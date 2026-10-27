@@ -18,18 +18,13 @@
 //!   this model's `Track` is a polyline of 2+ points
 //!   (`crates/model/src/ir.rs`'s `Track::pts`, and `crates/kicad`'s
 //!   im/exporter already treats a multi-point `Track` as N-1 consecutive
-//!   `(segment ...)`s -- see that crate's own docs). Duplicate/zero-length
-//!   detection below operates at whole-`Track` granularity; the merge
-//!   pass only ever considers straight 2-point tracks as candidates (the
-//!   same restriction `crates/cli/src/tune_api.rs`'s length tuner already
-//!   applies to its own single-track scope), so a `Track` that is already
-//!   a merged multi-point polyline is left alone.
-//! - "Track in pad" and "redundant via on a THT pad" use
-//!   `PlacedPad::signed_distance` (containment of both endpoints) rather
-//!   than KiCad's exact `SHAPE_POLY_SET` boolean-subtract-is-empty test --
-//!   equivalent for the rect/round/round-rect pad shapes this model has,
-//!   approximate only for a custom pad outline (which this model doesn't
-//!   support at all yet).
+//!   `(segment ...)`s). Every pass works on segments, as KiCad does: a polyline the cleanup may change is cut into its segments
+//!   first, and a polyline that loses one comes back as the runs of segments that stay (`explode`, `finish`). The runs and a
+//!   merged track are new tracks (new ids, no `pins`); KiCad keeps the uuid of what it does not delete, and modifies the first of
+//!   two merged segments in place.
+//! - "Track in pad" measures the track's width against the pad's copper (`PlacedPad::signed_distance`, see
+//!   `track_inside_pad`) rather than KiCad's `SHAPE_POLY_SET` boolean subtract; the same for a plain pad, sampled for a pad
+//!   made of pieces, and an oval is its inscribed ellipse.
 //! - Collinearity is an exact integer cross-product test over this
 //!   model's already-integer nm coordinates, not KiCad's
 //!   `ApproxCollinear` angular-tolerance test over floating geometry --
@@ -48,7 +43,7 @@
 //!   merge" is the safe direction for a check that only ever *skips* a
 //!   merge.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use eda_drc::zone_copper::ZoneCopper;
 use eda_model::ir::{Design, Point, RoutingSection, Track, Via, Zone};
@@ -57,9 +52,10 @@ use eda_model::{ConstraintModel, PadKind};
 
 use crate::algo::build_graph;
 use crate::cleanup_filter::{CleanupFilter, Protected};
-use crate::dangling::{dangling_tracks_and_vias, DanglingKind};
+use crate::dangling::{dangling_tracks_and_vias_with, DanglingKind};
 use crate::geom::point_in_polygon;
-use crate::items::ItemRef;
+use crate::items::{ItemRef, ItemShape};
+use eda_model::units::Nm;
 
 /// `dialog_cleanup_tracks_and_vias_base.cpp`'s checkboxes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -131,15 +127,16 @@ pub struct CleanupChange {
 #[derive(Debug, Clone, Default)]
 pub struct CleanupReport {
     pub changes: Vec<CleanupChange>,
+    /// The board's tracks the cleanup removes: those removed outright, and each polyline a segment of which goes (its other
+    /// segments come back in [`CleanupReport::added`]).
+    pub removed_tracks: Vec<String>,
+    /// The tracks the cleanup adds: merged tracks, and the runs of a polyline's segments that stay when another segment of it goes.
+    pub added: Vec<Track>,
 }
 
 impl CleanupReport {
     pub fn remove_track_ids(&self) -> Vec<String> {
-        let mut out: BTreeSet<String> = BTreeSet::new();
-        for c in &self.changes {
-            out.extend(c.remove_track_ids.iter().cloned());
-        }
-        out.into_iter().collect()
+        self.removed_tracks.clone()
     }
     pub fn remove_via_ids(&self) -> Vec<String> {
         let mut out: BTreeSet<String> = BTreeSet::new();
@@ -149,7 +146,7 @@ impl CleanupReport {
         out.into_iter().collect()
     }
     pub fn add_tracks(&self) -> Vec<Track> {
-        self.changes.iter().filter_map(|c| c.add_track.clone()).collect()
+        self.added.clone()
     }
 }
 
@@ -181,9 +178,10 @@ fn pad_geoms(design: &Design, model: &ConstraintModel) -> Vec<PadGeom> {
         let mut lib_pads: Vec<&eda_model::Pad> = footprint.pads.iter().collect();
         lib_pads.sort_by(|a, b| a.number.cmp(&b.number));
         for (pad, lp) in placed.into_iter().zip(lib_pads.iter()) {
+            // an SMD pad on its own side: the footprint's, or the other one for a pad drawn on the footprint's back (`opposite_side`), as `crate::items` places it
             let layer = if lp.kind == PadKind::ThroughHole {
                 None
-            } else if fp.side == eda_model::ir::Side::Top {
+            } else if (fp.side == eda_model::ir::Side::Top) != lp.opposite_side {
                 Some("F.Cu".to_string())
             } else {
                 Some("B.Cu".to_string())
@@ -204,38 +202,152 @@ fn working_design(base: &Design, tracks: &[Track], vias: &[Via]) -> Design {
     d
 }
 
+/// The working list's name for segment `k` of polyline `id` (see [`explode`]).
+fn piece_id(id: &str, k: usize) -> String {
+    format!("{id}~{k}")
+}
+
+/// The working list's name for the `n`th merged track (never a board id: board ids have no `~`).
+fn merged_id(n: usize) -> String {
+    format!("~merged{n}")
+}
+
+/// KiCad's `PCB_TRACK` is one segment; this model's `Track` is a polyline. Every pass works on segments, as KiCad does
+/// (`deleteDanglingTracks` and `removeShortingTrackSegments` remove the one `PCB_TRACK` at fault, not what it is drawn with), so each
+/// polyline of three or more points the cleanup may touch is cut into its segments first ([`piece_id`]); [`finish`] puts back the
+/// runs of segments that stay. An arc is one item already, and a locked or filtered polyline is never changed, so neither is cut.
+fn explode(tracks: &[Track], prot: &Protected) -> (Vec<Track>, BTreeMap<String, (String, usize)>) {
+    let mut out = Vec::with_capacity(tracks.len());
+    let mut pieces = BTreeMap::new();
+    for t in tracks {
+        if t.pts.len() <= 2 || t.arc().is_some() || prot.track(&t.id) {
+            out.push(t.clone());
+            continue;
+        }
+        for (k, w) in t.pts.windows(2).enumerate() {
+            let id = piece_id(&t.id, k);
+            pieces.insert(id.clone(), (t.id.clone(), k));
+            out.push(Track { id, net: t.net.clone(), pins: Vec::new(), layer: t.layer.clone(), width: t.width, pts: vec![w[0], w[1]], arc_mid_offset: None });
+        }
+    }
+    (out, pieces)
+}
+
+/// What the board loses and gains once every pass has run over the working list `work` (see [`explode`]): a polyline whose
+/// segments all stay is left as it is; one that lost a segment is removed, and each run of its consecutive segments that stay
+/// comes back as a track (with no `pins`, as a merged track). A merged track still in `work` is added. The changes' own ids
+/// are mapped back to the board's: a segment to its polyline; a merged track removed again by a later pass to nothing.
+fn finish(original: &[Track], work: &[Track], pieces: &BTreeMap<String, (String, usize)>, changes: &mut [CleanupChange]) -> (Vec<String>, Vec<Track>) {
+    let alive: BTreeSet<&str> = work.iter().map(|t| t.id.as_str()).collect();
+    let mut removed = BTreeSet::new();
+    let mut added = Vec::new();
+    for t in original {
+        let cut = pieces.contains_key(&piece_id(&t.id, 0));
+        if !cut {
+            if !alive.contains(t.id.as_str()) {
+                removed.insert(t.id.clone());
+            }
+            continue;
+        }
+        let kept: Vec<bool> = (0..t.pts.len() - 1).map(|k| alive.contains(piece_id(&t.id, k).as_str())).collect();
+        if kept.iter().all(|&k| k) {
+            continue;
+        }
+        removed.insert(t.id.clone());
+        let mut k = 0;
+        while k < kept.len() {
+            if !kept[k] {
+                k += 1;
+                continue;
+            }
+            let start = k;
+            while k < kept.len() && kept[k] {
+                k += 1;
+            }
+            added.push(Track { id: String::new(), net: t.net.clone(), pins: Vec::new(), layer: t.layer.clone(), width: t.width, pts: t.pts[start..=k].to_vec(), arc_mid_offset: None });
+        }
+    }
+    for t in work {
+        if t.id.starts_with('~') {
+            let mut t = t.clone();
+            t.id.clear();
+            added.push(t);
+        }
+    }
+    for c in changes.iter_mut() {
+        let mut ids: Vec<String> = Vec::new();
+        for id in &c.remove_track_ids {
+            let shown = match pieces.get(id) {
+                Some((orig, _)) => orig.clone(),
+                None if id.starts_with('~') => continue,
+                None => id.clone(),
+            };
+            if !ids.contains(&shown) {
+                ids.push(shown);
+            }
+        }
+        c.remove_track_ids = ids;
+        if let Some(t) = c.add_track.as_mut() {
+            t.id.clear();
+        }
+    }
+    (removed.into_iter().collect(), added)
+}
+
 fn is_zero_length(t: &Track) -> bool {
     t.pts.len() == 2 && t.pts[0] == t.pts[1]
 }
 
-/// Same endpoints, either direction -- a track has no inherent "start
-/// means something" the way a signed path might.
+/// `PCB_TRACK::IsPointOnEnds` both ways: the same two ends, either direction.
 fn same_endpoints(a: &Track, b: &Track) -> bool {
     a.pts == b.pts || (a.pts.len() == b.pts.len() && a.pts.iter().eq(b.pts.iter().rev()))
 }
 
-/// `TRACKS_CLEANER::cleanup`'s via/null-segment half: redundant vias
-/// (same position + layer span, or sharing a position with a through-hole
-/// pad spanning every copper layer) and zero-length tracks.
-fn remove_redundant(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, full_stack_pad_centers: &[Point], opts: &CleanupOptions, prot: &Protected, changes: &mut Vec<CleanupChange>) {
+/// `PCB_VIA::GetViaType` and `GetLayerSet`, for `cleanup`'s duplicate-via test: the via's type, and its span whichever way it is written.
+fn via_key(v: &Via, kinds: &[eda_model::via_extra::ViaExtra]) -> (Point, eda_model::via_extra::ViaKind, (String, String)) {
+    let kind = kinds.iter().find(|e| e.id == v.id).map(|e| e.kind).unwrap_or_default();
+    let span = if v.from_layer <= v.to_layer { (v.from_layer.clone(), v.to_layer.clone()) } else { (v.to_layer.clone(), v.from_layer.clone()) };
+    (v.at, kind, span)
+}
+
+/// `TRACKS_CLEANER::cleanup`'s via/null-segment half: redundant vias and zero-length tracks.
+///
+/// A via is redundant when a via not yet looked at (later in the list; or a locked or filtered one, wherever it is: source never
+/// flags those `SKIP_STRUCT`) has its position, type and layer set -- so of two equal vias the earlier one goes -- or when it touches
+/// a pad that has every copper layer (`GetConnectedPads( via )`, `( pad->GetLayerSet() & all_cu ) == all_cu`), wherever on the pad.
+#[allow(clippy::too_many_arguments)] // the passes' shared state, one argument each
+fn remove_redundant(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, model: &ConstraintModel, copper: &ZoneCopper, opts: &CleanupOptions, prot: &Protected, changes: &mut Vec<CleanupChange>) {
     if opts.delete_redundant_vias {
-        // A protected via is never flagged as processed in source, so a candidate on top of one collides with it whichever of the two comes first.
-        let mut seen: Vec<(Point, String, String)> = vias.iter().filter(|v| prot.via(&v.id)).map(|v| (v.at, v.from_layer.clone(), v.to_layer.clone())).collect();
-        let mut kept = Vec::with_capacity(vias.len());
-        for v in std::mem::take(vias) {
+        let kinds: Vec<eda_model::via_extra::ViaExtra> = base.drawings.as_ref().map(|d| d.via_extras.clone()).unwrap_or_default();
+        let keys: Vec<_> = vias.iter().map(|v| via_key(v, &kinds)).collect();
+        // the vias on a pad with every copper layer: their neighbours in the connectivity graph
+        let graph = build_graph(&working_design(base, tracks, vias), model, copper);
+        let last_layer = model.board.layers.len().max(1) as i32 - 1;
+        let full_stack_pads: BTreeSet<(String, String)> = graph.items.iter().filter_map(|i| match &i.item {
+            ItemRef::Pad { reference, number } if i.pad_piece_of.is_some() || (i.layer_lo == 0 && i.layer_hi == last_layer) => Some((reference.clone(), number.clone())),
+            _ => None,
+        }).collect();
+        let on_full_pad: BTreeSet<String> = graph.items.iter().filter_map(|i| match &i.item {
+            ItemRef::Via { via_id } if i.connected.iter().any(|&n| matches!(&graph.items[n].item, ItemRef::Pad { reference, number } if full_stack_pads.contains(&(reference.clone(), number.clone())))) => Some(via_id.clone()),
+            _ => None,
+        }).collect();
+        let mut gone = vec![false; vias.len()];
+        for i in 0..vias.len() {
+            let v = &vias[i];
             if prot.via(&v.id) {
-                kept.push(v);
                 continue;
             }
-            let key = (v.at, v.from_layer.clone(), v.to_layer.clone());
-            if seen.contains(&key) || full_stack_pad_centers.contains(&v.at) {
+            let twin = (0..vias.len()).any(|j| j != i && !gone[j] && (j > i || prot.via(&vias[j].id)) && keys[j] == keys[i]);
+            if twin || on_full_pad.contains(&v.id) {
+                gone[i] = true;
                 changes.push(CleanupChange { kind: CleanupKind::RedundantVia, net: v.net.clone(), remove_track_ids: vec![], remove_via_ids: vec![v.id.clone()], add_track: None });
-            } else {
-                seen.push(key);
-                kept.push(v);
             }
         }
-        *vias = kept;
+        let mut k = 0;
+        vias.retain(|_| {
+            k += 1;
+            !gone[k - 1]
+        });
     }
 
     let remove_null = opts.merge_segments || opts.delete_shorting;
@@ -259,54 +371,90 @@ fn remove_redundant(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, full_stack_pad
 /// doc: it runs `cleanup(..., true, ...)` either as part of the merge-
 /// gated first call, or as its own explicit always-on second call when
 /// merging is off).
+///
+/// Straight segments only (`PCB_TRACE_T`, not an arc) that are not null. A segment is compared with those not yet looked at (later in
+/// the list, or locked or filtered anywhere: those are never flagged `SKIP_STRUCT`) and not already deleted; on a match (both ends,
+/// the width and the layer) it is the segment looked at, the earlier one, that goes.
 fn remove_duplicates(tracks: &mut Vec<Track>, prot: &Protected, changes: &mut Vec<CleanupChange>) {
-    // What a candidate can duplicate: the protected tracks, wherever they sit in the list (source never flags them as processed), and the candidates already kept.
-    let mut twins: Vec<Track> = tracks.iter().filter(|t| prot.track(&t.id)).cloned().collect();
-    let mut out: Vec<Track> = Vec::with_capacity(tracks.len());
-    'outer: for t in std::mem::take(tracks) {
-        if prot.track(&t.id) {
-            out.push(t);
+    let straight = |t: &Track| t.arc().is_none() && !is_zero_length(t);
+    let mut gone = vec![false; tracks.len()];
+    for i in 0..tracks.len() {
+        let t = &tracks[i];
+        if prot.track(&t.id) || !straight(t) {
             continue;
         }
-        for k in &twins {
-            if k.layer == t.layer && k.width == t.width && same_endpoints(k, &t) {
-                changes.push(CleanupChange { kind: CleanupKind::DuplicateTrack, net: t.net.clone(), remove_track_ids: vec![t.id.clone()], remove_via_ids: vec![], add_track: None });
-                continue 'outer;
-            }
+        let twin = (0..tracks.len()).any(|j| {
+            let k = &tracks[j];
+            j != i && !gone[j] && (j > i || prot.track(&k.id)) && straight(k) && k.layer == t.layer && k.width == t.width && same_endpoints(k, t)
+        });
+        if twin {
+            gone[i] = true;
+            changes.push(CleanupChange { kind: CleanupKind::DuplicateTrack, net: t.net.clone(), remove_track_ids: vec![t.id.clone()], remove_via_ids: vec![], add_track: None });
         }
-        twins.push(t.clone());
-        out.push(t);
     }
-    *tracks = out;
+    let mut k = 0;
+    tracks.retain(|_| {
+        k += 1;
+        !gone[k - 1]
+    });
 }
 
-/// `TRACKS_CLEANER::deleteTracksInPads`: a straight 2-point track whose
-/// both endpoints sit inside the same pad's copper (see module docs for
-/// the containment-vs-boolean-subtract adaptation).
-fn remove_tracks_in_pads(tracks: &mut Vec<Track>, pads: &[PadGeom], prot: &Protected, changes: &mut Vec<CleanupChange>) {
-    let mut kept = Vec::with_capacity(tracks.len());
-    'outer: for t in std::mem::take(tracks) {
-        if t.pts.len() == 2 && !prot.track(&t.id) {
-            for p in pads {
-                if !pad_covers_layer(p, &t.layer) {
-                    continue;
-                }
-                if p.pad.signed_distance(t.pts[0]) <= 0.0 && p.pad.signed_distance(t.pts[1]) <= 0.0 {
-                    changes.push(CleanupChange { kind: CleanupKind::TrackInPad, net: t.net.clone(), remove_track_ids: vec![t.id.clone()], remove_via_ids: vec![], add_track: None });
-                    continue 'outer;
-                }
-            }
-        }
-        kept.push(t);
+/// `deleteTracksInPads`' `track->TransformShapeToPolygon(..)` then `poly.BooleanSubtract( *pad->GetEffectivePolygon(..) )` and
+/// `poly.IsEmpty()`: is the whole track, its width included, inside the pad's copper? The pad's copper less half the width (the
+/// points whose `signed_distance` is at most minus half the width) is convex for a plain pad, so both ends (or an arc's every
+/// tessellation point) in it hold the whole track; a pad made of pieces (a custom or chamfered pad) is not convex, so the
+/// segment is also sampled every half width. An oval is measured by its inscribed ellipse, so a track at an oval's very edge
+/// may be kept where KiCad deletes it.
+fn track_inside_pad(t: &Track, pad: &PlacedPad) -> bool {
+    let r = t.width.as_f64() / 2.0;
+    let inside = |p: Point| pad.signed_distance(p) <= -r;
+    if !t.pts.iter().all(|&p| inside(p)) {
+        return false;
     }
-    *tracks = kept;
+    if pad.pieces.is_empty() {
+        return true;
+    }
+    let step = r.max(1000.0) / 2.0;
+    t.pts.windows(2).all(|w| {
+        let n = (crate::geom::dist(w[0], w[1]) / step).ceil().clamp(1.0, 2000.0) as i64;
+        (1..n).all(|i| {
+            let f = i as f64 / n as f64;
+            let at = |a: Nm, b: Nm| Nm::new((a.as_f64() + (b - a).as_f64() * f).round() as i64);
+            inside(Point { x: at(w[0].x, w[1].x), y: at(w[0].y, w[1].y) })
+        })
+    })
 }
 
-/// `TRACKS_CLEANER::removeShortingTrackSegments`: any track segment or
-/// via geometrically touching a pad/track/via/zone of a different,
-/// non-empty net. Needs the real connectivity graph (`build_graph`),
-/// since "touching" is a geometry question this function has no cheaper
-/// shortcut for.
+/// `TRACKS_CLEANER::deleteTracksInPads`: a track (a segment or an arc, not a via) that lies whole inside the copper of a pad it is
+/// connected to (`GetConnectedPads( track )`, `pad->HitTest` of both ends, then [`track_inside_pad`]).
+fn remove_tracks_in_pads(tracks: &mut Vec<Track>, vias: &[Via], base: &Design, model: &ConstraintModel, copper: &ZoneCopper, prot: &Protected, changes: &mut Vec<CleanupChange>) {
+    let graph = build_graph(&working_design(base, tracks, vias), model, copper);
+    let mut bad = BTreeSet::new();
+    for it in &graph.items {
+        let ItemRef::TrackSeg { track_id, .. } = &it.item else { continue };
+        if prot.track(track_id) || bad.contains(track_id) {
+            continue;
+        }
+        let Some(t) = tracks.iter().find(|t| &t.id == track_id) else { continue };
+        // a polyline left whole (a locked one) is protected; anything else here is one segment or an arc
+        if t.pts.len() != 2 && t.arc().is_none() {
+            continue;
+        }
+        let in_pad = it.connected.iter().any(|&n| match &graph.items[n].shape {
+            ItemShape::Pad(pad) => matches!(graph.items[n].item, ItemRef::Pad { .. }) && track_inside_pad(t, pad),
+            _ => false,
+        });
+        if in_pad {
+            bad.insert(track_id.clone());
+            changes.push(CleanupChange { kind: CleanupKind::TrackInPad, net: t.net.clone(), remove_track_ids: vec![track_id.clone()], remove_via_ids: vec![], add_track: None });
+        }
+    }
+    tracks.retain(|t| !bad.contains(&t.id));
+}
+
+/// `TRACKS_CLEANER::removeShortingTrackSegments`: a track segment or a via (`m_brd->Tracks()`) connected to a pad
+/// (`GetConnectedPads`) or to a track, arc or via (`GetConnectedTracks`) whose net differs (`GetNetCode() !=`, no net included: a
+/// track on a pad with no net shorts, two items with no net do not). Zones are not looked at. Only the segment at fault goes.
 fn remove_shorting(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, model: &ConstraintModel, copper: &ZoneCopper, prot: &Protected, changes: &mut Vec<CleanupChange>) {
     let wd = working_design(base, tracks, vias);
     let graph = build_graph(&wd, model, copper);
@@ -314,58 +462,49 @@ fn remove_shorting(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, 
     let mut bad_vias = BTreeSet::new();
 
     for it in &graph.items {
-        if it.net.is_empty() {
-            continue;
-        }
-        for &nb in &it.connected {
+        let shorts = || it.connected.iter().any(|&nb| {
             let other = &graph.items[nb];
-            if other.net.is_empty() || other.net == it.net {
-                continue;
+            matches!(other.item, ItemRef::Pad { .. } | ItemRef::TrackSeg { .. } | ItemRef::Via { .. }) && other.net != it.net
+        });
+        match &it.item {
+            ItemRef::TrackSeg { track_id, .. } if !prot.track(track_id) && shorts() => {
+                bad_tracks.insert(track_id.clone());
             }
-            match &it.item {
-                ItemRef::TrackSeg { track_id, .. } if !prot.track(track_id) => {
-                    bad_tracks.insert(track_id.clone());
-                }
-                ItemRef::Via { via_id } if !prot.via(via_id) => {
-                    bad_vias.insert(via_id.clone());
-                }
-                _ => {}
+            ItemRef::Via { via_id } if !prot.via(via_id) && shorts() => {
+                bad_vias.insert(via_id.clone());
             }
-            break;
+            _ => {}
         }
     }
 
-    for id in &bad_tracks {
-        if let Some(t) = tracks.iter().find(|t| &t.id == id) {
-            changes.push(CleanupChange { kind: CleanupKind::ShortingTrack, net: t.net.clone(), remove_track_ids: vec![id.clone()], remove_via_ids: vec![], add_track: None });
-        }
+    for t in tracks.iter().filter(|t| bad_tracks.contains(&t.id)) {
+        changes.push(CleanupChange { kind: CleanupKind::ShortingTrack, net: t.net.clone(), remove_track_ids: vec![t.id.clone()], remove_via_ids: vec![], add_track: None });
     }
-    for id in &bad_vias {
-        if let Some(v) = vias.iter().find(|v| &v.id == id) {
-            changes.push(CleanupChange { kind: CleanupKind::ShortingVia, net: v.net.clone(), remove_track_ids: vec![], remove_via_ids: vec![id.clone()], add_track: None });
-        }
+    for v in vias.iter().filter(|v| bad_vias.contains(&v.id)) {
+        changes.push(CleanupChange { kind: CleanupKind::ShortingVia, net: v.net.clone(), remove_track_ids: vec![], remove_via_ids: vec![v.id.clone()], add_track: None });
     }
     tracks.retain(|t| !bad_tracks.contains(&t.id));
     vias.retain(|v| !bad_vias.contains(&v.id));
 }
 
-/// `TRACKS_CLEANER::deleteDanglingTracks`: iterate `dangling_tracks_and_
-/// vias` (already the exact port of `TestTrackEndpointDangling` DRC uses)
-/// to a fixed point, since removing one dangling stub can dangle whatever
-/// it was attached to.
+/// `TRACKS_CLEANER::deleteDanglingTracks`: iterate `dangling_tracks_and_vias_with( .., false )` (`TestTrackEndpointDangling( track,
+/// false )`, the cleaner's call: a segment inside one pad dangles) to a fixed point, since removing one dangling segment can dangle
+/// whatever it was attached to. Only the dangling segment goes, not the polyline it is drawn with ([`explode`]).
+#[allow(clippy::too_many_arguments)] // the passes' shared state, one argument each
 fn remove_dangling(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, model: &ConstraintModel, copper: &ZoneCopper, want_tracks: bool, want_vias: bool, prot: &Protected, changes: &mut Vec<CleanupChange>) -> bool {
     let mut deleted_any = false;
     let max_iters = tracks.len() + vias.len() + 2;
     for _ in 0..max_iters {
         let wd = working_design(base, tracks, vias);
         let graph = build_graph(&wd, model, copper);
-        let dangling = dangling_tracks_and_vias(&graph);
+        let dangling = dangling_tracks_and_vias_with(&graph, false);
 
         let mut track_ids = BTreeSet::new();
         let mut via_ids = BTreeSet::new();
         for d in &dangling {
             match d.kind {
                 DanglingKind::Track if want_tracks => {
+                    // `#N` names a segment of a polyline left whole, which only a locked or filtered one is
                     let id = d.id.split('#').next().unwrap_or(&d.id);
                     if !prot.track(id) {
                         track_ids.insert(id.to_string());
@@ -380,15 +519,11 @@ fn remove_dangling(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, 
         if track_ids.is_empty() && via_ids.is_empty() {
             break;
         }
-        for id in &track_ids {
-            if let Some(t) = tracks.iter().find(|t| &t.id == id) {
-                changes.push(CleanupChange { kind: CleanupKind::DanglingTrack, net: t.net.clone(), remove_track_ids: vec![id.clone()], remove_via_ids: vec![], add_track: None });
-            }
+        for t in tracks.iter().filter(|t| track_ids.contains(&t.id)) {
+            changes.push(CleanupChange { kind: CleanupKind::DanglingTrack, net: t.net.clone(), remove_track_ids: vec![t.id.clone()], remove_via_ids: vec![], add_track: None });
         }
-        for id in &via_ids {
-            if let Some(v) = vias.iter().find(|v| &v.id == id) {
-                changes.push(CleanupChange { kind: CleanupKind::DanglingVia, net: v.net.clone(), remove_track_ids: vec![], remove_via_ids: vec![id.clone()], add_track: None });
-            }
+        for v in vias.iter().filter(|v| via_ids.contains(&v.id)) {
+            changes.push(CleanupChange { kind: CleanupKind::DanglingVia, net: v.net.clone(), remove_track_ids: vec![], remove_via_ids: vec![v.id.clone()], add_track: None });
         }
         tracks.retain(|t| !track_ids.contains(&t.id));
         vias.retain(|v| !via_ids.contains(&v.id));
@@ -441,7 +576,7 @@ fn is_node(p: Point, layer: &str, exclude: (&str, &str), tracks: &[Track], vias:
 
 /// `TRACKS_CLEANER::cleanup`'s merge pass, run to a fixed point (matches
 /// source's own `do { ... } while (mergeSegments(...))`).
-fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zones: &[Zone], prot: &Protected, changes: &mut Vec<CleanupChange>) -> bool {
+fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zones: &[Zone], prot: &Protected, merged_count: &mut usize, changes: &mut Vec<CleanupChange>) -> bool {
     let mut changed_any = false;
     loop {
         let mut found: Option<(usize, usize, Point, Point)> = None;
@@ -480,7 +615,8 @@ fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zone
         let (lo, hi) = (i.min(j), i.max(j));
         let b = tracks.remove(hi);
         let a = tracks.remove(lo);
-        let merged = Track { id: String::new(), net: a.net.clone(), pins: Vec::new(), layer: a.layer.clone(), width: a.width, pts: vec![far_i, far_j], arc_mid_offset: None };
+        *merged_count += 1;
+        let merged = Track { id: merged_id(*merged_count), net: a.net.clone(), pins: Vec::new(), layer: a.layer.clone(), width: a.width, pts: vec![far_i, far_j], arc_mid_offset: None };
         changes.push(CleanupChange { kind: CleanupKind::MergedTracks, net: a.net.clone(), remove_track_ids: vec![a.id.clone(), b.id.clone()], remove_via_ids: vec![], add_track: Some(merged.clone()) });
         tracks.push(merged);
         changed_any = true;
@@ -504,18 +640,19 @@ pub fn compute_cleanup(design: &Design, model: &ConstraintModel, copper: &ZoneCo
 /// ones (which every cleanup leaves alone, `IsLocked()`), though they still count as copper to the passes.
 pub fn compute_cleanup_filtered(design: &Design, model: &ConstraintModel, copper: &ZoneCopper, opts: CleanupOptions, filter: &CleanupFilter) -> CleanupReport {
     let prot = filter.protected(design, model);
-    let mut tracks: Vec<Track> = design.routing.as_ref().map(|r| r.tracks.clone()).unwrap_or_default();
+    let original: Vec<Track> = design.routing.as_ref().map(|r| r.tracks.clone()).unwrap_or_default();
+    let (mut tracks, pieces) = explode(&original, &prot);
     let mut vias: Vec<Via> = design.routing.as_ref().map(|r| r.vias.clone()).unwrap_or_default();
     let zones: Vec<Zone> = design.routing.as_ref().map(|r| r.zones.clone()).unwrap_or_default();
     let pads = pad_geoms(design, model);
-    let full_stack_centers: Vec<Point> = pads.iter().filter(|p| p.layer.is_none()).map(|p| p.pad.center).collect();
 
     let mut changes = Vec::new();
+    let mut merged = 0usize;
 
-    remove_redundant(&mut tracks, &mut vias, &full_stack_centers, &opts, &prot, &mut changes);
+    remove_redundant(&mut tracks, &mut vias, design, model, copper, &opts, &prot, &mut changes);
 
     if opts.merge_segments {
-        merge_collinear(&mut tracks, &vias, &pads, &zones, &prot, &mut changes);
+        merge_collinear(&mut tracks, &vias, &pads, &zones, &prot, &mut merged, &mut changes);
     }
 
     if opts.delete_shorting {
@@ -523,7 +660,7 @@ pub fn compute_cleanup_filtered(design: &Design, model: &ConstraintModel, copper
     }
 
     if opts.delete_tracks_in_pads {
-        remove_tracks_in_pads(&mut tracks, &pads, &prot, &mut changes);
+        remove_tracks_in_pads(&mut tracks, &vias, design, model, copper, &prot, &mut changes);
     }
 
     let deleted_any = if opts.delete_dangling_tracks || opts.delete_dangling_vias {
@@ -533,10 +670,11 @@ pub fn compute_cleanup_filtered(design: &Design, model: &ConstraintModel, copper
     };
 
     if deleted_any && opts.merge_segments {
-        merge_collinear(&mut tracks, &vias, &pads, &zones, &prot, &mut changes);
+        merge_collinear(&mut tracks, &vias, &pads, &zones, &prot, &mut merged, &mut changes);
     }
 
-    CleanupReport { changes }
+    let (removed_tracks, added) = finish(&original, &tracks, &pieces, &mut changes);
+    CleanupReport { changes, removed_tracks, added }
 }
 
 #[cfg(test)]
@@ -574,7 +712,8 @@ mod tests {
         rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![a, b], arc_mid_offset: None });
         rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![b, a], arc_mid_offset: None }); // reverse order, still a dup
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions::default());
-        assert_eq!(report.remove_track_ids(), vec!["t2".to_string()]);
+        // `cleanup` compares a segment with those not yet looked at, so of two equal ones the earlier goes
+        assert_eq!(report.remove_track_ids(), vec!["t1".to_string()]);
         assert!(matches!(report.changes[0].kind, CleanupKind::DuplicateTrack));
     }
 
@@ -586,7 +725,7 @@ mod tests {
         rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: a, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         rt.vias.push(Via { id: "v2".into(), net: "N1".into(), at: a, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_redundant_vias: true, ..Default::default() });
-        assert_eq!(report.remove_via_ids(), vec!["v2".to_string()]);
+        assert_eq!(report.remove_via_ids(), vec!["v1".to_string()], "the earlier of two equal vias goes");
     }
 
     #[test]
@@ -696,6 +835,151 @@ mod tests {
         design.placement = None;
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_tracks_in_pads: true, delete_shorting: true, ..Default::default() });
         assert!(report.changes.is_empty());
+    }
+
+    fn trk(id: &str, net: &str, width: Nm, pts: Vec<Point>) -> Track {
+        Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width, pts, arc_mid_offset: None }
+    }
+
+    /// R1 gets a one-pad footprint of the given pad.
+    fn one_pad_part(model: &mut ConstraintModel, name: &str, size: Nm, shape: eda_model::PadShape, kind: PadKind) {
+        let drill = (kind == PadKind::ThroughHole).then(|| mm(0.8));
+        model.footprints.push(eda_model::Footprint {
+            name: name.into(),
+            pads: vec![eda_model::Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (size, size), shape, kind, drill, drill_slot: None, rot: 0, roundrect_ratio: None }],
+            courtyard: None,
+            model: None,
+            courtyard_outlines: vec![],
+            models3d: vec![],
+            art: Default::default(),
+        });
+        model.parts[0].footprint = Some(name.into());
+        model.parts[0].package = Some(name.into());
+    }
+
+    #[test]
+    fn cleanup_dangling_removes_only_the_dangling_segment_of_a_polyline() {
+        // `deleteDanglingTracks` removes the one `PCB_TRACK` that dangles: T1's Q-R; R1.1-Q still holds T2 at Q
+        let (mut design, model) = two_pad_model();
+        let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
+        let q = Point { x: (a.x + b.x) / 2, y: a.y };
+        let r = Point { x: q.x, y: q.y + mm(5.0) };
+        let rt = design.routing.as_mut().unwrap();
+        rt.tracks.push(trk("T1", "N1", mm(0.2), vec![a, q, r]));
+        rt.tracks.push(trk("T2", "N1", mm(0.2), vec![q, b]));
+        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_dangling_tracks: true, ..Default::default() });
+        assert_eq!(report.remove_track_ids(), vec!["T1".to_string()]);
+        let added = report.add_tracks();
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].pts, vec![a, q], "the segment that leads to the junction stays");
+        assert_eq!(report.changes.len(), 1);
+        assert_eq!(report.changes[0].remove_track_ids, vec!["T1".to_string()], "the change names the board's track");
+    }
+
+    #[test]
+    fn a_polyline_whose_segments_all_stay_is_left_alone() {
+        let (mut design, model) = two_pad_model();
+        let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
+        let q = Point { x: a.x, y: a.y - mm(3.0) };
+        design.routing.as_mut().unwrap().tracks.push(trk("T1", "N1", mm(0.2), vec![a, q, b]));
+        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_dangling_tracks: true, delete_shorting: true, delete_tracks_in_pads: true, merge_segments: true, delete_redundant_vias: true, delete_dangling_vias: true });
+        assert!(report.changes.is_empty() && report.add_tracks().is_empty() && report.remove_track_ids().is_empty(), "{:?}", report.changes);
+    }
+
+    #[test]
+    fn a_shorting_last_segment_goes_and_the_first_stays() {
+        let (mut design, mut model) = two_pad_model();
+        model.nets[0].pins = vec!["R1.1".into()];
+        model.nets.push(eda_model::Net { name: "N2".into(), pins: vec!["R2.1".into()] });
+        let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
+        let q = Point { x: a.x, y: a.y - mm(3.0) };
+        design.routing.as_mut().unwrap().tracks.push(trk("T1", "N1", mm(0.2), vec![a, q, b]));
+        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_shorting: true, ..Default::default() });
+        assert!(matches!(report.changes[0].kind, CleanupKind::ShortingTrack));
+        assert_eq!(report.remove_track_ids(), vec!["T1".to_string()]);
+        assert_eq!(report.add_tracks().iter().map(|t| t.pts.clone()).collect::<Vec<_>>(), vec![vec![a, q]]);
+    }
+
+    #[test]
+    fn shorting_track_to_a_no_net_pad_is_removed() {
+        // `segment->GetNetCode() != testedPad->GetNetCode()`, net 0 included
+        let (mut design, mut model) = two_pad_model();
+        model.nets[0].pins = vec!["R1.1".into()];
+        let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
+        design.routing.as_mut().unwrap().tracks.push(trk("t1", "N1", mm(0.2), vec![a, b]));
+        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_shorting: true, ..Default::default() });
+        assert_eq!(report.remove_track_ids(), vec!["t1".to_string()]);
+        assert!(matches!(report.changes[0].kind, CleanupKind::ShortingTrack));
+    }
+
+    #[test]
+    fn a_track_inside_one_pad_with_nothing_else_dangles_for_the_cleaner() {
+        // `TestTrackEndpointDangling( track, false )`: the pad counts once, at the nearer end
+        let (mut design, model) = two_pad_model();
+        let a = pad_center(&design, &model, "R1", "1");
+        design.routing.as_mut().unwrap().tracks.push(trk("t1", "N1", mm(0.1), vec![a, Point { x: a.x + mm(0.1), y: a.y }]));
+        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_dangling_tracks: true, ..Default::default() });
+        assert_eq!(report.remove_track_ids(), vec!["t1".to_string()]);
+        assert!(matches!(report.changes[0].kind, CleanupKind::DanglingTrack));
+    }
+
+    #[test]
+    fn a_track_in_a_pad_is_measured_with_its_width() {
+        let (mut design, mut model) = two_pad_model();
+        one_pad_part(&mut model, "SQ1", mm(1.0), eda_model::PadShape::Rect, PadKind::Smd);
+        let a = pad_center(&design, &model, "R1", "1");
+        let (l, r) = (Point { x: a.x - mm(0.3), y: a.y }, Point { x: a.x + mm(0.3), y: a.y });
+        design.routing.as_mut().unwrap().tracks.push(trk("wide", "N1", mm(0.8), vec![l, r]));
+        design.routing.as_mut().unwrap().tracks.push(trk("thin", "N1", mm(0.2), vec![l, r]));
+        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_tracks_in_pads: true, ..Default::default() });
+        assert_eq!(report.remove_track_ids(), vec!["thin".to_string()], "the 0.8 mm track overhangs the 1 mm pad");
+    }
+
+    #[test]
+    fn a_via_off_the_centre_of_a_through_hole_pad_is_redundant() {
+        let (mut design, mut model) = two_pad_model();
+        one_pad_part(&mut model, "TH17", mm(1.7), eda_model::PadShape::Circle, PadKind::ThroughHole);
+        let a = pad_center(&design, &model, "R1", "1");
+        design.routing.as_mut().unwrap().vias.push(Via { id: "v1".into(), net: "N1".into(), at: Point { x: a.x + mm(0.3), y: a.y }, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_redundant_vias: true, ..Default::default() });
+        assert_eq!(report.remove_via_ids(), vec!["v1".to_string()]);
+    }
+
+    #[test]
+    fn a_via_written_upside_down_is_still_a_duplicate() {
+        // `GetLayerSet()` has no direction
+        let (mut design, model) = two_pad_model();
+        let p = Point { x: mm(10.0), y: mm(15.0) };
+        let rt = design.routing.as_mut().unwrap();
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: p, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: "v2".into(), net: "N1".into(), at: p, drill: mm(0.3), diameter: mm(0.6), from_layer: "B.Cu".into(), to_layer: "F.Cu".into() });
+        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_redundant_vias: true, ..Default::default() });
+        assert_eq!(report.remove_via_ids(), vec!["v1".to_string()]);
+    }
+
+    #[test]
+    fn a_duplicate_segment_inside_a_polyline_goes_and_the_polyline_is_cut() {
+        let (mut design, model) = two_pad_model();
+        let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
+        let q = Point { x: a.x, y: a.y - mm(3.0) };
+        let rt = design.routing.as_mut().unwrap();
+        rt.tracks.push(trk("T1", "N1", mm(0.2), vec![a, q, b]));
+        rt.tracks.push(trk("t2", "N1", mm(0.2), vec![q, b]));
+        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions::default());
+        // T1's second segment is earlier in the list than t2, so it is the one that goes
+        assert_eq!(report.remove_track_ids(), vec!["T1".to_string()]);
+        assert_eq!(report.add_tracks().iter().map(|t| t.pts.clone()).collect::<Vec<_>>(), vec![vec![a, q]]);
+    }
+
+    #[test]
+    fn an_smd_pad_on_the_footprints_other_side_is_on_that_sides_copper() {
+        let (mut design, mut model) = two_pad_model();
+        one_pad_part(&mut model, "BK1", mm(1.0), eda_model::PadShape::Rect, PadKind::Smd);
+        model.footprints.last_mut().unwrap().pads[0].opposite_side = true;
+        let pads = pad_geoms(&design, &model);
+        assert_eq!(pads[0].layer.as_deref(), Some("B.Cu"));
+        design.placement.as_mut().unwrap().footprints[0].side = Side::Bottom;
+        assert_eq!(pad_geoms(&design, &model)[0].layer.as_deref(), Some("F.Cu"));
     }
 
     #[test]

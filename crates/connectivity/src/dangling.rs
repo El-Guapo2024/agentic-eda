@@ -7,7 +7,9 @@
 //! `CN_ANCHOR::IsDangling`, since that DRC provider is the actual oracle
 //! this crate is checked against, and it calls
 //! `TestTrackEndpointDangling(track, /*aIgnoreTracksInPads=*/true, ...)`
-//! specifically. That `true` is hard-coded below to match.
+//! specifically. That `true` is the default here; Cleanup Tracks & Vias
+//! (`TRACKS_CLEANER::deleteDanglingTracks`) passes `false`
+//! ([`dangling_tracks_and_vias_with`]).
 
 use eda_model::ir::Point;
 
@@ -30,14 +32,21 @@ pub struct DanglingItem {
     pub at: Point,
 }
 
-/// Every dangling track/arc segment and via on the board.
+/// Every dangling track/arc segment and via on the board, as DRC sees them (`aIgnoreTracksInPads = true`).
 pub fn dangling_tracks_and_vias(graph: &ConnGraph) -> Vec<DanglingItem> {
+    dangling_tracks_and_vias_with(graph, true)
+}
+
+/// [`dangling_tracks_and_vias`] with `TestTrackEndpointDangling`'s `aIgnoreTracksInPads`: `false` is the cleaner's call
+/// (`tracks_cleaner.cpp::deleteDanglingTracks`, `TestTrackEndpointDangling( track, false )`), where a segment with both ends under
+/// one pad or via counts that item once, at its nearer end, and so dangles when nothing else holds its other end.
+pub fn dangling_tracks_and_vias_with(graph: &ConnGraph, ignore_tracks_in_pads: bool) -> Vec<DanglingItem> {
     let mut out = Vec::new();
     for idx in 0..graph.items.len() {
         let it = &graph.items[idx];
         match &it.item {
             ItemRef::TrackSeg { track_id, seg_index } => {
-                if let Some(at) = track_seg_dangling(graph, idx) {
+                if let Some(at) = track_seg_dangling(graph, idx, ignore_tracks_in_pads) {
                     let id = if *seg_index == 0 { track_id.clone() } else { format!("{track_id}#{seg_index}") };
                     out.push(DanglingItem { kind: DanglingKind::Track, net: it.net.clone(), id, at });
                 }
@@ -110,22 +119,23 @@ fn arc_hits_point(pts: &[Point], width: i64, p: Point, accuracy: i64) -> bool {
     dist <= min_dist
 }
 
-/// `getMinDist` in `connectivity_data.cpp`, restricted to the one branch
-/// this port ever reaches it for (see [`track_seg_dangling`]): `std::min( track->GetStart().Distance( aPoint ),
-/// track->GetEnd().Distance( aPoint ) )` returned as an `int`, so truncated.
+/// `getMinDist` in `connectivity_data.cpp`: for a track or an arc `std::min( track->GetStart().Distance( aPoint ),
+/// track->GetEnd().Distance( aPoint ) )` returned as an `int`, so truncated; for anything else (a pad or a via, reached only with
+/// `aIgnoreTracksInPads == false`) `aItem->GetPosition().Distance( aPoint )`.
 fn min_dist_to_track(other: &crate::items::CnItem, p: Point) -> i64 {
     match &other.shape {
         ItemShape::Segment { a, b, .. } => geom::dist(p, *a).min(geom::dist(p, *b)) as i64,
         // `PCB_ARC_T`: the distance to its start or its end.
         ItemShape::Arc { pts, .. } => geom::dist(p, pts[0]).min(geom::dist(p, pts[pts.len() - 1])) as i64,
+        ItemShape::Pad(pad) => geom::dist(p, pad.center) as i64,
+        ItemShape::Via { center, .. } => geom::dist(p, *center) as i64,
         _ => 0,
     }
 }
 
-/// `TestTrackEndpointDangling`'s `PCB_TRACE_T`/`PCB_ARC_T` branch, called
-/// with `aIgnoreTracksInPads = true` (see module docs). `graph.items[idx]`
+/// `TestTrackEndpointDangling`'s `PCB_TRACE_T`/`PCB_ARC_T` branch (see module docs for `aIgnoreTracksInPads`). `graph.items[idx]`
 /// must be a [`ItemRef::TrackSeg`].
-fn track_seg_dangling(graph: &ConnGraph, idx: usize) -> Option<Point> {
+fn track_seg_dangling(graph: &ConnGraph, idx: usize, ignore_tracks_in_pads: bool) -> Option<Point> {
     let it = &graph.items[idx];
     let (a, b, half_width) = match &it.shape {
         ItemShape::Segment { a, b, half_width } => (*a, *b, *half_width),
@@ -157,8 +167,9 @@ fn track_seg_dangling(graph: &ConnGraph, idx: usize) -> Option<Point> {
                 // dangling" -- not just this endpoint, the whole segment.
                 ItemRef::ZoneOutline { .. } => return None,
                 // Both ends under the same pad/via: with
-                // `aIgnoreTracksInPads == true`, not dangling.
-                ItemRef::Pad { .. } | ItemRef::Via { .. } => return None,
+                // `aIgnoreTracksInPads == true`, not dangling; with `false`, counted once at the nearer end.
+                ItemRef::Pad { .. } | ItemRef::Via { .. } if ignore_tracks_in_pads => return None,
+                ItemRef::Pad { .. } | ItemRef::Via { .. } => {}
             }
             if min_dist_to_track(other, a) < min_dist_to_track(other, b) {
                 start_count += 1;

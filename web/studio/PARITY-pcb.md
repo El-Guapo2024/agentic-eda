@@ -606,13 +606,13 @@ Port of `pcbnew/tracks_cleaner.cpp` (`TRACKS_CLEANER`) and its dialog
 
 | Behavior | Status | KiCad file:function |
 |---|---|---|
-| Delete redundant vias: same position+layer span, or a via sharing a position with a through-hole pad spanning the whole copper stack | identical in effect | `TRACKS_CLEANER::cleanup`'s `aDeleteDuplicateVias` branch |
-| Delete zero-length tracks | identical for a straight 2-point track (see below for the granularity note) | `cleanup`'s `aDeleteNullSegments` branch (`PCB_TRACK::IsNull`) |
-| Delete exact-duplicate tracks (same endpoints either direction, width, layer) | identical, and -- matching source -- runs regardless of every other checkbox | `cleanup`'s `aDeleteDuplicateSegments` branch |
-| Delete tracks connecting different nets (short circuit) | identical in effect, via the real connectivity graph (`eda_connectivity::build_graph`) | `removeShortingTrackSegments` |
-| Delete tracks fully inside pads | both endpoints inside the pad's shape (`PlacedPad::signed_distance`) rather than source's exact polygon boolean-subtract -- equivalent for every pad shape this model has | `deleteTracksInPads` |
-| Delete tracks unconnected at one end / vias connected on only one layer | identical -- reuses the existing `dangling_tracks_and_vias` port (`connectivity/src/dangling.rs`, the same function DRC's `track_dangling`/`via_dangling` already use), iterated to a fixed point same as source's own `do`/`while` loop | `deleteDanglingTracks`, `TestTrackEndpointDangling` |
-| Merge co-linear tracks | ported for the common case: two straight 2-point tracks sharing an endpoint, collinear, with nothing else touching the shared joint | `cleanup`'s merge pass, `testMergeCollinearSegments`/`mergeCollinearSegments` |
+| Delete redundant vias: same position, via type and layer set (either way round) as a via not yet looked at, so of two the earlier goes; or touching a pad that has every copper layer, anywhere on it | identical (round 3 D-5, D-12: was the pad's exact centre, the strings of the span, and the later via) | `TRACKS_CLEANER::cleanup`'s `aDeleteDuplicateVias` branch |
+| Delete zero-length tracks | identical (every pass works on segments, see below) | `cleanup`'s `aDeleteNullSegments` branch (`PCB_TRACK::IsNull`) |
+| Delete exact-duplicate tracks (same endpoints either direction, width, layer; straight segments only, not arcs) | identical: the earlier of two goes (compared with the segments not yet looked at), and -- matching source -- runs regardless of every other checkbox (round 3 D-12: was the later one, arcs included) | `cleanup`'s `aDeleteDuplicateSegments` branch |
+| Delete tracks connecting different nets (short circuit) | identical, via the real connectivity graph (`eda_connectivity::build_graph`): the segment or via at fault goes, not its whole polyline; a pad or track with no net is a different net; zones are not looked at (round 3 D-2: was the whole polyline, no-net neighbours skipped, zones counted) | `removeShortingTrackSegments` |
+| Delete tracks fully inside pads | the track with its width inside the copper of a pad it connects to (`PlacedPad::signed_distance` at most minus half the width; sampled along a pad made of pieces) rather than source's polygon boolean subtract: the same for a plain pad, an oval measured by its inscribed ellipse; a segment of a polyline too (round 3 D-4: the width was ignored) | `deleteTracksInPads` |
+| Delete tracks unconnected at one end / vias connected on only one layer | identical -- the `dangling_tracks_and_vias` port (`connectivity/src/dangling.rs`) with the cleaner's `aIgnoreTracksInPads = false` (DRC passes `true`; a track inside one pad with nothing else on it dangles), iterated to a fixed point same as source's own `do`/`while` loop; only the dangling segment goes, not its polyline (round 3 D-1, D-3: was the whole polyline, and `true`) | `deleteDanglingTracks`, `TestTrackEndpointDangling` |
+| Merge co-linear tracks | ported for the common case: two straight segments sharing an endpoint, collinear, with nothing else touching the shared joint (the segments of a polyline included); the merged track is a new track, where KiCad modifies the first segment in place | `cleanup`'s merge pass, `testMergeCollinearSegments`/`mergeCollinearSegments` |
 | Call order (redundant/null/duplicate, then merge if asked, then shorting, then in-pad, then dangling, then a final merge pass if dangling actually deleted anything) | identical | `TRACKS_CLEANER::CleanupBoard` |
 | Dialog: six checkboxes, all unchecked by default (no `SetValue(true)` in the read snapshot), "Build Changes" (dry run, lists what would change) then "Update PCB" (commits), any checkbox edit resets back to "Build Changes" | identical | `DIALOG_CLEANUP_TRACKS_AND_VIAS` -- `CleanupTracksDialog.tsx` |
 | Filter Items: by net, by net class, by layer, "Selected items only" | **done (2026-10-10, GAPS.md item 35)**: the dialog's `SetFilter` lambda, in `crates/connectivity/src/cleanup_filter.rs` (`CleanupFilter`) with `kicad-port/cleanupFilters.ts` for the lists. A track or via the filter skips is never removed or merged (every pass gates its candidates the way `TRACKS_CLEANER` does with `filterItem`) but still counts as copper: it is what a dangling end touches, what a merge may not swallow, and the twin a duplicate or redundant via collides with (a candidate on top of a protected via goes whichever of the two comes first, as a protected item is never flagged as processed). A via is on the top layer of its span (`GetLayer()`); the class is the one that owns the item's net, the Default class for a net no class claims; "Selected items only" opens selected groups, nested ones too. Each box starts off; the net starts on the highlighted net, the layer on the active layer, the class on Default (`TransferDataToWindow`). Changing any of them sends the dialog back to Build Changes (`OnCheckBox`, `OnNetFilterSelect`, ...) | `DIALOG_CLEANUP_TRACKS_AND_VIAS::doCleanup`, `TRACKS_CLEANER::SetFilter` / `filterItem` -- `POST /api/cleanup_tracks/{preview,apply}` takes `filter_net`, `filter_netclass`, `filter_layer`, `selected_ids` |
@@ -625,11 +625,12 @@ Port of `pcbnew/tracks_cleaner.cpp` (`TRACKS_CLEANER`) and its dialog
 KiCad's `PCB_TRACK` is always a single two-point segment; this model's
 `Track` is a polyline of 2+ points (`crates/kicad`'s im/exporter already
 treats a multi-point `Track` as N-1 consecutive `(segment ...)`s, so this
-isn't a new approximation). Zero-length/duplicate detection operates at
-whole-`Track` granularity; the merge pass only ever considers straight
-2-point tracks as candidates (same scope `tune_api.rs`'s length tuner
-already has), so an already-merged multi-point `Track` is left alone
-rather than re-walked segment by segment. The merge pass's node check
+isn't a new approximation). Since round 3 (D-1/D-2) every pass works on
+segments as KiCad does: a polyline the cleanup may change is cut into its
+segments first, and one that loses a segment is removed and comes back as
+the runs of its segments that stay (new ids, no `pins`); a polyline whose
+segments all stay is not touched, and a locked or filtered one is never
+cut. The merge pass's node check
 also doesn't model source's one narrow exception for a true 3-way
 junction where two of three meeting tracks happen to be collinear --
 this port simply declines to merge there (a missed merge, never a wrong

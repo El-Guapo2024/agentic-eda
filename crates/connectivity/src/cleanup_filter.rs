@@ -211,14 +211,14 @@ mod tests {
     #[test]
     fn no_filter_removes_what_it_always_did() {
         let (design, model) = two_of_everything();
-        assert_eq!(nulls_and_vias(&design, &model, &CleanupFilter::default()), (ids(&["z1", "z2"]), ids(&["v2", "w2"])));
+        assert_eq!(nulls_and_vias(&design, &model, &CleanupFilter::default()), (ids(&["z1", "z2"]), ids(&["v1", "w1"])), "of two equal vias the earlier goes (`cleanup` compares with the vias not yet looked at)");
     }
 
     #[test]
     fn the_net_filter_leaves_the_other_nets_alone() {
         let (design, model) = two_of_everything();
         let f = CleanupFilter { net: Some("N2".into()), ..Default::default() };
-        assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z2"]), ids(&["w2"])));
+        assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z2"]), ids(&["w1"])));
     }
 
     #[test]
@@ -228,7 +228,7 @@ mod tests {
         let f = CleanupFilter { layer: Some("B.Cu".into()), ..Default::default() };
         assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z2"]), vec![]));
         let f = CleanupFilter { layer: Some("F.Cu".into()), ..Default::default() };
-        assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z1"]), ids(&["v2", "w2"])));
+        assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z1"]), ids(&["v1", "w1"])));
     }
 
     #[test]
@@ -238,7 +238,7 @@ mod tests {
             std::mem::swap(&mut v.from_layer, &mut v.to_layer);
         }
         let f = CleanupFilter { layer: Some("F.Cu".into()), ..Default::default() };
-        assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z1"]), ids(&["v2", "w2"])));
+        assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z1"]), ids(&["v1", "w1"])));
         let f = CleanupFilter { layer: Some("B.Cu".into()), ..Default::default() };
         assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z2"]), vec![]));
     }
@@ -248,10 +248,10 @@ mod tests {
         let (design, mut model) = two_of_everything();
         model.board.net_classes.push(class("Power", &["N2"]));
         let f = CleanupFilter { netclass: Some("Power".into()), ..Default::default() };
-        assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z2"]), ids(&["w2"])));
+        assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z2"]), ids(&["w1"])));
         // N1 is in no class of its own: the Default class owns it
         let f = CleanupFilter { netclass: Some("Default".into()), ..Default::default() };
-        assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z1"]), ids(&["v2"])));
+        assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z1"]), ids(&["v1"])));
     }
 
     #[test]
@@ -286,7 +286,7 @@ mod tests {
         dr.groups.push(Group { id: "g".into(), name: String::new(), member_ids: ids(&["w2"]), design_block: String::new() });
         dr.locked_ids.push("g".into());
         // z1 is locked; w2 is in a locked group, so w1 -- its twin -- is the one that goes
-        assert_eq!(nulls_and_vias(&design, &model, &CleanupFilter::default()), (ids(&["z2"]), ids(&["v2", "w1"])));
+        assert_eq!(nulls_and_vias(&design, &model, &CleanupFilter::default()), (ids(&["z2"]), ids(&["v1", "w1"])));
     }
 
     #[test]
