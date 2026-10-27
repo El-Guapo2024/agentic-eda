@@ -88,6 +88,19 @@ const ERROR_TYPES: &[(&str, &str)] = &[
     ("duplicate_reference", "ERCET_DUPLICATE_REFERENCE"),
     ("bus_entry_needed", "ERCET_BUS_ENTRY_NEEDED"),
     ("unconnected_wire_endpoint", "ERCET_UNCONNECTED_WIRE_ENDPOINT"),
+    // the checks KiCad 25ec2335 (the box's kicad-cli) added (`api/proto/schematic/schematic_rules.proto`)
+    ("pin_map_bad_pad", "ERCET_PIN_MAP_BAD_PAD"),
+    ("pin_map_unmapped_pin", "ERCET_PIN_MAP_UNMAPPED_PIN"),
+    ("pin_map_duplicate_pad", "ERCET_PIN_MAP_DUPLICATE_PAD"),
+    ("pin_map_stale_pin", "ERCET_PIN_MAP_STALE_PIN"),
+    ("empty_label_name", "ERCET_EMPTY_LABEL_NAME"),
+    ("variant_symbol_invalid", "ERCET_VARIANT_SYMBOL_INVALID"),
+    ("variant_symbol_incompatible", "ERCET_VARIANT_SYMBOL_INCOMPATIBLE"),
+    ("wired_implicit_power", "ERCET_WIRED_IMPLICIT_POWER"),
+    ("empty_power_value", "ERCET_EMPTY_POWER_VALUE"),
+    ("similar_labels", "ERCET_SIMILAR_LABELS"),
+    ("similar_power", "ERCET_SIMILAR_POWER"),
+    ("similar_label_and_power", "ERCET_SIMILAR_LABEL_AND_POWER"),
 ];
 
 /// The kind of finding the check's marker is (`kiapi.schematic.ErcErrorType`). The pin conflict is a warning or an error by the conflict map's cell, which the
@@ -503,6 +516,10 @@ mod tests {
         assert_eq!(error_type("pin_to_pin", "warning"), Some("ERCET_PIN_TO_PIN_WARNING"));
         assert_eq!(error_type("not_a_check", "error"), None);
         assert!(ERROR_TYPES.iter().all(|(_, t)| t.starts_with("ERCET_")));
+        // every check of the running kicad-cli's table has its kind (r3 D3-H1: the nine 25ec2335 added among them)
+        for (check, _) in eda_model::erc_checks::ERC_CHECKS {
+            assert!(error_type(check, "error").is_some(), "{check}");
+        }
     }
 
     #[test]

@@ -1,5 +1,5 @@
 {
-  "commit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+  "commit": "25ec2335f2d1bbc3277f617d8c907578953879d2",
   "source": [
     "eeschema/erc/erc_item.cpp",
     "eeschema/erc/erc_settings.cpp"
@@ -103,6 +103,24 @@
           "title": "Unconnected wire endpoint",
           "code": "ERCE_UNCONNECTED_WIRE_ENDPOINT",
           "defaultSeverity": "warning"
+        },
+        {
+          "key": "empty_label_name",
+          "title": "Label has an empty name",
+          "code": "ERCE_EMPTY_LABEL_NAME",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "empty_power_value",
+          "title": "Power symbol has an empty value",
+          "code": "ERCE_EMPTY_POWER_VALUE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "wired_implicit_power",
+          "title": "Wired hidden power input pin also connects globally by name",
+          "code": "ERCE_WIRED_IMPLICIT_POWER",
+          "defaultSeverity": "warning"
         }
       ]
     },
@@ -199,6 +217,30 @@
           "defaultSeverity": "warning"
         },
         {
+          "key": "pin_map_bad_pad",
+          "title": "Pin map references a pad that does not exist on the footprint",
+          "code": "ERCE_PIN_MAP_BAD_PAD",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "pin_map_unmapped_pin",
+          "title": "Connected pin is not mapped to any footprint pad",
+          "code": "ERCE_PIN_MAP_UNMAPPED_PIN",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "pin_map_duplicate_pad",
+          "title": "Two symbol pins are mapped to the same footprint pad",
+          "code": "ERCE_PIN_MAP_DUPLICATE_PAD",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "pin_map_stale_pin",
+          "title": "Pin map references a pin number that no longer exists on the symbol",
+          "code": "ERCE_PIN_MAP_STALE_PIN",
+          "defaultSeverity": "warning"
+        },
+        {
           "key": "unannotated",
           "title": "Symbol is not annotated",
           "code": "ERCE_UNANNOTATED",
@@ -224,19 +266,19 @@
         },
         {
           "key": "similar_labels",
-          "title": "Labels are similar (lower/upper case difference only)",
+          "title": "Labels are similar",
           "code": "ERCE_SIMILAR_LABELS",
           "defaultSeverity": "warning"
         },
         {
           "key": "similar_power",
-          "title": "Power pins are similar (lower/upper case difference only)",
+          "title": "Power pins are similar",
           "code": "ERCE_SIMILAR_POWER",
           "defaultSeverity": "warning"
         },
         {
           "key": "similar_label_and_power",
-          "title": "Power pin and label are similar (lower/upper case difference only)",
+          "title": "Power pin and label are similar",
           "code": "ERCE_SIMILAR_LABEL_AND_POWER",
           "defaultSeverity": "warning"
         },
@@ -293,6 +335,18 @@
           "title": "Symbol has power input pins that are not placed",
           "code": "ERCE_MISSING_POWER_INPUT_PIN",
           "defaultSeverity": "error"
+        },
+        {
+          "key": "variant_symbol_invalid",
+          "title": "Variant symbol not found in libraries",
+          "code": "ERCE_VARIANT_SYMBOL_INVALID",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "variant_symbol_incompatible",
+          "title": "Variant symbol is not pin-compatible",
+          "code": "ERCE_VARIANT_SYMBOL_INCOMPATIBLE",
+          "defaultSeverity": "warning"
         }
       ]
     }
