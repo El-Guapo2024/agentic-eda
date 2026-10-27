@@ -2,6 +2,16 @@
 name = "eda-clipper2"
 version = "0.1.0"
 edition = "2021"
-description = "A faithful Rust port of Clipper2's Clipper64 engine (clipper.engine/.offset/.rectclip), as used by KiCad's SHAPE_POLY_SET"
+description = "Clipper2 for the workspace: KiCad's vendored Clipper2 2.0.1 C++ (built with cc), plus the inactive Rust port behind the rust-port feature"
+build = "build.rs"
+links = "clipper2"
+
+[features]
+# INACTIVE (2026-10-28): routes every caller to the Rust port (`src/port`)
+# instead of the C++ binding. Off by default; kept for a future all-Rust build.
+rust-port = []
 
 [dependencies]
+
+[build-dependencies]
+cc = "1"

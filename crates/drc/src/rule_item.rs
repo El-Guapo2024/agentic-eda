@@ -170,6 +170,8 @@ pub struct RuleItem {
     pub holes: Vec<Vec<Point>>,
     /// `IsTeardropArea`.
     pub teardrop: bool,
+    /// What `A.Type` says when the item's class does not say it (Find by Properties' items name their own class: "Text Box", "Barcode", ...).
+    pub type_name: Option<String>,
 }
 
 impl RuleItem {
@@ -210,6 +212,7 @@ impl RuleItem {
             outline: Vec::new(),
             holes: Vec::new(),
             teardrop: false,
+            type_name: None,
         }
     }
 

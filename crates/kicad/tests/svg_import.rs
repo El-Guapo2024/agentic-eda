@@ -10,8 +10,9 @@ fn fixture(name: &str) -> String {
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
 }
 
+/// nanosvg works in `float`: a few millionths of a millimetre.
 fn near(a: V2, x: f64, y: f64) -> bool {
-    (a.x - x).abs() < 1e-6 && (a.y - y).abs() < 1e-6
+    (a.x - x).abs() < 1e-5 && (a.y - y).abs() < 1e-5
 }
 
 #[test]
@@ -19,7 +20,7 @@ fn a_rounded_rect_in_millimetres_is_one_closed_polygon_of_40_by_30() {
     let i = read_svg(&fixture("board_outline_rect.svg")).unwrap();
     assert_eq!(i.shapes.len(), 1, "{:?}", i.shapes);
     let ImportedShape::Polygon { pts, filled, stroke, .. } = &i.shapes[0] else { panic!("{:?}", i.shapes) };
-    assert!(!filled && (stroke.width - 0.1).abs() < 1e-9, "{stroke:?}");
+    assert!(!filled && (stroke.width - 0.1).abs() < 1e-6, "{stroke:?}");
     let b = i.bbox.unwrap();
     assert!(near(b.min, 0.0, 0.0) && near(b.max, 40.0, 30.0), "{b:?}");
     // The corners are curves cut into segments; the straight sides keep their end points.
@@ -92,4 +93,74 @@ fn kicads_svg_files_read_when_the_source_is_at_hand() {
         let b = i.bbox.unwrap();
         assert!(b.width().is_finite() && b.height().is_finite() && b.width() < 10_000.0, "{rel}: {b:?}");
     }
+}
+
+/// What a reading comes to, for comparing two readers: the count of each kind of shape, the box, the total polygon area, the messages.
+fn summary(i: &eda_kicad::graphics_import::Imported) -> (Vec<(&'static str, usize)>, Option<(f64, f64, f64, f64)>, f64, Vec<String>) {
+    let mut kinds: std::collections::BTreeMap<&'static str, usize> = Default::default();
+    let mut area = 0.0;
+    for s in &i.shapes {
+        let k = match s {
+            ImportedShape::Line { .. } => "line",
+            ImportedShape::Circle { .. } => "circle",
+            ImportedShape::Arc { .. } => "arc",
+            ImportedShape::Polygon { pts, .. } => {
+                let mut a = 0.0;
+                for k in 0..pts.len() {
+                    let (p, q) = (pts[k], pts[(k + 1) % pts.len()]);
+                    a += p.x * q.y - q.x * p.y;
+                }
+                area += a.abs() / 2.0;
+                "polygon"
+            }
+            ImportedShape::Text { .. } => "text",
+            ImportedShape::Spline { .. } => "spline",
+        };
+        *kinds.entry(k).or_default() += 1;
+    }
+    (kinds.into_iter().collect(), i.bbox.map(|b| (b.min.x, b.min.y, b.max.x, b.max.y)), area, i.messages.clone())
+}
+
+fn same(a: &eda_kicad::graphics_import::Imported, b: &eda_kicad::graphics_import::Imported) -> bool {
+    let (sa, sb) = (summary(a), summary(b));
+    let close = |x: f64, y: f64| (x - y).abs() <= 1e-4 * (1.0 + x.abs().max(y.abs()));
+    sa.0 == sb.0
+        && sa.3 == sb.3
+        && close(sa.2, sb.2)
+        && match (sa.1, sb.1) {
+            (Some(p), Some(q)) => close(p.0, q.0) && close(p.1, q.1) && close(p.2, q.2) && close(p.3, q.3),
+            (None, None) => true,
+            _ => false,
+        }
+}
+
+/// KiCad's nanosvg (the active reader) against the INACTIVE Rust port of nanosvg on the fixtures (which must read the same: the same shapes,
+/// box and area to 1e-4, the same messages) and, when `KICAD_SRC_DIR` is set, on KiCad's own SVGs (compared and listed; the port is known
+/// to differ from KiCad's nanosvg where KiCad changed it: `<style>` sheets, the basic colour keywords only, the default stroke width).
+#[test]
+fn kicads_nanosvg_and_the_inactive_port_read_the_fixtures_alike() {
+    for name in ["board_outline_rect.svg", "mounting_holes.svg", "paths_and_transforms.svg"] {
+        let text = fixture(name);
+        let (a, b) = (read_svg(&text).unwrap(), eda_kicad::svg_import::read_svg_port(&text).unwrap());
+        assert!(same(&a, &b), "{name}:\n  nanosvg {:?}\n  port    {:?}", summary(&a), summary(&b));
+    }
+    let Some(src) = std::env::var_os("KICAD_SRC_DIR").map(PathBuf::from) else { return };
+    let mut files = Vec::new();
+    for dir in ["qa/data/common/import_gfx", "qa/data/cli/basic_test", "qa/data/cli/artwork_generation_regressions"] {
+        if let Ok(rd) = std::fs::read_dir(src.join(dir)) {
+            files.extend(rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "svg")));
+        }
+    }
+    files.sort();
+    let mut alike = 0;
+    for f in &files {
+        let Ok(text) = std::fs::read_to_string(f) else { continue };
+        let (a, b) = (read_svg(&text), eda_kicad::svg_import::read_svg_port(&text));
+        match (&a, &b) {
+            (Ok(a), Ok(b)) if same(a, b) => alike += 1,
+            (Ok(a), Ok(b)) => eprintln!("{}: differs\n  nanosvg {:?}\n  port    {:?}", f.display(), summary(a), summary(b)),
+            _ => eprintln!("{}: nanosvg {:?} port {:?}", f.display(), a.as_ref().err(), b.as_ref().err()),
+        }
+    }
+    eprintln!("KiCad's SVGs: {alike} of {} read alike", files.len());
 }

@@ -23,6 +23,15 @@ blake3 = { workspace = true }
 # dependency added for them (approved 2026-10-21); no default features (no legacy-format reader, no dictionary builder).
 zstd = { version = "0.13", default-features = false }
 
+[features]
+# INACTIVE (2026-10-28): the SVG import reads files with the Rust port of nanosvg (`src/svg_import/nanosvg_port.rs`) instead of KiCad's
+# nanosvg built by build.rs. Off by default; kept for a future all-Rust build.
+rust-nanosvg = []
+
+[build-dependencies]
+# Builds KiCad's nanosvg (third_party/nanosvg) for the SVG import (approved 2026-10-28).
+cc = "1"
+
 [dev-dependencies]
 eda-place = { path = "../place" }
 eda-freeroute = { path = "../freeroute" }

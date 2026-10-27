@@ -25,6 +25,7 @@ pub mod pad_shape;
 mod known_props;
 pub mod libeval;
 pub mod pcbexpr;
+pub mod query;
 pub mod rule_board;
 pub mod rule_editor;
 pub mod rule_item;

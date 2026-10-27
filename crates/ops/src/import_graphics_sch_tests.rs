@@ -126,7 +126,9 @@ fn a_dashed_red_svg_line_keeps_its_style_and_colour_in_the_stroke_table() {
     let s = sch(&b);
     assert_eq!(s.lines.len(), 1, "{:?}", s.lines);
     let l = &s.lines[0];
-    assert_eq!((l.pts[0], l.pts[1], l.width_nm), (Point { x: mm(1.0), y: mm(2.0) }, Point { x: mm(11.0), y: mm(2.0) }, mm(0.3)));
+    // nanosvg (KiCad's, as KiCad links it) works in `float`: a few nanometres off, and the width is truncated (`MapLineWidth`'s `int( .. )`).
+    let near = |a: Nm, b: Nm| (a.get() - b.get()).abs() <= 4;
+    assert!(near(l.pts[0].x, mm(1.0)) && near(l.pts[0].y, mm(2.0)) && near(l.pts[1].x, mm(11.0)) && near(l.pts[1].y, mm(2.0)) && near(l.width_nm, mm(0.3)), "{l:?}");
     let st = s.extras.strokes.get(&l.id).expect("the style and colour are in the stroke table");
     assert_eq!((st.width_nm, st.style, st.color), (Nm::ZERO, SchLineStyle::Dash, Some(SchColor { r: 255, g: 0, b: 0, a: 255 })));
 }
@@ -301,7 +303,8 @@ fn a_symbol_has_no_curves_so_an_svg_curve_becomes_segments_that_follow_it() {
     assert_eq!(g.len(), 1, "{g:?}");
     let LibrarySymbolGraphic::Polyline { pts, stroke_mm, .. } = &g[0] else { panic!("{g:?}") };
     assert!(pts.len() > 4, "{} points", pts.len());
-    assert!((*stroke_mm - 0.2).abs() < 1e-9);
+    // nanosvg works in `float` and the width is truncated to the symbol editor's unit (0.1 um), as in KiCad: 0.2 mm can come out as 0.1999.
+    assert!((*stroke_mm - 0.2).abs() <= 1e-4 + 1e-9, "{stroke_mm}");
     // The curve leaves (0, 0), peaks at 7.5 below the line in the file (up in the picture's own frame, so -7.5 here) and comes back to (10, 0).
     assert_eq!((pts[0].x, pts[0].y), (0.0, 0.0));
     let last = pts[pts.len() - 1];

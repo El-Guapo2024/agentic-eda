@@ -11,6 +11,13 @@ eda-model = { path = "../model" }
 eda-clipper2 = { path = "../clipper2" }
 eda-shape-poly-set = { path = "../shape-poly-set" }
 eda-drc = { path = "../drc" }
+delaunator = "1"
+
+[features]
+# INACTIVE (2026-10-28): the ratsnest triangulates with the from-scratch
+# Delaunator port (`src/delaunay_port.rs`) instead of the `delaunator` crate.
+# Off by default; kept for a future all-Rust build.
+rust-port = []
 
 [dev-dependencies]
 serde_yaml = { workspace = true }

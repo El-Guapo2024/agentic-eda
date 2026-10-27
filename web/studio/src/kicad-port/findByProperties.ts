@@ -1,6 +1,7 @@
 // Find by Properties (`PCB_ACTIONS::findByProperties`, pcbnew/dialogs/dialog_find_by_properties.cpp at 8303b2ad), the part that decides what the dialog shows and selects. Its two
 // tabs: "From Selection" lists the properties the selected items share, each with a Match of Ignored, Matching or Different, and Select Matching selects every item of the
-// board whose class is one of the selection's and whose properties match; "Query" takes a PCBEXPR expression (`pcbExpr.ts`) and selects the items it is true for.
+// board whose class is one of the selection's and whose properties match; "Query" takes a PCBEXPR expression and selects the items it is true for. The expression
+// runs on the backend (`POST /api/pcb/query`, `eda_drc::query`, the workspace's one copy of the language); `pcbQuery.ts` builds the request.
 //
 //   rebuildPropertyGrid                 the rows: the properties every selected class has by name, visible, available for each item, in the alphabetical order of their names,
 //                                       then the fields every selected footprint has; a value that differs among the items is `<...>` and its Match cannot be set
@@ -16,7 +17,7 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { BoardState, Cmd } from "../api/types";
 import type { LengthUnit } from "../state/units";
-import { compilePcbExpr, itemsMatching, pcbExprEnv, type QueryCompilation } from "./pcbExpr";
+import { pcbQueryRequest, type PcbQueryRequest, type PcbQueryResponse } from "./pcbQuery";
 import { padIds } from "./pcbItems";
 import { PCB_PROPERTIES, pcbContext, pcbFriendlyName, pcbItemsOf, type PcbCtx, type PcbItem } from "./pcbProperties";
 import { formatValue } from "./propertyGrid";
@@ -325,26 +326,39 @@ export interface QueryCheck {
   status: string;
   /** The messages the compiler gave (the box of `Expression Error`). */
   errors: string[];
-  compiled: QueryCompilation | null;
+}
+
+/** Who answers a query: `POST /api/pcb/query` in the studio (`api/client.ts`); the tests hand in another. */
+export type QueryRunner = (request: PcbQueryRequest) => Promise<PcbQueryResponse>;
+
+/** What the dialog does before it compiles: an empty text and a `B.` are answered here; anything else is normalized (field aliases) and sent. */
+export function prepareQuery(expression: string, rows: readonly FindRow[]): { check: QueryCheck } | { normalized: string } {
+  const text = expression.trim();
+  if (text === "") return { check: { ok: false, status: "Expression is empty", errors: [] } };
+  const normalized = normalizeQueryFieldAliases(text, rows);
+  if (queryUsesPairwiseSyntax(normalized)) return { check: { ok: false, status: "B. expressions are not supported.", errors: ["B. expressions are not supported."] } };
+  return { normalized };
+}
+
+/** The status line of a compile: "Syntax OK" when the text parses, else "Syntax error: " and what the compiler told. */
+export function checkOf(response: PcbQueryResponse): QueryCheck {
+  return response.ok ? { ok: true, status: "Syntax OK", errors: response.errors } : { ok: false, status: `Syntax error: ${response.errors.join("\n")}`, errors: response.errors };
 }
 
 /** `onCheckSyntaxClick` (and the compile `selectMatchingFromQuery` does first) over an expression, as the dialog would after normalizing it. */
-export function checkQuery(expression: string, rows: readonly FindRow[], board: BoardState, units: LengthUnit): QueryCheck {
-  const text = expression.trim();
-  if (text === "") return { ok: false, status: "Expression is empty", errors: [], compiled: null };
-  const normalized = normalizeQueryFieldAliases(text, rows);
-  if (queryUsesPairwiseSyntax(normalized)) return { ok: false, status: "B. expressions are not supported.", errors: ["B. expressions are not supported."], compiled: null };
-  const errors: string[] = [];
-  const compiled = compilePcbExpr(normalized, pcbExprEnv(board, units), (m) => errors.push(m));
-  return compiled.ok ? { ok: true, status: "Syntax OK", errors, compiled } : { ok: false, status: `Syntax error: ${errors.join("\n")}`, errors, compiled };
+export async function checkQuery(expression: string, rows: readonly FindRow[], board: BoardState, units: LengthUnit, run: QueryRunner): Promise<QueryCheck> {
+  const prepared = prepareQuery(expression, rows);
+  if ("check" in prepared) return prepared.check;
+  return checkOf(await run(pcbQueryRequest(prepared.normalized, board, [], units)));
 }
 
 /** `selectMatchingFromQuery`: the ids of the items the expression is true for, on any layer they are on; null when it does not compile. */
-export function selectMatchingFromQuery(expression: string, rows: readonly FindRow[], board: BoardState, units: LengthUnit): { check: QueryCheck; ids: string[] | null } {
-  const check = checkQuery(expression, rows, board, units);
-  if (!check.ok || !check.compiled) return { check, ids: null };
-  const env = pcbExprEnv(board, units);
-  return { check, ids: itemsMatching(check.compiled, collectAllBoardItems(board), env) };
+export async function selectMatchingFromQuery(expression: string, rows: readonly FindRow[], board: BoardState, units: LengthUnit, run: QueryRunner): Promise<{ check: QueryCheck; ids: string[] | null }> {
+  const prepared = prepareQuery(expression, rows);
+  if ("check" in prepared) return { check: prepared.check, ids: null };
+  const response = await run(pcbQueryRequest(prepared.normalized, board, collectAllBoardItems(board), units));
+  const check = checkOf(response);
+  return { check, ids: check.ok ? (response.ids ?? []) : null };
 }
 
 /**

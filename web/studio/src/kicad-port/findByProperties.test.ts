@@ -2,8 +2,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { anyActive, buildRows, checkQuery, collectAllBoardItems, completionNames, exprFieldName, generateExpression, matchedText, normalizeQueryFieldAliases, queryUsesPairwiseSyntax, savedModes, selectMatchingFromQuery, selectMatchingFromRows, withRecentQuery, type FindRow, type MatchMode } from "./findByProperties";
 import { pcbExprBoard } from "./pcbExprFixture";
+import { compilePcbExpr, itemsMatching, pcbExprEnv } from "./pcbExpr";
+import { pcbItemsOf } from "./pcbProperties";
+import type { PcbQueryRequest, PcbQueryResponse } from "./pcbQuery";
 
 const board = pcbExprBoard();
+
+/** The query runner of these tests: the INACTIVE TypeScript copy of the language, which `pcbQuery.test.ts` holds to the same answers as the backend's. */
+const run = async (req: PcbQueryRequest): Promise<PcbQueryResponse> => {
+  const env = pcbExprEnv(board);
+  const errors: string[] = [];
+  const c = compilePcbExpr(req.expression, env, (m) => errors.push(m));
+  return { ok: c.ok, errors, ids: c.ok ? itemsMatching(c, pcbItemsOf(board, req.items.map((i) => i.id)), env) : null };
+};
 const rowsOf = (ids: string[], saved: ReadonlyMap<string, MatchMode> = new Map()) => buildRows(board, ids, "mm", saved);
 const setMode = (rows: FindRow[], name: string, mode: MatchMode): void => {
   const row = rows.find((r) => r.name === name);
@@ -146,25 +157,25 @@ test("Create from Selection Tab: the rows that are not Ignored, a length with it
   assert.equal(generateExpression(rowsOf(["trk_a"]).rows, board, ["trk_a"], "mm"), "", "nothing active: nothing to write");
 });
 
-test("the generated query selects what the rows select", () => {
+test("the generated query selects what the rows select", async () => {
   const b = rowsOf(["via_a"]);
   setMode(b.rows, "Via Type", "matching");
   setMode(b.rows, "Hole", "matching");
   const q = generateExpression(b.rows, board, ["via_a"], "mm");
   assert.equal(q, "A.Hole == 0.3mm && A.Via_Type == 'Through'");
   assert.deepEqual(selectMatchingFromRows(board, b.rows, b.types, "mm"), ["via_a"]);
-  assert.deepEqual(selectMatchingFromQuery(q, b.rows, board, "mm").ids, ["via_a"]);
+  assert.deepEqual((await selectMatchingFromQuery(q, b.rows, board, "mm", run)).ids, ["via_a"]);
   // in mil
   const m = rowsOf(["trk_a"]);
   setMode(m.rows, "Width", "matching");
   assert.equal(generateExpression(m.rows, board, ["trk_a"], "mil"), "A.Width == 7.87mil");
 });
 
-test("a footprint field row is written A.getField('Name')", () => {
+test("a footprint field row is written A.getField('Name')", async () => {
   const b = rowsOf(["U1"]);
   setMode(b.rows, "Supplier", "matching");
   assert.equal(generateExpression(b.rows, board, ["U1"], "mm"), "A.getField('Supplier') == 'ACME'");
-  assert.deepEqual(selectMatchingFromQuery("A.getField('Supplier') == 'ACME'", b.rows, board, "mm").ids, ["U1", "R1"]);
+  assert.deepEqual((await selectMatchingFromQuery("A.getField('Supplier') == 'ACME'", b.rows, board, "mm", run)).ids, ["U1", "R1"]);
 });
 
 // ------------------------------------------------------------------------------------------------------------------------------ the query tab
@@ -186,27 +197,27 @@ test("B. is not supported, but a B inside a name or a string is", () => {
   assert.equal(queryUsesPairwiseSyntax("A.Width > 1mm && (B.Net == A.Net)"), true);
 });
 
-test("Check Syntax: what the dialog's status line says", () => {
+test("Check Syntax: what the dialog's status line says", async () => {
   const rows: FindRow[] = [];
-  assert.equal(checkQuery("", rows, board, "mm").status, "Expression is empty");
-  assert.equal(checkQuery("   ", rows, board, "mm").status, "Expression is empty");
-  assert.equal(checkQuery("A.Width > 0.1mm", rows, board, "mm").status, "Syntax OK");
-  assert.equal(checkQuery("A.Width >", rows, board, "mm").status, "Syntax error: Syntax error");
-  assert.equal(checkQuery("A.Width == B.Width", rows, board, "mm").status, "B. expressions are not supported.");
-  assert.equal(checkQuery("A.Width ?? 1", rows, board, "mm").status, "Syntax error: Unrecognized character '?'", "the text so far is whole: the bad character is the only error");
-  assert.equal(checkQuery("A.Width == ?", rows, board, "mm").status, "Syntax error: Unrecognized character '?'\nSyntax error", "and here the text is cut short as well");
+  assert.equal((await checkQuery("", rows, board, "mm", run)).status, "Expression is empty");
+  assert.equal((await checkQuery("   ", rows, board, "mm", run)).status, "Expression is empty");
+  assert.equal((await checkQuery("A.Width > 0.1mm", rows, board, "mm", run)).status, "Syntax OK");
+  assert.equal((await checkQuery("A.Width >", rows, board, "mm", run)).status, "Syntax error: Syntax error");
+  assert.equal((await checkQuery("A.Width == B.Width", rows, board, "mm", run)).status, "B. expressions are not supported.");
+  assert.equal((await checkQuery("A.Width ?? 1", rows, board, "mm", run)).status, "Syntax error: Unrecognized character '?'", "the text so far is whole: the bad character is the only error");
+  assert.equal((await checkQuery("A.Width == ?", rows, board, "mm", run)).status, "Syntax error: Unrecognized character '?'\nSyntax error", "and here the text is cut short as well");
   // an unknown property is reported but the text still compiles, as in KiCad
-  const unknown = checkQuery("A.Nope == 'x'", rows, board, "mm");
+  const unknown = (await checkQuery("A.Nope == 'x'", rows, board, "mm", run));
   assert.equal(unknown.ok, true);
   assert.deepEqual(unknown.errors, ["Unrecognized property 'Nope'"]);
 });
 
-test("Select Matching from a query: the ids, or null when it does not compile", () => {
+test("Select Matching from a query: the ids, or null when it does not compile", async () => {
   const rows: FindRow[] = [];
-  assert.deepEqual(selectMatchingFromQuery("A.Type == 'Via' && A.Diameter >= 0.8mm", rows, board, "mm").ids, ["via_b", "via_c"]);
-  assert.equal(selectMatchingFromQuery("A.Type ==", rows, board, "mm").ids, null);
-  assert.deepEqual(selectMatchingFromQuery("A.Reference == 'R*'", rowsOf(["R1"]).rows, board, "mm").ids, ["R1", "R2"], "A.Reference is the field of a footprint (getField), so a pad is not one");
-  assert.deepEqual(selectMatchingFromQuery("A.Type == 'Pad' && A.Library_Link == 'R_0603'", rowsOf(["R1"]).rows, board, "mm").ids, ["R1.1", "R2.1"], "a pad has its footprint's library link, a property");
+  assert.deepEqual((await selectMatchingFromQuery("A.Type == 'Via' && A.Diameter >= 0.8mm", rows, board, "mm", run)).ids, ["via_b", "via_c"]);
+  assert.equal((await selectMatchingFromQuery("A.Type ==", rows, board, "mm", run)).ids, null);
+  assert.deepEqual((await selectMatchingFromQuery("A.Reference == 'R*'", rowsOf(["R1"]).rows, board, "mm", run)).ids, ["R1", "R2"], "A.Reference is the field of a footprint (getField), so a pad is not one");
+  assert.deepEqual((await selectMatchingFromQuery("A.Type == 'Pad' && A.Library_Link == 'R_0603'", rowsOf(["R1"]).rows, board, "mm", run)).ids, ["R1.1", "R2.1"], "a pad has its footprint's library link, a property");
 });
 
 test("completion after A.: the names of the properties and the fields, with _ for a blank, sorted", () => {

@@ -272,10 +272,13 @@ fn an_svg_outline_becomes_a_polygon_on_the_layer_with_the_strokes_width() {
     assert_eq!(new.len(), 1, "{new:?}");
     let Shape::Polygon { layer, stroke_width, filled, pts, .. } = &new[0] else { panic!("{new:?}") };
     // The stroke of the SVG is 0.1 mm; the dialog's DXF line width (0.2) has no say for an SVG. An SVG's Y axis already points down.
-    assert_eq!((layer.as_str(), *stroke_width, *filled), ("Dwgs.User", mm(0.1), false));
+    // nanosvg (KiCad's) works in `float`, and `MapLineWidth` truncates: 0.1 mm comes out as 99999 nm, as in KiCad; the corners land within a few nm.
+    let near = |a: Nm, b: Nm, tol: i64| (a.get() - b.get()).abs() <= tol;
+    assert_eq!((layer.as_str(), *filled), ("Dwgs.User", false));
+    assert!(near(*stroke_width, mm(0.1), 2), "{stroke_width:?}");
     let (minx, maxx) = (pts.iter().map(|p| p.x).min().unwrap(), pts.iter().map(|p| p.x).max().unwrap());
     let (miny, maxy) = (pts.iter().map(|p| p.y).min().unwrap(), pts.iter().map(|p| p.y).max().unwrap());
-    assert_eq!((minx, maxx, miny, maxy), (Nm::ZERO, mm(40.0), Nm::ZERO, mm(30.0)));
+    assert!(near(minx, Nm::ZERO, 10) && near(maxx, mm(40.0), 10) && near(miny, Nm::ZERO, 10) && near(maxy, mm(30.0), 10), "{minx:?} {maxx:?} {miny:?} {maxy:?}");
     assert!(pts.len() > 20, "the rounded corners are cut into segments: {}", pts.len());
 }
 
@@ -289,9 +292,12 @@ fn an_svg_scale_and_origin_work_as_a_dxfs_do() {
     r.offset_y_nm = mm(20.0);
     b.apply(&Cmd::ImportGraphics(r)).unwrap();
     let Shape::Polygon { stroke_width, pts, .. } = &added(&b)[0] else { panic!() };
-    assert_eq!(*stroke_width, mm(0.05), "0.1 mm halved");
-    assert_eq!((pts.iter().map(|p| p.x).min().unwrap(), pts.iter().map(|p| p.x).max().unwrap()), (mm(10.0), mm(30.0)));
-    assert_eq!((pts.iter().map(|p| p.y).min().unwrap(), pts.iter().map(|p| p.y).max().unwrap()), (mm(20.0), mm(35.0)));
+    // Within a few nm: nanosvg works in `float` (see above).
+    let near = |a: Nm, b: Nm, tol: i64| (a.get() - b.get()).abs() <= tol;
+    assert!(near(*stroke_width, mm(0.05), 2), "0.1 mm halved: {stroke_width:?}");
+    let (minx, maxx) = (pts.iter().map(|p| p.x).min().unwrap(), pts.iter().map(|p| p.x).max().unwrap());
+    let (miny, maxy) = (pts.iter().map(|p| p.y).min().unwrap(), pts.iter().map(|p| p.y).max().unwrap());
+    assert!(near(minx, mm(10.0), 10) && near(maxx, mm(30.0), 10) && near(miny, mm(20.0), 10) && near(maxy, mm(35.0), 10), "{minx:?} {maxx:?} {miny:?} {maxy:?}");
 }
 
 #[test]
@@ -321,7 +327,9 @@ fn an_svg_outline_can_replace_the_boards_outline_too() {
     b.apply(&Cmd::ImportGraphics(r)).unwrap();
     assert!(eda_model::outline::outline_is_shapes(b.design()));
     let ring = &b.design().placement.as_ref().unwrap().outline;
-    assert_eq!((ring.iter().map(|p| p.x).min().unwrap(), ring.iter().map(|p| p.x).max().unwrap(), ring.iter().map(|p| p.y).max().unwrap()), (Nm::ZERO, mm(40.0), mm(30.0)), "{}", ring.len());
+    let (minx, maxx, maxy) = (ring.iter().map(|p| p.x).min().unwrap(), ring.iter().map(|p| p.x).max().unwrap(), ring.iter().map(|p| p.y).max().unwrap());
+    // Within a few nm: nanosvg works in `float` (see above).
+    assert!(minx.get().abs() <= 10 && (maxx - mm(40.0)).get().abs() <= 10 && (maxy - mm(30.0)).get().abs() <= 10, "{minx:?} {maxx:?} {maxy:?} ({} points)", ring.len());
 }
 
 #[test]

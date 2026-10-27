@@ -25,6 +25,10 @@
 /// ever compare `x`/`y` (see clipper.core.h lines 195-203) -- `z` rides
 /// along for `ZCallback64` bookkeeping only -- so [`PartialEq`] is
 /// hand-written to match rather than derived.
+///
+/// `#[repr(C)]`: the same layout as the C++ `Point64` built with `USINGZ`
+/// (`{ int64 x, y, z }`), so `cpp.rs` hands paths to Clipper2 without copying.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Point64 {
     pub x: i64,
