@@ -5376,8 +5376,10 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// `PCB_BASE_FRAME::CreateNewFootprint`: a fresh, empty footprint with the
-    /// default attribute `FP_SMD`; the caller already made the name unique.
+    /// `PCB_BASE_FRAME::CreateNewFootprint`: a fresh footprint with the attributes of the library's last footprint ("Try to infer the footprint
+    /// attributes from an existing footprint in the library", `fpnames.back()` of the sorted names), else `FP_SMD`, and the Footprint Editor's default
+    /// texts: its Reference and Value take their default layouts when written (`fp_edit::default_library_reference_layout`), and the `${REFERENCE}`
+    /// text on the fabrication layer is added (`fp_edit::new_footprint_texts`). The caller already made the name unique.
     fn new_footprint(&mut self, name: &str) -> Result<(), Vec<CheckResult>> {
         if name.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_footprint", "footprint", "a footprint needs a name")]);
@@ -5386,7 +5388,11 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_footprint_exists", name, "a footprint with this name already exists; pick another name")]);
         }
         let mut lib_fp = LibraryFootprint::new_empty(name);
-        lib_fp.attributes.smd = true;
+        match self.design.footprint_library.as_ref().and_then(|l| l.footprints.iter().max_by(|a, b| a.name.cmp(&b.name))) {
+            Some(last) => lib_fp.attributes = last.attributes.clone(),
+            None => lib_fp.attributes.smd = true,
+        }
+        lib_fp.texts = eda_model::fp_edit::new_footprint_texts();
         lib_fp.assign_missing_ids();
         self.footprint_library_mut().footprints.push(lib_fp);
         Ok(())

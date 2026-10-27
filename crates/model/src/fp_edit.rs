@@ -566,14 +566,35 @@ pub fn default_value_layout(fp: &FootprintInstance) -> FieldLayout {
 /// The text a library footprint's Reference shows unless it says otherwise (`FOOTPRINT::GetReference` of a new footprint: `REF**`).
 pub const LIBRARY_REFERENCE_TEXT: &str = "REF**";
 
-/// Where a library footprint's Reference is when the file has none of its own: 1 mm text on the silkscreen above the origin.
+/// Where a library footprint's Reference is when it has no layout of its own (a new footprint, a built-in one): `PCB_BASE_FRAME::CreateNewFootprint`'s, from the
+/// Footprint Editor's default text items (`footprint_editor_settings.cpp`: `{ "REF**", true, F_SilkS }`) -- the silkscreen's 1 mm text with its 0.1 mm pen
+/// (`DEFAULT_SILK_TEXT_SIZE`, `DEFAULT_SILK_TEXT_WIDTH`), half a text height above the origin (`default_pos.y -= GetTextSize( txt_layer ).y / 2`).
 pub fn default_library_reference_layout() -> FieldLayout {
-    FieldLayout::new(Point { x: Nm::ZERO, y: Nm::new(-2_000_000) }, "F.SilkS")
+    let mut l = FieldLayout::new(Point { x: Nm::ZERO, y: Nm::new(-500_000) }, "F.SilkS");
+    l.thickness = Nm::new(100_000);
+    l
 }
 
-/// Where a library footprint's Value is when the file has none of its own: 1 mm text on the fabrication layer below the origin.
+/// Where a library footprint's Value is when it has no layout of its own: `CreateNewFootprint`'s second text item (`{ "", true, F_Fab }`), the fabrication
+/// layer's 1 mm text with its 0.15 mm pen (`DEFAULT_TEXT_SIZE`, `DEFAULT_TEXT_WIDTH`), one and a half text heights below the Reference: (0, 1 mm).
 pub fn default_library_value_layout() -> FieldLayout {
-    FieldLayout::new(Point { x: Nm::ZERO, y: Nm::new(2_000_000) }, "F.Fab")
+    FieldLayout::new(Point { x: Nm::ZERO, y: Nm::new(1_000_000) }, "F.Fab")
+}
+
+/// The texts `CreateNewFootprint` adds to a new footprint after its two fields (`m_DefaultFPTextItems[2..]`): `{ "${REFERENCE}", true, F_Fab }`, the
+/// fabrication layer's 1 mm text, at (0, 2.5 mm).
+pub fn new_footprint_texts() -> Vec<crate::ir::Text> {
+    vec![crate::ir::Text {
+        id: String::new(),
+        content: "${REFERENCE}".into(),
+        at: Point { x: Nm::ZERO, y: Nm::new(2_500_000) },
+        angle: Default::default(),
+        layer: "F.Fab".into(),
+        size_nm: Nm::new(1_000_000),
+        stroke_width: Nm::new(150_000),
+        justify: Default::default(),
+        mirror: false,
+    }]
 }
 
 /// Where a library footprint's Datasheet and Description fields are when the file has none of their own: `FOOTPRINT::FOOTPRINT`'s `addField( FIELD_T::DATASHEET,

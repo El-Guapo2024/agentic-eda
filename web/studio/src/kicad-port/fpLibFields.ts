@@ -1,7 +1,7 @@
 // The fields grid of the Footprint Editor's Footprint Properties (`DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR`, pcbnew/dialogs/dialog_footprint_properties_fp_editor.cpp): the rows it
 // starts with (the Reference, the Value and the user fields of the footprint in the library), what OK sends back and what it refuses.
 //
-// The Reference's text is `REF**` and the Value's the footprint's name until the file says otherwise; their layouts default to 1 mm text above and below the origin. The Datasheet
+// The Reference's text is `REF**` and the Value's the footprint's name until the file says otherwise; their layouts default to `CreateNewFootprint`'s (1 mm text just above and below the origin). The Datasheet
 // and the Description are the third and fourth mandatory rows (hidden, empty, at the origin on the fabrication layer until the file says otherwise). A user field
 // starts as `OnAddField` makes it: hidden, at the origin, on the fabrication layer, named `Field<n>`. The rules of a row are the board dialog's (kicad-port/fpFields.ts
 // `checkFieldRow`) and `Validate`'s for the names: every user field has one, none is a mandatory field's, none repeats another's (compared without case here, as KiCad's grid does).
@@ -24,8 +24,10 @@ export interface LibFieldRow {
   layout: FieldLayoutCmd;
 }
 
-export const defaultReferenceLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: -2_000_000 }, size: [1_000_000, 1_000_000], thickness: 150_000, layer: "F.SilkS", visible: true });
-export const defaultValueLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: 2_000_000 }, size: [1_000_000, 1_000_000], thickness: 150_000, layer: "F.Fab", visible: true });
+/** `CreateNewFootprint`'s Reference and Value (`fp_edit::default_library_reference_layout`, `default_library_value_layout`): REF** in the silkscreen's 1 mm / 0.1 mm text half a
+ * height above the origin, the name in the fabrication layer's 1 mm / 0.15 mm text at (0, 1 mm). */
+export const defaultReferenceLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: -500_000 }, size: [1_000_000, 1_000_000], thickness: 100_000, layer: "F.SilkS", visible: true });
+export const defaultValueLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: 1_000_000 }, size: [1_000_000, 1_000_000], thickness: 150_000, layer: "F.Fab", visible: true });
 /** `OnAddField`: hidden, at the origin, on the fabrication layer. */
 export const newFieldLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: 0 }, size: [1_000_000, 1_000_000], thickness: 150_000, layer: "F.Fab", visible: false });
 /** The Datasheet and Description fields of a footprint that has none of its own (`FOOTPRINT::FOOTPRINT`'s `addField( FIELD_T::DATASHEET, F_Fab, false )`): hidden, at the origin,

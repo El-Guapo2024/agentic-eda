@@ -15,7 +15,8 @@ test("a footprint with nothing set has the Reference REF** and the Value named a
     ["Datasheet", "", "F.Fab", false],
     ["Description", "", "F.Fab", false],
   ]);
-  assert.deepEqual(rows[0]!.layout.at, { x: 0, y: -2_000_000 });
+  // `CreateNewFootprint`: REF** half a 1 mm text height above the origin, in the silkscreen's 0.1 mm pen; the Value at (0, 1 mm).
+  assert.deepEqual([rows[0]!.layout.at, rows[0]!.layout.thickness, rows[1]!.layout.at], [{ x: 0, y: -500_000 }, 100_000, { x: 0, y: 1_000_000 }]);
   assert.deepEqual([rows[2]!.layout.size, rows[2]!.layout.thickness], [[1_270_000, 1_270_000], 0], "EDA_TEXT's 1.27 mm with the automatic pen");
 });
 
