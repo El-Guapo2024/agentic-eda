@@ -132,7 +132,7 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
 
     add_board_outline(&mut node, &drc_board, &layers);
     add_copper_texts(&mut node, design, &layers, &mut rules);
-    add_keepouts(&mut node, design, &layers, &rules);
+    add_keepouts(&mut node, design, &layers, &mut rules);
     node.set_rule_resolver(rules);
     // `ROUTER::SyncWorld`: `m_world->FixupVirtualVias()`
     node.fixup_virtual_vias();
@@ -187,28 +187,84 @@ fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: 
 }
 
 /// `PNS_KICAD_IFACE_BASE::syncZone` for each keepout rule area (`!aZone->GetIsRuleArea() || !aZone->HasKeepoutParametersSet()` returns at
-/// once): every triangle of the outline (`poly->CacheTriangulation()`, [`crate::triangulation::tesselate`]), on each of its copper layers, a
-/// `SOLID` with no net (`SetNet( nullptr )`, here [`crate::item::not_a_net`]), its parent the zone, not routable. What it keeps out, and how
-/// (`collideSimple`'s `IsKeepout`: an exact boundary), is [`crate::rule_resolver::Keepout`]'s and [`Node::item_collision`]'s. **Differs:** an
-/// outline the ear cutting cannot finish (KiCad subdivides or splits it) is one solid of its whole outline, and the holes of an area are not
-/// cut out of it.
-fn add_keepouts(node: &mut Node, design: &Design, layers: &LayerMap, rules: &crate::rule_resolver::RuleResolver) {
+/// once): every triangle of the outline with its holes (`poly->CacheTriangulation()`, [`keepout_triangles`]), on **each** copper layer of the
+/// area's set (`LSET layers = aZone->GetLayerSet(); for( PCB_LAYER_ID layer : LAYER_RANGE( F_Cu, B_Cu, .. ) ) { if( !layers[ layer ] ) continue;
+/// .. }`: a keepout on F.Cu and B.Cu, or on `*.Cu`, is an obstacle on every one of them), a `SOLID` with no net (`SetNet( nullptr )`, here
+/// [`crate::item::not_a_net`]), its parent the zone, not routable. What it keeps out, and how (`collideSimple`'s `IsKeepout`: an exact
+/// boundary), is [`crate::rule_resolver::Keepout`]'s and [`Node::item_collision`]'s. An outline that cannot be triangulated
+/// (`!poly->IsTriangulationUpToDate()`) is left out of the world, and the router says so: "%s is malformed." (with
+/// `GetItemDescription( .., true )`), "This zone cannot be handled by the router.\nPlease verify it is not a self-intersecting polygon."
+/// ([`crate::rule_resolver::RuleResolver::warnings`]; KiCad shows it in a dialog).
+fn add_keepouts(node: &mut Node, design: &Design, layers: &LayerMap, rules: &mut crate::rule_resolver::RuleResolver) {
     let Some(rt) = design.routing.as_ref() else { return };
     for z in rt.zones.iter().filter(|z| z.is_rule_area && (z.keepout_tracks || z.keepout_vias || z.keepout_pads || z.keepout_copper_pour || z.keepout_footprints)) {
-        let Some(layer) = layers.index_of(&z.layer) else { continue };
-        if z.outline.len() < 3 {
+        let mut on: Vec<i32> = z.copper_layers().into_iter().filter_map(|l| layers.index_of(l)).collect();
+        on.sort_unstable();
+        on.dedup();
+        if on.is_empty() || z.outline.len() < 3 {
             continue;
         }
-        let pieces: Vec<Vec<Point>> = match crate::triangulation::tesselate(&z.outline) {
-            Some(tris) => tris.into_iter().map(|t| t.to_vec()).collect(),
-            None => vec![z.outline.clone()],
+        let Some(pieces) = keepout_triangles(&z.outline, &z.holes) else {
+            rules.warn(format!("{} is malformed.\nThis zone cannot be handled by the router.\nPlease verify it is not a self-intersecting polygon.", rule_area_description(z, layers)));
+            continue;
         };
-        for (k, pts) in pieces.into_iter().enumerate() {
-            let n = pts.len() as i64;
-            let pos = Point { x: pts.iter().map(|p| p.x).sum::<Nm>() / n, y: pts.iter().map(|p| p.y).sum::<Nm>() / n };
-            let rule = rules.rule_of(&format!("{}{}", Solid::KEEPOUT_SOURCE, z.id));
-            node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos, shape: Shape::Polygon { pts }, source: format!("{}{}#{k}", Solid::KEEPOUT_SOURCE, z.id), edge: false, rule }));
+        let rule = rules.rule_of(&format!("{}{}", Solid::KEEPOUT_SOURCE, z.id));
+        let mut k = 0usize;
+        for &layer in &on {
+            for pts in &pieces {
+                let n = pts.len() as i64;
+                let pos = Point { x: pts.iter().map(|p| p.x).sum::<Nm>() / n, y: pts.iter().map(|p| p.y).sum::<Nm>() / n };
+                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos, shape: Shape::Polygon { pts: pts.clone() }, source: format!("{}{}#{k}", Solid::KEEPOUT_SOURCE, z.id), edge: false, rule }));
+                k += 1;
+            }
         }
+    }
+}
+
+/// `SHAPE_POLY_SET::CacheTriangulation` of a rule area's outline and its holes: the triangles of `TesselatePolygon` ([`crate::triangulation::tesselate`])
+/// of the outline, which leave the holes open -- a route may run in a keepout's cutout. An outline with holes is first fractured (`flatSet.Fracture()`,
+/// [`eda_shape_poly_set::ShapePolySet::fracture`]: each hole joined to the outline by a bridge) and the one chain that makes is cut into ears. `None`
+/// when the ear cutting does not finish (`!IsTriangulationUpToDate()`). **Differs:** KiCad first tries `TesselatePolygon( const POLYGON& )`, whose
+/// `eliminateHoles` bridges each hole to the outline itself, and fractures only when that fails; the triangles differ, the area they cover does not.
+fn keepout_triangles(outline: &[Point], holes: &[Vec<Point>]) -> Option<Vec<Vec<Point>>> {
+    let holes: Vec<&Vec<Point>> = holes.iter().filter(|h| h.len() >= 3).collect();
+    let chains: Vec<Vec<Point>> = if holes.is_empty() {
+        vec![outline.to_vec()]
+    } else {
+        use eda_shape_poly_set::ShapePolySet;
+        let to64 = |c: &[Point]| c.iter().map(|p| eda_clipper2::Point64::new(p.x.get(), p.y.get())).collect::<Vec<_>>();
+        let mut set = ShapePolySet::default();
+        let o = set.add_outline(to64(outline));
+        for h in holes {
+            set.add_hole(to64(h), Some(o));
+        }
+        set.fracture(true);
+        set.polys.iter().filter_map(|poly| poly.first()).map(|c| c.iter().map(|q| Point { x: Nm::new(q.x), y: Nm::new(q.y) }).collect()).collect()
+    };
+    let mut out = Vec::new();
+    for c in chains {
+        out.extend(crate::triangulation::tesselate(&c)?.into_iter().map(|t| t.to_vec()));
+    }
+    Some(out)
+}
+
+/// `ZONE::GetItemDescription( .., true )` of a rule area: "Rule Area on %s" or "Rule area '%s' on %s", its layers in the board's order ("on %s",
+/// "on %s and %s", "on %s, %s and %s", "on %s, %s and %zu more").
+fn rule_area_description(z: &eda_model::ir::Zone, layers: &LayerMap) -> String {
+    let mut set: Vec<&str> = z.layer_set();
+    // `m_layerSet.Seq()`: the copper layers in stack order, then the rest
+    set.sort_by_key(|l| (layers.index_of(l).unwrap_or(i32::MAX), l.to_string()));
+    let layer_desc = match set.as_slice() {
+        [a] => format!("on {a}"),
+        [a, b] => format!("on {a} and {b}"),
+        [a, b, c] => format!("on {a}, {b} and {c}"),
+        [a, b, rest @ ..] => format!("on {a}, {b} and {} more", rest.len()),
+        [] => String::new(),
+    };
+    if z.name.is_empty() {
+        format!("Rule Area {layer_desc}")
+    } else {
+        format!("Rule area '{}' {layer_desc}", z.name)
     }
 }
 
@@ -369,6 +425,77 @@ mod tests {
         assert!(node.first_colliding(&through, &net_of("N1"), front.layers, &rules, &[]).is_some());
         let clear = Shape::Stadium { a: Point { x: mm(0.015), y: y1 + Nm::new(100) + rules.clearance }, b: Point { x: mm(0.025), y: y1 + Nm::new(100) + rules.clearance }, r: Nm::new(100) };
         assert!(node.first_colliding(&clear, &net_of("N1"), front.layers, &rules, &[]).is_none());
+    }
+
+    fn keepout_board(zone: eda_model::ir::Zone) -> (Design, ConstraintModel) {
+        let (mut design, mut model) = two_pad_board();
+        model.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+        design.routing.as_mut().unwrap().zones.push(zone);
+        (design, model)
+    }
+
+    fn keepout_zone(layers: &[&str], outline: Vec<Point>, holes: Vec<Vec<Point>>) -> eda_model::ir::Zone {
+        let mut z = eda_model::ir::Zone { id: "ko".into(), is_rule_area: true, keepout_tracks: true, outline, holes, ..Default::default() };
+        z.set_layer_set(layers);
+        z
+    }
+
+    fn square(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<Point> {
+        vec![Point { x: mm(x0), y: mm(y0) }, Point { x: mm(x1), y: mm(y0) }, Point { x: mm(x1), y: mm(y1) }, Point { x: mm(x0), y: mm(y1) }]
+    }
+
+    /// The layers the keepout triangles of the world are on.
+    fn keepout_layers(node: &Node) -> Vec<i32> {
+        let mut v: Vec<i32> = node.iter().filter_map(|(_, it)| match it { Item::Solid(s) if s.is_keepout() => Some(s.layers.start()), _ => None }).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
+    /// R3-1 (`syncZone`: `for( PCB_LAYER_ID layer : LAYER_RANGE( F_Cu, B_Cu, .. ) ) { if( !layers[ layer ] ) continue; .. }`): a rule area on
+    /// F.Cu and B.Cu is an obstacle on both, and one on every copper layer (`*.Cu`) on all four.
+    #[test]
+    fn a_keepout_is_an_obstacle_on_every_copper_layer_of_its_set() {
+        let (design, model) = keepout_board(keepout_zone(&["F.Cu", "B.Cu"], square(10.0, 10.0, 20.0, 20.0), vec![]));
+        let (node, _) = build_node(&design, &model);
+        assert_eq!(keepout_layers(&node), vec![0, 3]);
+        let (design, model) = keepout_board(keepout_zone(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"], square(10.0, 10.0, 20.0, 20.0), vec![]));
+        let (node, _) = build_node(&design, &model);
+        assert_eq!(keepout_layers(&node), vec![0, 1, 2, 3]);
+        let (design, model) = keepout_board(keepout_zone(&["B.Cu"], square(10.0, 10.0, 20.0, 20.0), vec![]));
+        let (node, _) = build_node(&design, &model);
+        assert_eq!(keepout_layers(&node), vec![3]);
+    }
+
+    /// R3-5 (`CacheTriangulation` of the outline with its holes): no triangle of a keepout covers its hole, and together they cover the rest.
+    #[test]
+    fn a_keepouts_hole_is_left_open() {
+        let (design, model) = keepout_board(keepout_zone(&["F.Cu"], square(10.0, 10.0, 20.0, 20.0), vec![square(13.0, 13.0, 17.0, 17.0)]));
+        let (node, _) = build_node(&design, &model);
+        let tris: Vec<&Shape> = node.iter().filter_map(|(_, it)| match it { Item::Solid(s) if s.is_keepout() => Some(&s.shape), _ => None }).collect();
+        let at = |x: f64, y: f64| Shape::Circle { c: Point { x: mm(x), y: mm(y) }, r: Nm::ZERO };
+        assert!(tris.iter().all(|t| t.collides(&at(15.0, 15.0), Nm::ZERO).is_none()), "the hole's middle is open");
+        assert!(tris.iter().all(|t| t.collides(&at(13.5, 16.5), Nm::ZERO).is_none()), "and its corner");
+        for (x, y) in [(11.0, 11.0), (15.0, 11.5), (18.5, 15.0), (11.5, 18.5)] {
+            assert!(tris.iter().any(|t| t.collides(&at(x, y), Nm::ZERO).is_some()), "({x}, {y}) is in the area");
+        }
+        let area: f64 = tris.iter().map(|t| match t { Shape::Polygon { pts } => ((pts[1].x - pts[0].x).as_f64() * (pts[2].y - pts[0].y).as_f64() - (pts[2].x - pts[0].x).as_f64() * (pts[1].y - pts[0].y).as_f64()).abs() / 2.0, _ => 0.0 }).sum();
+        assert!((area - 84e12).abs() < 1e9, "100 mm2 less the 16 mm2 hole: {area}");
+    }
+
+    /// R3-9 (`syncZone`: `if( !poly->IsTriangulationUpToDate() ) { .. "%s is malformed." .. return false; }`): a self-intersecting outline is
+    /// left out of the world, and the router says so.
+    #[test]
+    fn a_malformed_keepout_is_left_out_with_a_warning() {
+        let bow_tie = vec![Point { x: mm(10.0), y: mm(10.0) }, Point { x: mm(20.0), y: mm(20.0) }, Point { x: mm(20.0), y: mm(10.0) }, Point { x: mm(10.0), y: mm(20.0) }];
+        assert!(crate::triangulation::tesselate(&bow_tie).is_none(), "the ear cutting does not finish a bow tie");
+        let mut z = keepout_zone(&["F.Cu", "B.Cu"], bow_tie, vec![]);
+        z.name = "ANT".into();
+        let (design, model) = keepout_board(z);
+        let (node, _) = build_node(&design, &model);
+        assert!(keepout_layers(&node).is_empty());
+        let warnings = node.rule_resolver().unwrap().warnings();
+        assert_eq!(warnings, ["Rule area 'ANT' on F.Cu and B.Cu is malformed.\nThis zone cannot be handled by the router.\nPlease verify it is not a self-intersecting polygon."]);
     }
 
     #[test]

@@ -32,12 +32,15 @@ fn footprint(name: &str, pads: Vec<Pad>) -> Footprint {
 /// `TIE2` footprint (two 1 mm squares side by side, touching) when asked.
 fn board(fps: &[(&str, &str, Point)], nets: &[(&str, &[&str])]) -> (Design, ConstraintModel) {
     let parts = fps.iter().map(|(r, f, _)| part(r, f, match *f { "TIE2" => 2, "MH3" => 0, _ => 1 })).collect();
+    let th = Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.6), mm(1.6)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(mm(0.8)), drill_slot: None, rot: 0, roundrect_ratio: None };
     let model = ConstraintModel {
         parts,
         nets: nets.iter().map(|(n, pins)| Net { name: n.to_string(), pins: pins.iter().map(|s| s.to_string()).collect() }).collect(),
         footprints: vec![
             footprint("PAD1", vec![smd("1", (Nm::ZERO, Nm::ZERO))]),
             footprint("TIE2", vec![smd("1", (Nm::ZERO, Nm::ZERO)), smd("2", (mm(1.0), Nm::ZERO))]),
+            // a through-hole pad: 1.6 mm round, 0.8 mm hole
+            footprint("TH1", vec![th]),
             // a 3 mm mounting hole: a non-plated pad of the hole's size
             footprint("MH3", vec![Pad { opposite_side: false, ext: Default::default(), number: String::new(), at: (Nm::ZERO, Nm::ZERO), size: (mm(3.0), mm(3.0)), shape: PadShape::Circle, kind: PadKind::NonPlatedHole, drill: Some(mm(3.0)), drill_slot: None, rot: 0, roundrect_ratio: None }]),
         ],
@@ -61,9 +64,14 @@ fn board(fps: &[(&str, &str, Point)], nets: &[(&str, &[&str])]) -> (Design, Cons
 
 /// Route `from` -> `to` in Walk around mode, as the studio does, and commit.
 fn route(design: &Design, model: &ConstraintModel, from: Point, to: Point) -> RouteCommit {
+    route_on(design, model, from, to, "F.Cu")
+}
+
+/// [`route`] on `layer`.
+fn route_on(design: &Design, model: &ConstraintModel, from: Point, to: Point, layer: &str) -> RouteCommit {
     let mut router = Router::new(design, model);
     router.settings.mode = Mode::Walkaround;
-    router.start(from, "F.Cu", mm(0.2)).expect("starts on the pad");
+    router.start(from, layer, mm(0.2)).expect("starts on the pad");
     let pv = router.preview(to).expect("a session");
     assert!(!pv.colliding, "the route is clear: {:?}", pv.head.pts);
     router.finish(to).expect("commits")
@@ -215,6 +223,56 @@ fn a_keepout_rule_area_blocks_tracks() {
         assert!(found.is_empty(), "{found:#?}");
         // the straight route through the area is what kicad-cli would flag
         assert!(!kicad_violations(&apply(&design, &straight), &model, &["items_not_allowed"]).unwrap().is_empty());
+    }
+}
+
+/// No committed track of `commit` crosses the polygon `area`.
+fn assert_outside(commit: &RouteCommit, area: &[Point]) {
+    let keepout = Shape::Polygon { pts: area.to_vec() };
+    for t in &commit.tracks {
+        for w in t.pts.windows(2) {
+            assert!(Shape::Stadium { a: w[0], b: w[1], r: t.width / 2 }.collides(&keepout, Nm::ZERO).is_none(), "{w:?} is in the keepout: {:?}", commit.tracks);
+        }
+    }
+}
+
+/// R3-1 (`syncZone` adds the triangles on each copper layer of `GetLayerSet()`): a rule area on F.Cu and B.Cu keeps a route on B.Cu out as
+/// well. Two through-hole pads, the area across the straight way between them, the route on B.Cu: it goes round, and kicad-cli finds no
+/// `items_not_allowed`; the straight route through it on B.Cu is what kicad-cli flags.
+#[test]
+fn a_keepout_on_both_copper_layers_blocks_a_route_on_the_back() {
+    let (r1, r2) = (p(5.0, 10.0), p(25.0, 10.0));
+    let (mut design, model) = board(&[("J1", "TH1", r1), ("J2", "TH1", r2)], &[("SIG", &["J1.1", "J2.1"])]);
+    let area = vec![p(13.0, 7.0), p(17.0, 7.0), p(17.0, 13.0), p(13.0, 13.0)];
+    let mut zone = rule_area("ko3", area.clone(), true, false);
+    zone.set_layer_set(&["F.Cu", "B.Cu"]);
+    design.routing.as_mut().unwrap().zones.push(zone);
+    let commit = route_on(&design, &model, r1, r2, "B.Cu");
+    assert!(commit.tracks.iter().all(|t| t.layer == "B.Cu"), "{:?}", commit.tracks);
+    assert_outside(&commit, &area);
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["items_not_allowed", "clearance"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        let straight = RouteCommit { tracks: vec![eda_model::ir::Track { id: String::new(), net: "SIG".into(), pins: vec![], layer: "B.Cu".into(), width: mm(0.2), pts: vec![r1, r2], arc_mid_offset: None }], ..Default::default() };
+        assert!(!kicad_violations(&apply(&design, &straight), &model, &["items_not_allowed"]).unwrap().is_empty(), "kicad-cli keeps B.Cu out too");
+    }
+}
+
+/// R3-5 (`CacheTriangulation` of the outline with its holes): a 10 x 10 mm keepout of tracks with a 4 x 4 mm hole, and two pads in the hole: the
+/// route between them is straight, and kicad-cli finds nothing.
+#[test]
+fn a_route_may_cross_the_hole_of_a_keepout() {
+    let (r1, r2) = (p(13.0, 10.0), p(17.0, 10.0));
+    let (mut design, model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2)], &[("SIG", &["R1.1", "R2.1"])]);
+    let mut zone = rule_area("ko4", vec![p(10.0, 5.0), p(20.0, 5.0), p(20.0, 15.0), p(10.0, 15.0)], true, false);
+    zone.holes = vec![vec![p(12.0, 8.0), p(18.0, 8.0), p(18.0, 12.0), p(12.0, 12.0)]];
+    design.routing.as_mut().unwrap().zones.push(zone);
+    let commit = route(&design, &model, r1, r2);
+    assert!(commit.tracks.iter().all(|t| t.pts.iter().all(|q| q.y == mm(10.0))), "straight across the hole: {:?}", commit.tracks);
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["items_not_allowed", "clearance"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        // the hole is in the derived board: a track across the area's body, outside the hole, is flagged
+        let body = RouteCommit { tracks: vec![eda_model::ir::Track { id: String::new(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(13.0, 6.0), p(17.0, 6.0)], arc_mid_offset: None }], ..Default::default() };
+        assert!(!kicad_violations(&apply(&design, &body), &model, &["items_not_allowed"]).unwrap().is_empty());
     }
 }
 

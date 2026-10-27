@@ -248,6 +248,8 @@ pub struct RuleResolver {
     /// hole clearances too), and every hole, physical or edge rule.
     max_hole_clearance: Nm,
     cache: RefCell<FnvMap<(Key, Key, bool), Nm>>,
+    /// What building the world had to tell the user ([`Self::warnings`]).
+    warnings: Vec<String>,
 }
 
 impl std::fmt::Debug for RuleResolver {
@@ -374,13 +376,23 @@ impl RuleResolver {
                     _ => false,
                 }
         });
-        RuleResolver { engine, layer_names, items, info, ids, extra: RefCell::new(FnvMap::default()), net_ties, geometry, plain, net_rules: rules.clone(), max_clearance, max_hole_clearance, cache: RefCell::new(FnvMap::default()) }
+        RuleResolver { engine, layer_names, items, info, ids, extra: RefCell::new(FnvMap::default()), net_ties, geometry, plain, net_rules: rules.clone(), max_clearance, max_hole_clearance, cache: RefCell::new(FnvMap::default()), warnings: Vec::new() }
     }
 
     /// The worst clearance anything of this board can ask for (`NODE::GetMaxClearance`, without the epsilon): how far a collision search
     /// has to look.
     pub fn max_clearance(&self) -> Nm {
         self.max_clearance
+    }
+
+    /// What `SyncWorld` told the user while it built the world: a rule area the router cannot handle (`syncZone`'s `KIDIALOG`: "%s is malformed.").
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    /// Adds a warning to [`Self::warnings`].
+    pub fn warn(&mut self, message: String) {
+        self.warnings.push(message);
     }
 
     /// The number `from_ir` gives the solid of `source` (`Solid::rule`): a pad's id, `keepout:<zone id>`, a copper text's source; `0` when the
