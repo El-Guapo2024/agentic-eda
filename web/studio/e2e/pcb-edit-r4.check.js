@@ -201,7 +201,8 @@
       const made = await newShapes(before);
       t(made.length === 1 && made[0].kind === "polygon", `one polygon, made by the click on the first corner (${made.length})`);
       const pts = made[0]?.pts ?? [];
-      t(pts.length === 5, `five corners: the bend is one (${pts.length}: ${JSON.stringify(pts.map((p) => [p[0] / 1e6 - fx, p[1] / 1e6 - fy]))})`);
+      // `ZONE_CREATE_HELPER::OnComplete` simplifies the outline (round 5 A5-5): (10,0) is on the line from (0,0) to the bend at (16,0), so four corners.
+      t(pts.length === 4, `four corners: the bend is one, the collinear (10,0) is simplified away (${pts.length}: ${JSON.stringify(pts.map((p) => [p[0] / 1e6 - fx, p[1] / 1e6 - fy]))})`);
       t(pts.some((p) => near(p, fx + 16, fy)), "the bend at (16,0)");
       t(__eda.state().tool === "select", `the tool was left (${__eda.state().tool})`);
       await __eda.run("pcbnew.EditorControl.lineModeFree");

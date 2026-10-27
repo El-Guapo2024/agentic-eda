@@ -15,7 +15,7 @@ import { snapPoint } from "./gridHelper";
 import { drawStrokeText } from "../text/strokeFont";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
 import { originMarkerColor } from "../../kicad-port/gridOrigin";
-import { leaderModeOf, zoneLeader } from "../../kicad-port/pcbDrawZone";
+import { leaderModeOf, zoneLeader, zoneLoop } from "../../kicad-port/pcbDrawZone";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
 import { carryRatsnest, offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
 import { carryMatrix, carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
@@ -1293,8 +1293,11 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   // `DrawZone`'s leader (a zone, a rule area, a graphic polygon): bent in the 45- and 90-degree line modes, as the click will lock it in (kicad-port/pcbDrawZone.ts).
   const polygonDraw = draw.kind === "zone" || (draw.kind === "shape" && draw.shapeKind === "polygon");
   const leader = polygonDraw && rubberEnd && pts.length > 0 ? zoneLeader(pts, rubberEnd, leaderModeOf(opts.angleSnapMode, opts.drawCtrl ?? false)) : null;
-  const shown: [number, number][] = leader ? [...pts, ...leader.slice(1)] : rubberEnd ? [...pts, rubberEnd] : pts;
-  strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), draw.kind === "zone" && shown.length >= 2);
+  // `m_loopPts`: in the 45- and 90-degree modes the outline closes from the cursor back to the first corner along a bent path, as finishing will make it
+  // (ZONE_CREATE_HELPER::OnComplete, round 5 A5-5); in the free mode a zone's preview closes straight.
+  const loop = polygonDraw && rubberEnd && pts.length > 1 ? zoneLoop(pts, rubberEnd, leaderModeOf(opts.angleSnapMode, opts.drawCtrl ?? false)) : [];
+  const shown: [number, number][] = leader ? [...pts, ...leader.slice(1), ...loop.slice(1, -1)] : rubberEnd ? [...pts, rubberEnd] : pts;
+  strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), (draw.kind === "zone" || loop.length > 0) && shown.length >= 2);
 
   // pcb_viewer_tools.cpp's measure tool: the straight-line distance (and
   // dx/dy) between the ruler's two ends, labeled at the midpoint, in the

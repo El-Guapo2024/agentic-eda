@@ -53,3 +53,10 @@ test("Redo and the zone fills are refused while an item is being drawn (wxBell, 
   assert.equal(redoRefused("pcb", "measure", { kind: "measure" }), false, "the measure tool has no such branch");
   assert.equal(redoRefused("pcb", "zone", null), false, "nothing started");
 });
+
+test("a graphic polygon emptied by Delete is still started: the next Delete ends it, not the selection (round 5 A5-6)", () => {
+  const emptied = withoutLastCorner({ kind: "shape", shapeKind: "polygon", pts: [[0, 0]] as [number, number][] });
+  assert.deepEqual(emptied, { kind: "shape", shapeKind: "polygon", pts: [] });
+  assert.equal(drawZoneStarted("pcb", "draw_polygon", emptied), true);
+  assert.equal(withoutLastCorner(emptied!), null, "nothing left to remove: cleanup()");
+});

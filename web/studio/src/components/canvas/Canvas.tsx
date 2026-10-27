@@ -79,7 +79,7 @@ import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { cellAddress, cellById, drawTableSession, tableById } from "../../kicad-port/tables";
 import { openDrawnTableDialog } from "../../state/tableDialogs";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
-import { leaderModeOf, zoneClick } from "../../kicad-port/pcbDrawZone";
+import { leaderModeOf, zoneClick, zoneFinish } from "../../kicad-port/pcbDrawZone";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
 import { displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
@@ -606,6 +606,11 @@ export function Canvas() {
   /** Route/zone/shape tools all share "click adds a point, Enter/double-click finishes" -- this commits whatever's accumulated in state.drawState, per its kind. Shared with the F ("Attempt Finish") hotkey for the route case specifically (useActionRunner.ts) via routing.ts's finishInteractiveRoute, so the two can never disagree about what finishing a route means. */
   const finishDraw = useCallback(() => {
     const draw = state.drawState;
+    // Where the cursor is when a zone or polygon is finished (the leader and loop `SetFinished` sees): the snapped cursor, else the last corner.
+    const finishCursor = (pts: readonly [number, number][]): [number, number] => {
+      const at = snap.lastPoint() ?? (state.cursorNm ? snapPoint(state.cursorNm.x, state.cursorNm.y, state.gridNm) : pts[pts.length - 1]);
+      return at ? [at[0], at[1]] : [0, 0];
+    };
     if (!draw) return;
     if (draw.kind === "route") {
       const [x, y] = draw.pts[draw.pts.length - 1] ?? [draw.pts[0]?.[0] ?? 0, draw.pts[0]?.[1] ?? 0];
@@ -616,21 +621,23 @@ export function Canvas() {
       const [x, y] = draw.ptsA[draw.ptsA.length - 1] ?? (cursor ? [cursor.x, cursor.y] : [0, 0]);
       void finishDiffPairRoute(x, y, dispatch, api);
     } else if (draw.kind === "zone") {
-      if (draw.pts.length >= 3) {
+      // `ZONE_CREATE_HELPER::OnComplete`: the locked corners, the leader's and loop's corners in the 45/90-degree modes, simplified (round 5 A5-5).
+      const outline = zoneFinish(draw.pts, finishCursor(draw.pts), leaderModeOf(state.pcbx.angleSnapMode, drawCtrlRef.current));
+      if (outline) {
         // zone_create_helper.cpp commitZone(): a cutout subtracts from its source zone and a
         // "similar" zone copies its settings -- neither shows the properties dialog (only
         // createNewZone() does); a plain draw still goes through ZoneDialog.
         const mode = state.pcbx.zoneDrawMode;
         const source = mode ? api.zoneById(mode.sourceId) : undefined;
         if (mode?.mode === "cutout" && source) {
-          void api.cmd({ op: "zone_cutout", id: source.id, cutout: draw.pts.map(([x, y]) => ({ x, y })) }).then(() => dispatch({ type: "SET_SELECTION", refs: [] }));
+          void api.cmd({ op: "zone_cutout", id: source.id, cutout: outline.map(([x, y]) => ({ x, y })) }).then(() => dispatch({ type: "SET_SELECTION", refs: [] }));
         } else if (mode?.mode === "similar" && source) {
-          void api.addZone(source.net, source.layer, draw.pts, zoneSettingsOf(source), { layers: [...zoneLayers(source)] });
+          void api.addZone(source.net, source.layer, outline, zoneSettingsOf(source), { layers: [...zoneLayers(source)] });
         } else if (mode?.mode === "stitch") {
           // KiCad 10's `ZONE_MODE::STITCH` (zone_create_helper.cpp): a via stitching with the outline, its defaults filled in (`InitializeDefaults`), and its properties dialog before any via is made.
-          openViaStitchDialog(null, newViaStitch(draw.pts, board?.board_rules?.via_diameter ?? 0, board?.board_rules?.via_drill ?? 0));
+          openViaStitchDialog(null, newViaStitch(outline, board?.board_rules?.via_diameter ?? 0, board?.board_rules?.via_drill ?? 0));
         } else {
-          dispatch({ type: "SET_ZONE_PENDING", outline: draw.pts });
+          dispatch({ type: "SET_ZONE_PENDING", outline });
         }
       }
       // `endPolygon`: `cleanup(); m_frame->PopTool( aEvent );` whether or not the outline made a zone.
@@ -653,7 +660,9 @@ export function Canvas() {
         dispatch({ type: "SET_DRAW_STATE", draw: null });
         return;
       }
-      const shape = shapeFromPoints(draw.shapeKind, draw.pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
+      // A graphic polygon is `DrawZone`'s too: its outline is `OnComplete`'s (round 5 A5-5).
+      const pts = draw.shapeKind === "polygon" ? (zoneFinish(draw.pts, finishCursor(draw.pts), leaderModeOf(state.pcbx.angleSnapMode, drawCtrlRef.current)) ?? []) : draw.pts;
+      const shape = shapeFromPoints(draw.shapeKind, pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
       if (shape) api.cmd({ op: "add_shape", shape });
       dispatch({ type: "SET_DRAW_STATE", draw: null });
       // A graphic polygon is `DrawZone`'s: finishing it pops the tool (`PopTool`), as a zone does.
@@ -805,6 +814,8 @@ export function Canvas() {
       if (state.activeTool === "zone") {
         const draw = state.drawState;
         const click = zoneClick(draw?.kind === "zone" ? draw.pts : [], [sx, sy], leaderModeOf(state.pcbx.angleSnapMode, snapMods(e).ctrl));
+        // `ZONE_CREATE_HELPER::OnFirstPoint`: `RunAction( ACTIONS::selectionClear )` (round 5 A5-6).
+        if (draw?.kind !== "zone") dispatch({ type: "SET_SELECTION", refs: [] });
         if (click.finish) finishDraw();
         else dispatch({ type: "SET_DRAW_STATE", draw: { kind: "zone", pts: click.pts } });
         return;
@@ -896,6 +907,8 @@ export function Canvas() {
       if (shapeKind === "polygon") {
         const draw = state.drawState;
         const click = zoneClick(draw?.kind === "shape" && draw.shapeKind === "polygon" ? draw.pts : [], [sx, sy], leaderModeOf(state.pcbx.angleSnapMode, snapMods(e).ctrl));
+        // `ZONE_CREATE_HELPER::OnFirstPoint` clears the selection (round 5 A5-6).
+        if (!(draw?.kind === "shape" && draw.shapeKind === "polygon")) dispatch({ type: "SET_SELECTION", refs: [] });
         if (click.finish) finishDraw();
         else dispatch({ type: "SET_DRAW_STATE", draw: { kind: "shape", shapeKind: "polygon", pts: click.pts } });
         return;

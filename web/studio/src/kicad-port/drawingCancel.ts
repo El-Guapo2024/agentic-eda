@@ -37,7 +37,8 @@ type DrawLike = { kind: string; shapeKind?: string; pts?: readonly unknown[]; ar
 export function drawZoneStarted(tab: string, activeTool: string, drawState: DrawLike | null | undefined): boolean {
   if (tab !== "pcb" || activeTool === "select" || drawState == null) return false;
   // `started` stays true once the first corner is in, even when Delete has taken every corner away again (see `withoutLastCorner`).
-  return drawState.kind === "zone" || (drawState.kind === "shape" && drawState.shapeKind === "polygon" && (drawState.pts?.length ?? 0) > 0);
+  // A graphic polygon's state exists only from its first corner on, so it is `started` with no corner left too (round 5 A5-6).
+  return drawState.kind === "zone" || (drawState.kind === "shape" && drawState.shapeKind === "polygon");
 }
 
 /**
