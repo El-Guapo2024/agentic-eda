@@ -71,7 +71,7 @@ Nothing in the residue is new: every line left is a cause rounds 2-4 listed. The
 
 ## Findings
 
-### F1. A board older than 20210606 keeps the old overbar notation: its net names and texts are not KiCad's. **high**
+### F1. A board older than 20210606 keeps the old overbar notation: its net names and texts are not KiCad's. **high** **Fixed** on task-r5-board-io: e3154817
 
 **What differs.**
 - `crates/kicad/src/import.rs:521` (`import_net_names`), `:543` (`net_of`), `:555` (`pad_net`), the net class `add_net` names, and every text reader take the strings as the file has them. No function in the crate converts `~...~` (grep: no overbar converter in `crates/`).
@@ -91,7 +91,7 @@ The QA corpus has no pre-20210606 board with a `~`, so the round trip does not s
 
 **Known?** No (no overbar row in GAPS or findings). The schematic reader (`sch_import.rs`) has the same gate in KiCad's `SCH_IO_KICAD_SEXPR_PARSER` (`m_requiredVersion < 20210606`); I did not check it, since it belongs to the schematic lane.
 
-### F2. Bold text in an outline font is widened 1.6x on read of a 20260826+ file; KiCad migrates stroke-font text only. **medium**
+### F2. Bold text in an outline font is widened 1.6x on read of a 20260826+ file; KiCad migrates stroke-font text only. **medium** **Fixed** on task-r5-board-io: fcfc782e
 
 **What differs.**
 - `crates/kicad/src/bold_text.rs:21` `normalize` / `:31` `widen` multiply the `(thickness ..)` of every bold `(font ..)` by 1.6. It runs on boards (`import.rs:151`) and, since r4 N4, on footprint files (`footprint_lib.rs:73`, `footprint_import.rs:75`).
@@ -111,7 +111,7 @@ The QA corpus has no pre-20210606 board with a `~`, so the round trip does not s
 
 **Known?** No. The N4 fix carried it into the footprint readers.
 
-### F3. Flipping a radial or leader dimension leaves its kept text position behind. **medium**
+### F3. Flipping a radial or leader dimension leaves its kept text position behind. **medium** **Fixed** on task-r5-board-io: e9726153
 
 **What differs.**
 - `crates/ops/src/pcb_transform.rs:590-605` (`transform_dimension`, `Xform::Flip`) mirrors `start`, `end`, the text angle and the height. Since r4 N1 a radial or leader keeps `Dimension::text_pos`, and Flip does not mirror it. Move and Rotate do (`connectivity/src/dimension.rs` `translate_dimension`, `rotate_dimension`).
@@ -133,7 +133,7 @@ The QA corpus has no pre-20210606 board with a `~`, so the round trip does not s
 
 **Known?** No (new with N1).
 
-### F4. Library parity: the pad layer set is not compared, though r4 N3 is marked Fixed for it; die length and fabrication property only when the board has one. **medium**
+### F4. Library parity: the pad layer set is not compared, though r4 N3 is marked Fixed for it; die length and fabrication property only when the board has one. **medium** **Fixed** on task-r5-board-io: 62a0d4de
 
 **What differs.**
 - `crates/model/src/fp_compare.rs:288-292` reports "Pad %s layers differ." only for `opposite_side` and the remove-unconnected/keep-outer flags. The r4 N3 Fixed note says "the pad layer-set comparison" was added; commit `36319460` has no such code, and the engine `Pad` carries no layer set (the library's `LibraryPad::layers` and the board's `PadMaskInfo::layers` exist but are not passed in).
@@ -155,11 +155,11 @@ The QA corpus has no pre-20210606 board with a `~`, so the round trip does not s
 
 **Known?** The layer set was round-4 N3; its Fixed mark is wrong. GAPS 26 does not list it.
 
-### F5. A copper graphic's line in the library-parity report: KiCad's footprint copy has no board. **low**
+### F5. A copper graphic's line in the library-parity report: KiCad's footprint copy has no board. **low** **Fixed** on task-r5-board-io: 62a0d4de
 
 `fp_compare.rs:229` (`describe`) writes `"Segment [<no net>] of R1 on F.Cu differs."`. In 8303b2ad and 25ec2335 `FootprintNeedsUpdate` the shapes described are those of `FOOTPRINT dummy( *this ); dummy.SetParent( nullptr );`. `PCB_SHAPE::GetItemDescription` on copper calls `GetNetnameMsg()`, which returns `wxT( "[** NO BOARD DEFINED **]" )` when `!GetBoard()`. So KiCad's line is `Segment [** NO BOARD DEFINED **] of R1 on F.Cu differs.` (and the layer is `LayerName()`'s canonical name, not the board's user name). This is a KiCad quirk; copy it or keep ours, but the doc comment's claim is not what KiCad prints. Test: extend `the_lines_follow_kicads_order_and_wording` with an `F.Cu` segment.
 
-### F6. A leader's `(text_frame N)` outside 0-3 is read as no frame; KiCad clamps. **low**
+### F6. A leader's `(text_frame N)` outside 0-3 is read as no frame; KiCad clamps. **low** **Fixed** on task-r5-board-io: 32912d58
 
 `import_items.rs:367-372`: `_ => DimensionTextBorder::None`. 8303b2ad `parseDIMENSION` `T_text_frame`: `textFrame = std::clamp( textFrame, 0, 3 );`, so `(text_frame 7)` is ROUNDRECT and `-1` is NONE. Hand-edited files only. Test: `(text_frame 7)` reads back as `(text_frame 3)`.
 

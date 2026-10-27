@@ -41,6 +41,8 @@ Each run prints three net lists: kicad-cli's netlist of the original file, ours 
 
 ### A5-H1. One pin number used in two units of a symbol: the tracer keeps one unit's pin and loses the other's net (high; what the A4-H3 fix leaves out)
 
+**Fixed** on task-r5-schematic: 3783b91e
+
 **What differs.**
 - Ours: `crates/cli/src/board.rs:785-792` (`pin_key`) adds the unit to the key only for a pin that is common to every unit (`common && ...` → `pin_copy_key`). Any other pin is keyed `REF.NUMBER`.
 - So when unit A and unit B of `J1` each have a pin `1`, and both units are placed on one screen, both get the key `J1.1`. `pin_world.insert(key, at)` (`board.rs:610-616` for a drawn symbol, `:648-652` for an imported one) keeps the last one only.
@@ -68,6 +70,8 @@ Test: `crates/cli/src/sch_hierarchy_tests.rs::a_pin_number_repeated_in_two_units
 
 ### A5-M1. Two bus wire entries that meet end to end join in ours; in KiCad an entry never propagates to another entry (medium)
 
+**Fixed** on task-r5-schematic: 3783b91e
+
 **What differs.**
 - Ours: `crates/engine/src/nets.rs:397-405` seeds both ends of each entry that is off every bus and unites them. Two entries that share an end point land on the same seeded id, so they join.
 - KiCad 25ec2335 `conn_islands.cpp`, the `ENTRY` row of `PROPAGATES` (columns ANCHOR, WIRE, BUS, ENTRY, ENTRY_BUS, NC, BUS_SIDE):
@@ -92,6 +96,8 @@ Test: `nets::tests::two_bus_entries_end_to_end_do_not_join`.
 
 ### A5-M2. A symbol placed in its alternate (De Morgan) body style loses its jumper pin groups and its power kind in the tracer (medium)
 
+**Fixed** on task-r5-schematic: 3783b91e
+
 **What differs.**
 - `crates/model/src/symbol.rs:330-348` (`LibSymbol::in_style`) builds the style-2 copy with `connectivity: Default::default()`. That drops `jumper_pin_groups`, `duplicate_pin_numbers_are_jumpers` and `power_local`.
 - The tracer takes pin facts from that copy:
@@ -111,6 +117,8 @@ Fix: `connectivity: self.connectivity.clone()` in `in_style`.
 **Already known?** No.
 
 ### A5-L1. Two pins of one number on a screen shown twice: the derived file swaps the two nets' names relative to ours and to the original (low)
+
+**Open**: the twin pin's uuid is made, not the file's; connectivity is the same
 
 **What differs.**
 - KiCad names the two nets `Net-(J1-A)` and `Net-(J1-A)_1` in an order set by the items' KIIDs.
@@ -178,6 +186,8 @@ Scratch cases:
 
 ### B5-H1. A delete batch that lists a junction before a wire half: refused, or the other half is deleted too (high; new in 3946f4d2)
 
+**Fixed** on task-r5-schematic: 46e9451f
+
 **What differs.**
 - Since 3946f4d2, `delete_junction` merges the in-line wires at the dot straight away (`crates/ops/src/lib.rs:5039-5055`: `scene.merge_at(at); let merged = scene.finish(); ... *sch = merged;`). The merged wire keeps the first wire's id, and the second wire's id is gone.
 - 628d36c1 defers only `commit_clean_up` to the end of the batch (`lib.rs:3001-3029`). This merge is not deferred.
@@ -222,6 +232,8 @@ Fix direction, either:
 
 ### B5-M1. `IsTerminalPoint`: KiCad finishes a wire or bus on any label or sheet pin at its point, connected or not; ours needs a wire or pin there (medium; the premise of r3 C3-M3 and r4 C4-L3 is wrong)
 
+**Fixed** on task-r5-schematic: ffc896e0
+
 **What differs.**
 - Ours, `web/studio/src/kicad-port/schTerminalPoint.ts:31-33`:
   ```ts
@@ -264,6 +276,8 @@ Test: in `schTerminalPoint.test.ts`, change the two assertions above to `true`, 
 
 ### B5-M2. A stacked pin (`[1-2]`) has no net in the studio: Highlight Net on it, or on a label sitting on it, does not find the net (medium; C4-M2's fix and A4-H4 do not meet)
 
+**Fixed** on task-r5-schematic: 32ef2aa2
+
 **What differs.**
 - `crates/cli/src/studio.rs:1797` builds `pin_net` from `model.nets`. Since A4-H4 (e3d9699b), a stacked pin is listed there as its pads (`J1.1`, `J1.2`).
 - The studio looks pins up by the library number:
@@ -284,6 +298,8 @@ Test, in `crates/cli/src/sch_hierarchy_tests.rs`: `a_label_on_a_stacked_pin_has_
 
 ### B5-L1. Delete Sheet Pin and Delete Sheet clean up only after the deletion; KiCad also deletes the junction at the pin through `DeleteJunction`'s merge (low)
 
+**Fixed** on task-r5-schematic: 46e9451f
+
 **What differs.**
 - KiCad: `DoDelete` puts a deleted sheet pin's position (and each pin of a deleted sheet, `for( SCH_SHEET_PIN* pin : sheet->GetPins() ) pts.insert( pin->GetPosition() )`) into `pts`. Then it calls `DeleteJunction`, which merges the in-line wires that end at the dot whatever their strokes (`MergeOverlap( .., false )`).
 - Ours: `SchCmd::DeleteSheet` and `DeleteSheetPin` (`crates/ops/src/sch_edit.rs:390-397`) run only `commit_clean_up`. That drops the junction (no longer explicit), but its merge skips wires whose strokes differ (`IsStrokeEquivalent`).
@@ -296,6 +312,8 @@ Test: `deleting_a_sheet_pin_merges_the_wires_at_its_junction` (`sch_sheet_pin_te
 **Already known?** No. C4-L1's fix covers the junction, not the merge. Cosmetic: connectivity is the same.
 
 ### B5-L2. A unit per sheet path is lost when a sheet is pasted or imported: `path_units` keeps the copied screen's old path keys (low)
+
+**Fixed** on task-r5-schematic: beaba393 (a sheet pasted as another placement of its screen; a sheet copied into new screens or brought by Import Sheet is still **Open**)
 
 **What differs.**
 - `SchExtras::path_units` is keyed by `path.join("/")` (`crates/model/src/sheet_list.rs:406`).
@@ -364,6 +382,8 @@ Test: `deleting_a_sheet_pin_merges_the_wires_at_its_junction` (`sch_sheet_pin_te
 
 ### C5-M1. Find Next with "Search only selected objects" searches the whole sheet and replaces the selection with the hit (medium)
 
+**Fixed** on task-r5-schematic: 1113c6d2
+
 **What differs.**
 - Ours: `web/studio/src/components/schematic/findNavigation.ts:65` asks the server with no scope:
   ```ts
@@ -398,6 +418,8 @@ Test: `findNavigation.test.ts` (or `schFind.test.ts` with an injected fetch), `f
 
 ### C5-M2. Replace All in references is refused when one replacement's result is another symbol's old reference, though the end state is unique (medium)
 
+**Fixed** on task-r5-schematic: 674109ac
+
 **What differs.**
 - Ours: `crates/ops/src/lib.rs` `replace_text_here` collects `(old, new)` pairs in hit order (ascending x, y: `search.rs:337`) and then renames one by one (`lib.rs:5588`, `for (old, new) in renames { self.rename_symbol(&old, &new)?; }`). `rename_symbol_in_schematic` (`lib.rs:5647-5652`) refuses a name another symbol still holds ("a symbol with this reference is already on the sheet"), and `Cmd` is atomic, so Replace All fails as a whole.
 - KiCad: `ReplaceAll` runs `doReplace` per match, and `SCH_FIELD::Replace` sets each reference with no uniqueness test:
@@ -419,6 +441,8 @@ Test: `crates/ops/src/tests.rs::replace_all_in_references_renames_through_a_chai
 
 ### C5-M3. The Symbol Fields Table and its export preview list a shared screen's symbols once, with the first placement's references; KiCad lists each sheet path (medium)
 
+**Fixed** on task-r5-schematic: ef49e9a7
+
 **What differs.**
 - Ours: `crates/ops/src/fields_table.rs:427-438` `project_view` adds every screen's `symbols` once ("a screen shared by two sheet symbols is one screen, listed once ... so no row is listed twice"). The second placement's references (`SchematicSection::instance_overrides`, `SymbolPathOverride { sheet_path, reference, .. }`, read by `sheet_list::reference_under`) never reach the table. So the grid, `${QUANTITY}`, `${ITEM_NUMBER}` and the Export tab's live preview (`sch_api.rs::bom_export` -> `fields_table::export_bom_over`) are short by every symbol of every later placement.
 - The BOM *file* is written by kicad-cli (`POST /api/sch/bom`, PARITY-sch row 498), and kicad-cli does list every path. So the studio's preview and the file it writes disagree. This is also active code that duplicates kicad-cli's output (the brief's reuse rule): the preview could be kicad-cli's own export into a scratch file.
@@ -432,6 +456,8 @@ Test: `fields_table::tests::a_shared_screen_lists_a_reference_per_placement`: bu
 **Already known?** No. GAPS item 1 lists "no variants and no scope selector" only, and PARITY section 7 says "covers the design's symbols on every sheet".
 
 ### C5-M4. A label whose text holds an escaped character (`/` stored as `{slash}`) is matched on the escaped text (medium)
+
+**Fixed** on task-r5-schematic: 674109ac
 
 **What differs.**
 - Ours: `search.rs:328` `matches_text(&l.net, data)`. `l.net` is the stored text, escaped as KiCad stores it: the studio writes it through `EscapeString( CTX_NETNAME )` (`kicad-port/schNetName.ts`), and the import keeps the file's text.
@@ -451,6 +477,8 @@ Test: `search::tests::a_label_matches_on_its_unescaped_text`: a label with `net:
 **Already known?** Partly (the replace half is in PARITY section 8; the matching half is not).
 
 ### C5-L1. The Reference field also matches when one of the symbol's pins or body texts matches (`SCH_SYMBOL::Matches`); ours checks the fields only (low)
+
+**Fixed** on task-r5-schematic: 674109ac
 
 **What differs.**
 - Ours: `search.rs:259-261` `symbol_matches` tests the non-Reference fields.
@@ -474,6 +502,8 @@ Test: `search::tests::a_symbols_body_text_makes_its_reference_match`.
 
 ### C5-L2. A label's own fields (net class, Sheet References, user fields) are not searched (low)
 
+**Fixed** on task-r5-schematic: 674109ac
+
 **What differs.**
 - Ours: `search.rs:324-331` tests a label's text only. `SchExtras::label_fields` (PARITY section 39) is not walked.
 - KiCad, `nextMatch`'s `addItem`:
@@ -493,6 +523,8 @@ Test: `search::tests::a_labels_shown_field_is_found`.
 **Severity.** Low. **Already known?** No. P11-6 lists other item kinds, not label fields.
 
 ### C5-L3. The Find dialog offers a "Wildcards (* and ?)" mode KiCad's schematic dialog does not have; labels and the selection box differ (low)
+
+**Fixed** on task-r5-schematic: 1113c6d2 (the replace dialog's Regular Expression box stays not ported: no regex engine)
 
 **What differs.**
 - Ours: `components/FindReplaceDialog.tsx:102-104` has a Wildcards checkbox (`mode: "wildcard"`). The file's own header says it is "the third EDA_SEARCH_MATCH_MODE the dialog does not expose".
@@ -516,6 +548,8 @@ Test: `search::tests::a_labels_shown_field_is_found`.
 
 ### C5-L4. Find's end and wrap: "No match found." where KiCad says "Reached end of ...", and the wrap never times out (low)
 
+**Fixed** on task-r5-schematic: 1113c6d2
+
 **What differs.**
 - Ours, `findNavigation.ts:76`:
   ```ts
@@ -536,6 +570,8 @@ Test: `search::tests::a_labels_shown_field_is_found`.
 
 ### C5-L5. Replace takes the Find cursor, not the current selection; KiCad replaces the selected item when it matches (low)
 
+**Fixed** on task-r5-schematic: 1113c6d2
+
 **What differs.**
 - Ours: `findReplaceOps.ts:20-34` replaces the match named by `state.schFind.cursor`. With no cursor it only finds.
 - KiCad: `ReplaceAndFindNext` replaces `getCurrentMatch()`, which is `m_selectionTool->GetSelection().Front()` (when not selected-only), and only `if( item && HasMatch() )`.
@@ -549,6 +585,8 @@ Test: `search::tests::a_labels_shown_field_is_found`.
 
 ### C5-L6. Replace refuses to empty a label; KiCad empties it (low)
 
+**Fixed** on task-r5-schematic: 674109ac
+
 **What differs.**
 - Ours: `lib.rs:5569` fails the whole Replace / Replace All with "replacing would leave a net label empty".
 - KiCad: `SCH_LABEL_BASE::Replace` -> `EDA_TEXT::Replace` sets the empty text. 25ec2335's ERC then reports `empty_label_name`, a check our ERC table has.
@@ -558,6 +596,8 @@ Test: `search::tests::a_labels_shown_field_is_found`.
 **Severity.** Low. **Already known?** No.
 
 ### C5-L7. In the replace dialog the highlight skips References and pins; KiCad's `searchAndReplace` is never set by its dialog (low)
+
+**Fixed** on task-r5-schematic: 1113c6d2
 
 **What differs.**
 - Ours: `findReplaceOps.ts:80` sets `search_and_replace: state.schDialog === "replace"` for the brightening. `search.rs:70-73` documents the flag as "set by the Replace paths (Find and Replace dialog's Replace buttons)".
@@ -574,6 +614,8 @@ Test: `search::tests::a_labels_shown_field_is_found`.
 
 ### C5-L8. A reference with a leading zero (`R01`) is shown and grouped as `R1` in the Fields Table (low)
 
+**Fixed** on task-r5-schematic: ef49e9a7
+
 **What differs.**
 - Ours: `fields_table.rs:116-134` `Ref::parse` keeps the number as `u64`, and `number_text` prints `n.to_string()`.
   - `R01` shows as `R1` in the Reference column and in `Shorthand`.
@@ -586,6 +628,8 @@ Test: `fields_table::tests::a_leading_zero_reference_is_its_own_symbol`.
 **Severity.** Low (rare references). **Already known?** No.
 
 ### C5-L9. Fields Table details: the empty-value edit, the Description column, the export preview's variables, the close question (low)
+
+**Fixed** on task-r5-schematic: ef49e9a7 in part: the empty edit, the preview's variables (a symbol's own), the close question's wording. **Open**: the Description column (no per-symbol Description in the IR) and the Save / Discard / Cancel dialog
 
 **What differs.**
 - **An empty edit creates a field.** `fields_table.rs:983-985` inserts a user field for an edit even when the value is empty. `ApplyData` creates one only `!destField && ( !srcValue.IsEmpty() || userAdded )`. Setting a group cell of `MPN` to empty adds an empty `MPN` property to every member that had none, and the writer then writes it.
@@ -678,6 +722,8 @@ PARITY-sch section 40 lists "a power symbol's `${#}` and `empty_power_value` of 
 
 ### D5-H1. A KiCad 6 / early-7 root's `symbol_instances`: root-sheet symbols lose their references, and no symbol gets its value or footprint from it (high)
 
+**Fixed** on task-r5-schematic: 088a5836
+
 **What differs.**
 - Ours: `crates/kicad/src/sch_import.rs:1026` (`legacy_symbol_instances`).
   - It needs at least a sheet and a symbol in the path: `let [sheets @ .., sheet, symbol] = parts.as_slice() else { continue };` (`:1040`). A symbol on the root sheet has the path `"/<symbol uuid>"` (one part), so it is skipped. Such a symbol keeps its `(property "Reference" ..)`. In the early-7 format (`20220622`..`20220904`, `(default_instance (reference "") ..)`), that property is `""` or `"U"`, so the symbol gets `U?n`.
@@ -718,6 +764,8 @@ PARITY-sch section 40 lists "a power symbol's `${#}` and `empty_power_value` of 
 **Already known?** No. GAPS item 4 says "KiCad 6's root `symbol_instances` ... are read" (section 39 review). The root-level paths and the value / footprint are not covered, and the doc comment at `:1021` describes only sheet paths. PARITY-sch §40 counts six of these files as "`empty_power_value` of legacy power symbols" with no cause.
 
 ### D5-H2. A root-sheet symbol's own `(instances (path "/<root uuid>" ..))` is ignored: the `Reference` property wins where KiCad takes the instance (high)
+
+**Fixed** on task-r5-schematic: 088a5836
 
 **What differs.**
 - Ours: `crates/kicad/src/sch_import.rs:1266` (`parse_instance_overrides`) drops the root's uuid and skips a path that is then empty:
@@ -760,6 +808,8 @@ PARITY-sch section 40 lists "a power symbol's `${#}` and `empty_power_value` of 
 
 ### D5-H3. A placed pin's alternate function is dropped. Since A4-M1 (e3d9699b), a `no_connect` library pin whose instance picks a connectable alternate joins nothing (high; regression in effect)
 
+**Fixed** on task-r5-schematic: 3783b91e (the studio cannot choose an alternate yet, nor draw its name)
+
 **What differs.**
 - Ours:
   - The tracer takes a pin's type from the library pin alone. `crates/cli/src/board.rs:559`: `Some(lp) => lp.electrical_type == "no_connect"`; also `:614`, `:636`. Those keys go to `nc_contacts` (`:682-692`), and `nets.rs:361-393` keeps them out of every island.
@@ -788,6 +838,8 @@ PARITY-sch section 40 lists "a power symbol's `${#}` and `empty_power_value` of 
 **Already known?** Partly. GAPS item 19 lists "a placed symbol ... has no alternate pin functions" as missing, and r4 cases8 `a1` checked only the net's name. The connectivity consequence is new with A4-M1, and §47 says "a `PT_NC` pin joins nothing" without the alternate.
 
 ### D5-H4. A directive label's `(property "Net Class" ..)` is read as no net class (high)
+
+**Fixed** on task-r5-schematic: 43ce360f
 
 **What differs.**
 - Ours: `crates/kicad/src/sch_extras_io.rs:460-461` reads a `netclass_flag`'s class only under the canonical name:
@@ -821,6 +873,8 @@ PARITY-sch section 40 lists "a power symbol's `${#}` and `empty_power_value` of 
 
 ### D5-M1. One library symbol per id: where a `lib_name` copy differs from the `lib_id` copy, the id's is traced, and the nets differ (medium; §47's documented "Differs", effect now measured)
 
+**Open** (documented Differs, PARITY-sch section 48): the model keeps one library symbol per id; the two QA files are named there
+
 **What differs.**
 - §47's row: "**Differs**: where both entries are cached and differ (beyond Swap Pins' places), the id's is drawn (one library symbol per id)". B4-H1's fix applies `lib_name` only where the id has no entry (`sch_import.rs:183-186` and following).
 - KiCad (`sch_symbol.cpp::GetSchSymbolLibraryName`, `SCH_SCREEN::UpdateSymbolLinks`) links each placed symbol to its own `lib_name` copy.
@@ -839,6 +893,8 @@ The two QA cases where it shows:
 **Already known?** Yes in principle (§47 Differs, r4 B4-H1). The connectivity effect and these two QA files are not stated; listed so the Differs row can name them.
 
 ### D5-M2. Do not Populate / Exclude from ...: the units of the symbol on other sheets are not changed, and do not count for the new state (medium)
+
+**Fixed** on task-r5-schematic: 4944d606 on the server (every annotated unit on every sheet). **Open**: the studio computes the new state from the sheet in view
 
 **What differs.**
 - Ours:
@@ -872,6 +928,8 @@ The two QA cases where it shows:
 **Already known?** No (B-L1 is a sheet's own flags; KiCad's `SetAttribute` also takes sheets and rule areas, which that row covers).
 
 ### D5-M3. Increment Annotations: "All sheets" is disabled whenever there are sheets, and a shared screen's other paths are not renumbered (medium)
+
+**Fixed** on task-r5-schematic: 4944d606
 
 **What differs.**
 - Ours:

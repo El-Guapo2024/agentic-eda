@@ -32,6 +32,9 @@
 ## Part A. Exports and the api-server lane
 
 ### X5-1. Through the api-server, a successful export's kicad-cli messages are dropped: IPC-D-356 shows "Done." alone, and warnings are lost (low)
+
+**Fixed** on ds/r5-editors-exports: `a6095d11`. A successful served job's log is rebuilt from its output paths as the per-run `CLI_REPORTER` lines, word for word: IPC-D-356 "Successfully created IPC-D-356 file"; drill "Created file '%s'" for Excellon files, "Created file '%s'." for maps and Gerber files, then "Done."; pos "Wrote front/back position data to '%s'." or "Wrote position data to '%s'.". Test: slow `api_jobs::a_served_export_reports_what_kicad_says` holds the served log equal to the per-run one on QA issue8407 for ipcd356, drill, drill with an SVG map, pos and gerber pos. Left: a warning on a run that still succeeds is not in `RunJobResponse`, so the served path cannot repeat it.
+
 - **What differs.**
   - Ours: `crates/kicad-engine/src/lib.rs:1665-1668` (`run_export`). With the lane, the reply's log is only the `message` of each `RunJobResponse`, and `ExecuteBoardJob` fills that only on failure.
   - The per-run path (`:1671-1674`) keeps kicad-cli's stdout and stderr as `log`, which `BoardExportDialog.tsx:413,465` shows under the result.
@@ -65,6 +68,9 @@
 - **Already known?** No.
 
 ### X5-2. Export IPC-2581's kept BOM columns follow neither KiCad: 8303b2ad keeps nothing on Export, and 25ec2335 keeps every column including the Internal ID (low)
+
+**Fixed** on ds/r5-editors-exports: `a6095d11`. 25ec2335's `DIALOG_EXPORT_2581_BOM::TransferDataToWindow` reads every kept column back, Internal ID included (`if( !m_oemRef->SetStringSelection( m_fields.m_internalId ) ) m_oemRef->SetSelection( 0 )`), so `ipc2581DialogStart` starts `col_id` from the kept column when the board has a field of that name (else "Generate unique"), and the PARITY row names both KiCad versions and what each did. Tests: `ipc2581Bom.test.ts`'s new `the internal id is read back as 25ec2335's BOM dialog does`, and the kept-columns test now expects `col_id: "Reference"`.
+
 - **What differs.**
   - Ours (r4 X4-4, `web/studio/src/kicad-port/ipc2581Bom.ts:84-104`, `PARITY-boardctl.md:73`): the columns are kept for the next opening, but the Internal ID is not read back "as in KiCad (`TransferDataToWindow` sets it on `m_choiceMPN`)".
   - KiCad 8303b2ad: `dialog_export_2581.cpp::DIALOG_EXPORT_2581::onOKClick` sets a job before it transfers, so `TransferDataFromWindow` takes its `m_job` branch and never writes `prj.m_IP2581Bom`:
@@ -90,6 +96,9 @@
 - **Already known?** No. The row's "Differs" names only the `.kicad_pro` round trip.
 
 ### X5-3. A one-shot CLI export now pays for starting the api-server: drill, pos and ipcd356 run slower than per-run kicad-cli (low, performance)
+
+**Fixed** on ds/r5-editors-exports: `a6095d11`. `api::exports_use_server`, with `api::long_lived_process` set by the studio's `serve`: the api-server lane is asked only by a long-lived process or `EDA_KICAD_API` set to anything but `0`/`off`/`no`/`false`; a one-shot command runs per-run kicad-cli. Measured on `padstacks_normal`'s drill: 1.02 s with the lane, 0.43 s per-run, the same files. Test: `server::tests::only_a_long_lived_caller_or_a_asking_environment_takes_the_lane`.
+
 - **What differs.**
   - Each `eda board export --kicad drill|pos|ipcd356` (and `eda fab drill|pos`) is a new process. `with_server` (`crates/kicad-engine/src/api/server.rs:327-371`) starts a `kicad-cli api-server`, waits for its `Ping`, opens the board, runs the job and shuts the server down at exit. Per-run kicad-cli only loads the board.
   - Measured with `/usr/bin/time`, debug `eda`:
@@ -106,6 +115,9 @@
 - **Already known?** No. The merge message says the server is "started on demand" without measuring a one-shot command.
 
 ### X5-4. `eda board export --kicad pos -- --format gerber` writes the Gerber X3 placement file as `<name>.pos` (low)
+
+**Fixed** on ds/r5-editors-exports: `a6095d11`. Every `pos` export goes through `export_pcb_placement` and `place_file_names`, so `--format gerber` writes `PLACEFILE_GERBER_WRITER::GetPlaceFileName`'s `<name>-pnp_top.gbr` / `<name>-pnp_bottom.gbr`; the generic `pcb_ext_for("pos")` arm is gone. Test: the fake-kicad-cli test in `lib.rs` pins `export/kicad/pos/board-pnp_top.gbr` and its log line.
+
 - **What differs.**
   - Ours: `export_pcb` (`crates/kicad-engine/src/lib.rs:1704-1716`) sends only ASCII and CSV to `export_pcb_placement`. A Gerber request goes to `run_export` with `pcb_ext_for("pos", ..)`, which gives `pos` (`:1576-1577`), so `-o` is `export/kicad/pos/<name>.pos`.
   - Run: `eda board export -C issue8407 --kicad pos -- --format gerber --side front` replied `"files": ["export/kicad/pos/intent.pos"]`, on both paths.
@@ -140,6 +152,9 @@
 ## Part B. 3D viewer and 3D model preview
 
 ### V5-1. The 3D model preview's dummy board is 1.58 mm thick; KiCad's is 1.51 mm (low)
+
+**Fixed** on ds/r5-editors-exports: `a6095d11`. `previewStack` uses two copper layers, so `LSET::FrontMask`'s F.Cu counts in `SetEnabledLayers` and `BuildDefaultStackupList` gives the dielectric body 1.6 - 2 x 0.035 - 2 x 0.01 = 1.51 mm (`panel_preview_3d_model.cpp`); the test that pinned 1.58 now pins 1.51 and `footprintZ = 0.755 + 0.035 + 0.04`.
+
 - **What differs.**
   - Ours: `web/studio/src/kicad-port/model3d.ts:201` `previewStack()` gives a body of `boardThicknessNm - 2 * 10 um` = 1.58 mm. It takes the dummy board to have no copper ("no copper is subtracted"), and `model3d.test.ts:257-260` pins 1.58.
   - KiCad: `pcbnew/dialogs/panel_preview_3d_model.cpp` (ctor):
@@ -157,6 +172,9 @@
 - **Already known?** No. It comes from V4-2's fix.
 
 ### V5-2. The 3D model preview ignores the zoom-modifier preference for the wheel (low)
+
+**Fixed** on ds/r5-editors-exports: `a6095d11`. `previewWheelScroll` hands the camera the Preferences' `scrollModifierZoom` and `VC_SETTINGS::Reset`'s other wheel values, as `PANEL_PREVIEW_3D_MODEL::loadSettings` does, and `ModelPreview3D` reads it through a ref at each notch. Tests: with `"ctrl"` a plain wheel pans and does not zoom; with `"none"` it zooms.
+
 - **What differs.**
   - Ours: `web/studio/src/components/footprint/ModelPreview3D.tsx:211` calls `camera.handleWheel({...})` without the scroll settings, so pan mode (`aPan`) is always off.
   - KiCad: `panel_preview_3d_model.cpp::PANEL_PREVIEW_3D_MODEL::loadSettings`:
@@ -170,6 +188,9 @@
 - **Already known?** No.
 
 ### V5-3. A dielectric with sublayers counts only its first sublayer in the 3D body, though the comment says they are summed (low)
+
+**Fixed** on ds/r5-editors-exports: `a6095d11`. `import_stackup` sums a layer's own `(thickness ..)` and its `(addsublayer (thickness ..))` entries, the sum `BOARD_ADAPTER::InitSettings` adds to the 3D body; the first sublayer's material, epsilon and loss stay the layer's, and a layer without sublayers keeps its own thickness. Test: `import::tests::a_dielectrics_sublayers_add_up_to_the_layers_thickness`, 0.5 + 0.06 + 0 = 0.56.
+
 - **What differs.**
   - Ours: `crates/kicad/src/import.rs:947` reads a layer with `addsublayer` as its first sublayer. `model3d.ts:155` says "(every sublayer; ours holds them summed)", which is not what the import does.
   - KiCad: `board_adapter.cpp::BOARD_ADAPTER::InitSettings`:
@@ -192,6 +213,9 @@
 ## Part C. Footprint Editor (the Text tool's dialog)
 
 ### E5-1. The Footprint Editor's Text dialog has its own size message (low)
+
+**Fixed** on ds/r5-editors-exports: `a6095d11`. `fpTextSizeMessage` gives `UNIT_BINDER::Validate`'s words with the bound printed as `StringFromValue` does (mm, trailing zeros off): "Width must be at least 0.001 mm." under 1000 nm, "Width must be less than 250 mm." over 250 mm, and `FpTextDialog` shows it. Tests: `fpTextTool.test.ts` pins 0, 999 and 300 mm and null for 1 um, 1 mm and 250 mm; `fp-tools.check.js` sees both messages, only one at a time, and no text placed.
+
 - **What differs.**
   - Ours: `web/studio/src/components/footprint/FpTextDialog.tsx:54` says "The text size must be between 0.001 mm and 250 mm."
   - KiCad: `dialog_text_properties.cpp::DIALOG_TEXT_PROPERTIES::TransferDataFromWindow` validates width and height through `common/widgets/unit_binder.cpp::UNIT_BINDER::Validate`: `_( "%s must be at least %s." )` and `_( "%s must be less than %s." )`. The `%s` is the label without its colon ("Width", "Height", `dialog_text_properties_base.cpp`).
@@ -201,6 +225,9 @@
 - **Already known?** No.
 
 ### E5-2. A text placed at an offset edited in the Text dialog is left unselected (low)
+
+**Fixed** on ds/r5-editors-exports: `a6095d11`. With an edited offset `FpTextDialog` selects the text `api.addText` answers with, as `DRAWING_TOOL::PlaceText` selects a text the dialog moved; the footprint store's `addText` answers with the new text's id, read back from the document because the state its refresh dispatches can land after the promise (the first browser run found the text placed but the selection empty). `fp-tools.check.js` places a text at Offset X 3 mm with one click, then asserts the selection is exactly that text with kind "text", the tool stays armed and Escape leaves it.
+
 - **What differs.**
   - Ours: `FpTextDialog.tsx:68` does `void api.addText(done)` and selects nothing. The usual path, a second click on the carried text (`FootprintCanvas.tsx:504-511`), does select it.
   - KiCad: `drawing_tool.cpp::DRAWING_TOOL::PlaceText`. When the dialog moved the text (`text->GetTextPos() != cursorPos`), it commits at once and selects:

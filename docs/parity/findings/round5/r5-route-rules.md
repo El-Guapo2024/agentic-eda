@@ -15,6 +15,8 @@ Scope, in priority order:
 
 ### R5-1. A route that starts on a pad or track of another layer than the active one starts with no net on the active layer (`ROUTER_TOOL::getStartLayer`)
 
+**Fixed** on task-r5-router: dc58601d (pickSingleItem on every layer, getStartLayer; the studio switches the active layer and gives it back at the end; kicad-cli proof in rules_kicad)
+
 - **What differs.**
   - Ours:
     - `web/studio/src/components/canvas/Canvas.tsx:746` sends the active layer: `const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";`.
@@ -40,6 +42,8 @@ Scope, in priority order:
 - **Already known?** No. Neither GAPS item 7 nor CODE-COMPARE-router names `getStartLayer`.
 
 ### R5-2. The router's commit drops a replaced track's solder-mask opening and its group; new tracks are not put in the entered group
+
+**Fixed** on task-r5-router: dc58601d (track_sources and the entered group through Cmd::CommitRoute; kicad-cli `pcb upgrade` proof in gate_vs_kicad. Cleanup's and Break Track's replacements still carry no source)
 
 - **What differs.**
   - Ours:
@@ -82,6 +86,8 @@ Scope, in priority order:
 
 ### R5-3. The `.kicad_pro` we write has no `track_widths` and no `via_dimensions`: the user's pre-defined track widths and via sizes are lost in KiCad
 
+**Fixed** on task-r5-router: 8df3629b
+
 - **What differs.**
   - Ours: `crates/kicad/src/pcb.rs:988-995` writes only the Differential Pairs list (`project["board"]["design_settings"]["diff_pair_dimensions"]`, new in cca40225). `grep -rn "track_widths\|via_dimensions" crates/kicad/src` finds nothing, so `RoutingSection::track_width_presets` and `via_presets` never reach the project file. The reader is missing too (`merge_project_predefined_sizes`, `import.rs:828`, reads only `diff_pair_dimensions`).
   - KiCad: `board_design_settings.cpp` has a `PARAM_LAMBDA` for each list. It writes `"track_widths"` and `"via_dimensions"` (`entry["diameter"] = pcbIUScale.IUTomm( via.m_Diameter ); entry["drill"] = ..`), each with the index-0 net-class dummy first, as for the pairs.
@@ -95,6 +101,8 @@ Scope, in priority order:
 ## Medium
 
 ### R5-4. A pair's start checks use the class sizes when the pair is routed with custom dimensions
+
+**Fixed** on task-r5-router: dc58601d
 
 - **What differs.**
   - Ours:
@@ -114,6 +122,8 @@ Scope, in priority order:
 - **Already known?** No. R4-4 fixed the arc case of the same check.
 
 ### R5-5. The Differential Pairs list of Pre-defined Sizes cannot be chosen: no entries in the pair menu, and W does not step it while routing a pair
+
+**Fixed** on task-r5-router: a023fbf8
 
 - **What differs.**
   - Ours:
@@ -147,6 +157,8 @@ Scope, in priority order:
 
 ### R5-6. W / Shift+W while routing steps a fixed ladder of ten widths, not the board's list, and the first press does not keep the index
 
+**Fixed** on task-r5-router: a023fbf8
+
 - **What differs.**
   - Ours:
     - While a route is live, `web/studio/src/actions/useActionRunner.ts:446-456` (`cycleWidth`) steps `WIDTH_PRESETS_NM = [100_000, 150_000, .., 1_000_000]` (`:128`) from the head's width.
@@ -174,6 +186,8 @@ Scope, in priority order:
 - **Already known?** In part. PARITY.md:240 documents the ladder, but the reason it gives no longer holds. GAPS does not list it.
 
 ### R5-7. The router's width menu turns "Use Starting Track Width" off where KiCad only overrides it for the current route
+
+**Fixed** on task-r5-router: a023fbf8
 
 - **What differs.**
   - Ours:
@@ -209,6 +223,8 @@ Scope, in priority order:
 
 ### R5-8. The router's message panel is not ported (`ROUTER_TOOL::UpdateMessagePanel`): the width, clearance and gap with the rule they came from
 
+**Fixed** on task-r5-router: a023fbf8 (DP Max Uncoupled-length is not shown)
+
 - **What differs.**
   - Ours: `web/studio/src/components/MessagePanel.tsx` shows the selection only, and its header says the fields are "this app's own reasonable approximation". `ImportedSizes::width_source` (`crates/pns/src/settings.rs`) is computed but nothing shows it: `grep width_source web/studio/src` finds nothing, and `/api/route/start` does not send it.
   - KiCad, while routing:
@@ -228,6 +244,8 @@ Scope, in priority order:
 
 ### R5-9. The chosen width and via are kept by value: a Board Setup edit to the list does not reach them
 
+**Fixed** on task-r5-router: a023fbf8
+
 - **What differs.**
   - Ours: `state/store.tsx:1638` stores `currentTrackWidthNm` with the index, and `chosenTrackWidth` (`kicad-port/routerVia.ts:162`) returns that stored value. The via preset is the same (`currentViaPreset`).
   - KiCad: `BOARD_DESIGN_SETTINGS::GetCurrentTrackWidth` reads the list at route time: `return m_TrackWidthList[ m_trackWidthIndex ];`. `GetCurrentViaSize` is the same.
@@ -236,6 +254,8 @@ Scope, in priority order:
 - **Already known?** No (R4-8's fix moved to indices but kept the value).
 
 ### R5-10. Pre-defined Sizes' Apply: no sort, Add rows pre-filled, and track widths refused with our own words
+
+**Fixed** on task-r5-router: a023fbf8, in part: Apply sorts the three lists. Open: Add rows pre-filled with the Default class, and the 0-width refusal in our words
 
 - **What differs.**
   - `PANEL_SETUP_TRACKS_AND_VIAS::TransferDataFromWindow` sorts all three lists (`// Sort lists by increasing value`: `sort( trackWidths.begin(), .. ); sort( vias.. ); sort( diffPairs.. );`, by `VIA_DIMENSION::operator<` diameter then drill, `DIFF_PAIR_DIMENSION::operator<` width, gap, via gap). Ours keeps the user's order (`BoardSetupDialog.tsx:218-225`, `ops set_*_presets`), and it is the order of the menu and of W.
@@ -246,6 +266,8 @@ Scope, in priority order:
 - **Already known?** No.
 
 ### R5-11. `merge_project_predefined_sizes` drops raw row 0 before it filters out malformed rows
+
+**Fixed** on task-r5-router: 8df3629b
 
 - **What differs.**
   - Ours: `crates/kicad/src/import.rs:833` drops the first raw row (`.skip(1)`) and only then filters out the malformed ones.
@@ -317,6 +339,8 @@ Scope: `crates/drc` (the rule engine, `pcbexpr`, `rule_board`, `inspect`, `query
 
 #### R5-D1. The rule engine's footprints have no sheet path, component classes or fields, though the IR now carries them. kicad-cli's DRC sees them, but the router and Inspect do not.
 
+**Fixed** on task-r5-rules-zones: 2e51b45e (getField answers only for a footprint item, as `getFieldFunc` does, so a clearance rule on it does not reach a pad: the router proof uses memberOfSheet and hasComponentClass)
+
 - **What differs.**
   - Ours, `crates/drc/src/rule_board.rs:237-245` (`build_footprints`):
     ```rust
@@ -358,6 +382,8 @@ Scope: `crates/drc` (the rule engine, `pcbexpr`, `rule_board`, `inspect`, `query
 
 #### R5-D2. The router's copper barcodes, text boxes and tables are typed as "Graphic" to the rules, so the implicit 1 mm barcode clearance is never applied
 
+**Fixed** on task-r5-rules-zones: 28cbdf9d
+
 - **What differs.**
   - Ours, `crates/pns/src/from_ir.rs`:
     - the barcode obstacle is `add_obstacle(.., Class::Shape)` (around line 450);
@@ -385,6 +411,8 @@ Scope: `crates/drc` (the rule engine, `pcbexpr`, `rule_board`, `inspect`, `query
 
 #### R5-D3. `existsOnLayer('')` is a compile error in ours and compiles silently in KiCad
 
+**Fixed** on task-r5-rules-zones: d9a5c7f1
+
 - **What differs.**
   - Ours, `pcbexpr.rs` `call_func`'s `_` arm (around line 1047) checks the argument before the item: `if arg.as_string(ctx).is_empty() { ctx.report_error(&missing(..)) ..}` and only then `let Some(it) = item else ..`. The preflight run has no items, so the message is told at compile.
   - KiCad, `existsOnLayerFunc` checks the item first: `if( !item ) return;` and only then `if( !arg || arg->AsString().IsEmpty() ) { .. ReportError( MISSING_LAYER_ARG( wxT( "existsOnLayer()" ) ) ) }`. The preflight (`libeval_compiler.cpp:951-970`) runs with no item, so nothing is reported at compile. Every other one-argument function checks the argument first, as ours does.
@@ -394,6 +422,8 @@ Scope: `crates/drc` (the rule engine, `pcbexpr`, `rule_board`, `inspect`, `query
 - **Already known?** No.
 
 #### R5-D4. The missing-argument messages of `hasNetclass`, `hasExactNetclass` and `hasComponentClass` are not KiCad's
+
+**Fixed** on task-r5-rules-zones: d9a5c7f1
 
 - **What differs.**
   - Ours, `pcbexpr.rs:778-788` `missing()`: these three names fall to `_ => format!("Missing {what} argument to {name}")` with `what = "name"`, which gives "Missing name argument to hasNetclass()".
@@ -408,6 +438,8 @@ Scope: `crates/drc` (the rule engine, `pcbexpr`, `rule_board`, `inspect`, `query
 - **Already known?** No.
 
 #### R5-D5. Clearance Resolution of a footprint: the stand-in pad differs for unnumbered pads, and ours takes the first pad where KiCad takes the last
+
+**Fixed** on task-r5-rules-zones: d9a5c7f1
 
 - **What differs.**
   - Ours, `rule_board.rs:773-782` (`footprint_stand_in`): `if pads.iter().all(|(_, i)| self.board.pads[*i].number == first.number) { return pad_item(first) }`.
@@ -494,6 +526,8 @@ Scope:
 
 #### R5-Z1. Two same-net zone fills that cross without a vertex of one inside the other are connected in ours; KiCad leaves them unconnected
 
+**Fixed** on task-r5-rules-zones: ed941af7
+
 - **What differs.**
   - Ours: `crates/connectivity/src/geom.rs:287`, `(ItemShape::Zone { outline: oa }, ItemShape::Zone { outline: ob }) => polygons_overlap(oa, ob)`. `polygons_overlap` (`geom.rs:120-140`) also returns true when any edge of one crosses an edge of the other (`segments_intersect`).
   - KiCad, `connectivity_algo.cpp::CN_VISITOR::checkZoneZoneConnection` tests only vertices:
@@ -526,6 +560,8 @@ Scope:
 
 #### R5-Z2. Moving, rotating, flipping or mirroring a zone, or OK in Zone Properties, throws away the fill; KiCad keeps it (moved with the zone, or as it was)
 
+**Fixed** on task-r5-rules-zones: f17789de (a flipped F&B zone is taken as mirrored; GAPS 13 corrected)
+
 - **What differs.**
   - Ours: a fill is kept only while `zone_signature` (`crates/kicad/src/zone_fills.rs:196-228`) still matches. The signature hashes the outline, net, layers, clearance, minimum width, thermal settings, islands, hatch and smoothing. Its doc says "Editing any of them takes the fill away (KiCad unfills a zone that is edited)". GAPS 13 says the same ("an edit to a zone (outline, layers, net, a setting) empties that zone", "as KiCad does with auto-refill off"). Nothing translates a fill when its zone moves: `grep` finds no transform of cached rings outside the importer's footprint frame.
   - KiCad:
@@ -542,6 +578,8 @@ Scope:
 
 #### R5-Z3. OK in Zone Properties on a copper zone with no net gives it the first net in alphabetical order
 
+**Fixed** on task-r5-rules-zones: 21761e94
+
 - **What differs.**
   - Ours: `web/studio/src/components/ZoneDialog.tsx:185` sets `const effectiveNet = kind === "copper" ? net || nets[0] || "" : ..`. The net `<select>` (`:277-284`) has no "no net" entry. The edit path sends `edit_zone` with `net: effectiveNet` (`:218`). A copper zone whose net is `""` (an imported no-net pour, or a thieving pour) therefore comes back on `nets[0]` after any OK, even one with no edits. The server accepts `""` (`crates/ops/src/lib.rs:4082-4086`); it is the dialog that changes the net.
   - KiCad: `panel_zone_properties.cpp` offers `<no net>` in `m_netSelector`. The panel only warns: `m_copperZoneInfoBar->ShowMessage( _( "<no net> will result in an isolated copper island." ), wxICON_WARNING );` (`updateInfoBar`). `Edit_Zone_Params` keeps net 0 (`if( NETINFO_ITEM* net = GetBoard()->FindNet( zoneInfo.m_Netcode ) ) aZone->SetNetCode( .. )`).
@@ -555,6 +593,8 @@ Scope:
 ### Medium
 
 #### R5-Z4. Cleanup's merge ignores KiCad's "different width attached" rule: a segment with a narrower or wider track on either end is never merged in KiCad
+
+**Fixed** on task-r5-rules-zones: 90fad5a1
 
 - **What differs.**
   - Ours: `crates/connectivity/src/cleanup.rs:590-616` (`merge_collinear`) only requires the two candidates to have the same net, layer and width, a shared end and collinearity. It then asks `is_node` about the joint. Nothing looks at the other tracks connected to either segment.
@@ -593,6 +633,8 @@ Scope:
 
 #### R5-Z5. Auto-Assign Priorities ignores the zones' holes (overlap, intersection, area)
 
+**Fixed** on task-r5-rules-zones: 08d8e21e
+
 - **What differs.**
   - Ours: `crates/ops/src/zone_priority.rs` builds each zone from its outer ring only:
     - `ring(&zones[i].outline)` (`:52-54`) and `polygons_overlap(&zones[i].outline, &zones[j].outline)` (`:77`) for the overlap and the intersection;
@@ -615,6 +657,8 @@ Scope:
 ### Low
 
 #### R5-Z6. Cleanup's `is_node`: pads, vias and zones at the joint are not asked as `testMergeCollinearSegments` asks them
+
+**Fixed** on task-r5-rules-zones: 90fad5a1
 
 `crates/connectivity/src/cleanup.rs:564-583` against `tracks_cleaner.cpp::testMergeCollinearSegments`. KiCad tests only `getConnectedItems( aSeg )`, the items connectivity has joined to the segment, and asks every non-track item with `citem->HitTest( point, ( aSeg1->GetWidth() + 1 ) / 2 )`. Ours differs in three ways:
 - **Pads.** Ours uses `pg.pad.signed_distance(p) <= 0.0`: the joint must lie inside the copper. KiCad's `PAD::HitTest( aPosition, aAccuracy )` is `GetEffectivePolygon( l, ERROR_INSIDE )->Contains( aPosition, -1, aAccuracy )` over every padstack layer, or `GetEffectiveHoleShape()->Collide( aPosition, aAccuracy )`. A joint up to half the track width outside a pad that the track's copper touches is a node in KiCad and not in ours, so ours merges there.

@@ -19,6 +19,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 # Part A: the round-4 merges
 
 ### A5-1 (high). An arc track at a via or round pad gets no teardrop (or a stunted one): the generator takes the arc's first tessellation segment as the track
+**Fixed** on task-r5-pcb-edit: a98857b6 (arc tracks as `findAnchorPointsOnTrack`; 25ec2335's arc refinements; proven point for point by `teardrops_kicad_cli.rs`'s four arc cases).
 - **What differs:**
   - **Ours.** `crates/connectivity/src/teardrop.rs:445-451` takes `(near, far)` as `pts[0], pts[1]` (or the last two points). For an arc track, `Track::pts` is the arc's 32-segment tessellation (`crates/model/src/ir.rs:1313-1324`, `TRACK_ARC_SEGMENTS`), and `arc_mid_offset` is never read in `teardrop.rs`. So the "track" is the first 1/32 of the arc:
     - when that piece ends inside the anchor, `teardrop.rs:363-367` ("The track is entirely inside the via") returns `None`, and there is no teardrop at all;
@@ -51,6 +52,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Already known?** No. GAPS 13/35 lists curved edges, non-round anchors, track-to-track, two-segment borrowing, `m_TdOnPadsInZones` and incremental updates, not arc tracks. The module doc says "Straight edges only", which is about `m_CurvedEdges`.
 
 ### A5-2 (high). A rectangle is constrained by the line mode (45 / 90 degrees, the studio's default 45), so it comes out flat or square; KiCad draws a rectangle free, and Ctrl gives a square
+**Fixed** on task-r5-pcb-edit: 9bb101cb (`kicad-port/pcbShapeSnap.ts`).
 - **What differs:**
   - **Ours.** `web/components/canvas/Canvas.tsx:906-910` runs `constrainByAngleMode(state.pcbx.angleSnapMode, last, [sx, sy])` on the second corner of a **rectangle** as on a line, and `painter.ts:1285-1287` does the same for the preview. In 45 mode, `posture45` (`web/components/canvas/routing.ts:188-197`) turns the diagonal onto the nearest 45-degree ray, keeping its length. So a 10 x 3 mm drag (16.7 degrees) becomes a 10.4 x 0 mm rectangle, and 10 x 7 mm becomes a square of 8.6 mm. In 90 mode every rectangle is flat.
   - **KiCad.** `pcbnew/tools/drawing_tool.cpp::DRAWING_TOOL::drawShape`:
@@ -74,6 +76,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Already known?** No. Round 4 C-4 named `constrainByAngleMode` only as the reason zones ignored the line mode.
 
 ### A5-3 (medium). The line tool's 45-degree mode turns the segment onto the nearest ray keeping its length; KiCad keeps the cursor's x (or y), and the boundary is 2:1, not 22.5 degrees. Ctrl does not free the angle
+**Fixed** on task-r5-pcb-edit: 9bb101cb.
 - **What differs:**
   - **Ours.** `posture45` (`web/components/canvas/routing.ts:188-197`) rounds the angle to a multiple of 45 degrees (boundary at 22.5 degrees) and keeps the length, then `Canvas.tsx:908-909` puts the result back on the grid. `constrainByAngleMode` takes no modifier, so Ctrl changes nothing.
   - **KiCad.** `drawShape` sets `newEnd = GetVectorSnapped45( lineVector, false )` (`libs/kimath/include/geometry/geometry_utils.h`):
@@ -97,6 +100,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Already known?** No.
 
 ### A5-4 (medium). The studio starts in the 45-degree line mode; KiCad's default is free angle
+**Fixed** on task-r5-pcb-edit: 9bb101cb.
 - **What differs:**
   - **Ours.** `web/kicad-port/pcbParityState.ts:101`: `angleSnapMode: "45"`.
   - **KiCad.** `pcbnew/pcbnew_settings.cpp` (8303b2ad and 25ec2335): `m_AngleSnapMode( LEADER_MODE::DIRECT )` and `new PARAM<int>( "editing.pcb_angle_snap_mode", reinterpret_cast<int*>( &m_AngleSnapMode ), static_cast<int>( LEADER_MODE::DIRECT ) )`.
@@ -107,6 +111,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Already known?** No.
 
 ### A5-5 (medium). Closing a zone, rule area or graphic polygon: the outline is the clicked corners only; KiCad adds the bent leader's and loop's corners in the 45/90 modes and simplifies the outline
+**Fixed** on task-r5-pcb-edit: 3ba02f35 (`pcbDrawZone.ts::zoneFinish`, and the loop in the preview).
 - **What differs:**
   - **Ours.** `finishDraw` (`web/components/canvas/Canvas.tsx:614-633` for zones, cutouts, similar zones and stitchings; `:652-656` for a graphic polygon) uses `draw.pts`, the locked corners. `kicad-port/polygonGeom.ts::finalOutline` already ports `OnComplete` (leader, loop, `Simplify`, the start point dropped when collinear), but only the schematic's rule area calls it (`components/schematic/schShapeTools.ts:69`). Our preview (`painter.ts:1290-1296`) closes the outline straight from the cursor to the first corner, with no loop line.
   - **KiCad.** `pcbnew/tools/zone_create_helper.cpp::ZONE_CREATE_HELPER::OnComplete`, which zones, rule areas and graphic polygons all go through:
@@ -137,6 +142,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Already known?** No. Round 4 C-4's fix (`6398b588`) ported the click and the leader, not the completion.
 
 ### A5-6 (medium). A graphic polygon emptied by Delete: the next Delete deletes the selection. A zone or polygon's first corner does not clear the selection
+**Fixed** on task-r5-pcb-edit: 3ba02f35.
 - **What differs:**
   - **Ours.** `drawZoneStarted` (`web/kicad-port/drawingCancel.ts:37-41`) keeps a zone `started` with no corner, but a graphic polygon only while `pts.length > 0`. After the first Delete has taken its only corner (`withoutLastCorner` keeps `{ shapeKind: "polygon", pts: [] }`), the second Delete:
     - is not `drawZoneStarted`;
@@ -165,6 +171,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Already known?** No. Round 4 A-4's fix made the zone kind keep `started`, but not the polygon kind.
 
 ### A5-7 (low). Docs and a test left stale by the teardrop rewrite
+**Fixed** on task-r5-pcb-edit: a98857b6 (the test) and 5720d03e (PARITY-pcb sections 12, 15; round 5 is section 60).
 - `web/studio/PARITY-pcb.md:740` still says the pentagon is "ported via a closed-form exact-tangent-on-circle construction instead of source's general convex-hull-over-clipped-polygon algorithm". Since `a6ea19db` it is the hull construction.
 - `PARITY-pcb.md:747` says "a track shorter than the requested teardrop length is simply skipped". It now gets a shorter teardrop (`actualTdLen`), as section 58 says.
 - `crates/connectivity/src/teardrop.rs:505-517` (`a_track_too_short_for_the_requested_length_is_skipped`): the comment says the 50 um track "must be skipped, not clipped". The test passes only because the track ends inside the 0.8 mm via (`inside(end)`). A 0.5 mm track would now get a clipped teardrop, so the name describes the old rule.
@@ -217,6 +224,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 # Part B: rows no round reviewed
 
 ### B5-1 (high). Draw Via (Ctrl+Shift+X) only places a via within 0.5 mm of a pad, via or track end, at the click point and with that item's net: a free via, a stitching via in a pour, a via on a track's middle are refused; no snap, no track split, no DRC check, always through
+**Fixed** on task-r5-pcb-edit: 9d3a3b9d (`kicad-port/viaPlacer.ts`, `crates/ops/src/via_place.rs`). Left: `(free yes)` (no flag in the IR), an arc track is not split.
 - **What differs:**
   - **Ours.** `web/components/canvas/Canvas.tsx:726-737`:
     ```ts
@@ -256,6 +264,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Already known?** No. PARITY-pcb has no row for the Draw Via tool. The router's Place Via (V while routing) is a different action.
 
 ### B5-2 (medium). The board's Text tool places the text where it was first clicked and goes back to Select; KiCad carries it to a second click and stays armed. A new text ignores the class's width and italic
+**Fixed** on task-r5-pcb-edit: dfd330bb (`place_text`, the carried text). Left: the canvas does not draw the bottom justification.
 - **What differs:**
   - **Ours.** `web/components/canvas/Canvas.tsx:939-943`: the click opens `SET_TEXT_DIALOG { mode: "add", at: [sx, sy] }` and at once sets the Select tool. `TextDialog.tsx:71-72` adds the text at `dialog.at`. `newTextStyle` (`web/kicad-port/layerDefaults.ts:86-89`) gives one size (the class's height) and no italic, and `add_text` has no width or italic.
   - **KiCad.** `drawing_tool.cpp::DRAWING_TOOL::PlaceText`:
@@ -274,6 +283,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 ## Cleanup Graphics (`pcbnew/graphics_cleaner.cpp`, `dialogs/dialog_cleanup_graphics.cpp`; ours `web/kicad-port/pcbGlobalEdit.ts`, `web/actions/pcbGlobalEditSweep.ts`, `web/components/PcbGlobalEditDialogs.tsx`)
 
 ### B5-3 (medium). The cleaner's 0.5 um tolerance became exact equality with the move to nanometres: near-duplicates and near-zero graphics are kept
+**Fixed** on task-r5-pcb-edit: 4e6628bf.
 - **What differs:**
   - **Ours.** `web/kicad-port/pcbGlobalEdit.ts:216-217`: `const same = (a, b) => Math.abs(a[0] - b[0]) < 0.5 && Math.abs(a[1] - b[1]) < 0.5;`, commented "`m_DRCEpsilon` = 0.5 um: on integer micrometres, equal". The file header (`:10`) still says "Units: micrometres". The shapes are nm now (`api/types.ts:598-605`, `Nm`; `pcbGeom.ts:29`), so `same` is exact equality. The arc branch of `areEquivalent` already uses `< 500` (`:252`).
   - **KiCad.** `GRAPHICS_CLEANER::CleanupBoard`: `m_epsilon = m_commit.GetBoard()->GetDesignSettings().GetDRCEpsilon();`, which is `ADVANCED_CFG::m_DRCEpsilon = 0.0005; // 0.5um`, 500 nm. Then:
@@ -290,6 +300,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Already known?** No.
 
 ### B5-4 (medium). Fix discontinuities in board outlines replaces each healed Edge.Cuts shape with a new one (id, group, lock, line style lost), and Merge lines into rectangles then never sees the healed lines
+**Fixed** on task-r5-pcb-edit: 4e6628bf.
 - **What differs:**
   - **Ours.** `pcbGlobalEdit.ts:302-310` takes `healShapes(edge, tol)`'s `remove`/`add` as they come, and `pcbGlobalEditSweep.ts:72` sends `delete_shape` + `add_shape`. The new shape copies only `layer`, `stroke_width` and `filled`. The healed ids are then marked deleted, so `mergeRects` (`:317`, `:331`) skips them.
     - Edit > Heal Shapes on the same shapes does keep ids, through `modifyResultCmds`/`reshapeCmds`; this path bypasses that.
@@ -302,6 +313,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Already known?** No.
 
 ### B5-5 (low). A merged rectangle takes only the stroke width; KiCad copies the whole stroke
+**Not a bug** here: board graphics have no line style or colour in this model (written `(type solid)`), so the width is the whole stroke.
 - **What differs:**
   - **Ours.** `pcbGlobalEdit.ts:350`: `{ kind: "rect", layer, stroke_width: top.shape.stroke_width, filled: false, ... }`.
   - **KiCad.** `GRAPHICS_CLEANER::mergeRects`: `rect->SetStroke( top->shape->GetStroke() );`, which carries the width, the line style and the colour.
@@ -309,6 +321,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Severity:** low.
 
 ### B5-6 (low). Text boxes are left out of Delete redundant graphics
+**Open** (recorded in GAPS item 8).
 - **What differs:**
   - **Ours.** `pcbGlobalEditSweep.ts:63` passes only `board.drawings?.shapes`.
   - **KiCad.** The cleaner walks `board->Drawings()` with `dynamic_cast<PCB_SHAPE*>( *it )`, and a `PCB_TEXTBOX` is a `PCB_SHAPE`. So a zero-size text box is "Remove zero-size graphic", and a text box whose rectangle, layer and border width equal an earlier one is "Remove duplicated graphic", whatever its text.
@@ -316,6 +329,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Severity:** low.
 
 ### B5-7 (low). Cleanup Graphics: a stale PARITY row and two dialog differences
+**Fixed** in part on task-r5-pcb-edit: 4e6628bf (Update PCB always runs) and 5720d03e (the stale row). Left: the change list is not clickable (GAPS item 8).
 - `web/studio/PARITY-pcb.md:622` still says Cleanup Graphics is "missing ... out of scope". It is implemented (`planCleanupGraphics`, `CleanupGraphicsDialog`), and no row describes the port.
 - Dialog (`web/components/PcbGlobalEditDialogs.tsx:92-117`):
   - "Update PCB" is disabled when nothing is ticked. KiCad's OK always works, and `doCleanup( false )` then pushes nothing.
@@ -325,6 +339,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 ## Create from Selection and Outset (`pcbnew/tools/convert_tool.cpp`, `item_modification_routine.cpp::OUTSET_ROUTINE`; ours `crates/ops/src/convert.rs`, `web/kicad-port/pcbConvert.ts`, `web/actions/pcbConvertSweep.ts`)
 
 ### B5-8 (medium). A rounded rectangle loses its corner radius in Create Polygon / Zone / Rule Area, Create Lines / Tracks and Outset
+**Fixed** on task-r5-pcb-edit: fb658ba2.
 - **What differs:**
   - **Ours.** Each of these treats a rectangle as four sharp corners:
     - `crates/ops/src/convert.rs:187` (`closed_ring`);
@@ -342,6 +357,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Severity:** medium.
 
 ### B5-9 (medium). Create Zone / Rule Area from Selection refuses a non-copper active layer; KiCad makes a non-copper zone there
+**Fixed** on task-r5-pcb-edit: fb658ba2.
 - **What differs:**
   - **Ours.** `web/actions/pcbConvertSweep.ts:66-67`: `if (kind !== "poly" && !board.layers.includes(layer)) { toast("Zones and rule areas are made on copper layers: choose a copper layer first.", "error"); return; }`. The message is our own.
   - **KiCad.** `CONVERT_TOOL::CreatePolys`:
@@ -356,6 +372,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Severity:** medium.
 
 ### B5-10 (medium). Create Zone / Rule Area from Selection takes several undo steps; KiCad's is one ("Convert to Zone")
+**Fixed** on task-r5-pcb-edit: fb658ba2 (the zones and the removal held in one step, `carry`).
 - **What differs:**
   - **Ours.** `web/components/ZoneDialog.tsx:225-230` adds each zone with `await api.addZone(...)`, which `store.tsx:2518-2541` makes a `runCmd(add_zone)` plus a separate `runBatch(follow)`. The originals are then deleted by a separate `api.cmdBatch(convert.deleteCmds)`.
   - **KiCad.** `CreatePolys` puts every zone in `commit.Add( zone )` and every original in `commit.Remove( item )`, then makes one `commit.Push( _( "Convert to Zone" ) )` ("Create Zone" when the originals are kept).
@@ -363,6 +380,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Severity:** medium (undo steps).
 
 ### B5-11 (medium). Create Lines and Create Tracks from a source with no width use the wrong default width
+**Fixed** on task-r5-pcb-edit: fb658ba2.
 - **What differs:**
   - **Ours.**
     - Lines: the layer class's line thickness (`pcbConvertSweep.ts:138`).
@@ -374,6 +392,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Severity:** medium (a wrong default).
 
 ### B5-12 (low). "Copy line width of first object" orders an arc by its start, not its centre
+**Fixed** on task-r5-pcb-edit: fb658ba2.
 - **What differs:**
   - **Ours.** `pcbConvert.ts:67-75` (`shapePosition`): `case "arc": ... return pt(s.start)`.
   - **KiCad.** `CreatePolys` uses `candidate->GetPosition()`, which is `EDA_SHAPE::getPosition` (`if( m_shape == SHAPE_T::ARC ) return getCenter();`).
@@ -381,6 +400,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Severity:** low.
 
 ### B5-13 (low). Create Polygon chains ends that meet exactly; KiCad joins ends within 100 nm
+**Fixed** on task-r5-pcb-edit: fb658ba2.
 - **What differs:**
   - **Ours.** `convert.rs:48` says it ("here only exact meetings chain"), and the `Chainer` keys points exactly (`convert.rs:264`).
   - **KiCad.** `makePolysFromChainedSegs`: `int chainingEpsilon = 100; // max dist from one endPt to next startPt in IU`, used by `findInsertionPoint` and the closing test (`closeEnough( outline.GetPoint( 0 ), outline.GetPoint( -1 ), chainingEpsilon )`).
@@ -389,6 +409,7 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Already known?** Only in the code comment, not in GAPS.
 
 ### B5-14 (low). Create Arc from a segment: the mid point can be 1 nm off
+**Fixed** on task-r5-pcb-edit: fb658ba2.
 - **What differs:**
   - **Ours.** `pcbConvert.ts:260-268` uses `Math.trunc((A+B)/2)` for the centre and an unrounded `0.1 * hypot` for the offset.
   - **KiCad.** `SegmentToArc`: `mid = seg->Center() + ( seg->B - seg->A ).Perpendicular().Resize( offsetRatio * seg->Length() )`. Here `SEG::Center()` is `A + ( B - A ) / 2`, and `Resize` takes an `int`, so the offset is truncated.
@@ -396,12 +417,14 @@ Reuse rule: no new duplicate of kicad-cli found. The teardrop generator still du
 - **Severity:** low.
 
 ### B5-15 (low). Outset's default line width is a fixed 0.05 mm, not the board's Edge.Cuts thickness
+**Fixed** on task-r5-pcb-edit: fb658ba2.
 - **What differs:**
   - **Ours.** `pcbConvert.ts:317`: `lineWidthNm: 50_000`.
   - **KiCad.** `CONVERT_TOOL::OutsetItems`: `outset_params_pcb_edit { pcbIUScale.mmToIU( 1 ), true, true, true, Edge_Cuts, frame.GetDesignSettings().GetLineThickness( Edge_Cuts ), std::nullopt, false }`.
 - **Severity:** low.
 
 ### B5-16 (low). Create Tracks has a dialog and a delete flag of its own, and forces a net
+**Open** (recorded in GAPS item 8).
 - **What differs:**
   - **Ours.** Our own "Create Tracks from Selection" dialog (copper layer, net, delete originals) and a remembered flag of its own (`pcbConvertSweep.ts:31`). The net is required by `commit_route` (`known_net`), which is noted only in a code comment.
   - **KiCad.** `CreateLines` has no dialog. It uses the active layer if that is copper, else `SelectOneLayer( F_Cu, LSET::AllNonCuMask() )`. The tracks have no net, and the flag is the shared `m_userSettings.m_DeleteOriginals`.
