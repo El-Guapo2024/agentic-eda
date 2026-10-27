@@ -1007,6 +1007,14 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
         dims.extend(pairs.iter().map(|p| serde_json::json!({ "width": mm_f(p.width), "gap": mm_f(p.gap), "via_gap": mm_f(p.via_gap) })));
         project["board"]["design_settings"]["diff_pair_dimensions"] = serde_json::Value::Array(dims);
     }
+    // Board Setup > Text & Graphics > Dimensions (`defaults.dimension_units`, `defaults.dimension_precision`, `defaults.dimensions.*`), when they are not KiCad's own
+    // (`crate::import::merge_project_dimension_defaults` reads them back).
+    if let Some((units, precision, dims)) = design.drawings.as_ref().and_then(|d| crate::import::project_dimension_defaults(&d.dimension_settings)) {
+        let defaults = &mut project["board"]["design_settings"]["defaults"];
+        defaults["dimension_units"] = units;
+        defaults["dimension_precision"] = precision;
+        defaults["dimensions"] = dims;
+    }
     let waived = crate::drc_exclusions::project_entries(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()));
     if !waived.is_empty() {
         project["board"]["design_settings"]["drc_exclusions"] = serde_json::Value::Array(waived);

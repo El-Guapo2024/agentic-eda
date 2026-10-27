@@ -228,6 +228,9 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
                 let board_file = PathBuf::from(&args.input);
                 let pro_path = board_file.with_extension("kicad_pro");
                 if let Ok(pro_text) = std::fs::read_to_string(&pro_path) {
+                    // A board with legacy design settings in its `(setup ..)` keeps them and KiCad ignores the project's, and a board with `(net_class ..)` blocks
+                    // keeps its classes in place of the project's (`board.cpp::SetProject`, `eda_kicad::project_json_for_board`).
+                    let pro_text = eda_kicad::project_json_for_board(&pro_text, &notes);
                     eda::merge_project_net_classes(&mut model, &pro_text);
                     // Same sidecar project, its per-DRC-type severity table (task item 2) -- see `eda_kicad::merge_project_rule_severities`'s doc comment for why this is a
                     // wholesale replacement, not a merge.
@@ -241,6 +244,8 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
                     // `via_dimensions`, `diff_pair_dimensions`), and they
                     // are an editable part of the design (the studio's Board Setup writes them), so they merge into the design, not the model.
                     eda::merge_project_predefined_sizes(&mut design, &pro_text);
+                    // Text & Graphics > Dimensions: the defaults a new dimension is styled from, which the project keeps.
+                    eda_kicad::merge_project_dimension_defaults(&mut design, &pro_text);
                     // The project's own DRC exclusions (`board.design_settings.drc_exclusions`, `BOARD_DESIGN_SETTINGS::m_DrcExclusions`), their items named as the
                     // derived board names them, so kicad-cli still waives them.
                     let derived = eda_kicad::export_kicad_pcb_mapped(&design, &model, &eda_kicad::ExportMeta { date: "", title: "" }).map(|(_, map)| map).unwrap_or_default();

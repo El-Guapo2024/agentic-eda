@@ -137,6 +137,13 @@ pub struct ImportNotes {
     /// shapes, texts and the other items. What a project's DRC exclusions name their items by (`eda_kicad::drc_exclusions::from_project`).
     #[serde(skip)]
     pub item_ids: BTreeMap<String, String>,
+    /// The board's `(setup ..)` holds legacy design settings (`BOARD::m_LegacyDesignSettingsLoaded`, [`legacy_design_settings_loaded`]): KiCad takes them
+    /// and ignores the project's `board.design_settings` ([`project_json_for_board`]).
+    #[serde(default)]
+    pub legacy_design_settings: bool,
+    /// The board has `(net_class ..)` blocks (`BOARD::m_LegacyNetclassesLoaded`): KiCad replaces the project's net classes with them ([`project_json_for_board`]).
+    #[serde(default)]
+    pub legacy_net_classes: bool,
 }
 
 /// Parse a `.kicad_pcb` file's text into our own design + constraint
@@ -156,7 +163,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         .filter(|l| sexpr::tag(l) == Some("kicad_pcb"))
         .ok_or_else(|| vec![CheckResult::fail("kicad_import.not_a_board", "file", "top-level form is not (kicad_pcb ...); not a KiCad PCB file")])?;
 
-    let mut notes = ImportNotes { footprints_scaled, unread_items: unread_items(root), ..ImportNotes::default() };
+    let mut notes = ImportNotes { footprints_scaled, unread_items: unread_items(root), legacy_design_settings: legacy_design_settings_loaded(root), legacy_net_classes: sexpr::find(root, "net_class").is_some(), ..ImportNotes::default() };
     // The items nothing here reads are kept as text and written back (`DrawingsSection::raw_items`).
     let mut raw_items: Vec<String> = root.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l).is_some_and(|t| !is_read(l, t))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
 
@@ -232,6 +239,26 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     };
     if !raw_items.is_empty() {
         design.drawings.get_or_insert_with(Default::default).raw_items = raw_items;
+    }
+    // A legacy board's pre-defined sizes and dimension defaults (`parseSetup`, `parseDefaults`): see [`legacy_setup_design`].
+    if let Some(legacy) = legacy_setup_design(root) {
+        if !legacy.track_widths.is_empty() || !legacy.vias.is_empty() || !legacy.pairs.is_empty() {
+            let routing = design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() });
+            routing.track_width_presets = legacy.track_widths;
+            routing.via_presets = legacy.vias;
+            routing.diff_pair_presets = legacy.pairs;
+        }
+        let units = legacy.dimension_units.and_then(dimension_units_from_code);
+        if units.is_some() || legacy.dimension_precision.is_some() {
+            let d = &mut design.drawings.get_or_insert_with(Default::default).dimension_settings;
+            if let Some(u) = units {
+                d.units = u;
+            }
+            // `static_cast<DIM_PRECISION>( parseInt( "dimension precision" ) )`, as it is
+            if let Some(p) = legacy.dimension_precision.filter(|p| (0..=9).contains(p)) {
+                d.precision = p as u8;
+            }
+        }
     }
     if !tables.is_empty() {
         design.drawings.get_or_insert_with(Default::default).tables = tables;
@@ -600,10 +627,9 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
     // A board file is a board somebody judged with KiCad's rules: its minimums are KiCad's (the project's, or the factory
     // ones when it has none), stated -- not the unstated ones of an intent (`BoardRules::constraints_explicit`).
     let mut board = BoardRules { layers: layers.to_vec(), constraints_explicit: true, layer_setup: import_layer_setup(root), ..BoardRules::default() };
-    // Legacy boards keep the copper-to-edge clearance in `(setup (edge_clearance ..))`.
-    if let Some(v) = sexpr::find(root, "setup").and_then(|st| sexpr::find(st, "edge_clearance")).and_then(|e| sexpr::num(e, 1)) {
-        board.copper_edge_clearance_nm = Some(mm_to_nm(v));
-    }
+    // The legacy design settings of `(setup ..)` first: a `(net_class "Default" ..)` block, which comes after `(setup ..)` in the file, replaces the Default
+    // class they set (`parseNETCLASS`: `SetDefaultNetclass( nc )`).
+    import_legacy_setup(root, &mut board);
     let classes: Vec<&[Sexpr]> = sexpr::find_all(root, "net_class").collect();
     let default_idx = classes.iter().position(|nc| sexpr::txt(nc, 1) == Some("Default")).or(if classes.len() == 1 { Some(0) } else { None });
 
@@ -643,7 +669,6 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
             Some(NetClass { name, nets, track_width, clearance, via_diameter, via_drill, microvia_diameter, microvia_drill, diff_pair_width, diff_pair_gap, diff_pair_via_gap: None, priority: 0 })
         })
         .collect();
-    import_legacy_setup_minimums(root, &mut board);
     import_solder_mask_setup(root, &mut board);
     import_formatting_and_hatch_offsets(root, &mut board);
     board
@@ -860,6 +885,87 @@ pub fn merge_project_predefined_sizes(design: &mut Design, project_json: &str) {
     }
 }
 
+/// A `.kicad_pro`'s Board Setup > Text & Graphics > Dimensions defaults (8303b2ad `board_design_settings.cpp`): `defaults.dimension_units` and
+/// `defaults.dimension_precision` (`PARAM_ENUM`s, INCH..AUTOMATIC and X..V_VVVVV), `defaults.dimensions.units_format` (NO_SUFFIX..PAREN_SUFFIX),
+/// `suppress_zeroes`, `text_position` (OUTSIDE..INLINE: "excluding DIM_TEXT_POSITION::MANUAL from the valid range"), `keep_text_aligned`, and the
+/// `arrow_length` and `extension_offset` (`PARAM<int>`, nanometres). Each is read as its `PARAM` loads it: a value out of range, or a key the section
+/// lacks, is KiCad's default (`aResetIfMissing`), so a project with design settings states every one. A section at schema 0 has the precision in its
+/// old meaning, migrated as `BOARD_DESIGN_SETTINGS::migrateSchema0to1` does (+3 for inches, +2 for millimetres, mils as they are), when both keys are
+/// integers. Absent `board.design_settings`, or text that is not JSON, is a no-op. The text size, the line width and the extension height are not
+/// project settings and are kept.
+pub fn merge_project_dimension_defaults(design: &mut Design, project_json: &str) {
+    use eda_model::ir::{DimensionSettings, DimensionTextPosition, DimensionUnitsFormat};
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else { return };
+    let Some(settings) = root.get("board").and_then(|b| b.get("design_settings")).filter(|s| s.is_object()) else { return };
+    let def = settings.get("defaults");
+    let get = |path: &[&str]| path.iter().try_fold(def?, |v, k| v.get(*k));
+    let int = |path: &[&str]| get(path).and_then(|v| v.as_i64());
+    let flag = |path: &[&str], default: bool| get(path).and_then(|v| v.as_bool()).unwrap_or(default);
+    let factory = DimensionSettings::default();
+    let units_code = int(&["dimension_units"]);
+    let mut precision = int(&["dimension_precision"]);
+    // `migrateSchema0to1`: only when both are integers (`is_number_integer`)
+    let version = settings.get("meta").and_then(|m| m.get("version")).and_then(|v| v.as_i64());
+    if version == Some(0) {
+        if let (Some(u), Some(p)) = (units_code, precision) {
+            precision = Some(p + match u {
+                0 => 3,
+                2 => 2,
+                _ => 0,
+            });
+        }
+    }
+    let d = &mut design.drawings.get_or_insert_with(Default::default).dimension_settings;
+    d.units = units_code.and_then(dimension_units_from_code).unwrap_or(factory.units);
+    d.precision = precision.filter(|p| (0..=9).contains(p)).map_or(factory.precision, |p| p as u8);
+    d.units_format = match int(&["dimensions", "units_format"]) {
+        Some(1) => DimensionUnitsFormat::BareSuffix,
+        Some(2) => DimensionUnitsFormat::ParenSuffix,
+        _ => DimensionUnitsFormat::NoSuffix,
+    };
+    d.suppress_trailing_zeros = flag(&["dimensions", "suppress_zeroes"], factory.suppress_trailing_zeros);
+    d.text_position = match int(&["dimensions", "text_position"]) {
+        Some(1) => DimensionTextPosition::Inline,
+        _ => DimensionTextPosition::Outside,
+    };
+    d.keep_text_aligned = flag(&["dimensions", "keep_text_aligned"], factory.keep_text_aligned);
+    // `aSettings.Get<int>`: a JSON number taken as an int
+    let nm = |path: &[&str], default: Nm| get(path).and_then(|v| v.as_f64()).map_or(default, |v| Nm::new(v as i64));
+    d.arrow_length = nm(&["dimensions", "arrow_length"], factory.arrow_length);
+    d.extension_offset = nm(&["dimensions", "extension_offset"], factory.extension_offset);
+}
+
+/// The Dimensions defaults as the project keeps them ([`merge_project_dimension_defaults`]'s keys): `None` when they are KiCad's own, which a project
+/// without them reads as.
+pub(crate) fn project_dimension_defaults(d: &eda_model::ir::DimensionSettings) -> Option<(serde_json::Value, serde_json::Value, serde_json::Value)> {
+    use eda_model::ir::{DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
+    let f = eda_model::ir::DimensionSettings::default();
+    let same = d.units == f.units && d.precision == f.precision && d.units_format == f.units_format && d.suppress_trailing_zeros == f.suppress_trailing_zeros && d.text_position == f.text_position && d.keep_text_aligned == f.keep_text_aligned && d.arrow_length == f.arrow_length && d.extension_offset == f.extension_offset;
+    if same {
+        return None;
+    }
+    let units = match d.units {
+        DimensionUnits::Inch => 0,
+        DimensionUnits::Mil => 1,
+        DimensionUnits::Mm => 2,
+        DimensionUnits::Automatic => 3,
+    };
+    let units_format = match d.units_format {
+        DimensionUnitsFormat::NoSuffix => 0,
+        DimensionUnitsFormat::BareSuffix => 1,
+        DimensionUnitsFormat::ParenSuffix => 2,
+    };
+    let text_position = match d.text_position {
+        DimensionTextPosition::Outside => 0,
+        DimensionTextPosition::Inline => 1,
+    };
+    Some((
+        serde_json::json!(units),
+        serde_json::json!(d.precision),
+        serde_json::json!({ "units_format": units_format, "suppress_zeroes": d.suppress_trailing_zeros, "text_position": text_position, "keep_text_aligned": d.keep_text_aligned, "arrow_length": d.arrow_length.get(), "extension_offset": d.extension_offset.get() }),
+    ))
+}
+
 /// A `(net_class ..)` block's microvia size and differential-pair sizes (`uvia_dia`, `uvia_drill`, `diff_pair_width`,
 /// `diff_pair_gap`), as a class with only those set -- `None` when the class has none. KiCad's own 0.3 / 0.1 mm microvia
 /// (what the writer gives a class that sets none) reads back as unset, so a board that never set one round-trips unchanged.
@@ -1004,42 +1110,218 @@ fn import_stackup(root: &[Sexpr]) -> Option<eda_model::Stackup> {
     })
 }
 
-/// Board-wide *minimum* constraints (`BOARD_DESIGN_SETTINGS`'s `rules.min_*`
-/// -- see [`merge_project_design_rules`]'s doc comment for the nominal-vs-
-/// minimum distinction this is one half of) from a bare `.kicad_pcb`'s own
-/// legacy `(setup ...)` block -- the pre-KiCad-7 tokens
-/// `PCB_IO_KICAD_SEXPR_PARSER::parseSetup` still reads for a file saved
-/// before board design settings moved into the sidecar `.kicad_pro`
-/// (`pcb_io_kicad_sexpr_parser.cpp`'s `T_trace_min`/`T_clearance_min`/
-/// `T_via_min_size`/`T_through_hole_min`/`T_via_min_drill`/
-/// `T_hole_to_hole_min`/`T_via_min_annulus` cases, read directly from the
-/// source). A modern multi-file project typically has none of these at all
-/// (confirmed empirically against the QA corpus: a current `.kicad_pcb`'s
-/// `(setup ...)` carries stackup/mask/zone defaults, never these) -- in
-/// that case [`merge_project_design_rules`] is the real source and should
-/// run after this, same ordering as net classes
-/// ([`merge_project_net_classes`]'s own doc comment).
-fn import_legacy_setup_minimums(root: &[Sexpr], board: &mut BoardRules) {
+/// The tokens of `(setup ..)` that are a legacy board's design settings: every case of `PCB_IO_KICAD_SEXPR_PARSER::parseSetup` (8303b2ad) that sets
+/// `m_board->m_LegacyDesignSettingsLoaded = true` -- not the stackup, the mask and paste margins, the tenting, the origins, the plot parameters or the zone
+/// defaults, which a current board still keeps in its file.
+const LEGACY_DESIGN_SETTINGS_TOKENS: &[&str] = &[
+    "user_trace_width", "trace_clearance", "zone_clearance", "zone_45_only", "clearance_min", "trace_min", "via_size", "via_drill", "via_min_annulus", "via_min_size",
+    "through_hole_min", "via_min_drill", "hole_to_hole_min", "user_via", "uvia_size", "uvia_drill", "uvias_allowed", "blind_buried_vias_allowed", "uvia_min_size",
+    "uvia_min_drill", "user_diff_pair", "segment_width", "edge_width", "mod_edge_width", "pcb_text_width", "mod_text_width", "pcb_text_size", "mod_text_size", "defaults",
+    "pad_size", "pad_drill", "max_error",
+];
+
+/// Whether the board file holds legacy design settings (`BOARD::m_LegacyDesignSettingsLoaded`): a `(setup ..)` with one of
+/// [`LEGACY_DESIGN_SETTINGS_TOKENS`]. KiCad then takes the board's design settings and ignores the project's (`board.cpp::SetProject`:
+/// `project.m_BoardSettings->SetParent( &project, !m_LegacyDesignSettingsLoaded )`, "Set parent, which also will load the values from JSON stored in the
+/// project if we don't have legacy design settings loaded already"); see [`project_json_for_board`].
+fn legacy_design_settings_loaded(root: &[Sexpr]) -> bool {
+    sexpr::find(root, "setup").is_some_and(|st| st.iter().skip(1).filter_map(Sexpr::as_list).any(|l| sexpr::tag(l).is_some_and(|t| LEGACY_DESIGN_SETTINGS_TOKENS.contains(&t))))
+}
+
+/// A legacy board's design settings in `(setup ..)`, read in file order as `PCB_IO_KICAD_SEXPR_PARSER::parseSetup` and `parseDefaults` /
+/// `parseDefaultTextDims` (8303b2ad) read them into `BOARD_DESIGN_SETTINGS`:
+///
+/// - the Default class's `trace_clearance`, `via_size`, `via_drill`, `uvia_size`, `uvia_drill` (`defaultNetClass->Set..`; a `(net_class "Default" ..)` block
+///   read after this replaces them, as `parseNETCLASS`'s `SetDefaultNetclass` does);
+/// - the minimums `clearance_min`, `trace_min`, `via_min_annulus`, `via_min_size`, `through_hole_min` (and its legacy `via_min_drill`), `hole_to_hole_min`,
+///   `uvia_min_size`, `uvia_min_drill`, and `max_error`;
+/// - the KiCad 5 line and text tokens (`segment_width` the copper line, `edge_width` the board outline, `mod_edge_width` the silkscreen line, `pcb_text_width` /
+///   `pcb_text_size` the copper text, `mod_text_width` / `mod_text_size` the silkscreen text);
+/// - `(defaults ..)`: `edge_clearance` (the copper-to-edge clearance, `m_CopperEdgeClearance`, which is only ever here: `parseSetup` has no `edge_clearance` case),
+///   `copper_line_width`, `courtyard_line_width`, `edge_cuts_line_width`, `silk_line_width`, `fab_layers_line_width`, `other_layers_line_width` and the
+///   `*_text_dims` (`(size x y)`, `(thickness t)`, and the bare `italic` / `keep_upright` that turn the class's flag on).
+///
+/// A board with these has its design settings from `BOARD_DESIGN_SETTINGS`' constructor plus the file, not from a project, so the italic and keep-upright flags
+/// start off (the constructor's `m_TextItalic` / `m_TextUpright` are false for every class; the project's `PARAM` default for upright is true). The pre-defined
+/// sizes and the dimension defaults are the design's ([`legacy_setup_design`]). Not read: `zone_clearance` (the zone defaults are not in the model), `pad_size` /
+/// `pad_drill` (the pad master), the ignored `uvias_allowed`, `blind_buried_vias_allowed`, `zone_45_only` and `last_trace_width`. pcbnew's GUI (not kicad-cli)
+/// infers a legacy board's edge clearance from its widest Edge.Cuts line when `edge_clearance` is absent (`files.cpp`'s `inferLegacyEdgeClearance`); that is not
+/// done here.
+fn import_legacy_setup(root: &[Sexpr], board: &mut BoardRules) {
     let Some(setup) = sexpr::find(root, "setup") else { return };
-    if let Some(v) = sexpr::find(setup, "trace_min").and_then(|f| sexpr::num(f, 1)) {
-        board.track_width_min_nm = mm_to_nm(v);
+    if !legacy_design_settings_loaded(root) {
+        return;
     }
-    if let Some(v) = sexpr::find(setup, "clearance_min").and_then(|f| sexpr::num(f, 1)) {
-        board.min_clearance_nm = mm_to_nm(v);
+    let num = |l: &[Sexpr], i: usize| sexpr::num(l, i).map(mm_to_nm);
+    let t = &mut board.text_graphics;
+    for c in [&mut t.silk, &mut t.copper, &mut t.fab, &mut t.others] {
+        c.italic = false;
+        c.upright = false;
     }
-    if let Some(v) = sexpr::find(setup, "via_min_size").and_then(|f| sexpr::num(f, 1)) {
-        board.via_diameter_min_nm = mm_to_nm(v);
+    let mut micro = board.default_class.clone().unwrap_or(NetClass { name: "Default".into(), nets: vec![], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+    for item in setup.iter().skip(1).filter_map(Sexpr::as_list) {
+        let v = num(item, 1);
+        match (sexpr::tag(item), v) {
+            (Some("trace_clearance"), Some(v)) => board.clearance = v,
+            (Some("via_size"), Some(v)) => board.via_diameter = v,
+            (Some("via_drill"), Some(v)) => board.via_drill = v,
+            (Some("uvia_size"), Some(v)) => micro.microvia_diameter = Some(v),
+            (Some("uvia_drill"), Some(v)) => micro.microvia_drill = Some(v),
+            (Some("clearance_min"), Some(v)) => board.min_clearance_nm = v,
+            (Some("trace_min"), Some(v)) => board.track_width_min_nm = v,
+            (Some("via_min_annulus"), Some(v)) => board.annular_width_min_nm = v,
+            (Some("via_min_size"), Some(v)) => board.via_diameter_min_nm = v,
+            (Some("through_hole_min") | Some("via_min_drill"), Some(v)) => board.via_drill_min_nm = v,
+            (Some("hole_to_hole_min"), Some(v)) => board.hole_to_hole_min_nm = v,
+            (Some("uvia_min_size"), Some(v)) => board.microvia_diameter_min_nm = v,
+            (Some("uvia_min_drill"), Some(v)) => board.microvia_drill_min_nm = v,
+            (Some("max_error"), Some(v)) => board.max_error_nm = v,
+            (Some("segment_width"), Some(v)) => board.text_graphics.copper.line_width_nm = v,
+            (Some("edge_width"), Some(v)) => board.text_graphics.edge_cuts_line_width_nm = v,
+            (Some("mod_edge_width"), Some(v)) => board.text_graphics.silk.line_width_nm = v,
+            (Some("pcb_text_width"), Some(v)) => board.text_graphics.copper.text_thickness_nm = v,
+            (Some("mod_text_width"), Some(v)) => board.text_graphics.silk.text_thickness_nm = v,
+            (Some("pcb_text_size"), Some(w)) => {
+                board.text_graphics.copper.text_width_nm = w;
+                if let Some(h) = num(item, 2) {
+                    board.text_graphics.copper.text_height_nm = h;
+                }
+            }
+            (Some("mod_text_size"), Some(w)) => {
+                board.text_graphics.silk.text_width_nm = w;
+                if let Some(h) = num(item, 2) {
+                    board.text_graphics.silk.text_height_nm = h;
+                }
+            }
+            (Some("defaults"), _) => import_legacy_defaults(item, board),
+            _ => {}
+        }
     }
-    let through_hole_min = sexpr::find(setup, "through_hole_min").or_else(|| sexpr::find(setup, "via_min_drill"));
-    if let Some(v) = through_hole_min.and_then(|f| sexpr::num(f, 1)) {
-        board.via_drill_min_nm = mm_to_nm(v);
+    // KiCad's own 0.3 / 0.1 mm microvia reads as unset, as [`default_class_extras`] reads a class block.
+    micro.microvia_diameter = micro.microvia_diameter.filter(|v| *v != mm(0.3));
+    micro.microvia_drill = micro.microvia_drill.filter(|v| *v != mm(0.1));
+    board.default_class = (micro.microvia_diameter.is_some() || micro.microvia_drill.is_some() || micro.diff_pair_width.is_some() || micro.diff_pair_gap.is_some()).then_some(micro);
+}
+
+/// `(setup (defaults ..))`: `PCB_IO_KICAD_SEXPR_PARSER::parseDefaults` and `parseDefaultTextDims` (8303b2ad). See [`import_legacy_setup`].
+fn import_legacy_defaults(defaults: &[Sexpr], board: &mut BoardRules) {
+    let t = &mut board.text_graphics;
+    let text_dims = |dims: &[Sexpr], c: &mut eda_model::rules::LayerClassDefaults| {
+        for d in dims.iter().skip(1) {
+            match d {
+                Sexpr::List(l) if sexpr::tag(l) == Some("size") => {
+                    if let (Some(x), Some(y)) = (sexpr::num(l, 1), sexpr::num(l, 2)) {
+                        c.text_width_nm = mm_to_nm(x);
+                        c.text_height_nm = mm_to_nm(y);
+                    }
+                }
+                Sexpr::List(l) if sexpr::tag(l) == Some("thickness") => {
+                    if let Some(v) = sexpr::num(l, 1) {
+                        c.text_thickness_nm = mm_to_nm(v);
+                    }
+                }
+                // `case T_italic: m_TextItalic[ aLayer ] = true;`, `case T_keep_upright: m_TextUpright[ aLayer ] = true;` (a bare token or a list of one)
+                other => match other.text().or_else(|| other.as_list().and_then(sexpr::tag)) {
+                    Some("italic") => c.italic = true,
+                    Some("keep_upright") => c.upright = true,
+                    _ => {}
+                },
+            }
+        }
+    };
+    for item in defaults.iter().skip(1).filter_map(Sexpr::as_list) {
+        let v = sexpr::num(item, 1).map(mm_to_nm);
+        match (sexpr::tag(item), v) {
+            (Some("edge_clearance"), Some(v)) => board.copper_edge_clearance_nm = Some(v),
+            (Some("copper_line_width"), Some(v)) => t.copper.line_width_nm = v,
+            (Some("courtyard_line_width"), Some(v)) => t.courtyard_line_width_nm = v,
+            (Some("edge_cuts_line_width"), Some(v)) => t.edge_cuts_line_width_nm = v,
+            (Some("silk_line_width"), Some(v)) => t.silk.line_width_nm = v,
+            (Some("fab_layers_line_width"), Some(v)) => t.fab.line_width_nm = v,
+            (Some("other_layers_line_width"), Some(v)) => t.others.line_width_nm = v,
+            (Some("copper_text_dims"), _) => text_dims(item, &mut t.copper),
+            (Some("silk_text_dims"), _) => text_dims(item, &mut t.silk),
+            (Some("fab_layers_text_dims"), _) => text_dims(item, &mut t.fab),
+            (Some("other_layers_text_dims"), _) => text_dims(item, &mut t.others),
+            _ => {}
+        }
     }
-    if let Some(v) = sexpr::find(setup, "hole_to_hole_min").and_then(|f| sexpr::num(f, 1)) {
-        board.hole_to_hole_min_nm = mm_to_nm(v);
+}
+
+/// What a legacy board's `(setup ..)` says of the design rather than its rules: the pre-defined sizes (`parseSetup`'s `user_trace_width`, `user_via`,
+/// `user_diff_pair`) and the dimension defaults (`parseDefaults`' `dimension_units`, `dimension_precision`). `user_trace_width` and `user_via` make room for
+/// the net class's entry before their first size ("Make room for the netclass value": `emplace_back( 0 )`); `user_diff_pair` does not, so its first pair
+/// sits at index 0, the net class's place, and is not a pre-defined size KiCad offers (`GetCurrentDiffPairWidth`: `m_diffPairIndex <= 0` is the net class).
+/// `None` for a board without legacy design settings.
+struct LegacySetupDesign {
+    track_widths: Vec<Nm>,
+    vias: Vec<ViaPreset>,
+    pairs: Vec<DiffPairPreset>,
+    dimension_units: Option<i64>,
+    dimension_precision: Option<i64>,
+}
+
+fn legacy_setup_design(root: &[Sexpr]) -> Option<LegacySetupDesign> {
+    let setup = sexpr::find(root, "setup").filter(|_| legacy_design_settings_loaded(root))?;
+    let mut out = LegacySetupDesign { track_widths: vec![], vias: vec![], pairs: vec![], dimension_units: None, dimension_precision: None };
+    let mut pairs = Vec::new();
+    for item in setup.iter().skip(1).filter_map(Sexpr::as_list) {
+        let n = |i: usize| sexpr::num(item, i).map(mm_to_nm);
+        match sexpr::tag(item) {
+            Some("user_trace_width") => out.track_widths.extend(n(1)),
+            Some("user_via") => out.vias.extend(n(1).zip(n(2)).map(|(diameter, drill)| ViaPreset { diameter, drill })),
+            Some("user_diff_pair") => pairs.extend(n(1).zip(n(2)).zip(n(3)).map(|((width, gap), via_gap)| DiffPairPreset { width, gap, via_gap })),
+            Some("defaults") => {
+                for d in item.iter().skip(1).filter_map(Sexpr::as_list) {
+                    let int = sexpr::num(d, 1).map(|v| v as i64);
+                    match sexpr::tag(d) {
+                        Some("dimension_units") => out.dimension_units = int,
+                        Some("dimension_precision") => out.dimension_precision = int,
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
     }
-    if let Some(v) = sexpr::find(setup, "via_min_annulus").and_then(|f| sexpr::num(f, 1)) {
-        board.annular_width_min_nm = mm_to_nm(v);
+    out.pairs = pairs.into_iter().skip(1).collect();
+    Some(out)
+}
+
+/// `DIM_UNITS_MODE` by its number (`pcb_dimension.h`: INCH, MILS, MM, AUTOMATIC).
+fn dimension_units_from_code(code: i64) -> Option<eda_model::ir::DimensionUnits> {
+    use eda_model::ir::DimensionUnits;
+    Some(match code {
+        0 => DimensionUnits::Inch,
+        1 => DimensionUnits::Mil,
+        2 => DimensionUnits::Mm,
+        3 => DimensionUnits::Automatic,
+        _ => return None,
+    })
+}
+
+/// The project text the board's import merges: the project as it is, or, for a board with legacy design settings ([`ImportNotes::legacy_design_settings`]),
+/// without its `board.design_settings` (`board.cpp::SetProject`: `SetParent( &project, !m_LegacyDesignSettingsLoaded )`), and for a board with legacy
+/// `(net_class ..)` blocks ([`ImportNotes::legacy_net_classes`]) without the project's net classes and their patterns, which KiCad replaces with the board's
+/// (`if( m_LegacyNetclassesLoaded )`: `SetDefaultNetclass`, `SetNetclasses`, `SetNetclassPatternAssignments` from the legacy settings). Text that is not a
+/// JSON object is given back unchanged.
+pub fn project_json_for_board(project_json: &str, notes: &ImportNotes) -> String {
+    if !notes.legacy_design_settings && !notes.legacy_net_classes {
+        return project_json.to_string();
     }
+    let Ok(mut root) = serde_json::from_str::<serde_json::Value>(project_json) else { return project_json.to_string() };
+    if notes.legacy_design_settings {
+        if let Some(board) = root.get_mut("board").and_then(|b| b.as_object_mut()) {
+            board.remove("design_settings");
+        }
+    }
+    if notes.legacy_net_classes {
+        if let Some(ns) = root.get_mut("net_settings").and_then(|b| b.as_object_mut()) {
+            ns.remove("classes");
+            ns.remove("netclass_patterns");
+        }
+    }
+    serde_json::to_string(&root).unwrap_or_else(|_| project_json.to_string())
 }
 
 /// A KiCad 7+ project's real net-class source: `net_settings.classes[]` +
@@ -1185,6 +1467,20 @@ pub fn merge_project_net_classes(model: &mut eda_model::ConstraintModel, project
         if let Some(v) = mm("via_drill") {
             model.board.via_drill = v;
         }
+        // The Default class's microvia and differential-pair sizes (`net_settings.cpp`'s `readNetClass`: `if( auto value = getInPcbUnits( entry,
+        // "microvia_diameter" ) ) nc->SetuViaDiameter( *value );` and so on for every key, the Default class's included): the class the board file's
+        // `(net_class "Default" ..)` block and the derived project then carry (`BoardRules::default_class`). A key the class does not have keeps what the
+        // board said.
+        let keys = [mm("microvia_diameter"), mm("microvia_drill"), mm("diff_pair_width"), mm("diff_pair_gap"), mm("diff_pair_via_gap")];
+        if keys.iter().any(Option::is_some) {
+            let d = model.board.default_class.get_or_insert_with(|| NetClass { name: "Default".into(), nets: vec![], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+            let [ud, ur, pw, pg, pv] = keys;
+            d.microvia_diameter = ud.or(d.microvia_diameter);
+            d.microvia_drill = ur.or(d.microvia_drill);
+            d.diff_pair_width = pw.or(d.diff_pair_width);
+            d.diff_pair_gap = pg.or(d.diff_pair_gap);
+            d.diff_pair_via_gap = pv.or(d.diff_pair_via_gap);
+        }
     }
 
     let mut project_classes = parse_project_net_classes(project_json);
@@ -1220,13 +1516,47 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
     let Some(design_settings) = root.get("board").and_then(|b| b.get("design_settings")) else {
         return;
     };
-    let Some(rules) = design_settings.get("rules") else {
-        return;
+    let empty = serde_json::json!({});
+    let has_rules = design_settings.get("rules").is_some();
+    let rules = design_settings.get("rules").unwrap_or(&empty);
+    // `PARAM_SCALED<int>::Load` (`include/settings/parameters.h`): `KiROUND( dval * m_invScale )`, then `if( val > m_max || val < m_min ) val = m_default;`,
+    // with each key's range and default of `BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS` (8303b2ad `board_design_settings.cpp`), in millimetres.
+    let ranged = |key: &str, min: f64, max: f64, default: f64| rules.get(key).and_then(|v| v.as_f64()).map(|v| {
+        let nm = mm_to_nm(v);
+        if nm < mm_to_nm(min) || nm > mm_to_nm(max) { mm_to_nm(default) } else { nm }
+    });
+    let mm = |key: &str| -> Option<Nm> {
+        let (min, max, default) = match key {
+            "min_clearance" => (0.0, 25.0, 0.0),
+            "min_connection" => (0.0, 100.0, 0.0),
+            "min_track_width" => (0.0, 25.0, 0.2),
+            // `m_ViasMinAnnularWidth`'s default is `DEFAULT_VIASMINSIZE`, as KiCad has it
+            "min_via_annular_width" => (0.0, 25.0, 0.5),
+            "min_via_diameter" => (0.0, 25.0, 0.5),
+            "min_through_hole_diameter" => (0.0, 25.0, 0.3),
+            "min_microvia_diameter" => (0.0, 10.0, 0.2),
+            "min_microvia_drill" => (0.0, 10.0, 0.1),
+            "min_hole_to_hole" => (0.0, 10.0, 0.25),
+            "min_hole_clearance" => (0.0, 100.0, 0.25),
+            "min_silk_clearance" => (-10.0, 100.0, 0.0),
+            "min_groove_width" => (0.0, 25.0, 0.0),
+            // `DEFAULT_SILK_TEXT_SIZE * 0.8`, `DEFAULT_SILK_TEXT_WIDTH * 0.8`
+            "min_text_height" => (0.0, 100.0, 0.8),
+            "min_text_thickness" => (0.0, 25.0, 0.08),
+            // -0.01 is the flag for the legacy method based on the edge cut thicknesses
+            "min_copper_edge_clearance" => (-0.01, 25.0, 0.5),
+            // `ARC_HIGH_DEF`
+            "max_error" => (0.0001, 1.0, 0.005),
+            "solder_mask_to_copper_clearance" => (0.0, 25.0, 0.0),
+            _ => return rules.get(key).and_then(|v| v.as_f64()).map(mm_to_nm),
+        };
+        ranged(key, min, max, default)
     };
-    let mm = |key: &str| rules.get(key).and_then(|v| v.as_f64()).map(mm_to_nm);
     let b = &mut model.board;
     // The project stated its minimums: they are exact, and written back exactly (`BoardRules::constraints_explicit`).
-    b.constraints_explicit = true;
+    if has_rules {
+        b.constraints_explicit = true;
+    }
     if let Some(v) = mm("min_track_width") {
         b.track_width_min_nm = v;
     }
@@ -1278,10 +1608,11 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
         b.min_groove_width_nm = v;
     }
     if let Some(v) = mm("max_error") {
-        b.max_error_nm = v.max(Nm::new(1));
+        b.max_error_nm = v;
     }
-    if let Some(v) = rules.get("min_resolved_spokes").and_then(|v| v.as_u64()) {
-        b.min_resolved_spokes = v.min(99) as u32;
+    // `PARAM<int>( "rules.min_resolved_spokes", .., DEFAULT_MINRESOLVEDSPOKES, 0, 99 )`: out of range is the default, 2
+    if let Some(v) = rules.get("min_resolved_spokes").and_then(|v| v.as_i64()) {
+        b.min_resolved_spokes = if (0..=99).contains(&v) { v as u32 } else { 2 };
     }
     if let Some(v) = rules.get("use_height_for_length_calcs").and_then(|v| v.as_bool()) {
         b.use_height_for_length_calcs = v;
@@ -1291,19 +1622,24 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
     }
     // Text & Graphics > Defaults (`defaults.<class>_line_width`, `_text_size_h/_v`, `_text_thickness`, `_text_italic`, `_text_upright`).
     if let Some(def) = design_settings.get("defaults") {
-        let num = |key: &str| def.get(key).and_then(|v| v.as_f64()).map(mm_to_nm);
+        // The same `PARAM_SCALED` range check: a stroke 1 nm to 100 mm (`minStroke`, `maxStroke`), a text size `TEXT_MIN_SIZE_MM` to `TEXT_MAX_SIZE_MM`
+        // (0.001 to 250 mm), else the class's default.
+        let factory = eda_model::rules::TextGraphicsDefaults::default();
+        let in_range = |key: &str, min: Nm, max: Nm, default: Nm| def.get(key).and_then(|v| v.as_f64()).map(mm_to_nm).map(|v| if v < min || v > max { default } else { v });
+        let stroke = |key: &str, default: Nm| in_range(key, Nm::new(1), eda_model::units::mm(100.0), default);
+        let text_size = |key: &str, default: Nm| in_range(key, eda_model::units::mm(0.001), eda_model::units::mm(250.0), default);
         let flag = |key: &str| def.get(key).and_then(|v| v.as_bool());
-        let class = |prefix: &str, c: &mut eda_model::rules::LayerClassDefaults| {
-            if let Some(v) = num(&format!("{prefix}_line_width")) {
+        let class = |prefix: &str, c: &mut eda_model::rules::LayerClassDefaults, f: &eda_model::rules::LayerClassDefaults| {
+            if let Some(v) = stroke(&format!("{prefix}_line_width"), f.line_width_nm) {
                 c.line_width_nm = v;
             }
-            if let Some(v) = num(&format!("{prefix}_text_size_h")) {
+            if let Some(v) = text_size(&format!("{prefix}_text_size_h"), f.text_width_nm) {
                 c.text_width_nm = v;
             }
-            if let Some(v) = num(&format!("{prefix}_text_size_v")) {
+            if let Some(v) = text_size(&format!("{prefix}_text_size_v"), f.text_height_nm) {
                 c.text_height_nm = v;
             }
-            if let Some(v) = num(&format!("{prefix}_text_thickness")) {
+            if let Some(v) = stroke(&format!("{prefix}_text_thickness"), f.text_thickness_nm) {
                 c.text_thickness_nm = v;
             }
             if let Some(v) = flag(&format!("{prefix}_text_italic")) {
@@ -1313,14 +1649,14 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
                 c.upright = v;
             }
         };
-        class("silk", &mut b.text_graphics.silk);
-        class("copper", &mut b.text_graphics.copper);
-        class("fab", &mut b.text_graphics.fab);
-        class("other", &mut b.text_graphics.others);
-        if let Some(v) = num("board_outline_line_width") {
+        class("silk", &mut b.text_graphics.silk, &factory.silk);
+        class("copper", &mut b.text_graphics.copper, &factory.copper);
+        class("fab", &mut b.text_graphics.fab, &factory.fab);
+        class("other", &mut b.text_graphics.others, &factory.others);
+        if let Some(v) = stroke("board_outline_line_width", factory.edge_cuts_line_width_nm) {
             b.text_graphics.edge_cuts_line_width_nm = v;
         }
-        if let Some(v) = num("courtyard_line_width") {
+        if let Some(v) = stroke("courtyard_line_width", factory.courtyard_line_width_nm) {
             b.text_graphics.courtyard_line_width_nm = v;
         }
     }
