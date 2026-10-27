@@ -561,18 +561,20 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         // A sheet on a screen shown on several paths has one `(path ..)` per path, each with its own page (`SCH_SHEET::m_instances`): the first is
         // the placement's page and a later one whose page differs is kept for its path (`SchExtras::sheet_pages`, by the model's path of the
         // screen: the path's sheet uuids, the root's own left out).
-        let instance_pages: Vec<(&str, &str)> = sexpr::find(s, "instances")
+        // The page as `parseSchSheetInstances` reads it: "Empty page numbers are not permitted" ("#" instead), nor white space. A sheet path the file
+        // gives no page gets one from `sheet_list::repair_page_numbers` once the tree is read (r2 B-M2).
+        let instance_pages: Vec<(&str, String)> = sexpr::find(s, "instances")
             .into_iter()
             .flat_map(|i| sexpr::find_all(i, "project"))
             .flat_map(|p| sexpr::find_all(p, "path"))
-            .filter_map(|p| Some((sexpr::txt(p, 1)?, sexpr::find(p, "page").and_then(|pg| sexpr::txt(pg, 1))?)))
+            .filter_map(|p| Some((sexpr::txt(p, 1)?, kicad_page_number(sexpr::find(p, "page").and_then(|pg| sexpr::txt(pg, 1))?))))
             .collect();
-        let page = instance_pages.first().map(|(_, pg)| *pg).filter(|pg| !pg.is_empty() && *pg != "1").unwrap_or_default().to_string();
+        let page = instance_pages.first().map(|(_, pg)| pg.as_str()).filter(|pg| *pg != "1").unwrap_or_default().to_string();
         if let Some((_, first)) = instance_pages.first() {
             for (path, pg) in instance_pages.iter().skip(1).filter(|(_, pg)| pg != first) {
                 let parent: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).skip(1).collect();
                 if !id.is_empty() {
-                    sheet_pages.entry(id.clone()).or_default().insert(parent.join("/"), pg.to_string());
+                    sheet_pages.entry(id.clone()).or_default().insert(parent.join("/"), pg.clone());
                 }
             }
         }
@@ -865,8 +867,20 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
     legacy_symbol_instances(&text, &design, &mut sheet_contents, &symbol_places);
     design.sheet_contents = (!sheet_contents.is_empty()).then_some(sheet_contents);
     legacy_sheet_instances(&text, &mut design);
+    // `SCH_SHEET_LIST::RepairPageNumbers`, which eeschema and kicad-cli run on a schematic just loaded with some page set (r2 B-M2)
+    eda_model::sheet_list::repair_page_numbers(&mut design);
 
     Ok((design, model, notes))
+}
+
+/// A sheet instance's page as `SCH_IO_KICAD_SEXPR_PARSER` reads it (`parseSchSheetInstances` and a sheet's `(instances ..)`): "Empty page numbers are not
+/// permitted" (a hash character instead), and "Whitespaces are not permitted" (`\r`, `\n`, `\t` and spaces removed).
+pub(crate) fn kicad_page_number(page: &str) -> String {
+    if page.is_empty() {
+        "#".to_string()
+    } else {
+        page.chars().filter(|c| !matches!(c, '\r' | '\n' | '\t' | ' ')).collect()
+    }
 }
 
 /// The key of the screen a sheet in a file of the folder `resolve_dir` names as `text`: the file's path from the root's folder `root_dir`, `/`-separated,
@@ -993,7 +1007,7 @@ fn legacy_sheet_instances(root_text: &str, design: &mut Design) {
             ids.remove(0);
         }
         let Some((sheet_id, parent)) = ids.split_last() else { continue };
-        let page = sexpr::find(path, "page").and_then(|p| sexpr::txt(p, 1)).map(|p| if p.is_empty() { "#" } else { p }).unwrap_or("#").to_string();
+        let page = sexpr::find(path, "page").and_then(|p| sexpr::txt(p, 1)).map_or_else(|| "#".to_string(), kicad_page_number);
         if page == "1" {
             continue;
         }
@@ -1966,6 +1980,30 @@ mod tests {
         let (design, _, _) = import_kicad_sch_tree(&dir.join("root.kicad_sch")).unwrap();
         let pages: Vec<(String, String)> = design.schematic.as_ref().unwrap().sheets.iter().map(|s| (s.name.clone(), s.page.clone())).collect();
         assert_eq!(pages, [("a".to_string(), "7".to_string()), ("b".to_string(), "#".to_string())]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// r2 B-M2 (`SCH_SHEET_LIST::RepairPageNumbers`, run on load when some page is set; QA `netlists/hierarchy_aliases`): root sheets on pages "2" and "3",
+    /// each showing a screen with a sheet the file gives no page: the two nested paths get 4 and 5, the lowest pages no sheet holds, and no page is shown
+    /// twice. An empty `(page "")` reads as "#" and white space is removed (`parseSchSheetInstances`).
+    #[test]
+    fn an_imported_file_with_some_pages_set_gives_the_others_unused_pages() {
+        let dir = std::env::temp_dir().join(format!("eda_kicad_repair_pages_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root_uuid = "11111111-1111-1111-1111-111111111111";
+        let sheet = |uuid: &str, name: &str, file: &str, x: i32, page: Option<&str>| {
+            let inst = page.map(|p| format!("(instances (project \"t\" (path \"/{root_uuid}\" (page \"{p}\"))))")).unwrap_or_default();
+            format!("(sheet (at {x} 50) (size 20 20) (uuid \"{uuid}\") (property \"Sheetname\" \"{name}\" (at {x} 49 0)) (property \"Sheetfile\" \"{file}\" (at {x} 71 0)) {inst})")
+        };
+        let file = |uuid: &str, body: String| format!("(kicad_sch (version 20231120) (generator eeschema) (uuid \"{uuid}\") (paper \"A4\") {body})");
+        std::fs::write(dir.join("root.kicad_sch"), file(root_uuid, format!("{} {} {} (sheet_instances (path \"/\" (page \"1\")))", sheet("21111111-1111-1111-1111-111111111111", "First", "sub.kicad_sch", 10, Some("2")), sheet("31111111-1111-1111-1111-111111111111", "Second", "sub.kicad_sch", 60, Some("3")), sheet("51111111-1111-1111-1111-111111111111", "Third", "leaf.kicad_sch", 110, Some("")))) ).unwrap();
+        std::fs::write(dir.join("sub.kicad_sch"), file("41111111-1111-1111-1111-111111111111", sheet("61111111-1111-1111-1111-111111111111", "Sub2", "leaf.kicad_sch", 10, None))).unwrap();
+        std::fs::write(dir.join("leaf.kicad_sch"), file("71111111-1111-1111-1111-111111111111", String::new())).unwrap();
+        let (design, _, _) = import_kicad_sch_tree(&dir.join("root.kicad_sch")).unwrap();
+        let shown: Vec<(String, String)> = eda_model::sheet_list::walk(&design).into_iter().map(|e| (e.name.clone(), e.effective_page())).collect();
+        let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(shown, [s("", "1"), s("First", "2"), s("Sub2", "4"), s("Second", "3"), s("Sub2", "5"), s("Third", "#")]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
