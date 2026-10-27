@@ -1830,11 +1830,21 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             symbol
         })
         .collect();
+    // the texts of every global label of the schematic, for a wire's label driver
+    let global_texts: std::collections::BTreeSet<&str> = design
+        .schematic
+        .iter()
+        .chain(design.sheet_contents.iter().flat_map(|c| c.values()))
+        .flat_map(|s| s.labels.iter().filter(|l| matches!(l.kind, eda_model::ir::LabelKind::Global { .. })).map(|l| l.net.as_str()))
+        .collect();
     let wires: Vec<Value> = sch
         .wires
         .iter()
         .map(|w| {
             let mut v = json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "bus": w.bus });
+            if let Some(name) = wire_label_driver(&sch, w, &global_texts) {
+                v["label_driver"] = json!(name);
+            }
             // The stroke Wire/Bus Properties set (width, style, colour), when one was.
             if let Some(stroke) = sch.extras.strokes.get(&w.id) {
                 v["stroke"] = json!(stroke);
@@ -2511,6 +2521,21 @@ fn ratsnest_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     Ok(json!({ "edges": edges }))
 }
 
+/// The name a local or global label put down on `w` takes (`SCH_DRAWING_TOOLS::createNewLabel`: `if( SCH_LINE* wire = findWire( aPosition ) ) netName =
+/// findWireLabelDriverName( wire );`, r2 C-L5): the net's name without its sheet's path when the net is named by a label -- a local label of that text on
+/// this sheet (the net is `/<path>/<text>`), or a global label of the net's name anywhere -- else none (a power symbol, a hierarchical label, a pin, nothing).
+fn wire_label_driver(sch: &eda_model::ir::SchematicSection, w: &eda_model::ir::Wire, global_texts: &std::collections::BTreeSet<&str>) -> Option<String> {
+    if w.bus || w.net.is_empty() {
+        return None;
+    }
+    if w.net.starts_with('/') {
+        let local = w.net.rsplit('/').next().unwrap_or(&w.net);
+        let unescaped = local.replace("{slash}", "/");
+        return sch.labels.iter().any(|l| l.kind.is_local() && (l.net == local || l.net == unescaped)).then(|| unescaped);
+    }
+    global_texts.contains(w.net.as_str()).then(|| w.net.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use eda_model::units::{mm, Nm};
@@ -2696,4 +2721,21 @@ mod tests {
         assert_eq!(resolved.sheets.len(), 0, "falls back to the root, not a panic/error");
         assert!(breadcrumb.is_empty());
     }
+
+    /// r2 C-L5 (`createNewLabel`'s `findWireLabelDriverName`): a wire a local label names gives that label's text (without the sheet's path), one a global
+    /// label names gives the global name, one only a power symbol or a hierarchical label names gives none.
+    #[test]
+    fn a_wire_tells_the_label_tool_the_label_that_names_it() {
+        use eda_model::ir::{LabelKind, LabelShape, NetLabel, Point, SchematicSection, Wire};
+        let wire = |net: &str| Wire { id: String::new(), net: net.into(), pins: vec![], pts: vec![Point::default(), Point::default()], bus: false };
+        let label = |net: &str, kind: LabelKind| NetLabel { id: String::new(), net: net.into(), at: Point::default(), kind };
+        let sch = SchematicSection { labels: vec![label("SDA", LabelKind::Local), label("PORT", LabelKind::Hierarchical { shape: LabelShape::Input })], ..Default::default() };
+        let globals: std::collections::BTreeSet<&str> = ["CLK"].into_iter().collect();
+        assert_eq!(wire_label_driver(&sch, &wire("/Sub/SDA"), &globals).as_deref(), Some("SDA"));
+        assert_eq!(wire_label_driver(&sch, &wire("CLK"), &globals).as_deref(), Some("CLK"));
+        assert_eq!(wire_label_driver(&sch, &wire("+3V3"), &globals), None, "a power symbol's net");
+        assert_eq!(wire_label_driver(&sch, &wire("/Sub/PORT"), &globals), None, "a hierarchical label's");
+        assert_eq!(wire_label_driver(&sch, &wire(""), &globals), None);
+    }
+
 }
