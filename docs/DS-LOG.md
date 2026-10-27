@@ -428,3 +428,58 @@ that points here.
   Sheet would assign 4 and 2 (KiCad numbers new sheet instances itself, `SCH_SHEET_LIST::AddNewSheetInstances`).
 - Finding 2 asks the panel to show a page for a sheet no one gave one; the studio may prefer to leave page assignment to the writer/import.
   The assertion is left out rather than changed, as asked.
+
+## R-4 and R-5: Board Setup's max_error bound and range messages (done 2026-10-27)
+
+**What I did** (round-2 route/rules findings R-4 and R-5, each checked against `~/src/kicad-src-8303b2ad`).
+
+- **R-4**: `BOARD_DESIGN_SETTINGS::ValidateDesignRules` (`pcbnew/board_design_settings.cpp:1519-1521`) bounds `max_error` by
+  `MINIMUM_ERROR_SIZE_MM`/`MAXIMUM_ERROR_SIZE_MM` (`include/board_design_settings.h:100-101`: 0.001 / 0.1 mm). The 1 mm we had came from
+  the `PARAM_SCALED` load range, not the dialog. `Constraints::validate` (`crates/model/src/rules.rs`) and `CONSTRAINT_RANGES`
+  (`web/studio/src/kicad-port/boardSetupRules.ts`) now cap at 100 000 nm. The studio test that asserted "between 0.001 and 1 mm." now
+  asserts KiCad's bound and message; the Rust test gained the same cases (0.5 mm out, 0.1 mm in, 0.100001 mm out).
+- **R-5**: `addRangeError` formats each bound with `StringFromValue( pcbIUScale, units, bound, true )`, and `aAddUnitsText` appends
+  `" mm"` to each (`common/eda_units.cpp::StringFromValue`, `GetText`), so the messages are "Value must be between 0 mm and 25 mm."
+  (and `-0.01 mm`, `0.001 mm`, `0.1 mm`), in both `rules.rs` and `boardSetupRules.ts`. The studio's spoke-count message is KiCad's
+  "Value must be between 0 and 99." (the Rust one already was). The Solder Mask/Paste page is not validated at all: KiCad's
+  `PANEL_SETUP_MASK_AND_PASTE::TransferDataFromWindow` only stores the values and returns true, so `validate_mask_paste` is removed
+  from `rules.rs` and `boardSetupRules.ts`, `set_mask_paste` stores whatever it is given, and `MaskPastePage.tsx` has no red marks or
+  Apply gate. With it went the two paste-ratio messages that disagreed with each other (`-100 and 100 %` in TS, `-1.000 and 1.000`
+  in Rust); KiCad's `addRatioRangeError` form is the Rust one.
+- Tests written first and seen to fail: the Rust model test on the message (`left: "Value must be between 0 and 25 mm." right:
+  "Value must be between 0 mm and 25 mm."`), the ops test on the refused 2.0 paste ratio (`ops_bad_mask_paste` / "Value must be
+  between -1.000 and 1.000."), and the web test (`not ok 316 - the Constraints page is range-checked like ValidateDesignRules`, the
+  same message diff).
+- The findings file marks both: `**Fixed** on ds/r2-board-setup: dc584275`.
+
+**Commits.**
+
+- `dc584275` -- board setup: KiCad's max_error bound and range messages; mask/paste checks nothing
+- this log, in its own commit.
+
+**Tests run.**
+
+- `cargo test -p eda-model -p eda-ops` EXIT 0 -- eda-model lib 371 passed, eda-ops lib 1037 passed, every integration target 0 failed.
+- `cd web/studio && npm run test:unit` EXIT 0 -- 2477 tests, 2477 pass, 0 fail.
+- `cd web/studio && npm run typecheck` EXIT 0.
+- `bash tools/run-all-checks.sh -j 1 --ports 8830-8832 board-setup-rules board-setup-pages` EXIT 0, a fresh build of the studio and
+  eda-cli:
+
+  ```
+  ok   board-setup-rules       10 scenarios    34s  board=mcu30
+  ok   board-setup-pages       79 scenarios   108s  board=mcu30-few
+
+  run-all-checks: 2 passed, 0 failed of 2 in 142s (logs: /tmp/run-all-checks.nEEG/runs)
+  ```
+
+  No server is left behind (the script kills each; ports 8830-8832 have no listeners).
+
+**Unsure / for the reviewer.**
+
+- R-5 notes KiCad prints the bounds in the user's units (`m_Frame->GetUserUnits()`) and ours are always mm. That was already so and is
+  left alone: the messages now match KiCad's mm text.
+- R-5 also notes KiCad shows only `errors.front()` through `PAGED_DIALOG::SetError`. The backend still refuses with the first problem
+  (`board_setup::first`); the studio still marks every wrong field in red instead of showing one message, as before. The finding's
+  remedy did not ask to change that display, so it is unchanged.
+- Removing the mask/paste checks means a length field left unreadable (NaN) is sent as `null` and refused by the backend's parser
+  rather than in the page. KiCad's page has no check of its own either; the fields' controls are all that stop bad input there.
