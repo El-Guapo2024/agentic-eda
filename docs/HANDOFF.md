@@ -73,6 +73,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r4-pcb-edit` (`-router`, 2026-10-28) | Round 4's PCB editing findings (`r4-pcb-edit`, 1 high, 10 medium, 9 low): teardrops as kicad-cli makes them, Swap Layers and tuning patterns, layer defaults, Create Array's kinds and group centre, the drawing tools' loops (Line chain, first click, Delete, Redo, closing on the first corner, the line mode), Global Deletions, and 8 lows (PARITY-pcb section 58) | done | C-8, the rest of A-5, Create Array of tuning patterns (GAPS item 8) |
 | `task-reuse-cpp` (`-sim`, 2026-10-28) | The user's reuse rule: KiCad's own Clipper2 2.0.1 and nanosvg (C++, `third_party/`, built with `cc`), the `delaunator` crate, and one copy of the expression language (Find by Properties posts to `/api/pcb/query`); the ports kept INACTIVE (features `eda-clipper2/rust-port`, `eda-connectivity/rust-port`, `eda-kicad/rust-nanosvg`; the TS `pcbExpr.ts`/`libeval.ts` imported only by tests); ARCHITECTURE "Reuse before porting", GAPS item 39 | done | SVG text (needs Fontconfig/FreeType/HarfBuzz); the SPICE value parser stays in two languages; the Query tab's geometry functions |
 
 Gates for any of them:
