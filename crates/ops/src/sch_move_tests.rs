@@ -1087,3 +1087,15 @@ fn clean_up_keeps_wires_of_different_strokes_apart_and_a_split_wire_keeps_its_st
         assert_eq!(out.extras.strokes.get(&w.id), Some(&dashed), "{} keeps the stroke", w.id);
     }
 }
+
+/// r2 C-M6 (`SCH_ALIGN_TOOL::moveItem` is `aItem->Move( delta )`, then `doAlignCleanup`): Align moves a symbol rigidly -- the wire on its pin stays where it
+/// is, and the pin comes off it, as in KiCad; nothing is stretched or bent.
+#[test]
+fn align_moves_items_rigidly_like_kicad() {
+    let mut s = section();
+    s.symbols.push(sym("R1", p(mm(20.32), mm(25.4))));
+    s.wires.push(wire("w1", &[p(mm(20.32), mm(21.59)), p(mm(20.32), mm(12.7))]));
+    let after = run_on(s, SchMoveCmd::Align { moves: vec![AlignMove { id: "R1".into(), dx: mm(5.08), dy: Nm::ZERO }], grid: Nm::ZERO });
+    assert_eq!(after.symbols[0].at, p(mm(25.4), mm(25.4)));
+    assert_eq!(wire_pts(&after), vec![vec![p(mm(20.32), mm(21.59)), p(mm(20.32), mm(12.7))]], "the wire is left where it was");
+}

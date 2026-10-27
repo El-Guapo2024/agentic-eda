@@ -1274,7 +1274,6 @@ fn align(scene: &mut Scene, moves: &[AlignMove], grid: Nm) -> Result<(), Vec<Che
         return Err(fail("ops_nothing_selected", "selection", "nothing to align"));
     }
     let mut moved: Vec<Item> = Vec::new();
-    let mut internal: Vec<Point> = Vec::new();
     let mut any = false;
     for m in moves {
         let items = find_items(scene, &m.id);
@@ -1301,40 +1300,28 @@ fn align(scene: &mut Scene, moves: &[AlignMove], grid: Nm) -> Result<(), Vec<Che
                 continue;
             }
             any = true;
-            // one item: reset what the last one left, select it, drag it
-            scene.selected.clear();
-            scene.by_drag.clear();
-            for s in scene.segs.iter_mut() {
-                s.flags = 0;
+            // `SCH_ALIGN_TOOL::moveItem`: a plain move (`aItem->Move( delta )`), the wires on it are not dragged along (r2 C-M6)
+            if let Item::Seg(i) = it {
+                scene.segs[i].flags |= F_START | F_END;
             }
-            match it {
-                Item::Seg(i) => scene.segs[i].flags = F_SELECTED | F_START | F_END,
-                other => {
-                    scene.selected.insert(other);
-                }
-            }
-            let mut st = Drag { ortho: true, grid, ..Default::default() };
-            scene.setup_items_for_drag(&mut st);
-            internal.extend(internal_points(scene));
-            scene.perform_item_move(&mut st, delta, true);
-            moved.extend(scene.in_selection());
+            scene.move_item(it, delta);
+            moved.push(it);
         }
     }
     if !any {
         return Err(fail("ops_nothing_to_move", "selection", "nothing moves: the items are locked or already aligned"));
     }
-    // clean up once for everything that moved
-    scene.selected = moved.iter().copied().filter(|i| !matches!(i, Item::Seg(_))).collect();
-    for it in &moved {
-        if let Item::Seg(i) = it {
-            if *i < scene.segs.len() {
-                scene.segs[*i].flags |= F_SELECTED;
-            }
-        }
+    // `doAlignCleanup`: `TrimOverLappingWires` and `AddJunctionsIfNeeded` on the aligned items, then `SCHEMATIC::CleanUp`
+    moved.sort();
+    moved.dedup();
+    scene.trim_overlapping_wires(&moved);
+    scene.add_junctions_if_needed(&moved);
+    for s in scene.segs.iter_mut() {
+        s.flags = 0;
     }
-    internal.sort();
-    internal.dedup();
-    scene.finalize(None, &internal);
+    scene.selected.clear();
+    scene.by_drag.clear();
+    scene.clean_up();
     Ok(())
 }
 
