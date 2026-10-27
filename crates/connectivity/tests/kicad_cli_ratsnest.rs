@@ -293,3 +293,69 @@ fn kicad_cli_ratsnest_zone_approximation() {
         println!("mismatches (expected -- outline-only zone approximation, no fill yet):\n{}", mismatches.join("\n"));
     }
 }
+
+/// R5-Z1 (`CN_VISITOR::checkZoneZoneConnection` tests vertices only): two GND bars crossing as a "+", each with a GND pad of its own outside the
+/// crossing, are not connected in KiCad (one unconnected item, "Missing connection between items: Zone [GND] .. / Zone [GND] .."); with the vertical
+/// bar shortened so two of its corners lie inside the other, they are (none). The board carries its fills (each the zone's outline) and kicad-cli's DRC
+/// runs without a refill: a refill grows each same-net fill into the other where they cross (`ZONE_FILLER::fillCopperZone`'s "aSmoothedOutline is
+/// larger than the zone where it intersects with other, same-net zones"), and the two then share vertices. Ours reads the file's fills as the import
+/// keeps them. Slow tier: `EDA_SLOW_TESTS=1`.
+#[test]
+fn kicad_cli_crossing_fills_join_only_by_a_vertex_inside() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let board = |vertical_end: &str| {
+        let pad = |r: &str, n: u32, at: &str| {
+            format!(
+                r#"  (footprint "T:P" (layer "F.Cu") (uuid "11111111-0000-0000-0000-00000000000{n}") (at {at})
+    (property "Reference" "{r}" (at 0 -2 0) (layer "F.SilkS") (uuid "11111111-0000-0000-0000-0000000000{n}1") (effects (font (size 1 1) (thickness 0.15))))
+    (property "Value" "P" (at 0 2 0) (layer "F.Fab") (uuid "11111111-0000-0000-0000-0000000000{n}2") (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "GND") (uuid "11111111-0000-0000-0000-0000000000{n}3")))
+"#
+            )
+        };
+        let zone = |n: u32, pts: &str| {
+            format!(
+                r#"  (zone (net 1) (net_name "GND") (layer "F.Cu") (uuid "22222222-0000-0000-0000-00000000000{n}") (hatch edge 0.5)
+    (connect_pads yes (clearance 0.2)) (min_thickness 0.2) (filled_areas_thickness no)
+    (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+    (polygon (pts {pts}))
+    (filled_polygon (layer "F.Cu") (pts {pts})))
+"#
+            )
+        };
+        format!(
+            "(kicad_pcb (version 20241229) (generator \"pcbnew\") (generator_version \"9.0\")\n  (general (thickness 1.6) (legacy_teardrops no))\n  (paper \"A4\")\n  (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal) (25 \"Edge.Cuts\" user))\n  (setup (pad_to_mask_clearance 0))\n  (net 0 \"\")\n  (net 1 \"GND\")\n{}{}  (gr_rect (start 98 98) (end 112 112) (stroke (width 0.1) (type default)) (fill no) (layer \"Edge.Cuts\") (uuid \"11111111-0000-0000-0000-000000000099\"))\n{}{})\n",
+            pad("P1", 1, "101 105"),
+            pad("P2", 2, "105 101"),
+            zone(1, "(xy 100 104) (xy 110 104) (xy 110 106) (xy 100 106)"),
+            zone(2, &format!("(xy 104 100) (xy 106 100) (xy 106 {vertical_end}) (xy 104 {vertical_end})")),
+        )
+    };
+    let dir = std::env::temp_dir().join(format!("eda_conn_zz_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, end, expected) in [("plus", "110", 1usize), ("tee", "105", 0)] {
+        let text = board(end);
+        let pcb = dir.join(format!("{name}.kicad_pcb"));
+        std::fs::write(&pcb, &text).unwrap();
+        let report_path = pcb.with_extension("drc.json");
+        let out = Command::new(&cli).args(["pcb", "drc", "--format", "json", "--severity-all", "--output"]).arg(&report_path).arg(&pcb).output().expect("run kicad-cli pcb drc");
+        assert!(report_path.exists(), "kicad-cli wrote no report: {}", String::from_utf8_lossy(&out.stderr));
+        let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&report_path).unwrap()).unwrap();
+        let theirs = report.get("unconnected_items").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+        let (design, model, notes) = import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import {name}: {e:?}"));
+        let entries = eda_kicad::zone_fills::entries_of_imported_file(&design, notes.zone_fills.clone());
+        let copper = eda_kicad::zone_fills::KicadFills::new("import".into(), String::new(), 0, entries).copper(&design);
+        let ours = analyze(&design, &model, &copper).ratsnest.len();
+        eprintln!("{name}: kicad-cli {theirs} unconnected, ours {ours}");
+        assert_eq!(theirs, expected, "{name}: kicad-cli's unconnected items");
+        assert_eq!(ours, theirs, "{name}: our ratsnest against kicad-cli's");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
