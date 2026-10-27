@@ -363,9 +363,10 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
         };
         // "new format: default to keep text aligned off unless token is present"
         let keep_text_aligned = style.map(|s| flag(s, "keep_text_aligned")).unwrap_or(false);
-        // `DIM_TEXT_BORDER`: parseDIMENSION only accepts `(text_frame ..)` inside a leader's style, and only a leader writes it.
+        // `DIM_TEXT_BORDER`: parseDIMENSION only accepts `(text_frame ..)` inside a leader's style, and only a leader writes it. The number is clamped to the four borders
+        // (`textFrame = std::clamp( textFrame, 0, 3 )`): 7 is a rounded rectangle, -1 none.
         let text_frame = if matches!(kind, DimensionKind::Leader) {
-            match style.and_then(|s| sexpr::find(s, "text_frame")).and_then(|v| sexpr::num(v, 1)).map(|n| n as i64) {
+            match style.and_then(|s| sexpr::find(s, "text_frame")).and_then(|v| sexpr::num(v, 1)).map(|n| (n as i64).clamp(0, 3)) {
                 Some(1) => DimensionTextBorder::Rectangle,
                 Some(2) => DimensionTextBorder::Circle,
                 Some(3) => DimensionTextBorder::RoundRect,
