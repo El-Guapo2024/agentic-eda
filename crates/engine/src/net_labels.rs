@@ -1,6 +1,7 @@
 //! A local label on every net the intent names that a sheet draws with wires alone (the user's decision of 2026-10-24, fix batch A).
 //!
-//! KiCad names a net after the label that drives it (`SCH_CONNECTION::recacheName`), and a net no label drives after its best pin (`Net-(D1-Pad1)`). A
+//! KiCad names a net after the label that drives it (25ec2335 `conn_signals.cpp::SignalBaseName`: the best claim's `fullName`), and a net no label drives
+//! after its best pin (`Net-(D1-Pad1)`). A
 //! derived sheet draws a net inside one block as wires, so the name the intent gave it (`LED1`, `USB_DP`) would be lost to KiCad, with what it meant --
 //! a differential pair, a net class pattern, a rule. So, as a KiCad user would, the sheet gets a local label with the intent's name on one of the net's
 //! wires: KiCad then calls the net `/<sheet path>/<name>`.

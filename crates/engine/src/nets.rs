@@ -1,6 +1,7 @@
 //! The nets a drawn schematic tree implies: `eeschema`'s connection graph, for the whole hierarchy at once.
 //!
-//! A `.kicad_sch` carries no net list; KiCad derives one from what is drawn (`connection_graph.cpp`). So does this project once
+//! A `.kicad_sch` carries no net list; KiCad derives one from what is drawn (KiCad 25ec2335 `eeschema/connectivity/conn_*.cpp`, the engine the box's
+//! kicad-cli runs; 8303b2ad's `connection_graph.cpp` where the two agree). So does this project once
 //! a person edits a sheet: [`trace_nets`] reads wires, pins, labels, power symbols, sheet pins and no-connect flags of every
 //! screen and writes the result back as `design.nets`.
 //!
@@ -9,7 +10,7 @@
 //!   and a point that lands on the interior of a wire (a T-junction) are one electrical node.
 //! - **Claims and their order** (KiCad 25ec2335's connectivity engine, `eeschema/connectivity/conn_claims.cpp`, which the box's kicad-cli runs:
 //!   `ADVANCED_CFG::m_ConnectivityEngine` is on by default): pin < sheet pin < hierarchical label < local label < bus member < global power pin (a
-//!   power symbol, a hidden power input) < global label. The greatest claim of the net names it (`CLAIM_LESS`: priority, then nearest the root with
+//!   power symbol, a hidden power input) < global label, a local power symbol (`LOCAL_POWER_PIN`) between a local label and a bus member. The greatest claim of the net names it (`CLAIM_LESS`: priority, then nearest the root with
 //!   a global name and a pin unscoped, then a power symbol's pin, then an output sheet pin, then a name without `-Pad`, then the first name).
 //! - **Names** (`BuildIslandRecord`'s edges): on one sheet every label, power symbol and hidden power input of one text is one net (`SCOPE::SHEET`:
 //!   a power symbol `VCC` and a local label `VCC` there are one net); global labels and power names are one net across every sheet
@@ -17,18 +18,20 @@
 //! - **The hierarchy**: a sheet pin on the parent and a hierarchical label of the same name inside the sheet are one net, at its port; a sheet pin
 //!   joins no label of its name on its own sheet.
 //!
-//! A subgraph with no driver keeps the name its wires already carry (a derived schematic names every wire after its net), so a
-//! retrace after an edit does not rename nets under a routed board; otherwise it is `NET_<n>`.
+//! A net no claim names is named after its best pin as KiCad names it (`SignalBaseName`, `conn_pin_name.cpp::RenderPinNetName`), every time:
+//! [`follow`] keeps no old name for it (r3 A3-H3). Of two nets of one name the holder is `AssignNames`' `preferred` (a strong claim, then the greater).
 //!
 //! - **A net per placement** (`CONNECTION_GRAPH::Recalculate` walks the `SCH_SHEET_LIST`, a subgraph per item *per sheet path*): a
 //!   screen two sheet symbols show is traced once for each, as [`ScreenIn`]s with their own [`ScreenIn::path`], its pins under the
 //!   references that placement gives its symbols, so the same drawing makes two sets of nets. A sheet pin joins the hierarchical labels
 //!   of the one placement it is on.
 //!
-//! - **Buses** (`processSubGraphs`, `propagateToNeighbors`, `matchBusMember`): a bus wire is a layer of its own that no wire or pin
-//!   touches; a bus label, hierarchical label or sheet pin on it names it, and [`Naming::bus_members`] gives its members. On the bus's
-//!   sheet each member is one net with the nets of its name (the bus's neighbours); a bus sheet pin and the bus hierarchical label of its
-//!   sheet are one bus, its members matched by index (a vector) or by name (a group), so a member's nets on both sheets are one net.
+//! - **Buses** (`conn_bindings.cpp::BindBundle`, `conn_bus.cpp::Align`; the old engine's `processSubGraphs`, `propagateToNeighbors`): a bus wire is a
+//!   layer of its own that no wire or pin touches; a bus label, hierarchical label or sheet pin on it names it, and [`Naming::bus_members`] gives its
+//!   members. On the bus's sheet each member is one net with the nets of its name (a slot's `SCOPE::SHEET` edges; a sheet pin's only when it drives its
+//!   bus, `drivesRecord`); a bus sheet pin and the bus hierarchical label of its sheet are one bus, its members aligned by place, or by name when both
+//!   buses are groups, so a member's nets on both sheets are one net.
+//! - **A pin common to every unit** is a pin of each placed unit, at each unit's place ([`PIN_COPY`]).
 //!
 //! Not ported: bus entries take no part (KiCad's do not either: a wire is on a member by its label), nor does a bus-to-bus entry.
 
@@ -36,6 +39,21 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use eda_model::ir::{LabelKind, Point, SchematicSection};
 use eda_model::Net;
+
+/// The mark that tells a second copy of a pin apart in [`ScreenIn::pins`]: a pin common to every unit (unit 0) is drawn on each placed unit, each copy its own
+/// `SCH_SYMBOL` pin on its own island (KiCad 25ec2335 `conn_facts.cpp` makes a `PIN_FACT` per pin object, r3 A3-H1). The first copy of a reference's pin is
+/// keyed `REF.PIN`, a later one `REF.PIN` + this mark + its unit ([`pin_copy_key`]); the nets and the write-back name every copy `REF.PIN`.
+pub const PIN_COPY: char = '\u{1}';
+
+/// The key of the copy of `pin_ref` (`REF.PIN`) a placed unit `unit` draws, when an earlier unit drew the first one.
+pub fn pin_copy_key(pin_ref: &str, unit: u32) -> String {
+    format!("{pin_ref}{PIN_COPY}{unit}")
+}
+
+/// `REF.PIN` of a key of [`ScreenIn::pins`], a copy's or the first's.
+pub fn base_pin(key: &str) -> &str {
+    key.split(PIN_COPY).next().unwrap_or(key)
+}
 
 /// `SCH_CONNECTIVITY::PRIORITY` (KiCad 25ec2335 `eeschema/connectivity/conn_claims.h`; the old engine's `CONNECTION_SUBGRAPH::PRIORITY` lacks
 /// `BUS_MEMBER`).
@@ -396,7 +414,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             // `GetDriverPriority`: a global power pin drives its subgraph at `GLOBAL_POWER_PIN`, named by `GetDefaultNetName` (the lib pin's name, escaped as
             // a net name), even where it is wired: `generateGlobalPowerPinSubGraphs` skips only the unwired one's own subgraph, the name joins it to the
             // others all the same.
-            if let Some(name) = naming.power_pins.and_then(|m| m.get(pin_ref)).filter(|n| !n.is_empty()) {
+            if let Some(name) = naming.power_pins.and_then(|m| m.get(pin_ref).or_else(|| m.get(base_pin(pin_ref)))).filter(|n| !n.is_empty()) {
                 groups[at[p]].drivers.push(Driver::new(GLOBAL_POWER_PIN, name.clone(), depth[si], &spath[si]));
                 groups[at[p]].global_names.push(name.clone());
                 groups[at[p]].local_names.push(name.clone());
@@ -534,29 +552,6 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 buses.entry(join.find(gid)).or_default().push(gid);
             }
         }
-        // `processSubGraphs`: a bus only a sheet pin names is weakly driven, and it is promoted to a strong one -- the one kind that finds the nets of its
-        // members on the sheet (`m_bus_neighbors`) -- only when no other bus there has its name, a vector none of its prefix either (`collectAllDriverValues`
-        // files a vector under `<prefix>[]` too), and no global label of its name is on the sheet; else it is renamed (`_1`) and has no neighbours.
-        let bus_name = |g: &Group| -> Option<String> {
-            let mut d: Vec<&Driver> = g.drivers.iter().filter(|d| d.prio > PIN).collect();
-            d.sort_by(|a, b| driver_order(a, b));
-            d.first().map(|d| d.name.clone())
-        };
-        let vector_prefix = |n: &str| -> Option<String> { (!n.contains('{')).then(|| n.split('[').next().unwrap_or(n).to_string()) };
-        let names_of: Vec<Option<String>> = groups.iter().map(|g| if g.bus { bus_name(g) } else { None }).collect();
-        let promoted = |g: usize| -> bool {
-            let Some(name) = names_of[g].as_ref() else { return false };
-            let here = |o: usize| groups[o].bus && groups[o].screen == groups[g].screen;
-            let mut peers = (0..names_of.len()).filter(|&o| here(o) && names_of[o].as_ref() == Some(name)).count();
-            if peers <= 1 {
-                if let Some(prefix) = vector_prefix(name) {
-                    peers = (0..names_of.len()).filter(|&o| here(o) && names_of[o].as_deref().and_then(vector_prefix).as_ref() == Some(&prefix)).count();
-                }
-            }
-            let global = groups.iter().any(|o| o.screen == groups[g].screen && o.global_names.contains(name));
-            peers <= 1 && !global
-        };
-        let promoted: Vec<bool> = (0..groups.len()).map(promoted).collect();
         for gids in buses.values() {
             let mut drivers: Vec<&Driver> = gids.iter().flat_map(|&g| groups[g].drivers.iter()).filter(|d| d.prio > PIN && bus_members(&d.name).is_some()).collect();
             drivers.sort_by(|a, b| driver_order(a, b));
@@ -584,24 +579,23 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 let mut own: Vec<&Driver> = groups[g].drivers.iter().filter(|d| d.prio > PIN).collect();
                 own.sort_by(|a, b| driver_order(a, b));
                 let names: Vec<(String, bool)> = own.iter().enumerate().filter(|(i, d)| *i == 0 || d.prio >= HIER_LABEL).map(|(_, d)| (d.name.clone(), d.prio >= HIER_LABEL)).collect();
+                // A sheet pin names its members on its sheet when it drives its bus there (25ec2335 `BindBundle`: `const bool named = !sheetPin ||
+                // source.drivesRecord;`, `drivesRecord` the best claim of its own island, `PrepareBundle`), whatever other bus or global label of its
+                // name the sheet has (r3 A3-H2; the old engine's `processSubGraphs` promoted it only when none had). A sheet pin under a label is not in
+                // `names`.
                 for (name, label) in names {
-                    // a bus a sheet pin names finds its members' nets only when it is promoted
-                    if !label && !promoted[g] {
-                        continue;
-                    }
                     let Some(members) = bus_members(&name) else { continue };
                     // `if( !conn->IsNet() ) continue;`: no virtual net of a bus inside a group
                     let nested = nested_group_members(&name, &bus_members);
                     for (i, m) in members.iter().enumerate() {
-                        // `matchBusMember`: a vector's member by its place; a group's by its local name (the member's name without the group's `prefix.`),
-                        // else the member of the group's flattened list at the searched member's `VectorIndex` -- its place in a vector this bus is (a
-                        // vector sheet pin on a group bus, `qa/data/eeschema/issue23840`). **Differs**: a member of a group this bus is has a `VectorIndex` too
-                        // (0, or its place in a vector inside the group), which KiCad falls back to and this does not: such a member is matched by name only.
-                        let child_vector = !name.contains('{');
-                        let k = if vector {
-                            (i < best_members.len()).then_some(i)
+                        // 25ec2335 `conn_bus.cpp::Align`: by name (the group path and local name) only when both buses are groups (`byName = aLeft.shape ==
+                        // GROUP && aRight.shape == GROUP`), else by place, a vector on a group bus included (r3 A3-M2). **Differs**: a leaf of a group that
+                        // matches none (`unmappedLeft`) gets no member slot of its own here.
+                        let child_group = name.contains('{');
+                        let k = if !vector && child_group {
+                            best_members.iter().position(|b| group_local_name(&best.name, b) == group_local_name(&name, m))
                         } else {
-                            best_members.iter().position(|b| group_local_name(&best.name, b) == group_local_name(&name, m)).or_else(|| (child_vector && i < best_members.len()).then_some(i))
+                            (i < best_members.len()).then_some(i)
                         };
                         let Some(k) = k else { continue };
                         let node = first + k;
@@ -639,6 +633,8 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
         screen: usize,
         /// A no-connect flag is on it.
         no_connect: bool,
+        /// The claim that names it (`content->best`).
+        best: Option<Driver>,
     }
     let mut finals: Vec<Final> = Vec::new();
     for (_, gids) in members {
@@ -652,14 +648,27 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
         let best = drivers.first();
         let screen = gids.iter().map(|&g| groups[g].screen).min_by_key(|&s| depth[s]).unwrap_or(0);
         let no_connect = gids.iter().any(|&g| groups[g].no_connect);
-        finals.push(Final { gids, pins, name: best.map(|d| d.full.clone()), driven: best.is_some(), screen, no_connect });
+        finals.push(Final { gids, pins, name: best.map(|d| d.full.clone()), driven: best.is_some(), screen, no_connect, best: best.map(|d| (*d).clone()) });
     }
 
     // Two nets that share a name (two sheet symbols' pins `X` with nothing inside naming them) are told apart as KiCad 25ec2335 does
     // (`conn_publish.cpp::AssignNames`): one keeps the name, the others take `_1`, `_2`, ... (`nextSuffix.try_emplace( .., 1 )`, `Suffix`), a name
-    // already taken skipped. **Differs**: which one keeps the bare name -- KiCad's holder is the greatest claim, then its node key (item uuids); here the
-    // net nearest the root, then by its name and its first pin.
-    finals.sort_by(|a, b| (depth[a.screen], a.name.clone(), a.pins.first().cloned()).cmp(&(depth[b.screen], b.name.clone(), b.pins.first().cloned())));
+    // already taken skipped. The holder of the bare name is `preferred`'s: a net a strong claim names (`Strong()`: a hierarchical, local or global label,
+    // a power pin, a bus member) over one a sheet pin names, and of two strong ones the greater claim (`CLAIM_LESS`) -- the net the user labelled keeps
+    // it (r3 A3-M3). **Differs**: of two alike after that, KiCad takes the node key (item uuids); here the net nearest the root, then by its name and its
+    // first pin.
+    let strong = |f: &Final| f.best.as_ref().is_some_and(|d| d.prio >= HIER_LABEL);
+    // (a total order: the name first, which is all the holder is chosen among)
+    finals.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| strong(b).cmp(&strong(a)))
+            .then_with(|| match (&a.best, &b.best) {
+                (Some(x), Some(y)) if strong(a) && strong(b) => driver_order(x, y),
+                _ => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| (depth[a.screen], a.pins.first().cloned()).cmp(&(depth[b.screen], b.pins.first().cloned())))
+    });
     let mut used: BTreeSet<String> = BTreeSet::new();
     for f in finals.iter_mut() {
         // a bus, or a member of one no net is on, keeps the name of its driver and takes it from no net
@@ -705,7 +714,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
     for (si, screen) in screens.iter_mut().enumerate() {
         let mut pins_of_point: BTreeMap<Point, Vec<String>> = BTreeMap::new();
         for (pin_ref, p) in &screen.pins {
-            pins_of_point.entry(*p).or_default().push(pin_ref.clone());
+            pins_of_point.entry(*p).or_default().push(base_pin(pin_ref).to_string());
         }
         for (wi, w) in screen.sch.wires.iter_mut().enumerate() {
             if let Some(g) = wire_group[si][wi] {
@@ -724,11 +733,30 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
         for nc in screen.sch.no_connects.iter_mut() {
             let refs: Vec<&String> = screen.pins.iter().filter(|(_, p)| **p == nc.at).map(|(r, _)| r).collect();
             if let Some(r) = refs.first() {
-                nc.pin = (*r).clone();
+                nc.pin = base_pin(r).to_string();
             }
         }
     }
     let mut nets: Vec<TracedNet> = finals.into_iter().filter(|f| !f.pins.is_empty()).map(|f| TracedNet { name: f.name.unwrap_or_default(), pins: f.pins, driven: f.driven }).collect();
+    // The copies of a pin common to every unit are `REF.PIN` again. KiCad's netlist lists the pin on the net of each copy; the net list here holds a pin
+    // once, so a pin whose copies are on several nets stays on the one with the most pins (the copy that is wired), the others lose it (r3 A3-H1).
+    if nets.iter().any(|n| n.pins.iter().any(|p| p.contains(PIN_COPY))) {
+        let mut best: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        for (i, n) in nets.iter().enumerate() {
+            let size = n.pins.iter().map(|p| base_pin(p)).collect::<BTreeSet<_>>().len();
+            for p in &n.pins {
+                let e = best.entry(base_pin(p).to_string()).or_insert((i, size));
+                if size > e.1 {
+                    *e = (i, size);
+                }
+            }
+        }
+        for (i, n) in nets.iter_mut().enumerate() {
+            let pins: BTreeSet<String> = n.pins.iter().map(|p| base_pin(p).to_string()).filter(|p| best.get(p).is_some_and(|b| b.0 == i)).collect();
+            n.pins = pins.into_iter().collect();
+        }
+        nets.retain(|n| !n.pins.is_empty());
+    }
     nets.sort_by(|a, b| a.name.cmp(&b.name));
     nets
 }
@@ -749,10 +777,17 @@ pub struct PinFacts<'a> {
 
 impl PinFacts<'_> {
     fn shown(&self, pin_ref: &str) -> &str {
-        self.names.and_then(|n| n.get(pin_ref)).map(String::as_str).filter(|s| !s.is_empty() && *s != "~").unwrap_or("")
+        self.names.and_then(|n| n.get(pin_ref).or_else(|| n.get(base_pin(pin_ref)))).map(String::as_str).filter(|s| !s.is_empty() && *s != "~").unwrap_or("")
     }
     fn is_nc(&self, pin_ref: &str) -> bool {
-        self.nc.is_some_and(|n| n.contains(pin_ref))
+        self.nc.is_some_and(|n| n.contains(pin_ref) || n.contains(base_pin(pin_ref)))
+    }
+    fn is_quiet(&self, pin_ref: &str) -> bool {
+        self.quiet.is_some_and(|q| q.contains(pin_ref) || q.contains(base_pin(pin_ref)))
+    }
+    /// The reference with the unit the copy is drawn on (`U1B`), the copy's own entry first.
+    fn unit_ref(&self, pin_ref: &str) -> Option<&str> {
+        self.units.and_then(|u| u.get(pin_ref).or_else(|| u.get(base_pin(pin_ref)))).map(String::as_str)
     }
 }
 
@@ -795,13 +830,13 @@ fn shown_name_counts(facts: &PinFacts) -> BTreeMap<(String, String), BTreeSet<St
 /// the reference with its unit (`Net-(U1-PA0)`, `Net-(U1A-OUT)`), with the pad number added when the part has several pins of that name that are not
 /// no-connect pins; `unconnected-(...)` for a pin that is alone or is a no-connect pin. `/` is written `{slash}`.
 fn default_net_name(pin_ref: &str, facts: &PinFacts, shown_count: &BTreeMap<(String, String), BTreeSet<String>>, force_no_connect: bool) -> String {
-    let (reference, number) = pin_ref.split_once('.').unwrap_or((pin_ref, ""));
+    let (reference, number) = base_pin(pin_ref).split_once('.').unwrap_or((pin_ref, ""));
     let escape = |s: &str| s.replace('/', "{slash}").replace(['\n', '\r'], "");
     let shown = facts.shown(pin_ref);
     let unconnected = force_no_connect || facts.is_nc(pin_ref);
     let prefix = if unconnected { "unconnected-(" } else { "Net-(" };
     if !shown.is_empty() && shown != number {
-        let with_unit = facts.units.and_then(|u| u.get(pin_ref)).map(String::as_str).unwrap_or(reference);
+        let with_unit = facts.unit_ref(pin_ref).unwrap_or(reference);
         // `hasDuplicateName = numbers.size() > 1 || !numbers.contains( pin->GetShownNumber() )`
         let has_multiple = !unconnected && shown_count.get(&(with_unit.to_string(), shown.to_string())).is_some_and(|numbers| numbers.len() > 1 || !numbers.contains(number));
         let pad = if unconnected || has_multiple { format!("-Pad{}", escape(number)) } else { String::new() };
@@ -824,7 +859,7 @@ pub fn unconnected_net_name(pin_ref: &str, shown: Option<&str>, with_unit: Optio
 /// that is not a "-Pad" name first (a pin with a name beats a pin with only a number), then the alphabetically first; a net of one pin, or one a
 /// no-connect flag is on, is that pin's `unconnected-(...)` name (`ncName`).
 fn kicad_net_name(pins: &[String], facts: &PinFacts, shown_count: &BTreeMap<(String, String), BTreeSet<String>>, no_connect: bool) -> String {
-    let quiet = |p: &String| facts.quiet.is_some_and(|q| q.contains(p));
+    let quiet = |p: &String| facts.is_quiet(p);
     let claiming: Vec<&String> = pins.iter().filter(|p| !quiet(p)).collect();
     let candidates: Vec<&String> = if claiming.is_empty() { pins.iter().collect() } else { claiming };
     let best = candidates.into_iter().min_by(|a, b| {
@@ -1123,13 +1158,14 @@ mod tests {
     /// p12 S1 (`generateBusAliasMembers` and the pass for buses "linked together somewhere by member (net) connections"): two buses on one sheet that never
     /// touch, each labelled, each taken by a sheet pin to a child whose `D0` reaches a pin, are one net per member name they share -- `/D0`, named by the root's
     /// member -- with no wire or label `D0` on the root. Buses whose names share no member (`E[0..3]`) stay apart. A bus named by its sheet pin alone makes no
-    /// virtual net (`GetAllBusLabels` takes labels only); its `D0` is the labelled bus's virtual `D0`'s neighbour only when `processSubGraphs` promotes it, which
-    /// it does not beside another vector of its prefix (`D[0..1]` and `D[0..3]` are both `/D[]`): there U2.1 stays apart, and with a group (`{D0 D1}`) it joins.
+    /// virtual net (`GetAllBusLabels` takes labels only), but it names its members on the sheet all the same when it drives its bus there (25ec2335 `BindBundle`'s
+    /// `drivesRecord`, r3 A3-H2: the old engine's `processSubGraphs` promoted it only when no other vector of its prefix was on the sheet), so its `D0` joins the
+    /// labelled bus's: U2.1 joins, for a vector (`D[0..3]`) as for a group (`{D0 D1}`).
     #[test]
     fn two_buses_on_one_sheet_join_by_a_shared_member_name() {
         let members = |n: &str| test_members(n).or_else(|| n.strip_prefix('{').and_then(|r| r.strip_suffix('}')).map(|i| i.split_whitespace().map(String::from).collect()));
         let naming = Naming { bus_members: Some(&members), ..Naming::default() };
-        for (second, labelled, joined) in [("D[0..3]", true, true), ("E[0..3]", true, false), ("D[0..3]", false, false), ("{D0 D1}", false, true)] {
+        for (second, labelled, joined) in [("D[0..3]", true, true), ("E[0..3]", true, false), ("D[0..3]", false, true), ("{D0 D1}", false, true)] {
             let mut root = section();
             let sheet = |id: &str, file: &str, y: i64, pin: &str| SheetInstance { id: id.into(), name: id.into(), file: file.into(), at: p(1000, y), size: (Nm::new(1000), Nm::new(1000)), pins: vec![SheetPin { id: String::new(), name: pin.into(), shape: LabelShape::Bidirectional, at: p(1000, y + 500) }], page: String::new() };
             root.sheets.push(sheet("s1", "a.kicad_sch", 0, "D[0..1]"));

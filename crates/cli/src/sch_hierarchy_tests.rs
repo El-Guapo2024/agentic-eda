@@ -1167,6 +1167,71 @@ fn a_hidden_power_input_pin_joins_the_net_of_its_name() {
     }
 }
 
+/// Import the reviewer's case `case` (`tests/fixtures/r3_nets/<case>/`, round 3's `/tmp/findings-r3-schematic.jjpH/cases`) and the net of each pin, `#` pins left out.
+fn r3_case_nets(case: &str, files: &[(&str, &str)]) -> (PathBuf, std::collections::BTreeMap<String, String>) {
+    let work = scratch(&format!("r3_{case}"));
+    for (f, text) in files {
+        std::fs::write(work.join(f), text).unwrap();
+    }
+    let dir = work.join("board");
+    crate::import_kicad::run(&[work.join("t.kicad_sch").display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let nets = design.nets.unwrap_or_default().into_iter().flat_map(|n| n.pins.into_iter().filter(|p| !p.starts_with('#')).map(move |p| (p, n.name.replace("{slash}", "/")))).collect();
+    (dir, nets)
+}
+
+/// Round 3's connectivity cases, as kicad-cli names their nets:
+/// - A3-H2 (`BindBundle`: a sheet pin names its members on its sheet when it drives its bus, `drivesRecord`): `c5`, one screen behind two sheet symbols
+///   with a bus pin `D[0..1]` each, is one net `/A/D0` of R1, R3 and R4; `c5d`, a bus labelled `D[0..1]` elsewhere on the root, is one net `/D0`;
+/// - A3-M1 (`canDrive &= .. !reference.StartsWith( "#" )`): `c1`, `#R1` wired to R2.1, is `Net-(R2-Pad1)`;
+/// - A3-M2 (`Align`: by place unless both buses are groups): `c4`, a global `{D1 D0}` and a local `D[0..1]` on one bus, joins R1 (D0) and R2 (D1) as `D0`;
+/// - A3-M3 (`AssignNames`' `preferred`: a strong claim holds the name): `c7`, a sheet pin `X` on R1.1 and a local label `X` on R2.1, is `/X` for R2.1.
+#[test]
+fn round_3s_connectivity_cases_are_named_as_kicad_cli_names_them() {
+    let fx = |c: &str, f: &str| -> String { std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/r3_nets").join(c).join(f)).unwrap() };
+    let cases: [(&str, &[&str], &[(&str, &str)]); 5] = [
+        ("c5", &["t.kicad_sch", "sub.kicad_sch"], &[("R1.1", "/A/D0"), ("R3.1", "/A/D0"), ("R4.1", "/A/D0")]),
+        ("c5d", &["t.kicad_sch", "sub.kicad_sch"], &[("R1.1", "/D0"), ("R3.1", "/D0")]),
+        ("c1", &["t.kicad_sch"], &[("R2.1", "Net-(R2-Pad1)")]),
+        ("c4", &["t.kicad_sch"], &[("R1.1", "D0"), ("R2.1", "D0")]),
+        ("c7", &["t.kicad_sch", "sub.kicad_sch"], &[("R1.1", "/X_1"), ("R2.1", "/X")]),
+    ];
+    for (case, files, want) in cases {
+        let texts: Vec<(&str, String)> = files.iter().map(|f| (*f, fx(case, f))).collect();
+        let refs: Vec<(&str, &str)> = texts.iter().map(|(f, t)| (*f, t.as_str())).collect();
+        let (dir, nets) = r3_case_nets(case, &refs);
+        for (pin, name) in want {
+            assert_eq!(nets.get(*pin).map(String::as_str), Some(*name), "{case}: {pin} in {nets:?}");
+        }
+        if kicad_cli_ready() {
+            let kicad = kicad_net_names(&dir);
+            for (pin, name) in want {
+                assert_eq!(kicad.get(*pin).map(|n| n.replace("{slash}", "/")).as_deref(), Some(*name), "{case}: kicad-cli's name of the derived file for {pin}");
+            }
+        }
+    }
+}
+
+/// r3 A3-H1 (`conn_facts.cpp`: a `PIN_FACT` per pin object, a pin common to every unit drawn on each placed unit; `GetRef( &aPath, true )`): a dual part
+/// whose pin 3 "C" is common to both units, U1A and U1B both placed, a wire from one unit's copy to R1.1. kicad-cli keeps R1.1 and U1.3 on one net named
+/// after the wired copy's unit, `Net-(U1A-C)` or `Net-(U1B-C)`; before, the copy of the unit written last overwrote the other, so a wire on U1A's copy
+/// connected nothing. (KiCad's netlist also lists the other copy as `unconnected-(..)`; the net list here holds a pin once.)
+#[test]
+fn a_common_pin_wired_on_one_unit_only_stays_on_its_wire() {
+    for (file, text, name) in [("a", include_str!("../tests/fixtures/common_pin/wired_on_a.kicad_sch"), "Net-(U1A-C)"), ("b", include_str!("../tests/fixtures/common_pin/wired_on_b.kicad_sch"), "Net-(U1B-C)")] {
+        let work = scratch(&format!("common_pin_{file}"));
+        std::fs::write(work.join("t.kicad_sch"), text).unwrap();
+        let dir = work.join("board");
+        crate::import_kicad::run(&[work.join("t.kicad_sch").display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let net = design.nets.unwrap_or_default().into_iter().find(|n| n.pins.iter().any(|p| p == "R1.1")).map(|n| (n.name, n.pins));
+        assert_eq!(net, Some((name.to_string(), vec!["R1.1".to_string(), "U1.3".into()])), "wired on unit {file}");
+        if kicad_cli_ready() {
+            assert_eq!(kicad_net_names(&dir).get("R1.1").map(String::as_str), Some(name), "kicad-cli's name of the derived file, wired on unit {file}");
+        }
+    }
+}
+
 /// r3 A3-H3 (`DeriveSignal`, `SignalBaseName`: a net nothing drives is named from the drawing every time): R2.1 wired to R3.1 is `Net-(R2-Pad1)`; a wire that
 /// joins R1.1 makes it `Net-(R1-Pad1)`, the name kicad-cli gives the derived file, not the old name.
 #[test]

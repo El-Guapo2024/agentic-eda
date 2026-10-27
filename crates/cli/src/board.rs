@@ -522,19 +522,24 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
     let mut quiet_pins: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for e in eda_model::sheet_list::walk(design) {
         let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
-        for sym in sec.symbols.iter().filter(|s| s.exclude_from_board) {
+        // ... nor do those of a symbol whose reference starts with `#` (`conn_facts.cpp`: `text.canDrive &= symbol->DoNetList() && !symbol->GetExcludedFromBoard(
+        // &aPath, variant ) && !reference.reference.StartsWith( wxS( "#" ) );`, r3 A3-M1)
+        for sym in sec.symbols.iter().filter(|s| s.exclude_from_board || eda_model::sheet_list::reference_under(sec, s, &e.path).starts_with('#')) {
             let reference = eda_model::sheet_list::reference_under(sec, sym, &e.path);
             if let Some(part) = model.part(&sym.id) {
                 quiet_pins.extend(part.pins.iter().map(|p| format!("{reference}.{}", p.number)));
             }
         }
-        for sym in &sec.symbols {
+        for (idx, sym) in sec.symbols.iter().enumerate() {
             let Some(part) = model.part(&sym.id) else { continue };
             let Some(lib) = model.real_symbol_of_instance(sec, sym, part).filter(|l| l.unit_count > 1) else { continue };
             let reference = eda_model::sheet_list::reference_under(sec, sym, &e.path);
             let unit = eda_model::sheet_list::unit_under(sec, sym, &e.path);
             for p in lib.pins.iter().filter(|p| p.unit == unit || p.unit == 0) {
-                pin_units.entry(format!("{reference}.{}", p.number)).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(unit)));
+                // each copy of a pin common to every unit is named with its own unit (`GetRef( &aPath, true )`, r3 A3-H1)
+                let key = pin_key(sec, idx, sym, unit, &p.number, p.unit == 0);
+                let key = key.replacen(&format!("{}.", sym.id), &format!("{reference}."), 1);
+                pin_units.entry(key).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(unit)));
                 if p.unit == 0 {
                     common_pins.insert(format!("{reference}.{}", p.number));
                 }
@@ -584,14 +589,15 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
     // A symbol a sheet path draws as another unit (`SCH_SYMBOL::GetPins( aSheet )` takes `GetUnitSelection( aSheet )`, r2 B-M4) has that unit's pins there.
     let pins_of = |sch: &eda_model::ir::SchematicSection, path: &[String]| -> std::collections::BTreeMap<String, Point> {
         let mut pin_world: std::collections::BTreeMap<String, Point> = std::collections::BTreeMap::new();
-        for sym in &sch.symbols {
+        for (idx, sym) in sch.symbols.iter().enumerate() {
             let unit = eda_model::sheet_list::unit_under(sch, sym, path);
             if !sch.imported_from_kicad {
                 if let Some(part) = model.part(&sym.id) {
                     let resolved = model.real_symbol_of_instance(sch, sym, part);
                     let pins = if unit == sym.unit { eda_engine::placed::pin_points_in(sch, sym, part, resolved.as_ref()) } else { eda_engine::placed::pin_points(&drawn_as_unit(sym, unit, resolved.as_ref()), part, resolved.as_ref()) };
                     for (number, at) in pins {
-                        pin_world.insert(format!("{}.{number}", sym.id), at);
+                        let common = resolved.as_ref().and_then(|r| r.pin_by_number(&number)).is_some_and(|p| p.unit == 0 && r_units(resolved.as_ref()) > 1);
+                        pin_world.insert(pin_key(sch, idx, sym, unit, &number, common), at);
                     }
                 }
                 continue;
@@ -612,7 +618,8 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
                 placed = eda_model::sch_extras::permute_pins(placed, swaps);
             }
             for (number, at) in placed {
-                pin_world.insert(format!("{}.{number}", sym.id), at);
+                let common = lib.unit_count > 1 && lib.pins.iter().any(|p| p.number == number && p.unit == 0);
+                pin_world.insert(pin_key(sch, idx, sym, unit, &number, common), at);
             }
         }
         pin_world
@@ -620,7 +627,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
     // `SCH_PIN::IsGlobalPower`'s legacy rule: an invisible power input of a symbol that is not a power symbol names its net by its pin name
     let power_pins_of = |sch: &eda_model::ir::SchematicSection, path: &[String]| -> std::collections::BTreeMap<String, String> {
         let mut out = std::collections::BTreeMap::new();
-        for sym in &sch.symbols {
+        for (idx, sym) in sch.symbols.iter().enumerate() {
             let Some(lib) = resolve_lib_symbol(&sym.lib_id, model) else { continue };
             if lib.power {
                 continue;
@@ -629,7 +636,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
             for p in lib.pins.iter().filter(|p| (p.unit == 0 || p.unit == unit) && p.hidden && p.electrical_type == "power_in") {
                 // escaped as a net name by the tracer (`GetDefaultNetName`: `EscapeString( pin name, CTX_NETNAME )`, `Driver::new`)
-                out.insert(format!("{}.{}", sym.id, p.number), p.name.clone());
+                out.insert(pin_key(sch, idx, sym, unit, &p.number, p.unit == 0 && lib.unit_count > 1), p.name.clone());
             }
         }
         out
@@ -725,6 +732,23 @@ fn power_value_under(view: Option<&PowerValueView>, path: &[String], raw: &str) 
 }
 
 /// `pins` ("REF.PIN" -> point) of `sec` under the references the sheet at `path` gives its symbols (`SCH_SYMBOL::GetRef( &sheetPath )`).
+/// The key of `sym`'s pin `number` among the tracer's pins (`ScreenIn::pins`): `REF.PIN`, or for a pin common to every unit (`common`) that an earlier symbol of
+/// the screen with this reference draws too, a copy of its own (`nets::pin_copy_key`) -- each placed unit has its own `SCH_PIN` of a common pin, on its own island
+/// (KiCad 25ec2335 `conn_facts.cpp`: a `PIN_FACT` per pin object), r3 A3-H1. Before, the last unit's copy overwrote the others'.
+fn pin_key(sch: &eda_model::ir::SchematicSection, idx: usize, sym: &eda_model::ir::SymbolInstance, unit: u32, number: &str, common: bool) -> String {
+    let base = format!("{}.{number}", sym.id);
+    if common && sch.symbols[..idx].iter().any(|s| s.id == sym.id) {
+        eda_engine::nets::pin_copy_key(&base, unit)
+    } else {
+        base
+    }
+}
+
+/// The number of units of a resolved library symbol (1 without one).
+fn r_units(resolved: Option<&eda_model::symbol::LibSymbol>) -> u32 {
+    resolved.map_or(1, |r| r.unit_count)
+}
+
 /// `sym` as the unit `unit` a sheet path draws it as (r2 B-M4): a symbol placed by the corner of its box (`eda_engine::placed`) keeps its library origin,
 /// where the writer bakes it from the box of its own unit, so its corner moves by the difference of the two units' boxes (`sch_sheets::place_by_box_corner`).
 fn drawn_as_unit(sym: &eda_model::ir::SymbolInstance, unit: u32, resolved: Option<&eda_model::symbol::LibSymbol>) -> eda_model::ir::SymbolInstance {
