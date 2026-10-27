@@ -654,6 +654,7 @@ name = "eda-kicad"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "cc",
  "eda-clipper2",
  "eda-connectivity",
  "eda-drc",
