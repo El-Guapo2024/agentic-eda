@@ -24,8 +24,8 @@ test("the tree lists the libraries by name and their blocks naturally, with the 
 
 test("a pinned library goes first among the libraries", () => {
   const groups = composeBlockGroups({ libraries: LIBS, query: "", history: [], pinned: new Set(["Sensors"]) });
-  assert.deepEqual(groups.map((g) => g.lib), ["Sensors", "Empty", "Power"]);
-  assert.equal(groups[0]?.pinned, true);
+  assert.deepEqual(groups.map((g) => g.lib), ["-- Recently Used --", "Sensors", "Empty", "Power"]);
+  assert.equal(groups[1]?.pinned, true);
 });
 
 test("a search scores the name, the library, the keywords and the description and hides what has no score", () => {
@@ -41,10 +41,18 @@ test("a search scores the name, the library, the keywords and the description an
   assert.deepEqual(composeBlockGroups({ libraries: LIBS, query: "zzz", history: [], pinned: new Set() }), []);
 });
 
+test("an empty Recently Used is listed, and a library without blocks stays while its name matches (r6 B6-3, LIB_TREE_NODE_LIBRARY::UpdateScore)", () => {
+  const empty = [lib("Power", [])];
+  assert.deepEqual(composeBlockGroups({ libraries: empty, query: "pow", history: [], pinned: new Set() }).map((g) => g.lib), ["Power"]);
+  assert.deepEqual(composeBlockGroups({ libraries: empty, query: "", history: [], pinned: new Set() }).map((g) => g.lib), ["-- Recently Used --", "Power"]);
+  assert.deepEqual(composeBlockGroups({ libraries: empty, query: "recently", history: [], pinned: new Set() }).map((g) => g.lib), ["-- Recently Used --"], "the pseudo-library's own name is its term");
+  assert.deepEqual(composeBlockGroups({ libraries: empty, query: "xyz", history: [], pinned: new Set() }), []);
+});
+
 test("the rows are a library row and its blocks while it is open", () => {
   const groups = composeBlockGroups({ libraries: LIBS, query: "", history: [], pinned: new Set() });
   const rows = visibleRows(groups, { groups: new Set(["Power"]), items: new Set(), searching: false }, "footprint");
-  assert.deepEqual(rows.map((r) => (r.kind === "group" ? `G ${r.group.lib}` : r.kind === "item" ? `I ${r.item.id}` : "?")), ["G Empty", "G Power", "I Power:Buck5V", "I Power:LDO3V3", "G Sensors"]);
+  assert.deepEqual(rows.map((r) => (r.kind === "group" ? `G ${r.group.lib}` : r.kind === "item" ? `I ${r.item.id}` : "?")), ["G -- Recently Used --", "G Empty", "G Power", "I Power:Buck5V", "I Power:LDO3V3", "G Sensors"]);
 });
 
 test("ids, history, names and links follow KiCad's rules", () => {

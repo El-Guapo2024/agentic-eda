@@ -113,7 +113,7 @@
     await clickTab("Symbol");
     const opened = await E.run("common.SuiteControl.showSymbolLibTable");
     await waitFor(() => document.querySelector(".lt-grid"));
-    check("the action opens Manage Symbol Libraries", opened.dialog === "Manage Symbol Libraries" && titles().includes("Manage Symbol Libraries"), JSON.stringify(opened));
+    check("the action opens Manage Symbol Libraries", opened.dialog === "Symbol Libraries" && titles().includes("Symbol Libraries"), JSON.stringify(opened));
     check("it has a Global Libraries tab and a Project Specific Libraries tab", !!tabByName("Global Libraries") && !!tabByName("Project Specific Libraries"));
     tabByName("Global Libraries").click();
     await sleep(300);

@@ -38,7 +38,7 @@ export function DesignBlockDialogs() {
           {q.detail && <div style={{ marginTop: 8, color: "var(--chrome-text-dim)" }}>{q.detail}</div>}
         </div>
         <div className="dialog-footer">
-          <button onClick={() => done(false)}>Cancel</button>
+          <button onClick={() => done(false)}>{q.cancelLabel ?? "Cancel"}</button>
           <button className="primary" autoFocus onClick={() => done(true)}>
             {q.okLabel}
           </button>
@@ -119,7 +119,7 @@ function PropertiesDialog({ q, onDone }: { q: PropertiesQuestion; onDone: (v: Bl
                   {rows.length === 0 && (
                     <tr>
                       <td colSpan={2} style={{ padding: "6px 8px", color: "var(--chrome-text-dim)" }}>
-                        No default fields. A placed sheet gets these as hidden fields.
+                        No default fields.
                       </td>
                     </tr>
                   )}

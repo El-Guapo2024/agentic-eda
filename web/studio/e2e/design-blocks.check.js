@@ -431,12 +431,12 @@
       await E.run("eeschema.SchDesignBlockControl.deleteDesignBlock");
       await waitFor(() => titles().includes("Confirmation"));
       t(/Delete design block 'MCU_core_v2' in library '.*' from disk\?/.test(dialog()?.innerText ?? ""), "Delete asks 'Delete design block ... from disk?'");
-      await press("Cancel", 500);
-      t(!!(await block("MCU_core_v2")), "Cancel keeps it");
+      await press("No", 500);
+      t(!!(await block("MCU_core_v2")), "No keeps it");
       await E.run("eeschema.SchDesignBlockControl.deleteDesignBlock");
       await waitFor(() => titles().includes("Confirmation"));
-      await press("OK", 1800);
-      t(!(await block("MCU_core_v2")) && !rowOf(`${LIB}:MCU_core_v2`), "OK deletes the block's folder and the tree loses it");
+      await press("Yes", 1800);
+      t(!(await block("MCU_core_v2")) && !rowOf(`${LIB}:MCU_core_v2`), "Yes deletes the block's folder and the tree loses it");
       t(/Design block 'MCU_core_v2' deleted from library/.test(toastText()), "the status says so");
     });
 
@@ -599,7 +599,7 @@
       await chooseBlock("BoardPair");
       await E.run("pcbnew.PcbDesignBlockControl.deleteDesignBlock");
       await waitFor(() => titles().includes("Confirmation"));
-      await press("OK", 1800);
+      await press("Yes", 1800);
       t(!(await block("BoardPair")), "Delete removes the block");
       // clean up the design: everything the scenario placed
       t(await ensureSame("pcb", placedBase, snapshotPcb), "undoing the copies leaves the board as the parts were placed");
@@ -614,7 +614,7 @@
         await chooseBlock(name);
         await E.run("eeschema.SchDesignBlockControl.deleteDesignBlock");
         await waitFor(() => titles().includes("Confirmation"));
-        await press("OK", 1500);
+        await press("Yes", 1500);
       }
       t(((await listing()).libraries.find((l) => l.name === LIB)?.blocks ?? []).length === 0, "every block the check made is deleted");
       await E.run("common.SuiteControl.showDesignBLockLibTable");

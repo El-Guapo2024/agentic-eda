@@ -7,7 +7,7 @@
 // `libChooser.ts`'s. What is a design block's own: the "Recently Used" group is the frame's `m_designBlockHistoryList` (seven: `while( m_historyList.size() >= 8 ) pop_back()`), the four check boxes under the tree, and a
 // block's name that Place as group gives its group.
 import type { Block, BlockLibrary } from "../api/designBlockClient";
-import { naturalCompare, orderGroups, parseQuery, scoreItems, splitId, RECENT_LABEL, type ChooserGroup, type ChooserItem } from "./libChooser";
+import { naturalCompare, orderGroups, parseQuery, scoreItemTerms, scoreItems, searchTerm, splitId, RECENT_LABEL, type ChooserGroup, type ChooserItem } from "./libChooser";
 
 /** The four check boxes under the tree (`design_block_chooser.*`, `SCH_DESIGN_BLOCK_PANE`, `PCB_DESIGN_BLOCK_PANE`). */
 export interface PlaceOptions {
@@ -38,8 +38,10 @@ export function itemOf(lib: string, block: Block): ChooserItem {
 
 /**
  * Every group the tree shows: the recently used blocks first, then the libraries (pinned ones before the others, then in natural order of their names; while a search is on the
- * best score first). A search keeps the blocks that score and hides a library with none (`GetChildren`: a node with no score is hidden); a library that has no block at all is
- * listed while nothing is searched.
+ * best score first). A search keeps the blocks that score and hides a library with none (`GetChildren`: a node with no score is hidden). A library node without children
+ * scores itself (`LIB_TREE_NODE_LIBRARY::UpdateScore`: 1 plus each word's score against its name, weight 8, or 0 when one word scores nothing), so an empty library is listed
+ * while nothing is searched and while its name matches; "-- Recently Used --" is always added (`rebuildHistoryNode` calls `DoAddLibrary` with no blocks too), and scores
+ * the same way when it is empty.
  */
 export function composeBlockGroups(input: { libraries: readonly BlockLibrary[]; query: string; history: readonly string[]; pinned: ReadonlySet<string> }): ChooserGroup[] {
   const searching = parseQuery(input.query).length > 0;
@@ -50,9 +52,19 @@ export function composeBlockGroups(input: { libraries: readonly BlockLibrary[]; 
   const recent = input.history.map((id) => known.get(id)).filter((i): i is ChooserItem => i !== undefined);
   let kept = searching ? scoreItems("footprint", recent, input.query) : recent;
   if (searching) kept = [...kept].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  if (kept.length > 0) groups.push({ lib: RECENT_LABEL, pseudo: "recent", pinned: false, items: [...kept], lazy: false, score: Math.max(0, ...kept.map((i) => i.score ?? 0)) });
+  const matchers = parseQuery(input.query);
+  /** `LIB_TREE_NODE_LIBRARY::UpdateScore` of a node with no children: its name (`SEARCH_TERM( aName, 8 )`) is its only term. */
+  const childlessScore = (name: string) => (searching ? scoreItemTerms(matchers, [searchTerm(name, 8)]) : 0);
+  const recentShown = recent.length === 0 ? !searching || childlessScore(RECENT_LABEL) > 0 : kept.length > 0;
+  if (recentShown) groups.push({ lib: RECENT_LABEL, pseudo: "recent", pinned: false, items: [...kept], lazy: false, score: recent.length === 0 ? childlessScore(RECENT_LABEL) : Math.max(0, ...kept.map((i) => i.score ?? 0)) });
   for (const lib of input.libraries) {
     const items = lib.blocks.map((b) => itemOf(lib.name, b));
+    if (items.length === 0) {
+      const score = childlessScore(lib.name);
+      if (searching && score === 0) continue;
+      groups.push({ lib: lib.name, description: lib.description, pinned: input.pinned.has(lib.name), items: [], count: 0, lazy: false, score });
+      continue;
+    }
     const scored = searching ? scoreItems("footprint", items, input.query) : items;
     if (searching && scored.length === 0) continue;
     scored.sort((a, b) => (searching && a.score !== b.score ? (b.score ?? 0) - (a.score ?? 0) : naturalCompare(a.name, b.name)));
