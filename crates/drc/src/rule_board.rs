@@ -323,7 +323,8 @@ impl<'a> RuleBoard<'a> {
             it.set("Library Link", Prop::Str(fpid));
             it.set("Position X", Prop::Int(fp.at.x.get()));
             it.set("Position Y", Prop::Int(fp.at.y.get()));
-            it.set("Orientation", Prop::Double(fp.rot as f64 / 1000.0));
+        // `FOOTPRINT::GetOrientationDegrees`: KiCad's angle, counter-clockwise in (-180, 180], not the model's clockwise `rot` (R6-D1).
+        it.set("Orientation", Prop::Double(crate::board::kicad_footprint_orientation(self.design, fp) as f64 / 1000.0));
             it.set("Layer", Prop::Layer(side_layer.to_string()));
             it.set("Locked", Prop::Bool(false));
             if let Some(e) = extra {
@@ -452,7 +453,8 @@ impl<'a> RuleBoard<'a> {
         it.set("Size Y", Prop::Int(p.size.1.get()));
         it.set("Position X", Prop::Int(p.center.x.get()));
         it.set("Position Y", Prop::Int(p.center.y.get()));
-        it.set("Orientation", Prop::Double(-(p.orientation_mdeg as f64) / 1000.0));
+        // `PAD::GetOrientationDegrees`: `orientation_mdeg` is already KiCad's, in [0, 360) (R6-D1).
+        it.set("Orientation", Prop::Double(p.orientation_mdeg as f64 / 1000.0));
         it.set("Net", Prop::Enum(net.clone()));
         it.set("Locked", Prop::Bool(false));
         it.set("Layer", Prop::Layer(layers.first().cloned().unwrap_or_default()));
@@ -1040,6 +1042,31 @@ mod footprint_facts_tests {
         assert!(holds(&rb, "A.memberOfSheet('/HV/')", &pad_of("R5")));
         assert!(!holds(&rb, "A.memberOfSheet('/HV/')", &pad_of("R6")));
         assert!(holds(&rb, "A.memberOfSheet('/')", &pad_of("R6")));
+    }
+
+    /// R6-D1: `A.Orientation` is KiCad's (`FOOTPRINT::GetOrientationDegrees`, in (-180, 180]; `PAD::GetOrientationDegrees`, in [0, 360)), not the model's
+    /// clockwise angle: R5 at the model's 270 is KiCad's `(at x y 90)`, and its pad (at 0 in the footprint) is at 90 too. R6 on the back, made here, is
+    /// written half a turn round (`FOOTPRINT::Flip`), at 180, and so is its pad. A component class with a Rotation condition goes to the footprint KiCad has
+    /// at that angle (`getRotationExpr`: `( A.Orientation == 90 deg )`).
+    #[test]
+    fn rule_board_orientation_is_kicads() {
+        let (design, model) = hv_board(|d, m| {
+            let fps = &mut d.placement.as_mut().unwrap().footprints;
+            fps[0].rot = 270_000;
+            fps[1].side = Side::Bottom;
+            m.board.component_classes.assignments.push(ClassAssignment { class: "TURNED".into(), all: true, conditions: vec![ClassCondition { kind: ConditionKind::Rotation, primary: "90".into(), secondary: String::new() }] });
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let (r5, r6) = (rb.footprint_item("R5").unwrap(), rb.footprint_item("R6").unwrap());
+        assert!(holds(&rb, "A.Orientation == 90 deg", &r5));
+        assert!(holds(&rb, "A.Orientation == 180 deg", &r6));
+        assert_eq!(r5.footprint.as_ref().unwrap().classes, ["TURNED"]);
+        assert!(r6.footprint.as_ref().unwrap().classes.is_empty());
+        let pads: Vec<Rc<RuleItem>> = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).collect();
+        let pad_of = |r: &str| pads.iter().find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == r)).unwrap().clone();
+        assert!(holds(&rb, "A.Orientation == 90 deg", &pad_of("R5")));
+        assert!(holds(&rb, "A.Orientation == 180 deg", &pad_of("R6")));
     }
 
     /// R5-D1: the classes a file gives a footprint, the project's assignment rules (`GetAssignmentInDRCLanguage`, evaluated on the footprint) and the sheet classes,

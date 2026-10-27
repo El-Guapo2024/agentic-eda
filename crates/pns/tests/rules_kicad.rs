@@ -200,6 +200,39 @@ fn a_rule_on_the_sheet_or_a_component_class_holds_a_route_off() {
     }
 }
 
+/// R6-D1: a rule on `A.Orientation` (the pad's, `PAD::GetOrientationDegrees`) or on a component class with a Rotation condition (`getRotationExpr`:
+/// `( A.Orientation == 90 deg )` on the footprint, `FOOTPRINT::GetOrientationDegrees`) reads KiCad's angle, counter-clockwise. R2 at the model's 270
+/// (clockwise) is KiCad's `(at x y 90)`: the rule holds the route 1 mm off it, and kicad-cli, which reads the derived file, finds nothing (and flags the
+/// route the net class alone gives). R2 at the model's 90 is KiCad's -90 (its pad at 270): no rule, the route runs straight, and kicad-cli agrees.
+#[test]
+fn a_rule_on_the_orientation_reads_kicads_angle() {
+    let (r1, r2, r3) = (p(5.0, 10.0), p(15.0, 11.2), p(25.0, 10.0));
+    let nets: &[(&str, &[&str])] = &[("SIG", &["R1.1", "R3.1"]), ("GND", &["R2.1"])];
+    for condition in ["A.Type == 'Pad' && A.Orientation == 90 deg", "A.hasComponentClass('TURNED')"] {
+        for (rot, applies) in [(270_000, true), (90_000, false)] {
+            let (mut design, mut model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2), ("R3", "PAD1", r3)], nets);
+            design.placement.as_mut().unwrap().footprints[1].rot = rot;
+            model.board.component_classes.assignments.push(eda_model::component_classes::ClassAssignment {
+                class: "TURNED".into(),
+                all: true,
+                conditions: vec![eda_model::component_classes::ClassCondition { kind: eda_model::component_classes::ConditionKind::Rotation, primary: "90".into(), secondary: String::new() }],
+            });
+            let plain_model = model.clone();
+            model.board.custom_rules_text = Some(format!("(version 1)\n(rule turned\n  (constraint clearance (min 1mm))\n  (condition \"{condition}\"))\n"));
+            let commit = route(&design, &model, r1, r3);
+            let gap = gap_to_pad(&commit, r2);
+            assert_eq!(gap >= 999_500.0, applies, "{condition} at {rot}: {gap}: {:?}", commit.tracks);
+            if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["clearance"]) {
+                assert!(found.is_empty(), "{condition} at {rot}: {found:#?}");
+                if applies {
+                    let class_only = route(&design, &plain_model, r1, r3);
+                    assert!(!kicad_violations(&apply(&design, &class_only), &model, &["clearance"]).unwrap().is_empty(), "{condition}: kicad-cli reads the rule");
+                }
+            }
+        }
+    }
+}
+
 /// The least gap from the committed tracks' copper to the polygon `pts` (its inside counts as 0).
 fn gap_to_box(commit: &RouteCommit, pts: &[Point]) -> f64 {
     let area = Shape::Polygon { pts: pts.to_vec() };
