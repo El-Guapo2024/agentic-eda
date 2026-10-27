@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, Dimension, Part, Pad } from "../api/types";
 import { carryAngleDeg, carryStart, editableSelection, flipPivot, isLocked, modificationPoint, planCarry, planFlip, planMove, planMoveExact, planRotate, rotationPivot, selectionCenter } from "./pcbTransform";
-import { padById, padIds, padParent, itemKind, itemPosition, itemBounds } from "./pcbItems";
+import { dimensionTextAngleRad, padById, padIds, padParent, itemKind, itemPosition, itemBounds } from "./pcbItems";
 import { boardDeleteCmds } from "./deleteCmds";
 
 function board(partial: Partial<BoardState>): BoardState {
@@ -279,4 +279,9 @@ test("editableSelection: Copy and Cut take a table cell as itself, the other too
   const cut = editableSelection(b, ["tbl_a:0:0"], { forClipboard: true }).ids;
   assert.deepEqual(cut, ["tbl_a:0:0"]);
   assert.deepEqual(boardDeleteCmds(b, cut).cmds, [{ op: "table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { text: "" } }], "the table stays, the cell is emptied");
+});
+
+test("a dimension's text is drawn at its KiCad angle negated: a vertical dimension reads bottom to top (round 3 A-4)", () => {
+  assert.equal(dimensionTextAngleRad({ computed_text_angle: 90_000 }), -Math.PI / 2);
+  assert.equal(dimensionTextAngleRad({ computed_text_angle: 0 }) === 0, true);
 });

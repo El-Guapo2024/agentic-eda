@@ -19,7 +19,7 @@ import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighl
 import { carryRatsnest, offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
 import { carryMatrix, carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
-import { itemBounds, padIds } from "../../kicad-port/pcbItems";
+import { dimensionTextAngleRad, itemBounds, padIds } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
 import type { LengthUnit } from "../../state/units";
 import { measureLabel } from "../../kicad-port/measureRuler";
@@ -997,11 +997,9 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
  * Task item 7: every `lines` segment (extension lines, crossbar/leader
  * pieces, arrow barbs, a centre cross -- already fully computed server-
  * side, `eda_connectivity::dimension::compute_dimension_geometry`) plus
- * the formatted `text` at `text_at`/`computed_text_angle`. Unlike
- * `drawTexts`' own `-angle` negation, `computed_text_angle` is already in
- * this app's canvas-native clockwise-positive convention (the same one
- * `rotate_point_about` documents backend-side), so it's used directly,
- * with no sign flip.
+ * the formatted `text` at `text_at`/`computed_text_angle`. That angle is KiCad's text angle, counter-clockwise on the screen
+ * (`PCB_DIM_ALIGNED::updateText`: `FULL_CIRCLE - EDA_ANGLE( crossbarCenter )`, `ANGLE_VERTICAL` for a vertical crossbar), so it is negated
+ * for the canvas as `drawTexts` negates a text's: a vertical dimension reads bottom to top (round 3 A-4).
  */
 function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
   const dimensions = board.drawings?.dimensions ?? [];
@@ -1023,7 +1021,7 @@ function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     ctx.restore();
 
     if (d.text) {
-      const angleRad = (d.computed_text_angle / 1000) * (Math.PI / 180);
+      const angleRad = dimensionTextAngleRad(d);
       drawStrokeText(ctx, d.text, d.text_at[0], d.text_at[1], {
         sizeNm: Math.max(d.text_size_nm, hairlineNm(view, 8)),
         thicknessNm: d.stroke_width,
