@@ -83,12 +83,12 @@
   await scenario("E4-F1: a drawn shape takes its layer class's width; a polygon on a courtyard is unfilled, on the silkscreen filled", async (t) => {
     const name = await newFootprint();
     t(!!name, `a new footprint: ${name}`);
-    const before = (await footprint(name)).graphics.length;
+    const before = ((await footprint(name)).graphics ?? []).length;
     t(await setLayer("F.CrtYd"), "the layer box offers F.CrtYd");
     await arm("pcbnew.InteractiveDrawing.rectangle", "draw_rect");
     await clickAt(-2_000_000, -2_000_000);
     await clickAt(2_000_000, 2_000_000);
-    let g = (await footprint(name)).graphics.slice(before);
+    let g = ((await footprint(name)).graphics ?? []).slice(before);
     t(g.length === 1 && g[0].kind === "rect" && g[0].stroke_width === 50_000, `the courtyard rectangle is 0.05 mm: ${JSON.stringify(g.map((x) => [x.kind, x.layer, x.stroke_width]))}`);
     await arm("pcbnew.InteractiveDrawing.graphicPolygon", "draw_polygon");
     await clickAt(-1_000_000, -1_000_000);
@@ -96,7 +96,7 @@
     await clickAt(0, 1_000_000);
     await key("Enter");
     await sleep(500);
-    g = (await footprint(name)).graphics.slice(before);
+    g = ((await footprint(name)).graphics ?? []).slice(before);
     const poly = g.find((x) => x.kind === "polygon");
     t(!!poly && poly.filled === false && poly.stroke_width === 50_000, `the courtyard polygon is unfilled, 0.05 mm: ${JSON.stringify(poly && [poly.filled, poly.stroke_width])}`);
     await key("Escape");
@@ -107,14 +107,14 @@
     await clickAt(3_500_000, 1_000_000);
     await key("Enter");
     await sleep(500);
-    const silk = (await footprint(name)).graphics.slice(before).find((x) => x.kind === "polygon" && x.layer === "F.SilkS");
+    const silk = ((await footprint(name)).graphics ?? []).slice(before).find((x) => x.kind === "polygon" && x.layer === "F.SilkS");
     t(!!silk && silk.filled === true && silk.stroke_width === 100_000, `the silkscreen polygon is filled, 0.1 mm: ${JSON.stringify(silk && [silk.filled, silk.stroke_width])}`);
     await key("Escape");
     t(await setLayer("Edge.Cuts"), "the layer box offers Edge.Cuts");
     await arm("pcbnew.InteractiveDrawing.line", "draw_segment");
     await clickAt(-3_000_000, 3_000_000);
     await clickAt(3_000_000, 3_000_000);
-    const edge = (await footprint(name)).graphics.find((x) => x.layer === "Edge.Cuts");
+    const edge = ((await footprint(name)).graphics ?? []).find((x) => x.layer === "Edge.Cuts");
     t(!!edge && edge.stroke_width === 50_000, `the Edge.Cuts line is 0.05 mm: ${edge?.stroke_width}`);
     await key("Escape");
     await setLayer("F.SilkS");
@@ -122,7 +122,7 @@
 
   await scenario("E4-F2: the Text tool opens Footprint Text Properties, carries the text, places it with the layer's defaults (mirrored on a back layer) and stays armed", async (t) => {
     const name = await newFootprint();
-    const before = (await footprint(name)).texts.length;
+    const before = ((await footprint(name)).texts ?? []).length;
     t(await setLayer("B.SilkS"), "the layer box offers B.SilkS");
     await arm("pcbnew.InteractiveDrawing.text", "text");
     await clickAt(1_000_000, 1_000_000);
@@ -132,10 +132,10 @@
     await type(tid("fp-text-content"), "R4TXT");
     tid("fp-text-ok").click();
     await sleep(400);
-    t((await footprint(name)).texts.length === before, "OK does not place it yet: it follows the cursor");
+    t(((await footprint(name)).texts ?? []).length === before, "OK does not place it yet: it follows the cursor");
     await clickAt(2_000_000, 1_500_000);
     await sleep(400);
-    const texts = (await footprint(name)).texts.slice(before);
+    const texts = ((await footprint(name)).texts ?? []).slice(before);
     const tx = texts[0];
     t(texts.length === 1 && tx.content === "R4TXT" && tx.layer === "B.SilkS", `the next click places it: ${JSON.stringify(texts.map((x) => [x.content, x.layer]))}`);
     t(!!tx && tx.at.x === 2_000_000 && tx.at.y === 1_500_000, `where the click was: ${JSON.stringify(tx?.at)}`);
@@ -148,7 +148,7 @@
     await sleep(300);
     await clickAt(0, 3_000_000);
     await closeDialogs();
-    t((await footprint(name)).texts.length === before + 1, "an empty text is not placed");
+    t(((await footprint(name)).texts ?? []).length === before + 1, "an empty text is not placed");
     // Escape with a text carried drops it and keeps the tool; a second Escape leaves it
     await clickAt(0, 2_500_000);
     await type(tid("fp-text-content"), "DROP");
@@ -158,7 +158,7 @@
     t(__eda.state().tool === "text", "Escape drops the carried text and keeps the tool");
     await key("Escape");
     t(__eda.state().tool === "select", "a second Escape leaves the tool");
-    t((await footprint(name)).texts.length === before + 1, "the dropped text was never placed");
+    t(((await footprint(name)).texts ?? []).length === before + 1, "the dropped text was never placed");
     await setLayer("F.SilkS");
   });
 
@@ -171,15 +171,17 @@
     await __eda.run("pcbnew.InteractiveEdit.rotateCcw");
     await key("f");
     await clickAt(0, 0);
-    let pads = (await footprint(name)).pads;
+    let pads = (await footprint(name)).pads ?? [];
     const p1 = pads[pads.length - 1];
-    t(!!p1 && p1.layers.includes("B.Cu") && !p1.layers.includes("F.Cu"), `F flipped the pad to the back: ${JSON.stringify(p1?.layers)}`);
+    // The default pad is plated through on `*.Cu` `*.Mask` (`SetDefaultMasterPad`): `PAD::Flip` leaves those layers (`FlipLayerMask` of every copper layer is
+    // itself) and negates the orientation, so the flip shows in the turn.
+    t(!!p1 && p1.layers.includes("*.Cu") && p1.layers.includes("*.Mask"), `the plated pad keeps its layers through the flip: ${JSON.stringify(p1?.layers)}`);
     t(!!p1 && p1.rot === 270_000, `R turned it 90 degrees and the flip negated it: ${p1?.rot}`);
     t(__eda.state().tool === "pad", "the pad tool stays armed");
     await clickAt(3_000_000, 0);
-    pads = (await footprint(name)).pads;
+    pads = (await footprint(name)).pads ?? [];
     const p2 = pads[pads.length - 1];
-    t(pads.length === 2 && p2.rot === p1.rot && p2.layers.includes("B.Cu"), `the next pad takes the same turn and side (the default pad took them): ${JSON.stringify(p2 && [p2.rot, p2.layers])}`);
+    t(pads.length === 2 && p2.rot === p1.rot && JSON.stringify(p2.layers) === JSON.stringify(p1.layers), `the next pad takes the same turn (the default pad took it): ${JSON.stringify(p2 && [p2.rot, p2.layers])}`);
     await key("Escape");
     // put the default pad back as it was for the other checks: a fresh F.Cu pad
     await arm("pcbnew.PadTool.placePad", "pad");

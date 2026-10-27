@@ -313,7 +313,7 @@ function Ipc2581Form({ o, set, fields }: { o: Ipc2581Options; set: (patch: Parti
           {choice("Manufacturer:", "col_mfg", "N/A", (v) => ({ col_mfg: v }), "", !o.col_mpn)}
           {choice("Distributor P/N:", "col_dist_pn", "Omit", (v) => ({ col_dist_pn: v, col_dist: distributorAfter(v, o.col_dist) }), "Column containing the distributor part number")}
           <Row label="Distributor:">
-            <input value={o.col_dist} disabled={!o.col_dist_pn} onChange={(e) => set({ col_dist: e.target.value })} style={{ width: 170 }} />
+            <input data-testid="ipc2581-dist" value={o.col_dist} disabled={!o.col_dist_pn} onChange={(e) => set({ col_dist: e.target.value })} style={{ width: 170 }} />
           </Row>
         </div>
       </fieldset>
