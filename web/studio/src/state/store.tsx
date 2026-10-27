@@ -2527,7 +2527,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const st = stateRef.current;
       if (!st.board) return false;
       // a pad is copied as itself, in a footprint of its own (`SaveSelection`)
-      const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false, keepPads: true });
+      const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false, forClipboard: true });
       if (ids.length === 0) return false;
       // `copyToClipboard`: `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )` -- the anchor of the copied items nearest the cursor, so a paste puts it on the cursor.
       const at = reference ?? (st.cursorNm ? (([x, y]) => ({ x, y }))(dragOriginFor(st, ids, [st.cursorNm.x, st.cursorNm.y])) : null);

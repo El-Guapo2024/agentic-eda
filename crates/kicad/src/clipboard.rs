@@ -21,7 +21,7 @@ use std::fmt::Write as _;
 
 use eda_model::barcode::Barcode;
 use eda_model::board_text::TextExtra;
-use eda_model::ir::{Design, Dimension, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
+use eda_model::ir::{Design, Dimension, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, Millideg, Nm, Point, Shape, Side, Text, Track, Via, Zone};
 use eda_model::pcb_items::{PcbPoint, RefImage, TextBox};
 use eda_model::table::Table;
 use eda_model::{CheckResult, ConstraintModel, Footprint};
@@ -149,6 +149,9 @@ struct Picked<'a> {
     images: Vec<&'a RefImage>,
     points: Vec<&'a PcbPoint>,
     tables: Vec<&'a Table>,
+    /// Cells copied without their table (`<table>:<row>:<col>`), by table: `SaveSelection` promotes a cell to a clone of its table (`promotedTables`) and
+    /// then keeps only the selected cells (`deleteUnselectedCells`).
+    cells: Vec<(&'a Table, BTreeSet<(usize, usize)>)>,
     /// Pads copied on their own (`REF.NUM[#k]`): `SaveSelection` puts each in a new footprint of its own ("Create a parent footprint to own the
     /// copied item").
     pads: Vec<String>,
@@ -170,6 +173,7 @@ impl<'a> Picked<'a> {
             + self.images.len()
             + self.points.len()
             + self.tables.len()
+            + self.cells.len()
             + self.pads.len()
     }
 
@@ -203,6 +207,13 @@ impl<'a> Picked<'a> {
             self.points.push(p);
         } else if let Some(t) = dr.and_then(|d| d.tables.iter().find(|t| t.id == id)) {
             self.tables.push(t);
+        } else if let Some((t, row, col)) = eda_model::table::parse_cell_item_id(id).and_then(|(tid, r, c)| dr.and_then(|d| d.tables.iter().find(|t| t.id == tid)).filter(|t| t.cell(r, c).is_some()).map(|t| (t, r, c))) {
+            match self.cells.iter_mut().find(|(k, _)| k.id == t.id) {
+                Some((_, sel)) => {
+                    sel.insert((row, col));
+                }
+                None => self.cells.push((t, BTreeSet::from([(row, col)]))),
+            }
         } else if lone_pad(design, model, id).is_some() {
             self.pads.push(id.to_string());
         } else if let Some(field) = field_as_text(design, model, id) {
@@ -353,7 +364,8 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
     let fp_pieces = |fp: &FootprintInstance| fp_pieces(model, fp, mv(fp.at));
 
     // A footprint on its own: bare, its pads on no net (`for( PAD* pad : newFootprint.Pads() ) pad->SetNetCode( 0 )`).
-    if picked.total() == 1 && picked.footprints.len() == 1 {
+    // `aSelected.Size() == 1 && aSelected.Front()->Type() == PCB_FOOTPRINT_T`: a selected group is a `PCB_GROUP_T`, so a group of one footprint takes the board branch
+    if picked.total() == 1 && picked.footprints.len() == 1 && picked.groups.is_empty() {
         let (part, footprint, moved) = fp_pieces(picked.footprints[0])?;
         let mut out = String::new();
         write_footprint(&mut out, &moved, part, &footprint, &BTreeMap::new(), model, design, false, "", &FpExtra::of(design, &moved.id, &footprint), &Default::default());
@@ -508,9 +520,49 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
         let uuid = crate::pcb_table::write(&mut out, &moved, false);
         written.entry(t.id.clone()).or_default().push(uuid);
     }
+    for (t, sel) in &picked.cells {
+        // a cell of a table copied whole is in that table already (`parentIsPromoted` the other way round: the table is the item)
+        if picked.tables.iter().any(|w| w.id == t.id) {
+            continue;
+        }
+        let mut moved = selected_block(t, sel);
+        moved.translate(dx, dy);
+        let uuid = crate::pcb_table::write(&mut out, &moved, false);
+        written.entry(t.id.clone()).or_default().push(uuid);
+    }
     write_groups(&mut out, &picked.groups, &written, &|g| duid(&format!("clip:group:{}", g.id)), &|_| false);
     writeln!(out, ")").unwrap();
     Ok(out)
+}
+
+/// `SaveSelection`'s `deleteUnselectedCells` on the clone of `t`: the cells not in `sel` are deleted (`DeleteMarkedCells`), the rows and columns from the
+/// first to the last selected one keep their heights and widths, and the cells left are laid out `maxCol - minCol + 1` to a row (`SetColCount`) from the
+/// first one's corner (`PCB_TABLE::GetPosition` is the first cell's, which `Normalize` lays the rest out from). A block of cells is copied as that block;
+/// a selection that is not one is packed into rows the way KiCad packs it, a short last row dropped (`GetRowCount` is the cell count divided by the
+/// column count). A merged cell's span is cut to the new table.
+fn selected_block(t: &Table, sel: &BTreeSet<(usize, usize)>) -> Table {
+    let (min_row, max_row) = (sel.iter().map(|c| c.0).min().unwrap_or(0), sel.iter().map(|c| c.0).max().unwrap_or(0));
+    let (min_col, max_col) = (sel.iter().map(|c| c.1).min().unwrap_or(0), sel.iter().map(|c| c.1).max().unwrap_or(0));
+    let cols = max_col - min_col + 1;
+    let kept: Vec<(usize, usize)> = (0..t.cells.len()).map(|i| t.row_col(i)).filter(|rc| sel.contains(rc)).collect();
+    let rows = (kept.len() / cols).max(1);
+    let first = kept.first().copied().unwrap_or((min_row, min_col));
+    let (x, y, _, _) = t.cell_local_rect(first.0, first.1);
+    let mut out = t.clone();
+    out.at = t.to_world((x, y));
+    out.col_widths = (0..cols).map(|c| t.col_widths.get(min_col + c).copied().unwrap_or(Nm::ZERO)).collect();
+    out.row_heights = (0..rows).map(|r| if min_row + r <= max_row { t.row_heights.get(min_row + r).copied().unwrap_or(Nm::ZERO) } else { Nm::ZERO }).collect();
+    out.cells = kept.iter().take(rows * cols).enumerate().map(|(i, &(r, c))| {
+        let mut cell = t.cell(r, c).cloned().unwrap_or_else(|| eda_model::table::TableCell::pcb_new(false));
+        let (nr, nc) = (i / cols, i % cols);
+        cell.col_span = cell.col_span.min((cols - nc) as u32);
+        cell.row_span = cell.row_span.min((rows - nr) as u32);
+        cell
+    }).collect();
+    while out.cells.len() < rows * cols {
+        out.cells.push(eda_model::table::TableCell::pcb_new(false));
+    }
+    out
 }
 
 // -------------------------------------------------------------------- parse
@@ -815,6 +867,38 @@ mod tests {
         assert!(clip.groups[outer].members.contains(&ClipRef::Group(inner)), "{:?}", clip.groups[outer].members);
         assert_eq!(clip.groups[outer].members.len(), 2);
         assert_eq!(clip.groups[inner].members.len(), 2);
+    }
+
+    #[test]
+    fn a_group_of_one_footprint_copies_as_a_board_with_its_group() {
+        // `aSelected.Front()->Type()` is `PCB_GROUP_T`: the board branch, the group and the pads' nets kept
+        let (mut design, model) = fixture();
+        design.drawings.as_mut().unwrap().groups = vec![Group { id: "grp_one".into(), name: "one".into(), member_ids: vec!["C1".into()], design_block: String::new() }];
+        let text = export_pcb_clipboard(&design, &model, &ids(&["grp_one"]), p(Nm::from_mm(110.0), Nm::from_mm(120.0))).unwrap();
+        assert!(text.starts_with("(kicad_pcb"), "{text}");
+        assert!(text.contains("(group") && text.contains("(net "), "{text}");
+    }
+
+    #[test]
+    fn copied_cells_are_a_table_of_the_selected_block() {
+        let (mut design, model) = fixture();
+        let mut t = Table::new_grid("F.SilkS", p(Nm::from_mm(50.0), Nm::from_mm(50.0)), 3, 3, Nm::from_mm(10.0), Nm::from_mm(5.0), Nm::from_mm(0.1));
+        t.id = "tbl_a".into();
+        t.col_widths = vec![Nm::from_mm(10.0), Nm::from_mm(20.0), Nm::from_mm(30.0)];
+        for (i, c) in t.cells.iter_mut().enumerate() {
+            c.text = format!("c{i}");
+        }
+        design.drawings.as_mut().unwrap().tables.push(t);
+        // the cells of the middle row, columns 1 and 2
+        let text = export_pcb_clipboard(&design, &model, &ids(&["tbl_a:1:1", "tbl_a:1:2"]), p(Nm::ZERO, Nm::ZERO)).unwrap();
+        assert!(text.contains("(table (column_count 2)"), "{text}");
+        assert!(text.contains("(column_widths 20 30) (row_heights 5)"), "{text}");
+        assert!(text.contains("\"c4\"") && text.contains("\"c5\"") && !text.contains("\"c0\"") && !text.contains("\"c3\""), "{text}");
+        assert_eq!(text.matches("(table_cell").count(), 2, "{text}");
+        assert!(text.contains("(start 60 55)"), "the table starts at the first cell's corner: {text}");
+        // a cell of a table copied whole adds nothing
+        let text = export_pcb_clipboard(&design, &model, &ids(&["tbl_a", "tbl_a:0:0"]), p(Nm::ZERO, Nm::ZERO)).unwrap();
+        assert_eq!(text.matches("(table_cell").count(), 9, "{text}");
     }
 
     #[test]

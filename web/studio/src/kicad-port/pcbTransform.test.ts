@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { BoardState, Dimension, Part, Pad } from "../api/types";
 import { carryAngleDeg, carryStart, editableSelection, flipPivot, isLocked, modificationPoint, planCarry, planFlip, planMove, planMoveExact, planRotate, rotationPivot, selectionCenter } from "./pcbTransform";
 import { padById, padIds, padParent, itemKind, itemPosition, itemBounds } from "./pcbItems";
+import { boardDeleteCmds } from "./deleteCmds";
 
 function board(partial: Partial<BoardState>): BoardState {
   return { name: "t", dir: "", outline: null, layers: ["F.Cu", "B.Cu"], snap: 100, parts: [], rules: [], routing: null, drawings: null, checks: [], activity: [], job: "idle", ...partial } as BoardState;
@@ -267,4 +268,15 @@ test("a lone text box turns about its centre (EDIT_TOOL::Rotate: PCB_TEXTBOX::Ge
   assert.equal(itemKind(b, "tb1"), "textbox");
   assert.deepEqual(rotationPivot(b, ["tb1"]), [3000, 3000]);
   assert.deepEqual(flipPivot(b, ["tb1"]), [1000, 2000]);
+});
+
+test("editableSelection: Copy and Cut take a table cell as itself, the other tools as its table (round 3 B-1)", () => {
+  const cell = (row: number, col: number) => ({ id: `tbl_a:${row}:${col}`, row, col, text: `r${row}c${col}`, col_span: 1, row_span: 1 });
+  const b = board({ drawings: drawings({ tables: [{ id: "tbl_a", layer: "F.SilkS", rows: 3, cols: 3, cells: [0, 1, 2].flatMap((r) => [0, 1, 2].map((c) => cell(r, c))) }] } as never) });
+  // `FilterCollectorForTableCells` (move, turn, duplicate, delete of the whole item)
+  assert.deepEqual(editableSelection(b, ["tbl_a:0:0"]).ids, ["tbl_a"]);
+  // `copyToClipboard` has no such filter: the cell travels as itself, and Cut's `DeleteItems` clears it ("Clear contents of table cell")
+  const cut = editableSelection(b, ["tbl_a:0:0"], { forClipboard: true }).ids;
+  assert.deepEqual(cut, ["tbl_a:0:0"]);
+  assert.deepEqual(boardDeleteCmds(b, cut).cmds, [{ op: "table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { text: "" } }], "the table stays, the cell is emptied");
 });

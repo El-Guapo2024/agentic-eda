@@ -61,7 +61,7 @@ export function isLocked(board: BoardState, id: string): boolean {
  * pads are edited through their footprint), ids the board no longer has dropped, and every locked item taken out
  * (`FilterCollectorForLockedItems`) -- so `lockedOut` is how the tool knows it left something where it was. Order is kept, repeats dropped.
  */
-export function editableSelection(board: BoardState, ids: readonly string[], opts: { respectLocks?: boolean; keepPads?: boolean } = {}): { ids: string[]; lockedOut: boolean } {
+export function editableSelection(board: BoardState, ids: readonly string[], opts: { respectLocks?: boolean; forClipboard?: boolean } = {}): { ids: string[]; lockedOut: boolean } {
   const respectLocks = opts.respectLocks ?? true;
   const out: string[] = [];
   const seen = new Set<string>();
@@ -69,8 +69,9 @@ export function editableSelection(board: BoardState, ids: readonly string[], opt
   for (const raw of ids) {
     // (`FilterCollectorForTableCells`: a table cell stands for its table in a move, a turn, a flip, a duplicate and a delete of the whole item)
     const kind = itemKind(board, raw);
-    // (`keepPads`: Copy and Cut take a pad as itself -- `copyToClipboard`'s filter has no `FilterCollectorForFreePads`)
-    const id = kind === "pad" ? (opts.keepPads ? raw : padParent(board, raw)) : kind === "tablecell" ? (cellById(board, raw)?.table.id ?? null) : raw;
+    // (`forClipboard`: Copy and Cut take a pad and a table cell as themselves -- `copyToClipboard`'s filter has neither `FilterCollectorForFreePads` nor
+    // `FilterCollectorForTableCells`: `SaveSelection` copies a cell's table cut down to the selected cells, and Cut's `DeleteItems` clears the cell)
+    const id = kind === "pad" ? (opts.forClipboard ? raw : padParent(board, raw)) : kind === "tablecell" ? (opts.forClipboard ? raw : (cellById(board, raw)?.table.id ?? null)) : raw;
     if (id == null || seen.has(id) || itemKind(board, id) == null) continue;
     seen.add(id);
     if (respectLocks && isLocked(board, id)) {
