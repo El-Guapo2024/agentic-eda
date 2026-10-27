@@ -1328,6 +1328,7 @@ export function Canvas() {
       deltaY: e.deltaY,
       shiftKey: e.shiftKey,
       ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
+      mac: isMac(),
       altKey: e.altKey,
       x: flipLocalX(state.bcx.boardFlipped, rect.width, e.clientX - rect.left),
       y: e.clientY - rect.top,

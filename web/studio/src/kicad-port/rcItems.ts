@@ -58,13 +58,26 @@ export function isListed(kind: RcKind, f: RcFilter): boolean {
   return kind === "error" ? f.errors : kind === "warning" ? f.warnings : f.exclusions;
 }
 
-/** The indexes of the entries the list shows, in report order. */
-export function listedIndexes<T extends { severity: string; excluded?: boolean }>(entries: readonly T[], f: RcFilter): number[] {
-  const out: number[] = [];
+/**
+ * The indexes of the entries the list shows: every error, then the warnings, then the exclusions, each kind in report order (r2 D-E3:
+ * `SHEETLIST_ERC_ITEMS_PROVIDER::SetSeverities` (erc_settings.cpp) and `DRC_ITEMS_PROVIDER::SetSeverities` (drc_item.cpp): "Sort markers so
+ * that errors appear before warnings", `std::stable_sort( .., a->GetSeverity() > b->GetSeverity() )`, ERROR 0x20 > WARNING 0x10 > EXCLUSION 0x04,
+ * an excluded marker's `GetSeverity` being the exclusion). Next / Previous Marker step in this order too.
+ *
+ * The sort runs when the provider refilters (`RC_TREE_MODEL::Update` -> `rebuildTree` -> `SetSeverities`). The ERC dialog does that on every
+ * exclusion change (`OnERCItemRClick`'s ID_ADD_EXCLUSION / ID_REMOVE_EXCLUSION and `DIALOG_ERC::ExcludeMarker` call `Update`), so an ERC row that is
+ * waived moves at once. The DRC dialog waives or restores one marker with `ValueChanged( node )` (or `DeleteCurrentItem` when exclusions are not
+ * shown), with no refilter, so the row stays where it was until the next refilter: such a row carries `listed_as`, the kind it was sorted as
+ * ([`patchDrcExcluded`] with `hold`, cleared by [`refilterDrc`]).
+ */
+export function listedIndexes<T extends { severity: string; excluded?: boolean; listed_as?: RcKind }>(entries: readonly T[], f: RcFilter): number[] {
+  const rank = (k: RcKind) => (k === "error" ? 0 : k === "warning" ? 1 : 2);
+  const out: Array<[number, number]> = [];
   entries.forEach((e, i) => {
-    if (isListed(rcKind(e), f)) out.push(i);
+    const kind = rcKind(e);
+    if (isListed(kind, f)) out.push([rank(e.listed_as ?? kind), i]);
   });
-  return out;
+  return out.sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, i]) => i);
 }
 
 export interface RcCounts {
@@ -391,12 +404,15 @@ const sameKey = (a: { check: string; items: string[] }, b: { check: string; item
  * The report after waiving (or restoring) violations, without running kicad-cli again: `ERC_MARK_EXCLUDED`'s DRC twin. `comment` is the
  * exclusion's. The counts leave the waived ones out. Whether kicad-cli matched the new exclusion is not known until the next run.
  */
-export function patchDrcExcluded(report: DrcReport, keys: ReadonlyArray<{ check: string; items: string[] }>, excluded: boolean, comment = ""): DrcReport {
+export function patchDrcExcluded(report: DrcReport, keys: ReadonlyArray<{ check: string; items: string[] }>, excluded: boolean, comment = "", hold = false): DrcReport {
+  // `hold`: one marker waived or restored from its row (`ValueChanged( node )`), which keeps its place in the list; otherwise the dialog's `Update`
+  // refilters and every row is sorted afresh (r2 D-E3, [`listedIndexes`])
   const patch = (v: DrcViolation): DrcViolation => {
     const key = drcKey(v);
-    if (!keys.some((k) => sameKey(k, key))) return v;
-    const { kicad_matched: _unknown, ...rest } = v;
-    return { ...rest, excluded, comment: excluded ? comment : "" };
+    const { listed_as: was, ...unheld } = v;
+    if (!keys.some((k) => sameKey(k, key))) return hold ? v : unheld;
+    const { kicad_matched: _unknown, ...rest } = unheld;
+    return { ...rest, excluded, comment: excluded ? comment : "", ...(hold ? { listed_as: was ?? rcKind(v) } : {}) };
   };
   const violations = report.violations.map(patch);
   const unconnected = report.unconnected_items?.map(patch);
@@ -406,6 +422,18 @@ export function patchDrcExcluded(report: DrcReport, keys: ReadonlyArray<{ check:
   return { ...report, violations, ...(unconnected ? { unconnected_items: unconnected } : {}), ...(parity ? { schematic_parity: parity } : {}), counts };
 }
 
+/** `RC_TREE_MODEL::Update` on the DRC dialog (a change of the Show boxes, a severity, a bulk exclusion): the provider refilters and sorts every row by
+ *  what it is now, so no row keeps a place it was given before (r2 D-E3). */
+export function refilterDrc(report: DrcReport): DrcReport {
+  const clear = (list: DrcViolation[] | undefined) => list?.map(({ listed_as: _held, ...v }) => v);
+  return {
+    ...report,
+    violations: clear(report.violations) ?? [],
+    ...(report.unconnected_items ? { unconnected_items: clear(report.unconnected_items) } : {}),
+    ...(report.schematic_parity ? { schematic_parity: clear(report.schematic_parity) } : {}),
+  };
+}
+
 /**
  * The report after a check's severity changed (`ID_SET_SEVERITY_TO_*`, the Ignored Tests radio menu), without running kicad-cli again --
  * what KiCad does to its markers in place: a check set to Error or Warning keeps its markers at the new severity; one set to Ignore loses
@@ -413,7 +441,8 @@ export function patchDrcExcluded(report: DrcReport, keys: ReadonlyArray<{ check:
  */
 export function patchDrcSeverity(report: DrcReport, check: string, severity: RuleSeverity, description: string): DrcReport {
   const ignoring = severity === "ignore";
-  const patch = (list: DrcViolation[] | undefined) => list?.filter((v) => !(ignoring && v.type === check)).map((v) => (v.type === check && !ignoring ? { ...v, severity } : v));
+  // `ID_SET_SEVERITY_TO_*` end with `Update`, a refilter: no row keeps a held place (r2 D-E3)
+  const patch = (list: DrcViolation[] | undefined) => list?.filter((v) => !(ignoring && v.type === check)).map(({ listed_as: _held, ...v }) => (v.type === check && !ignoring ? { ...v, severity } : v));
   const violations = patch(report.violations) ?? [];
   const unconnected = patch(report.unconnected_items);
   const parity = patch(report.schematic_parity);

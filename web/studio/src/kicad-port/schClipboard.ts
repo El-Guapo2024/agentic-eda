@@ -126,6 +126,16 @@ export function previewIsEmpty(p: SchPastePreview): boolean {
   return previewIds(p).length === 0 && p.symbols.length === 0 && p.power_symbols.length === 0;
 }
 
+/**
+ * What is selected once a paste is dropped (r2 D-C8). A Duplicate of the item under the cursor, with nothing selected, leaves nothing selected:
+ * `doCopy( true )` keeps `m_duplicateIsHoverSelection = selection.IsHover()`, `Paste` gives the pasted selection `SetIsHover(
+ * m_duplicateIsHoverSelection )`, and the Move tool that carries it (`prepareSelection`: `aUnselect = selection.IsHover()`) clears the selection when it
+ * ends (`finalizeMoveOperation`: `if( aUnselect ) m_toolMgr->RunAction( ACTIONS::selectionClear )`). Otherwise the pasted items stay selected.
+ */
+export function selectionAfterPaste(paste: { hover?: boolean }, pasted: string[]): string[] {
+  return paste.hover ? [] : pasted;
+}
+
 /** The items `after` has that `before` did not: the pasted ones, to select once the paste is placed (KiCad leaves them selected). A unit that joined a reference already there selects the reference. */
 export function newIdsAfter(before: Schematic, after: Schematic): string[] {
   const known = new Set<string>();

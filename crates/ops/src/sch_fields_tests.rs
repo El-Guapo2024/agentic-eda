@@ -331,7 +331,8 @@ fn a_power_symbols_value_and_a_sheets_name_are_edited_like_any_field() {
     b.apply(&mv(&[&field_id("#PWR01", "Value")], mm(5.08), Nm::ZERO)).unwrap_or_else(|e| panic!("{e:?}"));
     let ctx = OwnerCtx::new(b.design().schematic.as_ref().unwrap(), &m, "#PWR01").unwrap();
     let f = ctx.page_fields(b.design().schematic.as_ref().unwrap());
-    assert!(near(f[1].at, (15_080_000.0, 13_810_000.0)), "{:?}", f[1].at);
+    // (5.08 mm below it, on the 50 mil grid of the sheet: `AUTOPLACER` rounds the place itself, and 10 mm is off that grid)
+    assert!(near(f[1].at, (15_080_000.0, 15_240_000.0)), "{:?}", f[1].at);
     // the sheet's name is edited from its field
     b.apply(&edit(&field_id("sheet_a", "Sheetname"), |e| e.text = Some("Power".into()))).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(b.design().schematic.as_ref().unwrap().sheets[0].name, "Power");

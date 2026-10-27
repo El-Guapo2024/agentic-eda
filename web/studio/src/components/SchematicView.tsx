@@ -18,6 +18,7 @@
 // views reading the same state.selection/state.netHighlight.
 //
 // Scope: see PARITY-sch.md for the full per-action table.
+import { isTerminalPoint } from "../kicad-port/schTerminalPoint";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LabelScope, Schematic } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
@@ -523,6 +524,7 @@ export function SchematicView() {
       deltaY: e.deltaY,
       shiftKey: e.shiftKey,
       ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
+      mac: isMac(),
       altKey: e.altKey,
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
@@ -657,12 +659,10 @@ export function SchematicView() {
           const tail = wireTail(draw.pts[draw.pts.length - 1]!, snapped, state.schLineMode, state.schPosture, elbowRef.current);
           elbowRef.current = null;
           const next = { ...draw, pts: [...draw.pts, ...(tail as [number, number][])] };
-          // sch_screen.cpp IsTerminalPoint, simplified: landing back on a
-          // pin auto-finishes the wire, same as a real click on a pin/
-          // junction/other wire does in source -- this app only checks
-          // the pin case (see this file's header comment for the rest).
-          const onPin = !isLine && pinSnapPoints(sch).some(([px, py]) => px === snapped[0] && py === snapped[1]);
-          if (onPin && next.pts.length >= 2) {
+          // `SCH_SCREEN::IsTerminalPoint( cursorPos, segment->GetLayer() )`: a pin, junction, label, wire or bus of the segment's layer finishes it (r3 C3-M3)
+          const layer = isLine ? "notes" : state.activeTool === "bus" ? "bus" : "wire";
+          const terminal = isTerminalPoint(sch, pinSnapPoints(sch), snapped, layer);
+          if (terminal && next.pts.length >= 2) {
             commitDrawn(next.pts);
             dispatch({ type: "SET_DRAW_STATE", draw: null });
           } else {

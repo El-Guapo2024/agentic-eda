@@ -20,6 +20,8 @@ export interface SchPaste {
   /** Duplicate carries the copy from where it was, Paste from where the clipboard has it. */
   origin: "paste" | "duplicate";
   notes: string[];
+  /** A Duplicate of the item under the cursor, nothing being selected (`m_duplicateIsHoverSelection`): nothing is left selected when it is dropped. */
+  hover?: boolean;
 }
 
 let current: SchPaste | null = null;

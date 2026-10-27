@@ -474,6 +474,36 @@ fn box_center(b: (Point, Point)) -> Point {
 
 /// `SELECTION::GetCenter`: the middle of the selection's box, text and labels left out; of a selection of only those, the mean of their
 /// places (so turning it does not shift it).
+/// The boxes of a placed symbol's shown fields, merged (`SCH_SYMBOL::doGetBoundingBox( true, true )`'s fields); `None` when it shows none or its sheet has no
+/// field geometry (a sheet read from a KiCad file).
+fn symbol_fields_box(scene: &Scene, i: usize) -> Option<(Point, Point)> {
+    let s = &scene.sch.symbols[i];
+    let ctx = eda_engine::fields_edit::OwnerCtx::new(&scene.sch, scene.model, &eda_model::ir::field_key(&s.id, s.unit))?;
+    let mut out: Option<(Point, Point)> = None;
+    for f in ctx.page_fields(&scene.sch).iter().filter(|f| f.visible && !f.text.is_empty()) {
+        let r = eda_engine::fields::field_rect(f);
+        out = Some(merge_boxes((Point { x: r.x0, y: r.y0 }, Point { x: r.x1, y: r.y1 }), out));
+    }
+    out
+}
+
+/// `SCH_SHEET::GetBoundingBox`: the sheet's body and its fields.
+fn sheet_box_with_fields(sch: &SchematicSection, sheet: &SheetInstance) -> (Point, Point) {
+    let mut bx = (sheet.at, Point { x: sheet.at.x + sheet.size.0, y: sheet.at.y + sheet.size.1 });
+    for f in eda_engine::fields::sheet_fields(sch, sheet).iter().filter(|f| f.visible && !f.text.is_empty()) {
+        let r = eda_engine::fields::field_rect(f);
+        bx = merge_boxes(bx, Some((Point { x: r.x0, y: r.y0 }, Point { x: r.x1, y: r.y1 })));
+    }
+    bx
+}
+
+fn merge_boxes(a: (Point, Point), b: Option<(Point, Point)>) -> (Point, Point) {
+    match b {
+        None => a,
+        Some(b) => (Point { x: a.0.x.min(b.0.x), y: a.0.y.min(b.0.y) }, Point { x: a.1.x.max(b.1.x), y: a.1.y.max(b.1.y) }),
+    }
+}
+
 fn selection_center(scene: &Scene, items: &[Item], fields: &[FieldSel]) -> Point {
     let text_like = |it: &Item| matches!(it, Item::Text(_)) || matches!(it, Item::Label(_)) || scene.is_label_like(*it);
     // a field is no text for this (`SCH_FIELD_T` is not `SCH_TEXT_T`): its box counts
@@ -488,7 +518,12 @@ fn selection_center(scene: &Scene, items: &[Item], fields: &[FieldSel]) -> Point
     let mut lo: Option<Point> = None;
     let mut hi: Option<Point> = None;
     for it in items.iter().filter(|it| !text_like(it)) {
-        if let Some((a, b)) = scene.item_box(*it) {
+        // a symbol's box is `doGetBoundingBox( true, true )`: body, pins and the fields it shows (r2 C-L2)
+        let with_fields = match *it {
+            Item::Symbol(i) => scene.item_box(*it).map(|bx| merge_boxes(bx, symbol_fields_box(scene, i))),
+            _ => scene.item_box(*it),
+        };
+        if let Some((a, b)) = with_fields {
             lo = Some(match lo {
                 None => a,
                 Some(l) => Point { x: l.x.min(a.x), y: l.y.min(a.y) },
@@ -709,10 +744,10 @@ fn rotate_single(scene: &mut Scene, head: Item, reference: Option<Point>, ccw: b
             pivot
         }
         Item::SheetPin(s, p) => {
-            // "Rotate pin within parent sheet"
+            // "Rotate pin within parent sheet": about the centre of `sheet->GetBoundingBox()`, its fields included (r2 C-L2)
             let pivot = default_pivot(scene);
             let sheet = scene.sch.sheets[s].clone();
-            let center = box_center((sheet.at, Point { x: sheet.at.x + sheet.size.0, y: sheet.at.y + sheet.size.1 }));
+            let center = box_center(sheet_box_with_fields(&scene.sch, &sheet));
             rotate_sheet_pin(&mut scene.sch.sheets[s], p, &sheet, center, ccw);
             pivot
         }
@@ -735,8 +770,9 @@ fn rotate_single(scene: &mut Scene, head: Item, reference: Option<Point>, ccw: b
         }
         Item::Sheet(i) => {
             // "Rotate the sheet on itself. Sheets do not have an anchor point."
-            let s = &scene.sch.sheets[i];
-            let c = half_grid(box_center((s.at, Point { x: s.at.x + s.size.0, y: s.at.y + s.size.1 })), grid);
+            // `GetNearestHalfGridPosition( item->GetBoundingBox().Centre() )`: the sheet's box with its fields (r2 C-L2)
+            let s = scene.sch.sheets[i].clone();
+            let c = half_grid(box_center(sheet_box_with_fields(&scene.sch, &s)), grid);
             rotate_item(scene, head, c, ccw, grid);
             c
         }
@@ -879,7 +915,7 @@ fn mirror_single(scene: &mut Scene, head: Item, vertical: bool, grid: Nm) {
         Item::Graphic(i) if matches!(scene.graphic(i).shape, SchGraphicKind::Directive { .. }) => mirror_item_in_place(scene, head, vertical),
         Item::SheetPin(s, p) => {
             let sheet = scene.sch.sheets[s].clone();
-            let center = box_center((sheet.at, Point { x: sheet.at.x + sheet.size.0, y: sheet.at.y + sheet.size.1 }));
+            let center = box_center(sheet_box_with_fields(&scene.sch, &sheet));
             mirror_sheet_pin(&mut scene.sch.sheets[s].pins[p].at, &sheet, center, vertical);
         }
         Item::Sheet(i) => {
@@ -1170,8 +1206,23 @@ fn align_grid(p: Point, grid: Nm) -> Point {
 fn align_to_grid(scene: &mut Scene, grid: Nm) {
     let items = scene.in_selection();
     let mut st = Drag { ortho: false, grid, ..Default::default() };
-    let internal = internal_points(scene);
-    for it in items {
+    // `AlignSchematicItemsToGrid` (`sch_item_alignment.cpp`): the pins of the selected sheets, the selected wires that end on them (a pin follows such a
+    // wire's aligned end), and every wire's ends before anything moves (r2 C-L1)
+    let selected_pin_points: BTreeSet<Point> = items.iter().filter_map(|it| if let Item::Sheet(i) = it { Some(*i) } else { None }).flat_map(|i| scene.sch.sheets[i].pins.iter().map(|p| p.at).collect::<Vec<_>>()).collect();
+    let mut pin_wires: BTreeMap<Point, (usize, bool)> = BTreeMap::new();
+    for it in &items {
+        if let Item::Seg(i) = *it {
+            let (a, b) = (scene.segs[i].a, scene.segs[i].b);
+            if selected_pin_points.contains(&a) {
+                pin_wires.entry(a).or_insert((i, true));
+            }
+            if selected_pin_points.contains(&b) {
+                pin_wires.entry(b).or_insert((i, false));
+            }
+        }
+    }
+    let original_ends: Vec<(Point, Point)> = scene.segs.iter().map(|s| (s.a, s.b)).collect();
+    for it in items.iter().copied() {
         match it {
             Item::Seg(i) => {
                 for end in 0..2 {
@@ -1189,13 +1240,22 @@ fn align_to_grid(scene: &mut Scene, grid: Nm) {
                 }
                 scene.segs[i].flags |= F_START | F_END;
             }
-            Item::Text(_) | Item::NoteLine(_) | Item::Graphic(_) if !scene.is_connectable(it) => {
+            // `SCH_TEXT_T`: by its position
+            Item::Text(_) => {
                 let p = scene.position(it);
                 let delta = diff(align_grid(p, grid), p);
                 if delta != (Point { x: Nm::ZERO, y: Nm::ZERO }) {
                     scene.move_item(it, delta);
                 }
             }
+            // a graphic line is an `SCH_LINE_T`: each end on the grid
+            Item::NoteLine(i) => {
+                for p in scene.sch.lines[i].pts.iter_mut() {
+                    *p = align_grid(*p, grid);
+                }
+            }
+            // a shape, text box, rule area, image or table has no connection point: `most_common` stays (0, 0) and it does not move
+            Item::Graphic(_) | Item::Table(_) if !scene.is_connectable(it) => {}
             Item::Sheet(i) => {
                 let s = scene.sch.sheets[i].clone();
                 let tl = s.at;
@@ -1216,7 +1276,17 @@ fn align_to_grid(scene: &mut Scene, grid: Nm) {
                 }
                 for (pi, original, list) in pin_drag {
                     let pos = scene.sch.sheets[i].pins[pi].at;
-                    let target = if list.is_empty() { align_grid(pos, grid) } else { Point { x: pos.x, y: original.y } };
+                    // a selected wire on the pin: the pin follows that wire's aligned end; else the pin keeps its y only when a wire on it goes to
+                    // something other than a selected sheet's pin (`canDragWires`)
+                    let target = if let Some(&(w, start)) = pin_wires.get(&original) {
+                        if start { scene.segs[w].a } else { scene.segs[w].b }
+                    } else {
+                        let can_drag = list.iter().all(|d| match *d {
+                            Item::Seg(w) => original_ends.get(w).is_none_or(|&(a, b)| selected_pin_points.contains(&if a == original { b } else { a })),
+                            _ => true,
+                        });
+                        if !can_drag && !list.is_empty() { Point { x: pos.x, y: original.y } } else { align_grid(pos, grid) }
+                    };
                     scene.sch.sheets[i].pins[pi].at = constrain_on_edge(&scene.sch.sheets[i], target, false, pos);
                     let total = diff(scene.sch.sheets[i].pins[pi].at, original);
                     if total != (Point { x: Nm::ZERO, y: Nm::ZERO }) {
@@ -1246,10 +1316,6 @@ fn align_to_grid(scene: &mut Scene, grid: Nm) {
                         most_common = g;
                     }
                 }
-                if conns.is_empty() {
-                    let p = scene.position(other);
-                    most_common = diff(align_grid(p, grid), p);
-                }
                 if most_common != (Point { x: Nm::ZERO, y: Nm::ZERO }) {
                     scene.move_item(other, most_common);
                     let unique: BTreeSet<Item> = drag_items.into_iter().collect();
@@ -1260,7 +1326,15 @@ fn align_to_grid(scene: &mut Scene, grid: Nm) {
             }
         }
     }
-    scene.finalize(Some(&st), &internal);
+    // `SCH_MOVE_TOOL::AlignToGrid`: `TrimOverLappingWires` and `AddJunctionsIfNeeded` on the selection, then `SCHEMATIC::CleanUp` -- not a drag's finish
+    let _ = &st;
+    scene.trim_overlapping_wires(&items);
+    scene.add_junctions_if_needed(&items);
+    scene.by_drag.clear();
+    for s in scene.segs.iter_mut() {
+        s.flags = 0;
+    }
+    scene.clean_up();
 }
 
 fn diff(a: Point, b: Point) -> Point {
@@ -1268,11 +1342,12 @@ fn diff(a: Point, b: Point) -> Point {
 }
 
 /// Align Left / Right / Top / Bottom / Center (`SCH_ALIGN_TOOL::moveItem`): each item's offset, snapped so an item on the connection grid
-/// stays on it (`adjustDeltaForGrid`), and the wires attached stretch (a drag of one item at a time).
+/// stays on it (`adjustDeltaForGrid`), each moved rigidly (`aItem->Move( delta )`: the wires attached do not stretch).
 fn align(scene: &mut Scene, moves: &[AlignMove], grid: Nm) -> Result<(), Vec<CheckResult>> {
     if moves.is_empty() {
         return Err(fail("ops_nothing_selected", "selection", "nothing to align"));
     }
+    // every item to align, the ones that stay put (the anchor) included: `doAlignCleanup` cleans up after all of `itemsToAlign` (r3 C3-L2)
     let mut moved: Vec<Item> = Vec::new();
     let mut any = false;
     for m in moves {
@@ -1280,6 +1355,7 @@ fn align(scene: &mut Scene, moves: &[AlignMove], grid: Nm) -> Result<(), Vec<Che
         if items.is_empty() {
             return Err(fail("ops_unknown_item", &m.id, "no item with this id on the sheet"));
         }
+        moved.extend(items.iter().copied());
         if scene.sch.extras.is_locked(&m.id) {
             continue;
         }
@@ -1305,7 +1381,6 @@ fn align(scene: &mut Scene, moves: &[AlignMove], grid: Nm) -> Result<(), Vec<Che
                 scene.segs[i].flags |= F_START | F_END;
             }
             scene.move_item(it, delta);
-            moved.push(it);
         }
     }
     if !any {

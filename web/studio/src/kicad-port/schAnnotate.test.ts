@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Schematic } from "../api/types";
-import { annotateCmd, annotateRequest, annotateSelectionOf, defaultAnnotateSettings, scopeOnOpen, startNumber } from "./schAnnotate";
+import { annotateCmd, annotateRequest, annotateSelectionOf, defaultAnnotateSettings, pasteNumbering, scopeOnOpen, startNumber } from "./schAnnotate";
 
 const none = { symbols: [], sheets: [] };
 
@@ -43,8 +43,8 @@ test("the start number is read as a whole number, never below zero", () => {
   assert.equal(startNumber(""), 0);
 });
 
-test("a remembered selection scope falls back to the whole schematic when nothing is selected", () => {
-  assert.equal(scopeOnOpen("selection", none), "all");
+test("r2 D-A4: the dialog opens on the remembered scope as it was, Selection too when nothing is selected (TransferDataToWindow)", () => {
+  assert.equal(scopeOnOpen("selection", none), "selection");
   assert.equal(scopeOnOpen("selection", { symbols: ["R1"], sheets: [] }), "selection");
   assert.equal(scopeOnOpen("current_sheet", none), "current_sheet");
 });
@@ -70,4 +70,9 @@ test("r3 D3-L1: a sheet inside a selected group is not one of the selected sheet
     groups: [{ id: "grp", name: "", member_ids: ["R1", "sheet_a"] }],
   } as unknown as Schematic;
   assert.deepEqual(annotateSelectionOf(sch, ["grp"], (id) => id === "R1"), { symbols: ["R1"], sheets: [] });
+});
+
+test("a paste is numbered by the settings Annotate last saved (r2 D-C3: Paste reads m_AnnotateMethod, m_AnnotateStartNum, m_AnnotateSortOrder)", () => {
+  assert.deepEqual(pasteNumbering(defaultAnnotateSettings()), { algo: "first_free", start: 0, order: "by_x" });
+  assert.deepEqual(pasteNumbering({ sort: "y", algo: "sheet_x100", start: "10" }), { algo: "sheet_x100", start: 10, order: "by_y" });
 });

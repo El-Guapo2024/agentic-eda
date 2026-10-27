@@ -29,6 +29,7 @@ import { incrementLabelText } from "../kicad-port/incrementLabelText";
 import { labelOrientationForPoint, orientationSceneOf } from "../kicad-port/schAutoRotate";
 import { lastPlaced, rememberPlaced, type LabelSpinName } from "../kicad-port/schLastPlaced";
 import { mmToNm, nmToMm } from "../kicad-port/schProperties";
+import { labelNameFromWire, placeLabelCmd } from "../kicad-port/schLabelName";
 import { inferSpin } from "./schematic/labelShape";
 import type { LabelShape } from "../api/types";
 
@@ -64,9 +65,19 @@ export function LabelDialog() {
 
   // Re-seed on every fresh click (not on every keystroke) -- same
   // dependency shape TextDialog.tsx's own re-seed effect uses.
+  // r2 C-L5, `createNewLabel`: a local or global label put down on a wire whose driver is a label takes that label's name, and no dialog opens
+  // ("Auto-create from attached wire"); it has what the tool last placed (spin, style, shape, Auto).
+  const named = pending && state.schematic ? labelNameFromWire(state.schematic.wires, pending.at, pending.scope) : null;
   useEffect(() => {
     if (!pending) return;
     const last = lastPlaced();
+    if (named && state.schematic) {
+      void api.cmd(
+        placeLabelCmd({ at: pending.at, scope: pending.scope, text: named, shape: last.shape, spin: last.spin, plainSpin: last.spin || inferSpin(state.schematic.wires, pending.at), sizeNm: null, bold: last.bold, italic: last.italic, autoRotate: pending.scope !== "local" && last.autoRotate })
+      );
+      dispatch({ type: "SET_SCH_LABEL_PENDING", pending: null });
+      return;
+    }
     setText(incrementLabelText(state.lastLabelText));
     setShape(last.shape);
     setSpin(last.spin);
@@ -87,7 +98,7 @@ export function LabelDialog() {
   );
   const autoOn = supportsAuto && auto;
 
-  if (!pending) return null;
+  if (!pending || named) return null;
   const close = () => dispatch({ type: "SET_SCH_LABEL_PENDING", pending: null });
 
   const sizeNm = mmToNm(size);
@@ -97,19 +108,7 @@ export function LabelDialog() {
 
   const submit = () => {
     if (!canAdd) return;
-    const kind = pending.scope === "local" ? ({ scope: "local" } as const) : ({ scope: pending.scope, shape } as const);
-    void api.cmd({
-      op: "sch_edit",
-      verb: "place_label",
-      net: text,
-      at: { x: pending.at[0], y: pending.at[1] },
-      kind,
-      ...(spin || plainSpin ? { spin: (spin || plainSpin) as LabelSpinName } : {}),
-      ...(sizeNm !== null && sizeNm !== 1_270_000 ? { size_nm: sizeNm } : {}),
-      ...(bold ? { bold: true } : {}),
-      ...(italic ? { italic: true } : {}),
-      ...(autoOn ? { auto_rotate: true } : {}),
-    });
+    void api.cmd(placeLabelCmd({ at: pending.at, scope: pending.scope, text, shape, spin, plainSpin, sizeNm, bold, italic, autoRotate: autoOn }));
     // the tool remembers what it was last given (`m_lastTextOrientation`, `m_lastTextBold`, `m_lastTextItalic`, `m_lastGlobalLabelShape`, `m_lastAutoLabelRotateOnPlacement`)
     rememberPlaced({ spin, bold, italic, ...(supportsAuto ? { shape, autoRotate: auto } : {}) });
     dispatch({ type: "SET_LAST_LABEL_TEXT", text });

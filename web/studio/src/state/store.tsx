@@ -13,7 +13,7 @@ import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimens
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
-import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, type DrcPage } from "../kicad-port/rcItems";
+import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, refilterDrc, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
 import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type CarryStep, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
@@ -1124,7 +1124,9 @@ export type Action =
   | { type: "SET_DRC_REFILL"; refill: boolean }
   | { type: "SET_DRC_PARITY"; parity: boolean }
   /** Waive or restore DRC violations in the report on screen without running kicad-cli again (the exclusion itself is a persisted `Cmd`); `version` as for `ERC_MARK_EXCLUDED`. */
-  | { type: "DRC_PATCH_EXCLUDED"; keys: ReadonlyArray<{ check: string; items: string[] }>; excluded: boolean; comment: string; version: string | null }
+  | { type: "DRC_PATCH_EXCLUDED"; keys: ReadonlyArray<{ check: string; items: string[] }>; excluded: boolean; comment: string; version: string | null; /** One marker from its row: it keeps its place in the list (`ValueChanged`, r2 D-E3). */ hold?: boolean }
+  /** The DRC dialog's provider refilters (`RC_TREE_MODEL::Update`, e.g. a Show box changed): every row is sorted afresh (r2 D-E3). */
+  | { type: "DRC_REFILTER" }
   /** A check's severity changed (`set_rule_severities`): the report on screen takes it (`patchDrcSeverity`) -- an ignored check leaves the list and joins the ignored ones. */
   | { type: "DRC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
   /** The same for the schematic (`set_erc_severities`). */
@@ -1551,7 +1553,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, drcParity: action.parity };
     case "DRC_PATCH_EXCLUDED":
       if (!state.drc) return state;
-      return { ...state, drc: patchDrcExcluded(state.drc, action.keys, action.excluded, action.comment), drcVersion: action.version };
+      return { ...state, drc: patchDrcExcluded(state.drc, action.keys, action.excluded, action.comment, action.hold === true), drcVersion: action.version };
+    case "DRC_REFILTER":
+      return state.drc ? { ...state, drc: refilterDrc(state.drc) } : state;
     case "DRC_PATCH_SEVERITY":
       if (!state.drc) return state;
       return { ...state, drc: patchDrcSeverity(state.drc, action.check, action.severity, action.description), drcVersion: action.version, drcSelected: null };

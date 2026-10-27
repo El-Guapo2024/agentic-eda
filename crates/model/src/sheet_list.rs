@@ -29,7 +29,9 @@ pub struct SheetEntry {
 }
 
 impl SheetEntry {
-    /// The page the sheet shows: the one set for it, else its virtual page number (`GetPageNumber` falls back that way).
+    /// The page the sheet shows: the one set for it, else its virtual page number. KiCad's `GetPageNumber` has no fallback (an unset page is
+    /// empty); the virtual page stands for the number `SCH_SHEET_LIST::SetInitialPageNumbers` gives every sheet of a schematic loaded with no page
+    /// set, and an imported file with only some pages set gets the others from [`repair_page_numbers`] (r2 B-M2).
     pub fn effective_page(&self) -> String {
         if self.page.is_empty() {
             self.virtual_page.to_string()
@@ -209,6 +211,41 @@ pub fn keep_pages(design: &mut Design, before: &[SheetEntry]) -> bool {
     changed
 }
 
+/// `SCH_SHEET_LIST::RepairPageNumbers` (KiCad 25ec2335 `sch_sheet_path.cpp`), which eeschema and kicad-cli run on a schematic just loaded whose pages are
+/// not all empty (`SCH_EDIT_FRAME::OpenProjectFiles`, `files-io.cpp`; `EESCHEMA_HELPERS::LoadSchematic`): "A page number is claimed by the first sheet in
+/// the list that uses it. Any sheet with an empty page number, or one repeating a number an earlier sheet already claimed, is reassigned to the lowest
+/// unused positive integer", every page some sheet holds being reserved first. KiCad's `GetPageNumber` has no fallback (an unset page is empty), so an
+/// imported file with some pages set and others not (QA `netlists/hierarchy_aliases`: root sheets on "2" and "3", a nested sheet on none) must get
+/// its pages here, or each unset path would show its virtual page number and could repeat a page the user set (r2 B-M2). The root is page 1 here (it
+/// claims "1" first, as the root's own `(sheet_instances (path "/" (page "1")))` does). A schematic whose sheets have no page at all is left alone:
+/// KiCad gives it `SetInitialPageNumbers` (the walk's numbers), which is what a page left empty shows here. Returns whether a page was stored.
+pub fn repair_page_numbers(design: &mut Design) -> bool {
+    let entries = walk(design);
+    if entries.iter().skip(1).all(|e| e.page.is_empty()) {
+        return false;
+    }
+    let root = "1".to_string();
+    let reserved: std::collections::BTreeSet<String> = std::iter::once(root.clone()).chain(entries.iter().skip(1).filter(|e| !e.page.is_empty()).map(|e| e.page.clone())).collect();
+    let mut assigned: std::collections::BTreeSet<String> = std::iter::once(root).collect();
+    let mut next: i64 = 1;
+    let mut changed = false;
+    for e in entries.iter().skip(1) {
+        // keep the first sheet to claim a given page number
+        if !e.page.is_empty() && assigned.insert(e.page.clone()) {
+            continue;
+        }
+        let mut page = next.to_string();
+        while reserved.contains(&page) || assigned.contains(&page) {
+            next += 1;
+            page = next.to_string();
+        }
+        changed |= set_page(design, &e.path, &page);
+        assigned.insert(page);
+        next += 1;
+    }
+    changed
+}
+
 /// The screens some sheet shows: the files of the placements reachable from the root. A screen no sheet shows any more (its sheet was deleted) is
 /// still kept in `Design::sheet_contents` -- the file is still there to be shown again -- but it is not part of the schematic: its symbols hold no
 /// reference and its pins are on no net.
@@ -358,6 +395,15 @@ pub fn sort_by_page_numbers(entries: &[SheetEntry]) -> Vec<SheetEntry> {
 /// no overrides, and a symbol the placement did not renumber keeps its id; the root (`[]`) is always the id.
 pub fn reference_under(screen: &SchematicSection, sym: &crate::ir::SymbolInstance, path: &[String]) -> String {
     override_under(screen, sym, path).map(|o| o.reference.clone()).unwrap_or_else(|| sym.id.clone())
+}
+
+/// The unit `sym` of `screen` is drawn as on the sheet at `path` (`SCH_SYMBOL::GetUnitSelection( aSheet )`, which `GetPins( aSheet )` and the connectivity
+/// read): the unit filed for that path ([`crate::sch_extras::SchExtras::path_units`], r2 B-M4), else the symbol's own unit.
+pub fn unit_under(screen: &SchematicSection, sym: &crate::ir::SymbolInstance, path: &[String]) -> u32 {
+    if path.is_empty() {
+        return sym.unit;
+    }
+    screen.extras.path_units.get(&crate::ir::field_key(&sym.id, sym.unit)).and_then(|m| m.get(&path.join("/"))).copied().unwrap_or(sym.unit)
 }
 
 /// The [`crate::ir::SymbolPathOverride`] of `sym` filed under the sheet at `path`, if it has one.
@@ -686,4 +732,26 @@ use super::*;
         let i = &read.sheet_contents.as_ref().unwrap()["i.kicad_sch"];
         assert_eq!(i.instance_overrides.iter().map(|o| (o.sheet_path.join("/"), o.reference.as_str())).collect::<Vec<_>>(), vec![("oa/ib".to_string(), "U1"), ("ob/ib".to_string(), "U1")]);
     }
+
+    /// r2 B-M2 (`SCH_SHEET_LIST::RepairPageNumbers`): root sheets on pages "2" and "3" and a sheet with no page inside the first: the unset paths get
+    /// the lowest numbers no sheet holds (4 and 5), not their walk places (3 and 5), so no page is shown twice; a repeated page is renumbered too.
+    #[test]
+    fn a_file_with_some_pages_set_gets_the_lowest_unused_pages_for_the_others() {
+        let mut d = design(
+            section(vec![at_x(placement("first", "First", "sub.kicad_sch", "2"), 0.0), at_x(placement("second", "Second", "sub.kicad_sch", "3"), 50.0)]),
+            vec![("sub.kicad_sch", section(vec![placement("sub2", "Sub2", "sub2.kicad_sch", "")])), ("sub2.kicad_sch", section(vec![]))],
+        );
+        assert!(repair_page_numbers(&mut d));
+        let shown = pages(&d);
+        assert_eq!(shown, vec![("".into(), "1".into()), ("first".into(), "2".into()), ("first/sub2".into(), "4".into()), ("second".into(), "3".into()), ("second/sub2".into(), "5".into())]);
+        assert!(!repair_page_numbers(&mut d), "nothing left to repair");
+
+        let mut dup = design(section(vec![at_x(placement("a", "A", "x.kicad_sch", "3"), 0.0), at_x(placement("b", "B", "x.kicad_sch", "3"), 50.0), at_x(placement("c", "C", "x.kicad_sch", "1"), 90.0)]), vec![("x.kicad_sch", section(vec![]))]);
+        assert!(repair_page_numbers(&mut dup));
+        assert_eq!(pages(&dup), vec![("".into(), "1".into()), ("a".into(), "3".into()), ("b".into(), "2".into()), ("c".into(), "4".into())], "the first to claim a page keeps it; the root claims 1");
+
+        let mut none = design(section(vec![placement("a", "A", "x.kicad_sch", "")]), vec![("x.kicad_sch", section(vec![]))]);
+        assert!(!repair_page_numbers(&mut none), "a schematic with no page set keeps its walk numbers (SetInitialPageNumbers)");
+    }
+
 }

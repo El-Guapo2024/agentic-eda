@@ -292,7 +292,7 @@ impl<'a> Board<'a> {
                 .iter()
                 .map(|s| PastedRef { reference: s.id.clone(), unit: s.unit, unit_count: units_of(self, &s.lib_id), lib_id: s.lib_id.clone(), value: s.value.clone(), at: (s.at.x, s.at.y), power: false })
                 .collect();
-            let numbered = annotate_paste(&self.used_references(), &pasted, mode);
+            let numbered = annotate_paste(&self.used_references(), &pasted, mode, Default::default(), 1);
             let Some(sec) = self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(&e.file)) else { continue };
             for (s, reference) in screen.symbols.iter().zip(numbered) {
                 if reference != s.id {
@@ -378,7 +378,7 @@ impl<'a> Board<'a> {
                 .iter()
                 .map(|s| PastedRef { reference: s.id.clone(), unit: s.unit, unit_count: self.design_symbol(&s.lib_id).map_or(1, |l| l.unit_count.max(1)), lib_id: s.lib_id.clone(), value: s.value.clone(), at: (s.at.x, s.at.y), power: false })
                 .collect();
-            let numbered = annotate_paste(&self.used_references(), &pasted, PasteMode::Unique);
+            let numbered = annotate_paste(&self.used_references(), &pasted, PasteMode::Unique, Default::default(), 1);
             let Some(sec) = self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(&e.file)) else { continue };
             for (s, reference) in symbols.iter().zip(numbered) {
                 if reference != s.id {
@@ -390,6 +390,8 @@ impl<'a> Board<'a> {
 
     /// `ReannotateDuplicates` for one screen that is coming in: its symbols (and power symbols, always numbered anew) numbered against `used`, which
     /// then holds them too.
+    /// (**Differs**: the contents of a pasted sheet are numbered with KiCad's default annotation settings, not Schematic Setup's -- r2 D-C3 threads them
+    /// through the paste of the sheet in view only.)
     fn number_screen(&self, sec: &mut SchematicSection, used: &mut Vec<UsedRef>, mode: PasteMode, units_of: &dyn Fn(&Self, &str) -> u32) {
         let mut pasted: Vec<PastedRef> = Vec::new();
         for s in &sec.symbols {
@@ -398,7 +400,7 @@ impl<'a> Board<'a> {
         for p in &sec.power_symbols {
             pasted.push(PastedRef { reference: p.id.clone(), unit: 1, unit_count: 1, lib_id: p.lib_id.clone(), value: p.net.clone(), at: (p.at.x, p.at.y), power: true });
         }
-        let numbered = annotate_paste(used, &pasted, mode);
+        let numbered = annotate_paste(used, &pasted, mode, Default::default(), 1);
         let n_symbols = sec.symbols.len();
         let mut renames: Vec<SecRename> = Vec::new();
         for (i, new) in numbered.iter().enumerate() {
@@ -450,7 +452,7 @@ impl<'a> Board<'a> {
             let Some(mut sec) = self.design.sheet_contents.as_mut().and_then(|c| c.remove(file)) else { continue };
             let power_only: Vec<(usize, PastedRef)> = sec.power_symbols.iter().enumerate().map(|(i, p)| (i, PastedRef { reference: p.id.clone(), unit: 1, unit_count: 1, lib_id: p.lib_id.clone(), value: p.net.clone(), at: (p.at.x, p.at.y), power: true })).collect();
             let pasted: Vec<PastedRef> = power_only.iter().map(|(_, p)| p.clone()).collect();
-            let numbered = annotate_paste(&used, &pasted, PasteMode::Unique);
+            let numbered = annotate_paste(&used, &pasted, PasteMode::Unique, Default::default(), 1);
             let renames: Vec<SecRename> = power_only.iter().zip(&numbered).filter(|((_, p), new)| p.reference != **new).map(|((i, p), new)| SecRename { item: Item::Power(*i), old: p.reference.clone(), unit: 1, new: new.clone() }).collect();
             rename_in_section(&mut sec, &renames, &BTreeMap::new());
             used.extend(sec.power_symbols.iter().map(|p| UsedRef { reference: p.id.clone(), unit: 1, lib_id: p.lib_id.clone(), value: p.net.clone() }));
@@ -576,7 +578,7 @@ impl<'a> Board<'a> {
                     .iter()
                     .map(|s| PastedRef { reference: source.as_ref().map_or_else(|| s.id.clone(), |p| eda_model::sheet_list::reference_under(&screen, s, p)), unit: s.unit, unit_count: units_of(self, &s.lib_id), lib_id: s.lib_id.clone(), value: s.value.clone(), at: (s.at.x, s.at.y), power: false })
                     .collect();
-                let numbered = annotate_paste(&used, &pasted, mode);
+                let numbered = annotate_paste(&used, &pasted, mode, Default::default(), 1);
                 let Some(sec) = self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(&e.file)) else { continue };
                 for (s, reference) in screen.symbols.iter().zip(numbered) {
                     used.push(UsedRef { reference: reference.clone(), unit: s.unit, lib_id: s.lib_id.clone(), value: s.value.clone() });
@@ -640,7 +642,7 @@ impl<'a> Board<'a> {
         let (dx, dy) = (at.x - anchor.x, at.y - anchor.y);
         let units_here = |b: &Self| -> BTreeSet<(String, u32)> { b.schematic().map(|s| s.symbols.iter().map(|x| (x.id.clone(), x.unit)).collect()).unwrap_or_default() };
         let before = units_here(self);
-        let top = self.paste_sch(&fragment, dx, dy, if keep_annotations { PasteMode::Keep } else { PasteMode::Unique })?;
+        let top = self.paste_sch(&fragment, dx, dy, if keep_annotations { PasteMode::Keep } else { PasteMode::Unique }, Default::default())?;
         // `placeSheetContents`: `if( placeAsGroup )` a group of what came in (before the numbering, which renames the members it lists)
         self.group_placed(&top, how)?;
         if !keep_annotations {

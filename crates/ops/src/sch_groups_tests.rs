@@ -442,7 +442,7 @@ fn grouped_fragment() -> SchFragment {
 }
 
 fn paste(f: &SchFragment, dx: Nm, dy: Nm) -> Cmd {
-    Cmd::PasteSch { fragment: f.clone(), dx, dy, mode: PasteMode::Unique }
+    Cmd::PasteSch { fragment: f.clone(), dx, dy, mode: PasteMode::Unique, numbering: Default::default() }
 }
 
 #[test]

@@ -775,6 +775,31 @@ fn align_to_grid_puts_a_symbol_pins_on_the_grid_and_takes_its_wire_along() {
     assert_eq!(wire_pts(&after), vec![vec![p(mm(20.32), mm(21.59)), p(mm(20.32) + mm(0.3), mm(10.16))]]);
 }
 
+/// r2 C-L1 (`AlignSchematicItemsToGrid`: a shape has no connection point, so `most_common` stays (0, 0); a graphic line is an `SCH_LINE_T`, each end on the
+/// grid): a rectangle off the grid stays where it is, a graphic line's two ends are each put on the grid.
+#[test]
+fn align_to_grid_leaves_shapes_where_they_are_and_aligns_each_end_of_a_graphic_line() {
+    let mut s = section();
+    let rect: SchGraphic = serde_json::from_value(serde_json::json!({ "id": "rect_1", "shape": { "type": "rectangle", "start": { "x": mm(10.3).get(), "y": mm(10.3).get() }, "end": { "x": mm(20.3).get(), "y": mm(20.3).get() } } })).unwrap();
+    s.extras.graphics.push(rect.clone());
+    s.lines.push(SchLine { id: "sln_a".into(), pts: vec![p(mm(10.3), mm(30.48)), p(mm(25.0), mm(30.9))], width_nm: Nm::ZERO });
+    let after = run_on(s, SchMoveCmd::AlignToGrid { ids: ids(&["rect_1", "sln_a"]), grid: Nm::ZERO });
+    assert_eq!(after.extras.graphics[0].shape, rect.shape, "the rectangle stays");
+    assert_eq!(after.lines[0].pts, vec![p(mm(10.16), mm(30.48)), p(mm(25.4), mm(30.48))], "each end on the 50 mil grid");
+}
+
+/// r2 C-L2 (`SCH_SHEET_PIN::Rotate` about `sheet->GetBoundingBox().GetCenter()`, the sheet's fields included): a lone sheet pin turned on a sheet whose name runs
+/// far past its right edge is mirrored across the centre of the box with the name, not of the body.
+#[test]
+fn rotating_a_lone_sheet_pin_uses_the_box_with_the_sheet_fields() {
+    let turned = |name: &str| {
+        let mut s = section();
+        s.sheets.push(SheetInstance { id: "sh".into(), name: name.into(), file: "x.kicad_sch".into(), at: p(mm(50.8), mm(50.8)), size: (mm(10.16), mm(10.16)), pins: vec![SheetPin { id: "sp".into(), name: "IN".into(), shape: LabelShape::Input, at: p(mm(50.8), mm(50.8) + mm(2.54)) }], page: String::new() });
+        run_on(s, SchMoveCmd::Rotate { ids: ids(&["sp"]), vertices: BTreeMap::new(), ccw: true, about: None, grid: Nm::ZERO }).sheets[0].pins[0].at
+    };
+    assert_ne!(turned("A sheet with a very long name indeed, far wider than the sheet"), turned("A"), "the name's box moves the centre the pin turns about");
+}
+
 #[test]
 fn align_moves_each_item_by_its_offset_keeping_pins_on_the_grid() {
     let mut s = section();

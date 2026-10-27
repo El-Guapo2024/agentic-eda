@@ -1823,7 +1823,7 @@ export type Cmd =
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }
   /** Ctrl+V / Ctrl+Shift+V / Ctrl+D (`SCH_EDITOR_CONTROL::Paste`): the `fragment` `POST /api/sch/clipboard/parse` returned, added to the sheet in view moved by (`dx`, `dy`); `mode` is Paste Special's reference-designator choice. One undo step. */
-  | { op: "paste_sch"; fragment: unknown; dx?: Nm; dy?: Nm; mode?: "unique" | "keep" | "remove" }
+  | { op: "paste_sch"; fragment: unknown; dx?: Nm; dy?: Nm; mode?: "unique" | "keep" | "remove"; numbering?: { algo?: "first_free" | "sheet_x100" | "sheet_x1000"; start?: number; order?: "by_x" | "by_y" } }
   /** The schematic editor's other tool verbs (lock, break, convert text, shapes, sheet pins, ...) -- see api/schEditTypes.ts. */
   | ({ op: "sch_edit" } & SchEditCmd)
   /** Move, Drag, Rotate, Mirror and Align of every kind of schematic item (crates/ops/src/sch_move.rs) -- see api/schEditTypes.ts. */
@@ -2570,6 +2570,9 @@ export interface SchematicWire {
   members?: string[];
   /** The stroke Wire/Bus Properties set (width, style, colour); absent when the wire has the default one. */
   stroke?: SchStroke;
+  /** `SCH_DRAWING_TOOLS::findWireLabelDriverName`: the wire's connection's `LocalName()` on this sheet path when the net's driver is a local or a global label,
+   *  absent otherwise (a power symbol, a hierarchical label, a pin, or no driver). A local or global label put down on the wire takes it with no dialog (r2 C-L5). */
+  label_driver?: string;
 }
 
 /** A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a short diagonal stub tying one specific member net into a bus. `at` and `at + size` are its two endpoints -- which one is "the bus side" is never stored, only read off whichever endpoint lands on a bus wire. */
@@ -2584,7 +2587,10 @@ export interface BusEntry {
 export interface SchematicLabel {
   /** Stable id (`lbl_xxxxxxxxxxxx`) -- for `delete_label`. */
   id: string;
+  /** The label's text. */
   net: string;
+  /** The net the label is on as the tracer names it (`/sub/X`, `A_EN`), the wire's under it; absent or null for a label on no wire (r3 A3-M4). */
+  net_name?: string | null;
   at: [Nm, Nm];
   scope: LabelScope;
   shape: LabelShape | null;
@@ -2997,6 +3003,9 @@ export interface DrcViolation {
   kicad_matched?: boolean;
   /** Where the violation's marker may sit, in nanometres: the positions an exclusion keeps for the derived project (`eda_kicad_engine::marker_candidates`). */
   marker_nm?: Array<[number, number]>;
+  /** The studio's own, never sent: the kind this row was sorted as when the DRC dialog last refiltered, kept while a marker waived or restored from
+   *  its row stays where it was (`ValueChanged`, r2 D-E3; `rcItems.ts::listedIndexes`). */
+  listed_as?: "error" | "warning" | "exclusion";
 }
 
 /** What `add_drc_exclusions` takes for one violation (`eda_model::ir::DrcExclusion`). */
