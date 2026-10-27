@@ -647,6 +647,12 @@ pub fn autoplace_symbol_manual(sym: &SymbolInstance, geom: &SymbolGeom, specs: &
 /// The placements of the fields named by `specs`: the fields that are shown and allow it are placed, a field that does not allow it keeps its
 /// placement in `kept`, a hidden one takes the first placed one's place.
 fn place_fields(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec], kept: &[FieldPlacement], force: Option<(Side, i64)>, manual: Option<&Surroundings>) -> Vec<FieldPlacement> {
+    // `m_is_power_symbol = !schSymbol->IsInNetlist()`, `m_isInNetlist = !ref.StartsWith( wxT( "#" ) )`: a `#LOGO` is placed as a power symbol is (r3 C3-L4)
+    if sym.id.starts_with('#') != geom.power {
+        let mut g = geom.clone();
+        g.power = sym.id.starts_with('#');
+        return place_fields_of(sym.at, sym.rot, sym.mirrored, sym.mirror_y, &g, specs, kept, force, manual);
+    }
     place_fields_of(sym.at, sym.rot, sym.mirrored, sym.mirror_y, geom, specs, kept, force, manual)
 }
 
