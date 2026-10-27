@@ -39,7 +39,8 @@ pub(crate) fn refused(r: GroupRefusal) -> Vec<CheckResult> {
 }
 
 /// Every id an item of the board can be listed under: the groupable kinds (`BOARD_ITEM::IsGroupableType`: placed footprints, copper, graphics, texts, text boxes,
-/// reference images, barcodes, dimensions, tables, generators -- tuning patterns and via stitchings -- and the groups themselves; not a point).
+/// reference images, barcodes, dimensions, tables, generators -- tuning patterns and via stitchings -- and the groups themselves; and, as KiCad 25ec2335's adds
+/// them, points, grid items and drill maps, which the reader puts in groups -- round 3 B-4).
 fn universe(design: &Design) -> BTreeSet<String> {
     let mut out: BTreeSet<String> = design.placement.iter().flat_map(|p| p.footprints.iter().map(|f| f.id.clone())).collect();
     if let Some(rt) = &design.routing {
@@ -56,6 +57,9 @@ fn universe(design: &Design) -> BTreeSet<String> {
         out.extend(dr.board_items.text_boxes.iter().map(|t| t.id.clone()));
         out.extend(dr.board_items.images.iter().map(|i| i.id.clone()));
         out.extend(dr.board_items.via_stitches.iter().map(|v| v.id.clone()));
+        out.extend(dr.board_items.points.iter().map(|q| q.id.clone()));
+        out.extend(dr.board_items.grid_items.iter().map(|g| g.id.clone()));
+        out.extend(dr.board_items.drill_maps.iter().map(|m| m.id.clone()));
         out.extend(dr.tuning_patterns.iter().map(|p| p.id.clone()));
         out.extend(dr.groups.iter().map(|g| g.id.clone()));
     }

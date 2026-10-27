@@ -2470,10 +2470,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     groupSelection: async () => {
       const board = stateRef.current.board;
       if (!board) return;
-      // `PCB_GROUP_TOOL::Group`'s filter: "if( item->GetParentFootprint() ) aCollector.Remove( item );" -- a pad or a field is not grouped -- then two items or more
+      // `PCB_GROUP_TOOL::Group`'s filter: "if( item->GetParentFootprint() ) aCollector.Remove( item );" -- a pad or a field is not grouped -- and `IsGroupableType()`,
+      // which a table cell is not (round 3 B-4) -- then two items or more
       const ids = [...stateRef.current.selection].filter((id) => {
         const kind = itemKind(board, id);
-        return kind !== "pad" && kind !== "field";
+        return kind !== "pad" && kind !== "field" && kind !== "tablecell";
       });
       if (ids.length < 2) return;
       const before = new Set((board.drawings?.groups ?? []).map((g) => g.id));
