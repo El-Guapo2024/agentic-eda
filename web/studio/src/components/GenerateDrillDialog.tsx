@@ -10,7 +10,7 @@
 // starts as the board's plot settings say (`m_plotOpts.GetUseAuxOrigin()`) each time
 // the dialog opens, and is stored back in the board on Generate
 // (`DIALOG_GENDRILL::updateConfig`: `SetUseAuxOrigin( m_origin->GetSelection() == 1 )`,
-// `SetPlotOptions` and `OnModify` when it changed) as one undoable `set_plot_settings`.
+// `SetPlotOptions` and `OnModify` when it changed) as `set_plot_settings`, no undo step (round 4 X4-3).
 // The report is the writer's ("Created file '..'", then "Done.").
 import { useEffect, useState } from "react";
 import { postFabDrill } from "../api/client";
