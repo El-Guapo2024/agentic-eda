@@ -695,3 +695,19 @@ fn an_unflashed_via_is_its_hole_on_that_layer() {
     assert!(!hits(in1, 0.45), "on In1.Cu the via is its hole: 0.15 + 0.25 mm");
     assert!(hits(in1, 0.38), "and the hole keeps its clearance");
 }
+
+/// r3 R3-11 (`DRC_ENGINE::IsNetTieExclusion`: `aTrackNetCode == pad->GetNetCode()`, net codes): a head of no net is excused at a net tie's pad of
+/// no net, as a SIG head is at its SIG pad.
+#[test]
+fn a_no_net_head_is_excused_at_a_no_net_pad_of_a_net_tie() {
+    let t1 = p(15.0, 10.0);
+    let (mut design, model) = board(&[("T1", "TIE2", t1)], &[("GND", &["T1.2"])]);
+    design.drawings.as_mut().unwrap().footprint_extras.push(FootprintExtra { id: "T1".into(), net_tie_pad_groups: vec!["1,2".into()], ..Default::default() });
+    let (node, _) = eda_pns::from_ir::build_node(&design, &model);
+    let r = node.rule_resolver().unwrap();
+    let pad2 = node.iter().find(|(_, it)| matches!(it, eda_pns::item::Item::Solid(s) if s.source == "T1.2")).map(|(_, it)| it).unwrap();
+    assert!(r.is_in_net_tie(pad2));
+    // the collision with pad 2 at a point on pad 1 (no net), for a head of no net
+    assert!(r.is_net_tie_exclusion(&None, 0, p(15.4, 10.0), pad2));
+    assert!(!r.is_net_tie_exclusion(&eda_pns::item::net_of("SIG"), 0, p(15.4, 10.0), pad2), "a SIG head is not pad 1's net");
+}

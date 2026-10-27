@@ -118,6 +118,8 @@ pub enum SideKind {
 #[derive(Clone, Debug)]
 pub struct Keepout {
     pub zone_id: String,
+    /// `GetZoneName()`: empty for an area with no name.
+    pub name: String,
     pub tracks: bool,
     pub vias: bool,
     pub pads: bool,
@@ -276,6 +278,38 @@ fn hole_depth(copper: &Shape, hole: &Shape) -> Nm {
     }
 }
 
+/// `FOOTPRINT::MapPadNumbersToNetTieGroups`' pad numbers: each group split at its commas, a backslash keeping the character after it (`case '\\':
+/// esc = true;`, so `\,` is a comma of a pad number), each number trimmed and kept when it is not empty (`processPad`).
+fn net_tie_group_pads(groups: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for group in groups {
+        let (mut esc, mut pad) = (false, String::new());
+        let mut process = |pad: &str| {
+            let pad = pad.trim();
+            if !pad.is_empty() {
+                out.push(pad.to_string());
+            }
+        };
+        for ch in group.chars() {
+            if esc {
+                esc = false;
+                pad.push(ch);
+                continue;
+            }
+            match ch {
+                '\\' => esc = true,
+                ',' => {
+                    process(&pad);
+                    pad.clear();
+                }
+                _ => pad.push(ch),
+            }
+        }
+        process(&pad);
+    }
+    out
+}
+
 /// A net's name as the rules know it: `None` for no net and for [`crate::item::not_a_net`].
 fn net_name(n: &Net) -> Option<&str> {
     n.as_deref().filter(|s| *s != "\u{1}" && !s.is_empty())
@@ -327,7 +361,7 @@ impl RuleResolver {
             for z in rt.zones.iter().filter(|z| z.is_rule_area && (z.keepout_tracks || z.keepout_vias || z.keepout_pads || z.keepout_copper_pour || z.keepout_footprints)) {
                 ids.insert(format!("{}{}", Solid::KEEPOUT_SOURCE, z.id), items.len() as u32);
                 items.push(rb.zone_item_of(z));
-                let keepout = Keepout { zone_id: z.id.clone(), tracks: z.keepout_tracks, vias: z.keepout_vias, pads: z.keepout_pads, footprints: z.keepout_footprints, parent_footprint: z.parent_footprint.clone() };
+                let keepout = Keepout { zone_id: z.id.clone(), name: z.name.clone(), tracks: z.keepout_tracks, vias: z.keepout_vias, pads: z.keepout_pads, footprints: z.keepout_footprints, parent_footprint: z.parent_footprint.clone() };
                 info.push(SolidInfo { keepout: Some(keepout), special: true, ..Default::default() });
             }
         }
@@ -335,11 +369,11 @@ impl RuleResolver {
         let mut net_ties: HashMap<String, Vec<NetTiePad>> = HashMap::new();
         if let Some(d) = &design.drawings {
             for e in d.footprint_extras.iter().filter(|e| !e.net_tie_pad_groups.is_empty()) {
-                let grouped: Vec<&str> = e.net_tie_pad_groups.iter().flat_map(|g| g.split(',').map(str::trim)).filter(|n| !n.is_empty()).collect();
+                let grouped = net_tie_group_pads(&e.net_tie_pad_groups);
                 let pads = board
                     .pads
                     .iter()
-                    .filter(|p| p.footprint_ref == e.id && grouped.contains(&p.number.as_str()))
+                    .filter(|p| p.footprint_ref == e.id && grouped.contains(&p.number))
                     .map(|p| {
                         let idx: Vec<i32> = p.layers.iter().filter_map(|l| layer_index(l)).collect();
                         let layers = match (idx.iter().min(), idx.iter().max()) {
@@ -524,7 +558,8 @@ impl RuleResolver {
         let Item::Solid(s) = colliding else { return false };
         let Some(pads) = self.footprint_of(s).and_then(|fp| self.net_ties.get(fp)) else { return false };
         let probe = Shape::Circle { c: pos, r: Nm::ZERO };
-        pads.iter().any(|p| p.net.is_some() && p.net == *net && p.layers.overlaps_layer(layer) && p.shape.collides(&probe, DRC_EPSILON).is_some())
+        // `aTrackNetCode == pad->GetNetCode()`: net codes, so a head of no net matches a pad of no net (r3 R3-11)
+        pads.iter().any(|p| net_name(&p.net) == net_name(net) && p.layers.overlaps_layer(layer) && p.shape.collides(&probe, DRC_EPSILON).is_some())
     }
 
     fn layer_name(&self, layer: i32) -> Option<&str> {
@@ -868,5 +903,16 @@ impl RuleResolver {
         }
         cache.insert(key, Nm::new(rv));
         Nm::new(rv)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// r3 R3-11: `MapPadNumbersToNetTieGroups` keeps the character after a backslash, splits at the other commas and trims.
+    #[test]
+    fn net_tie_groups_read_an_escaped_comma() {
+        assert_eq!(net_tie_group_pads(&["1, 2".into(), "A\\,B,3".into(), " ,".into()]), vec!["1", "2", "A,B", "3"]);
     }
 }

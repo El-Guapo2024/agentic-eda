@@ -175,7 +175,11 @@ pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     match router.start(at, layer, width) {
         Ok(()) => {
-            let reply = router.preview(at).map(|p| preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
+            let mut reply = router.preview(at).map(|p| preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
+            // `syncZone`'s `KIDIALOG`: a rule area the router cannot handle, which it left out of the world
+            if !router.warnings().is_empty() {
+                reply["warnings"] = json!(router.warnings());
+            }
             *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
             reply
         }

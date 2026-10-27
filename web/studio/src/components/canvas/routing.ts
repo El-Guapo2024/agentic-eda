@@ -31,6 +31,8 @@ import { advanceRouteQueue } from "./routeQueue";
 /** `width` undefined: the server's `ImportSizes` width of the start net (the width list on "use net class"), which the reply carries. */
 export async function startInteractiveRoute(x: number, y: number, layer: string, width: number | undefined, settings: RouterSettings, dispatch: Dispatch<Action>, startItem?: string | null): Promise<boolean> {
   const preview = await routeStart(x, y, layer, width, settings);
+  // `syncZone`'s warning (KiCad's `KIDIALOG`): a rule area the router cannot handle is left out of its world
+  for (const w of preview.warnings ?? []) dispatch({ type: "TOAST", message: w, kind: "info" });
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Start a route from a pad, via, or track end.", kind: "error" });
     return false;
