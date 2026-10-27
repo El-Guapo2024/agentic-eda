@@ -3,7 +3,6 @@
 // of the derived `.kicad_pcb` says; the paste half goes there too (`pad_to_paste_clearance`, `_ratio`).
 import { useEffect } from "react";
 import { useStudioState } from "../../state/store";
-import { validateMaskPaste } from "../../kicad-port/boardSetupRules";
 import type { MaskPaste } from "../../api/types";
 import { Check, FieldRow, LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
 
@@ -27,20 +26,16 @@ export function MaskPastePage({ hidden, onDirty }: PageProps) {
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const draft = page.draft;
-  const errors = draft ? validateMaskPaste(draft) : {};
   const set = <K extends keyof MaskPaste>(key: K, value: MaskPaste[K]) => page.edit((d) => ({ ...d, [key]: value }));
 
+  // KiCad's page checks nothing (`PANEL_SETUP_MASK_AND_PASTE::TransferDataFromWindow` stores the values and returns true).
   const onApply = () => {
     if (!draft) return;
-    if (Object.keys(errors).length > 0) {
-      apply.setMessage({ text: "Fix the values marked in red first.", bad: true });
-      return;
-    }
     void apply.run({ op: "set_mask_paste", settings: draft }, page.markClean);
   };
   const length = (key: "expansion_nm" | "min_width_nm" | "to_copper_clearance_nm" | "paste_margin_nm", label: string, title: string) => (
-    <FieldRow label={label} title={title} error={errors[key]} unit={units}>
-      <LengthField ariaLabel={label.replace(/:$/, "")} units={units} value={draft?.[key]} invalid={!!errors[key]} onChange={(v) => set(key, v ?? Number.NaN)} />
+    <FieldRow label={label} title={title} unit={units}>
+      <LengthField ariaLabel={label.replace(/:$/, "")} units={units} value={draft?.[key]} onChange={(v) => set(key, v ?? Number.NaN)} />
     </FieldRow>
   );
 
@@ -71,11 +66,10 @@ export function MaskPastePage({ hidden, onDirty }: PageProps) {
 
           <div className="bs-section">Solder Paste Settings</div>
           {length("paste_margin_nm", "Solder paste clearance:", PASTE_TIP)}
-          <FieldRow label="Solder paste relative clearance:" title={PASTE_RATIO_TIP} error={errors.paste_margin_ratio} unit="%">
+          <FieldRow label="Solder paste relative clearance:" title={PASTE_RATIO_TIP} unit="%">
             <NumberField
               ariaLabel="Solder paste relative clearance"
               value={toPercent(draft.paste_margin_ratio)}
-              invalid={!!errors.paste_margin_ratio}
               onChange={(v) => set("paste_margin_ratio", v === undefined ? Number.NaN : v / 100)}
             />
           </FieldRow>

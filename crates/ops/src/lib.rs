@@ -1567,8 +1567,15 @@ pub enum Cmd {
         exclude_from_sim: Option<bool>,
     },
     /// `eeschema.EditorControl.editPageNumber` (`SCH_EDIT_TOOL::EditPageNumber`): the page number of the placement `sheet` (a
-    /// `SheetInstance::id`). Letters and digits only; empty puts the sheet back to its place in the hierarchy.
-    SetSheetPage { sheet: String, page: String },
+    /// `SheetInstance::id`). Letters and digits only; empty puts the sheet back to its place in the hierarchy. With `path` (the whole sheet
+    /// path, the placement ids from the root down to `sheet`), the page of that sheet path only (`SCH_SHEET_PATH::SetPageNumber`), as KiCad
+    /// keeps a page per path of a sheet on a screen shown twice; without, of every path the sheet is on.
+    SetSheetPage {
+        sheet: String,
+        page: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<Vec<String>>,
+    },
     /// `eeschema.Interactive.increment*` (`SCH_TOOL_BASE::Increment`): the new text of a label (its net name) or a free text, by id.
     SetSchItemText { id: String, text: String },
     /// `eeschema.EditorControl.editSymbolLibraryLinks` (`DIALOG_EDIT_SYMBOLS_LIBID`): every symbol linked to a `from` library id is linked to
@@ -2716,8 +2723,13 @@ impl<'a> Board<'a> {
         // A board brought in whole (`ReplaceBoard`) comes with its own summary, made with its own model, which this board's model is not.
         let edge_before = if matches!(cmd, Cmd::ReplaceBoard { .. }) { None } else { outline::snapshot(&self.design, self.model) };
         let shared_before = self.shared_screens_before();
+        let pages_before = (self.design.schematic.is_some() && (matches!(cmd.domain(), Domain::Schematic) || matches!(cmd, Cmd::Batch { .. }))).then(|| eda_model::sheet_list::walk(&self.design));
         self.apply_cmd(cmd)?;
         self.tidy_shared_screens(shared_before);
+        // the page numbers KiCad keeps: a new sheet path numbered, a page shown kept when the walk moves (`sheet_list::keep_pages`)
+        if let Some(before) = pages_before {
+            eda_model::sheet_list::keep_pages(&mut self.design, &before);
+        }
         self.tidy_groups(groups_before);
         self.tidy_sch_groups(sch_groups_before);
         self.tidy_tuning_patterns(patterns_before);
@@ -2992,7 +3004,7 @@ impl<'a> Board<'a> {
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
             Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
-            Cmd::SetSheetPage { sheet, page } => self.set_sheet_page(sheet, page),
+            Cmd::SetSheetPage { sheet, page, path } => self.set_sheet_page(sheet, page, path.as_deref()),
             Cmd::SetSchItemText { id, text } => self.set_sch_item_text(id, text),
             Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),
             Cmd::IncrementAnnotations { start, increment } => self.increment_annotations(start, *increment),

@@ -71,9 +71,10 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
 
     let mut out = String::new();
     writeln!(out, "(kicad_pcb").unwrap();
-    writeln!(out, "\t(version 20241229)").unwrap();
+    let version = board_file_version(design);
+    writeln!(out, "\t(version {version})").unwrap();
     writeln!(out, "\t(generator \"eda-kicad\")").unwrap();
-    writeln!(out, "\t(generator_version \"9.0\")").unwrap();
+    writeln!(out, "\t(generator_version \"{}\")", if version > KICAD9_BOARD_FILE_VERSION { "10.0" } else { "9.0" }).unwrap();
     writeln!(out, "\t(general").unwrap();
     // `(general (thickness ..))`: the board's thickness (`BOARD_DESIGN_SETTINGS::GetBoardThickness()`), KiCad's 1.6 mm unless Board Setup's
     // Physical Stackup says otherwise.
@@ -297,12 +298,14 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             };
             written.entry(z.id.clone()).or_default().push(uuid.clone());
             // The rings kicad-cli stored for the zone on each of its layers, while the zone is the one it filled.
-            let layer_fills: Vec<(String, Vec<crate::zone_fills::KicadRing>)> = match fills {
+            // None for a zone kicad-cli has no current fill of: it is written unfilled (`ZONE::IsFilled`), as is one whose file said so of its rings (`ZoneEntry::unfilled`).
+            let layer_fills: Vec<(String, Vec<crate::zone_fills::KicadRing>)> = match fills.filter(|k| k.current(z).is_some()) {
                 Some(k) => z.layer_set().into_iter().map(|layer| (layer.to_string(), k.rings(z, layer).to_vec())).collect(),
                 None => Vec::new(),
             };
+            let filled = fills.and_then(|k| k.current(z)).is_some_and(|e| !e.unfilled);
             let mut block = String::new();
-            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fills: &layer_fills, enabled_layers: Some(&enabled) });
+            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fills: &layer_fills, filled, enabled_layers: Some(&enabled) });
             zone_blocks.push((z.parent_footprint.clone(), block));
         }
     }
@@ -330,6 +333,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             let n = net_of("a track", &format!("{} on {}", t.net, t.layer), &t.net);
             let lock = if is_locked(&t.id) { " (locked yes)" } else { "" };
             let w = mm(t.width);
+            let mask = design.drawings.as_ref().and_then(|d| d.track_mask(&t.id));
+            let layer = cu_item_layer_words(&t.layer, mask.is_some(), mask.and_then(|m| m.margin));
             if let Some((start, mid, end)) = t.arc() {
                 // `PCB_ARC`: one `(arc (start) (mid) (end) (width))` item. `Track::arc()` only reports an arc
                 // while the polyline still is its tessellation, so an edited arc is written as the segments
@@ -338,14 +343,13 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
                 written.entry(t.id.clone()).or_default().push(uuid.clone());
                 writeln!(
                     out,
-                    "\t(arc (start {} {}) (mid {} {}) (end {} {}) (width {w}){lock} (layer {}) (net {n}) (uuid \"{uuid}\"))",
+                    "\t(arc (start {} {}) (mid {} {}) (end {} {}) (width {w}){lock} {layer} (net {n}) (uuid \"{uuid}\"))",
                     mm(start.x),
                     mm(start.y),
                     mm(mid.x),
                     mm(mid.y),
                     mm(end.x),
                     mm(end.y),
-                    sexpr_str(&t.layer)
                 )
                 .unwrap();
                 continue;
@@ -357,7 +361,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
                 let y2 = mm(pair[1].y);
                 let uuid = crate::duid_for(&format!("segment:{}:{}:{}:{}", t.net, t.layer, ti, j), &if j == 0 { t.id.clone() } else { format!("{}#{j}", t.id) });
                 written.entry(t.id.clone()).or_default().push(uuid.clone());
-                writeln!(out, "\t(segment (start {x1} {y1}) (end {x2} {y2}) (width {w}){lock} (layer {}) (net {n}) (uuid \"{uuid}\"))", sexpr_str(&t.layer)).unwrap();
+                writeln!(out, "\t(segment (start {x1} {y1}) (end {x2} {y2}) (width {w}){lock} {layer} (net {n}) (uuid \"{uuid}\"))").unwrap();
             }
         }
 
@@ -1183,7 +1187,7 @@ pub(crate) fn write_footprint(
         }
         writeln!(out, ")").unwrap();
     }
-    write_attr(out, &extra.attrs);
+    write_attr(out, &extra.attrs, own_extra.is_some_and(|e| e.allow_soldermask_bridges));
 
     // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).
     let mut pads: Vec<(usize, &Pad)> = footprint.pads.iter().enumerate().collect();
@@ -1235,6 +1239,8 @@ pub(crate) fn write_footprint(
     for &(pad_idx, pad) in &pads {
         let art_layers: &[String] = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.art_layers.as_slice()).unwrap_or_default();
         let (no_paste, no_mask, connector) = pad_infos.and_then(|p| p.get(pad_idx)).map_or((false, false, false), |i| (i.no_paste, i.no_mask, i.connector));
+        // The paste and mask of a hole or an edge connector pad that the file had and the default does not give, on the footprint's side.
+        let hole_tech: Option<Vec<String>> = pad_infos.and_then(|p| p.get(pad_idx)).and_then(|i| i.hole_tech_layers.as_ref()).map(|t| t.iter().map(|l| eda_model::fp_art::layer_on_side(l, fp.side)).collect());
         let nth = {
             let n = seen.entry(pad.number.as_str()).or_insert(0);
             *n += 1;
@@ -1308,15 +1314,14 @@ pub(crate) fn write_footprint(
                     // A pad of a board's file that says no drill (the Allegro importer makes them): `format( PAD )` writes the token for a hole of some size only.
                     (None, None) => {}
                 }
-                if art_layers.is_empty() && !no_mask {
-                    write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
-                } else if art_layers.is_empty() {
-                    write!(out, " (layers \"*.Cu\")").unwrap();
-                } else if no_mask {
-                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&["F.Cu", "B.Cu"], art_layers, fp.side)).unwrap();
-                } else {
-                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&["F.Cu", "B.Cu", "F.Mask", "B.Mask"], art_layers, fp.side)).unwrap();
+                // Copper on both sides and the mask on both, or the paste and mask the file's pad had (`PadMaskInfo::hole_tech_layers`: `format( const PAD* )` writes the pad's own set).
+                let mut base: Vec<&str> = vec!["F.Cu", "B.Cu"];
+                match &hole_tech {
+                    Some(tech) => base.extend(tech.iter().map(String::as_str)),
+                    None if !no_mask => base.extend(["F.Mask", "B.Mask"]),
+                    None => {}
                 }
+                write!(out, " {}", crate::fp_art_io::pad_layers_token(&base, art_layers, fp.side)).unwrap();
             }
             PadKind::Smd => {
                 if let Some((ox, oy)) = shape_text.offset {
@@ -1338,6 +1343,8 @@ pub(crate) fn write_footprint(
                 let several = !connector && !smd_layers.is_empty();
                 let base: Vec<&str> = if several {
                     smd_layers
+                } else if let (true, Some(tech)) = (connector, &hole_tech) {
+                    std::iter::once(cu).chain(tech.iter().map(String::as_str)).collect()
                 } else if connector {
                     std::iter::once(cu).chain((!no_mask).then_some(["F.Mask", "B.Mask"]).into_iter().flatten()).collect()
                 } else {
@@ -1434,7 +1441,18 @@ pub(crate) fn write_footprint(
         write!(out, "\t\t(pad {} np_thru_hole {} (at {px} {} {}) (size {} {})", sexpr_str(&pad.number), crate::pad_shape::shape_token(pad.shape), mm(pad.at.1), crate::pad_file_angle(fp.side, fp.rot, pad.rot), mm(pad.size.0), mm(pad.size.1)).unwrap();
         out.push_str(&shape_text.delta);
         out.push_str(&shape_text.corners);
-        write!(out, " {drill} (layers \"*.Mask\")").unwrap();
+        // Its layers (`*.Mask` unless the file's hole had others, `FootprintHole::layers`) and the tokens it had (its mask margin, ..), as `format( const PAD* )` writes them.
+        let layers = match &hole.layers {
+            Some(names) => {
+                let names: Vec<String> = names.iter().map(|l| eda_model::fp_art::layer_on_side(l, fp.side)).collect();
+                if names.is_empty() { "(layers)".to_string() } else { crate::fp_art_io::pad_layers_token(&names.iter().map(String::as_str).collect::<Vec<_>>(), &[], fp.side) }
+            }
+            None => "(layers \"*.Mask\")".to_string(),
+        };
+        write!(out, " {drill} {layers}").unwrap();
+        for token in &hole.tokens {
+            write!(out, " {token}").unwrap();
+        }
         if let Some(c) = hole.clearance {
             write!(out, " (clearance {})", mm(c)).unwrap();
         }
@@ -1583,13 +1601,53 @@ fn teardrop_priorities(zones: &[Zone]) -> std::collections::HashMap<&str, u32> {
 ///
 /// `style` is what the board keeps of the shape beyond `Shape` ([`eda_model::pcb_items::ShapeStyle`]): its hatch, its line endings (`(start_shape ..)` and `(end_shape ..)`
 /// after the stroke, `LINE_ENDING::Format`; an open shape's only) and its net, which `net` has already turned into the file's number (0 is none: `GetNetCode() > 0`).
+/// KiCad 9's board file version (`SEXPR_BOARD_FILE_VERSION` 20241229, "Expand User layers to arbitrary count"): what the writer writes a board as, so that KiCad 9 opens it
+/// (`parseBOARD_unchecked`'s `checkVersion` refuses a newer file outright).
+pub(crate) const KICAD9_BOARD_FILE_VERSION: i64 = 20241229;
+
+/// The first board file version whose vias inherit the board's covering, plugging, capping and filling when they say none of their own (20250228, "ipc-4761 via protection
+/// features"; `parsePCB_VIA`: `if( m_requiredVersion < 20250228 )` sets them all off, "Versions before 10.0 had no protection features other than tenting, so those features must
+/// be interpreted as OFF in legacy boards, not as unspecified (aka: inherit from board stackup)").
+pub(crate) const FIRST_VIA_PROTECTION_VERSION: i64 = 20250228;
+
+/// The file version a board is written as: KiCad 9's, which every reader of this crate's files opens, unless the board holds KiCad 10 data whose meaning the version decides
+/// (`m_requiredVersion` in 25ec2335's `pcb_io_kicad_sexpr_parser.cpp`):
+/// - board defaults for the vias' covering, plugging, capping or filling (`DrawingsSection::setup_tokens`): a via that says nothing inherits them only from 20250228 on, so the
+///   board is written as 20250228. The one other gate between the two versions, the stroked zone fill of before 20250210 (`isStrokedFill`), is off in either, as every zone is
+///   written `(filled_areas_thickness no)`; KiCad 9 cannot read such a setup anyway.
+/// - The later gates are met where the board is read instead, the tree normalised to KiCad 9's meaning: bold text (20260826, `crate::bold_text`), a footprint's library frame
+///   (20260616, `crate::fp_transform`), a reference image's scale (20260623, `crate::pcb_image::file_scale`). A version past 20260616 would have every footprint read in its
+///   library frame, which this writer does not write.
+pub(crate) fn board_file_version(design: &Design) -> i64 {
+    if design.drawings.as_ref().is_some_and(|d| !d.setup_tokens.is_empty()) {
+        FIRST_VIA_PROTECTION_VERSION
+    } else {
+        KICAD9_BOARD_FILE_VERSION
+    }
+}
+
+/// The layer words of a track, an arc or a board shape: `(layer "F.Cu")`, or, for one with a solder-mask opening on an outer copper layer, `(layers "F.Cu" "F.Mask")` and its own
+/// `(solder_mask_margin ..)` when it has one (`pcb_io_kicad_sexpr.cpp::format( PCB_TRACK )` and `format( PCB_SHAPE )`: `formatLayers( GetLayerSet() )` when the set has more than one
+/// layer, and `GetLayerSet` adds `F_Mask` to `F_Cu` and `B_Mask` to `B_Cu` only; the margin `if( HasSolderMask() && GetLocalSolderMaskMargin().has_value() &&
+/// IsExternalCopperLayer( GetLayer() ) )`).
+pub(crate) fn cu_item_layer_words(layer: &str, has_mask: bool, margin: Option<Nm>) -> String {
+    let mask_layer = match layer {
+        "F.Cu" if has_mask => "F.Mask",
+        "B.Cu" if has_mask => "B.Mask",
+        _ => return format!("(layer {})", sexpr_str(layer)),
+    };
+    let margin = margin.map(|m| format!(" (solder_mask_margin {})", mm(m))).unwrap_or_default();
+    format!("(layers {} {}){margin}", sexpr_str(layer), sexpr_str(mask_layer))
+}
+
 pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: Option<&eda_model::pcb_items::ShapeStyle>, net: usize) -> String {
     let sw = |w: Nm| mm(w.max(Nm::ZERO));
     let uuid = crate::duid_for(&format!("shape:{}", shape.id()), shape.id());
     let hatch = style.and_then(|st| st.hatch);
     let ends = style.map(|st| crate::line_ending_io::words(&st.endings, matches!(shape, Shape::Rect { .. } | Shape::Circle { .. } | Shape::Polygon { .. }))).unwrap_or_default();
     // `(net ..)` after the layer, before the uuid.
-    let layer = if net > 0 { format!("(layer {}) (net {net})", sexpr_str(shape.layer())) } else { format!("(layer {})", sexpr_str(shape.layer())) };
+    let layer = cu_item_layer_words(shape.layer(), style.is_some_and(|st| st.solder_mask), style.and_then(|st| st.solder_mask_margin));
+    let layer = if net > 0 { format!("{layer} (net {net})") } else { layer };
     // `(fill yes)`, `(fill no)` or `(fill hatch)`, `(fill reverse_hatch)`, `(fill cross_hatch)`: a solid fill wins over a hatch.
     let fill = |filled: bool| match (filled, hatch) {
         (true, _) => "yes",
@@ -2271,7 +2329,7 @@ mod tests {
     fn kicad_fills_of(design: &Design) -> crate::zone_fills::KicadFills {
         use crate::zone_fills::{zone_signature, KicadFills, KicadRing, ZoneEntry};
         let ring = KicadRing { island: false, pts: vec![[2_000_000, 2_000_000], [4_000_000, 2_000_000], [4_000_000, 4_000_000], [2_000_000, 4_000_000]] };
-        let zones = design.routing.as_ref().unwrap().zones.iter().filter(|z| !z.is_rule_area).map(|z| (z.id.clone(), ZoneEntry { sig: zone_signature(z), layers: z.layer_set().into_iter().map(|l| (l.to_string(), vec![ring.clone()])).collect() })).collect();
+        let zones = design.routing.as_ref().unwrap().zones.iter().filter(|z| !z.is_rule_area).map(|z| (z.id.clone(), ZoneEntry { sig: zone_signature(z), layers: z.layer_set().into_iter().map(|l| (l.to_string(), vec![ring.clone()])).collect(), unfilled: false })).collect();
         KicadFills::new("kicad-cli".into(), "r".into(), 1, zones)
     }
 
@@ -2302,7 +2360,7 @@ mod tests {
         };
         let extra = eda_model::ir::FootprintExtra {
             id: "U1".into(),
-            holes: vec![eda_model::ir::FootprintHole { pad: hole.clone(), clearance: Some(Nm::from_mm(1.2)) }],
+            holes: vec![eda_model::ir::FootprintHole { pad: hole.clone(), clearance: Some(Nm::from_mm(1.2)), layers: None, tokens: vec![] }],
             net_tie_pad_groups: vec!["1, 2".into(), "3".into()],
             ..Default::default()
         };
@@ -2335,7 +2393,7 @@ mod tests {
         let zone = Zone { id: "zg".into(), net: "GND".into(), layer: "F.Cu".into(), outline: square(Nm::from_mm(1.0), Nm::from_mm(1.0), Nm::from_mm(10.0)), ..Default::default() };
         design.routing.as_mut().unwrap().zones = vec![zone.clone()];
         let ring = |island: bool| KicadRing { island, pts: vec![[2_000_000, 2_000_000], [8_123_456, 2_000_000], [8_123_456, 7_654_321], [2_000_000, 7_654_321]] };
-        let entry = ZoneEntry { sig: zone_signature(&zone), layers: std::collections::BTreeMap::from([("F.Cu".to_string(), vec![ring(false), ring(true)])]) };
+        let entry = ZoneEntry { sig: zone_signature(&zone), layers: std::collections::BTreeMap::from([("F.Cu".to_string(), vec![ring(false), ring(true)])]), unfilled: false };
         let kicad = KicadFills::new("kicad-cli 10.99.0".into(), "r1".into(), 2_500, std::collections::BTreeMap::from([("zg".to_string(), entry)]));
 
         let out = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad)).unwrap();

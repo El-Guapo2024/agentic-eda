@@ -254,6 +254,7 @@ export function SheetPropertiesDialog({ id }: { id: string }) {
 }
 
 function SheetForm({ sheet }: { sheet: { id: string; name: string; file: string; page?: string } }) {
+  const here = useStudioState().currentSheetPath;
   const close = useClose();
   const send = useSend(close);
   const [name, setName] = useState(sheet.name);
@@ -263,7 +264,7 @@ function SheetForm({ sheet }: { sheet: { id: string; name: string; file: string;
   const fileOk = file.trim().length > 0 && !/[\\/]/.test(file);
   const pageOk = /^[\p{L}\p{N}]*$/u.test(page.trim());
   const canOk = name.trim().length > 0 && fileOk && pageOk;
-  const submit = () => canOk && void send(sheetEditCmd(sheet, { name, file, page }));
+  const submit = () => canOk && void send(sheetEditCmd(sheet, { name, file, page }, [...here, sheet.id]));
   return (
     <SchDialogShell title="Sheet Properties" width={440} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>

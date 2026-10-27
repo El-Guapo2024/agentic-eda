@@ -1,9 +1,11 @@
 //! The sheets of a hierarchy, in the orders eeschema walks them (`SCH_SHEET_LIST`, `eeschema/sch_sheet_path.cpp`).
 //!
 //! A sheet here is a *placement*: the chain of [`SheetInstance::id`]s from the root down (`SCH_SHEET_PATH`), the root being the empty
-//! path. The walk is depth first with the root first (`SCH_SHEET_LIST::BuildSheetList`), and a sheet's *virtual page number* is its
-//! 1-based place in that walk (`SCH_SHEET_PATH::GetVirtualPageNumber`). The page a sheet *shows* is the text the user gave it
-//! (Edit Sheet Page Number, [`SheetInstance::page`]), else its virtual page number; Next / Previous Sheet, Find across sheets and the
+//! path. The walk is depth first with the root first (`SCH_SHEET_LIST::BuildSheetList`), the sheets of a screen in `SCH_SCREEN::GetSheets`'
+//! order (by place: left to right, then top to bottom), and a sheet's *virtual page number* is its 1-based place in that walk
+//! (`SCH_SHEET_PATH::GetVirtualPageNumber`). The page a sheet *shows* is the page stored for its sheet path ([`page_on`]: Edit Sheet Page
+//! Number, or the number a new sheet was given, [`keep_pages`]), else its virtual page number -- which, for a schematic where no page is
+//! stored, is what `SCH_SHEET_LIST::SetInitialPageNumbers` numbers it on load; Next / Previous Sheet, Find across sheets and the
 //! "sheet number x 100" annotation all count by it (`GetPageNumberAsInt`, `SortByPageNumbers`).
 //!
 //! The studio keeps the same rules in `kicad-port/sheetPages.ts`; this is the server's copy, so a search or an annotation counts the
@@ -57,10 +59,11 @@ pub fn walk(design: &Design) -> Vec<SheetEntry> {
         if path.len() > MAX_DEPTH {
             return;
         }
-        for child in &sch.sheets {
+        for child in sheets_in_order(sch) {
             let Some(content) = design.sheet_contents.as_ref().and_then(|c| c.get(&child.file)) else { continue };
+            let page = page_on(sch, child, path).to_string();
             path.push(child.id.clone());
-            out.push(SheetEntry { path: path.clone(), name: child.name.clone(), file: child.file.clone(), page: child.page.clone(), virtual_page: out.len() + 1 });
+            out.push(SheetEntry { path: path.clone(), name: child.name.clone(), file: child.file.clone(), page, virtual_page: out.len() + 1 });
             visit(design, content, path, out);
             path.pop();
         }
@@ -70,6 +73,126 @@ pub fn walk(design: &Design) -> Vec<SheetEntry> {
         visit(design, root, &mut Vec::new(), &mut out);
     }
     out
+}
+
+/// `SCH_SCREEN::GetSheets`: the sheets drawn on `sch` in the order the hierarchy is walked -- by the x of their place, then its y, then (two
+/// sheets at one place) by id, where KiCad compares the uuids (the id is the uuid for a sheet read from a file; `eda_kicad::sheet_uuid`
+/// makes one from any other id, which may order such a tie otherwise).
+pub fn sheets_in_order(sch: &SchematicSection) -> Vec<&SheetInstance> {
+    let mut sheets: Vec<&SheetInstance> = sch.sheets.iter().collect();
+    sheets.sort_by(|a, b| (a.at.x, a.at.y, &a.id).cmp(&(b.at.x, b.at.y, &b.id)));
+    sheets
+}
+
+/// The page stored for `placement` (a sheet drawn on `screen`) on the sheet path `parent` + its id, `parent` being the path of the screen
+/// (`SCH_SHEET::getPageNumber( aParentPath )`, which looks the `SCH_SHEET_INSTANCE` up by that path): the screen's per-path entry
+/// ([`crate::sch_extras::SchExtras::sheet_pages`]), else the placement's own [`SheetInstance::page`]. Empty: none was stored.
+pub fn page_on<'a>(screen: &'a SchematicSection, placement: &'a SheetInstance, parent: &[String]) -> &'a str {
+    screen.extras.sheet_pages.get(&placement.id).and_then(|m| m.get(&parent.join("/"))).map_or(placement.page.as_str(), String::as_str)
+}
+
+/// The screen of the sheet at `path`, to change (the root's `design.schematic` for the empty path).
+fn screen_of_mut<'a>(design: &'a mut Design, path: &[String]) -> Option<&'a mut SchematicSection> {
+    let mut file: Option<String> = None;
+    {
+        let mut here = design.schematic.as_ref()?;
+        for id in path {
+            let placement = here.sheets.iter().find(|s| s.id == *id)?;
+            here = design.sheet_contents.as_ref()?.get(&placement.file)?;
+            file = Some(placement.file.clone());
+        }
+    }
+    match file {
+        None => design.schematic.as_mut(),
+        Some(f) => design.sheet_contents.as_mut()?.get_mut(&f),
+    }
+}
+
+/// `SCH_SHEET_PATH::SetPageNumber`: store `page` for the sheet at `path` only (`SCH_SHEET::setPageNumber( aParentPath, aPageNumber )`, its
+/// instance on that path). A sheet whose screen is shown once has one path and its page is [`SheetInstance::page`]; a sheet on a screen shown on
+/// several paths gets an entry of that screen's [`crate::sch_extras::SchExtras::sheet_pages`]. False when there is no sheet at `path`.
+pub fn set_page(design: &mut Design, path: &[String], page: &str) -> bool {
+    let Some((id, parent)) = path.split_last() else { return false };
+    let shown_on = match parent.split_last() {
+        None => 1,
+        Some(_) => match placement_at(design, parent) {
+            Some(p) => placement_counts(design).get(&p.file).copied().unwrap_or(0),
+            None => return false,
+        },
+    };
+    let Some(screen) = screen_of_mut(design, parent) else { return false };
+    if !screen.sheets.iter().any(|s| s.id == *id) {
+        return false;
+    }
+    if shown_on <= 1 {
+        screen.extras.sheet_pages.remove(id);
+        if let Some(s) = screen.sheets.iter_mut().find(|s| s.id == *id) {
+            s.page = page.to_string();
+        }
+    } else {
+        screen.extras.sheet_pages.entry(id.clone()).or_default().insert(parent.join("/"), page.to_string());
+    }
+    true
+}
+
+/// The placement `id` (on whatever screen it is drawn), its per-path pages dropped, so that what is set on its own [`SheetInstance::page`] is
+/// the page of every sheet path it is on. `None` when no screen draws a sheet with that id.
+pub fn placement_for_every_path<'a>(design: &'a mut Design, id: &str) -> Option<&'a mut SheetInstance> {
+    let screens = design.schematic.iter_mut().chain(design.sheet_contents.iter_mut().flat_map(|c| c.values_mut()));
+    for screen in screens {
+        if screen.sheets.iter().any(|s| s.id == id) {
+            screen.extras.sheet_pages.remove(id);
+            return screen.sheets.iter_mut().find(|s| s.id == id);
+        }
+    }
+    None
+}
+
+/// `SCH_SHEET_LIST::GetNextPageNumber`: the first whole number from 1 up that no page of `pages` is (a page counts when it reads as a whole
+/// number above 0, `ToLong`).
+pub fn next_page_number<'a>(pages: impl IntoIterator<Item = &'a str>) -> String {
+    let used: std::collections::BTreeSet<i64> = pages.into_iter().filter_map(to_long).filter(|n| *n > 0).collect();
+    let mut next = 1;
+    while used.contains(&next) {
+        next += 1;
+    }
+    next.to_string()
+}
+
+/// After an edit, the page numbers KiCad would show: KiCad stores a page for every sheet path -- `SCH_SHEET_LIST::SetInitialPageNumbers` numbers
+/// a schematic whose pages are all empty when it is loaded (`SCH_EDIT_FRAME::OpenProjectFiles`, eeschema/files-io.cpp), and a sheet path made
+/// later gets a number of its own: a drawn sheet `GetNextPageNumber` (`SCH_DRAWING_TOOLS::DrawSheet`), an imported one and the sheets inside it
+/// the lowest free one (`SCH_SHEET_LIST::AddNewSheetInstances`, which finds no instance of a path the file did not know, so a page the file gave
+/// a sheet inside it is not kept), a pasted one and the sheets inside it the first free one (`SCH_EDITOR_CONTROL::Paste`, `PageNumberExists`) --
+/// and a page once given stays when other sheets come and go. Here a sheet path with no stored page shows its virtual page number, so:
+///  * a path of `before` (the walk before the edit) that had no stored page and still has none, but whose place in the walk moved (a sheet came
+///    or went before it), keeps the page it showed: it is stored;
+///  * a path new to the walk gets the next free page number ([`next_page_number`] over the pages the other paths show), in walk order.
+///
+/// A walk with no path of `before` left but the root (the schematic replaced, Reorganize into Module Sheets) is a schematic loaded anew and is
+/// left to its virtual page numbers, as `SetInitialPageNumbers` would number it. The three KiCad rules for a new path differ only for a page that
+/// is a whole number written otherwise (`"01"`): one rule, `GetNextPageNumber`'s, is used here. Returns whether anything was stored.
+pub fn keep_pages(design: &mut Design, before: &[SheetEntry]) -> bool {
+    let after = walk(design);
+    let old: std::collections::BTreeMap<&[String], &SheetEntry> = before.iter().map(|e| (e.path.as_slice(), e)).collect();
+    if !after.iter().skip(1).any(|e| old.contains_key(e.path.as_slice())) {
+        return false;
+    }
+    let mut changed = false;
+    for e in after.iter().skip(1) {
+        let Some(b) = old.get(e.path.as_slice()) else { continue };
+        if b.page.is_empty() && e.page.is_empty() && b.virtual_page != e.virtual_page {
+            changed |= set_page(design, &e.path, &b.effective_page());
+        }
+    }
+    let after = if changed { walk(design) } else { after };
+    let mut used: Vec<String> = after.iter().filter(|e| e.path.is_empty() || old.contains_key(e.path.as_slice())).map(SheetEntry::effective_page).collect();
+    for e in after.iter().skip(1).filter(|e| !old.contains_key(e.path.as_slice())) {
+        let page = next_page_number(used.iter().map(String::as_str));
+        changed |= set_page(design, &e.path, &page);
+        used.push(page);
+    }
+    changed
 }
 
 /// The screens some sheet shows: the files of the placements reachable from the root. A screen no sheet shows any more (its sheet was deleted) is
@@ -323,6 +446,101 @@ use super::*;
         assert_eq!(within(&w, &[], true).len(), 4);
         assert!(screen_of(&d, &["a".to_string(), "c".to_string()]).is_some());
         assert!(placement_at(&d, &["b".to_string()]).is_some_and(|p| p.name == "B"));
+    }
+
+    fn at_x(mut p: SheetInstance, x_mm: f64) -> SheetInstance {
+        p.at = Point { x: Nm::from_mm(x_mm), y: Nm::ZERO };
+        p
+    }
+
+    fn pages(d: &Design) -> Vec<(String, String)> {
+        walk(d).into_iter().map(|e| (e.path_text(), e.effective_page())).collect()
+    }
+
+    #[test]
+    fn a_screen_s_sheets_are_walked_by_place_left_to_right_then_top_to_bottom() {
+        let mut low = at_x(placement("low", "Low", "a.kicad_sch", ""), 10.0);
+        low.at.y = Nm::from_mm(50.0);
+        let d = design(
+            section(vec![at_x(placement("c", "C", "a.kicad_sch", ""), 90.0), low, at_x(placement("b", "B", "a.kicad_sch", ""), 10.0), at_x(placement("a", "A", "a.kicad_sch", ""), 0.0)]),
+            vec![("a.kicad_sch", section(vec![]))],
+        );
+        assert_eq!(walk(&d).iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), vec!["", "A", "B", "Low", "C"], "x first, then y (SCH_SCREEN::GetSheets)");
+    }
+
+    #[test]
+    fn the_next_page_number_is_the_first_whole_number_no_page_is() {
+        assert_eq!(next_page_number(["1", "2", "4", "x", "-3"]), "3");
+        assert_eq!(next_page_number([]), "1");
+        assert_eq!(next_page_number(["01", "2"]), "3", "GetNextPageNumber reads a page as a number");
+    }
+
+    /// root, then A, B, C left to right, each with a screen of its own; no page stored.
+    fn three_sheets() -> Design {
+        design(
+            section(vec![at_x(placement("a", "A", "a.kicad_sch", ""), 0.0), at_x(placement("b", "B", "b.kicad_sch", ""), 10.0), at_x(placement("c", "C", "c.kicad_sch", ""), 20.0)]),
+            vec![("a.kicad_sch", section(vec![])), ("b.kicad_sch", section(vec![])), ("c.kicad_sch", section(vec![])), ("d.kicad_sch", section(vec![]))],
+        )
+    }
+
+    #[test]
+    fn a_new_sheet_gets_the_next_free_page_and_the_others_keep_theirs() {
+        let mut d = three_sheets();
+        let s = |v: &[(&str, &str)]| v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
+        assert_eq!(pages(&d), s(&[("", "1"), ("a", "2"), ("b", "3"), ("c", "4")]), "no page stored: SetInitialPageNumbers' numbers");
+        // a sheet drawn inside A comes second in the walk: B and C would move on, KiCad keeps the pages they were given on load
+        let before = walk(&d);
+        d.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap().sheets.push(placement("d", "D", "d.kicad_sch", "7"));
+        assert!(keep_pages(&mut d, &before));
+        assert_eq!(pages(&d), s(&[("", "1"), ("a", "2"), ("a/d", "5"), ("b", "3"), ("c", "4")]), "D: GetNextPageNumber, the page the copy carried is not kept");
+        // a sheet deleted before them: the pages stay
+        let before = walk(&d);
+        d.schematic.as_mut().unwrap().sheets.retain(|p| p.id != "a");
+        assert!(!keep_pages(&mut d, &before), "B and C hold their pages already");
+        assert_eq!(pages(&d), s(&[("", "1"), ("b", "3"), ("c", "4")]));
+        // a sheet deleted from a schematic with no page stored: the ones after it keep the pages they showed
+        let mut d = three_sheets();
+        let before = walk(&d);
+        d.schematic.as_mut().unwrap().sheets.retain(|p| p.id != "a");
+        keep_pages(&mut d, &before);
+        assert_eq!(pages(&d), s(&[("", "1"), ("b", "3"), ("c", "4")]));
+        // nothing moved: nothing is stored
+        let mut d = three_sheets();
+        let before = walk(&d);
+        assert!(!keep_pages(&mut d, &before));
+        assert!(d.schematic.as_ref().unwrap().sheets.iter().all(|p| p.page.is_empty()));
+    }
+
+    #[test]
+    fn a_schematic_replaced_whole_is_numbered_as_loaded() {
+        let mut d = three_sheets();
+        let before = walk(&d);
+        d.schematic = Some(section(vec![at_x(placement("x", "X", "a.kicad_sch", ""), 0.0)]));
+        assert!(!keep_pages(&mut d, &before));
+        assert!(d.schematic.as_ref().unwrap().sheets[0].page.is_empty());
+    }
+
+    #[test]
+    fn a_sheet_on_a_screen_shown_twice_has_a_page_per_path() {
+        // P1 and P2 both show s.kicad_sch, which draws N
+        let mut d = design(
+            section(vec![at_x(placement("p1", "P1", "s.kicad_sch", ""), 0.0), at_x(placement("p2", "P2", "s.kicad_sch", ""), 10.0)]),
+            vec![("s.kicad_sch", section(vec![placement("n", "N", "n.kicad_sch", "")])), ("n.kicad_sch", section(vec![]))],
+        );
+        let shown = |d: &Design| pages(d).into_iter().map(|(_, p)| p).collect::<Vec<_>>();
+        assert_eq!(shown(&d), vec!["1", "2", "3", "4", "5"]);
+        let n = |p: &str| vec![p.to_string(), "n".to_string()];
+        assert!(set_page(&mut d, &n("p2"), "9"));
+        assert_eq!(shown(&d), vec!["1", "2", "3", "4", "9"], "P1's N keeps its page");
+        let screen = &d.sheet_contents.as_ref().unwrap()["s.kicad_sch"];
+        assert_eq!((screen.sheets[0].page.as_str(), screen.extras.sheet_pages["n"]["p2"].as_str()), ("", "9"));
+        // a page set on a sheet shown once is the sheet's own
+        assert!(set_page(&mut d, &["p1".to_string()], "A"));
+        assert_eq!(d.schematic.as_ref().unwrap().sheets[0].page, "A");
+        assert!(!set_page(&mut d, &["p1".to_string(), "nope".to_string()], "2"), "no such sheet");
+        // the whole sheet, every path
+        placement_for_every_path(&mut d, "n").unwrap().page = "4".into();
+        assert_eq!(shown(&d), vec!["1", "A", "4", "4", "4"], "N is page 4 on both paths (P2 is page 4 by its place)");
     }
 
     #[test]

@@ -251,7 +251,7 @@ impl Springback {
 
     fn tag(base: &Node, world: World, area: Option<Area>, seq: i32, locked: bool) -> Tag {
         let removed = world.removed(base);
-        let mut added = Node::new();
+        let mut added = base.empty_like();
         world.add_to(base, &mut added);
         Tag { world, area, seq, locked, removed, added }
     }

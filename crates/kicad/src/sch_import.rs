@@ -527,6 +527,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     let mut sheet_locked: Vec<bool> = Vec::new();
     // how each sheet pin's text is set, by the pin's id (`SchExtras::sheet_pin_looks`)
     let mut sheet_pin_looks: Vec<(String, eda_model::sch_extras::LabelLook)> = Vec::new();
+    // the pages of a sheet on the paths after its first (`SchExtras::sheet_pages`)
+    let mut sheet_pages: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> = std::collections::BTreeMap::new();
     for s in sexpr::find_all(root, "sheet") {
         let id = sexpr::find(s, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
         let name = sheet_property_text(s, "Sheetname").unwrap_or_default();
@@ -550,14 +552,24 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             .collect();
         // `(instances (project "p" (path "/<parent>" (page "2"))))`: this placement's page number. Page "1" is the root's, and what this
         // project's own writer puts on a sheet whose page was never set -- both read back as "no explicit page" (`SheetInstance::page`).
-        let page = sexpr::find(s, "instances")
-            .and_then(|i| sexpr::find(i, "project"))
-            .and_then(|p| sexpr::find(p, "path"))
-            .and_then(|p| sexpr::find(p, "page"))
-            .and_then(|pg| sexpr::txt(pg, 1))
-            .filter(|pg| !pg.is_empty() && *pg != "1")
-            .unwrap_or_default()
-            .to_string();
+        // A sheet on a screen shown on several paths has one `(path ..)` per path, each with its own page (`SCH_SHEET::m_instances`): the first is
+        // the placement's page and a later one whose page differs is kept for its path (`SchExtras::sheet_pages`, by the model's path of the
+        // screen: the path's sheet uuids, the root's own left out).
+        let instance_pages: Vec<(&str, &str)> = sexpr::find(s, "instances")
+            .into_iter()
+            .flat_map(|i| sexpr::find_all(i, "project"))
+            .flat_map(|p| sexpr::find_all(p, "path"))
+            .filter_map(|p| Some((sexpr::txt(p, 1)?, sexpr::find(p, "page").and_then(|pg| sexpr::txt(pg, 1))?)))
+            .collect();
+        let page = instance_pages.first().map(|(_, pg)| *pg).filter(|pg| !pg.is_empty() && *pg != "1").unwrap_or_default().to_string();
+        if let Some((_, first)) = instance_pages.first() {
+            for (path, pg) in instance_pages.iter().skip(1).filter(|(_, pg)| pg != first) {
+                let parent: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).skip(1).collect();
+                if !id.is_empty() {
+                    sheet_pages.entry(id.clone()).or_default().insert(parent.join("/"), pg.to_string());
+                }
+            }
+        }
         sheets.push(SheetInstance { id, name, file, at: mm_point_to_um(at), size: (crate::import::sch_mm_to_nm(size.0), crate::import::sch_mm_to_nm(size.1)), pins, page });
         sheet_locked.push(is_locked(s));
         notes.sheets_not_descended += 1;
@@ -624,6 +636,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         sch.extras.body_styles.extend(body_style_entries);
         sch.extras.pin_swaps.extend(pin_swap_entries);
         sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
+        sch.extras.sheet_pages.extend(sheet_pages);
         // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
         for (id, (spin, look)) in sch.labels.iter().map(|l| l.id.clone()).zip(label_geometry) {
             if id.is_empty() {

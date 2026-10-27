@@ -814,7 +814,7 @@ fn verify_dp_bypass(cache: &HitCache, base: (&ChainHits, &ChainHits), pair: &cra
     let (ref_base, coupled_base) = if ref_is_p { (pair.p_pair_line(), pair.n_pair_line()) } else { (pair.n_pair_line(), pair.p_pair_line()) };
     let ref_line = PairLine { pts: new_ref, ..ref_base };
     let coupled_line = PairLine { pts: new_coupled, ..coupled_base };
-    !(cache.hits_with_base(base.0, &ref_line) || cache.hits_with_base(base.1, &coupled_line) || ref_line.hits_line(&coupled_line, cache.rules))
+    !(cache.hits_with_base(base.0, &ref_line) || cache.hits_with_base(base.1, &coupled_line) || ref_line.hits_line(&coupled_line, cache.node, cache.rules))
 }
 
 /// `coupledBypass`: a new route for the coupled line that follows the bypass the reference line took -- from a vertex of the coupled line
@@ -976,7 +976,7 @@ mod tests {
         use crate::layer::LayerRange;
         let (net, other) = (net_of("SIG"), net_of("GND"));
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: other, layers: LayerRange::new(0, 0), pos: Point { x: mm(2.0), y: mm(0.75) }, shape: Shape::Circle { c: Point { x: mm(2.0), y: mm(0.75) }, r: mm(0.2) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: other, layers: LayerRange::new(0, 0), pos: Point { x: mm(2.0), y: mm(0.75) }, shape: Shape::Circle { c: Point { x: mm(2.0), y: mm(0.75) }, r: mm(0.2) }, source: "U1.1".into(), edge: false, rule: 0 }));
         let hat = vec![Point { x: mm(-1.0), y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: mm(1.5) }, Point { x: mm(3.0), y: mm(1.5) }, Point { x: mm(4.0), y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];
         let line = Line::from_points(net, 0, mm(0.2), hat.clone());
         let straight = vec![Point { x: mm(-1.0), y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];
@@ -986,12 +986,12 @@ mod tests {
         assert!(kept.pts.iter().any(|q| q.y >= mm(0.75)), "the pad is inside the hat: the shortcut under it is refused: {:?}", kept.pts);
         // a pad of the line's own net is no topology to keep
         let mut same = Node::new();
-        same.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 0), pos: Point { x: mm(2.0), y: mm(0.75) }, shape: Shape::Circle { c: Point { x: mm(2.0), y: mm(0.75) }, r: mm(0.2) }, source: "U1.1".into(), edge: false }));
+        same.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 0), pos: Point { x: mm(2.0), y: mm(0.75) }, shape: Shape::Circle { c: Point { x: mm(2.0), y: mm(0.75) }, r: mm(0.2) }, source: "U1.1".into(), edge: false, rule: 0 }));
         let own = optimize_with(&line, &same, &rules(), &[], effort::MERGE_SEGMENTS | effort::KEEP_TOPOLOGY);
         assert_eq!(own.pts, straight);
         // and neither is a pad on the other layer
         let mut below = Node::new();
-        below.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(1, 1), pos: Point { x: mm(2.0), y: mm(0.75) }, shape: Shape::Circle { c: Point { x: mm(2.0), y: mm(0.75) }, r: mm(0.2) }, source: "U1.1".into(), edge: false }));
+        below.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(1, 1), pos: Point { x: mm(2.0), y: mm(0.75) }, shape: Shape::Circle { c: Point { x: mm(2.0), y: mm(0.75) }, r: mm(0.2) }, source: "U1.1".into(), edge: false, rule: 0 }));
         let other_layer = optimize_with(&line, &below, &rules(), &[], effort::MERGE_SEGMENTS | effort::KEEP_TOPOLOGY);
         assert_eq!(other_layer.pts, straight);
     }
@@ -1021,7 +1021,7 @@ mod tests {
         use crate::layer::LayerRange;
         let net = net_of("SIG");
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net.clone(), layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Rect { x0: mm(-1.0), y0: mm(-0.25), x1: mm(1.0), y1: mm(0.25) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net.clone(), layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Rect { x0: mm(-1.0), y0: mm(-0.25), x1: mm(1.0), y1: mm(0.25) }, source: "U1.1".into(), edge: false, rule: 0 }));
         // Drawn leaving the pad centre straight down, then across.
         let line = Line::from_points(net, 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(3.0) }, Point { x: mm(5.0), y: mm(3.0) }, Point { x: mm(8.0), y: mm(3.0) }]);
         let out = optimize_with(&line, &node, &rules(), &[], effort::SMART_PADS);
@@ -1040,7 +1040,7 @@ mod tests {
         use crate::layer::LayerRange;
         let net = net_of("SIG");
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net.clone(), layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::RoundRect { x0: mm(-1.0), y0: mm(-0.25), x1: mm(1.0), y1: mm(0.25), r: mm(0.125) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net.clone(), layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::RoundRect { x0: mm(-1.0), y0: mm(-0.25), x1: mm(1.0), y1: mm(0.25), r: mm(0.125) }, source: "U1.1".into(), edge: false, rule: 0 }));
         let line = Line::from_points(net, 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(3.0) }, Point { x: mm(5.0), y: mm(3.0) }, Point { x: mm(8.0), y: mm(3.0) }]);
         let out = optimize_with(&line, &node, &rules(), &[], effort::SMART_PADS);
         assert_eq!(out.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(3.0), y: mm(3.0) }, Point { x: mm(8.0), y: mm(3.0) }]);
@@ -1057,7 +1057,7 @@ mod tests {
         let net = net_of("SIG");
         let mut node = Node::new();
         // a GND pad on the line's last leg, far from the obtuse zigzag at its start
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 0), pos: Point { x: mm(9.0), y: mm(-2.0) }, shape: Shape::Circle { c: Point { x: mm(9.0), y: mm(-2.0) }, r: mm(0.3) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 0), pos: Point { x: mm(9.0), y: mm(-2.0) }, shape: Shape::Circle { c: Point { x: mm(9.0), y: mm(-2.0) }, r: mm(0.3) }, source: "U1.1".into(), edge: false, rule: 0 }));
         let pts = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(3.0), y: mm(-0.5) }, Point { x: mm(4.0), y: mm(-1.5) }, Point { x: mm(6.0), y: mm(-2.0) }, Point { x: mm(12.0), y: mm(-2.0) }];
         let out = merge_obtuse(pts.clone(), &node, 0, mm(0.2), &net, &rules(), &[]);
         assert!(out.len() < pts.len(), "merged despite the pad on the last leg: {out:?}");
@@ -1074,9 +1074,9 @@ mod tests {
     fn rect_pad_has_eight_breakouts_and_circle_eight() {
         use crate::item::{Item, Solid};
         use crate::layer::LayerRange;
-        let rect = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Rect { x0: mm(-0.5), y0: mm(-0.25), x1: mm(0.5), y1: mm(0.25) }, source: "U1.1".into(), edge: false });
+        let rect = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Rect { x0: mm(-0.5), y0: mm(-0.25), x1: mm(0.5), y1: mm(0.25) }, source: "U1.1".into(), edge: false, rule: 0 });
         assert_eq!(breakouts(mm(0.2), &rect).len(), 8);
-        let circ = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.3) }, source: "U1.2".into(), edge: false });
+        let circ = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.3) }, source: "U1.2".into(), edge: false, rule: 0 });
         assert_eq!(breakouts(mm(0.2), &circ).len(), 8);
     }
 
@@ -1116,7 +1116,7 @@ mod tests {
         use crate::layer::LayerRange;
         let mut node = Node::new();
         // a pad the line's first leg already runs through
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.3) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.3) }, source: "U1.1".into(), edge: false, rule: 0 }));
         let rules = rules();
         let line = Line::from_points(net_of("SIG"), 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(3.0), y: Nm::ZERO }, Point { x: mm(3.5), y: mm(0.5) }, Point { x: mm(5.0), y: mm(0.5) }, Point { x: mm(5.5), y: mm(1.0) }, Point { x: mm(8.0), y: mm(1.0) }]);
         let out = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, None);
@@ -1133,7 +1133,7 @@ mod tests {
         // A pad directly in the path of the straight-line shortcut between
         // the line's endpoints, but clear of the detour the line already
         // takes around it.
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(1.5), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(1.5), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(1.5), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(1.5), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 }));
         let rules = rules();
         let line = Line::from_points(net_of("SIG"), 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(1.0) }, Point { x: mm(3.0), y: mm(1.0) }, Point { x: mm(3.0), y: Nm::ZERO }]);
         assert!(!collides(&node, &line.pts, 0, mm(0.2), &net_of("SIG"), &rules, &[]), "test setup: the original detour must itself be collision-free");
@@ -1191,7 +1191,7 @@ mod tests {
         // approach to it to be genuinely clear, while still sitting
         // exactly on the (0,0)-(35000,0) shortcut the merge would
         // otherwise produce.
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(20.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(20.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(20.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(20.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 }));
         let rules = rules();
         let net = net_of("SIG");
         let pts = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(30.0), y: mm(-5.0) }, Point { x: mm(40.0), y: mm(5.0) }, Point { x: mm(50.0), y: mm(5.0) }];
@@ -1216,7 +1216,7 @@ mod tests {
         use crate::layer::LayerRange;
         let mut node = Node::new();
         for (x, y) in [(mm(2.0), mm(0.4)), (mm(6.0), mm(-0.7)), (mm(9.0), mm(0.9))] {
-            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x, y }, shape: Shape::Circle { c: Point { x, y }, r: mm(0.3) }, source: "U1.1".into(), edge: false }));
+            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x, y }, shape: Shape::Circle { c: Point { x, y }, r: mm(0.3) }, source: "U1.1".into(), edge: false, rule: 0 }));
         }
         node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(4.0), y: mm(-2.0) }, b: Point { x: mm(4.0), y: mm(-0.75) }, width: mm(0.2), source_track: None, locked: false }));
         let mut dp = crate::diff_pair::DiffPair::default();
@@ -1273,7 +1273,7 @@ mod tests {
         let rules = pair_rules();
         let before = dp.clone();
         let world_hit = |dp: &crate::diff_pair::DiffPair| dp.p_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY) || dp.n_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY);
-        assert!(!world_hit(&before) && !before.p_pair_line().hits_line(&before.n_pair_line(), &rules), "test setup: the pair as walked is clear");
+        assert!(!world_hit(&before) && !before.p_pair_line().hits_line(&before.n_pair_line(), &node, &rules), "test setup: the pair as walked is clear");
         optimize_pair(&node, &rules, &mut dp);
         // the ends stay
         assert_eq!((dp.p.first(), dp.p.last()), (before.p.first(), before.p.last()));
@@ -1283,7 +1283,7 @@ mod tests {
         // never longer (a micrometre of rounding aside), clear of the world, clear of each other
         assert!(crate::diff_pair::chain_length(&dp.p) <= crate::diff_pair::chain_length(&before.p) + Nm::new(1));
         assert!(crate::diff_pair::chain_length(&dp.n) <= crate::diff_pair::chain_length(&before.n) + Nm::new(1));
-        assert!(!dp.p_pair_line().hits_line(&dp.n_pair_line(), &rules), "{dp:?}");
+        assert!(!dp.p_pair_line().hits_line(&dp.n_pair_line(), &node, &rules), "{dp:?}");
         assert!(!world_hit(&dp), "{dp:?}");
         // and no less coupled than it was: `mergeDpStep` only accepts a merge that keeps the coupled length
         assert!(dp.coupled_length() + 2000.0 >= before.coupled_length(), "{} < {}", dp.coupled_length(), before.coupled_length());
@@ -1295,13 +1295,13 @@ mod tests {
         use crate::item::{Item, Solid};
         use crate::layer::LayerRange;
         let (mut node, mut dp) = pair_world();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.5), y: mm(0.9) }, shape: Shape::Circle { c: Point { x: mm(3.5), y: mm(0.9) }, r: mm(0.3) }, source: "U1.2".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.5), y: mm(0.9) }, shape: Shape::Circle { c: Point { x: mm(3.5), y: mm(0.9) }, r: mm(0.3) }, source: "U1.2".into(), edge: false, rule: 0 }));
         let rules = pair_rules();
         let before = dp.clone();
         let world_hit = |dp: &crate::diff_pair::DiffPair| dp.p_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY) || dp.n_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY);
         assert!(!world_hit(&before), "test setup: the pad is clear of the pair as walked");
         optimize_pair(&node, &rules, &mut dp);
-        assert!(!world_hit(&dp) && !dp.p_pair_line().hits_line(&dp.n_pair_line(), &rules), "{dp:?}");
+        assert!(!world_hit(&dp) && !dp.p_pair_line().hits_line(&dp.n_pair_line(), &node, &rules), "{dp:?}");
         assert_eq!((dp.p, dp.n), (before.p, before.n));
     }
 }

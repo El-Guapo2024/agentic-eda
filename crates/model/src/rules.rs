@@ -198,7 +198,8 @@ impl Constraints {
         let mut out = Vec::new();
         let mut range = |name: &'static str, v: Nm, min_nm: Nm, max_nm: Nm| {
             if v < min_nm || v > max_nm {
-                out.push((name, format!("Value must be between {} and {} mm.", fmt_mm(min_nm), fmt_mm(max_nm))));
+                // `addRangeError` formats each bound with `StringFromValue( .., true )`, which puts the unit on each of them.
+                out.push((name, format!("Value must be between {} mm and {} mm.", fmt_mm(min_nm), fmt_mm(max_nm))));
             }
         };
         range("min_clearance", self.min_clearance_nm, Nm::ZERO, Nm::new(25_000_000));
@@ -217,7 +218,8 @@ impl Constraints {
         range("min_text_thickness", self.min_silk_text_thickness_nm, Nm::ZERO, Nm::new(25_000_000));
         // `-0.01` mm is the flag for the pre-6.0 way of measuring the edge.
         range("min_copper_edge_clearance", self.min_copper_edge_clearance_nm, Nm::new(-10_000), Nm::new(25_000_000));
-        range("max_error", self.max_error_nm, Nm::new(1000), Nm::new(1_000_000));
+        // `MAXIMUM_ERROR_SIZE_MM`, the bound the dialog checks -- not the 1 mm of the `rules.max_error` load range.
+        range("max_error", self.max_error_nm, Nm::new(1000), Nm::new(100_000));
         if self.min_resolved_spokes > 99 {
             out.push(("min_resolved_spokes", "Value must be between 0 and 99.".into()));
         }
@@ -233,26 +235,9 @@ fn fmt_mm(nm: Nm) -> String {
 }
 
 /// Board Stackup > Solder Mask/Paste. `SolderMaskRules` is the model's own copy of the same values (the mask half
-/// is read by the solder-mask checks and written to the `.kicad_pcb`); the paste half is new.
+/// is read by the solder-mask checks and written to the `.kicad_pcb`); the paste half is new. The page itself
+/// (`PANEL_SETUP_MASK_AND_PASTE::TransferDataFromWindow`) checks nothing: it stores the values and returns true.
 pub type MaskPaste = SolderMaskRules;
-
-/// `ValidateDesignRules`' solder mask and paste ranges: `(setting name, message)` for each value out of range.
-pub fn validate_mask_paste(m: &MaskPaste) -> Vec<(&'static str, String)> {
-    let mut out = Vec::new();
-    let mut range = |name: &'static str, v: Nm, min_nm: Nm, max_nm: Nm| {
-        if v < min_nm || v > max_nm {
-            out.push((name, format!("Value must be between {} and {} mm.", fmt_mm(min_nm), fmt_mm(max_nm))));
-        }
-    };
-    range("solder_mask_expansion", m.expansion_nm, Nm::new(-25_000_000), Nm::new(25_000_000));
-    range("solder_mask_min_width", m.min_width_nm, Nm::ZERO, Nm::new(25_000_000));
-    range("solder_mask_to_copper_clearance", m.to_copper_clearance_nm, Nm::ZERO, Nm::new(25_000_000));
-    range("solder_paste_margin", m.paste_margin_nm, Nm::new(-25_000_000), Nm::new(25_000_000));
-    if !m.paste_margin_ratio.is_finite() || !(-1.0..=1.0).contains(&m.paste_margin_ratio) {
-        out.push(("solder_paste_margin_ratio", "Value must be between -1.000 and 1.000.".into()));
-    }
-    out
-}
 
 /// The characters `PANEL_TEXT_VARIABLES::m_nameValidator` keeps out of a variable name (`wxFILTER_EXCLUDE_CHAR_LIST`): they are the ones
 /// `${NAME}` and the other places a name is written (`NAME:field`, `NET_NAME(pin)`) give a meaning to.
@@ -815,8 +800,15 @@ mod tests {
         let bad = Constraints { min_clearance_nm: Nm::new(30_000_000), min_resolved_spokes: 100, max_error_nm: Nm::ZERO, ..ok.clone() };
         let names: Vec<&str> = bad.validate().iter().map(|(n, _)| *n).collect();
         assert_eq!(names, vec!["min_clearance", "max_error", "min_resolved_spokes"]);
-        assert!(bad.validate()[0].1.contains("between 0 and 25"), "{:?}", bad.validate()[0]);
-        assert!(Constraints { min_silk_clearance_nm: Nm::new(-5_000_000), ..ok }.validate().is_empty(), "the silk clearance may be negative, down to -10 mm");
+        // `addRangeError` puts the units on each bound (`StringFromValue( .., true )` appends " mm").
+        assert_eq!(bad.validate()[0].1, "Value must be between 0 mm and 25 mm.");
+        assert_eq!(bad.validate()[1].1, "Value must be between 0.001 mm and 0.1 mm.");
+        assert_eq!(bad.validate()[2].1, "Value must be between 0 and 99.");
+        assert!(Constraints { min_silk_clearance_nm: Nm::new(-5_000_000), ..ok.clone() }.validate().is_empty(), "the silk clearance may be negative, down to -10 mm");
+        // The dialog checks `MAXIMUM_ERROR_SIZE_MM` (0.1 mm), not the 1 mm of the `rules.max_error` load range.
+        assert_eq!(Constraints { max_error_nm: Nm::new(500_000), ..ok.clone() }.validate(), vec![("max_error", "Value must be between 0.001 mm and 0.1 mm.".to_string())]);
+        assert!(Constraints { max_error_nm: Nm::new(100_000), ..ok.clone() }.validate().is_empty(), "0.1 mm is the largest allowed deviation");
+        assert_eq!(Constraints { max_error_nm: Nm::new(100_001), ..ok }.validate().iter().map(|(n, _)| *n).collect::<Vec<_>>(), vec!["max_error"], "one nanometre more is out");
     }
 
     #[test]

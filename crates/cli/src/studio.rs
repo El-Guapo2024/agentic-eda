@@ -1964,6 +1964,15 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // "Leave Sheet"/an up-the-tree display) -- both empty for the
     // overwhelmingly common single-sheet design, same as `sheets`/
     // `instance_overrides` already default to empty everywhere else.
+    // a sheet's page is the one it shows on this sheet path (`SCH_SHEET::getPageNumber( currentSheetPath )`, Sheet Properties' Page number):
+    // stored for the path, else its place in the walk, as the derived file has it
+    let here: Vec<String> = breadcrumb.iter().map(|(id, _)| id.clone()).collect();
+    let walk = if sch.sheets.is_empty() { Vec::new() } else { eda_model::sheet_list::walk(design) };
+    let shown_page = |s: &eda_model::ir::SheetInstance| -> String {
+        walk.iter()
+            .find(|e| e.path.len() == here.len() + 1 && e.path.starts_with(&here) && e.path.last() == Some(&s.id))
+            .map_or_else(|| eda_model::sheet_list::page_on(&sch, s, &here).to_string(), eda_model::sheet_list::SheetEntry::effective_page)
+    };
     let sheets: Vec<Value> = sch
         .sheets
         .iter()
@@ -1973,7 +1982,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 sh.annotate_sheet_fields(&mut fields);
             }
             json!({
-                "id": s.id, "name": s.name, "file": s.file, "page": s.page,
+                "id": s.id, "name": s.name, "file": s.file, "page": shown_page(s),
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &s.id),
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
