@@ -139,10 +139,12 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
       const ids = ctx.requestSelection();
       const nets = netsOfItems(board, ids);
       if (nets.size === 0) return;
+      // `itemPassesFilter( item, true, nullptr )`: the Tracks, Vias and Graphics rows, and a lock -- an item's own or a locked group's above it
+      // (`BOARD_ITEM::IsLocked`; round 6 E6-5, E6-8).
       const passes = (id: string): boolean => {
-        if (lockedIds.has(id) && !state.selectionFilter.lockedItems) return false;
+        if (isLocked(board, id) && !state.selectionFilter.lockedItems) return false;
         const kind = itemKind(board, id);
-        return kind === "track" ? state.selectionFilter.tracks : kind === "via" ? state.selectionFilter.vias : true;
+        return kind === "track" ? state.selectionFilter.tracks : kind === "via" ? state.selectionFilter.vias : kind === "shape" ? state.selectionFilter.graphics : true;
       };
       const next = new Set(state.selection.size > 0 ? state.selection : ids);
       for (const id of netItems(board, nets)) {

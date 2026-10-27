@@ -63,6 +63,14 @@ export function zoneDialogKind(isRuleArea: boolean, layers: readonly string[]): 
 }
 
 /**
+ * The zone dialog's title when it is opened by Create Zone / Rule Area from Selection (`CONVERT_TOOL::CreatePolys` passes its `CONVERT_SETTINGS`, and the dialog
+ * adds a "Conversion Settings" box and retitles itself; `DIALOG_COPPER_ZONE`, `DIALOG_NON_COPPER_ZONES_EDITOR`, `DIALOG_RULE_AREA_PROPERTIES`; round 6 D6-2).
+ */
+export function convertZoneTitle(kind: "copper" | "non-copper" | "rule-area"): string {
+  return kind === "rule-area" ? "Convert to Rule Area" : kind === "non-copper" ? "Convert to Non Copper Zone" : "Convert to Copper Zone";
+}
+
+/**
  * The net the Zone Properties dialog gives the zone (`panel_zone_properties.cpp`'s `m_netSelector`, which offers `<no net>`). `chosen` is the net the dialog holds: the
  * zone's own when it edits or duplicates one (`""` for a zone on no net, which OK keeps: `Edit_Zone_Params` sets a net only `if( NETINFO_ITEM* net = FindNet(
  * zoneInfo.m_Netcode ) )`, and net 0 is kept), what the user picked, or `null` for a new zone nothing was picked for, which starts on the board's first net. A rule area

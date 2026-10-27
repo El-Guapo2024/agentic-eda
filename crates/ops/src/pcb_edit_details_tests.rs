@@ -330,11 +330,18 @@ fn a_routed_footprint_moved_turned_flipped_or_deleted_leaves_the_routing_in_the_
         Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(mm(30.0), mm(20.0)), angle_millideg: -15_000 },
         Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(mm(30.0), mm(20.0)), direction: FlipDirection::LeftRight },
         Cmd::Rip { part: id("U1") },
+        // Round 6 E6-1: the studio's Swap and Move Exactly are KiCad's edit tools as well.
+        Cmd::SwapChain { parts: vec![id("U1"), id("U2")] },
+        Cmd::MoveExact { parts: vec![id("U1")], dx: mm(1.0), dy: Nm::ZERO, rotate_millideg: 90_000, pivot: None },
         Cmd::CreateArray { ids: ids(&["U1"]), geometry: ArrayGeometry::Grid { nx: 2, ny: 1, dx: mm(5.0), dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false }, arrange: false, reannotate: true, group_positions: Default::default() },
     ] {
         assert!(!cmd.clears_routing_in(&b), "{cmd:?}");
     }
     // The verbs of the CLI and the agents answer as they did.
     assert!(Cmd::Nudge { part: id("U1"), dir: Dir::East, steps: 1 }.clears_routing_in(&b));
-    assert!(Cmd::PlaceAt { part: id("U1"), x: Nm::ZERO, y: Nm::ZERO }.clears_routing_in(&b));
+    assert!(Cmd::PlaceAt { part: id("U1"), x: Nm::ZERO, y: Nm::ZERO }.clears_routing_in(&b), "a re-placement of a placed part");
+    // A part put down from the unplaced list moves nothing copper was routed to (E6-1).
+    let mut off = b.design().clone();
+    off.placement.as_mut().unwrap().footprints.retain(|f| f.id != "U1");
+    assert!(!Cmd::PlaceAt { part: id("U1"), x: Nm::ZERO, y: Nm::ZERO }.clears_routing_in(&Board::new(off, &m, mm(0.1), mm(0.3))));
 }

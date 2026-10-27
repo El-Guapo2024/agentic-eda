@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { orderedLayerSet, zoneCopperLayers, zoneDialogKind, zoneDialogNet, zoneIsOnCopper, zoneIsOnLayer, zoneLayerChoices, zoneLayers, zonePickLayer } from "./zoneLayers";
+import { orderedLayerSet, zoneCopperLayers, zoneDialogKind, zoneDialogNet, zoneIsOnCopper, zoneIsOnLayer, zoneLayerChoices, zoneLayers, zonePickLayer, convertZoneTitle } from "./zoneLayers";
 
 test("a zone from a backend without layer sets is on its layer", () => {
   assert.deepEqual(zoneLayers({ layer: "F.Cu" }), ["F.Cu"]);
@@ -46,4 +46,10 @@ test("R5-Z3: OK on a copper zone on no net keeps it on no net; a new zone starts
   assert.equal(zoneDialogNet("copper", null, []), "");
   assert.equal(zoneDialogNet("rule-area", null, nets), "", "a rule area has no net unless it holds one");
   assert.equal(zoneDialogNet("non-copper", "GND", nets), "");
+});
+
+test("Create Zone / Rule Area from Selection is one dialog, titled for the conversion (round 6 D6-2)", () => {
+  assert.equal(convertZoneTitle("copper"), "Convert to Copper Zone");
+  assert.equal(convertZoneTitle("non-copper"), "Convert to Non Copper Zone");
+  assert.equal(convertZoneTitle("rule-area"), "Convert to Rule Area");
 });

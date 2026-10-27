@@ -12,16 +12,17 @@
 //     (touching) -- crates/ops/src/view.rs has no notion of this, it's
 //     pure frontend geometry against each part's courtyard.
 //   - drag a selected part to move it, previewed locally, committed with
-//     `move_to` on drop (see state/store.tsx `commitMove`); M starts the
+//     `move_items` on drop (see state/store.tsx `commitMove`); M starts the
 //     same preview without holding the button, click commits, Esc cancels.
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";
 import { newViaStitch } from "../../kicad-port/viaStitchTool";
 import { chosenDiffPair, chosenTrackWidthOf } from "../../kicad-port/routerSizes";
+import { currentViaSize } from "../../kicad-port/routerVia";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
-import { drawStrokeWidthNm } from "../../kicad-port/layerDefaults";
+import { drawStrokeWidthNm, graphicPolygonStyle } from "../../kicad-port/layerDefaults";
 import { activeLayerName, layerIsVisible } from "../../kicad-port/layerPresets";
 import { carryStart, isLocked } from "../../kicad-port/pcbTransform";
 import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
@@ -145,7 +146,8 @@ function shapeFromPoints(kind: ShapeToolKind, pts: [number, number][], layer: st
     case "arc":
       return pts.length >= 3 ? { kind: "arc", layer, stroke_width: widthNm, filled: false, start: p(0), mid: p(1), end: p(2) } : null;
     case "polygon":
-      return pts.length >= 3 ? { kind: "polygon", layer, stroke_width: widthNm, filled: true, pts: pts.map((_, i) => p(i)) } : null;
+      // The width and fill of a graphic polygon are `graphicPolygonStyle`'s (the caller passes its width): `commitZone` fills it except on Edge.Cuts and the courtyards.
+      return pts.length >= 3 ? { kind: "polygon", layer, stroke_width: widthNm, filled: graphicPolygonStyle(undefined, layer).filled, pts: pts.map((_, i) => p(i)) } : null;
   }
 }
 
@@ -398,7 +400,8 @@ export function Canvas() {
       lintSelected: state.drcLintSelected,
       zoneFill: state.zoneFill,
       zoneDisplayMode: state.zoneDisplayMode,
-      currentViaPreset: state.currentViaPreset,
+      // The Draw Via ghost: the size the next via gets (`GetCurrentViaSize`, round 6 C6-2).
+      currentViaPreset: state.board ? currentViaSize(state.board, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia) : state.currentViaPreset,
       units: state.units,
       zoneCornerPreview,
       shapePointPreview,
@@ -667,7 +670,10 @@ export function Canvas() {
       }
       // A graphic polygon is `DrawZone`'s too: its outline is `OnComplete`'s (round 5 A5-5).
       const pts = draw.shapeKind === "polygon" ? (zoneFinish(draw.pts, finishCursor(draw.pts), leaderModeOf(state.pcbx.angleSnapMode, drawCtrlRef.current)) ?? []) : draw.pts;
-      const shape = shapeFromPoints(draw.shapeKind, pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
+      const layer = activeLayerName(state.activeLayer, "F.SilkS");
+      // `DrawZone` never reads `m_stroke`: a graphic polygon is at its layer's own width (round 6 A6-2).
+      const widthNm = draw.shapeKind === "polygon" ? graphicPolygonStyle(board?.board_rules?.text_graphics, layer).strokeWidthNm : drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep);
+      const shape = shapeFromPoints(draw.shapeKind, pts, layer, widthNm);
       if (shape) api.cmd({ op: "add_shape", shape });
       dispatch({ type: "SET_DRAW_STATE", draw: null });
       // A graphic polygon is `DrawZone`'s: finishing it pops the tool (`PopTool`), as a zone does.
@@ -744,9 +750,9 @@ export function Canvas() {
       // `DRAWING_TOOL::DrawVia` (kicad-port/viaPlacer.ts): the via snaps onto the track, pad or graphic under the cursor, takes its net (or the zone fill's,
       // asking when there are several, or none: a free via), and the backend refuses it where it breaks a clearance and splits the track it is on (round 5 B5-1).
       if (state.activeTool === "via") {
-        const rules = board.board_rules;
         // pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), same board-default fallback the hotkey itself uses until it's ever pressed.
-        const viaPreset = state.currentViaPreset ?? { diameter: rules?.via_diameter ?? 600_000, drill: rules?.via_drill ?? 300_000 };
+        // `GetCurrentViaSize()` / `GetCurrentViaDrill()` asked on every via, from the board's list by index (round 6 C6-2).
+        const viaPreset = currentViaSize(board, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia);
         const copper = (board.layers ?? ["F.Cu", "B.Cu"]).filter((l) => l.endsWith(".Cu"));
         const mods = snapMods(e);
         const magnetic = toPcbMagnetic(state.prefs, state.magneticAllLayers);
@@ -776,6 +782,8 @@ export function Canvas() {
             to_layer: copper[copper.length - 1] ?? "B.Cu",
             split_track: track,
             allow_drc_violations: state.routerSettings.mode === "mark_obstacles" && state.routerSettings.allowDrcViolations,
+            // `checkDRCViolation`'s `view->Query` skips hidden layers (round 6 C6-1).
+            hidden_layers: copper.filter((l) => !layerIsVisible(state.layerVisible, l)),
           });
         const choice = viaNet(placer, at);
         if (choice.kind === "net") place(choice.net, choice.track);

@@ -50,6 +50,22 @@ export interface ViaPlacerInput {
 }
 
 const overlaps = (a: readonly string[], b: readonly string[]) => a.some((l) => b.includes(l));
+
+/** Whether an item is shown at all. */
+export type ItemShown = (item: { type: string; layers: readonly string[]; th?: boolean }) => boolean;
+
+/**
+ * `VIEW::Query` (`common/view/view.cpp`): "ignore layers that do not contain actual items" -- `if( ( *i )->displayOnly || !( *i )->visible ) continue;`.
+ * `findTrack`, `findPad`, `findGraphic` and `checkDRCViolation` collect their candidates through it, so an item none of whose view layers is shown is not
+ * snapped to, gives no net, is not split and does not refuse the via (round 6 C6-1). A track or a graphic lives on its own layer (`PCB_TRACK::ViewGetLayers`:
+ * the layer, its net-name and clearance layers, which follow it); a plated pad also on the hole layers (`LAYER_PAD_PLATEDHOLES`, ...), which no copper layer
+ * hides. (A hidden object class -- the Tracks, Pads or Graphics row -- is a level-of-detail choice, `ViewGetLOD`, which `Query` does not look at.)
+ */
+export function shownBy(isLayerVisible: (layer: string) => boolean): ItemShown {
+  return (item) => (item.type === "pad" && item.th === true) || item.layers.some(isLayerVisible);
+}
+
+const allShown: ItemShown = () => true;
 const d2 = (p: Pt, q: Pt) => (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2;
 
 /** `SEG::NearestPoint`. */
@@ -69,11 +85,11 @@ const viaBox = (pos: Pt, diameter: number) => box(pos[0] - diameter / 2, pos[1] 
  * `findTrack`: the track segment (or arc) under the via at `pos` on one of its layers -- a segment within half its width and half the via's
  * (`TestSegmentHit`), an arc within half the via (`PCB_ARC::HitTest`) -- the nearest by its chord (`SEG( start, end ).NearestPoint`).
  */
-export function findTrack(scene: SnapScene, pos: Pt, diameter: number, layers: readonly string[]): TrackItem | null {
+export function findTrack(scene: SnapScene, pos: Pt, diameter: number, layers: readonly string[], shown: ItemShown = allShown): TrackItem | null {
   let best: TrackItem | null = null;
   let bestD = Infinity;
   for (const item of queryScene(scene, viaBox(pos, diameter))) {
-    if (item.type !== "track" || !overlaps(item.layers, layers)) continue;
+    if (item.type !== "track" || !overlaps(item.layers, layers) || !shown(item)) continue;
     const t = item as TrackItem;
     const reach = (t.width + diameter) / 2;
     const hit = t.arc ? arcDistance(pos, t) <= reach : Math.sqrt(d2(pos, nearestOnSeg(pos, t.start, t.end))) <= reach;
@@ -100,9 +116,9 @@ function arcDistance(p: Pt, t: TrackItem): number {
 }
 
 /** `findPad`: the pad on one of the via's layers that `pos` is inside (`PAD::HitTest`). */
-export function findPad(scene: SnapScene, pos: Pt, diameter: number, layers: readonly string[]): PadItem | null {
+export function findPad(scene: SnapScene, pos: Pt, diameter: number, layers: readonly string[], shown: ItemShown = allShown): PadItem | null {
   for (const item of queryScene(scene, viaBox(pos, diameter))) {
-    if (item.type === "pad" && overlaps(item.layers, layers) && item.hit(pos)) return item as PadItem;
+    if (item.type === "pad" && overlaps(item.layers, layers) && shown(item as PadItem) && item.hit(pos)) return item as PadItem;
   }
   return null;
 }
@@ -131,12 +147,12 @@ function circumcentre(a: readonly [number, number], b: readonly [number, number]
 }
 
 /** `findGraphic`: the copper graphic on one of the via's layers within half the via of `pos` (`HitTest( pos, viaWidth / 2 )`), the nearest by its position. */
-export function findGraphic(scene: SnapScene, pos: Pt, diameter: number, layers: readonly string[]): ShapeItem | null {
+export function findGraphic(scene: SnapScene, pos: Pt, diameter: number, layers: readonly string[], shown: ItemShown = allShown): ShapeItem | null {
   const copper = layers.filter((l) => l.endsWith(".Cu"));
   let best: ShapeItem | null = null;
   let bestD = Infinity;
   for (const item of queryScene(scene, viaBox(pos, diameter))) {
-    if (item.type !== "shape" || !overlaps(item.layers, copper)) continue;
+    if (item.type !== "shape" || !overlaps(item.layers, copper) || !shown(item)) continue;
     const s = (item as ShapeItem).shape;
     if (shapeHitDistance(s, pos[0], pos[1]) > diameter / 2 + s.stroke_width / 2) continue;
     const d = Math.round(Math.sqrt(d2(shapePosition(s), pos)));
@@ -152,16 +168,17 @@ export function findGraphic(scene: SnapScene, pos: Pt, diameter: number, layers:
 export function snapViaPosition(input: ViaPlacerInput, mouse: Pt, gridPos: Pt): Pt {
   const scene = sceneOf(input.board);
   const { diameter, layers } = input;
+  const shown = shownBy(input.isLayerVisible);
   if (input.magnetic.tracks !== "never" && input.snap) {
-    const track = findTrack(scene, mouse, diameter, layers);
+    const track = findTrack(scene, mouse, diameter, layers, shown);
     if (track) return input.alignToSegment(mouse, track.start, track.end);
   }
   if (input.magnetic.pads !== "never" && input.snap) {
-    const pad = findPad(scene, mouse, diameter, layers);
+    const pad = findPad(scene, mouse, diameter, layers, shown);
     if (pad) return pad.at;
   }
   if (input.magnetic.graphics && input.snap) {
-    const item = findGraphic(scene, mouse, diameter, layers);
+    const item = findGraphic(scene, mouse, diameter, layers, shown);
     if (item) {
       const s = item.shape;
       if (s.filled) {
@@ -230,26 +247,36 @@ export type ViaNetChoice = { kind: "net"; net: string; track: string | null } | 
 export function viaNet(input: ViaPlacerInput, pos: Pt): ViaNetChoice {
   const scene = sceneOf(input.board);
   const { diameter, layers } = input;
-  const track = findTrack(scene, pos, diameter, layers);
+  const shown = shownBy(input.isLayerVisible);
+  const track = findTrack(scene, pos, diameter, layers, shown);
   if (track) {
     const t = input.board.routing?.tracks.find((x) => x.id === track.owner);
     // `if( track && m_gridHelper.GetSnap() )`: the split; Shift (no snap) leaves the track whole.
     return { kind: "net", net: t?.net ?? "", track: input.snap ? track.owner : null };
   }
-  const pad = findPad(scene, pos, diameter, layers);
+  const pad = findPad(scene, pos, diameter, layers, shown);
   if (pad) {
     const part = input.board.parts.find((p) => p.ref === pad.footprint);
     const num = pad.id.slice(pad.footprint.length + 1).split("#")[0];
     return { kind: "net", net: part?.pads?.find((p) => p.num === num)?.net ?? "", track: null };
   }
-  const shape = findGraphic(scene, pos, diameter, layers);
+  const shape = findGraphic(scene, pos, diameter, layers, shown);
   if (shape?.shape.net) return { kind: "net", net: shape.shape.net, track: null };
   const nets = stitchedZoneNets(input, pos);
   if (nets.length > 1) return { kind: "choose", nets };
   return { kind: "net", net: nets[0] ?? "", track: null };
 }
 
-/** `selectPossibleNetsByPopupMenu`'s entries: "&1  GND" for the first nine (the accelerator shown as its digit), the bare name after. */
+/** `NO_NET` (`pcbnew/netinfo.h`, 25ec2335): the menu's name for net 0. */
+export const NO_NET = "<no net>";
+
+/**
+ * `selectPossibleNetsByPopupMenu`'s entries: "&1  GND" for the first nine (the accelerator shown as its digit), the bare name after; a pour of no net is
+ * `NO_NET` (25ec2335: `wxString menuText = netcode ? netInfo.GetNetItem( netcode )->GetNetname() : NO_NET;`; round 6 C6-8).
+ */
 export function selectNetLabels(nets: readonly string[]): string[] {
-  return nets.map((n, i) => (i < 9 ? `${i + 1}  ${n}` : n));
+  return nets.map((n, i) => {
+    const name = n === "" ? NO_NET : n;
+    return i < 9 ? `${i + 1}  ${name}` : name;
+  });
 }

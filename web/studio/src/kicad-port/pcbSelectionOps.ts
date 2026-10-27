@@ -12,26 +12,41 @@
 // the flood anyway) and PCB_GENERATOR promotion (no generator items here).
 
 import type { BoardState } from "../api/types";
-import { itemKind } from "./pcbItems";
+import { itemKind, padById } from "./pcbItems";
 
 // ------------------------------------------------------------ select net
 
-/** `BOARD_CONNECTED_ITEM`s of the selection that carry a net: tracks, vias and zones (pads are not separately selectable here). */
+/**
+ * The nets of the selection's `BOARD_CONNECTED_ITEM`s (`selectNet`: `if( BOARD_CONNECTED_ITEM* item = dynamic_cast<BOARD_CONNECTED_ITEM*>( i ) )`): tracks, vias,
+ * zones, pads (`REF.NUMBER`) and copper shapes with a net (round 6 E6-5).
+ */
 export function netsOfItems(board: BoardState, ids: readonly string[]): Set<string> {
   const nets = new Set<string>();
   for (const id of ids) {
     const kind = itemKind(board, id);
-    const net = kind === "track" ? board.routing?.tracks.find((t) => t.id === id)?.net : kind === "via" ? board.routing?.vias.find((v) => v.id === id)?.net : kind === "zone" ? board.routing?.zones.find((z) => z.id === id)?.net : undefined;
+    const net =
+      kind === "track"
+        ? board.routing?.tracks.find((t) => t.id === id)?.net
+        : kind === "via"
+          ? board.routing?.vias.find((v) => v.id === id)?.net
+          : kind === "zone"
+            ? board.routing?.zones.find((z) => z.id === id)?.net
+            : kind === "pad"
+              ? (padById(board, id)?.pad.net ?? undefined)
+              : kind === "shape"
+                ? board.drawings?.shapes.find((x) => x.id === id)?.net
+                : undefined;
     if (net) nets.add(net);
   }
   return nets;
 }
 
-/** `SelectAllItemsOnNet`'s item set: `conn->GetNetItems( net, { PCB_TRACE_T, PCB_ARC_T, PCB_VIA_T, PCB_SHAPE_T } )` -- the tracks and vias of the nets (copper shapes carry no net here). */
+/** `SelectAllItemsOnNet`'s item set: `conn->GetNetItems( net, { PCB_TRACE_T, PCB_ARC_T, PCB_VIA_T, PCB_SHAPE_T } )` -- the tracks, vias and copper shapes of the nets (round 6 E6-5). */
 export function netItems(board: BoardState, nets: ReadonlySet<string>): string[] {
   const out: string[] = [];
   for (const t of board.routing?.tracks ?? []) if (nets.has(t.net)) out.push(t.id);
   for (const v of board.routing?.vias ?? []) if (nets.has(v.net)) out.push(v.id);
+  for (const sh of board.drawings?.shapes ?? []) if (sh.net && nets.has(sh.net) && sh.layer.endsWith(".Cu")) out.push(sh.id);
   return out;
 }
 

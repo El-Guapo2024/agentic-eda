@@ -1557,7 +1557,7 @@ export type Cmd =
   | { op: "set_track_width"; id: string; width: Nm }
   | { op: "add_via"; net: string; x: Nm; y: Nm; drill: Nm; diameter: Nm; from_layer: string; to_layer: string }
   /** The Draw Via tool's via (crates/ops/src/via_place.rs, `VIA_PLACER::PlaceItem`): `net` "" is a free via of no net; refused with "Via location violates DRC." unless `allow_drc_violations`; `split_track` is cut at the via. */
-  | { op: "place_via"; net: string; x: Nm; y: Nm; drill: Nm; diameter: Nm; from_layer: string; to_layer: string; split_track?: string | null; allow_drc_violations?: boolean }
+  | { op: "place_via"; net: string; x: Nm; y: Nm; drill: Nm; diameter: Nm; from_layer: string; to_layer: string; split_track?: string | null; allow_drc_violations?: boolean; hidden_layers?: string[] }
   | { op: "delete_via"; id: string }
   | { op: "move_via"; id: string; x: Nm; y: Nm }
   /** Track/Via Properties' editable via fields -- net, position and layer span are unchanged (KiCad does not let you re-net/re-span an existing via from this dialog either). */
@@ -1713,7 +1713,7 @@ export type Cmd =
   | { op: "edit_shape"; id: string; layer: string; stroke_width: Nm; filled: boolean }
   | { op: "add_text"; text: CmdText }
   /** The board's Text tool (`DRAWING_TOOL::PlaceText`, "Draw Text"; crates/ops/src/lib.rs `place_board_text`): the text with what it has beyond `CmdText` -- the glyph width, italic, the bottom justification. */
-  | { op: "place_text"; text: CmdText; extra?: { id: string; width_nm?: Nm; italic?: boolean; valign?: "top" | "center" | "bottom" } | null }
+  | { op: "place_text"; text: CmdText; extra?: { id: string; width_nm?: Nm; bold?: boolean; italic?: boolean; valign?: "top" | "center" | "bottom" } | null }
   | { op: "edit_text"; id: string; content: string; angle: number; layer: string; size_nm: Nm; stroke_width: Nm; justify: TextJustify; mirror: boolean }
   | { op: "delete_text"; id: string }
   | { op: "move_text"; id: string; x: Nm; y: Nm }

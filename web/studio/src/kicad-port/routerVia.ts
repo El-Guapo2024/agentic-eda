@@ -163,6 +163,22 @@ export function chosenViaSize(viaType: ViaType, chosen: ViaPreset | null, index:
   return chosen;
 }
 
+/**
+ * `BOARD_DESIGN_SETTINGS::GetCurrentViaSize()` / `GetCurrentViaDrill()` (board_design_settings.cpp), asked each time Draw Via makes a via (`CreateItem`;
+ * round 6 C6-2): the custom size while custom sizes are in use; else the list entry at the index, read from the board's list now (so a Board Setup edit
+ * to it is seen); else -- index 0, the net class's sizes, or an index past the list -- the Default class's via (`m_NetSettings->GetDefaultNetclass()`).
+ * `presets` is the board's list without KiCad's entry 0, so the entry at index `i` is `presets[i - 1]`.
+ */
+export function currentViaSize(board: BoardState, index: number | null, useCustomTrackVia: boolean, custom: CustomTrackVia): ViaPreset {
+  if (useCustomTrackVia) return { diameter: custom.viaDiameterNm, drill: custom.viaDrillNm };
+  const presets = board.routing?.via_presets ?? [];
+  const entry = index != null && index > 0 ? presets[index - 1] : undefined;
+  if (entry) return { diameter: entry.diameter, drill: entry.drill };
+  const rules = board.board_rules;
+  const def = rules?.default_class;
+  return { diameter: def?.via_diameter ?? rules?.via_diameter ?? 600_000, drill: def?.via_drill ?? rules?.via_drill ?? 300_000 };
+}
+
 /** `BOARD_DESIGN_SETTINGS`' custom track and via size (`m_customTrackWidth`, `m_customViaSize`): what `DIALOG_TRACK_VIA_SIZE` edits. */
 export interface CustomTrackVia {
   trackNm: Nm;

@@ -30,6 +30,9 @@ const CASES: &[(f64, f64, f64, f64, f64, f64)] = &[
     (140.0, 120.0, 0.7, 140.6, 120.0, 0.1),
     (150.0, 120.0, 0.9, 149.0, 125.0, 0.3),
     (160.0, 120.0, 0.6, 160.0, 119.2, 0.12),
+    // Round 6 D6-1: a track that leaves the via by 0.05 mm, less than its width. 25ec2335's `computeChordThroughShape` measures the chord on the extended
+    // centreline (the via's diameter), so it gets a teardrop; 8303b2ad's `computeEmergingTrackLength` refused it.
+    (100.0, 125.0, 0.6, 100.35, 125.0, 0.2),
 ];
 
 /// Round 5's A5-1: arc tracks. The via (x, y, diameter), and the arc (mid x, mid y, other end x, other end y, width) from the via's centre; `true` in the last
@@ -39,6 +42,8 @@ const ARC_CASES: &[(f64, f64, f64, f64, f64, f64, f64, f64, bool)] = &[
     (110.0, 110.0, 0.8, 111.3, 109.1, 112.1, 110.7, 0.25, false),
     (120.0, 110.0, 1.0, 121.7, 111.3, 123.9, 110.2, 0.2, true),
     (130.0, 110.0, 0.7, 129.2, 112.0, 130.3, 113.5, 0.15, true),
+    // Round 6 D6-1: a short arc (0.4 mm, emerging by less than its width measured in a straight line): 25ec2335 exempts arcs from the chord filter.
+    (140.0, 110.0, 0.6, 140.25, 110.1, 140.4, 110.05, 0.2, false),
 ];
 
 const PARAMS: &str = "(teardrops (best_length_ratio 0.5) (max_length 1) (best_width_ratio 1) (max_width 2) (curved_edges no) (filter_ratio 0.9) (enabled yes) (allow_two_segments no) (prefer_zone_connections yes))";

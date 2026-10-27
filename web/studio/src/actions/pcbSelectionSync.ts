@@ -84,19 +84,17 @@ export function registerPcbSelectionSync(m: Map<string, () => void>, ctx: SweepC
   m.set(
     "pcbnew.InteractiveSelection.SelectSameSheet",
     pcbOnly(() => {
-      if (!board || state.selection.size !== 1) return;
+      // `EDA_ITEM* item = m_selection.Front()`: the first selected item, whatever the size; silent when it is not a footprint or has no sheet path
+      // (`footprint->GetPath().empty()`; round 6 E6-6).
+      if (!board || state.selection.size === 0) return;
       const ref = [...state.selection][0]!;
       if (!board.parts.some((p) => p.ref === ref)) return; // "this function currently only supports footprints"
       void sheetsOfDesign()
         .then((sheets) => {
           const path = sheetOfRef(sheets, ref);
-          if (path === null) {
-            toast(`${ref} is not on any schematic sheet.`, "error");
-            return;
-          }
-          selectOnSheetPath(sheets, path);
+          if (path !== null) selectOnSheetPath(sheets, path);
         })
-        .catch(() => toast("Could not read the schematic sheets.", "error"));
+        .catch(() => undefined);
     })
   );
 
