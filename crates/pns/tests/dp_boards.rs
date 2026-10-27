@@ -141,7 +141,11 @@ fn a_pair_continues_from_a_pair_of_tracks_and_meets_the_two_stubs_in_every_mode(
         assert!(matches!(router.fix_diff_pair(U1_STUBS.0), Some(FixOutcome::Fixed { real_end: true })));
         let commit = router.finish_diff_pair(U1_STUBS.0).expect("commits");
         assert_eq!(commit.tracks.len(), 2, "{mode:?}: one track per net: {commit:?}");
-        assert!(commit.remove_track_ids.is_empty() && commit.vias.is_empty());
+        assert!(commit.vias.is_empty());
+        // `FixRoute`'s `TOPOLOGY::SimplifyLine` (round-2 R-3): each line is assembled through the tracks it continues -- the J1 side's and the
+        // stub -- and, since simplifying it drops a point there, it replaces them: what is removed is tracks of the pair's two nets only
+        let removed_nets: std::collections::BTreeSet<&str> = commit.remove_track_ids.iter().map(|id| design.routing.as_ref().unwrap().tracks.iter().find(|t| &t.id == id).map(|t| t.net.as_str()).unwrap_or("?")).collect();
+        assert!(removed_nets.iter().all(|n| *n == "/D+" || *n == "/D-"), "{mode:?}: {removed_nets:?}");
         let (d_plus, d_minus) = (track_of(&commit, "/D+"), track_of(&commit, "/D-"));
         assert_eq!((d_plus.width, d_minus.width), (mm(0.2), mm(0.2)), "the width of the tracks it continues");
         // the two tracks keep the pair's gap where they run side by side, and each net's copper joins its stub

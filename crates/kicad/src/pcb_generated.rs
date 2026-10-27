@@ -183,6 +183,9 @@ pub(crate) fn prop_line(list: &[Sexpr], key: &str) -> Vec<Point> {
 }
 
 fn prop_range(list: &[Sexpr], key: &str, default: TargetRange) -> TargetRange {
+    // A length target is a `long long` (`PCB_TUNING_PATTERN::SetProperties`: `long long int val; aProps.get_to_iu( "target_length", val )`), not a coordinate: its
+    // "unconstrained" 1000000 mm is not clamped to the board's coordinate range as a position is.
+    let prop_nm = |list: &[Sexpr], key: &str| prop_num(list, key).map(|v| Nm::new((v * 1_000_000.0).round() as i64));
     // `SetTargetLength( val )` gives a target its default tolerance, then the file's own minimum and maximum replace it
     let opt = prop_nm(list, key).unwrap_or(Nm::new(default.opt));
     let mut r = if opt == LENGTH_UNCONSTRAINED_NM { TargetRange::unconstrained() } else { TargetRange::around(opt) };
@@ -388,6 +391,13 @@ mod tests {
         assert_eq!((t.mode, t.layer.as_str(), t.max_amplitude, t.min_amplitude, t.spacing, t.corner_radius_percent), (TuningMode::Single, "F.Cu", Nm::from_mm(2.0), Nm::from_mm(0.2), Nm::from_mm(0.6), 100), "min_amplitude takes MEANDER_SETTINGS' default");
         assert_eq!((t.target_length, t.last_status.as_str(), t.base_line.len(), t.member_ids.len()), (TargetRange { min: 99_900_000, opt: 100_000_000, max: 100_100_000 }, "too_short", 2, 2));
         assert_eq!((t.origin, t.end), (p(Nm::new(115_571_487), Nm::from_mm(50.14)), p(Nm::new(123_137_350), Nm::from_mm(50.14))));
+        // F17 of round 2: the skew patterns' "unconstrained" 1000000 mm is kept as it is, not clamped to 2147.483637 mm
+        let wide = text.replace("(target_length 100) (target_length_max 100.1) (target_length_min 99.9)", "(target_length 1000000) (target_length_max 1000000) (target_length_min 0)");
+        let back = import_patterns(sexpr::parse(&wide).unwrap().as_list().unwrap(), &ids);
+        assert!(back[0].target_length.is_unconstrained(), "{:?}", back[0].target_length);
+        let mut out = String::new();
+        range_props(&mut out, "target_length", &back[0].target_length);
+        assert!(out.contains("(target_length 1000000)"), "{out}");
         // a pattern with no member of the board is a ghost
         assert!(import_patterns(tree.as_list().unwrap(), &BTreeMap::new()).is_empty());
     }

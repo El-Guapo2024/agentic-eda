@@ -200,7 +200,7 @@
       const namesInside = document.querySelector('[data-testid="new-symbol-names-inside"]');
       t(!!interchangeable && !interchangeable.checked, `All units are interchangeable starts unchecked (${interchangeable?.checked})`);
       t(!!namesInside && namesInside.checked, `Pin name inside starts checked (${namesInside?.checked})`);
-      // KiCad's CreateSymbol: two units with the box unchecked is LockUnits( true ); inside with an offset of 0 is 20 mils
+      // KiCad's CreateSymbol: two units with the box unchecked is LockUnits( true ); inside with an offset of 0 is 1 internal unit (SetPinNameOffset( 1 ))
       const nameA = `P20Lock${Date.now() % 100000}`;
       setValue(fieldOf("Symbol name"), nameA);
       setValue(fieldOf("Number of units per package"), 2);
@@ -211,7 +211,7 @@
         made.push(idA);
         const s = await symbol(idA);
         t(s.unit_count === 2 && s.units_locked === true, `two units and All units are interchangeable unchecked is locked (${JSON.stringify([s.unit_count, s.units_locked])})`);
-        t(s.pin_name_offset_mm === 0.508, `Pin name inside with an offset of 0 is 20 mils, as Symbol Properties does (${s.pin_name_offset_mm})`);
+        t(s.pin_name_offset_mm === 0.0001, `Pin name inside with an offset of 0 is 1 IU, 0.0001 mm (${s.pin_name_offset_mm})`);
       }
       // outside: "Pin name inside" unchecked writes an offset of 0
       open = await openNew();
@@ -278,13 +278,13 @@
       t((await symNames()).length === n0, "and makes nothing");
     });
 
-    await scenario("the pin tool asks for the new pin's properties first: Cancel places nothing, OK places it, the next one numbered after it", async (t) => {
+    await scenario("the pin tool asks for the new pin's properties first (no number, as CreatePin leaves it): Cancel places nothing, OK places it; Insert repeats it numbered and named one up", async (t) => {
       if (!SYM) return t(false, "no symbol");
       t(await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin"), `the pin tool is armed (${__eda.state().tool})`);
       await clickAt(-5_080_000, 0);
       let open = await until(() => /Pin Properties/.test(dialog()?.querySelector(".dialog-header")?.textContent ?? ""), 4000);
       t(!!open, `the click opens Pin Properties first (${dialog()?.querySelector(".dialog-header")?.textContent})`);
-      t(fieldOf("Pin number")?.value === "1", `the new pin is numbered 1 in the dialog (${fieldOf("Pin number")?.value})`);
+      t(fieldOf("Pin number")?.value === "", `the new pin has no number in the dialog (${fieldOf("Pin number")?.value})`);
       await closeDialogs(); // Cancel: SYMBOL_EDITOR_PIN_TOOL::CreatePin drops the pin
       await sleep(400);
       t(((await symbol(SYM)).pins ?? []).length === 0, "Cancel places no pin");
@@ -292,16 +292,17 @@
       await clickAt(-5_080_000, 0);
       open = await until(() => /Pin Properties/.test(dialog()?.querySelector(".dialog-header")?.textContent ?? ""), 4000);
       t(!!open, "a second click asks again");
-      buttonText(dialog(), "OK")?.click();
-      await sleep(900);
-      await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
-      await clickAt(-5_080_000, 2_540_000);
-      open = await until(() => /Pin Properties/.test(dialog()?.querySelector(".dialog-header")?.textContent ?? ""), 4000);
-      t(!!open, "and a third");
-      t(fieldOf("Pin number")?.value === "2", `numbered after the pin just placed (${fieldOf("Pin number")?.value})`);
+      setValue(fieldOf("Pin number"), "1");
+      setValue(fieldOf("Pin name"), "A1");
+      await sleep(100);
       buttonText(dialog(), "OK")?.click();
       await sleep(900);
       await toSelect();
+      // Insert: SYMBOL_EDITOR_PIN_TOOL::RepeatPin -- 100 mil down for a horizontal pin, IncrementString on the name and the number
+      await run("eeschema.InteractiveEdit.repeatDrawItem");
+      await sleep(900);
+      const rep = ((await symbol(SYM)).pins ?? []).find((p) => p.number === "2");
+      t(!!rep && rep.name === "A2", `Insert repeats the last pin with the next number and name (${JSON.stringify(rep && [rep.number, rep.name])})`);
       const pins = (await symbol(SYM)).pins ?? [];
       t(pins.length === 2, `two pins (${pins.length})`);
       const nums = pins.map((p) => p.number).sort();
@@ -355,7 +356,7 @@
       buttonText(dialog(), "Cancel")?.click();
       await sleep(500);
       // Merely selecting another pin (2.54 mm long) must not become the template.
-      const other = ((await symbol(SYM)).pins ?? []).find((q) => q.name === "");
+      const other = ((await symbol(SYM)).pins ?? []).find((q) => q.name !== "TMPL");
       if (!t(!!other, "another pin is there")) return;
       await select([other.id ?? `pin:${other.number}`]);
       await sleep(500);

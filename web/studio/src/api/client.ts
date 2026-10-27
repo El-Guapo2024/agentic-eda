@@ -332,6 +332,8 @@ export interface FabReply {
   /** Paths written, relative to the board directory (e.g. `export/board-F_Cu.gtl`). */
   files?: string[];
   message?: string;
+  /** What kicad-cli printed on a run that worked: its warnings and progress lines (`run_export`). */
+  log?: string;
   /** The design revision the export was made from (the /api/version stamp), like every kicad-cli reply. */
   revision?: string;
 }
@@ -341,16 +343,24 @@ export interface FabReply {
  * runs first when some zone has no current fill.
  */
 export function postFabGerbers(layers?: string[], useAuxOrigin = false, checkZones = false): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), ...(useAuxOrigin ? { use_aux_origin: true } : {}), ...(checkZones ? { check_zones: true } : {}) });
+  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), use_aux_origin: useAuxOrigin, ...(checkZones ? { check_zones: true } : {}) });
 }
 
-/** `useAuxOrigin`: the drill dialog's Origin choice, "Drill/place file origin" instead of "Absolute". */
-export function postFabDrill(separateTh: boolean, useAuxOrigin = false): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/drill", { separate_th: separateTh, ...(useAuxOrigin ? { use_aux_origin: true } : {}) });
+/** The Generate Drill Files dialog's options (`DIALOG_GENDRILL`): "PTH and NPTH in single file", "Use alternate drill mode" (oval holes as
+ * G85 slots instead of routed), and the Origin choice "Drill/place file origin" instead of "Absolute". */
+export interface FabDrillOptions {
+  merge_pth_npth: boolean;
+  alt_drill_mode: boolean;
+  use_aux_origin: boolean;
+}
+
+export function postFabDrill(opts: FabDrillOptions): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/drill", opts);
 }
 
 export interface FabPosOptions {
-  format: "csv" | "ascii";
+  /** Plain text, CSV or Gerber X3 (`m_formatCtrl`). */
+  format: "csv" | "ascii" | "gerber";
   side: "front" | "back" | "both";
   units_mm: boolean;
   smd_only: boolean;
@@ -362,6 +372,10 @@ export interface FabPosOptions {
   /** "Generate single file with both front and back positions" (`m_singleFile`, checked by default): with both sides asked and this
    * off, KiCad writes the top's and the bottom's files (`<name>-top-pos.csv`, `<name>-bottom-pos.csv`). */
   single_file?: boolean;
+  /** "Use negative X coordinates for footprints on bottom layer" (`m_negateXcb`; plain text and CSV). */
+  negate_x?: boolean;
+  /** "Include board edge layer" (`m_cbIncludeBoardEdge`; Gerber X3). */
+  board_edge?: boolean;
 }
 
 export function postFabPos(opts: FabPosOptions): Promise<FabReply> {

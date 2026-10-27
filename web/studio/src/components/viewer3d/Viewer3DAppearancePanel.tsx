@@ -9,7 +9,7 @@ import { useSyncExternalStore } from "react";
 import toolbarData from "../../kicad/viewer3d_toolbars.json";
 import type { Viewer3dAction, Viewer3dToolbarsFile } from "../../kicad/types";
 import { displayHotkey } from "../../actions/hotkeys";
-import { STACKUP_ROWS, isVisible, parseColor, rowsFor, toHex, toRgbHex, usedUserRows, type Row, type RowGroup } from "../../kicad-port/appearance3d";
+import { STACKUP_ROWS, isVisible, withSwatch, parseColor, rowsFor, toHex, toRgbHex, usedUserRows, type Row, type RowGroup } from "../../kicad-port/appearance3d";
 import { useStudioDispatch, useStudioState } from "../../state/store";
 import type { Viewer3DOptions } from "../../state/store";
 import { ActionIcon } from "../Toolbar";
@@ -57,11 +57,16 @@ export function Viewer3DAppearancePanel({ api }: { api: Viewer3DApi | null }) {
     if (!c) return;
     // The swatch has no alpha: keep the row's own (the solder mask is 83 % opaque).
     const alpha = colors[row.id]?.a ?? 1;
-    set({ colors: { ...opts.colors, [row.id]: toHex({ ...c, a: alpha }) } });
+    set({ colors: withSwatch(opts.colors, row.id, toHex({ ...c, a: alpha })) });
   };
   const resetColor = (id: string) => {
     const next = { ...opts.colors };
     delete next[id];
+    // the copper rows are one colour (`withSwatch`)
+    if (id === "copper_top" || id === "copper_bottom") {
+      delete next.copper_top;
+      delete next.copper_bottom;
+    }
     set({ colors: next });
   };
 

@@ -1566,8 +1566,15 @@ pub enum Cmd {
         exclude_from_sim: Option<bool>,
     },
     /// `eeschema.EditorControl.editPageNumber` (`SCH_EDIT_TOOL::EditPageNumber`): the page number of the placement `sheet` (a
-    /// `SheetInstance::id`). Letters and digits only; empty puts the sheet back to its place in the hierarchy.
-    SetSheetPage { sheet: String, page: String },
+    /// `SheetInstance::id`). Letters and digits only; empty puts the sheet back to its place in the hierarchy. With `path` (the whole sheet
+    /// path, the placement ids from the root down to `sheet`), the page of that sheet path only (`SCH_SHEET_PATH::SetPageNumber`), as KiCad
+    /// keeps a page per path of a sheet on a screen shown twice; without, of every path the sheet is on.
+    SetSheetPage {
+        sheet: String,
+        page: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<Vec<String>>,
+    },
     /// `eeschema.Interactive.increment*` (`SCH_TOOL_BASE::Increment`): the new text of a label (its net name) or a free text, by id.
     SetSchItemText { id: String, text: String },
     /// `eeschema.EditorControl.editSymbolLibraryLinks` (`DIALOG_EDIT_SYMBOLS_LIBID`): every symbol linked to a `from` library id is linked to
@@ -2715,8 +2722,13 @@ impl<'a> Board<'a> {
         // A board brought in whole (`ReplaceBoard`) comes with its own summary, made with its own model, which this board's model is not.
         let edge_before = if matches!(cmd, Cmd::ReplaceBoard { .. }) { None } else { outline::snapshot(&self.design, self.model) };
         let shared_before = self.shared_screens_before();
+        let pages_before = (self.design.schematic.is_some() && (matches!(cmd.domain(), Domain::Schematic) || matches!(cmd, Cmd::Batch { .. }))).then(|| eda_model::sheet_list::walk(&self.design));
         self.apply_cmd(cmd)?;
         self.tidy_shared_screens(shared_before);
+        // the page numbers KiCad keeps: a new sheet path numbered, a page shown kept when the walk moves (`sheet_list::keep_pages`)
+        if let Some(before) = pages_before {
+            eda_model::sheet_list::keep_pages(&mut self.design, &before);
+        }
         self.tidy_groups(groups_before);
         self.tidy_sch_groups(sch_groups_before);
         self.tidy_tuning_patterns(patterns_before);
@@ -2991,7 +3003,7 @@ impl<'a> Board<'a> {
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
             Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
-            Cmd::SetSheetPage { sheet, page } => self.set_sheet_page(sheet, page),
+            Cmd::SetSheetPage { sheet, page, path } => self.set_sheet_page(sheet, page, path.as_deref()),
             Cmd::SetSchItemText { id, text } => self.set_sch_item_text(id, text),
             Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),
             Cmd::IncrementAnnotations { start, increment } => self.increment_annotations(start, *increment),
@@ -5411,8 +5423,10 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// `PCB_BASE_FRAME::CreateNewFootprint`: a fresh, empty footprint with the
-    /// default attribute `FP_SMD`; the caller already made the name unique.
+    /// `PCB_BASE_FRAME::CreateNewFootprint`: a fresh footprint with the attributes of the library's last footprint ("Try to infer the footprint
+    /// attributes from an existing footprint in the library", `fpnames.back()` of the sorted names), else `FP_SMD`, and the Footprint Editor's default
+    /// texts: its Reference and Value take their default layouts when written (`fp_edit::default_library_reference_layout`), and the `${REFERENCE}`
+    /// text on the fabrication layer is added (`fp_edit::new_footprint_texts`). The caller already made the name unique.
     fn new_footprint(&mut self, name: &str) -> Result<(), Vec<CheckResult>> {
         if name.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_footprint", "footprint", "a footprint needs a name")]);
@@ -5421,7 +5435,11 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_footprint_exists", name, "a footprint with this name already exists; pick another name")]);
         }
         let mut lib_fp = LibraryFootprint::new_empty(name);
-        lib_fp.attributes.smd = true;
+        match self.design.footprint_library.as_ref().and_then(|l| l.footprints.iter().max_by(|a, b| a.name.cmp(&b.name))) {
+            Some(last) => lib_fp.attributes = last.attributes.clone(),
+            None => lib_fp.attributes.smd = true,
+        }
+        lib_fp.texts = eda_model::fp_edit::new_footprint_texts();
         lib_fp.assign_missing_ids();
         self.footprint_library_mut().footprints.push(lib_fp);
         Ok(())
@@ -5795,6 +5813,12 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_symbol_exists", lib_id, "a symbol with this name already exists; pick another name")]);
         }
         let mut lib_sym = LibrarySymbol::new_empty(lib_id);
+        // `LIB_SYMBOL::LIB_SYMBOL( aName, .. )` makes the mandatory fields with `new SCH_FIELD( this, id )`, at the origin, and `CreateSymbol` sets only their
+        // texts (the Value is the name): the Reference and the Value of a new symbol are stored at (0, 0), not at `default_field`'s places.
+        lib_sym.fields = vec![
+            eda_model::sym_fields::LibrarySymbolField::named("Reference", ""),
+            eda_model::sym_fields::LibrarySymbolField::named("Value", eda_model::sym_fields::bare_name(lib_id)),
+        ];
         lib_sym.assign_missing_ids();
         self.symbol_library_mut().symbols.push(lib_sym);
         Ok(())
@@ -5861,16 +5885,11 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// A pin needs a non-empty number (KiCad allows an empty pin *name*,
-    /// never an empty number) and a non-empty electrical type -- the one
-    /// validation cheap and unambiguous enough to enforce without
-    /// transcribing all of `pin_type.h`'s closed vocabulary (same "keep
-    /// the raw string, round-trip whatever this port doesn't special-case"
-    /// convention `LibPin::electrical_type`'s own doc already accepts).
+    /// A pin needs a non-empty electrical type -- the one validation cheap and unambiguous enough to enforce without transcribing all of
+    /// `pin_type.h`'s closed vocabulary (same "keep the raw string, round-trip whatever this port doesn't special-case" convention
+    /// `LibPin::electrical_type`'s own doc already accepts). Its number may be empty, as KiCad's may: `SYMBOL_EDITOR_PIN_TOOL::CreatePin` makes
+    /// a pin with none and `DIALOG_PIN_PROPERTIES::TransferDataFromWindow` does not ask for one.
     fn validate_pin(pin: &LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
-        if pin.number.trim().is_empty() {
-            return Err(vec![CheckResult::fail("ops_bad_pin", "pin", "a pin needs a number")]);
-        }
         if pin.electrical_type.trim().is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, "a pin needs an electrical type")]);
         }

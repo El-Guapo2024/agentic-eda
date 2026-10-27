@@ -6,15 +6,22 @@
 //! Reuses `eda_drc::board::build`, the exact same flattening DRC already
 //! does (pads/tracks/vias to board-space shapes, net resolution, layer
 //! names) -- so the router and the DRC engine agree on what a pad/track/via
-//! *is*, geometrically, by construction. Zones are deliberately not
-//! inserted as `NODE` items: `PNS::ITEM::PnsKind` has no `ZONE_T` in real
+//! *is*, geometrically, by construction. A copper zone is not
+//! inserted as a `NODE` item: `PNS::ITEM::PnsKind` has no `ZONE_T` in real
 //! KiCad either (confirmed while reading `pns_item.h`) -- the interactive
 //! router routes straight through/over a zone's fill area, which gets
-//! recomputed afterward, exactly like real KiCad.
+//! recomputed afterward, exactly like real KiCad. A keepout rule area is:
+//! `PNS_KICAD_IFACE_BASE::syncZone` adds each triangle of its outline, on each
+//! of its copper layers, as a `SOLID` of no net that is not routable
+//! ([`add_keepouts`]).
+//!
+//! The world carries the board's rules ([`crate::rule_resolver::RuleResolver`],
+//! `aWorld->SetRuleResolver( m_ruleResolver )`): the clearances the router keeps
+//! are the DRC engine's, local clearances, net ties and custom rules included.
 
 use eda_model::units::Nm;
 use crate::arcs::ArcPts;
-use crate::item::{net_of, Arc, Item, Segment, Solid, Via};
+use crate::item::{Arc, Item, Net, Segment, Solid, Via};
 use crate::layer::LayerMap;
 use crate::node::Node;
 use eda_drc::kimath::Shape;
@@ -46,6 +53,12 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
     let layers = LayerMap::new(&model.board.layers);
     let drc_board = eda_drc::board::build(design, model);
     let mut node = Node::new();
+    // `aWorld->SetRuleResolver( m_ruleResolver )`: built first, so that each solid carries the number of its board item (`Solid::rule`)
+    let names: Vec<String> = (0..layers.count() as i32).map(|i| layers.name_of(i).to_string()).collect();
+    let mut rules = crate::rule_resolver::RuleResolver::new(design, model, &drc_board, names);
+    // one handle per net (`NET_HANDLE`), as the board has one `NETINFO_ITEM` per net: the rule resolver's cache knows a net by it
+    let mut handles: std::collections::HashMap<String, Net> = std::collections::HashMap::new();
+    let mut net_of = |name: &str| handles.entry(name.to_string()).or_insert_with(|| crate::item::net_of(name)).clone();
     let locked = locked_ids_with(design, !patterns_in_edit);
     node.set_npth(drc_board.pads.iter().filter(|p| p.kind == eda_model::PadKind::NonPlatedHole).map(|p| p.id.clone()).collect());
 
@@ -54,7 +67,7 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
         // the pad as flashed on all of them and leaves the test of what is connected to the checks). A group whose layers are not next to each other (a custom stack's front
         // shape on the front and on a deeper layer) is a solid for each run of layers.
         if !pad.copper_by_layer.is_empty() {
-            let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().map(net_of).unwrap_or(None) };
+            let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().map(&mut net_of).unwrap_or(None) };
             for (names, shape) in pad.copper_groups() {
                 let mut idx: Vec<i32> = names.iter().filter_map(|n| layers.index_of(n)).collect();
                 idx.sort_unstable();
@@ -65,7 +78,7 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
                     while end + 1 < idx.len() && idx[end + 1] == idx[end] + 1 {
                         end += 1;
                     }
-                    node.add(Item::Solid(Solid { net: net.clone(), layers: crate::layer::LayerRange::new(idx[k], idx[end]), pos: pad.center, shape: shape.clone(), source: pad.id.clone(), edge: false }));
+                    node.add(Item::Solid(Solid { net: net.clone(), layers: crate::layer::LayerRange::new(idx[k], idx[end]), pos: pad.center, shape: shape.clone(), source: pad.id.clone(), edge: false, rule: rules.rule_of(&pad.id) }));
                     k = end + 1;
                 }
             }
@@ -82,8 +95,8 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
             })
         });
         let layer_range = layer_range.unwrap_or_else(|| layers.all());
-        let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().map(net_of).unwrap_or(None) };
-        node.add(Item::Solid(Solid { net, layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false }));
+        let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().map(&mut net_of).unwrap_or(None) };
+        node.add(Item::Solid(Solid { net, layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false, rule: rules.rule_of(&pad.id) }));
     }
 
     // An arc track (`PCB_ARC`) is an `ARC` (`PNS_KICAD_IFACE_BASE::syncArc`): one item with the arc's three points, linked at its two ends. (A
@@ -92,7 +105,7 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
     for t in &drc_board.tracks {
         let layer = layers.index_of(&t.layer).unwrap_or(0);
         let source_track = split_track_seg_id(&t.id);
-        let net = t.net.as_deref().map(net_of).unwrap_or(None);
+        let net = t.net.as_deref().map(&mut net_of).unwrap_or(None);
         if let Some(mid) = t.arc_mid {
             match source_track.as_ref() {
                 Some((id, _)) if circle_tracks.contains_key(id.as_str()) => {
@@ -114,11 +127,13 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
 
     for v in &drc_board.vias {
         let layer_range = layers.range_of(&v.from_layer, &v.to_layer);
-        node.add(Item::Via(Via { net: v.net.as_deref().map(net_of).unwrap_or(None), layers: layer_range, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: Some(v.id.clone()), locked: locked.contains(v.id.as_str()), is_virtual: false }));
+        node.add(Item::Via(Via { net: v.net.as_deref().map(&mut net_of).unwrap_or(None), layers: layer_range, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: Some(v.id.clone()), locked: locked.contains(v.id.as_str()), is_virtual: false }));
     }
 
     add_board_outline(&mut node, &drc_board, &layers);
-    add_copper_texts(&mut node, design, &layers);
+    add_copper_texts(&mut node, design, &layers, &mut rules);
+    add_keepouts(&mut node, design, &layers, &rules);
+    node.set_rule_resolver(rules);
     // `ROUTER::SyncWorld`: `m_world->FixupVirtualVias()`
     node.fixup_virtual_vias();
 
@@ -165,8 +180,34 @@ fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: 
                     continue;
                 }
                 let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: format!("edge:{index}"), edge: true }));
+                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: format!("edge:{index}"), edge: true, rule: 0 }));
             }
+        }
+    }
+}
+
+/// `PNS_KICAD_IFACE_BASE::syncZone` for each keepout rule area (`!aZone->GetIsRuleArea() || !aZone->HasKeepoutParametersSet()` returns at
+/// once): every triangle of the outline (`poly->CacheTriangulation()`, [`crate::triangulation::tesselate`]), on each of its copper layers, a
+/// `SOLID` with no net (`SetNet( nullptr )`, here [`crate::item::not_a_net`]), its parent the zone, not routable. What it keeps out, and how
+/// (`collideSimple`'s `IsKeepout`: an exact boundary), is [`crate::rule_resolver::Keepout`]'s and [`Node::item_collision`]'s. **Differs:** an
+/// outline the ear cutting cannot finish (KiCad subdivides or splits it) is one solid of its whole outline, and the holes of an area are not
+/// cut out of it.
+fn add_keepouts(node: &mut Node, design: &Design, layers: &LayerMap, rules: &crate::rule_resolver::RuleResolver) {
+    let Some(rt) = design.routing.as_ref() else { return };
+    for z in rt.zones.iter().filter(|z| z.is_rule_area && (z.keepout_tracks || z.keepout_vias || z.keepout_pads || z.keepout_copper_pour || z.keepout_footprints)) {
+        let Some(layer) = layers.index_of(&z.layer) else { continue };
+        if z.outline.len() < 3 {
+            continue;
+        }
+        let pieces: Vec<Vec<Point>> = match crate::triangulation::tesselate(&z.outline) {
+            Some(tris) => tris.into_iter().map(|t| t.to_vec()).collect(),
+            None => vec![z.outline.clone()],
+        };
+        for (k, pts) in pieces.into_iter().enumerate() {
+            let n = pts.len() as i64;
+            let pos = Point { x: pts.iter().map(|p| p.x).sum::<Nm>() / n, y: pts.iter().map(|p| p.y).sum::<Nm>() / n };
+            let rule = rules.rule_of(&format!("{}{}", Solid::KEEPOUT_SOURCE, z.id));
+            node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos, shape: Shape::Polygon { pts }, source: format!("{}{}#{k}", Solid::KEEPOUT_SOURCE, z.id), edge: false, rule }));
         }
     }
 }
@@ -182,12 +223,14 @@ const TEXT_MAX_ERROR_NM: eda_model::ir::Nm = Nm::new(5_000);
 /// (`DrawingsSection::copper_texts`, with their layout) and a plain [`eda_model::ir::Text`] put on a copper layer in the studio. A hidden text
 /// is not imported as copper (`IsVisible()`). Not here: a footprint's own copper texts (KiCad syncs its reference, value, fields and texts on
 /// copper too), a table (`PCB_TABLE`), a knockout text's margin, and a text box (`gr_text_box` is not read by the importer).
-fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap) {
+fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap, rules: &mut crate::rule_resolver::RuleResolver) {
     let Some(d) = design.drawings.as_ref() else { return };
     let mut add = |id: &str, layer: &str, at: Point, rot_deg: f64, segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Nm| {
         let (Some(layer), false) = (layers.index_of(layer), segs.is_empty()) else { return };
         let hull = text_bounding_hull(segs, r + TEXT_MAX_ERROR_NM, at, rot_deg);
-        node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos: at, shape: Shape::Polygon { pts: hull }, source: format!("{}{id}", Solid::TEXT_SOURCE), edge: false }));
+        let source = format!("{}{id}", Solid::TEXT_SOURCE);
+        let rule = rules.add_text(&source, layer);
+        node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos: at, shape: Shape::Polygon { pts: hull }, source, edge: false, rule }));
     };
     for (i, t) in d.copper_texts.iter().enumerate() {
         if let Some(Shape::Strokes { segs, r }) = eda_drc::board::footprint_text_shape(t) {
@@ -235,6 +278,7 @@ fn text_bounding_hull(segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Nm, at: P
 mod tests {
     use eda_model::units::mm;
     use super::*;
+    use crate::item::net_of;
     use eda_model::ir::{Design, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track};
     use eda_model::{ConstraintModel, Part, Pin, PinKind};
 

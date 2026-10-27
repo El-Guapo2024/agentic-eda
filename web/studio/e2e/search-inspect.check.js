@@ -471,7 +471,8 @@
       await sleep(900);
       const name = (await library()).find((n) => !before.includes(n));
       t(!!name, `a new footprint to check: ${name}`);
-      const pad = (num, x) => ({ number: num, at: { x, y: 0 }, size: [1_000_000, 1_000_000], shape: "rect", kind: "smd", drill: null, rot: 0, layers: [] });
+      const PAD_Y = 5_000_000; // below CreateNewFootprint's REF** (silkscreen, just above the origin), which would be silk over copper
+      const pad = (num, x) => ({ number: num, at: { x, y: PAD_Y }, size: [1_000_000, 1_000_000], shape: "rect", kind: "smd", drill: null, rot: 0, layers: [] });
       for (const [num, x] of [["1", -400_000], ["2", 400_000]]) { const r = await cmd({ op: "add_pad", footprint: name, pad: pad(num, x) }); t(r.ok, `pad ${num}: ${r.message ?? ""}`); if (r.ok) steps++; }
       await sleep(500);
 
@@ -516,7 +517,7 @@
       for (const g of [line(P(-3_000_000, -2_000_000), P(3_000_000, -2_000_000)), line(P(3_000_000, -2_000_000), P(3_000_000, 2_000_000)), line(P(3_000_000, 2_000_000), P(-3_000_000, 2_000_000)), line(P(-3_000_000, 2_000_000), P(-3_000_000, -2_000_000))]) { const r = await cmd({ op: "add_footprint_graphic", footprint: name, shape: g }); t(r.ok, `courtyard line: ${r.message ?? ""}`); if (r.ok) steps++; }
       const fp = await json(`/api/footprint?name=${encodeURIComponent(name)}`);
       const second = fp.pads.find((p) => p.number === "2");
-      const moved = await cmd({ op: "move_pad", footprint: name, id: second.id, x: 1_500_000, y: 0 });
+      const moved = await cmd({ op: "move_pad", footprint: name, id: second.id, x: 1_500_000, y: PAD_Y });
       t(moved.ok, `pad 2 moved apart: ${moved.message ?? ""}`);
       if (moved.ok) steps++;
       await sleep(500);
@@ -532,7 +533,7 @@
       await sleep(300);
       t(badge("errors") === "0" && badge("warnings") === "0", "reopened: the badges still count the last run");
       // (nothing is left to delete after the clean run: put a marker back first)
-      const edit = await cmd({ op: "move_pad", footprint: name, id: (await json(`/api/footprint?name=${encodeURIComponent(name)}`)).pads.find((p) => p.number === "2").id, x: 400_000, y: 0 });
+      const edit = await cmd({ op: "move_pad", footprint: name, id: (await json(`/api/footprint?name=${encodeURIComponent(name)}`)).pads.find((p) => p.number === "2").id, x: 400_000, y: PAD_Y });
       if (edit.ok) steps++;
       await sleep(400);
       t(await runChecks(), "a third run finishes");

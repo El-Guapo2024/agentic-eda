@@ -173,3 +173,33 @@ fn a_projects_net_classes_come_in_in_the_order_of_their_priority() {
     let classes = eda_kicad::parse_project_net_classes(&pro.to_string());
     assert_eq!(classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["delta", "bravo", "charlie", "alpha"], "-1 (none) first, then 0, 1, 2");
 }
+
+/// X3 (r2-editors-exports): the board's plot settings (`PCB_PLOT_PARAMS`) are the imported board's own after an import and a write, not a fixed block;
+/// the layer selection of a file older than 20240819 is in the legacy layer numbers (`remapLegacyLayerLSET`), and is written in today's.
+#[test]
+fn pcbplotparams_survive_import_and_write() {
+    let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+	(layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+	(setup
+		(pcbplotparams (layerselection 0x0001000_80000001) (plot_on_all_layers_selection 0x0000000_00000000) (usegerberextensions yes) (subtractmaskfromsilk yes)
+			(gerberprecision 5) (plotreference no) (useauxorigin yes) (dashed_line_dash_ratio 8.000000) (outputdirectory "gerbers/"))
+	)
+	(net 0 "")
+)
+"#;
+    let (design, model, _) = import_kicad_pcb(board).expect("imports");
+    let plot = design.drawings.as_ref().and_then(|d| d.plot_params.clone()).expect("the block is kept");
+    assert_eq!(plot.layer_selection, ["F.Cu", "B.Cu", "Edge.Cuts"], "legacy F.Cu 0, B.Cu 31 and Edge.Cuts 44");
+    let text = export(&design, &model);
+    let block = &text[text.find("(pcbplotparams").unwrap()..];
+    let block = &block[..block.find("\n\t\t)").unwrap()];
+    for item in ["(layerselection 0x00000000_00000000_00000000_02000005)", "(usegerberextensions yes)", "(subtractmaskfromsilk yes)", "(gerberprecision 5)", "(plotreference no)", "(useauxorigin yes)", "(outputdirectory \"gerbers/\")", "(dashed_line_dash_ratio 8.000000)", "(dashed_line_gap_ratio 3.000000)"] {
+        assert!(block.contains(item), "{item} in {block}");
+    }
+    let (again, _, _) = import_kicad_pcb(&text).expect("re-imports");
+    assert_eq!(again.drawings.and_then(|d| d.plot_params).map(|p| p.layer_selection), Some(plot.layer_selection), "the selection reads back the same in today's numbers");
+    // A board with no block of its own writes KiCad's defaults (`PCB_PLOT_PARAMS::Format` of a default `PCB_PLOT_PARAMS`).
+    let (d0, m0, _) = import_kicad_pcb(r#"(kicad_pcb (version 20241229) (generator "pcbnew") (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user)) (net 0 ""))"#).expect("imports");
+    let text = export(&d0, &m0);
+    assert!(text.contains("(layerselection 0x00000000_00000000_55555555_5755f5ff)") && text.contains("(usegerberextensions no)") && text.contains("(sketchdnponfab yes)"), "{text}");
+}

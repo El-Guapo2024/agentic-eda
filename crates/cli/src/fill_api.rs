@@ -262,7 +262,7 @@ mod tests {
 
     fn fill_of(zone: &Zone, layer: &str) -> ZoneEntry {
         let ring = KicadRing { island: false, pts: vec![[1_000_000, 1_000_000], [9_000_000, 1_000_000], [9_000_000, 9_000_000], [1_000_000, 9_000_000]] };
-        ZoneEntry { sig: zone_signature(zone), layers: BTreeMap::from([(layer.to_string(), vec![ring])]) }
+        ZoneEntry { sig: zone_signature(zone), layers: BTreeMap::from([(layer.to_string(), vec![ring])]), unfilled: false }
     }
 
     #[test]
@@ -380,9 +380,9 @@ mod tests {
             symbol_library: None,
         };
         let scanned = vec![
-            ScannedFill { zone: "uuid-a".into(), layer: "F.Cu".into(), island: false, pts: vec![[0, 0], [1_000_000, 0], [1_000_000, 1_000_000]] },
-            ScannedFill { zone: "uuid-a".into(), layer: "F.Cu".into(), island: true, pts: vec![[5_000_000, 5_000_000], [6_000_000, 5_000_000], [6_000_000, 6_000_000]] },
-            ScannedFill { zone: "somebody else".into(), layer: "F.Cu".into(), island: false, pts: vec![[0, 0], [1, 0], [1, 1]] },
+            ScannedFill { zone: "uuid-a".into(), zone_filled: true, layer: "F.Cu".into(), island: false, pts: vec![[0, 0], [1_000_000, 0], [1_000_000, 1_000_000]] },
+            ScannedFill { zone: "uuid-a".into(), zone_filled: true, layer: "F.Cu".into(), island: true, pts: vec![[5_000_000, 5_000_000], [6_000_000, 5_000_000], [6_000_000, 6_000_000]] },
+            ScannedFill { zone: "somebody else".into(), zone_filled: true, layer: "F.Cu".into(), island: false, pts: vec![[0, 0], [1, 0], [1, 1]] },
         ];
         keep_imported(&dir, &design, scanned);
         let kept = cached(&dir).expect("the fills were kept");

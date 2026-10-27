@@ -279,9 +279,8 @@ pub fn resolve_library_footprints_with(model: &mut ConstraintModel, mut find: im
 }
 
 /// The Reference, the Value and the user fields of a library footprint as `(property ..)` forms (`PCB_IO_KICAD_SEXPR::format( FOOTPRINT )` for a footprint of the library: its fields
-/// are the root's own, so they are indented one tab less than on a board). The Reference and the Value are written when the footprint has a layout for them or hides one of them
-/// -- a footprint that says nothing about them is left for KiCad to give its defaults, as the file always was; the user fields are always written, each with its layout (a field
-/// with none is hidden at the origin on the fabrication layer, `OnAddField`).
+/// are the root's own, so they are indented one tab less than on a board). The Reference and the Value are always written, with `CreateNewFootprint`'s layouts when the footprint
+/// has none of its own; the user fields are always written, each with its layout (a field with none is hidden at the origin on the fabrication layer, `OnAddField`).
 fn write_library_fields(out: &mut String, fp: &eda_model::ir::LibraryFootprint) {
     use eda_model::fp_edit::{default_library_reference_layout, default_library_value_layout, new_library_field_layout, LIBRARY_REFERENCE_TEXT};
     let one = |out: &mut String, name: &str, text: &str, l: &eda_model::fp_edit::FieldLayout| {
@@ -293,14 +292,14 @@ fn write_library_fields(out: &mut String, fp: &eda_model::ir::LibraryFootprint) 
             out.push('\n');
         }
     };
-    if let Some(mut l) = fp.reference.clone().or_else(|| (!fp.reference_visible).then(default_library_reference_layout)) {
-        l.visible = fp.reference_visible;
-        one(out, "Reference", l.shown(LIBRARY_REFERENCE_TEXT), &l);
-    }
-    if let Some(mut l) = fp.value.clone().or_else(|| (!fp.value_visible).then(default_library_value_layout)) {
-        l.visible = fp.value_visible;
-        one(out, "Value", l.shown(&fp.name), &l);
-    }
+    // Always written: a `.kicad_mod` without them reads in KiCad as an empty Reference and Value at the origin. A footprint with no layout of its own takes
+    // `CreateNewFootprint`'s (REF** on the silkscreen, the name on the fabrication layer).
+    let mut l = fp.reference.clone().unwrap_or_else(default_library_reference_layout);
+    l.visible = fp.reference_visible;
+    one(out, "Reference", l.shown(LIBRARY_REFERENCE_TEXT), &l);
+    let mut l = fp.value.clone().unwrap_or_else(default_library_value_layout);
+    l.visible = fp.value_visible;
+    one(out, "Value", l.shown(&fp.name), &l);
     // The Datasheet and the Description fields, when the footprint has them (else KiCad gives it its own, `default_library_datasheet_layout`).
     for (name, field) in [("Datasheet", &fp.datasheet), ("Description", &fp.description_field)] {
         if let Some(l) = field {
@@ -789,8 +788,10 @@ mod tests {
     fn export_kicad_mod_writes_the_fields_with_their_layouts_and_reads_them_back() {
         use eda_model::fp_edit::{new_library_field_layout, FieldLayout};
         use eda_model::ir::{FootprintField, Point};
+        // E1 (r2-editors-exports): a footprint with no layouts of its own writes `CreateNewFootprint`'s Reference and Value, not nothing (KiCad would read both empty).
         let plain = export_kicad_mod(&eda_model::ir::LibraryFootprint::new_empty("Test:Plain"));
-        assert!(!plain.contains("(property"), "a footprint with no fields writes none: {plain}");
+        assert!(plain.contains("(property \"Reference\" \"REF**\" (at 0 -0.5 0) (layer \"F.SilkS\")"), "{plain}");
+        assert!(plain.contains("(property \"Value\" \"Test:Plain\" (at 0 1 0) (layer \"F.Fab\")"), "{plain}");
 
         let mut reference = FieldLayout::new(Point { x: mm(0.5), y: mm(-2.5) }, "F.SilkS");
         reference.size = (mm(1.2), mm(1.0));

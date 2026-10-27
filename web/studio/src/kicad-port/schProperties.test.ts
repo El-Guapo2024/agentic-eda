@@ -120,6 +120,8 @@ test("a sheet dialog is one command: the name and file, and the page number", ()
       { op: "set_sheet_page", sheet: "sheet_a", page: "3" },
     ],
   });
+  // the dialog sets the page of the sheet path it shows (the sheet in view's path, then the sheet)
+  assert.deepEqual(sheetEditCmd(sh, { name: "Power", file: "power.kicad_sch", page: "4" }, ["outer", "sheet_a"]), { op: "set_sheet_page", sheet: "sheet_a", page: "4", path: ["outer", "sheet_a"] });
 });
 
 test("the stroke dialog shows what the items share, and mixed where they differ", () => {

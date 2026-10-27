@@ -2,12 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSchNetlistRequest, buildSchPlotRequest, DEFAULT_SCH_PLOT_FORM, SCH_NETLIST_FORMATS, summarizeOutputs } from "./schOutputs";
 
-test("buildSchPlotRequest: defaults mirror SCH_PLOT_OPTS (colour, drawing sheet, background, all pages)", () => {
+// X9 (r2-editors-exports): the dialog's own initial state, not SCH_PLOT_OPTS' constructor.
+test("the plot dialog starts as KiCad's: PDF, colour, drawing sheet, no background colour, all pages", () => {
   assert.deepEqual(buildSchPlotRequest(DEFAULT_SCH_PLOT_FORM), {
-    format: "svg",
+    format: "pdf",
     color: true,
     plot_drawing_sheet: true,
-    background: true,
+    background: false,
     plot_all: true,
     sheet_path: "",
   });

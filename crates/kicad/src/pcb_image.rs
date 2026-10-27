@@ -27,11 +27,45 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<RefImage> {
     Some(RefImage { id: String::new(), layer, at, scale_ppm: ((scale * SCALE_PPM as f64).round() as i64).max(1), data })
 }
 
+/// The first board file version whose image scale is for the image's own definition (`SEXPR_BOARD_FILE_VERSION` 20260623, "Migrate reference image scale for PNG
+/// pixel-density fix"). The board writer writes an older version (`pcb.rs`), so it writes the scale that version means ([`file_scale`]).
+pub const FIRST_TRUE_PPI_SCALE: i64 = 20260623;
+
+/// The scale an image has, as KiCad holds it, from the scale `scale_ppm` a file of `file_version` says: before [`FIRST_TRUE_PPI_SCALE`], the stored scale made up for a PNG's
+/// definition read short (`BITMAP_BASE::GetLegacyPPI`), and `parsePCB_REFERENCE_IMAGE` scales it by `GetPPI() / legacyPPI` "to preserve the rendered size of existing boards".
+pub(crate) fn scale_from_file(scale_ppm: i64, data: &str, file_version: i64) -> i64 {
+    match image_info::header_of_base64(data) {
+        Some(h) if file_version < FIRST_TRUE_PPI_SCALE && h.legacy_ppi > 0 && h.ppi != h.legacy_ppi => ((scale_ppm as f64 * h.ppi as f64 / h.legacy_ppi as f64).round() as i64).max(1),
+        _ => scale_ppm,
+    }
+}
+
+/// The `(scale ..)` to write for an image KiCad holds at `scale_ppm` into a file older than [`FIRST_TRUE_PPI_SCALE`], `None` for a scale of one: the inverse of
+/// [`scale_from_file`], so that KiCad's rescaling gives the image back its size. The scale is written with the fewest decimals (up to four) that read back as `scale_ppm`, which
+/// gives an older file's own scale back as it was (its `1` came in as 1.021277 and goes out as `1`), and otherwise in full, so that KiCad's product is the scale itself (a
+/// newer file's `1` goes out as 0.9791666666666666 and is 1 again in KiCad, which writes no scale for it: `if( GetImageScale() != 1.0 )`).
+pub(crate) fn file_scale(scale_ppm: i64, data: &str) -> Option<String> {
+    let header = image_info::header_of_base64(data).filter(|h| h.legacy_ppi > 0 && h.ppi != h.legacy_ppi);
+    let Some(h) = header else { return (scale_ppm != SCALE_PPM).then(|| crate::sch_extras_io::scale_str(scale_ppm)) };
+    let (ppi, legacy) = (h.ppi as f64, h.legacy_ppi as f64);
+    let x = scale_ppm as f64 / SCALE_PPM as f64 * legacy / ppi;
+    for decimals in 0..=4 {
+        let k = 10f64.powi(decimals);
+        let v = (x * k).round() / k;
+        if v > 0.0 && (v * ppi / legacy * SCALE_PPM as f64).round() as i64 == scale_ppm {
+            return Some(crate::sch_extras_io::scale_str((v * SCALE_PPM as f64).round() as i64));
+        }
+    }
+    Some(format!("{x}"))
+}
+
 /// Every `(image ..)` of a board, with the uuid and the lock of each in `refs`.
 pub(crate) fn read_all(root: &[Sexpr], refs: &mut Vec<crate::import_items::ItemRef>) -> Vec<RefImage> {
     let mut out = Vec::new();
+    let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
     for item in sexpr::find_all(root, "image") {
-        if let Some(img) = read(item) {
+        if let Some(mut img) = read(item) {
+            img.scale_ppm = scale_from_file(img.scale_ppm, &img.data, file_version);
             out.push(img);
             refs.push(crate::import_items::ItemRef::of(item));
         }
@@ -43,8 +77,8 @@ pub(crate) fn read_all(root: &[Sexpr], refs: &mut Vec<crate::import_items::ItemR
 pub(crate) fn write(out: &mut String, img: &RefImage, locked: bool) -> String {
     let uuid = crate::duid_for(&format!("refimage:{}", img.id), &img.id);
     write!(out, "\t(image\n\t\t(at {} {}) (layer {})", mm(img.at.x), mm(img.at.y), sexpr_str(&img.layer)).unwrap();
-    if img.scale_ppm != SCALE_PPM {
-        write!(out, " (scale {})", crate::sch_extras_io::scale_str(img.scale_ppm)).unwrap();
+    if let Some(scale) = file_scale(img.scale_ppm, &img.data) {
+        write!(out, " (scale {scale})").unwrap();
     }
     if locked {
         write!(out, " (locked yes)").unwrap();
@@ -57,6 +91,27 @@ pub(crate) fn write(out: &mut String, img: &RefImage, locked: bool) -> String {
 mod tests {
     use eda_model::units::Nm;
     use super::*;
+
+    /// F1 of round 2: a 96 dpi PNG (37.8 pixels per centimetre) was 94 dpi to KiCad before 20260623, and `parsePCB_REFERENCE_IMAGE` scales an older file's image by 96 / 94.
+    /// The board is written as 20241229, so the scale written is the one that comes back as the image's.
+    #[test]
+    fn the_scale_of_a_png_follows_the_file_version_both_ways() {
+        let data = image_info::base64_encode(&image_info::solid_png(40, 40, [0, 0, 0], 96));
+        // an older file's 1 is KiCad's 96 / 94 and is written back as 1
+        let old = scale_from_file(SCALE_PPM, &data, 20241229);
+        assert_eq!(old, 1_021_277);
+        assert_eq!(file_scale(old, &data).as_deref(), Some("1"));
+        // a newer file's 1 is 1, written as what KiCad turns back into 1
+        assert_eq!(scale_from_file(SCALE_PPM, &data, 20261017), SCALE_PPM);
+        let text = file_scale(SCALE_PPM, &data).expect("a scale");
+        let v: f64 = text.parse().unwrap();
+        assert_eq!(v * 96.0 / 94.0, 1.0, "{text}");
+        // an image whose definition KiCad always read right keeps its scale as it is
+        let png300 = image_info::base64_encode(&image_info::solid_png(4, 4, [0, 0, 0], 300));
+        assert_eq!(scale_from_file(SCALE_PPM, &png300, 20241229), SCALE_PPM);
+        assert_eq!(file_scale(500_000, &png300).as_deref(), Some("0.5"));
+        assert_eq!(file_scale(SCALE_PPM, &png300), None);
+    }
 
     fn image_text(layer: &str, extra: &str) -> (String, String) {
         let data = image_info::base64_encode(&image_info::solid_png(60, 40, [20, 120, 220], 254));

@@ -1,9 +1,13 @@
 // dialog_gendrill.cpp ("Generate Drill Files", File > Fabrication Outputs
 // > Drill Files...). The real dialog's map/report/units/zeros-format
 // options aren't all wired here yet -- the dialog POSTs to /api/fab/drill
-// (crates/cli/src/fab_api.rs), which runs `kicad-cli pcb export drill` with
-// its defaults (Excellon, millimetres, "decimal" zeros); the one option that
-// changes the *file set* -- merged vs. separate PTH/NPTH files -- is exposed.
+// (crates/cli/src/fab_api.rs), which runs `kicad-cli pcb export drill`
+// (Excellon, millimetres, "decimal" zeros). Wired, with KiCad's labels and
+// defaults (`dialog_gendrill_base.cpp`): "PTH and NPTH in single file"
+// (`m_Check_Merge_PTH_NPTH`, unchecked: two files), "Use alternate drill mode
+// for oval holes" (`m_altDrillMode`, unchecked: slots are routed,
+// `SetRouteModeForOvalHoles( !m_altDrillMode )`), and the Origin choice, which
+// starts as the board's plot settings say (`m_plotOpts.GetUseAuxOrigin()`).
 import { useState } from "react";
 import { postFabDrill } from "../api/client";
 import { useStudioDispatch, useStudioState } from "../state/store";
@@ -11,8 +15,9 @@ import { useStudioDispatch, useStudioState } from "../state/store";
 export function GenerateDrillDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
-  const [separateTh, setSeparateTh] = useState(false);
-  const [useAuxOrigin, setUseAuxOrigin] = useState(false);
+  const [mergePthNpth, setMergePthNpth] = useState(false);
+  const [altDrillMode, setAltDrillMode] = useState(false);
+  const [useAuxOrigin, setUseAuxOrigin] = useState(() => state.board?.plot_params?.use_aux_origin ?? false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
 
@@ -23,7 +28,7 @@ export function GenerateDrillDialog() {
     setBusy(true);
     setResult(null);
     try {
-      const reply = await postFabDrill(separateTh, useAuxOrigin);
+      const reply = await postFabDrill({ merge_pth_npth: mergePthNpth, alt_drill_mode: altDrillMode, use_aux_origin: useAuxOrigin });
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Drill file written." : "Failed."), files: reply.files ?? [] });
     } finally {
       setBusy(false);
@@ -37,9 +42,13 @@ export function GenerateDrillDialog() {
         <div className="dialog-body" style={{ paddingTop: 10 }}>
           <div style={{ marginBottom: 10 }}>
             <div style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginBottom: 6 }}>Drill File Format: Excellon, metric, decimal format</div>
-            <label className="toggle">
-              <input type="checkbox" checked={separateTh} onChange={(e) => setSeparateTh(e.target.checked)} />
-              Generate independent files for NPTH and PTH holes
+            <label className="toggle" title={"Not recommended.\nOnly use for board houses which ask for merged PTH and NPTH into a single file."}>
+              <input type="checkbox" checked={mergePthNpth} onChange={(e) => setMergePthNpth(e.target.checked)} />
+              PTH and NPTH in single file
+            </label>
+            <label className="toggle" style={{ display: "block", marginTop: 4 }}>
+              <input type="checkbox" checked={altDrillMode} onChange={(e) => setAltDrillMode(e.target.checked)} />
+              Use alternate drill mode for oval holes
             </label>
             {/* m_origin: "Absolute" or "Drill/place file origin" (pcbnew.EditorControl.drillOrigin). */}
             <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
@@ -51,7 +60,7 @@ export function GenerateDrillDialog() {
             </label>
           </div>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", marginBottom: 10 }}>
-            Output directory: <code>export/kicad/drill/</code>. Plated and non-plated holes merge into one <code>.drl</code> file unless separated above -- written by
+            Output directory: <code>export/kicad/drill/</code>. Plated and non-plated holes go into two files (<code>-PTH.drl</code>, <code>-NPTH.drl</code>) unless merged above -- written by
             `kicad-cli pcb export drill`.
           </div>
           {result && (

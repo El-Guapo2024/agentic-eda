@@ -442,7 +442,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
         moved.holes = z.holes.iter().map(|h| h.iter().map(|p| mv(*p)).collect()).collect();
         let n = if z.is_rule_area { 0 } else { net_n(&z.net) };
         let uuid = duid(&format!("clip:zone:{}", z.id));
-        write_zone(&mut out, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &[], enabled_layers: None });
+        write_zone(&mut out, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &[], filled: false, enabled_layers: None });
         written.entry(z.id.clone()).or_default().push(uuid);
     }
     for s in &picked.shapes {

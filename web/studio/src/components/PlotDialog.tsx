@@ -5,8 +5,13 @@
 // output: X2 format and whether a board-edge check should block the plot.
 //
 // POSTs straight to /api/fab/gerbers (crates/cli/src/fab_api.rs), which
-// runs `kicad-cli pcb export gerbers --layers ...` on the exported board and
-// writes into this board's own export/kicad/gerbers/ folder.
+// runs `kicad-cli pcb export gerbers --layers ...` on the exported board with
+// the board's own plot settings (`(setup (pcbplotparams ..))`: Protel names or
+// not, precision, X2, subtract mask from silk, the DNP fab options -- what
+// KiCad's dialog plots with) and writes into this board's own
+// export/kicad/gerbers/ folder. The checklist and the origin box start from
+// the board's plot settings too. Differs: KiCad stores the dialog's choices
+// back in the board on Plot; here they are this dialog's only.
 import { useEffect, useRef, useState } from "react";
 import { postFabGerbers } from "../api/client";
 import { useStudioDispatch, useStudioState } from "../state/store";
@@ -26,7 +31,8 @@ export function PlotDialog() {
   const copperLayers = state.board?.layers ?? ["F.Cu", "B.Cu"];
   const layerSetup = state.board?.board_rules?.layer_setup;
   const optional = enabledOptionalLayers(layerSetup);
-  const [checked, setChecked] = useState<Set<string>>(() => new Set(defaultLayers(copperLayers, optional)));
+  // `DIALOG_PLOT::init_Dialog`: the checklist is the board's plot settings' layer selection (`GetLayerSelection()`), KiCad's default for a board that has none.
+  const [checked, setChecked] = useState<Set<string>>(() => new Set(state.board?.plot_params?.layers ?? defaultLayers(copperLayers, optional)));
   // Board Setup > Physical Stackup changes the number of copper layers while this dialog's state lives on: a copper layer the board gained
   // starts checked (the default is every layer the board has) and one it lost is dropped, whatever else was ticked or cleared stays.
   const knownCopper = useRef(copperLayers);
@@ -57,7 +63,8 @@ export function PlotDialog() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [optionalKey]);
-  const [useAuxOrigin, setUseAuxOrigin] = useState(false);
+  // "Use drill/place file origin" (`m_useAuxOriginCheckBox`) starts as the board's `useauxorigin`.
+  const [useAuxOrigin, setUseAuxOrigin] = useState(() => state.board?.plot_params?.use_aux_origin ?? false);
   // `DIALOG_PLOT::m_zoneFillCheck`: on by default in KiCad.
   const [checkZones, setCheckZones] = useState(true);
   const [busy, setBusy] = useState(false);

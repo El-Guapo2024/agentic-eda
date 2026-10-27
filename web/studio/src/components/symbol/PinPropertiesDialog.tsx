@@ -20,6 +20,7 @@ import { pinOccupiedMessage, pinPlacementOccupant } from "../../kicad-port/pinPl
 import { alternatesError, PIN_SHAPE_OPTIONS as SHAPE_OPTIONS, PIN_TYPE_OPTIONS as ELECTRICAL_TYPE_OPTIONS } from "../../kicad-port/symPinAlternates";
 import { pinTemplateOf } from "../../kicad-port/symPinTemplate";
 import { synchronizePins } from "../../kicad-port/symPinSync";
+import { commonBodyStylesBox, commonUnitsBox, pinOffGridMessage, pinUnitsOnOk, syncPinsMessage } from "../../kicad-port/symPinDialog";
 import { askConfirm } from "../library/libraryDialogs";
 import { PinAlternatesGrid } from "./PinAlternatesGrid";
 
@@ -68,29 +69,37 @@ export function PinPropertiesDialog() {
     </span>
   );
 
+  const sym = state.symbol;
+  const unitCount = sym?.unit_count ?? 1;
+  // `TransferDataToWindow`: the two "Common to all ..." boxes, their tooltips, and the info bar while `m_SyncPinEdit` is on
+  const unitsBox = commonUnitsBox(form, unitCount, state.syncPins);
+  const stylesBox = commonBodyStylesBox(form, !!sym?.has_alternate_body_style);
+
   const submit = async () => {
     // `TransferDataFromWindow`: a row of the alternates grid needs a name
     const problem = alternatesError(form.alternates ?? []);
     if (problem) return setError(problem);
+    // "Only show the warning if the position has been changed": a pin off KiCad's standard grid asks first; No keeps the dialog open
+    const offGrid = pinOffGridMessage(pin.at, form.at);
+    if (offGrid && !(await askConfirm({ title: "Confirmation", message: offGrid, okLabel: "Yes", cancelLabel: "No" }))) return; // `IsOK`: Yes / No
+    // `SetUnit( m_checkApplyToAllParts->GetValue() ? 0 : m_frame->GetUnit() )`, the same for the body style: a disabled box is unchecked for the unit
+    const edited: LibrarySymbolPin = { ...form, ...pinUnitsOnOk(unitsBox.checked, stylesBox.checked, state.activeUnit, state.activeBodyStyle) };
+    // `EditPinProperties` saves the sticky defaults (`g_LastPin*`) when OK is pressed, for an edited pin and for a new one before `PlacePin` places it -- so a
+    // declined "Place Pin Anyway" keeps the new look too. Merely selecting a pin saves nothing.
+    dispatch({ type: "SET_PIN_TEMPLATE", pin: pinTemplateOf(edited) });
     if (id) {
-      // `EditPinProperties` saves the sticky defaults (`g_LastPin*`) for an edited pin too; merely selecting one does not.
-      if (await api.editPin(id, form)) {
-        dispatch({ type: "SET_PIN_TEMPLATE", pin: pinTemplateOf(form) });
-        close();
-      }
+      if (await api.editPin(id, edited)) close();
       return;
     }
     // A pin the tool has just dropped: `PlacePin` asks first when it lands on another pin (Synchronized Pins Mode), and only then is it added.
-    const sym = state.symbol;
     const syncMode = !!sym && synchronizePins(state.syncPins, sym.unit_count, !!sym.units_locked);
-    const occupant = pinPlacementOccupant(form, sym?.pins ?? [], syncMode);
+    const occupant = pinPlacementOccupant(edited, sym?.pins ?? [], syncMode);
     if (occupant && !(await askConfirm({ title: "Confirmation", message: pinOccupiedMessage(occupant.unit), okLabel: "Place Pin Anyway" }))) {
       dispatch({ type: "SET_PENDING_PIN", pin: null }); // PlacePin deletes the new pin and places nothing
       return;
     }
-    if (!(await api.addPin(form))) return; // the verb's refusal is the editor's toast; the dialog stays open on the pin
-    dispatch({ type: "PIN_PLACED", number: form.number });
-    dispatch({ type: "SET_PIN_TEMPLATE", pin: pinTemplateOf(form) });
+    if (!(await api.addPin(edited))) return; // the verb's refusal is the editor's toast; the dialog stays open on the pin
+    dispatch({ type: "PIN_PLACED", pin: edited });
     close();
   };
 
@@ -102,6 +111,15 @@ export function PinPropertiesDialog() {
           <span>{form.number || "(no number)"}</span>
         </div>
         <div className="dialog-body" style={{ maxHeight: "72vh", overflowY: "auto" }}>
+          {state.syncPins && (
+            // the info bar of `m_SyncPinEdit`, with its "Exit sync pins mode" link (`m_frame->m_SyncPinEdit = false`)
+            <div className="panel-empty" style={{ marginBottom: 8, display: "flex", justifyContent: "space-between", gap: 8 }} data-testid="pin-sync-infobar">
+              <span>{syncPinsMessage(unitsBox.checked, !id)}</span>
+              <a href="#" onClick={(e) => (e.preventDefault(), dispatch({ type: "SET_SYNC_PINS", on: false }))}>
+                Exit sync pins mode
+              </a>
+            </div>
+          )}
           <div className="kv-grid" style={{ gridTemplateColumns: "150px 1fr" }}>
             <span>Pin name</span>
             <input value={form.name} onChange={(e) => set("name", e.target.value)} style={{ width: 140 }} />
@@ -150,13 +168,13 @@ export function PinPropertiesDialog() {
               <input type="checkbox" checked={!form.hidden} onChange={(e) => set("hidden", !e.target.checked)} />
             </label>
 
-            <span>Common to all units</span>
-            <label>
-              <input type="checkbox" checked={form.unit === 0} onChange={(e) => set("unit", e.target.checked ? 0 : state.activeUnit)} />
+            <span>Common to all units in symbol</span>
+            <label title={unitsBox.tooltip ?? undefined}>
+              <input type="checkbox" data-testid="pin-common-units" disabled={!unitsBox.enabled} checked={unitsBox.checked} onChange={(e) => set("unit", e.target.checked ? 0 : state.activeUnit)} />
             </label>
             <span>Common to all body styles</span>
             <label>
-              <input type="checkbox" checked={form.body_style === 0} onChange={(e) => set("body_style", e.target.checked ? 0 : state.activeBodyStyle)} />
+              <input type="checkbox" data-testid="pin-common-styles" disabled={!stylesBox.enabled} checked={stylesBox.checked} onChange={(e) => set("body_style", e.target.checked ? 0 : state.activeBodyStyle)} />
             </label>
           </div>
           <PinAlternatesGrid rows={form.alternates ?? []} onChange={(rows) => set("alternates", rows)} pin={pin} available={!state.symbol?.has_alternate_body_style} onError={setError} />

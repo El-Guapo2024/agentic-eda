@@ -349,6 +349,8 @@ export interface FootprintEditorApi {
   moveText: (id: string, x: Nm, y: Nm) => Promise<void>;
   editText: (id: string, fields: Omit<CmdText, "id" | "at">) => Promise<void>;
   deleteText: (id: string) => Promise<void>;
+  /** `EDIT_TOOL::Remove`: the given pads, graphics and texts in one commit -- one `batch`, one undo step. */
+  deleteItems: (ids: readonly string[]) => Promise<void>;
   setAnchor: (at: PointXY) => Promise<void>;
   editProperties: (fields: FootprintPropertiesFields) => Promise<boolean>;
   updateOnBoard: () => Promise<void>;
@@ -626,6 +628,20 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       if (!name) return;
       dispatch({ type: "CLEAR_SELECTION" });
       await runCmd({ op: "delete_footprint_text", footprint: name, id });
+    },
+    deleteItems: async (ids) => {
+      const st = stateRef.current;
+      const name = st.name;
+      const fp = st.footprint;
+      if (!name || !fp) return;
+      const cmds: Cmd[] = [];
+      for (const id of ids) {
+        if (fp.pads.some((p) => p.id === id)) cmds.push({ op: "delete_pad", footprint: name, id });
+        else if (fp.graphics.some((g) => g.id === id)) cmds.push({ op: "delete_footprint_graphic", footprint: name, id });
+        else if (fp.texts.some((t) => t.id === id)) cmds.push({ op: "delete_footprint_text", footprint: name, id });
+      }
+      dispatch({ type: "CLEAR_SELECTION" });
+      if (cmds.length > 0) await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
     setAnchor: async (at) => {
       const name = stateRef.current.name;

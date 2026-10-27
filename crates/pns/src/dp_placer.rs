@@ -47,7 +47,6 @@ use crate::settings::{Mode, RoutingSettings};
 use crate::shove::{DisplacedLine, DisplacedVia, ShoveHead};
 use crate::springback::{HeadSet, Springback};
 use crate::walkaround::{WalkPolicy, WalkStatus, Walker};
-use eda_drc::kimath::Shape;
 use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 use std::collections::{BTreeMap, HashSet};
@@ -501,16 +500,17 @@ impl DiffPairPlacer {
         let mut handled: HashSet<ItemId> = HashSet::new();
         let norm_sq = |v: crate::diff_pair::Vec2| v.0.area(v.0) + v.1.area(v.1);
         while iter < MAX_ITER {
-            let circle = Shape::Circle { c: virt.pos, r: virt.diameter / 2 };
-            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false };
-            let mut obstacles = node.colliding_with(&circle, &virt.net, virt.layers, rules, &[], opts);
+            // `m_currentNode->QueryColliding( &virtHead, ..)`: its copper and its hole
+            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false, head_hole: None };
+            let mut obstacles = node.via_colliding(&virt, rules, &[], opts);
             obstacles.sort_by_key(|o| o.id);
             let Some(obs) = obstacles.first() else { break };
             if handled.contains(&obs.id) {
                 break;
             }
             let Some(item) = node.get(obs.id) else { break };
-            let clearance = Node::clearance_to(rules, &self.net_p, item);
+            // `m_currentNode->GetClearance( obs->m_item, &m_currentTrace.PLine(), false )`
+            let clearance = node.clearance_to(rules, crate::node::Side::track(&self.net_p, self.current_layer), item);
             let mut layer_force = (Nm::ZERO, Nm::ZERO);
             collided = false;
             // `RelevantShapeLayers`: the layers both occupy (shapes are the same on every layer here)
@@ -637,6 +637,12 @@ impl DiffPairPlacer {
         // `m_currentNode = m_shove->CurrentNode()` at the top of `rhShoveOnly`, and `Move`'s `m_lastNode = m_currentNode->Branch()`
         let frame = self.frame_node();
         self.last_node = Some(frame.clone());
+        // what is shown when the head cannot be routed (`routeHead` fails: `propagateDpHeadForces` runs out of steps; `tryWalkDp` always
+        // returns true): `Move`'s `m_lastNode = latestNode->Branch()` of that frame, whatever `route()` returned, so the tracks and vias
+        // the newest frame pushed stay pushed on screen (round-2 R-6)
+        let (top, _) = self.springback.top();
+        self.shoved_lines = top.displaced_lines(&self.world);
+        self.shoved_vias = top.displaced_vias();
         let ok = self.route_head(Some(&frame), rules, settings, p);
         self.fit_ok = false;
         if !ok {
@@ -1042,6 +1048,7 @@ impl DiffPairPlacer {
 mod tests {
     use eda_model::units::mm;
     use super::*;
+    use eda_drc::kimath::Shape;
     use crate::item::{Segment, Solid};
 
     fn p(x: Nm, y: Nm) -> Point {
@@ -1055,11 +1062,11 @@ mod tests {
 
     #[allow(dead_code)]
     fn pad(node: &mut Node, net: &str, at: Point, r: Nm) -> ItemId {
-        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false }))
+        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false, rule: 0 }))
     }
 
     fn smd_pad(node: &mut Node, net: &str, at: Point, r: Nm) -> ItemId {
-        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false }))
+        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false, rule: 0 }))
     }
 
     fn track(node: &mut Node, net: &str, a: Point, b: Point, width: Nm) -> ItemId {
@@ -1319,6 +1326,15 @@ mod tests {
         let (mut node, start) = two_pad_pairs();
         // a GND via just above the N line's lane, in the pair's way to the target pads
         node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(5.0), mm(1.0)), diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaG".into()), locked: false, is_virtual: false }));
+        // and, out of the way, a GND pad with a row of small ones after it: `propagateDpHeadForces` pushes the cursor out of the big one
+        // (1.515 mm, the largest force of the loop, which every later step adds again) into each small one in turn, until its 40 steps
+        // run out still colliding -- so `routeHead` fails
+        let (ax, ay) = (mm(0.0), mm(-30.0));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(ax, ay), shape: Shape::Circle { c: p(ax, ay), r: mm(1.0) }, source: "U9.0".into(), edge: false, rule: 0 }));
+        for k in 1..=45i64 {
+            let c = p(ax + mm(0.01) + Nm::new(1_515_000) * k + mm(0.3), ay);
+            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.05) }, source: format!("U9.{k}"), edge: false, rule: 0 }));
+        }
         let (rules, settings) = (rules(), mode(Mode::Shove));
         let mut dp = placer(&node, start);
         assert!(dp.move_to(&rules, &settings, p(mm(10.0), Nm::ZERO)), "the via can be pushed");
@@ -1326,6 +1342,11 @@ mod tests {
         assert_eq!(pushed.len(), 1, "{pushed:?}");
         assert_eq!(pushed[0].source_via, "viaG");
         assert_ne!(pushed[0].pos, p(mm(5.0), mm(1.0)), "the via is pushed off the N line");
+        // round-2 R-6: the cursor on the big pad, where the head cannot be routed: `rhShoveOnly` returns before its shove, and what is shown
+        // is still the newest frame (`m_lastNode = latestNode->Branch()`), with the via pushed
+        assert!(!dp.move_to(&rules, &settings, p(ax + mm(0.01), ay)), "the head cannot be routed there");
+        let pv = dp.preview();
+        assert_eq!(pv.displaced_vias.iter().map(|v| (v.source_via.clone(), v.pos)).collect::<Vec<_>>(), vec![(pushed[0].source_via.clone(), pushed[0].pos)], "the pushed via stays pushed: {pv:?}");
         // the cursor draws back, so the head is nowhere near the via: the frame the first position pushed is still the one the leg's
         // shove starts from, and the via stays where that frame left it
         assert!(dp.move_to(&rules, &settings, p(mm(2.0), mm(-2.0))));
@@ -1365,8 +1386,8 @@ mod tests {
         // pads side by side, along the pads' long side -- are only built for pads that line up like this.
         let mut node = Node::new();
         let rect = |c: Point| Shape::Rect { x0: c.x - mm(0.5), y0: c.y - mm(0.3), x1: c.x + mm(0.5), y1: c.y + mm(0.3) };
-        let start = node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(0), pos: p(Nm::ZERO, Nm::ZERO), shape: rect(p(Nm::ZERO, Nm::ZERO)), source: "J1.1".into(), edge: false }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(0), pos: p(mm(0.7), mm(0.7)), shape: rect(p(mm(0.7), mm(0.7))), source: "J1.2".into(), edge: false }));
+        let start = node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(0), pos: p(Nm::ZERO, Nm::ZERO), shape: rect(p(Nm::ZERO, Nm::ZERO)), source: "J1.1".into(), edge: false, rule: 0 }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(0), pos: p(mm(0.7), mm(0.7)), shape: rect(p(mm(0.7), mm(0.7))), source: "J1.2".into(), edge: false, rule: 0 }));
         let found = find_dp_primitive_pair(&node, start).unwrap();
         let mut gws = DpGateways::new(mm(0.4));
         gws.build_from_primitive_pair(&found.pair, false);
@@ -1398,8 +1419,8 @@ mod tests {
         for id in far {
             node.remove(id);
         }
-        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(1), pos: p(mm(10.0), Nm::ZERO), shape: Shape::Circle { c: p(mm(10.0), Nm::ZERO), r: mm(0.25) }, source: "far P".into(), edge: false }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(1), pos: p(mm(10.0), mm(1.0)), shape: Shape::Circle { c: p(mm(10.0), mm(1.0)), r: mm(0.25) }, source: "far N".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(1), pos: p(mm(10.0), Nm::ZERO), shape: Shape::Circle { c: p(mm(10.0), Nm::ZERO), r: mm(0.25) }, source: "far P".into(), edge: false, rule: 0 }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(1), pos: p(mm(10.0), mm(1.0)), shape: Shape::Circle { c: p(mm(10.0), mm(1.0)), r: mm(0.25) }, source: "far N".into(), edge: false, rule: 0 }));
         let (rules, settings) = (rules(), mode(Mode::Walkaround));
         let mut dp = placer(&node, start);
         dp.toggle_via(true, None, None, Some(1));

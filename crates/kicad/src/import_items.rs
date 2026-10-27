@@ -30,11 +30,17 @@ pub(crate) struct ItemRef {
     pub net: Option<String>,
     /// A rectangle's corner radius (`(radius r)`, `parsePCB_SHAPE`'s `case T_radius: shape->SetCornerRadius( parseBoardUnits( "corner radius" ) )`), nm.
     pub corner_radius: Nm,
+    /// A copper shape's solder-mask opening (`(layers "F.Cu" "F.Mask")`) and its own `(solder_mask_margin ..)`, which `Shape` has no field for (`crate::import::cu_item_layers`).
+    pub solder_mask: bool,
+    pub solder_mask_margin: Option<Nm>,
 }
 
 impl ItemRef {
     /// Read the `(uuid ..)`/`(tstamp ..)`, `locked`, hatch and line endings of one parsed item.
     pub(crate) fn of(item: &[Sexpr]) -> ItemRef {
+        // A board shape's solder-mask opening (tracks keep theirs in `DrawingsSection::track_masks`).
+        let shape = sexpr::tag(item).is_some_and(|t| t.starts_with("gr_"));
+        let mask = shape && crate::import::cu_item_layers(item).is_some_and(|(_, m)| m);
         ItemRef {
             uuid: item_uuid(item),
             locked: is_locked(item),
@@ -42,12 +48,14 @@ impl ItemRef {
             endings: crate::line_ending_io::read(item),
             net: None,
             corner_radius: if sexpr::tag(item) == Some("gr_rect") { sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(crate::import::mm_to_nm).unwrap_or(Nm::ZERO).max(Nm::ZERO) } else { Nm::ZERO },
+            solder_mask: shape && mask,
+            solder_mask_margin: if shape && mask { sexpr::find(item, "solder_mask_margin").and_then(|m| sexpr::num(m, 1)).map(crate::import::mm_to_nm) } else { None },
         }
     }
 
     /// The shape's style as the file gave it, by the id `id` the shape now has; `None` when it says nothing.
     pub(crate) fn shape_style(&self, id: &str) -> Option<eda_model::pcb_items::ShapeStyle> {
-        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), corner_radius: self.corner_radius, ..eda_model::pcb_items::ShapeStyle::empty(id) };
+        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), corner_radius: self.corner_radius, solder_mask: self.solder_mask, solder_mask_margin: self.solder_mask_margin, ..eda_model::pcb_items::ShapeStyle::empty(id) };
         (!st.is_empty()).then_some(st)
     }
 }
