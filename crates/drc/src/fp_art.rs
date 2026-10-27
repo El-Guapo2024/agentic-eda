@@ -271,8 +271,13 @@ pub enum FpCopper {
 /// The footprints' graphics and texts on copper layers (`FOOTPRINT::GraphicalItems()` and its texts, in the board's copper R-tree as `PCB_SHAPE` and `PCB_TEXT` of no net), placed
 /// where the footprint is: from its art, or what the importer kept in board space for a design that has no art. A graphic that belongs to a custom pad is the pad's.
 pub fn footprint_copper(design: &Design, model: &eda_model::ConstraintModel) -> Vec<FpCopper> {
+    footprint_copper_of(design, model).into_iter().map(|(_, c)| c).collect()
+}
+
+/// [`footprint_copper`], each piece with the reference of the footprint it is of (`GetParentFootprint()`).
+pub fn footprint_copper_of(design: &Design, model: &eda_model::ConstraintModel) -> Vec<(String, FpCopper)> {
     let copper = |l: &str| l.ends_with(".Cu");
-    let mut out = Vec::new();
+    let mut out: Vec<(String, FpCopper)> = Vec::new();
     let Some(pl) = &design.placement else { return out };
     for fp in &pl.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
@@ -280,8 +285,8 @@ pub fn footprint_copper(design: &Design, model: &eda_model::ConstraintModel) -> 
         let extra = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id));
         if legacy(design, fp, &footprint, extra) {
             let Some(e) = extra else { continue };
-            out.extend(e.graphics.iter().filter(|g| g.pad_number.is_none() && copper(g.shape.layer())).map(|g| FpCopper::Shape(g.shape.clone())));
-            out.extend(e.texts.iter().filter(|t| copper(&t.layer)).map(|t| FpCopper::Text(t.clone())));
+            out.extend(e.graphics.iter().filter(|g| g.pad_number.is_none() && copper(g.shape.layer())).map(|g| (fp.id.clone(), FpCopper::Shape(g.shape.clone()))));
+            out.extend(e.texts.iter().filter(|t| copper(&t.layer)).map(|t| (fp.id.clone(), FpCopper::Text(t.clone()))));
             continue;
         }
         for s in &footprint.art.shapes {
@@ -289,7 +294,7 @@ pub fn footprint_copper(design: &Design, model: &eda_model::ConstraintModel) -> 
             for layer in placed.all_layers().into_iter().filter(|l| copper(l)) {
                 let mut shape = placed.shape.clone();
                 shape.set_layer(layer.to_string());
-                out.push(FpCopper::Shape(shape));
+                out.push((fp.id.clone(), FpCopper::Shape(shape)));
             }
         }
         let value = part.value.as_deref().unwrap_or(&fp.id);
@@ -299,7 +304,7 @@ pub fn footprint_copper(design: &Design, model: &eda_model::ConstraintModel) -> 
             if p.text.is_empty() || !t.layout.visible || !copper(&p.layer) {
                 continue;
             }
-            out.push(FpCopper::Text(FootprintText { text: p.text, layer: p.layer, at: p.at, angle_file_mdeg: p.angle, size: p.size, thickness: p.thickness, halign: p.halign, valign: p.valign, mirror: p.mirror, keep_upright: p.keep_upright, bold: p.bold }));
+            out.push((fp.id.clone(), FpCopper::Text(FootprintText { text: p.text, layer: p.layer, at: p.at, angle_file_mdeg: p.angle, size: p.size, thickness: p.thickness, halign: p.halign, valign: p.valign, mirror: p.mirror, keep_upright: p.keep_upright, bold: p.bold })));
         }
     }
     out

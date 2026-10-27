@@ -276,6 +276,84 @@ fn a_route_may_cross_the_hole_of_a_keepout() {
     }
 }
 
+/// A filled copper polygon on F.Cu, `shape_id`, of the net `net` (none: no net).
+fn copper_poly(design: &mut Design, id: &str, pts: Vec<Point>, net: Option<&str>) {
+    let d = design.drawings.as_mut().unwrap();
+    d.shapes.push(eda_model::ir::Shape::Polygon { id: id.into(), layer: "F.Cu".into(), stroke_width: Nm::ZERO, filled: true, pts });
+    if let Some(n) = net {
+        d.board_items.set_net(id, Some(n.to_string()));
+    }
+}
+
+/// The least gap from the committed tracks' copper to the polygon `pts`.
+fn gap_to_poly(commit: &RouteCommit, pts: &[Point]) -> f64 {
+    let poly = Shape::Polygon { pts: pts.to_vec() };
+    commit.tracks.iter().flat_map(|t| t.pts.windows(2).map(|w| Shape::Stadium { a: w[0], b: w[1], r: t.width / 2 }.gap_to(&poly)).collect::<Vec<_>>()).fold(f64::MAX, f64::min)
+}
+
+/// R3-2 (`SyncWorld` -> `syncGraphicalItem` for a `PCB_SHAPE` on copper): a filled copper polygon of no net across the straight way between two SIG
+/// pads is an obstacle: the route goes round it at the clearance.
+#[test]
+fn a_copper_polygon_is_an_obstacle() {
+    let (r1, r2) = (p(5.0, 10.0), p(25.0, 10.0));
+    let (mut design, model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2)], &[("SIG", &["R1.1", "R2.1"])]);
+    let poly = vec![p(13.0, 8.0), p(17.0, 8.0), p(17.0, 12.0), p(13.0, 12.0)];
+    copper_poly(&mut design, "shp_block", poly.clone(), None);
+    let commit = route(&design, &model, r1, r2);
+    let gap = gap_to_poly(&commit, &poly);
+    assert!(gap >= 199_500.0, "the track keeps {gap} nm from the polygon: {:?}", commit.tracks);
+    // (kicad-cli 10.99 reports no track against a copper graphic on a board this small -- not even the straight track through the polygon, nor
+    // two crossing tracks of two nets; it does on KiCad's `simple.kicad_pcb` -- so its DRC is no judge of the polygon here: the gap above is)
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["clearance", "shorting_items"]) {
+        assert!(found.is_empty(), "{found:#?}");
+    }
+}
+
+/// R3-2: a copper polygon of the net GND (`SetNet( aItem->GetNet() )`). A SIG route keeps the clearance from it (kicad-cli: no `clearance`,
+/// no `shorting_items`), and a GND route from a GND pad may end on it (`SetAnchorPoints( GetConnectionPoints() )`: a filled shape's centre).
+#[test]
+fn a_copper_shape_with_a_net_is_an_obstacle_to_other_nets_and_an_end_for_its_own() {
+    let (r1, r2, g1) = (p(5.0, 10.0), p(25.0, 10.0), p(15.0, 3.0));
+    let (mut design, model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2), ("G1", "PAD1", g1)], &[("SIG", &["R1.1", "R2.1"]), ("GND", &["G1.1"])]);
+    let poly = vec![p(13.0, 8.0), p(17.0, 8.0), p(17.0, 12.0), p(13.0, 12.0)];
+    copper_poly(&mut design, "shp_gnd", poly.clone(), Some("GND"));
+    let commit = route(&design, &model, r1, r2);
+    assert!(gap_to_poly(&commit, &poly) >= 199_500.0, "{:?}", commit.tracks);
+    // the GND route ends on the polygon's centre, its anchor
+    let centre = p(15.0, 10.0);
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.start(g1, "F.Cu", mm(0.2)).unwrap();
+    let pv = router.preview(centre).unwrap();
+    assert!(!pv.colliding, "a GND route may run onto the GND polygon: {:?}", pv.head.pts);
+    assert_eq!(pv.head.pts.last(), Some(&centre), "{:?}", pv.head.pts);
+    let gnd = router.finish(centre).expect("the route ends on the polygon");
+    if let Some(found) = kicad_violations(&apply(&apply(&design, &commit), &gnd), &model, &["clearance", "shorting_items"]) {
+        assert!(found.is_empty(), "{found:#?}");
+    }
+}
+
+/// R3-6 (`syncGraphicalItem`'s `Margin`, `isEdge`'s `IsOnLayer( Margin )`): a line on the Margin layer across the straight way between two SIG
+/// pads is a board edge: the route goes round it at the copper-to-edge clearance, and kicad-cli (which tests Edge.Cuts and Margin alike,
+/// `LSET( { Edge_Cuts, Margin } )`) finds no `copper_edge_clearance`; the straight route is what it flags.
+#[test]
+fn a_margin_line_holds_a_route_off_as_an_edge() {
+    let (r1, r2) = (p(5.0, 10.0), p(25.0, 10.0));
+    let (mut design, model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2)], &[("SIG", &["R1.1", "R2.1"])]);
+    let (a, b) = (p(15.0, 8.0), p(15.0, 12.0));
+    design.drawings.as_mut().unwrap().shapes.push(eda_model::ir::Shape::Segment { id: "shp_margin".into(), layer: "Margin".into(), stroke_width: mm(0.1), filled: false, start: a, end: b });
+    let commit = route(&design, &model, r1, r2);
+    let edge = eda_drc::constraints::edge_clearance_min(&model.board).as_f64();
+    let line = Shape::Stadium { a, b, r: mm(0.05) };
+    let gap = commit.tracks.iter().flat_map(|t| t.pts.windows(2).map(|w| Shape::Stadium { a: w[0], b: w[1], r: t.width / 2 }.gap_to(&line)).collect::<Vec<_>>()).fold(f64::MAX, f64::min);
+    assert!(gap >= edge - 500.0, "the track keeps {gap} nm from the Margin line; the edge clearance is {edge}: {:?}", commit.tracks);
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["copper_edge_clearance"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        let straight = RouteCommit { tracks: vec![eda_model::ir::Track { id: String::new(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![r1, r2], arc_mid_offset: None }], ..Default::default() };
+        assert!(!kicad_violations(&apply(&design, &straight), &model, &["copper_edge_clearance"]).unwrap().is_empty(), "kicad-cli takes the Margin line for an edge");
+    }
+}
+
 /// R-2: a rule area that keeps out vias only: a track crosses it as if it were not there, but a via in it collides (`checkKeepout`:
 /// `GetDoNotAllowVias() && aOther->Type() == PCB_VIA_T`), and one outside it does not.
 #[test]
@@ -403,4 +481,59 @@ fn the_plain_answer_is_the_engines_on_kicads_boards() {
         eprintln!("{}: plain {}, {} sides", path.display(), r.is_plain(), sides.len());
     }
     assert!(compared > 10_000, "{compared} pairs compared");
+}
+
+/// R3-2 on KiCad's own boards: every board of `qa/data/pcbnew` that draws a graphic on a copper layer (a `gr_line`, `gr_poly`, `gr_rect`,
+/// `gr_circle` or `gr_arc` there, or a footprint's `fp_*` shape) has the graphic in the router's world, and the world builds.
+#[test]
+fn kicads_boards_with_copper_graphics_have_them_in_the_router_world() {
+    let Some(data) = std::env::var_os("KICAD_QA_DATA").map(std::path::PathBuf::from).or_else(|| std::env::var_os("KICAD_SRC_DIR").map(|s| std::path::PathBuf::from(s).join("qa/data"))) else {
+        eprintln!("KiCad QA corpus not found: skipping");
+        return;
+    };
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("EDA_SLOW_TESTS not set: skipping");
+        return;
+    }
+    let mut boards: Vec<std::path::PathBuf> = std::fs::read_dir(data.join("pcbnew")).unwrap().filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "kicad_pcb")).collect();
+    boards.sort();
+    // a `(gr_* ..)` or `(fp_* ..)` shape whose own `(layer ..)` is F.Cu or B.Cu
+    let on_copper = |text: &str| {
+        let b = text.as_bytes();
+        ["(gr_line", "(gr_poly", "(gr_rect", "(gr_circle", "(gr_arc", "(fp_line", "(fp_poly", "(fp_rect", "(fp_circle", "(fp_arc"].iter().any(|g| {
+            text.match_indices(g).any(|(start, _)| {
+                let (mut depth, mut end) = (0i32, start);
+                for (i, &c) in b[start..].iter().enumerate() {
+                    match c {
+                        b'(' => depth += 1,
+                        b')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = start + i;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let block = &text[start..=end];
+                ["(layer \"F.Cu\")", "(layer \"B.Cu\")", "(layer F.Cu)", "(layer B.Cu)"].iter().any(|l| block.contains(l))
+            })
+        })
+    };
+    let mut seen = Vec::new();
+    for path in boards {
+        let text = std::fs::read_to_string(&path).unwrap();
+        if !on_copper(&text) {
+            continue;
+        }
+        let Ok((mut design, model, _)) = eda_kicad::import_kicad_pcb(&text) else { continue };
+        design.assign_missing_ids();
+        let (node, _) = eda_pns::from_ir::build_node(&design, &model);
+        let graphics = node.iter().filter(|(_, it)| matches!(it, eda_pns::item::Item::Solid(s) if s.is_graphic())).count();
+        assert!(graphics > 0, "{}: no copper graphic in the router's world", path.display());
+        seen.push(path.file_name().unwrap().to_string_lossy().to_string());
+    }
+    eprintln!("{} boards: {seen:?}", seen.len());
+    assert!(seen.len() >= 20, "{seen:?}");
 }

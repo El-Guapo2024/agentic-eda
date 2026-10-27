@@ -418,6 +418,27 @@ impl RuleResolver {
         id
     }
 
+    /// A graphic's board item (`syncGraphicalItem`'s `PCB_SHAPE` / `PCB_TEXTBOX`, `syncDimension`'s and `syncBarcode`'s items, `syncTextItem`'s table): an item
+    /// of `net` (none: no net) on its copper layer, of the footprint `footprint` when it is one's (`GetParentFootprint()`, which a net tie's bridge is
+    /// [`Self::is_in_net_tie`] by), numbered for its solids. `class` is what the rules see it as (`A.Type`).
+    pub fn add_graphic(&mut self, source: &str, layer: i32, net: Option<&str>, footprint: Option<&str>, class: Class) -> u32 {
+        if let Some(&id) = self.ids.get(source) {
+            return id;
+        }
+        let layer = self.layer_name(layer).unwrap_or("F.Cu").to_string();
+        let mut it = RuleItem::new(source.to_string(), class);
+        it.layers = vec![layer.clone()];
+        it.layer = Some(layer.clone());
+        it.net = net.unwrap_or("").to_string();
+        it.set("Net", Prop::Enum(it.net.clone()));
+        it.set("Layer", Prop::Layer(layer));
+        let id = self.items.len() as u32;
+        self.items.push(Rc::new(it));
+        self.info.push(SolidInfo { special: true, footprint: footprint.map(str::to_string), ..Default::default() });
+        self.ids.insert(source.to_string(), id);
+        id
+    }
+
     fn info_of(&self, s: &Solid) -> Option<&SolidInfo> {
         if s.edge {
             return None;
@@ -593,7 +614,7 @@ impl RuleResolver {
     /// area on a copper layer are; the board edge is not.
     fn is_copper(&self, side: &Side, item: &RuleItem) -> bool {
         match side {
-            Side::Item(Item::Solid(s)) => !s.edge && (item.on_copper() || self.keepout(s).is_some() || s.is_text()),
+            Side::Item(Item::Solid(s)) => !s.edge && (item.on_copper() || self.keepout(s).is_some() || s.is_text() || s.is_graphic() || s.is_obstacle()),
             _ => true,
         }
     }

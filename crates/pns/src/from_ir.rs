@@ -78,7 +78,7 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
                     while end + 1 < idx.len() && idx[end + 1] == idx[end] + 1 {
                         end += 1;
                     }
-                    node.add(Item::Solid(Solid { net: net.clone(), layers: crate::layer::LayerRange::new(idx[k], idx[end]), pos: pad.center, shape: shape.clone(), source: pad.id.clone(), edge: false, rule: rules.rule_of(&pad.id) }));
+                    node.add(Item::Solid(Solid { net: net.clone(), layers: crate::layer::LayerRange::new(idx[k], idx[end]), pos: pad.center, shape: shape.clone(), source: pad.id.clone(), edge: false, rule: rules.rule_of(&pad.id), anchor_points: Vec::new() }));
                     k = end + 1;
                 }
             }
@@ -96,7 +96,7 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
         });
         let layer_range = layer_range.unwrap_or_else(|| layers.all());
         let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().map(&mut net_of).unwrap_or(None) };
-        node.add(Item::Solid(Solid { net, layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false, rule: rules.rule_of(&pad.id) }));
+        node.add(Item::Solid(Solid { net, layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false, rule: rules.rule_of(&pad.id), anchor_points: Vec::new() }));
     }
 
     // An arc track (`PCB_ARC`) is an `ARC` (`PNS_KICAD_IFACE_BASE::syncArc`): one item with the arc's three points, linked at its two ends. (A
@@ -131,7 +131,9 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
     }
 
     add_board_outline(&mut node, &drc_board, &layers);
+    add_margin(&mut node, design, &layers);
     add_copper_texts(&mut node, design, &layers, &mut rules);
+    add_copper_graphics(&mut node, design, model, &layers, &mut rules);
     add_keepouts(&mut node, design, &layers, &mut rules);
     node.set_rule_resolver(rules);
     // `ROUTER::SyncWorld`: `m_world->FixupVirtualVias()`
@@ -162,13 +164,19 @@ pub fn locked_ids_with(design: &Design, lock_pattern_members: bool) -> std::coll
 /// board's copper-to-edge clearance from it (`Node::clearance_to`) and a shove cannot push copper past it. A cutout is an obstacle
 /// like the outer edge: copper keeps the clearance from the hole's rim too.
 fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: &LayerMap) {
+    add_edge_solids(node, board.edge_cuts.iter(), layers, "edge:", false);
+}
+
+/// The solids of edge graphics (Edge.Cuts, Margin) as [`add_board_outline`] describes them, their sources `<prefix><n>`.
+/// `with_width`: the shape keeps half its width round its line (Margin); an Edge.Cuts one is given none (`SetWidth( 0 )`).
+fn add_edge_solids<'a>(node: &mut Node, shapes: impl Iterator<Item = &'a eda_model::ir::Shape>, layers: &LayerMap, prefix: &str, with_width: bool) {
     let mut i = 0usize;
-    for shape in &board.edge_cuts {
+    for shape in shapes {
         // KiCad keeps an Edge.Cuts arc a `SHAPE_ARC`; the chords here lie up to the flattening error inside it, so copper on the arc's
         // outer side (a cutout's rim, a notch) could come that much nearer the real arc than the clearance. A flattened side is
         // therefore given the error as its radius: the band holds the true curve, and the clearance is kept from all of it.
         let curved = matches!(shape, eda_model::ir::Shape::Arc { .. } | eda_model::ir::Shape::Circle { .. } | eda_model::ir::Shape::Bezier { .. });
-        let band = if curved { eda_model::outline::MAX_ERROR_NM } else { Nm::ZERO };
+        let band = if curved { eda_model::outline::MAX_ERROR_NM } else { Nm::ZERO } + if with_width { shape.stroke_width() / 2 } else { Nm::ZERO };
         for chain in eda_model::outline::shape_chains(shape, eda_model::outline::MAX_ERROR_NM.as_f64()) {
             let n = chain.pts.len();
             let sides = if chain.closed { n } else { n.saturating_sub(1) };
@@ -180,10 +188,21 @@ fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: 
                     continue;
                 }
                 let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: format!("edge:{index}"), edge: true, rule: 0 }));
+                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: format!("{prefix}{index}"), edge: true, rule: 0, anchor_points: Vec::new() }));
             }
         }
     }
+}
+
+/// The board's graphics on the Margin layer as board-edge obstacles (r3 R3-6): `syncGraphicalItem`'s `aItem->GetLayer() == Edge_Cuts ||
+/// aItem->GetLayer() == Margin` -- a `SOLID` on every copper layer, not routable -- and `isEdge`'s `parent->IsOnLayer( Edge_Cuts ) ||
+/// parent->IsOnLayer( Margin )`, so copper keeps the copper-to-edge clearance from it (`CT_EDGE_CLEARANCE`), as KiCad's DRC does
+/// (`drc_test_provider_edge_clearance.cpp`: `LSET( { Edge_Cuts, Margin } )`). The shape keeps its width (`SetWidth( 0 )` is for Edge.Cuts only), so
+/// the clearance is kept from its stroke's edge, as kicad-cli measures it. **Differs:** a footprint's own Margin graphics are not read; to the rules
+/// the solid is the board edge's item (on Edge.Cuts).
+fn add_margin(node: &mut Node, design: &Design, layers: &LayerMap) {
+    let Some(d) = design.drawings.as_ref() else { return };
+    add_edge_solids(node, d.shapes.iter().filter(|s| s.layer() == "Margin"), layers, "margin:", true);
 }
 
 /// `PNS_KICAD_IFACE_BASE::syncZone` for each keepout rule area (`!aZone->GetIsRuleArea() || !aZone->HasKeepoutParametersSet()` returns at
@@ -214,7 +233,7 @@ fn add_keepouts(node: &mut Node, design: &Design, layers: &LayerMap, rules: &mut
             for pts in &pieces {
                 let n = pts.len() as i64;
                 let pos = Point { x: pts.iter().map(|p| p.x).sum::<Nm>() / n, y: pts.iter().map(|p| p.y).sum::<Nm>() / n };
-                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos, shape: Shape::Polygon { pts: pts.clone() }, source: format!("{}{}#{k}", Solid::KEEPOUT_SOURCE, z.id), edge: false, rule }));
+                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos, shape: Shape::Polygon { pts: pts.clone() }, source: format!("{}{}#{k}", Solid::KEEPOUT_SOURCE, z.id), edge: false, rule, anchor_points: Vec::new() }));
                 k += 1;
             }
         }
@@ -286,7 +305,7 @@ fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap, rules: 
         let hull = text_bounding_hull(segs, r + TEXT_MAX_ERROR_NM, at, rot_deg);
         let source = format!("{}{id}", Solid::TEXT_SOURCE);
         let rule = rules.add_text(&source, layer);
-        node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos: at, shape: Shape::Polygon { pts: hull }, source, edge: false, rule }));
+        node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos: at, shape: Shape::Polygon { pts: hull }, source, edge: false, rule, anchor_points: Vec::new() }));
     };
     for (i, t) in d.copper_texts.iter().enumerate() {
         if let Some(Shape::Strokes { segs, r }) = eda_drc::board::footprint_text_shape(t) {
@@ -305,6 +324,144 @@ fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap, rules: 
         let rot = (t.angle as f64 / 1000.0).rem_euclid(360.0);
         let segs = eda_drc::stroke_font::kicad_text_segments(&eda_drc::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness: t.stroke_width, angle_deg: rot, mirror: t.mirror, halign, valign: 0 });
         add(&t.id, &t.layer, t.at, rot, &segs, pen / 2);
+    }
+}
+
+/// `PCB_SHAPE::GetConnectionPoints()`: where a route joins a graphic on copper -- a filled shape's centre (`IsSolidFill()`: `GetCenter()`), a
+/// circle's four quadrant points (`KIGEOM::GetCircleKeyPoints( .., false )`), an arc's middle and ends, a line's or a curve's ends, a polygon's
+/// corners, a rectangle's four corners.
+fn connection_points(shape: &eda_model::ir::Shape) -> Vec<Point> {
+    use eda_model::ir::Shape as S;
+    let bbox_centre = |pts: &[Point]| {
+        let (x0, x1) = (pts.iter().map(|p| p.x).min().unwrap_or(Nm::ZERO), pts.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO));
+        let (y0, y1) = (pts.iter().map(|p| p.y).min().unwrap_or(Nm::ZERO), pts.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO));
+        Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }
+    };
+    match shape {
+        S::Circle { center, filled: true, .. } => vec![*center],
+        S::Rect { start, end, filled: true, .. } => vec![bbox_centre(&[*start, *end])],
+        S::Polygon { pts, filled: true, .. } if pts.len() >= 3 => vec![bbox_centre(pts)],
+        S::Circle { center, end, .. } => {
+            let r = Nm::kiround(((end.x - center.x).as_f64()).hypot((end.y - center.y).as_f64()));
+            vec![Point { x: center.x, y: center.y + r }, Point { x: center.x + r, y: center.y }, Point { x: center.x, y: center.y - r }, Point { x: center.x - r, y: center.y }]
+        }
+        S::Arc { start, mid, end, .. } => vec![*mid, *start, *end],
+        S::Segment { start, end, .. } | S::Bezier { start, end, .. } => vec![*start, *end],
+        S::Polygon { pts, .. } => pts.clone(),
+        S::Rect { start, end, .. } => vec![*start, Point { x: end.x, y: start.y }, *end, Point { x: start.x, y: end.y }],
+    }
+}
+
+/// The graphics on copper as router obstacles (r3 R3-2), as `PNS_KICAD_IFACE_BASE::SyncWorld` adds them from `m_board->Drawings()` and each
+/// footprint's `GraphicalItems()`:
+/// - a shape (`PCB_SHAPE_T`, `syncGraphicalItem`): one `SOLID` per effective shape (`MakeEffectiveShapes`, [`eda_drc::board::effective_shapes`]: a
+///   filled outline and its stroked edge, a line, an arc's chords) on its layer, of the shape's net (`SetNet( aItem->GetNet() )`: a board shape's
+///   net, none for a footprint's), routable, with the shape's connection points as its anchors ([`connection_points`]): a route of another net (or
+///   of none) keeps the clearance from it, one of its net may start or end on it. A footprint's shape is its footprint's, so the bridge of a net tie
+///   is excused where it meets a pad of the route's net ([`crate::rule_resolver::RuleResolver::is_net_tie_exclusion`]);
+/// - a text box (`PCB_TEXTBOX_T`, `syncGraphicalItem` of it as a `PCB_SHAPE`): its rectangle's border, routable, of no net -- its text is not an obstacle;
+/// - a dimension (`syncDimension`): its lines at their width, and its text when it shows, not routable, of no net;
+/// - a barcode (`syncBarcode`: `GetBoundingHull`): the box of its symbol turned by its angle, not routable, of no net;
+/// - a table (`syncTextItem` of a `PCB_TABLE`: its cells' `TransformShapeToPolygon` with half the border's width, simplified to `Outline( 0 )`):
+///   the table's box grown by half its widest rule, not routable, of no net;
+/// - a footprint's own text on copper (`syncTextItem` of its reference, value, fields and texts): its bounding hull, as a board text's.
+///
+/// **Differs:** a dimension's and a barcode's text is the box of its glyphs, not the glyphs (`syncDimension` adds each glyph outline); a
+/// barcode's printed text is left out of its hull; a rounded rectangle on copper is its square corners; the line style (dashes) of a shape is
+/// not read.
+fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel, layers: &LayerMap, rules: &mut crate::rule_resolver::RuleResolver) {
+    use eda_drc::rule_item::Class;
+    let copper = |l: &str| layers.index_of(l).filter(|_| l.ends_with(".Cu"));
+    let add_shape = |node: &mut Node, rules: &mut crate::rule_resolver::RuleResolver, id: &str, shape: &eda_model::ir::Shape, net: Option<&str>, footprint: Option<&str>| {
+        let Some(layer) = copper(shape.layer()) else { return };
+        let source = format!("{}{id}", Solid::GRAPHIC_SOURCE);
+        let rule = rules.add_graphic(&source, layer, net, footprint, Class::Shape);
+        let anchors = connection_points(shape);
+        let pos = anchors.first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
+        let net = net.and_then(crate::item::net_of);
+        for (k, piece) in eda_drc::board::effective_shapes(shape).into_iter().enumerate() {
+            node.add(Item::Solid(Solid { net: net.clone(), layers: crate::layer::LayerRange::single(layer), pos, shape: piece, source: format!("{source}#{k}"), edge: false, rule, anchor_points: anchors.clone() }));
+        }
+    };
+    let add_obstacle = |node: &mut Node, rules: &mut crate::rule_resolver::RuleResolver, id: &str, layer: i32, pieces: Vec<Shape>, class: Class| {
+        let source = format!("{}{id}", Solid::OBSTACLE_SOURCE);
+        let rule = rules.add_graphic(&source, layer, None, None, class);
+        for (k, piece) in pieces.into_iter().enumerate() {
+            let (x0, y0, x1, y1) = piece.bbox(Nm::ZERO);
+            let pos = Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+            node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos, shape: piece, source: format!("{source}#{k}"), edge: false, rule, anchor_points: Vec::new() }));
+        }
+    };
+    if let Some(d) = design.drawings.as_ref() {
+        for (i, shape) in d.shapes.iter().enumerate() {
+            let id = if shape.id().is_empty() { format!("shape{i}") } else { shape.id().to_string() };
+            add_shape(node, rules, &id, shape, d.board_items.net_of(shape.id()), None);
+        }
+        // a text box: `syncGraphicalItem( static_cast<PCB_SHAPE*>( gitem ) )`, its rectangle (`PCB_SHAPE` part); not filled, its border at the
+        // border's width (none when the border is off)
+        for (i, tb) in d.board_items.text_boxes.iter().enumerate() {
+            if copper(&tb.layer).is_none() {
+                continue;
+            }
+            let corners = if tb.pts.len() == 4 { tb.pts.clone() } else { vec![tb.start, Point { x: tb.end.x, y: tb.start.y }, tb.end, Point { x: tb.start.x, y: tb.end.y }] };
+            let id = if tb.id.is_empty() { format!("textbox{i}") } else { tb.id.clone() };
+            let shape = eda_model::ir::Shape::Polygon { id: id.clone(), layer: tb.layer.clone(), stroke_width: if tb.border { tb.stroke_width_nm } else { Nm::ZERO }, filled: false, pts: corners };
+            add_shape(node, rules, &id, &shape, None, None);
+        }
+        for (i, dim) in d.dimensions.iter().enumerate() {
+            let Some(layer) = copper(&dim.layer) else { continue };
+            let g = eda_connectivity::dimension::compute_dimension_geometry(dim);
+            let r = dim.stroke_width / 2 + TEXT_MAX_ERROR_NM;
+            let mut pieces: Vec<Shape> = g.lines.iter().filter(|(a, b)| a != b).map(|&(a, b)| Shape::Stadium { a, b, r }).collect();
+            if !g.text.is_empty() {
+                let size = (dim.text_size_nm, dim.text_size_nm);
+                let thickness = dim.text_thickness_nm.unwrap_or_else(|| Nm::kiround(dim.text_size_nm.as_f64() * 0.15));
+                let rot = (g.text_angle as f64 / 1000.0).rem_euclid(360.0);
+                let segs = eda_drc::stroke_font::kicad_text_segments(&eda_drc::stroke_font::TextLayout { text: &g.text, pos: g.text_at, size, thickness, angle_deg: rot, mirror: false, halign: 0, valign: 0 });
+                if !segs.is_empty() {
+                    pieces.push(Shape::Polygon { pts: text_bounding_hull(&segs, thickness / 2 + TEXT_MAX_ERROR_NM, g.text_at, rot) });
+                }
+            }
+            let id = if dim.id.is_empty() { format!("dimension{i}") } else { dim.id.clone() };
+            add_obstacle(node, rules, &id, layer, pieces, Class::Dimension);
+        }
+        for (i, b) in d.barcodes.iter().enumerate() {
+            let Some(layer) = copper(&b.layer) else { continue };
+            let (hw, hh) = (b.width_nm.as_f64() / 2.0, b.height_nm.as_f64() / 2.0);
+            // `RotatePoint( corner, m_pos, m_angle )`: counter-clockwise on the screen, y down
+            let (sin, cos) = (b.angle as f64 / 1000.0).to_radians().sin_cos();
+            let pts = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].iter().map(|&(x, y)| Point { x: b.at.x + Nm::kiround(x * cos + y * sin), y: b.at.y + Nm::kiround(-x * sin + y * cos) }).collect();
+            let id = if b.id.is_empty() { format!("barcode{i}") } else { b.id.clone() };
+            add_obstacle(node, rules, &id, layer, vec![Shape::Polygon { pts }], Class::Shape);
+        }
+        for (i, t) in d.tables.iter().enumerate() {
+            let Some(layer) = copper(&t.layer) else { continue };
+            let (w, h) = t.local_size();
+            let corners: Vec<Point> = [(Nm::ZERO, Nm::ZERO), (w, Nm::ZERO), (w, h), (Nm::ZERO, h)].iter().map(|&c| t.to_world(c)).collect();
+            // `if( StrokeColumns() || StrokeRows() ) gap = std::max( gap, .. GetSeparatorsStroke().GetWidth() / 2 ); if( StrokeExternal() || StrokeHeaderSeparator() ) ..`
+            let sep = if t.separators.rows || t.separators.cols { t.separators.stroke.width_nm / 2 } else { Nm::ZERO };
+            let border = if t.border.external || t.border.header { t.border.stroke.width_nm / 2 } else { Nm::ZERO };
+            let gap = sep.max(border);
+            let ring: Vec<eda_drc::kimath::Seg> = (0..4).map(|k| eda_drc::kimath::Seg::new(corners[k], corners[(k + 1) % 4])).collect();
+            let shape = if gap > Nm::ZERO { Shape::Compound { parts: vec![Shape::Polygon { pts: corners.clone() }, Shape::Strokes { segs: ring, r: gap }] } } else { Shape::Polygon { pts: corners } };
+            let id = if t.id.is_empty() { format!("table{i}") } else { t.id.clone() };
+            add_obstacle(node, rules, &id, layer, vec![shape], Class::Shape);
+        }
+    }
+    for (i, (fp, piece)) in eda_drc::fp_art::footprint_copper_of(design, model).into_iter().enumerate() {
+        match piece {
+            eda_drc::fp_art::FpCopper::Shape(shape) => add_shape(node, rules, &format!("{fp}:{i}"), &shape, None, Some(&fp)),
+            eda_drc::fp_art::FpCopper::Text(t) => {
+                let (Some(layer), Some(Shape::Strokes { segs, r })) = (copper(&t.layer), eda_drc::board::footprint_text_shape(&t)) else { continue };
+                if segs.is_empty() {
+                    continue;
+                }
+                let hull = text_bounding_hull(&segs, r + TEXT_MAX_ERROR_NM, t.at, eda_drc::board::footprint_text_draw_rotation(&t));
+                let source = format!("{}{fp}:{i}", Solid::TEXT_SOURCE);
+                let rule = rules.add_text(&source, layer);
+                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos: t.at, shape: Shape::Polygon { pts: hull }, source, edge: false, rule, anchor_points: Vec::new() }));
+            }
+        }
     }
 }
 
@@ -496,6 +653,94 @@ mod tests {
         assert!(keepout_layers(&node).is_empty());
         let warnings = node.rule_resolver().unwrap().warnings();
         assert_eq!(warnings, ["Rule area 'ANT' on F.Cu and B.Cu is malformed.\nThis zone cannot be handled by the router.\nPlease verify it is not a self-intersecting polygon."]);
+    }
+
+    /// The graphics' solids of a world, by the id of their graphic.
+    fn graphic_solids<'a>(node: &'a Node, id: &str) -> Vec<&'a Solid> {
+        let (shape, other) = (format!("{}{id}#", Solid::GRAPHIC_SOURCE), format!("{}{id}#", Solid::OBSTACLE_SOURCE));
+        node.iter().filter_map(|(_, it)| match it { Item::Solid(s) if s.source.starts_with(&shape) || s.source.starts_with(&other) => Some(s), _ => None }).collect()
+    }
+
+    /// R3-2 (`SyncWorld`'s `m_board->Drawings()` -> `syncGraphicalItem`, `syncBarcode`, `syncTextItem` of a table, `syncGraphicalItem` of a text box):
+    /// each graphic on copper is a solid on its layer; a shape has its net and its connection points, and a route of its net joins it there;
+    /// one on silk is nothing to the router.
+    #[test]
+    fn copper_graphics_are_solids_on_their_layer() {
+        use eda_model::ir::{DrawingsSection, Shape as S};
+        let (mut design, model) = two_pad_board();
+        let pt = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let mut d = DrawingsSection::default();
+        d.shapes.push(S::Polygon { id: "shp_gnd".into(), layer: "F.Cu".into(), stroke_width: Nm::ZERO, filled: true, pts: vec![pt(10.0, 10.0), pt(14.0, 10.0), pt(14.0, 12.0), pt(10.0, 12.0)] });
+        d.board_items.set_net("shp_gnd", Some("GND".into()));
+        d.shapes.push(S::Segment { id: "shp_line".into(), layer: "B.Cu".into(), stroke_width: mm(0.5), filled: false, start: pt(20.0, 10.0), end: pt(25.0, 10.0) });
+        d.shapes.push(S::Segment { id: "shp_silk".into(), layer: "F.SilkS".into(), stroke_width: mm(0.5), filled: false, start: pt(20.0, 20.0), end: pt(25.0, 20.0) });
+        d.board_items.text_boxes.push(eda_model::pcb_items::TextBox { id: "tbx_1".into(), ..eda_model::pcb_items::TextBox::new("F.Cu", pt(30.0, 10.0), pt(34.0, 12.0), mm(1.0), mm(0.1)) });
+        d.tables.push(eda_model::table::Table { id: "tbl_1".into(), ..eda_model::table::Table::new_grid("F.Cu", pt(40.0, 10.0), 2, 2, mm(5.0), mm(2.0), mm(0.2)) });
+        d.barcodes.push(eda_model::barcode::Barcode { id: "bar_1".into(), at: pt(60.0, 10.0), angle: 90_000, layer: "F.Cu".into(), width_nm: mm(4.0), height_nm: mm(2.0), text: "X".into(), text_height_nm: mm(1.0), kind: Default::default(), ecc: Default::default(), show_text: false, knockout: false, margin_x_nm: Nm::ZERO, margin_y_nm: Nm::ZERO });
+        design.drawings = Some(d);
+        let (node, layers) = build_node(&design, &model);
+        let (f, b) = (layers.index_of("F.Cu").unwrap(), layers.index_of("B.Cu").unwrap());
+        let gnd = graphic_solids(&node, "shp_gnd");
+        assert_eq!(gnd.len(), 1, "a filled polygon with no stroke: its fill");
+        assert!(gnd[0].net.as_deref() == Some("GND") && gnd[0].routable() && gnd[0].layers == crate::layer::LayerRange::single(f));
+        // `GetConnectionPoints`: a filled shape's centre, which is a joint of GND
+        assert_eq!(gnd[0].anchor_points, vec![pt(12.0, 11.0)]);
+        assert!(node.joint_at(pt(12.0, 11.0), &net_of("GND")).is_some());
+        let line = graphic_solids(&node, "shp_line");
+        assert!(line.len() == 1 && line[0].layers == crate::layer::LayerRange::single(b) && line[0].net.is_none() && line[0].anchor_points == vec![pt(20.0, 10.0), pt(25.0, 10.0)]);
+        assert!(graphic_solids(&node, "shp_silk").is_empty());
+        // a SIG track across the GND polygon collides; across the line on the front it does not, on the back it does
+        let rules = model.board.clone();
+        let across = |y: f64| Shape::Stadium { a: pt(9.0, y), b: pt(26.0, y), r: mm(0.1) };
+        assert!(node.first_colliding(&across(11.0), &net_of("SIG"), crate::layer::LayerRange::single(f), &rules, &[]).is_some());
+        assert!(node.first_colliding(&across(10.0), &net_of("GND"), crate::layer::LayerRange::single(b), &rules, &[]).is_some());
+        assert!(node.first_colliding(&across(11.0), &net_of("GND"), crate::layer::LayerRange::single(f), &rules, &[]).is_none(), "its own net does not collide with it");
+        // the text box's border, the table's box and the barcode's turned box
+        let tbx = graphic_solids(&node, "tbx_1");
+        assert!(!tbx.is_empty() && tbx.iter().all(|s| s.routable() && s.layers.start() == f));
+        let tbl = graphic_solids(&node, "tbl_1");
+        assert_eq!(tbl.len(), 1);
+        let (x0, y0, x1, y1) = tbl[0].shape.bbox(Nm::ZERO);
+        assert_eq!((x0, y0, x1, y1), (mm(40.0) - mm(0.1), mm(10.0) - mm(0.1), mm(50.0) + mm(0.1), mm(14.0) + mm(0.1)), "two 5 mm columns, two 2 mm rows, half the 0.2 mm border round them");
+        assert!(!tbl[0].routable());
+        let bar = graphic_solids(&node, "bar_1");
+        let (x0, y0, x1, y1) = bar[0].shape.bbox(Nm::ZERO);
+        assert_eq!((x1 - x0, y1 - y0), (mm(2.0), mm(4.0)), "4 x 2 mm turned by 90 degrees");
+    }
+
+    /// R3-2: a footprint's own copper shape (`footprint->GraphicalItems()`) is a solid of its footprint, so a net tie's bridge is in the tie
+    /// (`IsInNetTie`), and a footprint's copper text is an obstacle (`syncTextItem` of its texts).
+    #[test]
+    fn a_footprints_copper_shape_is_of_its_footprint() {
+        use eda_model::ir::{DrawingsSection, FootprintExtra, FootprintGraphic, FootprintText, Shape as S};
+        let (mut design, model) = two_pad_board();
+        let pt = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let bridge = FootprintGraphic { shape: S::Segment { id: String::new(), layer: "F.Cu".into(), stroke_width: mm(0.3), filled: false, start: pt(0.0, 0.0), end: pt(1.0, 0.0) }, solder_mask_margin: None, pad_number: None, net: String::new(), pin_type: String::new() };
+        let text = FootprintText { text: "NT".into(), layer: "F.Cu".into(), at: pt(0.0, 3.0), angle_file_mdeg: 0, size: (mm(1.0), mm(1.0)), thickness: mm(0.15), halign: 0, valign: 0, mirror: false, keep_upright: false, bold: false };
+        design.drawings = Some(DrawingsSection { footprint_extras: vec![FootprintExtra { id: "U1".into(), net_tie_pad_groups: vec!["1,2".into()], graphics: vec![bridge], texts: vec![text], ..Default::default() }], ..Default::default() });
+        let (node, _) = build_node(&design, &model);
+        let shapes: Vec<&Item> = node.iter().filter_map(|(_, it)| match it { Item::Solid(s) if s.is_graphic() => Some(it), _ => None }).collect();
+        assert_eq!(shapes.len(), 1, "{:?}", node.iter().filter(|(_, it)| matches!(it, Item::Solid(_))).map(|(_, it)| it).collect::<Vec<_>>());
+        assert!(node.rule_resolver().unwrap().is_in_net_tie(shapes[0]), "the bridge is the net tie's");
+        assert_eq!(node.iter().filter(|(_, it)| matches!(it, Item::Solid(s) if s.is_text())).count(), 1, "the footprint's copper text");
+    }
+
+    /// R3-6 (`syncGraphicalItem`: `Edge_Cuts || Margin` -> every copper layer, not routable; `isEdge`: `IsOnLayer( Margin )`): a line on Margin is
+    /// a board edge to the router, kept at the copper-to-edge clearance.
+    #[test]
+    fn a_margin_line_is_an_edge() {
+        use eda_model::ir::{DrawingsSection, Shape as S};
+        let (mut design, model) = two_pad_board();
+        let pt = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        design.drawings = Some(DrawingsSection { shapes: vec![S::Segment { id: "shp_m".into(), layer: "Margin".into(), stroke_width: mm(0.1), filled: false, start: pt(10.0, 0.0), end: pt(10.0, 20.0) }], ..Default::default() });
+        let (node, layers) = build_node(&design, &model);
+        let margin: Vec<&Solid> = node.iter().filter_map(|(_, it)| match it { Item::Solid(s) if s.source.starts_with("margin:") => Some(s), _ => None }).collect();
+        assert_eq!(margin.len(), 1);
+        assert!(margin[0].edge && !margin[0].routable() && margin[0].layers == layers.all());
+        let rules = model.board.clone();
+        let edge = eda_drc::constraints::edge_clearance_min(&rules);
+        let near = Shape::Stadium { a: pt(5.0, 5.0), b: Point { x: mm(10.0) - edge + Nm::new(10_000), y: mm(5.0) }, r: Nm::new(5_000) };
+        assert!(node.first_colliding(&near, &net_of("SIG"), crate::layer::LayerRange::single(0), &rules, &[]).is_some(), "within the edge clearance of the Margin line");
     }
 
     #[test]
