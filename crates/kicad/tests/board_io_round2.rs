@@ -172,6 +172,12 @@ fn legacy_ki_properties_become_the_description_field() {
     assert!(!out.contains("ki_description") && !out.contains("ki_keywords"), "{out}");
     assert!(out.contains(r#"(property "Description" "Generic connector" (at 0 0 0) (layer "F.Fab") (hide yes)"#), "{out}");
     assert!(out.contains(r#"(property "Datasheet" "~" (at 0 0 0) (layer "F.Fab") (hide yes)"#), "a legacy field is hidden: {out}");
+    // r3 F7: on a back footprint turned by -90 the Description field `FOOTPRINT::FOOTPRINT` made stays on F.Fab and turns with the footprint (`issue12609`'s C1).
+    let back = text.replace(r#"(footprint "Conn:X" (layer "F.Cu")"#, r#"(footprint "Conn:X" (layer "B.Cu")"#).replace("(at 110 110)\n", "(at 110 110 -90)\n").replace(r#"(layers "F.Cu" "F.Paste" "F.Mask")"#, r#"(layers "B.Cu" "B.Paste" "B.Mask")"#);
+    assert!(back.contains("(at 110 110 -90)"), "{back}");
+    let (design, model, _) = import_kicad_pcb(&back).expect("parses");
+    let out = export(&design, &model);
+    assert!(out.contains(r#"(property "Description" "Generic connector" (at 0 0 270) (layer "F.Fab") (hide yes)"#), "{out}");
 }
 
 /// F6: a mask-only mounting hole keeps its mask margin (`issue5990`'s `MH1`: the mask opening is 5 mm + 2 x 1.2 mm), its zone connection and a one-sided layer set, as
@@ -546,4 +552,33 @@ fn a_zone_outline_keeps_its_arcs() {
     let out = export(&moved, &model);
     let zone = blocks(&out, "zone")[0].to_string();
     assert!(!zone.contains("(arc ") && zone.contains("(xy 96 95)"), "an edited outline is its points: {zone}");
+}
+
+/// r2 F15: a user field of a file before 20230620 (`(property "Case" "0805")`, no place of its own) is where KiCad's parser leaves it -- a new `PCB_FIELD`, not turned
+/// with the footprint -- which `format( PCB_FIELD )` writes at `p - R(a) p` (QA `simple`'s C1 at (147.91 100.48 -90): `(at 47.43 248.39 0)`); on a back footprint on
+/// B.Fab, mirrored (`StyleFromSettings( .., true )`).
+#[test]
+fn a_legacy_user_field_is_where_kicad_reads_it() {
+    let text = r#"(kicad_pcb (version 20220914) (generator pcbnew)
+ (general (thickness 1.6)) (paper "A4")
+ (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user "B.Silkscreen") (37 "F.SilkS" user "F.Silkscreen") (44 "Edge.Cuts" user) (49 "F.Fab" user) (48 "B.Fab" user))
+ (setup (pad_to_mask_clearance 0))
+ (net 0 "")
+ (footprint "C:C" (layer "F.Cu") (tstamp aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa) (at 147.91 100.48 -90)
+  (property "Case" "0805")
+  (fp_text reference "C1" (at 0 -2 90) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))) (tstamp aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab1))
+  (fp_text value "X" (at 0 2 90) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))) (tstamp aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab2))
+  (pad "1" smd rect (at 0 0 90) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (tstamp aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac1)))
+ (footprint "C:C" (layer "B.Cu") (tstamp bbbbbbbb-aaaa-aaaa-aaaa-aaaaaaaaaaaa) (at 160.325 107.075 180)
+  (property "Case" "0603")
+  (fp_text reference "C2" (at 0 -2 180) (layer "B.SilkS") (effects (font (size 1 1) (thickness 0.15)) (justify mirror)) (tstamp bbbbbbbb-aaaa-aaaa-aaaa-aaaaaaaaaab1))
+  (fp_text value "X" (at 0 2 180) (layer "B.Fab") (effects (font (size 1 1) (thickness 0.15)) (justify mirror)) (tstamp bbbbbbbb-aaaa-aaaa-aaaa-aaaaaaaaaab2))
+  (pad "1" smd rect (at 0 0 180) (size 1 1) (layers "B.Cu" "B.Paste" "B.Mask") (tstamp bbbbbbbb-aaaa-aaaa-aaaa-aaaaaaaaaac1)))
+)"#;
+    let (design, model, _) = import_kicad_pcb(text).expect("parses");
+    let out = export(&design, &model);
+    let line = |value: &str| blocks(&out, "property").into_iter().find(|l| l.contains(&format!("(property \"Case\" \"{value}\""))).unwrap_or_else(|| panic!("Case {value}: {out}")).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(line("0805").contains("(at 47.43 248.39 0) (layer \"F.Fab\")"), "{}", line("0805"));
+    assert!(!line("0805").contains("mirror"), "{}", line("0805"));
+    assert!(line("0603").contains("(at 320.65 214.15 0) (layer \"B.Fab\")") && line("0603").contains("mirror"), "{}", line("0603"));
 }

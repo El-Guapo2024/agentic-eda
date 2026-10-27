@@ -287,6 +287,19 @@ pub(crate) fn parse_footprint_edit_in(fp: &[Sexpr], id: &str, value: Option<&str
         let mut layout = parse_layout(p, side, fp_rot);
         if legacy {
             layout.visible = bool_tok(p, "hide") == Some(false);
+            if sexpr::find(p, "at").is_none() && !matches!(name, REFERENCE | VALUE | "Datasheet" | "Description") {
+                // A user field of an old file is a new `PCB_FIELD` made after the footprint was placed and turned (`parseFOOTPRINT_unchecked`'s `case T_property`):
+                // its text is not turned and it is not where the footprint is, and `format( PCB_FIELD )` then writes it at `p - R(a) p` from the footprint, `p` the
+                // footprint's `(at x y a)` (as kicad-cli writes QA `simple`'s 427 such fields); on the side's Fab layer, mirrored on the back
+                // (`StyleFromSettings( .., true )`: `SetMirrored( IsBackLayer( GetLayer() ) )`) (r2-board-io F15).
+                let at = sexpr::find(fp, "at");
+                let (px, py) = (mm_to_nm_f(at.and_then(|a| sexpr::num(a, 1)).unwrap_or(0.0)).as_f64(), mm_to_nm_f(at.and_then(|a| sexpr::num(a, 2)).unwrap_or(0.0)).as_f64());
+                let a = at.and_then(|a| sexpr::num(a, 3)).unwrap_or(0.0).to_radians();
+                // in nanometres, each turned coordinate rounded (`RotatePoint`, `KiROUND`)
+                let (rx, ry) = ((px * a.cos() - py * a.sin()).round(), (px * a.sin() + py * a.cos()).round());
+                layout.set_from_file(side, fp_rot, Nm::new((px - rx) as i64), Nm::new((py - ry) as i64), 0.0);
+                layout.mirror = side == Side::Bottom;
+            }
         }
         match name {
             REFERENCE => edit.reference = Some(with_text(layout, text, id)),

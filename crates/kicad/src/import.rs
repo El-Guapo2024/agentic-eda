@@ -1827,16 +1827,20 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     // A file from before footprint fields (20230620) held the symbol's keywords and description as properties of no place of their own (`parseFOOTPRINT_unchecked`,
     // `case T_property`, `if( m_requiredVersion < 20230620 )`): `ki_keywords` and `ki_locked` are dropped, `ki_description` is the text of the Description field, and a field
     // kept is hidden ("a legacy field that did not have text effects applied"). Written to a newer file as they were, they would be visible fields of their own; they are
-    // written as the fields KiCad made of them, which `format( PCB_FIELD )` writes at the footprint's origin on its side's Fab layer.
+    // written as the fields KiCad made of them: the Datasheet and Description fields `FOOTPRINT::FOOTPRINT` makes (`addField( FIELD_T::DESCRIPTION, F_Fab, false )`),
+    // on F.Fab whatever the footprint's side (the `(layer ..)` parsed after does not move them) and turned with the footprint by its `(at x y a)` (`SetOrientation`),
+    // which `format( PCB_FIELD )` writes at the footprint's origin at that angle (r3-board-io F7: `issue12609`'s back C1 at -90 has `(at 0 0 270) (layer "F.Fab")`).
     let legacy = file_version < crate::fp_fields::FIELD_PROPERTIES_VERSION;
-    let fab = if sexpr::find(fp, "layer").and_then(|l| sexpr::txt(l, 1)) == Some("B.Cu") { "B.Fab" } else { "F.Fab" };
+    let fab = "F.Fab";
+    let fp_angle = sexpr::find(fp, "at").and_then(|a| sexpr::num(a, 3)).unwrap_or(0.0).rem_euclid(360.0);
+    let fp_angle = crate::fmt_mm_f(if (fp_angle - 360.0).abs() < 1e-9 { 0.0 } else { fp_angle });
     // (Both name one field: the later text wins, as `SetText` on it.)
     let push_field = |tokens: &mut Vec<String>, field: String, name: &str| {
         let head = format!("(property {} ", crate::sexpr_str(name));
         tokens.retain(|t| !t.starts_with(&head));
         tokens.push(field);
     };
-    let hidden_field = |name: &str, value: &str| format!("(property {} {} (at 0 0 0) (layer \"{fab}\") (hide yes) (effects (font (size 1.27 1.27))))", crate::sexpr_str(name), crate::sexpr_str(value));
+    let hidden_field = |name: &str, value: &str| format!("(property {} {} (at 0 0 {fp_angle}) (layer \"{fab}\") (hide yes) (effects (font (size 1.27 1.27))))", crate::sexpr_str(name), crate::sexpr_str(value));
     for item in fp.iter().skip(2).filter_map(Sexpr::as_list) {
         let tag = sexpr::tag(item);
         if legacy && tag == Some("property") {
