@@ -93,7 +93,7 @@ pub(crate) fn gerber_args(layers: &[String], plot: &eda_model::plot_params::Plot
 
 /// The board's plot settings: an imported board's own block, else `PCB_PLOT_PARAMS`' defaults.
 pub(crate) fn plot_params_of(design: &eda_model::ir::Design) -> eda_model::plot_params::PlotParams {
-    design.drawings.as_ref().and_then(|d| d.plot_params.clone()).unwrap_or_else(eda_model::plot_params::PlotParams::kicad_default)
+    eda_model::plot_params::PlotParams::of_design(design)
 }
 
 /// `kicad-cli pcb export drill` (Excellon), as the Generate Drill Files dialog asks for it (`DIALOG_GENDRILL::genDrillAndMapFiles`):
@@ -204,7 +204,7 @@ pub fn gerbers(dir: &Path, body: &[u8]) -> Value {
 /// The layers the board's plot settings select, of those the board has (its copper layers, and every non-copper layer, which a
 /// `.kicad_pcb` always defines): the Plot dialog's checklist as `DIALOG_PLOT::init_Dialog` fills it from `GetLayerSelection()`.
 pub(crate) fn board_plot_layers(plot: &eda_model::plot_params::PlotParams, copper: &[String]) -> Vec<String> {
-    plot.layer_selection.iter().filter(|l| !eda_model::layers::is_copper_layer_name(l) || copper.contains(l)).cloned().collect()
+    plot.board_layers(copper)
 }
 
 /// `use_aux_origin: true` in a plot dialog's JSON: measure from the drill/place file origin

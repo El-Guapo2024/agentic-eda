@@ -183,6 +183,17 @@ impl PlotParams {
         .to_vec()
     }
 
+    /// The board's plot settings: an imported board's own block, else `PCB_PLOT_PARAMS`' defaults.
+    pub fn of_design(design: &crate::ir::Design) -> PlotParams {
+        design.drawings.as_ref().and_then(|d| d.plot_params.clone()).unwrap_or_else(Self::kicad_default)
+    }
+
+    /// The layers the selection names, of those the board has (its copper layers, and every non-copper layer, which a `.kicad_pcb` always defines): the
+    /// Plot dialog's checklist as `DIALOG_PLOT::init_Dialog` fills it from `GetLayerSelection()`.
+    pub fn board_layers(&self, copper: &[String]) -> Vec<String> {
+        self.layer_selection.iter().filter(|l| !crate::layers::is_copper_layer_name(l) || copper.contains(l)).cloned().collect()
+    }
+
     /// A default `PCB_PLOT_PARAMS`.
     pub fn kicad_default() -> PlotParams {
         PlotParams { layer_selection: Self::default_layer_selection(), plot_on_all_layers: Vec::new(), items: Self::default_items() }
