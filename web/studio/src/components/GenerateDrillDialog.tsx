@@ -29,7 +29,7 @@ export function GenerateDrillDialog() {
     setResult(null);
     try {
       const reply = await postFabDrill({ merge_pth_npth: mergePthNpth, alt_drill_mode: altDrillMode, use_aux_origin: useAuxOrigin });
-      setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Drill file written." : "Failed."), files: reply.files ?? [] });
+      setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Done." : "Failed."), files: reply.files ?? [] });
     } finally {
       setBusy(false);
     }

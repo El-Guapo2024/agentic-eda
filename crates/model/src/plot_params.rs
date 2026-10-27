@@ -131,6 +131,15 @@ pub fn encode_layer_selection(layers: &[String]) -> String {
     format!("0x{}", s.chars().rev().collect::<String>())
 }
 
+/// The items `PCB_PLOT_PARAMS::Format` writes after the two layer sets: the only ones a board KiCad saves keeps.
+pub const FORMAT_TOKENS: &[&str] = &[
+    "disableapertmacros", "usegerberextensions", "usegerberattributes", "usegerberadvancedattributes", "creategerberjobfile", "gerberprecision",
+    "dashed_line_dash_ratio", "dashed_line_gap_ratio", "svgprecision", "pngdpi", "pngantialias", "plotframeref", "mode", "useauxorigin",
+    "pdf_front_fp_property_popups", "pdf_back_fp_property_popups", "pdf_metadata", "pdf_single_document", "dxfpolygonmode", "dxfimperialunits",
+    "dxfusepcbnewfont", "psnegative", "psa4output", "plot_black_and_white", "sketchpadsonfab", "plotpadnumbers", "hidednponfab", "sketchdnponfab",
+    "crossoutdnponfab", "subtractmaskfromsilk", "outputformat", "mirror", "drillshape", "scaleselection", "outputdirectory",
+];
+
 impl PlotParams {
     /// `PCB_PLOT_PARAMS::PCB_PLOT_PARAMS`' `m_layerSelection`: both silkscreens, masks and pastes, the board outline, and every copper layer.
     pub fn default_layer_selection() -> Vec<String> {
@@ -183,9 +192,55 @@ impl PlotParams {
         .to_vec()
     }
 
-    /// The board's plot settings: an imported board's own block, else `PCB_PLOT_PARAMS`' defaults.
+    /// The board's plot settings: an imported board's own block, else `PCB_PLOT_PARAMS`' defaults, read as KiCad reads them back
+    /// ([`PlotParams::normalized`]: a board imported before the legacy tokens were dropped on import comes out the same).
     pub fn of_design(design: &crate::ir::Design) -> PlotParams {
-        design.drawings.as_ref().and_then(|d| d.plot_params.clone()).unwrap_or_else(Self::kicad_default)
+        design.drawings.as_ref().and_then(|d| d.plot_params.clone()).map(PlotParams::normalized).unwrap_or_else(Self::kicad_default)
+    }
+
+    /// One item of the block as `PCB_PLOT_PARAMS_PARSER::Parse` reads it and `PCB_PLOT_PARAMS::Format` writes it back, in its place in
+    /// the block. A legacy token `Format` no longer writes is applied and dropped, as a board KiCad saves loses it:
+    /// - `(excludeedgelayer no)` is Edge.Cuts pushed on "Plot on All Layers" (`case T_excludeedgelayer: if( !parseBool() )
+    ///   m_plotOnAllLayersSequence.push_back( Edge_Cuts )`); `yes` is nothing;
+    /// - `(viasonmask ..)` is the board's via tenting, which the board reader applies (`case T_pcbplotparams`:
+    ///   `GetLegacyPlotViaOnMaskLayer()`), so it is not kept here: written back after `(tenting ..)` it would undo the tenting on
+    ///   every read;
+    /// - `svguseinch`, `pscolor`, `plotinvisibletext`, the HPGL pen tokens and any unknown token (`default: skipCurrent()`) are read
+    ///   and dropped;
+    /// - `(gerberprecision n)` is clamped to 5..6 (`parseInt( gbrDefaultPrecision - 1, gbrDefaultPrecision )`), and 6, the default, is
+    ///   not written (`if( m_gerberPrecision != gbrDefaultPrecision )`).
+    pub fn read_item(&mut self, item: &str) {
+        let body = item.trim().trim_start_matches('(').trim_end_matches(')');
+        let mut words = body.split_whitespace();
+        let Some(tag) = words.next() else { return };
+        let value = words.next().unwrap_or("");
+        match tag {
+            "excludeedgelayer" => {
+                if matches!(value, "no" | "false") && !self.plot_on_all_layers.iter().any(|l| l == "Edge.Cuts") {
+                    self.plot_on_all_layers.push("Edge.Cuts".into());
+                }
+            }
+            "gerberprecision" => {
+                // `atoi`: a leading number, else 0.
+                let digits: String = value.chars().enumerate().take_while(|(i, c)| c.is_ascii_digit() || (*i == 0 && (*c == '-' || *c == '+'))).map(|(_, c)| c).collect();
+                let n = digits.parse::<i64>().unwrap_or(0).clamp(5, 6);
+                self.items.retain(|i| !i.starts_with("(gerberprecision"));
+                if n != 6 {
+                    self.items.push(format!("(gerberprecision {n})"));
+                }
+            }
+            t if FORMAT_TOKENS.contains(&t) => self.items.push(item.to_string()),
+            _ => {}
+        }
+    }
+
+    /// The block as KiCad reads it back: every item through [`PlotParams::read_item`], in order.
+    pub fn normalized(self) -> PlotParams {
+        let mut p = PlotParams { layer_selection: self.layer_selection, plot_on_all_layers: self.plot_on_all_layers, items: Vec::new() };
+        for item in &self.items {
+            p.read_item(item);
+        }
+        p
     }
 
     /// The layers the selection names, of those the board has (its copper layers, and every non-copper layer, which a `.kicad_pcb` always defines): the
