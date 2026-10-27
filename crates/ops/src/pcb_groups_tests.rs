@@ -284,3 +284,18 @@ fn duplicating_and_pasting_a_one_member_group_copies_the_group() {
     b.apply(&Cmd::PasteClipboard { text, at: p(mm(5.0), mm(5.0)) }).unwrap();
     assert_eq!(drawings(&b).groups.len(), 1, "{:?}", drawings(&b).groups);
 }
+
+/// r2-pcb-edit A4: `PCB_GROUP_TOOL::Group` locks the new group when an item of the selection is locked.
+#[test]
+fn grouping_a_locked_item_locks_the_group() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().locked_ids = vec!["shp_seg".into()];
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::Group { ids: ids(&["shp_seg", "txt_a"]) }).unwrap();
+    let g = drawings(&b).parent_group("txt_a").unwrap().id.clone();
+    assert!(drawings(&b).locked_ids.contains(&g), "{:?}", drawings(&b).locked_ids);
+    b.apply(&Cmd::Group { ids: ids(&["trk_a", "via_a"]) }).unwrap();
+    let g2 = drawings(&b).parent_group("via_a").unwrap().id.clone();
+    assert!(!drawings(&b).locked_ids.contains(&g2), "nothing locked, the group is not");
+}

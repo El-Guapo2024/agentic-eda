@@ -523,10 +523,9 @@ pub enum Cmd {
     RemoveFromGroup { ids: Vec<String> },
     /// `DIALOG_GROUP_PROPERTIES::TransferDataFromWindow` (`ACTIONS::groupProperties`, Group Properties...): rename the group `id` and
     /// make its members exactly `member_ids` -- each one pulled out of whatever other group it was in (an item is in one group at a
-    /// time), the group's own previous members that are not listed released. A group left with fewer than 2 members dissolves, as
-    /// everywhere else. The name is `PCB_GROUP::SetName`; the dialog's "Library link:" box is `design_block` (`Some("")` clears the design block link, `Some("Lib:Name")` sets it,
-    /// refused as "Invalid library link" when it is not an id of that shape, `None` leaves it); its lock box has no counterpart in this model. A member may be a group, but not
-    /// this group or one that holds it.
+    /// time), the group's own previous members that are not listed released (an emptied group goes). The name is `PCB_GROUP::SetName`; the dialog's "Library link:" box is
+    /// `design_block` (`Some("")` clears the design block link, `Some(text)` sets it as `LIB_ID::Parse( text, true )` reads it, `None` leaves it); its Locked box is a
+    /// `set_locked` sent with it in one batch. A member may be a group, but not this group or one that holds it.
     EditGroup {
         id: String,
         name: String,

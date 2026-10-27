@@ -456,8 +456,12 @@
       t(!!dlg() && dlg().querySelector('[aria-label="Library link"]').value === "", "the dialog has an empty 'Library link:' box for a group with no link");
       setValue(dlg().querySelector('[aria-label="Library link"]'), "nocolon");
       buttonOf(dlg(), "OK").click();
-      await sleep(400);
-      t(!!dlg() && /Invalid library link: 'nocolon'/.test(dlg().innerText), "a link that is no library id is refused in KiCad's words and the dialog stays");
+      await sleep(1500);
+      // `LIB_ID::Parse( text, true )` never fails: a name with no library is a link too (r2-pcb-edit A9)
+      t(!dlg() && (await sch(MCU)).groups.find((x) => x.id === gid)?.design_block === "nocolon", "a name with no library is taken as the link, as KiCad's Parse( .., true ) takes it");
+      await select([gid]);
+      await E.run("common.Groups.groupProperties");
+      await waitFor(() => dlg());
       setValue(dlg().querySelector('[aria-label="Library link"]'), `${LIB}:Pair`);
       buttonOf(dlg(), "OK").click();
       await sleep(1500);

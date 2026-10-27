@@ -61,8 +61,19 @@ impl Board<'_> {
     /// it was in. When every id shared one group, the new group takes their place in it -- what a group made while that group is
     /// entered does (`BOARD_COMMIT::Push` adds an item made with a group entered to that group, and the selection tool only
     /// offers the entered group's own members then). The list edit is `GroupHost::make_group`, the sheet's as well.
+    ///
+    /// `PCB_GROUP_TOOL::Group`: "if( static_cast<BOARD_ITEM*>( eda_item )->IsLocked() ) group->SetLocked( true );" -- a locked item makes the new group locked.
     pub(crate) fn group_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        self.drawings_mut().make_group(ids).map_err(refused)
+        let dr = self.drawings_mut();
+        let before: BTreeSet<String> = dr.groups.iter().map(|g| g.id.clone()).collect();
+        dr.make_group(ids).map_err(refused)?;
+        if ids.iter().any(|id| dr.locked_ids.contains(id)) {
+            let new: Vec<String> = dr.groups.iter().map(|g| g.id.clone()).filter(|g| !before.contains(g)).collect();
+            dr.locked_ids.extend(new);
+            dr.locked_ids.sort();
+            dr.locked_ids.dedup();
+        }
+        Ok(())
     }
 
     /// `Cmd::Ungroup` (Ctrl+Shift+G): dissolve every named group. Its members are free of it -- also of the group above it, if

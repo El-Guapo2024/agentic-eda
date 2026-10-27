@@ -266,8 +266,8 @@ pub enum SchCmd {
     /// Remove Items (`GROUP_TOOL::RemoveFromGroup`): each id leaves the group it is in. A group left with fewer than two members dissolves. Refused when none is in a group.
     RemoveFromGroup { ids: Vec<String> },
     /// Group Properties (`DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`): the group `id` is renamed and its members are exactly `member_ids`, each pulled out of the group
-    /// it was in, the previous members not listed released. `design_block` is the dialog's "Library link:" box: `Some("")` clears the link, `Some("Lib:Name")` sets it (refused
-    /// as "Invalid library link" when it is not an id of that shape), `None` leaves it.
+    /// it was in, the previous members not listed released. `design_block` is the dialog's "Library link:" box: `Some("")` clears the link, `Some(text)` sets it as
+    /// `LIB_ID::Parse( text, true )` reads it (never refused), `None` leaves it.
     EditGroup {
         id: String,
         name: String,

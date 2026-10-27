@@ -11,6 +11,8 @@ export interface GroupDialog {
   members: string[];
   /** The "Library link:" box (`m_libraryLink`): the design block (`Lib:Name`) the group is linked to, empty for none. */
   designBlock: string;
+  /** The "Locked" box (`m_locked`) once it was changed; absent: the group's lock as it is. */
+  locked?: boolean;
   /** `m_propertiesDialog->Show( false )` while the user picks a new member on the canvas (`PickNewMember`). */
   hidden: boolean;
 }
