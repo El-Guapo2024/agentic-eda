@@ -22,6 +22,9 @@ pub mod footprint_check;
 // Other EDA formats in: `kicad-cli pcb import` and `kicad-cli sch import` (docs/ARCHITECTURE.md, "Engines").
 pub mod foreign;
 pub use foreign::{import_foreign_pcb, import_foreign_sch, ForeignImport, ForeignOptions};
+// Pictures of the design as KiCad draws them (`eda schematic`'s `schematic.svg`, the judge's): `kicad-cli sch|pcb export svg|png`.
+pub mod pictures;
+pub use pictures::{board_plot, schematic_plot, PictureFormat};
 
 use eda_kicad::zone_fills::KicadFills;
 use eda_kicad::{export_kicad_pcb_mapped_with, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};

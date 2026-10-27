@@ -958,6 +958,14 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 **Partial.** `PARITY-boardctl.md` section 5; round 2's r2-editors-exports X1-X11 (fixed 2026-10-27 on `task-r2-editors-exports`: the board's plot settings kept and plotted with, the drill and placement dialogs' defaults and controls, the 3D export's outline check, the VRML origin, the board BOM on the board).
 - Left: the PCB Plot dialog offers Gerber only, with the layer checklist, "Check zone fills before plotting" and "Use drill/place file origin"; KiCad's `DIALOG_PLOT` also has PostScript, SVG, DXF, HPGL and PDF, "Plot drawing sheet", "Plot footprint values" and "Plot reference designators", "Sketch pads on fabrication layers", the DNP options, the drill marks, "Use Protel filename extensions", "Generate Gerber job file", "Coordinate format", "Use extended X2 format", "Include netlist attributes", "Disable aperture macros", "Subtract soldermask from silkscreen", the output directory and Run DRC (kicad-cli has a flag for each; the board's own settings already reach the plot), and storing the dialog's choices back in the board. The drill dialog lacks Gerber X2 drill files, map files, units, zeros, mirror and minimal header; the placement dialog lacks "Exclude from BOM" (no kicad-cli flag) and the design variant. The board BOM is kicad-cli's writer, not `GenBOMFileFromBoard`'s (quoting, the library prefix, no `;;;`). Export Symbol as SVG plots with kicad-cli's theme and page, not the editor's theme with a 10 % margin.
 
+### 38. Pictures of the design by kicad-cli (the port-vs-reuse audit's row 2)
+**Done 2026-10-28 on `task-pictures-kicad-cli`.** `eda schematic`'s `schematic.svg`, `GET /api/schematic.svg` and the judge's pictures are
+`kicad-cli sch|pcb export svg|png` (`docs/ARCHITECTURE.md`, "Engines"; `crates/kicad-engine/src/pictures.rs`; proofs in `crates/cli/tests/pictures.rs`).
+- Kept, inactive (the user's call of 2026-10-28: no code deleted): `crates/render` and `eda_judge::render_board_svg`, behind `EDA_RUST_PICTURES=1`.
+- Left: the judge's rubric is `judge-rubric-2` and has not been re-baselined on the bench boards' verdicts (the audit's golden check: no
+  `ANTHROPIC_API_KEY` on the box); a schematic picture is the whole page KiCad plots, so a small sheet is small in it (the old picture was
+  cropped to the content); lint's `schematic_content_in_bounds` now measures against the paper (the page kicad-cli plots), not a cropped viewBox.
+
 ## Appendix A. The original 30, one verdict each
 
 13 closed, 9 partial, 0 open, 8 out of scope (2026-10-10). Changed since 2026-10-07: #11 and #25 closed, #14 closed on `task-pcb-edit-details` (not merged); #6 and #26 re-worded.

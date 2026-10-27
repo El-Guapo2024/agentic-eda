@@ -1643,9 +1643,29 @@ fn dimension_settings_json(s: &eda_model::ir::DimensionSettings) -> Value {
     })
 }
 
+/// The design's schematic as KiCad plots it -- `kicad-cli sch export svg` on
+/// the derived `.kicad_sch`, the root sheet's page -- or, for a board started
+/// from an intent alone, the one derived from the intent
+/// (`kicad_engine::load_with_schematic`, as ERC and File > Plot read it).
+/// Without kicad-cli the route answers its reason. `EDA_RUST_PICTURES=1`
+/// draws the INACTIVE `eda-render` sheet instead ([`schematic_svg_rust`]).
+fn schematic_svg(dir: &Path, cache: &Mutex<Option<(std::time::SystemTime, String)>>) -> Result<String, Vec<CheckResult>> {
+    if eda::rust_pictures() {
+        return schematic_svg_rust(dir, cache);
+    }
+    let (design, model) = crate::kicad_engine::load_with_schematic(dir)?;
+    let work = dir.join(".kicad");
+    let pages = eda_kicad_engine::schematic_plot(&design, &model, &work, &work.join("schematic-svg"), &crate::kicad_engine::project_name(dir), eda_kicad_engine::PictureFormat::Svg)?;
+    let root = pages.first().ok_or_else(|| vec![CheckResult::fail("kicad_cli_export", "svg", "kicad-cli plotted no page")])?;
+    std::fs::read_to_string(root).map_err(|e| vec![CheckResult::fail("kicad_cli_export", "svg", format!("could not read {}: {e}", root.display()))])
+}
+
+/// INACTIVE (2026-10-28): replaced by kicad-cli `sch export svg` ([`schematic_svg`]) per the user's port-vs-reuse rule; kept for a future
+/// all-Rust build, used only with `EDA_RUST_PICTURES=1`.
+///
 /// The design's schematic drawn, or, for a board started from an intent
 /// alone, one derived from the intent (cached until the intent changes).
-fn schematic_svg(dir: &Path, cache: &Mutex<Option<(std::time::SystemTime, String)>>) -> Result<String, Vec<CheckResult>> {
+fn schematic_svg_rust(dir: &Path, cache: &Mutex<Option<(std::time::SystemTime, String)>>) -> Result<String, Vec<CheckResult>> {
     let (meta, design, model) = board::load(dir)?;
     if design.schematic.is_some() {
         return eda::render_schematic(&design, &model);
