@@ -391,14 +391,15 @@ fn positions(section: &SchematicSection) -> Vec<(Point, bool)> {
     let mut out: Vec<(Point, bool)> = Vec::new();
     out.extend(section.symbols.iter().map(|s| (s.at, true)));
     out.extend(section.power_symbols.iter().map(|s| (s.at, true)));
-    out.extend(section.wires.iter().filter_map(|w| w.pts.first().map(|p| (*p, true))));
+    // one `SCH_LINE` per segment, each at its start (`GetPosition`): every point of a polyline but its last (r2 D-C2)
+    out.extend(section.wires.iter().flat_map(|w| w.pts[..w.pts.len().saturating_sub(1).max(w.pts.len().min(1))].iter().map(|p| (*p, true))));
     out.extend(section.junctions.iter().map(|j| (j.at, true)));
     out.extend(section.no_connects.iter().map(|n| (n.at, true)));
     out.extend(section.bus_entries.iter().map(|b| (b.at, true)));
     out.extend(section.labels.iter().map(|l| (l.at, true)));
     out.extend(section.sheets.iter().map(|s| (s.at, true)));
     out.extend(section.texts.iter().map(|t| (t.at, false)));
-    out.extend(section.lines.iter().filter_map(|l| l.pts.first().map(|p| (*p, false))));
+    out.extend(section.lines.iter().flat_map(|l| l.pts[..l.pts.len().saturating_sub(1).max(l.pts.len().min(1))].iter().map(|p| (*p, false))));
     for g in &section.extras.graphics {
         let (p, connectable) = match &g.shape {
             SchGraphicKind::Rectangle { start, .. } | SchGraphicKind::TextBox { start, .. } | SchGraphicKind::Arc { start, .. } | SchGraphicKind::Bezier { start, .. } => (*start, false),
@@ -475,6 +476,17 @@ mod tests {
     }
     fn pasted(reference: &str, x: Nm) -> PastedRef {
         PastedRef { reference: reference.into(), unit: 1, unit_count: 1, lib_id: "Device:R".into(), value: "10k".into(), at: (x, Nm::ZERO), power: false }
+    }
+
+    /// r2 D-C2 (`SCH_SELECTION::GetTopLeftItem`: one `SCH_LINE` per segment, each at its start): the L wire (20,10) -> (10,10) -> (10,20) is carried
+    /// by (10,10), its second segment's start, not by its first point.
+    #[test]
+    fn top_left_anchor_counts_every_segment_start() {
+        let mm = crate::units::mm;
+        let p = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let mut s = SchematicSection::default();
+        s.wires.push(crate::ir::Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(20.0, 10.0), p(10.0, 10.0), p(10.0, 20.0)], bus: false });
+        assert_eq!(top_left_anchor(&s), Some(p(10.0, 10.0)));
     }
 
     #[test]
