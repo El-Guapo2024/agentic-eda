@@ -4,7 +4,7 @@
 // grid, like KiCad's, and a footprint is opened from the tree.
 import { useEffect, useRef, useState } from "react";
 import { useFpDispatch, useFpState } from "../../state/footprintEditorStore";
-import { enumeratePopupText, enumerateStart } from "../../kicad-port/padEnumeration";
+import { ENUM_PREFIX_MAX_LENGTH, enumSpinValue, enumeratePopupText, enumerateStart } from "../../kicad-port/padEnumeration";
 import { inPadEditMode, PAD_EDIT_MODE_MESSAGE, padEditLayer } from "../../kicad-port/padEditMode";
 import { FootprintCanvas } from "./FootprintCanvas";
 import { PadPropertiesDialog } from "./PadPropertiesDialog";
@@ -15,6 +15,7 @@ import { PushPadPropertiesDialog } from "./PushPadPropertiesDialog";
 import { LoadFromBoardDialog } from "./LoadFromBoardDialog";
 import { FootprintCheckerDialog } from "./FootprintCheckerDialog";
 import { FootprintCreateArrayDialog } from "./FootprintArrayDialog";
+import { FpTextDialog } from "./FpTextDialog";
 import { LibraryDialogHost } from "../library/libraryDialogs";
 import { DockColumn } from "../panels/Dock";
 import { Toolbar } from "../Toolbar";
@@ -47,22 +48,23 @@ function RenumberPadsDialog() {
     dispatch({ type: "SET_ENUMERATE", state: enumerateStart(params) });
     dispatch({ type: "SET_ACTIVE_TOOL", tool: "enumerate" });
   };
+  // `dialog_enum_pads_base.cpp`: the title, the note, the three labels, the prefix limited to 4 characters and the spin controls' 0..999.
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 340 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Renumber Pads">
+      <div className="dialog" style={{ width: 360 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Pad Enumeration Settings" data-testid="enum-pads-dialog">
         <div className="dialog-header">
-          <span>Renumber Pads</span>
+          <span>Pad Enumeration Settings</span>
         </div>
         <div className="dialog-body">
-          <div className="kv-grid" style={{ gridTemplateColumns: "120px 1fr" }}>
-            <span>Prefix</span>
-            <input value={prefix} autoFocus onChange={(e) => setPrefix(e.target.value)} onKeyDown={(e) => e.key === "Enter" && ok()} style={{ width: 80 }} />
-            <span>Start number</span>
-            <input type="number" value={start} onChange={(e) => setStart(Math.round(Number(e.target.value) || 0))} onKeyDown={(e) => e.key === "Enter" && ok()} style={{ width: 80 }} />
-            <span>Number step</span>
-            <input type="number" value={step} onChange={(e) => setStep(Math.round(Number(e.target.value) || 0))} onKeyDown={(e) => e.key === "Enter" && ok()} style={{ width: 80 }} />
+          <p style={{ margin: "0 0 10px" }}>Pad names are restricted to 4 characters (including number).</p>
+          <div className="kv-grid" style={{ gridTemplateColumns: "130px 1fr" }}>
+            <span>Pad name prefix:</span>
+            <input value={prefix} autoFocus maxLength={ENUM_PREFIX_MAX_LENGTH} data-testid="enum-pads-prefix" onChange={(e) => setPrefix(e.target.value.slice(0, ENUM_PREFIX_MAX_LENGTH))} onKeyDown={(e) => e.key === "Enter" && ok()} style={{ width: 80 }} />
+            <span>First pad number:</span>
+            <input type="number" min={0} max={999} step={1} value={start} data-testid="enum-pads-start" onChange={(e) => setStart(enumSpinValue(Number(e.target.value)))} onKeyDown={(e) => e.key === "Enter" && ok()} style={{ width: 80 }} />
+            <span>Numbering step:</span>
+            <input type="number" min={0} max={999} step={1} value={step} data-testid="enum-pads-step" onChange={(e) => setStep(enumSpinValue(Number(e.target.value)))} onKeyDown={(e) => e.key === "Enter" && ok()} style={{ width: 80 }} />
           </div>
-          <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "10px 0 0" }}>Then click the pads in the order they should be numbered.</p>
         </div>
         <div className="dialog-footer">
           <button onClick={close}>Cancel</button>
@@ -108,7 +110,7 @@ export function FootprintEditorView() {
         </div>
       )}
       {state.enumerate && (
-        <div role="status" style={{ padding: "4px 12px", background: "var(--chrome-bg-raised)", borderBottom: "1px solid var(--chrome-border)", fontSize: 12 }}>
+        <div role="status" style={{ padding: "4px 12px", background: "var(--chrome-bg-raised)", borderBottom: "1px solid var(--chrome-border)", fontSize: 12, whiteSpace: "pre-line" }}>
           {enumeratePopupText(state.enumerate)}
         </div>
       )}
@@ -126,6 +128,7 @@ export function FootprintEditorView() {
       <PadPropertiesDialog />
       <FootprintLibraryPropertiesDialog />
       <RenumberPadsDialog />
+      <FpTextDialog />
       <PadTableDialog />
       <PushPadPropertiesDialog />
       <LoadFromBoardDialog />
