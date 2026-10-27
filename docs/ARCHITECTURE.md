@@ -222,6 +222,13 @@ never edited as masters.
       first time (the server loads the board twice: `OpenDocument`, then the
       job) and 2.4 s again. The other export kinds stay per-run until their
       messages (plot settings, layers, variants) are mapped and proved.
+    A job export takes the lane only from a long-lived process: the studio's
+    `serve` says it is one (`api::long_lived_process`), and its exports reuse
+    the server it started; a one-shot `eda board export` / `eda fab` runs
+    per-run kicad-cli, since a server start for a single job costs more than
+    it saves (`exports_use_server`, X5-3: 1.02 s against 0.43 s on a small
+    board). `EDA_KICAD_API=1` asks for the lane from any process, `=0` closes
+    it everywhere including the studio.
     The lane is optional everywhere: when it is closed every caller takes its
     per-run kicad-cli path (or the INACTIVE port, for the session import). The
     server runs no DRC or ERC (`InjectDrcError` only) and no fill in a way we

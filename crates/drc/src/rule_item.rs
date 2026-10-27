@@ -78,8 +78,11 @@ pub struct FootprintFacts {
     /// `GetCourtyard( F_CrtYd )` and `B_CrtYd` as closed outlines in board space; empty = none.
     pub courtyard_front: Vec<Vec<Point>>,
     pub courtyard_back: Vec<Vec<Point>>,
-    /// The sheet the footprint came from (`GetSheetname`); the studio's footprints are not given one.
+    /// The sheet the footprint came from (`GetSheetname`): `/` for the root, `/HV/` below it; empty for a footprint placed by hand.
     pub sheet: String,
+    /// `GetComponentClass()`'s constituent classes, sorted (`COMPONENT_CLASS_MANAGER::sortClassNames`): the ones its file gives it and the ones the project's
+    /// assignment rules give it. Empty: the footprint is in no class.
+    pub classes: Vec<String>,
 }
 
 /// The local settings an item overrides the rules with (`GetClearanceOverrides`, `GetZoneConnectionOverrides`, `GetLocalThermalGapOverride`,

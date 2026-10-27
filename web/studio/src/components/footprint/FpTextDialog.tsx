@@ -1,13 +1,13 @@
 // The Footprint Editor's Text tool dialog: `DIALOG_TEXT_PROPERTIES` (pcbnew/dialogs/dialog_text_properties.cpp) on the text `DRAWING_TOOL::PlaceText`'s first click made
 // (kicad-port/fpTextTool.ts). For a footprint's text it is "Footprint Text Properties", one line of text, "Offset X:" / "Offset Y:" for the position, no Visible box.
 // OK with no printable character drops the text (`NoPrintableChars`); a text whose offset was changed here is placed at once ("If the user modified the location then go
-// ahead and place it there"), any other follows the cursor until the click that commits it. A pen too thick for the size is clamped with KiCad's message.
+// ahead and place it there") and selected (`ACTIONS::selectItem`), any other follows the cursor until the click that commits it. A size outside KiCad's limits gets
+// `UNIT_BINDER::Validate`'s message ("Width must be at least 0.001 mm."); a pen too thick for the size is clamped with KiCad's message.
 // The model's text has one size (square), no italic, bold, knockout or keep-upright, and no vertical justification: those controls are left out.
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
-import { noPrintableChars } from "../../kicad-port/fpTextTool";
+import { fpTextSizeMessage, noPrintableChars } from "../../kicad-port/fpTextTool";
 import { FP_EDITOR_LAYERS } from "../../kicad-port/fpDrawDefaults";
-import { TEXT_MAX_NM, TEXT_MIN_NM } from "../../kicad-port/fpFields";
 import type { TextJustify } from "../../api/types";
 
 /** The layers a footprint text can be put on: the Footprint Editor's layer box. */
@@ -49,9 +49,11 @@ export function FpTextDialog() {
   if (!text) return null;
   const close = () => dispatch({ type: "SET_TEXT_DIALOG", text: null });
   const ok = () => {
-    // `DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`: the size in KiCad's limits; a pen thicker than ClampTextPenSize allows is clamped, with the message.
+    // `DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`: the size in KiCad's limits, through UNIT_BINDER::Validate's words; a pen thicker than ClampTextPenSize
+    // allows is clamped, with the message.
     const sizeNm = nm(size);
-    if (!(sizeNm >= TEXT_MIN_NM && sizeNm <= TEXT_MAX_NM)) return setError(`The text size must be between ${TEXT_MIN_NM / 1e6} mm and ${TEXT_MAX_NM / 1e6} mm.`);
+    const sizeError = fpTextSizeMessage(sizeNm);
+    if (sizeError) return setError(sizeError);
     let pen = Math.max(0, nm(thickness) || 0);
     const maxPen = Math.round(sizeNm * 0.25);
     if (pen > maxPen) {
@@ -64,8 +66,11 @@ export function FpTextDialog() {
     const at = { x: nm(x) || 0, y: nm(y) || 0 };
     const done = { ...text, content, layer, size_nm: sizeNm, stroke_width: pen, angle: Math.round((Number(angle) || 0) * 1000), justify, mirror, at };
     if (at.x !== text.at.x || at.y !== text.at.y) {
-      // the offset was edited: placed there now, "Draw Text", and the tool stays
-      void api.addText(done);
+      // the offset was edited: placed there now, "Draw Text", and the tool stays; the commit is followed by `RunAction( ACTIONS::selectItem, text )`, as the
+      // second click's placement does on the canvas.
+      void api.addText(done).then((id) => {
+        if (id) dispatch({ type: "SET_SELECTION", refs: [id] });
+      });
     } else {
       dispatch({ type: "SET_CARRIED_TEXT", text: done });
     }

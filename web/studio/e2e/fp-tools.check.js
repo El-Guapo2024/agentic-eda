@@ -1,7 +1,8 @@
-// Footprint Editor drawing tools check (round 4 findings E4-F1, E4-F2, E4-F3; PARITY-fpedit.md): a drawn shape takes the line width of its layer's class and a polygon on a
-// courtyard is unfilled (`drawing_tool.cpp` `GetLineThickness`, `zone_create_helper.cpp`); the Text tool opens "Footprint Text Properties" on its first click, carries the text to
-// the next click, places it left justified, mirrored on a back layer, in the layer's size and pen, and stays armed (`DRAWING_TOOL::PlaceText`); the Pad tool carries its pad, and R
-// and F before the click turn and flip it (`PAD_TOOL::PlacePad`, `doInteractiveItemPlacement` with IPO_ROTATE | IPO_FLIP), the next pad taking the same turn.
+// Footprint Editor drawing tools check (round 4 findings E4-F1, E4-F2, E4-F3; round 5 E5-1, E5-2; PARITY-fpedit.md): a drawn shape takes the line width of its layer's class and
+// a polygon on a courtyard is unfilled (`drawing_tool.cpp` `GetLineThickness`, `zone_create_helper.cpp`); the Text tool opens "Footprint Text Properties" on its first click, carries
+// the text to the next click, places it left justified, mirrored on a back layer, in the layer's size and pen, and stays armed (`DRAWING_TOOL::PlaceText`); a size outside KiCad's
+// limits gets `UNIT_BINDER::Validate`'s "Width must be at least %s." / "Width must be less than %s.", and a text placed at an offset edited in the dialog is selected; the Pad tool
+// carries its pad, and R and F before the click turn and flip it (`PAD_TOOL::PlacePad`, `doInteractiveItemPlacement` with IPO_ROTATE | IPO_FLIP), the next pad taking the same turn.
 //
 // Run it in the page of a served board -- paste it into the Browser pane's javascript tool, or `page.evaluate( src )` in Playwright -- on a COPY of a board
 // (`eda board new examples/mcu_board_30plus.yaml -o <dir>`, then `eda board serve -C <dir> --port N --ui web/studio/dist`). It makes footprints of its own (New Footprint), and
@@ -160,6 +161,51 @@
     t(__eda.state().tool === "select", "a second Escape leaves the tool");
     t(((await footprint(name)).texts ?? []).length === before + 1, "the dropped text was never placed");
     await setLayer("F.SilkS");
+  });
+
+  await scenario("E5-1: a size outside KiCad's limits gets UNIT_BINDER::Validate's Width message, word for word", async (t) => {
+    const name = await newFootprint();
+    const before = ((await footprint(name)).texts ?? []).length;
+    await arm("pcbnew.InteractiveDrawing.text", "text");
+    await clickAt(1_000_000, 1_000_000);
+    t(!!tid("fp-text-dialog"), "the first click opens the dialog");
+    await type(tid("fp-text-content"), "SIZED");
+    await type(tid("fp-text-size"), "0");
+    tid("fp-text-ok").click();
+    await sleep(300);
+    const low = tid("fp-text-dialog")?.textContent ?? "";
+    t(/Width must be at least 0\.001 mm\./.test(low), `0 mm says "Width must be at least 0.001 mm.": ${low}`);
+    await type(tid("fp-text-size"), "300");
+    tid("fp-text-ok").click();
+    await sleep(300);
+    const high = tid("fp-text-dialog")?.textContent ?? "";
+    t(/Width must be less than 250 mm\./.test(high), `300 mm says "Width must be less than 250 mm.": ${high}`);
+    t(/Width must be at least 0\.001 mm\./.test(high) === false, "and only the one message shows");
+    t(((await footprint(name)).texts ?? []).length === before, "neither refused size placed a text");
+    await closeDialogs();
+    await key("Escape");
+    t(__eda.state().tool === "select", `Escape leaves the tool: ${__eda.state().tool}`);
+  });
+
+  await scenario("E5-2: a text placed at an offset edited in the dialog is selected, as ACTIONS::selectItem does", async (t) => {
+    const name = await newFootprint();
+    const before = ((await footprint(name)).texts ?? []).length;
+    t(await setLayer("F.SilkS"), "the layer box offers F.SilkS");
+    await arm("pcbnew.InteractiveDrawing.text", "text");
+    await clickAt(1_000_000, 1_000_000);
+    t(!!tid("fp-text-dialog"), "the first click opens the dialog");
+    await type(tid("fp-text-content"), "OFFSET");
+    await type(tid("fp-text-x"), "3");
+    tid("fp-text-ok").click();
+    await sleep(600);
+    const texts = ((await footprint(name)).texts ?? []).slice(before);
+    const made = texts[0];
+    t(texts.length === 1 && made.content === "OFFSET" && made.at.x === 3_000_000, `the text is placed at Offset X 3 mm with no second click: ${JSON.stringify(texts.map((x) => [x.content, x.at]))}`);
+    const sel = __eda.state().selection;
+    t(sel.length === 1 && sel[0].id === made?.id && sel[0].kind === "text", `and it is selected: ${JSON.stringify(sel)} (the new text ${made?.id})`);
+    t(__eda.state().tool === "text", `the Text tool stays armed: ${__eda.state().tool}`);
+    await key("Escape");
+    t(__eda.state().tool === "select", `Escape leaves the tool: ${__eda.state().tool}`);
   });
 
   await scenario("E4-F3: R and F before the click turn and flip the carried pad, and the next pad takes the same turn", async (t) => {

@@ -38,7 +38,7 @@ import { chooseMode, NO_CHOICES, placementFormOf, placementOf, placementOptions,
 import { duplicatedZoneOutline } from "../kicad-port/boardControl";
 import { enabledOptionalLayers, layerDisplayName } from "../kicad-port/boardLayers";
 import { activeLayerName, isCopper } from "../kicad-port/layerPresets";
-import { orderedLayerSet, zoneDialogKind, zoneLayerChoices, zoneLayers } from "../kicad-port/zoneLayers";
+import { NO_NET_ZONE_WARNING, orderedLayerSet, zoneDialogKind, zoneDialogNet, zoneLayerChoices, zoneLayers } from "../kicad-port/zoneLayers";
 
 type ZoneFormSettings = ZoneSettingsFields & RuleAreaFields;
 const DEFAULT_FORM_SETTINGS: ZoneFormSettings = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
@@ -112,7 +112,8 @@ export function ZoneDialog() {
     return [...set].sort();
   }, [state.board]);
 
-  const [net, setNet] = useState("");
+  // `null`: a new zone nothing was picked for (it starts on the first net); `""`: on no net (`<no net>`).
+  const [net, setNet] = useState<string | null>(null);
   /** The layers checked in the list (`ZONE_SETTINGS::m_Layers`), in the order the board lists them. */
   const [layers, setLayers] = useState<string[]>([]);
   const [name, setName] = useState("");
@@ -146,7 +147,7 @@ export function ZoneDialog() {
       setSettings({ ...dupZone });
     } else {
       // `createNewZone`: the zone is on the layer the tool was started on -- a technical layer gets the non-copper dialog.
-      setNet("");
+      setNet(null);
       setLayers([activeLayerName(state.activeLayer, copperLayers[0] ?? "F.Cu")]);
       setName("");
       setLocked(false);
@@ -181,8 +182,9 @@ export function ZoneDialog() {
   const choices = zoneLayerChoices(kind, copperLayers, optionalLayers);
   // A zone can hold a layer the list does not offer (a rule area's technical layers once the box is unchecked, a layer the board has since turned off): keep it in view.
   const listed = [...choices, ...layers.filter((l) => !choices.includes(l))];
-  // A rule area normally has no net at all (KiCad's net code 0) -- unlike a copper-pour zone, never defaulted to the first net on the board; a non-copper zone has none.
-  const effectiveNet = kind === "copper" ? net || nets[0] || "" : kind === "rule-area" ? net : "";
+  // A rule area normally has no net at all (KiCad's net code 0) -- unlike a new copper-pour zone, never defaulted to the first net on the board; a non-copper zone has
+  // none; a copper zone on no net stays on none (R5-Z3).
+  const effectiveNet = zoneDialogNet(kind, net, nets);
   const set = <K extends keyof ZoneFormSettings>(key: K, value: ZoneFormSettings[K]) => setSettings((s) => ({ ...s, [key]: value }));
   const setRuleArea = (on: boolean) => {
     set("is_rule_area", on);
@@ -207,7 +209,8 @@ export function ZoneDialog() {
   // either. "No layer selected." is both KiCad dialogs' check on the list.
   const noLayer = layers.length === 0;
   const thermalSpokeTooNarrow = kind === "copper" && settings.thermal_spoke_width < settings.min_thickness;
-  const canSubmit = !noLayer && (kind === "rule-area" ? true : kind === "non-copper" ? settings.min_thickness >= 0 : !!effectiveNet && !thermalSpokeTooNarrow && settings.clearance >= 0 && settings.min_thickness > 0);
+  // (a copper zone on no net is allowed: the panel only warns, `updateInfoBar`)
+  const canSubmit = !noLayer && (kind === "rule-area" ? true : kind === "non-copper" ? settings.min_thickness >= 0 : !thermalSpokeTooNarrow && settings.clearance >= 0 && settings.min_thickness > 0);
   const firstLayer = layers[0] ?? "F.Cu";
 
   const submit = async () => {
@@ -275,7 +278,7 @@ export function ZoneDialog() {
               <>
                 <span>Net</span>
                 <select value={effectiveNet} onChange={(e) => setNet(e.target.value)} data-testid="zone-net">
-                  {nets.length === 0 && <option value="">(no nets on this board)</option>}
+                  <option value="">{"<no net>"}</option>
                   {nets.map((n) => (
                     <option key={n} value={n}>
                       {n}
@@ -294,6 +297,11 @@ export function ZoneDialog() {
             </div>
           </div>
           {noLayer && <p style={{ color: "#ef5b5b", fontSize: 11, margin: "4px 0 0" }}>No layer selected.</p>}
+          {kind === "copper" && effectiveNet === "" && (
+            <p style={{ color: "#e0a030", fontSize: 11, margin: "4px 0 0" }} data-testid="zone-no-net-warning">
+              {NO_NET_ZONE_WARNING}
+            </p>
+          )}
           <label className="filter-row" style={{ display: "block", marginTop: 8 }} title="BOARD_ITEM::IsLocked() -- a locked zone is not moved or edited by the selection tools">
             <input type="checkbox" checked={locked} onChange={(e) => setLocked(e.target.checked)} data-testid="zone-locked" /> Locked
           </label>

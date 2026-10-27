@@ -12,7 +12,7 @@ import type { BoardState, Part } from "../../api/types";
 import { FOV_DEG, TrackballCamera, type ViewPreset } from "../../kicad-port/camera3d";
 import { isVisible } from "../../kicad-port/appearance3d";
 import type { ModelRow } from "../../kicad-port/fpModels";
-import { modelWorldMatrix, previewStack } from "../../kicad-port/model3d";
+import { modelWorldMatrix, previewStack, previewWheelScroll } from "../../kicad-port/model3d";
 import { useStudioState } from "../../state/store";
 import { ModelCache } from "../viewer3d/modelCache";
 import { boardOutlineBounds, buildBackgroundTexture, buildBoardGroup, disposeObject3D } from "../viewer3d/scene";
@@ -93,6 +93,11 @@ export function ModelPreview3D({ part, rows, height = 250, testId = "model-previ
   const [note, setNote] = useState("");
   /** What the view fitted to last: the camera moves when this changes, not when a field does. */
   const fitted = useRef("");
+  // The wheel reads the Preferences' zoom modifier when a notch arrives (`PANEL_PREVIEW_3D_MODEL::loadSettings`), as the main viewer's does.
+  const scrollPrefsRef = useRef(state.prefs);
+  useEffect(() => {
+    scrollPrefsRef.current = state.prefs;
+  }, [state.prefs]);
 
   /** The models as the list says, loaded and placed; the camera is fitted when `refit` or what is drawn changed in kind. */
   const syncModels = useCallback((refit: boolean) => {
@@ -208,7 +213,7 @@ export function ModelPreview3D({ part, rows, height = 250, testId = "model-previ
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      if (!camera.isMoving()) camera.handleWheel({ deltaX: e.deltaX, deltaY: e.deltaY, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey, altKey: e.altKey });
+      if (!camera.isMoving()) camera.handleWheel({ deltaX: e.deltaX, deltaY: e.deltaY, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey, altKey: e.altKey }, previewWheelScroll(scrollPrefsRef.current));
     };
     const onContext = (e: MouseEvent) => e.preventDefault();
     el.addEventListener("pointerdown", onDown);

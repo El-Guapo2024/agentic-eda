@@ -29,6 +29,9 @@
 //   and only the footprint's flip differs; `crates/model/src/footprint.rs` `Model3d::flipped_frame` is the half turn the KiCad file needs in its place.
 //   A top footprint has no difference at all.
 
+import { DEFAULT_WHEEL_SCROLL, type WheelScrollSettings } from "./camera3d";
+import type { Preferences } from "./preferences";
+
 /** Column-major 4x4, the order `THREE.Matrix4.elements` and `fromArray` use. */
 export type Mat4 = number[];
 
@@ -195,12 +198,22 @@ export function stackOfBoard(rules: StackRules | null | undefined): Stack {
 
 /**
  * The 3D model preview's dummy board (panel_preview_3d_model.cpp's ctor): the footprint editor's board thickness (BOARD_DESIGN_SETTINGS' 1.6 mm), enabled
- * layers `LSET::FrontMask() | LSET::BackMask()` (so `m_copperLayerCount` is 0, `SetEnabledLayers`) and `BuildDefaultStackupList( &dummy_bds, 2 )`: one
- * dielectric of the thickness less the two 10 um masks (no copper is subtracted at a count of 0), F.Cu and B.Cu at 35 um.
+ * layers `LSET::FrontMask() | LSET::BackMask()`, and `BuildDefaultStackupList( &dummy_bds, 2 )`. `LSET::FrontMask` is `FrontTechMask().set( F_Cu )`, so
+ * `SetEnabledLayers` counts two copper layers (`m_copperLayerCount`), and the one dielectric is the thickness less 2 x 35 um of copper and 2 x 10 um of
+ * masks: 1.51 mm. `InitSettings` adds only that dielectric to the body; F.Cu and B.Cu stay the outer copper at 35 um and the masks at 10 um.
  */
 export function previewStack(boardThicknessNm = 1_600_000): Stack {
-  const mm = (nm: number) => nm / 1e6;
-  return { boardThicknessMm: mm(boardThicknessNm - STACKUP_MASK_NM * 2), copperMm: mm(STACKUP_COPPER_NM), copperBackMm: mm(STACKUP_COPPER_NM), maskFrontMm: mm(STACKUP_MASK_NM), maskBackMm: mm(STACKUP_MASK_NM) };
+  return stackOfBoard({ copper_layers: 2, board_thickness_nm: boardThicknessNm });
+}
+
+/**
+ * The preview canvas's wheel settings, from the Preferences: `PANEL_PREVIEW_3D_MODEL::loadSettings` sets only
+ * `m_boardAdapter.m_MousewheelPanning = settings->m_Input.scroll_modifier_zoom != 0` (ours: a zoom modifier other than "none" turns the wheel into
+ * panning). The preview canvas is never given `SetVcSettings`, so every other wheel setting stays at `VC_SETTINGS::Reset`'s defaults -- pan H Ctrl, pan
+ * V Shift, no reversal (`DEFAULT_WHEEL_SCROLL`).
+ */
+export function previewWheelScroll(prefs: Pick<Preferences, "scrollModifierZoom">): WheelScrollSettings {
+  return { ...DEFAULT_WHEEL_SCROLL, scrollModifierZoom: prefs.scrollModifierZoom };
 }
 
 /**

@@ -1101,8 +1101,8 @@ re-read against KiCad 8303b2ad, and each fix has a test that failed first.
     clearance), a pair of items with no rules of their own (tracks, vias, their holes, pads with no local clearance, the edge) is answered without
     the engine, from the same numbers `EvalRules` takes there; `the_plain_answer_is_the_engines_on_kicads_boards` holds this to the engine on
     about 100 000 pairs of ten QA boards. A hole whose copper reaches further than the worst hole clearance can is not tested
-    (`RuleResolver::hole_reach`). The search margin leaves out the barcodes' implicit 1 mm physical clearance, which no router item is subject
-    to (KiCad's `QueryWorstConstraint` counts it). Measured on `simple-shove-1` replayed in Shove mode (debug build, CPU time, the best of
+    (`RuleResolver::hole_reach`). The search margin counts the barcodes' implicit 1 mm physical clearance once the world has a barcode
+    (Stage 18; KiCad's `QueryWorstConstraint` counts it always). Measured on `simple-shove-1` replayed in Shove mode (debug build, CPU time, the best of
     nine): 0.65 s with the rules, 0.63 s with the net classes alone.
   - Tests: `tests/rules_kicad.rs` -- a pad's local clearance, a footprint's, a custom rule, a net tie, a mounting hole's hole clearance, hole to
     hole between two vias of one net. Each routes in Walk around mode through `Router`, checks the copper, and under `EDA_SLOW_TESTS=1` has
@@ -1292,6 +1292,20 @@ The router and studio findings of `findings/round5/r5-route-rules.md` (R5-1 .. R
   **Differs:** "DP Max Uncoupled-length" is not shown; after a via the clearance is the start's (KiCad re-imports on a layer change).
 - **R5-10 (part).** Apply sorts the three lists (`TransferDataFromWindow`). **Left:** Add rows pre-filled with the Default class's values, and the
   ops' own "every preset width must be positive" refusal (KiCad checks no width).
+
+## Stage 19 -- round-5 rule findings (branch `task-r5-rules-zones`, 2026-10-28)
+
+The router side of `work/findings/round5/r5-route-rules.md` section D (R5-D1, R5-D2; the rule engine's side is `web/studio/PARITY-pcb.md` section 59).
+
+- **R5-D1.** The rule engine's footprints carry their sheet, fields and component class (`eda_drc::rule_board`), so a `.kicad_dru` rule on
+  `memberOfSheet`, `hasComponentClass` or (for a footprint) `getField` holds the route off as kicad-cli's DRC holds it.
+  Test: `a_rule_on_the_sheet_or_a_component_class_holds_a_route_off` (kicad-cli under `EDA_SLOW_TESTS=1`; it failed before).
+- **R5-D2.** `syncBarcode`, `syncGraphicalItem` of a `PCB_TEXTBOX` and `syncTextItem` of a `PCB_TABLE` give the solid its board item
+  (`solid->SetParent( aItem )`), so `A.Type` is `ENUM_MAP<KICAD_T>`'s "Barcode", "Text Box" or "Table" (`RuleResolver::add_graphic_as`, `RuleItem::type_name`);
+  a leader dimension is "Leader" (`Class::Leader`). The implicit "barcode visual separation default" (1 mm `physical_clearance`, `A.Type == 'Barcode'`) now holds:
+  a barcode's solid is a special side, which `engine_clearance` answers with `CT_PHYSICAL_CLEARANCE`, and the search margin takes the 1 mm once a barcode is
+  in the world. Tests: `a_copper_barcode_keeps_its_1mm_physical_clearance`, `a_rule_on_a_text_box_holds_a_route_off` (both kicad-cli-proved; both failed before).
+- `EDA_SLOW_TESTS=1 cargo test -p eda-pns --test qa_regressions`: 13 passed; `--test rules_kicad`: 28 passed.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
