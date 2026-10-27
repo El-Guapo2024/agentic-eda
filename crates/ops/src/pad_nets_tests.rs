@@ -323,3 +323,18 @@ fn copper_that_touches_another_net_asks_before_it_shorts() {
     let e = b.apply(&track_via_nets(&["t1"], Some("N3"), None, None)).unwrap_err();
     assert_eq!(e[0].check, "ops_net_change_pads");
 }
+
+/// Round 4 A-6: `confirmShortingNets` names the shorting net by `FindNet( .. )->GetNetname()` -- net 0's is "" -- and the selector by
+/// `m_netSelector->GetValue()`, `INDETERMINATE_STATE` ("-- mixed values --") when it is indeterminate.
+#[test]
+fn a_short_to_no_net_names_the_empty_net_and_an_indeterminate_selector_its_mixed_values() {
+    let m = model();
+    let (mut d, a) = track_on_u1_1(&m);
+    let far = Point { x: a.x, y: a.y + mm(5.0) };
+    d.routing.as_mut().unwrap().tracks.push(track_of("t4", "", Point { x: far.x - mm(1.0), y: far.y }, Point { x: far.x + mm(1.0), y: far.y }));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let e = b.apply(&track_via_nets(&["t1"], Some("N1"), None, None)).unwrap_err();
+    assert_eq!(e[0].hint.as_deref().unwrap_or_default(), "Applying these changes will short net N1 with .");
+    let e = b.apply(&track_via_nets(&["t1"], None, None, None)).unwrap_err();
+    assert_eq!(e[0].hint.as_deref().unwrap_or_default(), "Applying these changes will short net -- mixed values -- with .");
+}

@@ -14,8 +14,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo } from "../state/units";
-import { predefinedSizesCmds } from "../kicad-port/boardSetupRules";
-import type { DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Nm } from "../api/types";
+import { predefinedSizesCmds, validatePredefinedSizes } from "../kicad-port/boardSetupRules";
+import type { DiffPairPreset, DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Nm } from "../api/types";
 import { BoardLayersPage } from "./boardSetup/BoardLayersPage";
 import { ConstraintsPage } from "./boardSetup/ConstraintsPage";
 import { FormattingPage } from "./boardSetup/FormattingPage";
@@ -131,6 +131,9 @@ export function BoardSetupDialog() {
 
   const [widths, setWidths] = useState<number[]>([]);
   const [vias, setVias] = useState<{ diameter: number; drill: number }[]>([]);
+  const [diffPairs, setDiffPairs] = useState<DiffPairPreset[]>([]);
+  // The panel's Validate() message (validatePredefinedSizes): KiCad's words for the first bad row, shown by Apply.
+  const [sizesMessage, setSizesMessage] = useState<string | null>(null);
   const [td, setTd] = useState<TeardropSettings>(DEFAULT_TEARDROP_SETTINGS);
   const [tdBusy, setTdBusy] = useState(false);
   const [tdMessage, setTdMessage] = useState<string | null>(null);
@@ -166,6 +169,8 @@ export function BoardSetupDialog() {
     if (!open) return;
     setWidths(routing?.track_width_presets ?? []);
     setVias(routing?.via_presets ?? []);
+    setDiffPairs(routing?.diff_pair_presets ?? []);
+    setSizesMessage(null);
     setTd(routing?.teardrop_settings ?? DEFAULT_TEARDROP_SETTINGS);
     setTdMessage(null);
     setDimSettings(drawings?.dimension_settings ?? DEFAULT_DIMENSION_SETTINGS);
@@ -210,9 +215,13 @@ export function BoardSetupDialog() {
 
   if (!open) return null;
 
-  // One Apply, one undo step (kicad-port/boardSetupRules.ts `predefinedSizesCmds`).
+  // One Apply, one undo step (kicad-port/boardSetupRules.ts `predefinedSizesCmds`). The panel's Validate() runs first: a via row through
+  // PCB_VIA::ValidateViaParameters, then a pair with a width but no gap, with KiCad's message word for word.
   const applyTrackVia = async () => {
-    for (const c of predefinedSizesCmds(widths, vias)) await api.cmd(c);
+    const problem = validatePredefinedSizes(vias, diffPairs);
+    setSizesMessage(problem);
+    if (problem) return;
+    for (const c of predefinedSizesCmds(widths, vias, diffPairs)) await api.cmd(c);
   };
 
   const setTdField = <K extends keyof TeardropSettings>(key: K, value: TeardropSettings[K]) => setTd((s) => ({ ...s, [key]: value }));
@@ -358,6 +367,55 @@ export function BoardSetupDialog() {
               ))}
               <button onClick={() => setVias((vs) => [...vs, { diameter: (rules?.via_diameter ?? 600_000) as Nm, drill: (rules?.via_drill ?? 300_000) as Nm }])}>Add Via Size</button>
 
+              <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 14 }}>Differential Pairs (width, gap and via gap; `m_DiffPairDimensionsList`)</p>
+              {diffPairs.map((d, i) => {
+                const field = (key: keyof DiffPairPreset, label: string) => (
+                  <input
+                    type="number"
+                    step="any"
+                    aria-label={`Differential pair ${i + 1} ${label}`}
+                    value={nmTo(d[key], units)}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (!Number.isFinite(n)) return;
+                      setDiffPairs((ds) => ds.map((cur, j) => (j === i ? { ...cur, [key]: Math.round(nmFrom(n, units)) } : cur)));
+                    }}
+                    style={{ width: 90 }}
+                  />
+                );
+                return (
+                  <div key={i} className="filter-row" style={{ gap: 8 }}>
+                    <span>Width</span>
+                    {field("width", "width")}
+                    <span>Gap</span>
+                    {field("gap", "gap")}
+                    <span>Via gap</span>
+                    {field("via_gap", "via gap")}
+                    <span>{units}</span>
+                    <button onClick={() => setDiffPairs((ds) => ds.filter((_, j) => j !== i))}>Remove</button>
+                  </div>
+                );
+              })}
+              <button
+                onClick={() =>
+                  setDiffPairs((ds) => [
+                    ...ds,
+                    {
+                      width: (rules?.default_class?.diff_pair_width ?? 200_000) as Nm,
+                      gap: (rules?.default_class?.diff_pair_gap ?? 250_000) as Nm,
+                      via_gap: (rules?.default_class?.diff_pair_via_gap ?? rules?.default_class?.diff_pair_gap ?? 250_000) as Nm,
+                    },
+                  ])
+                }
+              >
+                Add Differential Pair
+              </button>
+
+              {sizesMessage && (
+                <p className="bs-error" role="alert">
+                  {sizesMessage}
+                </p>
+              )}
               <div style={{ marginTop: 14 }}>
                 <button className="primary" onClick={applyTrackVia}>
                   Apply

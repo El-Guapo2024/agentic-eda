@@ -36,7 +36,7 @@ fn board(tracks: Vec<Track>, vias: Vec<Via>, locked: &[&str]) -> (Design, Constr
             footprints: vec![FootprintInstance { id: "R1".into(), at: p(mm(-9.0), mm(30.0)), rot: 0, side: Side::Top, label: LabelSide::Above }, FootprintInstance { id: "R2".into(), at: p(mm(9.0), mm(30.0)), rot: 0, side: Side::Top, label: LabelSide::Above }],
             modules: vec![],
         }),
-        routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+        routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
         drawings: (!locked.is_empty()).then(|| DrawingsSection { locked_ids: locked.iter().map(|s| s.to_string()).collect(), ..Default::default() }),
     };
     (design, model)

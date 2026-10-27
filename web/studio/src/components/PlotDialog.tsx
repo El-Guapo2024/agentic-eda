@@ -13,7 +13,8 @@
 // the board's plot settings each time the dialog opens (`DIALOG_PLOT::init_Dialog`,
 // run by each construction), and Plot stores them back in the board first
 // (`applyPlotSettings`: `SetPlotSettings( tempOptions ); OnModify()` when they
-// changed), as one undoable `set_plot_settings`; the plot then takes the
+// changed), as `set_plot_settings`, which is no undo step (KiCad has no commit
+// there; round 4 X4-3); the plot then takes the
 // origin from the board.
 import { useEffect, useRef, useState } from "react";
 import { postFabGerbers } from "../api/client";

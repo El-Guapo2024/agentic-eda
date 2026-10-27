@@ -70,6 +70,20 @@ test("mirror reference point: a single item's own position, else the centre of t
   assert.deepEqual(c, [15, 5]);
 });
 
+test("mirror reference point of a lone tuning pattern: PCB_GENERATOR::GetPosition, its origin, not its box's centre (round 4 B-2)", () => {
+  const b = board({
+    drawings: {
+      shapes: [seg("m1", 0, 0, 10_000, 0), seg("m2", 10_000, 0, 10_000, 3_000)],
+      texts: [],
+      groups: [{ id: "tp1", name: "", member_ids: ["m1", "m2"], generator: "tuning_pattern" }],
+      dimensions: [],
+      dimension_settings: {} as never,
+      tuning_patterns: [{ id: "tp1", origin: { x: 0, y: 0 }, end: { x: 10_000, y: 0 } } as never],
+    },
+  });
+  assert.deepEqual(mirrorReferencePoint(b, ["tp1"]), [0, 0]);
+});
+
 test("mirrorableIds: groups expand to members and footprints are not mirrorable", () => {
   const b = board({
     parts: [{ ref: "U1", placed: true, at: [0, 0] } as never],

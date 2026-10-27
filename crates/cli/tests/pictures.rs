@@ -136,3 +136,80 @@ fn the_schematic_and_the_judges_pictures_are_kicad_clis_plots() {
         assert_png(&out.join(format!("judge_{stage}.png")));
     }
 }
+
+/// The colours of a PNG picture and their pixel counts, decoded by Python's stdlib `zlib` (the workspace has no PNG decoder): 8-bit RGB or
+/// RGBA, every filter type.
+fn png_colours(path: &Path) -> std::collections::HashMap<String, u64> {
+    const DECODE: &str = r#"
+import sys, zlib, struct, collections
+d = open(sys.argv[1], 'rb').read()
+p, idat = 8, b''
+while p < len(d):
+    n, t = struct.unpack('>I4s', d[p:p+8]); c = d[p+8:p+8+n]; p += 12 + n
+    if t == b'IHDR': w, h, bd, ct = struct.unpack('>IIBB', c[:10])
+    elif t == b'IDAT': idat += c
+raw = zlib.decompress(idat); bpp = {2: 3, 6: 4}[ct]; assert bd == 8
+stride = w * bpp; prev = bytearray(stride); hist = collections.Counter(); i = 0
+for y in range(h):
+    f = raw[i]; line = bytearray(raw[i+1:i+1+stride]); i += 1 + stride
+    for x in range(stride):
+        a = line[x-bpp] if x >= bpp else 0; b = prev[x]; c = prev[x-bpp] if x >= bpp else 0
+        if f == 1: line[x] = (line[x] + a) & 255
+        elif f == 2: line[x] = (line[x] + b) & 255
+        elif f == 3: line[x] = (line[x] + (a + b) // 2) & 255
+        elif f == 4:
+            pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+            line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+    prev = line
+    for x in range(w): hist['%02x%02x%02x' % tuple(line[x*bpp:x*bpp+3])] += 1
+for k, v in hist.items(): print(k, v)
+"#;
+    let out = Command::new("python3").arg("-I").arg("-c").arg(DECODE).arg(path).output().expect("python3");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.split_once(' ')).map(|(c, n)| (c.to_string(), n.parse().unwrap())).collect()
+}
+
+/// Round 4's X4-1: the judge's board PNG has the front copper on top. A board with an F.Cu rectangle (100..120 × 100..110 mm) and a B.Cu one
+/// (110..130), overlapping over 110..120, plotted with `board_plot`'s own arguments (`pictures::board_png_args`): F.Cu's theme colour
+/// (`#c83434`) covers its whole rectangle, twice the visible B.Cu (`#4d7fc4`). With F.Cu as kicad-cli's base layer (painted first,
+/// `PCB_PLOTTER::getPlotSequence`) the counts were the other way round.
+#[test]
+fn the_board_png_has_the_front_copper_on_top() {
+    if !slow() {
+        return;
+    }
+    use eda_kicad_engine::pictures::{board_png_args, EMPTY_DRAWING_SHEET};
+    let dir = scratch("png-order");
+    let pcb = dir.join("t.kicad_pcb");
+    std::fs::write(
+        &pcb,
+        r#"(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
+  (general (thickness 1.6) (legacy_teardrops no))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (5 "F.SilkS" user "F.Silkscreen") (7 "B.SilkS" user "B.Silkscreen")
+    (1 "F.Mask" user) (3 "B.Mask" user) (25 "Edge.Cuts" user) (31 "F.CrtYd" user "F.Courtyard") (29 "B.CrtYd" user "B.Courtyard"))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (gr_rect (start 100 100) (end 120 110) (stroke (width 0.1) (type solid)) (fill yes) (layer "F.Cu"))
+  (gr_rect (start 110 100) (end 130 110) (stroke (width 0.1) (type solid)) (fill yes) (layer "B.Cu"))
+  (gr_rect (start 95 95) (end 135 115) (stroke (width 0.1) (type solid)) (fill no) (layer "Edge.Cuts"))
+)
+"#,
+    )
+    .unwrap();
+    let sheet = dir.join("empty.kicad_wks");
+    std::fs::write(&sheet, EMPTY_DRAWING_SHEET).unwrap();
+    let out_dir = dir.join("out");
+    let mut model = eda_model::ConstraintModel::default();
+    model.board.layers = vec!["F.Cu".into(), "B.Cu".into()];
+    let layers = eda_kicad_engine::pictures::board_picture_layers(&model);
+    let cli = std::env::var("EDA_KICAD_CLI").unwrap_or_else(|_| "kicad-cli".into());
+    let out = Command::new(cli).args(["pcb", "export", "png"]).args(board_png_args(&layers, &sheet, &out_dir)).arg(&pcb).output().expect("kicad-cli");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "{said}");
+    let png = out_dir.join("t-Edge_Cuts.png");
+    assert_png(&png);
+    let colours = png_colours(&png);
+    let (front, back) = (colours.get("c83434").copied().unwrap_or(0), colours.get("4d7fc4").copied().unwrap_or(0));
+    assert!(back > 1000 && front > back * 19 / 10 && front < back * 21 / 10, "F.Cu {front} px, B.Cu {back} px: the front copper is not on top");
+}

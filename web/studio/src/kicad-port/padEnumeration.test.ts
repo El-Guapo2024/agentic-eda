@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { enumerateCommit, enumerateHit, enumerateNextValue, enumerateNumber, enumeratePopupText, enumerateShownNumber, enumerateStart, padsUnderSweep, sweepPoints } from "./padEnumeration";
+import { enumSpinValue, enumerateCommit, enumerateHit, enumerateNextValue, enumerateNumber, enumeratePopupText, enumerateShownNumber, enumerateStart, padsUnderSweep, sweepPoints } from "./padEnumeration";
 
 const run = (start = 1, step = 1, prefix = "") => enumerateStart({ start, step, prefix });
 
@@ -94,4 +94,10 @@ test("padsUnderSweep lists a pad once per consecutive run and keeps sweep order"
     ["c", "b", "a"],
     "a fast move across three pads numbers all three, in the order the cursor met them"
   );
+});
+
+test("the popup and the dialog's limits are KiCad's (pad_tool.cpp EnumeratePads, dialog_enum_pads_base.cpp)", () => {
+  assert.equal(enumeratePopupText(run()), "Click on pad 1\nPress <esc> to cancel all; double-click to finish");
+  // `wxSpinCtrl( .., 0, 999, 1 )`
+  assert.deepEqual([enumSpinValue(-3), enumSpinValue(5.6), enumSpinValue(1200), enumSpinValue(Number.NaN)], [0, 6, 999, 0]);
 });

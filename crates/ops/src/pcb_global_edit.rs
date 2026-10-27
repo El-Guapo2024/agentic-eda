@@ -8,8 +8,9 @@
 //!   Defaults holds (`BOARD_DESIGN_SETTINGS::m_LineThickness`, `m_TextSize`, `m_TextThickness`, read by the layer class of the item's layer,
 //!   `GetLayerClass`):
 //!   * `PCB_SHAPE::StyleFromSettings`: the stroke width is the line thickness of the layer class;
-//!   * `PCB_TEXT::StyleFromSettings`: the text size and the text thickness are the layer class's (the model draws a text square, so the size is the
-//!     class's text height; italic and upright have nothing to land on in a text of this model);
+//!   * `PCB_TEXT::StyleFromSettings`: the text size (width and height), the text thickness and italic are the layer class's (the width and italic of a
+//!     board text land on its `TextExtra`; keep-upright is only for a footprint's text, which this dialog does not reach here). A text box and a table
+//!     cell take the same; a dimension's label has one size in this model (the class's height) and no italic;
 //!   * `PCB_DIMENSION_BASE::StyleFromSettings`: the text as above, `SetLineThickness( GetLineThickness( layer ) )`, and the units, units format,
 //!     precision, zero suppression, text position and "keep text aligned" of the board's dimension settings.
 //!
@@ -30,9 +31,15 @@ pub fn line_thickness(d: &TextGraphicsDefaults, layer: &str) -> Nm {
     d.line_thickness_nm(layer)
 }
 
-/// `BOARD_DESIGN_SETTINGS::GetTextSize( aLayer )`, as the one size a text of this model has (its height).
+/// `BOARD_DESIGN_SETTINGS::GetTextSize( aLayer )`'s height, the one size a dimension's label has in this model.
 pub fn text_size(d: &TextGraphicsDefaults, layer: &str) -> Nm {
     d.text_size_nm(layer).1
+}
+
+/// `BOARD_DESIGN_SETTINGS::GetTextSize( aLayer )` as a glyph height and a width that is `None` when it is the height (how a text, a text box keeps it).
+fn text_height_width(d: &TextGraphicsDefaults, layer: &str) -> (Nm, Option<Nm>) {
+    let (w, h) = d.text_size_nm(layer);
+    (h, (w != h).then_some(w))
 }
 
 /// `BOARD_DESIGN_SETTINGS::GetTextThickness( aLayer )`.
@@ -88,6 +95,8 @@ impl Board<'_> {
         let defaults = self.model.board.text_graphics;
         let Some(dr) = self.design.drawings.as_mut() else { return Ok(()) };
         let dim_style = dr.dimension_settings;
+        // The texts restyled from the layer class: their id, glyph width (`None` when it is the height) and italic, for their extras.
+        let mut default_styles: Vec<(String, Option<Nm>, bool)> = Vec::new();
 
         for s in dr.shapes.iter_mut().filter(|s| shapes.contains(s.id())) {
             if e.layer_defaults {
@@ -104,8 +113,12 @@ impl Board<'_> {
         }
         for t in dr.texts.iter_mut().filter(|t| texts.contains(t.id.as_str())) {
             if e.layer_defaults {
-                t.size_nm = text_size(&defaults, &t.layer);
+                // `PCB_TEXT::StyleFromSettings`: `SetTextSize( GetTextSize( layer ) )`, `SetTextThickness( .. )`, `SetItalic( GetTextItalic( layer ) )`.
+                let (h, w) = text_height_width(&defaults, &t.layer);
+                let italic = defaults.text_italic_upright(&t.layer).0;
+                t.size_nm = h;
                 t.stroke_width = text_thickness(&defaults, &t.layer);
+                default_styles.push((t.id.clone(), w, italic));
                 continue;
             }
             if let Some(l) = e.layer {
@@ -128,14 +141,25 @@ impl Board<'_> {
                 x.auto_thickness = false;
             }
         }
+        for (id, width, italic) in default_styles {
+            if dr.text_extra(&id).is_none() && (width.is_some() || italic) {
+                dr.text_extras.push(eda_model::board_text::TextExtra { id: id.clone(), ..Default::default() });
+            }
+            if let Some(x) = dr.text_extras.iter_mut().find(|x| x.id == id) {
+                x.width_nm = width;
+                x.italic = italic;
+            }
+        }
+        // An extra left saying nothing goes, as the importer keeps none for such a text.
+        dr.text_extras.retain(|x| !x.is_default());
         // A text box is a text and a shape (`PCB_TEXTBOX` is an `EDA_TEXT` and a `PCB_SHAPE`): its glyphs, its pen and its border width.
         for t in dr.board_items.text_boxes.iter_mut().filter(|t| texts.contains(t.id.as_str())) {
             if e.layer_defaults {
                 // `PCB_TEXTBOX::StyleFromSettings`: `PCB_SHAPE::StyleFromSettings`, then the text
                 t.stroke_width_nm = line_thickness(&defaults, &t.layer);
-                t.size_nm = text_size(&defaults, &t.layer);
-                t.width_nm = None;
+                (t.size_nm, t.width_nm) = text_height_width(&defaults, &t.layer);
                 t.thickness_nm = text_thickness(&defaults, &t.layer);
+                t.italic = defaults.text_italic_upright(&t.layer).0;
                 continue;
             }
             if let Some(l) = e.layer {
@@ -162,9 +186,10 @@ impl Board<'_> {
                     continue;
                 }
                 if e.layer_defaults {
-                    cell.style.height_nm = text_size(&defaults, &layer);
-                    cell.style.width_nm = cell.style.height_nm;
+                    // `PCB_TEXTBOX::StyleFromSettings` (a cell is one): the class's (width, height), thickness and italic.
+                    (cell.style.width_nm, cell.style.height_nm) = defaults.text_size_nm(&layer);
                     cell.style.thickness_nm = text_thickness(&defaults, &layer);
+                    cell.style.italic = defaults.text_italic_upright(&layer).0;
                     continue;
                 }
                 if let Some(s) = e.text_size {

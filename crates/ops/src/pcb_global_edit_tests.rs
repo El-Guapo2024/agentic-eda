@@ -203,3 +203,43 @@ fn text_boxes_table_cells_and_barcodes_are_edited_too() {
     assert_eq!((tb.size_nm, tb.thickness_nm, tb.stroke_width_nm), (mm(1.2), mm(0.11), mm(0.12)));
     assert_eq!(drawings(&b).tables[0].cells[0].style.height_nm, mm(1.2));
 }
+
+/// Round 4 B-3: `PCB_TEXT::StyleFromSettings` (and `PCB_TEXTBOX`'s, a table cell's) sets `GetTextSize( layer )`, a (width, height), and
+/// `SetItalic( GetTextItalic( layer ) )`: the text is not made square at the class's height, and italic follows the class.
+#[test]
+fn layer_defaults_take_the_classs_width_height_and_italic() {
+    use eda_model::pcb_items::TextBox;
+    use eda_model::table::Table;
+    let mut m = model_with_defaults();
+    m.board.text_graphics.silk.text_width_nm = mm(1.2);
+    m.board.text_graphics.silk.text_height_nm = mm(1.5);
+    m.board.text_graphics.silk.italic = true;
+    let mut d = design();
+    let dr = d.drawings.as_mut().unwrap();
+    let mut tb = TextBox::new("F.SilkS", p(Nm::ZERO, Nm::ZERO), p(mm(10.0), mm(5.0)), mm(1.0), mm(0.1));
+    tb.id = "tbx_a".into();
+    dr.board_items.text_boxes.push(tb);
+    let mut t = Table::new_grid("F.SilkS", p(mm(20.0), mm(20.0)), 2, 1, mm(10.0), mm(5.0), mm(0.1));
+    t.id = "tbl_a".into();
+    dr.tables.push(t);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&defaults_cmd(&[], &["txt_a", "tbx_a", "tbl_a:0:0"], &[])).unwrap();
+    let dr = drawings(&b);
+    assert_eq!(dr.texts.iter().find(|t| t.id == "txt_a").unwrap().size_nm, mm(1.5), "the height");
+    let x = dr.text_extra("txt_a").expect("the width and italic land on the text's extras");
+    assert_eq!((x.width_nm, x.italic), (Some(mm(1.2)), true));
+    let tb = &dr.board_items.text_boxes[0];
+    assert_eq!((tb.size_nm, tb.width_nm, tb.italic), (mm(1.5), Some(mm(1.2)), true));
+    let cell = &dr.tables[0].cells[0].style;
+    assert_eq!((cell.height_nm, cell.width_nm, cell.italic), (mm(1.5), mm(1.2), true));
+
+    // Italic off in the class: an italic text is made upright.
+    let mut m2 = m.clone();
+    m2.board.text_graphics.silk.italic = false;
+    m2.board.text_graphics.silk.text_width_nm = mm(1.5);
+    let mut b2 = Board::new(b.design().clone(), &m2, mm(0.1), mm(0.3));
+    b2.apply(&defaults_cmd(&[], &["txt_a", "tbx_a"], &[])).unwrap();
+    let dr = drawings(&b2);
+    assert!(dr.text_extra("txt_a").map_or(true, |x| !x.italic && x.width_nm.is_none()), "square and upright: nothing left to say");
+    assert_eq!((dr.board_items.text_boxes[0].width_nm, dr.board_items.text_boxes[0].italic), (None, false));
+}

@@ -28,12 +28,16 @@ export interface HitCandidate {
 /** The kinds of selected item that start a connection: footprints (their pads), tracks, vias, zones and pads (`BOARD_CONNECTED_ITEM`). */
 const STARTS = new Set(["part", "track", "via", "zone", "pad"]);
 
-/** `initialCount` of `expandConnection`: how many selected items are footprints or connected. */
+/**
+ * `initialCount` of `expandConnection`: how many selected items are footprints, generators (a tuning pattern) or connected
+ * (`item->Type() == PCB_FOOTPRINT_T || item->Type() == PCB_GENERATOR_T || IsConnected()`).
+ */
 export function connectedStartCount(board: BoardState, selection: Iterable<string>): number {
+  const generators = new Set((board.drawings?.groups ?? []).filter((g) => g.generator).map((g) => g.id));
   let n = 0;
   for (const id of selection) {
     const kind = itemKind(board, id);
-    if (kind != null && STARTS.has(kind)) n++;
+    if (kind != null && (STARTS.has(kind) || (kind === "group" && generators.has(id)))) n++;
   }
   return n;
 }

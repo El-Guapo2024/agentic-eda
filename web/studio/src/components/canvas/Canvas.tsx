@@ -78,9 +78,10 @@ import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { cellAddress, cellById, drawTableSession, tableById } from "../../kicad-port/tables";
 import { openDrawnTableDialog } from "../../state/tableDialogs";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
+import { leaderModeOf, zoneClick } from "../../kicad-port/pcbDrawZone";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
-import { connectedTrackWidth, trackUnder, displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
+import { displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
 import { padAt } from "../../kicad-port/boardControlPick";
 import { canExclude, rcMenu } from "../../kicad-port/rcItems";
 import { drcMarkerAt, drcMenuContext, runMarkerMenu, selectMarkerDrc, showDrcInDialog, toMenuEntries } from "../../actions/checkerOps";
@@ -627,9 +628,10 @@ export function Canvas() {
         } else {
           dispatch({ type: "SET_ZONE_PENDING", outline: draw.pts });
         }
-        dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
-        dispatch({ type: "PCBX", patch: { zoneDrawMode: null } });
       }
+      // `endPolygon`: `cleanup(); m_frame->PopTool( aEvent );` whether or not the outline made a zone.
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+      dispatch({ type: "PCBX", patch: { zoneDrawMode: null } });
       dispatch({ type: "SET_DRAW_STATE", draw: null });
     } else if (draw.kind === "shape") {
       // An arc ends only when its three points are in (ARC_GEOM_MANAGER); Enter / a double-click leave it running.
@@ -642,9 +644,16 @@ export function Canvas() {
         dispatch({ type: "SET_DRAW_STATE", draw: null });
         return;
       }
+      // A double-click ends a chain of lines with nothing more to add (the segments are on the board already).
+      if (draw.shapeKind === "segment") {
+        dispatch({ type: "SET_DRAW_STATE", draw: null });
+        return;
+      }
       const shape = shapeFromPoints(draw.shapeKind, draw.pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
       if (shape) api.cmd({ op: "add_shape", shape });
       dispatch({ type: "SET_DRAW_STATE", draw: null });
+      // A graphic polygon is `DrawZone`'s: finishing it pops the tool (`PopTool`), as a zone does.
+      if (draw.shapeKind === "polygon") dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
     }
   }, [state.drawState, state.activeLayer, state.cursorNm, state.gridNm, state.pcbx, board, api, dispatch]);
 
@@ -737,15 +746,13 @@ export function Canvas() {
           // real net), same as `isStartingPointRoutable` upstream.
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
           // pcbnew.EditorControl.trackWidthInc/Dec's current pick (useActionRunner.ts) -- same fallback as the via preset above.
-          // `autoTrackWidth`: starting from an existing track's end, that track's width wins over the current one.
-          // (a route can start in the middle of a track too: that track's width then)
-          const under = state.bcx.autoTrackWidth ? trackUnder(board.routing?.tracks ?? [], sx, sy, layer) : null;
-          const connected = state.bcx.autoTrackWidth ? connectedTrackWidth(findRouteAnchor(board, sx, sy, ANCHOR_SNAP_NM)?.from ?? (under ? `track ${under.id}` : undefined), board.routing?.tracks ?? []) : null;
           // `ImportSizes`: with the width list on "use net class" (`UseNetClassTrack()`) no width is sent, and the server takes the start net's
-          // (`CT_WIDTH` through the rules: its class, a .kicad_dru rule, a pair's class width)
-          const width = connected ?? chosenTrackWidth(state.currentTrackWidthNm, board.board_rules?.track_width, state.pcbx.useCustomTrackVia);
+          // (`CT_WIDTH` through the rules: its class, a .kicad_dru rule, a pair's class width). `autoTrackWidth` (`m_UseConnectedTrackWidth`): the
+          // server's `inheritTrackWidth` first -- the width of the track the route starts on, or of the one joined to the pad or via whose far end
+          // is nearest the cursor -- over either
+          const width = chosenTrackWidth(state.currentTrackWidthNm, state.currentTrackWidthIndex, 1 + (board.routing?.track_width_presets?.length ?? 0), state.pcbx.useCustomTrackVia);
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
-          void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked());
+          void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked(), state.bcx.autoTrackWidth);
           return;
         }
         void fixInteractiveRoute(sx, sy, draw, dispatch, api);
@@ -761,7 +768,7 @@ export function Canvas() {
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
           // `ImportSizes`: the board's custom pair dimensions only while `UseCustomDiffPairDimensions()`
           const custom = state.pcbx.useCustomDiffPair ? state.pcbx.customDiffPair : null;
-          void startDiffPairRoute(sx, sy, layer, dispatch, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : undefined, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks));
+          void startDiffPairRoute(sx, sy, layer, dispatch, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : undefined, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), state.bcx.autoTrackWidth);
           return;
         }
         void fixDiffPairRoute(sx, sy, draw, dispatch, api);
@@ -790,10 +797,12 @@ export function Canvas() {
         return;
       }
 
+      // `DRAWING_TOOL::DrawZone` (kicad-port/pcbDrawZone.ts): a click on the first corner closes the outline; the line mode bends the leg in.
       if (state.activeTool === "zone") {
         const draw = state.drawState;
-        const pts: [number, number][] = draw?.kind === "zone" ? [...draw.pts, [sx, sy]] : [[sx, sy]];
-        dispatch({ type: "SET_DRAW_STATE", draw: { kind: "zone", pts } });
+        const click = zoneClick(draw?.kind === "zone" ? draw.pts : [], [sx, sy], leaderModeOf(state.pcbx.angleSnapMode, snapMods(e).ctrl));
+        if (click.finish) finishDraw();
+        else dispatch({ type: "SET_DRAW_STATE", draw: { kind: "zone", pts: click.pts } });
         return;
       }
 
@@ -858,6 +867,8 @@ export function Canvas() {
       if (shapeKind === "arc") {
         const draw = state.drawState;
         const prev = draw?.kind === "shape" && draw.shapeKind === "arc" ? draw.arc : undefined;
+        // `drawArc`: `if( !started ) m_toolMgr->RunAction( ACTIONS::selectionClear );`
+        if (!prev) dispatch({ type: "SET_SELECTION", refs: [] });
         const { geom, arc } = arcClick(prev, [sx, sy], arcAngleSnap(state.pcbx.angleSnapMode, e));
         if (arc) {
           const shape: CmdShape = { kind: "arc", layer: activeLayerName(state.activeLayer, "F.SilkS"), stroke_width: drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep), filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) };
@@ -870,14 +881,26 @@ export function Canvas() {
       if (shapeKind === "bezier") {
         const draw = state.drawState;
         const prev = draw?.kind === "shape" && draw.shapeKind === "bezier" ? draw.bezier : undefined;
+        // `drawOneBezier`: the first click clears the selection.
+        if (!prev) dispatch({ type: "SET_SELECTION", refs: [] });
         const { geom, curve } = bezierClick(prev, [sx, sy]);
         if (curve) void api.cmd({ op: "add_shape", shape: bezierShape(curve, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep)) });
         dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "bezier", pts: [], bezier: geom } : null });
         return;
       }
+      // A graphic polygon is `DrawZone`'s (`ZONE_MODE::GRAPHIC_POLYGON`): its clicks are a zone's.
+      if (shapeKind === "polygon") {
+        const draw = state.drawState;
+        const click = zoneClick(draw?.kind === "shape" && draw.shapeKind === "polygon" ? draw.pts : [], [sx, sy], leaderModeOf(state.pcbx.angleSnapMode, snapMods(e).ctrl));
+        if (click.finish) finishDraw();
+        else dispatch({ type: "SET_DRAW_STATE", draw: { kind: "shape", shapeKind: "polygon", pts: click.pts } });
+        return;
+      }
       if (shapeKind) {
         const draw = state.drawState;
         const already = draw?.kind === "shape" && draw.shapeKind === shapeKind ? draw.pts : [];
+        // `drawShape`: `if( !started ) { m_toolMgr->RunAction( ACTIONS::selectionClear ); ...`
+        if (already.length === 0) dispatch({ type: "SET_SELECTION", refs: [] });
         let point: [number, number] = [sx, sy];
         if (already.length > 0 && (shapeKind === "segment" || shapeKind === "rect")) {
           const last = already[already.length - 1]!;
@@ -887,6 +910,22 @@ export function Canvas() {
         }
         const pts = [...already, point];
         const finishAt = shapeAutoFinishCount(shapeKind);
+        // `DrawLine` loops `while( drawShape( .. ) )`: each segment is committed ("Draw Line") and the next starts at its end, until a click on the same spot
+        // (`twoPointMgr.IsEmpty()`), a double-click, or a click on a graphic's anchor that closes a path (`grid.GetSnapped()` a `PCB_SHAPE`).
+        if (shapeKind === "segment" && already.length > 0) {
+          const start = already[0]!;
+          const committed = draw?.kind === "shape" ? (draw.committed ?? []) : [];
+          if (point[0] === start[0] && point[1] === start[1]) {
+            dispatch({ type: "SET_DRAW_STATE", draw: null });
+            return;
+          }
+          const shape = shapeFromPoints("segment", [start, point], activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
+          if (shape) void api.cmd({ op: "add_shape", shape });
+          const snapped = snap.snappedItemId();
+          const closesPath = snapped !== null && (board.drawings?.shapes ?? []).some((q) => q.id === snapped);
+          dispatch({ type: "SET_DRAW_STATE", draw: closesPath ? null : { kind: "shape", shapeKind: "segment", pts: [point], committed: [...committed, [start, point]] } });
+          return;
+        }
         if (finishAt !== null && pts.length >= finishAt) {
           const shape = shapeFromPoints(shapeKind, pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
           if (shape) api.cmd({ op: "add_shape", shape });

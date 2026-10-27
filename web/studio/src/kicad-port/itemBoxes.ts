@@ -178,6 +178,11 @@ export function footprintItemBoxes(fp: LibraryFootprint): ItemBoxes {
 
 const mmToNm = ([x, y]: [number, number]): [number, number] => libPointToInternalNm([x, y]);
 
+/** A symbol graphic's box in the editor's internal space (nm, y down), whatever its unit and body style. */
+export function symbolGraphicBox(g: LibrarySymbolGraphic): Box | null {
+  return graphicBox(g);
+}
+
 function graphicBox(g: LibrarySymbolGraphic): Box | null {
   switch (g.kind) {
     case "rectangle":

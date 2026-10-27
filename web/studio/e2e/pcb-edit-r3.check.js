@@ -94,7 +94,7 @@
     return v && v.scale > 0 ? (xmm, ymm) => [xmm * 1e6 * v.scale + v.x, ymm * 1e6 * v.scale + v.y] : null;
   };
   const hover = async (toScreen, xmm, ymm) => { const [x, y] = toScreen(xmm, ymm); fire("pointermove", x, y); await sleep(200); return [x, y]; };
-  const click = async (toScreen, xmm, ymm) => { const [x, y] = await hover(toScreen, xmm, ymm); fire("pointerdown", x, y, { buttons: 1 }); await sleep(60); fire("pointerup", x, y); await sleep(500); };
+  const click = async (toScreen, xmm, ymm, extra = {}) => { const [x, y] = await hover(toScreen, xmm, ymm); fire("pointerdown", x, y, { buttons: 1, ...extra }); await sleep(60); fire("pointerup", x, y, extra); await sleep(500); };
 
   const scenario = async (name, fn) => {
     const entry = { name, ok: true, notes: [] };
@@ -144,9 +144,9 @@
       t(((await state()).routing?.tracks ?? []).some((q) => q.id === trk), "Delete did not delete the selected track");
       await __eda.run("common.Interactive.undo"); await sleep(500);
       t(((await state()).routing?.tracks ?? []).some((q) => q.id === trk), "nor did Undo undo it");
-      // left: the first corner; two more and close
-      await click(toScreen, fx, fy + 8);
-      await click(toScreen, fx - 6, fy + 4);
+      // left: the first corner; two more (free-angle with Ctrl: the 45-degree line mode would bend the second leg in, round 4 C-4) and close
+      await click(toScreen, fx, fy + 8, { ctrlKey: true });
+      await click(toScreen, fx - 6, fy + 4, { ctrlKey: true });
       await __eda.run("pcbnew.InteractiveDrawing.closeOutline"); await sleep(800);
       const made = ((await state()).drawings?.shapes ?? []).filter((s) => !shapesBefore.includes(s.id));
       t(made.length === 1 && made[0].kind === "polygon", `one polygon made (${made.map((s) => s.kind).join(",")})`);

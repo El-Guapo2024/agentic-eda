@@ -207,40 +207,8 @@ export function filterZones<Z extends { id: string; net: string; layer: string; 
 
 // ------------------------------------------------------------------ track width
 
-/**
- * `pcbnew.EditorControl.autoTrackWidth` (`BOARD_DESIGN_SETTINGS::m_UseConnectedTrackWidth`): a route started from the end of an
- * existing track takes that track's width instead of the current one. `from` is `findRouteAnchor`'s description of what it found
- * (`track <id>`, `via <id>`, `REF.PAD`); null when it is not a track end (the router uses the current width then).
- */
-export function connectedTrackWidth(from: string | undefined, tracks: ReadonlyArray<{ id: string; width: number }>): number | null {
-  if (!from?.startsWith("track ")) return null;
-  const id = from.slice("track ".length);
-  return tracks.find((t) => t.id === id)?.width ?? null;
-}
-
-/**
- * The track whose copper `(xNm, yNm)` is in on `layer`, the nearest centre line first -- what a route started in the middle of a track starts from
- * (`TOOL_BASE::updateStartItem` picking a segment; the router splits it there), so its width can be the route's (`connectedTrackWidth`).
- */
-export function trackUnder(tracks: ReadonlyArray<{ id: string; layer: string; width: number; pts: ReadonlyArray<readonly [number, number]> }>, xNm: number, yNm: number, layer: string): { id: string; width: number } | null {
-  let best: { id: string; width: number } | null = null;
-  let bestD = Infinity;
-  for (const track of tracks) {
-    if (track.layer !== layer) continue;
-    for (let i = 0; i + 1 < track.pts.length; i++) {
-      const [ax, ay] = track.pts[i]!;
-      const [bx, by] = track.pts[i + 1]!;
-      const len2 = (bx - ax) ** 2 + (by - ay) ** 2;
-      const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((xNm - ax) * (bx - ax) + (yNm - ay) * (by - ay)) / len2));
-      const d = Math.hypot(xNm - (ax + t * (bx - ax)), yNm - (ay + t * (by - ay)));
-      if (d <= track.width / 2 && d < bestD) {
-        bestD = d;
-        best = { id: track.id, width: track.width };
-      }
-    }
-  }
-  return best;
-}
+// The track width a route starts at (`pcbnew.EditorControl.autoTrackWidth`, `m_UseConnectedTrackWidth`) is the server's (`POST /api/route/start`'s
+// `auto_track_width`: `inheritTrackWidth`, a track's or the one joined to a pad or via, r4 R4-1).
 
 /** `ZoneDuplicate`: "If the new zone is on the same layer(s) as the initial zone, offset it a bit so it can more easily be picked" -- 1 mm each way. */
 export const DUPLICATE_ZONE_OFFSET_NM = 1_000_000;

@@ -166,3 +166,33 @@ test("wildcards: * and ? match like WildCompareString, case-insensitively", () =
   assert.ok(wildMatch("C1.5", "C1.5"));
   assert.ok(!wildMatch("C1.5", "C1x5"), "a dot is a dot");
 });
+
+test("Clear board takes every drawing: text boxes, tables, barcodes, images and points too (round 4 C-6)", () => {
+  const b = board({
+    drawings: {
+      ...drawings([]),
+      text_boxes: [{ id: "tb", layer: "F.SilkS" }],
+      tables: [{ id: "tbl", layer: "F.SilkS" }],
+      barcodes: [{ id: "bc", layer: "F.SilkS" }],
+      images: [{ id: "img", layer: "F.SilkS" }],
+      points: [{ id: "pt", layer: "F.SilkS" }],
+    },
+  });
+  const plan = planGlobalDeletions(b, opts({ all: true }), null);
+  for (const id of ["tb", "tbl", "bc", "img", "pt"]) assert.ok(plan.removed.includes(id), `${id} goes`);
+  assert.ok(plan.cmds.some((c) => c.op === "table" && c.verb === "delete" && c.id === "tbl"));
+  assert.ok(plan.cmds.some((c) => c.op === "pcb_item" && c.verb === "delete_text_box" && c.id === "tb"));
+});
+
+test("Text takes text boxes too (PCB_TEXT_T || PCB_TEXTBOX_T), on the layer asked", () => {
+  const b = board({ drawings: { ...drawings([], [{ id: "t", layer: "F.SilkS" }]), text_boxes: [{ id: "tb", layer: "F.SilkS" }, { id: "tb_b", layer: "B.SilkS" }] } });
+  assert.deepEqual(planGlobalDeletions(b, opts({ texts: true, currentLayerOnly: true }), "F.SilkS").removed, ["t", "tb"]);
+});
+
+test("a zone on several layers goes with Current layer only on any of them; a shape in a locked group counts as locked (BOARD_ITEM::IsLocked)", () => {
+  const z = { ...zone("z2", "F.Cu"), layers: ["F.Cu", "B.Cu"] };
+  const b = board({ routing: { tracks: [], vias: [], zones: [z] }, drawings: { ...drawings([seg("s", "F.SilkS", [0, 0], [1, 1])]), groups: [{ id: "g", name: "", member_ids: ["s"] }] }, locked: ["g"] });
+  assert.deepEqual(planGlobalDeletions(b, opts({ zones: true, currentLayerOnly: true }), "B.Cu").removed, ["z2"]);
+  assert.deepEqual(planGlobalDeletions(b, opts({ drawings: true }), null).removed, [], "the unlocked filter leaves a shape its group locks");
+  assert.deepEqual(planGlobalDeletions(b, opts({ drawings: true, drawingFilterLocked: true }), null).removed, ["s"]);
+});

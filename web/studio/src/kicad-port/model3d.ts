@@ -14,7 +14,8 @@
 //   in KiCad's 3D frame: x to the right, y UP (the board's y is negated: a footprint at board y 20 is at y -20), z up out of the board. `offset` is
 //   millimetres, `rotate` degrees, `units` the model's own unit in 3D units (a VRML model is in 0.1 inch: 2.54 mm; this module leaves it to the caller, who
 //   scales the loaded model once). `zpos` is the footprint's mounting height: the top of the front copper (`m_layerZcoordTop[F_Paste]`) for a footprint on
-//   the front, the bottom of the back copper (`m_layerZcoordBottom[B_Paste]`) on the back: +-(board thickness / 2 + copper thickness).
+//   the front, plus the paste layer's 0.04 mm, and the back copper's face (`m_layerZcoordBottom[B_Paste]`) on the back; the thicknesses are the stackup's
+//   (`stackOfBoard`).
 //
 // ------------------------------------------------------------------------------------------------- this studio's frame, and what differs
 //
@@ -117,19 +118,98 @@ export function modelPlacementMatrix(m: Pick<Model3dEntry, "offset" | "scale" | 
   return mat4Mul(mtx, mat4Scaling(m.scale[0], m.scale[1], m.scale[2]));
 }
 
-/** The board's vertical build-up the models sit on (BOARD_ADAPTER's `m_boardBodyThickness3DU` and `m_frontCopperThickness3DU`, in millimetres). */
+/**
+ * The board's vertical build-up, in millimetres, as `BOARD_ADAPTER::InitSettings` (3d-viewer/3d_canvas/board_adapter.cpp) keeps it: the body
+ * (`m_boardBodyThickness3DU`: the dielectrics and the inner copper), the outer copper (`m_frontCopperThickness3DU`, `m_backCopperThickness3DU`) and the
+ * solder masks (`m_frontMaskThickness3DU`, `m_backMaskThickness3DU`). The back copper and the masks default to the front copper and the technical layer
+ * thickness when absent.
+ */
 export interface Stack {
   boardThicknessMm: number;
   copperMm: number;
+  copperBackMm?: number;
+  maskFrontMm?: number;
+  maskBackMm?: number;
 }
 
-/** KiCad's defaults (`DEFAULT_BOARD_THICKNESS`, `DEFAULT_COPPER_THICKNESS`): 1.6 mm of board, 35 um of copper. */
-export const DEFAULT_STACK: Readonly<Stack> = Object.freeze({ boardThicknessMm: 1.6, copperMm: 0.035 });
+/** InitSettings' values before the stackup is read (`DEFAULT_BOARD_THICKNESS`, `DEFAULT_COPPER_THICKNESS`, `DEFAULT_TECH_LAYER_THICKNESS`): a board with no stackup at all, e.g. the footprint preview's dummy board. */
+export const DEFAULT_STACK: Readonly<Stack> = Object.freeze({ boardThicknessMm: 1.6, copperMm: 0.035, copperBackMm: 0.035, maskFrontMm: 0.025, maskBackMm: 0.025 });
 
-/** `BOARD_ADAPTER::GetFootprintZPos`: the front copper's top for a footprint on the front, the back copper's bottom (negative) on the back. */
+/** board_adapter.cpp `SOLDERPASTE_LAYER_THICKNESS`: `pcbIUScale.mmToIU( 0.04 )`. */
+export const SOLDERPASTE_LAYER_MM = 0.04;
+
+/** `BOARD_STACKUP_ITEM::GetCopperDefaultThickness` (35 um) and `GetMaskDefaultThickness` (10 um), the stackup items' own defaults. */
+const STACKUP_COPPER_NM = 35_000;
+const STACKUP_MASK_NM = 10_000;
+/** InitSettings: "The copper thickness must be > 0 to avoid draw issues ... We use a minimal arbitrary value = 1 micrometer here" (the mask's too). */
+const MIN_LAYER_NM = 1_000;
+
+/** The parts of the board's rules the build-up is read from (`BoardState["board_rules"]`). */
+export interface StackRules {
+  stackup?: { layers: ReadonlyArray<{ name: string; material?: string | null; thickness_mm: number | null; kind?: string }> } | null;
+  board_thickness_nm?: number;
+  copper_layers?: number;
+}
+
+/**
+ * `BOARD_ADAPTER::InitSettings`' stackup loop: the dielectrics (every sublayer; ours holds them summed) and the enabled inner copper make the body, the
+ * F.Cu / B.Cu items give the outer copper and the F.Mask / B.Mask items the masks (each at least 1 um). A layer with no thickness keeps its item's default
+ * (`BOARD_STACKUP_ITEM`'s ctor: copper 35 um, mask 10 um, a dielectric none).
+ *
+ * A KiCad board always has a stackup: with no `(stackup ..)` block, `PCB_IO_KICAD_SEXPR_PARSER::parseSetup` builds
+ * `BOARD_STACKUP::BuildDefaultStackupList( &bds, copperCount )`, whose dielectrics share `GetBoardThickness() - 35 um * copper - 10 um * masks`
+ * (integer division by `copper - 1`). That is what a design with no stackup gets here, from `board_thickness_nm` (default 1.6 mm, BOARD_DESIGN_SETTINGS)
+ * and `copper_layers` (default 2), with both masks enabled (ours has no way to disable F.Mask/B.Mask).
+ */
+export function stackOfBoard(rules: StackRules | null | undefined): Stack {
+  const layers = rules?.stackup?.layers ?? [];
+  const nm = (mm: number | null | undefined, fallback: number) => (mm === null || mm === undefined || !Number.isFinite(mm) ? fallback : Math.round(mm * 1e6));
+  if (layers.length === 0) {
+    const copper = Math.max(1, Math.round(rules?.copper_layers ?? 2));
+    const thickness = rules?.board_thickness_nm ?? 1_600_000;
+    const diel = Math.trunc((thickness - STACKUP_COPPER_NM * copper - STACKUP_MASK_NM * 2) / Math.max(1, copper - 1));
+    const body = diel * Math.max(0, copper - 1) + STACKUP_COPPER_NM * Math.max(0, copper - 2);
+    return { boardThicknessMm: body / 1e6, copperMm: STACKUP_COPPER_NM / 1e6, copperBackMm: STACKUP_COPPER_NM / 1e6, maskFrontMm: STACKUP_MASK_NM / 1e6, maskBackMm: STACKUP_MASK_NM / 1e6 };
+  }
+  const out: Stack = { ...DEFAULT_STACK };
+  let body = 0;
+  for (const item of layers) {
+    const kind = (item.kind ?? "").toLowerCase();
+    const isCopper = kind === "copper" || (kind === "" && /\.Cu$/.test(item.name));
+    if (kind === "core" || kind === "prepreg" || kind === "dielectric") {
+      body += nm(item.thickness_mm, 0);
+    } else if (isCopper) {
+      const t = Math.max(nm(item.thickness_mm, STACKUP_COPPER_NM), MIN_LAYER_NM);
+      if (item.name === "F.Cu") out.copperMm = t / 1e6;
+      else if (item.name === "B.Cu") out.copperBackMm = t / 1e6;
+      else body += t;
+    } else if (kind.includes("solder mask") || kind === "soldermask") {
+      const t = Math.max(nm(item.thickness_mm, STACKUP_MASK_NM), MIN_LAYER_NM);
+      if (item.name === "F.Mask") out.maskFrontMm = t / 1e6;
+      else if (item.name === "B.Mask") out.maskBackMm = t / 1e6;
+    }
+  }
+  out.boardThicknessMm = body / 1e6;
+  return out;
+}
+
+/**
+ * The 3D model preview's dummy board (panel_preview_3d_model.cpp's ctor): the footprint editor's board thickness (BOARD_DESIGN_SETTINGS' 1.6 mm), enabled
+ * layers `LSET::FrontMask() | LSET::BackMask()` (so `m_copperLayerCount` is 0, `SetEnabledLayers`) and `BuildDefaultStackupList( &dummy_bds, 2 )`: one
+ * dielectric of the thickness less the two 10 um masks (no copper is subtracted at a count of 0), F.Cu and B.Cu at 35 um.
+ */
+export function previewStack(boardThicknessNm = 1_600_000): Stack {
+  const mm = (nm: number) => nm / 1e6;
+  return { boardThicknessMm: mm(boardThicknessNm - STACKUP_MASK_NM * 2), copperMm: mm(STACKUP_COPPER_NM), copperBackMm: mm(STACKUP_COPPER_NM), maskFrontMm: mm(STACKUP_MASK_NM), maskBackMm: mm(STACKUP_MASK_NM) };
+}
+
+/**
+ * `BOARD_ADAPTER::GetFootprintZPos`: on the front, `m_layerZcoordTop[F_Paste]`, the front copper's top plus `SOLDERPASTE_LAYER_THICKNESS`; on the back,
+ * `m_layerZcoordBottom[B_Paste]`, which InitSettings sets to the back copper's top itself (negative). KiCad's two sides differ by the paste, and so do ours.
+ */
 export function footprintZ(stack: Stack, bottom: boolean): number {
-  const z = stack.boardThicknessMm / 2 + stack.copperMm;
-  return bottom ? -z : z;
+  const half = stack.boardThicknessMm / 2;
+  return bottom ? -(half + (stack.copperBackMm ?? stack.copperMm)) : half + stack.copperMm + SOLDERPASTE_LAYER_MM;
 }
 
 /** Where a footprint is on the board: its position in millimetres (board coordinates, y down), the studio's rotation in degrees (clockwise on screen) and its side. */

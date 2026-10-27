@@ -3,7 +3,8 @@
 //! imported board and project bring them in. No external tool is needed here; kicad-cli's reading of them is proved in `eda-cli`'s board tests.
 
 use eda_model::units::mm;
-use eda_kicad::{export_kicad_pcb, export_kicad_pro_for, import_kicad_pcb, merge_project_setup_pages, ExportMeta};
+use eda_kicad::{export_kicad_pcb, export_kicad_pro_for, import_kicad_pcb, merge_project_predefined_sizes, merge_project_setup_pages, ExportMeta};
+use eda_model::ir::{DiffPairPreset, Nm, RoutingSection};
 use eda_model::setup_pages::{CornerStyle, HatchOffset, MeanderSettings, ProfileLayerEntry, ProfileType, TuningProfile, ViaOverride};
 use eda_model::{ConstraintModel, Net, NetClass};
 
@@ -60,6 +61,7 @@ fn a_board_nobody_set_up_writes_the_defaults_and_none_of_the_pages_keys() {
     let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
     assert!(pro.get("tuning_profiles").is_none() && pro.get("net_settings").is_none());
     assert!(pro["board"]["design_settings"].get("tuning_pattern_settings").is_none());
+    assert!(pro["board"]["design_settings"].get("diff_pair_dimensions").is_none(), "no pair sizes saved: no list (an absent key reads back as none, as a fresh project's does)");
     assert!(pro["board"]["design_settings"].get("defaults").is_none_or(|d| d.get("apply_defaults_to_fp_fields").is_none()));
 }
 
@@ -126,6 +128,42 @@ fn a_profile_the_page_would_refuse_is_not_imported() {
     assert_eq!(model.board.tuning_profiles.profiles.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["ok"]);
     merge_project_setup_pages(&mut model, "not json");
     assert_eq!(model.board.tuning_profiles.profiles.len(), 1);
+}
+
+// r4 R4-3: the project's `board.design_settings.diff_pair_dimensions` (`BOARD_DESIGN_SETTINGS`' PARAM_LAMBDA) is written with its index-0 "use net
+// class" dummy first and read back without it, row by row, skipping an entry KiCad's loader skips (one missing a key).
+#[test]
+fn the_project_carries_the_differential_pair_sizes() {
+    let (mut design, model, _) = import_kicad_pcb(BOARD).expect("imports");
+    let pairs = vec![DiffPairPreset { width: mm(0.2), gap: mm(0.15), via_gap: mm(0.18) }, DiffPairPreset { width: mm(0.25), gap: mm(0.2), via_gap: mm(0.2) }];
+    design.routing = Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: pairs.clone(), teardrop_settings: Default::default() });
+    let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
+    assert_eq!(
+        pro["board"]["design_settings"]["diff_pair_dimensions"],
+        serde_json::json!([
+            { "width": 0.0, "gap": 0.0, "via_gap": 0.0 },
+            { "width": 0.2, "gap": 0.15, "via_gap": 0.18 },
+            { "width": 0.25, "gap": 0.2, "via_gap": 0.2 }
+        ]),
+        "KiCad's list starts with the net class's dummy row"
+    );
+
+    // The project read back: the dummy row is not a pair of ours.
+    let (mut back, _, _) = import_kicad_pcb(BOARD).expect("imports");
+    merge_project_predefined_sizes(&mut back, &serde_json::to_string(&pro).unwrap());
+    assert_eq!(back.routing.as_ref().unwrap().diff_pair_presets, pairs);
+
+    // A row missing a key is left out, as KiCad's loader leaves it out.
+    let pro = serde_json::json!({ "board": { "design_settings": { "diff_pair_dimensions": [
+        { "width": 0.0, "gap": 0.0, "via_gap": 0.0 },
+        { "width": 0.2, "gap": 0.15 },
+        { "width": 0.3, "gap": 0.2, "via_gap": 0.25 }
+    ] } } });
+    merge_project_predefined_sizes(&mut back, &pro.to_string());
+    assert_eq!(back.routing.as_ref().unwrap().diff_pair_presets, vec![DiffPairPreset { width: mm(0.3), gap: mm(0.2), via_gap: mm(0.25) }]);
+    assert_eq!(back.routing.as_ref().unwrap().diff_pair_presets[0].via_gap, Nm::new(250_000));
+    merge_project_predefined_sizes(&mut back, "not json");
+    assert_eq!(back.routing.as_ref().unwrap().diff_pair_presets.len(), 1, "unreadable JSON is a no-op");
 }
 
 fn class(name: &str, nets: &[&str], clearance: Option<eda_model::units::Nm>, track: Option<eda_model::units::Nm>) -> NetClass {

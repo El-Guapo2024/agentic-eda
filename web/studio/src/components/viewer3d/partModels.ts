@@ -91,7 +91,7 @@ export class PartModels {
         if (record.status === "ready" && record.proto) ready.push({ model, record });
       }
       const kind: ModelKind = part.kind3d ?? inferKind(part.pads);
-      const signature = [part.at.join(","), part.rot ?? 0, part.side, stack.boardThicknessMm, stack.copperMm, opts.showBoundingBoxes, ready.map((r) => modelSignature(r.model)).join(";"), ready.length === 0 ? JSON.stringify([part.body, part.courtyard, part.pads?.length]) : ""].join("#");
+      const signature = [part.at.join(","), part.rot ?? 0, part.side, stack.boardThicknessMm, stack.copperMm, stack.copperBackMm, opts.showBoundingBoxes, ready.map((r) => modelSignature(r.model)).join(";"), ready.length === 0 ? JSON.stringify([part.body, part.courtyard, part.pads?.length]) : ""].join("#");
       let entry = this.parts.get(part.ref);
       if (!entry || entry.signature !== signature) {
         if (entry) this.disposeEntry(entry);

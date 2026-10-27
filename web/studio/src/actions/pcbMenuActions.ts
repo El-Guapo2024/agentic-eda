@@ -42,8 +42,9 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
     pcbOnly(() => {
       dispatch({ type: "BCX", patch: { autoTrackWidth: false } });
       dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
-      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: base.width });
-      dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: base.via });
+      // `SetTrackWidthIndex( 0 )` / `SetViaSizeIndex( 0 )`: the dummy entry is the net class's.
+      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: base.width, index: 0 });
+      dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: base.via, index: 0 });
       reroute(dispatch, base.width);
     })
   );
@@ -56,7 +57,7 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
       dispatch({ type: "BCX", patch: { autoTrackWidth: false } });
       // `SetTrackWidthIndex`: "m_useCustomTrackVia = false"
       dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
-      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: width });
+      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: width, index: index(param) });
       reroute(dispatch, width);
     })
   );
@@ -69,7 +70,7 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
       dispatch({ type: "BCX", patch: { autoTrackWidth: false } });
       // `SetViaSizeIndex`: "m_useCustomTrackVia = false"
       dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
-      dispatch({ type: "SET_CURRENT_VIA_PRESET", preset });
+      dispatch({ type: "SET_CURRENT_VIA_PRESET", preset, index: index(param) });
     })
   );
   // "Use Net Class Values" of the pair menu (`bds.UseCustomDiffPairDimensions( false )`).

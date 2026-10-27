@@ -363,7 +363,8 @@ fn connection_points(shape: &eda_model::ir::Shape) -> Vec<Point> {
 ///   net, none for a footprint's), routable, with the shape's connection points as its anchors ([`connection_points`]): a route of another net (or
 ///   of none) keeps the clearance from it, one of its net may start or end on it. A footprint's shape is its footprint's, so the bridge of a net tie
 ///   is excused where it meets a pad of the route's net ([`crate::rule_resolver::RuleResolver::is_net_tie_exclusion`]);
-/// - a text box (`PCB_TEXTBOX_T`, `syncGraphicalItem` of it as a `PCB_SHAPE`): its rectangle's border, routable, of no net -- its text is not an obstacle;
+/// - a text box (`PCB_TEXTBOX_T`, `syncGraphicalItem` of it as a `PCB_SHAPE`): its rectangle's border at the stroke's width (with the border off
+///   too), routable, of no net -- its text is not an obstacle;
 /// - a dimension (`syncDimension`): its lines at their width, and its text when it shows, not routable, of no net;
 /// - a barcode (`syncBarcode`: `GetBoundingHull`): the box of its symbol turned by its angle, not routable, of no net;
 /// - a table (`syncTextItem` of a `PCB_TABLE`: its cells' `TransformShapeToPolygon` with half the border's width, simplified to `Outline( 0 )`):
@@ -372,7 +373,9 @@ fn connection_points(shape: &eda_model::ir::Shape) -> Vec<Point> {
 ///
 /// **Differs:** a dimension's and a barcode's text is the box of its glyphs, not the glyphs (`syncDimension` adds each glyph outline); a
 /// barcode's printed text is left out of its hull; a rounded rectangle on copper is its square corners; the line style (dashes) of a shape is
-/// not read.
+/// not read; an arc or a circle's ring is its chords with the flattening error (5 um) added to the stroke, where KiCad has one `SHAPE_ARC`.
+/// A hidden board text and a dimension whose text is hidden are not in the model (the importer leaves them out, so the board kicad-cli checks
+/// has none either); a footprint's hidden text is a hidden field, which `syncTextItem` leaves out too.
 fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel, layers: &LayerMap, rules: &mut crate::rule_resolver::RuleResolver) {
     use eda_drc::rule_item::Class;
     let copper = |l: &str| layers.index_of(l).filter(|_| l.ends_with(".Cu"));
@@ -383,7 +386,14 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
         let anchors = connection_points(shape);
         let pos = anchors.first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
         let net = net.and_then(crate::item::net_of);
+        // KiCad keeps an arc and an unfilled circle's ring one `SHAPE_ARC` (`makeEffectiveShapes`); its chords here lie up to the flattening error
+        // inside it, so, as for an Edge.Cuts arc ([`add_edge_solids`]), the stroke is given that error more: the band holds the true curve (r4 R4-6)
+        let curved = matches!(shape, eda_model::ir::Shape::Arc { .. } | eda_model::ir::Shape::Circle { .. });
         for (k, piece) in eda_drc::board::effective_shapes(shape).into_iter().enumerate() {
+            let piece = match piece {
+                Shape::Strokes { segs, r } if curved => Shape::Strokes { segs, r: r + eda_model::outline::MAX_ERROR_NM },
+                piece => piece,
+            };
             node.add(Item::Solid(Solid { net: net.clone(), layers: crate::layer::LayerRange::single(layer), pos, shape: piece, source: format!("{source}#{k}"), edge: false, rule, anchor_points: anchors.clone() }));
         }
     };
@@ -402,14 +412,15 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
             add_shape(node, rules, &id, shape, d.board_items.net_of(shape.id()), None);
         }
         // a text box: `syncGraphicalItem( static_cast<PCB_SHAPE*>( gitem ) )`, its rectangle (`PCB_SHAPE` part); not filled, its border at the
-        // border's width (none when the border is off)
+        // stroke's width whether the border is drawn or not (`makeEffectiveShapes` takes `GetEffectiveWidth()`, the stroke's; `m_borderEnabled` is
+        // read only by the text box's own drawing and polygon code, r4 R4-6)
         for (i, tb) in d.board_items.text_boxes.iter().enumerate() {
             if copper(&tb.layer).is_none() {
                 continue;
             }
             let corners = if tb.pts.len() == 4 { tb.pts.clone() } else { vec![tb.start, Point { x: tb.end.x, y: tb.start.y }, tb.end, Point { x: tb.start.x, y: tb.end.y }] };
             let id = if tb.id.is_empty() { format!("textbox{i}") } else { tb.id.clone() };
-            let shape = eda_model::ir::Shape::Polygon { id: id.clone(), layer: tb.layer.clone(), stroke_width: if tb.border { tb.stroke_width_nm } else { Nm::ZERO }, filled: false, pts: corners };
+            let shape = eda_model::ir::Shape::Polygon { id: id.clone(), layer: tb.layer.clone(), stroke_width: tb.stroke_width_nm.max(Nm::ZERO), filled: false, pts: corners };
             add_shape(node, rules, &id, &shape, None, None);
         }
         for (i, dim) in d.dimensions.iter().enumerate() {
@@ -510,7 +521,7 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection { outline: vec![], footprints: vec![fp], modules: vec![] }),
-            routing: Some(RoutingSection { tracks: vec![Track { id: "trk1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::new(200), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::new(1000) }], arc_mid_offset: None }], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+            routing: Some(RoutingSection { tracks: vec![Track { id: "trk1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::new(200), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::new(1000) }], arc_mid_offset: None }], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
         };
         (design, model)
@@ -710,6 +721,23 @@ mod tests {
         let bar = graphic_solids(&node, "bar_1");
         let (x0, y0, x1, y1) = bar[0].shape.bbox(Nm::ZERO);
         assert_eq!((x1 - x0, y1 - y0), (mm(2.0), mm(4.0)), "4 x 2 mm turned by 90 degrees");
+    }
+
+    /// r4 R4-6: a text box with its border off keeps its stroke's width (`makeEffectiveShapes` takes `GetEffectiveWidth()`), and an arc on copper
+    /// is its chords with the flattening error added to its stroke, so the band holds the true `SHAPE_ARC`.
+    #[test]
+    fn a_borderless_text_box_keeps_its_stroke_and_an_arc_its_flattening_error() {
+        use eda_model::ir::{DrawingsSection, Shape as S};
+        let (mut design, model) = two_pad_board();
+        let pt = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let mut d = DrawingsSection::default();
+        d.board_items.text_boxes.push(eda_model::pcb_items::TextBox { id: "tbx_1".into(), border: false, ..eda_model::pcb_items::TextBox::new("F.Cu", pt(30.0, 10.0), pt(34.0, 12.0), mm(1.0), mm(0.1)) });
+        d.shapes.push(S::Arc { id: "shp_arc".into(), layer: "F.Cu".into(), stroke_width: mm(0.2), filled: false, start: pt(40.0, 10.0), mid: pt(45.0, 5.0), end: pt(50.0, 10.0) });
+        design.drawings = Some(d);
+        let (node, _) = build_node(&design, &model);
+        let radii = |id: &str| graphic_solids(&node, id).iter().map(|s| match &s.shape { Shape::Strokes { r, .. } => *r, other => panic!("{other:?}") }).collect::<Vec<_>>();
+        assert_eq!(radii("tbx_1"), vec![mm(0.05)], "half the 0.1 mm stroke, the border off");
+        assert_eq!(radii("shp_arc"), vec![mm(0.1) + Nm::new(5_000)], "half the 0.2 mm stroke and ARC_HIGH_DEF");
     }
 
     /// R3-2: a footprint's own copper shape (`footprint->GraphicalItems()`) is a solid of its footprint, so a net tie's bridge is in the tie

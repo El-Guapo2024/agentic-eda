@@ -98,6 +98,7 @@ pub(super) fn sample_board() -> (Design, ConstraintModel) {
             zones: vec![Zone { net: "GND".into(), layer: "B.Cu".into(), outline: vec![Point { x: mm(1.0), y: mm(1.0) }, Point { x: mm(19.0), y: mm(1.0) }, Point { x: mm(19.0), y: mm(19.0) }, Point { x: mm(1.0), y: mm(19.0) }], ..Zone::default() }],
             track_width_presets: vec![],
             via_presets: vec![],
+            diff_pair_presets: vec![],
             teardrop_settings: Default::default(),
         }),
         drawings: None,

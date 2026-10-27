@@ -623,3 +623,83 @@ ladder still fails it exactly where intended: `l2_sensor_hub` seed 0, `l3_motor_
 - `a_compact_cluster_laid_out_by_the_engine_passes_cluster_split` derives with the built-in symbols (the lint crate does not
   depend on the installed libraries), so its three resistor boxes are the synthesized ones. The gate change is geometry-agnostic
   (`node_spacing` added on both axes); the bench run above is the evidence that it also holds for the real KiCad boxes.
+
+## R4-3 and R4-8 (studio): Board Setup's Differential Pairs list, and the size choice by index (done 2026-10-27)
+
+**What I did** (round-4 route/rules findings R4-3 and the studio half of R4-8, checked against `~/src/kicad-src-8303b2ad`).
+
+- **R4-3, the model and the command.** `RoutingSection::diff_pair_presets` holds `DiffPairPreset { width, gap, via_gap }` in nm,
+  `#[serde(default, skip_serializing_if = "Vec::is_empty")]`, so an older `design.json` reads as no pairs (a test loads one).
+  `Cmd::SetDiffPairPresets` joins the Pre-defined Sizes batch (`boardSetupRules.predefinedSizesCmds`), so one Apply is still one
+  undo step; the studio's `/api/state` serves the rows under `routing.diff_pair_presets` and `eda board` prints the command as
+  `board-setup diff-pairs`.
+- **The project file.** Written where KiCad keeps it (`board.design_settings.diff_pair_dimensions`, from `BOARD_DESIGN_SETTINGS`'
+  PARAM_LAMBDA): millimetres, the index-0 all-zero "use net class" dummy first (KiCad's `GetDiffPairWidth()` reads index >= 1, so
+  entry 0 is never a pair). `merge_project_predefined_sizes` reads the array back without the dummy and skips a row that is not an
+  object or misses one of the three keys, as KiCad's loader skips it; it replaces the design's list (as Apply does) and is a no-op
+  on unreadable JSON. `eda import-kicad` merges it into the design next to the setup pages. A design with no pairs writes no key at
+  all: KiCad's loader gives a missing list its constructor's dummy row, so an absent key and a dummy-only array are the same board;
+  the e2e's fresh project asserts the absence rather than making our writer emit the dummy alone.
+- **The page.** Board Setup > Pre-defined Sizes has a third section after the via list: one width/gap/via-gap row per pair, Add
+  Differential Pair and Remove. It sits after the via list so the e2e's "last two number inputs are the via diameter and drill"
+  selectors stay valid on a board with no pairs.
+- **Via rows, KiCad's words.** `set_via_presets` and the studio's `validatePredefinedSizes` run `PCB_VIA::ValidateViaParameters`:
+  `GEOMETRY_MIN_SIZE` (0.001 mm, 1 um) on the diameter first, then the drill, then "Via hole size must be smaller than via
+  diameter"; the messages are KiCad's word for word and in its order. A pair with a width and no gap is refused with
+  `ValidateDesignRules`' "No differential pair gap defined."; a zero-width row and the via gap are not checked there.
+- **R4-8, the studio.** The route's width and via size are chosen by the list index (`m_trackWidthIndex`/`m_viaSizeIndex`;
+  `UseNetClassTrack()` is `index == 0 && !m_useCustomTrackVia`), not by comparing the value with the Default class's:
+  `chosenTrackWidth`/`chosenViaSize` return "use net class" only when the index is absent, 0, or past the list
+  (`GetCurrentTrackWidth`/`GetCurrentViaSize`'s range check). The W/via cycles step the index (no `indexOf`), the menu's checks
+  are `widthIndex === i`/`viaIndex === i`, and `store.tsx` carries `currentTrackWidthIndex`/`currentViaIndex` (0 = net class; the
+  custom-size dialog leaves them alone, as KiCad's flags are separate).
+- The e2e fingerprint now includes `routing.diff_pair_presets`: the page's Apply always sends the list, so the scenario's
+  "everything is back at the start" comparison should see it.
+- Tests first: the web tests call the new chooser signatures and `validatePredefinedSizes` (they did not typecheck against the old
+  ones), and the Rust tests name the new command and merge function; the first full Rust run then failed on one of my own test
+  rows (`set_via_presets_refuses_with_kicads_words` expected a 500 nm drill at a 1 um diameter to pass; KiCad's minimum applies to
+  the drill too). The row is now 999 nm at 2 um, and the check's own boundary (1 um is accepted for both) is asserted as well.
+
+**Summary (as printed).**
+
+- R4-3: Board Setup's Pre-defined Sizes has KiCad's Differential Pairs list end to end -- `diff_pair_presets` in the design
+  overlay (serde default), one undoable `set_diff_pair_presets` in the page's batch, `.kicad_pro`'s `diff_pair_dimensions` written
+  with the dummy head and read back without it, and via rows through `ValidateViaParameters`' 1 um minimum and exact messages.
+- R4-8 (studio half): the width and via size are chosen by list index (0 = net class), so a preset equal to the Default class's
+  width is a user choice; the chooser, the cycles and the menu checks all use the index.
+- Commit `cca40225`; tests: touched-crate `cargo test`, 2544/2544 web unit tests, typecheck, and the three e2e checks all pass.
+
+**Commits.**
+
+- `cca40225` -- board setup: the Differential Pairs list, and the size choice by index
+- this log, in its own commit.
+
+**Tests run.**
+
+- `cargo test -p eda-model -p eda-ops -p eda-kicad -p eda -p eda-cli -p eda-connectivity -p eda-freeroute -p eda-gates
+  -p eda-lint -p eda-kicad-engine -p eda-pns` EXIT 0 -- 107 test targets, 0 failed.
+- `cd web/studio && npm run test:unit` EXIT 0 -- 2544 tests, 2544 pass, 0 fail.
+- `cd web/studio && npm run typecheck` EXIT 0.
+- `bash tools/run-all-checks.sh -j 1 --ports 8830-8832 board-setup-rules board-setup-pages router-leftovers` EXIT 0:
+
+  ```
+  ok   board-setup-rules       10 scenarios    32s  board=mcu30
+  ok   board-setup-pages       79 scenarios   108s  board=mcu30-few
+  ok   router-leftovers        14 scenarios   192s  board=mcu30
+
+  run-all-checks: 3 passed, 0 failed of 3 in 333s (logs: /tmp/run-all-checks.ruVY/runs)
+  ```
+
+  No server is left behind (ports 8830-8832 have no listeners).
+
+**Unsure / for the reviewer.**
+
+- The list now lives in the design and travels to the project, but the pns router still takes a pair's sizes from the net class or
+  the rules; `ImportSizes`' `GetCurrentDiffPairWidth()` side is not wired. R4-3's remedy is the model, the page and the project
+  file; R4-5 (same file) is where `ImportSizes` is being examined, so the router side reads as that lane's, not this one's.
+- KiCad's panel sorts the three lists on Apply and inserts the dummy head (`TransferDataFromWindow`); ours keeps the entered
+  order, as the existing track-width and via lists already did, and leaves the dummy to the writer. Sorting would renumber the
+  indices the router chooses by, and the finding did not ask for it.
+- The page shows one message under the section (KiCad marks the offending cell); Apply refuses the whole page, and the backend
+  refuses the same rows again if any client sends them anyway. The finding named the messages; the display is unchanged from the
+  other pages' single-message style.

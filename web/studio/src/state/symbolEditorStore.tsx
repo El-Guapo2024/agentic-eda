@@ -31,9 +31,9 @@ import { allFields, wireField } from "../kicad-port/symFields";
 import { movedRows } from "../kicad-port/symFieldLayout";
 import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchronizePins } from "../kicad-port/symPinSync";
 import { DEFAULT_PIN_TEMPLATE, samePinTemplate, type PinTemplate } from "../kicad-port/symPinTemplate";
-import { deletePlan, duplicateItems, pastedItems, placedPinWithId, repeatPin, rotatePlan, selectionPivot } from "../kicad-port/symEditItems";
+import { deletePlan, duplicateItems, pastedItems, placedPinWithId, repeatPin, rotatePivot, rotatePlan } from "../kicad-port/symEditItems";
 import { pinBoxAt } from "../kicad-port/schPins";
-import { symbolItemBoxes } from "../kicad-port/itemBoxes";
+import { symbolGraphicBox } from "../kicad-port/itemBoxes";
 import { resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
 import { measureStrokeText } from "../components/text/strokeFont";
 import { pinOccupiedMessage, pinPlacementOccupant } from "../kicad-port/pinPlacement";
@@ -270,6 +270,8 @@ export type SymAction =
   | { type: "SET_PENDING_PIN"; pin: LibrarySymbolPin | null }
   /** The pending pin has been added: its number becomes the next click's starting point (`g_lastPin`, `PIN_PLACED` only on success). */
   | { type: "PIN_PLACED"; pin: LibrarySymbolPin }
+  /** `RepeatDrawItem`: `selectionClear`, then `selectItem` of the repeated pin -- the last placed one, by the id `PIN_PLACED` found (r4 E4-2). */
+  | { type: "SELECT_LAST_PLACED_PIN" }
   | { type: "SET_COPIED_ITEMS"; items: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[] } | null }
   /** `g_LastPin*`: the look the next pin starts with. */
   | { type: "SET_PIN_TEMPLATE"; pin: PinTemplate }
@@ -394,6 +396,10 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       return { ...state, pendingPin: action.pin };
     case "PIN_PLACED":
       return { ...state, lastPlacedPin: { libId: state.libId, pin: placedPinWithId(action.pin, state.symbol?.pins ?? []) } };
+    case "SELECT_LAST_PLACED_PIN": {
+      const id = state.lastPlacedPin?.pin.id;
+      return id ? { ...state, selection: new Set([id]) } : state;
+    }
     case "SET_COPIED_ITEMS":
       return { ...state, copiedItems: action.items };
     case "SET_PIN_TEMPLATE":
@@ -678,12 +684,13 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
         const r = resolvePin({ number: p.number, name: p.name, electrical_type: p.electrical_type, shape: p.shape, at: [p.at.x, p.at.y], angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: p.body_style, hidden: p.hidden }, identity, [0, 0]);
         return pinBoxAt(r.tip, r.root, p.name, p.number, texts, measureStrokeText, (p.name_size_mm ?? 1.27) * 1e6, (p.number_size_mm ?? 1.27) * 1e6);
       });
-      const graphicBoxes = symbolItemBoxes(sym, 0, 0);
-      for (const id of ids) {
-        const b = sym.graphics.some((g) => g.id === id) ? graphicBoxes.get(id) : undefined;
-        if (b) boxes.push({ minX: b[0], minY: b[1], maxX: b[2], maxY: b[3] });
-      }
-      const turned = rotatePlan(pins, ids.length, ccw, st.gridNm / 1e6, [], selectionPivot(boxes, st.gridNm / 1e6));
+      // The selected graphics of every unit and body style (an imported body is `Name_0_1` / `Name_1_1`), texts left out as `SELECTION::GetCenter` does (r4 E4-1).
+      const graphics = sym.graphics.filter((g) => g.id && st.selection.has(g.id));
+      const boxOf = (g: LibrarySymbolGraphic) => {
+        const b = symbolGraphicBox(g);
+        return b ? { minX: b[0], minY: b[1], maxX: b[2], maxY: b[3] } : null;
+      };
+      const turned = rotatePlan(pins, ids.length, ccw, st.gridNm / 1e6, [], rotatePivot(boxes, graphics, st.gridNm / 1e6, boxOf));
       const cmds: Cmd[] = turned.map((p): Cmd => ({ op: "edit_symbol_pin", lib_id: libId, id: p.id!, pin: p }));
       if (cmds.length > 0) await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
@@ -700,12 +707,18 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       // `PlacePin`: the occupied-spot question in sync mode, then the images in the other units -- as the Pin tool's placement does.
       const syncMode = synchronizePins(st.syncPins, sym.unit_count, !!sym.units_locked);
       const occupant = pinPlacementOccupant(pin, sym.pins, syncMode);
-      if (occupant && !(await askConfirm({ title: "Confirmation", message: pinOccupiedMessage(occupant.unit), okLabel: "Place Pin Anyway" }))) return;
+      if (occupant && !(await askConfirm({ title: "Confirmation", message: pinOccupiedMessage(occupant.unit), okLabel: "Place Pin Anyway" }))) {
+        // `RepeatPin` returned nullptr: `RepeatDrawItem` still runs `selectionClear`
+        dispatch({ type: "CLEAR_SELECTION" });
+        return;
+      }
       const images = syncMode ? imagePinsFor(pin, sym.unit_count) : [];
       const cmds: Cmd[] = [pin, ...images].map((p): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin: p }));
       dispatch({ type: "CLEAR_SELECTION" });
       if (await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds })) {
         dispatch({ type: "PIN_PLACED", pin });
+        // `RepeatDrawItem`: `if( pin ) m_toolMgr->RunAction<EDA_ITEM*>( ACTIONS::selectItem, pin );` -- the new pin is selected, so E, Delete or R act on it.
+        dispatch({ type: "SELECT_LAST_PLACED_PIN" });
         // `PlacePin`: a new pin that was not pasted leaves its orientation, type and shape for the next one (`g_LastPinOrient`, `g_LastPinType`,
         // `g_LastPinShape`); Repeat's pin is `IS_NEW`.
         dispatch({ type: "SET_PIN_TEMPLATE", pin: { ...st.pinTemplate, angle_deg: pin.angle_deg, electrical_type: pin.electrical_type, shape: pin.shape } });

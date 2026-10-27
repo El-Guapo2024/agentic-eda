@@ -37,11 +37,12 @@
 //!   than risk mis-handling a real node. A rare case, and the safer of
 //!   the two failure directions (a missed merge, not a wrongly-merged
 //!   short).
-//! - Zone containment for `is_node` uses each zone's raw outline, not its
-//!   computed fill (unlike `crate::items`, which always prefers the real
-//!   fill) -- cheaper, and erring toward "there's copper here, don't
-//!   merge" is the safe direction for a check that only ever *skips* a
-//!   merge.
+//! - A zone counts at the joint as `testMergeCollinearSegments` asks it:
+//!   `citem->HitTest( point, ( width + 1 ) / 2 )`, which for a zone is
+//!   `ZONE::HitTest` -- the joint on a corner or an edge of the outline,
+//!   not inside it (round 4 A-5). Not ported: the merge of overlapping or
+//!   folded-back collinear segments into their bounding span, and
+//!   `ApproxCollinear`'s 1 nm tolerance.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,7 +54,6 @@ use eda_model::{ConstraintModel, PadKind};
 use crate::algo::build_graph;
 use crate::cleanup_filter::{CleanupFilter, Protected};
 use crate::dangling::{dangling_tracks_and_vias_with, DanglingKind};
-use crate::geom::point_in_polygon;
 use crate::items::{ItemRef, ItemShape};
 use eda_model::units::Nm;
 
@@ -194,11 +194,11 @@ fn pad_geoms(design: &Design, model: &ConstraintModel) -> Vec<PadGeom> {
 
 fn working_design(base: &Design, tracks: &[Track], vias: &[Via]) -> Design {
     let mut d = base.clone();
-    let (zones, track_width_presets, via_presets, teardrop_settings) = match &d.routing {
-        Some(rt) => (rt.zones.clone(), rt.track_width_presets.clone(), rt.via_presets.clone(), rt.teardrop_settings),
-        None => (Vec::new(), Vec::new(), Vec::new(), Default::default()),
+    let (zones, track_width_presets, via_presets, diff_pair_presets, teardrop_settings) = match &d.routing {
+        Some(rt) => (rt.zones.clone(), rt.track_width_presets.clone(), rt.via_presets.clone(), rt.diff_pair_presets.clone(), rt.teardrop_settings),
+        None => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Default::default()),
     };
-    d.routing = Some(RoutingSection { tracks: tracks.to_vec(), vias: vias.to_vec(), zones, track_width_presets, via_presets, teardrop_settings });
+    d.routing = Some(RoutingSection { tracks: tracks.to_vec(), vias: vias.to_vec(), zones, track_width_presets, via_presets, diff_pair_presets, teardrop_settings });
     d
 }
 
@@ -561,7 +561,7 @@ fn shared_endpoint(a: &Track, b: &Track) -> Option<(Point, Point, Point)> {
 /// `testTrackEndpointIsNode`: does anything besides the two merge
 /// candidates (named by `exclude`) touch `p`? See the module doc for the
 /// "elide a 3-way collinear junction" gap this simplifies away.
-fn is_node(p: Point, layer: &str, exclude: (&str, &str), tracks: &[Track], vias: &[Via], pads: &[PadGeom], zones: &[Zone]) -> bool {
+fn is_node(p: Point, layer: &str, net: &str, width: Nm, exclude: (&str, &str), tracks: &[Track], vias: &[Via], pads: &[PadGeom], zones: &[Zone]) -> bool {
     if tracks.iter().any(|t| t.id != exclude.0 && t.id != exclude.1 && t.layer == layer && t.pts.contains(&p)) {
         return true;
     }
@@ -571,7 +571,15 @@ fn is_node(p: Point, layer: &str, exclude: (&str, &str), tracks: &[Track], vias:
     if pads.iter().any(|pg| pad_covers_layer(pg, layer) && pg.pad.signed_distance(p) <= 0.0) {
         return true;
     }
-    zones.iter().any(|z| z.is_on_layer(layer) && z.outline.len() >= 3 && point_in_polygon(p, &z.outline) && !z.holes.iter().any(|h| h.len() >= 3 && point_in_polygon(p, h)))
+    // `ZONE::HitTest( p, ( width + 1 ) / 2 )`: `accuracy = std::max( aAccuracy, mmToIU( 0.1 ) )`, then
+    // `HitTestForCorner( p, accuracy * 2 ) || HitTestForEdge( p, accuracy )` -- the outline's corners and edges, holes included, not its inside.
+    let accuracy = ((width.get() + 1) / 2).max(100_000) as f64;
+    let hits = |ring: &[Point]| {
+        let n = ring.len();
+        ring.iter().any(|c| ((c.x - p.x).as_f64()).hypot((c.y - p.y).as_f64()) <= 2.0 * accuracy) || (0..n).any(|i| crate::geom::point_seg_distance(p, ring[i], ring[(i + 1) % n]) <= accuracy)
+    };
+    // (only a zone of the track's net is among `getConnectedItems( aSeg )`)
+    zones.iter().any(|z| z.net == net && z.is_on_layer(layer) && z.outline.len() >= 3 && (hits(&z.outline) || z.holes.iter().any(|h| h.len() >= 2 && hits(h))))
 }
 
 /// `TRACKS_CLEANER::cleanup`'s merge pass, run to a fixed point (matches
@@ -604,7 +612,7 @@ fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zone
                 if d1.0.get() * d2.0.get() + d1.1.get() * d2.1.get() <= 0 {
                     continue;
                 }
-                if is_node(shared, &tracks[i].layer, (tracks[i].id.as_str(), tracks[j].id.as_str()), tracks, vias, pads, zones) {
+                if is_node(shared, &tracks[i].layer, &tracks[i].net, tracks[i].width, (tracks[i].id.as_str(), tracks[j].id.as_str()), tracks, vias, pads, zones) {
                     continue;
                 }
                 found = Some((i, j, far_i, far_j));
@@ -693,6 +701,28 @@ mod tests {
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { merge_segments: true, ..Default::default() });
         assert_eq!(report.remove_track_ids(), vec!["t1".to_string()]);
         assert!(matches!(report.changes[0].kind, CleanupKind::ZeroLengthTrack));
+    }
+
+    /// Round 4 A-5: `testMergeCollinearSegments` asks a zone `ZONE::HitTest( joint, ( width + 1 ) / 2 )`, its corners and edges: two segments meeting
+    /// in the middle of a pour of their net merge; meeting on its edge they do not.
+    #[test]
+    fn merge_collinear_inside_a_zone() {
+        let (mut design, model) = two_pad_model();
+        let p = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let rt = design.routing.as_mut().unwrap();
+        rt.zones.push(Zone { id: "z".into(), net: "N1".into(), layer: "F.Cu".into(), outline: vec![p(-50.0, -50.0), p(50.0, -50.0), p(50.0, 50.0), p(-50.0, 50.0)], ..Default::default() });
+        rt.tracks.push(Track { id: "a".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(-20.0, -30.0), p(-15.0, -30.0)], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "b".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(-15.0, -30.0), p(-10.0, -30.0)], arc_mid_offset: None });
+        let opts = CleanupOptions { merge_segments: true, ..Default::default() };
+        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), opts);
+        assert_eq!(report.changes.iter().filter(|c| matches!(c.kind, CleanupKind::MergedTracks)).count(), 1, "{:?}", report.changes.iter().map(|c| c.kind).collect::<Vec<_>>());
+        // the joint on the zone's edge: a node
+        let rt = design.routing.as_mut().unwrap();
+        let n = rt.tracks.len();
+        rt.tracks[n - 2].pts = vec![p(-20.0, -50.0), p(-15.0, -50.0)];
+        rt.tracks[n - 1].pts = vec![p(-15.0, -50.0), p(-10.0, -50.0)];
+        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), opts);
+        assert_eq!(report.changes.iter().filter(|c| matches!(c.kind, CleanupKind::MergedTracks)).count(), 0);
     }
 
     #[test]

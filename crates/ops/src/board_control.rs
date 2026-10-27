@@ -88,11 +88,24 @@ fn edges_touch(a: &[Point], b: &[Point]) -> bool {
     })
 }
 
-/// `BOARD::TestZoneIntersection`: same layer, bounding boxes meet, and either
-/// an edge of one touches an edge of the other or a corner of one is inside
-/// the other.
+/// `BOARD::TestZoneIntersection`: a layer in common, bounding boxes meet, and either an edge of one touches an edge of the other
+/// (`IterateSegmentsWithHoles`: the holes' edges too) or a corner of one, holes' corners included, is in the other (`SHAPE_POLY_SET::Contains`:
+/// inside its outline and not in one of its holes). A zone wholly inside another's hole does not intersect it.
 pub fn zones_intersect(a: &Zone, b: &Zone) -> bool {
-    a.layer_set() == b.layer_set() && a.outline.len() >= 3 && b.outline.len() >= 3 && bboxes_meet(&a.outline, &b.outline) && (edges_touch(&a.outline, &b.outline) || b.outline.iter().any(|p| ring_contains(&a.outline, *p)) || a.outline.iter().any(|p| ring_contains(&b.outline, *p)))
+    let rings = |z: &Zone| -> Vec<Vec<Point>> { std::iter::once(z.outline.clone()).chain(z.holes.iter().filter(|h| h.len() >= 3).cloned()).collect() };
+    let contains = |z: &Zone, p: Point| ring_contains(&z.outline, p) && !z.holes.iter().filter(|h| h.len() >= 3).any(|h| ring_contains(h, p) && !on_ring(h, p));
+    let (ra, rb) = (rings(a), rings(b));
+    a.layer_set().iter().any(|l| b.is_on_layer(l))
+        && a.outline.len() >= 3
+        && b.outline.len() >= 3
+        && bboxes_meet(&a.outline, &b.outline)
+        && (ra.iter().any(|x| rb.iter().any(|y| edges_touch(x, y))) || rb.iter().flatten().any(|p| contains(a, *p)) || ra.iter().flatten().any(|p| contains(b, *p)))
+}
+
+/// Whether `p` is on an edge of `ring`.
+fn on_ring(ring: &[Point], p: Point) -> bool {
+    let n = ring.len();
+    (0..n).any(|i| orient(ring[i], ring[(i + 1) % n], p) == 0 && on_segment(ring[i], ring[(i + 1) % n], p))
 }
 
 // --------------------------------------------------------------------- merge
@@ -109,19 +122,41 @@ pub fn merge_zones(design: &mut Design, ids: &[String]) -> Result<String, Vec<Ch
     }
     let first = chosen[0];
     let mut to_merge: Vec<usize> = Vec::new();
+    // What the source `wxLogMessage`s for each zone it skips, in order, once each.
+    let mut logged: Vec<&str> = Vec::new();
+    let mut log = |m: &'static str| {
+        if !logged.contains(&m) {
+            logged.push(m);
+        }
+    };
     for &c in &chosen {
         let zone = &zones[c];
-        // wxLogMessage'd and skipped in the source: a different net, rule-area-ness or layer, or no overlap.
-        if zone.net != zones[first].net || zone.is_rule_area != zones[first].is_rule_area || zone.layer_set() != zones[first].layer_set() {
+        if zone.net != zones[first].net {
+            log("Some zone netcodes did not match and were not merged.");
+            continue;
+        }
+        if zone.is_rule_area != zones[first].is_rule_area {
+            log("Some zones were rule areas and were not merged.");
+            continue;
+        }
+        if zone.layer_set() != zones[first].layer_set() {
+            log("Some zone layer sets did not match and were not merged.");
             continue;
         }
         let meets = c == first || to_merge.iter().any(|&m| zones_intersect(zone, &zones[m]));
-        if meets && !to_merge.contains(&c) {
+        if !meets {
+            log("Some zones did not intersect and were not merged.");
+            continue;
+        }
+        if !to_merge.contains(&c) {
             to_merge.push(c);
         }
     }
+    // Only the first zone left: KiCad still runs `mergeZones` on it (a `Simplify` of its outline, a "Merge Zones" commit) and shows its log lines; here
+    // nothing changes and the log lines are the refusal (round 4 C-7).
     if to_merge.len() < 2 {
-        return Err(fail("ops_zone_merge", &zones[first].id, "the selected zones do not touch, so there is nothing to merge"));
+        let message = if logged.is_empty() { "select two or more zones to merge".to_string() } else { logged.join("\n") };
+        return Err(fail("ops_zone_merge", &zones[first].id, &message));
     }
 
     // `ZONE::Outline()`: the outline and its holes.
@@ -339,6 +374,18 @@ pub fn set_plot_settings(design: &mut Design, board_copper: &[String], layers: O
     Ok(())
 }
 
+/// Export IPC-2581's BOM columns kept in the board for the next opening of the dialog (`DIALOG_EXPORT_2581::TransferDataFromWindow`:
+/// `prj.m_IP2581Bom.id = GetOEM(); .. bomRev = m_textBomRev->GetValue();`, on Export). Like the plot settings this is no undo step (the
+/// project file has none), see `crates/cli/src/board.rs`'s `outside_history`. All empty clears it; nothing changed is refused.
+pub fn set_ipc2581_bom(design: &mut Design, bom: &eda_model::plot_params::Ipc2581Bom) -> Result<(), Vec<CheckResult>> {
+    let bom = (*bom != eda_model::plot_params::Ipc2581Bom::default()).then(|| bom.clone());
+    if design.drawings.as_ref().and_then(|d| d.ipc2581_bom.as_ref()) == bom.as_ref() {
+        return Err(fail("ops_ipc2581_bom", "ipc2581_bom", "the IPC-2581 BOM columns are already these"));
+    }
+    design.drawings.get_or_insert_with(Default::default).ipc2581_bom = bom;
+    Ok(())
+}
+
 /// `PCB_CONTROL::DoSetGridOrigin`: the point the editing grid is anchored at; `None` (or (0, 0)) is `GridResetOrigin`'s reset.
 pub fn set_grid_origin(design: &mut Design, at: Option<Point>) -> Result<(), Vec<CheckResult>> {
     let at = at.filter(|p| p.x != Nm::ZERO || p.y != Nm::ZERO);
@@ -547,6 +594,21 @@ mod tests {
         assert_eq!(zones(&d).len(), 2);
         // One zone is not a selection to merge.
         assert!(merge_zones(&mut d, &["a".into()]).is_err());
+    }
+
+    /// Round 4 C-7: `TestZoneIntersection` walks the holes too (`IterateSegmentsWithHoles`, `Contains` without the holes): a zone wholly inside another's
+    /// hole does not intersect it; and the refusal is in the words of the source's log lines.
+    #[test]
+    fn a_zone_inside_anothers_hole_does_not_intersect_it_and_the_refusal_is_kicads_log_line() {
+        let mut ring = square("r", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(30_000), 0);
+        ring.holes = vec![vec![pt(Nm::new(5_000), Nm::new(5_000)), pt(Nm::new(25_000), Nm::new(5_000)), pt(Nm::new(25_000), Nm::new(25_000)), pt(Nm::new(5_000), Nm::new(25_000))]];
+        let inner = square("i", "F.Cu", "GND", Nm::new(10_000), Nm::new(10_000), Nm::new(5_000), 0);
+        assert!(!zones_intersect(&ring, &inner), "inside the hole");
+        assert!(zones_intersect(&ring, &square("e", "F.Cu", "GND", Nm::new(20_000), Nm::new(20_000), Nm::new(10_000), 0)), "across the hole's edge");
+        let mut d = design(vec![ring, inner, square("v", "F.Cu", "VCC", Nm::ZERO, Nm::ZERO, Nm::new(5_000), 0)]);
+        let e = merge_zones(&mut d, &["r".into(), "i".into(), "v".into()]).unwrap_err();
+        assert_eq!(e[0].hint.as_deref(), Some("Some zones did not intersect and were not merged.\nSome zone netcodes did not match and were not merged."));
+        assert_eq!(zones(&d).len(), 3);
     }
 
     fn ring_area(ring: &[Point]) -> f64 {

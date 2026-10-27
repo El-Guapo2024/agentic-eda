@@ -36,13 +36,58 @@ type DrawLike = { kind: string; shapeKind?: string; pts?: readonly unknown[]; ar
  */
 export function drawZoneStarted(tab: string, activeTool: string, drawState: DrawLike | null | undefined): boolean {
   if (tab !== "pcb" || activeTool === "select" || drawState == null) return false;
-  const polygon = drawState.kind === "zone" || (drawState.kind === "shape" && drawState.shapeKind === "polygon");
-  return polygon && (drawState.pts?.length ?? 0) > 0;
+  // `started` stays true once the first corner is in, even when Delete has taken every corner away again (see `withoutLastCorner`).
+  return drawState.kind === "zone" || (drawState.kind === "shape" && drawState.shapeKind === "polygon" && (drawState.pts?.length ?? 0) > 0);
 }
 
-/** `POLYGON_GEOM_MANAGER::DeleteLastCorner`: the polygon without its last corner, or null (`cleanup()`) when no corner is left. */
+/**
+ * `POLYGON_GEOM_MANAGER::DeleteLastCorner`: the polygon without its last corner. It answers the corner it removed even when that was the only one, so the
+ * tool stays `started` with no corner; only the press after that, with nothing to remove, reaches `cleanup()` (null). (KiCad also warps the cursor onto the
+ * removed corner; a browser cannot move the pointer.)
+ */
 export function withoutLastCorner<T extends { pts: readonly unknown[] }>(draw: T): T | null {
-  return draw.pts.length <= 1 ? null : { ...draw, pts: draw.pts.slice(0, -1) };
+  return draw.pts.length === 0 ? null : { ...draw, pts: draw.pts.slice(0, -1) };
+}
+
+/** The shapes `DRAWING_TOOL::drawShape` draws (lines, rectangles, circles); arcs and Béziers have loops of their own (`drawArc`, `drawOneBezier`). */
+const DRAW_SHAPE_KINDS = new Set(["segment", "rect", "circle"]);
+
+/**
+ * Delete (and Backspace) with a line, rectangle or circle started is `drawShape`'s:
+ *
+ *   else if( started && ( evt->IsAction( &PCB_ACTIONS::doDelete ) || evt->IsAction( &PCB_ACTIONS::deleteLastPoint ) ) )
+ *
+ * so it never reaches the editor's Delete (the selection, which the first click cleared anyway). An arc or a Bézier handles only Backspace.
+ */
+export function drawShapeStarted(tab: string, activeTool: string, drawState: DrawLike | null | undefined): boolean {
+  if (tab !== "pcb" || activeTool === "select" || drawState?.kind !== "shape") return false;
+  return DRAW_SHAPE_KINDS.has(drawState.shapeKind ?? "") && (drawState.pts?.length ?? 0) > 0;
+}
+
+type LineDraw = { kind: string; shapeKind?: string; pts: [number, number][]; committed?: [[number, number], [number, number]][] };
+
+/**
+ * What that Delete or Backspace does: with a segment of `DrawLine`'s chain already on the board (`aCommittedGraphics` not empty), that segment is taken back
+ * -- popped off the chain, its "Draw Line" commit undone (`PopCommandFromUndoList`, `PutDataInPreviousState`) -- and the line in progress starts again from
+ * its start (`twoPointMgr.SetOrigin( top->GetStart() )`); otherwise the shape in progress goes (`cleanup()`) and the tool stays.
+ */
+export function takeBackLastLine<T extends LineDraw>(draw: T): { draw: T | null; undo: boolean } {
+  const committed = draw.committed ?? [];
+  const top = committed[committed.length - 1];
+  if (draw.shapeKind !== "segment" || !top) return { draw: null, undo: false };
+  return { draw: { ...draw, pts: [top[0]], committed: committed.slice(0, -1) }, undo: true };
+}
+
+/**
+ * Redo, and the zone fill actions (`ZONE_FILLER_TOOL::IsZoneFillAction`: Fill, Fill All, Unfill, Unfill All), with an item started in a drawing tool:
+ *
+ *   else if( started && ( ZONE_FILLER_TOOL::IsZoneFillAction( evt ) || evt->IsAction( &ACTIONS::redo ) ) )
+ *       wxBell();
+ *
+ * in `drawShape`, `drawArc`, `drawOneBezier`, `DrawZone`, `DrawDimension`, `DrawTable` and the image and text placers. The measure tool has no such branch.
+ */
+export function redoRefused(tab: string, activeTool: string, drawState: DrawLike | null | undefined): boolean {
+  return escapeKeepsDrawingTool(tab, activeTool, drawState) && drawState!.kind !== "measure";
 }
 
 /**

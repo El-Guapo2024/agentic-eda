@@ -340,6 +340,8 @@ export type DrawState =
       arc?: ArcGeom;
       /** `shapeKind === "bezier"` only: KIGFX::PREVIEW::BEZIER_GEOM_MANAGER's state (kicad-port/bezierGeom.ts). */
       bezier?: BezierGeom;
+      /** `shapeKind === "segment"` only: `DrawLine`'s `committedLines`, the segments of the chain already on the board (start, end), the last one last. */
+      committed?: [[Nm, Nm], [Nm, Nm]][];
     }
   /** Task item 7: two clicks (start, end) for any of the five dimension
    * kinds -- which one is read from `state.nextDimensionKind` when the
@@ -650,8 +652,16 @@ export interface StudioState {
    * until then, same value this would resolve to anyway).
    */
   currentTrackWidthNm: Nm | null;
+  /**
+   * `BOARD_DESIGN_SETTINGS::m_trackWidthIndex`: which entry of `[board_rules.track_width, ...routing.track_width_presets]` is chosen -- 0 is
+   * KiCad's "use the net class" dummy. The choice is the index, not the width (r4 R4-8): a preset whose width happens to equal the Default
+   * class's is still a choice. `useCustomTrackVia` (the custom size) overrides it.
+   */
+  currentTrackWidthIndex: number;
   /** Same idea as `currentTrackWidthNm`, for `pcbnew.EditorControl.viaSizeInc`/`viaSizeDec` cycling `board_rules.via_diameter`/`via_drill` plus `routing.via_presets`. */
   currentViaPreset: ViaPreset | null;
+  /** `m_viaSizeIndex`, the via list's counterpart of `currentTrackWidthIndex` (0 = use the net class; r4 R4-8). */
+  currentViaIndex: number;
   /** The text tool/E-to-edit dialog: "add" (fresh, at a clicked point) or "edit" (an existing text's id). */
   textDialog: { mode: "add"; at: [Nm, Nm] } | { mode: "edit"; id: string } | null;
   /** `L`/Ctrl+`L`/`H`: a just-clicked point waiting for LabelDialog to confirm its text (and, for global/hierarchical, its shape) before `add_label` commits -- same "draw/click first, dialog last" shape as `zonePending`. */
@@ -943,7 +953,9 @@ const initialState: StudioState = {
   generateDrillDialogOpen: false,
   footprintPositionDialogOpen: false,
   currentTrackWidthNm: null,
+  currentTrackWidthIndex: 0,
   currentViaPreset: null,
+  currentViaIndex: 0,
   textDialog: null,
   schLabelPending: null,
   schSheetPending: null,
@@ -1160,8 +1172,9 @@ export type Action =
   | { type: "SET_PLOT_DIALOG_OPEN"; open: boolean }
   | { type: "SET_GENERATE_DRILL_DIALOG_OPEN"; open: boolean }
   | { type: "SET_FOOTPRINT_POSITION_DIALOG_OPEN"; open: boolean }
-  | { type: "SET_CURRENT_TRACK_WIDTH"; widthNm: Nm }
-  | { type: "SET_CURRENT_VIA_PRESET"; preset: ViaPreset }
+  /** `index` (the width list's, 0 = net class) is the choice; omitted leaves the index as it is (the custom-size dialog). */
+  | { type: "SET_CURRENT_TRACK_WIDTH"; widthNm: Nm; index?: number }
+  | { type: "SET_CURRENT_VIA_PRESET"; preset: ViaPreset; index?: number }
   | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] }
   | { type: "SET_SCH_LABEL_PENDING"; pending: StudioState["schLabelPending"] }
   | { type: "SET_SCH_SHEET_PENDING"; pending: StudioState["schSheetPending"] }
@@ -1622,9 +1635,9 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_FOOTPRINT_POSITION_DIALOG_OPEN":
       return { ...state, footprintPositionDialogOpen: action.open };
     case "SET_CURRENT_TRACK_WIDTH":
-      return { ...state, currentTrackWidthNm: action.widthNm };
+      return { ...state, currentTrackWidthNm: action.widthNm, currentTrackWidthIndex: action.index === undefined ? state.currentTrackWidthIndex : action.index };
     case "SET_CURRENT_VIA_PRESET":
-      return { ...state, currentViaPreset: action.preset };
+      return { ...state, currentViaPreset: action.preset, currentViaIndex: action.index === undefined ? state.currentViaIndex : action.index };
     case "SET_TEXT_DIALOG":
       return { ...state, textDialog: action.dialog };
     case "SET_SCH_SHEET_PENDING":
@@ -1739,7 +1752,8 @@ export interface StudioApi {
   /** GAPS.md #6: the Hierarchy panel's own "enter sheet"/"leave sheet"/jump-to-breadcrumb -- sets `state.currentSheetPath` and immediately refetches the schematic for it (the version-gated poll loop alone wouldn't notice a pure navigation with no backend mutation behind it). `[]` is the root. */
   navigateToSheet: (path: string[], record?: boolean) => Promise<void>;
   route: () => Promise<void>;
-  undo: () => Promise<void>;
+  /** `keepTool`: the undo a drawing tool makes of its own last commit (`DrawLine`'s `PopCommandFromUndoList`): the tool and what it draws stay. */
+  undo: (opts?: { keepTool?: boolean }) => Promise<void>;
   redo: () => Promise<void>;
   /** Escape while a Duplicate's or a Paste's new items are carried: takes them away again (one undo step), provided nothing else was edited since. True when it did. */
   revertCarriedPlacement: () => Promise<boolean>;
@@ -2409,8 +2423,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     // the Schematic tab reverts that tab's own last edit (or is a no-op
     // once its stack is empty), never the PCB tab's, and vice versa -- see
     // `postUndo`/`board::undo`'s own doc for the backend half of this.
-    undo: async () => {
-      dispatch({ type: "CLEAR_SELECTION" });
+    undo: async (opts?: { keepTool?: boolean }) => {
+      if (!opts?.keepTool) dispatch({ type: "CLEAR_SELECTION" });
       const reply = await postUndo(stateRef.current.tab === "schematic" ? "schematic" : "pcb");
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();

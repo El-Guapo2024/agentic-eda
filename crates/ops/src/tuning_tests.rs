@@ -161,18 +161,31 @@ fn tuned_on_four_layers() -> Board<'static> {
 
 #[test]
 fn swap_layers_moves_a_tuning_pattern_one_way() {
-    // `swapBoardItem( generator, .. )`: {F.Cu (its own), In1.Cu (its track, moved)} maps onto {In1.Cu}, one layer: `SetLayer( In1.Cu )` (round 3 A-2)
+    // The track goes to In1.Cu; the pattern's `GetLayer` is its first track's, In1.Cu, and {In1.Cu} maps onto itself (round 4 B-1)
     let mut b = tuned_on_four_layers();
     b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "In1.Cu".into())] }).unwrap();
     assert_eq!(drawings(&b).tuning_patterns[0].layer, "In1.Cu");
 }
 
 #[test]
-fn swap_layers_both_ways_leaves_a_tuning_pattern_where_it_was() {
-    // KiCad's quirk: {F.Cu, B.Cu} maps onto itself, so the pattern stays on F.Cu while its track goes to B.Cu
+fn swap_layers_both_ways_puts_a_tuning_patterns_tracks_back_as_set_layer_does() {
+    // Round 4 B-1: the track goes to B.Cu; the pattern's set is {B.Cu} (`GetLayer` is its first track's), mapped to {F.Cu}: `SetLayer( F.Cu )` moves the
+    // pattern and its tracks there.
     let mut b = tuned_on_four_layers();
     b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "B.Cu".into()), ("B.Cu".into(), "F.Cu".into())] }).unwrap();
     assert_eq!(drawings(&b).tuning_patterns[0].layer, "F.Cu");
-    let member = &drawings(&b).tuning_patterns[0].member_ids[0];
-    assert_eq!(routing(&b).tracks.iter().find(|t| &t.id == member).unwrap().layer, "B.Cu");
+    for member in &drawings(&b).tuning_patterns[0].member_ids {
+        assert_eq!(routing(&b).tracks.iter().find(|t| &t.id == member).unwrap().layer, "F.Cu");
+    }
+}
+
+#[test]
+fn swap_layers_chained_moves_a_pattern_twice() {
+    // F.Cu to In1.Cu and In1.Cu to In2.Cu: the tracks go to In1.Cu, then the set {In1.Cu} maps to {In2.Cu} and `SetLayer( In2.Cu )` takes everything there.
+    let mut b = tuned_on_four_layers();
+    b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "In1.Cu".into()), ("In1.Cu".into(), "In2.Cu".into())] }).unwrap();
+    assert_eq!(drawings(&b).tuning_patterns[0].layer, "In2.Cu");
+    for member in &drawings(&b).tuning_patterns[0].member_ids {
+        assert_eq!(routing(&b).tracks.iter().find(|t| &t.id == member).unwrap().layer, "In2.Cu");
+    }
 }

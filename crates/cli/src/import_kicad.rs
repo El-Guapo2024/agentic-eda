@@ -237,6 +237,9 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
                     eda::merge_project_design_rules(&mut model, &pro_text);
                     // Board Setup's smaller pages: Formatting's footprint boxes, the Length-tuning Patterns, the Tuning Profiles and the profile each net class names.
                     eda::merge_project_setup_pages(&mut model, &pro_text);
+                    // Pre-defined Sizes' Differential Pairs live in the project, not the board (`board.design_settings.diff_pair_dimensions`), and they
+                    // are an editable part of the design (the studio's Board Setup writes them), so they merge into the design, not the model.
+                    eda::merge_project_predefined_sizes(&mut design, &pro_text);
                     // The project's own DRC exclusions (`board.design_settings.drc_exclusions`, `BOARD_DESIGN_SETTINGS::m_DrcExclusions`), their items named as the
                     // derived board names them, so kicad-cli still waives them.
                     let derived = eda_kicad::export_kicad_pcb_mapped(&design, &model, &eda_kicad::ExportMeta { date: "", title: "" }).map(|(_, map)| map).unwrap_or_default();

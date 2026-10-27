@@ -523,7 +523,7 @@ export function trapezoidCorners(w: Nm, h: Nm, delta: readonly [Nm, Nm]): [numbe
 // ---------------------------------------------------------------------------------------------------------- where a custom pad's copper is
 
 /** The points that bound a basic shape's own geometry, pad frame: an arc adds the extremes of its circle that its sweep reaches, a circle its four sides, a curve its control points. */
-function shapeExtentPoints(s: CmdShape): [number, number][] {
+export function shapeExtentPoints(s: CmdShape): [number, number][] {
   switch (s.kind) {
     case "segment":
     case "rect":

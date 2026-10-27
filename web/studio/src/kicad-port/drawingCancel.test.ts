@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { drawZoneStarted, escapeKeepsDrawingTool, undoDropsDrawing, withoutLastCorner } from "./drawingCancel";
+import { drawShapeStarted, drawZoneStarted, escapeKeepsDrawingTool, redoRefused, takeBackLastLine, undoDropsDrawing, withoutLastCorner } from "./drawingCancel";
 
 test("Escape with a line started keeps the line tool; with nothing started it leaves (DRAWING_TOOL::drawShape)", () => {
   assert.equal(escapeKeepsDrawingTool("pcb", "line", { kind: "shape" }), true);
@@ -15,10 +15,41 @@ test("Undo or Delete with a zone or polygon started removes the last corner (Dra
   assert.equal(drawZoneStarted("pcb", "zone", zone), true);
   assert.equal(drawZoneStarted("pcb", "polygon", { kind: "shape", shapeKind: "polygon", pts: [[0, 0]] }), true);
   assert.equal(drawZoneStarted("pcb", "rect", { kind: "shape", shapeKind: "rect", pts: [[0, 0]] }), false, "drawShape drops a rectangle instead");
-  assert.equal(drawZoneStarted("pcb", "zone", { kind: "zone", pts: [] }), false, "not started: Delete and Undo are the editor's");
+  assert.equal(drawZoneStarted("pcb", "zone", null), false, "not started: Delete and Undo are the editor's");
   assert.deepEqual(withoutLastCorner(zone)?.pts, [[0, 0], [1, 0]]);
-  assert.equal(withoutLastCorner({ kind: "zone", pts: [[0, 0]] }), null, "no corner left: cleanup()");
   assert.equal(undoDropsDrawing("pcb", "zone", zone), false);
   assert.equal(undoDropsDrawing("pcb", "line", { kind: "shape", shapeKind: "segment", pts: [[0, 0]] }), true);
   assert.equal(undoDropsDrawing("pcb", "measure", { kind: "measure" }), false, "MeasureTool handles only IsCancelInteractive()");
+});
+
+test("the last corner's removal keeps the outline started; only the press after it ends it (POLYGON_GEOM_MANAGER::DeleteLastCorner, round 4 A-4)", () => {
+  const one = { kind: "zone", pts: [[0, 0]] as [number, number][] };
+  const none = withoutLastCorner(one);
+  assert.deepEqual(none, { kind: "zone", pts: [] }, "DeleteLastCorner answered the corner: still started");
+  assert.equal(drawZoneStarted("pcb", "zone", none), true, "the next Delete is the tool's too");
+  assert.equal(withoutLastCorner(none!), null, "nothing left to remove: cleanup()");
+});
+
+test("Delete with a shape started is drawShape's, not the editor's (round 4 A-2)", () => {
+  assert.equal(drawShapeStarted("pcb", "rect", { kind: "shape", shapeKind: "rect", pts: [[0, 0]] }), true, "consumed by the tool");
+  assert.equal(drawShapeStarted("pcb", "line", { kind: "shape", shapeKind: "segment", pts: [[0, 0]] }), true);
+  assert.equal(drawShapeStarted("pcb", "arc", { kind: "shape", shapeKind: "arc", pts: [[0, 0]] }), false, "drawArc passes Delete on");
+  assert.equal(drawShapeStarted("pcb", "rect", null), false);
+  assert.deepEqual(takeBackLastLine({ kind: "shape", shapeKind: "rect", pts: [[0, 0]] }), { draw: null, undo: false }, "cleanup(): the rectangle goes");
+});
+
+test("Delete or Backspace in a chain of lines takes the last committed segment back and draws on from its start (DrawLine, round 4 A-1)", () => {
+  const draw = { kind: "shape", shapeKind: "segment", pts: [[10, 10]] as [number, number][], committed: [[[0, 0], [10, 0]], [[10, 0], [10, 10]]] as [[number, number], [number, number]][] };
+  const back = takeBackLastLine(draw);
+  assert.equal(back.undo, true, "the Draw Line commit is undone");
+  assert.deepEqual(back.draw?.pts, [[10, 0]]);
+  assert.deepEqual(back.draw?.committed, [[[0, 0], [10, 0]]]);
+  const again = takeBackLastLine(takeBackLastLine(back.draw!).draw!);
+  assert.deepEqual(again, { draw: null, undo: false }, "no committed segment left: cleanup()");
+});
+
+test("Redo and the zone fills are refused while an item is being drawn (wxBell, round 4 A-3)", () => {
+  for (const d of [{ kind: "shape", shapeKind: "segment", pts: [[0, 0]] }, { kind: "zone", pts: [[0, 0]] }, { kind: "dimension", pts: [[0, 0]] }, { kind: "table" }]) assert.equal(redoRefused("pcb", "x", d), true, d.kind);
+  assert.equal(redoRefused("pcb", "measure", { kind: "measure" }), false, "the measure tool has no such branch");
+  assert.equal(redoRefused("pcb", "zone", null), false, "nothing started");
 });

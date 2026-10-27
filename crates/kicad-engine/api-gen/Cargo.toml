@@ -1,0 +1,16 @@
+# Generator for `crates/kicad-engine/src/api/gen/*.rs`: the Rust types of KiCad's IPC API (`api/proto/**.proto`),
+# made with prost-build. Run it by hand when the KiCad tree that kicad-cli is built from changes; the output is
+# committed, so the workspace build needs neither protoc nor prost-build. It is its own workspace (not a member).
+#
+#   PROTOC=/path/to/protoc KICAD_API_PROTO_DIR=$HOME/src/kicad-src-25ec2335/api/proto \
+#     cargo run --manifest-path crates/kicad-engine/api-gen/Cargo.toml
+[package]
+name = "kicad-api-gen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+prost-build = "0.14"

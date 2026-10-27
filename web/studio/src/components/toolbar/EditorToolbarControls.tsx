@@ -4,14 +4,15 @@
 import type { GridEditor } from "../../kicad-port/gridSettings";
 import { zoomAbout } from "../../kicad-port/view";
 import { useActionRunner } from "../../actions/useActionRunner";
+import { FP_EDITOR_LAYERS } from "../../kicad-port/fpDrawDefaults";
 import { useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { useGridSettings } from "../../state/gridSettings";
 import { useStudioState } from "../../state/store";
 import { useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { formatLength } from "../../state/units";
 
-/** The layers the footprint editor's graphics and text tools draw on (the Layer selector's entries; its tools place silkscreen, fab and courtyard items). */
-const GRAPHIC_LAYERS = ["F.SilkS", "F.Fab", "F.CrtYd"];
+/** The Footprint Editor's layer box: every layer a footprint item can be on (kicad-port/fpDrawDefaults.ts). */
+const GRAPHIC_LAYERS = FP_EDITOR_LAYERS;
 
 /** 100% is one screen pixel per 100 um, the same reference the board toolbar's zoom box uses. */
 const ZOOM_PRESET_PERCENTS = [25, 50, 100, 200, 400, 800, 1600, 3200];

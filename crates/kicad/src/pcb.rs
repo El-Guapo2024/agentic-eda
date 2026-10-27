@@ -225,7 +225,34 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     // `BOARD_ITEM::IsLocked()`: every locked item's id (`DrawingsSection::locked_ids`). Each item kind
     // writes `(locked yes)` where KiCad's own writer does, so a locked board comes back locked.
     let locked: std::collections::BTreeSet<&str> = design.drawings.as_ref().map(|d| d.locked_ids.iter().map(String::as_str).collect()).unwrap_or_default();
-    let is_locked = |id: &str| !id.is_empty() && locked.contains(id);
+    // `BOARD_ITEM::IsLocked` (`pcbnew/board_item.cpp`) is also true when the group above is locked (`GetParentGroup()->IsLocked()`, up the chain), and every
+    // `format()` writes `IsLocked()`: a member of a locked group -- or of a locked tuning pattern or via stitching, which are groups -- is written `(locked yes)`.
+    let parent_of: BTreeMap<&str, &str> = design
+        .drawings
+        .as_ref()
+        .map(|d| {
+            let groups = d.groups.iter().map(|g| (g.id.as_str(), &g.member_ids));
+            let patterns = d.tuning_patterns.iter().map(|p| (p.id.as_str(), &p.member_ids));
+            let stitches = d.board_items.via_stitches.iter().map(|v| (v.id.as_str(), &v.member_ids));
+            groups.chain(patterns).chain(stitches).flat_map(|(g, ms)| ms.iter().map(move |m| (m.as_str(), g))).collect()
+        })
+        .unwrap_or_default();
+    let is_locked = |id: &str| {
+        let mut at = id;
+        for _ in 0..64 {
+            if at.is_empty() {
+                return false;
+            }
+            if locked.contains(at) {
+                return true;
+            }
+            match parent_of.get(at) {
+                Some(p) => at = p,
+                None => return false,
+            }
+        }
+        false
+    };
     // Our item id -> the KiCad uuids it was written as (a polyline track is several segments): what a
     // group's `(members ..)` names.
     let mut written: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -957,6 +984,14 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
             "model_mode": ng.model_mode,
             "workbook_filename": ng.workbook_filename,
         });
+    }
+    // Board Setup > Pre-defined Sizes' Differential Pairs (`BOARD_DESIGN_SETTINGS::m_DiffPairDimensionsList`, the project's `diff_pair_dimensions`):
+    // width, gap and via gap in millimetres, with the index-0 "use net class" dummy row KiCad keeps at the head of its list.
+    if let Some(pairs) = design.routing.as_ref().map(|r| r.diff_pair_presets.as_slice()).filter(|p| !p.is_empty()) {
+        let mm_f = eda_model::units::to_mm;
+        let mut dims = vec![serde_json::json!({ "width": 0.0, "gap": 0.0, "via_gap": 0.0 })];
+        dims.extend(pairs.iter().map(|p| serde_json::json!({ "width": mm_f(p.width), "gap": mm_f(p.gap), "via_gap": mm_f(p.via_gap) })));
+        project["board"]["design_settings"]["diff_pair_dimensions"] = serde_json::Value::Array(dims);
     }
     let waived = crate::drc_exclusions::project_entries(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()));
     if !waived.is_empty() {
@@ -1922,6 +1957,7 @@ mod tests {
                 zones: vec![],
                 track_width_presets: vec![],
                 via_presets: vec![],
+                diff_pair_presets: vec![],
                 teardrop_settings: Default::default(),
             }),
             drawings: None,
@@ -3008,6 +3044,13 @@ mod tests {
         let group = out.split("\t(group ").nth(1).expect("a group block");
         assert!(group.starts_with("\"decoupling\" (uuid \""), "{group}");
         assert!(group.contains("(locked yes)"), "{group}");
+        // Round 4 B-5: `BOARD_ITEM::IsLocked` counts the group above, and every `format()` writes it: the members are written locked too.
+        let segments: Vec<&str> = out.split("\t(segment ").skip(1).map(|b| b.split('\n').next().unwrap()).filter(|b| b.starts_with("(start 1 6)") || b.starts_with("(start 5 6)")).collect();
+        assert!(segments.len() == 2 && segments.iter().all(|b| b.contains("(locked yes)")), "the track's segments: {segments:?}");
+        let other = out.split("\t(segment ").skip(1).map(|b| b.split('\n').next().unwrap()).find(|b| b.starts_with("(start 5 5)")).unwrap();
+        assert!(!other.contains("(locked yes)"), "a track outside the group is not: {other}");
+        let fp_u1 = out.split("\t(footprint ").skip(1).find(|b| b.contains("\"Reference\" \"U1\"")).expect("U1");
+        assert!(fp_u1.lines().take(3).any(|l| l.contains("(locked yes)")), "U1 is written locked: {}", fp_u1.lines().take(3).collect::<Vec<_>>().join("|"));
         // U1, C1, the via, both segments of the two-segment track; the stale id names nothing.
         assert_eq!(group.split("(members").nth(1).unwrap().matches('"').count() / 2, 5, "{group}");
         assert!(out.rfind("\t(group ").unwrap() > out.rfind("\t(segment ").unwrap(), "groups come last, like KiCad's own writer");

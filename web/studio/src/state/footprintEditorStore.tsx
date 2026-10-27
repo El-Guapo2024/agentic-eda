@@ -110,6 +110,17 @@ export interface FootprintEditorState {
    * (kicad-port/padEditMode.ts `enterContrast` / `exitContrast`).
    */
   padEditContrast: boolean | null;
+  /**
+   * The Text tool (`DRAWING_TOOL::PlaceText`, kicad-port/fpTextTool.ts): the text its first click made, while `DIALOG_TEXT_PROPERTIES` is open on it (`textDialog`), then
+   * while it follows the cursor to the click that commits it (`carriedText`). The tool stays armed after each text.
+   */
+  textDialog: CmdText | null;
+  carriedText: CmdText | null;
+  /**
+   * The Pad tool's carried pad (`doInteractiveItemPlacement` with IPO_SINGLE_CLICK, kicad-port/fpPadPlacer.ts) once R or F has turned or flipped it; `null` is the pad
+   * made from the default pad as it is. A click places it and the default pad takes its settings.
+   */
+  carriedPad: LibraryPad | null;
   toast: { message: string; kind: "error" | "info" } | null;
 }
 
@@ -147,6 +158,9 @@ const initialState: FootprintEditorState = {
   lastPadNumber: null,
   duplicatePending: false,
   padEditContrast: null,
+  textDialog: null,
+  carriedText: null,
+  carriedPad: null,
   toast: null,
 };
 
@@ -189,6 +203,9 @@ export type FpAction =
   | { type: "PAD_EDIT_ENTER"; layer: string }
   /** The pad edit mode ended (`ExitPadEditMode`). */
   | { type: "PAD_EDIT_EXIT" }
+  | { type: "SET_TEXT_DIALOG"; text: CmdText | null }
+  | { type: "SET_CARRIED_TEXT"; text: CmdText | null }
+  | { type: "SET_CARRIED_PAD"; pad: LibraryPad | null }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" };
 
@@ -222,15 +239,24 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
     case "SET_SELECTION":
       return { ...state, selection: new Set(action.refs) };
     case "CLEAR_SELECTION":
-      return { ...state, selection: new Set(), activeTool: "select", drawState: null, movePreview: null, padPropertiesId: null, enumerate: null };
+      return { ...state, selection: new Set(), activeTool: "select", drawState: null, movePreview: null, padPropertiesId: null, enumerate: null, textDialog: null, carriedText: null, carriedPad: null };
     case "ESCAPE": {
+      // `PlaceText`: `IsCancelInteractive` with a text carried drops the text (`cleanup()`) and keeps the tool; without one it pops the tool.
+      if (state.carriedText || state.textDialog) return { ...state, carriedText: null, textDialog: null };
       const inProgress = state.activeTool !== "select" || state.drawState != null || state.movePreview != null;
       // `evt->IsCancelInteractive()` in EnumeratePads: `commit.Revert()` -- nothing was sent, so dropping the tool's state is the revert.
-      if (inProgress) return { ...state, activeTool: "select", drawState: null, movePreview: null, enumerate: null };
+      if (inProgress) return { ...state, activeTool: "select", drawState: null, movePreview: null, enumerate: null, carriedPad: null };
       return { ...state, selection: new Set() };
     }
     case "SET_ACTIVE_TOOL":
-      return { ...state, activeTool: action.tool, drawState: null };
+      // Another tool (`evt->IsActivate()`): a carried text or pad is dropped (`cleanup()`).
+      return { ...state, activeTool: action.tool, drawState: null, textDialog: null, carriedText: null, carriedPad: null };
+    case "SET_TEXT_DIALOG":
+      return { ...state, textDialog: action.text };
+    case "SET_CARRIED_TEXT":
+      return { ...state, carriedText: action.text };
+    case "SET_CARRIED_PAD":
+      return { ...state, carriedPad: action.pad };
     case "SET_DRAW_STATE":
       return { ...state, drawState: action.draw };
     case "SET_MOVE_PREVIEW":

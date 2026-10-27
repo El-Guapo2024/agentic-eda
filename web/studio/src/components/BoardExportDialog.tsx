@@ -7,7 +7,8 @@
 // board_output_api.rs), which builds the kicad-cli arguments the way the dialog does and runs it on the current design revision.
 // Output lands in the board directory's `export/kicad/<kind>/` folder, as every other output of the studio does.
 import { useEffect, useState } from "react";
-import { useStudioDispatch, useStudioState } from "../state/store";
+import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { distributorAfter, ipc2581Chosen, ipc2581DialogStart, ipc2581FieldOptions, manufacturerAfter } from "../kicad-port/ipc2581Bom";
 import { scaledModelsWarning, scaledModelsWarningSuppressed, suppressScaledModelsWarning, type ScaledModelsWarning } from "../kicad-port/stepScaleWarning";
 import type { BoardExportKind } from "../kicad-port/boardControlState";
 import {
@@ -265,10 +266,20 @@ function IdfForm({ o, set }: { o: IdfOptions; set: (patch: Partial<IdfOptions>) 
   );
 }
 
-function Ipc2581Form({ o, set }: { o: Ipc2581Options; set: (patch: Partial<Ipc2581Options>) => void }) {
-  const text = (label: string, key: "col_id" | "col_mpn" | "col_mfg" | "col_dist_pn" | "col_dist" | "bom_rev", placeholder: string) => (
+/** `DIALOG_EXPORT_2581`: the BOM columns are choices of the board's footprint field names (`init`), the first item of each meaning none;
+ *  Manufacturer is enabled with a Manufacturer P/N column and Distributor with a Distributor P/N column, each guessed from it
+ *  (`onMfgPNChange`, `onDistPNChange`; `kicad-port/ipc2581Bom.ts`). */
+function Ipc2581Form({ o, set, fields }: { o: Ipc2581Options; set: (patch: Partial<Ipc2581Options>) => void; fields: string[] }) {
+  const choice = (label: string, key: "col_id" | "col_mpn" | "col_mfg" | "col_dist_pn", first: string, onPick: (v: string) => Partial<Ipc2581Options>, title: string, disabled = false) => (
     <Row label={label}>
-      <input value={o[key]} placeholder={placeholder} onChange={(e) => set({ [key]: e.target.value })} style={{ width: 170 }} />
+      <select value={o[key]} disabled={disabled} title={title} onChange={(e) => set(onPick(e.target.value))} style={{ width: 170 }}>
+        <option value="">{first}</option>
+        {fields.map((f) => (
+          <option key={f} value={f}>
+            {f}
+          </option>
+        ))}
+      </select>
     </Row>
   );
   return (
@@ -292,14 +303,18 @@ function Ipc2581Form({ o, set }: { o: Ipc2581Options; set: (patch: Partial<Ipc25
       </div>
       <Check label="Compress output" checked={o.compress} onChange={(v) => set({ compress: v })} title="Compress output into 'zip' file" />
       <fieldset style={{ marginTop: 6 }}>
-        <legend>BOM columns (part field names)</legend>
+        <legend>BOM Columns</legend>
         <div className="kv-grid" style={grid}>
-          {text("BOM revision", "bom_rev", "")}
-          {text("Internal ID", "col_id", "Generate unique")}
-          {text("Manufacturer P/N", "col_mpn", "Omit")}
-          {text("Manufacturer", "col_mfg", "N/A")}
-          {text("Distributor P/N", "col_dist_pn", "Omit")}
-          {text("Distributor", "col_dist", "N/A")}
+          <Row label="BOM revision:">
+            <input value={o.bom_rev} title="Revision string for the BOM section. Auto-populated from schematic title block revision" onChange={(e) => set({ bom_rev: e.target.value })} style={{ width: 170 }} />
+          </Row>
+          {choice("Internal ID:", "col_id", "Generate unique", (v) => ({ col_id: v }), "Part ID number used internally during design.\nThis number must be unique to each part.")}
+          {choice("Manufacturer P/N:", "col_mpn", "Omit", (v) => ({ col_mpn: v, col_mfg: manufacturerAfter(v, o.col_mfg, fields) }), "Column containing the manufacturer part number")}
+          {choice("Manufacturer:", "col_mfg", "N/A", (v) => ({ col_mfg: v }), "", !o.col_mpn)}
+          {choice("Distributor P/N:", "col_dist_pn", "Omit", (v) => ({ col_dist_pn: v, col_dist: distributorAfter(v, o.col_dist) }), "Column containing the distributor part number")}
+          <Row label="Distributor:">
+            <input data-testid="ipc2581-dist" value={o.col_dist} disabled={!o.col_dist_pn} onChange={(e) => set({ col_dist: e.target.value })} style={{ width: 170 }} />
+          </Row>
         </div>
       </fieldset>
     </>
@@ -332,6 +347,7 @@ function OdbForm({ o, set }: { o: OdbOptions; set: (patch: Partial<OdbOptions>) 
 export function BoardExportDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
+  const api = useStudioApi();
   const kind = state.bcx.boardExport;
   const [three, setThree] = useState<ThreeDOptions>(DEFAULT_3D_OPTIONS);
   const [vrml, setVrml] = useState<VrmlOptions>(DEFAULT_VRML_OPTIONS);
@@ -344,7 +360,11 @@ export function BoardExportDialog() {
   // `DIALOG_EXPORT_STEP::DIALOG_EXPORT_STEP`: the "Model Scale Warning" when the STEP dialog opens on a board with scaled models.
   const [scaleWarning, setScaleWarning] = useState<ScaledModelsWarning | null>(null);
   const [doNotShow, setDoNotShow] = useState(false);
+  // The board's footprints' field names, the BOM columns' choices (`DIALOG_EXPORT_2581::init`).
+  const ipcFields = ipc2581FieldOptions((state.board?.parts ?? []).filter((p) => p.placed));
   useEffect(() => {
+    // `TransferDataToWindow`: the BOM columns the board kept, the BOM revision else the schematic's.
+    if (kind === "ipc2581") setIpc((o) => ({ ...o, ...ipc2581DialogStart(state.board?.plot_params?.ipc2581_bom, state.board?.plot_params?.sch_revision ?? "", ipcFields) }));
     setScaleWarning(kind === "3d" && !scaledModelsWarningSuppressed() ? scaledModelsWarning(state.board?.parts ?? []) : null);
     setDoNotShow(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -357,6 +377,16 @@ export function BoardExportDialog() {
   };
   const board = state.board;
   const selectedRefs = [...state.selection].filter((id) => board?.parts.some((p) => p.ref === id && p.placed));
+
+  // `TransferDataFromWindow` then the export: the columns kept in the board when they changed (no undo step), and given to kicad-cli.
+  const exportIpc2581 = async (): Promise<FabReply> => {
+    const chosen = ipc2581Chosen(ipc);
+    const kept = { id: "", mpn: "", mfg: "", dist_pn: "", dist: "", bom_rev: "", ...(state.board?.plot_params?.ipc2581_bom ?? {}) };
+    if (JSON.stringify(chosen) !== JSON.stringify({ id: kept.id, mpn: kept.mpn, mfg: kept.mfg, dist_pn: kept.dist_pn, dist: kept.dist, bom_rev: kept.bom_rev })) {
+      await api.cmd({ op: "set_ipc2581_bom", bom: chosen });
+    }
+    return postFabIpc2581({ ...ipc, col_id: chosen.id, col_mpn: chosen.mpn, col_mfg: chosen.mfg, col_dist_pn: chosen.dist_pn, col_dist: chosen.dist });
+  };
 
   const run = async () => {
     setBusy(true);
@@ -372,7 +402,7 @@ export function BoardExportDialog() {
               : kind === "idf"
                 ? await postFabIdf(idf)
                 : kind === "ipc2581"
-                  ? await postFabIpc2581(ipc)
+                  ? await exportIpc2581()
                   : kind === "odb"
                     ? await postFabOdb(odb)
                     : kind === "pcb_bom"
@@ -416,7 +446,7 @@ export function BoardExportDialog() {
           {kind === "vrml" && <VrmlForm o={vrml} set={(p) => setVrml((o) => ({ ...o, ...p }))} />}
           {kind === "gencad" && <GencadForm o={gencad} set={(p) => setGencad((o) => ({ ...o, ...p }))} />}
           {kind === "idf" && <IdfForm o={idf} set={(p) => setIdf((o) => ({ ...o, ...p }))} />}
-          {kind === "ipc2581" && <Ipc2581Form o={ipc} set={(p) => setIpc((o) => ({ ...o, ...p }))} />}
+          {kind === "ipc2581" && <Ipc2581Form o={ipc} set={(p) => setIpc((o) => ({ ...o, ...p }))} fields={ipcFields} />}
           {kind === "odb" && <OdbForm o={odb} set={(p) => setOdb((o) => ({ ...o, ...p }))} />}
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", margin: "10px 0" }}>
             {NOTE[kind]} Output directory: <code>{WHERE[kind]}</code>

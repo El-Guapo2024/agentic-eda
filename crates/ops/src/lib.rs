@@ -41,7 +41,7 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Nm, Via, ViaPreset, Wire, Zone,
+    Design, DiffPairPreset, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Nm, Via, ViaPreset, Wire, Zone,
 };
 #[cfg(test)]
 use eda_model::ir::Group;
@@ -88,6 +88,7 @@ mod pcb_groups;
 mod sch_groups;
 mod pcb_paste;
 mod specctra;
+pub use specctra::{set_session_importer, SessionImporter};
 mod pcb_paste_special;
 mod design_blocks;
 mod multichannel;
@@ -389,6 +390,8 @@ pub enum Cmd {
     SetTrackWidthPresets { widths: Vec<Nm> },
     /// Same idea as `SetTrackWidthPresets`, for `m_ViaSizeList`.
     SetViaPresets { presets: Vec<ViaPreset> },
+    /// Same panel's Differential Pairs grid, `m_DiffPairDimensionsList` (`.kicad_pro`'s `diff_pair_dimensions`), replaced wholesale.
+    SetDiffPairPresets { presets: Vec<DiffPairPreset> },
 
     /// `dialog_global_edit_tracks_and_vias.cpp`'s "Apply and Close": bulk-
     /// set width (tracks/arcs) and/or diameter+drill (vias) and/or layer
@@ -578,6 +581,10 @@ pub enum Cmd {
         /// next free number. False is "Keep original reference designators": the copies show the original's text.
         #[serde(default = "d_true")]
         reannotate: bool,
+        /// `PCB_GROUP::GetPosition()` -- the centre of the group's bounding box (`GetBoundingBox().Centre()`) -- of each group among `ids`, as the
+        /// studio, which has the items' boxes, works it out. A group not named here is at the middle of its members' positions.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        group_positions: std::collections::BTreeMap<String, Point>,
     },
 
     // ------------------------------------------------------- dimensions
@@ -728,6 +735,9 @@ pub enum Cmd {
         #[serde(default)]
         use_aux_origin: Option<bool>,
     },
+    /// Export IPC-2581's BOM columns, kept for the next opening as `DIALOG_EXPORT_2581::TransferDataFromWindow` keeps them in the project --
+    /// see [`board_control::set_ipc2581_bom`].
+    SetIpc2581Bom { bom: eda_model::plot_params::Ipc2581Bom },
     /// `common.Control.gridSetOrigin` / `gridResetOrigin` / `editGridOrigin` (`PCB_CONTROL::DoSetGridOrigin`): the point the editing grid is anchored
     /// at (`DrawingsSection::grid_origin`); `None` is the reset to (0, 0). The placement snap of the verbs below follows it.
     SetGridOrigin { at: Option<Point> },
@@ -2364,6 +2374,7 @@ impl Cmd {
             Cmd::MigrateBoardModels { replacements } => replacements.keys().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
+            Cmd::SetDiffPairPresets { .. } => vec!["diff_pair_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, .. } => shape_ids.iter().chain(text_ids.iter()).chain(dimension_ids.iter()).map(String::as_str).collect(),
             Cmd::RemoveUnusedPads { selected, .. } => selected.iter().flatten().map(String::as_str).collect(),
@@ -2407,6 +2418,7 @@ impl Cmd {
             Cmd::SetViaLayers { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetAuxOrigin { .. } => vec!["aux_origin"],
             Cmd::SetPlotSettings { .. } => vec!["plot_params"],
+            Cmd::SetIpc2581Bom { .. } => vec!["ipc2581_bom"],
             Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
             Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
             Cmd::RepairBoard => vec!["repair_board"],
@@ -2851,6 +2863,7 @@ impl<'a> Board<'a> {
             Cmd::SetViaLayers { ids, edit } => self.set_via_layers(ids, edit),
             Cmd::SetTrackWidthPresets { widths } => self.set_track_width_presets(widths),
             Cmd::SetViaPresets { presets } => self.set_via_presets(presets),
+            Cmd::SetDiffPairPresets { presets } => self.set_diff_pair_presets(presets),
             Cmd::EditTracksAndVias { ids, track_width, via_size, layer } => self.edit_tracks_and_vias(ids, track_width.as_ref(), via_size.as_ref(), layer.as_deref()),
             Cmd::SetTeardropSettings { settings } => self.set_teardrop_settings(*settings),
             Cmd::AddAllTeardrops => self.add_all_teardrops(),
@@ -2862,7 +2875,7 @@ impl<'a> Board<'a> {
             Cmd::EditGroup { id, name, member_ids, design_block } => self.edit_group(id, name, member_ids, design_block.as_deref()),
             Cmd::LinkDesignBlock { ids, block } => self.link_design_block_items(ids, block),
             Cmd::PlaceDesignBlock { text, at, block, as_group, group_name } => self.place_design_block(text, *at, block, *as_group, group_name),
-            Cmd::CreateArray { ids, geometry, arrange, reannotate } => self.create_array(ids, geometry, *arrange, *reannotate),
+            Cmd::CreateArray { ids, geometry, arrange, reannotate, group_positions } => self.create_array(ids, geometry, *arrange, *reannotate, group_positions),
             Cmd::AddDimension { dimension } => self.add_dimension(dimension.clone()),
             Cmd::DeleteDimension { id } => self.delete_dimension(id),
             Cmd::MoveDimension { id, dx, dy } => self.move_dimension(id, *dx, *dy),
@@ -2898,6 +2911,7 @@ impl<'a> Board<'a> {
             Cmd::SetZonePriority { id, to } => board_control::set_zone_priority(&mut self.design, id, *to),
             Cmd::SetAuxOrigin { at } => board_control::set_aux_origin(&mut self.design, *at),
             Cmd::SetPlotSettings { layers, use_aux_origin } => board_control::set_plot_settings(&mut self.design, &self.model.board.layers, layers.as_deref(), *use_aux_origin),
+            Cmd::SetIpc2581Bom { bom } => board_control::set_ipc2581_bom(&mut self.design, bom),
             Cmd::SetGridOrigin { at } => board_control::set_grid_origin(&mut self.design, *at),
             Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
             Cmd::SetSchematicPage { page, title_block } => page_settings::set_schematic_page(&mut self.design, page, title_block),
@@ -3733,7 +3747,7 @@ impl<'a> Board<'a> {
     /// must never clear an existing routing section -- see
     /// `Cmd::clears_routing`.
     fn routing_mut(&mut self) -> &mut RoutingSection {
-        self.design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() })
+        self.design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() })
     }
 
     /// The board's drawings section, creating an empty one on first use.
@@ -3855,17 +3869,36 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// Same panel's "Via Sizes" list.
+    /// Same panel's "Via Sizes" list. Each row through `PCB_VIA::ValidateViaParameters` (`pcbnew/pcb_track.cpp`) as the panel's `Validate()` runs it
+    /// on the grid's rows, in its order and with its messages word for word: the diameter's minimum, the drill's, and only then the pair. A row here
+    /// always has both a diameter and a drill (the model has no empty cell), so the two "not defined" messages of that function cannot occur.
     fn set_via_presets(&mut self, presets: &[ViaPreset]) -> Result<(), Vec<CheckResult>> {
+        /// `GEOMETRY_MIN_SIZE` (`pcbnew/pcb_track.h`): `0.001 * IU_PER_MM`, 1 um.
+        const GEOMETRY_MIN_SIZE: Nm = Nm::new(1_000);
         for p in presets {
-            if p.drill <= Nm::ZERO || p.diameter <= Nm::ZERO {
-                return Err(vec![CheckResult::fail("ops_bad_via", "via_presets", "via drill and diameter must be positive")]);
-            }
-            if p.drill >= p.diameter {
-                return Err(vec![CheckResult::fail("ops_bad_via", "via_presets", "drill must be smaller than diameter")]);
-            }
+            let message = if p.diameter < GEOMETRY_MIN_SIZE {
+                "Via diameter is too small."
+            } else if p.drill < GEOMETRY_MIN_SIZE {
+                "Via drill is too small."
+            } else if p.diameter <= p.drill {
+                "Via hole size must be smaller than via diameter"
+            } else {
+                continue;
+            };
+            return Err(vec![CheckResult::fail("ops_bad_via", "via_presets", message)]);
         }
         self.routing_mut().via_presets = presets.to_vec();
+        Ok(())
+    }
+
+    /// The same panel's Differential Pairs list, checked as `BOARD_DESIGN_SETTINGS::ValidateDesignRules` checks it (`pcbnew/board_design_settings.cpp`):
+    /// a row with a width needs a gap ("No differential pair gap defined."); a row of width 0 -- what the grid's Add makes -- and the via gap are not
+    /// checked there.
+    fn set_diff_pair_presets(&mut self, presets: &[DiffPairPreset]) -> Result<(), Vec<CheckResult>> {
+        if presets.iter().any(|p| p.width > Nm::ZERO && p.gap <= Nm::ZERO) {
+            return Err(vec![CheckResult::fail("ops_bad_diff_pair", "diff_pair_presets", "No differential pair gap defined.")]);
+        }
+        self.routing_mut().diff_pair_presets = presets.to_vec();
         Ok(())
     }
 
@@ -4411,8 +4444,11 @@ impl<'a> Board<'a> {
     /// `GLOBAL_EDIT_TOOL::SwapLayers`' `for( PCB_GENERATOR* generator : Generators() ) hasChanges |= swapBoardItem( generator, layerMap );`, after the
     /// tracks: `swapBoardItem` maps the generator's `GetLayerSet()` -- `PCB_GROUP::GetLayerSet() | LSET( { GetLayer() } )`, its members' layers (the tracks
     /// already moved) and its own -- and when that changes `SetLayerSet` takes it only if it is one layer (`SetLayer`; more is a `wxFAIL` that changes
-    /// nothing). So a tuning pattern moved one way (F.Cu to In1.Cu) goes with its tracks, while a two-way swap (F.Cu with B.Cu) maps {F.Cu, B.Cu} onto
-    /// itself and leaves the pattern where it was, as KiCad does. A via stitching's vias span several layers, so it moves only when it has none.
+    /// nothing). A tuning pattern's own layer is its first track's (`PCB_TUNING_PATTERN::GetLayer`, already moved), and its `SetLayer` moves every member
+    /// too. So F.Cu with B.Cu takes a pattern's tracks to B.Cu and then, its set {B.Cu} mapping to {F.Cu}, back to F.Cu with the pattern; a chained map
+    /// (F.Cu to In1.Cu, In1.Cu to In2.Cu) moves the tracks to In1.Cu and then the pattern and its tracks to In2.Cu (round 4 B-1); one way (F.Cu to In1.Cu)
+    /// the set {In1.Cu} is unchanged, and the pattern is on In1.Cu with its tracks because that is what its `GetLayer` says. A via stitching's vias
+    /// span several layers, so it moves only when it has none.
     fn swap_generator_layers(&mut self, map: &std::collections::HashMap<&str, &str>) {
         let layers = self.model.board.layers.clone();
         let (tracks, vias) = match self.design.routing.as_ref() {
@@ -4444,14 +4480,29 @@ impl<'a> Board<'a> {
             (mapped != set && mapped.len() == 1).then(|| mapped.into_iter().next()).flatten()
         };
         let Some(dr) = self.design.drawings.as_mut() else { return };
+        let mut moved_members: Vec<(Vec<String>, String)> = Vec::new();
         for p in dr.tuning_patterns.iter_mut() {
-            if let Some(l) = swapped(&p.layer, member_layers(&p.member_ids)) {
-                p.layer = l;
+            // `PCB_TUNING_PATTERN::GetLayer`: the first track's layer, else the generator's own.
+            let own = p.member_ids.iter().find_map(|id| tracks.iter().find(|t| &t.id == id)).map_or_else(|| p.layer.clone(), |t| t.layer.clone());
+            if let Some(l) = swapped(&own, member_layers(&p.member_ids)) {
+                p.layer = l.clone();
+                moved_members.push((p.member_ids.clone(), l));
+            } else {
+                // Unchanged, the pattern is where `GetLayer` says, its tracks' layer (what KiCad's writer writes, `format( PCB_GENERATOR )`).
+                p.layer = own;
             }
         }
         for v in dr.board_items.via_stitches.iter_mut() {
             if let Some(l) = swapped(&v.layer, member_layers(&v.member_ids)) {
                 v.layer = l;
+            }
+        }
+        // `PCB_TUNING_PATTERN::SetLayer`: `for( BOARD_ITEM* item : GetBoardItems() ) item->SetLayer( aLayer );`.
+        if let Some(rt) = self.design.routing.as_mut() {
+            for (ids, l) in moved_members {
+                for t in rt.tracks.iter_mut().filter(|t| ids.contains(&t.id)) {
+                    t.layer = l.clone();
+                }
             }
         }
     }
@@ -4646,16 +4697,20 @@ impl<'a> Board<'a> {
                 rt.tracks.retain(|t| !remove_track_ids.iter().any(|id| id == &t.id));
                 rt.vias.retain(|v| !remove_via_ids.iter().any(|id| id == &v.id));
             }
-            // a removed via's extras go with it (a displaced via comes back under a new id, its type in `via_kinds`)
+            // a removed via's extras go with it, unless it comes back (below); a displaced via's type is in `via_kinds` too
             if let Some(dr) = self.design.drawings.as_mut() {
-                dr.via_extras.retain(|e| !remove_via_ids.iter().any(|id| id == &e.id));
+                dr.via_extras.retain(|e| !remove_via_ids.iter().any(|id| id == &e.id) || vias.iter().any(|v| v.id == e.id));
             }
         }
         for t in &mut tracks {
             t.id.clear();
         }
+        // a via the router moved (dragged or shoved) comes back under the id it is removed under, with its extras (`remove_unused_layers`,
+        // tenting, ..): KiCad's router modifies the board's `PCB_VIA` it came from (r4 R4-2); any other id is a new via's
         for v in &mut vias {
-            v.id.clear();
+            if !remove_via_ids.contains(&v.id) {
+                v.id.clear();
+            }
         }
         if !tracks.is_empty() || !vias.is_empty() {
             let rt = self.routing_mut();
@@ -5894,7 +5949,12 @@ impl<'a> Board<'a> {
             if filter_layers && p.layers != src.layers {
                 continue;
             }
-            if filter_type && p.kind != src.kind {
+            // `doPushPadProperties`: `pad->GetAttribute() != aSrcPad.GetAttribute()` (an edge connector is its own attribute), then the
+            // "Special-case for aperture pads" between connector pads.
+            if filter_type && library_editors::pad_attribute(p) != library_editors::pad_attribute(&src) {
+                continue;
+            }
+            if filter_type && p.kicad.connector && library_editors::is_aperture_pad(p) != library_editors::is_aperture_pad(&src) {
                 continue;
             }
             // `pad->ImportSettingsFrom( aSrcPad )` -- see `library_editors::import_pad_settings`.

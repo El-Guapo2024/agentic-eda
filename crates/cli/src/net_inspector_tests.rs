@@ -44,7 +44,7 @@ fn design(tracks: Vec<Track>, vias: Vec<Via>) -> Design {
         schematic: None,
         nets: None,
         placement: Some(PlacementSection { outline: vec![p(0.0, 0.0), p(40.0, 0.0), p(40.0, 30.0), p(0.0, 30.0)], footprints: vec![fp("R1", p(10.0, 10.0)), fp("U1", p(20.0, 10.0))], modules: vec![] }),
-        routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+        routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
         drawings: None,
     }
 }

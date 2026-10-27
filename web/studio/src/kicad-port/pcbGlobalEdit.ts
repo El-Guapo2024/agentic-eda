@@ -12,6 +12,9 @@
 import type { BoardState, Cmd, CmdShape, Shape } from "../api/types";
 import { arcCenter, toIU, type V } from "./pcbGeom";
 import { healShapes } from "./pcbModify";
+import { ancestors } from "./groupTree";
+import { extraDeleteCmd } from "./pcbExtraItems";
+import { zoneLayers } from "./zoneLayers";
 
 // --------------------------------------------------------------------- global deletions
 
@@ -78,10 +81,13 @@ const isCopper = (layer: string): boolean => layer.endsWith(".Cu");
  * everything, locked or not, on every layer.
  *
  * Differs from the C++ on one point: there Text is only deleted when no graphics option is ticked (an `else if` chain), which
- * looks like a slip; here Text always deletes the texts.
+ * looks like a slip; here Text always deletes the texts and the text boxes.
  */
 export function planGlobalDeletions(board: BoardState, o: GlobalDeletionOptions, currentLayer: string | null): GlobalDeletionPlan {
-  const locked = new Set(board.locked ?? []);
+  // `BOARD_ITEM::IsLocked`: the item's own lock, or a group's above it.
+  const lockedIds = new Set(board.locked ?? []);
+  const groups = board.drawings?.groups ?? [];
+  const locked = { has: (id: string): boolean => lockedIds.has(id) || ancestors(groups, id).some((g) => lockedIds.has(g.id)) };
   const layerOk = (...layers: string[]): boolean => !o.currentLayerOnly || (currentLayer !== null && layers.includes(currentLayer));
   const cmds: Cmd[] = [];
   const removed: string[] = [];
@@ -92,8 +98,10 @@ export function planGlobalDeletions(board: BoardState, o: GlobalDeletionOptions,
     removed.push(id);
   };
 
+  // `( item->GetLayerSet() & layers_mask ).any()`: a zone goes when any of its layers is the one asked.
   for (const z of board.routing?.zones ?? []) {
-    if (o.all || (z.teardrop ? o.teardrops && layerOk(z.layer) : o.zones && layerOk(z.layer))) del({ op: "delete_zone", id: z.id }, z.id);
+    const on = layerOk(...zoneLayers(z));
+    if (o.all || (z.teardrop ? o.teardrops && on : o.zones && on)) del({ op: "delete_zone", id: z.id }, z.id);
   }
 
   for (const s of board.drawings?.shapes ?? []) {
@@ -109,7 +117,27 @@ export function planGlobalDeletions(board: BoardState, o: GlobalDeletionOptions,
   for (const t of board.drawings?.texts ?? []) {
     if (o.all || (o.texts && layerOk(t.layer))) del({ op: "delete_text", id: t.id }, t.id);
   }
-  if (o.all) for (const d of board.drawings?.dimensions ?? []) del({ op: "delete_dimension", id: d.id }, d.id);
+  // `if( item->Type() == PCB_TEXT_T || item->Type() == PCB_TEXTBOX_T )`: Text takes the text boxes too.
+  for (const t of board.drawings?.text_boxes ?? []) {
+    if (!o.all && o.texts && layerOk(t.layer)) del(extraDeleteCmd({ kind: "textbox", id: t.id }), t.id);
+  }
+  if (o.all) {
+    // "Clear board": `processItem( item, all_layers )` over every item of `board->Drawings()` -- dimensions, text boxes, tables, barcodes, reference
+    // images, points, and KiCad 10's grid items and drill maps. A via stitching is a generator, not a drawing: its vias go with the tracks. A tuning
+    // pattern left with no track goes with them (the backend drops it, as `pattern->GetBoardItems().empty()` does).
+    for (const d of board.drawings?.dimensions ?? []) del({ op: "delete_dimension", id: d.id }, d.id);
+    for (const t of board.drawings?.tables ?? []) del({ op: "table", verb: "delete", id: t.id }, t.id);
+    const dr = board.drawings;
+    const kinds = [
+      ["textbox", dr?.text_boxes],
+      ["image", dr?.images],
+      ["point", dr?.points],
+      ["barcode", dr?.barcodes],
+      ["grid", dr?.grid_items],
+      ["drill_map", dr?.drill_maps],
+    ] as const;
+    for (const [kind, items] of kinds) for (const item of items ?? []) del(extraDeleteCmd({ kind, id: item.id }), item.id);
+  }
 
   if (o.all || o.footprints) {
     const top = board.layers[0] ?? "F.Cu";

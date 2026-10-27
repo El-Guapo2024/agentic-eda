@@ -34,7 +34,8 @@ import {
   type AxisEntry,
   type PadNumberingOptions,
 } from "../kicad-port/arrayOptions";
-import { itemBounds, itemPosition } from "../kicad-port/pcbItems";
+import { itemBounds, itemKind, itemPosition } from "../kicad-port/pcbItems";
+import type { BoardState } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import type { LengthUnit } from "../state/units";
 
@@ -76,10 +77,21 @@ function BoardArrayForm() {
     units: state.units,
     origin,
     positionOf: (id) => (board ? itemPosition(board, id) : null),
-    submit: async (options) => ((await api.cmd(arrayCmd(options, ids))) ? null : undefined),
+    submit: async (options) => ((await api.cmd(arrayCmd(options, ids, board ? groupPositions(board, ids) : {}))) ? null : undefined),
     close: () => dispatch({ type: "SET_CREATE_ARRAY_DIALOG_OPEN", open: false }),
   };
   return <CreateArrayForm host={host} />;
+}
+
+/** `PCB_GROUP::GetPosition()` (its bounding box's centre) of each group among `ids`, for `create_array`. */
+function groupPositions(board: BoardState, ids: readonly string[]): Record<string, [number, number]> {
+  const out: Record<string, [number, number]> = {};
+  for (const id of ids) {
+    if (itemKind(board, id) !== "group") continue;
+    const at = itemPosition(board, id);
+    if (at) out[id] = at;
+  }
+  return out;
 }
 
 const MAX_DRAWN = 400;

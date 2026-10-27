@@ -738,6 +738,7 @@ mod tests {
                 zones: vec![Zone { id: "zone_a".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![p(Nm::from_mm(90.0), Nm::from_mm(90.0)), p(Nm::from_mm(95.0), Nm::from_mm(90.0)), p(Nm::from_mm(95.0), Nm::from_mm(95.0)), p(Nm::from_mm(90.0), Nm::from_mm(95.0))], ..Default::default() }],
                 track_width_presets: vec![],
                 via_presets: vec![],
+                diff_pair_presets: vec![],
                 teardrop_settings: Default::default(),
             }),
             drawings: Some(DrawingsSection {

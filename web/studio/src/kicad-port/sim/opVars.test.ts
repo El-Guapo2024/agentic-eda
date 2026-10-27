@@ -68,3 +68,32 @@ test("r3 S3-3: ${OP:<pin>} of a symbol not in the circuit is \"--\" before any r
   assert.equal(symbolOpToken("OP:7", { points: new Map(), ref: "R1", item: undefined, pins }), "?");
   assert.equal(symbolOpToken("OP:1", { points, ref: "R1", item: undefined, pins }), "1.20mA", "a two-pin model: the item's current");
 });
+
+// r4 S4-1: a label on nothing is still a subgraph of its own (`Connection()`), merged with the other labels of its name (`m_local_label_cache[( sheet, name )]`,
+// `m_global_label_cache[name]`); alone, its net is its own name.
+test("withOpVars: a label on nothing takes the net its name joins", () => {
+  const field = (text: string) => ({ name: "OP", text, shown: text, visible: true, italic: false, intersheet_refs: false, at: [0, 0], vertical: false, h: "left", size_nm: 1_270_000 });
+  const sch = {
+    lib_symbols: {},
+    symbols: [],
+    power_symbols: [],
+    wires: [{ id: "w1", net: "/VIN", pins: [], pts: [[10_000_000, 0], [30_000_000, 0]], bus: false }],
+    no_connects: [],
+    labels: [
+      { id: "a", net: "VIN", at: [0, 50_000_000], scope: "local", shape: null, fields: [field("${OP}")] },
+      { id: "b", net: "VIN", at: [20_000_000, 0], scope: "local", shape: null },
+      { id: "c", net: "LONE", at: [0, 90_000_000], scope: "local", shape: null, fields: [field("${OP}")] },
+      { id: "d", net: "G", at: [0, 70_000_000], scope: "global", shape: null, fields: [field("${OP}")] },
+    ],
+    texts: [],
+    title_block: null,
+    bus_entries: [],
+    sheets: [],
+    sheet_path: [{ id: "s1", name: "sub" }],
+  } as unknown as Schematic;
+  const out = withOpVars(sch, null, new Map([["/vin", 5], ["g", 1]]));
+  assert.equal(out.labels[0]!.fields![0]!.shown, "5.00V", "joins the wired VIN label");
+  assert.equal(out.labels[2]!.fields![0]!.shown, "?", "a net of its own, /sub/LONE, which the run has not");
+  assert.equal(out.labels[3]!.fields![0]!.shown, "1.00V", "a global label's net is its name");
+  assert.equal(withOpVars(sch, null, new Map()).labels[2]!.fields![0]!.shown, "--", "it has a connection: \"--\" before a run, not \"?\"");
+});

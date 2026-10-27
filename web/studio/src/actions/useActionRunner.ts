@@ -30,7 +30,7 @@ import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { snapPoint } from "../components/canvas/gridHelper";
-import { drawZoneStarted, undoDropsDrawing, withoutLastCorner } from "../kicad-port/drawingCancel";
+import { drawShapeStarted, drawZoneStarted, redoRefused, takeBackLastLine, undoDropsDrawing, withoutLastCorner } from "../kicad-port/drawingCancel";
 import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { carryPress } from "../kicad-port/pcbCarry";
@@ -219,6 +219,17 @@ export function useActionRunner() {
     registerImportActions(m, { tab: state.tab, dispatch, api });
     // The Design Blocks panes of the schematic and the board editor: show, place, save, update, properties, delete (actions/designBlockActions.ts).
     registerDesignBlockActions(m, { tab: state.tab, dispatch, api });
+    /**
+     * `drawShape`'s Delete / Backspace with a line, rectangle or circle started (kicad-port/drawingCancel.ts `takeBackLastLine`): the chain's last line is taken off
+     * the board -- its "Draw Line" step undone -- and the line in progress starts again from its start; with none, the shape in progress goes and the tool stays.
+     */
+    const takeBackLine = (): void => {
+      const draw = state.drawState;
+      if (draw?.kind !== "shape") return;
+      const back = takeBackLastLine(draw);
+      if (back.undo) void api.undo({ keepTool: true });
+      dispatch({ type: "SET_DRAW_STATE", draw: back.draw });
+    };
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
     const deleteRefs = (refs: string[], isCut = false) => {
       const cmds: Cmd[] = [];
@@ -363,6 +374,8 @@ export function useActionRunner() {
       if (state.tab === "schematic" && state.drawState?.kind === "sch_shape" && state.drawState.poly) return deleteLastPoint(state.drawState, dispatch);
       // `DrawZone`'s loop on the board: Delete with a corner placed removes the last corner (zones, rule areas, cutouts, graphic polygons)
       if (drawZoneStarted(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(state.drawState as { pts: [number, number][] }) as typeof state.drawState });
+      // `drawShape`'s loop: Delete with a line, rectangle or circle started takes back the chain's last line, or drops the shape (round 4 A-1, A-2)
+      if (drawShapeStarted(state.tab, state.activeTool, state.drawState)) return takeBackLine();
       const refs = requestSelection();
       // `EDIT_TOOL::Remove`: "When not in free-pad mode we normally auto-promote selected pads to their parent footprints. But this is probably a little too
       // dangerous for a destructive operation, so we just do the promotion but not the deletion (allowing for a second delete to do it if that's what the
@@ -657,6 +670,8 @@ export function useActionRunner() {
     });
     m.set("common.Interactive.redo", () => {
       if (boardMoving()) return;
+      // Every drawing loop: `started && evt->IsAction( &ACTIONS::redo )` is `wxBell()` (round 4 A-3).
+      if (redoRefused(state.tab, state.activeTool, state.drawState)) return;
       void (state.tab === "footprint" ? fpApi.redo() : state.tab === "symbol" ? symApi.redo() : api.redo());
     });
     // EDIT_TOOL::Duplicate: the board editor duplicates tracks/vias/zones/shapes/text; the footprint editor
@@ -1041,9 +1056,10 @@ export function useActionRunner() {
         void api.cmdBatch(cmds);
         return;
       }
-      const cur = state.currentTrackWidthNm ?? list[0]!;
-      const next = list[wrapStep(list.indexOf(cur), list.length, dir)]!;
-      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: next });
+      // The cycle runs on the list INDEX (`m_trackWidthIndex`), as KiCad's does -- not on the value, which a preset may share with the
+      // Default class's width (r4 R4-8).
+      const nextIndex = wrapStep(state.currentTrackWidthIndex, list.length, dir);
+      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: list[nextIndex]!, index: nextIndex });
     };
     if (state.drawState?.kind !== "route") {
       m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cycleTrackWidth(1)));
@@ -1056,7 +1072,6 @@ export function useActionRunner() {
       const base = { diameter: board?.board_rules?.via_diameter ?? 600_000, drill: board?.board_rules?.via_drill ?? 300_000 };
       return [base, ...(board?.routing?.via_presets ?? [])];
     };
-    const sameViaPreset = (a: { diameter: number; drill: number }, b: { diameter: number; drill: number }) => a.diameter === b.diameter && a.drill === b.drill;
     const cycleViaPreset = (dir: 1 | -1) => {
       const list = viaPresetList();
       const sel = toolIdle ? selOnlyTracksVias() : null;
@@ -1072,9 +1087,9 @@ export function useActionRunner() {
         void api.cmdBatch(cmds);
         return;
       }
-      const cur = state.currentViaPreset ?? list[0]!;
-      const next = list[wrapStep(list.findIndex((p) => sameViaPreset(p, cur)), list.length, dir)]!;
-      dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: next });
+      // Same as the width cycle: the index (`m_viaSizeIndex`), not the size (r4 R4-8).
+      const nextIndex = wrapStep(state.currentViaIndex, list.length, dir);
+      dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: list[nextIndex]!, index: nextIndex });
     };
     m.set("pcbnew.EditorControl.viaSizeInc", pcbOnly(() => cycleViaPreset(1)));
     m.set("pcbnew.EditorControl.viaSizeDec", pcbOnly(() => cycleViaPreset(-1)));
@@ -1974,7 +1989,9 @@ export function useActionRunner() {
               dispatch({ type: "SET_DRAW_STATE", draw: g.step === 0 ? null : { ...draw, bezier: g } });
               return;
             }
-            dispatch({ type: "SET_DRAW_STATE", draw: draw.pts.length <= 1 ? null : { ...draw, pts: draw.pts.slice(0, -1) } });
+            // `drawShape`: a line, rectangle or circle takes back the chain's last line or goes (`takeBackLastLine`); a zone or polygon loses its last corner.
+            if (draw.kind === "shape" && draw.shapeKind !== "polygon") return takeBackLine();
+            dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(draw) as typeof draw | null });
           })
         );
       }
@@ -2107,18 +2124,19 @@ export function useActionRunner() {
             return;
           }
           dispatch({ type: "SET_SELECTION", refs: [] });
-          // `ImportSizes`: undefined on "use net class", and each connection starts at its own net's width (the server's `CT_WIDTH`)
-          const width = chosenTrackWidth(state.currentTrackWidthNm, board.board_rules?.track_width, state.pcbx.useCustomTrackVia);
+          // `ImportSizes`: undefined on "use net class" (list index 0, or a custom size chosen), and each connection starts at its own net's
+          // width (the server's `CT_WIDTH`). By index, so a preset equal to the Default class's width is still chosen (r4 R4-8).
+          const width = chosenTrackWidth(state.currentTrackWidthNm, state.currentTrackWidthIndex, 1 + (board.routing?.track_width_presets?.length ?? 0), state.pcbx.useCustomTrackVia);
           const settings = withTrackSnapping(state.routerSettings, state.prefs.magneticTracks);
           const handOver = async (at: [number, number], layer: string): Promise<QueueOutcome> => {
             dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
-            return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch)) ? "live" : "done";
+            return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch, undefined, state.bcx.autoTrackWidth)) ? "live" : "done";
           };
           let done = 0;
           const runAnchor = (a: (typeof anchors)[number]) => async (): Promise<QueueOutcome> => {
             const layer = routeStartLayer(a, copperLayers, state.activeLayer);
             if (variant !== "auto") return handOver(variant === "fromEnd" ? a.target : a.at, layer);
-            const started = await routeStart(a.at[0], a.at[1], layer, width, settings);
+            const started = await routeStart(a.at[0], a.at[1], layer, width, settings, state.bcx.autoTrackWidth);
             if (!started.ok) return "done";
             const head = await routeMove(a.target[0], a.target[1]);
             // AttemptFinish: only a head that reaches the far end without colliding completes by itself.
@@ -2370,6 +2388,12 @@ export function useActionRunner() {
     registerSchSheetFileActions(m, { tab: state.tab, state, api, dispatch, controlDispatch: schControlDispatch });
     // The SPICE simulator (actions/simActions.ts): last, as it hands the shared zoom and grid actions to the plot while its window has the keyboard.
     registerSimActions(m, { tab: state.tab, dispatch, api });
+
+    // `ZONE_FILLER_TOOL::IsZoneFillAction` (Fill, Fill All, Unfill, Unfill All) with an item started in a drawing tool: `wxBell()`, nothing filled (round 4 A-3).
+    for (const id of ["pcbnew.ZoneFiller.zoneFill", "pcbnew.ZoneFiller.zoneFillAll", "pcbnew.ZoneFiller.zoneUnfill", "pcbnew.ZoneFiller.zoneUnfillAll"]) {
+      const run = m.get(id);
+      if (run) m.set(id, () => (redoRefused(state.tab, state.activeTool, state.drawState) ? undefined : run()));
+    }
 
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch, schControl, schControlDispatch]);

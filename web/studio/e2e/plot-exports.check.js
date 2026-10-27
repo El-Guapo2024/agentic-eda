@@ -4,7 +4,7 @@
 // IPC-2581, ODB++ and the board's Bill of Materials, and Plot Schematic (PDF, SVG one file per sheet). Each is opened with its action, run with its own
 // button, and judged by what the server answered (`/api/fab/*`, `/api/sch/plot`, captured as they come back: `ok`, the engine and the files written in
 // the board's `export/kicad/<kind>/`) and by the dialog's result panel; none of them edits the design except the Plot and Drill dialogs' choices, which KiCad
-// stores in the board's plot settings (one undo step, undone here; the revision is the same at the end).
+// stores in the board's plot settings (no undo step, as KiCad's `applyPlotSettings` pushes none: r4 X4-3; put back here; the revision is the same at the end).
 // Run it in the page of a served board that is placed and routed -- `eda pipeline examples/opamp_filter.yaml -o <p>`, `eda board new examples/opamp_filter.yaml
 // -o <dir>`, `cp <p>/design.json <dir>/`, `eda board serve -C <dir> --port N --ui web/studio/dist`, kicad-cli on the PATH or in EDA_KICAD_CLI -- with
 // `PLAYWRIGHT_MODULE=... node web/studio/e2e/run-check.mjs http://localhost:N/ web/studio/e2e/plot-exports.check.js`, or pasted into the Browser pane's
@@ -110,14 +110,18 @@
         res = await press(/^Plot$/, "fab/gerbers");
         t(res.reply?.body?.ok === true && !(res.reply?.req?.layers ?? []).includes("B.SilkS"), `the second plot asks for the layers without B.SilkS (${(res.reply?.req?.layers ?? []).join(",")})`);
         t((res.reply?.body?.files ?? []).filter((f) => !/\.gbrjob$/.test(f)).length === gerbers.length - 1, `and writes one Gerber fewer (${(res.reply?.body?.files ?? []).length})`);
-        // r3 X3-3: `applyPlotSettings` stored the checklist in the board before the plot (one undo step), and the plot took the origin from the board.
+        // r3 X3-3: `applyPlotSettings` stored the checklist in the board before the plot (no undo step, r4 X4-3), and the plot took the origin from the board.
         const stored = await plotParams();
         t(stored && !stored.layers.includes("B.SilkS") && stored.layers.includes("F.SilkS"), `the board's plot settings no longer select B.SilkS (${(stored?.layers ?? []).join(",")})`);
         t(res.reply?.req && !("use_aux_origin" in res.reply.req), "the plot does not send the origin: the server takes the board's useauxorigin");
         await close();
         await run("common.Interactive.undo");
-        const back = await until(async () => { const p = await plotParams(); return p?.layers.includes("B.SilkS") ? p : null; }, 15000);
-        t(back, "one Ctrl+Z puts B.SilkS back in the board's plot settings");
+        await sleep(1500);
+        const still = await plotParams();
+        t(still && !still.layers.includes("B.SilkS"), "Ctrl+Z does not take the dialog's choice back: `applyPlotSettings` only does SetPlotSettings and OnModify, no commit (r4 X4-3)");
+        const put = await post({ op: "set_plot_settings", layers: [...(still?.layers ?? []), "B.SilkS"] });
+        t(put.ok, "B.SilkS is put back in the board's plot settings");
+        await until(async () => { const p = await plotParams(); return p?.layers.includes("B.SilkS") ? p : null; }, 15000);
         rev0 = await version();
       }
     });
@@ -142,8 +146,12 @@
       t(res.panel.message.startsWith("Created file"), "and the dialog shows it");
       await close();
       await run("common.Interactive.undo");
-      const back = await until(async () => { const p = await plotParams(); return p?.use_aux_origin === (before?.use_aux_origin ?? false) && p.layers.includes("F.Paste") ? p : null; }, 15000);
-      t(back, "one Ctrl+Z puts the board's plot settings back");
+      await sleep(1500);
+      const still = await plotParams();
+      t(still?.use_aux_origin === true && !still.layers.includes("F.Paste"), "Ctrl+Z leaves the board's plot settings as they were stored (no undo step, r4 X4-3)");
+      const put = await post({ op: "set_plot_settings", layers: before?.layers ?? [], use_aux_origin: before?.use_aux_origin ?? false });
+      t(put.ok, "the plot settings are put back");
+      await until(async () => { const p = await plotParams(); return p?.use_aux_origin === (before?.use_aux_origin ?? false) && p.layers.includes("F.Paste") ? p : null; }, 15000);
       rev0 = await version();
     });
 
@@ -227,6 +235,44 @@
     await scenario("Export VRML: the board as a .wrl", exportOne("pcbnew.EditorControl.exportVRML", "Export VRML", "fab/vrml", /\.wrl$/i));
     await scenario("IPC-D-356 Netlist File: the board's test netlist", exportOne("pcbnew.EditorControl.generateD356File", "IPC-D-356", "fab/ipcd356", /\.(d356|ipc)$/i));
     await scenario("Export IPC-2581: one .xml", exportOne("pcbnew.EditorControl.generateIPC2581File", "Export IPC-2581", "fab/ipc2581", /\.(xml|zip)$/i));
+    await scenario("Export IPC-2581's BOM columns (r4 X4-4): choices of the footprints' field names, the distributor guessed from its P/N column, kept for the next opening and no undo step", async (t) => {
+      if (!(await open(t, "pcbnew.EditorControl.generateIPC2581File", "Export IPC-2581"))) return;
+      const pick = (title) => [...dialog().querySelectorAll("select")].find((sel) => sel.title === title);
+      const distPn = pick("Column containing the distributor part number");
+      const dist = () => dialog().querySelector("[data-testid=ipc2581-dist]");
+      const names = [...(distPn?.options ?? [])].map((o) => o.textContent.trim());
+      t(names[0] === "Omit" && ["Datasheet", "Description", "Reference", "Value"].every((n) => names.includes(n)), `Distributor P/N offers Omit and the footprints' fields (${names.join(",")})`);
+      const sorted = names.slice(1);
+      t(JSON.stringify(sorted) === JSON.stringify([...sorted].sort()), "sorted, once each (a std::set)");
+      const d0 = dist();
+      t(d0 && d0.disabled && d0.value === "N/A", `Distributor is "N/A" and disabled while no column is chosen (${d0?.value}, ${d0?.disabled})`);
+      if (distPn) {
+        Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(distPn, "Value");
+        distPn.dispatchEvent(new Event("change", { bubbles: true }));
+        await sleep(200);
+      }
+      const d1 = dist();
+      t(d1 && !d1.disabled && d1.value === "N/A", `a column whose name names no distributor enables Distributor and keeps "N/A" (${d1?.value})`);
+      const res = await press(/^Export$/, "fab/ipc2581");
+      t(res.reply?.body?.ok === true && res.reply?.req?.col_dist_pn === "Value" && res.reply?.req?.col_dist === "", `the export names the column and no distributor (${JSON.stringify(res.reply?.req)})`);
+      await close();
+      const kept = await until(async () => { const s = await fetch("/api/state", { cache: "no-store" }).then((x) => x.json()); return s.plot_params?.ipc2581_bom?.dist_pn === "Value" ? s : null; }, 15000);
+      t(kept, "the column is kept in the board");
+      const v = await version();
+      await until(() => __eda.state().revision === v, 10000); // the page's poll picks the kept columns up
+      await sleep(300);
+      if (await open(t, "pcbnew.EditorControl.generateIPC2581File", "Export IPC-2581")) {
+        t(pick("Column containing the distributor part number")?.value === "Value", "and the next opening starts from it (TransferDataToWindow)");
+        await close();
+      }
+      await run("common.Interactive.undo");
+      await sleep(1500);
+      const still = await fetch("/api/state", { cache: "no-store" }).then((x) => x.json());
+      t(still.plot_params?.ipc2581_bom?.dist_pn === "Value", "Ctrl+Z leaves it: the project file has no undo");
+      const put = await post({ op: "set_ipc2581_bom", bom: {} });
+      t(put.ok, "the columns are cleared again");
+      rev0 = await version();
+    });
     await scenario("Export ODB++: the archive", exportOne("pcbnew.EditorControl.generateODBPPFile", "Export ODB++", "fab/odb", /\.(zip|tgz|tar|odb)$|odb/i));
     await scenario("Bill of Materials (the board's): one .csv", exportOne("pcbnew.EditorControl.generateBOM", "Bill of Materials", "fab/pcb_bom", /\.csv$/i));
 

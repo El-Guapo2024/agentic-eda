@@ -79,11 +79,11 @@ impl Tweak for ArrayGeometry {
 }
 
 fn array(ids: &[&str], geometry: ArrayGeometry) -> Cmd {
-    Cmd::CreateArray { ids: ids.iter().map(|s| s.to_string()).collect(), geometry, arrange: false, reannotate: true }
+    Cmd::CreateArray { ids: ids.iter().map(|s| s.to_string()).collect(), geometry, arrange: false, reannotate: true, group_positions: Default::default() }
 }
 
 fn arrange(ids: &[&str], geometry: ArrayGeometry) -> Cmd {
-    Cmd::CreateArray { ids: ids.iter().map(|s| s.to_string()).collect(), geometry, arrange: true, reannotate: true }
+    Cmd::CreateArray { ids: ids.iter().map(|s| s.to_string()).collect(), geometry, arrange: true, reannotate: true, group_positions: Default::default() }
 }
 
 fn add_via(b: &mut Board<'_>, x: Nm, y: Nm) -> String {
@@ -178,7 +178,7 @@ fn the_numbers_the_dialog_refuses_are_refused_and_so_is_an_empty_or_unknown_sele
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     let v = add_via(&mut b, Nm::ZERO, Nm::ZERO);
-    assert_eq!(refusal(&mut b, Cmd::CreateArray { ids: vec![], geometry: grid(2, 2, mm(1.0), mm(1.0)), arrange: false, reannotate: true }), "ops_bad_array");
+    assert_eq!(refusal(&mut b, Cmd::CreateArray { ids: vec![], geometry: grid(2, 2, mm(1.0), mm(1.0)), arrange: false, reannotate: true, group_positions: Default::default() }), "ops_bad_array");
     assert_eq!(refusal(&mut b, array(&[&v], grid(2, 2, Nm::ZERO, mm(1.0)))), "ops_bad_array", "horizontal delta of zero with 2 objects");
     assert_eq!(refusal(&mut b, array(&[&v], grid(2, 2, mm(1.0), Nm::ZERO))), "ops_bad_array");
     assert_eq!(refusal(&mut b, array(&[&v], grid(0, 2, mm(1.0), mm(1.0)))), "ops_bad_array");
@@ -316,7 +316,7 @@ fn copies_take_the_rotation_side_and_edits_of_the_footprint_they_come_from() {
 fn keeping_the_original_references_keeps_the_text_but_not_the_id() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&Cmd::CreateArray { ids: ids(&["U1"]), geometry: grid(3, 1, mm(10.0), Nm::ZERO), arrange: false, reannotate: false }).unwrap();
+    b.apply(&Cmd::CreateArray { ids: ids(&["U1"]), geometry: grid(3, 1, mm(10.0), Nm::ZERO), arrange: false, reannotate: false, group_positions: Default::default() }).unwrap();
     assert_eq!(footprint_ids(&b), ["U1", "U2", "U3", "U4"], "ids stay unique");
     for copy in ["U3", "U4"] {
         let shown = b.design().footprint_edit(copy).and_then(|e| e.reference.clone()).and_then(|l| l.text);
@@ -474,4 +474,73 @@ fn an_array_turning_a_rounded_rectangle_off_the_quarter_makes_the_polygon_of_the
         assert_eq!(dr.board_items.corner_radius_of(s.id()), Nm::ZERO, "a polygon has no corner radius");
     }
     assert_eq!(dr.board_items.corner_radius_of("shp_rect"), mm(2.0));
+}
+
+// ----------------------------------------------------------------------------------------------------------- round 4
+
+/// Round 4 C-2: `ARRAY_TOOL::onDialogClosed` duplicates text boxes, barcodes, points, reference images and tables (`item->Duplicate( true, .. )`)
+/// like any item; they were dropped from the selection (`item_position` did not know them), so alone the array was refused.
+#[test]
+fn a_text_box_barcode_point_image_and_table_are_arrayed() {
+    use eda_model::barcode::{BarcodeKind, EccLevel};
+    use eda_model::pcb_items::{PcbPoint, RefImage, TextBox};
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    let dr = d.drawings.as_mut().unwrap();
+    let mut tb = TextBox::new("F.SilkS", p(mm(1.0), mm(1.0)), p(mm(4.0), mm(3.0)), mm(1.0), mm(0.1));
+    tb.id = "tbx_a".into();
+    dr.board_items.text_boxes.push(tb);
+    let mut pt = PcbPoint::new("F.SilkS", p(mm(1.0), mm(5.0)));
+    pt.id = "pnt_a".into();
+    dr.board_items.points.push(pt);
+    let mut img = RefImage::new("F.SilkS", p(mm(1.0), mm(7.0)), "iVBORw0KGgo=");
+    img.id = "img_a".into();
+    dr.board_items.images.push(img);
+    dr.barcodes.push(eda_model::barcode::Barcode { id: "bar_a".into(), at: p(mm(1.0), mm(9.0)), angle: 0, layer: "F.SilkS".into(), width_nm: mm(2.0), height_nm: mm(2.0), text: "X".into(), text_height_nm: mm(1.0), kind: BarcodeKind::Qr, ecc: EccLevel::L, show_text: false, knockout: false, margin_x_nm: Nm::ZERO, margin_y_nm: Nm::ZERO });
+    let mut t = eda_model::table::Table::new_grid("F.SilkS", p(mm(1.0), mm(11.0)), 2, 1, mm(2.0), mm(1.0), mm(0.1));
+    t.id = "tbl_a".into();
+    dr.tables.push(t);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&array(&["tbx_a", "bar_a", "pnt_a", "img_a", "tbl_a"], grid(3, 1, mm(5.0), Nm::ZERO))).unwrap();
+    let dr = drawings(&b);
+    let xs = |v: Vec<Nm>| -> Vec<Nm> {
+        let mut v = v;
+        v.sort();
+        v
+    };
+    let want = vec![mm(1.0), mm(6.0), mm(11.0)];
+    assert_eq!(xs(dr.board_items.text_boxes.iter().map(|t| t.start.x).collect()), want, "text boxes");
+    assert_eq!(xs(dr.barcodes.iter().map(|t| t.at.x).collect()), want, "barcodes");
+    assert_eq!(xs(dr.board_items.points.iter().map(|t| t.at.x).collect()), want, "points");
+    assert_eq!(xs(dr.board_items.images.iter().map(|t| t.at.x).collect()), want, "images");
+    assert_eq!(xs(dr.tables.iter().map(|t| t.at.x).collect()), want, "tables");
+    let ids: BTreeSet<&str> = dr.tables.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(ids.len(), 3, "each table copy has an id of its own");
+}
+
+/// Round 4 C-3: `PCB_GROUP::GetPosition` is `GetBoundingBox().Centre()`; a circular array without "Rotate items" moves an item by
+/// `RotatePoint( pos, centre, angle ) - pos`, so the copy of a group lands by its box's centre (the studio sends it), not by its members' anchors.
+#[test]
+fn a_group_turns_about_its_bounding_box_centre_in_a_circle() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: "block".into(), member_ids: ids(&["trk_a", "shp_seg"]), design_block: String::new() });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let start = routing(&b).tracks.iter().find(|t| t.id == "trk_a").unwrap().pts[0];
+    let centre = p(mm(25.0), mm(33.0));
+    let g = circle(2, 90, false);
+    let cmd = Cmd::CreateArray { ids: ids(&["grp_a"]), geometry: g, arrange: false, reannotate: true, group_positions: [("grp_a".to_string(), centre)].into() };
+    b.apply(&cmd).unwrap();
+    let copy = drawings(&b).groups.iter().find(|g| g.id != "grp_a").unwrap().clone();
+    let moved = routing(&b).tracks.iter().find(|t| copy.member_ids.contains(&t.id)).unwrap().pts[0];
+    let offset = g.transform(1, centre).0;
+    assert_eq!(moved, p(start.x + offset.x, start.y + offset.y), "the copy moved by R(box centre) - box centre");
+    // Arrange: the group goes to the first point by its box's centre too.
+    let mut d = design();
+    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: "block".into(), member_ids: ids(&["trk_a", "shp_seg"]), design_block: String::new() });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let cmd = Cmd::CreateArray { ids: ids(&["grp_a"]), geometry: circle(2, 90, false), arrange: true, reannotate: true, group_positions: [("grp_a".to_string(), centre)].into() };
+    b.apply(&cmd).unwrap();
+    let offset0 = circle(2, 90, false).transform(0, centre).0;
+    assert_eq!(routing(&b).tracks.iter().find(|t| t.id == "trk_a").unwrap().pts[0], p(start.x + offset0.x, start.y + offset0.y));
 }

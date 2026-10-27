@@ -15,6 +15,7 @@ import { snapPoint } from "./gridHelper";
 import { drawStrokeText } from "../text/strokeFont";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
 import { originMarkerColor } from "../../kicad-port/gridOrigin";
+import { leaderModeOf, zoneLeader } from "../../kicad-port/pcbDrawZone";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
 import { carryRatsnest, offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
 import { carryMatrix, carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
@@ -1288,7 +1289,10 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     rubberEnd = opts.snappedCursor && raw[0] === target[0] && raw[1] === target[1] ? raw : snapPoint(raw[0], raw[1], opts.gridNm);
   }
   const color = layerColor("selection");
-  const shown: [number, number][] = rubberEnd ? [...pts, rubberEnd] : pts;
+  // `DrawZone`'s leader (a zone, a rule area, a graphic polygon): bent in the 45- and 90-degree line modes, as the click will lock it in (kicad-port/pcbDrawZone.ts).
+  const polygonDraw = draw.kind === "zone" || (draw.kind === "shape" && draw.shapeKind === "polygon");
+  const leader = polygonDraw && rubberEnd && pts.length > 0 ? zoneLeader(pts, rubberEnd, leaderModeOf(opts.angleSnapMode, false)) : null;
+  const shown: [number, number][] = leader ? [...pts, ...leader.slice(1)] : rubberEnd ? [...pts, rubberEnd] : pts;
   strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), draw.kind === "zone" && shown.length >= 2);
 
   // pcb_viewer_tools.cpp's measure tool: the straight-line distance (and

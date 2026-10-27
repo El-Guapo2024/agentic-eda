@@ -116,6 +116,7 @@ pub(super) fn design() -> Design {
             zones: vec![zone("zone_a", "F.Cu", &[(Nm::ZERO, mm(60.0)), (mm(10.0), mm(60.0)), (mm(10.0), mm(70.0)), (Nm::ZERO, mm(70.0))])],
             track_width_presets: vec![],
             via_presets: vec![],
+            diff_pair_presets: vec![],
             teardrop_settings: Default::default(),
         }),
         drawings: Some(DrawingsSection {
