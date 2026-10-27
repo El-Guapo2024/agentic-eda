@@ -67,10 +67,23 @@ test("handleWheel: two modifiers at once is left unhandled (forwarded to tools i
 test("handleWheel: a dominant horizontal delta always pans horizontally, regardless of modifiers", () => {
   const view: ViewTransform = { scale: 0.001, x: 0, y: 0 };
   const zc = new ConstantZoomController(CONSTANT_SCALE.MSW);
-  const result = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaX: -50, ctrlOrCmd: true, shiftKey: true }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
+  const result = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaX: -50, ctrlOrCmd: true, altKey: true }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
   assert.equal(result.kind, "pan-horizontal");
   assert.notEqual(result.view.x, view.x);
   assert.equal(result.view.y, view.y);
+  const onMac = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaX: -50, shiftKey: true, mac: true }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
+  assert.equal(onMac.kind, "pan-horizontal", "macOS itself turns Shift+wheel into a horizontal wheel, and wx reports it so: KiCad pans sideways there too");
+});
+
+test("r2 D-V3: off macOS, Shift+wheel that the browser turned into a horizontal delta is the vertical wheel KiCad gets: it pans up and down", () => {
+  const view: ViewTransform = { scale: 0.001, x: 0, y: 0 };
+  const zc = new ConstantZoomController(CONSTANT_SCALE.MSW);
+  const turned = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaX: 100, shiftKey: true }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
+  const plain = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaY: 100, shiftKey: true }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
+  assert.equal(turned.kind, "pan");
+  assert.deepEqual(turned.view, plain.view);
+  assert.equal(turned.view.x, view.x);
+  assert.notEqual(turned.view.y, view.y);
 });
 
 test("handleWheel: reverseScrollZoom flips the zoom direction", () => {

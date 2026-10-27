@@ -523,6 +523,7 @@ export function SchematicView() {
       deltaY: e.deltaY,
       shiftKey: e.shiftKey,
       ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
+      mac: isMac(),
       altKey: e.altKey,
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,

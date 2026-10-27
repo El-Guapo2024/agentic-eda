@@ -72,6 +72,8 @@ export interface WheelInput {
   altKey: boolean;
   x: number;
   y: number;
+  /** The page runs on macOS (`isMac()`): there the system itself makes Shift+wheel a horizontal wheel, which wx reports as `wxMOUSE_WHEEL_HORIZONTAL`. */
+  mac?: boolean;
 }
 
 export type WheelResultKind = "zoom" | "pan" | "pan-horizontal" | "unhandled";
@@ -106,7 +108,11 @@ function toRotation(delta: number): number {
  * own pixel size, NOT the delta/anchor position); `zoomController` is
  * whatever pickDefaultZoomController() selected (or a caller-chosen one).
  */
-export function handleWheel(view: ViewTransform, screenSize: ScreenSize, input: WheelInput, settings: ViewControlSettings, zoomController: ZoomController): WheelResult {
+export function handleWheel(view: ViewTransform, screenSize: ScreenSize, given: WheelInput, settings: ViewControlSettings, zoomController: ZoomController): WheelResult {
+  // r2 D-V3: off macOS the browser (Chromium on Windows and Linux, Firefox) delivers Shift+vertical wheel as a horizontal delta (`deltaY` 0), where wx
+  // still reports the vertical axis with Shift down, so `onWheel` pans up and down (`scroll_modifier_pan_h` is Ctrl, not Shift). Undo the browser's
+  // swap. (A physical tilt wheel moved with Shift held is read the same way; the DOM cannot tell the two apart.)
+  const input = given.shiftKey && !given.mac && given.deltaY === 0 && given.deltaX !== 0 ? { ...given, deltaX: 0, deltaY: given.deltaX } : given;
   // "Native horizontal wheel events ... are always handled as horizontal
   // pan" regardless of modifiers/settings -- source picks this by
   // GetWheelAxis(); DOM has no such flag, so a diagonal/axis-dominant
