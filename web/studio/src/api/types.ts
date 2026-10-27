@@ -57,6 +57,8 @@ export interface Pad {
   mask_margin?: Nm | null;
   paste_margin?: Nm | null;
   paste_ratio?: number | null;
+  /** The pad's `(layers ..)` in the footprint's own frame (`F.Paste` is the footprint's side), when the backend sends it; absent, a pad is on the layers of its kind. */
+  layers?: string[];
   /** A trapezoid's two deltas (`PAD::GetDelta`, KiCad keeps one of them zero); null for any other shape. */
   delta?: [Nm, Nm] | null;
   /** A chamfered rectangle's ratio and corners (`PAD::GetChamferRectRatio`, `GetChamferPositions`); null for any other shape. */

@@ -64,6 +64,7 @@ import { artTextAsField, graphicsOf, layersOf } from "../../kicad-port/fpArt";
 import { fieldAsText } from "../../kicad-port/fpFields";
 import { zoneCopperLayers } from "../../kicad-port/zoneLayers";
 import { DEFAULT_STACK, stackOfBoard, type Stack } from "../../kicad-port/model3d";
+import { fieldsDrawn3d, padPaste3d } from "../../kicad-port/footprint3d";
 
 // ---------------------------------------------------------------------
 // Units
@@ -722,8 +723,8 @@ function addLayerShape(group: THREE.Group, s: Shape, y: number, lineMaterial: TH
 const TEXT_TEXTURE_PX_PER_MM = 48;
 
 /**
- * Free-standing board text (Place > Text) in 3D, and every placed
- * part's own reference designator (buildRefDesignatorMesh, below) --
+ * Free-standing board text (Place > Text) in 3D, and a footprint's
+ * fields and texts (addFootprintArt, below) --
  * both draw KiCad's real Newstroke font (strokeFont.ts) into an
  * offscreen canvas, then map that canvas onto a flat plane in the silk
  * layer. A texture rather than real 3D glyph geometry (extruded stroke
@@ -736,7 +737,7 @@ interface SilkTextSpec {
   xMm: number;
   zMm: number;
   sizeMm: number;
-  /** Real per-item stroke width when the caller has one (BoardText does; a part's reference designator doesn't, so buildRefDesignatorMesh leaves this undefined and drawStrokeText falls back to its own default). */
+  /** Real per-item stroke width when the caller has one (every caller has one now; absent, drawStrokeText falls back to its own default). */
   thicknessMm?: number;
   angleDeg: number;
   side: Side;
@@ -749,7 +750,7 @@ interface SilkTextSpec {
   tint?: THREE.Color;
 }
 
-/** Shared by buildTextMesh (Place > Text) and buildRefDesignatorMesh (every placed part's silk reference) -- see either caller's own comment for why a rendered-string texture stands in for real glyph outlines. */
+/** Shared by buildTextMesh (Place > Text, a footprint's fields and texts) -- see either caller's own comment for why a rendered-string texture stands in for real glyph outlines. */
 function buildSilkTextMesh(spec: SilkTextSpec): THREE.Mesh {
   const sizeMm = Math.max(spec.sizeMm, 0.01);
   const px = Math.max(TEXT_TEXTURE_PX_PER_MM * sizeMm, 1);
@@ -809,7 +810,7 @@ function buildSilkTextMesh(spec: SilkTextSpec): THREE.Mesh {
 }
 
 /** Free-standing board text (Place > Text) in 3D -- see buildSilkTextMesh's own comment. */
-function buildTextMesh(t: BoardText, y?: number, tint?: THREE.Color, kind = "silk"): THREE.Mesh {
+function buildTextMesh(t: BoardText, y?: number, tint?: THREE.Color, kind = "silk", name = `${kind}-text`): THREE.Mesh {
   return buildSilkTextMesh({
     y,
     tint,
@@ -827,55 +828,7 @@ function buildTextMesh(t: BoardText, y?: number, tint?: THREE.Color, kind = "sil
     side: silkSide(t.layer),
     justify: t.justify,
     mirror: t.mirror,
-    name: `${kind}-text`,
-  });
-}
-
-/**
- * Every placed part's own reference designator ("R1", "U1", ...) as
- * white silk text -- KiCad's real 3D render shows this for every part
- * (no courtyard rectangle; this app drew one as a stand-in before real
- * text rendering existed here, which doesn't match and has been
- * removed). Position/size/side-of-board logic (courtyard center, font
- * size clamped to the courtyard's own size, `part.label` choosing
- * above/below/left/right of the box) is ported straight from
- * components/canvas/painter.ts's drawFootprint -- same convention as the
- * 2D PCB canvas's own reference-designator label, including *not*
- * rotating the text with `part.rot` (that 2D convention, kept here
- * rather than inventing a second one for 3D).
- */
-function buildRefDesignatorMesh(part: Part): THREE.Mesh | null {
-  const courtyard = part.courtyard;
-  const side = part.side;
-  if (!courtyard || !side) return null;
-  const [x0, y0, x1, y1] = courtyard;
-  const sizeNm = Math.max(500_000, Math.min(900_000, Math.min(x1 - x0, y1 - y0) * 0.45));
-  const cx = (x0 + x1) / 2;
-  const cy = (y0 + y1) / 2;
-  let tx = cx;
-  let ty = y0 - sizeNm * 0.3;
-  let justify: "left" | "center" | "right" = "center";
-  if (part.label === "below") ty = y1 + sizeNm * 0.95;
-  if (part.label === "left") {
-    tx = x0 - sizeNm * 0.3;
-    ty = cy;
-    justify = "right";
-  }
-  if (part.label === "right") {
-    tx = x1 + sizeNm * 0.3;
-    ty = cy;
-    justify = "left";
-  }
-  return buildSilkTextMesh({
-    content: part.ref,
-    xMm: mm(tx),
-    zMm: mm(ty),
-    sizeMm: mm(sizeNm),
-    angleDeg: 0,
-    side,
-    justify,
-    mirror: false,
-    name: "part-ref",
+    name,
   });
 }
 
@@ -911,9 +864,25 @@ function addFootprintArt(group: THREE.Group, part: Part, mats: { shown: (row: st
       }
     }
   }
+  // The footprint's fields (`addFootprintShapes`' first loop): the visible ones on a layer the 3D view draws, each as it is on the board -- the Reference
+  // too, from its own field (a hidden one, or one on F.Fab, is drawn nowhere).
+  for (const f of fieldsDrawn3d(part, shown)) {
+    const on = shapeLayerOf(f.layer);
+    if (!on) continue;
+    const text = fieldAsText({ ...f, text: f.text.replace(/\n/g, " "), ...(f.shown !== undefined ? { shown: f.shown.replace(/\n/g, " ") } : {}) });
+    const kind = f.name === "Reference" ? "part-ref" : f.name === "Value" ? "part-value" : "part-field";
+    if (on.kind === "silk") {
+      if (shown(on.side === "top" ? "silkscreen_top" : "silkscreen_bottom")) group.add(buildTextMesh(text, undefined, undefined, kind, kind));
+    } else if (on.kind === "adhesive") {
+      if (shown("adhesive")) group.add(buildTextMesh(text, techLayerY(on.side), inkOf(on.side === "top" ? "F_Adhes" : "B_Adhes").color, "adhesive", kind));
+    } else if (shown(on.row)) {
+      group.add(buildTextMesh(text, techLayerY("top"), inkOf(on.row).color, on.row, kind));
+    }
+  }
   for (const t of part.texts ?? []) {
     const on = shapeLayerOf(t.layer);
-    if (!on || !t.text || (t.role === "reference" && !shown("references"))) continue;
+    // `addFootprintShapes`' text loop: every text with `LAYER_FP_TEXT`, a `${REFERENCE}` one with References, a `${VALUE}` one with Values.
+    if (!on || !t.text || !shown("footprint_text") || (t.role === "reference" && !shown("references")) || (t.role === "value" && !shown("values"))) continue;
     // One line: the 3D text is a texture of a single line of the stroke font.
     const text = fieldAsText(artTextAsField({ ...t, text: t.text.replace(/\n/g, " ") }));
     if (on.kind === "silk") {
@@ -1053,15 +1022,11 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
       } else if (copper) addPad(group, mm(pad.x), mm(pad.y), mm(pad.w), mm(pad.h), pad.round, y, pad.th ? platedMat[side] : smdMat[side]);
       // Solder paste only applies to exposed SMD pads (a through-hole pad
       // is soldered from the opposite side through the barrel, not pasted).
-      if (shown("solder_paste") && !pad.th) {
-        addPad(group, mm(pad.x), mm(pad.y), mm(pad.w), mm(pad.h), pad.round, pasteCenterY(side), pasteMat, SOLDERPASTE_MM);
+      // The paste of the pad's side, on its paste layer only and grown by its paste margin (`BOARD_ADAPTER::addPads`, kicad-port/footprint3d.ts).
+      const paste = shown("solder_paste") ? padPaste3d(pad, part, board.board_rules?.mask_paste) : null;
+      if (paste && paste.w > 0 && paste.h > 0) {
+        addPad(group, mm(pad.x), mm(pad.y), mm(paste.w), mm(paste.h), pad.round, pasteCenterY(side), pasteMat, SOLDERPASTE_MM);
       }
-    }
-
-    // The reference text is silkscreen ink (the "References" row, on the silkscreen of the part's side), not a 3D model.
-    if (shown(side === "top" ? "silkscreen_top" : "silkscreen_bottom") && shown("references")) {
-      const refMesh = buildRefDesignatorMesh(part);
-      if (refMesh) group.add(refMesh);
     }
 
     // The footprint's own silkscreen and drawings (`part.graphics`, `part.texts`): on the layers KiCad's 3D viewer draws, as a free drawing is.
