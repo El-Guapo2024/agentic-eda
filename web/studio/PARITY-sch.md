@@ -381,7 +381,7 @@ backing setting: Electrical Rules > Pin Conflicts Map.
 
 | Action | Status | KiCad file:function ↔ our code |
 |---|---|---|
-| Plot dialog: format (SVG / PDF), colour or black and white, drawing sheet, background colour, all pages / current page | identical, by running KiCad's own plotter | `DIALOG_PLOT_SCHEMATIC` / `SCH_PLOT_OPTS` ↔ `PlotSchematicDialog.tsx`, `kicad-port/schOutputs.ts` (`buildSchPlotRequest`) → `--black-and-white`, `--exclude-drawing-sheet`, `--no-background-color`, `--pages` |
+| Plot dialog: format (PDF / SVG), colour or black and white, drawing sheet, "Plot background color", all pages / current page; starts as `dialog_plot_schematic_base.cpp` does (PDF, colour, drawing sheet, no background colour) and keeps the last choices while the studio is open (`DIALOG_SHIM::LoadControlState`; r2 X9) | identical, by running KiCad's own plotter | `DIALOG_PLOT_SCHEMATIC` / `SCH_PLOT_OPTS` ↔ `PlotSchematicDialog.tsx`, `kicad-port/schOutputs.ts` (`buildSchPlotRequest`) → `--black-and-white`, `--exclude-drawing-sheet`, `--no-background-color`, `--pages` |
 | Page size Auto / A4 / A | **gap** — kicad-cli has no page-size override (it plots at the sheet's own size), so the dialog no longer offers the control | `SCH_PLOT_OPTS::m_pageSizeSelect` |
 | SVG: one file per sheet; PDF: one multi-page file | identical | `SCH_PLOTTER::createSVGFiles`/`createPDFFile` (kicad-cli's) |
 | Netlist: KiCad `.net` and generic `.xml` | identical | `kicad-cli sch export netlist --format kicadsexpr|kicadxml` |

@@ -927,6 +927,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Left (each with its boards in section 51): coordinates in micrometres (sub-micrometre segments of tuned tracks), pads that share a number but not a net, copper graphics with a net, the teardrops kicad-cli's Fill All
   rebuilds, and a `.kicad_dru` rule that ignores `via_dangling`.
 
+### 37. The fab output dialogs (Plot, drill, placement, BOM)
+**Partial.** `PARITY-boardctl.md` section 5; round 2's r2-editors-exports X1-X11 (fixed 2026-10-27 on `task-r2-editors-exports`: the board's plot settings kept and plotted with, the drill and placement dialogs' defaults and controls, the 3D export's outline check, the VRML origin, the board BOM on the board).
+- Left: the PCB Plot dialog offers Gerber only, with the layer checklist, "Check zone fills before plotting" and "Use drill/place file origin"; KiCad's `DIALOG_PLOT` also has PostScript, SVG, DXF, HPGL and PDF, "Plot drawing sheet", "Plot footprint values" and "Plot reference designators", "Sketch pads on fabrication layers", the DNP options, the drill marks, "Use Protel filename extensions", "Generate Gerber job file", "Coordinate format", "Use extended X2 format", "Include netlist attributes", "Disable aperture macros", "Subtract soldermask from silkscreen", the output directory and Run DRC (kicad-cli has a flag for each; the board's own settings already reach the plot), and storing the dialog's choices back in the board. The drill dialog lacks Gerber X2 drill files, map files, units, zeros, mirror and minimal header; the placement dialog lacks "Exclude from BOM" (no kicad-cli flag) and the design variant. The board BOM is kicad-cli's writer, not `GenBOMFileFromBoard`'s (quoting, the library prefix, no `;;;`). Export Symbol as SVG plots with kicad-cli's theme and page, not the editor's theme with a 10 % margin.
+
 ## Appendix A. The original 30, one verdict each
 
 13 closed, 9 partial, 0 open, 8 out of scope (2026-10-10). Changed since 2026-10-07: #11 and #25 closed, #14 closed on `task-pcb-edit-details` (not merged); #6 and #26 re-worded.
