@@ -386,14 +386,14 @@ stopped there, under the lane's rule for a design decision that spans many crate
 **Findings (the studio, not the check).** Both are in `hierarchy-navigator.check.js`; the assertion each would fail is left out with a comment
 that points here.
 
-- **hierarchy-navigator: a parent's children are not in page order.** Scenario "The hierarchy: every sheet once, ...". After Import Sheet of
+- **hierarchy-navigator: a parent's children are not in page order.** **Fixed by `f8b4ef93`** (the panel sorts each sheet's children by page, `hierarchyTreeOrder`; the walk itself now visits a screen's sheets by place, `SCH_SCREEN::GetSheets`; `PARITY-sch.md` section 43; the assertion is back in the check, `63cd3f26`). Scenario "The hierarchy: every sheet once, ...". After Import Sheet of
   the QA file, its two nested placements hold pages 4 (`Subsheet_1_1`) and 2 (`Subsheet_1_2`) in `GET /api/sch/hierarchy`, and the panel lists
   them in walk order (4 then 2). KiCad's pane builds the same depth-first tree and then sorts each parent's children by page:
   `HIERARCHY_PANE::buildHierarchyTree` calls `m_tree->SortChildren( aParent )` (eeschema/widgets/hierarchy_pane.cpp:153) and
   `HIERARCHY_TREE::OnCompareItems` compares `SCH_SHEET_PATH::ComparePageNum` (:61-66), which compares the last sheet's page numerically
   (`SCH_SHEET::ComparePageNum`, eeschema/sch_sheet.cpp:1877; `SCH_SHEET_PATH::ComparePageNum`, eeschema/sch_sheet_path.cpp:219). Page 2 would
   be listed above page 4. The panel's order is the list's walk order (`HierarchyPanel.tsx:38-64`), not a page sort.
-- **hierarchy-navigator: no page number for a sheet that was never given one.** Same scenario. `GET /api/sch/hierarchy` returns `page: ""`
+- **hierarchy-navigator: no page number for a sheet that was never given one.** **Fixed by `f8b4ef93`** (every sheet path shows and is written with a page: the load's numbers where none is stored, the next free page for a new sheet path, a page per path of a screen shown twice; `PARITY-sch.md` section 43; the assertion is back, `63cd3f26`. One correction to the check found on the way: KiCad does not keep the QA file's pages 4 and 2 for the imported sheet's nested sheets -- `AddNewSheetInstances` finds no instance of the new path and gives them the lowest free pages, 6 and 7 here). Same scenario. `GET /api/sch/hierarchy` returns `page: ""`
   for the three module sheets and for the imported sheet, and the panel prints the file alone (`HierarchyPanel.tsx:61`: `s.page ? ... : file`).
   KiCad's pane labels every sheet `formatPageString( name, GetPageNumber() )` ("name (page N)", eeschema/widgets/hierarchy_pane.cpp:145,
   :844-847); a schematic loaded with every page empty is numbered 1..N by `SCH_SHEET_LIST::SetInitialPageNumbers` (eeschema/files-io.cpp:456-457

@@ -69,6 +69,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-hierarchy-pages` | Sheet page numbers as KiCad keeps them (load numbering, next free page for new sheet paths, a page per sheet path), the walk by place, the Hierarchy Navigator's page order and pages (`PARITY-sch.md` section 43; DS-LOG's two hierarchy-navigator findings) | done, gated | instance paths sorted by `KIID_PATH` (cosmetic) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
