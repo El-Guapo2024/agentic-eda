@@ -280,7 +280,8 @@ impl<'a> RuleBoard<'a> {
         let extras: HashMap<&str, &eda_model::ir::FootprintExtra> = self.design.drawings.as_ref().map(|d| d.footprint_extras.iter().map(|e| (e.id.as_str(), e)).collect()).unwrap_or_default();
         for fp in &pl.footprints {
             let part = self.model.part(&fp.id);
-            let fpid = part.and_then(|p| p.footprint.clone().or_else(|| p.package.clone())).unwrap_or_default();
+            // `A.Library_Link`: the link the derived board writes (`footprint_lib_id`: a package's installed KiCad footprint), the one Multichannel reads too (R6-D2)
+            let fpid = part.map(eda_model::footprint::footprint_lib_id).unwrap_or_default();
             let value = part.and_then(|p| p.value.clone()).unwrap_or_default();
             let side_layer = if fp.side == Side::Bottom { "B.Cu" } else { "F.Cu" };
             let outlines: Vec<Vec<Point>> = self

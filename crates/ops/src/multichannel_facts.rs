@@ -15,10 +15,9 @@
 //!   annotations on the user layers of a footprint that has a side.
 
 use super::Board;
-use eda_model::component_classes::{ClassAssignment, ComponentClassSettings, ConditionKind};
 use eda_model::footprint::{placed_pads, to_board, Model3d};
 use eda_model::fp_edit::{self, FieldLayout, UserField};
-use eda_model::ir::{Design, FootprintExtra, FootprintInstance, Point, Side, Nm};
+use eda_model::ir::{Design, FootprintExtra, FootprintInstance, Point, Nm};
 use eda_model::multichannel::Box4;
 use eda_model::{ConstraintModel, Footprint, Part};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -70,17 +69,6 @@ pub(crate) struct McBoard {
     pub codes: BTreeMap<String, i64>,
 }
 
-/// `A.memberOfSheet( 'x' )`'s test, which `wxString::Matches` makes a wildcard one: the sheet of the footprint without its closing `/` against the pattern without its closing `/`;
-/// the root (`/`, or no sheet at all) is what an empty pattern and `/` name.
-pub(crate) fn member_of_sheet(sheet: &str, wanted: &str) -> bool {
-    let (sheet, wanted) = (sheet.strip_suffix('/').unwrap_or(sheet), wanted.strip_suffix('/').unwrap_or(wanted));
-    if eda_drc::pcbexpr::wild_compare(wanted, sheet, true) {
-        return true;
-    }
-    // `refName.Matches( "/" )`: the pattern, once its closing `/` is off, is "/" itself only if it was "//"; an empty one names the root
-    (eda_drc::pcbexpr::wild_compare("/", wanted, true) || wanted.is_empty()) && sheet.is_empty()
-}
-
 /// `memberOfSheetOrChildrenFunc`: the sheet of the footprint, or any sheet below it, is the pattern -- compared level by level, each a wildcard.
 pub(crate) fn member_of_sheet_or_children(sheet: &str, wanted: &str) -> bool {
     let (sheet, wanted) = (sheet.strip_suffix('/').unwrap_or(sheet), wanted.strip_suffix('/').unwrap_or(wanted));
@@ -107,100 +95,10 @@ pub(crate) fn member_of_group(groups_up: &[String], wanted: &str) -> bool {
     groups_up.iter().any(|g| eda_drc::pcbexpr::wild_compare(wanted, g, true))
 }
 
-/// The tests of `COMPONENT_CLASS_ASSIGNMENT_DATA::GetAssignmentInDRCLanguage`'s expressions, as one footprint answers them.
-struct ClassFacts<'a> {
-    reference: &'a str,
-    fpid: &'a str,
-    front: bool,
-    /// `A.Orientation`, KiCad's counter-clockwise degrees in 0..360.
-    orientation: f64,
-    fields: &'a [(String, String)],
-    sheet: &'a str,
-}
-
-/// A string `==` of the expression language: case-insensitive, and a wildcard when the literal has a `*` or a `?` (`VALUE::EqualTo`).
-fn lib_eval_eq(value: &str, literal: &str) -> bool {
-    if literal.contains('*') || literal.contains('?') {
-        eda_drc::pcbexpr::wild_compare(literal, value, false)
-    } else {
-        value.to_lowercase() == literal.to_lowercase()
-    }
-}
-
-/// One condition of an assignment as the DRC-language expression it becomes: `None` for the ones that make no expression (a blank one, side `Any`, a rotation that is no
-/// whole number), which `GetAssignmentInDRCLanguage` leaves out.
-fn condition_holds(kind: ConditionKind, primary: &str, secondary: &str, f: &ClassFacts) -> Option<bool> {
-    let (primary, secondary) = (primary.trim(), secondary.trim());
-    match kind {
-        ConditionKind::Reference => {
-            let refs: Vec<&str> = primary.split(',').collect();
-            if primary.is_empty() {
-                return None;
-            }
-            Some(refs.iter().any(|r| lib_eval_eq(f.reference, r)))
-        }
-        ConditionKind::Footprint => (!primary.is_empty()).then(|| lib_eval_eq(f.fpid, primary)),
-        ConditionKind::Side => match primary {
-            "Any" | "" => None,
-            "Front" => Some(f.front),
-            _ => Some(!f.front),
-        },
-        ConditionKind::Rotation => match primary.parse::<i64>() {
-            Ok(deg) if primary != "Any" => Some((f.orientation - deg as f64).abs() < 1e-6),
-            _ => None,
-        },
-        ConditionKind::FootprintField => {
-            if primary.is_empty() || secondary.is_empty() {
-                return None;
-            }
-            Some(f.fields.iter().find(|(n, _)| n == primary).is_some_and(|(_, v)| lib_eval_eq(v, secondary)))
-        }
-        // A DRC expression of the user's own: the expression language is evaluated for the inspection commands, on rule items; a class assigned by one is not
-        // worked out here, and no footprint is given it.
-        ConditionKind::Custom => (!primary.is_empty()).then_some(false),
-        ConditionKind::SheetName => (!primary.is_empty()).then(|| member_of_sheet(f.sheet, primary)),
-    }
-}
-
-/// `COMPONENT_CLASS_ASSIGNMENT_RULE::Matches`: the conditions, joined by `&&` or `||`; no condition at all assigns the class to every footprint.
-fn assignment_matches(a: &ClassAssignment, f: &ClassFacts) -> bool {
-    let results: Vec<bool> = a.conditions.iter().filter_map(|c| condition_holds(c.kind, &c.primary, &c.secondary, f)).collect();
-    if results.is_empty() {
-        return true;
-    }
-    if a.all {
-        results.iter().all(|r| *r)
-    } else {
-        results.iter().any(|r| *r)
-    }
-}
-
-/// The classes the project's rules give a footprint (`GetDynamicComponentClassesForFootprint`), with a class for each sheet when the project asks
-/// (`SyncDynamicComponentClassAssignments`: not for the root and not for a footprint on no sheet; quotes are taken out of the name).
-fn dynamic_classes(settings: &ComponentClassSettings, f: &ClassFacts) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    for a in &settings.assignments {
-        if !a.class.is_empty() && assignment_matches(a, f) {
-            out.insert(a.class.clone());
-        }
-    }
-    if settings.sheet_classes && !f.sheet.is_empty() && f.sheet != "/" {
-        let name = f.sheet.replace(['"', '\''], "");
-        if member_of_sheet(f.sheet, &name) {
-            out.insert(name);
-        }
-    }
-    out
-}
-
 /// `FOOTPRINT::GetFPIDAsString`: the library link a part names. A footprint no library holds is written into a file under the library `eda` (`eda_kicad`'s writer), and read
 /// back under it: the link of one and the same footprint is not told apart by that.
 pub(crate) fn fpid_of(name: &str) -> String {
     name.strip_prefix("eda:").unwrap_or(name).to_string()
-}
-
-fn norm360(a: i64) -> i64 {
-    a.rem_euclid(360_000)
 }
 
 /// The box of a point list.
@@ -263,7 +161,8 @@ impl Board<'_> {
         }
         let extras: HashMap<&str, &FootprintExtra> = design.drawings.iter().flat_map(|d| d.footprint_extras.iter()).map(|e| (e.id.as_str(), e)).collect();
         let locked: BTreeSet<&str> = design.drawings.iter().flat_map(|d| d.locked_ids.iter().map(String::as_str)).collect();
-        let settings = &model.board.component_classes;
+        let drc_board = eda_drc::board::build(design, model);
+        let rule_board = eda_drc::rule_board::RuleBoard::new(design, model, &drc_board, eda_drc::constraints::Units::Mm, None);
         let mut fps: Vec<McFootprint> = Vec::new();
         let mut poses: Vec<&FootprintInstance> = self.placement().footprints.iter().collect();
         poses.sort_by(|a, b| a.id.cmp(&b.id));
@@ -284,17 +183,10 @@ impl Board<'_> {
             }
             // the link the board file gives the footprint (`footprint_lib_id`: a package's installed KiCad footprint), which a design block saved from it has
             let fpid = fpid_of(&eda_model::footprint::footprint_lib_id(part));
-            let mut fields: Vec<(String, String)> = vec![("Reference".into(), pose.id.clone()), ("Value".into(), part.value.clone().unwrap_or_default()), ("Footprint".into(), fpid.clone())];
-            if let Some(d) = &part.datasheet {
-                fields.push(("Datasheet".into(), d.clone()));
-            }
-            if let Some(edit) = design.footprint_edit(&pose.id) {
-                fields.extend(edit.fields.iter().map(|u| (u.name.clone(), u.text.clone())));
-            }
-            let orientation = norm360(-(pose.rot as i64)) as f64 / 1000.0;
-            let facts = ClassFacts { reference: &pose.id, fpid: &fpid, front: pose.side == Side::Top, orientation, fields: &fields, sheet: &sheetname };
-            let mut classes: BTreeSet<String> = extra.map(|e| e.component_classes.iter().cloned().collect()).unwrap_or_default();
-            classes.extend(dynamic_classes(settings, &facts));
+            // `FOOTPRINT::GetComponentClass`: the file's classes and the project's dynamic ones, as the rule board works them out -- KiCad's
+            // `COMPONENT_CLASS_ASSIGNMENT_RULE::Matches`, the compiled `GetAssignmentInDRCLanguage` evaluated on the footprint, and the sheet classes (R6-D2:
+            // one evaluator for the router, Inspect and Multichannel)
+            let classes: BTreeSet<String> = rule_board.footprint_item(&pose.id).and_then(|it| it.footprint.as_ref().map(|f| f.classes.iter().cloned().collect())).unwrap_or_default();
             let dr = design.drawings.as_ref();
             let group = dr.and_then(|d| d.parent_group(&pose.id)).map(|g| g.id.clone());
             let mut groups_up: Vec<String> = Vec::new();
