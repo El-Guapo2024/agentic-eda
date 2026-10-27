@@ -12,7 +12,11 @@
 //! * a footprint the placement names takes the session's position, side and orientation (`FOOTPRINT::SetPosition`, `Flip`, `SetOrientation`);
 //! * every segment, arc and via of the session is added, `(type fix)` ones locked, and a via that is not a through via keeps its type (`DrawingsSection::via_extras`).
 //!
-//! The DRC markers `DeleteMARKERs` deletes are kicad-cli's report here, which is never stored: the next DRC run reports the new routing.
+//! The DRC markers `DeleteMARKERs` deletes are kicad-cli's report here, which is never stored: the next DRC run reports the new routing. Differs: the board's DRC
+//! exclusions (`DrawingsSection::drc_exclusions`) are kept, where KiCad's `DeleteMARKERs()` deletes the excluded markers too, so its next save forgets them.
+//!
+//! Every track and via of the session is a new item, as KiCad makes them (`new PCB_TRACK`, `new PCB_VIA` with default padstack settings): a segment that comes back
+//! unchanged gets its old content id, but not the old item's group, tuning pattern or via settings.
 
 use super::Board;
 use eda_model::ir::{DrawingsSection, RoutingSection};
@@ -45,6 +49,9 @@ impl<'a> Board<'a> {
 
         // Delete the old tracks and vias but keep the locked ones.
         let rt: &mut RoutingSection = self.routing_mut();
+        // Every track and via of the session is a new object (`FromSESSION`: `new PCB_TRACK`, `new PCB_VIA` with default settings, after `group->RemoveItem( track )`
+        // of the old ones): an id the content gives back for an unchanged segment is not the old item, so what was said of the old one goes with it.
+        let gone: std::collections::BTreeSet<String> = rt.tracks.iter().map(|t| t.id.clone()).chain(rt.vias.iter().map(|v| v.id.clone())).filter(|id| !locked.contains(id)).collect();
         rt.tracks.retain(|t| locked.contains(&t.id));
         rt.vias.retain(|v| locked.contains(&v.id));
         let kept_tracks = rt.tracks.len();
@@ -59,8 +66,25 @@ impl<'a> Board<'a> {
         self.sort_routing();
 
         let dr: &mut DrawingsSection = self.drawings_mut();
-        // What was said of a via that is gone goes with it.
-        dr.via_extras.retain(|e| via_ids.contains(&e.id));
+        // What was said of a via that is gone goes with it, and so do the old items' places in groups and tuning patterns.
+        dr.via_extras.retain(|e| via_ids.contains(&e.id) && !gone.contains(&e.id));
+        for g in dr.groups.iter_mut() {
+            g.member_ids.retain(|m| !gone.contains(m));
+        }
+        loop {
+            let empty: Vec<String> = dr.groups.iter().filter(|g| g.member_ids.is_empty()).map(|g| g.id.clone()).collect();
+            if empty.is_empty() {
+                break;
+            }
+            dr.groups.retain(|g| !g.member_ids.is_empty());
+            for g in dr.groups.iter_mut() {
+                g.member_ids.retain(|m| !empty.contains(m));
+            }
+        }
+        for p in dr.tuning_patterns.iter_mut() {
+            p.member_ids.retain(|m| !gone.contains(m));
+        }
+        dr.tuning_patterns.retain(|p| !p.member_ids.is_empty());
         for (id, kind, _) in &new_via_ids {
             if *kind != ViaKind::Through {
                 dr.via_extras.retain(|e| &e.id != id);
@@ -157,6 +181,33 @@ mod tests {
         // KiCad's orientation is 90 + 180 on the back; a footprint made here is written with a half turn in its orientation (KiCad's frame of a flipped
         // footprint, `eda_kicad::pcb::write_footprint`), so the studio's own turn is 180 - 270
         assert_eq!((fp.at, fp.side, fp.rot), (Point { x: mm(25.0), y: mm(20.0) }, Side::Bottom, 270_000));
+    }
+
+    /// D2 (r2-editors-exports): the session's routing is new items (`FromSESSION`: `new PCB_TRACK`, `new PCB_VIA`), even where a segment comes back unchanged and so
+    /// gets its old content id: it is in no group and has none of the old via's settings.
+    #[test]
+    fn the_sessions_routing_is_new_items_in_no_group_and_with_no_old_via_settings() {
+        let m = model();
+        let mut d = design();
+        let rt = d.routing.as_ref().unwrap();
+        let vcc = rt.tracks.iter().find(|t| t.net == "VCC").unwrap().id.clone();
+        let via = rt.vias[0].id.clone();
+        let dr = d.drawings.as_mut().unwrap();
+        dr.groups = vec![eda_model::ir::Group { id: "grp_1".into(), name: String::new(), member_ids: vec![vcc.clone(), "R1".into()], design_block: String::new() }];
+        dr.via_extras = vec![ViaExtra { id: via.clone(), kind: ViaKind::Through, tokens: vec!["(tenting (front yes) (back yes))".into()] }];
+        let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+        // The echo of the VCC track and the via: the same points, width, drill and size.
+        let echo = "(session r.ses (base_design r.dsn)
+  (routes (resolution um 10)
+    (library_out (padstack \"Via[0-1]_600:300_um\" (shape (circle F.Cu 6000)) (shape (circle B.Cu 6000)) (attach off)))
+    (network_out (net VCC (wire (path F.Cu 2500 192000 -200000 120000 -200000)) (via \"Via[0-1]_600:300_um\" 120000 -200000)))))
+";
+        b.apply(&Cmd::Specctra { session: echo.into(), name: "r.ses".into() }).unwrap();
+        let d = b.design();
+        assert!(d.routing.as_ref().unwrap().tracks.iter().any(|t| t.id == vcc), "the unchanged segment comes back with its content id");
+        let dr = d.drawings.as_ref().unwrap();
+        assert_eq!(dr.groups.iter().map(|g| g.member_ids.clone()).collect::<Vec<_>>(), [vec!["R1".to_string()]], "the new track is in no group");
+        assert!(dr.via_extras.iter().all(|e| e.tokens.is_empty()), "the old via's tenting is not the new via's: {:?}", dr.via_extras);
     }
 
     /// A session KiCad would refuse leaves the board as it was, with KiCad's words.
