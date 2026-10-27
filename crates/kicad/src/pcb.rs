@@ -1259,6 +1259,8 @@ pub(crate) fn write_footprint(
     for &(pad_idx, pad) in &pads {
         let art_layers: &[String] = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.art_layers.as_slice()).unwrap_or_default();
         let (no_paste, no_mask, connector) = pad_infos.and_then(|p| p.get(pad_idx)).map_or((false, false, false), |i| (i.no_paste, i.no_mask, i.connector));
+        // The paste and mask of a hole or an edge connector pad that the file had and the default does not give, on the footprint's side.
+        let hole_tech: Option<Vec<String>> = pad_infos.and_then(|p| p.get(pad_idx)).and_then(|i| i.hole_tech_layers.as_ref()).map(|t| t.iter().map(|l| eda_model::fp_art::layer_on_side(l, fp.side)).collect());
         let nth = {
             let n = seen.entry(pad.number.as_str()).or_insert(0);
             *n += 1;
@@ -1332,15 +1334,14 @@ pub(crate) fn write_footprint(
                     // A pad of a board's file that says no drill (the Allegro importer makes them): `format( PAD )` writes the token for a hole of some size only.
                     (None, None) => {}
                 }
-                if art_layers.is_empty() && !no_mask {
-                    write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
-                } else if art_layers.is_empty() {
-                    write!(out, " (layers \"*.Cu\")").unwrap();
-                } else if no_mask {
-                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&["F.Cu", "B.Cu"], art_layers, fp.side)).unwrap();
-                } else {
-                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&["F.Cu", "B.Cu", "F.Mask", "B.Mask"], art_layers, fp.side)).unwrap();
+                // Copper on both sides and the mask on both, or the paste and mask the file's pad had (`PadMaskInfo::hole_tech_layers`: `format( const PAD* )` writes the pad's own set).
+                let mut base: Vec<&str> = vec!["F.Cu", "B.Cu"];
+                match &hole_tech {
+                    Some(tech) => base.extend(tech.iter().map(String::as_str)),
+                    None if !no_mask => base.extend(["F.Mask", "B.Mask"]),
+                    None => {}
                 }
+                write!(out, " {}", crate::fp_art_io::pad_layers_token(&base, art_layers, fp.side)).unwrap();
             }
             PadKind::Smd => {
                 if let Some((ox, oy)) = shape_text.offset {
@@ -1362,6 +1363,8 @@ pub(crate) fn write_footprint(
                 let several = !connector && !smd_layers.is_empty();
                 let base: Vec<&str> = if several {
                     smd_layers
+                } else if let (true, Some(tech)) = (connector, &hole_tech) {
+                    std::iter::once(cu).chain(tech.iter().map(String::as_str)).collect()
                 } else if connector {
                     std::iter::once(cu).chain((!no_mask).then_some(["F.Mask", "B.Mask"]).into_iter().flatten()).collect()
                 } else {

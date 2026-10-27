@@ -112,3 +112,40 @@ fn allow_soldermask_bridges_survives_export() {
     let out = export(&design, &model);
     assert!(out.contains("(attr smd allow_soldermask_bridges)"), "{out}");
 }
+
+/// F3: `format( const PAD* )` writes the pad's own layer set (`formatLayers( aPad->GetLayerSet() )`), so a through-hole pad keeps its paste and a one-sided mask, and an edge
+/// connector pad (`connect`) keeps a mask on its own side only.
+#[test]
+fn a_through_hole_pad_keeps_its_paste_and_one_sided_mask() {
+    let text = board(&format!(
+        r#"{FP_HEAD}  (attr through_hole)
+  (pad "1" thru_hole circle (at -2 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "F.Mask" "*.Paste") (net 1 "A") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac1"))
+  (pad "2" connect rect (at 2 0) (size 1 2) (layers "F.Cu" "F.Mask") (net 1 "A") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac2"))
+  (pad "3" thru_hole circle (at 0 2) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask") (net 1 "A") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac3"))
+  (pad "4" connect rect (at 4 0) (size 1 2) (layers "F.Cu" "*.Mask") (net 1 "A") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac4")))"#
+    ));
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let pads = blocks(&out, "pad");
+    let pad = |n: &str| *pads.iter().find(|p| p.starts_with(&format!("(pad \"{n}\""))).unwrap_or_else(|| panic!("pad {n}: {out}"));
+    assert!(pad("1").contains(r#"(layers "*.Cu" "*.Paste" "F.Mask")"#), "{}", pad("1"));
+    assert!(pad("2").contains(r#"(layers "F.Cu" "F.Mask")"#), "{}", pad("2"));
+    assert!(pad("3").contains(r#"(layers "*.Cu" "*.Mask")"#), "{}", pad("3"));
+    assert!(pad("4").contains(r#"(layers "F.Cu" "F.Mask" "B.Mask")"#), "the default stays: {}", pad("4"));
+}
+
+/// F3, a back-side footprint: the pad's set is held as for a top-side one and goes to the footprint's side.
+#[test]
+fn a_back_side_through_hole_pad_keeps_its_one_sided_mask_on_its_side() {
+    let text = board(
+        r#" (footprint "R:X" (layer "B.Cu") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") (at 110 110)
+  (property "Reference" "R1" (at 0 -2 0) (layer "B.SilkS") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab1") (effects (font (size 1 1) (thickness 0.15)) (justify mirror)))
+  (property "Value" "X" (at 0 2 0) (layer "B.Fab") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab2") (effects (font (size 1 1) (thickness 0.15)) (justify mirror)))
+  (attr through_hole)
+  (pad "1" thru_hole circle (at -2 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "B.Mask" "B.Paste") (net 1 "A") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac1")))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let pads = blocks(&out, "pad");
+    assert!(pads[0].contains(r#"(layers "*.Cu" "B.Paste" "B.Mask")"#) || pads[0].contains(r#"(layers "*.Cu" "B.Mask" "B.Paste")"#), "{}", pads[0]);
+}

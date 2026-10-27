@@ -2710,6 +2710,11 @@ pub struct PadMaskInfo {
     /// gives it back its type and its layers, which kicad-cli's padstack check and the mask plot tell from an SMD pad's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub connector: bool,
+    /// The paste and mask layers of a through-hole, non-plated or edge connector pad when they are not the `*.Mask` (and no paste) the writer gives such a pad otherwise: a
+    /// through-hole pad with paste (`"*.Cu" "*.Paste" "*.Mask"`) or a mask on one side only, an edge connector pad with mask on its own side only. Named as for a top-side
+    /// footprint, like [`Self::art_layers`]. KiCad writes the pad's own layer set (`format( const PAD* )`: `formatLayers( aPad->GetLayerSet() )`). `None` is the default set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hole_tech_layers: Option<Vec<String>>,
     /// A pad whose `(layers ..)` has no solder mask layer (copper under the mask, a pad the mask covers): the writer leaves the mask layer out, where a pad otherwise gets its
     /// side's (a through-hole pad both sides').
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

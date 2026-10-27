@@ -1834,6 +1834,15 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
             info.smd_layers.sort();
         }
         info.no_mask = !info.layers.iter().any(|l| l.ends_with(".Mask"));
+        // A hole's or an edge connector's paste and mask when they are not the writer's default (see `PadMaskInfo::hole_tech_layers`).
+        if matches!(sexpr::txt(pad, 2), Some("thru_hole") | Some("np_thru_hole") | Some("connect")) {
+            let mut tech: Vec<String> = info.layers.iter().filter(|l| l.ends_with(".Mask") || l.ends_with(".Paste")).map(|l| eda_model::fp_art::layer_on_side(l, side)).collect();
+            tech.sort();
+            tech.dedup();
+            if !(tech.is_empty() || tech == ["B.Mask", "F.Mask"]) {
+                info.hole_tech_layers = Some(tech);
+            }
+        }
     }
     if let Some(m) = sexpr::find(pad, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
         let m = mm_to_nm(m);
