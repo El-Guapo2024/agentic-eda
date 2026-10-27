@@ -4363,8 +4363,11 @@ impl<'a> Board<'a> {
     /// `GLOBAL_EDIT_TOOL::SwapLayers`' `for( PCB_GENERATOR* generator : Generators() ) hasChanges |= swapBoardItem( generator, layerMap );`, after the
     /// tracks: `swapBoardItem` maps the generator's `GetLayerSet()` -- `PCB_GROUP::GetLayerSet() | LSET( { GetLayer() } )`, its members' layers (the tracks
     /// already moved) and its own -- and when that changes `SetLayerSet` takes it only if it is one layer (`SetLayer`; more is a `wxFAIL` that changes
-    /// nothing). So a tuning pattern moved one way (F.Cu to In1.Cu) goes with its tracks, while a two-way swap (F.Cu with B.Cu) maps {F.Cu, B.Cu} onto
-    /// itself and leaves the pattern where it was, as KiCad does. A via stitching's vias span several layers, so it moves only when it has none.
+    /// nothing). A tuning pattern's own layer is its first track's (`PCB_TUNING_PATTERN::GetLayer`, already moved), and its `SetLayer` moves every member
+    /// too. So F.Cu with B.Cu takes a pattern's tracks to B.Cu and then, its set {B.Cu} mapping to {F.Cu}, back to F.Cu with the pattern; a chained map
+    /// (F.Cu to In1.Cu, In1.Cu to In2.Cu) moves the tracks to In1.Cu and then the pattern and its tracks to In2.Cu (round 4 B-1); one way (F.Cu to In1.Cu)
+    /// the set {In1.Cu} is unchanged, and the pattern is on In1.Cu with its tracks because that is what its `GetLayer` says. A via stitching's vias
+    /// span several layers, so it moves only when it has none.
     fn swap_generator_layers(&mut self, map: &std::collections::HashMap<&str, &str>) {
         let layers = self.model.board.layers.clone();
         let (tracks, vias) = match self.design.routing.as_ref() {
@@ -4396,14 +4399,29 @@ impl<'a> Board<'a> {
             (mapped != set && mapped.len() == 1).then(|| mapped.into_iter().next()).flatten()
         };
         let Some(dr) = self.design.drawings.as_mut() else { return };
+        let mut moved_members: Vec<(Vec<String>, String)> = Vec::new();
         for p in dr.tuning_patterns.iter_mut() {
-            if let Some(l) = swapped(&p.layer, member_layers(&p.member_ids)) {
-                p.layer = l;
+            // `PCB_TUNING_PATTERN::GetLayer`: the first track's layer, else the generator's own.
+            let own = p.member_ids.iter().find_map(|id| tracks.iter().find(|t| &t.id == id)).map_or_else(|| p.layer.clone(), |t| t.layer.clone());
+            if let Some(l) = swapped(&own, member_layers(&p.member_ids)) {
+                p.layer = l.clone();
+                moved_members.push((p.member_ids.clone(), l));
+            } else {
+                // Unchanged, the pattern is where `GetLayer` says, its tracks' layer (what KiCad's writer writes, `format( PCB_GENERATOR )`).
+                p.layer = own;
             }
         }
         for v in dr.board_items.via_stitches.iter_mut() {
             if let Some(l) = swapped(&v.layer, member_layers(&v.member_ids)) {
                 v.layer = l;
+            }
+        }
+        // `PCB_TUNING_PATTERN::SetLayer`: `for( BOARD_ITEM* item : GetBoardItems() ) item->SetLayer( aLayer );`.
+        if let Some(rt) = self.design.routing.as_mut() {
+            for (ids, l) in moved_members {
+                for t in rt.tracks.iter_mut().filter(|t| ids.contains(&t.id)) {
+                    t.layer = l.clone();
+                }
             }
         }
     }
