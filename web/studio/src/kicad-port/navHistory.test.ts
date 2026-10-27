@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { initialNavHistory, pushToHistory, goBack, goForward, canGoBack, canGoForward } from "./navHistory";
+import { initialNavHistory, pushToHistory, goBack, goForward, canGoBack, canGoForward, cleanHistory, resetHistory } from "./navHistory";
 
 test("push, back, forward", () => {
   let h = initialNavHistory();
@@ -26,4 +26,14 @@ test("pushing after going back drops the forward tail; duplicates not repeated",
   h = pushToHistory(h, ["c"]);
   assert.equal(h.entries.length, 2);
   assert.equal(goBack(initialNavHistory()), null);
+});
+
+test("r6 C6-L1: clean_history_drops_paths_no_longer_in_the_hierarchy (CleanHistory)", () => {
+  assert.deepEqual(cleanHistory({ entries: [[], ["A"], []], index: 2 }, [[]]), { entries: [[]], index: 0 });
+  // kept entries; the index goes to the last one
+  assert.deepEqual(cleanHistory({ entries: [[], ["A"], ["B"], []], index: 1 }, [[], ["B"]]), { entries: [[], ["B"], []], index: 2 });
+  // an empty hierarchy leaves the history as it is (`wxCHECK( !sheets.empty() )`)
+  const h = { entries: [[], ["A"]], index: 1 };
+  assert.equal(cleanHistory(h, []), h);
+  assert.deepEqual(resetHistory(["A"]), { entries: [["A"]], index: 0 });
 });

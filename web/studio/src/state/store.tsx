@@ -12,7 +12,7 @@ import type { TuneDrawState } from "../kicad-port/tuneTool";
 import type { RouteSizesInfo } from "../kicad-port/routerSizes";
 import type { BoardState, BoardText, Cmd, CmdDimension, CmdText, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Nm, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
-import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
+import { cleanHistory, initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
 import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, refilterDrc, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
@@ -1079,6 +1079,8 @@ export type Action =
   | { type: "SET_TAB"; tab: EditorTab }
   | { type: "SET_SHEET_PATH"; path: string[]; /** false = do not push onto the Back/Forward history (Back/Forward themselves). Default true. */ record?: boolean }
   | { type: "SET_SCH_NAV"; nav: NavHistory }
+  /** `SCH_NAVIGATE_TOOL::CleanHistory` against the sheet paths of the hierarchy (r6 C6-L1). */
+  | { type: "CLEAN_SCH_NAV"; sheets: string[][] }
   | { type: "SET_SCH_LINE_MODE"; mode: LineMode }
   | { type: "TOGGLE_SCH_POSTURE" }
   | { type: "SET_RIGHT_DOCK_TAB"; tab: RightDockTab }
@@ -1318,6 +1320,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, currentSheetPath: action.path, schEnteredGroupId: null, schNav: action.record === false ? state.schNav : pushToHistory(state.schNav, action.path) };
     case "SET_SCH_NAV":
       return { ...state, schNav: action.nav };
+    case "CLEAN_SCH_NAV":
+      return { ...state, schNav: cleanHistory(state.schNav, action.sheets) };
     case "SET_SCH_LINE_MODE":
       return { ...state, schLineMode: action.mode };
     case "TOGGLE_SCH_POSTURE":

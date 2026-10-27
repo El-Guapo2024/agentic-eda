@@ -32,3 +32,23 @@ export function goBack(h: NavHistory): NavHistory | null {
 export function goForward(h: NavHistory): NavHistory | null {
   return canGoForward(h) ? { ...h, index: h.index + 1 } : null;
 }
+
+/**
+ * CleanHistory (sch_navigate_tool.cpp, run by `SCH_EDIT_FRAME::UpdateHierarchyNavigator` on every hierarchy change): drop each entry that no
+ * longer names a sheet path of the schematic (`sheets`, `Schematic().Hierarchy()`), and an entry equal to the one before it ("Don't allow
+ * multiple consecutive instances of the same history"); then the index goes to the last entry (the first when one or none is left).
+ * (KiCad's `wxCHECK( !sheets.empty() )` returns with the history untouched; so does this.)
+ */
+export function cleanHistory(h: NavHistory, sheets: string[][]): NavHistory {
+  if (sheets.length === 0) return h;
+  const entries: string[][] = [];
+  for (const e of h.entries) {
+    if (!sheets.some((s) => same(s, e))) continue;
+    if (entries.length > 0 && same(entries[entries.length - 1]!, e)) continue;
+    entries.push(e);
+  }
+  return { entries, index: entries.length <= 1 ? 0 : entries.length - 1 };
+}
+
+/** ResetHistory (sch_navigate_tool.cpp, on load, `files-io.cpp` / `sch_edit_frame.cpp`): one entry, the sheet in view. */
+export const resetHistory = (current: string[]): NavHistory => ({ entries: [current], index: 0 });

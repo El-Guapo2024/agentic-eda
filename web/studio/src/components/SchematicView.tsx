@@ -22,6 +22,7 @@ import { isTerminalPoint } from "../kicad-port/schTerminalPoint";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LabelScope, Schematic } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
+import { fetchHierarchy } from "../api/schControlClient";
 import { boundsOfPoints, fitTransform } from "./canvas/view";
 import { computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, handleWheel, type WheelInput } from "../kicad-port/viewControls";
 import { panByWorldDelta } from "../kicad-port/view";
@@ -182,6 +183,25 @@ export function SchematicView() {
   const imageVersion = useImageVersion();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // r6 C6-L1: `SCH_EDIT_FRAME::UpdateHierarchyNavigator` runs `SCH_NAVIGATE_TOOL::CleanHistory` when the hierarchy changes, so Back / Forward
+  // never step onto a sheet that was deleted. The list is read again on every design change; the clean runs when its sheet paths differ from the
+  // last ones read. (The history's `ResetHistory` on load is the store's initial `[[root]]`.)
+  const hierarchyKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetchHierarchy().then(
+      (list) => {
+        if (!live) return;
+        const key = list.map((e) => e.path.join("/")).sort().join("\n");
+        if (hierarchyKeyRef.current !== null && hierarchyKeyRef.current !== key) dispatch({ type: "CLEAN_SCH_NAV", sheets: list.map((e) => e.path) });
+        hierarchyKeyRef.current = key;
+      },
+      () => {}
+    );
+    return () => {
+      live = false;
+    };
+  }, [state.version, dispatch]);
   const dragRef = useRef<DragState | null>(null);
   /** Set when a right-button drag that panned or zoomed the view has just ended, so the `contextmenu` event the browser sends after it does not open the menu (a click does). */
   const justPannedRef = useRef(false);
