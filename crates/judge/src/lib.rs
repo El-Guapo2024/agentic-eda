@@ -1,11 +1,19 @@
-//! VLM judge: a hosted vision model looks at a RENDER of each stage and
+//! VLM judge: a hosted vision model looks at a picture of each stage and
 //! returns a rubric-versioned verdict. It only ever sees gate-clean
 //! candidates (the caller's job); its defects become CheckResults so the
 //! loop treats them like any other gate, and every verdict is logged as
 //! preference data for a trained critic later.
 //!
-//! No fallback: without `ANTHROPIC_API_KEY`, `rsvg-convert`, or a parseable
-//! verdict the judge FAILS (`judge_unavailable`), it never passes silently.
+//! The picture is KiCad's: `kicad-cli sch export svg|png` of the derived
+//! schematic, `kicad-cli pcb export svg|png` of the derived board
+//! (`eda_kicad_engine::pictures`), so the judge sees what KiCad draws. The
+//! hand-drawn pictures this crate and `eda-render` used to make
+//! ([`render_stage_svg`], [`render_board_svg`]) are INACTIVE, kept for a
+//! future all-Rust build behind `EDA_RUST_PICTURES=1`.
+//!
+//! No fallback: without `ANTHROPIC_API_KEY`, kicad-cli (or, for a kicad-cli
+//! too old to plot PNG, `rsvg-convert`), or a parseable verdict the judge
+//! FAILS (`judge_unavailable`), it never passes silently.
 
 use base64::Engine;
 use eda_model::footprint::{placed_courtyard, placed_pads};
@@ -15,7 +23,9 @@ use eda_model::units::{mm, Nm};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-pub const RUBRIC_VERSION: &str = "judge-rubric-1";
+/// 2: the pictures are kicad-cli's plots (KiCad's symbols, colours and
+/// drawing sheet), no longer the hand-drawn ones rubric 1 was written for.
+pub const RUBRIC_VERSION: &str = "judge-rubric-2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,7 +89,68 @@ fn unavailable(hint: impl Into<String>) -> Vec<CheckResult> {
     vec![CheckResult::fail("judge_unavailable", "judge", hint)]
 }
 
-// ------------------------------------------------------------- renders
+// ------------------------------------------------------------- pictures
+/// The picture of a stage, as the files the judge looks at.
+#[derive(Debug, Clone, Default)]
+pub struct StagePicture {
+    /// The SVG of every page (one for a board, one per sheet for a schematic, the root first).
+    pub svgs: Vec<String>,
+    /// The PNG of every page, in the same order: what the vision model is sent.
+    pub pngs: Vec<Vec<u8>>,
+}
+
+/// Whether the inactive hand-drawn pictures are asked for (`EDA_RUST_PICTURES=1`) instead of kicad-cli's.
+pub fn rust_pictures() -> bool {
+    eda_render::rust_pictures()
+}
+
+fn no_picture(stage: Stage, e: Vec<CheckResult>) -> Vec<CheckResult> {
+    let why: Vec<String> = e.iter().filter_map(|c| c.hint.clone()).collect();
+    unavailable(format!("no {} picture to judge: the judge looks at KiCad's plot of the design and has no fallback: {}", stage.name(), why.join("; ")))
+}
+
+/// The stage as KiCad plots it (`eda_kicad_engine::pictures`): the schematic's pages by `kicad-cli sch export svg|png`, the board by
+/// `kicad-cli pcb export svg|png` (placement without the tracks, routing with them). The derived files go into `<out>/.kicad`, named `name`.
+/// A kicad-cli that plots no PNG (an older nightly) has its SVG rasterised by `rsvg-convert` instead, the board on KiCad's background.
+pub fn kicad_stage_picture(stage: Stage, design: &Design, model: &ConstraintModel, out: &Path, name: &str) -> Result<StagePicture, Vec<CheckResult>> {
+    use eda_kicad_engine::pictures::{board_plot, plots_png, schematic_plot, PictureFormat, PCB_BACKGROUND};
+    let work = out.join(".kicad");
+    let read = |p: &Path| std::fs::read(p).map_err(|e| unavailable(format!("could not read {}: {e}", p.display())));
+    let mut pic = StagePicture::default();
+    match stage {
+        Stage::Schematic => {
+            let pages = schematic_plot(design, model, &work, &work.join("judge-schematic-svg"), name, PictureFormat::Svg).map_err(|e| no_picture(stage, e))?;
+            for p in &pages {
+                pic.svgs.push(String::from_utf8_lossy(&read(p)?).into_owned());
+            }
+            if plots_png("sch") {
+                for p in schematic_plot(design, model, &work, &work.join("judge-schematic-png"), name, PictureFormat::Png).map_err(|e| no_picture(stage, e))? {
+                    pic.pngs.push(read(&p)?);
+                }
+            } else {
+                for svg in &pic.svgs {
+                    pic.pngs.push(svg_to_png(svg, 1600, None)?);
+                }
+            }
+        }
+        Stage::Placement | Stage::Routing => {
+            let routing = stage == Stage::Routing;
+            let svg = board_plot(design, model, &work, &work.join(format!("judge-{}.svg", stage.name())), name, PictureFormat::Svg, routing).map_err(|e| no_picture(stage, e))?;
+            pic.svgs.push(String::from_utf8_lossy(&read(&svg)?).into_owned());
+            if plots_png("pcb") {
+                let png = board_plot(design, model, &work, &work.join(format!("judge-{}.png", stage.name())), name, PictureFormat::Png, routing).map_err(|e| no_picture(stage, e))?;
+                pic.pngs.push(read(&png)?);
+            } else {
+                pic.pngs.push(svg_to_png(&pic.svgs[0], 1600, Some(PCB_BACKGROUND))?);
+            }
+        }
+    }
+    Ok(pic)
+}
+
+/// INACTIVE (2026-10-28): replaced by [`kicad_stage_picture`] (kicad-cli `sch export svg` / `pcb export svg`) per the user's port-vs-reuse rule;
+/// kept for a future all-Rust build, and used only with `EDA_RUST_PICTURES=1`.
+///
 /// Render the stage the judge should look at. Schematic uses the real
 /// renderer; placement/routing use a plain board view (outline, courtyards
 /// with refdes, pads, tracks, vias) so the judge sees exactly our geometry.
@@ -90,6 +161,8 @@ pub fn render_stage_svg(stage: Stage, design: &Design, model: &ConstraintModel) 
     }
 }
 
+/// INACTIVE (2026-10-28): replaced by kicad-cli `pcb export svg` ([`kicad_stage_picture`]) per the user's port-vs-reuse rule; kept for a
+/// future all-Rust build, and used only with `EDA_RUST_PICTURES=1`.
 pub fn render_board_svg(design: &Design, model: &ConstraintModel, with_routing: bool) -> Result<String, Vec<CheckResult>> {
     let pl = design.placement.as_ref().ok_or_else(|| unavailable("design has no placement to render"))?;
     let (mut x0, mut y0, mut x1, mut y1) = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
@@ -138,12 +211,17 @@ pub fn render_board_svg(design: &Design, model: &ConstraintModel, with_routing: 
     Ok(s)
 }
 
-/// SVG → PNG via rsvg-convert (the same tool the dev review loop uses).
-pub fn svg_to_png(svg: &str, width_px: u32) -> Result<Vec<u8>, Vec<CheckResult>> {
+/// SVG → PNG via rsvg-convert (the same tool the dev review loop uses), on `background` (`-b`) when one is given: for the inactive
+/// hand-drawn pictures, and for a kicad-cli too old to plot PNG itself.
+pub fn svg_to_png(svg: &str, width_px: u32, background: Option<&str>) -> Result<Vec<u8>, Vec<CheckResult>> {
     use std::io::Write;
     use std::process::{Command, Stdio};
-    let mut child = Command::new("rsvg-convert")
-        .args(["-w", &width_px.to_string()])
+    let mut cmd = Command::new("rsvg-convert");
+    cmd.args(["-w", &width_px.to_string()]);
+    if let Some(bg) = background {
+        cmd.args(["-b", bg]);
+    }
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -169,7 +247,7 @@ pub fn rubric(stage: Stage) -> &'static str {
 6. Related parts are grouped (decoupling caps next to their IC pin, feedback networks next to the op-amp). \
 7. Few wire crossings; no four-way junctions ambiguity; junction dots where wires join. \
 8. Symbols are standard and recognisable; pin names readable.",
-        Stage::Placement => "You are a senior PCB layout engineer reviewing a component PLACEMENT (board view: outline, courtyards with refdes, pads; no traces yet). Rubric: \
+        Stage::Placement => "You are a senior PCB layout engineer reviewing a component PLACEMENT (KiCad's board view: outline, courtyards in magenta, silkscreen with refdes in yellow, pads; no traces yet). Rubric: \
 1. Decoupling capacitors sit right next to the IC pins they serve. \
 2. Connectors are at the board edge with their pins facing outward. \
 3. Parts connected to each other are close; no part stranded far from everything it talks to. \
@@ -177,7 +255,7 @@ pub fn rubric(stage: Stage) -> &'static str {
 5. Orientations are consistent (passives aligned in rows, same rotation where possible). \
 6. Enough room between parts for routing and assembly; nothing crammed against the outline. \
 7. Thermal/high-current parts have space and are not boxed in.",
-        Stage::Routing => "You are a senior PCB layout engineer reviewing ROUTED copper (red = top layer, blue = bottom layer, grey circles = vias, dashed = courtyards). Rubric: \
+        Stage::Routing => "You are a senior PCB layout engineer reviewing ROUTED copper in KiCad's colours (red = top copper, blue = bottom copper, round pads with a drilled hole on both = vias, magenta outlines = courtyards, yellow = silkscreen). Rubric: \
 1. Traces are short and direct; no detours, staircases, or loops. \
 2. Few vias; two-pin nets should rarely need a via. \
 3. No trace runs between pads of a part or under a part without reason. \
@@ -208,17 +286,23 @@ fn design_context(stage: Stage, design: &Design, model: &ConstraintModel) -> Str
 // ------------------------------------------------------------- the call
 /// Ask the vision model for a verdict on `png`.
 pub fn judge_png(stage: Stage, png: &[u8], context: &str, o: &JudgeOptions) -> Result<Verdict, Vec<CheckResult>> {
+    judge_pngs(stage, &[png.to_vec()], context, o)
+}
+
+/// Ask the vision model for a verdict on the pages `pngs` (a schematic's sheets, the root first), sent as one message.
+pub fn judge_pngs(stage: Stage, pngs: &[Vec<u8>], context: &str, o: &JudgeOptions) -> Result<Verdict, Vec<CheckResult>> {
     let key = o.api_key.clone().ok_or_else(|| unavailable("ANTHROPIC_API_KEY not set; the judge has no fallback"))?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+    let mut content: Vec<serde_json::Value> = pngs
+        .iter()
+        .map(|png| serde_json::json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64::engine::general_purpose::STANDARD.encode(png)}}))
+        .collect();
+    content.push(serde_json::json!({"type": "text", "text": prompt(stage, context)}));
     let body = serde_json::json!({
         "model": o.model,
         "max_tokens": o.max_tokens,
         "messages": [{
             "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
-                {"type": "text", "text": prompt(stage, context)}
-            ]
+            "content": content
         }]
     });
     let resp = ureq::post("https://api.anthropic.com/v1/messages")
@@ -249,15 +333,45 @@ fn extract_json(text: &str) -> Option<&str> {
     (end > start).then(|| &text[start..=end])
 }
 
-/// Full path: render → png → verdict → CheckResults. Also writes
-/// `<out>/judge_<stage>.{svg,png,json}` so the review page can show what
-/// the judge saw.
-pub fn judge_stage(stage: Stage, design: &Design, model: &ConstraintModel, out: &Path, o: &JudgeOptions) -> Result<(Verdict, Vec<CheckResult>), Vec<CheckResult>> {
-    let svg = render_stage_svg(stage, design, model)?;
-    let png = svg_to_png(&svg, 1600)?;
-    let _ = std::fs::write(out.join(format!("judge_{}.svg", stage.name())), &svg);
-    let _ = std::fs::write(out.join(format!("judge_{}.png", stage.name())), &png);
-    let verdict = judge_png(stage, &png, &design_context(stage, design, model), o)?;
+/// The file of page `i` of a stage's picture: `judge_<stage>.<ext>` for the first (the root sheet, the board), `judge_<stage>_<n>.<ext>` for
+/// page n = 2, 3, ... of a hierarchical schematic.
+fn picture_file(out: &Path, stage: Stage, i: usize, ext: &str) -> std::path::PathBuf {
+    if i == 0 {
+        out.join(format!("judge_{}.{ext}", stage.name()))
+    } else {
+        out.join(format!("judge_{}_{}.{ext}", stage.name(), i + 1))
+    }
+}
+
+/// Full path: picture → verdict → CheckResults. Also writes
+/// `<out>/judge_<stage>.{svg,png,json}` (and `judge_<stage>_<n>.{svg,png}`
+/// for a schematic's further sheets) so the review page can show what the
+/// judge saw. The pictures are KiCad's ([`kicad_stage_picture`], the derived
+/// files named `name`), or the inactive hand-drawn ones with
+/// `EDA_RUST_PICTURES=1`.
+pub fn judge_stage(stage: Stage, design: &Design, model: &ConstraintModel, out: &Path, name: &str, o: &JudgeOptions) -> Result<(Verdict, Vec<CheckResult>), Vec<CheckResult>> {
+    let pic = if rust_pictures() {
+        let svg = render_stage_svg(stage, design, model)?;
+        let png = svg_to_png(&svg, 1600, None)?;
+        StagePicture { svgs: vec![svg], pngs: vec![png] }
+    } else {
+        kicad_stage_picture(stage, design, model, out, name)?
+    };
+    // A page an earlier run wrote that this one has not (a sheet since removed) must not pass for this run's.
+    for ext in ["svg", "png"] {
+        let mut i = pic.svgs.len().max(pic.pngs.len());
+        while picture_file(out, stage, i, ext).exists() {
+            let _ = std::fs::remove_file(picture_file(out, stage, i, ext));
+            i += 1;
+        }
+    }
+    for (i, svg) in pic.svgs.iter().enumerate() {
+        let _ = std::fs::write(picture_file(out, stage, i, "svg"), svg);
+    }
+    for (i, png) in pic.pngs.iter().enumerate() {
+        let _ = std::fs::write(picture_file(out, stage, i, "png"), png);
+    }
+    let verdict = judge_pngs(stage, &pic.pngs, &design_context(stage, design, model), o)?;
     let _ = std::fs::write(out.join(format!("judge_{}.json", stage.name())), serde_json::to_string_pretty(&verdict).unwrap());
     Ok((verdict.clone(), verdict_to_checks(&verdict, o)))
 }

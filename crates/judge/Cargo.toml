@@ -10,3 +10,4 @@ base64 = "0.22"
 ureq = { version = "2", features = ["json"] }
 eda-model = { path = "../model" }
 eda-render = { path = "../render" }
+eda-kicad-engine = { path = "../kicad-engine" }
