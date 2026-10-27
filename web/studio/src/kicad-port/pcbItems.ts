@@ -124,8 +124,10 @@ export function itemPosition(board: BoardState, id: string): [number, number] | 
       const d = board.drawings?.dimensions.find((q) => q.id === id);
       return d ? [d.start[0], d.start[1]] : null;
     }
-    // `PCB_GROUP::GetPosition()` is the centre of its bounding box.
+    // `PCB_GROUP::GetPosition()` is the centre of its bounding box; a tuning pattern's (`PCB_GENERATOR::GetPosition()`) is its `m_origin`.
     case "group": {
+      const pattern = board.drawings?.tuning_patterns?.find((q) => q.id === id);
+      if (pattern) return [pattern.origin.x, pattern.origin.y];
       const b = itemBounds(board, id);
       return b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : null;
     }
