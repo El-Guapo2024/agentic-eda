@@ -684,10 +684,11 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
         })
     } else {
         // A board built from an intent states no minimums, so the floors are lowered to what the board itself asks of
-        // them: the narrowest class it routes. The router keeps every pad -- through-hole or not -- at least the
-        // board's own default clearance from copper on another net (see `crates/freeroute`'s clearance matrix); that is
-        // the real guarantee behind a hole on this board, so it is what the hole-clearance floor should ask for, never
-        // more.
+        // them: the narrowest class it routes. The hole floors are the board's own `hole_clearance_nm` and
+        // `hole_to_hole_min_nm`, KiCad's defaults unless the intent says otherwise (`DEFAULT_HOLECLEARANCE` and
+        // `DEFAULT_HOLETOHOLEMIN`, 0.25 mm, `BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS`): the router keeps exactly
+        // these (`pns::rule_resolver`'s `HOLE_CLEARANCE` and `HOLE_TO_HOLE`), so kicad-cli checks what was routed. (This
+        // wrote the class clearance, 0.2 mm, as the hole clearance until 2026-10-27.)
         let min_clearance = b.net_classes.iter().filter_map(|c| c.clearance).fold(b.clearance, Nm::min);
         let min_track_width = b.net_classes.iter().filter_map(|c| c.track_width).fold(b.track_width, Nm::min);
         serde_json::json!({
@@ -695,8 +696,8 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
             "min_track_width": mm_f(min_track_width),
             "min_via_annular_width": 0.1,
             "min_via_diameter": 0.3,
-            "min_hole_clearance": mm_f(b.clearance),
-            "min_hole_to_hole": 0.25,
+            "min_hole_clearance": mm_f(b.hole_clearance_nm),
+            "min_hole_to_hole": mm_f(b.hole_to_hole_min_nm),
             "min_through_hole_diameter": 0.2,
             "min_microvia_diameter": 0.2,
             "min_microvia_drill": 0.1,
@@ -2084,6 +2085,25 @@ mod tests {
         assert_eq!(out.matches("(layer \"B.CrtYd\")").count(), bottom, "a bottom-side footprint's courtyard is on B.CrtYd");
         assert!(out.contains("(fp_rect (start ") && out.contains("(fill none) (layer \"F.CrtYd\")"), "{out}");
         assert!(out.contains("(46 \"B.CrtYd\" user \"B.Courtyard\")") && out.contains("(47 \"F.CrtYd\" user \"F.Courtyard\")"), "both courtyard layers declared, with the names KiCad shows for them (formatBoardLayers)");
+    }
+
+    #[test]
+    fn an_intent_boards_project_asks_the_hole_clearance_the_router_keeps() {
+        // `BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS`: `m_HoleClearance = mmToIU( DEFAULT_HOLECLEARANCE )`, 0.25 mm
+        // (`board_design_settings.h`), and `m_HoleToHoleMin` 0.25 mm. The router (`pns::rule_resolver`, `HOLE_CLEARANCE`)
+        // keeps `board.hole_clearance_nm`; the project kicad-cli checks it with has to ask the same, not the class clearance.
+        let (_, model) = fixture();
+        assert!(!model.board.constraints_explicit);
+        let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro(&model)).expect("valid json");
+        let rules = &pro["board"]["design_settings"]["rules"];
+        assert_eq!(rules["min_hole_clearance"], serde_json::json!(0.25), "KiCad's DEFAULT_HOLECLEARANCE, the router's hole_clearance_nm");
+        assert_eq!(rules["min_hole_to_hole"], serde_json::json!(0.25), "KiCad's DEFAULT_HOLETOHOLEMIN");
+        let mut tighter = model.clone();
+        tighter.board.hole_clearance_nm = Nm::new(300_000);
+        tighter.board.hole_to_hole_min_nm = Nm::new(400_000);
+        let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro(&tighter)).expect("valid json");
+        assert_eq!(pro["board"]["design_settings"]["rules"]["min_hole_clearance"], serde_json::json!(0.3));
+        assert_eq!(pro["board"]["design_settings"]["rules"]["min_hole_to_hole"], serde_json::json!(0.4));
     }
 
     #[test]
