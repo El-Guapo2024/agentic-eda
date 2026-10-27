@@ -1,5 +1,5 @@
 // Compare Symbol with Library (`eeschema.InspectionTool.diffSymbol`, `SCH_INSPECTION_TOOL::DiffSymbol`): the report of how the symbol the schematic
-// draws differs from its library entry -- `kicad-port/symbolDiff.ts`. KiCad's "Visual" page (the two drawn side by side) is not ported.
+// draws differs from its library entry -- `kicad-port/symbolDiff.ts`, with the placed symbol's own fields (`flattenedSchSymbol->SetFields( fields )`). KiCad's "Visual" page (the two drawn side by side) is not ported.
 import { useEffect, useState } from "react";
 import { useStudioState } from "../../state/store";
 import { fetchAnySymbol } from "../../api/libraryClient";
@@ -23,7 +23,7 @@ export function SymbolDiffDialog({ reference, onClose }: { reference: string; on
       return;
     }
     fetchAnySymbol(libId).then(
-      ({ symbol }) => alive && setReport({ kind: "diff", lines: diffSymbols({ ...drawn, power: (drawn as { power?: boolean }).power ?? false }, symbol) }),
+      ({ symbol }) => alive && setReport({ kind: "diff", lines: diffSymbols({ ...drawn, power: (drawn as { power?: boolean }).power ?? false }, symbol, sym ? { at: sym.at, fields: sym.fields } : undefined) }),
       () => alive && setReport({ kind: "missing", item })
     );
     return () => {
