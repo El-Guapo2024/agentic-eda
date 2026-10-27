@@ -74,6 +74,8 @@ pub struct PinGeom {
     pub orient: PinOrient,
     /// The pin line's length, nanometres.
     pub length: f64,
+    /// Not shown (`SCH_PIN::IsVisible` false: a legacy hidden power pin).
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +146,7 @@ impl SymbolGeom {
             };
             let d = bake_dir(rot, mirrored, local);
             let name = part.and_then(|pt| pt.pins.iter().find(|x| x.number == p.number)).map(|x| x.name.clone().unwrap_or_default()).unwrap_or_else(|| p.name.clone());
-            pins.push(PinGeom { number: p.number.clone(), name: eda_model::kicad_geom::shown_name(&name).to_string(), tip, orient: PinOrient::of_dir(d), length: p.length_mm * 1e6 });
+            pins.push(PinGeom { number: p.number.clone(), name: eda_model::kicad_geom::shown_name(&name).to_string(), tip, orient: PinOrient::of_dir(d), length: p.length_mm * 1e6, hidden: p.hidden });
         }
         let texts = PinTexts { names_hidden: cs.pin_names_hidden, numbers_hidden: cs.pin_numbers_hidden, name_offset_mm: cs.pin_name_offset_mm };
         SymbolGeom { body, pins, texts, power: cs.power, width }

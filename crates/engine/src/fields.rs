@@ -432,13 +432,21 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&Field
     let fbox_w = sizes.iter().map(|s| s.0).max().unwrap_or(0);
     let fbox_h: i64 = sizes.iter().map(|s| round_n(s.1, GRID_IU, true)).sum();
 
-    let body = geom.body.unwrap_or(Rect::point((at.x.as_f64(), at.y.as_f64())));
+    // r2 C-M4: `AUTOPLACER` skips a symbol's invisible pins (`pinsOnSide`, `getPinsBox`: `if( !each_pin->IsVisible() && !m_is_power_symbol ) continue;`), and
+    // its body box (`GetBodyBoundingBox`, pins left out) still has the root of every visible pin ("the roots of the pins are always included")
+    let shown_pins: Vec<&crate::symgeom::PinGeom> = geom.pins.iter().filter(|p| !p.hidden || geom.power).collect();
+    let mut body = geom.body;
+    for p in geom.pins.iter().filter(|p| !p.hidden) {
+        let root = (p.tip.0 + p.orient.dir().0 * p.length, p.tip.1 + p.orient.dir().1 * p.length);
+        body = Some(body.map_or(Rect::point(root), |b| b.merge_point(root)));
+    }
+    let body = body.unwrap_or(Rect::point((at.x.as_f64(), at.y.as_f64())));
     let (bx, by, bw, bh) = (iu(body.x0), iu(body.y0), iu(body.w()), iu(body.h()));
     let center = (bx + bw / 2, by + bh / 2);
 
     // the pins on each side, and the box of each side's pins
     let st = SymbolGeom::pin_style();
-    let count = |s: Side| geom.pins.iter().filter(|p| pin_side(p.orient) == s).count();
+    let count = |s: Side| shown_pins.iter().filter(|p| pin_side(p.orient) == s).count();
     let mut order = [(Side::Right, count(Side::Right)), (Side::Top, count(Side::Top)), (Side::Left, count(Side::Left)), (Side::Bottom, count(Side::Bottom))];
     // `getPreferredSides`: `h_mirrored` swaps right and left, and a long thin one prefers the top and bottom
     if mirrored {
@@ -462,7 +470,7 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&Field
         let (mut fx, mut fy) = (fc.0 - fbox_w / 2, fc.1 - fbox_h / 2);
         if npins > 0 {
             let mut pins_box: Option<Rect> = None;
-            for p in geom.pins.iter().filter(|p| pin_side(p.orient) == side) {
+            for p in shown_pins.iter().filter(|p| pin_side(p.orient) == side) {
                 let b = pin_bbox(p.tip, p.orient, p.length, &p.name, &p.number, &st, &st, &geom.texts);
                 pins_box = Some(pins_box.map_or(b, |acc| acc.merge(b)));
             }
