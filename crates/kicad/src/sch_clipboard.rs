@@ -129,7 +129,10 @@ pub fn parse_clipboard(text: &str) -> Result<SchFragment, String> {
 
 /// KiCad has one segment to a wire, and a polyline this studio drew is written as one wire per segment. Read back, the segments that meet at a plain
 /// bend -- exactly two wire ends there, of the same kind (wire or bus), and nothing else at that point: no junction, label, no-connect, bus entry or
-/// power symbol -- are one polyline again, in the order they were written, so a copy of this studio's own wires pastes as the wires it copied.
+/// power symbol -- are one polyline again, in the order they were written, so a copy of this studio's own wires pastes as the wires it copied. Only
+/// segments that run on from one another (one's end the next one's start, as the writer writes a polyline) are joined: two that meet end to end, or
+/// start to start, came from KiCad's own wires, and a polyline made of them would turn one of them around and move the paste's anchor
+/// (`GetTopLeftItem` takes each `SCH_LINE`'s stored start: r3 D3-M6).
 fn join_bends(section: &mut SchematicSection) {
     use eda_model::ir::Wire;
     // the segments each joined wire was made of: a group names its members by the wires of the file, which the join replaces
@@ -166,14 +169,10 @@ fn join_bends(section: &mut SchematicSection) {
             if !plain_bend(bus, end) {
                 break;
             }
-            let Some(j) = (0..wires.len()).find(|&j| !used[j] && wires[j].bus == bus && wires[j].pts.len() >= 2 && (ends(&wires[j]).0 == end || ends(&wires[j]).1 == end)) else { break };
+            let Some(j) = (0..wires.len()).find(|&j| !used[j] && wires[j].bus == bus && wires[j].pts.len() >= 2 && ends(&wires[j]).0 == end) else { break };
             used[j] = true;
             parts.push(wires[j].id.clone());
-            if ends(&wires[j]).0 == end {
-                pts.extend(wires[j].pts[1..].iter().copied());
-            } else {
-                pts.extend(wires[j].pts.iter().rev().skip(1).copied());
-            }
+            pts.extend(wires[j].pts[1..].iter().copied());
         }
         // ... and back from the first one (the segment before it may come later in the text).
         loop {
@@ -181,10 +180,10 @@ fn join_bends(section: &mut SchematicSection) {
             if !plain_bend(bus, start) {
                 break;
             }
-            let Some(j) = (0..wires.len()).find(|&j| !used[j] && wires[j].bus == bus && wires[j].pts.len() >= 2 && (ends(&wires[j]).0 == start || ends(&wires[j]).1 == start)) else { break };
+            let Some(j) = (0..wires.len()).find(|&j| !used[j] && wires[j].bus == bus && wires[j].pts.len() >= 2 && ends(&wires[j]).1 == start) else { break };
             used[j] = true;
             parts.push(wires[j].id.clone());
-            let mut before: Vec<Point> = if ends(&wires[j]).1 == start { wires[j].pts[..wires[j].pts.len() - 1].to_vec() } else { wires[j].pts.iter().rev().copied().take(wires[j].pts.len() - 1).collect() };
+            let mut before: Vec<Point> = wires[j].pts[..wires[j].pts.len() - 1].to_vec();
             before.extend(pts);
             pts = before;
         }
@@ -909,6 +908,11 @@ mod tests {
         let f = parse_clipboard(&backwards).unwrap();
         assert_eq!(f.section.wires.len(), 1);
         assert_eq!(f.section.wires[0].pts.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), vec![(Nm::ZERO, Nm::ZERO), (mm(10.0), Nm::ZERO), (mm(10.0), mm(5.0))]);
+        // r3 D3-M6: KiCad's own wires meeting end to end stay two, each from its own start, and the paste's anchor is KiCad's (`GetTopLeftItem`: (10, 20))
+        let end_to_end = [wire((20.0, 10.0), (10.0, 10.0)), wire((10.0, 20.0), (10.0, 10.0))].concat();
+        let f = parse_clipboard(&end_to_end).unwrap();
+        assert_eq!(f.section.wires.len(), 2);
+        assert_eq!(eda_model::sch_clipboard::top_left_anchor(&f.section), Some(Point { x: mm(10.0), y: mm(20.0) }));
     }
 
     /// An image copied in KiCad is `(image ..)` in the fragment, and pastes as an image (it used to be left out with "images are not pasted").
