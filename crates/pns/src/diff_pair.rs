@@ -26,7 +26,7 @@ use crate::direction45::{AngleType, CornerMode, Direction45};
 use crate::item::{same_net, Item, Net, Segment, Via};
 use crate::layer::LayerRange;
 use crate::line::Line;
-use crate::node::{Node, QueryOpts};
+use crate::node::{Node, QueryOpts, Side};
 use crate::seg_ops::{self, rescale, Seg2};
 use eda_drc::kimath::{isqrt, Seg, Shape};
 use eda_model::ir::{Point, Nm};
@@ -314,15 +314,16 @@ impl PairLine<'_> {
     /// `NODE::CheckColliding( &line, aKindMask )`: some segment of the line, or its via, is within the clearance of an item of `node`
     /// of one of the kinds in `mask` ([`crate::node::kind_mask`]).
     pub fn hits_node(&self, node: &Node, rules: &BoardRules, mask: u8) -> bool {
-        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false };
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false, head_hole: None };
         let layers = LayerRange::single(self.layer);
         self.pts.windows(2).any(|w| !node.colliding_with(&Shape::Stadium { a: w[0], b: w[1], r: self.width / 2 }, self.net, layers, rules, &[], opts).is_empty())
-            || self.via.is_some_and(|v| !node.colliding_with(&Shape::Circle { c: v.pos, r: v.diameter / 2 }, &v.net, v.layers, rules, &[], opts).is_empty())
+            || self.via.is_some_and(|v| !node.via_colliding(v, rules, &[], opts).is_empty())
     }
 
     /// `LINE::Collide( &other, aNode, aLayer )`: the two lines, and each one's via against the other, are within the rules' clearance of
-    /// each other (no epsilon: `collideSimple` without a context). Lines of the same net never collide.
-    pub fn hits_line(&self, other: &PairLine, rules: &BoardRules) -> bool {
+    /// each other (no epsilon: `collideSimple` without a context; `aNode->GetClearance`, so with the board's rules the implicit "(diff
+    /// pair)" rule of a class whose gap is under its clearance: `AB.isCoupledDiffPair()`). Lines of the same net never collide.
+    pub fn hits_line(&self, other: &PairLine, node: &Node, rules: &BoardRules) -> bool {
         // a segment's shape and the box it can reach, for the pairs that are near enough to be worth the exact test
         let segs = |l: &PairLine, reach: Nm| {
             l.pts
@@ -336,7 +337,7 @@ impl PairLine<'_> {
         };
         let via_shape = |v: &Via| Shape::Circle { c: v.pos, r: v.diameter / 2 };
         if !same_net(self.net, other.net) && self.layer == other.layer {
-            let clearance = Node::clearance(rules, self.net, other.net);
+            let clearance = node.clearance_between(rules, Side::track(self.net, self.layer), Side::track(other.net, other.layer), false);
             let (mine, mut theirs) = (segs(self, clearance), segs(other, Nm::ZERO));
             // sweep along x: for each of mine, only the segments of theirs that start before it ends are candidates
             theirs.sort_by_key(|(_, b)| b.0);
@@ -350,7 +351,7 @@ impl PairLine<'_> {
         for (mine, theirs) in [(self, other), (other, self)] {
             if let Some(v) = mine.via {
                 if !same_net(&v.net, theirs.net) && v.layers.overlaps_layer(theirs.layer) {
-                    let clearance = Node::clearance(rules, &v.net, theirs.net);
+                    let clearance = node.clearance_between(rules, Side::via(v), Side::track(theirs.net, theirs.layer), false);
                     if segs(theirs, Nm::ZERO).iter().any(|(s, _)| via_shape(v).collides(s, clearance).is_some()) {
                         return true;
                     }
@@ -358,7 +359,7 @@ impl PairLine<'_> {
             }
         }
         if let (Some(a), Some(b)) = (self.via, other.via) {
-            if !same_net(&a.net, &b.net) && a.layers.overlaps(&b.layers) && via_shape(a).collides(&via_shape(b), Node::clearance(rules, &a.net, &b.net)).is_some() {
+            if !same_net(&a.net, &b.net) && a.layers.overlaps(&b.layers) && via_shape(a).collides(&via_shape(b), node.clearance_between(rules, Side::via(a), Side::via(b), false)).is_some() {
                 return true;
             }
         }

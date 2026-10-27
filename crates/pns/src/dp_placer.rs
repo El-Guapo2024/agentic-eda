@@ -47,7 +47,6 @@ use crate::settings::{Mode, RoutingSettings};
 use crate::shove::{DisplacedLine, DisplacedVia, ShoveHead};
 use crate::springback::{HeadSet, Springback};
 use crate::walkaround::{WalkPolicy, WalkStatus, Walker};
-use eda_drc::kimath::Shape;
 use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 use std::collections::{BTreeMap, HashSet};
@@ -501,16 +500,17 @@ impl DiffPairPlacer {
         let mut handled: HashSet<ItemId> = HashSet::new();
         let norm_sq = |v: crate::diff_pair::Vec2| v.0.area(v.0) + v.1.area(v.1);
         while iter < MAX_ITER {
-            let circle = Shape::Circle { c: virt.pos, r: virt.diameter / 2 };
-            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false };
-            let mut obstacles = node.colliding_with(&circle, &virt.net, virt.layers, rules, &[], opts);
+            // `m_currentNode->QueryColliding( &virtHead, ..)`: its copper and its hole
+            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false, head_hole: None };
+            let mut obstacles = node.via_colliding(&virt, rules, &[], opts);
             obstacles.sort_by_key(|o| o.id);
             let Some(obs) = obstacles.first() else { break };
             if handled.contains(&obs.id) {
                 break;
             }
             let Some(item) = node.get(obs.id) else { break };
-            let clearance = Node::clearance_to(rules, &self.net_p, item);
+            // `m_currentNode->GetClearance( obs->m_item, &m_currentTrace.PLine(), false )`
+            let clearance = node.clearance_to(rules, crate::node::Side::track(&self.net_p, self.current_layer), item);
             let mut layer_force = (Nm::ZERO, Nm::ZERO);
             collided = false;
             // `RelevantShapeLayers`: the layers both occupy (shapes are the same on every layer here)
@@ -1048,6 +1048,7 @@ impl DiffPairPlacer {
 mod tests {
     use eda_model::units::mm;
     use super::*;
+    use eda_drc::kimath::Shape;
     use crate::item::{Segment, Solid};
 
     fn p(x: Nm, y: Nm) -> Point {

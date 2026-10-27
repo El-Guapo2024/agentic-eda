@@ -814,7 +814,7 @@ fn verify_dp_bypass(cache: &HitCache, base: (&ChainHits, &ChainHits), pair: &cra
     let (ref_base, coupled_base) = if ref_is_p { (pair.p_pair_line(), pair.n_pair_line()) } else { (pair.n_pair_line(), pair.p_pair_line()) };
     let ref_line = PairLine { pts: new_ref, ..ref_base };
     let coupled_line = PairLine { pts: new_coupled, ..coupled_base };
-    !(cache.hits_with_base(base.0, &ref_line) || cache.hits_with_base(base.1, &coupled_line) || ref_line.hits_line(&coupled_line, cache.rules))
+    !(cache.hits_with_base(base.0, &ref_line) || cache.hits_with_base(base.1, &coupled_line) || ref_line.hits_line(&coupled_line, cache.node, cache.rules))
 }
 
 /// `coupledBypass`: a new route for the coupled line that follows the bypass the reference line took -- from a vertex of the coupled line
@@ -1273,7 +1273,7 @@ mod tests {
         let rules = pair_rules();
         let before = dp.clone();
         let world_hit = |dp: &crate::diff_pair::DiffPair| dp.p_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY) || dp.n_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY);
-        assert!(!world_hit(&before) && !before.p_pair_line().hits_line(&before.n_pair_line(), &rules), "test setup: the pair as walked is clear");
+        assert!(!world_hit(&before) && !before.p_pair_line().hits_line(&before.n_pair_line(), &node, &rules), "test setup: the pair as walked is clear");
         optimize_pair(&node, &rules, &mut dp);
         // the ends stay
         assert_eq!((dp.p.first(), dp.p.last()), (before.p.first(), before.p.last()));
@@ -1283,7 +1283,7 @@ mod tests {
         // never longer (a micrometre of rounding aside), clear of the world, clear of each other
         assert!(crate::diff_pair::chain_length(&dp.p) <= crate::diff_pair::chain_length(&before.p) + Nm::new(1));
         assert!(crate::diff_pair::chain_length(&dp.n) <= crate::diff_pair::chain_length(&before.n) + Nm::new(1));
-        assert!(!dp.p_pair_line().hits_line(&dp.n_pair_line(), &rules), "{dp:?}");
+        assert!(!dp.p_pair_line().hits_line(&dp.n_pair_line(), &node, &rules), "{dp:?}");
         assert!(!world_hit(&dp), "{dp:?}");
         // and no less coupled than it was: `mergeDpStep` only accepts a merge that keeps the coupled length
         assert!(dp.coupled_length() + 2000.0 >= before.coupled_length(), "{} < {}", dp.coupled_length(), before.coupled_length());
@@ -1301,7 +1301,7 @@ mod tests {
         let world_hit = |dp: &crate::diff_pair::DiffPair| dp.p_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY) || dp.n_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY);
         assert!(!world_hit(&before), "test setup: the pad is clear of the pair as walked");
         optimize_pair(&node, &rules, &mut dp);
-        assert!(!world_hit(&dp) && !dp.p_pair_line().hits_line(&dp.n_pair_line(), &rules), "{dp:?}");
+        assert!(!world_hit(&dp) && !dp.p_pair_line().hits_line(&dp.n_pair_line(), &node, &rules), "{dp:?}");
         assert_eq!((dp.p, dp.n), (before.p, before.n));
     }
 }

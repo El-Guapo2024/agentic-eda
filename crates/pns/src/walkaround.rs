@@ -20,7 +20,7 @@
 use crate::item::{ItemId, Net};
 use crate::layer::LayerRange;
 use crate::line::Line;
-use crate::node::{kind_mask, Node, QueryOpts};
+use crate::node::{kind_mask, Node, QueryOpts, Side};
 use eda_drc::kimath::{Seg, Shape};
 use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
@@ -280,7 +280,7 @@ impl<'a> Walker<'a> {
         let line = Line::from_points(net.clone(), layer, width, pts.to_vec());
         let restricted = &self.restricted;
         let filter = |id: ItemId| restricted.contains(&id);
-        let opts = QueryOpts { kind_mask: self.item_mask, filter: if restricted.is_empty() { None } else { Some(&filter) }, use_epsilon: true, box_hull: self.corner_mode.is_90() };
+        let opts = QueryOpts { kind_mask: self.item_mask, filter: if restricted.is_empty() { None } else { Some(&filter) }, use_epsilon: true, box_hull: self.corner_mode.is_90(), head_hole: None };
         self.node.nearest_obstacle(&line, self.end_via.as_ref(), self.rules, &self.exclude, opts)
     }
 
@@ -289,32 +289,28 @@ impl<'a> Walker<'a> {
         pts.windows(2).any(|w| {
             let shape = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
             self.node.first_colliding(&shape, net, LayerRange::single(layer), self.rules, &self.exclude).is_some()
-        }) || self.end_via.as_ref().is_some_and(|v| self.node.first_colliding(&Shape::Circle { c: v.pos, r: v.diameter / 2 }, &v.net, v.layers, self.rules, &self.exclude).is_some())
+        }) || self.end_via.as_ref().is_some_and(|v| !self.node.via_colliding(v, self.rules, &self.exclude, QueryOpts::default()).is_empty())
     }
 
-    /// `shortest->Collide( item, .. )`: does the path collide with this one item.
+    /// `shortest->Collide( item, .. )`: does the path collide with this one item ([`Node::item_collision`], with the epsilon).
     fn collides_item(&self, pts: &[Point], net: &Net, layer: i32, width: Nm, id: ItemId) -> bool {
         let Some(item) = self.node.get(id) else { return false };
-        if !item.layers().overlaps_layer(layer) || crate::item::same_net(item.net(), net) {
-            return false;
-        }
-        let clearance = Node::clearance_to(self.rules, net, item);
-        let clearance = if clearance > Nm::ZERO { (clearance - crate::node::CLEARANCE_EPSILON).max(Nm::ZERO) } else { clearance };
-        let item_shape = item.shape(item.layers().start());
-        pts.windows(2).any(|w| Shape::Stadium { a: w[0], b: w[1], r: width / 2 }.collides(&item_shape, clearance).is_some())
-            || self.end_via.as_ref().is_some_and(|v| {
-                let via_clearance = Node::clearance_to(self.rules, &v.net, item);
-                let via_clearance = if via_clearance > Nm::ZERO { (via_clearance - crate::node::CLEARANCE_EPSILON).max(Nm::ZERO) } else { via_clearance };
-                !crate::item::same_net(item.net(), &v.net) && item.layers().overlaps(&v.layers) && Shape::Circle { c: v.pos, r: v.diameter / 2 }.collides(&item_shape, via_clearance).is_some()
-            })
+        let opts = QueryOpts::default();
+        pts.windows(2).any(|w| {
+            let shape = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
+            self.node.item_collision(self.rules, id, item, &shape, Side::Track { net, layer, seg: Some((w[0], w[1])) }, LayerRange::single(layer), opts).is_some()
+        }) || self.end_via.as_ref().is_some_and(|v| {
+            let opts = QueryOpts { head_hole: (v.drill > Nm::ZERO).then_some(v.drill / 2), ..opts };
+            self.node.item_collision(self.rules, id, item, &Shape::Circle { c: v.pos, r: v.diameter / 2 }, Side::via(v), v.layers, opts).is_some()
+        })
     }
 
     /// `processCluster`: walk `pts` around every item of the cluster in turn.
     fn process_cluster(&self, cluster: &[ItemId], pts: &mut Vec<Point>, net: &Net, layer: i32, width: Nm, cw: bool) -> bool {
         for &id in cluster {
             let Some(item) = self.node.get(id) else { continue };
-            let clearance = Node::clearance_to(self.rules, net, item);
-            let hull = item.hull(clearance, width, layer);
+            // `m_world->GetClearance( clItem, &aLine, false )`, `clItem->Hull( clearance, aLine.Width(), layer )`
+            let hull = self.node.obstacle_hull(self.rules, item, Side::Track { net, layer, seg: pts.first().zip(pts.get(1)).map(|(a, b)| (*a, *b)) }, Nm::ZERO, width, layer, false);
             let hull = if self.corner_mode.is_90() { crate::hull::bbox_hull(&hull) } else { hull };
             let mut simplified = Line { arcs: self.arcs.clone(), ..Line::from_points(net.clone(), layer, width, std::mem::take(pts)) };
             simplified.simplify2(); // `aLine.Line().Simplify2()`

@@ -746,6 +746,7 @@ dependencies = [
  "eda-clipper2",
  "eda-drc",
  "eda-kicad",
+ "eda-kicad-engine",
  "eda-model",
  "eda-shape-poly-set",
  "serde_json",
