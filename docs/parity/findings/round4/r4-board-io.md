@@ -66,6 +66,8 @@ Each fix was read against the C++ and checked on its corpus board in the round t
 
 ### N1. A radial or leader dimension's text is moved to a computed place; KiCad keeps it where the file has it. **medium**
 
+**Fixed** on ds/r4-board-io: `25a5f8d7`. `import_dimensions` keeps the `gr_text`'s `(at x y)` for a radial and a leader (`Dimension::text_pos`) and the leader's `(text_frame ..)` (`Dimension::text_frame`); the writer gives both back, Move/Rotate carry the kept position, and a radial's aligned angle follows `PCB_DIM_RADIAL::updateText`. Test: `a_leader_and_a_radial_dimension_keep_their_text_position`. `issue6945` 50 -> 42 lines, `api_kitchen_sink` 49 -> 45.
+
 **What differs.**
 - `crates/kicad/src/import_items.rs:308` (`import_dimensions`) does not read the `gr_text`'s `(at ..)` ("The dimension's measured value and text are not read: both are recomputed ... (`dim->Update()` in KiCad, `compute_dimension_geometry` here)"), and `crates/kicad/src/pcb.rs:461` writes `compute_dimension_geometry(d)`'s text position for every kind.
 - For a radial and a leader dimension, KiCad never computes the text position: it is the user's (the line is drawn *to* it). 8303b2ad `pcb_dimension.cpp`:
@@ -83,6 +85,8 @@ Each fix was read against the C++ and checked on its corpus board in the round t
 **Known?** Partly. GAPS item 35 lists "manual text position" (mode 2) and the leader's text border. The mode-0 radial/leader case, where KiCad has no automatic position at all, is not listed, and the `import_items.rs` comment claims KiCad recomputes it.
 
 ### N2. Update/Compare Footprint with Library reports board "overrides" that are the library's own values. **medium**
+
+**Fixed** on ds/r4-board-io: `7ce2a09c`. Every override line is told only when the board's value differs from the library's (`FootprintNeedsUpdate`, `padHasOverrides`), the library's own pad margins and zone facts travel with the placed footprint (`LibraryFacts`/`PadOverrides`, `lib_keep`), and the missing footprint-level solder-paste checks and the pad's spoke-angle check are in. Test: `an_override_equal_to_the_librarys_is_not_reported` (and `a_published_library_footprints_own_overrides_are_not_differences` in the CLI). An unedited placed footprint reports nothing.
 
 **What differs.**
 - `crates/model/src/fp_compare.rs:329-341` reports "Pad clearance overridden.", "Solder mask expansion overridden.", "Zone connection overridden." whenever the board's value is set, and `pad_override_lines` (`fp_compare.rs:274`) reports each pad's when set.
@@ -114,6 +118,8 @@ Each fix was read against the C++ and checked on its corpus board in the round t
 
 ### N3. The library-parity report's wording and pad checks are not KiCad's. **low**
 
+**Fixed** on ds/r4-board-io: `36319460`. KiCad's wording (`describe`: "Segment of U1 on F.SilkS differs.", "%s [<net>] of %s on %s"), courtyard graphics among the other graphics, the pad layer-set comparison, pad-to-die length, fabrication property, the copper shape's whole stroke and one primitives line for the first differing layer. Not done: "'Allow bridged solder mask apertures between pads' settings differ." and "Barcode count differs." -- the model carries neither setting (GAPS 26 already lists the attribute flags); the "Courtyard differs." fallback stays only for a footprint whose courtyard is a derived outline rather than file graphics, where KiCad has no equivalent line to copy.
+
 `crates/model/src/fp_compare.rs` against 8303b2ad `drc_test_provider_library_parity.cpp`:
 - **Shape lines.** Ours: "Line on F.SilkS differs." (`kind_name`, `fp_compare.rs:86`). KiCad: `REPORT( wxString::Format( _( "%s differs." ), ITEM_DESC( *aIt ) ) )` with `PCB_SHAPE::GetItemDescription`: `"%s of %s on %s"` (`GetFriendlyName()`, the footprint reference, the layer), and `"%s %s of %s on %s"` with the net for a copper shape; `EDA_SHAPE::getFriendlyName` says "Segment", "Rectangle", "Arc", "Circle", "Polygon", "Curve". So KiCad says "Segment of U1 on F.SilkS differs.".
 - **"Courtyard differs."** (`fp_compare.rs:355-357`) is not a KiCad message. KiCad's courtyard lines are graphic items like the rest (`GraphicalItems()` filtered to `PCB_SHAPE_T`), so a courtyard change reads "Segment of U1 on F.CrtYd differs." or "Graphic item count differs.".
@@ -127,6 +133,8 @@ Each fix was read against the C++ and checked on its corpus board in the round t
 **Known?** Partly: GAPS 26 names the attribute flags, not the wording or the pad layer sets.
 
 ### N4. A footprint file of version 20260826 or later is read with its bold text 1.6 times too thin. **medium**
+
+**Fixed** on ds/r4-board-io: `bb087728`. `parse_footprint_file` and `footprint_import` run `bold_text::normalize` against the footprint file's own `(version ..)`, as `parseEDA_TEXT`'s `m_requiredVersion < 20260826` gate does; test `a_kicad_11_footprint_files_bold_text_keeps_its_width`.
 
 **What differs.**
 - The board reader widens a bold text's thickness back to the older meaning (`crates/kicad/src/bold_text.rs::normalize`, called only from `import.rs:151`).
@@ -146,6 +154,8 @@ Each fix was read against the C++ and checked on its corpus board in the round t
 **Known?** No (`bold_text.rs`'s header says "every reader of text in this crate works on either", which is true for boards only).
 
 ### N5. A legacy pad whose `(net N "name")` disagrees with the net table keeps the table's net; KiCad leaves it on no net. **low**
+
+**Fixed** on ds/r4-board-io: `2154aa5d`. `parsePAD`'s `case T_net`: a code the table has is on the table's net only when the line's name is that net's name, else no net (`NETINFO_LIST::ORPHANED`); a code the table lacks makes the line's name a net whatever the table (the `SetNetCode` failure path). Test: `a_pad_whose_net_name_disagrees_with_its_code_is_on_no_net` and the no-table case.
 
 **What differs.**
 - `crates/kicad/src/import.rs:554` (`net_of`): a bare code found in the table gives the table's name; a code not found gives the line's name only when the table is not empty.
@@ -170,6 +180,8 @@ Each fix was read against the C++ and checked on its corpus board in the round t
 
 ### N6. A layer the file has off is turned on when an item sits on it. **low**
 
+**Fixed** on ds/r4-board-io: `7419c3fc`. `add_layers_in_use` is gone: an item on a layer the file's `(layers ..)` does not name keeps its layer, and the page stays the file's, so `write_layers` lists only what the file listed; the item is kept and hidden. The test is now `a_layer_the_items_are_on_but_the_file_has_off_stays_off` (the old one asserted the divergence), and it also checks that the export carries both items and reads back as the same page. `issue25265` 14 -> 13, `issue25303` 14 -> 13, `stitch_fp_rulearea` 7 -> 6.
+
 **What differs.**
 - `crates/kicad/src/import.rs` `add_layers_in_use` ("A layer an imported item is on is a layer the board has") enables it, and `pcb.rs` `write_layers` lists it.
 - KiCad's parser finds the item's layer by name among all standard names (`m_layerIndices`), puts the item there, and leaves the board's enabled set as the file's `(layers ..)` says; `formatBoardLayers` writes only the enabled ones. The item is kept and hidden.
@@ -180,13 +192,17 @@ Each fix was read against the C++ and checked on its corpus board in the round t
 
 ### N7. A footprint polygon drawn with arcs is flattened to fewer points than KiCad flattens it to. **low**
 
+**Fixed** on ds/r4-board-io: `7419c3fc`. A polygon's arcs are flattened at `getArcPolygonizationMaxError()` -- `SHAPE_ARC::DefaultAccuracyForPCB() / 5`, 0.001 mm (`eda_model::outline::POLYGON_ARC_ERROR_NM`) -- in the footprint art reader, the board `gr_poly`/zone `(pts ..)` reader and so in the writer's points: `connect`'s J102 `fp_poly` has kicad-cli's 42 points (was 22) and compares identical (`connect` 206 -> 190 lines); `issue23053`'s H2-H5 now have kicad-cli's 60 points too, with 1 nm on a few coordinates left (our `Arc::polyline` rounds where `SHAPE_ARC::ConvertToPolyline` rounds slightly differently -- the N8 family; a faithful port of that function would touch every caller of `polyline`, so it is not done here).
+
 **How to see it.** 8303b2ad `connect`, J102's four `fp_poly` of two arcs each: kicad-cli's rewrite of the original has 42 points per polygon, ours 22 (`issue23053` likewise). The outline moves by up to the flattening error. kicad-cli itself writes these as points, so the arcs themselves are not lost by us alone.
 
 **Known?** The board `gr_poly` case is GAPS 27 and the custom-pad case GAPS 31; the footprint `fp_poly` case is not named.
 
 ### N8. One-nanometre drifts. **low**
-- `issue12609` R1 (back side, legacy file): the user fields MFR and MPN at `(at 275.824062 210.835224)` become `210.835223` (the r2 F15 placement `p - R(a) p` rounds differently from KiCad's `KiROUND`).
-- `issue8407`: two footprint arcs' `mid` by 1 nm.
+
+**Fixed** (arc) and **not a bug** (legacy field) on ds/r4-board-io: `7419c3fc`.
+- `issue8407`: **fixed**. A legacy `(start CENTRE) (end ARC_START) (angle A)` arc now mirrors `SetArcAngleAndEnd( A, true )` (the end is the start turned by -A; a negative A swaps them) and `GetArcMid` (the rounded start turned by half the angle its rounded radials make, `CalcArcAngles`), with KiCad's integer `RotatePoint`/`KIROUND` and its exact `EDA_ANGLE::Sin`/`Cos` and `EDA_ANGLE( VECTOR2D )` values. `issue8407` 173 -> 169.
+- `issue12609` R1 MFR/MPN (back side, legacy file): **not our import's rounding**. Our export writes `(at 275.824062 210.835224 0)`, byte for byte what kicad-cli's own rewrite of the original 20220914 file has -- the import's `p - R(a) p` for a field with no `(at)` reproduces KiCad's value exactly. The 1 nm appears only when kicad-cli re-parses our version-20241229 export: a pre-20260616 file's board-frame `(at)` is converted into the footprint frame and written back, with integer rounding each way, and no value near 210.835224 lands back on it (222 -> 223, 223 -> 223, 224 -> 223, 225 -> 225; a 5x7 probe around the pair found no preimage). The last nanometre therefore needs the 20260616 transform format (a KiCad 10 file version), not a different number in ours.
 
 ## Reuse (active code that duplicates kicad-cli or a linked C++ library)
 

@@ -113,17 +113,26 @@ fn a_board_nobody_set_up_is_the_board_kicad_starts() {
     assert!(LayerSetup::default().is_default());
 }
 
+/// r4-board-io N6: KiCad's parser finds an item's layer by name among all standard names (`m_layerIndices`) and leaves the board's enabled set as the file's `(layers ..)`
+/// says (`formatBoardLayers` writes the enabled ones); the item is kept and merely hidden. A file that lists fewer layers than its items use (`issue25265`'s, `issue25303`'s and
+/// `stitch_fp_rulearea`'s JSON on `User.9`) does not gain a layer from them.
 #[test]
-fn a_layer_the_items_are_on_is_a_layer_the_board_has() {
+fn a_layer_the_items_are_on_but_the_file_has_off_stays_off() {
     let text = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
 	(gr_line (start 1 1) (end 5 1) (stroke (width 0.1) (type default)) (layer "Cmts.User") (uuid "00000000-0000-0000-0000-000000000001"))
 	(gr_line (start 1 2) (end 5 2) (stroke (width 0.1) (type default)) (layer "User.7") (uuid "00000000-0000-0000-0000-000000000002"))
 	(net 0 ""))"#;
     let (design, model, _) = import_kicad_pcb(text).expect("imports");
-    assert!(model.board.layer_setup.enabled.iter().any(|l| l == "Cmts.User") && model.board.layer_setup.enabled.iter().any(|l| l == "User.7"), "{:?}", model.board.layer_setup.enabled);
-    assert!(design.drawings.as_ref().is_some_and(|d: &DrawingsSection| d.shapes.iter().any(|s: &Shape| s.layer() == "User.7")));
-    let layers = layers_section(&export(&design, &model));
-    assert!(layers.iter().any(|l| l == "(56 \"User.7\" user)"), "{layers:?}");
+    for off in ["Cmts.User", "User.7"] {
+        assert!(!model.board.layer_setup.enabled.iter().any(|l| l == off), "{off} was not in the file: {:?}", model.board.layer_setup.enabled);
+    }
+    assert!(design.drawings.as_ref().is_some_and(|d: &DrawingsSection| d.shapes.iter().any(|s: &Shape| s.layer() == "User.7")), "the item is kept, hidden");
+    let out = export(&design, &model);
+    let layers = layers_section(&out);
+    assert!(!layers.iter().any(|l| l.contains("User.7") || l.contains("Cmts.User")), "{layers:?}");
+    assert!(out.contains("(layer \"User.7\")") && out.contains("(layer \"Cmts.User\")"), "the items keep their layers: {out}");
+    let (_, again, _) = import_kicad_pcb(&out).expect("re-imports");
+    assert_eq!(again.board.layer_setup, model.board.layer_setup, "what the writer wrote is what the importer reads");
 }
 
 /// r3-board-io F13: a file from before 20200922 has no user names (`parseLayer`: `m_name = m_userName = name`), so its technical layers are shown by the file's names

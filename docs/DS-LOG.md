@@ -703,3 +703,142 @@ ladder still fails it exactly where intended: `l2_sensor_hub` seed 0, `l3_motor_
 - The page shows one message under the section (KiCad marks the offending cell); Apply refuses the whole page, and the backend
   refuses the same rows again if any client sends them anyway. The finding named the messages; the display is unchanged from the
   other pages' single-message style.
+
+## Round-4 board-file findings N1-N8 (r4-board-io) (done 2026-10-27)
+
+**What I did.**
+
+- Read the reviewer's `findings/round4/r4-board-io.md` (3 medium: N1, N2, N4; 5 low: N3, N5-N8) and re-read KiCad's own code for
+  each: `kicad-src-8303b2ad` (`PCB_DIM_LEADER::updateGeometry`, `PCB_DIM_RADIAL::updateText`,
+  `drc_test_provider_library_parity.cpp::FootprintNeedsUpdate` / `padHasOverrides`, `parseEDA_TEXT`'s
+  `m_requiredVersion < 20260826` gate, `parsePAD`'s `case T_net`, `parseLayer` / `formatBoardLayers`,
+  `SHAPE_LINE_CHAIN::Append` / `SHAPE_ARC::ConvertToPolyline`, the legacy arc's `SetArcAngleAndEnd` / `GetArcMid`) and
+  `kicad-src-25ec2335` (KiCad 10: `parsePAD`, `parseZONE`, the 20260616 transform).
+- Test first for every fix; the test is named with its finding below. No assertion was loosened. One test was replaced (N6)
+  because it asserted the divergence from KiCad; the new one checks KiCad's behaviour and more -- see Unsure.
+- The reviewer's scratch (`/tmp/findings-r4-board-io.QGzO`: `eda-bin`, `rt/summary.txt`, `bin/`) was the before; the same
+  `tools/board-roundtrip/run.sh ... 3` command over the same 214 boards was the after.
+
+**The findings' summary lines (verbatim).**
+
+| # | Finding | Severity | Known? |
+|---|---|---|---|
+| N1 | Radial and leader dimension text moved to a computed place; leader text frame lost | medium | partly (mode 2 and the frame are; mode 0 is not) |
+| N2 | Library parity reports the library's own pad/footprint settings as board overrides; paste and spoke-angle overrides missing | medium | no |
+| N4 | `.kicad_mod` of 20260826+ read without the bold-text migration: bold text 1.6x thinner | medium | no |
+| N3 | Library parity wording ("Line on .." vs "Segment of U1 on ..", "Courtyard differs."), pad layer sets, die length, fab property not compared | low | partly |
+| N5 | Pad `(net N "name")` mismatches: KiCad orphans / uses the name; we take the table / no net | low | no |
+| N6 | A layer the file has off is enabled when an item sits on it (`User.9` on 3 boards) | low | no (deliberate) |
+| N7 | Footprint `fp_poly` arcs flattened to fewer points than KiCad | low | no (board/pad cases known) |
+| N8 | 1 nm drifts (legacy field position, arc mid) | low | no |
+
+Counts: **high 0**, **medium 3** (N1, N2, N4), **low 5** (N3, N5, N6, N7, N8).
+
+**The fixes.**
+
+- **N1 (medium) -- fixed, `25a5f8d7`.** `import_dimensions` keeps a radial's and a leader's `gr_text` `(at x y)` in
+  `Dimension::text_pos` and the leader's `(text_frame ..)` in `Dimension::text_frame`; the writer gives both back, Move and
+  Rotate carry the kept position, and a radial's aligned text angle follows `PCB_DIM_RADIAL::updateText`. KiCad never
+  computes these two kinds' text position (the line is drawn to the text), so recomputing it moved the text and the leader
+  line. Test: `a_leader_and_a_radial_dimension_keep_their_text_position` (`crates/kicad/src/pcb.rs`). `issue6945` 50 -> 42
+  lines, `api_kitchen_sink` 49 -> 45.
+- **N2 (medium) -- fixed, `7ce2a09c`.** `FootprintNeedsUpdate` and `padHasOverrides` tell an override only when the board's
+  value differs from the library's (KiCad compares with `aLibFP`); the library's own values travel with the placed footprint
+  (`LibraryFacts` / `PadOverrides` in `fp_compare`; the library's kept tokens read with `lib_keep`), and the footprint-level solder-paste (absolute and relative) and
+  the pad's thermal-relief spoke angle checks are added, with the custom-zone knockout and effective thermal gap. An unedited
+  placed footprint reports nothing. Tests: `an_override_equal_to_the_librarys_is_not_reported`
+  (`crates/model/src/fp_compare.rs`) and `a_published_library_footprints_own_overrides_are_not_differences`
+  (`crates/cli/src/fp_library_tests.rs`).
+- **N3 (low) -- fixed, `36319460`.** The report now says KiCad's words: `ITEM_DESC` shape lines ("Segment of U1 on F.SilkS
+  differs.", the net in a copper shape's line), courtyard graphics among the other graphics, the pad layer-set comparison,
+  pad-to-die length, the fabrication property, the copper shape's whole stroke, and one primitives line for the first
+  differing layer. Not done: "'Allow bridged solder mask apertures between pads' settings differ." and "Barcode count
+  differs." -- the model carries neither setting (GAPS 26 already lists the attribute flags); the "Courtyard differs."
+  fallback stays only for a footprint whose courtyard is a derived outline rather than file graphics, where KiCad has no
+  equivalent line to copy.
+- **N4 (medium) -- fixed, `bb087728`.** `parse_footprint_file` and `footprint_import` run `bold_text::normalize` against the
+  footprint file's own `(version ..)`, as `parseEDA_TEXT`'s `m_requiredVersion < 20260826` gate does (the board reader
+  already did it). Tests: `a_kicad_11_footprint_files_bold_text_keeps_its_width` in `footprint_lib.rs` and
+  `footprint_import.rs`.
+- **N5 (low) -- fixed, `2154aa5d`.** `parsePAD`'s `case T_net`: a code the net table has is on the table's net only when the
+  line's name is that net's name, else no net (`NETINFO_LIST::ORPHANED`); a code the table lacks makes the line's name a net
+  whatever the table (the `SetNetCode` failure path). Test: `a_pad_whose_net_name_disagrees_with_its_code_is_on_no_net`
+  (`crates/kicad/src/import.rs`), plus the no-table case.
+- **N6 (low) -- fixed, `7419c3fc`.** `add_layers_in_use` is gone. An item on a layer the file's `(layers ..)` does not name
+  keeps its layer, and the page stays the file's, so the writer lists only the file's layers; the item is kept and hidden, as
+  in KiCad (`parseLayer` finds it among `m_layerIndices`; `formatBoardLayers` writes the enabled ones). The old test asserted
+  the divergence and is now `a_layer_the_items_are_on_but_the_file_has_off_stays_off`, which also checks that the export
+  carries both items and re-imports as the same page. `issue25265` 14 -> 13, `issue25303` 14 -> 13, `stitch_fp_rulearea`
+  7 -> 6.
+- **N7 (low) -- fixed, `7419c3fc`.** A polygon's arcs are flattened at `getArcPolygonizationMaxError()`
+  (`SHAPE_ARC::DefaultAccuracyForPCB() / 5`, 0.001 mm; `eda_model::outline::POLYGON_ARC_ERROR_NM`) in the footprint art
+  reader and the board `gr_poly` / zone `(pts ..)` reader. `connect`'s J102 `fp_poly` has kicad-cli's 42 points (was 22) and
+  compares identical (`connect` 206 -> 190 lines); `issue23053`'s polygons now have kicad-cli's 60 points too, with 1 nm on
+  a few coordinates left (see Unsure). Test: `a_polygons_arcs_are_flattened_as_finely_as_kicad_flattens_them`
+  (`crates/kicad/src/fp_art_io.rs`).
+- **N8 (low) -- fixed for the arc, not a bug for the legacy field, `7419c3fc`.** The arc: a legacy
+  `(start CENTRE) (end ARC_START) (angle A)` arc mirrors `SetArcAngleAndEnd( A, true )` (the end is the start turned by -A;
+  a negative A swaps them) and `GetArcMid` (the rounded start turned by half the angle its rounded radials make,
+  `CalcArcAngles`), with KiCad's integer `RotatePoint` / `KIROUND` and its exact `EDA_ANGLE::Sin` / `Cos` and
+  `EDA_ANGLE( VECTOR2D )` values; `issue8407` 173 -> 169. Test:
+  `a_legacy_arcs_middle_is_half_of_the_angle_its_rounded_ends_make` (`crates/kicad/src/import.rs`). The legacy field: our
+  export writes `(at 275.824062 210.835224 0)`, byte for byte what kicad-cli's own rewrite of the original 20220914 file has;
+  the 1 nm appears only when kicad-cli re-parses our 20241229 export, where a pre-20260616 file's board-frame `(at)` is
+  converted into the footprint frame and back (integer rounding each way), and no value near 210.835224 lands back on it
+  (222 -> 223, 223 -> 223, 224 -> 223, 225 -> 225; a 5x7 probe around the pair found no preimage). Nothing to fix in our
+  number without the 20260616 transform format, a KiCad 10 file version.
+
+**Commits.**
+
+- `bb087728` -- footprint files: apply the bold-text migration by the footprint's own version (N4)
+- `25a5f8d7` -- dimensions: keep a radial's and a leader's text position and frame (N1)
+- `7ce2a09c` -- fp_compare: report a pad or footprint override only when it differs from the library's (N2)
+- `36319460` -- fp_compare: KiCad's library-parity wording, the copper stroke, die length and fabrication property, courtyard graphics, one primitives line (N3)
+- `2154aa5d` -- import: a pad's net is its code's net, checked against the name the file writes; a code the table lacks makes the name a net (N5)
+- `7419c3fc` -- import: the page is the file's; a polygon's arcs flatten at KiCad's 1 um; a legacy arc's mid comes from its rounded ends (N6, N7, N8)
+- this log and the findings' marks, in their own commit.
+
+**Tests run.**
+
+- `cargo test -p eda-kicad` EXIT 0 -- 38 test targets, 712 passed, 0 failed.
+- `EDA_SLOW_TESTS=1 KICAD_SRC_DIR=$HOME/src/kicad-src-8303b2ad KICAD_QA_DATA=$HOME/src/kicad-src-8303b2ad/qa/data
+  EDA_KICAD_CLI=/usr/local/bin/kicad-cli cargo test -p eda-kicad --tests` EXIT 0 -- 37 test targets, 712 passed, 0 failed.
+- `cargo test -p eda-model` EXIT 0 -- 8 test targets, 435 passed, 0 failed.
+- `cargo test -p eda-cli -p eda-connectivity -p eda-ops` EXIT 0 -- 21 test targets, 1756 passed, 0 failed.
+- `cargo check --tests` -- 0 warnings.
+
+**Round trip (`tools/board-roundtrip/run.sh target/debug/eda /tmp/ds_final/rt 3`; `cmp.py`).**
+
+- Before (reviewer, main `01ffc984`): 214 boards, **32336** differing lines, **15** identical, `IMPORTFAIL plugins__fakeboard`.
+- After: 214 boards, **32301** differing lines, **15** identical, the same one import failure (`plugins__fakeboard`, a plugin
+  fixture that failed in rounds 2 and 3 too); **7 boards better, 0 worse**: `connect` 206 -> 190, `pcbnew__api_kitchen_sink`
+  49 -> 45, `pcbnew__issue25265` 14 -> 13, `pcbnew__issue25303` 14 -> 13, `pcbnew__issue6945` 50 -> 42,
+  `pcbnew__issue8407` 173 -> 169, `pcbnew__stitch_fp_rulearea` 7 -> 6.
+
+**Unsure / for the reviewer.**
+
+- N7's residual: `issue23053`'s flattened polygon points are 1 nm off on a few coordinates. Ours uses `Arc::polyline`;
+  KiCad's `SHAPE_ARC::ConvertToPolyline` rounds slightly differently. A faithful port would change every caller of
+  `polyline` (many crates), which the rules make a separate, asked-for change; the finding's point -- the point count and the
+  footprint `fp_poly` lines -- is fixed. Question: should the `ConvertToPolyline` port be its own task?
+- N3's two settings ("Allow bridged solder mask apertures between pads", barcode count) are still not compared because the
+  model carries neither. The "Courtyard differs." fallback remains for a derived courtyard only.
+- N8's legacy field is not a bug, as measured above. If byte parity on kicad-cli's re-parse of our file is still wanted, it
+  needs the 20260616 transform format (a KiCad 10 file version), not a different number in ours.
+- N6's old test was replaced, not deleted: it asserted our old auto-enable divergence (`Cmts.User` was enabled on import).
+  The new test asserts KiCad's result and additionally that the item survives, the export does not add the layer, and the
+  export re-imports to the same page. Flags: this is the only assertion in the branch's diff whose expectation changed.
+
+**Summary (as printed).**
+
+```
+Round-4 board-file findings on ds/r4-board-io: N1-N8 all addressed.
+  N1 fixed 25a5f8d7; N2 fixed 7ce2a09c; N3 fixed 36319460; N4 fixed bb087728;
+  N5 fixed 2154aa5d; N6 fixed 7419c3fc; N7 fixed 7419c3fc;
+  N8 arc fixed 7419c3fc, legacy field not a bug (kicad-cli's own re-parse rounds).
+Round trip, 214 QA boards: 32336 -> 32301 differing lines, 15 -> 15 identical,
+  7 better, 0 worse, same one import failure (plugins__fakeboard).
+Tests: eda-kicad 712/0, eda-model 435/0, eda-cli+connectivity+ops 1756/0
+  (21 targets), slow suite 712/0; all exit 0.
+Marked findings at work/findings/round4/r4-board-io.md; docs committed on ds/r4-board-io.
+```

@@ -2480,6 +2480,8 @@ fn aligned_dim(start: Point, end: Point) -> Dimension {
         extension_offset: mm(0.2),
         extension_height: mm(0.5),
         arrow_direction: ArrowDirection::Outward,
+        text_pos: None,
+        text_frame: Default::default(),
         text_thickness_nm: None,
     }
 }

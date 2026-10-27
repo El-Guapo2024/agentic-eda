@@ -28,6 +28,11 @@ pub const CHAINING_EPSILON_NM: Nm = Nm::new(10_000);
 /// distance between a curve and the polygon that stands for it.
 pub const MAX_ERROR_NM: Nm = Nm::new(5_000);
 
+/// `getArcPolygonizationMaxError()` (`libs/kimath/src/geometry/shape_line_chain.cpp`): `SHAPE_ARC::DefaultAccuracyForPCB() / 5`, 0.001 mm --
+/// the error a polygon's arcs (`(arc (start ..) (mid ..) (end ..))` among a `(pts ..)`) are flattened to, finer than [`MAX_ERROR_NM`] because
+/// `SHAPE_LINE_CHAIN::Append( arc )` was written to keep a displayed polygon's arcs smooth.
+pub const POLYGON_ARC_ERROR_NM: Nm = Nm::new(1_000);
+
 /// The id the segments of the polygon `placement.outline` carry as Edge.Cuts items: the one the writer maps their uuids to, so a
 /// kicad-cli report that names an outline segment is pointed back at the board outline.
 pub const POLYGON_OUTLINE_ID: &str = "outline";

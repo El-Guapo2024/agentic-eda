@@ -200,11 +200,6 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let copper_nets: Vec<&str> = tracks.iter().map(|t| t.net.as_str()).chain(vias.iter().map(|v| v.net.as_str())).chain(zones.iter().map(|z| z.net.as_str())).chain(refs.shapes.iter().filter_map(|r| r.net.as_deref())).collect();
     let nets = build_nets(&net_names, &pin_nets, &copper_nets);
 
-    add_layers_in_use(
-        &mut board.layer_setup,
-        shapes.iter().map(|s| s.layer().to_string()).chain(texts.iter().map(|t| t.layer.clone())).chain(dimensions.iter().map(|d| d.layer.clone())).chain(silk_texts.iter().map(|t| t.layer.clone())).chain(board_items.text_boxes.iter().map(|t| t.layer.clone())).chain(board_items.images.iter().map(|i| i.layer.clone())).chain(board_items.points.iter().map(|p| p.layer.clone())),
-    );
-
     // The outline override lives on `board` too (used when a downstream
     // tool re-derives placement); keep it in step with what we actually
     // found on Edge.Cuts.
@@ -486,7 +481,7 @@ fn default_layers() -> Vec<String> {
 /// shown by (the entry's last word) and the type of the copper layers and of the user layers off-board at the front or the back. The mandatory layers (the courtyards, the
 /// outline, the margin) are on whatever the file lists (`BOARD_DESIGN_SETTINGS::SetEnabledLayers`); a technical layer the file does not list is off, as KiCad has it (r2-board-io
 /// F17: `issue18839` lists no adhesive, paste, mask, silkscreen or fabrication layer; every board this studio wrote lists them all). A layer name the file has that is not one of
-/// KiCad's (`Rescue`, a name from before KiCad 5) is skipped. [`add_layers_in_use`] adds the layers the imported items sit on.
+/// KiCad's (`Rescue`, a name from before KiCad 5) is skipped. An item on a layer the list does not name keeps its layer and does not turn it on (r4-board-io N6).
 fn import_layer_setup(root: &[Sexpr]) -> LayerSetup {
     let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
     let mut setup = LayerSetup { enabled: Vec::new(), names: BTreeMap::new(), types: BTreeMap::new() };
@@ -514,17 +509,11 @@ fn import_layer_setup(root: &[Sexpr]) -> LayerSetup {
             setup.names.insert(name.to_string(), name.to_string());
         }
     }
+    // `SetEnabledLayers` adds only the mandatory layers to the file's list. An item on a layer the list does not name is kept on that layer (`parseLayer` finds it among
+    // all standard names, `m_layerIndices`) and does not turn it on (`formatBoardLayers` writes the enabled ones): a file that lists fewer layers than its items use does
+    // not gain a layer from them (r4-board-io N6). Nothing is lost: the writer writes an item on its layer whether the page has the layer on or not.
     setup.enabled.extend(eda_model::layers::MANDATORY_LAYERS.iter().map(|l| l.to_string()));
     setup.canonical()
-}
-
-/// A layer an imported item is on is a layer the board has: a file that lists fewer layers than its items use (a minimal fixture, a board from another tool) does not lose them.
-fn add_layers_in_use(setup: &mut LayerSetup, layers: impl Iterator<Item = String>) {
-    let before = setup.enabled.len();
-    setup.enabled.extend(layers.filter(|l| eda_model::layers::is_optional_layer(l)));
-    if setup.enabled.len() != before {
-        *setup = setup.canonical();
-    }
 }
 
 // ------------------------------------------------------------------ nets
@@ -555,6 +544,26 @@ fn net_of(n: &[Sexpr], net_names: &BTreeMap<i64, String>) -> String {
     if sexpr::is_bare_number(n, 1) {
         let code = sexpr::num(n, 1).unwrap_or(0.0) as i64;
         return net_names.get(&code).cloned().or_else(|| if net_names.is_empty() { None } else { sexpr::txt(n, 2).map(str::to_string) }).unwrap_or_default();
+    }
+    sexpr::txt(n, 1).unwrap_or("").to_string()
+}
+
+/// A pad's `(net ...)`, as `parsePAD`'s `T_net` reads it: a legacy net code is the pad's net, the file's table giving its name, and the name written
+/// beside the code must be that name -- a different one leaves the pad on no net (`SetNetCode( NETINFO_LIST::ORPHANED )`, whose name is ""). A code the
+/// board does not have (the table lists no such net, or there is no table: a KiCad 10 file lists none) makes the name the net, a new one where the
+/// table does not have it (`FindNet( netName )`, else a new `NETINFO_ITEM`). Code 0 is always the board's net 0, named "".
+fn pad_net(net: Option<&[Sexpr]>, net_names: &BTreeMap<i64, String>) -> String {
+    let Some(n) = net else { return String::new() };
+    if sexpr::is_bare_number(n, 1) {
+        let code = sexpr::num(n, 1).unwrap_or(0.0) as i64;
+        let table = net_names.get(&code).map(String::as_str).or(if code == 0 { Some("") } else { None });
+        return match table {
+            Some(name) => match sexpr::txt(n, 2) {
+                Some(written) if written != name => String::new(),
+                _ => name.to_string(),
+            },
+            None => sexpr::txt(n, 2).unwrap_or("").to_string(),
+        };
     }
     sexpr::txt(n, 1).unwrap_or("").to_string()
 }
@@ -1737,7 +1746,7 @@ fn import_footprints(
             // a stub for), but it still occupies space in `pads`, so it
             // still counts as a hole for clearance.
             if p.kind != PadKind::NonPlatedHole {
-                let name = net_ref(sexpr::find(pad, "net"), net_names);
+                let name = pad_net(sexpr::find(pad, "net"), net_names);
                 if !name.is_empty() {
                     pin_nets.push((format!("{reference}.{}", p.number), name));
                 }
@@ -2352,16 +2361,85 @@ fn stroke_width_of(item: &[Sexpr]) -> Nm {
     sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(Nm::ZERO)
 }
 
-/// The arc of a file written before `LEGACY_ARC_FORMATTING` (20210925), `(start CENTER) (end ARC_START) (angle A)` in degrees, as the
-/// three points of the arc (`parsePCB_SHAPE`: `SetCenter`, `SetStart`, `SetArcAngleAndEnd( A )` -- the end is the start turned by A, the
-/// middle by half of it, the same way, in the file's own axes). Returns (start, mid, end).
-pub(crate) fn legacy_arc(center: Point, start: Point, angle_deg: f64) -> (Point, Point, Point) {
-    let turn = |deg: f64| -> Point {
-        let (s, c) = deg.to_radians().sin_cos();
-        let (dx, dy) = ((start.x - center.x).as_f64(), (start.y - center.y).as_f64());
-        Point { x: center.x + Nm::kiround(dx * c - dy * s), y: center.y + Nm::kiround(dx * s + dy * c) }
+/// An angle in degrees as `EDA_ANGLE::Sin`/`Cos` give it: the exact value at a multiple of 45 degrees, `std`'s sine and cosine otherwise,
+/// of the angle in `[0, 360)`.
+fn kicad_sin_cos(deg: f64) -> (f64, f64) {
+    let mut a = deg % 360.0;
+    while a < 0.0 {
+        a += 360.0;
+    }
+    while a >= 360.0 {
+        a -= 360.0;
+    }
+    let s = if a == 0.0 || a == 180.0 {
+        0.0
+    } else if a == 45.0 || a == 135.0 {
+        std::f64::consts::FRAC_1_SQRT_2
+    } else if a == 225.0 || a == 315.0 {
+        -std::f64::consts::FRAC_1_SQRT_2
+    } else if a == 90.0 {
+        1.0
+    } else if a == 270.0 {
+        -1.0
+    } else {
+        a.to_radians().sin()
     };
-    (start, turn(angle_deg / 2.0), turn(angle_deg))
+    let c = if a == 0.0 {
+        1.0
+    } else if a == 180.0 {
+        -1.0
+    } else if a == 90.0 || a == 270.0 {
+        0.0
+    } else if a == 45.0 || a == 315.0 {
+        std::f64::consts::FRAC_1_SQRT_2
+    } else if a == 135.0 || a == 225.0 {
+        -std::f64::consts::FRAC_1_SQRT_2
+    } else {
+        a.to_radians().cos()
+    };
+    (s, c)
+}
+
+/// `EDA_ANGLE( VECTOR2D )`: the angle of a radial, its exact value on an axis or a diagonal, `atan2` in degrees otherwise.
+fn kicad_angle_of(x: f64, y: f64) -> f64 {
+    if x == 0.0 && y == 0.0 {
+        0.0
+    } else if y == 0.0 {
+        if x >= 0.0 { 0.0 } else { -180.0 }
+    } else if x == 0.0 {
+        if y >= 0.0 { 90.0 } else { -90.0 }
+    } else if x == y {
+        if x >= 0.0 { 45.0 } else { -135.0 }
+    } else if x == -y {
+        if x >= 0.0 { -45.0 } else { 135.0 }
+    } else {
+        y.atan2(x) / (std::f64::consts::PI / 180.0)
+    }
+}
+
+/// The arc of a file written before `LEGACY_ARC_FORMATTING` (20210925), `(start CENTER) (end ARC_START) (angle A)` in degrees, as the
+/// three points of the arc (`parsePCB_SHAPE`: `SetCenter`, `SetStart`, `SetArcAngleAndEnd( A, true )`): the end is the start turned by A about
+/// the centre, and a negative A swaps the two; the middle is `GetArcMid`'s half turn of the resulting start, by the angle its two rounded
+/// radials make (`CalcArcAngles`) -- half of the file's angle from the unrounded start is 1 nm off on QA issue8407 H1's arcs. Returns
+/// (start, mid, end) in the file's own axes.
+pub(crate) fn legacy_arc(center: Point, start: Point, angle_deg: f64) -> (Point, Point, Point) {
+    // `RotatePoint` of a board unit point: `KiROUND( y * sin + x * cos )`, `KiROUND( y * cos - x * sin )`.
+    let turn = |p: Point, deg: f64| -> Point {
+        let (s, c) = kicad_sin_cos(deg);
+        let (dx, dy) = ((p.x - center.x).as_f64(), (p.y - center.y).as_f64());
+        Point { x: center.x + Nm::kiround(dy * s + dx * c), y: center.y + Nm::kiround(dy * c - dx * s) }
+    };
+    let end = turn(start, -angle_deg);
+    let (first, last) = if angle_deg < 0.0 { (end, start) } else { (start, end) };
+    let a = kicad_angle_of((first.x - center.x).as_f64(), (first.y - center.y).as_f64());
+    let mut b = kicad_angle_of((last.x - center.x).as_f64(), (last.y - center.y).as_f64());
+    if b == a {
+        b = a + 360.0;
+    }
+    while b < a {
+        b += 360.0;
+    }
+    (start, turn(first, -(b - a) / 2.0), end)
 }
 
 /// An item's `(layer ..)`, or the copper layer of the `(layers "F.Cu" "F.Mask")` a track or a copper shape with a solder-mask opening has instead (see [`cu_item_layers`]).
@@ -2689,8 +2767,9 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
 }
 
 /// Points of a `gr_poly`'s (or a zone's) `(pts ...)` list: `xy` entries verbatim, and an `(arc (start ..) (mid ..) (end ..))` of KiCad 9's polygons as the polyline
-/// `SHAPE_ARC::ConvertToPolyline` makes of it at the 5 micrometres KiCad flattens arcs to everywhere else (`eda_model::outline::Arc::polyline`): a polygon with rounded
-/// corners keeps them, where the chord between an arc's ends made chamfers of them. (A line joins the end of one arc to the start of the next, as in the file.)
+/// `SHAPE_ARC::ConvertToPolyline` makes of it at `getArcPolygonizationMaxError()` (0.001 mm; `eda_model::outline::POLYGON_ARC_ERROR_NM`,
+/// `eda_model::outline::Arc::polyline`): a polygon with rounded corners keeps them, where the chord between an arc's ends made chamfers of them. (A line
+/// joins the end of one arc to the start of the next, as in the file.)
 fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
     let pts = sexpr::find(p, "pts")?;
     let mut out: Vec<Point> = Vec::new();
@@ -2711,7 +2790,7 @@ fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
                 let (start, mid, end) = (sexpr::find(l, "start").and_then(xy_point), sexpr::find(l, "mid").and_then(xy_point), sexpr::find(l, "end").and_then(xy_point));
                 match (start, mid, end) {
                     (Some(s), Some(m), Some(e)) => {
-                        for pt in edge::Arc::through(s, m, e).polyline(edge::MAX_ERROR_NM.as_f64()) {
+                        for pt in edge::Arc::through(s, m, e).polyline(edge::POLYGON_ARC_ERROR_NM.as_f64()) {
                             push(pt, &mut out);
                         }
                     }
@@ -2826,6 +2905,18 @@ mod tests {
         assert_eq!(legacy_arc(p(mm(15.0), mm(5.0)), p(mm(20.0), mm(5.0)), -90.0), (p(mm(20.0), mm(5.0)), p(Nm::new(18_535_534), Nm::new(1_464_466)), p(mm(15.0), Nm::ZERO)));
         // A half turn goes through the far side of the circle: the middle is a quarter turn on.
         assert_eq!(legacy_arc(p(Nm::ZERO, Nm::ZERO), p(mm(1.0), Nm::ZERO), 180.0), (p(mm(1.0), Nm::ZERO), p(Nm::ZERO, mm(1.0)), p(mm(-1.0), Nm::ZERO)));
+    }
+
+    /// A legacy arc's middle is `GetArcMid`'s: the start (after `SetArcAngleAndEnd`'s swap for a negative angle) rounded to the board's nanometres,
+    /// turned by half of the angle the *rounded* start and end radials make -- not half of the file's angle from the unrounded start, which is 1 nm
+    /// off on QA issue8407 H1's two 5-degree arcs.
+    #[test]
+    fn a_legacy_arcs_middle_is_half_of_the_angle_its_rounded_ends_make() {
+        let p = |x, y| Point { x, y };
+        let (start, mid, end) = legacy_arc(p(Nm::new(-2_011_026), Nm::new(19_367_384)), p(Nm::new(-18_637), Nm::new(19_541_695)), -5.0);
+        assert_eq!((start, mid, end), (p(Nm::new(-18_637), Nm::new(19_541_695)), p(Nm::new(-12_930), Nm::new(19_454_623)), p(Nm::new(-11_026), Nm::new(19_367_384))));
+        let (start, mid, end) = legacy_arc(p(Nm::new(-2_011_026), Nm::new(19_367_384)), p(Nm::new(-1_014_832), Nm::new(19_454_540)), -5.0);
+        assert_eq!((start, mid, end), (p(Nm::new(-1_014_832), Nm::new(19_454_540)), p(Nm::new(-1_011_979), Nm::new(19_411_004)), p(Nm::new(-1_011_027), Nm::new(19_367_384))));
     }
 
     #[test]
@@ -3437,6 +3528,37 @@ mod tests {
         let routing = design.routing.expect("copper");
         assert_eq!(routing.zones[0].net, "", "an unquoted 0 is net code 0: no net");
         assert_eq!(model.nets.iter().find(|n| n.name == "0").map(|n| n.pins.clone()), Some(vec!["R1.1".to_string()]), "the quoted \"0\" is a name");
+    }
+
+    /// `parsePAD`'s `T_net` (25ec2335): a legacy net code is authoritative, and the name written beside it is checked against the net the file's table
+    /// gives that code -- a different name leaves the pad on no net (`NETINFO_LIST::ORPHANED`, whose name is ""). A code the table does not have is looked
+    /// up by the name instead (`FindNet( netName )`, else a new `NETINFO_ITEM`), so a name is a net even in a file that lists none.
+    #[test]
+    fn a_pad_whose_net_name_disagrees_with_its_code_is_on_no_net() {
+        let text = r#"(kicad_pcb (version 20221018) (generator "pcbnew")
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+            (net 0 "") (net 3 "A")
+            (footprint "L:R" (layer "F.Cu") (at 10 10)
+                (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS"))
+                (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask") (net 3 "B")))
+        )"#;
+        let (_design, model, _notes) = import_kicad_pcb(text).expect("parses");
+        assert_eq!(model.nets.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), vec!["A"], "the code is the net; its name is the table's, and \"B\" is no net of the file");
+        assert!(model.nets.iter().all(|n| n.pins.is_empty()), "the pad is on no net (net 0, whose name is empty): {:?}", model.nets.iter().map(|n| (&n.name, &n.pins)).collect::<Vec<_>>());
+        // The table's own name is the pad's net.
+        let (_, model, _) = import_kicad_pcb(&text.replace("(net 3 \"B\")", "(net 3 \"A\")")).expect("parses");
+        assert_eq!(model.nets.iter().find(|n| n.name == "A").map(|n| n.pins.clone()), Some(vec!["R1.1".to_string()]));
+
+        // A 20260206 file lists no nets (KiCad 10 names them where they are used): a code the board does not have (`SetNetCode` fails) makes the name a
+        // net, though this file writes the code before it.
+        let text = r#"(kicad_pcb (version 20260206) (generator "pcbnew")
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+            (footprint "L:R" (layer "F.Cu") (uuid "f1") (at 10 10)
+                (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS") (uuid "p1"))
+                (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu") (net 5 "X") (uuid "a1")))
+        )"#;
+        let (_, model, _) = import_kicad_pcb(text).expect("parses");
+        assert_eq!(model.nets.iter().find(|n| n.name == "X").map(|n| n.pins.clone()), Some(vec!["R1.1".to_string()]), "{:?}", model.nets.iter().map(|n| (&n.name, &n.pins)).collect::<Vec<_>>());
     }
 
     /// r3-board-io F8: `ZONE_SETTINGS::ZONE_SETTINGS` keeps out tracks, vias and pads by default and `case T_keepout` resets only pads and footprints, so a placement

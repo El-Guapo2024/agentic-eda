@@ -121,6 +121,28 @@ impl LibraryFootprintKeep {
     }
 }
 
+/// The number of a kept `(tag value)` token. The kept tokens ([`LibraryFootprintKeep::tokens`], [`crate::ir::FootprintExtra::tokens`],
+/// [`crate::ir::PadMaskInfo::tokens`]) are the file's forms as the reader serializes them back -- one list, its atoms one space apart -- so the
+/// value the parser read is still there for a comparison that needs it (`FootprintNeedsUpdate`'s margins).
+pub fn kept_number(tokens: &[String], tag: &str) -> Option<f64> {
+    let head = format!("({tag} ");
+    tokens.iter().find_map(|t| t.strip_prefix(&head)?.strip_suffix(')')?.trim().parse().ok())
+}
+
+/// The length of a kept `(tag value)` token, read as KiCad reads a board length ([`Nm::from_mm`]).
+pub fn kept_mm(tokens: &[String], tag: &str) -> Option<Nm> {
+    kept_number(tokens, tag).map(Nm::from_mm)
+}
+
+/// The word of a kept `(tag word)` token, one that is not a number (`(property pad_prop_heatsink)`).
+pub fn kept_atom(tokens: &[String], tag: &str) -> Option<String> {
+    let head = format!("({tag} ");
+    tokens.iter().find_map(|t| {
+        let word = t.strip_prefix(&head)?.strip_suffix(')')?.trim();
+        (!word.is_empty() && !word.contains(' ')).then(|| word.to_string())
+    })
+}
+
 /// See the module doc: a library pad's.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

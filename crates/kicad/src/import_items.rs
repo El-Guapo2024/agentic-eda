@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use eda_model::ir::{ArrowDirection, Design, Dimension, DimensionKind, DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Group, Point, Nm};
+use eda_model::ir::{ArrowDirection, Design, Dimension, DimensionKind, DimensionSettings, DimensionTextBorder, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Group, Point, Nm};
 
 use crate::sexpr::{self, Sexpr};
 
@@ -363,6 +363,17 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
         };
         // "new format: default to keep text aligned off unless token is present"
         let keep_text_aligned = style.map(|s| flag(s, "keep_text_aligned")).unwrap_or(false);
+        // `DIM_TEXT_BORDER`: parseDIMENSION only accepts `(text_frame ..)` inside a leader's style, and only a leader writes it.
+        let text_frame = if matches!(kind, DimensionKind::Leader) {
+            match style.and_then(|s| sexpr::find(s, "text_frame")).and_then(|v| sexpr::num(v, 1)).map(|n| n as i64) {
+                Some(1) => DimensionTextBorder::Rectangle,
+                Some(2) => DimensionTextBorder::Circle,
+                Some(3) => DimensionTextBorder::RoundRect,
+                _ => DimensionTextBorder::None,
+            }
+        } else {
+            DimensionTextBorder::None
+        };
 
         // The text: its size and pen, and (when the label is not kept aligned) its angle.
         let text = sexpr::find(d, "gr_text");
@@ -374,6 +385,17 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
             .and_then(|a| sexpr::num(a, 3))
             .map(|deg| ((deg * 1000.0).round() as i64).rem_euclid(360_000) as u32)
             .unwrap_or(0);
+        // A radial's and a leader's text is the user's: their `updateGeometry` draw to it and never set it (`text_position_mode` only
+        // recomputes an aligned/orthogonal text). Keep the file's `(at x y)` for the geometry pass and the writer.
+        let text_pos = if matches!(kind, DimensionKind::Radial { .. } | DimensionKind::Leader) {
+            text.and_then(|t| sexpr::find(t, "at")).and_then(|a| {
+                let x = sexpr::num(a, 1)?;
+                let y = sexpr::num(a, 2)?;
+                Some(Point { x: crate::mm_to_nm(x), y: crate::mm_to_nm(y) })
+            })
+        } else {
+            None
+        };
 
         refs.dimensions.push(ItemRef::of(d));
         out.push(Dimension {
@@ -399,6 +421,8 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
             extension_height: st("extension_height").unwrap_or(defaults.extension_height),
             arrow_direction,
             text_thickness_nm,
+            text_pos,
+            text_frame,
         });
     }
     out

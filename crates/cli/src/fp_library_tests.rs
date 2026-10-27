@@ -81,6 +81,33 @@ fn an_update_reads_the_library_copy_through_the_tables_and_lists_what_differs_be
     assert_eq!(pad_sizes(&dir, "U1"), [(mm(1.0), mm(1.0)), (mm(1.0), mm(1.0))], "and Undo gives the board's copy back");
 }
 
+/// `FootprintNeedsUpdate` reports an override only when the board's value differs from the library's. A footprint placed from the Footprint Editor's
+/// own library, whose pad says `(zone_connect 2)` and whose file sets `(clearance 0.25)` and `(solder_paste_margin 0.02)`, has those values on the
+/// board too (`Design::pad_zone_facts`'s published entry), so an unedited footprint needs no update. Before, every set override was reported and the
+/// update list showed a stale footprint.
+#[test]
+fn a_published_library_footprints_own_overrides_are_not_differences() {
+    let dir = board_with_library("published_overrides");
+    let text = r#"(footprint "Zone" (version 20240108) (layer "F.Cu") (attr smd) (clearance 0.25) (solder_paste_margin 0.02)
+        (pad "1" smd rect (at -1 0) (size 0.8 0.8) (layers "F.Cu" "F.Paste" "F.Mask") (zone_connect 2) (thermal_bridge_angle 90))
+        (pad "2" smd rect (at 1 0) (size 0.8 0.8) (layers "F.Cu" "F.Paste" "F.Mask")))"#;
+    let mut fp = eda_kicad::parse_library_footprint(text).unwrap().footprint;
+    fp.name = "Mine:Zone".into();
+    // The Footprint Editor's entry, then the placement that publishes it (as Insert Footprint into PCB sends them)
+    step(&dir, Cmd::PutLibraryFootprint { footprint: fp.clone(), overwrite: false }, false, "test").unwrap();
+    let place = Cmd::PlaceFootprint { footprint: "Mine:Zone".into(), at: eda_model::ir::Point { x: mm(10.0), y: mm(15.0) }, reference: String::new(), value: "Zone".into(), definition: Some(fp) };
+    step(&dir, Cmd::Batch { cmds: vec![place, Cmd::UpdateFootprintOnBoard { name: "Mine:Zone".into() }] }, false, "test").unwrap();
+    let reference = {
+        let (_, _, model) = load(&dir).unwrap();
+        model.parts.iter().find(|p| p.footprint.as_deref() == Some("Mine:Zone")).expect("the placed footprint").reference.clone()
+    };
+    let diff = crate::fp_assign_api::footprint_diff(&dir, &reference);
+    assert_eq!(diff["found"], true, "{diff}");
+    assert!(diff["lines"].as_array().unwrap().is_empty(), "an unedited footprint needs no update: {diff}");
+    let e = &plan(&dir, &[&reference], None)["entries"][0];
+    assert_eq!((e["found"].as_bool(), e["differs"].as_bool()), (Some(true), Some(false)), "{e}");
+}
+
 #[test]
 fn compare_footprint_with_library_reports_what_differs_and_why_a_library_copy_is_missing() {
     let dir = board_with_library("compare_with_library");

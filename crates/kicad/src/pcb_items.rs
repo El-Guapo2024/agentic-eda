@@ -13,7 +13,7 @@ use eda_model::units::Nm;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Group, IslandRemovalMode, PadConnection, Zone, ZoneBorderStyle, ZoneSmoothing};
+use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextBorder, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Group, IslandRemovalMode, PadConnection, Zone, ZoneBorderStyle, ZoneSmoothing};
 
 use crate::{fmt_mm_f, mm, sexpr_str};
 
@@ -351,8 +351,14 @@ pub(crate) fn write_dimension(out: &mut String, d: &Dimension, a: &DimensionArgs
         write!(out, " (extension_height {})", mm(d.extension_height)).unwrap();
     }
     if matches!(d.kind, DimensionKind::Leader) {
-        // `DIM_TEXT_BORDER::NONE`: this model has no text frame.
-        write!(out, " (text_frame 0)").unwrap();
+        // `DIM_TEXT_BORDER`: only a leader writes one, and KiCad writes it even when NONE.
+        let frame = match d.text_frame {
+            DimensionTextBorder::None => 0,
+            DimensionTextBorder::Rectangle => 1,
+            DimensionTextBorder::Circle => 2,
+            DimensionTextBorder::RoundRect => 3,
+        };
+        write!(out, " (text_frame {frame})").unwrap();
     }
     write!(out, " (extension_offset {})", mm(d.extension_offset)).unwrap();
     if d.keep_text_aligned {
