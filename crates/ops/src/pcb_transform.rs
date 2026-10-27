@@ -292,6 +292,37 @@ impl Board<'_> {
                 super::pcb_tables::transform_table(t, x, copper);
             }
         }
+        // `BOARD::FlipLayer` is `m_layers[..].m_opposite`: a user layer typed front or back flips to its pair (`recalcOpposites`), which `::FlipLayer`
+        // above left where it was.
+        if x.is_flip() {
+            let opp = self.model.board.layer_setup.user_layer_opposites();
+            if !opp.is_empty() {
+                let to = |l: &mut String| {
+                    if let Some(o) = opp.get(l.as_str()) {
+                        *l = o.clone();
+                    }
+                };
+                if let Some(rt) = self.design.routing.as_mut() {
+                    for z in rt.zones.iter_mut().filter(|z| targets.zones.contains(&z.id)) {
+                        z.map_layers(|l| opp.get(l).cloned().unwrap_or_else(|| l.to_string()));
+                    }
+                }
+                if let Some(dr) = self.design.drawings.as_mut() {
+                    for s in dr.shapes.iter_mut().filter(|s| targets.shapes.contains(s.id())) {
+                        let mut l = s.layer().to_string();
+                        to(&mut l);
+                        s.set_layer(l);
+                    }
+                    dr.texts.iter_mut().filter(|t| targets.texts.contains(&t.id)).for_each(|t| to(&mut t.layer));
+                    dr.dimensions.iter_mut().filter(|d| targets.dimensions.contains(&d.id)).for_each(|d| to(&mut d.layer));
+                    dr.tables.iter_mut().filter(|t| targets.tables.contains(&t.id)).for_each(|t| to(&mut t.layer));
+                    dr.barcodes.iter_mut().filter(|b| targets.board_items.contains(&b.id)).for_each(|b| to(&mut b.layer));
+                    dr.board_items.text_boxes.iter_mut().filter(|b| targets.board_items.contains(&b.id)).for_each(|b| to(&mut b.layer));
+                    dr.board_items.images.iter_mut().filter(|b| targets.board_items.contains(&b.id)).for_each(|b| to(&mut b.layer));
+                    dr.board_items.points.iter_mut().filter(|b| targets.board_items.contains(&b.id)).for_each(|b| to(&mut b.layer));
+                }
+            }
+        }
         if !targets.tracks.is_empty() || !targets.vias.is_empty() {
             self.sort_routing();
         }

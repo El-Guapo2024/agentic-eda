@@ -604,3 +604,26 @@ fn the_new_verbs_round_trip_through_json_as_the_studio_sends_them() {
     let from_studio: Cmd = serde_json::from_str(r#"{"op":"flip_items","ids":["a"],"pivot":{"x":5,"y":6},"direction":"left_right"}"#).unwrap();
     assert_eq!(from_studio, Cmd::FlipItems { ids: ids(&["a"]), pivot: p(Nm::new(5), Nm::new(6)), direction: FlipDirection::LeftRight });
 }
+
+/// r2-pcb-edit C4: `BOARD::FlipLayer` reads `m_opposite`, which `recalcOpposites` pairs for user layers typed front and back: by the name after the first dot,
+/// else two consecutive renamed ones.
+#[test]
+fn flip_takes_a_front_user_layer_to_its_back_pair() {
+    use eda_model::layers::LayerType;
+    let mut m = model(&["F.Cu", "B.Cu"]);
+    let ls = &mut m.board.layer_setup;
+    ls.types.insert("User.1".into(), LayerType::Front);
+    ls.types.insert("User.2".into(), LayerType::Back);
+    ls.names.insert("User.1".into(), "F.Notes".into());
+    ls.names.insert("User.2".into(), "B.Notes".into());
+    ls.types.insert("User.5".into(), LayerType::Front);
+    let mut d = design();
+    let dr = d.drawings.as_mut().unwrap();
+    dr.shapes.iter_mut().find(|s| s.id() == "shp_seg").unwrap().set_layer("User.1".into());
+    dr.texts[0].layer = "User.5".into();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::FlipItems { ids: ids(&["shp_seg", "txt_a"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!(drawings(&b).shapes.iter().find(|s| s.id() == "shp_seg").unwrap().layer(), "User.2");
+    assert_eq!(drawings(&b).texts[0].layer, "User.5", "a front user layer with no pair stays");
+    assert_eq!(m.board.layer_setup.user_layer_opposites().get("User.2").map(String::as_str), Some("User.1"));
+}
