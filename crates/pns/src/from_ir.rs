@@ -56,6 +56,10 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
     // `aWorld->SetRuleResolver( m_ruleResolver )`: built first, so that each solid carries the number of its board item (`Solid::rule`)
     let names: Vec<String> = (0..layers.count() as i32).map(|i| layers.name_of(i).to_string()).collect();
     let mut rules = crate::rule_resolver::RuleResolver::new(design, model, &drc_board, names);
+    // `IsFlashedOnLayer`: the layers the pads and vias that remove their unconnected layers keep (r3 R3-7)
+    if eda_connectivity::flash::removes_any_layer(design, model) {
+        rules.set_flashed(&eda_connectivity::flash::flashed_layers(design, model));
+    }
     // one handle per net (`NET_HANDLE`), as the board has one `NETINFO_ITEM` per net: the rule resolver's cache knows a net by it
     let mut handles: std::collections::HashMap<String, Net> = std::collections::HashMap::new();
     let mut net_of = |name: &str| handles.entry(name.to_string()).or_insert_with(|| crate::item::net_of(name)).clone();

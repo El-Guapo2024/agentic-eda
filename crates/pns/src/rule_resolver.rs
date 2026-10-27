@@ -250,6 +250,9 @@ pub struct RuleResolver {
     cache: RefCell<FnvMap<(Key, Key, bool), Nm>>,
     /// What building the world had to tell the user ([`Self::warnings`]).
     warnings: Vec<String>,
+    /// The layers each pad and via that removes its unconnected layers has its copper on (`PAD::FlashLayer`, `PCB_VIA::FlashLayer`), by pad id
+    /// and via id: [`Self::is_flashed_on`].
+    flashed: HashMap<String, Vec<i32>>,
 }
 
 impl std::fmt::Debug for RuleResolver {
@@ -376,7 +379,7 @@ impl RuleResolver {
                     _ => false,
                 }
         });
-        RuleResolver { engine, layer_names, items, info, ids, extra: RefCell::new(FnvMap::default()), net_ties, geometry, plain, net_rules: rules.clone(), max_clearance, max_hole_clearance, cache: RefCell::new(FnvMap::default()), warnings: Vec::new() }
+        RuleResolver { engine, layer_names, items, info, ids, extra: RefCell::new(FnvMap::default()), net_ties, geometry, plain, net_rules: rules.clone(), max_clearance, max_hole_clearance, cache: RefCell::new(FnvMap::default()), warnings: Vec::new(), flashed: HashMap::new() }
     }
 
     /// The worst clearance anything of this board can ask for (`NODE::GetMaxClearance`, without the epsilon): how far a collision search
@@ -388,6 +391,32 @@ impl RuleResolver {
     /// What `SyncWorld` told the user while it built the world: a rule area the router cannot handle (`syncZone`'s `KIDIALOG`: "%s is malformed.").
     pub fn warnings(&self) -> &[String] {
         &self.warnings
+    }
+
+    /// The flashed layers of the board's pads and vias that remove their unconnected layers ([`eda_connectivity::flash::flashed_layers`]).
+    pub fn set_flashed(&mut self, flashed: &eda_connectivity::flash::Flashed) {
+        let index = |names: &Vec<String>| -> Vec<i32> { names.iter().filter_map(|n| self.layer_names.iter().position(|l| l == n).map(|i| i as i32)).collect() };
+        let map: HashMap<String, Vec<i32>> = flashed.pads.iter().chain(flashed.vias.iter()).map(|(id, names)| (id.clone(), index(names))).collect();
+        self.flashed = map;
+    }
+
+    /// `PNS_KICAD_IFACE_BASE::IsFlashedOnLayer( aItem, aLayer )` (the range form): is the item's copper on some layer of `layers` it spans? A
+    /// board's via or pad that removes its unconnected layers (`via->FlashLayer( .. )`, `pad->FlashLayer( .. )` of a layer of the
+    /// intersection) only on the layers it keeps; everything else -- a via the router made (`ConnectsLayer`), a track, a pad that keeps all its
+    /// layers -- on every layer it is on (r3 R3-7). Where it is not, its copper is no obstacle (`collideSimple`: `clearance = -1`) and a via
+    /// is its hole (`VIA::Hull`: `HullForHole`).
+    pub fn is_flashed_on(&self, item: &Item, layers: LayerRange) -> bool {
+        if self.flashed.is_empty() {
+            return true;
+        }
+        let id = match item {
+            Item::Via(v) => v.source_via.as_deref(),
+            Item::Solid(s) if !s.edge => Some(s.source.as_str()),
+            _ => None,
+        };
+        let Some(on) = id.and_then(|id| self.flashed.get(id)) else { return true };
+        let (lo, hi) = (item.layers().start().max(layers.start()), item.layers().end().min(layers.end()));
+        on.iter().any(|&l| l >= lo && l <= hi)
     }
 
     /// Adds a warning to [`Self::warnings`].

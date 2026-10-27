@@ -662,3 +662,36 @@ fn a_rule_on_a_vias_layer_reads_the_layer_asked_about() {
     let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
     assert_eq!(via(&node, &layers, &model.board), 0);
 }
+
+/// r3 R3-7 (`collideSimple`: `!iface->IsFlashedOnLayer( this, aHead->Layers() )` gives the copper `clearance = -1`; the via's hole collides on
+/// its own, at `max( HOLE_CLEARANCE, CLEARANCE )`; `VIA::Hull` is `HullForHole` there): a 0.6 / 0.3 mm via of SIG that removes its unused
+/// layers, joined on F.Cu and B.Cu only, on a four-layer board with a 0.2 mm clearance and a 0.25 mm hole clearance. On In1.Cu a GND track
+/// may come to 0.4 mm of its centre (the hole's 0.15 mm and 0.25 mm), not to the 0.5 mm its ring would ask; on F.Cu the ring is there.
+#[test]
+fn an_unflashed_via_is_its_hole_on_that_layer() {
+    let (design, mut model) = {
+        let (mut d, mut m) = board(&[], &[("SIG", &[]), ("GND", &[])]);
+        m.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+        m.board.constraints_explicit = true;
+        let at = p(10.0, 10.0);
+        let rt = d.routing.as_mut().unwrap();
+        rt.vias.push(eda_model::ir::Via { id: "v1".into(), net: "SIG".into(), at, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        for layer in ["F.Cu", "B.Cu"] {
+            rt.tracks.push(eda_model::ir::Track { id: format!("t_{layer}"), net: "SIG".into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: vec![at, p(5.0, 10.0)], arc_mid_offset: None });
+        }
+        d.drawings.as_mut().unwrap().via_extras.push(eda_model::via_extra::ViaExtra { id: "v1".into(), tokens: vec!["(remove_unused_layers yes)".into(), "(keep_end_layers no)".into()], ..Default::default() });
+        (d, m)
+    };
+    assert_eq!((model.board.clearance, model.board.hole_clearance_nm), (mm(0.2), mm(0.25)));
+    model.board.min_clearance_nm = model.board.min_clearance_nm.min(mm(0.2));
+    let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
+    let (f, in1) = (layers.index_of("F.Cu").unwrap(), layers.index_of("In1.Cu").unwrap());
+    // a 0.2 mm GND track passing above the via, its edge `edge` from the via's centre
+    let hits = |layer: i32, edge: f64| {
+        let y = mm(10.0) - mm(edge) - mm(0.1);
+        node.first_colliding(&Shape::Stadium { a: Point { x: mm(8.0), y }, b: Point { x: mm(12.0), y }, r: mm(0.1) }, &eda_pns::item::net_of("GND"), eda_pns::layer::LayerRange::single(layer), &model.board, &[]).is_some()
+    };
+    assert!(hits(f, 0.45), "on F.Cu the ring keeps the track 0.5 mm off");
+    assert!(!hits(in1, 0.45), "on In1.Cu the via is its hole: 0.15 + 0.25 mm");
+    assert!(hits(in1, 0.38), "and the hole keeps its clearance");
+}
