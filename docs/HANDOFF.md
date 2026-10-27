@@ -71,6 +71,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r3-editors-exports` | Round-3 editors and exports findings (`~/work/findings/round3/r3-editors-exports.md`, 3 high, 6 medium, 15 low; and r3-board-io F11): plot params read back as KiCad reads them (legacy `viasonmask` no longer written back, `excludeedgelayer`, precision clamp, the Rescue bit), the Plot/Drill dialogs start from the board at each opening and store their choices back as one undoable `set_plot_settings`, the STEP Model Scale Warning, the drill and Gerber X3 reports, Set Anchor moves fields and 3D model offsets (Footprint Editor) and fields (Symbol Editor), Rotate's pivot from the pins' full boxes, Repeat Pin by id, `${OP}` on labels on pins and sheet pins, the `.cmp` path | all 24 marked Fixed | Set Anchor does not move a footprint's kept zones/dimensions; the plot dialog's other controls are still not ported |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
