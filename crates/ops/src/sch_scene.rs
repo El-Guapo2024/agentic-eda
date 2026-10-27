@@ -815,7 +815,7 @@ impl<'m> Scene<'m> {
     /// merge (`MergeOverlap( screen, firstLine, false )`: no junction is looked for, and no stroke compared), an identical one goes. So the two halves of a T's
     /// through wire are one wire again, the stem ending on its middle (r4 C4-L2).
     pub(crate) fn merge_at(&mut self, p: Point) {
-        let mut ends: Vec<usize> = (0..self.segs.len()).filter(|&i| !self.segs[i].dead && self.segs[i].is_endpoint(p)).collect();
+        let ends: Vec<usize> = (0..self.segs.len()).filter(|&i| !self.segs[i].dead && self.segs[i].is_endpoint(p)).collect();
         let mut k = 0;
         while k < ends.len() {
             let i1 = ends[k];
