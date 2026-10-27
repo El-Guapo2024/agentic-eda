@@ -71,7 +71,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-r3-router` | Round-3 router findings (`findings/round3/r3-route-rules.md`, 11 of 11; `crates/pns/PARITY.md` Stage 16): keepouts on every copper layer of their set, with their holes open, a malformed one left out with KiCad's warning; copper graphics (board and footprint shapes with their net, text boxes, dimensions, barcodes, tables, footprint copper texts) and Margin graphics in the router's world; `ImportSizes` through the rule engine (the start net's width, the pair's and the via's sizes; the studio sends no width or via size on the net class's entry); unflashed layers; `isStartingPointRoutable`'s messages; the dummy via's layer; net-tie escapes | Done; gates in the branch's report | kicad-cli 10.99 reports no track against a copper graphic and no `diff_pair_gap` on the small test boards (it does on `simple.kicad_pcb`); a footprint's Margin graphics; a dimension's and barcode's text as a box |
+| Round 2 leftovers and round 3 fixes (2026-10-28): `task-r2-leftovers` (`ds-agentic-eda`, push disabled: merge locally; then round-3 schematic A3/C3), `task-r2-misc-leftovers` (`-router`; then round-3 board files), `task-r3-editors-exports` (`-embedded`), `task-r3-pcb-edit` (`-exports`), `task-r3-router` (`-rules`), `task-r3-sch-files` (`-sim`: schematic B3/D3) | Round 3 findings: `docs/parity/findings/round3/` (copies; live in `~/work/findings/round3/`): schematic 41, PCB editing 36, editors/exports 24, board files 13, router 11 (125; round 2 had 160, round 1 about 200) | started | all |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
