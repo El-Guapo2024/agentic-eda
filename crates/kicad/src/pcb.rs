@@ -1036,6 +1036,14 @@ pub(crate) struct FromSchematic {
     pub root_sheetfile: String,
 }
 
+/// The nets the derived board gives the pads the model has on no net: "REF.PIN" -> `unconnected-(..)` (a pin the schematic has alone, its own net in
+/// KiCad's netlist). Every other pad on no net -- an NPTH, a pad no pin names, a footprint read from a KiCad file -- is KiCad's net 0 there.
+pub fn unconnected_pad_nets(design: &Design, model: &ConstraintModel) -> BTreeMap<String, String> {
+    let parts: BTreeMap<&str, &Part> = model.parts.iter().map(|p| (p.reference.as_str(), p)).collect();
+    let footprints: Vec<&FootprintInstance> = design.placement.iter().flat_map(|pl| pl.footprints.iter()).collect();
+    unconnected_pin_nets(design, model, &footprints, &parts)
+}
+
 /// "REF.PIN" -> `unconnected-(..)` for every pin of a footprint made here that is on no net of `model` (see `export_kicad_pcb_with`).
 fn unconnected_pin_nets(design: &Design, model: &ConstraintModel, footprints: &[&FootprintInstance], parts: &BTreeMap<&str, &Part>) -> BTreeMap<String, String> {
     let on_a_net: std::collections::BTreeSet<&str> = model.nets.iter().flat_map(|n| n.pins.iter().map(String::as_str)).collect();

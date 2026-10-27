@@ -101,8 +101,11 @@ fn overlapping_pairs(zones: &[&Zone]) -> Vec<Pair> {
     pairs
 }
 
-/// `computeConstraint`: which of two overlapping zones of different nets goes above the other, or neither.
-fn constraint(pair: &Pair, zones: &[&Zone], board: &DrcBoard) -> Option<Edge> {
+/// `computeConstraint`: which of two overlapping zones of different nets goes above the other, or neither. Nets compare as KiCad's net codes
+/// (`aNetCode == netCodeA`): a zone of no net (`""`), a pad the derived board leaves on no net (an NPTH, a pad no pin names) and a via of none are
+/// all net 0, so a no-net zone counts them as its own (R6-Z2); a pin the schematic has alone is on its own `unconnected-(..)` net
+/// (`unconnected`, [`eda_kicad::unconnected_pad_nets`]), no zone's.
+fn constraint(pair: &Pair, zones: &[&Zone], board: &DrcBoard, unconnected: &BTreeMap<String, String>) -> Option<Edge> {
     // (`polyA = aPair.zoneA->Outline()->CloneDropTriangulation()`, holes and all)
     let mut intersection = outline_set(zones[pair.a]);
     intersection.boolean_intersection(&outline_set(zones[pair.b]));
@@ -111,19 +114,19 @@ fn constraint(pair: &Pair, zones: &[&Zone], board: &DrcBoard) -> Option<Edge> {
     }
     let (net_a, net_b) = (zones[pair.a].net.as_str(), zones[pair.b].net.as_str());
     let (mut count_a, mut count_b) = (0usize, 0usize);
-    let mut count = |at: Point, net: Option<&str>| {
+    let mut count = |at: Point, net: &str| {
         if contains(&intersection, at) {
-            match net {
-                Some(n) if n == net_a => count_a += 1,
-                Some(n) if n == net_b => count_b += 1,
-                _ => {}
+            if net == net_a {
+                count_a += 1;
+            } else if net == net_b {
+                count_b += 1;
             }
         }
     };
     // A pad counts once, if it is on any of the layers the zones share (`IsOnLayer`, then `break`).
     for pad in &board.pads {
         if pair.shared.iter().any(|l| pad.layers.contains(l)) {
-            count(pad.center, pad.net.as_deref());
+            count(pad.center, pad.net.as_deref().or_else(|| unconnected.get(&pad.id).map(String::as_str)).unwrap_or(""));
         }
     }
     let layer_index = |l: &str| board.layers.iter().position(|x| x == l);
@@ -134,7 +137,7 @@ fn constraint(pair: &Pair, zones: &[&Zone], board: &DrcBoard) -> Option<Edge> {
             _ => true,
         });
         if on {
-            count(via.at, via.net.as_deref());
+            count(via.at, via.net.as_deref().unwrap_or(""));
         }
     }
 
@@ -232,7 +235,8 @@ pub fn auto_assign_zone_priorities(design: &Design, model: &ConstraintModel) -> 
     }
 
     let board = eda_drc::board::build(design, model);
-    let edges: Vec<Edge> = pairs.iter().filter(|p| zones[p.a].net != zones[p.b].net).filter_map(|p| constraint(p, &zones, &board)).collect();
+    let unconnected = eda_kicad::unconnected_pad_nets(design, model);
+    let edges: Vec<Edge> = pairs.iter().filter(|p| zones[p.a].net != zones[p.b].net).filter_map(|p| constraint(p, &zones, &board, &unconnected)).collect();
     let mut priority = if edges.is_empty() { original.clone() } else { assign_from_graph(&edges, &original) };
 
     // Each group takes the highest priority any of its members got, so the order the different-net edges decided holds for the whole group.
@@ -293,6 +297,22 @@ mod tests {
         // GND and VCC overlap on x 5..10 mm; three GND vias and one VCC via sit in the overlap: 3 against 1, a clear win for GND whatever the sizes.
         let (d, m) = board(vec![square("gnd", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), square("vcc", "VCC", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 5)], vec![via("GND", Nm::new(6_000), Nm::new(2_000)), via("GND", Nm::new(7_000), Nm::new(4_000)), via("GND", Nm::new(8_000), Nm::new(6_000)), via("VCC", Nm::new(9_000), Nm::new(8_000))]);
         assert_eq!(assigned(&d, &m), vec![("gnd".to_string(), 1), ("vcc".to_string(), 0)]);
+    }
+
+    /// R6-Z2 (`computeConstraint` compares net codes): a no-net copper pour (net 0) overlapping a GND pour, three mounting holes (NPTH pads, net 0)
+    /// in the overlap and no GND pad there: 3 against 0, so the no-net pour goes above GND, though it is the bigger one.
+    #[test]
+    fn a_no_net_zone_counts_the_unconnected_pads_in_its_overlap() {
+        use eda_model::units::mm;
+        let (mut d, mut m) = board(vec![square("gnd", "GND", Nm::ZERO, Nm::ZERO, mm(10.0), 0), square("thief", "", mm(5.0), mm(5.0), mm(20.0), 0)], vec![]);
+        let hole = eda_model::Pad { number: String::new(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.0), mm(1.0)), shape: eda_model::PadShape::Circle, kind: eda_model::PadKind::NonPlatedHole, drill: Some(mm(1.0)), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        m.footprints.push(eda_model::Footprint { name: "MH".into(), pads: vec![hole], ..Default::default() });
+        for (i, at) in [(6.0, 6.0), (7.0, 8.0), (8.0, 7.0)].into_iter().enumerate() {
+            let r = format!("H{}", i + 1);
+            m.parts.push(Part { reference: r.clone(), mpn: None, lcsc: None, value: None, package: Some("MH".into()), footprint: Some("MH".into()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None });
+            d.placement.as_mut().unwrap().footprints.push(eda_model::ir::FootprintInstance { id: r, at: Point { x: mm(at.0), y: mm(at.1) }, rot: 0, side: eda_model::ir::Side::Top, label: Default::default() });
+        }
+        assert_eq!(assigned(&d, &m), vec![("gnd".to_string(), 0), ("thief".to_string(), 1)]);
     }
 
     #[test]
