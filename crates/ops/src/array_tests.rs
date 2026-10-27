@@ -456,3 +456,22 @@ fn an_array_never_clears_the_routing_not_even_of_a_routed_footprint() {
     assert!(!array(&["U1"], grid(2, 1, mm(5.0), Nm::ZERO)).clears_routing_in(&routed));
     assert!(!array(&["U1.1"], grid(2, 1, mm(5.0), Nm::ZERO)).clears_routing_in(&routed), "a pad stands for its footprint");
 }
+
+/// r2-pcb-edit C1's leftover: a rounded rectangle copied by a circular array that turns its copies by 45 degrees becomes the polygon of its rounded rectangle, as
+/// `Rotate` makes it (`EDA_SHAPE::rotate`), and the copy has no corner radius left; the original keeps its radius.
+#[test]
+fn an_array_turning_a_rounded_rectangle_off_the_quarter_makes_the_polygon_of_the_rounded_rectangle() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().board_items.set_corner_radius("shp_rect", mm(2.0));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&array(&["shp_rect"], circle(8, 45, true))).unwrap();
+    let dr = drawings(&b);
+    let polys: Vec<&Shape> = dr.shapes.iter().filter(|s| matches!(s, Shape::Polygon { .. })).filter(|s| s.layer() == dr.shapes.iter().find(|q| q.id() == "shp_rect").unwrap().layer()).collect();
+    let rounded = polys.iter().filter(|s| matches!(s, Shape::Polygon { pts, .. } if pts.len() > 4)).count();
+    assert!(rounded >= 4, "the copies at 45, 135, 225 and 315 degrees are rounded polygons: {polys:?}");
+    for s in &polys {
+        assert_eq!(dr.board_items.corner_radius_of(s.id()), Nm::ZERO, "a polygon has no corner radius");
+    }
+    assert_eq!(dr.board_items.corner_radius_of("shp_rect"), mm(2.0));
+}
