@@ -69,7 +69,7 @@
     Object.getOwnPropertyDescriptor(proto, "value").set.call(el, String(v));
     el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
   };
-  const closeDialogs = async () => { for (let i = 0; i < 3; i++) { const b = buttonText(document, "Cancel") ?? buttonText(document, "Close"); if (!b) break; b.click(); await sleep(150); } };
+  const closeDialogs = async () => { for (let i = 0; i < 4; i++) { const b = buttonText(document, "Cancel") ?? buttonText(document, "Cancel Changes") ?? buttonText(document, "Leave Nets Unchanged") ?? buttonText(document, "Close"); if (!b) break; b.click(); await sleep(150); } };
   /** The question box with `text` in it (`askConfirm`), waited for. */
   const question = async (text, ms = 4000) => {
     const t0 = Date.now();
@@ -206,19 +206,28 @@
         if (!dlg) return;
         setValue(dlg.querySelector("select[aria-label=Net]"), otherNet); await sleep(150);
         buttonText(dlg, "OK").click();
+        // the track may also touch copper of another net on its way: KiCad asks about the short first (`confirmShortingNets`)
+        const short = await question("Applying these changes will short net", 1500);
+        if (short) {
+          t(short.textContent.includes(otherNet), "the short question names the new net");
+          buttonText(short, "Apply Anyway").click(); await sleep(400);
+        }
         const q = await question("Changing the net will also update");
         t(!!q, `it asks (${q ? q.textContent.slice(0, 90) : "no question"})`);
         if (!q) return;
         t(q.textContent.includes(`${part.ref} pad ${padOnNet.num} to ${otherNet}`), "naming the pad and the net");
-        buttonText(q, answer).click(); await sleep(900);
+        buttonText(q, answer).click(); await sleep(1500);
       };
       await run("Leave Nets Unchanged");
       let st = await state();
       t(st.routing.tracks.find((q) => q.id === trk)?.net === padOnNet.net, "Leave Nets Unchanged: the track keeps its net");
       await run("Change Nets");
       st = await state();
-      t(st.routing.tracks.find((q) => q.id === trk)?.net === otherNet, "Change Nets: the track is on the new net");
-      t(st.parts.find((p) => p.ref === part.ref)?.pads.find((q) => q.num === padOnNet.num)?.net === otherNet, "and so is the pad");
+      // (the net's shown name is KiCad's, from its new driver: a pad that joins it can rename it, so the check is that both moved together, off the old net)
+      const trackNet = st.routing.tracks.find((q) => q.id === trk)?.net;
+      const padNet = st.parts.find((p) => p.ref === part.ref)?.pads.find((q) => q.num === padOnNet.num)?.net;
+      t(trackNet !== padOnNet.net, `Change Nets: the track left its net (${trackNet})`);
+      t(padNet === trackNet, `and the pad is on the track's new net (${padNet})`);
       await undoUntilBase();
       t((await snapshot()) === base, "undone, the board is as it was");
     });
@@ -257,6 +266,9 @@
       await sleep(400);
       const g = ((await state()).drawings?.groups ?? []).find((x) => x.member_ids.includes(poly));
       t(!!g, "the polygon is in a group");
+      // a click on a member picks its group: enter the group to work on the polygon
+      await select([g.id]);
+      await __eda.run("common.Interactive.groupEnter"); await sleep(300);
       await select([poly]);
       await __eda.run("pcbnew.InteractiveEdit.simplifyPolygons"); await sleep(600);
       const dlg = [...document.querySelectorAll(".dialog")].find((d) => d.textContent.includes("Simplify Shapes"));
@@ -269,6 +281,7 @@
       t(!!s, "the polygon keeps its id");
       t(s && s.pts.length === 4, `the point on the line is gone (${s?.pts.length})`);
       t((st.drawings.groups ?? []).some((x) => x.id === g?.id && x.member_ids.includes(poly)), "and it is still in its group");
+      await __eda.run("common.Interactive.groupLeave"); await sleep(300);
       await undoUntilBase();
       t((await snapshot()) === base, "undone, the board is as it was");
     });
