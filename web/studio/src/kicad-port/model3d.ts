@@ -207,13 +207,15 @@ export function previewStack(boardThicknessNm = 1_600_000): Stack {
 }
 
 /**
- * The preview canvas's wheel settings, from the Preferences: `PANEL_PREVIEW_3D_MODEL::loadSettings` sets only
- * `m_boardAdapter.m_MousewheelPanning = settings->m_Input.scroll_modifier_zoom != 0` (ours: a zoom modifier other than "none" turns the wheel into
- * panning). The preview canvas is never given `SetVcSettings`, so every other wheel setting stays at `VC_SETTINGS::Reset`'s defaults -- pan H Ctrl, pan
- * V Shift, no reversal (`DEFAULT_WHEEL_SCROLL`).
+ * The preview canvas's wheel, from the Preferences: `PANEL_PREVIEW_3D_MODEL::loadSettings` sets only
+ * `m_boardAdapter.m_MousewheelPanning = settings->m_Input.scroll_modifier_zoom != 0` ("TODO(JE) use all control options"), which is the `aPan`
+ * argument of `HIDPI_GL_3D_CANVAS::OnMouseWheelCamera`. The preview canvas is never given `SetVcSettings` (only eda_3d_viewer_frame.cpp calls it,
+ * for the main viewer), so its own `m_settings` stay `VC_SETTINGS::Reset`'s: zoom modifier 0, pan H Ctrl, pan V Shift, no reversal
+ * (`DEFAULT_WHEEL_SCROLL`). With a zoom modifier set, `aPan` is true but a plain wheel has `modifiers == m_scrollModifierZoom == 0`, so it skips the
+ * pan branch and zooms; Ctrl+wheel pans horizontally and Shift / Alt + wheel vertically.
  */
-export function previewWheelScroll(prefs: Pick<Preferences, "scrollModifierZoom">): WheelScrollSettings {
-  return { ...DEFAULT_WHEEL_SCROLL, scrollModifierZoom: prefs.scrollModifierZoom };
+export function previewWheel(prefs: Pick<Preferences, "scrollModifierZoom">): { scroll: WheelScrollSettings; aPan: boolean } {
+  return { scroll: DEFAULT_WHEEL_SCROLL, aPan: prefs.scrollModifierZoom !== "none" };
 }
 
 /**

@@ -227,7 +227,23 @@ pub fn success_log(job: &BoardJob, answers: &[RunJobResponse]) -> Vec<String> {
             BoardJob::IpcD356(_) => lines.push("Successfully created IPC-D-356 file".to_string()),
             BoardJob::Drill(j) => {
                 let excellon = j.format == DrillFormat::DfExcellon as i32;
-                for path in &answer.output_path {
+                // `EXCELLON_WRITER::CreateDrillandMapFilesSet` reports a backdrill span's drill file when it opens it, then
+                // `writeBackdrillLayerPairFile` reports and `AddCreatedFile`s the pair file (`<board>-<pair>-backdrill.drl`,
+                // `getBackdrillLayerPairFileName`), and only then is the drill file added: the outputs hold pair, drill where the log said
+                // drill, pair. Put each pair file back after the file that follows it.
+                let mut paths: Vec<&String> = answer.output_path.iter().collect();
+                if excellon {
+                    let mut i = 0;
+                    while i + 1 < paths.len() {
+                        if Path::new(paths[i]).file_stem().is_some_and(|s| s.to_string_lossy().ends_with("-backdrill")) {
+                            paths.swap(i, i + 1);
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
+                for path in paths {
                     // `EXCELLON_WRITER::CreateDrillandMapFilesSet` reports a drill file with no full stop and a map file with one; every
                     // `GERBER_WRITER` file (drill, map, tenting) has one (`Created file '%s'.`).
                     let drill_file = Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("drl"));
@@ -334,6 +350,11 @@ mod tests {
         assert_eq!(success_log(&drill, &[answer(&["/o/b-PTH.drl", "/o/b-NPTH.drl", "/o/b-PTH-drl_map.pdf"])]), ["Created file '/o/b-PTH.drl'", "Created file '/o/b-NPTH.drl'", "Created file '/o/b-PTH-drl_map.pdf'.", "Done."]);
         // GERBER_WRITER: every file, maps included, has the full stop.
         let gerber = board_job("drill", &args("--format gerber --generate-map --map-format svg")).unwrap();
+        // X6-2 (r6-editors-exports): a backdrill span's pair file is added before its drill file but reported after it
+        assert_eq!(
+            success_log(&drill, &[answer(&["/o/b-PTH.drl", "/o/b-F_Cu-In1_Cu-backdrill.drl", "/o/b_Backdrills_Drill_1_2.drl"])]),
+            ["Created file '/o/b-PTH.drl'", "Created file '/o/b_Backdrills_Drill_1_2.drl'", "Created file '/o/b-F_Cu-In1_Cu-backdrill.drl'", "Done."]
+        );
         assert_eq!(success_log(&gerber, &[answer(&["/o/b-PTH.gbr", "/o/b-PTH-drl_map.svg"])]), ["Created file '/o/b-PTH.gbr'.", "Created file '/o/b-PTH-drl_map.svg'.", "Done."]);
         // JobExportIpcD356: one line, no path, and `Done.` is only the drill writer's.
         let d356 = board_job("ipcd356", &[]).unwrap();

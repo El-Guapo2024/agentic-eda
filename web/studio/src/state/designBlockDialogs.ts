@@ -31,6 +31,8 @@ export interface ConfirmQuestion {
   /** The question under the message (`OKOrCancelDialog`'s detail). */
   detail?: string;
   okLabel: string;
+  /** The Cancel button's label; "Cancel" unless given (`IsOK`'s are "Yes" / "No"). */
+  cancelLabel?: string;
 }
 
 type Request = { id: number } & ({ kind: "properties"; q: PropertiesQuestion; resolve: (v: BlockValues | null) => void } | { kind: "confirm"; q: ConfirmQuestion; resolve: (v: boolean) => void });

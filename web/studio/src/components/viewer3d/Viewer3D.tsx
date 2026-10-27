@@ -32,7 +32,7 @@ import { TrackballCamera, FOV_DEG, KEY_ZOOM_FACTOR, ROTATION_STEP_DEG, type View
 import { resolve3DAction, ROTATE_SIGN, type Action3D } from "../../kicad-port/actions3d";
 import { isMac } from "../../platform";
 import { buildBoardGroup, buildBackgroundTexture, countByName, disposeObject3D, boardOutlineBounds } from "./scene";
-import { MODEL_ROWS, ROWS, isVisible, toggled } from "../../kicad-port/appearance3d";
+import { MODEL_ROWS, ROWS, isVisible, plotFollowVisibility, toggled } from "../../kicad-port/appearance3d";
 import { useViewerColors } from "./useViewerColors";
 import { ModelCache } from "./modelCache";
 import { PartModels, type PartStats } from "./partModels";
@@ -637,8 +637,10 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   // that), so it rebuilds geometry without moving the camera -- the same
   // way KiCad's own show/hide toggles don't reset your view.
   const { layers } = state.viewer3d;
+  // A row the person has not set follows the board's plot settings (`FOLLOW_PLOT_SETTINGS`, the preset KiCad's 3D viewer starts on: BOARD_ADAPTER::GetVisibleLayers).
+  const followed = plotFollowVisibility(state.board?.plot_params?.layers);
   // Which of the Appearance manager's rows that gate the board's own geometry are shown, as one string: toggling a model row (T / S / V, bounding boxes) must not rebuild the board.
-  const sceneRows = ROWS.filter((r) => !MODEL_ROWS.has(r.id)).map((r) => (isVisible(layers, r.id) ? "1" : "0")).join("");
+  const sceneRows = ROWS.filter((r) => !MODEL_ROWS.has(r.id)).map((r) => (isVisible(layers, r.id, followed) ? "1" : "0")).join("");
   // The colour of every row: the theme's, the board's stackup when "Use board stackup colors" is on, the swatches (kicad-port/appearance3d.ts, BOARD_ADAPTER::GetLayerColors).
   const resolved = useViewerColors();
   useEffect(() => {
@@ -648,7 +650,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     disposeObject3D(three.boardGroup);
     three.scene.remove(three.boardGroup);
     // The parts are not in this group: partModels draws them (the real models, a box until they are in).
-    const nextGroup = board ? buildBoardGroup(board, { visible: (row) => isVisible(layers, row), colors: resolved, zoneFills: zoneFill?.zones }) : new THREE.Group();
+    const nextGroup = board ? buildBoardGroup(board, { visible: (row) => isVisible(layers, row, followed), colors: resolved, zoneFills: zoneFill?.zones }) : new THREE.Group();
     three.scene.add(nextGroup);
     three.boardGroup = nextGroup;
     syncActiveGroupRef.current();

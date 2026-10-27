@@ -15,6 +15,7 @@ import { addToHistory, ensureDesignBlocks, refreshDesignBlocks, selectDesignBloc
 import { useActionRunner } from "../../actions/useActionRunner";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { BlockPreview } from "./BlockPreview";
+import { Linkified } from "../chooser/ChooserDetails";
 import "../../styles/designBlocks.css";
 
 /** The action names of the pane's entries, per editor (`SCH_ACTIONS`, `PCB_ACTIONS`). */
@@ -200,7 +201,7 @@ export function DesignBlocksPane({ editor, hasSelection }: { editor: BlockEditor
           <div>Item</div>
           <div>Description</div>
         </div>
-        {rows.length === 0 && <div className="db-empty">{emptyText}</div>}
+        {(rows.length === 0 || libraries.length === 0) && emptyText && <div className="db-empty">{emptyText}</div>}
         {rows.map((row) => {
           const selected = row.key === selectedKey;
           const common = { "data-key": row.key, "aria-selected": selected, className: `chooser-row ${row.kind}${selected ? " selected" : ""}` } as const;
@@ -222,7 +223,8 @@ export function DesignBlocksPane({ editor, hasSelection }: { editor: BlockEditor
                 <div title={g.lib}>
                   <span className="twisty">{row.open ? "▾" : "▸"}</span>
                   {g.pinned ? PIN_GLYPH : ""}
-                  {g.lib} {g.count !== undefined && !g.pseudo && <span className="dim">({g.count})</span>}
+                  {/* `LIB_TREE_MODEL_ADAPTER::GetValue`'s name column: the pin and the name, no count */}
+                  {g.lib}
                 </div>
                 <div title={g.description}>{g.description ?? ""}</div>
               </div>
@@ -246,7 +248,12 @@ export function DesignBlocksPane({ editor, hasSelection }: { editor: BlockEditor
             <BlockPreview lib={selectedLib} name={block.name} what={editor === "schematic" ? "sch" : "pcb"} has={editor === "schematic" ? block.schematic : block.board} />
             <div className="db-info" data-testid="db-info">
               <b>{blockInfo(block).name}</b>
-              {block.description && <div>{block.description}</div>}
+              {/* `GenerateInfo`: the description's line breaks kept (`esc_desc.Replace( "\n", "<br>" )`) and its addresses linked (`LinkifyHTML`) */}
+              {block.description && (
+                <div style={{ whiteSpace: "pre-line" }}>
+                  <Linkified text={block.description} />
+                </div>
+              )}
               {block.keywords && <div className="dim">Keywords: {block.keywords}</div>}
               {block.fields.length > 0 && (
                 <table>

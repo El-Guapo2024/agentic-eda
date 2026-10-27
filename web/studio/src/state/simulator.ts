@@ -16,6 +16,7 @@ import {
   commandToSimType,
   isPlottable,
   parseCommand,
+  selectDcSources,
   type CommandFields,
 } from "../kicad-port/sim/simCommand";
 import { SpiceValue } from "../kicad-port/sim/spiceValue";
@@ -297,7 +298,8 @@ export async function editAnalysis(): Promise<void> {
   const tab = currentTab(current.frame);
   if (!tab) return;
   await loadCircuit();
-  const fields = parseCommand(tab.command, current.frame.circuit?.sch_sim_command ?? "");
+  // `parseCommand`'s DC sources: selected only where `updateDCSources` lists them
+  const fields = selectDcSources(parseCommand(tab.command, current.frame.circuit?.sch_sim_command ?? ""), current.frame.circuit?.items ?? []);
   setSimDialog({ kind: "command", mode: "edit", fields, options: tab.options, command: tab.command });
 }
 

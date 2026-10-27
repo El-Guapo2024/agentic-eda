@@ -497,6 +497,43 @@ export function optionsOf(c: { fixIncludePaths: boolean; saveAllVoltages: boolea
   return o;
 }
 
+/** `DIALOG_SIM_COMMAND::SetSimOptions`, then `TransferDataToWindow`: the boxes from the tab's option bits, but "Add full path for .include library
+ *  directives" from the project's setting (`m_fixIncludePaths->SetValue( m_settings->GetFixIncludePaths() )`), which OK writes back
+ *  (`SetFixIncludePaths`) and `ApplySettings` turns into the tab's bit. */
+export function commandDialogOptions(options: number, settings: { fix_include_paths: boolean }): { fixIncludePaths: boolean; saveAllVoltages: boolean; saveAllCurrents: boolean; saveAllDissipations: boolean; saveAllEvents: boolean } {
+  return {
+    fixIncludePaths: !!settings.fix_include_paths,
+    saveAllVoltages: !!(options & OPTION_SAVE_ALL_VOLTAGES),
+    saveAllCurrents: !!(options & OPTION_SAVE_ALL_CURRENTS),
+    saveAllDissipations: !!(options & OPTION_SAVE_ALL_DISSIPATIONS),
+    saveAllEvents: !!(options & OPTION_SAVE_ALL_EVENTS),
+  };
+}
+
+/** `DIALOG_SIM_COMMAND::updateDCSources`: the sources a DC sweep's choice lists for a type letter, the sorted unique references of the items of
+ *  that device (`std::set<wxString>`), or "TEMP". The letter is compared as given (`aType == 'R'`), so a lower-case letter lists nothing. */
+export function dcSourceChoices(type: string, items: readonly { ref: string; device: string }[]): string[] {
+  if (type === "T") return ["TEMP"];
+  if (type !== "V" && type !== "I" && type !== "R") return [];
+  return [...new Set(items.filter((i) => i.device === type).map((i) => i.ref))].sort();
+}
+
+/** `DIALOG_SIM_COMMAND::parseCommand`'s DC sources: `updateDCSources( src.m_source.GetChar( 0 ), ... )` then `SetStringSelection( src.m_source )`
+ *  (`wxChoice::FindString`, case-insensitive). A source the list does not hold is no selection (""), which OK refuses with "A DC source must be
+ *  specified." -- e.g. the exporter's name `VBAT1` of the reference `BAT1`, or `temp` in lower case; under 'T' the list's "TEMP" stays selected
+ *  (`prevSelection`) whatever the text. */
+export function selectDcSources(f: CommandFields, items: readonly { ref: string; device: string }[]): CommandFields {
+  if (f.page !== "DC") return f;
+  const pick = (source: string) => {
+    const list = dcSourceChoices(source.charAt(0), items);
+    const found = list.find((x) => x.toLowerCase() === source.toLowerCase());
+    return found ?? (source.charAt(0) === "T" ? "TEMP" : "");
+  };
+  const out = { ...f, dcSource1: pick(f.dcSource1) };
+  if (f.dcEnable2) out.dcSource2 = pick(f.dcSource2);
+  return out;
+}
+
 /** The order `parseCommand` lists the analyses in for a new tab (`m_commandType`). */
 export const NEW_TAB_TYPES: SimType[] = ["OP", "DC", "AC", "TRAN", "PZ", "NOISE", "SP", "FFT", "UNKNOWN"];
 

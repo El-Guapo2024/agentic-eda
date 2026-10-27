@@ -287,6 +287,41 @@
     await sleep(300);
   });
 
+  // r6-editors-exports S6-1..S6-4 (PARITY-sch section 49)
+  await scenario("Edit Analysis Tab on the DC tab: its source, the project's include-path box, Plot Setup in SI; Delete takes the cursor's signal", async (t) => {
+    await run("eeschema.Simulation.simAnalysisProperties");
+    await sleep(800);
+    const d = document.querySelector(".sim-dialog [role=dialog]");
+    t(d?.querySelector('select[aria-label="Source 1"]')?.value === "V1", "the DC tab's source V1 is selected (listed by updateDCSources)");
+    const inc = [...(d?.querySelectorAll("label") ?? [])].find((l) => l.textContent.includes("Add full path for .include"))?.querySelector("input");
+    t(inc?.checked === true, "the include-path box is the project's setting (true by default)");
+    click([...(d?.querySelectorAll('button[role="tab"]') ?? [])].find((b) => b.textContent.trim() === "Plot Setup"));
+    await sleep(200);
+    const lock = d?.querySelector(".sim-lock");
+    const [min, max] = [...(lock?.querySelectorAll("input:not([type=checkbox])") ?? [])].map((i) => i.value);
+    t(!!min && !!max && /^-?[\d.]+[afpnumkMGTPE]?$/.test(max), `an unlocked axis shows its tick range in SI notation: ${min} .. ${max}`);
+    click([...(d?.querySelectorAll("button") ?? [])].find((b) => b.textContent.trim() === "Cancel"));
+    await sleep(300);
+    await run("eeschema.Simulation.editUserDefinedSignals");
+    await sleep(400);
+    const u = dialog("User-defined Signals");
+    click(u?.querySelector('button[aria-label="Add signal"]'));
+    await sleep(100);
+    click(u?.querySelector('button[aria-label="Add signal"]'));
+    await sleep(150);
+    setValue(u.querySelector('input[aria-label="Signal 2"]'), "V(/IN)");
+    setValue(u.querySelector('input[aria-label="Signal 3"]'), "V(/OUT)");
+    await sleep(100);
+    u.querySelector('input[aria-label="Signal 2"]')?.focus();
+    await sleep(100);
+    click(u?.querySelector('button[aria-label="Delete signal"]'));
+    await sleep(150);
+    const left = [...u.querySelectorAll("input.sim-cell")].map((i) => i.value);
+    t(JSON.stringify(left) === JSON.stringify([`${RC}*2`, "V(/OUT)"]), `Delete removed the cursor's row, not the last: ${JSON.stringify(left)}`);
+    click([...u.querySelectorAll("button")].find((b) => b.textContent.trim() === "Cancel"));
+    await sleep(300);
+  });
+
   await scenario("Probe a wire, Tune a resistor, and Save the tuned value", async (t) => {
     // back to the transient tab
     click(win()?.querySelector(".sim-tab"));

@@ -192,7 +192,8 @@ test("Configure Paths skips an empty row and refuses a name without a path, a pa
 test("a design block library is a .kicad_blocks folder: its nickname, its table and its format (PANEL_DESIGN_BLOCK_LIB_TABLE, AddDesignBlockLibrary)", () => {
   assert.equal(libraryExtension("design_block"), ".kicad_blocks");
   assert.equal(tableFileName("design_block"), "design-block-lib-table");
-  assert.equal(tableTitle("design_block"), "Manage Design Block Libraries");
+  assert.equal(tableTitle("design_block"), "Design Block Libraries");
+  assert.deepEqual([tableTitle("symbol"), tableTitle("footprint")], ["Symbol Libraries", "Footprint Libraries"], "r6 B6-5: DIALOG_EDIT_LIBRARY_TABLES's titles");
   assert.equal(nicknameForFile("design_block", "Power.kicad_blocks"), "Power");
   assert.equal(nicknameForFile("design_block", "plain_folder"), "plain_folder", "not a .kicad_blocks folder: the whole name");
   assert.equal(nicknameForFile("design_block", "team.v2"), "team.v2");

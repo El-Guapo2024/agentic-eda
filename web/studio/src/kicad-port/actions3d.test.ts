@@ -78,3 +78,16 @@ test("ROTATE_SIGN matches eda_3d_controller.cpp's RotateView table (Y is the odd
   assert.equal(ROTATE_SIGN.z.cw, -1);
   assert.equal(ROTATE_SIGN.z.ccw, 1);
 });
+
+// V6-8 (round 6): eda_3d_actions.cpp binds 'F', ' ', WXK_LEFT .. WXK_DOWN and WXK_HOME with no modifier, and common/tool/actions.cpp binds
+// WXK_F1 / WXK_F2 / WXK_F5 alone; a hotkey matches its exact modifiers, so Shift (or Ctrl, Alt) with them is no action.
+test("F, Space, the arrows, Home and F1/F2/F5 do nothing with a modifier held", () => {
+  for (const k of ["F", "f", " ", "ArrowLeft", "ArrowUp", "Home", "F1", "F2", "F5"]) {
+    for (const mod of [{ shiftKey: true }, { ctrlKey: true }, { altKey: true }]) assert.equal(resolve3DAction(key(k, mod), false), null, `${JSON.stringify(k)} ${JSON.stringify(mod)}`);
+  }
+  assert.equal(resolve3DAction(key("F1", { metaKey: true }), true), null);
+  // Plain, they still act; the R / Y / X / Z Shift forms are their own bindings.
+  assert.deepEqual(resolve3DAction(key("F"), false), { kind: "flip" });
+  assert.deepEqual(resolve3DAction(key("ArrowLeft"), false), { kind: "pan", direction: "left" });
+  assert.deepEqual(resolve3DAction(key("F1"), false), { kind: "zoomIn" });
+});

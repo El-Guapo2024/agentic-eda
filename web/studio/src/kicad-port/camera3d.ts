@@ -110,8 +110,10 @@ export const ROTATION_STEP_DEG = 10;
 const WHEEL_ZOOM_FACTOR = 1.1;
 /** eda_3d_canvas.cpp SetView3D's VIEW3D_ZOOM_IN/OUT factor ("3 steps per doubling": 1.26^3 = 2.000376). Used by keyboard (F1/F2) and toolbar zoom in/out. */
 export const KEY_ZOOM_FACTOR = 1.26;
-/** hidpi_gl_3D_canvas.h: `m_delta_move_step_factor = 0.7f` -- shared by arrow-key pan (scaled by current zoom) and as the wheel-pan speed's own base term. */
+/** hidpi_gl_3D_canvas.cpp: `m_delta_move_step_factor = 0.7f` -- shared by arrow-key pan (scaled by current zoom) and as the wheel-pan speed's own base term. In KiCad's 3D units (see `mmPer3DUnit`). */
 const PAN_STEP_FACTOR = 0.7;
+/** camera.cpp / eda_3d_viewer_frame.cpp: the camera starts `2 * RANGE_SCALE_3D` = 16 of KiCad's 3D units from the look-at point. */
+const INITIAL_DISTANCE_3D_UNITS = 2 * 8.0; /* RANGE_SCALE_3D */
 /** hidpi_gl_3D_canvas.cpp OnMouseWheelCamera: `delta_move *= 0.01f * event.GetWheelRotation()` (the `aPan` branch only). */
 const WHEEL_PAN_SPEED = 0.01;
 export type WheelModifier = "none" | "shift" | "ctrl" | "alt";
@@ -369,9 +371,19 @@ export class TrackballCamera {
     this.cameraPosLocal.z += dz;
   }
 
-  /** eda_3d_canvas.cpp SetView3D's VIEW3D_PAN_LEFT/RIGHT/UP/DOWN (arrow keys): `delta_move = m_delta_move_step_factor * zoom`, signed per direction. */
+  /**
+   * Millimetres per one of KiCad's 3D units. KiCad's pan steps (`SetView3D`'s and `OnMouseWheelCamera`'s `delta_move = 0.7 * zoom`) are in its 3D
+   * units, in which BOARD_ADAPTER::InitSettings scales the board's longest side to `RANGE_SCALE_3D * 1.6` = 12.8 and the camera starts 16 away; our
+   * geometry stays in millimetres, so a unit is `initialDistanceMm / 16` (= boardSpanMm / 12.8 for the board viewer; 0.7 of it is 5.47 % of the
+   * board's longest side, not 0.7 mm).
+   */
+  private mmPer3DUnit(): number {
+    return this.initialDistanceMm / INITIAL_DISTANCE_3D_UNITS;
+  }
+
+  /** eda_3d_canvas.cpp SetView3D's VIEW3D_PAN_LEFT/RIGHT/UP/DOWN (arrow keys): `delta_move = m_delta_move_step_factor * zoom` (3D units), signed per direction. */
   panArrow(direction: "left" | "right" | "up" | "down"): void {
-    const delta = PAN_STEP_FACTOR * this.zoomValue;
+    const delta = PAN_STEP_FACTOR * this.zoomValue * this.mmPer3DUnit();
     switch (direction) {
       case "left":
         this.panByWorld(-delta, 0);
@@ -432,17 +444,26 @@ export class TrackballCamera {
    * horizontal when |deltaX| wins. wx's rotation is in 120ths of a notch;
    * a DOM `deltaY` of 100 per notch is taken as is (it only scales the
    * `aPan` branch's step).
+   *
+   * `aPan` is its own argument, as in `OnMouseWheelCamera( event, aPan )`:
+   * the main viewer derives both it and `scroll` from the same preference,
+   * but the 3D model preview sets only `m_MousewheelPanning` and keeps
+   * `VC_SETTINGS::Reset`'s `m_scrollModifierZoom = 0` (see model3d.ts's
+   * `previewWheel`). Pan steps are in KiCad's 3D units (`mmPer3DUnit`).
    */
-  handleWheel(input: { deltaX: number; deltaY: number; shiftKey: boolean; ctrlKey: boolean; altKey: boolean }, scroll: WheelScrollSettings = DEFAULT_WHEEL_SCROLL): void {
+  handleWheel(
+    input: { deltaX: number; deltaY: number; shiftKey: boolean; ctrlKey: boolean; altKey: boolean },
+    scroll: WheelScrollSettings = DEFAULT_WHEEL_SCROLL,
+    aPan: boolean = scroll.scrollModifierZoom !== "none"
+  ): void {
     // "Shift beats control beats alt, we don't support more than one."
     const modifier: WheelModifier = input.shiftKey ? "shift" : input.ctrlKey ? "ctrl" : input.altKey ? "alt" : "none";
     const isHorizontalAxis = Math.abs(input.deltaX) > Math.abs(input.deltaY);
     const rotation = isHorizontalAxis ? -input.deltaX : -input.deltaY;
-    const aPan = scroll.scrollModifierZoom !== "none";
     const horizontalSign = scroll.reverseScrollPanH ? -1 : 1;
     const zoomSign = scroll.reverseScrollZoom ? -1 : 1;
 
-    let deltaMove = PAN_STEP_FACTOR * this.zoomValue;
+    let deltaMove = PAN_STEP_FACTOR * this.zoomValue * this.mmPer3DUnit();
     if (aPan) deltaMove *= WHEEL_PAN_SPEED * rotation;
     else if (rotation < 0) deltaMove = -deltaMove;
 
@@ -651,7 +672,7 @@ export class TrackballCamera {
   /** `VIEW3D_PAN_LEFT/RIGHT/UP/DOWN` (`Pan_T1`): the arrow keys, a linear move of `0.7 * zoom` at speed 8. */
   animatePan(direction: "left" | "right" | "up" | "down", nowMs: number): boolean {
     if (this.moving) return false;
-    const delta = PAN_STEP_FACTOR * this.zoomValue;
+    const delta = PAN_STEP_FACTOR * this.zoomValue * this.mmPer3DUnit();
     const t1 = this.beginMove("linear");
     const [dx, dy] = direction === "left" ? [-delta, 0] : direction === "right" ? [delta, 0] : direction === "up" ? [0, delta] : [0, -delta];
     t1.pos = { x: t1.pos.x + dx, y: t1.pos.y + dy, z: t1.pos.z };

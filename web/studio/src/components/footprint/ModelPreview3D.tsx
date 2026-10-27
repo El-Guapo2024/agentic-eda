@@ -12,7 +12,7 @@ import type { BoardState, Part } from "../../api/types";
 import { FOV_DEG, TrackballCamera, type ViewPreset } from "../../kicad-port/camera3d";
 import { isVisible } from "../../kicad-port/appearance3d";
 import type { ModelRow } from "../../kicad-port/fpModels";
-import { modelWorldMatrix, previewStack, previewWheelScroll } from "../../kicad-port/model3d";
+import { modelWorldMatrix, previewStack, previewWheel } from "../../kicad-port/model3d";
 import { useStudioState } from "../../state/store";
 import { ModelCache } from "../viewer3d/modelCache";
 import { boardOutlineBounds, buildBackgroundTexture, buildBoardGroup, disposeObject3D } from "../viewer3d/scene";
@@ -213,7 +213,10 @@ export function ModelPreview3D({ part, rows, height = 250, testId = "model-previ
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      if (!camera.isMoving()) camera.handleWheel({ deltaX: e.deltaX, deltaY: e.deltaY, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey, altKey: e.altKey }, previewWheelScroll(scrollPrefsRef.current));
+      if (!camera.isMoving()) {
+        const { scroll, aPan } = previewWheel(scrollPrefsRef.current);
+        camera.handleWheel({ deltaX: e.deltaX, deltaY: e.deltaY, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey, altKey: e.altKey }, scroll, aPan);
+      }
     };
     const onContext = (e: MouseEvent) => e.preventDefault();
     el.addEventListener("pointerdown", onDown);

@@ -4,12 +4,8 @@
 import { useState } from "react";
 import {
   NEW_TAB_TYPES,
-  OPTION_ADJUST_INCLUDE_PATHS,
-  OPTION_SAVE_ALL_CURRENTS,
-  OPTION_SAVE_ALL_DISSIPATIONS,
-  OPTION_SAVE_ALL_EVENTS,
-  OPTION_SAVE_ALL_VOLTAGES,
   buildCommand,
+  commandDialogOptions,
   dcUnit,
   longName,
   optionsOf,
@@ -18,10 +14,9 @@ import {
   type CommandFields,
   type SimType,
 } from "../../kicad-port/sim/simCommand";
-import { currentTab, formatDialogUnits, setUserSignals } from "../../kicad-port/sim/simFrame";
-import { ensureThirdYAxis, gridShown, labelOf, setGrid, unitsOf, type PlotTab } from "../../kicad-port/sim/simPlotTab";
-import { adjustLimitedView } from "../../kicad-port/sim/mathPlot";
-import { SpiceValue, formatToString, type SpiceValueFormat } from "../../kicad-port/sim/spiceValue";
+import { currentTab, deleteGridRows, formatDialogUnits, setUserSignals } from "../../kicad-port/sim/simFrame";
+import { applyPlotSetup, labelOf, plotSetupOf, unitsOf, type PlotTab } from "../../kicad-port/sim/simPlotTab";
+import { formatToString, type SpiceValueFormat } from "../../kicad-port/sim/spiceValue";
 import { applyAnalysis, doFourier, getSimUi, rerunIfFinished, saveWorkbookAs, setSimDialog, touch, useSimUi } from "../../state/simulator";
 import { sortSignals, signalMatches } from "../../kicad-port/sim/simSignals";
 
@@ -69,34 +64,12 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
   const plot = tab?.plot ?? null;
   const [f, setF] = useState<CommandFields>(d.fields);
   const [page, setPage] = useState<"command" | "plot">("command");
-  const [opts, setOpts] = useState({
-    fixIncludePaths: !!(d.options & OPTION_ADJUST_INCLUDE_PATHS),
-    saveAllVoltages: !!(d.options & OPTION_SAVE_ALL_VOLTAGES),
-    saveAllCurrents: !!(d.options & OPTION_SAVE_ALL_CURRENTS),
-    saveAllDissipations: !!(d.options & OPTION_SAVE_ALL_DISSIPATIONS),
-    saveAllEvents: !!(d.options & OPTION_SAVE_ALL_EVENTS),
-  });
+  // `SetSimOptions` then `TransferDataToWindow`: the include-path box is the project's setting
+  const [opts, setOpts] = useState(() => commandDialogOptions(d.options, ui.settings));
   const [mode, setMode] = useState(ui.settings.model_mode);
   const [error, setError] = useState<string | null>(null);
-  const scaleText = (s: PlotTab["y1"]) => (s && (s.locked ? [s.axisMin, s.axisMax] : null)) || null;
-  const [plotSet, setPlotSet] = useState(() => ({
-    lock1: !!plot?.y1?.locked,
-    min1: scaleText(plot?.y1 ?? null)?.[0]?.toString() ?? "",
-    max1: scaleText(plot?.y1 ?? null)?.[1]?.toString() ?? "",
-    lock2: !!plot?.y2?.locked,
-    min2: scaleText(plot?.y2 ?? null)?.[0]?.toString() ?? "",
-    max2: scaleText(plot?.y2 ?? null)?.[1]?.toString() ?? "",
-    lock3: !!plot?.y3?.locked,
-    min3: scaleText(plot?.y3 ?? null)?.[0]?.toString() ?? "",
-    max3: scaleText(plot?.y3 ?? null)?.[1]?.toString() ?? "",
-    grid: plot ? gridShown(plot) : true,
-    legend: !!plot?.legend.shown,
-    dotted: plot ? plot.dotted : true,
-    left: `${plot?.view.marginLeft ?? 70}`,
-    top: `${plot?.view.marginTop ?? 30}`,
-    right: `${plot?.view.marginRight ?? 70}`,
-    bottom: `${plot?.view.marginBottom ?? 45}`,
-  }));
+  // `SetPlotSettings`: an unlocked axis shows its tick range, in SI notation
+  const [plotSet, setPlotSet] = useState(() => plotSetupOf(plot));
   const set = (patch: Partial<CommandFields>) => setF((x) => ({ ...x, ...patch }));
   const itemName = (ref: string) => circuit?.items.find((i) => i.ref === ref)?.name ?? "";
   const nets = circuit?.nets ?? [];
@@ -108,35 +81,27 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
   const fftList = sortSignals([...ui.frame.signals, ...ui.frame.userSignals.values()]).filter((s) => signalMatches(fftFilter, s));
 
   const ok = () => {
-    const r = buildCommand(f, itemName, d.command === "*" ? "" : d.command, fftList);
+    // `GetStringSelection` of the node choices: a text the list does not hold is no selection
+    const sel = (v: string, list: string[]) => (list.includes(v) ? v : "");
+    const chosen: CommandFields = {
+      ...f,
+      noiseMeas: sel(f.noiseMeas, nets),
+      noiseRef: sel(f.noiseRef, nets),
+      noiseSrc: sel(f.noiseSrc, vSources),
+      pzInput: sel(f.pzInput, nets),
+      pzInputRef: sel(f.pzInputRef, nets),
+      pzOutput: sel(f.pzOutput, nets),
+      pzOutputRef: sel(f.pzOutputRef, nets),
+    };
+    const r = buildCommand(chosen, itemName, d.command === "*" ? "" : d.command, fftList);
     if ("error" in r) {
       setError(r.error);
       return;
     }
     const options = optionsOf(opts);
     void applyAnalysis(d.mode, r.command, options, { ...ui.settings, model_mode: mode, fix_include_paths: opts.fixIncludePaths }, (t) => {
-      const p = t.plot;
-      if (!p) return;
       // `DIALOG_SIM_COMMAND::ApplySettings`
-      const lock = (s: PlotTab["y1"], on: boolean, min: string, max: string) => {
-        if (!s) return;
-        s.locked = on;
-        s.axisMin = SpiceValue.parse(min).toDouble();
-        s.axisMax = SpiceValue.parse(max).toDouble();
-      };
-      if (labelOf(p.y1) !== "") lock(p.y1, plotSet.lock1, plotSet.min1, plotSet.max1);
-      if (labelOf(p.y2) !== "") lock(p.y2, plotSet.lock2, plotSet.min2, plotSet.max2);
-      if (plotSet.lock3 && !p.y3) ensureThirdYAxis(p);
-      if (labelOf(p.y3) !== "") lock(p.y3, plotSet.lock3, plotSet.min3, plotSet.max3);
-      p.view.yLocked = plotSet.lock1 || plotSet.lock2 || plotSet.lock3;
-      setGrid(p, plotSet.grid);
-      p.legend.shown = plotSet.legend;
-      p.dotted = plotSet.dotted;
-      p.view.marginLeft = Number.parseInt(plotSet.left, 10) || 0;
-      p.view.marginRight = Number.parseInt(plotSet.right, 10) || 0;
-      p.view.marginTop = Number.parseInt(plotSet.top, 10) || 0;
-      p.view.marginBottom = Number.parseInt(plotSet.bottom, 10) || 0;
-      adjustLimitedView(p.view);
+      if (t.plot) applyPlotSetup(t.plot, plotSet);
     });
   };
 
@@ -154,10 +119,11 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
       <input aria-label={label} value={String(f[key] ?? "")} onChange={(e) => set({ [key]: e.target.value } as Partial<CommandFields>)} />
     </Row>
   );
+  // A `wxChoice` starts with no selection, shown blank (only Reference node's list holds an empty entry); a text not in the list is no selection
   const choice = (key: keyof CommandFields, label: string, options: string[], blank = false) => (
     <Row label={label}>
-      <select aria-label={label} value={String(f[key] ?? "")} onChange={(e) => set({ [key]: e.target.value } as Partial<CommandFields>)}>
-        {blank && <option value="" />}
+      <select aria-label={label} value={options.includes(String(f[key] ?? "")) ? String(f[key]) : ""} onChange={(e) => set({ [key]: e.target.value } as Partial<CommandFields>)}>
+        {blank ? <option value="" /> : !options.includes(String(f[key] ?? "")) && <option value="" disabled hidden />}
         {options.map((o) => (
           <option key={o} value={o}>
             {o}
@@ -166,7 +132,8 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
       </select>
     </Row>
   );
-  const pointsLabel = (s: string) => (s === "lin" ? "Number of points:" : s === "oct" ? "Number of points per octave:" : "Number of points per decade:");
+  // `dialog_sim_command_base.cpp`: the label stays "per decade" whatever the scale
+  const pointsLabel = (_s: string) => "Number of points per decade:";
 
   const pages: Record<string, React.ReactNode> = {
     AC: (
@@ -428,6 +395,8 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
 function UserSignalsDialog() {
   const ui = useSimUi();
   const [rows, setRows] = useState(() => [...ui.frame.userSignals.entries()].map(([id, s]) => ({ id, s })));
+  // the grid cursor's row (`GetGridCursorRow`), which Delete takes when no row is selected
+  const [cursor, setCursor] = useState(() => (ui.frame.userSignals.size > 0 ? 0 : -1));
   const [help, setHelp] = useState(false);
   const ok = () => {
     const m = new Map<number, string>();
@@ -441,19 +410,28 @@ function UserSignalsDialog() {
       <table className="sim-grid" aria-label="User-defined signals">
         <tbody>
           {rows.map((r, i) => (
-            <tr key={r.id}>
+            <tr key={r.id} className={i === cursor ? "selected" : undefined} aria-selected={i === cursor}>
               <td style={{ width: "100%" }}>
-                <input className="sim-cell" aria-label={`Signal ${i + 1}`} value={r.s} onChange={(e) => setRows((rs) => rs.map((x, j) => (j === i ? { ...x, s: e.target.value } : x)))} />
+                <input className="sim-cell" aria-label={`Signal ${i + 1}`} value={r.s} onFocus={() => setCursor(i)} onChange={(e) => setRows((rs) => rs.map((x, j) => (j === i ? { ...x, s: e.target.value } : x)))} />
               </td>
             </tr>
           ))}
         </tbody>
       </table>
       <div className="sim-buttons">
-        <button type="button" aria-label="Add signal" onClick={() => setRows((rs) => [...rs, { id: rs.reduce((n, x) => Math.max(n, x.id + 1), 0), s: "" }])}>
+        <button type="button" aria-label="Add signal" onClick={() => {
+          // `WX_GRID::OnAddRow`: the new row takes the cursor
+          setCursor(rows.length);
+          setRows((rs) => [...rs, { id: rs.reduce((n, x) => Math.max(n, x.id + 1), 0), s: "" }]);
+        }}>
           +
         </button>
-        <button type="button" aria-label="Delete signal" onClick={() => setRows((rs) => rs.slice(0, -1))}>
+        <button type="button" aria-label="Delete signal" onClick={() => {
+          // `onDeleteSignal`: `WX_GRID::OnDeleteRows` takes the cursor's row
+          const r = deleteGridRows(rows, [], cursor);
+          setRows(r.rows);
+          setCursor(r.rows.length === 0 ? -1 : Math.min(r.cursor, r.rows.length - 1));
+        }}>
           −
         </button>
         <button type="button" className="link" onClick={() => setHelp(!help)}>

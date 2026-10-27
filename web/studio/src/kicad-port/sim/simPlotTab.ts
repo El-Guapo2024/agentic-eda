@@ -11,8 +11,8 @@ import {
   commandToSimType,
   type SimType,
 } from "./simCommand";
-import { extendDataRange, generateColor, newScale, newView, resetDataRange, valueAt, type PlotView, type Rgb, type Scale } from "./mathPlot";
-import { SpiceValue } from "./spiceValue";
+import { adjustLimitedView, extendDataRange, generateColor, newScale, newView, resetDataRange, valueAt, type PlotView, type Rgb, type Scale } from "./mathPlot";
+import { SpiceValue, simValueNormalize, simValueToDouble } from "./spiceValue";
 
 export interface Cursor {
   /** The cursor's x, in the trace's units (`CURSOR::m_coords.x`). */
@@ -340,9 +340,89 @@ function fromPlotSafe(s: Scale, p: number): number {
   return p / scale + s.minV;
 }
 
-/** `SIM_PLOT_TAB::GetY1Scale` and friends: a locked scale's min and max. */
-export function lockedRange(s: Scale | null): [number, number] | null {
-  return s && s.locked ? [s.axisMin, s.axisMax] : null;
+/** `SIM_PLOT_TAB::GetY1Scale` and friends (`mpScaleY::GetAxisMinMax`): whether the scale is locked, and its range: a locked scale's own, else
+ *  the ticks the last paint placed (first and last), else what the caller passed in (`DIALOG_SIM_COMMAND::SetPlotSettings`' 0.0). */
+export function axisMinMax(s: Scale, min = 0, max = 0): { locked: boolean; min: number; max: number } {
+  if (s.locked) return { locked: true, min: s.axisMin, max: s.axisMax };
+  if (s.tickValues.length > 0) return { locked: false, min: s.tickValues[0]!, max: s.tickValues[s.tickValues.length - 1]! };
+  return { locked: false, min, max };
+}
+
+/** The Plot Setup page of the analysis dialog, as its controls hold it (texts as typed). */
+export interface PlotSetup {
+  lock1: boolean;
+  min1: string;
+  max1: string;
+  lock2: boolean;
+  min2: string;
+  max2: string;
+  lock3: boolean;
+  min3: string;
+  max3: string;
+  grid: boolean;
+  legend: boolean;
+  dotted: boolean;
+  left: string;
+  top: string;
+  right: string;
+  bottom: string;
+}
+
+/** `DIALOG_SIM_COMMAND::SetPlotSettings`: for each named y axis the lock and its range (`GetY1Scale`: an unlocked axis shows its tick range) in
+ *  SI notation (`SIM_VALUE::Normalize`: "1.5m", "2M"), the grid, legend, dotted secondary and the margins. No plot tab: the dialog's own
+ *  defaults (`dialog_sim_command_base.cpp`: grid on, legend off, dotted on, margins 70, 30, 70, 45). */
+export function plotSetupOf(plot: PlotTab | null): PlotSetup {
+  const axis = (s: Scale | null): [boolean, string, string] => {
+    if (!s || labelOf(s) === "") return [false, "", ""];
+    const r = axisMinMax(s);
+    return [r.locked, Number.isNaN(r.min) ? "" : simValueNormalize(r.min), Number.isNaN(r.max) ? "" : simValueNormalize(r.max)];
+  };
+  const [lock1, min1, max1] = axis(plot?.y1 ?? null);
+  const [lock2, min2, max2] = axis(plot?.y2 ?? null);
+  const [lock3, min3, max3] = axis(plot?.y3 ?? null);
+  return {
+    lock1,
+    min1,
+    max1,
+    lock2,
+    min2,
+    max2,
+    lock3,
+    min3,
+    max3,
+    grid: plot ? gridShown(plot) : true,
+    legend: !!plot?.legend.shown,
+    dotted: plot ? plot.dotted : true,
+    left: `${plot?.view.marginLeft ?? 70}`,
+    top: `${plot?.view.marginTop ?? 30}`,
+    right: `${plot?.view.marginRight ?? 70}`,
+    bottom: `${plot?.view.marginBottom ?? 45}`,
+  };
+}
+
+/** `DIALOG_SIM_COMMAND::ApplySettings`' plot part: each named y axis locked or not with `SIM_VALUE::ToDouble` of the typed range (SI: "2M" is
+ *  2e6; unreadable text is NaN), the plot's y lock when any is locked, grid, legend, dotted and the margins (`ValueFromString` unscaled, cast to
+ *  int), then `AdjustLimitedView`. */
+export function applyPlotSetup(p: PlotTab, set: PlotSetup): void {
+  const lock = (s: Scale | null, on: boolean, min: string, max: string) => {
+    if (!s || labelOf(s) === "") return;
+    s.locked = on;
+    s.axisMin = simValueToDouble(min);
+    s.axisMax = simValueToDouble(max);
+  };
+  lock(p.y1, set.lock1, set.min1, set.max1);
+  lock(p.y2, set.lock2, set.min2, set.max2);
+  lock(p.y3, set.lock3, set.min3, set.max3);
+  p.view.yLocked = set.lock1 || set.lock2 || set.lock3;
+  setGrid(p, set.grid);
+  p.legend.shown = set.legend;
+  p.dotted = set.dotted;
+  const toInt = (v: string) => Math.trunc(Number.parseFloat(v)) || 0;
+  p.view.marginLeft = toInt(set.left);
+  p.view.marginRight = toInt(set.right);
+  p.view.marginTop = toInt(set.top);
+  p.view.marginBottom = toInt(set.bottom);
+  adjustLimitedView(p.view);
 }
 
 /** `SIM_PLOT_TAB::ShowGrid` / `IsGridShown`: the grid is mathplot's "no ticks". */

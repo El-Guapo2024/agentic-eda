@@ -1202,7 +1202,14 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     let net = net_of.get(format!("{}.{}", part.reference, q.number).as_str()).copied();
                     match engine_pads.get(i) {
                         // The pad with its own shape, type, hole and overrides (`crate::fp_json`).
-                        Some((pad, nth)) => crate::fp_json::pad_json(&design, &model, fp, q, pad, *nth, net, &flashed),
+                        Some((pad, nth)) => {
+                            let mut v = crate::fp_json::pad_json(&design, &model, fp, q, pad, *nth, net, &flashed);
+                            // The pad's own layers, for the 3D viewer's paste (r6 V6-5).
+                            if let (Some(f), Some(obj)) = (footprint.as_ref(), v.as_object_mut()) {
+                                obj.insert("layers".into(), json!(crate::fp_json::pad_file_layers(&design, fp, f, pad)));
+                            }
+                            v
+                        }
                         None => json!({ "num": q.number, "net": net, "x": q.center.x, "y": q.center.y, "w": q.size.0, "h": q.size.1, "round": q.is_round(), "th": q.through_hole }),
                     }
                 })

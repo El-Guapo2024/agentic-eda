@@ -456,14 +456,15 @@ test("the modifier wheel follows OnMouseWheelCamera with aPan false (KiCad's def
   const ctrlBig = new TrackballCamera(100, vec3(0, 0, 0));
   ctrlBig.handleWheel({ deltaX: 0, deltaY: -1000, shiftKey: false, ctrlKey: true, altKey: false });
   assert.ok(Math.abs(lookAtX(ctrl) - x0 - (lookAtX(ctrlBig) - x0)) < 1e-9, "a fixed step whatever the wheel delta");
-  assert.ok(Math.abs(Math.abs(lookAtX(ctrl) - x0) - 0.7) < 1e-6, `step 0.7*zoom, got ${lookAtX(ctrl) - x0}`);
+  // The step is in KiCad's 3D units: the camera starts 16 of them away (2 * RANGE_SCALE_3D), here 100 mm, so a unit is 6.25 mm.
+  assert.ok(Math.abs(Math.abs(lookAtX(ctrl) - x0) - 0.7 * 6.25) < 1e-6, `step 0.7*zoom 3D units, got ${lookAtX(ctrl) - x0}`);
   // Shift + a horizontal swipe still pans along the camera's y (PanV), never x. At the TOP view the camera's
   // local y is the world's z (getRenderPose's basis change), and the camera's distance (world y) is kept.
   const shift = new TrackballCamera(100, vec3(0, 0, 0));
   const p0 = shift.getRenderPose().position;
   shift.handleWheel({ deltaX: -100, deltaY: 0, shiftKey: true, ctrlKey: false, altKey: false });
   const p1 = shift.getRenderPose().position;
-  assert.ok(Math.abs(p1.x - p0.x) < 1e-9 && Math.abs(p1.y - p0.y) < 1e-9 && Math.abs(Math.abs(p1.z - p0.z) - 0.7) < 1e-6, `shift pans y: ${JSON.stringify(p0)} -> ${JSON.stringify(p1)}`);
+  assert.ok(Math.abs(p1.x - p0.x) < 1e-9 && Math.abs(p1.y - p0.y) < 1e-9 && Math.abs(Math.abs(p1.z - p0.z) - 0.7 * 6.25) < 1e-6, `shift pans y: ${JSON.stringify(p0)} -> ${JSON.stringify(p1)}`);
 });
 
 test("the wheel takes aPan true when the zoom modifier is set (trackpad scheme): plain wheel pans, Ctrl zooms", () => {
@@ -473,8 +474,24 @@ test("the wheel takes aPan true when the zoom modifier is set (trackpad scheme):
   plain.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: false, altKey: false }, scroll);
   assert.equal(plain.zoom, 1);
   const p1 = plain.getRenderPose().position;
-  assert.ok(Math.abs(p1.x - p0.x) < 1e-9 && Math.abs(Math.abs(p1.z - p0.z) - 0.7) < 1e-6, "aPan: Pan(0, -0.7 * zoom * 0.01 * rotation)");
+  assert.ok(Math.abs(p1.x - p0.x) < 1e-9 && Math.abs(Math.abs(p1.z - p0.z) - 0.7 * 6.25) < 1e-6, "aPan: Pan(0, -0.7 * zoom * 0.01 * rotation)");
   const ctrl = new TrackballCamera(100, vec3(0, 0, 0));
   ctrl.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: true, altKey: false }, scroll);
   assert.ok(Math.abs(ctrl.zoom - 1 / 1.1) < 1e-9);
+});
+
+// V6-2 (round 6): eda_3d_canvas.cpp::SetView3D pans `0.7 * zoom` in KiCad's 3D units, and BOARD_ADAPTER::InitSettings scales the board's
+// longest side to RANGE_SCALE_3D * 1.6 = 12.8 of them (board_adapter.cpp: `m_biuTo3Dunits = RANGE_SCALE_3D / max(...)`, `*= 1.6f`).
+test("a pan step is 0.7*zoom in KiCad's 3D units, not millimetres (SetView3D, BOARD_ADAPTER::InitSettings)", () => {
+  const cam = new TrackballCamera(1, vec3(0, 0, 0));
+  cam.setBoardGeometry(100, vec3(0, 0, 0));
+  cam.reset();
+  const x0 = cam.getRenderPose().position.x;
+  cam.panArrow("right");
+  assert.ok(Math.abs(Math.abs(cam.getRenderPose().position.x - x0) - (100 / 12.8) * 0.7) < 1e-6, `${cam.getRenderPose().position.x - x0}`);
+  const small = new TrackballCamera(1, vec3(0, 0, 0));
+  small.setBoardGeometry(10, vec3(0, 0, 0));
+  small.reset();
+  small.panArrow("right");
+  assert.ok(Math.abs(Math.abs(small.getRenderPose().position.x) - (10 / 12.8) * 0.7) < 1e-6, "a 10 mm board: 0.55 mm");
 });

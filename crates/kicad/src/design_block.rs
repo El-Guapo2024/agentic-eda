@@ -257,9 +257,64 @@ pub fn load(library: &Path, name: &str) -> Result<DesignBlock, String> {
 
 // ------------------------------------------------------------------------------------------------ writing
 
-/// `PATHS::IsFileWritable`-ish: the folder is there and its permissions let the owner write (`wxFileName::IsDirWritable`).
+/// `DESIGN_BLOCK_IO::IsLibraryWritable` (common/design_block_io.cpp): `path.IsOk() && path.IsDirWritable()`, and `wxFileName::IsDirWritable` is
+/// `access( dir, W_OK ) == 0`: whether *this user* may write the folder, not whether any write bit is set (r6 B6-1: a root-owned 0755 folder is read only to
+/// everyone else).
+///
+/// Differs: std has no `access`, and no crate is added for it, so on Linux the process's effective uid, gid and supplementary groups are read from
+/// `/proc/self/status` and the folder's mode bits are tested as the kernel does (owner bits for the owner, else group bits for a member, else the other bits;
+/// root may always write). POSIX ACLs and a read-only mount are not seen. Elsewhere (no `/proc`) it falls back to "some write bit is set".
 pub fn is_writable(library: &Path) -> bool {
-    std::fs::metadata(library).map(|m| m.is_dir() && !m.permissions().readonly()).unwrap_or(false)
+    let Ok(meta) = std::fs::metadata(library) else { return false };
+    if !meta.is_dir() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Some(who) = Credentials::of_this_process() {
+            return who.may_write(meta.uid(), meta.gid(), meta.mode());
+        }
+    }
+    !meta.permissions().readonly()
+}
+
+/// The effective uid, gid and supplementary groups of this process (`/proc/self/status`'s `Uid:`, `Gid:` and `Groups:` lines; the second number is the
+/// effective one).
+#[cfg(unix)]
+#[derive(Debug, Clone)]
+struct Credentials {
+    uid: u32,
+    gid: u32,
+    groups: Vec<u32>,
+}
+
+#[cfg(unix)]
+impl Credentials {
+    fn of_this_process() -> Option<Credentials> {
+        Self::parse(&std::fs::read_to_string("/proc/self/status").ok()?)
+    }
+
+    fn parse(status: &str) -> Option<Credentials> {
+        let field = |key: &str| status.lines().find_map(|l| l.strip_prefix(key)).map(|rest| rest.split_whitespace().filter_map(|n| n.parse::<u32>().ok()).collect::<Vec<_>>());
+        let uid = *field("Uid:")?.get(1)?;
+        let gid = *field("Gid:")?.get(1)?;
+        Some(Credentials { uid, gid, groups: field("Groups:").unwrap_or_default() })
+    }
+
+    /// `access( W_OK )`'s permission test on a file owned by `owner:group` with `mode`.
+    fn may_write(&self, owner: u32, group: u32, mode: u32) -> bool {
+        if self.uid == 0 {
+            return true;
+        }
+        if self.uid == owner {
+            return mode & 0o200 != 0;
+        }
+        if self.gid == group || self.groups.contains(&group) {
+            return mode & 0o020 != 0;
+        }
+        mode & 0o002 != 0
+    }
 }
 
 /// `DESIGN_BLOCK_IO::CreateLibrary`: the library folder. An existing path is refused ("Cannot overwrite library path").
@@ -346,6 +401,28 @@ pub fn delete(library: &Path, name: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// r6 B6-1: `IsDirWritable` is `access( W_OK )` for this user, so a root-owned 0755 folder is read only to anyone else (the write bits say "writable").
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_owned_by_another_user_is_read_only() {
+        let me = Credentials::of_this_process().expect("/proc/self/status");
+        if me.uid != 0 {
+            assert!(!is_writable(Path::new("/usr")), "/usr is root's");
+        }
+        let own = temp("writable");
+        assert!(is_writable(&own));
+        let user = Credentials { uid: 1000, gid: 1000, groups: vec![27] };
+        assert!(!user.may_write(0, 0, 0o755));
+        assert!(user.may_write(1000, 0, 0o755));
+        assert!(!user.may_write(1000, 1000, 0o575), "the owner's bits decide for the owner");
+        assert!(user.may_write(0, 27, 0o775), "a supplementary group");
+        assert!(user.may_write(0, 0, 0o757));
+        assert!(Credentials { uid: 0, gid: 0, groups: vec![] }.may_write(5, 5, 0o500));
+        let parsed = Credentials::parse("Name:\tx\nUid:\t1\t2\t2\t2\nGid:\t3\t4\t4\t4\nGroups:\t4 9 \n").unwrap();
+        assert_eq!((parsed.uid, parsed.gid, parsed.groups), (2, 4, vec![4, 9]));
+        let _ = std::fs::remove_dir_all(&own);
+    }
 
     fn temp(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("eda-design-block-{tag}-{}", std::process::id()));

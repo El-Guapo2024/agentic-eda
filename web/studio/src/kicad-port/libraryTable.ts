@@ -44,8 +44,11 @@ export function tableFileName(kind: TableKind): string {
   return kind === "symbol" ? "sym-lib-table" : kind === "footprint" ? "fp-lib-table" : "design-block-lib-table";
 }
 
+/** The dialog's title: `DIALOG_EDIT_LIBRARY_TABLES dlg( aParent, _( "Symbol Libraries" ) )` (panel_sym_lib_table.cpp::InvokeSchEditSymbolLibTable), "Footprint Libraries"
+ *  (panel_fp_lib_table.cpp::InvokePcbLibTableEditor), "Design Block Libraries" (panel_design_block_lib_table.cpp::InvokeEditDesignBlockLibTable); the actions that open them are
+ *  the "Manage ... Libraries..." ones. */
 export function tableTitle(kind: TableKind): string {
-  return kind === "symbol" ? "Manage Symbol Libraries" : kind === "footprint" ? "Manage Footprint Libraries" : "Manage Design Block Libraries";
+  return kind === "symbol" ? "Symbol Libraries" : kind === "footprint" ? "Footprint Libraries" : "Design Block Libraries";
 }
 
 export function emptyRow(): TableRow {

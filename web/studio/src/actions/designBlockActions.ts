@@ -279,7 +279,7 @@ export function registerDesignBlockActions(m: Map<string, ActionHandler>, ctx: D
     const c = chosen(getDesignBlocksUi().selected);
     if (!c) return;
     if (c.library && !c.library.writable) return toast(`Library '${c.lib}' is read only.`, "error");
-    const yes = await askBlockConfirm({ title: "Confirmation", message: `Delete design block '${c.name}' in library '${c.lib}' from disk?`, okLabel: "OK" });
+    const yes = await askBlockConfirm({ title: "Confirmation", message: `Delete design block '${c.name}' in library '${c.lib}' from disk?`, okLabel: "Yes", cancelLabel: "No" });
     if (!yes) return;
     let r;
     try {

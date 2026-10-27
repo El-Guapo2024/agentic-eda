@@ -309,9 +309,22 @@ pub fn exporters() -> Value {
     serde_json::json!({ "engine": engine, "unavailable": unavailable })
 }
 
-/// `POST /api/fab/ipcd356`: no options.
+/// `POST /api/fab/ipcd356`: no options. On success the reply's `message` is the one `BOARD_EDITOR_CONTROL::GenD356File`
+/// (pcbnew/exporters/export_d356.cpp) shows, see [`ipcd356_message`].
 pub fn ipcd356(dir: &Path) -> Value {
-    fab_api::reply(kicad_engine::export(dir, "ipcd356", &[]))
+    ipcd356_message(dir, fab_api::reply(kicad_engine::export(dir, "ipcd356", &[])))
+}
+
+/// `GenD356File`'s `DisplayInfoMessage( _( "IPC-D-356 netlist file created:\n'%s'." ), fn.GetFullPath() )` as the reply's `message`, the full
+/// path of the file written; kicad-cli's own "Successfully created IPC-D-356 file" (`JobExportIpcD356`, which the GUI never shows) stays in
+/// the log. None of the dialog's other exports says anything on success in KiCad, so this is the only one with a message.
+fn ipcd356_message(dir: &Path, mut reply: Value) -> Value {
+    let ok = reply.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let file = reply.get("files").and_then(Value::as_array).and_then(|f| f.first()).and_then(Value::as_str).map(|f| dir.join(f)).map(|p| std::path::absolute(&p).unwrap_or(p));
+    if let (true, Some(file), Some(obj)) = (ok, file, reply.as_object_mut()) {
+        obj.insert("message".into(), Value::String(format!("IPC-D-356 netlist file created:\n'{}'.", file.display())));
+    }
+    reply
 }
 
 /// `POST /api/fab/ipc2581` -- see [`ipc2581_args`].
@@ -384,6 +397,17 @@ mod tests {
         d.drawings.as_mut().unwrap().shapes.push(seg("4", (0.0, 10.0), (0.0, 0.0)));
         assert_eq!(step_outline_refusal(&d, &model, 0.001), None, "closed");
         assert!(step_outline_refusal(&blank(), &model, 0.01).unwrap().contains("0.010 mm"), "no outline at all is refused too");
+    }
+
+    /// X6-1 (r6-editors-exports): Generate IPC-D-356 says what `GenD356File` says, with the file's full path.
+    #[test]
+    fn ipcd356_says_what_gend356file_says() {
+        let dir = Path::new("/tmp/board");
+        let r = ipcd356_message(dir, json!({ "ok": true, "engine": "kicad-cli", "files": ["export/kicad/ipcd356/b.d356"], "log": "Successfully created IPC-D-356 file\n" }));
+        assert_eq!(r["message"], "IPC-D-356 netlist file created:\n'/tmp/board/export/kicad/ipcd356/b.d356'.");
+        assert_eq!(r["log"], "Successfully created IPC-D-356 file\n");
+        let failed = ipcd356_message(dir, json!({ "ok": false, "message": "kicad-cli failed" }));
+        assert_eq!(failed["message"], "kicad-cli failed");
     }
 
     #[test]
