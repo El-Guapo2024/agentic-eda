@@ -350,6 +350,18 @@ export function moveCursor(f: SimFrame, tr: Trace, id: number, x: number): void 
   f.modified = true;
 }
 
+/** `WX_GRID::OnDeleteRows` (common/widgets/wx_grid.cpp): the selected rows, else the grid cursor's row, are deleted (none: nothing happens), and
+ *  the cursor goes to the row above the lowest deleted one when there is one. User-defined Signals' Delete (`onDeleteSignal`). */
+export function deleteGridRows<T>(rows: readonly T[], selected: readonly number[], cursor: number): { rows: T[]; cursor: number } {
+  const del = [...new Set(selected)];
+  if (del.length === 0 && cursor >= 0 && cursor < rows.length) del.push(cursor);
+  if (del.length === 0) return { rows: [...rows], cursor };
+  del.sort((a, b) => b - a);
+  const next = del[del.length - 1]! - 1;
+  const gone = new Set(del);
+  return { rows: rows.filter((_, i) => !gone.has(i)), cursor: next >= 0 ? next : cursor };
+}
+
 /** `SetUserDefinedSignals`: the traces of a signal that went are deleted, those of one that changed renamed. */
 export function setUserSignals(f: SimFrame, signals: Map<number, string>): void {
   for (const tab of f.tabs) {

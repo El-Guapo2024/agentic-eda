@@ -359,3 +359,68 @@ export function spiceString(s: string): string {
 export function spiceDouble(s: string): number {
   return SpiceValue.parse(s).toDouble();
 }
+
+/** `SIM_VALUE_PARSER::Parse` of a float in SI notation (`SIM_VALUE_GRAMMAR::numberGrammar<TYPE_FLOAT, SI>`, eeschema/sim/sim_value.h): an
+ *  optional significand (`1.5`, `1.`, `1`, `.5`, `.`, `-`), an optional `e`/`E` exponent, an optional one-letter SI prefix and nothing else (no
+ *  blanks, no garbage suffix, so "1Meg" does not parse). An exponent with no digits ("1e") makes `std::stoi` throw: not ok. */
+const SI_FLOAT = /^([+-]?\d+\.\d+|[+-]?\d+\.|[+-]?\d+|\.\d+|\.|-)?(?:[eE]([+-]?\d*))?([afpnumkKMGTPE])?$/;
+
+/** `SIM_VALUE_PARSER::UnitPrefixToExponent` (SI). */
+function siUnitPrefixExponent(c: string): number {
+  switch (c) {
+    case "a": return -18;
+    case "f": return -15;
+    case "p": return -12;
+    case "n": return -9;
+    case "u": return -6;
+    case "m": return -3;
+    case "k":
+    case "K": return 3;
+    case "M": return 6;
+    case "G": return 9;
+    case "T": return 12;
+    case "P": return 15;
+    case "E": return 18;
+    default: return 0;
+  }
+}
+
+/** `SIM_VALUE::ToDouble( aString, aDefault = NAN )` (eeschema/sim/sim_value.cpp): SI notation, so "2M" is 2e6 and "2m" 2e-3 (SPICE's `SPICE_VALUE`
+ *  reads both as milli); text the grammar refuses, or with no significand, is `aDefault`. A significand of "-" or "." alone is 0 (`fast_float`
+ *  leaves it untouched). */
+export function simValueToDouble(s: string, def = Number.NaN): number {
+  const m = SI_FLOAT.exec(s);
+  if (!m || s === "") return def;
+  const [, sig, exp, prefix] = m;
+  if (exp !== undefined && !/\d/.test(exp)) return def;
+  if (sig === undefined || sig === "") return def;
+  let exponent = exp !== undefined ? Number.parseInt(exp, 10) : 0;
+  exponent += prefix !== undefined ? siUnitPrefixExponent(prefix) : 0;
+  const n = Number(sig);
+  const significand = Number.isNaN(n) ? 0 : n;
+  return significand * Math.pow(10, exponent);
+}
+
+/** `SIM_VALUE_PARSER::ExponentToUnitPrefix` (SI): the prefix for a base-10 exponent and the exponent it takes away. */
+function exponentToSiPrefix(e: number): { prefix: string; reduction: number } {
+  if (e >= -18 && e <= -15) return { prefix: "a", reduction: -18 };
+  if (e >= -15 && e < -12) return { prefix: "f", reduction: -15 };
+  if (e >= -12 && e < -9) return { prefix: "p", reduction: -12 };
+  if (e >= -9 && e < -6) return { prefix: "n", reduction: -9 };
+  if (e >= -6 && e < -3) return { prefix: "u", reduction: -6 };
+  if (e >= -3 && e < 0) return { prefix: "m", reduction: -3 };
+  if (e >= 0 && e < 3) return { prefix: "", reduction: 0 };
+  if (e >= 3 && e < 6) return { prefix: "k", reduction: 3 };
+  if (e >= 6 && e < 9) return { prefix: "M", reduction: 6 };
+  if (e >= 9 && e < 12) return { prefix: "G", reduction: 9 };
+  if (e >= 12 && e < 15) return { prefix: "T", reduction: 12 };
+  if (e >= 15 && e < 18) return { prefix: "P", reduction: 15 };
+  if (e >= 18 && e <= 21) return { prefix: "E", reduction: 18 };
+  return { prefix: "", reduction: 0 };
+}
+
+/** `SIM_VALUE::Normalize`: the value over its SI prefix, `{:g}` then the prefix ("1.5m", "12", "2M"; 0, whose log10 is -inf, is "0"). */
+export function simValueNormalize(v: number): string {
+  const { prefix, reduction } = exponentToSiPrefix(Math.log10(Math.abs(v)));
+  return `${formatG(v / Math.pow(10, reduction))}${prefix}`;
+}

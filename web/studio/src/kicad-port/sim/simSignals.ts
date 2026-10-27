@@ -82,18 +82,34 @@ export function sortSignals(signals: string[]): string[] {
 export function signalMatches(filter: string, signal: string): boolean {
   const f = (filter === "" ? "*" : filter).toUpperCase();
   const s = signal.toUpperCase();
+  return explicitRegex(f)?.test(s) || wildcardRegex(f)?.test(s) || s.includes(f);
+}
+
+/** `EDA_PATTERN_MATCH_REGEX::SetPattern`: a regular expression only when it is explicit, `^...$` as it is or `/.../` (the closing '/' optional);
+ *  one that does not compile is no matcher. wxRE_ADVANCED is Tcl's ARE; JavaScript's syntax is taken for it. */
+function explicitRegex(p: string): RegExp | null {
+  let pattern: string;
+  if (p.startsWith("^") && p.endsWith("$")) pattern = p;
+  else if (p.startsWith("/")) {
+    pattern = p.slice(1);
+    if (pattern.endsWith("/")) pattern = pattern.slice(0, -1);
+  } else return null;
   try {
-    if (new RegExp(f).test(s)) return true;
+    return new RegExp(pattern);
   } catch {
-    // not a regular expression
+    return null;
   }
-  const wild = f.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+}
+
+/** `EDA_PATTERN_MATCH_WILDCARD::SetPattern`: `?` is any one character, `*` any run, the others literal; matched anywhere. */
+function wildcardRegex(p: string): RegExp | null {
+  let r = "";
+  for (const c of p) r += c === "?" ? "." : c === "*" ? ".*" : ".*+?^${}()|[]/\\".includes(c) ? `\\${c}` : c;
   try {
-    if (new RegExp(wild).test(s)) return true;
+    return new RegExp(r);
   } catch {
-    // nothing
+    return null;
   }
-  return s.includes(f);
 }
 
 /** `SIMULATOR_FRAME_UI::rebuildSignalsList`: the signals of an analysis (`m_signals`) and the nets plotted as voltages (`m_netnames`). */
