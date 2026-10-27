@@ -24,6 +24,9 @@ export interface NavPin {
   name: string | null;
   /** World position of the pin's connection end, um (matches a no-connect flag's `at`). */
   tip: readonly [number, number];
+  /** The net the tracer put the pin on (the placed pin's `net`), when known: a pin joined by a label on its end or by touching another pin is on
+   *  its net with no wire ending on it (r6 C6-M1). Absent: the pin is on the nets of the wires that end on it. */
+  net?: string | null;
 }
 
 export interface NavSchematic {
@@ -31,7 +34,8 @@ export interface NavSchematic {
   pins: readonly NavPin[];
   /** Wires and buses with the net they carry and the "REF.PIN" ends they land on. */
   wires: ReadonlyArray<{ net: string; pins: readonly string[]; bus?: boolean }>;
-  labels: ReadonlyArray<{ id: string; net: string; at: readonly [number, number]; scope: "local" | "global" | "hierarchical" }>;
+  /** `net` is the label's text; `net_name` the net it is traced to (the wires' name, `/BAR` for a local `BAR`), absent for a label on no wire. */
+  labels: ReadonlyArray<{ id: string; net: string; net_name?: string | null; at: readonly [number, number]; scope: "local" | "global" | "hierarchical" }>;
   powerSymbols: ReadonlyArray<{ id: string; net: string; pin: { number: string; name: string | null } }>;
   noConnects: ReadonlyArray<{ id: string; at: readonly [number, number] }>;
 }
@@ -45,19 +49,39 @@ export interface NavItem {
   text: string;
 }
 
+/** The net a label is an item of: the traced one (`net_name`), or its text for a label on no wire. */
+export const labelNet = (l: { net: string; net_name?: string | null }): string => l.net_name || l.net;
+
 const plain = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** Every named net of the sheet, in name order (`NET_MAP` skips the nameless ones): a label's is the net it is traced to (r6 C6-M1: `/BAR`, not its text
+ *  `BAR`), and a placed pin's own net counts (one joined by a label or another pin with no wire). */
+export function sheetNets(s: {
+  wires: ReadonlyArray<{ net: string }>;
+  labels: ReadonlyArray<{ net: string; net_name?: string | null }>;
+  power_symbols: ReadonlyArray<{ net: string }>;
+  symbols: ReadonlyArray<{ pins?: ReadonlyArray<{ net?: string | null }> }>;
+}): string[] {
+  const names = new Set<string>();
+  for (const w of s.wires) if (w.net) names.add(w.net);
+  for (const l of s.labels) if (labelNet(l)) names.add(labelNet(l));
+  for (const sym of s.symbols) for (const p of sym.pins ?? []) if (p.net) names.add(p.net);
+  for (const p of s.power_symbols) if (p.net) names.add(p.net);
+  return [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
 
 /** The net's items in navigator order. */
 export function netNavigatorItems(sch: NavSchematic, net: string, units: MessageUnits): NavItem[] {
   const out: NavItem[] = [];
   const xy = (at: readonly [number, number]) => `(${messageTextFromValue(at[0], units)}, ${messageTextFromValue(at[1], units)})`;
 
-  // symbol pins: every "REF.PIN" end of a wire on this net
+  // symbol pins: every `SCH_PIN` of the net's subgraphs -- the pin's own traced net when the sheet carries it (r6 C6-M1: a pin joined by a label
+  // or another pin, with no wire ending on it), else every "REF.PIN" end of a wire on this net
   const onNet = new Set<string>();
   for (const w of sch.wires) if (w.net === net) for (const p of w.pins) onNet.add(p);
   const pinTips = new Set<string>();
   for (const p of sch.pins) {
-    if (!onNet.has(`${p.ref}.${p.number}`)) continue;
+    if (p.net !== undefined ? p.net !== net : !onNet.has(`${p.ref}.${p.number}`)) continue;
     const text = `Symbol '${p.ref}' pin '${p.number}'` + (p.name ? ` (${p.name})` : "");
     out.push({ key: `pin:${p.ref}.${p.number}`, owner: p.ref, text });
     pinTips.add(`${p.tip[0]},${p.tip[1]}`);
@@ -68,8 +92,9 @@ export function netNavigatorItems(sch: NavSchematic, net: string, units: Message
     const text = `Symbol '${ps.id}' pin '${ps.pin.number}'` + (ps.pin.name ? ` (${ps.pin.name})` : "");
     out.push({ key: `power:${ps.id}`, owner: ps.id, text });
   }
+  // a label is under the net it is traced to (`GetAllSubgraphs( aNetName )`), not under its own text (r6 C6-M1)
   for (const l of sch.labels) {
-    if (l.net !== net) continue;
+    if (labelNet(l) !== net) continue;
     const kind = l.scope === "global" ? "Global label" : l.scope === "hierarchical" ? "Hierarchical label" : "Label";
     out.push({ key: `label:${l.id}`, owner: l.id, text: `${kind} '${l.net}' at ${xy(l.at)}` });
   }

@@ -5,7 +5,9 @@
 import { useMemo, useState } from "react";
 import { useStudioDispatch, useStudioState } from "../../state/store";
 import { useSchControlDispatch, useSchControlState } from "../../state/schControlStore";
-import { netNavigatorItems, type NavSchematic } from "../../kicad-port/netNavigator";
+import { netNavigatorItems, sheetNets, type NavSchematic } from "../../kicad-port/netNavigator";
+
+export { sheetNets };
 import { resolveLibSymbol } from "../schematic/libSymbol";
 import { wildcardAnchoredMatch } from "../../kicad-port/footprintFilter";
 import type { Schematic } from "../../api/types";
@@ -13,21 +15,16 @@ import type { Schematic } from "../../api/types";
 /** The sheet as the net item list reads it. */
 export function navSchematic(s: Schematic): NavSchematic {
   return {
-    pins: s.symbols.flatMap((sym) => (resolveLibSymbol(sym, s.lib_symbols)?.pins ?? []).map((p) => ({ ref: sym.id, number: p.pin.number, name: p.pin.name, tip: p.tip }))),
+    pins: s.symbols.flatMap((sym) => {
+      // the placed pin's traced net (absent: the wires' ends decide)
+      const netOf = new Map((sym.pins ?? []).map((p) => [p.number, p.net ?? null] as const));
+      return (resolveLibSymbol(sym, s.lib_symbols)?.pins ?? []).map((p) => ({ ref: sym.id, number: p.pin.number, name: p.pin.name, tip: p.tip, ...(netOf.has(p.pin.number) ? { net: netOf.get(p.pin.number) } : {}) }));
+    }),
     wires: s.wires,
     labels: s.labels,
     powerSymbols: s.power_symbols,
     noConnects: s.no_connects,
   };
-}
-
-/** Every named net of the sheet, in name order (`NET_MAP` skips the nameless ones). */
-export function sheetNets(s: Schematic): string[] {
-  const names = new Set<string>();
-  for (const w of s.wires) if (w.net) names.add(w.net);
-  for (const l of s.labels) if (l.net) names.add(l.net);
-  for (const p of s.power_symbols) if (p.net) names.add(p.net);
-  return [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
 /** `RefreshNetNavigator`'s filter: a typed text with no wildcard matches anywhere in the name (`*text*`), case-insensitively. */

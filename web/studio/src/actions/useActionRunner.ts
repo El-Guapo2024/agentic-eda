@@ -67,6 +67,7 @@ import { arcRemoveLastPoint, arcToggleClockwise } from "../kicad-port/arcGeom";
 import { bezierRemoveLastPoint } from "../kicad-port/bezierGeom";
 import { planPack } from "../kicad-port/packFootprints";
 import { netNavigatorItems, stepNetItem, type NavSchematic } from "../kicad-port/netNavigator";
+import { navSchematic } from "../components/schControl/NetNavigatorPanel";
 import { repeatCmds } from "../kicad-port/schRepeat";
 import { nextReference, placementMinRef } from "../kicad-port/nextReference";
 import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnotate";
@@ -2299,13 +2300,7 @@ export function useActionRunner() {
       const stepNetNavigator = (forward: boolean) => () => {
         if (state.tab !== "schematic" || !state.schematic || !state.netHighlight || state.selection.size === 0) return;
         const s = state.schematic;
-        const nav: NavSchematic = {
-          pins: s.symbols.flatMap((sym) => (resolveLibSymbol(sym, s.lib_symbols)?.pins ?? []).map((p) => ({ ref: sym.id, number: p.pin.number, name: p.pin.name, tip: p.tip }))),
-          wires: s.wires,
-          labels: s.labels,
-          powerSymbols: s.power_symbols,
-          noConnects: s.no_connects,
-        };
+        const nav: NavSchematic = navSchematic(s);
         const items = netNavigatorItems(nav, state.netHighlight, state.units);
         const first = [...state.selection][0]!;
         if (!items.some((it) => it.owner === first)) return;

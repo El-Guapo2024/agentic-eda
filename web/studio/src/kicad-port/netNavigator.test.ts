@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { netNavigatorItems, stepNetItem, type NavSchematic } from "./netNavigator";
+import { netNavigatorItems, sheetNets, stepNetItem, type NavSchematic } from "./netNavigator";
 
 const sch: NavSchematic = {
   pins: [
@@ -69,4 +69,31 @@ test("stepNetItem: nothing found, nothing selected", () => {
   assert.equal(stepNetItem(items, null, null, true), null);
   assert.equal(stepNetItem([], null, "R1", true), null);
   assert.equal(stepNetItem(items, "pin:gone", "R1", true)?.owner, "R2", "a stale key falls back to the selection");
+});
+
+test("r6 C6-M1: a_label_is_an_item_of_the_net_it_is_traced_to, and a pin joined with no wire is too", () => {
+  const s: NavSchematic = {
+    pins: [
+      { ref: "J1", number: "2", name: null, tip: [0, 0], net: "/BAR" },
+      // joined to J1.2's net by a label on its end: no wire ends on it
+      { ref: "J2", number: "1", name: null, tip: [5_000_000, 0], net: "/BAR" },
+      { ref: "J2", number: "2", name: null, tip: [6_000_000, 0], net: null },
+    ],
+    wires: [{ net: "/BAR", pins: ["J1.2"] }],
+    labels: [{ id: "lbl_bar", net: "BAR", net_name: "/BAR", at: [1_000_000, 0], scope: "local" }],
+    powerSymbols: [],
+    noConnects: [],
+  };
+  assert.deepEqual(netNavigatorItems(s, "/BAR", "mm").map((i) => i.text), ["Label 'BAR' at (1.0000 mm, 0.0000 mm)", "Symbol 'J1' pin '2'", "Symbol 'J2' pin '1'"]);
+  assert.deepEqual(netNavigatorItems(s, "BAR", "mm"), []);
+  // Tab from the label walks the traced net's items
+  const items = netNavigatorItems(s, "/BAR", "mm");
+  assert.equal(stepNetItem(items, null, "lbl_bar", true)?.owner, "J1");
+});
+
+test("r6 C6-M1: sheetNets lists a local label's traced net once, not its text beside it", () => {
+  const nets = sheetNets({ wires: [{ net: "/BAR" }], labels: [{ net: "BAR", net_name: "/BAR" }], power_symbols: [], symbols: [{ pins: [{ net: "/BAR" }, { net: null }] }] });
+  assert.deepEqual(nets, ["/BAR"]);
+  // a label on no wire is its own text's net
+  assert.deepEqual(sheetNets({ wires: [], labels: [{ net: "FOO", net_name: null }], power_symbols: [], symbols: [] }), ["FOO"]);
 });
