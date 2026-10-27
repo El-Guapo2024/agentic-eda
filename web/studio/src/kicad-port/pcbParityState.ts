@@ -2,7 +2,6 @@
 // (docs/parity/UI-ACTIONS.md), kept in one object (`StudioState.pcbx`, one
 // `PCBX` reducer action) so the shared store file carries a single, easily
 // merged hunk instead of a field per action.
-import type { Cmd } from "../api/types";
 import type { TuneHoverReply, TuneKind, TuneSettings } from "../api/tuneTypes";
 import type { LayerPairSettings } from "./layerPairs";
 import { DEFAULT_CUSTOM_TRACK_VIA, type CustomTrackVia } from "./routerVia";
@@ -83,10 +82,16 @@ export interface PcbParityState {
   vertexEditorOpen: boolean;
 }
 
+/**
+ * Create Zone / Rule Area from Selection, while its one dialog is open (`CreatePolys` passes `&m_userSettings` to the zone editor, which shows them in a
+ * "Conversion Settings" box; round 6 D6-2): the selected items and the settings the box starts from. On OK the zone dialog converts the items with the
+ * settings it holds then (`getPolys( m_userSettings )`), adds a zone with its own settings for every outline and removes the sources when asked.
+ */
 export interface ZoneConvertPending {
-  extraOutlines: [number, number][][];
-  /** Delete commands for the converted sources (`Delete source objects after conversion`); empty when they stay. */
-  deleteCmds: Cmd[];
+  ids: string[];
+  strategy: "centerline" | "bounding_hull";
+  gapNm: number;
+  deleteOriginals: boolean;
 }
 
 export interface CustomDiffPair {

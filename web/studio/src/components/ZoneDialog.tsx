@@ -39,7 +39,11 @@ import { duplicatedZoneOutline } from "../kicad-port/boardControl";
 import { enabledOptionalLayers, layerDisplayName } from "../kicad-port/boardLayers";
 import { activeLayerName, isCopper } from "../kicad-port/layerPresets";
 import { postCarry } from "../api/client";
-import { NO_NET_ZONE_WARNING, orderedLayerSet, zoneDialogKind, zoneDialogNet, zoneLayerChoices, zoneLayers } from "../kicad-port/zoneLayers";
+import { NO_NET_ZONE_WARNING, convertZoneTitle, orderedLayerSet, zoneDialogKind, zoneDialogNet, zoneLayerChoices, zoneLayers } from "../kicad-port/zoneLayers";
+import { convertPolys } from "../api/client";
+import { deleteCmd } from "../kicad-port/pcbConvert";
+import { rememberZoneConversion } from "../actions/pcbConvertSweep";
+import { LengthRow, lengthText, useLengthField } from "./pcbDialogKit";
 
 type ZoneFormSettings = ZoneSettingsFields & RuleAreaFields;
 const DEFAULT_FORM_SETTINGS: ZoneFormSettings = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
@@ -123,6 +127,11 @@ export function ZoneDialog() {
   // The Placement tab of a rule area (`DIALOG_RULE_AREA_PROPERTIES`): the sheets, component classes and groups the board offers, and what is chosen among them.
   const [sources, setSources] = useState<PlacementChoices | null>(null);
   const [placement, setPlacement] = useState<PlacementForm>(() => placementFormOf(undefined, NO_CHOICES));
+  // Create Zone / Rule Area from Selection: the dialog's "Conversion Settings" box (`DIALOG_COPPER_ZONE( ..., aConvertSettings )`; round 6 D6-2).
+  const convert = addOutline != null ? state.pcbx.zoneConvert : null;
+  const [convStrategy, setConvStrategy] = useState<"centerline" | "bounding_hull">("centerline");
+  const convGap = useLengthField(0);
+  const [convDelete, setConvDelete] = useState(false);
 
   const copperLayers = state.board?.layers ?? [];
   const optionalLayers = enabledOptionalLayers(state.board?.board_rules?.layer_setup);
@@ -154,6 +163,11 @@ export function ZoneDialog() {
       setLocked(false);
       setSettings({ ...DEFAULT_FORM_SETTINGS, is_rule_area: state.nextZoneIsRuleArea });
       dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
+      if (convert) {
+        setConvStrategy(convert.strategy);
+        convGap.setText(lengthText(convert.gapNm, units));
+        setConvDelete(convert.deleteOriginals);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editId, dupId]);
@@ -211,7 +225,8 @@ export function ZoneDialog() {
   const noLayer = layers.length === 0;
   const thermalSpokeTooNarrow = kind === "copper" && settings.thermal_spoke_width < settings.min_thickness;
   // (a copper zone on no net is allowed: the panel only warns, `updateInfoBar`)
-  const canSubmit = !noLayer && (kind === "rule-area" ? true : kind === "non-copper" ? settings.min_thickness >= 0 : !thermalSpokeTooNarrow && settings.clearance >= 0 && settings.min_thickness > 0);
+  const convGapNm = convert && convStrategy === "bounding_hull" ? convGap.parse() : 0;
+  const canSubmit = convGapNm !== null && !noLayer && (kind === "rule-area" ? true : kind === "non-copper" ? settings.min_thickness >= 0 : !thermalSpokeTooNarrow && settings.clearance >= 0 && settings.min_thickness > 0);
   const firstLayer = layers[0] ?? "F.Cu";
 
   const submit = async () => {
@@ -226,15 +241,23 @@ export function ZoneDialog() {
       if (ok) close();
     } else if (addOutline) {
       const extra = { layers, name: settings.is_rule_area ? "" : name, locked };
-      // "Create Zone from Selection": the other outlines the conversion made get the same settings, then the converted sources go -- all one undo step, as
-      // `CreatePolys` pushes one commit ("Convert to Zone"; round 5 B5-10): the zones join a step held open, which the removal (or a bare commit) closes.
-      const convert = state.pcbx.zoneConvert;
-      await api.addZone(effectiveNet, firstLayer, addOutline, form, extra, convert ? "hold" : undefined);
       if (convert) {
-        for (const outline of convert.extraOutlines) await api.addZone(effectiveNet, firstLayer, outline, form, extra, "hold");
-        if (convert.deleteCmds.length > 0) await api.cmdBatch(convert.deleteCmds, "commit");
+        // "Create Zone from Selection": `getPolys( m_userSettings )` with what the box holds now (nothing to convert: nothing is done), a zone with the dialog's
+        // settings for every outline, then the converted sources go -- all one undo step, as `CreatePolys` pushes one commit (round 5 B5-10): the zones join a
+        // step held open, which the removal (or a bare commit) closes.
+        const chosen = { strategy: convStrategy, gapNm: convGapNm ?? 0, deleteOriginals: convDelete };
+        rememberZoneConversion(chosen);
+        const reply = await convertPolys(convert.ids, chosen.strategy, chosen.gapNm);
+        if (!reply.ok || reply.rings.length === 0 || !state.board) {
+          close();
+          return;
+        }
+        const board = state.board;
+        for (const outline of reply.rings) await api.addZone(effectiveNet, firstLayer, outline, form, extra, "hold");
+        const deleteCmds: Cmd[] = chosen.deleteOriginals ? reply.consumed.map((id) => deleteCmd(board, id)) : [];
+        if (deleteCmds.length > 0) await api.cmdBatch(deleteCmds, "commit");
         else await postCarry("commit");
-      }
+      } else await api.addZone(effectiveNet, firstLayer, addOutline, form, extra);
       close();
     } else if (dupZone) {
       // `ZoneDuplicate`: the copy is unfilled (fills are derived here), has the dialog's settings, and -- on the same layers as the original --
@@ -245,7 +268,9 @@ export function ZoneDialog() {
     }
   };
 
-  const title = editZone
+  const title = convert
+    ? convertZoneTitle(kind)
+    : editZone
     ? kind === "rule-area"
       ? "Rule Area Properties"
       : kind === "non-copper"
@@ -266,6 +291,23 @@ export function ZoneDialog() {
           <span>{title}</span>
         </div>
         <div className="dialog-body" style={{ maxHeight: "70vh", overflowY: "auto" }}>
+          {convert && (
+            <fieldset data-testid="zone-conversion-settings" style={{ marginBottom: 8, border: "1px solid var(--chrome-border, #444)", padding: "4px 8px" }}>
+              <legend style={{ fontSize: 11 }}>Conversion Settings</legend>
+              <label className="filter-row" style={{ display: "block" }}>
+                <input type="radio" name="zone-convert-strategy" checked={convStrategy === "centerline"} onChange={() => setConvStrategy("centerline")} /> Use centerlines
+              </label>
+              <label className="filter-row" style={{ display: "block" }}>
+                <input type="radio" name="zone-convert-strategy" checked={convStrategy === "bounding_hull"} onChange={() => setConvStrategy("bounding_hull")} /> Create bounding hull
+              </label>
+              <div style={{ marginLeft: 22 }}>
+                <LengthRow label="Gap:" field={convGap} disabled={convStrategy !== "bounding_hull"} />
+              </div>
+              <label className="filter-row" style={{ display: "block" }}>
+                <input type="checkbox" checked={convDelete} onChange={(e) => setConvDelete(e.target.checked)} /> Delete source objects after conversion
+              </label>
+            </fieldset>
+          )}
           <label className="filter-row" style={{ display: "block", marginBottom: 8 }} title="ZONE::GetIsRuleArea() -- a keepout instead of a copper pour">
             <input type="checkbox" data-testid="zone-rule-area" checked={settings.is_rule_area} onChange={(e) => setRuleArea(e.target.checked)} /> Rule area (keepout)
           </label>
