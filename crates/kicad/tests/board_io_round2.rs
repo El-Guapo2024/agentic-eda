@@ -318,3 +318,22 @@ fn no_attr_means_no_attr() {
     let out = export(&design, &model);
     assert!(!out.contains("(attr"), "{out}");
 }
+
+/// F10: a legacy `(pcbplotparams (viasonmask true))` is the vias untented (`parseSETUP`, `case T_pcbplotparams`); `false` is them tented.
+#[test]
+fn viasonmask_true_untents_the_vias() {
+    let legacy = |on: &str| {
+        format!(
+            r#"(kicad_pcb (version 20230620) (generator pcbnew)
+ (general (thickness 1.6)) (paper "A4")
+ (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (38 "B.Mask" user) (39 "F.Mask" user) (44 "Edge.Cuts" user))
+ (setup (pad_to_mask_clearance 0) (pcbplotparams (layerselection 0x00010fc_ffffffff) (viasonmask {on}) (outputdirectory "")))
+ (net 0 "")
+)"#
+        )
+    };
+    let (design, model, _) = import_kicad_pcb(&legacy("true")).expect("parses");
+    assert!(export(&design, &model).contains("(tenting (front no) (back no))"));
+    let (design, model, _) = import_kicad_pcb(&legacy("false")).expect("parses");
+    assert!(export(&design, &model).contains("(tenting (front yes) (back yes))"));
+}

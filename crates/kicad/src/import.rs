@@ -820,10 +820,28 @@ fn import_solder_mask_setup(root: &[Sexpr], board: &mut BoardRules) {
     if let Some(v) = sexpr::find(setup, "allow_soldermask_bridges_in_footprints").and_then(|f| sexpr::txt(f, 1)) {
         board.solder_mask.allow_bridges_in_footprints = v == "yes";
     }
-    if let Some(t) = sexpr::find(setup, "tenting") {
-        let (front, back) = front_back_opt_bool(t);
-        board.solder_mask.tent_vias_front = front.unwrap_or(false);
-        board.solder_mask.tent_vias_back = back.unwrap_or(false);
+    // In file order: `(tenting ..)`, and the `(viasonmask ..)` of a legacy `(pcbplotparams ..)`, which the parser turns into tenting (`case T_pcbplotparams`:
+    // `if( plotParams.GetLegacyPlotViaOnMaskLayer().has_value() ) { bool tent = !( *plotParams.GetLegacyPlotViaOnMaskLayer() ); m_TentViasFront = tent; m_TentViasBack = tent; }`;
+    // `PCB_PLOT_PARAMS_PARSER::parseBool` takes `true`, `yes`, `false` and `no`).
+    for item in setup.iter().skip(1).filter_map(Sexpr::as_list) {
+        match sexpr::tag(item) {
+            Some("tenting") => {
+                let (front, back) = front_back_opt_bool(item);
+                board.solder_mask.tent_vias_front = front.unwrap_or(false);
+                board.solder_mask.tent_vias_back = back.unwrap_or(false);
+            }
+            Some("pcbplotparams") => {
+                if let Some(on_mask) = sexpr::find(item, "viasonmask").and_then(|v| sexpr::txt(v, 1)).and_then(|v| match v {
+                    "true" | "yes" => Some(true),
+                    "false" | "no" => Some(false),
+                    _ => None,
+                }) {
+                    board.solder_mask.tent_vias_front = !on_mask;
+                    board.solder_mask.tent_vias_back = !on_mask;
+                }
+            }
+            _ => {}
+        }
     }
     // `m_SolderPasteMargin` / `m_SolderPasteMarginRatio`.
     if let Some(v) = sexpr::find(setup, "pad_to_paste_clearance").and_then(|f| sexpr::num(f, 1)) {
