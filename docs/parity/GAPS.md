@@ -431,6 +431,15 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   locked; Cleanup's merge inside a pour; Merge Zones' holes and log lines.
 - Missing (round 4): tuning patterns in Create Array; the circular array's angle in millidegrees (C-8); Cleanup's merge of overlapping or folded-back segments and its 1 nm tolerance; Track & Via
   Properties' short question on an OK with nothing edited; the cursor warp of a removed zone corner; the bell.
+- Done 2026-10-28 (`task-r5-pcb-edit`, `PARITY-pcb.md` section 59, the round-5 findings `r5-pcb-edit`): teardrops on arc tracks (kicad-cli's own outlines, both ways round); the studio starts in the free
+  line mode, a rectangle is free and Ctrl squares it, a 45-degree line keeps the cursor's x or y; a zone or polygon is finished through `OnComplete` (the loop's bend, `Simplify`); the first corner clears
+  the selection and an emptied polygon stays started; Draw Via snaps, takes the track's, pad's or pour's net (Select Net:), is refused by the clearances ("Via location violates DRC.") and splits the
+  track; the Text tool carries its text to a second click and stays armed, with the class's width and italic; Cleanup Graphics' 500 nm epsilon and the outline healed in place; Create from Selection keeps
+  a rounded rectangle's corners, chains within 100 nm, makes non-copper zones, is one undo step, and takes KiCad's default widths.
+- Missing (round 5): a free via's `(free yes)` (no flag in the IR's via); a Draw Via on an arc track does not cut it; the DRC check reads no constraint severity or pad clearance override; the canvas
+  draws a text centred on its anchor whatever its vertical justification; Cleanup Graphics leaves text boxes alone (B5-6: KiCad's cleaner takes a `PCB_TEXTBOX` as a `PCB_SHAPE`) and its change list
+  is not clickable; Create Tracks has its own dialog, delete flag and net (B5-16: KiCad's has none, uses the active copper layer and the shared `m_DeleteOriginals`, and leaves the tracks with no net,
+  which `commit_route` here refuses); `CalcArcCenter`'s round-number snap in the teardrop's arc.
 - Port from: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`, `align_distribute_tool.cpp`, `pcb_selection_tool.cpp`, `pcb_control.cpp` (`Paste`, `placeBoardItems`), `common/dialogs/dialog_paste_special.cpp`, `pcbnew/kicad_clipboard.cpp`.
 
 ### 9. Footprints on the board are editable objects
@@ -986,7 +995,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Graphics Properties reaches dimensions, lists every board layer and has "Set to layer (and dimension) default values" (section 13). Still open there: microvias and the annular-ring and IPC-4761 presets (a via has no
   padstack here); of text and graphics the footprint reference, value, other-field, text, graphic and dimension scopes, the two "By parent ..." filters, bold, italic, font, keep upright, visible and "center text on footprint"
   (a footprint's own text is not an item of the board until package P1). Rule areas: multi-layer rule areas, `(disallow ...)` rules on non-keepout items, `DRCE_TEXT_ON_EDGECUTS` (section 14). Teardrops: curved edges,
-  rectangular and non-circular pad anchors, track-to-track, two-segment borrowing, `m_TdOnPadsInZones`, incremental updates (section 15). Dimensions: a leader's text border, manual text position
+  rectangular and non-circular pad anchors, track-to-track, two-segment borrowing, `m_TdOnPadsInZones`, incremental updates (section 15; arc tracks done in round 5, section 59). Dimensions: a leader's text border, manual text position
   (section 18; Rotate/Flip of a dimension is done). The Draw Zone Fill Fracture Borders / Triangulation debug modes draw strokes only (the triangulation is an earcut port without KiCad's Z-order hash); Flip Board View mirrors text on
   non-side-specific layers with the board where KiCad keeps it readable; Automatically select track width does not turn off when a width is picked in the toolbar and the first width key while routing
   does not set `m_TempOverrideTrackWidth` (`PARITY-boardctl.md`).
