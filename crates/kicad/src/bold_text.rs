@@ -31,10 +31,14 @@ pub fn normalize(tree: &mut Sexpr) {
 fn widen(node: &mut Sexpr) {
     let Sexpr::List(items) = node else { return };
     if crate::sexpr::tag(items) == Some("font") && is_bold(items) {
+        // "Outline faces never baked bold into the width; skip them." (`MigrateLegacyBoldStrokeWidth`: `!isStrokeFont()`), nor a width of 1 nm or less (`thickness <= 1`).
+        if !is_stroke_font(items) {
+            return;
+        }
         for item in items.iter_mut() {
             if let Sexpr::List(l) = item {
                 if crate::sexpr::tag(l) == Some("thickness") {
-                    if let Some(t) = crate::sexpr::num(l, 1) {
+                    if let Some(t) = crate::sexpr::num(l, 1).filter(|&t| t > 0.000001) {
                         l[1] = Sexpr::Atom(format_mm(t * BOLD_FACTOR));
                     }
                 }
@@ -44,6 +48,15 @@ fn widen(node: &mut Sexpr) {
     }
     for item in items.iter_mut() {
         widen(item);
+    }
+}
+
+/// A font with no `(face ..)`, or the KiCad font named: `EDA_TEXT::isStrokeFont`, which during load keys off the stored face name, `FONT::IsStroke`
+/// (`aFontName == _( "Default Font" ) || aFontName == KICAD_FONT_NAME`, "KiCad Font"). Any other face is an outline font.
+fn is_stroke_font(font: &[Sexpr]) -> bool {
+    match crate::sexpr::find(font, "face").and_then(|f| crate::sexpr::txt(f, 1)) {
+        None => true,
+        Some(face) => face.is_empty() || face == "Default Font" || face == "KiCad Font",
     }
 }
 
@@ -97,6 +110,20 @@ mod tests {
         // Every font in the tree, a footprint's included.
         let text = "(kicad_pcb (version 20260826) (footprint \"x\" (property \"Reference\" \"R1\" (effects (font (size 1 1) (thickness 0.0625) bold)))) (gr_text \"a\" (effects (font (thickness 0.2) (bold yes)))))";
         assert_eq!(thickness_of(text), ["0.1", "0.32"]);
+    }
+
+    /// 25ec2335 `EDA_TEXT::MigrateLegacyBoldStrokeWidth`: "Outline faces never baked bold into the width; skip them." kicad-cli 10.99.0's upgrade of a bold `(thickness 0.2)`
+    /// writes 0.125 in the KiCad font and 0.2 in `(face "DejaVu Sans")`. The KiCad font named is a stroke font.
+    #[test]
+    fn an_outline_fonts_bold_thickness_is_left_as_it_is() {
+        let new = |font: &str| format!("(kicad_pcb (version 20260901) (gr_text \"a\" (effects (font {font} (size 1 1) (thickness 0.2) (bold yes)))))");
+        assert_eq!(thickness_of(&new("(face \"Arial\")")), ["0.2"]);
+        assert_eq!(thickness_of(&new("(face \"DejaVu Sans\")")), ["0.2"]);
+        assert_eq!(thickness_of(&new("(face \"KiCad Font\")")), ["0.32"]);
+        assert_eq!(thickness_of(&new("")), ["0.32"]);
+        // A footprint file, through its reader.
+        let fp = "(footprint \"X\" (version 20260901) (fp_text user \"a\" (at 0 0) (layer \"F.SilkS\") (effects (font (face \"Arial\") (size 1 1) (thickness 0.2) (bold yes)))))";
+        assert_eq!(thickness_of(fp), ["0.2"]);
     }
 
     /// A file of an older version is read as it is, whether it says `bold` or `(bold yes)`.
