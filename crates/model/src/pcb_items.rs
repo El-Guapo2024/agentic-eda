@@ -349,6 +349,12 @@ pub struct ShapeStyle {
     /// rounded rectangle (`ROUNDRECT( SHAPE_RECT( .. ), GetCornerRadius() )`). 0 is a sharp one. Additive.
     #[serde(default, skip_serializing_if = "is_zero", deserialize_with = "crate::units::de")]
     pub corner_radius: crate::ir::Nm,
+    /// A shape on an outer copper layer that has a solder-mask opening (`PCB_SHAPE::HasSolderMask`, the file's `(layers "F.Cu" "F.Mask")`). Additive.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub solder_mask: bool,
+    /// Its own `(solder_mask_margin ..)` (`PCB_SHAPE::GetLocalSolderMaskMargin`), nm; `None` takes the board's. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::units::de")]
+    pub solder_mask_margin: Option<crate::ir::Nm>,
 }
 
 fn is_zero(v: &crate::ir::Nm) -> bool {
@@ -358,12 +364,12 @@ fn is_zero(v: &crate::ir::Nm) -> bool {
 impl ShapeStyle {
     /// The style of `id` that says nothing.
     pub fn empty(id: &str) -> ShapeStyle {
-        ShapeStyle { id: id.to_string(), hatch: None, endings: Default::default(), net: None, corner_radius: Nm::ZERO }
+        ShapeStyle { id: id.to_string(), hatch: None, endings: Default::default(), net: None, corner_radius: Nm::ZERO, solder_mask: false, solder_mask_margin: None }
     }
 
     /// Says nothing beyond the shape itself: not kept.
     pub fn is_empty(&self) -> bool {
-        self.hatch.is_none() && self.endings.is_none() && self.net.is_none() && self.corner_radius == Nm::ZERO
+        self.hatch.is_none() && self.endings.is_none() && self.net.is_none() && self.corner_radius == Nm::ZERO && !self.solder_mask
     }
 }
 

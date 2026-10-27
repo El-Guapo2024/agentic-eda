@@ -166,7 +166,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // file can be turned into ids once the items have them.
     let mut refs = Refs::default();
     let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras, footprint_edits) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
-    let (tracks, vias, via_tenting, via_extras) = import_routing(root, &net_names, &mut notes, &mut refs);
+    let (tracks, track_masks, vias, via_tenting, via_extras) = import_routing(root, &net_names, &mut notes, &mut refs);
     let (mut shapes, texts, text_extras) = import_drawings(root, &net_names, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
     let (outline, outline_is_shapes, outline_width_nm) = import_outline(&mut shapes, &mut refs, &mut notes);
@@ -284,6 +284,11 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     if let Some(dr) = design.drawings.as_mut() {
         let styles: Vec<eda_model::pcb_items::ShapeStyle> = dr.shapes.iter().zip(&refs.shapes).filter_map(|(s, r)| r.shape_style(s.id())).collect();
         dr.board_items.shape_styles = styles;
+    }
+    // The tracks' solder-mask openings, named by the ids the tracks have just been given.
+    let track_masks: Vec<eda_model::track_mask::TrackMask> = design.routing.iter().flat_map(|r| r.tracks.iter()).zip(track_masks).filter_map(|(t, m)| m.map(|m| eda_model::track_mask::TrackMask { id: t.id.clone(), ..m })).collect();
+    if !track_masks.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).track_masks = track_masks;
     }
     // The vias' tokens beyond `Via`'s fields, named by the ids the vias have just been given.
     let via_extras: Vec<eda_model::via_extra::ViaExtra> = design.routing.iter().flat_map(|r| r.vias.iter()).zip(via_extras).filter(|(_, x)| !x.is_default()).map(|(v, mut x)| { x.id = v.id.clone(); x }).collect();
@@ -2053,16 +2058,19 @@ fn parse_text_on(item: &[Sexpr], text: &str, tf: &dyn Fn(Point) -> Point, keep_u
 
 // ---------------------------------------------------------------- routing
 
-fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Track>, Vec<Via>, Vec<ViaTenting>, Vec<eda_model::via_extra::ViaExtra>) {
+fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Track>, Vec<Option<eda_model::track_mask::TrackMask>>, Vec<Via>, Vec<ViaTenting>, Vec<eda_model::via_extra::ViaExtra>) {
 
     let mut tracks = Vec::new();
+    // The solder-mask opening of each track, one per track in the same order, for the caller to name once the tracks have ids.
+    let mut track_masks = Vec::new();
     for seg in sexpr::find_all(root, "segment") {
         let (Some(s), Some(e)) = (sexpr::find(seg, "start").and_then(xy_point), sexpr::find(seg, "end").and_then(xy_point)) else { continue };
         let net = net_ref(sexpr::find(seg, "net"), net_names);
         // Net 0 (no net) stays as an empty `net`: KiCad still checks a
         // netless track (clearance, shorting, dangling) like any other.
         let width = sexpr::find(seg, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(mm(0.2));
-        let layer = sexpr::find(seg, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
+        let (layer, mask) = cu_item_layers(seg).unwrap_or_else(|| ("F.Cu".to_string(), false));
+        track_masks.push(mask.then(|| eda_model::track_mask::TrackMask { id: String::new(), margin: sexpr::find(seg, "solder_mask_margin").and_then(|m| sexpr::num(m, 1)).map(mm_to_nm) }));
         tracks.push(Track { id: String::new(), net, pins: vec![], layer, width, pts: vec![s, e], arc_mid_offset: None });
         refs.tracks.push(ItemRef::of(seg));
     }
@@ -2075,7 +2083,8 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         };
         let net = net_ref(sexpr::find(arc, "net"), net_names);
         let width = sexpr::find(arc, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(mm(0.2));
-        let layer = sexpr::find(arc, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
+        let (layer, mask) = cu_item_layers(arc).unwrap_or_else(|| ("F.Cu".to_string(), false));
+        track_masks.push(mask.then(|| eda_model::track_mask::TrackMask { id: String::new(), margin: sexpr::find(arc, "solder_mask_margin").and_then(|m| sexpr::num(m, 1)).map(mm_to_nm) }));
         notes.track_arcs_kept += 1;
         tracks.push(Track::new_arc(net, layer, width, s, m, e));
         refs.tracks.push(ItemRef::of(arc));
@@ -2106,7 +2115,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         refs.vias.push(ItemRef::of(via));
     }
 
-    (tracks, vias, via_tenting, via_extras)
+    (tracks, track_masks, vias, via_tenting, via_extras)
 }
 
 // Track arcs go through `Track::new_arc` (eda_model), which keeps the true
@@ -2174,9 +2183,24 @@ pub(crate) fn legacy_arc(center: Point, start: Point, angle_deg: f64) -> (Point,
     (start, turn(angle_deg / 2.0), turn(angle_deg))
 }
 
-/// An item's `(layer ..)`.
+/// An item's `(layer ..)`, or the copper layer of the `(layers "F.Cu" "F.Mask")` a track or a copper shape with a solder-mask opening has instead (see [`cu_item_layers`]).
 fn layer_of(item: &[Sexpr]) -> String {
-    sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Cmts.User").to_string()
+    cu_item_layers(item).map(|(layer, _)| layer).unwrap_or_else(|| "Cmts.User".to_string())
+}
+
+/// The layer of a track, an arc or a board shape, and whether it has a solder-mask opening. KiCad 9 writes such an item with a mask opening as `(layers "B.Cu" "B.Mask")`
+/// instead of `(layer "B.Cu")` (`pcb_io_kicad_sexpr.cpp::format( PCB_TRACK )` and `format( PCB_SHAPE )`: `formatLayers( GetLayerSet() )` when the set has more than one layer),
+/// and the parser gives the item every copper layer of the set as its layer and a mask opening for a mask layer (`parseLayersForCuItemWithSoldermask`, `PCB_TRACK::SetLayerSet`,
+/// `PCB_SHAPE::SetLayerSet`: `RunOnLayers`, `IsCopperLayer` then `SetLayer`, `IsSolderMaskLayer` then `SetHasSolderMask( true )`). A set with no copper layer keeps its first
+/// layer (a shape's `(layers ..)` of KiCad 10's other kinds). `None` when the item names no layer.
+pub(crate) fn cu_item_layers(item: &[Sexpr]) -> Option<(String, bool)> {
+    if let Some(layer) = sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)) {
+        return Some((layer.to_string(), false));
+    }
+    let names: Vec<&str> = sexpr::find(item, "layers").map(|l| (1..l.len()).filter_map(|i| sexpr::txt(l, i)).collect()).unwrap_or_default();
+    let mask = names.iter().any(|n| n.ends_with(".Mask"));
+    let layer = names.iter().rev().find(|n| n.ends_with(".Cu")).or(names.first())?;
+    Some((layer.to_string(), mask))
 }
 
 /// `(fill yes|solid)`.

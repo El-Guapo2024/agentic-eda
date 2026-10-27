@@ -353,6 +353,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             let n = net_of("a track", &format!("{} on {}", t.net, t.layer), &t.net);
             let lock = if is_locked(&t.id) { " (locked yes)" } else { "" };
             let w = mm(t.width);
+            let mask = design.drawings.as_ref().and_then(|d| d.track_mask(&t.id));
+            let layer = cu_item_layer_words(&t.layer, mask.is_some(), mask.and_then(|m| m.margin));
             if let Some((start, mid, end)) = t.arc() {
                 // `PCB_ARC`: one `(arc (start) (mid) (end) (width))` item. `Track::arc()` only reports an arc
                 // while the polyline still is its tessellation, so an edited arc is written as the segments
@@ -361,14 +363,13 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
                 written.entry(t.id.clone()).or_default().push(uuid.clone());
                 writeln!(
                     out,
-                    "\t(arc (start {} {}) (mid {} {}) (end {} {}) (width {w}){lock} (layer {}) (net {n}) (uuid \"{uuid}\"))",
+                    "\t(arc (start {} {}) (mid {} {}) (end {} {}) (width {w}){lock} {layer} (net {n}) (uuid \"{uuid}\"))",
                     mm(start.x),
                     mm(start.y),
                     mm(mid.x),
                     mm(mid.y),
                     mm(end.x),
                     mm(end.y),
-                    sexpr_str(&t.layer)
                 )
                 .unwrap();
                 continue;
@@ -380,7 +381,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
                 let y2 = mm(pair[1].y);
                 let uuid = crate::duid_for(&format!("segment:{}:{}:{}:{}", t.net, t.layer, ti, j), &if j == 0 { t.id.clone() } else { format!("{}#{j}", t.id) });
                 written.entry(t.id.clone()).or_default().push(uuid.clone());
-                writeln!(out, "\t(segment (start {x1} {y1}) (end {x2} {y2}) (width {w}){lock} (layer {}) (net {n}) (uuid \"{uuid}\"))", sexpr_str(&t.layer)).unwrap();
+                writeln!(out, "\t(segment (start {x1} {y1}) (end {x2} {y2}) (width {w}){lock} {layer} (net {n}) (uuid \"{uuid}\"))").unwrap();
             }
         }
 
@@ -1606,13 +1607,28 @@ fn teardrop_priorities(zones: &[Zone]) -> std::collections::HashMap<&str, u32> {
 ///
 /// `style` is what the board keeps of the shape beyond `Shape` ([`eda_model::pcb_items::ShapeStyle`]): its hatch, its line endings (`(start_shape ..)` and `(end_shape ..)`
 /// after the stroke, `LINE_ENDING::Format`; an open shape's only) and its net, which `net` has already turned into the file's number (0 is none: `GetNetCode() > 0`).
+/// The layer words of a track, an arc or a board shape: `(layer "F.Cu")`, or, for one with a solder-mask opening on an outer copper layer, `(layers "F.Cu" "F.Mask")` and its own
+/// `(solder_mask_margin ..)` when it has one (`pcb_io_kicad_sexpr.cpp::format( PCB_TRACK )` and `format( PCB_SHAPE )`: `formatLayers( GetLayerSet() )` when the set has more than one
+/// layer, and `GetLayerSet` adds `F_Mask` to `F_Cu` and `B_Mask` to `B_Cu` only; the margin `if( HasSolderMask() && GetLocalSolderMaskMargin().has_value() &&
+/// IsExternalCopperLayer( GetLayer() ) )`).
+pub(crate) fn cu_item_layer_words(layer: &str, has_mask: bool, margin: Option<Nm>) -> String {
+    let mask_layer = match layer {
+        "F.Cu" if has_mask => "F.Mask",
+        "B.Cu" if has_mask => "B.Mask",
+        _ => return format!("(layer {})", sexpr_str(layer)),
+    };
+    let margin = margin.map(|m| format!(" (solder_mask_margin {})", mm(m))).unwrap_or_default();
+    format!("(layers {} {}){margin}", sexpr_str(layer), sexpr_str(mask_layer))
+}
+
 pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: Option<&eda_model::pcb_items::ShapeStyle>, net: usize) -> String {
     let sw = |w: Nm| mm(w.max(Nm::ZERO));
     let uuid = crate::duid_for(&format!("shape:{}", shape.id()), shape.id());
     let hatch = style.and_then(|st| st.hatch);
     let ends = style.map(|st| crate::line_ending_io::words(&st.endings, matches!(shape, Shape::Rect { .. } | Shape::Circle { .. } | Shape::Polygon { .. }))).unwrap_or_default();
     // `(net ..)` after the layer, before the uuid.
-    let layer = if net > 0 { format!("(layer {}) (net {net})", sexpr_str(shape.layer())) } else { format!("(layer {})", sexpr_str(shape.layer())) };
+    let layer = cu_item_layer_words(shape.layer(), style.is_some_and(|st| st.solder_mask), style.and_then(|st| st.solder_mask_margin));
+    let layer = if net > 0 { format!("{layer} (net {net})") } else { layer };
     // `(fill yes)`, `(fill no)` or `(fill hatch)`, `(fill reverse_hatch)`, `(fill cross_hatch)`: a solid fill wins over a hatch.
     let fill = |filled: bool| match (filled, hatch) {
         (true, _) => "yes",

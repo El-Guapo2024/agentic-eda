@@ -2619,6 +2619,10 @@ pub struct DrawingsSection {
     /// "every via is a through via with KiCad's defaults". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via_extras: Vec<crate::via_extra::ViaExtra>,
+    /// The solder-mask openings of the tracks that have one (`(layers "F.Cu" "F.Mask")`, `PCB_TRACK::HasSolderMask`), keyed by the track's id -- see
+    /// [`crate::track_mask`]. Additive: absent in an older `design.json` reads as "no track has a mask opening".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub track_masks: Vec<crate::track_mask::TrackMask>,
     /// The intent (a `ConstraintModel` as YAML) the board's parts, nets, footprints and rules come from when it is not the one `board.json` names: a path relative to the
     /// board's folder. File > Import > Non-KiCad Board File replaces the open board with another one, whose parts are not the intent's (`Cmd::ReplaceBoard`); the other
     /// board's model is a file of its own under `imports/`, named here, so the step is a change of this design and an undo takes the old board back whole. `board::build_model`
