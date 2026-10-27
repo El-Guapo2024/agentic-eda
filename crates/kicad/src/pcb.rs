@@ -147,7 +147,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     writeln!(out, "\t\t(grid_origin {} {})", mm(grid.x), mm(grid.y)).unwrap();
     // The board's plot settings (`PCB_PLOT_PARAMS::Format`): an imported board's own, else KiCad's defaults; the dash ratios are Text & Graphics > Formatting's.
     {
-        let plot = design.drawings.as_ref().and_then(|d| d.plot_params.clone()).unwrap_or_else(eda_model::plot_params::PlotParams::kicad_default);
+        // Read back as KiCad reads it (`PlotParams::of_design`): a legacy `(viasonmask ..)` is never written after `(tenting ..)`.
+        let plot = eda_model::plot_params::PlotParams::of_design(design);
         writeln!(out, "\t\t(pcbplotparams").unwrap();
         writeln!(out, "\t\t\t(layerselection {})", eda_model::plot_params::encode_layer_selection(&plot.layer_selection)).unwrap();
         writeln!(out, "\t\t\t(plot_on_all_layers_selection {})", eda_model::plot_params::encode_layer_selection(&plot.plot_on_all_layers)).unwrap();

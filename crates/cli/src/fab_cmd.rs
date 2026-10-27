@@ -39,10 +39,19 @@ pub fn run(argv: &[String]) -> Result<(), Vec<CheckResult>> {
             if layers.is_empty() {
                 return Err(fail("fab", "--layers", "--layers named no layers"));
             }
-            print_written(&dir, kicad_engine::export(&dir, "gerbers", &fab_api::gerber_args(&layers, &plot))?)
+            // The board's `useauxorigin`, as `/api/fab/gerbers` takes it when the dialog says nothing (`DIALOG_PLOT::init_Dialog`:
+            // `m_useAuxOriginCheckBox->SetValue( m_plotOpts.GetUseAuxOrigin() )`).
+            let aux = serde_json::json!({ "use_aux_origin": plot.flag("useauxorigin").unwrap_or(false) });
+            print_written(&dir, kicad_engine::export(&dir, "gerbers", &fab_api::with_aux_origin("gerbers", fab_api::gerber_args(&layers, &plot), &aux))?)
         }
         // The Generate Drill Files dialog's defaults: PTH and NPTH in two files and slots routed; `--merge-pth-npth` and `--alt-drill-mode` are its two boxes.
-        "drill" => print_written(&dir, kicad_engine::export(&dir, "drill", &fab_api::drill_args(has_flag(opts, "--merge-pth-npth"), has_flag(opts, "--alt-drill-mode"), has_flag(opts, "--generate-report")))?),
+        // Its Origin is the board's `useauxorigin` (`DIALOG_GENDRILL::TransferDataToWindow`: `m_origin->SetSelection( m_plotOpts.GetUseAuxOrigin() ? 1 : 0 )`).
+        "drill" => {
+            let (_, design, _) = board::load(&dir)?;
+            let aux = serde_json::json!({ "use_aux_origin": fab_api::plot_params_of(&design).flag("useauxorigin").unwrap_or(false) });
+            let args = fab_api::drill_args(has_flag(opts, "--merge-pth-npth"), has_flag(opts, "--alt-drill-mode"), has_flag(opts, "--generate-report"));
+            print_written(&dir, kicad_engine::export(&dir, "drill", &fab_api::with_aux_origin("drill", args, &aux))?)
+        }
         "pos" => {
             let format = flag_value(opts, "--format").unwrap_or("csv");
             if !matches!(format, "csv" | "ascii" | "gerber") {

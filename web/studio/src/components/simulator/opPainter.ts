@@ -2,7 +2,7 @@
 // the background). Where the labels go is kicad-port/sim/opOverlay.ts's.
 import type { Schematic } from "../../api/types";
 import { opLabels, opTextSize } from "../../kicad-port/sim/opOverlay";
-import { pinItems } from "../../kicad-port/schPins";
+import { allPinItems } from "../../kicad-port/schPins";
 import { getSimUi } from "../../state/simulator";
 import { drawStrokeText } from "../text/strokeFont";
 import { layerColor } from "../canvas/layers";
@@ -11,7 +11,8 @@ import { layerColor } from "../canvas/layers";
 export function paintOperatingPoints(ctx: CanvasRenderingContext2D, scale: number, sch: Schematic, background: string): void {
   const ui = getSimUi();
   if (ui.opPoints.size === 0 || (!ui.showOpVoltages && !ui.showOpCurrents)) return;
-  const pins = pinItems(sch).map((p) => ({ reference: p.reference, symbol: p.key, number: p.number, tip: p.tip, root: p.root, net: p.net }));
+  // `RefreshOperatingPointDisplay`: `symbol->GetPins( &sheetPath )`, hidden pins included, for the two-pin test.
+  const pins = allPinItems(sch).map((p) => ({ reference: p.reference, symbol: p.key, number: p.number, tip: p.tip, root: p.root, net: p.net, hidden: p.hidden }));
   const labels = opLabels({ wires: sch.wires, pins, circuit: ui.frame.circuit, points: ui.opPoints, voltages: ui.showOpVoltages, currents: ui.showOpCurrents, scale });
   const size = opTextSize(scale);
   // `GetPenSizeForDemiBold`: a sixth of the size.

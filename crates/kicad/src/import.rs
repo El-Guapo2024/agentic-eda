@@ -607,7 +607,8 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
 }
 
 /// `(setup (pcbplotparams ..))` as `PCB_PLOT_PARAMS_PARSER::Parse` reads it: the two layer sets decoded by the file's version (`T_layerselection`, `T_plot_on_all_layers_selection`:
-/// a number is the legacy "pretty 3" stack, a hex value of a file older than 20240819 is in the legacy layer numbers), every other item kept as written.
+/// a number is the legacy "pretty 3" stack, a hex value of a file older than 20240819 is in the legacy layer numbers), every other item
+/// that `PCB_PLOT_PARAMS::Format` writes kept as written ([`eda_model::plot_params::PlotParams::read_item`]).
 fn import_plot_params(plot: &[Sexpr], version: i64) -> eda_model::plot_params::PlotParams {
     use eda_model::plot_params::decode_layer_selection;
     let mut p = eda_model::plot_params::PlotParams::default();
@@ -616,7 +617,9 @@ fn import_plot_params(plot: &[Sexpr], version: i64) -> eda_model::plot_params::P
         match sexpr::tag(item) {
             Some("layerselection") => p.layer_selection = selection(item).unwrap_or_default(),
             Some("plot_on_all_layers_selection") => p.plot_on_all_layers = selection(item).unwrap_or_default(),
-            Some(_) => p.items.push(sexpr::to_text(&Sexpr::List(item.to_vec()))),
+            // `PCB_PLOT_PARAMS_PARSER::Parse`'s other cases, in file order: a legacy token is applied and dropped (`viasonmask` is the
+            // board's tenting, read in `import_solder_mask_setup`), as a board KiCad saves loses it.
+            Some(_) => p.read_item(&sexpr::to_text(&Sexpr::List(item.to_vec()))),
             None => {}
         }
     }

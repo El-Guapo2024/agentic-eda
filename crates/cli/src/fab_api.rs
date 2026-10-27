@@ -67,9 +67,9 @@ pub(crate) fn gerber_args(layers: &[String], plot: &eda_model::plot_params::Plot
     if on("subtractmaskfromsilk", false) {
         a.push("--subtract-soldermask".into());
     }
-    // `SetGerberPrecision`: 5, or else 6.
+    // `case T_gerberprecision: parseInt( gbrDefaultPrecision - 1, gbrDefaultPrecision )`: clamped to 5..6, so 4 is 5.
     let precision = plot.item("gerberprecision").and_then(|i| i.trim_start_matches("(gerberprecision").trim_end_matches(')').trim().parse::<i32>().ok()).unwrap_or(6);
-    a.extend(["--precision".into(), if precision == 5 { "5" } else { "6" }.into()]);
+    a.extend(["--precision".into(), if precision <= 5 { "5" } else { "6" }.into()]);
     if on("plotframeref", false) {
         a.push("--include-border-title".into());
     }
@@ -79,13 +79,13 @@ pub(crate) fn gerber_args(layers: &[String], plot: &eda_model::plot_params::Plot
             a.push("--sketch-pad-numbers".into());
         }
     }
-    if on("hidednponfab", false) {
+    // The three DNP flags as the dialog reads them back (`DIALOG_PLOT::init_Dialog`: "Plot DNP" is hide || sketch || crossout, then the
+    // "Hide" radio if hide is set, else "Cross-out"; `applyPlotSettings`: hide = plot && hide, sketch = crossout = plot && cross-out).
+    let (hide, sketch, crossout) = (on("hidednponfab", false), on("sketchdnponfab", true), on("crossoutdnponfab", true));
+    if hide {
         a.push("--hide-DNP-footprints-on-fab-layers".into());
-    }
-    if on("sketchdnponfab", true) {
+    } else if sketch || crossout {
         a.push("--sketch-DNP-footprints-on-fab-layers".into());
-    }
-    if on("crossoutdnponfab", true) {
         a.push("--crossout-DNP-footprints-on-fab-layers".into());
     }
     a
@@ -165,6 +165,25 @@ pub(crate) fn place_report(files: &[(String, usize)]) -> String {
     lines.join("\n")
 }
 
+/// The footprints of a Gerber X3 placement file: one `%TO.CRot,` per component (`PLACEFILE_GERBER_WRITER::CreatePlaceFile`'s `cmp_count`).
+pub(crate) fn gerber_place_count(text: &str) -> usize {
+    text.lines().filter(|l| l.trim_start().starts_with("%TO.CRot,")).count()
+}
+
+/// `DIALOG_GEN_FOOTPRINT_POSITION::CreateGerberFiles`' report, word for word: the top's file and its count, the bottom's and its count, the
+/// full count, then "Done.". `files` are (path, count).
+pub(crate) fn gerber_place_report(files: &[(String, usize)]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for (i, (f, n)) in files.iter().enumerate() {
+        let top = if files.len() == 2 { i == 0 } else { f.contains("-pnp_top") };
+        lines.push(if top { format!("Front (top side) placement file: '{f}'.") } else { format!("Back (bottom side) placement file: '{f}'.") });
+        lines.push(format!("Component count: {n}."));
+    }
+    lines.push(format!("Full component count: {}.", files.iter().map(|(_, n)| n).sum::<usize>()));
+    lines.push("Done.".into());
+    lines.join("\n")
+}
+
 /// `kicad-cli sch export bom` in JLCPCB's column layout (Comment,
 /// Designator, Footprint, LCSC Part #), grouped by what makes two parts
 /// interchangeable. A part marked Do Not Populate is not on an assembly BOM (`--exclude-dnp`), and one excluded from the BOM never is
@@ -226,7 +245,24 @@ pub(crate) fn with_aux_origin(kind: &str, mut args: Vec<String>, req: &Value) ->
 pub fn drill(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let flag = |k: &str| req.get(k).and_then(Value::as_bool).unwrap_or(false);
-    reply(kicad_engine::export(dir, "drill", &with_aux_origin("drill", drill_args(flag("merge_pth_npth"), flag("alt_drill_mode"), false), &req)))
+    let mut v = reply(kicad_engine::export(dir, "drill", &with_aux_origin("drill", drill_args(flag("merge_pth_npth"), flag("alt_drill_mode"), false), &req)));
+    if v["ok"].as_bool().unwrap_or(false) {
+        let files: Vec<String> = v["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
+        v["message"] = Value::String(drill_report(&files));
+    }
+    v
+}
+
+/// `EXCELLON_WRITER::CreateDrillandMapFilesSet`'s report, word for word: "Created file '%s'" for each drill file (no full stop), "Created
+/// file '%s'." for each map file (`GENDRILL_WRITER_BASE::CreateMapFilesSet`), then `ReportTail( _( "Done." ) )`.
+/// The files come sorted by name; the writer writes the plated layer pairs first and the NPTH file last (`CreateDrillandMapFilesSet`'s
+/// `hole_sets`, `doing_npth` last), so that is the order here.
+pub(crate) fn drill_report(files: &[String]) -> String {
+    let mut files: Vec<&String> = files.iter().collect();
+    files.sort_by_key(|f| f.contains("-NPTH"));
+    let mut lines: Vec<String> = files.iter().map(|f| if f.ends_with(".drl") { format!("Created file '{f}'") } else { format!("Created file '{f}'.") }).collect();
+    lines.push("Done.".into());
+    lines.join("\n")
 }
 
 /// `POST /api/fab/pos`: `{"format": "csv"|"ascii", "side": "front"|"back"|"both",
@@ -259,10 +295,10 @@ pub fn pos(dir: &Path, body: &[u8]) -> Value {
     };
     let files: Vec<String> = v["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
     if gerber {
-        // `CreateGerberFiles` has no candidate test; the count is what `CreatePlaceFile` returns, which the file does not say plainly.
-        let mut lines: Vec<String> = files.iter().enumerate().map(|(i, f)| if i == 0 && files.len() == 2 || f.contains("-pnp_top") { format!("Front (top side) placement file: '{f}'.") } else { format!("Back (bottom side) placement file: '{f}'.") }).collect();
-        lines.push("Done.".into());
-        v["message"] = Value::String(lines.join("\n"));
+        // `CreateGerberFiles` has no candidate test. Its counts are what `CreatePlaceFile` returns, one per footprint plotted, and each
+        // footprint's position flash carries exactly one `%TO.CRot,..*%` (`GBR_CMP_PNP_METADATA::FormatCmpPnPMetadata`).
+        let counted: Vec<(String, usize)> = files.iter().map(|f| (f.clone(), std::fs::read_to_string(dir.join(f)).map(|t| gerber_place_count(&t)).unwrap_or(0))).collect();
+        v["message"] = Value::String(gerber_place_report(&counted));
         return v;
     }
     let counted: Vec<(String, usize)> = files.iter().map(|f| (f.clone(), std::fs::read_to_string(dir.join(f)).map(|t| place_file_rows(&t, format == "csv")).unwrap_or(0))).collect();
@@ -322,6 +358,43 @@ mod tests {
     }
 
     /// X1, X2 (r2-editors-exports): the Generate Drill Files dialog's defaults are KiCad's, not kicad-cli's.
+    #[test]
+    fn legacy_plot_tokens_and_the_dnp_flags_are_read_as_kicad_reads_them() {
+        let l = vec!["F.Cu".to_string()];
+        // X3-2: `(excludeedgelayer no)` is the outline on every layer.
+        let mut p = eda_model::plot_params::PlotParams { items: vec!["(excludeedgelayer no)".into()], ..Default::default() };
+        p = p.normalized();
+        let a = gerber_args(&l, &p);
+        assert_eq!(a[2..4], ["--common-layers", "Edge.Cuts"]);
+        // X3-5: 4 is clamped to 5.
+        let p = eda_model::plot_params::PlotParams { items: vec!["(gerberprecision 4)".into()], ..Default::default() };
+        assert!(gerber_args(&l, &p).windows(2).any(|w| w == ["--precision", "5"]));
+        // X3-6: hide + sketch + crossout is hide only; sketch alone is sketch and cross-out.
+        let dnp = |h: &str, s: &str, c: &str| {
+            let p = eda_model::plot_params::PlotParams { items: vec![format!("(hidednponfab {h})"), format!("(sketchdnponfab {s})"), format!("(crossoutdnponfab {c})")], ..Default::default() };
+            gerber_args(&l, &p).into_iter().filter(|f| f.contains("DNP")).collect::<Vec<_>>()
+        };
+        assert_eq!(dnp("yes", "yes", "yes"), vec!["--hide-DNP-footprints-on-fab-layers"]);
+        assert_eq!(dnp("no", "yes", "no"), vec!["--sketch-DNP-footprints-on-fab-layers", "--crossout-DNP-footprints-on-fab-layers"]);
+        assert!(dnp("no", "no", "no").is_empty());
+    }
+
+    #[test]
+    fn the_gerber_placement_report_counts_the_components() {
+        let top = "%TF.FileFunction,Component,L1,Top*%\n%TO.C,R1*%\n%TO.CRot,0*%\nD03*\n%TO.C,R2*%\n%TO.CRot,90*%\nD03*\n";
+        assert_eq!(gerber_place_count(top), 2);
+        let report = gerber_place_report(&[("o/b-pnp_top.gbr".into(), 2), ("o/b-pnp_bottom.gbr".into(), 1)]);
+        assert_eq!(
+            report,
+            "Front (top side) placement file: 'o/b-pnp_top.gbr'.\nComponent count: 2.\nBack (bottom side) placement file: 'o/b-pnp_bottom.gbr'.\nComponent count: 1.\nFull component count: 3.\nDone."
+        );
+    }
+
+    #[test]
+    fn the_drill_report_is_the_writers() {
+        assert_eq!(drill_report(&["o/b-NPTH.drl".into(), "o/b-PTH.drl".into()]), "Created file 'o/b-PTH.drl'\nCreated file 'o/b-NPTH.drl'\nDone.");
+    }
+
     #[test]
     fn drill_defaults_are_the_dialogs() {
         assert_eq!(drill_args(false, false, false), vec!["--format", "excellon", "--excellon-oval-format", "route", "--excellon-separate-th"], "slots routed, PTH and NPTH in two files");

@@ -711,6 +711,14 @@ pub enum Cmd {
     /// `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin`: the drill/place file origin
     /// (`DrawingsSection::aux_origin`); `None` is the reset to (0, 0).
     SetAuxOrigin { at: Option<Point> },
+    /// The Plot dialog's checklist and "Use drill/place file origin", and the Generate Drill Files dialog's Origin, stored back in the
+    /// board's plot settings as KiCad's dialogs store them -- see [`board_control::set_plot_settings`].
+    SetPlotSettings {
+        #[serde(default)]
+        layers: Option<Vec<String>>,
+        #[serde(default)]
+        use_aux_origin: Option<bool>,
+    },
     /// `common.Control.gridSetOrigin` / `gridResetOrigin` / `editGridOrigin` (`PCB_CONTROL::DoSetGridOrigin`): the point the editing grid is anchored
     /// at (`DrawingsSection::grid_origin`); `None` is the reset to (0, 0). The placement snap of the verbs below follows it.
     SetGridOrigin { at: Option<Point> },
@@ -2329,6 +2337,7 @@ impl Cmd {
             Cmd::MergeZones { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::SetZonePriority { id, .. } => vec![id.as_str()],
             Cmd::SetAuxOrigin { .. } => vec!["aux_origin"],
+            Cmd::SetPlotSettings { .. } => vec!["plot_params"],
             Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
             Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
             Cmd::RepairBoard => vec!["repair_board"],
@@ -2815,6 +2824,7 @@ impl<'a> Board<'a> {
             Cmd::MergeZones { ids } => board_control::merge_zones(&mut self.design, ids).map(|_| ()),
             Cmd::SetZonePriority { id, to } => board_control::set_zone_priority(&mut self.design, id, *to),
             Cmd::SetAuxOrigin { at } => board_control::set_aux_origin(&mut self.design, *at),
+            Cmd::SetPlotSettings { layers, use_aux_origin } => board_control::set_plot_settings(&mut self.design, &self.model.board.layers, layers.as_deref(), *use_aux_origin),
             Cmd::SetGridOrigin { at } => board_control::set_grid_origin(&mut self.design, *at),
             Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
             Cmd::SetSchematicPage { page, title_block } => page_settings::set_schematic_page(&mut self.design, page, title_block),
@@ -5548,17 +5558,37 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// `drawing_tool.cpp::SetAnchor` -> `FOOTPRINT::MoveAnchorPosition( -cursorPos )` (a library footprint has no orientation, so the
+    /// `RotatePoint` is a no-op): the fields (Reference and Value at their default places when they have no layout of their own, the
+    /// Datasheet and Description when the footprint has them, every user field), the pads, the graphics and texts move; each 3D model's
+    /// offset follows, in millimetres with y up (`m_Offset.x += IUTomm( moveVector.x ); m_Offset.y -= IUTomm( moveVector.y )`).
+    /// Differs: the kept items the editor does not draw (`kicad.tokens`: zones, dimensions, ...) stay put, and the `courtyard`
+    /// half-extents override is centred on the origin by definition (KiCad has no such override: its courtyard is the F.CrtYd graphics,
+    /// which move).
     fn set_footprint_anchor(&mut self, name: &str, at: Point) -> Result<(), Vec<CheckResult>> {
         let fp = self.library_footprint_mut(name)?;
         let (dx, dy) = (-at.x, -at.y);
+        let shift = |p: &mut Point| *p = Point { x: p.x + dx, y: p.y + dy };
+        shift(&mut fp.reference.get_or_insert_with(eda_model::fp_edit::default_library_reference_layout).at);
+        shift(&mut fp.value.get_or_insert_with(eda_model::fp_edit::default_library_value_layout).at);
+        for l in [fp.datasheet.as_mut(), fp.description_field.as_mut()].into_iter().flatten() {
+            shift(&mut l.at);
+        }
+        for f in &mut fp.fields {
+            shift(&mut f.layout.get_or_insert_with(eda_model::fp_edit::new_library_field_layout).at);
+        }
         for p in &mut fp.pads {
-            p.at = Point { x: p.at.x + dx, y: p.at.y + dy };
+            shift(&mut p.at);
         }
         for g in &mut fp.graphics {
             g.translate(dx, dy);
         }
         for t in &mut fp.texts {
-            t.at = Point { x: t.at.x + dx, y: t.at.y + dy };
+            shift(&mut t.at);
+        }
+        for m in &mut fp.models3d {
+            m.offset[0] += dx.mm();
+            m.offset[1] -= dy.mm();
         }
         Ok(())
     }

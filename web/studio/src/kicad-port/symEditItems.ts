@@ -57,16 +57,43 @@ export function nearestHalfGrid(p: MmPoint, gridMm: number): MmPoint {
   return { x: snap(p.x), y: snap(p.y) };
 }
 
+/** `KiROUND`: halves away from zero. */
+const kiRound = (v: number) => Math.sign(v) * Math.round(Math.abs(v));
+
+/** Schematic internal units per nm (`schIUScale`: 1 IU = 100 nm). */
+const SCH_IU_NM = 100;
+
+/**
+ * `GetNearestHalfGridPosition( selection.GetCenter() )` of a selection of several items: `SELECTION::GetCenter` is the centre of the merged `GetBoundingBox()` of the
+ * items (`BOX2I::GetCenter`, integer IU), snapped to the half grid (`KiROUND( ( p - offset ) / half )`, the symbol editor's grid origin is 0). `boxes` are the items' boxes in
+ * the editor's internal space (nm, y down: a pin's is `PIN_LAYOUT_CACHE::GetPinBoundingBox`, its line, name and number); the point comes back in the symbol's mm, y up.
+ */
+export function selectionPivot(boxes: readonly { minX: number; minY: number; maxX: number; maxY: number }[], gridMm: number): MmPoint | null {
+  if (boxes.length === 0) return null;
+  const iu = (v: number) => kiRound(v / SCH_IU_NM);
+  const x0 = Math.min(...boxes.map((b) => iu(b.minX)));
+  const y0 = Math.min(...boxes.map((b) => iu(b.minY)));
+  const x1 = Math.max(...boxes.map((b) => iu(b.maxX)));
+  const y1 = Math.max(...boxes.map((b) => iu(b.maxY)));
+  // `BOX2I::GetCenter`: `m_Pos + m_Size / 2`, integer division
+  const cx = x0 + Math.trunc((x1 - x0) / 2);
+  const cy = y0 + Math.trunc((y1 - y0) / 2);
+  const half = (gridMm * 1e6) / SCH_IU_NM / 2;
+  const snap = (v: number) => (half > 0 ? kiRound(kiRound(v / half) * half) : v);
+  return { x: (snap(cx) * SCH_IU_NM) / 1e6, y: -(snap(cy) * SCH_IU_NM) / 1e6 };
+}
+
 /**
  * `SYMBOL_EDITOR_EDIT_TOOL::Rotate`: the selected pins turned a quarter, counter-clockwise on screen with `ccw`, about one point -- the pin's own position when the selection is
- * one item, else `GetNearestHalfGridPosition( selection.GetCenter() )`, the centre of the box of every selected item (`boxes`: the graphics' boxes the caller has; the pins'
- * are their two ends). Only the selected pins move: no twin in another unit is touched, the commit holds only the selection. `SCH_PIN::Rotate` turns the position about
+ * one item, else `GetNearestHalfGridPosition( selection.GetCenter() )`: `centre` when the caller has it ([`selectionPivot`] of the items' full boxes), else the
+ * centre of the box of the pins' two ends and `otherBoxes`. Only the selected pins move: no twin in another unit is touched, the commit holds only the selection. `SCH_PIN::Rotate` turns the position about
  * the point and the orientation with it. Returns the pins as they are after the turn.
  */
-export function rotatePlan(selectedPins: readonly LibrarySymbolPin[], selectionSize: number, ccw: boolean, gridMm: number, otherBoxes: readonly [MmPoint, MmPoint][] = []): LibrarySymbolPin[] {
+export function rotatePlan(selectedPins: readonly LibrarySymbolPin[], selectionSize: number, ccw: boolean, gridMm: number, otherBoxes: readonly [MmPoint, MmPoint][] = [], centre: MmPoint | null = null): LibrarySymbolPin[] {
   if (selectedPins.length === 0) return [];
   let pivot: MmPoint;
   if (selectionSize === 1) pivot = selectedPins[0]!.at;
+  else if (centre) pivot = centre;
   else {
     const pts: MmPoint[] = [...selectedPins.flatMap((p) => [p.at, pinEnd(p)]), ...otherBoxes.flat()];
     const xs = pts.map((p) => p.x);
@@ -89,6 +116,15 @@ const round = (v: number) => Math.round(v * IU_PER_MM) / IU_PER_MM;
 /** `SYMBOL_EDITOR_SETTINGS::m_Repeat`: `repeat.pin_step` (100 mil) and `repeat.label_delta` (1). */
 export const REPEAT_PIN_STEP_MM = 2.54;
 export const REPEAT_LABEL_DELTA = 1;
+
+/** `g_lastPin = pin->m_Uuid` (`CreatePin`, `RepeatPin`): the pin as it was placed, given the id the server gave it -- the pin of `pins` (the symbol after the
+ * add) with its number, unit, body style and place; the last such one when several match. Without a match it keeps the id it has (none). */
+export function placedPinWithId(placed: LibrarySymbolPin, pins: readonly LibrarySymbolPin[]): LibrarySymbolPin {
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+  const matches = pins.filter((p) => p.id && p.number === placed.number && p.unit === placed.unit && p.body_style === placed.body_style && near(p.at.x, placed.at.x) && near(p.at.y, placed.at.y));
+  const found = matches[matches.length - 1];
+  return found ? { ...placed, id: found.id } : placed;
+}
 
 /**
  * `SYMBOL_EDITOR_PIN_TOOL::RepeatPin`: a duplicate of `source` moved by the pin step -- down the screen (`step.y`) for a pin pointing right or left, across (`step.x`) for one

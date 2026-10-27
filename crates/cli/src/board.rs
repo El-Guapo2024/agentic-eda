@@ -1634,6 +1634,11 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetZonePriority { id, to } => format!("zone priority {id} --to {}", serde_json::to_value(to).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default()),
         Cmd::SetAuxOrigin { at: Some(p) } => format!("drill-origin --at {},{}", mm(p.x), mm(p.y)),
         Cmd::SetAuxOrigin { at: None } => "drill-origin --reset".to_string(),
+        Cmd::SetPlotSettings { layers, use_aux_origin } => format!(
+            "plot-settings{}{}",
+            layers.as_ref().map(|l| format!(" --layers {}", l.join(","))).unwrap_or_default(),
+            use_aux_origin.map(|a| format!(" --use-aux-origin {a}")).unwrap_or_default()
+        ),
         Cmd::SetGridOrigin { at: Some(p) } => format!("grid-origin --at {},{}", mm(p.x), mm(p.y)),
         Cmd::SetGridOrigin { at: None } => "grid-origin --reset".to_string(),
         Cmd::SetBoardPage { page, title_block } => format!("page --paper {}{} --title \"{}\"", page.paper, if page.portrait { " --portrait" } else { "" }, title_block.title),
@@ -1969,6 +1974,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::BooleanShapes { .. } => "shape",
         Cmd::ZoneCutout { .. } | Cmd::MergeZones { .. } | Cmd::SetZonePriority { .. } => "zone",
         Cmd::SetAuxOrigin { .. } => "drill-origin",
+        Cmd::SetPlotSettings { .. } => "plot-settings",
         Cmd::SetGridOrigin { .. } => "grid-origin",
         Cmd::SetBoardPage { .. } => "page",
         Cmd::SetSchematicPage { .. } => "schematic-page",

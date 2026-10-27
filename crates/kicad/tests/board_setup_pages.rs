@@ -193,9 +193,11 @@ fn pcbplotparams_survive_import_and_write() {
     let text = export(&design, &model);
     let block = &text[text.find("(pcbplotparams").unwrap()..];
     let block = &block[..block.find("\n\t\t)").unwrap()];
-    for item in ["(layerselection 0x00000000_00000000_00000000_02000005)", "(usegerberextensions yes)", "(subtractmaskfromsilk yes)", "(gerberprecision 5)", "(plotreference no)", "(useauxorigin yes)", "(outputdirectory \"gerbers/\")", "(dashed_line_dash_ratio 8.000000)", "(dashed_line_gap_ratio 3.000000)"] {
+    for item in ["(layerselection 0x00000000_00000000_00000000_02000005)", "(usegerberextensions yes)", "(subtractmaskfromsilk yes)", "(gerberprecision 5)", "(useauxorigin yes)", "(outputdirectory \"gerbers/\")", "(dashed_line_dash_ratio 8.000000)", "(dashed_line_gap_ratio 3.000000)"] {
         assert!(block.contains(item), "{item} in {block}");
     }
+    // `(plotreference ..)` is a legacy token `PCB_PLOT_PARAMS_PARSER` skips (`default: skipCurrent()`) and `Format` never writes (r3 X3-1).
+    assert!(!block.contains("plotreference"), "{block}");
     let (again, _, _) = import_kicad_pcb(&text).expect("re-imports");
     assert_eq!(again.drawings.and_then(|d| d.plot_params).map(|p| p.layer_selection), Some(plot.layer_selection), "the selection reads back the same in today's numbers");
     // A board with no block of its own writes KiCad's defaults (`PCB_PLOT_PARAMS::Format` of a default `PCB_PLOT_PARAMS`).
