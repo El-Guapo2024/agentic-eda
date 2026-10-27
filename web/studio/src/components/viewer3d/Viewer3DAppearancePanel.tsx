@@ -9,7 +9,8 @@ import { useSyncExternalStore } from "react";
 import toolbarData from "../../kicad/viewer3d_toolbars.json";
 import type { Viewer3dAction, Viewer3dToolbarsFile } from "../../kicad/types";
 import { displayHotkey } from "../../actions/hotkeys";
-import { STACKUP_ROWS, isVisible, withSwatch, parseColor, rowsFor, toHex, toRgbHex, usedUserRows, type Row, type RowGroup } from "../../kicad-port/appearance3d";
+import { STACKUP_ROWS, isVisible, plotFollowVisibility, resetSwatch, rowLabel, withSwatch, parseColor, rowsFor, toHex, toRgbHex, usedUserRows, type Row, type RowGroup } from "../../kicad-port/appearance3d";
+import { enabledOptionalLayers, layerDisplayName } from "../../kicad-port/boardLayers";
 import { useStudioDispatch, useStudioState } from "../../state/store";
 import type { Viewer3DOptions } from "../../state/store";
 import { ActionIcon } from "../Toolbar";
@@ -47,9 +48,12 @@ export function Viewer3DAppearancePanel({ api }: { api: Viewer3DApi | null }) {
   const colors = useViewerColors();
   const probe = useSyncExternalStore(viewer3dProbe.subscribe, viewer3dProbe.snapshot);
 
-  // The user layers the board has a drawing or a text on are the ones listed (KiCad lists the layers the board has enabled).
-  const used = usedUserRows([...(state.board?.drawings?.shapes ?? []).map((s) => s.layer), ...(state.board?.drawings?.texts ?? []).map((t) => t.layer)]);
-  const rows = rowsFor(used);
+  // `rebuildLayers`: User.1 .. User.45 are listed when the board enables them; a board layer's row is labelled with the board's name for it.
+  const layerSetup = state.board?.board_rules?.layer_setup;
+  const rows = rowsFor(usedUserRows(enabledOptionalLayers(layerSetup)));
+  const labelOf = (r: Row) => rowLabel(r, (file) => layerDisplayName(layerSetup, file));
+  // A row the person has not set follows the plot settings (`FOLLOW_PLOT_SETTINGS`), as in Viewer3D.tsx.
+  const followed = plotFollowVisibility(state.board?.plot_params?.layers);
 
   const setVisible = (id: string, shown: boolean) => set({ layers: { ...opts.layers, [id]: shown } });
   const setColor = (row: Row, text: string) => {
@@ -59,16 +63,8 @@ export function Viewer3DAppearancePanel({ api }: { api: Viewer3DApi | null }) {
     const alpha = colors[row.id]?.a ?? 1;
     set({ colors: withSwatch(opts.colors, row.id, toHex({ ...c, a: alpha })) });
   };
-  const resetColor = (id: string) => {
-    const next = { ...opts.colors };
-    delete next[id];
-    // the copper rows are one colour (`withSwatch`)
-    if (id === "copper_top" || id === "copper_bottom") {
-      delete next.copper_top;
-      delete next.copper_bottom;
-    }
-    set({ colors: next });
-  };
+  // `DIALOG_COLOR_PICKER::OnResetButton`: the swatch's default, `BOARD_ADAPTER::GetDefaultColors()` (both copper rows at once).
+  const resetColor = (id: string) => set({ colors: resetSwatch(opts.colors, id) });
 
   // Quiet failure per this route's design (Viewer3D.tsx's fetch effect): no popup, no repeated retries -- the panel says so, and Reload board tries again.
   const render =
@@ -120,11 +116,11 @@ export function Viewer3DAppearancePanel({ api }: { api: Viewer3DApi | null }) {
                 const overridden = r.id in opts.colors && !readOnly;
                 return (
                   <div key={r.id} className="filter-row" data-row={r.id} title={r.tooltip} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <input type="checkbox" aria-label={`Show ${r.label}`} checked={isVisible(opts.layers, r.id)} onChange={(e) => setVisible(r.id, e.target.checked)} />
+                    <input type="checkbox" aria-label={`Show ${labelOf(r)}`} checked={isVisible(opts.layers, r.id, followed)} onChange={(e) => setVisible(r.id, e.target.checked)} />
                     {r.color && c ? (
                       <input
                         type="color"
-                        aria-label={`${r.label} color`}
+                        aria-label={`${labelOf(r)} color`}
                         value={toRgbHex(c)}
                         disabled={readOnly}
                         title={readOnly ? STACKUP_OWNS : "Change color"}
@@ -134,9 +130,9 @@ export function Viewer3DAppearancePanel({ api }: { api: Viewer3DApi | null }) {
                     ) : (
                       <span style={{ width: 22 }} />
                     )}
-                    <span style={{ flex: 1 }}>{r.label}</span>
+                    <span style={{ flex: 1 }}>{labelOf(r)}</span>
                     {overridden && (
-                      <button className="toolbar-button" style={{ width: 18, height: 18, fontSize: 11 }} title="Back to the default color" aria-label={`Reset ${r.label} color`} onClick={() => resetColor(r.id)}>
+                      <button className="toolbar-button" style={{ width: 18, height: 18, fontSize: 11 }} title="Back to the default color" aria-label={`Reset ${labelOf(r)} color`} onClick={() => resetColor(r.id)}>
                         ↺
                       </button>
                     )}

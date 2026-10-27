@@ -123,11 +123,15 @@ export function stackupColorKind(itemType: string | undefined): "silk" | "mask" 
   return null;
 }
 
-/** `findColor` of `GetLayerColors`: a `#...` string is a colour; a name is looked up in `set`; the rest is transparent black (the colour is not set). */
+/**
+ * `findColor` of `GetLayerColors`: a `#...` string is a colour (`COLOR4D( aColorName )`, transparent black when it does not parse); a name is looked up
+ * in `set`; anything else is `KIGFX::COLOR4D()`, opaque black (its ctor sets `a( 1.0 )`). A dielectric's colour starts as "Not specified", which
+ * `g_BoardColors` does not list, so such a body is black with stackup colours on, as in KiCad.
+ */
 function findColor(name: string | undefined, set: readonly NamedColor[]): Rgba {
   const n = (name ?? "").trim() === "" ? NOT_SPECIFIED : (name ?? "").trim();
   if (n.startsWith("#")) return parseColor(n) ?? { r: 0, g: 0, b: 0, a: 0 };
-  return set.find((c) => c.name === n)?.color ?? { r: 0, g: 0, b: 0, a: 0 };
+  return set.find((c) => c.name === n)?.color ?? { r: 0, g: 0, b: 0, a: 1 };
 }
 
 const isZero = (c: Rgba) => c.r === 0 && c.g === 0 && c.b === 0 && c.a === 0;
@@ -184,7 +188,7 @@ export const ROWS: readonly Row[] = [
   // `EDA_3D_ACTIONS::showNotInPosFile` ('P', `render.show_footprints_not_in_posfile` true) and `showDNP` ('D', `render.show_footprints_dnp` false).
   row("not_in_pos_models", "Models not in POS File", "Show 3D models even if not found in .pos file", "models", false, true, "P"),
   row("dnp_models", "Models marked DNP", "Show 3D models even if marked 'Do Not Place'", "models", false, false, "D"),
-  row("bounding_boxes", "Model Bounding Boxes", "Show a bounding box per model", "models", false, false),
+  row("bounding_boxes", "Model Bounding Boxes", "Show 3D model bounding boxes in realtime renderer", "models", false, false), // EDA_3D_ACTIONS::showBBoxes' tooltip
   row("references", "References", "Show footprint references", "display", false),
   row("zones", "Zones", "Show copper zones (Preferences > 3D Viewer > Display Options: Show zones)", "display", false),
   row("background_top", "Background Start", "Background gradient start color", "display", true),
@@ -197,16 +201,91 @@ export function rowOf(id: string): Row | undefined {
   return ROW_BY_ID.get(id);
 }
 
-/** Whether the row is shown: what the person set, else the row's default. */
-export function isVisible(layers: Readonly<Record<string, boolean>>, id: string): boolean {
+/**
+ * Whether the row is shown: what the person set, else `defaults` (the main viewer passes `plotFollowVisibility`, the preset KiCad starts on), else the
+ * row's own default (`EDA_3D_VIEWER_SETTINGS`'s `render.show_*`).
+ */
+export function isVisible(layers: Readonly<Record<string, boolean>>, id: string, defaults?: Readonly<Record<string, boolean>>): boolean {
   const set = layers[id];
   if (set !== undefined) return set;
+  const followed = defaults?.[id];
+  if (followed !== undefined) return followed;
   return ROW_BY_ID.get(id)?.visible ?? true;
 }
 
 /** `layers` with the row's visibility flipped (a hotkey, a click on its eye). */
-export function toggled(layers: Readonly<Record<string, boolean>>, id: string): Record<string, boolean> {
-  return { ...layers, [id]: !isVisible(layers, id) };
+export function toggled(layers: Readonly<Record<string, boolean>>, id: string, defaults?: Readonly<Record<string, boolean>>): Record<string, boolean> {
+  return { ...layers, [id]: !isVisible(layers, id, defaults) };
+}
+
+/**
+ * `m_UseStackupColors` as KiCad first opens the 3D viewer: `use_stackup_colors` is registered true, but `current_layer_preset` defaults to
+ * `LEGACY_PRESET_FLAG` (eda_3d_viewer_settings.cpp), and `EDA_3D_VIEWER_FRAME::LoadSettings` turns that into `cfg->m_UseStackupColors = false;` and
+ * `cfg->m_CurrentPreset = FOLLOW_PLOT_SETTINGS;`.
+ */
+export const DEFAULT_USE_STACKUP_COLORS = false;
+
+/** `PCB_PLOT_PARAMS::PCB_PLOT_PARAMS`: `m_layerSelection = LSET( { F_SilkS, B_SilkS, F_Mask, B_Mask, F_Paste, B_Paste, Edge_Cuts } ) | LSET::AllCuMask()`. */
+const DEFAULT_PLOT_LAYERS = ["F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "F.Paste", "B.Paste", "Edge.Cuts"];
+
+/**
+ * `BOARD_ADAPTER::GetVisibleLayers` on `FOLLOW_PLOT_SETTINGS`, the preset KiCad's 3D viewer starts on (see `DEFAULT_USE_STACKUP_COLORS`): the board body
+ * always, and each board row from the plot settings' layer selection (`layers.test( F_Cu )`, ..., `F_Paste` for the paste, `F_Adhes` for the adhesive,
+ * `Map3DLayerToPCBLayer` for User.n); the References row from `GetPlotReference()` (default true; the studio's board state does not carry it, nor
+ * "Plot on All Layers", which is empty by default). The rows the branch does not set (barrels, models, bounding boxes, ours: zones) keep `m_Render`'s.
+ * `plotLayers` is the board's selection (`plot_params.layers`); absent, KiCad's default with every copper layer. Differs: KiCad snapshots every row into
+ * a custom preset on the first toggle (`OnLayerVisibilityChanged`); here a row the person never touched keeps following the plot settings.
+ */
+export function plotFollowVisibility(plotLayers: readonly string[] | undefined | null): Record<string, boolean> {
+  const on = new Set(plotLayers ?? [...DEFAULT_PLOT_LAYERS, "F.Cu", "B.Cu"]);
+  const v: Record<string, boolean> = {
+    board: true,
+    copper_top: on.has("F.Cu"),
+    copper_bottom: on.has("B.Cu"),
+    silkscreen_top: on.has("F.SilkS"),
+    silkscreen_bottom: on.has("B.SilkS"),
+    soldermask_top: on.has("F.Mask"),
+    soldermask_bottom: on.has("B.Mask"),
+    solder_paste: on.has("F.Paste"),
+    adhesive: on.has("F.Adhes"),
+    references: true,
+  };
+  for (const r of USER_ROWS) v[r.id] = on.has(rowLayer(r.id)!);
+  return v;
+}
+
+/** `Map3DLayerToPCBLayer` (common/layer_id.cpp): the board layer a row stands for (copper, silkscreen, mask and the user layers), or null. */
+export function rowLayer(id: string): string | null {
+  switch (id) {
+    case "copper_top":
+      return "F.Cu";
+    case "copper_bottom":
+      return "B.Cu";
+    case "silkscreen_top":
+      return "F.SilkS";
+    case "silkscreen_bottom":
+      return "B.SilkS";
+    case "soldermask_top":
+      return "F.Mask";
+    case "soldermask_bottom":
+      return "B.Mask";
+    case "user_drawings":
+      return "Dwgs.User";
+    case "user_comments":
+      return "Cmts.User";
+    case "user_eco1":
+      return "Eco1.User";
+    case "user_eco2":
+      return "Eco2.User";
+  }
+  const m = /^user_(\d+)$/.exec(id);
+  return m ? `User.${m[1]}` : null;
+}
+
+/** `APPEARANCE_CONTROLS_3D::rebuildLayers`' label: `GetBoard()->GetLayerName( Map3DLayerToPCBLayer( layer ) )` for a board layer's row (a renamed user layer shows its name), the row's own label otherwise. */
+export function rowLabel(r: Row, layerName: (file: string) => string): string {
+  const file = rowLayer(r.id);
+  return file ? layerName(file) : r.label;
 }
 
 /** The rows that gate partModels.ts's models (the rest gate the board's own geometry): rebuilding the board for one of these is wasted work. */
@@ -222,9 +301,13 @@ export function usedUserRows(layerNames: Iterable<string>): Set<string> {
   return used;
 }
 
-/** The rows the tree lists for a board: every fixed one, and the user layers the board has something on, in KiCad's order. */
-export function rowsFor(usedUserRows: ReadonlySet<string>): Row[] {
-  return ROWS.filter((r) => r.group !== "user" || usedUserRows.has(r.id));
+/**
+ * The rows the tree lists for a board, in KiCad's order: `APPEARANCE_CONTROLS_3D::rebuildLayers` lists every row but `LAYER_3D_USER_1` .. `_45`, which
+ * only when the board enables the layer (`enabled.test( Map3DLayerToPCBLayer( id ) )`). `enabledUserRows` holds those rows' ids (`usedUserRows` of the
+ * board's enabled layers).
+ */
+export function rowsFor(enabledUserRows: ReadonlySet<string>): Row[] {
+  return ROWS.filter((r) => r.group !== "user" || !/^user_\d+$/.test(r.id) || enabledUserRows.has(r.id));
 }
 
 /** The user-layer row a drawing on `layerName` belongs to (`Dwgs.User` -> `user_drawings`, `User.7` -> `user_7`), or null. */
@@ -334,6 +417,39 @@ const COPPER_ROWS = ["copper_top", "copper_bottom"];
 export function withSwatch(overrides: Readonly<Record<string, string>>, id: string, hex: string): Record<string, string> {
   const next = { ...overrides, [id]: hex };
   if (COPPER_ROWS.includes(id)) for (const other of COPPER_ROWS) next[other] = hex;
+  return next;
+}
+
+const unit = (r: number, g: number, b: number, a: number): Rgba => ({ r, g, b, a });
+
+/**
+ * `BOARD_ADAPTER::GetDefaultColors`: what a swatch's reset button gives (`APPEARANCE_CONTROLS_3D::rebuildLayers` hands each swatch
+ * `defaultColors[layer]`, `DIALOG_COLOR_PICKER::OnResetButton` sets it): the `g_Default*` colours of `BOARD_ADAPTER`'s ctor, not the theme's. User.1 ..
+ * User.45 take the default theme's colour, which `resolveColors` already gives them.
+ */
+export const DEFAULT_COLORS: Readonly<Record<string, Rgba>> = {
+  background_top: unit(0.8, 0.8, 0.9, 1),
+  background_bottom: unit(0.4, 0.4, 0.5, 1),
+  board: unit(0.43, 0.45, 0.3, 0.9),
+  copper_top: unit(0.75, 0.61, 0.23, 1),
+  copper_bottom: unit(0.75, 0.61, 0.23, 1),
+  silkscreen_top: unit(0.94, 0.94, 0.94, 1),
+  silkscreen_bottom: unit(0.94, 0.94, 0.94, 1),
+  soldermask_top: unit(0.08, 0.2, 0.14, 0.83),
+  soldermask_bottom: unit(0.08, 0.2, 0.14, 0.83),
+  solder_paste: unit(0.5, 0.5, 0.5, 1),
+  user_drawings: unit(0.85, 0.85, 0.85, 1),
+  user_comments: unit(0.85, 0.85, 0.85, 1),
+  user_eco1: unit(0.7, 0.1, 0.1, 1),
+  user_eco2: unit(0.7, 0.1, 0.1, 1),
+};
+
+/** The person's colour choices after the swatch of `id` is reset: its `DEFAULT_COLORS` colour (both copper rows at once, as `withSwatch`), or no choice for a row KiCad's default is the theme's. */
+export function resetSwatch(overrides: Readonly<Record<string, string>>, id: string): Record<string, string> {
+  const def = DEFAULT_COLORS[id];
+  if (def) return withSwatch(overrides, id, toHex(def));
+  const next = { ...overrides };
+  delete next[id];
   return next;
 }
 

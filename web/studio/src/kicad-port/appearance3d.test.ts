@@ -15,6 +15,12 @@ import {
   resolveColors,
   rowOf,
   rowsFor,
+  rowLabel,
+  DEFAULT_COLORS,
+  DEFAULT_USE_STACKUP_COLORS,
+  plotFollowVisibility,
+  resetSwatch,
+  toggled,
   shapeLayerOf,
   stackupColorKind,
   toHex,
@@ -62,13 +68,14 @@ test("the theme colours are the ones colors.json carries from builtin_color_them
   }
 });
 
-test("the tree lists KiCad's rows in KiCad's order, with its tooltips, and the user layers only when the board has something on them", () => {
+test("the tree lists KiCad's rows in KiCad's order, with its tooltips, the four named user layers always and User.n when the board enables it", () => {
   const ids = rowsFor(new Set()).map((r) => r.id);
   assert.deepEqual(ids.slice(0, 10), ["board", "plated_barrels", "copper_top", "copper_bottom", "adhesive", "solder_paste", "silkscreen_top", "silkscreen_bottom", "soldermask_top", "soldermask_bottom"]);
   assert.ok(ids.includes("th_models") && ids.includes("smd_models") && ids.includes("virtual_models") && ids.includes("zones") && ids.includes("bounding_boxes"));
-  assert.ok(!ids.some((id) => id.startsWith("user_")), "no user layer in use, none listed");
-  const withUser = rowsFor(new Set(["user_comments", "user_7"])).map((r) => r.id);
-  assert.deepEqual(withUser.filter((id) => id.startsWith("user_")), ["user_comments", "user_7"], "in KiCad's order: the named ones, then User.1 ..");
+  // V6-9: APPEARANCE_CONTROLS_3D::rebuildLayers filters only LAYER_3D_USER_1 .. _45 by the board's enabled layers.
+  assert.deepEqual(ids.filter((id) => id.startsWith("user_")), ["user_drawings", "user_comments", "user_eco1", "user_eco2"], "the named ones are always listed");
+  const withUser = rowsFor(new Set(["user_7"])).map((r) => r.id);
+  assert.deepEqual(withUser.filter((id) => id.startsWith("user_")), ["user_drawings", "user_comments", "user_eco1", "user_eco2", "user_7"], "in KiCad's order: the named ones, then User.1 ..");
   assert.equal(USER_ROWS.length, 4 + USER_LAYER_COUNT);
   assert.equal(rowOf("board")!.tooltip, "Show board body");
   assert.equal(rowOf("th_models")!.hotkey, "T");
@@ -125,7 +132,9 @@ test("the stackup's colours: a silkscreen and a mask by name, 'Not specified' an
   close(c.soldermask_top!, { r: 181, g: 19, b: 21, a: 0.83 });
   close(c.soldermask_bottom!, { r: 0x33, g: 0x66, b: 0x99, a: 1 }); // a typed #RRGGBB is opaque
   close(c.silkscreen_bottom!, { r: 245, g: 245, b: 245 }); // not specified: white
-  assert.equal(toHex(c.board!), toHex(THEME_COLORS.board!), "a dielectric with no colour leaves the body the theme's");
+  // V6-6: `findColor` ends `return KIGFX::COLOR4D();` (opaque black, `a( 1.0 )`), and a dielectric's colour starts as "Not specified", which
+  // g_BoardColors does not have: the body is opaque black, as in KiCad.
+  close(c.board!, { r: 0, g: 0, b: 0, a: 1 });
 });
 
 test("the body is the dielectrics mixed (Mix( layer, 1 - layer.a ), alpha += (1 - alpha) * layer.a / 2), once per dielectric", () => {
@@ -218,4 +227,55 @@ test("V3: a copper swatch sets every copper row (onColorSwatchChanged's single c
   const { withSwatch } = await import("./appearance3d");
   assert.deepEqual(withSwatch({ board: "#112233ff" }, "copper_bottom", "#ff0000ff"), { board: "#112233ff", copper_bottom: "#ff0000ff", copper_top: "#ff0000ff" });
   assert.deepEqual(withSwatch({}, "silkscreen_top", "#ffffffff"), { silkscreen_top: "#ffffffff" });
+});
+
+// V6-3 (round 6): EDA_3D_VIEWER_SETTINGS' `current_layer_preset` defaults to LEGACY_PRESET_FLAG, which EDA_3D_VIEWER_FRAME::LoadSettings turns into
+// `m_UseStackupColors = false` and `m_CurrentPreset = FOLLOW_PLOT_SETTINGS`; BOARD_ADAPTER::GetVisibleLayers then takes the board rows from the plot
+// selection, whose default (PCB_PLOT_PARAMS' ctor) is every copper layer, the silkscreens, masks, pastes and Edge.Cuts.
+test("by default the 3D viewer follows the plot settings and has no stackup colours (LoadSettings' LEGACY_PRESET_FLAG, GetVisibleLayers)", () => {
+  assert.equal(DEFAULT_USE_STACKUP_COLORS, false);
+  const d = plotFollowVisibility(undefined);
+  for (const id of ["board", "copper_top", "copper_bottom", "silkscreen_top", "silkscreen_bottom", "soldermask_top", "soldermask_bottom", "solder_paste", "references"]) assert.equal(isVisible({}, id, d), true, id);
+  for (const id of ["adhesive", "user_drawings", "user_comments", "user_eco1", "user_eco2", "user_1"]) assert.equal(isVisible({}, id, d), false, id);
+  // The rows GetVisibleLayers sets from `m_Render` before the preset branch keep their defaults.
+  for (const id of ["plated_barrels", "th_models", "smd_models", "virtual_models", "zones"]) assert.equal(isVisible({}, id, d), true, id);
+  assert.equal(isVisible({}, "bounding_boxes", d), false);
+  // A board's own selection.
+  const own = plotFollowVisibility(["F.Cu", "F.Adhes", "Dwgs.User", "User.3"]);
+  assert.deepEqual(
+    ["copper_top", "copper_bottom", "adhesive", "user_drawings", "user_3", "silkscreen_top", "solder_paste"].map((id) => isVisible({}, id, own)),
+    [true, false, true, true, true, false, false],
+  );
+  // What the person sets wins, and a toggle flips what is shown.
+  assert.equal(isVisible({ adhesive: true }, "adhesive", d), true);
+  assert.deepEqual(toggled({}, "adhesive", d), { adhesive: true });
+});
+
+test("V6-6: an unknown stackup colour name is opaque black (findColor's COLOR4D())", () => {
+  const c = resolveColors(base({ useStackupColors: true, stackup: { layers: [{ name: "F.Mask", kind: "Top Solder Mask", color: "Chartreuse" }, { name: "d", kind: "core" }] } }));
+  assert.deepEqual(c.soldermask_top, { r: 0, g: 0, b: 0, a: 1 });
+  assert.deepEqual(c.board, { r: 0, g: 0, b: 0, a: 1 });
+});
+
+test("V6-7: a swatch resets to GetDefaultColors(), not the theme's colour (dialog_color_picker.cpp OnResetButton)", () => {
+  close(DEFAULT_COLORS.board!, { r: 0.43 * 255, g: 0.45 * 255, b: 0.3 * 255, a: 0.9 });
+  assert.deepEqual(resetSwatch({ board: "#ff0000ff", soldermask_top: "#00ff00d4" }, "board"), { board: "#6e734de6", soldermask_top: "#00ff00d4" });
+  // g_DefaultSurfaceFinish for both copper rows (one copper colour).
+  assert.deepEqual(resetSwatch({ copper_top: "#ff0000ff", copper_bottom: "#ff0000ff" }, "copper_bottom"), { copper_top: "#bf9c3bff", copper_bottom: "#bf9c3bff" });
+  // User.n's default is the theme's: the person's choice goes.
+  assert.deepEqual(resetSwatch({ user_3: "#ff0000ff" }, "user_3"), {});
+  close(DEFAULT_COLORS.user_comments!, { r: 0.85 * 255, g: 0.85 * 255, b: 0.85 * 255 });
+  close(DEFAULT_COLORS.user_eco1!, { r: 0.7 * 255, g: 0.1 * 255, b: 0.1 * 255 });
+});
+
+test("V6-9: the bounding boxes' tooltip is showBBoxes', and a board layer's row has the board's name for the layer", () => {
+  assert.equal(rowOf("bounding_boxes")!.tooltip, "Show 3D model bounding boxes in realtime renderer");
+  const names: Record<string, string> = { "User.3": "Assembly", "Dwgs.User": "Notes", "F.SilkS": "F.Silkscreen", "F.Cu": "Top" };
+  const name = (file: string) => names[file] ?? file;
+  assert.equal(rowLabel(rowOf("user_3")!, name), "Assembly");
+  assert.equal(rowLabel(rowOf("user_drawings")!, name), "Notes");
+  assert.equal(rowLabel(rowOf("copper_top")!, name), "Top");
+  assert.equal(rowLabel(rowOf("silkscreen_top")!, name), "F.Silkscreen");
+  assert.equal(rowLabel(rowOf("board")!, name), "Board Body", "not a board layer: the row's own label");
+  assert.equal(rowLabel(rowOf("solder_paste")!, name), "Solder Paste", "Map3DLayerToPCBLayer has no paste");
 });

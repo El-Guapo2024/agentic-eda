@@ -153,6 +153,10 @@
   ], copper_finish: "ENIG", dielectric_constraints: false, edge_connector: 0, edge_plating: false } };
   const reply = await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd: { op: "set_stackup", settings: stackup }, strict: false }) }).then((r) => r.json());
   check("the stackup with colours was accepted", reply.ok === true, reply.message);
+  // KiCad's 3D viewer opens with "Use board stackup colors" off (EDA_3D_VIEWER_FRAME::LoadSettings, round 6 V6-3): turn it on.
+  const stackupBox = document.querySelector(".viewer3d-layer-group")?.closest(".panel-section")?.querySelector("label.filter-row input[type=checkbox]");
+  check("'Use board stackup colors' starts off", stackupBox?.checked === false, stackupBox?.checked);
+  if (stackupBox && !stackupBox.checked) stackupBox.click();
   await waitFor("the stackup's colours in the swatches", () => swatch("soldermask_top") === "#b51315", 8000);
   const after = { mask: swatch("soldermask_top"), silk: swatch("silkscreen_top"), board: swatch("board"), copper: swatch("copper_top"), disabled: document.querySelector('[data-row="soldermask_top"] input[type=color]')?.disabled };
   check("F.Mask Red is KiCad's red", after.mask === "#b51315", after.mask);

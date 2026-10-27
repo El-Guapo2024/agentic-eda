@@ -36,6 +36,7 @@ import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
 import { substituteSelection } from "../kicad-port/groupTree";
 import { substituteSchSelection } from "../kicad-port/schGroups";
+import { DEFAULT_USE_STACKUP_COLORS } from "../kicad-port/appearance3d";
 import { inEnteredGroup } from "../kicad-port/groupEdit";
 import { DEFAULT_BOARD_CONTROL, toggledHighlight, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { DEFAULT_APPEARANCE, withObjectKeys, type AppearanceState } from "../kicad-port/appearance";
@@ -436,7 +437,7 @@ export interface Viewer3DOptions {
   layers: Record<string, boolean>;
   /** Row id -> the colour the person set with its swatch, `#rrggbb[aa]`. A row that is not here has the theme's (or the stackup's) colour. */
   colors: Record<string, string>;
-  /** `m_UseStackupColors` (default on in KiCad): the board body, silkscreen, solder mask and copper finish take the colours of Board Setup's physical stackup. */
+  /** `m_UseStackupColors` (off when KiCad's 3D viewer first opens, `DEFAULT_USE_STACKUP_COLORS`): the board body, silkscreen, solder mask and copper finish take the colours of Board Setup's physical stackup. */
   useStackupColors: boolean;
   /** `render.use_board_editor_copper_colors`: copper is drawn in the PCB editor's colours for F.Cu and B.Cu. */
   useEditorCopperColors: boolean;
@@ -460,7 +461,7 @@ export type GlbStatus = "idle" | "pending" | "loaded" | "failed";
 export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
   layers: {},
   colors: {},
-  useStackupColors: true,
+  useStackupColors: DEFAULT_USE_STACKUP_COLORS, // kicad-port/appearance3d.ts: off as KiCad's LoadSettings turns the legacy preset into
   useEditorCopperColors: false,
   flipped: false,
   orthographic: false,
