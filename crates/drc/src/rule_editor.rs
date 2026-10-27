@@ -1911,6 +1911,20 @@ pub fn check_custom_syntax(name: &str, body: &str, env: &Rc<Env>) -> String {
     }
 }
 
+/// `PANEL_SETUP_RULES::OnCompile` (Board Setup > Custom Rules, "Check rule syntax", R6-D5): the board's rules text through
+/// `DRC_RULES_PARSER::Parse( dummyRules, m_errorsReport )` -- every error where it is, the deprecated keywords, the compiler's messages, and "No errors
+/// found." for a clean text ([`dru::parse_reporting`]) -- and a thrown `PARSE_ERROR` as `"%s <a href='%d:%d'>%s</a>%s"` with `_( "ERROR:" )`, the line,
+/// the byte index and `ParseProblem()`. **Differs**: the text goes in as written (`ConvertCrossReferencesToKIIDs` and `ExpandTextVars` are not run first),
+/// and `checkPlausibility`'s warnings are not ported (PARITY-pcb section 9).
+pub fn compile_report(text: &str, env: &Rc<Env>) -> Vec<dru::Reported> {
+    let (mut reported, parsed) = dru::parse_reporting(text, env);
+    if let Err(pe) = parsed {
+        let problem = pe.message.strip_prefix("ERROR: ").unwrap_or(&pe.message).to_string();
+        reported.push(dru::Reported { text: format!("ERROR: <a href='{}:{}'>{problem}</a>", pe.line, pe.offset), severity: dru::ReportedSeverity::Error });
+    }
+    reported
+}
+
 #[cfg(test)]
 #[path = "rule_editor_tests.rs"]
 mod tests;

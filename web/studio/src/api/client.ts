@@ -830,6 +830,12 @@ export async function fetchRuleEditor(): Promise<import("../kicad-port/ruleEdito
   return getJson("/api/rule_editor");
 }
 
+/** Board Setup > Custom Rules, "Check rule syntax" (`PANEL_SETUP_RULES::OnCompile`, R6-D5): what the rules parser tells its reporter of `text`, KiCad's
+ *  words -- an error's place as `<a href='line:offset'>` -- or "No errors found.". POST /api/rule_editor/check `{ compile }`; nothing is saved. */
+export async function postCompileRules(text: string): Promise<{ ok: boolean; message?: string; messages?: { text: string; severity: "error" | "warning" | "info" }[] }> {
+  return postJson("/api/rule_editor/check", { compile: text });
+}
+
 /** POST /api/rule_editor/check: what Save would say of a rule panel (`{ entry, rule }`), or a Custom rule's Check Syntax (`{ syntax: { name, body } }`). Changes nothing. */
 export async function postRuleEditorCheck(body: unknown): Promise<{ ok: boolean; valid?: boolean; message: string; generated?: string }> {
   const r = await fetch("/api/rule_editor/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
