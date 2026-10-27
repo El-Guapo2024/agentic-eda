@@ -82,6 +82,9 @@ pub struct Solid {
     /// net class the other item is in. It has no anchor: nothing joins to it,
     /// nothing starts a route on it.
     pub edge: bool,
+    /// The number of its board item to the world's rule resolver ([`crate::rule_resolver::RuleResolver::rule_of`]): `from_ir` gives every pad,
+    /// keepout triangle and copper text one. `0` is none of its own (a solid a test makes, the board edge), and the resolver goes by `source`.
+    pub rule: u32,
 }
 
 impl Solid {

@@ -22,7 +22,7 @@ use eda_drc::constraints::{CType, ImplicitSource, RuleEngine, Severity};
 use eda_drc::kimath::Shape;
 use eda_drc::rule_item::{Class, Prop, RuleItem};
 use eda_model::ir::{Design, Nm, Point};
-use eda_model::ConstraintModel;
+use eda_model::{BoardRules, ConstraintModel};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -148,13 +148,76 @@ struct NetTiePad {
     layers: LayerRange,
 }
 
+/// A net in a cache key, by its handle (`NET_HANDLE` is a pointer in KiCad, and so is it here): `from_ir` gives every item of a net the one
+/// `Rc`, so asking by the pointer is asking by the net. Two handles of one name are two keys of one answer; the key holds its `Rc`, so a
+/// freed one is never mistaken for another.
+#[derive(Clone, Debug)]
+struct NetKey(Net);
+
+impl PartialEq for NetKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for NetKey {}
+
+impl std::hash::Hash for NetKey {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        h.write_usize(self.0.as_ref().map_or(0, |r| Rc::as_ptr(r) as *const u8 as usize));
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 enum Key {
-    Track(Net, i32, Option<(i64, i64, i64, i64)>),
-    Via(Net, LayerRange, Option<(i64, i64)>),
-    ViaHole(Net, LayerRange, Option<(i64, i64)>),
-    Solid(String, LayerRange),
-    PadHole(String, LayerRange),
+    Track(NetKey, i32, Option<(i64, i64, i64, i64)>),
+    Via(NetKey, LayerRange, Option<(i64, i64)>),
+    ViaHole(NetKey, LayerRange, Option<(i64, i64)>),
+    /// A solid by the number its rule item has ([`RuleResolver::solid_id`]).
+    Solid(u32, LayerRange),
+    PadHole(u32, LayerRange),
+}
+
+/// FNV-1a: the clearance cache is asked on every collision test, its keys are small and not adversarial.
+#[derive(Default)]
+struct Fnv(u64);
+
+impl std::hash::Hasher for Fnv {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut h = if self.0 == 0 { 0xcbf2_9ce4_8422_2325 } else { self.0 };
+        for b in bytes {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        self.0 = h;
+    }
+}
+
+type FnvMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<Fnv>>;
+
+/// The number of the board edge's rule item ([`RuleResolver::solid_id`]).
+const EDGE_ID: u32 = 0;
+
+/// What the router asks of a solid besides its rules.
+#[derive(Debug, Clone, Default)]
+struct SolidInfo {
+    /// The drilled hole of a pad (`GetEffectiveHoleShape`), whether it is drilled (`HasDrilledHole`) and whether it is a non-plated slot.
+    hole: Option<(Shape, bool, bool)>,
+    /// How far inside the pad's copper its hole is at the least (0 when it is not known to be inside): see [`RuleResolver::hole_reach`].
+    annulus: Nm,
+    /// The rules ask more of it than of its net: a local clearance (`GetClearanceOverrides`), or it is a rule area or a text.
+    special: bool,
+    /// The footprint a pad is of.
+    footprint: Option<String>,
+    keepout: Option<Keepout>,
 }
 
 /// `PNS_PCBNEW_RULE_RESOLVER`, built once for a world ([`crate::from_ir`]).
@@ -162,28 +225,55 @@ pub struct RuleResolver {
     engine: RuleEngine,
     /// The router's layer index to the board's layer name.
     layer_names: Vec<String>,
-    /// The board items of the world's solids, by `Solid::source`: the pads (and a rule area by its zone id).
-    items: HashMap<String, Rc<RuleItem>>,
-    /// Items made on demand: the copper texts and the board edge.
-    extra: RefCell<HashMap<String, Rc<RuleItem>>>,
-    /// The drilled hole of a pad (`GetEffectiveHoleShape`), whether it is drilled (`HasDrilledHole`) and whether it is a non-plated slot.
-    holes: HashMap<String, (Shape, bool, bool)>,
-    keepouts: HashMap<String, Keepout>,
-    /// The footprint a pad is of.
-    pad_footprint: HashMap<String, String>,
+    /// The board items of the world's solids, by number (`Solid::rule`): the board edge (0), the pads, the rule areas, the copper texts.
+    items: Vec<Rc<RuleItem>>,
+    /// What else the router asks of each: a pad's hole and footprint, a rule area's keepout.
+    info: Vec<SolidInfo>,
+    /// The number of a solid's rule item by `Solid::source` (a pad, a copper text) or `keepout:<zone id>` (a rule area).
+    ids: FnvMap<String, u32>,
+    /// Items made when a solid of no number is asked about (one the board does not know): an item of no net on its layer.
+    extra: RefCell<FnvMap<String, (u32, Rc<RuleItem>)>>,
     /// For each net-tie footprint (`IsNetTie()`), its pads in a group.
     net_ties: HashMap<String, Vec<NetTiePad>>,
     /// `HasGeometryDependentRules()`.
     geometry: bool,
+    /// The board's clearance-type rules are its board setup and its net classes' plain clearances alone (no custom rule, no "(diff pair)"
+    /// clearance of a class whose gap is under its clearance): [`RuleResolver::is_plain`].
+    plain: bool,
+    /// What the plain answers are made of.
+    net_rules: BoardRules,
     /// `NODE::SetMaxClearance( worstClearance + ClearanceEpsilon() )`'s `worstClearance` (`SyncWorld`).
     max_clearance: Nm,
-    cache: RefCell<HashMap<(Key, Key, bool), Nm>>,
+    /// The worst clearance a hole can ask beyond its copper's: the board's hole clearance and hole to hole, the local clearances (which are
+    /// hole clearances too), and every hole, physical or edge rule.
+    max_hole_clearance: Nm,
+    cache: RefCell<FnvMap<(Key, Key, bool), Nm>>,
 }
 
 impl std::fmt::Debug for RuleResolver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RuleResolver({} items, {} keepouts)", self.items.len(), self.keepouts.len())
+        write!(f, "RuleResolver({} items)", self.items.len())
     }
+}
+
+/// How far inside `copper` the hole `hole` is at the least: the radial margin of a round hole in a round pad, the margin to the sides of a
+/// (rounded, then less the rounding) rectangle; 0 when it is not one of those, so that the hole is always tested.
+fn hole_depth(copper: &Shape, hole: &Shape) -> Nm {
+    let (hx0, hy0, hx1, hy1) = hole.bbox(Nm::ZERO);
+    match (copper, hole) {
+        (Shape::Circle { c, r }, Shape::Circle { c: hc, r: hr }) => {
+            let off = Nm::new((((c.x - hc.x).as_f64()).hypot((c.y - hc.y).as_f64())).ceil() as i64);
+            (*r - *hr - off).max(Nm::ZERO)
+        }
+        (Shape::Rect { x0, y0, x1, y1 }, _) => (hx0 - *x0).min(*x1 - hx1).min(hy0 - *y0).min(*y1 - hy1).max(Nm::ZERO),
+        (Shape::RoundRect { x0, y0, x1, y1, r }, _) => ((hx0 - *x0).min(*x1 - hx1).min(hy0 - *y0).min(*y1 - hy1) - *r).max(Nm::ZERO),
+        _ => Nm::ZERO,
+    }
+}
+
+/// A net's name as the rules know it: `None` for no net and for [`crate::item::not_a_net`].
+fn net_name(n: &Net) -> Option<&str> {
+    n.as_deref().filter(|s| *s != "\u{1}" && !s.is_empty())
 }
 
 /// A cache entry count after which the cache starts over (KiCad clears its temporary cache between algorithm runs; the router's mouse moves
@@ -196,31 +286,44 @@ impl RuleResolver {
     pub fn new(design: &Design, model: &ConstraintModel, board: &eda_drc::board::DrcBoard, layer_names: Vec<String>) -> RuleResolver {
         let rules = &model.board;
         let rb = eda_drc::rule_board::RuleBoard::new(design, model, board, eda_drc::constraints::Units::Mm, rules.custom_rules_text.as_deref());
-        let mut items: HashMap<String, Rc<RuleItem>> = HashMap::new();
-        let mut holes = HashMap::new();
-        let mut pad_footprint = HashMap::new();
+        // the board edge is item 0: a `PCB_SHAPE` on Edge.Cuts
+        let mut edge = RuleItem::new("edge", Class::Shape);
+        edge.layers = vec!["Edge.Cuts".to_string()];
+        edge.layer = Some("Edge.Cuts".to_string());
+        edge.set("Layer", Prop::Layer("Edge.Cuts".to_string()));
+        let mut items: Vec<Rc<RuleItem>> = vec![Rc::new(edge)];
+        let mut info: Vec<SolidInfo> = vec![SolidInfo::default()];
+        let mut ids: FnvMap<String, u32> = FnvMap::default();
         let mut max_clearance = eda_drc::constraints::worst_case_clearance(rules).max(eda_drc::constraints::edge_clearance_min(rules)).max(rules.hole_to_hole_min_nm);
+        let mut max_hole_clearance = rules.hole_clearance_nm.max(rules.hole_to_hole_min_nm);
         for (i, pad) in board.pads.iter().enumerate() {
-            if let Some(it) = rb.pad_item_at(i) {
-                // `pad->GetClearanceOverrides( nullptr )` counts towards the world's worst clearance
-                if let Some((c, _)) = &it.overrides.clearance {
-                    max_clearance = max_clearance.max(*c);
-                }
-                items.entry(pad.id.clone()).or_insert(it);
+            let Some(it) = rb.pad_item_at(i) else { continue };
+            // `pad->GetClearanceOverrides( nullptr )` counts towards the world's worst clearance
+            if let Some((c, _)) = &it.overrides.clearance {
+                max_clearance = max_clearance.max(*c);
+                max_hole_clearance = max_hole_clearance.max(*c);
             }
-            if let Some(h) = &pad.hole {
+            if ids.contains_key(&pad.id) {
+                continue;
+            }
+            let hole = pad.hole.as_ref().map(|h| {
                 let drilled = pad.drill_round.is_some() || pad.drill_slot.is_none();
                 let npth_slot = pad.kind == eda_model::PadKind::NonPlatedHole && pad.drill_slot.is_some_and(|(w, h)| w != h);
-                holes.entry(pad.id.clone()).or_insert((h.clone(), drilled, npth_slot));
-            }
-            pad_footprint.insert(pad.id.clone(), pad.footprint_ref.clone());
+                (h.clone(), drilled, npth_slot)
+            });
+            let annulus = hole.as_ref().map_or(Nm::ZERO, |(h, _, _)| hole_depth(&pad.copper, h));
+            ids.insert(pad.id.clone(), items.len() as u32);
+            let special = it.overrides.clearance.is_some();
+            items.push(it);
+            info.push(SolidInfo { hole, annulus, special, footprint: Some(pad.footprint_ref.clone()), keepout: None });
         }
         let layer_index = |name: &str| layer_names.iter().position(|l| l == name).map(|i| i as i32);
-        let mut keepouts = HashMap::new();
         if let Some(rt) = &design.routing {
             for z in rt.zones.iter().filter(|z| z.is_rule_area && (z.keepout_tracks || z.keepout_vias || z.keepout_pads || z.keepout_copper_pour || z.keepout_footprints)) {
-                items.insert(format!("{}{}", Solid::KEEPOUT_SOURCE, z.id), rb.zone_item_of(z));
-                keepouts.insert(z.id.clone(), Keepout { zone_id: z.id.clone(), tracks: z.keepout_tracks, vias: z.keepout_vias, pads: z.keepout_pads, footprints: z.keepout_footprints, parent_footprint: z.parent_footprint.clone() });
+                ids.insert(format!("{}{}", Solid::KEEPOUT_SOURCE, z.id), items.len() as u32);
+                items.push(rb.zone_item_of(z));
+                let keepout = Keepout { zone_id: z.id.clone(), tracks: z.keepout_tracks, vias: z.keepout_vias, pads: z.keepout_pads, footprints: z.keepout_footprints, parent_footprint: z.parent_footprint.clone() };
+                info.push(SolidInfo { keepout: Some(keepout), special: true, ..Default::default() });
             }
         }
         // the net ties: `FOOTPRINT::IsNetTie()` and its pads of a group
@@ -246,15 +349,32 @@ impl RuleResolver {
         }
         let engine = rb.engine;
         // `GetBiggestClearanceValue`: the worst of every clearance-type rule (`QueryWorstConstraint`)
-        for r in &engine.rules {
+        // (the barcodes' implicit 1 mm physical clearance, `A.Type == 'Barcode'`, is left out: it never holds for the router's items, and the
+        // margin is only how far the search looks -- KiCad's `QueryWorstConstraint` counts it and looks 1 mm out round everything)
+        for r in engine.rules.iter().filter(|r| r.implicit != ImplicitSource::BarcodeDefaults) {
             for c in &r.constraints {
                 if matches!(c.ctype, CType::Clearance | CType::PhysicalClearance | CType::HoleClearance | CType::EdgeClearance | CType::HoleToHole) {
-                    max_clearance = max_clearance.max(Nm::new(c.value.min().min(eda_drc::constraints::MAXIMUM_CLEARANCE)));
+                    let v = Nm::new(c.value.min().min(eda_drc::constraints::MAXIMUM_CLEARANCE));
+                    max_clearance = max_clearance.max(v);
+                    if c.ctype != CType::Clearance {
+                        max_hole_clearance = max_hole_clearance.max(v);
+                    }
                 }
             }
         }
         let geometry = engine.rules.iter().any(|r| !r.is_implicit() && r.condition.as_ref().is_some_and(|c| c.has_geometry_dependent_functions()));
-        RuleResolver { engine, layer_names, items, extra: RefCell::new(HashMap::new()), holes, keepouts, pad_footprint, net_ties, geometry, max_clearance, cache: RefCell::new(HashMap::new()) }
+        let clearance_type = |t: CType| matches!(t, CType::Clearance | CType::PhysicalClearance | CType::HoleClearance | CType::EdgeClearance | CType::HoleToHole);
+        let plain = engine.rules.iter().filter(|r| r.constraints.iter().any(|c| clearance_type(c.ctype))).all(|r| {
+            r.is_implicit()
+                && match r.implicit {
+                    ImplicitSource::BoardSetup => r.condition.is_none(),
+                    // `A.Type == 'Barcode'`: never one of the router's items
+                    ImplicitSource::BarcodeDefaults => true,
+                    ImplicitSource::NetClass => r.condition.as_ref().is_some_and(|c| c.expression().starts_with("A.hasExactNetclass(") && !c.expression().contains("&&")),
+                    _ => false,
+                }
+        });
+        RuleResolver { engine, layer_names, items, info, ids, extra: RefCell::new(FnvMap::default()), net_ties, geometry, plain, net_rules: rules.clone(), max_clearance, max_hole_clearance, cache: RefCell::new(FnvMap::default()) }
     }
 
     /// The worst clearance anything of this board can ask for (`NODE::GetMaxClearance`, without the epsilon): how far a collision search
@@ -263,21 +383,70 @@ impl RuleResolver {
         self.max_clearance
     }
 
+    /// The number `from_ir` gives the solid of `source` (`Solid::rule`): a pad's id, `keepout:<zone id>`, a copper text's source; `0` when the
+    /// board has no item of it.
+    pub fn rule_of(&self, source: &str) -> u32 {
+        self.ids.get(source).copied().unwrap_or(0)
+    }
+
+    /// A copper text's board item (`syncTextItem`'s `PCB_TEXT`, of no net on its layer), numbered for its solid.
+    pub fn add_text(&mut self, source: &str, layer: i32) -> u32 {
+        if let Some(&id) = self.ids.get(source) {
+            return id;
+        }
+        let layer = self.layer_name(layer).unwrap_or("F.Cu").to_string();
+        let mut it = RuleItem::new(source.to_string(), Class::Text);
+        it.layers = vec![layer.clone()];
+        it.layer = Some(layer.clone());
+        it.set("Layer", Prop::Layer(layer));
+        let id = self.items.len() as u32;
+        self.items.push(Rc::new(it));
+        self.info.push(SolidInfo { special: true, ..Default::default() });
+        self.ids.insert(source.to_string(), id);
+        id
+    }
+
+    fn info_of(&self, s: &Solid) -> Option<&SolidInfo> {
+        if s.edge {
+            return None;
+        }
+        let id = if s.rule != 0 { s.rule } else { *self.ids.get(s.source.as_str())? };
+        self.info.get(id as usize)
+    }
+
+    /// Can a hole at `depth` inside copper that keeps `copper_clearance` from the probe still be within its own clearance of it? Not when the
+    /// worst hole clearance is no more than the copper's plus the depth (the hole is that much further than the copper is): then the hole's
+    /// test is skipped, whatever its rules (`CT_CLEARANCE`, which a hole asks too, is the copper's).
+    pub fn hole_reach(&self, copper_clearance: Nm, depth: Nm) -> bool {
+        self.max_hole_clearance > copper_clearance + depth
+    }
+
+    /// How far inside its pad's copper a pad's hole is at the least ([`hole_depth`]).
+    pub fn hole_annulus(&self, s: &Solid) -> Nm {
+        self.info_of(s).map_or(Nm::ZERO, |i| i.annulus)
+    }
+
     /// The keepout area a solid of the world is a triangle of ([`crate::from_ir`]'s `syncZone`).
     pub fn keepout(&self, s: &Solid) -> Option<&Keepout> {
-        let zone = s.source.strip_prefix(Solid::KEEPOUT_SOURCE)?;
-        let zone = zone.rsplit_once('#').map_or(zone, |(z, _)| z);
-        self.keepouts.get(zone)
+        if s.rule == 0 && !s.is_keepout() {
+            return None;
+        }
+        if s.rule == 0 {
+            let zone = s.source.strip_prefix(Solid::KEEPOUT_SOURCE)?;
+            let zone = zone.rsplit_once('#').map_or(zone, |(z, _)| z);
+            return self.ids.get(&format!("{}{zone}", Solid::KEEPOUT_SOURCE)).and_then(|&id| self.info.get(id as usize)?.keepout.as_ref());
+        }
+        self.info_of(s)?.keepout.as_ref()
     }
 
     /// The drilled hole of a pad of the world (`SOLID::Hole()`), if it has one.
     pub fn pad_hole(&self, s: &Solid) -> Option<&Shape> {
-        self.holes.get(&s.source).map(|(h, _, _)| h)
+        self.info_of(s)?.hole.as_ref().map(|(h, _, _)| h)
     }
 
     /// The footprint a pad of the world belongs to.
     pub fn footprint_of(&self, s: &Solid) -> Option<&str> {
-        self.pad_footprint.get(&s.source).map(String::as_str)
+        self.info_of(s)?.footprint.as_deref()
     }
 
     /// `PNS_PCBNEW_RULE_RESOLVER::IsInNetTie( aA )`: the item is of a net-tie footprint.
@@ -303,26 +472,51 @@ impl RuleResolver {
     fn key(&self, side: &Side) -> Key {
         let g = self.geometry;
         match *side {
-            Side::Track { net, layer, seg } => Key::Track(net.clone(), layer, seg.filter(|_| g).map(|(a, b)| (a.x.get(), a.y.get(), b.x.get(), b.y.get()))),
-            Side::Via { net, layers, pos } => Key::Via(net.clone(), layers, g.then_some((pos.x.get(), pos.y.get()))),
-            Side::ViaHole { net, layers, pos } => Key::ViaHole(net.clone(), layers, g.then_some((pos.x.get(), pos.y.get()))),
-            Side::Item(Item::Segment(s)) => Key::Track(s.net.clone(), s.layer, g.then_some((s.a.x.get(), s.a.y.get(), s.b.x.get(), s.b.y.get()))),
-            Side::Item(Item::Arc(a)) => Key::Track(a.net.clone(), a.layer, g.then_some((a.arc.start.x.get(), a.arc.start.y.get(), a.arc.end.x.get(), a.arc.end.y.get()))),
-            Side::Item(Item::Via(v)) => Key::Via(v.net.clone(), v.layers, g.then_some((v.pos.x.get(), v.pos.y.get()))),
-            Side::Item(Item::Solid(s)) => Key::Solid(self.solid_key(s), s.layers),
-            Side::PadHole(s) => Key::PadHole(s.source.clone(), s.layers),
+            Side::Track { net, layer, seg } => Key::Track(NetKey(net.clone()), layer, seg.filter(|_| g).map(|(a, b)| (a.x.get(), a.y.get(), b.x.get(), b.y.get()))),
+            Side::Via { net, layers, pos } => Key::Via(NetKey(net.clone()), layers, g.then_some((pos.x.get(), pos.y.get()))),
+            Side::ViaHole { net, layers, pos } => Key::ViaHole(NetKey(net.clone()), layers, g.then_some((pos.x.get(), pos.y.get()))),
+            Side::Item(Item::Segment(s)) => Key::Track(NetKey(s.net.clone()), s.layer, g.then_some((s.a.x.get(), s.a.y.get(), s.b.x.get(), s.b.y.get()))),
+            Side::Item(Item::Arc(a)) => Key::Track(NetKey(a.net.clone()), a.layer, g.then_some((a.arc.start.x.get(), a.arc.start.y.get(), a.arc.end.x.get(), a.arc.end.y.get()))),
+            Side::Item(Item::Via(v)) => Key::Via(NetKey(v.net.clone()), v.layers, g.then_some((v.pos.x.get(), v.pos.y.get()))),
+            Side::Item(Item::Solid(s)) => Key::Solid(self.solid_id(s), s.layers),
+            Side::PadHole(s) => Key::PadHole(self.solid_id(s), s.layers),
         }
     }
 
-    /// The key a solid is cached by: the board edge's pieces are one item to the rules, a keepout area's triangles one area.
-    fn solid_key(&self, s: &Solid) -> String {
+    /// The number of the rule item a solid is (`Solid::rule`): the board edge's pieces are one item to the rules (0), a keepout area's
+    /// triangles one area. A solid with no number is looked up by its source, and one the board does not know is made an item of no net on
+    /// its layer the first time it is asked about.
+    fn solid_id(&self, s: &Solid) -> u32 {
         if s.edge {
-            return "edge".to_string();
+            return EDGE_ID;
+        }
+        if s.rule != 0 {
+            return s.rule;
+        }
+        if let Some(&id) = self.ids.get(s.source.as_str()) {
+            return id;
         }
         if let Some(k) = self.keepout(s) {
-            return format!("{}{}", Solid::KEEPOUT_SOURCE, k.zone_id);
+            if let Some(&id) = self.ids.get(&format!("{}{}", Solid::KEEPOUT_SOURCE, k.zone_id)) {
+                return id;
+            }
         }
-        s.source.clone()
+        self.extra_item(s).0
+    }
+
+    fn extra_item(&self, s: &Solid) -> (u32, Rc<RuleItem>) {
+        if let Some(e) = self.extra.borrow().get(&s.source) {
+            return e.clone();
+        }
+        let layer = self.layer_name(s.layers.start()).unwrap_or("F.Cu").to_string();
+        let mut it = RuleItem::new(s.source.clone(), Class::Text);
+        it.layers = vec![layer.clone()];
+        it.layer = Some(layer.clone());
+        it.set("Layer", Prop::Layer(layer));
+        let mut extra = self.extra.borrow_mut();
+        let entry = (self.items.len() as u32 + extra.len() as u32, Rc::new(it));
+        extra.insert(s.source.clone(), entry.clone());
+        entry
     }
 
     /// `getBoardItem` / `BoardItem()`: the board item a side is asked about as, on `layer`.
@@ -371,36 +565,16 @@ impl RuleResolver {
             Side::Item(Item::Segment(s)) => dummy_track(&s.net, Some((s.a, s.b))),
             Side::Item(Item::Arc(a)) => dummy_track(&a.net, Some((a.arc.start, a.arc.end))),
             Side::Item(Item::Via(v)) => dummy_via(&v.net, v.pos),
-            Side::Item(Item::Solid(s)) | Side::PadHole(s) => self.solid_item(s, layer),
+            Side::Item(Item::Solid(s)) | Side::PadHole(s) => self.solid_item(s),
         }
     }
 
-    fn solid_item(&self, s: &Solid, layer: &str) -> Rc<RuleItem> {
-        let key = self.solid_key(s);
-        if let Some(it) = self.items.get(&key) {
-            return it.clone();
+    fn solid_item(&self, s: &Solid) -> Rc<RuleItem> {
+        let id = self.solid_id(s) as usize;
+        match self.items.get(id) {
+            Some(it) => it.clone(),
+            None => self.extra_item(s).1,
         }
-        if let Some(it) = self.extra.borrow().get(&key) {
-            return it.clone();
-        }
-        let it = if s.edge {
-            // a `PCB_SHAPE` on Edge.Cuts
-            let mut it = RuleItem::new("edge", Class::Shape);
-            it.layers = vec!["Edge.Cuts".to_string()];
-            it.layer = Some("Edge.Cuts".to_string());
-            it.set("Layer", Prop::Layer("Edge.Cuts".to_string()));
-            it
-        } else {
-            // a copper text (`syncTextItem`), or a solid the rules do not know: an item of no net on its layer
-            let mut it = RuleItem::new(s.source.clone(), Class::Text);
-            it.layers = vec![layer.to_string()];
-            it.layer = Some(layer.to_string());
-            it.set("Layer", Prop::Layer(layer.to_string()));
-            it
-        };
-        let it = Rc::new(it);
-        self.extra.borrow_mut().insert(key, it.clone());
-        it
     }
 
     /// `isCopper( aItem )`: `!parent || parent->IsOnCopperLayer()`. An item the router made, a hole (whose `Parent()` is null) and a keepout
@@ -416,14 +590,14 @@ impl RuleResolver {
     fn is_drilled_hole(&self, side: &Side) -> bool {
         match side {
             Side::ViaHole { .. } => true,
-            Side::PadHole(s) => self.holes.get(&s.source).is_some_and(|h| h.1),
+            Side::PadHole(s) => self.info_of(s).and_then(|i| i.hole.as_ref()).is_some_and(|h| h.1),
             _ => false,
         }
     }
 
     /// `IsNonPlatedSlot( aItem )`.
     fn is_non_plated_slot(&self, side: &Side) -> bool {
-        matches!(side, Side::PadHole(s) if self.holes.get(&s.source).is_some_and(|h| h.2))
+        matches!(side, Side::PadHole(s) if self.info_of(s).and_then(|i| i.hole.as_ref()).is_some_and(|h| h.2))
     }
 
     /// `QueryConstraint( aType, aItemA, aItemB, aLayer )`: the minimum the rules give, or `None` when there is no constraint or it is
@@ -450,8 +624,70 @@ impl RuleResolver {
         (!c.is_null()).then(|| Nm::new(c.value.min()))
     }
 
+    /// The board's clearance rules are its board setup's and its net classes' plain clearances alone, which [`Self::clearance`] answers
+    /// without the engine for the items that have no rules of their own.
+    pub fn is_plain(&self) -> bool {
+        self.plain
+    }
+
+    /// Is the side's answer its net's alone? A track or via the router asks about, a pad with no local clearance, the board edge; not a rule
+    /// area, a copper text or a pad with a clearance of its own.
+    fn plain_side(&self, side: &Side) -> bool {
+        match side {
+            Side::Item(Item::Solid(s)) => s.edge || self.info_of(s).is_some_and(|i| !i.special),
+            Side::PadHole(s) => self.info_of(s).is_some_and(|i| !i.special),
+            _ => true,
+        }
+    }
+
+    /// `Clearance` for two plain sides on a plain board ([`Self::plain_side`], `plain`), without the engine: what `EvalRules` gives there is
+    /// the board setup's hole to hole, hole clearance and copper-to-edge clearance and the net classes' clearance (the larger of the two
+    /// nets', the board minimum under it: `eda_drc::constraints::clearance`), and nothing for `CT_PHYSICAL_CLEARANCE`. (A test holds this to
+    /// the engine on KiCad's QA boards.)
+    fn plain_clearance(&self, a: &Side, b: &Side) -> i64 {
+        let common = a.is_edge() || b.is_edge() || a.layers().overlaps(&b.layers());
+        if !common {
+            return 0;
+        }
+        let r = &self.net_rules;
+        let mut rv: i64 = 0;
+        if self.is_drilled_hole(a) && self.is_drilled_hole(b) {
+            rv = rv.max(r.hole_to_hole_min_nm.get());
+        } else if a.is_hole() || b.is_hole() {
+            rv = rv.max(r.hole_clearance_nm.get());
+        }
+        if !a.is_edge() && !b.is_edge() {
+            rv = rv.max(eda_drc::constraints::clearance(r, net_name(a.net()), net_name(b.net())).get());
+        }
+        if a.is_edge() || self.is_non_plated_slot(a) || b.is_edge() || self.is_non_plated_slot(b) {
+            rv = rv.max(eda_drc::constraints::edge_clearance_min(r).get());
+        }
+        rv
+    }
+
     /// `PNS_PCBNEW_RULE_RESOLVER::Clearance( aA, aB, aUseClearanceEpsilon )`.
     pub fn clearance(&self, a: &Side, b: &Side, use_epsilon: bool) -> Nm {
+        if self.plain {
+            // two tracks or vias (the most of what is asked): the net classes' clearance on a layer they share
+            let track_or_via = |s: &Side| matches!(s, Side::Track { .. } | Side::Via { .. } | Side::Item(Item::Segment(_) | Item::Arc(_) | Item::Via(_)));
+            let rv = if track_or_via(a) && track_or_via(b) {
+                if a.layers().overlaps(&b.layers()) {
+                    eda_drc::constraints::clearance(&self.net_rules, net_name(a.net()), net_name(b.net())).get()
+                } else {
+                    0
+                }
+            } else if self.plain_side(a) && self.plain_side(b) {
+                self.plain_clearance(a, b)
+            } else {
+                return self.engine_clearance(a, b, use_epsilon);
+            };
+            return Nm::new(if use_epsilon && rv > 0 { (rv - DRC_EPSILON.get()).max(0) } else { rv });
+        }
+        self.engine_clearance(a, b, use_epsilon)
+    }
+
+    /// [`Self::clearance`] asked of the engine whatever the sides, cached per pair (`m_clearanceCache`).
+    pub fn engine_clearance(&self, a: &Side, b: &Side, use_epsilon: bool) -> Nm {
         let key = (self.key(a), self.key(b), use_epsilon);
         if let Some(&v) = self.cache.borrow().get(&key) {
             return v;

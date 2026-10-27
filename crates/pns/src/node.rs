@@ -972,6 +972,15 @@ impl Node {
         if same_net(item.net(), head.net()) {
             return hull;
         }
+        // a hole far enough inside its copper reaches no further than the copper does ([`crate::rule_resolver::RuleResolver::hole_reach`])
+        let depth = match item {
+            Item::Via(v) => (v.diameter - v.drill) / 2,
+            Item::Solid(s) => self.rules.as_ref().map_or(Nm::ZERO, |r| r.hole_annulus(s)),
+            _ => return hull,
+        };
+        if !self.rules.as_ref().is_some_and(|r| r.hole_reach(clearance, depth)) {
+            return hull;
+        }
         let Some((hole, hole_side)) = self.hole_of(item) else { return hull };
         let hole_clearance = self.clearance_between(rules, hole_side, head, use_epsilon);
         let hole_hull = crate::hull::primitive_hull(&hole, hole_clearance + extra, walk_width);
@@ -1066,33 +1075,59 @@ impl Node {
                 return shape.collides(&item_shape, Nm::ZERO).map(|c| hit(Nm::ZERO, c));
             }
         }
+        // the copper's clearance when it was asked and did not collide: a hole that far inside the copper cannot then reach the probe
+        // ([`crate::rule_resolver::RuleResolver::hole_reach`])
+        let mut clear_at: Option<Nm> = None;
         if !same {
             // `COLLISION_SEARCH_OPTIONS::m_useClearanceEpsilon` (default on): `rv - m_clearanceEpsilon`, the board's DRC epsilon (0.5 um)
             let clearance = self.clearance_between(rules, Side::Item(item), head, opts.use_epsilon);
-            if let Some(c) = shape.collides(&item_shape, clearance) {
-                let net_tie = self.rules.as_ref().is_some_and(|r| {
-                    r.is_in_net_tie(item) && {
-                        let at = item_shape.collides(shape, clearance).map_or(c.1, |(_, p)| p);
-                        r.is_net_tie_exclusion(net, layers.start(), at, item)
+            match shape.collides(&item_shape, clearance) {
+                Some(c) => {
+                    let net_tie = self.rules.as_ref().is_some_and(|r| {
+                        r.is_in_net_tie(item) && {
+                            let at = item_shape.collides(shape, clearance).map_or(c.1, |(_, p)| p);
+                            r.is_net_tie_exclusion(net, layers.start(), at, item)
+                        }
+                    });
+                    if !net_tie {
+                        return Some(hit(clearance, c));
                     }
-                });
-                if !net_tie {
-                    return Some(hit(clearance, c));
                 }
+                None => clear_at = Some(clearance),
             }
         }
-        self.rules.as_ref()?;
+        let r = self.rules.as_ref()?;
+        // a track has no hole, and a probe that is not a via has none either
+        if opts.head_hole.is_none() && item.is_track() {
+            return None;
+        }
+        // how far inside its copper the item's hole is, and the probe's
+        let item_depth = match item {
+            Item::Via(v) => (v.diameter - v.drill) / 2,
+            Item::Solid(s) => r.hole_annulus(s),
+            _ => Nm::ZERO,
+        };
+        let head_hole = match (opts.head_hole, shape) {
+            (Some(hr), Shape::Circle { c: centre, r: cr }) => Some((*centre, hr, (*cr - hr).max(Nm::ZERO))),
+            _ => None,
+        };
+        let reach = |depth: Nm| clear_at.is_none_or(|c| r.hole_reach(c, depth));
+        let item_hole_counts = !same && reach(item_depth);
+        let head_counts = head_hole.is_some_and(|(_, _, d)| same || reach(d));
+        if !item_hole_counts && !head_counts {
+            return None;
+        }
         let hole = self.hole_of(item);
-        if let (Some((hole_shape, hole_side)), false) = (&hole, same) {
+        if let (Some((hole_shape, hole_side)), true) = (&hole, item_hole_counts) {
             let clearance = self.clearance_between(rules, *hole_side, head, opts.use_epsilon);
             if let Some(c) = shape.collides(hole_shape, clearance) {
                 return Some(hit(clearance, c));
             }
         }
-        if let (Some(r), Shape::Circle { c: centre, .. }) = (opts.head_hole, shape) {
-            let head_hole = Side::ViaHole { net, layers, pos: *centre };
-            let head_hole_shape = Shape::Circle { c: *centre, r };
-            if !same {
+        if let (Some((centre, hr, head_depth)), true) = (head_hole, head_counts) {
+            let head_hole = Side::ViaHole { net, layers, pos: centre };
+            let head_hole_shape = Shape::Circle { c: centre, r: hr };
+            if !same && reach(head_depth) {
                 let clearance = self.clearance_between(rules, Side::Item(item), head_hole, opts.use_epsilon);
                 if let Some(c) = head_hole_shape.collides(&item_shape, clearance) {
                     return Some(hit(clearance, c));
@@ -1100,8 +1135,8 @@ impl Node {
             }
             // `shouldWeConsiderHoleCollisions`: "we just treat via holes that are geometrically identical and belonging to the same net as
             // non-colliding" (the head's via and its own copy in the world)
-            let copy = matches!(item, Item::Via(v) if v.pos == *centre && v.drill / 2 == r && same);
-            if let (Some((hole_shape, hole_side)), false) = (&hole, copy) {
+            let copy = matches!(item, Item::Via(v) if v.pos == centre && v.drill / 2 == hr && same);
+            if let (Some((hole_shape, hole_side)), false, true) = (&hole, copy, same || reach(head_depth + item_depth)) {
                 let clearance = self.clearance_between(rules, *hole_side, head_hole, opts.use_epsilon);
                 if let Some(c) = head_hole_shape.collides(hole_shape, clearance) {
                     return Some(hit(clearance, c));
@@ -1460,7 +1495,7 @@ mod tests {
     fn collision_ignores_same_net_and_excluded() {
         let mut n = Node::new();
         let rules = rules();
-        let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(Nm::ZERO, Nm::ZERO), shape: Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: mm(0.5) }, source: "U1.1".into(), edge: false }));
+        let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(Nm::ZERO, Nm::ZERO), shape: Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0 }));
         let shape = Shape::Stadium { a: p(Nm::ZERO, Nm::ZERO), b: p(mm(1.0), Nm::ZERO), r: mm(0.1) };
         // Same net as the pad: must not collide.
         assert!(n.first_colliding(&shape, &net_of("GND"), LayerRange::single(0), &rules, &[]).is_none());
@@ -1474,7 +1509,7 @@ mod tests {
     #[test]
     fn nearest_anchor_finds_pad_within_threshold() {
         let mut n = Node::new();
-        n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(1.0)), shape: Shape::Circle { c: p(mm(1.0), mm(1.0)), r: mm(0.4) }, source: "U1.1".into(), edge: false }));
+        n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(1.0)), shape: Shape::Circle { c: p(mm(1.0), mm(1.0)), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 }));
         let hit = n.nearest_anchor(p(mm(1.05), mm(1.0)), LayerRange::single(0), mm(0.2), None);
         assert_eq!(hit.map(|(_, p)| p), Some(p(mm(1.0), mm(1.0))));
         assert!(n.nearest_anchor(p(mm(5.0), mm(5.0)), LayerRange::single(0), mm(0.2), None).is_none());
@@ -1488,7 +1523,7 @@ mod tests {
         // followed the table's iteration order would differ from round to round
         for _ in 0..40 {
             let mut n = Node::new();
-            let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(1.0)), shape: Shape::Circle { c: p(mm(1.0), mm(1.0)), r: mm(0.4) }, source: "U1.1".into(), edge: false }));
+            let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(1.0)), shape: Shape::Circle { c: p(mm(1.0), mm(1.0)), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 }));
             n.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(mm(1.0), mm(1.0)), b: p(mm(3.0), mm(1.0)), width: mm(0.2), source_track: None, locked: false }));
             assert_eq!(n.nearest_anchor(p(mm(1.1), mm(1.0)), LayerRange::single(0), mm(0.5), None).map(|(id, _)| id), Some(pad));
         }
@@ -1509,7 +1544,7 @@ mod tests {
     }
 
     fn pad_item(net: &str, c: Point, r: Nm) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false })
+        Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false, rule: 0 })
     }
 
     /// D12: `NearestObstacle` is the first hull the line enters, not the item it overlaps most.

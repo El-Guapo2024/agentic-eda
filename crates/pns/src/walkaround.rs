@@ -635,6 +635,7 @@ mod tests {
             shape: Shape::RoundRect { x0: mm(2.475 - 0.975), y0: mm(-1.905 - 0.3), x1: mm(2.475 + 0.975), y1: mm(-1.905 + 0.3), r: mm(0.15) },
             source: "U1.8".into(),
             edge: false,
+            rule: 0,
         }));
         let rules: BoardRules = serde_yaml::from_str("track_width: 200000\nclearance: 200000\nvia_drill: 300000\nvia_diameter: 600000\n").unwrap();
         let path = vec![Point { x: mm(-2.475), y: mm(-1.905) }, Point { x: mm(8.665), y: mm(-1.905) }, Point { x: mm(12.475), y: mm(1.905) }];
@@ -652,7 +653,7 @@ mod tests {
     #[test]
     fn walks_around_a_pad_blocking_the_direct_path() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(2.5), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(2.5), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0 }));
         let rules = rules();
         let path = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];
         let best = walk_base(&node, &rules, &net_of("SIG"), 0, mm(0.2), &path, kind_mask::ANY, 10, 1.5, &[]).expect("at least one winding must succeed");
@@ -675,7 +676,7 @@ mod tests {
     fn a_walk_in_a_90_degree_mode_goes_round_the_box_of_the_hull() {
         use crate::direction45::CornerMode;
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(2.5), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(2.5), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0 }));
         let rules = rules();
         let head = Line::from_points(net_of("SIG"), 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }]);
         let diagonal = |pts: &[Point]| pts.windows(2).any(|w| w[0].x != w[1].x && w[0].y != w[1].y);
@@ -688,7 +689,7 @@ mod tests {
     }
 
     fn walker_pad(node: &mut Node, net: &str, c: Point, r: Nm) -> ItemId {
-        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false }))
+        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false, rule: 0 }))
     }
 
     fn walker_track(node: &mut Node, net: &str, a: Point, b: Point, width: Nm) -> ItemId {

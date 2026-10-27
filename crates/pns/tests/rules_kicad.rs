@@ -283,3 +283,66 @@ fn a_via_keeps_the_hole_to_hole_distance_from_a_via_of_its_own_net() {
     assert_eq!(hits(10.56), 0, "holes 0.26 mm apart");
     assert_eq!(hits(10.0), 0, "the via's own copy");
 }
+
+/// The rule resolver answers a pair of plain items -- tracks, vias, their holes, pads with no clearance of their own, the board edge -- on a
+/// board whose clearance rules are its board setup's and its net classes' without asking the engine (`RuleResolver::clearance`'s plain
+/// answer). Held here to the engine's own answer (`engine_clearance`, `EvalRules`) for every pair of a sample of the items of KiCad's QA
+/// boards (the router's regression boards, and three boards of net classes, one of them composite), with and without the epsilon.
+#[test]
+fn the_plain_answer_is_the_engines_on_kicads_boards() {
+    let Some(data) = std::env::var_os("KICAD_QA_DATA").map(std::path::PathBuf::from).or_else(|| std::env::var_os("KICAD_SRC_DIR").map(|s| std::path::PathBuf::from(s).join("qa/data"))) else {
+        eprintln!("KiCad QA corpus not found: skipping");
+        return;
+    };
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("EDA_SLOW_TESTS not set: skipping");
+        return;
+    }
+    let pcbnew = data.join("pcbnew");
+    let mut boards: Vec<std::path::PathBuf> = std::fs::read_dir(pcbnew.join("pns_regressions/boards")).unwrap().filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "kicad_pcb")).collect();
+    boards.sort();
+    boards.extend(["issue16566", "issue6879", "multinetclasses_drc"].iter().map(|n| pcbnew.join(format!("{n}.kicad_pcb"))));
+    let mut compared = 0usize;
+    for path in boards {
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (mut design, mut model, _) = eda_kicad::import_kicad_pcb(&text).unwrap_or_else(|e| panic!("{}: {e:?}", path.display()));
+        if let Ok(pro) = std::fs::read_to_string(path.with_extension("kicad_pro")) {
+            eda_kicad::merge_project_net_classes(&mut model, &pro);
+            eda_kicad::merge_project_design_rules(&mut model, &pro);
+        }
+        model.board.custom_rules_text = None;
+        design.assign_missing_ids();
+        let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
+        let r = node.rule_resolver().expect("a world from the IR has its rules");
+        let items: Vec<&eda_pns::item::Item> = node.iter().map(|(_, it)| it).collect();
+        let step = (items.len() / 120).max(1);
+        let sample: Vec<&eda_pns::item::Item> = items.iter().step_by(step).copied().collect();
+        // and heads of every net of the sample, a track on each layer and a via
+        let nets: Vec<eda_pns::item::Net> = sample.iter().map(|it| it.net().clone()).collect();
+        let vias: Vec<eda_pns::item::Via> = nets.iter().map(|n| eda_pns::item::Via { net: n.clone(), layers: layers.all(), pos: p(1.0, 1.0), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false }).collect();
+        let mut sides: Vec<eda_pns::node::Side> = sample.iter().map(|it| eda_pns::node::Side::Item(it)).collect();
+        for it in &sample {
+            if let eda_pns::item::Item::Solid(s) = it {
+                if r.pad_hole(s).is_some() {
+                    sides.push(eda_pns::node::Side::PadHole(s));
+                }
+            }
+        }
+        for (n, v) in nets.iter().zip(&vias).step_by(4) {
+            sides.push(eda_pns::node::Side::track(n, 0));
+            sides.push(eda_pns::node::Side::track(n, layers.count() as i32 - 1));
+            sides.push(eda_pns::node::Side::via(v));
+            sides.push(eda_pns::node::Side::via_hole(v));
+        }
+        for (i, a) in sides.iter().enumerate() {
+            for b in sides.iter().skip(i + 1).step_by(3) {
+                for eps in [false, true] {
+                    assert_eq!(r.clearance(a, b, eps), r.engine_clearance(a, b, eps), "{}: {a:?} / {b:?} (epsilon {eps})", path.display());
+                    compared += 1;
+                }
+            }
+        }
+        eprintln!("{}: plain {}, {} sides", path.display(), r.is_plain(), sides.len());
+    }
+    assert!(compared > 10_000, "{compared} pairs compared");
+}

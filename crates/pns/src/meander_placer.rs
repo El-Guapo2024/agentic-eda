@@ -519,7 +519,7 @@ mod tests {
     }
 
     fn pad(net: &str, at: Point, layers: LayerRange) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: mm(0.4) }, source: "U1.1".into(), edge: false })
+        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 })
     }
 
     /// Two pads 40 mm apart on net SIG joined by a straight track.

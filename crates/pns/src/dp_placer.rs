@@ -1062,11 +1062,11 @@ mod tests {
 
     #[allow(dead_code)]
     fn pad(node: &mut Node, net: &str, at: Point, r: Nm) -> ItemId {
-        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false }))
+        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false, rule: 0 }))
     }
 
     fn smd_pad(node: &mut Node, net: &str, at: Point, r: Nm) -> ItemId {
-        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false }))
+        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false, rule: 0 }))
     }
 
     fn track(node: &mut Node, net: &str, a: Point, b: Point, width: Nm) -> ItemId {
@@ -1330,10 +1330,10 @@ mod tests {
         // (1.515 mm, the largest force of the loop, which every later step adds again) into each small one in turn, until its 40 steps
         // run out still colliding -- so `routeHead` fails
         let (ax, ay) = (mm(0.0), mm(-30.0));
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(ax, ay), shape: Shape::Circle { c: p(ax, ay), r: mm(1.0) }, source: "U9.0".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(ax, ay), shape: Shape::Circle { c: p(ax, ay), r: mm(1.0) }, source: "U9.0".into(), edge: false, rule: 0 }));
         for k in 1..=45i64 {
             let c = p(ax + mm(0.01) + Nm::new(1_515_000) * k + mm(0.3), ay);
-            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.05) }, source: format!("U9.{k}"), edge: false }));
+            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.05) }, source: format!("U9.{k}"), edge: false, rule: 0 }));
         }
         let (rules, settings) = (rules(), mode(Mode::Shove));
         let mut dp = placer(&node, start);
@@ -1386,8 +1386,8 @@ mod tests {
         // pads side by side, along the pads' long side -- are only built for pads that line up like this.
         let mut node = Node::new();
         let rect = |c: Point| Shape::Rect { x0: c.x - mm(0.5), y0: c.y - mm(0.3), x1: c.x + mm(0.5), y1: c.y + mm(0.3) };
-        let start = node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(0), pos: p(Nm::ZERO, Nm::ZERO), shape: rect(p(Nm::ZERO, Nm::ZERO)), source: "J1.1".into(), edge: false }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(0), pos: p(mm(0.7), mm(0.7)), shape: rect(p(mm(0.7), mm(0.7))), source: "J1.2".into(), edge: false }));
+        let start = node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(0), pos: p(Nm::ZERO, Nm::ZERO), shape: rect(p(Nm::ZERO, Nm::ZERO)), source: "J1.1".into(), edge: false, rule: 0 }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(0), pos: p(mm(0.7), mm(0.7)), shape: rect(p(mm(0.7), mm(0.7))), source: "J1.2".into(), edge: false, rule: 0 }));
         let found = find_dp_primitive_pair(&node, start).unwrap();
         let mut gws = DpGateways::new(mm(0.4));
         gws.build_from_primitive_pair(&found.pair, false);
@@ -1419,8 +1419,8 @@ mod tests {
         for id in far {
             node.remove(id);
         }
-        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(1), pos: p(mm(10.0), Nm::ZERO), shape: Shape::Circle { c: p(mm(10.0), Nm::ZERO), r: mm(0.25) }, source: "far P".into(), edge: false }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(1), pos: p(mm(10.0), mm(1.0)), shape: Shape::Circle { c: p(mm(10.0), mm(1.0)), r: mm(0.25) }, source: "far N".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(1), pos: p(mm(10.0), Nm::ZERO), shape: Shape::Circle { c: p(mm(10.0), Nm::ZERO), r: mm(0.25) }, source: "far P".into(), edge: false, rule: 0 }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(1), pos: p(mm(10.0), mm(1.0)), shape: Shape::Circle { c: p(mm(10.0), mm(1.0)), r: mm(0.25) }, source: "far N".into(), edge: false, rule: 0 }));
         let (rules, settings) = (rules(), mode(Mode::Walkaround));
         let mut dp = placer(&node, start);
         dp.toggle_via(true, None, None, Some(1));
