@@ -149,3 +149,27 @@ fn a_back_side_through_hole_pad_keeps_its_one_sided_mask_on_its_side() {
     let pads = blocks(&out, "pad");
     assert!(pads[0].contains(r#"(layers "*.Cu" "B.Paste" "B.Mask")"#) || pads[0].contains(r#"(layers "*.Cu" "B.Mask" "B.Paste")"#), "{}", pads[0]);
 }
+
+/// F5: in a file before 20230620, `parseFOOTPRINT_unchecked` drops `ki_keywords` and `ki_locked`, makes `ki_description` the Description field's text, and hides every
+/// field it keeps. Our 20241229 file says so in KiCad 9's own words.
+#[test]
+fn legacy_ki_properties_become_the_description_field() {
+    let text = r#"(kicad_pcb (version 20221018) (generator pcbnew)
+ (general (thickness 1.6)) (paper "A4")
+ (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user "B.Silkscreen") (37 "F.SilkS" user "F.Silkscreen") (38 "B.Mask" user) (39 "F.Mask" user) (44 "Edge.Cuts" user) (49 "F.Fab" user) (48 "B.Fab" user))
+ (setup (pad_to_mask_clearance 0))
+ (net 0 "") (net 1 "A")
+ (footprint "Conn:X" (layer "F.Cu") (tstamp aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa) (at 110 110)
+  (property "Datasheet" "~")
+  (property "ki_description" "Generic connector")
+  (property "ki_keywords" "connector")
+  (fp_text reference "J1" (at 0 -2) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))) (tstamp aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab1))
+  (fp_text value "X" (at 0 2) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))) (tstamp aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab2))
+  (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 1 "A") (tstamp aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac1)))
+)"#;
+    let (design, model, _) = import_kicad_pcb(text).expect("parses");
+    let out = export(&design, &model);
+    assert!(!out.contains("ki_description") && !out.contains("ki_keywords"), "{out}");
+    assert!(out.contains(r#"(property "Description" "Generic connector" (at 0 0 0) (layer "F.Fab") (hide yes)"#), "{out}");
+    assert!(out.contains(r#"(property "Datasheet" "~" (at 0 0 0) (layer "F.Fab") (hide yes)"#), "a legacy field is hidden: {out}");
+}

@@ -1722,8 +1722,30 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
         "layer", "uuid", "tstamp", "tedit", "at", "transform", "locked", "attr", "clearance", "zone_connect", "solder_mask_margin", "thermal_width", "thermal_gap", "net_tie_pad_groups", "fp_line", "fp_arc",
         "fp_circle", "fp_rect", "fp_poly", "fp_curve", "fp_text", "pad", "model", "zone", "group", "component_classes", "sheetname", "sheetfile", "units", "path", "embedded_fonts", "embedded_files",
     ];
+    // A file from before footprint fields (20230620) held the symbol's keywords and description as properties of no place of their own (`parseFOOTPRINT_unchecked`,
+    // `case T_property`, `if( m_requiredVersion < 20230620 )`): `ki_keywords` and `ki_locked` are dropped, `ki_description` is the text of the Description field, and a field
+    // kept is hidden ("a legacy field that did not have text effects applied"). Written to a newer file as they were, they would be visible fields of their own; they are
+    // written as the fields KiCad made of them, which `format( PCB_FIELD )` writes at the footprint's origin on its side's Fab layer.
+    let legacy = file_version < crate::fp_fields::FIELD_PROPERTIES_VERSION;
+    let fab = if sexpr::find(fp, "layer").and_then(|l| sexpr::txt(l, 1)) == Some("B.Cu") { "B.Fab" } else { "F.Fab" };
+    // (Both name one field: the later text wins, as `SetText` on it.)
+    let push_field = |tokens: &mut Vec<String>, field: String, name: &str| {
+        let head = format!("(property {} ", crate::sexpr_str(name));
+        tokens.retain(|t| !t.starts_with(&head));
+        tokens.push(field);
+    };
+    let hidden_field = |name: &str, value: &str| format!("(property {} {} (at 0 0 0) (layer \"{fab}\") (hide yes) (effects (font (size 1.27 1.27))))", crate::sexpr_str(name), crate::sexpr_str(value));
     for item in fp.iter().skip(2).filter_map(Sexpr::as_list) {
         let tag = sexpr::tag(item);
+        if legacy && tag == Some("property") {
+            match (sexpr::txt(item, 1), sexpr::txt(item, 2)) {
+                (Some("ki_description"), Some(v)) => push_field(&mut e.tokens, hidden_field("Description", v), "Description"),
+                (Some(name @ ("Datasheet" | "Description")), Some(v)) => push_field(&mut e.tokens, hidden_field(name, v), name),
+                (Some("ki_fp_filters"), Some(_)) => e.tokens.push(sexpr::to_text(&Sexpr::List(item.to_vec()))),
+                _ => {}
+            }
+            continue;
+        }
         let kept = match tag {
             Some("property") => matches!(sexpr::txt(item, 1), Some("Datasheet") | Some("Description") | Some("ki_fp_filters") | Some("ki_keywords") | Some("ki_locked") | Some("ki_description")),
             // In pre-9.0 files a paste margin of 0 meant "inherit" (the parser reads it so, `parseFOOTPRINT_unchecked`); written to a new file it would be a margin of its own.
