@@ -1956,7 +1956,16 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 })
                 .collect();
             // the net the label is on, as the tracer named it (the wire under it): Highlight Net takes a label's connection, `conn->Name()`, not its text (r3 A3-M4)
-            let traced = sch.wires.iter().find(|w| !w.net.is_empty() && w.pts.windows(2).any(|s| point_on_segment(s[0], s[1], l.at))).map(|w| w.net.clone());
+            let traced = sch.wires.iter().find(|w| !w.net.is_empty() && w.pts.windows(2).any(|s| point_on_segment(s[0], s[1], l.at))).map(|w| w.net.clone()).or_else(|| {
+                // a label put on a pin with no wire: the net of the pin it is on, a subgraph member like any other (r4 C4-M2)
+                sch.symbols.iter().find_map(|sym| {
+                    let part = model.part(&sym.id)?;
+                    let resolved = model.real_symbol_of_instance(&sch, sym, part);
+                    let (number, _) = eda_engine::placed::pin_points_in(&sch, sym, part, resolved.as_ref()).into_iter().find(|(_, at)| *at == l.at)?;
+                    let reference = eda_model::sheet_list::reference_under(&sch, sym, &sheet_ids);
+                    pin_net.get(format!("{reference}.{number}").as_str()).map(|n| n.to_string())
+                })
+            });
             json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields })
         })
         .collect();

@@ -1875,3 +1875,15 @@ fn a_placed_local_power_symbol_is_a_net_of_its_sheet() {
         .filter(|(_, text)| text.contains("lp:+48V"))
         .for_each(|(file, text)| assert!(text.contains("(power local)") && !text.contains("\t\t\t(power)\n"), "{file}"));
 }
+
+/// r4 C4-M2 (`SCH_EDITOR_CONTROL::HighlightNet`: `conn->Name()`, a label's own connection): a local label put on a pin end with no wire gives the studio
+/// the net it is on (`/X`), not its text, so Highlight Net on it lights the net its pins are on.
+#[test]
+fn a_label_on_a_pin_with_no_wire_has_the_net_of_the_pin() {
+    let (dir, _, nets) = r4_case("lbl");
+    assert_eq!(nets.get("/X").map(Vec::len), Some(2), "{nets:?}");
+    let sheet = crate::studio::schematic_json(&dir, "", eda_model::text_vars::Clock::utc_now()).unwrap();
+    let labels = sheet["labels"].as_array().unwrap();
+    assert_eq!(labels.len(), 2);
+    assert!(labels.iter().all(|l| l["net_name"] == "/X"), "{labels:?}");
+}

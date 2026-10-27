@@ -239,3 +239,12 @@ export function parseGridOverrides(raw: unknown, family: OverrideFamily, size: n
 export function sameOverrides(a: GridOverrides, b: GridOverrides): boolean {
   return a.enabled === b.enabled && OVERRIDE_CATEGORIES.every((c) => a[c].on === b[c].on && a[c].index === b[c].index);
 }
+
+/**
+ * `SCH_MOVE_TOOL::AlignToGrid`'s grid, `GetGridSize( grid.GetSelectionGrid( selection ) )`: the coarsest grid of the items' categories (`EE_GRID_HELPER::GetItemGrid`) --
+ * 50 mil for a symbol, the text override (10 mil by default) for texts and fields, the current grid for graphics with their override off (r4 C4-M1).
+ */
+export function selectionGridSize(kinds: readonly (SchItemKind | null | undefined)[], current: number, grids: readonly number[], overrides: GridOverrides | null | undefined): number {
+  const sizeOf = (c: GridCategory) => gridSizeFor(c, current, grids, overrides);
+  return sizeOf(selectionGrid(kinds.map(schItemGrid), sizeOf));
+}

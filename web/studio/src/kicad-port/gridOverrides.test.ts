@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   OVERRIDE_CATEGORIES,
   defaultGridOverrides,
+  selectionGridSize,
   gridSizeFor,
   isOverridden,
   overrideRows,
@@ -155,4 +156,16 @@ test("overrides are read back from storage field by field, anything damaged taki
   assert.equal(sameOverrides(d, defaultGridOverrides("schematic")), true);
   assert.equal(sameOverrides(d, { ...d, enabled: false }), false);
   assert.equal(sameOverrides(d, { ...d, wires: { on: true, index: 0 } }), false);
+});
+
+// r4 C4-M1 (`SCH_MOVE_TOOL::AlignToGrid`: `grid.GetSelectionGrid( selection )`): a text alone aligns to the text override (10 mil), a symbol to 50 mil, both to the
+// coarser; graphics with their override off to the current grid.
+test("Align to Grid aligns to the selection's grid, not always 50 mil", () => {
+  const MIL = 25_400;
+  const grids = [100 * MIL, 50 * MIL, 25 * MIL, 10 * MIL];
+  const o = defaultGridOverrides("schematic");
+  assert.equal(selectionGridSize(["text"], 25 * MIL, grids, o), 10 * MIL);
+  assert.equal(selectionGridSize(["symbol"], 25 * MIL, grids, o), 50 * MIL);
+  assert.equal(selectionGridSize(["symbol", "text"], 25 * MIL, grids, o), 50 * MIL);
+  assert.equal(selectionGridSize(["graphic_line"], 25 * MIL, grids, o), 25 * MIL);
 });

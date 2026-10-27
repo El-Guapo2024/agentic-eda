@@ -6,7 +6,7 @@
 import type { Schematic } from "../../api/types";
 import { SchGridHelper, type SchSnapItem } from "../../kicad-port/schGridHelper";
 import { computeVisibleGridSize } from "../../kicad-port/grid";
-import { gridSizeFor, type GridCategory, type GridOverrides, type SchItemKind } from "../../kicad-port/gridOverrides";
+import { gridSizeFor, selectionGridSize, type GridCategory, type GridOverrides, type SchItemKind } from "../../kicad-port/gridOverrides";
 import type { GridEnv, SnapOverlay } from "../../kicad-port/gridHelperBase";
 import { box, type Pt } from "../../kicad-port/snapGeom";
 import { fieldBox, fieldItems, isShownField } from "../../kicad-port/schFieldEdit";
@@ -163,6 +163,21 @@ function kindOfSelected(sch: Schematic, id: string): SchItemKind {
   }
 }
 
+/** The view the canvas last handed its snapping: what a verb outside the canvas (Align to Grid) sizes its grid by. */
+let lastView: SchSnapView | null = null;
+
+/**
+ * `SCH_MOVE_TOOL::AlignToGrid`'s grid: `GetGridSize( grid.GetSelectionGrid( selection ) )` (`EE_GRID_HELPER::GetItemGrid` per item, the coarsest wins) -- 50 mil for a
+ * symbol, the text override (10 mil by default) for texts and fields, the current grid for graphics with their override off (r4 C4-M1). The grid of
+ * `view`, or of the view the canvas last showed; `undefined` with neither.
+ */
+export function selectionGridNm(ids: readonly string[], view: SchSnapView | null = lastView): number | undefined {
+  if (!view?.sch) return undefined;
+  const sch = view.sch;
+  const size = selectionGridSize(ids.map((id) => kindOfSelected(sch, id)), view.gridNm, view.grids, view.overrides);
+  return size > 0 ? size : undefined;
+}
+
 export class SchSnap {
   private view: SchSnapView | null = null;
   private helper: SchGridHelper | null = null;
@@ -172,6 +187,7 @@ export class SchSnap {
 
   update(view: SchSnapView): void {
     this.view = view;
+    lastView = view;
     if (this.helper && view.sch) this.helper.setItems(itemsOf(view.sch));
   }
 

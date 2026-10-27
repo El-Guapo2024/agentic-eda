@@ -55,6 +55,7 @@ import type { SchTurn } from "../api/schEditTypes";
 import { findNextMatch } from "../components/schematic/findNavigation";
 import { boardDeleteCmds, tuningPatternIds } from "../kicad-port/deleteCmds";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
+import { selectionGridNm } from "../components/schematic/schSnap";
 import { symbolBounds } from "../components/schematic/painter";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { selectConnection, selectNodeAt } from "../kicad-port/schConnection";
@@ -1462,7 +1463,9 @@ export function useActionRunner() {
       "eeschema.AlignToGrid",
       schematicOnly(() => {
         const ids = schItems();
-        if (ids.length > 0) void api.cmd({ op: "sch_move", verb: "align_to_grid", ids });
+        // the selection's grid (`grid.GetSelectionGrid( selection )`, r4 C4-M1); the server's 50 mil without one
+        const grid = selectionGridNm(ids);
+        if (ids.length > 0) void api.cmd({ op: "sch_move", verb: "align_to_grid", ids, ...(grid ? { grid } : {}) });
       })
     );
 
