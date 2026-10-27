@@ -501,5 +501,5 @@ export function pickSelectionCandidates(
 ): SelectionCandidate[] {
   const all = collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, subtractiveOnly);
   if (skipHeuristics) return all;
-  return guessSelectionCandidates(all, onePixelNm, activeLayer);
+  return guessSelectionCandidates(all, onePixelNm, activeLayer, highContrast);
 }
