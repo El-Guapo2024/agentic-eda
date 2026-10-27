@@ -124,3 +124,32 @@ export function neighbourSheet(sheets: readonly HierarchySheet[], current: reado
   if (at < 0) return null;
   return sorted[at + delta] ?? null;
 }
+
+/**
+ * The name a Hierarchy Navigator row shows (`HIERARCHY_PANE::buildHierarchyTree` / `UpdateHierarchyTree`, widgets/hierarchy_pane.cpp): the
+ * sheet's name, or, when it is empty, its file's name without the folder and extension (`wxFileName( sheet->GetFileName() ).GetName()`); the
+ * root is the project's name (`getRootString`, "Schematic" without one). (r6 C6-L2)
+ */
+export function hierarchyRowName(sheet: HierarchySheet, projectName: string): string {
+  if (sheet.path.length === 0) return projectName || "Schematic";
+  if (sheet.name !== "") return sheet.name;
+  const base = sheet.file.slice(Math.max(sheet.file.lastIndexOf("/"), sheet.file.lastIndexOf("\\")) + 1);
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(0, dot) : base;
+}
+
+/** `SCH_SHEET_PATH::PathAsString`-like key a collapsed node is kept under (`m_collapsedPaths`). */
+export const hierarchyPathKey = (path: readonly string[]): string => `/${path.map((id) => `${id}/`).join("")}`;
+
+/** Whether a row has sheets under it (`ItemHasChildren`): only such a row can be collapsed. */
+export function hasChildSheets(rows: readonly HierarchySheet[], path: readonly string[]): boolean {
+  return rows.some((r) => r.path.length === path.length + 1 && path.every((id, k) => r.path[k] === id));
+}
+
+/** The rows a tree with `collapsed` nodes shows: a row under a collapsed one is hidden (`m_tree->Collapse( id )`); `rows` in tree order. */
+export function visibleHierarchyRows(rows: readonly HierarchySheet[], collapsed: ReadonlySet<string>): HierarchySheet[] {
+  return rows.filter((r) => {
+    for (let n = 0; n < r.path.length; n++) if (collapsed.has(hierarchyPathKey(r.path.slice(0, n)))) return false;
+    return true;
+  });
+}

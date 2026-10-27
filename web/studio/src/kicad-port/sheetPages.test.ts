@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { comparePageNum, hierarchyTreeOrder, neighbourSheet, sortByPageNumbers, strNumCmp, toLong, type HierarchySheet } from "./sheetPages";
+import { comparePageNum, hasChildSheets, hierarchyPathKey, hierarchyRowName, hierarchyTreeOrder, neighbourSheet, sortByPageNumbers, strNumCmp, toLong, visibleHierarchyRows, type HierarchySheet } from "./sheetPages";
 
 const sheet = (path: string[], page = "", name = path.join("/") || "root"): HierarchySheet => ({ path, name, file: `${name}.kicad_sch`, page });
 
@@ -57,4 +57,19 @@ test("the Hierarchy Navigator's tree: each sheet's children in page order, under
   const tie = [sheet([], "1"), sheet(["x"], "3", "X"), sheet(["y"], "3", "Y")];
   assert.deepEqual(hierarchyTreeOrder(tie).map((s) => s.name), ["root", "X", "Y"]);
   assert.deepEqual(hierarchyTreeOrder([]), []);
+});
+
+test("r6 C6-L2: a row's name falls back to its file's name; the root is the project's name", () => {
+  assert.equal(hierarchyRowName({ path: ["a"], name: "", file: "sub/power_supply.kicad_sch", page: "2" }, "board"), "power_supply");
+  assert.equal(hierarchyRowName({ path: ["a"], name: "PSU", file: "psu.kicad_sch", page: "2" }, "board"), "PSU");
+  assert.equal(hierarchyRowName({ path: [], name: "", file: "", page: "1" }, "board"), "board");
+  assert.equal(hierarchyRowName({ path: [], name: "", file: "", page: "1" }, ""), "Schematic");
+});
+
+test("r6 C6-L2: a collapsed node hides the sheets under it, not itself", () => {
+  const rows = [sheet([]), sheet(["a"]), sheet(["a", "b"]), sheet(["a", "b", "c"]), sheet(["d"])];
+  assert.ok(hasChildSheets(rows, ["a"]) && !hasChildSheets(rows, ["d"]));
+  assert.deepEqual(visibleHierarchyRows(rows, new Set([hierarchyPathKey(["a"])])).map((r) => r.path.join("/")), ["", "a", "d"]);
+  assert.deepEqual(visibleHierarchyRows(rows, new Set([hierarchyPathKey([])])).map((r) => r.path.join("/")), [""]);
+  assert.equal(visibleHierarchyRows(rows, new Set()).length, 5);
 });

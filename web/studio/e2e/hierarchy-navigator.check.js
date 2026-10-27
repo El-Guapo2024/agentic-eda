@@ -74,7 +74,8 @@
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const panel = () => document.querySelector("#hierarchy-panel");
   const rows = () => [...(panel()?.querySelectorAll('[role="button"]') ?? [])];
-  const text = (r) => (r?.innerText ?? "").replace(/\s*\n\s*/g, " ").trim();
+  // the row's text without its fold mark (r6 C6-L2)
+  const text = (r) => (r?.innerText ?? "").replace(/[▾▸]/g, "").replace(/\s*\n\s*/g, " ").trim();
   const marked = () => rows().map((r) => r.getAttribute("aria-current") === "true");
   const rowAt = (label) => rows().find((r) => text(r).startsWith(label));
   const waitRows = async (n) => { for (let i = 0; i < 50; i++) { if (rows().length === n) return true; await sleep(200); } return rows().length === n; };
@@ -123,7 +124,10 @@
       // m_tree->SortChildren( aParent ), HIERARCHY_TREE::OnCompareItems -> SCH_SHEET_PATH::ComparePageNum). The modules' pages are the
       // load's numbers by place (SetInitialPageNumbers over the walk, SCH_SCREEN::GetSheets: Header x 90, MCU 135, LED channels 175), the
       // imported sheet is the next free page (GetNextPageNumber, sch_drawing_tools.cpp).
-      const order = ["Root", "Header (J1)", "MCU (U1)", "LED channels (D1–D8)", "issue10926_1_subsheet_1", "Subsheet_1_2", "Subsheet_1_1"];
+      // the root row is the project's name (`getRootString`, r6 C6-L2), the name of the board's own file
+      const project = (/^(\S+)\.kicad_sch/.exec(text(rows()[0]).split(" ").find((w) => w.endsWith(".kicad_sch")) ?? "") ?? [])[1] ?? "?";
+      t(text(rows()[0]).startsWith(`${project} `) && project !== "Root", `the root row is the project's name (${text(rows()[0])})`);
+      const order = [project, "Header (J1)", "MCU (U1)", "LED channels (D1–D8)", "issue10926_1_subsheet_1", "Subsheet_1_2", "Subsheet_1_1"];
       t(order.every((label, i) => text(rows()[i]).startsWith(label)), `the root first, then the modules and the imported sheet in page order, the imported sheet's two after it (${rows().map((r) => text(r).split(/ \S+\.kicad_sch/)[0])})`);
       t(rows()[5]?.style.marginLeft === "20px" && rows()[6]?.style.marginLeft === "20px" && rows()[1]?.style.marginLeft === "10px", `a nested sheet is shown under its parent (${rows().map((r) => r.style.marginLeft)})`);
       const nestedRows = rows().filter((r) => text(r).includes(NESTED));
@@ -150,7 +154,7 @@
       const r = await post({ op: "set_sheet_page", sheet: header.path[0], page: "8", path: header.path });
       t(r.ok === true, `Edit Sheet Page Number: Header (J1) is page 8 (${JSON.stringify(r).slice(0, 200)})`);
       for (let i = 0; i < 50 && !text(rows()[6]).startsWith("Header"); i++) await sleep(200);
-      const after = ["Root", "MCU (U1)", "LED channels (D1–D8)", "issue10926_1_subsheet_1", "Subsheet_1_2", "Subsheet_1_1", "Header (J1)"];
+      const after = [text(rows()[0]).split(" ")[0], "MCU (U1)", "LED channels (D1–D8)", "issue10926_1_subsheet_1", "Subsheet_1_2", "Subsheet_1_1", "Header (J1)"];
       const labels = rows().map((r) => text(r).split(/ \S+\.kicad_sch/)[0]);
       t(after.every((label, i) => labels[i]?.startsWith(label)) && /page 8$/.test(text(rows()[6])), `Header (J1), page 8, is listed after the imported sheet (page 5) and its two, though the walk visits it first (${labels})`);
       t(rows()[6]?.style.marginLeft === "10px" && rows()[4]?.style.marginLeft === "20px", "it is still a sheet of the root, and the imported sheet keeps its two under it");
@@ -196,6 +200,45 @@
       t(a.crumbs?.at(-1) === "Subsheet_1_1" && b.crumbs?.at(-1) === "Subsheet_1_2", `and the breadcrumb ends with each placement's name (${a.crumbs} / ${b.crumbs})`);
       await clickRow(rows()[0]);
       t(same(__eda.state().sheetPath, []), "back at the root");
+    });
+
+    // ----- r6 C6-L2: fold and unfold
+    await scenario("A sheet with sheets under it folds and unfolds; Collapse All and Expand All from the right-click menu", async (t) => {
+      const fold = (label) => rowAt(label)?.querySelector('[data-testid="hierarchy-fold"]');
+      t(fold("issue10926_1_subsheet_1")?.getAttribute("aria-expanded") === "true" && fold("Header (J1)")?.getAttribute("aria-expanded") == null, "only a row with sheets under it has a fold mark, unfolded at first");
+      fold("issue10926_1_subsheet_1")?.click();
+      await sleep(400);
+      t(rows().length === sheets.length - 2 && !rowAt("Subsheet_1_1") && !!rowAt("issue10926_1_subsheet_1"), `folded: its two sheets are hidden, the row stays (${rows().length} rows)`);
+      fold("issue10926_1_subsheet_1")?.click();
+      await sleep(400);
+      t(rows().length === sheets.length, `unfolded: every row again (${rows().length})`);
+      const menuItem = async (label) => {
+        panel().dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
+        await sleep(300);
+        const item = [...document.querySelectorAll("[role=menuitem]")].find((el) => el.textContent?.trim() === label);
+        if (!item) t(false, `menu items: ${[...document.querySelectorAll("[role=menuitem]")].map((el) => el.textContent)}; panel ${!!panel()}`);
+        item?.click();
+        await sleep(400);
+        return !!item;
+      };
+      t(await menuItem("Collapse All"), "the menu has Collapse All");
+      t(rows().length === 1, `Collapse All: the root alone (${rows().length})`);
+      t(await menuItem("Expand All"), "and Expand All");
+      t(rows().length === sheets.length, `Expand All: every row (${rows().length})`);
+    });
+
+    // ----- r6 C6-L1: a sheet that leaves the hierarchy leaves Back / Forward's history (`CleanHistory`)
+    await scenario("Undo the import: Back no longer goes to the imported sheets", async (t) => {
+      await fetch("/api/undo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain: "schematic" }) });
+      for (let i = 0; i < 50 && rows().length !== 4; i++) await sleep(200);
+      t(rows().length === 4, `the imported sheet and its two are gone (${rows().length} rows)`);
+      await sleep(800);
+      await __eda.run("eeschema.NavigateTool.back");
+      await sleep(1200);
+      const left = (await hierarchy()).map((h) => JSON.stringify(h.path));
+      const at = __eda.state().sheetPath;
+      t(left.includes(JSON.stringify(at)), `Back lands on a sheet still in the hierarchy (${JSON.stringify(at)})`);
+      t(at.length === 1 && at[0] === sheets.find((h) => h.name.startsWith("LED")).path[0], `the last one left in the history before the root: LED channels (${JSON.stringify(at)})`);
     });
 
     // -------------------------------------------------------------------------------------------------------------------- the end
