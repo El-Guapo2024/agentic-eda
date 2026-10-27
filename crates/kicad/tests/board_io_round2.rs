@@ -431,3 +431,25 @@ fn kicad_cli_reads_the_thieving_zone_back() {
     let flat = back.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(flat.contains("(mode thieving)") && flat.contains("(thieving (type hatch) (size 5) (gap 2) (width 0.3) (stagger yes) (orientation 33)"), "{back}");
 }
+
+/// r3 F3: three vias of one net at one point (25ec2335 `multichannel_nested`): each keeps a uuid of its own, so the group that names all three keeps three members
+/// (`resolveGroups` finds one item per uuid).
+#[test]
+fn vias_at_one_point_get_distinct_uuids() {
+    let text = board(
+        r#" (via (at 100 100) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "a0000000-0000-0000-0000-000000000001"))
+ (via (at 100 100) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "a0000000-0000-0000-0000-000000000002"))
+ (via (at 100 100) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "a0000000-0000-0000-0000-000000000003"))
+ (group "G" (uuid "b0000000-0000-0000-0000-000000000001") (members "a0000000-0000-0000-0000-000000000001" "a0000000-0000-0000-0000-000000000002" "a0000000-0000-0000-0000-000000000003"))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let mut uuids: Vec<String> = blocks(&out, "via").iter().map(|v| v.split("(uuid \"").nth(1).unwrap().split('"').next().unwrap().to_string()).collect();
+    assert_eq!(uuids.len(), 3, "{out}");
+    uuids.sort();
+    uuids.dedup();
+    assert_eq!(uuids.len(), 3, "three distinct uuids: {out}");
+    let (again, _, _) = import_kicad_pcb(&out).expect("parses ours");
+    let groups = &again.drawings.as_ref().expect("drawings").groups;
+    assert_eq!(groups.iter().find(|g| g.name == "G").map(|g| g.member_ids.len()), Some(3), "{groups:?}");
+}

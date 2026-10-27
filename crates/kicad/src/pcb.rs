@@ -368,7 +368,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
 
         let mut vias: Vec<&Via> = routing.vias.iter().collect();
         vias.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
-        // Two vias of a net at one point (a microvia stack's, `PCB_VIA_STACK`) would mint one uuid: the second takes its layers into the seed.
+        // Two vias of a net at one point (a microvia stack's, `PCB_VIA_STACK`) would mint one uuid: the second takes its layers into the seed, and any later one at the
+        // same place on the same layers a count as well (25ec2335 `multichannel_nested` has three VCC vias at one point; `resolveGroups` finds one item per uuid).
         let mut via_seeds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for v in &vias {
             let n = net_of("a via", &format!("{} at ({}, {})", v.net, v.at.x, v.at.y), &v.net);
@@ -379,8 +380,13 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             let lock = if is_locked(&v.id) { " (locked yes)" } else { "" };
             let mut seed = format!("via:{}:{}:{}", v.net, v.at.x, v.at.y);
             if !via_seeds.insert(seed.clone()) {
-                seed = format!("{seed}:{}:{}", v.from_layer, v.to_layer);
-                via_seeds.insert(seed.clone());
+                let layered = format!("{seed}:{}:{}", v.from_layer, v.to_layer);
+                seed = layered.clone();
+                let mut k = 2;
+                while !via_seeds.insert(seed.clone()) {
+                    seed = format!("{layered}:{k}");
+                    k += 1;
+                }
             }
             let uuid = crate::duid_for(&seed, &v.id);
             written.entry(v.id.clone()).or_default().push(uuid.clone());
