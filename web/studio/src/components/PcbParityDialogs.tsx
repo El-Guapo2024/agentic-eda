@@ -114,6 +114,11 @@ type AnchorKind = "origin" | "grid" | "item" | "point";
 
 /** `DIALOG_POSITION_RELATIVE::s_anchorType` (`= ANCHOR_ITEM`). */
 let lastAnchorKind: AnchorKind = "item";
+/**
+ * "The dialog is not modal and not deleted between calls" (`POSITION_RELATIVE_TOOL::PositionRelative`, `if( !m_dialog ) m_dialog = new ..`): the offsets, the Polar
+ * coordinates box, the picked item's position (`m_anchorItemPosition`) and point are as they were left, until the units change (the dialog is made anew then).
+ */
+let lastPositionRelative: { units: string; polar: boolean; a: number; b: number; itemRef: string; pickedItem: { id: string; x: number; y: number } | null; pointX: number; pointY: number } | null = null;
 
 /** `DIALOG_POSITION_RELATIVE` -- see this file's header. */
 function PositionRelativeDialog() {
@@ -160,11 +165,12 @@ function PositionRelativeDialog() {
     lastAnchorKind = k;
     setAnchorKindState(k);
   };
-  const [itemRef, setItemRef] = useState("");
+  const kept = lastPositionRelative?.units === units ? lastPositionRelative : null;
+  const [itemRef, setItemRef] = useState(kept?.itemRef ?? "");
   /** An item picked on the canvas ("Select Item..."): any board item, anchored on its position (`UpdatePickedItem`). */
-  const [pickedItem, setPickedItem] = useState<{ id: string; x: number; y: number } | null>(null);
-  const [pointX, setPointX] = useState(0); // display units
-  const [pointY, setPointY] = useState(0);
+  const [pickedItem, setPickedItem] = useState<{ id: string; x: number; y: number } | null>(kept?.pickedItem ?? null);
+  const [pointX, setPointX] = useState(kept?.pointX ?? 0); // display units
+  const [pointY, setPointY] = useState(kept?.pointY ?? 0);
   // `OnSelectItemClick` / `OnSelectPointClick`: "Hide, but do not close, the dialog" while the picker runs.
   const [picking, setPicking] = useState(false);
   const pickingRef = useRef(false);
@@ -198,9 +204,12 @@ function PositionRelativeDialog() {
     setPointY(shown(p.y));
     setAnchorKind("point");
   };
-  const [polar, setPolar] = useState(false);
-  const [a, setA] = useState(0); // Offset X (or distance), display units
-  const [b, setB] = useState(0); // Offset Y (or angle, degrees)
+  const [polar, setPolar] = useState(kept?.polar ?? false);
+  const [a, setA] = useState(kept?.a ?? 0); // Offset X (or distance), display units
+  const [b, setB] = useState(kept?.b ?? 0); // Offset Y (or angle, degrees)
+  useEffect(() => {
+    lastPositionRelative = { units, polar, a, b, itemRef, pickedItem, pointX, pointY };
+  }, [units, polar, a, b, itemRef, pickedItem, pointX, pointY]);
 
   const placed = (board?.parts ?? []).filter((p) => p.placed && p.at);
 
