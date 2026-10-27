@@ -291,3 +291,19 @@ fn reference_image_scale_survives_a_kicad10_round_trip() {
     let img = blocks(&back, "image");
     assert!(img[0].contains("(scale 2.04255)"), "{}", &img[0][..img[0].len().min(200)]);
 }
+
+/// F8: `format( const ZONE* )` writes `(fill yes` only for a zone that is filled (`IsFilled()`). A board written with no fill of kicad-cli's says its zones are unfilled.
+#[test]
+fn an_unfilled_zone_is_written_unfilled() {
+    let text = board(
+        r#" (zone (net 1) (net_name "A") (layer "F.Cu") (uuid "77777777-7777-7777-7777-777777777777") (hatch edge 0.5)
+  (connect_pads (clearance 0.5)) (min_thickness 0.25) (filled_areas_thickness no)
+  (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+  (polygon (pts (xy 95 95) (xy 125 95) (xy 125 125) (xy 95 125))))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let zones = blocks(&out, "zone");
+    assert_eq!(zones.len(), 1, "{out}");
+    assert!(zones[0].contains("(fill (thermal_gap") && !zones[0].contains("(fill yes"), "{}", zones[0]);
+}

@@ -33,7 +33,7 @@ pub(crate) struct ZoneArgs<'a> {
     pub locked: bool,
     pub uuid: &'a str,
     /// The fill of each layer of the zone, one ring per `(filled_polygon ..)`, in nanometres: kicad-cli's (`crate::zone_fills`), while the zone is the one it filled. A layer
-    /// that is not here has no fill.
+    /// that is not here has no fill, and a zone with none of its layers here is not filled (`(fill` without `yes`).
     pub fills: &'a [(String, Vec<crate::zone_fills::KicadRing>)],
     /// `BOARD::GetEnabledLayers`: the layers the board has. The zone is written on the ones of its layer set that are in this list (`format( const ZONE* )`'s
     /// `layers &= aZone->GetBoard()->GetEnabledLayers()`); `None` is every layer.
@@ -149,9 +149,11 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
         .unwrap();
     }
 
-    // `(fill [yes] [(mode hatch)] (thermal_gap ..) (thermal_bridge_width ..) [smoothing] (island_removal_mode ..) ..)`.
+    // `(fill [yes] [(mode hatch)] (thermal_gap ..) (thermal_bridge_width ..) [smoothing] (island_removal_mode ..) ..)`: `yes` for a zone that is filled (`format( const ZONE* )`:
+    // "Default is not filled." `if( aZone->IsFilled() )`), the one kicad-cli has a current fill of. An unfilled zone written filled with nothing would get no "zones are not
+    // filled" bar (`PCB_CONTROL::unfilledZoneCheck`) and no refill when it is made dirty (`ZONE_FILLER_TOOL::ZoneFillDirty`: `if( !zone->IsFilled() || .. )`).
     write!(out, "\t\t(fill").unwrap();
-    if !rule_area {
+    if !rule_area && !a.fills.is_empty() {
         write!(out, " yes").unwrap();
     }
     let hatch_fill = !z.teardrop && z.fill_mode == eda_model::ir::FillMode::HatchPattern;

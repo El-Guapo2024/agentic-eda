@@ -321,7 +321,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             };
             written.entry(z.id.clone()).or_default().push(uuid.clone());
             // The rings kicad-cli stored for the zone on each of its layers, while the zone is the one it filled.
-            let layer_fills: Vec<(String, Vec<crate::zone_fills::KicadRing>)> = match fills {
+            // None for a zone kicad-cli has no current fill of: it is written unfilled (`ZONE::IsFilled`).
+            let layer_fills: Vec<(String, Vec<crate::zone_fills::KicadRing>)> = match fills.filter(|k| k.current(z).is_some()) {
                 Some(k) => z.layer_set().into_iter().map(|layer| (layer.to_string(), k.rings(z, layer).to_vec())).collect(),
                 None => Vec::new(),
             };
