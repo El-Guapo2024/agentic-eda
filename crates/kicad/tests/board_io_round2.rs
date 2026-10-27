@@ -372,3 +372,22 @@ fn a_zone_filled_with_nothing_stays_filled() {
     let zones = blocks(&out, "zone");
     assert!(zones[0].contains("(fill yes (thermal_gap") && !zones[0].contains("filled_polygon"), "{}", zones[0]);
 }
+
+/// F8: `ZONE::IsFilled` is a flag of its own: a zone whose file has its rings but says `(fill (thermal_gap ..))` without `yes` (`issue14559`'s 339) is written with the rings
+/// and without `yes`, as `format( const ZONE* )` writes it.
+#[test]
+fn a_zone_with_rings_the_file_says_is_unfilled_stays_unfilled() {
+    let text = board(
+        r#" (zone (net 1) (net_name "A") (layer "F.Cu") (uuid "77777777-7777-7777-7777-777777777777") (hatch edge 0.5)
+  (connect_pads (clearance 0.5)) (min_thickness 0.25) (filled_areas_thickness no)
+  (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+  (polygon (pts (xy 95 95) (xy 125 95) (xy 125 125) (xy 95 125)))
+  (filled_polygon (layer "F.Cu") (pts (xy 96 96) (xy 124 96) (xy 124 124) (xy 96 124))))"#,
+    );
+    let (mut design, model, notes) = import_kicad_pcb(&text).expect("parses");
+    design.assign_missing_ids();
+    let fills = eda_kicad::zone_fills::KicadFills::new("import".into(), String::new(), 0, eda_kicad::zone_fills::entries_of_imported_file(&design, notes.zone_fills.clone()));
+    let out = eda_kicad::export_kicad_pcb_with(&design, &model, &ExportMeta { date: "2026-01-01", title: "round2" }, Some(&fills)).expect("export");
+    let zones = blocks(&out, "zone");
+    assert!(zones[0].contains("(fill (thermal_gap") && zones[0].contains("(filled_polygon"), "{}", zones[0]);
+}
