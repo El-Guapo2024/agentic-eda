@@ -9,7 +9,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
-import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Nm, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, CmdDimension, CmdText, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Nm, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
@@ -233,6 +233,8 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
  * is just the CURRENT segment's points since the last via/start.
  */
 export type DrawState =
+  /** The board's Text tool (`DRAWING_TOOL::PlaceText`): the text the dialog made, following the cursor until the click that places it (round 5 B5-2). */
+  | { kind: "text"; text: CmdText; extra: { id: string; width_nm?: Nm; italic?: boolean; valign?: "top" | "center" | "bottom" } }
   /** `7` / `8` / `9`: a tuning pattern on its way to the board, or one of the board being edited through its edit points -- kicad-port/tuneTool.ts. */
   | TuneDrawState
   /** `S` (`SCH_DRAWING_TOOLS::DrawSheet`): the first corner of the sheet being sized; the second click ends it (`sizeSheet`). */

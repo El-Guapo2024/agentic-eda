@@ -12,7 +12,8 @@
 // measure tool (`MEASURE` in `pcb_viewer_tools.cpp`: `if( originSet ) clearRuler else PopTool`) do the same.
 
 /** The board drawing tools' in-progress kinds whose Escape cancels the item and keeps the tool. */
-const BOARD_DRAWING_KINDS = new Set(["shape", "zone", "dimension", "table", "measure"]);
+// A carried text (`PlaceText`: "if( text ) cleanup(); else PopTool") too.
+const BOARD_DRAWING_KINDS = new Set(["shape", "zone", "dimension", "table", "measure", "text"]);
 
 /** True when Escape should drop the item being drawn and leave the tool armed (rather than leave the tool): a board drawing tool with an item started. */
 export function escapeKeepsDrawingTool(tab: string, activeTool: string, drawState: { kind: string } | null | undefined): boolean {

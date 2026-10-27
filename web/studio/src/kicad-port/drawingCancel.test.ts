@@ -60,3 +60,8 @@ test("a graphic polygon emptied by Delete is still started: the next Delete ends
   assert.equal(drawZoneStarted("pcb", "draw_polygon", emptied), true);
   assert.equal(withoutLastCorner(emptied!), null, "nothing left to remove: cleanup()");
 });
+
+test("Escape with a text carried drops the text and keeps the Text tool; the next one leaves (PlaceText, round 5 B5-2)", () => {
+  assert.equal(escapeKeepsDrawingTool("pcb", "text", { kind: "text" }), true);
+  assert.equal(escapeKeepsDrawingTool("pcb", "text", null), false);
+});

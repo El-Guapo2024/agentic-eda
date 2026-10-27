@@ -1738,7 +1738,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::MoveShape { id, dx, dy } => format!("shape move {id} --dx {} --dy {}", mm(*dx), mm(*dy)),
         Cmd::EditShape { id, layer, stroke_width, filled } => format!("shape edit {id} --layer {layer} --width {} --filled {filled}", mm(*stroke_width)),
 
-        Cmd::AddText { text } => format!("text add --content {:?} --at {},{} --layer {}", text.content, mm(text.at.x), mm(text.at.y), text.layer),
+        Cmd::AddText { text } | Cmd::PlaceText { text, .. } => format!("text add --content {:?} --at {},{} --layer {}", text.content, mm(text.at.x), mm(text.at.y), text.layer),
         Cmd::EditText { id, content, layer, .. } => format!("text edit {id} --content {content:?} --layer {layer}"),
         Cmd::DeleteText { id } => format!("text delete {id}"),
         Cmd::MoveText { id, x, y } => format!("text move {id} --to {},{}", mm(*x), mm(*y)),
@@ -2093,7 +2093,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::EditTracksAndVias { .. } => "global-edit-tracks-and-vias",
         Cmd::AddZone { .. } | Cmd::DeleteZone { .. } | Cmd::EditZone { .. } | Cmd::SetZoneOutline { .. } => "zone",
         Cmd::AddShape { .. } | Cmd::DeleteShape { .. } | Cmd::MoveShape { .. } | Cmd::EditShape { .. } => "shape",
-        Cmd::AddText { .. } | Cmd::EditText { .. } | Cmd::DeleteText { .. } | Cmd::MoveText { .. } => "text",
+        Cmd::AddText { .. } | Cmd::PlaceText { .. } | Cmd::EditText { .. } | Cmd::DeleteText { .. } | Cmd::MoveText { .. } => "text",
         Cmd::EditTextAndGraphics { .. } => "global-edit-text-and-graphics",
         Cmd::RemoveUnusedPads { .. } => "remove-unused-pads",
         Cmd::SetViaLayers { .. } => "via-layers",

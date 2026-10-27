@@ -82,10 +82,14 @@ export function isBackLayer(layer: string): boolean {
   return ["B.Cu", "B.Adhes", "B.Paste", "B.SilkS", "B.Mask", "B.CrtYd", "B.Fab"].includes(layer);
 }
 
-/** What a text placed with the Text tool starts as on `layer` (`DRAWING_TOOL::PlaceText`): the layer class's size and thickness, mirrored on a back layer, aligned to the left. */
-export function newTextStyle(d: TextGraphicsDefaults | undefined, layer: string): { sizeNm: Nm; strokeWidthNm: Nm; mirror: boolean; justify: "left" } {
+/**
+ * What a text placed with the Text tool starts as on `layer` (`DRAWING_TOOL::PlaceText`'s `textAttrs`): the layer class's size (`GetTextSize`: the height, and the
+ * width when it differs) and thickness, its italic, mirrored on a back layer, aligned to the left and the bottom (`GR_TEXT_H_ALIGN_LEFT`, `GR_TEXT_V_ALIGN_BOTTOM`).
+ * (`m_KeepUpright` is a footprint text's: a board text has no parent footprint to be kept upright against.)
+ */
+export function newTextStyle(d: TextGraphicsDefaults | undefined, layer: string): { sizeNm: Nm; widthNm: Nm; strokeWidthNm: Nm; italic: boolean; mirror: boolean; justify: "left"; valign: "bottom" } {
   const s = textStyleOf(d, layer);
-  return { sizeNm: s.heightNm, strokeWidthNm: s.thicknessNm, mirror: isBackLayer(layer), justify: "left" };
+  return { sizeNm: s.heightNm, widthNm: s.widthNm, strokeWidthNm: s.thicknessNm, italic: s.italic, mirror: isBackLayer(layer), justify: "left", valign: "bottom" };
 }
 
 /**

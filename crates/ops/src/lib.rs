@@ -806,6 +806,13 @@ pub enum Cmd {
 
     /// Add free text.
     AddText { text: Text },
+    /// The board's Text tool's text (`DRAWING_TOOL::PlaceText`, "Draw Text"): [`Cmd::AddText`] with what `Text` has no field for -- the glyph width, italic and
+    /// the bottom justification `textAttrs` gives a new text (`DrawingsSection::text_extras`).
+    PlaceText {
+        text: Text,
+        #[serde(default)]
+        extra: Option<eda_model::board_text::TextExtra>,
+    },
     /// Replace a text's content and styling in place. Its id and position
     /// do not change (see `MoveText` for that).
     EditText { id: String, content: String, angle: Millideg, layer: String, size_nm: Nm, stroke_width: Nm, justify: TextJustify, mirror: bool },
@@ -2368,7 +2375,7 @@ impl Cmd {
             | Cmd::DeleteText { id }
             | Cmd::MoveText { id, .. } => vec![id.as_str()],
             Cmd::AddShape { shape } => vec![shape.layer()],
-            Cmd::AddText { text } => vec![text.content.as_str()],
+            Cmd::AddText { text } | Cmd::PlaceText { text, .. } => vec![text.content.as_str()],
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } | Cmd::PasteSpecial { .. } => vec!["paste"],
             Cmd::PlaceFootprint { footprint, .. } => vec![footprint.as_str()],
@@ -3011,6 +3018,7 @@ impl<'a> Board<'a> {
             Cmd::EditShape { id, layer, stroke_width, filled } => self.edit_shape(id, layer, *stroke_width, *filled),
 
             Cmd::AddText { text } => self.add_text(text.clone()),
+            Cmd::PlaceText { text, extra } => self.place_board_text(text.clone(), extra.clone()),
             Cmd::EditText { id, content, angle, layer, size_nm, stroke_width, justify, mirror } => {
                 self.edit_text(id, content.clone(), *angle, layer.clone(), *size_nm, *stroke_width, *justify, *mirror)
             }
@@ -4593,6 +4601,22 @@ impl<'a> Board<'a> {
         let dr = self.drawings_mut();
         dr.texts.push(text);
         dr.assign_missing_ids();
+        Ok(())
+    }
+
+    /// `Cmd::PlaceText`: the text, then its extras keyed by the id it was given (none when they say nothing a plain text would not).
+    fn place_board_text(&mut self, text: Text, extra: Option<eda_model::board_text::TextExtra>) -> Result<(), Vec<CheckResult>> {
+        let before: BTreeSet<String> = self.design.drawings.iter().flat_map(|d| d.texts.iter().map(|t| t.id.clone())).collect();
+        self.add_text(text)?;
+        let dr = self.drawings_mut();
+        let id = dr.texts.iter().find(|t| !before.contains(&t.id)).map(|t| t.id.clone());
+        if let (Some(id), Some(mut x)) = (id, extra) {
+            x.id = id.clone();
+            dr.text_extras.retain(|e| e.id != id);
+            if !x.is_default() {
+                dr.text_extras.push(x);
+            }
+        }
         Ok(())
     }
 

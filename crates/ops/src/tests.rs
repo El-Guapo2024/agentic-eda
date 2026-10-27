@@ -1222,6 +1222,25 @@ fn a_texts_imported_looks_follow_its_edits_and_leave_with_it() {
     assert!(b.design().drawings.as_ref().unwrap().text_extras.is_empty(), "the looks leave with the text");
 }
 
+/// Round 5's B5-2: the board's Text tool places its text with `PlaceText`'s `textAttrs` -- the class's glyph width (not the height), italic and the bottom
+/// justification -- kept as the text's extras under the id it was given.
+#[test]
+fn the_text_tool_places_its_text_with_the_class_width_italic_and_bottom_justification() {
+    use eda_model::board_text::TextExtra;
+    use eda_model::ir::TextVAlign;
+    let m = net_model();
+    let mut b = board(&m);
+    let text = Text { id: String::new(), content: "A".into(), at: Point { x: mm(10.0), y: mm(10.0) }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: TextJustify::Left, mirror: false };
+    b.apply(&Cmd::PlaceText { text: text.clone(), extra: Some(TextExtra { id: String::new(), width_nm: Some(mm(1.5)), italic: true, valign: TextVAlign::Bottom, ..Default::default() }) }).unwrap();
+    let dr = b.design().drawings.as_ref().unwrap();
+    let id = dr.texts[0].id.clone();
+    let x = dr.text_extra(&id).expect("the extras are kept under the new text's id");
+    assert_eq!((x.width_nm, x.italic, x.valign), (Some(mm(1.5)), true, TextVAlign::Bottom));
+    // Extras that say nothing are not kept.
+    b.apply(&Cmd::PlaceText { text: Text { content: "B".into(), ..text }, extra: Some(TextExtra::default()) }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().text_extras.len(), 1);
+}
+
 /// Set Text and Graphics to Layer Defaults, and a size or a stroke width in Edit Text and Graphics Properties, replace the glyph width and the automatic stroke width an
 /// imported text kept; a text that is not in the selection keeps both.
 #[test]

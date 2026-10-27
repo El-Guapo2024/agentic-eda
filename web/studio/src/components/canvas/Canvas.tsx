@@ -988,9 +988,22 @@ export function Canvas() {
         return;
       }
 
+      // `DRAWING_TOOL::PlaceText`: the first click clears the selection and opens the dialog on a new text with the layer's defaults; the text then follows the
+      // cursor (`drawState` "text", painted by painter.ts), and the next click places it ("Draw Text") and selects it. The tool stays armed (round 5 B5-2).
       if (state.activeTool === "text") {
+        const draw = state.drawState;
+        if (draw?.kind === "text") {
+          const before = new Set((board.drawings?.texts ?? []).map((t) => t.id));
+          dispatch({ type: "SET_DRAW_STATE", draw: null });
+          void api.cmd({ op: "place_text", text: { ...draw.text, at: { x: sx, y: sy } }, extra: draw.extra }).then(() => {
+            const made = (api.getState().board?.drawings?.texts ?? []).find((t) => !before.has(t.id));
+            if (made) dispatch({ type: "SET_SELECTION", refs: [made.id] }); // `selectItem, text`
+          });
+          return;
+        }
+        if (state.textDialog) return;
+        dispatch({ type: "SET_SELECTION", refs: [] }); // `ACTIONS::selectionClear`
         dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "add", at: [sx, sy] } });
-        dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
         return;
       }
     }

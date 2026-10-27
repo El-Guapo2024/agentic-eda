@@ -663,7 +663,10 @@
       check("the Text tool's dialog starts at the silkscreen class's size and thickness, not mirrored", size === 1_200_000 && thickness === 200_000 && mirrorBox()?.checked === false, `${size} ${thickness} ${mirrorBox()?.checked}`);
       await setText(document.querySelector(".dialog .kv-grid input"), "P9A tool text");
       const textsBefore = ((await state()).drawings?.texts ?? []).length;
-      await press(document.querySelector(".dialog"), "Add", 900);
+      await press(document.querySelector(".dialog"), "Add", 300);
+      // `PlaceText`: the text follows the cursor until the next click places it (round 5 B5-2).
+      await click(3, 22);
+      await sleep(600);
       const t = ((await state()).drawings?.texts ?? []).find((x) => x.content === "P9A tool text");
       if (((await state()).drawings?.texts ?? []).length > textsBefore) steps.push("pcb");
       check("the text is made with them, left aligned", t?.layer === "F.SilkS" && t.size === 1_200_000 && t.stroke_width === 200_000 && t.justify === "left" && t.mirror === false, JSON.stringify(t));

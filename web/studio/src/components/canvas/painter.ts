@@ -1204,6 +1204,16 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     return;
   }
 
+  // `PlaceText`: the text the dialog made follows the cursor (the snapped one) until a click places it.
+  if (draw.kind === "text") {
+    const at = opts.snappedCursor ?? (opts.cursorNm ? snapPoint(opts.cursorNm.x, opts.cursorNm.y, opts.gridNm) : null);
+    if (at) {
+      const t = draw.text;
+      drawStrokeText(ctx, t.content, at[0], at[1], { sizeNm: Math.max(t.size_nm, hairlineNm(view, 8)), thicknessNm: t.stroke_width, justify: t.justify, angleRad: (-t.angle / 1000) * (Math.PI / 180), mirror: t.mirror, color: layerColor(realLayerKey(t.layer)) });
+    }
+    return;
+  }
+
   if (draw.kind === "route") {
     const violationColor = "#ff3333";
     for (const run of draw.runs ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
