@@ -322,6 +322,9 @@ test("a track shows its end points; a via its type; a locked item its lock", () 
   const b = board();
   assert.deepEqual([rowOf(b, ["trk_a"], "Start X")!.value, rowOf(b, ["trk_a"], "Start Y")!.value, rowOf(b, ["trk_a"], "End X")!.value, rowOf(b, ["trk_a"], "End Y")!.value], [10_000, 40_000, 20_000, 50_000]);
   assert.equal(rowOf(b, ["via_a"], "Via Type")!.value, "Through");
+  // `GetViaType()`: a microvia says Micro whatever its span (r2-pcb-edit A8)
+  b.routing!.vias.find((v) => v.id === "via_a")!.type = "micro";
+  assert.equal(rowOf(b, ["via_a"], "Via Type")!.value, "Micro");
   assert.equal(rowOf(b, ["trk_b"], "Locked")!.value, true);
   assert.equal(rowOf(b, ["trk_a"], "Locked")!.value, false);
 });

@@ -947,10 +947,14 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       name: "Via Type",
       kind: "string",
       get: (i, c) => {
+        const v = i.via!;
+        // `GetViaType()` when the via says it (`ENUM_MAP<VIATYPE>`: Through, Blind, Buried, Micro), else worked out from the span
+        if (v.type === "micro") return "Micro";
+        if (v.type === "blind") return "Blind";
+        if (v.type === "buried") return "Buried";
         const first = c.copperLayers[0];
         const last = c.copperLayers[c.copperLayers.length - 1];
         const outer = (l: string): boolean => l === first || l === last;
-        const v = i.via!;
         if ((v.from === first && v.to === last) || (v.from === last && v.to === first)) return "Through";
         return outer(v.from) || outer(v.to) ? "Blind" : "Buried";
       },
