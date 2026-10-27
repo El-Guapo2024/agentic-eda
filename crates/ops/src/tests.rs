@@ -1202,7 +1202,8 @@ fn the_global_text_edit_takes_the_imported_glyph_width_and_automatic_stroke_with
     b.apply(&edit(&ids[1..2], false, None, Some(mm(0.2)))).unwrap();
     assert_eq!(looks(&b, &ids[1]), Some((Some(mm(0.8)), false, true)), "a stroke width: not automatic, the glyph width stays");
     b.apply(&edit(&ids[2..], true, None, None)).unwrap();
-    assert_eq!(looks(&b, &ids[2]), Some((None, false, true)), "layer defaults: both, and what is not size or stroke stays");
+    // `PCB_TEXT::StyleFromSettings` sets italic from the class too (round 4 B-3): the class is upright, so nothing is left for an extra to say
+    assert_eq!(looks(&b, &ids[2]), None, "layer defaults: the size, the stroke and italic are the class's");
     assert_eq!(looks(&b, &ids[1]), Some((Some(mm(0.8)), false, true)), "a text outside the selection is left alone");
 }
 
