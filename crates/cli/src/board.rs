@@ -561,8 +561,12 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
 pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, naming: &eda_engine::nets::Naming) -> Vec<eda_engine::nets::TracedNet> {
     // the sheets of the hierarchy: a screen no sheet shows any more (its sheet was deleted) is not part of the schematic, its pins are on no net
     let entries = eda_model::sheet_list::walk(design);
-    // what a power symbol's `${..}` read: the sheets, their pages and title blocks (only when some power symbol's value has a variable)
-    let has_vars = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.power_symbols.iter()).any(|p| eda_model::text_vars::has_text_vars(&p.net));
+    // what a power symbol's, a label's or a sheet pin's `${..}` read: the sheets, their pages and title blocks (only when some text has a variable)
+    let has_vars = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).any(|s| {
+        s.power_symbols.iter().any(|p| eda_model::text_vars::has_text_vars(&p.net))
+            || s.labels.iter().any(|l| eda_model::text_vars::has_text_vars(&l.net))
+            || s.sheets.iter().flat_map(|sh| sh.pins.iter()).any(|p| eda_model::text_vars::has_text_vars(&p.name))
+    });
     let hierarchy = has_vars.then(|| PowerValueView::of(design));
     let design_view = hierarchy.as_ref();
     let Some(mut root) = design.schematic.take() else { return Vec::new() };
@@ -647,7 +651,8 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             }
         }
         let resolve = |path: &[String], raw: &str| power_value_under(design_view, path, raw);
-        let naming = eda_engine::nets::Naming { power_pins: naming.power_pins.or(Some(&power_pins)), power_value: naming.power_value.or(Some(&resolve)), ..*naming };
+        // a label's and a sheet pin's text as a power symbol's Value: `GetShownText( &path, FOR_NETNAME )` of the placement (r2 A-N10)
+        let naming = eda_engine::nets::Naming { power_pins: naming.power_pins.or(Some(&power_pins)), power_value: naming.power_value.or(Some(&resolve)), label_text: naming.label_text.or(Some(&resolve)), ..*naming };
         eda_engine::nets::trace_nets_with(&mut screens, &naming)
     };
     design.schematic = Some(root);

@@ -249,6 +249,10 @@ pub struct Naming<'a> {
     /// A power symbol's Value with its text variables resolved for the placement it is traced in (`SCH_SYMBOL::GetValue( &sheet, FOR_NETNAME )`:
     /// `${#}` is that sheet path's page), given the placement's [`ScreenIn::path`] and the stored text. Without it the stored text names the net.
     pub power_value: Option<&'a dyn Fn(&[String], &str) -> String>,
+    /// A label's or sheet pin's text with its text variables resolved for the placement it is traced in (KiCad 25ec2335 `conn_facts.cpp`:
+    /// `label->GetShownText( &path, FOR_NETNAME )`, a sheet pin's with its sheet pushed on the path), given the path and the stored text: a shared
+    /// screen's `${SHEETNAME}_EN` is `A_EN` on one placement and `B_EN` on the other. Without it the stored text names the net.
+    pub label_text: Option<&'a dyn Fn(&[String], &str) -> String>,
 }
 
 impl Naming<'_> {
@@ -388,21 +392,23 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 groups[at[p]].local_names.push(name.clone());
             }
         }
+        let shown = |path: &[String], text: &str| -> String { naming.label_text.map(|f| f(path, text)).unwrap_or_else(|| text.to_string()) };
         for (l, &b) in sch.labels.iter().zip(&label_bus) {
             let g = &mut groups[if b { bus_at[&l.at] } else { at[&l.at] }];
+            let name = shown(&screen.path, &l.net);
             let (prio, bucket) = match &l.kind {
                 LabelKind::Local => (LOCAL_LABEL, 0),
                 LabelKind::Hierarchical { .. } => (HIER_LABEL, 1),
                 LabelKind::Global { .. } => (GLOBAL, 2),
             };
-            g.drivers.push(Driver::new(prio, l.net.clone(), depth[si], &spath[si]));
+            g.drivers.push(Driver::new(prio, name.clone(), depth[si], &spath[si]));
             // `BuildIslandRecord`'s name edges: every label kind is a name on its sheet (`SCOPE::SHEET`), a global one across the schematic too
             // (`SCOPE::GLOBAL`), a hierarchical one at its sheet's port (`SCOPE::PORT`)
-            g.local_names.push(l.net.clone());
+            g.local_names.push(name.clone());
             match bucket {
                 0 => {}
-                1 => g.hier_labels.push(l.net.clone()),
-                _ => g.global_names.push(l.net.clone()),
+                1 => g.hier_labels.push(name),
+                _ => g.global_names.push(name),
             }
         }
         for ps in &sch.power_symbols {
@@ -419,10 +425,12 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             g.global_names.push(name);
         }
         for (sh, flags) in sch.sheets.iter().zip(&pin_bus) {
+            let child_path: Vec<String> = screen.path.iter().cloned().chain(std::iter::once(sh.id.clone())).collect();
             for (p, &b) in sh.pins.iter().zip(flags) {
                 let g = &mut groups[if b { bus_at[&p.at] } else { at[&p.at] }];
-                g.drivers.push(Driver { output: p.shape == eda_model::ir::LabelShape::Output, ..Driver::new(SHEET_PIN, p.name.clone(), depth[si], &spath[si]) });
-                g.sheet_pins.push(p.name.clone());
+                let name = shown(&child_path, &p.name);
+                g.drivers.push(Driver { output: p.shape == eda_model::ir::LabelShape::Output, ..Driver::new(SHEET_PIN, name.clone(), depth[si], &spath[si]) });
+                g.sheet_pins.push(name);
             }
         }
         let mut per_wire: Vec<Option<usize>> = Vec::with_capacity(sch.wires.len());
@@ -474,12 +482,14 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
     for (si, screen) in screens.iter().enumerate() {
         for sh in &screen.sch.sheets {
             let Some(ci) = child_of(screens, si, sh) else { continue };
+            let child_path: Vec<String> = screen.path.iter().cloned().chain(std::iter::once(sh.id.clone())).collect();
             for p in &sh.pins {
+                let name = naming.label_text.map(|f| f(&child_path, &p.name)).unwrap_or_else(|| p.name.clone());
                 for (bus, here) in [(false, &group_at[si]), (true, &bus_group_at[si])] {
                     let Some(&gp) = here.get(&p.at) else { continue };
                     // a pin on the bus layer is on the bus port, one on the wire layer on the net port
-                    if groups[gp].bus == bus && groups[gp].sheet_pins.contains(&p.name) {
-                        ports.entry((ci, bus, p.name.clone())).or_default().push(gp);
+                    if groups[gp].bus == bus && groups[gp].sheet_pins.contains(&name) {
+                        ports.entry((ci, bus, name.clone())).or_default().push(gp);
                     }
                 }
             }
@@ -1399,6 +1409,31 @@ mod tests {
         let nets = trace_nets_with(&mut screens, &Naming { power_value: Some(&page), ..Naming::default() });
         let named: Vec<(String, Vec<String>)> = nets.iter().map(|n| (n.name.clone(), n.pins.clone())).collect();
         assert_eq!(named, vec![("P2".to_string(), vec!["R1.1".to_string()]), ("P3".to_string(), vec!["R2.1".to_string()])]);
+    }
+
+    /// r2 A-N10 (KiCad 25ec2335 `conn_facts.cpp`: `label->GetShownText( &path, FOR_NETNAME )` per placement): a shared screen's global label
+    /// `${SHEETNAME}_EN` is `A_EN` on placement A and `B_EN` on B, two nets, where the stored text made one net that shorted both (kicad-cli t17).
+    #[test]
+    fn a_labels_sheet_variable_is_resolved_per_placement() {
+        let mut root = section();
+        for (id, y) in [("A", 0), ("B", 2000)] {
+            root.sheets.push(SheetInstance { id: id.into(), name: id.into(), file: "sub.kicad_sch".into(), at: p(0, y), size: (Nm::new(1000), Nm::new(1000)), pins: vec![], page: String::new() });
+        }
+        let sub = || {
+            let mut c = section();
+            c.labels.push(label("${SHEETNAME}_EN", p(0, 0), LabelKind::Global { shape: LabelShape::Input }));
+            c
+        };
+        let (mut a, mut b) = (sub(), sub());
+        let mut screens = vec![
+            ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: BTreeMap::new() },
+            ScreenIn { path: vec!["A".into()], sch: &mut a, file: "sub.kicad_sch".into(), pins: pins(&[("R3.1", p(0, 0))]) },
+            ScreenIn { path: vec!["B".into()], sch: &mut b, file: "sub.kicad_sch".into(), pins: pins(&[("R4.1", p(0, 0))]) },
+        ];
+        let sheet_name = |path: &[String], raw: &str| raw.replace("${SHEETNAME}", path.last().map(String::as_str).unwrap_or("Root"));
+        let nets = trace_nets_with(&mut screens, &Naming { label_text: Some(&sheet_name), ..Naming::default() });
+        let named: Vec<(String, Vec<String>)> = nets.iter().map(|n| (n.name.clone(), n.pins.clone())).collect();
+        assert_eq!(named, vec![("A_EN".to_string(), vec!["R3.1".to_string()]), ("B_EN".to_string(), vec!["R4.1".to_string()])]);
     }
 
     /// "REF.PIN" -> point for every symbol on `sch`, from the engine's own geometry.

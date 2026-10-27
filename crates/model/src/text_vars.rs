@@ -17,8 +17,9 @@
 //!   eeschema/sch_symbol.cpp      `SCH_SYMBOL::ResolveTextVar` (a field by name, FOOTPRINT_*, UNIT, SYMBOL_*, DNP, EXCLUDE_FROM_*, NET_NAME(n) ..., then the sheet)
 //!   eeschema/sch_field.cpp, sch_text.cpp, sch_item.cpp   `GetShownText`, `ResolveText`: which resolvers an item's text goes through
 //!
-//! Not ported: the `@{..}` math expressions (`common/text_eval`: an expression is left as written once the variables in it are expanded, which is what
-//! `ExpandTextVars` itself does with one), `VCSHASH` / `VCSSHORTHASH` (the project's git hash: left as written), simulation `OP` values and design variants.
+//! The `@{..}` math expressions (`common/text_eval`) are evaluated for their arithmetic after each pass, as 25ec2335's `ResolveTextVars` does
+//! ([`evaluate_math`]); their functions, strings and units are not ported.
+//! Not ported: `VCSHASH` / `VCSSHORTHASH` (the project's git hash: left as written), simulation `OP` values and design variants.
 
 use std::collections::BTreeMap;
 
@@ -217,7 +218,8 @@ pub fn expand_text_vars(source: &str, resolver: Option<&Resolver>, flags: u32, d
     out
 }
 
-/// `ResolveTextVars`: expand again while a variable is left, to `MAX_DEPTH` passes counted in `depth` (which the nested field lookups share).
+/// `ResolveTextVars`: expand again while a variable is left, to `MAX_DEPTH` passes counted in `depth` (which the nested field lookups share), each pass
+/// followed by the arithmetic of its `@{..}` expressions (KiCad 25ec2335: `text = evaluator.Evaluate( text )`, [`evaluate_math`]).
 pub fn resolve_text_vars(source: &str, resolver: &Resolver, depth: &mut usize) -> String {
     let mut text = source.to_string();
     while has_text_vars(&text) && {
@@ -225,8 +227,189 @@ pub fn resolve_text_vars(source: &str, resolver: &Resolver, depth: &mut usize) -
         *depth <= MAX_DEPTH
     } {
         text = expand_text_vars(&text, Some(resolver), 0, 0);
+        if text.contains("@{") {
+            text = evaluate_math(&text);
+        }
     }
     text
+}
+
+/// `EXPRESSION_EVALUATOR::Evaluate` (KiCad 25ec2335 `common/text_eval`) for its arithmetic: each `@{..}` whose expression is numbers, `+ - * / % ^`, the six
+/// comparisons, signs and parentheses is replaced by its value, written as `VALUE_UTILS::ToString` writes a number (a whole number without a decimal
+/// point, else the shortest form). `text_eval.lemon`'s precedence: comparisons, then `+ -`, then `* / %`, then a sign, then `^` (right to left).
+/// **Differs**: the functions, strings, units and variables of the grammar are not ported, and an expression this cannot read (or a division by zero) is
+/// left as written, where KiCad reports an error.
+pub fn evaluate_math(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    // (a literal `\@{..}` is an escape marker by now, `<<<ESC_AT:..}`, which holds no `@{`)
+    while let Some(at) = rest.find("@{") {
+        out.push_str(&rest[..at]);
+        let body = &rest[at + 2..];
+        let mut depth = 1;
+        let mut end = None;
+        for (i, c) in body.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(end) = end else {
+            out.push_str(&rest[at..]);
+            return out;
+        };
+        match MathParser::new(&body[..end]).parse() {
+            Some(v) => out.push_str(&format_number(v)),
+            None => out.push_str(&rest[at..at + 2 + end + 1]),
+        }
+        rest = &body[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `VALUE_UTILS::ToString` of a number: `{:.0f}` when it is within 1e-10 of a whole number (below 1e15), else `fmt`'s shortest form.
+fn format_number(v: f64) -> String {
+    let rounded = v.round();
+    if (v - rounded).abs() < 1e-10 && rounded.abs() < 1e15 {
+        format!("{rounded:.0}")
+    } else {
+        format!("{v}")
+    }
+}
+
+/// A recursive descent reader of the arithmetic of `text_eval.lemon`.
+struct MathParser<'a> {
+    s: &'a [u8],
+    i: usize,
+}
+
+impl<'a> MathParser<'a> {
+    fn new(s: &'a str) -> Self {
+        MathParser { s: s.as_bytes(), i: 0 }
+    }
+    fn skip(&mut self) {
+        while self.i < self.s.len() && self.s[self.i].is_ascii_whitespace() {
+            self.i += 1;
+        }
+    }
+    fn eat(&mut self, tok: &str) -> bool {
+        self.skip();
+        if self.s[self.i..].starts_with(tok.as_bytes()) {
+            self.i += tok.len();
+            true
+        } else {
+            false
+        }
+    }
+    fn parse(mut self) -> Option<f64> {
+        let v = self.comparison()?;
+        self.skip();
+        (self.i == self.s.len() && v.is_finite()).then_some(v)
+    }
+    fn comparison(&mut self) -> Option<f64> {
+        let mut l = self.sum()?;
+        loop {
+            let op = ["<=", ">=", "==", "!=", "<", ">"].into_iter().find(|t| self.eat(t));
+            let Some(op) = op else { return Some(l) };
+            let r = self.sum()?;
+            let b = match op {
+                "<=" => l <= r,
+                ">=" => l >= r,
+                "==" => l == r,
+                "!=" => l != r,
+                "<" => l < r,
+                _ => l > r,
+            };
+            l = if b { 1.0 } else { 0.0 };
+        }
+    }
+    fn sum(&mut self) -> Option<f64> {
+        let mut l = self.term()?;
+        loop {
+            if self.eat("+") {
+                l += self.term()?;
+            } else if self.eat("-") {
+                l -= self.term()?;
+            } else {
+                return Some(l);
+            }
+        }
+    }
+    fn term(&mut self) -> Option<f64> {
+        let mut l = self.unary()?;
+        loop {
+            if self.eat("*") {
+                l *= self.unary()?;
+            } else if self.eat("/") {
+                let r = self.unary()?;
+                if r == 0.0 {
+                    return None;
+                }
+                l /= r;
+            } else if self.eat("%") {
+                let r = self.unary()?;
+                if r == 0.0 {
+                    return None;
+                }
+                l %= r;
+            } else {
+                return Some(l);
+            }
+        }
+    }
+    fn unary(&mut self) -> Option<f64> {
+        if self.eat("-") {
+            return Some(-self.unary()?);
+        }
+        if self.eat("+") {
+            return self.unary();
+        }
+        self.power()
+    }
+    fn power(&mut self) -> Option<f64> {
+        let base = self.atom()?;
+        if self.eat("^") {
+            // right to left, and a sign binds below it: `2^-1`
+            let exp = self.unary()?;
+            return Some(base.powf(exp));
+        }
+        Some(base)
+    }
+    fn atom(&mut self) -> Option<f64> {
+        if self.eat("(") {
+            let v = self.comparison()?;
+            return self.eat(")").then_some(v);
+        }
+        self.skip();
+        let start = self.i;
+        while self.i < self.s.len() && (self.s[self.i].is_ascii_digit() || self.s[self.i] == b'.') {
+            self.i += 1;
+        }
+        // an exponent, `1e3`
+        if self.i > start && self.i < self.s.len() && (self.s[self.i] == b'e' || self.s[self.i] == b'E') {
+            let save = self.i;
+            self.i += 1;
+            if self.i < self.s.len() && (self.s[self.i] == b'+' || self.s[self.i] == b'-') {
+                self.i += 1;
+            }
+            let digits = self.i;
+            while self.i < self.s.len() && self.s[self.i].is_ascii_digit() {
+                self.i += 1;
+            }
+            if self.i == digits {
+                self.i = save;
+            }
+        }
+        std::str::from_utf8(&self.s[start..self.i]).ok().filter(|t| !t.is_empty()).and_then(|t| t.parse().ok())
+    }
 }
 
 /// What `GetShownText` makes of a stored text: its escapes undone, its variables resolved, and the escape markers of a literal `\${..}` turned back
@@ -768,6 +951,17 @@ mod tests {
         assert_eq!(expand("${NOPE", &p), "${NOPE}", "and one that is not known is closed with the brace it lacks");
         assert_eq!(expand("${}", &p), "", "an empty reference is dropped");
         assert_eq!(expand("@{${A}+1}", &p), "@{x+1}", "an expression keeps its text, with the variables in it expanded");
+    }
+
+    /// `EXPRESSION_EVALUATOR::Evaluate`'s arithmetic, as KiCad 25ec2335's `ResolveTextVars` runs it after each pass: QA `issue23962`'s label `Out@{(${#}-2)*8+0}`
+    /// on page 3 is `Out8`, `issue24044`'s `Ch@{(${#}-2)*2+1}` on page 2 is `Ch1`.
+    #[test]
+    fn a_math_expression_is_evaluated_once_its_variables_are_expanded() {
+        let p = project(&[("N", "3"), ("A", "x")]);
+        assert_eq!(expand("Out@{(${N}-2)*8+0}", &p), "Out8");
+        assert_eq!(expand("@{7/2} @{2^3^2} @{-2^2} @{7%4} @{1+2*3} @{(1+2)*3} @{2>1} @{0.1+0.2}", &p), "3.5 512 -4 3 7 9 1 0.30000000000000004");
+        assert_eq!(expand("@{1/0}", &p), "@{1/0}", "an error is left as written");
+        assert_eq!(evaluate_math("a @{2*3} b @{x} c"), "a 6 b @{x} c");
     }
 
     #[test]

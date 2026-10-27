@@ -1363,6 +1363,9 @@ const QA_TRACED_ALIKE: &[&str] = &[
     "issue17771/issue1771.kicad_sch",
     // a hidden power input that is not on the edge its angle names (`4C4001`'s pins 10 and 20): it used to join GND and +5V
     "netlists/video/video.kicad_sch",
+    // a label's `${#}` in a math expression, per placement (r2 A-N10)
+    "issue23962/issue23962.kicad_sch",
+    "issue24044/issue24044.kicad_sch",
     // a pin name another unit repeats (r2 A-N6)
     "netlists/complex_hierarchy/complex_hierarchy.kicad_sch",
     "legacy_hierarchy/legacy_hierarchy.kicad_sch",
@@ -1375,8 +1378,6 @@ const QA_TRACED_ALIKE: &[&str] = &[
 /// The ones the studio still reads otherwise, each with why (PARITY-sch.md section 38, "Review"): printed, not asserted.
 const QA_TRACED_OTHERWISE: &[(&str, &str)] = &[
     ("netlists/complex_hierarchy_shared/complex_hierarchy.kicad_sch", "r2 B-H2: its sheets are in a subfolder"),
-    ("issue23962/issue23962.kicad_sch", "r2 A-N10: a label's text variables are not resolved"),
-    ("issue24044/issue24044.kicad_sch", "r2 A-N10"),
 ];
 
 #[test]
