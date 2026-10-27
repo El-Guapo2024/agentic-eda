@@ -1,6 +1,6 @@
 // Paste Special on the Schematic tab -- `DIALOG_PASTE_SPECIAL` (common/dialogs/dialog_paste_special.cpp at 8303b2ad): a "Reference Designators" box with
-// KiCad's three choices, then the paste itself (actions/schClipboardActions.ts `startPaste`) with the one picked. The dialog's "Clear net assignments"
-// box belongs to the board editor; the schematic's Paste does not read it, so it is not offered.
+// KiCad's three choices and the "Clear net assignments" box, then the paste itself (actions/schClipboardActions.ts `startPaste`) with the one picked. Only
+// pcbnew hides the box (`pcb_control.cpp`: `dlg.HideClearNets()`); eeschema shows it and its Paste does not read it, and neither does this one (r2 D-C5).
 import { useEffect, useState } from "react";
 import { startPaste } from "../actions/schClipboardActions";
 import { PASTE_SPECIAL_OPTIONS, type SchPasteMode } from "../kicad-port/schClipboard";
@@ -14,9 +14,13 @@ export function SchPasteSpecialDialog() {
   const dispatch = useStudioDispatch();
   // `PASTE_MODE pasteMode = annotateAutomatic ? UNIQUE_ANNOTATIONS : REMOVE_ANNOTATIONS`: the box opens on the mode a plain Paste uses.
   const [mode, setMode] = useState<SchPasteMode>("unique");
+  const [clearNets, setClearNets] = useState(false);
 
   useEffect(() => {
-    if (open) setMode("unique");
+    if (open) {
+      setMode("unique");
+      setClearNets(false);
+    }
   }, [open]);
 
   if (!open) return null;
@@ -36,6 +40,9 @@ export function SchPasteSpecialDialog() {
           </label>
         ))}
       </fieldset>
+      <label title="Remove the net information from all connected items before pasting" style={{ display: "block", margin: "8px 0 0" }}>
+        <input type="checkbox" checked={clearNets} onChange={(e) => setClearNets(e.target.checked)} /> Clear net assignments
+      </label>
     </SchDialogShell>
   );
 }

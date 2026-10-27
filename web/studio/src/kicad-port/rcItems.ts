@@ -58,13 +58,17 @@ export function isListed(kind: RcKind, f: RcFilter): boolean {
   return kind === "error" ? f.errors : kind === "warning" ? f.warnings : f.exclusions;
 }
 
-/** The indexes of the entries the list shows, in report order. */
+/** The indexes of the entries the list shows: every error, then the warnings, then the exclusions, each kind in report order (r2 D-E3:
+ *  `SetSeverities`' "Sort markers so that errors appear before warnings", `std::stable_sort( .., a->GetSeverity() > b->GetSeverity() )`, in
+ *  erc_settings.cpp and drc_item.cpp alike: ERROR 0x20 > WARNING 0x10 > EXCLUSION 0x04). Next / Previous Marker step in this order too. */
 export function listedIndexes<T extends { severity: string; excluded?: boolean }>(entries: readonly T[], f: RcFilter): number[] {
-  const out: number[] = [];
+  const rank = (k: RcKind) => (k === "error" ? 0 : k === "warning" ? 1 : 2);
+  const out: Array<[number, number]> = [];
   entries.forEach((e, i) => {
-    if (isListed(rcKind(e), f)) out.push(i);
+    const kind = rcKind(e);
+    if (isListed(kind, f)) out.push([rank(kind), i]);
   });
-  return out;
+  return out.sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, i]) => i);
 }
 
 export interface RcCounts {

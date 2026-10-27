@@ -199,7 +199,8 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
     json!({
         "ok": true,
         "kind": kind,
-        "long_text": kind == "text" && text.chars().count() > MAX_PASTED_TEXT,
+        // `content.size()` of the UTF-8 `std::string`: bytes, not characters (r2 D-C6)
+        "long_text": kind == "text" && text.len() > MAX_PASTED_TEXT,
         "fragment": serde_json::to_value(&fragment).unwrap_or(Value::Null),
         "anchor": anchor.map(|p| json!([p.x, p.y])),
         "preview": preview,

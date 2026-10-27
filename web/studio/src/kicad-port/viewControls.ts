@@ -208,17 +208,21 @@ export interface AutoPanState {
  * top-left (0,0), same coordinate space as WheelInput.x/y.
  */
 export function computeAutoPanDirection(cursorPx: { x: number; y: number }, screenSize: ScreenSize, margin = DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin): { x: number; y: number } {
-  const borderStart = Math.max(Math.min(margin * screenSize.width, margin * screenSize.height), 2);
-  const borderEndX = screenSize.width - borderStart;
-  const borderEndY = screenSize.height - borderStart;
+  // r2 D-V2: `int borderStart = std::min( m_settings.m_autoPanMargin * m_view->GetScreenPixelSize().x, ... )` truncates, and the pointer `p` is a
+  // `VECTOR2I`: the border and the direction are whole pixels
+  const borderStart = Math.max(Math.trunc(Math.min(margin * screenSize.width, margin * screenSize.height)), 2);
+  const borderEndX = Math.trunc(screenSize.width) - borderStart;
+  const borderEndY = Math.trunc(screenSize.height) - borderStart;
+  const px = Math.trunc(cursorPx.x);
+  const py = Math.trunc(cursorPx.y);
 
   let x = 0;
   let y = 0;
-  if (cursorPx.x < borderStart) x = -(borderStart - cursorPx.x);
-  else if (cursorPx.x > borderEndX) x = cursorPx.x - borderEndX;
+  if (px < borderStart) x = -(borderStart - px);
+  else if (px > borderEndX) x = px - borderEndX;
 
-  if (cursorPx.y < borderStart) y = -(borderStart - cursorPx.y);
-  else if (cursorPx.y > borderEndY) y = cursorPx.y - borderEndY;
+  if (py < borderStart) y = -(borderStart - py);
+  else if (py > borderEndY) y = py - borderEndY;
 
   return { x, y };
 }

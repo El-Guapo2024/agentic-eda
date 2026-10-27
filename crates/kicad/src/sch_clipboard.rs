@@ -424,7 +424,8 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
     let _ = writeln!(out, "\t\t(unit 1)");
     let _ = writeln!(out, "\t\t(body_style 1)");
     let _ = writeln!(out, "\t\t(exclude_from_sim no)");
-    let _ = writeln!(out, "\t\t(in_bom no)");
+    // KiCad's power library symbols are `(in_bom yes)` (r2 D-C7); a power symbol is kept out of the BOM by its `#` reference
+    let _ = writeln!(out, "\t\t(in_bom yes)");
     let _ = writeln!(out, "\t\t(on_board yes)");
     let _ = writeln!(out, "\t\t(in_pos_files yes)");
     let _ = writeln!(out, "\t\t(dnp no)");

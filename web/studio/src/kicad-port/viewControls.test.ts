@@ -154,3 +154,9 @@ test("dragZoomView: dragging up zooms in and down zooms out by exp( d.y * speed 
   assert.ok(dragZoomView(view, anchor, -20, 10).scale > up.scale);
   assert.equal(dragZoomView(view, anchor, 0, 5).scale, 0.002);
 });
+
+test("r2 D-V2: the auto-pan border and direction are whole pixels (int borderStart, VECTOR2I p)", () => {
+  // 733 * 0.02 = 14.66 -> 14
+  assert.deepEqual(computeAutoPanDirection({ x: 14.5, y: 300 }, { width: 1000, height: 733 }), { x: 0, y: 0 });
+  assert.deepEqual(computeAutoPanDirection({ x: 10.9, y: 300 }, { width: 1000, height: 733 }), { x: -4, y: 0 });
+});
