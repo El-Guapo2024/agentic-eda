@@ -1575,7 +1575,7 @@ mod tests {
     /// further along it is one segment per net from the start to the end, not two meeting at the fix point.
     #[test]
     fn a_pair_that_goes_straight_on_across_a_fix_is_one_segment_per_line() {
-        let (mut design, mut model) = two_pad_board();
+        let (design, mut model) = two_pad_board();
         model.nets = vec![IrNet { name: "USB_DP".into(), pins: vec!["R1.1".into(), "R2.1".into()] }, IrNet { name: "USB_DN".into(), pins: vec!["R1.2".into(), "R2.2".into()] }];
         let mut router = Router::new(&design, &model);
         router.settings.mode = crate::settings::Mode::Walkaround;
