@@ -1539,6 +1539,7 @@ fn pcb_ext(kind: &str) -> &'static str {
         "gencad" => "cad",
         "idf" => "emn",
         "stats" | "stackup" => "txt",
+        "bom" => "csv",
         _ => "out",
     }
 }

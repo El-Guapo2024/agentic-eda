@@ -220,8 +220,12 @@ pub(crate) fn odb_args(req: &Value) -> Vec<String> {
 }
 
 /// `BOARD_EDITOR_CONTROL::GenBOMFileFromBoard`'s file -- `"Id";"Designator";"Footprint";"Quantity";"Designation";
-/// "Supplier and ref"`, one row per value/footprint pair, designators joined with ", " -- as `kicad-cli sch export
-/// bom` writes it (the BOM is kicad-cli's; the row number is its ITEM_NUMBER, the last column a field nothing fills).
+/// "Supplier and ref"`, one row per value/footprint pair, designators joined with ", " -- as kicad-cli's BOM writes it (the row number is
+/// its ITEM_NUMBER, the last column a field nothing fills). Run on the board (`kicad-cli pcb export bom`, `PCBNEW_JOBS_HANDLER::JobExportBom`
+/// over `board->Footprints()`), so a footprint that is on the board only (a mounting hole, a logo) is in it as in KiCad's.
+///
+/// Differs (kicad-cli's writer, not `GenBOMFileFromBoard`'s hand-made one): every value is quoted, the Footprint is the whole library id
+/// (KiCad's is `GetLibItemName()`), and the rows have no trailing `;;;`.
 pub(crate) fn pcb_bom_args() -> Vec<String> {
     [
         "--fields",
@@ -321,8 +325,19 @@ pub fn odb(dir: &Path, body: &[u8]) -> Value {
 }
 
 /// `POST /api/fab/pcb_bom`: no options -- see [`pcb_bom_args`].
+///
+/// A board with no footprint is refused in `GenBOMFileFromBoard`'s words. A kicad-cli with no `pcb export bom` (older than the 10.99
+/// nightly) makes it from the derived schematic instead, as before: the board-only footprints are then missing.
 pub fn pcb_bom(dir: &Path) -> Value {
-    fab_api::reply(kicad_engine::export_sch(dir, "bom", &pcb_bom_args()))
+    match board::load(dir) {
+        Ok((_, design, _)) if design.placement.as_ref().is_none_or(|p| p.footprints.is_empty()) => return fab_api::err("Cannot export BOM: there are no footprints on the PCB."),
+        Err(e) => return fab_api::err(board::reasons(&e)),
+        Ok(_) => {}
+    }
+    if kicad_engine::missing_pcb_export("bom").is_some() {
+        return fab_api::reply(kicad_engine::export_sch(dir, "bom", &pcb_bom_args()));
+    }
+    fab_api::reply(kicad_engine::export(dir, "bom", &pcb_bom_args()))
 }
 
 #[cfg(test)]
