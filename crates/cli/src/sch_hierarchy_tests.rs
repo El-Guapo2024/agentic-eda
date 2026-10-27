@@ -1732,10 +1732,10 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
         }
     }
     println!("QA schematics written back: {same} judged alike, {differ} differ, {failed} failed");
-    // the ratchet: 87 of KiCad's 130 QA roots on 2026-10-23 (nightly 20261021); before the review of that day, 53 (turned and mirrored symbols were traced
-    // and written otherwise than drawn, and one file hung Import Sheet)
+    // the ratchet: 100 of KiCad's 130 QA roots on 2026-10-28 (r4: `lib_name` resolution and the pin facts); 87 on 2026-10-23 (nightly 20261021); before
+    // the review of that day, 53 (turned and mirrored symbols were traced and written otherwise than drawn, and one file hung Import Sheet)
     if only.is_none() {
-        assert!(same >= 87, "{same} judged alike, fewer than the 87 of 2026-10-23");
+        assert!(same >= 100, "{same} judged alike, fewer than the 100 of 2026-10-28");
     }
 }
 
