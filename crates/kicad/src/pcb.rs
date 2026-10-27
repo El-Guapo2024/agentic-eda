@@ -328,7 +328,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             // The rings kicad-cli stored for the zone on each of its layers, while the zone is the one it filled.
             // None for a zone kicad-cli has no current fill of: it is written unfilled (`ZONE::IsFilled`), as is one whose file said so of its rings (`ZoneEntry::unfilled`).
             let layer_fills: Vec<(String, Vec<crate::zone_fills::KicadRing>)> = match fills.filter(|k| k.current(z).is_some()) {
-                Some(k) => z.layer_set().into_iter().map(|layer| (layer.to_string(), k.rings(z, layer).to_vec())).collect(),
+                Some(k) => z.layer_set().into_iter().map(|layer| (layer.to_string(), k.rings(z, layer))).collect(),
                 None => Vec::new(),
             };
             let filled = fills.and_then(|k| k.current(z)).is_some_and(|e| !e.unfilled);
@@ -2492,7 +2492,7 @@ mod tests {
     fn kicad_fills_of(design: &Design) -> crate::zone_fills::KicadFills {
         use crate::zone_fills::{zone_signature, KicadFills, KicadRing, ZoneEntry};
         let ring = KicadRing { island: false, pts: vec![[2_000_000, 2_000_000], [4_000_000, 2_000_000], [4_000_000, 4_000_000], [2_000_000, 4_000_000]] };
-        let zones = design.routing.as_ref().unwrap().zones.iter().filter(|z| !z.is_rule_area).map(|z| (z.id.clone(), ZoneEntry { sig: zone_signature(z), layers: z.layer_set().into_iter().map(|l| (l.to_string(), vec![ring.clone()])).collect(), unfilled: false })).collect();
+        let zones = design.routing.as_ref().unwrap().zones.iter().filter(|z| !z.is_rule_area).map(|z| (z.id.clone(), ZoneEntry { sig: zone_signature(z), layers: z.layer_set().into_iter().map(|l| (l.to_string(), vec![ring.clone()])).collect(), unfilled: false, shape: None })).collect();
         KicadFills::new("kicad-cli".into(), "r".into(), 1, zones)
     }
 
@@ -2556,7 +2556,7 @@ mod tests {
         let zone = Zone { id: "zg".into(), net: "GND".into(), layer: "F.Cu".into(), outline: square(Nm::from_mm(1.0), Nm::from_mm(1.0), Nm::from_mm(10.0)), ..Default::default() };
         design.routing.as_mut().unwrap().zones = vec![zone.clone()];
         let ring = |island: bool| KicadRing { island, pts: vec![[2_000_000, 2_000_000], [8_123_456, 2_000_000], [8_123_456, 7_654_321], [2_000_000, 7_654_321]] };
-        let entry = ZoneEntry { sig: zone_signature(&zone), layers: std::collections::BTreeMap::from([("F.Cu".to_string(), vec![ring(false), ring(true)])]), unfilled: false };
+        let entry = ZoneEntry { sig: zone_signature(&zone), layers: std::collections::BTreeMap::from([("F.Cu".to_string(), vec![ring(false), ring(true)])]), unfilled: false, shape: None };
         let kicad = KicadFills::new("kicad-cli 10.99.0".into(), "r1".into(), 2_500, std::collections::BTreeMap::from([("zg".to_string(), entry)]));
 
         let out = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad)).unwrap();

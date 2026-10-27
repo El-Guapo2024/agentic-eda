@@ -6,8 +6,9 @@
 //! imported from a `.kicad_pcb` starts with the fills the file was saved with.
 //!
 //! Between fills the board shows the last fill, as KiCad does with auto-refill off: `GET /api/fill` serves it, and the derived `.kicad_pcb` every kicad-cli run is fed
-//! (the DRC's, the 3D view's, File > Save As) is written with it. A zone that was never filled, or was edited since, has none and is drawn as an outline -- no copper
-//! in that zone yet, here and in the live connectivity -- until the next B.
+//! (the DRC's, the 3D view's, File > Save As) is written with it. A zone that was never filled, or was reshaped or put on other layers since, has none and is drawn as an
+//! outline -- no copper in that zone yet, here and in the live connectivity -- until the next B; a zone moved, turned, mirrored or flipped keeps its fill moved with it,
+//! and one edited in Zone Properties keeps it as it was (`eda_kicad::zone_fills::KicadFills::current`), out of date until the next B.
 
 use crate::board;
 use eda_kicad::zone_fills::{self, KicadFills, ScannedFill};
@@ -168,7 +169,7 @@ pub(crate) fn keep_imported(dir: &Path, design: &Design, scanned: Vec<ScannedFil
 }
 
 /// `GET /api/fill`: the zones' fills as KiCad made them, as polygons in the raw-micrometre space `/api/ratsnest` uses, for the UI to draw. One entry per zone and layer:
-/// `filled` says the zone has a fill that is current (a zone never filled, or edited since, is an outline: `fragments` is empty); each fragment is a closed ring, KiCad's
+/// `filled` says the zone has a fill (a zone never filled, or reshaped since, is an outline: `fragments` is empty); each fragment is a closed ring, KiCad's
 /// own (an island with its holes bridged to its outline, already slitted, never a separate holes list). `with_polys` (`?polys=1`) adds `polys`: the same fill unfractured,
 /// one `{ outline, holes }` per island -- what the "Draw Zone Fill Triangulation" display triangulates (`kicad-port/polyTriangulate.ts`), as KiCad's `POLYGON_TRIANGULATION`
 /// does (it bridges the holes itself rather than reading the fractured ring). `source` says whose fill it is: `{ engine, revision, seconds, zones, stale }` or `null`.
@@ -262,7 +263,7 @@ mod tests {
 
     fn fill_of(zone: &Zone, layer: &str) -> ZoneEntry {
         let ring = KicadRing { island: false, pts: vec![[1_000_000, 1_000_000], [9_000_000, 1_000_000], [9_000_000, 9_000_000], [1_000_000, 9_000_000]] };
-        ZoneEntry { sig: zone_signature(zone), layers: BTreeMap::from([(layer.to_string(), vec![ring])]), unfilled: false }
+        ZoneEntry { sig: zone_signature(zone), layers: BTreeMap::from([(layer.to_string(), vec![ring])]), unfilled: false, shape: None }
     }
 
     #[test]

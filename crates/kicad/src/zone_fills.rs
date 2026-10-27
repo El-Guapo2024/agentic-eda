@@ -4,12 +4,15 @@
 //! of the derived board (`eda_kicad_engine::refill_zones`: Fill All Zones, B, and the refill before a DRC), or what a `.kicad_pcb` carried when it was imported. The rings
 //! are read back here and kept in `<board>/.kicad/zone_fills.json`, never in `design.json`, keyed by zone id with the revision of the design they were made at.
 //!
-//! Between fills the board shows the last fill, as KiCad does with auto-refill off: an edit to a track or a pad does not take the copper of a pour away. A zone *edited*
-//! since its fill (its outline, its layers, its net, a setting: [`zone_signature`]) has no fill any more, as in KiCad where editing a zone empties it, and is drawn as an
-//! outline; so is a zone that was never filled. Everything that reads zone copper (the canvas, the 3D view, live connectivity, the derived `.kicad_pcb`) reads it through
+//! Between fills the board shows the last fill, as KiCad does with auto-refill off: an edit to a track or a pad does not take the copper of a pour away. A zone that
+//! was moved, turned, mirrored or flipped since its fill keeps its fill, moved with it (`ZONE::Move` / `Rotate` / `Mirror` / `Flip` transform `m_FilledPolysList`), and
+//! one whose settings or net were changed in Zone Properties keeps it as it was (`PCB_EDIT_FRAME::Edit_Zone_Params` does not `UnFill()`). A zone whose outline was
+//! reshaped (the point editor's `m_zone.UnFill()`) or whose layers were changed (`ZONE::SetLayerSet` unfills) has no fill any more, and is drawn as an outline; so is a
+//! zone that was never filled ([`KicadFills::current`]). Everything that reads zone copper (the canvas, the 3D view, live connectivity, the derived `.kicad_pcb`) reads it through
 //! [`KicadFills::copper`] or [`KicadFills::current`], so a zone with no current fill is *no copper in that zone yet* everywhere at once.
 
 use eda_model::units::Nm;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -40,6 +43,33 @@ pub struct ZoneEntry {
     /// polygons; `issue14559` has 339 such zones). The writer writes the rings and no `yes`, as `format( const ZONE* )` does. A refill fills the zone: never set by one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unfilled: bool,
+    /// The zone's outline, holes and layers when it was filled: what a fill follows when the zone is moved, turned, mirrored or flipped afterwards
+    /// ([`KicadFills::current`]). `None` in a cache written before it was kept: such a fill holds only while the zone is unchanged ([`zone_signature`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<FilledShape>,
+}
+
+/// The geometry of a zone a fill was made for ([`ZoneEntry::shape`]).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FilledShape {
+    pub outline: Vec<eda_model::ir::Point>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holes: Vec<Vec<eda_model::ir::Point>>,
+    /// `Zone::layer_set`, in its UI order.
+    pub layers: Vec<String>,
+}
+
+impl FilledShape {
+    pub fn of(zone: &Zone) -> Self {
+        FilledShape { outline: zone.outline.clone(), holes: zone.holes.clone(), layers: zone.layer_set().into_iter().map(str::to_string).collect() }
+    }
+}
+
+impl ZoneEntry {
+    /// An empty fill of `zone` as it is now: its fingerprint and its shape.
+    pub fn of(zone: &Zone) -> Self {
+        ZoneEntry { sig: zone_signature(zone), layers: BTreeMap::new(), unfilled: false, shape: Some(FilledShape::of(zone)) }
+    }
 }
 
 /// What kicad-cli filled, for one design revision.
@@ -71,14 +101,41 @@ impl KicadFills {
         self.millis as f64 / 1000.0
     }
 
-    /// The fill of `zone`, if it has one that is current: the zone has not been edited since it was filled.
-    pub fn current(&self, zone: &Zone) -> Option<&ZoneEntry> {
-        self.zones.get(&zone.id).filter(|e| fill_is_of(e, zone))
+    /// The fill `zone` has now, as KiCad would hold it:
+    /// - the fill as it was made, while the zone is the one it was made for ([`zone_signature`]), or differs from it only in its settings or its net (Zone
+    ///   Properties' OK: `Edit_Zone_Params` does `ExportSetting` and no `UnFill()`, so KiCad keeps showing the old copper until a refill);
+    /// - the fill moved, turned or mirrored with the zone when the zone's outline and holes are that same rigid motion of the ones it was filled with (`ZONE::Move`:
+    ///   `pair.second->Move( offset )`; `ZONE::Rotate`: `pair.second->Rotate( aAngle, aCentre )`; `ZONE::Mirror`), and on the other side's layers when the motion is a
+    ///   mirror and the layers went to the other side (`ZONE::Flip`: `SetFilledPolysList( GetBoard()->FlipLayer( oldLayer ), shape )`);
+    /// - none when the outline was reshaped (the point editor's `m_zone.UnFill()`), when the layers changed otherwise (`ZONE::SetLayerSet` unfills), and for a rule area.
+    ///
+    /// Differs: a zone on both outer layers flipped keeps its layer set, and is taken as mirrored (each fill stays on its layer), as the before and after alone cannot
+    /// tell the two apart.
+    pub fn current(&self, zone: &Zone) -> Option<Cow<'_, ZoneEntry>> {
+        let entry = self.zones.get(&zone.id)?;
+        if fill_is_of(entry, zone) {
+            return Some(Cow::Borrowed(entry));
+        }
+        if zone.is_rule_area {
+            return None;
+        }
+        let was = entry.shape.as_ref()?;
+        let (motion, layer_of) = follow(was, zone)?;
+        let Some(motion) = motion else { return Some(Cow::Borrowed(entry)) };
+        let layers = entry
+            .layers
+            .iter()
+            .map(|(layer, rings)| {
+                let to = layer_of.get(layer).cloned().unwrap_or_else(|| layer.clone());
+                (to, rings.iter().map(|r| KicadRing { island: r.island, pts: r.pts.iter().map(|&p| motion.apply(p)).collect() }).collect())
+            })
+            .collect();
+        Some(Cow::Owned(ZoneEntry { sig: entry.sig.clone(), layers, unfilled: entry.unfilled, shape: entry.shape.clone() }))
     }
 
     /// The rings of `zone` on `layer`: none for a zone with no current fill, and none for a layer KiCad left empty.
-    pub fn rings(&self, zone: &Zone, layer: &str) -> &[KicadRing] {
-        self.current(zone).and_then(|e| e.layers.get(layer)).map_or(&[], |r| r.as_slice())
+    pub fn rings(&self, zone: &Zone, layer: &str) -> Vec<KicadRing> {
+        self.current(zone).and_then(|e| e.layers.get(layer).cloned()).unwrap_or_default()
     }
 
     /// The zones of `design` that have a fill that is current, and the zones that have one that is out of date (edited since).
@@ -191,12 +248,102 @@ fn micrometre_zone(zone: &Zone) -> Option<Zone> {
     Some(z)
 }
 
+// ------------------------------------------------------------------------------------------------- a fill that follows its zone
+
+/// A rigid motion of the plane, `p -> to + m (p - from)`: a turn, or a mirror then a turn (`m` has determinant -1), about `from`, then a move to `to`. A motion by
+/// whole quarter turns is kept exact (`m` of 0 and +-1), so a moved or quarter-turned fill lands on the nanometre KiCad's own `Move` / `Rotate` put it on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Motion {
+    from: [f64; 2],
+    to: [f64; 2],
+    m: [[f64; 2]; 2],
+}
+
+impl Motion {
+    fn apply(&self, p: [i64; 2]) -> [i64; 2] {
+        let (dx, dy) = (p[0] as f64 - self.from[0], p[1] as f64 - self.from[1]);
+        let x = self.to[0] + self.m[0][0] * dx + self.m[0][1] * dy;
+        let y = self.to[1] + self.m[1][0] * dx + self.m[1][1] * dy;
+        [x.round() as i64, y.round() as i64]
+    }
+
+    fn mirrors(&self) -> bool {
+        self.m[0][0] * self.m[1][1] - self.m[0][1] * self.m[1][0] < 0.0
+    }
+}
+
+/// How far, in nanometres, a corner of the zone may be from where the motion puts it: the corners of a zone turned by an angle that is not a quarter turn are each
+/// rounded to the nanometre, and the motion is worked out from two of them.
+const MOTION_TOLERANCE_NM: f64 = 4.0;
+
+/// The rigid motion that takes the zone `was` to `zone`, and where each of its layers went: `Some((None, _))` when nothing moved (the fill stays as it was),
+/// `Some((Some(motion), layers))` for a move, turn, mirror or flip, `None` when the zone was reshaped or its layers changed otherwise.
+fn follow(was: &FilledShape, zone: &Zone) -> Option<(Option<Motion>, HashMap<String, String>)> {
+    let now_layers: Vec<String> = zone.layer_set().into_iter().map(str::to_string).collect();
+    if was.outline.len() != zone.outline.len() || was.outline.len() < 3 || was.holes.len() != zone.holes.len() || was.holes.iter().zip(&zone.holes).any(|(a, b)| a.len() != b.len()) {
+        return None;
+    }
+    let old: Vec<[f64; 2]> = was.outline.iter().chain(was.holes.iter().flatten()).map(|p| [p.x.as_f64(), p.y.as_f64()]).collect();
+    let new: Vec<[f64; 2]> = zone.outline.iter().chain(zone.holes.iter().flatten()).map(|p| [p.x.as_f64(), p.y.as_f64()]).collect();
+    if old == new {
+        return (was.layers == now_layers).then(|| (None, HashMap::new()));
+    }
+    // The corner farthest from the first, so the angle is taken over the longest span.
+    let far = (1..old.len()).max_by(|&i, &j| dist2(old[0], old[i]).total_cmp(&dist2(old[0], old[j])))?;
+    let (u, v) = ([old[far][0] - old[0][0], old[far][1] - old[0][1]], [new[far][0] - new[0][0], new[far][1] - new[0][1]]);
+    if (u[0].hypot(u[1]) - v[0].hypot(v[1])).abs() > MOTION_TOLERANCE_NM {
+        return None;
+    }
+    let snap = |c: f64| if (c - c.round()).abs() < 1e-9 { c.round() } else { c };
+    let motion = [false, true].into_iter().find_map(|mirror| {
+        // A mirror first (y -> -y), then the turn that takes the mirrored span onto the new one.
+        let u = if mirror { [u[0], -u[1]] } else { u };
+        let a = v[1].atan2(v[0]) - u[1].atan2(u[0]);
+        let (c, s) = (snap(a.cos()), snap(a.sin()));
+        let m = if mirror { [[c, s], [s, -c]] } else { [[c, -s], [s, c]] };
+        let motion = Motion { from: old[0], to: new[0], m };
+        old.iter().zip(&new).all(|(o, n)| {
+            let (dx, dy) = (o[0] - motion.from[0], o[1] - motion.from[1]);
+            let p = [motion.to[0] + m[0][0] * dx + m[0][1] * dy, motion.to[1] + m[1][0] * dx + m[1][1] * dy];
+            dist2(p, *n).sqrt() <= MOTION_TOLERANCE_NM
+        })
+        .then_some(motion)
+    })?;
+    if was.layers == now_layers {
+        return Some((Some(motion), HashMap::new()));
+    }
+    // `ZONE::Flip`: a mirror, and every layer to the other side (`FlipLayer`): the copper stack reversed, a front technical layer to its back one.
+    if !motion.mirrors() || was.layers.len() != now_layers.len() {
+        return None;
+    }
+    let copper = |ls: &[String]| ls.iter().filter(|l| eda_model::layers::is_copper_layer_name(l)).cloned().collect::<Vec<_>>();
+    let (old_cu, new_cu) = (copper(&was.layers), copper(&now_layers));
+    if old_cu.len() != new_cu.len() {
+        return None;
+    }
+    let mut map: HashMap<String, String> = old_cu.iter().cloned().zip(new_cu.iter().rev().cloned()).collect();
+    for l in was.layers.iter().filter(|l| !eda_model::layers::is_copper_layer_name(l)) {
+        let other = if let Some(r) = l.strip_prefix("F.") { format!("B.{r}") } else if let Some(r) = l.strip_prefix("B.") { format!("F.{r}") } else { l.clone() };
+        map.insert(l.clone(), other);
+    }
+    let mut mapped: Vec<&String> = map.values().collect();
+    let mut now: Vec<&String> = now_layers.iter().collect();
+    mapped.sort();
+    now.sort();
+    (mapped == now).then_some((Some(motion), map))
+}
+
+fn dist2(a: [f64; 2], b: [f64; 2]) -> f64 {
+    (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)
+}
+
 // ----------------------------------------------------------------------------------------------------- the zone's fingerprint
 
 /// A fingerprint of everything about a zone that its fill is a fill *of*: the outline, the layers, the net and the settings (clearance, minimum width, connection,
-/// thermal relief, island removal, hatch, smoothing). Editing any of them takes the fill away (KiCad unfills a zone that is edited); the name, the border style and where
-/// the zone came from do not, and nor does the priority: the Zone Manager's OK changes the priorities and puts the zones' fills back (`DIALOG_ZONE_MANAGER::OnOk`), the
-/// next fill takes them into account. The zone's own id is the key it is filed under.
+/// thermal relief, island removal, hatch, smoothing). A zone whose fingerprint is its fill's has a fill that is up to date ([`KicadFills::tally`]); one edited since keeps
+/// its fill or not as KiCad would ([`KicadFills::current`]). The name, the border style, where the zone came from and the priority are not in it: the Zone Manager's OK
+/// changes the priorities and puts the zones' fills back (`DIALOG_ZONE_MANAGER::OnOk`), the next fill takes them into account. The zone's own id is the key it is filed
+/// under.
 pub fn zone_signature(z: &Zone) -> String {
     let text = format!(
         "{:?}|{}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
@@ -294,7 +441,7 @@ pub fn entries_by_zone(design: &Design, scanned: Vec<ScannedFill>, ids: &HashMap
     for f in scanned {
         let Some(id) = ids.get(&f.zone) else { continue };
         let Some(zone) = zones.get(id.as_str()) else { continue };
-        let entry = out.entry(id.clone()).or_insert_with(|| ZoneEntry { sig: zone_signature(zone), layers: BTreeMap::new(), unfilled: !f.zone_filled });
+        let entry = out.entry(id.clone()).or_insert_with(|| ZoneEntry { unfilled: !f.zone_filled, ..ZoneEntry::of(zone) });
         let rings = entry.layers.entry(f.layer).or_default();
         // (no points: a zone filled with nothing, which has a fill all the same)
         if !f.pts.is_empty() {
@@ -870,7 +1017,7 @@ mod tests {
         assert_eq!(f.polys.len(), 1);
         assert_eq!(f.polys[0][0][1], Point64::new(9_250_000, 500_000));
 
-        // An edit elsewhere on the board changes nothing about the zone; an edit to the zone itself empties it.
+        // An edit elsewhere on the board changes nothing about the zone; reshaping the zone empties it (the point editor's `UnFill()`).
         let mut moved = z.clone();
         moved.outline[2] = Point { x: mm(11.0), y: mm(10.0) };
         assert!(fills.current(&moved).is_none() && fills.rings(&moved, "F.Cu").is_empty());
@@ -883,10 +1030,12 @@ mod tests {
         assert!(fills.current(&renamed).is_some(), "a name is no part of what a fill is a fill of");
         let mut thicker = z.clone();
         thicker.min_thickness += Nm::new(10);
-        assert!(fills.current(&thicker).is_none(), "a setting is");
+        // A setting or the net changed in Zone Properties keeps the fill as it was (`Edit_Zone_Params` does not unfill), out of date until the next fill.
+        assert!(fills.current(&thicker).is_some(), "a setting keeps it");
+        assert_eq!(fills.tally(&design(vec![thicker])), (0, 1), "out of date");
         let mut other_net = z.clone();
         other_net.net = "VCC".into();
-        assert!(fills.current(&other_net).is_none());
+        assert!(fills.current(&other_net).is_some());
         let mut raised = z.clone();
         raised.priority += 1;
         assert!(fills.current(&raised).is_some(), "the Zone Manager's OK changes priorities and keeps the fills; the next fill takes them into account");
@@ -898,7 +1047,7 @@ mod tests {
     #[test]
     fn fill_selected_zones_takes_only_those_from_the_fresh_run_and_unfill_selected_takes_them_away() {
         let ring = |n: i64| vec![KicadRing { island: false, pts: vec![[0, 0], [n, 0], [n, n]] }];
-        let entry = |sig: &str, n: i64| ZoneEntry { sig: sig.into(), layers: BTreeMap::from([("F.Cu".to_string(), ring(n))]), unfilled: false };
+        let entry = |sig: &str, n: i64| ZoneEntry { sig: sig.into(), layers: BTreeMap::from([("F.Cu".to_string(), ring(n))]), unfilled: false, shape: None };
         let mut old = KicadFills::new("old".into(), "r1".into(), 1, BTreeMap::from([("a".to_string(), entry("s", 1)), ("b".to_string(), entry("s", 2))]));
         let fresh = KicadFills::new("fresh".into(), "r2".into(), 2, BTreeMap::from([("a".to_string(), entry("s", 10)), ("b".to_string(), entry("s", 20)), ("c".to_string(), entry("s", 30))]));
         old.take_from(fresh.clone(), Some(&["b".to_string(), "c".to_string()]));
@@ -917,7 +1066,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eda-zone-fills-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(load(&dir).is_none());
-        let zones = BTreeMap::from([("z".to_string(), ZoneEntry { sig: "abc".into(), layers: BTreeMap::from([("F.Cu".to_string(), vec![KicadRing { island: true, pts: vec![[0, 0], [1_000, 0], [1_000, 1_000]] }])]), unfilled: false })]);
+        let zones = BTreeMap::from([("z".to_string(), ZoneEntry { sig: "abc".into(), layers: BTreeMap::from([("F.Cu".to_string(), vec![KicadRing { island: true, pts: vec![[0, 0], [1_000, 0], [1_000, 1_000]] }])]), unfilled: false, shape: None })]);
         let fills = KicadFills::new("kicad-cli 10.99.0".into(), "rev".into(), 2_500, zones);
         store(&dir, &fills).unwrap();
         assert_eq!(load(&dir), Some(fills));
@@ -927,5 +1076,88 @@ mod tests {
         forget(&dir);
         assert!(!cache_path(&dir).exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R5-Z2: a fill of zone `z` (a 10 x 4 mm rectangle at (10, 10) mm on F.Cu) whose one ring is the zone's outline shrunk by 0.5 mm, and the zone.
+    fn filled_rect() -> (KicadFills, Zone) {
+        let p = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let z = Zone { id: "z".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![p(10.0, 10.0), p(20.0, 10.0), p(20.0, 14.0), p(10.0, 14.0)], ..Default::default() };
+        let ring = KicadRing { island: false, pts: vec![[10_500_000, 10_500_000], [19_500_000, 10_500_000], [19_500_000, 13_500_000], [10_500_000, 13_500_000]] };
+        let entry = ZoneEntry { layers: BTreeMap::from([("F.Cu".to_string(), vec![ring])]), ..ZoneEntry::of(&z) };
+        (KicadFills::new("t".into(), String::new(), 0, BTreeMap::from([("z".to_string(), entry)])), z)
+    }
+
+    fn moved(z: &Zone, f: impl Fn(Point) -> Point) -> Zone {
+        Zone { outline: z.outline.iter().map(|&q| f(q)).collect(), ..z.clone() }
+    }
+
+    /// `ZONE::Move` moves `m_FilledPolysList` with the outline.
+    #[test]
+    fn a_moved_zone_keeps_its_fill_moved() {
+        let (fills, z) = filled_rect();
+        let z2 = moved(&z, |q| Point { x: q.x + mm(5.0), y: q.y });
+        assert_eq!(fills.rings(&z2, "F.Cu")[0].pts, vec![[15_500_000, 10_500_000], [24_500_000, 10_500_000], [24_500_000, 13_500_000], [15_500_000, 13_500_000]]);
+        assert_eq!(fills.tally(&design(vec![z2])), (0, 1), "it is out of date all the same");
+    }
+
+    /// `ZONE::Rotate` turns the fill about the same centre: a quarter turn lands on whole nanometres, 30 degrees on the nearest ones.
+    #[test]
+    fn a_turned_zone_keeps_its_fill_turned() {
+        let (fills, z) = filled_rect();
+        // a quarter turn about (10, 10) mm: (x, y) -> (10 + (y - 10), 10 - (x - 10)) (KiCad's y down, counter-clockwise on screen)
+        let quarter = |q: Point| Point { x: mm(10.0) + (q.y - mm(10.0)), y: mm(10.0) - (q.x - mm(10.0)) };
+        let ring = fills.rings(&moved(&z, quarter), "F.Cu");
+        assert_eq!(ring[0].pts[0], [10_500_000, 9_500_000]);
+        assert_eq!(ring[0].pts[1], [10_500_000, 500_000]);
+        let (c, s) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+        let turn = |q: Point| {
+            let (dx, dy) = ((q.x - mm(10.0)).as_f64(), (q.y - mm(10.0)).as_f64());
+            Point { x: mm(10.0) + Nm::kiround(c * dx + s * dy), y: mm(10.0) + Nm::kiround(-s * dx + c * dy) }
+        };
+        let ring = fills.rings(&moved(&z, turn), "F.Cu");
+        let want = |x: i64, y: i64| {
+            let q = turn(Point { x: Nm::new(x), y: Nm::new(y) });
+            [q.x.get(), q.y.get()]
+        };
+        for (got, from) in ring[0].pts.iter().zip(&[[10_500_000i64, 10_500_000i64], [19_500_000, 10_500_000], [19_500_000, 13_500_000], [10_500_000, 13_500_000]]) {
+            let w = want(from[0], from[1]);
+            assert!((got[0] - w[0]).abs() <= 2 && (got[1] - w[1]).abs() <= 2, "{got:?} against {w:?}");
+        }
+    }
+
+    /// `ZONE::Flip`: mirrored, and the fill of F.Cu is the fill of B.Cu; `ZONE::Mirror` keeps the layer.
+    #[test]
+    fn a_flipped_zone_keeps_its_fill_on_the_other_side() {
+        let (fills, z) = filled_rect();
+        let mirror = |q: Point| Point { x: mm(30.0) - q.x, y: q.y };
+        let mirrored = moved(&z, mirror);
+        assert_eq!(fills.rings(&mirrored, "F.Cu")[0].pts[0], [19_500_000, 10_500_000]);
+        let mut flipped = mirrored.clone();
+        flipped.layer = "B.Cu".into();
+        assert!(fills.rings(&flipped, "F.Cu").is_empty());
+        assert_eq!(fills.rings(&flipped, "B.Cu")[0].pts[0], [19_500_000, 10_500_000]);
+        // a zone sent to B.Cu without a mirror (Zone Properties' layers): `ZONE::SetLayerSet` unfills it
+        let mut relayered = z.clone();
+        relayered.layer = "B.Cu".into();
+        assert!(fills.current(&relayered).is_none());
+    }
+
+    /// `Edit_Zone_Params` keeps the fill (no `UnFill()`); the point editor's reshaping takes it away.
+    #[test]
+    fn zone_properties_keep_the_fill_and_a_reshape_drops_it() {
+        let (fills, z) = filled_rect();
+        let edited = Zone { clearance: mm(1.0), net: "VCC".into(), ..z.clone() };
+        assert!(matches!(fills.current(&edited), Some(Cow::Borrowed(_))), "the fill as it was");
+        assert_eq!(fills.rings(&edited, "F.Cu").len(), 1);
+        let mut reshaped = z.clone();
+        reshaped.outline[2].x += mm(1.0);
+        assert!(fills.current(&reshaped).is_none());
+        // a fill kept before the shape was: only the unchanged zone has it
+        let mut old = fills.clone();
+        old.zones.get_mut("z").unwrap().shape = None;
+        assert!(old.current(&edited).is_none());
+        assert!(old.current(&z).is_some());
+        // a rule area never has one
+        assert!(fills.current(&Zone { is_rule_area: true, ..moved(&z, |q| Point { x: q.x + mm(1.0), y: q.y }) }).is_none());
     }
 }

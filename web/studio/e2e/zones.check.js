@@ -1,7 +1,7 @@
 // Zone fill check (GAPS.md package P13; item 13): the zone fill is KiCad's, through kicad-cli, and nobody else's. Fill All Zones (B) runs kicad-cli's filler on a copy of the
-// derived board and the fills are kept beside the design; the board shows the last fill, as KiCad does with auto-refill off; a zone never filled, or edited since, is drawn as an
-// outline. The scenarios: a board with nothing filled; B (the status bar says so while it runs, the toast says what filled and how long it took, the derived .kicad_pcb carries
-// kicad-cli's rings); an edit elsewhere leaves the fills and an edit to a zone empties that zone only, Undo giving it back; Fill Selected Zones and Unfill Selected Zones; Unfill
+// derived board and the fills are kept beside the design; the board shows the last fill, as KiCad does with auto-refill off; a zone never filled, or reshaped since, is drawn as an
+// outline (a zone moved keeps its fill moved, one edited in Zone Properties keeps it as it was). The scenarios: a board with nothing filled; B (the status bar says so while it runs, the toast says what filled and how long it took, the derived .kicad_pcb carries
+// kicad-cli's rings); an edit elsewhere leaves the fills, Zone Properties keep a zone's fill, a move carries it, a reshape empties that zone only, Undo giving it back; Fill Selected Zones and Unfill Selected Zones; Unfill
 // All Zones; the Zone Manager (the preview with a tab per layer of the zone, Auto-Assign Priorities on zones that overlap, its Refill zones box); the lock in Zone Properties;
 // "Refill all zones before performing DRC" and the Plot dialog's "Check zone fills before plotting".
 // Run it in the page of a served board that has footprints placed and two copper pours of one net on the two outer layers (examples/mcu_board_30plus.yaml, placed and routed,
@@ -82,7 +82,7 @@
       check.fillSeconds = seconds;
     });
 
-    await scenario("an edit elsewhere leaves the fills as they are, and an edit to a zone empties that zone only; Undo gives it back", async (t) => {
+    await scenario("an edit elsewhere leaves the fills as they are; Zone Properties keep a zone's fill, a move carries it along, a reshape empties that zone only; Undo gives it back", async (t) => {
       const before = byZone(await fill());
       const net = A.net;
       const added = await post({ op: "add_track", net, layer: "F.Cu", width: 250_000, pts: [{ x: 6_000_000, y: 8_000_000 }, { x: 9_000_000, y: 8_000_000 }] });
@@ -90,10 +90,32 @@
       await sleep(1200);
       t(JSON.stringify(byZone(await fill())) === JSON.stringify(before), "the fills are what they were: a pour is not refilled by an edit, as in KiCad with auto-refill off");
       await undo();
-      const zA = (await zonesOf()).find((z) => z.id === A.id);
+      // Zone Properties' OK (`Edit_Zone_Params`: no `UnFill()`): the old copper stays until a refill, and the source counts the zone out of date
+      let zA = (await zonesOf()).find((z) => z.id === A.id);
       const e = await editZone(zA, { min_thickness: zA.min_thickness + 10_000 });
       t(e.ok, `zone A's minimum width is changed (${e.message})`);
-      const f = await waitFill((x) => x.zones.some((z) => z.id === A.id && !z.filled));
+      let f = await waitFill((x) => x.source?.stale === 1);
+      t(JSON.stringify(byZone(f)) === JSON.stringify(before), "zone A keeps the fill it had, as KiCad keeps it after Zone Properties");
+      t(f.source?.stale === 1, `the source counts it out of date (${JSON.stringify(f.source)})`);
+      await undo();
+      await waitFill((x) => x.source?.stale === 0);
+      // a move (`ZONE::Move` moves `m_FilledPolysList`): the same copper, 1 mm to the right
+      const moved = await post({ op: "move_items", ids: [A.id], dx: 1_000_000, dy: 0 });
+      t(moved.ok, `zone A is moved 1 mm (${moved.message})`);
+      f = await waitFill((x) => x.source?.stale === 1);
+      const fa = f.zones.filter((z) => z.id === A.id);
+      t(fa.every((z) => z.filled && z.fragments.length > 0) && JSON.stringify(Object.fromEntries(Object.entries(byZone(f)).filter(([k]) => k.startsWith(A.id)))) === JSON.stringify(Object.fromEntries(Object.entries(before).filter(([k]) => k.startsWith(A.id)))), `zone A keeps its fill, moved with it: ${JSON.stringify(byZone(f))}`);
+      const bx = (zs) => Math.min(...zs.flatMap((z) => z.fragments.flatMap((r) => r.map((p) => p[0]))));
+      const was = f.zones;
+      await undo();
+      const back0 = await waitFill((x) => x.source?.stale === 0);
+      t(bx(was.filter((z) => z.id === A.id)) - bx(back0.zones.filter((z) => z.id === A.id)) === 1_000_000, "its copper is 1 mm to the right of where it was");
+      // a reshape (the point editor's `m_zone.UnFill()`): zone A has no fill until the next B
+      zA = (await zonesOf()).find((z) => z.id === A.id);
+      const outline = zA.outline.map((p, i) => (i === 0 ? { x: p.x + 1_000_000, y: p.y } : p));
+      const r = await post({ op: "set_zone_outline", id: A.id, outline });
+      t(r.ok, `a corner of zone A is moved (${r.message})`);
+      f = await waitFill((x) => x.zones.some((z) => z.id === A.id && !z.filled));
       const now = byZone(f);
       t(f.zones.filter((z) => z.id === A.id).every((z) => !z.filled && z.fragments.length === 0), "zone A has no fill any more: it is drawn as an outline until it is filled again");
       t(JSON.stringify(Object.entries(now).filter(([k]) => !k.startsWith(A.id))) === JSON.stringify(Object.entries(before).filter(([k]) => !k.startsWith(A.id))), "zone B keeps its fill");
@@ -109,7 +131,7 @@
 
     await scenario("Fill Selected Zones fills the selected zone only, Unfill Selected Zones takes only the selected one away, Unfill All Zones takes the rest", async (t) => {
       const zA = (await zonesOf()).find((z) => z.id === A.id);
-      await editZone(zA, { min_thickness: zA.min_thickness + 10_000 });
+      await post({ op: "set_zone_outline", id: A.id, outline: zA.outline.map((p, i) => (i === 0 ? { x: p.x + 1_000_000, y: p.y } : p)) });
       await waitFill((x) => x.zones.some((z) => z.id === A.id && !z.filled));
       const bBefore = byZone(await fill());
       await select([A.id]);
