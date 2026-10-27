@@ -77,3 +77,16 @@ test("createMoveThrottle: allows the first call, then gates until the interval e
   assert.equal(throttle.shouldSend(20), false);
   assert.equal(throttle.shouldSend(32), true);
 });
+
+test("R6-R2: a width chosen while routing below the board minimum is drawn at the minimum the server routes, '(from board minimum track width)'", () => {
+  const sizes = { width_source: "user choice" };
+  const current = baseDraw({ width: 100_000, sizes });
+  const raised = drawStateFromPreview(current, basePreview({ width: 200_000, width_source: "board minimum track width" }));
+  assert.equal(raised.width, 200_000);
+  assert.equal(raised.sizes?.width_source, "board minimum track width");
+  // a choice the server routes as it is keeps the source the studio set (the rule's at entry 0, "user choice" otherwise)
+  const kept = drawStateFromPreview(baseDraw({ width: 300_000, sizes }), basePreview({ width: 300_000, width_source: "user choice" }));
+  assert.equal(kept.sizes?.width_source, "user choice");
+  // a plain move's reply (no width asked) never changes the width the studio holds
+  assert.equal(drawStateFromPreview(current, basePreview({ width: 250_000 })).width, 100_000);
+});

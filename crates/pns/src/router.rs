@@ -495,10 +495,14 @@ impl Router {
         }
     }
 
-    pub fn set_width(&mut self, width: Nm) {
-        if let Some(s) = &mut self.session {
-            s.placer.width = width;
-        }
+    /// A width chosen while routing (W, the width menu): `onTrackViaSizeChanged` imports the sizes again, so the width is raised to the board's
+    /// minimum as at the start ([`crate::settings::chosen_track_width`], R6-R2). Returns the width routed and its source; `None` when no route is in
+    /// progress.
+    pub fn set_width(&mut self, width: Nm) -> Option<(Nm, String)> {
+        let (width, source) = crate::settings::chosen_track_width(&self.rules, width);
+        let s = self.session.as_mut()?;
+        s.placer.width = width;
+        Some((width, source))
     }
 
     /// `ROUTER::ToggleViaPlacement`: arm (or disarm) "drop a via here" for

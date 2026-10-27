@@ -238,6 +238,15 @@ pub fn import_sizes(world: &crate::node::Node, rules: &BoardRules, start: Option
     out
 }
 
+/// `ImportSizes`' width when neither the connected track nor the net class gives one (`!found`): the chosen width (a Pre-defined Sizes entry or the
+/// custom one, `bds.GetCurrentTrackWidth()`) raised to the board's minimum track width, `trackWidth = std::max( bds.m_TrackMinWidth,
+/// GetCurrentTrackWidth() )`, and its source -- "user choice" when the chosen width is the one routed, else the "board minimum track width" set first
+/// (R6-R2). Neither `DIALOG_TRACK_VIA_SIZE` nor Board Setup refuses a width below the minimum, so the case is reachable in KiCad.
+pub fn chosen_track_width(rules: &BoardRules, chosen: Nm) -> (Nm, String) {
+    let width = chosen.max(rules.track_width_min_nm);
+    (width, if width == chosen { "user choice" } else { "board minimum track width" }.into())
+}
+
 /// [`import_sizes`] without the connected track's width.
 fn import_rule_sizes(world: &crate::node::Node, rules: &BoardRules, start: Option<(&crate::item::Item, eda_model::ir::Point)>, layer: i32) -> ImportedSizes {
     use crate::rule_resolver::Side;

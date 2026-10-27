@@ -531,6 +531,30 @@ fn a_route_takes_the_start_nets_class_width() {
     }
 }
 
+/// R6-R2 (`ImportSizes`: `std::max( bds.m_TrackMinWidth, GetCurrentTrackWidth() )`): a chosen 0.1 mm on a board whose minimum track width is
+/// 0.2 mm routes at 0.2 mm, "board minimum track width", and so does a 0.1 mm chosen while routing (`Router::set_width`). Under `EDA_SLOW_TESTS=1`,
+/// kicad-cli's DRC finds no `track_width` in the route, and finds one in the same route at the 0.1 mm the studio used to commit.
+#[test]
+fn a_chosen_width_below_the_board_minimum_routes_at_the_minimum() {
+    let (r1, r2) = (p(5.0, 10.0), p(25.0, 10.0));
+    let (design, mut model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2)], &[("SIG", &["R1.1", "R2.1"])]);
+    model.board.track_width_min_nm = mm(0.2);
+    assert_eq!(eda_pns::settings::chosen_track_width(&model.board, mm(0.1)), (mm(0.2), "board minimum track width".to_string()));
+    assert_eq!(eda_pns::settings::chosen_track_width(&model.board, mm(0.2)), (mm(0.2), "user choice".to_string()));
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.start(r1, "F.Cu", eda_pns::settings::chosen_track_width(&model.board, mm(0.1)).0).unwrap();
+    assert_eq!(router.set_width(mm(0.1)), Some((mm(0.2), "board minimum track width".to_string())), "a width chosen while routing");
+    router.preview(r2).unwrap();
+    let commit = router.finish(r2).unwrap();
+    assert!(!commit.tracks.is_empty() && commit.tracks.iter().all(|t| t.width == mm(0.2)), "{:?}", commit.tracks);
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["track_width"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        let narrow = RouteCommit { tracks: commit.tracks.iter().map(|t| eda_model::ir::Track { width: mm(0.1), ..t.clone() }).collect(), ..Default::default() };
+        assert!(!kicad_violations(&apply(&design, &narrow), &model, &["track_width"]).unwrap().is_empty(), "the chosen 0.1 mm is what kicad-cli flags");
+    }
+}
+
 /// R3-4 (`ImportSizes` for a pair, via and holes: `CT_WIDTH` of the track and its coupled one, `CT_DIFF_PAIR_GAP`, `CT_VIA_DIAMETER`,
 /// `CT_VIA_HOLE`, `CT_HOLE_TO_HOLE`): a `.kicad_dru` rule for `/USB*` sets the pair's gap and width over the class's 0.25 mm gap, and a via
 /// rule the via's size; the hole to hole is the rule's.

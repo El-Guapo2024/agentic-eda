@@ -63,11 +63,15 @@ export interface RouteDrawState {
  * keeping whatever session-local fields (`net`, `placingVia`,
  * `pendingViaLayer`) the server doesn't echo back. */
 export function drawStateFromPreview(current: RouteDrawState, preview: RoutePreview): RouteDrawState {
+  // The reply to a move that chose a width (W, the width menu) says what was routed: the board's minimum when the choice was below it (R6-R2,
+  // `ImportSizes`' `std::max( bds.m_TrackMinWidth, GetCurrentTrackWidth() )`). Any other reply keeps the width the studio holds.
+  const raised = preview.width_source === "board minimum track width";
   return {
     ...current,
     net: preview.net ?? current.net,
     layer: preview.layer,
-    width: current.width,
+    width: preview.width_source != null && preview.width != null ? preview.width : current.width,
+    sizes: raised && current.sizes ? { ...current.sizes, width_source: preview.width_source! } : current.sizes,
     pts: preview.head,
     colliding: preview.colliding,
     runs: preview.runs,

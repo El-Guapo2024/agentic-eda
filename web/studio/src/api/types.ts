@@ -2085,6 +2085,9 @@ export interface RoutePreview {
   warnings?: string[];
   /** The width the route is drawn at (`m_sizes.TrackWidth()`): what a start without a width took from the start net (`ImportSizes`). */
   width?: Nm | null;
+  /** `/api/route/move` with a width only: where the width routed comes from -- "user choice", or "board minimum track width" when the chosen one
+   * was below the board's minimum and was raised to it (R6-R2). */
+  width_source?: string;
   /** `/api/route/start` only: what `ROUTER_TOOL::UpdateMessagePanel` shows of the sizes (their sources, the clearance, the net's class) and the rule's width (r5 R5-8). */
   sizes?: RouteSizesInfo;
   colliding: boolean;

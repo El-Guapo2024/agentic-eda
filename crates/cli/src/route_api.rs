@@ -214,7 +214,8 @@ pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     // `ImportSizes`' `SetWidthSource`: "existing track", "user choice", or the rule's
     let (width, width_source) = match (router.connected_track_width(at, layer), req.get("width").and_then(Value::as_i64)) {
         (Some(w), _) => (w, "existing track".to_string()),
-        (None, Some(w)) => (Nm::new(w), "user choice".to_string()),
+        // `std::max( bds.m_TrackMinWidth, GetCurrentTrackWidth() )`: a chosen width below the board's minimum routes at the minimum (R6-R2)
+        (None, Some(w)) => eda_pns::settings::chosen_track_width(&model.board, Nm::new(w)),
         (None, None) => router.import_sizes(at, layer).map_or((model.board.track_width, "netclass 'Default'".to_string()), |s| (s.track_width, s.width_source)),
     };
     match router.start(at, layer, width) {
@@ -232,7 +233,7 @@ pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     }
 }
 
-/// `POST /api/route/move`: `{x, y, flip_posture?, width?}` -- the `/`
+/// `POST /api/route/move`: `{x, y, flip_posture?, width?}` (with `width`, the reply's `width_source`) -- the `/`
 /// posture toggle and `W` width-cycle hotkeys fold in here (see
 /// `Router::flip_posture`'s own doc comment on why).
 pub fn mv(cell: &RouteCell, body: &[u8]) -> Value {
@@ -242,11 +243,14 @@ pub fn mv(cell: &RouteCell, body: &[u8]) -> Value {
     if req.get("flip_posture").and_then(Value::as_bool).unwrap_or(false) {
         router.flip_posture();
     }
-    if let Some(w) = req.get("width").and_then(Value::as_i64) {
-        router.set_width(Nm::new(w));
-    }
+    // a width chosen while routing, raised to the board's minimum (R6-R2): the reply's `width_source` says which
+    let width_source = req.get("width").and_then(Value::as_i64).and_then(|w| router.set_width(Nm::new(w))).map(|(_, source)| source);
     let at = point_of(&req);
-    router.preview(at).map(|p| preview_json(router, &p)).unwrap_or_else(|| err("not routing"))
+    let mut reply = router.preview(at).map(|p| preview_json(router, &p)).unwrap_or_else(|| err("not routing"));
+    if let Some(source) = width_source {
+        reply["width_source"] = json!(source);
+    }
+    reply
 }
 
 /// `POST /api/route/fix`: `{x, y}`.
@@ -992,6 +996,28 @@ mod tests {
         assert_eq!(sizes["netclass"], json!("Power and Default"), "the class sets no via sizes: the Default class completes it");
         assert_eq!(at(json!({ "auto_track_width": false, "width": 400_000 }))["sizes"]["width_source"], json!("user choice"));
         assert_eq!(at(json!({ "auto_track_width": false }))["sizes"]["width_source"], json!("netclass 'Power'"));
+    }
+
+    /// R6-R2 (`ImportSizes`: `trackWidth = bds.m_TrackMinWidth`, then `std::max( trackWidth, bds.GetCurrentTrackWidth() )`): a chosen width below
+    /// the board's minimum track width routes at the minimum, "(from board minimum track width)"; at or above it, as chosen, "user choice". A width
+    /// chosen while routing (W, the width menu: `onTrackViaSizeChanged` imports the sizes again) is raised the same way, and the reply says so.
+    #[test]
+    fn a_chosen_width_below_the_board_minimum_routes_at_the_minimum() {
+        let dir = scratch("min_width");
+        setup_board(&dir, vec![], vec![]);
+        let intent = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.board.track_width_min_nm = mm(0.2);
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let cell = RouteCell::default();
+        let reply = start(&dir, &cell, &body(json!({ "x": 5_000_000, "y": 5_000_000, "layer": "F.Cu", "width": 100_000, "auto_track_width": false })));
+        assert_eq!((reply["width"].clone(), reply["sizes"]["width_source"].clone()), (json!(200_000), json!("board minimum track width")), "{reply}");
+        let pv = mv(&cell, &body(json!({ "x": 9_000_000, "y": 5_000_000, "width": 100_000 })));
+        assert_eq!((pv["width"].clone(), pv["width_source"].clone()), (json!(200_000), json!("board minimum track width")), "{pv}");
+        let pv = mv(&cell, &body(json!({ "x": 9_000_000, "y": 5_000_000, "width": 300_000 })));
+        assert_eq!((pv["width"].clone(), pv["width_source"].clone()), (json!(300_000), json!("user choice")), "{pv}");
+        let reply = start(&dir, &cell, &body(json!({ "x": 5_000_000, "y": 5_000_000, "layer": "F.Cu", "width": 200_000, "auto_track_width": false })));
+        assert_eq!((reply["width"].clone(), reply["sizes"]["width_source"].clone()), (json!(200_000), json!("user choice")), "{reply}");
     }
 
     /// findings p5 F2-9: `F` routes to the nearest unconnected anchor and commits, or leaves the route going with the head where it got.
