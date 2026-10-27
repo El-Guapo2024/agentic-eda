@@ -476,10 +476,9 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       // eda_3d_actions.cpp's showTHT ('T') / showSMD ('S') / showVirtual ('V') -- visibility
       // view-OPTIONS, not camera actions, so these go straight to the
       // store (Viewer3DOptions) rather than through Action3D/camera3d.
-      // (showNotInPosFile/showDNP -- 'P'/'D' in source -- have no
-      // equivalent in this app's data model: no pick-and-place or DNP
-      // concept exists here, so those 2 hotkeys are not bound; see PARITY-3d.md.)
-      const modelRow = e.key === "t" || e.key === "T" ? "th_models" : e.key === "s" || e.key === "S" ? "smd_models" : e.key === "v" || e.key === "V" ? "virtual_models" : null;
+      // showNotInPosFile ('P') and showDNP ('D') toggle the two attribute rows the same way.
+      const k = e.key.toLowerCase();
+      const modelRow = k === "t" ? "th_models" : k === "s" ? "smd_models" : k === "v" ? "virtual_models" : k === "p" ? "not_in_pos_models" : k === "d" ? "dnp_models" : null;
       if (modelRow && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         e.stopPropagation();
@@ -671,10 +670,12 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   const thtShown = isVisible(layers, "th_models");
   const smdShown = isVisible(layers, "smd_models");
   const virtualShown = isVisible(layers, "virtual_models");
+  const notInPosShown = isVisible(layers, "not_in_pos_models");
+  const dnpShown = isVisible(layers, "dnp_models");
   const bboxShown = isVisible(layers, "bounding_boxes");
   useEffect(() => {
-    threeRef.current?.partModels.sync(board, { showTHT: thtShown, showSMD: smdShown, showVirtual: virtualShown, showBoundingBoxes: bboxShown });
-  }, [board, thtShown, smdShown, virtualShown, bboxShown]);
+    threeRef.current?.partModels.sync(board, { showTHT: thtShown, showSMD: smdShown, showVirtual: virtualShown, showNotInPos: notInPosShown, showDNP: dnpShown, showBoundingBoxes: bboxShown });
+  }, [board, thtShown, smdShown, virtualShown, notInPosShown, dnpShown, bboxShown]);
 
   // The background gradient (the Appearance manager's Background Start / End swatches).
   useEffect(() => {

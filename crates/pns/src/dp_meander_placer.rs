@@ -476,7 +476,7 @@ impl DpMeanderPlacer {
 
     pub fn spacing_step(&mut self, sign: i64) {
         let s = self.settings.spacing + sign * self.settings.step;
-        let clearance = Node::clearance(&self.env.rules, &self.pair.net_p, &None);
+        let clearance = self.world.track_clearance(&self.env.rules, &self.pair.net_p, self.pair.p.layer);
         self.settings.spacing = s.max(self.width_nm + clearance);
     }
 
@@ -552,7 +552,7 @@ impl DpMeanderPlacer {
             return false;
         }
 
-        let clearance = Node::clearance(&self.env.rules, &self.pair.net_p, &None);
+        let clearance = self.world.track_clearance(&self.env.rules, &self.pair.net_p, self.pair.p.layer);
         let mut env = FitEnv { settings: self.settings.clone(), clearance, world: &self.world, rules: &self.env.rules, net_p: self.pair.net_p.clone(), net_n: self.pair.net_n.clone(), layer: self.pair.p.layer, width_nm: self.pair.width };
         let mut result = MeanderedLine::new(true);
         result.set_width(self.width_nm);
@@ -689,7 +689,7 @@ mod tests {
     }
 
     fn pad(net: &str, at: Point) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: mm(0.3) }, source: "U1.1".into(), edge: false })
+        Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: mm(0.3) }, source: "U1.1".into(), edge: false, rule: 0 })
     }
 
     fn seg(net: &str, a: Point, b: Point) -> Item {

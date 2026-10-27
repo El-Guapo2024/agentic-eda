@@ -10,8 +10,8 @@
 //! A group's members are item ids, and an id may be another group's: grouping a selection that holds groups makes those groups
 //! members of the new one (`PCB_GROUP_TOOL::Group` adds every selected item, a group included, to the new group), where this
 //! model used to flatten them. An item is in one group at a time (`EDA_GROUP::AddItem` takes it out of the one it was in), a
-//! group can hold neither itself nor a group that holds it, and a group of fewer than two members dissolves
-//! (`GROUP_TOOL::RemoveFromGroup`), a nested one taking its place in the group above with it.
+//! group can hold neither itself nor a group that holds it, and Remove Items dissolves a group it leaves with fewer than two
+//! members (`GROUP_TOOL::RemoveFromGroup`'s `affectedGroups`); a group of one is otherwise kept, as KiCad keeps it.
 //!
 //! # Items made while a group is entered
 //!
@@ -24,8 +24,8 @@
 //!
 //! `BOARD_COMMIT::Push` takes an item that is removed out of its parent group. The delete verbs here do not know about groups, so
 //! [`Board::apply`](super::Board::apply) compares the board before and after a command ([`Board::group_universe`]) and
-//! [`Board::tidy_groups`] drops from every group the members that were on the board and no longer are, dissolving a group
-//! that is left with fewer than two. A member the board never had (a group made over ids no item answers to) stays, as it did.
+//! [`Board::tidy_groups`] drops from every group the members that were on the board and no longer are, dropping a group
+//! that is left empty (a group of one stays). A member the board never had (a group made over ids no item answers to) stays, as it did.
 
 use super::{Board, Cmd};
 use eda_model::groups::{GroupHost, GroupRefusal};
@@ -38,7 +38,8 @@ pub(crate) fn refused(r: GroupRefusal) -> Vec<CheckResult> {
     vec![CheckResult::fail(r.check, &r.subject, r.why)]
 }
 
-/// Every id an item of the board can be listed under: placed footprints, copper, graphics, dimensions and the groups themselves.
+/// Every id an item of the board can be listed under: the groupable kinds (`BOARD_ITEM::IsGroupableType`: placed footprints, copper, graphics, texts, text boxes,
+/// reference images, barcodes, dimensions, tables, generators -- tuning patterns and via stitchings -- and the groups themselves; not a point).
 fn universe(design: &Design) -> BTreeSet<String> {
     let mut out: BTreeSet<String> = design.placement.iter().flat_map(|p| p.footprints.iter().map(|f| f.id.clone())).collect();
     if let Some(rt) = &design.routing {
@@ -51,6 +52,11 @@ fn universe(design: &Design) -> BTreeSet<String> {
         out.extend(dr.texts.iter().map(|t| t.id.clone()));
         out.extend(dr.dimensions.iter().map(|d| d.id.clone()));
         out.extend(dr.tables.iter().map(|t| t.id.clone()));
+        out.extend(dr.barcodes.iter().map(|b| b.id.clone()));
+        out.extend(dr.board_items.text_boxes.iter().map(|t| t.id.clone()));
+        out.extend(dr.board_items.images.iter().map(|i| i.id.clone()));
+        out.extend(dr.board_items.via_stitches.iter().map(|v| v.id.clone()));
+        out.extend(dr.tuning_patterns.iter().map(|p| p.id.clone()));
         out.extend(dr.groups.iter().map(|g| g.id.clone()));
     }
     out
@@ -61,8 +67,19 @@ impl Board<'_> {
     /// it was in. When every id shared one group, the new group takes their place in it -- what a group made while that group is
     /// entered does (`BOARD_COMMIT::Push` adds an item made with a group entered to that group, and the selection tool only
     /// offers the entered group's own members then). The list edit is `GroupHost::make_group`, the sheet's as well.
+    ///
+    /// `PCB_GROUP_TOOL::Group`: "if( static_cast<BOARD_ITEM*>( eda_item )->IsLocked() ) group->SetLocked( true );" -- a locked item makes the new group locked.
     pub(crate) fn group_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        self.drawings_mut().make_group(ids).map_err(refused)
+        let dr = self.drawings_mut();
+        let before: BTreeSet<String> = dr.groups.iter().map(|g| g.id.clone()).collect();
+        dr.make_group(ids).map_err(refused)?;
+        if ids.iter().any(|id| dr.locked_ids.contains(id)) {
+            let new: Vec<String> = dr.groups.iter().map(|g| g.id.clone()).filter(|g| !before.contains(g)).collect();
+            dr.locked_ids.extend(new);
+            dr.locked_ids.sort();
+            dr.locked_ids.dedup();
+        }
+        Ok(())
     }
 
     /// `Cmd::Ungroup` (Ctrl+Shift+G): dissolve every named group. Its members are free of it -- also of the group above it, if

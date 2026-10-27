@@ -30,11 +30,17 @@ pub(crate) struct ItemRef {
     pub net: Option<String>,
     /// A rectangle's corner radius (`(radius r)`, `parsePCB_SHAPE`'s `case T_radius: shape->SetCornerRadius( parseBoardUnits( "corner radius" ) )`), nm.
     pub corner_radius: Nm,
+    /// A copper shape's solder-mask opening (`(layers "F.Cu" "F.Mask")`) and its own `(solder_mask_margin ..)`, which `Shape` has no field for (`crate::import::cu_item_layers`).
+    pub solder_mask: bool,
+    pub solder_mask_margin: Option<Nm>,
 }
 
 impl ItemRef {
     /// Read the `(uuid ..)`/`(tstamp ..)`, `locked`, hatch and line endings of one parsed item.
     pub(crate) fn of(item: &[Sexpr]) -> ItemRef {
+        // A board shape's solder-mask opening (tracks keep theirs in `DrawingsSection::track_masks`).
+        let shape = sexpr::tag(item).is_some_and(|t| t.starts_with("gr_"));
+        let mask = shape && crate::import::cu_item_layers(item).is_some_and(|(_, m)| m);
         ItemRef {
             uuid: item_uuid(item),
             locked: is_locked(item),
@@ -42,12 +48,14 @@ impl ItemRef {
             endings: crate::line_ending_io::read(item),
             net: None,
             corner_radius: if sexpr::tag(item) == Some("gr_rect") { sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(crate::import::mm_to_nm).unwrap_or(Nm::ZERO).max(Nm::ZERO) } else { Nm::ZERO },
+            solder_mask: shape && mask,
+            solder_mask_margin: if shape && mask { sexpr::find(item, "solder_mask_margin").and_then(|m| sexpr::num(m, 1)).map(crate::import::mm_to_nm) } else { None },
         }
     }
 
     /// The shape's style as the file gave it, by the id `id` the shape now has; `None` when it says nothing.
     pub(crate) fn shape_style(&self, id: &str) -> Option<eda_model::pcb_items::ShapeStyle> {
-        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), corner_radius: self.corner_radius, ..eda_model::pcb_items::ShapeStyle::empty(id) };
+        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), corner_radius: self.corner_radius, solder_mask: self.solder_mask, solder_mask_margin: self.solder_mask_margin, ..eda_model::pcb_items::ShapeStyle::empty(id) };
         (!st.is_empty()).then_some(st)
     }
 }
@@ -81,6 +89,8 @@ pub(crate) struct Refs {
     /// The items of `eda_model::pcb_items` (text boxes, ..).
     pub board_items: crate::pcb_items_io::ItemRefs,
     pub tables: Vec<ItemRef>,
+    /// The tuning patterns (`(generated (type tuning_pattern) ..)`), in the order `pcb_generated::import_patterns` keeps them.
+    pub patterns: Vec<ItemRef>,
 }
 
 impl Refs {
@@ -148,10 +158,13 @@ impl Refs {
             note(&self.board_items.via_stitches, dr.board_items.via_stitches.iter().map(|v| v.id.as_str()).collect());
             note(&self.board_items.drill_maps, dr.board_items.drill_maps.iter().map(|m| m.id.as_str()).collect());
             note(&self.tables, dr.tables.iter().map(|t| t.id.as_str()).collect());
+            note(&self.patterns, dr.tuning_patterns.iter().map(|p| p.id.as_str()).collect());
         }
 
         let names = design.drawings.iter().flat_map(|d| d.groups.iter().map(|g| g.id.clone())).collect();
-        let (groups, _locked_groups) = build_groups(&by_uuid, raw_groups, names);
+        // A group's `(locked yes)` is the group's lock (`PCB_GROUP::SetLocked`), kept with the items' locks.
+        let (groups, locked_groups) = build_groups(&by_uuid, raw_groups, names);
+        locked.extend(locked_groups);
         locked.sort();
         locked.dedup();
         (groups, locked)
@@ -162,8 +175,8 @@ impl Refs {
 /// several), `raw_groups` are the file's `(group ..)` forms and `names` the group ids already taken.
 ///
 /// A group may name another group (`resolveGroups` adds every group first "so subsequent getItem() calls for nested groups work"): the inner group is
-/// kept as a member of the outer one. Inner groups are made first, so their ids are known when the group that holds them is named; a group of fewer
-/// than two items is nothing to keep, and the one item it holds goes to the group above it.
+/// kept as a member of the outer one. Inner groups are made first, so their ids are known when the group that holds them is named. Every group with a
+/// member on the board is kept, a group of one too (`resolveGroups` keeps every group); the second list is the ids of the groups the file locks.
 pub(crate) fn build_groups(by_uuid: &HashMap<String, Vec<String>>, raw_groups: &[RawGroup], names: std::collections::BTreeSet<String>) -> (Vec<Group>, Vec<String>) {
     #[derive(Clone)]
     enum Built {
@@ -208,8 +221,10 @@ pub(crate) fn build_groups(by_uuid: &HashMap<String, Vec<String>>, raw_groups: &
             if key.is_some() {
                 self.visiting.pop();
             }
-            // A group of one is not a group, unless it is linked to a design block: `SaveSelectionAsDesignBlock` and a block placed as a sheet make those.
-            let built = if members.len() < 2 && !(members.len() == 1 && !g.lib_id.is_empty()) {
+            // `PCB_IO_KICAD_SEXPR_PARSER::resolveGroups` makes a `PCB_GROUP` for every group it reads, whatever its size, so a group of one is kept.
+            // One with no member on the board is left out: KiCad keeps it in memory but never writes it (`format( const PCB_GROUP* )`:
+            // `if( memberIds.empty() ) return;`), and the model holds no empty group.
+            let built = if members.is_empty() {
                 Built::Dropped(members)
             } else {
                 let mut group = Group { id: String::new(), name: g.name.clone(), member_ids: members, design_block: g.lib_id.clone() };
@@ -323,10 +338,10 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
             Some(2) => DimensionUnitsFormat::ParenSuffix,
             _ => DimensionUnitsFormat::NoSuffix,
         };
-        // `DIM_PRECISION`: 0..=5 are 0 to 5 decimals; the four unit-dependent `V_VV..` levels (6..=9) are two to five.
+        // `DIM_PRECISION` as KiCad stores it: 0..=5 are 0 to 5 decimals, 6..=9 the four unit-dependent `V_VV..` levels, kept
+        // as they are so the file KiCad reads back has its own level (`PCB_DIMENSION_BASE::GetValueText` resolves them).
         let precision = match int_of("precision") {
-            Some(p @ 0..=5) => p as u8,
-            Some(p @ 6..=9) => (p - 4) as u8,
+            Some(p @ 0..=9) => p as u8,
             _ => defaults.precision,
         };
         let override_text = format.and_then(|f| sexpr::find(f, "override_value")).and_then(|v| sexpr::txt(v, 1)).map(str::to_string);

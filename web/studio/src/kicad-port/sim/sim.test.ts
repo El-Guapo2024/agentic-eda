@@ -314,6 +314,34 @@ test("the operating point goes on the longest wire of a net and on a pin", async
   assert.equal(i.vertical, false, "a vertical pin's current reads across");
 });
 
+test("S2: the overlay takes the project's OP formats (drawing.operating_point_overlay_*)", async () => {
+  const { opLabels, DEFAULT_OP_FORMATS } = await import("./opOverlay");
+  assert.deepEqual(DEFAULT_OP_FORMATS, { vPrecision: 3, vRange: "~V", iPrecision: 3, iRange: "~A" });
+  const c: Circuit = { ...circuit, pin_nets: { "R1.2": "/out" }, items: [{ ...circuit.items[0]!, ref: "R1" }] };
+  const labels = opLabels({
+    wires: [{ net: "/OUT", pins: ["R1.2"], pts: [[0, 0], [10_000, 0]] }],
+    pins: [],
+    circuit: c,
+    points: new Map([["/out", 1.2]]),
+    voltages: true,
+    currents: false,
+    scale: 1,
+    formats: { ...DEFAULT_OP_FORMATS, vPrecision: 4, vRange: "mV" },
+  });
+  assert.equal(labels[0]?.text, "1200mV");
+});
+
+test("S3: a net with no pin on the sheet is labelled by its name; pins are grouped by symbol (unit), not by reference", async () => {
+  const { opLabels } = await import("./opOverlay");
+  const c: Circuit = { ...circuit, pin_nets: {}, items: [{ ...circuit.items[0]!, ref: "U1", pin_count: 4, pin_index: { "1": 0, "2": 1, "3": 2, "4": 3 }, currents: ["I(U1:a)", "I(U1:b)", "I(U1:c)", "I(U1:d)"] }] };
+  const points = new Map<string, number>([["/lbl", 2.5], ["u1", 1e-3]]);
+  const v = opLabels({ wires: [{ net: "/LBL", pins: [], pts: [[0, 0], [10_000, 0]] }], pins: [], circuit: c, points, voltages: true, currents: false, scale: 1 });
+  assert.equal(v[0]?.text, "2.50V", "GetNetMap's every net, by its name");
+  const pin = (symbol: string, number: string, y: number) => ({ reference: "U1", symbol, number, tip: [0, y] as [number, number], root: [0, y + 10_000] as [number, number], net: null });
+  const i = opLabels({ wires: [], pins: [pin("U1:1", "1", 0), pin("U1:1", "2", 20_000), pin("U1:2", "3", 40_000), pin("U1:2", "4", 60_000)], circuit: c, points, voltages: false, currents: true, scale: 1 });
+  assert.deepEqual(i.map((l) => l.text), ["1.00mA", "1.00mA"], "each two-pin unit takes the item's current on its first pin");
+});
+
 test("the plot goes to the schematic as KiCad's image clipboard text", async () => {
   const { base64, plotImageSexpr } = await import("./simExport");
   assert.equal(base64(new Uint8Array([77, 97, 110])), "TWFu");

@@ -55,7 +55,8 @@ fn kicad_cli_fills_the_derived_board_as_it_fills_the_original() {
         let out = cli_command(&cli, None).args(["pcb", "drc", "--refill-zones", "--save-board", "--format", "report", "--output"]).arg(board.join("original.report")).arg(&original).output().expect("run kicad-cli");
         assert!(out.status.success(), "{rel}: {}", String::from_utf8_lossy(&out.stderr));
         let mut oracle: BTreeMap<String, (f64, usize)> = BTreeMap::new();
-        for f in scan_zone_fills(&std::fs::read_to_string(&original).unwrap()) {
+        // (a fill with no points marks a zone filled with nothing: no ring)
+        for f in scan_zone_fills(&std::fs::read_to_string(&original).unwrap()).into_iter().filter(|f| !f.pts.is_empty()) {
             let e = oracle.entry(f.layer).or_default();
             e.0 += ring_area_mm2(&f.pts);
             e.1 += 1;

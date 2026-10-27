@@ -554,3 +554,71 @@ fn a_stitching_keeps_off_the_pads_its_own_pour_floods() {
         }
     }
 }
+
+/// r2-board-io F7 (r2-pcb-edit A1): `resolveGroups` keeps every group, so the one-member groups `DestA` and `DestB` of `issue22983` that its placement rule
+/// areas name (`(placement (enabled yes) (group "DestA"))`) are in the file we write.
+#[test]
+fn a_placement_rule_areas_one_member_group_is_kept() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(qa) = qa_data() else {
+        eprintln!("skipped: no KiCad 25ec2335 QA data");
+        return;
+    };
+    let text = std::fs::read_to_string(qa.join("pcbnew/issue22983/issue22983.kicad_pcb")).unwrap();
+    let (design, model, _) = import_kicad_pcb(&text).unwrap();
+    let out = export_kicad_pcb(&design, &model, &ExportMeta { date: "2026-01-01", title: "issue22983" }).unwrap();
+    for g in ["DestA", "DestB"] {
+        assert!(out.contains(&format!("(group \"{g}\"")), "the group {g} its rule area names is written");
+        assert!(out.contains(&format!("(placement (enabled yes) (group \"{g}\"))")) || out.contains(&format!("(group \"{g}\")")), "and the rule area still names it");
+    }
+}
+
+/// r2-board-io F14: a footprint's own groups (`issue14559`'s `ICON101` has two, of its silkscreen polygons) are read and written back inside the footprint,
+/// every member named by the uuid its item is written with: kicad-cli, re-saving our file, keeps both groups with all their members.
+#[test]
+fn a_footprints_own_groups_survive_the_round_trip() {
+    if slow_tests_off() {
+        return;
+    }
+    let (Some(qa), Some(cli)) = (qa_data(), kicad_cli()) else {
+        eprintln!("skipped: no KiCad 25ec2335 QA data or kicad-cli");
+        return;
+    };
+    let text = std::fs::read_to_string(qa.join("pcbnew/issue14559.kicad_pcb")).unwrap();
+    let members_of = |board: &str| -> Vec<usize> {
+        let i = board.find("\"ICON101\"").expect("ICON101");
+        let start = board[..i].rfind("(footprint").unwrap();
+        let mut depth = 0i32;
+        let mut end = start;
+        for (k, c) in board[start..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = start + k;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let fp = &board[start..=end];
+        let mut counts: Vec<usize> = fp.split("(group ").skip(1).map(|g| g.split("(members").nth(1).unwrap_or("").split(')').next().unwrap_or("").split_whitespace().count()).collect();
+        counts.sort();
+        counts
+    };
+    let want = members_of(&text);
+    assert_eq!(want.len(), 2, "the QA board's two groups");
+    let (design, model, _) = import_kicad_pcb(&text).unwrap();
+    let out = export_kicad_pcb(&design, &model, &ExportMeta { date: "2026-01-01", title: "issue14559" }).unwrap();
+    assert_eq!(members_of(&out), want, "written back with every member");
+    let dir = work_dir("issue14559_groups");
+    let pcb = dir.join("issue14559.kicad_pcb");
+    std::fs::write(&pcb, &out).unwrap();
+    let run = Command::new(&cli).args(["pcb", "upgrade", "--force"]).arg(&pcb).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(members_of(&std::fs::read_to_string(&pcb).unwrap()), want, "KiCad resolves every member");
+}

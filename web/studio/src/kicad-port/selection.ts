@@ -128,7 +128,13 @@ export interface GuessCandidate {
   areaNm2: number;
   /** The layer this candidate is considered "on" for the active-layer preference pass, or null for an item that doesn't belong to a single layer (a footprint as a whole, a through via) -- treated as always-on-layer, same effect as source's items never entering `rejected` for not matching `activeLayer`. */
   layer: string | null;
+  /** The item's kind (`SelectableKind`), for the silk and courtyard preferences; a candidate without one takes no part in them. */
+  kind?: string;
 }
+
+/** `GuessSelectionCandidates`' `singleLayerSilkTypes`: `PCB_FIELD_T, PCB_TEXT_T, PCB_TEXTBOX_T, PCB_TABLE_T, PCB_TABLECELL_T, PCB_SHAPE_T, PCB_BARCODE_T`. */
+const SINGLE_LAYER_SILK_KINDS = new Set(["field", "text", "textbox", "table", "tablecell", "shape", "barcode"]);
+const isSilk = (l: string | null | undefined): boolean => l === "F.SilkS" || l === "B.SilkS";
 
 /** pcb_selection_tool.cpp: "Prefer exact hits to sloppy ones" -- MAX_SLOP's role is in the caller's own hitTestDistance clamp; this constant is the *second* threshold, `singlePixel`, source adds on top of the best candidate's own slop. */
 export function sloppinessThresholdNm(onePixelNm: number): number {
@@ -140,12 +146,12 @@ export const SIZE_RATIO = 1.5;
 
 /**
  * Port of PCB_SELECTION_TOOL::GuessSelectionCandidates, narrowed to the
- * three passes that translate to this app's simpler item model (no
- * silk/courtyard-active-layer heuristic -- this app has no distinct
- * silkscreen-text item type to special-case, and no footprint
+ * passes that translate to this app's simpler item model (no footprint
  * coverage-ratio override -- no Clipper-based exact polygon coverage
  * here, just the approximate `areaNm2` the caller computed):
  *
+ *   0. "If a silk layer is in front ... give preferential treatment to single-layer items on *either* silk layer"; with a courtyard layer in front in
+ *      high contrast, to footprints (r2-pcb-edit C9). A single preferred item wins at once.
  *   1. Prefer exact/near hits over sloppy ones (within one screen pixel
  *      of the single best hit).
  *   2. Prefer the smallest of a set of nested items (never rejecting
@@ -156,10 +162,19 @@ export const SIZE_RATIO = 1.5;
  * the caller shows the disambiguation menu, matching source's `if
  * (collector.GetCount() > 1) { ... doSelectionMenu ... }`).
  */
-export function guessSelectionCandidates<T extends GuessCandidate>(candidates: readonly T[], onePixelNm: number, activeLayer: string | null): T[] {
+export function guessSelectionCandidates<T extends GuessCandidate>(candidates: readonly T[], onePixelNm: number, activeLayer: string | null, highContrast = false): T[] {
   if (candidates.length <= 1) return [...candidates];
 
   let pool: readonly T[] = candidates;
+
+  // 0. The silk and courtyard preferences.
+  let preferred: T[] = [];
+  if (isSilk(activeLayer)) preferred = pool.filter((c) => c.kind != null && SINGLE_LAYER_SILK_KINDS.has(c.kind) && isSilk(c.layer));
+  else if ((activeLayer === "F.CrtYd" || activeLayer === "B.CrtYd") && highContrast) preferred = pool.filter((c) => c.kind === "part");
+  if (preferred.length > 0) {
+    pool = preferred;
+    if (pool.length === 1) return [...pool];
+  }
 
   // 1. Prefer exact hits to sloppy ones.
   const minSlop = Math.min(...pool.map((c) => c.slopNm));

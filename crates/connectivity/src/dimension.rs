@@ -17,9 +17,7 @@
 //! anywhere -- `eda_engine::geometry::CHAR_WIDTH_FACTOR`'s own `0.6 *
 //! font_size` heuristic, reused here rather than re-derived, is the same
 //! approximation every other text-overlap check in this project already
-//! accepts); a leader's optional text border (rectangle/circle); `DIM_
-//! PRECISION`'s four unit-dependent "V_VVV" levels (`Dimension::precision`
-//! is a flat decimal count instead).
+//! accepts); a leader's optional text border (rectangle/circle).
 
 use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Millideg, Point, Nm};
 
@@ -89,9 +87,11 @@ fn perp(v: Point) -> Point {
     Point { x: -v.y, y: v.x }
 }
 /// Angle of `v` from the +X axis, clockwise-positive in Y-down screen
-/// coordinates (`atan2`'s own natural direction once Y grows downward).
+/// coordinates (`atan2`'s own natural direction once Y grows downward), to
+/// the millidegree (KiCad's `EDA_ANGLE` is a double; a whole degree wrote a
+/// kept-aligned label at 34 where KiCad has 33.69).
 fn angle_of(v: Point) -> i64 {
-    v.y.as_f64().atan2(v.x.as_f64()).to_degrees().round() as i64 * 1000
+    (v.y.as_f64().atan2(v.x.as_f64()).to_degrees() * 1000.0).round() as i64
 }
 fn rotate(p: Point, angle_millideg: i64) -> Point {
     let rad = (angle_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
@@ -137,6 +137,20 @@ fn resolve_units(units: DimensionUnits) -> DimensionUnits {
     }
 }
 
+/// The decimals of a `DIM_PRECISION` level in `units` (already resolved): `PCB_DIMENSION_BASE::GetValueText`'s
+/// `if( precision >= 6 ) switch( m_units ) { INCH: precision - 4; MILS: std::max( 0, precision - 7 ); MM: precision - 5 }`.
+pub fn decimals(precision: u8, units: DimensionUnits) -> usize {
+    let p = precision.min(9) as i64;
+    if p < 6 {
+        return p as usize;
+    }
+    (match units {
+        DimensionUnits::Mil => (p - 7).max(0),
+        DimensionUnits::Mm => p - 5,
+        DimensionUnits::Inch | DimensionUnits::Automatic => p - 4,
+    }) as usize
+}
+
 /// `PCB_DIMENSION_BASE::GetValueText` plus the prefix/suffix/units-suffix
 /// wrapping `updateText()` adds around it.
 fn format_value(dim: &Dimension, measured_value_nm: Nm) -> String {
@@ -155,7 +169,7 @@ fn format_value(dim: &Dimension, measured_value_nm: Nm) -> String {
         DimensionUnits::Automatic => unreachable!("resolved above"),
     };
 
-    let precision = dim.precision.min(5) as usize;
+    let precision = decimals(dim.precision, units);
     let mut number = format!("{value:.precision$}");
 
     if dim.suppress_trailing_zeros && number.contains('.') {
@@ -461,15 +475,16 @@ pub fn translate_dimension(dim: &mut Dimension, dx: Nm, dy: Nm) {
     dim.end.y += dy;
 }
 
-/// Rotate a dimension's own feature points about `pivot` -- `PCB_
-/// DIMENSION_BASE::Rotate`. `text_angle` (only meaningful when
-/// `keep_text_aligned` is false) rotates along too.
+/// Rotate a dimension's own feature points about `pivot` by `angle_millideg`, clockwise-positive on the screen as every
+/// turn of this crate -- `PCB_DIMENSION_BASE::Rotate`. `text_angle` (only meaningful when `keep_text_aligned` is false)
+/// turns along: it is KiCad's counter-clockwise file angle, so KiCad's `newAngle = GetTextAngle() + aAngle` (with
+/// `aAngle` counter-clockwise) is a subtraction here, as `PCB_TEXT::Rotate` is for a text.
 pub fn rotate_dimension(dim: &mut Dimension, pivot: Point, angle_millideg: i64) {
     let mut pts = [dim.start, dim.end];
     rotate_point_set(&mut pts, pivot, angle_millideg);
     dim.start = pts[0];
     dim.end = pts[1];
-    dim.text_angle = ((dim.text_angle as i64 + angle_millideg).rem_euclid(360_000)) as Millideg;
+    dim.text_angle = ((dim.text_angle as i64 - angle_millideg).rem_euclid(360_000)) as Millideg;
 }
 
 #[cfg(test)]
@@ -625,5 +640,18 @@ mod tests {
         let mut dim = base_dim(DimensionKind::Leader, Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO });
         rotate_dimension(&mut dim, Point { x: Nm::ZERO, y: Nm::ZERO }, 90_000);
         assert_eq!(dim.start, Point { x: Nm::ZERO, y: mm(1.0) });
+        assert_eq!(dim.text_angle, 270_000, "a clockwise quarter turn is KiCad's -90");
+    }
+
+    #[test]
+    fn a_unit_dependent_precision_gives_the_decimals_of_its_units() {
+        // `GetValueText`: V_VV (6) is 0.00 in / 0 mils / 0.0 mm, V_VVVVV (9) 0.00000 in / 0.00 mils / 0.0000 mm.
+        assert_eq!([DimensionUnits::Inch, DimensionUnits::Mil, DimensionUnits::Mm].map(|u| decimals(6, u)), [2, 0, 1]);
+        assert_eq!([DimensionUnits::Inch, DimensionUnits::Mil, DimensionUnits::Mm].map(|u| decimals(9, u)), [5, 2, 4]);
+        assert_eq!(decimals(3, DimensionUnits::Mil), 3);
+        let mut dim = base_dim(DimensionKind::Aligned { height: mm(1.0) }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(12.34), y: Nm::ZERO });
+        dim.precision = 6;
+        dim.suppress_trailing_zeros = false;
+        assert_eq!(compute_dimension_geometry(&dim).text, "12.3");
     }
 }

@@ -183,6 +183,9 @@ pub(crate) fn prop_line(list: &[Sexpr], key: &str) -> Vec<Point> {
 }
 
 fn prop_range(list: &[Sexpr], key: &str, default: TargetRange) -> TargetRange {
+    // A length target is a `long long` (`PCB_TUNING_PATTERN::SetProperties`: `long long int val; aProps.get_to_iu( "target_length", val )`), not a coordinate: its
+    // "unconstrained" 1000000 mm is not clamped to the board's coordinate range as a position is.
+    let prop_nm = |list: &[Sexpr], key: &str| prop_num(list, key).map(|v| Nm::new((v * 1_000_000.0).round() as i64));
     // `SetTargetLength( val )` gives a target its default tolerance, then the file's own minimum and maximum replace it
     let opt = prop_nm(list, key).unwrap_or(Nm::new(default.opt));
     let mut r = if opt == LENGTH_UNCONSTRAINED_NM { TargetRange::unconstrained() } else { TargetRange::around(opt) };
@@ -215,8 +218,16 @@ fn prop_delay_range(list: &[Sexpr], key: &str) -> TargetRange {
 
 /// The tuning patterns of the board file `root`, their members named by the file's uuid: `track_ids` maps the uuid of a track the importer made to
 /// its id in the design. A generator of another kind, and a pattern none of whose members is a track of the board, is left out.
+#[cfg(test)]
 pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, String>) -> Vec<TuningPattern> {
+    import_patterns_with_refs(root, track_ids).0
+}
+
+/// [`import_patterns`] with each pattern's file uuid and lock, in the same order: a `(group ..)` names a tuning pattern by its uuid (`resolveGroups` takes
+/// generators as members, `groupTypeObjects`), and `(locked yes)` is the pattern's lock.
+pub(crate) fn import_patterns_with_refs(root: &[Sexpr], track_ids: &BTreeMap<String, String>) -> (Vec<TuningPattern>, Vec<crate::import_items::ItemRef>) {
     let mut out = Vec::new();
+    let mut refs = Vec::new();
     for g in sexpr::find_all(root, "generated") {
         if prop_str(g, "type") != Some("tuning_pattern") {
             continue;
@@ -262,18 +273,20 @@ pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, Strin
             last_status: prop_str(g, "last_status").unwrap_or("tuned").to_string(),
             member_ids: members,
         });
+        refs.push(crate::import_items::ItemRef { uuid: prop_str(g, "uuid").map(str::to_string), locked: prop_bool(g, "locked").unwrap_or(false), ..Default::default() });
     }
-    out
+    (out, refs)
 }
 
 /// The patterns of an imported design: [`import_patterns`] with the tracks the importer made (`refs.tracks[i]` is the file uuid of the design's `i`th track).
-pub(crate) fn attach_patterns(design: &mut Design, root: &[Sexpr], refs: &crate::import_items::Refs) {
+pub(crate) fn attach_patterns(design: &mut Design, root: &[Sexpr], refs: &mut crate::import_items::Refs) {
     let Some(rt) = &design.routing else { return };
     let ids: BTreeMap<String, String> = refs.tracks.iter().zip(&rt.tracks).filter_map(|(r, t)| Some((r.uuid.clone()?, t.id.clone()))).collect();
-    let patterns = import_patterns(root, &ids);
+    let (patterns, pattern_refs) = import_patterns_with_refs(root, &ids);
     if patterns.is_empty() {
         return;
     }
+    refs.patterns = pattern_refs;
     let dr = design.drawings.get_or_insert_with(Default::default);
     dr.tuning_patterns = patterns;
     dr.assign_missing_ids();
@@ -378,6 +391,13 @@ mod tests {
         assert_eq!((t.mode, t.layer.as_str(), t.max_amplitude, t.min_amplitude, t.spacing, t.corner_radius_percent), (TuningMode::Single, "F.Cu", Nm::from_mm(2.0), Nm::from_mm(0.2), Nm::from_mm(0.6), 100), "min_amplitude takes MEANDER_SETTINGS' default");
         assert_eq!((t.target_length, t.last_status.as_str(), t.base_line.len(), t.member_ids.len()), (TargetRange { min: 99_900_000, opt: 100_000_000, max: 100_100_000 }, "too_short", 2, 2));
         assert_eq!((t.origin, t.end), (p(Nm::new(115_571_487), Nm::from_mm(50.14)), p(Nm::new(123_137_350), Nm::from_mm(50.14))));
+        // F17 of round 2: the skew patterns' "unconstrained" 1000000 mm is kept as it is, not clamped to 2147.483637 mm
+        let wide = text.replace("(target_length 100) (target_length_max 100.1) (target_length_min 99.9)", "(target_length 1000000) (target_length_max 1000000) (target_length_min 0)");
+        let back = import_patterns(sexpr::parse(&wide).unwrap().as_list().unwrap(), &ids);
+        assert!(back[0].target_length.is_unconstrained(), "{:?}", back[0].target_length);
+        let mut out = String::new();
+        range_props(&mut out, "target_length", &back[0].target_length);
+        assert!(out.contains("(target_length 1000000)"), "{out}");
         // a pattern with no member of the board is a ghost
         assert!(import_patterns(tree.as_list().unwrap(), &BTreeMap::new()).is_empty());
     }

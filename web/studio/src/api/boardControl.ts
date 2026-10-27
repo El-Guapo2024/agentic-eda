@@ -96,7 +96,7 @@ export interface VrmlOptions {
   units: VrmlUnits;
   no_unspecified: boolean;
   no_dnp: boolean;
-  /** "User defined origin"; off = the board centre. */
+  /** "User defined origin" (`m_cbUserDefinedOrigin`, checked at (0, 0) by default in `dialog_export_vrml_base.cpp`); off = the board centre, which kicad-cli works out itself. */
   user_origin: boolean;
   origin_x: number;
   origin_y: number;
@@ -106,7 +106,7 @@ export interface VrmlOptions {
   relative_paths: boolean;
 }
 
-export const DEFAULT_VRML_OPTIONS: VrmlOptions = { units: "m", no_unspecified: false, no_dnp: false, user_origin: false, origin_x: 0, origin_y: 0, copy_models: false, models_dir: "shapes3D", relative_paths: false };
+export const DEFAULT_VRML_OPTIONS: VrmlOptions = { units: "m", no_unspecified: false, no_dnp: false, user_origin: true, origin_x: 0, origin_y: 0, copy_models: false, models_dir: "shapes3D", relative_paths: false };
 
 export function postFabVrml(options: VrmlOptions): Promise<FabReply> {
   return postJson<FabReply>("/api/fab/vrml", options);

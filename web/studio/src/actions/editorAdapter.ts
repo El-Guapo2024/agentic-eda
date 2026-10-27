@@ -202,7 +202,9 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
           // a click on a member of a group that has not been entered takes the whole group (`FilterCollectorForHierarchy`)
           const groups = board.drawings?.groups ?? [];
           const promoted = ids.map((id) => promoteToGroup(id, groups, studio.enteredGroupId));
-          const { cmds, skippedLocked, message } = boardDeleteCmds(board, promoted);
+          // the picker runs with snapping off (`picker->SetSnapping( false )`): the raw cursor decides a lone zone's cutout
+          const { cmds, skippedLocked, message, keepSelection } = boardDeleteCmds(board, promoted, { cursor: studio.cursorNm });
+          if (keepSelection) snap.dispatch({ type: "SET_SELECTION", refs: keepSelection });
           // a tuning pattern is removed (`PCB_TUNING_PATTERN::Remove`), not deleted track by track
           const patterns = tuningPatternIds(board, promoted);
           if (patterns.length > 0) await removeTuningPatterns(patterns, snap.api, snap.dispatch);
@@ -298,11 +300,7 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         deleteIds: async (ids) => {
           const api = snap.fpApi;
           if (!footprint || !api) return null;
-          for (const id of ids) {
-            if (footprint.pads.some((p) => p.id === id)) await api.deletePad(id);
-            else if (footprint.graphics.some((g) => g.id === id)) await api.deleteGraphic(id);
-            else if (footprint.texts.some((t) => t.id === id)) await api.deleteText(id);
-          }
+          await api.deleteItems(ids);
           return null;
         },
       };
@@ -339,10 +337,7 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         deleteIds: async (ids) => {
           const api = snap.symApi;
           if (!symbol || !api) return null;
-          for (const id of ids) {
-            if (symbol.pins.some((p) => p.id === id)) await api.deletePin(id);
-            else if (symbol.graphics.some((g) => g.id === id)) await api.deleteGraphic(id);
-          }
+          await api.deleteItems(ids);
           return null;
         },
       };

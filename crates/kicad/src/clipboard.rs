@@ -19,11 +19,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+use eda_model::barcode::Barcode;
+use eda_model::board_text::TextExtra;
 use eda_model::ir::{Design, Dimension, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
+use eda_model::pcb_items::{PcbPoint, RefImage, TextBox};
+use eda_model::table::Table;
 use eda_model::{CheckResult, ConstraintModel, Footprint};
 
 use crate::fp_fields::FpExtra;
-use crate::pcb::{write_footprint, write_layers, write_shape, write_text};
+use crate::pcb::{write_footprint, write_layers, write_shape, write_text, write_text_with};
 use crate::pcb_items::{write_dimension, write_groups, write_zone, DimensionArgs, ZoneArgs};
 use crate::{duid, mm, sexpr_str};
 
@@ -40,6 +44,11 @@ pub struct Clipboard {
     pub texts: Vec<Text>,
     pub dimensions: Vec<Dimension>,
     pub footprints: Vec<ClipFootprint>,
+    /// The barcodes, text boxes, reference images and points (`PCB_BARCODE`, `PCB_TEXTBOX`, `PCB_REFERENCE_IMAGE`, `PCB_POINT`), as the text had them.
+    pub barcodes: Vec<Barcode>,
+    pub text_boxes: Vec<TextBox>,
+    pub images: Vec<RefImage>,
+    pub points: Vec<PcbPoint>,
     pub groups: Vec<ClipGroup>,
     /// True when the text was a single bare footprint (`PCB_FOOTPRINT_T` in `PCB_CONTROL::Paste`) rather than a board.
     pub bare_footprint: bool,
@@ -47,7 +56,17 @@ pub struct Clipboard {
 
 impl Clipboard {
     pub fn is_empty(&self) -> bool {
-        self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.footprints.is_empty()
+        self.tracks.is_empty()
+            && self.vias.is_empty()
+            && self.zones.is_empty()
+            && self.shapes.is_empty()
+            && self.texts.is_empty()
+            && self.dimensions.is_empty()
+            && self.footprints.is_empty()
+            && self.barcodes.is_empty()
+            && self.text_boxes.is_empty()
+            && self.images.is_empty()
+            && self.points.is_empty()
     }
 }
 
@@ -98,6 +117,9 @@ pub enum ClipRef {
     Text(usize),
     Dimension(usize),
     Footprint(usize),
+    Barcode(usize),
+    TextBox(usize),
+    Image(usize),
     /// A group inside the group (`PCB_GROUP` is an item like any other): the position in [`Clipboard::groups`]. Inner groups are
     /// listed before the groups that hold them.
     Group(usize),
@@ -119,19 +141,44 @@ struct Picked<'a> {
     shapes: Vec<&'a Shape>,
     texts: Vec<&'a Text>,
     dimensions: Vec<&'a Dimension>,
+    /// A footprint's field, as the free text `SaveSelection` makes of it (`copy = new PCB_TEXT( m_board )` with the field's text, position, layer,
+    /// attributes and draw rotation).
+    fields: Vec<(Text, TextExtra)>,
+    barcodes: Vec<&'a Barcode>,
+    text_boxes: Vec<&'a TextBox>,
+    images: Vec<&'a RefImage>,
+    points: Vec<&'a PcbPoint>,
+    tables: Vec<&'a Table>,
+    /// Pads copied on their own (`REF.NUM[#k]`): `SaveSelection` puts each in a new footprint of its own ("Create a parent footprint to own the
+    /// copied item").
+    pads: Vec<String>,
     groups: Vec<&'a Group>,
 }
 
 impl<'a> Picked<'a> {
     fn total(&self) -> usize {
-        self.footprints.len() + self.tracks.len() + self.vias.len() + self.zones.len() + self.shapes.len() + self.texts.len() + self.dimensions.len()
+        self.footprints.len()
+            + self.tracks.len()
+            + self.vias.len()
+            + self.zones.len()
+            + self.shapes.len()
+            + self.texts.len()
+            + self.dimensions.len()
+            + self.fields.len()
+            + self.barcodes.len()
+            + self.text_boxes.len()
+            + self.images.len()
+            + self.points.len()
+            + self.tables.len()
+            + self.pads.len()
     }
 
     /// Files `id` under its kind. `false` when the board has nothing under that id.
-    fn add_item(&mut self, design: &'a Design, id: &str, seen: &mut BTreeSet<String>) -> bool {
+    fn add_item(&mut self, design: &'a Design, model: &ConstraintModel, id: &str, seen: &mut BTreeSet<String>) -> bool {
         if !seen.insert(id.to_string()) {
             return true;
         }
+        let dr = design.drawings.as_ref();
         if let Some(f) = design.placement.as_ref().and_then(|p| p.footprints.iter().find(|f| f.id == id)) {
             self.footprints.push(f);
         } else if let Some(t) = design.routing.as_ref().and_then(|r| r.tracks.iter().find(|t| t.id == id)) {
@@ -146,6 +193,20 @@ impl<'a> Picked<'a> {
             self.texts.push(t);
         } else if let Some(d) = design.drawings.as_ref().and_then(|d| d.dimensions.iter().find(|d| d.id == id)) {
             self.dimensions.push(d);
+        } else if let Some(b) = dr.and_then(|d| d.barcodes.iter().find(|b| b.id == id)) {
+            self.barcodes.push(b);
+        } else if let Some(t) = dr.and_then(|d| d.board_items.text_boxes.iter().find(|t| t.id == id)) {
+            self.text_boxes.push(t);
+        } else if let Some(i) = dr.and_then(|d| d.board_items.images.iter().find(|i| i.id == id)) {
+            self.images.push(i);
+        } else if let Some(p) = dr.and_then(|d| d.board_items.points.iter().find(|p| p.id == id)) {
+            self.points.push(p);
+        } else if let Some(t) = dr.and_then(|d| d.tables.iter().find(|t| t.id == id)) {
+            self.tables.push(t);
+        } else if lone_pad(design, model, id).is_some() {
+            self.pads.push(id.to_string());
+        } else if let Some(field) = field_as_text(design, model, id) {
+            self.fields.push(field);
         } else {
             seen.remove(id);
             return false;
@@ -154,33 +215,120 @@ impl<'a> Picked<'a> {
     }
 
     /// A group and everything below it: its items, and the groups it holds with theirs.
-    fn add_group(&mut self, design: &'a Design, g: &'a Group, seen: &mut BTreeSet<String>) {
+    fn add_group(&mut self, design: &'a Design, model: &ConstraintModel, g: &'a Group, seen: &mut BTreeSet<String>) {
         if !seen.insert(g.id.clone()) {
             return;
         }
         self.groups.push(g);
         for m in &g.member_ids {
             match design.drawings.as_ref().and_then(|d| d.group(m)) {
-                Some(inner) => self.add_group(design, inner, seen),
+                Some(inner) => self.add_group(design, model, inner, seen),
                 None => {
-                    self.add_item(design, m, seen);
+                    self.add_item(design, model, m, seen);
                 }
             }
         }
     }
 
-    fn resolve(design: &'a Design, ids: &[String]) -> Result<Picked<'a>, Vec<CheckResult>> {
+    fn resolve(design: &'a Design, model: &ConstraintModel, ids: &[String]) -> Result<Picked<'a>, Vec<CheckResult>> {
         let mut out = Picked::default();
         let mut seen = BTreeSet::new();
         for id in ids {
             if let Some(g) = design.drawings.as_ref().and_then(|d| d.group(id)) {
-                out.add_group(design, g, &mut seen);
-            } else if !out.add_item(design, id, &mut seen) {
-                return Err(fail("clipboard.unknown_item", id, "no placed part, track, via, zone, shape, text, dimension or group with this id"));
+                out.add_group(design, model, g, &mut seen);
+            } else if !out.add_item(design, model, id, &mut seen) {
+                return Err(fail("clipboard.unknown_item", id, "no item of the board has this id"));
             }
         }
         Ok(out)
     }
+}
+
+/// The pad `id` of a placed footprint, copied on its own: `SaveSelection`'s `if( copy->Type() == PCB_FIELD_T || copy->Type() == PCB_PAD_T )` makes a new
+/// `FOOTPRINT` at the pad's position and adds the pad to it. Here that footprint keeps the reference, orientation and side of the one the pad is on (KiCad's
+/// is a fresh one, unnamed, at 0 degrees on the front, the pad keeping its own angle and layers: the same copper on the board) and has no library name, so
+/// a paste makes a footprint of that one pad. The pad keeps its edit (as the only pad edit) and its net. Returns the part with no footprint name, the
+/// one-pad footprint, its pose (at the pad), and the pad's edit.
+fn lone_pad(design: &Design, model: &ConstraintModel, id: &str) -> Option<(eda_model::Part, Footprint, FootprintInstance, eda_model::fp_edit::FootprintEdit)> {
+    use eda_model::fp_edit::{pad_index, parse_pad_id, FootprintEdit};
+    let (reference, number, nth) = parse_pad_id(id)?;
+    let fp = design.placement.as_ref()?.footprints.iter().find(|f| f.id == reference)?;
+    let part = model.part(&reference)?;
+    let footprint = model.footprint_of(part)?;
+    let mut pad = footprint.pads.get(pad_index(&footprint, &number, nth)?)?.clone();
+    let at = eda_model::footprint::to_board(fp, pad.at);
+    pad.at = (eda_model::ir::Nm::ZERO, eda_model::ir::Nm::ZERO);
+    let one = Footprint { name: String::new(), pads: vec![pad], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
+    let mut edit = FootprintEdit::new(&reference);
+    edit.pads = design.footprint_edit(&reference).into_iter().flat_map(|e| e.pads.iter()).filter(|p| p.number == number && p.nth.max(1) == nth.max(1)).map(|p| eda_model::fp_edit::PadEdit { nth: 1, ..p.clone() }).collect();
+    let part = eda_model::Part { footprint: Some(String::new()), package: None, ..part.clone() };
+    Some((part, one, FootprintInstance { at, ..fp.clone() }, edit))
+}
+
+/// The field `id` (`REF:Reference`, `REF:Value`, `REF:<name>`) of a placed footprint as the free text `CLIPBOARD_IO::SaveSelection` writes for it: a
+/// `PCB_TEXT` with the field's position, layer, text attributes and text, turned by `GetDrawRotation()` (a kept-upright field's angle brought into
+/// (-90, 90]), `${VALUE}` and `${REFERENCE}` replaced by the footprint's value and reference. (Hidden fields come over shown: `Text` has no visibility.)
+fn field_as_text(design: &Design, model: &ConstraintModel, id: &str) -> Option<(Text, TextExtra)> {
+    use eda_model::fp_edit::{effective_reference, effective_value, parse_field_id};
+    let (reference, name) = parse_field_id(id)?;
+    let fp = design.placement.as_ref()?.footprints.iter().find(|f| f.id == reference)?;
+    let part = model.part(reference)?;
+    let value = part.value.clone().unwrap_or_else(|| reference.to_string());
+    let (layout, text) = match name {
+        "Reference" => {
+            let footprint = model.footprint_of(part)?;
+            let l = effective_reference(design, fp, &footprint);
+            let t = l.shown(reference).to_string();
+            (l, t)
+        }
+        "Value" => {
+            let l = effective_value(design, fp);
+            let t = l.shown(&value).to_string();
+            (l, t)
+        }
+        other => {
+            let f = design.footprint_edit(reference)?.fields.iter().find(|f| f.name == other)?;
+            (f.layout.clone(), f.text.clone())
+        }
+    };
+    let text = match text.as_str() {
+        "${VALUE}" => value,
+        "${REFERENCE}" => reference.to_string(),
+        _ => text,
+    };
+    let mut angle = layout.board_angle(fp);
+    if layout.keep_upright {
+        // `while( rotation > ANGLE_90 ) rotation -= ANGLE_180; while( rotation <= -ANGLE_90 ) rotation += ANGLE_180;`
+        while angle > 90_000 {
+            angle -= 180_000;
+        }
+        while angle <= -90_000 {
+            angle += 180_000;
+        }
+    }
+    let justify = match layout.halign {
+        i8::MIN..=-1 => eda_model::ir::TextJustify::Left,
+        0 => eda_model::ir::TextJustify::Center,
+        _ => eda_model::ir::TextJustify::Right,
+    };
+    let t = Text {
+        id: format!("clipfield:{id}"),
+        content: text,
+        at: layout.board_position(fp),
+        angle: angle.rem_euclid(360_000) as Millideg,
+        layer: layout.layer.clone(),
+        size_nm: layout.size.1,
+        stroke_width: layout.thickness,
+        justify,
+        mirror: layout.mirror,
+    };
+    let valign = match layout.valign {
+        i8::MIN..=-1 => eda_model::ir::TextVAlign::Top,
+        0 => eda_model::ir::TextVAlign::Center,
+        _ => eda_model::ir::TextVAlign::Bottom,
+    };
+    let extra = TextExtra { id: t.id.clone(), width_nm: (layout.size.0 != layout.size.1).then_some(layout.size.0), valign, bold: layout.bold, italic: layout.italic, knockout: layout.knockout, ..Default::default() };
+    Some((t, extra))
 }
 
 /// A footprint's part and geometry, and its pose moved to `at`.
@@ -196,7 +344,7 @@ fn fp_pieces<'m>(model: &'m ConstraintModel, fp: &FootprintInstance, at: Point) 
 /// dimension and group ids), with `reference` as the point the copy is measured from -- the point a Paste will put back on
 /// the cursor.
 pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[String], reference: Point) -> Result<String, Vec<CheckResult>> {
-    let picked = Picked::resolve(design, ids)?;
+    let picked = Picked::resolve(design, model, ids)?;
     if picked.total() == 0 {
         return Err(fail("clipboard.empty", "copy", "nothing to copy: none of the items is a footprint, track, via, zone, graphic, text or dimension"));
     }
@@ -225,6 +373,11 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
             }
         }
     }
+    for id in &picked.pads {
+        // the pad's own pin (`REF.NUM`)
+        let pin = id.split('#').next().unwrap_or(id);
+        names.extend(model.nets.iter().filter(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.as_str()));
+    }
     names.remove("");
     let net_num: BTreeMap<&str, usize> = names.iter().enumerate().map(|(i, n)| (*n, i + 1)).collect();
     let net_n = |name: &str| net_num.get(name).copied().unwrap_or(0);
@@ -247,6 +400,19 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
         let (part, footprint, moved) = fp_pieces(fp)?;
         let uuid = write_footprint(&mut out, &moved, part, &footprint, &net_num, model, design, false, "", &FpExtra::of(design, &moved.id, &footprint), &Default::default());
         written.entry(fp.id.clone()).or_default().push(uuid);
+    }
+    for id in &picked.pads {
+        let Some((part, one, pose, edit)) = lone_pad(design, model, id) else { continue };
+        let moved = FootprintInstance { at: mv(pose.at), ..pose };
+        // The footprint the pad is on says nothing of this one (its uuid, holes, mask and zone settings are the whole footprint's).
+        let mut bare = design.clone();
+        if let Some(d) = bare.drawings.as_mut() {
+            d.footprint_extras.retain(|e| e.id != moved.id);
+            d.footprint_edits.retain(|e| e.id != moved.id);
+            d.zone_overrides.retain(|z| z.id != moved.id);
+        }
+        let extra = FpExtra { edit: Some(&edit), attrs: bare.effective_attrs(&moved.id, &one) };
+        write_footprint(&mut out, &moved, &part, &one, &net_num, model, &bare, false, "", &extra, &Default::default());
     }
     for t in &picked.tracks {
         let (n, w, layer) = (net_n(&t.net), mm(t.width), sexpr_str(&t.layer));
@@ -276,7 +442,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
         moved.holes = z.holes.iter().map(|h| h.iter().map(|p| mv(*p)).collect()).collect();
         let n = if z.is_rule_area { 0 } else { net_n(&z.net) };
         let uuid = duid(&format!("clip:zone:{}", z.id));
-        write_zone(&mut out, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &[], enabled_layers: None });
+        write_zone(&mut out, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &[], filled: false, enabled_layers: None });
         written.entry(z.id.clone()).or_default().push(uuid);
     }
     for s in &picked.shapes {
@@ -302,6 +468,46 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
         written.entry(d.id.clone()).or_default().push(uuid);
     }
     // Groups last, as KiCad writes them: a group names its members by uuid, and the parser resolves them once every item is read.
+    for (t, extra) in &picked.fields {
+        let mut moved = t.clone();
+        moved.at = mv(t.at);
+        let extra = (!extra.is_default()).then_some(extra);
+        write_text_with(&mut out, &moved, false, extra);
+    }
+    for b in &picked.barcodes {
+        let mut moved = (*b).clone();
+        moved.at = mv(b.at);
+        let uuid = crate::barcode_io::write(&mut out, &moved, false);
+        written.entry(b.id.clone()).or_default().push(uuid);
+    }
+    // Text boxes, reference images and points (a point is in no group: `IsGroupableType`), each moved by minus the reference point.
+    let mut items = eda_model::pcb_items::BoardItems::default();
+    for t in &picked.text_boxes {
+        let mut moved = (*t).clone();
+        moved.start = mv(t.start);
+        moved.end = mv(t.end);
+        for q in moved.pts.iter_mut() {
+            *q = mv(*q);
+        }
+        items.text_boxes.push(moved);
+    }
+    for i in &picked.images {
+        let mut moved = (*i).clone();
+        moved.at = mv(i.at);
+        items.images.push(moved);
+    }
+    for q in &picked.points {
+        let mut moved = (*q).clone();
+        moved.at = mv(q.at);
+        items.points.push(moved);
+    }
+    crate::pcb_items_io::write_all(&mut out, &items, &|_| false, &mut written);
+    for t in &picked.tables {
+        let mut moved = (*t).clone();
+        moved.translate(dx, dy);
+        let uuid = crate::pcb_table::write(&mut out, &moved, false);
+        written.entry(t.id.clone()).or_default().push(uuid);
+    }
     write_groups(&mut out, &picked.groups, &written, &|g| duid(&format!("clip:group:{}", g.id)), &|_| false);
     writeln!(out, ")").unwrap();
     Ok(out)
@@ -336,6 +542,10 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
         clip.shape_style = dr.shapes.iter().map(|s| dr.board_items.style_of(s.id()).cloned()).collect();
         clip.texts = dr.texts.clone();
         clip.dimensions = dr.dimensions.clone();
+        clip.barcodes = dr.barcodes.clone();
+        clip.text_boxes = dr.board_items.text_boxes.clone();
+        clip.images = dr.board_items.images.clone();
+        clip.points = dr.board_items.points.clone();
     }
     let mut fp_index: BTreeMap<String, usize> = BTreeMap::new();
     for fp in design.placement.iter().flat_map(|p| p.footprints.iter()) {
@@ -387,6 +597,9 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
                         .or_else(|| clip.shapes.iter().position(|s| s.id() == m).map(ClipRef::Shape))
                         .or_else(|| clip.texts.iter().position(|t| &t.id == m).map(ClipRef::Text))
                         .or_else(|| clip.dimensions.iter().position(|d| &d.id == m).map(ClipRef::Dimension))
+                        .or_else(|| clip.barcodes.iter().position(|b| &b.id == m).map(ClipRef::Barcode))
+                        .or_else(|| clip.text_boxes.iter().position(|t| &t.id == m).map(ClipRef::TextBox))
+                        .or_else(|| clip.images.iter().position(|i| &i.id == m).map(ClipRef::Image))
                         .or_else(|| fp_index.get(m).copied().map(ClipRef::Footprint)))
                 })
                 .collect();

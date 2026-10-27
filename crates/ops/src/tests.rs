@@ -534,6 +534,32 @@ fn edit_tracks_and_vias_net_class_resolves_each_items_own_net() {
     assert_eq!(widths["SLOW"], m.board.track_width, "SLOW has no class, so it falls back to the board default");
 }
 
+/// r2-pcb-edit C3: "Set to net class / custom rule values" is `PCB_EDIT_FRAME::SetTrackSegmentWidth( .., true )`: the width the DRC engine's
+/// `TRACK_WIDTH_CONSTRAINT` gives the item (its opt, else its min), so a custom rule wins over the class and a net of a diff pair takes the class's diff-pair
+/// width (`drc_engine.cpp`'s `A.hasExactNetclass(..) && A.inDiffPair('*')` rule); a via its `VIA_DIAMETER_CONSTRAINT` and `HOLE_SIZE_CONSTRAINT`.
+#[test]
+fn edit_tracks_and_vias_net_class_takes_the_diff_pair_width_and_custom_rules() {
+    let mut m = model(vec![part("U1", "SOIC-8"), part("U2", "SOIC-8")], &[("USB_P", &["U1"]), ("USB_N", &["U2"]), ("VBUS", &["U1"])], vec![]);
+    m.board.net_classes = vec![eda_model::NetClass { name: "HS".into(), nets: vec!["USB_P".into(), "USB_N".into()], track_width: Some(mm(0.2)), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(mm(0.12)), diff_pair_gap: Some(mm(0.15)), diff_pair_via_gap: None, priority: 0 }];
+    m.board.custom_rules_text = Some("(version 1)\n(rule w\n  (condition \"A.NetName == 'VBUS'\")\n  (constraint track_width (opt 0.5mm)))\n(rule v\n  (condition \"A.NetName == 'VBUS'\")\n  (constraint via_diameter (opt 0.9mm))\n  (constraint hole_size (opt 0.4mm)))\n".into());
+    let mut b = board(&m);
+    for (i, net) in ["USB_P", "USB_N", "VBUS"].iter().enumerate() {
+        let y = mm(i as f64 * 2.0);
+        b.apply(&Cmd::AddTrack { net: (*net).into(), layer: "F.Cu".into(), width: mm(0.3), pts: vec![Point { x: Nm::ZERO, y }, Point { x: mm(5.0), y }] }).unwrap();
+    }
+    b.apply(&Cmd::AddVia { net: "VBUS".into(), x: mm(8.0), y: mm(4.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    let rt = b.design().routing.as_ref().unwrap();
+    let mut ids: Vec<String> = rt.tracks.iter().map(|t| t.id.clone()).collect();
+    ids.push(rt.vias[0].id.clone());
+    b.apply(&Cmd::EditTracksAndVias { ids, track_width: Some(SizeSpec::NetClass), via_size: Some(ViaSizeSpec::NetClass), layer: None }).unwrap();
+    let rt = b.design().routing.as_ref().unwrap();
+    let widths: std::collections::BTreeMap<String, Nm> = rt.tracks.iter().map(|t| (t.net.clone(), t.width)).collect();
+    assert_eq!(widths["USB_P"], mm(0.12), "a diff pair's net takes the class's diff-pair width");
+    assert_eq!(widths["USB_N"], mm(0.12));
+    assert_eq!(widths["VBUS"], mm(0.5), "the custom rule's opt");
+    assert_eq!((rt.vias[0].diameter, rt.vias[0].drill), (mm(0.9), mm(0.4)));
+}
+
 #[test]
 fn edit_tracks_and_vias_refuses_empty_ids_and_bad_explicit_values() {
     let m = net_model();
@@ -1693,6 +1719,11 @@ fn new_footprint_creates_an_empty_smd_footprint_and_refuses_a_name_already_taken
     assert!(fp.pads.is_empty() && fp.graphics.is_empty());
     assert!(fp.attributes.smd && !fp.attributes.through_hole, "a new footprint defaults to SMD");
     assert!(!fp.published);
+    // E1 (r2-editors-exports): the Footprint Editor's third default text item, `${REFERENCE}` on F.Fab at (0, 2.5 mm), 1 mm / 0.15 mm.
+    assert_eq!(fp.texts.iter().map(|t| (t.content.as_str(), t.layer.as_str(), t.at.y, t.size_nm, t.stroke_width)).collect::<Vec<_>>(), [("${REFERENCE}", "F.Fab", mm(2.5), mm(1.0), mm(0.15))]);
+    let text = eda_kicad::export_kicad_mod(fp);
+    assert!(text.contains("(property \"Reference\" \"REF**\" (at 0 -0.5 0) (layer \"F.SilkS\")") && text.contains("(property \"Value\" \"Untitled\" (at 0 1 0) (layer \"F.Fab\")"), "{text}");
+    assert!(text.contains("(fp_text user \"${REFERENCE}\" (at 0 2.5") , "{text}");
 
     // already in the project library
     let e = b.apply(&Cmd::NewFootprint { name: "Untitled".into() }).unwrap_err();
@@ -1703,9 +1734,14 @@ fn new_footprint_creates_an_empty_smd_footprint_and_refuses_a_name_already_taken
     assert_eq!(b.apply(&Cmd::NewFootprint { name: String::new() }).unwrap_err()[0].check, "ops_bad_footprint");
     // its own undo domain, like every footprint-editor verb
     assert_eq!(Cmd::NewFootprint { name: "x".into() }.domain(), Domain::FootprintEditor);
-    // a second "Untitled_1" is fine
+    // a second "Untitled_1" is fine; it takes the attributes of the library's last footprint (`fpnames.back()`), here a through-hole one
+    if let Some(l) = b.design.footprint_library.as_mut() {
+        l.footprints[0].attributes = eda_model::ir::FootprintAttributes { through_hole: true, ..Default::default() };
+    }
     b.apply(&Cmd::NewFootprint { name: "Untitled_1".into() }).unwrap();
     assert_eq!(b.design().footprint_library.as_ref().unwrap().footprints.len(), 2);
+    let second = b.design().footprint_library.as_ref().unwrap().by_name("Untitled_1").unwrap();
+    assert!(second.attributes.through_hole && !second.attributes.smd, "{:?}", second.attributes);
 }
 
 #[test]
@@ -2575,12 +2611,12 @@ fn add_pin_against_an_unopened_symbol_is_refused() {
 }
 
 #[test]
-fn add_pin_rejects_an_empty_number() {
+fn add_pin_takes_an_empty_number_as_createpin_makes_it() {
+    // r2-editors-exports E2: `CreatePin` leaves the number empty and Pin Properties' OK does not ask for one.
     let m = net_model();
     let mut b = board(&m);
     b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
-    let e = b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin("", 0.0, 0.0) }).unwrap_err();
-    assert_eq!(e[0].check, "ops_bad_pin");
+    b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin("", 0.0, 0.0) }).unwrap();
 }
 
 #[test]

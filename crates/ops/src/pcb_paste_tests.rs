@@ -331,3 +331,22 @@ fn a_footprint_copied_from_the_back_is_pasted_where_it_was() {
     };
     assert_eq!(pads(&b), pads(&source), "every pad where it was");
 }
+
+/// r2-pcb-edit C2: Copy of one pad (`copyToClipboard` has no `FilterCollectorForFreePads`) puts that pad on the clipboard in a footprint of its own
+/// (`SaveSelection`: "Create a parent footprint to own the copied item"); a Paste makes a footprint of that one pad, on the pad's net, not a second U1.
+#[test]
+fn a_copied_pad_pastes_as_a_footprint_of_that_one_pad() {
+    let text = copy(&["U1.2"], p(Nm::ZERO, Nm::ZERO));
+    assert_eq!(text.matches("(pad ").count(), 1, "{text}");
+    assert!(text.contains("(net 1 \"VCC\")") || text.contains("\"VCC\""), "the pad keeps its net: {text}");
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let before = b.design().placement.as_ref().unwrap().footprints.len();
+    b.apply(&Cmd::PasteClipboard { text, at: p(mm(50.0), mm(50.0)) }).unwrap();
+    let fps = &b.design().placement.as_ref().unwrap().footprints;
+    assert_eq!(fps.len(), before + 1);
+    let new = fps.iter().find(|f| f.id != "U1" && f.id != "U2").expect("a new footprint");
+    let bp = b.design().drawings.as_ref().unwrap().board_parts.iter().find(|p| p.reference == new.id).expect("a board part");
+    assert_eq!(bp.definition.as_ref().map(|d| d.pads.len()), Some(1), "one pad, not U1's three: {bp:?}");
+    assert_eq!(bp.pad_nets, vec![("2".to_string(), "VCC".to_string())]);
+}

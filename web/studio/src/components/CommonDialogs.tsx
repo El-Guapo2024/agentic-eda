@@ -3,7 +3,6 @@ import { useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { closeGroupDialog, updateGroupDialog, useCommonDialogs } from "../state/commonDialogs";
 import { removeMemberAt } from "../kicad-port/groupEdit";
-import { linkProblem } from "../kicad-port/designBlocks";
 import { describeBoardItem, describeSchematicItem } from "../actions/editorAdapter";
 import { useActionRunner } from "../actions/useActionRunner";
 import { AboutDialog } from "./AboutDialog";
@@ -16,8 +15,9 @@ import { SaveFootprintAsDialog } from "./SaveFootprintAsDialog";
  * `DIALOG_GROUP_PROPERTIES` (common/dialogs/dialog_group_properties.cpp): the group's name and its member list. The plus button hides the
  * dialog and asks for a click on a new member (`ACTIONS::pickNewGroupMember`, PCB_GROUP_TOOL::PickNewMember -- common.Groups.selectNewGroupMember),
  * the trash button drops the selected row, a click on a row shows the item on the canvas (`FocusOnItem`). OK is one undo step (`EditGroup`) and
- * selects the group again; Cancel changes nothing. The "Library link:" box is the group's design block (`m_libraryLink`, `LIB_ID::Parse`: "Invalid library link:
- * '...'" keeps the dialog open); empty clears the link. Not here: the dialog's "Locked" box, which this model has no counterpart for.
+ * selects the group again; Cancel changes nothing. The "Library link:" box is the group's design block (`m_libraryLink`, `LIB_ID::Parse( .., true )`, which never
+ * fails: a name with no library is a link too, illegal characters become `_`); empty clears the link. "Locked" (`m_locked`, shown for a `PCB_GROUP_T` only) is the
+ * board group's lock, sent with the edit in one batch.
  */
 function GroupPropertiesDialog() {
   const dlg = useCommonDialogs().group;
@@ -27,35 +27,34 @@ function GroupPropertiesDialog() {
   const { run } = useActionRunner();
   const [row, setRow] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
-  const [linkError, setLinkError] = useState<string | null>(null);
   if (!dlg || dlg.hidden) return null;
 
   const close = () => {
     dispatch({ type: "SET_HOT", refs: [] });
     setRow(null);
-    setLinkError(null);
     closeGroupDialog();
   };
+  const onBoard = state.tab !== "schematic";
+  const wasLocked = onBoard && (state.board?.locked ?? []).includes(dlg.id);
+  const locked = dlg.locked ?? wasLocked;
   const ok = async () => {
-    // `TransferDataFromWindow`: a link that is no library id is refused and the dialog stays
-    const bad = linkProblem(dlg.designBlock);
-    setLinkError(bad);
-    if (bad) return;
     setBusy(true);
     try {
       // the group of the sheet in view is the sheet's (`SCH_GROUP`), the board's otherwise
       const design_block = dlg.designBlock.trim();
-      const done = await api.cmd(
-        state.tab === "schematic"
-          ? { op: "sch_edit", verb: "edit_group", id: dlg.id, name: dlg.name, member_ids: dlg.members, design_block }
-          : { op: "edit_group", id: dlg.id, name: dlg.name, member_ids: dlg.members, design_block }
-      );
+      const done = !onBoard
+        ? await api.cmd({ op: "sch_edit", verb: "edit_group", id: dlg.id, name: dlg.name, member_ids: dlg.members, design_block })
+        : await api.cmdBatch([
+            { op: "edit_group", id: dlg.id, name: dlg.name, member_ids: dlg.members, design_block },
+            // `m_group->AsEdaItem()->SetLocked( m_locked->GetValue() )`
+            ...(locked !== wasLocked ? [{ op: "set_locked" as const, ids: [dlg.id], locked }] : []),
+          ]);
       if (!done) return;
       dispatch({ type: "SET_HOT", refs: [] });
       setRow(null);
       closeGroupDialog();
-      // `ACTIONS::selectItem( group )`; a group left with fewer than two members is gone
-      dispatch({ type: "SET_SELECTION", refs: dlg.members.length >= 2 ? [dlg.id] : [] });
+      // `ACTIONS::selectItem( group )`: a group of one is still a group; one left empty is gone
+      dispatch({ type: "SET_SELECTION", refs: dlg.members.length >= 1 ? [dlg.id] : [] });
     } finally {
       setBusy(false);
     }
@@ -77,17 +76,14 @@ function GroupPropertiesDialog() {
               aria-label="Library link"
               placeholder="Library:Design block"
               spellCheck={false}
-              onChange={(e) => {
-                setLinkError(null);
-                updateGroupDialog({ designBlock: e.target.value });
-              }}
+              onChange={(e) => updateGroupDialog({ designBlock: e.target.value })}
               onKeyDown={(e) => e.key === "Enter" && void ok()}
             />
           </div>
-          {linkError && (
-            <div role="alert" style={{ color: "var(--chrome-error, #c0392b)", fontSize: 12, marginTop: 4 }}>
-              {linkError}
-            </div>
+          {onBoard && (
+            <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+              <input type="checkbox" checked={locked} aria-label="Locked" onChange={(e) => updateGroupDialog({ locked: e.target.checked })} /> Locked
+            </label>
           )}
           <div style={{ marginTop: 10, fontSize: 12 }}>Group members</div>
           <div style={{ border: "1px solid var(--chrome-border)", minHeight: 120, maxHeight: 220, overflowY: "auto", marginTop: 4 }} role="listbox" aria-label="Group members">

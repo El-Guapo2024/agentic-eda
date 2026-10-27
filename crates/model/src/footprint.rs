@@ -307,7 +307,8 @@ pub fn placed_courtyard(model: &ConstraintModel, part: &Part, fp: &FootprintInst
 /// The box of the placed footprint's courtyard as KiCad has it: `FOOTPRINT::GetBoundingBox` merges the footprint's `F.CrtYd`/`B.CrtYd`
 /// drawings as they are, so an off-centre courtyard (a pin header with its origin at pin 1) gives an off-centre box. That is the real
 /// outlines ([`Footprint::courtyard_outlines`]) put on the board, else the rectangle the board file is written with (`courtyard_half`,
-/// symmetric, turned with the footprint: the box of its four corners). [`placed_courtyard`] is the placer's symmetric box.
+/// symmetric, turned with the footprint: the box of its four corners). [`placed_courtyard`] is the placer's symmetric box. Each drawing's box is grown by half its
+/// line (`PCB_SHAPE::GetBoundingBox`): the library's courtyard lines' widest, else KiCad's 0.05 mm courtyard line, which the writer draws the box with.
 pub fn placed_courtyard_box(model: &ConstraintModel, part: &Part, fp: &FootprintInstance) -> Option<(Nm, Nm, Nm, Nm)> {
     let footprint = model.footprint_of(part)?;
     let pts: Vec<Point> = if footprint.courtyard_outlines.iter().any(|o| !o.is_empty()) {
@@ -316,8 +317,9 @@ pub fn placed_courtyard_box(model: &ConstraintModel, part: &Part, fp: &Footprint
         let (hw, hh) = footprint.courtyard_half();
         [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].into_iter().map(|p| to_board(fp, p)).collect()
     };
-    let (x0, y0) = (pts.iter().map(|p| p.x).min()?, pts.iter().map(|p| p.y).min()?);
-    let (x1, y1) = (pts.iter().map(|p| p.x).max()?, pts.iter().map(|p| p.y).max()?);
+    let half = footprint.art.courtyard.iter().map(|s| s.shape.stroke_width()).max().unwrap_or(Nm::new(50_000)) / 2;
+    let (x0, y0) = (pts.iter().map(|p| p.x).min()? - half, pts.iter().map(|p| p.y).min()? - half);
+    let (x1, y1) = (pts.iter().map(|p| p.x).max()? + half, pts.iter().map(|p| p.y).max()? + half);
     Some((x0, y0, x1, y1))
 }
 
@@ -1209,9 +1211,10 @@ mod tests {
         let header = Footprint { name: "HDR".into(), pads: vec![Pad::simple("1", (Nm::ZERO, Nm::ZERO), (Nm::new(1_700_000), Nm::new(1_700_000)), PadShape::Rect, PadKind::ThroughHole, None)], courtyard: Some((Nm::new(1_770_000), Nm::new(9_390_000))), model: None, courtyard_outlines: vec![ring], models3d: vec![], art: Default::default() };
         let (model, part) = part_with("HDR", header);
         let (x, y) = (Nm::new(10_000_000), Nm::new(10_000_000));
-        assert_eq!(placed_courtyard_box(&model, &part, &fp_instance(0, Side::Top)), Some((x - Nm::new(1_770_000), y - Nm::new(1_770_000), x + Nm::new(1_770_000), y + Nm::new(9_390_000))));
+        // grown by half the 0.05 mm courtyard line (r2-pcb-edit R8: `PCB_SHAPE::GetBoundingBox` counts the stroke)
+        assert_eq!(placed_courtyard_box(&model, &part, &fp_instance(0, Side::Top)), Some((x - Nm::new(1_795_000), y - Nm::new(1_795_000), x + Nm::new(1_795_000), y + Nm::new(9_415_000))));
         // turned a quarter (clockwise on the screen, `to_board`), the long side points left
-        assert_eq!(placed_courtyard_box(&model, &part, &fp_instance(90_000, Side::Top)), Some((x - Nm::new(9_390_000), y - Nm::new(1_770_000), x + Nm::new(1_770_000), y + Nm::new(1_770_000))));
+        assert_eq!(placed_courtyard_box(&model, &part, &fp_instance(90_000, Side::Top)), Some((x - Nm::new(9_415_000), y - Nm::new(1_795_000), x + Nm::new(1_795_000), y + Nm::new(1_795_000))));
         // the placer's box (the importer's symmetric enclosure) stays symmetric
         let sym = placed_courtyard(&model, &part, &fp_instance(0, Side::Top)).unwrap();
         assert_eq!(sym.1, y - Nm::new(9_390_000));

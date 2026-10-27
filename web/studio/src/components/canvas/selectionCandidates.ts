@@ -12,6 +12,7 @@
 // track right under the cursor, but its much larger area loses the
 // size-ratio pass -- see pcb_selection_tool.cpp's own comment: "If the
 // user clicked on a small item within a much larger one...").
+import { stitchFilteredAsVia } from "../../kicad-port/viaStitch";
 import type { BoardState, Dimension, FieldInfo, Pad, Part } from "../../api/types";
 import { padIds } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
@@ -82,6 +83,11 @@ function lockedForFilter(board: BoardState, locked: ReadonlySet<string>, lockedI
   const groups = board.drawings?.groups ?? [];
   if (groups.length === 0 || locked.size === 0) return false;
   return ancestors(groups, lockedId).some((g) => locked.has(g.id));
+}
+
+/** The kind `itemPassesFilter` filters an item as (kicad-port/viaStitch.ts `stitchFilteredAsVia`: a via stitching with vias follows the Vias row). */
+function filterKindOf(board: BoardState, kind: SelectableKind, id: string): SelectableKind {
+  return kind === "via_stitch" && stitchFilteredAsVia(board, id) ? "via" : kind;
 }
 
 function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
@@ -233,7 +239,7 @@ export function collectSelectionCandidates(
   const locked = new Set(board.locked ?? []);
   const consider = (kind: SelectableKind, id: string, slopNm: number, areaNm2: number, layer: string | null, lockedId: string = id, ruleArea = false) => {
     if (slopNm > toleranceNm) return;
-    if (!(kind === "zone" ? zoneAllowed(filter, ruleArea) : filterAllows(filter, kind)) || !objectSelectable(kind, layerVisible)) return;
+    if (!(kind === "zone" ? zoneAllowed(filter, ruleArea) : filterAllows(filter, filterKindOf(board, kind, id))) || !objectSelectable(kind, layerVisible)) return;
     // pcb_selection_tool.cpp itemPassesFilter: `!m_filter.lockedItems && aItem->IsLocked()` -> rejected -- but a click may pick a lone pad of a locked
     // footprint ("allow a single pad to be selected -- there are a lot of operations that require this").
     if (!filter.lockedItems && kind !== "pad" && lockedForFilter(board, locked, lockedId)) return;
@@ -413,7 +419,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   const padHits: BoxSelectHit[] = [];
   const locked = new Set(board.locked ?? []);
   const consider = (kind: SelectableKind, id: string, itemBox: Box, layer: string | null, lockedId: string = id, ruleArea = false) => {
-    if (!(kind === "zone" ? zoneAllowed(filter, ruleArea) : filterAllows(filter, kind)) || !objectSelectable(kind, layerVisible)) return;
+    if (!(kind === "zone" ? zoneAllowed(filter, ruleArea) : filterAllows(filter, filterKindOf(board, kind, id))) || !objectSelectable(kind, layerVisible)) return;
     if (!filter.lockedItems && lockedForFilter(board, locked, lockedId)) return; // itemPassesFilter, as above (a box is a multi-select: no lone-pad exception)
 
     if (!layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
@@ -495,5 +501,5 @@ export function pickSelectionCandidates(
 ): SelectionCandidate[] {
   const all = collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, subtractiveOnly);
   if (skipHeuristics) return all;
-  return guessSelectionCandidates(all, onePixelNm, activeLayer);
+  return guessSelectionCandidates(all, onePixelNm, activeLayer, highContrast);
 }

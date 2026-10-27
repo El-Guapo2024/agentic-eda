@@ -71,9 +71,10 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
 
     let mut out = String::new();
     writeln!(out, "(kicad_pcb").unwrap();
-    writeln!(out, "\t(version 20241229)").unwrap();
+    let version = board_file_version(design);
+    writeln!(out, "\t(version {version})").unwrap();
     writeln!(out, "\t(generator \"eda-kicad\")").unwrap();
-    writeln!(out, "\t(generator_version \"9.0\")").unwrap();
+    writeln!(out, "\t(generator_version \"{}\")", if version > KICAD9_BOARD_FILE_VERSION { "10.0" } else { "9.0" }).unwrap();
     writeln!(out, "\t(general").unwrap();
     // `(general (thickness ..))`: the board's thickness (`BOARD_DESIGN_SETTINGS::GetBoardThickness()`), KiCad's 1.6 mm unless Board Setup's
     // Physical Stackup says otherwise.
@@ -144,43 +145,20 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     // The point the editing grid is anchored at (`common.Control.gridSetOrigin`): KiCad's `(grid_origin x y)` of the board setup.
     let grid = design.drawings.as_ref().and_then(|d| d.grid_origin).unwrap_or(eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO });
     writeln!(out, "\t\t(grid_origin {} {})", mm(grid.x), mm(grid.y)).unwrap();
-    writeln!(out, "\t\t(pcbplotparams").unwrap();
-    writeln!(out, "\t\t\t(layerselection 0x00010fc_ffffffff)").unwrap();
-    writeln!(out, "\t\t\t(plot_on_all_layers_selection 0x0000000_00000000)").unwrap();
-    writeln!(out, "\t\t\t(disableapertmacros no)").unwrap();
-    writeln!(out, "\t\t\t(usegerberextensions no)").unwrap();
-    writeln!(out, "\t\t\t(usegerberattributes yes)").unwrap();
-    writeln!(out, "\t\t\t(usegerberadvancedattributes yes)").unwrap();
-    writeln!(out, "\t\t\t(creategerberjobfile yes)").unwrap();
-    // Text & Graphics > Formatting: the dash and the gap of a dashed line, in line widths.
-    writeln!(out, "\t\t\t(dashed_line_dash_ratio {:.6})", model.board.formatting.dash_length_ratio).unwrap();
-    writeln!(out, "\t\t\t(dashed_line_gap_ratio {:.6})", model.board.formatting.gap_length_ratio).unwrap();
-    writeln!(out, "\t\t\t(svgprecision 4)").unwrap();
-    writeln!(out, "\t\t\t(plotframeref no)").unwrap();
-    writeln!(out, "\t\t\t(mode 1)").unwrap();
-    writeln!(out, "\t\t\t(useauxorigin no)").unwrap();
-    writeln!(out, "\t\t\t(hpglpennumber 1)").unwrap();
-    writeln!(out, "\t\t\t(hpglpenspeed 20)").unwrap();
-    writeln!(out, "\t\t\t(hpglpendiameter 15.000000)").unwrap();
-    writeln!(out, "\t\t\t(pdf_front_fp_property_popups yes)").unwrap();
-    writeln!(out, "\t\t\t(pdf_back_fp_property_popups yes)").unwrap();
-    writeln!(out, "\t\t\t(dxfpolygonmode yes)").unwrap();
-    writeln!(out, "\t\t\t(dxfimperialunits yes)").unwrap();
-    writeln!(out, "\t\t\t(dxfusepcbnewfont yes)").unwrap();
-    writeln!(out, "\t\t\t(psnegative no)").unwrap();
-    writeln!(out, "\t\t\t(psa4output no)").unwrap();
-    writeln!(out, "\t\t\t(plotreference yes)").unwrap();
-    writeln!(out, "\t\t\t(plotvalue yes)").unwrap();
-    writeln!(out, "\t\t\t(plotfptext yes)").unwrap();
-    writeln!(out, "\t\t\t(plotinvisibletext no)").unwrap();
-    writeln!(out, "\t\t\t(sketchpadsonfab no)").unwrap();
-    writeln!(out, "\t\t\t(subtractmaskfromsilk no)").unwrap();
-    writeln!(out, "\t\t\t(outputformat 1)").unwrap();
-    writeln!(out, "\t\t\t(mirror no)").unwrap();
-    writeln!(out, "\t\t\t(drillshape 1)").unwrap();
-    writeln!(out, "\t\t\t(scaleselection 1)").unwrap();
-    writeln!(out, "\t\t\t(outputdirectory \"\")").unwrap();
-    writeln!(out, "\t\t)").unwrap();
+    // The board's plot settings (`PCB_PLOT_PARAMS::Format`): an imported board's own, else KiCad's defaults; the dash ratios are Text & Graphics > Formatting's.
+    {
+        let plot = design.drawings.as_ref().and_then(|d| d.plot_params.clone()).unwrap_or_else(eda_model::plot_params::PlotParams::kicad_default);
+        writeln!(out, "\t\t(pcbplotparams").unwrap();
+        writeln!(out, "\t\t\t(layerselection {})", eda_model::plot_params::encode_layer_selection(&plot.layer_selection)).unwrap();
+        writeln!(out, "\t\t\t(plot_on_all_layers_selection {})", eda_model::plot_params::encode_layer_selection(&plot.plot_on_all_layers)).unwrap();
+        let mut plot = plot;
+        plot.set_item("dashed_line_dash_ratio", &format!("{:.6}", model.board.formatting.dash_length_ratio));
+        plot.set_item("dashed_line_gap_ratio", &format!("{:.6}", model.board.formatting.gap_length_ratio));
+        for item in &plot.items {
+            writeln!(out, "\t\t\t{item}").unwrap();
+        }
+        writeln!(out, "\t\t)").unwrap();
+    }
     writeln!(out, "\t)").unwrap();
 
     // ---- nets ----
@@ -320,12 +298,14 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             };
             written.entry(z.id.clone()).or_default().push(uuid.clone());
             // The rings kicad-cli stored for the zone on each of its layers, while the zone is the one it filled.
-            let layer_fills: Vec<(String, Vec<crate::zone_fills::KicadRing>)> = match fills {
+            // None for a zone kicad-cli has no current fill of: it is written unfilled (`ZONE::IsFilled`), as is one whose file said so of its rings (`ZoneEntry::unfilled`).
+            let layer_fills: Vec<(String, Vec<crate::zone_fills::KicadRing>)> = match fills.filter(|k| k.current(z).is_some()) {
                 Some(k) => z.layer_set().into_iter().map(|layer| (layer.to_string(), k.rings(z, layer).to_vec())).collect(),
                 None => Vec::new(),
             };
+            let filled = fills.and_then(|k| k.current(z)).is_some_and(|e| !e.unfilled);
             let mut block = String::new();
-            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fills: &layer_fills, enabled_layers: Some(&enabled) });
+            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fills: &layer_fills, filled, enabled_layers: Some(&enabled) });
             zone_blocks.push((z.parent_footprint.clone(), block));
         }
     }
@@ -353,6 +333,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             let n = net_of("a track", &format!("{} on {}", t.net, t.layer), &t.net);
             let lock = if is_locked(&t.id) { " (locked yes)" } else { "" };
             let w = mm(t.width);
+            let mask = design.drawings.as_ref().and_then(|d| d.track_mask(&t.id));
+            let layer = cu_item_layer_words(&t.layer, mask.is_some(), mask.and_then(|m| m.margin));
             if let Some((start, mid, end)) = t.arc() {
                 // `PCB_ARC`: one `(arc (start) (mid) (end) (width))` item. `Track::arc()` only reports an arc
                 // while the polyline still is its tessellation, so an edited arc is written as the segments
@@ -361,14 +343,13 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
                 written.entry(t.id.clone()).or_default().push(uuid.clone());
                 writeln!(
                     out,
-                    "\t(arc (start {} {}) (mid {} {}) (end {} {}) (width {w}){lock} (layer {}) (net {n}) (uuid \"{uuid}\"))",
+                    "\t(arc (start {} {}) (mid {} {}) (end {} {}) (width {w}){lock} {layer} (net {n}) (uuid \"{uuid}\"))",
                     mm(start.x),
                     mm(start.y),
                     mm(mid.x),
                     mm(mid.y),
                     mm(end.x),
                     mm(end.y),
-                    sexpr_str(&t.layer)
                 )
                 .unwrap();
                 continue;
@@ -380,7 +361,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
                 let y2 = mm(pair[1].y);
                 let uuid = crate::duid_for(&format!("segment:{}:{}:{}:{}", t.net, t.layer, ti, j), &if j == 0 { t.id.clone() } else { format!("{}#{j}", t.id) });
                 written.entry(t.id.clone()).or_default().push(uuid.clone());
-                writeln!(out, "\t(segment (start {x1} {y1}) (end {x2} {y2}) (width {w}){lock} (layer {}) (net {n}) (uuid \"{uuid}\"))", sexpr_str(&t.layer)).unwrap();
+                writeln!(out, "\t(segment (start {x1} {y1}) (end {x2} {y2}) (width {w}){lock} {layer} (net {n}) (uuid \"{uuid}\"))").unwrap();
             }
         }
 
@@ -502,6 +483,13 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     // resolves them once every item has been read.
     if let Some(drawings) = &design.drawings {
         let groups: Vec<&eda_model::ir::Group> = drawings.groups.iter().collect();
+        // A group may hold a generator (`resolveGroups`' `groupTypeObjects` has them): a tuning pattern that is written (one with a member on the
+        // board) is named by its uuid.
+        for p in &drawings.tuning_patterns {
+            if p.member_ids.iter().any(|m| written.contains_key(m)) {
+                written.entry(p.id.clone()).or_default().push(crate::duid_for(&format!("generated:{}", p.id), &p.id));
+            }
+        }
         write_groups(&mut out, &groups, &written, &|g| crate::duid_for(&format!("group:{}", g.id), &g.id), &is_locked);
         // ... and the generators after them (`PCB_IO_KICAD_SEXPR::format( BOARD )` writes them last): the tuning patterns.
         crate::pcb_generated::write_generated(&mut out, &drawings.tuning_patterns, &written, &|p| crate::duid_for(&format!("generated:{}", p.id), &p.id), &is_locked);
@@ -1041,6 +1029,30 @@ pub(crate) fn half_turn_layout(l: &mut eda_model::fp_edit::FieldLayout) {
     l.angle = (l.angle + 180_000).rem_euclid(360_000);
 }
 
+/// An angle in millidegrees in (-180, 180] (`EDA_ANGLE::Normalize180`).
+fn normalize180(a: i64) -> i64 {
+    let mut a = a.rem_euclid(360_000);
+    if a > 180_000 {
+        a -= 360_000;
+    }
+    a
+}
+
+/// Is the back footprint `fp` written half a turn from the model's pose (see [`write_footprint`])? One made or flipped here is, one read in the
+/// file's frame is not.
+fn written_half_turned(design: &Design, fp: &FootprintInstance) -> bool {
+    let read_in_the_files_frame = design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == fp.id && !e.library_frame));
+    fp.side == Side::Bottom && !read_in_the_files_frame
+}
+
+/// KiCad's orientation of the footprint `fp`, in millidegrees counter-clockwise, in (-180, 180]: the angle of the `(at x y angle)` the writer gives it,
+/// which is what KiCad's Properties panel (`FOOTPRINT::GetOrientationDegrees`) and Footprint Properties show. A back footprint made or flipped here
+/// is half a turn from the model's `rot` (`FOOTPRINT::Flip`: `-m_orient`, then `Rotate( ANGLE_180 )` for a left-right flip).
+pub fn kicad_footprint_orientation(design: &Design, fp: &FootprintInstance) -> i64 {
+    let half = if written_half_turned(design, fp) { 180_000 } else { 0 };
+    normalize180(-(fp.rot as i64 + half))
+}
+
 /// One footprint; returns the uuid it was written with (a group's `(members ..)` names it).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn write_footprint(
@@ -1064,8 +1076,7 @@ pub(crate) fn write_footprint(
     // orientation (`ExchangeFootprint`), then put it where it was, and its 3D models need no turn of their own. A footprint read from a KiCad file is in
     // that frame already (the reader keeps the file's numbers), and is written as it was read.
     // (one read in the library's frame, `FootprintExtra::library_frame`, is turned as one made here)
-    let read_in_the_files_frame = design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == fp.id && !e.library_frame));
-    let turn = fp.side == Side::Bottom && !read_in_the_files_frame;
+    let turn = written_half_turned(design, fp);
     let (as_placed, footprint_as_placed) = (fp, footprint);
     let (turned_fp, turned_footprint);
     let (fp, footprint) = if turn {
@@ -1086,13 +1097,7 @@ pub(crate) fn write_footprint(
     // `footprint::to_board` output and `kicad-cli pcb drc` unconnected-item
     // positions for a rotated part.
     // `FOOTPRINT::SetOrientation` keeps the angle in (-180, 180] (`Normalize180`), and the file has it so.
-    let rot_deg = {
-        let mut a = -(fp.rot as i64) % 360_000;
-        if a <= -180_000 {
-            a += 360_000;
-        }
-        fmt_mm_f(a as f64 / 1000.0)
-    };
+    let rot_deg = fmt_mm_f(normalize180(-(fp.rot as i64)) as f64 / 1000.0);
     // A footprint imported from a KiCad file keeps the uuid it had there (the first footprint to claim one), as a pour does: a text can name a footprint by its uuid
     // (`${uuid:REFERENCE}`) and `kicad-cli pcb diff` matches items by it.
     let kept_uuid = design.drawings.as_ref().and_then(|d| {
@@ -1206,7 +1211,7 @@ pub(crate) fn write_footprint(
         }
         writeln!(out, ")").unwrap();
     }
-    write_attr(out, &extra.attrs);
+    write_attr(out, &extra.attrs, own_extra.is_some_and(|e| e.allow_soldermask_bridges));
 
     // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).
     let mut pads: Vec<(usize, &Pad)> = footprint.pads.iter().enumerate().collect();
@@ -1255,9 +1260,13 @@ pub(crate) fn write_footprint(
     // The k-th pad that carries a number is the one the studio and a `PadEdit` name `NUM#k`.
     let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
     let mut pad_seeds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // The uuid each pad is written with, by `NUM#k`: a group of the footprint names its pads so.
+    let mut pad_uuids: BTreeMap<String, String> = BTreeMap::new();
     for &(pad_idx, pad) in &pads {
         let art_layers: &[String] = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.art_layers.as_slice()).unwrap_or_default();
         let (no_paste, no_mask, connector) = pad_infos.and_then(|p| p.get(pad_idx)).map_or((false, false, false), |i| (i.no_paste, i.no_mask, i.connector));
+        // The paste and mask of a hole or an edge connector pad that the file had and the default does not give, on the footprint's side.
+        let hole_tech: Option<Vec<String>> = pad_infos.and_then(|p| p.get(pad_idx)).and_then(|i| i.hole_tech_layers.as_ref()).map(|t| t.iter().map(|l| eda_model::fp_art::layer_on_side(l, fp.side)).collect());
         let nth = {
             let n = seen.entry(pad.number.as_str()).or_insert(0);
             *n += 1;
@@ -1309,6 +1318,7 @@ pub(crate) fn write_footprint(
             pad_seeds.insert(seed.clone());
         }
         let uuid = crate::duid_for(&seed, &format!("{}.{}", fp.id, pad.number));
+        pad_uuids.insert(format!("pad:{}#{nth}", pad.number), uuid.clone());
         // KiCad stores a pad's orientation as its footprint's own angle
         // plus the pad's own (0 for the overwhelming majority of pads) --
         // see `pad_file_angle` for the mirroring subtlety.
@@ -1331,15 +1341,14 @@ pub(crate) fn write_footprint(
                     // A pad of a board's file that says no drill (the Allegro importer makes them): `format( PAD )` writes the token for a hole of some size only.
                     (None, None) => {}
                 }
-                if art_layers.is_empty() && !no_mask {
-                    write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
-                } else if art_layers.is_empty() {
-                    write!(out, " (layers \"*.Cu\")").unwrap();
-                } else if no_mask {
-                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&["F.Cu", "B.Cu"], art_layers, fp.side)).unwrap();
-                } else {
-                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&["F.Cu", "B.Cu", "F.Mask", "B.Mask"], art_layers, fp.side)).unwrap();
+                // Copper on both sides and the mask on both, or the paste and mask the file's pad had (`PadMaskInfo::hole_tech_layers`: `format( const PAD* )` writes the pad's own set).
+                let mut base: Vec<&str> = vec!["F.Cu", "B.Cu"];
+                match &hole_tech {
+                    Some(tech) => base.extend(tech.iter().map(String::as_str)),
+                    None if !no_mask => base.extend(["F.Mask", "B.Mask"]),
+                    None => {}
                 }
+                write!(out, " {}", crate::fp_art_io::pad_layers_token(&base, art_layers, fp.side)).unwrap();
             }
             PadKind::Smd => {
                 if let Some((ox, oy)) = shape_text.offset {
@@ -1361,6 +1370,8 @@ pub(crate) fn write_footprint(
                 let several = !connector && !smd_layers.is_empty();
                 let base: Vec<&str> = if several {
                     smd_layers
+                } else if let (true, Some(tech)) = (connector, &hole_tech) {
+                    std::iter::once(cu).chain(tech.iter().map(String::as_str)).collect()
                 } else if connector {
                     std::iter::once(cu).chain((!no_mask).then_some(["F.Mask", "B.Mask"]).into_iter().flatten()).collect()
                 } else {
@@ -1457,7 +1468,18 @@ pub(crate) fn write_footprint(
         write!(out, "\t\t(pad {} np_thru_hole {} (at {px} {} {}) (size {} {})", sexpr_str(&pad.number), crate::pad_shape::shape_token(pad.shape), mm(pad.at.1), crate::pad_file_angle(fp.side, fp.rot, pad.rot), mm(pad.size.0), mm(pad.size.1)).unwrap();
         out.push_str(&shape_text.delta);
         out.push_str(&shape_text.corners);
-        write!(out, " {drill} (layers \"*.Mask\")").unwrap();
+        // Its layers (`*.Mask` unless the file's hole had others, `FootprintHole::layers`) and the tokens it had (its mask margin, ..), as `format( const PAD* )` writes them.
+        let layers = match &hole.layers {
+            Some(names) => {
+                let names: Vec<String> = names.iter().map(|l| eda_model::fp_art::layer_on_side(l, fp.side)).collect();
+                if names.is_empty() { "(layers)".to_string() } else { crate::fp_art_io::pad_layers_token(&names.iter().map(String::as_str).collect::<Vec<_>>(), &[], fp.side) }
+            }
+            None => "(layers \"*.Mask\")".to_string(),
+        };
+        write!(out, " {drill} {layers}").unwrap();
+        for token in &hole.tokens {
+            write!(out, " {token}").unwrap();
+        }
         if let Some(c) = hole.clearance {
             write!(out, " (clearance {})", mm(c)).unwrap();
         }
@@ -1562,6 +1584,41 @@ pub(crate) fn write_footprint(
 
     // The footprint's own zones (rule areas it carries), after its pads and graphics as KiCad writes them.
     out.push_str(zones);
+    // The footprint's own groups (`format( const FOOTPRINT* )` writes `GetGroups()` inside it), while the part is on the footprint they were read from: each
+    // member by the uuid its item is written with here.
+    if let Some(e) = own_extra.filter(|e| !e.groups.is_empty() && e.source_name == lib_name_written) {
+        let field_names: Vec<&str> = extra.edit.map(|ed| ed.fields.iter().map(|f| f.name.as_str()).collect()).unwrap_or_default();
+        for (gi, g) in e.groups.iter().enumerate() {
+            let mut members: Vec<String> = g
+                .members
+                .iter()
+                .filter_map(|m| {
+                    let (kind, rest) = m.split_once(':')?;
+                    match kind {
+                        "art" => Some(crate::duid_for(&format!("footprint:{}:art:{rest}", fp.id), &fp.id)),
+                        "arttext" => Some(crate::duid_for(&format!("footprint:{}:arttext:{rest}", fp.id), &fp.id)),
+                        "pad" => pad_uuids.get(m).cloned(),
+                        "uuid" => own_courtyard.is_some().then(|| rest.to_string()),
+                        "field" => match rest {
+                            "Reference" => Some(crate::duid_for(&format!("footprint:{}:ref", fp.id), &fp.id)),
+                            "Value" => Some(crate::duid_for(&format!("footprint:{}:val", fp.id), &fp.id)),
+                            name => field_names.iter().position(|n| *n == name).map(|i| crate::duid_for(&format!("footprint:{}:field:{i}", fp.id), &fp.id)),
+                        },
+                        _ => None,
+                    }
+                })
+                .collect();
+            if members.is_empty() {
+                continue;
+            }
+            members.sort();
+            members.dedup();
+            let guuid = crate::duid_for(&format!("footprint:{}:group:{gi}", fp.id), &fp.id);
+            let lock = if g.locked { " (locked yes)" } else { "" };
+            let quoted: Vec<String> = members.iter().map(|m| sexpr_str(m)).collect();
+            writeln!(out, "\t\t(group {} (uuid \"{guuid}\"){lock} (members {}))", sexpr_str(&g.name), quoted.join(" ")).unwrap();
+        }
+    }
     writeln!(out, "\t)").unwrap();
     uuid
 }
@@ -1606,13 +1663,53 @@ fn teardrop_priorities(zones: &[Zone]) -> std::collections::HashMap<&str, u32> {
 ///
 /// `style` is what the board keeps of the shape beyond `Shape` ([`eda_model::pcb_items::ShapeStyle`]): its hatch, its line endings (`(start_shape ..)` and `(end_shape ..)`
 /// after the stroke, `LINE_ENDING::Format`; an open shape's only) and its net, which `net` has already turned into the file's number (0 is none: `GetNetCode() > 0`).
+/// KiCad 9's board file version (`SEXPR_BOARD_FILE_VERSION` 20241229, "Expand User layers to arbitrary count"): what the writer writes a board as, so that KiCad 9 opens it
+/// (`parseBOARD_unchecked`'s `checkVersion` refuses a newer file outright).
+pub(crate) const KICAD9_BOARD_FILE_VERSION: i64 = 20241229;
+
+/// The first board file version whose vias inherit the board's covering, plugging, capping and filling when they say none of their own (20250228, "ipc-4761 via protection
+/// features"; `parsePCB_VIA`: `if( m_requiredVersion < 20250228 )` sets them all off, "Versions before 10.0 had no protection features other than tenting, so those features must
+/// be interpreted as OFF in legacy boards, not as unspecified (aka: inherit from board stackup)").
+pub(crate) const FIRST_VIA_PROTECTION_VERSION: i64 = 20250228;
+
+/// The file version a board is written as: KiCad 9's, which every reader of this crate's files opens, unless the board holds KiCad 10 data whose meaning the version decides
+/// (`m_requiredVersion` in 25ec2335's `pcb_io_kicad_sexpr_parser.cpp`):
+/// - board defaults for the vias' covering, plugging, capping or filling (`DrawingsSection::setup_tokens`): a via that says nothing inherits them only from 20250228 on, so the
+///   board is written as 20250228. The one other gate between the two versions, the stroked zone fill of before 20250210 (`isStrokedFill`), is off in either, as every zone is
+///   written `(filled_areas_thickness no)`; KiCad 9 cannot read such a setup anyway.
+/// - The later gates are met where the board is read instead, the tree normalised to KiCad 9's meaning: bold text (20260826, `crate::bold_text`), a footprint's library frame
+///   (20260616, `crate::fp_transform`), a reference image's scale (20260623, `crate::pcb_image::file_scale`). A version past 20260616 would have every footprint read in its
+///   library frame, which this writer does not write.
+pub(crate) fn board_file_version(design: &Design) -> i64 {
+    if design.drawings.as_ref().is_some_and(|d| !d.setup_tokens.is_empty()) {
+        FIRST_VIA_PROTECTION_VERSION
+    } else {
+        KICAD9_BOARD_FILE_VERSION
+    }
+}
+
+/// The layer words of a track, an arc or a board shape: `(layer "F.Cu")`, or, for one with a solder-mask opening on an outer copper layer, `(layers "F.Cu" "F.Mask")` and its own
+/// `(solder_mask_margin ..)` when it has one (`pcb_io_kicad_sexpr.cpp::format( PCB_TRACK )` and `format( PCB_SHAPE )`: `formatLayers( GetLayerSet() )` when the set has more than one
+/// layer, and `GetLayerSet` adds `F_Mask` to `F_Cu` and `B_Mask` to `B_Cu` only; the margin `if( HasSolderMask() && GetLocalSolderMaskMargin().has_value() &&
+/// IsExternalCopperLayer( GetLayer() ) )`).
+pub(crate) fn cu_item_layer_words(layer: &str, has_mask: bool, margin: Option<Nm>) -> String {
+    let mask_layer = match layer {
+        "F.Cu" if has_mask => "F.Mask",
+        "B.Cu" if has_mask => "B.Mask",
+        _ => return format!("(layer {})", sexpr_str(layer)),
+    };
+    let margin = margin.map(|m| format!(" (solder_mask_margin {})", mm(m))).unwrap_or_default();
+    format!("(layers {} {}){margin}", sexpr_str(layer), sexpr_str(mask_layer))
+}
+
 pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: Option<&eda_model::pcb_items::ShapeStyle>, net: usize) -> String {
     let sw = |w: Nm| mm(w.max(Nm::ZERO));
     let uuid = crate::duid_for(&format!("shape:{}", shape.id()), shape.id());
     let hatch = style.and_then(|st| st.hatch);
     let ends = style.map(|st| crate::line_ending_io::words(&st.endings, matches!(shape, Shape::Rect { .. } | Shape::Circle { .. } | Shape::Polygon { .. }))).unwrap_or_default();
     // `(net ..)` after the layer, before the uuid.
-    let layer = if net > 0 { format!("(layer {}) (net {net})", sexpr_str(shape.layer())) } else { format!("(layer {})", sexpr_str(shape.layer())) };
+    let layer = cu_item_layer_words(shape.layer(), style.is_some_and(|st| st.solder_mask), style.and_then(|st| st.solder_mask_margin));
+    let layer = if net > 0 { format!("{layer} (net {net})") } else { layer };
     // `(fill yes)`, `(fill no)` or `(fill hatch)`, `(fill reverse_hatch)`, `(fill cross_hatch)`: a solid fill wins over a hatch.
     let fill = |filled: bool| match (filled, hatch) {
         (true, _) => "yes",
@@ -2294,7 +2391,7 @@ mod tests {
     fn kicad_fills_of(design: &Design) -> crate::zone_fills::KicadFills {
         use crate::zone_fills::{zone_signature, KicadFills, KicadRing, ZoneEntry};
         let ring = KicadRing { island: false, pts: vec![[2_000_000, 2_000_000], [4_000_000, 2_000_000], [4_000_000, 4_000_000], [2_000_000, 4_000_000]] };
-        let zones = design.routing.as_ref().unwrap().zones.iter().filter(|z| !z.is_rule_area).map(|z| (z.id.clone(), ZoneEntry { sig: zone_signature(z), layers: z.layer_set().into_iter().map(|l| (l.to_string(), vec![ring.clone()])).collect() })).collect();
+        let zones = design.routing.as_ref().unwrap().zones.iter().filter(|z| !z.is_rule_area).map(|z| (z.id.clone(), ZoneEntry { sig: zone_signature(z), layers: z.layer_set().into_iter().map(|l| (l.to_string(), vec![ring.clone()])).collect(), unfilled: false })).collect();
         KicadFills::new("kicad-cli".into(), "r".into(), 1, zones)
     }
 
@@ -2325,7 +2422,7 @@ mod tests {
         };
         let extra = eda_model::ir::FootprintExtra {
             id: "U1".into(),
-            holes: vec![eda_model::ir::FootprintHole { pad: hole.clone(), clearance: Some(Nm::from_mm(1.2)) }],
+            holes: vec![eda_model::ir::FootprintHole { pad: hole.clone(), clearance: Some(Nm::from_mm(1.2)), layers: None, tokens: vec![] }],
             net_tie_pad_groups: vec!["1, 2".into(), "3".into()],
             ..Default::default()
         };
@@ -2358,7 +2455,7 @@ mod tests {
         let zone = Zone { id: "zg".into(), net: "GND".into(), layer: "F.Cu".into(), outline: square(Nm::from_mm(1.0), Nm::from_mm(1.0), Nm::from_mm(10.0)), ..Default::default() };
         design.routing.as_mut().unwrap().zones = vec![zone.clone()];
         let ring = |island: bool| KicadRing { island, pts: vec![[2_000_000, 2_000_000], [8_123_456, 2_000_000], [8_123_456, 7_654_321], [2_000_000, 7_654_321]] };
-        let entry = ZoneEntry { sig: zone_signature(&zone), layers: std::collections::BTreeMap::from([("F.Cu".to_string(), vec![ring(false), ring(true)])]) };
+        let entry = ZoneEntry { sig: zone_signature(&zone), layers: std::collections::BTreeMap::from([("F.Cu".to_string(), vec![ring(false), ring(true)])]), unfilled: false };
         let kicad = KicadFills::new("kicad-cli 10.99.0".into(), "r1".into(), 2_500, std::collections::BTreeMap::from([("zg".to_string(), entry)]));
 
         let out = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad)).unwrap();
@@ -2656,6 +2753,16 @@ mod tests {
         assert_eq!(*got, want);
         assert!(got.id.starts_with("tun_"), "{}", got.id);
 
+        // r2-board-io F14: a group holding the pattern names it by its uuid, and the reader puts it back in the group (`resolveGroups` takes generators).
+        let mut grouped = design.clone();
+        let pattern_id = grouped.drawings.as_ref().unwrap().tuning_patterns[0].id.clone();
+        grouped.drawings.as_mut().unwrap().groups = vec![eda_model::ir::Group { id: "grp_t".into(), name: "tuned".into(), member_ids: vec![ids[0].clone(), pattern_id], design_block: String::new() }];
+        let (back, _, _) = crate::import_kicad_pcb(&export_kicad_pcb(&grouped, &model, &meta()).unwrap()).unwrap();
+        let dr = back.drawings.as_ref().unwrap();
+        assert_eq!(dr.groups.len(), 1);
+        assert!(dr.groups[0].member_ids.contains(&dr.tuning_patterns[0].id), "the pattern is still a member: {:?}", dr.groups[0]);
+        assert_eq!(dr.groups[0].member_ids.len(), 2, "{:?}", dr.groups[0]);
+
         // A pattern whose tracks are gone is a ghost and is not written.
         design.routing.as_mut().unwrap().tracks.retain(|t| t.id != ids[1]);
         design.drawings.as_mut().unwrap().tuning_patterns[0].member_ids = vec![ids[1].clone()];
@@ -2767,6 +2874,8 @@ mod tests {
         dims[1].units = DimensionUnits::Mil;
         dims[1].keep_text_aligned = false;
         dims[1].text_position = DimensionTextPosition::Inline;
+        // A unit-dependent `DIM_PRECISION` level (V_VV) is KiCad's own number in the file, both ways.
+        dims[2].precision = 6;
         let mut dr = eda_model::ir::DrawingsSection::default();
         dr.dimensions = dims.clone();
         dr.assign_missing_ids();
@@ -2780,6 +2889,7 @@ mod tests {
         assert!(out.contains("(height 2)") && out.contains("(orientation 1)") && out.contains("(leader_length 3)") && out.contains("(text_frame 0)"), "{out}");
         assert!(out.contains("(format (prefix \"L=\") (suffix \"\") (units 2) (units_format 1) (precision 2) (override_value \"ten\") (suppress_zeroes yes))"), "{out}");
         assert!(out.contains("(units 1)") && out.contains("(text_position_mode 1)"), "{out}");
+        assert!(out.contains("(precision 6)"), "{out}");
         assert!(out.contains("(thickness 0.15) (arrow_length 1.27) (text_position_mode 0) (arrow_direction inward) (extension_height 0.58) (extension_offset 0.5) (keep_text_aligned yes)"), "{out}");
         assert!(out.contains("(effects (font (size 1.2 1.2) (thickness 0.18)))"), "{out}");
 
@@ -2827,10 +2937,12 @@ mod tests {
         let mut dr = eda_model::ir::DrawingsSection::default();
         dr.groups = vec![Group { id: String::new(), name: "decoupling".into(), member_ids: vec!["U1".into(), "C1".into(), via_id.clone(), long_track.clone(), "no such item".into()], design_block: String::new() }];
         dr.assign_missing_ids();
+        dr.locked_ids = vec![dr.groups[0].id.clone()];
         design.drawings = Some(dr);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let group = out.split("\t(group ").nth(1).expect("a group block");
         assert!(group.starts_with("\"decoupling\" (uuid \""), "{group}");
+        assert!(group.contains("(locked yes)"), "{group}");
         // U1, C1, the via, both segments of the two-segment track; the stale id names nothing.
         assert_eq!(group.split("(members").nth(1).unwrap().matches('"').count() / 2, 5, "{group}");
         assert!(out.rfind("\t(group ").unwrap() > out.rfind("\t(segment ").unwrap(), "groups come last, like KiCad's own writer");
@@ -2839,6 +2951,7 @@ mod tests {
         let groups = back.drawings.as_ref().unwrap().groups.clone();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].name, "decoupling");
+        assert!(back.drawings.as_ref().unwrap().locked_ids.contains(&groups[0].id), "r2-board-io F7: the group's lock is read back");
         let brt = back.routing.as_ref().unwrap();
         assert_eq!(groups[0].member_ids.len(), 5, "{:?}", groups[0].member_ids);
         assert!(groups[0].member_ids.contains(&"U1".to_string()) && groups[0].member_ids.contains(&"C1".to_string()));
@@ -2885,8 +2998,25 @@ mod tests {
         assert!(outer.member_ids.contains(&"U1".to_string()) && outer.member_ids.contains(&middle.id), "{outer:?}");
         assert!(middle.member_ids.contains(&"C1".to_string()) && middle.member_ids.contains(&inner.id), "{middle:?}");
         assert!(inner.member_ids.contains(&brt.tracks[0].id) && inner.member_ids.iter().any(|m| brt.vias.iter().any(|v| &v.id == m)), "{inner:?}");
-        assert!(!dr.groups.iter().any(|g| g.name == "holder"), "a group of one item is dropped on the way in: {:?}", dr.groups);
+        let holder = by_name("holder");
+        assert_eq!(holder.member_ids, vec![brt.vias.iter().find(|v| holder.member_ids.contains(&v.id)).expect("the via").id.clone()], "a group of one item is read back (`resolveGroups` keeps every group)");
         assert_eq!(dr.group_leaves(&outer.id).len(), 4, "U1, C1, the track and a via: {:?}", dr.group_leaves(&outer.id));
+    }
+
+    /// r2-pcb-edit A2: the orientation the studio shows is the file's angle.
+    #[test]
+    fn a_back_footprints_kicad_orientation_is_the_angle_it_is_written_with() {
+        let (mut design, model) = fixture();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let c1 = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "C1").unwrap().clone();
+        let u1 = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U1").unwrap().clone();
+        // C1 is on the back at rot 90 (clockwise), made here: written half a turn round, -(90 + 180) = 90.
+        assert_eq!(kicad_footprint_orientation(&design, &c1), 90_000);
+        assert!(out.contains("(at 10 10 90)"), "{out}");
+        assert_eq!(kicad_footprint_orientation(&design, &u1), 0);
+        // Read in the file's frame: no half turn.
+        design.drawings = Some(eda_model::ir::DrawingsSection { footprint_extras: vec![eda_model::ir::FootprintExtra { id: "C1".into(), ..Default::default() }], ..Default::default() });
+        assert_eq!(kicad_footprint_orientation(&design, &c1), -90_000);
     }
 
     #[test]

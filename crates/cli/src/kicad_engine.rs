@@ -154,7 +154,7 @@ pub fn sim_netlists(dir: &Path) -> Result<(Design, eda_kicad_engine::SimNetlists
 
 /// The exporters the studio offers only where the kicad-cli in use has them (File > Export > IDFv3... and GenCAD...), by their
 /// `pcb export` command, with the name a message calls each one by.
-pub const OPTIONAL_PCB_EXPORTS: [(&str, &str); 2] = [("idf", "IDF"), ("gencad", "GenCAD")];
+pub const OPTIONAL_PCB_EXPORTS: [(&str, &str); 3] = [("idf", "IDF"), ("gencad", "GenCAD"), ("bom", "board BOM")];
 
 /// Why `kicad-cli pcb export <kind>` cannot run here, or `None` when it can: "This kicad-cli (10.99.0) has no IDF exporter; KiCad 10.99
 /// nightly or later has one." Only the kinds of [`OPTIONAL_PCB_EXPORTS`] are asked about (`eda_kicad_engine::cli_has_export`, one

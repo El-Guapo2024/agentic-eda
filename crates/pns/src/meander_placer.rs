@@ -307,7 +307,7 @@ impl MeanderPlacer {
     /// `MEANDER_PLACER_BASE::SpacingStep`: the spacing one step more or less, not below the width and clearance.
     pub fn spacing_step(&mut self, sign: i64) {
         let s = self.settings.spacing + sign * self.settings.step;
-        let clearance = Node::clearance(&self.env.rules, &self.origin_line.net, &None);
+        let clearance = self.world.track_clearance(&self.env.rules, &self.origin_line.net, self.origin_line.layer);
         self.settings.spacing = s.max(self.width_nm + clearance);
     }
 
@@ -393,7 +393,7 @@ impl MeanderPlacer {
         let (pre, mut tuned, post) = self.origin_chain.split3(self.current_start, p);
         let raw = tuned.clone();
 
-        let clearance = Node::clearance(&self.env.rules, &self.origin_line.net, &None);
+        let clearance = self.world.track_clearance(&self.env.rules, &self.origin_line.net, self.origin_line.layer);
         let mut env = FitEnv { settings: self.settings.clone(), clearance, world: &self.world, rules: &self.env.rules, net: self.origin_line.net.clone(), layer: self.origin_line.layer, width_nm: self.origin_line.width };
         let zero = Point { x: Nm::ZERO, y: Nm::ZERO };
         let mut result = MeanderedLine::new(false);
@@ -519,7 +519,7 @@ mod tests {
     }
 
     fn pad(net: &str, at: Point, layers: LayerRange) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: mm(0.4) }, source: "U1.1".into(), edge: false })
+        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 })
     }
 
     /// Two pads 40 mm apart on net SIG joined by a straight track.

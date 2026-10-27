@@ -6,7 +6,8 @@
 // pcbnew/board_stackup_manager/stackup_predefined_prms.cpp (the colour names Board Setup offers). Pure: no three.js, no React.
 //
 // What the data model has and has not: the board has the copper, silkscreen, mask and paste of `scene.ts`, drawing shapes on any layer, and parts with 3D models;
-// it has no "off-board silkscreen", footprint values or text, DNP or not-in-position-file attributes, so those rows of KiCad's tree are not listed (PARITY-3d.md).
+// it has no "off-board silkscreen", footprint values or text, so those rows of KiCad's tree are not listed (PARITY-3d.md). A part's DNP and not-in-position-file
+// attributes come with it (`parts[].dnp`, `parts[].not_in_pos`), so the two model rows that gate them are.
 
 export interface Rgba {
   r: number;
@@ -160,7 +161,8 @@ export const USER_ROWS: readonly Row[] = [
   row("user_comments", "User.Comments", "Show user comments layer", "user", true),
   row("user_eco1", "User.Eco1", "Show user ECO1 layer", "user", true),
   row("user_eco2", "User.Eco2", "Show user ECO2 layer", "user", true),
-  ...Array.from({ length: USER_LAYER_COUNT }, (_, i) => row(`user_${i + 1}`, `User.${i + 1}`, `Show user defined layer ${i + 1}`, "user", true)),
+  // `EDA_3D_VIEWER_SETTINGS`: `render.show_user{n}` defaults to false (the four named ones, `show_drawings` .. `show_eco2`, to true).
+  ...Array.from({ length: USER_LAYER_COUNT }, (_, i) => row(`user_${i + 1}`, `User.${i + 1}`, `Show user defined layer ${i + 1}`, "user", true, false)),
 ];
 
 /** Every row the data model can show, in KiCad's order (`s_layerSettings`). The user layers are listed by [`rowsFor`] only when the board has something on them. */
@@ -178,7 +180,10 @@ export const ROWS: readonly Row[] = [
   ...USER_ROWS,
   row("th_models", "Through-hole Models", "Show 3D models for 'Through hole' type footprints", "models", false, true, "T"),
   row("smd_models", "SMD Models", "Show 3D models for 'Surface mount' type footprints", "models", false, true, "S"),
-  row("virtual_models", "Virtual Models", "Show 3D models for 'Virtual' type footprints", "models", false, true, "V"),
+  row("virtual_models", "Virtual Models", "Show 3D models for 'unspecified' type footprints", "models", false, true, "V"),
+  // `EDA_3D_ACTIONS::showNotInPosFile` ('P', `render.show_footprints_not_in_posfile` true) and `showDNP` ('D', `render.show_footprints_dnp` false).
+  row("not_in_pos_models", "Models not in POS File", "Show 3D models even if not found in .pos file", "models", false, true, "P"),
+  row("dnp_models", "Models marked DNP", "Show 3D models even if marked 'Do Not Place'", "models", false, false, "D"),
   row("bounding_boxes", "Model Bounding Boxes", "Show a bounding box per model", "models", false, false),
   row("references", "References", "Show footprint references", "display", false),
   row("zones", "Zones", "Show copper zones (Preferences > 3D Viewer > Display Options: Show zones)", "display", false),
@@ -205,7 +210,7 @@ export function toggled(layers: Readonly<Record<string, boolean>>, id: string): 
 }
 
 /** The rows that gate partModels.ts's models (the rest gate the board's own geometry): rebuilding the board for one of these is wasted work. */
-export const MODEL_ROWS: ReadonlySet<string> = new Set(["th_models", "smd_models", "virtual_models", "bounding_boxes"]);
+export const MODEL_ROWS: ReadonlySet<string> = new Set(["th_models", "smd_models", "virtual_models", "not_in_pos_models", "dnp_models", "bounding_boxes"]);
 
 /** The user-layer rows a board has something on: the rows its drawings' layers name. */
 export function usedUserRows(layerNames: Iterable<string>): Set<string> {
@@ -319,6 +324,17 @@ export function finishColor(finish: string | undefined): Rgba | null {
   if (f.startsWith("HAL") || f.startsWith("HASL") || f.endsWith("tin") || f.endsWith("nickel")) return findColor("Tin", FINISH_COLORS);
   if (f.endsWith("silver")) return findColor("Silver", FINISH_COLORS);
   return null;
+}
+
+/** The copper rows whose colour is one (`APPEARANCE_CONTROLS_3D::onColorSwatchChanged`: "The internals of the 3D viewer only supports a single color for copper,
+ * which must be applied to all copper layers" -- `LAYER_3D_COPPER_TOP`, `LAYER_3D_COPPER_BOTTOM`, `LAYER_3D_PLATED_BARRELS`; the barrels have no swatch here). */
+const COPPER_ROWS = ["copper_top", "copper_bottom"];
+
+/** The person's colour choices after a swatch of `id` is set to `hex`: a copper swatch sets every copper row. */
+export function withSwatch(overrides: Readonly<Record<string, string>>, id: string, hex: string): Record<string, string> {
+  const next = { ...overrides, [id]: hex };
+  if (COPPER_ROWS.includes(id)) for (const other of COPPER_ROWS) next[other] = hex;
+  return next;
 }
 
 /**

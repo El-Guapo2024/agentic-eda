@@ -523,10 +523,9 @@ pub enum Cmd {
     RemoveFromGroup { ids: Vec<String> },
     /// `DIALOG_GROUP_PROPERTIES::TransferDataFromWindow` (`ACTIONS::groupProperties`, Group Properties...): rename the group `id` and
     /// make its members exactly `member_ids` -- each one pulled out of whatever other group it was in (an item is in one group at a
-    /// time), the group's own previous members that are not listed released. A group left with fewer than 2 members dissolves, as
-    /// everywhere else. The name is `PCB_GROUP::SetName`; the dialog's "Library link:" box is `design_block` (`Some("")` clears the design block link, `Some("Lib:Name")` sets it,
-    /// refused as "Invalid library link" when it is not an id of that shape, `None` leaves it); its lock box has no counterpart in this model. A member may be a group, but not
-    /// this group or one that holds it.
+    /// time), the group's own previous members that are not listed released (an emptied group goes). The name is `PCB_GROUP::SetName`; the dialog's "Library link:" box is
+    /// `design_block` (`Some("")` clears the design block link, `Some(text)` sets it as `LIB_ID::Parse( text, true )` reads it, `None` leaves it); its Locked box is a
+    /// `set_locked` sent with it in one batch. A member may be a group, but not this group or one that holds it.
     EditGroup {
         id: String,
         name: String,
@@ -3793,12 +3792,36 @@ impl<'a> Board<'a> {
         }
 
         let id_set: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
-        let model = self.model;
+        // "Set to net class / custom rule values" is `PCB_EDIT_FRAME::SetTrackSegmentWidth( aItem, .., true )`: the DRC engine's constraint for the item
+        // (`PCB_TRACK::GetWidthConstraint`: `EvalRules( TRACK_WIDTH_CONSTRAINT, this, nullptr, m_layer )`; a via's `VIA_DIAMETER_CONSTRAINT` and
+        // `HOLE_SIZE_CONSTRAINT`), its opt else its min; nothing (`<= 0`) leaves the item's own value. So a custom rule wins over the class, and a net of a
+        // diff pair takes the class's diff-pair width. Worked out first, on the board as it is.
+        let wants_rules = matches!(track_width, Some(SizeSpec::NetClass)) || matches!(via_size, Some(ViaSizeSpec::NetClass));
+        let mut by_rule: BTreeMap<String, (Option<Nm>, Option<Nm>)> = BTreeMap::new();
+        if wants_rules {
+            use eda_drc::constraints::CType;
+            let drc_board = eda_drc::board::build(&self.design, self.model);
+            let rb = eda_drc::rule_board::RuleBoard::new(&self.design, self.model, &drc_board, eda_drc::constraints::Units::Mm, self.model.board.custom_rules_text.as_deref());
+            let value = |ctype: CType, id: &str, layer: &str| -> Option<Nm> {
+                let item = rb.item(id, None).ok()?;
+                let c = rb.engine().eval_rules(ctype, Some(&item), None, Some(layer), None).value;
+                let v = c.opt.or_else(|| c.min.filter(|m| *m > 0))?;
+                (v > 0).then_some(Nm::new(v))
+            };
+            if let Some(rt) = &self.design.routing {
+                for t in rt.tracks.iter().filter(|t| id_set.contains(t.id.as_str())) {
+                    by_rule.insert(t.id.clone(), (value(CType::TrackWidth, &t.id, &t.layer), None));
+                }
+                for v in rt.vias.iter().filter(|v| id_set.contains(v.id.as_str())) {
+                    by_rule.insert(v.id.clone(), (value(CType::ViaDiameter, &v.id, &v.from_layer), value(CType::HoleSize, &v.id, &v.from_layer)));
+                }
+            }
+        }
         if let Some(rt) = self.design.routing.as_mut() {
             for t in rt.tracks.iter_mut().filter(|t| id_set.contains(t.id.as_str())) {
                 if let Some(spec) = track_width {
                     t.width = match spec {
-                        SizeSpec::NetClass => model.board.width_of(&t.net),
+                        SizeSpec::NetClass => by_rule.get(&t.id).and_then(|r| r.0).unwrap_or(t.width),
                         SizeSpec::Value { nm } => *nm,
                     };
                 }
@@ -3810,8 +3833,9 @@ impl<'a> Board<'a> {
                 if let Some(spec) = via_size {
                     match spec {
                         ViaSizeSpec::NetClass => {
-                            v.diameter = model.board.via_diameter_of(&v.net);
-                            v.drill = model.board.via_drill_of(&v.net);
+                            let (diameter, drill) = by_rule.get(&v.id).copied().unwrap_or((None, None));
+                            v.diameter = diameter.unwrap_or(v.diameter);
+                            v.drill = drill.unwrap_or(v.drill);
                         }
                         ViaSizeSpec::Value { diameter, drill } => {
                             v.diameter = *diameter;
@@ -4263,6 +4287,17 @@ impl<'a> Board<'a> {
                 }
             }
             dr.board_items.swap_layers(&|l| map.get(l).map(|d| (*d).to_string()));
+            // `Drawings()` holds the tables and the barcodes too (`swapBoardItem` over every drawing).
+            for t in dr.tables.iter_mut() {
+                if let Some(dest) = map.get(t.layer.as_str()) {
+                    t.layer = (*dest).to_string();
+                }
+            }
+            for b in dr.barcodes.iter_mut() {
+                if let Some(dest) = map.get(b.layer.as_str()) {
+                    b.layer = (*dest).to_string();
+                }
+            }
         }
         Ok(())
     }
@@ -5437,8 +5472,10 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// `PCB_BASE_FRAME::CreateNewFootprint`: a fresh, empty footprint with the
-    /// default attribute `FP_SMD`; the caller already made the name unique.
+    /// `PCB_BASE_FRAME::CreateNewFootprint`: a fresh footprint with the attributes of the library's last footprint ("Try to infer the footprint
+    /// attributes from an existing footprint in the library", `fpnames.back()` of the sorted names), else `FP_SMD`, and the Footprint Editor's default
+    /// texts: its Reference and Value take their default layouts when written (`fp_edit::default_library_reference_layout`), and the `${REFERENCE}`
+    /// text on the fabrication layer is added (`fp_edit::new_footprint_texts`). The caller already made the name unique.
     fn new_footprint(&mut self, name: &str) -> Result<(), Vec<CheckResult>> {
         if name.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_footprint", "footprint", "a footprint needs a name")]);
@@ -5447,7 +5484,11 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_footprint_exists", name, "a footprint with this name already exists; pick another name")]);
         }
         let mut lib_fp = LibraryFootprint::new_empty(name);
-        lib_fp.attributes.smd = true;
+        match self.design.footprint_library.as_ref().and_then(|l| l.footprints.iter().max_by(|a, b| a.name.cmp(&b.name))) {
+            Some(last) => lib_fp.attributes = last.attributes.clone(),
+            None => lib_fp.attributes.smd = true,
+        }
+        lib_fp.texts = eda_model::fp_edit::new_footprint_texts();
         lib_fp.assign_missing_ids();
         self.footprint_library_mut().footprints.push(lib_fp);
         Ok(())
@@ -5821,6 +5862,12 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_symbol_exists", lib_id, "a symbol with this name already exists; pick another name")]);
         }
         let mut lib_sym = LibrarySymbol::new_empty(lib_id);
+        // `LIB_SYMBOL::LIB_SYMBOL( aName, .. )` makes the mandatory fields with `new SCH_FIELD( this, id )`, at the origin, and `CreateSymbol` sets only their
+        // texts (the Value is the name): the Reference and the Value of a new symbol are stored at (0, 0), not at `default_field`'s places.
+        lib_sym.fields = vec![
+            eda_model::sym_fields::LibrarySymbolField::named("Reference", ""),
+            eda_model::sym_fields::LibrarySymbolField::named("Value", eda_model::sym_fields::bare_name(lib_id)),
+        ];
         lib_sym.assign_missing_ids();
         self.symbol_library_mut().symbols.push(lib_sym);
         Ok(())
@@ -5887,16 +5934,11 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// A pin needs a non-empty number (KiCad allows an empty pin *name*,
-    /// never an empty number) and a non-empty electrical type -- the one
-    /// validation cheap and unambiguous enough to enforce without
-    /// transcribing all of `pin_type.h`'s closed vocabulary (same "keep
-    /// the raw string, round-trip whatever this port doesn't special-case"
-    /// convention `LibPin::electrical_type`'s own doc already accepts).
+    /// A pin needs a non-empty electrical type -- the one validation cheap and unambiguous enough to enforce without transcribing all of
+    /// `pin_type.h`'s closed vocabulary (same "keep the raw string, round-trip whatever this port doesn't special-case" convention
+    /// `LibPin::electrical_type`'s own doc already accepts). Its number may be empty, as KiCad's may: `SYMBOL_EDITOR_PIN_TOOL::CreatePin` makes
+    /// a pin with none and `DIALOG_PIN_PROPERTIES::TransferDataFromWindow` does not ask for one.
     fn validate_pin(pin: &LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
-        if pin.number.trim().is_empty() {
-            return Err(vec![CheckResult::fail("ops_bad_pin", "pin", "a pin needs a number")]);
-        }
         if pin.electrical_type.trim().is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, "a pin needs an electrical type")]);
         }

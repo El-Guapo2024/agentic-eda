@@ -1544,6 +1544,7 @@ fn pcb_ext(kind: &str) -> &'static str {
         "gencad" => "cad",
         "idf" => "emn",
         "stats" | "stackup" => "txt",
+        "bom" => "csv",
         _ => "out",
     }
 }
@@ -1570,7 +1571,17 @@ fn pcb_ext_for(kind: &str, args: &[String]) -> &'static str {
 /// (`PLACE_FILE_EXPORTER::DecorateFilename`: `-all` for both sides in one file, `-top`/`-bottom` for one side or for the two-file
 /// mode, and `CreateAsciiFiles`'s CSV `-pos` before the extension). `single_file` is the dialog's "Generate single file with both front
 /// and back positions" (checked by default); with it off and both sides asked, the top and the bottom are two files.
+///
+/// The Gerber X3 format (`CreateGerberFiles`) is always one file per side ("Gerber P&P files are always separated"), named by
+/// `PLACEFILE_GERBER_WRITER::GetPlaceFileName`: `<name>-pnp_top.gbr` and `<name>-pnp_bottom.gbr`.
 pub fn place_file_names(stem: &str, side: &str, format: &str, single_file: bool) -> Vec<String> {
+    if format == "gerber" {
+        return match side {
+            "front" => vec![format!("{stem}-pnp_top.gbr")],
+            "back" => vec![format!("{stem}-pnp_bottom.gbr")],
+            _ => vec![format!("{stem}-pnp_top.gbr"), format!("{stem}-pnp_bottom.gbr")],
+        };
+    }
     let decorated = |front: bool, back: bool| -> String {
         let base = match (front, back) {
             (true, true) => format!("{stem}-all"),
@@ -1653,7 +1664,14 @@ fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path
     if !out.status.success() || files.is_empty() {
         return Err(fail("kicad_cli_export", kind, format!("kicad-cli {scope} export {kind} failed: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))));
     }
-    Ok(json!({ "ok": true, "engine": format!("kicad-cli {}", cli_version(cli)), "files": files }))
+    // What kicad-cli said on the way (its warnings -- "Board outline is malformed. Run DRC for a full analysis." -- and its progress), as
+    // KiCad's STEP dialog shows the exporter's output in its log window (`DIALOG_EXPORT_STEP_LOG`): kept in the reply, not thrown away.
+    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)).trim().to_string();
+    let mut reply = json!({ "ok": true, "engine": format!("kicad-cli {}", cli_version(cli)), "files": files });
+    if !log.is_empty() {
+        reply["log"] = Value::String(log);
+    }
+    Ok(reply)
 }
 
 fn check_kind(kind: &str) -> Result<(), Vec<CheckResult>> {
@@ -2435,6 +2453,8 @@ fi"#;
         assert_eq!(names("both", "ascii", false), "board-top.pos, board-bottom.pos");
         assert_eq!(names("front", "csv", false), "board-top-pos.csv", "one side asked: the single-file choice does not apply");
         assert_eq!(names("back", "ascii", true), "board-bottom.pos");
+        // X8 (r2-editors-exports): Gerber X3 is always the two sides apart, `PLACEFILE_GERBER_WRITER::GetPlaceFileName`'s `-pnp_top`/`-pnp_bottom`.
+        assert_eq!(names("both", "gerber", true), "board-pnp_top.gbr, board-pnp_bottom.gbr");
     }
 
     /// The mode is one kicad-cli run per file: kicad-cli writes exactly the name its `-o` has, so the two sides become two runs, each

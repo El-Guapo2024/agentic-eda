@@ -64,7 +64,7 @@ test("lengths are in nanometres: a width of 200 um is 0.2mm", () => {
   assert.equal(holds("A.Diameter == 0.6mm && A.Hole == 0.3mm", "via_a"), true);
   assert.equal(holds("A.Position_X < 20mm", "via_a"), false);
   assert.equal(holds("A.Position_X == 20mm && A.Position_Y == 50mm", "via_a"), true);
-  assert.equal(holds("A.Orientation == 270deg", "U1"), true, "the footprint's orientation, counter-clockwise");
+  assert.equal(holds("A.Orientation == -90deg", "U1"), true, "the footprint's orientation, counter-clockwise, in (-180, 180] as FOOTPRINT::GetOrientationDegrees gives it");
   assert.equal(holds("A.Width + 0.1mm == 0.3mm", "trk_a"), true);
 });
 

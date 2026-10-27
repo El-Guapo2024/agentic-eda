@@ -378,3 +378,11 @@ export function stitchPreview(pitch: number, layout: StitchLayout, seed: number)
   }
   return { samples, extent: pitch * PREVIEW_TILE_PITCHES };
 }
+
+/**
+ * `PCB_SELECTION_TOOL::itemPassesFilter`: a generator with members is filtered as its first member (`if( itemType == PCB_GENERATOR_T ) { if( GetItems().empty() ) ..
+ * m_filter.otherItems .. else itemType = ( *GetItems().begin() )->Type(); }`): a via stitching that holds vias is gated by the Vias row, an empty one by Other items.
+ */
+export function stitchFilteredAsVia(board: { drawings?: { via_stitches?: { id: string; member_ids?: string[] }[] } | null } | null | undefined, id: string): boolean {
+  return (board?.drawings?.via_stitches?.find((v) => v.id === id)?.member_ids ?? []).length > 0;
+}

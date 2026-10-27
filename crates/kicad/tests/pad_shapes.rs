@@ -124,7 +124,8 @@ fn a_board_with_trapezoid_chamfered_and_custom_pads_keeps_every_one_of_them() {
     assert!(text.contains("trapezoid (at -3 0 0) (size 2 1) (rect_delta 0.4 0)"), "{text}");
     assert!(text.contains("(roundrect_rratio 0.2) (chamfer_ratio 0.25) (chamfer top_left bottom_right)"), "{text}");
     assert!(text.contains("(options (clearance convexhull) (anchor rect)) (primitives (gr_poly (pts (xy 0 0) (xy 1.5 0) (xy 1.5 0.5) (xy 0 1)) (width 0) (fill yes))"), "{text}");
-    assert!(text.contains("(gr_bbox (start -0.4 -0.4) (end 0.4 0.4)) (gr_vector (start 0 0) (end 2 0)))"), "{text}");
+    // (the number box with its fill: `formatPrimitives` writes it for every rectangle, and a box that says none is filled by `parsePCB_SHAPE`)
+    assert!(text.contains("(gr_bbox (start -0.4 -0.4) (end 0.4 0.4) (fill yes)) (gr_vector (start 0 0) (end 2 0)))"), "{text}");
     assert!(text.contains("(drill 0.7 (offset 0.3 0))"), "{text}");
     assert!(!text.contains("pad \"1\" smd rect "), "a trapezoid is not written as the rectangle round it");
 

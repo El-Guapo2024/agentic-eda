@@ -354,6 +354,21 @@ fn a_via_drill_equal_to_the_default_is_the_nets_own() {
     assert_eq!(got.vias[0].via.drill, mm(0.4));
 }
 
+/// D1 (r2-editors-exports), not a bug: `makeVIA`'s type tests never give a MICROVIA for a padstack of two shapes (`topLayerNdx` is the largest index, so
+/// `topLayerNdx == 0 && botLayerNdx == 1` cannot hold), so an F.Cu-In1.Cu via of a session is BURIED in KiCad 8303b2ad, and its undefined drill is the class's via drill.
+#[test]
+fn a_two_layer_via_of_a_session_is_buried_with_the_via_drill_as_kicads_make_via_types_it() {
+    let (design, mut model) = sample_board();
+    model.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+    let pcb_text = crate::export_kicad_pcb(&design, &model, &crate::ExportMeta { date: "", title: "" }).unwrap();
+    let board = BoardView::parse(&pcb_text).unwrap();
+    assert_eq!(board.copper_count(), 4);
+    let ses = "(session s.ses (base_design s.dsn)\n (routes (resolution um 10)\n  (library_out (padstack \"Via[0-1]_250:300_um\" (shape (circle F.Cu 2500)) (shape (circle In1.Cu 2500)) (attach off)) (padstack uv (shape (circle F.Cu 2500)) (shape (circle In1.Cu 2500)) (attach off)))\n  (network_out (net VIN (via \"Via[0-1]_250:300_um\" 0 0) (via uv 10 0)))))\n";
+    let session = super::parse::load_session(ses, "s.ses").unwrap();
+    let got = from_session_db(&session, &board, 300_000, &|_| 300_000).unwrap();
+    assert_eq!(got.vias.iter().map(|v| (v.kind, v.via.drill, v.via.from_layer.as_str(), v.via.to_layer.as_str())).collect::<Vec<_>>(), [(ViaKind::Buried, Nm::new(300_000), "F.Cu", "In1.Cu"), (ViaKind::Buried, Nm::new(300_000), "F.Cu", "In1.Cu")]);
+}
+
 // ------------------------------------------------------------------------------------------------------------------------------- held to kicad-cli
 
 /// A board written by hand to hold what a plain design does not (`crates/kicad/tests/fixtures/specctra_parity.kicad_pcb`): a footprint turned by 30 degrees with arcs

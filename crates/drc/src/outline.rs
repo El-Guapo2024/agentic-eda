@@ -951,12 +951,17 @@ fn copper_outside(contours: &ShapePolySet, pads: &[(Point, Point)]) -> bool {
 /// are holes (`fpHoles.Append( fpOutlines )`), and the shapes of every other footprint go on to the board's own pass. Returns the items of that pass (the board's
 /// Edge.Cuts first), the holes, and every footprint Edge.Cuts shape.
 fn footprint_pass(design: &Design, model: &eda_model::ConstraintModel, max_error: f64) -> (Vec<Shape>, ShapePolySet, Vec<Shape>) {
+    footprint_pass_with(design, model, max_error, CHAINING_EPSILON_NM)
+}
+
+/// [`footprint_pass`] at a chaining epsilon of the caller's.
+fn footprint_pass_with(design: &Design, model: &eda_model::ConstraintModel, max_error: f64, chaining_epsilon: Nm) -> (Vec<Shape>, ShapePolySet, Vec<Shape>) {
     let mut items = edge::edge_cuts_outline_shapes(design);
     let mut holes = ShapePolySet::new();
     let mut all = Vec::new();
     for (shapes, pads) in footprint_edge_cuts(design, model) {
         all.extend(shapes.iter().cloned());
-        let r = convert(&shapes, max_error, CHAINING_EPSILON_NM, false);
+        let r = convert(&shapes, max_error, chaining_epsilon, false);
         if r.success && (copper_outside(&r.polys, &pads) || r.polys.outline_count() > 1) {
             holes.polys.extend(r.polys.polys);
         } else {
@@ -979,6 +984,27 @@ pub fn board_outline_with(design: &Design, model: Option<&eda_model::ConstraintM
     }
     out.polys.simplify();
     out
+}
+
+/// `BuildBoardPolygonOutlines( board, outline, aErrorMax, aChainingEpsilon, false )`'s return value for the design, both passes (the board's Edge.Cuts and
+/// the footprints'): `true` when the outline is there and every contour closes within `chaining_epsilon`. `DIALOG_EXPORT_STEP::onExportButton` asks this at
+/// the dialog's tolerance before it runs kicad-cli. A board with no Edge.Cuts item at all has no outline (`success` stays `false`).
+pub fn board_outline_closes(design: &Design, model: Option<&eda_model::ConstraintModel>, max_error: f64, chaining_epsilon: Nm) -> bool {
+    let items = match model.filter(|m| !footprint_edge_cuts(design, m).is_empty()) {
+        Some(m) => footprint_pass_with(design, m, max_error, chaining_epsilon).0,
+        None => edge::edge_cuts_outline_shapes(design),
+    };
+    !items.is_empty() && convert(&items, max_error, chaining_epsilon, true).success
+}
+
+/// `BOARD::ComputeBoundingBox( true, true )`: the box of every Edge.Cuts shape of the board and of every footprint's Edge.Cuts shapes (each grown by half
+/// its line width, `EDA_SHAPE::GetBoundingBox`). What the STEP and VRML dialogs take the "board center" origin from. `None` with no Edge.Cuts at all.
+pub fn board_edges_bounding_box(design: &Design, model: Option<&eda_model::ConstraintModel>) -> Option<(Point, Point)> {
+    let mut shapes = edge::edge_cuts_shapes(design);
+    if let Some(m) = model {
+        shapes.extend(footprint_edge_cuts_shapes(design, m));
+    }
+    edge::bounding_box(&shapes, MAX_ERROR_NM.as_f64())
 }
 
 /// [`board_outline`] of a list of Edge.Cuts items.

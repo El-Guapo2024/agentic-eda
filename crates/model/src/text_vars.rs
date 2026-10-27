@@ -19,7 +19,8 @@
 //!
 //! The `@{..}` math expressions (`common/text_eval`) are evaluated for their arithmetic after each pass, as 25ec2335's `ResolveTextVars` does
 //! ([`evaluate_math`]); their functions, strings and units are not ported.
-//! Not ported: `VCSHASH` / `VCSSHORTHASH` (the project's git hash: left as written), simulation `OP` values and design variants.
+//! Not ported: `VCSHASH` / `VCSSHORTHASH` (the project's git hash: left as written) and design variants. Simulation `OP` values are left as written here and
+//! resolved by the studio, which holds the last run (`web/studio/src/kicad-port/sim/opVars.ts`).
 
 use std::collections::BTreeMap;
 

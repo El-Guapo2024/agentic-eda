@@ -12,12 +12,15 @@
 //     their unit label and the unit in the header.
 //
 // Pure: no store, no DOM. Unit-tested in netInspector.test.ts.
+import { valueStringCompare } from "./valueStringCompare";
 import { messageTextFromValue, type MessageUnits } from "./messageText";
 
 /** One net's row, as the backend sends it (lengths in nm). */
 export interface NetInspectorRow {
   name: string;
   netclass: string;
+  /** `NETCLASS::GetName()` of the effective class ("Effective for net: <net>" for a net several classes claim), what the netclass filter matches; absent from an older backend. */
+  netclass_name?: string;
   total_length: number;
   via_count: number;
   via_length: number;
@@ -84,20 +87,21 @@ export function netShown(row: NetInspectorRow, o: NetInspectorOptions): boolean 
   const filter = o.filter.toUpperCase();
   const name = row.name.toUpperCase();
   let matched = filter.length === 0;
-  if (!matched && o.filterByNetclass && row.netclass.toUpperCase().includes(filter)) matched = true;
+  // `netFilterMatches`: `UnescapeString( netClass->GetName() ).Upper()`, the effective class's own name, not the column's human-readable one
+  if (!matched && o.filterByNetclass && (row.netclass_name ?? row.netclass).toUpperCase().includes(filter)) matched = true;
   if (!matched && o.filterByNetName && name.includes(filter)) matched = true;
   if (matched && !o.showUnconnectedNets) matched = !name.startsWith("UNCONNECTED-(");
   return matched;
 }
 
-/** The rows shown, sorted by `column` (the name breaking a tie). */
+/** The rows shown, sorted by `column` (the name breaking a tie): the numbers as numbers, the Name and Netclass columns by `ValueStringCompare` (`compareItems`). */
 export function netInspectorRows(rows: readonly NetInspectorRow[], o: NetInspectorOptions, column: NetInspectorColumn = "name", ascending = true): NetInspectorRow[] {
   const shown = rows.filter((r) => netShown(r, o));
   const cmp = (a: NetInspectorRow, b: NetInspectorRow): number => {
     const x = valueOf(a, column);
     const y = valueOf(b, column);
-    const c = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y));
-    return c !== 0 ? c : a.name.localeCompare(b.name);
+    const c = typeof x === "number" && typeof y === "number" ? x - y : valueStringCompare(String(x), String(y));
+    return c !== 0 ? c : valueStringCompare(a.name, b.name);
   };
   shown.sort((a, b) => (ascending ? cmp(a, b) : cmp(b, a)));
   return shown;

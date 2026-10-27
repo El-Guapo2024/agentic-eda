@@ -146,3 +146,13 @@ test("guessSelectionCandidates: active-layer pass is a no-op when nothing matche
   const result = guessSelectionCandidates([a, b], 10, "F.Cu");
   assert.equal(result.length, 2, "neither is on F.Cu, so the pass leaves both for disambiguation");
 });
+
+test("guessSelectionCandidates: a silk layer in front prefers silk items, a courtyard in high contrast footprints (r2-pcb-edit C9)", () => {
+  const pad = { slopNm: 0, areaNm2: 10, layer: "F.Cu", kind: "pad" };
+  const ref = { slopNm: 50, areaNm2: 1000, layer: "F.SilkS", kind: "field" };
+  assert.deepEqual(guessSelectionCandidates([pad, ref], 10, "F.SilkS"), [ref], "the Reference over the smaller, nearer pad");
+  assert.deepEqual(guessSelectionCandidates([pad, ref], 10, "F.Cu"), [pad]);
+  const part = { slopNm: 30, areaNm2: 5000, layer: null, kind: "part" };
+  assert.deepEqual(guessSelectionCandidates([pad, part], 10, "F.CrtYd", true), [part]);
+  assert.deepEqual(guessSelectionCandidates([pad, part], 10, "F.CrtYd", false), [pad]);
+});

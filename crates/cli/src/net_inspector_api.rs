@@ -384,6 +384,9 @@ pub(crate) fn rows(design: &Design, model: &ConstraintModel) -> Vec<Value> {
             Some(json!({
                 "name": net,
                 "netclass": human_class_name(&class.constituents),
+                // `NETCLASS::GetName()`, what "Filter by Netclass" matches: a net several classes claim has the effective class `GetEffectiveNetClass` makes,
+                // "Effective for net: %s" (one class that leaves parameters to the Default class makes one too in KiCad; here it keeps its name)
+                "netclass_name": if class.constituents.len() > 1 { format!("Effective for net: {net}") } else { human_class_name(&class.constituents) },
                 "total_length": s.total(),
                 "via_count": s.num_vias,
                 "via_length": s.via_length,

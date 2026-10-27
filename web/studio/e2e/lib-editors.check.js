@@ -1131,7 +1131,7 @@
     const text = await (await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(id)}`)).text();
     t(text.includes('(text_box "10V\\nREF" (at -7.62 5.08 0) (size 15.24 -10.16) (margins 1.016 1.016 1.016 1.016)'), "the exported .kicad_sym has the box as KiCad writes it, the line break as \\n");
     t(inkIn(-7_000_000, -4_500_000, 7_000_000, -3_000_000) > 40, `the text is drawn in the box (${inkIn(-7_000_000, -4_500_000, 7_000_000, -3_000_000)} px)`);
-    t(inkIn(-8_200_000, -5_800_000, 8_200_000, -5_600_000) > 40, "and the border is drawn");
+    t(inkIn(-8_200_000, -5_200_000, 8_200_000, -4_960_000) > 40, "and the border is drawn"); // a band across the top edge (y -5.08 mm), above the text
     // a click in the box picks it, anywhere in it (not on the border alone)
     await __eda.run("common.InteractiveSelection.selectionTool");
     await sleep(200);
@@ -1145,7 +1145,7 @@
     await click(tid("tb-cancel"), 500);
     await __eda.run("common.InteractiveSelection.selectionTool");
     // edit: a double click opens it on what it holds
-    await dbl(0, 0);
+    await dbl(0, 2_500_000); // inside the box, off the origin, where a new symbol's Reference and Value sit (`LIB_SYMBOL::LIB_SYMBOL`)
     t(!!tid("text-box-properties") && tid("tb-text")?.value === "10V\nREF" && tid("tb-bold")?.checked === true, `a double click opens the box: ${tid("tb-text")?.value}`);
     await type(tid("tb-text"), "5k");
     tid("tb-vertical").click(); await sleep(60);
@@ -1159,14 +1159,14 @@
     t(bs.length === 1 && e0.id === b0.id && e0.text === "5k" && e0.angle_deg === 90 && e0.stroke_mm === -0.0001 && e0.fill === "background" && e0.h_align === "center" && e0.size_mm === 0.635, `the edit replaced the box and kept its id: ${JSON.stringify(e0)}`);
     t(e0.margin_mm === 1.016, `and the margin it had: ${e0.margin_mm}`);
     // a size the dialog refuses
-    await dbl(0, 0);
+    await dbl(0, 2_500_000);
     await type(tid("tb-size"), "0");
     await click(tid("tb-ok"), 300);
     t(/between 0\.01 mm and 1000 mm/.test(tid("tb-error")?.textContent ?? "") && !!tid("text-box-properties"), `a text size of 0 is refused: ${tid("tb-error")?.textContent}`);
     await click(tid("tb-cancel"), 400);
     // moved by a drag: both corners
     const before = (await boxes())[0];
-    await dragFromTo([0, 0], [2_540_000, 1_270_000]);
+    await dragFromTo([0, 2_540_000], [2_540_000, 3_810_000]); // on the grid, so the drag is the delta asked
     const after = (await boxes())[0];
     t(near(after.start.x - before.start.x, 2.54, 0.001) && near(after.end.x - before.end.x, 2.54, 0.001) && near(after.start.y - before.start.y, -1.27, 0.001), `a drag moves both corners: ${JSON.stringify([before.start, after.start])}`);
     await undoFp();

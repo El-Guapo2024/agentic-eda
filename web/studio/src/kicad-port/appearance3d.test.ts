@@ -76,7 +76,7 @@ test("the tree lists KiCad's rows in KiCad's order, with its tooltips, and the u
   assert.equal(new Set(ROWS.map((r) => r.id)).size, ROWS.length, "ids are unique");
 });
 
-test("what is shown by default is EDA_3D_VIEWER_SETTINGS's: everything but the bounding boxes", () => {
+test("what is shown by default is EDA_3D_VIEWER_SETTINGS's: everything but the bounding boxes, the numbered user layers and the DNP models", () => {
   const shown = ROWS.filter((r) => isVisible({}, r.id)).map((r) => r.id);
   assert.ok(!shown.includes("bounding_boxes"));
   for (const id of ["board", "plated_barrels", "copper_top", "copper_bottom", "adhesive", "solder_paste", "silkscreen_top", "soldermask_bottom", "th_models", "smd_models", "virtual_models", "zones", "references", "user_drawings"]) assert.ok(shown.includes(id), id);
@@ -194,4 +194,28 @@ test("Board Setup offers KiCad's colour names for a mask, a silkscreen and a die
       assert.ok(c[row]!.a > 0, `${kind}: ${name}`);
     }
   }
+});
+
+test("V1: User.1 .. User.45 are hidden by default (render.show_user{n} = false); the four named user layers are shown", () => {
+  assert.equal(isVisible({}, "user_1"), false);
+  assert.equal(isVisible({}, "user_45"), false);
+  for (const id of ["user_drawings", "user_comments", "user_eco1", "user_eco2"]) assert.equal(isVisible({}, id), true, id);
+  assert.equal(isVisible({ user_3: true }, "user_3"), true);
+});
+
+test("V2: the Models not in POS File (P, shown) and Models marked DNP (D, hidden) rows follow Virtual Models", () => {
+  const ids = ROWS.map((r) => r.id);
+  assert.deepEqual(ids.slice(ids.indexOf("th_models"), ids.indexOf("th_models") + 5), ["th_models", "smd_models", "virtual_models", "not_in_pos_models", "dnp_models"]);
+  assert.equal(rowOf("not_in_pos_models")!.label, "Models not in POS File");
+  assert.equal(rowOf("not_in_pos_models")!.hotkey, "P");
+  assert.equal(rowOf("dnp_models")!.label, "Models marked DNP");
+  assert.equal(rowOf("dnp_models")!.hotkey, "D");
+  assert.equal(isVisible({}, "not_in_pos_models"), true);
+  assert.equal(isVisible({}, "dnp_models"), false);
+});
+
+test("V3: a copper swatch sets every copper row (onColorSwatchChanged's single copper colour)", async () => {
+  const { withSwatch } = await import("./appearance3d");
+  assert.deepEqual(withSwatch({ board: "#112233ff" }, "copper_bottom", "#ff0000ff"), { board: "#112233ff", copper_bottom: "#ff0000ff", copper_top: "#ff0000ff" });
+  assert.deepEqual(withSwatch({}, "silkscreen_top", "#ffffffff"), { silkscreen_top: "#ffffffff" });
 });

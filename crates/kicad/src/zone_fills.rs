@@ -36,6 +36,10 @@ pub struct ZoneEntry {
     /// Layer -> the rings KiCad stored for the zone on it. A layer that is not here has no fill.
     #[serde(default)]
     pub layers: BTreeMap<String, Vec<KicadRing>>,
+    /// The file the fill came from had the rings but said the zone is not filled (`(fill (thermal_gap ..) ..)` without `yes`: `ZONE::IsFilled` is the flag, not the
+    /// polygons; `issue14559` has 339 such zones). The writer writes the rings and no `yes`, as `format( const ZONE* )` does. A refill fills the zone: never set by one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unfilled: bool,
 }
 
 /// What kicad-cli filled, for one design revision.
@@ -253,11 +257,13 @@ pub fn forget(board_dir: &Path) {
 
 // --------------------------------------------------------------------------------------------- reading a refilled board
 
-/// A `(filled_polygon ..)` of a zone, as the file has it.
+/// A `(filled_polygon ..)` of a zone, as the file has it; one with no points stands for a zone the file says is filled (`(fill yes ..)`) with nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScannedFill {
     /// The `(uuid ..)` of the zone it is in.
     pub zone: String,
+    /// The zone says it is filled (`(fill yes ..)`, `ZONE::IsFilled`).
+    pub zone_filled: bool,
     pub layer: String,
     pub island: bool,
     pub pts: Vec<[i64; 2]>,
@@ -288,7 +294,12 @@ pub fn entries_by_zone(design: &Design, scanned: Vec<ScannedFill>, ids: &HashMap
     for f in scanned {
         let Some(id) = ids.get(&f.zone) else { continue };
         let Some(zone) = zones.get(id.as_str()) else { continue };
-        out.entry(id.clone()).or_insert_with(|| ZoneEntry { sig: zone_signature(zone), layers: BTreeMap::new() }).layers.entry(f.layer).or_default().push(KicadRing { island: f.island, pts: f.pts });
+        let entry = out.entry(id.clone()).or_insert_with(|| ZoneEntry { sig: zone_signature(zone), layers: BTreeMap::new(), unfilled: !f.zone_filled });
+        let rings = entry.layers.entry(f.layer).or_default();
+        // (no points: a zone filled with nothing, which has a fill all the same)
+        if !f.pts.is_empty() {
+            rings.push(KicadRing { island: f.island, pts: f.pts });
+        }
     }
     out
 }
@@ -498,6 +509,9 @@ impl<'a> Cursor<'a> {
         let mut uuid = String::new();
         let mut outline: Vec<[i64; 2]> = Vec::new();
         let first = out.len();
+        // `(fill yes ..)` and the zone's first layer: a zone the file says is filled but that has no `(filled_polygon ..)` is filled with nothing (`ZONE::IsFilled`).
+        let mut filled = false;
+        let mut layer = String::new();
         loop {
             self.skip_ws();
             match self.s.get(self.i) {
@@ -521,6 +535,14 @@ impl<'a> Cursor<'a> {
                                 out.push(f);
                             }
                         }
+                        "fill" => {
+                            filled = self.atom() == Some("yes");
+                            self.skip_list();
+                        }
+                        "layer" | "layers" if layer.is_empty() => {
+                            layer = self.atom().unwrap_or("").to_string();
+                            self.skip_list();
+                        }
                         // The outline (the first `(polygon (pts ..))`): what names a zone written without a uuid.
                         "polygon" if outline.is_empty() => {
                             outline = self.read_polygon();
@@ -533,9 +555,13 @@ impl<'a> Cursor<'a> {
                 }
             }
         }
+        if filled && out.len() == first && !layer.is_empty() {
+            out.push(ScannedFill { zone: String::new(), zone_filled: true, layer, island: false, pts: Vec::new() });
+        }
         // A teardrop has no uuid in the file (`format( const ZONE* )`: `if( !aZone->IsTeardropArea() ) KICAD_FORMAT::FormatUuid( m_out, aZone->m_Uuid )`): its fills are
         // filed under its layer and outline instead ([`outline_key`]).
         for f in &mut out[first..] {
+            f.zone_filled = filled;
             f.zone = if uuid.is_empty() && !outline.is_empty() { outline_key(&f.layer, outline.iter().copied()) } else { uuid.clone() };
         }
     }
@@ -597,7 +623,7 @@ impl<'a> Cursor<'a> {
                 }
             }
         }
-        (!layer.is_empty() && pts.len() >= 3).then_some(ScannedFill { zone: String::new(), layer, island, pts })
+        (!layer.is_empty() && pts.len() >= 3).then_some(ScannedFill { zone: String::new(), zone_filled: true, layer, island, pts })
     }
 
     /// Past `(pts` and up to its closing paren: the `(xy x y)` points, in nanometres. An `(arc ..)` contributes its three points.
@@ -872,7 +898,7 @@ mod tests {
     #[test]
     fn fill_selected_zones_takes_only_those_from_the_fresh_run_and_unfill_selected_takes_them_away() {
         let ring = |n: i64| vec![KicadRing { island: false, pts: vec![[0, 0], [n, 0], [n, n]] }];
-        let entry = |sig: &str, n: i64| ZoneEntry { sig: sig.into(), layers: BTreeMap::from([("F.Cu".to_string(), ring(n))]) };
+        let entry = |sig: &str, n: i64| ZoneEntry { sig: sig.into(), layers: BTreeMap::from([("F.Cu".to_string(), ring(n))]), unfilled: false };
         let mut old = KicadFills::new("old".into(), "r1".into(), 1, BTreeMap::from([("a".to_string(), entry("s", 1)), ("b".to_string(), entry("s", 2))]));
         let fresh = KicadFills::new("fresh".into(), "r2".into(), 2, BTreeMap::from([("a".to_string(), entry("s", 10)), ("b".to_string(), entry("s", 20)), ("c".to_string(), entry("s", 30))]));
         old.take_from(fresh.clone(), Some(&["b".to_string(), "c".to_string()]));
@@ -891,7 +917,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eda-zone-fills-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(load(&dir).is_none());
-        let zones = BTreeMap::from([("z".to_string(), ZoneEntry { sig: "abc".into(), layers: BTreeMap::from([("F.Cu".to_string(), vec![KicadRing { island: true, pts: vec![[0, 0], [1_000, 0], [1_000, 1_000]] }])]) })]);
+        let zones = BTreeMap::from([("z".to_string(), ZoneEntry { sig: "abc".into(), layers: BTreeMap::from([("F.Cu".to_string(), vec![KicadRing { island: true, pts: vec![[0, 0], [1_000, 0], [1_000, 1_000]] }])]), unfilled: false })]);
         let fills = KicadFills::new("kicad-cli 10.99.0".into(), "rev".into(), 2_500, zones);
         store(&dir, &fills).unwrap();
         assert_eq!(load(&dir), Some(fills));

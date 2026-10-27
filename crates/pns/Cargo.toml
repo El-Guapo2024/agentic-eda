@@ -14,3 +14,5 @@ serde_yaml = { workspace = true }
 serde_json = { workspace = true }
 # the QA replays (tests/qa_regressions.rs) read KiCad's own boards and projects
 eda-kicad = { path = "../kicad" }
+# kicad-cli's DRC of a board the router routed (tests/rules_kicad.rs)
+eda-kicad-engine = { path = "../kicad-engine" }

@@ -376,12 +376,12 @@ pub trait GroupHost {
 
     /// `DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`: rename the group and make its members exactly `member_ids`, each pulled out of the group it
     /// was in, the previous members not listed released. A member may be a group, but not this one or one that holds it. `design_block` is the dialog's
-    /// "Library link:" box: `Some("")` clears the link, `Some("Lib:Name")` sets it (it must be an id of that shape, `LIB_ID::Parse`: "Invalid library link"), `None`
-    /// leaves it as it is.
+    /// "Library link:" box: `Some("")` clears the link, `Some(text)` sets it as `LIB_ID::Parse( text, true )` reads it ([`fix_lib_link`]: never refused, a
+    /// name without a library is a link too), `None` leaves it as it is.
     fn set_group(&mut self, id: &str, name: &str, member_ids: &[String], design_block: Option<&str>) -> Result<(), GroupRefusal> {
         let link = match design_block.map(str::trim) {
             Some("") | None => design_block.map(|_| String::new()),
-            Some(text) => Some(check_design_block_id(text).map_err(|why| GroupRefusal::bad_group(id, &why))?),
+            Some(text) => Some(fix_lib_link(text)),
         };
         let tree = GroupTree(self.group_list());
         if !tree.is_group(id) {
@@ -446,6 +446,19 @@ pub trait GroupHost {
         let new_id = groups.last().map(|g| g.id.clone()).unwrap_or_default();
         drop_empty_groups(groups);
         Ok(new_id)
+    }
+}
+
+/// `LIB_ID::Parse( text, true )` then `Format()`, as the Group Properties dialog takes its "Library link:": the nickname is what comes before the first colon
+/// (`checkLibNickname` only refuses a colon in it, which the first colon cannot leave), the item name the rest with `FixIllegalChars( .., false )` turning a
+/// colon, tab, newline, carriage return, backslash, `<`, `>` or `"` into `_`. It never fails, so the dialog's "Invalid library link: '%s'" never shows; with no
+/// colon the whole text is the name and the link has no library.
+pub fn fix_lib_link(text: &str) -> String {
+    let fix = |s: &str| s.chars().map(|c| if matches!(c, ':' | '\t' | '\n' | '\r' | '\\' | '<' | '>' | '"') { '_' } else { c }).collect::<String>();
+    match text.split_once(':') {
+        Some((nick, name)) if !nick.is_empty() => format!("{nick}:{}", fix(name)),
+        Some((_, name)) => fix(name),
+        None => fix(text),
     }
 }
 
@@ -593,6 +606,8 @@ mod tests {
     #[test]
     fn a_design_block_link_is_a_lib_id_a_lone_group_takes_it_and_other_items_get_a_group_of_their_own() {
         assert_eq!(check_design_block_id(" Power:Buck "), Ok("Power:Buck".to_string()));
+        assert_eq!(fix_lib_link("MyBlock"), "MyBlock", "no library: the whole text is the name");
+        assert_eq!(fix_lib_link("Lib:a:b<c"), "Lib:a_b_c");
         for bad in ["", "Power", ":Buck", "Power:", "Po\\wer:Buck", "a\tb:c"] {
             assert_eq!(check_design_block_id(bad), Err(format!("Invalid library link: '{}'", bad.trim())), "{bad:?}");
         }
@@ -626,12 +641,13 @@ mod tests {
         assert_eq!(e.group(&id3).unwrap().member_ids, strs(&["R1"]));
         assert!(e.link_design_block(&[], "Power:Buck").is_err());
         assert!(e.link_design_block(&strs(&["C9"]), "nonsense").is_err());
-        // Group Properties' "Library link:" box sets, clears and checks the link
+        // Group Properties' "Library link:" box sets and clears the link
         e.set_group(&id, "Boost", &strs(&["C1"]), Some("Mine:Boost2")).unwrap();
         assert_eq!(e.group(&id).unwrap().design_block, "Mine:Boost2");
         e.set_group(&id, "Boost", &strs(&["C1"]), None).unwrap();
         assert_eq!(e.group(&id).unwrap().design_block, "Mine:Boost2", "no answer leaves the link");
-        assert!(e.set_group(&id, "Boost", &strs(&["C1"]), Some("bogus")).is_err());
+        e.set_group(&id, "Boost", &strs(&["C1"]), Some("bogus")).unwrap();
+        assert_eq!(e.group(&id).unwrap().design_block, "bogus", "`LIB_ID::Parse( text, true )` never fails");
         e.make_group(&strs(&["D1", "D2"])).unwrap();
         let plain = e.groups.last().unwrap().id.clone();
         e.set_group(&plain, "diodes", &strs(&["D1", "D2"]), Some("")).unwrap();

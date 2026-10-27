@@ -194,6 +194,56 @@ impl Default for LayerSetup {
 }
 
 impl LayerSetup {
+    /// The user layers that flip to one another (`BOARD::recalcOpposites`, the part after `::FlipLayer`): two user layers typed `front` and `back` are a pair when
+    /// their names agree after the first dot ("Match up similary-named front/back user layers", `F.Notes` and `B.Notes`), else two consecutive ones, the front
+    /// first, both renamed ("Match up non-custom-named consecutive front/back user layer pairs"). Each layer maps to its opposite; a layer not here stays.
+    pub fn user_layer_opposites(&self) -> BTreeMap<String, String> {
+        const USER_LAYERS: usize = 45;
+        let layer = |n: usize| format!("User.{n}");
+        let kind = |l: &str| self.types.get(l).copied().filter(|t| matches!(t, LayerType::Front | LayerType::Back));
+        let user_name = |l: &str| self.names.get(l).cloned().unwrap_or_else(|| l.to_string());
+        let after_dot = |s: &str| s.split_once('.').map(|(_, r)| r.to_string()).unwrap_or_default();
+        let mut opp: BTreeMap<String, String> = BTreeMap::new();
+        for a in 1..=USER_LAYERS {
+            let la = layer(a);
+            let Some(ta) = kind(&la) else { continue };
+            if opp.contains_key(&la) {
+                continue;
+            }
+            let principal = after_dot(&user_name(&la));
+            for b in a + 1..=USER_LAYERS {
+                let lb = layer(b);
+                if opp.contains_key(&lb) {
+                    continue;
+                }
+                let Some(tb) = kind(&lb) else { continue };
+                if ta == tb {
+                    continue;
+                }
+                let candidate = after_dot(&user_name(&lb));
+                if !candidate.is_empty() && candidate == principal {
+                    opp.insert(la.clone(), lb.clone());
+                    opp.insert(lb, la.clone());
+                    break;
+                }
+            }
+        }
+        for a in 1..USER_LAYERS {
+            let (la, lb) = (layer(a), layer(a + 1));
+            if opp.contains_key(&la) || opp.contains_key(&lb) {
+                continue;
+            }
+            if kind(&la) != Some(LayerType::Front) || kind(&lb) != Some(LayerType::Back) {
+                continue;
+            }
+            if user_name(&la) != la && user_name(&lb) != lb {
+                opp.insert(la.clone(), lb.clone());
+                opp.insert(lb, la);
+            }
+        }
+        opp
+    }
+
     /// Whether this is what a board has when nobody opened the page (nothing to write beyond what the writer always writes).
     pub fn is_default(&self) -> bool {
         self.canonical() == LayerSetup::default()

@@ -10,6 +10,7 @@ import { isLocked } from "./pcbTransform";
 import { extraDeleteCmd, extraItems } from "./pcbExtraItems";
 import { cellById } from "./tables";
 import { editFieldCmd, fieldById } from "./fpFields";
+import { pointInRings } from "./pcbModify";
 
 /** The tuning patterns (`PCB_GENERATOR`s) among `ids`: deleting one puts the track back as it was before it was tuned, which the tuner's API does (`/api/tune/remove`), not a verb. */
 export function tuningPatternIds(board: BoardState | null | undefined, ids: readonly string[]): string[] {
@@ -22,8 +23,17 @@ export function tuningPatternIds(board: BoardState | null | undefined, ids: read
  * by ripping it up (the board's footprints come from the schematic, so deleting one unplaces it), a group as all its members -- the groups it holds opened.
  * A locked item is skipped (`FilterCollectorForLockedItems`), and so is a group with a locked item anywhere below it or a locked group above it;
  * `skippedLocked` says how many of `ids` were. The backend takes a deleted item out of its groups, and a group left without members goes too.
+ *
+ * `case PCB_ZONE_T:` "cutouts can be deleted when the delete tool is called from inside a cutout when the zone is selected": with one item to
+ * delete, not a Cut, and `cursor` inside one of that zone's holes (`ZONE::HitTestCutout`, the first hole that holds it), only that hole goes
+ * (`ZONE::RemoveCutout`) and the zone stays selected (`keepSelection`). KiCad 8303b2ad pushes no commit for it (the removal does not count in
+ * `itemsDeleted`, so no `commit.Push` runs and the change has no undo entry); here it is one undoable `set_zone_outline`, a deliberate difference.
  */
-export function boardDeleteCmds(board: BoardState, ids: readonly string[]): { cmds: Cmd[]; skippedLocked: number; message?: string } {
+export function boardDeleteCmds(
+  board: BoardState,
+  ids: readonly string[],
+  opts: { cursor?: { x: number; y: number } | null; isCut?: boolean } = {}
+): { cmds: Cmd[]; skippedLocked: number; message?: string; keepSelection?: string[] } {
   const groups = board.drawings?.groups ?? [];
   let skippedLocked = 0;
   const free: string[] = [];
@@ -33,6 +43,20 @@ export function boardDeleteCmds(board: BoardState, ids: readonly string[]): { cm
     if (patterns.has(id)) continue;
     if (isLocked(board, id)) skippedLocked++;
     else free.push(id);
+  }
+  if (free.length === 1 && patterns.size === 0 && !opts.isCut && opts.cursor) {
+    const zone = (board.routing?.zones ?? []).find((z) => z.id === free[0]);
+    const holes = zone?.holes ?? [];
+    const c = opts.cursor;
+    const hit = holes.findIndex((h) => pointInRings([h], [c.x, c.y]));
+    if (zone && hit >= 0) {
+      const xy = (r: readonly (readonly [number, number])[]) => r.map(([x, y]) => ({ x, y }));
+      return {
+        cmds: [{ op: "set_zone_outline", id: zone.id, outline: xy(zone.outline), holes: holes.filter((_, i) => i !== hit).map(xy) }],
+        skippedLocked,
+        keepSelection: [zone.id],
+      };
+    }
   }
   const wanted = new Set<string>(expandGroups(groups, free));
   const tracks = new Set((board.routing?.tracks ?? []).map((t) => t.id));

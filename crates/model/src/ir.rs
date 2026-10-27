@@ -2274,11 +2274,11 @@ pub struct Dimension {
     pub override_text: Option<String>,
     pub units: DimensionUnits,
     pub units_format: DimensionUnitsFormat,
-    /// Decimal places, 0-5. A flat count -- source's own `DIM_PRECISION`
-    /// also has four unit-dependent "V_VVV"-style levels (fewer decimals
-    /// for mm than inch at the "same" precision); not ported, since a
-    /// fixed decimal count covers the overwhelming majority of real
-    /// dimensioned drawings and keeps one precision concept instead of two.
+    /// KiCad's `DIM_PRECISION`: 0-5 (`X` .. `X_XXXXX`) are that many
+    /// decimals; 6-9 (`V_VV` .. `V_VVVVV`) are unit-dependent levels whose
+    /// decimals `PCB_DIMENSION_BASE::GetValueText` works out from the units
+    /// (inch `p - 4`, mils `max(0, p - 7)`, mm `p - 5`), see
+    /// `eda_connectivity::dimension::decimals`.
     pub precision: u8,
     pub suppress_trailing_zeros: bool,
     pub text_position: DimensionTextPosition,
@@ -2441,7 +2441,8 @@ impl Default for DimensionSettings {
             stroke_width: Nm::new(200_000),
             arrow_length: Nm::new(arrow_length),
             extension_offset: Nm::new(500_000), // 0.5mm
-            extension_height: Nm::kiround(arrow_length as f64 * 27.5f64.to_radians().sin()),
+            // `static_cast<int>( m_arrowLength * s_arrowAngle.Sin() )`: truncated, not rounded.
+            extension_height: Nm::new((arrow_length as f64 * 27.5f64.to_radians().sin()) as i64),
         }
     }
 }
@@ -2609,6 +2610,10 @@ pub struct DrawingsSection {
     /// `(covering (front no) (back no))`, `(plugging ..)`, `(capping no)` and `(filling no)`. Additive: absent reads as "none".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub setup_tokens: Vec<String>,
+    /// The board's plot settings, `(setup (pcbplotparams ..))` (KiCad's `PCB_PLOT_PARAMS`), as an imported board had them -- see [`crate::plot_params`]. The Plot dialog
+    /// and kicad-cli's `--board-plot-params` plot with them. Additive: absent in an older `design.json` (and for a board that never had a block) reads as KiCad's defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_params: Option<crate::plot_params::PlotParams>,
     /// The items of the board file that nothing reads (a text box, a reference image, a target, a table, a board-level property, whatever a newer KiCad adds), each as the file
     /// wrote it on one line: not in the design, not on the canvas, and written back where the board ends, so that the file kicad-cli judges and plots has them. Additive: absent
     /// in an older `design.json` reads as "none". Lives here for the reason `rules` does.
@@ -2619,6 +2624,10 @@ pub struct DrawingsSection {
     /// "every via is a through via with KiCad's defaults". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via_extras: Vec<crate::via_extra::ViaExtra>,
+    /// The solder-mask openings of the tracks that have one (`(layers "F.Cu" "F.Mask")`, `PCB_TRACK::HasSolderMask`), keyed by the track's id -- see
+    /// [`crate::track_mask`]. Additive: absent in an older `design.json` reads as "no track has a mask opening".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub track_masks: Vec<crate::track_mask::TrackMask>,
     /// The intent (a `ConstraintModel` as YAML) the board's parts, nets, footprints and rules come from when it is not the one `board.json` names: a path relative to the
     /// board's folder. File > Import > Non-KiCad Board File replaces the open board with another one, whose parts are not the intent's (`Cmd::ReplaceBoard`); the other
     /// board's model is a file of its own under `imports/`, named here, so the step is a change of this design and an undo takes the old board back whole. `board::build_model`
@@ -2706,6 +2715,11 @@ pub struct PadMaskInfo {
     /// gives it back its type and its layers, which kicad-cli's padstack check and the mask plot tell from an SMD pad's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub connector: bool,
+    /// The paste and mask layers of a through-hole, non-plated or edge connector pad when they are not the `*.Mask` (and no paste) the writer gives such a pad otherwise: a
+    /// through-hole pad with paste (`"*.Cu" "*.Paste" "*.Mask"`) or a mask on one side only, an edge connector pad with mask on its own side only. Named as for a top-side
+    /// footprint, like [`Self::art_layers`]. KiCad writes the pad's own layer set (`format( const PAD* )`: `formatLayers( aPad->GetLayerSet() )`). `None` is the default set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hole_tech_layers: Option<Vec<String>>,
     /// A pad whose `(layers ..)` has no solder mask layer (copper under the mask, a pad the mask covers): the writer leaves the mask layer out, where a pad otherwise gets its
     /// side's (a through-hole pad both sides').
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -2925,6 +2939,14 @@ pub struct FootprintHole {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "crate::units::de")]
     pub clearance: Option<Nm>,
+    /// The hole's `(layers ..)` when it is not `*.Mask` (a mask opening on one side only, `(layers "F.Mask")`, or none, `(layers)`), named as for a top-side footprint like
+    /// [`PadMaskInfo::art_layers`]. KiCad writes the pad's own set (`format( const PAD* )`). `None` is `*.Mask`. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<String>>,
+    /// The pad's other tokens as the file wrote them, in file order: `(solder_mask_margin ..)`, `(zone_connect ..)`, the paste margins, `(pintype ..)`, whatever a newer KiCad adds
+    /// (without the position, size, shape, drill, layers, net, clearance and uuid, which the hole holds or the writer makes). Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tokens: Vec<String>,
 }
 
 /// A pad of a footprint with no copper layer that is not a hole of its own ([`FootprintHole`]): a stencil opening (`(layers "F.Paste")`), a mask aperture, a pad on
@@ -2938,6 +2960,18 @@ pub struct FootprintAuxPad {
     /// The pad's net, empty for none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub net: String,
+}
+
+/// A group inside a footprint ([`FootprintExtra::groups`]).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintGroup {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
+    /// Each member by its place: `art:<i>` / `arttext:<i>` (the footprint's i-th graphic / user text, `Footprint::art`), `pad:<number>#<k>` (the k-th pad
+    /// with that number), `field:<name>` (Reference, Value or a user field), `uuid:<u>` (an item the file's text is kept for as it was, a courtyard item).
+    pub members: Vec<String>,
 }
 
 /// See [`DrawingsSection::footprint_extras`].
@@ -3004,6 +3038,11 @@ pub struct FootprintExtra {
     /// them: the derived schematic's symbols have uuids of their own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tokens: Vec<String>,
+    /// The footprint's own groups (`(group ..)` inside the `(footprint ..)`: `resolveGroups` keeps them, members the footprint's own items), each member named
+    /// by its place in the footprint ([`FootprintGroup::members`]); written back while the part is on the footprint they were read from ([`Self::source_name`]).
+    /// Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<FootprintGroup>,
     /// The courtyard graphics as the file wrote them (`fp_line`, `fp_arc`, `fp_circle`, `fp_rect`, `fp_poly`, `fp_curve` on `F.CrtYd` or `B.CrtYd`), in file order. The checks here
     /// work from the outlines made of them (`Footprint::courtyard_outlines`), but a courtyard of four lines, or a circle, is not one polygon, and a footprint on the board whose
     /// courtyard is no longer the library's does not match the library's copy (`lib_footprint_mismatch`): these are written back, in place of the polygons, while the part is
