@@ -19,7 +19,7 @@ Reuse rule: the only active code found that duplicates what kicad-cli runs is th
 # Part A: the round-3 merges for Cleanup, table cells, zone-drawing undo, Track & Via nets and Select Connection
 
 ### A-1 (medium). The board's graphic Line tool draws one segment and stops; KiCad chains segments. Delete and Backspace after a committed segment do not take it back
-- **Status:** Open.
+- **Status:** **Fixed** on task-r4-pcb-edit: 6398b588 (the chain is the chain's, not the tool session's; PARITY-pcb section 58)
 - **What differs:**
   - **Ours.** `web/studio/src/components/canvas/Canvas.tsx:119-124`: `shapeAutoFinishCount("segment") == 2`. At `Canvas.tsx:889-893`, the second click sends `add_shape` and clears `drawState`. So each line needs two fresh clicks.
   - **Backspace.** `pcbnew.InteractiveDrawing.deleteLastPoint` (`web/studio/src/actions/useActionRunner.ts:1957-1975`) can only drop the started point. No committed segment is ever taken back.
@@ -64,7 +64,7 @@ Reuse rule: the only active code found that duplicates what kicad-cli runs is th
 - **Already known?** No. PARITY-pcb rows 128 and 2172 cover Escape and Undo only. The round-2 C6 and round-3 checks read `drawShape`'s Escape and Undo branches, not this one.
 
 ### A-2 (medium). Delete with a graphic shape started deletes the selection; KiCad cancels the shape, and the selection was cleared at the first click anyway
-- **Status:** Open.
+- **Status:** **Fixed** on task-r4-pcb-edit: 6398b588
 - **What differs:**
   - **Ours.** `useActionRunner.ts:358-375` (`common.Interactive.delete`) intercepts only `drawZoneStarted` (zones and polygons) and the schematic rule area. With a line, rectangle, circle, arc or Bezier started, it falls through to `requestSelection()` and `deleteRefs`.
   - **Our first click.** The shape tool's first click (`Canvas.tsx:878-897`) does not clear the selection. So whatever was selected before the tool was picked is deleted.
@@ -78,7 +78,7 @@ Reuse rule: the only active code found that duplicates what kicad-cli runs is th
 - **Already known?** No.
 
 ### A-3 (medium). Redo, and the zone-fill actions, while an item is being drawn act on the board; KiCad refuses them (`wxBell()`)
-- **Status:** Open.
+- **Status:** **Fixed** on task-r4-pcb-edit: 6398b588 (refused silently: no bell)
 - **What differs:**
   - **Ours.** `common.Interactive.redo` (`useActionRunner.ts:657-660`) checks only `boardMoving()`. With a zone outline, line, dimension, table or image in progress, Redo redoes the board under the preview.
   - **Fill All Zones (B).** It runs too.
@@ -98,7 +98,7 @@ Reuse rule: the only active code found that duplicates what kicad-cli runs is th
 - **Already known?** No (C6 and C-1 covered Escape, Undo and Delete only).
 
 ### A-4 (low). Delete or Undo of a zone corner: the cursor is not put on the removed corner, and the last corner's removal ends the outline one press early
-- **Status:** Open.
+- **Status:** **Fixed** on task-r4-pcb-edit: 6398b588 (the last corner keeps the outline started); the cursor warp is not done (a browser cannot move the pointer)
 - **What differs:**
   - **KiCad, cursor.** `DrawZone` (`drawing_tool.cpp:3608-3622`) warps the cursor to the corner it removed and holds it there:
     ```cpp
@@ -121,7 +121,7 @@ Reuse rule: the only active code found that duplicates what kicad-cli runs is th
 - **Already known?** No.
 
 ### A-5 (low). Cleanup's merge refuses two collinear segments that meet inside a zone, overlap, or fold back; KiCad merges them
-- **Status:** Open.
+- **Status:** **Fixed** in part on task-r4-pcb-edit: 45dcab1a (the zone: `ZONE::HitTest` of the track's net); overlap, fold-back and the 1 nm tolerance left
 - **What differs:**
   - **Zones.** `is_node` (`crates/connectivity/src/cleanup.rs:564-575`) takes any zone whose raw outline holds the joint as a node, so the merge is refused. The module doc (`cleanup.rs:40-44`) calls this "the safe direction". KiCad's `testMergeCollinearSegments` (`pcbnew/tracks_cleaner.cpp`) tests a zone with `citem->HitTest( aSeg1->GetStart(), ( aSeg1->GetWidth() + 1 ) / 2 )`. That is `ZONE::HitTest` (`pcbnew/zone.cpp:734-741`), which only hits the outline's corners and edges:
     ```cpp
@@ -136,7 +136,7 @@ Reuse rule: the only active code found that duplicates what kicad-cli runs is th
 - **Already known?** The zone outline is in the module doc as a deliberate choice, but its reason ("is the shared joint a node") does not match KiCad's code. The overlap, fold-back and 1 nm cases are not documented.
 
 ### A-6 (low). Track & Via Properties' short question: the net names differ from KiCad's for no net and for an indeterminate selector, and an OK with no edits asks nothing
-- **Status:** Open.
+- **Status:** **Fixed** in part on task-r4-pcb-edit: ca34d02e (the names); an OK with nothing edited still asks nothing
 - **What differs:**
   - **KiCad's message.** `confirmShortingNets` (`pcbnew/dialogs/dialog_track_via_properties.cpp:908-929`) formats `"Applying these changes will short net %s with %s."` from `m_netSelector->GetValue()` and `FindNet( *shortingNets.begin() )->GetNetname()`. For a short to a no-net pad that second string is net 0's name, `""`, giving "... with .". For an indeterminate selector, `GetValue()` is the indeterminate string `INDETERMINATE_STATE`, "-- mixed values --" (`include/widgets/ui_common.h:46`, set at `dialog_track_via_properties.cpp:747`).
   - **Ours.** `crates/ops/src/pad_nets.rs` (`track_via_nets`, the `shown` and `selector` closures) prints `<no net>` for the shorting net and `""` for an indeterminate selector ("short net  with GND.").
@@ -146,7 +146,7 @@ Reuse rule: the only active code found that duplicates what kicad-cli runs is th
 - **Already known?** No. C-2 was fixed and its known difference is the zone flood, not this.
 
 ### A-7 (low). Select Connection with a tuning pattern selected discards it and picks under the cursor; KiCad expands from the pattern
-- **Status:** Open.
+- **Status:** **Fixed** on task-r4-pcb-edit: 357b9cea
 - **What differs:**
   - **KiCad.** `PCB_SELECTION_TOOL::expandConnection` (`pcbnew/tools/pcb_selection_tool.cpp:1808-1816`) counts a generator in `initialCount`:
     ```cpp
@@ -214,6 +214,7 @@ Reuse rule: the only active code found that duplicates what kicad-cli runs is th
 ---
 
 ### B-1 (medium). Swap Layers and a tuning pattern: we take the pattern's stored layer as its own, KiCad takes its first track's layer (`GetLayer` override). A two-way swap therefore gives a different result, and leaves our pattern on one layer with its tracks on another
+- **Status:** **Fixed** on task-r4-pcb-edit: d977e10a (tests `swap_layers_both_ways_puts_a_tuning_patterns_tracks_back_as_set_layer_does`, `swap_layers_chained_moves_a_pattern_twice`)
 - **What differs.** `crates/ops/src/lib.rs:4368-4404` (`swap_generator_layers`) builds the set as `{p.layer} ∪ member layers`. `p.layer` is the stored layer, which is still the old one. KiCad's generator set is `PCB_GENERATOR::GetLayerSet()` = `PCB_GROUP::GetLayerSet() | LSET( { GetLayer() } )`. `PCB_TUNING_PATTERN` overrides `GetLayer`:
   ```cpp
   // pcbnew/generators/pcb_tuning_pattern.h
@@ -251,6 +252,7 @@ Reuse rule: the only active code found that duplicates what kicad-cli runs is th
 - **Already known?** No. r3 A-2 is marked Fixed, but the fix is wrong for the two-way and chained cases.
 
 ### B-2 (medium). Mirror, Rotate (and Create Array's origin) of one selected tuning pattern turn about its bounding-box centre; KiCad uses `PCB_GENERATOR::GetPosition()` = `m_origin`
+- **Status:** **Fixed** on task-r4-pcb-edit: 1f93df15
 - **What differs.**
   - `web/studio/src/kicad-port/pcbItems.ts:127-131` (`itemPosition`, `case "group"`) returns the centre of the box for every group, generators included.
   - `EDIT_TOOL::updateModificationPoint` (`pcbnew/tools/edit_tool.cpp:3563-3569`) takes "the reference point is its position" for a single item: `aSelection.SetReferencePoint( item->GetPosition() )`.
@@ -265,6 +267,7 @@ Reuse rule: the only active code found that duplicates what kicad-cli runs is th
 - **Already known?** No.
 
 ### B-3 (medium). Edit Text & Graphics "Set to layer default values": the text is made square at the class's height, and italic is not reset; `StyleFromSettings` sets the class's (width, height) and italic
+- **Status:** **Fixed** on task-r4-pcb-edit: 2a6681ec (texts, text boxes, cells; a dimension has one size and no italic in this model)
 - **What differs.** `crates/ops/src/pcb_global_edit.rs`:
   - texts: `:107` sets `size_nm` to the height; `:125` drops the width (`x.width_nm = None`);
   - text boxes: `:136-137`;
@@ -288,6 +291,7 @@ Reuse rule: the only active code found that duplicates what kicad-cli runs is th
 - **Already known?** In part. PARITY-pcb line 676 lists bold, italic and font as not ported "this model has no font or style flag on `Text`". That reason is stale: the extras carry italic now. The width/height loss is not listed anywhere.
 
 ### B-4 (low). Pad Properties checks for a custom pad and for a pad with no copper layer
+- **Status:** **Fixed** in part on task-r4-pcb-edit: 41e138cf (custom pads); the no-copper-layer case does not arise (the dialog's type picks the layers)
 - **What differs.** `web/studio/src/kicad-port/fpFields.ts:262-293` (`padCheck`) uses `pad.size` for every shape and skips the mask check for `custom`.
 
   `PAD::doCheckPad` (`pcbnew/pad.cpp:2962-2965, 2970, 3034-3048`):
@@ -315,6 +319,7 @@ Reuse rule: the only active code found that duplicates what kicad-cli runs is th
 - **Already known?** No (r3 C-4 covered the plain shapes).
 
 ### B-5 (low). The writer marks only the group locked; KiCad writes `(locked yes)` on every item whose group above is locked
+- **Status:** **Fixed** on task-r4-pcb-edit: 3853fa1d
 - **What differs.**
   - `crates/kicad/src/pcb_items.rs:381-431`: since 8b3a2a07 the group's lock takes the group above into account, but only for groups.
   - Every `format()` in `pcb_io_kicad_sexpr.cpp` writes `IsLocked()` (tracks :2882, vias :2763, shapes :1092, footprints :1209, texts :2332, text boxes :2374, zones :2917, ...). `BOARD_ITEM::IsLocked` (`pcbnew/board_item.cpp:125-137`) is true when `GetParentGroup()->IsLocked()`.
@@ -378,6 +383,7 @@ Rows rounds 1-3 covered were not re-read: p6, r2, r3, p13, P24 and P25.
 ---
 
 ### C-1 (high). Teardrops are measured from the pad or via centre, not from its edge: with KiCad's default ratio the teardrop ends on the via's rim and adds almost no copper
+- **Status:** **Fixed** on task-r4-pcb-edit: a6ea19db (and the `>=` width filters); kicad-cli's own teardrops equal ours on 8 vias (`crates/kicad/tests/teardrops_kicad_cli.rs`)
 - **What differs.** `crates/connectivity/src/teardrop.rs:197-199` puts the track-side corners A and B at `near + dir * target_len`, where `near` is the anchor's centre (`:157`, `near != center` returns None) and `target_len = anchor_diameter * best_length_ratio` (`:121`). KiCad measures the length from where the track leaves the pad/via outline: `pcbnew/teardrop/teardrop_utils.cpp::TEARDROP_MANAGER::findAnchorPointsOnTrack`:
   ```cpp
   int targetLength = KiROUND( GetWidth( aOther, layer ) * aParams.m_BestLengthRatio );
@@ -396,6 +402,7 @@ Rows rounds 1-3 covered were not re-read: p6, r2, r3, p13, P24 and P25.
 - **Reuse rule.** The whole generator duplicates C++ that kicad-cli runs: `zone_filler_tool.cpp:135` (`teardropMgr.UpdateTeardrops( commit, nullptr, nullptr, true /* forceFullUpdate */ )`) rebuilds every teardrop from the pads' and vias' teardrop parameters on a refill, the run `fill_api.rs` already makes. Writing the parameters (`(teardrops (best_length_ratio ..) ..)` per pad/via) and not `(legacy_teardrops yes)` would give KiCad's own shapes, rect pads and two-track teardrops included. GAPS 521 states this as left ("KiCad's own teardrop rebuild ... is not what the studio asks for"), so it is a known choice. It is reported here because this finding is in the duplicated code.
 
 ### C-2 (medium). Create Array leaves out text boxes, barcodes, points and reference images (and tables, tuning patterns): alone it refuses, in a mixed selection it drops them without a word
+- **Status:** **Fixed** in part on task-r4-pcb-edit: a49363b6 (text boxes, barcodes, points, images, tables); tuning patterns left
 - **What differs.** `crates/ops/src/array.rs:264-277` (`array_selection`) keeps an id only if `item_position` finds it. `item_position` (`:230-260`) knows footprints, tracks, vias, zones, shapes, texts, dimensions and groups only. So a text box, barcode, point, image, table or tuning pattern is dropped before `collect_copies` (which *can* copy the first four, `pcb_paste.rs:317`). Alone, it fails with "none of the given ids name a footprint, track, via, zone, shape, text, dimension or group on the board". KiCad's `pcbnew/tools/array_tool.cpp::ARRAY_TOOL::onDialogClosed` duplicates all of them:
   ```cpp
   case PCB_BARCODE_T: case PCB_REFERENCE_IMAGE_T: case PCB_TEXT_T: case PCB_TEXTBOX_T: case PCB_TABLE_T:
@@ -410,12 +417,14 @@ Rows rounds 1-3 covered were not re-read: p6, r2, r3, p13, P24 and P25.
 - **Already known?** No. GAPS line 406 says "Paste, Duplicate and Create Array land text boxes and images", which is untrue for Create Array.
 
 ### C-3 (medium). A group's position in Create Array is the middle of its members' anchor points, not the centre of its bounding box: circular arrays without "Rotate items", and Arrange selection, put groups elsewhere
+- **Status:** **Fixed** on task-r4-pcb-edit: a49363b6 (the studio sends the box centre, `group_positions`)
 - **What differs.** `array.rs:255-257` (`item_position` of a group) and `:463-465` (`transform_block`) take `middle(points)`, the box of the members' *positions* (a footprint's origin, a track's start, ...). KiCad's `pcbnew/pcb_group.cpp::PCB_GROUP::GetPosition` is `return GetBoundingBox().Centre();`, the full item boxes. `TransformItem` (`array_tool.cpp:44-50`) feeds that position to `GetTransform( aIndex, aItem.GetPosition() )`. For a circular array the offset is `RotatePoint( new_pos, m_centre, angle ) - aPos` (`array_options.cpp::ARRAY_CIRCULAR_OPTIONS::GetTransform`), so it depends on the position whenever "Rotate items" is off. Arrange selection aligns every item to `firstItem->GetPosition()` through `PCB_GROUP::SetPosition`, so two groups whose boxes are not centred on their anchors land offset from KiCad's. A grid, and a circle with Rotate items on, are the same either way: the motion is rigid.
 - **How to see it.** A group of a footprint at (0,0) whose courtyard spans x 0..10 mm, plus a track starting at (0,0). Circular array, centre (20 mm, 0), 2 points, 90 degrees, Rotate items off. KiCad moves the copy by `R(5,0) - (5,0)`; ours by `R(0,0) - (0,0)`. Test `array_tests::a_group_turns_about_its_bounding_box_centre_in_a_circle`: assert the copied footprint's `at` is 5 mm off ours.
 - **Severity.** medium (wrong placement).
 - **Already known?** No. p6's "checked" list has "group box centre" for the TS transform code. `array.rs` is a separate implementation.
 
 ### C-4 (medium). Drawing a zone, rule area or graphic polygon: a click on the first corner does not close the outline, and the line mode (45 / 90 degrees) is ignored
+- **Status:** **Fixed** on task-r4-pcb-edit: 6398b588
 - **What differs.**
   - `web/components/canvas/Canvas.tsx:793-797` appends every click to the zone's points. Graphic polygons (`:878-896`) do the same. `pcbnew/tools/drawing_tool.cpp::DrawZone` (which runs `drawPolygon`, `drawZone`, `drawRuleArea`, `drawZoneCutout` and `drawSimilarZone`, `:4402-4416`) ends the outline when the click is on the first corner: `const bool endPolygon = evt->IsDblClick( BUT_LEFT ) || evt->IsAction( &PCB_ACTIONS::closeOutline ) || polyGeomMgr.NewPointClosesOutline( cursorPos );`, with `POLYGON_GEOM_MANAGER::NewPointClosesOutline` being `m_lockedPoints.PointCount() > 0 && m_lockedPoints.CPoint( 0 ) == aPt`. Ours adds a duplicate corner and keeps drawing.
   - `DrawZone` sets `polyGeomMgr.SetLeaderMode( angleSnap )` from `GetAngleSnapMode()` (Ctrl gives `LEADER_MODE::DIRECT`). In 45-degree mode `AddPoint` locks in two points per click (`m_leaderPts`' elbow and end). Ours constrains only segments and rectangles (`Canvas.tsx:882-886`, `constrainByAngleMode`). Zones and polygons are always free-angle, whatever `state.pcbx.angleSnapMode` says.
@@ -424,11 +433,13 @@ Rows rounds 1-3 covered were not re-read: p6, r2, r3, p13, P24 and P25.
 - **Already known?** No.
 
 ### C-5 (low). A finished graphic polygon leaves its drawing tool armed; KiCad's DrawZone pops back to the selection tool
+- **Status:** **Fixed** on task-r4-pcb-edit: 6398b588
 - **What differs.** `Canvas.tsx:637-650` (`finishDraw`, `draw.kind === "shape"`) only clears `drawState`. The zone branch does `SET_ACTIVE_TOOL select` (`:629`), as KiCad does. KiCad's graphic polygon runs in `DrawZone` too (`Go( &DRAWING_TOOL::DrawZone, PCB_ACTIONS::drawPolygon.MakeEvent() )`), and `if( endPolygon ) { ...; cleanup(); m_frame->PopTool( aEvent ); break; }`.
 - **How to see it.** Draw a polygon, double-click: KiCad is back in selection; ours waits for the next polygon.
 - **Already known?** No. r3's "Noted, not checked" item (the zone tool) is answered under "checked" below: zones match.
 
 ### C-6 (medium). Global Deletions: "Clear board" leaves text boxes, tables, barcodes, images, points and tuning patterns; "Text" leaves text boxes
+- **Status:** **Fixed** on task-r4-pcb-edit: d8538fb5 (and the three lows; the Text deviation is in PARITY-pcb section 58)
 - **What differs.** `web/kicad-port/pcbGlobalEdit.ts:83-135` (`planGlobalDeletions`) with `all` deletes zones, shapes, texts, dimensions, footprints, tracks and vias only. `pcbnew/dialogs/dialog_global_deletion.cpp::DIALOG_GLOBAL_DELETION::DoGlobalDeletions` removes everything in `board->Drawings()` (`if( delete_all ) processItem( item, all_layers );`), which holds text boxes, tables, barcodes, reference images and points. It also removes tuning patterns left with no tracks (`if( pattern->GetBoardItems().empty() ) commit.Remove( pattern );`). The Text option is `if( item->Type() == PCB_TEXT_T || item->Type() == PCB_TEXTBOX_T )`, but ours walks `drawings.texts` only.
 - **How to see it.** A board with a text box and a barcode, Global Deletions > "Clear board" > OK: both stay. Test in `pcbGlobalEdit.test.ts`: `planGlobalDeletions(b with text_boxes:[tb], barcodes:[bc], opts({ all: true }))`; assert `removed` includes `tb` and `bc`.
 - **Severity.** medium.
@@ -439,6 +450,7 @@ Rows rounds 1-3 covered were not re-read: p6, r2, r3, p13, P24 and P25.
   - The deliberate deviation in the comment (`:79-81`, Text deleted even with Graphics ticked: KiCad's `else if` chain only deletes texts when no graphics option is set) is not in PARITY-pcb. It should be listed there as a difference.
 
 ### C-7 (low). Merge Zones: refusals KiCad does not make, and the intersection test ignores holes
+- **Status:** **Fixed** on task-r4-pcb-edit: a4f1a061 (holes; the log lines as the refusal); no self-intersection check (a simplified union never self-intersects)
 - **What differs.**
   - `crates/ops/src/board_control.rs:123-125` refuses with "the selected zones do not touch, so there is nothing to merge" when only the first zone qualifies. `pcbnew/tools/board_editor_control.cpp::ZoneMerge` only `wxLogMessage( _( "Some zones did not intersect and were not merged." ) )` (likewise "Some zone netcodes did not match and were not merged.", "Some zones were rule areas and were not merged.", "Some zone layer sets did not match and were not merged."). It still runs `mergeZones` on the one zone (a `Simplify` and a "Merge Zones" commit). Ours shows an error KiCad has no words for, and never shows the four log lines.
   - `zones_intersect` (`board_control.rs:94-96`) uses the outer outline only. `edit_zone_helpers.cpp::BOARD::TestZoneIntersection` iterates `IterateSegmentsWithHoles()` and tests corners with `poly1->Contains( *iter )`, which excludes holes. A zone lying wholly inside another's hole is "not intersecting" in KiCad (skipped, the rest merged); ours takes it in, and the union gives two outlines and "Zones have insufficient overlap for merging.", so nothing merges.
@@ -446,6 +458,7 @@ Rows rounds 1-3 covered were not re-read: p6, r2, r3, p13, P24 and P25.
 - **Already known?** No.
 
 ### C-8 (low). Create Array, circular: the angle is rounded to a millidegree before it is multiplied
+- **Status:** Open (not fixed: KiCad reads its full-circle angle back from the entry's formatted text, so sending the exact double is not KiCad's either; 2.3 um at 50 mm)
 - **What differs.** `array.rs:141-142`: `angle_millideg * n` on an integer millidegree angle, and the even division `.round()`. KiCad: `EDA_ANGLE( m_angle.AsDegrees() * n, DEGREES_T )` on the double the entry held (`DoubleValueFromString( m_entryCircAngle->GetValue() )`). "Full circle" with 7 points gives 51.428571 degrees in KiCad. Ours sends 51429 mdeg, so point 6 is 0.0026 degrees off: 2.3 µm at a 50 mm radius.
 - **Already known?** No.
 

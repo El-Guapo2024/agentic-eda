@@ -21,6 +21,7 @@
 ## Part A. Fab outputs, exports and pictures
 
 ### X4-1. The judge's board PNG paints the back copper, the back silkscreen and the courtyards over the front copper (medium)
+**Fixed** on task-r4-editors-exports: b89cdedd (Edge.Cuts is the `--layers` base, F.Cu after B.Cu in `--common-layers`; slow `crates/cli/tests/pictures.rs::the_board_png_has_the_front_copper_on_top` counts the colours on a board with overlapping F.Cu/B.Cu: before, B.Cu covered 243602 px and F.Cu 121801; after, the other way round)
 - **What differs.**
   - Ours: `crates/kicad-engine/src/pictures.rs:155` plots the PNG as `pcb export png --layers F.Cu --common-layers Edge.Cuts,B.Courtyard,B.SilkS,B.Cu,<inner, reversed>,F.SilkS,F.Courtyard ...`. The doc comment of `board_picture_layers` (`:91-94`) says the layers are "back to front ... the front last".
   - kicad-cli (`pcbnew/pcb_plotter.cpp::PCB_PLOTTER::getPlotSequence`, 25ec2335) always plots the `--layers` entry first and the common layers after it, in their order:
@@ -47,6 +48,7 @@
 - **Already known?** No. GAPS 38 lists only the rubric and the page size.
 
 ### X4-2. Schematic Plot "current page only" plots the sheet whose page number is the sheet's place in the stored list, so it can plot another sheet (medium)
+**Fixed** on task-r4-editors-exports: 4d7f8899 (`page_of` is the walk's effective page; on a copy of QA issue12814 with swapped pages, `sheet_path` Drive now plots `intent-Drive.svg`. Left: two sheets with one page number are both plotted, kicad-cli has no sheet-path option)
 - **What differs.**
   - Ours: `crates/cli/src/sch_output_api.rs:32-58` `page_of` counts the sheets depth first over `sch.sheets` in stored order (`:37`) and returns that count. `plot_args` then passes it as `--pages <n>` (`:76`).
   - kicad-cli: `--pages` is a list of page *numbers* (the sheet's `(page "..")`), which `SCH_PLOTTER` keeps by `SCH_SHEET_LIST::TrimToPageNumbers` (`eeschema/sch_sheet_path.cpp`):
@@ -65,6 +67,7 @@
 - **Already known?** No. PARITY-sch.md:384 calls the dialog "identical".
 
 ### X4-3. Plot / Generate Drill Files store their choices as an undo step; KiCad's `applyPlotSettings` and `updateConfig` push none (low)
+**Fixed** on task-r4-editors-exports: 9c9527f3 (chosen: KiCad's behaviour with design.json kept the source of truth. `set_plot_settings` still writes design.json through `/api/cmd`, but pushes no undo snapshot and leaves redo; an undo or redo of the edits around it carries the current plot settings over, as KiCad's item undo never touches them. A whole-file step restores them with the rest)
 - **What differs.**
   - Ours: `PlotDialog.tsx:110` and `GenerateDrillDialog.tsx:43` send `set_plot_settings` through `api.cmd` (`crates/ops/src/board_control.rs:326`). That is one undo step, so Ctrl+Z after a plot takes back the dialog's layer checklist and origin, not the user's last edit.
   - KiCad: `dialog_plot.cpp::DIALOG_PLOT::applyPlotSettings` does `m_editFrame->SetPlotSettings( tempOptions ); m_editFrame->OnModify();`, and `dialog_gendrill.cpp::DIALOG_GENDRILL::updateConfig` does `m_board->SetPlotOptions( m_plotOpts ); m_pcbEditFrame->OnModify();`. Neither has a commit, so there is no undo entry.
@@ -74,6 +77,7 @@
 - **Already known?** No.
 
 ### X4-4. Export IPC-2581: the BOM columns are free text, are not kept in the project, and the distributor is not guessed; PARITY says "identical" (low)
+**Fixed** on task-r4-editors-exports: 75f6c3bb (choices of the footprints' field names, `onMfgPNChange`/`onDistPNChange`, kept in design.json by `set_ipc2581_bom`, no undo step; the Internal ID is not read back, as in KiCad. Left: the columns are not written to / read from the `.kicad_pro`'s `board.ipc2581`)
 - **What differs.**
   - KiCad: `pcbnew/dialogs/dialog_export_2581.cpp`.
     - The column controls are choices of the board's footprint field names (`m_oemRef->Append( items )`).
@@ -320,6 +324,7 @@ These are rows of `PARITY-fpedit.md` that no earlier round reviewed (p1-p2, p7-p
 - Test: `fpLibFields.test.ts` `the library dialog's size message is the fp editor's`. A width of 0 gives "The text width must be between 0.001 mm and 1000 mm.".
 
 ### E4-F5. Push Pad Properties' "same type" filter does not tell an SMD pad from a connector or aperture pad (low)
+**Fixed** on task-r4-editors-exports: 34f6e9a8
 - Ours: `crates/ops/src/lib.rs:5837` `if filter_type && p.kind != src.kind { continue; }`. An edge-connector pad is `PadKind::Smd` with `kicad.connector = true` (`footprint_import.rs:331,380`), so it passes as an SMD pad.
 - KiCad: `pad_tool.cpp::doPushPadProperties`:
   ```cpp

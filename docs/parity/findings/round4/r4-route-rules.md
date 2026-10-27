@@ -15,6 +15,8 @@ Scope, in priority order:
 
 ### R4-1. A route started on a pad or via does not take the width of the track already joined to it (`inheritTrackWidth`, `m_UseConnectedTrackWidth`)
 
+**Fixed** on task-r4-router: 747bbd9a (server `inheritTrackWidth`, `auto_track_width` default on; studio sends it, on by default), 3f855aa1 (route_api test, browser check). Proof: `a_route_started_on_a_pad_takes_the_width_of_its_stub` (kicad-cli).
+
 - **What differs.**
   - Ours, studio: `web/studio/src/components/canvas/Canvas.tsx:742-746` takes a connected width only through `connectedTrackWidth(findRouteAnchor(..)?.from ?? ..)`, and `web/studio/src/kicad-port/boardControl.ts:215` (`connectedTrackWidth`) returns `null` unless `from` starts with `"track "`. A start on a pad (`REF.PAD`) or a via (`via <id>`) gets the chosen width or, with none, the server's `ImportSizes`.
   - Ours, server: `crates/pns/src/settings.rs:213` (`import_sizes`) says "The connected track's width (`m_UseConnectedTrackWidth`, `inheritTrackWidth`) is the caller's", and `crates/cli/src/route_api.rs:174` calls it without that step. `Router::inherit_track_width` (`crates/pns/src/router.rs:1145`) exists, but only `start_diff_pair` calls it.
@@ -36,6 +38,8 @@ Scope, in priority order:
 - **Already known?** No. p5 F4-5 fixed this for pairs only (`a_pair_started_on_a_pad_with_a_stub_takes_the_stubs_width`). Round 3's R3-3 left `m_UseConnectedTrackWidth` to "the caller", and the caller handles track ends only.
 
 ### R4-2. The head's side of `IsFlashedOnLayer` is missing: a dragged or shoved board via that removes its unconnected layers still has full copper on those layers
+
+**Fixed** on task-r4-router: 747bbd9a (`QueryOpts::head_via`, `is_via_flashed_on`; a moved via keeps its id and extras through `CommitRoute`; a drag at a via takes the via, `pickSingleItem`). Proof: `an_unflashed_head_via_collides_by_its_hole_only` (kicad-cli).
 
 - **What differs.**
   - Ours: `crates/pns/src/node.rs:1094`: `let flashed = self.rules.as_ref().is_none_or(|r| r.is_flashed_on(item, layers));`. Only the world's item is asked. `via_colliding` (`node.rs:1050`) probes with `Shape::Circle { r: via.diameter / 2 }` on all of `via.layers`, whatever the via is.
@@ -84,12 +88,15 @@ Scope, in priority order:
   - Test (ops): `set_via_presets_refuses_with_kicads_words`. Presets `[{diameter: 500, drill: 300}]` (nm) give "Via diameter is too small."; `[{600_000, 600_000}]` gives "Via hole size must be smaller than via diameter".
 - **Severity.** Medium: wrong messages and bounds, and a missing page section. Losing the project's pair list is also a lost default.
 - **Already known?** Partly. The importer dropping the project's via and track presets is p22 F5. The diff-pair list, the page's grid and the messages are not listed (GAPS item 3; PARITY-pcb.md:464 says the page is "editable").
+- **Fixed** on ds/r4-board-setup: cca40225 -- `RoutingSection::diff_pair_presets` (width/gap/via gap, serde default and skip-empty) written and read as the project's `board.design_settings.diff_pair_dimensions` (millimetres, KiCad's index-0 dummy first; read back without the dummy, a row missing a key skipped), `Cmd::SetDiffPairPresets` in the Pre-defined Sizes batch (one undo step) and the studio page's third grid; `set_via_presets` and `validatePredefinedSizes` now run `PCB_VIA::ValidateViaParameters` with `GEOMETRY_MIN_SIZE` 1 um and KiCad's three messages in its order, and the pairs through `ValidateDesignRules`' "No differential pair gap defined.".
 
 ---
 
 ## Low
 
 ### R4-4. A pair started on arc tracks skips the start-gap check, and takes the class width instead of the arcs'
+
+**Fixed** on task-r4-router: 747bbd9a. Test: `a_pair_started_on_arcs_checks_the_gap`.
 
 - **What differs.**
   - Ours: `crates/pns/src/dp_placer.rs:353-365` inherits the width and runs the "does not match the configured gap" test only for `(Item::Segment(sp), Item::Segment(_))`.
@@ -102,6 +109,8 @@ Scope, in priority order:
 
 ### R4-5. `ImportSizes` details: hole to hole with no start item, the pair's dummy track at anchor 0, and the dummy via's position
 
+**Fixed** on task-r4-router: 747bbd9a. Test: `hole_to_hole_is_asked_with_no_start_item_too` (the anchor-0 dummies and the (0, 0) dummy via changed with it, untested: no rule reading position on hand).
+
 - **What differs.** `crates/pns/src/settings.rs:262-312` against `pns_kicad_iface.cpp::ImportSizes`:
   - KiCad queries `CT_HOLE_TO_HOLE` of `&dummyVia, &dummyVia, UNDEFINED_LAYER` (and of the coupled via) **outside** `if( aStartItem )`. With no start item, a custom rule that matches a no-net via still sets `SetHoleToHole`. Ours only queries with an anchor, and otherwise keeps `rules.hole_to_hole_min_nm` (`settings.rs:262-312`).
   - KiCad builds the pair's `dummyTrack` / `coupledTrack` at `aStartItem->Anchor( 0 )`, not at `startAnchor`. Ours uses the start anchor `p` (the anchor nearer the cursor).
@@ -112,6 +121,8 @@ Scope, in priority order:
 - **Already known?** No.
 
 ### R4-6. Copper-graphics details of `SyncWorld` (the R3-2 port)
+
+**Fixed** on task-r4-router: 919021d7 (text box stroke with border off; arcs/circle rings get ARC_HIGH_DEF more stroke). Hidden board texts and hidden dimension text: **not a router bug** (the importer drops them, so the derived board kicad-cli checks has none; footprint hidden texts are hidden fields, dropped by KiCad too) -- an importer gap, noted in GAPS 7.
 
 `crates/pns/src/from_ir.rs` against `pns_kicad_iface.cpp`:
 - **A text box with its border off still has its stroke width in KiCad.**
@@ -133,6 +144,8 @@ Scope, in priority order:
 
 ### R4-7. `inflate2` / `inflateLine2` with `aSimplify`: ours simplifies the offset; KiCad's call discards the result (latent)
 
+**Fixed** on task-r4-router: a2c130eb. Test: `inflate_with_simplify_keeps_the_offsets_vertices`.
+
 - **What differs.**
   - Ours: `crates/shape-poly-set/src/lib.rs:321` `let paths = cl::simplify_paths(&paths, (amount as f64).abs() * coeff, true);`, and `:353` the same with `false`. Both feed the result to the union.
   - KiCad, `shape_poly_set.cpp::SHAPE_POLY_SET::inflate2` (8303b2ad and 25ec2335 alike): `Clipper2Lib::SimplifyPaths( paths, std::abs( aAmount ) * coeff, true );`. That is a statement whose return value is dropped. `SimplifyPaths` takes `const Paths<T>&` and returns a new `Paths<T>` (`third_party/clipper2/include/clipper2/clipper.h:706`), so KiCad unions the **unsimplified** offset. `inflateLine2` (`:1271`) is the same.
@@ -143,12 +156,15 @@ Scope, in priority order:
 
 ### R4-8. A preset equal to the Default class's width is taken for "use net class"
 
+**Not done on task-r4-router:** studio-only (the width list kept by value in `routerVia.ts::chosenTrackWidth` / `useActionRunner.ts`); no server half is needed -- the server already takes an explicit `width`.
+
 - **What differs.**
   - Ours: `web/studio/src/kicad-port/routerVia.ts:160-163` (`chosenTrackWidth`): `if (current == null || current === netClassEntry) return undefined;`. `useActionRunner.ts:1014-1017` builds the list as `[base, ...track_width_presets]` and steps it with `list.indexOf(cur)`.
   - KiCad: `BOARD_DESIGN_SETTINGS::UseNetClassTrack()` is `m_trackWidthIndex == 0 && !m_useCustomTrackVia`. It goes by the **index**: a pre-defined width that happens to equal the Default class's width (index > 0) is "user choice" (`ImportSizes`: `trackWidth = std::max( trackWidth, bds.GetCurrentTrackWidth() )`, source "user choice").
 - **How to see it.** Default is 0.25 mm, Power is 0.5 mm, and the pre-defined widths are [0.25, 0.4]. Pick 0.25 mm from the list and start on a Power pad: KiCad routes at 0.25 mm and ours at 0.5 mm. With that duplicate, W from 0.25 also steps from index 0 (`indexOf`), so it never reaches the preset entry.
 - **Severity.** Low.
 - **Already known?** No.
+- **Fixed** on ds/r4-board-setup: cca40225 -- the studio chooses by the list index: `chosenTrackWidth`/`chosenViaSize` (`web/studio/src/kicad-port/routerVia.ts`) return "use net class" only when the index is absent, 0, or past the list (`GetCurrentTrackWidth`/`GetCurrentViaSize`'s range check), so a preset equal to the Default class's width at index > 0 is a user choice; the W/via cycles (`useActionRunner.ts`), the menu's checks (`pcbMenuBuilder.ts`) and `currentTrackWidthIndex`/`currentViaIndex` (`store.tsx`) all carry the index. The web tests cover the duplicate-width preset at index 1 and the past-the-end fallback.
 
 ---
 
