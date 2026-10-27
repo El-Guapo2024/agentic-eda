@@ -159,6 +159,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Round 4 (2026-10-28, `task-r4-schematic`, `PARITY-sch.md` section 47): a batch (Delete of a window over a T) cleans up once at its end (C4-H1); the label
   tool, Delete Sheet and Delete Sheet Pin clean up (C4-L1); a T's deleted dot merges the through wire (C4-L2); Align to Grid uses the selection's grid (C4-M1);
   a label on a pin has its net (C4-M2) and is a terminal point (C4-L3); a symbol on a shared screen is numbered per path by the project's method and page (D4-M1).
+- Round 5 (2026-10-28, `task-r5-schematic`, `PARITY-sch.md` section 48): a batch deletes its junctions last (B5-H1), Delete Sheet / Sheet Pin merge through
+  `DeleteJunction` (B5-L1); a wire finishes on any label or sheet pin anchor (B5-M1, r3 C3-M3 and r4 C4-L3 corrected); Find and Replace (selection only,
+  Replace's target, escaped label text, label fields, body texts, reference chains, emptying a label, the end and wrap, KiCad's boxes: C5-M1, M2, M4, L1-L7);
+  the Symbol Fields Table per sheet path, `R01`, empty edits, the preview's variables (C5-M3, L8, L9 in part); DNP / Exclude across sheets (D5-M2, server side)
+  and Increment Annotations over all sheets (D5-M3). **Left**: the Fields Table's Description column and Save / Discard / Cancel close question (C5-L9), the
+  Find dialog's Regular Expression box, the studio's DNP state from the sheet in view (D5-M2).
 - Done (`crates/ops/src/{sch_move,sch_drag,sch_scene,sch_props}.rs`, `kicad-port/{schMove,schAlign,schProperties}.ts`, `components/{SchematicView,SchPropertiesDialogs}.tsx`):
   one verb family, `Cmd::SchMove`, moves, drags, turns, mirrors and aligns any set of symbols, power symbols, wires and bus wires, labels of every kind,
   free text, text boxes, shapes, rule areas, directive labels, junctions, no-connects, bus entries, graphic lines and sheets (with their pins), as one
@@ -266,6 +272,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   duplicate pins as jumpers (A4-H2), two pins of one number (A4-H3), stacked numbers (A4-H4), no-connect pins (A4-M1), bus wire entries (A4-M2), all alike
   in kicad-cli; a symbol cached under its `lib_name` (B4-H1); a unit per path and Exclude from position files follow the symbol (A4-M3, B4-M2); a sheet above
   the root's folder saves as a design block and a copy (B4-M1). Left: D4-L1 (the root's page), D4-L2 (a power symbol's flags), D4-L5 (Paste's per-screen cache).
+  Done 2026-10-28 (`task-r5-schematic`, section 48): a KiCad 6 / early-7 root's `symbol_instances` give every symbol, the root's included, its reference,
+  value and footprint (D5-H1, 11 QA roots); a root symbol's own `/<root>` instance names it (D5-H2); a directive label's "Net Class" field (D5-H4); a placed
+  pin's alternate function read, kept, written and traced by its type (D5-H3); one pin number in two units (A5-H1); two bus entries end to end (A5-M1); a De
+  Morgan placement's jumper groups (A5-M2); Delete's junctions last (B5-H1, B5-L1); a stacked pin's net in the studio (B5-M2); a pasted shared sheet's units
+  (B5-L2). KiCad's 130 QA roots through `eda import-kicad`: 108 alike before, 123 after. Left: D5-M1 (a differing `lib_name` copy: one library symbol
+  per id, `legacy_power`, `same_local_global_power`), A5-L1 (a shared screen's twin pin net names), a library symbol's user fields in the cache (`issue22286`'s
+  `${LOCATION}`), the per-path units of screens copied whole (`add_sheet_tree`).
 - Done earlier: the IR (`SchematicSection::sheets`, `Design::sheet_contents` in `crates/model/src/ir.rs`); tree import and multi-file export
   (`crates/kicad/src/sch_import.rs::import_kicad_sch_tree`, `lib.rs`); one derived schematic as module sheets (`crates/engine/src/hier/`,
   Tools > Reorganize into Module Sheets); every schematic command acts on the sheet in view (`Cmd::OnSheet`); the nets traced across sheets
@@ -648,7 +661,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Round 4 (2026-10-28, `task-r4-editors-exports`; `PARITY-fpedit.md` section 17): the Footprint Editor's drawing tools take the layer class's width (a polygon unfilled on Edge.Cuts and the courtyards) and the layer box
   lists every layer; the Text tool is KiCad's (Footprint Text Properties on the first click, the text carried, the layer's size and pen, left, mirrored on a back layer, the tool stays); the pad is carried and R / F
   turn or flip it before the click; the library Footprint Properties' size messages, Paste Footprint's Value and the Renumber Pads dialog and popup are KiCad's.
-- Missing: Explode and Recombine of a custom pad (item 31); a placed symbol gets a library text box as its border and fill only, not its text (the engine's `SymbolGraphic` has no text box), and has no alternate pin functions (`LibPin` has none); the border's colour and
+- Missing: Explode and Recombine of a custom pad (item 31); a placed symbol gets a library text box as its border and fill only, not its text (the engine's `SymbolGraphic` has no text box), keeps the alternate pin function a file picked (round 5, PARITY-sch section 48) but the studio cannot choose one or draw its name; the border's colour and
   a custom fill colour (the style is kept since the review, not edited) and Private to Symbol Editor of a library shape and text box; a plain text of a symbol and the Footprint Editor's graphics and texts have no Properties dialog (a new footprint text has its Footprint Text Properties since round 4, an existing one not yet); a footprint text has no vertical justification, italic or keep-upright; the fields table has no simulation fields; no named body styles;
   Symbol Properties has no unit display names grid and no Pin Connections tab (both kept in the file); a pad's fabrication property and margins are kept, not edited, in the library Pad Properties; the board's Footprint Properties still has two mandatory rows. (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
