@@ -453,7 +453,7 @@ export function BoardExportDialog() {
           </div>
           {result && (
             <div className={result.ok ? "panel-empty" : "problem-row"} style={{ fontSize: 11 }}>
-              <b>{result.message}</b>
+              <b style={{ whiteSpace: "pre-line" }}>{result.message}</b>
               {result.files.length > 0 && (
                 <ul style={{ margin: "6px 0 0 16px", padding: 0 }}>
                   {result.files.map((f) => (
