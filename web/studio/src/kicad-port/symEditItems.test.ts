@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { LibrarySymbolGraphic, LibrarySymbolPin } from "../api/types";
-import { deletePlan, duplicateItems, maxPinNumber, nearestHalfGrid, pastedItems, placedPinWithId, repeatPin, rotatePlan } from "./symEditItems";
+import { deletePlan, duplicateItems, maxPinNumber, nearestHalfGrid, pastedItems, placedPinWithId, repeatPin, rotatePlan, selectionPivot } from "./symEditItems";
+import { pinBoxAt } from "./schPins";
+import { resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
 
 const pin = (id: string, number: string, x: number, y: number, unit = 1, extra: Partial<LibrarySymbolPin> = {}): LibrarySymbolPin => ({
   id,
@@ -73,4 +75,20 @@ test("Repeat Pin keeps the last pin by its id (g_lastPin is a UUID), so it is fo
   const source = now.find((p) => p.id === last.id)!;
   assert.deepEqual([repeatPin(source).number, repeatPin(source).at], ["6", { x: 0, y: -2.54 }]);
   assert.equal(placedPinWithId(placed, []).id, undefined);
+});
+
+test("Rotate's pivot counts the pins' name and number boxes (PIN_LAYOUT_CACHE::GetPinBoundingBox), KiROUNDed in y-down IU (r3 E3-3)", () => {
+  const measure = (text: string, size: number) => text.length * size * 0.6;
+  const texts = { namesHidden: false, numbersHidden: false, nameOffsetNm: 508_000 };
+  const pins = [pin("a", "1", 0, 0, 1, { name: "IN" }), pin("b", "2", 0, -2.54, 1, { name: "OUT" })];
+  const boxes = pins.map((p) => {
+    const r = resolvePin({ number: p.number, name: p.name, electrical_type: p.electrical_type, shape: p.shape, at: [p.at.x, p.at.y], angle_deg: p.angle_deg, length_mm: p.length_mm, unit: 1, body_style: 1, hidden: false }, symbolTransformMatrix(0, null), [0, 0]);
+    return pinBoxAt(r.tip, r.root, p.name, p.number, texts, measure, 1.27e6, 1.27e6);
+  });
+  const c = selectionPivot(boxes, 1.27)!;
+  assert.equal(c.x, 2.54, "the names inside the body widen the box to the right; the ends alone give 1.27");
+  // y: the number of the upper pin over its line (1.625 up) and the name of the lower one on its line (3.175 down): centre -0.775, on the half grid -0.635
+  assert.equal(c.y, -0.635);
+  const [r1] = rotatePlan(pins, 2, true, 1.27, [], c);
+  assert.deepEqual(r1!.at, { x: 1.905, y: -3.175 });
 });

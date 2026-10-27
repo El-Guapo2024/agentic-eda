@@ -31,7 +31,11 @@ import { allFields, wireField } from "../kicad-port/symFields";
 import { movedRows } from "../kicad-port/symFieldLayout";
 import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchronizePins } from "../kicad-port/symPinSync";
 import { DEFAULT_PIN_TEMPLATE, samePinTemplate, type PinTemplate } from "../kicad-port/symPinTemplate";
-import { deletePlan, duplicateItems, pastedItems, placedPinWithId, repeatPin, rotatePlan } from "../kicad-port/symEditItems";
+import { deletePlan, duplicateItems, pastedItems, placedPinWithId, repeatPin, rotatePlan, selectionPivot } from "../kicad-port/symEditItems";
+import { pinBoxAt } from "../kicad-port/schPins";
+import { symbolItemBoxes } from "../kicad-port/itemBoxes";
+import { resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
+import { measureStrokeText } from "../components/text/strokeFont";
 import { pinOccupiedMessage, pinPlacementOccupant } from "../kicad-port/pinPlacement";
 import { askConfirm } from "../components/library/libraryDialogs";
 import { INITIAL_LAST_TEXT_BOX, type LastTextBox, type LibTextBox } from "../kicad-port/symTextBox";
@@ -667,7 +671,19 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       if (!libId || !sym || st.selection.size === 0) return;
       const ids = [...st.selection];
       const pins = ids.map((id) => sym.pins.find((p) => p.id === id)).filter((p): p is LibrarySymbolPin => !!p);
-      const turned = rotatePlan(pins, ids.length, ccw, st.gridNm / 1e6);
+      // `selection.GetCenter()`: every selected item's `GetBoundingBox()` -- a pin's line, name and number (`PIN_LAYOUT_CACHE::GetPinBoundingBox`), a graphic's box.
+      const texts = { namesHidden: !!sym.pin_names_hidden, numbersHidden: !!sym.pin_numbers_hidden, nameOffsetNm: (sym.pin_name_offset_mm ?? 0) * 1e6 };
+      const identity = symbolTransformMatrix(0, null);
+      const boxes = pins.map((p) => {
+        const r = resolvePin({ number: p.number, name: p.name, electrical_type: p.electrical_type, shape: p.shape, at: [p.at.x, p.at.y], angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: p.body_style, hidden: p.hidden }, identity, [0, 0]);
+        return pinBoxAt(r.tip, r.root, p.name, p.number, texts, measureStrokeText, (p.name_size_mm ?? 1.27) * 1e6, (p.number_size_mm ?? 1.27) * 1e6);
+      });
+      const graphicBoxes = symbolItemBoxes(sym, 0, 0);
+      for (const id of ids) {
+        const b = sym.graphics.some((g) => g.id === id) ? graphicBoxes.get(id) : undefined;
+        if (b) boxes.push({ minX: b[0], minY: b[1], maxX: b[2], maxY: b[3] });
+      }
+      const turned = rotatePlan(pins, ids.length, ccw, st.gridNm / 1e6, [], selectionPivot(boxes, st.gridNm / 1e6));
       const cmds: Cmd[] = turned.map((p): Cmd => ({ op: "edit_symbol_pin", lib_id: libId, id: p.id!, pin: p }));
       if (cmds.length > 0) await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
