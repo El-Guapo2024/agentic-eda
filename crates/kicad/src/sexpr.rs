@@ -44,6 +44,14 @@ impl Sexpr {
     }
 }
 
+/// Replace an atom's text, keeping the file's quoting of it (the [`QUOTED`] mark): a reader that rewrites a token in the tree before the readers see it
+/// (`overbar::normalize`). A list is left alone.
+pub(crate) fn set_text(atom: &mut Sexpr, text: &str) {
+    if let Sexpr::Atom(s) = atom {
+        *s = if s.starts_with(QUOTED) { format!("{QUOTED}{text}") } else { text.to_string() };
+    }
+}
+
 /// Parse the whole document: exactly one top-level list, e.g.
 /// `(kicad_pcb ...)`. Returns the offset of the failure (byte index) in the
 /// error string so a caller can turn it into a line number if it wants one.

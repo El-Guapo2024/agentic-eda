@@ -34,6 +34,7 @@ mod pcb_point;
 mod pcb_textbox;
 mod board_text_io;
 mod bold_text;
+mod overbar;
 mod via_io;
 mod fp_art_io;
 mod fp_fields;

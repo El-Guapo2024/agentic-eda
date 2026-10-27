@@ -149,6 +149,8 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let footprints_scaled = crate::fp_transform::normalize(&mut tree);
     // KiCad 10's bold text, whose thickness is the width before the bold factor, in the older meaning every reader here has (`bold_text`).
     crate::bold_text::normalize(&mut tree);
+    // A file older than 20210606: its `~X~` overbars in KiCad's new `~{X}` notation, net names and texts, as KiCad's parser converts them (`overbar`).
+    crate::overbar::normalize(&mut tree);
     let root = tree
         .as_list()
         .filter(|l| sexpr::tag(l) == Some("kicad_pcb"))
@@ -2584,14 +2586,15 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
     for (z, parent) in all {
         // `SetIslandRemovalMode( ISLAND_REMOVAL_MODE::ALWAYS )` and priority 0 before parsing.
         let mut zone = Zone { parent_footprint: parent, ..Zone::default() };
-        // `(net N)` (code) or, in newer files, `(net "name")`; `(net_name ...)` as a fallback.
+        // `(net N)` (code) or, in newer files, `(net "name")`. Then `parseZONE`'s `legacyNetnameFromFile`: a `(net_name ..)` that is not the name of the zone's net
+        // ("Can happens which old boards, with nonexistent nets ... or after being edited by hand") puts the zone on the net of that name, a new one if the board has
+        // none (`FindNet`, else a new `NETINFO_ITEM`). The name is never converted to the new overbar notation (`overbar`), so in a file older than 20210606 a zone on
+        // `~RESET~` (net `~{RESET}`) is on a new net `~RESET~` of its own, as kicad-cli 10.99.0's upgrade of such a file has it.
         if let Some(n) = sexpr::find(z, "net") {
             zone.net = net_of(n, net_names);
         }
-        if zone.net.is_empty() {
-            if let Some(n) = sexpr::find(z, "net_name") {
-                zone.net = sexpr::txt(n, 1).unwrap_or("").to_string();
-            }
+        if let Some(name) = sexpr::find(z, "net_name").and_then(|n| sexpr::txt(n, 1)).filter(|name| !name.is_empty() && *name != zone.net) {
+            zone.net = name.to_string();
         }
         // `T_layer` (a zone on one layer) and `T_layers` (`parseBoardItemLayersAsMask`: the wildcards `*.Cu`, `F&B.Cu` and `*.Mask` stand for the layers they name).
         let mut names: Vec<&str> = Vec::new();

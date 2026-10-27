@@ -73,6 +73,8 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     // KiCad 10's bold text, whose thickness is the width before the bold factor: `parseEDA_TEXT` widens it back for a footprint file of version
     // 20260826 or later, the footprint's own `(version ..)` (`parseFOOTPRINT_unchecked`'s `m_requiredVersion`). See `bold_text`.
     crate::bold_text::normalize(&mut tree);
+    // A file older than 20210606: its `~X~` overbars in KiCad's new `~{X}` notation, net names and texts, as KiCad's parser converts them (`overbar`).
+    crate::overbar::normalize(&mut tree);
     let root = tree.as_list().filter(|l| matches!(sexpr::tag(l), Some("footprint") | Some("module"))).ok_or("the top-level form is not (footprint ...); not a KiCad footprint file")?;
     let name = sexpr::txt(root, 1).ok_or("the footprint has no name")?;
     let mut warnings = Vec::new();
