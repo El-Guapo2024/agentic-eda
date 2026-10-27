@@ -226,7 +226,7 @@ export function DrcDialog() {
             </div>
           )}
           <div style={{ display: "flex", gap: 18, marginBottom: 10 }}>
-            <label className="toggle" title="KiCad's filler runs first, on a copy of the board (the fills are kept, like Fill All Zones), and the DRC then judges the board with that fill. Off by default: it judges the fills the board holds.">
+            <label className="toggle" title="KiCad's filler runs first, on a copy of the board (the fills are kept, like Fill All Zones), and the DRC then judges the board with that fill. On by default, as in KiCad; off, it judges the fills the board holds.">
               <input type="checkbox" checked={state.drcRefillZones} onChange={(e) => dispatch({ type: "SET_DRC_REFILL", refill: e.target.checked })} />
               Refill all zones before performing DRC
             </label>

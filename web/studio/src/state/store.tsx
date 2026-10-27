@@ -1036,7 +1036,7 @@ const initialState: StudioState = {
   drcRunning: false,
   drcError: null,
   drcVersion: null,
-  drcRefillZones: false,
+  drcRefillZones: true, // `dialog_drc_base.cpp`: `m_cbRefillZones->SetValue(true);` -- never read from the settings (R6-D6)
   drcParity: false,
   drcSelected: null,
   drcLintSelected: null,
