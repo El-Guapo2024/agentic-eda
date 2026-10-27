@@ -427,6 +427,7 @@
     const before = (await state()).routing?.diff_pair_presets ?? [];
     await cmd({ op: "set_diff_pair_presets", presets: [{ width: 300_000, gap: 250_000, via_gap: 300_000 }] });
     for (let i = 0; i < 20 && !((await state()).routing?.diff_pair_presets ?? []).length; i++) await sleep(200);
+    await sleep(1500); // the studio's own copy of the board follows the server's at its next poll (700 ms)
     await E.run("studio.Router.setDiffPair", 1);
     await arm();
     const r = await startAt(...p1);

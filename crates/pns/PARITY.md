@@ -237,7 +237,7 @@ cancel flows, replacing the old client-only `commitRoute`/
 | Backspace | `pcbnew.InteractiveRouter.UndoLastSegment` -> `routeUndoSegment` |
 | V (via + layer switch) | `pcbnew.Control.layerToggle` -> `routeToggleVia` (arms the *next* fix, doesn't commit immediately) |
 | `/` (posture) | `Canvas.tsx` keydown (no separate upstream `TOOL_ACTION` for this one -- see that handler's own comment) -> `routeMove(..., flipPosture: true)` |
-| W / Shift+W (width) | `pcbnew.EditorControl.trackWidthInc`/`trackWidthDec` -> a small fixed preset ladder (this project has no per-board "preferred widths" list the way real pcbnew's dialog does) |
+| W / Shift+W (width) | `pcbnew.EditorControl.trackWidthInc`/`trackWidthDec` -> the board's width list by index (`routing.track_width_presets`, entry 0 the net class's), or the pair list while a pair is routed (Stage 18, r5 R5-5/R5-6) |
 
 Verified end to end: `cargo test`/`clippy` on the Rust side (including
 `tests/real_board.rs`), and `npm run typecheck && npm run test:unit &&
@@ -1242,6 +1242,56 @@ failed without it; R4-1 and R4-2 have kicad-cli proofs under `EDA_SLOW_TESTS=1` 
   `routerVia.ts::chosenTrackWidth`, `useActionRunner.ts`'s width list; no server half needed) and R4-3 (Board Setup's Differential Pairs list,
   the via rows' checks), other lanes'. A pair's custom dimensions are still applied after `start_diff_pair`'s start-gap check, where KiCad's
   `ImportSizes` has them before it (`UseCustomDiffPairDimensions`).
+
+## Stage 18 -- round-5 router findings (branch `task-r5-router`, 2026-10-28)
+
+The router and studio findings of `findings/round5/r5-route-rules.md` (R5-1 .. R5-11; R5-D* and R5-Z* are another lane's), each re-read against
+`pns_tool_base.cpp` (`pickSingleItem`, `updateStartItem`), `router_tool.cpp` (`getStartLayer`, `prepareInteractive`, `finishInteractive`,
+`TRACK_WIDTH_MENU`, `DIFF_PAIR_MENU`, `UpdateMessagePanel`), `pns_kicad_iface.cpp` (`ImportSizes`, `createBoardItem`, `RemoveItem`, `Commit`),
+`board_editor_control.cpp` (`TrackWidthInc`/`Dec`, `AutoTrackWidth`), `board_design_settings.cpp` (the three lists' `PARAM_LAMBDA`s,
+`GetCurrentDiffPair*`, `SetDiffPairIndex`) and `panel_setup_tracks_and_vias.cpp` at 8303b2ad.
+
+- **R5-1, the start layer.** `Router::pick_start` ranks as `pickSingleItem( pos, nullptr, -1 )`: at slop 0 a pad/via/track end on the active
+  layer, a track there, then the same on any copper layer (`prioritized[2]`, `[3]`); then within the snap, the active layer's and any layer's.
+  `start_layer_of` is `getStartLayer` (the item's first layer when it is not on the active one); `start`, `import_sizes`, `connected_track_width`
+  (`SetStartLayerFromPCBNew`) and `start_diff_pair` use it; `Router::start_layer`. The studio's `pickRouteItem` takes the top layer (an end only its
+  layer's, `aLayer >= 0`); a start the server put on another layer switches the active layer (`SetActiveLayer( pcbLayer )`) and the route's end gives
+  it back (`finishInteractive`'s `m_originalActiveLayer`, the store's `SET_DRAW_STATE`). Tests: `tests/start_layer.rs`, `routePick.test.ts`; kicad-cli:
+  `a_route_started_on_a_bottom_pad_with_the_top_layer_active_connects_on_the_bottom` (no unconnected item, clearance, short or crossing; the board
+  without the route has the two pads unconnected). **Differs:** visibility and high contrast are the studio's; on another layer the first track by
+  layer order wins, not the nearest end.
+- **R5-2, the commit's sources.** `RouteCommit::track_sources` (index, board track) is `GetSourceItem()`: a shoved line's tracks (the line placer's
+  and the pair placer's `displaced_tracks`), a dragged line's (`DragCommit::sources`: the grabbed segment's track, an uncovered run's, a fan-out
+  leg's, a shoved line's), a split track's halves, kept through `drop_redundant` and `simplify_new_lines` (a merged line takes its seed's, as
+  `AssembleLine` does). `Cmd::CommitRoute { track_sources, group }`: each sourced track takes its source's `track_masks` entry and joins its group
+  (`createBoardItem`, `m_replacementMap[src]`); a track with no source and a new via join `group`, the entered group the studio sends with each
+  start (`group`, `ENTERED_GROUP_MAGIC_NUMBER`); a replacement of a track in no group stays in none; removed tracks' mask entries go. Tests:
+  `commit_route_carries_a_replaced_tracks_mask_and_group` (ops), `head_via.rs` (shove and drag sources); kicad-cli (`gate_vs_kicad`): a dragged
+  masked, grouped track and a route made with a group entered, through the route API, resaved by `kicad-cli pcb upgrade --force`: the segment is
+  `(layers "F.Cu" "F.Mask")` with its margin, both groups list the new items. **Not done:** Cleanup's and Break Track's replacements carry no source.
+- **R5-3 / R5-11, the project's lists.** The writer puts `track_widths` and `via_dimensions` in the project with the net class's dummy first, as
+  `diff_pair_dimensions`; `merge_project_predefined_sizes` reads all three, rows filtered as KiCad's loaders filter them and then the first dropped
+  (p22 F5). Test: `the_project_carries_the_predefined_track_widths_and_via_sizes` (eda-kicad).
+- **R5-4, a pair's user dimensions at the start.** `Router::user_diff_pair` (`UserDpSizes`) is `ImportSizes`' "user choice" handed to the router
+  before `StartRouting` (`DiffPairPlacer::start_with`): the min-clearance and start-gap checks judge them, over the inherited width too. `dp_start`
+  sets it from `width` / `gap` / `via_gap`; the pair's Route From Other End from the sizes it ran at. Test:
+  `a_pair_with_custom_dimensions_is_checked_with_them_at_the_start`.
+- **R5-5 .. R5-7, R5-9, the size choices (studio, `kicad-port/routerSizes.ts`).** The pair menu lists Pre-defined Sizes' pairs with
+  `DIFF_PAIR_MENU`'s labels (`studio.Router.setDiffPair`, `pcbx.diffPairIndex`, Use Net Class Values sets index 0); W / Shift+W step the pair list
+  while the pair tool is active and re-size a running pair (`dp_dims`; entry 0 the rule's sizes from the `dp_start` reply). Outside a pair, W steps
+  `[class, ...track_width_presets]` by index, wrapping; the first press of a route at its inherited width only sets `widthOverride`
+  (`m_TempOverrideTrackWidth`) and goes to the current entry; entry 0 while routing is the net's rule width (`rule_width` of the start reply,
+  `Router::rule_sizes`); `UseCustomTrackViaSize( false )`. The width and via menu entries and Custom Track/Via Size no longer turn "Use Starting
+  Track Width" off; Auto Track Width turns custom sizes off first (`AutoTrackWidth`). The chosen width and via are read from the board's list
+  at route time (`chosenTrackWidthOf`; the via action's list entry). Tests: `routerSizes.test.ts`; browser: router-leftovers' r5 scenario,
+  diff-pairs' pair-sizes scenario.
+- **R5-8, the message panel.** `/api/route/start` and `dp_start` reply `sizes`: the width's source ("existing track", "user choice", the rule's),
+  `clearance` and its source (`ImportedSizes::clearance_source`), the pair's width and gap sources, the resolved class
+  (`GetHumanReadableName` of `effective_class`), and the rule's sizes. `MessagePanel` shows `routerMessagePanel` while routing: "Routing Track: %s"
+  / "Resolved Netclass: %s" (or "Routing Diff Pair"), "Corner Style", "Mode", "Track Width: %s" / "(from %s)", "Min Clearance", "Diff Pair Gap".
+  **Differs:** "DP Max Uncoupled-length" is not shown; after a via the clearance is the start's (KiCad re-imports on a layer change).
+- **R5-10 (part).** Apply sorts the three lists (`TransferDataFromWindow`). **Left:** Add rows pre-filled with the Default class's values, and the
+  ops' own "every preset width must be positive" refusal (KiCad checks no width).
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
