@@ -354,6 +354,8 @@
     // ------------------------------------------------------------------------------------------------------------------ 2. the inductor
     await scenario("Draw Microwave Lines: two clicks, Length of track from the distance, KiCad's messages before the value, Component value, one undo step", async (t) => {
       t((await E.actions()).some((a) => a.id === "pcbnew.MicrowaveTool.createLine" && a.enabled !== false), "Draw Microwave Lines is an action of the board editor");
+      // The studio starts free, as KiCad (round 5 A5-4): the 45-degree line mode is chosen here.
+      await E.run("pcbnew.EditorControl.lineMode45");
       await E.run("pcbnew.MicrowaveTool.createLine");
       await sleep(300);
       const [x1, y1] = at(8, 22);

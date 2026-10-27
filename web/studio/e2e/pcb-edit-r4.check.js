@@ -189,10 +189,12 @@
 
     await scenario("C-4, C-5: a click on the first corner closes a polygon, the 45-degree mode bends a leg in, and the tool is left", async (t) => {
       const before = ((await state()).drawings?.shapes ?? []).map((s) => s.id);
+      // The studio starts free, as KiCad (round 5 A5-4): the 45-degree mode is chosen here.
+      await __eda.run("pcbnew.EditorControl.lineMode45"); await sleep(100);
       await __eda.run("pcbnew.InteractiveDrawing.graphicPolygon"); await sleep(400);
       await click(toScreen, fx, fy);
       await click(toScreen, fx + 10, fy);
-      // from (10,0) to (20,4) in the default 45-degree mode: a run to (16,0), then 45 degrees into (20,4)
+      // from (10,0) to (20,4) in the 45-degree mode: a run to (16,0), then 45 degrees into (20,4)
       await click(toScreen, fx + 20, fy + 4);
       await click(toScreen, fx + 10, fy + 10, { ctrlKey: true });
       await click(toScreen, fx, fy);
@@ -202,6 +204,7 @@
       t(pts.length === 5, `five corners: the bend is one (${pts.length}: ${JSON.stringify(pts.map((p) => [p[0] / 1e6 - fx, p[1] / 1e6 - fy]))})`);
       t(pts.some((p) => near(p, fx + 16, fy)), "the bend at (16,0)");
       t(__eda.state().tool === "select", `the tool was left (${__eda.state().tool})`);
+      await __eda.run("pcbnew.EditorControl.lineModeFree");
       await undoUntilBase();
       t((await snapshot()) === base, "undone, the board is as it was");
     });

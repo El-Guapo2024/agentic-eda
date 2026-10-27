@@ -49,7 +49,8 @@ import { useGridSettings } from "../../state/gridSettings";
 import { toPcbMagnetic } from "../../kicad-port/preferences";
 import { withTrackSnapping } from "../../kicad-port/routerSettings";
 import { heldCursor } from "../../kicad-port/heldCursor";
-import { findRouteAnchor, constrainByAngleMode, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
+import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
+import { findRouteAnchor, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { clearRouteQueue } from "./routeQueue";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
 import { routeMove, routeDragMove, dpMove } from "../../api/client";
@@ -201,6 +202,8 @@ export function Canvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  /** Ctrl (Cmd on a Mac) at the last pointer move: `drawShape`'s modifier for the rubber band (kicad-port/pcbShapeSnap.ts). */
+  const drawCtrlRef = useRef(false);
   /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag (kicad-port/dragThreshold.ts). Made at every press, read by the move, the up and the long press. */
   const gestureRef = useRef<ClickDragGesture | null>(null);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
@@ -418,6 +421,7 @@ export function Canvas() {
       snappedCursor: PLACING_TOOLS.has(state.activeTool) ? snap.lastPoint() : null,
       activeTool: state.activeTool,
       angleSnapMode: state.pcbx.angleSnapMode,
+      drawCtrl: drawCtrlRef.current,
       enteredGroup: state.enteredGroupId,
       appearance: paintAppearance,
     });
@@ -902,11 +906,10 @@ export function Canvas() {
         // `drawShape`: `if( !started ) { m_toolMgr->RunAction( ACTIONS::selectionClear ); ...`
         if (already.length === 0) dispatch({ type: "SET_SELECTION", refs: [] });
         let point: [number, number] = [sx, sy];
-        if (already.length > 0 && (shapeKind === "segment" || shapeKind === "rect")) {
-          const last = already[already.length - 1]!;
-          const constrained = constrainByAngleMode(state.pcbx.angleSnapMode, last, [sx, sy]);
-          // Constrained onto the line mode's ray, then back on the grid -- unless it did not move (an anchor already on the ray keeps its exact place).
-          point = constrained[0] === sx && constrained[1] === sy ? [sx, sy] : (([x, y]) => [x, y] as [number, number])(snap.align("shape", constrained, snapMods(e), "graphics"));
+        if (already.length > 0 && (shapeKind === "segment" || shapeKind === "rect" || shapeKind === "circle")) {
+          // `drawShape`: the snapped cursor's vector from the first point through `GetVectorSnapped45`/`90` -- a line by the line mode (Ctrl frees it), a
+          // rectangle or circle free (Ctrl: 45 degrees, a rectangle square). The cursor is on the grid already, and the snap keeps its x or y (round 5 A5-2/3).
+          point = shapeSecondPoint(shapeKind, state.pcbx.angleSnapMode, snapMods(e).ctrl, already[already.length - 1]!, [sx, sy]);
         }
         const pts = [...already, point];
         const finishAt = shapeAutoFinishCount(shapeKind);
@@ -1131,6 +1134,7 @@ export function Canvas() {
 
   const onPointerMove = (e: React.PointerEvent) => {
     const [wx, wy] = worldAt(e);
+    drawCtrlRef.current = snapMods(e).ctrl;
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
     const containerRectForAutoPan = containerRef.current?.getBoundingClientRect();
     if (containerRectForAutoPan) lastPointerScreenRef.current = { x: e.clientX - containerRectForAutoPan.left, y: e.clientY - containerRectForAutoPan.top };
