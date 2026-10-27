@@ -94,3 +94,21 @@ fn a_masked_copper_shape_stays_on_its_copper_layer() {
     assert!(lines.iter().any(|l| l.contains(r#"(layers "F.Cu" "F.Mask") (net 1)"#)), "{out}");
     assert!(!out.contains("Cmts.User\") (net"), "{out}");
 }
+
+const FP_HEAD: &str = r#" (footprint "R:X" (layer "F.Cu") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") (at 110 110)
+  (property "Reference" "R1" (at 0 -2 0) (layer "F.SilkS") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab1") (effects (font (size 1 1) (thickness 0.15))))
+  (property "Value" "X" (at 0 2 0) (layer "F.Fab") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab2") (effects (font (size 1 1) (thickness 0.15))))
+"#;
+
+/// F4: `format( FOOTPRINT )` writes ` allow_soldermask_bridges` last in `(attr ..)` when `AllowSolderMaskBridges()`; the solder-mask DRC skips the footprint's bridges.
+#[test]
+fn allow_soldermask_bridges_survives_export() {
+    let text = board(&format!(
+        r#"{FP_HEAD}  (attr smd allow_soldermask_bridges)
+  (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask" "F.Paste") (net 1 "A") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac1"))
+  (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Mask" "F.Paste") (net 1 "A") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac2")))"#
+    ));
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    assert!(out.contains("(attr smd allow_soldermask_bridges)"), "{out}");
+}

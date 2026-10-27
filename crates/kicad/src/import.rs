@@ -1777,7 +1777,7 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
         e.solder_mask_margin = if file_version <= 20240201 && m == Nm::ZERO { None } else { Some(m) };
     }
     if let Some(attr) = sexpr::find(fp, "attr") {
-        e.allow_soldermask_bridges = attr.iter().skip(1).filter_map(Sexpr::text).any(|t| t == "allow_soldermask_bridges");
+        e.allow_soldermask_bridges = attr.iter().skip(1).filter_map(Sexpr::text).any(|t| t == "allow_soldermask_bridges" || t == "allow_solder_mask_bridges");
     }
     if let Some(g) = sexpr::find(fp, "net_tie_pad_groups") {
         e.net_tie_pad_groups = g.iter().skip(1).filter_map(Sexpr::text).map(String::from).collect();

@@ -119,9 +119,10 @@ pub(crate) fn write_fields(out: &mut String, fp: &FootprintInstance, part: &Part
     }
 }
 
-/// `(attr smd through_hole board_only exclude_from_pos_files exclude_from_bom allow_missing_courtyard dnp)`: only the tokens that
-/// are set, and nothing at all when none is (`format( FOOTPRINT )`).
-pub(crate) fn write_attr(out: &mut String, a: &FootprintAttrs) {
+/// `(attr smd through_hole board_only exclude_from_pos_files exclude_from_bom allow_missing_courtyard dnp allow_soldermask_bridges)`: only the tokens
+/// that are set, and nothing at all when none is (`format( FOOTPRINT )`). `allow_soldermask_bridges` is `FootprintExtra::allow_soldermask_bridges`
+/// (`FOOTPRINT::AllowSolderMaskBridges`), which the solder-mask DRC reads (`drc_test_provider_solder_mask.cpp`).
+pub(crate) fn write_attr(out: &mut String, a: &FootprintAttrs, allow_soldermask_bridges: bool) {
     let mut tokens: Vec<&str> = Vec::new();
     match a.kind {
         FootprintKind::Smd => tokens.push("smd"),
@@ -142,6 +143,9 @@ pub(crate) fn write_attr(out: &mut String, a: &FootprintAttrs) {
     }
     if a.dnp {
         tokens.push("dnp");
+    }
+    if allow_soldermask_bridges {
+        tokens.push("allow_soldermask_bridges");
     }
     if !tokens.is_empty() {
         writeln!(out, "\t\t(attr {})", tokens.join(" ")).unwrap();
@@ -456,10 +460,13 @@ mod tests {
     #[test]
     fn attributes_are_written_in_kicads_order_and_not_at_all_when_empty() {
         let mut out = String::new();
-        write_attr(&mut out, &FootprintAttrs::default());
+        write_attr(&mut out, &FootprintAttrs::default(), false);
         assert!(out.is_empty());
-        write_attr(&mut out, &FootprintAttrs { kind: FootprintKind::ThroughHole, board_only: true, exclude_from_pos_files: true, exclude_from_bom: true, dnp: true, allow_missing_courtyard: true });
+        write_attr(&mut out, &FootprintAttrs { kind: FootprintKind::ThroughHole, board_only: true, exclude_from_pos_files: true, exclude_from_bom: true, dnp: true, allow_missing_courtyard: true }, false);
         assert_eq!(out.trim(), "(attr through_hole board_only exclude_from_pos_files exclude_from_bom allow_missing_courtyard dnp)");
+        let mut bridges = String::new();
+        write_attr(&mut bridges, &FootprintAttrs { kind: FootprintKind::Smd, ..Default::default() }, true);
+        assert_eq!(bridges.trim(), "(attr smd allow_soldermask_bridges)", "after dnp, as `format( FOOTPRINT )`");
         let back = parse_attrs(&parse(out.trim()));
         assert_eq!(back, FootprintAttrs { kind: FootprintKind::ThroughHole, board_only: true, exclude_from_pos_files: true, exclude_from_bom: true, dnp: true, allow_missing_courtyard: true });
         assert_eq!(parse_attrs(&parse("(attr virtual)")), FootprintAttrs { exclude_from_pos_files: true, exclude_from_bom: true, ..Default::default() });

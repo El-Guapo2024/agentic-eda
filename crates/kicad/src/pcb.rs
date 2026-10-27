@@ -1207,7 +1207,7 @@ pub(crate) fn write_footprint(
         }
         writeln!(out, ")").unwrap();
     }
-    write_attr(out, &extra.attrs);
+    write_attr(out, &extra.attrs, own_extra.is_some_and(|e| e.allow_soldermask_bridges));
 
     // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).
     let mut pads: Vec<(usize, &Pad)> = footprint.pads.iter().enumerate().collect();
