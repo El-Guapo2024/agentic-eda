@@ -145,7 +145,7 @@ struct Rule {
 /// 8303b2ad unless a row says KiCad 25ec2335, the box's kicad-cli, whose new connectivity engine places its markers through `ERC_MARKER_PLACER`; the rows
 /// marked [probed] were run against kicad-cli 10.99.0-5334, and `footprint_link_issues` again against 25ec2335, whose matchers accept these forms and are more
 /// lenient with a few: a record with no paths still matches, `ResolveERCExclusions`' pathless fallback). The connectivity rows were read from 8303b2ad and
-/// have not been compared line by line with 25ec2335's `ERC_MARKER_PLACER` calls (r3 D3-L5: the fallback keeps them matching).
+/// were compared line by line with 25ec2335's `ERC_MARKER_PLACER` calls in round 4 and all match (r4, the `r4-schematic` review).
 fn rule(check: &str) -> Option<Rule> {
     use At::{Aux, Main};
     use Paths::{Specific, SpecificMain, SpecificMainAux};
@@ -168,6 +168,10 @@ fn rule(check: &str) -> Option<Rule> {
         // erc.cpp 1225-1231: the pin that needs a driver [probed: `pin_not_driven`, `power_pin_not_driven`]; 1421-1429: a ground pin on another net; 1460-1465: a
         // pin named like a stacked one.
         "pin_not_driven" | "power_pin_not_driven" | "ground_pin_not_ground" | "stacked_pin_name" => r(Main, SpecificMain),
+        // KiCad 25ec2335 erc.cpp 2323-2329: `ercItem->SetItems( pin.item ); markers.Place( .., pin.sheet, pin.position, ITEM_PATHS::MAIN )`; 766 and 818:
+        // `reportSourceErrors( .., ERCE_EMPTY_POWER_VALUE / ERCE_EMPTY_LABEL_NAME, .. )`, `markers.Report( aCode, { source.item }, source.sheet, source.position,
+        // ITEM_PATHS::MAIN )` (r4 D4-L4).
+        "wired_implicit_power" | "empty_label_name" | "empty_power_value" => r(Main, SpecificMain),
         // erc.cpp 616-622: the unit that is placed, with its sheet.
         "missing_unit" | "missing_input_pin" | "missing_bidi_pin" | "missing_power_pin" => r(Main, SpecificMain),
         // connection_graph.cpp 4064-4069: `SetItems( no_connect )`, sheet-specific, item sheet set [probed].
@@ -446,6 +450,18 @@ mod tests {
             })
         );
         assert!(entry(&m, "").get("comment").is_none(), "no comment: none is written");
+    }
+
+    /// r4 D4-L4 (KiCad 25ec2335 erc.cpp 2323-2329, 766, 818: `ITEM_PATHS::MAIN` at the item): the three checks 201f2183 added have a marker, sheet-specific with
+    /// the item's sheet, so an exclusion of one reaches kicad-cli.
+    #[test]
+    fn the_new_checks_have_markers() {
+        let pin = item("693a38f5-591c-4c06-9786-e8973d13af99", 1_000_000, 2_000_000, "Symbol U1 Pin 7 [Power input, Line]");
+        for check in ["wired_implicit_power", "empty_label_name", "empty_power_value"] {
+            let m = marker(check, "warning", std::slice::from_ref(&pin), ROOT, 1).unwrap_or_else(|| panic!("{check}"));
+            assert_eq!((m.sheet.clone(), m.main_sheet.clone(), m.aux_sheet.clone()), (only(&[ROOT_UUID]), only(&[ROOT_UUID]), vec![]), "{check}");
+            assert_eq!(m.at_nm, [Nm::new(1_000_000), Nm::new(2_000_000)]);
+        }
     }
 
     /// r2 D-E2: a legacy (schema 0) exclusion listed twice, first without and then with a comment, keeps the comment (`ResolveERCExclusions`).

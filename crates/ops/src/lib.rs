@@ -5037,11 +5037,19 @@ impl<'a> Board<'a> {
     /// Delete a junction (`SCH_EDIT_FRAME::DeleteJunction` from `DoDelete`): the dot goes and the wires that end at it merge where they are in line
     /// (`MergeOverlap`), as the commit's `SCHEMATIC::CleanUp` does, so two crossing wires are no longer joined and the stem of a T is cut off (r3 C3-H1).
     fn delete_junction(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let model = self.model;
         let sch = self.schematic_mut()?;
-        let before = sch.junctions.len();
-        sch.junctions.retain(|j| j.id != id);
-        if sch.junctions.len() == before {
+        let Some(at) = sch.junctions.iter().find(|j| j.id == id).map(|j| j.at) else {
             return Err(vec![CheckResult::fail("ops_unknown_junction", id, "no junction with this id")]);
+        };
+        sch.junctions.retain(|j| j.id != id);
+        // `DeleteJunction` merges the lines in line that end at the dot, whatever their strokes and whatever else meets there (r4 C4-L2)
+        let mut scene = sch_scene::Scene::new(sch, model);
+        scene.merge_at(at);
+        let merged = scene.finish();
+        if merged.wires.iter().map(|w| &w.pts).ne(sch.wires.iter().map(|w| &w.pts)) {
+            *sch = merged;
+            sch.assign_missing_ids();
         }
         self.commit_clean_up()
     }

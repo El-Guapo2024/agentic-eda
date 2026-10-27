@@ -396,7 +396,8 @@ fn keep_project_erc_settings(out: &Path, root: &Path) -> Result<(), Vec<CheckRes
     let mut severities = std::collections::BTreeMap::new();
     if let Some(rules) = pro["erc"]["rule_severities"].as_object() {
         for (key, value) in rules {
-            let Some(value) = value.as_str().filter(|v| ["error", "warning", "ignore"].contains(v)) else { continue };
+            // `SeverityFromString`: "warning" and "ignore", anything else an error (`common/widgets/ui_common.cpp`, r4 D4-L3)
+            let Some(value) = value.as_str().map(|v| if ["warning", "ignore"].contains(&v) { v } else { "error" }) else { continue };
             let library_link = ["lib_symbol_issues", "lib_symbol_mismatch", "footprint_link_issues"].contains(&key.as_str());
             if !library_link && eda_model::erc_checks::default_severity(key).is_some_and(|d| d != value) {
                 severities.insert(key.clone(), value.to_string());

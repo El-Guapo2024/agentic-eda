@@ -3188,6 +3188,23 @@ fn deleting_a_t_with_its_junction_in_one_batch_deletes_all_three() {
     assert!(sch.wires.is_empty() && sch.junctions.is_empty(), "{:?} {:?}", sch.wires, sch.junctions);
 }
 
+/// r4 C4-L2 (`SCH_EDIT_FRAME::DeleteJunction`: the lines in line that end at the dot merge, `MergeOverlap( .., false )` looks for no junction): deleting the dot
+/// of a T leaves one through wire with no vertex there, the stem ending on its middle.
+#[test]
+fn deleting_a_t_junction_merges_the_through_wire() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::AddWire { pts: vec![p(mm(10.16), mm(40.64)), p(mm(30.48), mm(40.64))], bus: false }).unwrap();
+    b.apply(&Cmd::AddWire { pts: vec![p(mm(20.32), mm(50.8)), p(mm(20.32), mm(40.64))], bus: false }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert!(sch.wires.iter().filter(|w| w.pts.contains(&p(mm(20.32), mm(40.64)))).count() >= 2, "the dot splits the through wire");
+    let id = sch.junctions[0].id.clone();
+    b.apply(&Cmd::DeleteJunction { id }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert!(sch.junctions.is_empty());
+    assert!(sch.wires.iter().any(|w| w.pts.contains(&p(mm(10.16), mm(40.64))) && w.pts.contains(&p(mm(30.48), mm(40.64))) && !w.pts.contains(&p(mm(20.32), mm(40.64)))), "{:?}", sch.wires);
+}
+
 /// r3 C3-M4 (`SCH_LINE::IsStrokeEquivalent`: DEFAULT and SOLID are alike): a `solid` wire and a default one in line merge.
 #[test]
 fn clean_up_merges_solid_with_default() {

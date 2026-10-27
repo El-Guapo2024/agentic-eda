@@ -20,3 +20,9 @@ test("a bus never finishes on a pin; a line finishes on another line", () => {
   assert.equal(isTerminalPoint(s, [], [50, 0], "wire"), false, "a wire does not finish on a bus");
   assert.equal(isTerminalPoint(s, [], [5, 10], "notes"), true);
 });
+
+test("a label on a pin end with no wire is connected: a bus finishes on it (r4 C4-L3: SCH_ITEM::IsConnected counts the pin)", () => {
+  const s = sch({ labels: [{ at: [700, 700] }] });
+  assert.equal(isTerminalPoint(s, [[700, 700]], [700, 700], "bus"), true);
+  assert.equal(isTerminalPoint(s, [], [700, 700], "bus"), false, "nothing there but the label");
+});

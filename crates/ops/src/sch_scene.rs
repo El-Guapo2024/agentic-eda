@@ -811,6 +811,43 @@ impl<'m> Scene<'m> {
         }
     }
 
+    /// `SCH_EDIT_FRAME::DeleteJunction`'s merge (bus-wire-junction.cpp): of the wires and buses that end at `p` (the deleted dot), each two that are parallel
+    /// merge (`MergeOverlap( screen, firstLine, false )`: no junction is looked for, and no stroke compared), an identical one goes. So the two halves of a T's
+    /// through wire are one wire again, the stem ending on its middle (r4 C4-L2).
+    pub(crate) fn merge_at(&mut self, p: Point) {
+        let mut ends: Vec<usize> = (0..self.segs.len()).filter(|&i| !self.segs[i].dead && self.segs[i].is_endpoint(p)).collect();
+        let mut k = 0;
+        while k < ends.len() {
+            let i1 = ends[k];
+            k += 1;
+            if self.segs[i1].dead {
+                continue;
+            }
+            for &i2 in ends.iter().skip(k) {
+                if self.segs[i1].dead || self.segs[i2].dead {
+                    continue;
+                }
+                let (f, s) = (&self.segs[i1], &self.segs[i2]);
+                if !parallel(s.dir(), f.dir()) || s.bus != f.bus {
+                    continue;
+                }
+                if f.is_endpoint(s.a) && f.is_endpoint(s.b) {
+                    self.segs[i1].dead = true;
+                    continue;
+                }
+                if let Some((a, b)) = merge_ends(f.a, f.b, s.a, s.b) {
+                    let selected = self.segs[i1].has(F_SELECTED) || self.segs[i2].has(F_SELECTED);
+                    self.segs[i1].a = a;
+                    self.segs[i1].b = b;
+                    if selected {
+                        self.segs[i1].flags |= F_SELECTED;
+                    }
+                    self.segs[i2].dead = true;
+                }
+            }
+        }
+    }
+
     /// The stroke the segment's wire was drawn with (`SchExtras::strokes`, by the wire's id); `None` for the default.
     /// `SCH_LINE::IsStrokeEquivalent`: the same width and colour, and the same style -- `DEFAULT` and `SOLID` being alike (r3 C3-M4). A line with no
     /// stroke of its own has the default one.

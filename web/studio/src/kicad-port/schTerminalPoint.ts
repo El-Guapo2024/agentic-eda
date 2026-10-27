@@ -4,7 +4,7 @@
 //  * a wire (`LAYER_WIRE`): a bus entry, a junction, a pin, a wire (its end or its middle), a label that is connected, a sheet pin that is connected;
 //  * a bus (`LAYER_BUS`): a bus, a sheet pin or a label that is connected -- never a pin;
 //  * a graphic line (`LAYER_NOTES`): another graphic line.
-// A label or sheet pin is connected when a wire or bus of the sheet reaches its point (`IsConnected( aPosition )`, the items the connection map gives it).
+// A label or sheet pin is connected when a wire, a bus or a pin of the sheet is at its point (`IsConnected( aPosition )`, the items the connection map gives it).
 import type { Schematic } from "../api/types";
 
 export type TerminalLayer = "wire" | "bus" | "notes";
@@ -28,7 +28,8 @@ const same = (a: Pt, b: Pt) => a[0] === b[0] && a[1] === b[1];
 /** Is `p` a point the tool drawing on `layer` finishes at? `pins` are the sheet's pin tips. */
 export function isTerminalPoint(sch: Pick<Schematic, "wires" | "labels" | "bus_entries" | "junctions" | "sheets" | "lines">, pins: readonly Pt[], p: Pt, layer: TerminalLayer): boolean {
   const onWire = (bus: boolean) => sch.wires.some((w) => w.bus === bus && onPolyline(w.pts as Pt[], p));
-  const reached = () => sch.wires.some((w) => onPolyline(w.pts as Pt[], p));
+  // `SCH_ITEM::IsConnected( aPosition )`: any item the connection map joins there -- a wire or bus, or a pin (r4 C4-L3: a label put on a pin end is connected)
+  const reached = () => sch.wires.some((w) => onPolyline(w.pts as Pt[], p)) || pins.some((q) => same(q, p));
   const sheetPinConnected = () => sch.sheets.some((s) => s.pins.some((sp) => same(sp.at, p))) && reached();
   const labelConnected = () => sch.labels.some((l) => same(l.at, p)) && reached();
   switch (layer) {

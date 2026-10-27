@@ -1315,7 +1315,7 @@ fn a_kicad_projects_erc_settings_come_in_with_the_schematic() {
     // one bad cell is left at its default; the rest of the map is kept (r3 D3-L3, `ERC_SETTINGS`' loader)
     let mut written = json!(pin_map);
     written[2][3] = json!("x");
-    std::fs::write(root.with_extension("kicad_pro"), json!({ "erc": { "rule_severities": { "pin_not_connected": "ignore", "lib_symbol_mismatch": "warning", "pin_to_pin": "warning", "empty_label_name": "ignore", "wired_implicit_power": "error" }, "pin_map": written }, "schematic": { "connection_grid_size": 100.0 } }).to_string()).unwrap();
+    std::fs::write(root.with_extension("kicad_pro"), json!({ "erc": { "rule_severities": { "pin_not_connected": "ignore", "lib_symbol_mismatch": "warning", "pin_to_pin": "warning", "empty_label_name": "ignore", "wired_implicit_power": "error", "similar_labels": "Warning" }, "pin_map": written }, "schematic": { "connection_grid_size": 100.0 } }).to_string()).unwrap();
     let dir = work.join("board");
     crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
     let (_, design, _) = load(&dir).unwrap();
@@ -1324,6 +1324,8 @@ fn a_kicad_projects_erc_settings_come_in_with_the_schematic() {
     // two of the checks KiCad 25ec2335 (the box's kicad-cli) added (r3 D3-H1)
     assert_eq!(severities.get("empty_label_name").map(String::as_str), Some("ignore"));
     assert_eq!(severities.get("wired_implicit_power").map(String::as_str), Some("error"));
+    // r4 D4-L3 (`SeverityFromString`: anything but "warning" or "ignore" is an error)
+    assert_eq!(severities.get("similar_labels").map(String::as_str), Some("error"), "\"Warning\" is not \"warning\"");
     assert_eq!(severities.get("lib_symbol_mismatch").map(String::as_str), Some("ignore"), "the derived project's library-link checks stay ignored");
     assert_eq!(eda_kicad::custom_erc_pin_map(&design).unwrap()[1][1], pin_map[1][1]);
     assert_eq!(design.schematic.as_ref().unwrap().extras.connection_grid_mils, Some(100));
