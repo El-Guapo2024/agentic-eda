@@ -308,3 +308,19 @@ fn increment_annotations_over_all_sheets() {
     // "Current sheet only" leaves sheet a alone
     b.apply(&Cmd::IncrementAnnotations { start: "R6".into(), increment: 1, all_sheets: false }).unwrap_err(); // the current sheet only: R7 is sheet a's and does not move
 }
+
+#[test]
+fn replace_all_in_references_moves_a_multi_unit_symbol_on_two_sheets() {
+    // r6 A6-M1: `SCH_FIELD::Replace` sets each reference (`parentSymbol->SetRef( sheet, text )`) with no test against the others, so U1's unit on the root
+    // and its unit on sheet a both become U2; only the end state is checked, and it has one U2 (the two units of one part).
+    let m = ConstraintModel::default();
+    let mut b = Board::new(two_sheet_design(), &m, mm(0.1), mm(0.3));
+    let search = crate::search::SearchData { find: "U1".into(), replace: "U2".into(), replace_references: true, ..Default::default() };
+    b.apply(&Cmd::ReplaceText { search, items: None, all_sheets: true }).unwrap();
+    assert!(b.design().schematic.as_ref().unwrap().symbols.iter().any(|x| x.id == "U2"));
+    assert!(b.design().sheet_contents.as_ref().unwrap()["a.kicad_sch"].symbols.iter().any(|x| x.id == "U2"));
+    assert!(b.design().schematic.iter().chain(b.design().sheet_contents.iter().flat_map(|c| c.values())).all(|s| s.symbols.iter().all(|x| x.id != "U1")));
+    // a new reference another part holds is still refused: R5 (root) -> R6 (sheet a's)
+    let search = crate::search::SearchData { find: "R5".into(), replace: "R6".into(), replace_references: true, ..Default::default() };
+    assert_eq!(b.apply(&Cmd::ReplaceText { search, items: None, all_sheets: true }).unwrap_err()[0].check, "ops_duplicate_symbol");
+}

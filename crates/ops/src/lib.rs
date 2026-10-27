@@ -5776,15 +5776,30 @@ impl<'a> Board<'a> {
     /// (`parentSymbol->SetRef( sheet, text )`) with no test against the others, so only the end state counts. A chain like `R1 -> R10, R10 -> R100`
     /// would trip over itself one rename at a time, so every renamed reference first takes a temporary name, then its final one, as Increment
     /// Annotations does (r5 C5-M2). Each rename is made on its own sheet and carries what `Cmd::RenameSymbol` carries; the board's parts follow in
-    /// one go. Refused as a whole when a new reference is still another symbol's.
+    /// one go. The end state is checked once, before any rename, and the renames themselves are unchecked (`rename_symbol_here_unchecked`), so a
+    /// multi-unit symbol whose units are on two sheets moves to one new reference on both (r6 A6-M1). Refused as a whole when a new reference is still
+    /// another symbol's at the end (one this design keys by reference, where KiCad would keep two symbols of one reference), or two references become one.
     fn apply_reference_renames(&mut self, renames: Vec<(Option<String>, String, String)>) -> Result<(), Vec<CheckResult>> {
         let renames: Vec<(Option<String>, String, String)> = renames.into_iter().filter(|(_, old, new)| old != new).collect();
         if renames.is_empty() {
             return Ok(());
         }
-        for (_, old, new) in &renames {
+        // what moves: (screen, old reference); a symbol of the new reference that does not move is still there at the end
+        let moving: BTreeSet<(Option<String>, String)> = renames.iter().map(|(focus, old, _)| (focus.clone(), old.clone())).collect();
+        let mut screens: Vec<(Option<String>, &eda_model::ir::SchematicSection)> = self.design.schematic.iter().map(|s| (None, s)).collect();
+        screens.extend(self.design.sheet_contents.iter().flatten().map(|(file, s)| (Some(file.clone()), s)));
+        for (focus, old, new) in &renames {
             if new.is_empty() {
                 return Err(vec![CheckResult::fail("ops_bad_symbol", old, "a symbol needs a reference designator")]);
+            }
+            if renames.iter().any(|(_, o, n)| n == new && o != old) {
+                return Err(vec![CheckResult::fail("ops_duplicate_symbol", new, "a symbol with this reference is already on the sheet")]);
+            }
+            for (screen, sch) in &screens {
+                if sch.symbols.iter().any(|x| x.id == *new) && !moving.contains(&(screen.clone(), new.clone())) {
+                    let hint = if screen == focus { "a symbol with this reference is already on the sheet" } else { "a symbol with this reference is already on another sheet" };
+                    return Err(vec![CheckResult::fail("ops_duplicate_symbol", new, hint)]);
+                }
             }
             if self.board_part_without_symbol(new) {
                 return Err(vec![CheckResult::fail("ops_duplicate_symbol", new, "a footprint with this reference is already on the board")]);
@@ -5797,7 +5812,7 @@ impl<'a> Board<'a> {
                 self.focus = focus.clone();
                 let temp = format!("\u{1}replace{i}");
                 let (from, to) = if pass == 0 { (old.as_str(), temp.as_str()) } else { (temp.as_str(), new.as_str()) };
-                if let Err(e) = self.rename_symbol_in_schematic(from, to) {
+                if let Err(e) = self.find_symbol(from).map(|_| ()).and_then(|_| self.rename_symbol_here_unchecked(from, to)) {
                     outcome = Err(e);
                     break 'pass;
                 }
