@@ -34,6 +34,7 @@ import { dragOriginFor, modificationSnapFor } from "./modificationSnap";
 import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
+import { strokeStepKept } from "../kicad-port/layerDefaults";
 import { substituteSelection } from "../kicad-port/groupTree";
 import { substituteSchSelection } from "../kicad-port/schGroups";
 import { inEnteredGroup } from "../kicad-port/groupEdit";
@@ -1507,8 +1508,11 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, sketchTracks: !state.sketchTracks };
     case "TOGGLE_SKETCH_VIAS":
       return { ...state, sketchVias: !state.sketchVias };
-    case "SET_ACTIVE_LAYER":
-      return { ...state, activeLayer: action.layer };
+    case "SET_ACTIVE_LAYER": {
+      // A layer change seen by a running drawShape / drawArc / Bezier tool resets `m_stroke` to the new layer's width (`layerChanged`, round 6 A6-1).
+      const kept = strokeStepKept(state.pcbx.drawStrokeStep, state.activeTool, action.layer);
+      return { ...state, activeLayer: action.layer, pcbx: kept === state.pcbx.drawStrokeStep ? state.pcbx : { ...state.pcbx, drawStrokeStep: kept } };
+    }
     case "TOGGLE_HIGH_CONTRAST":
       // `PCB_CONTROL::HighContrastMode`: NORMAL <-> DIMMED (from HIDDEN it goes back to NORMAL).
       return { ...state, highContrast: !state.highContrast, appearance: state.appearance.contrastHidden ? { ...state.appearance, contrastHidden: false } : state.appearance };
@@ -1643,7 +1647,9 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_ZONE_DISPLAY_MODE":
       return { ...state, zoneDisplayMode: action.mode };
     case "SET_BOARD_SETUP_DIALOG_OPEN":
-      return { ...state, boardSetupDialogOpen: action.open };
+      // Leaving Board Setup is its OK (every page applies as it goes): `ShowBoardSetupDialog`'s `ResetTools( MODEL_RELOAD )` runs `DRAWING_TOOL::Reset`,
+      // which puts `m_stroke` back to the class's width (round 6 A6-1).
+      return { ...state, boardSetupDialogOpen: action.open, pcbx: action.open || !state.pcbx.drawStrokeStep ? state.pcbx : { ...state.pcbx, drawStrokeStep: null } };
     case "SET_BOARD_SETUP_INITIAL_PAGE":
       return { ...state, boardSetupInitialPage: action.page };
     case "SET_PLOT_DIALOG_OPEN":

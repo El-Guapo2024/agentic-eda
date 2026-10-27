@@ -87,22 +87,63 @@ export function isBackLayer(layer: string): boolean {
  * width when it differs) and thickness, its italic, mirrored on a back layer, aligned to the left and the bottom (`GR_TEXT_H_ALIGN_LEFT`, `GR_TEXT_V_ALIGN_BOTTOM`).
  * (`m_KeepUpright` is a footprint text's: a board text has no parent footprint to be kept upright against.)
  */
-export function newTextStyle(d: TextGraphicsDefaults | undefined, layer: string): { sizeNm: Nm; widthNm: Nm; strokeWidthNm: Nm; italic: boolean; mirror: boolean; justify: "left"; valign: "bottom" } {
+export function newTextStyle(d: TextGraphicsDefaults | undefined, layer: string): { sizeNm: Nm; widthNm: Nm; strokeWidthNm: Nm; bold: boolean; italic: boolean; mirror: boolean; justify: "left"; valign: "bottom" } {
   const s = textStyleOf(d, layer);
-  return { sizeNm: s.heightNm, widthNm: s.widthNm, strokeWidthNm: s.thicknessNm, italic: s.italic, mirror: isBackLayer(layer), justify: "left", valign: "bottom" };
+  return { sizeNm: s.heightNm, widthNm: s.widthNm, strokeWidthNm: s.thicknessNm, bold: inferBold(s.thicknessNm, s.widthNm, s.heightNm), italic: s.italic, mirror: isBackLayer(layer), justify: "left", valign: "bottom" };
+}
+
+/**
+ * `InferBold` (gr_text.h:82-89), which `PlaceText` runs on the class's size and thickness (drawing_tool.cpp:1058-1060; round 6 A6-3): a text is bold when its
+ * pen is nearer the bold pen than the normal one, `abs( penSize - GetPenSizeForBold( textSize ) ) < abs( penSize - GetPenSizeForNormal( textSize ) )`, with
+ * `GetPenSizeForBold` = `KiROUND( size / 5.0 )` and `GetPenSizeForNormal` = `KiROUND( size / 8.0 )` of the smaller of the width and the height (gr_text.cpp:37-64).
+ * So copper text at KiCad's defaults (1.5 mm, 0.3 mm) is bold, silkscreen text (1.0 mm, 0.1 mm) is not.
+ */
+export function inferBold(penNm: Nm, widthNm: Nm, heightNm: Nm): boolean {
+  const size = Math.min(widthNm, heightNm);
+  return Math.abs(penNm - Math.round(size / 5)) < Math.abs(penNm - Math.round(size / 8));
 }
 
 /**
  * The width a graphic being drawn on `activeLayer` (as the state holds it: a key like "f_silks" or a copper layer's name) gets: the layer class's line thickness, unless `incWidth` / `decWidth` have stepped it on this layer (KiCad
- * resets `m_stroke` to the class's width when the tool starts and when the layer changes, so a step on another layer is gone).
+ * resets `m_stroke` to the class's width when a drawing tool finds another layer than its `m_layer`, so a step on another layer is gone; see `strokeStepKept`).
  */
 export function drawStrokeWidthNm(d: TextGraphicsDefaults | undefined, activeLayer: string | null | undefined, step: DrawStrokeStep | null): Nm {
   const layer = activeLayerName(activeLayer, "F.SilkS");
   return step && step.layer === layer ? step.um : lineThicknessNm(d, layer);
 }
 
+/**
+ * The tools that carry `DRAWING_TOOL::m_stroke` and step it with `incWidth` / `decWidth`: `drawShape` (line, rectangle, circle; drawing_tool.cpp:2690), `drawArc`
+ * (:2995) and the Bezier tool (:3311). The graphic polygon is `DrawZone` (`ZONE_CREATE_HELPER`), which never reads `m_stroke`; the dimension tool steps only a
+ * dimension already started and is not counted here.
+ */
+export const STROKE_TOOLS: ReadonlySet<string> = new Set(["draw_segment", "draw_rect", "draw_circle", "draw_arc", "draw_bezier"]);
+
+/**
+ * What becomes of a stepped width when `tool` sees `activeLayer` -- when it is armed, or when the layer changes while it runs. `m_stroke` belongs to
+ * `DRAWING_TOOL`, shared by every drawing tool, and is reset to the class's width only when the layer the tool finds differs from `m_layer`
+ * (drawing_tool.cpp:2369-2372 at the start of drawShape, 2792-2796 drawArc, 3084-3087 the Bezier tool; 2503-2508 and 2938-2943 on `layerChanged` in their
+ * loops) and in `DRAWING_TOOL::Reset` (a board load, Board Setup OK): `if( m_layer != m_frame->GetActiveLayer() ) { m_layer = ...; m_stroke.SetWidth(
+ * bds.GetLineThickness( m_layer ) ); }`. So a step survives re-arming any of these tools on its layer (round 6 A6-1), and a layer change no stroke tool sees
+ * (none armed, or the polygon tool) leaves it.
+ */
+export function strokeStepKept(step: DrawStrokeStep | null, tool: string, activeLayer: string | null | undefined): DrawStrokeStep | null {
+  if (!step || !STROKE_TOOLS.has(tool)) return step;
+  return step.layer === activeLayerName(activeLayer, "F.SilkS") ? step : null;
+}
+
 /** `incWidth` / `decWidth`: one `WIDTH_STEP` more or less than the width now (the decrement is refused at the last step). */
 export function steppedDrawStroke(d: TextGraphicsDefaults | undefined, activeLayer: string | null | undefined, step: DrawStrokeStep | null, dir: 1 | -1): DrawStrokeStep {
   const layer = activeLayerName(activeLayer, "F.SilkS");
   return { layer, um: stepStrokeWidth(drawStrokeWidthNm(d, layer, step), dir) };
+}
+
+/**
+ * The graphic polygon tool's new shape (`ZONE_CREATE_HELPER::commitZone`, `ZONE_MODE::GRAPHIC_POLYGON`, zone_create_helper.cpp:236-251): filled except on
+ * Edge.Cuts and the courtyards, at the layer class's line thickness with a solid line -- `DrawZone` never reads `m_stroke`, so an incWidth / decWidth step
+ * of the other drawing tools does not reach it (round 6 A6-2; the Footprint Editor's own tool is `fpDrawDefaults.ts`'s):
+ * `poly->SetFilled( layer != Edge_Cuts && layer != F_CrtYd && layer != B_CrtYd ); poly->SetStroke( STROKE_PARAMS( bds.GetLineThickness( layer ), LINE_STYLE::SOLID ) );`
+ */
+export function graphicPolygonStyle(d: TextGraphicsDefaults | undefined, layer: string): { filled: boolean; strokeWidthNm: Nm } {
+  return { filled: layer !== "Edge.Cuts" && layer !== "F.CrtYd" && layer !== "B.CrtYd", strokeWidthNm: lineThicknessNm(d, layer) };
 }

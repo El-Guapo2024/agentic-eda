@@ -1711,7 +1711,7 @@ export type Cmd =
   | { op: "edit_shape"; id: string; layer: string; stroke_width: Nm; filled: boolean }
   | { op: "add_text"; text: CmdText }
   /** The board's Text tool (`DRAWING_TOOL::PlaceText`, "Draw Text"; crates/ops/src/lib.rs `place_board_text`): the text with what it has beyond `CmdText` -- the glyph width, italic, the bottom justification. */
-  | { op: "place_text"; text: CmdText; extra?: { id: string; width_nm?: Nm; italic?: boolean; valign?: "top" | "center" | "bottom" } | null }
+  | { op: "place_text"; text: CmdText; extra?: { id: string; width_nm?: Nm; bold?: boolean; italic?: boolean; valign?: "top" | "center" | "bottom" } | null }
   | { op: "edit_text"; id: string; content: string; angle: number; layer: string; size_nm: Nm; stroke_width: Nm; justify: TextJustify; mirror: boolean }
   | { op: "delete_text"; id: string }
   | { op: "move_text"; id: string; x: Nm; y: Nm }

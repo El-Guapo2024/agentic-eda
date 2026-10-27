@@ -1237,8 +1237,14 @@ fn the_text_tool_places_its_text_with_the_class_width_italic_and_bottom_justific
     let x = dr.text_extra(&id).expect("the extras are kept under the new text's id");
     assert_eq!((x.width_nm, x.italic, x.valign), (Some(mm(1.5)), true, TextVAlign::Bottom));
     // Extras that say nothing are not kept.
-    b.apply(&Cmd::PlaceText { text: Text { content: "B".into(), ..text }, extra: Some(TextExtra::default()) }).unwrap();
+    b.apply(&Cmd::PlaceText { text: Text { content: "B".into(), ..text.clone() }, extra: Some(TextExtra::default()) }).unwrap();
     assert_eq!(b.design().drawings.as_ref().unwrap().text_extras.len(), 1);
+    // Round 6 A6-3: the bold `InferBold` gives a copper text at the class's 1.5 mm / 0.3 mm is kept too (the studio's `newTextStyle` infers it).
+    let copper = Text { content: "C".into(), layer: "F.Cu".into(), size_nm: mm(1.5), stroke_width: mm(0.3), ..text };
+    b.apply(&Cmd::PlaceText { text: copper, extra: Some(TextExtra { id: String::new(), bold: true, valign: TextVAlign::Bottom, ..Default::default() }) }).unwrap();
+    let dr = b.design().drawings.as_ref().unwrap();
+    let c = dr.texts.iter().find(|t| t.content == "C").unwrap();
+    assert!(dr.text_extra(&c.id).expect("kept").bold);
 }
 
 /// Set Text and Graphics to Layer Defaults, and a size or a stroke width in Edit Text and Graphics Properties, replace the glyph width and the automatic stroke width an

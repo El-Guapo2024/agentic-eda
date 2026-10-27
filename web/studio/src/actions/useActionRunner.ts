@@ -41,7 +41,7 @@ import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, route
 import { nextAngleSnapMode } from "../kicad-port/pcbParityState";
 import { cancelEditPattern, cancelTune, finishEditPattern, removeTuningPatterns, startEditPattern, stepTune, updateEditPattern } from "../components/canvas/tuneRouting";
 import { tuneRegenerate } from "../api/tuneClient";
-import { steppedDrawStroke } from "../kicad-port/layerDefaults";
+import { STROKE_TOOLS, steppedDrawStroke, strokeStepKept } from "../kicad-port/layerDefaults";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { continueDiffPairFromEnd, finishDiffPairRoute, toggleDiffPairVia } from "../components/canvas/diffPairRouting";
@@ -653,10 +653,12 @@ export function useActionRunner() {
         }
       })
     );
-    // Arming a graphic tool starts it at the line thickness of its layer's class again (`m_stroke.SetWidth( bds.GetLineThickness( m_layer ) )`): a step of incWidth / decWidth is gone.
+    // Arming a graphic tool keeps a step of incWidth / decWidth made on the same layer: `m_stroke` is reset only when the tool finds another layer than `m_layer`
+    // (round 6 A6-1, `strokeStepKept`).
     const armGraphicTool = (tool: "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon") =>
       pcbOnly(() => {
-        dispatch({ type: "PCBX", patch: { drawStrokeStep: null } });
+        const kept = strokeStepKept(state.pcbx.drawStrokeStep, tool, state.activeLayer);
+        if (kept !== state.pcbx.drawStrokeStep) dispatch({ type: "PCBX", patch: { drawStrokeStep: kept } });
         dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === tool ? "select" : tool });
       });
     m.set("pcbnew.InteractiveDrawing.line", armGraphicTool("draw_segment"));
@@ -2025,8 +2027,12 @@ export function useActionRunner() {
 
       // ---- incWidth / decWidth (Ctrl++ / Ctrl+-) -- drawing_tool.cpp DRAWING_TOOL::DrawSegment: `m_stroke.SetWidth( width +/- WIDTH_STEP )` while a graphic tool is armed.
       if (shapeToolActive) {
-        m.set("pcbnew.InteractiveDrawing.incWidth", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawStrokeStep: steppedDrawStroke(state.board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep, 1) } })));
-        m.set("pcbnew.InteractiveDrawing.decWidth", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawStrokeStep: steppedDrawStroke(state.board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep, -1) } })));
+        // Only the loops of drawShape, drawArc and the Bezier tool handle incWidth / decWidth (round 6 A6-4): with no such tool armed they do nothing.
+        const stepWidth = (dir: 1 | -1) => {
+          if (STROKE_TOOLS.has(state.activeTool)) dispatch({ type: "PCBX", patch: { drawStrokeStep: steppedDrawStroke(state.board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep, dir) } });
+        };
+        m.set("pcbnew.InteractiveDrawing.incWidth", pcbOnly(() => stepWidth(1)));
+        m.set("pcbnew.InteractiveDrawing.decWidth", pcbOnly(() => stepWidth(-1)));
       }
 
       // ---- lineModeNext (Shift+Space) and the explicit modes -- pcb_viewer_tools.cpp PCB_VIEWER_TOOLS::NextLineMode: DIRECT -> DEG45 -> DEG90 -> DIRECT.
@@ -2231,7 +2237,11 @@ export function useActionRunner() {
 
       // Ctrl+Shift+B (bezier) -- DRAWING_TOOL::DrawBezier: arm "Draw Bezier Curve" (start, control 1, end, control 2; the curve chains), in either frame.
       m.set("pcbnew.InteractiveDrawing.bezier", () => {
-        if (state.tab === "pcb") dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_bezier" ? "select" : "draw_bezier" });
+        if (state.tab === "pcb") {
+          const kept = strokeStepKept(state.pcbx.drawStrokeStep, "draw_bezier", state.activeLayer);
+          if (kept !== state.pcbx.drawStrokeStep) dispatch({ type: "PCBX", patch: { drawStrokeStep: kept } });
+          dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_bezier" ? "select" : "draw_bezier" });
+        }
         else if (state.tab === "footprint") fpDispatch({ type: "SET_ACTIVE_TOOL", tool: fpApi.getState().activeTool === "draw_bezier" ? "select" : "draw_bezier" });
       });
 
