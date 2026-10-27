@@ -75,14 +75,19 @@ export function pinItems(sch: Schematic): PinItem[] {
   return items;
 }
 
-function pinsOfSymbol(sch: Schematic, s: SchematicSymbol): PinItem[] {
+/** Every pin of every placed symbol, hidden ones too (`SCH_SYMBOL::GetPins`), each with whether it is hidden. Not cached: the OP overlay asks once a frame. */
+export function allPinItems(sch: Schematic): Array<PinItem & { hidden: boolean }> {
+  return sch.symbols.flatMap((s) => pinsOfSymbol(sch, s, true));
+}
+
+function pinsOfSymbol(sch: Schematic, s: SchematicSymbol, withHidden = false): Array<PinItem & { hidden: boolean }> {
   const real = resolveLibSymbol(s, sch.lib_symbols);
   if (!real) return [];
   const key = symbolKey(s.id, s.unit || 1);
   const nets = new Map((s.pins ?? []).map((p) => [p.number, p.net ?? null]));
-  const out: PinItem[] = [];
+  const out: Array<PinItem & { hidden: boolean }> = [];
   for (const r of real.pins) {
-    if (r.pin.hidden) continue;
+    if (r.pin.hidden && !withHidden) continue;
     out.push({
       id: pinItemId(key, r.pin.number),
       key,
@@ -95,6 +100,7 @@ function pinsOfSymbol(sch: Schematic, s: SchematicSymbol): PinItem[] {
       root: r.root,
       net: nets.get(r.pin.number) ?? null,
       texts: real.texts,
+      hidden: !!r.pin.hidden,
     });
   }
   return out;

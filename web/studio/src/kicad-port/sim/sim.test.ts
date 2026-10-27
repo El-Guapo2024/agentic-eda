@@ -314,6 +314,19 @@ test("the operating point goes on the longest wire of a net and on a pin", async
   assert.equal(i.vertical, false, "a vertical pin's current reads across");
 });
 
+test("r3 S3-4: the two-pin test counts hidden pins (GetPins), so a unit of 2 shown pins and 1 hidden takes the model-pin path", async () => {
+  const { opLabels } = await import("./opOverlay");
+  const c: Circuit = { ...circuit, pin_nets: {}, items: [{ ...circuit.items[0]!, ref: "Q1", pin_count: 3, pin_index: { "1": 0, "2": 1, "3": 2 }, currents: ["I(Q1:c)", "I(Q1:b)", "I(Q1:e)"] }] };
+  const points = new Map<string, number>([["q1", 9], ["q1:c", 1e-3], ["q1:b", 2e-3]]);
+  const pins = [
+    { reference: "Q1", number: "1", tip: [0, -10_000] as [number, number], root: [0, -2_000] as [number, number], net: "A" },
+    { reference: "Q1", number: "2", tip: [-10_000, 0] as [number, number], root: [-2_000, 0] as [number, number], net: "B" },
+    { reference: "Q1", number: "3", tip: [0, 10_000] as [number, number], root: [0, 2_000] as [number, number], net: "C", hidden: true },
+  ];
+  const texts = opLabels({ wires: [], pins, circuit: c, points, voltages: false, currents: true, scale: 1 }).map((l) => l.text).sort();
+  assert.deepEqual(texts, ["1.00mA", "2.00mA"], "each shown pin its own current; the hidden one is not drawn");
+});
+
 test("S2: the overlay takes the project's OP formats (drawing.operating_point_overlay_*)", async () => {
   const { opLabels, DEFAULT_OP_FORMATS } = await import("./opOverlay");
   assert.deepEqual(DEFAULT_OP_FORMATS, { vPrecision: 3, vRange: "~V", iPrecision: 3, iRange: "~A" });

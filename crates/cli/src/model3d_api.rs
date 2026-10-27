@@ -99,8 +99,8 @@ pub(crate) fn expand(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<Str
                 };
                 let start = if close.is_some() { n + 2 } else { n + 1 };
                 if start >= s.len() {
-                    // `if( m >= strlen ) break;`: the `$` (and its bracket) end the text
-                    out.extend(&s[n..]);
+                    // `if( m >= strlen ) break;`: the `$` (and its bracket) end the text, and nothing is appended for them (the `break` leaves the
+                    // `switch` before any `strResult +=`), so `a$` is `a` and `a${` is `a`.
                     break;
                 }
                 let mut m = start;
@@ -1004,7 +1004,9 @@ mod tests {
         assert_eq!(expand("${KICAD6_3DMODEL_DIR}/a.wrl", &roots, &env), "/m/a.wrl");
         assert_eq!(expand("${KIPRJMOD}/b.step", &roots, &env), "/p/b.step");
         assert_eq!(expand("${NOPE}/b.step", &roots, &env), "${NOPE}/b.step");
-        assert_eq!(expand("a$", &roots, &env), "a$");
+        assert_eq!(expand("a$", &roots, &env), "a", "r3 R3-1: a trailing `$` is dropped");
+        assert_eq!(expand("a${", &roots, &env), "a");
+        assert_eq!(expand("a$(", &roots, &env), "a");
     }
 
     #[test]
