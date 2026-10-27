@@ -1645,7 +1645,8 @@ export function useActionRunner() {
           const hit = pickItem(sch, state.cursorNm.x, state.cursorNm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "first");
           return hit ? [hit] : [];
         };
-        const ids = state.selection.size > 0 || state.tab !== "schematic" ? [...state.selection] : hovered();
+        // (the board's `RequestSelection` falls back to the item under the cursor too, and `if( selection.IsHover() ) ClearSelection()` leaves no selection behind: round 3 B-6)
+        const ids = state.tab !== "schematic" ? requestSelection() : state.selection.size > 0 ? [...state.selection] : hovered();
         // the board: each item's shown text, a table's cells tab- and newline-separated (kicad-port/pcbCopyAsText.ts)
         const texts = state.tab === "schematic" ? (sch ? schSelectionTexts(sch, ids) : []) : state.board ? ids.map((id) => boardItemAsText(state.board!, id)) : [];
         const text = selectionAsText(texts);
