@@ -5834,7 +5834,12 @@ impl<'a> Board<'a> {
             if filter_layers && p.layers != src.layers {
                 continue;
             }
-            if filter_type && p.kind != src.kind {
+            // `doPushPadProperties`: `pad->GetAttribute() != aSrcPad.GetAttribute()` (an edge connector is its own attribute), then the
+            // "Special-case for aperture pads" between connector pads.
+            if filter_type && library_editors::pad_attribute(p) != library_editors::pad_attribute(&src) {
+                continue;
+            }
+            if filter_type && p.kicad.connector && library_editors::is_aperture_pad(p) != library_editors::is_aperture_pad(&src) {
                 continue;
             }
             // `pad->ImportSettingsFrom( aSrcPad )` -- see `library_editors::import_pad_settings`.
