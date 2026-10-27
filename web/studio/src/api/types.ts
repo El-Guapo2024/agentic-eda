@@ -1554,6 +1554,8 @@ export type Cmd =
   | { op: "delete_track"; id: string }
   | { op: "set_track_width"; id: string; width: Nm }
   | { op: "add_via"; net: string; x: Nm; y: Nm; drill: Nm; diameter: Nm; from_layer: string; to_layer: string }
+  /** The Draw Via tool's via (crates/ops/src/via_place.rs, `VIA_PLACER::PlaceItem`): `net` "" is a free via of no net; refused with "Via location violates DRC." unless `allow_drc_violations`; `split_track` is cut at the via. */
+  | { op: "place_via"; net: string; x: Nm; y: Nm; drill: Nm; diameter: Nm; from_layer: string; to_layer: string; split_track?: string | null; allow_drc_violations?: boolean }
   | { op: "delete_via"; id: string }
   | { op: "move_via"; id: string; x: Nm; y: Nm }
   /** Track/Via Properties' editable via fields -- net, position and layer span are unchanged (KiCad does not let you re-net/re-span an existing via from this dialog either). */
@@ -1708,6 +1710,8 @@ export type Cmd =
   /** Shape Properties' editable fields (layer, line width, filled) -- geometry has no dialog field to edit in source either, only by dragging its own points (no point editor for shapes yet). */
   | { op: "edit_shape"; id: string; layer: string; stroke_width: Nm; filled: boolean }
   | { op: "add_text"; text: CmdText }
+  /** The board's Text tool (`DRAWING_TOOL::PlaceText`, "Draw Text"; crates/ops/src/lib.rs `place_board_text`): the text with what it has beyond `CmdText` -- the glyph width, italic, the bottom justification. */
+  | { op: "place_text"; text: CmdText; extra?: { id: string; width_nm?: Nm; italic?: boolean; valign?: "top" | "center" | "bottom" } | null }
   | { op: "edit_text"; id: string; content: string; angle: number; layer: string; size_nm: Nm; stroke_width: Nm; justify: TextJustify; mirror: boolean }
   | { op: "delete_text"; id: string }
   | { op: "move_text"; id: string; x: Nm; y: Nm }
@@ -1896,7 +1900,7 @@ export type Cmd =
   /** `eeschema.EditorControl.editSymbolLibraryLinks`: every symbol linked to a `from` library id is linked to the paired `to` id (`update_fields`: the Datasheet follows the library symbol). */
   | { op: "set_symbol_lib_ids"; changes: Array<[string, string]>; update_fields?: boolean }
   /** `eeschema.EditorControl.incrementAnnotations`: every reference with the start's letters and a number at least its own moves by `increment`. */
-  | { op: "increment_annotations"; start: string; increment: number }
+  | { op: "increment_annotations"; start: string; increment: number; all_sheets?: boolean }
   /** `dialog_erc.cpp`'s "Exclude this violation" / un-exclude -- `(check, location)` keys exactly one `ErcViolation`, matching it byte-for-byte against the same `location` string GET /api/erc reported (see `ErcViolation.location`'s own doc for the shapes that can be). Refused server-side when `location` is empty -- nothing to key an exclusion on. */
   | { op: "add_erc_exclusion"; check: string; location: string; comment?: string; marker?: ErcMarker }
   /** `sheet`: the sheet path of the finding's marker, so that deleting one placement's exclusion leaves the other placements' of a shared screen. */
@@ -3393,7 +3397,7 @@ export interface FindMatch {
   page?: string;
   /** The sheet's place in the page order: matches come sorted by it. */
   sheet_rank?: number;
-  kind: "field" | "label" | "text" | "pin";
+  kind: "field" | "label" | "text" | "pin" | "label_field";
   /** Symbol reference / label id / text id that owns the match. */
   id: string;
   /** Field name or pin number (empty for labels/text). */

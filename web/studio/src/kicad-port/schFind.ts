@@ -87,3 +87,32 @@ export function endReachedMessage(allSheets = true): string {
 export function scopeFromSelection(selection: ReadonlySet<string>, selectedOnly: boolean): string[] | undefined {
   return selectedOnly ? [...selection] : undefined;
 }
+
+/** `m_wrapAroundTimer.StartOnce( 4000 )`: after "Reached end of ...", only a Find within this many milliseconds wraps around to the start. */
+export const WRAP_WINDOW_MS = 4000;
+
+/**
+ * The cursor a Find starts from, given when the end was last reported (`wrapArmedAt`, ms; null when it was not): within {@link WRAP_WINDOW_MS}
+ * the wrap timer is running (`afterSheet = nullptr; m_afterItem = nullptr`), so the walk starts over -- at the first sheet when the search
+ * goes over the sheets ({@link WRAP_CURSOR}), else at the start of the sheet. Later, the walk goes on from `cursor` as before and reports
+ * the end again.
+ */
+export function findStartCursor(cursor: string | null, wrapArmedAt: number | null, now: number, allSheets: boolean): string | null {
+  if (wrapArmedAt !== null && now - wrapArmedAt < WRAP_WINDOW_MS) return allSheets ? WRAP_CURSOR : null;
+  return cursor;
+}
+
+/**
+ * `SCH_FIND_REPLACE_TOOL::getCurrentMatch` + `HasMatch`: what Replace replaces. With "Search the current selection only" it is the match
+ * the Find cursor is on (`m_afterItem`); otherwise it is the selected item (`m_selectionTool->GetSelection().Front()`), when it matches.
+ * The selection holds owner ids (a symbol for its fields), so the match the cursor is on is taken when it belongs to the selected item,
+ * else the item's first match. Null when there is none: Replace then does nothing (`if( item && HasMatch() )`).
+ */
+export function currentMatch(matches: readonly FindMatch[], cursor: string | null, selection: readonly string[], selectedOnly: boolean): FindMatch | null {
+  if (selectedOnly) return matches.find((m) => matchId(m) === cursor) ?? null;
+  const front = selection[0];
+  if (front === undefined) return null;
+  const onCursor = matches.find((m) => matchId(m) === cursor);
+  if (onCursor && onCursor.id === front) return onCursor;
+  return matches.find((m) => m.id === front) ?? null;
+}

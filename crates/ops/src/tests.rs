@@ -1222,6 +1222,25 @@ fn a_texts_imported_looks_follow_its_edits_and_leave_with_it() {
     assert!(b.design().drawings.as_ref().unwrap().text_extras.is_empty(), "the looks leave with the text");
 }
 
+/// Round 5's B5-2: the board's Text tool places its text with `PlaceText`'s `textAttrs` -- the class's glyph width (not the height), italic and the bottom
+/// justification -- kept as the text's extras under the id it was given.
+#[test]
+fn the_text_tool_places_its_text_with_the_class_width_italic_and_bottom_justification() {
+    use eda_model::board_text::TextExtra;
+    use eda_model::ir::TextVAlign;
+    let m = net_model();
+    let mut b = board(&m);
+    let text = Text { id: String::new(), content: "A".into(), at: Point { x: mm(10.0), y: mm(10.0) }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: TextJustify::Left, mirror: false };
+    b.apply(&Cmd::PlaceText { text: text.clone(), extra: Some(TextExtra { id: String::new(), width_nm: Some(mm(1.5)), italic: true, valign: TextVAlign::Bottom, ..Default::default() }) }).unwrap();
+    let dr = b.design().drawings.as_ref().unwrap();
+    let id = dr.texts[0].id.clone();
+    let x = dr.text_extra(&id).expect("the extras are kept under the new text's id");
+    assert_eq!((x.width_nm, x.italic, x.valign), (Some(mm(1.5)), true, TextVAlign::Bottom));
+    // Extras that say nothing are not kept.
+    b.apply(&Cmd::PlaceText { text: Text { content: "B".into(), ..text }, extra: Some(TextExtra::default()) }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().text_extras.len(), 1);
+}
+
 /// Set Text and Graphics to Layer Defaults, and a size or a stroke width in Edit Text and Graphics Properties, replace the glyph width and the automatic stroke width an
 /// imported text kept; a text that is not in the selection keeps both.
 #[test]
@@ -3340,6 +3359,41 @@ fn deleting_a_t_with_its_junction_in_one_batch_deletes_all_three() {
     b.apply(&Cmd::Batch { cmds }).unwrap_or_else(|e| panic!("{:?}", e));
     let sch = b.design().schematic.as_ref().unwrap();
     assert!(sch.wires.is_empty() && sch.junctions.is_empty(), "{:?} {:?}", sch.wires, sch.junctions);
+}
+
+/// r5 B5-H1 (`SCH_EDIT_TOOL::DoDelete`: a junction is flagged and deleted last, through `DeleteJunction`, after the other items): a batch that lists the T's dot
+/// before one half of its through wire -- the studio sends the verbs in selection order -- deletes the dot and that half and keeps the other half and the
+/// stem, whichever half it names.
+#[test]
+fn a_junction_listed_before_a_wire_half_is_deleted_last() {
+    let m = model(vec![], &[], vec![]);
+    let dot = p(mm(20.32), mm(40.64));
+    for keep_left in [true, false] {
+        let mut b = board(&m);
+        // two halves of a through wire, as a KiCad file has them (the studio's own wire tool draws one polyline), a stem, and the dot
+        b.apply(&Cmd::AddWire { pts: vec![p(mm(20.32), mm(50.8)), dot], bus: false }).unwrap();
+        {
+            let sch = b.design.schematic.as_mut().unwrap();
+            for (id, a) in [("wire_h1", p(mm(10.16), mm(40.64))), ("wire_h2", p(mm(30.48), mm(40.64)))] {
+                sch.wires.push(eda_model::ir::Wire { id: id.into(), net: String::new(), pins: vec![], pts: vec![a, dot], bus: false });
+            }
+            if sch.junctions.is_empty() {
+                sch.junctions.push(eda_model::ir::Junction { id: "jct_t".into(), at: dot });
+            }
+        }
+        let sch = b.design().schematic.as_ref().unwrap();
+        let half = |left: bool| sch.wires.iter().find(|w| w.pts.contains(&dot) && w.pts.iter().all(|q| q.y == dot.y) && w.pts.iter().any(|q| if left { q.x < dot.x } else { q.x > dot.x })).map(|w| w.id.clone()).expect("a half");
+        let gone = half(!keep_left);
+        let cmds = vec![Cmd::DeleteJunction { id: sch.junctions[0].id.clone() }, Cmd::DeleteWire { id: gone }];
+        b.apply(&Cmd::Batch { cmds }).unwrap_or_else(|e| panic!("keep_left {keep_left}: {e:?}"));
+        let sch = b.design().schematic.as_ref().unwrap();
+        assert!(sch.junctions.is_empty());
+        let kept_end = if keep_left { p(mm(10.16), mm(40.64)) } else { p(mm(30.48), mm(40.64)) };
+        let lost_end = if keep_left { p(mm(30.48), mm(40.64)) } else { p(mm(10.16), mm(40.64)) };
+        assert!(sch.wires.iter().any(|w| w.pts.contains(&kept_end) && w.pts.contains(&dot)), "keep_left {keep_left}: the half not named stays: {:?}", sch.wires);
+        assert!(!sch.wires.iter().any(|w| w.pts.contains(&lost_end)), "keep_left {keep_left}: {:?}", sch.wires);
+        assert!(sch.wires.iter().any(|w| w.pts.contains(&p(mm(20.32), mm(50.8)))), "the stem stays");
+    }
 }
 
 /// r4 C4-L2 (`SCH_EDIT_FRAME::DeleteJunction`: the lines in line that end at the dot merge, `MergeOverlap( .., false )` looks for no junction): deleting the dot

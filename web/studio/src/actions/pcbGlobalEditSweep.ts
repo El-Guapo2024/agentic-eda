@@ -6,7 +6,7 @@
 
 import { createElement } from "react";
 import type { Cmd } from "../api/types";
-import { DEFAULT_CLEANUP_GRAPHICS, DEFAULT_GLOBAL_DELETION, planCleanupGraphics, planGlobalDeletions, type CleanupGraphicsOptions, type GlobalDeletionOptions } from "../kicad-port/pcbGlobalEdit";
+import { DEFAULT_CLEANUP_GRAPHICS, DEFAULT_GLOBAL_DELETION, cleanupGraphicsCmds, planCleanupGraphics, planGlobalDeletions, type CleanupGraphicsOptions, type GlobalDeletionOptions } from "../kicad-port/pcbGlobalEdit";
 import { CHANGE_OPTIONS, UPDATE_OPTIONS, exchangeCmd, exchangeReport, isLibraryId, matchingFootprints, type ReportLine } from "../kicad-port/pcbExchange";
 import { postExchangePlan } from "../api/fpAssign";
 import { CleanupGraphicsDialog, ExchangeFootprintsDialog, GlobalDeletionDialog, type ExchangeState } from "../components/PcbGlobalEditDialogs";
@@ -70,7 +70,7 @@ export function registerPcbGlobalEditSweep(m: Map<string, () => void>, ctx: Swee
           onOk: (o: CleanupGraphicsOptions) => {
             last.cleanup = o;
             const plan = planCleanupGraphics(shapes, o, false);
-            const cmds: Cmd[] = [...plan.remove.map((id): Cmd => ({ op: "delete_shape", id })), ...plan.add.map((shape): Cmd => ({ op: "add_shape", shape }))];
+            const cmds: Cmd[] = cleanupGraphicsCmds(plan);
             dispatch({ type: "CLEAR_SELECTION" }); // "Clear current selection list to avoid selection of deleted items"
             if (cmds.length === 0) {
               toast("Nothing to clean up.");

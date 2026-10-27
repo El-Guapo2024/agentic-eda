@@ -9,8 +9,8 @@
 // and graphic lines, "Create Arc from Selection" (SegmentToArc), and the exact
 // outsets of "Create Outsets from Selection" (OUTSET_ROUTINE::ProcessItem).
 //
-// Units: micrometres (the IR's), with KiCad's integer geometry done in nm through
-// pcbGeom.ts where rounding matters.
+// Units: nanometres (the IR's), KiCad's integer geometry through pcbGeom.ts where
+// rounding matters.
 
 import type { BoardState, Cmd, CmdRouteTrack, CmdShape, Shape } from "../api/types";
 import { arcCentralAngle, arcCenter, arcFromCenterAngle, arcRadius, resize, toIU, fromIU, vsub, type V } from "./pcbGeom";
@@ -63,12 +63,13 @@ export function copiedLineWidth(board: BoardState, ids: readonly string[]): numb
   return best ? best.w : null;
 }
 
-/** `BOARD_ITEM::GetPosition` of a shape: its start (a rectangle / segment / arc / curve), centre (circle) or first point (polygon). */
+/** `EDA_SHAPE::getPosition` of a shape: an arc's centre (`if( m_shape == SHAPE_T::ARC ) return getCenter();`, round 5 B5-12), a polygon's first point, else its start (a circle's is its centre). */
 function shapePosition(s: Shape): P {
   switch (s.kind) {
+    case "arc":
+      return fromIU(arcCenter({ start: toIU(s.start), mid: toIU(s.mid), end: toIU(s.end) }));
     case "segment":
     case "rect":
-    case "arc":
     case "bezier":
       return pt(s.start);
     case "circle":
@@ -146,6 +147,15 @@ export function sourceRings(board: BoardState, id: string): P[][] | null {
   return null;
 }
 
+/** The sides and corner arcs of a rectangle source with a corner radius (`EDA_SHAPE::GetCornerRadius()`), null for anything else. */
+function roundedSourcePieces(board: BoardState, id: string): ReturnType<typeof roundedRectPieces> | null {
+  const s = board.drawings?.shapes.find((sh) => sh.id === id);
+  if (s?.kind !== "rect" || !s.corner_radius || s.corner_radius <= 0) return null;
+  const box: [number, number, number, number] = [Math.min(s.start[0], s.end[0]), Math.min(s.start[1], s.end[1]), Math.max(s.start[0], s.end[0]), Math.max(s.start[1], s.end[1])];
+  const pieces = roundedRectPieces(box, s.corner_radius);
+  return pieces.length > 0 ? pieces : null;
+}
+
 /**
  * `GetBoardItemWidth` for a polygon-like source: a shape's own stroke width when it has one and is not solid-filled; nothing
  * for a zone.
@@ -184,6 +194,16 @@ export function planConvertToLines(board: BoardState, ids: readonly string[], la
   const cmds: Cmd[] = [];
   const removed: string[] = [];
   for (const id of ids) {
+    // A rounded rectangle: `ROUNDRECT rrect( rect, graphic->GetCornerRadius(), true )`, its sides as lines and its corners as arcs (round 5 B5-8).
+    const rounded = roundedSourcePieces(board, id);
+    if (rounded) {
+      const width = sourceWidth(board, id) ?? fallbackWidthNm;
+      for (const piece of rounded) {
+        if (piece.kind === "seg") cmds.push({ op: "add_shape", shape: { kind: "segment", layer, stroke_width: width, filled: false, start: xy(piece.a), end: xy(piece.b) } });
+        else cmds.push({ op: "add_shape", shape: { kind: "arc", layer, stroke_width: width, filled: false, start: xy(fromIU(piece.arc.start)), mid: xy(fromIU(piece.arc.mid)), end: xy(fromIU(piece.arc.end)) } });
+      }
+      continue;
+    }
     const rings = sourceRings(board, id);
     if (!rings) continue;
     const width = sourceWidth(board, id) ?? fallbackWidthNm;
@@ -232,6 +252,16 @@ export function planConvertToTracks(board: BoardState, ids: readonly string[], l
       removedShapes.push(id);
       continue;
     }
+    const rounded = roundedSourcePieces(board, id);
+    if (rounded) {
+      const width = sourceWidth(board, id) ?? fallbackWidthNm;
+      for (const piece of rounded) {
+        if (piece.kind === "seg") tracks.push({ net, layer, width, pts: [xy(piece.a), xy(piece.b)] });
+        else tracks.push(arcRouteTrack(net, layer, width, fromIU(piece.arc.start) as P, fromIU(piece.arc.mid) as P, fromIU(piece.arc.end) as P));
+      }
+      removedShapes.push(id);
+      continue;
+    }
     const rings = sourceRings(board, id);
     if (!rings) continue;
     const width = sourceWidth(board, id) ?? fallbackWidthNm;
@@ -261,9 +291,11 @@ export function arcMidOfSegment(a: P, b: P): P {
   const A = toIU(a);
   const B = toIU(b);
   const d = vsub(B, A);
-  const length = Math.hypot(d[0], d[1]);
-  const normal = resize([-d[1], d[0]], ARC_OFFSET_RATIO * length);
-  const centre: V = [Math.trunc((A[0] + B[0]) / 2), Math.trunc((A[1] + B[1]) / 2)];
+  // `SEG::Length()` is an int (`EuclideanNorm`, rounded), and `Resize` takes an int: the offset is truncated (round 5 B5-14).
+  const length = Math.round(Math.hypot(d[0], d[1]));
+  const normal = resize([-d[1], d[0]], Math.trunc(ARC_OFFSET_RATIO * length));
+  // `SEG::Center()`: `A + ( B - A ) / 2`, the integer halving truncated toward zero.
+  const centre: V = [A[0] + Math.trunc(d[0] / 2), A[1] + Math.trunc(d[1] / 2)];
   return fromIU([centre[0] + normal[0], centre[1] + normal[1]]);
 }
 
@@ -313,8 +345,14 @@ export interface OutsetParams {
   deleteSourceItems: boolean;
 }
 
-/** The dialog's start values for the board editor (`outset_params_pcb_edit`: 1 mm, rounded corners, copy layers, on Edge.Cuts, 0.05 mm). */
+/** The dialog's start values for the board editor (`outset_params_pcb_edit`: 1 mm, rounded corners, copy layers, on Edge.Cuts); the line width is the board's
+ * Edge.Cuts thickness (`GetLineThickness( Edge_Cuts )`, round 5 B5-15), which the caller fills in -- 0.05 mm is KiCad's own default for it. */
 export const DEFAULT_OUTSET_PARAMS: OutsetParams = { outsetNm: 1_000_000, roundCorners: true, useSourceLayers: true, useSourceWidths: true, layer: "Edge.Cuts", lineWidthNm: 50_000, gridRoundingNm: null, deleteSourceItems: false };
+
+/** `CONVERT_TOOL::CreateLines`' widths for a source with none: `addGraphicChain` and `addTrackChain` set one only `if( aWidth && *aWidth > 0 )`, so the
+ * constructors' stand -- `PCB_SHAPE`'s `DEFAULT_LINE_WIDTH` (0.10 mm) and `PCB_TRACK`'s 0.2 mm (round 5 B5-11). */
+export const DEFAULT_CONVERTED_LINE_WIDTH_NM = 100_000;
+export const DEFAULT_CONVERTED_TRACK_WIDTH_NM = 200_000;
 
 export interface OutsetResult {
   add: CmdShape[];
@@ -378,8 +416,8 @@ export function outsetShapes(shapes: readonly Shape[], params: OutsetParams): Ou
           failures++;
           break;
         }
-        // The IR rectangle has no corner radius, so a radius only comes from rounding the outset's corners.
-        const radius = params.roundCorners ? Math.max(d, 0) : 0;
+        // `cornerRadius = pcb_shape.GetCornerRadius(); if( m_params.roundCorners ) cornerRadius = std::max( cornerRadius + m_params.outsetDistance, 0 );` (round 5 B5-8)
+        const radius = params.roundCorners ? Math.max((s.corner_radius ?? 0) + d, 0) : (s.corner_radius ?? 0);
         if (radius > 0) {
           for (const piece of roundedRectPieces(params.gridRoundingNm ? gridOut(x0, y0, x1, y1, params.gridRoundingNm) : [x0, y0, x1, y1], radius)) {
             if (piece.kind === "seg") seg(piece.a, piece.b);

@@ -239,3 +239,45 @@ test("outset: polygons are not supported", () => {
   assert.equal(r.successes + r.failures, 0);
   assert.equal(r.message, "Unable to outset the selected items.");
 });
+
+// ------------------------------------------------------------------------------------------------ round 5
+
+const M = 1_000_000;
+const roundRect = (id: string, r: number, w = 100_000): Shape => ({ kind: "rect", id, layer: "F.Fab", stroke_width: w, filled: false, start: [0, 0], end: [10 * M, 5 * M], corner_radius: r });
+
+test("Create Lines from a rounded rectangle: four sides and four corner arcs (ROUNDRECT, round 5 B5-8)", () => {
+  const b = board({ drawings: drawings([roundRect("r", 2 * M)]) });
+  const plan = planConvertToLines(b, ["r"], "F.Fab", 100_000, false);
+  const kinds = plan.cmds.map((c) => (c.op === "add_shape" ? c.shape.kind : c.op));
+  assert.equal(kinds.filter((k) => k === "segment").length, 4, kinds.join(","));
+  assert.equal(kinds.filter((k) => k === "arc").length, 4, kinds.join(","));
+  const tracks = planConvertToTracks(b, ["r"], "F.Cu", "GND", 200_000, false);
+  const cmd = tracks.cmds[0];
+  const made = cmd && cmd.op === "commit_route" ? (cmd.tracks ?? []) : [];
+  assert.ok(made.length === 8 && made.filter((t) => t.arc_mid_offset).length === 4, JSON.stringify(cmd).slice(0, 200));
+});
+
+test("Outset of a rounded rectangle: the corner radius grows by the outset (OUTSET_ROUTINE, round 5 B5-8)", () => {
+  const params: OutsetParams = { ...DEFAULT_OUTSET_PARAMS, outsetNm: 1 * M, roundCorners: true, useSourceLayers: true, useSourceWidths: true };
+  const out = outsetShapes([roundRect("r", 2 * M)], params);
+  const arcs = out.add.filter((s): s is Extract<CmdShape, { kind: "arc" }> => s.kind === "arc");
+  assert.equal(arcs.length, 4);
+  // The top-left corner arc: from (-1, 2) through to (2, -1) mm about (2, 2), radius 3 mm.
+  const a = arcs[0]!;
+  assert.ok(Math.abs(Math.hypot(a.start.x - 2 * M, a.start.y - 2 * M) - 3 * M) < 2, JSON.stringify(a));
+  // Not rounded: the source's own radius stays.
+  const sharp = outsetShapes([roundRect("r", 2 * M)], { ...params, roundCorners: false });
+  assert.equal(sharp.add.filter((s) => s.kind === "arc").length, 4);
+});
+
+test("Copy line width of first object: an arc is placed by its centre (EDA_SHAPE::getPosition, round 5 B5-12)", () => {
+  // An arc of radius 5 mm about (5, 0): from (1, 3) through (0, 0) to (1, -3). Its start is left of the segment's (2, 0), its centre right of it.
+  const arcAboutCentre: Shape = { kind: "arc", id: "a", layer: "F.Fab", stroke_width: 500_000, filled: false, start: [1 * M, 3 * M], mid: [0, 0], end: [1 * M, -3 * M] };
+  const b = board({ drawings: drawings([arcAboutCentre, seg("s", 2 * M, 0, 2 * M, 3 * M, 200_000)]) });
+  assert.equal(copiedLineWidth(b, ["a", "s"]), 200_000);
+});
+
+test("Create Arc: the mid point as SegmentToArc rounds it (SEG::Center, an int offset; round 5 B5-14)", () => {
+  assert.deepEqual(arcMidOfSegment([0, 0], [10_000_005, 0]), [5_000_002, 1_000_000]);
+  assert.deepEqual(arcMidOfSegment([-3, 0], [0, 0]), [-2, 0], "A + (B - A) / 2, truncated toward zero");
+});

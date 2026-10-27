@@ -12,7 +12,8 @@
 // measure tool (`MEASURE` in `pcb_viewer_tools.cpp`: `if( originSet ) clearRuler else PopTool`) do the same.
 
 /** The board drawing tools' in-progress kinds whose Escape cancels the item and keeps the tool. */
-const BOARD_DRAWING_KINDS = new Set(["shape", "zone", "dimension", "table", "measure"]);
+// A carried text (`PlaceText`: "if( text ) cleanup(); else PopTool") too.
+const BOARD_DRAWING_KINDS = new Set(["shape", "zone", "dimension", "table", "measure", "text"]);
 
 /** True when Escape should drop the item being drawn and leave the tool armed (rather than leave the tool): a board drawing tool with an item started. */
 export function escapeKeepsDrawingTool(tab: string, activeTool: string, drawState: { kind: string } | null | undefined): boolean {
@@ -37,7 +38,8 @@ type DrawLike = { kind: string; shapeKind?: string; pts?: readonly unknown[]; ar
 export function drawZoneStarted(tab: string, activeTool: string, drawState: DrawLike | null | undefined): boolean {
   if (tab !== "pcb" || activeTool === "select" || drawState == null) return false;
   // `started` stays true once the first corner is in, even when Delete has taken every corner away again (see `withoutLastCorner`).
-  return drawState.kind === "zone" || (drawState.kind === "shape" && drawState.shapeKind === "polygon" && (drawState.pts?.length ?? 0) > 0);
+  // A graphic polygon's state exists only from its first corner on, so it is `started` with no corner left too (round 5 A5-6).
+  return drawState.kind === "zone" || (drawState.kind === "shape" && drawState.shapeKind === "polygon");
 }
 
 /**

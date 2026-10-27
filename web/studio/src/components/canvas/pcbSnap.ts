@@ -187,6 +187,15 @@ export class PcbSnap {
     return p;
   }
 
+  /** `AlignToSegment( point, seg )` on the helper of `tool`, snapping on unless Shift is held (`m_gridHelper.SetSnap( !( m_modifiers & MD_SHIFT ) )`). */
+  alignToSegment(tool: string, world: Pt, a: Pt, b: Pt, mods: SnapMods): Pt {
+    if (!this.view) return world;
+    const h = this.helperFor(tool);
+    h.setUseGrid(!mods.ctrl);
+    h.setSnap(!mods.shift);
+    return whole(h.alignToSegment(world, a, b));
+  }
+
   /** `BestDragOrigin`: the point a move of `items` starts from. */
   dragOrigin(tool: string, mouse: Pt, ids: readonly string[], filter?: DragFilter): Pt {
     if (!this.view?.board) return mouse;

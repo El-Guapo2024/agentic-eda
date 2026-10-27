@@ -1,7 +1,7 @@
 //! Round 4's C-1: our teardrop generator (`eda_connectivity::teardrop::generate_teardrops`, the port of `TEARDROP_MANAGER::computeTeardropPolygon` for a round
 //! anchor) gives the outlines KiCad's own gives. A board of vias and tracks is written with each via's `(teardrops ..)` parameters and without
 //! `(legacy_teardrops yes)`, so `kicad-cli pcb drc --refill-zones --save-board` runs `TEARDROP_MANAGER::UpdateTeardrops` (`zone_filler_tool.cpp`) and saves its
-//! teardrops. That board is read back, its teardrop zones taken out, and ours generated on the same vias and tracks: every outline is the same, point for point.
+//! teardrops (round 5's A5-1 adds arc tracks, both ways round). That board is read back, its teardrop zones taken out, and ours generated on the same vias and tracks: every outline is the same, point for point.
 //!
 //! Slow: it needs kicad-cli. Run with `EDA_SLOW_TESTS=1 cargo test -p eda-kicad --test teardrops_kicad_cli -- --nocapture`.
 
@@ -32,6 +32,15 @@ const CASES: &[(f64, f64, f64, f64, f64, f64)] = &[
     (160.0, 120.0, 0.6, 160.0, 119.2, 0.12),
 ];
 
+/// Round 5's A5-1: arc tracks. The via (x, y, diameter), and the arc (mid x, mid y, other end x, other end y, width) from the via's centre; `true` in the last
+/// field writes the arc the other way round (it ends at the via, `findAnchorPointsOnTrack`'s `arc.Reverse()`).
+const ARC_CASES: &[(f64, f64, f64, f64, f64, f64, f64, f64, bool)] = &[
+    (100.0, 110.0, 0.6, 101.0, 110.4, 102.0, 110.0, 0.2, false),
+    (110.0, 110.0, 0.8, 111.3, 109.1, 112.1, 110.7, 0.25, false),
+    (120.0, 110.0, 1.0, 121.7, 111.3, 123.9, 110.2, 0.2, true),
+    (130.0, 110.0, 0.7, 129.2, 112.0, 130.3, 113.5, 0.15, true),
+];
+
 const PARAMS: &str = "(teardrops (best_length_ratio 0.5) (max_length 1) (best_width_ratio 1) (max_width 2) (curved_edges no) (filter_ratio 0.9) (enabled yes) (allow_two_segments no) (prefer_zone_connections yes))";
 
 fn board() -> String {
@@ -41,6 +50,11 @@ fn board() -> String {
     for (i, (x, y, d, ex, ey, w)) in CASES.iter().enumerate() {
         s += &format!("  (via (at {x} {y}) (size {d}) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 1) {PARAMS} (uuid \"00000000-0000-0000-0000-0000000001{i:02}\"))\n");
         s += &format!("  (segment (start {x} {y}) (end {ex} {ey}) (width {w}) (layer \"F.Cu\") (net 1) (uuid \"00000000-0000-0000-0000-0000000002{i:02}\"))\n");
+    }
+    for (i, (x, y, d, mx, my, ex, ey, w, rev)) in ARC_CASES.iter().enumerate() {
+        s += &format!("  (via (at {x} {y}) (size {d}) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 1) {PARAMS} (uuid \"00000000-0000-0000-0000-0000000003{i:02}\"))\n");
+        let ((sx, sy), (tx, ty)) = if *rev { ((*ex, *ey), (*x, *y)) } else { ((*x, *y), (*ex, *ey)) };
+        s += &format!("  (arc (start {sx} {sy}) (mid {mx} {my}) (end {tx} {ty}) (width {w}) (layer \"F.Cu\") (net 1) (uuid \"00000000-0000-0000-0000-0000000004{i:02}\"))\n");
     }
     s + ")\n"
 }
@@ -66,7 +80,7 @@ fn our_teardrops_are_kicad_clis_own() {
     let rt = design.routing.as_mut().unwrap();
     let mut kicad: Vec<_> = rt.zones.iter().filter(|z| z.teardrop).map(|z| z.outline.clone()).collect();
     rt.zones.retain(|z| !z.teardrop);
-    assert_eq!(kicad.len(), CASES.len(), "kicad-cli made one teardrop per via");
+    assert_eq!(kicad.len(), CASES.len() + ARC_CASES.len(), "kicad-cli made one teardrop per via");
 
     let settings = TeardropSettings { enabled: true, ..Default::default() };
     let mut ours: Vec<_> = generate_teardrops(&design, &model, &settings).into_iter().map(|z| z.outline).collect();

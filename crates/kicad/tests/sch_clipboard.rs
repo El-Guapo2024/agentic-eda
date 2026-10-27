@@ -231,7 +231,14 @@ fn forms_taken_from_real_kicad_files_read_as_the_file_does() {
     for name in ["erc_label_test.kicad_sch", "NoConnectOnPin.kicad_sch", "NoConnectOnLine.kicad_sch", "erc_wire_endpoints.kicad_sch", "erc_pin_not_connected_basic.kicad_sch", "api_kitchen_sink.kicad_sch", "ground_pin_test_ok.kicad_sch", "ERC_dynamic_power_symbol_test.kicad_sch"] {
         let path: &Path = &data.join("eeschema").join(name);
         let Ok(text) = std::fs::read_to_string(path) else { continue };
-        let (file_design, _, _) = import_kicad_sch(&text).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        // A KiCad 6 / early-7 file's references, values and footprints of its `(symbol_instances ..)` are applied when the file is loaded
+        // (`SCH_SHEET_LIST::UpdateSymbolInstanceData`, r5 D5-H1); a clipboard has none and Paste applies none (`SCH_EDITOR_CONTROL::Paste` never calls it),
+        // so the items are compared with the file read without them (`erc_pin_not_connected_basic`'s two `R1` properties: R1 and R2 in the file)
+        let without_instances = match text.find("(symbol_instances") {
+            Some(start) => format!("{}{}", &text[..start], &text[start + form_at(&text, start).len()..]),
+            None => text.clone(),
+        };
+        let (file_design, _, _) = import_kicad_sch(&without_instances).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         let file = file_design.schematic.unwrap();
         let fragment = fragment_of_file(&text);
         let f = parse_clipboard(&fragment).unwrap_or_else(|e| panic!("{name}: {e}"));

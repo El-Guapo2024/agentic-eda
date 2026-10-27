@@ -9,13 +9,13 @@ import type { BoardState, Dimension, DrcViolation, FieldInfo, FillReport, Part, 
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { hairlineNm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
-import { constrainByAngleMode } from "./routing";
+import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
 import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
 import { snapPoint } from "./gridHelper";
 import { drawStrokeText } from "../text/strokeFont";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
 import { originMarkerColor } from "../../kicad-port/gridOrigin";
-import { leaderModeOf, zoneLeader } from "../../kicad-port/pcbDrawZone";
+import { leaderModeOf, zoneLeader, zoneLoop } from "../../kicad-port/pcbDrawZone";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
 import { carryRatsnest, offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
 import { carryMatrix, carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
@@ -103,6 +103,8 @@ export interface PaintOptions {
   activeTool: ToolId;
   /** `pcbnew.EditorControl.lineModeNext`'s current mode -- constrains the segment/rect tools' rubber-band, same as their click does (Canvas.tsx). Absent = the pre-existing 45-degree behavior. */
   angleSnapMode?: AngleSnapMode;
+  /** Ctrl (Cmd on a Mac) held at the last pointer move: `drawShape`'s and `DrawZone`'s modifier for the preview. */
+  drawCtrl?: boolean;
   /**
    * pcbnew.Control.pad/track/viaDisplayMode ("Sketch Pads/Tracks/Vias"):
    * outline instead of filled. KiCad draws a true unfilled outline (two
@@ -1202,6 +1204,16 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     return;
   }
 
+  // `PlaceText`: the text the dialog made follows the cursor (the snapped one) until a click places it.
+  if (draw.kind === "text") {
+    const at = opts.snappedCursor ?? (opts.cursorNm ? snapPoint(opts.cursorNm.x, opts.cursorNm.y, opts.gridNm) : null);
+    if (at) {
+      const t = draw.text;
+      drawStrokeText(ctx, t.content, at[0], at[1], { sizeNm: Math.max(t.size_nm, hairlineNm(view, 8)), thicknessNm: t.stroke_width, justify: t.justify, angleRad: (-t.angle / 1000) * (Math.PI / 180), mirror: t.mirror, color: layerColor(realLayerKey(t.layer)) });
+    }
+    return;
+  }
+
   if (draw.kind === "route") {
     const violationColor = "#ff3333";
     for (const run of draw.runs ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
@@ -1282,18 +1294,20 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   let rubberEnd: [number, number] | null = null;
   if (cursor && !frozen) {
     const last = pts[pts.length - 1]!;
-    const usePosture = draw.kind === "shape" && (draw.shapeKind === "segment" || draw.shapeKind === "rect");
-    const target: [number, number] = opts.snappedCursor ? [opts.snappedCursor[0], opts.snappedCursor[1]] : [cursor.x, cursor.y];
-    const raw: [number, number] = usePosture ? constrainByAngleMode(opts.angleSnapMode ?? "45", last, target) : target;
-    // An anchor or snap line point (the helper's) stays where it is; a point the line mode moved, or a raw cursor, goes to the grid.
-    rubberEnd = opts.snappedCursor && raw[0] === target[0] && raw[1] === target[1] ? raw : snapPoint(raw[0], raw[1], opts.gridNm);
+    const twoPoint = draw.kind === "shape" && (draw.shapeKind === "segment" || draw.shapeKind === "rect" || draw.shapeKind === "circle") ? draw.shapeKind : null;
+    // The snapped cursor (the grid helper's), or the raw cursor put on the grid; then `drawShape`'s angle constraint, which keeps it on the grid.
+    const target: [number, number] = opts.snappedCursor ? [opts.snappedCursor[0], opts.snappedCursor[1]] : snapPoint(cursor.x, cursor.y, opts.gridNm);
+    rubberEnd = twoPoint ? shapeSecondPoint(twoPoint, opts.angleSnapMode ?? "direct", opts.drawCtrl ?? false, last, target) : target;
   }
   const color = layerColor("selection");
   // `DrawZone`'s leader (a zone, a rule area, a graphic polygon): bent in the 45- and 90-degree line modes, as the click will lock it in (kicad-port/pcbDrawZone.ts).
   const polygonDraw = draw.kind === "zone" || (draw.kind === "shape" && draw.shapeKind === "polygon");
-  const leader = polygonDraw && rubberEnd && pts.length > 0 ? zoneLeader(pts, rubberEnd, leaderModeOf(opts.angleSnapMode, false)) : null;
-  const shown: [number, number][] = leader ? [...pts, ...leader.slice(1)] : rubberEnd ? [...pts, rubberEnd] : pts;
-  strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), draw.kind === "zone" && shown.length >= 2);
+  const leader = polygonDraw && rubberEnd && pts.length > 0 ? zoneLeader(pts, rubberEnd, leaderModeOf(opts.angleSnapMode, opts.drawCtrl ?? false)) : null;
+  // `m_loopPts`: in the 45- and 90-degree modes the outline closes from the cursor back to the first corner along a bent path, as finishing will make it
+  // (ZONE_CREATE_HELPER::OnComplete, round 5 A5-5); in the free mode a zone's preview closes straight.
+  const loop = polygonDraw && rubberEnd && pts.length > 1 ? zoneLoop(pts, rubberEnd, leaderModeOf(opts.angleSnapMode, opts.drawCtrl ?? false)) : [];
+  const shown: [number, number][] = leader ? [...pts, ...leader.slice(1), ...loop.slice(1, -1)] : rubberEnd ? [...pts, rubberEnd] : pts;
+  strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), (draw.kind === "zone" || loop.length > 0) && shown.length >= 2);
 
   // pcb_viewer_tools.cpp's measure tool: the straight-line distance (and
   // dx/dy) between the ruler's two ends, labeled at the midpoint, in the

@@ -63,6 +63,7 @@ mod fp_array;
 mod pad_edit;
 mod unused_pads;
 mod via_layers;
+pub mod via_place;
 pub use via_layers::ViaLayerEdit;
 mod pad_nets;
 mod fp_lib_fields;
@@ -364,6 +365,21 @@ pub enum Cmd {
 
     /// Add a via.
     AddVia { net: String, x: Nm, y: Nm, drill: Nm, diameter: Nm, from_layer: String, to_layer: String },
+    /// The Draw Via tool's via (`DRAWING_TOOL::DrawVia`, `VIA_PLACER::PlaceItem`; `via_place.rs`): `net` may be empty (a free via of no net); refused with
+    /// "Via location violates DRC." unless `allow_drc_violations`; `split_track` is the track it was snapped onto, cut at the via.
+    PlaceVia {
+        net: String,
+        x: Nm,
+        y: Nm,
+        drill: Nm,
+        diameter: Nm,
+        from_layer: String,
+        to_layer: String,
+        #[serde(default)]
+        split_track: Option<String>,
+        #[serde(default)]
+        allow_drc_violations: bool,
+    },
     /// Remove a via by id.
     DeleteVia { id: String },
     /// Move a via to a new position. Its id, net, drill, diameter and
@@ -790,6 +806,13 @@ pub enum Cmd {
 
     /// Add free text.
     AddText { text: Text },
+    /// The board's Text tool's text (`DRAWING_TOOL::PlaceText`, "Draw Text"): [`Cmd::AddText`] with what `Text` has no field for -- the glyph width, italic and
+    /// the bottom justification `textAttrs` gives a new text (`DrawingsSection::text_extras`).
+    PlaceText {
+        text: Text,
+        #[serde(default)]
+        extra: Option<eda_model::board_text::TextExtra>,
+    },
     /// Replace a text's content and styling in place. Its id and position
     /// do not change (see `MoveText` for that).
     EditText { id: String, content: String, angle: Millideg, layer: String, size_nm: Nm, stroke_width: Nm, justify: TextJustify, mirror: bool },
@@ -1665,7 +1688,13 @@ pub enum Cmd {
     },
     /// `eeschema.EditorControl.incrementAnnotations` (`SCH_EDITOR_CONTROL::IncrementAnnotations`): every reference with the start
     /// reference's letters and a number at least its own moves by `increment`.
-    IncrementAnnotations { start: String, increment: i32 },
+    /// `all_sheets`: the dialog's "All sheets" (`Hierarchy().GetSymbols( .. )`) rather than "Current sheet only" (`CurrentSheet().GetSymbols( .. )`).
+    IncrementAnnotations {
+        start: String,
+        increment: i32,
+        #[serde(default)]
+        all_sheets: bool,
+    },
 
     // -------------------------------------------------- footprint editor
     //
@@ -2344,7 +2373,7 @@ impl Cmd {
             | Cmd::SetFootprintZoneConnection { part, .. }
             | Cmd::SetPadZoneOverrides { part, .. } => vec![part],
             Cmd::Swap { a, b } => vec![a, b],
-            Cmd::AddTrack { net, .. } | Cmd::AddVia { net, .. } | Cmd::AddZone { net, .. } => vec![net.as_str()],
+            Cmd::AddTrack { net, .. } | Cmd::AddVia { net, .. } | Cmd::PlaceVia { net, .. } | Cmd::AddZone { net, .. } => vec![net.as_str()],
             Cmd::DeleteTrack { id }
             | Cmd::SetTrackWidth { id, .. }
             | Cmd::DeleteVia { id }
@@ -2360,7 +2389,7 @@ impl Cmd {
             | Cmd::DeleteText { id }
             | Cmd::MoveText { id, .. } => vec![id.as_str()],
             Cmd::AddShape { shape } => vec![shape.layer()],
-            Cmd::AddText { text } => vec![text.content.as_str()],
+            Cmd::AddText { text } | Cmd::PlaceText { text, .. } => vec![text.content.as_str()],
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } | Cmd::PasteSpecial { .. } => vec!["paste"],
             Cmd::PlaceFootprint { footprint, .. } => vec![footprint.as_str()],
@@ -2608,6 +2637,10 @@ pub struct Board<'a> {
     net_collision: Option<sch_net_collision::NetCollision>,
     /// Inside a [`Cmd::Batch`]: the sheets (their [`Self::focus`]) whose commit-time clean-up a verb asked for, run once when the batch ends (r4 C4-H1).
     pending_clean_up: Option<BTreeSet<Option<String>>>,
+    /// Inside a [`Cmd::Batch`]: the points (with their sheet) where `DoDelete` runs `DeleteJunction` after every other item is gone (`SCH_EDIT_TOOL::DoDelete`
+    /// flags a junction and deletes it last, r5 B5-H1): a junction Delete Junction removed (`true`), or the point of a deleted sheet pin, whose junction
+    /// goes only when it is no longer explicit (`false`, r5 B5-L1).
+    pending_junction_merges: Vec<(Option<String>, Point, bool)>,
 }
 
 /// Decoupling pairs `(cap, ic)` that no proximity rule already places --
@@ -2651,7 +2684,7 @@ impl<'a> Board<'a> {
             decoupling.entry(cap.clone()).or_default().insert(ic.clone());
             decoupling.entry(ic).or_default().insert(cap);
         }
-        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None, net_collision: None, pending_clean_up: None }
+        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None, net_collision: None, pending_clean_up: None, pending_junction_merges: Vec::new() }
     }
 
     /// The net-collision overlay of the last Move or Drag applied (see `sch_net_collision.rs`); `None` when none was.
@@ -2696,6 +2729,7 @@ impl<'a> Board<'a> {
             intent_nets: self.intent_nets.clone(),
             net_collision: None,
             pending_clean_up: None,
+            pending_junction_merges: Vec::new(),
         }
     }
 
@@ -2865,6 +2899,7 @@ impl<'a> Board<'a> {
             Cmd::SetTrackWidth { id, width } => self.set_track_width(id, *width),
 
             Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => self.add_via(net, *x, *y, *drill, *diameter, from_layer, to_layer),
+            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations } => self.place_via(net, *x, *y, *drill, *diameter, from_layer, to_layer, split_track.as_deref(), *allow_drc_violations),
             Cmd::DeleteVia { id } => self.delete_via(id),
             Cmd::MoveVia { id, x, y } => self.move_via(id, *x, *y),
             Cmd::EditVia { id, diameter, drill } => self.edit_via(id, *diameter, *drill),
@@ -3002,6 +3037,7 @@ impl<'a> Board<'a> {
             Cmd::EditShape { id, layer, stroke_width, filled } => self.edit_shape(id, layer, *stroke_width, *filled),
 
             Cmd::AddText { text } => self.add_text(text.clone()),
+            Cmd::PlaceText { text, extra } => self.place_board_text(text.clone(), extra.clone()),
             Cmd::EditText { id, content, angle, layer, size_nm, stroke_width, justify, mirror } => {
                 self.edit_text(id, content.clone(), *angle, layer.clone(), *size_nm, *stroke_width, *justify, *mirror)
             }
@@ -3059,9 +3095,21 @@ impl<'a> Board<'a> {
                 let mut result = cmds.iter().try_for_each(|c| self.apply(c));
                 if outer {
                     let sheets = self.pending_clean_up.take().unwrap_or_default();
+                    let merges = std::mem::take(&mut self.pending_junction_merges);
                     if result.is_ok() {
                         let focus = self.focus.clone();
+                        // the junctions deleted, last: their in-line wires that are left merge (`DoDelete`'s `DeleteJunction` after the other items)
+                        for (sheet, at, deleted) in merges {
+                            self.focus = sheet;
+                            if let Err(e) = self.delete_junction_at(at, deleted) {
+                                result = Err(e);
+                                break;
+                            }
+                        }
                         for sheet in sheets {
+                            if result.is_err() {
+                                break;
+                            }
                             self.focus = sheet;
                             result = self.commit_clean_up();
                             if result.is_err() {
@@ -3131,7 +3179,7 @@ impl<'a> Board<'a> {
             Cmd::SetSheetPage { sheet, page, path } => self.set_sheet_page(sheet, page, path.as_deref()),
             Cmd::SetSchItemText { id, text } => self.set_sch_item_text(id, text),
             Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),
-            Cmd::IncrementAnnotations { start, increment } => self.increment_annotations(start, *increment),
+            Cmd::IncrementAnnotations { start, increment, all_sheets } => self.increment_annotations(start, *increment, *all_sheets),
             Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => self.set_symbol_fields(edits, add_fields, rename_fields, remove_fields),
             Cmd::ReplaceText { search, items, all_sheets } => self.replace_text(search, items.as_deref(), *all_sheets),
             Cmd::SetErcPinMapCell { a, b, level } => self.set_erc_pin_map_cell(*a, *b, *level),
@@ -4587,6 +4635,22 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// `Cmd::PlaceText`: the text, then its extras keyed by the id it was given (none when they say nothing a plain text would not).
+    fn place_board_text(&mut self, text: Text, extra: Option<eda_model::board_text::TextExtra>) -> Result<(), Vec<CheckResult>> {
+        let before: BTreeSet<String> = self.design.drawings.iter().flat_map(|d| d.texts.iter().map(|t| t.id.clone())).collect();
+        self.add_text(text)?;
+        let dr = self.drawings_mut();
+        let id = dr.texts.iter().find(|t| !before.contains(&t.id)).map(|t| t.id.clone());
+        if let (Some(id), Some(mut x)) = (id, extra) {
+            x.id = id.clone();
+            dr.text_extras.retain(|e| e.id != id);
+            if !x.is_default() {
+                dr.text_extras.push(x);
+            }
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn edit_text(&mut self, id: &str, content: String, angle: Millideg, layer: String, size_nm: Nm, stroke_width: Nm, justify: TextJustify, mirror: bool) -> Result<(), Vec<CheckResult>> {
         if layer.is_empty() {
@@ -5141,13 +5205,47 @@ impl<'a> Board<'a> {
     /// Delete a junction (`SCH_EDIT_FRAME::DeleteJunction` from `DoDelete`): the dot goes and the wires that end at it merge where they are in line
     /// (`MergeOverlap`), as the commit's `SCHEMATIC::CleanUp` does, so two crossing wires are no longer joined and the stem of a T is cut off (r3 C3-H1).
     fn delete_junction(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
-        let model = self.model;
         let sch = self.schematic_mut()?;
         let Some(at) = sch.junctions.iter().find(|j| j.id == id).map(|j| j.at) else {
             return Err(vec![CheckResult::fail("ops_unknown_junction", id, "no junction with this id")]);
         };
         sch.junctions.retain(|j| j.id != id);
-        // `DeleteJunction` merges the lines in line that end at the dot, whatever their strokes and whatever else meets there (r4 C4-L2)
+        // Inside a batch the merge waits for the batch's end: `SCH_EDIT_TOOL::DoDelete` flags a junction (`SetFlags( STRUCT_DELETED )`, "clean up junctions
+        // at the end") and runs `DeleteJunction` after deleting every other item, so a wire half the batch also deletes is gone by then, and the half it
+        // keeps keeps its id for the verbs after this one (r5 B5-H1)
+        if self.pending_clean_up.is_some() {
+            self.pending_junction_merges.push((self.focus.clone(), at, true));
+            return self.commit_clean_up();
+        }
+        self.delete_junction_at(at, true)?;
+        self.commit_clean_up()
+    }
+
+    /// `DoDelete`'s junctions, after the other items: at a point of `pts` (a deleted sheet pin's), the junction goes when it is no longer explicit
+    /// (`if( junction->HasFlag( STRUCT_DELETED ) || !screen->IsExplicitJunction( point ) ) m_frame->DeleteJunction( &commit, junction )`), and
+    /// `DeleteJunction` merges the lines in line that end there whatever their strokes. `deleted`: the junction is one the verbs deleted already.
+    /// Inside a batch it waits for the batch's end.
+    pub(crate) fn delete_junction_at(&mut self, at: Point, deleted: bool) -> Result<(), Vec<CheckResult>> {
+        if self.pending_clean_up.is_some() && !deleted {
+            self.pending_junction_merges.push((self.focus.clone(), at, false));
+            return Ok(());
+        }
+        if !deleted {
+            let model = self.model;
+            let sch = self.schematic_mut()?;
+            if !sch.junctions.iter().any(|j| j.at == at) || sch_scene::Scene::new(sch, model).is_explicit_junction(at) {
+                return Ok(());
+            }
+            sch.junctions.retain(|j| j.at != at);
+        }
+        self.merge_at_junction(at)
+    }
+
+    /// `DeleteJunction`'s merge: the lines in line that end at `at` merge, whatever their strokes and whatever else meets there (r4 C4-L2), on the sheet the
+    /// verbs act on.
+    fn merge_at_junction(&mut self, at: Point) -> Result<(), Vec<CheckResult>> {
+        let model = self.model;
+        let sch = self.schematic_mut()?;
         let mut scene = sch_scene::Scene::new(sch, model);
         scene.merge_at(at);
         let merged = scene.finish();
@@ -5155,7 +5253,7 @@ impl<'a> Board<'a> {
             *sch = merged;
             sch.assign_missing_ids();
         }
-        self.commit_clean_up()
+        Ok(())
     }
 
     /// The commit-time `SCHEMATIC::CleanUp` of an edit that holds a connectable item (`SCH_COMMIT::pushSchEdit`: "Do a local clean up if there are any
@@ -5514,6 +5612,8 @@ impl<'a> Board<'a> {
         if self.design.schematic.is_none() {
             return Err(vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")]);
         }
+        // a row of a later sheet path stands for the screen's symbol (`fields_table::changes_for_sheets`)
+        let edits = &fields_table::changes_for_sheets(&self.design, edits)[..];
         let known: BTreeSet<String> = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.symbols.iter().map(|x| x.id.clone())).collect();
         if let Some(e) = edits.iter().find(|e| !known.contains(&e.id)) {
             return Err(vec![CheckResult::fail("ops_bad_fields", "symbol_fields", format!("no symbol with reference '{}'", e.id))]);
@@ -5544,6 +5644,7 @@ impl<'a> Board<'a> {
         if search.find.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_search", "replace_text", "nothing to search for")]);
         }
+        let mut renames: Vec<(Option<String>, String, String)> = Vec::new();
         let replaced = if all_sheets {
             // `ReplaceAll` over `Schematic().Hierarchy()`: every screen once (a screen two sheets share has one set of items)
             let mut files: Vec<Option<String>> = vec![None];
@@ -5554,7 +5655,10 @@ impl<'a> Board<'a> {
             for file in files {
                 self.focus = file;
                 match self.replace_text_here(search, None) {
-                    Ok(n) => total += n,
+                    Ok((n, r)) => {
+                        total += n;
+                        renames.extend(r);
+                    }
                     Err(e) => {
                         outcome = Err(e);
                         break;
@@ -5565,16 +5669,20 @@ impl<'a> Board<'a> {
             outcome?;
             total
         } else {
-            self.replace_text_here(search, items)?
+            let (n, r) = self.replace_text_here(search, items)?;
+            renames.extend(r);
+            n
         };
         if replaced == 0 {
             return Err(vec![CheckResult::fail("ops_nothing_to_replace", "replace_text", "nothing to replace")]);
         }
-        Ok(())
+        self.apply_reference_renames(renames)
     }
 
-    /// [`Self::replace_text`] on the screen the verbs act on: how many items it replaced in.
-    fn replace_text_here(&mut self, search: &search::SearchData, items: Option<&[String]>) -> Result<usize, Vec<CheckResult>> {
+    /// [`Self::replace_text`] on the screen the verbs act on: how many items it replaced in, and the Reference replacements it found (with the
+    /// sheet they are on), which [`Self::apply_reference_renames`] makes once every sheet is done.
+    #[allow(clippy::type_complexity)]
+    fn replace_text_here(&mut self, search: &search::SearchData, items: Option<&[String]>) -> Result<(usize, Vec<(Option<String>, String, String)>), Vec<CheckResult>> {
         let mut data = search.clone();
         data.search_and_replace = true;
         let model = self.model;
@@ -5611,13 +5719,22 @@ impl<'a> Board<'a> {
                         }
                         replaced += 1;
                     }
+                    // `SCH_LABEL_BASE::Replace`: the strings escaped as a net name (r5 C5-M4). A label may be emptied, as `EDA_TEXT::Replace` sets
+                    // any text; ERC then reports `empty_label_name` (r5 C5-L6).
                     search::ItemKind::Label => {
                         if let Some(l) = sch.labels.iter_mut().find(|l| l.id == h.id) {
-                            if let Some(new) = search::replace_text(&l.net, &data) {
-                                if new.is_empty() {
-                                    return Err(vec![CheckResult::fail("ops_bad_replace", &h.id, "replacing would leave a net label empty")]);
-                                }
+                            if let Some(new) = search::replace_label_text(&l.net, &data) {
                                 l.net = new;
+                                replaced += 1;
+                            }
+                        }
+                    }
+                    // a label's own field: `SCH_FIELD::Replace` -> `EDA_TEXT::Replace` (r5 C5-L2)
+                    search::ItemKind::LabelField => {
+                        let field = sch.extras.label_fields.get_mut(&h.id).and_then(|fs| fs.iter_mut().find(|f| f.name == h.name));
+                        if let Some(f) = field {
+                            if let Some(new) = search::replace_text(&f.text, &data) {
+                                f.text = new;
                                 replaced += 1;
                             }
                         }
@@ -5634,10 +5751,45 @@ impl<'a> Board<'a> {
                 }
             }
         }
-        for (old, new) in renames {
-            self.rename_symbol(&old, &new)?;
+        let focus = self.focus.clone();
+        Ok((replaced, renames.into_iter().map(|(old, new)| (focus.clone(), old, new)).collect()))
+    }
+
+    /// The Reference replacements of a Replace / Replace All, applied together once every match is replaced: `SCH_FIELD::Replace` sets each reference
+    /// (`parentSymbol->SetRef( sheet, text )`) with no test against the others, so only the end state counts. A chain like `R1 -> R10, R10 -> R100`
+    /// would trip over itself one rename at a time, so every renamed reference first takes a temporary name, then its final one, as Increment
+    /// Annotations does (r5 C5-M2). Each rename is made on its own sheet and carries what `Cmd::RenameSymbol` carries; the board's parts follow in
+    /// one go. Refused as a whole when a new reference is still another symbol's.
+    fn apply_reference_renames(&mut self, renames: Vec<(Option<String>, String, String)>) -> Result<(), Vec<CheckResult>> {
+        let renames: Vec<(Option<String>, String, String)> = renames.into_iter().filter(|(_, old, new)| old != new).collect();
+        if renames.is_empty() {
+            return Ok(());
         }
-        Ok(replaced)
+        for (_, old, new) in &renames {
+            if new.is_empty() {
+                return Err(vec![CheckResult::fail("ops_bad_symbol", old, "a symbol needs a reference designator")]);
+            }
+            if self.board_part_without_symbol(new) {
+                return Err(vec![CheckResult::fail("ops_duplicate_symbol", new, "a footprint with this reference is already on the board")]);
+            }
+        }
+        let saved_focus = self.focus.clone();
+        let mut outcome: Result<(), Vec<CheckResult>> = Ok(());
+        'pass: for pass in 0..2 {
+            for (i, (focus, old, new)) in renames.iter().enumerate() {
+                self.focus = focus.clone();
+                let temp = format!("\u{1}replace{i}");
+                let (from, to) = if pass == 0 { (old.as_str(), temp.as_str()) } else { (temp.as_str(), new.as_str()) };
+                if let Err(e) = self.rename_symbol_in_schematic(from, to) {
+                    outcome = Err(e);
+                    break 'pass;
+                }
+            }
+        }
+        self.focus = saved_focus;
+        outcome?;
+        self.rename_part(&renames.iter().map(|(_, old, new)| (old.clone(), new.clone())).collect());
+        Ok(())
     }
 
     /// `panel_setup_pinmap.cpp::changeErrorLevel`: see
@@ -5702,6 +5854,13 @@ impl<'a> Board<'a> {
         if new_id == id {
             return Ok(false); // renaming to the same id is a no-op, not an error
         }
+        self.rename_symbol_here_unchecked(id, new_id)?;
+        Ok(true)
+    }
+
+    /// The renaming half of [`Self::rename_symbol_in_schematic`], with no test that `new_id` is free: for a caller that moves several references at
+    /// once and has checked the end state itself (Increment Annotations over every sheet, where a multi-unit symbol's units on two sheets move together).
+    pub(crate) fn rename_symbol_here_unchecked(&mut self, id: &str, new_id: &str) -> Result<(), Vec<CheckResult>> {
         // a generated symbol is drawn from the part it is named for: it keeps its drawing under a name of its own
         self.freeze_generated_symbols(&BTreeSet::from([id.to_string()]));
         let sch = self.schematic_mut()?;
@@ -5732,7 +5891,7 @@ impl<'a> Board<'a> {
         }
         // where its fields are, and whether Autoplace Fields put them there, follow the new reference
         sch_fields::rename_symbol_keys(sch, id, new_id);
-        Ok(true)
+        Ok(())
     }
 
     // -------------------------------------------------- footprint editor

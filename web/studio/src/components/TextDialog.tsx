@@ -69,7 +69,12 @@ export function TextDialog() {
   const submit = () => {
     if (!content.trim()) return;
     if (dialog.mode === "add") {
-      api.cmd({ op: "add_text", text: { content, at: { x: dialog.at[0], y: dialog.at[1] }, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror } });
+      // `PlaceText`: the text now follows the cursor until the next click places it ("Draw Text"; components/canvas/Canvas.tsx), with the class's glyph width and
+      // italic and the bottom justification `textAttrs` gave it (round 5 B5-2). (The dialog has no position field, so it never "modified the location".)
+      const style = newTextStyle(defaults, layer);
+      // A size typed in the dialog is square (the dialog has one size field); the class's own size keeps the class's width.
+      const extra = { id: "", ...(size === style.sizeNm && style.widthNm !== size ? { width_nm: style.widthNm } : {}), ...(style.italic ? { italic: true } : {}), valign: style.valign };
+      dispatch({ type: "SET_DRAW_STATE", draw: { kind: "text", text: { content, at: { x: dialog.at[0], y: dialog.at[1] }, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror }, extra } });
     } else {
       api.cmd({ op: "edit_text", id: dialog.id, content, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror });
     }

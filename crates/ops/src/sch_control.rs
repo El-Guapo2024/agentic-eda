@@ -69,30 +69,44 @@ pub fn increment_plan(refs: &[String], start: &str, increment: i32) -> Result<Ve
 
 impl<'a> Board<'a> {
     /// `SCH_EDIT_TOOL::SetAttribute`: `Some(v)` sets the attribute on every placed unit of every listed reference ("The attributes
-    /// should be kept in sync in multi-unit parts"), `None` leaves it. Which state a toggle goes to (`new_state`: set when any of the
+    /// should be kept in sync in multi-unit parts"), on every sheet when the reference is annotated, `None` leaves it. Which state a toggle goes to (`new_state`: set when any of the
     /// items does not have it yet, else cleared) is the caller's decision, as in the C++ where it is computed before the commit.
     pub(crate) fn set_symbol_attrs(&mut self, ids: &[String], dnp: Option<bool>, exclude_from_bom: Option<bool>, exclude_from_board: Option<bool>, exclude_from_sim: Option<bool>) -> Result<(), Vec<CheckResult>> {
         if ids.is_empty() {
             return Err(fail("ops_nothing_selected", "attributes", "select a symbol first"));
         }
-        let sch = self.schematic_mut()?;
-        for id in ids {
-            if !sch.symbols.iter().any(|s| &s.id == id) {
-                return Err(fail("ops_unknown_symbol", id, "no symbol instance with this reference"));
+        let mut targets: Vec<(String, String)> = Vec::new();
+        {
+            let sch = self.schematic()?;
+            for id in ids {
+                let Some(s) = sch.symbols.iter().find(|s| &s.id == id) else {
+                    return Err(fail("ops_unknown_symbol", id, "no symbol instance with this reference"));
+                };
+                targets.push((id.clone(), s.lib_id.clone()));
             }
         }
-        for s in sch.symbols.iter_mut().filter(|s| ids.contains(&s.id)) {
-            if let Some(v) = dnp {
-                s.dnp = v;
-            }
-            if let Some(v) = exclude_from_bom {
-                s.exclude_from_bom = v;
-            }
-            if let Some(v) = exclude_from_board {
-                s.exclude_from_board = v;
-            }
-            if let Some(v) = exclude_from_sim {
-                s.exclude_from_sim = v;
+        // "The attributes should be kept in sync in multi-unit parts. Of course the symbol must be annotated to collect other units."
+        // (`symbol->IsAnnotated( .. )` then `CollectOtherUnits( ref, unit, libId, sheet, &otherUnits )` on every sheet of `Hierarchy()`): an annotated
+        // reference's units of the same library symbol on the other sheets go to the same state (r5 D5-M2). An unannotated one is only the sheet's.
+        let annotated = |id: &str| !id.ends_with('?');
+        let here = self.focus.clone();
+        let screens = std::iter::once((None, self.design.schematic.as_mut())).chain(self.design.sheet_contents.iter_mut().flat_map(|c| c.iter_mut()).map(|(k, v)| (Some(k.clone()), Some(v))));
+        for (key, sch) in screens {
+            let Some(sch) = sch else { continue };
+            let in_view = key == here;
+            for s in sch.symbols.iter_mut().filter(|s| targets.iter().any(|(id, lib)| *id == s.id && (in_view || (annotated(id) && *lib == s.lib_id)))) {
+                if let Some(v) = dnp {
+                    s.dnp = v;
+                }
+                if let Some(v) = exclude_from_bom {
+                    s.exclude_from_bom = v;
+                }
+                if let Some(v) = exclude_from_board {
+                    s.exclude_from_board = v;
+                }
+                if let Some(v) = exclude_from_sim {
+                    s.exclude_from_sim = v;
+                }
             }
         }
         // The board's footprint carries the same two flags: the one edited last wins (`Board::sync_footprint_bom_flags`).
@@ -198,7 +212,10 @@ impl<'a> Board<'a> {
     /// would trip over itself one rename at a time, so every moved reference first takes a temporary name (never a real one) and then its
     /// final one. Each rename carries what `Cmd::RenameSymbol` carries (the wires', power symbols' and no-connects' `REF.PIN` strings, the
     /// user fields). Refused as a whole when a new reference is already another symbol's.
-    pub(crate) fn increment_annotations(&mut self, start: &str, increment: i32) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn increment_annotations(&mut self, start: &str, increment: i32, all_sheets: bool) -> Result<(), Vec<CheckResult>> {
+        if all_sheets {
+            return self.increment_annotations_everywhere(start, increment);
+        }
         let refs: Vec<String> = {
             let mut r: Vec<String> = self.schematic()?.symbols.iter().map(|s| s.id.clone()).collect();
             r.sort();
@@ -230,6 +247,62 @@ impl<'a> Board<'a> {
         }
         // the parts on the board follow in one go, so a plan like `R5 -> R6, R6 -> R7` never has two parts under one reference
         self.rename_part(&plan.iter().cloned().collect());
+        Ok(())
+    }
+
+    /// [`Self::increment_annotations`] with "All sheets" (`schematic->Hierarchy().GetSymbols( references, SYMBOL_FILTER_ALL )`, then
+    /// `ref.GetSymbol()->SetRef( &sheet, .. )` for each sheet path): the references of every sheet, a shared screen's later paths' own references
+    /// (`instance_overrides`) included, move by the one plan (r5 D5-M3). A reference's units on several sheets move together. Refused as a whole when a
+    /// new reference is one that does not move.
+    fn increment_annotations_everywhere(&mut self, start: &str, increment: i32) -> Result<(), Vec<CheckResult>> {
+        let mut screens: Vec<Option<String>> = vec![None];
+        screens.extend(self.design.sheet_contents.iter().flat_map(|c| c.keys().cloned()).map(Some));
+        let sections = || self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values()));
+        let mut refs: Vec<String> = sections().flat_map(|s| s.symbols.iter().map(|x| x.id.clone()).chain(s.instance_overrides.iter().map(|o| o.reference.clone()))).collect();
+        refs.sort();
+        refs.dedup();
+        let plan = increment_plan(&refs, start, increment).map_err(|m| fail("ops_bad_increment", start, m))?;
+        if plan.is_empty() {
+            return Ok(());
+        }
+        let moving: Vec<&String> = plan.iter().map(|(old, _)| old).collect();
+        for (_, new) in &plan {
+            if refs.iter().any(|r| r == new && !moving.contains(&r)) {
+                return Err(fail("ops_duplicate_symbol", new, "a symbol with this reference is already on a sheet"));
+            }
+            if !moving.contains(&new) && self.board_part_without_symbol(new) {
+                return Err(fail("ops_duplicate_symbol", new, "a footprint with this reference is already on the board"));
+            }
+        }
+        let saved_focus = self.focus.clone();
+        let mut outcome: Result<(), Vec<CheckResult>> = Ok(());
+        'pass: for pass in 0..2 {
+            for (i, (old, new)) in plan.iter().enumerate() {
+                let temp = format!("\u{1}tmp{i}");
+                let (from, to) = if pass == 0 { (old.as_str(), temp.as_str()) } else { (temp.as_str(), new.as_str()) };
+                for screen in &screens {
+                    self.focus = screen.clone();
+                    let has = self.schematic().map(|s| s.symbols.iter().any(|x| x.id == from)).unwrap_or(false);
+                    if has {
+                        if let Err(e) = self.rename_symbol_here_unchecked(from, to) {
+                            outcome = Err(e);
+                            break 'pass;
+                        }
+                    }
+                }
+            }
+        }
+        self.focus = saved_focus;
+        outcome?;
+        let map: BTreeMap<String, String> = plan.iter().cloned().collect();
+        for sch in self.design.schematic.iter_mut().chain(self.design.sheet_contents.iter_mut().flat_map(|c| c.values_mut())) {
+            for o in sch.instance_overrides.iter_mut() {
+                if let Some(new) = map.get(&o.reference) {
+                    o.reference = new.clone();
+                }
+            }
+        }
+        self.rename_part(&map);
         Ok(())
     }
 }

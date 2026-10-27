@@ -111,16 +111,44 @@ test("the markers flag is passed through", () => {
 const cleanup = (o: Partial<typeof DEFAULT_CLEANUP_GRAPHICS>) => ({ ...DEFAULT_CLEANUP_GRAPHICS, ...o });
 
 test("cleanup: zero-size and duplicated graphics are listed and removed", () => {
-  const shapes: Shape[] = [seg("a", "F.SilkS", [0, 0], [100, 0]), seg("a2", "F.SilkS", [0, 0], [100, 0]), seg("zero", "F.SilkS", [5, 5], [5, 5]), seg("other", "F.SilkS", [0, 0], [200, 0]), seg("wider", "F.SilkS", [0, 0], [100, 0], 300), seg("layer", "F.Fab", [0, 0], [100, 0])];
+  const shapes: Shape[] = [seg("a", "F.SilkS", [0, 0], [100_000, 0]), seg("a2", "F.SilkS", [0, 0], [100_000, 0]), seg("zero", "F.SilkS", [5000, 5000], [5000, 5000]), seg("other", "F.SilkS", [0, 0], [200_000, 0]), seg("wider", "F.SilkS", [0, 0], [100_000, 0], 300), seg("layer", "F.Fab", [0, 0], [100_000, 0])];
   const plan = planCleanupGraphics(shapes, cleanup({ deleteRedundant: true }), true);
   assert.deepEqual(plan.items.map((i) => [i.kind, i.ids]), [["duplicate", ["a2"]], ["null", ["zero"]]]);
   assert.deepEqual(plan.remove, ["a2", "zero"]);
 });
 
+test("cleanup graphics uses KiCad's 500 nm epsilon (GetDRCEpsilon, round 5 B5-3)", () => {
+  // (0,0)-(10 mm,0), then (300 nm,0)-(10 mm,200 nm) within 0.5 um of it at both ends, then (0,0)-(400 nm,0): ends within 0.5 um, zero size.
+  const shapes: Shape[] = [seg("a", "F.SilkS", [0, 0], [10_000_000, 0]), seg("near", "F.SilkS", [300, 0], [10_000_000, 200]), seg("tiny", "F.SilkS", [0, 0], [400, 0])];
+  const plan = planCleanupGraphics(shapes, cleanup({ deleteRedundant: true }), true);
+  assert.deepEqual(plan.items.map((i) => [i.kind, i.ids]), [["duplicate", ["near"]], ["null", ["tiny"]]]);
+});
+
+test("cleanup: the outline fix moves the lines in place (their ids stay), and Merge lines into rectangles sees them healed (round 5 B5-4)", () => {
+  // A 20 x 10 mm rectangle of four Edge.Cuts lines with 0.1 mm gaps at the corners.
+  const w = 100_000;
+  const M = 1_000_000;
+  const shapes: Shape[] = [
+    seg("top", "Edge.Cuts", [0, 0], [20 * M - 100_000, 0], w),
+    seg("right", "Edge.Cuts", [20 * M, 100_000], [20 * M, 10 * M], w),
+    seg("bottom", "Edge.Cuts", [20 * M - 100_000, 10 * M], [0, 10 * M], w),
+    seg("left", "Edge.Cuts", [0, 10 * M - 100_000], [0, 0], w),
+  ];
+  const healOnly = planCleanupGraphics(shapes, cleanup({ fixBoardOutlines: true, toleranceNm: 2 * M }), false);
+  assert.deepEqual(healOnly.remove, [], "no line is deleted");
+  assert.deepEqual(healOnly.add, [], "no line is made anew");
+  assert.ok(healOnly.replace.length > 0 && healOnly.replace.every((r) => ["top", "right", "bottom", "left"].includes(r.id)), JSON.stringify(healOnly.replace));
+  const both = planCleanupGraphics(shapes, cleanup({ fixBoardOutlines: true, toleranceNm: 2 * M, mergeRects: true }), false);
+  assert.equal(both.add.length, 1, JSON.stringify(both));
+  assert.equal(both.add[0]!.kind, "rect");
+  assert.deepEqual(both.remove.sort(), ["bottom", "left", "right", "top"]);
+  assert.deepEqual(both.replace, [], "the healed lines the rectangle took are gone");
+});
+
 test("cleanup: polygons are never taken for duplicates, equal circles and arcs are", () => {
   const poly: Shape = { kind: "polygon", id: "p1", layer: "F.Fab", stroke_width: 100, filled: false, pts: [[0, 0], [1, 0], [0, 1]] };
   const circle = (id: string): Shape => ({ kind: "circle", id, layer: "F.Fab", stroke_width: 100, filled: false, center: [0, 0], end: [50, 0] });
-  const arc = (id: string): Shape => ({ kind: "arc", id, layer: "F.Fab", stroke_width: 100, filled: false, start: [10, 0], mid: [0, -10], end: [-10, 0] });
+  const arc = (id: string): Shape => ({ kind: "arc", id, layer: "F.Fab", stroke_width: 100, filled: false, start: [10_000, 0], mid: [0, -10_000], end: [-10_000, 0] });
   const plan = planCleanupGraphics([poly, { ...poly, id: "p2" }, circle("c1"), circle("c2"), arc("a1"), arc("a2")], cleanup({ deleteRedundant: true }), true);
   assert.deepEqual(plan.remove, ["c2", "a2"]);
 });
@@ -153,9 +181,9 @@ test("cleanup: three lines are not a rectangle, and lines already deleted as dup
 test("cleanup: the board-outline fix runs on a real cleanup, not on the preview", () => {
   const edge: Shape[] = [seg("e1", "Edge.Cuts", [0, 0], [10000, 0], 50), seg("e2", "Edge.Cuts", [10100, 0], [10100, 5000], 50)];
   const dry = planCleanupGraphics(edge, cleanup({ fixBoardOutlines: true, toleranceNm: 2000 }), true);
-  assert.deepEqual(dry, { items: [], remove: [], add: [] });
+  assert.deepEqual(dry, { items: [], remove: [], replace: [], add: [] });
   const real = planCleanupGraphics(edge, cleanup({ fixBoardOutlines: true, toleranceNm: 2000 }), false);
-  assert.ok(real.remove.length + real.add.length > 0, "the 100 um gap is closed");
+  assert.ok(real.replace.length > 0, "the 100 nm gap is closed, the lines edited in place");
 });
 
 test("wildcards: * and ? match like WildCompareString, case-insensitively", () => {

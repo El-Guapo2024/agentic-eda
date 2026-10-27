@@ -111,6 +111,8 @@ fn is_mandatory(name: &str) -> bool {
 pub struct Ref {
     pub prefix: String,
     pub num: Option<u64>,
+    /// `m_numRefStr`: the number as the reference writes it (`R01` keeps `01`), which `GetRefNumber()` returns and `unitMatch` compares (r5 C5-L8).
+    pub num_text: String,
 }
 
 impl Ref {
@@ -119,14 +121,18 @@ impl Ref {
         let t = text.trim_end_matches('?');
         let digits = t.chars().rev().take_while(|c| c.is_ascii_digit()).count();
         if digits == 0 || t.len() != text.len() {
-            return Ref { prefix: t.to_string(), num: None };
+            return Ref { prefix: t.to_string(), num: None, num_text: String::new() };
         }
         let split = t.len() - digits;
-        Ref { prefix: t[..split].trim_end().to_string(), num: t[split..].parse().ok() }
+        Ref { prefix: t[..split].trim_end().to_string(), num: t[split..].parse().ok(), num_text: t[split..].to_string() }
     }
-    /// `GetRefNumber()`.
+    /// `GetRefNumber()`: `m_numRefStr`, or `?` for an unannotated reference.
     pub fn number_text(&self) -> String {
-        self.num.map_or_else(|| "?".to_string(), |n| n.to_string())
+        if self.num.is_none() {
+            "?".to_string()
+        } else {
+            self.num_text.clone()
+        }
     }
     /// `GetRef() << GetRefNumber()`.
     pub fn full(&self) -> String {
@@ -421,9 +427,13 @@ fn field_value(sch: &SchematicSection, model: &ConstraintModel, sym: &SymbolInst
     }
 }
 
-/// The symbols of the whole design as one section, for the table to read: the root sheet's, then every other sheet screen's (a screen shared
-/// by two sheet symbols is one screen, listed once). KiCad's table covers the project the same way (`SCH_REFERENCE_LIST` over
-/// `SCH_SHEET_LIST`); a reference is one part for the whole design, so no row is listed twice.
+/// The symbols of the whole design as one section, for the table to read: the root sheet's, then every other sheet screen's, then one more row for
+/// each symbol of a screen shown on a later sheet path under a reference of its own. KiCad's dialog lists a reference per sheet path
+/// (`Hierarchy().GetSymbols( m_symbolsList, .. )`, where `SCH_SHEET_PATH::AppendSymbol` makes one `SCH_REFERENCE( aSymbol, *this )` for each path,
+/// `GetRef( this )`), so a screen placed twice counts twice in the grid, in `${QUANTITY}` and in the export, as in kicad-cli's BOM (r5 C5-M3). The
+/// extra row is the screen's symbol under the path's reference ([`eda_model::sheet_list::reference_under`]) and unit, with the symbol's fields; an
+/// edit to it is an edit to that symbol ([`path_aliases`]). A path whose reference is the symbol's own id adds nothing (the screen's row stands
+/// for it, and two units of one reference are one row anyway).
 pub fn project_view(design: &eda_model::ir::Design) -> Option<SchematicSection> {
     let mut sch = design.schematic.clone()?;
     for screen in design.sheet_contents.iter().flat_map(|c| c.values()) {
@@ -432,7 +442,77 @@ pub fn project_view(design: &eda_model::ir::Design) -> Option<SchematicSection> 
             sch.user_fields.entry(reference.clone()).or_default().extend(fields.clone());
         }
     }
+    for (alias, screen, sym, unit) in path_rows(design) {
+        if sch.symbols.iter().any(|s| s.id == alias && s.unit == unit) {
+            continue;
+        }
+        let mut copy = sym.clone();
+        copy.id = alias.clone();
+        copy.unit = unit;
+        sch.symbols.push(copy);
+        if let Some(fields) = screen.user_fields.get(&sym.id) {
+            sch.user_fields.entry(alias).or_default().extend(fields.clone());
+        }
+    }
     Some(sch)
+}
+
+/// The placed symbols a later sheet path shows under a reference other than the symbol's id: `(reference, screen, symbol, unit)`, in the hierarchy's order.
+fn path_rows(design: &eda_model::ir::Design) -> Vec<(String, &SchematicSection, &SymbolInstance, u32)> {
+    use eda_model::sheet_list;
+    let mut out = Vec::new();
+    for entry in sheet_list::walk(design).into_iter().skip(1) {
+        let Some(screen) = sheet_list::screen_of(design, &entry.path) else { continue };
+        for sym in &screen.symbols {
+            let reference = sheet_list::reference_under(screen, sym, &entry.path);
+            if reference != sym.id {
+                out.push((reference, screen, sym, sheet_list::unit_under(screen, sym, &entry.path)));
+            }
+        }
+    }
+    out
+}
+
+/// The references [`project_view`] lists for a later sheet path, each with the id of the screen's symbol it shows: a field is the symbol's, whichever
+/// path's row it is edited on.
+pub fn path_aliases(design: &eda_model::ir::Design) -> BTreeMap<String, String> {
+    let ids: std::collections::BTreeSet<&str> = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.symbols.iter().map(|x| x.id.as_str())).collect();
+    path_rows(design).into_iter().filter(|(alias, ..)| !ids.contains(alias.as_str())).map(|(alias, _, sym, _)| (alias, sym.id.clone())).collect()
+}
+
+/// `changes` for the table over [`project_view`]: an edit to a symbol goes to every row that shows it (the symbol's own and its later paths'), as a
+/// field is the symbol's on every path.
+pub fn changes_for_view(design: &eda_model::ir::Design, changes: &FieldChanges) -> FieldChanges {
+    let aliases = path_aliases(design);
+    let mut out = changes.clone();
+    out.edits.clear();
+    for e in &changes.edits {
+        let own = aliases.get(&e.id).cloned().unwrap_or_else(|| e.id.clone());
+        let mut push = |id: &str| {
+            if !out.edits.iter().any(|x| x.id == id && x.field == e.field) {
+                out.edits.push(FieldEdit { id: id.to_string(), ..e.clone() });
+            }
+        };
+        push(&own);
+        for (alias, of) in &aliases {
+            if *of == own {
+                push(alias);
+            }
+        }
+    }
+    out
+}
+
+/// `changes` for the sheets: an edit made on a later path's row is an edit to the screen's symbol.
+pub fn changes_for_sheets(design: &eda_model::ir::Design, edits: &[FieldEdit]) -> Vec<FieldEdit> {
+    let aliases = path_aliases(design);
+    let mut out: Vec<FieldEdit> = Vec::new();
+    for e in edits {
+        let id = aliases.get(&e.id).cloned().unwrap_or_else(|| e.id.clone());
+        out.retain(|x| !(x.id == id && x.field == e.field));
+        out.push(FieldEdit { id, ..e.clone() });
+    }
+    out
 }
 
 /// Every user-field name any symbol carries (the dialog adds one column
@@ -542,9 +622,9 @@ impl Model<'_> {
     }
 }
 
-/// `unitMatch`: same reference, annotated -> another unit of one symbol.
+/// `unitMatch`: same reference, annotated -> another unit of one symbol. The numbers compare as text (`GetRefNumber()`), so `R01` and `R1` are two symbols.
 fn unit_match(l: &SymRef, r: &SymRef) -> bool {
-    l.r.num.is_some() && l.r.prefix == r.r.prefix && l.r.num == r.r.num
+    l.r.num.is_some() && l.r.prefix == r.r.prefix && l.r.num_text == r.r.num_text
 }
 
 struct RawRow {
@@ -832,7 +912,7 @@ pub fn export_bom_over(sch: &SchematicSection, base: &SchematicSection, model: &
     for row in &table.rows {
         spec_rows.push(row.refs.clone());
     }
-    let m = Model { spec, store: build_store(sch, model, spec) };
+    let m = Model { spec, store: resolved_store(sch, model, build_store(sch, model, spec)) };
     let all = sym_refs(sch);
     for (idx, ids) in spec_rows.iter().enumerate() {
         let refs: Vec<SymRef> = all.iter().filter(|s| ids.contains(&s.id)).cloned().collect();
@@ -845,6 +925,45 @@ pub fn export_bom_over(sch: &SchematicSection, base: &SchematicSection, model: &
         }
     }
     out
+}
+
+/// `GetExportValue` -> `GetValue( .., resolveVars = true, .. )`: each symbol's cells with their `${..}` expanded through `ref.GetSymbol()->ResolveTextVar`
+/// (r5 C5-L9), so the preview says what kicad-cli's BOM file says. Ported for what a symbol answers itself (`SCH_SYMBOL::ResolveTextVar`): a field by its
+/// name (case-insensitive), `FOOTPRINT_LIBRARY`, `FOOTPRINT_NAME`, `DNP` and the `EXCLUDE_FROM_*` flags; a sheet, schematic or project variable is left
+/// as written (the file from kicad-cli has them).
+fn resolved_store(sch: &SchematicSection, model: &ConstraintModel, mut store: Store) -> Store {
+    use eda_model::text_vars::{has_text_vars, shown_text};
+    for (id, entry) in store.iter_mut() {
+        if !entry.values().any(|v| has_text_vars(v)) {
+            continue;
+        }
+        let Some(sym) = sch.symbols.iter().find(|s| &s.id == id) else { continue };
+        let mut fields: Vec<(String, String)> = vec![(REFERENCE.into(), sym.id.clone()), (VALUE.into(), field_value(sch, model, sym, VALUE)), (FOOTPRINT.into(), sym.footprint.clone()), (DATASHEET.into(), sym.datasheet.clone())];
+        if let Some(user) = sch.user_fields.get(id) {
+            fields.extend(user.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        let resolver = |token: &str| -> Option<String> {
+            if let Some((_, text)) = fields.iter().find(|(n, _)| n.eq_ignore_ascii_case(token)) {
+                return Some(text.clone());
+            }
+            let flag = |on: bool, text: &str| Some(if on { text.to_string() } else { String::new() });
+            match token {
+                "FOOTPRINT_LIBRARY" => Some(sym.footprint.split_once(':').map_or("", |(l, _)| l).to_string()),
+                "FOOTPRINT_NAME" => Some(sym.footprint.split_once(':').map_or("", |(_, n)| n).to_string()),
+                "DNP" => flag(sym.dnp, "DNP"),
+                "EXCLUDE_FROM_BOM" => flag(sym.exclude_from_bom, "Excluded from BOM"),
+                "EXCLUDE_FROM_BOARD" => flag(sym.exclude_from_board, "Excluded from board"),
+                "EXCLUDE_FROM_SIM" => flag(sym.exclude_from_sim, "Excluded from simulation"),
+                _ => None,
+            }
+        };
+        for v in entry.values_mut() {
+            if has_text_vars(v) {
+                *v = shown_text(v, &resolver, 0);
+            }
+        }
+    }
+    store
 }
 
 // ---------------------------------------------------------------------
@@ -983,8 +1102,13 @@ pub fn apply_field_changes(sch: &mut SchematicSection, changes: &FieldChanges) -
                     set_attribute(s, attr, &e.value);
                 }
             }
+            // `ApplyData`: "Add a not existing field if it has a value for this symbol" -- `createField = !destField && ( !srcValue.IsEmpty() ||
+            // userAdded )`; an empty edit of a field the symbol has not, in a column not added in this dialog, creates nothing (r5 C5-L9)
             other => {
-                sch.user_fields.entry(e.id.clone()).or_default().insert(other.to_string(), e.value.clone());
+                let exists = sch.user_fields.get(&e.id).is_some_and(|m| m.contains_key(other));
+                if exists || !e.value.is_empty() || changes.add_fields.iter().any(|a| a == other) {
+                    sch.user_fields.entry(e.id.clone()).or_default().insert(other.to_string(), e.value.clone());
+                }
             }
         }
     }
@@ -1034,8 +1158,8 @@ mod tests {
 
     #[test]
     fn ref_parse_matches_sch_reference_split() {
-        assert_eq!(r("R12"), Ref { prefix: "R".into(), num: Some(12) });
-        assert_eq!(r("R?"), Ref { prefix: "R".into(), num: None });
+        assert_eq!(r("R12"), Ref { prefix: "R".into(), num: Some(12), num_text: "12".into() });
+        assert_eq!(r("R?"), Ref { prefix: "R".into(), num: None, num_text: String::new() });
         assert_eq!(r("U1").full(), "U1");
         assert_eq!(r("J").number_text(), "?");
     }
@@ -1380,5 +1504,79 @@ mod tests {
         // a view from before the filters existed has neither
         let old: TableSpec = serde_json::from_str(r#"{"columns": [{"name": "Reference"}], "group_symbols": true}"#).unwrap();
         assert!(!old.exclude_dnp && !old.include_excluded_from_bom);
+    }
+
+    #[test]
+    fn a_leading_zero_reference_is_its_own_symbol() {
+        // r5 C5-L8: `SCH_REFERENCE::Split` keeps `m_numRefStr` ("01"); `unitMatch` compares `GetRefNumber()`.
+        assert_eq!(r("R01").full(), "R01");
+        let s = sch(vec![sym("R01", "10k", "", 1), sym("R1", "10k", "", 1)]);
+        let mut spec = TableSpec::grouped_by_value();
+        spec.group_symbols = false;
+        let t = build_table(&s, &ConstraintModel::default(), &spec);
+        let mut refs: Vec<String> = t.rows.iter().flat_map(|r| r.refs.clone()).collect();
+        refs.sort();
+        assert_eq!(t.rows.len(), 2, "two rows, not two units of one symbol");
+        assert_eq!(refs, vec!["R01".to_string(), "R1".to_string()]);
+    }
+
+    #[test]
+    fn an_empty_edit_creates_no_field() {
+        // r5 C5-L9: `ApplyData`'s `createField = !destField && ( !srcValue.IsEmpty() || userAdded )`
+        let mut s = sch(vec![sym("R1", "10k", "", 1), sym("R2", "10k", "", 1)]);
+        s.user_fields.insert("R1".into(), [("MPN".to_string(), "X".to_string())].into_iter().collect());
+        let edit = |id: &str, v: &str| FieldEdit { id: id.into(), field: "MPN".into(), value: v.into() };
+        apply_field_changes(&mut s, &FieldChanges { edits: vec![edit("R1", ""), edit("R2", "")], ..Default::default() }).unwrap();
+        assert_eq!(s.user_fields.get("R1").and_then(|m| m.get("MPN")).map(String::as_str), Some(""), "a field the symbol has is emptied");
+        assert!(s.user_fields.get("R2").is_none_or(|m| !m.contains_key("MPN")), "R2 had no MPN and gets none");
+        // a column added in the dialog is created empty
+        apply_field_changes(&mut s, &FieldChanges { edits: vec![FieldEdit { id: "R2".into(), field: "Note".into(), value: String::new() }], add_fields: vec!["Note".into()], ..Default::default() }).unwrap();
+        assert!(s.user_fields.get("R2").is_some_and(|m| m.contains_key("Note")));
+    }
+
+    /// A screen with R1 shown on two sheet paths: the second path's R1 is R5.
+    fn shared_design() -> eda_model::ir::Design {
+        use crate::sch_annotate_tests::{placement, section};
+        let mut d = crate::sch_annotate_tests::design();
+        let mut screen = section(vec![sym("R1", "10k", "", 1)], vec![]);
+        screen.user_fields.insert("R1".into(), [("MPN".to_string(), "M1".to_string())].into_iter().collect());
+        let at = screen.symbols[0].at;
+        screen.instance_overrides.push(eda_model::ir::SymbolPathOverride { at, sheet_path: vec!["s2".into()], reference: "R5".into(), unit: 1 });
+        let mut second = placement("s2", "Two", "shared.kicad_sch", "");
+        second.at = Point { x: Nm::new(100_000_000), y: Nm::ZERO };
+        d.schematic = Some(section(vec![], vec![placement("s1", "One", "shared.kicad_sch", ""), second]));
+        d.sheet_contents = Some([("shared.kicad_sch".to_string(), screen)].into_iter().collect());
+        d
+    }
+
+    #[test]
+    fn a_shared_screen_lists_a_reference_per_placement() {
+        // r5 C5-M3: `Hierarchy().GetSymbols(..)` -> one `SCH_REFERENCE` per sheet path.
+        let d = shared_design();
+        let view = project_view(&d).unwrap();
+        let spec = TableSpec::grouped_by_value();
+        let t = build_table(&view, &ConstraintModel::default(), &spec);
+        assert_eq!(t.rows.len(), 1);
+        let col = |n: &str| spec.columns.iter().position(|c| c.name == n).unwrap();
+        assert_eq!(t.rows[0].cells[col(REFERENCE)], "R1, R5");
+        assert_eq!(t.rows[0].cells[col(QUANTITY)], "2");
+        // an edit on R5's row is an edit to the screen's R1, and it shows on both rows
+        let changes = FieldChanges { edits: vec![FieldEdit { id: "R5".into(), field: "MPN".into(), value: "M2".into() }], ..Default::default() };
+        let mut staged = view.clone();
+        apply_field_changes(&mut staged, &changes_for_view(&d, &changes)).unwrap();
+        assert_eq!(staged.user_fields["R1"]["MPN"], "M2");
+        assert_eq!(staged.user_fields["R5"]["MPN"], "M2");
+        assert_eq!(changes_for_sheets(&d, &changes.edits), vec![FieldEdit { id: "R1".into(), field: "MPN".into(), value: "M2".into() }]);
+    }
+
+    #[test]
+    fn the_export_resolves_a_fields_variables() {
+        // r5 C5-L9: `Export` -> `GetExportValue` -> `GetValue( .., resolveVars = true, .. )`
+        let mut s = sch(vec![sym("R1", "10k", "", 1)]);
+        s.user_fields.insert("R1".into(), [("Note".to_string(), "${VALUE}-X".to_string())].into_iter().collect());
+        let mut spec = TableSpec::grouped_by_value();
+        spec.columns.push(Column { name: "Note".into(), label: "Note".into(), show: true, group_by: false });
+        let text = export_bom(&s, &ConstraintModel::default(), &spec, &BomFmt::csv());
+        assert!(text.contains("\"10k-X\""), "{text}");
     }
 }

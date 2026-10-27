@@ -4651,6 +4651,12 @@ impl LibrarySymbol {
                 }
             }
         }
+        // each pin's alternate functions (r5 D5-H3)
+        for p in pins.iter_mut() {
+            if let Some(alts) = sym.connectivity.pin_alternates.get(&p.number) {
+                p.alternates = alts.clone();
+            }
+        }
         LibrarySymbol {
             lib_id: sym.lib_id.clone(),
             reference_prefix: sym.reference_prefix.clone(),
@@ -4705,6 +4711,7 @@ impl LibrarySymbol {
                 power_local: self.power && self.power_local,
                 duplicate_pin_numbers_are_jumpers: self.kicad.duplicate_pin_numbers_are_jumpers,
                 jumper_pin_groups: self.kicad.jumper_pin_groups.clone(),
+                pin_alternates: self.pins.iter().filter(|p| !p.alternates.is_empty()).map(|p| (p.number.clone(), p.alternates.clone())).collect(),
             },
         }
     }

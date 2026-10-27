@@ -42,7 +42,7 @@ export interface PcbParityState {
   movingIndividually: boolean;
   zoneDrawMode: ZoneDrawMode | null;
   pcbDialog: PcbDialog;
-  /** `PCBNEW_SETTINGS::m_AngleSnapMode` -- starts at 45 deg, what the segment/rect tools always did before this became switchable. */
+  /** `PCBNEW_SETTINGS::m_AngleSnapMode` -- starts free (`LEADER_MODE::DIRECT`, `editing.pcb_angle_snap_mode`'s default in pcbnew_settings.cpp; round 5's A5-4). */
   angleSnapMode: AngleSnapMode;
   /** `DRAWING_TOOL::m_stroke`'s width, once `incWidth`/`decWidth` have stepped it by `WIDTH_STEP` while a graphic is being drawn; null = the layer class's default. */
   drawStrokeStep: DrawStrokeStep | null;
@@ -101,7 +101,7 @@ export const DEFAULT_PCB_PARITY: PcbParityState = {
   movingIndividually: false,
   zoneDrawMode: null,
   pcbDialog: null,
-  angleSnapMode: "45",
+  angleSnapMode: "direct",
   drawStrokeStep: null,
   fpEditRequest: null,
   tuneSettings: {},

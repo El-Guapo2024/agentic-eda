@@ -38,6 +38,7 @@ import { chooseMode, NO_CHOICES, placementFormOf, placementOf, placementOptions,
 import { duplicatedZoneOutline } from "../kicad-port/boardControl";
 import { enabledOptionalLayers, layerDisplayName } from "../kicad-port/boardLayers";
 import { activeLayerName, isCopper } from "../kicad-port/layerPresets";
+import { postCarry } from "../api/client";
 import { NO_NET_ZONE_WARNING, orderedLayerSet, zoneDialogKind, zoneDialogNet, zoneLayerChoices, zoneLayers } from "../kicad-port/zoneLayers";
 
 type ZoneFormSettings = ZoneSettingsFields & RuleAreaFields;
@@ -225,12 +226,14 @@ export function ZoneDialog() {
       if (ok) close();
     } else if (addOutline) {
       const extra = { layers, name: settings.is_rule_area ? "" : name, locked };
-      await api.addZone(effectiveNet, firstLayer, addOutline, form, extra);
-      // "Create Zone from Selection": the other outlines the conversion made get the same settings, then the converted sources go.
+      // "Create Zone from Selection": the other outlines the conversion made get the same settings, then the converted sources go -- all one undo step, as
+      // `CreatePolys` pushes one commit ("Convert to Zone"; round 5 B5-10): the zones join a step held open, which the removal (or a bare commit) closes.
       const convert = state.pcbx.zoneConvert;
+      await api.addZone(effectiveNet, firstLayer, addOutline, form, extra, convert ? "hold" : undefined);
       if (convert) {
-        for (const outline of convert.extraOutlines) await api.addZone(effectiveNet, firstLayer, outline, form, extra);
-        if (convert.deleteCmds.length > 0) await api.cmdBatch(convert.deleteCmds);
+        for (const outline of convert.extraOutlines) await api.addZone(effectiveNet, firstLayer, outline, form, extra, "hold");
+        if (convert.deleteCmds.length > 0) await api.cmdBatch(convert.deleteCmds, "commit");
+        else await postCarry("commit");
       }
       close();
     } else if (dupZone) {

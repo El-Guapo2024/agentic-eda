@@ -329,6 +329,10 @@ impl<'a> Board<'a> {
             if let Some(swaps) = src.extras.pin_swaps_of(&eda_model::ir::field_key(&s.id, s.unit)) {
                 sch.extras.pin_swaps.insert(eda_model::ir::field_key(new, s.unit), swaps.clone());
             }
+            // ... and the alternate functions picked for them (r5 D5-H3)
+            if let Some(alts) = src.extras.pin_alternates.get(&eda_model::ir::field_key(&s.id, s.unit)) {
+                sch.extras.pin_alternates.insert(eda_model::ir::field_key(new, s.unit), alts.clone());
+            }
         }
         // a pasted label keeps its spin, size, bold and italic, and its fields
         for (k, l) in src.labels.iter().enumerate() {
