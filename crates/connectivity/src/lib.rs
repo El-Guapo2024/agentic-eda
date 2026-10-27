@@ -12,7 +12,8 @@
 //!   `CONNECTIVITY_DATA::TestTrackEndpointDangling` -> [`dangling`] (what the
 //!   Cleanup Tracks & Vias tool deletes; whether a board *has* dangling
 //!   copper is a DRC finding, which is kicad-cli's to report).
-//! - `thirdparty/delaunator` -> [`delaunay`] (see that module's docs).
+//! - `thirdparty/delaunator` -> [`delaunay`], the `delaunator` crate (the
+//!   from-scratch port, [`delaunay_port`], is INACTIVE).
 //!
 //! This crate works on the geometry IR (`eda_model::ir::Design`) plus the
 //! `ConstraintModel`, not on a live, mutable board -- so the parts of
@@ -34,6 +35,7 @@ pub mod cleanup;
 pub mod cleanup_filter;
 pub mod dangling;
 pub mod delaunay;
+pub mod delaunay_port;
 pub mod dimension;
 pub mod flash;
 pub mod geom;

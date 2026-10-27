@@ -1,3 +1,10 @@
+//! INACTIVE (2026-10-28): replaced by the `delaunator` crate (the reference
+//! Rust port of Delaunator by its own author, wrapped in `crate::delaunay`);
+//! kept for a future all-Rust build that wants no third-party triangulator.
+//! It compiles in every build, its own tests run, and
+//! `tests/delaunay_equivalence.rs` checks it against the crate; the
+//! `rust-port` cargo feature (off by default) makes `crate::delaunay` use it.
+//!
 //! A Delaunay triangulation of a 2D point set, incremental hull insertion
 //! with an angular hash for point location -- the "Delaunator" algorithm.
 //!
