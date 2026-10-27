@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::layers::{pcb_layer_id, user_layer_name, MAX_USER_LAYERS, TECH_LAYERS};
 
+/// `Rescue` (`include/layer_ids.h`).
+const RESCUE: u32 = 37;
+
 /// `PCB_LAYER_ID_COUNT` (`include/layer_ids.h`).
 const LAYER_COUNT: u32 = 128;
 
@@ -40,6 +43,8 @@ fn all_layers() -> Vec<(u32, String)> {
     names.extend(TECH_LAYERS.iter().map(|s| s.to_string()));
     names.extend((1..=MAX_USER_LAYERS).map(user_layer_name));
     let mut v: Vec<(u32, String)> = names.into_iter().filter_map(|n| pcb_layer_id(&n).map(|id| (id, n))).collect();
+    // `Rescue` (37) is no layer a board defines, but a selection read with `ParseHex` keeps its bit, and `FmtHex` writes it back.
+    v.push((RESCUE, "Rescue".into()));
     v.sort();
     v
 }
@@ -102,16 +107,25 @@ pub fn decode_layer_selection(value: &str, file_version: i64, number: bool) -> V
             parse_hex_bits(hex, LAYER_COUNT).into_iter().filter_map(|b| table.iter().find(|(id, _)| *id == b).map(|(_, n)| n.clone())).collect()
         }
     };
-    names.sort_by_key(|n| pcb_layer_id(n).unwrap_or(u32::MAX));
+    names.sort_by_key(|n| layer_number(n).unwrap_or(u32::MAX));
     names.dedup();
     names
+}
+
+/// `pcb_layer_id`, and `Rescue`.
+fn layer_number(name: &str) -> Option<u32> {
+    if name == "Rescue" {
+        Some(RESCUE)
+    } else {
+        pcb_layer_id(name)
+    }
 }
 
 /// `BASE_SET::FmtHex` of the set of `layers` (128 bits, `_` between groups of eight nibbles), with KiCad's `0x` prefix.
 pub fn encode_layer_selection(layers: &[String]) -> String {
     let mut bits = [false; LAYER_COUNT as usize];
     for l in layers {
-        if let Some(id) = pcb_layer_id(l) {
+        if let Some(id) = layer_number(l) {
             bits[id as usize] = true;
         }
     }
@@ -243,10 +257,10 @@ impl PlotParams {
         p
     }
 
-    /// The layers the selection names, of those the board has (its copper layers, and every non-copper layer, which a `.kicad_pcb` always defines): the
-    /// Plot dialog's checklist as `DIALOG_PLOT::init_Dialog` fills it from `GetLayerSelection()`.
+    /// The layers the selection names, of those the board has (its copper layers, and every non-copper layer, which a `.kicad_pcb` always defines;
+    /// never `Rescue`, which `GetEnabledLayers` never has): the Plot dialog's checklist as `DIALOG_PLOT::init_Dialog` fills it from `GetLayerSelection()`.
     pub fn board_layers(&self, copper: &[String]) -> Vec<String> {
-        self.layer_selection.iter().filter(|l| !crate::layers::is_copper_layer_name(l) || copper.contains(l)).cloned().collect()
+        self.layer_selection.iter().filter(|l| *l != "Rescue" && (!crate::layers::is_copper_layer_name(l) || copper.contains(l))).cloned().collect()
     }
 
     /// A default `PCB_PLOT_PARAMS`.
@@ -289,6 +303,15 @@ mod tests {
         assert_eq!(encode_layer_selection(&PlotParams::default_layer_selection()), "0x00000000_00000000_55555555_5755f5ff");
         assert_eq!(encode_layer_selection(&[]), "0x00000000_00000000_00000000_00000000");
         assert_eq!(decode_layer_selection("0x00000000_00000000_55555555_5755f5ff", 20241229, false), PlotParams::default_layer_selection());
+    }
+
+    #[test]
+    fn the_rescue_bit_is_kept() {
+        // r3 board-io F11: `video-v10`'s selection, bit 37 (Rescue) included, reads and writes back unchanged.
+        let v = decode_layer_selection("0x00000000_00000000_000010fc_ffffffff", 20241229, false);
+        assert!(v.contains(&"Rescue".to_string()));
+        assert_eq!(encode_layer_selection(&v), "0x00000000_00000000_000010fc_ffffffff");
+        assert!(!PlotParams { layer_selection: v, ..Default::default() }.board_layers(&[]).contains(&"Rescue".to_string()));
     }
 
     #[test]

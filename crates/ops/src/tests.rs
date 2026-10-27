@@ -1932,6 +1932,36 @@ fn set_footprint_anchor_translates_every_pad_graphic_and_text_so_the_click_point
     assert_eq!(fp.texts[0].at, Point { x: Nm::ZERO, y: mm(-0.5) });
 }
 
+/// r3 E3-1: `FOOTPRINT::MoveAnchorPosition` moves the fields and the 3D model offsets too.
+#[test]
+fn set_footprint_anchor_moves_fields_and_models_as_move_anchor_position() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", mm(2.0), Nm::ZERO) }).unwrap();
+    {
+        let mut fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().clone();
+        fp.reference = None;
+        fp.value = None;
+        let mut l = eda_model::fp_edit::new_library_field_layout();
+        l.at = Point { x: mm(1.0), y: mm(1.0) };
+        fp.fields = vec![eda_model::ir::FootprintField { name: "Vendor".into(), value: "X".into(), visible: false, layout: Some(l) }];
+        fp.models3d = vec![eda_model::footprint::Model3d::identity("m.step")];
+        b.apply(&Cmd::PutLibraryFootprint { footprint: fp, overwrite: true }).unwrap();
+    }
+    b.apply(&Cmd::SetFootprintAnchor { name: "Test:FP".into(), at: Point { x: mm(2.0), y: Nm::ZERO } }).unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    assert_eq!(fp.pads[0].at, Point { x: Nm::ZERO, y: Nm::ZERO });
+    assert_eq!(fp.reference.as_ref().unwrap().at, Point { x: mm(-2.0), y: mm(-0.5) });
+    assert_eq!(fp.value.as_ref().unwrap().at, Point { x: mm(-2.0), y: mm(1.0) });
+    assert_eq!(fp.fields[0].layout.as_ref().unwrap().at, Point { x: mm(-1.0), y: mm(1.0) });
+    assert_eq!(fp.models3d[0].offset, [-2.0, 0.0, 0.0]);
+    // The y offset is negated (KiCad's model frame is y up).
+    b.apply(&Cmd::SetFootprintAnchor { name: "Test:FP".into(), at: Point { x: Nm::ZERO, y: mm(1.0) } }).unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    assert_eq!(fp.models3d[0].offset, [-2.0, 1.0, 0.0]);
+}
+
 #[test]
 fn update_footprint_on_board_only_flips_the_explicit_flag() {
     let m = net_model();

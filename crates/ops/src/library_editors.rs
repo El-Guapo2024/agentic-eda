@@ -390,6 +390,14 @@ impl<'a> Board<'a> {
         for p in &mut sym.pins {
             p.at = SPoint { x: p.at.x + dx, y: p.at.y + dy };
         }
+        // `LIB_SYMBOL::Move` moves every item of `m_drawings`, and the fields are among them (`addField` puts them in
+        // `m_drawings[SCH_FIELD_T]`): each mandatory field (at its default place when the symbol stores none) and each user field moves
+        // with the body. `all_fields` gives the five mandatory fields with their texts, so storing them all keeps what they show.
+        let mut fields = sym.all_fields();
+        for f in &mut fields {
+            f.at = SPoint { x: f.at.x + dx, y: f.at.y + dy };
+        }
+        sym.set_fields(fields);
         Ok(())
     }
 }
@@ -751,6 +759,24 @@ mod verb_tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(b.apply(&Cmd::SetSymbolAnchor { lib_id: "eda:Nope".into(), at: SPoint { x: 0.0, y: 0.0 } }).unwrap_err()[0].check, "ops_unknown_symbol");
+    }
+
+    /// r3 E3-2: `LIB_SYMBOL::Move` moves the fields with the body.
+    #[test]
+    fn set_symbol_anchor_moves_the_fields_too() {
+        let m = ConstraintModel::default();
+        let mut b = board(&m);
+        b.apply(&Cmd::PutLibrarySymbol { symbol: symbol_with_pins("eda:A"), overwrite: false }).unwrap();
+        let before = b.design().symbol_library.as_ref().unwrap().by_lib_id("eda:A").unwrap().all_fields();
+        b.apply(&Cmd::SetSymbolAnchor { lib_id: "eda:A".into(), at: SPoint { x: 2.54, y: 0.0 } }).unwrap();
+        let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("eda:A").unwrap();
+        let r = sym.field("Reference").unwrap();
+        let v = sym.field("Value").unwrap();
+        assert!((r.at.x + 2.54).abs() < 1e-9 && (r.at.y - 5.08).abs() < 1e-9, "{r:?}");
+        assert!((v.at.x + 2.54).abs() < 1e-9 && (v.at.y - 2.54).abs() < 1e-9, "{v:?}");
+        // The texts are what they were.
+        let texts = |f: &[eda_model::sym_fields::LibrarySymbolField]| f.iter().map(|f| (f.name.clone(), f.text.clone())).collect::<Vec<_>>();
+        assert_eq!(texts(&sym.all_fields()), texts(&before));
     }
 
     #[test]

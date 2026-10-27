@@ -5548,17 +5548,37 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// `drawing_tool.cpp::SetAnchor` -> `FOOTPRINT::MoveAnchorPosition( -cursorPos )` (a library footprint has no orientation, so the
+    /// `RotatePoint` is a no-op): the fields (Reference and Value at their default places when they have no layout of their own, the
+    /// Datasheet and Description when the footprint has them, every user field), the pads, the graphics and texts move; each 3D model's
+    /// offset follows, in millimetres with y up (`m_Offset.x += IUTomm( moveVector.x ); m_Offset.y -= IUTomm( moveVector.y )`).
+    /// Differs: the kept items the editor does not draw (`kicad.tokens`: zones, dimensions, ...) stay put, and the `courtyard`
+    /// half-extents override is centred on the origin by definition (KiCad has no such override: its courtyard is the F.CrtYd graphics,
+    /// which move).
     fn set_footprint_anchor(&mut self, name: &str, at: Point) -> Result<(), Vec<CheckResult>> {
         let fp = self.library_footprint_mut(name)?;
         let (dx, dy) = (-at.x, -at.y);
+        let shift = |p: &mut Point| *p = Point { x: p.x + dx, y: p.y + dy };
+        shift(&mut fp.reference.get_or_insert_with(eda_model::fp_edit::default_library_reference_layout).at);
+        shift(&mut fp.value.get_or_insert_with(eda_model::fp_edit::default_library_value_layout).at);
+        for l in [fp.datasheet.as_mut(), fp.description_field.as_mut()].into_iter().flatten() {
+            shift(&mut l.at);
+        }
+        for f in &mut fp.fields {
+            shift(&mut f.layout.get_or_insert_with(eda_model::fp_edit::new_library_field_layout).at);
+        }
         for p in &mut fp.pads {
-            p.at = Point { x: p.at.x + dx, y: p.at.y + dy };
+            shift(&mut p.at);
         }
         for g in &mut fp.graphics {
             g.translate(dx, dy);
         }
         for t in &mut fp.texts {
-            t.at = Point { x: t.at.x + dx, y: t.at.y + dy };
+            shift(&mut t.at);
+        }
+        for m in &mut fp.models3d {
+            m.offset[0] += dx.mm();
+            m.offset[1] -= dy.mm();
         }
         Ok(())
     }
