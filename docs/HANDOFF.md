@@ -70,6 +70,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r2-schematic` | The round-2 schematic findings: KiCad 25ec2335's connectivity engine for names and joins (the user's choice, 2026-10-27), shared screens through `eda import-kicad`, sheets in subfolders, KiCad 6 pages, sheet user fields, a project's ERC settings, the wire / placement / drag / align finishes, Autoplace Fields details, copy on a shared screen, first-free numbering; PARITY-sch section 44 | 12/12 highs, 20 of 25 mediums (B-M1 by main's page work), 11 of 25 lows fixed (C-H3's label half not a bug) (each marked in `docs/parity/findings/round2/r2-schematic.md`); the QA trace test now compares names through the real import: 24/24 | GAPS items 1 and 4 list the rest |
 | Round 2 fixes (2026-10-27): `task-r2-router` (`-router`), `task-r2-pcb-edit` (`-exports`), `task-r2-editors-exports` (`-embedded`), `task-r2-schematic` (`ds-agentic-eda`), `task-r2-board-io` (`-sim`) | The round-2 findings, `docs/parity/findings/round2/` (copies; the live files are in `~/work/findings/round2/`). Router/rules 8, PCB editing 36, editors/exports 35, schematic 62, board files 19. The user, 2026-10-27: the schematic tracer matches KiCad's NEW connectivity engine (`eeschema/connectivity/`, 25ec2335) | started | all |
 
 Gates for any of them:

@@ -1412,7 +1412,8 @@ export function useActionRunner() {
 
     // SCH_ACTIONS::alignLeft/Right/Top/Bottom/CenterX/CenterY (eeschema/tools/sch_align_tool.cpp): every selected item of every kind lines up
     // with the target's edge (kicad-port/schAlign.ts measures it from the boxes the studio draws and picks by); the backend's `align` verb
-    // moves each by its offset, snapped so pins stay on the connection grid and with the wires on each item stretching, as one undo step.
+    // moves each rigidly by its offset, snapped so pins stay on the connection grid (`SCH_ALIGN_TOOL::moveItem`: the wires stay where they are), then
+    // `doAlignCleanup`, as one undo step.
     const alignItems = (kind: SchAlignKind) =>
       schematicOnly(() => {
         if (!sch) return;

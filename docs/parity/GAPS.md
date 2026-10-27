@@ -149,6 +149,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 
 ### 1. Schematic edit tools act on every item kind
 **Closed 2026-10-08** (`2a8bf8f`; fields and labels `2d92851`); the details it left are done on `task-sch-details` (2026-10-12, not merged: P10). Hit: every schematic session.
+- Round 2 (2026-10-27, `task-r2-schematic`, `PARITY-sch.md` section 44): a drawn wire is cut between a two-pin part's pins, a placed symbol cuts the wire it lands
+  on, a dragged wire stays on its sheet pin, the clean-up keeps strokes apart, directive labels mirror across the axis, Align is rigid, Autoplace Fields skips
+  hidden pins and treats each unit as a symbol. **Left**: power symbols' Autoplace (C-M3), Align to Grid's kinds (C-L1), pivot boxes with fields (C-L2), a label
+  named after its wire (C-L5), Paste's method and start (D-C3), Paste's library precedence (D-C4), Duplicate's hover (D-C8), the Annotate dialog's enabling (D-A4).
 - Done (`crates/ops/src/{sch_move,sch_drag,sch_scene,sch_props}.rs`, `kicad-port/{schMove,schAlign,schProperties}.ts`, `components/{SchematicView,SchPropertiesDialogs}.tsx`):
   one verb family, `Cmd::SchMove`, moves, drags, turns, mirrors and aligns any set of symbols, power symbols, wires and bus wires, labels of every kind,
   free text, text boxes, shapes, rule areas, directive labels, junctions, no-connects, bus entries, graphic lines and sheets (with their pins), as one
@@ -241,6 +245,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 
 ### 4. Hierarchical sheets
 **Mostly done (2026-10-10, `task-sch-hierarchy`)**, limits below. Hit: every multi-sheet design. Package P4 for what is left.
+- Round 2 (2026-10-27, `task-r2-schematic`, `PARITY-sch.md` section 44): `eda import-kicad` of a shared screen keeps each sheet path's references; sheets in a
+  subfolder are read, keyed and written as KiCad resolves them; a KiCad 6 root's `sheet_instances` pages; a sheet's user fields; the tracer is KiCad 25ec2335's
+  connectivity engine (the box's kicad-cli). The QA trace test compares net names through the real import: 24 of 24 alike (11 before). **Left** (findings
+  `docs/parity/findings/round2/r2-schematic.md`): a per-path unit (B-M4), a pasted sheet's references from the copied path (B-M5), the writer's fallback page
+  for a partly paged file (B-M2, the page lane), a sheet's DNP / BOM / board flags and look (B-L1), `in_pos_files` (B-L2), symbol uuids (B-L3), the writer's
+  cosmetics (B-L4), an unannotated reference's uuid hash (A-N13), which of two same-named nets keeps the bare name (A-N11).
 - Done earlier: the IR (`SchematicSection::sheets`, `Design::sheet_contents` in `crates/model/src/ir.rs`); tree import and multi-file export
   (`crates/kicad/src/sch_import.rs::import_kicad_sch_tree`, `lib.rs`); one derived schematic as module sheets (`crates/engine/src/hier/`,
   Tools > Reorganize into Module Sheets); every schematic command acts on the sheet in view (`Cmd::OnSheet`); the nets traced across sheets
