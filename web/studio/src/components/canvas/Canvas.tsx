@@ -22,7 +22,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
 import { drawStrokeWidthNm } from "../../kicad-port/layerDefaults";
-import { activeLayerName } from "../../kicad-port/layerPresets";
+import { activeLayerName, layerIsVisible } from "../../kicad-port/layerPresets";
 import { carryStart, isLocked } from "../../kicad-port/pcbTransform";
 import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
 import { EXTRA_KINDS, extraItemLabel } from "../../kicad-port/pcbExtraItems";
@@ -54,7 +54,7 @@ import { SELECT_NET_TITLE, selectNetLabels, snapViaPosition, viaNet, type ViaPla
 import { startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { clearRouteQueue } from "./routeQueue";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
-import { routeMove, routeDragMove, dpMove } from "../../api/client";
+import { routeMove, routeDragMove, dpMove, fetchState } from "../../api/client";
 import { finishInlineDrag } from "./dragging";
 import { dragStateFromPreview } from "../../kicad-port/dragTool";
 import { startDiffPairRoute, fixDiffPairRoute, finishDiffPairRoute } from "./diffPairRouting";
@@ -755,7 +755,7 @@ export function Canvas() {
           fills: (state.zoneFill?.zones ?? []).filter((z) => z.filled).map((z) => ({ net: z.net, layer: z.layer, fragments: z.fragments })),
           activeLayer: state.activeLayer ?? "F.Cu",
           highContrast: state.highContrast,
-          isLayerVisible: (l) => state.layerVisible[l] !== false,
+          isLayerVisible: (l) => layerIsVisible(state.layerVisible, l),
         };
         const at = snapViaPosition(placer, [wx, wy], [sx, sy]);
         const place = (net: string, track: string | null) =>
@@ -996,8 +996,11 @@ export function Canvas() {
           const before = new Set((board.drawings?.texts ?? []).map((t) => t.id));
           dispatch({ type: "SET_DRAW_STATE", draw: null });
           void api.cmd({ op: "place_text", text: { ...draw.text, at: { x: sx, y: sy } }, extra: draw.extra }).then(() => {
-            const made = (api.getState().board?.drawings?.texts ?? []).find((t) => !before.has(t.id));
-            if (made) dispatch({ type: "SET_SELECTION", refs: [made.id] }); // `selectItem, text`
+            // (the board as the backend has it now: the store's catches up on the next render)
+            void fetchState().then((now) => {
+              const made = (now.drawings?.texts ?? []).find((t) => !before.has(t.id));
+              if (made) dispatch({ type: "SET_SELECTION", refs: [made.id] }); // `selectItem, text`
+            });
           });
           return;
         }
