@@ -74,3 +74,11 @@ test("with a connected item selected the cursor is not looked at", () => {
   const plan = planSelectConnection(b, new Set(["m1"]), [{ kind: "track", id: "t2" }]);
   assert.deepEqual(plan && plan.refs, ["m1"], "the flood from m1 adds nothing, and t2 under the cursor is ignored");
 });
+
+test("a tuning pattern selected alone starts the connection from its tracks (expandConnection counts a PCB_GENERATOR_T, round 4 A-7)", () => {
+  const b = board();
+  b.drawings!.groups = [{ id: "tp1", name: "", member_ids: ["t2"], generator: "tuning_pattern" }];
+  assert.equal(connectedStartCount(b, ["tp1"]), 1);
+  const plan = planSelectConnection(b, new Set(["tp1"]), []);
+  assert.ok(plan && plan.refs.includes("tp1") && plan.refs.includes("t1") && plan.refs.includes("t3"), JSON.stringify(plan));
+});
