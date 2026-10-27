@@ -341,10 +341,9 @@ pub fn constraint_for(rules: &BoardRules, kind: TuningMode, net: &str, partner: 
         if r.min.is_none() && r.max.is_none() && r.opt.is_none() {
             continue;
         }
-        if let Some(pat) = &r.layer {
-            if !eda_model::glob_match(pat, layer) {
-                continue;
-            }
+        // `(layer outer)` / `(layer inner)` are the outer and the inner copper layers (`DRC_RULES_PARSER::parseLayer`), any other a wildcard name
+        if !eda_kicad::rule_layer_matches(r.layer.as_deref(), layer) {
+            continue;
         }
         if let Some(text) = r.condition.as_deref() {
             let mut condition = Condition::new(text);
@@ -1210,6 +1209,17 @@ mod tests {
         assert_eq!(constraint_for(&rules, TuningMode::Single, "SIG", None, "F.Cu").unwrap().name, "first");
         rules.custom_rules[0].layer = Some("B.Cu".into());
         assert!(constraint_for(&rules, TuningMode::Single, "SIG", None, "F.Cu").is_none(), "a rule for another layer");
+    }
+
+    /// r6-board-io F4: a rule of two constraints gives the length tuner its length whichever comes first, and `(layer outer)` takes in F.Cu.
+    #[test]
+    fn a_rule_on_the_outer_layers_targets_a_track_on_f_cu() {
+        let mut rules = BoardRules::default();
+        rules.custom_rules = eda_kicad::parse_custom_rules("(version 1)\n(rule L (constraint skew (max 0.1mm)) (constraint length (min 40mm) (max 41mm)) (layer outer) (condition \"A.NetName == 'CLK'\"))\n");
+        let c = constraint_for(&rules, TuningMode::Single, "CLK", None, "F.Cu").expect("the length of rule L");
+        assert_eq!((c.name.as_str(), c.range.min, c.range.max), ("L", 40_000_000, 41_000_000));
+        assert!(constraint_for(&rules, TuningMode::Single, "CLK", None, "In1.Cu").is_none(), "an inner layer is not outer");
+        assert_eq!(constraint_for(&rules, TuningMode::DiffPairSkew, "CLK", Some("CLK_N"), "B.Cu").expect("the skew of rule L").range.max, 100_000);
     }
 
     fn pattern_for_handles(mode: TuningMode) -> TuningPattern {
