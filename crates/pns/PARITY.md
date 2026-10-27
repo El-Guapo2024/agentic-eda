@@ -1307,6 +1307,52 @@ The router side of `work/findings/round5/r5-route-rules.md` section D (R5-D1, R5
   in the world. Tests: `a_copper_barcode_keeps_its_1mm_physical_clearance`, `a_rule_on_a_text_box_holds_a_route_off` (both kicad-cli-proved; both failed before).
 - `EDA_SLOW_TESTS=1 cargo test -p eda-pns --test qa_regressions`: 13 passed; `--test rules_kicad`: 28 passed.
 
+## Stage 20 -- round-6 router findings (branch `task-r6-router`, 2026-10-28)
+
+The router side of `work/findings/round6/r6-route-rules.md` section R (and R6-D1 on the router's rules), each re-read against `router_tool.cpp`
+(`handleLayerSwitch`, `onLayerCommand`, `onViaCommand`, `MainLoop`'s `m_startWithVia`, `performRouting`'s `syncRouterAndFrameLayer`,
+`finishInteractive`, `RouteSelected`), `pns_line_placer.cpp` (`SetLayer`, `FixRoute`, `UnfixRoute`), `pns_router.cpp` (`SwitchLayer`, `Finish`) and
+`pns_kicad_iface.cpp::ImportSizes` at 8303b2ad.
+
+- **R6-R1, V's via size.** V while routing (`ACT_PlaceThroughVia` -> `onViaCommand` -> `handleLayerSwitch( aEvent, true )`) sizes its via as every via
+  command: no size while the net class's are in use (the server's `net_class_via_size`: `VIA_DIAMETER_CONSTRAINT` / `HOLE_SIZE_CONSTRAINT` of a dummy
+  via of the route's net), else the chosen Pre-defined Sizes entry or the custom size (`kicad-port/routerVia.ts` `chosenViaOf`, shared with the blind,
+  micro and Select Layer commands). Tests: `routerVia.test.ts`; kicad-cli: `a_via_armed_while_routing_has_the_nets_class_size` (a Power class's 0.8 /
+  0.4 mm via passes a `via_diameter` / `hole_size` rule, the board's 0.6 / 0.3 mm default is flagged).
+- **R6-R2, the board's minimum width.** `settings::chosen_track_width` is `ImportSizes`' `!found` branch: `std::max( bds.m_TrackMinWidth,
+  GetCurrentTrackWidth() )`, "user choice" when the chosen width is routed, else "board minimum track width". `route_api::start` takes it for a chosen
+  width; `Router::set_width` (W, the width menu: `onTrackViaSizeChanged` imports the sizes again) raises the width too and the move reply says
+  `width_source`, which the studio's `drawStateFromPreview` takes when the width was raised. Tests: `a_chosen_width_below_the_board_minimum_routes_at_the_minimum`
+  (route_api and, kicad-cli-proved, `rules_kicad.rs`: no `track_width` in the route, the 0.1 mm one flagged).
+- **R6-R3, the layer keys while routing.** `LinePlacer::set_layer` is `LINE_PLACER::SetLayer`: idle, any layer; refused once a fix chained the route to
+  a segment (`m_chainedPlacement = !pl.EndsWithVia()`) or when it started on a track (`m_startItem` not a via or a `SOLID` on the layer); otherwise the
+  head goes to the layer and starts again from the leg's start in the first direction. `Router::switch_layer` (`ROUTER::SwitchLayer`), `POST
+  /api/route/layer`. The studio registers layerNext / layerPrev / layerTop / layerInner1..30 / layerBottom while a route is drawn
+  (`actions/routerViaActions.ts`; `routerLayerTarget` is `handleLayerSwitch`'s target: next / prev in UI order past hidden layers, a layer the board
+  has); refused, a through via to the layer is armed, sized as V's. Tests: `a_layer_key_moves_the_head_to_the_layer_until_a_fix_chains_it`
+  (route_api), `routerVia.test.ts`, router-leftovers' r6 scenario. **Differs:** `updateSizesAfterRouterEvent` (the clearance re-imported on the new
+  layer) is not run, as after a via (Stage 18).
+- **R6-R4, Autoroute.** Each connection starts at its anchor and goes through `ROUTER::Finish` (`attempt_finish`, as the F key), and `RouteSelected`'s
+  undo groups are kept: `append_undo` on every connection of a run but the first of a group, so the routes `Finish` makes are one undo step, and a
+  connection it cannot make stays live with the head where it got (its commit, finished by hand, joins the group too, as KiCad's flags are set before
+  `performRouting`). The studio's own toasts ("Nothing to route ...", "Autorouted %d of %d ...") are gone. Test:
+  `autoroute_of_three_free_connections_is_one_undo_step` (route_api).
+- **R6-R5, V before a route.** With the route tool armed and no route, V (`ACT_PlaceThroughVia` in `MainLoop`) flips the active layer
+  (`PCB_CONTROL::LayerToggle`: the pair's other layer) and sets `pcbx.startWithVia`; the next route starts with a through via armed
+  (`performRouting`'s `handleLayerSwitch( ACT_PlaceThroughVia, true )`, `components/canvas/routing.ts`), once. Browser: router-leftovers' r6 scenario.
+  **Differs:** the via's implicit target is the pair's other layer, as V's (Stage 11), not the nearest ratsnest anchor's.
+- **R6-R6, the active layer.** `syncRouterAndFrameLayer`: while a route or pair runs the active layer is the one being routed, made visible
+  (the store's `SET_DRAW_STATE`); `m_originalActiveLayer` is saved at every start and given back at the end (`finishInteractive`). GAPS item 7's R5 line
+  said the active layer followed the route; now it does. Browser: router-leftovers' r6 scenario.
+- **R6-D1 on the router.** `A.Orientation` of a footprint and a pad is KiCad's (`web/studio/PARITY-pcb.md` section 62). kicad-cli:
+  `a_rule_on_the_orientation_reads_kicads_angle` (a pad orientation rule and a Rotation component class hold a route off a footprint KiCad has at
+  90, and not one at -90).
+- **R6-R8, not fixed.** A shoved line that stood on several board tracks is committed under one of them (`ShoveOutcome`: the first of
+  `source_tracks`, which sorts the ids), so its segments share one mask and group, as KiCad's; KiCad's is the seed segment's source
+  (`AssembleLine`), ours the track whose id sorts first. Equal when the tracks share a mask and group, the usual case. Fixing it needs the seed carried
+  through `Line`.
+- Gates: see the HANDOFF row (`qa_regressions` 13/13 exact, `rules_kicad` all passed).
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
