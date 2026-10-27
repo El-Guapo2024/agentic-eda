@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import type { Constraints, MaskPaste, NetClass, Stackup, StackupSettings, TextGraphicsDefaults } from "../api/types";
+import type { Constraints, NetClass, Stackup, StackupSettings, TextGraphicsDefaults } from "../api/types";
 import {
   CONSTRAINT_RANGES,
   MAXIMUM_CLEARANCE_NM,
@@ -32,7 +32,6 @@ import {
   stackupThicknessNm,
   textRowOf,
   validateConstraints,
-  validateMaskPaste,
   validateNetClasses,
   validateStackup,
   validateTextGraphics,
@@ -233,25 +232,20 @@ test("the Constraints page is range-checked like ValidateDesignRules", () => {
   assert.deepEqual(validateConstraints(constraints()), {});
   const bad = validateConstraints(constraints({ min_clearance_nm: 30_000_000, max_error_nm: 0, min_resolved_spokes: 100 }));
   assert.deepEqual(Object.keys(bad).sort(), ["max_error_nm", "min_clearance_nm", "min_resolved_spokes"]);
-  assert.equal(bad.min_clearance_nm, "Value must be between 0 and 25 mm.");
-  assert.equal(bad.max_error_nm, "Value must be between 0.001 and 1 mm.");
+  assert.equal(bad.min_clearance_nm, "Value must be between 0 mm and 25 mm.");
+  assert.equal(bad.max_error_nm, "Value must be between 0.001 mm and 0.1 mm.");
+  assert.equal(bad.min_resolved_spokes, "Value must be between 0 and 99.");
   assert.deepEqual(validateConstraints(constraints({ min_silk_clearance_nm: -5_000_000 })), {}, "the silk clearance may be negative, down to -10 mm");
   assert.deepEqual(Object.keys(validateConstraints(constraints({ min_silk_clearance_nm: -10_000_001 }))), ["min_silk_clearance_nm"]);
   assert.deepEqual(validateConstraints(constraints({ min_copper_edge_clearance_nm: -10_000 })), {}, "-0.01 mm is the legacy flag value");
   assert.equal(validateConstraints(constraints({ min_track_width_nm: Number.NaN })).min_track_width_nm, "Value is not a number.");
   assert.ok(validateConstraints(constraints({ min_resolved_spokes: 1.5 })).min_resolved_spokes);
+  assert.deepEqual(validateConstraints(constraints({ max_error_nm: 100_000 })), {}, "0.1 mm is the largest (MAXIMUM_ERROR_SIZE_MM)");
+  assert.equal(validateConstraints(constraints({ max_error_nm: 100_001 })).max_error_nm, "Value must be between 0.001 mm and 0.1 mm.", "one nanometre more is out");
   assert.equal(new Set(CONSTRAINT_RANGES.map((r) => r.key)).size, CONSTRAINT_RANGES.length);
   assert.equal(mmText(25_000_000), "25");
   assert.equal(mmText(-10_000), "-0.01");
   assert.equal(mmText(0), "0");
-});
-
-test("the Solder Mask/Paste page is range-checked, the paste ratio as a fraction", () => {
-  const ok: MaskPaste = { expansion_nm: 50_000, min_width_nm: 100_000, to_copper_clearance_nm: 0, allow_bridges_in_footprints: false, tent_vias_front: true, tent_vias_back: true, paste_margin_nm: -50_000, paste_margin_ratio: -0.05 };
-  assert.deepEqual(validateMaskPaste(ok), {});
-  assert.deepEqual(Object.keys(validateMaskPaste({ ...ok, expansion_nm: 25_000_001, min_width_nm: -1, paste_margin_ratio: 1.5 })).sort(), ["expansion_nm", "min_width_nm", "paste_margin_ratio"]);
-  assert.equal(validateMaskPaste({ ...ok, paste_margin_nm: Number.NaN }).paste_margin_nm, "Value is not a number.");
-  assert.deepEqual(validateMaskPaste({ ...ok, paste_margin_ratio: 1 }), {}, "100 % is the largest");
 });
 
 // ---------------------------------------------------------------- text and graphics

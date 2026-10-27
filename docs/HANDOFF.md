@@ -69,7 +69,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-hierarchy-pages` | Sheet page numbers as KiCad keeps them (load numbering, next free page for new sheet paths, a page per sheet path), the walk by place, the Hierarchy Navigator's page order and pages (`PARITY-sch.md` section 43; DS-LOG's two hierarchy-navigator findings) | done, gated | instance paths sorted by `KIID_PATH` (cosmetic) |
+| Round 2 fixes (2026-10-27): `task-r2-router` (`-router`), `task-r2-pcb-edit` (`-exports`), `task-r2-editors-exports` (`-embedded`), `task-r2-schematic` (`ds-agentic-eda`), `task-r2-board-io` (`-sim`), `task-hierarchy-pages` (`-rules`) | The round-2 findings, `docs/parity/findings/round2/` (copies; the live files are in `~/work/findings/round2/`). Router/rules 8, PCB editing 36, editors/exports 35, schematic 62, board files 19. The user, 2026-10-27: the schematic tracer matches KiCad's NEW connectivity engine (`eeschema/connectivity/`, 25ec2335) | started | all |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

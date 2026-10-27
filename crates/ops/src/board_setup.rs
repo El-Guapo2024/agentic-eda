@@ -44,9 +44,8 @@ pub(crate) fn set_constraints(design: &mut Design, constraints: &Constraints) ->
     Ok(())
 }
 
-/// `Cmd::SetMaskPaste`.
+/// `Cmd::SetMaskPaste`: `PANEL_SETUP_MASK_AND_PASTE::TransferDataFromWindow` stores the page and returns true -- it has no checks of its own.
 pub(crate) fn set_mask_paste(design: &mut Design, settings: &MaskPaste) -> Done {
-    first("ops_bad_mask_paste", rules::validate_mask_paste(settings))?;
     overlay(design).mask_paste = Some(settings.clone());
     Ok(())
 }
