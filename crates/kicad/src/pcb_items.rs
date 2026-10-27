@@ -46,6 +46,9 @@ pub(crate) struct ZoneArgs<'a> {
     /// The `(pts ..)` of each ring as the file drew it, with its arcs (`DrawingsSection::zone_arcs`), while the zone's outline and holes are still the ones read: written
     /// in place of the points.
     pub arc_rings: Option<&'a [String]>,
+    /// The zone's own per-layer settings as the file wrote them (`DrawingsSection::zone_layer_props`), one per line: written after the fill for the layers the
+    /// zone is on (`for( const auto& [layer, properties] : aZone->LayerProperties() ) format( properties, 0, layer )`).
+    pub layer_props: Option<&'a str>,
 }
 
 /// `PCB_IO_KICAD_SEXPR::formatLayers( layers, aEnumerateLayers, aIsZone )` for a zone: `(layers "F.Cu" "B.Cu")`. A zone on copper layers lists each of them
@@ -210,6 +213,12 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
         write!(out, " {t}").unwrap();
     }
     writeln!(out, ")").unwrap();
+    for prop in a.layer_props.into_iter().flat_map(|p| p.lines()) {
+        let on = prop.split("(layer \"").nth(1).and_then(|r| r.split('"').next()).is_none_or(|l| z.is_on_layer(l));
+        if on {
+            writeln!(out, "\t\t{prop}").unwrap();
+        }
+    }
 
     // `SHAPE_POLY_SET::POLYGON poly = aZone->Outline()->Polygon(0); for( const SHAPE_LINE_CHAIN& chain : poly )`: the outline, then each of its holes.
     if let Some(rings) = a.arc_rings {

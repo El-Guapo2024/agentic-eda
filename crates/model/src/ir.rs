@@ -2698,6 +2698,11 @@ pub struct DrawingsSection {
     /// still the ones read ([`ZoneArcs::shape`]). Additive: absent in an older `design.json` reads as "no zone outline has arcs".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub zone_arcs: Vec<ZoneArcs>,
+    /// A zone's own per-layer settings (`ZONE::LayerProperties`, `(property (layer "F.Cu") (hatch_position (xy ..)))` inside the zone: a hatched fill's offset on that
+    /// layer), as the file wrote them, keyed by the zone's id; written back for the layers the zone is still on. Additive: absent in an older `design.json` reads
+    /// as "no zone has any".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zone_layer_props: Vec<ZoneThieving>,
     /// The intent (a `ConstraintModel` as YAML) the board's parts, nets, footprints and rules come from when it is not the one `board.json` names: a path relative to the
     /// board's folder. File > Import > Non-KiCad Board File replaces the open board with another one, whose parts are not the intent's (`Cmd::ReplaceBoard`); the other
     /// board's model is a file of its own under `imports/`, named here, so the step is a change of this design and an undo takes the old board back whole. `board::build_model`

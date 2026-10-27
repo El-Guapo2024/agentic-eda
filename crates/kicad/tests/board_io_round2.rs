@@ -617,3 +617,17 @@ fn a_padless_footprint_keeps_its_zone_connection() {
     let fp = blocks(&out, "footprint")[0].to_string();
     assert!(fp.contains("(zone_connect 0)") && fp.contains("(clearance 0.3)"), "{fp}");
 }
+
+/// r3 F13: a zone's own per-layer setting (`(property (layer "F.Cu") (hatch_position (xy 1 1)))`, `ZONE::LayerProperties`) is written back.
+#[test]
+fn a_zones_layer_properties_are_kept() {
+    let text = board(
+        r#" (zone (net 1) (net_name "A") (layer "F.Cu") (uuid "44444444-4444-4444-4444-444444444444") (hatch edge 0.5) (connect_pads (clearance 0.5)) (min_thickness 0.25)
+  (fill (mode hatch) (thermal_gap 0.5) (thermal_bridge_width 0.5) (hatch_thickness 0.5) (hatch_gap 1) (hatch_orientation 0) (hatch_border_algorithm hatch_thickness) (hatch_min_hole_area 0.3))
+  (property (layer "F.Cu") (hatch_position (xy 1 1)))
+  (polygon (pts (xy 95 95) (xy 125 95) (xy 125 125) (xy 95 125))))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    assert!(blocks(&out, "zone")[0].contains("(property (layer \"F.Cu\") (hatch_position (xy 1 1)))"), "{out}");
+}
