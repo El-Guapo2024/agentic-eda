@@ -582,7 +582,7 @@ export function ZoneDialog() {
             Cancel
           </button>
           <button className="primary" disabled={!canSubmit} onClick={submit} data-testid="zone-ok">
-            {editZone ? "OK" : settings.is_rule_area ? "Add Rule Area" : "Add Zone"}
+            {editZone || convert ? "OK" : settings.is_rule_area ? "Add Rule Area" : "Add Zone"}
           </button>
         </div>
       </div>

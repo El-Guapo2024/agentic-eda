@@ -635,20 +635,22 @@
       }
       step("arming again");
       sh = await draw("pcbnew.InteractiveDrawing.line", "draw_segment", [[3, 8], [11, 8]]);
-      check("arming the tool again starts at the class's width", sh?.stroke_width === 180_000, JSON.stringify(sh));
+      // `m_stroke` is DRAWING_TOOL's and is reset only when a tool finds another layer than `m_layer` (or by `Reset()`): arming again on F.SilkS keeps the
+      // step, for every stroke tool (round 6 A6-1).
+      check("arming the tool again on the same layer keeps the stepped width", sh?.stroke_width === 280_000, JSON.stringify(sh));
       step("a rectangle");
       sh = await draw("pcbnew.InteractiveDrawing.rectangle", "draw_rect", [[14, 4], [20, 9]]);
-      check("a rectangle takes it too", sh?.kind === "rect" && sh.layer === "F.SilkS" && sh.stroke_width === 180_000, JSON.stringify(sh));
+      check("a rectangle takes it too", sh?.kind === "rect" && sh.layer === "F.SilkS" && sh.stroke_width === 280_000, JSON.stringify(sh));
       step("a circle");
       sh = await draw("pcbnew.InteractiveDrawing.circle", "draw_circle", [[24, 7], [27, 7]]);
-      check("and a circle", sh?.kind === "circle" && sh.stroke_width === 180_000, JSON.stringify(sh));
+      check("and a circle", sh?.kind === "circle" && sh.stroke_width === 280_000, JSON.stringify(sh));
       step("an arc");
       sh = await draw("pcbnew.InteractiveDrawing.arc", "draw_arc", [[14, 14], [18, 14], [14, 18]]);
-      check("and an arc", sh?.kind === "arc" && sh.stroke_width === 180_000, JSON.stringify(sh));
+      check("and an arc", sh?.kind === "arc" && sh.stroke_width === 280_000, JSON.stringify(sh));
       step("a line on the fabrication layer");
       await pickLayer("f_fab");
       sh = await draw("pcbnew.InteractiveDrawing.line", "draw_segment", [[3, 12], [11, 12]]);
-      check("a line on another layer has that class's width: the front fabrication layer's", sh?.layer === "F.Fab" && sh.stroke_width === 90_000, JSON.stringify(sh));
+      check("a line on another layer has that class's width (the step is gone): the front fabrication layer's", sh?.layer === "F.Fab" && sh.stroke_width === 90_000, JSON.stringify(sh));
       step("a line on a user layer");
       await pickLayer("Dwgs_User");
       sh = await draw("pcbnew.InteractiveDrawing.line", "draw_segment", [[3, 14], [11, 14]]);
