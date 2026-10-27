@@ -37,6 +37,8 @@
   const waitFill = async (pred, ms = 15000) => { const t0 = Date.now(); let f = await fill(); while (!pred(f) && Date.now() - t0 < ms) { await sleep(300); f = await fill(); } return f; };
   const zonesOf = async () => ((await state()).routing?.zones ?? []).filter((z) => !z.is_rule_area);
   const editZone = (z, patch) => post({ op: "edit_zone", ...z, ...patch });
+  /** A zone outline with its first corner 1 mm to the right (state gives points as `[x, y]`, the command takes `{ x, y }`). */
+  const reshaped = (outline) => outline.map((p, i) => { const [x, y] = Array.isArray(p) ? p : [p.x, p.y]; return { x: i === 0 ? x + 1_000_000 : x, y }; });
   const scenario = async (name, fn) => {
     const entry = { name, ok: true, notes: [] };
     const t = (cond, msg) => { entry.notes.push(`${cond ? "ok" : "FAIL"}: ${msg}`); if (!cond) entry.ok = false; };
@@ -112,8 +114,7 @@
       t(bx(was.filter((z) => z.id === A.id)) - bx(back0.zones.filter((z) => z.id === A.id)) === 1_000_000, "its copper is 1 mm to the right of where it was");
       // a reshape (the point editor's `m_zone.UnFill()`): zone A has no fill until the next B
       zA = (await zonesOf()).find((z) => z.id === A.id);
-      const outline = zA.outline.map((p, i) => (i === 0 ? { x: p.x + 1_000_000, y: p.y } : p));
-      const r = await post({ op: "set_zone_outline", id: A.id, outline });
+      const r = await post({ op: "set_zone_outline", id: A.id, outline: reshaped(zA.outline) });
       t(r.ok, `a corner of zone A is moved (${r.message})`);
       f = await waitFill((x) => x.zones.some((z) => z.id === A.id && !z.filled));
       const now = byZone(f);
@@ -131,7 +132,7 @@
 
     await scenario("Fill Selected Zones fills the selected zone only, Unfill Selected Zones takes only the selected one away, Unfill All Zones takes the rest", async (t) => {
       const zA = (await zonesOf()).find((z) => z.id === A.id);
-      await post({ op: "set_zone_outline", id: A.id, outline: zA.outline.map((p, i) => (i === 0 ? { x: p.x + 1_000_000, y: p.y } : p)) });
+      await post({ op: "set_zone_outline", id: A.id, outline: reshaped(zA.outline) });
       await waitFill((x) => x.zones.some((z) => z.id === A.id && !z.filled));
       const bBefore = byZone(await fill());
       await select([A.id]);
