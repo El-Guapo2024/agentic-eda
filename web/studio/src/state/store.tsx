@@ -2555,8 +2555,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       let cmd: Cmd;
       if (system != null && isKicadPcbText(system)) {
         cmd = paste(system);
-      } else if (system != null && system.trim() !== "") {
-        // the text as it is, KiCad's text defaults, on the active layer (kicad-port/plainTextPaste.ts); a long one asks first
+      } else if (system != null && system !== "") {
+        // the text as it is, KiCad's text defaults, on the active layer (kicad-port/plainTextPaste.ts), blanks too (`clipText.empty()` is the only text KiCad
+        // does not paste; an empty clipboard here falls back to the session's copy, as a browser that hands nothing over does); a long one asks first
         const plain = plainTextPaste(system, at, activeLayerName(st.activeLayer, "F.SilkS"))!;
         if (plain.longText && !window.confirm(LONG_TEXT_QUESTION)) return;
         cmd = plain.cmd;
