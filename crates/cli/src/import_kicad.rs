@@ -372,6 +372,24 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
 ///   keeps at ignore (`effective_erc_severities`: every symbol is embedded there);
 /// - `erc.pin_map` (`SetPinMapValue( i, j, val )` for a 12 x 12 array of 0..2), as the design's pin map when it is not KiCad's default;
 /// - `schematic.connection_grid_size` (mils, `SCHEMATIC_SETTINGS::m_ConnectionGridSize`), when it is not the default 50.
+/// A project's `erc.pin_map` as `ERC_SETTINGS`' loader reads it (25ec2335 `erc_settings.cpp`, the `pin_map` `PARAM_LAMBDA`): nothing unless it is an array of
+/// 12 rows; the rows are read in order and the reading stops at the first that is not an array of 12 (the rows before it are kept); each cell that is
+/// a whole number in range is set and any other stays at the default (r3 D3-L3: one bad cell used to drop the whole map). **Differs**: the range is OK,
+/// warning and error (0..2); KiCad's loader also takes `PIN_ERROR::UNCONNECTED` (3), which no dialog sets and the stored map does not hold.
+fn project_pin_map(json: &serde_json::Value) -> Option<Vec<Vec<u8>>> {
+    let rows = json.as_array().filter(|rows| rows.len() == 12)?;
+    let mut m = eda_model::ir::ErcPinMap::default_matrix();
+    for (i, row) in rows.iter().enumerate() {
+        let Some(row) = row.as_array().filter(|r| r.len() == 12) else { break };
+        for (j, v) in row.iter().enumerate() {
+            if let Some(v) = v.as_u64().filter(|v| *v <= 2) {
+                m[i][j] = v as u8;
+            }
+        }
+    }
+    Some(m)
+}
+
 fn keep_project_erc_settings(out: &Path, root: &Path) -> Result<(), Vec<CheckResult>> {
     let Ok(pro_text) = std::fs::read_to_string(root.with_extension("kicad_pro")) else { return Ok(()) };
     let Ok(pro) = serde_json::from_str::<serde_json::Value>(&pro_text) else { return Ok(()) };
@@ -385,10 +403,7 @@ fn keep_project_erc_settings(out: &Path, root: &Path) -> Result<(), Vec<CheckRes
             }
         }
     }
-    let pin_map: Option<Vec<Vec<u8>>> = pro["erc"]["pin_map"].as_array().filter(|rows| rows.len() == 12).and_then(|rows| {
-        rows.iter().map(|r| r.as_array().filter(|r| r.len() == 12).and_then(|r| r.iter().map(|v| v.as_u64().filter(|v| *v <= 2).map(|v| v as u8)).collect::<Option<Vec<u8>>>())).collect()
-    });
-    let pin_map = pin_map.filter(|m| *m != eda_model::ir::ErcPinMap::default_matrix());
+    let pin_map = project_pin_map(&pro["erc"]["pin_map"]).filter(|m| *m != eda_model::ir::ErcPinMap::default_matrix());
     let grid = pro["schematic"]["connection_grid_size"].as_f64().map(|g| g.round() as u32).filter(|&g| g != 50 && g > 0);
     if severities.is_empty() && pin_map.is_none() && grid.is_none() {
         return Ok(());

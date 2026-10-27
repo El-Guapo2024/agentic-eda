@@ -62,3 +62,12 @@ test("r2 D-A3: a selected group stands for every symbol below it (getInferredSym
   assert.deepEqual(annotateSelectionOf(sch, ["grp"], isSymbol), { symbols: ["R1", "C1"], sheets: [] });
   assert.deepEqual(annotateSelectionOf(sch, ["R9", "sheet_a"], isSymbol), { symbols: ["R9"], sheets: ["sheet_a"] });
 });
+
+test("r3 D3-L1: a sheet inside a selected group is not one of the selected sheets (AnnotateSymbols takes the selection's own SCH_SHEET_T items)", () => {
+  const sch = {
+    symbols: [{ id: "R1", unit: 1 }],
+    sheets: [{ id: "sheet_a", pins: [] }],
+    groups: [{ id: "grp", name: "", member_ids: ["R1", "sheet_a"] }],
+  } as unknown as Schematic;
+  assert.deepEqual(annotateSelectionOf(sch, ["grp"], (id) => id === "R1"), { symbols: ["R1"], sheets: [] });
+});

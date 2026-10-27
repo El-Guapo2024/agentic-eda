@@ -56,7 +56,9 @@ export function annotateSelectionOf(sch: Schematic | null | undefined, selected:
   const leaves = leafIds(sch, selected);
   return {
     symbols: [...new Set(leaves.filter(isSymbol))],
-    sheets: leaves.filter((id) => sch?.sheets.some((s) => s.id === id) ?? false),
+    // `AnnotateSymbols` takes the sheets from the selected items themselves (`for( EDA_ITEM* item : selection ) if( item->Type() == SCH_SHEET_T )`), not from
+    // inside a selected group (r3 D3-L1)
+    sheets: selected.filter((id) => sch?.sheets.some((s) => s.id === id) ?? false),
   };
 }
 

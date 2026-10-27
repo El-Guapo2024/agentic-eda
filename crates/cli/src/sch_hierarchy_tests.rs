@@ -1177,7 +1177,10 @@ fn a_kicad_projects_erc_settings_come_in_with_the_schematic() {
     std::fs::write(&root, include_str!("../tests/fixtures/hidden_power_pins.kicad_sch")).unwrap();
     let mut pin_map = eda_model::ir::ErcPinMap::default_matrix();
     pin_map[1][1] = (pin_map[1][1] + 1) % 3;
-    std::fs::write(root.with_extension("kicad_pro"), json!({ "erc": { "rule_severities": { "pin_not_connected": "ignore", "lib_symbol_mismatch": "warning", "pin_to_pin": "warning", "empty_label_name": "ignore", "wired_implicit_power": "error" }, "pin_map": pin_map }, "schematic": { "connection_grid_size": 100.0 } }).to_string()).unwrap();
+    // one bad cell is left at its default; the rest of the map is kept (r3 D3-L3, `ERC_SETTINGS`' loader)
+    let mut written = json!(pin_map);
+    written[2][3] = json!("x");
+    std::fs::write(root.with_extension("kicad_pro"), json!({ "erc": { "rule_severities": { "pin_not_connected": "ignore", "lib_symbol_mismatch": "warning", "pin_to_pin": "warning", "empty_label_name": "ignore", "wired_implicit_power": "error" }, "pin_map": written }, "schematic": { "connection_grid_size": 100.0 } }).to_string()).unwrap();
     let dir = work.join("board");
     crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
     let (_, design, _) = load(&dir).unwrap();

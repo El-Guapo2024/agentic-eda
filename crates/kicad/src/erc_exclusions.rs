@@ -141,21 +141,26 @@ struct Rule {
     paths: Paths,
 }
 
-/// The markers' own fields, per check: what `SCH_MARKER`'s creator sets (`erc.cpp` and `connection_graph.cpp` line numbers are of the source this was read from;
-/// the ones marked [probed] were run against kicad-cli 10.99.0-5334, whose matcher accepts these forms and is more lenient with a few).
+/// The markers' own fields, per check: what `SCH_MARKER`'s creator sets (`erc.cpp` and `connection_graph.cpp` line numbers are of the source this was read from:
+/// 8303b2ad unless a row says KiCad 25ec2335, the box's kicad-cli, whose new connectivity engine places its markers through `ERC_MARKER_PLACER`; the rows
+/// marked [probed] were run against kicad-cli 10.99.0-5334, and `footprint_link_issues` again against 25ec2335, whose matchers accept these forms and are more
+/// lenient with a few: a record with no paths still matches, `ResolveERCExclusions`' pathless fallback). The connectivity rows were read from 8303b2ad and
+/// have not been compared line by line with 25ec2335's `ERC_MARKER_PLACER` calls (r3 D3-L5: the fallback keeps them matching).
 fn rule(check: &str) -> Option<Rule> {
     use At::{Aux, Main};
-    use Paths::{None as NoPaths, Specific, SpecificMain, SpecificMainAux};
+    use Paths::{Specific, SpecificMain, SpecificMainAux};
     let r = |at, paths| Some(Rule { at, paths });
     match check {
-        // erc.cpp: a symbol's problem, put at the symbol, with no sheet in it (`TestLibSymbolIssues` 1706-1782, `TestFootprintLinkIssues` 1825-1933,
-        // `TestSimModelIssues` 2061-2069).
-        // (`footprint_link_issues` [probed].)
-        "footprint_link_issues" | "simulation_model_issue" | "lib_symbol_issues" | "lib_symbol_mismatch" => r(Main, NoPaths),
-        // erc.cpp 169-172: `SetItems( sheet, test_item )`, at the first sheet. 716-721: the item with the undefined netclass.
-        "duplicate_sheet_names" | "undefined_netclass" => r(Main, NoPaths),
-        // erc.cpp 555-559: `SetItems( unit, secondUnit )`, put at the second unit.
-        "different_unit_footprint" => r(Aux, NoPaths),
+        // KiCad 25ec2335 (the box's kicad-cli; r3 D3-L5) erc.cpp: a symbol's problem, put at the symbol, sheet-specific with the symbol's sheet
+        // (`TestLibSymbolIssues` 2986-2990, `TestFootprintLinkIssues` 3060 and the footprint filters 3097 through `ERC_MARKER_PLACER::Report( .., ITEM_PATHS::MAIN )`,
+        // `TestSimModelIssues` 3223-3225), and the item with the undefined netclass (1119-1121). (8303b2ad set no sheet in any of them; a record made
+        // then still matches, through `ResolveERCExclusions`' pathless fallback.) [`footprint_link_issues` probed]
+        "footprint_link_issues" | "footprint_filter" | "simulation_model_issue" | "lib_symbol_issues" | "lib_symbol_mismatch" | "undefined_netclass" => r(Main, SpecificMain),
+        // 25ec2335 erc.cpp 398-403: `SetItems( sheet, test_item )`, `SetSheetSpecificPath( path )`, `SetItemsSheetPaths( path, path )`, at the first sheet.
+        "duplicate_sheet_names" => r(Main, SpecificMainAux),
+        // 25ec2335 erc.cpp 1014-1017: `SetItems( reference, unit )`, put at the second unit, sheet-specific on its sheet, the items on theirs (the report
+        // names one sheet, so only a single-sheet report knows the first unit's).
+        "different_unit_footprint" => r(Aux, SpecificMainAux),
         // connection_graph.cpp 4161-4166 and 4190-4195 (a symbol's pin), 4656-4661 (a sheet pin): sheet-specific, the item's sheet set, at the pin.
         // (The hierarchical label of the root sheet, 4628-4632, sets no sheet: see [`marker`].)
         // [probed]
@@ -225,7 +230,8 @@ pub fn marker(check: &str, severity: &str, items: &[MarkerItem], sheet: &str, sh
 /// decides, as it always did.
 pub fn same_sheet(a: Option<&ErcMarker>, b: Option<&ErcMarker>) -> bool {
     match (a, b) {
-        (Some(a), Some(b)) => a.sheet == b.sheet,
+        // (a marker kept with no sheet is of no sheet in particular: one of a check 8303b2ad put no sheet in, r3 D3-L5)
+        (Some(a), Some(b)) => a.sheet.is_empty() || b.sheet.is_empty() || a.sheet == b.sheet,
         _ => true,
     }
 }
@@ -316,10 +322,24 @@ pub fn read_project(pro_text: &str) -> Vec<(ErcMarker, String)> {
         let p = |i: usize| props.get(i).map(|t| text_path(t)).unwrap_or_default();
         Some((ErcMarker { error_type: error_type.to_string(), at_nm: [iu(1), iu(2)], items, sheet: p(5), main_sheet: p(6), aux_sheet: p(7) }, comment.to_string()))
     };
+    if legacy {
+        // `ERC_SETTINGS::migrateSchema0to1` keeps the texts in a `std::set<std::pair<wxString, wxString>>` (`m_ErcExclusionsLegacy`): each (text, comment)
+        // once, an empty text left out, sorted -- so of two comments of one text the first in that order is the one `ResolveERCExclusions` keeps (r3 D3-L4)
+        let pairs: std::collections::BTreeSet<(&str, &str)> = entries
+            .iter()
+            .filter_map(|e| match e {
+                Value::Array(pair) => Some((pair.first()?.as_str()?, pair.get(1).and_then(Value::as_str).unwrap_or(""))),
+                Value::String(text) => Some((text.as_str(), "")),
+                _ => None,
+            })
+            .filter(|(text, _)| !text.is_empty())
+            .collect();
+        return pairs.into_iter().filter_map(|(text, comment)| from_text(text, comment)).filter(|(m, _)| !m.items.is_empty()).collect();
+    }
     entries
         .iter()
         .filter_map(|e| match e {
-            Value::Object(_) if !legacy => {
+            Value::Object(_) => {
                 let m = e.get("marker")?;
                 let error_type = field(m, "error_type", "errorType").as_str()?.to_string();
                 check_of(&error_type)?;
@@ -337,8 +357,6 @@ pub fn read_project(pro_text: &str) -> Vec<(ErcMarker, String)> {
                 };
                 Some((marker, e.get("comment").and_then(Value::as_str).unwrap_or("").to_string()))
             }
-            Value::Array(pair) if legacy => from_text(pair.first()?.as_str()?, pair.get(1).and_then(Value::as_str).unwrap_or("")),
-            Value::String(text) if legacy => from_text(text, ""),
             _ => None,
         })
         .filter(|(m, _)| !m.items.is_empty())
@@ -439,18 +457,23 @@ mod tests {
         let derived: std::collections::HashMap<String, String> = [("d-pin".to_string(), "U1.1".to_string())].into_iter().collect();
         let got = from_project(&pro, &ids, &derived, "", "");
         assert_eq!(got.iter().map(|e| e.comment.as_str()).collect::<Vec<_>>(), ["why"]);
+        // r3 D3-L4: with two comments, the first of the sorted set (`m_ErcExclusionsLegacy`), not of the file
+        let pro = json!({ "erc": { "meta": { "version": 0 }, "erc_exclusions": [[text, "b"], [text, "a"]] } }).to_string();
+        assert_eq!(from_project(&pro, &ids, &derived, "", "").iter().map(|e| e.comment.as_str()).collect::<Vec<_>>(), ["a"]);
     }
 
+    /// r3 D3-L5: in KiCad 25ec2335 a symbol's footprint link issue is sheet-specific, with the symbol's sheet (`ERC_MARKER_PLACER::Report( .., ITEM_PATHS::MAIN )`);
+    /// 8303b2ad's had no sheet, and a record of then still matches one of now (`same_sheet`, and kicad-cli's pathless fallback).
     #[test]
-    fn a_symbols_footprint_link_issue_has_no_sheet_in_it() {
+    fn a_symbols_footprint_link_issue_names_the_symbols_sheet() {
         let symbol = item("a4f97020-e09b-4e24-b611-b376f3c27df7", 113_030_000, 100_330_000, "Symbol C1 [C]");
         let m = marker("footprint_link_issues", "warning", &[symbol.clone()], ROOT, 1).unwrap();
         assert_eq!((m.error_type.as_str(), m.at_nm), ("ERCET_FOOTPRINT_LINK_ISSUES", [mm(113.03), mm(100.33)]));
-        assert!(m.sheet.is_empty() && m.main_sheet.is_empty() && m.aux_sheet.is_empty());
-        let e = entry(&m, "");
-        assert!(e["marker"].get("sheetSpecificPath").is_none() && e["marker"].get("mainItemSheetPath").is_none(), "{e}");
-        // The same on a design of many sheets: nothing of a sheet in it, so the report's group does not matter.
-        assert!(marker("footprint_link_issues", "warning", &[symbol], "/r/s", 3).unwrap().sheet.is_empty());
+        assert_eq!((m.sheet.clone(), m.main_sheet.clone(), m.aux_sheet.clone()), (only(&[ROOT_UUID]), only(&[ROOT_UUID]), vec![]));
+        // on a design of many sheets the report lists it under its sheet
+        assert_eq!(marker("footprint_link_issues", "warning", &[symbol], "/r/s", 3).unwrap().sheet, only(&["r", "s"]));
+        let old = ErcMarker { sheet: vec![], main_sheet: vec![], ..m.clone() };
+        assert!(same_sheet(Some(&old), Some(&m)), "a marker kept before is of no sheet in particular");
     }
 
     #[test]
