@@ -870,7 +870,8 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
 }
 
 /// The key of the screen a sheet in a file of the folder `resolve_dir` names as `text`: the file's path from the root's folder `root_dir`, `/`-separated,
-/// with `.` and `..` worked out (`ampli_ht/filter.kicad_sch`). A file outside the root's folder keeps its path from it with the `..` in front.
+/// with `.` and `..` worked out (`ampli_ht/filter.kicad_sch`). A file outside the root's folder keeps its path from it with the `..` in front, and an
+/// absolute name stays absolute. (The derived tree writes either inside its work folder: `crate::sheet_file_in_work`.)
 pub fn sheet_file_key(root_dir: &Path, resolve_dir: &Path, text: &str) -> String {
     use std::path::Component;
     let normal = |p: &Path| -> Vec<String> {
@@ -891,6 +892,10 @@ pub fn sheet_file_key(root_dir: &Path, resolve_dir: &Path, text: &str) -> String
         out
     };
     let target = normal(&resolve_dir.join(text));
+    // an absolute name keeps its own text (`if( !fileName.IsAbsolute() ) fileName.MakeAbsolute( .. )`), worked out: `/` and the path from it
+    if Path::new(text).is_absolute() {
+        return format!("/{}", target.iter().filter(|c| !c.starts_with('/')).cloned().collect::<Vec<_>>().join("/"));
+    }
     let root = normal(root_dir);
     let common = root.iter().zip(&target).take_while(|(a, b)| a == b).count();
     let mut parts: Vec<String> = std::iter::repeat_n("..".to_string(), root.len() - common).collect();
@@ -1902,6 +1907,11 @@ mod tests {
         assert_eq!(sheet_file_key(root, root, "./a/../a/x.kicad_sch"), "a/x.kicad_sch");
         assert_eq!(sheet_file_key(root, &root.join("a"), "../top.kicad_sch"), "top.kicad_sch");
         assert_eq!(sheet_file_key(root, root, "../out.kicad_sch"), "../out.kicad_sch");
+        assert_eq!(sheet_file_key(root, root, "/abs/./x/../amp.kicad_sch"), "/abs/amp.kicad_sch");
+        assert_eq!(crate::sheet_file_relative_to("a", "/abs/amp.kicad_sch"), "/abs/amp.kicad_sch");
+        assert_eq!(crate::sheet_file_in_work("../../s/amp.kicad_sch"), "__up__/__up__/s/amp.kicad_sch");
+        assert_eq!(crate::sheet_file_in_work("/abs/amp.kicad_sch"), "__root__/abs/amp.kicad_sch");
+        assert_eq!(crate::sheet_file_in_work("a/x.kicad_sch"), "a/x.kicad_sch");
         assert_eq!(crate::sheet_file_relative_to("a", "a/x.kicad_sch"), "x.kicad_sch");
         assert_eq!(crate::sheet_file_relative_to("a", "top.kicad_sch"), "../top.kicad_sch");
         assert_eq!(crate::sheet_file_relative_to("", "a/x.kicad_sch"), "a/x.kicad_sch");

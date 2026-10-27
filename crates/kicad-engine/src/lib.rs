@@ -543,7 +543,8 @@ fn export_board_with(design: &Design, model: &ConstraintModel, work: &Path, stem
 
 /// Export the design's schematic as `<stem>.kicad_sch` (+ project), and one file for every screen of a hierarchical design, at its name from the root's
 /// folder (a screen's key: `ampli_ht/filter.kicad_sch` is written in `ampli_ht/`, and its placing file names it relative to its own folder), so kicad-cli
-/// reads the whole tree.
+/// reads the whole tree. A screen above the root's folder (`../shared/amp.kicad_sch`) is written inside `work` too (`__up__/shared/amp.kicad_sch`,
+/// `eda_kicad::sheet_file_in_work`): nothing is ever written outside it.
 fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path, stem: &str) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
     work_dir(work)?;
     let date = today();
@@ -559,6 +560,11 @@ fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path, stem:
         }
     }
     for (name, text) in &files {
+        // Never outside `work` (the tree names a screen above the root's folder inside it, `eda_kicad::sheet_file_in_work`): a derived file written at
+        // `work.join("../..")` could land on the project's own sheet.
+        if Path::new(name).components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+            return Err(fail("kicad_engine_write", name, format!("a derived schematic file must be inside {}", work.display())));
+        }
         // a screen in a subfolder of the root's (QA `complex_hierarchy_shared`'s `ampli_ht/`): the folder is made first
         if let Some(parent) = work.join(name).parent().filter(|p| *p != work) {
             std::fs::create_dir_all(parent).map_err(|e| fail("kicad_engine_write", &parent.display().to_string(), e.to_string()))?;
