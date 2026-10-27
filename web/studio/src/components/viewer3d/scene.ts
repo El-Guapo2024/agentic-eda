@@ -63,6 +63,7 @@ import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 import { artTextAsField, graphicsOf, layersOf } from "../../kicad-port/fpArt";
 import { fieldAsText } from "../../kicad-port/fpFields";
 import { zoneCopperLayers } from "../../kicad-port/zoneLayers";
+import { DEFAULT_STACK, stackOfBoard, type Stack } from "../../kicad-port/model3d";
 
 // ---------------------------------------------------------------------
 // Units
@@ -77,18 +78,27 @@ function mm(um: number): number {
 // Stack-up (all mm)
 // ---------------------------------------------------------------------
 
-/** Board slab thickness -- standard 1.6mm FR4. */
-export const BOARD_THICKNESS_MM = 1.6;
-const HALF_THICKNESS_MM = BOARD_THICKNESS_MM / 2;
-/** Copper foil thickness -- ~1oz copper (35µm), a real value, not tuned for looks. */
-const COPPER_MM = 0.035;
+/**
+ * The board's vertical build-up for the build in progress: the body (`m_boardBodyThickness3DU`), the outer copper and the solder masks, from the
+ * board's stackup as `BOARD_ADAPTER::InitSettings` reads it (kicad-port/model3d.ts `stackOfBoard`). Set once at the start of every build, which is
+ * synchronous, like `palette` below.
+ */
+let stack: Stack = DEFAULT_STACK;
+/** Half the body: the outer copper's inner face (`m_layerZcoordBottom[F_Cu]` / `[B_Cu]`). */
+const halfThickness = () => stack.boardThicknessMm / 2;
+/** The outer copper's thickness on `side` (`m_frontCopperThickness3DU` / `m_backCopperThickness3DU`). */
+const copperMm = (side: Side) => (side === "top" ? stack.copperMm : stack.copperBackMm ?? stack.copperMm);
+/** The solder mask's thickness on `side` (`m_frontMaskThickness3DU` / `m_backMaskThickness3DU`). */
+const maskMm = (side: Side) => (side === "top" ? stack.maskFrontMm : stack.maskBackMm) ?? MASK_MM;
+/** The front copper, for the items that are not on one side (a track on an inner layer). */
+const COPPER_MM = DEFAULT_STACK.copperMm;
 /** Track/via-cap joints rendered a hair taller than straight copper so a
  * joint sitting exactly on a pad or another joint (very common -- tracks
  * terminate at pad centres) doesn't z-fight with it: both would
  * otherwise share the exact same top/bottom Y-planes. Purely a rendering
  * nicety, not a stack-up dimension. */
 const JOINT_COPPER_MM = COPPER_MM + 0.002;
-/** Solder mask tint thickness -- board_adapter.cpp's DEFAULT_TECH_LAYER_THICKNESS (`pcbIUScale.mmToIU(0.025)`), the same constant KiCad uses for both solder mask and silkscreen "technical layer" thickness. */
+/** board_adapter.cpp's DEFAULT_TECH_LAYER_THICKNESS (`pcbIUScale.mmToIU(0.025)`): the "technical layer" thickness (`m_nonCopperLayerThickness3DU`), and the solder mask's when the stack names none (a board always has one from its stackup, `stackOfBoard`). */
 const MASK_MM = 0.025;
 /** DEFAULT_COPPER_THICKNESS is 0.035mm already (COPPER_MM above matches); SOLDERPASTE_LAYER_THICKNESS is its own, thicker constant (`pcbIUScale.mmToIU(0.04)`) -- see addSolderPaste. */
 const SOLDERPASTE_MM = 0.04;
@@ -108,15 +118,15 @@ function outwardSign(side: Side): 1 | -1 {
 
 /** The board slab's own outer surface for `side` (+0.8mm / -0.8mm), independent of any copper/mask stack-up on top of it. */
 function surfaceY(side: Side): number {
-  return outwardSign(side) * HALF_THICKNESS_MM;
+  return outwardSign(side) * halfThickness();
 }
 
 function maskCenterY(side: Side): number {
-  return surfaceY(side) + outwardSign(side) * (COPPER_MM / 2 + MASK_MM / 2);
+  return surfaceY(side) + outwardSign(side) * (copperMm(side) / 2 + maskMm(side) / 2);
 }
 
 function silkY(side: Side): number {
-  return surfaceY(side) + outwardSign(side) * (COPPER_MM + MASK_MM + SILK_GAP_MM);
+  return surfaceY(side) + outwardSign(side) * (copperMm(side) + maskMm(side) + SILK_GAP_MM);
 }
 
 /** Part bodies sit directly on the board surface (task spec: "top parts sit above +0.8mm ... extending further up"), not stacked on top of the copper/mask -- those are sub-0.05mm and not worth the extra offset the spec didn't ask for. */
@@ -138,11 +148,11 @@ function layerY(layerName: string, layerOrder: readonly string[]): number {
   if (idx < 0) {
     // Unknown layer name (shouldn't happen for real board data): fall
     // back to whichever outer surface the name itself suggests.
-    return layerName.toLowerCase().startsWith("b.") ? -HALF_THICKNESS_MM : HALF_THICKNESS_MM;
+    return layerName.toLowerCase().startsWith("b.") ? -halfThickness() : halfThickness();
   }
-  if (layerOrder.length <= 1) return HALF_THICKNESS_MM;
+  if (layerOrder.length <= 1) return halfThickness();
   const t = idx / (layerOrder.length - 1); // 0 at the first (top) entry, 1 at the last (bottom)
-  return HALF_THICKNESS_MM - t * BOARD_THICKNESS_MM;
+  return halfThickness() - t * stack.boardThicknessMm;
 }
 
 // ---------------------------------------------------------------------
@@ -350,7 +360,7 @@ function buildOutlineShapes(board: BoardState): THREE.Shape[] {
 }
 
 /**
- * The board slab: `shape`'s polygon extruded to BOARD_THICKNESS_MM.
+ * The board slab: `shape`'s polygon extruded to the body's thickness (`m_boardBodyThickness3DU`).
  *
  * Axis note: ExtrudeGeometry extrudes a Shape built in its own local
  * (x,y) plane along local +Z. Rotating the resulting mesh +90° about X
@@ -370,10 +380,10 @@ function buildOutlineShapes(board: BoardState): THREE.Shape[] {
  */
 function buildSlab(shape: THREE.Shape): THREE.Mesh | null {
   try {
-    const geometry = new THREE.ExtrudeGeometry(shape, { depth: BOARD_THICKNESS_MM, bevelEnabled: false });
+    const geometry = new THREE.ExtrudeGeometry(shape, { depth: stack.boardThicknessMm, bevelEnabled: false });
     const mesh = new THREE.Mesh(geometry, boardMaterial());
     mesh.rotation.x = Math.PI / 2;
-    mesh.position.y = BOARD_THICKNESS_MM / 2;
+    mesh.position.y = stack.boardThicknessMm / 2;
     mesh.name = "board-slab";
     return mesh;
   } catch (err) {
@@ -444,13 +454,13 @@ function addPad(group: THREE.Group, xMm: number, zMm: number, wMm: number, hMm: 
  * covers exposed copper, not anything under the solder mask.
  */
 function pasteCenterY(side: Side): number {
-  return surfaceY(side) + outwardSign(side) * (COPPER_MM + SOLDERPASTE_MM / 2);
+  return surfaceY(side) + outwardSign(side) * (copperMm(side) + SOLDERPASTE_MM / 2);
 }
 
 function addVia(group: THREE.Group, xMm: number, zMm: number, diameterMm: number, material: THREE.Material): void {
   const radius = Math.max(diameterMm / 2, 0.001);
   // Through every layer -- this app's model has no blind/buried vias.
-  const geometry = new THREE.CylinderGeometry(radius, radius, BOARD_THICKNESS_MM, 24);
+  const geometry = new THREE.CylinderGeometry(radius, radius, stack.boardThicknessMm, 24);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(xMm, 0, zMm);
   mesh.name = "via";
@@ -927,11 +937,13 @@ export interface BuildBoardOptions {
   colors?: Record<string, Rgba>;
   /** The zones' fills as KiCad made them (`GET /api/fill`): a zone with none has no copper. Absent: each zone's outline stands in for its copper. */
   zoneFills?: readonly FillZone[];
+  /** The board's build-up (`stackOfBoard`). Absent: `stackOfBoard(board.board_rules)`. */
+  stack?: Stack;
 }
 
 /** Where a layer KiCad draws flat above the board sits, in the front or the back (`BOARD_ADAPTER::InitSettings`: a technical layer other than silkscreen, mask and paste is 2 * 1.1 * the layer thickness off the copper). */
 function techLayerY(side: Side): number {
-  return surfaceY(side) + outwardSign(side) * (COPPER_MM + 2 * 1.1 * MASK_MM);
+  return surfaceY(side) + outwardSign(side) * (copperMm(side) + 2 * 1.1 * MASK_MM);
 }
 
 /**
@@ -946,6 +958,7 @@ function techLayerY(side: Side): number {
 export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {}): THREE.Group {
   palette = { ...THEME_COLORS, ...(opts.colors ?? {}) };
   rowShown = opts.visible ?? (() => true);
+  stack = opts.stack ?? stackOfBoard(board.board_rules);
   const shown = rowShown;
   const copperShown = (layerName: string) => (layerName.toLowerCase().startsWith("b.") ? shown("copper_bottom") : layerName === "F.Cu" ? shown("copper_top") : true);
 
