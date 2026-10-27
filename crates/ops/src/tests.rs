@@ -398,6 +398,11 @@ fn add_track_assigns_an_id_that_set_track_width_and_delete_track_can_use() {
     let t = &b.design().routing.as_ref().unwrap().tracks[0];
     assert_eq!(t.width, mm(0.35));
     assert_eq!(t.id, id, "changing width must not move the id");
+    // r2-pcb-edit A7: the Properties panel's Width (`PROPERTY<PCB_TRACK, int>( "Width", .., PT_SIZE )`, a `PGPROPERTY_SIZE` with no validator) takes 0; only a
+    // negative width is refused.
+    b.apply(&Cmd::SetTrackWidth { id: id.clone(), width: Nm::ZERO }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().tracks[0].width, Nm::ZERO);
+    assert!(b.apply(&Cmd::SetTrackWidth { id: id.clone(), width: Nm::new(-1) }).is_err());
 
     b.apply(&Cmd::DeleteTrack { id: id.clone() }).unwrap();
     assert!(b.design().routing.as_ref().unwrap().tracks.is_empty());

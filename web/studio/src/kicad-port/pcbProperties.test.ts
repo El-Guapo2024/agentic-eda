@@ -406,11 +406,12 @@ test("a track: width, layer, net and the end points each go through their verb",
   assert.deepEqual(edit(b, ["trk_arc"], "End X", 24_000), [{ op: "edit_track", id: "trk_arc", end: { x: 24_000, y: 10_000 } }]);
 });
 
-test("a width of zero or less is refused, and so is taking a track off its net", () => {
+test("a track width of zero is taken (PGPROPERTY_SIZE, r2-pcb-edit A7), a negative one refused, and so is taking a track off its net", () => {
   const b = board();
-  const w = pcbEdit(b, ["trk_a"], "Width", 0, "mm");
+  assert.deepEqual(edit(b, ["trk_a"], "Width", 0), [{ op: "set_track_width", id: "trk_a", width: 0 }]);
+  const w = pcbEdit(b, ["trk_a"], "Width", -1, "mm");
   assert.equal(w.ok, false);
-  assert.match(!w.ok ? w.error : "", /^Width: Value must be greater than or equal to 0\.001 mm$/);
+  assert.match(!w.ok ? w.error : "", /^Width: Value must be greater than or equal to 0$/);
   const n = pcbEdit(b, ["trk_a"], "Net", "", "mm");
   assert.equal(n.ok, false);
   assert.match(!n.ok ? n.error : "", /needs a net/);

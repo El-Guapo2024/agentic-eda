@@ -3689,9 +3689,11 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// The Properties panel's Width and the width steps (`PCB_TRACK::SetWidth`): KiCad's grid row is a `PGPROPERTY_SIZE`, which takes 0 and refuses a negative size only
+    /// (r2-pcb-edit A7; the Track & Via Properties dialog's `GEOMETRY_MIN_SIZE` check is its own, `edit_tracks_and_vias`).
     fn set_track_width(&mut self, id: &str, width: Nm) -> Result<(), Vec<CheckResult>> {
-        if width <= Nm::ZERO {
-            return Err(vec![CheckResult::fail("ops_bad_track", id, "track width must be positive")]);
+        if width < Nm::ZERO {
+            return Err(vec![CheckResult::fail("ops_bad_track", id, "Value must be greater than or equal to 0")]);
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_track", id, "the board has no routing yet")])?;
         let t = rt.tracks.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_track", id, "no track with this id")])?;

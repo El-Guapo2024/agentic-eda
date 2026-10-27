@@ -875,7 +875,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     kind: "int",
     display: "size",
     get: (i) => i.track!.width,
-    validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
+    // `PGPROPERTY_SIZE` (no validator): 0 is a width, a negative one is not (r2-pcb-edit A7)
+    validate: (v) => (num(v) < 0 ? "Value must be greater than or equal to 0" : null),
     set: (i, v) => (i.track!.width === num(v) ? [] : [{ op: "set_track_width", id: i.id, width: Math.round(num(v)) }]),
   });
   const end = (t: Track, which: "start" | "end"): [number, number] => (which === "start" ? t.pts[0] : t.pts[t.pts.length - 1]) ?? [0, 0];
