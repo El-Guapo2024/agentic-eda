@@ -41,6 +41,8 @@ Scope, in priority order:
 - **Severity.** High. The router commits copper that kicad-cli's DRC rejects, and many keepouts are drawn on both sides or on `*.Cu` (KiCad's antenna and mounting-hole keepouts).
 - **Already known?** No. R-2's fix and its tests use one layer. PARITY Stage 15 lists only the holes and the subdivision as "Differs".
 
+**Fixed** on task-r3-router: 8980a235 (`add_keepouts` on each copper layer of `Zone::copper_layers()`; `a_keepout_is_an_obstacle_on_every_copper_layer_of_its_set`, slow `a_keepout_on_both_copper_layers_blocks_a_route_on_the_back`).
+
 ### R3-2. Copper graphics are not router obstacles: board shapes on copper (with or without a net), a footprint's copper shapes, dimensions, barcodes, tables and text boxes on copper
 
 - **What differs.**
@@ -73,6 +75,8 @@ Scope, in priority order:
   - A second case: a copper shape on net A. A route of net B must keep the clearance from it, and a route of net A may end on it.
 - **Severity.** High: a short or a clearance violation, committed silently.
 - **Already known?** No. GAPS item 7's "Left" lists only "a footprint's copper texts as obstacles". GAPS item 36's "copper graphics with a net" is about connectivity, not the router.
+
+**Fixed** on task-r3-router: f44f6bdd (`add_copper_graphics`: board and footprint shapes with net and connection points, text boxes, dimensions, barcodes, tables, footprint copper texts; the 20 QA boards checked). kicad-cli 10.99 reports no track against a copper graphic on the small test boards (it does on `simple.kicad_pcb`), so the no-net polygon's proof is the router-side gap; the net shape's route is judged by kicad-cli. `arc_boards.rs`'s random-shove check now counts violations from the tracks' side (a net-tie bridge of issue12609 seen as the probe had no exclusion): 27c4e9ae.
 
 ### R3-3. A route starts at the board's default width, not at the start net's class width (`ImportSizes`, `UseNetClassTrack()`)
 
@@ -107,6 +111,8 @@ Scope, in priority order:
 - **Severity.** High: every route of a non-Default class is at the wrong width, unless the user changes it by hand (the ratsnest's power nets, impedance classes).
 - **Already known?** No. r2-pcb-edit's finding about "Set to net class / custom rule values" is the same root in Edit Track & Via Properties. The router's start width is not listed anywhere.
 
+**Fixed** on task-r3-router: 9fc2ad42 (`settings::import_sizes`, `Router::import_sizes`, `/api/route/start` without a width; the studio sends none on "use net class": Canvas.tsx, Route Selected/Autoroute). pcbEditSweep.ts (Change Track Width) and pcbConvertSweep.ts (Convert to Tracks): **not a bug** -- KiCad uses `GetCurrentTrackWidth()` there, not `ImportSizes`.
+
 ---
 
 ## Medium
@@ -132,6 +138,8 @@ Scope, in priority order:
 - **Severity.** Medium. These are wrong defaults. kicad-cli flags them only when the rule has a `min` above the class value.
 - **Already known?** No. `CODE-COMPARE-router.md:216` (the `ImportSizes` row for a pair) is about the class's gap and via gap only.
 
+**Fixed** on task-r3-router: 9fc2ad42 (`DpSizes::import`, the armed via's size through `RuleResolver::via_size`; slow `a_pair_routed_at_the_rules_sizes_passes_kicad_clis_checks`; kicad-cli reports no `diff_pair_gap` on that board even under the minimum, so the gap is held by the test).
+
 ### R3-5. A keepout's holes are not cut out: the router will not route inside a keepout's cutout
 
 - **What differs.**
@@ -140,6 +148,8 @@ Scope, in priority order:
 - **How to see it.** Test `rules_kicad::a_route_may_cross_the_hole_of_a_keepout`. Make a 10 x 10 mm keepout (tracks) with a 4 x 4 mm hole, and two pads inside the hole. Route between them. Assert the route is straight. Today the start is refused ("The routing start point violates DRC.") or the route walks out of the area.
 - **Severity.** Medium: a route that KiCad allows is refused. No bad copper is committed.
 - **Already known?** Only as a "Differs" sentence in `crates/pns/PARITY.md` Stage 15 R-2 ("an area's holes are not cut out of it"). It is not in GAPS item 7's "Left". It is listed here so it reaches GAPS.
+
+**Fixed** on task-r3-router: 8980a235 (`keepout_triangles`: fractured outline and holes; slow `a_route_may_cross_the_hole_of_a_keepout`).
 
 ### R3-6. Margin-layer graphics are not board-edge obstacles
 
@@ -152,6 +162,8 @@ Scope, in priority order:
 - **How to see it.** Draw a line on Margin across the board, and route a track across it in Walk around mode. KiCad walks round it at the copper-to-edge clearance; we cross it, and kicad-cli reports `copper_edge_clearance`. Test `board_edge::a_margin_line_is_an_edge`.
 - **Severity.** Medium: an edge case, but the copper it commits is flagged by kicad-cli.
 - **Already known?** No.
+
+**Fixed** on task-r3-router: f44f6bdd (`add_margin`; slow `a_margin_line_holds_a_route_off_as_an_edge`). A footprint's own Margin graphics are not read.
 
 ### R3-7. Unflashed via and pad layers are still copper to the router (`IsFlashedOnLayer`), and the CODE-COMPARE reason for that is out of date
 
@@ -167,6 +179,8 @@ Scope, in priority order:
   - Test `node::tests::an_unflashed_via_is_its_hole_on_that_layer`.
 - **Severity.** Medium: we route more conservatively than KiCad on boards that use Remove Unused Pads. No violation results.
 - **Already known?** Partly: CODE-COMPARE :70 and :160, with a reason that is no longer true. It is not in GAPS item 7.
+
+**Fixed** on task-r3-router: b08d5ced (`RuleResolver::is_flashed_on` from `eda_connectivity::flash::flashed_layers`; `item_collision`, `obstacle_hull`); CODE-COMPARE rows 70 and 160 corrected.
 
 ### R3-8. The start point's refusals for a rule area and a text: "Rule area disallows tracks." and "Cannot start routing from a text item." are missing; a start inside a vias-only keepout is allowed
 
@@ -195,6 +209,8 @@ Scope, in priority order:
 - **Severity.** Medium: messages and an edge case.
 - **Already known?** No.
 
+**Fixed** on task-r3-router: 6203a913 (`Router::start_refusal`, and the pair's gap check first in `start_diff_pair`).
+
 ---
 
 ## Low
@@ -206,6 +222,8 @@ Scope, in priority order:
 - Test: `triangulation::tests::a_bow_tie_is_refused`, and `from_ir` adds no solid for it, plus a warning for the studio.
 - **Severity.** Low. **Known?** Only the subdivision half, in PARITY Stage 15.
 
+**Fixed** on task-r3-router: 8980a235 (left out with the warning) and 6203a913 (the warning in `/api/route/start`, a studio toast).
+
 ### R3-10. The dummy via's layer: KiCad's is the layer asked about; ours is always the first copper layer
 
 - Ours: `rule_resolver.rs:546-560` `dummy_via`: `it.layers = copper(); it.layer = it.layers.first().cloned();`, with no `Layer` property.
@@ -213,11 +231,15 @@ Scope, in priority order:
 - A custom rule `(condition "A.Type == 'Via' && A.Layer == 'B.Cu'")` matches the head's via on B.Cu in KiCad and never here.
 - **Severity.** Low (a rare condition).
 
+**Fixed** on task-r3-router: 9fc2ad42 (`dummy_via` on the layer asked about; `a_rule_on_a_vias_layer_reads_the_layer_asked_about`).
+
 ### R3-11. Net-tie pad groups: a backslash escape is not read, and a head of no net never matches a pad of no net
 
 - Ours: `rule_resolver.rs:333` splits `net_tie_pad_groups` on `,` and trims. `:465` requires `p.net.is_some() && p.net == *net`.
 - KiCad `FOOTPRINT::MapPadNumbersToNetTieGroups` keeps the character after a `\\` (`case '\\': esc = true;`). `DRC_ENGINE::IsNetTieExclusion` compares net codes (`aTrackNetCode == pad->GetNetCode()`), so code 0 matches code 0.
 - **Severity.** Low.
+
+**Fixed** on task-r3-router: 6203a913 (`net_tie_group_pads`, net-code compare).
 
 ---
 

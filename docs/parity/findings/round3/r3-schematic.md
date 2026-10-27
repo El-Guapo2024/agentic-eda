@@ -42,6 +42,8 @@ Scope: the round-2 tracer commits bc4f7c1d, f29b4fb7, d931295c, 5e1074a8 and 861
 
 ### A3-H1. A pin common to every unit is placed once, at the unit written last: a wire on the other unit's copy connects nothing (high)
 
+**Fixed** on task-r2-leftovers: 8f93aeee (a copy of the pin per placed unit; the net list keeps the pin on the wired copy's net, where KiCad's netlist also lists the other copy unconnected)
+
 **What differs.**
 - **Ours:** `trace_design`'s `pins_of` (`crates/cli/src/board.rs:590` for a studio-drawn symbol, `:611` for an imported one) keys a pin's point by `"REF.PIN"`: `pin_world.insert(format!("{}.{number}", sym.id), at)`. Since section 41 (P25-2), a common pin (unit 0) passes the filter `p.unit == 0 || p.unit == sym.unit` for *every* placed unit. So each unit inserts the same key, and the last unit in `sec.symbols` overwrites the others. The tracer then sees the common pin only at that unit's place. A wire to the pin on any other unit ends on nothing.
 - The name is affected too. `pin_units` (`board.rs:536`) uses `or_insert_with`, so the first unit's letter wins whichever unit is wired (`Net-(U1A-C)` where KiCad says `Net-(U1B-C)`).
@@ -60,6 +62,8 @@ Test to write, in `crates/cli/src/board.rs` tests: `a_common_pin_wired_on_the_fi
 **Already known?** No. P25-2 (fixed in section 41) made unit 0 survive the reader, and that fix exposed this.
 
 ### A3-H2. A bus sheet pin finds its members on the parent by the old engine's promotion rule, not 25ec2335's `drivesRecord` (high)
+
+**Fixed** on task-r2-leftovers: 8f93aeee (c5 and c5d now as kicad-cli names them)
 
 **What differs.**
 - **Ours:** `nets.rs:529-551` (`promoted`) and `:581` (`if !label && !promoted[g] { continue; }`) port 8303b2ad `connection_graph.cpp::processSubGraphs`. A bus that only a sheet pin names finds the parent's member nets only when:
@@ -95,6 +99,8 @@ Test to write, in `nets.rs`: `a_bus_sheet_pin_that_drives_its_bus_finds_the_pare
 
 ### A3-H3. After an edit, a net no label names keeps its old name, not KiCad's: `design.nets` and the derived schematic disagree (high)
 
+**Fixed** on task-r2-leftovers: 1e96d3ea (no old name inherited at all; a net the edit did not touch keeps its name)
+
 **What differs.**
 - **Ours:** `reconcile_schematic` (`board.rs:774-779`) runs `eda_engine::nets::follow` after every schematic command that changes connectivity. For a net the edit touched with no driver, `follow` takes the name of the old net most of its pins came from (`nets.rs:889`: `let inherited = ranked.iter().map(|(n, _)| *n).find(..)`). It uses the tracer's name (KiCad's) only when no old name is free.
   - `design.nets` is the net list the PCB, the exports and the checks read, and `reconcile_schematic` renames every wire after it. So the studio and the board show a name KiCad never gives that net.
@@ -115,6 +121,8 @@ Test to write, in `crates/cli/src/board.rs` tests: `an_undriven_net_an_edit_touc
 
 ### A3-M1. An ordinary symbol whose reference starts with `#` claims its net's name (medium)
 
+**Fixed** on task-r2-leftovers: 8f93aeee (`DoNetList()` is not modelled)
+
 **What differs.**
 - **Ours:** `trace_kicad_names` (`board.rs:520-530`) puts only the pins of `exclude_from_board` symbols into `quiet_pins`.
 - **KiCad 25ec2335** (`conn_facts.cpp`):
@@ -133,6 +141,8 @@ Test to write, in `crates/cli/src/board.rs` tests: `an_undriven_net_an_edit_touc
 **Already known?** No. Round 2's A-N9 fixed the excluded-from-board half only. The QA trace test filters out pins of `#` references (`sch_hierarchy_tests.rs:1334`), so it cannot see this.
 
 ### A3-M2. Bus members aligned by name when the canonical bus is a group and the other a vector; KiCad aligns by index unless both are groups (medium)
+
+**Fixed** on task-r2-leftovers: 8f93aeee (an unmatched group leaf still gets no slot of its own)
 
 **What differs.**
 - **Ours:** `nets.rs:593-597`. When the best bus driver is a group, a member of another bus on it is matched by its local name first: `best_members.iter().position(|b| group_local_name(..) == group_local_name(&name, m)).or_else(|| (child_vector && ..).then_some(i))`.
@@ -155,6 +165,8 @@ KiCad also reports the mixed shapes (`mixedBusShapes`), so this is an edge case.
 **Already known?** No.
 
 ### A3-M3. Of two nets of one name, the one the label names should keep it: the holder ignores the claims' strength and `CLAIM_LESS` (medium; partly known)
+
+**Fixed** on task-r2-leftovers: 8f93aeee (the last tie, KiCad's node key, is still ours: depth, then first pin)
 
 **What differs.**
 - **Ours:** `nets.rs:654` orders the colliding nets by the depth of their screen, then name, then first pin.
@@ -184,6 +196,8 @@ Section 44 lists "which keeps the bare name (KiCad: by item uuids)". That covers
 
 ### A3-M4. Highlight Net on a label highlights the label's text, not its net; a label is lit only when the net's name equals its text (medium)
 
+**Fixed** on task-r2-leftovers: 20f1c16c
+
 **What differs.**
 - **Ours:**
   - `netAtClick` (`web/studio/src/actions/schControlActions.ts:324`) makes each label an anchor with `net: l.net`. `l.net` is the label's *text*: `studio.rs:1901` sends `"net": l.net` of the `NetLabel`.
@@ -198,6 +212,8 @@ Section 44 lists "which keeps the bare name (KiCad: by item uuids)". That covers
 
 ### A3-L1. `@{..}` with an error: KiCad drops the label's net from the netlist, ours names it with the raw text (low)
 
+**Open** after task-r2-leftovers: not changed (low; ERC reports such labels anyway)
+
 Case `m1`, 15 expressions in local labels. 12 match kicad-cli exactly:
 - `1/3` gives 0.3333333333333333, `2^3^2` gives 512, `-2^2` gives -4, `7%3` gives 1, `10/4` and `2.50` give 2.5;
 - `1e3`, `2*(3+4)`, `1==1`, `3>2`, `0.1+0.2` (0.30000000000000004) and `1000000*1000000` also match.
@@ -205,6 +221,8 @@ Case `m1`, 15 expressions in local labels. 12 match kicad-cli exactly:
 `abs(-3)` is a function (known: functions not ported). For `1/0` and `5-`, kicad-cli's netlist has no net at all for the label's pin, while ours names it `/N@{1/0}`. ERC reports such labels anyway.
 
 ### A3-L2. Doc rows still cite the old engine (low)
+
+**Fixed** on task-r2-leftovers: 8f93aeee (nets.rs, net_labels.rs); PARITY-pcb.md row in the docs commit
 
 PARITY-pcb.md:2112 ("A net's name", marked **identical**) has `recacheName`, `driverName`, `compareDrivers` and `propagateToNeighbors` in its KiCad column. `nets.rs:1-33`'s module doc and `net_labels.rs:3` also name `connection_graph.cpp` for buses and `recacheName` for names. After section 44, they should name `conn_claims.cpp`, `conn_bindings.cpp` and `conn_signals.cpp`.
 
@@ -238,6 +256,8 @@ KiCad: 8303b2ad. The scratch cases are under `/tmp/findings-r3-schematic.jjpH/sl
 
 ### B3-H1. A sheet file outside the root's folder is written outside `.kicad/`, and can overwrite the user's own file (high)
 
+**Fixed** on task-r3-sch-files: 179c5cf5
+
 **What differs.**
 - **The reader.** Since 85b05524, `sheet_file_key` (`crates/kicad/src/sch_import.rs`) keys a screen by its path from the root's folder. For a file above that folder the key keeps the `..` in front (its doc says "A file outside the root's folder keeps its path from it with the `..` in front"). For an absolute `Sheetfile` the key is `../..` all the way up to `/`.
 - **The writer.** `export_schematic` (`crates/kicad-engine/src/lib.rs:563-567`) writes each screen at `work.join(name)`, after `create_dir_all(parent)`.
@@ -257,6 +277,8 @@ Possible fix: map a key that starts with `..`, or an absolute one, to a name ins
 **Already known?** No. GAPS item 4 says "sheets in a subfolder are read, keyed and written as KiCad resolves them".
 
 ### B3-M1. `Sheetfile` and `${SHEETFILE}` show the root-relative key, not the file's own text (medium)
+
+**Fixed** on task-r3-sch-files: 733537a4 (the canvas, move preview and `${SHEETFILE}`; the Properties panel still shows the key)
 
 **What differs.**
 - **Ours.** After 85b05524, `SheetInstance::file` holds the key. For example, a sheet placed by `ampli_ht/ampli_ht.kicad_sch` whose file field says `filter.kicad_sch` has `file = "ampli_ht/filter.kicad_sch"`. Three places use that key as the text:
@@ -284,6 +306,8 @@ Test to write: import that project, then assert two things:
 
 ### B3-M2. A sheet's user fields are lost by Paste, Duplicate and Import Sheet (medium)
 
+**Fixed** on task-r3-sch-files: cda452b1
+
 **What differs.**
 - **Ours.** 52ac71ac keeps the fields in the placing screen's `SchExtras::sheet_fields`, keyed by sheet id (`crates/model/src/sch_extras.rs:96-100`).
   - `add_sheet_tree` (`crates/ops/src/sch_sheets.rs:166-176`, `:207-211`) clears the new sheet's id and every inner sheet's id, and never moves `sheet_fields`.
@@ -298,6 +322,8 @@ Test to write: `a_pasted_sheet_keeps_its_user_fields`, and the same for Import S
 
 ### B3-M3. The studio's shown text does not resolve a sheet's user fields; only the tracer does (medium)
 
+**Fixed** on task-r3-sch-files: 733537a4
+
 **What differs.**
 - **Ours.** 52ac71ac added the fields to `PowerValueView::of` (`board.rs:692-694`) only. `SchShown::new` (`text_vars_json.rs:215-221`) still builds each level from `Sheetname` and `Sheetfile` alone.
 - **KiCad.** One `SCH_SHEET::ResolveTextVar` serves both the display and the netlist.
@@ -309,6 +335,8 @@ Test to write: build `SchShown` for that breadcrumb and assert that `${param}` s
 **Already known?** No. Section 44 says "resolved for what the sheet shows".
 
 ### B3-M4. A sheet whose file is missing is dropped from the walk, so pages collide in the derived file (medium)
+
+**Fixed** on task-r3-sch-files: 48f86d0f
 
 **What differs.**
 - **Ours.**
@@ -330,6 +358,8 @@ Test to write: `a_sheet_with_no_screen_keeps_its_place_in_the_page_numbers`.
 
 ### B3-M5. Another project's page for the same placement overrides this project's (medium, narrow)
 
+**Fixed** on task-r3-sch-files: 48f86d0f
+
 **What differs.**
 - **Ours.** The sheet reader (`sch_import.rs:564-577`) takes the first `(path ..)` of any project as the placement's page. It files any later differing page under the path with the first component dropped (`.skip(1)`), whatever root uuid that was. So `/<otherRoot>` and `/<thisRoot>` collide on the key `""`, and the later one wins in `sheet_pages`.
 - **KiCad.** `SCH_SHEET::getPageNumber( aParentPath )` (`sch_sheet.cpp:1794-1808`) compares the whole path, root uuid included: `if( instance.m_Path == aParentPath )`.
@@ -343,6 +373,8 @@ Fix: compare the first component with the root's uuid, and skip the instances of
 **Already known?** In part: round 2's B-L4 covers the symbol half.
 
 ### B3-M6. A sheet file that places itself is followed 32 levels deep; KiCad refuses it (medium, from the code)
+
+**Fixed** on task-r3-sch-files: 48f86d0f (a file that places itself is listed once, as kicad-cli lists 2 sheets; one placing a screen above its parent is listed empty)
 
 **What differs.**
 - **Ours.** `sheet_list::walk` has a depth cap (`path.len() > MAX_DEPTH`, 32, at `sheet_list.rs:58-61`) but no ancestor test. So a file that places itself gives 33 entries, and Annotate, `keep_pages` and the navigator all use them. The writer's own walk has an `in_progress` guard.
@@ -358,6 +390,8 @@ Test to write: `walk(d).len() == 2` for a screen that places its own file.
 
 ### B3-L1. Page numbers keep their whitespace; KiCad strips it on read (low)
 
+**Fixed** on task-r3-sch-files: 48f86d0f
+
 Neither the sheet reader (`sch_import.rs:564-570`) nor `legacy_sheet_instances` (`:996`) strips whitespace from a page. KiCad does, in `sch_io_kicad_sexpr_parser.cpp:3877-3887` and `:2585-2590`:
 ```
 // Whitespaces are not permitted
@@ -366,9 +400,13 @@ for( wxString ch : whitespaces ) instance.m_PageNumber.Replace( ch, wxEmptyStrin
 
 ### B3-L2. A sheet's own `(page "")` is not read as `#` (low)
 
+**Fixed** on task-r3-sch-files: 48f86d0f
+
 66d47b36 maps an empty page to `#` only in the root's `sheet_instances`. In a sheet's own instances, `sch_import.rs:570` still drops it. KiCad's `parseSchSheet` (`T_instances`, `:3870-3875`) says: "Empty page numbers are not permitted ... Use hash character instead".
 
 ### B3-L3. A deleted sheet's `sheet_fields` and `sheet_pages` stay behind (low, unconfirmed)
+
+**Fixed** on task-r3-sch-files: cda452b1
 
 No verb removes them. A sheet drawn again under the same id would take them back. I have not confirmed that ids can repeat.
 
@@ -411,6 +449,8 @@ KiCad: 8303b2ad `eeschema`. This slice was read from the code only. `eda` has no
 
 ### C3-H1. Deleting a junction (or an item with a junction on its point) leaves the wires split there; KiCad merges them, so connectivity differs (high)
 
+**Fixed** on task-r2-leftovers: 8bb401b6
+
 **What differs.**
 - **Ours:**
   - `delete_junction` (`crates/ops/src/lib.rs:4871`) only drops the dot.
@@ -442,6 +482,8 @@ The smaller cases (medium on their own):
 
 ### C3-M1. Only drawing a wire and the move/rotate/align tools run KiCad's commit-time `CleanUp` (medium)
 
+**Fixed** on task-r2-leftovers: 8bb401b6 (Delete and the placing verbs; other verbs that edit connectable items, e.g. Swap or Edit Properties, still do not)
+
 **What differs.**
 - **KiCad:** `sch_commit.cpp::pushSchEdit` sets `LOCAL_CLEANUP` for any commit that holds a connectable item ("Do a local clean up if there are any connectable objects in the commit."). It then calls `RecalculateConnections( this, connectivityCleanUp )`, which runs `CleanUp`.
 - **Ours:** `Scene::clean_up` (`sch_scene.rs:714`) runs from:
@@ -466,6 +508,8 @@ Test to write: `delete_power_symbol_on_wire_cleans_up`.
 
 ### C3-M2. `J` neither breaks the wires through the dot nor runs `CleanUp` (medium)
 
+**Fixed** on task-r2-leftovers: 8bb401b6 (a dot on fewer than three items is refused with KiCad's message)
+
 **What differs.**
 - **Ours:** `add_junction` (`lib.rs:4859-4868`) only pushes the dot. The writer then writes the wire unbroken through it.
 - **KiCad:** `sch_drawing_tools.cpp::SingleClickPlace` runs `lwbTool->AddJunction( &commit, screen, cursorPos ); m_frame->Schematic().CleanUp( &commit );`, and `AddJunction` ends with `BreakSegments( aCommit, aPos, aScreen );`.
@@ -476,6 +520,8 @@ Test to write: `delete_power_symbol_on_wire_cleans_up`.
 **Already known?** No. PARITY-sch.md:192 and :402 say identical.
 
 ### C3-M3. The wire tool finishes only on a pin; KiCad finishes on any terminal point, and a bus never finishes on a pin (medium)
+
+**Fixed** on task-r2-leftovers: 8bb401b6
 
 **What differs.**
 - **Ours:** `SchematicView.tsx:660-669` finishes on `onPin`, for both the wire and the bus tool.
@@ -489,6 +535,8 @@ Test to write: `delete_power_symbol_on_wire_cleans_up`.
 
 ### C3-M4. The clean-up never merges a `solid` wire with a `default` one (medium; new in c539e423)
 
+**Fixed** on task-r2-leftovers: 8bb401b6
+
 **What differs.**
 - **Ours:** `sch_scene.rs:767` merges two wires only if `stroke_of(i1) == stroke_of(i2)`. A file wire with `(type solid)` is stored as `SchLineStyle::Solid` (`sch_extras.rs:415`, `:645-647`), and a wire drawn in the studio has no stroke entry. So the two never merge.
 - **KiCad:** `sch_line.h::IsStrokeEquivalent` treats DEFAULT and SOLID as equal: `style_a == style_b || ( style_a == LINE_STYLE::DEFAULT && style_b == LINE_STYLE::SOLID ) || ( style_a == LINE_STYLE::SOLID && style_b == LINE_STYLE::DEFAULT )`.
@@ -498,6 +546,8 @@ Test to write: `delete_power_symbol_on_wire_cleans_up`.
 **Already known?** No.
 
 ### C3-L1. `add_wire`'s `finishSegments` also runs for Break/Slice and Repeat (low)
+
+**Open** after task-r2-leftovers: not changed (Break and Repeat need verbs of their own); the stale `add_wire` doc is fixed in 8bb401b6 and says so
 
 - **Callers:** `schBreak.ts:92-102` and `schRepeat.ts:68` send `add_wire` too.
 - **KiCad finishes those differently:**
@@ -510,6 +560,8 @@ Test to write: `delete_power_symbol_on_wire_cleans_up`.
 
 ### C3-L2. Align cleans up only the items that moved (low)
 
+**Fixed** on task-r2-leftovers: 4cdc30e7 (every item cleaned up; "nothing to move" is still refused rather than an empty commit)
+
 - **Ours:** `sch_move.rs:1295-1316` passes only the moved items to the clean-up.
 - **KiCad:** `doAlignCleanup` adds every item of `itemsToAlign`, the anchor included.
 - **Nothing to move:** ours returns `ops_nothing_to_move`; KiCad pushes an empty commit silently.
@@ -517,16 +569,22 @@ Test to write: `delete_power_symbol_on_wire_cleans_up`.
 
 ### C3-L3. The sheet-pin special case of a drag (89e27c22) differs in two narrow ways (low, unconfirmed effect)
 
+**Open** after task-r2-leftovers: not changed (unconfirmed effect)
+
 - **Past a junction:** ours (`sch_drag.rs:161-172`) records the pin even when a junction is there. KiCad's `getConnectedItems` returns early: "If you're connected to a junction, you're only connected to the junction."
 - **Per pin:** KiCad's `m_specialCaseSheetPins` keeps one line per pin; ours keeps every line.
 
 ### C3-L4. Autoplace decides "power symbol" by the library flag, not by the `#` reference (low)
+
+**Fixed** on task-r2-leftovers: 4cdc30e7 (the `#` rule; the body box's library text is still a point)
 
 - **KiCad:** `m_is_power_symbol = !schSymbol->IsInNetlist()`, where `m_isInNetlist = !ref.StartsWith( wxT( "#" ) )` (`sch_symbol.cpp:974`).
 - **Ours:** `fields.rs:438` uses `lib.power`. The two differ for a `#LOGO`-style symbol.
 - **Body box:** `symgeom.rs:104` counts a library text as one point. `GetBodyBoundingBox` uses the text's `GetBoundingBox()`.
 
 ### C3-L5. PARITY-sch.md:191 is stale (low)
+
+**Fixed** on task-r2-leftovers: the docs commit (PARITY-sch.md rows 188, 191, 192)
 
 It says T-junction dots are "never a stored item". Since 9decd1b9, `add_wire` and `settle_placed` store them in `sch.junctions`.
 
@@ -580,6 +638,8 @@ D3-H1, D3-M1, D3-M2 and D3-L5 come from that.
 
 ### D3-H1. Nine ERC checks of the running kicad-cli are unknown to the studio (high)
 
+**Fixed** on task-r3-sch-files: 201f2183
+
 **What differs.** 25ec2335 `erc_item.cpp` and `erc_settings.cpp` add nine checks:
 
 | Check key | KiCad title | Default severity |
@@ -611,6 +671,8 @@ Test to write: add `"empty_label_name": "ignore"` to `a_kicad_projects_erc_setti
 
 ### D3-M1. Three check titles are 8303b2ad's (medium)
 
+**Fixed** on task-r3-sch-files: 201f2183
+
 25ec2335 dropped the suffix " (lower/upper case difference only)" from three titles. `erc_checks.json:227` and its two neighbours still carry it:
 - KiCad's `_HKI( "Labels are similar")`;
 - "Power pins are similar";
@@ -619,6 +681,8 @@ Test to write: add `"empty_label_name": "ignore"` to `a_kicad_projects_erc_setti
 These titles show on the Severity page and in every menu label, so one row can mix both wordings.
 
 ### D3-M2. On 25ec2335, Ignore for `pin_to_pin` no longer silences pin-to-pin errors (medium)
+
+**Not a bug** (as KiCad reads the project): 25ec2335 persists only the warning slot, so KiCad itself reports the errors again after reopening the project and kicad-cli always does; only its in-session menu state differs. Documented in PARITY-sch section 45
 
 **What differs.**
 - **In 8303b2ad**, `GetSeverity` made both pin-to-pin codes follow the warning slot: `if( m_ERCSeverities.at( ERCE_PIN_TO_PIN_WARNING ) == RPT_SEVERITY_IGNORE ) return RPT_SEVERITY_IGNORE;`.
@@ -633,6 +697,8 @@ These titles show on the Severity page and in every menu label, so one row can m
 
 ### D3-M3. Placing a symbol with sheet number x 100 / x 1000 always numbers as page 1 (medium; part of the 96cc869b fix)
 
+**Fixed** on task-r3-sch-files: d9fb4d14
+
 - **Ours:** `placementMinRef( algo, start, sheetNumber = 1 )` (`nextReference.ts`) is called with no sheet number by both callers: `SchematicView.tsx:768` and `useActionRunner.ts:2276` (Repeat).
 - **KiCad:** `PlaceSymbol` runs `ReannotateByOptions( .., &hierarchy )`, which does `ref.SetSheetNumber( path->GetPageNumberAsInt() )`, so `minRefId = m_sheetNum * aSheetIntervalId + 1`.
 - **Example:** a resistor placed on page 2 with X 100 gets R201 in KiCad and R101 in ours.
@@ -642,6 +708,8 @@ These titles show on the Severity page and in every menu label, so one row can m
 
 ### D3-M4. A placed PWR_FLAG is named `#PWR0n`; KiCad names it `#FLG0n` (medium)
 
+**Fixed** on task-r3-sch-files: d9fb4d14 (also the built-in PWR_FLAG said #PWR)
+
 - **Ours:** `add_power_symbol` (`crates/ops/src/lib.rs:5103-5106`, cd6e6bf2) formats `#PWR0{n}` and counts only `#PWR` ids. `PowerSymbolDialog.tsx:14` offers `power:PWR_FLAG` through this same command.
 - **KiCad:** numbers the library's prefix, `#FLG` (`FindFirstUnusedReference`, `formatRefStr` "0%d"), so the flag is `#FLG01`.
 - **Our own generator** already writes `#FLG{n:02}` (`engine/src/flat.rs:233`, `hier/mod.rs:213`).
@@ -649,6 +717,8 @@ These titles show on the Severity page and in every menu label, so one row can m
 Test to write: `add_power_symbol` of `power:PWR_FLAG` gives `#FLG01`.
 
 ### D3-M5. A placed power symbol ignores the method, the start number, the other placements of a shared screen and the per-path references (medium; the rest of r2 D-A2)
+
+**Fixed** on task-r3-sch-files: d9fb4d14 (method and start number; left: a shared screen still gives one reference, power symbols have no per-path reference in the model)
 
 - **Ours:** cd6e6bf2 takes the first free number over the power-symbol ids of every screen.
 - **KiCad's `PlaceSymbol` `annotate`** (`sch_drawing_tools.cpp:220-246`) does three things ours does not:
@@ -661,6 +731,8 @@ Test to write: `add_power_symbol` of `power:PWR_FLAG` gives `#FLG01`.
 
 ### D3-M6. The paste anchor is still off when a KiCad clipboard's segments meet end to end (medium; the rest of r2 D-C2)
 
+**Fixed** on task-r3-sch-files: 70bddba8
+
 - **Ours:** `join_bends` (`kicad/src/sch_clipboard.rs:133-185`) reverses a segment it joins at its end (`pts.extend(wires[j].pts.iter().rev().skip(1))`), and only then does `top_left_anchor` (`sch_clipboard_api.rs:197`, `model/src/sch_clipboard.rs:395`) look at the segment starts.
 - **KiCad:** `GetTopLeftItem` uses each `SCH_LINE`'s stored start.
 - **Example:** two wires, `(xy 20 10) (xy 10 10)` and `(xy 10 20) (xy 10 10)`.
@@ -671,21 +743,31 @@ Our own copies are not affected.
 
 ### D3-L1. Annotate's Selection scope recurses into sheets inside a selected group (low)
 
+**Fixed** on task-r3-sch-files: 5aea27d7
+
 `annotateSelectionOf` (96cc869b) takes sheets from `leafIds`. KiCad's `AnnotateSymbols` takes sheets from the top-level selected items only (`for( EDA_ITEM* item : selection ) if( item->Type() == SCH_SHEET_T )`).
 
 ### D3-L2. The D-C9 fix follows 8303b2ad; 25ec2335 is back to the full lib id (low, version note)
+
+**Fixed** on task-r3-sch-files: 5aea27d7 (follows 25ec2335: CompareLibId)
 
 25ec2335 `refdes_tracker.cpp::areUnitsAvailable` and `sch_reference_list.cpp:229` and `:559` use `CompareLibId`, while 4d5db9e6 moved ours to `CompareLibName`'s item name. 25ec2335 `mapExistingAnnotation` also uses `SYMBOL_FILTER_NON_POWER`.
 
 ### D3-L3. Import drops the whole pin map when one cell is bad (low)
 
+**Fixed** on task-r3-sch-files: 5aea27d7
+
 `import_kicad.rs:389-391` and `pcb.rs:871` keep the map only if all 144 cells are `<= 2`. KiCad's loader (25ec2335 `erc_settings.cpp:218-243`) keeps every good cell (`val >= 0 && val <= PIN_ERROR::UNCONNECTED`, which is 0..3) and leaves a bad one at its default.
 
 ### D3-L4. Legacy duplicate exclusions with two comments: KiCad's order is sorted, ours is the file's (low)
 
+**Fixed** on task-r3-sch-files: 5aea27d7
+
 25ec2335 keeps `std::set<std::pair<wxString, wxString>>` and never replaces a non-empty comment. So for `[[t,"b"],[t,"a"]]` KiCad keeps "a", and ours keeps "b" (`erc_exclusions.rs:363-367`).
 
 ### D3-L5. The marker path rules are still the old engine's (low, unconfirmed)
+
+**Fixed** on task-r3-sch-files: 5aea27d7 (the six non-connectivity rules; footprint_link_issues probed on kicad-cli)
 
 - **Ours:** `erc_exclusions.rs::rule` gives no paths to:
   - `lib_symbol_issues`, `lib_symbol_mismatch`;
