@@ -229,6 +229,37 @@ pub fn placement_at<'a>(design: &'a Design, path: &[String]) -> Option<&'a Sheet
     screen_of(design, parents)?.sheets.iter().find(|s| s.id == *last)
 }
 
+/// The key of the screen shown at `path` (`""` for the root): the file of the placement there.
+pub fn screen_key_at(design: &Design, path: &[String]) -> String {
+    placement_at(design, path).map(|p| p.file.clone()).unwrap_or_default()
+}
+
+/// The folder of the screen `key` (its path from the root's folder): `ampli_ht` of `ampli_ht/filter.kicad_sch`, `""` of `a.kicad_sch`.
+pub fn screen_folder(key: &str) -> &str {
+    key.rsplit_once('/').map_or("", |(d, _)| d)
+}
+
+/// `file` (a screen's key: its path from the root's folder, `ampli_ht/filter.kicad_sch`) as the file in `folder` that places it names it: relative to that
+/// folder (`filter.kicad_sch` from `ampli_ht`, `../a.kicad_sch` from `ampli_ht` to a file beside the root), an absolute one as it is.
+pub fn sheet_file_relative_to(folder: &str, file: &str) -> String {
+    if file.starts_with('/') {
+        return file.to_string();
+    }
+    let from: Vec<&str> = folder.split('/').filter(|c| !c.is_empty()).collect();
+    let to: Vec<&str> = file.split('/').filter(|c| !c.is_empty()).collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count().min(to.len().saturating_sub(1));
+    let mut parts: Vec<&str> = std::iter::repeat_n("..", from.len() - common).collect();
+    parts.extend(&to[common..]);
+    parts.join("/")
+}
+
+/// A sheet's `Sheetfile` text, its `SHEET_FILENAME` field (`SCH_SHEET::GetFileName`, what `${SHEETFILE}` and the drawn field show): its screen `file` as
+/// the screen `placing_key` that places it names it ([`sheet_file_relative_to`] from that screen's folder). A sheet inside `ampli_ht/ampli_ht.kicad_sch`
+/// whose screen is `ampli_ht/filter.kicad_sch` shows `filter.kicad_sch`, as the file says.
+pub fn sheet_file_text(placing_key: &str, file: &str) -> String {
+    sheet_file_relative_to(screen_folder(placing_key), file)
+}
+
 /// The sheets inside the sheet at `path`, itself included when `include_self` (`SCH_SHEET_LIST::GetSheetsWithinPath`), in walk order.
 pub fn within<'a>(entries: &'a [SheetEntry], path: &[String], include_self: bool) -> Vec<&'a SheetEntry> {
     entries.iter().filter(|e| e.path.starts_with(path) && (include_self || e.path.len() > path.len())).collect()

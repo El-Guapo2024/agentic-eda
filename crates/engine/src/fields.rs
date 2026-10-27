@@ -796,10 +796,18 @@ pub fn sheet_placements(sheet: &SheetInstance) -> Vec<FieldPlacement> {
     ]
 }
 
+/// The sheet's Sheetname and Sheetfile fields on `sch`, a screen beside the root (or one whose sheets already name their files as it does: the writer's).
 pub fn sheet_fields(sch: &SchematicSection, sheet: &SheetInstance) -> Vec<PageField> {
+    sheet_fields_on(sch, sheet, "")
+}
+
+/// [`sheet_fields`] on the screen `placing_key`: the Sheetfile is the file's own text, the screen's key as that screen names it
+/// (`eda_model::sheet_list::sheet_file_text`, `SCH_SHEET::GetFileName`), not the key from the root's folder.
+pub fn sheet_fields_on(sch: &SchematicSection, sheet: &SheetInstance, placing_key: &str) -> Vec<PageField> {
     let stored = sch.field_layout.get(&sheet.id);
     let auto = sheet_placements(sheet);
-    [("Sheetname", sheet.name.as_str()), ("Sheetfile", sheet.file.as_str())]
+    let file = eda_model::sheet_list::sheet_file_text(placing_key, &sheet.file);
+    [("Sheetname", sheet.name.as_str()), ("Sheetfile", file.as_str())]
         .iter()
         .map(|(name, text)| {
             let p = stored.and_then(|s| s.iter().find(|p| p.name == *name)).or_else(|| auto.iter().find(|p| p.name == *name)).cloned().expect("a placement for each sheet field");

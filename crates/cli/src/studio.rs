@@ -1975,11 +1975,13 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             .find(|e| e.path.len() == here.len() + 1 && e.path.starts_with(&here) && e.path.last() == Some(&s.id))
             .map_or_else(|| eda_model::sheet_list::page_on(&sch, s, &here).to_string(), eda_model::sheet_list::SheetEntry::effective_page)
     };
+    // the screen in view: a sheet's Sheetfile is its file as this screen names it (r3 B3-M1)
+    let placing_key = viewed_file(design, &breadcrumb);
     let sheets: Vec<Value> = sch
         .sheets
         .iter()
         .map(|s| {
-            let mut fields = eda_engine::fields::sheet_fields(&sch, s).iter().map(|f| page_field_json(&s.id, f)).collect::<Vec<_>>();
+            let mut fields = eda_engine::fields::sheet_fields_on(&sch, s, &placing_key).iter().map(|f| page_field_json(&s.id, f)).collect::<Vec<_>>();
             if let Some(sh) = &shown {
                 sh.annotate_sheet_fields(&mut fields);
             }
@@ -2040,7 +2042,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
 
 /// The file of the screen the breadcrumb ends on (`""` for the root): the title block of the sheet in view names it. The sheets
 /// of the whole design are `GET /api/sch/hierarchy`.
-fn viewed_file(design: &eda_model::ir::Design, breadcrumb: &[(String, String)]) -> String {
+pub(crate) fn viewed_file(design: &eda_model::ir::Design, breadcrumb: &[(String, String)]) -> String {
     let mut here = design.schematic.as_ref();
     let mut file = String::new();
     for (id, _) in breadcrumb {

@@ -168,16 +168,7 @@ impl ScreenCtx {
 /// `file` (a screen's name: its path from the root's folder, `ampli_ht/filter.kicad_sch`) as the file in `folder` that places it names it: relative to that
 /// folder (`filter.kicad_sch` from `ampli_ht`, `../a.kicad_sch` from `ampli_ht` to a file beside the root).
 pub fn sheet_file_relative_to(folder: &str, file: &str) -> String {
-    // an absolute name is the file's own text (`wxFileName::IsAbsolute`: KiCad reads it as it is)
-    if file.starts_with('/') {
-        return file.to_string();
-    }
-    let from: Vec<&str> = folder.split('/').filter(|c| !c.is_empty()).collect();
-    let to: Vec<&str> = file.split('/').filter(|c| !c.is_empty()).collect();
-    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count().min(to.len().saturating_sub(1));
-    let mut parts: Vec<&str> = std::iter::repeat_n("..", from.len() - common).collect();
-    parts.extend(&to[common..]);
-    parts.join("/")
+    eda_model::sheet_list::sheet_file_relative_to(folder, file)
 }
 
 /// The name the screen `file` (its key: its path from the root's folder) is written at in the derived schematic's work folder: the key itself, but with each
@@ -203,7 +194,7 @@ pub fn sheet_file_in_work(file: &str) -> String {
 
 /// The folder of the screen `file` (its name from the root's folder): `ampli_ht` of `ampli_ht/filter.kicad_sch`, `""` of `a.kicad_sch`.
 pub fn sheet_file_folder(file: &str) -> String {
-    file.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default()
+    eda_model::sheet_list::screen_folder(file).to_string()
 }
 
 /// A sheet's own uuid: its id when that already is one, else one derived from it. KiCad reads a sheet's identity from the uuid, and

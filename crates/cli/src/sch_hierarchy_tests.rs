@@ -1603,3 +1603,51 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
 fn kicad_cli_net_groups_opt(root: &Path) -> Vec<Vec<String>> {
     std::panic::catch_unwind(|| kicad_cli_net_groups(root)).unwrap_or_default()
 }
+
+/// The QA project `rel` brought in with `eda import-kicad`, its folder copied whole: the board folder, or `None` without `KICAD_SRC_DIR`.
+fn qa_imported(rel: &str, name: &str) -> Option<PathBuf> {
+    let src = std::env::var_os("KICAD_SRC_DIR").map(PathBuf::from)?.join("qa/data/eeschema").join(rel);
+    let work = scratch(name);
+    copy_tree(src.parent().unwrap(), &work.join("src"));
+    let dir = work.join("board");
+    crate::import_kicad::run(&[work.join("src").join(src.file_name().unwrap()).display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    Some(dir)
+}
+
+/// The placement ids from the root down to the first sheet (depth first) whose screen is `file`.
+fn path_to_file(design: &eda_model::ir::Design, file: &str) -> Vec<String> {
+    eda_model::sheet_list::walk(design).into_iter().find(|e| e.file == file).unwrap_or_else(|| panic!("a sheet of {file}")).path
+}
+
+/// r3 B3-M1: a sheet's `Sheetfile` is its `SHEET_FILENAME` field's text (`SCH_SHEET::GetFileName`), as the file that places it says it: the Filter sheet of
+/// QA `complex_hierarchy_shared`, placed by `ampli_ht/ampli_ht.kicad_sch`, says `filter.kicad_sch`, not its key `ampli_ht/filter.kicad_sch`; and
+/// `${SHEETFILE}` (`SCH_SHEET::ResolveTextVar`) on its screen shows the same.
+#[test]
+fn a_sheets_file_shows_as_the_placing_file_names_it() {
+    let Some(dir) = qa_imported("netlists/complex_hierarchy_shared/complex_hierarchy.kicad_sch", "sheetfile_text") else { return };
+    let (meta, design, model) = load(&dir).unwrap();
+    let filter = path_to_file(&design, "ampli_ht/filter.kicad_sch");
+    let parent = filter[..filter.len() - 1].join("/");
+    let json = crate::studio::schematic_json_of(&design, &model, &parent);
+    let sheet = json["sheets"].as_array().unwrap().iter().find(|s| s["id"] == filter.last().unwrap().as_str()).unwrap();
+    let field = sheet["fields"].as_array().unwrap().iter().find(|f| f["name"] == "Sheetfile").unwrap();
+    assert_eq!(field["text"], "filter.kicad_sch", "{sheet}");
+    let (_, breadcrumb) = crate::studio::resolve_sheet(&design, &filter.join("/"));
+    let project = crate::text_vars_json::project(&dir, &meta.intent, eda_model::text_vars::Clock::utc_now());
+    let shown = crate::text_vars_json::SchShown::new(&dir, &design, &model, &breadcrumb, project);
+    assert_eq!(shown.text_shown("${SHEETFILE}"), "filter.kicad_sch");
+}
+
+/// r3 B3-M3: the studio's shown text resolves a sheet's user fields as the tracer does (one `SCH_SHEET::ResolveTextVar`): `${param}` on a sub-sheet of QA
+/// `ERC_dynamic_power_symbol_test` shows that sheet's `param` field.
+#[test]
+fn the_shown_text_resolves_a_sheets_user_fields() {
+    let Some(dir) = qa_imported("ERC_dynamic_power_symbol_test.kicad_sch", "sheet_user_fields_shown") else { return };
+    let (meta, design, model) = load(&dir).unwrap();
+    let root = design.schematic.as_ref().unwrap();
+    let sub = root.sheets.iter().find(|s| s.name == "ERC_dynamic_power_symbol_subsheet1").expect("the sub-sheet");
+    let (_, breadcrumb) = crate::studio::resolve_sheet(&design, &sub.id);
+    let project = crate::text_vars_json::project(&dir, &meta.intent, eda_model::text_vars::Clock::utc_now());
+    let shown = crate::text_vars_json::SchShown::new(&dir, &design, &model, &breadcrumb, project);
+    assert_eq!(shown.text_shown("${param}"), "param_subsheet_1");
+}
