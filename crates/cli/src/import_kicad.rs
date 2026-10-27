@@ -344,6 +344,7 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
         let _ = std::fs::remove_dir_all(out.join(".history"));
         eprintln!("import-kicad: schematic: {summary}");
         if args.input.to_ascii_lowercase().ends_with(".kicad_sch") {
+            keep_project_erc_settings(out, Path::new(&args.input))?;
             keep_project_erc_exclusions(out, Path::new(&args.input))?;
         }
     }
@@ -363,6 +364,46 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
     }
     eprintln!("wrote {}", out.join("design.json").display());
     Ok(())
+}
+
+/// The project's own ERC settings and connection grid (`.kicad_pro` beside `root`), which kicad-cli judges the original by (r2 D-E1):
+/// - `erc.rule_severities` (`ERC_SETTINGS`'s loader: `if( aJson.contains( key ) ) m_ERCSeverities[code] = SeverityFromString( aJson[key] )`), as Schematic Setup's
+///   choices (`SchExtras::erc_severities`) for the checks whose severity is not KiCad's default -- but the three library-link checks, which the derived project
+///   keeps at ignore (`effective_erc_severities`: every symbol is embedded there);
+/// - `erc.pin_map` (`SetPinMapValue( i, j, val )` for a 12 x 12 array of 0..2), as the design's pin map when it is not KiCad's default;
+/// - `schematic.connection_grid_size` (mils, `SCHEMATIC_SETTINGS::m_ConnectionGridSize`), when it is not the default 50.
+fn keep_project_erc_settings(out: &Path, root: &Path) -> Result<(), Vec<CheckResult>> {
+    let Ok(pro_text) = std::fs::read_to_string(root.with_extension("kicad_pro")) else { return Ok(()) };
+    let Ok(pro) = serde_json::from_str::<serde_json::Value>(&pro_text) else { return Ok(()) };
+    let mut severities = std::collections::BTreeMap::new();
+    if let Some(rules) = pro["erc"]["rule_severities"].as_object() {
+        for (key, value) in rules {
+            let Some(value) = value.as_str().filter(|v| ["error", "warning", "ignore"].contains(v)) else { continue };
+            let library_link = ["lib_symbol_issues", "lib_symbol_mismatch", "footprint_link_issues"].contains(&key.as_str());
+            if !library_link && eda_model::erc_checks::default_severity(key).is_some_and(|d| d != value) {
+                severities.insert(key.clone(), value.to_string());
+            }
+        }
+    }
+    let pin_map: Option<Vec<Vec<u8>>> = pro["erc"]["pin_map"].as_array().filter(|rows| rows.len() == 12).and_then(|rows| {
+        rows.iter().map(|r| r.as_array().filter(|r| r.len() == 12).and_then(|r| r.iter().map(|v| v.as_u64().filter(|v| *v <= 2).map(|v| v as u8)).collect::<Option<Vec<u8>>>())).collect()
+    });
+    let pin_map = pin_map.filter(|m| *m != eda_model::ir::ErcPinMap::default_matrix());
+    let grid = pro["schematic"]["connection_grid_size"].as_f64().map(|g| g.round() as u32).filter(|&g| g != 50 && g > 0);
+    if severities.is_empty() && pin_map.is_none() && grid.is_none() {
+        return Ok(());
+    }
+    let (_, mut design, _) = crate::board::load(out)?;
+    let Some(sch) = design.schematic.as_mut() else { return Ok(()) };
+    eprintln!("  the project's ERC settings kept: {} severities, {} pin map, connection grid {}", severities.len(), if pin_map.is_some() { "its" } else { "the default" }, grid.map_or("50".to_string(), |g| g.to_string()));
+    sch.extras.erc_severities.extend(severities);
+    if let Some(m) = pin_map {
+        sch.erc_pin_map = Some(eda_model::ir::ErcPinMap { matrix: m });
+    }
+    if grid.is_some() {
+        sch.extras.connection_grid_mils = grid;
+    }
+    crate::board::save(out, &design)
 }
 
 /// The project's own ERC exclusions (`erc.erc_exclusions` of the `.kicad_pro` beside `root`, `ERC_SETTINGS::m_ErcExclusions`), their items and sheets named as the

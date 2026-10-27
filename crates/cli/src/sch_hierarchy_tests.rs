@@ -1167,6 +1167,27 @@ fn a_hidden_power_input_pin_joins_the_net_of_its_name() {
     }
 }
 
+/// r2 D-E1 (`ERC_SETTINGS`'s `rule_severities` and `pin_map` loaders, `SCHEMATIC_SETTINGS`'s `connection_grid_size`): `eda import-kicad` of a schematic brings
+/// its project's ERC severities, pin map and connection grid with it, so the derived project's ERC judges as kicad-cli judges the original (QA `issue22938`
+/// ignores `pin_not_connected`; ours reported 50 of them). A library-link check stays at the derived project's ignore.
+#[test]
+fn a_kicad_projects_erc_settings_come_in_with_the_schematic() {
+    let work = scratch("project_erc_settings");
+    let root = work.join("p.kicad_sch");
+    std::fs::write(&root, include_str!("../tests/fixtures/hidden_power_pins.kicad_sch")).unwrap();
+    let mut pin_map = eda_model::ir::ErcPinMap::default_matrix();
+    pin_map[1][1] = (pin_map[1][1] + 1) % 3;
+    std::fs::write(root.with_extension("kicad_pro"), json!({ "erc": { "rule_severities": { "pin_not_connected": "ignore", "lib_symbol_mismatch": "warning", "pin_to_pin": "warning" }, "pin_map": pin_map }, "schematic": { "connection_grid_size": 100.0 } }).to_string()).unwrap();
+    let dir = work.join("board");
+    crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let severities = eda_kicad::effective_erc_severities(&design);
+    assert_eq!(severities.get("pin_not_connected").map(String::as_str), Some("ignore"));
+    assert_eq!(severities.get("lib_symbol_mismatch").map(String::as_str), Some("ignore"), "the derived project's library-link checks stay ignored");
+    assert_eq!(eda_kicad::custom_erc_pin_map(&design).unwrap()[1][1], pin_map[1][1]);
+    assert_eq!(design.schematic.as_ref().unwrap().extras.connection_grid_mils, Some(100));
+}
+
 /// p13-p16 F6, the ERC half: a KiCad project's own ERC exclusions come in with `eda import-kicad`, named as the derived schematic names its items, and
 /// kicad-cli still waives the violation on the studio's run. The record is the one KiCad 10 writes for kicad-cli's own marker of U1's unconnected pin 1 (and
 /// kicad-cli reads it as excluded on the original project first).
