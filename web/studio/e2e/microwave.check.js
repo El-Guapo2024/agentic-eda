@@ -252,10 +252,13 @@
       const s = (await mine())[0];
       t(!!s && s.footprint === "muwave_stub", `a muwave_stub (${s?.footprint})`);
       if (!s) return;
-      const pad = (n) => s.pads.find((q) => q.num === n);
-      t(near(pad("1").x, s.at[0], 1000) && near(pad("1").y, s.at[1], 1000) && pad("1").w === TW && pad("1").h === TW, "pad 1 is the track's square at the origin");
-      t(pad("2").w === TW && pad("2").h === 1_500_000, `pad 2 is as wide as the track and 1.5 mm long (${pad("2").w} x ${pad("2").h})`);
-      t(near(pad("2").y, s.at[1] - (1_500_000 + TW) / 2, 1000), `above it: -(stub + h) / 2 (${pad("2").y - s.at[1]})`);
+      // both pads are numbered 1: `createBaseFootprint` inserts each pad first, so `Pads().begin()` -- pad 2 -- is the one renamed 1 (round 3 D-7)
+      t(s.pads.length === 2 && s.pads.every((q) => q.num === "1"), `both pads are pad 1 (${s.pads.map((q) => q.num)})`);
+      const square = s.pads.find((q) => q.h === TW);
+      const stub = s.pads.find((q) => q !== square);
+      t(!!square && near(square.x, s.at[0], 1000) && near(square.y, s.at[1], 1000) && square.w === TW, "the track's square at the origin");
+      t(!!stub && stub.w === TW && stub.h === 1_500_000, `the stub is as wide as the track and 1.5 mm long (${stub?.w} x ${stub?.h})`);
+      t(!!stub && near(stub.y, s.at[1] - (1_500_000 + TW) / 2, 1000), `above it: -(stub + h) / 2 (${stub ? stub.y - s.at[1] : "none"})`);
       const f = s.fields.find((q) => q.name === "Reference");
       t(f && f.w === TW && f.h === TW, `the Reference text is the track's size too (${f?.w})`);
       await deleteAll();
@@ -504,7 +507,7 @@
       t(!!m, "a second shape");
       if (!m) return;
       block = blockOf(await pcbText(), m.ref);
-      t(/\(pad "1" smd rect \(at -2 0 0\)/.test(block) && /\(pad "2" smd rect \(at 2 0 0\)/.test(block), "edited to 4 mm, the pads are 4 mm apart");
+      t(/\(pad "2" smd rect \(at -2 0 0\)/.test(block) && /\(pad "1" smd rect \(at 2 0 0\)/.test(block), "edited to 4 mm, the pads are 4 mm apart");
       const mir = /\(fp_poly \(pts \(xy -2 0\) \(xy -2 ([\d.]+)\)/.exec(block);
       t(!!mir && Number(mir[1]) > 0, `Mirrored puts the polygon below the line (y ${mir?.[1]})`);
       await deleteAll();
