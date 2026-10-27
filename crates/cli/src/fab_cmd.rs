@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! eda fab gerbers <dir> [--layers F.Cu,B.Cu,...]
-//! eda fab drill   <dir> [--separate-th] [--generate-report]
+//! eda fab drill   <dir> [--merge-pth-npth] [--alt-drill-mode] [--generate-report]
 //! eda fab pos     <dir> [--format csv|ascii] [--side front|back|both] [--units mm|in] [--smd-only] [--exclude-fp-th] [--exclude-dnp] [--separate-sides]
 //! eda fab bom     <dir>
 //! ```
@@ -30,19 +30,19 @@ pub fn run(argv: &[String]) -> Result<(), Vec<CheckResult>> {
     let opts = &argv[2.min(argv.len())..];
     match verb.as_str() {
         "gerbers" => {
+            let (_, design, model) = board::load(&dir)?;
+            let plot = fab_api::plot_params_of(&design);
             let layers: Vec<String> = match flag_value(opts, "--layers") {
                 Some(list) => list.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect(),
-                None => {
-                    let (_, _, model) = board::load(&dir)?;
-                    fab_api::default_gerber_layers(&model.board.layers)
-                }
+                None => fab_api::board_plot_layers(&plot, &model.board.layers),
             };
             if layers.is_empty() {
                 return Err(fail("fab", "--layers", "--layers named no layers"));
             }
-            print_written(&dir, kicad_engine::export(&dir, "gerbers", &fab_api::gerber_args(&layers))?)
+            print_written(&dir, kicad_engine::export(&dir, "gerbers", &fab_api::gerber_args(&layers, &plot))?)
         }
-        "drill" => print_written(&dir, kicad_engine::export(&dir, "drill", &fab_api::drill_args(has_flag(opts, "--separate-th"), has_flag(opts, "--generate-report")))?),
+        // The Generate Drill Files dialog's defaults: PTH and NPTH in two files and slots routed; `--merge-pth-npth` and `--alt-drill-mode` are its two boxes.
+        "drill" => print_written(&dir, kicad_engine::export(&dir, "drill", &fab_api::drill_args(has_flag(opts, "--merge-pth-npth"), has_flag(opts, "--alt-drill-mode"), has_flag(opts, "--generate-report")))?),
         "pos" => {
             let format = flag_value(opts, "--format").unwrap_or("csv");
             if !matches!(format, "csv" | "ascii") {

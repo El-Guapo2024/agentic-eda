@@ -2609,6 +2609,10 @@ pub struct DrawingsSection {
     /// `(covering (front no) (back no))`, `(plugging ..)`, `(capping no)` and `(filling no)`. Additive: absent reads as "none".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub setup_tokens: Vec<String>,
+    /// The board's plot settings, `(setup (pcbplotparams ..))` (KiCad's `PCB_PLOT_PARAMS`), as an imported board had them -- see [`crate::plot_params`]. The Plot dialog
+    /// and kicad-cli's `--board-plot-params` plot with them. Additive: absent in an older `design.json` (and for a board that never had a block) reads as KiCad's defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_params: Option<crate::plot_params::PlotParams>,
     /// The items of the board file that nothing reads (a text box, a reference image, a target, a table, a board-level property, whatever a newer KiCad adds), each as the file
     /// wrote it on one line: not in the design, not on the canvas, and written back where the board ends, so that the file kicad-cli judges and plots has them. Additive: absent
     /// in an older `design.json` reads as "none". Lives here for the reason `rules` does.

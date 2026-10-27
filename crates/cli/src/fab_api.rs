@@ -36,15 +36,74 @@ pub(crate) fn default_gerber_layers(copper: &[String]) -> Vec<String> {
     v
 }
 
-/// `kicad-cli pcb export gerbers --layers ...`.
-pub(crate) fn gerber_args(layers: &[String]) -> Vec<String> {
-    vec!["--layers".into(), layers.join(",")]
+/// `kicad-cli pcb export gerbers --layers ...` with the board's plot settings (`plot`, the board's `PCB_PLOT_PARAMS`), which is what
+/// KiCad's Plot dialog plots with (`DIALOG_PLOT::Plot` -> `m_editFrame->GetPlotSettings()`): each Gerber option of the block becomes
+/// kicad-cli's flag for it (`PCB_PLOTTER::PlotJobToPlotOpts` is the way back), so a board that says `(usegerberextensions no)` -- KiCad's
+/// default -- is plotted as `-F_Cu.gbr`, not as kicad-cli's own default `-F_Cu.gtl`.
+///
+/// Differs: kicad-cli's `--board-plot-params` would read the block itself, but it plots every copper layer the board has whatever the
+/// selection says and ignores `--layers` (`PCBNEW_JOBS_HANDLER::JobExportGerbers`: `( GetLayerSelection() & AllNonCuMask() ) |
+/// ( GetEnabledLayers() & AllCuMask() )`), where the dialog plots the layers checked in it; so the flags are passed one by one. The
+/// legacy `plotreference`/`plotvalue` tokens are not read by `PCB_PLOT_PARAMS_PARSER` (both stay on), and kicad-cli always writes the
+/// Gerber job file (`m_createJobsFile`), whatever `creategerberjobfile` says.
+pub(crate) fn gerber_args(layers: &[String], plot: &eda_model::plot_params::PlotParams) -> Vec<String> {
+    let mut a: Vec<String> = vec!["--layers".into(), layers.join(",")];
+    let on = |key: &str, default: bool| plot.flag(key).unwrap_or(default);
+    if !plot.plot_on_all_layers.is_empty() {
+        a.extend(["--common-layers".into(), plot.plot_on_all_layers.join(",")]);
+    }
+    if !on("usegerberextensions", false) {
+        a.push("--no-protel-ext".into());
+    }
+    if !on("usegerberattributes", true) {
+        a.push("--no-x2".into());
+    }
+    if !on("usegerberadvancedattributes", true) {
+        a.push("--no-netlist".into());
+    }
+    if on("disableapertmacros", false) {
+        a.push("--disable-aperture-macros".into());
+    }
+    if on("subtractmaskfromsilk", false) {
+        a.push("--subtract-soldermask".into());
+    }
+    // `SetGerberPrecision`: 5, or else 6.
+    let precision = plot.item("gerberprecision").and_then(|i| i.trim_start_matches("(gerberprecision").trim_end_matches(')').trim().parse::<i32>().ok()).unwrap_or(6);
+    a.extend(["--precision".into(), if precision == 5 { "5" } else { "6" }.into()]);
+    if on("plotframeref", false) {
+        a.push("--include-border-title".into());
+    }
+    if on("sketchpadsonfab", false) {
+        a.push("--sketch-pads-on-fab-layers".into());
+        if on("plotpadnumbers", false) {
+            a.push("--sketch-pad-numbers".into());
+        }
+    }
+    if on("hidednponfab", false) {
+        a.push("--hide-DNP-footprints-on-fab-layers".into());
+    }
+    if on("sketchdnponfab", true) {
+        a.push("--sketch-DNP-footprints-on-fab-layers".into());
+    }
+    if on("crossoutdnponfab", true) {
+        a.push("--crossout-DNP-footprints-on-fab-layers".into());
+    }
+    a
 }
 
-/// `kicad-cli pcb export drill` (Excellon).
-pub(crate) fn drill_args(separate_th: bool, report: bool) -> Vec<String> {
+/// The board's plot settings: an imported board's own block, else `PCB_PLOT_PARAMS`' defaults.
+pub(crate) fn plot_params_of(design: &eda_model::ir::Design) -> eda_model::plot_params::PlotParams {
+    design.drawings.as_ref().and_then(|d| d.plot_params.clone()).unwrap_or_else(eda_model::plot_params::PlotParams::kicad_default)
+}
+
+/// `kicad-cli pcb export drill` (Excellon), as the Generate Drill Files dialog asks for it (`DIALOG_GENDRILL::genDrillAndMapFiles`):
+/// `merge_pth_npth` is "PTH and NPTH in single file" (`m_Check_Merge_PTH_NPTH`, unchecked by default, so two files), and oval holes are
+/// routed (`SetRouteModeForOvalHoles( !m_altDrillMode )`, `G00`/`M15`..) unless "Use alternate drill mode" (`alt_drill_mode`, `G85`) is checked.
+/// kicad-cli's own defaults are the other way round on both (`--excellon-oval-format alternate`, one file).
+pub(crate) fn drill_args(merge_pth_npth: bool, alt_drill_mode: bool, report: bool) -> Vec<String> {
     let mut a: Vec<String> = vec!["--format".into(), "excellon".into()];
-    if separate_th {
+    a.extend(["--excellon-oval-format".into(), if alt_drill_mode { "alternate" } else { "route" }.into()]);
+    if !merge_pth_npth {
         a.push("--excellon-separate-th".into());
     }
     if report {
@@ -75,11 +134,6 @@ pub(crate) fn bom_args() -> Vec<String> {
     ["--fields", "Value,Reference,Footprint,LCSC", "--labels", "Comment,Designator,Footprint,LCSC Part #", "--group-by", "Value,Footprint,LCSC", "--sort-field", "Reference", "--exclude-dnp"].map(String::from).to_vec()
 }
 
-fn copper_layers(dir: &Path) -> Result<Vec<String>, String> {
-    let (_, _, model) = board::load(dir).map_err(|e| board::reasons(&e))?;
-    Ok(model.board.layers.clone())
-}
-
 /// `POST /api/fab/gerbers`: `{"layers": ["F.Cu", "B.Cu", ...]}` (omitted or
 /// empty = [`default_gerber_layers`], the Plot dialog's own default
 /// checklist). `"check_zones": true` is the dialog's "Check zone fills before plotting": KiCad's filler runs first when some zone has no current fill
@@ -91,14 +145,27 @@ pub fn gerbers(dir: &Path, body: &[u8]) -> Value {
             return err(format!("Zones not filled before plotting: {why}"));
         }
     }
+    let (design, model) = match board::load(dir) {
+        Ok((_, d, m)) => (d, m),
+        Err(e) => return err(board::reasons(&e)),
+    };
+    let plot = plot_params_of(&design);
     let mut layers: Vec<String> = req.get("layers").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
     if layers.is_empty() {
-        layers = match copper_layers(dir) {
-            Ok(c) => default_gerber_layers(&c),
-            Err(e) => return err(e),
-        };
+        layers = board_plot_layers(&plot, &model.board.layers);
     }
-    reply(kicad_engine::export(dir, "gerbers", &with_aux_origin("gerbers", gerber_args(&layers), &req)))
+    // The dialog's "Use drill/place file origin" starts as the board's `useauxorigin`; a request that says nothing plots as the board says.
+    let mut req = req;
+    if req.get("use_aux_origin").is_none() && plot.flag("useauxorigin").unwrap_or(false) {
+        req["use_aux_origin"] = Value::Bool(true);
+    }
+    reply(kicad_engine::export(dir, "gerbers", &with_aux_origin("gerbers", gerber_args(&layers, &plot), &req)))
+}
+
+/// The layers the board's plot settings select, of those the board has (its copper layers, and every non-copper layer, which a
+/// `.kicad_pcb` always defines): the Plot dialog's checklist as `DIALOG_PLOT::init_Dialog` fills it from `GetLayerSelection()`.
+pub(crate) fn board_plot_layers(plot: &eda_model::plot_params::PlotParams, copper: &[String]) -> Vec<String> {
+    plot.layer_selection.iter().filter(|l| !eda_model::layers::is_copper_layer_name(l) || copper.contains(l)).cloned().collect()
 }
 
 /// `use_aux_origin: true` in a plot dialog's JSON: measure from the drill/place file origin
@@ -115,10 +182,12 @@ pub(crate) fn with_aux_origin(kind: &str, mut args: Vec<String>, req: &Value) ->
     args
 }
 
-/// `POST /api/fab/drill`: `{"separate_th": bool, "use_aux_origin": bool}`.
+/// `POST /api/fab/drill`: `{"merge_pth_npth": bool, "alt_drill_mode": bool, "use_aux_origin": bool}`, the Generate Drill Files dialog's
+/// "PTH and NPTH in single file", "Use alternate drill mode" and Origin (each unchecked / Absolute by default, as in KiCad's dialog).
 pub fn drill(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    reply(kicad_engine::export(dir, "drill", &with_aux_origin("drill", drill_args(req.get("separate_th").and_then(Value::as_bool).unwrap_or(false), false), &req)))
+    let flag = |k: &str| req.get(k).and_then(Value::as_bool).unwrap_or(false);
+    reply(kicad_engine::export(dir, "drill", &with_aux_origin("drill", drill_args(flag("merge_pth_npth"), flag("alt_drill_mode"), false), &req)))
 }
 
 /// `POST /api/fab/pos`: `{"format": "csv"|"ascii", "side": "front"|"back"|"both",
@@ -165,13 +234,33 @@ mod tests {
     fn the_default_plot_is_copper_mask_paste_silk_and_the_outline() {
         let l = default_gerber_layers(&["F.Cu".into(), "In1.Cu".into(), "B.Cu".into()]);
         assert_eq!(l.join(","), "F.Cu,In1.Cu,B.Cu,F.Mask,B.Mask,F.Paste,B.Paste,F.SilkS,B.SilkS,Edge.Cuts");
-        assert_eq!(gerber_args(&l), vec!["--layers", "F.Cu,In1.Cu,B.Cu,F.Mask,B.Mask,F.Paste,B.Paste,F.SilkS,B.SilkS,Edge.Cuts"]);
+        // `PCB_PLOT_PARAMS`' default selection, of the layers a 4-layer board has, in `PCB_LAYER_ID` order.
+        let plot = eda_model::plot_params::PlotParams::kicad_default();
+        assert_eq!(board_plot_layers(&plot, &["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()]).join(","), "F.Cu,F.Mask,B.Cu,B.Mask,In1.Cu,F.SilkS,In2.Cu,B.SilkS,F.Paste,B.Paste,Edge.Cuts");
     }
 
+    /// X3 (r2-editors-exports): the plot uses the board's plot settings, as KiCad's Plot dialog does.
     #[test]
-    fn drill_options_become_flags() {
-        assert_eq!(drill_args(false, false), vec!["--format", "excellon"]);
-        assert_eq!(drill_args(true, true), vec!["--format", "excellon", "--excellon-separate-th", "--generate-report"]);
+    fn the_plot_uses_the_boards_plot_settings() {
+        let l: Vec<String> = vec!["F.Cu".into(), "B.Cu".into()];
+        let plot = eda_model::plot_params::PlotParams::kicad_default();
+        assert_eq!(
+            gerber_args(&l, &plot),
+            vec!["--layers", "F.Cu,B.Cu", "--no-protel-ext", "--precision", "6", "--sketch-DNP-footprints-on-fab-layers", "--crossout-DNP-footprints-on-fab-layers"],
+            "KiCad's defaults: .gbr names, X2 with netlist attributes, DNP footprints sketched and crossed out on the fab layers"
+        );
+        let mut own = plot.clone();
+        for (k, v) in [("usegerberextensions", "yes"), ("subtractmaskfromsilk", "yes"), ("gerberprecision", "5"), ("usegerberattributes", "no"), ("sketchdnponfab", "no"), ("crossoutdnponfab", "no")] {
+            own.set_item(k, v);
+        }
+        assert_eq!(gerber_args(&l, &own), vec!["--layers", "F.Cu,B.Cu", "--no-x2", "--subtract-soldermask", "--precision", "5"]);
+    }
+
+    /// X1, X2 (r2-editors-exports): the Generate Drill Files dialog's defaults are KiCad's, not kicad-cli's.
+    #[test]
+    fn drill_defaults_are_the_dialogs() {
+        assert_eq!(drill_args(false, false, false), vec!["--format", "excellon", "--excellon-oval-format", "route", "--excellon-separate-th"], "slots routed, PTH and NPTH in two files");
+        assert_eq!(drill_args(true, true, true), vec!["--format", "excellon", "--excellon-oval-format", "alternate", "--generate-report"]);
     }
 
     #[test]
@@ -180,8 +269,8 @@ mod tests {
         let off = serde_json::json!({});
         assert_eq!(with_aux_origin("gerbers", vec!["--layers".into(), "F.Cu".into()], &on), vec!["--layers", "F.Cu", "--use-drill-file-origin"]);
         assert_eq!(with_aux_origin("pos", vec![], &on), vec!["--use-drill-file-origin"]);
-        assert_eq!(with_aux_origin("drill", drill_args(false, false), &on), vec!["--format", "excellon", "--drill-origin", "plot"]);
-        assert_eq!(with_aux_origin("drill", drill_args(false, false), &off), vec!["--format", "excellon"], "unset: the absolute origin, kicad-cli's default");
+        assert_eq!(with_aux_origin("drill", vec![], &on), vec!["--drill-origin", "plot"]);
+        assert!(with_aux_origin("drill", vec![], &off).is_empty(), "unset: the absolute origin, kicad-cli's default");
     }
 
     #[test]

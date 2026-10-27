@@ -249,6 +249,11 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     if !setup_tokens.is_empty() {
         design.drawings.get_or_insert_with(Default::default).setup_tokens = setup_tokens;
     }
+    // The board's plot settings, `(setup (pcbplotparams ..))`, which the Plot dialog plots with.
+    if let Some(plot) = sexpr::find(root, "setup").and_then(|s| sexpr::find(s, "pcbplotparams")) {
+        let version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
+        design.drawings.get_or_insert_with(Default::default).plot_params = Some(import_plot_params(plot, version));
+    }
     // `(setup (aux_axis_origin x y))`: the drill/place file origin the board was saved with.
     if let Some(aux) = sexpr::find(root, "setup").and_then(|s| sexpr::find(s, "aux_axis_origin")) {
         if let (Some(x), Some(y)) = (sexpr::num(aux, 1), sexpr::num(aux, 2)) {
@@ -594,6 +599,23 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
     import_solder_mask_setup(root, &mut board);
     import_formatting_and_hatch_offsets(root, &mut board);
     board
+}
+
+/// `(setup (pcbplotparams ..))` as `PCB_PLOT_PARAMS_PARSER::Parse` reads it: the two layer sets decoded by the file's version (`T_layerselection`, `T_plot_on_all_layers_selection`:
+/// a number is the legacy "pretty 3" stack, a hex value of a file older than 20240819 is in the legacy layer numbers), every other item kept as written.
+fn import_plot_params(plot: &[Sexpr], version: i64) -> eda_model::plot_params::PlotParams {
+    use eda_model::plot_params::decode_layer_selection;
+    let mut p = eda_model::plot_params::PlotParams::default();
+    for item in plot.iter().skip(1).filter_map(Sexpr::as_list) {
+        let selection = |l: &[Sexpr]| sexpr::txt(l, 1).map(|v| decode_layer_selection(v, version, v.parse::<f64>().is_ok()));
+        match sexpr::tag(item) {
+            Some("layerselection") => p.layer_selection = selection(item).unwrap_or_default(),
+            Some("plot_on_all_layers_selection") => p.plot_on_all_layers = selection(item).unwrap_or_default(),
+            Some(_) => p.items.push(sexpr::to_text(&Sexpr::List(item.to_vec()))),
+            None => {}
+        }
+    }
+    p
 }
 
 /// `(setup (pcbplotparams (dashed_line_dash_ratio ..) (dashed_line_gap_ratio ..)))` (Text & Graphics > Formatting) and `(setup (zone_defaults (property (layer ..) (hatch_position (xy ..)))))`

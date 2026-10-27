@@ -1026,8 +1026,8 @@ fn export_fab(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
     let pos_out = dir.join(format!("{title}-positions.csv")).display().to_string();
     let bom_out = dir.join(format!("{title}-bom.csv")).display().to_string();
     let mut jobs: Vec<(&str, Vec<String>, std::path::PathBuf)> = vec![
-        ("gerbers", [vec!["pcb".to_string(), "export".into(), "gerbers".into()], fab_api::gerber_args(&gerber_layers), vec!["-o".into(), dir_out.clone()]].concat(), pcb.clone()),
-        ("drill", [vec!["pcb".to_string(), "export".into(), "drill".into()], fab_api::drill_args(false, false), vec!["-o".into(), dir_out]].concat(), pcb.clone()),
+        ("gerbers", [vec!["pcb".to_string(), "export".into(), "gerbers".into()], fab_api::gerber_args(&gerber_layers, &fab_api::plot_params_of(design)), vec!["-o".into(), dir_out.clone()]].concat(), pcb.clone()),
+        ("drill", [vec!["pcb".to_string(), "export".into(), "drill".into()], fab_api::drill_args(false, false, false), vec!["-o".into(), dir_out]].concat(), pcb.clone()),
         ("positions", [vec!["pcb".to_string(), "export".into(), "pos".into()], fab_api::pos_args("csv", "both", true, false, false), vec!["--exclude-dnp".into(), "-o".into(), pos_out]].concat(), pcb.clone()),
     ];
     if sch.exists() {

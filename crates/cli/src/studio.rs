@@ -1447,6 +1447,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
         "locked": design.drawings.as_ref().map(|d| d.locked_ids.clone()).unwrap_or_default(),
         // The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`), `[x, y]` um, or null at (0, 0).
         "aux_origin": design.drawings.as_ref().and_then(|d| d.aux_origin).map(|p| json!([p.x, p.y])),
+        // The board's plot settings as the Plot and Generate Drill Files dialogs start from them (`DIALOG_PLOT::init_Dialog`,
+        // `DIALOG_GENDRILL::TransferDataToWindow`): the layer selection, of the layers the board has, and "Use drill/place file origin".
+        "plot_params": plot_params_json(&design, &model),
         // The point the editing grid is anchored at (`BOARD_DESIGN_SETTINGS::GetGridOrigin`), `[x, y]` um, or null at (0, 0).
         "grid_origin": design.drawings.as_ref().and_then(|d| d.grid_origin).map(|p| json!([p.x, p.y])),
         // The board's paper and title block (Page Settings); null is A4 landscape / an empty title block.
@@ -1499,6 +1502,13 @@ fn outline_polys_json(design: &eda_model::ir::Design, model: Option<&eda_model::
             .map(|i| json!({ "outer": ring(outline.polys.outline(i)), "holes": (0..outline.polys.hole_count(i)).map(|h| ring(outline.polys.hole(i, h))).collect::<Vec<_>>() }))
             .collect(),
     )
+}
+
+/// The board's plot settings as the Plot and Generate Drill Files dialogs start from them (`DIALOG_PLOT::init_Dialog`, `DIALOG_GENDRILL::TransferDataToWindow`):
+/// the layer selection, of the layers the board has, and "Use drill/place file origin".
+fn plot_params_json(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Value {
+    let plot = crate::fab_api::plot_params_of(design);
+    json!({ "layers": crate::fab_api::board_plot_layers(&plot, &model.board.layers), "use_aux_origin": plot.flag("useauxorigin").unwrap_or(false) })
 }
 
 /// What `kicad-cli pcb drc` reports as `invalid_outline` ("Board has malformed outline") for this board, from the live port of the same check:

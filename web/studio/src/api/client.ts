@@ -341,12 +341,19 @@ export interface FabReply {
  * runs first when some zone has no current fill.
  */
 export function postFabGerbers(layers?: string[], useAuxOrigin = false, checkZones = false): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), ...(useAuxOrigin ? { use_aux_origin: true } : {}), ...(checkZones ? { check_zones: true } : {}) });
+  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), use_aux_origin: useAuxOrigin, ...(checkZones ? { check_zones: true } : {}) });
 }
 
-/** `useAuxOrigin`: the drill dialog's Origin choice, "Drill/place file origin" instead of "Absolute". */
-export function postFabDrill(separateTh: boolean, useAuxOrigin = false): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/drill", { separate_th: separateTh, ...(useAuxOrigin ? { use_aux_origin: true } : {}) });
+/** The Generate Drill Files dialog's options (`DIALOG_GENDRILL`): "PTH and NPTH in single file", "Use alternate drill mode" (oval holes as
+ * G85 slots instead of routed), and the Origin choice "Drill/place file origin" instead of "Absolute". */
+export interface FabDrillOptions {
+  merge_pth_npth: boolean;
+  alt_drill_mode: boolean;
+  use_aux_origin: boolean;
+}
+
+export function postFabDrill(opts: FabDrillOptions): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/drill", opts);
 }
 
 export interface FabPosOptions {

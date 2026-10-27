@@ -111,16 +111,18 @@
       }
     });
 
-    await scenario("Generate Drill Files: one Excellon file for all the holes, or the plated and non-plated holes apart", async (t) => {
+    await scenario("Generate Drill Files: the plated and non-plated holes in two Excellon files (KiCad's default), or in one with \"PTH and NPTH in single file\"", async (t) => {
       if (!(await open(t, "pcbnew.EditorControl.generateDrillFiles", "Generate Drill Files"))) return;
       let res = await press(/^Generate Drill File$/, "fab/drill");
-      const merged = judged(t, "drill", res, /\.(drl|gbr)$/i);
-      t(res.reply?.req?.separate_th === false, "merged by default");
-      box("Generate independent files")?.click();
+      const apart = judged(t, "drill", res, /\.(drl|gbr)$/i);
+      t(res.reply?.req?.merge_pth_npth === false && res.reply?.req?.alt_drill_mode === false, "two files and routed slots by default (m_Check_Merge_PTH_NPTH, m_altDrillMode unchecked)");
+      t(apart.some((f) => /-PTH\.drl$/.test(f)), `apart: ${apart.map(base).join(", ")}`);
+      box("PTH and NPTH in single file")?.click();
       await sleep(1500); // the second-long window of the file list, as above
       res = await press(/^Generate Drill File$/, "fab/drill");
-      const apart = res.reply?.body?.files ?? [];
-      t(res.reply?.body?.ok === true && apart.some((f) => /PTH/i.test(f)) && apart.length >= merged.length, `apart: ${apart.map(base).join(", ")}`);
+      const merged = res.reply?.body?.files ?? [];
+      t(res.reply?.body?.ok === true && res.reply?.req?.merge_pth_npth === true && !merged.some((f) => /PTH\.drl$/i.test(f)), `merged: ${merged.map(base).join(", ")}`);
+      box("PTH and NPTH in single file")?.click();
     });
 
     await scenario("Generate Placement Files: CSV with both sides in KiCad's -all-pos file, or the -top-pos and -bottom-pos ones; ASCII", async (t) => {
