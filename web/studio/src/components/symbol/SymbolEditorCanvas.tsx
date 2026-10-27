@@ -35,7 +35,6 @@ import { isMac } from "../../platform";
 import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
 import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
 import { distToSegment } from "../canvas/itemHitTest";
-import { nextPinNumber } from "../../kicad-port/pinNumbering";
 import { polyBegin, polyContinue, polyFinish } from "../../kicad-port/symPolyDraw";
 import { newPinFromClick } from "../../kicad-port/symPinTemplate";
 import { pinShown } from "../../kicad-port/symPinText";
@@ -390,12 +389,9 @@ export function SymbolEditorCanvas() {
     const [sx, sy] = placing ? toolPoint(e, wx, wy) : [wx, wy];
 
     if (state.activeTool === "pin" && sym) {
-      // `SYMBOL_EDITOR_PIN_TOOL::CreatePin`: the click makes the pin (the sticky defaults at that place) and Pin Properties asks for its
-      // properties before it is added -- OK adds it, Cancel drops it. The pin just placed may not be in `sym.pins` yet (the document is
-      // re-polled after the round trip), so the next number is seeded from `lastPlacedPin` too, as the C++ tool's `g_lastPin` carry does.
-      const last = state.lastPlacedPin;
-      const number = nextPinNumber(last && last.libId === state.libId ? [...sym.pins, { number: last.number }] : sym.pins);
-      dispatch({ type: "SET_PENDING_PIN", pin: newPinFromClick(state.pinTemplate, state.activeUnit, state.activeBodyStyle, number, nmPointToMm(sx, sy)) });
+      // `SYMBOL_EDITOR_PIN_TOOL::CreatePin`: the click makes the pin (the sticky defaults at that place, no name and no number) and Pin
+      // Properties asks for its properties before it is added -- OK adds it, Cancel drops it.
+      dispatch({ type: "SET_PENDING_PIN", pin: newPinFromClick(state.pinTemplate, state.activeUnit, state.activeBodyStyle, nmPointToMm(sx, sy)) });
       return;
     }
 
@@ -549,18 +545,8 @@ export function SymbolEditorCanvas() {
     else if (hit?.kind === "graphic") openGraphicProperties(hit.id);
   };
 
-  const rotatePinSelection = useCallback(
-    (ccw: boolean) => {
-      for (const id of state.selection) {
-        const p = api.pinById(id);
-        if (!p) continue;
-        const delta = ccw ? 90 : -90;
-        const angle = ((p.angle_deg + delta) % 360 + 360) % 360;
-        void api.editPin(id, { ...p, angle_deg: angle });
-      }
-    },
-    [state.selection, api]
-  );
+  // `SYMBOL_EDITOR_EDIT_TOOL::Rotate`: the selection about one point, one undo step (the store's `rotateSelection`).
+  const rotatePinSelection = useCallback((ccw: boolean) => void api.rotateSelection(ccw), [api]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && state.drawState) {
@@ -576,11 +562,7 @@ export function SymbolEditorCanvas() {
     // `eeschema.InteractiveEdit.properties` (actions/editorFrameActions.ts), which the window-level hotkey runs. The canvas keeps Backspace, which the hotkey
     // table binds on a Mac only (`macHotkey`).
     if (e.key === "Backspace" && !/Mac/.test(navigator.platform) && state.selection.size > 0 && state.activeTool === "select") {
-      for (const id of state.selection) {
-        if (api.pinById(id)) void api.deletePin(id);
-        else if (api.graphicById(id)) void api.deleteGraphic(id);
-      }
-      dispatch({ type: "CLEAR_SELECTION" });
+      void api.deleteItems([...state.selection]);
     }
   };
 
@@ -621,7 +603,12 @@ export function SymbolEditorCanvas() {
           ...(stack.canExplode ? [{ label: "Explode Stacked Pin", onSelect: () => run("eeschema.InteractiveEdit.explodeStackedPin") }] : []),
         ] as MenuEntry[];
       })(),
-      { label: "Delete (Del)", onSelect: () => refs.forEach((id) => (api.pinById(id) ? void api.deletePin(id) : void api.deleteGraphic(id))), disabled: refs.length === 0 },
+      // `SYMBOL_EDITOR_EDIT_TOOL::Init`'s clipboard rows: Cut, Copy, Paste, Duplicate, then Delete -- each one undo step.
+      { label: "Cut", onSelect: () => void api.copySelection(true), disabled: refs.length === 0 },
+      { label: "Copy", onSelect: () => void api.copySelection(false), disabled: refs.length === 0 },
+      { label: "Paste", onSelect: () => void api.pasteItems(), disabled: !state.copiedItems },
+      { label: "Duplicate", onSelect: () => void api.duplicateSelection(), disabled: refs.length === 0 },
+      { label: "Delete (Del)", onSelect: () => void api.deleteItems(refs), disabled: refs.length === 0 },
     ];
     setContextMenu({ x: e.clientX, y: e.clientY, entries });
   };

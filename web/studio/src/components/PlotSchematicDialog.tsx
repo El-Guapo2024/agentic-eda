@@ -1,6 +1,6 @@
 // File > Plot... on the Schematic tab -- eeschema's DIALOG_PLOT_SCHEMATIC
 // (dialog_plot_schematic.cpp, SCH_PLOT_OPTS): output format, colour vs.
-// black and white, "Plot drawing sheet", "Use background color", page size,
+// black and white, "Plot drawing sheet", "Plot background color", page size,
 // and all pages vs. the current one. The real dialog also offers PostScript/
 // DXF/PNG, a colour-theme chooser and PDF property popups -- not wired here
 // (see PARITY-sch.md section 10); kicad-cli has no page-size override, so
@@ -27,7 +27,7 @@ export function PlotSchematicDialog() {
 
   useEffect(() => {
     if (!open) return;
-    setForm({ ...DEFAULT_SCH_PLOT_FORM });
+    // The choices of the last plot stay (`DIALOG_SHIM::LoadControlState` restores them); only the result is cleared.
     setResult(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -56,10 +56,10 @@ export function PlotSchematicDialog() {
           <fieldset style={{ marginBottom: 10 }}>
             <legend>Output format</legend>
             <label style={{ display: "block" }}>
-              <input type="radio" checked={form.format === "svg"} onChange={() => set({ format: "svg" })} /> SVG (one file per sheet)
+              <input type="radio" checked={form.format === "pdf"} onChange={() => set({ format: "pdf" })} /> PDF (one page per sheet)
             </label>
             <label style={{ display: "block" }}>
-              <input type="radio" checked={form.format === "pdf"} onChange={() => set({ format: "pdf" })} /> PDF (one page per sheet)
+              <input type="radio" checked={form.format === "svg"} onChange={() => set({ format: "svg" })} /> SVG (one file per sheet)
             </label>
           </fieldset>
           <fieldset style={{ marginBottom: 10 }}>
@@ -82,8 +82,8 @@ export function PlotSchematicDialog() {
             <label style={{ display: "block", marginTop: 6 }}>
               <input type="checkbox" checked={form.plotDrawingSheet} onChange={(e) => set({ plotDrawingSheet: e.target.checked })} /> Plot drawing sheet (frame and title block)
             </label>
-            <label style={{ display: "block", opacity: form.color ? 1 : 0.5 }}>
-              <input type="checkbox" disabled={!form.color} checked={form.useBackgroundColor} onChange={(e) => set({ useBackgroundColor: e.target.checked })} /> Use background color
+            <label style={{ display: "block", opacity: form.color ? 1 : 0.5 }} title="Plot the background color if the output format supports it">
+              <input type="checkbox" disabled={!form.color} checked={form.useBackgroundColor} onChange={(e) => set({ useBackgroundColor: e.target.checked })} /> Plot background color
             </label>
           </fieldset>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", marginBottom: 10 }}>

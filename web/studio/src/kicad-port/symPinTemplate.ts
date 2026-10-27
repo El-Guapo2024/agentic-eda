@@ -35,12 +35,14 @@ export const DEFAULT_PIN_TEMPLATE: PinTemplate = {
 };
 
 /** `SYMBOL_EDITOR_PIN_TOOL::CreatePin`: the pin a click makes -- the sticky defaults at the clicked place (mm, +y up), on the unit
- * and body style being edited unless the last pin was common to all of them. */
-export function newPinFromClick(template: PinTemplate, activeUnit: number, activeBodyStyle: number, number: string, at: MmPoint): LibrarySymbolPin {
+ * and body style being edited unless the last pin was common to all of them. It has no name and no number: `CreatePin` sets neither
+ * (`SCH_PIN::SCH_PIN( LIB_SYMBOL* )` starts empty), so Pin Properties opens with both empty. Only Repeat Pin (Insert) increments a number
+ * (`RepeatPin`'s `IncrementString`, kicad-port/symEditItems.ts). */
+export function newPinFromClick(template: PinTemplate, activeUnit: number, activeBodyStyle: number, at: MmPoint): LibrarySymbolPin {
   return {
     ...template,
     name: "",
-    number,
+    number: "",
     at,
     unit: template.unit === 0 ? 0 : activeUnit,
     body_style: template.body_style === 0 ? 0 : activeBodyStyle,

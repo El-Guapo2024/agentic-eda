@@ -110,6 +110,8 @@ export const SCHEMATIC_AND_SYMBOL_EDITOR: ReadonlySet<string> = new Set([
   "eeschema.InteractiveEdit.properties",
   "eeschema.InteractiveEdit.rotateCCW",
   "eeschema.InteractiveEdit.rotateCW",
+  // Repeat Last Item (Insert): `SCH_EDIT_TOOL::RepeatDrawItem` on the sheet, `SYMBOL_EDITOR_DRAWING_TOOLS::RepeatDrawItem` (`RepeatPin`) in the symbol editor.
+  "eeschema.InteractiveEdit.repeatDrawItem",
 ]);
 
 export function isActionEnabledForTab(name: string, tab: string, registered: boolean): boolean {

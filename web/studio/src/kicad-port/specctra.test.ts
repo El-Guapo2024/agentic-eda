@@ -20,5 +20,6 @@ test("an export says BOARD exported OK, a warning of FromBOARD, or the server's 
 test("a session file is the specctra command, and its answer KiCad's words", () => {
   assert.deepEqual(specctraImportCmd({ name: "b.ses", text: "(session b)" }), { op: "specctra", session: "(session b)", name: "b.ses" });
   assert.match(describeImport({ ok: true, message: "" }).message, /^Session file imported and merged OK\./);
-  assert.deepEqual(describeImport({ ok: false, message: "Session file uses invalid layer id 'In3.Cu'." }), { message: "Session file uses invalid layer id 'In3.Cu'.", kind: "error" });
+  // D4 (r2-editors-exports): KiCad's "Fix problem and try again" over the error.
+  assert.deepEqual(describeImport({ ok: false, message: "Session file uses invalid layer id 'In3.Cu'." }), { message: "Fix problem and try again\nSession file uses invalid layer id 'In3.Cu'.", kind: "error" });
 });

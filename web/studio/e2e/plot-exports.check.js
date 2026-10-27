@@ -111,24 +111,25 @@
       }
     });
 
-    await scenario("Generate Drill Files: one Excellon file for all the holes, or the plated and non-plated holes apart", async (t) => {
+    await scenario("Generate Drill Files: the plated and non-plated holes in two Excellon files (KiCad's default), or in one with \"PTH and NPTH in single file\"", async (t) => {
       if (!(await open(t, "pcbnew.EditorControl.generateDrillFiles", "Generate Drill Files"))) return;
       let res = await press(/^Generate Drill File$/, "fab/drill");
-      const merged = judged(t, "drill", res, /\.(drl|gbr)$/i);
-      t(res.reply?.req?.separate_th === false, "merged by default");
-      box("Generate independent files")?.click();
+      const apart = judged(t, "drill", res, /\.(drl|gbr)$/i);
+      t(res.reply?.req?.merge_pth_npth === false && res.reply?.req?.alt_drill_mode === false, "two files and routed slots by default (m_Check_Merge_PTH_NPTH, m_altDrillMode unchecked)");
+      t(apart.some((f) => /-PTH\.drl$/.test(f)), `apart: ${apart.map(base).join(", ")}`);
+      box("PTH and NPTH in single file")?.click();
       await sleep(1500); // the second-long window of the file list, as above
       res = await press(/^Generate Drill File$/, "fab/drill");
-      const apart = res.reply?.body?.files ?? [];
-      t(res.reply?.body?.ok === true && apart.some((f) => /PTH/i.test(f)) && apart.length >= merged.length, `apart: ${apart.map(base).join(", ")}`);
+      const merged = res.reply?.body?.files ?? [];
+      t(res.reply?.body?.ok === true && res.reply?.req?.merge_pth_npth === true && !merged.some((f) => /PTH\.drl$/i.test(f)), `merged: ${merged.map(base).join(", ")}`);
+      box("PTH and NPTH in single file")?.click();
     });
 
     await scenario("Generate Placement Files: CSV with both sides in KiCad's -all-pos file, or the -top-pos and -bottom-pos ones; ASCII", async (t) => {
       if (!(await open(t, "pcbnew.EditorControl.generatePosFile", "Generate Placement Files"))) return;
       const radio = (name, i) => dialog().querySelectorAll(`input[name="${name}"]`)[i];
+      t(radio("pos-format", 0)?.checked === true && !dialog().querySelector('input[name="pos-side"]'), "Plain text first, and no side choice (KiCad's dialog always does both sides)");
       radio("pos-format", 1)?.click(); // CSV
-      const both = [...dialog().querySelectorAll('input[name="pos-side"]')].find((x) => x.closest("label")?.textContent.includes("Both"));
-      both?.click();
       await sleep(150);
       let res = await press(/^Generate/, "fab/pos");
       let files = judged(t, "CSV", res, /\.csv$/i);
@@ -149,6 +150,13 @@
       res = await press(/^Generate/, "fab/pos");
       files = judged(t, "ASCII", res, /\.pos$/i);
       t(files.length === 1 && /-all\.pos$/.test(files[0]), `ASCII, both sides, one file (${files.map(base).join(", ")})`);
+      t(/^Placement file: '.*'\.\nComponent count: \d+\.\nDone\.$/.test(res.reply?.body?.message ?? ""), `CreateAsciiFiles' report (${JSON.stringify(res.reply?.body?.message)})`);
+      radio("pos-format", 2)?.click(); // Gerber X3
+      await sleep(150);
+      res = await press(/^Generate/, "fab/pos");
+      files = judged(t, "Gerber X3", res, /\.gbr$/i);
+      t(files.length === 2 && files.some((f) => /-pnp_top\.gbr$/.test(f)) && files.some((f) => /-pnp_bottom\.gbr$/.test(f)), `Gerber X3: -pnp_top and -pnp_bottom (${files.map(base).join(", ")})`);
+      radio("pos-format", 0)?.click();
     });
 
     const exportOne = (action, title, route, re) => async (t) => {
@@ -169,6 +177,8 @@
       await sleep(1200);
       if (!(await open(t, "common.Control.plot", "Plot Schematic"))) return;
       const radio = (text) => labelled(text)?.querySelector("input");
+      // `dialog_plot_schematic_base.cpp`: PDF selected, "Plot background color" unchecked.
+      t(radio("PDF")?.checked === true && radio("Plot background color")?.checked === false, "the dialog starts at PDF with no background colour, as KiCad's");
       radio("PDF")?.click();
       radio("Plot all pages")?.click();
       await sleep(150);

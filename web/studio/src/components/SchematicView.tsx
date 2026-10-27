@@ -44,6 +44,7 @@ import { applyPatch, heldCmd, holdPoint, pickedVertices, previewBody, wirePick }
 import { paintNetCollision } from "./schematic/netCollisionPainter";
 import { paintOperatingPoints } from "./simulator/opPainter";
 import { useSimUi } from "../state/simulator";
+import { withOpVars } from "../kicad-port/sim/opVars";
 import { hasNetCollision } from "../kicad-port/schNetCollision";
 import { LINE_MODE_FREE } from "../kicad-port/schLineMode";
 import { postMovePreview } from "../api/client";
@@ -170,7 +171,8 @@ export function SchematicView() {
   const wheelPrefs = useWheelPrefs();
   const schControl = useSchControlState();
   // the simulator's operating point is drawn on the sheet: a new one redraws it
-  const simVersion = useSimUi().version;
+  const simUi = useSimUi();
+  const simVersion = simUi.version;
   /** The paste being carried (`SCH_EDITOR_CONTROL::Paste` -> the Move tool): the items it would add, until a click drops them or Escape throws them away. */
   const paste = useSchPaste();
   /** The image Place Image holds (state/schImageHand.ts), and the number of bitmaps that have arrived: the sheet is painted again for either. */
@@ -355,7 +357,8 @@ export function SchematicView() {
     );
     // `SCH_DRAG_NET_COLLISION_MONITOR`: where the held selection would short two nets or pull a connection apart (the server sends it with the preview)
     const collisionOverlay = held && patch ? patch.net_collision : undefined;
-    paintSchematic(ctx, state.schematicView, displaySch, { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display, enteredGroup: state.schEnteredGroupId });
+    // `${OP}` in a symbol's field or a label: the last operating point's values (kicad-port/sim/opVars.ts), resolved in what is drawn.
+    paintSchematic(ctx, state.schematicView, withOpVars(displaySch, simUi.frame.circuit, simUi.opPoints), { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display, enteredGroup: state.schEnteredGroupId });
     if (collisionOverlay) paintNetCollision(ctx, state.schematicView.scale || 1, collisionOverlay);
     // The simulator's operating point (View > Show OP Voltages / Currents, components/simulator/opPainter.ts).
     paintOperatingPoints(ctx, state.schematicView.scale || 1, displaySch, layerColor("LAYER_SCHEMATIC_BACKGROUND"));

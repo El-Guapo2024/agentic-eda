@@ -6,17 +6,22 @@ import type { LibrarySymbolPin } from "../api/types";
 const template = { ...DEFAULT_PIN_TEMPLATE };
 
 test("newPinFromClick: the sticky defaults and the click's place, in mm and +y up", () => {
-  const pin = newPinFromClick(template, 2, 1, "5", { x: -5.08, y: 2.54 });
-  assert.deepEqual(pin, { ...template, name: "", number: "5", at: { x: -5.08, y: 2.54 }, unit: 2, body_style: 1 });
+  const pin = newPinFromClick(template, 2, 1, { x: -5.08, y: 2.54 });
+  assert.deepEqual(pin, { ...template, name: "", number: "", at: { x: -5.08, y: 2.54 }, unit: 2, body_style: 1 });
   assert.equal(pin.name, "", "g_LastPin* holds no name: a new pin starts without one");
   assert.equal(pin.length_mm, 2.54, "the default 100 mil pin");
 });
 
+test("a clicked pin has no number, as CreatePin leaves it (E2)", () => {
+  // `SYMBOL_EDITOR_PIN_TOOL::CreatePin` sets no number: `SCH_PIN::SCH_PIN( LIB_SYMBOL* )` starts with an empty one, and Pin Properties shows it empty.
+  assert.equal(newPinFromClick(DEFAULT_PIN_TEMPLATE, 1, 1, { x: 0, y: 0 }).number, "");
+});
+
 test("newPinFromClick: a pin made common to all units (or styles) keeps the next one common too -- g_LastPinCommonUnit", () => {
-  const pin = newPinFromClick({ ...template, unit: 0, body_style: 0 }, 2, 2, "1", { x: 0, y: 0 });
+  const pin = newPinFromClick({ ...template, unit: 0, body_style: 0 }, 2, 2, { x: 0, y: 0 });
   assert.equal(pin.unit, 0);
   assert.equal(pin.body_style, 0);
-  const other = newPinFromClick({ ...template, unit: 1, body_style: 1 }, 2, 2, "2", { x: 0, y: 0 });
+  const other = newPinFromClick({ ...template, unit: 1, body_style: 1 }, 2, 2, { x: 0, y: 0 });
   assert.equal(other.unit, 2, "an ordinary pin takes the unit being edited");
   assert.equal(other.body_style, 2);
 });

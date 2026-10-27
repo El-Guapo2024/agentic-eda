@@ -74,45 +74,70 @@ pub struct Resolved {
     pub format: Format,
 }
 
-/// KiCad's variable expansion for a model path (`KIwxExpandEnvVars`, `common/common.cpp`): `${NAME}` and `$(NAME)`. A name resolves, in order, to the board's
-/// directory (`KIPRJMOD`), to the process environment, and -- for `KISYS3DMOD` and any `KICAD<n>_3DMODEL_DIR`, however old -- to the model library of the KiCad
-/// that is installed ("replace unmatched older variables with current locations"). Anything else is left as written, and then names no file.
+/// KiCad's variable expansion for a model path (`KIwxExpandEnvVars`, `common/common.cpp`): `${NAME}`, `$(NAME)` and a bare `$NAME`, the name being the run of
+/// letters, digits, `_` and `:` after the bracket (`while( wxIsalnum( str_m ) || str_m == '_' || str_m == ':' )`); `\$` is a plain `$`. A name resolves, in
+/// order, to the board's directory (`KIPRJMOD`), to the process environment, and -- for a name that contains `KISYS3DMOD` or is any `KICAD*_3DMODEL_DIR`, however
+/// old -- to the model library of the KiCad that is installed ("Replace unmatched older variables with current locations"). Anything else is left as written,
+/// and then names no file; so is a bracket left open (KiCad logs "Environment variables expansion failed: missing '%c' ..." and goes on with the text after
+/// the name). Not ported: `FILENAME_RESOLVER::ResolvePath`'s try of an unresolved `${NAME}` against the user's 3D search-path aliases (KiCad 5's alias list,
+/// which the studio has no settings for).
 pub(crate) fn expand(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> String {
+    let s: Vec<char> = name.chars().collect();
     let mut out = String::with_capacity(name.len());
-    let mut rest = name;
-    while let Some(at) = rest.find('$') {
-        out.push_str(&rest[..at]);
-        let after = &rest[at + 1..];
-        let (open, close) = match after.chars().next() {
-            Some('{') => ('{', '}'),
-            Some('(') => ('(', ')'),
-            _ => {
-                out.push('$');
-                rest = after;
-                continue;
+    let mut n = 0;
+    while n < s.len() {
+        match s[n] {
+            '\\' if matches!(s.get(n + 1), Some('$') | Some('%')) => {
+                out.push(s[n + 1]);
+                n += 2;
             }
-        };
-        let Some(end) = after.find(close) else {
-            out.push_str(&rest[at..]);
-            return out;
-        };
-        let var = &after[open.len_utf8()..end];
-        let value = if var == "KIPRJMOD" {
-            Some(roots.project.to_string_lossy().into_owned())
-        } else if let Some(v) = env(var).filter(|v| !v.is_empty()) {
-            Some(v)
-        } else if var == "KISYS3DMOD" || (var.starts_with("KICAD") && var.ends_with("_3DMODEL_DIR")) {
-            Some(roots.models.to_string_lossy().into_owned())
-        } else {
-            None
-        };
-        match value {
-            Some(v) => out.push_str(&v),
-            None => out.push_str(&rest[at..at + 1 + end + 1]),
+            '$' => {
+                let close = match s.get(n + 1) {
+                    Some('(') => Some(')'),
+                    Some('{') => Some('}'),
+                    _ => None,
+                };
+                let start = if close.is_some() { n + 2 } else { n + 1 };
+                if start >= s.len() {
+                    // `if( m >= strlen ) break;`: the `$` (and its bracket) end the text
+                    out.extend(&s[n..]);
+                    break;
+                }
+                let mut m = start;
+                while m < s.len() && (s[m].is_alphanumeric() || s[m] == '_' || s[m] == ':') {
+                    m += 1;
+                }
+                let var: String = s[start..m].iter().collect();
+                let value = if var == "KIPRJMOD" {
+                    Some(roots.project.to_string_lossy().into_owned())
+                } else if let Some(v) = env(&var).filter(|v| !v.is_empty()) {
+                    Some(v)
+                } else if var.contains("KISYS3DMOD") || (var.starts_with("KICAD") && var.ends_with("_3DMODEL_DIR")) {
+                    Some(roots.models.to_string_lossy().into_owned())
+                } else {
+                    None
+                };
+                let expanded = value.is_some();
+                match value {
+                    Some(v) => out.push_str(&v),
+                    None => out.extend(&s[n..m]),
+                }
+                if let Some(c) = close {
+                    if s.get(m) == Some(&c) {
+                        if !expanded {
+                            out.push(c);
+                        }
+                        m += 1;
+                    }
+                }
+                n = m;
+            }
+            c => {
+                out.push(c);
+                n += 1;
+            }
         }
-        rest = &after[end + 1..];
     }
-    out.push_str(rest);
     out
 }
 
@@ -612,12 +637,23 @@ fn model_json(m: &eda_model::footprint::Model3d) -> Value {
     json!({ "name": m.path, "offset": m.offset, "scale": m.scale, "rotate": m.rotate, "opacity": m.opacity, "show": m.show })
 }
 
-/// The 3D models of `part` for `/api/state`: `{ "models": [{ name, offset, scale, rotate, opacity, show }], "kind3d": "smd" | "tht" | "virtual" }`, `None` when
-/// it has no model. `footprint` is what the model resolved the part's footprint to. The placement is the footprint file's, in the studio's frame for a top-side
-/// footprint (`Model3d::flipped_frame`); the 3D view turns it with a bottom-side part.
-pub fn part_json(model: &ConstraintModel, part: &Part, footprint: &Footprint) -> Option<Value> {
+/// The 3D models of `part` for `/api/state`: `{ "models": [{ name, offset, scale, rotate, opacity, show }], "kind3d": "smd" | "tht" | "virtual", "dnp", "not_in_pos" }`,
+/// `None` when it has no model. `footprint` is what the model resolved the part's footprint to. The placement is the footprint file's, in the studio's frame for a
+/// top-side footprint (`Model3d::flipped_frame`); the 3D view turns it with a bottom-side part.
+///
+/// The kind and the two flags are the board footprint's own attributes (`Design::effective_attrs`: Footprint Properties' edit, else what the board file is written
+/// with), which `BOARD_ADAPTER::IsFootprintShown` reads: `FP_SMD` an SMD model, `FP_THROUGH_HOLE` a through-hole one, neither a virtual one; `FP_DNP` and
+/// `FP_EXCLUDE_FROM_POS_FILES` hide it unless the viewer's "Models marked DNP" / "Models not in POS File" rows are on.
+pub fn part_json(design: &eda_model::ir::Design, model: &ConstraintModel, part: &Part, footprint: &Footprint) -> Option<Value> {
+    use eda_model::fp_edit::FootprintKind;
     let found = part_models(model, part, footprint)?;
-    Some(json!({ "models": found.models.iter().map(model_json).collect::<Vec<_>>(), "kind3d": found.kind.as_str() }))
+    let attrs = design.effective_attrs(&part.reference, footprint);
+    let kind = match attrs.kind {
+        FootprintKind::Smd => "smd",
+        FootprintKind::ThroughHole => "tht",
+        FootprintKind::Unspecified => "virtual",
+    };
+    Some(json!({ "models": found.models.iter().map(model_json).collect::<Vec<_>>(), "kind3d": kind, "dnp": attrs.dnp, "not_in_pos": attrs.exclude_from_pos_files }))
 }
 
 #[cfg(test)]
@@ -953,13 +989,37 @@ mod tests {
         assert!(!wants_wait("/api/3dmodel"));
     }
 
+    /// R1 (r2-editors-exports): `KIwxExpandEnvVars`' scanner -- a name is letters, digits, `_` and `:` only, a name that only contains `KISYS3DMOD` is the
+    /// model library too, and a bare `$NAME` is a variable as well.
+    #[test]
+    fn variables_are_scanned_as_kiwxexpandenvvars_scans_them() {
+        let roots = Roots { models: PathBuf::from("/m"), project: PathBuf::from("/p"), extra: Vec::new() };
+        let env = |n: &str| (n == "MY").then(|| "/my".to_string());
+        assert_eq!(expand("${NO LIB}/x.wrl", &roots, &env), "${NO LIB}/x.wrl", "the name `NO` ends at the space and is no variable");
+        assert_eq!(expand("${MY LIB}/x.wrl", &roots, &env), "/my LIB}/x.wrl", "`MY` is one, and the bracket left open is text (KiCad's warning, no skip)");
+        assert_eq!(expand("${MY}/x.wrl", &roots, &env), "/my/x.wrl");
+        assert_eq!(expand("$MY/x.wrl", &roots, &env), "/my/x.wrl", "Bracket_None");
+        assert_eq!(expand("$(MY)/x.wrl", &roots, &env), "/my/x.wrl");
+        assert_eq!(expand("${OLD_KISYS3DMOD}/a.wrl", &roots, &env), "/m/a.wrl", "`strVarName.Contains( \"KISYS3DMOD\" )`");
+        assert_eq!(expand("${KICAD6_3DMODEL_DIR}/a.wrl", &roots, &env), "/m/a.wrl");
+        assert_eq!(expand("${KIPRJMOD}/b.step", &roots, &env), "/p/b.step");
+        assert_eq!(expand("${NOPE}/b.step", &roots, &env), "${NOPE}/b.step");
+        assert_eq!(expand("a$", &roots, &env), "a$");
+    }
+
     #[test]
     fn the_parts_models_go_out_with_their_placement_and_kind() {
         let part = Part { reference: "R1".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None };
         let model = ConstraintModel { parts: vec![part.clone()], ..Default::default() };
         let fp = model.footprint_of(&part).unwrap();
-        let v = part_json(&model, &part, &fp).expect("a 0603 has a model");
-        assert_eq!(v["kind3d"], "smd");
+        let mut design: eda_model::ir::Design = serde_json::from_value(json!({ "provenance": { "engine_version": "t", "intent_hash": "x", "seed": 0, "stage_hashes": [] } })).unwrap();
+        let v = part_json(&design, &model, &part, &fp).expect("a 0603 has a model");
+        assert_eq!((v["kind3d"].clone(), v["dnp"].clone(), v["not_in_pos"].clone()), (json!("smd"), json!(false), json!(false)));
+        // V2 (r2-editors-exports): Footprint Properties' Component type and flags decide, as `IsFootprintShown` reads the board footprint's.
+        let attrs = eda_model::fp_edit::FootprintAttrs { kind: eda_model::fp_edit::FootprintKind::Unspecified, dnp: true, exclude_from_pos_files: true, ..Default::default() };
+        design.drawings.get_or_insert_with(Default::default).footprint_edits.push(eda_model::fp_edit::FootprintEdit { id: "R1".into(), attrs: Some(attrs), ..Default::default() });
+        let v = part_json(&design, &model, &part, &fp).unwrap();
+        assert_eq!((v["kind3d"].clone(), v["dnp"].clone(), v["not_in_pos"].clone()), (json!("virtual"), json!(true), json!(true)));
         let m = &v["models"][0];
         assert!(m["name"].as_str().unwrap().ends_with("Resistor_SMD.3dshapes/R_0603_1608Metric.step"), "{m}");
         assert_eq!((m["scale"].clone(), m["opacity"].clone(), m["show"].clone()), (json!([1.0, 1.0, 1.0]), json!(1.0), json!(true)));

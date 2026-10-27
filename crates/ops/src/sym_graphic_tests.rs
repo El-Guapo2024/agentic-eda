@@ -195,3 +195,15 @@ fn a_derived_symbol_keeps_no_drawing_of_its_own_so_its_text_boxes_are_edited_on_
     let engine = flat.to_engine_symbol();
     assert!(engine.graphics.iter().any(|g| matches!(g, eda_model::symbol::SymbolGraphic::Rectangle { stroke_mm, .. } if *stroke_mm == 0.254)));
 }
+
+/// E12 (r2-editors-exports): a new symbol's Reference and Value are at the origin, as `LIB_SYMBOL::LIB_SYMBOL` makes its fields; the Value is the name.
+#[test]
+fn a_new_symbols_reference_and_value_are_at_the_origin() {
+    let m = ConstraintModel::default();
+    let mut b = board(&m);
+    b.apply(&Cmd::NewSymbol { lib_id: "Lib:S".into() }).unwrap();
+    let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Lib:S").unwrap();
+    let text = eda_kicad::export_kicad_sym(sym);
+    assert!(text.contains("(property \"Reference\" \"U\" (at 0 0 0)") || text.contains("(property \"Reference\" \"\" (at 0 0 0)"), "{text}");
+    assert!(text.contains("(property \"Value\" \"S\" (at 0 0 0)"), "{text}");
+}

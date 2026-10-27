@@ -187,6 +187,14 @@ export function kindShown(kind: ModelKind, shown: { tht: boolean; smd: boolean; 
   return kind === "smd" ? shown.smd : kind === "tht" ? shown.tht : shown.virtual;
 }
 
+/** `BOARD_ADAPTER::IsFootprintShown`, in its order: a footprint excluded from the position files shows only with "Models not in POS File" on
+ * (`show_footprints_not_in_posfile`), one marked Do Not Populate only with "Models marked DNP" on (`show_footprints_dnp`), and then its kind's row decides. */
+export function footprintShown(part: { kind: ModelKind; dnp?: boolean; notInPos?: boolean }, shown: { tht: boolean; smd: boolean; virtual: boolean; notInPos: boolean; dnp: boolean }): boolean {
+  if (part.notInPos && !shown.notInPos) return false;
+  if (part.dnp && !shown.dnp) return false;
+  return kindShown(part.kind, shown);
+}
+
 /** The kind of a part the backend did not classify: through-hole when it has a through-hole pad, else SMD (the studio's footprints carry no `(attr ...)`). */
 export function inferKind(pads: ReadonlyArray<{ th: boolean }> | undefined): ModelKind {
   return (pads ?? []).some((p) => p.th) ? "tht" : "smd";

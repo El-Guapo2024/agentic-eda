@@ -1693,6 +1693,11 @@ fn new_footprint_creates_an_empty_smd_footprint_and_refuses_a_name_already_taken
     assert!(fp.pads.is_empty() && fp.graphics.is_empty());
     assert!(fp.attributes.smd && !fp.attributes.through_hole, "a new footprint defaults to SMD");
     assert!(!fp.published);
+    // E1 (r2-editors-exports): the Footprint Editor's third default text item, `${REFERENCE}` on F.Fab at (0, 2.5 mm), 1 mm / 0.15 mm.
+    assert_eq!(fp.texts.iter().map(|t| (t.content.as_str(), t.layer.as_str(), t.at.y, t.size_nm, t.stroke_width)).collect::<Vec<_>>(), [("${REFERENCE}", "F.Fab", mm(2.5), mm(1.0), mm(0.15))]);
+    let text = eda_kicad::export_kicad_mod(fp);
+    assert!(text.contains("(property \"Reference\" \"REF**\" (at 0 -0.5 0) (layer \"F.SilkS\")") && text.contains("(property \"Value\" \"Untitled\" (at 0 1 0) (layer \"F.Fab\")"), "{text}");
+    assert!(text.contains("(fp_text user \"${REFERENCE}\" (at 0 2.5") , "{text}");
 
     // already in the project library
     let e = b.apply(&Cmd::NewFootprint { name: "Untitled".into() }).unwrap_err();
@@ -1703,9 +1708,14 @@ fn new_footprint_creates_an_empty_smd_footprint_and_refuses_a_name_already_taken
     assert_eq!(b.apply(&Cmd::NewFootprint { name: String::new() }).unwrap_err()[0].check, "ops_bad_footprint");
     // its own undo domain, like every footprint-editor verb
     assert_eq!(Cmd::NewFootprint { name: "x".into() }.domain(), Domain::FootprintEditor);
-    // a second "Untitled_1" is fine
+    // a second "Untitled_1" is fine; it takes the attributes of the library's last footprint (`fpnames.back()`), here a through-hole one
+    if let Some(l) = b.design.footprint_library.as_mut() {
+        l.footprints[0].attributes = eda_model::ir::FootprintAttributes { through_hole: true, ..Default::default() };
+    }
     b.apply(&Cmd::NewFootprint { name: "Untitled_1".into() }).unwrap();
     assert_eq!(b.design().footprint_library.as_ref().unwrap().footprints.len(), 2);
+    let second = b.design().footprint_library.as_ref().unwrap().by_name("Untitled_1").unwrap();
+    assert!(second.attributes.through_hole && !second.attributes.smd, "{:?}", second.attributes);
 }
 
 #[test]
@@ -2575,12 +2585,12 @@ fn add_pin_against_an_unopened_symbol_is_refused() {
 }
 
 #[test]
-fn add_pin_rejects_an_empty_number() {
+fn add_pin_takes_an_empty_number_as_createpin_makes_it() {
+    // r2-editors-exports E2: `CreatePin` leaves the number empty and Pin Properties' OK does not ask for one.
     let m = net_model();
     let mut b = board(&m);
     b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
-    let e = b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin("", 0.0, 0.0) }).unwrap_err();
-    assert_eq!(e[0].check, "ops_bad_pin");
+    b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin("", 0.0, 0.0) }).unwrap();
 }
 
 #[test]

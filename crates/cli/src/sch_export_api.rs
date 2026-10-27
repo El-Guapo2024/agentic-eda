@@ -235,7 +235,8 @@ pub fn symbol_svg(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let lib_id = req.get("lib_id").and_then(Value::as_str).unwrap_or("");
     if lib_id.is_empty() {
-        return err("no symbol to export");
+        // `SYMBOL_EDITOR_CONTROL::ExportSymbolAsSVG`: `wxMessageBox( _( "No symbol to export" ) )`.
+        return err("No symbol to export");
     }
     let unit = req.get("unit").and_then(Value::as_u64).unwrap_or(1).max(1) as u32;
     let demorgan = req.get("body_style").and_then(Value::as_u64).unwrap_or(1) == 2;

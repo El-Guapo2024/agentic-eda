@@ -18,7 +18,8 @@
 //!   eeschema/sch_field.cpp, sch_text.cpp, sch_item.cpp   `GetShownText`, `ResolveText`: which resolvers an item's text goes through
 //!
 //! Not ported: the `@{..}` math expressions (`common/text_eval`: an expression is left as written once the variables in it are expanded, which is what
-//! `ExpandTextVars` itself does with one), `VCSHASH` / `VCSSHORTHASH` (the project's git hash: left as written), simulation `OP` values and design variants.
+//! `ExpandTextVars` itself does with one), `VCSHASH` / `VCSSHORTHASH` (the project's git hash: left as written) and design variants. Simulation `OP` values are left as written here and
+//! resolved by the studio, which holds the last run (`web/studio/src/kicad-port/sim/opVars.ts`).
 
 use std::collections::BTreeMap;
 

@@ -145,43 +145,20 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     // The point the editing grid is anchored at (`common.Control.gridSetOrigin`): KiCad's `(grid_origin x y)` of the board setup.
     let grid = design.drawings.as_ref().and_then(|d| d.grid_origin).unwrap_or(eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO });
     writeln!(out, "\t\t(grid_origin {} {})", mm(grid.x), mm(grid.y)).unwrap();
-    writeln!(out, "\t\t(pcbplotparams").unwrap();
-    writeln!(out, "\t\t\t(layerselection 0x00010fc_ffffffff)").unwrap();
-    writeln!(out, "\t\t\t(plot_on_all_layers_selection 0x0000000_00000000)").unwrap();
-    writeln!(out, "\t\t\t(disableapertmacros no)").unwrap();
-    writeln!(out, "\t\t\t(usegerberextensions no)").unwrap();
-    writeln!(out, "\t\t\t(usegerberattributes yes)").unwrap();
-    writeln!(out, "\t\t\t(usegerberadvancedattributes yes)").unwrap();
-    writeln!(out, "\t\t\t(creategerberjobfile yes)").unwrap();
-    // Text & Graphics > Formatting: the dash and the gap of a dashed line, in line widths.
-    writeln!(out, "\t\t\t(dashed_line_dash_ratio {:.6})", model.board.formatting.dash_length_ratio).unwrap();
-    writeln!(out, "\t\t\t(dashed_line_gap_ratio {:.6})", model.board.formatting.gap_length_ratio).unwrap();
-    writeln!(out, "\t\t\t(svgprecision 4)").unwrap();
-    writeln!(out, "\t\t\t(plotframeref no)").unwrap();
-    writeln!(out, "\t\t\t(mode 1)").unwrap();
-    writeln!(out, "\t\t\t(useauxorigin no)").unwrap();
-    writeln!(out, "\t\t\t(hpglpennumber 1)").unwrap();
-    writeln!(out, "\t\t\t(hpglpenspeed 20)").unwrap();
-    writeln!(out, "\t\t\t(hpglpendiameter 15.000000)").unwrap();
-    writeln!(out, "\t\t\t(pdf_front_fp_property_popups yes)").unwrap();
-    writeln!(out, "\t\t\t(pdf_back_fp_property_popups yes)").unwrap();
-    writeln!(out, "\t\t\t(dxfpolygonmode yes)").unwrap();
-    writeln!(out, "\t\t\t(dxfimperialunits yes)").unwrap();
-    writeln!(out, "\t\t\t(dxfusepcbnewfont yes)").unwrap();
-    writeln!(out, "\t\t\t(psnegative no)").unwrap();
-    writeln!(out, "\t\t\t(psa4output no)").unwrap();
-    writeln!(out, "\t\t\t(plotreference yes)").unwrap();
-    writeln!(out, "\t\t\t(plotvalue yes)").unwrap();
-    writeln!(out, "\t\t\t(plotfptext yes)").unwrap();
-    writeln!(out, "\t\t\t(plotinvisibletext no)").unwrap();
-    writeln!(out, "\t\t\t(sketchpadsonfab no)").unwrap();
-    writeln!(out, "\t\t\t(subtractmaskfromsilk no)").unwrap();
-    writeln!(out, "\t\t\t(outputformat 1)").unwrap();
-    writeln!(out, "\t\t\t(mirror no)").unwrap();
-    writeln!(out, "\t\t\t(drillshape 1)").unwrap();
-    writeln!(out, "\t\t\t(scaleselection 1)").unwrap();
-    writeln!(out, "\t\t\t(outputdirectory \"\")").unwrap();
-    writeln!(out, "\t\t)").unwrap();
+    // The board's plot settings (`PCB_PLOT_PARAMS::Format`): an imported board's own, else KiCad's defaults; the dash ratios are Text & Graphics > Formatting's.
+    {
+        let plot = design.drawings.as_ref().and_then(|d| d.plot_params.clone()).unwrap_or_else(eda_model::plot_params::PlotParams::kicad_default);
+        writeln!(out, "\t\t(pcbplotparams").unwrap();
+        writeln!(out, "\t\t\t(layerselection {})", eda_model::plot_params::encode_layer_selection(&plot.layer_selection)).unwrap();
+        writeln!(out, "\t\t\t(plot_on_all_layers_selection {})", eda_model::plot_params::encode_layer_selection(&plot.plot_on_all_layers)).unwrap();
+        let mut plot = plot;
+        plot.set_item("dashed_line_dash_ratio", &format!("{:.6}", model.board.formatting.dash_length_ratio));
+        plot.set_item("dashed_line_gap_ratio", &format!("{:.6}", model.board.formatting.gap_length_ratio));
+        for item in &plot.items {
+            writeln!(out, "\t\t\t{item}").unwrap();
+        }
+        writeln!(out, "\t\t)").unwrap();
+    }
     writeln!(out, "\t)").unwrap();
 
     // ---- nets ----

@@ -635,12 +635,7 @@ export function FootprintCanvas() {
     // the hotkey table binds on a Mac only (`macHotkey`), so off a Mac it would otherwise do nothing.
     const macDelete = /Mac/.test(navigator.platform);
     if (e.key === "Backspace" && !macDelete && state.selection.size > 0 && state.activeTool === "select") {
-      for (const id of state.selection) {
-        if (api.padById(id)) void api.deletePad(id);
-        else if (api.graphicById(id)) void api.deleteGraphic(id);
-        else if (api.textById(id)) void api.deleteText(id);
-      }
-      dispatch({ type: "CLEAR_SELECTION" });
+      void api.deleteItems([...state.selection]);
       return;
     }
     // R / Shift+R (rotate the selected pads) is the registered action `pcbnew.InteractiveEdit.rotateCcw` / `rotateCw` (actions/editorFrameActions.ts), which
@@ -676,7 +671,7 @@ export function FootprintCanvas() {
       act("pcbnew.PadTool.CopyPadSettings", "Copy Pad Properties to Default", padRefs.length !== 1),
       act("pcbnew.PadTool.ApplyPadSettings", "Paste Default Pad Properties to Selected", padRefs.length === 0),
       act("pcbnew.PadTool.PushPadSettings", "Push Pad Properties to Other Pads...", padRefs.length !== 1),
-      { label: "Delete (Del)", onSelect: () => refs.forEach((id) => (api.padById(id) ? void api.deletePad(id) : api.graphicById(id) ? void api.deleteGraphic(id) : void api.deleteText(id))), disabled: refs.length === 0 },
+      { label: "Delete (Del)", onSelect: () => void api.deleteItems(refs), disabled: refs.length === 0 },
     ];
     setContextMenu({ x: e.clientX, y: e.clientY, entries });
   };

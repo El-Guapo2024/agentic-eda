@@ -298,11 +298,7 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         deleteIds: async (ids) => {
           const api = snap.fpApi;
           if (!footprint || !api) return null;
-          for (const id of ids) {
-            if (footprint.pads.some((p) => p.id === id)) await api.deletePad(id);
-            else if (footprint.graphics.some((g) => g.id === id)) await api.deleteGraphic(id);
-            else if (footprint.texts.some((t) => t.id === id)) await api.deleteText(id);
-          }
+          await api.deleteItems(ids);
           return null;
         },
       };
@@ -339,10 +335,7 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         deleteIds: async (ids) => {
           const api = snap.symApi;
           if (!symbol || !api) return null;
-          for (const id of ids) {
-            if (symbol.pins.some((p) => p.id === id)) await api.deletePin(id);
-            else if (symbol.graphics.some((g) => g.id === id)) await api.deleteGraphic(id);
-          }
+          await api.deleteItems(ids);
           return null;
         },
       };

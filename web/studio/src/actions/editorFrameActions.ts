@@ -100,17 +100,12 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
       if (target?.dialog === "pad") ctx.fpDispatch({ type: "SET_PAD_PROPERTIES_ID", id: target.id });
       else if (target?.dialog === "footprint") footprintProperties?.();
     });
-    // Delete (`EDIT_TOOL::Remove` in the footprint editor): the selected pads, graphics and texts, each its own verb. The Delete key reaches it through the hotkey
-    // table (the canvas keeps Backspace, which the table does not bind).
+    // Delete (`EDIT_TOOL::Remove` in the footprint editor): the selected pads, graphics and texts in one commit, one undo step. The Delete key reaches it through the
+    // hotkey table (the canvas keeps Backspace, which the table does not bind).
     m.set("common.Interactive.delete", () => {
       const st = ctx.fpApi.getState();
       if (st.activeTool !== "select" || st.selection.size === 0) return;
-      for (const id of st.selection) {
-        if (ctx.fpApi.padById(id)) void ctx.fpApi.deletePad(id);
-        else if (ctx.fpApi.graphicById(id)) void ctx.fpApi.deleteGraphic(id);
-        else if (ctx.fpApi.textById(id)) void ctx.fpApi.deleteText(id);
-      }
-      ctx.fpDispatch({ type: "CLEAR_SELECTION" });
+      void ctx.fpApi.deleteItems([...st.selection]);
     });
   } else {
     // Properties (E): `SYMBOL_EDITOR_EDIT_TOOL::Properties` -- a pin's Pin Properties, a shape's own dialog, a field's row of Symbol Properties, Symbol
@@ -130,29 +125,29 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
         else ctx.symDispatch({ type: "SET_SHAPE_DIALOG_ID", id: target.id });
       }
     });
-    // Rotate (R / Shift+R, `SYMBOL_EDITOR_EDIT_TOOL::Rotate`): the selected pins a quarter turn, counter-clockwise or clockwise (shapes do not turn here yet).
+    // Rotate (R / Shift+R, `SYMBOL_EDITOR_EDIT_TOOL::Rotate`): the selected pins a quarter turn, counter-clockwise or clockwise, about the pin itself or the
+    // selection's half-grid centre, one undo step (shapes do not turn here yet).
     const rotatePins = (ccw: boolean) => () => {
       const st = ctx.symApi.getState();
       if (st.activeTool !== "select") return;
-      for (const id of st.selection) {
-        const p = ctx.symApi.pinById(id);
-        if (!p) continue;
-        const angle = (((p.angle_deg + (ccw ? 90 : -90)) % 360) + 360) % 360;
-        void ctx.symApi.editPin(id, { ...p, angle_deg: angle });
-      }
+      void ctx.symApi.rotateSelection(ccw);
     };
     m.set("eeschema.InteractiveEdit.rotateCCW", rotatePins(true));
     m.set("eeschema.InteractiveEdit.rotateCW", rotatePins(false));
-    // Delete (`SYMBOL_EDITOR_EDIT_TOOL::DoDelete`): the selected pins and graphics.
+    // Delete (`SYMBOL_EDITOR_EDIT_TOOL::DoDelete`): the selected pins and graphics, with the pins' twins in Synchronized Pins Mode, one undo step.
     m.set("common.Interactive.delete", () => {
       const st = ctx.symApi.getState();
       if (st.activeTool !== "select" || st.selection.size === 0) return;
-      for (const id of st.selection) {
-        if (ctx.symApi.pinById(id)) void ctx.symApi.deletePin(id);
-        else if (ctx.symApi.graphicById(id)) void ctx.symApi.deleteGraphic(id);
-      }
-      ctx.symDispatch({ type: "CLEAR_SELECTION" });
+      void ctx.symApi.deleteItems([...st.selection]);
     });
+    // The Symbol Editor's own clipboard and repeat (the schematic's handlers of these names act on the schematic): `SYMBOL_EDITOR_EDIT_TOOL::Cut` / `Copy` / `Paste`
+    // / `Duplicate` and `SYMBOL_EDITOR_DRAWING_TOOLS::RepeatDrawItem` (Insert: `RepeatPin`), each one undo step (kicad-port/symEditItems.ts).
+    const idle = () => ctx.symApi.getState().activeTool === "select";
+    m.set("common.Interactive.cut", () => idle() && void ctx.symApi.copySelection(true));
+    m.set("common.Interactive.copy", () => idle() && void ctx.symApi.copySelection(false));
+    m.set("common.Interactive.paste", () => void ctx.symApi.pasteItems());
+    m.set("common.Interactive.duplicate", () => idle() && void ctx.symApi.duplicateSelection());
+    m.set("eeschema.InteractiveEdit.repeatDrawItem", () => void ctx.symApi.repeatLastPin());
     // Selection tool (`ACTIONS::selectionTool`).
     m.set("common.InteractiveSelection.selectionTool", () => ctx.symDispatch({ type: "SET_ACTIVE_TOOL", tool: "select" }));
     // Show Datasheet (`ACTIONS::showDatasheet`): the open symbol's datasheet field, opened like the schematic's does.

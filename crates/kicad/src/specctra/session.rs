@@ -36,7 +36,7 @@ pub struct SessionVia {
     pub locked: bool,
 }
 
-/// What `FromSESSION` puts on the board, micrometres; the ids are left for the design to give.
+/// What `FromSESSION` puts on the board, in nanometres; the ids are left for the design to give.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionImport {
     pub placements: Vec<SessionPlace>,
@@ -117,7 +117,7 @@ impl Db<'_> {
     }
 
     /// `SPECCTRA_DB::makeVIA`. `via_drill_default` is the Default net class's via drill (nanometres); `drill_of_net` is `PCB_VIA::GetDrillValue` of a via whose drill is
-    /// `UNDEFINED_DRILL_DIAMETER` (the via's net class's), micrometres.
+    /// `UNDEFINED_DRILL_DIAMETER` (the via's net class's), nanometres.
     fn make_via(&self, wire_via: &WireVia, padstack: &Padstack, point: &Pt, net: &str, via_drill_default: i64, drill_of_net: i64, res: &UnitRes) -> Result<SessionVia, String> {
         let shape_count = padstack.shapes.len();
         let copper_layer_count = self.board.copper_count();
@@ -181,6 +181,9 @@ impl Db<'_> {
             let (a, b) = (top.min(bot), top.max(bot));
             (kind, via_diam, self.kicad_layers[a].clone(), self.kicad_layers[b].clone())
         };
+        // `PCB_VIA::GetDrillValue` of an undefined drill is the class's via drill, or its microvia drill for a MICROVIA; but the type tests above never make one
+        // of a padstack of two or more shapes (`topLayerNdx` is the largest index, `botLayerNdx` the smallest, so neither `topLayerNdx == 0 && botLayerNdx == 1`
+        // nor `topLayerNdx == count - 2 && botLayerNdx == count - 1` can hold): an F.Cu-In1.Cu via comes back BURIED, with the via drill, in KiCad as here.
         let drill = if drill_diam_iu > 0 { drill_diam_iu } else { drill_of_net };
         let via = Via { id: String::new(), net: net.to_string(), at: pos, drill: Nm::new(drill), diameter: Nm::new(diameter), from_layer, to_layer };
         Ok(SessionVia { via, kind, locked: wire_via.via_type == Some(WireType::Fix) })
@@ -199,7 +202,7 @@ fn shape_token(s: &ShapeElem) -> String {
 }
 
 /// `SPECCTRA_DB::FromSESSION` on a session already read (`LoadSESSION`), against `board`, the board as KiCad reads it. `via_drill_default` is the Default class's via
-/// drill in nanometres; `drill_of_net` answers `PCB_VIA::GetDrillValue` of a via of a net whose drill the session left undefined, micrometres.
+/// drill in nanometres; `drill_of_net` answers `PCB_VIA::GetDrillValue` of a via of a net whose drill the session left undefined, nanometres.
 pub fn from_session_db(session: &Session, board: &BoardView, via_drill_default: i64, drill_of_net: &dyn Fn(&str) -> i64) -> Result<SessionImport, String> {
     let route = session.route.as_ref().ok_or("Session file is missing the \"routes\" section")?;
     let library = route.library.as_ref().ok_or("Session file is missing the \"library_out\" section")?;

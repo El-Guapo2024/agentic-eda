@@ -300,6 +300,10 @@ export interface Part {
   models?: Array<{ name: string; offset: [number, number, number]; scale: [number, number, number]; rotate: [number, number, number]; opacity: number; show: boolean }>;
   /** How KiCad's 3D viewer sorts the part's models: a through-hole model (`tht`), an SMD one or a virtual one (`BOARD_ADAPTER::IsFootprintShown`). */
   kind3d?: "smd" | "tht" | "virtual";
+  /** The board footprint's "Do not populate" and "Exclude from position files" (`FP_DNP`, `FP_EXCLUDE_FROM_POS_FILES`), which hide its models unless the 3D viewer's
+   * "Models marked DNP" / "Models not in POS File" rows are on (`IsFootprintShown`). Absent = false. */
+  dnp?: boolean;
+  not_in_pos?: boolean;
   pads?: Pad[];
   /** A multi-gate footprint's units (`FOOTPRINT::GetUnitInfo`): each unit's name and the numbers of its pads; absent when it has fewer than two (Swap Gate Nets). */
   units?: Array<{ name: string; pins: string[] }> | null;
@@ -1017,6 +1021,8 @@ export interface BoardState {
   locked?: string[];
   /** The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`, `pcbnew.EditorControl.drillOrigin`), `[x, y]` nm; null/absent = (0, 0). */
   aux_origin?: [Nm, Nm] | null;
+  /** The board's plot settings (`PCB_PLOT_PARAMS`, `(setup (pcbplotparams ..))`) the Plot and drill dialogs start from: the layer selection of the layers the board has, and "Use drill/place file origin". Absent from an older backend. */
+  plot_params?: { layers: string[]; use_aux_origin: boolean };
   /** The point the editing grid is anchored at (`BOARD_DESIGN_SETTINGS::GetGridOrigin`, `common.Control.gridSetOrigin`), `[x, y]` nm; null/absent = (0, 0). */
   grid_origin?: [Nm, Nm] | null;
   /** The board's paper and title block (Page Settings, `common.Control.pageSettings`); null/absent are A4 landscape and an empty title block. */

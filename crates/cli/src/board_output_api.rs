@@ -45,15 +45,13 @@ fn origin_mm(x: f64, y: f64) -> String {
     format!("--user-origin={x:.6}x{y:.6}mm")
 }
 
-/// The centre of the board outline in mm: `BOARD::ComputeBoundingBox( true, true )`'s centre, what the dialogs use
-/// for "board centre" (the 3D formats' default origin choice besides the drill origin, and VRML's).
-pub(crate) fn board_center_mm(outline: &[eda_model::ir::Point]) -> (f64, f64) {
-    if outline.is_empty() {
-        return (0.0, 0.0);
+/// The board centre in mm: the centre of `BOARD::ComputeBoundingBox( true, true )`, the box of every Edge.Cuts shape of the board and of its
+/// footprints (`eda_drc::outline::board_edges_bounding_box`), what `DIALOG_EXPORT_STEP` passes for "Board center origin". (0, 0) with no Edge.Cuts.
+pub(crate) fn board_center_mm(design: &eda_model::ir::Design, model: Option<&eda_model::ConstraintModel>) -> (f64, f64) {
+    match eda_drc::outline::board_edges_bounding_box(design, model) {
+        Some((lo, hi)) => ((lo.x + hi.x).as_f64() / 2e6, (lo.y + hi.y).as_f64() / 2e6),
+        None => (0.0, 0.0),
     }
-    let (x0, x1) = outline.iter().fold((eda_model::units::Nm::MAX, eda_model::units::Nm::MIN), |(lo, hi), p| (lo.min(p.x), hi.max(p.x)));
-    let (y0, y1) = outline.iter().fold((eda_model::units::Nm::MAX, eda_model::units::Nm::MIN), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
-    ((x0 + x1).as_f64() / 2e6, (y0 + y1).as_f64() / 2e6)
 }
 
 /// The formats of `DIALOG_EXPORT_STEP`'s choice (`c_formatCommand`), by their kicad-cli command.
@@ -104,17 +102,22 @@ pub(crate) fn three_d_args(req: &Value, board_center: (f64, f64)) -> (&'static s
         "user" => a.push(origin_mm(req.get("origin_x").and_then(Value::as_f64).unwrap_or(0.0), req.get("origin_y").and_then(Value::as_f64).unwrap_or(0.0))),
         _ => a.push(origin_mm(board_center.0, board_center.1)),
     }
-    // The dialog's "tolerance" choice: 0.001, 0.01 or 0.1 mm.
-    let tolerance = req.get("tolerance").and_then(Value::as_f64).filter(|t| *t > 0.0 && *t <= 1.0).unwrap_or(0.001);
-    a.push(format!("--min-distance={tolerance:.3}mm"));
+    a.push(format!("--min-distance={:.3}mm", three_d_tolerance(req)));
     a.push("-f".into());
     (format, a)
 }
 
+/// The dialog's "tolerance" choice: 0.001, 0.01 or 0.1 mm.
+fn three_d_tolerance(req: &Value) -> f64 {
+    req.get("tolerance").and_then(Value::as_f64).filter(|t| *t > 0.0 && *t <= 1.0).unwrap_or(0.001)
+}
+
 /// `BOARD_EDITOR_CONTROL::ExportVRML` with `DIALOG_EXPORT_VRML`'s fields: `{ units: "mm"|"m"|"tenths"|"in",
-/// no_unspecified, no_dnp, copy_models, models_dir, relative_paths, user_origin, origin_x, origin_y }`. The origin is
-/// always passed: the user's, else the board centre.
-pub(crate) fn vrml_args(req: &Value, board_center: (f64, f64)) -> Vec<String> {
+/// no_unspecified, no_dnp, copy_models, models_dir, relative_paths, user_origin, origin_x, origin_y }`. "User defined origin" is
+/// checked at (0, 0) by default (`dialog_export_vrml_base.cpp`: `m_cbUserDefinedOrigin->SetValue(true)`); unchecked, the origin is the
+/// board centre, which kicad-cli works out itself as `ExportVRML` does (`PCBNEW_JOBS_HANDLER::JobExportStep`: no `--user-origin` is
+/// `brd->ComputeBoundingBox( true, true )`'s centre), so nothing is passed.
+pub(crate) fn vrml_args(req: &Value) -> Vec<String> {
     let mut a: Vec<String> = vec!["--units".into(), choice(req, "units", &["mm", "m", "tenths", "in"], "m").into()];
     if flag(req, "no_unspecified", false) {
         a.push("--no-unspecified".into());
@@ -122,10 +125,8 @@ pub(crate) fn vrml_args(req: &Value, board_center: (f64, f64)) -> Vec<String> {
     if flag(req, "no_dnp", false) {
         a.push("--no-dnp".into());
     }
-    if flag(req, "user_origin", false) {
+    if flag(req, "user_origin", true) {
         a.push(origin_mm(req.get("origin_x").and_then(Value::as_f64).unwrap_or(0.0), req.get("origin_y").and_then(Value::as_f64).unwrap_or(0.0)));
-    } else {
-        a.push(origin_mm(board_center.0, board_center.1));
     }
     // "Copy 3D model files to 3D model path": a folder of models beside the board; without it they are embedded.
     if flag(req, "copy_models", false) {
@@ -219,8 +220,12 @@ pub(crate) fn odb_args(req: &Value) -> Vec<String> {
 }
 
 /// `BOARD_EDITOR_CONTROL::GenBOMFileFromBoard`'s file -- `"Id";"Designator";"Footprint";"Quantity";"Designation";
-/// "Supplier and ref"`, one row per value/footprint pair, designators joined with ", " -- as `kicad-cli sch export
-/// bom` writes it (the BOM is kicad-cli's; the row number is its ITEM_NUMBER, the last column a field nothing fills).
+/// "Supplier and ref"`, one row per value/footprint pair, designators joined with ", " -- as kicad-cli's BOM writes it (the row number is
+/// its ITEM_NUMBER, the last column a field nothing fills). Run on the board (`kicad-cli pcb export bom`, `PCBNEW_JOBS_HANDLER::JobExportBom`
+/// over `board->Footprints()`), so a footprint that is on the board only (a mounting hole, a logo) is in it as in KiCad's.
+///
+/// Differs (kicad-cli's writer, not `GenBOMFileFromBoard`'s hand-made one): every value is quoted, the Footprint is the whole library id
+/// (KiCad's is `GetLibItemName()`), and the rows have no trailing `;;;`.
 pub(crate) fn pcb_bom_args() -> Vec<String> {
     [
         "--fields",
@@ -242,30 +247,32 @@ pub(crate) fn pcb_bom_args() -> Vec<String> {
     .to_vec()
 }
 
-fn outline_center(dir: &Path) -> Result<(f64, f64), String> {
-    let (_, design, _) = board::load(dir).map_err(|e| board::reasons(&e))?;
-    Ok(board_center_mm(&design.placement.map(|p| p.outline).unwrap_or_default()))
+/// `DIALOG_EXPORT_STEP::onExportButton`'s check before it runs kicad-cli: `BuildBoardPolygonOutlines( board, outline, maxError (0.05 mm),
+/// chainingEpsilon (the tolerance), false )`, refused in its words when the outline is missing or does not close.
+fn step_outline_refusal(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, tolerance_mm: f64) -> Option<String> {
+    let closes = eda_drc::outline::board_outline_closes(design, Some(model), eda_model::units::mm(0.05).as_f64(), eda_model::units::mm(tolerance_mm));
+    (!closes).then(|| format!("Board outline is missing or not closed using {tolerance_mm:.3} mm tolerance.\nRun DRC for a full analysis."))
 }
 
-/// `POST /api/fab/3d`: STEP, GLB, XAO, BREP, PLY, STL, STPZ, U3D or 3D PDF -- see [`three_d_args`].
+/// `POST /api/fab/3d`: STEP, GLB, XAO, BREP, PLY, STL, STPZ, U3D or 3D PDF -- see [`three_d_args`]. A board whose outline does not close
+/// at the dialog's tolerance is refused before kicad-cli runs, as KiCad's dialog refuses it ([`step_outline_refusal`]); kicad-cli
+/// itself would warn ("Board outline is malformed. Run DRC for a full analysis.") and write the file anyway.
 pub fn three_d(dir: &Path, body: &[u8]) -> Value {
     let req = request(body);
-    let center = match outline_center(dir) {
-        Ok(c) => c,
-        Err(e) => return fab_api::err(e),
+    let (design, model) = match board::load(dir) {
+        Ok((_, d, m)) => (d, m),
+        Err(e) => return fab_api::err(board::reasons(&e)),
     };
-    let (format, args) = three_d_args(&req, center);
+    let (format, args) = three_d_args(&req, board_center_mm(&design, Some(&model)));
+    if let Some(why) = step_outline_refusal(&design, &model, three_d_tolerance(&req)) {
+        return fab_api::err(why);
+    }
     fab_api::reply(kicad_engine::export(dir, format, &args))
 }
 
 /// `POST /api/fab/vrml` -- see [`vrml_args`].
 pub fn vrml(dir: &Path, body: &[u8]) -> Value {
-    let req = request(body);
-    let center = match outline_center(dir) {
-        Ok(c) => c,
-        Err(e) => return fab_api::err(e),
-    };
-    fab_api::reply(kicad_engine::export(dir, "vrml", &vrml_args(&req, center)))
+    fab_api::reply(kicad_engine::export(dir, "vrml", &vrml_args(&request(body))))
 }
 
 /// An IDF or GenCAD export's reply: a kicad-cli without the command says so (`kicad_engine::missing_pcb_export`); a run that fails is
@@ -318,8 +325,19 @@ pub fn odb(dir: &Path, body: &[u8]) -> Value {
 }
 
 /// `POST /api/fab/pcb_bom`: no options -- see [`pcb_bom_args`].
+///
+/// A board with no footprint is refused in `GenBOMFileFromBoard`'s words. A kicad-cli with no `pcb export bom` (older than the 10.99
+/// nightly) makes it from the derived schematic instead, as before: the board-only footprints are then missing.
 pub fn pcb_bom(dir: &Path) -> Value {
-    fab_api::reply(kicad_engine::export_sch(dir, "bom", &pcb_bom_args()))
+    match board::load(dir) {
+        Ok((_, design, _)) if design.placement.as_ref().is_none_or(|p| p.footprints.is_empty()) => return fab_api::err("Cannot export BOM: there are no footprints on the PCB."),
+        Err(e) => return fab_api::err(board::reasons(&e)),
+        Ok(_) => {}
+    }
+    if kicad_engine::missing_pcb_export("bom").is_some() {
+        return fab_api::reply(kicad_engine::export_sch(dir, "bom", &pcb_bom_args()));
+    }
+    fab_api::reply(kicad_engine::export(dir, "bom", &pcb_bom_args()))
 }
 
 #[cfg(test)]
@@ -333,11 +351,39 @@ mod tests {
         v.join(" ")
     }
 
+    fn blank() -> eda_model::ir::Design {
+        serde_json::from_value(json!({ "provenance": { "engine_version": "t", "intent_hash": "x", "seed": 0, "stage_hashes": [] } })).unwrap()
+    }
+
     #[test]
     fn the_board_centre_is_the_middle_of_the_outline_in_mm() {
-        let outline = [Point { x: mm(10.0), y: mm(20.0) }, Point { x: mm(110.0), y: mm(20.0) }, Point { x: mm(110.0), y: mm(80.0) }, Point { x: mm(10.0), y: mm(80.0) }];
-        assert_eq!(board_center_mm(&outline), (60.0, 50.0));
-        assert_eq!(board_center_mm(&[]), (0.0, 0.0));
+        let outline = vec![Point { x: mm(10.0), y: mm(20.0) }, Point { x: mm(110.0), y: mm(20.0) }, Point { x: mm(110.0), y: mm(80.0) }, Point { x: mm(10.0), y: mm(80.0) }];
+        let mut d = blank();
+        assert_eq!(board_center_mm(&d, None), (0.0, 0.0));
+        d.placement = Some(eda_model::ir::PlacementSection { outline, footprints: vec![], modules: vec![] });
+        assert_eq!(board_center_mm(&d, None), (60.0, 50.0));
+    }
+
+    /// X6 (r2-editors-exports): `ComputeBoundingBox( true, true )` counts every Edge.Cuts shape, not the largest outline only.
+    #[test]
+    fn the_board_centre_counts_every_edge_cuts_shape() {
+        let rect = |id: &str, x0: f64, x1: f64| eda_model::ir::Shape::Rect { id: id.into(), layer: "Edge.Cuts".into(), stroke_width: eda_model::units::Nm::ZERO, filled: false, start: Point { x: mm(x0), y: mm(0.0) }, end: Point { x: mm(x1), y: mm(10.0) } };
+        let mut d = blank();
+        d.drawings = Some(eda_model::ir::DrawingsSection { shapes: vec![rect("a", 0.0, 10.0), rect("b", 20.0, 30.0)], outline_is_shapes: true, ..Default::default() });
+        assert_eq!(board_center_mm(&d, None), (15.0, 5.0));
+    }
+
+    /// X4 (r2-editors-exports): KiCad's STEP dialog refuses an outline that does not close at its tolerance, in its words.
+    #[test]
+    fn a_3d_export_of_an_open_outline_is_refused_in_kicads_words() {
+        let seg = |id: &str, a: (f64, f64), b: (f64, f64)| eda_model::ir::Shape::Segment { id: id.into(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: Point { x: mm(a.0), y: mm(a.1) }, end: Point { x: mm(b.0), y: mm(b.1) } };
+        let mut d = blank();
+        d.drawings = Some(eda_model::ir::DrawingsSection { shapes: vec![seg("1", (0.0, 0.0), (10.0, 0.0)), seg("2", (10.0, 0.0), (10.0, 10.0)), seg("3", (10.0, 10.0), (0.0, 10.0))], outline_is_shapes: true, ..Default::default() });
+        let model = eda_model::ConstraintModel::default();
+        assert_eq!(step_outline_refusal(&d, &model, 0.001).as_deref(), Some("Board outline is missing or not closed using 0.001 mm tolerance.\nRun DRC for a full analysis."));
+        d.drawings.as_mut().unwrap().shapes.push(seg("4", (0.0, 10.0), (0.0, 0.0)));
+        assert_eq!(step_outline_refusal(&d, &model, 0.001), None, "closed");
+        assert!(step_outline_refusal(&blank(), &model, 0.01).unwrap().contains("0.010 mm"), "no outline at all is refused too");
     }
 
     #[test]
@@ -391,14 +437,16 @@ mod tests {
 
     #[test]
     fn vrml_takes_units_ignored_parts_and_an_origin_and_embeds_its_models_unless_told_to_copy_them() {
-        let a = vrml_args(&Value::Null, (30.0, 40.0));
-        assert_eq!(args(a), "--units m --user-origin=30.000000x40.000000mm -f", "metres (the dialog's choice), the board centre");
-        let a = vrml_args(&json!({ "units": "tenths", "no_dnp": true, "no_unspecified": true, "user_origin": true, "origin_x": 1.0, "origin_y": 2.0, "copy_models": true, "models_dir": "models", "relative_paths": true }), (30.0, 40.0));
+        let a = vrml_args(&Value::Null);
+        assert_eq!(args(a), "--units m --user-origin=0.000000x0.000000mm -f", "metres (the dialog's choice), the user origin at (0, 0) (X5)");
+        let a = vrml_args(&json!({ "units": "tenths", "no_dnp": true, "no_unspecified": true, "user_origin": true, "origin_x": 1.0, "origin_y": 2.0, "copy_models": true, "models_dir": "models", "relative_paths": true }));
         assert_eq!(args(a), "--units tenths --no-unspecified --no-dnp --user-origin=1.000000x2.000000mm --models-dir models --models-relative -f");
+        // Unchecked: kicad-cli takes the board centre itself (`ComputeBoundingBox( true, true )`).
+        assert_eq!(args(vrml_args(&json!({ "user_origin": false }))), "--units m -f");
         // Relative paths mean nothing without a folder of models; an empty folder name is the dialog's default.
-        assert_eq!(args(vrml_args(&json!({ "relative_paths": true }), (0.0, 0.0))), "--units m --user-origin=0.000000x0.000000mm -f");
-        assert!(args(vrml_args(&json!({ "copy_models": true, "models_dir": " " }), (0.0, 0.0))).contains("--models-dir shapes3D"));
-        assert!(args(vrml_args(&json!({ "units": "furlongs" }), (0.0, 0.0))).starts_with("--units m "), "an unknown unit falls back");
+        assert_eq!(args(vrml_args(&json!({ "relative_paths": true }))), "--units m --user-origin=0.000000x0.000000mm -f");
+        assert!(args(vrml_args(&json!({ "copy_models": true, "models_dir": " " }))).contains("--models-dir shapes3D"));
+        assert!(args(vrml_args(&json!({ "units": "furlongs" }))).starts_with("--units m "), "an unknown unit falls back");
     }
 
     #[test]

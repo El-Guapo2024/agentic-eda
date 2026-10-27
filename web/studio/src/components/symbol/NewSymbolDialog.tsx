@@ -6,6 +6,7 @@
 // offset with "Pin name inside" (`CreateSymbol`: inside keeps the offset, 20 mils for one of 0; outside writes 0) and the pin number/name
 // text. A parent symbol is the Derive from Existing Symbol dialog's question, so this one doesn't ask it. OK is one `new_symbol` and its
 // properties (one undo step, `SymbolEditorApi.newSymbol`); the new symbol opens in the editor.
+import { storedPinNameOffsetMm } from "../../kicad-port/symPinDialog";
 import { useEffect, useState } from "react";
 import { fetchSymbolEditorNames } from "../../api/client";
 import { splitLibName } from "../../kicad-port/libraryNames";
@@ -93,8 +94,8 @@ export function NewSymbolDialog() {
     setError(null);
     try {
       // `CreateSymbol`: `if( aProps.pinNameInside ) { SetPinNameOffset( aProps.pinTextPosition ); if( GetPinNameOffset() == 0 ) SetPinNameOffset( 1 ); }
-      // else SetPinNameOffset( 0 );` -- an inside offset of 0 is 20 mils here, as Symbol Properties' "Place pin names inside" already makes it.
-      const offsetMm = namesInside ? (pinNameOffsetMm === 0 ? DEFAULT_PIN_NAME_OFFSET_MM : pinNameOffsetMm) : 0;
+      // else SetPinNameOffset( 0 );` -- an inside offset of 0 is 1 internal unit, 0.0001 mm.
+      const offsetMm = storedPinNameOffsetMm(namesInside, pinNameOffsetMm, "new_symbol");
       const done = await api.newSymbol({
         name: check.name,
         reference,

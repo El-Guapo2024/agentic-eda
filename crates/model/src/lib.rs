@@ -40,6 +40,7 @@ pub mod pad_geom;
 pub mod padstack;
 pub mod page;
 pub mod pcb_items;
+pub mod plot_params;
 pub mod reannotate;
 pub mod rules;
 pub mod sch_clipboard;
