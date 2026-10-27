@@ -587,6 +587,14 @@ impl<'a> Board<'a> {
                     if reference != s.id {
                         sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, sheet_path: e.path.clone(), reference, unit: s.unit });
                     }
+                    // ... and the unit the clipboard's instance draws it as (`updatePastedSymbol`: `newInstance.m_Unit` from the clip instance, then
+                    // `SetUnit`), filed under the new path (r5 B5-L2)
+                    if let Some(from) = &source {
+                        let unit = eda_model::sheet_list::unit_under(&screen, s, from);
+                        if unit != s.unit {
+                            sec.extras.path_units.entry(eda_model::ir::field_key(&s.id, s.unit)).or_default().insert(e.path.join("/"), unit);
+                        }
+                    }
                 }
             }
         }

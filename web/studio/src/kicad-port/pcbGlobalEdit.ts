@@ -7,7 +7,7 @@
 // Pure functions over the studio's board state; the commands they produce are sent as one undo step by
 // actions/pcbGlobalEditSweep.ts.
 //
-// Units: micrometres.
+// Units: nanometres (the board's coordinates).
 
 import type { BoardState, Cmd, CmdShape, Shape } from "../api/types";
 import { arcCenter, toIU, type V } from "./pcbGeom";
@@ -210,11 +210,16 @@ export interface CleanupGraphicsPlan {
   /** What the dialog lists under "Changes to be applied" (a dry run; outline fixes are not listed, as in the C++). */
   items: CleanupItem[];
   remove: string[];
+  /** The board-outline lines `fixBoardOutlines` moved, edited in place (`m_commit.Modify( shape )`): their id, group and lock stay. */
+  replace: { id: string; shape: CmdShape }[];
   add: CmdShape[];
 }
 
-/** `equivalent( a, b, epsilon )` with `m_DRCEpsilon` = 0.5 um: on integer micrometres, equal. */
-const same = (a: readonly [number, number], b: readonly [number, number]): boolean => Math.abs(a[0] - b[0]) < 0.5 && Math.abs(a[1] - b[1]) < 0.5;
+/** `m_epsilon = GetDRCEpsilon()`: `ADVANCED_CFG::m_DRCEpsilon`, 0.5 um, in nanometres (round 5 B5-3: it was exact equality since the move to nanometres). */
+export const CLEANUP_EPSILON_NM = 500;
+
+/** `equivalent( a, b, epsilon )`: `abs( a.x - b.x ) < epsilon && abs( a.y - b.y ) < epsilon`. */
+const same = (a: readonly [number, number], b: readonly [number, number]): boolean => Math.abs(a[0] - b[0]) < CLEANUP_EPSILON_NM && Math.abs(a[1] - b[1]) < CLEANUP_EPSILON_NM;
 
 /** `GRAPHICS_CLEANER::isNullShape`. */
 function isNullShape(s: Shape): boolean {
@@ -249,7 +254,7 @@ function areEquivalent(a: Shape, b: Shape): boolean {
       const o = b as typeof a;
       const ca = arcCenter({ start: toIU(a.start), mid: toIU(a.mid), end: toIU(a.end) });
       const cb = arcCenter({ start: toIU(o.start), mid: toIU(o.mid), end: toIU(o.end) });
-      return Math.abs(ca[0] - cb[0]) < 500 && Math.abs(ca[1] - cb[1]) < 500 && same(a.start, o.start) && same(a.end, o.end);
+      return Math.abs(ca[0] - cb[0]) < CLEANUP_EPSILON_NM && Math.abs(ca[1] - cb[1]) < CLEANUP_EPSILON_NM && same(a.start, o.start) && same(a.end, o.end);
     }
     case "polygon":
       return false;
@@ -275,6 +280,7 @@ export function planCleanupGraphics(shapes: readonly Shape[], o: CleanupGraphics
   const items: CleanupItem[] = [];
   const remove: string[] = [];
   const add: CmdShape[] = [];
+  const healed = new Map<string, CmdShape>(); // the outline lines `fixBoardOutlines` moved, by id
   const deleted = new Set<string>(); // IS_DELETED
 
   if (o.deleteRedundant) {
@@ -299,21 +305,37 @@ export function planCleanupGraphics(shapes: readonly Shape[], o: CleanupGraphics
     }
   }
 
+  // `fixBoardOutlines`: `shapeList.push_back( shape ); m_commit.Modify( shape ); ... ConnectBoardShapes( shapeList, m_outlinesTolerance )` -- the shapes are moved in
+  // place, so a healed line keeps its id, group and lock, and `mergeRects()` below sees it where it now is (round 5 B5-4).
   if (o.fixBoardOutlines && !dryRun) {
     const edge = shapes.filter((s) => s.layer === "Edge.Cuts" && !deleted.has(s.id));
     const res = healShapes(edge, o.toleranceNm);
+    const byId = new Map(res.replaced.map((r) => [r.id, r.addIndex]));
+    const used = new Set<number>();
     for (const id of res.remove) {
+      const idx = byId.get(id);
+      const next = idx === undefined ? undefined : res.add[idx];
+      if (idx !== undefined && next) {
+        healed.set(id, next as CmdShape);
+        used.add(idx);
+        continue;
+      }
       deleted.add(id);
       remove.push(id);
     }
-    add.push(...(res.add as CmdShape[]));
+    res.add.forEach((shape, i) => {
+      if (!used.has(i)) add.push(shape as CmdShape);
+    });
   }
 
   if (o.mergeRects) {
     const sides: Side[] = [];
     const byStart = new Map<string, Side[]>();
     const key = (p: V) => `${p[0]},${p[1]}`;
-    for (const s of shapes) {
+    for (const original of shapes) {
+      // A healed outline line, where the fix moved it.
+      const h = healed.get(original.id);
+      const s: Shape = h && h.kind === "segment" && original.kind === "segment" ? { ...original, start: [h.start.x, h.start.y], end: [h.end.x, h.end.y] } : original;
       if (s.kind !== "segment" || isNullShape(s) || deleted.has(s.id)) continue;
       if (s.start[0] !== s.end[0] && s.start[1] !== s.end[1]) continue;
       let start: V = [s.start[0], s.start[1]];
@@ -352,7 +374,14 @@ export function planCleanupGraphics(shapes: readonly Shape[], o: CleanupGraphics
     }
   }
 
-  return { items, remove, add };
+  // A healed line that a rectangle took is gone; the others are edited in place.
+  const replace = [...healed].filter(([id]) => !deleted.has(id)).map(([id, shape]) => ({ id, shape }));
+  return { items, remove, replace, add };
+}
+
+/** The plan as one undo step's commands ("Cleanup Graphics"): the removals, the in-place edits of the healed outline, the new shapes. */
+export function cleanupGraphicsCmds(plan: CleanupGraphicsPlan): Cmd[] {
+  return [...plan.remove.map((id): Cmd => ({ op: "delete_shape", id })), ...plan.replace.map(({ id, shape }): Cmd => ({ op: "replace_shape", id, shape })), ...plan.add.map((shape): Cmd => ({ op: "add_shape", shape }))];
 }
 
 // ---------------------------------------------------------------------- wildcards

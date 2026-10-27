@@ -26,8 +26,9 @@ test("a new text takes the size, thickness and style of its layer class, is mirr
   assert.deepEqual(textStyleOf(defaults, "F.SilkS"), { widthNm: 1_200_000, heightNm: 1_300_000, thicknessNm: 180, italic: true, upright: false });
   assert.deepEqual([textStyleOf(defaults, "B.Cu").heightNm, textStyleOf(defaults, "In1.Cu").thicknessNm], [1_500_000, 300_000]);
   assert.deepEqual([textStyleOf(defaults, "Edge.Cuts").heightNm, textStyleOf(defaults, "F.CrtYd").thicknessNm], [1_000_000, 150_000], "the classes with no text cells keep KiCad's own constants");
-  assert.deepEqual(newTextStyle(defaults, "F.SilkS"), { sizeNm: 1_300_000, strokeWidthNm: 180, mirror: false, justify: "left" });
-  assert.deepEqual(newTextStyle(defaults, "B.SilkS"), { sizeNm: 1_300_000, strokeWidthNm: 180, mirror: true, justify: "left" });
+  // The class's width and italic too, and the bottom justification (round 5 B5-2).
+  assert.deepEqual(newTextStyle(defaults, "F.SilkS"), { sizeNm: 1_300_000, widthNm: 1_200_000, strokeWidthNm: 180, italic: true, mirror: false, justify: "left", valign: "bottom" });
+  assert.deepEqual(newTextStyle(defaults, "B.SilkS"), { sizeNm: 1_300_000, widthNm: 1_200_000, strokeWidthNm: 180, italic: true, mirror: true, justify: "left", valign: "bottom" });
   assert.deepEqual(["B.Cu", "B.Fab", "B.CrtYd", "B.Mask", "B.Paste", "B.Adhes"].map(isBackLayer), [true, true, true, true, true, true]);
   assert.deepEqual(["F.Cu", "F.SilkS", "In1.Cu", "Edge.Cuts", "Dwgs.User"].map(isBackLayer), [false, false, false, false, false]);
 });

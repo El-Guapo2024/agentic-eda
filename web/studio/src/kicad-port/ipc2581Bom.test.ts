@@ -31,8 +31,14 @@ test("the dialog starts from the kept columns that still exist (TransferDataToWi
   const opts = ["Datasheet", "Description", "LCSC", "MPN", "Mfg", "Reference", "Value"];
   assert.deepEqual(ipc2581DialogStart(undefined, "B", opts), { bom_rev: "B", col_id: "", col_mpn: "", col_mfg: "", col_dist_pn: "", col_dist: NOT_APPLICABLE });
   const kept = { id: "Reference", mpn: "MPN", mfg: "Mfg", dist_pn: "LCSC", dist: "LCSC Electronics", bom_rev: "3" };
-  assert.deepEqual(ipc2581DialogStart(kept, "B", opts), { bom_rev: "3", col_id: "", col_mpn: "MPN", col_mfg: "Mfg", col_dist_pn: "LCSC", col_dist: "LCSC Electronics" }, "the Internal ID is not read back (KiCad sets it on m_choiceMPN)");
+  assert.deepEqual(ipc2581DialogStart(kept, "B", opts), { bom_rev: "3", col_id: "Reference", col_mpn: "MPN", col_mfg: "Mfg", col_dist_pn: "LCSC", col_dist: "LCSC Electronics" });
   assert.deepEqual(ipc2581DialogStart({ mpn: "Gone", mfg: "Mfg", dist_pn: "Gone" }, "", opts), { bom_rev: "", col_id: "", col_mpn: "", col_mfg: "", col_dist_pn: "", col_dist: NOT_APPLICABLE });
+});
+
+// X5-2: 25ec2335's DIALOG_EXPORT_2581_BOM::TransferDataToWindow reads the Internal ID back with the other columns.
+test("the internal id is read back as 25ec2335's BOM dialog does", () => {
+  assert.equal(ipc2581DialogStart({ id: "Reference" }, "", ["Reference", "Value"]).col_id, "Reference");
+  assert.equal(ipc2581DialogStart({ id: "Gone" }, "", ["Reference", "Value"]).col_id, "", "a column the board has lost is Generate unique again");
 });
 
 test("what Export keeps and passes: Manufacturer and Distributor only with their P/N column, and never N/A", () => {

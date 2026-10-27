@@ -387,14 +387,28 @@ impl<'a> Board<'a> {
             SchCmd::DeleteGraphic { id } => delete_graphic(self.schematic_mut()?, id),
             SchCmd::EditGraphic { id, graphic } => edit_graphic(self.schematic_mut()?, id, graphic.clone()),
             SchCmd::DeleteSheet { id } => {
+                let pins: Vec<Point> = self.schematic_mut()?.sheets.iter().filter(|s| &s.id == id).flat_map(|s| s.pins.iter().map(|p| p.at)).collect();
                 delete_sheet(self.schematic_mut()?, id)?;
+                // `DoDelete`: `for( SCH_SHEET_PIN* pin : sheet->GetPins() ) pts.insert( pin->GetPosition() )`, then `DeleteJunction` where the junction is no
+                // longer explicit, which merges the wires in line there whatever their strokes (r5 B5-L1)
+                for at in pins {
+                    self.delete_junction_at(at, false)?;
+                }
                 // the references its placement gave a screen another sheet still shows go with it (`PruneOrphanedSymbolInstances`)
                 eda_model::sheet_list::prune_orphaned_overrides(&mut self.design);
                 // `DoDelete` puts the sheet's pins' points in `pts` and drops a junction there that joins nothing any more; the commit cleans up (r4 C4-L1)
                 self.commit_clean_up()
             }
             SchCmd::AddSheetPin { sheet, name, shape, at } => add_sheet_pin(self.schematic_mut()?, sheet, name, *shape, *at),
-            SchCmd::DeleteSheetPin { id } => delete_sheet_pin(self.schematic_mut()?, id).and_then(|_| self.commit_clean_up()),
+            SchCmd::DeleteSheetPin { id } => {
+                let at = self.schematic_mut()?.sheets.iter().flat_map(|s| s.pins.iter()).find(|p| &p.id == id).map(|p| p.at);
+                delete_sheet_pin(self.schematic_mut()?, id)?;
+                // `DoDelete` puts the pin's position in `pts` and runs `DeleteJunction` there when the junction is no longer explicit (r5 B5-L1)
+                if let Some(at) = at {
+                    self.delete_junction_at(at, false)?;
+                }
+                self.commit_clean_up()
+            }
             SchCmd::EditSheetPin { id, name, shape, at, size_nm, bold, italic } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at, SheetPinLookEdit { size_nm: *size_nm, bold: *bold, italic: *italic }),
             SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id),
             SchCmd::UpdateLibrarySymbols { lib_ids } => self.update_library_symbols(lib_ids),

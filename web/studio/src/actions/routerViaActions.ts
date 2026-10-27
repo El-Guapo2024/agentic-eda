@@ -61,7 +61,10 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
         }
         // the net class's sizes (or a microvia's): none sent, the server asks the rules for the route's net (`handleLayerSwitch`, r3 R3-4).
         // The choice is the via list's index (0 = net class), not the size (r4 R4-8).
-        const size = chosenViaSize(plan.viaType, state.currentViaPreset, state.currentViaIndex, 1 + (board.routing?.via_presets?.length ?? 0), state.pcbx.useCustomTrackVia);
+        // The chosen entry is read from the board's list now (`GetCurrentViaSize`: `m_ViasDimensionsList[ m_viaSizeIndex ]`), so a Board Setup edit to it reaches it (r5 R5-9); the custom size while custom sizes are in use.
+        const presets = board.routing?.via_presets ?? [];
+        const entry = state.pcbx.useCustomTrackVia ? { diameter: state.pcbx.customTrackVia.viaDiameterNm, drill: state.pcbx.customTrackVia.viaDrillNm } : state.currentViaIndex != null && state.currentViaIndex > 0 ? (presets[state.currentViaIndex - 1] ?? null) : state.currentViaPreset;
+        const size = chosenViaSize(plan.viaType, entry, state.currentViaIndex, 1 + presets.length, state.pcbx.useCustomTrackVia);
         void routeToggleVia(true, size?.diameter, size?.drill, plan.toLayer, { viaType: plan.viaType, span: plan.span }).then((reply) => {
           if (!reply.ok) {
             if (reply.message) toast(reply.message, "error");
@@ -113,15 +116,16 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
         element: createElement(TrackViaSizeDialog, {
           value: state.pcbx.customTrackVia,
           onOk: (v) => {
+            // `m_TempOverrideTrackWidth = true; bds.UseCustomTrackViaSize( true );` -- "Use Starting Track Width" is left as it is (r5 R5-7)
             dispatch({ type: "PCBX", patch: { customTrackVia: v, useCustomTrackVia: true } });
-            dispatch({ type: "BCX", patch: { autoTrackWidth: false } });
             dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: v.trackNm });
             dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: { diameter: v.viaDiameterNm, drill: v.viaDrillNm } });
             const live = ctx.api.getState().drawState;
             const at = ctx.api.getState().cursorNm;
             if (live?.kind === "route" && at) {
-              dispatch({ type: "SET_DRAW_STATE", draw: { ...live, width: v.trackNm } });
-              void routeMove(at.x, at.y, undefined, v.trackNm).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview({ ...live, width: v.trackNm }, preview) }));
+              const next = { ...live, width: v.trackNm, widthOverride: true, sizes: live.sizes ? { ...live.sizes, width_source: "user choice" } : undefined };
+              dispatch({ type: "SET_DRAW_STATE", draw: next });
+              void routeMove(at.x, at.y, undefined, v.trackNm).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(next, preview) }));
             }
           },
         }),

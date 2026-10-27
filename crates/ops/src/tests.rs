@@ -1222,6 +1222,25 @@ fn a_texts_imported_looks_follow_its_edits_and_leave_with_it() {
     assert!(b.design().drawings.as_ref().unwrap().text_extras.is_empty(), "the looks leave with the text");
 }
 
+/// Round 5's B5-2: the board's Text tool places its text with `PlaceText`'s `textAttrs` -- the class's glyph width (not the height), italic and the bottom
+/// justification -- kept as the text's extras under the id it was given.
+#[test]
+fn the_text_tool_places_its_text_with_the_class_width_italic_and_bottom_justification() {
+    use eda_model::board_text::TextExtra;
+    use eda_model::ir::TextVAlign;
+    let m = net_model();
+    let mut b = board(&m);
+    let text = Text { id: String::new(), content: "A".into(), at: Point { x: mm(10.0), y: mm(10.0) }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: TextJustify::Left, mirror: false };
+    b.apply(&Cmd::PlaceText { text: text.clone(), extra: Some(TextExtra { id: String::new(), width_nm: Some(mm(1.5)), italic: true, valign: TextVAlign::Bottom, ..Default::default() }) }).unwrap();
+    let dr = b.design().drawings.as_ref().unwrap();
+    let id = dr.texts[0].id.clone();
+    let x = dr.text_extra(&id).expect("the extras are kept under the new text's id");
+    assert_eq!((x.width_nm, x.italic, x.valign), (Some(mm(1.5)), true, TextVAlign::Bottom));
+    // Extras that say nothing are not kept.
+    b.apply(&Cmd::PlaceText { text: Text { content: "B".into(), ..text }, extra: Some(TextExtra::default()) }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().text_extras.len(), 1);
+}
+
 /// Set Text and Graphics to Layer Defaults, and a size or a stroke width in Edit Text and Graphics Properties, replace the glyph width and the automatic stroke width an
 /// imported text kept; a text that is not in the selection keeps both.
 #[test]
@@ -1587,6 +1606,56 @@ fn paste_items_with_nothing_in_it_is_a_harmless_no_op() {
 
 // ------------------------------------------------------- commit route
 
+// r5 R5-2: `PNS_KICAD_IFACE::createBoardItem` gives a track the router made in place of a board track (`GetSourceItem()`) that track's solder-mask
+// opening, and `Commit` files it in that track's group (`m_replacementMap[src]`); a new track or via joins the entered group, and a replacement of
+// a track that was in no group stays out of the entered one.
+#[test]
+fn commit_route_carries_a_replaced_tracks_mask_and_group() {
+    let m = net_model();
+    let mut b = board(&m);
+    let seg = |x: f64| vec![Point { x: mm(x), y: mm(-2.0) }, Point { x: mm(x), y: mm(2.0) }];
+    for x in [2.5, 4.0, 6.0, 8.0, 10.0] {
+        b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: seg(x) }).unwrap();
+    }
+    let id_at = |b: &Board<'_>, x: f64| b.design().routing.as_ref().unwrap().tracks.iter().find(|t| t.pts[0].x == mm(x)).unwrap().id.clone();
+    let (a, a2, c, c2, loose) = (id_at(&b, 2.5), id_at(&b, 4.0), id_at(&b, 6.0), id_at(&b, 8.0), id_at(&b, 10.0));
+    b.apply(&Cmd::Group { ids: vec![a.clone(), a2.clone()] }).unwrap();
+    b.apply(&Cmd::Group { ids: vec![c.clone(), c2.clone()] }).unwrap();
+    let mut design = b.design().clone();
+    let dr = design.drawings.as_mut().unwrap();
+    let g_a = dr.parent_group(&a).unwrap().id.clone();
+    let g_c = dr.parent_group(&c).unwrap().id.clone();
+    dr.track_masks.push(eda_model::track_mask::TrackMask { id: a.clone(), margin: Some(mm(0.05)) });
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+    let track = |pts: Vec<Point>| Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts, arc_mid_offset: None };
+    b.apply(&Cmd::CommitRoute {
+        remove_track_ids: vec![a.clone(), loose.clone()],
+        remove_via_ids: vec![],
+        // the shoved `a`, the shoved `loose`, and the new route
+        tracks: vec![track(seg(3.0)), track(seg(10.5)), track(vec![Point { x: mm(0.0), y: mm(5.0) }, Point { x: mm(1.0), y: mm(5.0) }])],
+        vias: vec![Via { id: String::new(), net: "GND".into(), at: Point { x: mm(1.0), y: mm(5.0) }, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
+        lock_tracks: vec![],
+        via_kinds: vec![],
+        track_sources: vec![(0, a.clone()), (1, loose.clone())],
+        group: Some(g_c.clone()),
+    })
+    .unwrap();
+    let d = b.design();
+    let rt = d.routing.as_ref().unwrap();
+    let new_id = |x: f64| rt.tracks.iter().find(|t| t.pts[0].x == mm(x)).unwrap().id.clone();
+    let (moved, moved_loose, route) = (new_id(3.0), new_id(10.5), new_id(0.0));
+    let via = rt.vias[0].id.clone();
+    let dr = d.drawings.as_ref().unwrap();
+    assert_eq!(dr.track_mask(&moved).map(|m| m.margin), Some(Some(mm(0.05))), "the shoved track keeps the mask opening and its margin");
+    assert!(dr.track_mask(&a).is_none(), "the removed track's entry is gone");
+    assert_eq!(dr.track_masks.len(), 1);
+    assert_eq!(dr.parent_group(&moved).map(|g| g.id.clone()), Some(g_a.clone()), "the shoved track stays in its group");
+    assert_eq!(dr.parent_group(&route).map(|g| g.id.clone()), Some(g_c.clone()), "the new track joins the entered group");
+    assert_eq!(dr.parent_group(&via).map(|g| g.id.clone()), Some(g_c.clone()), "the new via joins the entered group");
+    assert!(dr.parent_group(&moved_loose).is_none(), "a replacement of a track in no group stays in none");
+    assert!(dr.parent_group(&a).is_none() && dr.group(&g_a).unwrap().member_ids.len() == 2);
+}
+
 #[test]
 fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
     let m = net_model();
@@ -1604,6 +1673,8 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
         vias: vec![],
         lock_tracks: vec![],
         via_kinds: vec![],
+        track_sources: vec![],
+        group: None,
     })
     .unwrap();
 
@@ -1619,7 +1690,7 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
 fn commit_route_tolerates_an_already_gone_id() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap();
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 1);
 }
 
@@ -1627,7 +1698,7 @@ fn commit_route_tolerates_an_already_gone_id() {
 fn commit_route_rejects_an_unknown_net() {
     let m = net_model();
     let mut b = board(&m);
-    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap_err();
+    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None }).unwrap_err();
     assert!(!e.is_empty());
     assert!(b.design().routing.is_none(), "a refused commit must not partially apply");
 }
@@ -3200,7 +3271,7 @@ fn commit_route_gives_its_vias_their_type_and_drops_the_extras_of_removed_vias()
     assert_eq!(extras.len(), 1);
     assert_eq!((extras[0].id.as_str(), extras[0].kind), (micro.as_str(), eda_model::via_extra::ViaKind::Micro));
     assert!(b.design().drawings.as_ref().unwrap().via_extra(&through).is_none());
-    b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![micro], tracks: vec![], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap();
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![micro], tracks: vec![], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None }).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().via_extras.is_empty(), "the removed via's type went with it");
 }
 
@@ -3288,6 +3359,41 @@ fn deleting_a_t_with_its_junction_in_one_batch_deletes_all_three() {
     b.apply(&Cmd::Batch { cmds }).unwrap_or_else(|e| panic!("{:?}", e));
     let sch = b.design().schematic.as_ref().unwrap();
     assert!(sch.wires.is_empty() && sch.junctions.is_empty(), "{:?} {:?}", sch.wires, sch.junctions);
+}
+
+/// r5 B5-H1 (`SCH_EDIT_TOOL::DoDelete`: a junction is flagged and deleted last, through `DeleteJunction`, after the other items): a batch that lists the T's dot
+/// before one half of its through wire -- the studio sends the verbs in selection order -- deletes the dot and that half and keeps the other half and the
+/// stem, whichever half it names.
+#[test]
+fn a_junction_listed_before_a_wire_half_is_deleted_last() {
+    let m = model(vec![], &[], vec![]);
+    let dot = p(mm(20.32), mm(40.64));
+    for keep_left in [true, false] {
+        let mut b = board(&m);
+        // two halves of a through wire, as a KiCad file has them (the studio's own wire tool draws one polyline), a stem, and the dot
+        b.apply(&Cmd::AddWire { pts: vec![p(mm(20.32), mm(50.8)), dot], bus: false }).unwrap();
+        {
+            let sch = b.design.schematic.as_mut().unwrap();
+            for (id, a) in [("wire_h1", p(mm(10.16), mm(40.64))), ("wire_h2", p(mm(30.48), mm(40.64)))] {
+                sch.wires.push(eda_model::ir::Wire { id: id.into(), net: String::new(), pins: vec![], pts: vec![a, dot], bus: false });
+            }
+            if sch.junctions.is_empty() {
+                sch.junctions.push(eda_model::ir::Junction { id: "jct_t".into(), at: dot });
+            }
+        }
+        let sch = b.design().schematic.as_ref().unwrap();
+        let half = |left: bool| sch.wires.iter().find(|w| w.pts.contains(&dot) && w.pts.iter().all(|q| q.y == dot.y) && w.pts.iter().any(|q| if left { q.x < dot.x } else { q.x > dot.x })).map(|w| w.id.clone()).expect("a half");
+        let gone = half(!keep_left);
+        let cmds = vec![Cmd::DeleteJunction { id: sch.junctions[0].id.clone() }, Cmd::DeleteWire { id: gone }];
+        b.apply(&Cmd::Batch { cmds }).unwrap_or_else(|e| panic!("keep_left {keep_left}: {e:?}"));
+        let sch = b.design().schematic.as_ref().unwrap();
+        assert!(sch.junctions.is_empty());
+        let kept_end = if keep_left { p(mm(10.16), mm(40.64)) } else { p(mm(30.48), mm(40.64)) };
+        let lost_end = if keep_left { p(mm(30.48), mm(40.64)) } else { p(mm(10.16), mm(40.64)) };
+        assert!(sch.wires.iter().any(|w| w.pts.contains(&kept_end) && w.pts.contains(&dot)), "keep_left {keep_left}: the half not named stays: {:?}", sch.wires);
+        assert!(!sch.wires.iter().any(|w| w.pts.contains(&lost_end)), "keep_left {keep_left}: {:?}", sch.wires);
+        assert!(sch.wires.iter().any(|w| w.pts.contains(&p(mm(20.32), mm(50.8)))), "the stem stays");
+    }
 }
 
 /// r4 C4-L2 (`SCH_EDIT_FRAME::DeleteJunction`: the lines in line that end at the dot merge, `MergeOverlap( .., false )` looks for no junction): deleting the dot

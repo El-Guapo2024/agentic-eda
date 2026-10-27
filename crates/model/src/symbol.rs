@@ -271,6 +271,11 @@ pub struct LibConnectivity {
     /// `(jumper_pin_groups ("1" "2") ..)` (`LIB_SYMBOL::JumperPinGroups`): the pins of each group, by number, are one node.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub jumper_pin_groups: Vec<Vec<String>>,
+    /// The alternate functions of the pins, by pin number (`(pin .. (alternate "name" <type> <shape>))`, `SCH_PIN::GetAlternates`), each pin's sorted by
+    /// name as KiCad's `std::map` keeps them. A placed symbol picks one per pin (`SchExtras::pin_alternates`), and the pin is then of the alternate's
+    /// electrical type ([`LibSymbol::placed_pin_type`]). Kept here, not on [`LibPin`], so the pin's literals stay as they are.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub pin_alternates: std::collections::BTreeMap<String, Vec<crate::ir::PinAlternate>>,
 }
 
 impl LibConnectivity {
@@ -280,6 +285,15 @@ impl LibConnectivity {
 }
 
 impl LibSymbol {
+    /// The electrical type of the library pin `pin` on a placed symbol that picked the alternate function `alt` for it (`SCH_PIN::GetType`: an alternate's
+    /// `m_Type` when the pin has one, `m_libPin->GetAlt( m_alt )`). `SCH_PIN::SetAlt` keeps no alternate that is the pin's own name or that the library
+    /// pin does not have, so for those, and for no alternate, it is the library pin's type (r5 D5-H3).
+    pub fn placed_pin_type<'a>(&'a self, pin: &'a LibPin, alt: Option<&str>) -> &'a str {
+        alt.filter(|a| !a.is_empty() && *a != pin.name)
+            .and_then(|a| self.connectivity.pin_alternates.get(&pin.number).and_then(|alts| alts.iter().find(|x| x.name == a)))
+            .map_or(pin.electrical_type.as_str(), |x| x.electrical_type.as_str())
+    }
+
     pub fn pin_by_number(&self, number: &str) -> Option<&LibPin> {
         self.pins.iter().find(|p| p.number == number)
     }
@@ -330,7 +344,9 @@ impl LibSymbol {
     pub fn in_style(&self, style: u32) -> std::borrow::Cow<'_, LibSymbol> {
         let want = if style == 2 { 2 } else { 1 };
         match &self.alternate {
-            Some(alt) if self.drawn_style() != want => std::borrow::Cow::Owned(LibSymbol { connectivity: Default::default(),
+            // one `LIB_SYMBOL` for every body style: its jumper groups, power kind and pin alternates hold in either (`conn_facts.cpp` reads
+            // `JumperPinGroups()` whatever the style, r5 A5-M2)
+            Some(alt) if self.drawn_style() != want => std::borrow::Cow::Owned(LibSymbol { connectivity: self.connectivity.clone(),
                 lib_id: self.lib_id.clone(),
                 graphics: alt.graphics.clone(),
                 pins: alt.pins.clone(),
@@ -717,6 +733,18 @@ mod tests {
             body_nm: None,
             edge: None,
         }
+    }
+
+    /// r5 A5-M2: the symbol in its alternate body style keeps what the connectivity engine reads of it (one `LIB_SYMBOL` for every body style).
+    #[test]
+    fn in_style_keeps_the_connectivity() {
+        let mut sym = device_r();
+        sym.alternate = Some(Box::new(AlternateBody { style: 2, graphics: sym.graphics.clone(), pins: sym.pins.clone() }));
+        sym.connectivity.jumper_pin_groups = vec![vec!["1".into(), "2".into()]];
+        sym.connectivity.duplicate_pin_numbers_are_jumpers = true;
+        let styled = sym.in_style(2);
+        assert!(matches!(styled, std::borrow::Cow::Owned(_)));
+        assert_eq!(styled.connectivity, sym.connectivity);
     }
 
     #[test]

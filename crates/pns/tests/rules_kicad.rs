@@ -107,7 +107,8 @@ fn kicad_violations(design: &Design, model: &ConstraintModel, kinds: &[&str]) ->
     std::fs::create_dir_all(&work).unwrap();
     let report = eda_kicad_engine::drc(design, model, &work, false).unwrap_or_else(|e| panic!("kicad-cli DRC: {e:?}"));
     let _ = std::fs::remove_dir_all(&work);
-    Some(report.violations.iter().filter(|v| kinds.contains(&v.kind.as_str()) && !v.excluded).map(|v| format!("{}: {}", v.kind, v.description)).collect())
+    // the ratsnest's items (`unconnected_items`) are a list of their own in the report
+    Some(report.violations.iter().chain(&report.unconnected_items).filter(|v| kinds.contains(&v.kind.as_str()) && !v.excluded).map(|v| format!("{}: {}", v.kind, v.description)).collect())
 }
 
 /// R-1: a 0.6 mm clearance on pad R2.1 (`PAD::GetLocalClearance`, "Local override on %s"), where the net class asks 0.2 mm. The straight way from
@@ -164,6 +165,98 @@ fn a_custom_rule_holds_a_route_off() {
         let class_only = route(&design, &plain_model, r1, r3);
         assert!(gap_to_pad(&class_only, r2) < 999_500.0);
         assert!(!kicad_violations(&apply(&design, &class_only), &model, &["clearance"]).unwrap().is_empty(), "kicad-cli reads the rule");
+    }
+}
+
+/// R5-D1: a custom rule keyed on the footprint's sheet, or on a component class the project's assignment rule gives it for a field of it
+/// (`memberOfSheet`, `hasComponentClass`; the rule `FOOTPRINT_FIELD Voltage = 400V` is `A.getField('Voltage') == '400V'` on the footprint). R2 is on
+/// sheet `/HV/` with the field `Voltage=400V` (its symbol's, as Update PCB from Schematic gives them: the derived board writes `(sheetname "/HV/")` and
+/// the field, and the project the assignment rule), and its pad on GND. Each rule asks 1 mm: the route keeps 1 mm from R2.1, and kicad-cli finds
+/// nothing; the route the net class alone gives is what kicad-cli flags. (`getField` itself answers only for a footprint, `getFieldFunc`: a pad's is
+/// empty, so a clearance rule on it does not reach a pad.)
+#[test]
+fn a_rule_on_the_sheet_or_a_component_class_holds_a_route_off() {
+    let (r1, r2, r3) = (p(5.0, 10.0), p(15.0, 11.2), p(25.0, 10.0));
+    let nets: &[(&str, &[&str])] = &[("SIG", &["R1.1", "R3.1"]), ("GND", &["R2.1"])];
+    for condition in ["A.memberOfSheet('/HV/')", "A.hasComponentClass('HV')"] {
+        let (design, mut model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2), ("R3", "PAD1", r3)], nets);
+        model.symbol_links.insert("R2".into(), eda_model::SymbolLink { path: "/00000000-0000-0000-0000-0000000000a1/00000000-0000-0000-0000-0000000000a2".into(), sheetname: "/HV/".into(), sheetfile: "hv.kicad_sch".into(), fields: vec![("Voltage".into(), "400V".into())], ..Default::default() });
+        model.board.component_classes.assignments.push(eda_model::component_classes::ClassAssignment {
+            class: "HV".into(),
+            all: true,
+            conditions: vec![eda_model::component_classes::ClassCondition { kind: eda_model::component_classes::ConditionKind::FootprintField, primary: "Voltage".into(), secondary: "400V".into() }],
+        });
+        let plain_model = model.clone();
+        model.board.custom_rules_text = Some(format!("(version 1)\n(rule hv\n  (constraint clearance (min 1mm))\n  (condition \"{condition}\"))\n"));
+        let commit = route(&design, &model, r1, r3);
+        let gap = gap_to_pad(&commit, r2);
+        assert!(gap >= 999_500.0, "{condition}: {gap}: {:?}", commit.tracks);
+        let class_only = route(&design, &plain_model, r1, r3);
+        assert!(gap_to_pad(&class_only, r2) < 999_500.0, "{condition}");
+        if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["clearance"]) {
+            assert!(found.is_empty(), "{condition}: {found:#?}");
+            assert!(!kicad_violations(&apply(&design, &class_only), &model, &["clearance"]).unwrap().is_empty(), "{condition}: kicad-cli reads the rule");
+        }
+    }
+}
+
+/// The least gap from the committed tracks' copper to the polygon `pts` (its inside counts as 0).
+fn gap_to_box(commit: &RouteCommit, pts: &[Point]) -> f64 {
+    let area = Shape::Polygon { pts: pts.to_vec() };
+    commit.tracks.iter().flat_map(|t| t.pts.windows(2).map(|w| Shape::Stadium { a: w[0], b: w[1], r: t.width / 2 }.gap_to(&area)).collect::<Vec<_>>()).fold(f64::MAX, f64::min)
+}
+
+/// R5-D2 (`syncBarcode`: `solid->SetParent( aBarcode )`, so `A.Type` is "Barcode"; `DRC_ENGINE::loadImplicitRules`' "barcode visual separation default",
+/// a 1 mm `physical_clearance` on `A.Type == 'Barcode'`): a 4 mm QR code on F.Cu 0.5 mm below the straight way from R1.1 to R3.1. The route keeps 1 mm
+/// (less the epsilon) from it, and kicad-cli finds nothing; a straight track there is what kicad-cli flags.
+#[test]
+fn a_copper_barcode_keeps_its_1mm_physical_clearance() {
+    let (r1, r3) = (p(5.0, 10.0), p(25.0, 10.0));
+    let (mut design, model) = board(&[("R1", "PAD1", r1), ("R3", "PAD1", r3)], &[("SIG", &["R1.1", "R3.1"])]);
+    let barcode = eda_model::barcode::Barcode {
+        id: "bc1".into(),
+        at: p(15.0, 12.6),
+        angle: 0,
+        layer: "F.Cu".into(),
+        width_nm: mm(4.0),
+        height_nm: mm(4.0),
+        text: "R5-D2".into(),
+        text_height_nm: mm(1.0),
+        kind: Default::default(),
+        ecc: Default::default(),
+        show_text: false,
+        knockout: false,
+        margin_x_nm: Nm::ZERO,
+        margin_y_nm: Nm::ZERO,
+    };
+    design.drawings.as_mut().unwrap().barcodes.push(barcode);
+    let hull = [p(13.0, 10.6), p(17.0, 10.6), p(17.0, 14.6), p(13.0, 14.6)];
+    let commit = route(&design, &model, r1, r3);
+    let gap = gap_to_box(&commit, &hull);
+    assert!(gap >= 999_000.0, "the track keeps {gap} nm from the barcode: {:?}", commit.tracks);
+    let straight = RouteCommit { tracks: vec![eda_model::ir::Track { id: String::new(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![r1, r3], arc_mid_offset: None }], ..commit.clone() };
+    let kinds = ["clearance", "physical_clearance"];
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &kinds) {
+        assert!(found.is_empty(), "{found:#?}");
+        assert!(!kicad_violations(&apply(&design, &straight), &model, &kinds).unwrap().is_empty(), "kicad-cli holds a track 1 mm off a barcode");
+    }
+}
+
+/// R5-D2 (`syncGraphicalItem` of a `PCB_TEXTBOX`: `solid->SetParent( aItem )`, so `A.Type` is "Text Box"): a custom rule `A.Type == 'Text Box'`
+/// asking 1 mm keeps the route that far from a copper text box below the straight way, and kicad-cli finds nothing.
+#[test]
+fn a_rule_on_a_text_box_holds_a_route_off() {
+    let (r1, r3) = (p(5.0, 10.0), p(25.0, 10.0));
+    let (mut design, mut model) = board(&[("R1", "PAD1", r1), ("R3", "PAD1", r3)], &[("SIG", &["R1.1", "R3.1"])]);
+    let tb = eda_model::pcb_items::TextBox::new("F.Cu", p(13.0, 10.6), p(17.0, 13.0), mm(1.0), mm(0.1));
+    design.drawings.as_mut().unwrap().board_items.text_boxes.push(eda_model::pcb_items::TextBox { id: "tb1".into(), ..tb });
+    model.board.custom_rules_text = Some("(version 1)\n(rule tb\n  (constraint clearance (min 1mm))\n  (condition \"A.Type == 'Text Box'\"))\n".into());
+    let commit = route(&design, &model, r1, r3);
+    // the border is a 0.1 mm stroke along the box's edge: its copper reaches 0.05 mm out
+    let gap = gap_to_box(&commit, &[p(12.95, 10.55), p(17.05, 10.55), p(17.05, 13.05), p(12.95, 13.05)]);
+    assert!(gap >= 999_000.0, "{gap}: {:?}", commit.tracks);
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["clearance"]) {
+        assert!(found.is_empty(), "{found:#?}");
     }
 }
 
@@ -855,6 +948,32 @@ fn a_pair_started_on_arcs_checks_the_gap() {
     assert_eq!(start(0.35), Ok(mm(0.2)));
 }
 
+/// r5 R5-4 (`prepareInteractive`: `ImportSizes` then `UpdateSizes` before `StartRouting`; `ImportSizes`' `else` branch takes
+/// `GetCurrentDiffPairWidth/Gap/ViaGap()` while custom dimensions are on, over the inherited width too): the same arcs at a 0.5 mm pitch, which
+/// the class refuses, start a pair routed at a custom 0.3 / 0.2 mm, at the custom width; and a custom gap under the board's minimum clearance is
+/// refused although the class's is not.
+#[test]
+fn a_pair_with_custom_dimensions_is_checked_with_them_at_the_start() {
+    let start = |user: Option<eda_pns::dp_placer::UserDpSizes>| {
+        let (mut design, mut model) = board(&[("J1", "PAD1", p(25.0, 5.0)), ("J2", "PAD1", p(25.0, 15.0))], &[("/USB_P", &["J1.1"]), ("/USB_N", &["J2.1"])]);
+        model.board.net_classes.push(eda_model::NetClass { diff_pair_gap: Some(mm(0.15)), diff_pair_width: Some(mm(0.25)), clearance: Some(mm(0.15)), ..class("usb", &["/USB_P", "/USB_N"]) });
+        model.board.min_clearance_nm = mm(0.1);
+        let arc = |net: &str, r: f64| {
+            let mut t = eda_model::ir::Track::new_arc(net.into(), "F.Cu".into(), mm(0.2), p(7.5 - r, 15.0), p(7.5, 15.0 - r), p(7.5 + r, 15.0));
+            t.id = format!("arc_{net}");
+            t
+        };
+        design.routing.as_mut().unwrap().tracks.extend([arc("/USB_P", 5.0), arc("/USB_N", 5.5)]);
+        let mut router = Router::new(&design, &model);
+        router.user_diff_pair = user;
+        router.start_diff_pair(p(12.5, 15.0), "F.Cu").map(|()| router.diff_pair_preview(p(12.7, 18.0)).unwrap().width)
+    };
+    assert!(start(None).unwrap_err().starts_with("The differential pair gap at the start point does not match the configured gap."));
+    let custom = |w: f64, g: f64| Some(eda_pns::dp_placer::UserDpSizes { width: Some(mm(w)), gap: Some(mm(g)), via_gap: Some(mm(g)) });
+    assert_eq!(start(custom(0.3, 0.2)), Ok(mm(0.3)), "0.3 + 0.2 is the 0.5 mm pitch; the custom width is routed");
+    assert_eq!(start(custom(0.45, 0.05)), Err("Diff pair gap is less than board minimum clearance.".into()));
+}
+
 /// r4 R4-5 (`ImportSizes` asks `CT_HOLE_TO_HOLE` of `&dummyVia, &dummyVia, UNDEFINED_LAYER` outside `if( aStartItem )`): a route started in
 /// empty space, under a rule for vias of no net, has the rule's hole to hole, not the board's minimum.
 #[test]
@@ -865,4 +984,24 @@ fn hole_to_hole_is_asked_with_no_start_item_too() {
     model.board.custom_rules_text = Some("(version 1)\n(rule h2h\n  (condition \"A.Type == 'Via' && A.NetName == ''\")\n  (constraint hole_to_hole (min 0.5mm)))\n".into());
     let s = Router::new(&design, &model).import_sizes(p(15.0, 10.0), "F.Cu").unwrap();
     assert_eq!((s.hole_to_hole, s.diff_pair_hole_to_hole), (mm(0.5), mm(0.5)), "{s:?}");
+}
+
+/// r5 R5-1: with F.Cu active, a route started on a pad of a bottom-side footprint starts on B.Cu with the pad's net (`pickSingleItem` on every
+/// layer, `ROUTER_TOOL::getStartLayer`), and the route to the other bottom-side pad connects the two for kicad-cli: no unconnected item, no
+/// clearance, short or crossing. Before, it started on F.Cu with no net and left R1.1 and R2.1 unconnected.
+#[test]
+fn a_route_started_on_a_bottom_pad_with_the_top_layer_active_connects_on_the_bottom() {
+    let (r1, r2) = (p(5.0, 10.0), p(25.0, 10.0));
+    let (mut design, model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2)], &[("SIG", &["R1.1", "R2.1"])]);
+    for f in &mut design.placement.as_mut().unwrap().footprints {
+        f.side = Side::Bottom;
+    }
+    let commit = route_on(&design, &model, r1, r2, "F.Cu");
+    assert!(!commit.tracks.is_empty());
+    assert!(commit.tracks.iter().all(|t| t.layer == "B.Cu" && t.net == "SIG"), "{:?}", commit.tracks);
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["unconnected_items", "clearance", "shorting_items", "tracks_crossing"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        // the control: the board without the route has R1.1 and R2.1 unconnected
+        assert!(!kicad_violations(&design, &model, &["unconnected_items"]).unwrap().is_empty());
+    }
 }

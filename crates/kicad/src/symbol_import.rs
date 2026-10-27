@@ -546,7 +546,7 @@ fn parse_pin(item: &[Sexpr], unit: u32, style: u32, tilde_is_empty: bool) -> Opt
 
 /// A pin's `(alternate "name" <type> <shape>)` forms (`SCH_IO_KICAD_SEXPR_PARSER::parseSymbol`, `T_alternate`): kept by name -- the file's `std::map`, so a name given twice keeps its
 /// last definition -- and sorted by it, as the map holds them. A nameless one is what the library cache's writer strips ("a bug somewhere in the alternate pin code"), so it is not read.
-fn pin_alternates(pin: &[Sexpr]) -> Vec<eda_model::ir::PinAlternate> {
+pub(crate) fn pin_alternates(pin: &[Sexpr]) -> Vec<eda_model::ir::PinAlternate> {
     let mut map: std::collections::BTreeMap<String, eda_model::ir::PinAlternate> = std::collections::BTreeMap::new();
     for alt in sexpr::find_all(pin, "alternate") {
         let Some(name) = sexpr::txt(alt, 1).filter(|n| !n.is_empty()) else { continue };

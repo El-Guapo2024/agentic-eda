@@ -17,12 +17,12 @@
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";
 import { newViaStitch } from "../../kicad-port/viaStitchTool";
-import { chosenTrackWidth } from "../../kicad-port/routerVia";
+import { chosenDiffPair, chosenTrackWidthOf } from "../../kicad-port/routerSizes";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
 import { drawStrokeWidthNm } from "../../kicad-port/layerDefaults";
-import { activeLayerName } from "../../kicad-port/layerPresets";
+import { activeLayerName, layerIsVisible } from "../../kicad-port/layerPresets";
 import { carryStart, isLocked } from "../../kicad-port/pcbTransform";
 import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
 import { EXTRA_KINDS, extraItemLabel } from "../../kicad-port/pcbExtraItems";
@@ -49,10 +49,12 @@ import { useGridSettings } from "../../state/gridSettings";
 import { toPcbMagnetic } from "../../kicad-port/preferences";
 import { withTrackSnapping } from "../../kicad-port/routerSettings";
 import { heldCursor } from "../../kicad-port/heldCursor";
-import { findRouteAnchor, constrainByAngleMode, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
+import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
+import { SELECT_NET_TITLE, selectNetLabels, snapViaPosition, viaNet, type ViaPlacerInput } from "../../kicad-port/viaPlacer";
+import { startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { clearRouteQueue } from "./routeQueue";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
-import { routeMove, routeDragMove, dpMove } from "../../api/client";
+import { routeMove, routeDragMove, dpMove, fetchState, setRouterEnteredGroup } from "../../api/client";
 import { finishInlineDrag } from "./dragging";
 import { dragStateFromPreview } from "../../kicad-port/dragTool";
 import { startDiffPairRoute, fixDiffPairRoute, finishDiffPairRoute } from "./diffPairRouting";
@@ -78,7 +80,7 @@ import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { cellAddress, cellById, drawTableSession, tableById } from "../../kicad-port/tables";
 import { openDrawnTableDialog } from "../../state/tableDialogs";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
-import { leaderModeOf, zoneClick } from "../../kicad-port/pcbDrawZone";
+import { leaderModeOf, zoneClick, zoneFinish } from "../../kicad-port/pcbDrawZone";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
 import { displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
@@ -111,8 +113,6 @@ const PAN_BUTTONS = new Set([1, 2]);
 // kicad-port/dragThreshold.ts, tool_dispatcher.cpp -- more than 8 px of travel along an axis, or on macOS a motion after 300 ms held.)
 
 const LONG_PRESS_MS = 500;
-/** A click within this many board um of a pad/via/track-end counts as landing on it (which net a route click joins) -- generous enough to be usable at a typical zoom without needing pixel-perfect precision. Where the click goes is the snapping's (`PcbSnap.routePoint`, components/canvas/pcbSnap.ts). */
-const ANCHOR_SNAP_NM = 500_000;
 // A new graphic starts at the line thickness of its layer's class (Board Setup > Text & Graphics > Defaults, kicad-port/layerDefaults.ts); incWidth / decWidth step it (state.pcbx.drawStrokeStep).
 /** How many points finish a given drawing-tool shape by itself, once reached, without waiting for an explicit Enter/double-click -- a plain 2-point line/rect/circle doesn't need a third confirmation the way a polygon does. Arc is start/mid/end (3); zone/polygon/route have no auto-finish (arbitrary length). */
 type ShapeToolKind = "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
@@ -201,6 +201,8 @@ export function Canvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  /** Ctrl (Cmd on a Mac) at the last pointer move: `drawShape`'s modifier for the rubber band (kicad-port/pcbShapeSnap.ts). */
+  const drawCtrlRef = useRef(false);
   /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag (kicad-port/dragThreshold.ts). Made at every press, read by the move, the up and the long press. */
   const gestureRef = useRef<ClickDragGesture | null>(null);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
@@ -275,6 +277,8 @@ export function Canvas() {
     bumpSnap((n) => n + 1);
   }, [snap, state.activeTool]);
   useEffect(() => () => snap.reset(), [snap]);
+  // the router's sessions start with the entered group, which their new items join (r5 R5-2)
+  useEffect(() => setRouterEnteredGroup(state.enteredGroupId), [state.enteredGroupId]);
 
   // The canvas's backing size tracks its container's actual box, not a
   // value computed once at mount -- a side panel opening/closing or the
@@ -418,6 +422,7 @@ export function Canvas() {
       snappedCursor: PLACING_TOOLS.has(state.activeTool) ? snap.lastPoint() : null,
       activeTool: state.activeTool,
       angleSnapMode: state.pcbx.angleSnapMode,
+      drawCtrl: drawCtrlRef.current,
       enteredGroup: state.enteredGroupId,
       appearance: paintAppearance,
     });
@@ -472,7 +477,11 @@ export function Canvas() {
       const started = draw?.kind === "route" || draw?.kind === "diffpair" || draw?.kind === "drag";
       // what the cursor does not snap onto: the line a drag is dragging (`checkSnap`), the item a route started on (`pickSingleItem( .., { m_startItem } )`)
       const skip = draw?.kind === "drag" && draw.lineTracks?.length ? new Set(draw.lineTracks) : draw?.kind === "route" && draw.startItem ? new Set([draw.startItem]) : undefined;
-      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started, skip });
+      // `pickSingleItem`'s layer (r5 R5-1): a start takes the active layer's items first and then any layer's (`aLayer` -1, `tl` the top layer); a
+      // route's or a pair's end only its current layer's (`updateEndItem`: `layer = m_router->GetCurrentLayer()`, -1 while placing a via)
+      const routing = draw?.kind === "route" || draw?.kind === "diffpair" ? draw : null;
+      const layer = routing ? (routing.placingVia ? { top: routing.layer } : { top: routing.layer, only: true }) : draw?.kind === "drag" ? undefined : { top: state.activeLayer ?? board?.layers[0] ?? "F.Cu" };
+      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started, skip, layer });
       return [p[0], p[1]];
     }
     const opts: PointOpts = {};
@@ -602,6 +611,11 @@ export function Canvas() {
   /** Route/zone/shape tools all share "click adds a point, Enter/double-click finishes" -- this commits whatever's accumulated in state.drawState, per its kind. Shared with the F ("Attempt Finish") hotkey for the route case specifically (useActionRunner.ts) via routing.ts's finishInteractiveRoute, so the two can never disagree about what finishing a route means. */
   const finishDraw = useCallback(() => {
     const draw = state.drawState;
+    // Where the cursor is when a zone or polygon is finished (the leader and loop `SetFinished` sees): the snapped cursor, else the last corner.
+    const finishCursor = (pts: readonly [number, number][]): [number, number] => {
+      const at = snap.lastPoint() ?? (state.cursorNm ? snapPoint(state.cursorNm.x, state.cursorNm.y, state.gridNm) : pts[pts.length - 1]);
+      return at ? [at[0], at[1]] : [0, 0];
+    };
     if (!draw) return;
     if (draw.kind === "route") {
       const [x, y] = draw.pts[draw.pts.length - 1] ?? [draw.pts[0]?.[0] ?? 0, draw.pts[0]?.[1] ?? 0];
@@ -612,21 +626,23 @@ export function Canvas() {
       const [x, y] = draw.ptsA[draw.ptsA.length - 1] ?? (cursor ? [cursor.x, cursor.y] : [0, 0]);
       void finishDiffPairRoute(x, y, dispatch, api);
     } else if (draw.kind === "zone") {
-      if (draw.pts.length >= 3) {
+      // `ZONE_CREATE_HELPER::OnComplete`: the locked corners, the leader's and loop's corners in the 45/90-degree modes, simplified (round 5 A5-5).
+      const outline = zoneFinish(draw.pts, finishCursor(draw.pts), leaderModeOf(state.pcbx.angleSnapMode, drawCtrlRef.current));
+      if (outline) {
         // zone_create_helper.cpp commitZone(): a cutout subtracts from its source zone and a
         // "similar" zone copies its settings -- neither shows the properties dialog (only
         // createNewZone() does); a plain draw still goes through ZoneDialog.
         const mode = state.pcbx.zoneDrawMode;
         const source = mode ? api.zoneById(mode.sourceId) : undefined;
         if (mode?.mode === "cutout" && source) {
-          void api.cmd({ op: "zone_cutout", id: source.id, cutout: draw.pts.map(([x, y]) => ({ x, y })) }).then(() => dispatch({ type: "SET_SELECTION", refs: [] }));
+          void api.cmd({ op: "zone_cutout", id: source.id, cutout: outline.map(([x, y]) => ({ x, y })) }).then(() => dispatch({ type: "SET_SELECTION", refs: [] }));
         } else if (mode?.mode === "similar" && source) {
-          void api.addZone(source.net, source.layer, draw.pts, zoneSettingsOf(source), { layers: [...zoneLayers(source)] });
+          void api.addZone(source.net, source.layer, outline, zoneSettingsOf(source), { layers: [...zoneLayers(source)] });
         } else if (mode?.mode === "stitch") {
           // KiCad 10's `ZONE_MODE::STITCH` (zone_create_helper.cpp): a via stitching with the outline, its defaults filled in (`InitializeDefaults`), and its properties dialog before any via is made.
-          openViaStitchDialog(null, newViaStitch(draw.pts, board?.board_rules?.via_diameter ?? 0, board?.board_rules?.via_drill ?? 0));
+          openViaStitchDialog(null, newViaStitch(outline, board?.board_rules?.via_diameter ?? 0, board?.board_rules?.via_drill ?? 0));
         } else {
-          dispatch({ type: "SET_ZONE_PENDING", outline: draw.pts });
+          dispatch({ type: "SET_ZONE_PENDING", outline });
         }
       }
       // `endPolygon`: `cleanup(); m_frame->PopTool( aEvent );` whether or not the outline made a zone.
@@ -649,7 +665,9 @@ export function Canvas() {
         dispatch({ type: "SET_DRAW_STATE", draw: null });
         return;
       }
-      const shape = shapeFromPoints(draw.shapeKind, draw.pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
+      // A graphic polygon is `DrawZone`'s too: its outline is `OnComplete`'s (round 5 A5-5).
+      const pts = draw.shapeKind === "polygon" ? (zoneFinish(draw.pts, finishCursor(draw.pts), leaderModeOf(state.pcbx.angleSnapMode, drawCtrlRef.current)) ?? []) : draw.pts;
+      const shape = shapeFromPoints(draw.shapeKind, pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
       if (shape) api.cmd({ op: "add_shape", shape });
       dispatch({ type: "SET_DRAW_STATE", draw: null });
       // A graphic polygon is `DrawZone`'s: finishing it pops the tool (`PopTool`), as a zone does.
@@ -723,16 +741,53 @@ export function Canvas() {
         return;
       }
 
+      // `DRAWING_TOOL::DrawVia` (kicad-port/viaPlacer.ts): the via snaps onto the track, pad or graphic under the cursor, takes its net (or the zone fill's,
+      // asking when there are several, or none: a free via), and the backend refuses it where it breaks a clearance and splits the track it is on (round 5 B5-1).
       if (state.activeTool === "via") {
-        const anchor = findRouteAnchor(board, sx, sy, ANCHOR_SNAP_NM);
-        if (!anchor) {
-          dispatch({ type: "TOAST", message: "Click a pad, via, or track end -- a via needs a net.", kind: "error" });
-          return;
-        }
         const rules = board.board_rules;
         // pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), same board-default fallback the hotkey itself uses until it's ever pressed.
         const viaPreset = state.currentViaPreset ?? { diameter: rules?.via_diameter ?? 600_000, drill: rules?.via_drill ?? 300_000 };
-        api.cmd({ op: "add_via", net: anchor.net, x: sx, y: sy, drill: viaPreset.drill, diameter: viaPreset.diameter, from_layer: "F.Cu", to_layer: "B.Cu" });
+        const copper = (board.layers ?? ["F.Cu", "B.Cu"]).filter((l) => l.endsWith(".Cu"));
+        const mods = snapMods(e);
+        const magnetic = toPcbMagnetic(state.prefs, state.magneticAllLayers);
+        const placer: ViaPlacerInput = {
+          board,
+          diameter: viaPreset.diameter,
+          // `bds.m_CurrentViaType` is always THROUGH: the via spans the board.
+          layers: copper,
+          magnetic: { tracks: magnetic.tracks, pads: magnetic.pads, graphics: magnetic.graphics },
+          snap: !mods.shift,
+          alignToSegment: (p, a, b) => snap.alignToSegment("via", p, a, b, mods),
+          fills: (state.zoneFill?.zones ?? []).filter((z) => z.filled).map((z) => ({ net: z.net, layer: z.layer, fragments: z.fragments })),
+          activeLayer: state.activeLayer ?? "F.Cu",
+          highContrast: state.highContrast,
+          isLayerVisible: (l) => layerIsVisible(state.layerVisible, l),
+        };
+        const at = snapViaPosition(placer, [wx, wy], [sx, sy]);
+        const place = (net: string, track: string | null) =>
+          void api.cmd({
+            op: "place_via",
+            net,
+            x: Math.round(at[0]),
+            y: Math.round(at[1]),
+            drill: viaPreset.drill,
+            diameter: viaPreset.diameter,
+            from_layer: copper[0] ?? "F.Cu",
+            to_layer: copper[copper.length - 1] ?? "B.Cu",
+            split_track: track,
+            allow_drc_violations: state.routerSettings.mode === "mark_obstacles" && state.routerSettings.allowDrcViolations,
+          });
+        const choice = viaNet(placer, at);
+        if (choice.kind === "net") place(choice.net, choice.track);
+        else {
+          // `selectPossibleNetsByPopupMenu`: "The net assignment is ambiguous. Let the user decide." -- a cancelled menu places nothing.
+          const labels = selectNetLabels(choice.nets);
+          setContextMenu({
+            x: e.clientX,
+            y: e.clientY,
+            entries: [{ label: SELECT_NET_TITLE, onSelect: () => {}, disabled: true }, { label: "", onSelect: () => {}, separator: true }, ...choice.nets.map((net, i) => ({ label: labels[i]!, onSelect: () => place(net, null) }))],
+          });
+        }
         return;
       }
 
@@ -750,7 +805,8 @@ export function Canvas() {
           // (`CT_WIDTH` through the rules: its class, a .kicad_dru rule, a pair's class width). `autoTrackWidth` (`m_UseConnectedTrackWidth`): the
           // server's `inheritTrackWidth` first -- the width of the track the route starts on, or of the one joined to the pad or via whose far end
           // is nearest the cursor -- over either
-          const width = chosenTrackWidth(state.currentTrackWidthNm, state.currentTrackWidthIndex, 1 + (board.routing?.track_width_presets?.length ?? 0), state.pcbx.useCustomTrackVia);
+          // the chosen entry read from the board's list now (`GetCurrentTrackWidth`: `m_TrackWidthList[ m_trackWidthIndex ]`, r5 R5-9)
+          const width = chosenTrackWidthOf(board.routing?.track_width_presets ?? [], state.currentTrackWidthIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia.trackNm);
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
           void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked(), state.bcx.autoTrackWidth);
           return;
@@ -766,9 +822,11 @@ export function Canvas() {
         const draw = state.drawState;
         if (!draw || draw.kind !== "diffpair") {
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
-          // `ImportSizes`: the board's custom pair dimensions only while `UseCustomDiffPairDimensions()`
-          const custom = state.pcbx.useCustomDiffPair ? state.pcbx.customDiffPair : null;
-          void startDiffPairRoute(sx, sy, layer, dispatch, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : undefined, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), state.bcx.autoTrackWidth);
+          // `ImportSizes`: the board's custom pair dimensions while `UseCustomDiffPairDimensions()`, else the chosen entry of the pre-defined pairs
+          // (`GetCurrentDiffPairWidth/Gap/ViaGap()`, r5 R5-5); the net class's at entry 0
+          const custom = state.pcbx.customDiffPair;
+          const dims = chosenDiffPair(board.routing?.diff_pair_presets ?? [], state.pcbx.diffPairIndex, state.pcbx.useCustomDiffPair, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : null);
+          void startDiffPairRoute(sx, sy, layer, dispatch, dims, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), state.bcx.autoTrackWidth);
           return;
         }
         void fixDiffPairRoute(sx, sy, draw, dispatch, api);
@@ -801,6 +859,8 @@ export function Canvas() {
       if (state.activeTool === "zone") {
         const draw = state.drawState;
         const click = zoneClick(draw?.kind === "zone" ? draw.pts : [], [sx, sy], leaderModeOf(state.pcbx.angleSnapMode, snapMods(e).ctrl));
+        // `ZONE_CREATE_HELPER::OnFirstPoint`: `RunAction( ACTIONS::selectionClear )` (round 5 A5-6).
+        if (draw?.kind !== "zone") dispatch({ type: "SET_SELECTION", refs: [] });
         if (click.finish) finishDraw();
         else dispatch({ type: "SET_DRAW_STATE", draw: { kind: "zone", pts: click.pts } });
         return;
@@ -892,6 +952,8 @@ export function Canvas() {
       if (shapeKind === "polygon") {
         const draw = state.drawState;
         const click = zoneClick(draw?.kind === "shape" && draw.shapeKind === "polygon" ? draw.pts : [], [sx, sy], leaderModeOf(state.pcbx.angleSnapMode, snapMods(e).ctrl));
+        // `ZONE_CREATE_HELPER::OnFirstPoint` clears the selection (round 5 A5-6).
+        if (!(draw?.kind === "shape" && draw.shapeKind === "polygon")) dispatch({ type: "SET_SELECTION", refs: [] });
         if (click.finish) finishDraw();
         else dispatch({ type: "SET_DRAW_STATE", draw: { kind: "shape", shapeKind: "polygon", pts: click.pts } });
         return;
@@ -902,11 +964,10 @@ export function Canvas() {
         // `drawShape`: `if( !started ) { m_toolMgr->RunAction( ACTIONS::selectionClear ); ...`
         if (already.length === 0) dispatch({ type: "SET_SELECTION", refs: [] });
         let point: [number, number] = [sx, sy];
-        if (already.length > 0 && (shapeKind === "segment" || shapeKind === "rect")) {
-          const last = already[already.length - 1]!;
-          const constrained = constrainByAngleMode(state.pcbx.angleSnapMode, last, [sx, sy]);
-          // Constrained onto the line mode's ray, then back on the grid -- unless it did not move (an anchor already on the ray keeps its exact place).
-          point = constrained[0] === sx && constrained[1] === sy ? [sx, sy] : (([x, y]) => [x, y] as [number, number])(snap.align("shape", constrained, snapMods(e), "graphics"));
+        if (already.length > 0 && (shapeKind === "segment" || shapeKind === "rect" || shapeKind === "circle")) {
+          // `drawShape`: the snapped cursor's vector from the first point through `GetVectorSnapped45`/`90` -- a line by the line mode (Ctrl frees it), a
+          // rectangle or circle free (Ctrl: 45 degrees, a rectangle square). The cursor is on the grid already, and the snap keeps its x or y (round 5 A5-2/3).
+          point = shapeSecondPoint(shapeKind, state.pcbx.angleSnapMode, snapMods(e).ctrl, already[already.length - 1]!, [sx, sy]);
         }
         const pts = [...already, point];
         const finishAt = shapeAutoFinishCount(shapeKind);
@@ -936,9 +997,25 @@ export function Canvas() {
         return;
       }
 
+      // `DRAWING_TOOL::PlaceText`: the first click clears the selection and opens the dialog on a new text with the layer's defaults; the text then follows the
+      // cursor (`drawState` "text", painted by painter.ts), and the next click places it ("Draw Text") and selects it. The tool stays armed (round 5 B5-2).
       if (state.activeTool === "text") {
+        const draw = state.drawState;
+        if (draw?.kind === "text") {
+          const before = new Set((board.drawings?.texts ?? []).map((t) => t.id));
+          dispatch({ type: "SET_DRAW_STATE", draw: null });
+          void api.cmd({ op: "place_text", text: { ...draw.text, at: { x: sx, y: sy } }, extra: draw.extra }).then(() => {
+            // (the board as the backend has it now: the store's catches up on the next render)
+            void fetchState().then((now) => {
+              const made = (now.drawings?.texts ?? []).find((t) => !before.has(t.id));
+              if (made) dispatch({ type: "SET_SELECTION", refs: [made.id] }); // `selectItem, text`
+            });
+          });
+          return;
+        }
+        if (state.textDialog) return;
+        dispatch({ type: "SET_SELECTION", refs: [] }); // `ACTIONS::selectionClear`
         dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "add", at: [sx, sy] } });
-        dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
         return;
       }
     }
@@ -1131,6 +1208,7 @@ export function Canvas() {
 
   const onPointerMove = (e: React.PointerEvent) => {
     const [wx, wy] = worldAt(e);
+    drawCtrlRef.current = snapMods(e).ctrl;
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
     const containerRectForAutoPan = containerRef.current?.getBoundingClientRect();
     if (containerRectForAutoPan) lastPointerScreenRef.current = { x: e.clientX - containerRectForAutoPan.left, y: e.clientY - containerRectForAutoPan.top };

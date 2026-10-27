@@ -9,7 +9,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
-import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Nm, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { RouteSizesInfo } from "../kicad-port/routerSizes";
+import type { BoardState, BoardText, Cmd, CmdDimension, CmdText, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Nm, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
@@ -233,6 +234,8 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
  * is just the CURRENT segment's points since the last via/start.
  */
 export type DrawState =
+  /** The board's Text tool (`DRAWING_TOOL::PlaceText`): the text the dialog made, following the cursor until the click that places it (round 5 B5-2). */
+  | { kind: "text"; text: CmdText; extra: { id: string; width_nm?: Nm; italic?: boolean; valign?: "top" | "center" | "bottom" } }
   /** `7` / `8` / `9`: a tuning pattern on its way to the board, or one of the board being edited through its edit points -- kicad-port/tuneTool.ts. */
   | TuneDrawState
   /** `S` (`SCH_DRAWING_TOOLS::DrawSheet`): the first corner of the sheet being sized; the second click ends it (`sizeSheet`). */
@@ -267,6 +270,12 @@ export type DrawState =
       pendingViaLayer?: string;
       /** The pad, via or track segment the route started on: it does not end there (see kicad-port/routeTool.ts). */
       startItem?: string;
+      /** The active layer before a start on another layer's item: see kicad-port/routeTool.ts. */
+      originalActiveLayer?: string;
+      /** The message panel's sizes: see kicad-port/routeTool.ts. */
+      sizes?: RouteSizesInfo;
+      /** `m_TempOverrideTrackWidth`: see kicad-port/routeTool.ts. */
+      widthOverride?: boolean;
     }
   /** `D` (gap #7 stage 5, `pcbnew.InteractiveRouter.Drag45Degree` ->
    * `eda_pns::dragger::Dragger`, driven through crates/cli/src/route_api.rs's
@@ -330,6 +339,10 @@ export type DrawState =
       /** Shove mode: other tracks/vias the pair would push aside. */
       displaced?: { layer: string; pts: [Nm, Nm][] }[];
       displacedVias?: { source_via: string; x: Nm; y: Nm }[];
+      /** The active layer before a start on another layer's item: see kicad-port/dpTool.ts. */
+      originalActiveLayer?: string;
+      /** The message panel's sizes: see kicad-port/dpTool.ts. */
+      sizes?: RouteSizesInfo;
     }
   | { kind: "zone"; pts: [Nm, Nm][] }
   | {
@@ -1608,8 +1621,13 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, ercLintSelected: action.index, ercSelected: action.index === null ? state.ercSelected : null };
     case "LINT_OK":
       return { ...state, lint: action.lint };
-    case "SET_DRAW_STATE":
+    case "SET_DRAW_STATE": {
+      // `ROUTER_TOOL::finishInteractive`: `frame()->SetActiveLayer( m_originalActiveLayer )` -- a route that started on another layer's item
+      // (`getStartLayer`, r5 R5-1) gives the active layer back when it ends
+      const prev = state.drawState;
+      if ((prev?.kind === "route" || prev?.kind === "diffpair") && prev.originalActiveLayer !== undefined && action.draw?.kind !== prev.kind) return { ...state, drawState: action.draw, activeLayer: prev.originalActiveLayer };
       return { ...state, drawState: action.draw };
+    }
     case "SET_ZONE_PENDING":
       return { ...state, zonePending: action.outline };
     case "SET_ZONE_EDIT_ID":
@@ -1739,7 +1757,8 @@ export interface StudioApi {
   /** F (edit_tool.cpp Flip): footprints, one undo step for the whole selection. */
   flipSelection: (refs?: string[]) => Promise<void>;
   /** Several Cmds as ONE undo step (`Cmd::Batch`): all-or-nothing. A single Cmd is sent as itself. Returns whether the backend accepted it. */
-  cmdBatch: (cmds: Cmd[]) => Promise<boolean>;
+  /** `carry`: the batch's place in a step held open across several commands (crates/cli/src/carry.rs). */
+  cmdBatch: (cmds: Cmd[], carry?: CarryStep) => Promise<boolean>;
   /** pcbnew.AlignAndDistribute.align* (no default hotkey in source either -- reached from the right-click menu, Canvas.tsx's onContextMenu). Placed footprints only -- see kicad-port/alignDistribute.ts's own scope note. A no-op under 2 placed parts, same floor source's menu-visibility condition enforces. */
   alignSelection: (edge: AlignEdge) => Promise<void>;
   /** pcbnew.AlignAndDistribute.distribute* -- same placed-footprints-only scope. A no-op under 3 placed parts. */
@@ -1842,7 +1861,8 @@ export interface StudioApi {
    * `Cmd::AddZone` with inline settings, so every existing caller of that
    * Cmd (the CLI, this app's own tests) keeps its exact three-field shape.
    */
-  addZone: (net: string, layer: string, outline: [Nm, Nm][], settings: ZoneSettingsFields & RuleAreaFields, extra?: { layers?: string[]; name?: string; locked?: boolean }) => Promise<void>;
+  /** `carry` "hold": the zone and its settings join a step held open (Create Zone from Selection's several zones and the sources' removal are one undo step). */
+  addZone: (net: string, layer: string, outline: [Nm, Nm][], settings: ZoneSettingsFields & RuleAreaFields, extra?: { layers?: string[]; name?: string; locked?: boolean }, carry?: CarryStep) => Promise<void>;
   /**
    * B ("Fill All Zones"), or Fill Selected Zones with `ids`: kicad-cli's filler runs (seconds; `state.zoneFillRunning` meanwhile, the board stays editable) and its fills
    * are kept beside the design; then they are read (`state.zoneFill`). A run already in flight is not doubled.
@@ -2293,7 +2313,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const presses = (q === 3 ? -1 : q) * (st.bcx.boardFlipped ? -1 : 1);
       await runPlan(planRotate(st.board, explicit ?? [...st.selection], presses, gridSnap(), st.prefs.rotationStepDeg));
     },
-    cmdBatch: (cmds) => runBatch(cmds),
+    cmdBatch: (cmds, carry) => runBatch(cmds, carry),
     ripSelection: async () => {
       const refs = [...stateRef.current.selection];
       dispatch({ type: "CLEAR_SELECTION" });
@@ -2515,12 +2535,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!ok) return;
       dispatch({ type: "SET_SELECTION", refs: members, raw: true });
     },
-    addZone: async (net, layer, outline, settings, extra) => {
+    addZone: async (net, layer, outline, settings, extra, carry) => {
       // The board as the backend has it now (several zones can be added one after the other, e.g. "Create Zone from Selection").
       const board = await fetchState().catch(() => null);
       if (!board) return;
       const before = allItemIds(board);
-      const ok = await runCmd({ op: "add_zone", net, layer, outline: outline.map(([x, y]) => ({ x, y })) });
+      const ok = await runCmd({ op: "add_zone", net, layer, outline: outline.map(([x, y]) => ({ x, y })) }, carry);
       if (!ok) return;
       // Read the board from the backend: `stateRef` only catches up on the next render, which is after this continuation, so the new
       // zone would not be in it yet and its settings (a rule area's flags, say) would never be applied.
@@ -2538,7 +2558,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!unchanged || layers) follow.push({ op: "edit_zone", ...settings, id: newId, net, layer, ...(layers ? { layers } : {}) });
       if (extra?.name) follow.push({ op: "set_zone_name", id: newId, name: extra.name });
       if (extra?.locked) follow.push({ op: "set_locked", ids: [newId], locked: true });
-      if (follow.length > 0) await runBatch(follow);
+      if (follow.length > 0) await runBatch(follow, carry);
     },
     // edit_tool.cpp copyToClipboard: the selection (a pad stands for its footprint, a locked item is copied) as KiCad's own clipboard text, measured
     // from the cursor's grid point or the point Copy with Reference picked -- on the system clipboard, where KiCad can paste it, and here.

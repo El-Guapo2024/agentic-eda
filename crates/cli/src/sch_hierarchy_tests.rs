@@ -1732,10 +1732,11 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
         }
     }
     println!("QA schematics written back: {same} judged alike, {differ} differ, {failed} failed");
-    // the ratchet: 100 of KiCad's 130 QA roots on 2026-10-28 (r4: `lib_name` resolution and the pin facts); 87 on 2026-10-23 (nightly 20261021); before
+    // the ratchet: 112 of KiCad's 130 QA roots on 2026-10-28 after r5 (legacy `symbol_instances`, a root symbol's own instance, pin alternates, "Net Class");
+    // 100 on 2026-10-28 (r4: `lib_name` resolution and the pin facts); 87 on 2026-10-23 (nightly 20261021); before
     // the review of that day, 53 (turned and mirrored symbols were traced and written otherwise than drawn, and one file hung Import Sheet)
     if only.is_none() {
-        assert!(same >= 100, "{same} judged alike, fewer than the 100 of 2026-10-28");
+        assert!(same >= 112, "{same} judged alike, fewer than the 112 of 2026-10-28 (r5)");
     }
 }
 
@@ -1801,8 +1802,13 @@ fn the_shown_text_resolves_a_sheets_user_fields() {
 /// Import the round-4 case `case` (`tests/fixtures/r4_connectivity/<case>`, the reviewer's generated files) into a scratch board: the board folder, the
 /// copied root, and the board's nets as `name -> pins`.
 fn r4_case(case: &str) -> (PathBuf, PathBuf, std::collections::BTreeMap<String, Vec<String>>) {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/r4_connectivity").join(case);
-    let work = scratch(&format!("r4_{case}"));
+    round_case("r4_connectivity", case)
+}
+
+/// [`r4_case`] of the fixtures folder `round` (`r4_connectivity`, `r5_connectivity`).
+fn round_case(round: &str, case: &str) -> (PathBuf, PathBuf, std::collections::BTreeMap<String, Vec<String>>) {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(round).join(case);
+    let work = scratch(&format!("{round}_{case}"));
     for e in std::fs::read_dir(&src).unwrap().flatten() {
         std::fs::copy(e.path(), work.join(e.file_name())).unwrap();
     }
@@ -1839,6 +1845,40 @@ fn a_symbols_jumper_pins_are_one_net_as_kicad_cli_reads_them() {
             assert_eq!(derived, kicad_cli_net_groups(&root), "{case}: kicad-cli reads the derived file as the original");
         }
     }
+}
+
+/// Round 5's connectivity cases (`tests/fixtures/r5_connectivity`, the reviewer's files), with the nets kicad-cli gives the original (`#` pins left out):
+/// - D5-H3 (`SCH_PIN::GetType`: a pin is of the type of the alternate its symbol picked; `conn_facts.cpp`: `nc = pin->GetType() == PT_NC`): QA
+///   `issue22286/bugtest` (`a22286`), a connector whose library pins are all `no_connect` with alternates of other types, picked on J1;
+/// - A5-H1 (`conn_facts.cpp`: an item per pin of each placed `SCH_SYMBOL`): `j5`, pin `1` in unit A and in unit B, both placed and wired apart;
+/// - A5-M1 (`PROPAGATES[ENTRY][ENTRY]` is false): `e1`, two bus wire entries end to end with a wire on each far end, join nothing;
+/// - A5-M2 (one `LIB_SYMBOL` for every body style: `JumperPinGroups()` whatever the style): `dm1`, a jumper group on a symbol placed in body style 2.
+///
+/// The derived file reads in kicad-cli as the original.
+#[test]
+fn round_5s_connectivity_cases_are_traced_as_kicad_cli_traces_them() {
+    let cases: &[(&str, &[(&str, &[&str])])] = &[
+        ("a22286", &[("GND", &["J1.1", "J1.8"]), ("+5V", &["J1.2"]), ("Net-(J1-Pad3)", &["J1.3", "R1.1"]), ("Net-(J1-Pad7)", &["J1.7", "R1.2"])]),
+        ("j5", &[("Net-(J1A-A)", &["J1.1", "R1.1"]), ("Net-(J1B-B)", &["R2.1"])]),
+        ("e1", &[("unconnected-(R1-Pad1)", &["R1.1"]), ("unconnected-(R3-Pad1)", &["R3.1"])]),
+        ("dm1", &[("Net-(J1-A)", &["J1.1", "J1.2", "R1.1", "R2.1"])]),
+    ];
+    for (case, want) in cases {
+        let (dir, root, nets) = round_case("r5_connectivity", case);
+        for (name, pins) in *want {
+            let got = nets.get(*name).map(|p| p.iter().map(String::as_str).filter(|p| !p.starts_with('#')).collect::<Vec<_>>());
+            assert_eq!(got, Some(pins.to_vec()), "{case}: {name} in {nets:?}");
+        }
+        if kicad_cli_ready() {
+            assert_eq!(kicad_net_groups(&dir), kicad_cli_net_groups(&root), "{case}: kicad-cli reads the derived file as the original");
+        }
+    }
+    // the derived file keeps the alternates J1 picked
+    let (dir, _, _) = round_case("r5_connectivity", "a22286");
+    let (_, design, model) = load(&dir).unwrap();
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-28", title: "t" }, "root.kicad_sch").unwrap();
+    let derived = &files[0].1;
+    assert!(derived.contains("(alternate \"3.out\")") && derived.contains("(alternate \"3.out\" output line)"), "the derived file names the alternate and defines it");
 }
 
 /// r4 A4-H1 (`SCH_PIN::IsLocalPower`: the placed symbol's library symbol decides): one library id cached `(power local)` on the root and `(power)` on the
@@ -1888,4 +1928,45 @@ fn a_label_on_a_pin_with_no_wire_has_the_net_of_the_pin() {
     let labels = sheet["labels"].as_array().unwrap();
     assert_eq!(labels.len(), 2);
     assert!(labels.iter().all(|l| l["net_name"] == "/X"), "{labels:?}");
+}
+
+/// r5 B5-M2 (a stacked pin is a subgraph member like any other, `HighlightNet` -> `conn->Name()`): J1's pin `[1-2]` and R1.1, each with a local label `X` and
+/// no wire, are `/X` (kicad-cli: `/X [J1.1, J1.2, R1.1]`); the studio gives the stacked pin and the label on it that net, through its pads.
+#[test]
+fn a_label_on_a_stacked_pin_has_the_pins_net() {
+    let (dir, _, nets) = round_case("r5_connectivity", "s2");
+    assert_eq!(nets.get("/X"), Some(&vec!["J1.1".to_string(), "J1.2".into(), "R1.1".into()]), "{nets:?}");
+    let sheet = crate::studio::schematic_json(&dir, "", eda_model::text_vars::Clock::utc_now()).unwrap();
+    let labels = sheet["labels"].as_array().unwrap();
+    assert!(labels.len() == 2 && labels.iter().all(|l| l["net_name"] == "/X"), "{labels:?}");
+    let j1 = sheet["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "J1").expect("J1");
+    let stacked = j1["pins"].as_array().unwrap().iter().find(|p| p["number"] == "[1-2]").expect("pin [1-2]");
+    assert_eq!(stacked["net"], "/X");
+}
+
+/// r5 B5-L2 (`SCH_EDITOR_CONTROL::updatePastedSymbol`: the new instance takes the clip instance's unit, `newInstance.m_Unit`, then `SetUnit`): the sheet of
+/// the shared channel screen whose path draws U1 as unit B, copied and pasted, draws U1 as unit B on the new path too.
+#[test]
+fn a_pasted_sheet_keeps_the_unit_its_path_drew() {
+    let work = scratch("per_path_unit_paste");
+    std::fs::write(work.join("root.kicad_sch"), include_str!("../tests/fixtures/per_path_unit/root.kicad_sch")).unwrap();
+    std::fs::write(work.join("ch.kicad_sch"), include_str!("../tests/fixtures/per_path_unit/ch.kicad_sch")).unwrap();
+    let dir = work.join("board");
+    crate::import_kicad::run(&[work.join("root.kicad_sch").display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let screen = &design.sheet_contents.as_ref().unwrap()["ch.kicad_sch"];
+    let u1 = screen.symbols.iter().find(|s| s.id == "U1").unwrap();
+    let unit_b_sheet = design.schematic.as_ref().unwrap().sheets.iter().find(|sh| eda_model::sheet_list::unit_under(screen, u1, std::slice::from_ref(&sh.id)) == 2).expect("the path that draws unit B").id.clone();
+    let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [unit_b_sheet] }).to_string().as_bytes());
+    let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
+    assert_eq!(parsed["ok"], true, "{parsed}");
+    let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 60_000_000, "dy": 0 })).unwrap();
+    step(&dir, cmd, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let sheets = &design.schematic.as_ref().unwrap().sheets;
+    assert_eq!(sheets.len(), 3);
+    let screen = &design.sheet_contents.as_ref().unwrap()["ch.kicad_sch"];
+    let u1 = screen.symbols.iter().find(|s| s.id == "U1").unwrap();
+    let new_id = sheets.last().unwrap().id.clone();
+    assert_eq!(eda_model::sheet_list::unit_under(screen, u1, &[new_id]), 2, "{:?}", screen.extras.path_units);
 }

@@ -28,6 +28,7 @@
 //   /                     -> flip posture (straight-then-diagonal or the
 //                            other way round)
 import type { DiffPairPreview } from "../api/types";
+import type { RouteSizesInfo } from "./routerSizes";
 
 /** A via of the pair, as the preview carries it (one per net). */
 export interface DpDrawVia {
@@ -65,6 +66,12 @@ export interface DpDrawState {
   /** Shove mode: what the head would push aside. */
   displaced?: { layer: string; pts: [number, number][] }[];
   displacedVias?: { source_via: string; x: number; y: number }[];
+  /** The active layer before the route started on an item of another layer (`ROUTER_TOOL::prepareInteractive`: `m_originalActiveLayer`, then
+   * `SetActiveLayer( getStartLayer( .. ) )`): the active layer goes back to it when the route ends (`finishInteractive`). Unset when the route
+   * started on the active layer. */
+  originalActiveLayer?: string;
+  /** What the message panel shows of the route's sizes (the start reply's `sizes`; kicad-port/routerSizes.ts). */
+  sizes?: RouteSizesInfo;
 }
 
 function viaOf(v: NonNullable<DiffPairPreview["vias"]>[number]): DpDrawVia {

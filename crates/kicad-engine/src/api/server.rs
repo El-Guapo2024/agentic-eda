@@ -22,6 +22,7 @@ use super::proto::kiapi::common::{ApiRequest, ApiRequestHeader, ApiResponse, Api
 use super::sp::ReqSocket;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -313,9 +314,37 @@ fn lane() -> &'static Mutex<Lane> {
     LANE.get_or_init(Default::default)
 }
 
+/// Whether a value of [`ENV`] closes the lane: `0`, `off`, `no` or `false`, in any case.
+fn is_off(value: &str) -> bool {
+    matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "off" | "no" | "false")
+}
+
 /// Whether [`ENV`] closes the lane.
 fn turned_off() -> bool {
-    std::env::var(ENV).is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "off" | "no" | "false"))
+    std::env::var(ENV).is_ok_and(|v| is_off(&v))
+}
+
+/// Whether this process is long-lived and keeps the server between jobs: the studio's `serve` says so ([`long_lived_process`]).
+static LONG_LIVED: AtomicBool = AtomicBool::new(false);
+
+/// The studio's `serve` calls this: its process outlives one job, so its exports take the lane without [`ENV`] asking. A one-shot command does not, and
+/// pays a server start for a single job (`X5-3`: 1.02 s against 0.43 s on `padstacks_normal`), so it runs kicad-cli per job.
+pub fn long_lived_process() {
+    LONG_LIVED.store(true, Ordering::Relaxed);
+}
+
+/// Whether an export job should try the lane: a long-lived caller ([`long_lived_process`]), or [`ENV`] set to anything but a false word
+/// (`EDA_KICAD_API=1` asks for it; `=0` still closes it for everyone). Unset in a one-shot command, the export runs per-run kicad-cli.
+pub fn exports_use_server() -> bool {
+    exports_lane(std::env::var(ENV).ok().as_deref(), LONG_LIVED.load(Ordering::Relaxed))
+}
+
+fn exports_lane(env: Option<&str>, long_lived: bool) -> bool {
+    match env {
+        Some(v) if is_off(v) => false,
+        Some(_) => true,
+        None => long_lived,
+    }
 }
 
 /// Whether kicad-cli at `cli` has the `api-server` command: its top-level `--help` lists it (one run per binary per run of this program).
@@ -405,5 +434,26 @@ pub fn running_group_id() -> Option<u32> {
 pub fn shutdown() {
     if let Ok(mut l) = lane().lock() {
         l.server = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{exports_lane, is_off};
+
+    /// X5-3: a one-shot command (no `EDA_KICAD_API`, not long-lived) runs kicad-cli per job; the studio's `serve`, which says it is long-lived, takes
+    /// the lane without asking; and `EDA_KICAD_API`'s false words close it for everyone.
+    #[test]
+    fn only_a_long_lived_caller_or_a_asking_environment_takes_the_lane() {
+        assert!(!exports_lane(None, false), "a one-shot command starts no server");
+        assert!(exports_lane(None, true), "the studio's serve keeps one");
+        assert!(exports_lane(Some("1"), false), "EDA_KICAD_API=1 asks for it");
+        assert!(exports_lane(Some("yes"), true));
+        for off in ["0", "off", "OFF", " no ", "False"] {
+            assert!(is_off(off), "{off:?}");
+            assert!(!exports_lane(Some(off), true), "{off:?} closes it even for a long-lived caller");
+            assert!(!exports_lane(Some(off), false));
+        }
+        assert!(!is_off("1") && !is_off(""));
     }
 }

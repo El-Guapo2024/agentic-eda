@@ -619,15 +619,19 @@
       let sh = await draw("pcbnew.InteractiveDrawing.line", "draw_segment", [[3, 4], [11, 4]]);
       check("a line on the front silkscreen is on F.SilkS, at its class's line thickness", sh?.kind === "segment" && sh.layer === "F.SilkS" && sh.stroke_width === 180_000, JSON.stringify(sh));
       step("incWidth");
+      // The Line tool chains (drawing_tool.cpp DRAWING_TOOL::DrawLine: `startingPoint = VECTOR2D( line->GetEnd() )` after each commit), so the next
+      // segment is already started at (11, 4); `drawShape`'s `graphic && incWidth` steps it (`m_stroke.SetWidth( m_stroke.GetWidth() + WIDTH_STEP )`),
+      // and one click commits it. The click is straight below (11, 4), so the line mode (45 degrees or free) leaves it where it is.
       await __eda.run("pcbnew.InteractiveDrawing.incWidth");
       await sleep(200);
       {
         const before = await shapeCount();
-        await click(3, 6); await click(11, 6);
+        await click(11, 6);
         const after = await shapeCount();
         if (after > before) steps.push("pcb");
-        sh = await lastShape();
-        check("incWidth steps the width by 0.1 mm from the class's", after === before + 1 && sh?.stroke_width === 280_000, JSON.stringify(sh));
+        const shapes = (await state()).drawings?.shapes ?? [];
+        sh = shapes.find((s) => s.kind === "segment" && s.start?.[0] === 11_000_000 && s.start?.[1] === 4_000_000);
+        check("incWidth steps the width by 0.1 mm from the class's", after === before + 1 && sh?.end?.[0] === 11_000_000 && sh?.end?.[1] === 6_000_000 && sh?.stroke_width === 280_000, `${after - before} new; ${JSON.stringify(sh ?? shapes.slice(-3))}`);
       }
       step("arming again");
       sh = await draw("pcbnew.InteractiveDrawing.line", "draw_segment", [[3, 8], [11, 8]]);
@@ -663,7 +667,10 @@
       check("the Text tool's dialog starts at the silkscreen class's size and thickness, not mirrored", size === 1_200_000 && thickness === 200_000 && mirrorBox()?.checked === false, `${size} ${thickness} ${mirrorBox()?.checked}`);
       await setText(document.querySelector(".dialog .kv-grid input"), "P9A tool text");
       const textsBefore = ((await state()).drawings?.texts ?? []).length;
-      await press(document.querySelector(".dialog"), "Add", 900);
+      await press(document.querySelector(".dialog"), "Add", 300);
+      // `PlaceText`: the text follows the cursor until the next click places it (round 5 B5-2).
+      await click(3, 22);
+      await sleep(600);
       const t = ((await state()).drawings?.texts ?? []).find((x) => x.content === "P9A tool text");
       if (((await state()).drawings?.texts ?? []).length > textsBefore) steps.push("pcb");
       check("the text is made with them, left aligned", t?.layer === "F.SilkS" && t.size === 1_200_000 && t.stroke_width === 200_000 && t.justify === "left" && t.mirror === false, JSON.stringify(t));

@@ -14,7 +14,7 @@
 //! `add_shape` / `add_zone` / `delete_*` commands.
 //!
 //! Not ported: text and pads as sources (the studio has no font outlines, and pads are not selectable
-//! items), a rounded rectangle's corner radius (the IR rectangle has none).
+//! items).
 
 use eda_model::units::Nm;
 use eda_clipper2::Point64;
@@ -44,8 +44,7 @@ pub struct ConvertedPolys {
     pub consumed: Vec<String>,
 }
 
-/// `bds.m_MaxError` (`ARC_HIGH_DEF`, 0.005 mm), the error every shape of the conversion is polygonised and inflated to. (KiCad chains
-/// segments whose ends are within `chainingEpsilon = 100` nm; here only exact meetings chain.)
+/// `bds.m_MaxError` (`ARC_HIGH_DEF`, 0.005 mm), the error every shape of the conversion is polygonised and inflated to.
 const MAX_ERROR_NM: i32 = 5_000;
 
 fn pt64(p: Point) -> Point64 {
@@ -182,8 +181,14 @@ fn find_items<'a>(design: &'a Design, ids: &[String]) -> Vec<(String, Item<'a>)>
 }
 
 /// The ring of a closed graphic as `makePolysFromClosedGraphics` reads it (the raw shape, line width ignored), its stroke width and whether it is filled.
-fn closed_ring(item: &Item, strategy: ConvertStrategy) -> Option<(Vec<Point64>, Nm, bool)> {
+/// A rectangle with a corner radius (`GetCornerRadius() > 0`, `DrawingsSection::board_items`) is its rounded outline (`TransformRoundChamferedRectToPolygon`,
+/// here `ROUNDRECT::TransformToPolygon`'s arcs at the same error, `eda_model::outline::rounded_rect_ring`; round 5 B5-8).
+fn closed_ring(item: &Item, strategy: ConvertStrategy, corner_radius: Nm) -> Option<(Vec<Point64>, Nm, bool)> {
     match item {
+        Item::Shape(Shape::Rect { start, end, stroke_width, filled, .. }) if corner_radius > Nm::ZERO => {
+            let ring = eda_model::outline::rounded_rect_ring(*start, *end, corner_radius, MAX_ERROR_NM as f64).into_iter().map(pt64).collect();
+            Some((ring, *stroke_width, *filled))
+        }
         Item::Shape(Shape::Rect { start, end, stroke_width, filled, .. }) => {
             let ring = vec![pt64(*start), pt64(Point { x: end.x, y: start.y }), pt64(*end), pt64(Point { x: start.x, y: end.y })];
             Some((ring, *stroke_width, *filled))
@@ -265,8 +270,34 @@ fn key(p: Point) -> (i64, i64) {
     (p.x.get(), p.y.get())
 }
 
+/// `chainingEpsilon = 100`: "max dist from one endPt to next startPt in IU" (`closeEnough`: the squared distance at most its square).
+const CHAINING_EPSILON_NM: i64 = 100;
+
 impl Chainer {
-    fn new(edges: Vec<Edge>) -> Self {
+    fn new(mut edges: Vec<Edge>) -> Self {
+        // `findInsertionPoint`: an end within the chaining epsilon of a point already in `connections` is filed under that point (round 5 B5-13). The edge's end
+        // is moved onto it, so the walk meets it exactly; KiCad's walk, which appends the far end of each item it enters, drops the near-miss point the same way.
+        let mut keys: Vec<Point> = Vec::new();
+        let canon = |p: Point, keys: &mut Vec<Point>| -> Point {
+            if keys.contains(&p) {
+                return p;
+            }
+            let close = |q: &&Point| {
+                let (dx, dy) = ((p.x - q.x).get() as i128, (p.y - q.y).get() as i128);
+                dx * dx + dy * dy <= (CHAINING_EPSILON_NM as i128).pow(2)
+            };
+            if let Some(q) = keys.iter().find(close) {
+                return *q;
+            }
+            keys.push(p);
+            p
+        };
+        for e in edges.iter_mut() {
+            let n = e.pts.len();
+            e.pts[0] = canon(e.pts[0], &mut keys);
+            e.pts[n - 1] = canon(e.pts[n - 1], &mut keys);
+        }
+        edges.retain(|e| e.start() != e.end() || e.pts.len() > 2);
         let mut at: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
         for (i, e) in edges.iter().enumerate() {
             at.entry(key(e.start())).or_default().push(i);
@@ -390,7 +421,8 @@ pub fn polys_from_items(design: &Design, ids: &[String], strategy: ConvertStrate
 
     // makePolysFromClosedGraphics
     for (id, item) in &items {
-        let Some((ring, width, filled)) = closed_ring(item, strategy) else { continue };
+        let radius = design.drawings.as_ref().map(|d| d.board_items.corner_radius_of(id)).unwrap_or(Nm::ZERO);
+        let Some((ring, width, filled)) = closed_ring(item, strategy, radius) else { continue };
         if strategy == ConvertStrategy::BoundingHull {
             // `TransformShapeToPolygon( ..., ignoreLineWidth = false )`: the shape with its line (a filled one grown by half the width, an outline one as a ring).
             let zone = matches!(item, Item::Zone(_));
@@ -599,6 +631,35 @@ mod tests {
         assert_eq!(r.rings.len(), 1);
         assert_eq!(r.rings[0].len(), 3);
         assert_eq!(r.consumed, vec!["z1".to_string()]);
+    }
+
+    /// Round 5's B5-8: a 10 x 5 mm rectangle with 2 mm corners is its rounded outline (`TransformShapeToPolygon` of the `ROUNDRECT`), not four corners.
+    #[test]
+    fn polys_from_items_keeps_a_rounded_rectangles_corners() {
+        let mut d = design(vec![rect(Nm::ZERO, Nm::ZERO, mm(10.0), mm(5.0), mm(0.2))]);
+        let id = ids(&d)[0].clone();
+        d.drawings.as_mut().unwrap().board_items.set_corner_radius(&id, mm(2.0));
+        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, Nm::ZERO);
+        assert_eq!(r.rings.len(), 1);
+        assert!(r.rings[0].len() > 8, "rounded corners: {} points", r.rings[0].len());
+        // 50 mm^2 less four corners of (4 - pi) mm^2 each: 50 - 4 * 0.8584 = 46.566 mm^2.
+        let expect = (50.0 - 4.0 * (4.0 - std::f64::consts::PI)) * 1e12;
+        assert!((area(&r.rings[0]) - expect).abs() < 0.01e12, "area {} vs {expect}", area(&r.rings[0]));
+    }
+
+    /// Round 5's B5-13: `makePolysFromChainedSegs` joins ends within `chainingEpsilon = 100` nm -- a triangle with one end 50 nm off is a polygon.
+    #[test]
+    fn ends_within_100_nm_chain() {
+        let p = |x: f64, y: f64| (mm(x), mm(y));
+        let off = (mm(0.0) + Nm::new(50), mm(0.0));
+        let d = design(vec![seg(p(0.0, 0.0), p(10.0, 0.0), mm(0.1)), seg(p(10.0, 0.0), p(5.0, 8.0), mm(0.1)), seg(p(5.0, 8.0), off, mm(0.1))]);
+        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, Nm::ZERO);
+        assert_eq!(r.rings.len(), 1, "{r:?}");
+        assert_eq!(r.rings[0].len(), 3);
+        // 150 nm is too far.
+        let far = (mm(0.0) + Nm::new(150), mm(0.0));
+        let d = design(vec![seg(p(0.0, 0.0), p(10.0, 0.0), mm(0.1)), seg(p(10.0, 0.0), p(5.0, 8.0), mm(0.1)), seg(p(5.0, 8.0), far, mm(0.1))]);
+        assert!(polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, Nm::ZERO).rings.is_empty());
     }
 
     #[test]

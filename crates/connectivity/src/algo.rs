@@ -332,4 +332,27 @@ mod tests {
         assert!(!graph.items[r1].connected.contains(&r2));
         assert_eq!(clusters.len(), 2);
     }
+
+    /// The fill of one zone: `ZoneCopper` with one fragment, `outline` in mm (below the two pads, which sit at y = 5 mm).
+    fn bar_fill(copper: &mut ZoneCopper, id: &str, outline: &[(f64, f64)]) -> eda_model::ir::Zone {
+        let chain = outline.iter().map(|&(x, y)| eda_clipper2::Point64 { x: mm(x).get(), y: mm(y).get(), z: 0 }).collect();
+        copper.zones.insert((id.into(), "F.Cu".into()), eda_shape_poly_set::ShapePolySet::from_outline(chain));
+        eda_model::ir::Zone { id: id.into(), net: "N1".into(), layer: "F.Cu".into(), outline: outline.iter().map(|&(x, y)| eda_model::ir::Point { x: mm(x), y: mm(y) }).collect(), ..Default::default() }
+    }
+
+    /// R5-Z1, `CN_VISITOR::checkZoneZoneConnection`: two same-net fills that cross as a "+" with no vertex of either inside the other are two clusters (kicad-cli:
+    /// "Missing connection between items: Zone [GND] .. / Zone [GND] .."); shorten one bar so a vertex lies inside the other, and they are one.
+    #[test]
+    fn two_crossing_fills_without_a_vertex_inside_are_not_connected() {
+        let clusters_of = |vertical: &[(f64, f64)]| {
+            let (mut design, model) = two_pad_model();
+            let mut copper = ZoneCopper::default();
+            let zones = vec![bar_fill(&mut copper, "h", &[(0.0, 14.0), (10.0, 14.0), (10.0, 16.0), (0.0, 16.0)]), bar_fill(&mut copper, "v", vertical)];
+            design.routing.as_mut().unwrap().zones = zones;
+            let graph = build_graph(&design, &model, &copper);
+            search_clusters(&graph).into_iter().filter(|c| c.items.iter().all(|&i| matches!(graph.items[i].item, ItemRef::ZoneOutline { .. }))).count()
+        };
+        assert_eq!(clusters_of(&[(4.0, 10.0), (6.0, 10.0), (6.0, 20.0), (4.0, 20.0)]), 2, "edges crossing join nothing");
+        assert_eq!(clusters_of(&[(4.0, 10.0), (6.0, 10.0), (6.0, 15.0), (4.0, 15.0)]), 1, "a vertex inside the other fill joins them");
+    }
 }

@@ -187,6 +187,15 @@ export class PcbSnap {
     return p;
   }
 
+  /** `AlignToSegment( point, seg )` on the helper of `tool`, snapping on unless Shift is held (`m_gridHelper.SetSnap( !( m_modifiers & MD_SHIFT ) )`). */
+  alignToSegment(tool: string, world: Pt, a: Pt, b: Pt, mods: SnapMods): Pt {
+    if (!this.view) return world;
+    const h = this.helperFor(tool);
+    h.setUseGrid(!mods.ctrl);
+    h.setSnap(!mods.shift);
+    return whole(h.alignToSegment(world, a, b));
+  }
+
   /** `BestDragOrigin`: the point a move of `items` starts from. */
   dragOrigin(tool: string, mouse: Pt, ids: readonly string[], filter?: DragFilter): Pt {
     if (!this.view?.board) return mouse;
@@ -224,8 +233,9 @@ export class PcbSnap {
    *   * a pad or via snaps to its centre; a track to the nearer end if the cursor is within half its width of one, else along the segment (`AlignToSegment`);
    *   * nothing under the cursor: `Align` to the wire grid (the via grid for a via being placed). Ctrl turns the grid off.
    * `skip` are the tracks a drag is dragging (it never snaps to the line it moves, `checkSnap`) or the item a route started on (which it does not end on).
+   * `layer` is `pickSingleItem`'s layer: the active one for a start (its items first, then any layer's: `getStartLayer`), the route's for an end (its items only).
    */
-  routePoint(world: Pt, mods: SnapMods, opts: { net?: string | null; isEnd: boolean; placingVia?: boolean; skip?: ReadonlySet<string> }): Pt {
+  routePoint(world: Pt, mods: SnapMods, opts: { net?: string | null; isEnd: boolean; placingVia?: boolean; skip?: ReadonlySet<string>; layer?: { top: string; only?: boolean } }): Pt {
     if (!this.view?.board) return world;
     const h = this.helperFor("route");
     h.setUseGrid(!mods.ctrl);
@@ -233,7 +243,7 @@ export class PcbSnap {
     const category: GridCategory = opts.placingVia ? "vias" : "wires";
     const align = (): Pt => h.align(world, category);
     const gridSlop = Math.max(h.gridSize("current")[0], 1);
-    const item = pickRouteItem(this.view.board, h.scene, world, gridSlop, opts.net ?? null, (layers) => layers.some((l) => this.view!.layerVisible[l] !== false), opts.skip);
+    const item = pickRouteItem(this.view.board, h.scene, world, gridSlop, opts.net ?? null, (layers) => layers.some((l) => this.view!.layerVisible[l] !== false), opts.skip, opts.layer);
     const { pads, tracks } = this.view.magnetic;
     // `checkSnap`: an end only snaps to an item the magnetic settings allow; a start always does.
     const allowed = !opts.isEnd || (h.getSnap() && (item?.type === "pad" ? pads !== "never" : item ? tracks !== "never" : false));

@@ -11,7 +11,7 @@
 //   else if( polyGeomMgr.AddPoint( cursorPos ) ) ...
 //
 // A click on the first corner closes the outline; in the 45- and 90-degree line modes a click locks in the leader's bend and its end (two corners).
-import { addPoint, newPointClosesOutline, setCursorPosition, type LeaderMode, type PolyGeom, type Pt } from "./polygonGeom";
+import { addPoint, finalOutline, newPointClosesOutline, setCursorPosition, type LeaderMode, type PolyGeom, type Pt } from "./polygonGeom";
 
 export type AngleSnapMode = "direct" | "90" | "45";
 
@@ -33,4 +33,23 @@ export function zoneClick(pts: readonly Pt[], at: Pt, mode: LeaderMode): { finis
 /** `m_leaderPts` for the cursor at `cursor`: the rubber band from the last corner, bent in the 45- and 90-degree modes. Empty with no corner. */
 export function zoneLeader(pts: readonly Pt[], cursor: Pt, mode: LeaderMode): [number, number][] {
   return setCursorPosition(geomOf(pts, mode), cursor).leader.map((p): [number, number] => [p[0], p[1]]);
+}
+
+/** `m_loopPts` for the cursor at `cursor`: the path closing the outline from the cursor back to the first corner, bent in the 45- and 90-degree modes
+ * (`build45DegLeader( aEndPoint, m_lockedPoints.Reverse() ).Reverse()`); empty in the free mode, where the preview closes straight. */
+export function zoneLoop(pts: readonly Pt[], cursor: Pt, mode: LeaderMode): [number, number][] {
+  return setCursorPosition(geomOf(pts, mode), cursor).loop.map((p): [number, number] => [p[0], p[1]]);
+}
+
+/**
+ * The outline a zone, rule area, cutout, similar zone, via stitching or graphic polygon is made with when it is finished with the cursor at `cursor`:
+ * `ZONE_CREATE_HELPER::OnComplete` (pcbnew/tools/zone_create_helper.cpp) -- the locked corners, then in the 45- and 90-degree modes the leader's and the
+ * loop's corners ("we may have intermediate points in the leader that should be included as they are shown in the preview"), `Simplify( true )`, and the
+ * start point dropped when it lies on the line between its neighbours (polygonGeom.ts `finalOutline`). Null with fewer than three corners ("just scrap the
+ * zone in progress"). Round 5's A5-5.
+ */
+export function zoneFinish(pts: readonly Pt[], cursor: Pt, mode: LeaderMode): [number, number][] | null {
+  if (pts.length < 3) return null;
+  const out = finalOutline(setCursorPosition(geomOf(pts, mode), cursor));
+  return out ? out.map((p): [number, number] => [p[0], p[1]]) : null;
 }

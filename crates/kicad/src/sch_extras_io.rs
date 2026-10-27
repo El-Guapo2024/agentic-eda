@@ -457,7 +457,12 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                 let orientation = (sexpr::num(at, 3).unwrap_or(0.0) * 1000.0).round().rem_euclid(360_000.0) as Millideg;
                 let pin_length_nm = sexpr::find(item, "length").and_then(|l| sexpr::num(l, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(mm(2.54));
                 let shape = sexpr::find(item, "shape").and_then(|s| sexpr::txt(s, 1)).map(DirectiveShape::from_token).unwrap_or_default();
-                let field = |name: &str| sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1) == Some(name)).and_then(|p| sexpr::txt(p, 2)).unwrap_or("").to_string();
+                // a field by its canonical name: `SCH_FIELD::GetCanonicalName` takes "Net Class" for "Netclass" on a label (`labelTypes` holds
+                // `SCH_DIRECTIVE_LABEL_T`), and `CONNECTION_GRAPH` gives the net the class of either spelling (r5 D5-H4, QA `issue23962`)
+                fn canonical(n: &str) -> &str {
+                    if n == "Net Class" { "Netclass" } else { n }
+                }
+                let field = |name: &str| sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1).map(canonical) == Some(name)).and_then(|p| sexpr::txt(p, 2)).unwrap_or("").to_string();
                 let kind = SchGraphicKind::Directive { at: Point { x: crate::import::sch_mm_to_nm(x), y: crate::import::sch_mm_to_nm(y) }, orientation, shape, pin_length_nm, netclass: field("Netclass"), component_class: field("Component Class") };
                 out.push(ReadGraphic::new(SchGraphic::new(kind), locked_of(item)));
             }
@@ -475,6 +480,25 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
 mod tests {
     use eda_model::units::mm;
     use super::*;
+
+    /// r5 D5-H4 (`SCH_FIELD::GetCanonicalName`: "Net Class" is "Netclass" on a label): a directive label's `(property "Net Class" "HV")` is its net class,
+    /// and is written back under the canonical name.
+    #[test]
+    fn a_directive_labels_net_class_field_is_read_under_either_name() {
+        let text = r#"(kicad_sch (version 20250114) (netclass_flag "" (length 2.54) (shape round) (at 10 10 0) (uuid "d1111111-1111-1111-1111-111111111111") (property "Net Class" "HV" (at 10 8 0))))"#;
+        let tree = sexpr::parse(text).unwrap();
+        let read = read_graphics(tree.as_list().unwrap());
+        let netclass = read.iter().find_map(|r| match &r.graphic.shape {
+            SchGraphicKind::Directive { netclass, .. } => Some(netclass.clone()),
+            _ => None,
+        });
+        assert_eq!(netclass.as_deref(), Some("HV"));
+        let mut sch = SchematicSection::default();
+        sch.extras.graphics.push(read[0].graphic.clone());
+        let mut out = String::new();
+        write_graphics(&mut out, &sch);
+        assert!(out.contains("(property \"Netclass\" \"HV\""), "{out}");
+    }
 
     fn p(x: Nm, y: Nm) -> Point {
         Point { x, y }

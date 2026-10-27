@@ -493,7 +493,13 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
                 continue;
             }
             let pin_uuid = if nth == 0 { duid_for(&format!("pin:{}:{}", sym.id, pin.number), &format!("{}.{}", sym.id, pin.number)) } else { duid_for(&format!("pin:{}:{}:{nth}", sym.id, pin.number), &format!("{}.{}#{nth}", sym.id, pin.number)) };
-            writeln!(out, "\t\t(pin {} (uuid \"{pin_uuid}\"))", sexpr_str(&pin.number)).unwrap();
+            // the alternate function the symbol picked for the pin (`SCH_IO_KICAD_SEXPR::saveSymbol`: `(alternate ..)` unless it is empty or the pin's own
+            // name, r5 D5-H3)
+            let alt = sch.extras.pin_alternate(&eda_model::ir::field_key(&sym.id, sym.unit), &pin.number).filter(|a| pin.name.as_deref() != Some(*a));
+            match alt {
+                Some(alt) => writeln!(out, "\t\t(pin {} (uuid \"{pin_uuid}\") (alternate {}))", sexpr_str(&pin.number), sexpr_str(alt)).unwrap(),
+                None => writeln!(out, "\t\t(pin {} (uuid \"{pin_uuid}\"))", sexpr_str(&pin.number)).unwrap(),
+            }
         }
         writeln!(out, "\t\t(instances").unwrap();
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
@@ -1505,13 +1511,14 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
             let hide = if resolved.and_then(|s| s.nth_pin_by_number(&pin.number, nth)).is_some_and(|rp| rp.hidden) { " (hide yes)" } else { "" };
             writeln!(
                 out,
-                "\t\t\t\t(pin {etype} line (at {} {} {}) (length {}){hide}\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
+                "\t\t\t\t(pin {etype} line (at {} {} {}) (length {}){hide}\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27)))){}\n\t\t\t\t)",
                 fmt_mm_f(bx),
                 fmt_mm_f(by),
                 fmt_mm_f(angle),
                 fmt_mm_f(length_mm),
                 sexpr_str(&name),
                 sexpr_str(&pin.number),
+                pin_alternates_str(resolved, &pin.number),
             )
             .unwrap();
         }
@@ -1541,18 +1548,26 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
             let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
             writeln!(
                 out,
-                "\t\t\t\t(pin {etype} line (at {} {} {}) (length {})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
+                "\t\t\t\t(pin {etype} line (at {} {} {}) (length {})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27)))){}\n\t\t\t\t)",
                 fmt_mm_f(bx),
                 fmt_mm_f(by),
                 fmt_mm_f(angle),
                 fmt_mm_f(length),
                 sexpr_str(&name),
                 sexpr_str(&pin.number),
+                pin_alternates_str(resolved, &pin.number),
             )
             .unwrap();
         }
         writeln!(out, "\t\t\t)").unwrap();
     }
+}
+
+/// A library pin's `(alternate "name" <type> <shape>)` forms, each on a line of its own, as `SCH_IO_KICAD_SEXPR_LIB_CACHE::savePin` writes them (in the order of
+/// the pin's `std::map`, by name): a placed symbol's `(pin .. (alternate ..))` names one of them (r5 D5-H3).
+fn pin_alternates_str(resolved: Option<&eda_model::LibSymbol>, number: &str) -> String {
+    let Some(alts) = resolved.and_then(|r| r.connectivity.pin_alternates.get(number)) else { return String::new() };
+    alts.iter().map(|a| format!("\n\t\t\t\t\t(alternate {} {} {})", sexpr_str(&a.name), a.electrical_type, a.shape)).collect()
 }
 
 /// A power symbol's `lib_symbol`: the resolved definition's real graphics

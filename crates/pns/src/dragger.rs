@@ -235,6 +235,9 @@ pub struct DragCommit {
     pub remove_track_ids: Vec<String>,
     pub remove_via_ids: Vec<String>,
     pub tracks: Vec<Line>,
+    /// The board track each of `tracks` replaces (`GetSourceItem()`), by the same index: the dragged line's is the dragged segment's track, a
+    /// shoved line's the track it stood on (r5 R5-2: its mask and group go to the new track).
+    pub sources: Vec<Option<String>>,
     pub vias: Vec<(Point, Nm, Nm, Option<String>)>,
 }
 
@@ -646,6 +649,14 @@ impl Dragger {
     }
 
     /// The IR tracks `line` stands on.
+    /// The board track of the segment the drag took hold of (`m_draggedSegmentIndex` of the line `AssembleLine` gave), the dragged line's
+    /// source (`pl.SetSourceItem( aSeg->GetSourceItem() )`).
+    fn dragged_source(&self, node: &Node) -> Option<String> {
+        let ids = &self.original.segment_ids;
+        let id = ids.get(self.grabbed_index.min(ids.len().saturating_sub(1)))?;
+        node.get(*id).and_then(|it| it.source_track_id()).map(str::to_string)
+    }
+
     fn source_tracks(node: &Node, line: &Line) -> Vec<String> {
         let mut out: Vec<String> = line.segment_ids.iter().filter_map(|id| node.get(*id).and_then(|it| it.source_track_id()).map(str::to_string)).collect();
         out.sort_unstable();
@@ -814,12 +825,17 @@ impl Dragger {
                 let tracks = Self::source_tracks(node, &self.original);
                 commit.remove_track_ids.extend(tracks.iter().cloned());
                 commit.tracks.push(Line { pts: preview.pts.clone(), arcs: preview.arcs.clone(), ..self.original.clone() });
+                // `NODE::AssembleLine`'s `pl.SetSourceItem( aSeg->GetSourceItem() )`: the dragged segment's track
+                commit.sources.push(self.dragged_source(node).or_else(|| tracks.first().cloned()));
                 // an IR track the dragged line stood on only in part keeps the rest (a junction cuts a track into lines); a track the
                 // shove moved too has been handed back by the shove
                 let covered: HashSet<ItemId> = self.original.segment_ids.iter().copied().collect();
                 let shoved: HashSet<&String> = preview.displaced_lines.iter().filter_map(|d| d.source_track.as_ref()).collect();
                 for t in tracks.iter().filter(|t| !shoved.contains(t)) {
-                    commit.tracks.extend(node.uncovered_track_runs(t, &covered));
+                    for run in node.uncovered_track_runs(t, &covered) {
+                        commit.tracks.push(run);
+                        commit.sources.push(Some(t.clone()));
+                    }
                 }
             }
             DragKind::Via => {
@@ -835,6 +851,7 @@ impl Dragger {
                 // a leg taken from a frame names its tracks itself (its items are the frame's, not the session's)
                 for (i, l) in preview.fanout.iter().enumerate() {
                     let sources = if preview.fanout_tracks.len() == preview.fanout.len() { preview.fanout_tracks[i].clone() } else { Self::source_tracks(node, l) };
+                    commit.sources.push(sources.first().cloned());
                     for src in sources {
                         if !commit.remove_track_ids.contains(&src) {
                             commit.remove_track_ids.push(src);
@@ -852,6 +869,7 @@ impl Dragger {
                     commit.remove_track_ids.push(id.clone());
                 }
                 commit.tracks.push(d.line.clone());
+                commit.sources.push(Some(id.clone()));
             }
         }
         for d in &preview.displaced_vias {

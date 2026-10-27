@@ -15,21 +15,24 @@
 //     lookup ErcDialog's jumpTo uses.
 //   * the item is on another sheet (the search went over every sheet, `searchAllSheets`) -> `RunAction( changeSheet, &sheet )` first, then the
 //     selection and the view as above.
-//   * no item left -> "Reached end of schematic. Find again to wrap around
-//     to the start." and the cursor resets so the next call wraps.
+//   * no item left (or none at all) -> "Reached end of schematic. Find again to wrap around
+//     to the start."; a Find within 4 s wraps (`m_wrapAroundTimer`), a later one reports the end again.
 import type { Dispatch } from "react";
 import { fetchSchFind } from "../../api/client";
 import type { FindMatch } from "../../api/types";
 import { fitTransform } from "../canvas/view";
-import { endReachedMessage, pickMatch, searchesAllSheets } from "../../kicad-port/schFind";
+import { WRAP_CURSOR, endReachedMessage, findStartCursor, pickMatch, scopeFromSelection, searchesAllSheets } from "../../kicad-port/schFind";
 import { samePath } from "../../kicad-port/sheetPages";
 import type { Action, StudioApi } from "../../state/store";
 
-/** Go to the sheet of a match and select + pan to it (the `FindNext` success path). */
-export async function visitMatch(api: StudioApi, dispatch: Dispatch<Action>, match: FindMatch): Promise<void> {
+/**
+ * Go to the sheet of a match and select + pan to it (the `FindNext` success path). With "Search the current selection only" the selection is
+ * kept (`if( !selectedOnly ) { ClearSelection(); AddItemToSel( item ); }`): it is what the search walks.
+ */
+export async function visitMatch(api: StudioApi, dispatch: Dispatch<Action>, match: FindMatch, select = true): Promise<void> {
   // `editFrame->GetToolManager()->RunAction<SCH_SHEET_PATH*>( SCH_ACTIONS::changeSheet, &sheet )`
   if (match.sheet && !samePath(match.sheet, api.getState().currentSheetPath)) await api.navigateToSheet(match.sheet);
-  dispatch({ type: "SET_SELECTION", refs: [match.id] });
+  if (select) dispatch({ type: "SET_SELECTION", refs: [match.id] });
   dispatch({ type: "SET_HOT", refs: [match.id] });
   const container = document.querySelector(".pcb-canvas-container");
   const rect = container?.getBoundingClientRect();
@@ -55,14 +58,18 @@ export async function visitMatch(api: StudioApi, dispatch: Dispatch<Action>, mat
  */
 export async function findNextMatch(api: StudioApi, dispatch: Dispatch<Action>, reversed: boolean, cursorOverride?: string | null): Promise<FindMatch | null> {
   const state = api.getState();
-  const { search } = state.schFind;
-  const cursor = cursorOverride === undefined ? state.schFind.cursor : cursorOverride;
+  const { search, selectedOnly } = state.schFind;
+  const allSheets = searchesAllSheets(state.schFind.currentSheetOnly, selectedOnly);
+  const stored = cursorOverride === undefined ? state.schFind.cursor : cursorOverride;
+  // `if( m_wrapAroundTimer.IsRunning() ) { afterSheet = nullptr; m_afterItem = nullptr; .. }`
+  const cursor = findStartCursor(stored, wrapArmedAt, Date.now(), allSheets);
+  wrapArmedAt = null;
   if (search.find === "") {
     dispatch({ type: "SET_SCH_DIALOG", dialog: "find" });
     return null;
   }
-  const allSheets = searchesAllSheets(state.schFind.currentSheetOnly, state.schFind.selectedOnly);
-  const reply = await fetchSchFind({ ...search, search_and_replace: false }, undefined, state.currentSheetPath, allSheets);
+  // `nextMatch`: with "Search the current selection only", the items of the selection (`for( EDA_ITEM* item : m_selectionTool->GetSelection() )`)
+  const reply = await fetchSchFind({ ...search, search_and_replace: false }, scopeFromSelection(state.selection, selectedOnly), state.currentSheetPath, allSheets);
   if (!reply.ok) {
     dispatch({ type: "SET_SCH_FIND", find: { status: reply.message ?? "Find failed." } });
     return null;
@@ -70,11 +77,17 @@ export async function findNextMatch(api: StudioApi, dispatch: Dispatch<Action>, 
   const picked = pickMatch(reply.matches, cursor, reversed, allSheets ? (reply.current_rank ?? 0) : undefined);
   if (picked.match) {
     dispatch({ type: "SET_SCH_FIND", find: { cursor: picked.cursor, status: `${reply.matches.length} match${reply.matches.length === 1 ? "" : "es"}` } });
-    await visitMatch(api, dispatch, picked.match);
+    await visitMatch(api, dispatch, picked.match, !selectedOnly);
     return picked.match;
   }
-  const message = reply.matches.length === 0 ? "No match found." : endReachedMessage(allSheets);
-  dispatch({ type: "SET_SCH_FIND", find: { cursor: picked.cursor, status: message } });
+  // "Reached end of schematic." / "Reached end of sheet." + " Find again to wrap around to the start.", shown when nothing matched at all too;
+  // only a Find within the next 4 s wraps (`m_wrapAroundTimer.StartOnce( 4000 )`), a later one goes on from the cursor and reports the end again
+  const message = endReachedMessage(allSheets);
+  wrapArmedAt = Date.now();
+  dispatch({ type: "SET_SCH_FIND", find: { cursor: stored === WRAP_CURSOR ? null : stored, status: message } });
   dispatch({ type: "TOAST", message, kind: "info" });
   return null;
 }
+
+/** When the last Find reported the end (ms), for the 4 s wrap window; null when it did not. */
+let wrapArmedAt: number | null = null;

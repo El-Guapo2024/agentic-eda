@@ -16,7 +16,7 @@ import { routeAttemptFinish, routeCancel, routeContinueFromEnd, routeFinish, rou
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { drawStateFromPreview, type RouteDrawState } from "../../kicad-port/routeTool";
-import { posture90 } from "../../kicad-port/pcbEditActions";
+import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
 import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
 import { advanceRouteQueue } from "./routeQueue";
 
@@ -37,7 +37,13 @@ export async function startInteractiveRoute(x: number, y: number, layer: string,
     dispatch({ type: "TOAST", message: preview.message ?? "Start a route from a pad, via, or track end.", kind: "error" });
     return false;
   }
-  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width: preview.width ?? width ?? 250_000, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias, startItem: startItem ?? undefined };
+  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width: preview.width ?? width ?? 250_000, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias, startItem: startItem ?? undefined, sizes: preview.sizes };
+  // `ROUTER_TOOL::prepareInteractive`: the route starts on `getStartLayer`'s layer -- the start item's when it is not on the active one -- and that
+  // becomes the active layer until the route ends (r5 R5-1)
+  if (preview.layer && preview.layer !== layer) {
+    draw.originalActiveLayer = layer;
+    dispatch({ type: "SET_ACTIVE_LAYER", layer: preview.layer });
+  }
   dispatch({ type: "SET_DRAW_STATE", draw });
   return true;
 }
@@ -167,15 +173,13 @@ export function findRouteAnchor(board: BoardState, xNm: number, yNm: number, thr
 
 /**
  * `to` constrained by the current line mode (`PCBNEW_SETTINGS::m_AngleSnapMode`,
- * cycled by `pcbnew.EditorControl.lineModeNext`): `direct` = free angle
- * (`LEADER_MODE::DIRECT`), `45` = nearest 45-degree ray (`DEG45`), `90` =
- * orthogonal (`DEG90`). The shape tools' segment/rect preview and click
- * both go through this so they can never disagree.
+ * cycled by `pcbnew.EditorControl.lineModeNext`) as a line's end: `direct` = free angle
+ * (`LEADER_MODE::DIRECT`), `45` = `GetVectorSnapped45` (the cursor's x or y kept), `90` =
+ * `GetVectorSnapped90`. The shape tools go through `shapeSecondPoint`
+ * (kicad-port/pcbShapeSnap.ts), which adds the Ctrl modifier and a rectangle's own rule.
  */
 export function constrainByAngleMode(mode: AngleSnapMode, from: [number, number], to: [number, number]): [number, number] {
-  if (mode === "direct") return to;
-  if (mode === "90") return posture90(from, to);
-  return posture45(from, to);
+  return shapeSecondPoint("segment", mode, false, from, to);
 }
 
 const POSTURE_STEP_DEG = 45;

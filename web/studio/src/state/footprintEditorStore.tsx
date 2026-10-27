@@ -371,7 +371,9 @@ export interface FootprintEditorApi {
   moveGraphic: (id: string, dx: Nm, dy: Nm) => Promise<void>;
   editGraphic: (id: string, layer: string, strokeWidth: Nm, filled: boolean) => Promise<void>;
   deleteGraphic: (id: string) => Promise<void>;
-  addText: (text: CmdText) => Promise<void>;
+  /** Add a text and answer with the document's id for it (the text `DRAWING_TOOL::PlaceText` selects once it is placed), or `undefined` when the
+   *  command was refused. The id is read back from the server's document: `runCmd`'s refresh dispatches it, but that state can land after this returns. */
+  addText: (text: CmdText) => Promise<string | undefined>;
   moveText: (id: string, x: Nm, y: Nm) => Promise<void>;
   editText: (id: string, fields: Omit<CmdText, "id" | "at">) => Promise<void>;
   deleteText: (id: string) => Promise<void>;
@@ -636,8 +638,16 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
     },
     addText: async (text) => {
       const name = stateRef.current.name;
-      if (!name) return;
-      await runCmd({ op: "add_footprint_text", footprint: name, text });
+      if (!name) return undefined;
+      const before = new Set((stateRef.current.footprint?.texts ?? []).map((t) => t.id));
+      if (!(await runCmd({ op: "add_footprint_text", footprint: name, text }))) return undefined;
+      // Read the document for the new text's id: `runCmd` has refreshed the state, but React may not have committed it when this resolves.
+      try {
+        const footprint = await fetchFootprint(name);
+        return footprint.texts.find((t) => t.id && !before.has(t.id))?.id;
+      } catch {
+        return undefined;
+      }
     },
     moveText: async (id, x, y) => {
       const name = stateRef.current.name;

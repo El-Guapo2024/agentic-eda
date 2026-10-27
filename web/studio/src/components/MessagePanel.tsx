@@ -6,6 +6,7 @@
 // not a transcription of KiCad's exact fields.
 import { useStudioState } from "../state/store";
 import { formatLength, formatXY } from "../state/units";
+import { routerMessagePanel } from "../kicad-port/routerSizes";
 
 export function MessagePanel() {
   const state = useStudioState();
@@ -13,6 +14,28 @@ export function MessagePanel() {
   const selectedRefs = [...state.selection];
 
   if (!board) return <div className="message-panel" />;
+
+  // `ROUTER_TOOL::UpdateMessagePanel` while a track or a pair is routed (r5 R5-8): the net and its class, the corner style, the mode, and the
+  // width, clearance and gap with where each came from (kicad-port/routerSizes.ts).
+  const draw = state.drawState;
+  if (draw?.kind === "route" || draw?.kind === "diffpair") {
+    const fmt = (nm: number) => formatLength(nm, state.units);
+    const settings = { mode: state.routerSettings.mode, freeAngle: state.routerSettings.freeAngleMode, cornerMode: state.routerSettings.cornerMode };
+    const items =
+      draw.kind === "route"
+        ? routerMessagePanel({ pair: false, net: draw.net || null, width: draw.width }, draw.sizes, settings, fmt)
+        : routerMessagePanel({ pair: true, netA: draw.netA, netB: draw.netB, width: draw.width, gap: draw.gap ?? 0 }, draw.sizes, settings, fmt);
+    return (
+      <div className="message-panel" data-router-panel="">
+        {items.map((it) => (
+          <span className="kv" key={it.upper}>
+            <b>{it.upper}</b>
+            {it.lower}
+          </span>
+        ))}
+      </div>
+    );
+  }
 
   if (selectedRefs.length === 1) {
     const p = board.parts.find((x) => x.ref === selectedRefs[0]);
