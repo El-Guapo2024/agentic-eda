@@ -3985,6 +3985,41 @@ pub(crate) mod tests {
         assert!(design.routing.is_none(), "moving a part must still clear routing -- it can move a footprint out from under a track");
     }
 
+    /// Round 6 E6-1: the studio's Swap (`swap_chain`, `EDIT_TOOL::Swap`), Move Exactly (`move_exact`, `EDIT_TOOL::MoveExact`) and the placing of a part from
+    /// the unplaced list (`place_at` of a part not on the board) change only the footprints they act on, as KiCad's do: every track, via and zone stays,
+    /// the ones routed to a moved pad left dangling where they were. They used to take the whole routing with them.
+    #[test]
+    fn swap_move_exact_and_placing_an_unplaced_part_leave_the_routing_as_it_was() {
+        let dir = scratch("studio_keeps_routing");
+        setup(&dir);
+        // U2 off the board first (`rip` keeps the routing), so `place_at` has an unplaced part to put down.
+        step(&dir, Cmd::Rip { part: "U2".into() }, false, "test").unwrap();
+        // A GND track ending on U1's pad 1 (4000, 5000), a via, and a GND zone.
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: mm(2.0), y: mm(5.0) }, Point { x: mm(4.0), y: mm(5.0) }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: mm(2.0), y: mm(5.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        let sq = |x0: f64, y0: f64, x1: f64, y1: f64| vec![Point { x: mm(x0), y: mm(y0) }, Point { x: mm(x1), y: mm(y0) }, Point { x: mm(x1), y: mm(y1) }, Point { x: mm(x0), y: mm(y1) }];
+        step(&dir, Cmd::AddZone { net: "GND".into(), layer: "B.Cu".into(), outline: sq(1.0, 12.0, 19.0, 19.0) }, false, "test").unwrap();
+        let routing = |dir: &Path| load(dir).unwrap().1.routing.expect("the routing is still there");
+        let was = routing(&dir);
+        assert_eq!((was.tracks.len(), was.vias.len(), was.zones.len()), (1, 1, 1));
+        let same = |dir: &Path, what: &str| {
+            let now = routing(dir);
+            assert_eq!(serde_json::to_value(&now.tracks).unwrap(), serde_json::to_value(&was.tracks).unwrap(), "{what}: the tracks stay where they were");
+            assert_eq!(serde_json::to_value(&now.vias).unwrap(), serde_json::to_value(&was.vias).unwrap(), "{what}: the vias stay");
+            assert_eq!(serde_json::to_value(&now.zones).unwrap(), serde_json::to_value(&was.zones).unwrap(), "{what}: the zones stay");
+        };
+        // Placing U2 from the unplaced list.
+        step(&dir, Cmd::PlaceAt { part: "U2".into(), x: mm(15.0), y: mm(5.0) }, false, "ui").unwrap();
+        same(&dir, "place_at of an unplaced part");
+        // Swap U1 (with the track on its pad) and U2: the track stays, dangling.
+        step(&dir, Cmd::SwapChain { parts: vec!["U1".into(), "U2".into()] }, false, "ui").unwrap();
+        assert_eq!(load(&dir).unwrap().1.placement.unwrap().footprints.iter().find(|f| f.id == "U1").unwrap().at, Point { x: mm(15.0), y: mm(5.0) });
+        same(&dir, "swap_chain");
+        // Move Exactly.
+        step(&dir, Cmd::MoveExact { parts: vec!["U1".into()], dx: mm(-1.0), dy: mm(1.0), rotate_millideg: 0, pivot: None }, false, "ui").unwrap();
+        same(&dir, "move_exact");
+    }
+
     /// A `design.json` written before tracks/vias carried ids -- no `id`
     /// key on either -- must still load, and `board::load` must back-fill
     /// ids the same deterministic way `RoutingSection::assign_missing_ids`

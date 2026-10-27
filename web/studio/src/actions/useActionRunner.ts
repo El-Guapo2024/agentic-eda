@@ -2257,7 +2257,7 @@ export function useActionRunner() {
 
       // P (packAndMoveFootprints) -- EDIT_TOOL::PackAndMoveFootprints: the selected footprints (locked ones filtered out; the hovered one when nothing
       // is selected) are packed by `SpreadFootprints` into a compact, reference-ordered block whose top-left is the selection's own top-left, then the
-      // Move tool picks the whole block up. The packed layout is a preview until the drop (one `move_to` batch = one undo step); Escape reverts it.
+      // Move tool picks the whole block up. The packed layout is a preview until the drop (one `move_items` batch = one undo step); Escape reverts it.
       m.set("pcbnew.InteractiveEdit.packAndMoveFootprints", () => {
         if (state.tab !== "pcb" || !state.board) return;
         // `if( isRouterActive() || m_dragging ) { wxBell(); return 0; }`

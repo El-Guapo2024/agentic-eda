@@ -12,7 +12,7 @@
 //     (touching) -- crates/ops/src/view.rs has no notion of this, it's
 //     pure frontend geometry against each part's courtyard.
 //   - drag a selected part to move it, previewed locally, committed with
-//     `move_to` on drop (see state/store.tsx `commitMove`); M starts the
+//     `move_items` on drop (see state/store.tsx `commitMove`); M starts the
 //     same preview without holding the button, click commits, Esc cancels.
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";

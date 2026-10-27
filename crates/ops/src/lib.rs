@@ -2606,12 +2606,24 @@ impl Cmd {
     /// (it becomes unconnected, and the ratsnest says so). So the commands that move, turn, flip or take away *any* kind of item
     /// ([`Cmd::MoveItems`], [`Cmd::RotateItems`], [`Cmd::FlipItems`], [`Cmd::Rip`], [`Cmd::CreateArray`]) answer `false` here, whatever the
     /// footprints they name have routed to them; the older verbs of the CLI and the agents (`move_to`, `rotate`, `flip`, `place_at`, ...) keep their
-    /// answer, because a placement made by hand there is followed by a new routing. `board` is the board as it was before the command.
+    /// answer, because a placement made by hand there is followed by a new routing (the placement pipeline places, then routes). `board` is the board
+    /// as it was before the command.
+    ///
+    /// The studio's own part verbs are KiCad's edit tools too, and answer `false` (round 6 E6-1: they used to delete every track, via and zone):
+    /// - [`Cmd::SwapChain`] is `EDIT_TOOL::Swap` (`edit_tool_move_fct.cpp`), which only `commit->Modify`s the selection and swaps poses;
+    /// - [`Cmd::MoveExact`] is `EDIT_TOOL::MoveExact`, a move of the selection;
+    /// - [`Cmd::PlaceAt`] of a part that is not on the board yet (the studio's unplaced list, `BOARD_EDITOR_CONTROL::PlaceFootprint`) adds one
+    ///   footprint and moves nothing that copper could have been routed to. A `place_at` of a part already placed is a re-placement and keeps the
+    ///   older verbs' answer.
+    ///
+    /// The studio's Pack and Move drop sends `move_items`.
     pub fn clears_routing_in(&self, board: &Board<'_>) -> bool {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(|c| c.clears_routing_in(board)),
             Cmd::InGroup { cmd, .. } => cmd.clears_routing_in(board),
             Cmd::MoveItems { .. } | Cmd::RotateItems { .. } | Cmd::FlipItems { .. } | Cmd::MirrorTracks { .. } | Cmd::MirrorItems { .. } | Cmd::Rip { .. } | Cmd::CreateArray { .. } => false,
+            Cmd::SwapChain { .. } | Cmd::MoveExact { .. } => false,
+            Cmd::PlaceAt { part, .. } => board.pose_of(part).is_some(),
             other => other.clears_routing(),
         }
     }
