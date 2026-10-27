@@ -6,8 +6,9 @@
 // Each form's fields are the real dialog's, with its defaults; the options go to `/api/fab/<kind>` (crates/cli/src/
 // board_output_api.rs), which builds the kicad-cli arguments the way the dialog does and runs it on the current design revision.
 // Output lands in the board directory's `export/kicad/<kind>/` folder, as every other output of the studio does.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
+import { scaledModelsWarning, scaledModelsWarningSuppressed, suppressScaledModelsWarning, type ScaledModelsWarning } from "../kicad-port/stepScaleWarning";
 import type { BoardExportKind } from "../kicad-port/boardControlState";
 import {
   DEFAULT_3D_OPTIONS,
@@ -340,6 +341,14 @@ export function BoardExportDialog() {
   const [odb, setOdb] = useState<OdbOptions>(DEFAULT_ODB_OPTIONS);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[]; log?: string } | null>(null);
+  // `DIALOG_EXPORT_STEP::DIALOG_EXPORT_STEP`: the "Model Scale Warning" when the STEP dialog opens on a board with scaled models.
+  const [scaleWarning, setScaleWarning] = useState<ScaledModelsWarning | null>(null);
+  const [doNotShow, setDoNotShow] = useState(false);
+  useEffect(() => {
+    setScaleWarning(kind === "3d" && !scaledModelsWarningSuppressed() ? scaledModelsWarning(state.board?.parts ?? []) : null);
+    setDoNotShow(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind]);
 
   if (!kind) return null;
   const close = () => {
@@ -384,6 +393,25 @@ export function BoardExportDialog() {
       <div className="dialog" style={{ width: kind === "3d" ? 640 : 480 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">{TITLES[kind]}</div>
         <div className="dialog-body" style={{ paddingTop: 10, maxHeight: "70vh", overflowY: "auto" }}>
+          {kind === "3d" && scaleWarning && (
+            <div className="problem-row" role="alertdialog" aria-label={scaleWarning.title} data-testid="step-scale-warning" style={{ fontSize: 11, marginBottom: 10 }}>
+              <b>{scaleWarning.title}</b>
+              <div style={{ marginTop: 4 }}>{scaleWarning.message}</div>
+              <pre style={{ margin: "6px 0", whiteSpace: "pre-wrap" }}>{scaleWarning.extended}</pre>
+              <label className="toggle">
+                <input type="checkbox" checked={doNotShow} onChange={(e) => setDoNotShow(e.target.checked)} />
+                Do not show again
+              </label>{" "}
+              <button
+                onClick={() => {
+                  if (doNotShow) suppressScaledModelsWarning();
+                  setScaleWarning(null);
+                }}
+              >
+                OK
+              </button>
+            </div>
+          )}
           {kind === "3d" && <ThreeDForm o={three} set={(p) => setThree((o) => ({ ...o, ...p }))} selectedRefs={selectedRefs} />}
           {kind === "vrml" && <VrmlForm o={vrml} set={(p) => setVrml((o) => ({ ...o, ...p }))} />}
           {kind === "gencad" && <GencadForm o={gencad} set={(p) => setGencad((o) => ({ ...o, ...p }))} />}

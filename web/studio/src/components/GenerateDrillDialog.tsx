@@ -7,19 +7,31 @@
 // (`m_Check_Merge_PTH_NPTH`, unchecked: two files), "Use alternate drill mode
 // for oval holes" (`m_altDrillMode`, unchecked: slots are routed,
 // `SetRouteModeForOvalHoles( !m_altDrillMode )`), and the Origin choice, which
-// starts as the board's plot settings say (`m_plotOpts.GetUseAuxOrigin()`).
-import { useState } from "react";
+// starts as the board's plot settings say (`m_plotOpts.GetUseAuxOrigin()`) each time
+// the dialog opens, and is stored back in the board on Generate
+// (`DIALOG_GENDRILL::updateConfig`: `SetUseAuxOrigin( m_origin->GetSelection() == 1 )`,
+// `SetPlotOptions` and `OnModify` when it changed) as one undoable `set_plot_settings`.
+// The report is the writer's ("Created file '..'", then "Done.").
+import { useEffect, useState } from "react";
 import { postFabDrill } from "../api/client";
-import { useStudioDispatch, useStudioState } from "../state/store";
+import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 
 export function GenerateDrillDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const [mergePthNpth, setMergePthNpth] = useState(false);
   const [altDrillMode, setAltDrillMode] = useState(false);
+  const api = useStudioApi();
   const [useAuxOrigin, setUseAuxOrigin] = useState(() => state.board?.plot_params?.use_aux_origin ?? false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
+  // `DIALOG_GENDRILL::TransferDataToWindow` runs at each opening: the Origin is the board's as it is then.
+  useEffect(() => {
+    if (!state.generateDrillDialogOpen) return;
+    setUseAuxOrigin(state.board?.plot_params?.use_aux_origin ?? false);
+    setResult(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.generateDrillDialogOpen]);
 
   if (!state.generateDrillDialogOpen) return null;
   const close = () => dispatch({ type: "SET_GENERATE_DRILL_DIALOG_OPEN", open: false });
@@ -28,6 +40,7 @@ export function GenerateDrillDialog() {
     setBusy(true);
     setResult(null);
     try {
+      if (useAuxOrigin !== (state.board?.plot_params?.use_aux_origin ?? false) && !(await api.cmd({ op: "set_plot_settings", use_aux_origin: useAuxOrigin }))) return;
       const reply = await postFabDrill({ merge_pth_npth: mergePthNpth, alt_drill_mode: altDrillMode, use_aux_origin: useAuxOrigin });
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Done." : "Failed."), files: reply.files ?? [] });
     } finally {

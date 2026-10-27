@@ -317,6 +317,28 @@ pub fn set_aux_origin(design: &mut Design, at: Option<Point>) -> Result<(), Vec<
     Ok(())
 }
 
+/// What the Plot and Generate Drill Files dialogs store back in the board (`DIALOG_PLOT::applyPlotSettings`: `if( !m_plotOpts.IsSameAs(
+/// tempOptions ) ) { SetPlotSettings( tempOptions ); OnModify(); }`, on Plot; `DIALOG_GENDRILL::updateConfig`, on Generate, the Origin
+/// as `SetUseAuxOrigin( m_origin->GetSelection() == 1 )`): the checklist as the layer selection
+/// ([`eda_model::plot_params::PlotParams::set_dialog_layer_selection`]) and "Use drill/place file origin" as `useauxorigin`. `None`
+/// leaves that part as it is (the drill dialog has no checklist). Nothing changed is refused, so no empty undo step is pushed (KiCad does
+/// not mark the board modified either). Differs: the dialogs' other controls are not ported, so only these two are stored.
+pub fn set_plot_settings(design: &mut Design, board_copper: &[String], layers: Option<&[String]>, use_aux_origin: Option<bool>) -> Result<(), Vec<CheckResult>> {
+    let before = eda_model::plot_params::PlotParams::of_design(design);
+    let mut plot = before.clone();
+    if let Some(layers) = layers {
+        plot.set_dialog_layer_selection(layers, board_copper);
+    }
+    if let Some(aux) = use_aux_origin {
+        plot.set_item("useauxorigin", if aux { "yes" } else { "no" });
+    }
+    if plot == before {
+        return Err(fail("ops_plot_settings", "plot_params", "the plot settings are already these"));
+    }
+    design.drawings.get_or_insert_with(Default::default).plot_params = Some(plot);
+    Ok(())
+}
+
 /// `PCB_CONTROL::DoSetGridOrigin`: the point the editing grid is anchored at; `None` (or (0, 0)) is `GridResetOrigin`'s reset.
 pub fn set_grid_origin(design: &mut Design, at: Option<Point>) -> Result<(), Vec<CheckResult>> {
     let at = at.filter(|p| p.x != Nm::ZERO || p.y != Nm::ZERO);

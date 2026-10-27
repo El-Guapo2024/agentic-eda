@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { LibrarySymbolGraphic, LibrarySymbolPin } from "../api/types";
-import { deletePlan, duplicateItems, maxPinNumber, nearestHalfGrid, pastedItems, repeatPin, rotatePlan } from "./symEditItems";
+import { deletePlan, duplicateItems, maxPinNumber, nearestHalfGrid, pastedItems, placedPinWithId, repeatPin, rotatePlan } from "./symEditItems";
 
 const pin = (id: string, number: string, x: number, y: number, unit = 1, extra: Partial<LibrarySymbolPin> = {}): LibrarySymbolPin => ({
   id,
@@ -61,4 +61,16 @@ test("Paste puts the items on the unit and body style being edited unless common
   const out = pastedItems({ pins: [pin("a", "1", 0, 0, 1), pin("b", "2", 0, 0, 0, { body_style: 0 })], graphics: [rect] }, 3, 2);
   assert.deepEqual(out.pins.map((p) => [p.unit, p.body_style]), [[3, 2], [0, 0]]);
   assert.deepEqual([out.graphics[0]!.unit, out.graphics[0]!.body_style], [3, 2]);
+});
+
+test("Repeat Pin keeps the last pin by its id (g_lastPin is a UUID), so it is found after an edit (r3 E3-4)", () => {
+  const placed = { ...pin("", "1", 0, 0), id: undefined };
+  const after = [pin("p0", "3", 5, 5), pin("p7", "1", 0, 0), pin("p8", "1", 0, 0, 2)];
+  const last = placedPinWithId(placed, after);
+  assert.equal(last.id, "p7", "the pin of the symbol that is the pin as placed, on its unit");
+  // Renumbered to 5 since: found by id, and repeated as it is now.
+  const now = [pin("p7", "5", 0, 0)];
+  const source = now.find((p) => p.id === last.id)!;
+  assert.deepEqual([repeatPin(source).number, repeatPin(source).at], ["6", { x: 0, y: -2.54 }]);
+  assert.equal(placedPinWithId(placed, []).id, undefined);
 });

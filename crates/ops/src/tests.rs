@@ -3043,6 +3043,26 @@ fn a_placement_snaps_to_the_grid_anchored_at_the_grid_origin() {
     assert!(b.design().drawings.as_ref().and_then(|d| d.grid_origin).is_none());
 }
 
+/// r3 X3-3: the Plot dialog's checklist and origin, and the drill dialog's origin, are stored back in the board's plot settings
+/// (`DIALOG_PLOT::applyPlotSettings`, `DIALOG_GENDRILL::updateConfig`); the copper layers the board lacks stay selected; nothing changed is refused.
+#[test]
+fn the_plot_dialogs_store_their_choices_in_the_board() {
+    let m = net_model();
+    let mut b = board(&m);
+    let cmd: Cmd = serde_json::from_str(r#"{"op":"set_plot_settings","layers":["F.Cu","F.Mask","Edge.Cuts"],"use_aux_origin":true}"#).unwrap();
+    b.apply(&cmd).unwrap();
+    let plot = eda_model::plot_params::PlotParams::of_design(b.design());
+    assert_eq!(plot.flag("useauxorigin"), Some(true));
+    assert!(plot.layer_selection.contains(&"F.Cu".to_string()) && plot.layer_selection.contains(&"In1.Cu".to_string()) && !plot.layer_selection.contains(&"B.Cu".to_string()));
+    assert!(!plot.layer_selection.contains(&"F.Paste".to_string()));
+    assert_eq!(plot.board_layers(&m.board.layers), vec!["F.Cu", "F.Mask", "Edge.Cuts"]);
+    assert_eq!(b.apply(&cmd).unwrap_err()[0].check, "ops_plot_settings");
+    // The drill dialog sends only its Origin.
+    b.apply(&Cmd::SetPlotSettings { layers: None, use_aux_origin: Some(false) }).unwrap();
+    let plot = eda_model::plot_params::PlotParams::of_design(b.design());
+    assert_eq!((plot.flag("useauxorigin"), plot.board_layers(&m.board.layers)), (Some(false), vec!["F.Cu".to_string(), "F.Mask".into(), "Edge.Cuts".into()]));
+}
+
 /// `Cmd::CommitRoute`'s `via_kinds` read from the JSON the studio and the route API send (`[[index, "blind"]]`, numbers inside a tagged enum: the
 /// `arbitrary_precision` reader), and the via it names gets its type in `via_extras`; a removed via's extras go with it.
 #[test]

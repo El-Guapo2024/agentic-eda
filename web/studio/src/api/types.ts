@@ -1652,6 +1652,7 @@ export type Cmd =
   | { op: "set_zone_priority"; id: string; to: ZonePriorityMove }
   /** `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin` -- the drill/place file origin; `null` resets it to (0, 0). */
   | { op: "set_aux_origin"; at: PointXY | null }
+  | { op: "set_plot_settings"; layers?: string[]; use_aux_origin?: boolean }
   /** `common.Control.gridSetOrigin` / `gridResetOrigin` / `editGridOrigin` -- the point the editing grid is anchored at; `null` resets it to (0, 0). */
   | { op: "set_grid_origin"; at: PointXY | null }
   /** `common.Control.pageSettings` -- the board's paper and title block, one undo step (`BOARD_EDITOR_CONTROL::PageSettings`). Refused when nothing changes. */

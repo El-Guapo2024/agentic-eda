@@ -263,6 +263,18 @@ impl PlotParams {
         self.layer_selection.iter().filter(|l| *l != "Rescue" && (!crate::layers::is_copper_layer_name(l) || copper.contains(l))).cloned().collect()
     }
 
+    /// The Plot dialog's checklist stored back as the layer selection (`DIALOG_PLOT::applyPlotSettings`): the `checked` layers, plus every
+    /// copper layer the board does not have (`selectedLayers | ( LSET::AllCuMask() & ~GetEnabledLayers() )`: "If someone enables more
+    /// copper layers they will be selected by default"), in `PCB_LAYER_ID` order. A layer the checklist does not list (one the board has
+    /// not enabled, `Rescue`) is not kept, as `m_layerList` is the board's enabled layers.
+    pub fn set_dialog_layer_selection(&mut self, checked: &[String], board_copper: &[String]) {
+        let mut v: Vec<String> = checked.iter().filter(|l| layer_number(l).is_some() && *l != "Rescue").cloned().collect();
+        v.extend(all_copper().into_iter().filter(|l| !board_copper.contains(l)));
+        v.sort_by_key(|n| layer_number(n).unwrap_or(u32::MAX));
+        v.dedup();
+        self.layer_selection = v;
+    }
+
     /// A default `PCB_PLOT_PARAMS`.
     pub fn kicad_default() -> PlotParams {
         PlotParams { layer_selection: Self::default_layer_selection(), plot_on_all_layers: Vec::new(), items: Self::default_items() }

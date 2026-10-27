@@ -342,8 +342,9 @@ export interface FabReply {
  * `useAuxOrigin`: the Plot dialog's "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). `checkZones`: its "Check zone fills before plotting" -- KiCad's filler
  * runs first when some zone has no current fill.
  */
-export function postFabGerbers(layers?: string[], useAuxOrigin = false, checkZones = false): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), use_aux_origin: useAuxOrigin, ...(checkZones ? { check_zones: true } : {}) });
+/** `useAuxOrigin` left out plots from the origin the board's plot settings say (`useauxorigin`), as KiCad's Plot dialog does after it stored its choices. */
+export function postFabGerbers(layers?: string[], useAuxOrigin?: boolean, checkZones = false): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), ...(useAuxOrigin !== undefined ? { use_aux_origin: useAuxOrigin } : {}), ...(checkZones ? { check_zones: true } : {}) });
 }
 
 /** The Generate Drill Files dialog's options (`DIALOG_GENDRILL`): "PTH and NPTH in single file", "Use alternate drill mode" (oval holes as

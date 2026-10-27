@@ -90,6 +90,15 @@ const round = (v: number) => Math.round(v * IU_PER_MM) / IU_PER_MM;
 export const REPEAT_PIN_STEP_MM = 2.54;
 export const REPEAT_LABEL_DELTA = 1;
 
+/** `g_lastPin = pin->m_Uuid` (`CreatePin`, `RepeatPin`): the pin as it was placed, given the id the server gave it -- the pin of `pins` (the symbol after the
+ * add) with its number, unit, body style and place; the last such one when several match. Without a match it keeps the id it has (none). */
+export function placedPinWithId(placed: LibrarySymbolPin, pins: readonly LibrarySymbolPin[]): LibrarySymbolPin {
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+  const matches = pins.filter((p) => p.id && p.number === placed.number && p.unit === placed.unit && p.body_style === placed.body_style && near(p.at.x, placed.at.x) && near(p.at.y, placed.at.y));
+  const found = matches[matches.length - 1];
+  return found ? { ...placed, id: found.id } : placed;
+}
+
 /**
  * `SYMBOL_EDITOR_PIN_TOOL::RepeatPin`: a duplicate of `source` moved by the pin step -- down the screen (`step.y`) for a pin pointing right or left, across (`step.x`) for one
  * pointing up or down -- with `IncrementString( name, label_delta )` and the same for the number. The step is in KiCad's +y-down frame, so "down" is -y here.
