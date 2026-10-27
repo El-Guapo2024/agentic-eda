@@ -211,6 +211,54 @@ pub fn succeeded(r: &RunJobResponse) -> bool {
     matches!(JobStatus::try_from(r.status), Ok(JobStatus::JsSuccess) | Ok(JobStatus::JsWarning))
 }
 
+/// The lines kicad-cli prints when `answers` are a successful run of `job`. `ExecuteBoardJob` answers with no message on success
+/// (`pcbnew/api/api_handler_pcb.cpp`: `reporter.GetMessages()` reaches the response only on failure), while the per-run path keeps `CLI_REPORTER`'s
+/// output -- the `WX_STRING_REPORTER` messages of the job's handler, one per file written and a closing line for drill -- so they are rebuilt here from
+/// what the job wrote (`RunJobResponse::output_path`), word for word. A warning the handler reported on a run that still succeeded is not in the
+/// protocol, so the served path cannot repeat it; the per-run path keeps it.
+pub fn success_log(job: &BoardJob, answers: &[RunJobResponse]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for answer in answers {
+        // `JS_WARNING` may carry KiCad's warning; `JS_SUCCESS` never carries anything.
+        if !answer.message.trim().is_empty() {
+            lines.push(answer.message.trim().to_string());
+        }
+        match job {
+            BoardJob::IpcD356(_) => lines.push("Successfully created IPC-D-356 file".to_string()),
+            BoardJob::Drill(j) => {
+                let excellon = j.format == DrillFormat::DfExcellon as i32;
+                for path in &answer.output_path {
+                    // `EXCELLON_WRITER::CreateDrillandMapFilesSet` reports a drill file with no full stop and a map file with one; every
+                    // `GERBER_WRITER` file (drill, map, tenting) has one (`Created file '%s'.`).
+                    let drill_file = Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("drl"));
+                    lines.push(if excellon && drill_file { format!("Created file '{path}'") } else { format!("Created file '{path}'.") });
+                }
+                lines.push("Done.".to_string());
+            }
+            BoardJob::Position(j) => {
+                let gerber = j.format == PositionFormat::PfGerber as i32;
+                let side = PositionSide::try_from(j.side).ok();
+                for (i, path) in answer.output_path.iter().enumerate() {
+                    // `PCBNEW_JOBS_HANDLER::JobExportPos`: the Gerber writer reports each side by name, and so does the ASCII/CSV two-file mode
+                    // (`--side both` with `single_file` off, front's file then back's); one file of both sides is "Wrote position data".
+                    let named_sides = gerber || (side == Some(PositionSide::PsBoth) && !j.single_file);
+                    let named = named_sides.then(|| match side {
+                        Some(PositionSide::PsFront) => true,
+                        Some(PositionSide::PsBack) => false,
+                        _ => i == 0,
+                    });
+                    lines.push(match named {
+                        Some(true) => format!("Wrote front position data to '{path}'."),
+                        Some(false) => format!("Wrote back position data to '{path}'."),
+                        None => format!("Wrote position data to '{path}'."),
+                    });
+                }
+            }
+        }
+    }
+    lines
+}
+
 /// Run `jobs` on the board file `pcb`, opened once (and left open: a later call on the same bytes skips the load); each job's output goes where its path says (a folder ending in `/` for `drill`, a file for `pos`
 /// and `ipcd356`, as `-o` takes them). The answers come in the jobs' order.
 pub fn run_board_jobs(pcb: &Path, jobs: &[(BoardJob, String)]) -> Result<Vec<RunJobResponse>, ApiError> {
@@ -272,5 +320,39 @@ mod tests {
         assert_eq!(board_job("ipcd356", &args("--define-var X=1")), None);
         assert_eq!(board_job("gerbers", &[]), None);
         assert_eq!(board_job("drill", &args("--format")), None, "an option without its value");
+    }
+
+    fn answer(paths: &[&str]) -> RunJobResponse {
+        RunJobResponse { status: JobStatus::JsSuccess as i32, output_path: paths.iter().map(|p| p.to_string()).collect(), message: String::new() }
+    }
+
+    /// X5-1: `ExecuteBoardJob` says nothing on success, so the served reply's log is the per-run one, rebuilt from the job's output paths.
+    #[test]
+    fn a_successful_jobs_lines_are_the_per_run_ones() {
+        // EXCELLON_WRITER: `Created file '%s'` for the drill files (no full stop), `Created file '%s'.` for the maps, then `Done.`.
+        let drill = board_job("drill", &[]).unwrap();
+        assert_eq!(success_log(&drill, &[answer(&["/o/b-PTH.drl", "/o/b-NPTH.drl", "/o/b-PTH-drl_map.pdf"])]), ["Created file '/o/b-PTH.drl'", "Created file '/o/b-NPTH.drl'", "Created file '/o/b-PTH-drl_map.pdf'.", "Done."]);
+        // GERBER_WRITER: every file, maps included, has the full stop.
+        let gerber = board_job("drill", &args("--format gerber --generate-map --map-format svg")).unwrap();
+        assert_eq!(success_log(&gerber, &[answer(&["/o/b-PTH.gbr", "/o/b-PTH-drl_map.svg"])]), ["Created file '/o/b-PTH.gbr'.", "Created file '/o/b-PTH-drl_map.svg'.", "Done."]);
+        // JobExportIpcD356: one line, no path, and `Done.` is only the drill writer's.
+        let d356 = board_job("ipcd356", &[]).unwrap();
+        assert_eq!(success_log(&d356, &[answer(&["/o/b.d356"])]), ["Successfully created IPC-D-356 file"]);
+        // JobExportPos: one file of both sides is "Wrote position data"; the Gerber writer names the side it wrote.
+        let pos = board_job("pos", &[]).unwrap();
+        assert_eq!(success_log(&pos, &[answer(&["/o/b-all.pos"])]), ["Wrote position data to '/o/b-all.pos'."]);
+        let front = board_job("pos", &args("--format gerber --side front")).unwrap();
+        assert_eq!(success_log(&front, &[answer(&["/o/b-pnp_top.gbr"])]), ["Wrote front position data to '/o/b-pnp_top.gbr'."]);
+        let back = board_job("pos", &args("--format gerber --side back")).unwrap();
+        assert_eq!(success_log(&back, &[answer(&["/o/b-pnp_bottom.gbr"])]), ["Wrote back position data to '/o/b-pnp_bottom.gbr'."]);
+        // The two-file ASCII mode (`single_file` off, both sides) names each side, in the front's file then the back's.
+        let Some(BoardJob::Position(mut both)) = board_job("pos", &args("--side both")) else { panic!() };
+        both.single_file = false;
+        assert_eq!(
+            success_log(&BoardJob::Position(both), &[answer(&["/o/b-top.pos", "/o/b-bottom.pos"])]),
+            ["Wrote front position data to '/o/b-top.pos'.", "Wrote back position data to '/o/b-bottom.pos'."]
+        );
+        // A job of both sides in one write, and one run after another: each answer's lines come in the jobs' order.
+        assert_eq!(success_log(&d356, &[answer(&["/o/b.d356"]), answer(&["/o/c.d356"])]), ["Successfully created IPC-D-356 file", "Successfully created IPC-D-356 file"]);
     }
 }

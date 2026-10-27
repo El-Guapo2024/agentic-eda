@@ -1562,7 +1562,8 @@ fn pcb_ext(kind: &str) -> &'static str {
 
 /// The extension kicad-cli's output carries for these arguments. ODB++ and IPC-2581 are named by the compression asked
 /// for, since kicad-cli writes whatever name it is given: an ODB++ is a `.zip` or a `.tgz`, or (`--compression none`) a
-/// folder with no extension; an IPC-2581 is an `.xml`, or a `.zip` when compressed. A placement file is named by its format.
+/// folder with no extension; an IPC-2581 is an `.xml`, or a `.zip` when compressed. A placement file never comes here: its
+/// name is the dialog's ([`place_file_names`]).
 fn pcb_ext_for(kind: &str, args: &[String]) -> &'static str {
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
     match kind {
@@ -1572,8 +1573,6 @@ fn pcb_ext_for(kind: &str, args: &[String]) -> &'static str {
             _ => "zip",
         },
         "ipc2581" if args.iter().any(|a| a == "--compress") => "zip",
-        // `DIALOG_GEN_FOOTPRINT_POSITION::CreateFiles`: a CSV placement file is a `.csv`; the ASCII one (kicad-cli's default) a `.pos`.
-        "pos" if value("--format") == Some("csv") => "csv",
         _ => pcb_ext(kind),
     }
 }
@@ -1660,12 +1659,17 @@ fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path
     if dir_kind && !out_arg.ends_with('/') {
         out_arg.push('/');
     }
-    // The kept api-server first, for the kinds whose job it builds from these arguments (`api::jobs`); per-run kicad-cli when it cannot (no server on
-    // this machine, another kind or argument) or when its job failed, so a failure is always kicad-cli's own words.
-    let by_server = (scope == "pcb").then(|| api::jobs::board_job(kind, args)).flatten().and_then(|job| match api::jobs::run_board_jobs(input, &[(job, out_arg.clone())]) {
-        Ok(answers) if answers.iter().all(api::jobs::succeeded) => Some(answers.into_iter().map(|a| a.message).filter(|m| !m.is_empty()).collect::<Vec<_>>().join("\n")),
-        _ => None,
-    });
+    // The kept api-server first, for the kinds whose job it builds from these arguments (`api::jobs`) and only where the lane pays for its start
+    // (`api::exports_use_server`: the studio's long-lived process, or `EDA_KICAD_API` set); per-run kicad-cli when it cannot (no server on this
+    // machine, another kind or argument) or when its job failed, so a failure is always kicad-cli's own words.
+    let by_server = (scope == "pcb" && api::exports_use_server())
+        .then(|| api::jobs::board_job(kind, args))
+        .flatten()
+        .and_then(|job| match api::jobs::run_board_jobs(input, &[(job.clone(), out_arg.clone())]) {
+            // `ExecuteBoardJob` says nothing on success: the log is the per-run one, rebuilt from what the job wrote (X5-1).
+            Ok(answers) if answers.iter().all(api::jobs::succeeded) => Some(api::jobs::success_log(&job, &answers).join("\n")),
+            _ => None,
+        });
     let (success, log, engine) = match by_server {
         Some(log) => (true, log, format!("kicad-cli {} (api-server)", cli_version(cli))),
         None => {
@@ -1713,10 +1717,10 @@ fn check_kind(kind: &str) -> Result<(), Vec<CheckResult>> {
 /// relative to `root`.
 pub fn export_pcb(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
     check_kind(kind)?;
-    let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
-    // A placement file's name is decorated by the dialog's rules (`place_file_names`), so its export is its own function; one file of
+    // A placement file's name is decorated by the dialog's rules (`place_file_names`), so its export is its own function, whatever its format:
+    // the Gerber X3 writer's `-pnp_top.gbr` / `-pnp_bottom.gbr` too, where the generic path would write `<name>.pos` (X5-4). One file of
     // both sides (KiCad's default) unless the caller asks otherwise.
-    if kind == "pos" && matches!(value("--format"), None | Some("ascii") | Some("csv")) {
+    if kind == "pos" {
         return export_pcb_placement(design, model, work, root, name, args, true);
     }
     let cli = need_cli()?;
@@ -1727,8 +1731,10 @@ pub fn export_pcb(design: &Design, model: &ConstraintModel, work: &Path, root: &
 }
 
 /// `kicad-cli pcb export pos` with the names `DIALOG_GEN_FOOTPRINT_POSITION` gives its files ([`place_file_names`]): `<name>-all`, or
-/// `<name>-top` and `<name>-bottom` with `single_file` off and both sides asked. kicad-cli writes exactly the file its `-o` names, so
-/// the two-file mode is two runs -- the second's `--side back` over the same board. Returns `{ ok, engine, files }` as [`export_pcb`].
+/// `<name>-top` and `<name>-bottom` with `single_file` off and both sides asked, and the Gerber X3 writer's `-pnp_top.gbr` / `-pnp_bottom.gbr`.
+/// kicad-cli writes exactly the file its `-o` names, so the two-file mode is two runs -- the second's `--side back` over the same board.
+/// Returns `{ ok, engine, files }` as [`export_pcb`], with the runs' `log` when they said anything (the served lane's built by
+/// [`api::jobs::success_log`], since the job answers with no message on success).
 pub fn export_pcb_placement(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, args: &[String], single_file: bool) -> Result<Value, Vec<CheckResult>> {
     check_kind("pos")?;
     let cli = need_cli()?;
@@ -1740,6 +1746,17 @@ pub fn export_pcb_placement(design: &Design, model: &ConstraintModel, work: &Pat
     std::fs::create_dir_all(&out_dir).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
     let mut files: Vec<String> = Vec::new();
     let mut served = false;
+    let mut log = String::new();
+    // Each run's words, one after the other as kicad-cli printed them (`add_log` keeps the newline the first ends with, or adds one).
+    let mut add_log = |text: &str| {
+        if text.is_empty() {
+            return;
+        }
+        if !log.is_empty() && !log.ends_with('\n') {
+            log.push('\n');
+        }
+        log.push_str(text);
+    };
     for (i, file_name) in names.iter().enumerate() {
         let run_args: Vec<String> = if names.len() == 2 {
             // The two-file mode asks kicad-cli for one side at a time; the first file is the top's, the second the bottom's.
@@ -1750,11 +1767,18 @@ pub fn export_pcb_placement(design: &Design, model: &ConstraintModel, work: &Pat
         let target = out_dir.join(file_name);
         // A file an earlier run left must not pass for this one's.
         let _ = std::fs::remove_file(&target);
-        // The kept api-server's job when it builds this one (`api::jobs`), else per-run kicad-cli (see `run_export`).
-        let by_server = api::jobs::board_job("pos", &run_args)
-            .is_some_and(|job| api::jobs::run_board_jobs(&pcb, &[(job, target.to_string_lossy().into_owned())]).is_ok_and(|a| a.iter().all(api::jobs::succeeded)) && target.is_file());
-        if by_server {
+        // The kept api-server's job when it builds this one (`api::jobs`) and the lane pays for its start (`api::exports_use_server`), else
+        // per-run kicad-cli (see `run_export`).
+        let by_server = api::exports_use_server()
+            .then(|| api::jobs::board_job("pos", &run_args))
+            .flatten()
+            .and_then(|job| {
+                let answers = api::jobs::run_board_jobs(&pcb, &[(job.clone(), target.to_string_lossy().into_owned())]).ok()?;
+                (answers.iter().all(api::jobs::succeeded) && target.is_file()).then(|| api::jobs::success_log(&job, &answers))
+            });
+        if let Some(lines) = by_server {
             served = true;
+            add_log(&lines.join("\n"));
             files.push(target.strip_prefix(root).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| target.to_string_lossy().to_string()));
             continue;
         }
@@ -1766,9 +1790,15 @@ pub fn export_pcb_placement(design: &Design, model: &ConstraintModel, work: &Pat
                 format!("kicad-cli pcb export pos failed: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)),
             ));
         }
+        add_log(&format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)));
         files.push(target.strip_prefix(root).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| target.to_string_lossy().to_string()));
     }
-    Ok(json!({ "ok": true, "engine": format!("kicad-cli {}{}", cli_version(&cli), if served { " (api-server)" } else { "" }), "files": files }))
+    let log = log.trim().to_string();
+    let mut reply = json!({ "ok": true, "engine": format!("kicad-cli {}{}", cli_version(&cli), if served { " (api-server)" } else { "" }), "files": files });
+    if !log.is_empty() {
+        reply["log"] = Value::String(log);
+    }
+    Ok(reply)
 }
 
 /// `args` with `--side` set to `side` (`PLACE_FILE_EXPORTER`'s one side per run).
@@ -2465,18 +2495,9 @@ fi"#;
         assert_eq!(pcb_ext_for("gencad", &a(&[])), "cad");
     }
 
-    /// `DIALOG_GEN_FOOTPRINT_POSITION::CreateAsciiFiles` / `CreateFiles` (pcbnew/dialogs/dialog_gen_footprint_position.cpp): a CSV placement file is a
-    /// `.csv` (`fn.SetExt( wxT( "csv" ) )`), an ASCII one a `.pos` (`FILEEXT::FootprintPlaceFileExtension`).
-    #[test]
-    fn a_csv_placement_file_is_a_csv_and_an_ascii_one_a_pos() {
-        let a = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        assert_eq!(pcb_ext_for("pos", &a(&["--format", "csv", "--side", "both"])), "csv");
-        assert_eq!(pcb_ext_for("pos", &a(&["--format", "ascii", "--side", "front"])), "pos");
-        assert_eq!(pcb_ext_for("pos", &a(&[])), "pos", "kicad-cli's own default format is ascii");
-    }
-
     /// `PLACE_FILE_EXPORTER::DecorateFilename` and `DIALOG_GEN_FOOTPRINT_POSITION`'s "Generate single file with both front and back
-    /// positions" (checked by default): `<name>-all`, `-top`, `-bottom`, the CSV adding its `-pos` before the extension.
+    /// positions" (checked by default): `<name>-all`, `-top`, `-bottom`, the CSV adding its `-pos` before the extension. Every placement
+    /// format's export is [`export_pcb_placement`]'s (X5-4); the fake kicad-cli test below holds the names on disk.
     #[test]
     fn placement_files_are_named_all_top_and_bottom_as_kicad_names_them() {
         let names = |side: &str, format: &str, single: bool| place_file_names("board", side, format, single).join(", ");
@@ -2528,6 +2549,13 @@ fi"#;
         let top = export_pcb_placement(&design, &model, &work, &dir, "board", &args(&["--format", "ascii", "--side", "front"]), false).expect("the top only");
         assert_eq!(files(&top), vec!["export/kicad/pos/board-top.pos"], "one side asked: one file whatever the single-file choice");
         assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), "front");
+
+        // X5-4: the generic `eda board export --kicad pos` names a Gerber X3 placement file as `PLACEFILE_GERBER_WRITER::GetPlaceFileName`
+        // does, `-pnp_top.gbr`, not the ASCII path's `.pos`.
+        let _ = std::fs::remove_file(&log);
+        let gerber = export_pcb(&design, &model, &work, &dir, "board", "pos", &args(&["--format", "gerber", "--side", "front"])).expect("the Gerber placement file");
+        assert_eq!(files(&gerber), vec!["export/kicad/pos/board-pnp_top.gbr"]);
+        assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), "front", "the same one-kicad-cli-run-per-file path");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

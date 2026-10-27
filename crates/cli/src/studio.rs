@@ -77,6 +77,9 @@ fn built_ui(cli_ui: Option<&Path>) -> Option<PathBuf> {
 pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<CheckResult>> {
     // Fail now, not on the first request, if this is no board.
     board::load(dir)?;
+    // This process serves many requests, so its exports keep the api-server between jobs (X5-3): only a long-lived caller says so, and a one-shot
+    // `eda board export` stays on per-run kicad-cli, where a server start would cost more than the job saves.
+    eda_kicad_engine::api::long_lived_process();
     let ui_root = built_ui(ui.as_deref());
     // A taken port is usually another studio already showing a board;
     // take the next free one rather than refuse.
