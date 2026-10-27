@@ -21,7 +21,7 @@ import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, isKicadPcbText, newItemIds, type ClipboardContents } from "../components/canvas/clipboard";
-import { subItemIds } from "../kicad-port/pcbItems";
+import { itemKind, subItemIds } from "../kicad-port/pcbItems";
 import { tableCellIds } from "../kicad-port/tables";
 import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
 import type { CarryOp } from "../kicad-port/pcbCarry";
@@ -2470,7 +2470,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     groupSelection: async () => {
       const board = stateRef.current.board;
       if (!board) return;
-      const ids = [...stateRef.current.selection];
+      // `PCB_GROUP_TOOL::Group`'s filter: "if( item->GetParentFootprint() ) aCollector.Remove( item );" -- a pad or a field is not grouped -- then two items or more
+      const ids = [...stateRef.current.selection].filter((id) => {
+        const kind = itemKind(board, id);
+        return kind !== "pad" && kind !== "field";
+      });
       if (ids.length < 2) return;
       const before = new Set((board.drawings?.groups ?? []).map((g) => g.id));
       const ok = await runCmd({ op: "group", ids });
