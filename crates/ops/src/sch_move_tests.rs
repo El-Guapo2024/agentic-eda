@@ -1008,3 +1008,35 @@ fn the_editor_s_pins_of_a_turned_symbol_are_the_writer_s_in_every_orientation() 
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+/// r2 C-H2 (`SCH_LINE_WIRE_BUS_TOOL::finishSegments`: `CleanUp`, then `TrimWire` between the two connection points of every part that has no more than
+/// two): a wire drawn straight through R1's pins (20.32, 21.59) and (20.32, 29.21) is cut between them, so R1 is in series on it, not shorted by it, and
+/// each pin is a plain wire end (two exit angles: no junction).
+#[test]
+fn a_wire_drawn_through_a_resistor_is_cut_between_its_pins() {
+    let mut s = section();
+    s.symbols.push(sym("R1", p(mm(20.32), mm(25.4))));
+    let out = draw(s, &[p(mm(20.32), mm(15.0)), p(mm(20.32), mm(35.0))]);
+    assert!(out.junctions.is_empty(), "no junction at a pin that ends a wire: {:?}", out.junctions);
+    let mut runs: Vec<Vec<Point>> = out.wires.iter().map(|w| w.pts.clone()).collect();
+    runs.sort();
+    assert_eq!(runs, vec![vec![p(mm(20.32), mm(15.0)), p(mm(20.32), mm(21.59))], vec![p(mm(20.32), mm(29.21)), p(mm(20.32), mm(35.0))]], "the piece between the pins is gone");
+}
+
+/// r2 C-H3 (`SCH_DRAWING_TOOLS::PlaceSymbol`: `TrimOverLappingWires`, `AddJunctionsIfNeeded` on the placing click): a resistor placed on a wire cuts it
+/// between its pins.
+#[test]
+fn placing_a_resistor_on_a_wire_cuts_it_between_the_pins() {
+    let mut s = section();
+    s.wires.push(wire("w1", &[p(mm(20.32), mm(10.0)), p(mm(20.32), mm(40.0))]));
+    let m = ConstraintModel::default();
+    let mut design = empty_design();
+    design.schematic = Some(s);
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddSymbol { id: "R1".into(), lib_id: "Device:R".into(), at: p(mm(20.32), mm(25.4)), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
+    let out = b.design().schematic.clone().unwrap();
+    let mut runs: Vec<Vec<Point>> = out.wires.iter().map(|w| w.pts.clone()).collect();
+    runs.sort();
+    assert_eq!(runs, vec![vec![p(mm(20.32), mm(10.0)), p(mm(20.32), mm(21.59))], vec![p(mm(20.32), mm(29.21)), p(mm(20.32), mm(40.0))]]);
+    assert!(out.junctions.is_empty(), "{:?}", out.junctions);
+}
