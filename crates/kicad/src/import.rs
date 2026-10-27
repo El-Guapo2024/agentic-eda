@@ -1920,7 +1920,19 @@ fn layerless_hole(pad: &[Sexpr], fp_side: Side, fp_rot: u32, file_version: i64, 
     }
     // `(clearance C)` on the pad (`PAD::SetLocalClearance`); in pre-9.0 files 0 meant "inherit".
     let clearance = sexpr::find(pad, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_nm).filter(|&c| !(file_version <= 20240201 && c == Nm::ZERO));
-    Some(eda_model::ir::FootprintHole { pad: p, clearance })
+    // Its layers when they are not `*.Mask`, and the tokens the hole has besides what it is made of (see `FootprintHole::layers`, `FootprintHole::tokens`): `issue5990`'s holes
+    // have a mask margin of 1.2 mm, which makes their mask opening 7.4 mm across where the 5 mm pad alone makes 5 mm.
+    let mut names: Vec<String> = sexpr::find(pad, "layers").map(|l| l.iter().skip(1).filter_map(Sexpr::text).map(|n| n.to_string()).collect()).unwrap_or_default();
+    names = names.iter().flat_map(|n| if n == "*.Mask" { vec!["F.Mask".to_string(), "B.Mask".to_string()] } else { vec![n.clone()] }).map(|l| eda_model::fp_art::layer_on_side(&l, fp_side)).collect();
+    names.sort();
+    names.dedup();
+    let layers = (names != ["B.Mask", "F.Mask"]).then_some(names);
+    const OWN: &[&str] = &["at", "size", "rect_delta", "roundrect_rratio", "chamfer_ratio", "chamfer", "drill", "layers", "net", "clearance", "uuid", "tstamp", "options", "primitives"];
+    let tokens = pad.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| !sexpr::tag(l).is_some_and(|t| OWN.contains(&t))).filter(|l| {
+        // In pre-9.0 files a margin of 0 meant "inherit" (`parsePAD`); written to a new file it would be a margin of its own.
+        !(file_version <= 20240201 && matches!(sexpr::tag(l), Some("solder_mask_margin") | Some("solder_paste_margin") | Some("solder_paste_margin_ratio")) && sexpr::num(l, 1) == Some(0.0))
+    }).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
+    Some(eda_model::ir::FootprintHole { pad: p, clearance, layers, tokens })
 }
 
 /// A pad with no copper layer, as the file wrote it, its `(net ..)` taken out and named ([`eda_model::ir::FootprintAuxPad`]); `None` for a pad with copper or no

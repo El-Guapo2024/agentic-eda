@@ -2934,6 +2934,14 @@ pub struct FootprintHole {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "crate::units::de")]
     pub clearance: Option<Nm>,
+    /// The hole's `(layers ..)` when it is not `*.Mask` (a mask opening on one side only, `(layers "F.Mask")`, or none, `(layers)`), named as for a top-side footprint like
+    /// [`PadMaskInfo::art_layers`]. KiCad writes the pad's own set (`format( const PAD* )`). `None` is `*.Mask`. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<String>>,
+    /// The pad's other tokens as the file wrote them, in file order: `(solder_mask_margin ..)`, `(zone_connect ..)`, the paste margins, `(pintype ..)`, whatever a newer KiCad adds
+    /// (without the position, size, shape, drill, layers, net, clearance and uuid, which the hole holds or the writer makes). Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tokens: Vec<String>,
 }
 
 /// A pad of a footprint with no copper layer that is not a hole of its own ([`FootprintHole`]): a stencil opening (`(layers "F.Paste")`), a mask aperture, a pad on

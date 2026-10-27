@@ -173,3 +173,20 @@ fn legacy_ki_properties_become_the_description_field() {
     assert!(out.contains(r#"(property "Description" "Generic connector" (at 0 0 0) (layer "F.Fab") (hide yes)"#), "{out}");
     assert!(out.contains(r#"(property "Datasheet" "~" (at 0 0 0) (layer "F.Fab") (hide yes)"#), "a legacy field is hidden: {out}");
 }
+
+/// F6: a mask-only mounting hole keeps its mask margin (`issue5990`'s `MH1`: the mask opening is 5 mm + 2 x 1.2 mm), its zone connection and a one-sided layer set, as
+/// `format( const PAD* )` writes the pad's own.
+#[test]
+fn a_mask_only_hole_keeps_its_margin_and_layers() {
+    let text = board(&format!(
+        r#"{FP_HEAD}  (attr exclude_from_pos_files)
+  (pad "" np_thru_hole circle (at 0 0) (size 5 5) (drill 2.7) (layers "*.Mask") (solder_mask_margin 1.2) (clearance 1.2) (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac1"))
+  (pad "" np_thru_hole circle (at 6 0) (size 3 3) (drill 3) (layers "F.Mask") (zone_connect 0) (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac2")))"#
+    ));
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let pads = blocks(&out, "pad");
+    assert_eq!(pads.len(), 2, "{out}");
+    assert!(pads.iter().any(|p| p.contains(r#"(layers "*.Mask") (solder_mask_margin 1.2) (clearance 1.2)"#)), "{out}");
+    assert!(pads.iter().any(|p| p.contains(r#"(layers "F.Mask") (zone_connect 0)"#)), "{out}");
+}

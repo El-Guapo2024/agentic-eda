@@ -1461,7 +1461,18 @@ pub(crate) fn write_footprint(
         write!(out, "\t\t(pad {} np_thru_hole {} (at {px} {} {}) (size {} {})", sexpr_str(&pad.number), crate::pad_shape::shape_token(pad.shape), mm(pad.at.1), crate::pad_file_angle(fp.side, fp.rot, pad.rot), mm(pad.size.0), mm(pad.size.1)).unwrap();
         out.push_str(&shape_text.delta);
         out.push_str(&shape_text.corners);
-        write!(out, " {drill} (layers \"*.Mask\")").unwrap();
+        // Its layers (`*.Mask` unless the file's hole had others, `FootprintHole::layers`) and the tokens it had (its mask margin, ..), as `format( const PAD* )` writes them.
+        let layers = match &hole.layers {
+            Some(names) => {
+                let names: Vec<String> = names.iter().map(|l| eda_model::fp_art::layer_on_side(l, fp.side)).collect();
+                if names.is_empty() { "(layers)".to_string() } else { crate::fp_art_io::pad_layers_token(&names.iter().map(String::as_str).collect::<Vec<_>>(), &[], fp.side) }
+            }
+            None => "(layers \"*.Mask\")".to_string(),
+        };
+        write!(out, " {drill} {layers}").unwrap();
+        for token in &hole.tokens {
+            write!(out, " {token}").unwrap();
+        }
         if let Some(c) = hole.clearance {
             write!(out, " (clearance {})", mm(c)).unwrap();
         }
@@ -2344,7 +2355,7 @@ mod tests {
         };
         let extra = eda_model::ir::FootprintExtra {
             id: "U1".into(),
-            holes: vec![eda_model::ir::FootprintHole { pad: hole.clone(), clearance: Some(Nm::from_mm(1.2)) }],
+            holes: vec![eda_model::ir::FootprintHole { pad: hole.clone(), clearance: Some(Nm::from_mm(1.2)), layers: None, tokens: vec![] }],
             net_tie_pad_groups: vec!["1, 2".into(), "3".into()],
             ..Default::default()
         };
