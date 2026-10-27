@@ -579,7 +579,7 @@ pub(crate) fn transform_text(t: &mut Text, x: Xform, copper: usize) {
 /// `PCB_DIMENSION_BASE::Move`/`::Rotate`/`::Flip` and the kind-specific overrides: `PCB_DIM_ORTHOGONAL::Rotate`
 /// turns the crossbar to the nearest quarter turn, `PCB_DIM_ALIGNED::Mirror` and `PCB_DIM_ORTHOGONAL::Mirror` move
 /// the side the crossbar sits on with the mirror. The text and the lines are worked out again from the two feature
-/// points, so only those, the kind's own numbers and the text angle are carried.
+/// points, so only those, the kind's own numbers, the text angle and a radial's or a leader's kept text position are carried.
 pub(crate) fn transform_dimension(d: &mut Dimension, x: Xform, copper: usize) {
     match x {
         Xform::Move { dx, dy } => eda_connectivity::dimension::translate_dimension(d, dx, dy),
@@ -588,6 +588,11 @@ pub(crate) fn transform_dimension(d: &mut Dimension, x: Xform, copper: usize) {
             eda_connectivity::dimension::rotate_dimension(d, pivot, angle);
         }
         Xform::Flip { dir, .. } => {
+            // `PCB_DIMENSION_BASE::Mirror`: "MIRROR( newPos, axis_pos, aFlipDirection ); SetTextPos( newPos );" first. Only a radial's and a leader's text
+            // position is kept (`text_pos`); the others' is worked out again from the points.
+            if let Some(t) = &mut d.text_pos {
+                *t = x.point(*t);
+            }
             d.start = x.point(d.start);
             d.end = x.point(d.end);
             d.text_angle = norm360(-(d.text_angle as i64)) as Millideg;

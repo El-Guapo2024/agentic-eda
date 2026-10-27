@@ -521,6 +521,29 @@ fn a_flipped_dimension_moves_its_crossbar_side_with_the_mirror() {
     assert_eq!(by_id("aligned").layer, "Dwgs.User");
 }
 
+/// `PCB_DIMENSION_BASE::Mirror` (which `Flip` calls) mirrors the text position first: a leader's or a radial's kept text goes with its lines (r5 F3).
+#[test]
+fn a_flipped_leader_mirrors_its_text_position() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    let mut leader = dimension("leader", DimensionKind::Leader, p(mm(2.0), mm(1.0)), p(mm(6.0), mm(4.0)));
+    leader.text_pos = Some(p(mm(10.0), mm(5.0)));
+    let mut radial = dimension("radial", DimensionKind::Radial { leader_length: mm(3.0) }, p(mm(20.0), mm(20.0)), p(mm(25.0), mm(20.0)));
+    radial.text_pos = Some(p(mm(30.0), mm(22.0)));
+    d.drawings.as_mut().unwrap().dimensions = vec![leader, radial];
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::FlipItems { ids: ids(&["leader", "radial"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
+    let by_id = |b: &Board, name: &str| drawings(b).dimensions.iter().find(|d| d.id == name).unwrap().clone();
+    let l = by_id(&b, "leader");
+    assert_eq!((l.start, l.end), (p(mm(-2.0), mm(1.0)), p(mm(-6.0), mm(4.0))));
+    assert_eq!(l.text_pos, Some(p(mm(-10.0), mm(5.0))));
+    let r = by_id(&b, "radial");
+    assert_eq!((r.start, r.end), (p(mm(-20.0), mm(20.0)), p(mm(-25.0), mm(20.0))));
+    assert_eq!(r.text_pos, Some(p(mm(-30.0), mm(22.0))));
+    b.apply(&Cmd::FlipItems { ids: ids(&["leader"]), pivot: p(Nm::ZERO, mm(10.0)), direction: FlipDirection::TopBottom }).unwrap();
+    assert_eq!(by_id(&b, "leader").text_pos, Some(p(mm(-10.0), mm(15.0))));
+}
+
 #[test]
 fn a_flipped_footprint_has_every_pad_where_the_mirror_image_puts_it() {
     let m = model(&["F.Cu", "B.Cu"]);
