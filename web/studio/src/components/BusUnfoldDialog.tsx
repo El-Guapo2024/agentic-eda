@@ -1,12 +1,11 @@
 // `C` (SCH_LINE_WIRE_BUS_TOOL::UnfoldBus): the member nets of the bus under the cursor, as `BUS_UNFOLD_MENU`
 // lists them in a popup at the cursor -- a small modal list here (the studio has no popup-menu primitive).
 // Picking one arms the wire tool from the far end of a new bus entry: the entry (rooted on the bus at the
-// cursor, `doUnfoldBus`), the wire the user draws and the member's label at the wire's end are committed
-// together when the wire is finished (SchematicView.tsx's `commitDrawn`).
+// cursor, `doUnfoldBus`) leans toward the cursor until the first click, which places the member's label
+// (`doDrawSegments`, kicad-port/schBusUnfold.ts); the entry, the wire and the label are committed together
+// when the wire is finished (SchematicView.tsx's `commitDrawn`).
 import { useStudioDispatch, useStudioState } from "../state/store";
-
-/** The bus entry's default size: a 100 mil diagonal (`SCH_BUS_WIRE_ENTRY( pos )` ends at `pos + ( 100 mil, 100 mil )`). */
-const ENTRY_SIZE_NM = 2_540_000;
+import { BUS_ENTRY_SIZE_NM as ENTRY_SIZE_NM } from "../kicad-port/schBusUnfold";
 
 export function BusUnfoldDialog() {
   const state = useStudioState();

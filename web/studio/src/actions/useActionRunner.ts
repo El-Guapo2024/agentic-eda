@@ -2318,19 +2318,26 @@ export function useActionRunner() {
       m.set("eeschema.InteractiveDrawing.drawSheet", toggleSchTool("sch_sheet"));
 
       // C (unfoldBus) -- SCH_LINE_WIRE_BUS_TOOL::UnfoldBus: with the cursor on a bus, pick one of its member nets (`BUS_UNFOLD_MENU`, a dialog here);
-      // a bus entry then roots on the bus at the cursor and a wire is drawn from its far end, the member's label going on the wire's end.
+      // a bus entry then roots on the bus at the cursor and a wire is drawn from its far end, the member's label going where the first click is.
       m.set(
         "eeschema.InteractiveDrawingLineWireBus.unfoldBus",
         schematicOnly(() => {
           const c = state.cursorNm;
           if (!sch || !c) return;
-          const bus = hitBus(sch, c.x, c.y, 10 / (state.schematicView.scale || 1), cursorSnapped() ?? undefined);
+          // `getBusForUnfolding`: `RequestSelection( { SCH_ITEM_LOCATE_BUS_T } )` -- a selected bus wherever the cursor is (its segment nearest the
+          // snapped cursor), else the bus under the cursor (r6 C6-M2)
+          const snapped = cursorSnapped() ?? ([c.x, c.y] as [number, number]);
+          const selectedBus = sch.wires.find((w) => w.bus && w.id && state.selection.has(w.id));
+          const bus = selectedBus
+            ? hitBus({ ...sch, wires: [selectedBus] }, snapped[0], snapped[1], Infinity, snapped)
+            : hitBus(sch, c.x, c.y, 10 / (state.schematicView.scale || 1), cursorSnapped() ?? undefined);
+          // `BUS_UNFOLD_MENU::update`'s disabled items, word for word (a toast here)
           if (!bus) {
-            dispatch({ type: "TOAST", message: "Unfold from Bus: put the cursor on a bus first.", kind: "info" });
+            dispatch({ type: "TOAST", message: "No bus selected", kind: "info" });
             return;
           }
           if (bus.members.length === 0) {
-            dispatch({ type: "TOAST", message: `${bus.net} has no member nets to unfold.`, kind: "info" });
+            dispatch({ type: "TOAST", message: "Bus has no members", kind: "info" });
             return;
           }
           dispatch({ type: "SET_BUS_UNFOLD_PICKER", picker: { bus: bus.net, entryAt: bus.at, members: bus.members } });

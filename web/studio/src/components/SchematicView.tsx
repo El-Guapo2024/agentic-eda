@@ -23,6 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { LabelScope, Schematic } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
 import { fetchHierarchy } from "../api/schControlClient";
+import { placeUnfoldLabel, unfoldEntrySize } from "../kicad-port/schBusUnfold";
 import { boundsOfPoints, fitTransform } from "./canvas/view";
 import { computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, handleWheel, type WheelInput } from "../kicad-port/viewControls";
 import { panByWorldDelta } from "../kicad-port/view";
@@ -400,8 +401,15 @@ export function SchematicView() {
       // rubber band from the last click to the cursor is two segments (an
       // elbow) in LINE_MODE_90/45, one straight segment in LINE_MODE_FREE.
       let pts = state.drawState.pts;
+      // `C` before its first click: the entry leans toward the cursor and the wire starts at its end (r6 C6-M2, `doDrawSegments`' motion branch)
+      let unfoldSize = state.busUnfold?.size;
       if (state.cursorNm) {
         const c = snap.lastPoint() ?? snap.align([state.cursorNm.x, state.cursorNm.y], NO_MODS, state.activeTool === "sch_line" ? "graphics" : "wires");
+        const u = state.busUnfold;
+        if (u && !u.labelAt && pts.length === 1) {
+          unfoldSize = unfoldEntrySize(u.entryAt, [c[0], c[1]], u.size);
+          pts = [[u.entryAt[0] + unfoldSize[0], u.entryAt[1] + unfoldSize[1]]];
+        }
         const tail = wireTail(pts[pts.length - 1]!, [c[0], c[1]], state.schLineMode, state.schPosture, elbowRef.current);
         elbowRef.current = tail.length === 2 ? { mid: tail[0]!, end: tail[1]! } : null;
         pts = [...pts, ...(tail as [number, number][])];
@@ -416,10 +424,11 @@ export function SchematicView() {
       // `C` (Unfold from Bus): the bus entry already sits at its root and the wire runs from its far end -- show the stub too.
       const unfold = state.busUnfold;
       if (unfold) {
+        const size = unfoldSize ?? unfold.size;
         ctx.strokeStyle = layerColor("LAYER_BUS");
         ctx.beginPath();
         ctx.moveTo(unfold.entryAt[0], unfold.entryAt[1]);
-        ctx.lineTo(unfold.entryAt[0] + unfold.size[0], unfold.entryAt[1] + unfold.size[1]);
+        ctx.lineTo(unfold.entryAt[0] + size[0], unfold.entryAt[1] + size[1]);
         ctx.stroke();
       }
     }
@@ -519,14 +528,15 @@ export function SchematicView() {
       void api.cmd(wire);
       return;
     }
-    const end = points[points.length - 1]!;
+    // the label where the first click was (`m_busUnfold.label_placed`), the wire's second point (r6 C6-M2)
+    const at = unfold.labelAt ? { x: unfold.labelAt[0], y: unfold.labelAt[1] } : points[1]!;
     void api.cmdBatch([
       { op: "add_bus_entry", at: { x: unfold.entryAt[0], y: unfold.entryAt[1] }, size: { x: unfold.size[0], y: unfold.size[1] } },
       wire,
-      { op: "add_label", net: unfold.net, at: end, kind: { scope: "local" } },
+      { op: "add_label", net: unfold.net, at, kind: { scope: "local" } },
     ]);
+    // `UnfoldBus` goes on drawing wires (`doDrawSegments( aEvent, commit, LAYER_WIRE, false )`): the wire tool stays armed
     dispatch({ type: "SET_BUS_UNFOLD", unfold: null });
-    dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
   };
 
   const onWheel = (e: WheelEvent) => {
@@ -671,10 +681,18 @@ export function SchematicView() {
           const isLine = state.activeTool === "sch_line";
           // `BestSnapAnchor` on the tool's grid (wires: `GRID_WIRES`, lines: `GRID_GRAPHICS`): a pin is reached through the grid it sits on, or as an anchor with the grid off.
           const snapped = snapToGrid(wx, wy);
-          const draw = state.drawState;
+          let draw = state.drawState;
           if (draw?.kind !== "wire") {
             dispatch({ type: "SET_DRAW_STATE", draw: { kind: "wire", pts: [snapped] } });
             return;
+          }
+          // "First click when unfolding places the label and wire-to-bus entry" (r6 C6-M2): the entry keeps the posture this click gives it, the wire
+          // starts at its end, and the member's label is here
+          const unfold = state.busUnfold;
+          if (unfold && !unfold.labelAt && draw.pts.length === 1) {
+            const placed = placeUnfoldLabel(unfold.entryAt, unfold.size, snapped);
+            dispatch({ type: "SET_BUS_UNFOLD", unfold: { ...unfold, size: placed.size, labelAt: placed.labelAt } });
+            draw = { ...draw, pts: [placed.start] };
           }
           const tail = wireTail(draw.pts[draw.pts.length - 1]!, snapped, state.schLineMode, state.schPosture, elbowRef.current);
           elbowRef.current = null;
