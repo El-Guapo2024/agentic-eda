@@ -120,6 +120,10 @@ pub struct SchExtras {
     /// and written back as `(power local)`. Additive.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub local_power: std::collections::BTreeSet<String>,
+    /// The symbols marked "Exclude from position files" (`SCH_SYMBOL::GetExcludedFromPosFiles`, `(in_pos_files no)`), by `field_key` (r2 B-L2): read and
+    /// written back, so the board's position files leave them out as KiCad's do. Additive.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub excluded_from_pos_files: std::collections::BTreeSet<String>,
     /// The items whose fields are where Autoplace Fields put them (`SCH_ITEM::m_fieldsAutoplaced`, `(fields_autoplaced yes)` in the file), by
     /// `field_key` (a symbol's reference, `#<unit>` after it for a unit but the first), a power symbol's or a sheet's id. Moving, turning, re-justifying or
     /// editing the place of one of the fields takes the item out of it (`SetFieldsAutoplaced( AUTOPLACE_NONE )`); turning the symbol, editing a field's
@@ -589,6 +593,7 @@ impl SchExtras {
             && self.sheet_pages.is_empty()
             && self.path_units.is_empty()
             && self.local_power.is_empty()
+            && self.excluded_from_pos_files.is_empty()
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()
             && self.pin_swaps.is_empty()

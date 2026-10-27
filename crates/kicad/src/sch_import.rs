@@ -117,6 +117,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     // the real library declares, not just whichever unit happened to be
     // read first) and per-pin world position can be resolved.
     struct RawInstance {
+        exclude_from_pos_files: bool,
         lib_id: String,
         at_nm: Point,
         rot: Millideg,
@@ -193,6 +194,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         // has the default: populated, in the BOM, on the board, simulated.
         let flag = |name: &str| sexpr::find(item, name).and_then(|n| sexpr::txt(n, 1));
         let (dnp, exclude_from_bom, exclude_from_board, exclude_from_sim) = (flag("dnp") == Some("yes"), flag("in_bom") == Some("no"), flag("on_board") == Some("no"), flag("exclude_from_sim") == Some("yes"));
+        // `(in_pos_files no)`: "Exclude from position files" (r2 B-L2)
+        let exclude_from_pos_files = flag("in_pos_files") == Some("no");
 
         if is_locked(item) {
             locked_refs.insert(reference.clone());
@@ -212,7 +215,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             }
             overrides.push(o);
         }
-        raw.push(RawInstance { lib_id: lib_id.to_string(), at_nm, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), swaps });
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_nm, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), swaps, exclude_from_pos_files });
     }
 
     if opts.unique_references {
@@ -264,6 +267,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
 
     // `(body_style 2)` of the symbols placed in the alternate body style of a library symbol that has one, by `field_key` (`SchExtras::body_styles`)
     let mut body_style_entries: Vec<(String, u32)> = Vec::new();
+    let mut pos_files_excluded: Vec<String> = Vec::new();
     // the places Swap Pins traded, by `field_key` (`SchExtras::pin_swaps`)
     let mut pin_swap_entries: Vec<(String, BTreeMap<String, String>)> = Vec::new();
     // the user-defined fields of the symbols (`SchematicSection::user_fields`, by reference) and where each unit draws them (`field_layout`, by `field_key`)
@@ -341,6 +345,9 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             }
             if !r.swaps.is_empty() {
                 pin_swap_entries.push((eda_model::ir::field_key(&reference, r.unit), r.swaps.clone()));
+            }
+            if r.exclude_from_pos_files {
+                pos_files_excluded.push(eda_model::ir::field_key(&reference, r.unit));
             }
             symbols.push(SymbolInstance {
                 id: reference.clone(),
@@ -649,6 +656,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             sch.extras.set_locked(&id, true);
         }
         sch.extras.body_styles.extend(body_style_entries);
+        sch.extras.excluded_from_pos_files.extend(pos_files_excluded);
         sch.extras.pin_swaps.extend(pin_swap_entries);
         sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
         sch.extras.sheet_pages.extend(sheet_pages);
@@ -1226,6 +1234,9 @@ fn parse_instance_overrides(item: &[Sexpr], at: Point, own_unit: u32) -> Vec<(ed
             // `SCH_SYMBOL_INSTANCE::m_Unit`: the unit this path draws the symbol as. The override is filed under the symbol's own unit, which tells
             // the symbol apart (`sheet_list::override_under`), and a path unit that differs goes to `SchExtras::path_units` (r2 B-M4)
             let unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0).max(1.0) as u32;
+            // of two instances of one path (two projects' blocks), the last read wins: `AddHierarchicalReference` calls `RemoveInstance( aInstance.m_Path )`
+            // first (r2 B-L4)
+            out.retain(|(o, _): &(eda_model::ir::SymbolPathOverride, u32)| o.sheet_path != sheet_path);
             out.push((eda_model::ir::SymbolPathOverride { at, sheet_path, reference: reference.to_string(), unit: own_unit }, unit));
         }
     }
@@ -1988,6 +1999,29 @@ mod tests {
         assert!(out.contains("(property \"param\" \"NODE_1\""), "{out}");
     }
 
+    /// r2 B-L4 (`SCH_SYMBOL::AddHierarchicalReference`: `RemoveInstance( instance.m_Path )` first): of two instances of one path, the last read wins.
+    #[test]
+    fn of_two_instances_of_one_path_the_last_wins() {
+        let tree = sexpr::parse(r#"(symbol (instances (project "a" (path "/r/x" (reference "R1") (unit 1))) (project "b" (path "/r/x" (reference "R7") (unit 1)) (path "/r/y" (reference "R8") (unit 1)))))"#).unwrap();
+        let got: Vec<(Vec<String>, String)> = parse_instance_overrides(tree.as_list().unwrap(), Point::default(), 1).into_iter().map(|(o, _)| (o.sheet_path, o.reference)).collect();
+        assert_eq!(got, vec![(vec!["x".to_string()], "R7".to_string()), (vec!["y".to_string()], "R8".to_string())]);
+    }
+
+    /// r2 B-L2 (`saveSymbol`: `FormatBool( m_out, "in_pos_files", !aSymbol->GetExcludedFromPosFiles() )`): a symbol excluded from the position files stays so
+    /// through a read and a write; the others are written `(in_pos_files yes)`.
+    #[test]
+    fn a_symbol_excluded_from_position_files_stays_excluded() {
+        let model = ldo_model();
+        let design = derive_schematic(&model, &EngineOptions::new(1, "pos")).unwrap();
+        let text = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "pos" }).unwrap();
+        assert_eq!(text.matches("(in_pos_files no)").count(), 0);
+        let marked = text.replacen("(in_pos_files yes)", "(in_pos_files no)", 1);
+        let (back, back_model, _) = import_kicad_sch(&marked).unwrap();
+        assert_eq!(back.schematic.as_ref().unwrap().extras.excluded_from_pos_files.len(), 1);
+        let again = export_kicad_sch(&back, &back_model, &ExportMeta { date: "2026-01-01", title: "pos" }).unwrap();
+        assert_eq!(again.matches("(in_pos_files no)").count(), 1, "{again}");
+    }
+
     /// r2 B-M3 (`parseSchSheetInstances`, `UpdateSheetInstanceData`): a KiCad 6 root's `(sheet_instances (path "/<sheet>/" (page "7")))` is the sheet's page, and an
     /// empty page is "#".
     #[test]
@@ -2109,8 +2143,8 @@ mod tests {
             r1.exclude_from_sim = true;
         }
         let text = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "attrs" }).unwrap();
-        assert!(text.contains("(exclude_from_sim yes) (in_bom no) (on_board no) (dnp yes)"), "R1's flags are in the file");
-        assert!(text.contains("(exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)"), "R2 keeps the defaults");
+        assert!(text.contains("(exclude_from_sim yes) (in_bom no) (on_board no) (in_pos_files yes) (dnp yes)"), "R1's flags are in the file");
+        assert!(text.contains("(exclude_from_sim no) (in_bom yes) (on_board yes) (in_pos_files yes) (dnp no)"), "R2 keeps the defaults");
         let (back, _, _) = import_kicad_sch(&text).unwrap();
         let sch = back.schematic.unwrap();
         let r1 = sch.symbols.iter().find(|s| s.id == "R1").unwrap();

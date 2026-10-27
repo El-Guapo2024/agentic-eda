@@ -421,10 +421,12 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let yes_no = |b: bool| if b { "yes" } else { "no" };
         writeln!(
             out,
-            "\t\t(exclude_from_sim {}) (in_bom {}) (on_board {}) (dnp {})",
+            "\t\t(exclude_from_sim {}) (in_bom {}) (on_board {}) (in_pos_files {}) (dnp {})",
             yes_no(sym.exclude_from_sim),
             yes_no(!sym.exclude_from_bom),
             yes_no(!sym.exclude_from_board),
+            // `KICAD_FORMAT::FormatBool( m_out, "in_pos_files", !aSymbol->GetExcludedFromPosFiles() )` (r2 B-L2)
+            yes_no(!sch.extras.excluded_from_pos_files.contains(&eda_model::ir::field_key(&sym.id, sym.unit))),
             yes_no(sym.dnp)
         )
         .unwrap();
@@ -492,7 +494,9 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         // `rot` is KiCad's angle (counter-clockwise on the sheet), as the reader reads it, the editor (`Matrix::of`) turns it and the painter draws it
         let angle = (ps.rot / 1000) % 360;
         writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} {angle}) (unit 1)", sexpr_str(&ps.lib_id)).unwrap();
-        writeln!(out, "\t\t(exclude_from_sim no) (in_bom no) (on_board no) (dnp no)").unwrap();
+        // the library's flags, which KiCad copies to a placed symbol (`power:` symbols are in the BOM and on the board; their netlist and BOM leave them out as power
+        // symbols), r2 B-L4
+        writeln!(out, "\t\t(exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)").unwrap();
         if sch.extras.is_locked(&ps.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
         }
