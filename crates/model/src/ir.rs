@@ -1509,6 +1509,17 @@ impl ZoneSmoothing {
     }
 }
 
+/// A generator nothing here reads: see `DrawingsSection::raw_generators`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawGenerator {
+    /// The `(generated ..)` item as the file wrote it, on one line, without its `(members ..)`.
+    pub text: String,
+    /// The ids of its members, in the file's order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_ids: Vec<String>,
+}
+
 /// One copper thieving zone: see `DrawingsSection::zone_thieving`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2629,6 +2640,11 @@ pub struct DrawingsSection {
     /// in an older `design.json` reads as "none". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub raw_items: Vec<String>,
+    /// The generators of a kind nothing here reads (KiCad 10's microvia stack, `(generated (type via_stack) ..)`), kept as text like `raw_items` but with their members
+    /// by our ids: the file's `(members ..)` names items by the uuids it gave them, which the writer does not write again, so the writer puts in the uuids it wrote
+    /// those items as (KiCad's `resolveGroups` drops a generator whose members it cannot find). Additive: absent in an older `design.json` reads as "none".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_generators: Vec<RawGenerator>,
     /// What a via says beyond `Via`'s fields (its type, the unconnected-layer mode, `free`, the zone layer connections, tenting, capping, covering, plugging, filling, its padstack
     /// and teardrop settings, ..), one entry per via that has any, keyed by the via's id -- see [`crate::via_extra`]. Additive: absent in an older `design.json` reads as
     /// "every via is a through via with KiCad's defaults". Lives here for the reason `rules` does.

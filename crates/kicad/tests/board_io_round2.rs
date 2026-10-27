@@ -471,3 +471,40 @@ fn a_legacy_group_lock_is_read() {
     assert!(d.locked_ids.contains(&id_of("")), "{:?}", d.locked_ids);
     assert!(!d.locked_ids.contains(&id_of("locked")), "{:?}", d.locked_ids);
 }
+
+/// 25ec2335's QA board `name`, if the KiCad 10 source is here (`KICAD10_SRC_DIR`, else `~/src/kicad-src-25ec2335`).
+fn kicad10_qa(name: &str) -> Option<String> {
+    let root = std::env::var_os("KICAD10_SRC_DIR").map(std::path::PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("src/kicad-src-25ec2335")))?;
+    std::fs::read_to_string(root.join("qa/data/pcbnew").join(name)).ok()
+}
+
+/// r3 F5: a generator nothing here reads (KiCad 10's microvia stack, 25ec2335 `via_stacks`) names its members by the uuids our file writes them as, so kicad-cli's
+/// `resolveGroups` keeps it: its re-save of our file has both stacks, with their 2 and 3 vias.
+#[test]
+fn an_unread_generator_keeps_its_members() {
+    let Some(text) = kicad10_qa("via_stacks.kicad_pcb") else {
+        eprintln!("skipped: no 25ec2335 QA data");
+        return;
+    };
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let item_uuids: Vec<String> = out.split("(uuid \"").skip(1).map(|r| r.split('"').next().unwrap().to_string()).collect();
+    let gens = blocks(&out, "generated");
+    let stacks: Vec<&&str> = gens.iter().filter(|g| g.contains("(type via_stack)")).collect();
+    assert_eq!(stacks.len(), 2, "{out}");
+    let members = |g: &str| -> Vec<String> { g.split("(members").nth(1).unwrap_or("").split('"').skip(1).step_by(2).map(str::to_string).collect() };
+    let counts: Vec<usize> = stacks.iter().map(|g| members(g).len()).collect();
+    assert_eq!(counts, vec![2, 3], "{stacks:?}");
+    for g in &stacks {
+        assert!(members(g).iter().all(|u| item_uuids.contains(u)), "every member is an item of the file: {g}");
+    }
+    if slow_tests_off() {
+        return;
+    }
+    let Some(back) = kicad_resave(&text, "via_stacks") else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let flat = back.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(flat.matches("(type via_stack)").count(), 2, "{back}");
+}

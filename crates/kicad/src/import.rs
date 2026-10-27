@@ -327,6 +327,21 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     for (uuid, id) in refs.item_ids(&design) {
         notes.item_ids.entry(uuid).or_insert(id);
     }
+    // The unread generators (KiCad 10's `via_stack`), their members named by our ids (`DrawingsSection::raw_generators`).
+    let ids_by_uuid: BTreeMap<String, String> = refs.item_ids(&design).into_iter().collect();
+    if let Some(dr) = design.drawings.as_mut() {
+        let (generators, rest): (Vec<String>, Vec<String>) = std::mem::take(&mut dr.raw_items).into_iter().partition(|t| t.starts_with("(generated"));
+        dr.raw_items = rest;
+        for text in generators {
+            let Ok(Sexpr::List(items)) = sexpr::parse(&text) else {
+                dr.raw_items.push(text);
+                continue;
+            };
+            let member_ids = sexpr::find(&items, "members").map(|m| m.iter().skip(1).filter_map(Sexpr::text).filter_map(|u| ids_by_uuid.get(u).cloned()).collect()).unwrap_or_default();
+            let without: Vec<Sexpr> = items.into_iter().filter(|i| i.as_list().and_then(sexpr::tag) != Some("members")).collect();
+            dr.raw_generators.push(eda_model::ir::RawGenerator { text: sexpr::to_text(&Sexpr::List(without)), member_ids });
+        }
+    }
     if !groups.is_empty() || !locked_ids.is_empty() {
         let dr = design.drawings.get_or_insert_with(Default::default);
         dr.groups = groups;
