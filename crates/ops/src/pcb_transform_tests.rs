@@ -337,6 +337,29 @@ fn a_rectangle_turned_a_quarter_stays_a_normalised_rectangle_and_any_other_turn_
 }
 
 #[test]
+fn a_rounded_rectangle_turned_45_degrees_is_the_polygon_of_its_rounded_rectangle() {
+    // `EDA_SHAPE::rotate`: `ROUNDRECT rr( SHAPE_RECT( .. ), m_cornerRadius ); m_shape = SHAPE_T::POLY; rr.TransformToPolygon( .. ); .Rotate( .. )`.
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().board_items.set_corner_radius("shp_rect", mm(2.0));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let pivot = p(mm(5.0), mm(92.5));
+    b.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot, angle_millideg: 45_000 }).unwrap();
+    let dr = drawings(&b);
+    let r = dr.shapes.iter().find(|s| s.id() == "shp_rect").unwrap();
+    let Shape::Polygon { pts, .. } = r else { panic!("{r:?}") };
+    assert!(pts.len() > 4, "the corners are rounded: {pts:?}");
+    // Every point turned back lies on the rounded rectangle 0..10 x 90..95 mm with 2 mm corners.
+    let ring = eda_model::outline::rounded_rect_ring(p(Nm::ZERO, mm(90.0)), p(mm(10.0), mm(95.0)), mm(2.0), eda_model::outline::MAX_ERROR_NM.as_f64());
+    let want: Vec<Point> = ring.iter().map(|q| rotate_point_about(*q, pivot, 45_000)).collect();
+    assert_eq!(pts.len(), want.len());
+    for (a, w) in pts.iter().zip(&want) {
+        assert!((a.x - w.x).abs() <= Nm::new(2) && (a.y - w.y).abs() <= Nm::new(2), "{a:?} vs {w:?}");
+    }
+    assert_eq!(dr.board_items.corner_radius_of("shp_rect"), Nm::ZERO, "a polygon has no corner radius");
+}
+
+#[test]
 fn a_rotated_arc_track_is_still_an_arc_with_its_mid_point_turned() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();

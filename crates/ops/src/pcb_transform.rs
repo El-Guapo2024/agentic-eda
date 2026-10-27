@@ -276,7 +276,10 @@ impl Board<'_> {
         }
         if let Some(dr) = self.design.drawings.as_mut() {
             for s in dr.shapes.iter_mut().filter(|s| targets.shapes.contains(s.id())) {
-                transform_shape(s, x, copper);
+                let radius = dr.board_items.corner_radius_of(s.id());
+                if transform_rounded_shape(s, x, copper, radius) && radius > Nm::ZERO {
+                    dr.board_items.set_corner_radius(s.id(), Nm::ZERO);
+                }
             }
             for t in dr.texts.iter_mut().filter(|t| targets.texts.contains(&t.id)) {
                 transform_text(t, x, copper);
@@ -396,6 +399,13 @@ fn norm_rect(start: &mut Point, end: &mut Point) {
 /// start at the top left. A mirrored arc swaps its ends, as in source, so it still runs counter-clockwise from start
 /// to end; the three points describe the same arc either way.
 pub(crate) fn transform_shape(s: &mut Shape, x: Xform, copper: usize) {
+    transform_rounded_shape(s, x, copper, Nm::ZERO);
+}
+
+/// [`transform_shape`] of a shape whose rectangle has corners of `corner_radius` (`BoardItems::corner_radius_of`): a turn by anything but a
+/// quarter makes it the polygon of its *rounded* rectangle, `ROUNDRECT( SHAPE_RECT( .. ), m_cornerRadius ).TransformToPolygon( .., getMaxError() )`
+/// turned (`EDA_SHAPE::rotate`). True when the rectangle became a polygon, so the caller drops the radius (a polygon has none).
+pub(crate) fn transform_rounded_shape(s: &mut Shape, x: Xform, copper: usize, corner_radius: Nm) -> bool {
     let flip = x.is_flip();
     let moving = matches!(x, Xform::Move { .. });
     let mut as_polygon: Option<Shape> = None;
@@ -415,8 +425,7 @@ pub(crate) fn transform_shape(s: &mut Shape, x: Xform, copper: usize) {
         Shape::Rect { id, layer, stroke_width, filled, start, end } => {
             if let Xform::Rotate { angle, .. } = x {
                 if angle.rem_euclid(90_000) != 0 {
-                    let (x0, y0, x1, y1) = (start.x.min(end.x), start.y.min(end.y), start.x.max(end.x), start.y.max(end.y));
-                    let corners = [Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }];
+                    let corners = eda_model::outline::rounded_rect_ring(*start, *end, corner_radius, eda_model::outline::MAX_ERROR_NM.as_f64());
                     as_polygon = Some(Shape::Polygon { id: std::mem::take(id), layer: layer.clone(), stroke_width: *stroke_width, filled: *filled, pts: corners.iter().map(|c| x.point(*c)).collect() });
                 }
             }
@@ -440,6 +449,7 @@ pub(crate) fn transform_shape(s: &mut Shape, x: Xform, copper: usize) {
             *end = x.point(*end);
         }
     }
+    let became_polygon = as_polygon.is_some();
     if let Some(poly) = as_polygon {
         *s = poly;
     }
@@ -447,6 +457,7 @@ pub(crate) fn transform_shape(s: &mut Shape, x: Xform, copper: usize) {
         let flipped = flip_layer(s.layer(), copper);
         s.set_layer(flipped);
     }
+    became_polygon
 }
 
 /// `PCB_TEXT::Move`/`::Rotate`/`::Flip`. A text's angle is KiCad's (counter-clockwise on the screen), so a clockwise
