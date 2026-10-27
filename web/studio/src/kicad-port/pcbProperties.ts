@@ -18,7 +18,7 @@ import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimensi
 import type { LengthUnit } from "../state/units";
 import { enabledOptionalLayers, layerDisplayName } from "./boardLayers";
 import { effectiveClassName } from "./boardSetupRules";
-import { toCmdDimension } from "./dimensionConvert";
+import { DIM_PRECISION_CHOICES, toCmdDimension } from "./dimensionConvert";
 import { editAttrsCmd, editFieldCmd, editPadCmd, fieldById, localAngleOf } from "./fpFields";
 import { arcShapeCenter, padById } from "./pcbItems";
 import { shapeToCmd } from "./pcbPointEdit";
@@ -1508,7 +1508,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       owner: "PCB_DIMENSION_BASE",
       name: "Precision",
       kind: "enum",
-      choices: () => [0, 1, 2, 3, 4, 5].map((n) => ({ label: n === 0 ? "0" : `0.${"0".repeat(n)}`, value: n })),
+      choices: () => DIM_PRECISION_CHOICES,
       get: (i) => i.dim!.precision,
       available: notLeader,
       set: dimSet((_i, v) => ({ precision: num(v) }), (i, v) => i.dim!.precision !== v),

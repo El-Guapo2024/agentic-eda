@@ -323,10 +323,10 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
             Some(2) => DimensionUnitsFormat::ParenSuffix,
             _ => DimensionUnitsFormat::NoSuffix,
         };
-        // `DIM_PRECISION`: 0..=5 are 0 to 5 decimals; the four unit-dependent `V_VV..` levels (6..=9) are two to five.
+        // `DIM_PRECISION` as KiCad stores it: 0..=5 are 0 to 5 decimals, 6..=9 the four unit-dependent `V_VV..` levels, kept
+        // as they are so the file KiCad reads back has its own level (`PCB_DIMENSION_BASE::GetValueText` resolves them).
         let precision = match int_of("precision") {
-            Some(p @ 0..=5) => p as u8,
-            Some(p @ 6..=9) => (p - 4) as u8,
+            Some(p @ 0..=9) => p as u8,
             _ => defaults.precision,
         };
         let override_text = format.and_then(|f| sexpr::find(f, "override_value")).and_then(|v| sexpr::txt(v, 1)).map(str::to_string);

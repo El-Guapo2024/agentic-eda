@@ -8,15 +8,13 @@
 // separate dialogs.
 //
 // Not ported: changing a dimension's kind after creation (source has no
-// such control either -- each kind is a different drawing tool); `DIM_
-// PRECISION`'s unit-dependent "V_VVV" levels (`precision` here is a flat
-// decimal count, see `Dimension`'s own doc); `DIM_TEXT_POSITION::MANUAL`
+// such control either -- each kind is a different drawing tool); `DIM_TEXT_POSITION::MANUAL`
 // (no point-editor-style text dragging); the interactive centre-point/
 // -item picker buttons (plain numeric X/Y fields instead, same convention
 // every other dialog in this app already uses).
 import { useEffect, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { toCmdDimension } from "../kicad-port/dimensionConvert";
+import { DIM_PRECISION_CHOICES, toCmdDimension } from "../kicad-port/dimensionConvert";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 import type { ArrowDirection, CmdDimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat } from "../api/types";
@@ -237,7 +235,11 @@ export function DimensionPropertiesDialog() {
                       <option value="paren_suffix">1234.0 (mm)</option>
                     </select>
                     <span>Precision</span>
-                    <input type="number" min={0} max={5} step={1} value={precision} onChange={(e) => setPrecision(Math.max(0, Math.min(5, Math.round(Number(e.target.value)))))} />
+                    <select value={precision} onChange={(e) => setPrecision(Number(e.target.value))}>
+                      {DIM_PRECISION_CHOICES.map((c) => (
+                        <option key={c.value} value={c.value}>{c.label}</option>
+                      ))}
+                    </select>
                     <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <input type="checkbox" checked={suppressZeros} onChange={(e) => setSuppressZeros(e.target.checked)} /> Suppress trailing zeros
                     </label>

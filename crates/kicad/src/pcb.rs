@@ -2767,6 +2767,8 @@ mod tests {
         dims[1].units = DimensionUnits::Mil;
         dims[1].keep_text_aligned = false;
         dims[1].text_position = DimensionTextPosition::Inline;
+        // A unit-dependent `DIM_PRECISION` level (V_VV) is KiCad's own number in the file, both ways.
+        dims[2].precision = 6;
         let mut dr = eda_model::ir::DrawingsSection::default();
         dr.dimensions = dims.clone();
         dr.assign_missing_ids();
@@ -2780,6 +2782,7 @@ mod tests {
         assert!(out.contains("(height 2)") && out.contains("(orientation 1)") && out.contains("(leader_length 3)") && out.contains("(text_frame 0)"), "{out}");
         assert!(out.contains("(format (prefix \"L=\") (suffix \"\") (units 2) (units_format 1) (precision 2) (override_value \"ten\") (suppress_zeroes yes))"), "{out}");
         assert!(out.contains("(units 1)") && out.contains("(text_position_mode 1)"), "{out}");
+        assert!(out.contains("(precision 6)"), "{out}");
         assert!(out.contains("(thickness 0.15) (arrow_length 1.27) (text_position_mode 0) (arrow_direction inward) (extension_height 0.58) (extension_offset 0.5) (keep_text_aligned yes)"), "{out}");
         assert!(out.contains("(effects (font (size 1.2 1.2) (thickness 0.18)))"), "{out}");
 

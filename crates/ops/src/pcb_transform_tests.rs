@@ -285,6 +285,21 @@ fn a_text_turned_clockwise_loses_the_same_angle_because_its_angle_is_kicads() {
 }
 
 #[test]
+fn rotating_a_dimension_turns_its_text_the_way_a_text_turns() {
+    // `PCB_DIMENSION_BASE::Rotate`: `newAngle = GetTextAngle() + aAngle` with KiCad's counter-clockwise angle, the same
+    // way `PCB_TEXT::Rotate` turns a text. Our clockwise-positive -90 is KiCad's +90.
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    let dims = &mut d.drawings.as_mut().unwrap().dimensions;
+    dims[0].keep_text_aligned = false;
+    dims[0].text_angle = 0;
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::RotateItems { ids: ids(&["dim_a", "txt_a"]), pivot: p(mm(70.0), mm(80.0)), angle_millideg: -90_000 }).unwrap();
+    assert_eq!(drawings(&b).texts[0].angle, 90_000);
+    assert_eq!(drawings(&b).dimensions[0].text_angle, 90_000, "the dimension's text turns with the text");
+}
+
+#[test]
 fn a_footprint_turned_about_a_pivot_has_its_pads_where_the_same_turn_puts_them() {
     let m = model(&["F.Cu", "B.Cu"]);
     for (rot, side) in [(0, Side::Top), (90_000, Side::Top), (30_000_000, Side::Bottom), (270_000, Side::Bottom)] {

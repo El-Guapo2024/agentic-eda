@@ -2274,11 +2274,11 @@ pub struct Dimension {
     pub override_text: Option<String>,
     pub units: DimensionUnits,
     pub units_format: DimensionUnitsFormat,
-    /// Decimal places, 0-5. A flat count -- source's own `DIM_PRECISION`
-    /// also has four unit-dependent "V_VVV"-style levels (fewer decimals
-    /// for mm than inch at the "same" precision); not ported, since a
-    /// fixed decimal count covers the overwhelming majority of real
-    /// dimensioned drawings and keeps one precision concept instead of two.
+    /// KiCad's `DIM_PRECISION`: 0-5 (`X` .. `X_XXXXX`) are that many
+    /// decimals; 6-9 (`V_VV` .. `V_VVVVV`) are unit-dependent levels whose
+    /// decimals `PCB_DIMENSION_BASE::GetValueText` works out from the units
+    /// (inch `p - 4`, mils `max(0, p - 7)`, mm `p - 5`), see
+    /// `eda_connectivity::dimension::decimals`.
     pub precision: u8,
     pub suppress_trailing_zeros: bool,
     pub text_position: DimensionTextPosition,
@@ -2441,7 +2441,8 @@ impl Default for DimensionSettings {
             stroke_width: Nm::new(200_000),
             arrow_length: Nm::new(arrow_length),
             extension_offset: Nm::new(500_000), // 0.5mm
-            extension_height: Nm::kiround(arrow_length as f64 * 27.5f64.to_radians().sin()),
+            // `static_cast<int>( m_arrowLength * s_arrowAngle.Sin() )`: truncated, not rounded.
+            extension_height: Nm::new((arrow_length as f64 * 27.5f64.to_radians().sin()) as i64),
         }
     }
 }
