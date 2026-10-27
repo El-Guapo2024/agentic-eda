@@ -637,6 +637,12 @@ impl DiffPairPlacer {
         // `m_currentNode = m_shove->CurrentNode()` at the top of `rhShoveOnly`, and `Move`'s `m_lastNode = m_currentNode->Branch()`
         let frame = self.frame_node();
         self.last_node = Some(frame.clone());
+        // what is shown when the head cannot be routed (`routeHead` fails: `propagateDpHeadForces` runs out of steps; `tryWalkDp` always
+        // returns true): `Move`'s `m_lastNode = latestNode->Branch()` of that frame, whatever `route()` returned, so the tracks and vias
+        // the newest frame pushed stay pushed on screen (round-2 R-6)
+        let (top, _) = self.springback.top();
+        self.shoved_lines = top.displaced_lines(&self.world);
+        self.shoved_vias = top.displaced_vias();
         let ok = self.route_head(Some(&frame), rules, settings, p);
         self.fit_ok = false;
         if !ok {
@@ -1319,6 +1325,15 @@ mod tests {
         let (mut node, start) = two_pad_pairs();
         // a GND via just above the N line's lane, in the pair's way to the target pads
         node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(5.0), mm(1.0)), diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaG".into()), locked: false, is_virtual: false }));
+        // and, out of the way, a GND pad with a row of small ones after it: `propagateDpHeadForces` pushes the cursor out of the big one
+        // (1.515 mm, the largest force of the loop, which every later step adds again) into each small one in turn, until its 40 steps
+        // run out still colliding -- so `routeHead` fails
+        let (ax, ay) = (mm(0.0), mm(-30.0));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(ax, ay), shape: Shape::Circle { c: p(ax, ay), r: mm(1.0) }, source: "U9.0".into(), edge: false }));
+        for k in 1..=45i64 {
+            let c = p(ax + mm(0.01) + Nm::new(1_515_000) * k + mm(0.3), ay);
+            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.05) }, source: format!("U9.{k}"), edge: false }));
+        }
         let (rules, settings) = (rules(), mode(Mode::Shove));
         let mut dp = placer(&node, start);
         assert!(dp.move_to(&rules, &settings, p(mm(10.0), Nm::ZERO)), "the via can be pushed");
@@ -1326,6 +1341,11 @@ mod tests {
         assert_eq!(pushed.len(), 1, "{pushed:?}");
         assert_eq!(pushed[0].source_via, "viaG");
         assert_ne!(pushed[0].pos, p(mm(5.0), mm(1.0)), "the via is pushed off the N line");
+        // round-2 R-6: the cursor on the big pad, where the head cannot be routed: `rhShoveOnly` returns before its shove, and what is shown
+        // is still the newest frame (`m_lastNode = latestNode->Branch()`), with the via pushed
+        assert!(!dp.move_to(&rules, &settings, p(ax + mm(0.01), ay)), "the head cannot be routed there");
+        let pv = dp.preview();
+        assert_eq!(pv.displaced_vias.iter().map(|v| (v.source_via.clone(), v.pos)).collect::<Vec<_>>(), vec![(pushed[0].source_via.clone(), pushed[0].pos)], "the pushed via stays pushed: {pv:?}");
         // the cursor draws back, so the head is nowhere near the via: the frame the first position pushed is still the one the leg's
         // shove starts from, and the via stays where that frame left it
         assert!(dp.move_to(&rules, &settings, p(mm(2.0), mm(-2.0))));
