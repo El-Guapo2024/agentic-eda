@@ -8,6 +8,7 @@ import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
 import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm } from "./types";
 import type { LengthUnit } from "../state/units";
+import type { PcbQueryRequest, PcbQueryResponse } from "../kicad-port/pcbQuery";
 import type { SchMovePatch } from "./schEditTypes";
 
 import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
@@ -777,6 +778,11 @@ export async function fetchSchFormatting(): Promise<SchFormattingReply> {
 export function inspectClearance(req: { a: string; b: string; aAt?: [Nm, Nm]; bAt?: [Nm, Nm]; activeLayer?: string; units: LengthUnit }): Promise<InspectReply> {
   const mm = (p?: [Nm, Nm]) => (p ? [p[0] / 1e6, p[1] / 1e6] : undefined);
   return postJson("/api/inspect/clearance", { a: req.a, b: req.b, a_at: mm(req.aAt), b_at: mm(req.bAt), active_layer: req.activeLayer, units: req.units });
+}
+
+/** `POST /api/pcb/query`: Find by Properties' Query tab, the expression run by the backend's language (`eda_drc::query`) on the items sent. */
+export function postPcbQuery(req: PcbQueryRequest): Promise<PcbQueryResponse> {
+  return postJson("/api/pcb/query", req);
 }
 
 /** `POST /api/inspect/constraints`: `InspectConstraints` for one item. */

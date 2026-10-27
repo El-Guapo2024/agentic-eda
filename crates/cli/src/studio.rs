@@ -1017,6 +1017,8 @@ fn handle(
         ("GET", "/api/net_inspector") => respond(stream, "200 OK", "application/json", crate::net_inspector_api::net_inspector(dir).to_string().as_bytes()),
         ("POST", "/api/inspect/clearance") => respond(stream, "200 OK", "application/json", inspect_api::clearance(dir, &body).to_string().as_bytes()),
         ("POST", "/api/inspect/constraints") => respond(stream, "200 OK", "application/json", inspect_api::constraints(dir, &body).to_string().as_bytes()),
+        // Find by Properties' Query tab: the expression language runs here, on the items the studio sends (`eda_drc::query`).
+        ("POST", "/api/pcb/query") => respond(stream, "200 OK", "application/json", eda_drc::query::handle(&body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/convert/polys") => respond(stream, "200 OK", "application/json", convert_api::polys(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/apply") => respond(stream, "200 OK", "application/json", cleanup_api::apply(dir, &body).to_string().as_bytes()),

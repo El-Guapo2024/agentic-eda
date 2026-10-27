@@ -1,3 +1,7 @@
+// INACTIVE (2026-10-28): replaced by the backend's expression language (`POST /api/pcb/query`, `crates/drc/src/query.rs` over `eda_drc::pcbexpr`
+// and `eda_drc::libeval`, the workspace's one copy); kept for a future build that evaluates in the browser. Nothing in the studio imports it: only its
+// own tests and the equivalence test (`pcbQuery.test.ts`, which holds this copy and the Rust one to the same golden answers) do.
+//
 // The board's expression language: what `A.Width > 0.25mm`, `A.Type == 'Via' && A.NetName == 'GND'` and `A.hasNetclass('HV')` mean on the studio's items. This is
 // `pcbnew/pcbexpr_evaluator.cpp` and `pcbexpr_functions.cpp` (8303b2ad) over `libeval.ts`: the property references (`PCBEXPR_VAR_REF`, its net, net class, type and
 // layer special cases), the values that compare as KiCad's do (a layer matches the layers a pattern names, a net class matches any class of a composite one), the units,

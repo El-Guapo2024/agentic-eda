@@ -2,7 +2,7 @@
 //! `COMPILER::lexDefault`, `grammar.lemon` at KiCad 8303b2ad). It turns the text of a `.kicad_dru` condition, or of a Find by Properties query, into a
 //! tree; what the tree means -- the items `A` and `B`, their properties, `A.hasNetclass('x')` -- is [`crate::pcbexpr`]'s.
 //!
-//! Ported as it is, quirks included (the studio's `kicad-port/libeval.ts` is the same port and is held to the same cases):
+//! Ported as it is, quirks included (the studio's `kicad-port/libeval.ts`, the same port, is INACTIVE since 2026-10-28: Find by Properties asks this one, [`crate::query`]):
 //!
 //! * only the space is white space: a tab or a new line is "Unrecognized character";
 //! * a unit (`mil` `mm` `in` `deg` `fs` `ps`) is looked for before an identifier, at every token start, and it is case sensitive;

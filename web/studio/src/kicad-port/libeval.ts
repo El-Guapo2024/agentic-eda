@@ -1,3 +1,7 @@
+// INACTIVE (2026-10-28): replaced by the backend's expression language (`POST /api/pcb/query`, `crates/drc/src/query.rs` over `eda_drc::pcbexpr`
+// and `eda_drc::libeval`, the workspace's one copy); kept for a future build that evaluates in the browser. Nothing in the studio imports it: only its
+// own tests and the equivalence test (`pcbQuery.test.ts`, which holds this copy and the Rust one to the same golden answers) do.
+//
 // KiCad's expression language -- `libeval_compiler` (common/libeval_compiler/libeval_compiler.cpp, include/libeval_compiler/libeval_compiler.h, grammar.lemon at
 // 8303b2ad): the lexer, the grammar with its precedences, the code generator that turns the tree into a list of operations (UCODE), and the machine that runs it
 // on a stack of VALUEs. It is what `DRC_RULE_CONDITION` ("A.NetClass == 'HV'") and Find by Properties' Query tab compile. What the language talks about -- the items

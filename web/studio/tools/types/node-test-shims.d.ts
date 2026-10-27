@@ -28,4 +28,8 @@ declare module "node:assert/strict" {
 // Reading a fixture file shared with the Rust tests (src/kicad/*.json): the unit-test build has no JSON module import.
 declare module "node:fs" {
   export function readFileSync(path: string, encoding: "utf8"): string;
+  export function writeFileSync(path: string, data: string): void;
 }
+
+// `process.env` (a test that rewrites its golden file when asked: pcbQuery.test.ts).
+declare const process: { env: Record<string, string | undefined> };

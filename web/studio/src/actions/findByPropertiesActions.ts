@@ -3,6 +3,7 @@
 // the matching and the query are kicad-port/findByProperties.ts; the dialog is components/FindByPropertiesDialog.tsx and its state state/findByProperties.ts.
 import type { Dispatch } from "react";
 import type { Action, StudioApi, StudioState } from "../state/store";
+import { postPcbQuery } from "../api/client";
 import { buildRows, checkQuery, generateExpression, matchedText, savedModes, selectMatchingFromQuery, selectMatchingFromRows, withRecentQuery, type MatchMode } from "../kicad-port/findByProperties";
 import { itemBounds, unionBounds } from "../kicad-port/pcbItems";
 import { zoomFitBox } from "../kicad-port/zoomFit";
@@ -83,15 +84,16 @@ export function selectMatching(api: StudioApi, dispatch: Dispatch<Action>): void
   }
   const expression = f.query.trim();
   if (expression === "") return;
-  const { check, ids } = selectMatchingFromQuery(expression, f.rows, board, state.units);
-  if (!ids) {
-    // `m_queryStatusLabel` and the `Expression Error` message box
-    const status = check.status === "B. expressions are not supported." ? check.status : "Syntax error in expression";
-    setFindByProperties({ queryStatus: status, errorBox: check.errors.map((e) => `${e}\n`).join("") || check.status });
-    return;
-  }
-  setFindByProperties({ recent: withRecentQuery(f.recent, expression), errorBox: null });
-  applyMatchResults(api, dispatch, ids, (status) => setFindByProperties({ queryStatus: status }));
+  void selectMatchingFromQuery(expression, f.rows, board, state.units, postPcbQuery).then(({ check, ids }) => {
+    if (!ids) {
+      // `m_queryStatusLabel` and the `Expression Error` message box
+      const status = check.status === "B. expressions are not supported." ? check.status : "Syntax error in expression";
+      setFindByProperties({ queryStatus: status, errorBox: check.errors.map((e) => `${e}\n`).join("") || check.status });
+      return;
+    }
+    setFindByProperties({ recent: withRecentQuery(getFindByProperties().recent, expression), errorBox: null });
+    applyMatchResults(api, dispatch, ids, (status) => setFindByProperties({ queryStatus: status }));
+  });
 }
 
 /** `onCheckSyntaxClick`. */
@@ -99,7 +101,7 @@ export function checkSyntax(api: StudioApi): void {
   const f = getFindByProperties();
   const state = api.getState();
   if (!state.board) return;
-  setFindByProperties({ queryStatus: checkQuery(f.query, f.rows, state.board, state.units).status });
+  void checkQuery(f.query, f.rows, state.board, state.units, postPcbQuery).then((check) => setFindByProperties({ queryStatus: check.status }));
 }
 
 /** `onCreateQueryClick`: the rows written as an expression, which goes to the Query tab; nothing when no row is active. */

@@ -1,8 +1,8 @@
 //! KiCad's PCB expression language: what `A.Width > 0.25mm`, `A.Type == 'Via' && A.NetName == 'GND'` and `A.hasNetclass('HV')` mean on a board's items. This is
 //! `pcbnew/pcbexpr_evaluator.cpp`, `pcbexpr_functions.cpp` and the back half of `libeval_compiler` (the code generator, the values and the stack machine) at KiCad
 //! 8303b2ad, over the lexer and grammar of [`crate::libeval`]. A `.kicad_dru` rule's `(condition "...")` and `(assertion "...")` are compiled with it, and
-//! `DRC_RULE_CONDITION::EvaluateFor` runs them on one or two items ([`crate::rule_item::RuleItem`]); the studio's Find by Properties is the same language over the
-//! Properties panel's registry (`kicad-port/pcbExpr.ts`, held to the same cases).
+//! `DRC_RULE_CONDITION::EvaluateFor` runs them on one or two items ([`crate::rule_item::RuleItem`]); the studio's Find by Properties runs its queries here too, on
+//! the items and properties of the Properties panel ([`crate::query`]; the TypeScript copy, `kicad-port/pcbExpr.ts`, is INACTIVE since 2026-10-28).
 //!
 //! Ported as it is, quirks included: `Compile` answers true when the text parses, whatever the code generator told (an unknown item, property or function is
 //! reported to the listener and still compiles; `DRC_ENGINE::compileRules` counts those as errors, Find by Properties does not); strings compare without case and a
@@ -147,6 +147,13 @@ pub struct Env {
     pub areas: Vec<Rc<AreaFacts>>,
     /// `GetEffectiveNetClass( net )`: its name (the constituents joined by a comma) and the constituents, the class with the highest priority first.
     pub classes: Box<dyn Fn(&str) -> (String, Vec<String>)>,
+    /// `true` and `false` are the numbers 1 and 0. Not KiCad: its compiler has neither name and calls them unrecognized items, while its Find by
+    /// Properties dialog writes `A.Locked == false` for a flag (`formatValueForExpression`). Only the studio's Find by Properties query turns it on
+    /// ([`crate::query`]); rule files keep KiCad's reading.
+    pub literal_booleans: bool,
+    /// The property names the language knows, lower-cased, when the items come with their own registry (the studio's Properties panel, for Find by
+    /// Properties); `None` is KiCad's list ([`crate::known_props`]).
+    pub property_names: Option<HashSet<String>>,
 }
 
 impl Env {
@@ -160,11 +167,13 @@ impl Env {
             footprints: Vec::new(),
             areas: Vec::new(),
             classes: Box::new(|_| ("Default".to_string(), vec!["Default".to_string()])),
+            literal_booleans: false,
+            property_names: None,
         }
     }
 
     pub fn new(layer_entries: Vec<(String, String)>, standard_names: HashMap<String, String>, classes: Box<dyn Fn(&str) -> (String, Vec<String>)>) -> Env {
-        Env { layer_entries, layer_cache: RefCell::new(HashMap::new()), standard_names, nets: HashSet::new(), footprints: Vec::new(), areas: Vec::new(), classes }
+        Env { layer_entries, layer_cache: RefCell::new(HashMap::new()), standard_names, nets: HashSet::new(), footprints: Vec::new(), areas: Vec::new(), classes, literal_booleans: false, property_names: None }
     }
 
     /// `m_LayerExpressionCache`: the layers a pattern names (`entry.GetText().Matches( layerName )` for each entry of the enum map).
@@ -481,6 +490,8 @@ enum RefKind {
     NetName,
     Type,
     Null,
+    /// `true` or `false` with [`Env::literal_booleans`].
+    Boolean(bool),
 }
 
 /// `PCBEXPR_VAR_REF` and its "object code" subclasses: `A.Width`, `B.Layer`, or just `A`. `index` is 0 for A (and AB), 1 for B and 2 for L, the layer.
@@ -509,6 +520,7 @@ impl VarRef {
     fn get_value(&self, ctx: &Ctx) -> Value {
         match self.kind {
             RefKind::Null => return Value::null(),
+            RefKind::Boolean(b) => return Value::number(if b { 1.0 } else { 0.0 }),
             RefKind::NetClass => {
                 return match self.object(ctx) {
                     Some(item) if item.is_connected() => Value::netclass(&item.net),
@@ -532,7 +544,7 @@ impl VarRef {
                 return match self.object(ctx) {
                     Some(item) => {
                         let over = ctx.type_overrides.iter().find(|(id, _)| *id == item.id).map(|(_, t)| *t);
-                        Value::string(over.unwrap_or_else(|| item.class.type_name()))
+                        Value::string(over.or(item.type_name.as_deref()).unwrap_or_else(|| item.class.type_name()))
                     }
                     None => Value::undefined(),
                 }
@@ -1171,10 +1183,14 @@ impl Compiled {
     }
 }
 
-/// `PCBEXPR_UCODE::CreateVarRef`.
-fn create_var_ref(variable: &str, field: &str) -> Option<VarRef> {
+/// `PCBEXPR_UCODE::CreateVarRef`, with the names and the booleans of `env` ([`Env::property_names`], [`Env::literal_booleans`]).
+fn create_var_ref(variable: &str, field: &str, env: &Env) -> Option<VarRef> {
+    let booleans = env.literal_booleans;
     if variable.eq_ignore_ascii_case("null") {
         return Some(VarRef { kind: RefKind::Null, index: 0, vtype: VarType::Null, field: String::new() });
+    }
+    if booleans && field.is_empty() && (variable == "true" || variable == "false") {
+        return Some(VarRef { kind: RefKind::Boolean(variable == "true"), index: 0, vtype: VarType::Numeric, field: String::new() });
     }
     let f = field.to_lowercase();
     let special = match f.as_str() {
@@ -1203,7 +1219,11 @@ fn create_var_ref(variable: &str, field: &str) -> Option<VarRef> {
         return Some(r);
     }
     let name = field.replace('_', " ");
-    r.vtype = if crate::known_props::is_known(&name) { VarType::Str } else { VarType::ParseError };
+    let known = match &env.property_names {
+        Some(names) => names.contains(&name.to_lowercase()),
+        None => crate::known_props::is_known(&name),
+    };
+    r.vtype = if known { VarType::Str } else { VarType::ParseError };
     r.field = name;
     Some(r)
 }
@@ -1290,7 +1310,7 @@ impl Gen<'_> {
             }
             Op::Identifier => {
                 let name = text_of(Some(node));
-                let vref = create_var_ref(&name, "");
+                let vref = create_var_ref(&name, "", self.env);
                 if vref.is_none() {
                     self.report(format!("Unrecognized item '{name}'"), node.src_pos.saturating_sub(name.chars().count()));
                 }
@@ -1321,7 +1341,7 @@ impl Gen<'_> {
         match member.op {
             Op::Identifier => {
                 let prop = text_of(Some(member));
-                let vref = create_var_ref(&item_name, &prop);
+                let vref = create_var_ref(&item_name, &prop, self.env);
                 match &vref {
                     None => self.report(format!("Unrecognized item '{item_name}'"), item.src_pos.saturating_sub(item_name.chars().count())),
                     Some(r) if r.vtype == VarType::ParseError => self.report(format!("Unrecognized property '{prop}'"), member.src_pos.saturating_sub(prop.chars().count())),
@@ -1330,7 +1350,7 @@ impl Gen<'_> {
                 self.ucode.ops.push(Uop::PushVar(vref.map(Rc::new)));
             }
             Op::FuncCall => {
-                let vref = create_var_ref(&item_name, "");
+                let vref = create_var_ref(&item_name, "", self.env);
                 if vref.is_none() {
                     self.report(format!("Unrecognized item '{item_name}'"), item.src_pos.saturating_sub(item_name.chars().count()));
                 }
@@ -1365,7 +1385,7 @@ impl Gen<'_> {
             }
             _ => {
                 let prop = text_of(Some(member));
-                if create_var_ref(&item_name, &prop).is_none() {
+                if create_var_ref(&item_name, &prop, self.env).is_none() {
                     self.report(format!("Unrecognized item '{item_name}'"), item.src_pos.saturating_sub(item_name.chars().count()));
                 }
                 self.report(format!("Unrecognized property '{prop}'"), item.src_pos + 1);

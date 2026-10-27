@@ -1,0 +1,5680 @@
+{
+ "note": "Written by web/studio/src/kicad-port/pcbQuery.test.ts (UPDATE_PCB_QUERY_GOLDEN=1); read by crates/drc/tests/pcb_query_golden.rs.",
+ "request": {
+  "expression": "",
+  "items": [
+   {
+    "id": "trk_a",
+    "class": "PCB_TRACK",
+    "type_name": "Track",
+    "layers": [
+     "F.Cu"
+    ],
+    "net": "GND",
+    "props": [
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 200000
+     },
+     {
+      "name": "Start X",
+      "kind": "int",
+      "value": 10000000
+     },
+     {
+      "name": "Start Y",
+      "kind": "int",
+      "value": 40000000
+     },
+     {
+      "name": "End X",
+      "kind": "int",
+      "value": 20000000
+     },
+     {
+      "name": "End Y",
+      "kind": "int",
+      "value": 50000000
+     },
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "GND"
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Track"
+     }
+    ],
+    "footprint": null,
+    "groups": [
+     "block"
+    ],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "trk_b",
+    "class": "PCB_TRACK",
+    "type_name": "Track",
+    "layers": [
+     "F.Cu"
+    ],
+    "net": "VCC",
+    "props": [
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 300000
+     },
+     {
+      "name": "Start X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Start Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "End X",
+      "kind": "int",
+      "value": 5000000
+     },
+     {
+      "name": "End Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "HV,Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "VCC"
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Track"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "trk_c",
+    "class": "PCB_TRACK",
+    "type_name": "Track",
+    "layers": [
+     "B.Cu"
+    ],
+    "net": "GND",
+    "props": [
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 250000
+     },
+     {
+      "name": "Start X",
+      "kind": "int",
+      "value": 10000000
+     },
+     {
+      "name": "Start Y",
+      "kind": "int",
+      "value": 10000000
+     },
+     {
+      "name": "End X",
+      "kind": "int",
+      "value": 20000000
+     },
+     {
+      "name": "End Y",
+      "kind": "int",
+      "value": 10000000
+     },
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "B.Cu"
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "GND"
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Track"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "trk_p",
+    "class": "PCB_TRACK",
+    "type_name": "Track",
+    "layers": [
+     "F.Cu"
+    ],
+    "net": "USB_P",
+    "props": [
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Start X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Start Y",
+      "kind": "int",
+      "value": 60000000
+     },
+     {
+      "name": "End X",
+      "kind": "int",
+      "value": 10000000
+     },
+     {
+      "name": "End Y",
+      "kind": "int",
+      "value": 60000000
+     },
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Fast"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "USB_P"
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Track"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "trk_n",
+    "class": "PCB_TRACK",
+    "type_name": "Track",
+    "layers": [
+     "F.Cu"
+    ],
+    "net": "USB_N",
+    "props": [
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Start X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Start Y",
+      "kind": "int",
+      "value": 60300000
+     },
+     {
+      "name": "End X",
+      "kind": "int",
+      "value": 10000000
+     },
+     {
+      "name": "End Y",
+      "kind": "int",
+      "value": 60300000
+     },
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Fast"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "USB_N"
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Track"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "trk_arc",
+    "class": "PCB_ARC",
+    "type_name": "Track",
+    "layers": [
+     "B.Cu"
+    ],
+    "net": "GND",
+    "props": [
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 200000
+     },
+     {
+      "name": "Start X",
+      "kind": "int",
+      "value": 10000000
+     },
+     {
+      "name": "Start Y",
+      "kind": "int",
+      "value": 10000000
+     },
+     {
+      "name": "End X",
+      "kind": "int",
+      "value": 20000000
+     },
+     {
+      "name": "End Y",
+      "kind": "int",
+      "value": 10000000
+     },
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "B.Cu"
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "GND"
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Track"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "via_a",
+    "class": "PCB_VIA",
+    "type_name": "Via",
+    "layers": [
+     "F.Cu",
+     "In1.Cu",
+     "In2.Cu",
+     "B.Cu"
+    ],
+    "net": "GND",
+    "props": [
+     {
+      "name": "Diameter",
+      "kind": "int",
+      "value": 600000
+     },
+     {
+      "name": "Hole",
+      "kind": "int",
+      "value": 300000
+     },
+     {
+      "name": "Layer Top",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Layer Bottom",
+      "kind": "layer",
+      "value": "B.Cu"
+     },
+     {
+      "name": "Via Type",
+      "kind": "str",
+      "value": "Through"
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "GND"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 20000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 50000000
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Via"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": "Through"
+   },
+   {
+    "id": "via_b",
+    "class": "PCB_VIA",
+    "type_name": "Via",
+    "layers": [
+     "F.Cu",
+     "In1.Cu"
+    ],
+    "net": "VCC",
+    "props": [
+     {
+      "name": "Diameter",
+      "kind": "int",
+      "value": 800000
+     },
+     {
+      "name": "Hole",
+      "kind": "int",
+      "value": 400000
+     },
+     {
+      "name": "Layer Top",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Layer Bottom",
+      "kind": "layer",
+      "value": "In1.Cu"
+     },
+     {
+      "name": "Via Type",
+      "kind": "str",
+      "value": "Blind"
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "HV,Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "VCC"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 22000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 50000000
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Via"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": "Blind"
+   },
+   {
+    "id": "via_c",
+    "class": "PCB_VIA",
+    "type_name": "Via",
+    "layers": [
+     "In1.Cu",
+     "In2.Cu"
+    ],
+    "net": "VCC",
+    "props": [
+     {
+      "name": "Diameter",
+      "kind": "int",
+      "value": 800000
+     },
+     {
+      "name": "Hole",
+      "kind": "int",
+      "value": 400000
+     },
+     {
+      "name": "Layer Top",
+      "kind": "layer",
+      "value": "In1.Cu"
+     },
+     {
+      "name": "Layer Bottom",
+      "kind": "layer",
+      "value": "In2.Cu"
+     },
+     {
+      "name": "Via Type",
+      "kind": "str",
+      "value": "Buried"
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "HV,Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "VCC"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 24000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 50000000
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Via"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": "Buried"
+   },
+   {
+    "id": "U1",
+    "class": "FOOTPRINT",
+    "type_name": "Footprint",
+    "layers": [
+     "F.Cu"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": -90
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "U1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "MCU"
+     },
+     {
+      "name": "MPN",
+      "kind": "str",
+      "value": "STM32"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "Package_QFP:LQFP-48"
+     },
+     {
+      "name": "Block",
+      "kind": "str",
+      "value": "core"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND, VCC, USB_P"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 30000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 20000000
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Footprint"
+     }
+    ],
+    "footprint": {
+     "reference": "U1",
+     "fpid": "Package_QFP:LQFP-48",
+     "fields": [
+      [
+       "Reference",
+       "U1"
+      ],
+      [
+       "Value",
+       "MCU"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [
+     "block"
+    ],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "U1.1",
+    "class": "PAD",
+    "type_name": "Pad",
+    "layers": [
+     "F.Cu",
+     "F.Paste",
+     "F.Mask"
+    ],
+    "net": "GND",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": -90
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "U1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "MCU"
+     },
+     {
+      "name": "MPN",
+      "kind": "str",
+      "value": "STM32"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "Package_QFP:LQFP-48"
+     },
+     {
+      "name": "Block",
+      "kind": "str",
+      "value": "core"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND, VCC, USB_P"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 29000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 19000000
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Pad"
+     },
+     {
+      "name": "Pad Type",
+      "kind": "enum",
+      "value": "SMD"
+     },
+     {
+      "name": "Pad Shape",
+      "kind": "enum",
+      "value": "Rectangle"
+     },
+     {
+      "name": "Pad Number",
+      "kind": "str",
+      "value": "1"
+     },
+     {
+      "name": "Size X",
+      "kind": "int",
+      "value": 600000
+     },
+     {
+      "name": "Size Y",
+      "kind": "int",
+      "value": 600000
+     },
+     {
+      "name": "Hole Shape",
+      "kind": "enum",
+      "value": "Round"
+     },
+     {
+      "name": "Hole Size X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "GND"
+     }
+    ],
+    "footprint": {
+     "reference": "U1",
+     "fpid": "Package_QFP:LQFP-48",
+     "fields": [
+      [
+       "Reference",
+       "U1"
+      ],
+      [
+       "Value",
+       "MCU"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [
+     "block"
+    ],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "U1.2",
+    "class": "PAD",
+    "type_name": "Pad",
+    "layers": [
+     "F.Cu",
+     "In1.Cu",
+     "In2.Cu",
+     "B.Cu",
+     "F.Mask",
+     "B.Mask"
+    ],
+    "net": "VCC",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": -90
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "U1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "MCU"
+     },
+     {
+      "name": "MPN",
+      "kind": "str",
+      "value": "STM32"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "Package_QFP:LQFP-48"
+     },
+     {
+      "name": "Block",
+      "kind": "str",
+      "value": "core"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND, VCC, USB_P"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 31000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 19000000
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Pad"
+     },
+     {
+      "name": "Pad Type",
+      "kind": "enum",
+      "value": "Through-hole"
+     },
+     {
+      "name": "Pad Shape",
+      "kind": "enum",
+      "value": "Circle"
+     },
+     {
+      "name": "Pad Number",
+      "kind": "str",
+      "value": "2"
+     },
+     {
+      "name": "Size X",
+      "kind": "int",
+      "value": 800000
+     },
+     {
+      "name": "Hole Shape",
+      "kind": "enum",
+      "value": "Round"
+     },
+     {
+      "name": "Hole Size X",
+      "kind": "int",
+      "value": 400000
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "HV,Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "VCC"
+     }
+    ],
+    "footprint": {
+     "reference": "U1",
+     "fpid": "Package_QFP:LQFP-48",
+     "fields": [
+      [
+       "Reference",
+       "U1"
+      ],
+      [
+       "Value",
+       "MCU"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [
+     "block"
+    ],
+    "plated": true,
+    "via_type": null
+   },
+   {
+    "id": "U1.3",
+    "class": "PAD",
+    "type_name": "Pad",
+    "layers": [
+     "F.Cu",
+     "F.Paste",
+     "F.Mask"
+    ],
+    "net": "VCC",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": -90
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "U1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "MCU"
+     },
+     {
+      "name": "MPN",
+      "kind": "str",
+      "value": "STM32"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "Package_QFP:LQFP-48"
+     },
+     {
+      "name": "Block",
+      "kind": "str",
+      "value": "core"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND, VCC, USB_P"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 31000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 21000000
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Pad"
+     },
+     {
+      "name": "Pad Type",
+      "kind": "enum",
+      "value": "SMD"
+     },
+     {
+      "name": "Pad Shape",
+      "kind": "enum",
+      "value": "Oval"
+     },
+     {
+      "name": "Pad Number",
+      "kind": "str",
+      "value": "3"
+     },
+     {
+      "name": "Size X",
+      "kind": "int",
+      "value": 800000
+     },
+     {
+      "name": "Size Y",
+      "kind": "int",
+      "value": 400000
+     },
+     {
+      "name": "Hole Shape",
+      "kind": "enum",
+      "value": "Round"
+     },
+     {
+      "name": "Hole Size X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "HV,Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "VCC"
+     }
+    ],
+    "footprint": {
+     "reference": "U1",
+     "fpid": "Package_QFP:LQFP-48",
+     "fields": [
+      [
+       "Reference",
+       "U1"
+      ],
+      [
+       "Value",
+       "MCU"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [
+     "block"
+    ],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "U1.4",
+    "class": "PAD",
+    "type_name": "Pad",
+    "layers": [
+     "F.Cu",
+     "F.Paste",
+     "F.Mask"
+    ],
+    "net": "USB_P",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": -90
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "U1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "MCU"
+     },
+     {
+      "name": "MPN",
+      "kind": "str",
+      "value": "STM32"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "Package_QFP:LQFP-48"
+     },
+     {
+      "name": "Block",
+      "kind": "str",
+      "value": "core"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND, VCC, USB_P"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 29000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 21000000
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Pad"
+     },
+     {
+      "name": "Pad Type",
+      "kind": "enum",
+      "value": "SMD"
+     },
+     {
+      "name": "Pad Shape",
+      "kind": "enum",
+      "value": "Rectangle"
+     },
+     {
+      "name": "Pad Number",
+      "kind": "str",
+      "value": "4"
+     },
+     {
+      "name": "Size X",
+      "kind": "int",
+      "value": 500000
+     },
+     {
+      "name": "Size Y",
+      "kind": "int",
+      "value": 500000
+     },
+     {
+      "name": "Hole Shape",
+      "kind": "enum",
+      "value": "Round"
+     },
+     {
+      "name": "Hole Size X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Fast"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "USB_P"
+     }
+    ],
+    "footprint": {
+     "reference": "U1",
+     "fpid": "Package_QFP:LQFP-48",
+     "fields": [
+      [
+       "Reference",
+       "U1"
+      ],
+      [
+       "Value",
+       "MCU"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [
+     "block"
+    ],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "U1:Reference",
+    "class": "PCB_FIELD",
+    "type_name": "Text",
+    "layers": [
+     "F.SilkS"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.SilkS"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "U1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "MCU"
+     },
+     {
+      "name": "MPN",
+      "kind": "str",
+      "value": "STM32"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "Package_QFP:LQFP-48"
+     },
+     {
+      "name": "Block",
+      "kind": "str",
+      "value": "core"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND, VCC, USB_P"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Text"
+     },
+     {
+      "name": "Text",
+      "kind": "str",
+      "value": "U1"
+     },
+     {
+      "name": "Thickness",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Italic",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Bold",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Mirrored",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Visible",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Height",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Horizontal Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Vertical Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Knockout",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Keep Upright",
+      "kind": "bool",
+      "value": false
+     }
+    ],
+    "footprint": {
+     "reference": "U1",
+     "fpid": "Package_QFP:LQFP-48",
+     "fields": [
+      [
+       "Reference",
+       "U1"
+      ],
+      [
+       "Value",
+       "MCU"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [
+     "block"
+    ],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "U1:Value",
+    "class": "PCB_FIELD",
+    "type_name": "Text",
+    "layers": [
+     "F.SilkS"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.SilkS"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "U1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "MCU"
+     },
+     {
+      "name": "MPN",
+      "kind": "str",
+      "value": "STM32"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "Package_QFP:LQFP-48"
+     },
+     {
+      "name": "Block",
+      "kind": "str",
+      "value": "core"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND, VCC, USB_P"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Text"
+     },
+     {
+      "name": "Text",
+      "kind": "str",
+      "value": "MCU"
+     },
+     {
+      "name": "Thickness",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Italic",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Bold",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Mirrored",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Visible",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Height",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Horizontal Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Vertical Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Knockout",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Keep Upright",
+      "kind": "bool",
+      "value": false
+     }
+    ],
+    "footprint": {
+     "reference": "U1",
+     "fpid": "Package_QFP:LQFP-48",
+     "fields": [
+      [
+       "Reference",
+       "U1"
+      ],
+      [
+       "Value",
+       "MCU"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [
+     "block"
+    ],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "U1:Supplier",
+    "class": "PCB_FIELD",
+    "type_name": "Text",
+    "layers": [
+     "F.SilkS"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.SilkS"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "U1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "MCU"
+     },
+     {
+      "name": "MPN",
+      "kind": "str",
+      "value": "STM32"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "Package_QFP:LQFP-48"
+     },
+     {
+      "name": "Block",
+      "kind": "str",
+      "value": "core"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND, VCC, USB_P"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Text"
+     },
+     {
+      "name": "Text",
+      "kind": "str",
+      "value": "ACME"
+     },
+     {
+      "name": "Thickness",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Italic",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Bold",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Mirrored",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Visible",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Height",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Horizontal Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Vertical Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Knockout",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Keep Upright",
+      "kind": "bool",
+      "value": false
+     }
+    ],
+    "footprint": {
+     "reference": "U1",
+     "fpid": "Package_QFP:LQFP-48",
+     "fields": [
+      [
+       "Reference",
+       "U1"
+      ],
+      [
+       "Value",
+       "MCU"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [
+     "block"
+    ],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "R1",
+    "class": "FOOTPRINT",
+    "type_name": "Footprint",
+    "layers": [
+     "B.Cu"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "B.Cu"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "R1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "10k"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "R_0603"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 60000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 20000000
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Footprint"
+     }
+    ],
+    "footprint": {
+     "reference": "R1",
+     "fpid": "R_0603",
+     "fields": [
+      [
+       "Reference",
+       "R1"
+      ],
+      [
+       "Value",
+       "10k"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "R1.1",
+    "class": "PAD",
+    "type_name": "Pad",
+    "layers": [
+     "B.Cu",
+     "B.Paste",
+     "B.Mask"
+    ],
+    "net": "GND",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "B.Cu"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "R1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "10k"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "R_0603"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 59000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 20000000
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Pad"
+     },
+     {
+      "name": "Pad Type",
+      "kind": "enum",
+      "value": "SMD"
+     },
+     {
+      "name": "Pad Shape",
+      "kind": "enum",
+      "value": "Rectangle"
+     },
+     {
+      "name": "Pad Number",
+      "kind": "str",
+      "value": "1"
+     },
+     {
+      "name": "Size X",
+      "kind": "int",
+      "value": 600000
+     },
+     {
+      "name": "Size Y",
+      "kind": "int",
+      "value": 600000
+     },
+     {
+      "name": "Hole Shape",
+      "kind": "enum",
+      "value": "Round"
+     },
+     {
+      "name": "Hole Size X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "GND"
+     }
+    ],
+    "footprint": {
+     "reference": "R1",
+     "fpid": "R_0603",
+     "fields": [
+      [
+       "Reference",
+       "R1"
+      ],
+      [
+       "Value",
+       "10k"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "R1:Reference",
+    "class": "PCB_FIELD",
+    "type_name": "Text",
+    "layers": [
+     "F.SilkS"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.SilkS"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "R1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "10k"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "R_0603"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Text"
+     },
+     {
+      "name": "Text",
+      "kind": "str",
+      "value": "R1"
+     },
+     {
+      "name": "Thickness",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Italic",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Bold",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Mirrored",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Visible",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Height",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Horizontal Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Vertical Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Knockout",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Keep Upright",
+      "kind": "bool",
+      "value": false
+     }
+    ],
+    "footprint": {
+     "reference": "R1",
+     "fpid": "R_0603",
+     "fields": [
+      [
+       "Reference",
+       "R1"
+      ],
+      [
+       "Value",
+       "10k"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "R1:Value",
+    "class": "PCB_FIELD",
+    "type_name": "Text",
+    "layers": [
+     "F.SilkS"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.SilkS"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "R1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "10k"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "R_0603"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Text"
+     },
+     {
+      "name": "Text",
+      "kind": "str",
+      "value": "10k"
+     },
+     {
+      "name": "Thickness",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Italic",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Bold",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Mirrored",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Visible",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Height",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Horizontal Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Vertical Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Knockout",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Keep Upright",
+      "kind": "bool",
+      "value": false
+     }
+    ],
+    "footprint": {
+     "reference": "R1",
+     "fpid": "R_0603",
+     "fields": [
+      [
+       "Reference",
+       "R1"
+      ],
+      [
+       "Value",
+       "10k"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "R1:Supplier",
+    "class": "PCB_FIELD",
+    "type_name": "Text",
+    "layers": [
+     "F.SilkS"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.SilkS"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "R1"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "10k"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "R_0603"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "GND"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Text"
+     },
+     {
+      "name": "Text",
+      "kind": "str",
+      "value": "ACME"
+     },
+     {
+      "name": "Thickness",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Italic",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Bold",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Mirrored",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Visible",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Height",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Horizontal Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Vertical Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Knockout",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Keep Upright",
+      "kind": "bool",
+      "value": false
+     }
+    ],
+    "footprint": {
+     "reference": "R1",
+     "fpid": "R_0603",
+     "fields": [
+      [
+       "Reference",
+       "R1"
+      ],
+      [
+       "Value",
+       "10k"
+      ],
+      [
+       "Supplier",
+       "ACME"
+      ]
+     ]
+    },
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "R2",
+    "class": "FOOTPRINT",
+    "type_name": "Footprint",
+    "layers": [
+     "F.Cu"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "R2"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "10k"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "R_0603"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "HV1"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 70000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 20000000
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Footprint"
+     }
+    ],
+    "footprint": {
+     "reference": "R2",
+     "fpid": "R_0603",
+     "fields": [
+      [
+       "Reference",
+       "R2"
+      ],
+      [
+       "Value",
+       "10k"
+      ],
+      [
+       "Supplier",
+       "Other"
+      ]
+     ]
+    },
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "R2.1",
+    "class": "PAD",
+    "type_name": "Pad",
+    "layers": [
+     "F.Cu",
+     "F.Paste",
+     "F.Mask"
+    ],
+    "net": "HV1",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "R2"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "10k"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "R_0603"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "HV1"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 69000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 20000000
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Pad"
+     },
+     {
+      "name": "Pad Type",
+      "kind": "enum",
+      "value": "SMD"
+     },
+     {
+      "name": "Pad Shape",
+      "kind": "enum",
+      "value": "Rectangle"
+     },
+     {
+      "name": "Pad Number",
+      "kind": "str",
+      "value": "1"
+     },
+     {
+      "name": "Size X",
+      "kind": "int",
+      "value": 600000
+     },
+     {
+      "name": "Size Y",
+      "kind": "int",
+      "value": 600000
+     },
+     {
+      "name": "Hole Shape",
+      "kind": "enum",
+      "value": "Round"
+     },
+     {
+      "name": "Hole Size X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "HV,Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "HV1"
+     }
+    ],
+    "footprint": {
+     "reference": "R2",
+     "fpid": "R_0603",
+     "fields": [
+      [
+       "Reference",
+       "R2"
+      ],
+      [
+       "Value",
+       "10k"
+      ],
+      [
+       "Supplier",
+       "Other"
+      ]
+     ]
+    },
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "R2:Reference",
+    "class": "PCB_FIELD",
+    "type_name": "Text",
+    "layers": [
+     "F.SilkS"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.SilkS"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "R2"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "10k"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "R_0603"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "HV1"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Text"
+     },
+     {
+      "name": "Text",
+      "kind": "str",
+      "value": "R2"
+     },
+     {
+      "name": "Thickness",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Italic",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Bold",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Mirrored",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Visible",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Height",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Horizontal Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Vertical Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Knockout",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Keep Upright",
+      "kind": "bool",
+      "value": false
+     }
+    ],
+    "footprint": {
+     "reference": "R2",
+     "fpid": "R_0603",
+     "fields": [
+      [
+       "Reference",
+       "R2"
+      ],
+      [
+       "Value",
+       "10k"
+      ],
+      [
+       "Supplier",
+       "Other"
+      ]
+     ]
+    },
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "R2:Value",
+    "class": "PCB_FIELD",
+    "type_name": "Text",
+    "layers": [
+     "F.SilkS"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.SilkS"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "R2"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "10k"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "R_0603"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "HV1"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Text"
+     },
+     {
+      "name": "Text",
+      "kind": "str",
+      "value": "10k"
+     },
+     {
+      "name": "Thickness",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Italic",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Bold",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Mirrored",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Visible",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Height",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Horizontal Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Vertical Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Knockout",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Keep Upright",
+      "kind": "bool",
+      "value": false
+     }
+    ],
+    "footprint": {
+     "reference": "R2",
+     "fpid": "R_0603",
+     "fields": [
+      [
+       "Reference",
+       "R2"
+      ],
+      [
+       "Value",
+       "10k"
+      ],
+      [
+       "Supplier",
+       "Other"
+      ]
+     ]
+    },
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "R2:Supplier",
+    "class": "PCB_FIELD",
+    "type_name": "Text",
+    "layers": [
+     "F.SilkS"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.SilkS"
+     },
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Reference",
+      "kind": "str",
+      "value": "R2"
+     },
+     {
+      "name": "Value",
+      "kind": "str",
+      "value": "10k"
+     },
+     {
+      "name": "Library Link",
+      "kind": "str",
+      "value": "R_0603"
+     },
+     {
+      "name": "Nets",
+      "kind": "str",
+      "value": "HV1"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Text"
+     },
+     {
+      "name": "Text",
+      "kind": "str",
+      "value": "Other"
+     },
+     {
+      "name": "Thickness",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Italic",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Bold",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Mirrored",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Visible",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Height",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Horizontal Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Vertical Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Knockout",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Keep Upright",
+      "kind": "bool",
+      "value": false
+     }
+    ],
+    "footprint": {
+     "reference": "R2",
+     "fpid": "R_0603",
+     "fields": [
+      [
+       "Reference",
+       "R2"
+      ],
+      [
+       "Value",
+       "10k"
+      ],
+      [
+       "Supplier",
+       "Other"
+      ]
+     ]
+    },
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "shp_seg",
+    "class": "PCB_SHAPE",
+    "type_name": "Graphic",
+    "layers": [
+     "F.SilkS"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.SilkS"
+     },
+     {
+      "name": "Shape",
+      "kind": "str",
+      "value": "Segment"
+     },
+     {
+      "name": "Start X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Start Y",
+      "kind": "int",
+      "value": 80000000
+     },
+     {
+      "name": "End X",
+      "kind": "int",
+      "value": 10000000
+     },
+     {
+      "name": "End Y",
+      "kind": "int",
+      "value": 80000000
+     },
+     {
+      "name": "Line Width",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Start Shape",
+      "kind": "enum",
+      "value": "None"
+     },
+     {
+      "name": "Start Length",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Start Width",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Start Stroke Width",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "End Shape",
+      "kind": "enum",
+      "value": "None"
+     },
+     {
+      "name": "End Length",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "End Width",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "End Stroke Width",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Default"
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Graphic"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "shp_rect",
+    "class": "PCB_SHAPE",
+    "type_name": "Graphic",
+    "layers": [
+     "F.Fab"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Fab"
+     },
+     {
+      "name": "Shape",
+      "kind": "str",
+      "value": "Rectangle"
+     },
+     {
+      "name": "Start X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Start Y",
+      "kind": "int",
+      "value": 90000000
+     },
+     {
+      "name": "End X",
+      "kind": "int",
+      "value": 10000000
+     },
+     {
+      "name": "End Y",
+      "kind": "int",
+      "value": 95000000
+     },
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 10000000
+     },
+     {
+      "name": "Height",
+      "kind": "int",
+      "value": 5000000
+     },
+     {
+      "name": "Line Width",
+      "kind": "int",
+      "value": 100000
+     },
+     {
+      "name": "Fill",
+      "kind": "enum",
+      "value": "None"
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Default"
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Graphic"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "txt_a",
+    "class": "PCB_TEXT",
+    "type_name": "Text",
+    "layers": [
+     "F.SilkS"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Orientation",
+      "kind": "double",
+      "value": 90
+     },
+     {
+      "name": "Text",
+      "kind": "str",
+      "value": "hello"
+     },
+     {
+      "name": "Thickness",
+      "kind": "int",
+      "value": 150000
+     },
+     {
+      "name": "Mirrored",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Width",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Height",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Horizontal Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 70000000
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 80000000
+     },
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.SilkS"
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Text"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "zone_a",
+    "class": "ZONE",
+    "type_name": "Zone",
+    "layers": [
+     "F.Cu"
+    ],
+    "net": "GND",
+    "props": [
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Priority",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Name",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Fill Mode",
+      "kind": "enum",
+      "value": "Solid fill"
+     },
+     {
+      "name": "Hatch Orientation",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Hatch Width",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Hatch Gap",
+      "kind": "int",
+      "value": 1500000
+     },
+     {
+      "name": "Hatch Minimum Hole Ratio",
+      "kind": "double",
+      "value": 0.15
+     },
+     {
+      "name": "Smoothing Effort",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Smoothing Amount",
+      "kind": "double",
+      "value": 0.1
+     },
+     {
+      "name": "Remove Islands",
+      "kind": "enum",
+      "value": "Always"
+     },
+     {
+      "name": "Minimum Island Area",
+      "kind": "int",
+      "value": 10000000000000
+     },
+     {
+      "name": "Clearance",
+      "kind": "int",
+      "value": 500000
+     },
+     {
+      "name": "Minimum Width",
+      "kind": "int",
+      "value": 250000
+     },
+     {
+      "name": "Pad Connections",
+      "kind": "enum",
+      "value": "Thermal reliefs"
+     },
+     {
+      "name": "Thermal Relief Gap",
+      "kind": "int",
+      "value": 500000
+     },
+     {
+      "name": "Thermal Relief Spoke Width",
+      "kind": "int",
+      "value": 500000
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Default"
+     },
+     {
+      "name": "Net",
+      "kind": "net",
+      "value": "GND"
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Zone"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   },
+   {
+    "id": "zone_ra",
+    "class": "ZONE",
+    "type_name": "Zone",
+    "layers": [
+     "F.Cu"
+    ],
+    "net": "",
+    "props": [
+     {
+      "name": "Position X",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Position Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Layer",
+      "kind": "layer",
+      "value": "F.Cu"
+     },
+     {
+      "name": "Name",
+      "kind": "str",
+      "value": "keepout"
+     },
+     {
+      "name": "Keep Out Tracks",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Keep Out Vias",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Keep Out Pads",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Keep Out Zone Fills",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Keep Out Footprints",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Enable",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Source Type",
+      "kind": "enum",
+      "value": "Sheet Name"
+     },
+     {
+      "name": "Source Name",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Net Class",
+      "kind": "str",
+      "value": "Default"
+     },
+     {
+      "name": "Locked",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Type",
+      "kind": "enum",
+      "value": "Zone"
+     }
+    ],
+    "footprint": null,
+    "groups": [],
+    "plated": false,
+    "via_type": null
+   }
+  ],
+  "env": {
+   "layer_entries": [
+    [
+     "F.Cu",
+     "F.Cu"
+    ],
+    [
+     "In1.Cu",
+     "In1.Cu"
+    ],
+    [
+     "In2.Cu",
+     "In2.Cu"
+    ],
+    [
+     "B.Cu",
+     "B.Cu"
+    ],
+    [
+     "F.Adhes",
+     "F.Adhes"
+    ],
+    [
+     "F.Adhesive",
+     "F.Adhes"
+    ],
+    [
+     "B.Adhes",
+     "B.Adhes"
+    ],
+    [
+     "B.Adhesive",
+     "B.Adhes"
+    ],
+    [
+     "F.Paste",
+     "F.Paste"
+    ],
+    [
+     "B.Paste",
+     "B.Paste"
+    ],
+    [
+     "F.SilkS",
+     "F.SilkS"
+    ],
+    [
+     "F.Silkscreen",
+     "F.SilkS"
+    ],
+    [
+     "B.SilkS",
+     "B.SilkS"
+    ],
+    [
+     "B.Silkscreen",
+     "B.SilkS"
+    ],
+    [
+     "F.Mask",
+     "F.Mask"
+    ],
+    [
+     "B.Mask",
+     "B.Mask"
+    ],
+    [
+     "Dwgs.User",
+     "Dwgs.User"
+    ],
+    [
+     "User.Drawings",
+     "Dwgs.User"
+    ],
+    [
+     "Cmts.User",
+     "Cmts.User"
+    ],
+    [
+     "User.Comments",
+     "Cmts.User"
+    ],
+    [
+     "Eco1.User",
+     "Eco1.User"
+    ],
+    [
+     "User.Eco1",
+     "Eco1.User"
+    ],
+    [
+     "Eco2.User",
+     "Eco2.User"
+    ],
+    [
+     "User.Eco2",
+     "Eco2.User"
+    ],
+    [
+     "Edge.Cuts",
+     "Edge.Cuts"
+    ],
+    [
+     "Margin",
+     "Margin"
+    ],
+    [
+     "F.CrtYd",
+     "F.CrtYd"
+    ],
+    [
+     "F.Courtyard",
+     "F.CrtYd"
+    ],
+    [
+     "B.CrtYd",
+     "B.CrtYd"
+    ],
+    [
+     "B.Courtyard",
+     "B.CrtYd"
+    ],
+    [
+     "F.Fab",
+     "F.Fab"
+    ],
+    [
+     "B.Fab",
+     "B.Fab"
+    ]
+   ],
+   "standard_names": {
+    "F.Adhes": "F.Adhesive",
+    "B.Adhes": "B.Adhesive",
+    "F.SilkS": "F.Silkscreen",
+    "B.SilkS": "B.Silkscreen",
+    "Dwgs.User": "User.Drawings",
+    "Cmts.User": "User.Comments",
+    "Eco1.User": "User.Eco1",
+    "Eco2.User": "User.Eco2",
+    "F.CrtYd": "F.Courtyard",
+    "B.CrtYd": "B.Courtyard"
+   },
+   "nets": [
+    "GND",
+    "HV1",
+    "USB_N",
+    "USB_P",
+    "VCC"
+   ],
+   "classes": {
+    "GND": [
+     "Default",
+     [
+      "Default"
+     ]
+    ],
+    "HV1": [
+     "HV,Default",
+     [
+      "HV",
+      "Default"
+     ]
+    ],
+    "USB_N": [
+     "Fast",
+     [
+      "Fast"
+     ]
+    ],
+    "USB_P": [
+     "Fast",
+     [
+      "Fast"
+     ]
+    ],
+    "VCC": [
+     "HV,Default",
+     [
+      "HV",
+      "Default"
+     ]
+    ]
+   },
+   "properties": [
+    "Affects Cursor Snap",
+    "Affects Placement",
+    "Affects Routing",
+    "Angle",
+    "Arrow Direction",
+    "Associated Layer",
+    "Auto Thickness",
+    "Barcode Type",
+    "Block",
+    "Bold",
+    "Border",
+    "Border Color",
+    "Border Style",
+    "Border Width",
+    "Cell Separators",
+    "Center X",
+    "Center Y",
+    "Clearance",
+    "Column Width",
+    "Component Type",
+    "Corner Radius Ratio",
+    "Corner Radius Size",
+    "Crossbar Height",
+    "Decimal Places",
+    "Diameter",
+    "Do not Populate",
+    "Drill",
+    "Enable",
+    "End Length",
+    "End Shape",
+    "End Stroke Width",
+    "End Width",
+    "End X",
+    "End Y",
+    "Error Correction",
+    "Exclude From Bill of Materials",
+    "Exclude From Position Files",
+    "Exempt From Courtyard Requirement",
+    "Extension Line Overshoot",
+    "Extent X",
+    "Extent Y",
+    "External Border",
+    "Fill",
+    "Fill Mode",
+    "Font",
+    "Grid Type",
+    "Guarded Net",
+    "Guide Cross",
+    "Hatch Gap",
+    "Hatch Minimum Hole Ratio",
+    "Hatch Orientation",
+    "Hatch Width",
+    "Header Border",
+    "Height",
+    "Hole",
+    "Hole Shape",
+    "Hole Size X",
+    "Hole Size Y",
+    "Hole Span",
+    "Horizontal Justification",
+    "Italic",
+    "Keep Aligned with Dimension",
+    "Keep Out Footprints",
+    "Keep Out Pads",
+    "Keep Out Tracks",
+    "Keep Out Vias",
+    "Keep Out Zone Fills",
+    "Keep Upright",
+    "Knockout",
+    "Layer",
+    "Layer Bottom",
+    "Layer Top",
+    "Layout",
+    "Leader Length",
+    "Library Link",
+    "Line Width",
+    "Locked",
+    "MPN",
+    "Margin Bottom",
+    "Margin Left",
+    "Margin Right",
+    "Margin Top",
+    "Margin X",
+    "Margin Y",
+    "Minimum Island Area",
+    "Minimum Width",
+    "Mirrored",
+    "Mode",
+    "Name",
+    "Net",
+    "Net Class",
+    "Nets",
+    "Not in Schematic",
+    "Offset X",
+    "Offset Y",
+    "Orientation",
+    "Outline Slots",
+    "Override Text",
+    "Pad Connections",
+    "Pad Number",
+    "Pad Shape",
+    "Pad Type",
+    "Phi Extent",
+    "Phi Spacing",
+    "Pitch",
+    "Position X",
+    "Position Y",
+    "Precision",
+    "Prefix",
+    "Priority",
+    "Radius",
+    "Radius Extent",
+    "Radius Spacing",
+    "Reference",
+    "Remove Islands",
+    "Row Height",
+    "Row Separators",
+    "Scale",
+    "Seed",
+    "Separators Color",
+    "Separators Style",
+    "Separators Width",
+    "Shape",
+    "Show Text",
+    "Show Totals",
+    "Size",
+    "Size X",
+    "Size Y",
+    "Smoothing Amount",
+    "Smoothing Effort",
+    "Source Name",
+    "Source Type",
+    "Spacing X",
+    "Spacing Y",
+    "Start Length",
+    "Start Shape",
+    "Start Stroke Width",
+    "Start Width",
+    "Start X",
+    "Start Y",
+    "Suffix",
+    "Suppress Trailing Zeroes",
+    "Symbol Size",
+    "Text",
+    "Text Size",
+    "Thermal Relief Gap",
+    "Thermal Relief Spoke Width",
+    "Thickness",
+    "Tick Interval",
+    "Type",
+    "Units",
+    "Units Format",
+    "Value",
+    "Vertical Justification",
+    "Via Type",
+    "Visible",
+    "Width"
+   ]
+  }
+ },
+ "cases": [
+  {
+   "expression": "",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1",
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "shp_rect",
+    "txt_a",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Via'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_a",
+    "via_b",
+    "via_c"
+   ]
+  },
+  {
+   "expression": "A.Type == 'via'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_a",
+    "via_b",
+    "via_c"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Track'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Pad'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "R1.1",
+    "R2.1"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Footprint'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1",
+    "R1",
+    "R2"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Graphic'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "shp_seg",
+    "shp_rect"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Text'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "txt_a"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Zone'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.Type != 'Pad'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "shp_rect",
+    "txt_a",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.Type == '*a*'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "R1.1",
+    "R2.1",
+    "shp_seg",
+    "shp_rect"
+   ]
+  },
+  {
+   "expression": "A.Width == 0.2mm",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_arc"
+   ]
+  },
+  {
+   "expression": "A.Width > 0.25mm",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_b",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_rect",
+    "txt_a"
+   ]
+  },
+  {
+   "expression": "A.Width < 10mil",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "R1",
+    "R1.1",
+    "R2",
+    "R2.1",
+    "shp_seg",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.Width >= 200000",
+   "ok": true,
+   "errors": [
+    "Missing units for '200000'| (must be mm, in, mil, deg, fs, or ps)"
+   ],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_arc",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_rect",
+    "txt_a"
+   ]
+  },
+  {
+   "expression": "A.Diameter == 0.6mm && A.Hole == 0.3mm",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_a"
+   ]
+  },
+  {
+   "expression": "A.Position_X < 20mm",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "shp_rect",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.Position_X == 20mm && A.Position_Y == 50mm",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_a"
+   ]
+  },
+  {
+   "expression": "A.Orientation == -90deg",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4"
+   ]
+  },
+  {
+   "expression": "A.Width + 0.1mm == 0.3mm",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_arc"
+   ]
+  },
+  {
+   "expression": "A.width == 0.2mm",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_arc"
+   ]
+  },
+  {
+   "expression": "A.Pad_Type == 'SMD'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1.1",
+    "U1.3",
+    "U1.4",
+    "R1.1",
+    "R2.1"
+   ]
+  },
+  {
+   "expression": "A.Pad_Type == 'Through-hole'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1.2"
+   ]
+  },
+  {
+   "expression": "A.Pad_Shape == 'Oval'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1.3"
+   ]
+  },
+  {
+   "expression": "A.Pad_Number == '3'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1.3"
+   ]
+  },
+  {
+   "expression": "A.Via_Type == 'Through'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_a"
+   ]
+  },
+  {
+   "expression": "A.Via_Type == 'Blind'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_b"
+   ]
+  },
+  {
+   "expression": "A.Via_Type == 'Buried'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_c"
+   ]
+  },
+  {
+   "expression": "A.Via_Type != 'Through'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_b",
+    "via_c"
+   ]
+  },
+  {
+   "expression": "A.Reference == 'U1'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier"
+   ]
+  },
+  {
+   "expression": "A.Reference == 'U*'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier"
+   ]
+  },
+  {
+   "expression": "A.Reference == 'R*'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "R1",
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier"
+   ]
+  },
+  {
+   "expression": "A.Value == 'MCU'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier"
+   ]
+  },
+  {
+   "expression": "A.Library_Link == 'Package_QFP:LQFP-48'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier"
+   ]
+  },
+  {
+   "expression": "A.Locked",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_b"
+   ]
+  },
+  {
+   "expression": "!A.Locked",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1",
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "shp_rect",
+    "txt_a",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.Locked == 1",
+   "ok": true,
+   "errors": [
+    "Missing units for '1'| (must be mm, in, mil, deg, fs, or ps)"
+   ],
+   "ids": [
+    "trk_b"
+   ]
+  },
+  {
+   "expression": "A.Locked == false",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1",
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "shp_rect",
+    "txt_a",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.Locked == true",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_b"
+   ]
+  },
+  {
+   "expression": "A.Layer == 'B.Cu'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_c",
+    "trk_arc",
+    "R1",
+    "R1.1"
+   ]
+  },
+  {
+   "expression": "A.Layer == 'F.Cu'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_p",
+    "trk_n",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "R2",
+    "R2.1",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.NetName == 'GND'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_c",
+    "trk_arc",
+    "via_a",
+    "U1.1",
+    "R1.1",
+    "zone_a"
+   ]
+  },
+  {
+   "expression": "A.NetName == 'G*'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_c",
+    "trk_arc",
+    "via_a",
+    "U1.1",
+    "R1.1",
+    "zone_a"
+   ]
+  },
+  {
+   "expression": "A.Net == 'GND'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_c",
+    "trk_arc",
+    "via_a",
+    "U1.1",
+    "R1.1",
+    "zone_a"
+   ]
+  },
+  {
+   "expression": "A.NetClass == 'HV'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_b",
+    "via_b",
+    "via_c",
+    "U1.2",
+    "U1.3",
+    "R2.1"
+   ]
+  },
+  {
+   "expression": "A.NetClass == 'Default'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "R1.1",
+    "R2.1",
+    "shp_seg",
+    "shp_rect",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.NetClass == 'HV,Default'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_b",
+    "via_b",
+    "via_c",
+    "U1.2",
+    "U1.3",
+    "R2.1"
+   ]
+  },
+  {
+   "expression": "A.NetClass != 'HV'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "U1.1",
+    "U1.4",
+    "R1.1",
+    "shp_seg",
+    "shp_rect",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.hasNetclass('HV')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_b",
+    "via_b",
+    "via_c",
+    "U1.2",
+    "U1.3",
+    "R2.1"
+   ]
+  },
+  {
+   "expression": "A.hasNetclass('Default')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "R1.1",
+    "R2.1",
+    "shp_seg",
+    "shp_rect",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.hasExactNetclass('Default')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_c",
+    "trk_arc",
+    "via_a",
+    "U1.1",
+    "R1.1",
+    "shp_seg",
+    "shp_rect",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.hasExactNetclass('HV')",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "A.hasNetclass('Fast')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_p",
+    "trk_n",
+    "U1.4"
+   ]
+  },
+  {
+   "expression": "A.Net_Class == 'Default'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_c",
+    "trk_arc",
+    "via_a",
+    "U1.1",
+    "R1.1",
+    "shp_seg",
+    "shp_rect",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.inDiffPair('USB*')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_p",
+    "trk_n",
+    "U1.4"
+   ]
+  },
+  {
+   "expression": "A.inDiffPair('USB')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_p",
+    "trk_n",
+    "U1.4"
+   ]
+  },
+  {
+   "expression": "A.inDiffPair('SPI*')",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "A.inDiffPair('*')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_p",
+    "trk_n",
+    "U1.4"
+   ]
+  },
+  {
+   "expression": "A.hasNetclass('Fast') && A.inDiffPair('*')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_p",
+    "trk_n",
+    "U1.4"
+   ]
+  },
+  {
+   "expression": "A.Layer == '*.Cu'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "R1",
+    "R1.1",
+    "R2",
+    "R2.1",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.Layer == 'B.*'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_c",
+    "trk_arc",
+    "R1",
+    "R1.1"
+   ]
+  },
+  {
+   "expression": "A.Layer == 'F.Silkscreen'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "txt_a"
+   ]
+  },
+  {
+   "expression": "A.Layer == 'F.SilkS'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "txt_a"
+   ]
+  },
+  {
+   "expression": "A.Layer != 'F.SilkS'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "R1",
+    "R1.1",
+    "R2",
+    "R2.1",
+    "shp_rect",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "L == 'B.Cu'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_c",
+    "trk_arc",
+    "via_a",
+    "U1.2",
+    "R1",
+    "R1.1"
+   ]
+  },
+  {
+   "expression": "L == 'F.Cu'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_p",
+    "trk_n",
+    "via_a",
+    "via_b",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "R2",
+    "R2.1",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.existsOnLayer('F.Cu')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_p",
+    "trk_n",
+    "via_a",
+    "via_b",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "R2",
+    "R2.1",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.existsOnLayer('B.Cu')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_c",
+    "trk_arc",
+    "via_a",
+    "U1.2",
+    "R1",
+    "R1.1"
+   ]
+  },
+  {
+   "expression": "A.existsOnLayer('*.Cu')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "R1",
+    "R1.1",
+    "R2",
+    "R2.1",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.existsOnLayer('In1.Cu')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1.2"
+   ]
+  },
+  {
+   "expression": "A.existsOnLayer('In2.Cu')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_a",
+    "via_c",
+    "U1.2"
+   ]
+  },
+  {
+   "expression": "A.existsOnLayer('*.Mask')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "R1.1",
+    "R2.1"
+   ]
+  },
+  {
+   "expression": "A.isPlated()",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1.2"
+   ]
+  },
+  {
+   "expression": "A.isBlindVia()",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_b"
+   ]
+  },
+  {
+   "expression": "A.isBuriedVia()",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_c"
+   ]
+  },
+  {
+   "expression": "A.isBlindBuriedVia()",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_b",
+    "via_c"
+   ]
+  },
+  {
+   "expression": "A.isMicroVia()",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "A.memberOfGroup('block')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier"
+   ]
+  },
+  {
+   "expression": "A.memberOf('bl*')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier"
+   ]
+  },
+  {
+   "expression": "A.memberOfFootprint('U1')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier"
+   ]
+  },
+  {
+   "expression": "A.memberOfFootprint('R*')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier"
+   ]
+  },
+  {
+   "expression": "A.memberOfFootprint('Package_QFP:*')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier"
+   ]
+  },
+  {
+   "expression": "A.getField('Supplier') == 'ACME'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1",
+    "R1"
+   ]
+  },
+  {
+   "expression": "A.getField('Nope') == ''",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1",
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "shp_rect",
+    "txt_a",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.getField('Reference') == 'R*'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "R1",
+    "R2"
+   ]
+  },
+  {
+   "expression": "A.Nope == 'x'",
+   "ok": true,
+   "errors": [
+    "Unrecognized property 'Nope'"
+   ],
+   "ids": []
+  },
+  {
+   "expression": "A.Nope == 1",
+   "ok": true,
+   "errors": [
+    "Unrecognized property 'Nope'",
+    "Missing units for '1'| (must be mm, in, mil, deg, fs, or ps)"
+   ],
+   "ids": []
+  },
+  {
+   "expression": "A.Nope != 1",
+   "ok": true,
+   "errors": [
+    "Unrecognized property 'Nope'",
+    "Missing units for '1'| (must be mm, in, mil, deg, fs, or ps)"
+   ],
+   "ids": []
+  },
+  {
+   "expression": "C.Width > 1mm",
+   "ok": true,
+   "errors": [
+    "Unrecognized item 'C'"
+   ],
+   "ids": []
+  },
+  {
+   "expression": "A.frobnicate('x')",
+   "ok": true,
+   "errors": [
+    "Unrecognized function 'frobnicate'"
+   ],
+   "ids": []
+  },
+  {
+   "expression": "A.Width > 5",
+   "ok": true,
+   "errors": [
+    "Missing units for '5'| (must be mm, in, mil, deg, fs, or ps)"
+   ],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_rect",
+    "txt_a"
+   ]
+  },
+  {
+   "expression": "A.memberOfGroup('')",
+   "ok": true,
+   "errors": [
+    "Missing group name argument to memberOfGroup()."
+   ],
+   "ids": []
+  },
+  {
+   "expression": "A.Width >",
+   "ok": false,
+   "errors": [
+    "Syntax error"
+   ],
+   "ids": null
+  },
+  {
+   "expression": "A.Width ?? 1",
+   "ok": false,
+   "errors": [
+    "Unrecognized character '?'"
+   ],
+   "ids": null
+  },
+  {
+   "expression": "A.Width == ?",
+   "ok": false,
+   "errors": [
+    "Unrecognized character '?'",
+    "Syntax error"
+   ],
+   "ids": null
+  },
+  {
+   "expression": "A.Type ==",
+   "ok": false,
+   "errors": [
+    "Syntax error"
+   ],
+   "ids": null
+  },
+  {
+   "expression": "A.Type == 'Via' && A.Diameter < 0.7mm",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_a"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Via' && A.Diameter >= 0.8mm",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_b",
+    "via_c"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Track' && A.NetName == 'GND'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_c",
+    "trk_arc"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Track' && A.Layer == 'B.Cu'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_c",
+    "trk_arc"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Pad' && A.Pad_Type == 'Through-hole'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1.2"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Footprint' && A.Layer == 'B.Cu'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "R1"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Track' && A.hasNetclass('Fast')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_p",
+    "trk_n"
+   ]
+  },
+  {
+   "expression": "A.Type == 'Track' && A.Type == 'Via' || A.Type == 'Pad'",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "A.existsOnLayer('B.Cu') && A.Type == 'Track'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_c",
+    "trk_arc"
+   ]
+  },
+  {
+   "expression": "A.Hole == 0.3mm && A.Via_Type == 'Through'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "via_a"
+   ]
+  },
+  {
+   "expression": "A.Layer != 'F.Cu' && A.Locked == false && A.Net == 'GND' && A.Type == 'Track' && A.Width == 0.2mm",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_arc"
+   ]
+  },
+  {
+   "expression": "A.Width == 7.87mil",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "A.Type == 'Pad' && A.Library_Link == 'R_0603'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "R1.1",
+    "R2.1"
+   ]
+  },
+  {
+   "expression": "A.intersectsCourtyard('U1')",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "A.insideArea('*')",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "A.enclosedByArea('*')",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "A.fromTo('U1-1', 'R1-1')",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "AB.isCoupledDiffPair()",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "A.memberOfSheet('/')",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "A.hasComponentClass('x')",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "A.ComponentClass == ''",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1",
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier"
+   ]
+  },
+  {
+   "expression": "A.Width > 0.1mm || A.Diameter > 0.5mm",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_rect",
+    "txt_a"
+   ]
+  },
+  {
+   "expression": "(A.Width > 0.1mm) && !(A.NetName == 'GND')",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_b",
+    "trk_p",
+    "trk_n",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_rect",
+    "txt_a"
+   ]
+  },
+  {
+   "expression": "1 + 2 == 3",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1",
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "shp_rect",
+    "txt_a",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "1mm == 1000000",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1",
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "shp_rect",
+    "txt_a",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "0.07mm == 70000",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1",
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "shp_rect",
+    "txt_a",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "'abc' == 'ABC'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1",
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "shp_rect",
+    "txt_a",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "'abc' == 'a*'",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1",
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "shp_rect",
+    "txt_a",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "2 * 3 > 5 && 10 / 4 == 2.5",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "via_a",
+    "via_b",
+    "via_c",
+    "U1",
+    "U1.1",
+    "U1.2",
+    "U1.3",
+    "U1.4",
+    "U1:Reference",
+    "U1:Value",
+    "U1:Supplier",
+    "R1",
+    "R1.1",
+    "R1:Reference",
+    "R1:Value",
+    "R1:Supplier",
+    "R2",
+    "R2.1",
+    "R2:Reference",
+    "R2:Value",
+    "R2:Supplier",
+    "shp_seg",
+    "shp_rect",
+    "txt_a",
+    "zone_a",
+    "zone_ra"
+   ]
+  },
+  {
+   "expression": "A.Width == null",
+   "ok": true,
+   "errors": [],
+   "ids": []
+  },
+  {
+   "expression": "A.Start_X < A.End_X",
+   "ok": true,
+   "errors": [],
+   "ids": [
+    "trk_a",
+    "trk_b",
+    "trk_c",
+    "trk_p",
+    "trk_n",
+    "trk_arc",
+    "shp_seg",
+    "shp_rect"
+   ]
+  }
+ ]
+}
