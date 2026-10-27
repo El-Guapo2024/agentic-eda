@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, FieldInfo, Pad, Part } from "../api/types";
-import { attrsOf, checkFieldRow, checkPadValues, drawAngle, editAttrsCmd, editFieldCmd, editPadCmd, fieldAsText, fieldById, fieldId, layoutOf, localAngleOf, newFieldLayout, newFieldName, nthOfPad, padEditOf, padEditWith, parseFieldId, userFieldsOf, fieldShownByObjects } from "./fpFields";
+import { attrsOf, checkFieldRow, checkPadValues, padCheck, drawAngle, editAttrsCmd, editFieldCmd, editPadCmd, fieldAsText, fieldById, fieldId, layoutOf, localAngleOf, newFieldLayout, newFieldName, nthOfPad, padEditOf, padEditWith, parseFieldId, userFieldsOf, fieldShownByObjects } from "./fpFields";
 import { subItemIds } from "./pcbItems";
 
 const field = (over: Partial<FieldInfo> = {}): FieldInfo => ({
@@ -136,18 +136,21 @@ test("a new field starts hidden at the origin on the fabrication layer of the fo
   assert.equal(newFieldName(["Field4", "Field5"], 4), "Field6");
 });
 
-test("pad values: sizes, holes and ratios are refused with the dialog's words", () => {
+test("pad values: sizes and holes are refused with the dialog's words; a hole at or past the copper's edge only warns (r2-pcb-edit C5)", () => {
   const fmt = (um: number) => `${um / 1000} mm`;
   const ok = { kind: "through_hole", shape: "circle", size: [1600, 1600] as [number, number], drill: 800 };
   assert.equal(checkPadValues(ok, fmt), null);
   assert.equal(checkPadValues({ ...ok, size: [0, 0] }, fmt), "Error: (Pad must have a positive size)");
   assert.equal(checkPadValues({ ...ok, drill: 0 }, fmt), "Error: Through hole pad has no hole.");
-  assert.match(checkPadValues({ ...ok, drill: 1600 }, fmt)!, /PTH pad hole leaves no copper/);
+  assert.deepEqual(padCheck({ ...ok, drill: 1600 }, fmt), { errors: [], warnings: ["Warning: (PTH pad hole leaves no copper)"] }, "a 1 mm round pad with a 1 mm hole: a warning");
+  assert.deepEqual(padCheck({ kind: "through_hole", shape: "rect", size: [2000, 1000], drill: 1200 }, fmt), { errors: [], warnings: ["Warning: (PTH pad hole not fully inside copper)"] });
   assert.equal(checkPadValues({ ...ok, kind: "non_plated_hole", drill: 1600 }, fmt), null, "a non-plated hole may be as big as its pad");
+  assert.deepEqual(padCheck({ ...ok, kind: "non_plated_hole", drill: 1600 }, fmt).warnings, []);
   assert.equal(checkPadValues({ kind: "smd", shape: "rect", size: [600, 400], drill: null }, fmt), null, "an SMD pad has no hole");
-  assert.match(checkPadValues({ kind: "through_hole", shape: "oval", size: [1500, 900], slot: [900, 1000] }, fmt)!, /leaves no copper/);
-  assert.equal(checkPadValues({ kind: "smd", shape: "round_rect", size: [600, 400], ratio: 0.7 }, fmt), "Corner radius ratio must be between 0 and 50%.");
-  assert.equal(checkPadValues({ kind: "smd", shape: "rect", size: [600, 400], pasteRatio: -0.8 }, fmt), "Solder paste ratio must be between -50% and 100%.");
+  assert.deepEqual(padCheck({ kind: "through_hole", shape: "oval", size: [1500, 900], slot: [900, 1000] }, fmt).warnings, ["Warning: (PTH pad hole not fully inside copper)"]);
+  assert.deepEqual(padCheck({ kind: "through_hole", shape: "oval", size: [1500, 900], slot: [1600, 1000] }, fmt).warnings, ["Warning: (PTH pad hole leaves no copper)"]);
+  assert.equal(checkPadValues({ ...ok, drill: 3 }, fmt), "Error: (PTH pad hole size must be larger than 0.004 mm)");
+  assert.equal(checkPadValues({ kind: "smd", shape: "round_rect", size: [600, 400], ratio: 0.7 }, fmt), null, "KiCad has no message for the ratios: the dialog clamps them");
 });
 
 test("a field follows the Appearance panel's Objects rows: References for the Reference, Values for the Value, Footprint Text for all, the footprint's side for the lot", () => {

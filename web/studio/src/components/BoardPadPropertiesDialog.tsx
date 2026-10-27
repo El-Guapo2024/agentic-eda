@@ -20,7 +20,7 @@
 // post-machining. "Push Pad Properties to other pads" is the footprint editor's.
 import { useEffect, useState } from "react";
 import type { Cmd, PadConnection, PadEditCmd } from "../api/types";
-import { checkPadValues, padEditWith } from "../kicad-port/fpFields";
+import { padCheck, padEditWith } from "../kicad-port/fpFields";
 import { chooseShape, checkShape, hasSizeY, shapeFormOf, shapeNameOf, shapePatch, sizeOf, type PadShapeChoice, type PadShapeForm } from "../kicad-port/padShape";
 import { FRONT, changeMode, checkStack, layerFormOf, padstackControlsShown, stackDiffers, stackOf, stackStateOf, withLayerForm, type LayerForm, type PadStackState } from "../kicad-port/padStack";
 import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
@@ -146,12 +146,14 @@ export function BoardPadPropertiesDialog() {
   const submit = async () => {
     setError(null);
     const size = sizeOf(s);
-    const message =
-      checkPadValues(
-        { kind: form.kind, shape: shapeNameOf(s.choice), size, drill: form.hole === "round" ? form.drill : null, slot: form.hole === "oblong" ? [form.slotW, form.slotH] : null, ratio: s.choice === "round_rect" ? s.ratio : null, pasteRatio: form.pasteRatio },
-        fmt
-      ) ?? checkShape(s) ?? (stackShown ? checkStack(form.stack) : null);
+    // `padValuesOK`: an error keeps the dialog open; the warnings are shown and the pad is applied
+    const checked = padCheck(
+      { kind: form.kind, shape: shapeNameOf(s.choice), size, drill: form.hole === "round" ? form.drill : null, slot: form.hole === "oblong" ? [form.slotW, form.slotH] : null, ratio: s.choice === "round_rect" ? s.ratio : null, pasteRatio: form.pasteRatio },
+      fmt
+    );
+    const message = checked.errors[0] ?? checkShape(s) ?? (stackShown ? checkStack(form.stack) : null);
     if (message) return setError(message);
+    if (checked.warnings.length > 0) dispatch({ type: "TOAST", message: checked.warnings.join("\n"), kind: "info" });
 
     // What differs from the pad as it is becomes a key of the pad's edit; an override that was switched off becomes `undefined` and goes.
     const was = { kind: pad.kind ?? (pad.th ? "through_hole" : "smd") };
