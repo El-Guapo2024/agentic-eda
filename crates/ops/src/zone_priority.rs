@@ -15,7 +15,7 @@
 use eda_model::units::Nm;
 use std::collections::BTreeMap;
 
-use eda_connectivity::geom::{point_in_polygon, polygons_overlap};
+use eda_connectivity::geom::{point_in_polygon, seg_seg_distance};
 use eda_drc::board::DrcBoard;
 use eda_model::ir::{Design, Point, Zone};
 use eda_model::ConstraintModel;
@@ -43,13 +43,34 @@ fn bbox(outline: &[Point]) -> (Nm, Nm, Nm, Nm) {
     outline.iter().fold((Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN), |b, p| (b.0.min(p.x), b.1.min(p.y), b.2.max(p.x), b.3.max(p.y)))
 }
 
-fn area(outline: &[Point]) -> f64 {
+fn ring_area(outline: &[Point]) -> f64 {
     let twice: i128 = (0..outline.len()).map(|i| outline[i].x.area(outline[(i + 1) % outline.len()].y) - outline[(i + 1) % outline.len()].x.area(outline[i].y)).sum();
     (twice as f64 / 2.0).abs()
 }
 
-fn ring(outline: &[Point]) -> ShapePolySet {
-    ShapePolySet::from_outline(outline.iter().map(|p| eda_clipper2::Point64::new(p.x.get(), p.y.get())).collect())
+/// `ZONE::Outline()->Area()`: the outline's area less its holes' (`SHAPE_POLY_SET::Area`: `area -= Hole( i, j ).Area( true )`).
+fn area(z: &Zone) -> f64 {
+    ring_area(&z.outline) - z.holes.iter().filter(|h| h.len() >= 3).map(|h| ring_area(h)).sum::<f64>()
+}
+
+/// `ZONE::Outline()`: the zone's outline with its holes (`Zone::holes`).
+fn outline_set(z: &Zone) -> ShapePolySet {
+    let chain = |ring: &[Point]| ring.iter().map(|p| eda_clipper2::Point64::new(p.x.get(), p.y.get())).collect::<Vec<_>>();
+    ShapePolySet { polys: vec![std::iter::once(chain(&z.outline)).chain(z.holes.iter().filter(|h| h.len() >= 3).map(|h| chain(h))).collect()] }
+}
+
+/// `findOverlappingPairs`' test: `a->Outline()->Collide( b->Outline() ) || a->Outline()->Contains( b->Outline()->CVertex( 0 ) ) || ..` -- the two areas,
+/// holes taken out, meet: an edge of one (its outline's or a hole's) touches or crosses an edge of the other, or the first corner of one is inside the other (and in
+/// none of its holes). A zone that lies in a cutout of another does not overlap it.
+fn outlines_collide(a: &Zone, b: &Zone) -> bool {
+    let rings = |z: &Zone| std::iter::once(z.outline.clone()).chain(z.holes.iter().filter(|h| h.len() >= 2).cloned()).collect::<Vec<_>>();
+    let (ra, rb) = (rings(a), rings(b));
+    let edges = |rs: &[Vec<Point>]| rs.iter().flat_map(|r| (0..r.len()).map(move |i| (r[i], r[(i + 1) % r.len()]))).collect::<Vec<_>>();
+    let (ea, eb) = (edges(&ra), edges(&rb));
+    if ea.iter().any(|&(a1, a2)| eb.iter().any(|&(b1, b2)| seg_seg_distance(a1, a2, b1, b2) <= 0.0)) {
+        return true;
+    }
+    contains(&outline_set(a), b.outline[0]) || contains(&outline_set(b), a.outline[0])
 }
 
 /// `SHAPE_POLY_SET::Contains`: inside an outline of the set and in none of its holes.
@@ -72,7 +93,7 @@ fn overlapping_pairs(zones: &[&Zone]) -> Vec<Pair> {
             if box_b.0 > box_a.2 || box_b.2 < box_a.0 || box_b.1 > box_a.3 || box_b.3 < box_a.1 {
                 continue;
             }
-            if polygons_overlap(&zones[i].outline, &zones[j].outline) {
+            if outlines_collide(zones[i], zones[j]) {
                 pairs.push(Pair { a: i, b: j, shared });
             }
         }
@@ -82,8 +103,9 @@ fn overlapping_pairs(zones: &[&Zone]) -> Vec<Pair> {
 
 /// `computeConstraint`: which of two overlapping zones of different nets goes above the other, or neither.
 fn constraint(pair: &Pair, zones: &[&Zone], board: &DrcBoard) -> Option<Edge> {
-    let mut intersection = ring(&zones[pair.a].outline);
-    intersection.boolean_intersection(&ring(&zones[pair.b].outline));
+    // (`polyA = aPair.zoneA->Outline()->CloneDropTriangulation()`, holes and all)
+    let mut intersection = outline_set(zones[pair.a]);
+    intersection.boolean_intersection(&outline_set(zones[pair.b]));
     if intersection.is_empty() {
         return None;
     }
@@ -118,7 +140,7 @@ fn constraint(pair: &Pair, zones: &[&Zone], board: &DrcBoard) -> Option<Edge> {
 
     // The smaller zone goes above the bigger; the same size says nothing.
     let by_area = |count_diff: usize| {
-        let (area_a, area_b) = (area(&zones[pair.a].outline), area(&zones[pair.b].outline));
+        let (area_a, area_b) = (area(zones[pair.a]), area(zones[pair.b]));
         if area_a == area_b {
             return None;
         }
@@ -333,5 +355,22 @@ mod tests {
         // One pour alone has nothing to be ordered against.
         let (d, m) = board(vec![square("a", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0)], vec![]);
         assert!(auto_assign_zone_priorities(&d, &m).is_none());
+    }
+
+    /// R5-Z5: a small VBUS pour that lies in the cutout of a big GND pour does not overlap it (`Collide` and `Contains` see the holes): nothing changes. With
+    /// a cutout so big that the GND pour's copper is the smaller, an overlap is decided by the areas less the holes.
+    #[test]
+    fn auto_priorities_respect_a_cutout() {
+        let p = |x: i64, y: i64| Point { x: Nm::new(x), y: Nm::new(y) };
+        let mut gnd = square("gnd", "GND", Nm::ZERO, Nm::ZERO, Nm::new(20_000), 1);
+        gnd.holes = vec![vec![p(4_000, 4_000), p(16_000, 4_000), p(16_000, 16_000), p(4_000, 16_000)]];
+        let vbus = square("vbus", "VCC", Nm::new(6_000), Nm::new(6_000), Nm::new(4_000), 0);
+        let (d, m) = board(vec![gnd.clone(), vbus], vec![]);
+        assert!(auto_assign_zone_priorities(&d, &m).is_none(), "{:?}", auto_assign_zone_priorities(&d, &m));
+        // GND: 400 - 144 = 256 mm2 of copper; VCC 18 x 18 mm = 324 mm2 across the ring: VCC is the bigger, GND goes above
+        gnd.priority = 0;
+        let big = square("vcc", "VCC", Nm::new(1_000), Nm::new(1_000), Nm::new(18_000), 1);
+        let (d, m) = board(vec![gnd, big], vec![]);
+        assert_eq!(assigned(&d, &m), vec![("gnd".to_string(), 1), ("vcc".to_string(), 0)]);
     }
 }

@@ -1587,6 +1587,56 @@ fn paste_items_with_nothing_in_it_is_a_harmless_no_op() {
 
 // ------------------------------------------------------- commit route
 
+// r5 R5-2: `PNS_KICAD_IFACE::createBoardItem` gives a track the router made in place of a board track (`GetSourceItem()`) that track's solder-mask
+// opening, and `Commit` files it in that track's group (`m_replacementMap[src]`); a new track or via joins the entered group, and a replacement of
+// a track that was in no group stays out of the entered one.
+#[test]
+fn commit_route_carries_a_replaced_tracks_mask_and_group() {
+    let m = net_model();
+    let mut b = board(&m);
+    let seg = |x: f64| vec![Point { x: mm(x), y: mm(-2.0) }, Point { x: mm(x), y: mm(2.0) }];
+    for x in [2.5, 4.0, 6.0, 8.0, 10.0] {
+        b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: seg(x) }).unwrap();
+    }
+    let id_at = |b: &Board<'_>, x: f64| b.design().routing.as_ref().unwrap().tracks.iter().find(|t| t.pts[0].x == mm(x)).unwrap().id.clone();
+    let (a, a2, c, c2, loose) = (id_at(&b, 2.5), id_at(&b, 4.0), id_at(&b, 6.0), id_at(&b, 8.0), id_at(&b, 10.0));
+    b.apply(&Cmd::Group { ids: vec![a.clone(), a2.clone()] }).unwrap();
+    b.apply(&Cmd::Group { ids: vec![c.clone(), c2.clone()] }).unwrap();
+    let mut design = b.design().clone();
+    let dr = design.drawings.as_mut().unwrap();
+    let g_a = dr.parent_group(&a).unwrap().id.clone();
+    let g_c = dr.parent_group(&c).unwrap().id.clone();
+    dr.track_masks.push(eda_model::track_mask::TrackMask { id: a.clone(), margin: Some(mm(0.05)) });
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+    let track = |pts: Vec<Point>| Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts, arc_mid_offset: None };
+    b.apply(&Cmd::CommitRoute {
+        remove_track_ids: vec![a.clone(), loose.clone()],
+        remove_via_ids: vec![],
+        // the shoved `a`, the shoved `loose`, and the new route
+        tracks: vec![track(seg(3.0)), track(seg(10.5)), track(vec![Point { x: mm(0.0), y: mm(5.0) }, Point { x: mm(1.0), y: mm(5.0) }])],
+        vias: vec![Via { id: String::new(), net: "GND".into(), at: Point { x: mm(1.0), y: mm(5.0) }, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
+        lock_tracks: vec![],
+        via_kinds: vec![],
+        track_sources: vec![(0, a.clone()), (1, loose.clone())],
+        group: Some(g_c.clone()),
+    })
+    .unwrap();
+    let d = b.design();
+    let rt = d.routing.as_ref().unwrap();
+    let new_id = |x: f64| rt.tracks.iter().find(|t| t.pts[0].x == mm(x)).unwrap().id.clone();
+    let (moved, moved_loose, route) = (new_id(3.0), new_id(10.5), new_id(0.0));
+    let via = rt.vias[0].id.clone();
+    let dr = d.drawings.as_ref().unwrap();
+    assert_eq!(dr.track_mask(&moved).map(|m| m.margin), Some(Some(mm(0.05))), "the shoved track keeps the mask opening and its margin");
+    assert!(dr.track_mask(&a).is_none(), "the removed track's entry is gone");
+    assert_eq!(dr.track_masks.len(), 1);
+    assert_eq!(dr.parent_group(&moved).map(|g| g.id.clone()), Some(g_a.clone()), "the shoved track stays in its group");
+    assert_eq!(dr.parent_group(&route).map(|g| g.id.clone()), Some(g_c.clone()), "the new track joins the entered group");
+    assert_eq!(dr.parent_group(&via).map(|g| g.id.clone()), Some(g_c.clone()), "the new via joins the entered group");
+    assert!(dr.parent_group(&moved_loose).is_none(), "a replacement of a track in no group stays in none");
+    assert!(dr.parent_group(&a).is_none() && dr.group(&g_a).unwrap().member_ids.len() == 2);
+}
+
 #[test]
 fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
     let m = net_model();
@@ -1604,6 +1654,8 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
         vias: vec![],
         lock_tracks: vec![],
         via_kinds: vec![],
+        track_sources: vec![],
+        group: None,
     })
     .unwrap();
 
@@ -1619,7 +1671,7 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
 fn commit_route_tolerates_an_already_gone_id() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap();
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 1);
 }
 
@@ -1627,7 +1679,7 @@ fn commit_route_tolerates_an_already_gone_id() {
 fn commit_route_rejects_an_unknown_net() {
     let m = net_model();
     let mut b = board(&m);
-    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap_err();
+    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None }).unwrap_err();
     assert!(!e.is_empty());
     assert!(b.design().routing.is_none(), "a refused commit must not partially apply");
 }
@@ -3200,7 +3252,7 @@ fn commit_route_gives_its_vias_their_type_and_drops_the_extras_of_removed_vias()
     assert_eq!(extras.len(), 1);
     assert_eq!((extras[0].id.as_str(), extras[0].kind), (micro.as_str(), eda_model::via_extra::ViaKind::Micro));
     assert!(b.design().drawings.as_ref().unwrap().via_extra(&through).is_none());
-    b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![micro], tracks: vec![], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap();
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![micro], tracks: vec![], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None }).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().via_extras.is_empty(), "the removed via's type went with it");
 }
 

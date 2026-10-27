@@ -3,7 +3,7 @@
 //
 //   __eda.actions({ all? })    -> [{ id, label, enabled, reason? }]   the actions the runner handles on this tab (all: plus the KiCad actions with no handler)
 //   await __eda.run(id, args?) -> { ok, error?, revision, dialog?, toast? }   runs the action as a menu click does and waits for its /api/ round trips
-//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], entered, counts, grid, gridOverrides, snap, dialogs, open, sheetPath, view, appearance, viewer3d }
+//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], entered, counts, grid, gridOverrides, snap, dialogs, open, sheetPath, view, activeLayer, appearance, viewer3d }
 //   __eda.viewer3dScreen(ref)  -> { x, y } | null   where a part is on the 3D canvas (CSS px from its top-left), for hovering it without guessing pixels
 //   __eda.errors(since?)       -> [{ time, message }]   console.error, uncaught errors, rejected promises, 5xx replies and the error toasts since the page loaded
 //
@@ -79,6 +79,8 @@ export interface HookState {
   sheetPath: string[];
   /** The view of the canvas on screen (the schematic's, the board's, the Footprint Editor's or the Symbol Editor's): a point `(x, y)` of the sheet is at `(view.x + x * view.scale, view.y + y * view.scale)` pixels from the canvas's top-left corner (in the editors' own space: um, +y down); null on the other tabs. */
   view: { x: number; y: number; scale: number } | null;
+  /** The board editor's active layer (`PCB_BASE_FRAME::GetActiveLayer()`); null off the board tab or before one is chosen. */
+  activeLayer: string | null;
   /** The Appearance panel's settings that differ from a new project (kicad-port/edaTestHook.ts `AppearanceSummary`). */
   appearance: AppearanceSummary;
   /** The 3D viewer's own readout (components/viewer3d/viewer3dProbe.ts): the time to the first real model, the models in, the part under the pointer, whether the camera is moving; null off the 3D tab. */
@@ -248,6 +250,7 @@ function build(latest: { current: Latest }): EdaTestHook {
         open: openNames(L),
         sheetPath: studio.tab === "schematic" ? [...studio.currentSheetPath] : [],
         view: studio.tab === "schematic" ? { ...studio.schematicView } : studio.tab === "pcb" ? { ...studio.view } : studio.tab === "footprint" ? { ...L.fp.view } : studio.tab === "symbol" ? { ...L.sym.view } : null,
+        activeLayer: studio.tab === "pcb" ? studio.activeLayer : null,
         appearance: appearanceSummary(studio),
         viewer3d: studio.tab === "3d" ? viewer3dProbe.snapshot() : null,
       };

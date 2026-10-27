@@ -1,8 +1,8 @@
 // Zone fill check (GAPS.md package P13; item 13): the zone fill is KiCad's, through kicad-cli, and nobody else's. Fill All Zones (B) runs kicad-cli's filler on a copy of the
-// derived board and the fills are kept beside the design; the board shows the last fill, as KiCad does with auto-refill off; a zone never filled, or edited since, is drawn as an
-// outline. The scenarios: a board with nothing filled; B (the status bar says so while it runs, the toast says what filled and how long it took, the derived .kicad_pcb carries
-// kicad-cli's rings); an edit elsewhere leaves the fills and an edit to a zone empties that zone only, Undo giving it back; Fill Selected Zones and Unfill Selected Zones; Unfill
-// All Zones; the Zone Manager (the preview with a tab per layer of the zone, Auto-Assign Priorities on zones that overlap, its Refill zones box); the lock in Zone Properties;
+// derived board and the fills are kept beside the design; the board shows the last fill, as KiCad does with auto-refill off; a zone never filled, or reshaped since, is drawn as an
+// outline (a zone moved keeps its fill moved, one edited in Zone Properties keeps it as it was). The scenarios: a board with nothing filled; B (the status bar says so while it runs, the toast says what filled and how long it took, the derived .kicad_pcb carries
+// kicad-cli's rings); an edit elsewhere leaves the fills, Zone Properties keep a zone's fill, a move carries it, a reshape empties that zone only, Undo giving it back; Fill Selected Zones and Unfill Selected Zones; Unfill
+// All Zones; the Zone Manager (the preview with a tab per layer of the zone, Auto-Assign Priorities on zones that overlap, its Refill zones box); the lock in Zone Properties; a zone on no net kept on no net by Zone Properties' OK;
 // "Refill all zones before performing DRC" and the Plot dialog's "Check zone fills before plotting".
 // Run it in the page of a served board that has footprints placed and two copper pours of one net on the two outer layers (examples/mcu_board_30plus.yaml, placed and routed,
 // `eda board zone add --net GND --layer F.Cu --pts "2.9,5 28.3,5 28.3,29.2 2.9,29.2"` and the same on B.Cu) -- paste it into the Browser pane's javascript tool, or
@@ -37,6 +37,8 @@
   const waitFill = async (pred, ms = 15000) => { const t0 = Date.now(); let f = await fill(); while (!pred(f) && Date.now() - t0 < ms) { await sleep(300); f = await fill(); } return f; };
   const zonesOf = async () => ((await state()).routing?.zones ?? []).filter((z) => !z.is_rule_area);
   const editZone = (z, patch) => post({ op: "edit_zone", ...z, ...patch });
+  /** A zone outline with its first corner 1 mm to the right (state gives points as `[x, y]`, the command takes `{ x, y }`). */
+  const reshaped = (outline) => outline.map((p, i) => { const [x, y] = Array.isArray(p) ? p : [p.x, p.y]; return { x: i === 0 ? x + 1_000_000 : x, y }; });
   const scenario = async (name, fn) => {
     const entry = { name, ok: true, notes: [] };
     const t = (cond, msg) => { entry.notes.push(`${cond ? "ok" : "FAIL"}: ${msg}`); if (!cond) entry.ok = false; };
@@ -82,7 +84,7 @@
       check.fillSeconds = seconds;
     });
 
-    await scenario("an edit elsewhere leaves the fills as they are, and an edit to a zone empties that zone only; Undo gives it back", async (t) => {
+    await scenario("an edit elsewhere leaves the fills as they are; Zone Properties keep a zone's fill, a move carries it along, a reshape empties that zone only; Undo gives it back", async (t) => {
       const before = byZone(await fill());
       const net = A.net;
       const added = await post({ op: "add_track", net, layer: "F.Cu", width: 250_000, pts: [{ x: 6_000_000, y: 8_000_000 }, { x: 9_000_000, y: 8_000_000 }] });
@@ -90,10 +92,31 @@
       await sleep(1200);
       t(JSON.stringify(byZone(await fill())) === JSON.stringify(before), "the fills are what they were: a pour is not refilled by an edit, as in KiCad with auto-refill off");
       await undo();
-      const zA = (await zonesOf()).find((z) => z.id === A.id);
+      // Zone Properties' OK (`Edit_Zone_Params`: no `UnFill()`): the old copper stays until a refill, and the source counts the zone out of date
+      let zA = (await zonesOf()).find((z) => z.id === A.id);
       const e = await editZone(zA, { min_thickness: zA.min_thickness + 10_000 });
       t(e.ok, `zone A's minimum width is changed (${e.message})`);
-      const f = await waitFill((x) => x.zones.some((z) => z.id === A.id && !z.filled));
+      let f = await waitFill((x) => x.source?.stale === 1);
+      t(JSON.stringify(byZone(f)) === JSON.stringify(before), "zone A keeps the fill it had, as KiCad keeps it after Zone Properties");
+      t(f.source?.stale === 1, `the source counts it out of date (${JSON.stringify(f.source)})`);
+      await undo();
+      await waitFill((x) => x.source?.stale === 0);
+      // a move (`ZONE::Move` moves `m_FilledPolysList`): the same copper, 1 mm to the right
+      const moved = await post({ op: "move_items", ids: [A.id], dx: 1_000_000, dy: 0 });
+      t(moved.ok, `zone A is moved 1 mm (${moved.message})`);
+      f = await waitFill((x) => x.source?.stale === 1);
+      const fa = f.zones.filter((z) => z.id === A.id);
+      t(fa.every((z) => z.filled && z.fragments.length > 0) && JSON.stringify(Object.fromEntries(Object.entries(byZone(f)).filter(([k]) => k.startsWith(A.id)))) === JSON.stringify(Object.fromEntries(Object.entries(before).filter(([k]) => k.startsWith(A.id)))), `zone A keeps its fill, moved with it: ${JSON.stringify(byZone(f))}`);
+      const bx = (zs) => Math.min(...zs.flatMap((z) => z.fragments.flatMap((r) => r.map((p) => p[0]))));
+      const was = f.zones;
+      await undo();
+      const back0 = await waitFill((x) => x.source?.stale === 0);
+      t(bx(was.filter((z) => z.id === A.id)) - bx(back0.zones.filter((z) => z.id === A.id)) === 1_000_000, "its copper is 1 mm to the right of where it was");
+      // a reshape (the point editor's `m_zone.UnFill()`): zone A has no fill until the next B
+      zA = (await zonesOf()).find((z) => z.id === A.id);
+      const r = await post({ op: "set_zone_outline", id: A.id, outline: reshaped(zA.outline) });
+      t(r.ok, `a corner of zone A is moved (${r.message})`);
+      f = await waitFill((x) => x.zones.some((z) => z.id === A.id && !z.filled));
       const now = byZone(f);
       t(f.zones.filter((z) => z.id === A.id).every((z) => !z.filled && z.fragments.length === 0), "zone A has no fill any more: it is drawn as an outline until it is filled again");
       t(JSON.stringify(Object.entries(now).filter(([k]) => !k.startsWith(A.id))) === JSON.stringify(Object.entries(before).filter(([k]) => !k.startsWith(A.id))), "zone B keeps its fill");
@@ -109,7 +132,7 @@
 
     await scenario("Fill Selected Zones fills the selected zone only, Unfill Selected Zones takes only the selected one away, Unfill All Zones takes the rest", async (t) => {
       const zA = (await zonesOf()).find((z) => z.id === A.id);
-      await editZone(zA, { min_thickness: zA.min_thickness + 10_000 });
+      await post({ op: "set_zone_outline", id: A.id, outline: reshaped(zA.outline) });
       await waitFill((x) => x.zones.some((z) => z.id === A.id && !z.filled));
       const bBefore = byZone(await fill());
       await select([A.id]);
@@ -199,6 +222,30 @@
       await undo();
       t(!((await state()).locked ?? []).includes(A.id), "Undo unlocks it");
       await select([]);
+    });
+
+    await scenario("Zone Properties on a copper zone on no net: <no net> is offered and OK keeps it on no net, with KiCad's warning", async (t) => {
+      const added = await post({ op: "add_zone", net: "", layer: A.layer, outline: [{ x: 5_000_000, y: 8_000_000 }, { x: 9_000_000, y: 8_000_000 }, { x: 9_000_000, y: 12_000_000 }, { x: 5_000_000, y: 12_000_000 }] });
+      t(added.ok, `a pour on no net is added (${added.message})`);
+      await sleep(800);
+      const z = (await zonesOf()).find((x) => !startZones.some((s0) => s0.id === x.id));
+      t(!!z && z.net === "", "it is on no net");
+      if (z) {
+        await select([z.id]);
+        await __eda.run("pcbnew.InteractiveEdit.properties");
+        await sleep(600);
+        const sel = tid("zone-net");
+        t(!!sel && sel.options[0]?.textContent === "<no net>" && sel.value === "", `the net list starts with <no net>, chosen (${sel && sel.value})`);
+        t(tid("zone-no-net-warning")?.textContent === "<no net> will result in an isolated copper island.", "the panel warns as KiCad's does");
+        tid("zone-ok").click();
+        await sleep(1200);
+        const after = (await zonesOf()).find((x) => x.id === z.id);
+        t(after?.net === "", `OK keeps the zone on no net (${after?.net})`);
+        await select([]);
+        await post({ op: "delete_zone", id: z.id });
+        await sleep(600);
+      }
+      t((await zonesOf()).length === startZones.length, "the pour is taken away again");
     });
 
     await scenario("Refill all zones before performing DRC and Check zone fills before plotting run kicad-cli's filler first and keep what it makes", async (t) => {

@@ -18,6 +18,7 @@ import type { EmbeddedCmd } from "./embeddedTypes";
 import type { TableCmdWire } from "./tableTypes";
 import type { TuningPattern } from "./tuneTypes";
 import type { LineEnding } from "../kicad-port/lineEnding";
+import type { RouteSizesInfo } from "../kicad-port/routerSizes";
 
 export type Nm = number;
 export type Degrees = number;
@@ -2080,6 +2081,8 @@ export interface RoutePreview {
   warnings?: string[];
   /** The width the route is drawn at (`m_sizes.TrackWidth()`): what a start without a width took from the start net (`ImportSizes`). */
   width?: Nm | null;
+  /** `/api/route/start` only: what `ROUTER_TOOL::UpdateMessagePanel` shows of the sizes (their sources, the clearance, the net's class) and the rule's width (r5 R5-8). */
+  sizes?: RouteSizesInfo;
   colliding: boolean;
   layer: string;
   /** The live, not-yet-fixed head: last fixed point (or the route's
@@ -2190,6 +2193,8 @@ export interface DiffPairPreview {
   width: Nm;
   /** The edge-to-edge gap the pair is routed at. */
   gap?: Nm;
+  /** `/api/route/dp_start` only: the message panel's sizes and the rule's pair sizes (r5 R5-8). */
+  sizes?: RouteSizesInfo;
   /** The pair does not fit as drawn (`!m_fitOk`). */
   colliding: boolean;
   /** The live, not-yet-fixed head of each line -- already resolved

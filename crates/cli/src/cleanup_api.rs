@@ -110,6 +110,8 @@ pub fn apply(dir: &Path, body: &[u8]) -> Value {
         vias: vec![],
         lock_tracks: vec![],
         via_kinds: vec![],
+        track_sources: vec![],
+        group: None,
     };
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => json!({ "ok": true, "message": summary, "changes": changes_json }),

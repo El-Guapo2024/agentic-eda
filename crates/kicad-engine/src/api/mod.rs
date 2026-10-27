@@ -9,6 +9,9 @@
 //! (`ImportSpecctraSession` is "Since: 11.0"), or `EDA_KICAD_API=0` leaves every caller on its other path: the per-run kicad-cli for exports, our
 //! own session import (`eda_kicad::specctra`, INACTIVE otherwise) for Specctra. [`server::ApiError::falls_back`] says when.
 //!
+//! An export takes the lane only where it pays: the studio's long-lived process ([`long_lived_process`]) or `EDA_KICAD_API` set true; a one-shot CLI
+//! command runs kicad-cli per job, since a server start costs more than the job saves (`exports_use_server`).
+//!
 //! The server does not run a DRC or an ERC (`InjectDrcError` only, no `RunDrc`), so those stay per-run.
 
 pub mod jobs;
@@ -17,4 +20,4 @@ pub mod server;
 pub mod sp;
 pub mod specctra;
 
-pub use server::{shutdown, unavailable, with_server, ApiError, Client};
+pub use server::{exports_use_server, long_lived_process, shutdown, unavailable, with_server, ApiError, Client};

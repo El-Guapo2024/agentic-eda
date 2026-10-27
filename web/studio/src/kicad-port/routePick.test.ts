@@ -42,3 +42,17 @@ test("a route does not pick the item it started on: a skipped pad, via or one se
   assert.equal(pickRouteItem(board, scene, [2000, 60], 1000, null, visible, new Set(["other#0"])), null, "only that segment is skipped, not the whole track: the other one is too far");
   assert.equal(pickRouteItem(board, scene, [2000, 4900], 1000, null, visible, new Set(["other#0"]))?.id, "other#1");
 });
+
+// r5 R5-1: `pickSingleItem`'s top layer -- a pad or via, then a track, on it before any on another layer; the end of a route takes only its layer's.
+test("the top layer's items come first, another layer's are picked when it has none, and an end takes only its layer's", () => {
+  const onB = (t: TrackItem): TrackItem => ({ ...t, layers: ["B.Cu"] });
+  const scene: SnapScene = { items: [onB(track("gnd", [0, 0], [4000, 0])), track("other", [0, 300], [4000, 300])] };
+  // the cursor is on the B.Cu track's copper and within a grid of the F.Cu one: slop 0 finds only the B.Cu one, which is the pick
+  assert.equal(pickRouteItem(board, scene, [2000, 50], 1000, null, visible, undefined, { top: "F.Cu" })?.owner, "gnd");
+  // both under the cursor (wide tracks): the top layer's wins, whichever it is
+  const wide: SnapScene = { items: [onB(track("gnd", [0, 0], [4000, 0], 1000)), track("other", [0, 300], [4000, 300], 1000)] };
+  assert.equal(pickRouteItem(board, wide, [2000, 150], 1000, null, visible, undefined, { top: "F.Cu" })?.owner, "other");
+  assert.equal(pickRouteItem(board, wide, [2000, 150], 1000, null, visible, undefined, { top: "B.Cu" })?.owner, "gnd");
+  // a route's end on F.Cu: the B.Cu track under the cursor is no end, and nothing is picked (the slop pass that found it ends the search)
+  assert.equal(pickRouteItem(board, scene, [2000, 50], 1000, null, visible, undefined, { top: "F.Cu", only: true }), null);
+});

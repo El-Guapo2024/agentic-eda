@@ -7,8 +7,10 @@
 import type { Dispatch } from "react";
 import type { Action } from "../state/store";
 import type { SweepCtx } from "./pcbSweepKit";
-import { routeMove } from "../api/client";
+import { dpMove, dpSetDims, routeMove } from "../api/client";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
+import { dpStateFromPreview } from "../kicad-port/dpTool";
+import { chosenDiffPair, routeWidthAfterChange } from "../kicad-port/routerSizes";
 
 type Handler = (param?: unknown) => void;
 
@@ -25,14 +27,19 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
   const vias = () => [base.via, ...(board?.routing?.via_presets ?? [])];
   const index = (param: unknown): number => (typeof param === "number" ? Math.round(param) : 0);
 
-  /** A width picked while a route is being drawn takes effect at once, as `W` does: the live head is re-resolved at the cursor with it. */
-  const reroute = (d: Dispatch<Action>, width: number) => {
+  /** A width picked while a route is being drawn takes effect at once, as `W` does: the live head is re-resolved at the cursor with it
+   * (`trackViaSizeChanged` -> `ImportSizes` with `m_TempOverrideTrackWidth` set: the list's entry, or at entry 0 the net's rule width, the
+   * start reply's `rule_width`). `index` is the list entry chosen, or undefined for one the width is given for. */
+  const reroute = (d: Dispatch<Action>, width: number, index?: number) => {
     const draw = state.drawState;
     if (draw?.kind !== "route") return;
     const cursor = state.cursorNm ?? { x: draw.pts[draw.pts.length - 1]?.[0] ?? 0, y: draw.pts[draw.pts.length - 1]?.[1] ?? 0 };
-    d({ type: "SET_DRAW_STATE", draw: { ...draw, width } });
-    void routeMove(cursor.x, cursor.y, undefined, width).then((preview) => {
-      if (preview.ok) d({ type: "SET_DRAW_STATE", draw: drawStateFromPreview({ ...draw, width }, preview) });
+    const w = index === undefined ? width : routeWidthAfterChange(board?.routing?.track_width_presets ?? [], index, false, 0, draw.sizes?.rule_width ?? width);
+    const source = index === 0 ? (draw.sizes?.rule_width_source ?? draw.sizes?.width_source) : "user choice";
+    const next = { ...draw, width: w, widthOverride: true, sizes: draw.sizes ? { ...draw.sizes, width_source: source } : undefined };
+    d({ type: "SET_DRAW_STATE", draw: next });
+    void routeMove(cursor.x, cursor.y, undefined, w).then((preview) => {
+      if (preview.ok) d({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(next, preview) });
     });
   };
 
@@ -45,38 +52,54 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
       // `SetTrackWidthIndex( 0 )` / `SetViaSizeIndex( 0 )`: the dummy entry is the net class's.
       dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: base.width, index: 0 });
       dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: base.via, index: 0 });
-      reroute(dispatch, base.width);
+      reroute(dispatch, base.width, 0);
     })
   );
-  // A track width of the list (entry 0 is the net class's).
+  // A track width of the list (entry 0 is the net class's). `TRACK_WIDTH_MENU::eventHandler`: `UseCustomTrackViaSize( false )`,
+  // `m_TempOverrideTrackWidth = true`, `SetTrackWidthIndex( .. )` -- "Use Starting Track Width" (`m_UseConnectedTrackWidth`) is left as it is:
+  // the choice overrides it for the route in progress only, and the next route that starts on a track inherits its width again (r5 R5-7).
   m.set(
     "studio.Router.setTrackWidth",
     pcbOnly((param) => {
       const width = widths()[index(param)];
       if (width == null) return;
-      dispatch({ type: "BCX", patch: { autoTrackWidth: false } });
       // `SetTrackWidthIndex`: "m_useCustomTrackVia = false"
       dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
       dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: width, index: index(param) });
-      reroute(dispatch, width);
+      reroute(dispatch, width, index(param));
     })
   );
-  // A via size of the list (entry 0 is the net class's).
+  // A via size of the list (entry 0 is the net class's): `UseCustomTrackViaSize( false )`, `SetViaSizeIndex( .. )`, nothing else (r5 R5-7).
   m.set(
     "studio.Router.setViaSize",
     pcbOnly((param) => {
       const preset = vias()[index(param)];
       if (!preset) return;
-      dispatch({ type: "BCX", patch: { autoTrackWidth: false } });
       // `SetViaSizeIndex`: "m_useCustomTrackVia = false"
       dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
       dispatch({ type: "SET_CURRENT_VIA_PRESET", preset, index: index(param) });
     })
   );
-  // "Use Net Class Values" of the pair menu (`bds.UseCustomDiffPairDimensions( false )`).
+  // "Use Net Class Values" of the pair menu (`bds.UseCustomDiffPairDimensions( false ); bds.SetDiffPairIndex( 0 );`).
   m.set(
     "studio.Router.useNetclassDiffPair",
-    pcbOnly(() => dispatch({ type: "PCBX", patch: { useCustomDiffPair: false } }))
+    pcbOnly(() => dispatch({ type: "PCBX", patch: { useCustomDiffPair: false, diffPairIndex: 0 } }))
+  );
+  // A pair of Pre-defined Sizes' Differential Pairs (`ID_POPUP_PCB_SELECT_DIFFPAIR1 + i - 1`: `UseCustomDiffPairDimensions( false )`,
+  // `SetDiffPairIndex( i )`), then `trackViaSizeChanged`: a pair being routed takes it at once (r5 R5-5).
+  m.set(
+    "studio.Router.setDiffPair",
+    pcbOnly((param) => {
+      const i = index(param);
+      const dims = chosenDiffPair(board?.routing?.diff_pair_presets ?? [], i, false, null);
+      if (!dims) return;
+      dispatch({ type: "PCBX", patch: { useCustomDiffPair: false, diffPairIndex: i } });
+      const draw = state.drawState;
+      if (draw?.kind !== "diffpair") return;
+      const cursor = state.cursorNm;
+      const sizes = draw.sizes ? { ...draw.sizes, width_source: "user choice", gap_source: "user choice" } : undefined;
+      void dpSetDims(dims.width, dims.gap, dims.viaGap).then(() => cursor && dpMove(cursor.x, cursor.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview({ ...draw, sizes }, preview) })));
+    })
   );
   // "Use Custom Values..." of the pair menu (`DIFF_PAIR_MENU::eventHandler`, `ID_POPUP_PCB_SELECT_CUSTOM_DIFFPAIR`): "bds.UseCustomDiffPairDimensions(
   // true ); toolManager->RunAction( PCB_ACTIONS::routerDiffPairDialog );" -- the flag stays set whatever the dialog returns.

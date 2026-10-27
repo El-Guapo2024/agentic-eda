@@ -249,6 +249,9 @@ pub struct RuleResolver {
     /// The worst clearance a hole can ask beyond its copper's: the board's hole clearance and hole to hole, the local clearances (which are
     /// hole clearances too), and every hole, physical or edge rule.
     max_hole_clearance: Nm,
+    /// The barcodes' implicit physical clearance ("barcode visual separation default", `A.Type == 'Barcode'`): counted in [`Self::max_clearance`]
+    /// once the world has a barcode ([`Self::add_graphic_as`]).
+    barcode_clearance: Nm,
     cache: RefCell<FnvMap<(Key, Key, bool), Nm>>,
     /// What building the world had to tell the user ([`Self::warnings`]).
     warnings: Vec<String>,
@@ -388,8 +391,17 @@ impl RuleResolver {
         }
         let engine = rb.engine;
         // `GetBiggestClearanceValue`: the worst of every clearance-type rule (`QueryWorstConstraint`)
-        // (the barcodes' implicit 1 mm physical clearance, `A.Type == 'Barcode'`, is left out: it never holds for the router's items, and the
-        // margin is only how far the search looks -- KiCad's `QueryWorstConstraint` counts it and looks 1 mm out round everything)
+        // (the barcodes' implicit 1 mm physical clearance, `A.Type == 'Barcode'`, is counted only once the world has a barcode, `add_graphic_as`:
+        // the margin is only how far the search looks -- KiCad's `QueryWorstConstraint` counts it and looks 1 mm out round everything)
+        let barcode_clearance = engine
+            .rules
+            .iter()
+            .filter(|r| r.implicit == ImplicitSource::BarcodeDefaults)
+            .flat_map(|r| r.constraints.iter())
+            .filter(|c| c.ctype == CType::PhysicalClearance)
+            .map(|c| Nm::new(c.value.min().min(eda_drc::constraints::MAXIMUM_CLEARANCE)))
+            .max()
+            .unwrap_or(Nm::ZERO);
         for r in engine.rules.iter().filter(|r| r.implicit != ImplicitSource::BarcodeDefaults) {
             for c in &r.constraints {
                 if matches!(c.ctype, CType::Clearance | CType::PhysicalClearance | CType::HoleClearance | CType::EdgeClearance | CType::HoleToHole) {
@@ -407,13 +419,13 @@ impl RuleResolver {
             r.is_implicit()
                 && match r.implicit {
                     ImplicitSource::BoardSetup => r.condition.is_none(),
-                    // `A.Type == 'Barcode'`: never one of the router's items
+                    // `A.Type == 'Barcode'`: a barcode's solid is a special side (`add_graphic_as`), which the engine always answers for
                     ImplicitSource::BarcodeDefaults => true,
                     ImplicitSource::NetClass => r.condition.as_ref().is_some_and(|c| c.expression().starts_with("A.hasExactNetclass(") && !c.expression().contains("&&")),
                     _ => false,
                 }
         });
-        RuleResolver { engine, layer_names, items, info, ids, extra: RefCell::new(FnvMap::default()), net_ties, geometry, plain, net_rules: rules.clone(), max_clearance, max_hole_clearance, cache: RefCell::new(FnvMap::default()), warnings: Vec::new(), flashed: HashMap::new() }
+        RuleResolver { engine, layer_names, items, info, ids, extra: RefCell::new(FnvMap::default()), net_ties, geometry, plain, net_rules: rules.clone(), max_clearance, max_hole_clearance, barcode_clearance, cache: RefCell::new(FnvMap::default()), warnings: Vec::new(), flashed: HashMap::new() }
     }
 
     /// The worst clearance anything of this board can ask for (`NODE::GetMaxClearance`, without the epsilon): how far a collision search
@@ -493,11 +505,23 @@ impl RuleResolver {
     /// of `net` (none: no net) on its copper layer, of the footprint `footprint` when it is one's (`GetParentFootprint()`, which a net tie's bridge is
     /// [`Self::is_in_net_tie`] by), numbered for its solids. `class` is what the rules see it as (`A.Type`).
     pub fn add_graphic(&mut self, source: &str, layer: i32, net: Option<&str>, footprint: Option<&str>, class: Class) -> u32 {
+        self.add_graphic_as(source, layer, net, footprint, class, None)
+    }
+
+    /// [`Self::add_graphic`] of an item whose type the rules see by its own name (`A.Type`, `ENUM_MAP<KICAD_T>`) rather than its class's: "Barcode"
+    /// (`syncBarcode`: `solid->SetParent( aBarcode )`), "Text Box" (`syncGraphicalItem` of a `PCB_TEXTBOX`), "Table" (`syncTextItem` of a `PCB_TABLE`).
+    /// A barcode brings the barcodes' implicit physical clearance into [`Self::max_clearance`].
+    pub fn add_graphic_as(&mut self, source: &str, layer: i32, net: Option<&str>, footprint: Option<&str>, class: Class, type_name: Option<&str>) -> u32 {
         if let Some(&id) = self.ids.get(source) {
             return id;
         }
+        if type_name == Some("Barcode") {
+            self.max_clearance = self.max_clearance.max(self.barcode_clearance);
+            self.max_hole_clearance = self.max_hole_clearance.max(self.barcode_clearance);
+        }
         let layer = self.layer_name(layer).unwrap_or("F.Cu").to_string();
         let mut it = RuleItem::new(source.to_string(), class);
+        it.type_name = type_name.map(str::to_string);
         it.layers = vec![layer.clone()];
         it.layer = Some(layer.clone());
         it.net = net.unwrap_or("").to_string();

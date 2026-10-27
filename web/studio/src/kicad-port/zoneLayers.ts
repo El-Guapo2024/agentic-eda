@@ -61,3 +61,18 @@ export function zoneLayerChoices(kind: "copper" | "non-copper" | "rule-area", co
 export function zoneDialogKind(isRuleArea: boolean, layers: readonly string[]): "copper" | "non-copper" | "rule-area" {
   return isRuleArea ? "rule-area" : layers.some(isCopper) ? "copper" : "non-copper";
 }
+
+/**
+ * The net the Zone Properties dialog gives the zone (`panel_zone_properties.cpp`'s `m_netSelector`, which offers `<no net>`). `chosen` is the net the dialog holds: the
+ * zone's own when it edits or duplicates one (`""` for a zone on no net, which OK keeps: `Edit_Zone_Params` sets a net only `if( NETINFO_ITEM* net = FindNet(
+ * zoneInfo.m_Netcode ) )`, and net 0 is kept), what the user picked, or `null` for a new zone nothing was picked for, which starts on the board's first net. A rule area
+ * has the net it holds (none, usually); a non-copper zone has none.
+ */
+export function zoneDialogNet(kind: "copper" | "non-copper" | "rule-area", chosen: string | null, nets: readonly string[]): string {
+  if (kind === "non-copper") return "";
+  if (kind === "rule-area") return chosen ?? "";
+  return chosen ?? nets[0] ?? "";
+}
+
+/** `PANEL_ZONE_PROPERTIES::updateInfoBar`'s warning for a copper zone on no net. */
+export const NO_NET_ZONE_WARNING = "<no net> will result in an isolated copper island.";

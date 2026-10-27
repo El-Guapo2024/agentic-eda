@@ -96,6 +96,10 @@ fn a_route_with_a_via_pushes_the_track_on_the_other_layer_the_via_sits_on() {
     assert_eq!((commit.vias[0].at, commit.vias[0].from_layer.as_str(), commit.vias[0].to_layer.as_str()), (via_at, "F.Cu", "B.Cu"));
     assert!(commit.remove_track_ids.contains(&"t_gnd".to_string()), "{:?}", commit.remove_track_ids);
     assert!(commit.tracks.iter().any(|t| t.layer == "F.Cu") && commit.tracks.iter().any(|t| t.layer == "B.Cu"), "tracks on both layers");
+    // r5 R5-2: the shoved GND track's replacements name it as their source (`GetSourceItem()`), the route's own tracks name none
+    let gnd: Vec<usize> = (0..commit.tracks.len()).filter(|&i| commit.tracks[i].net == "GND").collect();
+    assert!(!gnd.is_empty() && gnd.iter().all(|&i| commit.source_of(i) == Some("t_gnd")), "{:?} {:?}", commit.track_sources, commit.tracks);
+    assert!((0..commit.tracks.len()).filter(|&i| commit.tracks[i].net == "SIG").all(|i| commit.source_of(i).is_none_or(|s| s == "t_sig")), "{:?}", commit.track_sources);
     let after = committed(&design, &commit);
     assert!(violations(&after, &model).is_empty(), "the committed board is clean: {:?}", violations(&after, &model));
 }
@@ -207,4 +211,17 @@ fn backspace_takes_a_via_leg_back_with_the_via_armed_again() {
     let commit = router.finish(p(mm(-5.0), mm(3.0))).unwrap();
     assert_eq!(commit.vias.iter().map(|v| v.at).collect::<Vec<_>>(), vec![p(mm(-5.0), Nm::ZERO)]);
     assert!(commit.tracks.iter().any(|t| t.layer == "B.Cu"));
+}
+
+/// r5 R5-2: a dragged track's replacement names the track as its source (`NODE::AssembleLine`: `pl.SetSourceItem( aSeg->GetSourceItem() )`), so the
+/// commit gives it the track's mask opening and group.
+#[test]
+fn a_dragged_tracks_replacement_names_it_as_its_source() {
+    let (design, model) = board(vec![track("t_gnd", "GND", "F.Cu", &[p(mm(-3.0), mm(-4.0)), p(mm(-3.0), mm(4.0))])]);
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Shove;
+    router.drag_start(p(mm(-3.0), Nm::ZERO), "F.Cu").expect("drags the GND track");
+    let commit = router.drag_finish(p(mm(-2.0), Nm::ZERO)).expect("commits");
+    assert_eq!(commit.remove_track_ids, vec!["t_gnd".to_string()]);
+    assert!(!commit.tracks.is_empty() && (0..commit.tracks.len()).all(|i| commit.source_of(i) == Some("t_gnd")), "{:?}", commit.track_sources);
 }

@@ -272,7 +272,8 @@ pub fn bbox_of(points: &[Point]) -> (Nm, Nm, Nm, Nm) {
 /// Whether two [`ItemShape`]s touch -- the geometric half of
 /// `CN_VISITOR::operator()`. Zones are handled by outline containment of
 /// the other shape's anchor points (see [`crate::items`]), matching the
-/// task's "zones connect items within their outline" approximation;
+/// task's "zones connect items within their outline" approximation; two
+/// zone fills by a vertex of one inside the other ([`zone_zone_touch`]);
 /// everything else is a direct shape/shape distance test against 0.
 pub fn touches(a: &ItemShape, a_anchors: &[Point], b: &ItemShape, b_anchors: &[Point]) -> bool {
     // An arc collides where one piece of its tessellation does (the anchors stay the arc's two ends).
@@ -284,7 +285,7 @@ pub fn touches(a: &ItemShape, a_anchors: &[Point], b: &ItemShape, b_anchors: &[P
     }
     match (a, b) {
         (ItemShape::Arc { .. }, _) | (_, ItemShape::Arc { .. }) => unreachable!("taken apart above"),
-        (ItemShape::Zone { outline: oa }, ItemShape::Zone { outline: ob }) => polygons_overlap(oa, ob),
+        (ItemShape::Zone { outline: oa }, ItemShape::Zone { outline: ob }) => zone_zone_touch(oa, ob),
         (ItemShape::Zone { outline }, other) => zone_item_touch(outline, other, b_anchors),
         (other, ItemShape::Zone { outline }) => zone_item_touch(outline, other, a_anchors),
 
@@ -323,6 +324,27 @@ pub fn polygon_edge_distance(p: Point, poly: &[Point]) -> f64 {
 /// or within `accuracy` of its edge.
 pub fn zone_hits_point(poly: &[Point], p: Point, accuracy: f64) -> bool {
     point_in_polygon(p, poly) || (accuracy > 0.0 && polygon_edge_distance(p, poly) <= accuracy)
+}
+
+/// `CN_ZONE_LAYER::ContainsPoint`: the point on one of the fill fragment's triangles (`SHAPE::Collide( p )` with no clearance, so its edge counts).
+fn zone_contains_point(poly: &[Point], p: Point) -> bool {
+    point_in_polygon(p, poly) || polygon_edge_distance(p, poly) <= 0.0
+}
+
+/// `CN_VISITOR::checkZoneZoneConnection`: two fill fragments on one layer are joined when a **vertex** of one lies in the other (A's vertices against B,
+/// then B's against A, each behind the other's bounding box). Edges that cross with no vertex of either inside the other do not join them: a "+" made of
+/// two same-net bars is two clusters in KiCad (kicad-cli's DRC says "Missing connection between items: Zone [GND] .. / Zone [GND] .."), and so in ours.
+/// The layer test is the caller's (a zone item is one layer).
+fn zone_zone_touch(a: &[Point], b: &[Point]) -> bool {
+    if a.len() < 3 || b.len() < 3 {
+        return false;
+    }
+    let (box_a, box_b) = (bbox_of(a), bbox_of(b));
+    let in_box = |p: &Point, bx: &(Nm, Nm, Nm, Nm)| p.x >= bx.0 && p.y >= bx.1 && p.x <= bx.2 && p.y <= bx.3;
+    if box_a.0 > box_b.2 || box_b.0 > box_a.2 || box_a.1 > box_b.3 || box_b.1 > box_a.3 {
+        return false;
+    }
+    a.iter().any(|p| in_box(p, &box_b) && zone_contains_point(b, *p)) || b.iter().any(|p| in_box(p, &box_a) && zone_contains_point(a, *p))
 }
 
 /// `CN_VISITOR::checkZoneItemConnection`: an anchor inside the fill

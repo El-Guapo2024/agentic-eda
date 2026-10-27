@@ -37,10 +37,14 @@
 //!   than risk mis-handling a real node. A rare case, and the safer of
 //!   the two failure directions (a missed merge, not a wrongly-merged
 //!   short).
-//! - A zone counts at the joint as `testMergeCollinearSegments` asks it:
-//!   `citem->HitTest( point, ( width + 1 ) / 2 )`, which for a zone is
-//!   `ZONE::HitTest` -- the joint on a corner or an edge of the outline,
-//!   not inside it (round 4 A-5). Not ported: the merge of overlapping or
+//! - The items at the joint are asked as `testMergeCollinearSegments` asks
+//!   them ([`is_node`]): a track's or via's end there, a pad's copper or a
+//!   zone's outline (`ZONE::HitTest`: a corner or an edge, not its inside,
+//!   round 4 A-5) within `( width + 1 ) / 2` of it, a zone only when its
+//!   fill touches the segments. A segment with a straight track of another
+//!   width attached is not merged (`mergeSegments`' necking-down rule).
+//!   The dialog's filter and the lock are one set here: a filtered track
+//!   still counts as attached where KiCad's `filterItem` skips it. Not ported: the merge of overlapping or
 //!   folded-back collinear segments into their bounding span, and
 //!   `ApproxCollinear`'s 1 nm tolerance.
 
@@ -558,33 +562,80 @@ fn shared_endpoint(a: &Track, b: &Track) -> Option<(Point, Point, Point)> {
     }
 }
 
-/// `testTrackEndpointIsNode`: does anything besides the two merge
-/// candidates (named by `exclude`) touch `p`? See the module doc for the
-/// "elide a 3-way collinear junction" gap this simplifies away.
-fn is_node(p: Point, layer: &str, net: &str, width: Nm, exclude: (&str, &str), tracks: &[Track], vias: &[Via], pads: &[PadGeom], zones: &[Zone]) -> bool {
+/// The copper layer range of a via (`from_layer`..`to_layer` in the board's stack order, either way round).
+fn via_spans(v: &Via, layer: &str, stack: &[String]) -> bool {
+    let at = |l: &str| stack.iter().position(|s| s == l);
+    match (at(&v.from_layer), at(&v.to_layer), at(layer)) {
+        (Some(a), Some(b), Some(l)) => a.min(b) <= l && l <= a.max(b),
+        // a layer the stack does not name: the via's own two
+        _ => v.from_layer == layer || v.to_layer == layer,
+    }
+}
+
+/// Is the straight segment `a`-`b` of half width `hw` among the items connectivity joins to a zone fill fragment `ring` (`checkZoneItemConnection`)?
+fn fill_touches_segment(ring: &[Point], a: Point, b: Point, hw: f64) -> bool {
+    crate::geom::touches(&ItemShape::Zone { outline: ring.to_vec() }, ring, &ItemShape::Segment { a, b, half_width: hw }, &[a, b])
+}
+
+/// `testMergeCollinearSegments`' flags at the joint `p` of two merge candidates (named by `exclude`), from the items connectivity joins to either
+/// segment (`getConnectedItems( aSeg )`): any flag there keeps the segments apart (the merged segment would not end on it). Each item is asked as KiCad
+/// asks it:
+/// - a track, an arc or a via: `IsPointOnEnds( p )`, an end exactly at the joint -- a via only when it reaches the segments' layer (connected);
+/// - a pad: `PAD::HitTest( p, ( width + 1 ) / 2 )`, its copper on the layer within half the width of the joint;
+/// - a zone: `ZONE::HitTest( p, ( width + 1 ) / 2 )` -- `accuracy = std::max( aAccuracy, mmToIU( 0.1 ) )`, `HitTestForCorner( p, accuracy * 2 ) ||
+///   HitTestForEdge( p, accuracy )`, the outline's corners and edges, holes included, not its inside -- of a zone whose **fill** on the layer touches
+///   one of the segments (connectivity joins a zone by its fill, `checkZoneItemConnection`); an unfilled zone joins nothing.
+///
+/// See the module doc for the "elide a 3-way collinear junction" gap this simplifies away.
+#[allow(clippy::too_many_arguments)]
+fn is_node(p: Point, segs: [(Point, Point); 2], layer: &str, width: Nm, exclude: (&str, &str), tracks: &[Track], vias: &[Via], pads: &[PadGeom], zones: &[Zone], copper: &ZoneCopper, stack: &[String]) -> bool {
     if tracks.iter().any(|t| t.id != exclude.0 && t.id != exclude.1 && t.layer == layer && t.pts.contains(&p)) {
         return true;
     }
-    if vias.iter().any(|v| v.at == p) {
+    if vias.iter().any(|v| v.at == p && via_spans(v, layer, stack)) {
         return true;
     }
-    if pads.iter().any(|pg| pad_covers_layer(pg, layer) && pg.pad.signed_distance(p) <= 0.0) {
+    let accuracy = ((width.get() + 1) / 2) as f64;
+    if pads.iter().any(|pg| pad_covers_layer(pg, layer) && pg.pad.signed_distance(p) <= accuracy) {
         return true;
     }
-    // `ZONE::HitTest( p, ( width + 1 ) / 2 )`: `accuracy = std::max( aAccuracy, mmToIU( 0.1 ) )`, then
-    // `HitTestForCorner( p, accuracy * 2 ) || HitTestForEdge( p, accuracy )` -- the outline's corners and edges, holes included, not its inside.
-    let accuracy = ((width.get() + 1) / 2).max(100_000) as f64;
+    let zone_accuracy = accuracy.max(100_000.0);
     let hits = |ring: &[Point]| {
         let n = ring.len();
-        ring.iter().any(|c| ((c.x - p.x).as_f64()).hypot((c.y - p.y).as_f64()) <= 2.0 * accuracy) || (0..n).any(|i| crate::geom::point_seg_distance(p, ring[i], ring[(i + 1) % n]) <= accuracy)
+        ring.iter().any(|c| ((c.x - p.x).as_f64()).hypot((c.y - p.y).as_f64()) <= 2.0 * zone_accuracy) || (0..n).any(|i| crate::geom::point_seg_distance(p, ring[i], ring[(i + 1) % n]) <= zone_accuracy)
     };
-    // (only a zone of the track's net is among `getConnectedItems( aSeg )`)
-    zones.iter().any(|z| z.net == net && z.is_on_layer(layer) && z.outline.len() >= 3 && (hits(&z.outline) || z.holes.iter().any(|h| h.len() >= 2 && hits(h))))
+    let hw = width.as_f64() / 2.0;
+    zones.iter().any(|z| {
+        if !z.is_on_layer(layer) || z.outline.len() < 3 || !(hits(&z.outline) || z.holes.iter().any(|h| h.len() >= 2 && hits(h))) {
+            return false;
+        }
+        let Some(fill) = copper.get(&z.id, layer) else { return false };
+        fill.polys.iter().filter_map(|poly| poly.first()).any(|chain| {
+            let ring: Vec<Point> = chain.iter().map(|q| Point { x: Nm::new(q.x), y: Nm::new(q.y) }).collect();
+            ring.len() >= 3 && segs.iter().any(|&(a, b)| fill_touches_segment(&ring, a, b, hw))
+        })
+    })
+}
+
+/// `TRACKS_CLEANER::cleanup`'s `mergeSegments`: "Do not merge an end which has different width tracks attached -- it's a common use-case for
+/// necking-down a track between pads." A segment that connectivity joins (anywhere along it) to a straight track (`PCB_TRACE_T`, not an arc) of
+/// another width takes part in no merge as the segment the pass starts from.
+fn has_different_width_attached(seg: &Track, tracks: &[Track]) -> bool {
+    let (a, b) = (seg.pts[0], seg.pts[1]);
+    let hw = seg.width.as_f64() / 2.0;
+    tracks.iter().any(|t| {
+        t.id != seg.id
+            && t.layer == seg.layer
+            && t.width != seg.width
+            && t.arc().is_none()
+            && t.pts.windows(2).any(|w| crate::geom::seg_seg_distance(a, b, w[0], w[1]) <= hw + t.width.as_f64() / 2.0)
+    })
 }
 
 /// `TRACKS_CLEANER::cleanup`'s merge pass, run to a fixed point (matches
 /// source's own `do { ... } while (mergeSegments(...))`).
-fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zones: &[Zone], prot: &Protected, merged_count: &mut usize, changes: &mut Vec<CleanupChange>) -> bool {
+#[allow(clippy::too_many_arguments)]
+fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zones: &[Zone], copper: &ZoneCopper, stack: &[String], prot: &Protected, merged_count: &mut usize, changes: &mut Vec<CleanupChange>) -> bool {
     let mut changed_any = false;
     loop {
         let mut found: Option<(usize, usize, Point, Point)> = None;
@@ -593,8 +644,14 @@ fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zone
             if prot.track(&tracks[i].id) {
                 continue;
             }
+            // the board's order stands for KiCad's `candidate < segment` (the items' addresses): the pair is tried from its first segment, whose
+            // attached tracks decide
+            // ("one can merge only collinear segments, not vias or arcs")
+            if tracks[i].pts.len() != 2 || tracks[i].arc().is_some() || has_different_width_attached(&tracks[i], tracks) {
+                continue;
+            }
             for j in (i + 1)..tracks.len() {
-                if prot.track(&tracks[j].id) {
+                if prot.track(&tracks[j].id) || tracks[j].arc().is_some() {
                     continue;
                 }
                 if tracks[i].net != tracks[j].net || tracks[i].layer != tracks[j].layer || tracks[i].width != tracks[j].width {
@@ -612,7 +669,8 @@ fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zone
                 if d1.0.get() * d2.0.get() + d1.1.get() * d2.1.get() <= 0 {
                     continue;
                 }
-                if is_node(shared, &tracks[i].layer, &tracks[i].net, tracks[i].width, (tracks[i].id.as_str(), tracks[j].id.as_str()), tracks, vias, pads, zones) {
+                let segs = [(tracks[i].pts[0], tracks[i].pts[1]), (tracks[j].pts[0], tracks[j].pts[1])];
+                if is_node(shared, segs, &tracks[i].layer, tracks[i].width, (tracks[i].id.as_str(), tracks[j].id.as_str()), tracks, vias, pads, zones, copper, stack) {
                     continue;
                 }
                 found = Some((i, j, far_i, far_j));
@@ -660,7 +718,7 @@ pub fn compute_cleanup_filtered(design: &Design, model: &ConstraintModel, copper
     remove_redundant(&mut tracks, &mut vias, design, model, copper, &opts, &prot, &mut changes);
 
     if opts.merge_segments {
-        merge_collinear(&mut tracks, &vias, &pads, &zones, &prot, &mut merged, &mut changes);
+        merge_collinear(&mut tracks, &vias, &pads, &zones, copper, &model.board.layers, &prot, &mut merged, &mut changes);
     }
 
     if opts.delete_shorting {
@@ -678,7 +736,7 @@ pub fn compute_cleanup_filtered(design: &Design, model: &ConstraintModel, copper
     };
 
     if deleted_any && opts.merge_segments {
-        merge_collinear(&mut tracks, &vias, &pads, &zones, &prot, &mut merged, &mut changes);
+        merge_collinear(&mut tracks, &vias, &pads, &zones, copper, &model.board.layers, &prot, &mut merged, &mut changes);
     }
 
     let (removed_tracks, added) = finish(&original, &tracks, &pieces, &mut changes);
@@ -716,13 +774,61 @@ mod tests {
         let opts = CleanupOptions { merge_segments: true, ..Default::default() };
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), opts);
         assert_eq!(report.changes.iter().filter(|c| matches!(c.kind, CleanupKind::MergedTracks)).count(), 1, "{:?}", report.changes.iter().map(|c| c.kind).collect::<Vec<_>>());
-        // the joint on the zone's edge: a node
+        // the joint on the zone's edge: a node, once the zone's fill reaches the segments (R5-Z6: connectivity joins a zone by its fill)
         let rt = design.routing.as_mut().unwrap();
         let n = rt.tracks.len();
         rt.tracks[n - 2].pts = vec![p(-20.0, -50.0), p(-15.0, -50.0)];
         rt.tracks[n - 1].pts = vec![p(-15.0, -50.0), p(-10.0, -50.0)];
-        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), opts);
-        assert_eq!(report.changes.iter().filter(|c| matches!(c.kind, CleanupKind::MergedTracks)).count(), 0);
+        let merges = |copper: &ZoneCopper| compute_cleanup(&design, &model, copper, opts).changes.iter().filter(|c| matches!(c.kind, CleanupKind::MergedTracks)).count();
+        assert_eq!(merges(&ZoneCopper::default()), 1, "an unfilled zone is connected to nothing");
+        let mut copper = ZoneCopper::default();
+        let ring = [(-50.0, -50.0), (50.0, -50.0), (50.0, 50.0), (-50.0, 50.0)].iter().map(|&(x, y)| eda_clipper2::Point64 { x: mm(x).get(), y: mm(y).get(), z: 0 }).collect();
+        copper.zones.insert(("z".into(), "F.Cu".into()), eda_shape_poly_set::ShapePolySet::from_outline(ring));
+        assert_eq!(merges(&copper), 0);
+    }
+
+    /// R5-Z4 (`mergeSegments`: "Do not merge an end which has different width tracks attached"): C1 (0.15 mm), A (0.25 mm), B (0.25 mm), C2 (0.15 mm)
+    /// in a collinear chain, A and B meeting at a free point: nothing merges. Without C1 and C2, A and B merge.
+    #[test]
+    fn merge_skips_a_segment_with_a_different_width_attached() {
+        let (mut design, model) = two_pad_model();
+        let p = |x: f64| Point { x: mm(x), y: mm(15.0) };
+        let t = |id: &str, a: f64, b: f64, w: f64| Track { id: id.into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(w), pts: vec![p(a), p(b)], arc_mid_offset: None };
+        design.routing.as_mut().unwrap().tracks = vec![t("c1", 2.0, 4.0, 0.15), t("a", 4.0, 6.0, 0.25), t("b", 6.0, 8.0, 0.25), t("c2", 8.0, 10.0, 0.15)];
+        let opts = CleanupOptions { merge_segments: true, ..Default::default() };
+        let merges = |d: &Design| compute_cleanup(d, &model, &ZoneCopper::default(), opts).changes.iter().filter(|c| matches!(c.kind, CleanupKind::MergedTracks)).count();
+        assert_eq!(merges(&design), 0);
+        design.routing.as_mut().unwrap().tracks.retain(|t| t.id == "a" || t.id == "b");
+        assert_eq!(merges(&design), 1);
+    }
+
+    /// R5-Z6: a pad counts at the joint within half the track's width (`PAD::HitTest( p, ( width + 1 ) / 2 )`), and a via only when it reaches the
+    /// segments' layer (connectivity joins it to them).
+    #[test]
+    fn merge_keeps_a_joint_within_half_width_of_a_pad_and_ignores_a_via_off_the_layer() {
+        let (mut design, mut model) = two_pad_model();
+        model.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+        let c = pad_center(&design, &model, "R1", "1");
+        let edge = c.x + (0..).map(|k| Nm::new(k * 1_000)).find(|&d| design_pad_distance(&design, &model, Point { x: c.x + d, y: c.y }) > 0.0).unwrap();
+        // the joint 0.1 mm outside the pad's edge, the segments 0.25 mm wide running away from it, upwards
+        let j = Point { x: edge + mm(0.1), y: c.y };
+        let t = |id: &str, a: Point, b: Point| Track { id: id.into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.25), pts: vec![a, b], arc_mid_offset: None };
+        design.routing.as_mut().unwrap().tracks = vec![t("a", Point { x: j.x, y: j.y - mm(2.0) }, j), t("b", j, Point { x: j.x, y: j.y + mm(2.0) })];
+        let opts = CleanupOptions { merge_segments: true, ..Default::default() };
+        let merges = |d: &Design, m: &ConstraintModel| compute_cleanup(d, m, &ZoneCopper::default(), opts).changes.iter().filter(|c| matches!(c.kind, CleanupKind::MergedTracks)).count();
+        assert_eq!(merges(&design, &model), 0, "the pad is at the joint");
+        // away from the pad, a blind via In1-In2 at the joint does not reach F.Cu: the segments merge; one from F.Cu keeps them apart
+        let far = Point { x: j.x + mm(5.0), y: j.y };
+        design.routing.as_mut().unwrap().tracks = vec![t("a", Point { x: far.x, y: far.y - mm(2.0) }, far), t("b", far, Point { x: far.x, y: far.y + mm(2.0) })];
+        let via = |from: &str, to: &str| Via { id: "v".into(), net: "N1".into(), at: far, drill: mm(0.3), diameter: mm(0.6), from_layer: from.into(), to_layer: to.into() };
+        design.routing.as_mut().unwrap().vias = vec![via("In1.Cu", "In2.Cu")];
+        assert_eq!(merges(&design, &model), 1);
+        design.routing.as_mut().unwrap().vias = vec![via("F.Cu", "In1.Cu")];
+        assert_eq!(merges(&design, &model), 0);
+    }
+
+    fn design_pad_distance(design: &Design, model: &ConstraintModel, p: Point) -> f64 {
+        pad_geoms(design, model).iter().map(|g| g.pad.signed_distance(p)).fold(f64::MAX, f64::min)
     }
 
     #[test]

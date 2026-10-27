@@ -490,13 +490,19 @@ export function severitiesToSend(items: readonly SeverityItem[], chosen: Readonl
  * undoable verb, one per Apply.)
  */
 export function predefinedSizesCmds(widths: readonly Nm[], vias: ReadonlyArray<ViaPreset>, diffPairs: ReadonlyArray<DiffPairPreset>): Cmd[] {
+  // `PANEL_SETUP_TRACKS_AND_VIAS::TransferDataFromWindow`: "Sort lists by increasing value" -- the widths, the vias by diameter then drill
+  // (`VIA_DIMENSION::operator<`), the pairs by width, gap, via gap (`DIFF_PAIR_DIMENSION::operator<`), so the menu and W go from small to large (r5 R5-10)
+  const byKeys = <T,>(keys: ((x: T) => number)[]) => (a: T, b: T) => {
+    for (const k of keys) if (k(a) !== k(b)) return k(a) - k(b);
+    return 0;
+  };
   return [
     {
       op: "batch",
       cmds: [
-        { op: "set_track_width_presets", widths: [...widths] },
-        { op: "set_via_presets", presets: vias.map((v) => ({ ...v })) },
-        { op: "set_diff_pair_presets", presets: diffPairs.map((d) => ({ ...d })) },
+        { op: "set_track_width_presets", widths: [...widths].sort((a, b) => a - b) },
+        { op: "set_via_presets", presets: vias.map((v) => ({ ...v })).sort(byKeys<ViaPreset>([(v) => v.diameter, (v) => v.drill])) },
+        { op: "set_diff_pair_presets", presets: diffPairs.map((d) => ({ ...d })).sort(byKeys<DiffPairPreset>([(d) => d.width, (d) => d.gap, (d) => d.via_gap])) },
       ],
     },
   ];

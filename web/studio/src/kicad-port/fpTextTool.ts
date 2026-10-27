@@ -13,6 +13,7 @@
 // the model's own vertical centre.
 
 import type { CmdText, PointXY } from "../api/types";
+import { TEXT_MAX_NM, TEXT_MIN_NM } from "./fpFields";
 import { isBackLayer, textStyleOf } from "./layerDefaults";
 
 /** The text PlaceText's first click makes on `layer` at `at`, before the dialog fills its content. */
@@ -24,4 +25,22 @@ export function fpNewText(layer: string, at: PointXY): CmdText {
 /** `NoPrintableChars`: nothing but white space. */
 export function noPrintableChars(text: string): boolean {
   return text.trim() === "";
+}
+
+/** `EDA_UNIT_UTILS::UI::StringFromValue`'s millimetres with their unit: "%.10f", the trailing zeros (and a bare point) off, then " mm" (`GetText`). */
+function mmText(nmValue: number): string {
+  const text = (nmValue / 1e6).toFixed(10);
+  const trimmed = text.includes(".") ? text.replace(/0+$/, "").replace(/\.$/, "") : text;
+  return `${trimmed} mm`;
+}
+
+/**
+ * `DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`'s size check, through `UNIT_BINDER::Validate` (common/widgets/unit_binder.cpp): under `TEXT_MIN_SIZE_MM` the
+ * message is `_( "%s must be at least %s." )`, over `TEXT_MAX_SIZE_MM` `_( "%s must be less than %s." )`, the first `%s` the label without its colon (`Width`)
+ * and the second the bound as `StringFromValue` prints it. Our one Size field is the width, so its wording is KiCad's. Null when the size is in range.
+ */
+export function fpTextSizeMessage(sizeNm: number): string | null {
+  if (!(sizeNm >= TEXT_MIN_NM)) return `Width must be at least ${mmText(TEXT_MIN_NM)}.`;
+  if (sizeNm > TEXT_MAX_NM) return `Width must be less than ${mmText(TEXT_MAX_NM)}.`;
+  return null;
 }
