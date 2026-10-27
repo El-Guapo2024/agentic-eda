@@ -760,14 +760,25 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
     let mut read_files: BTreeSet<String> = BTreeSet::new();
     // each file's symbols by uuid: where they are and their unit, for the root's `(symbol_instances ..)`
     let mut symbol_places: BTreeMap<String, BTreeMap<String, (Point, Option<u32>)>> = BTreeMap::new();
-    let root_sheets: Vec<(String, std::path::PathBuf)> = design.schematic.as_ref().map(|s| s.sheets.iter().map(|sh| (sh.file.clone(), dir.to_path_buf())).collect()).unwrap_or_default();
-    let mut queue: Vec<(String, std::path::PathBuf)> = root_sheets;
+    // A sheet's file is resolved against the folder of the file that places it (`SCH_IO_KICAD_SEXPR::loadHierarchy`: `fileName.MakeAbsolute(
+    // m_currentPath.top() )`, then `m_currentPath.push( fileName.GetPath() )`), and a screen is the file it resolves to (`SCH_SCREENS` by file name,
+    // `SearchHierarchy( fn.GetFullPath() )`): each screen is keyed by its path from the root's folder (`ampli_ht/filter.kicad_sch`), and each sheet
+    // names its screen by that key. Two `x.kicad_sch` of two folders are two screens, and one file spelt two ways is one.
+    let key_of = |resolve_dir: &Path, text: &str| -> String { sheet_file_key(dir, resolve_dir, text) };
+    if let Some(root_sch) = design.schematic.as_mut() {
+        for sh in root_sch.sheets.iter_mut() {
+            sh.file = key_of(dir, &sh.file);
+        }
+    }
+    let root_sheets: Vec<String> = design.schematic.as_ref().map(|s| s.sheets.iter().map(|sh| sh.file.clone()).collect()).unwrap_or_default();
+    let mut queue: Vec<String> = root_sheets;
 
-    while let Some((file, resolve_dir)) = queue.pop() {
+    while let Some(file) = queue.pop() {
         if !read_files.insert(file.clone()) {
             continue; // same screen reached again through another placement/path -- already have its content
         }
-        let child_path = resolve_dir.join(&file);
+        let child_path = dir.join(&file);
+        let resolve_dir = child_path.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
         let Ok(child_text) = std::fs::read_to_string(&child_path) else { continue };
         let Ok((child_design, child_model, child_notes)) = import_kicad_sch_with(&child_text, opts) else { continue };
         symbol_places.insert(file.clone(), symbol_places_of(&child_text));
@@ -797,9 +808,9 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
                     root_sch.extras.embedded.insert(f);
                 }
             }
-            let child_dir = child_path.parent().unwrap_or(&resolve_dir).to_path_buf();
-            for s in &child_sch.sheets {
-                queue.push((s.file.clone(), child_dir.clone()));
+            for s in child_sch.sheets.iter_mut() {
+                s.file = key_of(&resolve_dir, &s.file);
+                queue.push(s.file.clone());
             }
             sheet_contents.insert(file, child_sch);
         }
@@ -835,6 +846,35 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
     design.sheet_contents = (!sheet_contents.is_empty()).then_some(sheet_contents);
 
     Ok((design, model, notes))
+}
+
+/// The key of the screen a sheet in a file of the folder `resolve_dir` names as `text`: the file's path from the root's folder `root_dir`, `/`-separated,
+/// with `.` and `..` worked out (`ampli_ht/filter.kicad_sch`). A file outside the root's folder keeps its path from it with the `..` in front.
+pub fn sheet_file_key(root_dir: &Path, resolve_dir: &Path, text: &str) -> String {
+    use std::path::Component;
+    let normal = |p: &Path| -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for c in p.components() {
+            match c {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    if out.last().is_some_and(|l| l != "..") {
+                        out.pop();
+                    } else {
+                        out.push("..".into());
+                    }
+                }
+                other => out.push(other.as_os_str().to_string_lossy().into_owned()),
+            }
+        }
+        out
+    };
+    let target = normal(&resolve_dir.join(text));
+    let root = normal(root_dir);
+    let common = root.iter().zip(&target).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<String> = std::iter::repeat_n("..".to_string(), root.len() - common).collect();
+    parts.extend(target[common..].iter().cloned());
+    parts.join("/")
 }
 
 /// The bus aliases of a `.kicad_pro`'s text: `schematic.bus_aliases`, `{ "<name>": ["<member>", ..] }`, where KiCad 10 keeps them (`PROJECT_FILE`'s
@@ -1777,6 +1817,53 @@ mod tests {
             _ => 0.0,
         };
         assert!((width(&lib.graphics[0]) - 5.08).abs() < 1e-6 && (width(&alternate.graphics[0]) - 7.62).abs() < 1e-6, "{:?} {:?}", lib.graphics, alternate.graphics);
+    }
+
+    /// r2 B-H2: a sheet's file is resolved against the folder of the file that places it (`SCH_IO_KICAD_SEXPR::loadHierarchy`), and a screen is keyed by
+    /// the file it resolves to, from the root's folder: `a/x.kicad_sch` and `b/x.kicad_sch`, each placed as `x.kicad_sch` by the file beside it, are two
+    /// screens; `./a/../a/x.kicad_sch` is `a/x.kicad_sch`. The writer names each again as its placing file reads it, and writes it in its folder.
+    #[test]
+    fn sheets_in_subfolders_are_keyed_by_the_file_they_resolve_to() {
+        let root = Path::new("/p");
+        assert_eq!(sheet_file_key(root, root, "a/x.kicad_sch"), "a/x.kicad_sch");
+        assert_eq!(sheet_file_key(root, &root.join("a"), "x.kicad_sch"), "a/x.kicad_sch");
+        assert_eq!(sheet_file_key(root, root, "./a/../a/x.kicad_sch"), "a/x.kicad_sch");
+        assert_eq!(sheet_file_key(root, &root.join("a"), "../top.kicad_sch"), "top.kicad_sch");
+        assert_eq!(sheet_file_key(root, root, "../out.kicad_sch"), "../out.kicad_sch");
+        assert_eq!(crate::sheet_file_relative_to("a", "a/x.kicad_sch"), "x.kicad_sch");
+        assert_eq!(crate::sheet_file_relative_to("a", "top.kicad_sch"), "../top.kicad_sch");
+        assert_eq!(crate::sheet_file_relative_to("", "a/x.kicad_sch"), "a/x.kicad_sch");
+        assert_eq!(crate::sheet_file_relative_to("a/b", "a/c/x.kicad_sch"), "../c/x.kicad_sch");
+
+        let dir = std::env::temp_dir().join(format!("eda_kicad_sch_subfolders_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for f in ["a", "b"] {
+            std::fs::create_dir_all(dir.join(f)).unwrap();
+        }
+        let sheet = |uuid: &str, name: &str, file: &str, y: i32| format!("(sheet (at 100 {y}) (size 20 20) (uuid \"{uuid}\") (property \"Sheetname\" \"{name}\" (at 100 99 0)) (property \"Sheetfile\" \"{file}\" (at 100 121 0)))");
+        let file = |uuid: &str, body: &str| format!("(kicad_sch (version 20250114) (generator \"test\") (uuid \"{uuid}\") (paper \"A4\") {body})");
+        let leaf = |uuid: &str, text: &str| file(uuid, &format!("(label \"{text}\" (at 10 10 0) (uuid \"{uuid}-l\"))"));
+        std::fs::write(dir.join("root.kicad_sch"), file("11111111-1111-1111-1111-111111111111", &format!("{} {}", sheet("21111111-1111-1111-1111-111111111111", "A", "a/a.kicad_sch", 100), sheet("31111111-1111-1111-1111-111111111111", "B", "b/b.kicad_sch", 200)))).unwrap();
+        std::fs::write(dir.join("a/a.kicad_sch"), file("41111111-1111-1111-1111-111111111111", &sheet("51111111-1111-1111-1111-111111111111", "X", "x.kicad_sch", 100))).unwrap();
+        std::fs::write(dir.join("b/b.kicad_sch"), file("61111111-1111-1111-1111-111111111111", &sheet("71111111-1111-1111-1111-111111111111", "X", "x.kicad_sch", 100))).unwrap();
+        std::fs::write(dir.join("a/x.kicad_sch"), leaf("81111111-1111-1111-1111-111111111111", "IN_A")).unwrap();
+        std::fs::write(dir.join("b/x.kicad_sch"), leaf("91111111-1111-1111-1111-111111111111", "IN_B")).unwrap();
+        let (design, model, notes) = import_kicad_sch_tree(&dir.join("root.kicad_sch")).unwrap();
+        assert_eq!(notes.sheets_not_descended, 0);
+        let screens = design.sheet_contents.as_ref().unwrap();
+        let mut keys: Vec<&String> = screens.keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["a/a.kicad_sch", "a/x.kicad_sch", "b/b.kicad_sch", "b/x.kicad_sch"]);
+        assert_eq!(screens["a/x.kicad_sch"].labels[0].net, "IN_A");
+        assert_eq!(screens["b/x.kicad_sch"].labels[0].net, "IN_B", "the other folder's x.kicad_sch is a screen of its own");
+        assert_eq!(screens["a/a.kicad_sch"].sheets[0].file, "a/x.kicad_sch");
+        // written back: each screen in its folder, named relative to the file that places it
+        let files = crate::export_kicad_sch_tree(&design, &model, &ExportMeta { date: "2026-10-27", title: "t" }, "root.kicad_sch").unwrap();
+        let text = |name: &str| files.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("{name} in {:?}", files.iter().map(|f| &f.0).collect::<Vec<_>>())).1.clone();
+        assert!(text("a/a.kicad_sch").contains("(property \"Sheetfile\" \"x.kicad_sch\""), "{}", text("a/a.kicad_sch"));
+        assert!(text("root.kicad_sch").contains("(property \"Sheetfile\" \"b/b.kicad_sch\""));
+        assert!(text("b/x.kicad_sch").contains("IN_B"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// GAPS.md #6: `import_kicad_sch_tree` actually follows a `(sheet ...)`

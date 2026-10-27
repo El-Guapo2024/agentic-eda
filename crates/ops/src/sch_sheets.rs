@@ -664,7 +664,8 @@ pub(crate) fn fold_first_path_references(design: &mut eda_model::ir::Design) {
         let mut renames: Vec<SecRename> = Vec::new();
         for (old, new) in names {
             let [new] = new.into_iter().collect::<Vec<_>>().try_into().unwrap_or_else(|_| [old.clone()]);
-            if new == old || new.is_empty() || held.contains(&new) {
+            // (an unannotated reference, `R?`, is no name of its own: several symbols have it, each keeps its placeholder)
+            if new == old || new.is_empty() || new.contains('?') || held.contains(&new) {
                 continue;
             }
             held.insert(new.clone());

@@ -1253,7 +1253,8 @@ fn kicad_cli_net_names(root: &Path) -> std::collections::BTreeMap<String, String
     for line in text.lines().map(str::trim) {
         if line.starts_with("<net ") {
             net = attr(line, "name");
-        } else if line.starts_with("<node ") && !attr(line, "ref").starts_with('#') {
+        } else if line.starts_with("<node ") && !attr(line, "ref").starts_with('#') && !attr(line, "ref").contains('?') {
+            // (an unannotated reference, `R?`, is shared by several symbols: their pins cannot be told apart by `REF.PIN`)
             names.insert(format!("{}.{}", attr(line, "ref"), attr(line, "pin")), net.clone());
         }
     }
@@ -1283,6 +1284,8 @@ struct QaTraced {
     kicad: Vec<Vec<String>>,
     /// `(pin, our net's name, kicad-cli's)` for every pin of kicad-cli's netlist whose net we name otherwise ("" when we put it on no net).
     names: Vec<(String, String, String)>,
+    /// `(pin, the net kicad-cli names it on of the schematic the studio derives, the original's)` where the two differ.
+    derived: Vec<(String, String, String)>,
 }
 
 /// The QA project `rel` brought in as a user brings it in (`eda import-kicad x.kicad_sch`: `Cmd::ReplaceSchematic`, the screens into the design's frame,
@@ -1307,7 +1310,7 @@ fn traced_beside_kicad_cli(src: &Path, name: &str) -> Option<QaTraced> {
     let mut our_names: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     let mut ours: Vec<Vec<String>> = Vec::new();
     for n in traced {
-        let mut pins: Vec<String> = n.pins.into_iter().filter(|p| !p.starts_with('#')).collect();
+        let mut pins: Vec<String> = n.pins.into_iter().filter(|p| !p.starts_with('#') && !p.split_once('.').is_some_and(|(r, _)| r.contains('?'))).collect();
         pins.sort();
         for p in &pins {
             our_names.insert(p.clone(), n.name.clone());
@@ -1338,7 +1341,13 @@ fn traced_beside_kicad_cli(src: &Path, name: &str) -> Option<QaTraced> {
         let mine = our_names.get(pin).cloned().unwrap_or_else(|| alone(pin)).replace("{slash}", "/");
         (&mine != theirs).then(|| (pin.clone(), mine, theirs.clone()))
     }).collect();
-    Some(QaTraced { ours, kicad, names })
+    // and the schematic the studio derives from it (`.kicad/board.kicad_sch` and its screens, subfolders too), read by kicad-cli
+    let derived_names = kicad_net_names(&dir).into_iter().filter(|(p, _)| !p.split_once('.').is_some_and(|(r, _)| r.contains('?'))).collect::<std::collections::BTreeMap<_, _>>();
+    let derived = kicad_names.iter().filter_map(|(pin, theirs)| {
+        let d = derived_names.get(pin).cloned().unwrap_or_default();
+        (&d != theirs).then(|| (pin.clone(), d, theirs.clone()))
+    }).collect();
+    Some(QaTraced { ours, kicad, names, derived })
 }
 
 /// KiCad's QA projects that show a screen twice, carry buses across sheets or give labels fields of their own, brought in by `eda import-kicad` and traced as
@@ -1366,6 +1375,8 @@ const QA_TRACED_ALIKE: &[&str] = &[
     // a label's `${#}` in a math expression, per placement (r2 A-N10)
     "issue23962/issue23962.kicad_sch",
     "issue24044/issue24044.kicad_sch",
+    // its sheets in a subfolder (r2 B-H2), its symbols unannotated (`C?`, left out of the comparison)
+    "netlists/complex_hierarchy_shared/complex_hierarchy.kicad_sch",
     // a pin name another unit repeats (r2 A-N6)
     "netlists/complex_hierarchy/complex_hierarchy.kicad_sch",
     "legacy_hierarchy/legacy_hierarchy.kicad_sch",
@@ -1377,7 +1388,6 @@ const QA_TRACED_ALIKE: &[&str] = &[
 
 /// The ones the studio still reads otherwise, each with why (PARITY-sch.md section 38, "Review"): printed, not asserted.
 const QA_TRACED_OTHERWISE: &[(&str, &str)] = &[
-    ("netlists/complex_hierarchy_shared/complex_hierarchy.kicad_sch", "r2 B-H2: its sheets are in a subfolder"),
 ];
 
 #[test]
@@ -1390,7 +1400,10 @@ fn slow_kicad_qa_hierarchies_trace_as_kicad_cli_reads_them() {
     for rel in QA_TRACED_ALIKE {
         let t = qa_traced(rel).unwrap_or_else(|| panic!("{rel} reads"));
         let (groups, names) = (only(&t.kicad, &t.ours).len(), t.names.len());
-        println!("{rel}: {groups} of {} nets of 2+ pins differ, {names} of the pins' net names differ", t.kicad.len());
+        println!("{rel}: {groups} of {} nets of 2+ pins differ, {names} of the pins' net names differ, {} in the derived schematic", t.kicad.len(), t.derived.len());
+        if !t.derived.is_empty() {
+            println!("   derived: {:?}", t.derived.iter().take(8).collect::<Vec<_>>());
+        }
         if t.kicad.is_empty() && !t.ours.is_empty() {
             wrong.push(format!("{rel}: kicad-cli has no nets"));
         }

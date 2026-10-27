@@ -149,14 +149,33 @@ pub struct ScreenCtx {
     pub seed: String,
     /// The KiCad path of a sheet drawn on this screen (one of `instance_paths`, then the sheet's uuid) -> its page number.
     pub sheet_pages: BTreeMap<String, usize>,
+    /// The folder of this screen's file, relative to the root's (`""` for a file beside the root): a sheet's `Sheetfile` is written relative to it,
+    /// as KiCad reads it (`SCH_IO_KICAD_SEXPR::loadHierarchy`: `fileName.MakeAbsolute( m_currentPath.top() )`).
+    pub folder: String,
 }
 
 impl ScreenCtx {
     /// The root screen of an ordinary single-sheet design (what `export_kicad_sch` has always written).
     pub fn root() -> ScreenCtx {
         let file_uuid = duid_plain("sheet:/");
-        ScreenCtx { instance_paths: vec![format!("/{file_uuid}")], instance_sheet_paths: vec![Vec::new()], file_uuid, seed: String::new(), sheet_pages: BTreeMap::new() }
+        ScreenCtx { instance_paths: vec![format!("/{file_uuid}")], instance_sheet_paths: vec![Vec::new()], file_uuid, seed: String::new(), sheet_pages: BTreeMap::new(), folder: String::new() }
     }
+}
+
+/// `file` (a screen's name: its path from the root's folder, `ampli_ht/filter.kicad_sch`) as the file in `folder` that places it names it: relative to that
+/// folder (`filter.kicad_sch` from `ampli_ht`, `../a.kicad_sch` from `ampli_ht` to a file beside the root).
+pub fn sheet_file_relative_to(folder: &str, file: &str) -> String {
+    let from: Vec<&str> = folder.split('/').filter(|c| !c.is_empty()).collect();
+    let to: Vec<&str> = file.split('/').filter(|c| !c.is_empty()).collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count().min(to.len().saturating_sub(1));
+    let mut parts: Vec<&str> = std::iter::repeat_n("..", from.len() - common).collect();
+    parts.extend(&to[common..]);
+    parts.join("/")
+}
+
+/// The folder of the screen `file` (its name from the root's folder): `ampli_ht` of `ampli_ht/filter.kicad_sch`, `""` of `a.kicad_sch`.
+pub fn sheet_file_folder(file: &str) -> String {
+    file.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default()
 }
 
 /// A sheet's own uuid: its id when that already is one, else one derived from it. KiCad reads a sheet's identity from the uuid, and
@@ -682,7 +701,15 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
                 (path.clone(), page)
             })
             .collect();
-        write_sheet_item(&mut out, sch, s, &instances);
+        // the file as the placing file names it, relative to its own folder
+        let named = sheet_file_relative_to(&ctx.folder, &s.file);
+        if named != s.file {
+            let mut s = (*s).clone();
+            s.file = named;
+            write_sheet_item(&mut out, sch, &s, &instances);
+        } else {
+            write_sheet_item(&mut out, sch, s, &instances);
+        }
     }
 
     // ---- groups (`SCH_IO_KICAD_SEXPR::saveGroup`): a name, a uuid and the sorted uuids of the members, a group by its own uuid ----
@@ -842,6 +869,7 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
                 instance_sheet_paths: placements.get(file).map(|v| v.iter().map(|(_, p)| p.clone()).collect()).unwrap_or_default(),
                 seed: format!("{file}|"),
                 sheet_pages: sheet_pages_of.get(file).cloned().unwrap_or_default(),
+                folder: sheet_file_folder(file),
             };
             out.push((file.clone(), export_screen(&child_design, model, &child_meta, &ctx)?));
         }
