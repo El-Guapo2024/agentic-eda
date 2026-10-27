@@ -14,7 +14,7 @@
 import type { Dispatch } from "react";
 import { fetchSchematic } from "../api/client";
 import { postSchCopy, postSchParse } from "../api/schClipboardClient";
-import { clipboardTextOrNull, newIdsAfter, pasteOffset, type SchPasteMode } from "../kicad-port/schClipboard";
+import { clipboardTextOrNull, newIdsAfter, pasteOffset, selectionAfterPaste, type SchPasteMode } from "../kicad-port/schClipboard";
 import { deleteCmds } from "../kicad-port/schDelete";
 import { getSchPaste, openPasteSpecial, setSchPaste } from "../state/schPasteStore";
 import type { Action, StudioApi, StudioState } from "../state/store";
@@ -57,7 +57,7 @@ export interface SchPasteContext {
  * `SCH_EDITOR_CONTROL::Paste` up to the Move tool: read the clipboard (or, for Duplicate, the text given), have the server work out what it would
  * add to the sheet in view and where the cursor holds it, and carry that with the cursor. Nothing is stored until the click.
  */
-export async function startPaste(ctx: SchPasteContext, opts: { mode: SchPasteMode; duplicate: boolean; text?: string | null }): Promise<void> {
+export async function startPaste(ctx: SchPasteContext, opts: { mode: SchPasteMode; duplicate: boolean; text?: string | null; hover?: boolean }): Promise<void> {
   const { state, dispatch } = ctx;
   const text = clipboardTextOrNull(opts.text) ?? (opts.duplicate ? clipboardTextOrNull(duplicateBuffer) : await readSystemClipboard());
   if (!text) {
@@ -80,7 +80,7 @@ export async function startPaste(ctx: SchPasteContext, opts: { mode: SchPasteMod
   if (reply.notes?.length) toast(dispatch, reply.notes.join("; "));
   // `selectionClear`, then the pasted items are the selection.
   dispatch({ type: "CLEAR_SELECTION" });
-  setSchPaste({ fragment: reply.fragment, preview: reply.preview, anchor: reply.anchor ?? [0, 0], sheet: [...state.currentSheetPath], mode: opts.mode, origin: opts.duplicate ? "duplicate" : "paste", notes: reply.notes ?? [] });
+  setSchPaste({ fragment: reply.fragment, preview: reply.preview, anchor: reply.anchor ?? [0, 0], sheet: [...state.currentSheetPath], mode: opts.mode, origin: opts.duplicate ? "duplicate" : "paste", notes: reply.notes ?? [], ...(opts.hover ? { hover: true } : {}) });
 }
 
 /** The click that drops the paste (`commit.Push( _( "Paste" ) )`): one `paste_sch` command, then the new items are the selection. `snapped` is the grid-snapped cursor. */
@@ -93,7 +93,7 @@ export async function placeSchPaste(api: StudioApi, dispatch: Dispatch<Action>, 
   const ok = await api.cmd({ op: "paste_sch", fragment: paste.fragment, dx, dy, mode: paste.mode });
   if (!ok || !before) return;
   try {
-    const ids = newIdsAfter(before, await fetchSchematic(paste.sheet));
+    const ids = selectionAfterPaste(paste, newIdsAfter(before, await fetchSchematic(paste.sheet)));
     if (ids.length > 0) dispatch({ type: "SET_SELECTION", refs: ids, raw: true });
   } catch {
     // The poll will show the new items; only the selection of them is lost.
@@ -149,12 +149,14 @@ export function registerSchClipboardActions(registry: ActionMap, ctx: SchEditCon
   // Ctrl+Shift+V -- the same through DIALOG_PASTE_SPECIAL. The board editor's Paste Special (clear the nets of pasted copper) has no counterpart here: say so.
   registry.set("common.Interactive.pasteSpecial", () => (state.tab === "schematic" ? openPasteSpecial() : toast(dispatch, "Paste Special is only offered on the Schematic tab.")));
 
-  // Ctrl+D -- SCH_EDITOR_CONTROL::Duplicate: `doCopy( true )` into the buffer of its own, then Paste.
+  // Ctrl+D -- SCH_EDITOR_CONTROL::Duplicate: `doCopy( true )` into the buffer of its own, then Paste. With nothing selected `RequestSelection` took the
+  // item under the cursor: a hover selection, which is not left selected when the copy is dropped (r2 D-C8).
   m.set("common.Interactive.duplicate", () => {
+    const hover = state.selection.size === 0;
     void clipboardTextFor(requestSelection()).then((text) => {
       if (!text) return;
       duplicateBuffer = text;
-      return startPaste(ctx, { mode: "unique", duplicate: true, text });
+      return startPaste(ctx, { mode: "unique", duplicate: true, text, hover });
     });
   });
 }
