@@ -11,6 +11,8 @@ import support from "../kicad/editor_toolbar_support.json";
 import { datasheetTarget } from "../kicad-port/itemText";
 import { footprintPropertiesTarget, symbolPropertiesTarget } from "../kicad-port/libEditorEdit";
 import { libFieldName } from "../kicad-port/symFieldLayout";
+import { rotateCarriedPad } from "../kicad-port/fpPadPlacer";
+import { newPadFromMaster } from "../kicad-port/padSettings";
 import { worldToScreen, zoomAbout, type ViewTransform } from "../kicad-port/view";
 import { getDockLayout, setDockColumnCollapsed } from "../state/dockLayoutStore";
 import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
@@ -82,7 +84,14 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     // Select (`ACTIONS::selectSetRect`, the first button of the right toolbar's Selection modes group): back to the select tool.
     m.set("common.Interactive.selectSetRect", () => void ctx.fpApi.setTool("select"));
     // Rotate Counterclockwise / Clockwise (R / Shift+R): the selected pads, a quarter turn. (The verbs rotate pads only: graphics and text have none.)
+    // With the Pad tool armed they turn the pad it carries instead (`doInteractiveItemPlacement`, IPO_ROTATE: `newItem->Rotate( newItem->GetPosition(), rotationAngle )`,
+    // the Footprint Editor's 90 degree step), which the placed pad then hands on to the default pad (kicad-port/fpPadPlacer.ts).
     const rotate = (quarterTurns: number) => () => {
+      const st = ctx.fpApi.getState();
+      if (st.activeTool === "pad") {
+        ctx.fpDispatch({ type: "SET_CARRIED_PAD", pad: rotateCarriedPad(st.carriedPad ?? newPadFromMaster(st.defaultPad, "", { x: 0, y: 0 }), quarterTurns * 90) });
+        return;
+      }
       const pads = [...ctx.fpApi.getState().selection].filter((id) => ctx.fpApi.padById(id));
       if (pads.length === 0) return toast("Select one or more pads to rotate: pads are the only items this editor rotates so far.");
       for (const id of pads) void ctx.fpApi.rotatePad(id, quarterTurns);

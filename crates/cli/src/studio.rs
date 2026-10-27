@@ -1546,10 +1546,14 @@ fn outline_polys_json(design: &eda_model::ir::Design, model: Option<&eda_model::
 }
 
 /// The board's plot settings as the Plot and Generate Drill Files dialogs start from them (`DIALOG_PLOT::init_Dialog`, `DIALOG_GENDRILL::TransferDataToWindow`):
-/// the layer selection, of the layers the board has, and "Use drill/place file origin".
+/// the layer selection, of the layers the board has, and "Use drill/place file origin". With them, what Export IPC-2581 starts from
+/// (`DIALOG_EXPORT_2581::TransferDataToWindow`): the BOM columns kept in the board and the root schematic's title block revision
+/// (`m_IP2581Bom.schRevision`, the BOM revision when none was kept).
 fn plot_params_json(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Value {
     let plot = eda_model::plot_params::PlotParams::of_design(design);
-    json!({ "layers": plot.board_layers(&model.board.layers), "use_aux_origin": plot.flag("useauxorigin").unwrap_or(false) })
+    let bom = design.drawings.as_ref().and_then(|d| d.ipc2581_bom.clone()).unwrap_or_default();
+    let sch_revision = design.schematic.as_ref().and_then(|s| s.title_block.as_ref()).map(|t| t.rev.clone()).unwrap_or_default();
+    json!({ "layers": plot.board_layers(&model.board.layers), "use_aux_origin": plot.flag("useauxorigin").unwrap_or(false), "ipc2581_bom": bom, "sch_revision": sch_revision })
 }
 
 /// What `kicad-cli pcb drc` reports as `invalid_outline` ("Board has malformed outline") for this board, from the live port of the same check:

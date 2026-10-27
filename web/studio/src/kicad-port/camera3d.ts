@@ -114,6 +114,17 @@ export const KEY_ZOOM_FACTOR = 1.26;
 const PAN_STEP_FACTOR = 0.7;
 /** hidpi_gl_3D_canvas.cpp OnMouseWheelCamera: `delta_move *= 0.01f * event.GetWheelRotation()` (the `aPan` branch only). */
 const WHEEL_PAN_SPEED = 0.01;
+export type WheelModifier = "none" | "shift" | "ctrl" | "alt";
+/** The `VC_SETTINGS` scroll fields OnMouseWheelCamera reads (the studio's Preferences has the same names). */
+export interface WheelScrollSettings {
+  scrollModifierZoom: WheelModifier;
+  scrollModifierPanH: WheelModifier;
+  scrollModifierPanV: WheelModifier;
+  reverseScrollZoom: boolean;
+  reverseScrollPanH: boolean;
+}
+/** common_settings.cpp's defaults: `input.scroll_modifier_zoom` 0, `_pan_h` WXK_CONTROL, `_pan_v` WXK_SHIFT, no reversal. */
+export const DEFAULT_WHEEL_SCROLL: WheelScrollSettings = { scrollModifierZoom: "none", scrollModifierPanH: "ctrl", scrollModifierPanV: "shift", reverseScrollZoom: false, reverseScrollPanH: false };
 /** camera.cpp: "180 - epsilon" literal, everywhere source wants a half-turn without risking a full 360-degree spin if the previous angle was already exactly the opposite extreme. */
 const FLIP_EPSILON_DEG = 179.999;
 
@@ -397,45 +408,54 @@ export class TrackballCamera {
   }
 
   /**
-   * hidpi_gl_3D_canvas.cpp HIDPI_GL_3D_CANVAS::OnMouseWheelCamera, ported
-   * for this app's one real default: `m_MousewheelPanning` is hardcoded
-   * `true` in board_adapter.cpp's ctor and never exposed as a user
-   * preference in the interactive 3D viewer, so `aPan` is always true here
-   * (see PARITY-3d.md). DOM has neither wx's single signed "wheel
-   * rotation" value nor its per-event horizontal/vertical axis flag --
-   * same dominant-delta translation this app's 2D port already uses
-   * (kicad-port/viewControls.ts's own header comment): the larger-
-   * magnitude of deltaX/deltaY is treated as "the" rotation, sign-flipped
-   * so scrolling up/left is a positive rotation.
+   * hidpi_gl_3D_canvas.cpp HIDPI_GL_3D_CANVAS::OnMouseWheelCamera, every
+   * branch. `aPan` is `m_MousewheelPanning`, which board_adapter.cpp's ctor
+   * sets true but eda_3d_viewer_frame.cpp::loadCommonSettings overrides when
+   * the frame is built: `m_MousewheelPanning = scroll_modifier_zoom != 0`.
+   * With KiCad's default `input.scroll_modifier_zoom` = 0
+   * (common_settings.cpp) that is `aPan = false`:
+   *   - Shift (PanV) + wheel -> `Pan( 0, -delta_move, 0 )`, whatever the axis;
+   *   - Ctrl (PanH) + wheel -> `Pan( delta_move * horizontalSign, 0, 0 )`;
+   *   - anything else (no modifier, Alt) -> `Zoom( rotation * zoomSign > 0 ? 1.1 : 1/1.1 )`;
+   * with `delta_move = 0.7 * zoom`, negated for a negative rotation and not
+   * scaled by the wheel. A user who picks a zoom modifier (Preferences >
+   * Mouse and Touchpad, e.g. the trackpad scheme) gets the `aPan` branch:
+   * the wheel pans by `0.7 * zoom * 0.01 * rotation`, sideways on a
+   * horizontal axis or with PanH held, and only the zoom modifier zooms.
+   * The scroll settings are the canvas's `VC_SETTINGS`
+   * (`EDA_DRAW_PANEL_GAL::GetVcSettings`), i.e. the same preferences the 2D
+   * canvases read.
    *
-   * With the real default settings (scrollModifierZoom=NONE,
-   * scrollModifierPanH=CTRL, scrollReverseZoom/PanH=false), source's own
-   * branch structure collapses to: a plain wheel with NO modifier always
-   * ZOOMS, regardless of which axis it came from -- a native horizontal
-   * trackpad swipe with no modifier is not special-cased into a pan the
-   * way it is in the 2D viewport, because the outer branch that handles
-   * it is gated on a modifier being held (`modifiers !=
-   * m_scrollModifierZoom`, and NONE != NONE is false). Only
-   * Shift/Ctrl/Alt+wheel pans. This is source's actual behavior, not a
-   * simplification -- see PARITY-3d.md.
+   * DOM has neither wx's single signed "wheel rotation" nor its axis flag:
+   * as in viewControls.ts, the larger of deltaX/deltaY is "the" rotation,
+   * sign-flipped so scrolling up/left is positive, and the axis is
+   * horizontal when |deltaX| wins. wx's rotation is in 120ths of a notch;
+   * a DOM `deltaY` of 100 per notch is taken as is (it only scales the
+   * `aPan` branch's step).
    */
-  handleWheel(input: { deltaX: number; deltaY: number; shiftKey: boolean; ctrlKey: boolean; altKey: boolean }): void {
-    const modifier: "none" | "shift" | "ctrl" | "alt" = input.shiftKey ? "shift" : input.ctrlKey ? "ctrl" : input.altKey ? "alt" : "none";
+  handleWheel(input: { deltaX: number; deltaY: number; shiftKey: boolean; ctrlKey: boolean; altKey: boolean }, scroll: WheelScrollSettings = DEFAULT_WHEEL_SCROLL): void {
+    // "Shift beats control beats alt, we don't support more than one."
+    const modifier: WheelModifier = input.shiftKey ? "shift" : input.ctrlKey ? "ctrl" : input.altKey ? "alt" : "none";
     const isHorizontalAxis = Math.abs(input.deltaX) > Math.abs(input.deltaY);
     const rotation = isHorizontalAxis ? -input.deltaX : -input.deltaY;
+    const aPan = scroll.scrollModifierZoom !== "none";
+    const horizontalSign = scroll.reverseScrollPanH ? -1 : 1;
+    const zoomSign = scroll.reverseScrollZoom ? -1 : 1;
 
-    if (modifier !== "none") {
-      const deltaMove = PAN_STEP_FACTOR * this.zoomValue * WHEEL_PAN_SPEED * rotation;
-      if (isHorizontalAxis || modifier === "ctrl") {
-        this.panByWorld(-deltaMove, 0);
-      } else {
-        // shift or alt: source's own "else" branch doesn't distinguish them further.
-        this.panByWorld(0, -deltaMove);
-      }
-      return;
+    let deltaMove = PAN_STEP_FACTOR * this.zoomValue;
+    if (aPan) deltaMove *= WHEEL_PAN_SPEED * rotation;
+    else if (rotation < 0) deltaMove = -deltaMove;
+
+    if (aPan && modifier !== scroll.scrollModifierZoom) {
+      if (isHorizontalAxis || modifier === scroll.scrollModifierPanH) this.panByWorld(-deltaMove, 0);
+      else this.panByWorld(0, -deltaMove);
+    } else if (modifier === scroll.scrollModifierPanV && !aPan) {
+      this.panByWorld(0, -deltaMove);
+    } else if (modifier === scroll.scrollModifierPanH && !aPan) {
+      this.panByWorld(deltaMove * horizontalSign, 0);
+    } else {
+      this.zoomBy(rotation * zoomSign > 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR);
     }
-
-    this.zoomBy(rotation > 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR);
   }
 
   /** eda_3d_controller.cpp EDA_3D_CONTROLLER::RotateView's X_CW/X_CCW/etc -> CAMERA::RotateX/Y/Z, radian angle, sign already resolved by the caller (ROTATION_STEP_DEG * +-1) -- see actions3d.ts for the exact CW/CCW-to-sign table (eda_3d_controller.cpp's own comment: "Y rotations are backward b/c the RHR has Y pointing into the screen"). */

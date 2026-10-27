@@ -628,8 +628,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   footprint's margins, clearance, net ties, zones, points, groups (with the items' uuids), line styles, text looks, the Datasheet and Description fields (Footprint Properties' four mandatory rows),
   the precision of corner ratios, and the pad tool's next number (`GetNextPadNumber` from the tool's last number, "1" on load). Symbol Properties has KiCad's groups and words.
   Left: the micrometre grid of the IR (70 of the 164 footprints have a length finer than a micrometre, rounded by up to 0.5 um); see the two PARITY sections.
+- Round 4 (2026-10-28, `task-r4-editors-exports`; `PARITY-fpedit.md` section 17): the Footprint Editor's drawing tools take the layer class's width (a polygon unfilled on Edge.Cuts and the courtyards) and the layer box
+  lists every layer; the Text tool is KiCad's (Footprint Text Properties on the first click, the text carried, the layer's size and pen, left, mirrored on a back layer, the tool stays); the pad is carried and R / F
+  turn or flip it before the click; the library Footprint Properties' size messages, Paste Footprint's Value and the Renumber Pads dialog and popup are KiCad's.
 - Missing: Explode and Recombine of a custom pad (item 31); a placed symbol gets a library text box as its border and fill only, not its text (the engine's `SymbolGraphic` has no text box), and has no alternate pin functions (`LibPin` has none); the border's colour and
-  a custom fill colour (the style is kept since the review, not edited) and Private to Symbol Editor of a library shape and text box; a plain text of a symbol and the Footprint Editor's graphics and texts have no Properties dialog; the fields table has no simulation fields; no named body styles;
+  a custom fill colour (the style is kept since the review, not edited) and Private to Symbol Editor of a library shape and text box; a plain text of a symbol and the Footprint Editor's graphics and texts have no Properties dialog (a new footprint text has its Footprint Text Properties since round 4, an existing one not yet); a footprint text has no vertical justification, italic or keep-upright; the fields table has no simulation fields; no named body styles;
   Symbol Properties has no unit display names grid and no Pin Connections tab (both kept in the file); a pad's fabrication property and margins are kept, not edited, in the library Pad Properties; the board's Footprint Properties still has two mandatory rows. (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
 
@@ -676,6 +679,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Missing: raytracing (out of scope); layer presets and viewports of the 3D viewer; the PCB editor's selection drawn green in the 3D view; the 3D Navigator; the Value and user fields (a footprint's own texts and the Reference are drawn since P1), off-board silkscreen;
   the PCB editor's per-layer copper colours on inner layers; X3D and IGES models; per-layer ambient and specular colours of the board; the preferences that set the animation speed; NPTH holes are not cut out of the slab
   (`aIncludeNPTHAsOutlines`, item 27); the Extruded 3D Body of a footprint (item 30).
+- Round 4 (`task-r4-editors-exports`, V4-1, V4-2): the wheel is `OnMouseWheelCamera` with KiCad's default `aPan = false` (Shift pans along y, Ctrl along x, Alt and no modifier zoom; a fixed `0.7 * zoom` step), and the slab, copper and mask
+  thicknesses and the models' mounting height come from the stackup (`BOARD_ADAPTER::InitSettings`, `GetFootprintZPos`; KiCad's default stackup when the board has none). Left: both masks are taken as enabled; the silkscreen keeps its own offset.
 
 ### 24. Item kinds the IR does not have
 **Done in part (2026-10-21, `task-pcb-items`, package P16i, not merged yet): the board's text box, reference image, points, hatch fills and barcodes and the schematic's image are real items (tables are P16t's, on main, below); what is left is listed after.**
@@ -988,6 +993,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Left: the judge's rubric is `judge-rubric-2` and has not been re-baselined on the bench boards' verdicts (the audit's golden check: no
   `ANTHROPIC_API_KEY` on the box); a schematic picture is the whole page KiCad plots, so a small sheet is small in it (the old picture was
   cropped to the content); lint's `schematic_content_in_bounds` now measures against the paper (the page kicad-cli plots), not a cropped viewBox.
+- Round 4 (`task-r4-editors-exports`, X4-1): the board PNG is painted back to front. kicad-cli plots the `--layers` entry first (`PCB_PLOTTER::getPlotSequence`), so the base is Edge.Cuts and F.Cu comes after
+  B.Cu in `--common-layers` (it was F.Cu, painted under the back copper, the back silkscreen and the courtyards); proved by `pictures.rs::the_board_png_has_the_front_copper_on_top`.
 
 ## Appendix A. The original 30, one verdict each
 

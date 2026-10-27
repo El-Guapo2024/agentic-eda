@@ -1938,6 +1938,48 @@ fn push_pad_properties_only_touches_filtered_matches() {
     assert_eq!(by_id(&ids[2]).number, "3", "push never touches number/position");
 }
 
+/// Round 4's E4-F5 (`pad_tool.cpp::doPushPadProperties`): the type filter compares `GetAttribute()`, so an edge-connector pad (`PAD_ATTRIB::CONN`, an
+/// SMD pad with `kicad.connector` here) is not an SMD pad; and between two connector pads, an aperture pad (no copper, `PAD::IsAperturePad`) is kept
+/// apart from one with copper ("Special-case for aperture pads").
+#[test]
+fn push_pad_type_filter_keeps_connector_pads_apart() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    let connector = |n: &str, x: Nm, layers: &[&str]| {
+        let mut p = fp_pad(n, x, Nm::ZERO);
+        p.kicad.connector = true;
+        p.layers = layers.iter().map(|l| l.to_string()).collect();
+        p
+    };
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", Nm::ZERO, Nm::ZERO) }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: connector("2", mm(2.0), &["F.Cu", "F.Mask"]) }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: connector("3", mm(4.0), &["F.Mask"]) }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: connector("4", mm(6.0), &["F.Cu", "F.Mask"]) }).unwrap();
+    let pads = |b: &Board| b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads.clone();
+    let ids: Vec<String> = pads(&b).iter().map(|p| p.id.clone()).collect();
+    let push = |b: &mut Board, src: &str, size: Nm| {
+        let mut p = pads(b).into_iter().find(|p| p.id == src).unwrap();
+        p.size = (size, size);
+        b.apply(&Cmd::EditPad { footprint: "Test:FP".into(), id: src.to_string(), pad: p }).unwrap();
+        b.apply(&Cmd::PushPadProperties { footprint: "Test:FP".into(), source_pad_id: src.to_string(), filter_shape: false, filter_orientation: false, filter_layers: false, filter_type: true }).unwrap();
+    };
+
+    // From the SMD pad: no connector pad is of its type.
+    push(&mut b, &ids[0], mm(3.0));
+    let after = pads(&b);
+    for i in 1..=3 {
+        assert_eq!(after[i].size, (mm(1.0), mm(1.0)), "pad {} is a connector pad, not an SMD pad", after[i].number);
+        assert!(after[i].kicad.connector);
+    }
+    // From a connector pad with copper: the other one receives the push, the aperture pad does not.
+    push(&mut b, &ids[3], mm(2.0));
+    let after = pads(&b);
+    assert_eq!(after[1].size, (mm(2.0), mm(2.0)), "pad 2 is a connector pad with copper, as pad 4");
+    assert_eq!(after[2].size, (mm(1.0), mm(1.0)), "pad 3 is an aperture pad (no copper)");
+    assert_eq!(after[0].size, (mm(3.0), mm(3.0)), "the SMD pad is not a connector pad");
+}
+
 #[test]
 fn renumber_pads_orders_by_position_not_by_current_number() {
     let m = net_model();
@@ -3115,6 +3157,21 @@ fn the_plot_dialogs_store_their_choices_in_the_board() {
     b.apply(&Cmd::SetPlotSettings { layers: None, use_aux_origin: Some(false) }).unwrap();
     let plot = eda_model::plot_params::PlotParams::of_design(b.design());
     assert_eq!((plot.flag("useauxorigin"), plot.board_layers(&m.board.layers)), (Some(false), vec!["F.Cu".to_string(), "F.Mask".into(), "Edge.Cuts".into()]));
+}
+
+/// r4 X4-4: Export IPC-2581's BOM columns kept in the board (`DIALOG_EXPORT_2581::TransferDataFromWindow`, the project's `m_IP2581Bom`); all
+/// empty clears them; nothing changed is refused.
+#[test]
+fn the_ipc2581_dialog_keeps_its_bom_columns_in_the_board() {
+    let m = net_model();
+    let mut b = board(&m);
+    let cmd: Cmd = serde_json::from_str(r#"{"op":"set_ipc2581_bom","bom":{"mpn":"MPN","dist_pn":"LCSC","dist":"LCSC","bom_rev":"A"}}"#).unwrap();
+    b.apply(&cmd).unwrap();
+    let kept = b.design().drawings.as_ref().unwrap().ipc2581_bom.clone().unwrap();
+    assert_eq!((kept.mpn.as_str(), kept.dist_pn.as_str(), kept.dist.as_str(), kept.bom_rev.as_str(), kept.id.as_str()), ("MPN", "LCSC", "LCSC", "A", ""));
+    assert_eq!(b.apply(&cmd).unwrap_err()[0].check, "ops_ipc2581_bom");
+    b.apply(&Cmd::SetIpc2581Bom { bom: Default::default() }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().ipc2581_bom, None);
 }
 
 /// `Cmd::CommitRoute`'s `via_kinds` read from the JSON the studio and the route API send (`[[index, "blind"]]`, numbers inside a tagged enum: the

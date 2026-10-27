@@ -100,6 +100,18 @@ pub fn pad_can_have_number(pad: &LibraryPad) -> bool {
     pad.kind != eda_model::footprint::PadKind::NonPlatedHole
 }
 
+/// `PAD::GetAttribute()` of a library pad: its kind, and for an SMD pad whether it is an edge connector (`PAD_ATTRIB::CONN`, which the model holds
+/// as an SMD pad with [`eda_model::lib_keep::LibraryPadKeep::connector`]).
+pub fn pad_attribute(pad: &LibraryPad) -> (eda_model::footprint::PadKind, bool) {
+    (pad.kind, pad.kind == eda_model::footprint::PadKind::Smd && pad.kicad.connector)
+}
+
+/// `PAD::IsAperturePad`: `( m_padStack.LayerSet() & LSET::AllCuMask() ).none()`, the pad is on no copper layer. A pad whose layers are not set yet
+/// (empty) is not one: the pad tools give it the default pad's copper.
+pub fn is_aperture_pad(pad: &LibraryPad) -> bool {
+    !pad.layers.is_empty() && !pad.layers.iter().any(|l| l.ends_with(".Cu"))
+}
+
 /// `PAD::ImportSettingsFrom( aMasterPad )` (pcbnew/pad.cpp) for what the library pad models: the
 /// padstack (shape, size, offset, drill, corner ratios, trapezoid delta), the layer set, the
 /// attribute (pad type), the orientation and the local clearance / thermal overrides move from

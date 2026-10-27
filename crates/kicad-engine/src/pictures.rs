@@ -103,17 +103,42 @@ pub fn board_picture_layers(model: &ConstraintModel) -> Vec<String> {
     layers
 }
 
+/// The `--layers` / `--common-layers` of the board PNG, painted in the order of `layers` ([`board_picture_layers`], back to front): kicad-cli
+/// plots the `--layers` entry first and then the common layers in their order (`pcb_plotter.cpp::PCB_PLOTTER::getPlotSequence`, 25ec2335:
+/// "Base layer always gets plotted first."; `PCBNEW_JOBS_HANDLER::convertLayerArg` keeps the list's order), so the base is the back-most layer,
+/// the outline. With the front copper as the base (round 4's X4-1) it was painted first and the back copper, the inner layers, the back
+/// silkscreen and the courtyards covered it. The file kicad-cli writes is then `<board>-Edge_Cuts.png`, read from its "Plotted to" report.
+pub fn board_png_layer_args(layers: &[String]) -> Vec<String> {
+    let (base, common) = layers.split_first().map(|(b, c)| (b.clone(), c.join(","))).unwrap_or_else(|| ("Edge.Cuts".into(), String::new()));
+    let mut args = vec!["--layers".to_string(), base];
+    if !common.is_empty() {
+        args.extend(["--common-layers".to_string(), common]);
+    }
+    args
+}
+
+/// The arguments of `kicad-cli pcb export png` after the command (the board file last is the caller's): [`board_png_layer_args`], the board
+/// scaled to the page on the theme's background with the drills at their real shape, at [`PICTURE_DPI`], with the drawing sheet `sheet`
+/// ([`EMPTY_DRAWING_SHEET`]), into the folder `out_dir`.
+pub fn board_png_args(layers: &[String], sheet: &Path, out_dir: &Path) -> Vec<String> {
+    let mut args = board_png_layer_args(layers);
+    args.extend(["--scale", "0", "--bg-color", "--drill-shape-opt", "2", "--dpi"].map(String::from));
+    args.push(PICTURE_DPI.to_string());
+    args.extend(["--drawing-sheet".to_string(), sheet.display().to_string(), "-o".to_string(), format!("{}/", out_dir.display())]);
+    args
+}
+
 /// A drawing sheet with nothing on it, for `pcb export png`, which always plots the page's frame and title block (`JOB_EXPORT_PCB_PLOT`'s
 /// `m_plotDrawingSheet( true )`; the command has `--include-border-title` but no way to leave it out): with this sheet the frame draws nothing and
 /// the board is the whole picture, as `pcb export svg --exclude-drawing-sheet` gives it.
-const EMPTY_DRAWING_SHEET: &str = "(kicad_wks (version 20231118) (generator \"eda\")\n  (setup (textsize 1.5 1.5) (linewidth 0.15) (textlinewidth 0.15)\n    (left_margin 0) (right_margin 0) (top_margin 0) (bottom_margin 0))\n)\n";
+pub const EMPTY_DRAWING_SHEET: &str = "(kicad_wks (version 20231118) (generator \"eda\")\n  (setup (textsize 1.5 1.5) (linewidth 0.15) (textlinewidth 0.15)\n    (left_margin 0) (right_margin 0) (top_margin 0) (bottom_margin 0))\n)\n";
 
 /// The design's board plotted into the one file `target` by kicad-cli, the [`board_picture_layers`] on KiCad's colour theme with the drills at
 /// their real shape:
 /// - SVG: `pcb export svg --mode-single --page-size-mode 2 --exclude-drawing-sheet` -- the board area only, on a transparent background;
 /// - PNG: `pcb export png --scale 0 --bg-color` at [`PICTURE_DPI`] -- the board scaled to the page (KiCad's "auto" plot scale) on the theme's
-///   background, with an empty drawing sheet ([`EMPTY_DRAWING_SHEET`]). The command plots one file per `--layers` entry, so the front copper is
-///   the one layer and the rest are its `--common-layers`.
+///   background, with an empty drawing sheet ([`EMPTY_DRAWING_SHEET`]). The command plots one file per `--layers` entry, so the back-most
+///   layer is the one layer and the rest are its `--common-layers` ([`board_png_layer_args`]).
 ///
 /// With `routing` off the design's tracks, vias and zones are left out (a placement is judged without them). The derived board is written into
 /// `work`, named `name`.
@@ -151,13 +176,7 @@ pub fn board_plot(design: &Design, model: &ConstraintModel, work: &Path, target:
             clear(&out_dir, "png")?;
             let sheet = work.join("empty.kicad_wks");
             write_file(&sheet, EMPTY_DRAWING_SHEET)?;
-            let common: Vec<&str> = layers.iter().map(String::as_str).filter(|l| *l != "F.Cu").collect();
-            cmd.args(["pcb", "export", "png", "--layers", "F.Cu", "--common-layers"])
-                .arg(common.join(","))
-                .args(["--scale", "0", "--bg-color", "--drill-shape-opt", "2", "--dpi", &PICTURE_DPI.to_string(), "--drawing-sheet"])
-                .arg(&sheet)
-                .arg("-o")
-                .arg(format!("{}/", out_dir.display()));
+            cmd.args(["pcb", "export", "png"]).args(board_png_args(&layers, &sheet, &out_dir));
         }
     }
     cmd.arg(&pcb);
@@ -172,4 +191,19 @@ pub fn board_plot(design: &Design, model: &ConstraintModel, work: &Path, target:
         return Err(fail("kicad_cli_export", format.ext(), format!("kicad-cli pcb export {} failed: {}", format.ext(), said.trim())));
     }
     Ok(target.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// X4-1: kicad-cli paints the `--layers` entry first (`PCB_PLOTTER::getPlotSequence`), so the PNG's base is the back-most layer and the
+    /// front copper comes after the back copper.
+    #[test]
+    fn the_board_png_paints_the_layers_back_to_front() {
+        let mut model = ConstraintModel::default();
+        model.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+        let args = board_png_layer_args(&board_picture_layers(&model));
+        assert_eq!(args, ["--layers", "Edge.Cuts", "--common-layers", "B.Courtyard,B.SilkS,B.Cu,In2.Cu,In1.Cu,F.Cu,F.SilkS,F.Courtyard"]);
+    }
 }

@@ -12,7 +12,7 @@ import type { BoardState, Part } from "../../api/types";
 import { FOV_DEG, TrackballCamera, type ViewPreset } from "../../kicad-port/camera3d";
 import { isVisible } from "../../kicad-port/appearance3d";
 import type { ModelRow } from "../../kicad-port/fpModels";
-import { DEFAULT_STACK, modelWorldMatrix } from "../../kicad-port/model3d";
+import { modelWorldMatrix, previewStack } from "../../kicad-port/model3d";
 import { useStudioState } from "../../state/store";
 import { ModelCache } from "../viewer3d/modelCache";
 import { boardOutlineBounds, buildBackgroundTexture, buildBoardGroup, disposeObject3D } from "../viewer3d/scene";
@@ -111,7 +111,7 @@ export function ModelPreview3D({ part, rows, height = 250, testId = "model-previ
       const instance = new THREE.Group();
       instance.name = "preview-model";
       instance.matrixAutoUpdate = false;
-      instance.matrix.fromArray(modelWorldMatrix({ xMm: 0, yMm: 0, rotDeg: 0, bottom: false }, { offset: row.offset, scale: row.scale, rotate: row.rotate }, DEFAULT_STACK));
+      instance.matrix.fromArray(modelWorldMatrix({ xMm: 0, yMm: 0, rotDeg: 0, bottom: false }, { offset: row.offset, scale: row.scale, rotate: row.rotate }, previewStack()));
       instance.matrixWorldNeedsUpdate = true;
       for (const child of record.proto.children) {
         const mesh = child.clone() as THREE.Mesh;
@@ -288,7 +288,8 @@ export function ModelPreview3D({ part, rows, height = 250, testId = "model-previ
     disposeObject3D(t.board);
     t.scene.remove(t.board);
     const visible = (row: string) => isVisible(layers, row) && (bodyShown || !BODY_ROWS.has(row));
-    t.board = buildBoardGroup(previewBoard(part), { visible, colors });
+    // The preview's dummy board and its default stackup (previewStack), for the board and the models alike.
+    t.board = buildBoardGroup(previewBoard(part), { visible, colors, stack: previewStack() });
     t.scene.add(t.board);
     syncModels(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps

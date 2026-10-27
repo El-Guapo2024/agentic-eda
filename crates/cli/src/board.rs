@@ -1065,7 +1065,7 @@ pub(crate) fn step_carrying(dir: &Path, cmd: Cmd, strictness: Strictness, by: &s
     let r = step_quiet(dir, &cmd, strictness);
     match &r {
         Ok((summary, tag)) => {
-            if let Some(before) = before {
+            if let Some(before) = before.filter(|_| !outside_history(&cmd)) {
                 carry::record(dir, carry, &before, tag, by);
             }
             log_activity(dir, by, &line, true, summary)
@@ -1073,6 +1073,32 @@ pub(crate) fn step_carrying(dir: &Path, cmd: Cmd, strictness: Strictness, by: &s
         Err(e) => log_activity(dir, by, &line, false, &reasons(e)),
     }
     r.map(|(summary, _)| summary)
+}
+
+/// A command KiCad applies with no commit, so no undo entry: the Plot and Generate Drill Files dialogs' choices (`DIALOG_PLOT::applyPlotSettings`:
+/// `m_editFrame->SetPlotSettings( tempOptions ); m_editFrame->OnModify();`, `DIALOG_GENDRILL::updateConfig` alike). It is still a `/api/cmd` verb
+/// and still lands in `design.json`, the source of truth; it only pushes no step, leaves the redo stack as it is, and what it stores is kept
+/// through an undo or a redo of the edits around it ([`keep_outside_history`]), as KiCad's undo, which restores items, never touches the
+/// board's plot settings. (Round 4's X4-3: it used to be a step, so Ctrl+Z after a plot took back the dialog's checklist.)
+fn outside_history(cmd: &Cmd) -> bool {
+    matches!(cmd, Cmd::SetPlotSettings { .. } | Cmd::SetIpc2581Bom { .. })
+}
+
+/// What [`outside_history`] commands store: the plot settings and Export IPC-2581's BOM columns.
+type OutsideHistory = (Option<eda_model::plot_params::PlotParams>, Option<eda_model::plot_params::Ipc2581Bom>);
+
+fn outside_history_of(design: &eda_model::ir::Design) -> OutsideHistory {
+    design.drawings.as_ref().map(|d| (d.plot_params.clone(), d.ipc2581_bom.clone())).unwrap_or_default()
+}
+
+/// What [`outside_history`] commands store (in the design before an undo or a redo), carried into the design it restores. A whole-design
+/// (`file`) step is an outside edit of `design.json` and restores them with the rest.
+fn keep_outside_history(kept: OutsideHistory, mut restored: eda_model::ir::Design) -> eda_model::ir::Design {
+    if kept != outside_history_of(&restored) {
+        let d = restored.drawings.get_or_insert_with(Default::default);
+        (d.plot_params, d.ipc2581_bom) = kept;
+    }
+    restored
 }
 
 /// Undo/redo history: two stacks of whole-design snapshots, under the
@@ -1291,7 +1317,12 @@ pub(crate) fn undo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String
     };
     let _ = push_snapshot_tagged(&redo_dir(dir), &current, &snap.tag, &snap.by);
     // A whole-design (`file`) step restores everything, whatever the scope; one that changed both editors' halves restores both.
+    let kept = (snap.tag != FILE_TAG).then(|| outside_history_of(&current));
     let restored = if snap.tag == BOTH_TAG { restore_both(current, snap.design) } else { restore_domain(current, snap.design, if snap.domain.is_none() { None } else { scope }) };
+    let restored = match kept {
+        Some(kept) => keep_outside_history(kept, restored),
+        None => restored,
+    };
     save(dir, &restored)?;
     let msg = format!("undo: reverted the last edit (by {})", snap.by);
     log_activity(dir, by, "undo", true, &msg);
@@ -1324,7 +1355,12 @@ pub(crate) fn redo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String
     };
     let _ = push_snapshot_tagged(&undo_dir(dir), &current, &snap.tag, &snap.by);
     // A whole-design (`file`) step restores everything, whatever the scope; one that changed both editors' halves restores both.
+    let kept = (snap.tag != FILE_TAG).then(|| outside_history_of(&current));
     let restored = if snap.tag == BOTH_TAG { restore_both(current, snap.design) } else { restore_domain(current, snap.design, if snap.domain.is_none() { None } else { scope }) };
+    let restored = match kept {
+        Some(kept) => keep_outside_history(kept, restored),
+        None => restored,
+    };
     save(dir, &restored)?;
     let msg = format!("redo: re-applied the undone edit (by {})", snap.by);
     log_activity(dir, by, "redo", true, &msg);
@@ -1675,6 +1711,7 @@ fn cmd_line(c: &Cmd) -> String {
             layers.as_ref().map(|l| format!(" --layers {}", l.join(","))).unwrap_or_default(),
             use_aux_origin.map(|a| format!(" --use-aux-origin {a}")).unwrap_or_default()
         ),
+        Cmd::SetIpc2581Bom { bom } => format!("ipc2581-bom {}", serde_json::to_string(bom).unwrap_or_default()),
         Cmd::SetGridOrigin { at: Some(p) } => format!("grid-origin --at {},{}", mm(p.x), mm(p.y)),
         Cmd::SetGridOrigin { at: None } => "grid-origin --reset".to_string(),
         Cmd::SetBoardPage { page, title_block } => format!("page --paper {}{} --title \"{}\"", page.paper, if page.portrait { " --portrait" } else { "" }, title_block.title),
@@ -2014,6 +2051,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::ZoneCutout { .. } | Cmd::MergeZones { .. } | Cmd::SetZonePriority { .. } => "zone",
         Cmd::SetAuxOrigin { .. } => "drill-origin",
         Cmd::SetPlotSettings { .. } => "plot-settings",
+        Cmd::SetIpc2581Bom { .. } => "ipc2581-bom",
         Cmd::SetGridOrigin { .. } => "grid-origin",
         Cmd::SetBoardPage { .. } => "page",
         Cmd::SetSchematicPage { .. } => "schematic-page",
@@ -3675,6 +3713,43 @@ pub(crate) mod tests {
         assert!(undo(&dir, "test", Some(Domain::Schematic)).is_err(), "and the carry left no undo entry");
         redo(&dir, "test", Some(Domain::Schematic)).unwrap();
         assert_eq!(counts(&dir), (before.0 + 5, before.1 + 4), "the earlier redo is still there");
+    }
+
+    /// Round 4's X4-3: the Plot and Generate Drill Files dialogs store their choices as KiCad's do (`DIALOG_PLOT::applyPlotSettings`,
+    /// `DIALOG_GENDRILL::updateConfig`: `SetPlotSettings` and `OnModify()`, no commit): in `design.json`, but as no undo step. So Ctrl+Z
+    /// after a plot takes back the edit before it (the footprint's move), and the plot settings stay as the dialog left them, through the
+    /// undo and the redo.
+    #[test]
+    fn the_plot_dialogs_settings_are_no_undo_step_and_survive_undo() {
+        let dir = scratch("plot_settings_undo");
+        setup_both(&dir);
+        let r1 = |dir: &Path| load(dir).unwrap().1.placement.unwrap().footprints[0].at;
+        let aux = |dir: &Path| eda_model::plot_params::PlotParams::of_design(&load(dir).unwrap().1).item("useauxorigin").map(str::to_string);
+        let was = r1(&dir);
+        step(&dir, Cmd::MoveTo { part: "R1".into(), x: mm(12.0), y: mm(10.0) }, false, "test").unwrap();
+        let moved = r1(&dir);
+        assert_ne!(moved, was);
+        step(&dir, Cmd::SetPlotSettings { layers: None, use_aux_origin: Some(true) }, false, "test").unwrap();
+        assert_eq!(aux(&dir).as_deref(), Some("(useauxorigin yes)"), "the choice is kept in design.json");
+
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(r1(&dir), was, "the undo takes back the move, the last edit");
+        assert_eq!(aux(&dir).as_deref(), Some("(useauxorigin yes)"), "and the plot settings stay");
+        redo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(r1(&dir), moved);
+        assert_eq!(aux(&dir).as_deref(), Some("(useauxorigin yes)"));
+        undo(&dir, "test", None).unwrap();
+        assert_eq!(aux(&dir).as_deref(), Some("(useauxorigin yes)"), "an unscoped undo (the CLI's) keeps them too");
+        assert!(undo(&dir, "test", Some(Domain::Pcb)).is_err(), "and there was no step of their own");
+
+        // Export IPC-2581's BOM columns, kept in the project by KiCad (`TransferDataFromWindow`), are no step either.
+        let bom = eda_model::plot_params::Ipc2581Bom { dist_pn: "LCSC".into(), dist: "LCSC".into(), ..Default::default() };
+        step(&dir, Cmd::SetIpc2581Bom { bom: bom.clone() }, false, "test").unwrap();
+        assert!(step(&dir, Cmd::SetIpc2581Bom { bom: bom.clone() }, false, "test").is_err(), "nothing changed is refused");
+        redo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(r1(&dir), moved, "the redo stack was left as it was");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.drawings.unwrap().ipc2581_bom, Some(bom), "the columns stay through the undo");
     }
 
     /// The other Board Setup pages reach kicad-cli the same way (slow tier: a dozen kicad-cli runs): a class assigned by a

@@ -439,3 +439,42 @@ test("the quaternion of a move takes the short way between q and -q, and stays a
   assert.ok(Math.abs(Math.hypot(mid.x, mid.y, mid.z, mid.w) - 1) < 1e-12, "unit length");
   closeV(rotateVecByQuat(vec3(1, 2, 3), mid), rotateVecByQuat(vec3(1, 2, 3), q), 1e-9);
 });
+
+// V4-1 (round 4): eda_3d_viewer_frame.cpp::loadCommonSettings sets `m_MousewheelPanning = scroll_modifier_zoom != 0`,
+// and the default `input.scroll_modifier_zoom` is 0, so OnMouseWheelCamera runs with aPan = false.
+test("the modifier wheel follows OnMouseWheelCamera with aPan false (KiCad's default settings)", () => {
+  const lookAtX = (c: TrackballCamera) => c.getRenderPose().position.x;
+  // Alt + wheel: no pan modifier -> the else branch zooms x1.1.
+  const alt = new TrackballCamera(100, vec3(0, 0, 0));
+  alt.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: false, altKey: true });
+  assert.ok(Math.abs(alt.zoom - 1 / 1.1) < 1e-9, `alt zooms, got ${alt.zoom}`);
+  // Ctrl + wheel up: Pan( +delta_move * horizontalSign, 0, 0 ), delta_move = 0.7 * zoom, not scaled by the wheel.
+  const ctrl = new TrackballCamera(100, vec3(0, 0, 0));
+  const x0 = lookAtX(ctrl);
+  ctrl.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: true, altKey: false });
+  assert.equal(ctrl.zoom, 1);
+  const ctrlBig = new TrackballCamera(100, vec3(0, 0, 0));
+  ctrlBig.handleWheel({ deltaX: 0, deltaY: -1000, shiftKey: false, ctrlKey: true, altKey: false });
+  assert.ok(Math.abs(lookAtX(ctrl) - x0 - (lookAtX(ctrlBig) - x0)) < 1e-9, "a fixed step whatever the wheel delta");
+  assert.ok(Math.abs(Math.abs(lookAtX(ctrl) - x0) - 0.7) < 1e-6, `step 0.7*zoom, got ${lookAtX(ctrl) - x0}`);
+  // Shift + a horizontal swipe still pans along the camera's y (PanV), never x. At the TOP view the camera's
+  // local y is the world's z (getRenderPose's basis change), and the camera's distance (world y) is kept.
+  const shift = new TrackballCamera(100, vec3(0, 0, 0));
+  const p0 = shift.getRenderPose().position;
+  shift.handleWheel({ deltaX: -100, deltaY: 0, shiftKey: true, ctrlKey: false, altKey: false });
+  const p1 = shift.getRenderPose().position;
+  assert.ok(Math.abs(p1.x - p0.x) < 1e-9 && Math.abs(p1.y - p0.y) < 1e-9 && Math.abs(Math.abs(p1.z - p0.z) - 0.7) < 1e-6, `shift pans y: ${JSON.stringify(p0)} -> ${JSON.stringify(p1)}`);
+});
+
+test("the wheel takes aPan true when the zoom modifier is set (trackpad scheme): plain wheel pans, Ctrl zooms", () => {
+  const scroll = { scrollModifierZoom: "ctrl", scrollModifierPanH: "shift", scrollModifierPanV: "none", reverseScrollZoom: false, reverseScrollPanH: false } as const;
+  const plain = new TrackballCamera(100, vec3(0, 0, 0));
+  const p0 = plain.getRenderPose().position;
+  plain.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: false, altKey: false }, scroll);
+  assert.equal(plain.zoom, 1);
+  const p1 = plain.getRenderPose().position;
+  assert.ok(Math.abs(p1.x - p0.x) < 1e-9 && Math.abs(Math.abs(p1.z - p0.z) - 0.7) < 1e-6, "aPan: Pan(0, -0.7 * zoom * 0.01 * rotation)");
+  const ctrl = new TrackballCamera(100, vec3(0, 0, 0));
+  ctrl.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: true, altKey: false }, scroll);
+  assert.ok(Math.abs(ctrl.zoom - 1 / 1.1) < 1e-9);
+});

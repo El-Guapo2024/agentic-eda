@@ -49,9 +49,9 @@ export function enumerateNextValue(s: EnumerateState): number {
   return s.stored.length > 0 ? s.stored[0]! : s.seq;
 }
 
-/** The tool's popup: "Click on pad %s\nPress <esc> to cancel all; double-click to finish". */
+/** The tool's popup, `PAD_TOOL::EnumeratePads`: `_( "Click on pad %s\nPress <esc> to cancel all; double-click to finish" )`. */
 export function enumeratePopupText(s: EnumerateState): string {
-  return `Click on pad ${enumerateNumber(s.params, enumerateNextValue(s))} -- Esc cancels all, double-click finishes`;
+  return `Click on pad ${enumerateNumber(s.params, enumerateNextValue(s))}\nPress <esc> to cancel all; double-click to finish`;
 }
 
 /**
@@ -125,3 +125,12 @@ export function padsUnderSweep<P extends { id?: string }>(pads: readonly P[], po
   }
   return hits;
 }
+
+/** `DIALOG_ENUM_PADS_BASE`'s spin controls, `wxSpinCtrl( .., 0, 999, 1 )`: First pad number and Numbering step are whole numbers from 0 to 999. */
+export function enumSpinValue(v: number): number {
+  if (!Number.isFinite(v)) return 0;
+  return Math.min(999, Math.max(0, Math.round(v)));
+}
+
+/** `m_padPrefix->SetMaxLength( 4 )`. */
+export const ENUM_PREFIX_MAX_LENGTH = 4;
