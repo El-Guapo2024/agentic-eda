@@ -73,6 +73,7 @@
   /** A 10 mm square whose corners miss by 0.3 mm. */
   const gappy = dxf([[0, 0, 9.7, 0], [10, 0.3, 10, 9.7], [9.7, 10, 0.3, 10], [0, 9.7, 0, 0.3]].map((l) => line(...l)).join(""));
 
+  // (KiCad's nanosvg reads an SVG in `float`, and MapLineWidth truncates: its numbers land within a few nm, 0.1 mm can be 99999 nm, as in KiCad.)
   /** A 40 x 30 mm rounded rect drawn with a 0.1 mm stroke, the way a vector drawing tool writes it, and a small filled logo with a hole. */
   const svgRect = `<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="40mm" height="30mm" viewBox="0 0 40 30"><rect x="0" y="0" width="40" height="30" rx="3" fill="none" stroke="#000" stroke-width="0.1"/></svg>`;
   const svgLogo = `<svg xmlns="http://www.w3.org/2000/svg" width="20mm" height="20mm" viewBox="0 0 20 20"><path d="M0 0 h20 v20 h-20 z M5 5 v10 h10 v-10 z" fill="#333" fill-rule="evenodd"/><text x="1" y="1">x</text></svg>`;
@@ -273,9 +274,9 @@
     applied++;
     sh = added(await board());
     const poly = sh.find((s) => s.kind === "polygon");
-    check("a stroked rounded rect is one unfilled polygon with the stroke's own width (0.1 mm), not the DXF default", !!poly && !poly.filled && poly.stroke_width === 100_000, JSON.stringify(poly && { kind: poly.kind, w: poly.stroke_width, filled: poly.filled }));
+    check("a stroked rounded rect is one unfilled polygon with the stroke's own width (0.1 mm), not the DXF default", !!poly && !poly.filled && Math.abs(poly.stroke_width - 100_000) <= 2, JSON.stringify(poly && { kind: poly.kind, w: poly.stroke_width, filled: poly.filled }));
     const [vx0, vy0, vx1, vy1] = extent([poly]);
-    check("at the origin, 40 x 30 mm, y down as the SVG has it", vx0 === 0 && vy0 === 0 && vx1 === 40_000_000 && vy1 === 30_000_000, [vx0, vy0, vx1, vy1]);
+    check("at the origin, 40 x 30 mm, y down as the SVG has it", Math.abs(vx0) <= 10 && Math.abs(vy0) <= 10 && Math.abs(vx1 - 40_000_000) <= 10 && Math.abs(vy1 - 30_000_000) <= 10, [vx0, vy0, vx1, vy1]);
     await undo();
     applied--;
     r = await importFile({ name: "logo.svg", text: svgLogo }, { Layer: "F.SilkS", "Place at": true, "Group imported items": false });
@@ -534,7 +535,7 @@
     ng = newGraphics(q.sch);
     const poly2 = ng.find((g) => g.shape.type === "polygon");
     const [px0, py0, px1, py1] = poly2 ? span(poly2.shape.pts.map((p) => [p.x, p.y])) : [0, 0, 0, 0];
-    check("an SVG's rounded rect is one polygon of its own stroke width (0.1 mm), 40 x 30 mm, y down as it has it", ng.length === 1 && !!poly2 && poly2.width_nm === 100_000 && px0 === 0 && py0 === 0 && px1 === 40_000_000 && py1 === 30_000_000, JSON.stringify(ng.map((g) => [g.shape.type, g.width_nm])));
+    check("an SVG's rounded rect is one polygon of its own stroke width (0.1 mm), 40 x 30 mm, y down as it has it", ng.length === 1 && !!poly2 && Math.abs(poly2.width_nm - 100_000) <= 2 && Math.abs(px0) <= 10 && Math.abs(py0) <= 10 && Math.abs(px1 - 40_000_000) <= 10 && Math.abs(py1 - 30_000_000) <= 10, JSON.stringify(ng.map((g) => [g.shape.type, g.width_nm])));
     await undoDomain("schematic");
     appliedSch--;
 
@@ -638,7 +639,7 @@
     q = await importSch({ name: "outline.svg", text: svgRect }, { placeAt: true });
     appliedSym++;
     sg = symNew(await symbol());
-    check("an SVG outline is a closed polyline of its stroke width", sg.length === 1 && sg[0].kind === "polyline" && Math.abs(sg[0].stroke_mm - 0.1) < 1e-9 && sg[0].pts.length > 20, JSON.stringify(sg.map((g) => [g.kind, g.stroke_mm, g.pts?.length])));
+    check("an SVG outline is a closed polyline of its stroke width", sg.length === 1 && sg[0].kind === "polyline" && Math.abs(sg[0].stroke_mm - 0.1) <= 1e-4 + 1e-9 && sg[0].pts.length > 20, JSON.stringify(sg.map((g) => [g.kind, g.stroke_mm, g.pts?.length])));
     await undoDomain("symbol_editor");
     appliedSym--;
 
