@@ -752,6 +752,22 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
                 return bad(format!("The folder '{}' does not exist.", parent.display()));
             }
         }
+        if path.exists() && kind == TableKind::DesignBlock {
+            // `DESIGN_BLOCK_PANE::createNewDesignBlockLibrary`: an existing folder is refused when it is not writable ("Library %s is read only.") and otherwise
+            // asked about (a KIDIALOG "Library %s already exists." with OK labelled "Overwrite"); Overwrite is `pi->DeleteLibrary( libPath )` then `CreateLibrary`.
+            // `DeleteLibrary`'s own refusals ("Library folder '%s' has unexpected files.") stand, so a folder with anything but blocks in it is never removed.
+            if !eda_kicad::design_block::is_writable(&path) {
+                return bad(format!("Library {} is read only.", path.display()));
+            }
+            if req.get("overwrite").and_then(Value::as_bool) != Some(true) {
+                let mut v = bad(format!("Library {} already exists.", path.display()));
+                v["confirm"] = json!("Overwrite");
+                return v;
+            }
+            if let Err(e) = eda_kicad::design_block::delete_library(&path) {
+                return bad(e);
+            }
+        }
         if path.exists() {
             return bad(format!("Library {} already exists.", path.display()));
         }
@@ -1270,6 +1286,32 @@ pub(crate) mod tests {
         assert!(add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "create": true, "path": "  " })))["error"].is_string());
         assert!(!m.root.join("config").join("10.99").join("fp-lib-table").to_string_lossy().contains("Chips"));
         assert!(!std::fs::read_to_string(m.config.join("fp-lib-table")).unwrap().contains("Chips"), "the global table is never written");
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    /// r6 B6-4 (`DESIGN_BLOCK_PANE::createNewDesignBlockLibrary`): New Library on an existing folder says "Library %s is read only." when it cannot be written,
+    /// else asks "Library %s already exists." with an Overwrite button, which deletes the library and makes it again.
+    #[test]
+    fn new_design_block_library_on_a_read_only_existing_folder_says_read_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let m = machine("dbexists", true);
+        let env = m.env();
+        let old = m.board.join("blocks").join("Old.kicad_blocks");
+        std::fs::create_dir_all(old.join("amp.kicad_block")).unwrap();
+        let asked = add_library_with(&env, &m.board, &req(json!({ "kind": "design_block", "create": true, "path": "blocks/Old" })));
+        assert_eq!((asked["error"].clone(), asked["confirm"].clone()), (json!(format!("Library {} already exists.", old.display())), json!("Overwrite")), "{asked}");
+        assert!(old.join("amp.kicad_block").is_dir(), "nothing is removed before the answer");
+        let r = add_library_with(&env, &m.board, &req(json!({ "kind": "design_block", "create": true, "path": "blocks/Old", "overwrite": true })));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(eda_kicad::design_block::enumerate(&old).unwrap(), Vec::<String>::new(), "Overwrite: DeleteLibrary then CreateLibrary");
+        let locked = m.board.join("blocks").join("Locked.kicad_blocks");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if !eda_kicad::design_block::is_writable(&locked) {
+            let r = add_library_with(&env, &m.board, &req(json!({ "kind": "design_block", "create": true, "path": "blocks/Locked", "overwrite": true })));
+            assert_eq!(r["error"], json!(format!("Library {} is read only.", locked.display())), "{r}");
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
         let _ = std::fs::remove_dir_all(&m.root);
     }
 

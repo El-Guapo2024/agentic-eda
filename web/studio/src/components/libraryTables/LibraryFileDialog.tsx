@@ -6,7 +6,8 @@
 // the table. KiCad's file dialog has a "Add to global / project library table" choice; the global tables are KiCad's and are not written here, so the row goes into
 // the board's own table (`sym-lib-table`, `fp-lib-table`, `design-block-lib-table`), which is said in the dialog. The path is written as a table writes one (`NormalizePath`: under a variable
 // or `${KIPRJMOD}` where one holds it), the nickname is the file's name (`LIB_ID::FixIllegalChars`), and a nickname a library already has is refused ("Library '%s'
-// already exists.").
+// already exists."). New Design Block Library on a folder that is there says "Library %s is read only." when it cannot be written, else asks "Library %s already
+// exists." with an Overwrite button, as `createNewDesignBlockLibrary` does (the other kinds refuse it).
 import { useEffect, useState } from "react";
 import { addLibrary, fetchLibraryTables, type LibraryTablesView } from "../../api/libraryTablesClient";
 import { baseName, libraryExtension, nicknameForFile, tableFileName, type TableKind } from "../../kicad-port/libraryTable";
@@ -34,6 +35,9 @@ function FileBody({ kind, create }: { kind: TableKind; create: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [browse, setBrowse] = useState<BrowseWhat | null>(null);
+  /** The Overwrite question on screen, and its answer's resolver. */
+  const [question, setQuestion] = useState<{ message: string; okLabel: string; resolve: (yes: boolean) => void } | null>(null);
+  const ask = (message: string, okLabel: string) => new Promise<boolean>((resolve) => setQuestion({ message, okLabel, resolve }));
 
   const noun = kind === "symbol" ? "Symbol" : kind === "footprint" ? "Footprint" : "Design Block";
   const title = `${create ? "New" : "Add"} ${noun} Library`;
@@ -71,7 +75,14 @@ function FileBody({ kind, create }: { kind: TableKind; create: boolean }) {
     if (!create && path.trim() === "") return setError("Choose a library to add.");
     setBusy(true);
     try {
-      const answer = await addLibrary({ kind, path: target, create, nickname: create ? undefined : nickname.trim() || undefined, descr: descr.trim() || undefined });
+      const request = { kind, path: target, create, nickname: create ? undefined : nickname.trim() || undefined, descr: descr.trim() || undefined };
+      let answer = await addLibrary(request);
+      // `DESIGN_BLOCK_PANE::createNewDesignBlockLibrary` on an existing writable folder: a KIDIALOG "Library %s already exists." titled "Confirmation", OK labelled
+      // "Overwrite"; Cancel leaves everything as it was
+      if (!("ok" in answer && answer.ok) && "confirm" in answer && answer.confirm) {
+        if (!(await ask(answer.error, answer.confirm))) return;
+        answer = await addLibrary({ ...request, overwrite: true });
+      }
       if ("ok" in answer && answer.ok) {
         const lib = answer.added.nickname;
         dispatch({ type: "TOAST", message: `${answer.added.created ? "Created" : "Added"} library '${lib}' in the project's ${tableFileName(kind)}.`, kind: "info" });
@@ -147,6 +158,38 @@ function FileBody({ kind, create }: { kind: TableKind; create: boolean }) {
           </button>
         </div>
       </div>
+      {question && (
+        <div className="dialog-backdrop" onClick={(e) => e.stopPropagation()}>
+          <div className="dialog" style={{ width: 440 }} role="dialog" aria-label="Confirmation" onKeyDown={(e) => e.key === "Escape" && (question.resolve(false), setQuestion(null))}>
+            <div className="dialog-header">
+              <span>Confirmation</span>
+            </div>
+            <div className="dialog-body" style={{ whiteSpace: "pre-wrap" }}>
+              {question.message}
+            </div>
+            <div className="dialog-footer">
+              <button
+                onClick={() => {
+                  question.resolve(false);
+                  setQuestion(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary"
+                autoFocus
+                onClick={() => {
+                  question.resolve(true);
+                  setQuestion(null);
+                }}
+              >
+                {question.okLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {browse && (
         <div onClick={(e) => e.stopPropagation()}>
           <FolderBrowser

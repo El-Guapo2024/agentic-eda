@@ -136,9 +136,11 @@ export interface AddRequest {
   descr?: string;
   /** Add a library table (a row of type `Table`) rather than a library. */
   table?: boolean;
+  /** New Design Block Library on an existing folder: the "Overwrite" answer (`createNewDesignBlockLibrary`: `DeleteLibrary` then `CreateLibrary`). */
+  overwrite?: boolean;
 }
 
-export type AddAnswer = ({ ok: true; added: { kind: TableKind; nickname: string; uri: string; path: string; created: boolean } } & LibraryTablesView) | ({ ok?: false } & Refusal);
+export type AddAnswer = ({ ok: true; added: { kind: TableKind; nickname: string; uri: string; path: string; created: boolean } } & LibraryTablesView) | ({ ok?: false; confirm?: string } & Refusal);
 
 /** Add Existing Library, and New Library when `create` is set: a row in the board's table, never in the global one. */
 export async function addLibrary(req: AddRequest): Promise<AddAnswer> {
