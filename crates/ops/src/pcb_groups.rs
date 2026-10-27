@@ -38,7 +38,8 @@ pub(crate) fn refused(r: GroupRefusal) -> Vec<CheckResult> {
     vec![CheckResult::fail(r.check, &r.subject, r.why)]
 }
 
-/// Every id an item of the board can be listed under: placed footprints, copper, graphics, dimensions and the groups themselves.
+/// Every id an item of the board can be listed under: the groupable kinds (`BOARD_ITEM::IsGroupableType`: placed footprints, copper, graphics, texts, text boxes,
+/// reference images, barcodes, dimensions, tables, generators -- tuning patterns and via stitchings -- and the groups themselves; not a point).
 fn universe(design: &Design) -> BTreeSet<String> {
     let mut out: BTreeSet<String> = design.placement.iter().flat_map(|p| p.footprints.iter().map(|f| f.id.clone())).collect();
     if let Some(rt) = &design.routing {
@@ -51,6 +52,11 @@ fn universe(design: &Design) -> BTreeSet<String> {
         out.extend(dr.texts.iter().map(|t| t.id.clone()));
         out.extend(dr.dimensions.iter().map(|d| d.id.clone()));
         out.extend(dr.tables.iter().map(|t| t.id.clone()));
+        out.extend(dr.barcodes.iter().map(|b| b.id.clone()));
+        out.extend(dr.board_items.text_boxes.iter().map(|t| t.id.clone()));
+        out.extend(dr.board_items.images.iter().map(|i| i.id.clone()));
+        out.extend(dr.board_items.via_stitches.iter().map(|v| v.id.clone()));
+        out.extend(dr.tuning_patterns.iter().map(|p| p.id.clone()));
         out.extend(dr.groups.iter().map(|g| g.id.clone()));
     }
     out

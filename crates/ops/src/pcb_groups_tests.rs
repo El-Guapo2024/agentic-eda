@@ -299,3 +299,19 @@ fn grouping_a_locked_item_locks_the_group() {
     let g2 = drawings(&b).parent_group("via_a").unwrap().id.clone();
     assert!(!drawings(&b).locked_ids.contains(&g2), "nothing locked, the group is not");
 }
+
+/// r2-pcb-edit A3: text boxes, barcodes and reference images are groupable (`BOARD_ITEM::IsGroupableType`): one drawn in an entered group joins it, and a
+/// deleted one leaves its group.
+#[test]
+fn a_text_box_drawn_in_an_entered_group_joins_it_and_a_deleted_one_leaves_it() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().groups = vec![group("grp_a", &["shp_seg", "txt_a"])];
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let tb = eda_model::pcb_items::TextBox::new("F.SilkS", p(mm(1.0), mm(1.0)), p(mm(5.0), mm(3.0)), mm(1.0), mm(0.12));
+    b.apply(&Cmd::InGroup { group: "grp_a".into(), cmd: Box::new(Cmd::PcbItem(crate::pcb_items::PcbItemCmd::AddTextBox { text_box: tb })) }).unwrap();
+    let id = drawings(&b).board_items.text_boxes[0].id.clone();
+    assert!(members(&b, "grp_a").contains(&id), "{:?}", members(&b, "grp_a"));
+    b.apply(&Cmd::PcbItem(crate::pcb_items::PcbItemCmd::DeleteTextBox { id: id.clone() })).unwrap();
+    assert_eq!(members(&b, "grp_a"), ids(&["shp_seg", "txt_a"]), "the deleted box leaves the group");
+}
