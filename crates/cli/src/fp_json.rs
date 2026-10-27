@@ -200,6 +200,15 @@ fn stack_layers_json(model: &ConstraintModel, fp: &FootprintInstance, pad: &Pad,
 
 /// The pads of `footprint` in the order the studio lists them (sorted by number, ties in the footprint's own order), each with the
 /// `nth` that tells it from another pad of the same number.
+/// The pad's `(layers ..)` as the board's file has them, in the footprint's own frame (`F.Paste` is the footprint's side):
+/// [`eda_model::fp_compare::written_pad_layers`] with the facts the import kept for it (the k-th of `footprint.pads`, as `export_kicad_pcb` takes them),
+/// else its kind's defaults. The 3D viewer draws paste only on a pad on that layer (`BOARD_ADAPTER::addPads`: `if( !pad->IsOnLayer( aLayerId ) ) continue;`).
+pub(crate) fn pad_file_layers(design: &Design, fp: &FootprintInstance, footprint: &Footprint, pad: &Pad) -> Vec<String> {
+    let idx = footprint.pads.iter().position(|p| std::ptr::eq(p, pad));
+    let infos = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id)).map(|e| e.pads.as_slice()).filter(|p| p.len() == footprint.pads.len());
+    eda_model::fp_compare::written_pad_layers(pad, idx.and_then(|i| infos.and_then(|p| p.get(i))))
+}
+
 pub(crate) fn pads_in_studio_order(footprint: &Footprint) -> Vec<(&Pad, u32)> {
     let mut pads: Vec<&Pad> = footprint.pads.iter().collect();
     pads.sort_by(|a, b| a.number.cmp(&b.number));
@@ -231,5 +240,20 @@ mod tests {
         let outline = eda_drc::pad_shape::pad_outline(&fp, &pad, Point::default(), PAD_OUTLINE_MAX_ERROR);
         let vertices: usize = outline.iter().map(Vec::len).sum();
         assert!((60..400).contains(&vertices), "{vertices} vertices");
+    }
+
+    /// V6-5 (r6-editors-exports): the studio is told a pad's own layers, so a fiducial (an SMD pad the file has on no paste layer) gets no paste in 3D.
+    #[test]
+    fn a_pads_layers_are_the_files() {
+        let pad = |n: &str| Pad { number: n.into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.0), mm(1.0)), shape: PadShape::Circle, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        let footprint = eda_model::Footprint { pads: vec![pad("1"), pad("2")], ..Default::default() };
+        let fp = FootprintInstance { id: "FID1".into(), at: Point::default(), rot: 0, side: Side::Top, label: LabelSide::Above };
+        let mut design: eda_model::ir::Design = serde_json::from_value(serde_json::json!({ "provenance": { "engine_version": "t", "intent_hash": "x", "seed": 0, "stage_hashes": [] } })).unwrap();
+        assert_eq!(super::pad_file_layers(&design, &fp, &footprint, &footprint.pads[0]), ["F.Cu", "F.Paste", "F.Mask"], "a pad made here: its kind's defaults");
+        let info = |no_paste| eda_model::ir::PadMaskInfo { no_paste, ..Default::default() };
+        let extra = eda_model::ir::FootprintExtra { id: "FID1".into(), pads: vec![info(false), info(true)], ..Default::default() };
+        design.drawings = Some(eda_model::ir::DrawingsSection { footprint_extras: vec![extra], ..Default::default() });
+        assert_eq!(super::pad_file_layers(&design, &fp, &footprint, &footprint.pads[1]), ["F.Cu", "F.Mask"]);
+        assert_eq!(super::pad_file_layers(&design, &fp, &footprint, &footprint.pads[0]), ["F.Cu", "F.Paste", "F.Mask"]);
     }
 }
