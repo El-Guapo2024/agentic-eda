@@ -474,12 +474,45 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
     save_design(&cx.args.out, &design)?;
     let ok = print_checks("schematic gates", &checks);
     cx.record("schematic", &checks, t0);
-    let svg = render_schematic(&design, &cx.model)?;
-    write(&cx.args.out.join("schematic.svg"), svg.as_bytes())?;
+    write_schematic_svg(cx, &design)?;
     if !ok {
         return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
     }
     Ok(design)
+}
+
+/// `<out>/schematic.svg`: the schematic as KiCad plots it, `kicad-cli sch export svg` on the derived `.kicad_sch` (its files in `<out>/.kicad`,
+/// named after the intent like `export`'s). The root sheet is `schematic.svg`; a hierarchy's further sheets are `schematic_<n>.svg`, n = 2, 3, ...
+/// in KiCad's page order. Without kicad-cli the picture is not drawn and the stage says why (a picture is not a gate, so the stage goes on);
+/// `EDA_RUST_PICTURES=1` draws the INACTIVE `eda-render` sheet instead.
+fn write_schematic_svg(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
+    let out = &cx.args.out;
+    let page_file = |i: usize| if i == 0 { out.join("schematic.svg") } else { out.join(format!("schematic_{}.svg", i + 1)) };
+    // A picture an earlier run left must not pass for this one's.
+    let mut i = 0;
+    while page_file(i).exists() {
+        let _ = std::fs::remove_file(page_file(i));
+        i += 1;
+    }
+    if eda::rust_pictures() {
+        let svg = render_schematic(design, &cx.model)?;
+        return write(&page_file(0), svg.as_bytes());
+    }
+    let title = cx.args.intent.file_stem().and_then(|s| s.to_str()).unwrap_or("design");
+    let work = out.join(".kicad");
+    match eda_kicad_engine::schematic_plot(design, &cx.model, &work, &work.join("schematic-svg"), title, eda_kicad_engine::PictureFormat::Svg) {
+        Ok(pages) => {
+            for (i, page) in pages.iter().enumerate() {
+                std::fs::copy(page, page_file(i)).map_err(|e| vec![CheckResult::fail("io", page_file(i).display().to_string(), e.to_string())])?;
+            }
+            Ok(())
+        }
+        Err(e) if e.iter().any(|c| c.check == "kicad_cli_missing") => {
+            println!("schematic.svg not written: {}", e.iter().filter_map(|c| c.hint.as_deref()).collect::<Vec<_>>().join("; "));
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Give the constructive placer an outline to build into.
@@ -1221,7 +1254,8 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
 /// Tier::Critic. Fails the run on judge_unavailable or judge fails.
 fn run_judge(cx: &mut Ctx, d: &Design, stage: eda_judge::Stage) -> Result<(), Vec<CheckResult>> {
     let opts = eda_judge::JudgeOptions::default();
-    let (verdict, checks) = eda_judge::judge_stage(stage, d, &cx.model, &cx.args.out, &opts)?;
+    let title = cx.args.intent.file_stem().and_then(|s| s.to_str()).unwrap_or("design");
+    let (verdict, checks) = eda_judge::judge_stage(stage, d, &cx.model, &cx.args.out, title, &opts)?;
     let log_stage = match stage { eda_judge::Stage::Schematic => Stage::Schematic, eda_judge::Stage::Placement => Stage::Placement, eda_judge::Stage::Routing => Stage::Routing };
     let metrics = serde_json::json!({ "judge_score": verdict.score, "rubric_version": verdict.rubric_version, "judge_model": verdict.model, "summary": verdict.summary });
     cx.log.candidate(log_stage, 0, cx.args.seed, d, Tier::Critic, &checks, metrics).ok();

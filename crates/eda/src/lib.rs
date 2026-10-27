@@ -5,7 +5,8 @@
 //! let issues = eda::lint(&model);
 //! let design = eda::derive_schematic(&model, &opts)?;
 //! let checks = eda::check_schematic(&design, &model); // readability; ERC is kicad-cli's
-//! let svg    = eda::render_schematic(&design, &model)?;
+//! // the schematic's picture is kicad-cli's (`eda_kicad_engine::schematic_plot`);
+//! // `render_schematic` is the INACTIVE hand-drawn one, kept for an all-Rust build
 //! let placed = eda::place(&design, &model, &PlaceOptions::default())?;
 //! let routed = eda::route(&placed, &model, &model.board, seed)?;
 //! ```
@@ -13,7 +14,9 @@
 pub use eda_engine::{derive_schematic, EngineOptions};
 pub use eda_intent::{import_zen, import_zen_cli};
 pub use eda_intent::lint::lint;
-pub use eda_render::render_schematic;
+/// INACTIVE (2026-10-28): replaced by kicad-cli `sch export svg` per the user's port-vs-reuse rule; kept for a future all-Rust build.
+/// Callers use it only when [`rust_pictures`] (`EDA_RUST_PICTURES=1`) asks for it.
+pub use eda_render::{render_schematic, rust_pictures};
 pub use eda_kicad::{export_kicad_pcb, export_kicad_pro, export_kicad_sch, import_kicad_pcb, import_kicad_sch, merge_custom_rules, merge_project_design_rules, merge_project_net_classes, merge_project_rule_severities, merge_project_setup_pages, ExportMeta, ImportNotes};
 pub use eda_kicad::{default_footprint_library_root, resolve_library_footprints};
 pub use eda_kicad::{default_symbol_library_root, resolve_library_symbols};

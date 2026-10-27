@@ -66,6 +66,23 @@ never edited as masters.
   (10.99, kicad-dev-nightly PPA, matching the master source we port from),
   installed by `tools/install-kicad-nightly.sh`; `EDA_KICAD_CLI` overrides the
   binary. A missing kicad-cli is an error, never a silent skip.
+  - **Pictures are kicad-cli's too** (2026-10-28): `eda schematic`'s
+    `schematic.svg` (and `schematic_<n>.svg` for a hierarchy's further
+    sheets), the studio's `GET /api/schematic.svg` and the vision-model
+    judge's `judge_<stage>.{svg,png}` are `kicad-cli sch export svg|png` of
+    the derived schematic and `kicad-cli pcb export svg|png` of the derived
+    board (`crates/kicad-engine/src/pictures.rs`: the board's outline,
+    courtyards, silkscreen and copper; a placement without its tracks; PNG at
+    150 dpi, the board scaled to the page on KiCad's background with an empty
+    drawing sheet). Without kicad-cli `eda schematic` writes no picture and
+    says why (the stage still passes: a picture is not a gate); the judge fails
+    `judge_unavailable`. A kicad-cli with no PNG plot (older nightlies) has its
+    SVG rasterised by `rsvg-convert`. Nothing draws a schematic or board
+    picture of its own any more: `crates/render` (the hand-drawn sheet) and
+    the judge's `render_board_svg` are **INACTIVE**, kept compiling and tested
+    for a future all-Rust build and reached only with `EDA_RUST_PICTURES=1`
+    (which also makes lint's `schematic_content_in_bounds` measure against
+    that picture's viewBox instead of the plotted page).
   - The project file written next to the derived files carries our design
     rules, the design's own ERC pin map and the `.kicad_dru` an import brought,
     and ignores the library-link checks (every footprint and symbol is
