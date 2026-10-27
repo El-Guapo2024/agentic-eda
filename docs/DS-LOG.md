@@ -363,3 +363,68 @@ stopped there, under the lane's rule for a design decision that spans many crate
   "only the pin dialog's OK" read allows it; before, only the pending pin's OK saved the template.
 - `Pin name inside` changes only `pin_name_offset_mm` in the batch; "Show pin name text" still owns `pin_names_hidden`, as `CreateSymbol` keeps
   them separate.
+
+## Import Sheet and the Hierarchy Navigator browser checks (done 2026-10-27)
+
+**What I did** (the task: GAPS.md item 33, package P4's hierarchy row, "Not: Import Sheet, the Hierarchy Navigator").
+
+- `web/studio/e2e/import-sheet.check.js` (board `mcu30-sheet`, 3 scenarios): Choose Schematic lists the project's `.kicad_sch` files and says
+  what the file brings and what `LoadSheetFromFile` finds (a missing library is a warning), with the remembered Place as sheet/group and Keep
+  annotations options; Open arms `sch_import_sheet`; two canvas clicks open Sheet Properties named after the file; Import brings the copy and
+  its screen (one symbol numbered anew, the hierarchical labels IN and OUT, two nested sheets showing
+  `issue10926_1_subsheet_1_1.kicad_sch` with pins IN_A/OUT_A), and one Undo takes the placement and both screens away, the hierarchy back to
+  what it was. Every scenario undoes what it did; the end compares the design with the start.
+- `web/studio/e2e/hierarchy-navigator.check.js` (board `mcu30-sheet`, 4 scenarios): the setup imports the QA file through `import_sheet` (the
+  dialog is the other check's subject), then the panel lists all 7 sheets of `GET /api/sch/hierarchy` in walk order with the nested rows
+  indented and the shared screen twice with pages 4 and 2; a click opens the row's sheet (LED channels), a nested row opens its own placement,
+  the row is `aria-current`, the root row comes back, and `GET /api/schematic?sheet=<ids joined by />` gives the breadcrumb at each level.
+- `tools/run-all-checks.sh`: board kind `mcu30-sheet` -- `eda board new examples/mcu_board_30plus.yaml` with KiCad's QA
+  `issue10926_1_subsheet_1.kicad_sch` and `issue10926_1_subsheet_1_1.kicad_sch` (from `$KICAD_SRC_DIR/qa/data/eeschema`, default
+  `~/src/kicad-src-8303b2ad`) under `fixtures/`. They are under `fixtures/` so the copy Import Sheet writes into the project folder does not
+  overwrite the file it reads.
+
+**Findings (the studio, not the check).** Both are in `hierarchy-navigator.check.js`; the assertion each would fail is left out with a comment
+that points here.
+
+- **hierarchy-navigator: a parent's children are not in page order.** Scenario "The hierarchy: every sheet once, ...". After Import Sheet of
+  the QA file, its two nested placements hold pages 4 (`Subsheet_1_1`) and 2 (`Subsheet_1_2`) in `GET /api/sch/hierarchy`, and the panel lists
+  them in walk order (4 then 2). KiCad's pane builds the same depth-first tree and then sorts each parent's children by page:
+  `HIERARCHY_PANE::buildHierarchyTree` calls `m_tree->SortChildren( aParent )` (eeschema/widgets/hierarchy_pane.cpp:153) and
+  `HIERARCHY_TREE::OnCompareItems` compares `SCH_SHEET_PATH::ComparePageNum` (:61-66), which compares the last sheet's page numerically
+  (`SCH_SHEET::ComparePageNum`, eeschema/sch_sheet.cpp:1877; `SCH_SHEET_PATH::ComparePageNum`, eeschema/sch_sheet_path.cpp:219). Page 2 would
+  be listed above page 4. The panel's order is the list's walk order (`HierarchyPanel.tsx:38-64`), not a page sort.
+- **hierarchy-navigator: no page number for a sheet that was never given one.** Same scenario. `GET /api/sch/hierarchy` returns `page: ""`
+  for the three module sheets and for the imported sheet, and the panel prints the file alone (`HierarchyPanel.tsx:61`: `s.page ? ... : file`).
+  KiCad's pane labels every sheet `formatPageString( name, GetPageNumber() )` ("name (page N)", eeschema/widgets/hierarchy_pane.cpp:145,
+  :844-847); a schematic loaded with every page empty is numbered 1..N by `SCH_SHEET_LIST::SetInitialPageNumbers` (eeschema/files-io.cpp:456-457
+  calls it when `AllSheetPageNumbersEmpty()`, eeschema/sch_sheet_path.cpp:1653), and a sheet drawn or imported gets the first free number
+  (`SCH_SHEET_LIST::GetNextPageNumber`, eeschema/sch_sheet_path.cpp:1198, called by `SCH_DRAWING_TOOLS::DrawSheet`,
+  eeschema/tools/sch_drawing_tools.cpp:3437). The studio has `effectivePage()` for Next/Previous (`web/studio/src/kicad-port/sheetPages.ts`);
+  the panel does not use it. The imported sheet's part of this is the known "first-free page numbers" left item (GAPS.md item 4); the three
+  modules' (a design `eda board new` makes has no stored pages) is the new part.
+
+**Commits.**
+
+- `b7f5700a` -- browser checks: Import Sheet and the Hierarchy Navigator (the checks, the board kind, GAPS.md item 33)
+- this log, in its own commit.
+
+**Tests run.**
+
+- `bash tools/run-all-checks.sh -j 1 --ports 8830-8832 import-sheet hierarchy-navigator` (a fresh build of the studio and eda-cli):
+
+  ```
+  run-all-checks: 2 passed, 0 failed of 2 in 34s (logs: /tmp/run-all-checks.j0MY/runs)
+  ```
+
+  and its lines: `ok   import-sheet             3 scenarios    22s  board=mcu30-sheet`,
+  `ok   hierarchy-navigator      4 scenarios    12s  board=mcu30-sheet`.
+- An earlier `--no-build` run of the hierarchy check alone passed too (`ok   hierarchy-navigator      4 scenarios    13s  board=mcu30-sheet`),
+  and the import-sheet check was first run against a served scratch board (`__importSheetCheck: done=true ok=true scenarios=3 failed=[]`).
+
+**Unsure / for the reviewer.**
+
+- The pages 4 and 2 are what the studio's import stored (the reader keeps each sheet's first instance page; GAPS.md item 4's known limit).
+  The check asserts what the panel shows for the design it holds and what KiCad's pane would do with pages: it does not claim KiCad's Import
+  Sheet would assign 4 and 2 (KiCad numbers new sheet instances itself, `SCH_SHEET_LIST::AddNewSheetInstances`).
+- Finding 2 asks the panel to show a page for a sheet no one gave one; the studio may prefer to leave page assignment to the writer/import.
+  The assertion is left out rather than changed, as asked.
