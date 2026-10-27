@@ -73,6 +73,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| Round 4 fixes (2026-10-28): `task-r4-schematic` (`-embedded`), `task-r4-pcb-edit` (`-router`), `task-r4-router` (`-rules`), `task-r4-editors-exports` (`-sim`), `ds/r4-board-setup` (`ds-agentic-eda`, then the board-files findings), `task-kicad-api-server` (`-exports`) | Round 4 findings: `docs/parity/findings/round4/` (copies; live in `~/work/findings/round4/`): 74 (schematic 22, PCB editing 20, editors/exports 16, router 8, board files 8; 7 high). Round 3 had 125 (19 high), round 2 160, round 1 about 200 | started | all |
 | `task-reuse-cpp` (`-sim`, 2026-10-28) | The user's reuse rule: KiCad's own Clipper2 2.0.1 and nanosvg (C++, `third_party/`, built with `cc`), the `delaunator` crate, and one copy of the expression language (Find by Properties posts to `/api/pcb/query`); the ports kept INACTIVE (features `eda-clipper2/rust-port`, `eda-connectivity/rust-port`, `eda-kicad/rust-nanosvg`; the TS `pcbExpr.ts`/`libeval.ts` imported only by tests); ARCHITECTURE "Reuse before porting", GAPS item 39 | done | SVG text (needs Fontconfig/FreeType/HarfBuzz); the SPICE value parser stays in two languages; the Query tab's geometry functions |
 
 Gates for any of them:
