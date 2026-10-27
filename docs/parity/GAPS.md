@@ -549,8 +549,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   moves, paste and the clipboard keep them. Left (non-blocking): the point editor edits the outline only; Convert to shapes ignores the holes (`crates/ops/src/convert.rs`, `kicad-port/pcbConvert.ts`),
   as do Simplify (`actions/pcbEditSweep.ts`), the zone's shape in the rule evaluator's clearance tests (`crates/drc/src/rule_board.rs::zone_item`: its `shapes`; `insideArea` has the holes),
   the canvas hit test (`kicad-port/selectionCandidates.ts`), the Zone Manager's preview, and Repeat Layout's target area (the reference's outline without its holes).
-- **Between fills the board shows the last fill**, as KiCad does with auto-refill off: an edit elsewhere leaves it, an edit to a zone (outline, layers, net, a setting) empties that zone (a priority is none of
-  them: the Zone Manager's OK changes priorities and puts the fills back, `DIALOG_ZONE_MANAGER::OnOk`), and a zone never filled is an outline (no copper for live connectivity, the 3D stand-in and the status bar's "N zones not filled (B)"). Read by: the canvas and the 3D stand-in (`GET /api/fill`), the `.kicad_pcb` writer (so the DRC, the
+- **Between fills the board shows the last fill**, as KiCad does with auto-refill off: an edit elsewhere leaves it; a zone moved, turned, mirrored or flipped keeps its fill moved with it (`ZONE::Move` /
+  `Rotate` / `Mirror` / `Flip` transform `m_FilledPolysList`), and one edited in Zone Properties (a setting, its net) keeps it as it was (`Edit_Zone_Params` does not `UnFill()`), both counted out of date
+  until the next fill (round 5 R5-Z2, 2026-10-28: before, any edit to a zone emptied it, which was not KiCad's); a zone reshaped (the point editor's `UnFill()`) or put on other layers (`SetLayerSet`) is emptied;
+  a zone never filled is an outline (no copper for live connectivity, the 3D stand-in and the status bar's "N zones not filled (B)"). Read by: the canvas and the 3D stand-in (`GET /api/fill`), the `.kicad_pcb` writer (so the DRC, the
   render, the plots and File > Save As carry kicad-cli's rings), live connectivity and Cleanup Tracks (`eda_drc::zone_copper::ZoneCopper`). A board imported from a `.kicad_pcb` starts with the fills it was saved with.
   "Refill all zones before performing DRC", the Plot dialog's "Check zone fills before plotting" and the Zone Manager's "Refill zones" run the filler first, on a copy; the DRC itself runs without `--refill-zones`,
   so it judges the fill the studio keeps (a run that refills does not skip the courtyard checks, as was written here: kicad-cli 25ec2335 reports `courtyards_overlap` on `fill_bad` either way). Fill Selected, Unfill Selected and Unfill All Zones go to the server.
@@ -558,6 +560,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   read and written as KiCad does, edited in Zone Properties (one box per layer, the dialog chosen by the layer drawn on). A zone keeps the uuid it had in an imported file (`Zone::uuid`): KiCad breaks ties between
   zones of one priority by uuid, and `issue5750`'s B.Cu fill came out at about half the area in kicad-cli's refill of our copy until it did (the slow proof below). A mask-only NPTH hole (`FootprintExtra::holes`) and a net
   tie's pad groups reach the derived board, so the fill kicad-cli makes of it keeps clear of the hole and exempts the tie.
+- Round 5 (2026-10-28, `task-r5-rules-zones`, `PARITY-pcb.md` section 59): Auto-Assign Priorities takes the zones' holes (a pour in another's cutout does not overlap it; the areas less the holes, R5-Z5);
+  Zone Properties offers `<no net>` and its OK keeps a copper zone on no net, with KiCad's warning (R5-Z3; a new zone still starts on the first net, P13-4); a zone keeps its fill through a move (R5-Z2, above).
+  Left: a zone on both outer layers that is flipped keeps its layer set, and is taken as mirrored (each fill stays on its layer: the before and after alone cannot tell the two apart); a fill made before
+  2026-10-28 holds only while its zone is unchanged (the cache did not keep the zone's shape).
 - **Zone UI**: Auto-Assign Priorities in the Zone Manager (`AutoAssignZonePriorities` ported to `eda_ops::zone_priority`: the pads and vias of each net inside an overlap decide, the smaller zone where they do not,
   Kahn's order, one priority per same-net group; `GET /api/zone_priorities/auto`, staged and applied on OK), the Zone Manager's preview (a tab per layer of the zone: the board's edges, the fill or the outline;
   `components/ZonePreview.tsx`), a "Refill zones" box, and the Locked box of Zone Properties. The full settings dialog, keepouts, Merge, Duplicate onto Layer and the Priority actions are as before (`PARITY-boardctl.md`).
@@ -833,8 +839,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `qa/data/pcbnew` (38 `.kicad_dru` files) parse and four of them resolve to the winner their rules say. **The Footprint Checker** (`pcbnew.ModuleEditor.checkFootprint`): `crates/kicad-engine/src/footprint_check.rs` puts the footprint being edited on a scratch board
   (its `.kicad_mod`, a net per pad number, the Footprint Editor's severities), runs `kicad-cli pcb drc` on it through the kicad lane and returns the violations of the footprint-level checks (courtyard, attributes, pads, shorting pads, holes, net ties,
   clipped silk) as markers with the editor's own item ids; the dialog (Show boxes and badges, the marker list, Delete Marker, Delete All Markers, Run Checks) and the markers on the footprint canvas.
-- Missing: the implicit rules of the tuning profiles (`addTuningSingleRule`; the profiles are in the IR since P9a); component classes and sheet paths in a condition (`hasComponentClass`, `memberOfSheet` say false); `fromTo`; a footprint's user fields in `getField`
-  (only Reference, Value and Footprint); properties KiCad has and the IR does not (a rule that names one compiles and reads it as undefined); micro vias (the IR has no via type: a via is through, blind or buried by its layers), a footprint's own paste margin and the net-tie
+- Done 2026-10-28 (`task-r5-rules-zones`, round 5 R5-D1..D5, `PARITY-pcb.md` section 59): the rule engine's footprints have their sheet (`GetSheetname`: the file's, else the symbol link's), their fields
+  (`GetField`: Reference, Value, Datasheet, Description, the user's; no "Footprint" field) and their component class (the file's classes, the project's assignment rules and sheet classes compiled from
+  `GetAssignmentInDRCLanguage` and evaluated on each footprint; `A.ComponentClass` compares by constituent), so `memberOfSheet`, `getField` and `hasComponentClass` hold in the router, Clearance Resolution and the via
+  stitching as in kicad-cli (proof: `crates/pns/tests/rules_kicad.rs`); the router's copper barcodes, text boxes, tables and leaders are "Barcode", "Text Box", "Table" and "Leader" to the rules, so the barcodes'
+  implicit 1 mm physical clearance holds; `existsOnLayer('')` compiles silently; the net class and component class functions' missing-argument words; the stand-in pad of a footprint is its last logical pad.
+- Missing: the implicit rules of the tuning profiles (`addTuningSingleRule`; the profiles are in the IR since P9a); `fromTo`; Find by Properties' Query still sends no sheet path or class (`crates/drc/src/query.rs`,
+  item 21); a custom assignment condition that itself asks `hasComponentClass` sees the file's classes only; properties KiCad has and the IR does not (a rule that names one compiles and reads it as undefined); micro vias (the IR has no via type: a via is through, blind or buried by its layers), a footprint's own paste margin and the net-tie
   cache of a footprint's copper graphics; text variables and cross references in the rules text are not expanded (`${VAR}` is an unresolved variable here); a footprint field (`REF:Name`) cannot be inspected; the courtyard report notice (`MALFORMED_COURTYARDS`) is never set;
   the geometry functions treat touching as intersecting (KiCad deflates the area by an epsilon). (The DRC Rule Editor: done, item 3, P9b, `PARITY-pcb.md` section 48.)
   The Footprint Checker's markers are where the first item of the violation is (kicad-cli's report has no marker position; KiCad puts a short at the contact point); a footprint's Reference and Value are not on the scratch board (a hidden `REF**` stands in).
@@ -996,6 +1007,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-10-23 (`task-connectivity-parity`): the measured set is fixed (the examples and every `qa/data/pcbnew` board, never `work/`), kicad-cli runs on a copy with the ignored checks turned back on, and our counts are capped
   at its error limits. Fixed in `crates/connectivity`: an arc is one item, a pad turned off a multiple of 90 degrees is measured by its copper, and a pad or via that removes its unused copper is its hole on the layers it is
   conditionally flashed on.
+- Done 2026-10-28 (`task-r5-rules-zones`, R5-Z1): two same-net fills join only by a vertex of one inside the other (`CN_VISITOR::checkZoneZoneConnection`), not where their edges cross; proof on
+  kicad-cli's DRC of a "+" of two GND bars (`kicad_cli_ratsnest.rs`). Cleanup's merge (R5-Z4, R5-Z6): no merge from a segment with a track of another width attached, and the joint's pads, vias and zones
+  asked as `testMergeCollinearSegments` asks them.
 - Left (each with its boards in section 51): coordinates in micrometres (sub-micrometre segments of tuned tracks), pads that share a number but not a net, copper graphics with a net, the teardrops kicad-cli's Fill All
   rebuilds, and a `.kicad_dru` rule that ignores `via_dangling`.
 
