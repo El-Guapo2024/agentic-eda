@@ -392,3 +392,12 @@ test("validatePredefinedSizes: KiCad's via messages row by row, then the differe
   assert.equal(validatePredefinedSizes([], [{ width: 200, gap: 0, via_gap: 150 }]), "No differential pair gap defined.");
   assert.equal(validatePredefinedSizes([via(0, 300_000)], [{ width: 200, gap: 0, via_gap: 0 }]), "Via diameter is too small.", "the via rows come first, as the panel checks them");
 });
+
+// r5 R5-10: `TransferDataFromWindow` sorts the three lists by increasing value.
+test("predefinedSizesCmds sorts the widths, the vias and the pairs as KiCad's Apply does", () => {
+  const cmds = predefinedSizesCmds([600, 300], [{ diameter: 900, drill: 450 }, { diameter: 800, drill: 500 }, { diameter: 800, drill: 400 }], [{ width: 200, gap: 150, via_gap: 150 }, { width: 100, gap: 200, via_gap: 0 }]);
+  const batch = cmds[0] as { op: "batch"; cmds: Array<Record<string, unknown>> };
+  assert.deepEqual(batch.cmds[0]!.widths, [300, 600]);
+  assert.deepEqual(batch.cmds[1]!.presets, [{ diameter: 800, drill: 400 }, { diameter: 800, drill: 500 }, { diameter: 900, drill: 450 }]);
+  assert.deepEqual(batch.cmds[2]!.presets, [{ width: 100, gap: 200, via_gap: 0 }, { width: 200, gap: 150, via_gap: 150 }]);
+});

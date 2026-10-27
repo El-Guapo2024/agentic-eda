@@ -8,6 +8,7 @@ import {
   footprintZ,
   stackOfBoard,
   previewStack,
+  previewWheelScroll,
   inferKind,
   kindShown,
   footprintShown,
@@ -27,6 +28,8 @@ import {
   transformPoint,
   type Vec3Tuple,
 } from "./model3d";
+import { TrackballCamera } from "./camera3d";
+import { lengthV, subV, vec3 } from "./math3d";
 
 const EPS = 1e-9;
 function close(got: readonly number[], want: readonly number[], eps = EPS) {
@@ -254,8 +257,29 @@ test("V2: IsFootprintShown -- not in the position file, then DNP, then the kind"
   assert.equal(footprintShown({ kind: "virtual", notInPos: true }, { ...rows, virtual: false }), false);
 });
 
-test("the 3D model preview's dummy board: BuildDefaultStackupList with no copper counted (panel_preview_3d_model.cpp)", () => {
+test("the 3D model preview's dummy board: FrontMask includes F.Cu, so two copper layers are counted (panel_preview_3d_model.cpp)", () => {
+  // V5-1: `LSET::FrontMask` is `FrontTechMask().set( F_Cu )`, so `SetEnabledLayers` counts 2 copper layers and `BuildDefaultStackupList( &dummy_bds, 2 )`
+  // gives the dielectric 1.6 - 2 x 0.035 - 2 x 0.01 = 1.51 mm; InitSettings sums only the dielectric into the body.
   const s = previewStack();
-  assert.ok(Math.abs(s.boardThicknessMm - 1.58) < EPS && Math.abs(s.copperMm - 0.035) < EPS);
-  assert.ok(Math.abs(footprintZ(s, false) - (0.79 + 0.035 + 0.04)) < EPS);
+  assert.ok(Math.abs(s.boardThicknessMm - 1.51) < EPS && Math.abs(s.copperMm - 0.035) < EPS);
+  assert.ok(Math.abs(footprintZ(s, false) - (0.755 + 0.035 + 0.04)) < EPS, "the top of the front copper plus the paste");
+});
+
+test("the 3D model preview's wheel honours the zoom-modifier preference (PANEL_PREVIEW_3D_MODEL::loadSettings)", () => {
+  // V5-2: `m_MousewheelPanning = settings->m_Input.scroll_modifier_zoom != 0`: with Ctrl as the zoom modifier, a plain wheel pans and does not zoom,
+  // and the rest of the wheel settings are `VC_SETTINGS::Reset`'s (Ctrl pans horizontally, Shift vertically, nothing reversed).
+  const scroll = previewWheelScroll({ scrollModifierZoom: "ctrl" });
+  assert.equal(scroll.scrollModifierZoom, "ctrl");
+  assert.deepEqual({ panH: scroll.scrollModifierPanH, panV: scroll.scrollModifierPanV, rz: scroll.reverseScrollZoom, rp: scroll.reverseScrollPanH }, { panH: "ctrl", panV: "shift", rz: false, rp: false });
+  const cam = new TrackballCamera(100, vec3(0, 0, 0));
+  const beforeZoom = cam.zoom;
+  const beforePos = cam.getRenderPose().position;
+  cam.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: false, altKey: false }, scroll);
+  assert.equal(cam.zoom, beforeZoom, "a plain wheel must not zoom while a zoom modifier is set");
+  assert.ok(lengthV(subV(cam.getRenderPose().position, beforePos)) > 1e-9, "it pans instead");
+  // With no zoom modifier, the same wheel zooms, as before.
+  const plain = new TrackballCamera(100, vec3(0, 0, 0));
+  const start = plain.zoom;
+  plain.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: false, altKey: false }, previewWheelScroll({ scrollModifierZoom: "none" }));
+  assert.ok(plain.zoom < start);
 });

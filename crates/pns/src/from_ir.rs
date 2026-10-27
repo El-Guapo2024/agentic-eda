@@ -379,10 +379,10 @@ fn connection_points(shape: &eda_model::ir::Shape) -> Vec<Point> {
 fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel, layers: &LayerMap, rules: &mut crate::rule_resolver::RuleResolver) {
     use eda_drc::rule_item::Class;
     let copper = |l: &str| layers.index_of(l).filter(|_| l.ends_with(".Cu"));
-    let add_shape = |node: &mut Node, rules: &mut crate::rule_resolver::RuleResolver, id: &str, shape: &eda_model::ir::Shape, net: Option<&str>, footprint: Option<&str>| {
+    let add_shape = |node: &mut Node, rules: &mut crate::rule_resolver::RuleResolver, id: &str, shape: &eda_model::ir::Shape, net: Option<&str>, footprint: Option<&str>, type_name: Option<&str>| {
         let Some(layer) = copper(shape.layer()) else { return };
         let source = format!("{}{id}", Solid::GRAPHIC_SOURCE);
-        let rule = rules.add_graphic(&source, layer, net, footprint, Class::Shape);
+        let rule = rules.add_graphic_as(&source, layer, net, footprint, Class::Shape, type_name);
         let anchors = connection_points(shape);
         let pos = anchors.first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
         let net = net.and_then(crate::item::net_of);
@@ -397,9 +397,9 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
             node.add(Item::Solid(Solid { net: net.clone(), layers: crate::layer::LayerRange::single(layer), pos, shape: piece, source: format!("{source}#{k}"), edge: false, rule, anchor_points: anchors.clone() }));
         }
     };
-    let add_obstacle = |node: &mut Node, rules: &mut crate::rule_resolver::RuleResolver, id: &str, layer: i32, pieces: Vec<Shape>, class: Class| {
+    let add_obstacle = |node: &mut Node, rules: &mut crate::rule_resolver::RuleResolver, id: &str, layer: i32, pieces: Vec<Shape>, class: Class, type_name: Option<&str>| {
         let source = format!("{}{id}", Solid::OBSTACLE_SOURCE);
-        let rule = rules.add_graphic(&source, layer, None, None, class);
+        let rule = rules.add_graphic_as(&source, layer, None, None, class, type_name);
         for (k, piece) in pieces.into_iter().enumerate() {
             let (x0, y0, x1, y1) = piece.bbox(Nm::ZERO);
             let pos = Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
@@ -409,7 +409,7 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
     if let Some(d) = design.drawings.as_ref() {
         for (i, shape) in d.shapes.iter().enumerate() {
             let id = if shape.id().is_empty() { format!("shape{i}") } else { shape.id().to_string() };
-            add_shape(node, rules, &id, shape, d.board_items.net_of(shape.id()), None);
+            add_shape(node, rules, &id, shape, d.board_items.net_of(shape.id()), None, None);
         }
         // a text box: `syncGraphicalItem( static_cast<PCB_SHAPE*>( gitem ) )`, its rectangle (`PCB_SHAPE` part); not filled, its border at the
         // stroke's width whether the border is drawn or not (`makeEffectiveShapes` takes `GetEffectiveWidth()`, the stroke's; `m_borderEnabled` is
@@ -421,7 +421,8 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
             let corners = if tb.pts.len() == 4 { tb.pts.clone() } else { vec![tb.start, Point { x: tb.end.x, y: tb.start.y }, tb.end, Point { x: tb.start.x, y: tb.end.y }] };
             let id = if tb.id.is_empty() { format!("textbox{i}") } else { tb.id.clone() };
             let shape = eda_model::ir::Shape::Polygon { id: id.clone(), layer: tb.layer.clone(), stroke_width: tb.stroke_width_nm.max(Nm::ZERO), filled: false, pts: corners };
-            add_shape(node, rules, &id, &shape, None, None);
+            // `A.Type` is "Text Box" (`solid->SetParent( aItem )`, the text box itself)
+            add_shape(node, rules, &id, &shape, None, None, Some("Text Box"));
         }
         for (i, dim) in d.dimensions.iter().enumerate() {
             let Some(layer) = copper(&dim.layer) else { continue };
@@ -438,7 +439,9 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
                 }
             }
             let id = if dim.id.is_empty() { format!("dimension{i}") } else { dim.id.clone() };
-            add_obstacle(node, rules, &id, layer, pieces, Class::Dimension);
+            // `ENUM_MAP<KICAD_T>`: "Leader" for a `PCB_DIM_LEADER`, "Dimension" for the others
+            let class = if matches!(dim.kind, eda_model::ir::DimensionKind::Leader) { Class::Leader } else { Class::Dimension };
+            add_obstacle(node, rules, &id, layer, pieces, class, None);
         }
         for (i, b) in d.barcodes.iter().enumerate() {
             let Some(layer) = copper(&b.layer) else { continue };
@@ -447,7 +450,8 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
             let (sin, cos) = (b.angle as f64 / 1000.0).to_radians().sin_cos();
             let pts = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].iter().map(|&(x, y)| Point { x: b.at.x + Nm::kiround(x * cos + y * sin), y: b.at.y + Nm::kiround(-x * sin + y * cos) }).collect();
             let id = if b.id.is_empty() { format!("barcode{i}") } else { b.id.clone() };
-            add_obstacle(node, rules, &id, layer, vec![Shape::Polygon { pts }], Class::Shape);
+            // `A.Type == 'Barcode'`: the implicit 1 mm physical clearance ("barcode visual separation default") holds a route off it
+            add_obstacle(node, rules, &id, layer, vec![Shape::Polygon { pts }], Class::Shape, Some("Barcode"));
         }
         for (i, t) in d.tables.iter().enumerate() {
             let Some(layer) = copper(&t.layer) else { continue };
@@ -460,12 +464,12 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
             let ring: Vec<eda_drc::kimath::Seg> = (0..4).map(|k| eda_drc::kimath::Seg::new(corners[k], corners[(k + 1) % 4])).collect();
             let shape = if gap > Nm::ZERO { Shape::Compound { parts: vec![Shape::Polygon { pts: corners.clone() }, Shape::Strokes { segs: ring, r: gap }] } } else { Shape::Polygon { pts: corners } };
             let id = if t.id.is_empty() { format!("table{i}") } else { t.id.clone() };
-            add_obstacle(node, rules, &id, layer, vec![shape], Class::Shape);
+            add_obstacle(node, rules, &id, layer, vec![shape], Class::Shape, Some("Table"));
         }
     }
     for (i, (fp, piece)) in eda_drc::fp_art::footprint_copper_of(design, model).into_iter().enumerate() {
         match piece {
-            eda_drc::fp_art::FpCopper::Shape(shape) => add_shape(node, rules, &format!("{fp}:{i}"), &shape, None, Some(&fp)),
+            eda_drc::fp_art::FpCopper::Shape(shape) => add_shape(node, rules, &format!("{fp}:{i}"), &shape, None, Some(&fp), None),
             eda_drc::fp_art::FpCopper::Text(t) => {
                 let (Some(layer), Some(Shape::Strokes { segs, r })) = (copper(&t.layer), eda_drc::board::footprint_text_shape(&t)) else { continue };
                 if segs.is_empty() {

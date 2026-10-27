@@ -150,6 +150,11 @@ pub struct SchExtras {
     /// entry, or an entry naming itself, is where the library puts it. The entries always form a permutation of the symbol's pin numbers.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pin_swaps: BTreeMap<String, BTreeMap<String, String>>,
+    /// The alternate function a placed symbol picked for some of its pins, by `field_key`: pin number -> the alternate's name (`SCH_PIN::m_alt`,
+    /// `(pin "3" (uuid ..) (alternate "3.out"))` in the file). The pin is then of the alternate's type (`SCH_PIN::GetType`,
+    /// [`crate::symbol::LibSymbol::placed_pin_type`]): a `no_connect` library pin whose alternate is an output is a contact (r5 D5-H3).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pin_alternates: BTreeMap<String, BTreeMap<String, String>>,
     /// How a free-standing text (`SchematicText`) is justified about its anchor (`EDA_TEXT::GetHorizJustify`, `GetVertJustify`), by text id, once
     /// Text Properties, a turn (`SCH_TEXT::Rotate90`) or a mirror (`MirrorHorizontally`, `MirrorVertically`, `MirrorSpinStyle`) set it. A text with no
     /// entry is [`SchTextJustify::default`], left and bottom -- the way the studio has always set a text on its anchor; an entry equal to that is never
@@ -546,6 +551,11 @@ impl SchExtras {
         }
     }
 
+    /// The alternate function the symbol keyed `key` picked for its pin `number`, if any.
+    pub fn pin_alternate(&self, key: &str, number: &str) -> Option<&str> {
+        self.pin_alternates.get(key).and_then(|m| m.get(number)).map(String::as_str)
+    }
+
     /// The places of the pins of the symbol keyed `key`, as [`permute_pins`] takes them; `None` for a symbol whose pins are all where the library has them.
     pub fn pin_swaps_of(&self, key: &str) -> Option<&BTreeMap<String, String>> {
         self.pin_swaps.get(key)
@@ -619,6 +629,7 @@ impl SchExtras {
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()
             && self.pin_swaps.is_empty()
+            && self.pin_alternates.is_empty()
             && self.text_justify.is_empty()
             && self.tables.is_empty()
             && self.groups.is_empty()

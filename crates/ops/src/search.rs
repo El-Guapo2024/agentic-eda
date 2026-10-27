@@ -28,9 +28,13 @@
 //! carry); our IR has no per-field visibility, so KiCad's template defaults
 //! apply (Reference/Value visible; Footprint, Datasheet and user fields
 //! hidden); no per-field position, so every field of a symbol sits at the
-//! symbol's own position; labels' `CTX_NETNAME` escaping is not applied.
+//! symbol's own position. A label's text and a field's text are matched
+//! unescaped (`UnescapeString( GetText() )`), and a label is replaced with the
+//! find and replace strings escaped (`EscapeString( .., CTX_NETNAME )`,
+//! `SCH_LABEL_BASE::Replace`), r5 C5-M4.
 
 use eda_model::ir::{Point, SchematicSection};
+use eda_model::text_vars::unescape_string;
 use eda_model::ConstraintModel;
 use serde::{Deserialize, Serialize};
 
@@ -67,8 +71,12 @@ pub struct SearchData {
     /// `replaceReferences`.
     #[serde(default)]
     pub replace_references: bool,
-    /// `searchAndReplace`: set by the Replace paths (Find and Replace
-    /// dialog's Replace buttons); makes non-replaceable items not match.
+    /// `searchAndReplace`: makes non-replaceable items (pins, and the
+    /// Reference unless `replaceReferences`) not match. KiCad's dialog never
+    /// sets it (it is only read from and written to the config,
+    /// `eda_draw_frame.cpp`, default false), so the dialog's Find, Find Next
+    /// and highlight leave it off; our replace verb sets it so its walk
+    /// skips what `SCH_FIELD::Replace` / `SCH_PIN::Replace` would not change.
     #[serde(default)]
     pub search_and_replace: bool,
 }
@@ -127,6 +135,26 @@ fn find_from(hay: &[char], needle: &[char], from: usize) -> Option<usize> {
         return None;
     }
     (from..=hay.len() - needle.len()).find(|&i| hay[i..i + needle.len()] == *needle)
+}
+
+/// `EscapeString( aSource, CTX_NETNAME )` (`common/string_utils.cpp`): `/` becomes `{slash}`, line breaks are dropped.
+pub fn escape_netname(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '/' => out.push_str("{slash}"),
+            '\n' | '\r' => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// `SCH_LABEL_BASE::Replace`: the find and replace strings escaped as a net name (`EscapeString( .., CTX_NETNAME )`), then `EDA_TEXT::Replace` on the stored
+/// (escaped) text.
+pub fn replace_label_text(stored: &str, data: &SearchData) -> Option<String> {
+    let local = SearchData { find: escape_netname(&data.find), replace: escape_netname(&data.replace), ..data.clone() };
+    replace_text(stored, &local)
 }
 
 /// `EDA_ITEM::Matches( aText, aSearchData )` (the replaceable-item guard is
@@ -205,6 +233,8 @@ pub enum ItemKind {
     Text,
     /// A symbol pin (`SCH_PIN`): `name` is the pin number.
     Pin,
+    /// A label's own field (`SCH_LABEL_BASE::m_fields`, `SchExtras::label_fields`): `id` is the label id, `name` the field's name.
+    LabelField,
 }
 
 /// One match: what to select / pan to, and a stable key (`kind:id:name`)
@@ -231,6 +261,7 @@ pub fn hit_key(kind: ItemKind, id: &str, name: &str) -> String {
         ItemKind::Label => "label",
         ItemKind::Text => "text",
         ItemKind::Pin => "pin",
+        ItemKind::LabelField => "label_field",
     };
     format!("{k}:{id}:{name}")
 }
@@ -254,10 +285,22 @@ fn symbol_fields(sch: &SchematicSection, model: &ConstraintModel, id: &str) -> V
 }
 
 /// `SCH_SYMBOL::Matches`: any non-Reference field matches (hidden ones only
-/// with `searchAllFields`). `searchMetadata` (library name/description/
-/// keywords) is not exposed by the schematic dialog and not ported.
+/// with `searchAllFields`; a field's text unescaped, as `SCH_FIELD::Matches`
+/// reads it), then -- "for completeness" -- any non-field draw item of the
+/// library symbol (`GetLibSymbolRef()->GetDrawItems()`, every unit and body
+/// style): a body text (`SCH_TEXT::Matches` on its text) or, with
+/// `searchAllPins`, a pin's name or number (`SCH_PIN::Matches`; a library
+/// pin has no connection, so `searchNetNames` adds nothing), r5 C5-L1.
+/// `searchMetadata` (library name/description/keywords) is not exposed by
+/// the schematic dialog and not ported.
 fn symbol_matches(sch: &SchematicSection, model: &ConstraintModel, id: &str, data: &SearchData) -> bool {
-    symbol_fields(sch, model, id).into_iter().filter(|(n, _)| n != "Reference").any(|(n, text)| (field_visible(&n) || data.search_hidden_fields) && matches_text(&text, data))
+    if symbol_fields(sch, model, id).into_iter().filter(|(n, _)| n != "Reference").any(|(n, text)| (field_visible(&n) || data.search_hidden_fields) && matches_text(&unescape_string(&text), data)) {
+        return true;
+    }
+    let Some(sym) = sch.symbols.iter().find(|s| s.id == id) else { return false };
+    let Some(lib) = model.part(id).and_then(|part| model.real_symbol_of(&sym.lib_id, part)) else { return false };
+    let body_text = lib.graphics.iter().any(|g| matches!(g, eda_model::symbol::SymbolGraphic::Text { text, .. } if matches_text(text, data)));
+    body_text || (data.search_pins && lib.pins.iter().any(|p| matches_text(&p.name, data) || matches_text(&p.number, data)))
 }
 
 /// Unit letter suffix (`SCH_SYMBOL::SubReference`): 1 -> "A".
@@ -300,7 +343,7 @@ pub fn find_items(sch: &SchematicSection, model: &ConstraintModel, data: &Search
                     symbol_matches(sch, model, &sym.id, data) || matches_text(&text, data) || (multi_unit && matches_text(&format!("{}{}", text, unit_letter(sym.unit)), data))
                 }
             } else {
-                matches_text(&text, data)
+                matches_text(&unescape_string(&text), data)
             };
             if matched {
                 hits.push(Hit { kind: ItemKind::Field, id: sym.id.clone(), name, at: sym.at, text });
@@ -322,11 +365,23 @@ pub fn find_items(sch: &SchematicSection, model: &ConstraintModel, data: &Search
         }
     }
     for l in &sch.labels {
-        // SCH_LABEL_BASE::Matches: its text, or (searchNetNames) its net
-        // name -- which for our labels is the same string, so the text
-        // test already covers both.
-        if matches_text(&l.net, data) {
-            hits.push(Hit { kind: ItemKind::Label, id: l.id.clone(), name: String::new(), at: l.at, text: l.net.clone() });
+        // SCH_LABEL_BASE::Matches: its text unescaped (`UnescapeString( GetText() )`: `{slash}` is `/`), or (searchNetNames) its net
+        // name -- which for our labels is the same string, so the text test already covers both.
+        let shown = unescape_string(&l.net);
+        if matches_text(&shown, data) {
+            hits.push(Hit { kind: ItemKind::Label, id: l.id.clone(), name: String::new(), at: l.at, text: shown });
+        }
+        // `nextMatch`'s `addItem`: a label's fields are items of their own (`for( SCH_FIELD& field : label->GetFields() )`), each matched by
+        // `SCH_FIELD::Matches` -- a hidden one only with `searchAllFields`, its text unescaped (r5 C5-L2). They sit at the label here (no field
+        // position is kept for the sort).
+        for f in sch.extras.label_fields.get(&l.id).into_iter().flatten() {
+            if !f.visible && !data.search_hidden_fields {
+                continue;
+            }
+            let text = unescape_string(&f.text);
+            if matches_text(&text, data) {
+                hits.push(Hit { kind: ItemKind::LabelField, id: l.id.clone(), name: f.name.clone(), at: l.at, text });
+            }
         }
     }
     for t in &sch.texts {
@@ -410,5 +465,66 @@ mod tests {
         assert!(!wild_match("a*c", "acd"));
         assert!(wild_match("*a*b*", "xxaxxbxx"));
         assert!(!wild_match("a?c", "ac"));
+    }
+
+    use eda_model::ir::{LabelKind, NetLabel, SymbolInstance};
+    use eda_model::sch_extras::LabelField;
+    use eda_model::units::mm;
+
+    fn label(id: &str, net: &str, x: f64) -> NetLabel {
+        NetLabel { id: id.into(), net: net.into(), at: Point { x: mm(x), y: mm(0.0) }, kind: LabelKind::Local }
+    }
+
+    #[test]
+    fn a_label_matches_on_its_unescaped_text() {
+        // SCH_LABEL_BASE::Matches: `SCH_ITEM::Matches( UnescapeString( GetText() ), aSearchData )`
+        let sch = SchematicSection { labels: vec![label("l1", "SDA{slash}SCL", 1.0)], ..Default::default() };
+        let m = ConstraintModel::default();
+        let hits = find_items(&sch, &m, &d("SDA/SCL"));
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "SDA/SCL");
+        assert!(find_items(&sch, &m, &d("slash")).is_empty(), "the escape is not text");
+        // SCH_LABEL_BASE::Replace: both strings escaped as a net name, then replaced on the stored text
+        let mut r = d("/");
+        r.replace = "_".into();
+        assert_eq!(replace_label_text("SDA{slash}SCL", &r).as_deref(), Some("SDA_SCL"));
+        let mut r = d("_");
+        r.replace = "/".into();
+        assert_eq!(replace_label_text("A_B", &r).as_deref(), Some("A{slash}B"));
+    }
+
+    #[test]
+    fn a_labels_shown_field_is_found() {
+        let mut sch = SchematicSection { labels: vec![label("l1", "VBUS", 1.0)], ..Default::default() };
+        sch.extras.label_fields.insert("l1".into(), vec![LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: false }, LabelField { name: "Note".into(), text: "HVX".into(), visible: false, italic: false }]);
+        let m = ConstraintModel::default();
+        let hits = find_items(&sch, &m, &d("HV"));
+        assert_eq!(hits.iter().map(|h| (h.kind, h.name.as_str())).collect::<Vec<_>>(), vec![(ItemKind::LabelField, "Netclass")], "the hidden field only with searchAllFields");
+        let mut all = d("HV");
+        all.search_hidden_fields = true;
+        assert_eq!(find_items(&sch, &m, &all).len(), 2);
+        assert_eq!(hits[0].key(), "label_field:l1:Netclass");
+    }
+
+    #[test]
+    fn a_symbols_body_text_makes_its_reference_match() {
+        // SCH_SYMBOL::Matches: "Search non-field lib draw items (pins, graphical text) for completeness."
+        let mut lib = eda_model::symbol::builtin("Device:R").unwrap();
+        lib.lib_id = "T:OPA".into();
+        lib.graphics.push(eda_model::symbol::SymbolGraphic::Text { unit: 0, text: "OPA".into(), at: eda_model::symbol::SPoint { x: 0.0, y: 0.0 }, angle_deg: 0.0, size_mm: 1.27 });
+        let pin_name = lib.pins[0].number.clone();
+        let mut m = ConstraintModel::default();
+        m.symbols.push(lib);
+        m.parts.push(serde_json::from_value(serde_json::json!({ "reference": "U1" })).unwrap());
+        let sym = SymbolInstance { id: "U1".into(), at: Point { x: mm(1.0), y: mm(0.0) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "T:OPA".into(), unit: 1, value: "x".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let sch = SchematicSection { symbols: vec![sym], ..Default::default() };
+        let hits = find_items(&sch, &m, &d("OPA"));
+        assert_eq!(hits.iter().map(|h| (h.kind, h.name.as_str())).collect::<Vec<_>>(), vec![(ItemKind::Field, "Reference")]);
+        // a library pin's number, only with searchAllPins
+        let mut whole = d(&pin_name);
+        whole.mode = MatchMode::WholeWord;
+        assert!(find_items(&sch, &m, &whole).iter().all(|h| h.name != "Reference"));
+        whole.search_pins = true;
+        assert!(find_items(&sch, &m, &whole).iter().any(|h| h.name == "Reference"));
     }
 }

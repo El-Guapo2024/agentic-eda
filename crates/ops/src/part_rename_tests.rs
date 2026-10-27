@@ -169,7 +169,7 @@ fn a_footprint_made_on_the_board_is_not_taken_by_a_rename() {
 fn increment_annotations_moves_the_parts_in_one_go_so_no_two_share_a_reference() {
     let (model, design) = fixture();
     let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
-    b.apply(&Cmd::IncrementAnnotations { start: "R1".into(), increment: 1 }).unwrap();
+    b.apply(&Cmd::IncrementAnnotations { start: "R1".into(), increment: 1, all_sheets: false }).unwrap();
     let d = b.design();
     assert_eq!(d.placement.as_ref().unwrap().footprints.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), ["R2", "R3", "U1"]);
     assert_eq!(d.placement.as_ref().unwrap().footprints[0].at, p(mm(10.0), mm(20.0)), "R1 became R2 where it stood");
@@ -207,7 +207,7 @@ fn a_rename_is_a_step_of_both_editors() {
     let rename = Cmd::RenameSymbol { id: "U1".into(), new_id: "U2".into() };
     assert!(rename.spans_both_editors());
     assert_eq!(rename.domain(), Domain::Schematic, "it is still a schematic command (its tab, its connectivity)");
-    assert!(Cmd::IncrementAnnotations { start: "R1".into(), increment: 1 }.spans_both_editors());
+    assert!(Cmd::IncrementAnnotations { start: "R1".into(), increment: 1, all_sheets: false }.spans_both_editors());
     assert!(Cmd::Annotate { reset_existing: false, order: AnnotateOrder::default(), ids: None, options: Default::default() }.spans_both_editors());
     assert!(Cmd::OnSheet { sheet: "a".into(), cmd: Box::new(rename.clone()) }.spans_both_editors());
     assert!(Cmd::Batch { cmds: vec![Cmd::AddJunction { at: p(Nm::ZERO, Nm::ZERO) }, rename] }.spans_both_editors());

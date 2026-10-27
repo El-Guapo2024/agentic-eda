@@ -24,6 +24,8 @@
 //   vias          `V` shows a pair of vias a via gap apart, a fix places them and the route goes on on the other layer from them, to the pads; the commit has both vias and tracks
 //                 on both layers and one Undo takes them all away;
 //   keys          Backspace takes the last fixed leg back; `/` flips the posture (the heads change, a second flip brings them back); Escape ends the session.
+//   pair sizes    (r5 R5-5) a pair of Pre-defined Sizes chosen (the pair menu's entry) is what the next pair is started and routed at ("user choice"); W while it is routed steps the pair list
+//                 back to the net class's entry; Use Net Class Values sends no sizes;
 //   other end     Ctrl+E (Route From Other End, `ROUTER::ContinueFromEnd`) after a fixed leg commits the legs and starts a pair of the same nets, at the pad pair of the far end of the P net's
 //                  connection and heading for where the head ended; the click on the end of the committed legs finishes both connections, and one Undo takes both commits away.
 //
@@ -418,6 +420,31 @@
     const open = (st.checks ?? []).filter((x) => x.check === "routing_connectivity" && x.fail && (x.at === "/USB_DP" || x.at === "/USB_DN"));
     t(!!fin && fin.body.ok === true && open.length === 0, `the click on the end of the committed legs finishes the connection of both nets: finish ${fin && fin.body.ok}, ${open.length} open`);
     await undoOurs(t, "the pair continued from the other end");
+  });
+
+  await scenario("r5 R5-5: a pair of Pre-defined Sizes is routed when chosen, W steps the pair list while a pair is routed, and Use Net Class Values goes back", async (t) => {
+    const cmd = (c) => json("/api/cmd", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cmd: c, strict: false }) });
+    const before = (await state()).routing?.diff_pair_presets ?? [];
+    await cmd({ op: "set_diff_pair_presets", presets: [{ width: 300_000, gap: 250_000, via_gap: 300_000 }] });
+    for (let i = 0; i < 20 && !((await state()).routing?.diff_pair_presets ?? []).length; i++) await sleep(200);
+    await sleep(1500); // the studio's own copy of the board follows the server's at its next poll (700 ms)
+    await E.run("studio.Router.setDiffPair", 1);
+    await arm();
+    const r = await startAt(...p1);
+    t(r && r.body.ok === true && r.req.width === 300_000 && r.req.gap === 250_000 && r.req.via_gap === 300_000, `the chosen pair's sizes are sent and routed: ${r && JSON.stringify([r.req.width, r.req.gap, r.req.via_gap, r.body.ok, r.body.width, r.body.message])}`);
+    t(r && r.body.width === 300_000 && r.body.gap === 250_000 && r.body.sizes?.width_source === "user choice", `the pair is at 0.3 / 0.25 mm, "user choice": ${r && JSON.stringify([r.body.width, r.body.gap, r.body.sizes])}`);
+    // W: the list has the class's entry and this one, so it goes back to the class's
+    const n = replies.length;
+    await E.run("pcbnew.EditorControl.trackWidthInc");
+    const d = await waitReply("dp_dims", n, 8000);
+    t(d && r && d.req.width === r.body.sizes?.rule_width && d.req.gap === r.body.sizes?.rule_gap, `W while routing goes to the class's sizes: ${d && JSON.stringify(d.req)} (the rule's ${r && JSON.stringify([r.body.sizes?.rule_width, r.body.sizes?.rule_gap])})`);
+    await abandon();
+    await E.run("studio.Router.useNetclassDiffPair");
+    await arm();
+    const r2 = await startAt(...p1);
+    t(r2 && r2.body.ok === true && r2.req.width === undefined && r2.req.gap === undefined, `Use Net Class Values: no sizes are sent: ${r2 && JSON.stringify([r2.req.width, r2.req.gap])}`);
+    await abandon();
+    await cmd({ op: "set_diff_pair_presets", presets: before });
   });
 
   await scenario("the board is as it was, and the studio reported no error but the refusal", async (t) => {

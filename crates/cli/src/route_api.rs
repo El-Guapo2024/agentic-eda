@@ -153,6 +153,37 @@ fn preview_json(router: &Router, preview: &Preview) -> Value {
     })
 }
 
+/// `NETCLASS::GetHumanReadableName` of the net class KiCad gives `net` (`NET_SETTINGS::GetEffectiveNetClass`): one class's name, or its classes'
+/// in precedence order -- "%s and %s", "%s, %s and %s", "%s, %s and %d more".
+fn human_readable_class(rules: &eda_model::BoardRules, net: &str) -> String {
+    let c = rules.effective_class(net).constituents;
+    match c.as_slice() {
+        [] => "Default".into(),
+        [one] => one.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [a, b, d] => format!("{a}, {b} and {d}"),
+        [a, b, rest @ ..] => format!("{a}, {b} and {} more", rest.len()),
+    }
+}
+
+/// What `ROUTER_TOOL::UpdateMessagePanel` shows of a route that started (r5 R5-8): the sizes it routes at and where each came from
+/// (`GetWidthSource`, `GetClearanceSource`), and the net's resolved class. `rule_width` / `rule_width_source` are `ImportSizes` with the
+/// connected width overridden (`m_TempOverrideTrackWidth`), what the route takes when the width list goes back to its first entry while
+/// routing (`TrackWidthInc`/`Dec`, the width menu).
+fn route_sizes_json(router: &Router, rules: &eda_model::BoardRules, at: Point, layer: &str, width_source: String) -> Value {
+    let sizes = router.import_sizes(at, layer);
+    let rule = router.rule_sizes(at, layer);
+    let net = router.current_net();
+    json!({
+        "width_source": width_source,
+        "clearance": sizes.as_ref().map(|s| s.clearance),
+        "clearance_source": sizes.as_ref().map(|s| s.clearance_source.clone()),
+        "netclass": net.as_deref().map(|n| human_readable_class(rules, n)),
+        "rule_width": rule.as_ref().map(|s| s.track_width),
+        "rule_width_source": rule.map(|s| s.width_source),
+    })
+}
+
 /// `auto_track_width` of a start request: `BOARD_DESIGN_SETTINGS::m_UseConnectedTrackWidth` (the studio's "Use Starting Track Width", the
 /// project's `board.auto_track_width`), on unless the request says otherwise, as KiCad's project default is (`PROJECT_LOCAL_SETTINGS`:
 /// `m_AutoTrackWidth( true )`).
@@ -173,20 +204,23 @@ pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let mut router = Router::new(&design, &model);
     router.settings = settings_of(&req);
+    router.entered_group = entered_group(&req);
     router.use_connected_track_width = auto_track_width(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     // `ImportSizes`: the width of the track the start item is (or is joined to) first, whatever width was chosen (`m_UseConnectedTrackWidth &&
     // !m_TempOverrideTrackWidth`, r4 R4-1); no `width`: the width list is on "use net class" (`UseNetClassTrack()`), and `ImportSizes` takes
     // the start net's width through the rules (`CT_WIDTH`: its class, a `.kicad_dru` rule, a pair's class width), r3 R3-3
-    let width = match (router.connected_track_width(at, layer), req.get("width").and_then(Value::as_i64)) {
-        (Some(w), _) => w,
-        (None, Some(w)) => Nm::new(w),
-        (None, None) => router.import_sizes(at, layer).map_or(model.board.track_width, |s| s.track_width),
+    // `ImportSizes`' `SetWidthSource`: "existing track", "user choice", or the rule's
+    let (width, width_source) = match (router.connected_track_width(at, layer), req.get("width").and_then(Value::as_i64)) {
+        (Some(w), _) => (w, "existing track".to_string()),
+        (None, Some(w)) => (Nm::new(w), "user choice".to_string()),
+        (None, None) => router.import_sizes(at, layer).map_or((model.board.track_width, "netclass 'Default'".to_string()), |s| (s.track_width, s.width_source)),
     };
     match router.start(at, layer, width) {
         Ok(()) => {
             let mut reply = router.preview(at).map(|p| preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
+            reply["sizes"] = route_sizes_json(&router, &model.board, at, layer, width_source);
             // `syncZone`'s `KIDIALOG`: a rule area the router cannot handle, which it left out of the world
             if !router.warnings().is_empty() {
                 reply["warnings"] = json!(router.warnings());
@@ -276,10 +310,21 @@ pub fn via(cell: &RouteCell, body: &[u8]) -> Value {
     json!({ "ok": true })
 }
 
+/// `Cmd::CommitRoute` of a router's commit: with each new track's source (its mask and group go to it) and the entered group `group` (the
+/// new items join it), r5 R5-2.
+fn commit_cmd(commit: eda_pns::router::RouteCommit, group: Option<String>) -> eda_ops::Cmd {
+    eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds, track_sources: commit.track_sources, group }
+}
+
+/// `group` of a request that starts a session: the group the board editor has entered (`PCB_SELECTION_TOOL::GetEnteredGroup()`), if any.
+fn entered_group(req: &Value) -> Option<String> {
+    req.get("group").and_then(Value::as_str).filter(|g| !g.is_empty()).map(str::to_string)
+}
+
 /// The commit of a route (or of what it had fixed) as the one undoable step `Cmd::CommitRoute`; with `append_undo`, joined to the step
 /// before it (a route restarted from the other end is one undo with the part committed when it restarted).
-fn commit_route(dir: &Path, commit: eda_pns::router::RouteCommit, append_undo: bool) -> Result<String, String> {
-    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
+fn commit_route(dir: &Path, commit: eda_pns::router::RouteCommit, append_undo: bool, group: Option<String>) -> Result<String, String> {
+    let cmd = commit_cmd(commit, group);
     let summary = board::step(dir, cmd, true, "ui").map_err(|e| board::reasons(&e))?;
     if append_undo {
         board::append_to_previous_undo(dir);
@@ -298,7 +343,7 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let at = point_of(&req);
     let Some(commit) = router.finish(at) else {
-        let committed = match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo)) {
+        let committed = match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo, router.entered_group.clone())) {
             Some(Err(e)) => return err(e),
             Some(Ok(_)) => true,
             None => false,
@@ -306,7 +351,7 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         let message = if committed { "final segment still collides; the segments fixed before it are committed" } else { "final segment still collides; route left uncommitted" };
         return json!({ "ok": false, "committed": committed, "message": message });
     };
-    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
+    let cmd = commit_cmd(commit, router.entered_group.clone());
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => {
             // a route restarted from the other end is one undo with the part that was committed when it restarted
@@ -329,10 +374,10 @@ pub fn attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let Some(router) = guard.as_mut() else { return err("not routing") };
     match router.attempt_finish(at) {
         Ok(commit) => {
-            let append_undo = router.append_undo;
+            let (append_undo, group) = (router.append_undo, router.entered_group.clone());
             *guard = None;
             drop(guard);
-            match commit_route(dir, commit, append_undo) {
+            match commit_route(dir, commit, append_undo, group) {
                 Ok(summary) => json!({ "ok": true, "finished": true, "message": summary }),
                 Err(e) => err(e),
             }
@@ -352,18 +397,17 @@ pub fn attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
 pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let at = point_of(&req);
-    let (continuation, settings, append_undo) = {
+    let (continuation, settings, append_undo, group) = {
         let guard = cell.lock().unwrap_or_else(|e| e.into_inner());
         let Some(router) = guard.as_ref() else { return err("not routing") };
         match router.continue_from_end(at) {
-            Ok(c) => (c, router.settings.clone(), router.append_undo),
+            Ok(c) => (c, router.settings.clone(), router.append_undo, router.entered_group.clone()),
             Err(message) => return err(message),
         }
     };
     let committed = !continuation.commit.tracks.is_empty() || !continuation.commit.vias.is_empty() || !continuation.commit.remove_track_ids.is_empty();
     if committed {
-        let c = continuation.commit;
-        let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: c.remove_track_ids, remove_via_ids: c.remove_via_ids, tracks: c.tracks, vias: c.vias, lock_tracks: c.lock_tracks, via_kinds: c.via_kinds };
+        let cmd = commit_cmd(continuation.commit, group.clone());
         if let Err(e) = board::step(dir, cmd, true, "ui") {
             return err(board::reasons(&e));
         }
@@ -379,6 +423,7 @@ pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let mut router = Router::new(&design, &model);
     router.settings = settings;
+    router.entered_group = group;
     // what the new session commits is one undo step with this commit (`APPEND_UNDO`), and with the ones before it
     router.append_undo = append_undo || committed;
     if let Err(message) = router.start(continuation.from, &continuation.layer, continuation.width) {
@@ -401,7 +446,7 @@ pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
 /// A drag leaves the board as it was (`performDragging`: `if( evt->IsCancelInteractive() ) { .. break; }` then `StopRouting()`).
 pub fn cancel(dir: &Path, cell: &RouteCell) -> Value {
     let Some(mut router) = cell.lock().unwrap_or_else(|e| e.into_inner()).take() else { return json!({ "ok": true, "committed": false }) };
-    match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo)) {
+    match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo, router.entered_group.clone())) {
         Some(Err(e)) => err(e),
         Some(Ok(_)) => json!({ "ok": true, "committed": true }),
         None => json!({ "ok": true, "committed": false }),
@@ -493,6 +538,7 @@ pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let mut router = Router::new(&design, &model);
     router.settings = settings_of(&req);
+    router.entered_group = entered_group(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     let free_angle = req.get("free_angle").and_then(Value::as_bool).unwrap_or(false);
@@ -545,9 +591,10 @@ pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         let message = if marking { "Track violates DRC. (Ctrl+Click to commit anyway.)" } else { "drag target still collides; left uncommitted" };
         return json!({ "ok": false, "dragging": true, "message": message });
     };
+    let group = router.entered_group.clone();
     *guard = None;
     drop(guard);
-    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
+    let cmd = commit_cmd(commit, group);
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => json!({ "ok": true, "message": summary }),
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
@@ -608,13 +655,35 @@ pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let mut router = Router::new(&design, &model);
     router.settings = settings_of(&req);
+    router.entered_group = entered_group(&req);
     router.use_connected_track_width = auto_track_width(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
+    // `prepareInteractive`: `ImportSizes` (the user's dimensions, when sent) and `UpdateSizes` before `StartRouting`, whose checks judge them (r5 R5-4)
+    router.user_diff_pair = eda_pns::dp_placer::UserDpSizes::of(req.get("width").and_then(Value::as_i64).map(Nm::new), req.get("gap").and_then(Value::as_i64).map(Nm::new), req.get("via_gap").and_then(Value::as_i64).map(Nm::new));
     match router.start_diff_pair(at, layer) {
         Ok(()) => {
-            router.set_diff_pair_sizes(req.get("width").and_then(Value::as_i64).map(Nm::new), req.get("gap").and_then(Value::as_i64).map(Nm::new), req.get("via_gap").and_then(Value::as_i64).map(Nm::new));
-            let reply = router.diff_pair_preview(at).map(|p| dp_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
+            let mut reply = router.diff_pair_preview(at).map(|p| dp_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
+            // `UpdateMessagePanel` for a pair (r5 R5-8): "Track Width" / "Diff Pair Gap" with `GetDiffPairWidthSource` / `GetDiffPairGapSource`
+            // ("user choice" with the user's dimensions), "Min Clearance", and "Resolved Netclass" of the two nets
+            if let Some(s) = router.import_sizes(at, layer) {
+                let user = router.user_diff_pair;
+                let (a, b) = router.diff_pair_nets().unwrap_or((None, None));
+                let class = |n: &Option<String>| n.as_deref().map(|n| human_readable_class(&model.board, n)).unwrap_or_default();
+                let (ca, cb) = (class(&a), class(&b));
+                reply["sizes"] = json!({
+                    "width_source": if user.is_some() { "user choice".to_string() } else { s.diff_pair_width_source.clone() },
+                    "gap_source": if user.is_some() { "user choice".to_string() } else { s.diff_pair_gap_source.clone() },
+                    "clearance": s.clearance,
+                    "clearance_source": s.clearance_source,
+                    "netclass": if ca == cb { ca } else { format!("{ca}, {cb}") },
+                    "rule_width": s.diff_pair_width,
+                    "rule_gap": s.diff_pair_gap,
+                    "rule_via_gap": s.diff_pair_via_gap,
+                    "rule_width_source": s.diff_pair_width_source,
+                    "rule_gap_source": s.diff_pair_gap_source,
+                });
+            }
             *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
             reply
         }
@@ -695,7 +764,7 @@ pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let at = point_of(&req);
     let Some(commit) = router.finish_diff_pair(at) else {
         // as a single track's finish: the legs fixed before are committed (`CommitRouting()` after the loop)
-        let committed = match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo)) {
+        let committed = match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo, router.entered_group.clone())) {
             Some(Err(e)) => return err(e),
             Some(Ok(_)) => true,
             None => false,
@@ -703,7 +772,7 @@ pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         let message = if committed { "the pair still collides; the legs fixed before it are committed" } else { "the pair still collides; left uncommitted" };
         return json!({ "ok": false, "committed": committed, "message": message });
     };
-    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
+    let cmd = commit_cmd(commit, router.entered_group.clone());
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => {
             // a pair restarted from the other end is one undo with the part that was committed when it restarted
@@ -724,18 +793,17 @@ pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
 pub fn dp_continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let at = point_of(&req);
-    let (continuation, settings, append_undo) = {
+    let (continuation, settings, append_undo, group) = {
         let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
         let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
         match router.continue_diff_pair_from_end(at) {
-            Ok(c) => (c, router.settings.clone(), router.append_undo),
+            Ok(c) => (c, router.settings.clone(), router.append_undo, router.entered_group.clone()),
             Err(message) => return err(message),
         }
     };
     let committed = !continuation.commit.tracks.is_empty() || !continuation.commit.vias.is_empty() || !continuation.commit.remove_track_ids.is_empty();
     if committed {
-        let c = continuation.commit;
-        let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: c.remove_track_ids, remove_via_ids: c.remove_via_ids, tracks: c.tracks, vias: c.vias, lock_tracks: c.lock_tracks, via_kinds: c.via_kinds };
+        let cmd = commit_cmd(continuation.commit, group.clone());
         if let Err(e) = board::step(dir, cmd, true, "ui") {
             return err(board::reasons(&e));
         }
@@ -749,13 +817,14 @@ pub fn dp_continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value 
     };
     let mut router = Router::new(&design, &model);
     router.settings = settings;
+    router.entered_group = group;
     router.append_undo = append_undo || committed;
+    // the sizes the pair was routed at go on (`UpdateSizes`), and the restart's checks judge them
+    router.user_diff_pair = Some(eda_pns::dp_placer::UserDpSizes { width: Some(continuation.width), gap: Some(continuation.gap), via_gap: Some(continuation.via_gap) });
     if let Err(message) = router.start_diff_pair(continuation.from, &continuation.layer) {
         *cell.lock().unwrap_or_else(|e| e.into_inner()) = None;
         return json!({ "ok": false, "committed": committed, "message": message });
     }
-    // the sizes the pair was routed at go on (`UpdateSizes`)
-    router.set_diff_pair_sizes(Some(continuation.width), Some(continuation.gap), Some(continuation.via_gap));
     let mut reply = router.diff_pair_preview(continuation.to).map(|p| dp_preview_json(&router, &p)).unwrap_or_else(|| err("internal: restarted but no preview"));
     *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
     if let Some(obj) = reply.as_object_mut() {
@@ -893,6 +962,36 @@ mod tests {
         assert_eq!((pv["via"]["diameter"].clone(), pv["via"]["drill"].clone()), (json!(900_000), json!(450_000)), "{pv}");
         let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 300_000, "auto_track_width": false })));
         assert_eq!(reply["width"], json!(300_000), "{reply}");
+    }
+
+    /// r5 R5-8: a start's reply carries what `ROUTER_TOOL::UpdateMessagePanel` shows -- the width's source ("existing track", "user choice", the
+    /// rule's: "netclass 'Power'"), the clearance and its source, the net's resolved class -- and the width the route takes when the list goes back
+    /// to its net-class entry while routing (the rule's, with the connected width overridden).
+    #[test]
+    fn a_start_says_where_its_width_and_clearance_come_from() {
+        let dir = scratch("sizes_sources");
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(mm(10.0), mm(9.0)), p(mm(10.0), mm(8.0))], arc_mid_offset: None };
+        setup_board(&dir, vec![stub], vec![]);
+        let intent = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.board.net_classes.push(eda_model::NetClass { name: "Power".into(), nets: vec!["SIG".into()], track_width: Some(mm(0.5)), clearance: Some(mm(0.3)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let cell = RouteCell::default();
+        let at = |extra: Value| {
+            let mut req = json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu" });
+            for (k, v) in extra.as_object().unwrap() {
+                req[k] = v.clone();
+            }
+            start(&dir, &cell, &body(req))
+        };
+        let reply = at(json!({}));
+        let sizes = &reply["sizes"];
+        assert_eq!(sizes["width_source"], json!("existing track"), "{reply}");
+        assert_eq!((sizes["clearance"].clone(), sizes["clearance_source"].clone()), (json!(300_000), json!("netclass 'Power'")), "{reply}");
+        assert_eq!((sizes["rule_width"].clone(), sizes["rule_width_source"].clone()), (json!(500_000), json!("netclass 'Power'")), "{reply}");
+        assert_eq!(sizes["netclass"], json!("Power and Default"), "the class sets no via sizes: the Default class completes it");
+        assert_eq!(at(json!({ "auto_track_width": false, "width": 400_000 }))["sizes"]["width_source"], json!("user choice"));
+        assert_eq!(at(json!({ "auto_track_width": false }))["sizes"]["width_source"], json!("netclass 'Power'"));
     }
 
     /// findings p5 F2-9: `F` routes to the nearest unconnected anchor and commits, or leaves the route going with the head where it got.

@@ -17,7 +17,7 @@
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";
 import { newViaStitch } from "../../kicad-port/viaStitchTool";
-import { chosenTrackWidth } from "../../kicad-port/routerVia";
+import { chosenDiffPair, chosenTrackWidthOf } from "../../kicad-port/routerSizes";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
@@ -54,7 +54,7 @@ import { SELECT_NET_TITLE, selectNetLabels, snapViaPosition, viaNet, type ViaPla
 import { startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { clearRouteQueue } from "./routeQueue";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
-import { routeMove, routeDragMove, dpMove, fetchState } from "../../api/client";
+import { routeMove, routeDragMove, dpMove, fetchState, setRouterEnteredGroup } from "../../api/client";
 import { finishInlineDrag } from "./dragging";
 import { dragStateFromPreview } from "../../kicad-port/dragTool";
 import { startDiffPairRoute, fixDiffPairRoute, finishDiffPairRoute } from "./diffPairRouting";
@@ -277,6 +277,8 @@ export function Canvas() {
     bumpSnap((n) => n + 1);
   }, [snap, state.activeTool]);
   useEffect(() => () => snap.reset(), [snap]);
+  // the router's sessions start with the entered group, which their new items join (r5 R5-2)
+  useEffect(() => setRouterEnteredGroup(state.enteredGroupId), [state.enteredGroupId]);
 
   // The canvas's backing size tracks its container's actual box, not a
   // value computed once at mount -- a side panel opening/closing or the
@@ -475,7 +477,11 @@ export function Canvas() {
       const started = draw?.kind === "route" || draw?.kind === "diffpair" || draw?.kind === "drag";
       // what the cursor does not snap onto: the line a drag is dragging (`checkSnap`), the item a route started on (`pickSingleItem( .., { m_startItem } )`)
       const skip = draw?.kind === "drag" && draw.lineTracks?.length ? new Set(draw.lineTracks) : draw?.kind === "route" && draw.startItem ? new Set([draw.startItem]) : undefined;
-      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started, skip });
+      // `pickSingleItem`'s layer (r5 R5-1): a start takes the active layer's items first and then any layer's (`aLayer` -1, `tl` the top layer); a
+      // route's or a pair's end only its current layer's (`updateEndItem`: `layer = m_router->GetCurrentLayer()`, -1 while placing a via)
+      const routing = draw?.kind === "route" || draw?.kind === "diffpair" ? draw : null;
+      const layer = routing ? (routing.placingVia ? { top: routing.layer } : { top: routing.layer, only: true }) : draw?.kind === "drag" ? undefined : { top: state.activeLayer ?? board?.layers[0] ?? "F.Cu" };
+      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started, skip, layer });
       return [p[0], p[1]];
     }
     const opts: PointOpts = {};
@@ -799,7 +805,8 @@ export function Canvas() {
           // (`CT_WIDTH` through the rules: its class, a .kicad_dru rule, a pair's class width). `autoTrackWidth` (`m_UseConnectedTrackWidth`): the
           // server's `inheritTrackWidth` first -- the width of the track the route starts on, or of the one joined to the pad or via whose far end
           // is nearest the cursor -- over either
-          const width = chosenTrackWidth(state.currentTrackWidthNm, state.currentTrackWidthIndex, 1 + (board.routing?.track_width_presets?.length ?? 0), state.pcbx.useCustomTrackVia);
+          // the chosen entry read from the board's list now (`GetCurrentTrackWidth`: `m_TrackWidthList[ m_trackWidthIndex ]`, r5 R5-9)
+          const width = chosenTrackWidthOf(board.routing?.track_width_presets ?? [], state.currentTrackWidthIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia.trackNm);
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
           void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked(), state.bcx.autoTrackWidth);
           return;
@@ -815,9 +822,11 @@ export function Canvas() {
         const draw = state.drawState;
         if (!draw || draw.kind !== "diffpair") {
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
-          // `ImportSizes`: the board's custom pair dimensions only while `UseCustomDiffPairDimensions()`
-          const custom = state.pcbx.useCustomDiffPair ? state.pcbx.customDiffPair : null;
-          void startDiffPairRoute(sx, sy, layer, dispatch, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : undefined, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), state.bcx.autoTrackWidth);
+          // `ImportSizes`: the board's custom pair dimensions while `UseCustomDiffPairDimensions()`, else the chosen entry of the pre-defined pairs
+          // (`GetCurrentDiffPairWidth/Gap/ViaGap()`, r5 R5-5); the net class's at entry 0
+          const custom = state.pcbx.customDiffPair;
+          const dims = chosenDiffPair(board.routing?.diff_pair_presets ?? [], state.pcbx.diffPairIndex, state.pcbx.useCustomDiffPair, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : null);
+          void startDiffPairRoute(sx, sy, layer, dispatch, dims, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), state.bcx.autoTrackWidth);
           return;
         }
         void fixDiffPairRoute(sx, sy, draw, dispatch, api);

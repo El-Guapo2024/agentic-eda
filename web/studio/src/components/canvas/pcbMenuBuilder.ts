@@ -1,6 +1,7 @@
 // The right-click menu of the board canvas, built from the studio's state: which tool owns the click (the router, a drawing tool, a picker, the selection tool),
 // what the selection is, and the lists the Zoom, Grid and Track/Via Width submenus show. The entries and their conditions are kicad-port/pcbContextMenu.ts's.
 import { cornerModeMenuKey } from "../../kicad-port/routerSettings";
+import { diffPairLabel } from "../../kicad-port/routerSizes";
 import type { MenuNode } from "../../kicad/types";
 import type { BoardState } from "../../api/types";
 import type { StudioState } from "../../state/store";
@@ -108,13 +109,21 @@ export function trackViaWidthMenu(state: StudioState, board: BoardState): MenuNo
   return out;
 }
 
-/** `DIFF_PAIR_MENU::update`: "Use Net Class Values" and "Use Custom Values..." (this studio keeps no list of pair sizes besides the custom one). */
-export function diffPairMenu(state: StudioState): MenuNode[] {
+/** `DIFF_PAIR_MENU::update`: "Use Net Class Values" (checked with no custom dimensions and the list's entry 0), "Use Custom Values...", and each of Pre-defined
+ * Sizes' Differential Pairs after the net class's entry 0, labelled as `diffPairLabel` and checked when it is the chosen one (r5 R5-5). */
+export function diffPairMenu(state: StudioState, board?: BoardState | null): MenuNode[] {
   const custom = state.pcbx.useCustomDiffPair;
-  return [
-    { type: "item", action: "studio.Router.useNetclassDiffPair", label: "Use Net Class Values", checked: !custom },
+  const index = state.pcbx.diffPairIndex ?? 0;
+  const out: MenuNode[] = [
+    { type: "item", action: "studio.Router.useNetclassDiffPair", label: "Use Net Class Values", checked: !custom && index === 0 },
     { type: "item", action: "studio.Router.useCustomDiffPair", label: "Use Custom Values...", checked: custom },
   ];
+  const presets = board?.routing?.diff_pair_presets ?? [];
+  if (presets.length > 0) out.push({ type: "separator" });
+  presets.forEach((p, k) => {
+    out.push({ type: "item", action: "studio.Router.setDiffPair", label: diffPairLabel(p, (nm) => formatLength(nm, state.units)), arg: k + 1, checked: !custom && index === k + 1 });
+  });
+  return out;
 }
 
 function routerContext(state: StudioState, board: BoardState): RouterMenuContext {
@@ -132,7 +141,7 @@ function routerContext(state: StudioState, board: BoardState): RouterMenuContext
     // `m_router->Settings().GetCornerMode()`: the Track Corner Mode actions set it (`state.routerSettings.cornerMode`).
     cornerMode: cornerModeMenuKey(state.routerSettings.cornerMode ?? "mitered_45"),
     trackViaMenu: trackViaWidthMenu(state, board),
-    diffPairMenu: diffPairMenu(state),
+    diffPairMenu: diffPairMenu(state, board),
     zoom: zoomEntries(state),
     grid: gridEntries(state),
   };

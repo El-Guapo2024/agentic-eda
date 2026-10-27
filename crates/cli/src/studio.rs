@@ -77,6 +77,9 @@ fn built_ui(cli_ui: Option<&Path>) -> Option<PathBuf> {
 pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<CheckResult>> {
     // Fail now, not on the first request, if this is no board.
     board::load(dir)?;
+    // This process serves many requests, so its exports keep the api-server between jobs (X5-3): only a long-lived caller says so, and a one-shot
+    // `eda board export` stays on per-run kicad-cli, where a server start would cost more than the job saves.
+    eda_kicad_engine::api::long_lived_process();
     let ui_root = built_ui(ui.as_deref());
     // A taken port is usually another studio already showing a board;
     // take the next free one rather than refuse.
@@ -1787,6 +1790,19 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
     schematic_json_with(design, model, sheet_path, None)
 }
 
+/// The net of the pin `number` of the symbol `reference` in the net list ("REF.PIN" -> net). A stacked pin (`[1-2]`, `ExpandStackedPinNotation`) is listed as
+/// its pads (r4 A4-H4), so it is on the net of its pads, the smallest first (`GetSmallestStackedPadNumber`): Highlight Net on it, or on a label sitting on it,
+/// finds the net, as KiCad's subgraph member does (r5 B5-M2).
+fn net_of_pin<'a>(pin_net: &std::collections::HashMap<&str, &'a str>, reference: &str, number: &str) -> Option<&'a str> {
+    if let Some(n) = pin_net.get(format!("{reference}.{number}").as_str()) {
+        return Some(n);
+    }
+    match eda_model::fp_units::expand_stacked_pin_notation(number) {
+        (pads, true) => pads.iter().find_map(|pad| pin_net.get(format!("{reference}.{pad}").as_str()).copied()),
+        _ => None,
+    }
+}
+
 /// [`schematic_json_of`] with the board folder and project of the board it is the schematic of, which the `shown` form of each text and field needs
 /// (`${NAME}`, `crate::text_vars_json`); without them the texts are sent as stored.
 fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, sheet_path: &str, shown: Option<(&Path, eda_model::text_vars::Project)>) -> Value {
@@ -1817,7 +1833,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     p.pins
                         .iter()
                         .filter(|pin| resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)).is_none_or(|rp| rp.unit == 0 || rp.unit == s.unit))
-                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": pin_net.get(format!("{reference}.{}", pin.number).as_str()) }))
+                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": net_of_pin(&pin_net, &reference, &pin.number) }))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -1980,7 +1996,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     let resolved = model.real_symbol_of_instance(&sch, sym, part);
                     let (number, _) = eda_engine::placed::pin_points_in(&sch, sym, part, resolved.as_ref()).into_iter().find(|(_, at)| *at == l.at)?;
                     let reference = eda_model::sheet_list::reference_under(&sch, sym, &sheet_ids);
-                    pin_net.get(format!("{reference}.{number}").as_str()).map(|n| n.to_string())
+                    net_of_pin(&pin_net, &reference, &number).map(str::to_string)
                 })
             });
             json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields })

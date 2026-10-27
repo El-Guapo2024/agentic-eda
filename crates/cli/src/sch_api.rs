@@ -66,7 +66,8 @@ fn staged_schematic(req: &Value, design: &eda_model::ir::Design) -> Result<(eda_
     let mut sch = base.clone();
     if let Some(c) = req.get("changes").filter(|v| !v.is_null()) {
         let changes: FieldChanges = serde_json::from_value(c.clone()).map_err(|e| format!("bad changes: {e}"))?;
-        fields_table::apply_field_changes(&mut sch, &changes)?;
+        // an edit shows on every row of its symbol: the screen's and each later sheet path's (`fields_table::changes_for_view`)
+        fields_table::apply_field_changes(&mut sch, &fields_table::changes_for_view(design, &changes))?;
     }
     Ok((sch, base))
 }

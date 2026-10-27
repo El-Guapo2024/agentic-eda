@@ -4,7 +4,7 @@
 
 use eda_model::units::mm;
 use eda_kicad::{export_kicad_pcb, export_kicad_pro_for, import_kicad_pcb, merge_project_predefined_sizes, merge_project_setup_pages, ExportMeta};
-use eda_model::ir::{DiffPairPreset, Nm, RoutingSection};
+use eda_model::ir::{DiffPairPreset, Nm, RoutingSection, ViaPreset};
 use eda_model::setup_pages::{CornerStyle, HatchOffset, MeanderSettings, ProfileLayerEntry, ProfileType, TuningProfile, ViaOverride};
 use eda_model::{ConstraintModel, Net, NetClass};
 
@@ -164,6 +164,37 @@ fn the_project_carries_the_differential_pair_sizes() {
     assert_eq!(back.routing.as_ref().unwrap().diff_pair_presets[0].via_gap, Nm::new(250_000));
     merge_project_predefined_sizes(&mut back, "not json");
     assert_eq!(back.routing.as_ref().unwrap().diff_pair_presets.len(), 1, "unreadable JSON is a no-op");
+}
+
+// r5 R5-3: the project's `track_widths` and `via_dimensions` (`BOARD_DESIGN_SETTINGS`' PARAM_LAMBDAs) are written with the index-0 net-class dummy
+// first, as the pairs are, and read back without it; p22 F5 for the reader.
+#[test]
+fn the_project_carries_the_predefined_track_widths_and_via_sizes() {
+    let (mut design, model, _) = import_kicad_pcb(BOARD).expect("imports");
+    let widths = vec![mm(0.4), mm(0.25)];
+    let vias = vec![ViaPreset { diameter: mm(0.8), drill: mm(0.4) }];
+    design.routing = Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: widths.clone(), via_presets: vias.clone(), diff_pair_presets: vec![], teardrop_settings: Default::default() });
+    let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
+    assert_eq!(pro["board"]["design_settings"]["track_widths"], serde_json::json!([0.0, 0.4, 0.25]));
+    assert_eq!(pro["board"]["design_settings"]["via_dimensions"], serde_json::json!([{ "diameter": 0.0, "drill": 0.0 }, { "diameter": 0.8, "drill": 0.4 }]));
+
+    let (mut back, _, _) = import_kicad_pcb(BOARD).expect("imports");
+    merge_project_predefined_sizes(&mut back, &serde_json::to_string(&pro).unwrap());
+    let rt = back.routing.as_ref().unwrap();
+    assert_eq!(rt.track_width_presets, widths);
+    assert_eq!(rt.via_presets, vias);
+
+    // KiCad's loaders skip a via row that is not an object or misses a key, and a null width, before the first entry is taken as the net class's (R5-11)
+    let pro = serde_json::json!({ "board": { "design_settings": {
+        "track_widths": [null, 0.0, 0.3],
+        "via_dimensions": [{}, { "diameter": 0.0, "drill": 0.0 }, { "diameter": 0.6 }, { "diameter": 0.6, "drill": 0.3 }],
+        "diff_pair_dimensions": [{}, { "width": 0.0, "gap": 0.0, "via_gap": 0.0 }, { "width": 0.2, "gap": 0.15, "via_gap": 0.15 }]
+    } } });
+    merge_project_predefined_sizes(&mut back, &pro.to_string());
+    let rt = back.routing.as_ref().unwrap();
+    assert_eq!(rt.track_width_presets, vec![mm(0.3)]);
+    assert_eq!(rt.via_presets, vec![ViaPreset { diameter: mm(0.6), drill: mm(0.3) }]);
+    assert_eq!(rt.diff_pair_presets, vec![DiffPairPreset { width: mm(0.2), gap: mm(0.15), via_gap: mm(0.15) }]);
 }
 
 fn class(name: &str, nets: &[&str], clearance: Option<eda_model::units::Nm>, track: Option<eda_model::units::Nm>) -> NetClass {

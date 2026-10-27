@@ -62,7 +62,7 @@ use eda_model::units::mm;
 use std::collections::BTreeMap;
 
 use eda_model::units::Nm;
-use eda_model::ir::{Design, DiffPairPreset, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Track, Text, Via, Zone};
+use eda_model::ir::{Design, DiffPairPreset, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaPreset, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Track, Text, Via, Zone};
 use eda_model::layers::{LayerSetup, LayerType};
 use eda_model::outline as edge;
 use eda_model::{BoardRules, CheckResult, ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
@@ -821,25 +821,41 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
     }
 }
 
-/// A `.kicad_pro`'s Pre-defined Sizes' Differential Pairs (`board.design_settings.diff_pair_dimensions`): `BOARD_DESIGN_SETTINGS`' PARAM_LAMBDA
-/// writes `{width, gap, via_gap}` rows in millimetres, its first row the all-zero "use net class" dummy. Read as KiCad's loader reads the array: a
-/// row that is not an object, or misses one of the three keys, is skipped; the first row is the net class entry, not a pair of ours. The list
-/// replaces the design's own, as the panel's Apply does; absent or unreadable JSON is a no-op.
+/// A `.kicad_pro`'s Pre-defined Sizes (`board.design_settings.track_widths`, `via_dimensions` and `diff_pair_dimensions`): `BOARD_DESIGN_SETTINGS`'
+/// PARAM_LAMBDAs write millimetres, a width per entry, `{diameter, drill}` and `{width, gap, via_gap}` rows, each list's first entry the all-zero "use
+/// net class" dummy. Read as KiCad's loaders read the arrays: an empty entry (`entry.empty()`: a null, `{}`), a row that is not an object, or one that
+/// misses a key, is skipped; then the first entry left is the net class's, not a preset of ours (`GetCurrentTrackWidth`'s index 0; r5 R5-11: filtered
+/// first, the dummy dropped after). Each list present replaces the design's own, as the panel's Apply does; a list absent leaves it, and absent or
+/// unreadable JSON is a no-op (r5 R5-3 and p22 F5 for the widths and vias).
 pub fn merge_project_predefined_sizes(design: &mut Design, project_json: &str) {
     let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else { return };
-    let Some(rows) = root.get("board").and_then(|b| b.get("design_settings")).and_then(|s| s.get("diff_pair_dimensions")).and_then(|v| v.as_array()) else { return };
-    let pairs: Vec<DiffPairPreset> = rows
-        .iter()
-        .skip(1)
-        .filter_map(|row| {
-            let nm = |key: &str| row.get(key).and_then(|v| v.as_f64()).map(mm_to_nm);
-            Some(DiffPairPreset { width: nm("width")?, gap: nm("gap")?, via_gap: nm("via_gap")? })
-        })
-        .collect();
+    let Some(settings) = root.get("board").and_then(|b| b.get("design_settings")) else { return };
+    let list = |key: &str| settings.get(key).and_then(|v| v.as_array()).cloned();
+    // `if( entry.empty() || !entry.is_object() ) continue;` and the keys' check, then the net class's entry off the front
+    let rows = |key: &str, fields: &[&str]| -> Option<Vec<Vec<Nm>>> {
+        let rows = list(key)?;
+        let kept: Vec<Vec<Nm>> = rows.iter().filter_map(|row| fields.iter().map(|f| row.get(*f).and_then(|v| v.as_f64()).map(mm_to_nm)).collect::<Option<Vec<Nm>>>()).collect();
+        Some(kept.into_iter().skip(1).collect())
+    };
+    // `track_widths`: `if( entry.empty() ) continue;`, then `entry.get<double>()`
+    let widths: Option<Vec<Nm>> = list("track_widths").map(|rows| rows.iter().filter_map(|v| v.as_f64()).map(mm_to_nm).skip(1).collect());
+    let vias = rows("via_dimensions", &["diameter", "drill"]);
+    let pairs = rows("diff_pair_dimensions", &["width", "gap", "via_gap"]);
+    if widths.is_none() && vias.is_none() && pairs.is_none() {
+        return;
+    }
     let routing = design
         .routing
         .get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() });
-    routing.diff_pair_presets = pairs;
+    if let Some(widths) = widths {
+        routing.track_width_presets = widths;
+    }
+    if let Some(vias) = vias {
+        routing.via_presets = vias.into_iter().map(|r| ViaPreset { diameter: r[0], drill: r[1] }).collect();
+    }
+    if let Some(pairs) = pairs {
+        routing.diff_pair_presets = pairs.into_iter().map(|r| DiffPairPreset { width: r[0], gap: r[1], via_gap: r[2] }).collect();
+    }
 }
 
 /// A `(net_class ..)` block's microvia size and differential-pair sizes (`uvia_dia`, `uvia_drill`, `diff_pair_width`,
@@ -944,18 +960,25 @@ fn import_solder_mask_setup(root: &[Sexpr], board: &mut BoardRules) {
 }
 
 /// `PCB_IO_KICAD_SEXPR_PARSER::parseBoardStackup`: `(setup (stackup (layer "F.Cu" (type "copper") (thickness 0.035)) ..
-/// (copper_finish "ENIG") (dielectric_constraints yes) ..))`. A layer with several sublayers (`addsublayer`) is read as its
-/// first. `None` when the board has no stackup block.
+/// (copper_finish "ENIG") (dielectric_constraints yes) ..))`. A layer with several sublayers holds their sum, which is what
+/// `BOARD_ADAPTER::InitSettings` adds to the 3D board's body for a dielectric: the layer's own `(thickness ..)` is sublayer 0
+/// and each `(addsublayer (thickness ..))` the ones after it (0 when a sublayer writes none). `None` when the board has no
+/// stackup block.
 fn import_stackup(root: &[Sexpr]) -> Option<eda_model::Stackup> {
     let st = sexpr::find(root, "setup").and_then(|setup| sexpr::find(setup, "stackup"))?;
     let layers: Vec<eda_model::StackupLayer> = sexpr::find_all(st, "layer")
         .filter_map(|l| {
             let name = sexpr::txt(l, 1)?.to_string();
             let kind = sexpr::find(l, "type").and_then(|t| sexpr::txt(t, 1)).map(String::from);
+            let thicknesses: Vec<f64> = sexpr::find(l, "thickness")
+                .and_then(|t| sexpr::num(t, 1))
+                .into_iter()
+                .chain(sexpr::find_all(l, "addsublayer").filter_map(|s| sexpr::find(s, "thickness")).filter_map(|t| sexpr::num(t, 1)))
+                .collect();
             Some(eda_model::StackupLayer {
                 name,
                 material: sexpr::find(l, "material").and_then(|m| sexpr::txt(m, 1)).map(String::from),
-                thickness_mm: sexpr::find(l, "thickness").and_then(|t| sexpr::num(t, 1)),
+                thickness_mm: (!thicknesses.is_empty()).then(|| thicknesses.iter().sum()),
                 kind,
                 epsilon_r: sexpr::find(l, "epsilon_r").and_then(|e| sexpr::num(e, 1)),
                 loss_tangent: sexpr::find(l, "loss_tangent").and_then(|e| sexpr::num(e, 1)),
@@ -2836,6 +2859,34 @@ mod tests {
         assert_eq!(import_kicad_pcb(board).unwrap().0.drawings.unwrap().board_items.text_boxes.len(), 2);
         let (_, _, plain) = import_kicad_pcb(r#"(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 "F.Cu" signal)) (net 0 ""))"#).unwrap();
         assert!(plain.unread_items.is_empty());
+    }
+
+    /// V5-3: a dielectric with sublayers is one item whose thicknesses `BOARD_ADAPTER::InitSettings` adds up for the 3D body
+    /// (`for( sublayer ... ) body_thickness += item->GetThickness( sublayer )`), so the import keeps their sum on the one layer it
+    /// reads. A layer whose sublayer writes no thickness adds 0 (`DIELECTRIC_PRMS`'s default); a layer with none keeps its own.
+    #[test]
+    fn a_dielectrics_sublayers_add_up_to_the_layers_thickness() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6)) (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  (setup (stackup
+    (layer "F.Mask" (type "Top Solder Mask") (thickness 0.01))
+    (layer "F.Cu" (type "copper") (thickness 0.035))
+    (layer "dielectric 1" (type "core") (thickness 0.5) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02)
+      (addsublayer (thickness 0.06) (material "FR4") (epsilon_r 4.2) (loss_tangent 0.01))
+      (addsublayer (material "FR4")))
+    (layer "B.Cu" (type "copper") (thickness 0.035))
+    (layer "B.Mask" (type "Bottom Solder Mask") (thickness 0.01))
+    (copper_finish "ENIG")))
+  (net 0 "")
+)"#;
+        let (_, model, _) = import_kicad_pcb(board).unwrap();
+        let layers = &model.stackup.expect("the stackup").layers;
+        let diel = layers.iter().find(|l| l.name == "dielectric 1").unwrap();
+        assert!((diel.thickness_mm.unwrap() - 0.56).abs() < 1e-9, "{diel:?}");
+        assert_eq!((diel.material.as_deref(), diel.epsilon_r, diel.loss_tangent), (Some("FR4"), Some(4.5), Some(0.02)), "the first sublayer's material, as KiCad shows the layer");
+        let copper = layers.iter().find(|l| l.name == "F.Cu").unwrap();
+        assert_eq!(copper.thickness_mm, Some(0.035), "no addsublayer: the layer's own thickness");
     }
 
     /// In a pre-9.0 file a footprint margin of 0 means "inherit" (`parseFOOTPRINT_unchecked`): neither the mask margin nor a paste margin token of 0 comes through as a margin

@@ -320,3 +320,24 @@ fn deleting_a_sheet_pin_drops_its_junction() {
     let after = ok(&d, Cmd::SchEdit(crate::sch_edit::SchCmd::DeleteSheetPin { id: "shpin_in".into() }));
     assert!(root_of(&after).junctions.is_empty(), "{:?}", root_of(&after).junctions);
 }
+
+/// r5 B5-L1 (`DoDelete` -> `SCH_EDIT_FRAME::DeleteJunction` at a deleted sheet pin's point: the junction goes, and the lines in line that end there merge
+/// whatever their strokes, `MergeOverlap( .., false )`): a dashed wire and a default one meeting in line at the pin with a dot are one wire once the pin is
+/// deleted (the commit's `CleanUp` alone would leave them apart, `IsStrokeEquivalent`).
+#[test]
+fn deleting_a_sheet_pin_merges_the_wires_at_its_junction() {
+    let mut d = design();
+    let root = d.schematic.as_mut().unwrap();
+    // the two wires alone meet at the pin
+    root.wires.retain(|w| w.id != "wire_in");
+    root.wires.push(wire("", &[p(mm(100.0), mm(40.0)), p(mm(100.0), mm(60.0))]));
+    root.wires.push(wire("", &[p(mm(100.0), mm(60.0)), p(mm(100.0), mm(80.0))]));
+    root.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(mm(100.0), mm(60.0)) });
+    root.assign_missing_ids();
+    let dashed = root.wires[0].id.clone();
+    root.extras.strokes.insert(dashed, eda_model::sch_extras::SchStroke { style: eda_model::sch_extras::SchLineStyle::Dash, ..Default::default() });
+    let after = ok(&d, Cmd::SchEdit(crate::sch_edit::SchCmd::DeleteSheetPin { id: "shpin_in".into() }));
+    let sch = root_of(&after);
+    assert!(sch.junctions.is_empty(), "{:?}", sch.junctions);
+    assert_eq!(sch.wires.iter().filter(|w| w.pts.iter().all(|q| q.x == mm(100.0))).count(), 1, "{:?}", sch.wires);
+}

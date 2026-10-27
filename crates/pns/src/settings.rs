@@ -185,6 +185,13 @@ pub struct ImportedSizes {
     /// `SetWidthSource`: the name of the rule the width is from ("netclass 'Power'", a custom rule's name), "board minimum track width" or
     /// "netclass 'Default'".
     pub width_source: String,
+    /// `SetClearanceSource`: the clearance rule's name, or "board minimum clearance" -- what `ROUTER_TOOL::UpdateMessagePanel` shows as "(from %s)"
+    /// after "Min Clearance: %s" (r5 R5-8).
+    pub clearance_source: String,
+    /// `SetDiffPairWidthSource` / `SetDiffPairGapSource`: "board minimum track width" / "board minimum clearance", the rule's name, or the
+    /// connected track's ("existing track" is not set for the pair in KiCad: the width source stays the rule's or the board minimum's).
+    pub diff_pair_width_source: String,
+    pub diff_pair_gap_source: String,
     pub via_diameter: Nm,
     pub via_drill: Nm,
     pub diff_pair_width: Nm,
@@ -224,6 +231,8 @@ pub fn import_sizes(world: &crate::node::Node, rules: &BoardRules, start: Option
             out.track_width = w;
             out.width_source = "existing track".into();
             out.diff_pair_width = w;
+            // the pair's width source is not set by the inheritance, and `!found` skips `CT_WIDTH`: it stays the board minimum's
+            out.diff_pair_width_source = "board minimum track width".into();
         }
     }
     out
@@ -243,6 +252,9 @@ fn import_rule_sizes(world: &crate::node::Node, rules: &BoardRules, start: Optio
             clearance: s.clearance,
             track_width: if start.is_some() { s.track_width.max(rules.track_width_min_nm) } else { rules.track_width.max(rules.track_width_min_nm) },
             width_source: String::new(),
+            clearance_source: String::new(),
+            diff_pair_width_source: String::new(),
+            diff_pair_gap_source: String::new(),
             via_diameter: s.via_diameter,
             via_drill: s.via_drill,
             diff_pair_width: dp.width,
@@ -268,6 +280,9 @@ fn import_rule_sizes(world: &crate::node::Node, rules: &BoardRules, start: Optio
         clearance: rules.min_clearance_nm,
         track_width: rules.track_width_min_nm,
         width_source: "board minimum track width".into(),
+        clearance_source: "board minimum clearance".into(),
+        diff_pair_width_source: "board minimum track width".into(),
+        diff_pair_gap_source: "board minimum clearance".into(),
         via_diameter: rules.via_diameter_min_nm,
         via_drill: rules.via_drill_min_nm,
         diff_pair_width: rules.track_width_min_nm,
@@ -285,9 +300,10 @@ fn import_rule_sizes(world: &crate::node::Node, rules: &BoardRules, start: Optio
     let coupled_via = Side::Via { net: &coupled, layers: all_layers, pos: origin };
     if let Some((p, p0)) = anchors {
         let dummy = Side::Track { net: &net, layer, seg: Some((p, p)) };
-        if let Some((c, _)) = r.query_constraint(CType::Clearance, &dummy, None, Some(layer)) {
+        if let Some((c, rule)) = r.query_constraint(CType::Clearance, &dummy, None, Some(layer)) {
             if nm(c.min()) >= rules.min_clearance_nm {
                 out.clearance = nm(c.min());
+                out.clearance_source = rule;
             }
         }
         if let Some((c, rule)) = r.query_constraint(CType::TrackWidth, &dummy, None, Some(layer)) {
@@ -299,12 +315,18 @@ fn import_rule_sizes(world: &crate::node::Node, rules: &BoardRules, start: Optio
         }
         let pair_track = Side::Track { net: &net, layer, seg: Some((p0, p0)) };
         let coupled_track = Side::Track { net: &coupled, layer, seg: Some((p0, p0)) };
-        if let Some((c, _)) = r.query_constraint(CType::TrackWidth, &pair_track, Some(&coupled_track), Some(layer)) {
+        if let Some((c, rule)) = r.query_constraint(CType::TrackWidth, &pair_track, Some(&coupled_track), Some(layer)) {
             out.diff_pair_width = out.diff_pair_width.max(nm(c.opt()));
+            if out.diff_pair_width == nm(c.opt()) {
+                out.diff_pair_width_source = rule;
+            }
         }
-        if let Some((c, _)) = r.query_constraint(CType::DiffPairGap, &pair_track, Some(&coupled_track), Some(layer)) {
+        if let Some((c, rule)) = r.query_constraint(CType::DiffPairGap, &pair_track, Some(&coupled_track), Some(layer)) {
             out.diff_pair_gap = out.diff_pair_gap.max(nm(c.opt()));
             out.diff_pair_via_gap = out.diff_pair_via_gap.max(nm(c.opt()));
+            if out.diff_pair_gap == nm(c.opt()) {
+                out.diff_pair_gap_source = rule;
+            }
         }
         if let Some((c, _)) = r.query_constraint(CType::ViaDiameter, &via, None, Some(layer)) {
             out.via_diameter = out.via_diameter.max(nm(c.opt()));

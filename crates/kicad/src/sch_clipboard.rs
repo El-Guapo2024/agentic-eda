@@ -96,6 +96,17 @@ pub fn parse_clipboard(text: &str) -> Result<SchFragment, String> {
         notes.extend(parsed.warnings);
         lib_symbols.extend(parsed.symbols);
     }
+    // A symbol whose `(lib_name ..)` names its cache entry: Paste links it to that entry (`SCH_EDITOR_CONTROL::Paste`: `tempScreen->GetLibSymbols().find(
+    // symbol->GetSchSymbolLibraryName() )`). The design keeps one library symbol per id, so the copy stands under the symbol's id where the clipboard has no
+    // entry of the id's own, as the importer files it (r4 B4-H1, `import_screen`; QA `ground_pin_test_ok`'s `Test_Symbol_GND_1`).
+    for (lib_id, lib_name) in crate::sch_import::cache_aliases(root) {
+        if lib_symbols.iter().any(|l| l.lib_id == lib_id) {
+            continue;
+        }
+        if let Some(copy) = lib_symbols.iter().find(|l| l.lib_id == lib_name).cloned() {
+            lib_symbols.push(LibrarySymbol { lib_id, ..copy });
+        }
+    }
 
     // The properties beyond the four main ones: user fields, by reference.
     for sym in sexpr::find_all(root, "symbol") {

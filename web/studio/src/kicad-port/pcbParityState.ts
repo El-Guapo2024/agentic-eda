@@ -69,6 +69,9 @@ export interface PcbParityState {
   customDiffPair: CustomDiffPair | null;
   /** `BOARD_DESIGN_SETTINGS::UseCustomDiffPairDimensions()`: the pairs routed from now on take `customDiffPair` rather than the net class's. Set by the pair menu's "Use Custom Values..." (`DIFF_PAIR_MENU::eventHandler`, kept on Cancel too), cleared by "Use Net Class Values"; the Route menu's dialog alone does not set it (`DpDimensionsDialog`). */
   useCustomDiffPair: boolean;
+  /** `BOARD_DESIGN_SETTINGS::GetDiffPairIndex()`: the chosen entry of Pre-defined Sizes' Differential Pairs (`m_DiffPairDimensionsList`), 0 the net class's -- the pair
+   * menu's entries and W while a pair is routed choose it (`SetDiffPairIndex`, which turns the custom dimensions off), r5 R5-5. */
+  diffPairIndex: number;
   /** `BOARD_DESIGN_SETTINGS::m_customTrackWidth` / `m_customViaSize`: the Custom Track/Via Size dialog's values (`DIALOG_TRACK_VIA_SIZE`), and whether they are in use (`UseCustomTrackViaSize()`, the "Use Custom Values..." check of the width menu; choosing a width or via size of the list turns it off). */
   customTrackVia: CustomTrackVia;
   useCustomTrackVia: boolean;
@@ -110,6 +113,7 @@ export const DEFAULT_PCB_PARITY: PcbParityState = {
   layerPairs: null,
   customDiffPair: null,
   useCustomDiffPair: false,
+  diffPairIndex: 0,
   customTrackVia: DEFAULT_CUSTOM_TRACK_VIA,
   useCustomTrackVia: false,
   zoneConvert: null,

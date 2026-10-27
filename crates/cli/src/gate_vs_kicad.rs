@@ -329,7 +329,7 @@ mod tests {
                 continue;
             };
             pushed += commit.remove_track_ids.len().min(1);
-            let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
+            let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds, track_sources: commit.track_sources, group: None };
             board::step(&dir, cmd, false, "test").expect("the commit applies");
             let after = edge_and_copper_counts(&dir);
             eprintln!("tip {tip_y}: {} copper_edge_clearance, {} copper clearance violations after", after.0, after.1);
@@ -887,6 +887,90 @@ mod tests {
         assert_eq!(dangling, 4, "only the stubs' outer ends dangle: {found:?}");
         let other: Vec<&(String, String)> = found.iter().filter(|(k, _)| k != "track_dangling").collect();
         assert!(other.is_empty(), "kicad-cli finds {other:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// r5 R5-2: through the route API, as the studio drives it, a track with a solder-mask opening in a group is dragged (D) and keeps both, and a
+    /// route made with a group entered joins it (`PNS_KICAD_IFACE::createBoardItem`, `Commit`'s `m_replacementMap`). kicad-cli reads the board
+    /// file (`pcb upgrade --force` resaves it as KiCad has it): the moved segment is `(layers "F.Cu" "F.Mask")` with its margin, and each group
+    /// lists the new items.
+    #[test]
+    fn a_dragged_track_keeps_its_mask_and_group_and_a_route_joins_the_entered_group_for_kicad_cli() {
+        use eda_model::ir::{DrawingsSection, Group, PlacementSection, Point, Provenance, RoutingSection, Track};
+        use serde_json::json;
+        if !kicad_available() {
+            return;
+        }
+        let dir = scratch("mask_group");
+        let p = |x, y| Point { x, y };
+        let model = ConstraintModel { nets: ["SIG", "GND"].iter().map(|n| eda_model::Net { name: n.to_string(), pins: vec![] }).collect(), ..ConstraintModel::default() };
+        let intent_path = dir.join("intent.yaml");
+        std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let t = |id: &str, net: &str, a: Point, b: Point| Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.25), pts: vec![a, b], arc_mid_offset: None };
+        let tracks = vec![
+            t("gnd_m", "GND", p(mm(4.0), mm(10.0)), p(mm(16.0), mm(10.0))),
+            t("gnd_s", "GND", p(mm(4.0), mm(16.0)), p(mm(6.0), mm(16.0))),
+            t("sig_a", "SIG", p(mm(2.0), mm(4.0)), p(mm(4.0), mm(4.0))),
+            t("sig_b", "SIG", p(mm(16.0), mm(4.0)), p(mm(18.0), mm(4.0))),
+        ];
+        let mut drawings = DrawingsSection::default();
+        drawings.groups = vec![Group { id: "grp_gnd".into(), name: "gnd".into(), member_ids: vec!["gnd_m".into(), "gnd_s".into()], design_block: String::new() }, Group { id: "grp_sig".into(), name: "sig".into(), member_ids: vec!["sig_a".into(), "sig_b".into()], design_block: String::new() }];
+        drawings.track_masks = vec![eda_model::track_mask::TrackMask { id: "gnd_m".into(), margin: Some(mm(0.05)) }];
+        let design = Design {
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+            schema: eda_model::ir::SCHEMA_VERSION,
+            provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            nets: None,
+            placement: Some(PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.0), Nm::ZERO), p(mm(20.0), mm(20.0)), p(Nm::ZERO, mm(20.0))], footprints: vec![], modules: vec![] }),
+            routing: Some(RoutingSection { tracks, vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
+            drawings: Some(drawings),
+        };
+        board::save(&dir, &design).unwrap();
+        let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
+        std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+        let body = |v: serde_json::Value| v.to_string().into_bytes();
+        let cell: crate::route_api::RouteCell = std::sync::Mutex::new(None);
+        // D on the GND track's middle, 2 mm down
+        let started = crate::route_api::drag_start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 10_000_000, "layer": "F.Cu", "settings": { "mode": "shove" } })));
+        assert_eq!(started["ok"], json!(true), "{started}");
+        let done = crate::route_api::drag_finish(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 12_000_000 })));
+        assert_eq!(done["ok"], json!(true), "{done}");
+        // a route from sig_a to sig_b with the "sig" group entered
+        let started = crate::route_api::start(&dir, &cell, &body(json!({ "x": 4_000_000, "y": 4_000_000, "layer": "F.Cu", "width": 250_000, "group": "grp_sig", "settings": { "mode": "walkaround" } })));
+        assert_eq!(started["ok"], json!(true), "{started}");
+        let finished = crate::route_api::finish(&dir, &cell, &body(json!({ "x": 16_000_000, "y": 4_000_000 })));
+        assert_eq!(finished["ok"], json!(true), "{finished}");
+
+        let (_, design, model) = board::load(&dir).unwrap();
+        let rt = design.routing.as_ref().unwrap();
+        let moved = rt.tracks.iter().find(|t| t.net == "GND" && t.pts.iter().any(|q| q.y == mm(12.0))).expect("the dragged track").id.clone();
+        let route = rt.tracks.iter().find(|t| t.net == "SIG" && !["sig_a", "sig_b"].contains(&t.id.as_str())).expect("the new route").id.clone();
+        let (text, map) = eda_kicad::export_kicad_pcb_mapped(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).expect("the board file");
+        let uuid_of = |id: &str| map.iter().find(|(_, v)| v.as_str() == id).map(|(k, _)| k.clone()).unwrap_or_else(|| panic!("no uuid for {id}"));
+        let pcb = dir.join("resaved.kicad_pcb");
+        std::fs::write(&pcb, text).unwrap();
+        let out = eda_kicad_engine::cli_command(&eda_kicad_engine::find_cli().expect("kicad-cli"), None).args(["pcb", "upgrade", "--force"]).arg(&pcb).output().expect("kicad-cli runs");
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let resaved = std::fs::read_to_string(&pcb).unwrap();
+        // KiCad's writer puts a segment over several lines: take the block that names the moved track's uuid
+        let block_of = |uuid: &str, head: &str| -> String {
+            let at = resaved.find(&format!("(uuid \"{uuid}\")")).unwrap_or_else(|| panic!("KiCad's file has no {uuid}"));
+            let start = resaved[..at].rfind(head).unwrap();
+            resaved[start..at].to_string()
+        };
+        let seg = block_of(&uuid_of(&moved), "(segment");
+        assert!(seg.contains("(layers \"F.Cu\" \"F.Mask\")") && seg.contains("(solder_mask_margin 0.05)"), "the moved segment as KiCad has it: {seg}");
+        let group_has = |name: &str, uuid: &str| {
+            let at = resaved.find(&format!("(group \"{name}\"")).unwrap_or_else(|| panic!("no group {name}"));
+            let end = resaved[at..].find("\n\t)").map_or(resaved.len(), |e| at + e);
+            resaved[at..end].contains(uuid)
+        };
+        assert!(group_has("gnd", &uuid_of(&moved)), "the dragged track is still in its group");
+        assert!(group_has("sig", &uuid_of(&route)), "the route made in the entered group joined it");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

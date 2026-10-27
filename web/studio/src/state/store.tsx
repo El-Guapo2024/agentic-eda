@@ -9,6 +9,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
+import type { RouteSizesInfo } from "../kicad-port/routerSizes";
 import type { BoardState, BoardText, Cmd, CmdDimension, CmdText, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Nm, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
@@ -269,6 +270,12 @@ export type DrawState =
       pendingViaLayer?: string;
       /** The pad, via or track segment the route started on: it does not end there (see kicad-port/routeTool.ts). */
       startItem?: string;
+      /** The active layer before a start on another layer's item: see kicad-port/routeTool.ts. */
+      originalActiveLayer?: string;
+      /** The message panel's sizes: see kicad-port/routeTool.ts. */
+      sizes?: RouteSizesInfo;
+      /** `m_TempOverrideTrackWidth`: see kicad-port/routeTool.ts. */
+      widthOverride?: boolean;
     }
   /** `D` (gap #7 stage 5, `pcbnew.InteractiveRouter.Drag45Degree` ->
    * `eda_pns::dragger::Dragger`, driven through crates/cli/src/route_api.rs's
@@ -332,6 +339,10 @@ export type DrawState =
       /** Shove mode: other tracks/vias the pair would push aside. */
       displaced?: { layer: string; pts: [Nm, Nm][] }[];
       displacedVias?: { source_via: string; x: Nm; y: Nm }[];
+      /** The active layer before a start on another layer's item: see kicad-port/dpTool.ts. */
+      originalActiveLayer?: string;
+      /** The message panel's sizes: see kicad-port/dpTool.ts. */
+      sizes?: RouteSizesInfo;
     }
   | { kind: "zone"; pts: [Nm, Nm][] }
   | {
@@ -1610,8 +1621,13 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, ercLintSelected: action.index, ercSelected: action.index === null ? state.ercSelected : null };
     case "LINT_OK":
       return { ...state, lint: action.lint };
-    case "SET_DRAW_STATE":
+    case "SET_DRAW_STATE": {
+      // `ROUTER_TOOL::finishInteractive`: `frame()->SetActiveLayer( m_originalActiveLayer )` -- a route that started on another layer's item
+      // (`getStartLayer`, r5 R5-1) gives the active layer back when it ends
+      const prev = state.drawState;
+      if ((prev?.kind === "route" || prev?.kind === "diffpair") && prev.originalActiveLayer !== undefined && action.draw?.kind !== prev.kind) return { ...state, drawState: action.draw, activeLayer: prev.originalActiveLayer };
       return { ...state, drawState: action.draw };
+    }
     case "SET_ZONE_PENDING":
       return { ...state, zonePending: action.outline };
     case "SET_ZONE_EDIT_ID":

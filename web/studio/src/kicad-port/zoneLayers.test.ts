@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { orderedLayerSet, zoneCopperLayers, zoneDialogKind, zoneIsOnCopper, zoneIsOnLayer, zoneLayerChoices, zoneLayers, zonePickLayer } from "./zoneLayers";
+import { orderedLayerSet, zoneCopperLayers, zoneDialogKind, zoneDialogNet, zoneIsOnCopper, zoneIsOnLayer, zoneLayerChoices, zoneLayers, zonePickLayer } from "./zoneLayers";
 
 test("a zone from a backend without layer sets is on its layer", () => {
   assert.deepEqual(zoneLayers({ layer: "F.Cu" }), ["F.Cu"]);
@@ -36,4 +36,14 @@ test("the dialog a zone gets follows its layers", () => {
   assert.deepEqual(zoneLayerChoices("non-copper", copper, optional), optional);
   assert.deepEqual(zoneLayerChoices("rule-area", copper, optional), ["F.Cu", "B.Cu", "F.SilkS", "F.Mask"]);
   assert.deepEqual(orderedLayerSet(["B.Cu", "F.Cu"], copper), ["F.Cu", "B.Cu"], "the dialog lists the layers in the board's order");
+});
+
+test("R5-Z3: OK on a copper zone on no net keeps it on no net; a new zone starts on the first net; <no net> can be chosen", () => {
+  const nets = ["+3V3", "GND"];
+  assert.equal(zoneDialogNet("copper", "", nets), "", "an existing zone on no net (Edit_Zone_Params keeps net 0)");
+  assert.equal(zoneDialogNet("copper", "GND", nets), "GND");
+  assert.equal(zoneDialogNet("copper", null, nets), "+3V3", "a new zone nothing was picked for");
+  assert.equal(zoneDialogNet("copper", null, []), "");
+  assert.equal(zoneDialogNet("rule-area", null, nets), "", "a rule area has no net unless it holds one");
+  assert.equal(zoneDialogNet("non-copper", "GND", nets), "");
 });
