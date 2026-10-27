@@ -181,3 +181,11 @@ fn a_page_position_taken_into_the_symbols_frame_and_back_is_the_same_whatever_th
         }
     }
 }
+
+/// r2 C-M7: `BOX2I::Intersects` -- boxes that only touch collide.
+#[test]
+fn touching_boxes_intersect() {
+    assert!(boxes_intersect([0, 0, 10, 10], [10, 0, 20, 10]));
+    assert!(boxes_intersect([0, 0, 10, 10], [0, 10, 10, 10]), "a box of no height on the edge");
+    assert!(!boxes_intersect([0, 0, 10, 10], [11, 0, 20, 10]));
+}

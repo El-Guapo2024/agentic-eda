@@ -233,7 +233,8 @@ fn drawable_area(sch: &SchematicSection) -> Option<Rect> {
 /// no-connects, junctions, texts and sheets.
 pub fn surroundings(sch: &SchematicSection, model: &ConstraintModel, exclude_key: &str) -> Surroundings {
     let mut colliders: Vec<Collider> = Vec::new();
-    // a symbol is one box: its body and its pins (`GetBodyAndPinsBoundingBox`)
+    // a symbol is one box: its body and its pins (`GetBodyAndPinsBoundingBox`); each unit of a part is a symbol of its own (r2 C-M5: the obstacle's owner
+    // is the unit's field key, `U1#2`), and only the one being placed is left out
     let mut by_owner: std::collections::BTreeMap<String, Rect> = std::collections::BTreeMap::new();
     for o in crate::obstacles::of_section_but_wires(sch, model) {
         if o.owner.is_empty() {
@@ -249,7 +250,9 @@ pub fn surroundings(sch: &SchematicSection, model: &ConstraintModel, exclude_key
     for w in &sch.wires {
         for pair in w.pts.windows(2) {
             let (a, b) = (pair[0], pair[1]);
-            colliders.push(Collider { rect: Rect::of(a, b), wire: Some((a.y, b.y)) });
+            // `SCH_LINE::GetBoundingBox`: the segment grown by half its pen (`GetPenWidth() / 2`), the default wire's 6 mils here (**Differs**: a wire's own
+            // stroke width is not read)
+            colliders.push(Collider { rect: Rect::of(a, b).inflate(Nm::new(76_200)), wire: Some((a.y, b.y)) });
         }
     }
     for t in &sch.texts {

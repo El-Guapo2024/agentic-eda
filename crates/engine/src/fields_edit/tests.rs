@@ -118,3 +118,29 @@ fn the_manual_autoplace_keeps_the_fields_off_a_wire_that_runs_where_the_automati
     let at = ctx.page(&moved[0], "R1").at;
     assert!(at.0 < 50_800_000.0, "the fields leave the right side the wire crosses: {at:?}");
 }
+
+/// r2 C-M5 (`AUTOPLACER::getPossibleCollisions` keeps every `SCH_SYMBOL` but the one placed, each unit being one): the manual Autoplace of unit 2 of U1
+/// leaves out unit 2's own box and keeps unit 1's, and the two are boxes of their own (not one box spanning both).
+#[test]
+fn manual_autoplace_treats_each_unit_as_its_own_symbol() {
+    let mut m = model();
+    m.parts.push(part("U1"));
+    let unit = |u: u32, x: f64| SymbolInstance { id: "U1".into(), unit: u, ..resistor(Point { x: mm(x), y: mm(50.0) }, 0, false) };
+    let sch = SchematicSection { symbols: vec![unit(1, 50.0), unit(2, 150.0)], ..Default::default() };
+    let boxes = |key: &str| surroundings(&sch, &m, key).colliders.iter().filter(|c| c.wire.is_none()).map(|c| c.rect).collect::<Vec<_>>();
+    let around_two = boxes("U1#2");
+    assert!(around_two.iter().all(|r| r.x0 < mm(100.0)), "unit 2's own box and fields are left out: {around_two:?}");
+    assert!(around_two.iter().any(|r| r.x0 < mm(52.0) && r.x1 > mm(50.0)), "unit 1's box is kept: {around_two:?}");
+    let all = boxes("R9");
+    assert!(all.iter().any(|r| r.x0 > mm(140.0)), "{all:?}");
+    assert!(all.iter().all(|r| !(r.x0 < mm(100.0) && r.x1 > mm(140.0))), "no box over both units: {all:?}");
+}
+
+/// r2 C-M7 (`BOX2I::Intersects` counts boxes that touch; `SCH_LINE::GetBoundingBox` grows a wire by half its pen): a horizontal wire's collider has a height.
+#[test]
+fn a_wire_collider_is_grown_by_half_its_pen() {
+    let mut sch = sheet_of(resistor(Point { x: mm(50.0), y: mm(50.0) }, 0, false));
+    sch.wires.push(eda_model::ir::Wire { id: "w".into(), net: String::new(), pins: vec![], pts: vec![Point { x: mm(51.0), y: mm(47.46) }, Point { x: mm(60.0), y: mm(47.46) }], bus: false });
+    let wire = surroundings(&sch, &model(), "R1").colliders.into_iter().find(|c| c.wire.is_some()).unwrap();
+    assert_eq!((wire.rect.y0, wire.rect.y1), (mm(47.46) - Nm::new(76_200), mm(47.46) + Nm::new(76_200)));
+}

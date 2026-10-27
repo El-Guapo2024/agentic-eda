@@ -376,9 +376,10 @@ fn iu_box(r: crate::hier::kit::Rect) -> IuBox {
     [r.x0.get() / iu, r.y0.get() / iu, r.x1.get() / iu, r.y1.get() / iu]
 }
 
-/// `BOX2I::Intersects`: the boxes share some area.
+/// `BOX2I::Intersects`: the boxes share a point -- touching counts ("if a common area exists, it must have a positive (null accepted) size": `left <= right
+/// && top <= bottom`), so a wire on the field box's edge collides (r2 C-M7).
 fn boxes_intersect(a: IuBox, b: IuBox) -> bool {
-    a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
+    a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
 }
 
 /// `chooseSideFiltered`: the sides that collide the way `which` says leave the list, and the one of them with the fewest pins (the later of equals)
