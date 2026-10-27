@@ -1741,7 +1741,8 @@ export interface StudioApi {
   /** F (edit_tool.cpp Flip): footprints, one undo step for the whole selection. */
   flipSelection: (refs?: string[]) => Promise<void>;
   /** Several Cmds as ONE undo step (`Cmd::Batch`): all-or-nothing. A single Cmd is sent as itself. Returns whether the backend accepted it. */
-  cmdBatch: (cmds: Cmd[]) => Promise<boolean>;
+  /** `carry`: the batch's place in a step held open across several commands (crates/cli/src/carry.rs). */
+  cmdBatch: (cmds: Cmd[], carry?: CarryStep) => Promise<boolean>;
   /** pcbnew.AlignAndDistribute.align* (no default hotkey in source either -- reached from the right-click menu, Canvas.tsx's onContextMenu). Placed footprints only -- see kicad-port/alignDistribute.ts's own scope note. A no-op under 2 placed parts, same floor source's menu-visibility condition enforces. */
   alignSelection: (edge: AlignEdge) => Promise<void>;
   /** pcbnew.AlignAndDistribute.distribute* -- same placed-footprints-only scope. A no-op under 3 placed parts. */
@@ -1844,7 +1845,8 @@ export interface StudioApi {
    * `Cmd::AddZone` with inline settings, so every existing caller of that
    * Cmd (the CLI, this app's own tests) keeps its exact three-field shape.
    */
-  addZone: (net: string, layer: string, outline: [Nm, Nm][], settings: ZoneSettingsFields & RuleAreaFields, extra?: { layers?: string[]; name?: string; locked?: boolean }) => Promise<void>;
+  /** `carry` "hold": the zone and its settings join a step held open (Create Zone from Selection's several zones and the sources' removal are one undo step). */
+  addZone: (net: string, layer: string, outline: [Nm, Nm][], settings: ZoneSettingsFields & RuleAreaFields, extra?: { layers?: string[]; name?: string; locked?: boolean }, carry?: CarryStep) => Promise<void>;
   /**
    * B ("Fill All Zones"), or Fill Selected Zones with `ids`: kicad-cli's filler runs (seconds; `state.zoneFillRunning` meanwhile, the board stays editable) and its fills
    * are kept beside the design; then they are read (`state.zoneFill`). A run already in flight is not doubled.
@@ -2295,7 +2297,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const presses = (q === 3 ? -1 : q) * (st.bcx.boardFlipped ? -1 : 1);
       await runPlan(planRotate(st.board, explicit ?? [...st.selection], presses, gridSnap(), st.prefs.rotationStepDeg));
     },
-    cmdBatch: (cmds) => runBatch(cmds),
+    cmdBatch: (cmds, carry) => runBatch(cmds, carry),
     ripSelection: async () => {
       const refs = [...stateRef.current.selection];
       dispatch({ type: "CLEAR_SELECTION" });
@@ -2517,12 +2519,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!ok) return;
       dispatch({ type: "SET_SELECTION", refs: members, raw: true });
     },
-    addZone: async (net, layer, outline, settings, extra) => {
+    addZone: async (net, layer, outline, settings, extra, carry) => {
       // The board as the backend has it now (several zones can be added one after the other, e.g. "Create Zone from Selection").
       const board = await fetchState().catch(() => null);
       if (!board) return;
       const before = allItemIds(board);
-      const ok = await runCmd({ op: "add_zone", net, layer, outline: outline.map(([x, y]) => ({ x, y })) });
+      const ok = await runCmd({ op: "add_zone", net, layer, outline: outline.map(([x, y]) => ({ x, y })) }, carry);
       if (!ok) return;
       // Read the board from the backend: `stateRef` only catches up on the next render, which is after this continuation, so the new
       // zone would not be in it yet and its settings (a rule area's flags, say) would never be applied.
@@ -2540,7 +2542,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!unchanged || layers) follow.push({ op: "edit_zone", ...settings, id: newId, net, layer, ...(layers ? { layers } : {}) });
       if (extra?.name) follow.push({ op: "set_zone_name", id: newId, name: extra.name });
       if (extra?.locked) follow.push({ op: "set_locked", ids: [newId], locked: true });
-      if (follow.length > 0) await runBatch(follow);
+      if (follow.length > 0) await runBatch(follow, carry);
     },
     // edit_tool.cpp copyToClipboard: the selection (a pad stands for its footprint, a locked item is copied) as KiCad's own clipboard text, measured
     // from the cursor's grid point or the point Copy with Reference picked -- on the system clipboard, where KiCad can paste it, and here.

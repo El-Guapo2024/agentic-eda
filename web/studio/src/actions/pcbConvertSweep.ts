@@ -11,6 +11,8 @@ import type { BoardState, Cmd } from "../api/types";
 import { convertPolys } from "../api/client";
 import {
   DEFAULT_CONVERT_SETTINGS,
+  DEFAULT_CONVERTED_LINE_WIDTH_NM,
+  DEFAULT_CONVERTED_TRACK_WIDTH_NM,
   DEFAULT_OUTSET_PARAMS,
   convertAvailability,
   copiedLineWidth,
@@ -29,9 +31,10 @@ import { openSweepDialog } from "./pcbSweepDialogs";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 
 /** Remembered between invocations, like the C++ `m_userSettings` and `static` outset parameters. */
-const last: { convert: ConvertSettings; outset: OutsetParams; tracks: { layer: string; net: string; deleteOriginals: boolean } } = {
+const last: { convert: ConvertSettings; outset: OutsetParams | null; tracks: { layer: string; net: string; deleteOriginals: boolean } } = {
   convert: { ...DEFAULT_CONVERT_SETTINGS },
-  outset: { ...DEFAULT_OUTSET_PARAMS },
+  // `static outset_params_pcb_edit`, made on the first use with the board's Edge.Cuts line thickness (`GetLineThickness( Edge_Cuts )`).
+  outset: null,
   tracks: { layer: "", net: "", deleteOriginals: true },
 };
 
@@ -63,10 +66,8 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
       if (ids.length === 0 || !convertAvailability(board, ids).poly) return;
       const layer = destLayer();
       if (!layer) return;
-      if (kind !== "poly" && !board.layers.includes(layer)) {
-        toast("Zones and rule areas are made on copper layers: choose a copper layer first.", "error");
-        return;
-      }
+      // A zone on a technical layer is a non-copper zone (`CreatePolys`: `nonCopper = IsNonCopperLayer( destLayer )` opens `InvokeNonCopperZonesEditor`;
+      // ZoneDialog picks the dialog by the layer; round 5 B5-9).
       void (async () => {
         // "Pre-flight getPolys() to see if there's anything to convert."
         const pre = await convertPolys(ids, "bounding_hull", 0);
@@ -135,7 +136,7 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
           showHull: false,
           onOk: (chosen: ConvertSettings) => {
             last.convert = { ...last.convert, deleteOriginals: chosen.deleteOriginals };
-            const plan = planConvertToLines(board, ids, layer, layerLineWidthNm(layer, board.board_rules?.text_graphics), chosen.deleteOriginals);
+            const plan = planConvertToLines(board, ids, layer, DEFAULT_CONVERTED_LINE_WIDTH_NM, chosen.deleteOriginals);
             if (plan.empty) return;
             void applyEdit(plan.cmds, plan.removed);
           },
@@ -172,8 +173,7 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
           deleteOriginals: last.tracks.deleteOriginals,
           onOk: (v: { layer: string; net: string; deleteOriginals: boolean }) => {
             last.tracks = v;
-            const width = state.currentTrackWidthNm ?? board.board_rules?.track_width ?? 250_000;
-            const plan = planConvertToTracks(board, ids, v.layer, v.net, width, v.deleteOriginals);
+            const plan = planConvertToTracks(board, ids, v.layer, v.net, DEFAULT_CONVERTED_TRACK_WIDTH_NM, v.deleteOriginals);
             if (plan.empty) return;
             void applyEdit(plan.cmds, plan.removed);
           },
@@ -209,7 +209,8 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
       const ids = requestFiltered((id) => !!api.shapeById(id));
       if (ids.length === 0) return;
       const layers = [...board.layers, ...STANDARD_LAYERS.map((l) => l.label)];
-      const start: OutsetParams = { ...last.outset, layer: layers.includes(last.outset.layer) ? last.outset.layer : (layers[0] ?? "Edge.Cuts") };
+      const saved: OutsetParams = last.outset ?? { ...DEFAULT_OUTSET_PARAMS, lineWidthNm: lineThicknessNm(board.board_rules?.text_graphics, "Edge.Cuts") };
+      const start: OutsetParams = { ...saved, layer: layers.includes(saved.layer) ? saved.layer : (layers[0] ?? "Edge.Cuts") };
       openSweepDialog({
         kind: "element",
         element: createElement(OutsetItemsDialog, {
