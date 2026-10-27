@@ -567,9 +567,11 @@ fn layer_ordinal(layer: &str) -> i32 {
 /// `TechAndUserUIOrder`, typed `user` unless a user layer is off-board at the front or the back. A layer the user renamed, and every layer whose standard name
 /// KiCad shows differs from the one the file writes (`F.SilkS` is `F.Silkscreen`), carries that name as the entry's last word.
 pub(crate) fn write_layers(out: &mut String, copper_layers: &[String], setup: &LayerSetup) {
+    // A layer shown by the very name the file writes needs no name of its own -- unless KiCad's standard name for it differs (`F.SilkS` is `F.Silkscreen`): a layer of a
+    // file from before 20200922 is shown by its file name (`parseLayer`), and only an explicit `(5 "F.SilkS" user "F.SilkS")` says so to a reader of this file.
     let shown = |layer: &str| {
         let name = setup.display_name(layer);
-        if name == layer { String::new() } else { format!(" {}", sexpr_str(&name)) }
+        if name == layer && eda_model::layers::standard_layer_name(layer) == layer { String::new() } else { format!(" {}", sexpr_str(&name)) }
     };
     writeln!(out, "\t(layers").unwrap();
     for (i, name) in copper_layers.iter().enumerate() {

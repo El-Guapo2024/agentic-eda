@@ -483,6 +483,7 @@ fn default_layers() -> Vec<String> {
 /// F17: `issue18839` lists no adhesive, paste, mask, silkscreen or fabrication layer; every board this studio wrote lists them all). A layer name the file has that is not one of
 /// KiCad's (`Rescue`, a name from before KiCad 5) is skipped. [`add_layers_in_use`] adds the layers the imported items sit on.
 fn import_layer_setup(root: &[Sexpr]) -> LayerSetup {
+    let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
     let mut setup = LayerSetup { enabled: Vec::new(), names: BTreeMap::new(), types: BTreeMap::new() };
     for item in sexpr::find(root, "layers").map_or(&[][..], |l| &l[1..]) {
         let Some(l) = item.as_list() else { continue };
@@ -502,6 +503,10 @@ fn import_layer_setup(root: &[Sexpr]) -> LayerSetup {
         }
         if let Some(shown) = sexpr::txt(l, 3).filter(|s| *s != "hide" && !s.is_empty() && *s != eda_model::layers::standard_layer_name(name)) {
             setup.names.insert(name.to_string(), shown.to_string());
+        } else if file_version < 20200922 && !eda_model::layers::is_copper_layer_name(name) && name != eda_model::layers::standard_layer_name(name) {
+            // "Older versions didn't have a dedicated user name field" (`parseLayer`: `m_name = m_userName = name`): the layer is shown, and written back, by the name
+            // the file used (`formatBoardLayers` writes no long name when `GetLayerName` is `LSET::Name`) (r3-board-io F13: `custom_pads`, `issue4139`, `issue4257`).
+            setup.names.insert(name.to_string(), name.to_string());
         }
     }
     setup.enabled.extend(eda_model::layers::MANDATORY_LAYERS.iter().map(|l| l.to_string()));

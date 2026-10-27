@@ -125,3 +125,15 @@ fn a_layer_the_items_are_on_is_a_layer_the_board_has() {
     let layers = layers_section(&export(&design, &model));
     assert!(layers.iter().any(|l| l == "(56 \"User.7\" user)"), "{layers:?}");
 }
+
+/// r3-board-io F13: a file from before 20200922 has no user names (`parseLayer`: `m_name = m_userName = name`), so its technical layers are shown by the file's names
+/// (`B.Adhes`, not `B.Adhesive`) and written so that a reader of our file shows them the same (`custom_pads`, `issue4139`, `issue4257`).
+#[test]
+fn a_legacy_boards_layers_keep_their_file_names() {
+    let (design, model, _) = import_kicad_pcb(r#"(kicad_pcb (version 20200829) (generator pcbnew) (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (32 "B.Adhes" user) (37 "F.SilkS" user) (44 "Edge.Cuts" user)) (net 0 ""))"#).expect("imports");
+    assert_eq!(model.board.layer_setup.display_name("B.Adhes"), "B.Adhes");
+    assert_eq!(model.board.layer_setup.display_name("F.SilkS"), "F.SilkS");
+    let layers = layers_section(&export(&design, &model));
+    assert!(layers.iter().any(|l| l == "(32 \"B.Adhes\" user \"B.Adhes\")"), "{layers:?}");
+    assert!(layers.iter().any(|l| l == "(44 \"Edge.Cuts\" user)"), "a layer whose standard name is its file name needs none: {layers:?}");
+}
