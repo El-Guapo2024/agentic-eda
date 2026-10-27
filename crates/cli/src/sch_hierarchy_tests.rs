@@ -1928,3 +1928,17 @@ fn a_label_on_a_pin_with_no_wire_has_the_net_of_the_pin() {
     assert_eq!(labels.len(), 2);
     assert!(labels.iter().all(|l| l["net_name"] == "/X"), "{labels:?}");
 }
+
+/// r5 B5-M2 (a stacked pin is a subgraph member like any other, `HighlightNet` -> `conn->Name()`): J1's pin `[1-2]` and R1.1, each with a local label `X` and
+/// no wire, are `/X` (kicad-cli: `/X [J1.1, J1.2, R1.1]`); the studio gives the stacked pin and the label on it that net, through its pads.
+#[test]
+fn a_label_on_a_stacked_pin_has_the_pins_net() {
+    let (dir, _, nets) = round_case("r5_connectivity", "s2");
+    assert_eq!(nets.get("/X"), Some(&vec!["J1.1".to_string(), "J1.2".into(), "R1.1".into()]), "{nets:?}");
+    let sheet = crate::studio::schematic_json(&dir, "", eda_model::text_vars::Clock::utc_now()).unwrap();
+    let labels = sheet["labels"].as_array().unwrap();
+    assert!(labels.len() == 2 && labels.iter().all(|l| l["net_name"] == "/X"), "{labels:?}");
+    let j1 = sheet["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "J1").expect("J1");
+    let stacked = j1["pins"].as_array().unwrap().iter().find(|p| p["number"] == "[1-2]").expect("pin [1-2]");
+    assert_eq!(stacked["net"], "/X");
+}
