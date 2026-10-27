@@ -38,11 +38,13 @@ use eda_model::ir::{LabelKind, Point, SchematicSection};
 use eda_model::Net;
 
 /// `SCH_CONNECTIVITY::PRIORITY` (KiCad 25ec2335 `eeschema/connectivity/conn_claims.h`; the old engine's `CONNECTION_SUBGRAPH::PRIORITY` lacks
-/// `BUS_MEMBER`). `LOCAL_POWER_PIN` (5, a local power symbol) is not ported.
+/// `BUS_MEMBER`).
 const PIN: u8 = 1;
 const SHEET_PIN: u8 = 2;
 const HIER_LABEL: u8 = 3;
 const LOCAL_LABEL: u8 = 4;
+/// The pin of a local power symbol (`SchExtras::local_power`): a name on its sheet only.
+const LOCAL_POWER_PIN: u8 = 5;
 /// A bus member's slot (`BindBundle`: `slot.claim.priority = PRIORITY::BUS_MEMBER`), above every label but a global one.
 const BUS_MEMBER: u8 = 6;
 const GLOBAL_POWER_PIN: u8 = 7;
@@ -428,6 +430,12 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             }
             let name = naming.power_value.map(|f| f(&screen.path, &ps.net)).unwrap_or_else(|| ps.net.clone());
             let g = &mut groups[at[&ps.at]];
+            // a local power symbol (`LOCAL_POWER_PIN`): a `SCOPE::SHEET` name edge only, its net named with the sheet's path (r2 D-E1's note, QA issue22938)
+            if sch.extras.local_power.contains(&ps.lib_id) {
+                g.drivers.push(Driver::new(LOCAL_POWER_PIN, name.clone(), depth[si], &spath[si]));
+                g.local_names.push(name);
+                continue;
+            }
             g.drivers.push(Driver { power_parent: true, ..Driver::new(GLOBAL_POWER_PIN, name.clone(), depth[si], &spath[si]) });
             g.local_names.push(name.clone());
             g.global_names.push(name);
@@ -1301,6 +1309,38 @@ mod tests {
         let nets = trace_nets(&mut screens);
         assert_eq!(pins_of(&nets, "GND"), vec!["C1.2", "C2.2"]);
         assert_eq!(a.power_symbols[0].pin, "C1.2");
+    }
+
+    /// r2 D-E1's note (QA `issue22938`; `PRIORITY::LOCAL_POWER_PIN`, `BuildIslandRecord`: a local power pin emits a `SCOPE::SHEET` edge only): a local power
+    /// symbol `+48V` on two sheets is two nets, each named with its sheet's path; a global one of the same name joins them.
+    #[test]
+    fn a_local_power_symbol_is_a_net_of_its_own_sheet() {
+        let trace = |local: bool| -> Vec<Net> {
+            let mut root = section();
+            root.sheets.push(SheetInstance { id: "s1".into(), name: "a".into(), file: "a.kicad_sch".into(), at: p(0, 0), size: (Nm::new(10), Nm::new(10)), pins: vec![], page: String::new() });
+            root.sheets.push(SheetInstance { id: "s2".into(), name: "b".into(), file: "b.kicad_sch".into(), at: p(20, 0), size: (Nm::new(10), Nm::new(10)), pins: vec![], page: String::new() });
+            let pwr = |at: Point| PowerSymbol { id: "#PWR01".into(), lib_id: "L:+48V".into(), at, rot: 0, net: "+48V".into(), pin: String::new() };
+            let mut a = section();
+            a.power_symbols.push(pwr(p(5, 5)));
+            let mut b = section();
+            b.power_symbols.push(pwr(p(7, 7)));
+            if local {
+                a.extras.local_power.insert("L:+48V".into());
+                b.extras.local_power.insert("L:+48V".into());
+            }
+            let mut screens = vec![
+                ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: BTreeMap::new() },
+                ScreenIn { path: vec!["s1".into()], sch: &mut a, file: "a.kicad_sch".into(), pins: pins(&[("C1.2", p(5, 5))]) },
+                ScreenIn { path: vec!["s2".into()], sch: &mut b, file: "b.kicad_sch".into(), pins: pins(&[("C2.2", p(7, 7))]) },
+            ];
+            trace_nets(&mut screens)
+        };
+        let local = trace(true);
+        let of = |nets: &[Net], pin: &str| nets.iter().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| (n.name.clone(), n.pins.clone())).unwrap();
+        assert_eq!(of(&local, "C1.2").1, vec!["C1.2"], "{local:?}");
+        assert_eq!(of(&local, "C2.2").1, vec!["C2.2"], "{local:?}");
+        assert!(of(&local, "C1.2").0.ends_with("/+48V") && of(&local, "C1.2").0.len() > "/+48V".len(), "named with its sheet's path: {local:?}");
+        assert_eq!(pins_of(&trace(false), "+48V"), vec!["C1.2", "C2.2"], "a global one is one net");
     }
 
     /// A PWR_FLAG joins no net by its name whatever library it comes from (`SCH_PIN::IsGlobalPower`: a power-input pin; the flag's is a power output): two

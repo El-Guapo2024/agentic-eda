@@ -652,6 +652,11 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         sch.extras.pin_swaps.extend(pin_swap_entries);
         sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
         sch.extras.sheet_pages.extend(sheet_pages);
+        // the local power symbols of the file's library cache (`(power local)`, `parseSymbol`'s `T_power`)
+        let local_libs: BTreeSet<String> = sexpr::find(root, "lib_symbols")
+            .map(|l| sexpr::find_all(l, "symbol").filter(|s| sexpr::find(s, "power").and_then(|p| sexpr::txt(p, 1)) == Some("local")).filter_map(|s| sexpr::txt(s, 1).map(String::from)).collect())
+            .unwrap_or_default();
+        sch.extras.local_power = sch.power_symbols.iter().filter(|p| local_libs.contains(&p.lib_id)).map(|p| p.lib_id.clone()).collect();
         for (at, own, path, unit) in path_units {
             if let Some(sym) = sch.symbols.iter().find(|s| s.at == at && s.unit == own) {
                 sch.extras.path_units.entry(eda_model::ir::field_key(&sym.id, sym.unit)).or_default().insert(path.join("/"), unit);

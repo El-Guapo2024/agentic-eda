@@ -1191,6 +1191,32 @@ fn a_symbol_drawn_as_another_unit_on_a_second_path_keeps_its_pins_there() {
     }
 }
 
+/// r2 D-E1's note: QA `issue22938`'s `0IBF_Supply:+48V` and `IBF_supply:+7V` are local power symbols (`(power local)`), on the root and on its sheet:
+/// kicad-cli names four nets `/+48V`, `/+7V`, `/Spannungsversorgung/+48V`, `/Spannungsversorgung/+7V` and reports six `power_pin_not_driven`. Ours read them
+/// as global power symbols, so the derived file had two nets of them and four findings; now every pin's net is named as kicad-cli names it in the original,
+/// and the derived ERC reports six.
+#[test]
+fn slow_qa_issue22938s_local_power_symbols_are_a_net_per_sheet() {
+    let Some(qa) = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from) else { return };
+    if !kicad_cli_ready() {
+        return;
+    }
+    let src = qa.join("eeschema/issue22938");
+    let work = scratch("issue22938");
+    for e in std::fs::read_dir(&src).unwrap().flatten() {
+        std::fs::copy(e.path(), work.join(e.file_name())).unwrap();
+    }
+    let root = work.join("issue22938.kicad_sch");
+    let dir = work.join("board");
+    crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let ours: std::collections::BTreeMap<String, String> = design.nets.unwrap_or_default().into_iter().flat_map(|n| n.pins.into_iter().filter(|p| !p.starts_with('#')).map(move |p| (p, n.name.clone()))).collect();
+    let derived = kicad_net_names(&dir);
+    assert!(derived.values().any(|n| n == "/Spannungsversorgung/+48V") && derived.values().any(|n| n == "/+48V"), "{derived:?}");
+    assert_eq!(ours, derived, "our nets are kicad-cli's of the derived files");
+    assert_eq!(erc_kinds(&dir).get("power_pin_not_driven").copied(), Some(6), "as kicad-cli reports on the original");
+}
+
 /// r2 D-E1 (`ERC_SETTINGS`'s `rule_severities` and `pin_map` loaders, `SCHEMATIC_SETTINGS`'s `connection_grid_size`): `eda import-kicad` of a schematic brings
 /// its project's ERC severities, pin map and connection grid with it, so the derived project's ERC judges as kicad-cli judges the original (QA `issue22938`
 /// ignores `pin_not_connected`; ours reported 50 of them). A library-link check stays at the derived project's ignore.

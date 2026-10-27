@@ -383,7 +383,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             // resolves it, real library first, then `symbol::builtin`'s
             // generic rail fallback for any net name.
             let resolved = model.symbol_of(lib_id).unwrap_or_else(|| eda_model::symbol::builtin(lib_id).expect("power lib_id always resolves"));
-            write_power_lib_symbol(&mut out, lib_id, &resolved);
+            write_power_lib_symbol(&mut out, lib_id, &resolved, sch.extras.local_power.contains(lib_id));
         }
     }
     let mut written_copies: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
@@ -1513,9 +1513,10 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
 /// and pin(s), embedded verbatim (already in the correct on-disk
 /// convention — see [`baked_local`]'s doc comment). One shared definition
 /// per `lib_id`, regardless of how many instances place it.
-fn write_power_lib_symbol(out: &mut String, lib_id: &str, resolved: &eda_model::LibSymbol) {
+/// `local`: a local power symbol (`SchExtras::local_power`), `(power local)`.
+fn write_power_lib_symbol(out: &mut String, lib_id: &str, resolved: &eda_model::LibSymbol, local: bool) {
     writeln!(out, "\t\t(symbol {}", sexpr_str(lib_id)).unwrap();
-    writeln!(out, "\t\t\t(power)").unwrap();
+    writeln!(out, "\t\t\t{}", if local { "(power local)" } else { "(power)" }).unwrap();
     writeln!(out, "\t\t\t(pin_numbers (hide yes))").unwrap();
     writeln!(out, "\t\t\t(pin_names (offset 0) (hide yes))").unwrap();
     writeln!(out, "\t\t\t(exclude_from_sim no) (in_bom yes) (on_board yes)").unwrap();
