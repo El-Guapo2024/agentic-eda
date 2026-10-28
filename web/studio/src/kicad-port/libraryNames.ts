@@ -99,12 +99,33 @@ export function ensureUniqueName(name: string, taken: Iterable<string>): string 
   }
 }
 
-/** `ensureUniqueName` on the item part of a `Lib:Name` id, tested against whole ids (the library stays as given). */
-export function ensureUniqueLibId(libId: string, takenLibIds: Iterable<string>): string {
-  const used = new Set(takenLibIds);
+/** `ensureUniqueName` on the item part of a `Lib:Name` id, tested against whole ids (the library stays as given). A symbol's name is free when no
+ * symbol of its library has it in any case (`SYMBOL_LIBRARY_MANAGER::SymbolNameInUse`, `CmpNoCase`; `caseInsensitive`); a footprint's when no
+ * footprint has it exactly (`FootprintExists`). */
+export function ensureUniqueLibId(libId: string, takenLibIds: Iterable<string>, caseInsensitive = false): string {
+  const used = [...takenLibIds];
   const { lib, item } = splitLibName(libId);
-  const unique = ensureUniqueName(item, [...used].filter((id) => splitLibName(id).lib === lib).map((id) => splitLibName(id).item));
-  return joinLibName(lib, unique);
+  const fold = (s: string) => (caseInsensitive ? s.toLowerCase() : s);
+  const unique = ensureUniqueName(fold(item), used.filter((id) => splitLibName(id).lib === lib).map((id) => fold(splitLibName(id).item)));
+  // the suffix found on the folded name, put on the name as written
+  return joinLibName(lib, item + unique.slice(item.length));
+}
+
+/** `SYMBOL_LIBRARY_MANAGER::SymbolNameInUse`: a symbol of the same library has the name, compared without case (`candidate.CmpNoCase( unescapedName ) == 0`).
+ * Used by Paste and Duplicate (`ensureUniqueName`), Rename's Overwrite question, Save As and Symbol Properties' rename. */
+export function symbolNameInUse(libId: string, takenLibIds: Iterable<string>): boolean {
+  return symbolNameInUseAs(libId, takenLibIds) !== null;
+}
+
+/** The `lib_id` in `takenLibIds` that `symbolNameInUse` matched (the existing spelling), or null. */
+export function symbolNameInUseAs(libId: string, takenLibIds: Iterable<string>): string | null {
+  const { lib, item } = splitLibName(libId);
+  const want = item.toLowerCase();
+  for (const id of takenLibIds) {
+    const t = splitLibName(id);
+    if (t.lib === lib && t.item.toLowerCase() === want) return id;
+  }
+  return null;
 }
 
 /** `FOOTPRINT_EDITOR_CONTROL::PasteFootprint`: `while( FootprintExists( newLib, newName ) ) newName += "_copy";` -- the suffix piles up. */

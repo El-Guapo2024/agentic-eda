@@ -6493,8 +6493,15 @@ impl<'a> Board<'a> {
         sym.pin_numbers_hidden = pin_numbers_hidden;
         sym.pin_names_hidden = pin_names_hidden;
         sym.pin_name_offset_mm = pin_name_offset_mm;
-        sym.unit_count = unit_count;
-        sym.has_alternate_body_style = has_alternate_body_style;
+        // a derived symbol's units and body styles are its parent's (`GetUnitCount` / `GetBodyStyleCount` of the root): only its flags change
+        if sym.extends.is_some() {
+            sym.unit_count = unit_count;
+            sym.has_alternate_body_style = has_alternate_body_style;
+        } else {
+            // `SetUnitCount( m_unitSpinCtrl->GetValue(), true )` and `SetBodyStyleCount`: the items of dropped units and body styles go, new units start as copies of unit 1
+            library_editors::set_unit_count(sym, unit_count);
+            library_editors::set_alternate_body_style(sym, has_alternate_body_style);
+        }
         sym.footprint_filters = footprint_filters;
         attributes.apply(sym);
         Ok(())
@@ -6563,6 +6570,7 @@ impl<'a> Board<'a> {
         Self::validate_pin(&pin)?;
         let sym = self.drawing_symbol_mut(lib_id)?;
         Self::check_alternates_allowed(sym, &pin)?;
+        library_editors::check_pin_unit_and_style(sym, &pin)?;
         sym.pins.push(pin);
         sym.assign_missing_ids();
         Ok(())
@@ -6590,6 +6598,7 @@ impl<'a> Board<'a> {
         Self::validate_pin(&pin)?;
         let sym = self.drawing_symbol_mut(lib_id)?;
         Self::check_alternates_allowed(sym, &pin)?;
+        library_editors::check_pin_unit_and_style(sym, &pin)?;
         let slot = Self::find_pin_mut(sym, id)?;
         *slot = pin;
         Ok(())
@@ -6799,6 +6808,8 @@ mod fp_lib_fields_tests;
 mod lib_keep_tests;
 #[cfg(test)]
 mod pin_alternates_tests;
+#[cfg(test)]
+mod sym_units_tests;
 #[cfg(test)]
 mod sym_graphic_tests;
 #[cfg(test)]

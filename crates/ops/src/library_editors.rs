@@ -25,7 +25,7 @@
 //! else, which is what keeps `restore_domain` (crates/cli/src/board.rs) able to
 //! undo it without touching the board or the schematic.
 
-use eda_model::ir::{LibraryFootprint, LibraryPad, LibrarySymbol};
+use eda_model::ir::{LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolPin};
 use eda_model::symbol::SPoint;
 use eda_model::CheckResult;
 
@@ -181,6 +181,79 @@ pub fn change_pin_length(pin: &mut eda_model::ir::LibrarySymbolPin, new_length_m
     pin.length_mm = new_length_mm;
 }
 
+/// `LIB_SYMBOL::SetUnitCount( aCount, true )` (eeschema/lib_symbol.cpp), as `DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow` calls it:
+/// - fewer units: every pin and graphic with `m_unit > aCount` is erased (`m_drawings.erase( it )`), so the file no longer has the dropped
+///   units' `Name_<unit>_<style>` sub-symbols (the dialog asked "Delete extra units from symbol?" first, `Validate`);
+/// - more units: every item of unit 1 (`item.m_unit != 1` skipped, so the items common to all units stay as they are) is duplicated into each new
+///   unit `prevCount + 1 ..= aCount`; the copies get new ids here.
+///
+/// The unit display names follow the dialog's grid, which has one row per unit (`OnUnitSpinCtrl` deletes the extra rows), so the name of a
+/// dropped unit goes with it.
+pub fn set_unit_count(sym: &mut LibrarySymbol, count: u32) {
+    let prev = sym.unit_count.max(1);
+    if count < prev {
+        sym.pins.retain(|p| p.unit <= count);
+        sym.graphics.retain(|g| g.unit() <= count);
+    } else if count > prev {
+        let mut new_pins = Vec::new();
+        let mut new_graphics = Vec::new();
+        for unit in prev + 1..=count {
+            new_pins.extend(sym.pins.iter().filter(|p| p.unit == 1).map(|p| LibrarySymbolPin { id: String::new(), unit, ..p.clone() }));
+            new_graphics.extend(sym.graphics.iter().filter(|g| g.unit() == 1).map(|g| {
+                let mut copy = g.clone();
+                copy.set_id(String::new());
+                copy.set_unit(unit);
+                copy
+            }));
+        }
+        sym.pins.extend(new_pins);
+        sym.graphics.extend(new_graphics);
+        sym.assign_missing_ids();
+    }
+    sym.kicad.unit_names.retain(|unit, _| *unit <= count);
+    sym.unit_count = count;
+}
+
+/// `LIB_SYMBOL::SetBodyStyleCount` as KiCad 25ec2335's `TransferDataFromWindow` calls it, before `SetHasDeMorganBodyStyles`:
+/// - "'Standard' and 'Alternate' De Morgan body styles" on a single-style symbol, `SetBodyStyleCount( 2, false, true )`: the pins of body style 1
+///   are duplicated into body style 2 (`aDuplicateDrawItems` false: the graphics are not);
+/// - "Single body style" on a De Morgan symbol, `SetBodyStyleCount( 1, false, false )`: every item with `m_bodyStyle > 1` is erased ("Delete
+///   converted shape items because the converted shape does not exist"), after `Validate`'s "Delete extra body styles from symbol?".
+///
+/// 8303b2ad calls `SetHasDeMorganBodyStyles` first, so its `SetBodyStyleCount` finds the count already changed and returns at once, copying and
+/// erasing nothing; 25ec2335 swapped the two calls. This follows 25ec2335 (the question is asked in both).
+pub fn set_alternate_body_style(sym: &mut LibrarySymbol, demorgan: bool) {
+    if sym.has_alternate_body_style == demorgan {
+        return;
+    }
+    if demorgan {
+        let copies: Vec<LibrarySymbolPin> = sym.pins.iter().filter(|p| p.body_style == 1).map(|p| LibrarySymbolPin { id: String::new(), body_style: 2, ..p.clone() }).collect();
+        sym.pins.extend(copies);
+        sym.assign_missing_ids();
+    } else {
+        sym.pins.retain(|p| p.body_style <= 1);
+        sym.graphics.retain(|g| g.body_style() <= 1);
+    }
+    sym.has_alternate_body_style = demorgan;
+}
+
+/// The Pin Table's Unit and Body Style cells (`dialog_lib_edit_pin_table.cpp`, `GRID_CELL_COMBOBOX`): "All" (0) or one of the symbol's units, and
+/// "All" or Standard / Alternate when the symbol has De Morgan body styles. `PIN_INFO_FORMATTER::UpdatePin` ignores a value that names none of
+/// them; the verbs refuse it here, since the writer would make a `Name_<unit>_1` sub-symbol for a unit the symbol does not have (KiCad then reads
+/// more units) and drops a pin of a body style the symbol does not have.
+pub(crate) fn check_pin_unit_and_style(sym: &LibrarySymbol, pin: &LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
+    let units = sym.unit_count.max(1);
+    if pin.unit > units {
+        return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, format!("the symbol has {units} unit(s): a pin's unit is 0 (all units) or one of them, not {}", pin.unit))]);
+    }
+    let styles = if sym.has_alternate_body_style { 2 } else { 1 };
+    if pin.body_style > styles {
+        let what = if styles == 1 { "the symbol has one body style: a pin's body style is 0 (all) or 1" } else { "a pin's body style is 0 (all), 1 (Standard) or 2 (Alternate)" };
+        return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, format!("{what}, not {}", pin.body_style))]);
+    }
+    Ok(())
+}
+
 fn bad_name(subject: &str, what: &str, c: char) -> Vec<CheckResult> {
     vec![CheckResult::fail("ops_bad_name", subject, format!("{what} cannot contain {c:?}"))]
 }
@@ -225,7 +298,21 @@ impl<'a> Board<'a> {
     }
 
     fn symbol_lib_id_taken(&self, lib_id: &str) -> bool {
-        self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).is_some() || self.model.symbol_of(lib_id).is_some()
+        self.project_symbol_in_any_case(lib_id).is_some() || self.model.symbol_of(lib_id).is_some()
+    }
+
+    /// `SYMBOL_LIBRARY_MANAGER::SymbolNameInUse`: the project library symbol of the same library whose name is `lib_id`'s in any case
+    /// (`candidate.CmpNoCase( unescapedName ) == 0`), as it is spelled there.
+    fn project_symbol_in_any_case(&self, lib_id: &str) -> Option<String> {
+        let (lib, item) = split_lib_name(lib_id);
+        let lib_section = self.design.symbol_library.as_ref()?;
+        if lib_section.by_lib_id(lib_id).is_some() {
+            return Some(lib_id.to_string());
+        }
+        lib_section.symbols.iter().find(|s| {
+            let (l, i) = split_lib_name(&s.lib_id);
+            l == lib && i.to_lowercase() == item.to_lowercase()
+        }).map(|s| s.lib_id.clone())
     }
 
     /// See [`Cmd::PutLibraryFootprint`](crate::Cmd::PutLibraryFootprint).
@@ -328,8 +415,9 @@ impl<'a> Board<'a> {
     /// See [`Cmd::PutLibrarySymbol`](crate::Cmd::PutLibrarySymbol).
     pub(crate) fn put_library_symbol(&mut self, sym: &LibrarySymbol, overwrite: bool) -> Result<(), Vec<CheckResult>> {
         check_symbol_lib_id(&sym.lib_id)?;
-        let in_library = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(&sym.lib_id)).is_some();
-        if !overwrite && (in_library || self.symbol_lib_id_taken(&sym.lib_id)) {
+        // a name the library has in another case is the same symbol (`SymbolNameInUse`), and an overwrite replaces it
+        let same_name = self.project_symbol_in_any_case(&sym.lib_id);
+        if !overwrite && (same_name.is_some() || self.symbol_lib_id_taken(&sym.lib_id)) {
             return Err(vec![CheckResult::fail("ops_symbol_exists", &sym.lib_id, "a symbol with this name already exists; pick another name")]);
         }
         let mut entry = sym.clone();
@@ -360,7 +448,7 @@ impl<'a> Board<'a> {
         entry.unit_count = entry.unit_count.max(1);
         entry.assign_missing_ids();
         let lib = self.symbol_library_mut();
-        lib.symbols.retain(|s| s.lib_id != entry.lib_id);
+        lib.symbols.retain(|s| s.lib_id != entry.lib_id && Some(&s.lib_id) != same_name.as_ref());
         lib.symbols.push(entry);
         Ok(())
     }
@@ -374,12 +462,13 @@ impl<'a> Board<'a> {
         if new_lib_id == lib_id {
             return Ok(());
         }
-        let clash_in_library = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(new_lib_id)).is_some();
-        if !overwrite && (clash_in_library || self.symbol_lib_id_taken(new_lib_id)) {
+        // the name in any case (`SymbolNameInUse`), the symbol's own name in another case aside
+        let clash = self.project_symbol_in_any_case(new_lib_id).filter(|c| c != lib_id);
+        if !overwrite && (clash.is_some() || (self.model.symbol_of(new_lib_id).is_some() && !new_lib_id.eq_ignore_ascii_case(lib_id))) {
             return Err(vec![CheckResult::fail("ops_symbol_exists", new_lib_id, "a symbol with this name already exists; pick another name")]);
         }
         let lib = self.symbol_library_mut();
-        lib.symbols.retain(|s| s.lib_id != new_lib_id);
+        lib.symbols.retain(|s| s.lib_id != new_lib_id && Some(&s.lib_id) != clash.as_ref());
         lib.by_lib_id_mut(lib_id).expect("checked above").lib_id = new_lib_id.to_string();
         if let Some(l) = self.design.symbol_library.as_mut() {
             l.embedded.remove(new_lib_id);
@@ -751,6 +840,22 @@ mod verb_tests {
         assert_eq!(b.apply(&Cmd::RenameLibrarySymbol { lib_id: "eda:Renamed".into(), new_lib_id: "eda:Other".into(), overwrite: false }).unwrap_err()[0].check, "ops_symbol_exists");
         b.apply(&Cmd::RenameLibrarySymbol { lib_id: "eda:Renamed".into(), new_lib_id: "eda:Other".into(), overwrite: true }).unwrap();
         assert_eq!(b.design().symbol_library.as_ref().unwrap().symbols.len(), 1);
+    }
+
+    #[test]
+    fn a_symbol_name_is_taken_in_any_case() {
+        // `SYMBOL_LIBRARY_MANAGER::SymbolNameInUse`: `candidate.CmpNoCase( unescapedName ) == 0` (r7 E7-S18)
+        let m = ConstraintModel::default();
+        let mut b = board(&m);
+        b.apply(&Cmd::PutLibrarySymbol { symbol: symbol_with_pins("eda:amp"), overwrite: false }).unwrap();
+        assert_eq!(b.apply(&Cmd::PutLibrarySymbol { symbol: symbol_with_pins("eda:AMP"), overwrite: false }).unwrap_err()[0].check, "ops_symbol_exists");
+        b.apply(&Cmd::PutLibrarySymbol { symbol: symbol_with_pins("eda:Other"), overwrite: false }).unwrap();
+        assert_eq!(b.apply(&Cmd::RenameLibrarySymbol { lib_id: "eda:Other".into(), new_lib_id: "eda:Amp".into(), overwrite: false }).unwrap_err()[0].check, "ops_symbol_exists");
+        // a symbol renamed to its own name in another case is no clash; an overwrite replaces the other spelling
+        b.apply(&Cmd::RenameLibrarySymbol { lib_id: "eda:Other".into(), new_lib_id: "eda:OTHER".into(), overwrite: false }).unwrap();
+        b.apply(&Cmd::PutLibrarySymbol { symbol: symbol_with_pins("eda:Amp"), overwrite: true }).unwrap();
+        let ids: Vec<&str> = b.design().symbol_library.as_ref().unwrap().symbols.iter().map(|s| s.lib_id.as_str()).collect();
+        assert_eq!(ids, ["eda:OTHER", "eda:Amp"]);
     }
 
     #[test]

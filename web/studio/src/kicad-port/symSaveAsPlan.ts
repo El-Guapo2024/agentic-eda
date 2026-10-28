@@ -7,6 +7,10 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { LibrarySymbol } from "../api/types";
 import { bareName, libraryOf } from "./symFields";
+import { symbolNameInUse } from "./libraryNames";
+
+/** A name is in use in any case (`SYMBOL_LIBRARY_MANAGER::SymbolNameInUse`, `CmpNoCase`; r7 E7-S18). */
+const inUseAnyCase = (taken: Iterable<string>, libId: string) => symbolNameInUse(libId, taken);
 
 export type ConflictStrategy = "overwrite" | "rename";
 
@@ -28,7 +32,7 @@ const sameLibrary = (a: string, b: string) => libraryOf(a) === libraryOf(b);
 /** `CheckSavingIntoOwnInheritance`: the name is in the symbol's ancestry, or the symbol is in the ancestry of the one that would be replaced. Only inside one library, and only for a name in use. */
 export function savingIntoOwnInheritance(chain: readonly LibrarySymbol[], newLibId: string, taken: ReadonlySet<string>, parentOf: (libId: string) => string | undefined): { inAncestry: boolean; inDescendants: boolean } {
   const leaf = chain[0]!;
-  if (!sameLibrary(leaf.lib_id, newLibId) || !taken.has(newLibId)) return { inAncestry: false, inDescendants: false };
+  if (!sameLibrary(leaf.lib_id, newLibId) || !inUseAnyCase(taken, newLibId)) return { inAncestry: false, inDescendants: false };
   const inAncestry = chain.slice(1).some((p) => bareName(p.lib_id) === bareName(newLibId));
   let inDescendants = false;
   for (let at = parentOf(newLibId), n = 0; at && n < 64; at = parentOf(at), n++) {
@@ -44,7 +48,7 @@ export function savingIntoOwnInheritance(chain: readonly LibrarySymbol[], newLib
 export function chainConflicts(input: Pick<SaveAsInput, "chain" | "newLibId" | "flatten" | "taken">): string[] {
   const { chain, newLibId, flatten, taken } = input;
   const lib = libraryOf(newLibId);
-  const inUse = (bare: string) => taken.has(lib ? `${lib}:${bare}` : bare);
+  const inUse = (bare: string) => inUseAnyCase(taken, lib ? `${lib}:${bare}` : bare);
   const out: string[] = [];
   if (sameLibrary(chain[0]!.lib_id, newLibId) || flatten) {
     if (inUse(bareName(newLibId))) out.push(bareName(newLibId));
@@ -75,7 +79,7 @@ export function savePlan(input: SaveAsInput): LibrarySymbol[] {
     if (strategy === "overwrite") return proposed;
     for (let n = 1; ; n++) {
       const candidate = `${proposed}_${n}`;
-      if (!used.has(lib ? `${lib}:${candidate}` : candidate)) return candidate;
+      if (!inUseAnyCase(used, lib ? `${lib}:${candidate}` : candidate)) return candidate;
     }
   };
   // what is copied, leaf first: the flat symbol; the symbol itself into its own library (it keeps its parent); the whole chain into another one

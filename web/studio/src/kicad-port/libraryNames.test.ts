@@ -71,3 +71,13 @@ test("saveAsSymbolName: trimmed, spaces become underscores, then escaped", () =>
   assert.equal(symbolLibIdError("eda:" + saveAsSymbolName("a:b c")), null, "the escaped name is a legal symbol name");
   assert.equal(saveAsSymbolName("   "), "");
 });
+
+test("a symbol's name is taken in any case (SymbolNameInUse's CmpNoCase, r7 E7-S18)", async () => {
+  const { symbolNameInUse, symbolNameInUseAs } = await import("./libraryNames");
+  assert.equal(ensureUniqueLibId("R", ["r"], true), "R_1");
+  assert.equal(ensureUniqueLibId("Lib:Amp", ["Lib:AMP", "Lib:amp_1"], true), "Lib:Amp_2");
+  assert.equal(ensureUniqueLibId("R", ["r"]), "R", "a footprint's name is compared exactly");
+  assert.equal(symbolNameInUse("Lib:R", ["Lib:r"]), true);
+  assert.equal(symbolNameInUse("Lib:R", ["Other:R"]), false);
+  assert.equal(symbolNameInUseAs("Lib:r2", ["Lib:R2"]), "Lib:R2");
+});

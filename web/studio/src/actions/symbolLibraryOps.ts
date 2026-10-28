@@ -10,7 +10,7 @@ import type { Dispatch } from "react";
 import type { Cmd, LibrarySymbol } from "../api/types";
 import { fetchLibrarySymbolFlat, fetchSymbolEditorNames } from "../api/client";
 import { fetchAnySymbol, fetchSymbolKicadSymText, parseSymbolText, pickTextFile, readClipboardText, saveCanvasPng, saveTextFile, writeClipboardText } from "../api/libraryClient";
-import { ensureUniqueLibId, joinLibName, PROJECT_LIBRARY, splitLibName, symbolLibIdError } from "../kicad-port/libraryNames";
+import { ensureUniqueLibId, escapeLibIdName, joinLibName, PROJECT_LIBRARY, splitLibName, symbolLibIdError, symbolNameInUse, symbolNameInUseAs } from "../kicad-port/libraryNames";
 import { PROJECT_SYMBOL_LIB } from "../kicad-port/symEditActions";
 import { clipboardTextForSymbols, looksLikeSymbolText } from "../kicad-port/symClipboard";
 import { bareName, descendantsOf, treeConditions } from "../kicad-port/symFields";
@@ -126,7 +126,7 @@ export async function pasteSymbols(c: SymCtx): Promise<void> {
     const lib = targetLibrary(c);
     const { all } = await names();
     // each symbol under a free name (`ensureUniqueName`); a derived one (a file's clipboard text can hold them) follows its parent's name and comes after it
-    const { puts, ids } = planPaste(symbols, lib, all, ensureUniqueLibId, joinLibName);
+    const { puts, ids } = planPaste(symbols, lib, all, (id, taken) => ensureUniqueLibId(id, taken, true), joinLibName);
     const cmds = puts.map((sym): Cmd => ({ op: "put_library_symbol", symbol: { ...sym, published: false } }));
     if (!(await runBatch(c, cmds))) return;
     await c.api.openSymbol(ids[0]!);
@@ -143,7 +143,7 @@ export async function duplicateSymbol(c: SymCtx): Promise<void> {
   try {
     const { symbol } = await fetchAnySymbol(id);
     const { all } = await names();
-    const libId = ensureUniqueLibId(id, all);
+    const libId = ensureUniqueLibId(id, all, true);
     if (!(await runBatch(c, [{ op: "put_library_symbol", symbol: { ...symbol, lib_id: libId, published: false } }]))) return;
     await c.api.openSymbol(libId);
     select(c, [libId]);
@@ -198,14 +198,17 @@ export async function renameSymbol(c: SymCtx): Promise<void> {
       label: "New name:",
       initial: item,
       okLabel: "Rename",
-      validate: (v) => (v.trim() === "" ? "Symbol must have a name." : symbolLibIdError(joinLibName(lib, v))),
+      // `RENAME_DIALOG` trims the name; `RenameSymbol` escapes it (`EscapeString( aNewName, CTX_LIBID )`), so a colon or a quote is kept as `{colon}`, `{dblquote}`
+      validate: (v) => (v.trim() === "" ? "Symbol must have a name." : symbolLibIdError(joinLibName(lib, escapeLibIdName(v.trim())))),
     });
     if (entered === null) return;
-    const newId = joinLibName(lib, entered);
+    const typed = entered.trim();
+    const newId = joinLibName(lib, escapeLibIdName(typed));
     if (newId === id) return;
     let overwrite = false;
-    if (all.includes(newId)) {
-      if (!(await askConfirm({ title: "Confirmation", message: `Symbol '${entered}' already exists in library '${lib || PROJECT_LIBRARY}'.`, okLabel: "Overwrite" }))) return;
+    // `SymbolNameInUse`: any case; the symbol's own name in another case is not a clash
+    if (symbolNameInUseAs(newId, all.filter((n) => n !== id))) {
+      if (!(await askConfirm({ title: "Confirmation", message: `Symbol '${typed}' already exists in library '${lib || PROJECT_LIBRARY}'.`, okLabel: "Overwrite" }))) return;
       overwrite = true;
     }
     const wasOpen = c.api.getState().libId === id;
@@ -262,7 +265,7 @@ export async function performImport(c: SymCtx, lib: string, chosen: LibrarySymbo
     let skipped = 0;
     for (const sym of chosen) {
       const libId = joinLibName(lib, splitLibName(sym.lib_id).item);
-      if (taken.has(libId) && (resolutions[sym.lib_id] ?? "overwrite") === "skip") {
+      if (symbolNameInUse(libId, taken) && (resolutions[sym.lib_id] ?? "overwrite") === "skip") {
         skipped++;
         continue;
       }
@@ -273,7 +276,7 @@ export async function performImport(c: SymCtx, lib: string, chosen: LibrarySymbo
     const present = new Set(all.filter((n) => (splitLibName(n).lib || PROJECT_LIBRARY) === lib).map((n) => splitLibName(n).item));
     const cmds: Cmd[] = planImport(file, wanted, present).map((sym): Cmd => {
       const libId = joinLibName(lib, splitLibName(sym.lib_id).item);
-      return { op: "put_library_symbol", symbol: { ...sym, lib_id: libId, published: false }, overwrite: taken.has(libId) };
+      return { op: "put_library_symbol", symbol: { ...sym, lib_id: libId, published: false }, overwrite: symbolNameInUse(libId, taken) };
     });
     const first = joinLibName(lib, splitLibName(wanted[0]!.lib_id).item);
     if (!(await runBatch(c, cmds))) return;
@@ -309,7 +312,7 @@ export async function saveAsContext(c: SymCtx, libId: string): Promise<{ chain: 
  */
 export async function performSaveAs(c: SymCtx, req: { libId: string; openCopy: boolean }, puts: LibrarySymbol[], taken: ReadonlySet<string>): Promise<boolean> {
   try {
-    const cmds = puts.map((symbol): Cmd => ({ op: "put_library_symbol", symbol, overwrite: taken.has(symbol.lib_id) || symbol.lib_id === req.libId }));
+    const cmds = puts.map((symbol): Cmd => ({ op: "put_library_symbol", symbol, overwrite: symbolNameInUse(symbol.lib_id, taken) || symbol.lib_id === req.libId }));
     if (!(await runBatch(c, cmds))) return false;
     const copy = puts[puts.length - 1]!.lib_id; // the root comes first and the symbol itself last
     if (req.openCopy) await c.api.openSymbol(copy);

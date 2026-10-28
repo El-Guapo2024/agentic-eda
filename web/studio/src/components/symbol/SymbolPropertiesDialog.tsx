@@ -24,6 +24,10 @@ import { bareName, parentCandidates, wireField } from "../../kicad-port/symField
 import { gridProblem, gridRowsFor, savedFields, type GridRow } from "../../kicad-port/symFieldsGrid";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { notifyLibraryChanged } from "../library/useLibraryNames";
+import { askConfirm } from "../library/libraryDialogs";
+import { escapeLibIdName, joinLibName, PROJECT_LIBRARY, splitLibName, symbolNameInUse } from "../../kicad-port/libraryNames";
+import { unescapeString } from "../../kicad-port/schNetName";
+import { symbolPropertiesQuestions } from "../../kicad-port/symUnits";
 import { SymbolFieldsGrid } from "./SymbolFieldsGrid";
 
 const FORM_KEYS: (keyof SymbolPropertiesFields)[] = ["reference_prefix", "description", "keywords", "datasheet", "power", "in_bom", "on_board", "pin_numbers_hidden", "pin_names_hidden", "pin_name_offset_mm", "unit_count", "has_alternate_body_style", "footprint_filters"];
@@ -56,6 +60,8 @@ export function LibrarySymbolPropertiesDialog() {
   const [candidates, setCandidates] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** "Symbol name:" (`m_SymbolNameCtrl`), shown unescaped (`UnescapeString( m_libEntry->GetName() )`). */
+  const [symbolName, setSymbolName] = useState("");
   /** "Place pin names inside": `m_PinsNameInsideButt->SetValue( GetPinNameOffset() != 0 )`. */
   const [namesInside, setNamesInside] = useState(true);
 
@@ -63,6 +69,7 @@ export function LibrarySymbolPropertiesDialog() {
     if (!subject || !state.propertiesOpen) return;
     let stopped = false;
     setForm(formOf(subject));
+    setSymbolName(unescapeString(bareName(subject.lib_id)));
     setNamesInside(subject.pin_name_offset_mm !== 0);
     setFiltersText(subject.footprint_filters.join(" "));
     setError(null);
@@ -96,12 +103,32 @@ export function LibrarySymbolPropertiesDialog() {
     const problem = gridProblem(rows, !derived);
     if (problem) return setError(problem);
     if (derived && parent === "") return setError("Derived symbol must have a parent selected");
+    // `Validate`: "Confirm destructive actions." -- the dropped units' and body styles' items are deleted (`SetUnitCount`, `SetBodyStyleCount`)
+    for (const question of symbolPropertiesQuestions(subject, form, derived)) {
+      if (!(await askConfirm({ title: "Confirmation", message: question, okLabel: "Yes", cancelLabel: "No" }))) return;
+    }
+    // `TransferDataFromWindow`: the name, escaped for a LIB_ID; an empty one, or one the library has (`SymbolNameInUse`, any case), is refused
+    const { lib } = splitLibName(subject.lib_id);
+    const newName = escapeLibIdName(symbolName);
+    if (newName === "") return setError("Symbol must have a name.");
+    const newLibId = joinLibName(lib, newName);
+    let renamed = false;
+    if (newLibId !== subject.lib_id) {
+      try {
+        const { names } = await fetchSymbolEditorNames();
+        if (symbolNameInUse(newLibId, names.filter((n) => n !== subject.lib_id))) return setError(`Symbol name '${unescapeString(newName)}' already in use in library '${lib || PROJECT_LIBRARY}'.`);
+      } catch {
+        /* the server refuses a taken name as well */
+      }
+      renamed = true;
+    }
+    const target = renamed ? newLibId : subject.lib_id;
     const footprint_filters = filtersText
       .split(/\s+/)
       .map((s) => s.trim())
       .filter(Boolean);
-    // "Power symbols must have value matching name for now"
-    const out = !derived && form.power ? rows.map((r) => (r.name === "Value" ? { ...r, text: bareName(subject.lib_id) } : r)) : rows;
+    // "Power symbols must have value matching name for now": `GetValueField().SetText( newName )`
+    const out = !derived && form.power ? rows.map((r) => (r.name === "Value" ? { ...r, text: newName } : r)) : rows;
     const text = (name: string) => out.find((r) => r.name === name)?.text ?? "";
     // "Place pin names inside": the offset, or `offset == 0 ? 20 : offset` in internal units (0.002 mm, "We interpret an offset of 0 as outside"); unchecked, 0
     const pin_name_offset_mm = storedPinNameOffsetMm(namesInside, form.pin_name_offset_mm, "symbol_properties");
@@ -110,13 +137,19 @@ export function LibrarySymbolPropertiesDialog() {
     const power_local = form.power && !!form.power_local;
     const props: SymbolPropertiesFields = { ...form, pin_name_offset_mm, units_locked, power_local, reference_prefix: text("Reference"), description: text("Description"), datasheet: text("Datasheet"), footprint_filters };
     const cmds: Cmd[] = [];
-    if (derived && parent !== subject.extends) cmds.push({ op: "set_symbol_parent", lib_id: subject.lib_id, parent });
-    cmds.push({ op: "edit_symbol_properties", lib_id: subject.lib_id, ...props });
-    cmds.push({ op: "edit_library_symbol_fields", lib_id: subject.lib_id, fields: savedFields(out).map(wireField) });
+    // `UNDO_REDO::LIB_RENAME`: the rename comes first, so the fields the grid says (the Value among them) are set on the renamed symbol as typed
+    if (renamed) cmds.push({ op: "rename_library_symbol", lib_id: subject.lib_id, new_lib_id: target, overwrite: false });
+    if (derived && parent !== subject.extends) cmds.push({ op: "set_symbol_parent", lib_id: target, parent });
+    cmds.push({ op: "edit_symbol_properties", lib_id: target, ...props });
+    cmds.push({ op: "edit_library_symbol_fields", lib_id: target, fields: savedFields(out).map(wireField) });
     setBusy(true);
     try {
       const ok = await api.cmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
       notifyLibraryChanged();
+      if (ok && renamed) await api.openSymbol(target);
+      // `RebuildSymbolUnitAndBodyStyleLists`: a unit or body style the symbol no longer has goes back to the first
+      if (ok && !derived && state.activeUnit > form.unit_count) dispatch({ type: "SET_ACTIVE_UNIT", unit: 1 });
+      if (ok && !derived && !form.has_alternate_body_style && state.activeBodyStyle > 1) dispatch({ type: "SET_ACTIVE_BODY_STYLE", style: 1 });
       // "if units are locked, graphic items are specific to each unit": `SetDrawSpecificUnit( symbol->UnitsLocked() )` after OK
       if (ok && !derived) dispatch({ type: "SET_DRAW_SPECIFIC", unit: units_locked });
       if (ok) close();
@@ -133,6 +166,20 @@ export function LibrarySymbolPropertiesDialog() {
           <span>{subject.lib_id}</span>
         </div>
         <div className="dialog-body" style={{ maxHeight: "74vh", overflowY: "auto" }}>
+          <div className="kv-grid" style={{ gridTemplateColumns: "180px 1fr", marginBottom: 8 }}>
+            <span>Symbol name:</span>
+            <input
+              value={symbolName}
+              onChange={(e) => {
+                setSymbolName(e.target.value);
+                // `OnSymbolNameText`: a power symbol's Value follows its name
+                if (!derived && form.power) setRows((rs) => rs.map((r) => (r.name === "Value" ? { ...r, text: e.target.value } : r)));
+              }}
+              style={{ width: 300 }}
+              aria-label="Symbol name"
+              data-testid="props-symbol-name"
+            />
+          </div>
           <SymbolFieldsGrid rows={rows} onChange={setRows} parentName={parent ? bareName(parent) : undefined} onError={setError} initialField={state.propertiesField} />
           <div className="kv-grid" style={{ gridTemplateColumns: "180px 1fr", marginTop: 10 }}>
             <span>Keywords:</span>
