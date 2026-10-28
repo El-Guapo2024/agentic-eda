@@ -70,6 +70,7 @@ mod import_kicad;
 mod route_api;
 mod sch_output_api;
 mod sim_api;
+mod sim_model_api;
 mod sheet_drop_api;
 mod sheet_import;
 #[cfg(test)]

@@ -519,4 +519,35 @@ mod tests {
         assert_eq!(back["text"], text);
         assert_eq!(workbook_parse_route(br#"{"text": "{ nope"}"#)["ok"], false);
     }
+
+    /// The Simulation Model dialog's write (`DIALOG_SIM_MODEL::TransferDataFromWindow` for a library model, `web/studio`'s SimModelDialog): U1
+    /// made a subcircuit of a library in the project folder -- `Sim.Library` relative, `Sim.Name`, `Sim.Device` "SUBCKT" and `Sim.Pins` -- and
+    /// kicad-cli's netlist and ngspice find it there. The library's op-amp is a VCVS of gain 1e5, so V(OUT) is very nearly 11 * 0.1 V.
+    #[test]
+    fn a_library_subcircuit_the_model_dialog_picks_simulates() {
+        if !slow() {
+            return;
+        }
+        let opts = eda_sim::netlist::OPTION_DEFAULT_FLAGS;
+        let b = board("libamp", OPAMP);
+        std::fs::create_dir_all(b.join("models")).unwrap();
+        std::fs::write(b.join("models/amp.lib"), "* a test op-amp\n.subckt MYAMP inp inn vcc vee out\nE1 out 0 inp inn 1e5\nR1 vcc vee 1Meg\n.ends MYAMP\n").unwrap();
+        let lib = crate::sim_model_api::library_route(&b, json!({ "path": "models/amp.lib" }).to_string().as_bytes());
+        assert_eq!(lib["models"][0]["pins"], json!(["inp", "inn", "vcc", "vee", "out"]), "{lib}");
+        let edit = |field: &str, value: &str| eda_ops::fields_table::FieldEdit { id: "U1".into(), field: field.into(), value: value.into() };
+        let cmd = eda_ops::Cmd::SetSymbolFields {
+            edits: vec![edit("Sim.Library", "models/amp.lib"), edit("Sim.Name", "MYAMP"), edit("Sim.Device", "SUBCKT"), edit("Sim.Pins", "1=inp 2=inn 3=vcc 4=vee 5=out")],
+            add_fields: vec![],
+            rename_fields: vec![],
+            remove_fields: vec![],
+        };
+        crate::board::step(&b, cmd, false, "test").unwrap();
+        let op = run(&b, json!({ "command": ".op", "options": opts }));
+        // V(IN) is 12 V * 1k / 120k = 0.1 V; the feedback divider takes a 1/11 of V(OUT) back: V(OUT) = A V(IN) / (1 + A / 11)
+        let a = 1e5;
+        let want_out = a * 0.1 / (1.0 + a / 11.0);
+        let out = vector(&op, "v(/out)")[0];
+        assert!((out - want_out).abs() < 1e-6, "V(/OUT) = {out}, by hand {want_out}; netlist {}", op["netlist"]);
+        assert!(op["netlist"].as_str().unwrap().contains("XU1 /IN /FB VCC GND /OUT MYAMP"), "{}", op["netlist"]);
+    }
 }

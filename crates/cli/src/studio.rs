@@ -1073,6 +1073,10 @@ fn handle(
         ("POST", "/api/sim/stop") => respond(stream, "200 OK", "application/json", crate::sim_api::stop_route().to_string().as_bytes()),
         ("POST", "/api/sim/workbook/parse") => respond(stream, "200 OK", "application/json", crate::sim_api::workbook_parse_route(&body).to_string().as_bytes()),
         ("POST", "/api/sim/workbook/text") => respond(stream, "200 OK", "application/json", crate::sim_api::workbook_text_route(&body).to_string().as_bytes()),
+        // The Simulation Model dialog's reads (`crate::sim_model_api`): the symbol's simulation fields and pins, a library's models, the library files.
+        ("POST", "/api/sim/model/symbol") => respond(stream, "200 OK", "application/json", crate::sim_model_api::symbol_route(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/sim/model/library") => respond(stream, "200 OK", "application/json", crate::sim_model_api::library_route(dir, &body).to_string().as_bytes()),
+        ("GET", "/api/sim/model/files") => respond(stream, "200 OK", "application/json", crate::sim_model_api::files_route(dir).to_string().as_bytes()),
         // The schematic control actions' outputs (`crate::sch_export_api`): the Fields Table's BOM file, a legacy BOM generator's output and one symbol's SVG.
         // kicad-cli's, so off the loop like the plots above.
         ("POST", "/api/sch/bom") => offload(stream, lane, dir, job, path, &body, sch_export_api::bom),
