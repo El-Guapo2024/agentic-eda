@@ -136,10 +136,17 @@ impl<'a> Board<'a> {
             // `RotateAndMirrorPin( dummy, parent->GetOrientation() )`: the library pin's direction through the symbol's turn and mirror; a pin with no direction known runs right
             let body = scene.shapes[i].dirs.get(k).map(|&(dx, dy)| m.apply_dir(dx, dy)).unwrap_or((1, 0));
             // the pin's own name and type, from the symbol as it is placed (a swapped pin keeps its own, and sits where the other one was)
-            let lib_pin = placed_lib_symbol(self.model, &scene.sch, sym).and_then(|l| l.pins.iter().find(|p| p.number == number && (p.unit == 0 || p.unit == sym.unit)).cloned());
-            let (name, etype) = match lib_pin {
-                Some(p) => (eda_model::kicad_geom::shown_name(&p.name).to_string(), p.electrical_type),
-                None => (String::new(), String::new()),
+            let lib = placed_lib_symbol(self.model, &scene.sch, sym);
+            let lib_pin = lib.as_ref().and_then(|l| l.pins.iter().find(|p| p.number == number && (p.unit == 0 || p.unit == sym.unit)).cloned());
+            // ... and of the alternate the symbol picked for the pin when it keeps one (`SCH_PIN::GetShownName`: `m_alt`; `GetType`: the alternate's `m_Type`;
+            // `SetAlt` keeps none the library pin does not have, r7 M4)
+            let alt = scene.sch.extras.pin_alternate(&field_key(&sym.id, sym.unit), number);
+            let (name, etype) = match (lib.as_ref(), lib_pin) {
+                (Some(l), Some(p)) => match l.kept_alternate(&p, alt) {
+                    Some(a) => (a.name.clone(), a.electrical_type.clone()),
+                    None => (eda_model::kicad_geom::shown_name(&p.name).to_string(), p.electrical_type),
+                },
+                _ => (String::new(), String::new()),
             };
             // `labelText.Printf( "%s_%s", pin->GetParentSymbol()->GetRef( &sheetPath ), pin->GetNumber() )` for a pin with no name to show
             let text = if name.is_empty() { format!("{}_{}", sym.id, number) } else { name };
