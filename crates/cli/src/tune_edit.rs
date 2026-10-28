@@ -310,9 +310,48 @@ pub struct Constraint {
     pub range: TargetRange,
 }
 
+/// `PCB_TUNING_PATTERN::CreateNew` / `ShowPropertiesDialog` / `EditStart`'s rule lookup (R7-D4):
+///
+/// ```text
+/// constraint = bds.m_DRCEngine->EvalRules( LENGTH_CONSTRAINT, aStartItem, nullptr, layer );   // SKEW_CONSTRAINT for a skew pattern
+/// if( !constraint.IsNull() ) .. m_settings.SetTargetLength( constraint.GetValue() );
+/// ```
+///
+/// through the main rule engine (`eda_drc::rule_board::RuleBoard`, the compiled `.kicad_dru` the router, Inspect and the DRC's own checks use): A is the real
+/// start track `track_id` (its width, layer, net class, groups, sheet .. all there), B is none, and a rules file that does not compile gives no rule. The value
+/// is what `MEANDER_SETTINGS::SetTargetLength( const MINOPTMAX& )` makes of it: `SetTargetLength( Opt() )` (the optimum, else the minimum, with the default
+/// tolerance round it), then the rule's own minimum and maximum when it has them. `None` when no rule applies, or the track is not on the board.
+pub fn rule_constraint(design: &Design, model: &ConstraintModel, kind: TuningMode, track_id: &str, layer: &str) -> Option<Constraint> {
+    use eda_drc::rule_board::RuleBoard;
+    let board = eda_drc::board::build(design, model);
+    let idx = board.tracks.iter().position(|s| s.id.rsplit_once('#').map_or(s.id.as_str(), |(base, _)| base) == track_id && s.layer == layer).or_else(|| board.tracks.iter().position(|s| s.id.rsplit_once('#').map_or(s.id.as_str(), |(base, _)| base) == track_id))?;
+    let rb = RuleBoard::new(design, model, &board, eda_drc::constraints::Units::Mm, model.board.custom_rules_text.as_deref());
+    let item = rb.segment_item_at(idx);
+    let ctype = if kind == TuningMode::DiffPairSkew { CType::Skew } else { CType::Length };
+    let c = rb.engine().eval_rules(ctype, Some(&item), None, Some(layer), None);
+    if c.is_null() || c.parent.is_none() {
+        return None;
+    }
+    let rule = c.parent.and_then(|i| rb.engine().rules.get(i));
+    // `constraint.GetOption( DRC_CONSTRAINT::OPTIONS::TIME_DOMAIN )`: KiCad then sets the target delay (`SetTargetLengthDelay`) and no length. **Differs:** a time
+    // domain rule gives the tuner no target here yet (its values are times, not lengths)
+    if rule.and_then(|r| r.find_constraint(ctype)).is_some_and(|k| k.options & eda_drc::dru::OPT_TIME_DOMAIN != 0) {
+        return None;
+    }
+    let name = rule.map(|r| r.name.clone()).unwrap_or(c.name.clone());
+    let opt = c.value.opt();
+    let tolerance = TargetRange::around(Nm::new(opt));
+    Some(Constraint { name, range: TargetRange { min: c.value.min.unwrap_or(tolerance.min), opt, max: c.value.max.unwrap_or(tolerance.max) } })
+}
+
+/// **INACTIVE** (R7-D4; kept, not deleted, per the user's rule for replaced code): the tuner's old rule lookup, a second evaluator over `BoardRules::custom_rules`
+/// (`eda_kicad::parse_custom_rules`, a second `.kicad_dru` reader beside the rule engine's `crates/drc/src/dru.rs`) on two stand-in tracks with a net and a layer
+/// only, and B the partner. Nothing calls it: [`rule_constraint`] is the lookup. Delete it with the reader once nothing reads `custom_rules`.
+///
 /// `DRC_ENGINE::EvalRules( LENGTH_CONSTRAINT / SKEW_CONSTRAINT, track, partner, layer )`: the last custom rule of the constraint type that applies, in file order. Its
 /// value is what `MEANDER_SETTINGS::SetTargetLength( constraint.GetValue() )` makes of it: the optimum is the rule's, else its minimum, with the default tolerance round it
 /// unless the rule has a minimum or a maximum of its own.
+#[allow(dead_code)]
 pub fn constraint_for(rules: &BoardRules, kind: TuningMode, net: &str, partner: Option<&str>, layer: &str) -> Option<Constraint> {
     let (ty, ctype) = if kind == TuningMode::DiffPairSkew { ("skew", CType::Skew) } else { ("length", CType::Length) };
     // The conditions run through the PCBEXPR port (`DRC_RULE_CONDITION::EvaluateFor`, crates/drc/src/pcbexpr.rs) on two track stand-ins: a net and its class are
@@ -513,7 +552,8 @@ fn constrain(scene: &Scene, pattern: &mut TuningPattern, pk: &Pick) -> (Option<S
     if pattern.override_custom_rules {
         return (partner, None);
     }
-    let c = constraint_for(&scene.env.rules, pattern.mode, &pk.net, partner.as_deref(), &pk.layer);
+    // `EvalRules( .., aStartItem, nullptr, layer )`: the track the pattern starts on (R7-D4)
+    let c = rule_constraint(&scene.design, &scene.model, pattern.mode, &pk.track_id, &pk.layer);
     if let Some(c) = &c {
         if pattern.mode == TuningMode::DiffPairSkew {
             pattern.target_skew = c.range;

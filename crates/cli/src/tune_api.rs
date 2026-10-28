@@ -391,9 +391,8 @@ pub fn pattern(dir: &Path, body: &[u8]) -> Value {
         Err(m) => return err(m),
     };
     let nets = nets_of(&scene.design, &p);
-    let primary = nets.first().cloned().unwrap_or_else(|| p.last_netname.clone());
-    let partner = nets.get(1).cloned();
-    let constraint = tune_edit::constraint_for(&scene.env.rules, p.mode, &primary, partner.as_deref(), &p.layer);
+    // `ShowPropertiesDialog`: `EvalRules( .., *m_items.begin(), nullptr, GetLayer() )`, none for a pattern with no items (R7-D4)
+    let constraint = p.member_ids.first().and_then(|t| tune_edit::rule_constraint(&scene.design, &scene.model, p.mode, t, &p.layer));
     json!({
         "ok": true, "pattern": pattern_json(&p), "mode": mode_name(p.mode), "nets": nets, "info": p.tuning_info(),
         "constraint": constraint.map(|c| json!({ "name": c.name, "min": c.range.min, "opt": c.range.opt, "max": c.range.max })),
@@ -559,6 +558,18 @@ mod tests {
             footprints: vec![fp],
             ..Default::default()
         };
+        // the rules as the `.kicad_dru` text the rule engine compiles (the tuner's targets come from it, R7-D4)
+        let dru: Vec<String> = rules
+            .iter()
+            .map(|r| {
+                let v = |k: &str, n: Option<Nm>| n.map(|n| format!(" ({k} {}mm)", n.mm())).unwrap_or_default();
+                let cond = r.condition.as_deref().map(|c| format!(" (condition \"{c}\")")).unwrap_or_default();
+                format!("(rule {} (constraint {}{}{}{}){cond})", r.name, r.constraint_type, v("min", r.min), v("opt", r.opt), v("max", r.max))
+            })
+            .collect();
+        if !dru.is_empty() {
+            model.board.custom_rules_text = Some(format!("(version 1)\n{}\n", dru.join("\n")));
+        }
         model.board.custom_rules = rules;
         let intent_path = dir.join("intent.yaml");
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
@@ -645,6 +656,18 @@ mod tests {
         // nothing under the cursor
         assert_eq!(hover(&dir, &body(json!({ "x": 15_000_000, "y": 5_000_000, "layer": "F.Cu" })))["hit"], json!(false));
         assert_eq!(std::fs::read_to_string(dir.join("design.json")).unwrap(), before, "hovering does not change the board");
+    }
+
+    /// R7-D4 (`PCB_TUNING_PATTERN::CreateNew`: `EvalRules( LENGTH_CONSTRAINT, aStartItem, nullptr, layer )`): the target comes from the rule engine on the real
+    /// start track -- a rule on its width applies (the old stand-in track had no width), and one asking B does not (B is null).
+    #[test]
+    fn a_length_rule_on_track_width_gives_the_target() {
+        let dir = scratch("width_rule");
+        let rule = |name: &str, min: f64, cond: &str| eda_model::CustomRule { name: name.into(), constraint_type: "length".into(), min: Some(mm(min)), max: None, opt: None, layer: None, severity: None, condition: Some(cond.into()) };
+        setup(&dir, ["SIG", "OTHER"], vec![rule("w", 40.0, "A.Width == 0.25mm"), rule("b", 50.0, "B.NetName == '/SIG'")]);
+        let r = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
+        assert_eq!(r["readout"]["constraint"], "w", "{r}");
+        assert_eq!(r["readout"]["opt"].as_f64(), Some(40.0), "{r}");
     }
 
     #[test]

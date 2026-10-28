@@ -26,6 +26,11 @@
 //! tokenizer has no concept of -- see [`strip_comments`]. Getting this
 //! wrong would silently *activate* a rule the file's author deliberately
 //! disabled, which is worse than not parsing the file at all.
+//!
+//! **INACTIVE as a rule source** (round 7, R7-D4; kept, not deleted, per the user's rule for replaced code): its only reader was the length tuner's target
+//! lookup, which now asks the rule engine (`crates/drc/src/dru.rs`, the port of `DRC_RULES_PARSER`, through `eda_drc::rule_board::RuleBoard`) on the real
+//! start track, as `PCB_TUNING_PATTERN::CreateNew` does. `BoardRules::custom_rules` is still filled (`merge_custom_rules`) and kept in step with the board's
+//! net names, but nothing active reads it; `crates/cli/src/tune_edit.rs` `constraint_for` is its inactive reader.
 
 use eda_model::ir::Nm;
 use eda_model::CustomRule;
