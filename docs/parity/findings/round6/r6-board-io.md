@@ -37,6 +37,8 @@ The round trip does not see the project file: kicad-cli's `pcb upgrade` moves a 
 
 ### F1. A board with legacy design settings in `(setup ..)` loses most of them: the `(defaults ..)` block (copper edge clearance, line widths, text sizes), the pre-defined sizes and the legacy Default-class tokens. kicad-cli then judges our file by other numbers. **high**
 
+**Fixed** on task-r6-board-io: 0035c36c (`import_legacy_setup` / `import_legacy_defaults` / `legacy_setup_design` read every legacy token of `(setup ..)` and `(defaults ..)`; `project_json_for_board` drops the project's `board.design_settings` for such a board (and its net classes for a board with `(net_class ..)` blocks); `crates/kicad/tests/board_io_round6.rs`, slow: no `copper_edge_clearance` on ours either.)
+
 **What differs.**
 - KiCad reads every legacy token of `(setup ..)` (8303b2ad `pcb_io_kicad_sexpr_parser.cpp::parseSetup`, cases `user_trace_width`, `user_via`, `user_diff_pair`, `trace_clearance`, `via_size`, `via_drill`, `uvia_size`, `uvia_drill`, `uvia_min_size`, `uvia_min_drill`, `segment_width`, `edge_width`, `mod_edge_width`, `pcb_text_width`, `pcb_text_size`, `mod_text_width`, `mod_text_size`, `pad_size`, `pad_drill`, `max_error`, `defaults`, ...), sets `m_board->m_LegacyDesignSettingsLoaded = true`, and then **ignores the project file's design settings** (`board.cpp::SetProject`: `project.m_BoardSettings->SetParent( &project, !m_LegacyDesignSettingsLoaded );`, "Set parent, which also will load the values from JSON stored in the project if we don't have legacy design settings loaded already").
 - `parseDefaults` (called for `T_defaults` inside `parseSetup`) reads `edge_clearance` (`designSettings.m_CopperEdgeClearance = parseBoardUnits( T_edge_clearance ); m_board->m_LegacyCopperEdgeClearanceLoaded = true;`), `copper_line_width`, `copper_text_dims`, `courtyard_line_width`, `edge_cuts_line_width`, `silk_line_width`, `silk_text_dims`, `fab_layers_*`, `other_layers_*`, `dimension_units`, `dimension_precision`.
@@ -53,6 +55,8 @@ The round trip does not see the project file: kicad-cli's `pcb upgrade` moves a 
 
 ### F2. The project's Default class keeps only four of its sizes: its microvia and differential-pair sizes are dropped, and the board file we write gives KiCad's defaults instead. **high**
 
+**Fixed** on task-r6-board-io: 0035c36c (`merge_project_net_classes` sets `default_class` from the project's Default class.)
+
 **What differs.**
 - `import.rs:1169` (`merge_project_net_classes`) reads the project's `Default` class for `clearance`, `track_width`, `via_diameter`, `via_drill` only; `parse_project_net_classes` (`import.rs:1066`) skips `Default` ("the board-default fields already cover this"). `microvia_diameter`, `microvia_drill`, `diff_pair_width`, `diff_pair_gap`, `diff_pair_via_gap` of the Default class are never read, so `BoardRules::default_class` stays `None` for every KiCad 7+ project (only a legacy `(net_class ..)` block sets it, `import.rs:624`).
 - The writer (`pcb.rs:620`, `write_class_micro_and_pair`) then writes `(uvia_dia 0.3) (uvia_drill 0.1)` and no `diff_pair_*` for Default. kicad-cli reads this legacy block (`parseNETCLASS`: `std::make_shared<NETCLASS>( wxEmptyString )`, initialised with KiCad's defaults, 0.2 / 0.25 for the pair) and moves it into the project (`m_LegacyNetclassesLoaded`), replacing the project's own Default.
@@ -67,6 +71,8 @@ The round trip does not see the project file: kicad-cli's `pcb upgrade` moves a 
 
 ### F3. Board Setup's Dimensions defaults never come from the project or go back to it. **medium**
 
+**Fixed** on task-r6-board-io: 0035c36c (`merge_project_dimension_defaults` (schema-0 migration, `PARAM` ranges and reset-if-missing) and `export_kicad_pro_for` writes them when not KiCad's defaults.)
+
 **What differs.** `BOARD_DESIGN_SETTINGS` keeps the dimension defaults in the project (8303b2ad `board_design_settings.cpp`: `defaults.dimension_units` (833), `defaults.dimension_precision` (837), `defaults.dimensions.units_format`, `suppress_zeroes`, `text_position`, `keep_text_aligned`, `arrow_length`, `extension_offset`), and migrates the precision from schema 0 (`migrateSchema0to1`). Ours holds them as `DrawingsSection::dimension_settings` (`ir.rs:2580`, edited by `Cmd::SetDimensionSettings`), but `merge_project_design_rules` (`import.rs:1293-1325`) reads no `dimension*` key and `export_kicad_pro` (`pcb.rs:766-781`) writes none. So an imported project's dimension style (e.g. inches, precision 2) is replaced by ours for every new dimension, and an edit on the page reaches no KiCad file.
 
 **How to see it.** A `.kicad_pro` with `"defaults": {"dimension_units": 0, "dimension_precision": 2, "dimensions": {"arrow_length": 2540000, ...}}`: import, draw a dimension in the studio: it is in our default units and precision.
@@ -76,6 +82,8 @@ The round trip does not see the project file: kicad-cli's `pcb upgrade` moves a 
 **Known?** No (GAPS 3 lists the page's other leftovers).
 
 ### F4. The tuner's `.kicad_dru` reader keeps one constraint per rule and never matches `(layer outer)` / `(layer inner)`. **medium**
+
+**Fixed** on task-r6-board-io: b4ae2230 (a `CustomRule` per `(constraint ..)`; `eda_kicad::rule_layer_matches` for `outer` / `inner`.)
 
 **What differs.**
 - `crates/kicad/src/custom_rules.rs:114` (`parse_rule`): `sexpr::find(r, "constraint")`, the first `(constraint ..)` only. 8303b2ad `drc_rule_parser.cpp::parseDRC_RULE` adds every `T_constraint` to `rule->m_Constraints`, and `DRC_ENGINE::compileRules` (drc_engine.cpp:729) files each one by its type. A rule written `(rule DDR (condition ..) (constraint length (min 50mm) (max 60mm)) (constraint skew (max 0.1mm)))` (a common shape for a length-matched bus) gives the tuner its length and no skew; written the other way round, no length.
@@ -90,6 +98,8 @@ The round trip does not see the project file: kicad-cli's `pcb upgrade` moves a 
 
 ### F5. A footprint library file in KiCad 5's `(module ..)` form cannot be resolved for a part; KiCad loads it. **medium**
 
+**Fixed** on task-r6-board-io: 4e6cae39 (`(module ..)` accepted.)
+
 **What differs.** `crates/kicad/src/footprint_lib.rs:75` (`parse_footprint_file`, used by `resolve_library_footprints_with` at :274 for every `Library:Footprint` a part names): `.filter(|l| sexpr::tag(l) == Some("footprint")).ok_or("top-level form is not (footprint ...); not a KiCad footprint file")`. 8303b2ad `parseFOOTPRINT_unchecked` (pcb_io_kicad_sexpr_parser.cpp:4960): `wxCHECK_MSG( CurTok() == T_module || CurTok() == T_footprint, ..`. The editor's reader (`footprint_import.rs:78`) accepts both. The round-5 overbar call added at `footprint_lib.rs:73` is therefore unreachable for the files that need it most (KiCad 5 `.pretty` libraries are all `(module ..)`, pre-20210606).
 
 **How to see it.** A project library `old.pretty/R.kicad_mod` starting `(module R (layer F.Cu) (tedit 5B307E4C) ..)`, a part with `footprint: old:R`: the CLI prints "<path>: top-level form is not (footprint ...)" and the part has no footprint.
@@ -99,6 +109,8 @@ The round trip does not see the project file: kicad-cli's `pcb upgrade` moves a 
 **Known?** No.
 
 ### F6. The project's rule values outside KiCad's range are kept; KiCad replaces them with the default. **low**
+
+**Fixed** on task-r6-board-io: 0035c36c (each `rules.*` key's range and default, the Text & Graphics strokes and sizes, `min_resolved_spokes` 0-99 else 2; `defaults` read without `rules`.)
 
 `import.rs:1230-1286` takes every `rules.*` number as it is (only `max_error` is floored at 1 nm, `min_resolved_spokes` capped at 99). KiCad's `PARAM_SCALED<int>::Load` (`include/settings/parameters.h`): `if( val > m_max || val < m_min ) val = m_default;`, with the ranges of `board_design_settings.cpp` 269-336 and 1026 (e.g. `rules.max_error` 0.0001-1 mm, default `ARC_HIGH_DEF` 0.005 mm; `min_clearance` 0-25 mm; `min_copper_edge_clearance` -0.01-25 mm; `min_silk_clearance` -10-100 mm). A hand-edited `"max_error": 0` is 5 um in KiCad and 1 nm here. Also `merge_project_design_rules` returns before reading `defaults` when the project has no `rules` object (`import.rs:1223`). Test: `an_out_of_range_rule_value_reads_as_kicads_default`.
 

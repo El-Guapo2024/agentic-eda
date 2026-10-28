@@ -104,7 +104,7 @@
 
 ### D6-1. kicad-cli already rebuilds every drill chart on every run, so the port's cells only ever reach the studio's canvas and the saved file; `kicad-cli pcb upgrade` could replace it (low, reuse)
 
-**Open**: held for the user's decision (skipped on task-r6-editors-exports).
+**Fixed** on task-r6-board-io: d72c0ae5 (the user's decision, 2026-10-28: keep the Rust refresh, port what it lacked): a via's backdrill spans and "Backdrill" rows with their stub lengths, post-machining in the key, the board's layer names in FROM / TO, the backdrill filter; imperial drills keyed from nanometres (`d304800`, printed 0.305 as KiCad prints it); `crates/ops/tests/drill_charts_kicad_cli.rs` holds a 10-column chart of all of them (with and without a stackup, and filtered) cell for cell to `kicad-cli pcb upgrade`'s.
 
 - **What the port does.** `crates/ops/src/drill_chart.rs` (869 lines) ports `EnumerateDrillOperations`, `GroupKeyString`, `DRILL_CHART_MODEL::Build`, `AssignDrillSymbols`, `PCB_DRILL_CHART::generate`, `PCB_GENERATED_TABLE::RebuildCells`, `migrateRows` and `RefreshGeneratedTables`; `Board::refresh_drill_charts` runs it after every command, in that command's undo step (`PARITY-pcb.md:2049`, "identical to kicad-cli's `pcb upgrade`"; proof `crates/ops/tests/drill_charts_kicad_cli.rs`, which compares with `pcb upgrade --force`).
 - **The kicad-cli command that does the same.** `kicad-cli pcb upgrade <board>` (`PCBNEW_JOBS_HANDLER::JobUpgrade`, 25ec2335 `pcbnew_jobs_handler.cpp:3300-3330`):
