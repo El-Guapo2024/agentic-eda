@@ -16,12 +16,20 @@
 // control's own selection state (the position is derived from the selected item instead), the
 // sheet-pin item kind (this studio's sheet pins carry no net).
 import { messageTextFromValue, type MessageUnits } from "./messageText";
+import { referenceUnitSuffix, subpartIdsOf } from "./schUnits";
+import { resolveLibSymbol } from "../components/schematic/libSymbol";
+import type { Schematic } from "../api/types";
 
 export interface NavPin {
-  /** Reference of the owning symbol. */
+  /** Reference of the owning symbol (the id it is selected by, and the `REF` of the wires' "REF.PIN" ends). */
   ref: string;
+  /** The reference as the item's text shows it, `SCH_SYMBOL::GetRef( &aSheetPath, true )`: with the unit's sub-reference for a symbol of more than one unit
+   *  (`U1B`, r7 A7-M1). Absent: `ref`. */
+  shownRef?: string;
   number: string;
   name: string | null;
+  /** The alternate function the placed pin picked, which `SCH_PIN::GetShownName` gives in place of the library pin's name (`m_alt`, r7 A7-M1). */
+  alt?: string | null;
   /** World position of the pin's connection end, um (matches a no-connect flag's `at`). */
   tip: readonly [number, number];
   /** The net the tracer put the pin on (the placed pin's `net`), when known: a pin joined by a label on its end or by touching another pin is on
@@ -82,7 +90,9 @@ export function netNavigatorItems(sch: NavSchematic, net: string, units: Message
   const pinTips = new Set<string>();
   for (const p of sch.pins) {
     if (p.net !== undefined ? p.net !== net : !onNet.has(`${p.ref}.${p.number}`)) continue;
-    const text = `Symbol '${p.ref}' pin '${p.number}'` + (p.name ? ` (${p.name})` : "");
+    // `GetNetNavigatorItemText`: `GetRef( &aSheetPath, true )` and `UnescapeString( pin->GetShownName() )` (the alternate when the pin has one)
+    const shownName = p.alt || p.name;
+    const text = `Symbol '${p.shownRef ?? p.ref}' pin '${p.number}'` + (shownName ? ` (${shownName})` : "");
     out.push({ key: `pin:${p.ref}.${p.number}`, owner: p.ref, text });
     pinTips.add(`${p.tip[0]},${p.tip[1]}`);
   }
@@ -118,3 +128,22 @@ export function stepNetItem(items: readonly NavItem[], currentKey: string | null
   const next = forward ? (i + 1) % items.length : (i + items.length - 1) % items.length;
   return items[next] ?? null;
 }
+
+/** The sheet as the net item list reads it. */
+export function navSchematic(s: Schematic): NavSchematic {
+  return {
+    pins: s.symbols.flatMap((sym) => {
+      // the placed pin's traced net (absent: the wires' ends decide)
+      const netOf = new Map((sym.pins ?? []).map((p) => [p.number, p.net ?? null] as const));
+      const altOf = new Map((sym.pins ?? []).filter((p) => p.alt).map((p) => [p.number, p.alt] as const));
+      // the item's text names the symbol by `GetRef( &aSheetPath, true )`: its unit's sub-reference for a symbol of several units (r7 A7-M1)
+      const shownRef = (sym.reference ?? sym.id) + referenceUnitSuffix(s.lib_symbols[sym.lib_id ?? ""], sym.unit, subpartIdsOf(s));
+      return (resolveLibSymbol(sym, s.lib_symbols)?.pins ?? []).map((p) => ({ ref: sym.id, shownRef, number: p.pin.number, name: p.pin.name, alt: altOf.get(p.pin.number) ?? null, tip: p.tip, ...(netOf.has(p.pin.number) ? { net: netOf.get(p.pin.number) } : {}) }));
+    }),
+    wires: s.wires,
+    labels: s.labels,
+    powerSymbols: s.power_symbols,
+    noConnects: s.no_connects,
+  };
+}
+

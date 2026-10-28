@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { nextUnitToPlace, unitCountOf } from "./schUnits";
+import { nextUnitToPlace, referenceUnitSuffix, subpartIdsOf, unitCountOf } from "./schUnits";
 import type { LibSymbol } from "../api/types";
 
 const pin = (unit: number) => ({ number: "1", name: null, electrical_type: "passive", shape: "line", at: [0, 0], angle_deg: 0, length_mm: 2.54, unit, body_style: 1, hidden: false }) as unknown as LibSymbol["pins"][number];
@@ -22,4 +22,20 @@ test("the next unit is the lowest one not yet placed", () => {
 test("a single-unit symbol and a fully placed one say why nothing is placed", () => {
   assert.deepEqual(nextUnitToPlace(1, [1]), { ok: false, message: "This symbol has only one unit." });
   assert.deepEqual(nextUnitToPlace(2, [1, 2]), { ok: false, message: "All units of this symbol are already placed." });
+});
+
+test("a placed unit's reference has its suffix whenever the symbol has more than one unit, in the project's naming (r7 M3, H5)", () => {
+  const two = { pins: [pin(1), pin(2)], graphics: [] };
+  // one placement of a two-unit symbol is still U1A (GetRef: GetUnitCount() > 1), a single-unit symbol never has one
+  assert.equal(referenceUnitSuffix(two, 1), "A");
+  assert.equal(referenceUnitSuffix({ pins: [pin(1)], graphics: [] }, 1), "");
+  assert.equal(referenceUnitSuffix({ pins: [pin(1)], graphics: [], unit_count: 4 }, 3), "C", "the server's unit count wins");
+  assert.equal(referenceUnitSuffix(undefined, 2), "");
+  // "subpart_id_separator": 46, "subpart_first_id": 49 -- VD1.1, VD1.3
+  const dotted = subpartIdsOf({ subpart_id_separator: 46, subpart_first_id: 49 });
+  assert.equal(referenceUnitSuffix(two, 1, dotted), ".1");
+  assert.equal(referenceUnitSuffix({ ...two, unit_count: 3 }, 3, dotted), ".3");
+  // a display name follows the separator too (SCH_SYMBOL::SubReference)
+  assert.equal(referenceUnitSuffix({ ...two, unit_names: { "2": "Pwr" } }, 2, dotted), ".Pwr");
+  assert.equal(referenceUnitSuffix(two, 2, subpartIdsOf({ subpart_first_id: 97 })), "b", "letters from 'a'");
 });

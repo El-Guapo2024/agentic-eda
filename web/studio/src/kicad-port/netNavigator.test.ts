@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { netNavigatorItems, sheetNets, stepNetItem, type NavSchematic } from "./netNavigator";
+import { navSchematic, netNavigatorItems, sheetNets, stepNetItem, type NavSchematic } from "./netNavigator";
+import type { Schematic } from "../api/types";
 
 const sch: NavSchematic = {
   pins: [
@@ -96,4 +97,18 @@ test("r6 C6-M1: sheetNets lists a local label's traced net once, not its text be
   assert.deepEqual(nets, ["/BAR"]);
   // a label on no wire is its own text's net
   assert.deepEqual(sheetNets({ wires: [], labels: [{ net: "FOO", net_name: null }], power_symbols: [], symbols: [] }), ["FOO"]);
+});
+
+test("r7 A7-M1: a_pin_of_a_multi_unit_symbol_is_listed_with_its_unit_and_alternate", () => {
+  const libPin = (number: string, name: string, unit: number) => ({ number, name, electrical_type: "bidirectional", shape: "line", at: [0, 0], angle_deg: 0, length_mm: 2.54, unit, body_style: 0, hidden: false });
+  const sch = {
+    lib_symbols: { "MCU:X": { graphics: [], pins: [libPin("1", "PA0", 1), libPin("5", "PB7", 2)], unit_count: 2 } },
+    symbols: [{ id: "U1", lib_id: "MCU:X", at: [0, 0], rot: 0, mirror: null, unit: 2, body_style: 1, value: null, mpn: null, package: null, footprint: null, datasheet: null, pins: [{ number: "5", name: "PB7", kind: "signal", net: "/SDA", alt: "SDA" }] }],
+    wires: [], labels: [], power_symbols: [], no_connects: [],
+  } as unknown as Schematic;
+  const items = netNavigatorItems(navSchematic(sch), "/SDA", "mm");
+  assert.deepEqual(items.map((i) => [i.text, i.owner]), [["Symbol 'U1B' pin '5' (SDA)", "U1"]]);
+  // the project's unit naming names the unit too (H5): separator '.', numbers from '1'
+  const dotted = { ...sch, subpart_id_separator: 46, subpart_first_id: 49 } as Schematic;
+  assert.equal(netNavigatorItems(navSchematic(dotted), "/SDA", "mm")[0]?.text, "Symbol 'U1.2' pin '5' (SDA)");
 });

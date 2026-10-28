@@ -45,7 +45,7 @@ import { shownText } from "../../kicad-port/schFieldEdit";
 import { schTextLines, textLie } from "../../kicad-port/schTextItem";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
-import { unitLetter } from "../../kicad-port/unitLetter";
+import { referenceUnitSuffix, subpartIdsOf } from "../../kicad-port/schUnits";
 import { DEFAULT_SCH_DISPLAY, ercSeverityShown, type SchDisplayOptions } from "./displayOptions";
 import { bodyBoundsOf } from "./symbolMarkers";
 import { drawSymbolMarkers } from "./symbolMarkersDraw";
@@ -1080,18 +1080,12 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   }
 
   // Symbols (drawn last, like eda-render, so their fill sits on top of any wire stub reaching into the box).
-  // Multi-unit: a reference with more than one placed instance gets its
-  // KiCad-style unit-letter suffix drawn next to the reference ("U1" ->
-  // "U1A"/"U1B"/...), same as real eeschema -- `unitCounts` is only used
-  // to decide *whether* to suffix at all, so a single-unit part (every
-  // placed instance appears here exactly once) keeps the bare reference it
-  // always had.
-  const unitCounts = new Map<string, number>();
-  for (const s of sch.symbols) unitCounts.set(s.id, (unitCounts.get(s.id) ?? 0) + 1);
+  // Multi-unit: the reference gets its unit's sub-reference whenever the library symbol has more than one unit (`SCH_SYMBOL::GetRef( &aSheet, true )`:
+  // `if( aIncludeUnit && GetUnitCount() > 1 ) ref += subRef;`, r7 M3), in the project's unit naming (`SCH_SYMBOL::SubReference`, KiCad 25ec2335, r7 H5).
+  const subpartIds = subpartIdsOf(sch);
   for (const s of sch.symbols) {
     const selected = opts.selection.has(s.id);
-    // `SCH_SYMBOL::SubReference` (KiCad 25ec2335): a unit's display name in place of its letter
-    const unitSuffix = (unitCounts.get(s.id) ?? 1) > 1 ? (sch.lib_symbols[s.lib_id ?? ""]?.unit_names?.[String(s.unit)] ?? unitLetter(s.unit)) : "";
+    const unitSuffix = referenceUnitSuffix(sch.lib_symbols[s.lib_id ?? ""], s.unit, subpartIds);
     const real = resolveLibSymbol(s, sch.lib_symbols);
     if (real) {
       drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected, unitSuffix, display.showHiddenPins, real.texts);
