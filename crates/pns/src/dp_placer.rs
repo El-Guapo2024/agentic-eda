@@ -307,6 +307,7 @@ struct Snapshot {
     legs: usize,
     own_items: Vec<ItemId>,
     prev_pair: Option<DpPrimitivePair>,
+    chained_placement: bool,
     start: DpPrimitivePair,
     start_diagonal: bool,
     initial_diagonal: bool,
@@ -345,6 +346,9 @@ pub struct DiffPairPlacer {
     initial_diagonal: bool,
     /// `m_currentLayer`.
     current_layer: i32,
+    /// `m_chainedPlacement`: the last fix ended in tracks (not vias, not on the target), so the next leg is chained to them and [`Self::set_layer`]
+    /// refuses.
+    chained_placement: bool,
     /// `m_placingVia`, and the layer the route goes on to after the vias (`switchLayerOnViaPlacement`).
     placing_via: bool,
     via_to_layer: Option<i32>,
@@ -439,6 +443,7 @@ impl DiffPairPlacer {
             sizes,
             start: found.pair,
             prev_pair: None,
+            chained_placement: false,
             start_items: vec![found.id_p, found.id_n],
             own_items: Vec::new(),
             all_layers,
@@ -487,6 +492,49 @@ impl DiffPairPlacer {
         }
         self.current_trace.width = self.sizes.width;
         self.current_trace.set_gap(self.sizes.gap);
+    }
+
+    /// `DIFF_PAIR_PLACER::SetLayer` (R7-R3): idle, any layer; refused once a fix chained the pair to its tracks (`m_chainedPlacement`) or before the
+    /// first Move (`!m_prevPair`); else the pair moves to `layer` when what it goes on from is no item, or a pair of vias on that layer:
+    ///
+    /// ```text
+    /// else if( !m_prevPair->PrimP() || ( m_prevPair->PrimP()->OfKind( ITEM::VIA_T ) && m_prevPair->PrimP()->Layers().Overlaps( aLayer ) ) )
+    /// { m_currentLayer = aLayer; m_start = *m_prevPair; initPlacement(); Move( m_currentEnd, nullptr ); return true; }
+    /// ```
+    ///
+    /// A pair started on pads stays on its layer (a pad is a `SOLID`, even a through-hole one), and the studio arms a pair of vias instead. The
+    /// `Move` is the caller's next `dp_move`.
+    pub fn set_layer(&mut self, layer: i32) -> bool {
+        if self.idle {
+            self.current_layer = layer;
+            return true;
+        }
+        if self.chained_placement {
+            return false;
+        }
+        let Some(prev) = self.prev_pair.clone() else { return false };
+        let free = match &prev.prim_p {
+            None => true,
+            Some(it) => matches!(it, Item::Via(_)) && it.layers().overlaps_layer(layer),
+        };
+        if !free {
+            return false;
+        }
+        self.current_layer = layer;
+        self.start = prev;
+        // `initPlacement`: the head starts afresh over the world the fixes left, the shove's stack empty
+        self.start_diagonal = self.initial_diagonal;
+        self.current_end_item = None;
+        self.current_trace.p.clear();
+        self.current_trace.n.clear();
+        self.current_trace.remove_vias();
+        self.last_node = None;
+        self.shoved_lines.clear();
+        self.shoved_vias.clear();
+        self.springback = Springback::new();
+        self.snap_on_target = false;
+        self.fit_ok = false;
+        true
     }
 
     /// `DIFF_PAIR_PLACER::FlipPosture`.
@@ -979,6 +1027,7 @@ impl DiffPairPlacer {
             legs: self.legs.len(),
             own_items: self.own_items.clone(),
             prev_pair: self.prev_pair.clone(),
+            chained_placement: self.chained_placement,
             start: self.start.clone(),
             start_diagonal: self.start_diagonal,
             initial_diagonal: self.initial_diagonal,
@@ -1027,6 +1076,8 @@ impl DiffPairPlacer {
         self.placement_correct = true;
 
         let real_end = self.snap_on_target;
+        // `if( m_currentTrace.EndsWithVias() ) { .. m_chainedPlacement = false; } else m_chainedPlacement = !m_snapOnTarget && !aForceFinish;`
+        self.chained_placement = vias.is_none() && !self.snap_on_target && !force_finish;
         if let Some((a, _)) = &vias {
             // `switchLayerOnViaPlacement` -> `SetLayer`: on from the vias, on the other layer
             let _ = a;
@@ -1083,6 +1134,7 @@ impl DiffPairPlacer {
         self.legs.truncate(was.legs);
         self.own_items = was.own_items;
         self.prev_pair = was.prev_pair;
+        self.chained_placement = was.chained_placement;
         self.start = was.start;
         self.start_diagonal = was.start_diagonal;
         self.initial_diagonal = was.initial_diagonal;
@@ -1163,6 +1215,29 @@ mod tests {
 
     fn placer(node: &Node, start: ItemId) -> DiffPairPlacer {
         DiffPairPlacer::start(node, &rules(), &RoutingSettings::default(), start, node.get(start).and_then(|it| it.anchors().first().copied()).unwrap(), 0, LayerRange::new(0, 1), true).expect("starts")
+    }
+
+    /// R7-R3 (`DIFF_PAIR_PLACER::SetLayer`): a pair started on two vias moves to another layer they are on; one started on pads does not; after a
+    /// plain fix the pair is chained to its tracks and refuses; idle, any layer.
+    #[test]
+    fn a_layer_key_moves_a_pair_on_vias_to_the_layer() {
+        let mut node = Node::new();
+        let via = |net: &str, at: Point| Item::Via(Via { net: net_of(net), layers: LayerRange::new(0, 1), pos: at, diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false });
+        let start = node.add(via("USB_DP", p(Nm::ZERO, Nm::ZERO)));
+        node.add(via("USB_DN", p(Nm::ZERO, mm(1.0))));
+        let mut dp = DiffPairPlacer::start(&node, &rules(), &RoutingSettings::default(), start, p(Nm::ZERO, Nm::ZERO), 0, LayerRange::new(0, 1), true).expect("starts");
+        assert!(!dp.set_layer(1), "before the first Move there is no m_prevPair");
+        dp.move_to(&rules(), &RoutingSettings::default(), p(mm(5.0), Nm::ZERO));
+        assert!(dp.set_layer(1), "the start vias are on B.Cu too");
+        assert_eq!(dp.current_layer, 1);
+        dp.move_to(&rules(), &RoutingSettings::default(), p(mm(5.0), Nm::ZERO));
+        assert!(matches!(dp.fix_route(&rules(), &RoutingSettings::default(), p(mm(5.0), Nm::ZERO), false), Some(FixOutcome::Fixed { .. })));
+        assert!(!dp.set_layer(0), "chained to the fixed tracks");
+        // on pads: a SOLID is never moved off its layer
+        let (pads, pad) = two_pad_pairs();
+        let mut on_pads = placer(&pads, pad);
+        on_pads.move_to(&rules(), &RoutingSettings::default(), p(mm(5.0), Nm::ZERO));
+        assert!(!on_pads.set_layer(1));
     }
 
     /// R7-R2 (`handleLayerSwitch`: `GetCurrentViaSize()` unless the net class's vias are in use): V with a size sends the pair's vias at that size;

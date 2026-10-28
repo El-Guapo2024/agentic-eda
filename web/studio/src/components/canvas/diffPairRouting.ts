@@ -8,6 +8,7 @@ import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { dpStateFromPreview, dpViaRequest, type DpDrawState } from "../../kicad-port/dpTool";
 import type { RouterSettings } from "../../kicad-port/routerSettings";
+import { otherLayerOfPair, type LayerPair } from "../../kicad-port/layerPairs";
 
 /** `6` / the first click after arming the diff-pair tool: start a session
  * from whatever pad/via/track-end is at `(x, y)`, on a net with a
@@ -16,7 +17,9 @@ import type { RouterSettings } from "../../kicad-port/routerSettings";
  * router's (the pair is walked, shoved or only marked per its mode).
  * Shows an error toast -- KiCad's own message -- and leaves `drawState`
  * untouched otherwise. */
-export async function startDiffPairRoute(x: number, y: number, layer: string, dispatch: Dispatch<Action>, dims?: { width: number; gap: number; viaGap?: number }, settings?: RouterSettings, autoTrackWidth?: boolean): Promise<void> {
+/** `startWithVia`: V was pressed before the pair started (`m_startWithVia`, R7-R3): the pair starts with its vias armed, sized as V sizes them
+ *  (`size`: none for the net class's), to the other layer of the layer pair `pair` (`performRouting`: `handleLayerSwitch( ACT_PlaceThroughVia, true )`). */
+export async function startDiffPairRoute(x: number, y: number, layer: string, dispatch: Dispatch<Action>, dims?: { width: number; gap: number; viaGap?: number }, settings?: RouterSettings, autoTrackWidth?: boolean, startWithVia?: { size: { diameter: number; drill: number } | null; pair: LayerPair }): Promise<void> {
   // `dims`: the "Differential Pair Dimensions..." dialog's custom width and gap, when it was used.
   const preview = await dpStart(x, y, layer, dims, settings, autoTrackWidth);
   if (!preview.ok) {
@@ -28,6 +31,14 @@ export async function startDiffPairRoute(x: number, y: number, layer: string, di
   // whatever the start layer, and given back when it ends (R6-R6)
   draw.originalActiveLayer = layer;
   if (preview.layer && preview.layer !== layer) dispatch({ type: "SET_ACTIVE_LAYER", layer: preview.layer });
+  if (startWithVia) {
+    const toLayer = otherLayerOfPair(startWithVia.pair, draw.layer);
+    const armed = await dpToggleVia(true, toLayer, startWithVia.size?.diameter, startWithVia.size?.drill);
+    if (armed.ok) {
+      draw.placingVia = true;
+      draw.pendingViaLayer = toLayer;
+    }
+  }
   dispatch({ type: "SET_DRAW_STATE", draw });
 }
 

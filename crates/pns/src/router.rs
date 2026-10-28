@@ -508,6 +508,10 @@ impl Router {
     /// `ROUTER::SwitchLayer` (R6-R3): `m_placer->SetLayer( aLayer )` while a track is routed ([`LinePlacer::set_layer`]); false when no route is in
     /// progress or the placer refuses, and then `handleLayerSwitch` arms a via to the layer instead.
     pub fn switch_layer(&mut self, layer: i32) -> bool {
+        // the placer of either mode (`m_placer->SetLayer`): a pair's is `DIFF_PAIR_PLACER::SetLayer` (R7-R3)
+        if let Some(d) = self.diff.as_mut() {
+            return d.set_layer(layer);
+        }
         self.session.as_mut().is_some_and(|s| s.placer.set_layer(layer))
     }
 
