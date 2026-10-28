@@ -2867,6 +2867,8 @@ fn push_pin_property_skips_length_across_different_body_styles_but_not_text_size
     let m = net_model();
     let mut b = board(&m);
     b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
+    // a pin of body style 2 needs a symbol with De Morgan body styles (the verbs refuse one the symbol has not, r7 E7-S10)
+    b.design.symbol_library.as_mut().unwrap().by_lib_id_mut("Test:Sym").unwrap().has_alternate_body_style = true;
     b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: { let mut p = sym_pin("1", 0.0, 3.81); p.length_mm = 5.08; p.name_size_mm = Some(2.0); p } }).unwrap();
     b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: { let mut p = sym_pin("2", 0.0, -3.81); p.body_style = 2; p } }).unwrap();
     b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin("3", 2.54, 0.0) }).unwrap();

@@ -23,7 +23,7 @@
 // take plain mm numbers, matching the wire format directly).
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, PushPinField, SymbolPropertiesFields } from "../api/types";
-import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolForEditor, postCmd, postRedo, postUndo } from "../api/client";
+import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolEditorNames, fetchSymbolForEditor, postCmd, postRedo, postUndo } from "../api/client";
 import { ensureSymbolInProject } from "../api/libraryClient";
 import { joinLibName } from "../kicad-port/libraryNames";
 import { PROJECT_SYMBOL_LIB } from "../kicad-port/symEditActions";
@@ -560,7 +560,12 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
     openSymbol: async (libId) => {
       dispatch({ type: "SET_LIB_ID", libId });
       await ensureSymbolInProject(libId); // an installed KiCad symbol is copied into the project library first, or the verb below would open a blank one
-      await postCmd({ op: "open_symbol_for_edit", lib_id: libId }, false);
+      // a symbol the project library has is opened as it is: the verb would change nothing and still be an undo step, so Undo after a rename (which opens the
+      // renamed symbol) would undo the opening and not the rename
+      const inProject = await fetchSymbolEditorNames()
+        .then((n) => (n.project ?? []).includes(libId))
+        .catch(() => false);
+      if (!inProject) await postCmd({ op: "open_symbol_for_edit", lib_id: libId }, false);
       const { symbol, own } = await fetchSymbolForEditor(libId);
       dispatch({ type: "SYMBOL_OK", symbol, own });
     },

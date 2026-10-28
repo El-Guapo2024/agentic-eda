@@ -919,7 +919,8 @@
     await selectRow(id);
     await __eda.run("eeschema.SymbolLibraryControl.editSymbol");
     await sleep(900);
-    const units = (sym) => sym.pins.map((p) => `${p.number}@${p.unit}/${p.body_style ?? 1}`).sort().join(" ");
+    // the server leaves out a unit or a body style of 1
+    const units = (sym) => sym.pins.map((p) => `${p.number}@${p.unit ?? 1}/${p.body_style ?? 1}`).sort().join(" ");
     // more units: unit 1's pin in each new unit (`SetUnitCount( 3, true )`)
     await __eda.run("eeschema.InteractiveEdit.symbolProperties");
     await sleep(500);
@@ -973,7 +974,7 @@
     t((await symbol(id)).pins.every((p) => p.name === "N1"), "nothing is written before OK");
     await click(tid("pin-table-ok"), 1500);
     sym = await symbol(id);
-    const names = sym.pins.filter((p) => p.number === "1").map((p) => `${p.unit}:${p.name}`).sort().join(" ");
+    const names = sym.pins.filter((p) => p.number === "1").map((p) => `${p.unit ?? 1}:${p.name}`).sort().join(" ");
     t(names === "1:A 2:N1 3:N1", `the row's pin only, no Synchronized Pins Mode: ${names}`);
     const nine = sym.pins.find((p) => p.number === "9");
     t(!!nine && nine.electrical_type === "passive" && nine.angle_deg === 0 && Math.abs(nine.at.y - 2.54) < 1e-6 && nine.unit === 3, `Add Pin copied the last pin (type, orientation, unit) a step up: ${JSON.stringify(nine)}`);

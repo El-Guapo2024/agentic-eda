@@ -58,10 +58,20 @@ pub(crate) fn str_num_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 pub fn symbol_route(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let reference = req.get("ref").and_then(Value::as_str).unwrap_or("");
-    let (_, design, model) = match board::load(dir) {
+    let (_, mut design, model) = match board::load(dir) {
         Ok(v) => v,
         Err(e) => return err(board::reasons(&e)),
     };
+    // a board whose schematic was never edited keeps none: the derived one is what the studio shows (`sch_api::loaded`)
+    if design.schematic.is_none() {
+        match board::derived_schematic(&design, &model) {
+            Ok(d) => {
+                design.schematic = d.schematic;
+                design.sheet_contents = d.sheet_contents;
+            }
+            Err(e) => return err(board::reasons(&e)),
+        }
+    }
     let sheets = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values()));
     let Some((sch, sym)) = sheets.flat_map(|s| s.symbols.iter().map(move |x| (s, x))).find(|(_, x)| x.id == reference) else {
         return err(format!("no symbol {reference} on the schematic"));

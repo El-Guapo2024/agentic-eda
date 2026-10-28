@@ -532,6 +532,9 @@ mod tests {
         let b = board("libamp", OPAMP);
         std::fs::create_dir_all(b.join("models")).unwrap();
         std::fs::write(b.join("models/amp.lib"), "* a test op-amp\n.subckt MYAMP inp inn vcc vee out\nE1 out 0 inp inn 1e5\nR1 vcc vee 1Meg\n.ends MYAMP\n").unwrap();
+        // the dialog opens on the library symbol's fields (the board keeps no schematic of its own yet: the derived one is read)
+        let u1 = crate::sim_model_api::symbol_route(&b, json!({ "ref": "U1" }).to_string().as_bytes());
+        assert_eq!((u1["fields"]["Sim.Name"].as_str(), u1["pins"].as_array().map(Vec::len)), (Some("kicad_builtin_opamp"), Some(5)), "{u1}");
         let lib = crate::sim_model_api::library_route(&b, json!({ "path": "models/amp.lib" }).to_string().as_bytes());
         assert_eq!(lib["models"][0]["pins"], json!(["inp", "inn", "vcc", "vee", "out"]), "{lib}");
         let edit = |field: &str, value: &str| eda_ops::fields_table::FieldEdit { id: "U1".into(), field: field.into(), value: value.into() };
