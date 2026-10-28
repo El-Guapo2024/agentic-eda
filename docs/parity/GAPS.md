@@ -175,7 +175,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   **Left**: Ctrl+E edits the shared library entry, not the placed symbol's own copy (one library symbol per id, D5-M1); which of two equal default net names
   takes `_1` (KiCad: the island's smallest item KIID, not kept); Unfold from Bus's bus-member submenus and label ghost; the Hierarchy Navigator's Edit Page
   Number, Rename and net highlight; Compare's line style, corner radius, keywords and footprint filters.
-- Round 7 (2026-10-28, `task-r7-schematic`, `PARITY-sch.md` section 51): a schematic-only import reads its `.kicad_pro` as KiCad does -- the net classes
+- Round 7 (2026-10-28, `task-r7-schematic`, `PARITY-sch.md` section 52): a schematic-only import reads its `.kicad_pro` as KiCad does -- the net classes
   (H1), every top-level sheet of a KiCad 10 project (H2, on a root sheet), the unit notation, which names the units everywhere (H5, `U1.1`), the text
   variables (H6) and the rest of Schematic Setup, kept for the derived project (M1); a placed symbol's Description and the cache's Description, keywords and
   footprint filters (H3); a text's and a text box's exclude from simulation, a text's link and looks, font colours and hatch fills (H4, M5); an empty Value
