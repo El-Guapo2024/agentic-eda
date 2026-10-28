@@ -495,10 +495,20 @@ impl Router {
         }
     }
 
-    pub fn set_width(&mut self, width: Nm) {
-        if let Some(s) = &mut self.session {
-            s.placer.width = width;
-        }
+    /// A width chosen while routing (W, the width menu): `onTrackViaSizeChanged` imports the sizes again, so the width is raised to the board's
+    /// minimum as at the start ([`crate::settings::chosen_track_width`], R6-R2). Returns the width routed and its source; `None` when no route is in
+    /// progress.
+    pub fn set_width(&mut self, width: Nm) -> Option<(Nm, String)> {
+        let (width, source) = crate::settings::chosen_track_width(&self.rules, width);
+        let s = self.session.as_mut()?;
+        s.placer.width = width;
+        Some((width, source))
+    }
+
+    /// `ROUTER::SwitchLayer` (R6-R3): `m_placer->SetLayer( aLayer )` while a track is routed ([`LinePlacer::set_layer`]); false when no route is in
+    /// progress or the placer refuses, and then `handleLayerSwitch` arms a via to the layer instead.
+    pub fn switch_layer(&mut self, layer: i32) -> bool {
+        self.session.as_mut().is_some_and(|s| s.placer.set_layer(layer))
     }
 
     /// `ROUTER::ToggleViaPlacement`: arm (or disarm) "drop a via here" for

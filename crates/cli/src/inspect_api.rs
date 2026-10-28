@@ -326,3 +326,14 @@ mod tests {
         }
     }
 }
+
+/// `POST /api/pcb/query`: Find by Properties' Query tab (`eda_drc::query`), each footprint with the sheet and the component classes the board's rule board
+/// gives it (`GetSheetname`, `GetComponentClass`, R6-D3), as `DIALOG_FIND_BY_PROPERTIES::selectMatchingFromQuery` evaluates the board's real footprints.
+/// A board that does not load answers with the request's facts alone.
+pub fn pcb_query(dir: &Path, body: &[u8]) -> Value {
+    let Ok((_, design, model)) = board::load(dir) else { return eda_drc::query::handle(body) };
+    let drc_board = eda_drc::board::build(&design, &model);
+    let rb = RuleBoard::new(&design, &model, &drc_board, Units::Mm, None);
+    let facts = |reference: &str| rb.footprint_item(reference).and_then(|it| it.footprint.as_ref().map(|f| (f.sheet.clone(), f.classes.clone())));
+    eda_drc::query::handle_with(body, &facts)
+}

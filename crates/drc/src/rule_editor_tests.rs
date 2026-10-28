@@ -547,6 +547,19 @@ fn check_syntax_says_what_kicads_reporter_is_told() {
     assert!(bad.contains("</a>") && bad.ends_with("ERROR: <a href='3:12'>Could not parse expression 'A.Type == '.</a>\n"), "{bad}");
 }
 
+/// R6-D5 (`PANEL_SETUP_RULES::OnCompile`): Board Setup > Custom Rules' check is the parser's reporter -- "No errors found." for a good text, each error at
+/// its line and offset for a bad one -- and a lexer `PARSE_ERROR` as "ERROR: <a href='line:offset'>problem</a>".
+#[test]
+fn custom_rules_check_says_what_kicads_compile_says() {
+    let e = env();
+    let texts = |text: &str| super::compile_report(text, &e).into_iter().map(|r| r.text).collect::<Vec<_>>();
+    assert_eq!(texts("(version 1)\n(rule a (constraint clearance (min 1mm)))"), ["No errors found."]);
+    let missing = texts("(version 1)\n(rule a (constraint clearance (min 1mm))");
+    assert_eq!(missing, ["ERROR: <a href='3:1'>Missing ')'.</a>"], "{missing:?}");
+    let lexer = texts("(version 1)\n(rule a (condition \"A.Type == 'Pad'))");
+    assert!(lexer.len() == 1 && lexer[0].starts_with("ERROR: <a href='2:") && lexer[0].ends_with("</a>"), "{lexer:?}");
+}
+
 /// KiCad's own rule files (`qa/data/pcbnew/*.kicad_dru`): read by the editor and written back unedited, every rule is the same rule -- the same
 /// name, condition, layer, severity and constraints, its own text kept verbatim -- and writing the result again changes nothing.
 #[test]

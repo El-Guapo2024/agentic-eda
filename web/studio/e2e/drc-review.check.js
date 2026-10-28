@@ -69,6 +69,9 @@
   if (eda.state().tab !== "pcb") return [{ name: "the PCB tab opens", ok: false, detail: eda.state().tab }];
   const ran = await eda.run("pcbnew.DRCTool.runDRC");
   check("Run DRC opens the Design Rules Checker", ran.ok && /Design Rules Checker/.test(ran.dialog ?? ""), ran.dialog);
+  // R6-D6: `dialog_drc_base.cpp`: `m_cbRefillZones->SetValue(true);`
+  const refillBox = [...document.querySelectorAll(".dialog label")].find((l) => /Refill all zones before performing DRC/.test(l.innerText))?.querySelector("input");
+  check("Refill all zones before performing DRC starts checked, as KiCad's", refillBox?.checked === true, String(refillBox?.checked));
   const loaded = await until(() => rows().length >= 3);
   check("the Violations page lists the findings", !!loaded, `${rows().length} rows`);
   if (!loaded) return results;

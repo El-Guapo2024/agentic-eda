@@ -84,7 +84,11 @@ impl CleanupFilter {
         let mut out = Protected::default();
         let Some(rt) = design.routing.as_ref() else { return out };
         for t in &rt.tracks {
-            if is_locked(design, &t.id) || self.skips(design, model, &t.id, &t.net, &t.layer) {
+            let skipped = self.skips(design, model, &t.id, &t.net, &t.layer);
+            if skipped {
+                out.filtered_tracks.insert(t.id.clone());
+            }
+            if is_locked(design, &t.id) || skipped {
                 out.tracks.insert(t.id.clone());
             }
         }
@@ -102,6 +106,9 @@ impl CleanupFilter {
 pub struct Protected {
     pub tracks: BTreeSet<String>,
     pub vias: BTreeSet<String>,
+    /// The tracks of [`Self::tracks`] the filter skips (`filterItem`), locked or not: what `mergeSegments` leaves out of the different-width tracks it looks
+    /// for, where a locked track the filter keeps still counts (R6-Z4).
+    pub filtered_tracks: BTreeSet<String>,
 }
 
 impl Protected {
@@ -375,6 +382,25 @@ mod tests {
         locked.drawings.get_or_insert_with(DrawingsSection::default).locked_ids.push("t2".into());
         let report = cleanup(&locked, &model, opts, &CleanupFilter::default());
         assert!(report.changes.iter().all(|c| !matches!(c.kind, CleanupKind::MergedTracks)), "a locked track is never merged");
+    }
+
+    /// R6-Z4 (`mergeSegments`: the different-width candidates are the tracks `!filterItem( candidate )`): a 0.15 mm track of another net that the net filter
+    /// leaves out does not stop the merge of two collinear 0.25 mm tracks of the filtered net; with no filter it does (necking down), and a locked one does too.
+    #[test]
+    fn merge_ignores_a_filtered_out_different_width_track() {
+        let (mut design, model) = two_pad_model();
+        let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
+        let mid = Point { x: (a.x + b.x) / 2, y: a.y };
+        let rt = design.routing.as_mut().unwrap();
+        rt.tracks.push(track("t1", "N1", "F.Cu", mm(0.25), vec![a, mid]));
+        rt.tracks.push(track("t2", "N1", "F.Cu", mm(0.25), vec![mid, b]));
+        // touching t1's far end (at R1's pad), on another net
+        rt.tracks.push(track("neck", "N2", "F.Cu", mm(0.15), vec![a, Point { x: a.x, y: a.y - mm(2.0) }]));
+        let opts = CleanupOptions { merge_segments: true, ..Default::default() };
+        let merges = |d: &Design, f: &CleanupFilter| cleanup(d, &model, opts, f).changes.iter().filter(|c| matches!(c.kind, CleanupKind::MergedTracks)).count();
+        let n1 = CleanupFilter { net: Some("N1".into()), ..Default::default() };
+        assert_eq!(merges(&design, &n1), 1, "the filtered-out neck-down track does not count");
+        assert_eq!(merges(&design, &CleanupFilter::default()), 0, "with no filter it does");
     }
 
     #[test]

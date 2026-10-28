@@ -1044,6 +1044,14 @@ pub(crate) struct FromSchematic {
     pub root_sheetfile: String,
 }
 
+/// The nets the derived board gives the pads the model has on no net: "REF.PIN" -> `unconnected-(..)` (a pin the schematic has alone, its own net in
+/// KiCad's netlist). Every other pad on no net -- an NPTH, a pad no pin names, a footprint read from a KiCad file -- is KiCad's net 0 there.
+pub fn unconnected_pad_nets(design: &Design, model: &ConstraintModel) -> BTreeMap<String, String> {
+    let parts: BTreeMap<&str, &Part> = model.parts.iter().map(|p| (p.reference.as_str(), p)).collect();
+    let footprints: Vec<&FootprintInstance> = design.placement.iter().flat_map(|pl| pl.footprints.iter()).collect();
+    unconnected_pin_nets(design, model, &footprints, &parts)
+}
+
 /// "REF.PIN" -> `unconnected-(..)` for every pin of a footprint made here that is on no net of `model` (see `export_kicad_pcb_with`).
 fn unconnected_pin_nets(design: &Design, model: &ConstraintModel, footprints: &[&FootprintInstance], parts: &BTreeMap<&str, &Part>) -> BTreeMap<String, String> {
     let on_a_net: std::collections::BTreeSet<&str> = model.nets.iter().flat_map(|n| n.pins.iter().map(String::as_str)).collect();
@@ -1105,29 +1113,9 @@ pub(crate) fn half_turn_layout(l: &mut eda_model::fp_edit::FieldLayout) {
     l.angle = (l.angle + 180_000).rem_euclid(360_000);
 }
 
-/// An angle in millidegrees in (-180, 180] (`EDA_ANGLE::Normalize180`).
-fn normalize180(a: i64) -> i64 {
-    let mut a = a.rem_euclid(360_000);
-    if a > 180_000 {
-        a -= 360_000;
-    }
-    a
-}
-
-/// Is the back footprint `fp` written half a turn from the model's pose (see [`write_footprint`])? One made or flipped here is, one read in the
-/// file's frame is not.
-fn written_half_turned(design: &Design, fp: &FootprintInstance) -> bool {
-    let read_in_the_files_frame = design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == fp.id && !e.library_frame));
-    fp.side == Side::Bottom && !read_in_the_files_frame
-}
-
-/// KiCad's orientation of the footprint `fp`, in millidegrees counter-clockwise, in (-180, 180]: the angle of the `(at x y angle)` the writer gives it,
-/// which is what KiCad's Properties panel (`FOOTPRINT::GetOrientationDegrees`) and Footprint Properties show. A back footprint made or flipped here
-/// is half a turn from the model's `rot` (`FOOTPRINT::Flip`: `-m_orient`, then `Rotate( ANGLE_180 )` for a left-right flip).
-pub fn kicad_footprint_orientation(design: &Design, fp: &FootprintInstance) -> i64 {
-    let half = if written_half_turned(design, fp) { 180_000 } else { 0 };
-    normalize180(-(fp.rot as i64 + half))
-}
+// `normalize180`, `written_half_turned` and `kicad_footprint_orientation` live in `eda_drc::board`, which the rule board's `A.Orientation` shares (R6-D1).
+use eda_drc::board::{normalize180, written_half_turned};
+pub use eda_drc::board::kicad_footprint_orientation;
 
 /// One footprint; returns the uuid it was written with (a group's `(members ..)` names it).
 #[allow(clippy::too_many_arguments)]

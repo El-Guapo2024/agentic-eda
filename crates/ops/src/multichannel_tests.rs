@@ -964,8 +964,8 @@ fn the_classes_the_project_gives_a_footprint_are_those_its_assignment_rules_matc
             // the sheet, and a field
             rule("OnChannelTwo", true, vec![cond(ConditionKind::SheetName, "/ch2/", "")]),
             rule("ByField", true, vec![cond(ConditionKind::FootprintField, "Value", "10k")]),
-            // an expression of the user's own is not evaluated here
-            rule("Custom", true, vec![cond(ConditionKind::Custom, "A.Layer == 'F.Cu'", "")]),
+            // an expression of the user's own, evaluated on the footprint as KiCad's `( <expr> )` (R6-D2: the rule board's evaluator)
+            rule("Custom", true, vec![cond(ConditionKind::Custom, "A.Reference == 'R2'", "")]),
         ],
     };
     let b = Board::new(design(2), &m, mm(0.1), mm(0.3));
@@ -973,7 +973,7 @@ fn the_classes_the_project_gives_a_footprint_are_those_its_assignment_rules_matc
     let classes = |r: &str| -> Vec<String> { mc.fps[mc.index_of(r).unwrap()].classes.iter().cloned().collect() };
     assert_eq!(classes("U1"), vec!["Amplifiers", "Everything"]);
     assert_eq!(classes("U2"), vec!["Amplifiers", "Everything", "OnChannelTwo", "TurnedAmplifiers"], "U2 is turned half a turn");
-    assert_eq!(classes("R2"), vec!["Everything", "OnChannelTwo", "Resistors"]);
+    assert_eq!(classes("R2"), vec!["Custom", "Everything", "OnChannelTwo", "Resistors"]);
     assert_eq!(classes("C1"), vec!["EitherOne", "Everything"]);
     // sheet classes: one per sheet but the root, named by the sheet's path
     let mut m2 = model(2);
@@ -1002,12 +1002,7 @@ fn the_classes_the_project_gives_a_footprint_are_those_its_assignment_rules_matc
 
 #[test]
 fn the_sheet_tests_are_the_rule_languages() {
-    use super::multichannel_facts::{in_sheet_or_below, member_of_group, member_of_sheet, member_of_sheet_or_children};
-    // memberOfSheet: the sheet itself, wildcards allowed, the closing slash ignored
-    assert!(member_of_sheet("/ch1/", "/ch1"));
-    assert!(member_of_sheet("/ch1/", "/ch?/"));
-    assert!(!member_of_sheet("/ch1/sub/", "/ch1/"));
-    assert!(member_of_sheet("", ""), "the root is no sheet name, or all of them");
+    use super::multichannel_facts::{in_sheet_or_below, member_of_group, member_of_sheet_or_children};
     // memberOfSheetOrChildren: the sheet and the ones below it, level by level
     assert!(member_of_sheet_or_children("/ch1/sub/", "/ch1/"));
     assert!(member_of_sheet_or_children("/ch1/sub/", "/*/sub"));

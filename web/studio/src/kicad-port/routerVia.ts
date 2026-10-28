@@ -163,17 +163,42 @@ export function chosenViaSize(viaType: ViaType, chosen: ViaPreset | null, index:
   return chosen;
 }
 
+/** What the studio holds of the via size choice: the board's Pre-defined Sizes list (without KiCad's entry 0), the chosen index (0 = net class), and the
+ *  custom size and whether it is in use. */
+export interface ViaChoice {
+  presets: readonly ViaPreset[];
+  index: number | null;
+  useCustomTrackVia: boolean;
+  custom: CustomTrackVia;
+}
+
 /**
- * `BOARD_DESIGN_SETTINGS::GetCurrentViaSize()` / `GetCurrentViaDrill()` (board_design_settings.cpp), asked each time Draw Via makes a via (`CreateItem`;
- * round 6 C6-2): the custom size while custom sizes are in use; else the list entry at the index, read from the board's list now (so a Board Setup edit
- * to it is seen); else -- index 0, the net class's sizes, or an index past the list -- the Default class's via (`m_NetSettings->GetDefaultNetclass()`).
- * `presets` is the board's list without KiCad's entry 0, so the entry at index `i` is `presets[i - 1]`.
+ * The chosen via size of `BOARD_DESIGN_SETTINGS::GetCurrentViaSize()` / `GetCurrentViaDrill()`, the one place both of KiCad's via sizings read it: the custom
+ * size while custom sizes are in use; else the list entry at the index, read from the board's list now (`m_ViasDimensionsList[ m_viaSizeIndex ]`, so a
+ * Board Setup edit to it is seen, r5 R5-9, round 6 C6-2); null for index 0 ("use net class values") or an index past the list.
+ */
+export function chosenViaEntry(c: ViaChoice): ViaPreset | null {
+  if (c.useCustomTrackVia) return { diameter: c.custom.viaDiameterNm, drill: c.custom.viaDrillNm };
+  const entry = c.index != null && c.index > 0 ? c.presets[c.index - 1] : undefined;
+  return entry ? { diameter: entry.diameter, drill: entry.drill } : null;
+}
+
+/**
+ * The router's via commands (`handleLayerSwitch`, R6-R1) -- Place Through Via (V while routing, `ACT_PlaceThroughVia`) as much as the blind, micro and
+ * Select Layer ones: [`chosenViaEntry`], except a microvia (`|| viaType == MICROVIA`). Null: send no size, and the server takes the rules' for the
+ * route's net (its class, a `.kicad_dru` `via_diameter` / `hole_size` rule).
+ */
+export function chosenViaOf(viaType: ViaType, c: ViaChoice): ViaPreset | null {
+  return viaType === "micro" ? null : chosenViaEntry(c);
+}
+
+/**
+ * Draw Via (`CreateItem`, round 6 C6-2): `GetCurrentViaSize()` / `GetCurrentViaDrill()` asked each time a via is made -- [`chosenViaEntry`], else (index 0
+ * or past the list) the Default class's via (`m_NetSettings->GetDefaultNetclass()`). `presets` is the board's list without KiCad's entry 0.
  */
 export function currentViaSize(board: BoardState, index: number | null, useCustomTrackVia: boolean, custom: CustomTrackVia): ViaPreset {
-  if (useCustomTrackVia) return { diameter: custom.viaDiameterNm, drill: custom.viaDrillNm };
-  const presets = board.routing?.via_presets ?? [];
-  const entry = index != null && index > 0 ? presets[index - 1] : undefined;
-  if (entry) return { diameter: entry.diameter, drill: entry.drill };
+  const chosen = chosenViaEntry({ presets: board.routing?.via_presets ?? [], index, useCustomTrackVia, custom });
+  if (chosen) return chosen;
   const rules = board.board_rules;
   const def = rules?.default_class;
   return { diameter: def?.via_diameter ?? rules?.via_diameter ?? 600_000, drill: def?.via_drill ?? rules?.via_drill ?? 300_000 };
@@ -200,4 +225,30 @@ export function validateViaParameters(diameter: Nm | null, drill: Nm | null): st
   if (drill != null && diameter == null) return "No via diameter defined.";
   if (diameter != null && drill != null && diameter <= drill) return "Via hole size must be smaller than via diameter";
   return null;
+}
+
+/**
+ * The layer a layer command asks for while routing (`ROUTER_TOOL::handleLayerSwitch`'s first half, R6-R3), from the router's current layer: `next` /
+ * `prev` step through the copper layers in UI order, wrapping, to the next visible one (issue 14480: none visible, nothing); a named layer
+ * (`layerTop`, `layerInnerN`, `layerBottom`: `layerDirectSwitchActions`) only when the board has it (`enabledLayers.test( targetLayer )`). Null:
+ * nothing to do -- and the current layer itself is nothing to do too (`if( targetLayer == currentLayer ) return 0;`).
+ */
+export function routerLayerTarget(cmd: "next" | "prev" | string, current: string, copper: readonly string[], visible: (layer: string) => boolean): string | null {
+  let target: string | null = null;
+  if (cmd === "next" || cmd === "prev") {
+    const idx = Math.max(0, copper.indexOf(current));
+    const n = copper.length;
+    if (n === 0) return null;
+    let t = cmd === "next" ? (idx + 1) % n : idx > 0 ? idx - 1 : n - 1;
+    for (let i = 0; i < n - 1; i++) {
+      if (visible(copper[t]!)) {
+        target = copper[t]!;
+        break;
+      }
+      t = cmd === "next" ? (t + 1) % n : t > 0 ? t - 1 : n - 1;
+    }
+  } else if (copper.includes(cmd)) {
+    target = cmd;
+  }
+  return target === current ? null : target;
 }

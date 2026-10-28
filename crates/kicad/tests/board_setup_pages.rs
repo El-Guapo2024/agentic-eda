@@ -274,3 +274,18 @@ fn pcbplotparams_survive_import_and_write() {
     let text = export(&d0, &m0);
     assert!(text.contains("(layerselection 0x00000000_00000000_55555555_5755f5ff)") && text.contains("(usegerberextensions no)") && text.contains("(sketchdnponfab yes)"), "{text}");
 }
+
+/// R6-R7 (`BOARD_DESIGN_SETTINGS`' `tuning_pattern_settings` reader: each key taken as it is, no check): a diff-pair group with its minimum amplitude above
+/// its maximum, as KiCad's panel lets one type it, is read as it is, and the single-track group next to it keeps its own spacing.
+#[test]
+fn merge_project_setup_pages_keeps_each_group_as_kicad_reads_it() {
+    let (_, mut model, _) = import_kicad_pcb(BOARD).expect("imports");
+    let pro = serde_json::json!({ "board": { "design_settings": { "tuning_pattern_settings": {
+        "single_track_defaults": { "spacing": 0.9 },
+        "diff_pair_defaults": { "min_amplitude": 1.2, "max_amplitude": 1.0, "corner_radius_percentage": 150 },
+    } } } });
+    merge_project_setup_pages(&mut model, &pro.to_string());
+    assert_eq!(model.board.tuning_patterns.single_track.spacing_nm, mm(0.9));
+    assert_eq!((model.board.tuning_patterns.diff_pair.min_amplitude_nm, model.board.tuning_patterns.diff_pair.max_amplitude_nm), (mm(1.2), mm(1.0)));
+    assert_eq!(model.board.tuning_patterns.diff_pair.corner_radius_percentage, 150, "no clamp");
+}

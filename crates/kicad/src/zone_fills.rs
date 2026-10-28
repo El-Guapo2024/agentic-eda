@@ -130,7 +130,23 @@ impl KicadFills {
                 (to, rings.iter().map(|r| KicadRing { island: r.island, pts: r.pts.iter().map(|&p| motion.apply(p)).collect() }).collect())
             })
             .collect();
-        Some(Cow::Owned(ZoneEntry { sig: entry.sig.clone(), layers, unfilled: entry.unfilled, shape: entry.shape.clone() }))
+        // `ZONE::Flip` of a one-sided zone: `SetLayerSet( flipped )` sees another set and unfills (`m_isFilled = false`), then `SetFilledPolysList` puts the
+        // mirrored fill back without setting the flag -- the copper is there, `IsFilled()` is false (R6-Z3)
+        let unfilled = entry.unfilled || !layer_of.is_empty();
+        Some(Cow::Owned(ZoneEntry { sig: entry.sig.clone(), layers, unfilled, shape: entry.shape.clone() }))
+    }
+
+    /// The fill a copy of `source` carries (R6-Z1): `EDIT_TOOL::Duplicate` and the array tool clone the zone (`ZONE::InitDataFromSrcInCopyCtor` copies
+    /// `m_FilledPolysList` and `m_isFilled`, and no `UnFill()` follows), so the copy holds the source's fill as the source holds it now, wherever the copy
+    /// was put. The entry is filed under the copy's id with the shape it was filled for, so [`Self::current`] moves it onto the copy. `None` when the source
+    /// has no current fill (so the copy has none either) or the copy is not a rigid motion of the shape the fill was made for.
+    pub fn entry_for_copy(&self, source: &Zone, copy: &Zone) -> Option<ZoneEntry> {
+        self.current(source)?;
+        let entry = self.zones.get(&source.id)?;
+        // (a fill kept with no shape is current only while the zone is the one it filled)
+        let was = entry.shape.clone().unwrap_or_else(|| FilledShape::of(source));
+        follow(&was, copy)?;
+        Some(ZoneEntry { shape: Some(was), ..entry.clone() })
     }
 
     /// The rings of `zone` on `layer`: none for a zone with no current fill, and none for a layer KiCad left empty.
@@ -449,6 +465,24 @@ pub fn entries_by_zone(design: &Design, scanned: Vec<ScannedFill>, ids: &HashMap
         }
     }
     out
+}
+
+/// The fill a pasted zone carries (R6-Z1): KiCad's clipboard holds every `(filled_polygon ..)` of a copied zone (`PCB_IO_KICAD_SEXPR::format( const ZONE* )`,
+/// "Save the PolysList (filled areas)") and the paste reads them back with it. `clip_zone` is the zone as the clipboard has it (where it was copied from, in the
+/// clipboard's frame), `scanned` the clipboard's fills ([`scan_zone_fills`]), `copy` the pasted zone; the entry is made for `clip_zone`, so
+/// [`KicadFills::current`] moves it onto the copy. `None` when the clipboard has no fill of the zone or the copy is not a rigid motion of it.
+pub fn entry_of_pasted_zone(clip_zone: &Zone, scanned: &[ScannedFill], copy: &Zone) -> Option<ZoneEntry> {
+    let mut entry: Option<ZoneEntry> = None;
+    for f in scanned.iter().filter(|f| !clip_zone.uuid.is_empty() && f.zone == clip_zone.uuid) {
+        let e = entry.get_or_insert_with(|| ZoneEntry { unfilled: !f.zone_filled, ..ZoneEntry::of(clip_zone) });
+        let rings = e.layers.entry(f.layer.clone()).or_default();
+        if !f.pts.is_empty() {
+            rings.push(KicadRing { island: f.island, pts: f.pts.clone() });
+        }
+    }
+    let entry = entry?;
+    follow(entry.shape.as_ref()?, copy)?;
+    Some(entry)
 }
 
 /// The name the fills of a zone with no uuid in the file are filed under (a teardrop: KiCad writes none for one): the layer and the zone's outline, in nanometres.
@@ -1136,6 +1170,10 @@ mod tests {
         flipped.layer = "B.Cu".into();
         assert!(fills.rings(&flipped, "F.Cu").is_empty());
         assert_eq!(fills.rings(&flipped, "B.Cu")[0].pts[0], [19_500_000, 10_500_000]);
+        // R6-Z3: `SetLayerSet` of the other side unfills (`m_isFilled = false`), and `SetFilledPolysList` puts the mirrored copper back without the flag: the
+        // zone is written `(fill` without ` yes`; a mirror on its own layer keeps it
+        assert!(fills.current(&flipped).unwrap().unfilled, "a flipped one-sided zone has its fill but is not filled");
+        assert!(!fills.current(&mirrored).unwrap().unfilled);
         // a zone sent to B.Cu without a mirror (Zone Properties' layers): `ZONE::SetLayerSet` unfills it
         let mut relayered = z.clone();
         relayered.layer = "B.Cu".into();

@@ -30,18 +30,21 @@ export interface RcFilter {
   errors: boolean;
   warnings: boolean;
   exclusions: boolean;
+  /** `m_showAll`: a box of its own, which only `OnSeverity` on itself sets (R6-D9). Unset: drawn checked when every severity is on. */
+  all?: boolean;
 }
 
-export const SHOW_ALL: RcFilter = { errors: true, warnings: true, exclusions: true };
+export const SHOW_ALL: RcFilter = { errors: true, warnings: true, exclusions: true, all: true };
 
 /** `OnSeverity` on the "All" box: errors stay on, warnings and exclusions follow the box. Unchecking it leaves the errors only. */
 export function setShowAll(checked: boolean): RcFilter {
-  return { errors: true, warnings: checked, exclusions: checked };
+  return { errors: true, warnings: checked, exclusions: checked, all: checked };
 }
 
-/** Whether the "All" box is drawn checked: every severity is on. */
+/** Whether the "All" box is drawn checked: its own state (`DIALOG_DRC::OnSeverity` / `DIALOG_ERC::OnSeverity` push it into the other three, and
+ *  nothing sets it back from them: unticking Warnings leaves it ticked, ticking the three by hand leaves it as it was, R6-D9). */
 export function allShown(f: RcFilter): boolean {
-  return f.errors && f.warnings && f.exclusions;
+  return f.all ?? (f.errors && f.warnings && f.exclusions);
 }
 
 /** A marker as the list files it (`MARKER_BASE::GetSeverity`): a waived marker is an exclusion, whatever the check's severity is. */

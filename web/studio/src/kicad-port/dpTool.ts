@@ -66,9 +66,8 @@ export interface DpDrawState {
   /** Shove mode: what the head would push aside. */
   displaced?: { layer: string; pts: [number, number][] }[];
   displacedVias?: { source_via: string; x: number; y: number }[];
-  /** The active layer before the route started on an item of another layer (`ROUTER_TOOL::prepareInteractive`: `m_originalActiveLayer`, then
-   * `SetActiveLayer( getStartLayer( .. ) )`): the active layer goes back to it when the route ends (`finishInteractive`). Unset when the route
-   * started on the active layer. */
+  /** The active layer when the route started (`ROUTER_TOOL::prepareInteractive`: `m_originalActiveLayer`, then `SetActiveLayer( getStartLayer( .. ) )`):
+   * the active layer follows the route while it runs (`syncRouterAndFrameLayer`) and goes back to this one when it ends (`finishInteractive`), R6-R6. */
   originalActiveLayer?: string;
   /** What the message panel shows of the route's sizes (the start reply's `sizes`; kicad-port/routerSizes.ts). */
   sizes?: RouteSizesInfo;

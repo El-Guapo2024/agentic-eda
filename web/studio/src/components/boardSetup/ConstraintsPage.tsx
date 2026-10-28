@@ -4,7 +4,7 @@
 // (BOARD_DESIGN_SETTINGS::ValidateDesignRules) and Undo takes the edit back.
 import { useEffect } from "react";
 import { useStudioState } from "../../state/store";
-import { validateConstraints } from "../../kicad-port/boardSetupRules";
+import { spokeCountOf, validateConstraints } from "../../kicad-port/boardSetupRules";
 import type { Constraints } from "../../api/types";
 import { Check, FieldRow, LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
 
@@ -117,7 +117,7 @@ export function ConstraintsPage({ hidden, onDirty }: PageProps) {
             Allow fillets/chamfers outside zone outline
           </Check>
           <FieldRow label="Minimum thermal relief spoke count:" error={errors.min_resolved_spokes}>
-            <NumberField ariaLabel="Minimum thermal relief spoke count" width={50} value={draft.min_resolved_spokes} invalid={!!errors.min_resolved_spokes} onChange={(v) => set("min_resolved_spokes", v ?? Number.NaN)} />
+            <NumberField ariaLabel="Minimum thermal relief spoke count" width={50} value={draft.min_resolved_spokes} invalid={!!errors.min_resolved_spokes} onChange={(v) => set("min_resolved_spokes", spokeCountOf(v, draft.min_resolved_spokes))} />
           </FieldRow>
 
           <div className="bs-section">Length Tuning</div>

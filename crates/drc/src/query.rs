@@ -9,8 +9,9 @@
 //!
 //! An item matches when the expression is not zero on any layer it is on (`L` is that layer, `A` the item, there is no `B`), as in
 //! `selectMatchingFromQuery`. `true` and `false` are 1 and 0 ([`crate::pcbexpr::Env::literal_booleans`]): the queries Create from Selection Tab writes
-//! use them. `memberOfSheet` is KiCad's: the studio sends no sheet path, so a footprint (and its pads and fields) is on the root sheet, `/` (the
-//! TypeScript copy said false for every sheet). The functions that need shapes (`intersectsCourtyard`, `intersectsArea`, `enclosedByArea` and their old names) find no courtyard or area
+//! use them. `memberOfSheet`, `hasComponentClass` and `A.ComponentClass` are KiCad's: the studio sends no sheet path and no classes, and the server
+//! fills each footprint's from the board's rule board (`GetSheetname`, `GetComponentClass`: [`handle_with`], R6-D3); without them a footprint is on the
+//! root sheet, `/`, with no class. The functions that need shapes (`intersectsCourtyard`, `intersectsArea`, `enclosedByArea` and their old names) find no courtyard or area
 //! here and say false, as the TypeScript copy did.
 //!
 //! Request: `{ "expression": "...", "items": [...], "env": {...} }` (see [`Request`]). Answer: `{ "ok": bool, "errors": [..], "ids": [..] | null }`:
@@ -39,6 +40,12 @@ pub struct QueryFootprint {
     pub fpid: String,
     #[serde(default)]
     pub fields: Vec<(String, String)>,
+    /// `FOOTPRINT::GetSheetname()` and the names of `GetComponentClass()`'s classes. The studio sends neither; the server fills them from the board's rule
+    /// board ([`run_with`], R6-D3), as `selectMatchingFromQuery` reads the board's real footprints.
+    #[serde(default)]
+    pub sheet: Option<String>,
+    #[serde(default)]
+    pub classes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,7 +138,7 @@ fn prop_of(p: &QueryProp) -> Option<Prop> {
     })
 }
 
-fn rule_item(q: &QueryItem) -> RuleItem {
+fn rule_item(q: &QueryItem, facts: &dyn Fn(&str) -> Option<(String, Vec<String>)>) -> RuleItem {
     let mut it = RuleItem::new(q.id.clone(), class_of(&q.class));
     it.type_name = Some(q.type_name.clone());
     it.layers = q.layers.clone();
@@ -142,7 +149,13 @@ fn rule_item(q: &QueryItem) -> RuleItem {
             it.set(&p.name, v);
         }
     }
-    it.footprint = q.footprint.as_ref().map(|f| Rc::new(FootprintFacts { reference: f.reference.clone(), fpid: f.fpid.clone(), fields: f.fields.clone(), ..Default::default() }));
+    it.footprint = q.footprint.as_ref().map(|f| {
+        // the footprint's sheet and classes: the request's, else the board's (`memberOfSheet`, `hasComponentClass`, `A.ComponentClass`)
+        let board = (f.sheet.is_none() || f.classes.is_none()).then(|| facts(&f.reference)).flatten().unwrap_or_default();
+        let sheet = f.sheet.clone().unwrap_or(board.0);
+        let classes = f.classes.clone().unwrap_or(board.1);
+        Rc::new(FootprintFacts { reference: f.reference.clone(), fpid: f.fpid.clone(), fields: f.fields.clone(), sheet, classes, ..Default::default() })
+    });
     it.groups = q.groups.clone();
     it.plated = q.plated;
     it.via_type = match q.via_type.as_deref() {
@@ -170,6 +183,12 @@ fn env_of(e: &QueryEnv) -> Env {
 
 /// The answer to one request.
 pub fn run(req: &Request) -> Value {
+    run_with(req, &|_| None)
+}
+
+/// [`run`] with `facts`: a footprint's sheet and component classes by its reference (the board's, `eda_drc::rule_board::RuleBoard`), for the footprints the
+/// request sends without them.
+pub fn run_with(req: &Request, facts: &dyn Fn(&str) -> Option<(String, Vec<String>)>) -> Value {
     let env = Rc::new(env_of(&req.env));
     let compiled = compile(&req.expression, &PCB_UNITS, &env);
     let errors: Vec<String> = compiled.errors.iter().map(|e| e.message.clone()).collect();
@@ -178,7 +197,7 @@ pub fn run(req: &Request) -> Value {
     }
     let mut ids = Vec::new();
     for q in &req.items {
-        let item = Rc::new(rule_item(q));
+        let item = Rc::new(rule_item(q, facts));
         for layer in &q.layers {
             let mut ctx = Ctx::new(env.clone(), 0, Some(layer));
             ctx.set_items(Some(item.clone()), None);
@@ -193,8 +212,41 @@ pub fn run(req: &Request) -> Value {
 
 /// `POST /api/pcb/query`'s body to its answer.
 pub fn handle(body: &[u8]) -> Value {
+    handle_with(body, &|_| None)
+}
+
+/// [`handle`] with the board's footprint facts ([`run_with`]).
+pub fn handle_with(body: &[u8], facts: &dyn Fn(&str) -> Option<(String, Vec<String>)>) -> Value {
     match serde_json::from_slice::<Request>(body) {
-        Ok(req) => run(&req),
+        Ok(req) => run_with(&req, facts),
         Err(e) => json!({ "ok": false, "errors": [format!("bad request: {e}")], "ids": Value::Null }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R6-D3: a footprint's sheet and component classes reach the language (`memberOfSheet`, `hasComponentClass`, `A.ComponentClass`), from the board's
+    /// facts when the request has none, for the footprint and for a pad of it.
+    #[test]
+    fn a_footprints_sheet_and_classes_reach_the_query() {
+        let body = |expression: &str| {
+            json!({
+                "expression": expression,
+                "items": [
+                    { "id": "R5", "class": "FOOTPRINT", "type_name": "Footprint", "layers": ["F.Cu"], "footprint": { "reference": "R5", "fpid": "R:0603" } },
+                    { "id": "R5.1", "class": "PAD", "type_name": "Pad", "layers": ["F.Cu"], "footprint": { "reference": "R5", "fpid": "R:0603" } },
+                    { "id": "R6", "class": "FOOTPRINT", "type_name": "Footprint", "layers": ["F.Cu"], "footprint": { "reference": "R6", "fpid": "R:0603", "sheet": "/LV/", "classes": [] } },
+                ],
+            })
+            .to_string()
+        };
+        let facts = |r: &str| (r == "R5" || r == "R6").then(|| ("/HV/".to_string(), vec!["PWR".to_string()]));
+        let ids = |expression: &str| handle_with(body(expression).as_bytes(), &facts)["ids"].clone();
+        assert_eq!(ids("A.memberOfSheet('/HV/')"), json!(["R5", "R5.1"]), "the request's own sheet wins: R6 is on /LV/");
+        assert_eq!(ids("A.hasComponentClass('PWR')"), json!(["R5", "R5.1"]));
+        assert_eq!(ids("A.ComponentClass == 'PWR'"), json!(["R5", "R5.1"]));
+        assert_eq!(handle(body("A.hasComponentClass('PWR')").as_bytes())["ids"], json!([]), "without the board's facts, no class");
     }
 }

@@ -551,6 +551,30 @@ pub fn footprint_text_draw_rotation(t: &eda_model::ir::FootprintText) -> f64 {
     rot
 }
 
+/// An angle in millidegrees in (-180, 180] (`EDA_ANGLE::Normalize180`).
+pub fn normalize180(a: i64) -> i64 {
+    let mut a = a.rem_euclid(360_000);
+    if a > 180_000 {
+        a -= 360_000;
+    }
+    a
+}
+
+/// Is the back footprint `fp` written half a turn from the model's pose (see `eda_kicad`'s `write_footprint`)? One made or flipped here is, one read in the
+/// file's frame is not.
+pub fn written_half_turned(design: &Design, fp: &eda_model::ir::FootprintInstance) -> bool {
+    let read_in_the_files_frame = design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == fp.id && !e.library_frame));
+    fp.side == Side::Bottom && !read_in_the_files_frame
+}
+
+/// KiCad's orientation of the footprint `fp`, in millidegrees counter-clockwise, in (-180, 180]: the angle of the `(at x y angle)` the writer gives it,
+/// which is what KiCad's Properties panel (`FOOTPRINT::GetOrientationDegrees`), Footprint Properties and the rule property `A.Orientation` give. A back
+/// footprint made or flipped here is half a turn from the model's `rot` (`FOOTPRINT::Flip`: `-m_orient`, then `Rotate( ANGLE_180 )` for a left-right flip).
+pub fn kicad_footprint_orientation(design: &Design, fp: &eda_model::ir::FootprintInstance) -> i64 {
+    let half = if written_half_turned(design, fp) { 180_000 } else { 0 };
+    normalize180(-(fp.rot as i64 + half))
+}
+
 pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
     let outline = design.placement.as_ref().map(|p| p.outline.clone()).unwrap_or_default();
     let board_outline = crate::outline::board_outline_with(design, Some(model), true);
@@ -585,6 +609,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 footprints.push(DrcFootprint { id: fp.id.clone(), side: fp.side, courtyard: c, outlines });
             }
             let board_rot = fp.rot as i64;
+            let half_turned = written_half_turned(design, fp);
             for (pad_idx, pad) in footprint.pads.iter().enumerate() {
                 let center = pad_center(fp, pad.at);
                 let pad_rot = board_rot + pad.rot as i64;
@@ -630,8 +655,11 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                     drill_slot,
                     size: pad.size,
                     shape: pad.shape,
-                    // `pad_file_angle`: the footprint's rotation plus the pad's own (whose sense flips on the bottom), negated.
-                    orientation_mdeg: (-(board_rot + if fp.side == Side::Bottom { -(pad.rot as i64) } else { pad.rot as i64 })).rem_euclid(360_000),
+                    // `pad_file_angle`: the footprint's rotation plus the pad's own (whose sense flips on the bottom), negated. A back footprint written half
+                    // a turn round turns its pads' absolute angle with it, except a pad `half_turn_pad` turns by its own angle instead (R6-D1).
+                    orientation_mdeg: (-(board_rot + if fp.side == Side::Bottom { -(pad.rot as i64) } else { pad.rot as i64 })
+                        + if half_turned && pad.ext.is_default() { 180_000 } else { 0 })
+                    .rem_euclid(360_000),
                     zone: design.pad_zone_facts(&fp.id, &footprint.name, pad_idx, footprint.pads.len(), &pad.number),
                 });
             }

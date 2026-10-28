@@ -200,6 +200,39 @@ fn a_rule_on_the_sheet_or_a_component_class_holds_a_route_off() {
     }
 }
 
+/// R6-D1: a rule on `A.Orientation` (the pad's, `PAD::GetOrientationDegrees`) or on a component class with a Rotation condition (`getRotationExpr`:
+/// `( A.Orientation == 90 deg )` on the footprint, `FOOTPRINT::GetOrientationDegrees`) reads KiCad's angle, counter-clockwise. R2 at the model's 270
+/// (clockwise) is KiCad's `(at x y 90)`: the rule holds the route 1 mm off it, and kicad-cli, which reads the derived file, finds nothing (and flags the
+/// route the net class alone gives). R2 at the model's 90 is KiCad's -90 (its pad at 270): no rule, the route runs straight, and kicad-cli agrees.
+#[test]
+fn a_rule_on_the_orientation_reads_kicads_angle() {
+    let (r1, r2, r3) = (p(5.0, 10.0), p(15.0, 11.2), p(25.0, 10.0));
+    let nets: &[(&str, &[&str])] = &[("SIG", &["R1.1", "R3.1"]), ("GND", &["R2.1"])];
+    for condition in ["A.Type == 'Pad' && A.Orientation == 90 deg", "A.hasComponentClass('TURNED')"] {
+        for (rot, applies) in [(270_000, true), (90_000, false)] {
+            let (mut design, mut model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2), ("R3", "PAD1", r3)], nets);
+            design.placement.as_mut().unwrap().footprints[1].rot = rot;
+            model.board.component_classes.assignments.push(eda_model::component_classes::ClassAssignment {
+                class: "TURNED".into(),
+                all: true,
+                conditions: vec![eda_model::component_classes::ClassCondition { kind: eda_model::component_classes::ConditionKind::Rotation, primary: "90".into(), secondary: String::new() }],
+            });
+            let plain_model = model.clone();
+            model.board.custom_rules_text = Some(format!("(version 1)\n(rule turned\n  (constraint clearance (min 1mm))\n  (condition \"{condition}\"))\n"));
+            let commit = route(&design, &model, r1, r3);
+            let gap = gap_to_pad(&commit, r2);
+            assert_eq!(gap >= 999_500.0, applies, "{condition} at {rot}: {gap}: {:?}", commit.tracks);
+            if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["clearance"]) {
+                assert!(found.is_empty(), "{condition} at {rot}: {found:#?}");
+                if applies {
+                    let class_only = route(&design, &plain_model, r1, r3);
+                    assert!(!kicad_violations(&apply(&design, &class_only), &model, &["clearance"]).unwrap().is_empty(), "{condition}: kicad-cli reads the rule");
+                }
+            }
+        }
+    }
+}
+
 /// The least gap from the committed tracks' copper to the polygon `pts` (its inside counts as 0).
 fn gap_to_box(commit: &RouteCommit, pts: &[Point]) -> f64 {
     let area = Shape::Polygon { pts: pts.to_vec() };
@@ -495,6 +528,60 @@ fn a_route_takes_the_start_nets_class_width() {
         assert!(found.is_empty(), "{found:#?}");
         let narrow = RouteCommit { tracks: commit.tracks.iter().map(|t| eda_model::ir::Track { width: mm(0.25), ..t.clone() }).collect(), ..Default::default() };
         assert!(!kicad_violations(&apply(&design, &narrow), &judged, &["track_width"]).unwrap().is_empty(), "the Default width is what kicad-cli flags");
+    }
+}
+
+/// R6-R2 (`ImportSizes`: `std::max( bds.m_TrackMinWidth, GetCurrentTrackWidth() )`): a chosen 0.1 mm on a board whose minimum track width is
+/// 0.2 mm routes at 0.2 mm, "board minimum track width", and so does a 0.1 mm chosen while routing (`Router::set_width`). Under `EDA_SLOW_TESTS=1`,
+/// kicad-cli's DRC finds no `track_width` in the route, and finds one in the same route at the 0.1 mm the studio used to commit.
+#[test]
+fn a_chosen_width_below_the_board_minimum_routes_at_the_minimum() {
+    let (r1, r2) = (p(5.0, 10.0), p(25.0, 10.0));
+    let (design, mut model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2)], &[("SIG", &["R1.1", "R2.1"])]);
+    model.board.track_width_min_nm = mm(0.2);
+    assert_eq!(eda_pns::settings::chosen_track_width(&model.board, mm(0.1)), (mm(0.2), "board minimum track width".to_string()));
+    assert_eq!(eda_pns::settings::chosen_track_width(&model.board, mm(0.2)), (mm(0.2), "user choice".to_string()));
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.start(r1, "F.Cu", eda_pns::settings::chosen_track_width(&model.board, mm(0.1)).0).unwrap();
+    assert_eq!(router.set_width(mm(0.1)), Some((mm(0.2), "board minimum track width".to_string())), "a width chosen while routing");
+    router.preview(r2).unwrap();
+    let commit = router.finish(r2).unwrap();
+    assert!(!commit.tracks.is_empty() && commit.tracks.iter().all(|t| t.width == mm(0.2)), "{:?}", commit.tracks);
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["track_width"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        let narrow = RouteCommit { tracks: commit.tracks.iter().map(|t| eda_model::ir::Track { width: mm(0.1), ..t.clone() }).collect(), ..Default::default() };
+        assert!(!kicad_violations(&apply(&design, &narrow), &model, &["track_width"]).unwrap().is_empty(), "the chosen 0.1 mm is what kicad-cli flags");
+    }
+}
+
+/// R6-R1 (`handleLayerSwitch`: with the net class's via sizes in use, `VIA_DIAMETER_CONSTRAINT` / `HOLE_SIZE_CONSTRAINT` of a dummy via of the
+/// route's net): V while routing a `+5V` net of a `Power` class with a 0.8 / 0.4 mm via arms the class's via, not the board's 0.6 / 0.3 mm default
+/// the studio used to send. Under `EDA_SLOW_TESTS=1`, with a rule that wants Power's vias at least 0.8 / 0.4 mm, kicad-cli finds no `via_diameter`
+/// or `drill_out_of_range` in the route, and flags the same route with the default via.
+#[test]
+fn a_via_armed_while_routing_has_the_nets_class_size() {
+    let (r1, r2, at) = (p(5.0, 10.0), p(25.0, 10.0), p(15.0, 10.0));
+    let (design, mut model) = board(&[("R1", "PAD1", r1), ("R2", "TH1", r2)], &[("+5V", &["R1.1", "R2.1"])]);
+    model.board.layers = vec!["F.Cu".into(), "B.Cu".into()];
+    model.board.net_classes.push(eda_model::NetClass { via_diameter: Some(mm(0.8)), via_drill: Some(mm(0.4)), ..class("Power", &["+5V"]) });
+    model.board.custom_rules_text = Some("(version 1)\n(rule power_via\n  (condition \"A.Type == 'Via' && A.NetClass == 'Power'\")\n  (constraint via_diameter (min 0.8mm))\n  (constraint hole_size (min 0.4mm)))\n".into());
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.start(r1, "F.Cu", mm(0.25)).unwrap();
+    router.preview(at).unwrap();
+    let back = router.layer_index("B.Cu");
+    let size = router.net_class_via_size(eda_model::via_extra::ViaKind::Through, None, back).unwrap();
+    assert_eq!(size, (mm(0.8), mm(0.4)), "the class's via");
+    router.toggle_via(true, size.0, size.1, back);
+    router.fix(at).unwrap();
+    router.preview(r2).unwrap();
+    let commit = router.finish(r2).unwrap();
+    assert_eq!(commit.vias.iter().map(|v| (v.diameter, v.drill)).collect::<Vec<_>>(), vec![(mm(0.8), mm(0.4))], "{commit:?}");
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["via_diameter", "drill_out_of_range"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        let default_via = RouteCommit { vias: commit.vias.iter().map(|v| eda_model::ir::Via { diameter: mm(0.6), drill: mm(0.3), ..v.clone() }).collect(), ..commit.clone() };
+        assert!(!kicad_violations(&apply(&design, &default_via), &model, &["via_diameter", "drill_out_of_range"]).unwrap().is_empty(), "the board's default via is what kicad-cli flags");
     }
 }
 
