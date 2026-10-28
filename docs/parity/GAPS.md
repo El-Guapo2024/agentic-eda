@@ -165,6 +165,16 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   the Symbol Fields Table per sheet path, `R01`, empty edits, the preview's variables (C5-M3, L8, L9 in part); DNP / Exclude across sheets (D5-M2, server side)
   and Increment Annotations over all sheets (D5-M3). **Left**: the Fields Table's Description column and Save / Discard / Cancel close question (C5-L9), the
   Find dialog's Regular Expression box, the studio's DNP state from the sheet in view (D5-M2).
+- Round 6 (2026-10-28, `task-r6-schematic`, `PARITY-sch.md` section 50): a unit's display name (`unit_name`) is kept in the schematic's cache and names the
+  unit in net names, `${UNIT}` and the drawn reference (B6-H1, QA `issue21980`); the library symbol's user fields are in the cache (`${LOCATION}`, QA
+  `issue22286`); Replace All in References moves a multi-unit symbol on two sheets (A6-M1); a pin's alternate counts in the duplicate-name test and holds on
+  every sheet path (A6-M2, A6-L2); every Delete of a connectable item merges through `DeleteJunction` (A6-L1); a `~` value is literal from 20250318 (A6-L3);
+  the Net Navigator lists labels and pins under their traced nets (C6-M1); Unfold from Bus leans the entry toward the cursor and puts the label at the first
+  click (C6-M2); Ctrl+E takes the hovered symbol and refuses a broken link (C6-M3); Compare Symbol with Library is `LIB_SYMBOL::Compare` (C6-M4); Back / Forward
+  clean their history (C6-L1); the Hierarchy Navigator's names, folding and Expand / Collapse All (C6-L2); the Symbol Checker's local power note (C6-L3).
+  **Left**: Ctrl+E edits the shared library entry, not the placed symbol's own copy (one library symbol per id, D5-M1); which of two equal default net names
+  takes `_1` (KiCad: the island's smallest item KIID, not kept); Unfold from Bus's bus-member submenus and label ghost; the Hierarchy Navigator's Edit Page
+  Number, Rename and net highlight; Compare's line style, corner radius, keywords and footprint filters.
 - Done (`crates/ops/src/{sch_move,sch_drag,sch_scene,sch_props}.rs`, `kicad-port/{schMove,schAlign,schProperties}.ts`, `components/{SchematicView,SchPropertiesDialogs}.tsx`):
   one verb family, `Cmd::SchMove`, moves, drags, turns, mirrors and aligns any set of symbols, power symbols, wires and bus wires, labels of every kind,
   free text, text boxes, shapes, rule areas, directive labels, junctions, no-connects, bus entries, graphic lines and sheets (with their pins), as one
@@ -691,7 +701,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   turn or flip it before the click; the library Footprint Properties' size messages, Paste Footprint's Value and the Renumber Pads dialog and popup are KiCad's.
 - Missing: Explode and Recombine of a custom pad (item 31); a placed symbol gets a library text box as its border and fill only, not its text (the engine's `SymbolGraphic` has no text box), keeps the alternate pin function a file picked (round 5, PARITY-sch section 48) but the studio cannot choose one or draw its name; the border's colour and
   a custom fill colour (the style is kept since the review, not edited) and Private to Symbol Editor of a library shape and text box; a plain text of a symbol and the Footprint Editor's graphics and texts have no Properties dialog (a new footprint text has its Footprint Text Properties since round 4, an existing one not yet); a footprint text has no vertical justification, italic or keep-upright; the fields table has no simulation fields; no named body styles;
-  Symbol Properties has no unit display names grid and no Pin Connections tab (both kept in the file); a pad's fabrication property and margins are kept, not edited, in the library Pad Properties; the board's Footprint Properties still has two mandatory rows. (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
+  Symbol Properties has no unit display names grid and no Pin Connections tab (both kept in the file, and the unit names in the schematic's cache since round 6); a pad's fabrication property and margins are kept, not edited, in the library Pad Properties; the board's Footprint Properties still has two mandatory rows. (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
 
 ### 20. Schematic view controls
