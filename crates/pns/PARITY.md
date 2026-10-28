@@ -1354,6 +1354,39 @@ The router side of `work/findings/round6/r6-route-rules.md` section R (and R6-D1
   through `Line`.
 - Gates: see the HANDOFF row (`qa_regressions` 13/13 exact, `rules_kicad` all passed).
 
+## Stage 21 -- round-7 router findings (branch `task-r7-router`, 2026-10-28)
+
+The router side of `work/findings/round7/r7-route-rules.md` section R, each re-read against `router_tool.cpp` (`prepareInteractive`, `finishInteractive`,
+`performRouting`, `performDragging`, `InlineDrag`, `MainLoop`, `onLayerCommand`, `handleLayerSwitch`), `pns_diff_pair_placer.cpp` (`SetLayer`, `FixRoute`,
+`makeVia`, `routeHead`), `pns_router.cpp` (`SwitchLayer`) and `undo_redo.cpp` (`RestoreCopyFromUndoList`) at 8303b2ad.
+
+- **R7-R1, the edit keys while routing (high).** `prepareInteractive`, `performDragging` and `InlineDrag` set `UndoRedoBlock( true )`; `performRouting`
+  takes Undo and Delete as `routerUndoLastSegment` and rings the bell on the zone-fill actions; `performDragging` treats an undo as an escape. The studio's
+  `routerEditKey` (`kicad-port/drawingCancel.ts`): with a route or a pair drawn, Ctrl+Z and Delete are Undo Last Segment, Redo and Fill / Fill All / Unfill /
+  Unfill All do nothing; with a drag, Ctrl+Z drops it, Redo, Delete and the fills do nothing. The server refuses `/api/undo` and `/api/redo` of the board
+  while a route, pair or drag session is open (`route_api::undo_redo_blocked`, `route_session: true` in the reply), and a studio that draws no route ends
+  such a session (one a reload left) and asks again. **Differs:** Delete during a drag is passed on in KiCad (`SetPassEvent`) and would reach the
+  selection tool's Remove under the drag; here it does nothing. Tests: `drawingCancel.test.ts`, `an_undo_is_refused_while_a_route_session_is_open`
+  (route_api), diff-pairs' r7 scenario.
+- **R7-R2, a pair's via size (high).** V while routing a pair sends `chosenViaOf( "through", .. )` as a track's V (`handleLayerSwitch`:
+  `GetCurrentViaSize()` unless the net class's vias are in use); `DiffPairPlacer::toggle_via` takes it, and with none goes back to the size the pair
+  started with (`rule_via`). **Differs:** with the net class's in use the size is the start layer's rules', not asked again at the layer being routed
+  (`net_class_via_size`). Tests: `a_pair_via_takes_the_chosen_via_size` (dp_placer; `dpTool.test.ts`; kicad-cli in `rules_kicad.rs`: a pair via rule of
+  0.8 / 0.4 mm passes the chosen vias and flags the class's 0.6 / 0.3 mm).
+- **R7-R3, the pair tool's layer keys and V before a pair.** `DiffPairPlacer::set_layer` is `DIFF_PAIR_PLACER::SetLayer`: idle, any layer; refused when
+  chained (`m_chainedPlacement`, now kept: a plain fix chains, a fix ending in vias does not) or before the first Move; else when the pair goes on from no
+  item or from two vias on the layer, it moves there (`m_start = *m_prevPair; initPlacement()`). `Router::switch_layer` is the placer's of either mode.
+  The studio registers the layer actions while a pair is drawn (refused: a pair of through vias to the layer is armed, sized as V), and V with the pair
+  tool armed sets `startWithVia`, spent by `startDiffPairRoute`. Tests: `a_layer_key_moves_a_pair_on_vias_to_the_layer` (dp_placer), diff-pairs' r7 scenario.
+- **R7-R4, Autoroute's hand-finished connection.** `performRouting`'s `routerAttemptFinish`: when `Finish` fails under the autorouter, `*autoRouted = false;
+  m_iface->SetCommitFlags( 0 );` -- `route_api::attempt_finish` clears `append_undo` on a refusal, so the connection the user finishes by hand is an undo
+  step of its own. Stage 20's R6-R4 sentence said the opposite and is corrected. Test: `a_hand_finished_autoroute_connection_is_its_own_undo_step`.
+- **R7-R5, E while routing.** `evt->IsAction( &PCB_ACTIONS::properties )` runs `ACT_CustomTrackWidth`: E with a route or a pair drawn opens Track and Via
+  Dimensions (`pcbnew.InteractiveRouter.CustomTrackViaSize`), not the hovered item's properties. Tests: `drawingCancel.test.ts`, diff-pairs' r7 scenario.
+- Left (low), in GAPS item 7: R7-R6 (`startWithVia` outlives the tool), R7-R7 (Autoroute's active layer afterwards), R7-R8 (the mode toasts), R7-R9
+  (`COMPONENT_DRAGGER` / `MULTI_DRAGGER`).
+- Gates: see the HANDOFF row.
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
