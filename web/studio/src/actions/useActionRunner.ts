@@ -86,7 +86,7 @@ import { netAtClick, registerSchControlActions, schControlChecked } from "./schC
 import { registerSchSheetFileActions } from "./schSheetFileActions";
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
-import { hitBus, hitSymbol, schematicBounds } from "../components/schematic/schHit";
+import { hitBus, hitSymbol, hitSymbolInstance, schematicBounds } from "../components/schematic/schHit";
 import { BROKEN_LINK_MESSAGE, symbolEditorTarget } from "../kicad-port/editWithSymbolEditor";
 import { hitField } from "../kicad-port/schFieldEdit";
 import { measureStrokeText } from "../components/text/strokeFont";
@@ -1476,7 +1476,7 @@ export function useActionRunner() {
     // own copy, `LoadSymbolFromSchematic` / `SaveSymbolToSchematic`).
     const editInSymbolEditor = schematicOnly(() => {
       if (!sch) return;
-      const hovered = state.cursorNm ? hitSymbol(sch, state.cursorNm.x, state.cursorNm.y) : null;
+      const hovered = state.cursorNm ? hitSymbolInstance(sch, state.cursorNm.x, state.cursorNm.y) : null;
       const target = symbolEditorTarget([...state.selection], [...sch.symbols, ...sch.power_symbols], (libId) => !!sch.lib_symbols[libId], hovered);
       if (target.kind === "none") return;
       if (target.kind === "broken") {
@@ -1484,7 +1484,7 @@ export function useActionRunner() {
         return;
       }
       dispatch({ type: "SET_TAB", tab: "symbol" });
-      void symApi.openSymbol(target.libId);
+      void symApi.openSymbol(target.libId, { unit: target.unit, bodyStyle: target.bodyStyle });
     });
     m.set("eeschema.EditorControl.editWithSymbolEditor", editInSymbolEditor);
     m.set("eeschema.EditorControl.editLibSymbolWithSymbolEditor", editInSymbolEditor);

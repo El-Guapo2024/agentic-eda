@@ -459,7 +459,8 @@ export interface SymbolEditorApi {
   /** The live state, read at call time (a hotkey handler's closure may be a render behind). */
   getState: () => SymbolEditorState;
   /** Open (or re-open -- a no-op server-side if already open) a symbol by lib_id and start polling it. */
-  openSymbol: (libId: string) => Promise<void>;
+  /** `at`: the unit and body style to show (`SYMBOL_EDIT_FRAME::LoadSymbolFromSchematic`, Ctrl+E on a placed symbol, r7 A7-M2); absent keeps the editor's. */
+  openSymbol: (libId: string, at?: { unit: number; bodyStyle: number }) => Promise<void>;
   /** `SYMBOL_EDIT_FRAME::CreateNewSymbol`'s `LIB_SYMBOL_LIBRARY_MANAGER::CreateNewSymbol`: a new, empty symbol in the project library,
    * one undo step (the `new_symbol` verb and its first properties), opened in the editor. Returns whether the verb accepted it (a name
    * the library has is refused; the dialog has already checked, the verb is the authority). */
@@ -557,12 +558,17 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
 
   const api: SymbolEditorApi = {
     getState: () => stateRef.current,
-    openSymbol: async (libId) => {
+    openSymbol: async (libId, at) => {
       dispatch({ type: "SET_LIB_ID", libId });
       await ensureSymbolInProject(libId); // an installed KiCad symbol is copied into the project library first, or the verb below would open a blank one
       await postCmd({ op: "open_symbol_for_edit", lib_id: libId }, false);
       const { symbol, own } = await fetchSymbolForEditor(libId);
       dispatch({ type: "SYMBOL_OK", symbol, own });
+      // `LoadSymbolFromSchematic`: `m_unit = std::max( 1, aSymbol->GetUnit() ); m_bodyStyle = std::max( 1, aSymbol->GetBodyStyle() );`
+      if (at) {
+        dispatch({ type: "SET_ACTIVE_UNIT", unit: at.unit });
+        dispatch({ type: "SET_ACTIVE_BODY_STYLE", style: at.bodyStyle });
+      }
     },
     newSymbol: async (request) => {
       const libId = joinLibName(PROJECT_SYMBOL_LIB, request.name);

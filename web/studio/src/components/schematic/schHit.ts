@@ -36,6 +36,11 @@ export function schematicBounds(sch: Schematic): Array<[number, number]> {
 }
 
 export function hitSymbol(sch: Schematic, xNm: number, yNm: number): string | null {
+  return hitSymbolInstance(sch, xNm, yNm)?.id ?? null;
+}
+
+/** The placed symbol (the unit, when several units of one reference are on the sheet) under the point: [`hitSymbol`]'s test, the item itself. */
+export function hitSymbolInstance(sch: Schematic, xNm: number, yNm: number): Schematic["symbols"][number] | null {
   for (let i = sch.symbols.length - 1; i >= 0; i--) {
     const s = sch.symbols[i]!;
     // World-space bbox test -- symbolBounds already accounts for
@@ -43,7 +48,7 @@ export function hitSymbol(sch: Schematic, xNm: number, yNm: number): string | nu
     // real graphics' own extent, not just a generic box), so there is no
     // local-space un-rotation to do here.
     const b = symbolBounds(s, sch.lib_symbols);
-    if (xNm >= b.minX - 200_000 && xNm <= b.maxX + 200_000 && yNm >= b.minY - 200_000 && yNm <= b.maxY + 200_000) return s.id;
+    if (xNm >= b.minX - 200_000 && xNm <= b.maxX + 200_000 && yNm >= b.minY - 200_000 && yNm <= b.maxY + 200_000) return s;
   }
   return null;
 }
