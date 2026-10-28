@@ -1385,9 +1385,20 @@ fn write_lib_symbol_entry(out: &mut String, cache_name: &str, lib_id: &str, inst
     }
     write_property(out, "Reference", "U", 0.0, 0.0, false);
     write_property(out, "Value", bare_name, 0.0, 0.0, false);
+    // the mandatory Description (`SaveSymbol` writes every field, `FIELD_T::DESCRIPTION` among them), which kicad-cli's netlist reads as the part's
+    // `<description>` (r7 H3)
+    if let Some(d) = resolved.as_ref().map(|r| r.description.as_str()).filter(|d| !d.is_empty()) {
+        write_property(out, "Description", d, 0.0, 0.0, true);
+    }
     // the library symbol's user fields (`SaveSymbol` writes every field), which its body texts resolve `${NAME}` by (`LIB_SYMBOL::ResolveTextVar`)
     for (name, text) in resolved.iter().flat_map(|r| r.connectivity.user_fields.iter()) {
         write_property(out, name, text, 0.0, 0.0, true);
+    }
+    // the keywords and the footprint filters (`saveDcmInfoAsFields`: `ki_keywords`, `ki_fp_filters`, hidden, each when it is not empty, r7 H3)
+    for (name, text) in resolved.iter().flat_map(|r| [("ki_keywords", &r.connectivity.keywords), ("ki_fp_filters", &r.connectivity.fp_filters)]) {
+        if !text.is_empty() {
+            write_property(out, name, text, 0.0, 0.0, true);
+        }
     }
 
     // ---- the body style(s): `_0_1` / `_<u>_1` for the normal one; a symbol with an alternate ("De Morgan") body style also gets `_0_2` / `_<u>_2` ----

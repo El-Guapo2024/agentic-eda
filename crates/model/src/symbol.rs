@@ -285,6 +285,14 @@ pub struct LibConnectivity {
     /// (`LIB_SYMBOL::ResolveTextVar`). Kept here, as [`Self::pin_alternates`] is, so the symbol's literals stay as they are.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub user_fields: Vec<(String, String)>,
+    /// The library symbol's keywords (`LIB_SYMBOL::GetKeyWords`, `(property "ki_keywords" ..)`), which the schematic's cache writes back
+    /// (`SCH_IO_KICAD_SEXPR_LIB_CACHE::saveDcmInfoAsFields`, r7 H3). Not connectivity; kept here as [`Self::user_fields`] is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub keywords: String,
+    /// The library symbol's footprint filters as the file has them (`(property "ki_fp_filters" ..)`: `GetFPFilters` joined by spaces, a space in a filter
+    /// escaped), written back the same way (r7 H3).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fp_filters: String,
 }
 
 impl LibConnectivity {

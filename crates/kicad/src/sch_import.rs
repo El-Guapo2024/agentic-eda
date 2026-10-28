@@ -454,7 +454,9 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             reference: reference.clone(),
             mpn: None,
             lcsc: None,
-            value: (!primary.value.is_empty()).then(|| primary.value.clone()),
+            // the file's Value as it is, an empty one too (`saveField` writes the empty text, r7 M2): the writers fall back to the reference only for a part
+            // that has no value at all, which a KiCad file's symbol never is
+            value: Some(primary.value.clone()),
             package: None,
             footprint: (!primary.footprint.is_empty()).then(|| primary.footprint.clone()),
             symbol: Some(lib_id.clone()),
@@ -1337,16 +1339,17 @@ impl RawUserField {
     }
 }
 
-/// The properties of a placed symbol that are no standard field (`FIELD_T::USER`): every `(property ...)` but Reference, Value, Footprint, Datasheet and
-/// Description (matched without regard to case, as `parseSchField` does), in file order, the first of a name. `(property private "Name" "text" ...)` is read too
-/// (the flag is not kept).
+/// The properties of a placed symbol beyond the four the instance holds itself: every `(property ...)` but Reference, Value, Footprint and Datasheet (matched
+/// without regard to case, as `parseSchField` does), in file order, the first of a name. `(property private "Name" "text" ...)` is read too (the flag is not
+/// kept). The mandatory Description (`FIELD_T::DESCRIPTION`) is one of them, kept as a field of that name with its text, place and look, so the writer
+/// writes it as `saveSymbol` does (every field) and kicad-cli's netlist and BOM have it (r7 H3). **Differs**: the studio lists it with the user fields.
 fn user_fields_of(item: &[Sexpr]) -> Vec<RawUserField> {
     let mut out: Vec<RawUserField> = Vec::new();
     for p in sexpr::find_all(item, "property") {
         // `private` is a word of its own before the name; a field called "private" has a list (its position) where the text would end
         let shift = usize::from(sexpr::txt(p, 1) == Some("private") && p.get(3).is_some_and(|n| n.text().is_some()));
         let (Some(name), Some(text)) = (sexpr::txt(p, 1 + shift), sexpr::txt(p, 2 + shift)) else { continue };
-        if name.is_empty() || ["Reference", "Value", "Footprint", "Datasheet", "Description"].iter().any(|m| m.eq_ignore_ascii_case(name)) || out.iter().any(|f| f.name == name) {
+        if name.is_empty() || ["Reference", "Value", "Footprint", "Datasheet"].iter().any(|m| m.eq_ignore_ascii_case(name)) || out.iter().any(|f| f.name == name) {
             continue;
         }
         let at = sexpr::find(p, "at");
