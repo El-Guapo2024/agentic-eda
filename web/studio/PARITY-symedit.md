@@ -72,8 +72,10 @@ one code path by construction, not just by intent.
 `SymbolEditorCanvas.tsx`: select/move/pin/draw-shape/text tools, pin
 auto-increment (`kicad-port/pinNumbering.ts`, ported+tested against
 `crates/model/src/ir.rs`'s identical algorithm), orientation
-Right/Left/Up/Down <-> `angle_deg` (`kicad-port/pinOrientation.ts`,
-confirmed against this app's own already-correct builtin symbols, tested).
+Right/Left/Up/Down <-> `angle_deg` (`kicad-port/pinOrientation.ts`): the
+file's angle as `parseSymbolPin` reads it, 0 Right, 90 Up, 180 Left, 270
+Down (round 7, E7-S1: the earlier "confirmed against builtin symbols"
+mapping was turned 180 degrees, so every label was the opposite one).
 Only the active unit/body-style's own items (plus unit/style `0` =
 shared) are shown/hit-testable, matching real eeschema. `R`/Shift+`R`
 rotates a selected pin 90 deg CCW/CW. `PinPropertiesDialog.tsx` (full
@@ -270,6 +272,26 @@ Tests: `crates/kicad/tests/library_keep.rs` (the symbol cases), `crates/kicad/sr
 The action audit (`tools/ui-parity-audit.mjs`) counts an action by name, not by tab: `common.Interactive.copy`/`paste`/`cut`/`duplicate` and
 `eeschema.InteractiveEdit.repeatDrawItem` were counted as wired from the schematic while the Symbol tab had none; they are the Symbol tab's own
 now (`actions/editorFrameActions.ts`), but the audit still cannot tell a tab that lacks one.
+
+## Round 7: pin orientation, units and body styles, the Pin Table, the library names (`r7-editors-exports` E7-S1..S23; 2026-10-28, `task-r7-sym-editor`)
+
+| Row | Status | KiCad file:function |
+|---|---|---|
+| Pin orientation (Pin Properties, the Pin Table, the pin tool's default) | **identical** (E7-S1): the label is the file angle's (0 Right, 90 Up, 180 Left, 270 Down); a new pin is Right, written at 0 (`g_LastPinOrient = PIN_RIGHT`). The stored angles did not change, so every file keeps its pins pointing the way they did; only the labels and the default were wrong | `sch_io_kicad_sexpr_parser.cpp::parseSymbolPin`, `pin_type.cpp::InitTables`, `symbol_editor_pin_tool.cpp` |
+| A pin's length (Pin Properties, the Pin Table) | **identical** (E7-S2): `ChangeLength` -- the body end stays and the connection point moves by the change along the pin; Pin Properties takes the typed place, then the length (`SetPosition( newPos ); ChangeLength( .. )`) | `DIALOG_PIN_PROPERTIES::TransferDataFromWindow`, `PIN_INFO_FORMATTER::UpdatePin`, `SCH_PIN::ChangeLength` |
+| A pin's Y (Pin Properties, the Pin Table) | **identical** (E7-S3): KiCad's internal Y, the file's negated (`parseXY( true )`; eeschema's `ORIGIN_TRANSFORMS` is the identity), so a pin at `(at 0 2.54 ..)` shows -2.54 | `DIALOG_PIN_PROPERTIES::TransferDataToWindow`, `PIN_INFO_FORMATTER::Format` |
+| Symbol Properties' "Number of units" | **identical** (E7-S5, S6): fewer units ask "Delete extra units from symbol?" (Yes / No; No keeps the dialog) and delete every pin and graphic of the dropped units (and their display names); more units copy unit 1's items into each new unit; the canvas goes back to unit A when its unit is gone | `DIALOG_LIB_SYMBOL_PROPERTIES::Validate`, `LIB_SYMBOL::SetUnitCount( n, true )`, `RebuildSymbolUnitAndBodyStyleLists`; `crates/ops/src/library_editors.rs::set_unit_count` |
+| Symbol Properties' body styles | **25ec2335's** (E7-S7): De Morgan on copies the body-style-1 pins into style 2 (`SetBodyStyleCount( 2, false, true )`); off asks "Delete extra body styles from symbol?" and deletes style 2. 8303b2ad asks but copies and deletes nothing (it calls `SetHasDeMorganBodyStyles` first, so `SetBodyStyleCount` returns at once), which 25ec2335 fixed | `Validate`, `TransferDataFromWindow` (25ec2335), `LIB_SYMBOL::SetBodyStyleCount`; `set_alternate_body_style` |
+| Symbol Properties' "Symbol name:" | **identical** (E7-S8): shown unescaped, written `EscapeString( .., CTX_LIBID )`; "Symbol must have a name.", "Symbol name '%s' already in use in library '%s'." (any case); the rename is in the same undo step (`LIB_RENAME`), and a power symbol's Value follows the name as it is typed (`OnSymbolNameText`) | `TransferDataFromWindow`, `OnSymbolNameText` |
+| The Pin Table | **identical** (E7-S10..S14): it edits copies of the pins; OK writes them as one undo step ("Edit Pins"), closing with changes asks "Save changes?" (Save / Discard Changes / Cancel), a derived symbol's OK is "Read Only"; the rows act on their own pins (no Synchronized Pins Mode); Unit is "ALL" and the units ("Unit A" or the display name), Body Style "ALL", "Standard", "Alternate", each only on a symbol that has several (else "ALL", not editable), and the verbs refuse a unit or body style the symbol has not (the writer would make a `Name_5_1` or drop the pin); Add Pin is `OnAddRow` (no number or name, unspecified, Right, unit and body style 0, or the last row's orientation, type, shape, unit and body style one `pin_step` from it) | `SYMBOL_EDITOR_EDIT_TOOL::PinTable`, `DIALOG_LIB_EDIT_PIN_TABLE` (`OnAddRow`, `OnClose`, `TransferDataFromWindow`), `PIN_INFO_FORMATTER`; `kicad-port/pinTable.ts` |
+| Rename Symbol | **identical** (E7-S17): the name is trimmed (`RENAME_DIALOG`) and escaped (`A:B` is stored `A{colon}B`) | `SYMBOL_EDITOR_CONTROL::RenameSymbol` |
+| A symbol name in use | **identical** (E7-S18): in any case, in the same library (`SymbolNameInUse`'s `CmpNoCase`): Paste and Duplicate name `R` `R_1` beside `r`, Rename and Save As ask about it, and the verbs refuse it (an overwrite replaces the other spelling) | `SYMBOL_LIBRARY_MANAGER::SymbolNameInUse`, `ensureUniqueName` |
+
+Left, low (GAPS.md item 19): Pin Properties' Delete Pin button, its silent clamps and labels (E7-S4); the "Exclude from" boxes disabled on opening a power symbol (E7-S9); the Pin Table's summary, Count and text-size
+columns, type names and sort (E7-S15); the Symbol Checker's unit letters (E7-S16); the library tree's E7-S19..S23.
+
+Tests: `crates/ops/src/sym_units_tests.rs` (5), `library_editors.rs` `a_symbol_name_is_taken_in_any_case`; `kicad-port/pinOrientation.test.ts`, `symPinTemplate.test.ts`, `symUnits.test.ts`, `pinTable.test.ts`,
+`libraryNames.test.ts`; the scenario "r7: Symbol Properties' fewer units ..." of `e2e/lib-editors.check.js`.
 
 ## Differs from KiCad
 
