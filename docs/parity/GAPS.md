@@ -711,6 +711,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Missing: Explode and Recombine of a custom pad (item 31); a placed symbol gets a library text box as its border and fill only, not its text (the engine's `SymbolGraphic` has no text box), keeps the alternate pin function a file picked (round 5, PARITY-sch section 48) but the studio cannot choose one or draw its name; the border's colour and
   a custom fill colour (the style is kept since the review, not edited) and Private to Symbol Editor of a library shape and text box; a plain text of a symbol and the Footprint Editor's graphics and texts have no Properties dialog (a new footprint text has its Footprint Text Properties since round 4, an existing one not yet); a footprint text has no vertical justification, italic or keep-upright; the fields table has no simulation fields; no named body styles;
   Symbol Properties has no unit display names grid and no Pin Connections tab (both kept in the file, and the unit names in the schematic's cache since round 6); a pad's fabrication property and margins are kept, not edited, in the library Pad Properties; the board's Footprint Properties still has two mandatory rows. (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
+- Round 7 (2026-10-28, `task-r7-fp-editor`; `PARITY-fpedit.md` section 18): Pad Properties' pad type is KiCad's five (Edge Connector and SMD Aperture too) and a choice resets the layers, the hole and the number
+  (`PadTypeSelected`); OK runs `padValuesOK` (warnings shown, a plated hole that reaches the pad edge applied) and makes the pad Add Pad's master with its number the last; the Pad Table's Type is `PAD::SetAttribute`;
+  library Footprint Properties has "Component type:" and KiCad's attribute labels. Left (low):
+  - E7-F6: switching the hole between Round and Slot puts fixed sizes in (0.8 mm, 0.6 x 1.0 mm); KiCad's `OnDrillShapeSelected` keeps the size, and its label is "Oblong".
+  - E7-F7: the THT preset (`F.Mask B.Mask`) and a pad's `*.Mask` compare as different strings, so the Add Pad master shows no preset as current.
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
 
 ### 20. Schematic view controls
@@ -1058,6 +1063,15 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (section 18; Rotate/Flip of a dimension is done). The Draw Zone Fill Fracture Borders / Triangulation debug modes draw strokes only (the triangulation is an earcut port without KiCad's Z-order hash); Flip Board View mirrors text on
   non-side-specific layers with the board where KiCad keeps it readable; Automatically select track width does not turn off when a width is picked in the toolbar and the first width key while routing
   does not set `m_TempOverrideTrackWidth` (`PARITY-boardctl.md`).
+- Round 7 (2026-10-28, `task-r7-fp-editor`; `PARITY-boardctl.md` section 7): Export Footprints writes every board footprint, as the board has it, over its library entry; zone priority's overlap honours holes and
+  layer sets (the command and the menu); the ratsnest mode forgets the local ratsnest pads on every change; a multi-net highlight keeps the last-highlight memory; Hide Net acts on the selection only; a ratsnest
+  line whose ends coincide is KiCad's cross. Left (low):
+  - C7-5: Highlight Net (selection) drops a selected item with no net; KiCad highlights the unconnected items (net code 0).
+  - C7-8: the curved ratsnest is a quadratic bow of 0.03 L; KiCad's is `DrawCurve( source, center, center, target )` with the centre 0.1 L off the line.
+  - C7-9: a highlighted net's ratsnest is the selection-shadow colour at 2.5 px; KiCad brightens the net's own colour and halves the alpha of the other lines (`dimStatic`).
+  - C7-10: Local Ratsnest picks a pad by its box, not `PAD::HitTest`, and leaves the selection alone (KiCad clears it).
+  - C7-11: the net under the cursor is the nearest pad centre or a track within 10 px, not `highlightNet`'s collector (hit test, preferred layer, high-contrast filter).
+  - C7-12: Repair Board scans tracks, vias, zones and drawings, not footprints and pads first; it takes orphan nets from zones too; it is an undo step (KiCad's `OnModify` makes none).
 
 ### 36. Connectivity against kicad-cli
 **Measured, mostly closed.** `tools/parity_report.py` section 1 (`crates/connectivity/tests/parity_connectivity.rs`), `PARITY-pcb.md` section 51.
