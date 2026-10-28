@@ -101,8 +101,8 @@ struct Sources {
     sheets: Vec<(String, SheetFile)>,
     /// kicad-cli's runs, in the order they were made.
     imports: Vec<ForeignImport>,
-    /// The sheets are a KiCad project's top-level sheets (`schematic.top_level_sheets`), not the sheets of a project of another format.
-    top_level_sheets: bool,
+    /// When the sheets are a KiCad project's top-level sheets (`schematic.top_level_sheets`), each one's file, relative to the project; empty otherwise.
+    top_level_files: Vec<String>,
 }
 
 fn stem_of(path: &Path) -> String {
@@ -125,7 +125,7 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
 fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
     let input = PathBuf::from(&args.input);
     let ext = input.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    let mut s = Sources { board: None, project: None, rules: None, sheets: Vec::new(), imports: Vec::new(), top_level_sheets: false };
+    let mut s = Sources { board: None, project: None, rules: None, sheets: Vec::new(), imports: Vec::new(), top_level_files: Vec::new() };
     let mut runs = 0;
     let mut convert_one = |s: &mut Sources, path: &Path, kind: Option<Kind>| -> Result<ForeignImport, Vec<CheckResult>> {
         runs += 1;
@@ -147,14 +147,15 @@ fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
             // (`/Root/shared1/`). **Differs**: the studio has one root, so the derived file is a root that places the top-level sheets, not a project of several.
             let listed = std::fs::read_to_string(input.with_extension("kicad_pro")).map(|pro| eda_kicad::project_schematic::top_level_sheets(&pro)).unwrap_or_default();
             let dir = input.parent().map(Path::to_path_buf).unwrap_or_default();
-            let found: Vec<(String, PathBuf)> = listed.into_iter().map(|(file, name)| (name, dir.join(file))).filter(|(_, path)| path.is_file()).collect();
+            let found: Vec<(String, String)> = listed.into_iter().filter(|(file, _)| dir.join(file).is_file()).collect();
             if found.len() > 1 {
-                eprintln!("import-kicad: the project has {} top-level sheets ({}): each is read", found.len(), found.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", "));
-                for (name, path) in &found {
-                    let file = eda_kicad::load_sheet_file(path)?;
-                    s.sheets.push((if name.is_empty() { stem_of(path) } else { name.clone() }, file));
+                eprintln!("import-kicad: the project has {} top-level sheets ({}): each is read", found.len(), found.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>().join(", "));
+                for (file_name, name) in &found {
+                    let path = dir.join(file_name);
+                    let file = eda_kicad::load_sheet_file(&path)?;
+                    s.sheets.push((if name.is_empty() { stem_of(&path) } else { name.clone() }, file));
+                    s.top_level_files.push(file_name.replace('\\', "/"));
                 }
-                s.top_level_sheets = true;
             } else {
                 let file = eda_kicad::load_sheet_file(&input)?;
                 s.sheets.push((stem_of(&input), file));
@@ -379,9 +380,10 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
     if !sources.sheets.is_empty() {
         let (name, content) = match sources.sheets.len() {
             1 => sources.sheets.into_iter().next().expect("one sheet"),
-            n if sources.top_level_sheets => {
+            n if !sources.top_level_files.is_empty() => {
                 eprintln!("import-kicad: {n} top-level sheets, placed on a root sheet under the names the project gives them");
-                ("project".to_string(), foreign::combine_sheets_with(sources.sheets, false))
+                let parts = sources.sheets.into_iter().zip(sources.top_level_files).map(|((name, file), file_name)| (name, file_name, file)).collect();
+                ("project".to_string(), foreign::combine_top_level_sheets(parts))
             }
             n => {
                 eprintln!("import-kicad: {n} sheets, placed on a root sheet as KiCad's Altium project import places them");

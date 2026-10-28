@@ -2131,7 +2131,8 @@ fn a_schematic_only_import_keeps_the_projects_net_classes() {
 }
 
 /// r7 H2: every top-level sheet a KiCad 10 project lists (`schematic.top_level_sheets`) is read, as `OpenProjectFiles` loads them: QA `issue23403`'s two
-/// top-level sheets each place `shared1.kicad_sch`, so C1 is placed twice and kicad-cli makes four nets of the two pins, of the original and of the derived file.
+/// top-level sheets each place `shared1.kicad_sch`, so C1 is placed twice and kicad-cli makes four nets of the two pins, of the original and of the derived file,
+/// and flags its unconnected pins once per screen in both.
 #[test]
 fn every_top_level_sheet_of_the_project_is_imported() {
     let Some((dir, root)) = qa_variant("issue23403/issue23403.kicad_sch", "r7_top_level_sheets", None, "") else { return };
@@ -2143,6 +2144,9 @@ fn every_top_level_sheet_of_the_project_is_imported() {
     assert_eq!(design.nets.iter().flatten().filter(|n| n.name.starts_with("unconnected-(C1")).count(), 4, "{:?}", design.nets);
     if kicad_cli_ready() {
         assert_eq!(kicad_net_groups(&dir), kicad_cli_net_groups(&root), "kicad-cli reads the derived file's nets as the original's");
+        // the shared screen is one screen on both paths, so its unconnected pins are flagged once each, as in the original
+        let (derived, original) = (erc_kinds(&dir), kicad_cli_erc_counts(&root).unwrap());
+        assert_eq!(derived.get("pin_not_connected"), original.get("pin_not_connected"), "{derived:?} against {original:?}");
     }
 }
 
