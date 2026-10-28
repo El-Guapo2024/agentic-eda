@@ -388,7 +388,7 @@ pub fn attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     let Some(router) = guard.as_mut() else { return err("not routing") };
     // `append_undo` (Autoroute, R6-R4): `RouteSelected`'s `m_iface->SetCommitFlags( APPEND_UNDO )` for every connection of a run but the first of a
-    // group -- the commit joins the step before it, whether `Finish` makes it now or the user finishes the route by hand later
+    // group -- the commit `Finish` makes joins the step before it
     if let Some(append) = req.get("append_undo").and_then(Value::as_bool) {
         router.append_undo = append;
     }
@@ -403,6 +403,11 @@ pub fn attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
             }
         }
         Err(end) => {
+            // `performRouting`, `routerAttemptFinish` when `Finish` fails: "This acts as check if we were called by the autorouter; we don't want to
+            // reset APPEND_UNDO if we're auto finishing after route-other-end" -- `if( autoRouted != nullptr ) { *autoRouted = false;
+            // m_iface->SetCommitFlags( 0 ); }`: the connection the user now finishes by hand is an undo step of its own, a checkpoint (R7-R4). A
+            // hand F sends no `append_undo` and has none to clear.
+            router.append_undo = false;
             let preview = router.preview(end).map(|p| preview_json(router, &p)).unwrap_or_else(|| json!({}));
             json!({ "ok": true, "finished": false, "warp": [end.x, end.y], "preview": preview })
         }
@@ -471,6 +476,20 @@ pub fn cancel(dir: &Path, cell: &RouteCell) -> Value {
         Some(Ok(_)) => json!({ "ok": true, "committed": true }),
         None => json!({ "ok": true, "committed": false }),
     }
+}
+
+/// R7-R1: `/api/undo` and `/api/redo` on the board while a route, a pair or a drag session is open. `ROUTER_TOOL::prepareInteractive` (and
+/// `performDragging` / `InlineDrag`) set `frame()->UndoRedoBlock( true )` until `finishInteractive`, and `PCB_BASE_EDIT_FRAME::RestoreCopyFromUndoList`
+/// / `RestoreCopyFromRedoList` return at once while it is set (`undo_redo.cpp`: `if( UndoRedoBlocked() ) return;`): an undo must not change the board
+/// under a session whose world, displaced tracks and commit were computed from it. The studio sends Ctrl+Z while routing to Undo Last Segment and never
+/// here; this guards every other client. The footprint and symbol editors keep their own undo (their own domains). The reply carries `route_session`,
+/// so a studio that has no route of its own (a session left by a page reload) can end it and ask again.
+pub fn undo_redo_blocked(cell: &RouteCell, scope: Option<eda_ops::Domain>) -> Option<Value> {
+    if matches!(scope, Some(eda_ops::Domain::FootprintEditor | eda_ops::Domain::SymbolEditor)) {
+        return None;
+    }
+    let live = cell.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+    live.then(|| json!({ "ok": false, "route_session": true, "message": "Undo and redo are blocked while a route is in progress (Esc ends it)." }))
 }
 
 /// `POST /api/route/mode`: `{mode}` (`"mark_obstacles" | "walkaround" | "shove"`) -- `ROUTER_TOOL::ChangeRouterMode` /
@@ -1102,6 +1121,54 @@ mod tests {
         assert_ne!(tracks(), before, "the routes were committed");
         board::undo(&dir, "test", Some(eda_ops::Domain::Pcb)).unwrap();
         assert_eq!(tracks(), before, "one undo takes the three autorouted connections away");
+    }
+
+    /// R7-R4 (`performRouting`: `m_iface->SetCommitFlags( 0 )` when `Finish` fails during Autoroute): connection 1 routed by `Finish`, connection 2
+    /// blocked so that `Finish` stops short and finished by hand -- one undo takes connection 2 away and leaves connection 1 on the board.
+    #[test]
+    fn a_hand_finished_autoroute_connection_is_its_own_undo_step() {
+        let dir = scratch("autoroute_hand");
+        let stub = |id: &str, net: &str, x: f64, y: f64| Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(mm(x), mm(y)), p(mm(x + 1.0), mm(y))], arc_mid_offset: None };
+        // connection 2 (GND, y = 6) has a wall of another net across its way, from y = 3 to y = 9, so walk around cannot reach the far stub
+        let wall = Track { id: "wall".into(), net: "USB_DP".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.5), pts: vec![p(mm(5.5), mm(4.0)), p(mm(5.5), mm(8.0))], arc_mid_offset: None };
+        setup_board(&dir, vec![stub("a0", "SIG", 2.0, 2.0), stub("b0", "SIG", 8.0, 2.0), stub("a1", "GND", 2.0, 6.0), stub("b1", "GND", 8.0, 6.0), wall], vec![]);
+        let tracks = || board::load(&dir).unwrap().1.routing.unwrap().tracks;
+        let cell = RouteCell::default();
+        let start_at = |y: i64| start(&dir, &cell, &body(json!({ "x": 3_000_000, "y": y, "layer": "F.Cu", "width": 200_000, "settings": { "mode": "mark_obstacles" } })));
+        assert_eq!(start_at(2_000_000)["ok"], json!(true));
+        assert_eq!(attempt_finish(&dir, &cell, &body(json!({ "x": 8_000_000, "y": 2_000_000, "append_undo": false })))["finished"], json!(true));
+        let after_one = tracks();
+        assert_eq!(start_at(6_000_000)["ok"], json!(true));
+        let reply = attempt_finish(&dir, &cell, &body(json!({ "x": 8_000_000, "y": 6_000_000, "append_undo": true })));
+        assert_eq!(reply["finished"], json!(false), "the wall stops Finish: {reply}");
+        // by hand: round the wall, then to the stub
+        for (x, y) in [(4_000_000, 6_000_000), (4_000_000, 10_000_000), (8_000_000, 10_000_000)] {
+            mv(&cell, &body(json!({ "x": x, "y": y })));
+            assert_eq!(fix(&cell, &body(json!({ "x": x, "y": y })))["blocked"], json!(false), "fix at {x},{y}");
+        }
+        mv(&cell, &body(json!({ "x": 8_000_000, "y": 6_000_000 })));
+        assert_eq!(finish(&dir, &cell, &body(json!({ "x": 8_000_000, "y": 6_000_000 })))["ok"], json!(true));
+        assert_ne!(tracks(), after_one, "connection 2 is on the board");
+        board::undo(&dir, "test", Some(eda_ops::Domain::Pcb)).unwrap();
+        assert_eq!(tracks(), after_one, "one undo takes the hand-finished connection away, and connection 1 stays");
+    }
+
+    /// R7-R1 (`frame()->UndoRedoBlock( true )` while routing): with a route session open, an undo or a redo of the board is refused and the board
+    /// stays as it is; the footprint and symbol editors' own undo is not the board's; once the session ends, undo works again.
+    #[test]
+    fn an_undo_is_refused_while_a_route_session_is_open() {
+        let dir = scratch("undo_blocked");
+        setup(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        assert!(undo_redo_blocked(&cell, Some(eda_ops::Domain::Pcb)).is_none(), "no session, nothing blocked");
+        start_with(&dir, &cell, json!({ "mode": "walkaround" }));
+        let refused = undo_redo_blocked(&cell, Some(eda_ops::Domain::Pcb)).expect("blocked while routing");
+        assert_eq!((refused["ok"].clone(), refused["route_session"].clone()), (json!(false), json!(true)), "{refused}");
+        assert!(undo_redo_blocked(&cell, None).is_some() && undo_redo_blocked(&cell, Some(eda_ops::Domain::Schematic)).is_some());
+        assert!(undo_redo_blocked(&cell, Some(eda_ops::Domain::FootprintEditor)).is_none());
+        assert!(undo_redo_blocked(&cell, Some(eda_ops::Domain::SymbolEditor)).is_none());
+        cancel(&dir, &cell);
+        assert!(undo_redo_blocked(&cell, Some(eda_ops::Domain::Pcb)).is_none(), "the session ended");
     }
 
     /// findings p5 F2-3: Esc commits what the clicks fixed (`ROUTER_TOOL::performRouting`: the cancel branch breaks out of the loop, and

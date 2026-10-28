@@ -1695,6 +1695,8 @@ export type Cmd =
   | { op: "set_schematic_page"; page: CmdPage; title_block: TitleBlock }
   /** `pcbnew.Control.repairBoard` -- refused ("No board problems found.") when there is nothing to repair; `POST /api/repair_board` wraps it with KiCad's report. */
   | { op: "repair_board" }
+  /** `pcbnew.EditorControl.exportFootprints` (`ExportFootprintsToLibrary`): every board footprint, as the board has it, over the project library's entry of its name. */
+  | { op: "export_footprints_to_library" }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
   /**
@@ -2412,6 +2414,8 @@ export interface SchematicPin {
   kind: PinKind;
   /** The net the pin is on (the netlist: wires, labels, power symbols), absent for a pin on none. */
   net?: string | null;
+  /** The alternate function the placed pin picked (`SCH_PIN::m_alt`, `SchExtras::pin_alternates`), when `SCH_PIN::SetAlt` keeps it: absent for none. */
+  alt?: string | null;
 }
 
 /** eeschema's ELECTRICAL_PINTYPE, serialized name per .kicad_sym. */
@@ -2478,6 +2482,8 @@ export interface LibSymbol {
   body_style_count?: number;
   /** `LIB_SYMBOL::GetUnitDisplayNames`, by unit number: a unit's `(unit_name ..)`, which KiCad 25ec2335's `SCH_SYMBOL::SubReference` shows in place of its letter. */
   unit_names?: Record<string, string>;
+  /** `LIB_SYMBOL::GetUnitCount` (`m_unitCount`); absent from a backend that does not send it, when the highest unit of a pin or graphic stands in (`unitCountOf`). */
+  unit_count?: number;
 }
 
 /** GET /api/schematic's `lib_symbols`: every distinct lib_id used on the sheet, keyed by that lib_id ("Device:R", "power:GND", ...). */
@@ -2803,6 +2809,10 @@ export interface Schematic {
   paper?: SchematicPaper;
   /** The file of the screen shown (empty for the root sheet): the title block names it. The design's whole tree is `fetchHierarchy` (`GET /api/sch/hierarchy`). */
   file?: string;
+  /** The project's unit naming (`schematic.subpart_id_separator` / `subpart_first_id`, character codes; the root sheet's `SchExtras`): absent is KiCad's default,
+   *  no separator and 'A' (`SCHEMATIC_SETTINGS::SubReference`). */
+  subpart_id_separator?: number | null;
+  subpart_first_id?: number | null;
 }
 
 // ---------------------------------------------------------------- Symbol library

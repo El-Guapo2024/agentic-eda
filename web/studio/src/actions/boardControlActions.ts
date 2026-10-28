@@ -7,12 +7,11 @@
 
 import type { Dispatch } from "react";
 import type { Action, StudioApi, StudioState } from "../state/store";
-import type { BoardControlState, BoardExportKind } from "../kicad-port/boardControlState";
+import { localRatsnestPadsAfter, type BoardControlState, type BoardExportKind } from "../kicad-port/boardControlState";
 import { postRepairBoard } from "../api/boardControl";
 import { cliExporterUnavailable } from "../state/cliExporters";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
-import { fetchFootprintLibraryNames } from "../api/client";
-import type { Cmd, ZonePriorityMove } from "../api/types";
+import type { ZonePriorityMove } from "../api/types";
 import { highlightedNets, netsOfSelection, ratsnestModeCycle, selectedCopperZones, setNetsHidden, swapHighlight } from "../kicad-port/boardControl";
 
 export interface BoardControlContext {
@@ -53,14 +52,14 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
     })
   );
 
-  // RatsnestModeCycle: off -> all layers -> visible layers -> off. Turning the global ratsnest on or off also resets every pad's local flag
-  // (`SetElementVisibility( LAYER_RATSNEST )`), which the reducer's TOGGLE_RATSNEST does.
+  // RatsnestModeCycle: off -> all layers -> visible layers -> off. Every step resets every pad's local flag (`SetElementVisibility( LAYER_RATSNEST,
+  // m_ShowGlobalRatsnest )`, the All to Visible step included, r7 C7-3).
   m.set(
     "pcbnew.Control.ratsnestModeCycle",
     pcbOnly(() => {
       const next = ratsnestModeCycle(state.showRatsnest, state.bcx.ratsnestMode);
       if (next.show !== state.showRatsnest) dispatch({ type: "TOGGLE_RATSNEST" });
-      bcx({ ratsnestMode: next.mode });
+      bcx({ ratsnestMode: next.mode, localRatsnestPads: localRatsnestPadsAfter(state.bcx.localRatsnestPads, { show: state.showRatsnest, mode: state.bcx.ratsnestMode }, next) });
     })
   );
 
@@ -111,14 +110,12 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
     })
   );
 
-  // hideNetInRatsnest / showNetInRatsnest on the selection's nets (`doHideRatsnestNet`, netcode <= 0 and a selection).
+  // hideNetInRatsnest / showNetInRatsnest on the selection's nets: `doHideRatsnestNet` reads `GetSelection()` only (not the item under the cursor) and keeps the
+  // nets with `GetNetCode() > 0`; with none it does nothing and says nothing (the action is disabled by `haveNetCond`, r7 C7-6).
   const setNetsInRatsnest = (hide: boolean) =>
     pcbOnly(() => {
-      const nets = board ? netsOfSelection(c.requestSelection(), board) : [];
-      if (nets.length === 0) {
-        toast(`Select an item on the net to ${hide ? "hide" : "show"} in the ratsnest.`);
-        return;
-      }
+      const nets = board ? netsOfSelection([...state.selection], board) : [];
+      if (nets.length === 0) return;
       bcx({ hiddenRatsnestNets: setNetsHidden(state.bcx.hiddenRatsnestNets, nets, hide) });
     });
   m.set("pcbnew.EditorControl.hideNet", setNetsInRatsnest(true));
@@ -242,27 +239,15 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
   m.set("pcbnew.EditorControl.generateBOM", exportDialog("pcb_bom"));
   m.set("pcbnew.EditorControl.exportFootprintAssociations", exportDialog("cmp"));
 
-  // ExportFootprints ("Footprints..." under File > Export, `ExportFootprintsToLibrary( false )`): saves a copy of every footprint of the
-  // board into a library. The studio has the one project footprint library (`design.footprint_library`) rather than a library table to pick
-  // from, and a placed footprint is its named footprint (a library entry reaches the board only once it is published), so each distinct
-  // footprint the board uses that is not an entry yet becomes one (`Cmd::OpenFootprintForEdit` copies what the board resolves the name to).
-  // KiCad skips a footprint with no library item name, and its "link the board footprints to the exported ones" option has nothing to do.
+  // ExportFootprints ("Footprints..." under File > Export, `PCB_EDIT_FRAME::ExportFootprintsToLibrary`): every footprint of the board, as the board has it (its
+  // pad edits and 3D models), saved over the project footprint library's entry of its name (`SaveFootprint( .., true )`), the last instance of a name
+  // winning -- `Cmd::ExportFootprintsToLibrary` (crates/ops/src/board_control.rs). The studio has the one project library rather than a library table, so
+  // KiCad's "Export footprints to library:" question and its "link the board footprints" option have nothing to do. KiCad says nothing when it is done;
+  // a board with no footprints is refused with "No footprints to export!" (r7 X7-1).
   m.set(
     "pcbnew.EditorControl.exportFootprints",
     pcbOnly(() => {
-      const names = [...new Set((board?.parts ?? []).map((p) => p.footprint).filter((n): n is string => !!n))];
-      if (names.length === 0) {
-        toast("No footprints to export!");
-        return;
-      }
-      void fetchFootprintLibraryNames()
-        .then(async (lib) => {
-          const entries = new Set(lib.project ?? []);
-          const todo = names.filter((n) => !entries.has(n));
-          if (todo.length > 0 && !(await api.cmdBatch(todo.map((name): Cmd => ({ op: "open_footprint_for_edit", name }))))) return;
-          toast(`${todo.length} footprint(s) added to the project footprint library, ${names.length - todo.length} already there.`);
-        })
-        .catch((e: unknown) => toast(e instanceof Error ? e.message : String(e), "error"));
+      void api.cmd({ op: "export_footprints_to_library" });
     })
   );
 

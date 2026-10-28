@@ -1,11 +1,14 @@
 //! The patterns that assign nets to net classes (Board Setup > Design Rules > Net Classes, "Netclass Assignments"): `EDA_COMBINED_MATCHER( pattern, CTX_NETCLASS )`.
 //!
-//! A net belongs to a pattern when *either* reading of the pattern matches the whole net name: as a regular expression (`EDA_PATTERN_MATCH_REGEX_ANCHORED`: `^` and `$` are
-//! added when the pattern lacks them) or as a wildcard pattern (`EDA_PATTERN_MATCH_WILDCARD_ANCHORED`: `*` is any run of characters, `?` any one character, everything else
-//! literal). So `USB_D.*`, `USB_D?` and `USB_D[PM]` all name the nets of a USB pair, and a pattern that is no regular expression (`USB_(`) still works as a wildcard pattern.
+//! A net belongs to a pattern when *either* reading of the pattern matches it: as a regular expression (`EDA_PATTERN_MATCH_REGEX_ANCHORED`: `^` and `$` are added to the
+//! pattern *text* when it lacks them, then a match is accepted when it starts at position 0, `EDA_COMBINED_MATCHER::StartsWith`) or as a wildcard pattern
+//! (`EDA_PATTERN_MATCH_WILDCARD_ANCHORED`: `*` is any run of characters, `?` any one character, everything else literal, the whole name). So `USB_D.*`, `USB_D?` and
+//! `USB_D[PM]` all name the nets of a USB pair, and a pattern that is no regular expression (`USB_(`) still works as a wildcard pattern. The anchoring is textual, so
+//! with a top-level `|` only the first alternative is anchored at the start and only the last at the end: `A|B|C` reads as `^A` or `B` or `C$`, and matches a net that
+//! `A` or `B` starts or that is exactly `C`.
 //!
 //! The regular expressions are wxWidgets' advanced ones; this reads the part of them net names are matched with -- literals, `.`, `[..]` classes (ranges, `^` negation, `[:alpha:]` and
-//! the like, the `\d \w \s` shorthands), `( .. )` and `(?: .. )` groups, `|`, and `* + ? {m} {m,} {m,n}` with an optional lazy `?` (which cannot change a match of the whole name).
+//! the like, the `\d \w \s` shorthands), `( .. )` and `(?: .. )` groups, `|`, and `* + ? {m} {m,} {m,n}` with an optional lazy `?` (which cannot change whether a match starts at the name's first character).
 //! Matching is by simulation of the machine the pattern compiles to, so no pattern can take longer than its length times the net name's. A pattern with anything else in it (a
 //! back reference, a look-ahead, a word boundary) is no regular expression here, and matches as a wildcard pattern only -- as KiCad treats one wxRegEx cannot compile.
 //!
@@ -19,19 +22,34 @@ const MAX_PROGRAM: usize = 4_000;
 /// The deepest nesting of groups a pattern may have.
 const MAX_DEPTH: usize = 64;
 
-/// Whether the whole of `net` matches `pattern` read as a regular expression or as a wildcard pattern: `EDA_COMBINED_MATCHER::StartsWith( net )` in the net class context.
+/// Whether `net` matches `pattern` read as a regular expression or as a wildcard pattern: `EDA_COMBINED_MATCHER::StartsWith( net )` in the net class context.
 pub fn pattern_matches(pattern: &str, net: &str) -> bool {
     glob_match(pattern, net) || regex_matches(pattern, net)
 }
 
-/// Whether the whole of `net` matches `pattern` read as an anchored regular expression. False when the pattern is no regular expression this reads.
+/// KiCad's `EDA_PATTERN_MATCH_REGEX_ANCHORED::SetPattern`: `^` before and `$` after the pattern *text*, with no group around it, unless it already starts with `^` /
+/// ends with `$`. A top-level `|` therefore binds looser than the anchors.
+fn anchored_pattern(pattern: &str) -> String {
+    let mut anchored = String::with_capacity(pattern.len() + 2);
+    if !pattern.starts_with('^') {
+        anchored.push('^');
+    }
+    anchored.push_str(pattern);
+    if !pattern.ends_with('$') {
+        anchored.push('$');
+    }
+    anchored
+}
+
+/// Whether a match of `pattern` read as KiCad's anchored regular expression starts at the first character of `net` (`EDA_PATTERN_MATCH_REGEX::Find`'s start position,
+/// `EDA_COMBINED_MATCHER::StartsWith`). False when the pattern is no regular expression this reads.
 pub fn regex_matches(pattern: &str, net: &str) -> bool {
-    Regex::new(pattern).is_some_and(|r| r.is_match(net))
+    Regex::new(&anchored_pattern(pattern)).is_some_and(|r| r.matches_from_start(net))
 }
 
 /// Whether `pattern` compiles as a regular expression (what a page can say about a pattern that does not: it only works as a wildcard pattern).
 pub fn is_regex(pattern: &str) -> bool {
-    Regex::new(pattern).is_some()
+    Regex::new(&anchored_pattern(pattern)).is_some()
 }
 
 /// Whether `pattern` has a character a regular expression gives a meaning to besides `*` and `?` (which are wildcards too): a pattern without one reads the same either way.
@@ -157,7 +175,7 @@ impl Parser {
             _ => return Some(atom),
         };
         self.pos += 1;
-        // A lazy quantifier matches the same names as a greedy one when the whole name must match.
+        // A lazy quantifier matches what a greedy one does when only the start of the match matters.
         self.eat('?');
         if matches!(self.peek(), Some('*' | '+' | '{')) {
             return None; // a second quantifier on the same atom
@@ -299,7 +317,7 @@ enum Inst {
     Match,
 }
 
-/// A compiled pattern: matches a whole name.
+/// A compiled pattern: matches a name from its first character (the anchored reading's `Find` at position 0).
 pub struct Regex {
     program: Vec<Inst>,
     classes: Vec<(Vec<ClassItem>, bool)>,
@@ -401,14 +419,18 @@ impl Regex {
         Some(())
     }
 
-    /// Whether the whole of `text` matches.
-    pub fn is_match(&self, text: &str) -> bool {
+    /// Whether some match starts at the first character of `text`: the machine runs from position 0 and accepts as soon as it reaches its match state, wherever that is
+    /// (`wxRegEx::Matches` plus `GetMatch`'s start, which `EDA_COMBINED_MATCHER::StartsWith` requires to be 0).
+    pub fn matches_from_start(&self, text: &str) -> bool {
         let chars: Vec<char> = text.chars().collect();
         let n = self.program.len();
         let mut current: Vec<usize> = Vec::new();
         let mut next: Vec<usize> = Vec::new();
         let mut seen = vec![usize::MAX; n];
         self.add(&mut current, 0, 0, chars.len(), &mut seen, 0);
+        if current.iter().any(|&pc| matches!(self.program[pc], Inst::Match)) {
+            return true; // an empty match at the start
+        }
         for (i, &c) in chars.iter().enumerate() {
             // `seen` is keyed by the step so a thread is added once per position.
             let step = i + 1;
@@ -428,8 +450,11 @@ impl Regex {
             if current.is_empty() {
                 return false;
             }
+            if current.iter().any(|&pc| matches!(self.program[pc], Inst::Match)) {
+                return true; // a match that ends here started at 0
+            }
         }
-        current.iter().any(|&pc| matches!(self.program[pc], Inst::Match))
+        false
     }
 
     /// Add the thread at `pc` and everything it reaches without reading a character, at position `pos`.
@@ -557,11 +582,27 @@ mod tests {
         no("A{2,3}B", "AAAAB");
         yes("(AB){2}", "ABAB");
         yes("x|y|z", "y");
-        no("x|y|z", "xy");
+        // KiCad anchors the pattern text with no group around it, so a top-level `|` leaves `y` unanchored: `xy` matches through `^x`.
+        yes("x|y|z", "xy");
         yes("\\.", ".");
         no("\\.", "x");
         yes("[a\\]b]+", "a]b");
         yes("[-a]+", "a-");
         yes("[a-]+", "-a");
+    }
+
+    /// F1 (round 7): KiCad wraps the pattern text in `^..$` with no group around it (`EDA_PATTERN_MATCH_REGEX_ANCHORED::SetPattern`), so with a top-level `|`
+    /// only the first alternative is anchored at the start and only the last at the end, and a match accepted when it starts at 0 (`EDA_COMBINED_MATCHER::StartsWith`):
+    /// `A|B|C` is `^A` or `B` or `C$`, so `A` and `B` match a *prefix* of the net and `C` matches all of it.
+    #[test]
+    fn top_level_alternatives_are_prefixes_but_the_last() {
+        yes("/XIN|/XOUT|", "/XIN32");
+        yes("x|y|z", "xy");
+        yes("a|b", "ab");
+        no("a|b", "ba");
+        yes("I2C-.*|.*SDA|.*SCL", "SDA_EXT");
+        no("^A|B$", "XB");
+        // A group is anchored as a whole: `(x|y)` has no top-level `|`.
+        no("(x|y)", "xy");
     }
 }

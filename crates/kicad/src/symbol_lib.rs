@@ -277,9 +277,13 @@ pub(crate) fn connectivity_of(node: &[Sexpr]) -> eda_model::symbol::LibConnectiv
         .filter_map(|p| Some((sexpr::txt(p, 1)?.to_string(), sexpr::txt(p, 2).unwrap_or("").to_string())))
         .filter(|(name, _)| !eda_model::sym_fields::is_mandatory_field(name) && !name.starts_with("ki_"))
         .collect();
+    // `ki_keywords` and `ki_fp_filters` (`parseProperty`: the keywords and the footprint filters, not fields), which the cache writes back (r7 H3)
+    let ki = |name: &str| sexpr::find_all(node, "property").find(|p| sexpr::txt(p, 1) == Some(name)).and_then(|p| sexpr::txt(p, 2)).unwrap_or("").to_string();
     eda_model::symbol::LibConnectivity {
         unit_names,
         user_fields,
+        keywords: ki("ki_keywords"),
+        fp_filters: ki("ki_fp_filters"),
         power_local: sexpr::find(node, "power").and_then(|p| sexpr::txt(p, 1)) == Some("local"),
         duplicate_pin_numbers_are_jumpers: sexpr::find(node, "duplicate_pin_numbers_are_jumpers").and_then(|p| sexpr::txt(p, 1)) == Some("yes"),
         jumper_pin_groups,

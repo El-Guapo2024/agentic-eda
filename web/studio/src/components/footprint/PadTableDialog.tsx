@@ -4,20 +4,25 @@
 // ("Edit Pads"); Cancel leaves the footprint untouched (the C++ edits live and restores on cancel; here nothing is applied until OK).
 // A row that gets focus selects its pad on the canvas (`OnSelectCell`, `SetBrightened`).
 //
-// Not ported: the Connector / Aperture pad types (the footprint IR has plated, SMD and non-plated pads) and the "Pad->Die Length / Delay" columns
+// The Type column is `PAD::SetAttribute` (`kicad-port/padType.ts`): a Connector pad is an SMD pad with the connector flag, an Aperture one an SMD pad with no copper.
+// Not ported: the "Pad->Die Length / Delay" columns
 // (the IR carries no pad-to-die data). A row set to "Custom shape" is the anchor alone until its basic shapes are drawn in Pad Properties.
 import { useEffect, useMemo, useState } from "react";
-import type { LibraryPad, LibraryPadShape, PadKind } from "../../api/types";
+import type { LibraryPad, LibraryPadShape } from "../../api/types";
+import { padDlgTypeOf, setPadAttribute, type PadDlgType } from "../../kicad-port/padType";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { useStudioState } from "../../state/store";
 import { padNumberSummary } from "../../kicad-port/pinNumbersSummary";
 import { drillColumns, withDrill } from "../../kicad-port/padTable";
 import { nmFrom, nmTo, type LengthUnit } from "../../state/units";
 
-const TYPE_OPTIONS: { value: PadKind; label: string }[] = [
-  { value: "through_hole", label: "Through-hole" },
+/** The Type column's choices (`typeNames`): "Aperture" is shown for a copper-less SMD pad but not set ("Aperture derived by copper-less layers"). */
+const TYPE_OPTIONS: { value: PadDlgType; label: string }[] = [
+  { value: "pth", label: "Through-hole" },
   { value: "smd", label: "SMD" },
-  { value: "non_plated_hole", label: "NPTH" },
+  { value: "conn", label: "Connector" },
+  { value: "npth", label: "NPTH" },
+  { value: "aperture", label: "Aperture" },
 ];
 
 const SHAPE_OPTIONS: { value: LibraryPadShape; label: string }[] = [
@@ -136,14 +141,12 @@ export function PadTableDialog() {
                     <td>
                       <select
                         aria-label={`Type ${i + 1}`}
-                        value={r.kind}
-                        onChange={(e) =>
-                          patch(i, (p) => {
-                            const kind = e.target.value as PadKind;
-                            // `SetAttribute`: an SMD pad has no hole; a pad that becomes plated or non-plated needs one.
-                            return kind === "smd" ? { ...p, kind, drill: null, drill_slot: null } : { ...p, kind, drill: p.drill ?? (p.drill_slot ? null : 800_000) };
-                          })
-                        }
+                        value={padDlgTypeOf(r)}
+                        onChange={(e) => {
+                          const type = e.target.value as PadDlgType;
+                          // `OnCellChanged( COL_TYPE )`: `SetAttribute` -- the copper plumped up or trimmed, the hole, the number (`kicad-port/padType.ts`).
+                          if (type !== "aperture") patch(i, (p) => setPadAttribute(p, type));
+                        }}
                       >
                         {TYPE_OPTIONS.map((o) => (
                           <option key={o.value} value={o.value}>

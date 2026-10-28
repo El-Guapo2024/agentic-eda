@@ -797,6 +797,7 @@ These rows were read against `board_editor_control.cpp`, `board_inspection_tool.
 **Round-6 merges:** 21 of the 23 fixes are right against the C++. V6-5 left the paste-only-pad edge (V7-1). B6-1 uses the effective uid/gid where `access` uses the real ones, which does not matter outside a setuid process.
 
 **Doc corrections for a fixer** (task-r7-sym-editor did the GAPS 34 / PARITY-sch 49 size, PARITY-sch 38.1's Save on imported sheets, and PARITY-symedit's orientation note):
+**Doc corrections for a fixer:**
 - GAPS 34 / PARITY-sch 49: the Simulation Model port is about 28k lines, not 14.7k.
 - PARITY-fpedit section 3: the "Validation" and "PTH-only thermal" rows. **Fixed** on task-r7-fp-editor: 258abd35.
 - PARITY-fpedit section 5: "Attributes identical". **Fixed** on task-r7-fp-editor: 258abd35.

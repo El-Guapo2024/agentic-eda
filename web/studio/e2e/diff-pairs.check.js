@@ -29,6 +29,10 @@
 //   other end     Ctrl+E (Route From Other End, `ROUTER::ContinueFromEnd`) after a fixed leg commits the legs and starts a pair of the same nets, at the pad pair of the far end of the P net's
 //                  connection and heading for where the head ended; the click on the end of the committed legs finishes both connections, and one Undo takes both commits away.
 //
+//   r7            (R7-R1, R7-R5) Ctrl+Z and Delete while a pair is drawn take back the last leg and never undo the board, E opens Track and Via Dimensions;
+//                 (R7-R2) V sends the chosen via size; (R7-R3) a layer key while a pair is drawn arms a pair of vias to the layer (the pair started on pads), and
+//                 V with the pair tool armed before a pair flips the active layer and starts the next pair with its vias armed.
+//
 // It answers through `window.__diffPairsCheck`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }. Read it with `await __diffPairsCheck.wait(60000)` until
 // `.done`. In a hidden pane the browser stops timers; the script waits with a fetch loop. A run takes one to three minutes (a debug build of the server, and a machine that is busy answers
 // slowly), longer than the Browser pane's javascript tool gives one call: start it (`(0, eval)( src )` returns at once) and poll with `wait(30000)`. A click that lands elsewhere because the page
@@ -49,7 +53,8 @@
   window.fetch = async (input, init) => {
     const res = await realFetch.call(window, input, init);
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const m = /\/api\/route\/([a-z_]+)/.exec(url);
+    // the board's own undo and redo too (`board_undo`, `board_redo`): none may be asked while a pair is drawn (R7-R1)
+    const m = /\/api\/route\/([a-z_]+)/.exec(url) ?? (/\/api\/(undo|redo)$/.exec(url) ? [null, `board_${/\/api\/(undo|redo)$/.exec(url)[1]}`] : null);
     if (m) replies.push({ name: m[1], req: init && typeof init.body === "string" ? JSON.parse(init.body) : null, body: await res.clone().json().catch(() => null) });
     return res;
   };
@@ -445,6 +450,71 @@
     t(r2 && r2.body.ok === true && r2.req.width === undefined && r2.req.gap === undefined, `Use Net Class Values: no sizes are sent: ${r2 && JSON.stringify([r2.req.width, r2.req.gap])}`);
     await abandon();
     await cmd({ op: "set_diff_pair_presets", presets: before });
+  });
+
+  await scenario("r7: Ctrl+Z and Delete while a pair is drawn take back the last leg, E opens Track and Via Dimensions, V sends the chosen via size, a layer key arms vias, and V before a pair starts it with vias", async (t) => {
+    const cmd = (c) => json("/api/cmd", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cmd: c, strict: false }) });
+    // R7-R1: a leg fixed, then Ctrl+Z, then (fixed again) Delete
+    await arm();
+    await startAt(...p1);
+    await inMode("pcbnew.InteractiveRouter.ShoveMode");
+    for (const [what, action] of [["Ctrl+Z", "common.Interactive.undo"], ["Delete", "common.Interactive.delete"]]) {
+      let n = replies.length;
+      await moveTo(...target);
+      await clickAt(...target);
+      const fix = await waitReply("dp_fix", n);
+      t(fix && fix.body.ok === true && fix.body.blocked === false, `a leg is fixed before ${what}`);
+      n = replies.length;
+      await E.run(action);
+      const undone = await waitReply("dp_undo_segment", n, 8000);
+      await quiet();
+      t(undone && undone.body.popped === true, `${what} takes the leg back (UndoLastSegment)`);
+      t(!replies.slice(n).some((q) => q.name === "board_undo" || q.name === "delete"), `${what} asks no undo of the board`);
+      t(snapshot(await state()) === original, `and the board is as it was after ${what}`);
+    }
+    // R7-R5: E is ACT_CustomTrackWidth
+    await E.run("pcbnew.InteractiveEdit.properties");
+    await sleep(400);
+    t(E.state().dialogs.some((d) => /Track and Via Dimensions/.test(d)), `E while routing opens Track and Via Dimensions: ${JSON.stringify(E.state().dialogs)}`);
+    key("Escape");
+    await sleep(300);
+    // R7-R3: a layer key; the pair started on pads, so a pair of vias to the layer is armed
+    let n = replies.length;
+    await E.run("pcbnew.Control.layerBottom");
+    const lay = await waitReply("layer", n, 8000);
+    const armed = await waitReply("dp_via", n, 8000);
+    t(lay && lay.body.ok === true && lay.body.switched === false, `the layer key asks the pair placer (DIFF_PAIR_PLACER::SetLayer) and it refuses on pads: ${lay && JSON.stringify(lay.body)}`);
+    t(armed && armed.req.enabled === true && armed.req.to_layer === "B.Cu", `then a pair of vias to B.Cu is armed: ${armed && JSON.stringify(armed.req)}`);
+    await abandon();
+    // R7-R2: a via of the Pre-defined Sizes chosen
+    const before = (await state()).routing?.via_presets ?? [];
+    await cmd({ op: "set_via_presets", presets: [{ diameter: 800_000, drill: 400_000 }] });
+    for (let i = 0; i < 20 && !((await state()).routing?.via_presets ?? []).length; i++) await sleep(200);
+    await sleep(1500); // the studio's own copy of the board follows the server's at its next poll
+    await E.run("studio.Router.setViaSize", 1);
+    await arm();
+    await startAt(...p1);
+    n = replies.length;
+    await E.run("pcbnew.Control.layerToggle");
+    const v = await waitReply("dp_via", n, 8000);
+    t(v && v.req.enabled === true && v.req.diameter === 800_000 && v.req.drill === 400_000, `V sends the chosen via, 0.8 / 0.4 mm: ${v && JSON.stringify(v.req)}`);
+    await abandon();
+    await E.run("studio.Router.setViaSize", 0);
+    await cmd({ op: "set_via_presets", presets: before });
+    // R7-R3: V with the pair tool armed and no pair: the active layer flips, the next pair starts with its vias armed
+    await E.run("pcbnew.Control.layerTop");
+    await arm();
+    const layer0 = E.state().activeLayer;
+    await E.run("pcbnew.InteractiveRouter.PlaceVia");
+    await sleep(300);
+    t(layer0 === "F.Cu" && E.state().activeLayer === "B.Cu", `V before a pair flips the active layer: ${layer0} -> ${E.state().activeLayer}`);
+    n = replies.length;
+    const started = await startAt(...p1);
+    const sv = await waitReply("dp_via", n, 8000);
+    t(started && started.req.layer === "B.Cu" && sv && sv.req.enabled === true && sv.req.to_layer === "F.Cu", `the pair starts on B.Cu with its vias armed to F.Cu: ${started && started.req.layer} ${sv && JSON.stringify(sv.req)}`);
+    await abandon();
+    await E.run("pcbnew.Control.layerTop");
+    t(snapshot(await state()) === original, "nothing was committed");
   });
 
   await scenario("the board is as it was, and the studio reported no error but the refusal", async (t) => {

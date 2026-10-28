@@ -5,27 +5,10 @@
 import { useMemo, useState } from "react";
 import { useStudioDispatch, useStudioState } from "../../state/store";
 import { useSchControlDispatch, useSchControlState } from "../../state/schControlStore";
-import { netNavigatorItems, sheetNets, type NavSchematic } from "../../kicad-port/netNavigator";
+import { navSchematic, netNavigatorItems, sheetNets } from "../../kicad-port/netNavigator";
 
-export { sheetNets };
-import { resolveLibSymbol } from "../schematic/libSymbol";
+export { navSchematic, sheetNets };
 import { wildcardAnchoredMatch } from "../../kicad-port/footprintFilter";
-import type { Schematic } from "../../api/types";
-
-/** The sheet as the net item list reads it. */
-export function navSchematic(s: Schematic): NavSchematic {
-  return {
-    pins: s.symbols.flatMap((sym) => {
-      // the placed pin's traced net (absent: the wires' ends decide)
-      const netOf = new Map((sym.pins ?? []).map((p) => [p.number, p.net ?? null] as const));
-      return (resolveLibSymbol(sym, s.lib_symbols)?.pins ?? []).map((p) => ({ ref: sym.id, number: p.pin.number, name: p.pin.name, tip: p.tip, ...(netOf.has(p.pin.number) ? { net: netOf.get(p.pin.number) } : {}) }));
-    }),
-    wires: s.wires,
-    labels: s.labels,
-    powerSymbols: s.power_symbols,
-    noConnects: s.no_connects,
-  };
-}
 
 /** `RefreshNetNavigator`'s filter: a typed text with no wildcard matches anywhere in the name (`*text*`), case-insensitively. */
 export function netMatchesFilter(name: string, filter: string): boolean {

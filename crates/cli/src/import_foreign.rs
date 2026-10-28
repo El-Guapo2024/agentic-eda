@@ -237,6 +237,43 @@ pub(crate) fn combine_sheets(parts: Vec<(String, SheetFile)>) -> SheetFile {
     SheetFile { root, screens, lib_symbols, bus_aliases, notes }
 }
 
+/// A KiCad 10 project's top-level sheets (`schematic.top_level_sheets`) as one schematic the studio's single root can hold (r7 H2): a root that places each
+/// of them as a sheet of the name the project gives it, laid out as [`combine_sheets`] lays a project's sheets out. `parts` are each sheet's name, its file
+/// (relative to the project) and what was read of it. Unlike [`combine_sheets`] (another application's sheets, kicad-cli's files), the files are the project's
+/// own: a screen that two top-level sheets place (`shared1.kicad_sch`) is one screen placed on both paths, as KiCad loads it once (`SCH_SCREENS`), and the
+/// hierarchical labels stay hierarchical (only `SCH_IO_ALTIUM` makes a top-level sheet's into global ones). **Differs**: KiCad's root is the project, which has
+/// no sheet of its own; the derived file's root is a sheet that places the top-level sheets.
+pub(crate) fn combine_top_level_sheets(parts: Vec<(String, String, SheetFile)>) -> SheetFile {
+    const GRID: Nm = Nm::new(25_400_000);
+    const SHEET: (Nm, Nm) = (Nm::new(12_700_000), Nm::new(3_810_000));
+    let mut root = SchematicSection { imported_from_kicad: true, ..Default::default() };
+    let mut screens: BTreeMap<String, SchematicSection> = BTreeMap::new();
+    let mut lib_symbols: Vec<eda_model::ir::LibrarySymbol> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    let mut bus_aliases: Vec<eda_model::ir::BusAlias> = Vec::new();
+    for (i, (name, file_name, file)) in parts.into_iter().enumerate() {
+        let (x, y) = (1 + 2 * (i as i64 % 5), 1 + 2 * (i as i64 / 5));
+        for (key, sec) in file.screens {
+            screens.entry(key).or_insert(sec);
+        }
+        screens.entry(file_name.clone()).or_insert(file.root);
+        root.sheets.push(SheetInstance { id: String::new(), name, file: file_name, at: Point { x: GRID * x, y: GRID * y }, size: SHEET, pins: vec![], page: (i + 2).to_string() });
+        for lib in file.lib_symbols {
+            if !lib_symbols.iter().any(|l| l.lib_id == lib.lib_id) {
+                lib_symbols.push(lib);
+            }
+        }
+        notes.extend(file.notes);
+        for alias in file.bus_aliases {
+            if !bus_aliases.iter().any(|a| a.name == alias.name) {
+                bus_aliases.push(alias);
+            }
+        }
+    }
+    root.assign_missing_ids();
+    SheetFile { root, screens, lib_symbols, bus_aliases, notes }
+}
+
 /// A name as a file name stem: the characters every file system takes.
 pub(crate) fn file_name_of(name: &str) -> String {
     eda_kicad_engine::file_stem(name)

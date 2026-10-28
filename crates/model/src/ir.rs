@@ -4714,6 +4714,8 @@ impl LibrarySymbol {
                 pin_alternates: self.pins.iter().filter(|p| !p.alternates.is_empty()).map(|p| (p.number.clone(), p.alternates.clone())).collect(),
                 unit_names: self.kicad.unit_names.clone(),
                 user_fields: self.fields.iter().filter(|f| !crate::sym_fields::is_mandatory_field(&f.name) && !f.name.starts_with("ki_")).map(|f| (f.name.clone(), f.text.clone())).collect(),
+                keywords: self.keywords.clone(),
+                fp_filters: self.footprint_filters.iter().map(|f| f.replace(' ', "{space}")).collect::<Vec<_>>().join(" "),
             },
         }
     }

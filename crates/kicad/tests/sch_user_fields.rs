@@ -227,7 +227,8 @@ fn the_properties_beyond_the_standard_ones_are_the_user_fields_of_a_file_made_by
     let sch = design.schematic.expect("a sheet");
     let user = &sch.user_fields["U1"];
     let names: Vec<&str> = user.keys().map(String::as_str).collect();
-    assert_eq!(names, ["Empty", "Internal note", "Sim.Device"], "not Reference, Value, Footprint, Datasheet and Description, whatever the case; the first of a name");
+    assert_eq!(names, ["Description", "Empty", "Internal note", "Sim.Device"], "not Reference, Value, Footprint and Datasheet, whatever the case; the first of a name");
+    assert_eq!(user["Description"], "a gate", "the mandatory Description, which the writer writes back (r7 H3)");
     assert_eq!(user["Sim.Device"], "SUBCKT");
     assert_eq!(user["Empty"], "", "a field may be empty");
     assert_eq!(user["Internal note"], "keep out", "`private` is a word before the name");
@@ -289,4 +290,33 @@ fn a_sheet_pins_text_look_is_written_and_read_back() {
     assert_eq!(looks.len(), 1, "only a pin that is set differently has an entry: {looks:?}");
     let look = looks.get("22222222-2222-4222-8222-222222222222").copied().expect("the look of CLK");
     assert_eq!((look.size_nm, look.bold, look.italic), (mm(2.0), true, true));
+}
+
+/// r7 H3: a placed symbol's Description is written back (`SCH_IO_KICAD_SEXPR::saveSymbol` writes every field, `FIELD_T::DESCRIPTION` among them), and the
+/// cache has the library's Description, keywords and footprint filters (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol`, `saveDcmInfoAsFields`), so kicad-cli's
+/// netlist and BOM have the part's description.
+#[test]
+fn a_placed_symbols_description_is_written() {
+    let text = HAND_MADE.replace(
+        "(property \"Value\" \"GATE\" (at 0 0 0) (effects (font (size 1.27 1.27))))\n",
+        "(property \"Value\" \"GATE\" (at 0 0 0) (effects (font (size 1.27 1.27))))\n\t\t\t(property \"Description\" \"A two-input gate\" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))\n\t\t\t(property \"ki_keywords\" \"logic gate\" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))\n\t\t\t(property \"ki_fp_filters\" \"SOIC*3.9x4.9mm* DIP*W7.62mm*\" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))\n",
+    );
+    let (design, model, _) = import_kicad_sch(&text).unwrap_or_else(|e| panic!("{e:?}"));
+    let out = export_kicad_sch(&design, &model, &META).unwrap();
+    let (cache, placed) = out.split_once("\n\t(symbol (lib_id").or_else(|| out.split_once("(symbol (lib_id")).expect("a placed symbol");
+    assert!(placed.contains("(property \"Description\" \"a gate\""), "the placed symbol's own Description:\n{placed}");
+    for want in ["(property \"Description\" \"A two-input gate\"", "(property \"ki_keywords\" \"logic gate\"", "(property \"ki_fp_filters\" \"SOIC*3.9x4.9mm* DIP*W7.62mm*\""] {
+        assert!(cache.contains(want), "the cache has {want}:\n{cache}");
+    }
+}
+
+/// r7 M2: an empty Value is written empty (`saveField` writes the field's text as it is), not as the reference: QA `spice_netlists/fliege_filter`'s V1.
+#[test]
+fn an_empty_value_stays_empty() {
+    let text = HAND_MADE.replace("(property \"Value\" \"GATE\" (at 100 105.08 0)", "(property \"Value\" \"\" (at 100 105.08 0)");
+    let (design, model, _) = import_kicad_sch(&text).unwrap_or_else(|e| panic!("{e:?}"));
+    let out = export_kicad_sch(&design, &model, &META).unwrap();
+    let placed = out.split("(symbol (lib_id").nth(1).expect("a placed symbol");
+    assert!(placed.contains("(property \"Value\" \"\""), "{placed}");
+    assert!(!placed.contains("(property \"Value\" \"U1\""), "{placed}");
 }

@@ -19,7 +19,7 @@ fn yes(b: bool) -> &'static str {
 }
 
 /// An alpha 0..=255 as KiCad's 0..1 decimal (`FormatDouble2Str`: shortest form, up to 4 places).
-fn alpha_str(a: u8) -> String {
+pub(crate) fn alpha_str(a: u8) -> String {
     let v = (a as f64 / 255.0 * 10_000.0).round() / 10_000.0;
     let s = format!("{v:.4}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
@@ -61,9 +61,11 @@ pub(crate) fn junction_attrs(look: Option<&JunctionLook>) -> String {
     format!("(diameter {}) (color {})", sch_mm(look.diameter_nm), look.color.map(color_str).unwrap_or_else(|| "0 0 0 0".to_string()))
 }
 
+/// `formatFill` (`sch_io_kicad_sexpr_common.cpp`): the type, and the colour for a colour fill and the three hatches (all zeroes, `COLOR4D::UNSPECIFIED`,
+/// when the shape has none).
 fn fill_str(g: &SchGraphic) -> String {
     match (g.fill, g.fill_color) {
-        (SchFill::Color, Some(c)) => format!("(fill (type color) (color {}))", color_str(c)),
+        (f @ (SchFill::Color | SchFill::Hatch | SchFill::ReverseHatch | SchFill::CrossHatch), c) => format!("(fill (type {}) (color {}))", f.token(), c.map(color_str).unwrap_or_else(|| "0 0 0 0".to_string())),
         (f, _) => format!("(fill (type {}))", f.token()),
     }
 }
@@ -84,6 +86,11 @@ fn angle_str(m: Millideg) -> String {
 /// The `(effects ...)` of a free-standing schematic text: its size and how `j` justifies it, written as `EDA_TEXT::Format` does (centre is not named, so a
 /// centred text has no `(justify ...)`).
 pub(crate) fn text_effects_str(size_nm: Nm, j: eda_model::sch_extras::SchTextJustify) -> String {
+    text_effects_with(size_nm, j, &Default::default())
+}
+
+/// [`text_effects_str`] with a free text's bold, italic, colour and hyperlink ([`eda_model::sch_extras::TextAttrs`], r7 H4).
+pub(crate) fn text_effects_with(size_nm: Nm, j: eda_model::sch_extras::SchTextJustify, attrs: &eda_model::sch_extras::TextAttrs) -> String {
     use eda_model::ir::{TextJustify, TextVAlign};
     let h = match j.h {
         TextJustify::Left => SchHAlign::Left,
@@ -95,7 +102,7 @@ pub(crate) fn text_effects_str(size_nm: Nm, j: eda_model::sch_extras::SchTextJus
         TextVAlign::Center => SchVAlign::Center,
         TextVAlign::Bottom => SchVAlign::Bottom,
     };
-    effects_str(size_nm, false, false, h, v)
+    effects_with(size_nm, attrs.bold, attrs.italic, h, v, attrs.color, attrs.href.as_deref())
 }
 
 /// What a free-standing text's `(effects ...)` and `(at x y angle)` say about how it lies: the text's angle made upright (`KeepUpright`: along the sheet or up
@@ -122,8 +129,9 @@ pub(crate) fn read_text_lie(item: &[Sexpr], look: &EffectsLook) -> (Millideg, ed
     (angle, eda_model::sch_extras::SchTextJustify { h, v })
 }
 
-/// The `(effects ...)` of a text box: font size, bold/italic and the justification (a box defaults to left/top).
-fn effects_str(size_nm: Nm, bold: bool, italic: bool, h: SchHAlign, v: SchVAlign) -> String {
+/// The `(effects ..)` of a text box or a directive label: its size, bold, italic and justification, with the font colour and the hyperlink (`EDA_TEXT::Format`: `(color r g b a)` last in `(font ..)` when the colour is not
+/// `UNSPECIFIED`, `(href "..")` after `(justify ..)`, r7 H4, M5).
+pub(crate) fn effects_with(size_nm: Nm, bold: bool, italic: bool, h: SchHAlign, v: SchVAlign, color: Option<SchColor>, href: Option<&str>) -> String {
     let mut f = format!("(font (size {0} {0})", sch_mm(size_nm));
     if bold {
         f.push_str(" (bold yes)");
@@ -131,7 +139,11 @@ fn effects_str(size_nm: Nm, bold: bool, italic: bool, h: SchHAlign, v: SchVAlign
     if italic {
         f.push_str(" (italic yes)");
     }
+    if let Some(c) = color {
+        let _ = write!(f, " (color {})", color_str(c));
+    }
     f.push(')');
+    let href = href.map(|h| format!(" (href {})", sexpr_str(h))).unwrap_or_default();
     let mut j = String::new();
     match h {
         SchHAlign::Left => j.push_str(" left"),
@@ -144,9 +156,9 @@ fn effects_str(size_nm: Nm, bold: bool, italic: bool, h: SchHAlign, v: SchVAlign
         SchVAlign::Center => {}
     }
     if j.is_empty() {
-        format!("(effects {f})")
+        format!("(effects {f}{href})")
     } else {
-        format!("(effects {f} (justify{j}))")
+        format!("(effects {f} (justify{j}){href})")
     }
 }
 
@@ -176,6 +188,7 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
     for g in &sch.extras.graphics {
         let uuid = duid_for(&format!("sch_graphic:{}", g.id_seed()), &g.id);
         let locked = if sch.extras.is_locked(&g.id) { "\n\t\t(locked yes)" } else { "" };
+        let attrs = sch.extras.text_attrs.get(&g.id).cloned().unwrap_or_default();
         match &g.shape {
             SchGraphicKind::Rectangle { start, end, corner_radius_nm } => {
                 let radius = if *corner_radius_nm > Nm::ZERO { format!("\n\t\t(radius {})", sch_mm(*corner_radius_nm)) } else { String::new() };
@@ -212,8 +225,10 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                 let (w, h) = (end.x - start.x, end.y - start.y);
                 let _ = writeln!(
                     out,
-                    "\t(text_box {}\n\t\t(exclude_from_sim no)\n\t\t(at {} {} {})\n\t\t(size {} {})\n\t\t(margins {m} {m} {m} {m})\n\t\t{}\n\t\t{}\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}\n\t)",
+                    "\t(text_box {}\n\t\t(exclude_from_sim {})\n\t\t(at {} {} {})\n\t\t(size {} {})\n\t\t(margins {m} {m} {m} {m})\n\t\t{}\n\t\t{}\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}\n\t)",
                     sexpr_str(text),
+                    // `saveTextBox`: `FormatBool( m_out, "exclude_from_sim", aTextBox->GetExcludedFromSim() )`, as the box has it (r7 H4: it was always `no`)
+                    yes(attrs.exclude_from_sim),
                     sch_mm(start.x),
                     sch_mm(start.y),
                     angle_str(*angle),
@@ -221,7 +236,7 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                     sch_mm(h),
                     stroke_str(g),
                     fill_str(g),
-                    effects_str(*size_nm, *bold, *italic, *h_align, *v_align),
+                    effects_with(*size_nm, *bold, *italic, *h_align, *v_align, attrs.color, attrs.href.as_deref()),
                     m = sch_mm(margin)
                 );
             }
@@ -254,12 +269,13 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                 }
                 let _ = writeln!(
                     out,
-                    "\t(netclass_flag \"\"\n\t\t(length {})\n\t\t(shape {})\n\t\t(at {} {} {})\n\t\t(fields_autoplaced yes)\n\t\t(effects (font (size 1.27 1.27)) (justify left bottom))\n\t\t(uuid \"{uuid}\"){locked}{props}\n\t)",
+                    "\t(netclass_flag \"\"\n\t\t(length {})\n\t\t(shape {})\n\t\t(at {} {} {})\n\t\t(fields_autoplaced yes)\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}{props}\n\t)",
                     sch_mm(*pin_length_nm),
                     shape.token(),
                     sch_mm(at.x),
                     sch_mm(at.y),
-                    angle_str(*orientation)
+                    angle_str(*orientation),
+                    effects_with(mm(1.27), false, false, SchHAlign::Left, SchVAlign::Bottom, attrs.color, None)
                 );
             }
         }
@@ -277,11 +293,13 @@ pub(crate) struct ReadGraphic {
     pub locked: bool,
     /// The item's `(uuid ..)`, which a `(group ..)` names it by.
     pub uuid: Option<String>,
+    /// A text box's or a directive label's [`eda_model::sch_extras::TextAttrs`] (r7 H4, M5); the default for the other kinds.
+    pub attrs: eda_model::sch_extras::TextAttrs,
 }
 
 impl ReadGraphic {
     fn new(graphic: SchGraphic, locked: bool) -> ReadGraphic {
-        ReadGraphic { graphic, locked, uuid: None }
+        ReadGraphic { graphic, locked, uuid: None, attrs: Default::default() }
     }
 }
 
@@ -306,6 +324,21 @@ pub(crate) struct EffectsLook {
 }
 
 /// The `(effects ...)` of `item`. `bold` and `italic` are read as `(bold yes)` (what KiCad writes since 9) and as the bare words older files have.
+/// A text item's [`eda_model::sch_extras::TextAttrs`] as the file has them (`parseSchText` / `parseSchTextBox`: `T_exclude_from_sim`; `parseEDA_TEXT`: `(bold ..)`,
+/// `(italic ..)` and `(color ..)` of `(font ..)`, `(href ..)` of `(effects ..)`; a colour of all zeroes is `UNSPECIFIED`), r7 H4, M5.
+pub(crate) fn read_text_attrs(item: &[Sexpr]) -> eda_model::sch_extras::TextAttrs {
+    let look = read_effects(item);
+    let effects = sexpr::find(item, "effects");
+    let color = effects.and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "color")).and_then(parse_color).filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0));
+    eda_model::sch_extras::TextAttrs {
+        exclude_from_sim: parse_bool(item, "exclude_from_sim").unwrap_or(false),
+        href: effects.and_then(|e| sexpr::find(e, "href")).and_then(|h| sexpr::txt(h, 1)).filter(|h| !h.is_empty()).map(String::from),
+        bold: look.bold,
+        italic: look.italic,
+        color,
+    }
+}
+
 pub(crate) fn read_effects(item: &[Sexpr]) -> EffectsLook {
     let effects = sexpr::find(item, "effects");
     let font = effects.and_then(|e| sexpr::find(e, "font"));
@@ -342,11 +375,9 @@ pub(crate) fn parse_stroke(node: &[Sexpr]) -> (Nm, SchLineStyle, Option<SchColor
 fn parse_fill(node: &[Sexpr]) -> (SchFill, Option<SchColor>) {
     let Some(f) = sexpr::find(node, "fill") else { return (SchFill::None, None) };
     let ty = sexpr::find(f, "type").and_then(|t| sexpr::txt(t, 1)).unwrap_or("none");
-    let fill = match ty {
-        "hatch" | "reverse_hatch" | "cross_hatch" => SchFill::Color,
-        other => SchFill::from_token(other),
-    };
-    (fill, sexpr::find(f, "color").and_then(parse_color))
+    // `parseFill`: `T_hatch`, `T_reverse_hatch`, `T_cross_hatch` are fills of their own (r7 M5: they were read as a colour fill)
+    let fill = SchFill::from_token(ty);
+    (fill, sexpr::find(f, "color").and_then(parse_color).filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0) || fill == SchFill::Color))
 }
 
 fn styled(shape: SchGraphicKind, node: &[Sexpr]) -> SchGraphic {
@@ -434,7 +465,10 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                     SchVAlign::Center
                 };
                 let shape = SchGraphicKind::TextBox { start, end, text, angle, size_nm, bold: flag("bold"), italic: flag("italic"), h_align, v_align, margin_nm };
-                out.push(ReadGraphic::new(styled(shape, item), locked_of(item)));
+                let mut read = ReadGraphic::new(styled(shape, item), locked_of(item));
+                // its exclude from simulation, font colour and hyperlink (the shape keeps the bold and the italic)
+                read.attrs = eda_model::sch_extras::TextAttrs { bold: false, italic: false, ..read_text_attrs(item) };
+                out.push(read);
             }
             Some("image") => {
                 // `SCH_IO_KICAD_SEXPR_PARSER::parseImage`
@@ -464,7 +498,10 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                 }
                 let field = |name: &str| sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1).map(canonical) == Some(name)).and_then(|p| sexpr::txt(p, 2)).unwrap_or("").to_string();
                 let kind = SchGraphicKind::Directive { at: Point { x: crate::import::sch_mm_to_nm(x), y: crate::import::sch_mm_to_nm(y) }, orientation, shape, pin_length_nm, netclass: field("Netclass"), component_class: field("Component Class") };
-                out.push(ReadGraphic::new(SchGraphic::new(kind), locked_of(item)));
+                let mut read = ReadGraphic::new(SchGraphic::new(kind), locked_of(item));
+                // the flag's font colour (r7 M5)
+                read.attrs = eda_model::sch_extras::TextAttrs { color: read_text_attrs(item).color, ..Default::default() };
+                out.push(read);
             }
             _ => {}
         }

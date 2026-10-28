@@ -30,7 +30,7 @@ import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { snapPoint } from "../components/canvas/gridHelper";
-import { drawShapeStarted, drawZoneStarted, redoRefused, takeBackLastLine, undoDropsDrawing, withoutLastCorner } from "../kicad-port/drawingCancel";
+import { drawShapeStarted, drawZoneStarted, redoRefused, routerEditKey, takeBackLastLine, undoDropsDrawing, withoutLastCorner, type RouterEditKey } from "../kicad-port/drawingCancel";
 import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { carryPress } from "../kicad-port/pcbCarry";
@@ -86,7 +86,7 @@ import { netAtClick, registerSchControlActions, schControlChecked } from "./schC
 import { registerSchSheetFileActions } from "./schSheetFileActions";
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
-import { hitBus, hitSymbol, schematicBounds } from "../components/schematic/schHit";
+import { hitBus, hitSymbol, hitSymbolInstance, schematicBounds } from "../components/schematic/schHit";
 import { BROKEN_LINK_MESSAGE, symbolEditorTarget } from "../kicad-port/editWithSymbolEditor";
 import { hitField } from "../kicad-port/schFieldEdit";
 import { measureStrokeText } from "../components/text/strokeFont";
@@ -369,9 +369,20 @@ export function useActionRunner() {
       })
     );
 
+    // R7-R1 / R7-R5: an edit key while a route, a pair or a drag is live is the router's (kicad-port/drawingCancel.ts `routerEditKey`): Undo and Delete
+    // take back the last segment (`UndoLastSegment`), E opens Custom Track/Via Size, Undo drops a drag as Escape does, Redo and the fills do nothing.
+    // True when the key was the router's.
+    const routerKey = (key: "undo" | "redo" | "delete" | "fill" | "properties"): boolean => {
+      const k: RouterEditKey | null = routerEditKey(state.tab, state.drawState, key);
+      if (k === "undoSegment") m.get("pcbnew.InteractiveRouter.UndoLastSegment")?.();
+      else if (k === "customSize") m.get("pcbnew.InteractiveRouter.CustomTrackViaSize")?.();
+      else if (k === "cancel") m.get("common.Interactive.cancel")?.();
+      return k != null;
+    };
     // Del: RequestSelection (selection, else the item under the cursor), then ONE commit for all of it.
     m.set("common.Interactive.delete", () => {
       if (state.tab !== "pcb" && state.tab !== "schematic") return;
+      if (routerKey("delete")) return;
       // `DrawRuleArea`'s loop: Delete while a rule area is in progress removes its last corner (`deleteLastPoint`) instead of deleting a selection.
       if (state.tab === "schematic" && state.drawState?.kind === "sch_shape" && state.drawState.poly) return deleteLastPoint(state.drawState, dispatch);
       // `DrawZone`'s loop on the board: Delete with a corner placed removes the last corner (zones, rule areas, cutouts, graphic polygons)
@@ -504,7 +515,8 @@ export function useActionRunner() {
         "pcbnew.Control.layerToggle",
         pcbOnly(() => {
           if (!state.board) return;
-          void toggleDiffPairVia(draw, cursor, otherLayerOfPair(layerPairsOf(state.board, state.pcbx.layerPairs).current, draw.layer), dispatch);
+          // sized as the single track's V (R6-R1, R7-R2): the chosen entry or custom size, none while the net class's are in use
+          void toggleDiffPairVia(draw, cursor, otherLayerOfPair(layerPairsOf(state.board, state.pcbx.layerPairs).current, draw.layer), dispatch, chosenViaOf("through", viaChoiceOf(state)) ?? undefined);
         })
       );
       m.set(
@@ -691,6 +703,7 @@ export function useActionRunner() {
     const boardMoving = () => state.tab === "pcb" && (state.activeTool === "move" || state.movePreview?.kind === "pcb");
     m.set("common.Interactive.undo", () => {
       if (boardMoving()) return void m.get("common.Interactive.cancel")?.();
+      if (routerKey("undo")) return;
       // `DrawZone`: Undo with a corner placed removes the last corner (`DeleteLastCorner`)
       if (drawZoneStarted(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(state.drawState as { pts: [number, number][] }) as typeof state.drawState });
       // `drawShape`: "( started && evt->IsAction( &ACTIONS::undo ) )" cancels the item being drawn, as Escape does, and keeps the tool (not the measure tool's)
@@ -699,6 +712,7 @@ export function useActionRunner() {
     });
     m.set("common.Interactive.redo", () => {
       if (boardMoving()) return;
+      if (routerKey("redo")) return;
       // Every drawing loop: `started && evt->IsAction( &ACTIONS::redo )` is `wxBell()` (round 4 A-3).
       if (redoRefused(state.tab, state.activeTool, state.drawState)) return;
       void (state.tab === "footprint" ? fpApi.redo() : state.tab === "symbol" ? symApi.redo() : api.redo());
@@ -952,6 +966,8 @@ export function useActionRunner() {
         // it keeps the existing footprint-properties dialog's pattern.
         // Shared with Canvas.tsx's double-click (properties.ts) so the
         // two can never disagree.
+        // `performRouting`: `evt->IsAction( &PCB_ACTIONS::properties )` runs `ACT_CustomTrackWidth` (R7-R5)
+        if (routerKey("properties")) return;
         const ref = requestSelection()[0];
         if (ref) openPropertiesFor(ref, api, dispatch);
       })
@@ -1476,7 +1492,7 @@ export function useActionRunner() {
     // own copy, `LoadSymbolFromSchematic` / `SaveSymbolToSchematic`).
     const editInSymbolEditor = schematicOnly(() => {
       if (!sch) return;
-      const hovered = state.cursorNm ? hitSymbol(sch, state.cursorNm.x, state.cursorNm.y) : null;
+      const hovered = state.cursorNm ? hitSymbolInstance(sch, state.cursorNm.x, state.cursorNm.y) : null;
       const target = symbolEditorTarget([...state.selection], [...sch.symbols, ...sch.power_symbols], (libId) => !!sch.lib_symbols[libId], hovered);
       if (target.kind === "none") return;
       if (target.kind === "broken") {
@@ -1484,7 +1500,7 @@ export function useActionRunner() {
         return;
       }
       dispatch({ type: "SET_TAB", tab: "symbol" });
-      void symApi.openSymbol(target.libId);
+      void symApi.openSymbol(target.libId, { unit: target.unit, bodyStyle: target.bodyStyle });
     });
     m.set("eeschema.EditorControl.editWithSymbolEditor", editInSymbolEditor);
     m.set("eeschema.EditorControl.editLibSymbolWithSymbolEditor", editInSymbolEditor);
@@ -2439,7 +2455,8 @@ export function useActionRunner() {
     // `ZONE_FILLER_TOOL::IsZoneFillAction` (Fill, Fill All, Unfill, Unfill All) with an item started in a drawing tool: `wxBell()`, nothing filled (round 4 A-3).
     for (const id of ["pcbnew.ZoneFiller.zoneFill", "pcbnew.ZoneFiller.zoneFillAll", "pcbnew.ZoneFiller.zoneUnfill", "pcbnew.ZoneFiller.zoneUnfillAll"]) {
       const run = m.get(id);
-      if (run) m.set(id, () => (redoRefused(state.tab, state.activeTool, state.drawState) ? undefined : run()));
+      // and with a route, a pair or a drag live (`performRouting` / `performDragging`: `IsZoneFillAction( evt )` -> `wxBell()`, R7-R1)
+      if (run) m.set(id, () => (redoRefused(state.tab, state.activeTool, state.drawState) || routerKey("fill") ? undefined : run()));
     }
 
     return m;

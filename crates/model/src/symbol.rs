@@ -285,6 +285,14 @@ pub struct LibConnectivity {
     /// (`LIB_SYMBOL::ResolveTextVar`). Kept here, as [`Self::pin_alternates`] is, so the symbol's literals stay as they are.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub user_fields: Vec<(String, String)>,
+    /// The library symbol's keywords (`LIB_SYMBOL::GetKeyWords`, `(property "ki_keywords" ..)`), which the schematic's cache writes back
+    /// (`SCH_IO_KICAD_SEXPR_LIB_CACHE::saveDcmInfoAsFields`, r7 H3). Not connectivity; kept here as [`Self::user_fields`] is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub keywords: String,
+    /// The library symbol's footprint filters as the file has them (`(property "ki_fp_filters" ..)`: `GetFPFilters` joined by spaces, a space in a filter
+    /// escaped), written back the same way (r7 H3).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fp_filters: String,
 }
 
 impl LibConnectivity {
@@ -295,11 +303,18 @@ impl LibConnectivity {
 
 impl LibSymbol {
     /// `SCH_SYMBOL::SubReference( aUnit, false )` (KiCad 25ec2335, `sch_symbol.cpp`): "A custom unit display name overrides the default A/B/C (or numeric)
-    /// suffix", else the unit's letters (`LIB_SYMBOL::LetterSubReference( aUnit, 'A' )`). The separator (`m_SubpartIdSeparator`) is KiCad's default, none.
+    /// suffix", else the unit's letters (`LIB_SYMBOL::LetterSubReference( aUnit, 'A' )`), with KiCad's default unit notation (no separator, letters from A); [`Self::sub_reference_in`] takes a project's.
     pub fn sub_reference(&self, unit: u32) -> String {
+        self.sub_reference_in(unit, &crate::annotate::SubpartIds::default(), true)
+    }
+
+    /// `SCH_SYMBOL::SubReference( aUnit, aAddSeparator )` with the project's unit notation (`SCHEMATIC::Settings()`, [`crate::annotate::SubpartIds`]): a unit's
+    /// display name after the separator, else `SCHEMATIC_SETTINGS::SubReference`. `GetRef( &aPath, true )` adds the separator (`aAddSeparator` defaults to true);
+    /// a `${REFERENCE(pin)}`/`${UNIT(pin)}` does not (r7 H5).
+    pub fn sub_reference_in(&self, unit: u32, ids: &crate::annotate::SubpartIds, add_separator: bool) -> String {
         match self.connectivity.unit_names.get(&unit) {
-            Some(name) => name.clone(),
-            None => crate::annotate::unit_letters(unit),
+            Some(name) => format!("{}{name}", ids.separator_text(add_separator)),
+            None => ids.sub_reference(unit, add_separator),
         }
     }
 
@@ -307,9 +322,13 @@ impl LibSymbol {
     /// `m_Type` when the pin has one, `m_libPin->GetAlt( m_alt )`). `SCH_PIN::SetAlt` keeps no alternate that is the pin's own name or that the library
     /// pin does not have, so for those, and for no alternate, it is the library pin's type (r5 D5-H3).
     pub fn placed_pin_type<'a>(&'a self, pin: &'a LibPin, alt: Option<&str>) -> &'a str {
-        alt.filter(|a| !a.is_empty() && *a != pin.name)
-            .and_then(|a| self.connectivity.pin_alternates.get(&pin.number).and_then(|alts| alts.iter().find(|x| x.name == a)))
-            .map_or(pin.electrical_type.as_str(), |x| x.electrical_type.as_str())
+        self.kept_alternate(pin, alt).map_or(pin.electrical_type.as_str(), |x| x.electrical_type.as_str())
+    }
+
+    /// The alternate a placed pin keeps of the one its symbol picked (`SCH_PIN::SetAlt`: none that is the pin's own name or that the library pin does not
+    /// have), which is then its shown name (`SCH_PIN::GetShownName`: `m_alt`) and its type (`GetType`).
+    pub fn kept_alternate<'a>(&'a self, pin: &LibPin, alt: Option<&str>) -> Option<&'a crate::ir::PinAlternate> {
+        alt.filter(|a| !a.is_empty() && *a != pin.name).and_then(|a| self.connectivity.pin_alternates.get(&pin.number).and_then(|alts| alts.iter().find(|x| x.name == a)))
     }
 
     pub fn pin_by_number(&self, number: &str) -> Option<&LibPin> {

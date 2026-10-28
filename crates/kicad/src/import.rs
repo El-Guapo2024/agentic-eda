@@ -886,6 +886,68 @@ pub fn merge_project_predefined_sizes(design: &mut Design, project_json: &str) {
     }
 }
 
+/// A `.kicad_pro`'s Board Setup > Teardrops (`BOARD_DESIGN_SETTINGS`' `teardrop_options` and `teardrop_parameters` `PARAM_LAMBDA`s, 8303b2ad
+/// `board_design_settings.cpp:526-660`): the target kinds from `teardrop_options` (`td_onvia`, `td_onpthpad`, `td_onsmdpad`) and the round target's sizes
+/// from `teardrop_parameters` (`td_target_name` `td_round_shape`: `td_maxlen` and `td_maxheight` in millimetres, `td_length_ratio`, `td_height_ratio` and
+/// `td_width_to_size_filter_ratio`). This port collapses KiCad's three parameter blocks into one round-shapes block (PARITY-pcb §15), so the entries for
+/// `td_rect_shape` and `td_track_end` are not read. An array entry that is empty, not an object or (for the parameters) names no target is skipped, as
+/// KiCad's loader skips it; a key the entry does not have keeps what the design had. Absent `board.design_settings` or text that is not JSON is a no-op.
+pub fn merge_project_teardrops(design: &mut Design, project_json: &str) {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else { return };
+    let Some(settings) = root.get("board").and_then(|b| b.get("design_settings")) else { return };
+    let entries = |key: &str| settings.get(key).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let options = entries("teardrop_options");
+    let params = entries("teardrop_parameters");
+    let mut t = design.routing.as_ref().map_or_else(Default::default, |r| r.teardrop_settings);
+    let mut read = false;
+    let flag = |entry: &serde_json::Value, key: &str| entry.get(key).and_then(|v| v.as_bool());
+    for entry in options.iter().filter(|e| e.is_object() && !e.as_object().is_some_and(|o| o.is_empty())) {
+        // `m_TargetVias`, `m_TargetPTHPads`, `m_TargetSMDPads`; `td_ontrackend` and `td_onroundshapesonly` name targets this port does not model.
+        if let Some(v) = flag(entry, "td_onvia") {
+            t.target_vias = v;
+            read = true;
+        }
+        if let Some(v) = flag(entry, "td_onpthpad") {
+            t.target_pth_pads = v;
+            read = true;
+        }
+        if let Some(v) = flag(entry, "td_onsmdpad") {
+            t.target_smd_pads = v;
+            read = true;
+        }
+    }
+    for entry in params.iter().filter(|e| e.is_object() && !e.as_object().is_some_and(|o| o.is_empty())) {
+        // `GetTeardropTargetTypeFromCanonicalName`: only the round target's block feeds this port's collapsed one.
+        if entry.get("td_target_name").and_then(|v| v.as_str()) != Some("td_round_shape") {
+            continue;
+        }
+        let num = |key: &str| entry.get(key).and_then(|v| v.as_f64());
+        if let Some(v) = num("td_maxlen") {
+            t.max_len_nm = mm_to_nm(v);
+            read = true;
+        }
+        if let Some(v) = num("td_maxheight") {
+            t.max_width_nm = mm_to_nm(v);
+            read = true;
+        }
+        if let Some(v) = num("td_length_ratio") {
+            t.best_length_ratio = v;
+            read = true;
+        }
+        if let Some(v) = num("td_height_ratio") {
+            t.best_width_ratio = v;
+            read = true;
+        }
+        if let Some(v) = num("td_width_to_size_filter_ratio") {
+            t.width_to_size_filter_ratio = v;
+            read = true;
+        }
+    }
+    if read {
+        design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }).teardrop_settings = t;
+    }
+}
+
 /// A `.kicad_pro`'s Board Setup > Text & Graphics > Dimensions defaults (8303b2ad `board_design_settings.cpp`): `defaults.dimension_units` and
 /// `defaults.dimension_precision` (`PARAM_ENUM`s, INCH..AUTOMATIC and X..V_VVVVV), `defaults.dimensions.units_format` (NO_SUFFIX..PAREN_SUFFIX),
 /// `suppress_zeroes`, `text_position` (OUTSIDE..INLINE: "excluding DIM_TEXT_POSITION::MANUAL from the valid range"), `keep_text_aligned`, and the
@@ -1347,6 +1409,18 @@ pub fn project_json_for_board(project_json: &str, notes: &ImportNotes) -> String
 /// "first match wins" is exactly KiCad's own "earliest-declared non-default
 /// netclass wins" precedence (`net_settings.cpp`'s `makeEffectiveNetclass`).
 pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
+    project_net_classes(project_json, false)
+}
+
+/// [`parse_project_net_classes`] for a project read with its schematic and no board (`eda import-kicad x.kicad_sch`, r7 H1): every class the project defines,
+/// a class no pattern names included (a net class label of the schematic may name it: `ERC_TESTER::TestMissingNetclasses` reports a class the project does not
+/// have), with its patterns, and nothing from `netclass_assignments`: those are what the schematic's labels said when KiCad last saved it, and the schematic
+/// says it again (KiCad 25ec2335 `FACADE::ApplyNetclasses` retires every assignment its labels no longer make), so a class only they name stays implicit.
+pub fn parse_project_net_classes_for_schematic(project_json: &str) -> Vec<NetClass> {
+    project_net_classes(project_json, true)
+}
+
+fn project_net_classes(project_json: &str, for_schematic: bool) -> Vec<NetClass> {
     let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else {
         return Vec::new();
     };
@@ -1367,7 +1441,9 @@ pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
     let assigned: Vec<(String, String)> = net_settings
         .get("netclass_assignments")
         .and_then(|v| v.as_object())
-        .map(|m| m.iter().flat_map(|(net, cs)| cs.as_array().into_iter().flatten().filter_map(|c| c.as_str()).map(move |c| (c.to_string(), crate::pcb::exact_pattern(net)))).collect())
+        .filter(|_| !for_schematic)
+        // a class name or a list of them (a project at `net_settings` version 3 writes one name: `NET_SETTINGS`' migration to 4 makes it a list)
+        .map(|m| m.iter().flat_map(|(net, cs)| cs.as_array().map(|a| a.iter().filter_map(|c| c.as_str()).collect::<Vec<_>>()).unwrap_or_else(|| cs.as_str().into_iter().collect()).into_iter().map(move |c| (c.to_string(), crate::pcb::exact_pattern(net)))).collect())
         .unwrap_or_default();
 
     let num_mm = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_f64()).map(mm_to_nm);
@@ -1386,7 +1462,7 @@ pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
             .filter_map(|p| p.get("pattern").and_then(|v| v.as_str()).map(String::from))
             .chain(assigned.iter().filter(|(class, _)| class == name).map(|(_, pattern)| pattern.clone()))
             .collect();
-        if nets.is_empty() {
+        if nets.is_empty() && !for_schematic {
             continue; // an unused class matches nothing; not worth carrying (same rule import_board_rules uses)
         }
         out.push(NetClass {
@@ -1450,6 +1526,15 @@ pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
 /// via size -- wrong for every net that has no more specific class, not
 /// just the ones a custom class names.
 pub fn merge_project_net_classes(model: &mut eda_model::ConstraintModel, project_json: &str) {
+    merge_net_classes(model, project_json, false)
+}
+
+/// [`merge_project_net_classes`] for a project read with its schematic and no board: the classes [`parse_project_net_classes_for_schematic`] reads (r7 H1).
+pub fn merge_project_net_classes_for_schematic(model: &mut eda_model::ConstraintModel, project_json: &str) {
+    merge_net_classes(model, project_json, true)
+}
+
+fn merge_net_classes(model: &mut eda_model::ConstraintModel, project_json: &str, for_schematic: bool) {
     let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else {
         return;
     };
@@ -1484,7 +1569,7 @@ pub fn merge_project_net_classes(model: &mut eda_model::ConstraintModel, project
         }
     }
 
-    let mut project_classes = parse_project_net_classes(project_json);
+    let mut project_classes = project_net_classes(project_json, for_schematic);
     if !project_classes.is_empty() {
         project_classes.append(&mut model.board.net_classes);
         model.board.net_classes = project_classes;

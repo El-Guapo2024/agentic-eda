@@ -161,6 +161,12 @@ pub struct SchExtras {
     /// stored. The writer says it in `(effects ... (justify ...))` and the importer reads it back, so KiCad draws the text where the studio does.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub text_justify: BTreeMap<String, SchTextJustify>,
+    /// What a text item's `EDA_TEXT` and `SCH_ITEM` hold that the item itself does not, by item id -- a free text (`SchematicText`), a text box, a label, a
+    /// directive label: "exclude from simulation" (`SCH_TEXT` and `SCH_TEXTBOX`'s `m_excludedFromSim`, which the SPICE netlister skips a directive by), the
+    /// hyperlink (`m_hyperlink`, `(href ..)`), a free text's bold and italic and the font colour (`EDA_TEXT::GetTextColor`, `(color ..)` in `(font ..)`).
+    /// Read from a KiCad file and written back as `saveText` / `saveTextBox` write them (r7 H4, M5). An item with no entry has KiCad's defaults. Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub text_attrs: BTreeMap<String, TextAttrs>,
     /// The tables of this sheet (`SCH_TABLE`, written as `(table ..)`), in the order of the file: the cells' text, sizes and strokes, the grid -- see [`crate::table::Table`]. A table is
     /// selected, moved, locked and grouped like any item of the sheet (its id is `tbl_..`), and a click picks one of its cells. Additive: empty and not written for a sheet with none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -186,6 +192,24 @@ pub struct SchExtras {
     /// `writes_nothing`, not in `is_empty`.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sim_workbook: Option<String>,
+    /// Schematic Setup > Annotation's "Symbol unit notation" (`SCHEMATIC_SETTINGS::m_SubpartIdSeparator`, the `.kicad_pro`'s `schematic.subpart_id_separator`): the
+    /// character code put between a reference and its unit (`U1.A`), 0 for none. `None`: KiCad's default, 0. Read from an imported project as KiCad's loader reads it
+    /// (`PARAM<int>( .., 0, 0, 126 )`: out of range is the default) and written back to the derived project; [`crate::annotate::SubpartIds`] names the units by it.
+    /// Only the root sheet's extras hold it. Additive. (Counts in `writes_nothing`, not in `is_empty`: it is a project setting, no part of the drawing.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subpart_id_separator: Option<u32>,
+    /// The same setting's first unit id (`SCHEMATIC_SETTINGS::m_SubpartFirstId`, `schematic.subpart_first_id`): the character code of unit 1, `'A'` (65) by default,
+    /// `'1'` for numbered units (`PARAM<int>( .., 'A', '1', 'z' )`). `None`: the default. Only the root sheet's extras hold it. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subpart_first_id: Option<u32>,
+    /// The rest of an imported project's Schematic Setup (`SCHEMATIC_SETTINGS`' `m_params`, the `.kicad_pro`'s `schematic` object), as KiCad wrote it: formatting
+    /// (`drawing.*`: text sizes, label and offset ratios, pin symbol size, junction size), annotation (`annotate_start_num`, `annotation.*`, `used_designators`), the
+    /// BOM and netlist settings, the simulator's `spice_*` keys -- every key the studio has no setting of its own for. The derived project starts its `schematic`
+    /// object from this and writes the studio's own settings over it (`eda_kicad::pcb::export_kicad_pro_for`), so kicad-cli reads the project as KiCad saved it.
+    /// The keys the studio holds itself, and those naming files of the original folder, are left out on import (`eda_kicad::project_schematic::kept`). `None`: no
+    /// project was imported. Only the root sheet's extras hold it. Additive. (Counts in `writes_nothing`.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_schematic: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// `NGSPICE_SETTINGS` (`eeschema/sim/spice_settings.cpp`), the `.kicad_pro`'s `schematic.ngspice` object: `workbook_filename` (relative to the project), `fix_include_paths`
@@ -362,6 +386,29 @@ fn is_true(b: &bool) -> bool {
     *b
 }
 
+/// See [`SchExtras::text_attrs`]. `bold` and `italic` are a free text's (a label keeps its own in [`LabelLook`], a text box in its shape).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextAttrs {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude_from_sim: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub italic: bool,
+    /// The font colour; `None` is `COLOR4D::UNSPECIFIED`, the layer's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<SchColor>,
+}
+
+impl TextAttrs {
+    pub fn is_default(&self) -> bool {
+        *self == TextAttrs::default()
+    }
+}
+
 /// One of a label's own fields (`SCH_FIELD` of an `SCH_LABEL_BASE`): its name as stored (`Netclass` for the net class), its text, whether it is shown and whether it
 /// is set in italics. It is placed where `SCH_LABEL_BASE::AutoplaceFields` puts it, under the label's text (a field moved by hand is placed there again).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -511,7 +558,7 @@ impl SchExtras {
     /// Whether design.json has nothing to say for `extras` (it is then not written): [`is_empty`](Self::is_empty), no table of ERC severities and no connection grid. The
     /// severities and the grid are no part of the schematic KiCad's files draw -- they go to the derived project -- so they are not in `is_empty`.
     pub fn writes_nothing(&self) -> bool {
-        self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none() && self.intersheet_refs.is_none() && self.ngspice.is_none() && self.sim_workbook.is_none()
+        self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none() && self.intersheet_refs.is_none() && self.ngspice.is_none() && self.sim_workbook.is_none() && self.subpart_id_separator.is_none() && self.subpart_first_id.is_none() && self.project_schematic.is_none()
     }
 
     /// The net class a label's fields give its net (`SCH_LABEL_BASE`'s `Netclass` field; the first that is not empty), if any.
@@ -631,6 +678,7 @@ impl SchExtras {
             && self.pin_swaps.is_empty()
             && self.pin_alternates.is_empty()
             && self.text_justify.is_empty()
+            && self.text_attrs.is_empty()
             && self.tables.is_empty()
             && self.groups.is_empty()
             && self.embedded.is_empty()
@@ -746,6 +794,10 @@ pub enum SchFill {
     Outline,
     Background,
     Color,
+    /// `FILL_T::HATCH`, `REVERSE_HATCH`, `CROSS_HATCH` (`(fill (type hatch))` ..): lines across the shape in the stroke's colour (r7 M5).
+    Hatch,
+    ReverseHatch,
+    CrossHatch,
 }
 
 impl SchFill {
@@ -760,6 +812,9 @@ impl SchFill {
             SchFill::Outline => "outline",
             SchFill::Background => "background",
             SchFill::Color => "color",
+            SchFill::Hatch => "hatch",
+            SchFill::ReverseHatch => "reverse_hatch",
+            SchFill::CrossHatch => "cross_hatch",
         }
     }
 
@@ -768,6 +823,9 @@ impl SchFill {
             "outline" => SchFill::Outline,
             "background" => SchFill::Background,
             "color" => SchFill::Color,
+            "hatch" => SchFill::Hatch,
+            "reverse_hatch" => SchFill::ReverseHatch,
+            "cross_hatch" => SchFill::CrossHatch,
             _ => SchFill::None,
         }
     }

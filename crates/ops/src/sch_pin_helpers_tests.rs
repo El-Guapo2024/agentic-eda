@@ -288,6 +288,27 @@ fn a_swapped_pin_is_labelled_where_it_sits_now_running_the_way_the_pin_it_swappe
     assert_eq!(after.extras.label_spins.get(&l.id), Some(&LabelSpin::Right));
 }
 
+/// r7 M4: a pin that picked an alternate is labelled by it (`SCH_PIN::GetShownName`: `m_alt`) in the alternate's shape (`GetType`: the alternate's `m_Type`):
+/// `IN` (input) with the alternate `USART1_TX` (output) gives a global label `USART1_TX` of the output shape. An alternate the library pin does not have is not
+/// kept (`SetAlt`), so pin 2's `NOPE` leaves it `OUT`.
+#[test]
+fn a_pins_label_says_its_alternate() {
+    let mut m = model();
+    m.symbols[0].connectivity.pin_alternates.insert("1".into(), vec![eda_model::ir::PinAlternate { name: "USART1_TX".into(), electrical_type: "output".into(), shape: "line".into() }]);
+    let mut start = sheet(0, false);
+    let (tip1, tip2) = (pin_at(&start, "1"), pin_at(&start, "2"));
+    let key = eda_model::ir::field_key("U1", 1);
+    start.extras.pin_alternates.insert(key, [("1".to_string(), "USART1_TX".to_string()), ("2".to_string(), "NOPE".to_string())].into());
+    let mut design = empty_design();
+    design.schematic = Some(start);
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::SchEdit(helper(PinHelper::GlobalLabel, &["pin:U1:1", "pin:U1:2"], Nm::ZERO))).unwrap_or_else(|e| panic!("{e:?}"));
+    let after = b.design().schematic.clone().unwrap();
+    let l1 = label_at(&after, tip1);
+    assert_eq!((l1.net.as_str(), &l1.kind), ("USART1_TX", &LabelKind::Global { shape: LabelShape::Output }));
+    assert_eq!(label_at(&after, tip2).net, "OUT");
+}
+
 // ----------------------------------------------------------------------------------------------------------------------------- sheet pins
 
 fn sheet_with_pins() -> SchematicSection {

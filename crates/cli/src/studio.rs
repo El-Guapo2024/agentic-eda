@@ -951,6 +951,9 @@ fn handle(
         ("POST", "/api/appearance") => respond(stream, "200 OK", "application/json", crate::appearance_api::post(dir, &String::from_utf8_lossy(&body)).to_string().as_bytes()),
         ("POST", "/api/undo") => {
             let scope = request_domain(&body);
+            if let Some(refused) = route_api::undo_redo_blocked(route_session, scope) {
+                return respond(stream, "200 OK", "application/json", refused.to_string().as_bytes());
+            }
             let reply = match board::undo(dir, "ui", scope) {
                 Ok(summary) => json!({ "ok": true, "message": summary }),
                 Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
@@ -959,6 +962,9 @@ fn handle(
         }
         ("POST", "/api/redo") => {
             let scope = request_domain(&body);
+            if let Some(refused) = route_api::undo_redo_blocked(route_session, scope) {
+                return respond(stream, "200 OK", "application/json", refused.to_string().as_bytes());
+            }
             let reply = match board::redo(dir, "ui", scope) {
                 Ok(summary) => json!({ "ok": true, "message": summary }),
                 Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
@@ -1852,7 +1858,15 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     p.pins
                         .iter()
                         .filter(|pin| resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)).is_none_or(|rp| rp.unit == 0 || rp.unit == s.unit))
-                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": net_of_pin(&pin_net, &reference, &pin.number) }))
+                        .map(|pin| {
+                            let mut j = json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": net_of_pin(&pin_net, &reference, &pin.number) });
+                            // the alternate the pin keeps (`SCH_PIN::SetAlt`), its shown name (`GetShownName`), for the Net Navigator's line (r7 A7-M1)
+                            let alt = sch.extras.pin_alternates.get(&eda_model::ir::field_key(&s.id, s.unit)).and_then(|m| m.get(&pin.number)).map(String::as_str);
+                            if let Some(kept) = resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number).and_then(|lp| r.kept_alternate(lp, alt))) {
+                                j["alt"] = json!(kept.name);
+                            }
+                            j
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
@@ -2157,6 +2171,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "sheets": sheets,
         "sheet_path": sheet_path,
         "page_number": page_number,
+        // the project's unit notation (the root's `SchExtras::subpart_*`, r7 H5), which the sheet draws a unit's reference by
+        "subpart_id_separator": design.schematic.as_ref().and_then(|r| r.extras.subpart_id_separator),
+        "subpart_first_id": design.schematic.as_ref().and_then(|r| r.extras.subpart_first_id),
     })
 }
 
@@ -2430,7 +2447,7 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
         pins.extend(a.1.iter().filter(|p| !normal.1.contains(p)).map(|p| pin(p, 2)));
     }
     // how the symbol's pins show their texts (`(pin_names (hide yes) (offset x))`, `(pin_numbers (hide yes))`)
-    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count(), "unit_names": s.connectivity.unit_names, "power_local": s.power && s.connectivity.power_local })
+    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })
 }
 
 /// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document

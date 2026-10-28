@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { carryRatsnest, offsetRatsnestForPreview, type RatsnestBoardLike, type RatsnestEdgeLike } from "./localRatsnest";
+import { carryRatsnest, offsetRatsnestForPreview, ratsnestCross, type RatsnestBoardLike, type RatsnestEdgeLike } from "./localRatsnest";
 
 const board: RatsnestBoardLike = {
   parts: [
@@ -71,4 +71,12 @@ test("carryRatsnest: an endpoint on a carried pad, via or track end goes where t
 test("carryRatsnest: nothing carried leaves the edges alone", () => {
   const edges: RatsnestEdgeLike[] = [{ net: "N1", from: [1100, 1000], to: [5100, 5000] }];
   assert.deepEqual(carryRatsnest(edges, board, { moving: { parts: [], routing: null } }, (pt) => [pt[0] + 1, pt[1]]), edges);
+});
+
+test("r7 C7-7: a ratsnest line whose ends coincide is KiCad's 0.2 mm cross; any other line is not", () => {
+  assert.deepEqual(ratsnestCross([1_000_000, 2_000_000], [1_000_000, 2_000_000]), [
+    [[800_000, 1_800_000], [1_200_000, 2_200_000]],
+    [[800_000, 2_200_000], [1_200_000, 1_800_000]],
+  ]);
+  assert.equal(ratsnestCross([0, 0], [1, 0]), null);
 });

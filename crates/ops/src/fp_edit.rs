@@ -246,7 +246,8 @@ impl Board<'_> {
             }
         }
 
-        // What the pad becomes must be a pad the library's own rules accept: edit the footprint's edits in a trial and judge it.
+        // What the pad becomes must be a pad the library's own rules accept: edit the footprint's edits in a trial and judge it -- as `padValuesOK` judges
+        // it: a hole that leaves no annular ring is a warning there (the dialog shows it), not a refusal (r7 review).
         let mut edit = edit.clone();
         edit.nth = nth;
         let mut all: Vec<PadEdit> = self.design.footprint_edit(part).map(|e| e.pads.clone()).unwrap_or_default();
@@ -254,9 +255,9 @@ impl Board<'_> {
         if !edit.is_empty() {
             all.push(edit.clone());
         }
-        let was: BTreeSet<String> = lib.validate().into_iter().filter_map(|c| c.hint).collect();
+        let was: BTreeSet<String> = lib.validate_pad_values().into_iter().filter_map(|c| c.hint).collect();
         let trial = patched_footprint(&lib, &all);
-        if let Some(new) = trial.validate().into_iter().filter(|c| c.hint.as_ref().is_some_and(|h| !was.contains(h))).find(|c| c.location.as_deref().is_some_and(|l| l.ends_with(&format!("pad {}", edit.number)))) {
+        if let Some(new) = trial.validate_pad_values().into_iter().filter(|c| c.hint.as_ref().is_some_and(|h| !was.contains(h))).find(|c| c.location.as_deref().is_some_and(|l| l.ends_with(&format!("pad {}", edit.number)))) {
             return Err(fail("ops_bad_pad", &pad_ref, new.hint.unwrap_or_default()));
         }
         // `PAD::doCheckPad`: "(custom pad shape must resolve to a single polygon)" -- the anchor and the basic shapes make one piece of copper.

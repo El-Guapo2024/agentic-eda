@@ -789,7 +789,7 @@
       await sleep(400);
       await E.run("pcbnew.PcbDesignBlockControl.deleteDesignBlock");
       await waitFor(() => titles().includes("Confirmation"));
-      await press("OK", 1800);
+      await press("Yes", 1800); // IsOK: OK/Cancel relabelled Yes/No (confirm.cpp)
       const listing = await json("/api/design_blocks");
       t(!(listing.libraries.find((l) => l.name === LIB)?.blocks ?? []).some((x) => x.name === "Channel"), "the block is deleted");
       await E.run("common.SuiteControl.showDesignBLockLibTable");

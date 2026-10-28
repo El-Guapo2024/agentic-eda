@@ -611,3 +611,17 @@ export function customPadBox(pad: Pick<LibraryPad, "size" | "custom" | "at" | "o
   }
   return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
 }
+
+/** A custom pad's boxes for `padCheck` (`PAD::doCheckPad`): its copper's (`GetBoundingBox().GetSize()`) and each basic shape's (`PCB_SHAPE::GetBoundingBox`, the stroke included). */
+export function customPadBoxes(s: PadShapeForm, size: [number, number]): { customBox?: [number, number]; primitiveBoxes?: [number, number][] } {
+  if (shapeNameOf(s.choice) !== "custom") return {};
+  const [x0, y0, x1, y1] = customPadExtent({ size, custom: { anchor: s.choice === "custom_rect" ? "rect" : "circle", zone: "outline", primitives: s.primitives } });
+  const primitiveBoxes = s.primitives.map((p): [number, number] => {
+    const pts = shapeExtentPoints(p.shape);
+    const reach = Math.max(p.shape.stroke_width, 0);
+    const xs = pts.map(([x]) => x);
+    const ys = pts.map(([, y]) => y);
+    return [Math.max(...xs) - Math.min(...xs) + reach, Math.max(...ys) - Math.min(...ys) + reach];
+  });
+  return { customBox: [x1 - x0, y1 - y0], primitiveBoxes };
+}

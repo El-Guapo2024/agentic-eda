@@ -454,7 +454,9 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             reference: reference.clone(),
             mpn: None,
             lcsc: None,
-            value: (!primary.value.is_empty()).then(|| primary.value.clone()),
+            // the file's Value as it is, an empty one too (`saveField` writes the empty text, r7 M2): the writers fall back to the reference only for a part
+            // that has no value at all, which a KiCad file's symbol never is
+            value: Some(primary.value.clone()),
             package: None,
             footprint: (!primary.footprint.is_empty()).then(|| primary.footprint.clone()),
             symbol: Some(lib_id.clone()),
@@ -612,6 +614,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut label_uuid: Vec<Option<String>> = Vec::new();
     // each label's spin and look, parallel to `labels`: the file's own, not an inference from the wires
     let mut label_geometry: Vec<(eda_model::sch_extras::LabelSpin, crate::sch_extras_io::EffectsLook)> = Vec::new();
+    // each label's font colour, parallel to `labels` (`SchExtras::text_attrs`, r7 M5)
+    let mut label_colors: Vec<Option<eda_model::sch_extras::SchColor>> = Vec::new();
     // each label's own fields (`parseSchText`'s properties), parallel to `labels`
     let mut label_fields_read: Vec<Vec<eda_model::sch_extras::LabelField>> = Vec::new();
     for (tag, global) in [("label", None), ("global_label", Some(true)), ("hierarchical_label", Some(false))] {
@@ -640,6 +644,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             label_locked.push(is_locked(l));
             label_uuid.push(uuid_of(l));
             label_geometry.push((spin, look));
+            label_colors.push(crate::sch_extras_io::read_text_attrs(l).color);
             label_fields_read.push(crate::label_fields::read_label_fields(l, tag == "global_label"));
         }
     }
@@ -652,6 +657,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut text_uuid: Vec<Option<String>> = Vec::new();
     // each text's justification, parallel to `texts` (`SchExtras::text_justify`)
     let mut text_lie: Vec<eda_model::sch_extras::SchTextJustify> = Vec::new();
+    // each text's exclude from simulation, hyperlink, bold, italic and colour, parallel to `texts` (`SchExtras::text_attrs`, r7 H4)
+    let mut text_attrs: Vec<eda_model::sch_extras::TextAttrs> = Vec::new();
     for t in sexpr::find_all(root, "text") {
         let Some(content) = sexpr::txt(t, 1).map(String::from) else { continue };
         let Some(at) = sexpr::find(t, "at") else { continue };
@@ -663,6 +670,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         text_locked.push(is_locked(t));
         text_uuid.push(uuid_of(t));
         text_lie.push(justify);
+        text_attrs.push(crate::sch_extras_io::read_text_attrs(t));
     }
 
     let mut sheets: Vec<SheetInstance> = Vec::new();
@@ -763,6 +771,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         let graphics = crate::sch_extras_io::read_graphics(root);
         let graphic_locked: Vec<bool> = graphics.iter().map(|g| g.locked).collect();
         let graphic_uuid: Vec<Option<String>> = graphics.iter().map(|g| g.uuid.clone()).collect();
+        let graphic_attrs: Vec<eda_model::sch_extras::TextAttrs> = graphics.iter().map(|g| g.attrs.clone()).collect();
         sch.extras.graphics = graphics.into_iter().map(|g| g.graphic).collect();
         // Its tables (`SCH_TABLE`), with what a lock and a group need of each.
         let tables = crate::sch_table_io::read_all(root);
@@ -820,6 +829,14 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             if !id.is_empty() && !fields.is_empty() {
                 sch.extras.label_fields.insert(id, fields);
             }
+        }
+        // A text's, a text box's, a label's and a directive label's attributes beyond what the item keeps (`SchExtras::text_attrs`, r7 H4, M5); the default keeps
+        // no entry.
+        let attrs = sch.texts.iter().map(|t| t.id.clone()).zip(text_attrs)
+            .chain(sch.extras.graphics.iter().map(|g| g.id.clone()).zip(graphic_attrs))
+            .chain(sch.labels.iter().map(|l| l.id.clone()).zip(label_colors.into_iter().map(|color| eda_model::sch_extras::TextAttrs { color, ..Default::default() })));
+        for (id, a) in attrs.filter(|(id, a)| !id.is_empty() && !a.is_default()).collect::<Vec<_>>() {
+            sch.extras.text_attrs.insert(id, a);
         }
         // A text's justification, as the file has it (`SchExtras::text_justify`); the default keeps no entry.
         for (id, justify) in sch.texts.iter().map(|t| t.id.clone()).zip(text_lie) {
@@ -1337,16 +1354,17 @@ impl RawUserField {
     }
 }
 
-/// The properties of a placed symbol that are no standard field (`FIELD_T::USER`): every `(property ...)` but Reference, Value, Footprint, Datasheet and
-/// Description (matched without regard to case, as `parseSchField` does), in file order, the first of a name. `(property private "Name" "text" ...)` is read too
-/// (the flag is not kept).
+/// The properties of a placed symbol beyond the four the instance holds itself: every `(property ...)` but Reference, Value, Footprint and Datasheet (matched
+/// without regard to case, as `parseSchField` does), in file order, the first of a name. `(property private "Name" "text" ...)` is read too (the flag is not
+/// kept). The mandatory Description (`FIELD_T::DESCRIPTION`) is one of them, kept as a field of that name with its text, place and look, so the writer
+/// writes it as `saveSymbol` does (every field) and kicad-cli's netlist and BOM have it (r7 H3). **Differs**: the studio lists it with the user fields.
 fn user_fields_of(item: &[Sexpr]) -> Vec<RawUserField> {
     let mut out: Vec<RawUserField> = Vec::new();
     for p in sexpr::find_all(item, "property") {
         // `private` is a word of its own before the name; a field called "private" has a list (its position) where the text would end
         let shift = usize::from(sexpr::txt(p, 1) == Some("private") && p.get(3).is_some_and(|n| n.text().is_some()));
         let (Some(name), Some(text)) = (sexpr::txt(p, 1 + shift), sexpr::txt(p, 2 + shift)) else { continue };
-        if name.is_empty() || ["Reference", "Value", "Footprint", "Datasheet", "Description"].iter().any(|m| m.eq_ignore_ascii_case(name)) || out.iter().any(|f| f.name == name) {
+        if name.is_empty() || ["Reference", "Value", "Footprint", "Datasheet"].iter().any(|m| m.eq_ignore_ascii_case(name)) || out.iter().any(|f| f.name == name) {
             continue;
         }
         let at = sexpr::find(p, "at");

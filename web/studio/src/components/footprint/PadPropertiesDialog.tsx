@@ -7,27 +7,24 @@
 // (BGA/fiducial/testpoint/...; cosmetic metadata with no consumer anywhere in
 // this app yet).
 import { useEffect, useState } from "react";
-import type { LibraryPad, PadConnection, PadKind } from "../../api/types";
+import type { LibraryPad, PadConnection } from "../../api/types";
 import { useFpApi, useFpState, useFpDispatch } from "../../state/footprintEditorStore";
 import { useStudioState } from "../../state/store";
-import { nmFrom, nmTo } from "../../state/units";
+import { formatLength, nmFrom, nmTo } from "../../state/units";
+import { padCheck } from "../../kicad-port/fpFields";
 import { PAD_CONNECTION_OPTIONS, defaultSpokeAngleDeg, importPadSettings, settingsOf } from "../../kicad-port/padSettings";
-import { chooseShape, libraryFieldsOf, shapeFormOfLibraryPad, type PadShapeChoice, type PadShapeForm } from "../../kicad-port/padShape";
+import { chooseShape, customPadBoxes, libraryFieldsOf, shapeFormOfLibraryPad, type PadShapeChoice, type PadShapeForm } from "../../kicad-port/padShape";
 import { FRONT, changeMode, checkStack, layerFormOf, padstackControlsShown, stackOf, stackStateOf, withLayerForm, type LayerForm, type PadStackState } from "../../kicad-port/padStack";
+import { PAD_DLG_TYPES, padDlgTypeOf, padTypeHas, padTypeSelected, type PadDlgType } from "../../kicad-port/padType";
+import { FIRST_LAST_PAD_NUMBER } from "../../kicad-port/padNumbering";
 import { CopperLayersRow, PadPrimitivePanel, PadShapeRows, PadStackRows } from "../PadShapeFields";
 
-const KIND_OPTIONS: { value: PadKind; label: string }[] = [
-  { value: "smd", label: "SMD" },
-  { value: "through_hole", label: "Through hole" },
-  { value: "non_plated_hole", label: "NPTH, mechanical" },
-];
-
 /** `pad.cpp`'s static layer masks (`PTHMask`/`SMDMask`/`ConnSMDMask`/`UnplatedHoleMask`) -- the dialog's own "preset" buttons rather than a full per-layer checkbox grid, matching this task's own "layers (SMD/THT/NPTH/connector presets)" scope. */
-const LAYER_PRESETS: { label: string; kind: PadKind; layers: string[] }[] = [
-  { label: "SMD", kind: "smd", layers: ["F.Cu", "F.Paste", "F.Mask"] },
-  { label: "Connector (no paste)", kind: "smd", layers: ["F.Cu", "F.Mask"] },
-  { label: "THT", kind: "through_hole", layers: ["*.Cu", "F.Mask", "B.Mask"] },
-  { label: "NPTH, mechanical", kind: "non_plated_hole", layers: ["*.Cu", "*.Mask"] },
+const LAYER_PRESETS: { label: string; type: PadDlgType; layers: string[] }[] = [
+  { label: "SMD", type: "smd", layers: ["F.Cu", "F.Paste", "F.Mask"] },
+  { label: "Connector (no paste)", type: "conn", layers: ["F.Cu", "F.Mask"] },
+  { label: "THT", type: "pth", layers: ["*.Cu", "F.Mask", "B.Mask"] },
+  { label: "NPTH, mechanical", type: "npth", layers: ["*.Cu", "*.Mask"] },
 ];
 
 export function PadPropertiesDialog() {
@@ -40,7 +37,7 @@ export function PadPropertiesDialog() {
   // no number and no position, and OK stores into the default pad instead of editing a pad of the footprint.
   const defaultMode = state.defaultPadOpen;
   const id = state.padPropertiesId;
-  const pad: LibraryPad | undefined = defaultMode ? { id: "", number: "", at: { x: 0, y: 0 }, ...state.defaultPad } : id ? state.footprint?.pads.find((p) => p.id === id) : undefined;
+  const pad: LibraryPad | undefined = defaultMode ? { id: "", number: state.lastPadNumber ?? FIRST_LAST_PAD_NUMBER, at: { x: 0, y: 0 }, ...state.defaultPad } : id ? state.footprint?.pads.find((p) => p.id === id) : undefined;
   const close = () => (defaultMode ? dispatch({ type: "SET_DEFAULT_PAD_OPEN", open: false }) : dispatch({ type: "SET_PAD_PROPERTIES_ID", id: null }));
 
   const [form, setForm] = useState<LibraryPad | null>(null);
@@ -87,22 +84,40 @@ export function PadPropertiesDialog() {
 
   const submit = async () => {
     // The shape, the size and what goes with them are the shape form's.
-    const message = stackShown ? checkStack(stack) : null;
+    const shape = libraryFieldsOf(shapeForm);
+    // `padValuesOK` (`PAD::doCheckPad( .., aForPadProperties = true )`): an error keeps the dialog open, the warnings are shown ("Warning: ..") and the pad is applied.
+    const keep = form.kicad as { solder_mask_margin?: number; solder_paste_margin?: number; solder_paste_margin_ratio?: number } | undefined;
+    const checked = padCheck(
+      { kind: form.kind, shape: shape.shape, size: shape.size, drill: form.drill, slot: form.drill_slot, ratio: shape.roundrect_ratio, pasteRatio: keep?.solder_paste_margin_ratio ?? null, offset: [form.offset.x, form.offset.y], clearance: form.clearance_override, maskMargin: keep?.solder_mask_margin ?? null, pasteMargin: keep?.solder_paste_margin ?? null, ...customPadBoxes(shapeForm, shape.size) },
+      (nm) => formatLength(nm, units),
+      units
+    );
+    const message = checked.errors[0] ?? (stackShown ? checkStack(stack) : null);
     if (message) {
       dispatch({ type: "TOAST", message, kind: "error" });
       return;
     }
-    const edited: LibraryPad = { ...form, ...libraryFieldsOf(shapeForm) };
+    if (checked.warnings.length > 0) dispatch({ type: "TOAST", message: checked.warnings.join("\n"), kind: "info" });
+    // `transferDataToPad`: an NPTH (and an aperture) pad has no number, an SMD or connector pad no hole.
+    const has = padTypeHas(padDlgTypeOf(form));
+    const edited: LibraryPad = { ...form, ...shape, number: has.connection ? form.number : "", ...(has.hole ? {} : { drill: null, drill_slot: null }) };
     // The padstack travels with the pad (`PAD::SetPadstack`); a pad that has none sends none.
     const stackNow = stackOf(stack);
     edited.stack = Object.keys(stackNow).length > 0 ? stackNow : undefined;
+    // `TransferDataFromWindow`: `transferDataToPad( m_masterPad )` and `padTool->SetLastPadNumber( m_masterPad->GetNumber() )` whichever pad the dialog is on --
+    // the Add Pad tool's next pad is the one just edited (the circle / SMD fix-ups of `ImportSettingsFrom` included); then, on a pad, the pad takes it.
+    const master = settingsOf(importPadSettings(edited, edited));
     if (defaultMode) {
-      // `m_Pad_Master` takes what the dialog holds (the circle / SMD fix-ups of `ImportSettingsFrom` included).
-      dispatch({ type: "SET_DEFAULT_PAD", pad: settingsOf(importPadSettings(edited, edited)) });
+      dispatch({ type: "SET_DEFAULT_PAD", pad: master });
+      dispatch({ type: "SET_LAST_PAD_NUMBER", number: edited.number });
       close();
       return;
     }
-    if (id && (await api.editPad(id, edited))) close();
+    if (id && (await api.editPad(id, edited))) {
+      dispatch({ type: "SET_DEFAULT_PAD", pad: master });
+      dispatch({ type: "SET_LAST_PAD_NUMBER", number: edited.number });
+      close();
+    }
   };
 
   /** `onPadShapeSelection`: the choice, with the defaults it sets up and the spoke angle that follows a circle. */
@@ -113,27 +128,33 @@ export function PadPropertiesDialog() {
     if (was !== null) set("thermal_spoke_angle_mdeg", Math.round(r.spokeAngleDeg * 1000));
   };
 
-  const hasDrill = form.kind !== "smd";
+  // `OnUpdateUI`: the hole and the number are enabled by the type.
+  const type = padDlgTypeOf(form);
+  const has = padTypeHas(type);
+  const hasDrill = has.hole;
+  /** `PadTypeSelected` on the type chosen (`current`: the pad the dialog is on, none for the default pad). */
+  const chooseType = (next: PadDlgType, layers?: string[]) =>
+    setForm((f) => {
+      if (!f) return f;
+      const r = padTypeSelected(f, next, defaultMode ? null : (pad ?? null));
+      return layers ? { ...r, layers: [...layers] } : r;
+    });
   const isSlot = form.drill_slot != null;
 
   return (
     <div className="dialog-backdrop" onClick={close}>
       <div className="dialog" style={{ width: 480 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
-          <span>{defaultMode ? "Default Pad Properties" : "Pad Properties"}</span>
-          <span>{defaultMode ? "used by Add Pad" : pad.number || "(no number)"}</span>
+          <span>{defaultMode ? "Default Pad Properties for Add Pad Tool" : "Pad Properties"}</span>
+          <span>{defaultMode ? "" : pad.number || "(no number)"}</span>
         </div>
         <div className="dialog-body" style={{ maxHeight: "72vh", overflowY: "auto" }}>
           <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
-            {!defaultMode && (
-              <>
-                <span>Number</span>
-                <input value={form.number} onChange={(e) => set("number", e.target.value)} style={{ width: 80 }} />
-              </>
-            )}
+            <span>Pad number</span>
+            <input value={form.number} disabled={!has.connection} onChange={(e) => set("number", e.target.value)} style={{ width: 80 }} data-testid="fp-pad-number" />
             <span>Pad type</span>
-            <select value={form.kind} onChange={(e) => set("kind", e.target.value as PadKind)}>
-              {KIND_OPTIONS.map((o) => (
+            <select value={type} onChange={(e) => chooseType(e.target.value as PadDlgType)} data-testid="fp-pad-type">
+              {PAD_DLG_TYPES.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>
@@ -172,9 +193,9 @@ export function PadPropertiesDialog() {
               {LAYER_PRESETS.map((p) => (
                 <button
                   key={p.label}
-                  className={form.kind === p.kind && form.layers.join(",") === p.layers.join(",") ? "primary" : undefined}
+                  className={type === p.type && form.layers.join(",") === p.layers.join(",") ? "primary" : undefined}
                   style={{ marginRight: 6, marginBottom: 4 }}
-                  onClick={() => setForm((f) => (f ? { ...f, kind: p.kind, layers: p.layers } : f))}
+                  onClick={() => chooseType(p.type, p.layers)}
                 >
                   {p.label}
                 </button>
@@ -198,7 +219,7 @@ export function PadPropertiesDialog() {
                 {!isSlot && (
                   <>
                     <span />
-                    <span>{len(form.drill ?? 800_000, (d) => set("drill", d))}</span>
+                    <span>{len(form.drill ?? 0, (d) => set("drill", d))}</span>
                   </>
                 )}
                 {isSlot && (

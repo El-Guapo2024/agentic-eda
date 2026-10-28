@@ -1955,6 +1955,31 @@ fn rotate_pad_wraps_at_a_full_turn() {
     assert_eq!(b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads[0].rot, 0, "four quarter turns is a full turn, back to 0");
 }
 
+/// `DIALOG_PAD_PROPERTIES::padValuesOK`: a plated hole that reaches the pad's edge (or covers it) is a `DRCE_PADSTACK` warning ("PTH pad hole not fully
+/// inside copper", "PTH pad hole leaves no copper"), not an error -- KiCad applies the pad. Only a hole that is missing or not positive is refused (r7 E7-F1).
+#[test]
+fn edit_pad_accepts_a_plated_hole_that_reaches_the_pad_edge() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", Nm::ZERO, Nm::ZERO) }).unwrap();
+    let id = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads[0].id.clone();
+    let mut th = fp_pad("1", Nm::ZERO, Nm::ZERO);
+    th.kind = eda_model::PadKind::ThroughHole;
+    th.shape = eda_model::ir::LibraryPadShape::Rect;
+    th.size = (mm(2.0), mm(1.0));
+    th.drill = Some(mm(1.2));
+    th.layers = vec!["*.Cu".into(), "*.Mask".into()];
+    b.apply(&Cmd::EditPad { footprint: "Test:FP".into(), id: id.clone(), pad: th.clone() }).expect("a 1.2 mm hole in a 2 x 1 mm pad is a warning in KiCad, not a refusal");
+    // and a slot as wide as the pad
+    th.drill = None;
+    th.drill_slot = Some((mm(2.0), mm(1.0)));
+    b.apply(&Cmd::EditPad { footprint: "Test:FP".into(), id: id.clone(), pad: th.clone() }).unwrap();
+    // `DRCE_PAD_TH_WITH_NO_HOLE` still is
+    th.drill_slot = None;
+    assert!(b.apply(&Cmd::EditPad { footprint: "Test:FP".into(), id, pad: th }).is_err());
+}
+
 #[test]
 fn edit_pad_replaces_every_field_but_keeps_the_id() {
     let m = net_model();

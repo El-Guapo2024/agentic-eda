@@ -286,8 +286,9 @@ impl<'a> RuleBoard<'a> {
         let extras: HashMap<&str, &eda_model::ir::FootprintExtra> = self.design.drawings.as_ref().map(|d| d.footprint_extras.iter().map(|e| (e.id.as_str(), e)).collect()).unwrap_or_default();
         for fp in &pl.footprints {
             let part = self.model.part(&fp.id);
-            // `A.Library_Link`: the link the derived board writes (`footprint_lib_id`: a package's installed KiCad footprint), the one Multichannel reads too (R6-D2)
-            let fpid = part.map(eda_model::footprint::footprint_lib_id).unwrap_or_default();
+            // `A.Library_Link`: the link the derived board writes (`footprint_lib_id`: a package's installed KiCad footprint), the one Multichannel reads too (R6-D2),
+            // without the importer's `#2` slot, which the writer takes off too (R7-D3)
+            let fpid = part.map(|p| eda_model::footprint::without_import_slot(&eda_model::footprint::footprint_lib_id(p), &self.model.footprints)).unwrap_or_default();
             let value = part.and_then(|p| p.value.clone()).unwrap_or_default();
             let side_layer = if fp.side == Side::Bottom { "B.Cu" } else { "F.Cu" };
             let outlines: Vec<Vec<Point>> = self
@@ -333,7 +334,7 @@ impl<'a> RuleBoard<'a> {
         // `FOOTPRINT::GetOrientationDegrees`: KiCad's angle, counter-clockwise in (-180, 180], not the model's clockwise `rot` (R6-D1).
         it.set("Orientation", Prop::Double(crate::board::kicad_footprint_orientation(self.design, fp) as f64 / 1000.0));
             it.set("Layer", Prop::Layer(side_layer.to_string()));
-            it.set("Locked", Prop::Bool(self.is_locked(&fp.id)));
+            it.set("Locked", Prop::Bool(self.own_lock(&fp.id)));
             if let Some(e) = extra {
                 if let Some(c) = e.clearance {
                     it.overrides.clearance = Some((c, format!("footprint {}", fp.id)));
@@ -494,9 +495,33 @@ impl<'a> RuleBoard<'a> {
 
     // ---------------------------------------------------------------------------------------------------------------------------------- tracks
 
-    /// `BOARD_ITEM::IsLocked`, the "Locked" property of a footprint, track or via (R6-D7): the item is in the design's locked ids.
-    fn is_locked(&self, id: &str) -> bool {
+    /// The item's own lock (`m_isLocked`): its id is in the design's locked ids. `FOOTPRINT::IsLocked` is this alone (`footprint.h`).
+    fn own_lock(&self, id: &str) -> bool {
         self.design.drawings.as_ref().is_some_and(|d| d.locked_ids.iter().any(|l| l == id))
+    }
+
+    /// `BOARD_ITEM::IsLocked`, the "Locked" property of a track, via, zone, shape or text (R6-D7, R7-D1): its own lock, or its group's --
+    ///
+    /// ```text
+    /// if( EDA_GROUP* group = GetParentGroup() ) { if( group->AsEdaItem()->IsLocked() ) return true; }
+    /// .. return m_isLocked;
+    /// ```
+    ///
+    /// and a group's `IsLocked` is the same, so a lock anywhere up the nesting counts.
+    fn is_locked(&self, id: &str) -> bool {
+        let groups = self.design.drawings.as_ref().map(|d| d.groups.as_slice()).unwrap_or_default();
+        let mut at = id.to_string();
+        // the nesting never loops (`Group::member_ids`), but a damaged file is not trusted: at most one step per group
+        for _ in 0..=groups.len() {
+            if self.own_lock(&at) {
+                return true;
+            }
+            match groups.iter().find(|g| g.member_ids.iter().any(|m| *m == at)) {
+                Some(g) => at = g.id.clone(),
+                None => return false,
+            }
+        }
+        false
     }
 
     fn track_item(&self, seg_idx: usize) -> RuleItem {
@@ -542,9 +567,14 @@ impl<'a> RuleBoard<'a> {
         };
         let layers: Vec<String> = copper[lo..=hi].to_vec();
         let outer = |l: &str| copper.first().is_some_and(|f| f == l) || copper.last().is_some_and(|f| f == l);
+        // `PCB_VIA::GetViaType` (R7-D2): a microvia is `VIATYPE::MICROVIA` (the file's `micro`, the router's Place Microvia: `ViaExtra::kind`), "Micro"
+        // in `ENUM_MAP<VIATYPE>` -- `isMicroVia()` is true and `isBlindVia()` false for it (`IsBlindVia`: `BLIND || BURIED` only); the others by their span
+        let micro = self.design.drawings.as_ref().is_some_and(|d| d.via_extras.iter().any(|e| e.id == v.id && e.kind == eda_model::via_extra::ViaKind::Micro));
         let kind = {
             let (s_out, e_out) = (outer(&v.from_layer), outer(&v.to_layer));
-            if s_out && e_out {
+            if micro {
+                "Micro"
+            } else if s_out && e_out {
                 "Through"
             } else if s_out ^ e_out {
                 "Blind"
@@ -580,6 +610,7 @@ impl<'a> RuleBoard<'a> {
         let fmt = match kind {
             "Blind" => "Blind via",
             "Buried" => "Buried via",
+            "Micro" => "Micro via",
             _ => "Via",
         };
         it.description = format!("{fmt} {} on {}", net_msg(&net), layer_mask_describe(&it.layers, self.rules));
@@ -603,6 +634,7 @@ impl<'a> RuleBoard<'a> {
         it.set("Name", Prop::Str(z.name.clone()));
         it.set("Layer", Prop::Layer(z.layer.clone()));
         it.set("Priority", Prop::Int(z.priority as i64));
+        it.set("Locked", Prop::Bool(self.is_locked(&z.id)));
         if z.is_rule_area {
             it.description = if z.name.is_empty() { format!("Rule Area on {layer_name}") } else { format!("Rule area '{}' on {layer_name}", z.name) };
             return it;
@@ -652,6 +684,7 @@ impl<'a> RuleBoard<'a> {
         it.position = s.points().first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
         it.set("Layer", Prop::Layer(layer.clone()));
         it.set("Line Width", Prop::Int(s.stroke_width().get()));
+        it.set("Locked", Prop::Bool(self.is_locked(s.id())));
         let name = match s {
             eda_model::ir::Shape::Segment { .. } => "Line",
             eda_model::ir::Shape::Rect { .. } => "Rectangle",
@@ -678,6 +711,7 @@ impl<'a> RuleBoard<'a> {
         it.set("Text Thickness", Prop::Int(t.stroke_width.get()));
         it.set("Position X", Prop::Int(t.at.x.get()));
         it.set("Position Y", Prop::Int(t.at.y.get()));
+        it.set("Locked", Prop::Bool(self.is_locked(&t.id)));
         it.description = format!("PCB text '{}' on {}", t.content, self.rules.layer_setup.display_name(&t.layer));
         it
     }
@@ -1092,6 +1126,70 @@ mod footprint_facts_tests {
         assert!(!holds(&rb, "A.Locked", &rb.footprint_item("R6").unwrap()));
         let pad = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == "R5")).unwrap();
         assert!(!holds(&rb, "A.Locked", &pad), "a pad has no Locked property");
+    }
+
+    /// R7-D1 (`BOARD_ITEM::IsLocked`: `if( EDA_GROUP* group = GetParentGroup() ) { if( group->AsEdaItem()->IsLocked() ) return true; }`, and the "Locked"
+    /// property registered on `BOARD_ITEM`): a track in a locked group (nested one deep) reads as locked, and a locked zone, shape and text do too; a
+    /// footprint in a locked group does not (`FOOTPRINT::IsLocked` is its own flag).
+    #[test]
+    fn a_member_of_a_locked_group_and_a_locked_zone_are_locked() {
+        let (design, model) = hv_board(|d, _| {
+            let track = |id: &str, y: f64| eda_model::ir::Track { id: id.into(), net: "HV".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: mm(1.0), y: mm(y) }, Point { x: mm(5.0), y: mm(y) }], arc_mid_offset: None };
+            let zone: eda_model::ir::Zone = serde_json::from_str(r#"{ "id": "z1", "net": "HV", "layer": "F.Cu", "outline": [{ "x": 0, "y": 0 }, { "x": 3000000, "y": 0 }, { "x": 3000000, "y": 3000000 }] }"#).unwrap();
+            d.routing = Some(eda_model::ir::RoutingSection { tracks: vec![track("t1", 1.0), track("t2", 2.0)], vias: vec![], zones: vec![zone], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() });
+            let group = |id: &str, members: &[&str]| eda_model::ir::Group { id: id.into(), name: String::new(), member_ids: members.iter().map(|m| m.to_string()).collect(), design_block: String::new() };
+            d.drawings = Some(eda_model::ir::DrawingsSection { groups: vec![group("G", &["inner", "R6"]), group("inner", &["t1"])], locked_ids: vec!["G".into(), "z1".into()], ..Default::default() });
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let seg = |id: &str| (0..board.tracks.len()).map(|i| rb.segment_item_at(i)).find(|t| t.id.split('#').next() == Some(id)).unwrap();
+        assert!(holds(&rb, "A.Locked", &seg("t1")), "a member of a group inside a locked group");
+        assert!(!holds(&rb, "A.Locked", &seg("t2")));
+        let zones = &design.routing.as_ref().unwrap().zones;
+        assert!(holds(&rb, "A.Locked", &rb.zone_item_of(&zones[0])), "a locked zone");
+        assert!(!holds(&rb, "A.Locked", &rb.footprint_item("R6").unwrap()), "FOOTPRINT::IsLocked is its own flag");
+    }
+
+    /// R7-D2 (`PCB_VIA::IsMicroVia`: `m_viaType == VIATYPE::MICROVIA`; `IsBlindVia`: `BLIND || BURIED` only; `ENUM_MAP<VIATYPE>`'s "Micro"): a via F.Cu - In1.Cu
+    /// whose `ViaExtra::kind` is `Micro` is a microvia on the rule board, not a blind via; the same via with no extra is blind.
+    #[test]
+    fn a_micro_via_is_micro_on_the_rule_board() {
+        let (design, model) = hv_board(|d, m| {
+            m.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+            let via = |id: &str| eda_model::ir::Via { id: id.into(), net: "HV".into(), at: Point { x: mm(1.0), y: mm(1.0) }, drill: mm(0.1), diameter: mm(0.3), from_layer: "F.Cu".into(), to_layer: "In1.Cu".into() };
+            d.routing = Some(eda_model::ir::RoutingSection { tracks: vec![], vias: vec![via("uv"), via("bv")], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() });
+            d.drawings = Some(eda_model::ir::DrawingsSection { via_extras: vec![eda_model::via_extra::ViaExtra { id: "uv".into(), kind: eda_model::via_extra::ViaKind::Micro, tokens: vec![] }], ..Default::default() });
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let via = |id: &str| (0..board.vias.len()).map(|i| rb.via_item_at(i)).find(|v| v.id == id).unwrap();
+        let uv = via("uv");
+        assert!(holds(&rb, "A.isMicroVia()", &uv));
+        assert!(!holds(&rb, "A.isBlindVia()", &uv));
+        assert!(holds(&rb, "A.Via_Type == 'Micro'", &uv));
+        assert!(uv.description.starts_with("Micro via"), "{}", uv.description);
+        let bv = via("bv");
+        assert!(holds(&rb, "A.isBlindVia()", &bv) && !holds(&rb, "A.isMicroVia()", &bv));
+    }
+
+    /// R7-D3 (`FOOTPRINT::GetFPIDAsString`, `testFootprintSelector`): a part whose footprint is the importer's `Resistor_SMD:R_0603#2` (a second variant of one
+    /// library footprint) has the library link the board writes, `Resistor_SMD:R_0603`, in `A.Library_Link` and in `memberOfFootprint('lib:name')`.
+    #[test]
+    fn library_link_has_no_import_slot() {
+        let (design, model) = hv_board(|_, m| {
+            let mut variant = m.footprints[0].clone();
+            m.footprints[0].name = "Resistor_SMD:R_0603".into();
+            variant.name = "Resistor_SMD:R_0603#2".into();
+            m.footprints.push(variant);
+            m.parts[0].footprint = Some("Resistor_SMD:R_0603#2".into());
+            m.parts[0].package = None;
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let fp = rb.footprint_item("R5").unwrap();
+        assert!(holds(&rb, "A.Library_Link == 'Resistor_SMD:R_0603'", &fp));
+        let pad = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == "R5")).unwrap();
+        assert!(holds(&rb, "A.memberOfFootprint('Resistor_SMD:R_0603')", &pad));
     }
 
     /// R6-D8 (`SyncDynamicComponentClassAssignments`: `if( success ) m_assignmentRules = std::move( rules );`): one row with no class, or a `"` in a value, gives

@@ -114,8 +114,8 @@
       const r = await run("pcbnew.InteractiveEdit.properties");
       await sleep(400);
       t(/Pad Properties/.test(dialog()?.querySelector(".dialog-header")?.textContent ?? ""), `E opens Pad Properties (${r.dialog})`);
-      const num = fieldOf("Number");
-      t(num?.value === "2", `its Number reads 2 (${num?.value})`);
+      const num = fieldOf("Pad number");
+      t(num?.value === "2", `its Pad number reads 2 (${num?.value})`);
       setValue(num, "5");
       const pos = [...(fieldOf("Position")?.parentElement?.querySelectorAll("input") ?? [])];
       if (pos.length >= 2) setValue(pos[1], "1.5");

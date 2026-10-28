@@ -5,7 +5,8 @@
 import type { SchColor, SchGraphic, SchLineStyle } from "../../api/schEditTypes";
 import type { ViewTransform } from "../../state/store";
 import { schImageUrl } from "../../kicad-port/refImage";
-import { arcFromThreePoints, directiveShape, pt, rectCorners, schImageBox } from "../../kicad-port/schItemGeom";
+import { arcFromThreePoints, directiveShape, graphicBounds, pt, rectCorners, schImageBox } from "../../kicad-port/schItemGeom";
+import { hatchLines } from "../../kicad-port/schHatch";
 import { imageFor } from "../canvas/imageCache";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { defaultTextBoxMargin, layoutTextBox } from "../../kicad-port/schTextBox";
@@ -162,7 +163,23 @@ export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform
     }
     const widthNm = g.width_nm && g.width_nm > 0 ? g.width_nm : DEFAULT_WIDTH_NM;
     const fill = g.fill ?? "none";
-    if (fill !== "none" && g.shape.type !== "arc" && g.shape.type !== "bezier") {
+    if ((fill === "hatch" || fill === "reverse_hatch" || fill === "cross_hatch") && g.shape.type !== "arc" && g.shape.type !== "bezier") {
+      // `SCH_PAINTER::draw( SCH_SHAPE )`: the hatch lines in the background layer's colour (the fill colour, else the stroke's), clipped to the shape (r7 M5)
+      tracePath(ctx, g);
+      ctx.save();
+      ctx.clip();
+      const b = graphicBounds(g);
+      const h = hatchLines(fill, [b.minX, b.minY, b.maxX, b.maxY], widthNm);
+      ctx.strokeStyle = g.fill_color ? rgba(g.fill_color) : strokeColor(g, false);
+      ctx.lineWidth = Math.max(h.width, hair);
+      ctx.beginPath();
+      for (const [ax, ay, bx, by] of h.segments) {
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+      }
+      ctx.stroke();
+      ctx.restore();
+    } else if (fill !== "none" && g.shape.type !== "arc" && g.shape.type !== "bezier") {
       tracePath(ctx, g);
       ctx.fillStyle = fill === "color" && g.fill_color ? rgba(g.fill_color) : fill === "background" ? layerColor("LAYER_NOTES_BACKGROUND") : strokeColor(g, false);
       ctx.fill();

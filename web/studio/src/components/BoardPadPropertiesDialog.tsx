@@ -21,7 +21,7 @@
 import { useEffect, useState } from "react";
 import type { Cmd, PadConnection, PadEditCmd } from "../api/types";
 import { padCheck, padEditWith } from "../kicad-port/fpFields";
-import { chooseShape, checkShape, customPadExtent, hasSizeY, shapeExtentPoints, shapeFormOf, shapeNameOf, shapePatch, sizeOf, type PadShapeChoice, type PadShapeForm } from "../kicad-port/padShape";
+import { chooseShape, checkShape, customPadBoxes, hasSizeY, shapeFormOf, shapeNameOf, shapePatch, sizeOf, type PadShapeChoice, type PadShapeForm } from "../kicad-port/padShape";
 import { FRONT, changeMode, checkStack, layerFormOf, padstackControlsShown, stackDiffers, stackOf, stackStateOf, withLayerForm, type LayerForm, type PadStackState } from "../kicad-port/padStack";
 import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
 import { footprintZoneForm, padZoneForm, zoneCmds, type PadZoneForm } from "../kicad-port/padZone";
@@ -148,7 +148,7 @@ export function BoardPadPropertiesDialog() {
     const size = sizeOf(s);
     // `padValuesOK`: an error keeps the dialog open; the warnings are shown and the pad is applied
     const checked = padCheck(
-      { kind: form.kind, shape: shapeNameOf(s.choice), size, drill: form.hole === "round" ? form.drill : null, slot: form.hole === "oblong" ? [form.slotW, form.slotH] : null, ratio: s.choice === "round_rect" ? s.ratio : null, pasteRatio: form.pasteRatio, offset: [form.ox, form.oy], clearance: form.zone.clearance, maskMargin: form.mask, pasteMargin: form.paste, ...customBoxes(s, size) },
+      { kind: form.kind, shape: shapeNameOf(s.choice), size, drill: form.hole === "round" ? form.drill : null, slot: form.hole === "oblong" ? [form.slotW, form.slotH] : null, ratio: s.choice === "round_rect" ? s.ratio : null, pasteRatio: form.pasteRatio, offset: [form.ox, form.oy], clearance: form.zone.clearance, maskMargin: form.mask, pasteMargin: form.paste, ...customPadBoxes(s, size) },
       fmt,
       units
     );
@@ -341,18 +341,4 @@ export function BoardPadPropertiesDialog() {
       </div>
     </div>
   );
-}
-
-/** A custom pad's boxes for `padCheck` (`PAD::doCheckPad`): its copper's (`GetBoundingBox().GetSize()`) and each basic shape's (`PCB_SHAPE::GetBoundingBox`, the stroke included). */
-function customBoxes(s: PadShapeForm, size: [number, number]): { customBox?: [number, number]; primitiveBoxes?: [number, number][] } {
-  if (shapeNameOf(s.choice) !== "custom") return {};
-  const [x0, y0, x1, y1] = customPadExtent({ size, custom: { anchor: s.choice === "custom_rect" ? "rect" : "circle", zone: "outline", primitives: s.primitives } });
-  const primitiveBoxes = s.primitives.map((p): [number, number] => {
-    const pts = shapeExtentPoints(p.shape);
-    const reach = Math.max(p.shape.stroke_width, 0);
-    const xs = pts.map(([x]) => x);
-    const ys = pts.map(([, y]) => y);
-    return [Math.max(...xs) - Math.min(...xs) + reach, Math.max(...ys) - Math.min(...ys) + reach];
-  });
-  return { customBox: [x1 - x0, y1 - y0], primitiveBoxes };
 }

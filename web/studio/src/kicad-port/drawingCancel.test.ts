@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { drawShapeStarted, drawZoneStarted, escapeKeepsDrawingTool, redoRefused, takeBackLastLine, undoDropsDrawing, withoutLastCorner } from "./drawingCancel";
+import { drawShapeStarted, drawZoneStarted, escapeKeepsDrawingTool, redoRefused, routerEditKey, takeBackLastLine, undoDropsDrawing, withoutLastCorner } from "./drawingCancel";
 
 test("Escape with a line started keeps the line tool; with nothing started it leaves (DRAWING_TOOL::drawShape)", () => {
   assert.equal(escapeKeepsDrawingTool("pcb", "line", { kind: "shape" }), true);
@@ -64,4 +64,22 @@ test("a graphic polygon emptied by Delete is still started: the next Delete ends
 test("Escape with a text carried drops the text and keeps the Text tool; the next one leaves (PlaceText, round 5 B5-2)", () => {
   assert.equal(escapeKeepsDrawingTool("pcb", "text", { kind: "text" }), true);
   assert.equal(escapeKeepsDrawingTool("pcb", "text", null), false);
+});
+
+test("undo_and_delete_while_routing_take_back_the_last_segment (R7-R1: UndoRedoBlock, performRouting's routerUndoLastSegment; R7-R5: E is ACT_CustomTrackWidth)", () => {
+  for (const kind of ["route", "diffpair"]) {
+    assert.equal(routerEditKey("pcb", { kind }, "undo"), "undoSegment");
+    assert.equal(routerEditKey("pcb", { kind }, "delete"), "undoSegment");
+    assert.equal(routerEditKey("pcb", { kind }, "redo"), "nothing", "UndoRedoBlock");
+    assert.equal(routerEditKey("pcb", { kind }, "fill"), "nothing", "IsZoneFillAction: wxBell");
+    assert.equal(routerEditKey("pcb", { kind }, "properties"), "customSize");
+  }
+  // performDragging: an undo is an escape; the fill actions ring the bell
+  assert.equal(routerEditKey("pcb", { kind: "drag" }, "undo"), "cancel");
+  assert.equal(routerEditKey("pcb", { kind: "drag" }, "redo"), "nothing");
+  assert.equal(routerEditKey("pcb", { kind: "drag" }, "fill"), "nothing");
+  assert.equal(routerEditKey("pcb", { kind: "drag" }, "delete"), "nothing");
+  assert.equal(routerEditKey("pcb", null, "undo"), null, "no session: the editor's undo");
+  assert.equal(routerEditKey("pcb", { kind: "shape" }, "undo"), null, "the drawing tools have their own");
+  assert.equal(routerEditKey("schematic", { kind: "route" }, "undo"), null);
 });
