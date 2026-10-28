@@ -566,9 +566,14 @@ impl<'a> RuleBoard<'a> {
         };
         let layers: Vec<String> = copper[lo..=hi].to_vec();
         let outer = |l: &str| copper.first().is_some_and(|f| f == l) || copper.last().is_some_and(|f| f == l);
+        // `PCB_VIA::GetViaType` (R7-D2): a microvia is `VIATYPE::MICROVIA` (the file's `micro`, the router's Place Microvia: `ViaExtra::kind`), "Micro"
+        // in `ENUM_MAP<VIATYPE>` -- `isMicroVia()` is true and `isBlindVia()` false for it (`IsBlindVia`: `BLIND || BURIED` only); the others by their span
+        let micro = self.design.drawings.as_ref().is_some_and(|d| d.via_extras.iter().any(|e| e.id == v.id && e.kind == eda_model::via_extra::ViaKind::Micro));
         let kind = {
             let (s_out, e_out) = (outer(&v.from_layer), outer(&v.to_layer));
-            if s_out && e_out {
+            if micro {
+                "Micro"
+            } else if s_out && e_out {
                 "Through"
             } else if s_out ^ e_out {
                 "Blind"
@@ -604,6 +609,7 @@ impl<'a> RuleBoard<'a> {
         let fmt = match kind {
             "Blind" => "Blind via",
             "Buried" => "Buried via",
+            "Micro" => "Micro via",
             _ => "Via",
         };
         it.description = format!("{fmt} {} on {}", net_msg(&net), layer_mask_describe(&it.layers, self.rules));
@@ -1141,6 +1147,28 @@ mod footprint_facts_tests {
         let zones = &design.routing.as_ref().unwrap().zones;
         assert!(holds(&rb, "A.Locked", &rb.zone_item_of(&zones[0])), "a locked zone");
         assert!(!holds(&rb, "A.Locked", &rb.footprint_item("R6").unwrap()), "FOOTPRINT::IsLocked is its own flag");
+    }
+
+    /// R7-D2 (`PCB_VIA::IsMicroVia`: `m_viaType == VIATYPE::MICROVIA`; `IsBlindVia`: `BLIND || BURIED` only; `ENUM_MAP<VIATYPE>`'s "Micro"): a via F.Cu - In1.Cu
+    /// whose `ViaExtra::kind` is `Micro` is a microvia on the rule board, not a blind via; the same via with no extra is blind.
+    #[test]
+    fn a_micro_via_is_micro_on_the_rule_board() {
+        let (design, model) = hv_board(|d, m| {
+            m.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+            let via = |id: &str| eda_model::ir::Via { id: id.into(), net: "HV".into(), at: Point { x: mm(1.0), y: mm(1.0) }, drill: mm(0.1), diameter: mm(0.3), from_layer: "F.Cu".into(), to_layer: "In1.Cu".into() };
+            d.routing = Some(eda_model::ir::RoutingSection { tracks: vec![], vias: vec![via("uv"), via("bv")], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() });
+            d.drawings = Some(eda_model::ir::DrawingsSection { via_extras: vec![eda_model::via_extra::ViaExtra { id: "uv".into(), kind: eda_model::via_extra::ViaKind::Micro, tokens: vec![] }], ..Default::default() });
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let via = |id: &str| (0..board.vias.len()).map(|i| rb.via_item_at(i)).find(|v| v.id == id).unwrap();
+        let uv = via("uv");
+        assert!(holds(&rb, "A.isMicroVia()", &uv));
+        assert!(!holds(&rb, "A.isBlindVia()", &uv));
+        assert!(holds(&rb, "A.Via_Type == 'Micro'", &uv));
+        assert!(uv.description.starts_with("Micro via"), "{}", uv.description);
+        let bv = via("bv");
+        assert!(holds(&rb, "A.isBlindVia()", &bv) && !holds(&rb, "A.isMicroVia()", &bv));
     }
 
     /// R6-D8 (`SyncDynamicComponentClassAssignments`: `if( success ) m_assignmentRules = std::move( rules );`): one row with no class, or a `"` in a value, gives
