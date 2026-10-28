@@ -175,6 +175,20 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   **Left**: Ctrl+E edits the shared library entry, not the placed symbol's own copy (one library symbol per id, D5-M1); which of two equal default net names
   takes `_1` (KiCad: the island's smallest item KIID, not kept); Unfold from Bus's bus-member submenus and label ghost; the Hierarchy Navigator's Edit Page
   Number, Rename and net highlight; Compare's line style, corner radius, keywords and footprint filters.
+- Round 7 (2026-10-28, `task-r7-schematic`, `PARITY-sch.md` section 51): a schematic-only import reads its `.kicad_pro` as KiCad does -- the net classes
+  (H1), every top-level sheet of a KiCad 10 project (H2, on a root sheet), the unit notation, which names the units everywhere (H5, `U1.1`), the text
+  variables (H6) and the rest of Schematic Setup, kept for the derived project (M1); a placed symbol's Description and the cache's Description, keywords and
+  footprint filters (H3); a text's and a text box's exclude from simulation, a text's link and looks, font colours and hatch fills (H4, M5); an empty Value
+  (M2); `Sim.Library` files carried (M6); the unit suffix drawn for every multi-unit symbol (M3); Pin Helpers and the Net Navigator with alternates (M4,
+  A7-M1); Ctrl+E on the placed unit (A7-M2); Compare Symbol in 100 nm IU (A7-L1). QA with each root's project: 118 of 130 alike (110 before).
+  **Left (low)**:
+  - A7-L2: Unfold from Bus does not turn the member's label with R / Shift+R while it follows the cursor, nor remember the spin. **Left (low)**
+  - A7-L3: the Hierarchy Navigator has no project row above the root, and its rows do not read "name (page N)". **Left (low)**
+  - A7-L4: the cache writes the library's user fields hidden at (0, 0), `Reference "U"`, and no Footprint or Datasheet. **Left (low)**
+  - L1: the writer adds a junction at every T, which KiCad then keeps as an explicit junction. **Left (low)**
+  - L2: a schematic with only graphics (QA `groups_load_save`) is refused on import. **Left (low)**
+  - Also left: a label field's bold, thickness and `show_name` (M5's last part); the colours and a free text's bold and italic are kept in the files but not
+    drawn; a project's drawing sheet file and `.include` model files are not carried; `${U1A:FIELD}` cross-references by the letter form only.
 - Done (`crates/ops/src/{sch_move,sch_drag,sch_scene,sch_props}.rs`, `kicad-port/{schMove,schAlign,schProperties}.ts`, `components/{SchematicView,SchPropertiesDialogs}.tsx`):
   one verb family, `Cmd::SchMove`, moves, drags, turns, mirrors and aligns any set of symbols, power symbols, wires and bus wires, labels of every kind,
   free text, text boxes, shapes, rule areas, directive labels, junctions, no-connects, bus entries, graphic lines and sheets (with their pins), as one
