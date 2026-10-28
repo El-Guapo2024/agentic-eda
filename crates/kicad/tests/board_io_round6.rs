@@ -271,3 +271,62 @@ fn kicad_cli_judges_our_legacy_board_by_its_own_edge_clearance() {
     assert_eq!(o.get("track_dangling"), t.get("track_dangling"), "ours: {o:?}, the original: {t:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// F1 (round 7) against kicad-cli: QA `connect` (the KiCad 10 corpus) gives `Crystal` a 1.5 mm clearance through patterns with a top-level `|`
+/// (`"/XIN|/XOUT|"`; `EDA_PATTERN_MATCH_REGEX_ANCHORED` anchors the text, so `/XOUT32` matches through the unanchored middle alternative). kicad-cli finds
+/// 54 `clearance` violations on the original and the same 54 on ours; `--all-track-errors` (one report per track otherwise, short-circuiting on the first, so
+/// the count depends on the tracks' UUIDs) gives the same 140 on both. Before the fix ours had none: `/XIN32` and `/XOUT32` fell to Default, and `Crystal` was
+/// dropped as a class no net carried.
+#[test]
+fn kicad_cli_reads_the_projects_pattern_class_on_our_board() {
+    if slow_tests_off() {
+        return;
+    }
+    let k10 = std::env::var_os("KICAD10_SRC_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("src/kicad-src-25ec2335")))
+        .filter(|r| r.join("qa/data/pcbnew/connect/connect.kicad_pro").exists());
+    let Some(dir) = k10.map(|r| r.join("qa/data/pcbnew/connect")) else {
+        eprintln!("skipped: connect needs the KiCad 10 QA boards (KICAD10_SRC_DIR)");
+        return;
+    };
+    let text = std::fs::read_to_string(dir.join("connect.kicad_pcb")).expect("connect.kicad_pcb");
+    let mut project: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("connect.kicad_pro")).expect("connect.kicad_pro")).unwrap();
+    for class in project["net_settings"]["classes"].as_array_mut().expect("the project's classes") {
+        if class["name"] == "Crystal" {
+            class["clearance"] = serde_json::json!(1.5);
+        }
+    }
+    let project = project.to_string();
+
+    let root = std::env::temp_dir().join(format!("eda_board_io_round7_f1_{}", std::process::id()));
+    let (theirs, ours) = (root.join("theirs"), root.join("ours"));
+    std::fs::create_dir_all(&theirs).unwrap();
+    std::fs::create_dir_all(&ours).unwrap();
+    std::fs::write(theirs.join("b.kicad_pcb"), &text).unwrap();
+    std::fs::write(theirs.join("b.kicad_pro"), &project).unwrap();
+    let (design, mut model, notes) = import_kicad_pcb(&text).expect("import");
+    // The same merges `eda import-kicad` makes from the sidecar project; only the net classes bear on this DRC type.
+    let project = project_json_for_board(&project, &notes);
+    merge_project_net_classes(&mut model, &project);
+    eda_kicad::merge_project_rule_severities(&mut model, &project);
+    merge_project_design_rules(&mut model, &project);
+    std::fs::write(ours.join("b.kicad_pcb"), export_kicad_pcb(&design, &model, &ExportMeta { date: "2026-01-01", title: "b" }).expect("export")).unwrap();
+    std::fs::write(ours.join("b.kicad_pro"), export_kicad_pro_for(&design, &model)).unwrap();
+    /// Every `clearance` violation, item names sorted: `--all-track-errors`, so the set does not depend on the UUIDs' order.
+    fn clearances(dir: &std::path::Path) -> std::collections::BTreeSet<String> {
+        let report = dir.join("drc-all.json");
+        let out = std::process::Command::new(kicad_cli()).args(["pcb", "drc", "--all-track-errors", "--format", "json", "--severity-all", "-o"]).arg(&report).arg(dir.join("b.kicad_pcb")).output().expect("kicad-cli runs");
+        assert!(report.exists(), "kicad-cli pcb drc: {}", String::from_utf8_lossy(&out.stderr));
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();
+        v["violations"].as_array().into_iter().flatten().filter(|x| x["type"] == "clearance").map(|x| {
+            let mut items: Vec<&str> = x["items"].as_array().into_iter().flatten().filter_map(|i| i["description"].as_str()).collect();
+            items.sort();
+            format!("{} | {}", x["description"].as_str().unwrap_or(""), items.join("; "))
+        }).collect()
+    }
+    let (t, o) = (clearances(&theirs), clearances(&ours));
+    assert_eq!(t.len(), 140, "the original: {t:#?}");
+    assert_eq!(o, t, "ours differs from the original");
+    let _ = std::fs::remove_dir_all(&root);
+}
