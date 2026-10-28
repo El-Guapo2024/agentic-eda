@@ -320,6 +320,9 @@ pub struct DiffPairPlacer {
     pub net_p: Net,
     pub net_n: Net,
     pub sizes: DpSizes,
+    /// The via size `ImportSizes` gave the pair at its start (the net class's, or a `.kicad_dru` via rule's): what V arms when the studio sends no
+    /// size (`handleLayerSwitch`: `bds.UseNetClassVia()`), R7-R2.
+    rule_via: (Nm, Nm),
     /// `m_start`, the pair the route began on -- or, after a layer change, the vias it went on from.
     start: DpPrimitivePair,
     /// `m_prevPair`: what the last fix ended on, which the next head starts from.
@@ -432,6 +435,7 @@ impl DiffPairPlacer {
         Ok(DiffPairPlacer {
             net_p: net_p.clone(),
             net_n: net_n.clone(),
+            rule_via: (sizes.via_diameter, sizes.via_drill),
             sizes,
             start: found.pair,
             prev_pair: None,
@@ -492,15 +496,17 @@ impl DiffPairPlacer {
 
     /// `DIFF_PAIR_PLACER::ToggleVia`: the head ends in a pair of vias (or stops doing so). `to_layer` is the layer the route goes on to
     /// after them; without one, the other end of the board.
+    ///
+    /// The size is `handleLayerSwitch`'s (R7-R2): `if( bds.UseNetClassVia() ) { .. the rules' .. } else { sizes.SetViaDiameter(
+    /// bds.GetCurrentViaSize() ); sizes.SetViaDrill( bds.GetCurrentViaDrill() ); }`, then `UpdateSizes` -- the pair makes its vias from the router's
+    /// sizes (`DIFF_PAIR_PLACER::makeVia`: `VIA v( aP, layers, m_sizes.ViaDiameter(), m_sizes.ViaDrill(), .. )`). A size sent is the chosen list entry
+    /// or custom size; none is the net class's, the one the pair started with (`rule_via`; ours asks the rules at the start layer, not again at the
+    /// layer being routed as the single track's V does).
     pub fn toggle_via(&mut self, enabled: bool, diameter: Option<Nm>, drill: Option<Nm>, to_layer: Option<i32>) {
         self.placing_via = enabled;
         if enabled {
-            if let Some(d) = diameter.filter(|d| *d > Nm::ZERO) {
-                self.sizes.via_diameter = d;
-            }
-            if let Some(d) = drill.filter(|d| *d > Nm::ZERO) {
-                self.sizes.via_drill = d;
-            }
+            self.sizes.via_diameter = diameter.filter(|d| *d > Nm::ZERO).unwrap_or(self.rule_via.0);
+            self.sizes.via_drill = drill.filter(|d| *d > Nm::ZERO).unwrap_or(self.rule_via.1);
             self.via_to_layer = to_layer.or_else(|| Some(if self.current_layer == self.all_layers.start() { self.all_layers.end() } else { self.all_layers.start() }));
         } else {
             self.via_to_layer = None;
@@ -1157,6 +1163,21 @@ mod tests {
 
     fn placer(node: &Node, start: ItemId) -> DiffPairPlacer {
         DiffPairPlacer::start(node, &rules(), &RoutingSettings::default(), start, node.get(start).and_then(|it| it.anchors().first().copied()).unwrap(), 0, LayerRange::new(0, 1), true).expect("starts")
+    }
+
+    /// R7-R2 (`handleLayerSwitch`: `GetCurrentViaSize()` unless the net class's vias are in use): V with a size sends the pair's vias at that size;
+    /// V with none goes back to the size the pair started with, the net class's.
+    #[test]
+    fn a_pair_via_takes_the_chosen_via_size() {
+        let (node, start) = two_pad_pairs();
+        let mut dp = placer(&node, start);
+        let rule = (dp.sizes.via_diameter, dp.sizes.via_drill);
+        dp.toggle_via(true, Some(mm(0.8)), Some(mm(0.4)), Some(1));
+        let v = dp.make_via(p(Nm::ZERO, Nm::ZERO), &dp.net_p.clone());
+        assert_eq!((v.diameter, v.drill), (mm(0.8), mm(0.4)));
+        dp.toggle_via(false, None, None, None);
+        dp.toggle_via(true, None, None, Some(1));
+        assert_eq!((dp.sizes.via_diameter, dp.sizes.via_drill), rule, "the net class's again");
     }
 
     #[test]

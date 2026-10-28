@@ -32,9 +32,10 @@ export async function startDiffPairRoute(x: number, y: number, layer: string, di
 }
 
 /** `V` while a pair is routed (`ROUTER_TOOL::onViaCommand` -> `handleLayerSwitch`): arm or disarm the pair of vias, then ask for the preview again so the vias show. */
-export async function toggleDiffPairVia(draw: DpDrawState, cursor: { x: number; y: number }, toLayer: string, dispatch: Dispatch<Action>): Promise<void> {
-  const request = dpViaRequest(draw, toLayer);
-  const reply = await dpToggleVia(request.enabled, request.toLayer);
+export async function toggleDiffPairVia(draw: DpDrawState, cursor: { x: number; y: number }, toLayer: string, dispatch: Dispatch<Action>, size?: { diameter: number; drill: number }): Promise<void> {
+  // `size`: the chosen via entry or custom size (`chosenViaOf`), none for the net class's (R7-R2)
+  const request = dpViaRequest(draw, toLayer, size);
+  const reply = await dpToggleVia(request.enabled, request.toLayer, request.diameter, request.drill);
   if (!reply.ok) return;
   const preview = await dpMove(cursor.x, cursor.y);
   if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: { ...dpStateFromPreview(draw, preview), pendingViaLayer: request.enabled ? request.toLayer : undefined } });

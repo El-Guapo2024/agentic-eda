@@ -515,7 +515,8 @@ export function useActionRunner() {
         "pcbnew.Control.layerToggle",
         pcbOnly(() => {
           if (!state.board) return;
-          void toggleDiffPairVia(draw, cursor, otherLayerOfPair(layerPairsOf(state.board, state.pcbx.layerPairs).current, draw.layer), dispatch);
+          // sized as the single track's V (R6-R1, R7-R2): the chosen entry or custom size, none while the net class's are in use
+          void toggleDiffPairVia(draw, cursor, otherLayerOfPair(layerPairsOf(state.board, state.pcbx.layerPairs).current, draw.layer), dispatch, chosenViaOf("through", viaChoiceOf(state)) ?? undefined);
         })
       );
       m.set(
