@@ -21,6 +21,8 @@ import {
 } from "../kicad-port/sim/simCommand";
 import { SpiceValue } from "../kicad-port/sim/spiceValue";
 import { saveTextAs } from "../api/client";
+import { fetchSimModelSymbol } from "../api/simModelClient";
+import { tunerSaveEdit } from "../kicad-port/sim/simModel";
 import {
   addTrace,
   applyRun,
@@ -637,15 +639,18 @@ export async function tunerChanged(): Promise<void> {
 }
 
 /** `SIMULATOR_FRAME_UI::UpdateTunerValue` (the tuner's Save): the value written to the symbol -- its `Sim.Params` parameter when the symbol has one, else its
- *  Value field -- one undo step. */
+ *  Value field -- one undo step. The fields are read from the server (`POST /api/sim/model/symbol`: the instance's over the library symbol's), so a sheet
+ *  read from a KiCad file, whose symbols the studio lists without fields, is saved too (r7 R7-SM-2); `symbolFields` is the caller's copy, used when the
+ *  server cannot be asked. */
 export async function saveTunerValue(t: Tuner, symbolFields: Record<string, string> | null): Promise<void> {
-  const params = symbolFields?.["Sim.Params"];
-  const re = new RegExp(`(^|\\s)${t.param}=("[^"]*"|\\S*)`, "i");
-  if (params !== undefined && re.test(params)) {
-    await host?.cmd({ op: "sch_edit", verb: "edit_field", id: `fld:${t.ref}:Sim.Params`, text: params.replace(re, `$1${t.param}=${t.text}`) });
-  } else {
-    await host?.cmd({ op: "sch_edit", verb: "edit_field", id: `fld:${t.ref}:Value`, text: t.text });
+  let fields = symbolFields ?? {};
+  try {
+    const r = await fetchSimModelSymbol(t.ref);
+    if (r.ok) fields = r.fields;
+  } catch {
+    /* the caller's copy */
   }
+  await host?.cmd({ op: "set_symbol_fields", edits: [tunerSaveEdit(t.ref, t.param, t.text, fields)] });
 }
 
 /** The simulator's checks for the menus and the toolbar (`SIMULATOR_FRAME::setupUIConditions`). */

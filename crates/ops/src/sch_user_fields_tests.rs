@@ -447,6 +447,21 @@ fn a_sheet_read_from_a_kicad_file_keeps_its_user_fields_but_has_no_places_to_edi
 }
 
 #[test]
+fn tunes_save_and_the_simulation_model_dialog_write_a_sheet_read_from_a_kicad_file() {
+    // r7 R7-SM-2: `edit_field` has no places on such a sheet, the Symbol Fields Table's verb has no need of them (`UpdateTunerValue`, `WriteFields`)
+    let mut start = sheet(0, false);
+    start.imported_from_kicad = true;
+    let edit = |field: &str, value: &str| crate::fields_table::FieldEdit { id: "R1".into(), field: field.into(), value: value.into() };
+    let cmd = Cmd::SetSymbolFields { edits: vec![edit("Value", "15k"), edit("Sim.Pins", "1=+ 2=-")], add_fields: vec![], rename_fields: vec![], remove_fields: vec![] };
+    let after = run(start, cmd).unwrap();
+    assert_eq!(after.symbols[0].value, "15k");
+    assert_eq!(after.user_fields["R1"]["Sim.Pins"], "1=+ 2=-");
+    assert_eq!(after.user_fields["R1"]["MPN"], "ERJ-3EKF", "the other fields stay");
+    let gone = run(after, Cmd::SchEdit(SchCmd::RemoveUserField { id: "R1".into(), name: "Sim.Pins".into() })).unwrap();
+    assert!(!gone.user_fields["R1"].contains_key("Sim.Pins"));
+}
+
+#[test]
 fn a_stored_placement_of_a_user_field_is_where_the_sheet_draws_it() {
     let mut start = sheet(0, false);
     start.field_layout.insert("R1".into(), vec![FieldPlacement { dx: mm(3.0), dy: mm(-7.0), visible: true, h: TextJustify::Left, ..FieldPlacement::at_origin("MPN") }]);

@@ -906,6 +906,107 @@
     t((await symbol(id)).pin_name_offset_mm !== 0, "one undo of the Symbol Editor takes it back");
   });
 
+  // ================================================================================================ 5c. r7: units, body styles, the symbol's name and the Pin Table
+  await scenario("r7: Symbol Properties' fewer units ask KiCad's question and drop the units' pins, more units copy unit 1, De Morgan copies the pins; the Pin Table edits copies (one undo step, no sync, KiCad's Unit choices, Add Pin, the Y KiCad shows); Symbol name renames", async (t) => {
+    await clickTab("Symbol");
+    await sleep(500);
+    const id = "eda:P17R7Units";
+    madeSyms.push(id);
+    let r = await cmd({ op: "new_symbol", lib_id: id });
+    t(r.ok, `new_symbol: ${r.message ?? "ok"}`);
+    r = await cmd({ op: "add_symbol_pin", lib_id: id, pin: { number: "1", name: "N1", electrical_type: "passive", shape: "line", at: { x: -5.08, y: 0 }, angle_deg: 0, length_mm: 2.54, unit: 1, body_style: 1, hidden: false, name_size_mm: null, number_size_mm: null } });
+    t(r.ok, `add_symbol_pin: ${r.message ?? "ok"}`);
+    await selectRow(id);
+    await __eda.run("eeschema.SymbolLibraryControl.editSymbol");
+    await sleep(900);
+    const units = (sym) => sym.pins.map((p) => `${p.number}@${p.unit}/${p.body_style ?? 1}`).sort().join(" ");
+    // more units: unit 1's pin in each new unit (`SetUnitCount( 3, true )`)
+    await __eda.run("eeschema.InteractiveEdit.symbolProperties");
+    await sleep(500);
+    await type(tid("props-unit-count"), "3");
+    await click(tid("props-ok"), 1200);
+    let sym = await symbol(id);
+    t(sym.unit_count === 3 && units(sym) === "1@1/1 1@2/1 1@3/1", `three units, unit 1 copied: ${units(sym)}`);
+    // fewer units: "Delete extra units from symbol?"; No keeps the dialog open and the symbol as it is
+    await __eda.run("eeschema.InteractiveEdit.symbolProperties");
+    await sleep(500);
+    await type(tid("props-unit-count"), "2");
+    tid("props-ok").click();
+    const confirmation = () => document.querySelector('[role="dialog"][aria-label="Confirmation"]');
+    await until(confirmation, 4000);
+    t(/Delete extra units from symbol\?/.test(confirmation()?.textContent ?? ""), `Validate asks: ${confirmation()?.textContent.replace(/\s+/g, " ")}`);
+    [...confirmation().querySelectorAll("button")].find((b) => b.textContent.trim() === "No").click();
+    await sleep(500);
+    t(!!tid("symbol-properties") && (await symbol(id)).unit_count === 3, "No: the dialog stays and nothing changes");
+    tid("props-ok").click();
+    await until(confirmation, 4000);
+    [...confirmation().querySelectorAll("button")].find((b) => b.textContent.trim() === "Yes").click();
+    await sleep(1200);
+    sym = await symbol(id);
+    t(sym.unit_count === 2 && units(sym) === "1@1/1 1@2/1", `Yes: unit 3 and its pin are gone: ${units(sym)}`);
+    const text = await (await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(id)}`)).text();
+    t(!/P17R7Units_3_/.test(text), "the .kicad_sym has no unit 3 sub-symbol");
+    await undoFp();
+    t(units(await symbol(id)) === "1@1/1 1@2/1 1@3/1", "one undo brings unit 3 back");
+    // De Morgan on: the style-1 pins copied to style 2 (KiCad 25ec2335's `SetBodyStyleCount( 2, false, true )`)
+    await __eda.run("eeschema.InteractiveEdit.symbolProperties");
+    await sleep(500);
+    tid("props-demorgan").click();
+    await click(tid("props-ok"), 1200);
+    sym = await symbol(id);
+    t(sym.has_alternate_body_style && units(sym) === "1@1/1 1@1/2 1@2/1 1@2/2 1@3/1 1@3/2", `De Morgan: ${units(sym)}`);
+    await undoFp();
+
+    // the Pin Table: copies, one OK, no sync
+    await __eda.run("eeschema.InteractiveEdit.pinTable");
+    await until(() => tid("pin-table"), 4000);
+    const rows = () => [...document.querySelectorAll('[data-testid="pin-table-row"]')];
+    t(rows().length === 3, `a row per pin: ${rows().length}`);
+    const cell = (row, label) => row.querySelector(`[aria-label="${label}"]`);
+    t([...cell(rows()[0], "Unit").options].map((o) => o.textContent).join(",") === "ALL,Unit A,Unit B,Unit C", `the Unit choices are ALL and the symbol's units: ${[...cell(rows()[0], "Unit").options].map((o) => o.textContent)}`);
+    t(cell(rows()[0], "Orientation").value === "right", "file angle 0 is Right (parseSymbolPin)");
+    await type(cell(rows()[0], "Name"), "A");
+    await click(tid("pin-table-add"), 300);
+    const added = rows()[3];
+    t(!!added && cell(added, "Number").value === "" && cell(added, "Y Position").value === "-2.54", `Add Pin: no number, a pin step up the file, shown as KiCad's internal Y: ${added && cell(added, "Y Position").value}`);
+    await type(cell(added, "Number"), "9");
+    t((await symbol(id)).pins.every((p) => p.name === "N1"), "nothing is written before OK");
+    await click(tid("pin-table-ok"), 1500);
+    sym = await symbol(id);
+    const names = sym.pins.filter((p) => p.number === "1").map((p) => `${p.unit}:${p.name}`).sort().join(" ");
+    t(names === "1:A 2:N1 3:N1", `the row's pin only, no Synchronized Pins Mode: ${names}`);
+    const nine = sym.pins.find((p) => p.number === "9");
+    t(!!nine && nine.electrical_type === "passive" && nine.angle_deg === 0 && Math.abs(nine.at.y - 2.54) < 1e-6 && nine.unit === 3, `Add Pin copied the last pin (type, orientation, unit) a step up: ${JSON.stringify(nine)}`);
+    await undoFp();
+    sym = await symbol(id);
+    t(sym.pins.every((p) => p.name === "N1") && !sym.pins.some((p) => p.number === "9"), "one undo takes the whole table back (\"Edit Pins\")");
+    // Cancel with changes asks "Save changes?"; Discard Changes writes nothing
+    await __eda.run("eeschema.InteractiveEdit.pinTable");
+    await until(() => tid("pin-table"), 4000);
+    await type(cell(rows()[0], "Name"), "B");
+    [...document.querySelectorAll('[data-testid="pin-table"] .dialog-footer button')].find((b) => b.textContent.trim() === "Cancel").click();
+    await until(() => document.querySelector('[role="dialog"][aria-label="Save Changes?"]'), 4000);
+    t(/Save changes\?/.test(document.querySelector('[role="dialog"][aria-label="Save Changes?"]')?.textContent ?? ""), "OnClose: Save changes?");
+    tid("choice-alt").click();
+    await sleep(800);
+    t(!tid("pin-table") && (await symbol(id)).pins.every((p) => p.name === "N1"), "Discard Changes closes and writes nothing");
+
+    // "Symbol name:" renames, as one undo step with the rest
+    await __eda.run("eeschema.InteractiveEdit.symbolProperties");
+    await sleep(500);
+    t(tid("props-symbol-name")?.value === "P17R7Units", `the name, unescaped: ${tid("props-symbol-name")?.value}`);
+    await type(tid("props-symbol-name"), "P17R7Named");
+    await click(tid("props-ok"), 1500);
+    let all = await symNames();
+    t(all.includes("eda:P17R7Named") && !all.includes(id), "renamed");
+    await undoFp();
+    all = await symNames();
+    t(all.includes(id) && !all.includes("eda:P17R7Named"), "one undo takes the name back");
+    await selectRow(id);
+    await __eda.run("eeschema.SymbolLibraryControl.editSymbol");
+    await sleep(600);
+  });
+
   // ================================================================================================ 6. alternate pin functions
   await scenario("Symbol Editor pin alternates: Pin Properties edits them in KiCad's grid, the icon is drawn beside the name while Show Pin Alternate Icons is on, the file has them, a symbol with two body styles takes none", async (t) => {
     await clickTab("Symbol");

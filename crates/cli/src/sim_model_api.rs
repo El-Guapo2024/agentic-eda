@@ -2,7 +2,7 @@
 //! `DIALOG_SIM_MODEL`) reads from the server:
 //! - `POST /api/sim/model/symbol` `{ref}`: the symbol's simulation fields as the dialog starts from them (`m_fields`: the instance's fields, over
 //!   the library symbol's on a sheet the studio drew, which writes those beside the instance's) and its pins sorted by number
-//!   (`m_sortedPartPins`: every unit's, a De Morgan alternate's pins left out, `StrNumCmp` order);
+//!   (`m_sortedPartPins`: every unit's, a De Morgan alternate's pins left out, `StrNumCmp` order), and which of the fields are the instance's own;
 //! - `POST /api/sim/model/library` `{path}`: the models of a SPICE library (`loadLibrary`, `eda_sim::library`), each with its pins and the
 //!   `Sim.Device` / `Sim.Type` its model type writes, and the path as `Sim.Library` stores it (`TransferDataFromWindow`: made relative to the project
 //!   when it is inside it); or what the info bar says when the library cannot be read;
@@ -75,8 +75,10 @@ pub fn symbol_route(dir: &Path, body: &[u8]) -> Value {
             fields.insert(n.clone(), json!(t));
         }
     }
+    let mut own = Vec::new();
     for (n, t) in sch.user_fields.get(&sym.id).into_iter().flatten() {
         fields.insert(n.clone(), json!(t));
+        own.push(n.clone());
     }
     let value = if !sym.value.is_empty() { sym.value.clone() } else { part.and_then(|p| p.value.clone()).unwrap_or_default() };
     let mut pins: Vec<(String, String)> = part.map(|p| p.pins.iter().map(|pin| (pin.number.clone(), pin.name.clone().unwrap_or_default())).collect()).unwrap_or_default();
@@ -88,6 +90,8 @@ pub fn symbol_route(dir: &Path, body: &[u8]) -> Value {
         "value": value,
         "imported": sch.imported_from_kicad,
         "fields": fields,
+        // the fields that are the instance's own (`SchematicSection::user_fields`), which a verb can remove; the others are the library symbol's
+        "own": own,
         "pins": pins.iter().map(|(n, name)| json!({ "number": n, "name": name })).collect::<Vec<_>>(),
     })
 }
@@ -96,7 +100,7 @@ pub fn symbol_route(dir: &Path, body: &[u8]) -> Value {
 /// starting with ".."), else as given.
 fn stored_path(path: &str, dir: &Path) -> String {
     let p = Path::new(path);
-    if !p.is_absolute() {
+    if !p.is_absolute() || path.contains('$') {
         return path.to_string();
     }
     let (Ok(abs), Ok(project)) = (std::fs::canonicalize(p), std::fs::canonicalize(dir)) else { return path.to_string() };
@@ -114,7 +118,10 @@ pub fn library_route(dir: &Path, body: &[u8]) -> Value {
         return json!({ "ok": false, "path": path, "models": [], "messages": ["IBIS models are not read by the studio yet (GAPS 34): edit the Sim.* fields by hand."] });
     }
     let spice_lib_dir = std::env::var_os("SPICE_LIB_DIR").map(std::path::PathBuf::from);
-    let lib = read_library(&path, dir, spice_lib_dir.as_deref());
+    // `ExpandEnvVarSubstitutions( aLibraryPath, m_project )`: `${KIPRJMOD}`, KiCad's own (`${KICAD9_SYMBOL_DIR}` read as this KiCad's), the project's
+    // and the environment's variables
+    let vars = crate::library_tables::Env::discover().vars(dir, &crate::text_variables::project_variables(dir));
+    let lib = read_library(&vars.expand(&path), dir, spice_lib_dir.as_deref());
     let models: Vec<Value> = lib
         .models
         .iter()
@@ -186,6 +193,8 @@ mod tests {
         let r = library_route(&dir, json!({ "path": "spice/none.lib" }).to_string().as_bytes());
         assert_eq!(r["ok"], false);
         assert!(r["messages"][0].as_str().unwrap().starts_with("Simulation model library not found at '"));
+        let r = library_route(&dir, json!({ "path": "${KIPRJMOD}/spice/amp.lib" }).to_string().as_bytes());
+        assert_eq!((r["ok"].as_bool(), r["path"].as_str()), (Some(true), Some("${KIPRJMOD}/spice/amp.lib")), "a path with a variable is stored as written");
         let f = files_route(&dir);
         assert_eq!(f["files"], json!(["spice/amp.lib"]));
         std::fs::remove_dir_all(&dir).ok();

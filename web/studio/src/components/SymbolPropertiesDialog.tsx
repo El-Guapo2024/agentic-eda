@@ -23,6 +23,7 @@ import { addUserFieldCmd, fieldTextCmd, fieldVisibilityCmds, newUserFieldName, o
 import { expandStackedPinNotation } from "../kicad-port/stackedPins";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { FootprintChooserDialog } from "./FootprintChooserDialog";
+import { SimModelDialog } from "./simulator/SimModelDialog";
 
 const MAIN_FIELDS = STANDARD_SYMBOL_FIELDS;
 
@@ -57,6 +58,8 @@ export function SymbolPropertiesDialog() {
   const nextKey = useRef(0);
   // The Footprint field's browse button: the Footprint Chooser, narrowed by this symbol's pin count and its library symbol's footprint filters.
   const [choosingFootprint, setChoosingFootprint] = useState(false);
+  // "Simulation Model..." (`OnEditSpiceModel`, the button `dialog_symbol_properties.cpp` shows for a symbol that is not a power symbol)
+  const [editingSimModel, setEditingSimModel] = useState(false);
   const [libInfo, setLibInfo] = useState<{ filters: string[]; pins: number } | null>(null);
   const libId = symbol?.lib_id ?? null;
   useEffect(() => {
@@ -282,12 +285,32 @@ export function SymbolPropertiesDialog() {
           </p>
         </div>
         <div className="dialog-footer">
+          <button style={{ marginRight: "auto" }} onClick={() => setEditingSimModel(true)} data-testid="symbol-sim-model">
+            Simulation Model...
+          </button>
           <button onClick={close}>Cancel</button>
           <button className="primary" onClick={submit}>
             OK
           </button>
         </div>
       </div>
+      {editingSimModel && (
+        <SimModelDialog
+          reference={symbol.id}
+          onClose={() => setEditingSimModel(false)}
+          // the Simulation Model dialog wrote the fields itself (its own undo step): the rows show them as the symbol has them now
+          onWritten={(written) =>
+            setUserRows((rows) => {
+              let out = rows.filter((r) => !(r.name in written && written[r.name] === "" && !r.isNew));
+              out = out.map((r) => (r.name in written && written[r.name] !== "" ? { ...r, text: written[r.name]!, removed: false, was: { text: written[r.name]!, visible: r.was?.visible ?? r.shown } } : r));
+              for (const [name, text] of Object.entries(written)) {
+                if (text !== "" && !out.some((r) => r.name === name)) out.push({ key: nextKey.current++, name, text, shown: false, isNew: false, removed: false, was: { text, visible: false } });
+              }
+              return out;
+            })
+          }
+        />
+      )}
       {choosingFootprint && (
         <FootprintChooserDialog
           preselect={footprint.includes(":") ? footprint : null}

@@ -11,6 +11,7 @@
 //   the plot's zooms and their history (Undo/Redo Last Zoom), the View toggles (legend, dotted, dark mode, side panel, console) and their check marks;
 //   an operating point: "Simulation results:" in the console with V(/OUT) = 989mV, and the voltages and currents on the sheet toggled;
 //   a DC sweep of the supply; Show SPICE Netlist; Probe (a wire's voltage) and Tune (a tuner, a value tuned and run, Save as one undo step);
+//   the Simulation Model dialog from Symbol Properties: U1's library, its models, the pin grid, a reassignment written as Sim.Pins (one undo step);
 //   the exports (PNG, CSV, the clipboard, the plot pasted on the sheet), held back from the disk and the clipboard;
 //   the workbook saved in the design (one undo step), the window closed and opened again on it, and a KiCad workbook opened;
 //   Stop Simulation killing a long run; nothing logged an error.
@@ -384,6 +385,43 @@
     t(val(back) === "1k", `one undo step takes it back: ${val(back)}`);
     click(tuner?.querySelector('button[aria-label="Remove tuner R5"]'));
     await sleep(200);
+  });
+
+  await scenario("the Simulation Model dialog (Symbol Properties' Simulation Model...): U1's library and model, its pins, a reassignment written as Sim.Pins in one undo step", async (t) => {
+    const fields = async () => (await post("/api/sim/model/symbol", { ref: "U1" })).fields ?? {};
+    const before = await fields();
+    t(before["Sim.Name"] === "kicad_builtin_opamp" && before["Sim.Pins"] === "1=in+ 2=in- 3=vcc 4=vee 5=out", `the library symbol's fields: ${JSON.stringify(before)}`);
+    await E.run("common.InteractiveSelection.clear");
+    await E.run("common.InteractiveSelection.selectItems", ["U1"]);
+    await sleep(300);
+    await E.run("eeschema.InteractiveEdit.properties");
+    await sleep(500);
+    click(document.querySelector('[data-testid="symbol-sim-model"]'));
+    const dlg = () => document.querySelector('[data-testid="sim-model-dialog"]');
+    const t0 = Date.now();
+    while (!(dlg()?.querySelector('[data-testid="sim-model-list"] option')) && Date.now() - t0 < 8000) await sleep(200);
+    const list = dlg()?.querySelector('[data-testid="sim-model-list"]');
+    t(dlg()?.querySelector('[data-testid="sim-model-file"]')?.value === before["Sim.Library"], `the File box: ${dlg()?.querySelector('[data-testid="sim-model-file"]')?.value}`);
+    t(list?.value === "kicad_builtin_opamp" && [...(list?.options ?? [])].some((o) => o.value === "kicad_builtin_opamp_dual"), `the library's models, the symbol's selected: ${list?.value}`);
+    click(dlg()?.querySelector('[data-testid="sim-model-pins-tab"]'));
+    await sleep(300);
+    const cells = () => [...(dlg()?.querySelectorAll('[data-testid="sim-model-pin-grid"] select') ?? [])];
+    t(cells().length === 5 && cells()[0].value === '1 ("in+")' && cells()[4].value === '5 ("out")', `the pin grid: ${cells().map((c) => c.value).join(" | ")}`);
+    setValue(cells()[0], '2 ("in-")');
+    await sleep(200);
+    t(cells()[1].value === "Not Connected", "the row that had model pin 2 lets it go");
+    setValue(cells()[1], '1 ("in+")');
+    await sleep(200);
+    click(dlg()?.querySelector('[data-testid="sim-model-ok"]'));
+    await sleep(1200);
+    t(!dlg(), "OK closes the dialog");
+    const after = await fields();
+    t(after["Sim.Pins"] === "1=in- 2=in+ 3=vcc 4=vee 5=out" && after["Sim.Name"] === "kicad_builtin_opamp", `Sim.Pins written: ${after["Sim.Pins"]}`);
+    click([...document.querySelectorAll(".dialog-footer button")].find((b) => b.textContent.trim() === "Cancel"));
+    await sleep(300);
+    await E.run("common.Interactive.undo");
+    await sleep(900);
+    t((await fields())["Sim.Pins"] === before["Sim.Pins"], "one undo step takes it back");
   });
 
   await scenario("the workbook: saved in the design, opened again, and a KiCad workbook opened", async (t) => {
