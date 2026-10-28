@@ -8,13 +8,14 @@
 //
 // Pure: no store, no DOM. Unit-tested in pcbSelectionSummary.test.ts.
 import { hasExclusions } from "./viaStitch";
-import type { BoardState, Zone } from "../api/types";
+import type { BoardState } from "../api/types";
 import { convertAvailability } from "./pcbConvert";
 import { emptyPcbSummary, type OtherKind, type PcbSelectionSummary, type ShapeKind } from "./pcbContextMenu";
 import { ancestors, parentGroup } from "./groupTree";
-import { itemBounds, itemKind, padById } from "./pcbItems";
+import { itemKind, padById } from "./pcbItems";
 import { canMerge, canUnmerge, cellById } from "./tables";
 import { gateSwapChoice } from "./gateSwap";
+import { overlappingZones } from "./zoneOverlap";
 
 const isCopper = (layer: string): boolean => layer.endsWith(".Cu");
 
@@ -26,16 +27,6 @@ function lockedItem(board: BoardState, id: string): boolean {
   return ancestors(groups, id).some((g) => locked.has(g.id));
 }
 
-/** `getOverlappingZones`: the other copper zones on the same layer whose box meets this one's. (KiCad also tests the outlines against each other; the box is the first cut.) */
-function overlappingZones(board: BoardState, zone: Zone): Zone[] {
-  const box = itemBounds(board, zone.id);
-  if (!box) return [];
-  return (board.routing?.zones ?? []).filter((other) => {
-    if (other.id === zone.id || other.is_rule_area || other.teardrop || other.layer !== zone.layer) return false;
-    const b = itemBounds(board, other.id);
-    return b != null && b[0] <= box[2] && b[2] >= box[0] && b[1] <= box[3] && b[3] >= box[1];
-  });
-}
 
 /** Counts `ids` as the menu's conditions do. A pad id counts as a pad; an id the board does not have counts as nothing. */
 export function summarizePcbSelection(board: BoardState, ids: readonly string[]): PcbSelectionSummary {
@@ -141,7 +132,8 @@ export function summarizePcbSelection(board: BoardState, ids: readonly string[])
     s.canChamferCorner = !!zone || shape?.kind === "polygon";
     s.editableCorners = (zone != null && !zone.teardrop) || shape?.kind === "polygon";
     if (zone && !zone.is_rule_area && !zone.teardrop) {
-      for (const other of overlappingZones(board, zone)) {
+      // `getOverlappingZones`: the layer sets intersected and the areas tested, as the command does (r7 C7-2).
+      for (const other of overlappingZones(board.routing?.zones ?? [], zone)) {
         if (other.priority > zone.priority) s.zoneCanRaise = true;
         if (other.priority < zone.priority) s.zoneCanLower = true;
       }

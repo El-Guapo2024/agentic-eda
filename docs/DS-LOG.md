@@ -957,3 +957,83 @@ Tests: cargo check 0 warnings; eda-kicad-engine 72/0, eda-cli 568/0, eda-kicad 7
 Marked findings at work/findings/round5/r5-editors-exports.md; D5-1 left to the lead; both commits on
   ds/r5-editors-exports.
 ```
+
+## Round-7 board-io findings F1, F2, F3 (r7-board-io) (done 2026-10-28)
+
+**What I did.**
+
+- F1, net-class patterns (`crates/model/src/net_pattern.rs`). KiCad's `EDA_PATTERN_MATCH_REGEX_ANCHORED::SetPattern` puts `^` before and
+  `$` after the pattern *text* (no group), and `EDA_COMBINED_MATCHER::StartsWith` accepts a match whose start is 0, so a top-level `|`
+  binds looser than the anchors: `A|B|C` reads as `^A` or `B` or `C$`. `anchored_pattern` does that textual wrapping, and
+  `Regex::matches_from_start` runs the machine from position 0 and accepts as soon as it reaches its match state, wherever that is (the
+  old `is_match` required the whole name). `is_regex` compiles the anchored form. Module docs and the two quantifier comments say
+  "start of the match" instead of "the whole name". The one named assertion is flipped: `no("x|y|z", "xy")` becomes
+  `yes("x|y|z", "xy")`; new `top_level_alternatives_are_prefixes_but_the_last` covers the finding's six cases (`/XIN|/XOUT|` on
+  `/XIN32`, `a|b`, `ba`, `I2C-.*|.*SDA|.*SCL`, `^A|B$`, `(x|y)`). Slow: `kicad_cli_reads_the_projects_pattern_class_on_our_board`
+  exports QA `connect` (KiCad 10 corpus) with the `Crystal` class at 1.5 mm and compares kicad-cli's DRC sets.
+- F2, external fillets (`crates/kicad/src/pcb.rs`). `export_kicad_pro` now always writes
+  `board.design_settings.zones_allow_external_fillets` from `board.zones_allow_external_fillets`, as `BOARD_DESIGN_SETTINGS`' save
+  does; kicad-cli's filler reads `m_ZoneKeepExternalFillets`. Test `the_external_fillets_setting_is_written_to_the_project` checks the
+  default false in the JSON, true after setting it, and the reader giving it back.
+- F3, teardrops (`crates/kicad/src/import.rs`, `pcb.rs`, `crates/cli/src/import_kicad.rs`). `merge_project_teardrops` reads
+  `board.design_settings.teardrop_options` (`td_onvia`, `td_onpthpad`, `td_onsmdpad`) and the `td_round_shape` entry of
+  `teardrop_parameters` (`td_maxlen` / `td_maxheight` in mm, `td_length_ratio`, `td_height_ratio`,
+  `td_width_to_size_filter_ratio`) into `design.routing.teardrop_settings`; empty or non-object entries are skipped, a missing key keeps
+  what the design had, and the CLI's import calls it after the predefined sizes. `export_kicad_pro_for` writes both keys when the page
+  differs from KiCad's defaults: the port's one collapsed block (PARITY-pcb §15) repeated for `td_round_shape` and `td_rect_shape`, plus
+  `td_track_end` at `TEARDROP_PARAMETERS()`'s constructor numbers (1.0 / 2.0 mm, 0.5 / 1.0, filter 0.9). New tests in
+  `crates/kicad/tests/board_setup_pages.rs`: `the_projects_teardrop_parameters_are_read_and_written` (read, rect and track entries
+  ignored, full equality, writer output, read-back, no keys at the defaults, non-JSON and missing keys a no-op) and
+  `issue18142_keeps_its_teardrop_length_ratio` (QA, 0.2 read and written).
+- F4 is not fixed (low). `docs/parity/GAPS.md` item 2 gets one **Left (low)** line for the `User` paper clamp and `portrait` turn.
+- `merge_project_teardrops` is re-exported from `eda_kicad` and `eda`.
+
+**Commits.**
+
+- `e2ef31bf` -- net-class patterns anchor as KiCad's (F1); the derived project writes the external-fillets setting (F2) and the
+  teardrop options/parameters (F3); GAPS item 2's F4 line.
+- this log, in its own commit.
+
+**Tests run.**
+
+- `cargo check --workspace --tests`: exit 0, no warnings.
+- `cargo test -p eda-model -p eda-kicad`: exit 0, every suite green, 0 failed (`eda-model` 396 unit tests; the kicad integration
+  suites including `board_io_round6` and `board_setup_pages`; the new F3 tests run without QA data too).
+- `EDA_SLOW_TESTS=1 cargo test -p eda-kicad --tests`: exit 0, every suite green, 0 failed (the 5 and 4 ignored are the suites gated
+  on KiCad 10 data); the F1 kicad-cli test passed in 1.98 s.
+- `bash tools/run-all-checks.sh -j 1 --ports 8830-8832 board-setup-rules board-setup-pages`: 2 passed, 0 failed in 159 s
+  (`board-setup-rules` 10 scenarios 34 s on mcu30; `board-setup-pages` 79 scenarios 125 s on mcu30-few).
+- Proof runs outside the test suite: kicad-cli DRC on QA `connect` (ours vs the original, `--all-track-errors`), and the `fil2`
+  refill-area comparison on issue12609 / issue11814 / issue14559 / connect, both tables in the findings file.
+
+**Unsure / for the reviewer.**
+
+- F1 and kicad-cli's default report: without `--all-track-errors` DRC reports 54 clearance violations on the original and 55 on ours.
+  The extra one is a report-ordering artefact: the provider reports one violation per track and stops at the first neighbour, and
+  which neighbour that is depends on item UUIDs, which our writer assigns anew (the pair is Track [/XIN32] 0.25 mm against Track
+  [/Button-4] 6 mm, actual 0.8 mm, a real violation both boards have). With `--all-track-errors` the two sets are identical, 140 each,
+  and that is what the slow test asserts. Should it compare the default report instead, one violation per track would have to be
+  picked by something other than UUID order (KiCad's own report is order-dependent too).
+- F2: the reviewer's `fil2` numbers exclude the `.kicad_dru` that sits next to some QA boards; with the dru, issue11814's refill is
+  3152.81 mm^2, not 3021.44. I compared with board + project only, fresh exports (kicad-cli's refill is not idempotent: refilling an
+  already-refilled board gives a slightly different area), and got the reviewer's `u2` column exactly: 2167.5817 / 3021.4434 /
+  19939.7214 / 5488.8995.
+- F3: the writer omits both keys when the page equals KiCad's defaults; KiCad's own save always writes them, and an absent key loads as
+  the default, so our `.kicad_pro` is equivalent but not textually what pcbnew would write. Kept the style of the neighbouring settings
+  (write only what differs). The reader takes only `td_round_shape`, because the model has one block; a project whose round and
+  rectangular blocks differ loses the rectangular numbers, as PARITY-pcb §15 already records.
+- F3: QA `issue18142`'s project also has legacy `td_onviapad` / `td_onpadsmd` keys; current `BOARD_DESIGN_SETTINGS` does not read
+  them (they are the old names), so neither do we.
+
+**Summary (as printed).**
+
+```
+Round-7 board-io findings on ds/r7-board-io: F1, F2, F3 fixed (e2ef31bf); F4 left (low, GAPS item 2).
+  F1 net-class patterns anchor the pattern text as KiCad does (^..$, StartsWith), so "/XIN|/XOUT|"
+  covers Crystal's nets: kicad-cli --all-track-errors reports the same 140 clearances on ours as
+  on the original connect board (default report: 54 theirs, 55 ours, a per-track pick by UUID order).
+  F2 export_kicad_pro writes zones_allow_external_fillets; the fil2 refills match the u2 column.
+  F3 teardrops are read from teardrop_options/teardrop_parameters and written back; issue18142 keeps 0.2.
+Tests: cargo check 0 warnings; eda-model+eda-kicad 0 failed; slow eda-kicad 0 failed; browser
+  board-setup-rules 10/0, board-setup-pages 79/0. Findings marked at work/findings/round7/r7-board-io.md.
+```

@@ -60,6 +60,8 @@ export function settingsOf(pad: LibraryPad): PadSettings {
     thermal_spoke_angle_mdeg: pad.thermal_spoke_angle_mdeg ?? null,
     // `SetPadstack( aMasterPad.Padstack() )`: the shapes of the pad's other layers and its unconnected-layer mode travel with the rest.
     stack: pad.stack ? structuredClone(pad.stack) : undefined,
+    // `SetAttribute( aMasterPad.GetAttribute() )`: an edge connector pad (`PAD_ATTRIB::CONN`) stays one (`LibraryPadKeep::imported_from`'s `connector`).
+    ...(pad.kicad?.connector === true ? { kicad: { connector: true } } : {}),
   };
 }
 
@@ -71,6 +73,11 @@ export function settingsOf(pad: LibraryPad): PadSettings {
  */
 export function importPadSettings(dst: LibraryPad, master: PadSettings): LibraryPad {
   const out: LibraryPad = { ...dst, ...settingsOf({ ...dst, ...master }) };
+  // The attribute is the master's: the connector flag follows it, the rest of what the file kept of the pad stays the pad's.
+  const keep: Record<string, unknown> = { ...(dst.kicad ?? {}) };
+  if (master.kicad?.connector === true) keep.connector = true;
+  else delete keep.connector;
+  out.kicad = Object.keys(keep).length > 0 ? keep : undefined;
   if (master.shape === "circle") out.size = [out.size[0], out.size[0]];
   if (master.kind === "smd") {
     out.drill = null;

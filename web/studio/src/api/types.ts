@@ -1695,6 +1695,8 @@ export type Cmd =
   | { op: "set_schematic_page"; page: CmdPage; title_block: TitleBlock }
   /** `pcbnew.Control.repairBoard` -- refused ("No board problems found.") when there is nothing to repair; `POST /api/repair_board` wraps it with KiCad's report. */
   | { op: "repair_board" }
+  /** `pcbnew.EditorControl.exportFootprints` (`ExportFootprintsToLibrary`): every board footprint, as the board has it, over the project library's entry of its name. */
+  | { op: "export_footprints_to_library" }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
   /**

@@ -173,3 +173,16 @@ test("the units of the selected pads reach the summary: two units with as many p
   assert.deepEqual(summarizePcbSelection(b, ["R1.1", "R1.2"]).gateSwap, { multiple: false, targets: null }, "a footprint without units");
   assert.deepEqual(summarizePcbSelection(b, ["U1.1", "R1.1"]).gateSwap, { multiple: false, targets: ["B"] }, "R1's pad is passed over, as a non-eligible pad is");
 });
+
+test("Zone Priority (r7 C7-2): a multi-layer zone can rise over a zone on its second layer; boxes that meet are not outlines that meet; a zone in a hole overlaps nothing", () => {
+  const twoLayers = summarizePcbSelection(board({ routing: routing([], [zone("fb", { priority: 1, layers: ["F.Cu", "B.Cu"] }), zone("b", { priority: 4, layer: "B.Cu" })]) }), ["fb"]);
+  assert.deepEqual([twoLayers.zoneCanRaise, twoLayers.zoneCanLower], [true, false], "the layer sets are intersected, not the first layers");
+  // two L shapes whose boxes overlap and whose outlines do not
+  const l1: [number, number][] = [[0, 0], [10_000, 0], [10_000, 2_000], [2_000, 2_000], [2_000, 10_000], [0, 10_000]];
+  const l2: [number, number][] = [[10_000, 10_000], [4_000, 10_000], [4_000, 8_000], [8_000, 8_000], [8_000, 4_000], [10_000, 4_000]];
+  const ls = summarizePcbSelection(board({ routing: routing([], [zone("l1", { priority: 1, outline: l1 }), zone("l2", { priority: 4, outline: l2 })]) }), ["l1"]);
+  assert.deepEqual([ls.zoneCanRaise, ls.zoneCanLower], [false, false]);
+  const ring = zone("ring", { priority: 0, outline: [[0, 0], [20_000, 0], [20_000, 20_000], [0, 20_000]], holes: [[[5_000, 5_000], [15_000, 5_000], [15_000, 15_000], [5_000, 15_000]]] });
+  const inHole = summarizePcbSelection(board({ routing: routing([], [ring, zone("in", { priority: 1, outline: [[8_000, 8_000], [12_000, 8_000], [12_000, 12_000], [8_000, 12_000]] })]) }), ["in"]);
+  assert.deepEqual([inHole.zoneCanRaise, inHole.zoneCanLower], [false, false]);
+});

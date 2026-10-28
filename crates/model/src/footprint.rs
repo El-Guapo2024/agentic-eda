@@ -518,6 +518,19 @@ impl Footprint {
     /// commonly four physical pads named the same pin), and an empty
     /// number (a mounting hole) is normal too.
     pub fn validate(&self) -> Vec<crate::CheckResult> {
+        self.validate_with(true)
+    }
+
+    /// [`Footprint::validate`] as the Footprint Editor's Pad Properties judges a pad (`DIALOG_PAD_PROPERTIES::padValuesOK` over `PAD::doCheckPad`): a plated
+    /// hole that reaches or covers the pad's edge is a `DRCE_PADSTACK` warning there ("(PTH pad hole not fully inside copper)", "(PTH pad hole leaves no
+    /// copper)"), which the dialog shows and then applies, so it is not refused here; the studio shows the warning (`kicad-port/fpFields.ts::padCheck`). A
+    /// missing hole (`DRCE_PAD_TH_WITH_NO_HOLE`) and the shape errors (`DRCE_PADSTACK_INVALID`) still are.
+    pub fn validate_pad_values(&self) -> Vec<crate::CheckResult> {
+        self.validate_with(false)
+    }
+
+    /// `annular`: refuse a plated hole that leaves no annular ring (the generated footprints' rule; KiCad's dialog only warns).
+    fn validate_with(&self, annular: bool) -> Vec<crate::CheckResult> {
         let mut out = Vec::new();
         let mut bad = |what: &str, why: String| {
             out.push(crate::CheckResult::fail("footprint", format!("{}.{what}", self.name), why));
@@ -561,7 +574,7 @@ impl Footprint {
                 // A non-plated hole is normal at size == drill (no annular
                 // ring by definition -- there is no copper); only a plated
                 // through-hole needs the drill strictly smaller than the pad.
-                let plated = p.kind == PadKind::ThroughHole;
+                let plated = annular && p.kind == PadKind::ThroughHole;
                 match (p.drill, p.drill_slot) {
                     (None, None) => bad(
                         &format!("pad {}", p.number),
@@ -1068,6 +1081,16 @@ pub fn footprint_lib_id(part: &crate::Part) -> String {
         return twin.id();
     }
     part.package.clone().unwrap_or_default()
+}
+
+/// `name` without the importer's `#2`, `#3` ... slot (`eda_kicad::import`'s `dedup_footprint_key`, which keeps apart instances of one library footprint whose pads,
+/// models or graphics differ) when what is left is a footprint of `footprints`: in the file it is still that library's footprint, and the derived board writes it so
+/// (`(footprint "Lib:Name" ..)`). `FOOTPRINT::GetFPIDAsString`, the "Library Link" the rules read, is that written link (R7-D3).
+pub fn without_import_slot(name: &str, footprints: &[Footprint]) -> String {
+    match name.rsplit_once('#') {
+        Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && footprints.iter().any(|f| f.name == base) => base.to_string(),
+        _ => name.to_string(),
+    }
 }
 
 /// The `(model ...)` path an exported footprint of this part gets when the footprint itself carries none -- an explicit definition (a project-library entry, a

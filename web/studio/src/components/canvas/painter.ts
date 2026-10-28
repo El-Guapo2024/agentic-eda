@@ -17,7 +17,7 @@ import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID
 import { originMarkerColor } from "../../kicad-port/gridOrigin";
 import { leaderModeOf, zoneLeader, zoneLoop } from "../../kicad-port/pcbDrawZone";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
-import { carryRatsnest, offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
+import { carryRatsnest, offsetRatsnestForPreview, ratsnestCross } from "../../kicad-port/localRatsnest";
 import { carryMatrix, carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { dimensionTextAngleRad, itemBounds, padIds } from "../../kicad-port/pcbItems";
@@ -1056,6 +1056,16 @@ function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges:
     const [ax, ay] = e.from;
     const [bx, by] = e.to;
     ctx.beginPath();
+    // `if( source == target )`: a cross, so a connection whose ends coincide still shows (r7 C7-7).
+    const cross = ratsnestCross(e.from, e.to);
+    if (cross) {
+      for (const [[x0, y0], [x1, y1]] of cross) {
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+      }
+      ctx.stroke();
+      continue;
+    }
     ctx.moveTo(ax, ay);
     if (curved) {
       // pcbnew.Control.ratsnestLineMode ("Curved Ratsnest Lines"): a

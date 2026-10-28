@@ -105,6 +105,9 @@ export function dpStateFromPreview(current: DpDrawState, preview: DiffPairPrevie
  * `V` while a pair is routed (`ROUTER_TOOL::onViaCommand` -> `handleLayerSwitch`): the pair of vias is armed, with the layer the route goes
  * on to after them (`toLayer`: the other end of the layer pair, see `otherLayerOfPair`); a second `V` takes the vias away again.
  */
-export function dpViaRequest(draw: DpDrawState, toLayer: string): { enabled: boolean; toLayer: string } {
-  return { enabled: !draw.placingVia, toLayer };
+export function dpViaRequest(draw: DpDrawState, toLayer: string, size?: { diameter: number; drill: number }): { enabled: boolean; toLayer: string; diameter?: number; drill?: number } {
+  // `handleLayerSwitch`: `sizes.SetViaDiameter( bds.GetCurrentViaSize() ); sizes.SetViaDrill( bds.GetCurrentViaDrill() )` unless the net class's vias
+  // are in use -- the chosen via list entry or custom size (`routerVia.ts` `chosenViaOf`), as a single track's V (R7-R2). None: the server's rules.
+  const enabled = !draw.placingVia;
+  return enabled && size ? { enabled, toLayer, diameter: size.diameter, drill: size.drill } : { enabled, toLayer };
 }

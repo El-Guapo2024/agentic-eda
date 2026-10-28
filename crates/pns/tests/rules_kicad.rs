@@ -647,6 +647,40 @@ fn a_pair_routed_at_the_rules_sizes_passes_kicad_clis_checks() {
     }
 }
 
+/// R7-R2 (`handleLayerSwitch`: `sizes.SetViaDiameter( bds.GetCurrentViaSize() )` unless the net class's vias are in use; `DIFF_PAIR_PLACER::makeVia`
+/// takes `m_sizes.ViaDiameter()`): V while routing a pair with a 0.8 / 0.4 mm via chosen (a Pre-defined Sizes entry or a custom size) places two
+/// 0.8 / 0.4 mm vias, not the class's. Under `EDA_SLOW_TESTS=1`, with a rule that wants the pair's vias at least 0.8 / 0.4 mm, kicad-cli finds no
+/// `via_diameter` or `drill_out_of_range`, and flags the pair whose V sent no size (the class's 0.6 / 0.3 mm).
+#[test]
+fn a_pair_via_takes_the_chosen_via_size() {
+    let (p1, n1, mid, end) = (p(5.0, 10.0), p(5.0, 11.6), p(15.0, 10.0), p(24.0, 10.0));
+    let (design, mut model) = board(&[("J1", "PAD1", p1), ("J2", "PAD1", n1)], &[("/USB_P", &["J1.1"]), ("/USB_N", &["J2.1"])]);
+    model.board.layers = vec!["F.Cu".into(), "B.Cu".into()];
+    model.board.net_classes.push(eda_model::NetClass { diff_pair_gap: Some(mm(0.25)), diff_pair_width: Some(mm(0.2)), via_diameter: Some(mm(0.6)), via_drill: Some(mm(0.3)), ..class("usb", &["/USB_P", "/USB_N"]) });
+    model.board.custom_rules_text = Some("(version 1)\n(rule pair_via\n  (condition \"A.Type == 'Via' && A.inDiffPair('/USB*')\")\n  (constraint via_diameter (min 0.8mm))\n  (constraint hole_size (min 0.4mm)))\n".into());
+    let pair = |size: Option<(Nm, Nm)>| {
+        let mut router = Router::new(&design, &model);
+        router.settings.mode = Mode::Walkaround;
+        router.start_diff_pair(p1, "F.Cu").expect("the pair starts");
+        router.diff_pair_preview(mid).expect("a preview");
+        let back = router.layer_index("B.Cu");
+        router.toggle_diff_pair_via(true, size.map(|s| s.0), size.map(|s| s.1), back);
+        let pv = router.diff_pair_preview(mid).expect("a preview");
+        assert!(!pv.colliding, "{pv:?}");
+        assert!(matches!(router.fix_diff_pair(mid), Some(eda_pns::line_placer::FixOutcome::Fixed { .. })));
+        router.diff_pair_preview(end).expect("a preview on B.Cu");
+        router.finish_diff_pair(end).expect("commits")
+    };
+    let chosen = pair(Some((mm(0.8), mm(0.4))));
+    assert_eq!(chosen.vias.iter().map(|v| (v.diameter, v.drill)).collect::<Vec<_>>(), vec![(mm(0.8), mm(0.4)); 2], "{chosen:?}");
+    let classed = pair(None);
+    assert_eq!(classed.vias.iter().map(|v| (v.diameter, v.drill)).collect::<Vec<_>>(), vec![(mm(0.6), mm(0.3)); 2], "{classed:?}");
+    if let Some(found) = kicad_violations(&apply(&design, &chosen), &model, &["via_diameter", "drill_out_of_range", "clearance", "hole_to_hole"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        assert!(!kicad_violations(&apply(&design, &classed), &model, &["via_diameter", "drill_out_of_range"]).unwrap().is_empty(), "the class's via is what kicad-cli flags");
+    }
+}
+
 /// R-2: a rule area that keeps out vias only: a track crosses it as if it were not there, but a via in it collides (`checkKeepout`:
 /// `GetDoNotAllowVias() && aOther->Type() == PCB_VIA_T`), and one outside it does not.
 #[test]

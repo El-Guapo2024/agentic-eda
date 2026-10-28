@@ -263,6 +263,9 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
                     // `via_dimensions`, `diff_pair_dimensions`), and they
                     // are an editable part of the design (the studio's Board Setup writes them), so they merge into the design, not the model.
                     eda::merge_project_predefined_sizes(&mut design, &pro_text);
+                    // Board Setup > Teardrops: the target kinds and round-shape sizes the project keeps (`teardrop_options`, `teardrop_parameters`), so
+                    // "Add All Teardrops" and a refill use the project's numbers, as pcbnew does.
+                    eda::merge_project_teardrops(&mut design, &pro_text);
                     // Text & Graphics > Dimensions: the defaults a new dimension is styled from, which the project keeps.
                     eda_kicad::merge_project_dimension_defaults(&mut design, &pro_text);
                     // The project's own DRC exclusions (`board.design_settings.drc_exclusions`, `BOARD_DESIGN_SETTINGS::m_DrcExclusions`), their items named as the

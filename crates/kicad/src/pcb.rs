@@ -775,6 +775,10 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
         }
     }
     let mut design_settings = serde_json::json!({ "rule_severities": effective_rule_severities(model), "rules": rules });
+    // Board Setup > Constraints: "Allow fillets outside zone outlines" (`PARAM<bool>( "zones_allow_external_fillets", &m_ZoneKeepExternalFillets, false )`, written to
+    // the project by every save). kicad-cli's zone filler reads it (`zone.cpp`: `keepExternalFillets = board->GetDesignSettings().m_ZoneKeepExternalFillets`), so a
+    // filleted concave corner keeps its copper only when the derived project says so too.
+    design_settings["zones_allow_external_fillets"] = serde_json::json!(b.zones_allow_external_fillets);
     if b.constraints_explicit || !t.is_default() || f.applies_any() {
         design_settings["defaults"] = serde_json::Value::Object(defaults);
     }
@@ -1022,6 +1026,37 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
         dims.extend(pairs.iter().map(|p| serde_json::json!({ "width": mm_f(p.width), "gap": mm_f(p.gap), "via_gap": mm_f(p.via_gap) })));
         project["board"]["design_settings"]["diff_pair_dimensions"] = serde_json::Value::Array(dims);
     }
+    // Board Setup > Teardrops (`BOARD_DESIGN_SETTINGS`' `teardrop_options` and `teardrop_parameters` `PARAM_LAMBDA`s, 8303b2ad `board_design_settings.cpp:526-660`),
+    // when the page was used. This port's one round-shapes block (PARITY-pcb §15) is repeated for KiCad's round and rectangular targets, and the track-end target
+    // keeps `TEARDROP_PARAMETERS()`'s constructor defaults: lengths 1.0 / 2.0 mm, ratios 0.5 / 1.0, filter 0.9, no curved edges, two tracks allowed.
+    if let Some(td) = design.routing.as_ref().map(|r| &r.teardrop_settings) {
+        if *td != eda_model::ir::TeardropSettings::default() {
+            let mm_f = eda_model::units::to_mm;
+            let entry = |name: &str, maxlen: f64, maxheight: f64, length: f64, height: f64, filter: f64| {
+                serde_json::json!({
+                    "td_target_name": name,
+                    "td_maxlen": maxlen,
+                    "td_maxheight": maxheight,
+                    "td_length_ratio": length,
+                    "td_height_ratio": height,
+                    "td_curve_segcount": 0,
+                    "td_width_to_size_filter_ratio": filter,
+                    "td_allow_use_two_tracks": true,
+                    "td_on_pad_in_zone": false,
+                })
+            };
+            let round = entry("td_round_shape", mm_f(td.max_len_nm), mm_f(td.max_width_nm), td.best_length_ratio, td.best_width_ratio, td.width_to_size_filter_ratio);
+            let params = vec![round, entry("td_rect_shape", mm_f(td.max_len_nm), mm_f(td.max_width_nm), td.best_length_ratio, td.best_width_ratio, td.width_to_size_filter_ratio), entry("td_track_end", 1.0, 2.0, 0.5, 1.0, 0.9)];
+            project["board"]["design_settings"]["teardrop_parameters"] = serde_json::Value::Array(params);
+            project["board"]["design_settings"]["teardrop_options"] = serde_json::json!([{
+                "td_onvia": td.target_vias,
+                "td_onpthpad": td.target_pth_pads,
+                "td_onsmdpad": td.target_smd_pads,
+                "td_ontrackend": false,
+                "td_onroundshapesonly": false,
+            }]);
+        }
+    }
     // Board Setup > Text & Graphics > Dimensions (`defaults.dimension_units`, `defaults.dimension_precision`, `defaults.dimensions.*`), when they are not KiCad's own
     // (`crate::import::merge_project_dimension_defaults` reads them back).
     if let Some((units, precision, dims)) = design.drawings.as_ref().and_then(|d| crate::import::project_dimension_defaults(&d.dimension_settings)) {
@@ -1195,10 +1230,7 @@ pub(crate) fn write_footprint(
     let lib_name = Some(eda_model::footprint::footprint_lib_id(part)).filter(|n| !n.is_empty()).unwrap_or_else(|| footprint.name.clone());
     // A `#2`, `#3` ... slot is the importer's way to keep apart instances of one library footprint whose pads, models or graphics differ (`dedup_footprint_key`): in the file it is
     // still that library's footprint.
-    let lib_name = match lib_name.rsplit_once('#') {
-        Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && model.footprints.iter().any(|f| f.name == base) => base.to_string(),
-        _ => lib_name,
-    };
+    let lib_name = eda_model::footprint::without_import_slot(&lib_name, &model.footprints);
     // A footprint named for no library is written with none (`LIB_ID::Format`: the bare item name), as the derived symbol names it.
     let own_extra = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id));
     let lib_name_written = lib_name.clone();
@@ -3274,6 +3306,20 @@ mod tests {
         assert!(back.board.constraints_explicit);
         assert_eq!((back.board.track_width_min_nm, back.board.min_clearance_nm, back.board.copper_edge_clearance_nm, back.board.annular_width_min_nm), (Nm::from_mm(0.25), Nm::from_mm(0.3), Some(Nm::from_mm(0.35)), Nm::from_mm(0.13)));
         assert_eq!((back.board.max_error_nm, back.board.min_resolved_spokes, back.board.min_silk_text_height_nm), (Nm::new(5000), 2, Nm::from_mm(1.0)));
+    }
+
+    /// F2 (round 7): Board Setup > Constraints' "Allow fillets outside zone outlines" is `BOARD_DESIGN_SETTINGS`' `zones_allow_external_fillets`, which the project
+    /// carries for kicad-cli's filler. The writer says it, and the reader takes it back.
+    #[test]
+    fn the_external_fillets_setting_is_written_to_the_project() {
+        let (_, mut model) = fixture();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&export_kicad_pro(&model)).unwrap()["board"]["design_settings"]["zones_allow_external_fillets"], serde_json::json!(false), "KiCad's default");
+        model.board.zones_allow_external_fillets = true;
+        let pro = export_kicad_pro(&model);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&pro).unwrap()["board"]["design_settings"]["zones_allow_external_fillets"], serde_json::json!(true));
+        let mut back = ConstraintModel::default();
+        crate::merge_project_design_rules(&mut back, &pro);
+        assert!(back.board.zones_allow_external_fillets, "the project read back keeps the setting");
     }
 
     #[test]

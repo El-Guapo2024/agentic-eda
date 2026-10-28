@@ -138,11 +138,12 @@ fn a_pad_edit_that_cannot_be_a_pad_is_refused() {
     }))
     .contains("not both"));
     assert!(refusal(&mut b, pad(&|e| e.kind = Some(PadKind::ThroughHole))).contains("no drill"), "a through-hole pad needs a hole");
-    assert!(refusal(&mut b, pad(&|e| {
-        e.kind = Some(PadKind::ThroughHole);
-        e.drill = Some(mm(0.9));
-    }))
-    .contains("annular ring"), "a hole as big as the 600 um pad leaves no copper");
+    // `padValuesOK`: "Warning: (PTH pad hole leaves no copper)" is a `DRCE_PADSTACK` warning (the dialog shows it, `padCheck`) and the pad is applied.
+    let mut no_ring = PadEdit::none("1", 1);
+    no_ring.kind = Some(PadKind::ThroughHole);
+    no_ring.drill = Some(mm(0.9));
+    b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: no_ring }).expect("a hole as big as the 600 um pad is a warning in KiCad, not a refusal");
+    b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: PadEdit::none("1", 1) }).unwrap();
     let mut other = PadEdit::none("7", 1);
     other.size = Some((mm(0.5), mm(0.5)));
     assert_eq!(b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: other }).unwrap_err()[0].check, "ops_unknown_pad");
