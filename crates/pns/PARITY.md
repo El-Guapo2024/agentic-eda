@@ -1334,8 +1334,9 @@ The router side of `work/findings/round6/r6-route-rules.md` section R (and R6-D1
   layer) is not run, as after a via (Stage 18).
 - **R6-R4, Autoroute.** Each connection starts at its anchor and goes through `ROUTER::Finish` (`attempt_finish`, as the F key), and `RouteSelected`'s
   undo groups are kept: `append_undo` on every connection of a run but the first of a group, so the routes `Finish` makes are one undo step, and a
-  connection it cannot make stays live with the head where it got (its commit, finished by hand, joins the group too, as KiCad's flags are set before
-  `performRouting`). The studio's own toasts ("Nothing to route ...", "Autorouted %d of %d ...") are gone. Test:
+  connection it cannot make stays live with the head where it got, and its commit, finished by hand, is an undo step of its own (`performRouting`
+  clears the flag when `Finish` fails: `m_iface->SetCommitFlags( 0 )`, "the user gets nice checkpoints"; this sentence said the opposite until
+  round 7, R7-R4, Stage 21). The studio's own toasts ("Nothing to route ...", "Autorouted %d of %d ...") are gone. Test:
   `autoroute_of_three_free_connections_is_one_undo_step` (route_api).
 - **R6-R5, V before a route.** With the route tool armed and no route, V (`ACT_PlaceThroughVia` in `MainLoop`) flips the active layer
   (`PCB_CONTROL::LayerToggle`: the pair's other layer) and sets `pcbx.startWithVia`; the next route starts with a through via armed
