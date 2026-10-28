@@ -237,6 +237,72 @@
     await key("Escape");
   });
 
+  await scenario("E7-F2/F3/F4/F5: Pad type resets the layers, the hole and the number; Edge Connector is written; OK makes the pad Add Pad's; the Pad Table's Type and the Component type follow KiCad", async (t) => {
+    const name = await newFootprint();
+    await arm("pcbnew.PadTool.placePad", "pad");
+    await clickAt(0, 0);
+    await key("Escape");
+    await key("Escape");
+    const padNow = async () => ((await footprint(name)).pads ?? [])[0];
+    const dlg = () => document.querySelector(".dialog");
+    const ok = async () => { [...(dlg()?.querySelectorAll(".dialog-footer button") ?? [])].find((b) => b.textContent.trim() === "OK")?.click(); await sleep(900); };
+    const openPad = async (id) => { await __eda.run("common.InteractiveSelection.clear"); await __eda.run("common.InteractiveSelection.selectItems", [id]); await sleep(250); await __eda.run("pcbnew.InteractiveEdit.properties"); await sleep(400); };
+    let p = await padNow();
+    if (!t(!!p && p.kind === "through_hole", `a plated pad from the default pad (${p?.kind})`)) return;
+    const types = [...(tid("fp-pad-type")?.options ?? [])];
+    await openPad(p.id);
+    t(JSON.stringify([...(tid("fp-pad-type")?.options ?? types)].map((o) => o.textContent)) === JSON.stringify(["Through-hole", "SMD", "Edge Connector", "NPTH, Mechanical", "SMD Aperture"]), `KiCad's five pad types: ${[...(tid("fp-pad-type")?.options ?? [])].map((o) => o.textContent)}`);
+    await choose(tid("fp-pad-type"), "smd");
+    await ok();
+    p = await padNow();
+    t(p.kind === "smd" && JSON.stringify(p.layers) === JSON.stringify(["F.Cu", "F.Paste", "F.Mask"]) && p.drill == null, `SMD takes SMDMask and no hole: ${JSON.stringify([p.kind, p.layers, p.drill])}`);
+    await openPad(p.id);
+    await choose(tid("fp-pad-type"), "npth");
+    t(tid("fp-pad-number")?.disabled === true && tid("fp-pad-number")?.value === "", `NPTH: the number is emptied and disabled (${tid("fp-pad-number")?.value})`);
+    await closeDialogs();
+    await openPad(p.id);
+    await choose(tid("fp-pad-type"), "conn");
+    await type(tid("fp-pad-number"), "7");
+    await ok();
+    p = await padNow();
+    t(p.kind === "smd" && p.kicad?.connector === true && JSON.stringify(p.layers) === JSON.stringify(["F.Cu", "F.Mask"]) && p.number === "7", `Edge Connector: an SMD pad marked connector on ConnSMDMask: ${JSON.stringify([p.kind, p.kicad, p.layers, p.number])}`);
+    // TransferDataFromWindow: the edited pad is the Add Pad master, its number the last
+    await arm("pcbnew.PadTool.placePad", "pad");
+    await clickAt(3_000_000, 0);
+    await key("Escape");
+    await key("Escape");
+    const pads = (await footprint(name)).pads ?? [];
+    const added = pads.find((q) => q.id !== p.id);
+    t(!!added && added.kind === "smd" && added.kicad?.connector === true && added.number === "8", `Add Pad places the pad just edited, numbered after it: ${JSON.stringify(added && [added.kind, added.kicad, added.number])}`);
+    await __eda.run("pcbnew.PadTool.defaultPadProperties");
+    await sleep(400);
+    t(/Default Pad Properties for Add Pad Tool/.test(dlg()?.querySelector(".dialog-header")?.textContent ?? "") && tid("fp-pad-number")?.value === "8", `Default Pad Properties shows the last pad number (${tid("fp-pad-number")?.value})`);
+    // put the default pad back: a plated pad
+    await choose(tid("fp-pad-type"), "pth");
+    await ok();
+    // PAD::SetAttribute in the Pad Table: the connector pad to through-hole plumps its copper up to *.Cu
+    await __eda.run("common.InteractiveSelection.clear");
+    await __eda.run("pcbnew.ModuleEditor.padTable");
+    await sleep(500);
+    const row = [...(dlg()?.querySelectorAll("tbody tr") ?? [])].findIndex((r) => r.querySelector("input")?.value === "7");
+    const sel = dlg()?.querySelector(`select[aria-label="Type ${row + 1}"]`);
+    if (t(!!sel, "the Pad Table has pad 7's Type")) {
+      await choose(sel, "pth");
+      await ok();
+      const q = ((await footprint(name)).pads ?? []).find((x) => x.number === "7");
+      t(q?.kind === "through_hole" && q.layers[0] === "*.Cu" && q.layers.includes("F.Mask") && !q.layers.includes("F.Cu") && q.kicad?.connector !== true, `SetAttribute( PTH ): ${JSON.stringify(q && [q.kind, q.layers, q.kicad])}`);
+    }
+    // Footprint Properties: "Component type:" is one choice
+    await __eda.run("pcbnew.ModuleEditor.footprintProperties");
+    await sleep(500);
+    if (t(!!tid("fp-lib-component-type"), "Footprint Properties has Component type")) {
+      await choose(tid("fp-lib-component-type"), "through_hole");
+      await ok();
+      const a = (await footprint(name)).attributes;
+      t(a?.through_hole === true && a?.smd === false, `Through hole clears SMD: ${JSON.stringify(a)}`);
+    }
+  });
+
   // ================================================================================================ leave the library as it was
   await closeDialogs();
   for (const n of made) if (n) await cmd({ op: "delete_library_footprint", name: n });

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkLibFieldRow, defaultReferenceLayout, gridProblem, moveRow, newRowName, panelOfRows, pastedFootprint, rowsOfFootprint, type LibFieldRow } from "./fpLibFields";
+import { COMPONENT_TYPES, componentTypeOf, withComponentType, checkLibFieldRow, defaultReferenceLayout, gridProblem, moveRow, newRowName, panelOfRows, pastedFootprint, rowsOfFootprint, type LibFieldRow } from "./fpLibFields";
 import type { LibraryFootprint } from "../api/types";
 
 const fp = (over: Partial<LibraryFootprint> = {}) => ({ name: "R_0603", reference_visible: true, value_visible: true, fields: [], ...over }) as unknown as LibraryFootprint;
@@ -100,4 +100,13 @@ test("Paste Footprint renames the copy and keeps its Value (FOOTPRINT_EDITOR_CON
   assert.equal(rowsOfFootprint(plain)[1]!.text, "X", "the Value shows the old name");
   const own = pastedFootprint(fp({ name: "X", value: { at: { x: 0, y: 2 }, size: [1, 1], layer: "F.Fab", text: "10k" } }), "X_copy");
   assert.deepEqual([own.value?.text, own.value?.at], ["10k", { x: 0, y: 2 }]);
+});
+
+test("Component type is one choice: SMD clears through_hole, a file with both reads as Through hole (r7 E7-F5)", () => {
+  const both = { smd: true, through_hole: true, dnp: false };
+  assert.equal(componentTypeOf(both), "through_hole");
+  assert.deepEqual(withComponentType(both, "smd"), { smd: true, through_hole: false, dnp: false });
+  assert.deepEqual(withComponentType(both, "unspecified"), { smd: false, through_hole: false, dnp: false });
+  assert.equal(componentTypeOf({ smd: false, through_hole: false }), "unspecified");
+  assert.deepEqual(COMPONENT_TYPES.map((t) => t.label), ["Through hole", "SMD", "Unspecified"]);
 });

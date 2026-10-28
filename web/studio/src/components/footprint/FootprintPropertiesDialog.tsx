@@ -26,7 +26,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { FootprintPropertiesFields } from "../../api/types";
 import type { PadConnection } from "../../api/types";
 import { boardLayerList } from "../../kicad-port/boardLayers";
-import { gridProblem, panelOfRows, rowsOfFootprint, type LibFieldRow } from "../../kicad-port/fpLibFields";
+import { COMPONENT_TYPES, componentTypeOf, gridProblem, panelOfRows, rowsOfFootprint, withComponentType, type ComponentType, type LibFieldRow } from "../../kicad-port/fpLibFields";
 import { formatLength } from "../../state/units";
 import { FootprintFieldsGrid } from "./FootprintFieldsGrid";
 import { EmbeddedFilesPanel } from "../EmbeddedFilesPanel";
@@ -134,17 +134,25 @@ export function FootprintLibraryPropertiesDialog() {
           </div>
 
           <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Attributes</p>
+          <label style={{ display: "block", marginBottom: 4 }}>
+            Component type:{" "}
+            <select value={componentTypeOf(form.attributes)} onChange={(e) => setForm((f) => ({ ...f, attributes: withComponentType(f.attributes, e.target.value as ComponentType) }))} data-testid="fp-lib-component-type">
+              {COMPONENT_TYPES.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
             {(
               [
-                ["smd", "SMD"],
-                ["through_hole", "Through hole"],
-                ["exclude_from_bom", "Exclude from BOM"],
+                ["board_only", "Not in schematic"],
                 ["exclude_from_position_files", "Exclude from position files"],
-                ["board_only", "Board only (no schematic symbol)"],
+                ["exclude_from_bom", "Exclude from bill of materials"],
                 ["dnp", "Do not populate"],
-                ["allow_missing_courtyard", "Allow missing courtyard"],
-                ["allow_soldermask_bridges", "Allow solder mask bridges"],
+                ["allow_missing_courtyard", "Exempt from courtyard requirement"],
+                ["allow_soldermask_bridges", "Allow bridged solder mask apertures between pads"],
               ] as const
             ).map(([key, label]) => (
               <label key={key}>
@@ -163,7 +171,7 @@ export function FootprintLibraryPropertiesDialog() {
             >
               {PAD_CONNECTION_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
-                  {o.value === "" ? "Inherited" : o.label}
+                  {o.value === "" ? "Use zone setting" : o.label}
                 </option>
               ))}
             </select>

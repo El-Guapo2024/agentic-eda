@@ -6148,7 +6148,8 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_bad_pad", &pad.number, "pad size must be positive")]);
         }
         let probe = Footprint { name: "probe".into(), pads: vec![pad.to_engine_pad()], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
-        let errs = probe.validate();
+        // `padValuesOK`: what KiCad's dialog only warns about is not refused (r7 E7-F1).
+        let errs = probe.validate_pad_values();
         if errs.is_empty() {
             Ok(())
         } else {

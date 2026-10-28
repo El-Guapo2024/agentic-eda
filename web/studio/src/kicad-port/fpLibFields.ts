@@ -137,3 +137,23 @@ export function moveRow<T>(rows: readonly T[], index: number, dir: -1 | 1): read
   [next[index], next[to]] = [next[to]!, next[index]!];
   return next;
 }
+
+/** Footprint Properties' "Component type:" (`m_componentType`): one choice, { "Through hole", "SMD", "Unspecified" }, not two boxes. */
+export type ComponentType = "through_hole" | "smd" | "unspecified";
+
+/** `m_componentTypeChoices`, word for word. */
+export const COMPONENT_TYPES: { value: ComponentType; label: string }[] = [
+  { value: "through_hole", label: "Through hole" },
+  { value: "smd", label: "SMD" },
+  { value: "unspecified", label: "Unspecified" },
+];
+
+/** `TransferDataToWindow`: `FP_THROUGH_HOLE` first, then `FP_SMD`, else Unspecified (a file with both reads as Through hole). */
+export function componentTypeOf(attrs: { smd: boolean; through_hole: boolean }): ComponentType {
+  return attrs.through_hole ? "through_hole" : attrs.smd ? "smd" : "unspecified";
+}
+
+/** `TransferDataFromWindow`: the choice sets one of the two attribute bits and clears the other (`attributes |= FP_THROUGH_HOLE` or `FP_SMD`, from 0). */
+export function withComponentType<T extends { smd: boolean; through_hole: boolean }>(attrs: T, type: ComponentType): T {
+  return { ...attrs, smd: type === "smd", through_hole: type === "through_hole" };
+}
