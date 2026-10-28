@@ -213,22 +213,13 @@ pub enum ZonePriorityMove {
     Bottom,
 }
 
-/// `getOverlappingZones`: the other copper zones that share a layer with this one and whose outline touches it or holds it (or is held by it).
+/// `getOverlappingZones`: the other copper zones that share a layer with this one, whose boxes meet, and whose areas collide
+/// (`aZone->Outline()->Collide( candidate->Outline() )`, over the triangulation, so nothing in a hole) or of which one holds the other's first corner
+/// (`Outline()->Contains( CVertex( 0 ) )`, a point in a hole being outside). That is [`zones_intersect`]'s test: a zone inside another's hole does not
+/// overlap it (r7 C7-1).
 pub fn overlapping_zones(zones: &[Zone], zi: usize) -> Vec<usize> {
     let zone = &zones[zi];
-    (0..zones.len())
-        .filter(|&ci| {
-            let c = &zones[ci];
-            ci != zi
-                && !c.is_rule_area
-                && !c.teardrop
-                && c.layer_set().into_iter().any(|l| zone.is_on_layer(l))
-                && c.outline.len() >= 3
-                && zone.outline.len() >= 3
-                && bboxes_meet(&zone.outline, &c.outline)
-                && (edges_touch(&zone.outline, &c.outline) || ring_contains(&zone.outline, c.outline[0]) || ring_contains(&c.outline, zone.outline[0]))
-        })
-        .collect()
+    (0..zones.len()).filter(|&ci| ci != zi && !zones[ci].is_rule_area && !zones[ci].teardrop && zones_intersect(zone, &zones[ci])).collect()
 }
 
 /// `buildPriorityMap`: every copper zone but `exclude`, by priority.
@@ -645,6 +636,23 @@ mod tests {
         assert_eq!(priorities(&d)[0], ("a".to_string(), 8), "then just above c");
         let e = set_zone_priority(&mut d, "a", ZonePriorityMove::Raise).unwrap_err();
         assert_eq!(e[0].check, "ops_zone_priority", "already on top");
+    }
+
+    /// `getOverlappingZones` tests `Outline()->Collide( .. )` (triangles, none in a hole) and `Contains( CVertex( 0 ) )` ("If the point is inside a hole it
+    /// is outside of the polygon"): a zone in another's hole does not overlap it (r7 C7-1).
+    #[test]
+    fn a_zone_inside_anothers_hole_does_not_overlap_it() {
+        let mut b = square("b", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, mm(20.0), 0);
+        b.holes = vec![vec![pt(mm(5.0), mm(5.0)), pt(mm(15.0), mm(5.0)), pt(mm(15.0), mm(15.0)), pt(mm(5.0), mm(15.0))]];
+        let a = square("a", "F.Cu", "GND", mm(8.0), mm(8.0), mm(4.0), 1);
+        let mut d = design(vec![b.clone(), a]);
+        assert!(overlapping_zones(zones(&d), 1).is_empty(), "in the hole");
+        assert!(set_zone_priority(&mut d, "a", ZonePriorityMove::Lower).is_err(), "nothing to lower under");
+        assert_eq!(priorities(&d), vec![("b".to_string(), 0), ("a".to_string(), 1)]);
+        // one that reaches over the hole's edge does
+        let over = square("o", "F.Cu", "GND", mm(3.0), mm(8.0), mm(4.0), 1);
+        let d = design(vec![b, over]);
+        assert_eq!(overlapping_zones(zones(&d), 1), vec![0]);
     }
 
     #[test]

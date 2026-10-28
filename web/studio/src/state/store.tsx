@@ -39,7 +39,7 @@ import { substituteSelection } from "../kicad-port/groupTree";
 import { substituteSchSelection } from "../kicad-port/schGroups";
 import { DEFAULT_USE_STACKUP_COLORS } from "../kicad-port/appearance3d";
 import { inEnteredGroup } from "../kicad-port/groupEdit";
-import { DEFAULT_BOARD_CONTROL, toggledHighlight, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
+import { DEFAULT_BOARD_CONTROL, localRatsnestPadsAfter, toggledHighlight, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { DEFAULT_APPEARANCE, withObjectKeys, type AppearanceState } from "../kicad-port/appearance";
 import { reduceView, type AppearanceOp, type ViewSlice } from "../kicad-port/appearanceOps";
 import { applyAppearanceFile } from "../kicad-port/appearanceFile";
@@ -1266,9 +1266,9 @@ function viewSliceOf(state: StudioState): ViewSlice {
   };
 }
 
-/** The state with an edited slice put back. Turning the global ratsnest on or off forgets the Local Ratsnest tool's pads (`SetElementVisibility( LAYER_RATSNEST )`). */
+/** The state with an edited slice put back. A change of the ratsnest display (on, off, or its mode) forgets the Local Ratsnest tool's pads (`SetElementVisibility( LAYER_RATSNEST )`). */
 function withViewSlice(state: StudioState, slice: ViewSlice): StudioState {
-  const ratsnestChanged = slice.showRatsnest !== state.showRatsnest;
+  const localPads = localRatsnestPadsAfter(state.bcx.localRatsnestPads, { show: state.showRatsnest, mode: state.bcx.ratsnestMode }, { show: slice.showRatsnest, mode: slice.ratsnestMode });
   return {
     ...state,
     appearance: slice.appearance,
@@ -1278,7 +1278,7 @@ function withViewSlice(state: StudioState, slice: ViewSlice): StudioState {
     highContrast: slice.highContrast,
     showRatsnest: slice.showRatsnest,
     gridVisible: slice.gridVisible,
-    bcx: { ...state.bcx, boardFlipped: slice.boardFlipped, ratsnestMode: slice.ratsnestMode, hiddenRatsnestNets: slice.hiddenNets, localRatsnestPads: ratsnestChanged ? [] : state.bcx.localRatsnestPads },
+    bcx: { ...state.bcx, boardFlipped: slice.boardFlipped, ratsnestMode: slice.ratsnestMode, hiddenRatsnestNets: slice.hiddenNets, localRatsnestPads: localPads },
   };
 }
 

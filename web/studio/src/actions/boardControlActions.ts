@@ -7,7 +7,7 @@
 
 import type { Dispatch } from "react";
 import type { Action, StudioApi, StudioState } from "../state/store";
-import type { BoardControlState, BoardExportKind } from "../kicad-port/boardControlState";
+import { localRatsnestPadsAfter, type BoardControlState, type BoardExportKind } from "../kicad-port/boardControlState";
 import { postRepairBoard } from "../api/boardControl";
 import { cliExporterUnavailable } from "../state/cliExporters";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
@@ -53,14 +53,14 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
     })
   );
 
-  // RatsnestModeCycle: off -> all layers -> visible layers -> off. Turning the global ratsnest on or off also resets every pad's local flag
-  // (`SetElementVisibility( LAYER_RATSNEST )`), which the reducer's TOGGLE_RATSNEST does.
+  // RatsnestModeCycle: off -> all layers -> visible layers -> off. Every step resets every pad's local flag (`SetElementVisibility( LAYER_RATSNEST,
+  // m_ShowGlobalRatsnest )`, the All to Visible step included, r7 C7-3).
   m.set(
     "pcbnew.Control.ratsnestModeCycle",
     pcbOnly(() => {
       const next = ratsnestModeCycle(state.showRatsnest, state.bcx.ratsnestMode);
       if (next.show !== state.showRatsnest) dispatch({ type: "TOGGLE_RATSNEST" });
-      bcx({ ratsnestMode: next.mode });
+      bcx({ ratsnestMode: next.mode, localRatsnestPads: localRatsnestPadsAfter(state.bcx.localRatsnestPads, { show: state.showRatsnest, mode: state.bcx.ratsnestMode }, next) });
     })
   );
 
@@ -111,14 +111,12 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
     })
   );
 
-  // hideNetInRatsnest / showNetInRatsnest on the selection's nets (`doHideRatsnestNet`, netcode <= 0 and a selection).
+  // hideNetInRatsnest / showNetInRatsnest on the selection's nets: `doHideRatsnestNet` reads `GetSelection()` only (not the item under the cursor) and keeps the
+  // nets with `GetNetCode() > 0`; with none it does nothing and says nothing (the action is disabled by `haveNetCond`, r7 C7-6).
   const setNetsInRatsnest = (hide: boolean) =>
     pcbOnly(() => {
-      const nets = board ? netsOfSelection(c.requestSelection(), board) : [];
-      if (nets.length === 0) {
-        toast(`Select an item on the net to ${hide ? "hide" : "show"} in the ratsnest.`);
-        return;
-      }
+      const nets = board ? netsOfSelection([...state.selection], board) : [];
+      if (nets.length === 0) return;
       bcx({ hiddenRatsnestNets: setNetsHidden(state.bcx.hiddenRatsnestNets, nets, hide) });
     });
   m.set("pcbnew.EditorControl.hideNet", setNetsInRatsnest(true));

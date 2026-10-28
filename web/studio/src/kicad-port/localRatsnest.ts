@@ -86,3 +86,21 @@ export function carryRatsnest<E extends RatsnestEdgeLike>(
   const shift = (pt: readonly [number, number]): [number, number] => (moving.has(key(pt[0], pt[1])) ? map(pt) : [pt[0], pt[1]]);
   return edges.map((e) => ({ ...e, from: shift(e.from), to: shift(e.to) }));
 }
+
+/** `RATSNEST_VIEW_ITEM::ViewDraw`'s `CROSS_SIZE`: 0.2 mm each way from the point, nm. */
+export const RATSNEST_CROSS_SIZE_NM = 200_000;
+
+/**
+ * `RATSNEST_VIEW_ITEM::ViewDraw`, `if( source == target )` (and the dynamic ratsnest's `l.a == l.b`): a line whose two ends coincide -- a via on a pad of its net
+ * on the other side, not connected -- is drawn as a cross of two lines `CROSS_SIZE` each way from the point, so the open connection shows (r7 C7-7). Null for
+ * any other line (drawn straight or curved).
+ */
+export function ratsnestCross(from: readonly [number, number], to: readonly [number, number]): [[number, number], [number, number]][] | null {
+  if (from[0] !== to[0] || from[1] !== to[1]) return null;
+  const [x, y] = from;
+  const c = RATSNEST_CROSS_SIZE_NM;
+  return [
+    [[x - c, y - c], [x + c, y + c]],
+    [[x - c, y + c], [x + c, y - c]],
+  ];
+}

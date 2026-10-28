@@ -63,6 +63,15 @@ export const DEFAULT_BOARD_CONTROL: BoardControlState = {
 };
 
 /**
+ * The Local Ratsnest tool's pads after the ratsnest display goes from `before` to `after`: `PCB_CONTROL::RatsnestModeCycle` and
+ * `APPEARANCE_CONTROLS::onRatsnestMode` call `SetElementVisibility( LAYER_RATSNEST, m_ShowGlobalRatsnest )` on every change -- the mode's too, All to Visible
+ * layers -- and `BOARD::SetElementVisibility` then sets `SetLocalRatsnestVisible( isEnabled )` on every pad, so the tool's flips are forgotten (r7 C7-3).
+ */
+export function localRatsnestPadsAfter(pads: readonly string[], before: { show: boolean; mode: RatsnestMode }, after: { show: boolean; mode: RatsnestMode }): string[] {
+  return before.show !== after.show || before.mode !== after.mode ? [] : [...pads];
+}
+
+/**
  * The state after the highlighted nets change from `before` (the first net, plus `bcx.netHighlightMore`) to `nets` (the
  * first net, then the rest): `m_lastHighlighted` takes what was on show whenever the highlight really changes, as
  * `BOARD_INSPECTION_TOOL::HighlightNet` does (`if( !netcodes.empty() ) m_lastHighlighted = netcodes`).
@@ -70,7 +79,10 @@ export const DEFAULT_BOARD_CONTROL: BoardControlState = {
 export function withHighlight(bcx: BoardControlState, before: string | null, nets: readonly string[]): BoardControlState {
   const was = before ? [before, ...bcx.netHighlightMore.filter((n) => n !== before)] : [];
   const same = was.length === nets.length && was.every((n, i) => n === nets[i]);
-  return { ...bcx, netHighlightMore: nets.slice(1), lastHighlight: same || was.length === 0 ? bcx.lastHighlight : was, currentHighlight: [...nets] };
+  // `highlightNet`'s multi-net branch (`netcodes.size() > 1`) sets `m_currentlyHighlighted = netcodes; return true;` before it reaches `m_lastHighlighted = netcodes`:
+  // a highlight of several nets leaves the memory alone (r7 C7-4).
+  const keep = same || was.length === 0 || nets.length > 1;
+  return { ...bcx, netHighlightMore: nets.slice(1), lastHighlight: keep ? bcx.lastHighlight : was, currentHighlight: [...nets] };
 }
 
 /**
