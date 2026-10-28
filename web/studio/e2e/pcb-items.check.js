@@ -358,8 +358,16 @@
       const scene = E.state().viewer3d.scene;
       const silkBefore = (await textBoxes()).filter((b) => before.has(b.id) && /\.SilkS$/.test(b.layer)).length;
       t((scene["silk-text-box"] ?? 0) === 2 + silkBefore, `the two silkscreen boxes are drawn, front and back, with the ${silkBefore} the board had (${JSON.stringify(scene)})`);
-      t(Object.keys(scene).some((k) => /text-box/.test(k) && k !== "silk-text-box"), "the user layer's box is drawn on its own row");
-      t(!Object.keys(scene).includes("F.CrtYd-text-box") && Object.values(scene).length > 0, "a layer KiCad's 3D view does not draw (courtyard) has none");
+      // The 3D view opens on FOLLOW_PLOT_SETTINGS (round 6 V6-3): the User.Drawings row is shown only when the plot selection has Dwgs.User
+      // (BOARD_ADAPTER::GetVisibleLayers, `layers.test( Dwgs_User )`). Turn the row on if it starts off, as one would in the 3D Appearance panel.
+      const userRow = () => document.querySelector('[data-row="user_drawings"] input[type=checkbox]');
+      const userStartsOn = userRow()?.checked === true;
+      t(!!userRow() && userStartsOn === Object.keys(scene).includes("user_drawings-text-box"), `the user layer's box follows the User.Drawings row as the plot settings set it (${userStartsOn ? "on" : "off"})`);
+      if (!userStartsOn) { userRow()?.click(); await sleep(1500); }
+      const sceneOn = E.state().viewer3d.scene;
+      t((sceneOn["user_drawings-text-box"] ?? 0) >= 1, `the user layer's box is drawn on its own row once the row is shown (${JSON.stringify(sceneOn)})`);
+      if (!userStartsOn) { userRow()?.click(); await sleep(500); }
+      t(!Object.keys(sceneOn).includes("F.CrtYd-text-box") && Object.values(sceneOn).length > 0, "a layer KiCad's 3D view does not draw (courtyard) has none");
       // back to the board editor
       [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === "PCB")?.click();
       await sleep(800);

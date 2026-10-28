@@ -76,3 +76,9 @@ test("dpViaRequest arms the vias toward the given layer, and a second V takes th
   assert.deepEqual(dpViaRequest(baseDraw(), "B.Cu"), { enabled: true, toLayer: "B.Cu" });
   assert.deepEqual(dpViaRequest(baseDraw({ placingVia: true }), "B.Cu"), { enabled: false, toLayer: "B.Cu" });
 });
+
+test("a_pair_via_takes_the_chosen_via_size (R7-R2: handleLayerSwitch's GetCurrentViaSize)", () => {
+  assert.deepEqual(dpViaRequest(baseDraw(), "B.Cu", { diameter: 800_000, drill: 400_000 }), { enabled: true, toLayer: "B.Cu", diameter: 800_000, drill: 400_000 });
+  assert.deepEqual(dpViaRequest(baseDraw(), "B.Cu", undefined), { enabled: true, toLayer: "B.Cu" }, "the net class's: the server's rules");
+  assert.deepEqual(dpViaRequest(baseDraw({ placingVia: true }), "B.Cu", { diameter: 800_000, drill: 400_000 }), { enabled: false, toLayer: "B.Cu" });
+});

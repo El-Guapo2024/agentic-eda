@@ -100,3 +100,32 @@ export function redoRefused(tab: string, activeTool: string, drawState: DrawLike
 export function undoDropsDrawing(tab: string, activeTool: string, drawState: DrawLike | null | undefined): boolean {
   return escapeKeepsDrawingTool(tab, activeTool, drawState) && drawState!.kind !== "measure" && !drawZoneStarted(tab, activeTool, drawState);
 }
+
+/** What a board edit key does while the router has a session live (R7-R1, R7-R5): `null` when the key is the editor's as usual. */
+export type RouterEditKey = "undoSegment" | "cancel" | "customSize" | "nothing";
+
+/**
+ * The edit keys while a route or a pair is drawn, or a track dragged (`ROUTER_TOOL`, pcbnew/router/router_tool.cpp):
+ *
+ * - `prepareInteractive`, `performDragging` and `InlineDrag` set `frame()->UndoRedoBlock( true )` until the session ends, so the board's undo and redo
+ *   never run under it (`RestoreCopyFromUndoList`: `if( UndoRedoBlocked() ) return;`).
+ * - `performRouting` (a track and a pair alike):
+ *
+ *     else if( evt->IsAction( &PCB_ACTIONS::routerUndoLastSegment ) || evt->IsAction( &ACTIONS::doDelete ) || evt->IsAction( &ACTIONS::undo ) )
+ *         if( std::optional<VECTOR2I> last = m_router->UndoLastSegment() ) ..
+ *     else if( evt->IsAction( &PCB_ACTIONS::properties ) )
+ *         m_toolMgr->RunAction( ACT_CustomTrackWidth );
+ *     else if( ZONE_FILLER_TOOL::IsZoneFillAction( evt ) )
+ *         wxBell();
+ *
+ *   so Undo and Delete take back the last fixed segment, E opens Custom Track/Via Size, and Redo (blocked) and the fill actions do nothing.
+ * - `performDragging` / `InlineDrag`: "treat an undo as an escape" (`if( m_startItem ) break;`, the drag is dropped, `StopRouting()`); the fill actions,
+ *   cut, copy and paste ring the bell. Delete is passed on there (`SetPassEvent`), and KiCad's selection tool would then delete under the drag; here it does
+ *   nothing, as the drag's server session was built from the board as it was (a difference, kept on purpose).
+ */
+export function routerEditKey(tab: string, drawState: { kind: string } | null | undefined, key: "undo" | "redo" | "delete" | "fill" | "properties"): RouterEditKey | null {
+  if (tab !== "pcb" || drawState == null) return null;
+  if (drawState.kind === "route" || drawState.kind === "diffpair") return key === "undo" || key === "delete" ? "undoSegment" : key === "properties" ? "customSize" : "nothing";
+  if (drawState.kind === "drag") return key === "undo" ? "cancel" : key === "properties" ? null : "nothing";
+  return null;
+}

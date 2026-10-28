@@ -3,8 +3,9 @@
 //! imported board and project bring them in. No external tool is needed here; kicad-cli's reading of them is proved in `eda-cli`'s board tests.
 
 use eda_model::units::mm;
-use eda_kicad::{export_kicad_pcb, export_kicad_pro_for, import_kicad_pcb, merge_project_predefined_sizes, merge_project_setup_pages, ExportMeta};
-use eda_model::ir::{DiffPairPreset, Nm, RoutingSection, ViaPreset};
+use eda_kicad::{export_kicad_pcb, export_kicad_pro_for, import_kicad_pcb, merge_project_predefined_sizes, merge_project_setup_pages, merge_project_teardrops, ExportMeta};
+use eda_model::ir::{DiffPairPreset, Nm, RoutingSection, TeardropSettings, ViaPreset};
+use std::path::PathBuf;
 use eda_model::setup_pages::{CornerStyle, HatchOffset, MeanderSettings, ProfileLayerEntry, ProfileType, TuningProfile, ViaOverride};
 use eda_model::{ConstraintModel, Net, NetClass};
 
@@ -128,6 +129,73 @@ fn a_profile_the_page_would_refuse_is_not_imported() {
     assert_eq!(model.board.tuning_profiles.profiles.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["ok"]);
     merge_project_setup_pages(&mut model, "not json");
     assert_eq!(model.board.tuning_profiles.profiles.len(), 1);
+}
+
+/// F3 (round 7): Board Setup > Teardrops is `BOARD_DESIGN_SETTINGS`' `teardrop_options` and `teardrop_parameters` (`board_design_settings.cpp:526-660`). The
+/// reader takes the target kinds and the round block's sizes (this port's single block collapses KiCad's three, PARITY-pcb §15); the writer repeats it for the
+/// round and rectangular targets and keeps the track-end target at `TEARDROP_PARAMETERS()`'s constructor defaults.
+#[test]
+fn the_projects_teardrop_parameters_are_read_and_written() {
+    let (mut design, model, _) = import_kicad_pcb(BOARD).expect("imports");
+    let pro = serde_json::json!({ "board": { "design_settings": {
+        "teardrop_options": [{ "td_onvia": true, "td_onpthpad": false, "td_onsmdpad": true, "td_ontrackend": true, "td_onroundshapesonly": false }],
+        "teardrop_parameters": [
+            { "td_target_name": "td_round_shape", "td_maxlen": 0.5, "td_maxheight": 2.5, "td_length_ratio": 0.2, "td_height_ratio": 0.8, "td_curve_segcount": 4, "td_width_to_size_filter_ratio": 0.6 },
+            { "td_target_name": "td_rect_shape", "td_maxlen": 0.9, "td_maxheight": 3.0, "td_length_ratio": 0.4 },
+            { "td_maxlen": 0.1 },
+            { "td_target_name": "td_track_end", "td_maxlen": 0.7, "td_length_ratio": 0.3 }
+        ]
+    } } });
+    merge_project_teardrops(&mut design, &pro.to_string());
+    let td = design.routing.as_ref().expect("the page's block").teardrop_settings;
+    assert_eq!((td.target_vias, td.target_pth_pads, td.target_smd_pads), (true, false, true));
+    assert_eq!((td.best_length_ratio, td.best_width_ratio, td.width_to_size_filter_ratio), (0.2, 0.8, 0.6));
+    assert_eq!((td.max_len_nm, td.max_width_nm), (mm(0.5), mm(2.5)));
+    assert_eq!(td, TeardropSettings { target_pth_pads: false, best_length_ratio: 0.2, best_width_ratio: 0.8, max_len_nm: mm(0.5), max_width_nm: mm(2.5), width_to_size_filter_ratio: 0.6, ..Default::default() }, "the rect and track entries do not feed the collapsed block");
+
+    let project: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
+    let ds = &project["board"]["design_settings"];
+    let params = ds["teardrop_parameters"].as_array().expect("the parameter blocks");
+    let entry = |name: &str| params.iter().find(|e| e["td_target_name"] == name).unwrap_or_else(|| panic!("{name} in {params:?}")).clone();
+    for name in ["td_round_shape", "td_rect_shape"] {
+        let e = entry(name);
+        assert_eq!((e["td_maxlen"].as_f64(), e["td_maxheight"].as_f64(), e["td_length_ratio"].as_f64(), e["td_height_ratio"].as_f64(), e["td_width_to_size_filter_ratio"].as_f64()), (Some(0.5), Some(2.5), Some(0.2), Some(0.8), Some(0.6)), "{name}: {e}");
+    }
+    let track = entry("td_track_end");
+    assert_eq!((track["td_maxlen"].as_f64(), track["td_maxheight"].as_f64(), track["td_length_ratio"].as_f64(), track["td_height_ratio"].as_f64(), track["td_width_to_size_filter_ratio"].as_f64()), (Some(1.0), Some(2.0), Some(0.5), Some(1.0), Some(0.9)), "KiCad's constructor defaults: {track}");
+    assert_eq!(ds["teardrop_options"], serde_json::json!([{ "td_onvia": true, "td_onpthpad": false, "td_onsmdpad": true, "td_ontrackend": false, "td_onroundshapesonly": false }]));
+
+    // Read back: the same block (the off-schema keys are KiCad's own defaults).
+    let mut back = design.clone();
+    back.routing.as_mut().unwrap().teardrop_settings = Default::default();
+    merge_project_teardrops(&mut back, &project.to_string());
+    assert_eq!(back.routing.as_ref().unwrap().teardrop_settings, td);
+    // A project without the keys, or text that is not JSON, leaves the design alone.
+    let before = back.routing.as_ref().unwrap().teardrop_settings;
+    merge_project_teardrops(&mut back, r#"{"board":{"design_settings":{"rules":{}}}}"#);
+    merge_project_teardrops(&mut back, "not json");
+    assert_eq!(back.routing.as_ref().unwrap().teardrop_settings, before);
+    // A never-touched page writes neither key (an absent key reads back as KiCad's defaults).
+    let mut untouched = design.clone();
+    untouched.routing.as_mut().unwrap().teardrop_settings = Default::default();
+    let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&untouched, &model)).unwrap();
+    assert!(plain["board"]["design_settings"].get("teardrop_parameters").is_none() && plain["board"]["design_settings"].get("teardrop_options").is_none());
+}
+
+/// F3 on the QA project the finding names: `issue18142` keeps a 0.2 round-shape length ratio, read from the project's `teardrop_parameters`.
+#[test]
+fn issue18142_keeps_its_teardrop_length_ratio() {
+    let dir = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).or_else(|| std::env::var_os("KICAD_SRC_DIR").map(|d| PathBuf::from(d).join("qa/data")));
+    let Some(project) = dir.and_then(|d| std::fs::read_to_string(d.join("pcbnew").join("issue18142.kicad_pro")).ok()) else {
+        eprintln!("skipped: issue18142.kicad_pro needs KICAD_QA_DATA (or KICAD_SRC_DIR)");
+        return;
+    };
+    let (mut design, model, _) = import_kicad_pcb(BOARD).expect("imports");
+    merge_project_teardrops(&mut design, &project);
+    assert_eq!(design.routing.as_ref().unwrap().teardrop_settings.best_length_ratio, 0.2);
+    let out: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
+    let round = out["board"]["design_settings"]["teardrop_parameters"].as_array().unwrap().iter().find(|e| e["td_target_name"] == "td_round_shape").expect("the round block").clone();
+    assert_eq!(round["td_length_ratio"], 0.2);
 }
 
 // r4 R4-3: the project's `board.design_settings.diff_pair_dimensions` (`BOARD_DESIGN_SETTINGS`' PARAM_LAMBDA) is written with its index-0 "use net

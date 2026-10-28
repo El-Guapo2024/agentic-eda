@@ -13,7 +13,7 @@
 // layerToggle (actions/pcbMenuActions.ts).
 
 import { createElement } from "react";
-import { dpMove, routeMove, routeSwitchLayer, routeToggleVia } from "../api/client";
+import { dpMove, dpToggleVia, routeMove, routeSwitchLayer, routeToggleVia } from "../api/client";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { chosenViaOf, pickableLayers, planViaCommand, routerLayerTarget, VIA_COMMANDS, type ViaChoice, type ViaCommand } from "../kicad-port/routerVia";
@@ -123,12 +123,42 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
     m.set("pcbnew.Control.layerBottom", layerCommand("B.Cu"));
     for (let i = 1; i <= 30; i++) m.set(`pcbnew.Control.layerInner${i}`, layerCommand(`In${i}.Cu`));
   }
+  // The same while a pair is drawn (R7-R3): `onLayerCommand` is the router tool's in both modes, and `ROUTER::SwitchLayer` is the pair placer's
+  // `DIFF_PAIR_PLACER::SetLayer` (crates/pns/src/dp_placer.rs `set_layer`: a pair going on from two vias on the layer moves to it); refused, a pair
+  // of through vias to the layer is armed, sized as V sizes them (R7-R2).
+  if (board && draw?.kind === "diffpair") {
+    const layerCommand = (cmd: string) =>
+      pcbOnly(() => {
+        const target = routerLayerTarget(cmd, draw.layer, board.layers, (l) => state.layerVisible[l] !== false);
+        if (!target) return;
+        const cursor = state.cursorNm ?? { x: draw.ptsA[draw.ptsA.length - 1]?.[0] ?? 0, y: draw.ptsA[draw.ptsA.length - 1]?.[1] ?? 0 };
+        const refresh = (next: typeof draw) => void dpMove(cursor.x, cursor.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(next, preview) }));
+        void routeSwitchLayer(target).then((r) => {
+          if (!r.ok) return;
+          if (r.switched) return refresh({ ...draw, layer: target });
+          const size = chosenViaOf("through", viaChoiceOf(state));
+          void dpToggleVia(true, target, size?.diameter, size?.drill).then((armed) => {
+            if (!armed.ok) return;
+            const next = { ...draw, placingVia: true, pendingViaLayer: target };
+            dispatch({ type: "SET_DRAW_STATE", draw: next });
+            refresh(next);
+          });
+        });
+      });
+    m.set("pcbnew.Control.layerNext", layerCommand("next"));
+    m.set("pcbnew.Control.layerPrev", layerCommand("prev"));
+    m.set("pcbnew.Control.layerTop", layerCommand("F.Cu"));
+    m.set("pcbnew.Control.layerBottom", layerCommand("B.Cu"));
+    for (let i = 1; i <= 30; i++) m.set(`pcbnew.Control.layerInner${i}`, layerCommand(`In${i}.Cu`));
+  }
 
   // ------------------------------------------------------------------------------ V with the route tool armed
   // `ROUTER_TOOL::MainLoop`: "else if( evt->IsAction( &ACT_PlaceThroughVia ) ) { m_startWithVia = true; m_toolMgr->RunAction( PCB_ACTIONS::layerToggle ); }"
   // -- the active layer flips to the other layer of the pair (`PCB_CONTROL::LayerToggle`) and the next route starts with a via armed (`performRouting`:
   // `if( m_startWithVia ) { m_startWithVia = false; handleLayerSwitch( ACT_PlaceThroughVia.MakeEvent(), true ); }`, components/canvas/routing.ts), R6-R5.
-  if (board && !draw && state.activeTool === "route") {
+  // `MainLoop` is the loop of both modes (`Go( &ROUTER_TOOL::MainLoop, PCB_ACTIONS::routeDiffPair.MakeEvent() )`), so V with the pair tool armed does
+  // the same, and the pair starts with its vias armed (components/canvas/diffPairRouting.ts `startDiffPairRoute`), R7-R3.
+  if (board && !draw && (state.activeTool === "route" || state.activeTool === "diffpair")) {
     const startWithVia = pcbOnly(() => {
       const pair = layerPairsOf(board, state.pcbx.layerPairs).current;
       dispatch({ type: "SET_ACTIVE_LAYER", layer: otherLayerOfPair(pair, state.activeLayer ?? "") });

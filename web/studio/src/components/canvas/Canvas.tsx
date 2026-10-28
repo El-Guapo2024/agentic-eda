@@ -839,7 +839,10 @@ export function Canvas() {
           // (`GetCurrentDiffPairWidth/Gap/ViaGap()`, r5 R5-5); the net class's at entry 0
           const custom = state.pcbx.customDiffPair;
           const dims = chosenDiffPair(board.routing?.diff_pair_presets ?? [], state.pcbx.diffPairIndex, state.pcbx.useCustomDiffPair, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : null);
-          void startDiffPairRoute(sx, sy, layer, dispatch, dims, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), state.bcx.autoTrackWidth);
+          // `m_startWithVia` for a pair too (R7-R3), spent at the start
+          const startWithVia = state.pcbx.startWithVia ? { size: chosenViaOf("through", viaChoiceOf(state)), pair: layerPairsOf(board, state.pcbx.layerPairs).current } : undefined;
+          if (startWithVia) dispatch({ type: "PCBX", patch: { startWithVia: false } });
+          void startDiffPairRoute(sx, sy, layer, dispatch, dims, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), state.bcx.autoTrackWidth, startWithVia);
           return;
         }
         void fixDiffPairRoute(sx, sy, draw, dispatch, api);

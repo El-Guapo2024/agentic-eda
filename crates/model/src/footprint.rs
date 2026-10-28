@@ -1083,6 +1083,16 @@ pub fn footprint_lib_id(part: &crate::Part) -> String {
     part.package.clone().unwrap_or_default()
 }
 
+/// `name` without the importer's `#2`, `#3` ... slot (`eda_kicad::import`'s `dedup_footprint_key`, which keeps apart instances of one library footprint whose pads,
+/// models or graphics differ) when what is left is a footprint of `footprints`: in the file it is still that library's footprint, and the derived board writes it so
+/// (`(footprint "Lib:Name" ..)`). `FOOTPRINT::GetFPIDAsString`, the "Library Link" the rules read, is that written link (R7-D3).
+pub fn without_import_slot(name: &str, footprints: &[Footprint]) -> String {
+    match name.rsplit_once('#') {
+        Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && footprints.iter().any(|f| f.name == base) => base.to_string(),
+        _ => name.to_string(),
+    }
+}
+
 /// The `(model ...)` path an exported footprint of this part gets when the footprint itself carries none -- an explicit definition (a project-library entry, a
 /// `.kicad_mod` read for its pads) has no model of its own, and without one `kicad-cli pcb export glb` leaves the part out of the 3D view altogether.
 pub fn model_path_for_part(part: &crate::Part) -> Option<String> {
