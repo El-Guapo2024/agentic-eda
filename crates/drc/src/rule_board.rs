@@ -286,8 +286,9 @@ impl<'a> RuleBoard<'a> {
         let extras: HashMap<&str, &eda_model::ir::FootprintExtra> = self.design.drawings.as_ref().map(|d| d.footprint_extras.iter().map(|e| (e.id.as_str(), e)).collect()).unwrap_or_default();
         for fp in &pl.footprints {
             let part = self.model.part(&fp.id);
-            // `A.Library_Link`: the link the derived board writes (`footprint_lib_id`: a package's installed KiCad footprint), the one Multichannel reads too (R6-D2)
-            let fpid = part.map(eda_model::footprint::footprint_lib_id).unwrap_or_default();
+            // `A.Library_Link`: the link the derived board writes (`footprint_lib_id`: a package's installed KiCad footprint), the one Multichannel reads too (R6-D2),
+            // without the importer's `#2` slot, which the writer takes off too (R7-D3)
+            let fpid = part.map(|p| eda_model::footprint::without_import_slot(&eda_model::footprint::footprint_lib_id(p), &self.model.footprints)).unwrap_or_default();
             let value = part.and_then(|p| p.value.clone()).unwrap_or_default();
             let side_layer = if fp.side == Side::Bottom { "B.Cu" } else { "F.Cu" };
             let outlines: Vec<Vec<Point>> = self
@@ -1169,6 +1170,26 @@ mod footprint_facts_tests {
         assert!(uv.description.starts_with("Micro via"), "{}", uv.description);
         let bv = via("bv");
         assert!(holds(&rb, "A.isBlindVia()", &bv) && !holds(&rb, "A.isMicroVia()", &bv));
+    }
+
+    /// R7-D3 (`FOOTPRINT::GetFPIDAsString`, `testFootprintSelector`): a part whose footprint is the importer's `Resistor_SMD:R_0603#2` (a second variant of one
+    /// library footprint) has the library link the board writes, `Resistor_SMD:R_0603`, in `A.Library_Link` and in `memberOfFootprint('lib:name')`.
+    #[test]
+    fn library_link_has_no_import_slot() {
+        let (design, model) = hv_board(|_, m| {
+            let mut variant = m.footprints[0].clone();
+            m.footprints[0].name = "Resistor_SMD:R_0603".into();
+            variant.name = "Resistor_SMD:R_0603#2".into();
+            m.footprints.push(variant);
+            m.parts[0].footprint = Some("Resistor_SMD:R_0603#2".into());
+            m.parts[0].package = None;
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let fp = rb.footprint_item("R5").unwrap();
+        assert!(holds(&rb, "A.Library_Link == 'Resistor_SMD:R_0603'", &fp));
+        let pad = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == "R5")).unwrap();
+        assert!(holds(&rb, "A.memberOfFootprint('Resistor_SMD:R_0603')", &pad));
     }
 
     /// R6-D8 (`SyncDynamicComponentClassAssignments`: `if( success ) m_assignmentRules = std::move( rules );`): one row with no class, or a `"` in a value, gives
