@@ -1381,6 +1381,10 @@ fn write_lib_symbol_entry(out: &mut String, cache_name: &str, lib_id: &str, inst
     }
     write_property(out, "Reference", "U", 0.0, 0.0, false);
     write_property(out, "Value", bare_name, 0.0, 0.0, false);
+    // the library symbol's user fields (`SaveSymbol` writes every field), which its body texts resolve `${NAME}` by (`LIB_SYMBOL::ResolveTextVar`)
+    for (name, text) in resolved.iter().flat_map(|r| r.connectivity.user_fields.iter()) {
+        write_property(out, name, text, 0.0, 0.0, true);
+    }
 
     // ---- the body style(s): `_0_1` / `_<u>_1` for the normal one; a symbol with an alternate ("De Morgan") body style also gets `_0_2` / `_<u>_2` ----
     // Each style is baked through the instances' own transform exactly like the other. The box they hang from is that of both bodies together

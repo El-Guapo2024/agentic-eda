@@ -280,6 +280,11 @@ pub struct LibConnectivity {
     /// by it in place of its letter ([`LibSymbol::sub_reference`]), so a net's default name has it (`unconnected-(A1TopLeft_UnderSide-+3.3V-PadJ1.1)`, r6 B6-H1).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub unit_names: std::collections::BTreeMap<u32, String>,
+    /// The library symbol's user fields (`SCH_FIELD`s beyond the mandatory five and the `ki_` keys), name and text, in their order. Not connectivity: the
+    /// schematic's cache writes them (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol`), and a body text of the symbol resolves `${LOCATION}` by them
+    /// (`LIB_SYMBOL::ResolveTextVar`). Kept here, as [`Self::pin_alternates`] is, so the symbol's literals stay as they are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_fields: Vec<(String, String)>,
 }
 
 impl LibConnectivity {

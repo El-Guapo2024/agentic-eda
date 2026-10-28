@@ -2059,3 +2059,25 @@ fn a_pins_alternate_is_its_shown_name_for_the_duplicate_name_test() {
         }
     }
 }
+
+/// The library symbol's user fields in the schematic's cache (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol` writes every field): QA `issue22286/bugtest`'s
+/// connector draws the body text `${LOCATION}`, which resolves by its library symbol's `LOCATION` field (`LIB_SYMBOL::ResolveTextVar`), so kicad-cli finds
+/// no `unresolved_variable` in the derived file, as in the original (PARITY-sch section 48 "Left").
+#[test]
+fn a_library_symbols_user_fields_are_written_in_the_cache() {
+    let (dir, root, _) = round_case("r5_connectivity", "a22286");
+    let (_, design, model) = load(&dir).unwrap();
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-28", title: "t" }, "board.kicad_sch").unwrap();
+    let cache = files[0].1.split("(lib_symbols").nth(1).unwrap().split("\n\t)").next().unwrap();
+    let has_fields = cache.contains("(property \"LOCATION\" \"Front\"") && cache.contains("(property \"FUNCTION\" \"Panel\"");
+    if kicad_cli_ready() {
+        let derived_dir = dir.parent().unwrap().join("derived");
+        std::fs::create_dir_all(&derived_dir).unwrap();
+        for (name, text) in &files {
+            std::fs::write(derived_dir.join(name), text).unwrap();
+        }
+        let unresolved = |root: &Path| kicad_cli_erc_counts(root).expect("an ERC report").get("unresolved_variable").copied().unwrap_or(0);
+        assert_eq!(unresolved(&derived_dir.join("board.kicad_sch")), unresolved(&root));
+    }
+    assert!(has_fields, "the cache has the library's user fields");
+}
