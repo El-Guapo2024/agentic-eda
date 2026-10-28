@@ -101,6 +101,8 @@ struct Sources {
     sheets: Vec<(String, SheetFile)>,
     /// kicad-cli's runs, in the order they were made.
     imports: Vec<ForeignImport>,
+    /// The sheets are a KiCad project's top-level sheets (`schematic.top_level_sheets`), not the sheets of a project of another format.
+    top_level_sheets: bool,
 }
 
 fn stem_of(path: &Path) -> String {
@@ -123,7 +125,7 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
 fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
     let input = PathBuf::from(&args.input);
     let ext = input.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    let mut s = Sources { board: None, project: None, rules: None, sheets: Vec::new(), imports: Vec::new() };
+    let mut s = Sources { board: None, project: None, rules: None, sheets: Vec::new(), imports: Vec::new(), top_level_sheets: false };
     let mut runs = 0;
     let mut convert_one = |s: &mut Sources, path: &Path, kind: Option<Kind>| -> Result<ForeignImport, Vec<CheckResult>> {
         runs += 1;
@@ -139,8 +141,24 @@ fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
             s.board = Some((name_of(&input), text, dir));
         }
         "kicad_sch" => {
-            let file = eda_kicad::load_sheet_file(&input)?;
-            s.sheets.push((stem_of(&input), file));
+            // A KiCad 10 project lists its top-level sheets (`schematic.top_level_sheets`), and KiCad loads every one of them, whichever file was opened
+            // (`files-io.cpp::OpenProjectFiles`: each `TOP_LEVEL_SHEET_INFO`'s file under the project's folder, "Top-level sheet file not found" skipped, the sheet
+            // named by `sheetInfo.name`). With more than one, they are placed on a root sheet under those names (r7 H2), so the paths read as KiCad's
+            // (`/Root/shared1/`). **Differs**: the studio has one root, so the derived file is a root that places the top-level sheets, not a project of several.
+            let listed = std::fs::read_to_string(input.with_extension("kicad_pro")).map(|pro| eda_kicad::project_schematic::top_level_sheets(&pro)).unwrap_or_default();
+            let dir = input.parent().map(Path::to_path_buf).unwrap_or_default();
+            let found: Vec<(String, PathBuf)> = listed.into_iter().map(|(file, name)| (name, dir.join(file))).filter(|(_, path)| path.is_file()).collect();
+            if found.len() > 1 {
+                eprintln!("import-kicad: the project has {} top-level sheets ({}): each is read", found.len(), found.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", "));
+                for (name, path) in &found {
+                    let file = eda_kicad::load_sheet_file(path)?;
+                    s.sheets.push((if name.is_empty() { stem_of(path) } else { name.clone() }, file));
+                }
+                s.top_level_sheets = true;
+            } else {
+                let file = eda_kicad::load_sheet_file(&input)?;
+                s.sheets.push((stem_of(&input), file));
+            }
         }
         "prjpcb" => {
             let project = foreign::altium_project(&input)?;
@@ -276,7 +294,28 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
             let _ = name;
             (design, model, Some(notes), setup)
         }
-        None => (empty_board(), eda_model::ConstraintModel::default(), None, None),
+        None => {
+            let mut model = eda_model::ConstraintModel::default();
+            let mut design = empty_board();
+            let mut setup = None;
+            // A KiCad schematic's project (`.kicad_pro` beside it) is read as KiCad reads it for the schematic alone (r7 H1, H6): its net classes (a net class
+            // label names one: `TestMissingNetclasses`; the netlist puts the net in it), the rest of its setup the board would read, and its library tables and
+            // text variables (`PROJECT::GetTextVars`, which `${VAR}` resolves from).
+            if args.input.to_ascii_lowercase().ends_with(".kicad_sch") {
+                let pro_path = PathBuf::from(&args.input).with_extension("kicad_pro");
+                if let Ok(pro_text) = std::fs::read_to_string(&pro_path) {
+                    eda_kicad::merge_project_net_classes_for_schematic(&mut model, &pro_text);
+                    eda::merge_project_rule_severities(&mut model, &pro_text);
+                    eda::merge_project_design_rules(&mut model, &pro_text);
+                    eda::merge_project_setup_pages(&mut model, &pro_text);
+                    eda::merge_project_predefined_sizes(&mut design, &pro_text);
+                    eda_kicad::merge_project_dimension_defaults(&mut design, &pro_text);
+                    let dir = std::fs::canonicalize(&args.input).ok().and_then(|p| p.parent().map(Path::to_path_buf));
+                    setup = dir.map(|dir| eda_kicad::library_table::import_project_setup(&dir, out, Some(&pro_text)));
+                }
+            }
+            (design, model, None, setup)
+        }
     };
 
     let intent_yaml = serde_yaml::to_string(&model).map_err(|e| fail("kicad_import_encode", "intent.yaml", e.to_string()))?;
@@ -340,11 +379,23 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
     if !sources.sheets.is_empty() {
         let (name, content) = match sources.sheets.len() {
             1 => sources.sheets.into_iter().next().expect("one sheet"),
+            n if sources.top_level_sheets => {
+                eprintln!("import-kicad: {n} top-level sheets, placed on a root sheet under the names the project gives them");
+                ("project".to_string(), foreign::combine_sheets_with(sources.sheets, false))
+            }
             n => {
                 eprintln!("import-kicad: {n} sheets, placed on a root sheet as KiCad's Altium project import places them");
                 ("project".to_string(), foreign::combine_sheets(sources.sheets))
             }
         };
+        let mut content = content;
+        // The project's Schematic Setup, before the nets are traced: its unit notation names them (`U1.1`, r7 H5), and the rest is kept for the derived
+        // project (r7 M1, `eda_kicad::project_schematic`).
+        if args.input.to_ascii_lowercase().ends_with(".kicad_sch") {
+            if let Ok(pro_text) = std::fs::read_to_string(Path::new(&args.input).with_extension("kicad_pro")) {
+                eda_kicad::project_schematic::apply(&mut content.root.extras, &pro_text);
+            }
+        }
         for note in &content.notes {
             eprintln!("  schematic: {note}");
         }

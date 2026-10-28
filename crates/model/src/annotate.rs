@@ -79,17 +79,83 @@ pub fn is_unannotated(reference: &str) -> bool {
 
 /// `LIB_SYMBOL::LetterSubReference( unit, 'A' )`: 1 is `A`, 26 is `Z`, 27 is `AA`.
 pub fn unit_letters(unit: u32) -> String {
+    letter_sub_reference(unit, 'A' as u32)
+}
+
+/// `LIB_SYMBOL::LetterSubReference( aUnit, aInitialLetter )`: the letters of `unit` counted from `initial` (`'A'` gives `A` .. `Z`, `AA`; `'a'` gives `a` ..),
+/// a character past the 26 as KiCad's `wxChar( aInitialLetter + u )` makes it.
+pub fn letter_sub_reference(unit: u32, initial: u32) -> String {
     let mut unit = unit as i64;
     let mut suffix = String::new();
     loop {
         let u = (unit - 1).rem_euclid(26);
-        suffix.insert(0, char::from_u32('A' as u32 + u as u32).unwrap_or('?'));
+        suffix.insert(0, char::from_u32(initial + u as u32).unwrap_or('?'));
         unit = (unit - u) / 26;
         if unit <= 0 {
             break;
         }
     }
     suffix
+}
+
+/// Schematic Setup's "Symbol unit notation" (`SCHEMATIC_SETTINGS::m_SubpartIdSeparator`, `m_SubpartFirstId`): how a unit is named after its reference. KiCad's
+/// default is no separator and letters from `A` (`U1A`); a project may say `U1.1`, `U1-A`, `U1_a` and so on (`SchExtras::subpart_id_separator`,
+/// `SchExtras::subpart_first_id`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubpartIds {
+    /// The character code between the reference and the unit, 0 for none.
+    pub separator: u32,
+    /// The character code of unit 1: a digit names the units by number.
+    pub first_id: u32,
+}
+
+impl Default for SubpartIds {
+    fn default() -> Self {
+        SubpartIds { separator: 0, first_id: 'A' as u32 }
+    }
+}
+
+impl SubpartIds {
+    /// The settings a schematic's root extras hold (KiCad's defaults where they say nothing).
+    pub fn of(extras: &crate::sch_extras::SchExtras) -> SubpartIds {
+        let d = SubpartIds::default();
+        SubpartIds { separator: extras.subpart_id_separator.unwrap_or(d.separator), first_id: extras.subpart_first_id.unwrap_or(d.first_id) }
+    }
+
+    /// The settings of a design (its root sheet's extras).
+    pub fn of_design(design: &crate::ir::Design) -> SubpartIds {
+        design.schematic.as_ref().map_or_else(SubpartIds::default, |s| SubpartIds::of(&s.extras))
+    }
+
+    /// `SCHEMATIC_SETTINGS::SubReference( aUnit, aAddSeparator )` (KiCad 25ec2335, `schematic_settings.cpp`): nothing for a unit below 1; the separator when
+    /// there is one and `add_separator`; then the unit's number when the first id is a digit, else its letters from the first id.
+    pub fn sub_reference(&self, unit: u32, add_separator: bool) -> String {
+        let mut sub = String::new();
+        if unit < 1 {
+            return sub;
+        }
+        if self.separator != 0 && add_separator {
+            sub.extend(char::from_u32(self.separator));
+        }
+        if ('0' as u32..='9' as u32).contains(&self.first_id) {
+            sub.push_str(&unit.to_string());
+        } else {
+            sub.push_str(&letter_sub_reference(unit, self.first_id));
+        }
+        sub
+    }
+
+    /// The separator alone, as `SCH_SYMBOL::SubReference` puts it before a unit's display name (`if( sep != 0 && aAddSeparator ) subRef << wxChar( sep )`).
+    pub fn separator_text(&self, add_separator: bool) -> String {
+        if self.separator != 0 && add_separator { char::from_u32(self.separator).map(String::from).unwrap_or_default() } else { String::new() }
+    }
+
+    /// The two keys as KiCad's loader takes them from a project's `schematic` object (`PARAM<int>`: a value out of `0..=126`, or of `'1'..='z'`, is the default),
+    /// `None` for one the project does not have or that is the default.
+    pub fn from_project(schematic: &serde_json::Value) -> (Option<u32>, Option<u32>) {
+        let read = |key: &str, default: u32, min: u32, max: u32| schematic.get(key).and_then(|v| v.as_i64()).map(|v| if v < min as i64 || v > max as i64 { default } else { v as u32 }).filter(|v| *v != default);
+        (read("subpart_id_separator", 0, 0, 126), read("subpart_first_id", 'A' as u32, '1' as u32, 'z' as u32))
+    }
 }
 
 /// One placed symbol as the numbering sees it: `SCH_REFERENCE`.
@@ -552,6 +618,19 @@ pub fn check_annotation(mut list: Vec<Entry>) -> Vec<Problem> {
 
 #[cfg(test)]
 mod tests {
+
+    use super::{SubpartIds, letter_sub_reference};
+
+    /// 25ec2335 `SCHEMATIC_SETTINGS::SubReference`: the separator when asked for, the number for a digit first id, else letters from the first id (r7 H5).
+    #[test]
+    fn a_projects_unit_notation_names_the_units() {
+        assert_eq!(SubpartIds::default().sub_reference(2, true), "B");
+        let dotted = SubpartIds { separator: '.' as u32, first_id: '1' as u32 };
+        assert_eq!((dotted.sub_reference(1, true), dotted.sub_reference(12, true), dotted.sub_reference(3, false), dotted.sub_reference(0, true)), (".1".into(), ".12".into(), "3".into(), String::new()));
+        let lower = SubpartIds { separator: '-' as u32, first_id: 'a' as u32 };
+        assert_eq!((lower.sub_reference(1, true), lower.sub_reference(27, true)), ("-a".into(), "-aa".into()));
+        assert_eq!(letter_sub_reference(28, 'A' as u32), "AB");
+    }
     use super::*;
 
     fn e(key: usize, reference: &str, pos: (Nm, Nm)) -> Entry {

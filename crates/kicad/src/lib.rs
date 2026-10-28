@@ -53,7 +53,7 @@ mod page;
 mod import;
 mod fp_transform;
 mod import_items;
-pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_dimension_defaults, project_json_for_board, merge_project_net_classes, merge_project_predefined_sizes, merge_project_rule_severities, merge_project_setup_pages, mm_to_nm, parse_project_net_classes, sch_mm_to_nm, parse_rule_severities, ImportNotes};
+pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_dimension_defaults, project_json_for_board, merge_project_net_classes, merge_project_net_classes_for_schematic, parse_project_net_classes_for_schematic, merge_project_predefined_sizes, merge_project_rule_severities, merge_project_setup_pages, mm_to_nm, parse_project_net_classes, sch_mm_to_nm, parse_rule_severities, ImportNotes};
 
 mod custom_rules;
 pub use custom_rules::{merge_custom_rules, parse_custom_rules, rule_layer_matches};
@@ -103,6 +103,8 @@ pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, import_kicad_sch_t
 // The review workflow's share of the derived project: the waived DRC and ERC violations as KiCad's marker texts, and the per-check ERC severities.
 pub mod drc_exclusions;
 pub mod erc_exclusions;
+// An imported project's Schematic Setup (`.kicad_pro`'s `schematic` object): the unit notation and the rest kept for the derived project (r7 H5, M1).
+pub mod project_schematic;
 pub use pcb::effective_erc_severities;
 pub use pcb::exact_pattern;
 // The zone fills kicad-cli makes (Fill All Zones, B): read back from a refilled board and kept as derived data beside `design.json`.
@@ -974,6 +976,8 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
     if design.schematic.is_none() {
         return out;
     }
+    // the project's unit notation (`GetRef( &aPath, true )`'s `SubReference`, r7 H5)
+    let subpart = eda_model::annotate::SubpartIds::of_design(design);
     for e in eda_model::sheet_list::walk(design) {
         let Some(sch) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
         // the sheets from the root down: their uuids (`SCH_SHEET_PATH::Path`, the root's left out) and names (`PathHumanReadable`)
@@ -1002,7 +1006,7 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
                     let pin_type = resolve_pin_electrical_type(pin, resolved.as_ref());
                     let function = pin.name.as_deref().filter(|n| !n.is_empty() && *n != "~").map(|n| format!("{n}_{}", pin.number)).unwrap_or_default();
                     link.pins.entry(pin.number.clone()).or_insert((function, pin_type));
-                    link.units.entry(pin.number.clone()).or_insert_with(|| format!("{reference}{}", resolved.as_ref().map_or_else(|| eda_model::annotate::unit_letters(sym.unit), |r| r.sub_reference(sym.unit))));
+                    link.units.entry(pin.number.clone()).or_insert_with(|| format!("{reference}{}", resolved.as_ref().map_or_else(|| subpart.sub_reference(sym.unit, true), |r| r.sub_reference_in(sym.unit, &subpart, true))));
                 }
                 continue;
             }
@@ -1047,7 +1051,7 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
                     .filter(|pin| drawn(&pin.number))
                     .map(|pin| {
                         let unit = r.pin_by_number(&pin.number).map(|p| p.unit).filter(|u| *u > 0).unwrap_or(sym.unit);
-                        (pin.number.clone(), format!("{reference}{}", r.sub_reference(unit)))
+                        (pin.number.clone(), format!("{reference}{}", r.sub_reference_in(unit, &subpart, true)))
                     })
                     .collect(),
                 None => BTreeMap::new(),

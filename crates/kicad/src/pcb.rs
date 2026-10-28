@@ -949,6 +949,21 @@ const ERC_EXCLUSION_RECORDS_SCHEMA: u32 = 1;
 ///   reports each as excluded and leaves it out of a report that does not ask for exclusions.
 pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String {
     let mut project: serde_json::Value = serde_json::from_str(&export_kicad_pro(model)).unwrap_or_else(|_| serde_json::json!({}));
+    // An imported project's Schematic Setup as KiCad wrote it (`SchExtras::project_schematic`, r7 M1): the derived project's `schematic` object starts from it, and
+    // the studio's own settings are written over it below.
+    if let Some(kept) = design.schematic.as_ref().and_then(|s| s.extras.project_schematic.as_ref()) {
+        project["schematic"] = serde_json::Value::Object(kept.clone());
+    }
+    // Schematic Setup > Annotation's unit notation (`SCHEMATIC_SETTINGS::m_SubpartIdSeparator`, `m_SubpartFirstId`), which every `U1.1`-style reference and net
+    // name of the design is made by (r7 H5).
+    if let Some(sch) = design.schematic.as_ref() {
+        if let Some(sep) = sch.extras.subpart_id_separator {
+            project["schematic"]["subpart_id_separator"] = serde_json::json!(sep);
+        }
+        if let Some(first) = sch.extras.subpart_first_id {
+            project["schematic"]["subpart_first_id"] = serde_json::json!(first);
+        }
+    }
     let mut erc = serde_json::json!({ "rule_severities": effective_erc_severities(design) });
     if let Some(m) = custom_erc_pin_map(design) {
         erc["pin_map"] = serde_json::json!(m);

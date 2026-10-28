@@ -175,6 +175,12 @@ pub(crate) fn top_level_siblings(import: &ForeignImport, first: &SheetFile) -> V
 /// has no parent to take them to. `parts` are the sheets' names and what each was converted to. A sheet that another sheet of the project places is not placed again (the loader
 /// looks for "an existing screen" of the same name), and the screens inside each file are filed under names that cannot meet another file's.
 pub(crate) fn combine_sheets(parts: Vec<(String, SheetFile)>) -> SheetFile {
+    combine_sheets_with(parts, true)
+}
+
+/// [`combine_sheets`], with `hier_to_global` false for a KiCad project's own top-level sheets (`schematic.top_level_sheets`, r7 H2): KiCad reads their hierarchical
+/// labels as they are (only `SCH_IO_ALTIUM` turns them into global ones, in the file it writes), so they stay hierarchical and join nothing above.
+pub(crate) fn combine_sheets_with(parts: Vec<(String, SheetFile)>, hier_to_global: bool) -> SheetFile {
     // 1000 mil, in nanometres, and the default size of a sheet symbol (`MIN_SHEET_WIDTH`, `MIN_SHEET_HEIGHT`: 500 and 150 mil)
     const GRID: Nm = Nm::new(25_400_000);
     const SHEET: (Nm, Nm) = (Nm::new(12_700_000), Nm::new(3_810_000));
@@ -203,7 +209,7 @@ pub(crate) fn combine_sheets(parts: Vec<(String, SheetFile)>) -> SheetFile {
         }
         for l in &mut top.labels {
             // `m_rootSheet` takes hierarchical labels of a top-level sheet for global ones
-            if let LabelKind::Hierarchical { shape } = l.kind.clone() {
+            if let (true, LabelKind::Hierarchical { shape }) = (hier_to_global, l.kind.clone()) {
                 l.kind = LabelKind::Global { shape };
             }
         }

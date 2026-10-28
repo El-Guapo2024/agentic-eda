@@ -2081,3 +2081,107 @@ fn a_library_symbols_user_fields_are_written_in_the_cache() {
     }
     assert!(has_fields, "the cache has the library's user fields");
 }
+
+// ---------------------------------------------------------------------------------------- round 7: the project file of a schematic-only import
+
+/// The QA file `rel` copied with its folder, its `.kicad_pro` replaced by `pro` when given and `items` put in its root file before the file's closing paren,
+/// then brought in with `eda import-kicad`: the board folder and the copied root. `None` without `KICAD_SRC_DIR`.
+fn qa_variant(rel: &str, name: &str, pro: Option<&str>, items: &str) -> Option<(PathBuf, PathBuf)> {
+    let src = std::env::var_os("KICAD_SRC_DIR").map(PathBuf::from)?.join("qa/data/eeschema").join(rel);
+    let work = scratch(name);
+    copy_tree(src.parent().unwrap(), &work.join("src"));
+    let root = work.join("src").join(src.file_name().unwrap());
+    if let Some(pro) = pro {
+        std::fs::write(root.with_extension("kicad_pro"), pro).unwrap();
+    }
+    if !items.is_empty() {
+        let text = std::fs::read_to_string(&root).unwrap();
+        let end = text.trim_end().rfind(')').unwrap();
+        std::fs::write(&root, format!("{}{items}\n{}", &text[..end], &text[end..])).unwrap();
+    }
+    let dir = work.join("board");
+    crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    Some((dir, root))
+}
+
+/// The derived project the studio's kicad-cli runs read (`<board>/.kicad/*.kicad_pro`), after an ERC wrote it.
+fn derived_project(dir: &Path) -> serde_json::Value {
+    let pro = std::fs::read_dir(dir.join(".kicad")).unwrap().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "kicad_pro")).expect("a derived project");
+    serde_json::from_str(&std::fs::read_to_string(pro).unwrap()).unwrap()
+}
+
+/// r7 H1: a schematic-only import reads the project's net classes, as kicad-cli reads them for the schematic (`NET_SETTINGS` of the `.kicad_pro`): QA
+/// `netlists/issue14494` defines `net_01`, `net_02` and `usb_diff`, and a net class flag of its sub-sheet names `net_02`, which no pattern assigns. The model
+/// has every class, and kicad-cli finds the same `undefined_netclass` (none) in the derived files as in the original.
+#[test]
+fn a_schematic_only_import_keeps_the_projects_net_classes() {
+    let Some((dir, root)) = qa_variant("netlists/issue14494/issue14494.kicad_sch", "r7_net_classes", None, "") else { return };
+    let (_, _, model) = load(&dir).unwrap();
+    let names: Vec<&str> = model.board.net_classes.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["net_01", "net_02", "usb_diff"]);
+    assert_eq!(model.board.net_classes[0].clearance, Some(mm(0.1)), "the class's own numbers");
+    assert!(model.board.net_classes.iter().all(|c| c.nets.is_empty()), "the stored assignments are what the labels say again, so none is a pattern");
+    if kicad_cli_ready() {
+        let derived = erc_kinds(&dir);
+        let classes: Vec<String> = derived_project(&dir)["net_settings"]["classes"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap().to_string()).collect();
+        assert_eq!(classes, ["Default", "net_01", "net_02", "usb_diff"]);
+        let original = kicad_cli_erc_counts(&root).unwrap();
+        assert_eq!(derived.get("undefined_netclass"), original.get("undefined_netclass"), "{derived:?} against {original:?}");
+    }
+}
+
+/// r7 H2: every top-level sheet a KiCad 10 project lists (`schematic.top_level_sheets`) is read, as `OpenProjectFiles` loads them: QA `issue23403`'s two
+/// top-level sheets each place `shared1.kicad_sch`, so C1 is placed twice and kicad-cli makes four nets of the two pins, of the original and of the derived file.
+#[test]
+fn every_top_level_sheet_of_the_project_is_imported() {
+    let Some((dir, root)) = qa_variant("issue23403/issue23403.kicad_sch", "r7_top_level_sheets", None, "") else { return };
+    let (_, design, _) = load(&dir).unwrap();
+    let names: Vec<&str> = design.schematic.as_ref().unwrap().sheets.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Root", "top_level_sheet_1"], "the sheets under the names the project gives them");
+    let c1 = eda_model::sheet_list::walk(&design).iter().filter(|e| eda_model::sheet_list::screen_of(&design, &e.path).is_some_and(|s| s.symbols.iter().any(|x| x.id.starts_with("C1")))).count();
+    assert_eq!(c1, 2, "C1 on both paths");
+    assert_eq!(design.nets.iter().flatten().filter(|n| n.name.starts_with("unconnected-(C1")).count(), 4, "{:?}", design.nets);
+    if kicad_cli_ready() {
+        assert_eq!(kicad_net_groups(&dir), kicad_cli_net_groups(&root), "kicad-cli reads the derived file's nets as the original's");
+    }
+}
+
+/// r7 H6: a schematic-only import keeps the project's text variables (`PROJECT::GetTextVars`): QA `issue1768` with `Version` in its project and a text
+/// `Rev ${Version}` -- kicad-cli finds no `unresolved_variable` in the derived files, as in the original.
+#[test]
+fn a_schematic_only_import_keeps_the_projects_text_variables() {
+    let text = "  (text \"Rev ${Version}\" (exclude_from_sim no) (at 50 50 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid 7a7a7a7a-0000-4000-8000-000000000001))";
+    let Some((dir, root)) = qa_variant("issue1768/issue1768.kicad_sch", "r7_text_vars", Some(r#"{ "text_variables": { "Version": "V1.2.0" } }"#), text) else { return };
+    let vars = eda_kicad::library_table::read_project_variables(&dir);
+    assert_eq!(vars.get("Version").map(String::as_str), Some("V1.2.0"));
+    if kicad_cli_ready() {
+        let derived = erc_kinds(&dir);
+        assert_eq!(derived_project(&dir)["text_variables"]["Version"], "V1.2.0");
+        let original = kicad_cli_erc_counts(&root).unwrap();
+        assert_eq!((derived.get("unresolved_variable"), original.get("unresolved_variable")), (None, None), "{derived:?}");
+    }
+}
+
+/// r7 H5, M1: the project's unit notation names the units (25ec2335 `SCHEMATIC_SETTINGS::SubReference`: QA `issue1768` with `subpart_id_separator` '.' and
+/// `subpart_first_id` '1' names VD1's units `VD1.1` ..), so the nets are kicad-cli's (`unconnected-(VD1.1-K-Pad1)`); the derived project carries the two
+/// keys and the rest of the project's Schematic Setup (`annotate_start_num`), and kicad-cli reads the derived files' names as the original's.
+#[test]
+fn the_projects_unit_naming_names_the_nets() {
+    let pro = r#"{ "schematic": { "meta": { "version": 1 }, "subpart_id_separator": 46, "subpart_first_id": 49, "annotate_start_num": 10, "drawing": { "label_size_ratio": 0.3 } } }"#;
+    let Some((dir, root)) = qa_variant("issue1768/issue1768.kicad_sch", "r7_subpart", Some(pro), "") else { return };
+    let (_, design, model) = load(&dir).unwrap();
+    let names: Vec<&str> = design.nets.iter().flatten().map(|n| n.name.as_str()).collect();
+    assert!(names.contains(&"unconnected-(VD1.1-K-Pad1)"), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("(VD1A-")), "{names:?}");
+    let pro: serde_json::Value = serde_json::from_str(&eda_kicad::export_kicad_pro_for(&design, &model)).unwrap();
+    assert_eq!((pro["schematic"]["subpart_id_separator"].as_u64(), pro["schematic"]["subpart_first_id"].as_u64()), (Some(46), Some(49)));
+    assert_eq!(pro["schematic"]["annotate_start_num"].as_u64(), Some(10));
+    assert_eq!(pro["schematic"]["drawing"]["label_size_ratio"].as_f64(), Some(0.3));
+    if kicad_cli_ready() {
+        let original = kicad_cli_named_nets(&root);
+        let _ = erc_kinds(&dir);
+        let derived_root = std::fs::read_dir(dir.join(".kicad")).unwrap().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "kicad_sch") && !p.file_name().unwrap().to_string_lossy().contains("__")).unwrap();
+        let derived = kicad_cli_named_nets(&derived_root);
+        assert_eq!(derived.keys().collect::<Vec<_>>(), original.keys().collect::<Vec<_>>(), "kicad-cli names the derived file's nets as the original's");
+    }
+}

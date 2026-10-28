@@ -186,6 +186,24 @@ pub struct SchExtras {
     /// `writes_nothing`, not in `is_empty`.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sim_workbook: Option<String>,
+    /// Schematic Setup > Annotation's "Symbol unit notation" (`SCHEMATIC_SETTINGS::m_SubpartIdSeparator`, the `.kicad_pro`'s `schematic.subpart_id_separator`): the
+    /// character code put between a reference and its unit (`U1.A`), 0 for none. `None`: KiCad's default, 0. Read from an imported project as KiCad's loader reads it
+    /// (`PARAM<int>( .., 0, 0, 126 )`: out of range is the default) and written back to the derived project; [`crate::annotate::SubpartIds`] names the units by it.
+    /// Only the root sheet's extras hold it. Additive. (Counts in `writes_nothing`, not in `is_empty`: it is a project setting, no part of the drawing.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subpart_id_separator: Option<u32>,
+    /// The same setting's first unit id (`SCHEMATIC_SETTINGS::m_SubpartFirstId`, `schematic.subpart_first_id`): the character code of unit 1, `'A'` (65) by default,
+    /// `'1'` for numbered units (`PARAM<int>( .., 'A', '1', 'z' )`). `None`: the default. Only the root sheet's extras hold it. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subpart_first_id: Option<u32>,
+    /// The rest of an imported project's Schematic Setup (`SCHEMATIC_SETTINGS`' `m_params`, the `.kicad_pro`'s `schematic` object), as KiCad wrote it: formatting
+    /// (`drawing.*`: text sizes, label and offset ratios, pin symbol size, junction size), annotation (`annotate_start_num`, `annotation.*`, `used_designators`), the
+    /// BOM and netlist settings, the simulator's `spice_*` keys -- every key the studio has no setting of its own for. The derived project starts its `schematic`
+    /// object from this and writes the studio's own settings over it (`eda_kicad::pcb::export_kicad_pro_for`), so kicad-cli reads the project as KiCad saved it.
+    /// The keys the studio holds itself, and those naming files of the original folder, are left out on import (`eda_kicad::project_schematic::kept`). `None`: no
+    /// project was imported. Only the root sheet's extras hold it. Additive. (Counts in `writes_nothing`.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_schematic: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// `NGSPICE_SETTINGS` (`eeschema/sim/spice_settings.cpp`), the `.kicad_pro`'s `schematic.ngspice` object: `workbook_filename` (relative to the project), `fix_include_paths`
@@ -511,7 +529,7 @@ impl SchExtras {
     /// Whether design.json has nothing to say for `extras` (it is then not written): [`is_empty`](Self::is_empty), no table of ERC severities and no connection grid. The
     /// severities and the grid are no part of the schematic KiCad's files draw -- they go to the derived project -- so they are not in `is_empty`.
     pub fn writes_nothing(&self) -> bool {
-        self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none() && self.intersheet_refs.is_none() && self.ngspice.is_none() && self.sim_workbook.is_none()
+        self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none() && self.intersheet_refs.is_none() && self.ngspice.is_none() && self.sim_workbook.is_none() && self.subpart_id_separator.is_none() && self.subpart_first_id.is_none() && self.project_schematic.is_none()
     }
 
     /// The net class a label's fields give its net (`SCH_LABEL_BASE`'s `Netclass` field; the first that is not empty), if any.

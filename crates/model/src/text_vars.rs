@@ -736,6 +736,8 @@ pub struct SchSymbol {
     /// The units' display names of the symbol's library symbol (`LIB_SYMBOL::GetUnitDisplayNames`), which [`SchSymbol::unit_letter_of`] gives in place of
     /// a letter (KiCad 25ec2335 `SCH_SYMBOL::SubReference`, r6 B6-H1).
     pub unit_names: std::collections::BTreeMap<u32, String>,
+    /// The project's unit notation (`SCHEMATIC_SETTINGS::m_SubpartIdSeparator`, `m_SubpartFirstId`), which [`SchSymbol::unit_letter_of`] names a unit by (r7 H5).
+    pub subpart: crate::annotate::SubpartIds,
 }
 
 /// One sheet of the path from the root down to the sheet in view (`SCH_SHEET_PATH`): the placement's fields and the title block of the screen it shows.
@@ -902,7 +904,9 @@ impl SchSheet {
 }
 
 impl SchSymbol {
-    /// `SubReference(unit)` for another unit than this symbol's own: `A` for 1, `B` for 2 ... (`LIB_SYMBOL::LetterSubReference`).
+    /// `SubReference( unit, false )` for another unit than this symbol's own, as `${REFERENCE(pin)}` and `${UNIT(pin)}` ask for it (KiCad 25ec2335
+    /// `SCH_SYMBOL::ResolveTextVar`: `SubReference( pinUnit, false )`): the unit's display name, else `A` for 1, `B` for 2 ... in the project's notation
+    /// (`SCHEMATIC_SETTINGS::SubReference`), with no separator.
     pub fn unit_letter_of(&self, unit: u32) -> String {
         if unit == 0 {
             return String::new();
@@ -910,16 +914,7 @@ impl SchSymbol {
         if let Some(name) = self.unit_names.get(&unit) {
             return name.clone();
         }
-        let mut n = unit - 1;
-        let mut s = String::new();
-        loop {
-            s.insert(0, (b'A' + (n % 26) as u8) as char);
-            if n < 26 {
-                break;
-            }
-            n = n / 26 - 1;
-        }
-        s
+        self.subpart.sub_reference(unit, false)
     }
 }
 

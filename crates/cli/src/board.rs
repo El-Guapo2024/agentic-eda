@@ -538,6 +538,8 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
     let mut common_pins: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // the pins of a symbol excluded from the board make no claim to a net's name (r2 A-N9)
     let mut quiet_pins: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // the project's unit notation (`SCHEMATIC_SETTINGS::SubReference`: `U1.1` where it says so, r7 H5)
+    let subpart = eda_model::annotate::SubpartIds::of_design(design);
     for e in eda_model::sheet_list::walk(design) {
         let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
         // ... nor do those of a symbol whose reference starts with `#` (`conn_facts.cpp`: `text.canDrive &= symbol->DoNetList() && !symbol->GetExcludedFromBoard(
@@ -561,8 +563,8 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
                 if !p.name.is_empty() {
                     pin_names.insert(key.clone(), p.name.clone());
                 }
-                // (`SCH_SYMBOL::SubReference`: the unit's display name when it has one, r6 B6-H1)
-                pin_units.entry(key).or_insert_with(|| format!("{reference}{}", lib.sub_reference(unit)));
+                // (`SCH_SYMBOL::SubReference`: the unit's display name when it has one, r6 B6-H1, in the project's notation)
+                pin_units.entry(key).or_insert_with(|| format!("{reference}{}", lib.sub_reference_in(unit, &subpart, true)));
                 if p.unit == 0 {
                     common_pins.insert(format!("{reference}.{}", p.number));
                 }

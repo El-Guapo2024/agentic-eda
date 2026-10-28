@@ -161,7 +161,7 @@ pub(crate) struct SchShown {
     by_key: HashMap<String, usize>,
 }
 
-fn symbol_of(sch: &SchematicSection, model: &ConstraintModel, sym: &eda_model::ir::SymbolInstance) -> SchSymbol {
+fn symbol_of(sch: &SchematicSection, model: &ConstraintModel, sym: &eda_model::ir::SymbolInstance, subpart: &eda_model::annotate::SubpartIds) -> SchSymbol {
     let part = model.part(&sym.id);
     let lib = part.and_then(|p| model.real_symbol_of_instance(sch, sym, p));
     let units = lib.as_ref().map_or(1, |l| l.unit_count);
@@ -169,8 +169,12 @@ fn symbol_of(sch: &SchematicSection, model: &ConstraintModel, sym: &eda_model::i
     for (name, text) in sch.user_fields.get(&sym.id).into_iter().flatten() {
         fields.push((name.clone(), text.clone()));
     }
-    let probe = SchSymbol { unit_names: lib.as_ref().map(|l| l.connectivity.unit_names.clone()).unwrap_or_default(), ..Default::default() };
-    let letter = probe.unit_letter_of(sym.unit);
+    let probe = SchSymbol { unit_names: lib.as_ref().map(|l| l.connectivity.unit_names.clone()).unwrap_or_default(), subpart: *subpart, ..Default::default() };
+    // `SubReference( unit )` (`aAddSeparator` true): `${UNIT}` and `GetRef( &aPath, true )` have the project's separator (r7 H5)
+    let letter = match lib.as_ref() {
+        Some(l) => l.sub_reference_in(sym.unit, subpart, true),
+        None => subpart.sub_reference(sym.unit, true),
+    };
     let lib_id = if sym.lib_id.is_empty() { format!("eda:{}", sym.id) } else { sym.lib_id.clone() };
     let (nickname, item) = lib_id.split_once(':').unwrap_or(("", lib_id.as_str()));
     let footprint = fields.iter().find(|(n, _)| n == "Footprint").map(|(_, t)| t.clone()).unwrap_or_default();
@@ -203,6 +207,7 @@ fn symbol_of(sch: &SchematicSection, model: &ConstraintModel, sym: &eda_model::i
         exclude_from_sim: sym.exclude_from_sim,
         pins,
         unit_names: probe.unit_names,
+        subpart: *subpart,
     }
 }
 
@@ -245,10 +250,11 @@ impl SchShown {
         if let Some(c) = design.sheet_contents.as_ref() {
             screens.extend(c.values());
         }
+        let subpart = eda_model::annotate::SubpartIds::of_design(design);
         for sch in screens {
             for sym in &sch.symbols {
                 by_key.insert(eda_model::ir::field_key(&sym.id, sym.unit), symbols.len());
-                symbols.push(symbol_of(sch, model, sym));
+                symbols.push(symbol_of(sch, model, sym, &subpart));
             }
         }
         let sheet_path = std::iter::once("/".to_string()).chain(breadcrumb.iter().map(|(_, n)| format!("{n}/"))).collect::<String>();
