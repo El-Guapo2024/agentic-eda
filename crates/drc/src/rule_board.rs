@@ -333,7 +333,7 @@ impl<'a> RuleBoard<'a> {
         // `FOOTPRINT::GetOrientationDegrees`: KiCad's angle, counter-clockwise in (-180, 180], not the model's clockwise `rot` (R6-D1).
         it.set("Orientation", Prop::Double(crate::board::kicad_footprint_orientation(self.design, fp) as f64 / 1000.0));
             it.set("Layer", Prop::Layer(side_layer.to_string()));
-            it.set("Locked", Prop::Bool(self.is_locked(&fp.id)));
+            it.set("Locked", Prop::Bool(self.own_lock(&fp.id)));
             if let Some(e) = extra {
                 if let Some(c) = e.clearance {
                     it.overrides.clearance = Some((c, format!("footprint {}", fp.id)));
@@ -494,9 +494,33 @@ impl<'a> RuleBoard<'a> {
 
     // ---------------------------------------------------------------------------------------------------------------------------------- tracks
 
-    /// `BOARD_ITEM::IsLocked`, the "Locked" property of a footprint, track or via (R6-D7): the item is in the design's locked ids.
-    fn is_locked(&self, id: &str) -> bool {
+    /// The item's own lock (`m_isLocked`): its id is in the design's locked ids. `FOOTPRINT::IsLocked` is this alone (`footprint.h`).
+    fn own_lock(&self, id: &str) -> bool {
         self.design.drawings.as_ref().is_some_and(|d| d.locked_ids.iter().any(|l| l == id))
+    }
+
+    /// `BOARD_ITEM::IsLocked`, the "Locked" property of a track, via, zone, shape or text (R6-D7, R7-D1): its own lock, or its group's --
+    ///
+    /// ```text
+    /// if( EDA_GROUP* group = GetParentGroup() ) { if( group->AsEdaItem()->IsLocked() ) return true; }
+    /// .. return m_isLocked;
+    /// ```
+    ///
+    /// and a group's `IsLocked` is the same, so a lock anywhere up the nesting counts.
+    fn is_locked(&self, id: &str) -> bool {
+        let groups = self.design.drawings.as_ref().map(|d| d.groups.as_slice()).unwrap_or_default();
+        let mut at = id.to_string();
+        // the nesting never loops (`Group::member_ids`), but a damaged file is not trusted: at most one step per group
+        for _ in 0..=groups.len() {
+            if self.own_lock(&at) {
+                return true;
+            }
+            match groups.iter().find(|g| g.member_ids.iter().any(|m| *m == at)) {
+                Some(g) => at = g.id.clone(),
+                None => return false,
+            }
+        }
+        false
     }
 
     fn track_item(&self, seg_idx: usize) -> RuleItem {
@@ -603,6 +627,7 @@ impl<'a> RuleBoard<'a> {
         it.set("Name", Prop::Str(z.name.clone()));
         it.set("Layer", Prop::Layer(z.layer.clone()));
         it.set("Priority", Prop::Int(z.priority as i64));
+        it.set("Locked", Prop::Bool(self.is_locked(&z.id)));
         if z.is_rule_area {
             it.description = if z.name.is_empty() { format!("Rule Area on {layer_name}") } else { format!("Rule area '{}' on {layer_name}", z.name) };
             return it;
@@ -652,6 +677,7 @@ impl<'a> RuleBoard<'a> {
         it.position = s.points().first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
         it.set("Layer", Prop::Layer(layer.clone()));
         it.set("Line Width", Prop::Int(s.stroke_width().get()));
+        it.set("Locked", Prop::Bool(self.is_locked(s.id())));
         let name = match s {
             eda_model::ir::Shape::Segment { .. } => "Line",
             eda_model::ir::Shape::Rect { .. } => "Rectangle",
@@ -678,6 +704,7 @@ impl<'a> RuleBoard<'a> {
         it.set("Text Thickness", Prop::Int(t.stroke_width.get()));
         it.set("Position X", Prop::Int(t.at.x.get()));
         it.set("Position Y", Prop::Int(t.at.y.get()));
+        it.set("Locked", Prop::Bool(self.is_locked(&t.id)));
         it.description = format!("PCB text '{}' on {}", t.content, self.rules.layer_setup.display_name(&t.layer));
         it
     }
@@ -1092,6 +1119,28 @@ mod footprint_facts_tests {
         assert!(!holds(&rb, "A.Locked", &rb.footprint_item("R6").unwrap()));
         let pad = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == "R5")).unwrap();
         assert!(!holds(&rb, "A.Locked", &pad), "a pad has no Locked property");
+    }
+
+    /// R7-D1 (`BOARD_ITEM::IsLocked`: `if( EDA_GROUP* group = GetParentGroup() ) { if( group->AsEdaItem()->IsLocked() ) return true; }`, and the "Locked"
+    /// property registered on `BOARD_ITEM`): a track in a locked group (nested one deep) reads as locked, and a locked zone, shape and text do too; a
+    /// footprint in a locked group does not (`FOOTPRINT::IsLocked` is its own flag).
+    #[test]
+    fn a_member_of_a_locked_group_and_a_locked_zone_are_locked() {
+        let (design, model) = hv_board(|d, _| {
+            let track = |id: &str, y: f64| eda_model::ir::Track { id: id.into(), net: "HV".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: mm(1.0), y: mm(y) }, Point { x: mm(5.0), y: mm(y) }], arc_mid_offset: None };
+            let zone: eda_model::ir::Zone = serde_json::from_str(r#"{ "id": "z1", "net": "HV", "layer": "F.Cu", "outline": [{ "x": 0, "y": 0 }, { "x": 3000000, "y": 0 }, { "x": 3000000, "y": 3000000 }] }"#).unwrap();
+            d.routing = Some(eda_model::ir::RoutingSection { tracks: vec![track("t1", 1.0), track("t2", 2.0)], vias: vec![], zones: vec![zone], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() });
+            let group = |id: &str, members: &[&str]| eda_model::ir::Group { id: id.into(), name: String::new(), member_ids: members.iter().map(|m| m.to_string()).collect(), design_block: String::new() };
+            d.drawings = Some(eda_model::ir::DrawingsSection { groups: vec![group("G", &["inner", "R6"]), group("inner", &["t1"])], locked_ids: vec!["G".into(), "z1".into()], ..Default::default() });
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let seg = |id: &str| (0..board.tracks.len()).map(|i| rb.segment_item_at(i)).find(|t| t.id.split('#').next() == Some(id)).unwrap();
+        assert!(holds(&rb, "A.Locked", &seg("t1")), "a member of a group inside a locked group");
+        assert!(!holds(&rb, "A.Locked", &seg("t2")));
+        let zones = &design.routing.as_ref().unwrap().zones;
+        assert!(holds(&rb, "A.Locked", &rb.zone_item_of(&zones[0])), "a locked zone");
+        assert!(!holds(&rb, "A.Locked", &rb.footprint_item("R6").unwrap()), "FOOTPRINT::IsLocked is its own flag");
     }
 
     /// R6-D8 (`SyncDynamicComponentClassAssignments`: `if( success ) m_assignmentRules = std::move( rules );`): one row with no class, or a `"` in a value, gives
