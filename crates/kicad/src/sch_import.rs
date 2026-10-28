@@ -614,6 +614,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut label_uuid: Vec<Option<String>> = Vec::new();
     // each label's spin and look, parallel to `labels`: the file's own, not an inference from the wires
     let mut label_geometry: Vec<(eda_model::sch_extras::LabelSpin, crate::sch_extras_io::EffectsLook)> = Vec::new();
+    // each label's font colour, parallel to `labels` (`SchExtras::text_attrs`, r7 M5)
+    let mut label_colors: Vec<Option<eda_model::sch_extras::SchColor>> = Vec::new();
     // each label's own fields (`parseSchText`'s properties), parallel to `labels`
     let mut label_fields_read: Vec<Vec<eda_model::sch_extras::LabelField>> = Vec::new();
     for (tag, global) in [("label", None), ("global_label", Some(true)), ("hierarchical_label", Some(false))] {
@@ -642,6 +644,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             label_locked.push(is_locked(l));
             label_uuid.push(uuid_of(l));
             label_geometry.push((spin, look));
+            label_colors.push(crate::sch_extras_io::read_text_attrs(l).color);
             label_fields_read.push(crate::label_fields::read_label_fields(l, tag == "global_label"));
         }
     }
@@ -654,6 +657,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut text_uuid: Vec<Option<String>> = Vec::new();
     // each text's justification, parallel to `texts` (`SchExtras::text_justify`)
     let mut text_lie: Vec<eda_model::sch_extras::SchTextJustify> = Vec::new();
+    // each text's exclude from simulation, hyperlink, bold, italic and colour, parallel to `texts` (`SchExtras::text_attrs`, r7 H4)
+    let mut text_attrs: Vec<eda_model::sch_extras::TextAttrs> = Vec::new();
     for t in sexpr::find_all(root, "text") {
         let Some(content) = sexpr::txt(t, 1).map(String::from) else { continue };
         let Some(at) = sexpr::find(t, "at") else { continue };
@@ -665,6 +670,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         text_locked.push(is_locked(t));
         text_uuid.push(uuid_of(t));
         text_lie.push(justify);
+        text_attrs.push(crate::sch_extras_io::read_text_attrs(t));
     }
 
     let mut sheets: Vec<SheetInstance> = Vec::new();
@@ -765,6 +771,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         let graphics = crate::sch_extras_io::read_graphics(root);
         let graphic_locked: Vec<bool> = graphics.iter().map(|g| g.locked).collect();
         let graphic_uuid: Vec<Option<String>> = graphics.iter().map(|g| g.uuid.clone()).collect();
+        let graphic_attrs: Vec<eda_model::sch_extras::TextAttrs> = graphics.iter().map(|g| g.attrs.clone()).collect();
         sch.extras.graphics = graphics.into_iter().map(|g| g.graphic).collect();
         // Its tables (`SCH_TABLE`), with what a lock and a group need of each.
         let tables = crate::sch_table_io::read_all(root);
@@ -822,6 +829,14 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             if !id.is_empty() && !fields.is_empty() {
                 sch.extras.label_fields.insert(id, fields);
             }
+        }
+        // A text's, a text box's, a label's and a directive label's attributes beyond what the item keeps (`SchExtras::text_attrs`, r7 H4, M5); the default keeps
+        // no entry.
+        let attrs = sch.texts.iter().map(|t| t.id.clone()).zip(text_attrs)
+            .chain(sch.extras.graphics.iter().map(|g| g.id.clone()).zip(graphic_attrs))
+            .chain(sch.labels.iter().map(|l| l.id.clone()).zip(label_colors.into_iter().map(|color| eda_model::sch_extras::TextAttrs { color, ..Default::default() })));
+        for (id, a) in attrs.filter(|(id, a)| !id.is_empty() && !a.is_default()).collect::<Vec<_>>() {
+            sch.extras.text_attrs.insert(id, a);
         }
         // A text's justification, as the file has it (`SchExtras::text_justify`); the default keeps no entry.
         for (id, justify) in sch.texts.iter().map(|t| t.id.clone()).zip(text_lie) {

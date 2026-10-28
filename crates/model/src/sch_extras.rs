@@ -161,6 +161,12 @@ pub struct SchExtras {
     /// stored. The writer says it in `(effects ... (justify ...))` and the importer reads it back, so KiCad draws the text where the studio does.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub text_justify: BTreeMap<String, SchTextJustify>,
+    /// What a text item's `EDA_TEXT` and `SCH_ITEM` hold that the item itself does not, by item id -- a free text (`SchematicText`), a text box, a label, a
+    /// directive label: "exclude from simulation" (`SCH_TEXT` and `SCH_TEXTBOX`'s `m_excludedFromSim`, which the SPICE netlister skips a directive by), the
+    /// hyperlink (`m_hyperlink`, `(href ..)`), a free text's bold and italic and the font colour (`EDA_TEXT::GetTextColor`, `(color ..)` in `(font ..)`).
+    /// Read from a KiCad file and written back as `saveText` / `saveTextBox` write them (r7 H4, M5). An item with no entry has KiCad's defaults. Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub text_attrs: BTreeMap<String, TextAttrs>,
     /// The tables of this sheet (`SCH_TABLE`, written as `(table ..)`), in the order of the file: the cells' text, sizes and strokes, the grid -- see [`crate::table::Table`]. A table is
     /// selected, moved, locked and grouped like any item of the sheet (its id is `tbl_..`), and a click picks one of its cells. Additive: empty and not written for a sheet with none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -378,6 +384,29 @@ fn yes() -> bool {
 }
 fn is_true(b: &bool) -> bool {
     *b
+}
+
+/// See [`SchExtras::text_attrs`]. `bold` and `italic` are a free text's (a label keeps its own in [`LabelLook`], a text box in its shape).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextAttrs {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude_from_sim: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub italic: bool,
+    /// The font colour; `None` is `COLOR4D::UNSPECIFIED`, the layer's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<SchColor>,
+}
+
+impl TextAttrs {
+    pub fn is_default(&self) -> bool {
+        *self == TextAttrs::default()
+    }
 }
 
 /// One of a label's own fields (`SCH_FIELD` of an `SCH_LABEL_BASE`): its name as stored (`Netclass` for the net class), its text, whether it is shown and whether it
@@ -649,6 +678,7 @@ impl SchExtras {
             && self.pin_swaps.is_empty()
             && self.pin_alternates.is_empty()
             && self.text_justify.is_empty()
+            && self.text_attrs.is_empty()
             && self.tables.is_empty()
             && self.groups.is_empty()
             && self.embedded.is_empty()
@@ -764,6 +794,10 @@ pub enum SchFill {
     Outline,
     Background,
     Color,
+    /// `FILL_T::HATCH`, `REVERSE_HATCH`, `CROSS_HATCH` (`(fill (type hatch))` ..): lines across the shape in the stroke's colour (r7 M5).
+    Hatch,
+    ReverseHatch,
+    CrossHatch,
 }
 
 impl SchFill {
@@ -778,6 +812,9 @@ impl SchFill {
             SchFill::Outline => "outline",
             SchFill::Background => "background",
             SchFill::Color => "color",
+            SchFill::Hatch => "hatch",
+            SchFill::ReverseHatch => "reverse_hatch",
+            SchFill::CrossHatch => "cross_hatch",
         }
     }
 
@@ -786,6 +823,9 @@ impl SchFill {
             "outline" => SchFill::Outline,
             "background" => SchFill::Background,
             "color" => SchFill::Color,
+            "hatch" => SchFill::Hatch,
+            "reverse_hatch" => SchFill::ReverseHatch,
+            "cross_hatch" => SchFill::CrossHatch,
             _ => SchFill::None,
         }
     }

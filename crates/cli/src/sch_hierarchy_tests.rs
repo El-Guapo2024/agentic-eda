@@ -2185,3 +2185,26 @@ fn the_projects_unit_naming_names_the_nets() {
         assert_eq!(derived.keys().collect::<Vec<_>>(), original.keys().collect::<Vec<_>>(), "kicad-cli names the derived file's nets as the original's");
     }
 }
+
+/// r7 H4 (slow): a text excluded from simulation stays so in the derived file (`saveText`'s `exclude_from_sim`), so kicad-cli's SPICE netlist of QA
+/// `spice_netlists/rlc` with an excluded `.param` directive has the directive neither for the original nor for the derived files.
+#[test]
+fn an_excluded_spice_directive_stays_out_of_the_derived_netlist() {
+    let text = "  (text \".param EXCLUDED=1\" (exclude_from_sim yes) (at 101.6 140 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid 11111111-2222-3333-4444-555555555555))";
+    let Some((dir, root)) = qa_variant("spice_netlists/rlc/rlc.kicad_sch", "r7_text_sim", None, text) else { return };
+    let (_, design, _) = load(&dir).unwrap();
+    let sch = design.schematic.as_ref().unwrap();
+    let excluded = sch.texts.iter().find(|t| t.content.starts_with(".param")).unwrap();
+    assert!(sch.extras.text_attrs.get(&excluded.id).is_some_and(|a| a.exclude_from_sim));
+    if kicad_cli_ready() {
+        let spice = |root: &Path| {
+            let out = root.with_extension("cir");
+            std::process::Command::new(eda_kicad_engine::find_cli().unwrap()).args(["sch", "export", "netlist", "--format", "spice", "-o"]).arg(&out).arg(root).output().unwrap();
+            std::fs::read_to_string(&out).unwrap()
+        };
+        assert!(!spice(&root).contains("EXCLUDED"), "the original leaves it out");
+        let done = crate::kicad_engine::export_sch(&dir, "netlist", &["--format".to_string(), "spice".to_string()]).expect("kicad-cli exports the SPICE netlist");
+        let derived = std::fs::read_to_string(dir.join(done["files"][0].as_str().unwrap())).unwrap();
+        assert!(derived.contains(".tran") && !derived.contains("EXCLUDED"), "{derived}");
+    }
+}

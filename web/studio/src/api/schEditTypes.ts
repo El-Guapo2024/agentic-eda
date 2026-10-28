@@ -4,8 +4,9 @@ import type { BoardTable, CmdLabelKind, LabelShape, PointXY, SchField, Nm } from
 
 /** Stroke style of a graphic (`LINE_STYLE`); `default` follows the sheet's own default. */
 export type SchLineStyle = "default" | "solid" | "dash" | "dot" | "dash_dot" | "dash_dot_dot";
-/** How a closed graphic is filled (`FILL_T`): `outline` with the stroke colour, `background` with the body background, `color` with `fill_color`. */
-export type SchFill = "none" | "outline" | "background" | "color";
+/** How a closed graphic is filled (`FILL_T`): `outline` with the stroke colour, `background` with the body background, `color` with `fill_color`, and the
+ * three hatches (`HATCH`, `REVERSE_HATCH`, `CROSS_HATCH`: lines across the shape, `kicad-port/schHatch.ts`, r7 M5). */
+export type SchFill = "none" | "outline" | "background" | "color" | "hatch" | "reverse_hatch" | "cross_hatch";
 export interface SchColor {
   r: number;
   g: number;

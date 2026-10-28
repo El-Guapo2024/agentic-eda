@@ -153,6 +153,9 @@ function TextBoxDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { kind
         <option value="none">None</option>
         <option value="outline">Outline color</option>
         <option value="background">Background color</option>
+        <option value="hatch">Hatch</option>
+        <option value="reverse_hatch">Reverse hatch</option>
+        <option value="cross_hatch">Cross-hatch</option>
       </select>
     </Shell>
   );

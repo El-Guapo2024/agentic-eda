@@ -735,9 +735,12 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         // KiCad keeps a text's angle upright (0 or 90, `KeepUpright`) and says which end of the text sits on the anchor with the justification
         let angle_deg = if eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0) { 90 } else { 0 };
         let uuid = duid_for(&format!("text:{}:{}:{}", t.content, t.at.x, t.at.y), &t.id);
+        let attrs = sch.extras.text_attrs.get(&t.id).cloned().unwrap_or_default();
         writeln!(out, "\t(text {}", sexpr_str(&t.content)).unwrap();
+        // `saveText`: a free text's `(exclude_from_sim ..)` (`SCH_TEXT_T` only), which the SPICE netlister skips an excluded directive by (r7 H4)
+        writeln!(out, "\t\t(exclude_from_sim {})", if attrs.exclude_from_sim { "yes" } else { "no" }).unwrap();
         writeln!(out, "\t\t(at {x} {y} {angle_deg})").unwrap();
-        writeln!(out, "\t\t{}", sch_extras_io::text_effects_str(t.size_nm, sch.extras.text_justify_of(&t.id))).unwrap();
+        writeln!(out, "\t\t{}", sch_extras_io::text_effects_with(t.size_nm, sch.extras.text_justify_of(&t.id), &attrs)).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&t.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
@@ -1213,7 +1216,13 @@ pub(crate) fn label_effects(sch: &eda_model::ir::SchematicSection, l: &NetLabel,
     let (angle, justify) = label_spin(sch, l);
     let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
     let vertical_justify = if local { " bottom" } else { "" };
-    (angle, format!("(effects {} (justify {justify}{vertical_justify}))", FieldLook { size_nm: look.text_size_nm().as_f64(), bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font()))
+    // the font colour (`EDA_TEXT::Format`'s `(color ..)`, last in `(font ..)`, r7 M5)
+    let mut font = FieldLook { size_nm: look.text_size_nm().as_f64(), bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font();
+    if let Some(c) = sch.extras.text_attrs.get(&l.id).and_then(|a| a.color) {
+        font.pop();
+        font.push_str(&format!(" (color {} {} {} {}))", c.r, c.g, c.b, sch_extras_io::alpha_str(c.a)));
+    }
+    (angle, format!("(effects {font} (justify {justify}{vertical_justify}))"))
 }
 
 /// `(fields_autoplaced yes)`: the fields of the item are where Autoplace Fields put them (`SCH_ITEM::GetFieldsAutoplaced`).
