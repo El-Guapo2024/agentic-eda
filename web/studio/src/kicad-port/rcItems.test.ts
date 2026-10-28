@@ -60,7 +60,7 @@ test("a marker is listed by what it is: an excluded one is an exclusion whatever
 });
 
 test("the All box turns warnings and exclusions on or off with it and leaves the errors on", () => {
-  assert.deepEqual(setShowAll(false), { errors: true, warnings: false, exclusions: false });
+  assert.deepEqual(setShowAll(false), { errors: true, warnings: false, exclusions: false, all: false });
   assert.deepEqual(setShowAll(true), SHOW_ALL);
   assert.equal(allShown(SHOW_ALL), true);
   assert.equal(allShown({ errors: true, warnings: true, exclusions: false }), false);
@@ -491,4 +491,23 @@ test("r2 D-E3: a DRC marker waived or restored on its own keeps its row until th
   assert.deepEqual(listedIndexes(refilterDrc(held).violations, SHOW_ALL), [2, 1, 0], "a change of the Show boxes refilters too");
   // with exclusions hidden a waived row leaves the list at once (`DeleteCurrentItem`)
   assert.deepEqual(listedIndexes(held.violations, { errors: true, warnings: true, exclusions: false }), [2, 1]);
+});
+
+test("R6-D9: the All box is a box of its own (OnSeverity only pushes it into the others)", () => {
+  const warningsOff = { ...SHOW_ALL, warnings: false };
+  assert.equal(allShown(warningsOff), true, "unticking Warnings leaves All ticked");
+  const byHand = { ...setShowAll(false), warnings: true, exclusions: true };
+  assert.equal(allShown(byHand), false, "ticking the three by hand leaves All unticked");
+});
+
+test("R6-D4: Violation Severity lists the checks of the kicad-cli that runs the DRC (25ec2335), not the pinned 8303b2ad's", () => {
+  const json = JSON.parse(readFileSync("src/kicad/drc_checks.json", "utf8")) as { commit: string; groups: { items: { key: string; defaultSeverity: string }[] }[] };
+  assert.ok(json.commit.startsWith("25ec2335"), json.commit);
+  const items = new Map(json.groups.flatMap((g) => g.items).map((i) => [i.key, i.defaultSeverity]));
+  for (const key of ["copper_outside_board", "malformed_microvia_stack_span", "microvia_stack_not_filled", "microvia_stack_depth", "hole_aspect_ratio", "microvia_crosses_core", "via_stitch_overlap", "net_chain_stub_length", "net_chain_return_path", "net_chain_tuning_profiles", "footprint_scaled_with_pads"]) {
+    assert.ok(items.has(key), key);
+  }
+  assert.equal(items.get("copper_outside_board"), "warning");
+  assert.equal(items.get("via_stitch_overlap"), "error");
+  assert.ok(!items.has("zones_intersect"), "gone from 25ec2335's DRC_ITEM::allItemTypes");
 });

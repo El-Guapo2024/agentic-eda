@@ -549,10 +549,11 @@ fn reexport_fidelity(cli: &Path, pcb: &Path, format: Format) -> ReexportFidelity
         let staged = stage_original(cli, pcb, format);
         let original_report = kicad_drc_report(cli, &staged, "orig");
         let text = std::fs::read_to_string(&staged).unwrap_or_else(|e| panic!("read: {e}"));
-        let (design, mut model, _notes) = import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import_kicad_pcb: {e:?}"));
+        let (design, mut model, notes) = import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import_kicad_pcb: {e:?}"));
         // The project the board came from, as `eda import-kicad` reads it: net classes, severities and the
-        // design-rule minimums from the sidecar `.kicad_pro`, custom rules from the `.kicad_dru`.
+        // design-rule minimums from the sidecar `.kicad_pro` (less what a legacy board keeps of its own), custom rules from the `.kicad_dru`.
         if let Ok(pro) = std::fs::read_to_string(pcb.with_extension("kicad_pro")) {
+            let pro = eda_kicad::project_json_for_board(&pro, &notes);
             eda_kicad::merge_project_net_classes(&mut model, &pro);
             eda_kicad::merge_project_rule_severities(&mut model, &pro);
             eda_kicad::merge_project_design_rules(&mut model, &pro);

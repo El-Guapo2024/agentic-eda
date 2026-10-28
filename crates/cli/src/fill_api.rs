@@ -168,6 +168,57 @@ pub(crate) fn keep_imported(dir: &Path, design: &Design, scanned: Vec<ScannedFil
     let _ = zone_fills::store(dir, &fills);
 }
 
+/// Whether `cmd` makes copies of zones that carry their fills ([`carry_copied_fills`]): Duplicate, Create Array, and the pastes.
+pub(crate) fn copies_zones(cmd: &eda_ops::Cmd) -> bool {
+    matches!(cmd, eda_ops::Cmd::Duplicate { .. } | eda_ops::Cmd::CreateArray { .. } | eda_ops::Cmd::PasteClipboard { .. } | eda_ops::Cmd::PasteSpecial { .. } | eda_ops::Cmd::PasteItems { .. })
+}
+
+/// R6-Z1: the zones `cmd` just made, copies of others, carry the fills of the zones they copy, filed under their own ids. KiCad's `EDIT_TOOL::Duplicate` and the array
+/// tool clone a zone with its fill (`ZONE::InitDataFromSrcInCopyCtor`: `m_FilledPolysList`, `m_isFilled`, and no `UnFill()`), and a paste reads back the
+/// `(filled_polygon ..)` the clipboard holds; the interactive move that follows moves the fill with the copy (`ZONE::Move`). Here a fill is derived data kept by zone
+/// id ([`zone_fills`]), and a copy has a new id: its entry is the source's ([`KicadFills::entry_for_copy`]) or the clipboard's
+/// ([`zone_fills::entry_of_pasted_zone`]). `before` is the design before the command. A copy whose source has no current fill has none.
+pub(crate) fn carry_copied_fills(dir: &Path, before: &Design, cmd: &eda_ops::Cmd) {
+    let Ok((_, after, _)) = board::load(dir) else { return };
+    let old: std::collections::HashSet<&str> = before.routing.iter().flat_map(|r| r.zones.iter()).map(|z| z.id.as_str()).collect();
+    let copies: Vec<&eda_model::ir::Zone> = after.routing.iter().flat_map(|r| r.zones.iter()).filter(|z| !old.contains(z.id.as_str()) && zone_fills::fillable(z)).collect();
+    if copies.is_empty() {
+        return;
+    }
+    let mut fills = cached(dir).unwrap_or_else(|| KicadFills::new("kicad-cli".into(), design_stamp(dir), 0, Default::default()));
+    let mut taken: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut carried = std::collections::BTreeMap::new();
+    let pasted = match cmd {
+        eda_ops::Cmd::PasteClipboard { text, .. } | eda_ops::Cmd::PasteSpecial { text, .. } => Some(eda_kicad::pcb_clipboard_zone_fills(text)),
+        _ => None,
+    };
+    for copy in copies {
+        // the first source not yet taken that the copy is a copy of, in the order the command names them
+        let found = match (&pasted, cmd) {
+            (Some((zones, scanned)), _) => zones.iter().enumerate().filter(|(i, _)| !taken.contains(i)).find_map(|(i, z)| zone_fills::entry_of_pasted_zone(z, scanned, copy).map(|e| (i, e))),
+            (None, eda_ops::Cmd::PasteItems { zones, .. }) => {
+                let sources: Vec<&eda_model::ir::Zone> = zones.iter().filter_map(|z| before.routing.iter().flat_map(|r| r.zones.iter()).find(|b| b.id == z.id)).collect();
+                sources.iter().enumerate().filter(|(i, _)| !taken.contains(i)).find_map(|(i, z)| fills.entry_for_copy(z, copy).map(|e| (i, e)))
+            }
+            (None, eda_ops::Cmd::Duplicate { ids } | eda_ops::Cmd::CreateArray { ids, .. }) => {
+                let sources: Vec<&eda_model::ir::Zone> = before.routing.iter().flat_map(|r| r.zones.iter()).filter(|z| ids.contains(&z.id) && z.net == copy.net).collect();
+                // (an array makes several copies of one zone: each takes the source's fill)
+                sources.iter().find_map(|z| fills.entry_for_copy(z, copy).map(|e| (usize::MAX, e)))
+            }
+            _ => None,
+        };
+        if let Some((i, entry)) = found {
+            taken.insert(i);
+            carried.insert(copy.id.clone(), entry);
+        }
+    }
+    if carried.is_empty() {
+        return;
+    }
+    fills.zones.extend(carried);
+    let _ = zone_fills::store(dir, &fills);
+}
+
 /// `GET /api/fill`: the zones' fills as KiCad made them, as polygons in the raw-micrometre space `/api/ratsnest` uses, for the UI to draw. One entry per zone and layer:
 /// `filled` says the zone has a fill (a zone never filled, or reshaped since, is an outline: `fragments` is empty); each fragment is a closed ring, KiCad's
 /// own (an island with its holes bridged to its outline, already slitted, never a separate holes list). `with_polys` (`?polys=1`) adds `polys`: the same fill unfractured,
@@ -357,6 +408,44 @@ mod tests {
         assert_eq!(cached(&dir).unwrap().zones.keys().collect::<Vec<_>>(), ["zb"]);
         assert_eq!(clear(&dir, None), json!({ "ok": true }));
         assert!(cached(&dir).is_none(), "Unfill All Zones leaves nothing");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R6-Z1 (`ZONE::InitDataFromSrcInCopyCtor` copies `m_FilledPolysList` and `m_isFilled`; the clipboard holds every `(filled_polygon ..)`): a duplicated
+    /// zone carries its source's fill, and a pasted one the fill the copy wrote, moved to where it was pasted. A copy of a zone with no fill has none.
+    #[test]
+    fn a_duplicated_or_pasted_zone_carries_its_fill() {
+        let (a, b) = (square("za", "", "F.Cu", Nm::ZERO), square("zb", "", "B.Cu", mm(20.0)));
+        let dir = board_dir("copies", vec![a.clone(), b.clone()]);
+        zone_fills::store(&dir, &KicadFills::new("kicad-cli".into(), String::new(), 1, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu"))]))).unwrap();
+        let new_zones = |before: &Design| -> Vec<Zone> {
+            let old: Vec<String> = before.routing.as_ref().unwrap().zones.iter().map(|z| z.id.clone()).collect();
+            board::load(&dir).unwrap().1.routing.unwrap().zones.into_iter().filter(|z| !old.contains(&z.id)).collect()
+        };
+        let run = |cmd: eda_ops::Cmd| -> Vec<Zone> {
+            let before = board::load(&dir).unwrap().1;
+            assert!(copies_zones(&cmd));
+            board::step(&dir, cmd.clone(), false, "test").unwrap();
+            carry_copied_fills(&dir, &before, &cmd);
+            new_zones(&before)
+        };
+        let copies = run(eda_ops::Cmd::Duplicate { ids: vec!["za".into(), "zb".into()] });
+        assert_eq!(copies.len(), 2);
+        let fills = cached(&dir).unwrap();
+        let (ca, cb) = (copies.iter().find(|z| z.layer == "F.Cu").unwrap(), copies.iter().find(|z| z.layer == "B.Cu").unwrap());
+        assert_eq!(fills.rings(ca, "F.Cu"), fills.rings(&a, "F.Cu"), "the copy in place has the source's fill");
+        assert!(fills.current(cb).is_none(), "a copy of a zone with no fill has none");
+        // the interactive move after the duplicate moves the fill with it (`ZONE::Move`)
+        let moved = Zone { outline: ca.outline.iter().map(|p| Point { x: p.x + mm(5.0), y: p.y }).collect(), ..ca.clone() };
+        assert_eq!(fills.rings(&moved, "F.Cu")[0].pts[0], [6_000_000, 1_000_000]);
+        // Copy (with the fills, `format( const ZONE* )`) and Paste 20 mm along
+        let (_, design, model) = board::load(&dir).unwrap();
+        let text = eda_kicad::export_pcb_clipboard_with(&design, &model, &["za".to_string()], Point { x: Nm::ZERO, y: Nm::ZERO }, Some(&fills)).unwrap();
+        assert!(text.contains("filled_polygon"), "{text}");
+        let pasted = run(eda_ops::Cmd::PasteClipboard { text, at: Point { x: mm(20.0), y: mm(5.0) } });
+        assert_eq!(pasted.len(), 1);
+        let rings = cached(&dir).unwrap().rings(&pasted[0], "F.Cu");
+        assert_eq!(rings.first().map(|r| r.pts[0]), Some([21_000_000, 6_000_000]), "the clipboard's fill, where the zone was pasted: {rings:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

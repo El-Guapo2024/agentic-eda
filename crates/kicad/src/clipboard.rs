@@ -355,6 +355,12 @@ fn fp_pieces<'m>(model: &'m ConstraintModel, fp: &FootprintInstance, at: Point) 
 /// dimension and group ids), with `reference` as the point the copy is measured from -- the point a Paste will put back on
 /// the cursor.
 pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[String], reference: Point) -> Result<String, Vec<CheckResult>> {
+    export_pcb_clipboard_with(design, model, ids, reference, None)
+}
+
+/// [`export_pcb_clipboard`] with the board's zone fills: a copied zone is written with its current fill, moved with it, and `(fill yes ..)` when it is filled
+/// (`PCB_IO_KICAD_SEXPR::format( const ZONE* )` writes the `(filled_polygon ..)` whatever the control flags, R6-Z1), so a paste carries the fill.
+pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: &[String], reference: Point, fills: Option<&crate::zone_fills::KicadFills>) -> Result<String, Vec<CheckResult>> {
     let picked = Picked::resolve(design, model, ids)?;
     if picked.total() == 0 {
         return Err(fail("clipboard.empty", "copy", "nothing to copy: none of the items is a footprint, track, via, zone, graphic, text or dimension"));
@@ -454,7 +460,14 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
         moved.holes = z.holes.iter().map(|h| h.iter().map(|p| mv(*p)).collect()).collect();
         let n = if z.is_rule_area { 0 } else { net_n(&z.net) };
         let uuid = duid(&format!("clip:zone:{}", z.id));
-        write_zone(&mut out, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &[], filled: false, enabled_layers: None, thieving: None, arc_rings: None, layer_props: None });
+        // the zone's current fill, moved as the zone is (`ZONE::Move` of a copy), and its `IsFilled`
+        let current = fills.and_then(|k| k.current(z));
+        let layer_fills: Vec<(String, Vec<crate::zone_fills::KicadRing>)> = match &current {
+            Some(e) => z.layer_set().into_iter().map(|layer| (layer.to_string(), e.layers.get(layer).map(|rings| rings.iter().map(|r| crate::zone_fills::KicadRing { island: r.island, pts: r.pts.iter().map(|p| [p[0] + dx.get(), p[1] + dy.get()]).collect() }).collect()).unwrap_or_default())).collect(),
+            None => Vec::new(),
+        };
+        let filled = current.as_ref().is_some_and(|e| !e.unfilled);
+        write_zone(&mut out, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &layer_fills, filled, enabled_layers: None, thieving: None, arc_rings: None, layer_props: None });
         written.entry(z.id.clone()).or_default().push(uuid);
     }
     for s in &picked.shapes {
@@ -566,6 +579,13 @@ fn selected_block(t: &Table, sel: &BTreeSet<(usize, usize)>) -> Table {
 }
 
 // -------------------------------------------------------------------- parse
+
+/// The zones of a clipboard text with the fills it holds of each (R6-Z1, [`crate::zone_fills::entry_of_pasted_zone`]): the zones as
+/// [`parse_pcb_clipboard`] reads them (with their uuids) and every `(filled_polygon ..)` of the text.
+pub fn pcb_clipboard_zone_fills(text: &str) -> (Vec<eda_model::ir::Zone>, Vec<crate::zone_fills::ScannedFill>) {
+    let zones = parse_pcb_clipboard(text).map(|c| c.zones).unwrap_or_default();
+    (zones, crate::zone_fills::scan_zone_fills(text))
+}
 
 /// `CLIPBOARD_IO::Parse`: the items of a clipboard text -- a whole `(kicad_pcb ..)`, or one `(footprint ..)`.
 pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {

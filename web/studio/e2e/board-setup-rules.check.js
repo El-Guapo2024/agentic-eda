@@ -194,9 +194,26 @@
     await scenario("Custom Rules: a rule typed and applied is the board's .kicad_dru text (set_custom_rules), one undo step", async (t) => {
       const p = await openPage("Custom Rules");
       const r0 = (await state()).board_rules?.custom_rules_text ?? null;
+      // R6-D5: "Check rule syntax" says what KiCad's `OnCompile` says -- the parser's error at its place, or "No errors found."
+      const checkSyntax = async () => {
+        const dlg = p.closest(".dialog") ?? document;
+        [...dlg.querySelectorAll("button")].find((b) => b.textContent.trim() === "Check rule syntax")?.click();
+        for (let i = 0; i < 40; i++) {
+          await sleep(150);
+          const r = document.querySelector("[data-rules-report]");
+          if (r && !/Checking/.test(r.textContent)) return r.textContent;
+        }
+        return null;
+      };
+      setValue(aria(p, "DRC Rules"), "(version 1)\n(rule a (constraint clearance (min 1mm))");
+      await sleep(200);
+      const broken = await checkSyntax();
+      t(/ERROR: Missing '\)'\./.test(broken ?? ""), `a missing ')' is KiCad's error: ${broken}`);
       const text = '(version 1)\n(rule "p20_wide"\n  (condition "A.NetClass == \'Default\'")\n  (constraint track_width (min 0.2mm)))\n';
       setValue(aria(p, "DRC Rules"), text);
       await sleep(200);
+      const fine = await checkSyntax();
+      t(/No errors found\./.test(fine ?? ""), `a good text: "No errors found.": ${fine}`);
       const { st } = await apply(p, (s) => (s.board_rules?.custom_rules_text ?? "").includes("p20_wide"));
       t((st?.board_rules?.custom_rules_text ?? "").includes('(rule "p20_wide"'), `the board's rules text has the rule (${J(st?.board_rules?.custom_rules_text).slice(0, 120)})`);
       const back = await undoAfter();
@@ -208,6 +225,8 @@
       const sev0 = (await state()).board_rules?.severities ?? {};
       const group = p.querySelector('[role="radiogroup"][aria-label="Tracks crossing"]');
       t(!!group, "the page lists Tracks crossing");
+      // R6-D4: the checks of the kicad-cli that runs the DRC (25ec2335)
+      t(!!p.querySelector('[role="radiogroup"][aria-label="Via-stitching zones overlap for same net"]'), "the page lists Via-stitching zones overlap for same net (25ec2335's via_stitch_overlap)");
       const ignore = [...(group?.querySelectorAll("label") ?? [])].find((l) => l.textContent.trim() === "Ignore")?.querySelector("input");
       ignore?.click();
       await sleep(150);

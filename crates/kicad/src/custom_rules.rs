@@ -109,13 +109,32 @@ fn parse_constraint(c: &[Sexpr]) -> (String, Option<Nm>, Option<Nm>, Option<Nm>)
     (ty, bound("min"), bound("max"), bound("opt"))
 }
 
-fn parse_rule(r: &[Sexpr]) -> Option<CustomRule> {
-    let name = sexpr::txt(r, 1)?.to_string();
-    let (constraint_type, min, max, opt) = sexpr::find(r, "constraint").map(parse_constraint).unwrap_or_default();
+/// One `(rule ..)`: a [`CustomRule`] for each of its `(constraint ..)`s, in the file's order, each with the rule's name, layer, severity and condition --
+/// `DRC_RULES_PARSER::parseDRC_RULE` adds every `T_constraint` to `rule->m_Constraints` and `DRC_ENGINE::compileRules` files each one by its type, so
+/// `(rule DDR (constraint length ..) (constraint skew ..))` is a length rule and a skew rule (r6-board-io F4). A rule with no constraint is one entry
+/// with an empty type, which nothing matches.
+fn parse_rule(r: &[Sexpr]) -> Vec<CustomRule> {
+    let Some(name) = sexpr::txt(r, 1).map(String::from) else { return Vec::new() };
     let layer = sexpr::find(r, "layer").and_then(|l| sexpr::txt(l, 1)).map(String::from);
     let severity = sexpr::find(r, "severity").and_then(|l| sexpr::txt(l, 1)).map(String::from);
     let condition = sexpr::find(r, "condition").and_then(|l| sexpr::txt(l, 1)).map(String::from);
-    Some(CustomRule { name, constraint_type, min, max, opt, layer, severity, condition })
+    let mut constraints: Vec<(String, Option<Nm>, Option<Nm>, Option<Nm>)> = sexpr::find_all(r, "constraint").map(parse_constraint).collect();
+    if constraints.is_empty() {
+        constraints.push(Default::default());
+    }
+    constraints.into_iter().map(|(constraint_type, min, max, opt)| CustomRule { name: name.clone(), constraint_type, min, max, opt, layer: layer.clone(), severity: severity.clone(), condition: condition.clone() }).collect()
+}
+
+/// Whether a rule's `(layer ..)` takes in a copper layer, as `DRC_RULES_PARSER::parseLayer` (8303b2ad `drc_rule_parser.cpp`) reads it: `outer` is
+/// `LSET::ExternalCuMask()` (F.Cu, B.Cu), `inner` is `LSET::InternalCuMask()` (In1.Cu .. In30.Cu), anything else a layer name matched as a wildcard
+/// (`wxString::Matches`, case-sensitive). No `(layer ..)` is every layer.
+pub fn rule_layer_matches(rule_layer: Option<&str>, layer: &str) -> bool {
+    match rule_layer {
+        None => true,
+        Some("outer") => matches!(layer, "F.Cu" | "B.Cu"),
+        Some("inner") => layer.strip_prefix("In").and_then(|l| l.strip_suffix(".Cu")).is_some_and(|n| n.parse::<u32>().is_ok_and(|n| (1..=30).contains(&n))),
+        Some(pat) => eda_model::glob_match(pat, layer),
+    }
 }
 
 /// Parse every `(rule ...)` block in a `.kicad_dru` file's text. Returns an
@@ -129,7 +148,7 @@ pub fn parse_custom_rules(text: &str) -> Vec<CustomRule> {
     let wrapped = format!("(__root__ {})", strip_comments(text));
     let Ok(tree) = sexpr::parse(&wrapped) else { return Vec::new() };
     let Some(root) = tree.as_list() else { return Vec::new() };
-    sexpr::find_all(root, "rule").filter_map(parse_rule).collect()
+    sexpr::find_all(root, "rule").flat_map(parse_rule).collect()
 }
 
 /// Merge a sidecar `<board>.kicad_dru` file into an already-imported board
@@ -150,6 +169,30 @@ pub fn merge_custom_rules(model: &mut eda_model::ConstraintModel, dru_text: &str
 mod tests {
     use eda_model::units::mm;
     use super::*;
+
+    /// r6-board-io F4: every `(constraint ..)` of a rule is read, whichever comes first.
+    #[test]
+    fn every_constraint_of_a_rule_is_read() {
+        let text = "(version 1)\n(rule L (constraint skew (max 0.1mm)) (constraint length (min 40mm) (max 41mm)) (layer outer) (condition \"A.NetName == 'CLK'\"))\n";
+        let rules = parse_custom_rules(text);
+        assert_eq!(rules.len(), 2, "{rules:#?}");
+        assert_eq!((rules[0].constraint_type.as_str(), rules[0].max), ("skew", Some(mm(0.1))));
+        assert_eq!((rules[1].constraint_type.as_str(), rules[1].min, rules[1].max), ("length", Some(mm(40.0)), Some(mm(41.0))));
+        for r in &rules {
+            assert_eq!((r.name.as_str(), r.layer.as_deref(), r.condition.as_deref()), ("L", Some("outer"), Some("A.NetName == 'CLK'")));
+        }
+        assert_eq!(parse_custom_rules("(version 1)\n(rule bare (condition \"A.Type == 'Via'\"))").len(), 1, "a rule with no constraint is still listed");
+    }
+
+    #[test]
+    fn outer_and_inner_name_the_copper_layers_kicad_gives_them() {
+        assert!(rule_layer_matches(Some("outer"), "F.Cu") && rule_layer_matches(Some("outer"), "B.Cu"));
+        assert!(!rule_layer_matches(Some("outer"), "In1.Cu"));
+        assert!(rule_layer_matches(Some("inner"), "In1.Cu") && rule_layer_matches(Some("inner"), "In30.Cu"));
+        assert!(!rule_layer_matches(Some("inner"), "F.Cu") && !rule_layer_matches(Some("inner"), "F.SilkS"));
+        assert!(rule_layer_matches(Some("?.Cu"), "B.Cu") && !rule_layer_matches(Some("f.cu"), "F.Cu"), "a name is a case-sensitive wildcard");
+        assert!(rule_layer_matches(None, "In2.Cu"));
+    }
 
     #[test]
     fn parses_a_simple_clearance_rule() {

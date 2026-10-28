@@ -25,6 +25,7 @@
 ## Slice A: round 5's merges
 
 ### A6-M1. Replace All in References: a multi-unit symbol with units on two sheets is refused as a whole, "a symbol with this reference is already on another sheet" (medium) **Fixed** on task-r6-schematic: ae5feeec
+### A6-M1. Replace All in References: a multi-unit symbol with units on two sheets is refused as a whole, "a symbol with this reference is already on another sheet" (medium)
 
 **What differs.**
 - Ours: `crates/ops/src/lib.rs:5763` (`apply_reference_renames`, from 674109ac, r5 C5-M2) renames each hit through a temporary name in two passes. Each pass goes through `rename_symbol_in_schematic` (`lib.rs:5843`), which still refuses a new id that a symbol on another sheet holds (`lib.rs:5851`, `symbols_elsewhere`). With Replace All over every sheet, U1 unit A (root) and U1 unit B (sheet `a`) are two renames, `(None, U1, U2)` and `(Some(a), U1, U2)`:
@@ -60,6 +61,7 @@ Fix direction: check the end state once, as the function's doc already says ("on
 **Already known?** No. C5-M2's fix covers chains on one sheet.
 
 ### A6-M2. A placed pin's alternate is left out of the "duplicate pin name" test: two pins that share a base name but chose different alternates are named `Net-(J1-IO-Pad3)` / `-Pad7` where KiCad names them `Net-(J1-IO)` / `Net-(J1-IO)_1` (medium) **Fixed** on task-r6-schematic: 0b63e63d (the duplicate-name rule; which of two equal names takes `_1` follows KiCad's island anchor KIID, not kept: Open, a named Differs)
+### A6-M2. A placed pin's alternate is left out of the "duplicate pin name" test: two pins that share a base name but chose different alternates are named `Net-(J1-IO-Pad3)` / `-Pad7` where KiCad names them `Net-(J1-IO)` / `Net-(J1-IO)_1` (medium)
 
 **What differs.**
 - KiCad 25ec2335, `sch_pin.cpp::SCH_PIN::GetDefaultNetName`. The name part is the **library** pin's name, but the duplicate test compares the **placed** pins' shown names. `SCH_PIN::GetShownName` returns `m_alt` when it is set (`sch_pin.cpp`, `if( !m_alt.IsEmpty() ) return m_alt;`):
@@ -93,6 +95,7 @@ Test: `sch_hierarchy_tests::a_pins_alternate_is_its_shown_name_for_the_duplicate
 **Already known?** No. §48's row lists the NC rule, `unconnected-`, power input and pin kind.
 
 ### A6-L1. Delete of a wire, symbol, label or bus entry: KiCad runs `DeleteJunction` on a junction at the deleted item's points that is no longer explicit, merging the in-line wires whatever their strokes; ours only cleans up (low; B5-L1's fix covers sheet pins only) **Fixed** on task-r6-schematic: 327bb669
+### A6-L1. Delete of a wire, symbol, label or bus entry: KiCad runs `DeleteJunction` on a junction at the deleted item's points that is no longer explicit, merging the in-line wires whatever their strokes; ours only cleans up (low; B5-L1's fix covers sheet pins only)
 
 **What differs.**
 - KiCad 8303b2ad, `tools/sch_edit_tool.cpp::SCH_EDIT_TOOL::DoDelete` collects the connection points of **every** connectable deleted item:
@@ -131,6 +134,7 @@ The same holds for a symbol whose pin was the third branch.
 **Already known?** Partly. B5-L1 named sheet pins only. This is the general case of the same `DoDelete` loop.
 
 ### A6-L2. The alternate of a pin on a shared screen's later path is not seen by the `unconnected-` naming: `pin_alternates_by_pin` keys by the symbol's id, `nc_pins` looks up the part's reference (low) **Fixed** on task-r6-schematic: 0b63e63d
+### A6-L2. The alternate of a pin on a shared screen's later path is not seen by the `unconnected-` naming: `pin_alternates_by_pin` keys by the symbol's id, `nc_pins` looks up the part's reference (low)
 
 **What differs.**
 - `crates/cli/src/board.rs:497` (`pin_alternates_by_pin`) builds `"{sym.id}.{number}"`.
@@ -145,6 +149,7 @@ Test: as `round_5s_connectivity_cases_are_traced_as_kicad_cli_traces_them`, with
 **Severity.** Low. **Already known?** No.
 
 ### A6-L3. A symbol instance's `(value "~")` / `(footprint "~")` is read as empty in any file version; KiCad does that only below 20250318 (low) **Fixed** on task-r6-schematic: f1ccd18c
+### A6-L3. A symbol instance's `(value "~")` / `(footprint "~")` is read as empty in any file version; KiCad does that only below 20250318 (low)
 
 **What differs.**
 - `crates/kicad/src/sch_import.rs:1420` (`own_instance_fields`, 088a5836): `if t == "~" { String::new() }`.
@@ -210,12 +215,14 @@ Test: `sch_import::tests::a_tilde_value_is_literal_in_a_new_file`.
 | Unannotated or duplicate references. A design names a part by its reference, so a second `U2` or an `R?` is renamed `U?1`, `P?1`, and so on. Connectivity is the same; the pin groups compare by reference, so they show as differing. | `netlists/complex_hierarchy_shared/ampli_ht` (`P?` -> `P?1`), `netlists/issue16915` (`J?`/`U?` -> `J?1`/`U?1`), `netlists/test_multiunit_reannotate_4` (`U?` -> `U?1`, so `missing_unit` and the others counted per renamed symbol), `netlists/test_multiunit_reannotate_5` (two units each of `U2` with three units: KiCad keeps the duplicate `U2`, so its `different_unit_net` 8 is lost) | known: PARITY-sch §40 ("units and unannotated `R?`", "the multi-unit reannotation projects"), §42 `unique_references`; the model's limit |
 | A `lib_name` cache copy that differs from the `lib_id` copy (one library symbol per id) | `netlists/legacy_power` (`VCC` / `+3.3V` swapped on U1001.1), `same_local_global_power` (the 2 `same_local_global_power` errors lost) | known: D5-M1, the §48 Differs |
 | The library symbol's own user fields are not written in the cache, so its body text `${LOCATION}` is unresolved in the derived file | `issue22286/bugtest` (`unresolved_variable` 2; the nets now match, after D5-H3) | known: §48 "Left". **Fixed** on task-r6-schematic: ddc91f1a |
+| The library symbol's own user fields are not written in the cache, so its body text `${LOCATION}` is unresolved in the derived file | `issue22286/bugtest` (`unresolved_variable` 2; the nets now match, after D5-H3) | known: §48 "Left" |
 
 **Net names (new comparison).** Of the 123, two are alike in pin groups but not in names:
 - `netlists/complex_hierarchy_shared/complex_hierarchy` (68 lines): `Net-(C?-a501e6b4-Pad1)` against ours `Net-(C?-9f14b212-Pad1)`. This is the unannotated name's uuid hash. Known: r2 A-N13 / B-L3, PARITY §46 "Left".
 - `issue21980` (40 lines): a new cause, B6-H1.
 
 ### B6-H1. A unit's display name (`(unit_name "..")`) is dropped from the schematic's library cache, and the tracer names units by letter: KiCad 25ec2335 names `A1TopLeft_UnderSide`, ours `A1A` (high: a file KiCad reads differently) **Fixed** on task-r6-schematic: 9d05af7a
+### B6-H1. A unit's display name (`(unit_name "..")`) is dropped from the schematic's library cache, and the tracer names units by letter: KiCad 25ec2335 names `A1TopLeft_UnderSide`, ours `A1A` (high: a file KiCad reads differently)
 
 **What differs.**
 - KiCad 25ec2335, `sch_symbol.cpp::SCH_SYMBOL::SubReference`. A custom unit name replaces the letter in `GetRef( path, true )`, and so in every net name `GetDefaultNetName` builds (`reference{ symbol->GetRef( &aPath, false ), symbol->GetRef( &aPath, true ), .. }`), and in the reference shown on the sheet:
@@ -282,6 +289,7 @@ Tests:
 **Runs.** Code only. One fact is from round 5's import output: `/tmp/findings-r5-schematic.V0fy/qa/issue18346_kicad_sch/out/design.json` has the label `{"net": "BAR"}` and the wires `{"net": "/BAR"}`.
 
 ### C6-M1. Net Navigator: a local or hierarchical label is listed under its own text, not under the net the wires are on, so the net is split in two and Tab / Shift+Tab skips the label (medium) **Fixed** on task-r6-schematic: d53c20b8
+### C6-M1. Net Navigator: a local or hierarchical label is listed under its own text, not under the net the wires are on, so the net is split in two and Tab / Shift+Tab skips the label (medium)
 
 **What differs.**
 - Since the KiCad net-names decision (batch A), a wire carries the net's KiCad name (`"/BAR"`), but a label's `net` is still its text (`"BAR"`). The traced name is a separate field, `net_name` (`crates/cli/src/studio.rs:2002`: `json!({ "id": l.id, "net": l.net, "net_name": traced, ... })`).
@@ -306,6 +314,7 @@ Test: `netNavigator.test.ts::a_label_is_an_item_of_the_net_it_is_traced_to`.
 **Already known?** No. PARITY-sch §13's Net Navigator row predates batch A's naming.
 
 ### C6-M2. Unfold from Bus: the bus entry never turns toward the cursor, and the member's label goes on the wire's last point, not on the first click (medium) **Fixed** on task-r6-schematic: 7595d15c (a bus member as a submenu, the label ghost while moving, and the messages as disabled menu items: Open)
+### C6-M2. Unfold from Bus: the bus entry never turns toward the cursor, and the member's label goes on the wire's last point, not on the first click (medium)
 
 **What differs.**
 - Ours:
@@ -350,6 +359,7 @@ Test: `schBusUnfold.test.ts::the_entry_leans_toward_the_cursor_and_the_label_tak
 **Already known?** No. PARITY-sch §11 lists only "the label's persisted spin style" as not ported.
 
 ### C6-M3. Edit with Symbol Editor (Ctrl+E) edits the shared library entry, so an edit made from R1 reaches every placement of that `lib_id`; KiCad edits the placed symbol's own copy (medium) **Fixed in part** on task-r6-schematic: 8685a920 (the hovered symbol, the first of several, the broken-link refusal); editing the placed symbol's own copy is a named Differs (one library symbol per id, as D5-M1)
+### C6-M3. Edit with Symbol Editor (Ctrl+E) edits the shared library entry, so an edit made from R1 reaches every placement of that `lib_id`; KiCad edits the placed symbol's own copy (medium)
 
 **What differs.**
 - Ours: `useActionRunner.ts:1459-1476` binds both `editWithSymbolEditor` and `editLibSymbolWithSymbolEditor` to `symApi.openSymbol(libId)`. The code comment says why: "This IR has one symbol library (no separate schematic-local copy), so both open the same entry".
@@ -382,6 +392,7 @@ Test: `editing_one_placed_symbols_copy_leaves_the_others` (needs a per-placement
 **Already known?** In principle (D5-M1). The Ctrl+E consequence is not listed in PARITY-sch or PARITY-symedit.
 
 ### C6-M4. Compare Symbol with Library reports what KiCad's `Compare( .., ERC, reporter )` does not, and leaves out the field rows it does report (medium) **Fixed** on task-r6-schematic: 6c545baa, 02f258df (line style and corner radius are not in either side's JSON, keywords and footprint filters not on the schematic side: Open)
+### C6-M4. Compare Symbol with Library reports what KiCad's `Compare( .., ERC, reporter )` does not, and leaves out the field rows it does report (medium)
 
 **What differs.** `kicad-port/symbolDiff.ts:79-108` against `lib_symbol.cpp::LIB_SYMBOL::Compare` and `sch_inspection_tool.cpp::DiffSymbol` (8303b2ad).
 - **Pins: KiCad compares their place only.** It calls `aPin->SCH_ITEM::compare( *bPin, aCompareFlags )`. `SCH_ITEM::compare` (`sch_item.cpp:722`) tests the type, unit, body style, `IsPrivate()` and position, and returns 0 under `COMPARE_FLAGS::ERC`. Ours (`pinSame`, `:34`) also compares the name, electrical type, shape, angle and length, and reports "Pin %s differs" for them. KiCad says "No relevant differences detected.".
@@ -405,6 +416,7 @@ Test: `editing_one_placed_symbols_copy_leaves_the_others` (needs a per-placement
 **Already known?** No. PARITY-sch §13 calls these "identical rules".
 
 ### C6-L1. Back / Forward keep sheets that were deleted; KiCad's `CleanHistory` drops them on every hierarchy change, and `ResetHistory` clears the history on load (low) **Fixed** on task-r6-schematic: 8ffb4585
+### C6-L1. Back / Forward keep sheets that were deleted; KiCad's `CleanHistory` drops them on every hierarchy change, and `ResetHistory` clears the history on load (low)
 
 - Ours: `kicad-port/navHistory.ts` has no clean step. `state.schNav` is set once (`store.tsx:950`). `goBack` to a dead path (`useActionRunner.ts:1437-1443`) lets `resolve_sheet` (`studio.rs:1742`) fall back to the parent while `currentSheetPath` keeps the dead path.
 - KiCad 8303b2ad: `SCH_EDIT_FRAME::UpdateHierarchyNavigator` (`sch_edit_frame.cpp:1376`) calls `CleanHistory()`:
@@ -424,6 +436,7 @@ Test: `editing_one_placed_symbols_copy_leaves_the_others` (needs a per-placement
 - **Already known?** No.
 
 ### C6-L2. The Hierarchy Navigator has no context menu, expand / collapse or net highlight; an unnamed sheet shows an empty label (low) **Fixed in part** on task-r6-schematic: 8cc119ae (root by project name, nameless sheet by file, fold state, Expand / Collapse All); Edit Page Number, Rename, net highlight, top-level sheets: Open
+### C6-L2. The Hierarchy Navigator has no context menu, expand / collapse or net highlight; an unnamed sheet shows an empty label (low)
 
 `components/panels/HierarchyPanel.tsx` is a flat, indented list. KiCad 8303b2ad `widgets/hierarchy_pane.cpp` also has:
 - the right-click menu (`onRightClick`):
@@ -443,6 +456,7 @@ Test: a Playwright check, `hierarchy-navigator.check.js`.
 **Already known?** No PARITY row lists these.
 
 ### C6-L3. Symbol Checker: a local power symbol's hidden power-input pin gets no "Hidden power pin" note (low) **Fixed** on task-r6-schematic: c7cee1cd
+### C6-L3. Symbol Checker: a local power symbol's hidden power-input pin gets no "Hidden power pin" note (low)
 
 - Ours: `kicad-port/symbolChecker.ts:162` tests `!symbol.power && ..`.
 - KiCad 8303b2ad `symbol_checker.cpp::CheckLibSymbol`:

@@ -12,7 +12,8 @@
 // own, much simpler, single-segment preview.
 import type { BoardState } from "../../api/types";
 import type { RouterSettings } from "../../kicad-port/routerSettings";
-import { routeAttemptFinish, routeCancel, routeContinueFromEnd, routeFinish, routeFix, routeStart } from "../../api/client";
+import { routeAttemptFinish, routeCancel, routeContinueFromEnd, routeFinish, routeFix, routeStart, routeToggleVia } from "../../api/client";
+import { otherLayerOfPair, type LayerPair } from "../../kicad-port/layerPairs";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { drawStateFromPreview, type RouteDrawState } from "../../kicad-port/routeTool";
@@ -29,7 +30,9 @@ import { advanceRouteQueue } from "./routeQueue";
  * same as every other "current pick" this app's route/via tools read
  * (track width, via preset). */
 /** `width` undefined: the server's `ImportSizes` width of the start net (the width list on "use net class"), which the reply carries. */
-export async function startInteractiveRoute(x: number, y: number, layer: string, width: number | undefined, settings: RouterSettings, dispatch: Dispatch<Action>, startItem?: string | null, autoTrackWidth?: boolean): Promise<boolean> {
+/** `startWithVia`: V was pressed before the route started (`ROUTER_TOOL::m_startWithVia`, R6-R5): the route starts with a through via armed, sized as V
+ *  sizes one (`size`: none for the net class's), to the other layer of the layer pair `pair`. */
+export async function startInteractiveRoute(x: number, y: number, layer: string, width: number | undefined, settings: RouterSettings, dispatch: Dispatch<Action>, startItem?: string | null, autoTrackWidth?: boolean, startWithVia?: { size: { diameter: number; drill: number } | null; pair: LayerPair }): Promise<boolean> {
   const preview = await routeStart(x, y, layer, width, settings, autoTrackWidth);
   // `syncZone`'s warning (KiCad's `KIDIALOG`): a rule area the router cannot handle is left out of its world
   for (const w of preview.warnings ?? []) dispatch({ type: "TOAST", message: w, kind: "info" });
@@ -38,11 +41,19 @@ export async function startInteractiveRoute(x: number, y: number, layer: string,
     return false;
   }
   const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width: preview.width ?? width ?? 250_000, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias, startItem: startItem ?? undefined, sizes: preview.sizes };
-  // `ROUTER_TOOL::prepareInteractive`: the route starts on `getStartLayer`'s layer -- the start item's when it is not on the active one -- and that
-  // becomes the active layer until the route ends (r5 R5-1)
-  if (preview.layer && preview.layer !== layer) {
-    draw.originalActiveLayer = layer;
-    dispatch({ type: "SET_ACTIVE_LAYER", layer: preview.layer });
+  // `ROUTER_TOOL::prepareInteractive`: `m_originalActiveLayer` is saved whatever the start layer, the route starts on `getStartLayer`'s layer -- the
+  // start item's when it is not on the active one -- and that becomes the active layer until the route ends (r5 R5-1; `finishInteractive` always
+  // gives `m_originalActiveLayer` back, R6-R6)
+  draw.originalActiveLayer = layer;
+  if (preview.layer && preview.layer !== layer) dispatch({ type: "SET_ACTIVE_LAYER", layer: preview.layer });
+  // `performRouting`: "If the user pressed 'V' before starting to route, enable via placement now" (`handleLayerSwitch( ACT_PlaceThroughVia, true )`)
+  if (startWithVia) {
+    const toLayer = otherLayerOfPair(startWithVia.pair, draw.layer);
+    const armed = await routeToggleVia(true, startWithVia.size?.diameter, startWithVia.size?.drill, toLayer);
+    if (armed.ok) {
+      draw.placingVia = true;
+      draw.pendingViaLayer = toLayer;
+    }
   }
   dispatch({ type: "SET_DRAW_STATE", draw });
   return true;

@@ -106,6 +106,113 @@ impl ViaExtra {
     }
 }
 
+/// `PADSTACK::DRILL_PROPS` of a via's backdrill (`SecondaryDrill`) or tertiary drill (`TertiaryDrill`), as `PCB_IO_KICAD_SEXPR_PARSER::parsePCB_VIA` reads `(backdrill (size ..)
+/// (layers start end))` / `(tertiary_drill ..)`: a round drill of `size` (both axes), from the layer the drill starts on to the one it ends on, in the file's order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViaBackdrill {
+    pub size: crate::units::Nm,
+    pub start: String,
+    pub end: String,
+}
+
+/// `PADSTACK::POST_MACHINING_PROPS` as `parsePostMachining` reads `(front_post_machining counterbore|countersink (size ..) (depth ..) (angle ..))`: the mode as
+/// `PAD_DRILL_POST_MACHINING_MODE` numbers it (0 `UNKNOWN` when the via has none, 2 `COUNTERBORE`, 3 `COUNTERSINK`), size and depth in nanometres, the angle in tenths of a degree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PostMachining {
+    pub mode: i32,
+    pub size: crate::units::Nm,
+    pub depth: crate::units::Nm,
+    pub angle: i32,
+}
+
+/// A file token split into its words and parentheses, a quoted word unquoted.
+fn words_of(token: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = token.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c == '(' || c == ')' {
+            out.push(c.to_string());
+            chars.next();
+        } else if c.is_whitespace() {
+            chars.next();
+        } else if c == '"' {
+            chars.next();
+            let mut w = String::new();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => {
+                        if let Some(n) = chars.next() {
+                            w.push(n);
+                        }
+                    }
+                    '"' => break,
+                    c => w.push(c),
+                }
+            }
+            out.push(w);
+        } else {
+            let mut w = String::new();
+            while let Some(&c) = chars.peek() {
+                if c == '(' || c == ')' || c.is_whitespace() {
+                    break;
+                }
+                w.push(c);
+                chars.next();
+            }
+            out.push(w);
+        }
+    }
+    out
+}
+
+/// The words after `(name` in `words`, up to its `)` (a sub-list's words skipped).
+fn field<'a>(words: &'a [String], name: &str) -> Option<&'a [String]> {
+    let at = words.windows(2).position(|w| w[0] == "(" && w[1] == name)? + 2;
+    let end = words[at..].iter().position(|w| w == "(" || w == ")").map_or(words.len(), |e| at + e);
+    Some(&words[at..end])
+}
+
+fn board_units(word: Option<&String>) -> Option<crate::units::Nm> {
+    word?.parse::<f64>().ok().map(|mm| crate::units::Nm::kiround(mm * 1_000_000.0))
+}
+
+impl ViaExtra {
+    fn token_words(&self, name: &str) -> Option<Vec<String>> {
+        let t = self.tokens.iter().rev().find(|t| t.strip_prefix('(').is_some_and(|r| r.split_whitespace().next() == Some(name)))?;
+        Some(words_of(t)[2..].to_vec())
+    }
+
+    fn drill_props(&self, name: &str) -> Option<ViaBackdrill> {
+        let w = self.token_words(name)?;
+        let size = board_units(field(&w, "size")?.first())?;
+        let layers = field(&w, "layers")?;
+        Some(ViaBackdrill { size, start: layers.first()?.clone(), end: layers.get(1)?.clone() })
+    }
+
+    /// The via's backdrill (`Padstack().SecondaryDrill()`), if the file gave it one.
+    pub fn secondary_drill(&self) -> Option<ViaBackdrill> {
+        self.drill_props("backdrill")
+    }
+
+    /// The via's tertiary drill (`Padstack().TertiaryDrill()`), if the file gave it one.
+    pub fn tertiary_drill(&self) -> Option<ViaBackdrill> {
+        self.drill_props("tertiary_drill")
+    }
+
+    /// `Padstack().FrontPostMachining()` (`front`) or `BackPostMachining()`.
+    pub fn post_machining(&self, front: bool) -> PostMachining {
+        let Some(w) = self.token_words(if front { "front_post_machining" } else { "back_post_machining" }) else { return PostMachining::default() };
+        let mode = match w.first().map(String::as_str) {
+            Some("counterbore") => 2,
+            Some("countersink") => 3,
+            _ => return PostMachining::default(),
+        };
+        let num = |n: &str| field(&w, n).and_then(|f| board_units(f.first())).unwrap_or(crate::units::Nm::ZERO);
+        let angle = field(&w, "angle").and_then(|f| f.first()?.parse::<f64>().ok()).map_or(0, |a| (a * 10.0).round() as i32);
+        PostMachining { mode, size: num("size"), depth: num("depth"), angle }
+    }
+}
+
 /// `(name yes)` or `(name no)`: a file token that is one boolean setting. A bare `(name)` is `yes` (`parseMaybeAbsentBool( true )`).
 fn flag_token(token: &str) -> Option<(&str, bool)> {
     let inner = token.strip_prefix('(')?.strip_suffix(')')?;
@@ -146,6 +253,16 @@ mod tests {
         assert_eq!(extra(&["(keep_end_layers yes)", "(remove_unused_layers no)"]).unconnected_layers(), UnconnectedLayers::RemoveExceptStartAndEnd);
         // A bare setting is a yes.
         assert_eq!(extra(&["(remove_unused_layers)"]).unconnected_layers(), UnconnectedLayers::RemoveAll);
+    }
+
+    #[test]
+    fn a_vias_backdrills_and_post_machining_are_read_as_parse_pcb_via_reads_them() {
+        let e = extra(&["(backdrill (size 0.6) (layers \"B.Cu\" \"In2.Cu\"))", "(tertiary_drill (size 0.65) (layers \"F.Cu\" \"In1.Cu\"))", "(front_post_machining countersink (size 0.9) (angle 90))"]);
+        assert_eq!(e.secondary_drill(), Some(ViaBackdrill { size: crate::units::Nm::new(600_000), start: "B.Cu".into(), end: "In2.Cu".into() }));
+        assert_eq!(e.tertiary_drill().map(|d| (d.size, d.start)), Some((crate::units::Nm::new(650_000), "F.Cu".to_string())));
+        assert_eq!(e.post_machining(true), PostMachining { mode: 3, size: crate::units::Nm::new(900_000), depth: crate::units::Nm::ZERO, angle: 900 });
+        assert_eq!(e.post_machining(false), PostMachining::default());
+        assert_eq!(extra(&[]).secondary_drill(), None);
     }
 
     #[test]

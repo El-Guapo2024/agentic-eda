@@ -188,7 +188,13 @@ impl<'a> RuleBoard<'a> {
     /// m_assignmentRules = std::move( rules )`). The reference of each footprint a rule matched, with the classes it is given.
     fn dynamic_component_classes(&self, env: &Rc<Env>) -> Vec<(String, Vec<String>)> {
         let settings = &self.rules.component_classes;
-        let mut rules: Vec<(String, String)> = settings.assignments.iter().filter(|a| !a.class.is_empty()).map(|a| (a.class.clone(), assignment_condition(a))).collect();
+        // `CompileAssignmentRule` gives no rule for an empty class (`if( ruleSource.empty() ) return nullptr;`) and for a text the rules parser cannot read -- a `"`
+        // in the class or a condition ends the `"%s"` it is written into (`(assign_component_class "%s" (condition "%s"))`) -- and one rule that does not
+        // compile leaves the board with none (`success = false`, R6-D8)
+        if settings.assignments.iter().any(|a| a.class.is_empty() || a.class.contains('"') || assignment_condition(a).contains('"')) {
+            return Vec::new();
+        }
+        let mut rules: Vec<(String, String)> = settings.assignments.iter().map(|a| (a.class.clone(), assignment_condition(a))).collect();
         if settings.sheet_classes {
             let mut sheets: BTreeSet<String> = BTreeSet::new();
             for fp in self.footprints.values() {
@@ -280,7 +286,8 @@ impl<'a> RuleBoard<'a> {
         let extras: HashMap<&str, &eda_model::ir::FootprintExtra> = self.design.drawings.as_ref().map(|d| d.footprint_extras.iter().map(|e| (e.id.as_str(), e)).collect()).unwrap_or_default();
         for fp in &pl.footprints {
             let part = self.model.part(&fp.id);
-            let fpid = part.and_then(|p| p.footprint.clone().or_else(|| p.package.clone())).unwrap_or_default();
+            // `A.Library_Link`: the link the derived board writes (`footprint_lib_id`: a package's installed KiCad footprint), the one Multichannel reads too (R6-D2)
+            let fpid = part.map(eda_model::footprint::footprint_lib_id).unwrap_or_default();
             let value = part.and_then(|p| p.value.clone()).unwrap_or_default();
             let side_layer = if fp.side == Side::Bottom { "B.Cu" } else { "F.Cu" };
             let outlines: Vec<Vec<Point>> = self
@@ -323,9 +330,10 @@ impl<'a> RuleBoard<'a> {
             it.set("Library Link", Prop::Str(fpid));
             it.set("Position X", Prop::Int(fp.at.x.get()));
             it.set("Position Y", Prop::Int(fp.at.y.get()));
-            it.set("Orientation", Prop::Double(fp.rot as f64 / 1000.0));
+        // `FOOTPRINT::GetOrientationDegrees`: KiCad's angle, counter-clockwise in (-180, 180], not the model's clockwise `rot` (R6-D1).
+        it.set("Orientation", Prop::Double(crate::board::kicad_footprint_orientation(self.design, fp) as f64 / 1000.0));
             it.set("Layer", Prop::Layer(side_layer.to_string()));
-            it.set("Locked", Prop::Bool(false));
+            it.set("Locked", Prop::Bool(self.is_locked(&fp.id)));
             if let Some(e) = extra {
                 if let Some(c) = e.clearance {
                     it.overrides.clearance = Some((c, format!("footprint {}", fp.id)));
@@ -452,9 +460,10 @@ impl<'a> RuleBoard<'a> {
         it.set("Size Y", Prop::Int(p.size.1.get()));
         it.set("Position X", Prop::Int(p.center.x.get()));
         it.set("Position Y", Prop::Int(p.center.y.get()));
-        it.set("Orientation", Prop::Double(-(p.orientation_mdeg as f64) / 1000.0));
+        // `PAD::GetOrientationDegrees`: `orientation_mdeg` is already KiCad's, in [0, 360) (R6-D1).
+        it.set("Orientation", Prop::Double(p.orientation_mdeg as f64 / 1000.0));
         it.set("Net", Prop::Enum(net.clone()));
-        it.set("Locked", Prop::Bool(false));
+        // (no "Locked": `pad.cpp` masks it, `propMgr.Mask( TYPE_HASH( PAD ), TYPE_HASH( BOARD_ITEM ), _HKI( "Locked" ) )`, R6-D7)
         it.set("Layer", Prop::Layer(layers.first().cloned().unwrap_or_default()));
         if let Some(d) = p.drill_round {
             it.set("Hole Size X", Prop::Int(d.get()));
@@ -485,6 +494,11 @@ impl<'a> RuleBoard<'a> {
 
     // ---------------------------------------------------------------------------------------------------------------------------------- tracks
 
+    /// `BOARD_ITEM::IsLocked`, the "Locked" property of a footprint, track or via (R6-D7): the item is in the design's locked ids.
+    fn is_locked(&self, id: &str) -> bool {
+        self.design.drawings.as_ref().is_some_and(|d| d.locked_ids.iter().any(|l| l == id))
+    }
+
     fn track_item(&self, seg_idx: usize) -> RuleItem {
         let s = &self.board.tracks[seg_idx];
         let net = s.net.clone().unwrap_or_default();
@@ -502,7 +516,7 @@ impl<'a> RuleBoard<'a> {
         it.set("Start Y", Prop::Int(s.a.y.get()));
         it.set("End X", Prop::Int(s.b.x.get()));
         it.set("End Y", Prop::Int(s.b.y.get()));
-        it.set("Locked", Prop::Bool(false));
+        it.set("Locked", Prop::Bool(self.is_locked(s.id.rsplit_once('#').map_or(s.id.as_str(), |(base, _)| base))));
         let length = match s.arc_mid {
             Some(mid) => {
                 let pts = crate::board::arc_polyline(s.a, mid, s.b, crate::board::ARC_HIGH_DEF);
@@ -562,7 +576,7 @@ impl<'a> RuleBoard<'a> {
         it.set("Layer Top", Prop::Layer(v.from_layer.clone()));
         it.set("Layer Bottom", Prop::Layer(v.to_layer.clone()));
         it.set("Net", Prop::Enum(net.clone()));
-        it.set("Locked", Prop::Bool(false));
+        it.set("Locked", Prop::Bool(self.is_locked(&v.id)));
         let fmt = match kind {
             "Blind" => "Blind via",
             "Buried" => "Buried via",
@@ -1040,6 +1054,59 @@ mod footprint_facts_tests {
         assert!(holds(&rb, "A.memberOfSheet('/HV/')", &pad_of("R5")));
         assert!(!holds(&rb, "A.memberOfSheet('/HV/')", &pad_of("R6")));
         assert!(holds(&rb, "A.memberOfSheet('/')", &pad_of("R6")));
+    }
+
+    /// R6-D1: `A.Orientation` is KiCad's (`FOOTPRINT::GetOrientationDegrees`, in (-180, 180]; `PAD::GetOrientationDegrees`, in [0, 360)), not the model's
+    /// clockwise angle: R5 at the model's 270 is KiCad's `(at x y 90)`, and its pad (at 0 in the footprint) is at 90 too. R6 on the back, made here, is
+    /// written half a turn round (`FOOTPRINT::Flip`), at 180, and so is its pad. A component class with a Rotation condition goes to the footprint KiCad has
+    /// at that angle (`getRotationExpr`: `( A.Orientation == 90 deg )`).
+    #[test]
+    fn rule_board_orientation_is_kicads() {
+        let (design, model) = hv_board(|d, m| {
+            let fps = &mut d.placement.as_mut().unwrap().footprints;
+            fps[0].rot = 270_000;
+            fps[1].side = Side::Bottom;
+            m.board.component_classes.assignments.push(ClassAssignment { class: "TURNED".into(), all: true, conditions: vec![ClassCondition { kind: ConditionKind::Rotation, primary: "90".into(), secondary: String::new() }] });
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let (r5, r6) = (rb.footprint_item("R5").unwrap(), rb.footprint_item("R6").unwrap());
+        assert!(holds(&rb, "A.Orientation == 90 deg", &r5));
+        assert!(holds(&rb, "A.Orientation == 180 deg", &r6));
+        assert_eq!(r5.footprint.as_ref().unwrap().classes, ["TURNED"]);
+        assert!(r6.footprint.as_ref().unwrap().classes.is_empty());
+        let pads: Vec<Rc<RuleItem>> = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).collect();
+        let pad_of = |r: &str| pads.iter().find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == r)).unwrap().clone();
+        assert!(holds(&rb, "A.Orientation == 90 deg", &pad_of("R5")));
+        assert!(holds(&rb, "A.Orientation == 180 deg", &pad_of("R6")));
+    }
+
+    /// R6-D7: `A.Locked` is `IsLocked()` -- true for a locked footprint (the design's locked ids), false for another; a pad has no "Locked" (`pad.cpp`
+    /// masks it), so a rule on it never takes a pad.
+    #[test]
+    fn a_locked_footprint_is_locked_on_the_rule_board() {
+        let (design, model) = hv_board(|d, _| d.drawings = Some(eda_model::ir::DrawingsSection { locked_ids: vec!["R5".into()], ..Default::default() }));
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        assert!(holds(&rb, "A.Locked", &rb.footprint_item("R5").unwrap()));
+        assert!(!holds(&rb, "A.Locked", &rb.footprint_item("R6").unwrap()));
+        let pad = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == "R5")).unwrap();
+        assert!(!holds(&rb, "A.Locked", &pad), "a pad has no Locked property");
+    }
+
+    /// R6-D8 (`SyncDynamicComponentClassAssignments`: `if( success ) m_assignmentRules = std::move( rules );`): one row with no class, or a `"` in a value, gives
+    /// `CompileAssignmentRule` no rule, and the board has no dynamic class at all -- not even the rows that are good.
+    #[test]
+    fn a_class_rule_kicad_cannot_compile_leaves_the_board_with_none() {
+        for bad in [ClassAssignment { class: String::new(), all: true, conditions: vec![] }, ClassAssignment { class: "Q".into(), all: true, conditions: vec![ClassCondition { kind: ConditionKind::FootprintField, primary: "Voltage".into(), secondary: "4\"00V".into() }] }] {
+            let (design, model) = hv_board(|_, m| {
+                m.board.component_classes.assignments.push(bad.clone());
+                m.board.component_classes.assignments.push(ClassAssignment { class: "PWR".into(), all: true, conditions: vec![] });
+            });
+            let board = crate::board::build(&design, &model);
+            let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+            assert!(rb.footprint_item("R5").unwrap().footprint.as_ref().unwrap().classes.is_empty(), "{bad:?}");
+        }
     }
 
     /// R5-D1: the classes a file gives a footprint, the project's assignment rules (`GetAssignmentInDRCLanguage`, evaluated on the footprint) and the sheet classes,

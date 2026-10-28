@@ -18,7 +18,9 @@
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";
 import { newViaStitch } from "../../kicad-port/viaStitchTool";
 import { chosenDiffPair, chosenTrackWidthOf } from "../../kicad-port/routerSizes";
-import { currentViaSize } from "../../kicad-port/routerVia";
+import { chosenViaOf, currentViaSize } from "../../kicad-port/routerVia";
+import { viaChoiceOf } from "../../actions/routerViaActions";
+import { layerPairsOf } from "../../actions/pcbRouterSweep";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
@@ -816,7 +818,10 @@ export function Canvas() {
           // the chosen entry read from the board's list now (`GetCurrentTrackWidth`: `m_TrackWidthList[ m_trackWidthIndex ]`, r5 R5-9)
           const width = chosenTrackWidthOf(board.routing?.track_width_presets ?? [], state.currentTrackWidthIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia.trackNm);
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
-          void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked(), state.bcx.autoTrackWidth);
+          // `m_startWithVia` (V before the route started, actions/routerViaActions.ts): the route starts with a via armed, and the flag is spent
+          const startWithVia = state.pcbx.startWithVia ? { size: chosenViaOf("through", viaChoiceOf(state)), pair: layerPairsOf(board, state.pcbx.layerPairs).current } : undefined;
+          if (startWithVia) dispatch({ type: "PCBX", patch: { startWithVia: false } });
+          void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked(), state.bcx.autoTrackWidth, startWithVia);
           return;
         }
         void fixInteractiveRoute(sx, sy, draw, dispatch, api);

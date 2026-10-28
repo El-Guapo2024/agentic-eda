@@ -904,11 +904,18 @@ fn handle(
                     // A Specctra session KiCad imported with items skipped (`crate::specctra_api::take_session_warning`): its warning travels in the reply.
                     let session = cmd.imports_session();
                     let _ = session.then(crate::specctra_api::take_session_warning);
+                    // a copy of a zone carries its fill (R6-Z1): the design before, to tell the copies from the zones that were there
+                    let copied = crate::fill_api::copies_zones(&cmd).then(|| board::load(dir).ok().map(|(_, d, _)| (d, cmd.clone()))).flatten();
                     match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
-                        Ok(summary) => match session.then(crate::specctra_api::take_session_warning).flatten() {
-                            Some(w) => json!({ "ok": true, "message": summary, "warning": w }),
-                            None => json!({ "ok": true, "message": summary }),
-                        },
+                        Ok(summary) => {
+                            if let Some((before, cmd)) = &copied {
+                                crate::fill_api::carry_copied_fills(dir, before, cmd);
+                            }
+                            match session.then(crate::specctra_api::take_session_warning).flatten() {
+                                Some(w) => json!({ "ok": true, "message": summary, "warning": w }),
+                                None => json!({ "ok": true, "message": summary }),
+                            }
+                        }
                         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
                     }
                 }
@@ -987,6 +994,7 @@ fn handle(
         ("POST", "/api/route/fix") => respond(stream, "200 OK", "application/json", route_api::fix(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/undo_segment") => respond(stream, "200 OK", "application/json", route_api::undo_segment(route_session).to_string().as_bytes()),
         ("POST", "/api/route/via") => respond(stream, "200 OK", "application/json", route_api::via(route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/layer") => respond(stream, "200 OK", "application/json", route_api::layer(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/finish") => respond(stream, "200 OK", "application/json", route_api::finish(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/attempt_finish") => respond(stream, "200 OK", "application/json", route_api::attempt_finish(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/continue_from_end") => respond(stream, "200 OK", "application/json", route_api::continue_from_end(dir, route_session, &body).to_string().as_bytes()),
@@ -1031,7 +1039,7 @@ fn handle(
         ("POST", "/api/inspect/clearance") => respond(stream, "200 OK", "application/json", inspect_api::clearance(dir, &body).to_string().as_bytes()),
         ("POST", "/api/inspect/constraints") => respond(stream, "200 OK", "application/json", inspect_api::constraints(dir, &body).to_string().as_bytes()),
         // Find by Properties' Query tab: the expression language runs here, on the items the studio sends (`eda_drc::query`).
-        ("POST", "/api/pcb/query") => respond(stream, "200 OK", "application/json", eda_drc::query::handle(&body).to_string().as_bytes()),
+        ("POST", "/api/pcb/query") => respond(stream, "200 OK", "application/json", crate::inspect_api::pcb_query(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/convert/polys") => respond(stream, "200 OK", "application/json", convert_api::polys(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/apply") => respond(stream, "200 OK", "application/json", cleanup_api::apply(dir, &body).to_string().as_bytes()),

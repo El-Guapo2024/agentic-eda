@@ -1,6 +1,6 @@
 // Board Setup > Design Rules > Violation Severity -- port of common/dialogs/panel_setup_severities.cpp: one row per DRC check (grouped under
 // the headings DRC_ITEM::GetItemsWithSeverities lists them by) with Error / Warning / Ignore. The rows come from KiCad's own list
-// (src/kicad/drc_checks.json, generated from drc_item.cpp by tools/extract-drc-checks.js) and the table is the derived project's
+// (src/kicad/drc_checks.json, generated from drc_item.cpp by tools/extract-drc-checks.js at the box kicad-cli's commit, 25ec2335, R6-D4) and the table is the derived project's
 // `rule_severities`: kicad-cli reports each check at the severity chosen here, and an ignored check is not reported at all.
 import { useEffect, useMemo } from "react";
 import checks from "../../kicad/drc_checks.json";

@@ -33,6 +33,9 @@
 //   r5           a route started on a B.Cu stub with F.Cu active starts on B.Cu, B.Cu is active while it runs and F.Cu again after (R5-1); the message panel shows the width and the
 //                clearance with their sources (R5-8); W steps the class's width, then the board's 0.3 and 0.6 mm, the first press only overriding the inherited width (R5-6); a width
 //                chosen from the menu leaves Use Starting Track Width on (R5-7);
+//   r6           the layer keys while routing (R6-R3): from a via the head goes to the key's layer, after a fix the key arms a via to it, after a via it switches again; the
+//                active layer follows the route and the one active at its start comes back after (R6-R6); V with the route tool armed flips the active layer and the next route
+//                starts with a via armed, once (R6-R5);
 //   via actions  (task-router-actions) on the board made 4-layer for the scenario (`set_stackup`, undone after): `/` (Switch Track Posture) flips the head, Ctrl+V (Place Microvia) arms a
 //                microvia and takes it back, `<` opens the layer picker and arms a through via to the picked layer, Select Layer and Place Micro Via picks among the layers but the one
 //                being routed, Q (Custom Track/Via Size) refuses a hole as big as the via in KiCad's words and its sizes go with the route, Alt+< and Alt+Shift+V arm blind vias; the
@@ -981,6 +984,80 @@
       t((await layersNow()).length === 2, `the board is 2-layer again: ${JSON.stringify(await layersNow())}`);
       await sleep(1500);
     }
+  });
+
+  await scenario("r6: the layer keys while routing switch the route's layer or arm a via, the active layer follows the route and comes back, V before a route starts it with a via", async (t) => {
+    // R6-R3 (`ROUTER_TOOL::onLayerCommand` -> `handleLayerSwitch( aEvent, false )`), R6-R6 (`syncRouterAndFrameLayer`, `finishInteractive`), R6-R5 (`m_startWithVia`)
+    const net = "/LED channels (D1–D8)/PA6", at = [6_000_000, 8_000_000];
+    await commit([], [{ net, at: xy(at), drill: 300_000, diameter: 600_000, from_layer: "F.Cu", to_layer: "B.Cu" }]);
+    await E.run("pcbnew.InteractiveRouter.SingleTrack");
+    await sleep(300);
+    await E.run("pcbnew.Control.layerBottom");
+    await sleep(200);
+    t(E.state().activeLayer === "B.Cu", `B.Cu active before the route: ${E.state().activeLayer}`);
+    let n = replies.length;
+    await clickAt(at[0], at[1]);
+    const s = await waitReply("start", n);
+    t(s && s.body.ok === true && s.body.layer === "B.Cu", `the route starts on the via, on B.Cu: ${s && JSON.stringify([s.body.ok, s.body.layer, s.body.message])}`);
+    await moveTo(9_000_000, 8_000_000);
+    // a layer key with the route held by nothing but a via on every layer: the head goes to that layer (`ROUTER::SwitchLayer`)
+    n = replies.length;
+    await E.run("pcbnew.Control.layerTop");
+    const sw = await waitReply("layer", n);
+    const mv = await waitReply("move", n);
+    t(sw && sw.req.layer === "F.Cu" && sw.body.switched === true && mv && mv.body.layer === "F.Cu", `layerTop moves the head to F.Cu: ${JSON.stringify([sw && sw.body, mv && mv.body.layer])}`);
+    await sleep(300);
+    t(E.state().activeLayer === "F.Cu", `and F.Cu is the active layer while it is routed there: ${E.state().activeLayer}`);
+    n = replies.length;
+    await clickAt(9_000_000, 8_000_000);
+    await waitReply("fix", n);
+    await moveTo(12_000_000, 8_000_000);
+    // after a fix the route is chained to its segment: the key arms a through via to the layer instead, sized by the rules (none sent)
+    n = replies.length;
+    await E.run("pcbnew.Control.layerBottom");
+    const refused = await waitReply("layer", n);
+    const armed = await waitReply("via", n);
+    t(refused && refused.body.switched === false && armed && armed.req.enabled === true && armed.req.to_layer === "B.Cu" && armed.req.diameter === undefined, `layerBottom after a fix arms a via to B.Cu: ${JSON.stringify([refused && refused.body, armed && armed.req])}`);
+    n = replies.length;
+    await clickAt(12_000_000, 8_000_000);
+    const fx = await waitReply("fix", n);
+    await sleep(300);
+    t(fx && fx.body.preview && fx.body.preview.layer === "B.Cu" && E.state().activeLayer === "B.Cu", `the click places the via, the route and the active layer go on on B.Cu: ${JSON.stringify([fx && fx.body.preview && fx.body.preview.layer, E.state().activeLayer])}`);
+    await moveTo(14_000_000, 10_000_000);
+    // after a via nothing holds the route: layerTop switches it again
+    n = replies.length;
+    await E.run("pcbnew.Control.layerTop");
+    const again = await waitReply("layer", n);
+    await sleep(300);
+    t(again && again.body.switched === true && E.state().activeLayer === "F.Cu", `after the via, layerTop switches the head to F.Cu: ${JSON.stringify([again && again.body, E.state().activeLayer])}`);
+    await leaveTool();
+    await sleep(300);
+    t(E.state().activeLayer === "B.Cu", `the route over, the layer active when it started is active again (finishInteractive): ${E.state().activeLayer}`);
+    await restore();
+    // V with the route tool armed and no route: the active layer flips, and the next route starts with a via armed
+    await commit([], [{ net, at: xy(at), drill: 300_000, diameter: 600_000, from_layer: "F.Cu", to_layer: "B.Cu" }]);
+    await E.run("pcbnew.InteractiveRouter.SingleTrack");
+    await sleep(300);
+    await E.run("pcbnew.Control.layerTop");
+    await sleep(200);
+    const toggled = await E.run("pcbnew.Control.layerToggle");
+    await sleep(200);
+    t(toggled && toggled.ok !== false && E.state().activeLayer === "B.Cu", `V before the route flips the active layer to B.Cu: ${JSON.stringify([toggled, E.state().activeLayer])}`);
+    n = replies.length;
+    await clickAt(at[0], at[1]);
+    const s2 = await waitReply("start", n);
+    const v2 = await waitReply("via", n);
+    t(s2 && s2.body.layer === "B.Cu" && v2 && v2.req.enabled === true && v2.req.to_layer === "F.Cu", `the route starts on B.Cu with a via to F.Cu armed: ${JSON.stringify([s2 && s2.body.layer, v2 && v2.req])}`);
+    await leaveTool();
+    await sleep(300);
+    await E.run("pcbnew.InteractiveRouter.SingleTrack");
+    await sleep(300);
+    n = replies.length;
+    await clickAt(at[0], at[1]);
+    await waitReply("start", n);
+    await sleep(500);
+    t(!replies.slice(n).some((r) => r.name === "via"), "the next route starts with no via: the flag was spent");
+    await leaveTool();
   });
 
   await scenario("the board is as it was, and the studio reported no error", async (t) => {

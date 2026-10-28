@@ -2087,6 +2087,9 @@ export interface RoutePreview {
   warnings?: string[];
   /** The width the route is drawn at (`m_sizes.TrackWidth()`): what a start without a width took from the start net (`ImportSizes`). */
   width?: Nm | null;
+  /** `/api/route/move` with a width only: where the width routed comes from -- "user choice", or "board minimum track width" when the chosen one
+   * was below the board's minimum and was raised to it (R6-R2). */
+  width_source?: string;
   /** `/api/route/start` only: what `ROUTER_TOOL::UpdateMessagePanel` shows of the sizes (their sources, the clearance, the net's class) and the rule's width (r5 R5-8). */
   sizes?: RouteSizesInfo;
   colliding: boolean;
@@ -3081,7 +3084,7 @@ export interface DrcReport {
   engine?: string;
   /** The ratsnest kicad-cli reports as `unconnected_items`. */
   unconnected_items?: DrcViolation[];
-  /** Whether kicad-cli's filler ran before the DRC ("Refill all zones before performing DRC"): on a copy of the board, the DRC then judging the board with that fill. Off by default: the DRC judges the fills the board holds. */
+  /** Whether kicad-cli's filler ran before the DRC ("Refill all zones before performing DRC"): on a copy of the board, the DRC then judging the board with that fill. Off: the DRC judges the fills the board holds (the dialog starts with it on, as KiCad's does). */
   zones_refilled_by_kicad?: boolean;
   /** The design revision this run started from: the stamp GET /api/version served at that moment. The report is out of date once the board's revision is another one (kicad-port/checkRevision.ts). Absent from a server that does not stamp. */
   revision?: string;

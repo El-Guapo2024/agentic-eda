@@ -49,9 +49,8 @@ export interface RouteDrawState {
   pendingViaLayer?: string;
   /** The id of the pad, via or track segment the route started on (`m_startItem`): the route does not end on it, so the cursor within a grid of it does not snap back onto it. */
   startItem?: string;
-  /** The active layer before the route started on an item of another layer (`ROUTER_TOOL::prepareInteractive`: `m_originalActiveLayer`, then
-   * `SetActiveLayer( getStartLayer( .. ) )`): the active layer goes back to it when the route ends (`finishInteractive`). Unset when the route
-   * started on the active layer. */
+  /** The active layer when the route started (`ROUTER_TOOL::prepareInteractive`: `m_originalActiveLayer`, then `SetActiveLayer( getStartLayer( .. ) )`):
+   * the active layer follows the route while it runs (`syncRouterAndFrameLayer`) and goes back to this one when it ends (`finishInteractive`), R6-R6. */
   originalActiveLayer?: string;
   /** What the message panel shows of the route's sizes (the start reply's `sizes`; kicad-port/routerSizes.ts). */
   sizes?: RouteSizesInfo;
@@ -63,11 +62,15 @@ export interface RouteDrawState {
  * keeping whatever session-local fields (`net`, `placingVia`,
  * `pendingViaLayer`) the server doesn't echo back. */
 export function drawStateFromPreview(current: RouteDrawState, preview: RoutePreview): RouteDrawState {
+  // The reply to a move that chose a width (W, the width menu) says what was routed: the board's minimum when the choice was below it (R6-R2,
+  // `ImportSizes`' `std::max( bds.m_TrackMinWidth, GetCurrentTrackWidth() )`). Any other reply keeps the width the studio holds.
+  const raised = preview.width_source === "board minimum track width";
   return {
     ...current,
     net: preview.net ?? current.net,
     layer: preview.layer,
-    width: current.width,
+    width: preview.width_source != null && preview.width != null ? preview.width : current.width,
+    sizes: raised && current.sizes ? { ...current.sizes, width_source: preview.width_source! } : current.sizes,
     pts: preview.head,
     colliding: preview.colliding,
     runs: preview.runs,

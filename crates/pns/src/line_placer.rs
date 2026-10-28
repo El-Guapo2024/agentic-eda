@@ -220,6 +220,10 @@ pub struct LinePlacer {
     /// `m_fixedTail`'s stages, one per run: the length of the springback stack when the run was fixed -- its newest frame is the
     /// stage's `commit` node, which Backspace rewinds the stack to (`RewindSpringbackTo( st.commit )`).
     stages: Vec<usize>,
+    /// What [`Self::set_layer`] may switch from (R6-R3): `m_startItem` -- `None` for nothing (empty space, or after a fix), `Some(Some(layers))` for a via or a pad
+    /// (`SOLID`) and its layers, `Some(None)` for a track -- and `m_chainedPlacement` (a fix that did not end in a via: the route goes on from that segment).
+    start_layers: Option<Option<LayerRange>>,
+    chained: bool,
 }
 
 impl LinePlacer {
@@ -229,7 +233,8 @@ impl LinePlacer {
     pub fn start(node: &Node, p: Point, start_item: Option<ItemId>, net: Net, layer: i32, width: Nm) -> Self {
         // `m_initial_direction = Settings().InitialDirection()`: `N` (`NE` with "start diagonal", which the studio does not set). The start
         // segment's direction KiCad's `Start` works out (`lastSegDir`, `initialDir`) is never used (findings p5 F2-12).
-        let _ = (node, start_item);
+        // `m_startItem = aStartItem`: what `SetLayer` may switch from -- a via or a pad on the layer asked, or nothing
+        let start_layers = start_item.and_then(|id| node.get(id)).map(|it| matches!(it, crate::item::Item::Via(_) | crate::item::Item::Solid(_)).then(|| it.layers()));
         let direction = Direction45::N;
         // `LINE_PLACER::Start`: `m_mouseTrailTracer.Clear(); AddTrailPoint( aP ); SetTolerance( m_head.Width() ); SetDefaultDirections( m_initial_direction, UNDEFINED )`
         let mut trail = MouseTrailTracer::new();
@@ -237,7 +242,7 @@ impl LinePlacer {
         trail.add_trail_point(p);
         trail.set_tolerance(width);
         trail.set_default_directions(direction, Direction45::Undefined);
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new() }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false }
     }
 
     pub fn fixed_start(&self) -> Point {
@@ -633,6 +638,9 @@ impl LinePlacer {
         *self.last_good.borrow_mut() = None;
         self.placement_correct = true;
         if !real_end {
+            // `FixRoute`: "m_startItem = nullptr; .. m_chainedPlacement = !pl.EndsWithVia();"
+            self.start_layers = None;
+            self.chained = true;
             // `FixRoute`: "m_mouseTrailTracer.Clear(); SetTolerance( m_head.Width() ); AddTrailPoint( m_currentStart ); SetDefaultDirections( lastSegDir, UNDEFINED )"
             self.restart_trail(self.fixed_start(), self.direction);
         }
@@ -687,8 +695,37 @@ impl LinePlacer {
         self.via_to_layer = None;
         self.via_span = None;
         self.placement_correct = true;
+        // `FixRoute` of a line that ends in a via: "m_startItem = nullptr; .. m_chainedPlacement = !pl.EndsWithVia();"
+        self.start_layers = None;
+        self.chained = false;
         // `FixRoute` after a via: "lastSegDir = pl.EndsWithVia() ? DIRECTION_45::UNDEFINED : d_last"
         self.restart_trail(via_pos, Direction45::Undefined);
+    }
+
+    /// `LINE_PLACER::SetLayer` (R6-R3): the layer keys while routing (`ROUTER_TOOL::onLayerCommand` -> `handleLayerSwitch( aEvent, false )` ->
+    /// `ROUTER::SwitchLayer`) move the head to `layer` when nothing holds it to the one it is on -- the route started in empty space or after a via, or on a via
+    /// or pad that is on `layer` too -- and not once a fix chained it to a segment (`m_chainedPlacement`) or when it started on a track. The head starts again
+    /// from where the leg starts, in the route's first direction (`m_p_start = m_currentStart; m_direction = m_initial_direction; m_mouseTrailTracer.Clear()`).
+    /// False: the caller arms a via to `layer` instead (`handleLayerSwitch` goes on to the via).
+    pub fn set_layer(&mut self, layer: i32) -> bool {
+        if self.idle {
+            self.current_layer = layer;
+            return true;
+        }
+        if self.chained {
+            return false;
+        }
+        match self.start_layers {
+            None => {}
+            Some(Some(layers)) if layers.overlaps_layer(layer) => {}
+            Some(_) => return false,
+        }
+        self.current_layer = layer;
+        self.direction = self.initial_direction;
+        *self.last_good.borrow_mut() = None;
+        *self.last_move.borrow_mut() = None;
+        self.restart_trail(self.fixed_start(), self.initial_direction);
+        true
     }
 
     /// `LINE_PLACER::UnfixRoute` (Backspace): drop the last fixed run,
@@ -698,6 +735,8 @@ impl LinePlacer {
     /// shrink below the route's own origin.
     pub fn undo_last_segment(&mut self) -> bool {
         let Some(popped) = self.runs.pop() else { return false };
+        // `UnfixRoute`: "m_startItem = nullptr;" (`m_chainedPlacement` is left as it was)
+        self.start_layers = None;
         // the via that run ended in goes with it, and the route is back on the layer the run was on (`m_currentLayer = st.pts[0].layer`)
         let left = self.runs.len();
         let ended_in_via = self.fixed_vias.iter().rev().find(|(v, runs)| *runs > left && popped.last() == Some(v.pos)).map(|(v, _)| v.clone());

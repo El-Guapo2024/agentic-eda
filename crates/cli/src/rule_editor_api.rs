@@ -7,7 +7,8 @@
 //!     Within Area selectors (`NET_SELECTOR`, `NETCLASS_SELECTOR`, `AREA_SELECTOR`: the board's nets, its net classes, its named rule areas, sorted).
 //!   - **`POST /api/rule_editor/check`**: `{"entry", "rule"}` is what Save would say of a panel (`onSaveButtonClicked`): `{"ok", "valid", "message",
 //!     "generated"}`, without changing anything; `{"syntax": {"name", "body"}}` is a Custom rule's Check Syntax (`DRC_RE_CUSTOM_RULE_PANEL::onCheckSyntax`):
-//!     `{"ok", "message"}`.
+//!     `{"ok", "message"}`; `{"compile": text}` is Board Setup > Custom Rules' "Check rule syntax" (`PANEL_SETUP_RULES::OnCompile`): `{"ok", "messages":
+//!     [{"text", "severity"}]}`.
 
 use eda_drc::rule_editor::{self, Fields, PanelType, RuleEdit};
 use serde_json::{json, Map, Value};
@@ -72,6 +73,21 @@ pub(crate) fn check(dir: &Path, body: &[u8]) -> Value {
         Err(e) => return fail(crate::board::reasons(&e)),
     };
     let board = eda_ops::rule_editor::editor_board(&model);
+    // Board Setup > Custom Rules' "Check rule syntax" (`PANEL_SETUP_RULES::OnCompile`, R6-D5): `{"compile": text}` -> `{"ok", "messages": [{"text", "severity"}]}`
+    if let Some(text) = req.get("compile").and_then(Value::as_str) {
+        let messages: Vec<Value> = rule_editor::compile_report(text, &board.env())
+            .into_iter()
+            .map(|r| {
+                let severity = match r.severity {
+                    eda_drc::dru::ReportedSeverity::Error => "error",
+                    eda_drc::dru::ReportedSeverity::Warning => "warning",
+                    eda_drc::dru::ReportedSeverity::Info => "info",
+                };
+                json!({ "text": r.text, "severity": severity })
+            })
+            .collect();
+        return json!({ "ok": true, "messages": messages });
+    }
     if let Some(syntax) = req.get("syntax") {
         let name = syntax["name"].as_str().unwrap_or("test");
         let text = syntax["body"].as_str().unwrap_or("");

@@ -73,7 +73,8 @@ pub fn parse_footprint_file(text: &str, name: &str) -> Result<Footprint, String>
     crate::bold_text::normalize(&mut tree);
     // A file older than 20210606: its `~X~` overbars in KiCad's new `~{X}` notation, net names and texts, as KiCad's parser converts them (`overbar`).
     crate::overbar::normalize(&mut tree);
-    let root = tree.as_list().filter(|l| sexpr::tag(l) == Some("footprint")).ok_or("top-level form is not (footprint ...); not a KiCad footprint file")?;
+    // `(footprint ..)`, or KiCad 5's `(module ..)`: `parseFOOTPRINT_unchecked`'s `wxCHECK_MSG( CurTok() == T_module || CurTok() == T_footprint, ..`
+    let root = tree.as_list().filter(|l| matches!(sexpr::tag(l), Some("footprint") | Some("module"))).ok_or("top-level form is not (footprint ...); not a KiCad footprint file")?;
 
     // A bare footprint file has no board placement, so its own `(at ...)`
     // (present when it was saved from a board, absent from a pristine
@@ -597,6 +598,15 @@ mod tests {
     use eda_model::units::mm;
     use super::*;
     use eda_model::PadKind;
+
+    /// r6-board-io F5: a KiCad 5 library file is `(module ..)`, which `parseFOOTPRINT_unchecked` takes as it takes `(footprint ..)`.
+    #[test]
+    fn a_kicad5_module_file_is_a_footprint() {
+        let fp = parse_footprint_file("(module R (layer F.Cu) (tedit 5B307E4C) (pad 1 smd rect (at 0 0) (size 1 1) (layers F.Cu F.Paste F.Mask)))", "old:R").expect("a (module ..) file reads");
+        assert_eq!(fp.pads.len(), 1);
+        assert_eq!(fp.name, "old:R");
+        assert!(parse_footprint_file("(kicad_pcb (version 1))", "x:y").is_err(), "a board is still not a footprint");
+    }
 
     fn usb_c_fixture() -> String {
         // A trimmed stand-in for the real HRO USB-C receptacle: one signal
