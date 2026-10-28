@@ -406,6 +406,7 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
         if args.input.to_ascii_lowercase().ends_with(".kicad_sch") {
             keep_project_erc_settings(out, Path::new(&args.input))?;
             keep_project_erc_exclusions(out, Path::new(&args.input))?;
+            keep_sim_libraries(out, Path::new(&args.input))?;
         }
     }
 
@@ -505,6 +506,31 @@ fn keep_project_erc_exclusions(out: &Path, root: &Path) -> Result<(), Vec<CheckR
         sch.erc_exclusions = waived;
     }
     crate::board::save(out, &design)
+}
+
+/// The simulation model files the schematic names in its project's folder (`Sim.Library "diode.lib"`, `eda_kicad::project_schematic::sim_library_files`), copied
+/// into the board folder at the same place, so the derived project finds them where KiCad finds them in the original (`SIM_LIB_MGR::ResolveLibraryPath`, r7 M6).
+/// A file the board folder has already is kept.
+fn keep_sim_libraries(out: &Path, root: &Path) -> Result<(), Vec<CheckResult>> {
+    let Some(src) = root.parent() else { return Ok(()) };
+    let (_, design, model) = crate::board::load(out)?;
+    let mut n = 0;
+    for rel in eda_kicad::project_schematic::sim_library_files(&design, &model) {
+        let (from, to) = (src.join(&rel), out.join(&rel));
+        if !from.is_file() || to.exists() {
+            continue;
+        }
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if std::fs::copy(&from, &to).is_ok() {
+            n += 1;
+        }
+    }
+    if n > 0 {
+        eprintln!("  {n} simulation model file(s) of the project kept");
+    }
+    Ok(())
 }
 
 /// A board with an outline and nothing on it, for a schematic that has no board: the 100 by 80 mm a new project starts with.

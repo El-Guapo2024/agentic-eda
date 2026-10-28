@@ -487,6 +487,19 @@ fn write_project_with(work: &Path, stem: &str, design: &Design, model: &Constrai
             let _ = std::fs::remove_file(&prl);
         }
     }
+    // The simulation model files the design names inside its folder (`Sim.Library "diode.lib"`), beside the derived project, where KiCad looks for them
+    // (`SIM_LIB_MGR::ResolveLibraryPath`: the project's folder, r7 M6). Only the studio's own `<board>/.kicad` has a board folder to take them from.
+    if let Some(board_dir) = work.file_name().filter(|n| *n == ".kicad").and(work.parent()) {
+        for rel in eda_kicad::project_schematic::sim_library_files(design, model) {
+            let (from, to) = (board_dir.join(&rel), work.join(&rel));
+            if from.is_file() {
+                if let Some(parent) = to.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::copy(&from, &to);
+            }
+        }
+    }
     // The simulator's workbook, under the name the project's `schematic.ngspice.workbook_filename` gives it (`SIMULATOR_FRAME_UI::InitWorkbook` reads it from there).
     if let Some(sch) = design.schematic.as_ref() {
         if let (Some(text), Some(ng)) = (sch.extras.sim_workbook.as_ref(), sch.extras.ngspice.as_ref()) {

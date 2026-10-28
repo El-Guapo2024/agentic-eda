@@ -119,6 +119,36 @@ pub fn top_level_sheets(project_json: &str) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// The simulation model files the design names by a path inside its project folder (r7 M6): each `Sim.Library` field of a placed symbol (`user_fields`, on every
+/// screen), of a library symbol (`LibConnectivity::user_fields`) and of the simulation fields the studio writes (`ConstraintModel::symbol_sim_fields`), as a
+/// path relative to the project -- `${KIPRJMOD}/` taken off -- that stays inside it. KiCad finds such a file in the project's folder
+/// (`SIM_LIB_MGR::ResolveLibraryPath`: `m_project->AbsolutePath( expandedPath )`), so `eda import-kicad` copies it into the board folder and the derived files
+/// get it beside them (`eda_kicad_engine`'s project writer). An absolute path, a path with another variable, and one that climbs out of the folder are
+/// left to KiCad's own search and not carried (**Differs**: such a file is found only on the machine it is on).
+pub fn sim_library_files(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Vec<std::path::PathBuf> {
+    let mut names: Vec<&str> = Vec::new();
+    let screens = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values()));
+    for sch in screens {
+        names.extend(sch.user_fields.values().filter_map(|f| f.get("Sim.Library")).map(String::as_str));
+    }
+    names.extend(model.symbols.iter().flat_map(|s| s.connectivity.user_fields.iter()).filter(|(n, _)| n == "Sim.Library").map(|(_, t)| t.as_str()));
+    names.extend(model.symbol_sim_fields.values().flat_map(|f| f.iter()).filter(|(n, _)| n == "Sim.Library").map(|(_, t)| t.as_str()));
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    for name in names {
+        let name = name.trim().replace('\\', "/");
+        let rel = name.strip_prefix("${KIPRJMOD}/").unwrap_or(&name);
+        let path = std::path::Path::new(rel);
+        if rel.is_empty() || rel.contains("${") || !path.components().all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir)) {
+            continue;
+        }
+        let path = path.components().filter(|c| matches!(c, std::path::Component::Normal(_))).collect::<std::path::PathBuf>();
+        if !out.contains(&path) {
+            out.push(path);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

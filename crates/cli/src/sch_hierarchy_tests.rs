@@ -2208,3 +2208,18 @@ fn an_excluded_spice_directive_stays_out_of_the_derived_netlist() {
         assert!(derived.contains(".tran") && !derived.contains("EXCLUDED"), "{derived}");
     }
 }
+
+/// r7 M6: a symbol's simulation model file in the project's folder (`Sim.Library "diode.lib"`, which KiCad finds there: `SIM_LIB_MGR::ResolveLibraryPath`) is
+/// carried into the board folder and beside the derived files, so kicad-cli finds no `simulation_model_issue` in the derived files of QA
+/// `spice_netlists/rectifier`, as in the original.
+#[test]
+fn a_symbols_sim_library_file_is_carried() {
+    let Some((dir, root)) = qa_variant("spice_netlists/rectifier/rectifier.kicad_sch", "r7_sim_library", None, "") else { return };
+    assert!(dir.join("diode.lib").is_file(), "the model file is in the board folder");
+    if kicad_cli_ready() {
+        let derived = erc_kinds(&dir);
+        assert!(dir.join(".kicad/diode.lib").is_file(), "and beside the derived files");
+        let original = kicad_cli_erc_counts(&root).unwrap();
+        assert_eq!(derived.get("simulation_model_issue"), original.get("simulation_model_issue"), "{derived:?} against {original:?}");
+    }
+}
