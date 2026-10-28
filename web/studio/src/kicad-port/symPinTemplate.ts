@@ -21,7 +21,7 @@ export interface PinTemplate {
   body_style: number;
 }
 
-/** `SYMBOL_EDITOR_SETTINGS::m_Defaults`: input/line/right (180deg, see pinOrientation.ts), 100 mil (2.54mm) length, 50 mil (1.27mm) name/number text. */
+/** `SYMBOL_EDITOR_SETTINGS::m_Defaults`: input/line/right (`g_LastPinOrient = PIN_ORIENTATION::PIN_RIGHT`, file angle 0), 100 mil (2.54mm) length, 50 mil (1.27mm) name/number text. */
 export const DEFAULT_PIN_TEMPLATE: PinTemplate = {
   electrical_type: "input",
   shape: "line",

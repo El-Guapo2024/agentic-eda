@@ -63,3 +63,7 @@ test("samePinTemplate: what the poll may re-set without a re-render", () => {
   assert.equal(samePinTemplate(template, { ...template, length_mm: 3.81 }), false);
   assert.equal(samePinTemplate(template, { ...template, unit: 0 }), false);
 });
+
+test("the default pin points right, file angle 0 (g_LastPinOrient = PIN_RIGHT, r7 E7-S1)", () => {
+  assert.equal(DEFAULT_PIN_TEMPLATE.angle_deg, 0);
+});

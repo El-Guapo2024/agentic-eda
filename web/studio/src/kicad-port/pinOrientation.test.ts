@@ -8,18 +8,19 @@ test("right/left/up/down round-trip through angle_deg", () => {
   }
 });
 
-test("matches this app's own already-verified builtin symbols (crates/model/src/symbol.rs)", () => {
-  // conn_01x's pins sit left of the body (stub pointing left) at angle 0.
-  assert.equal(angleDegToOrientation(0), "left");
-  // device_d's pin 2 sits right of the body (stub pointing right) at angle 180.
-  assert.equal(angleDegToOrientation(180), "right");
-  // device_r's pin 1 sits above the body (stub pointing up) at angle 270.
-  assert.equal(angleDegToOrientation(270), "up");
-  // device_r's pin 2 sits below the body (stub pointing down) at angle 90.
-  assert.equal(angleDegToOrientation(90), "down");
+test("the file angle as parseSymbolPin reads it: 0 PIN_RIGHT, 90 PIN_UP, 180 PIN_LEFT, 270 PIN_DOWN (r7 E7-S1)", () => {
+  assert.equal(angleDegToOrientation(0), "right");
+  assert.equal(angleDegToOrientation(90), "up");
+  assert.equal(angleDegToOrientation(180), "left");
+  assert.equal(angleDegToOrientation(270), "down");
+  assert.equal(orientationToAngleDeg("right"), 0);
+  assert.equal(orientationToAngleDeg("up"), 90);
+  assert.equal(orientationToAngleDeg("left"), 180);
+  assert.equal(orientationToAngleDeg("down"), 270);
 });
 
 test("a stray non-cardinal angle snaps to the nearest cardinal orientation", () => {
-  assert.equal(angleDegToOrientation(10), "left");
-  assert.equal(angleDegToOrientation(100), "down");
+  assert.equal(angleDegToOrientation(10), "right");
+  assert.equal(angleDegToOrientation(100), "up");
+  assert.equal(angleDegToOrientation(-90), "down");
 });

@@ -1,29 +1,29 @@
-// `dialog_pin_properties.cpp`'s Orientation combo (Right/Left/Up/Down) <->
-// `LibPin::angle_deg`/`LibrarySymbolPin.angle_deg` (0/90/180/270, the
-// direction *from* the pin's outer end *into* the symbol body -- see
-// `components/schematic/transform.ts`'s own `pinDirectionInternal` doc).
-// Confirmed against this app's own already-correct builtin library
-// transcriptions (`crates/model/src/symbol.rs`'s `device_r`/`device_d`/
-// `conn_01x`, read directly rather than guessed): a pin drawn to the
-// *left* of the body (its stub pointing further left, e.g. `conn_01x`'s
-// pins at x=-5.08 with the body at x in [-1.27,1.27]) has `angle_deg ===
-// 0`, i.e. "Left" maps to 0, not 180 as the bare word might suggest --
-// the angle names which way the pin points *into* the body (east, here),
-// the opposite of which way its own stub visually points (west).
+// `dialog_pin_properties.cpp`'s Orientation combo (Right/Left/Up/Down) <-> `LibPin::angle_deg`/`LibrarySymbolPin.angle_deg`, which is the file's angle
+// (`(pin .. (at x y <angle>))`) as it is.
+//
+// `sch_io_kicad_sexpr_parser.cpp::parseSymbolPin` reads that angle as
+//     case 0:   pin->SetOrientation( PIN_ORIENTATION::PIN_RIGHT ); break;
+//     case 90:  pin->SetOrientation( PIN_ORIENTATION::PIN_UP );    break;
+//     case 180: pin->SetOrientation( PIN_ORIENTATION::PIN_LEFT );  break;
+//     case 270: pin->SetOrientation( PIN_ORIENTATION::PIN_DOWN );  break;
+// and the combo shows `PIN_RIGHT` as "Right" (`pin_type.cpp::InitTables`). The orientation names the way the pin runs from its connection point
+// to the body: `Device:R`'s pin 1, above the body at file angle 270, is "Down"; a pin left of a connector's body, `(at -5.08 0 0)`, is "Right".
+// (Before r7 E7-S1 this table was turned 180 degrees and every label was the opposite one; the stored angles never changed, so a file keeps its
+// pins pointing the way they did.)
 export type PinOrientation = "right" | "left" | "up" | "down";
 
 const ORIENTATION_TO_ANGLE: Record<PinOrientation, number> = {
-  right: 180,
-  left: 0,
-  up: 270,
-  down: 90,
+  right: 0,
+  up: 90,
+  left: 180,
+  down: 270,
 };
 
 const ANGLE_TO_ORIENTATION: Record<number, PinOrientation> = {
-  180: "right",
-  0: "left",
-  270: "up",
-  90: "down",
+  0: "right",
+  90: "up",
+  180: "left",
+  270: "down",
 };
 
 /** `dialog_pin_properties.cpp`'s own combo order. */
