@@ -78,7 +78,7 @@ test("r6 C6-M4: a_body_text_is_not_a_graphic_item", () => {
   assert.deepEqual(diffSymbols(sch, library()), []);
 });
 
-test("r6 C6-M4: shapes compare within EPSILON 2 nm, and two equal shapes are one (`std::set`)", () => {
+test("r6 C6-M4: shapes compare within EPSILON (2 IU), and two equal shapes are one (`std::set`)", () => {
   const lib = library({ graphics: [{ kind: "rectangle", unit: 1, body_style: 1, start: { x: -1.016, y: -2.54 }, end: { x: 1.016000002, y: 2.54 }, stroke_mm: 0.254, fill: "none" }] });
   assert.deepEqual(diffSymbols(resolved(), lib), []);
   const twice = resolved({ graphics: [...resolved().graphics, ...resolved().graphics] });
@@ -102,4 +102,24 @@ test("r6 C6-M4: a local power symbol against a global one differs (`m_options`)"
   assert.deepEqual(diffSymbols(resolved({ power: true, power_local: true } as never), library({ power: true, power_local: true })), []);
   // a schematic side that does not say is taken as the library's kind
   assert.deepEqual(diffSymbols(resolved({ power: true }), library({ power: true, power_local: true })), []);
+});
+
+test("r7 A7-L1: shapes_150_nm_apart_are_the_same (EPSILON is 2 IU of 100 nm), a pin 50 nm away is not moved", () => {
+  const lib = library({ graphics: [{ kind: "rectangle", unit: 1, body_style: 1, start: { x: -1.016, y: -2.54 }, end: { x: 1.01615, y: 2.54 }, stroke_mm: 0.254, fill: "none" }] });
+  assert.deepEqual(diffSymbols(resolved(), lib), []);
+  const far = library({ graphics: [{ kind: "rectangle", unit: 1, body_style: 1, start: { x: -1.016, y: -2.54 }, end: { x: 1.0163, y: 2.54 }, stroke_mm: 0.254, fill: "none" }] });
+  assert.equal(diffSymbols(resolved(), far).length, 1, "300 nm is past it");
+  const nudged = library();
+  nudged.pins[0] = { ...nudged.pins[0]!, at: { x: 0.00004, y: 3.81 } };
+  assert.deepEqual(diffSymbols(resolved(), nudged), []);
+});
+
+test("r7 A7-L1: two_polylines_with_one_first_point_pair_by_vertex_count (a POLY's start and end are (0, 0))", () => {
+  const poly = (pts: [number, number][]) => ({ kind: "polyline" as const, pts, stroke_width: 0.254, fill: "none" as const, unit: 1, body_style: 1 });
+  const lpoly = (pts: [number, number][]) => ({ kind: "polyline" as const, unit: 1, body_style: 1, pts: pts.map(([x, y]) => ({ x, y })), stroke_mm: 0.254, fill: "none" as const });
+  // same first point; a 2-point line ending far right and a 3-point line ending far left. By the last point the 3-point one sorts first; by KiCad's
+  // vertex count the 2-point one does. With the library's 3-point line moved, only that pair is reported.
+  const sch = resolved({ graphics: [poly([[0, 0], [10, 0]]), poly([[0, 0], [1, 1], [-10, 0]])] });
+  const lib = library({ graphics: [lpoly([[0, 0], [10, 0]]), lpoly([[0, 0], [1, 2], [-10, 0]])] });
+  assert.deepEqual(diffSymbols(sch, lib), ["Graphic item differs: Polyline, 3 points; Polyline, 3 points."]);
 });

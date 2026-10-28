@@ -11,7 +11,7 @@
 // - "Unit count differs.";
 // - the shapes (`SCH_SHAPE_T` only: a body text or text box is not a graphic item), sorted by `SCH_ITEM::cmp_items` (a `std::set`, so two equal
 //   shapes are one), their count, then each pair by `SCH_SHAPE::compare` -> `SCH_ITEM::compare` (unit, body style, position) and
-//   `EDA_SHAPE::Compare` (points within `EPSILON` 2 nm, the corner radius, the stroke width, its line style, the fill);
+//   `EDA_SHAPE::Compare` (points within `EPSILON` 2 IU, 200 nm, the corner radius, the stroke width, its line style, the fill);
 // - each schematic pin not found by number, unit and body style in the library ("Extra pin"), or found at another place: `SCH_ITEM::compare`
 //   tests the type, unit, body style, `IsPrivate()` and position, and returns 0 under ERC, so a pin's name, type, shape, direction and length
 //   are not compared;
@@ -37,10 +37,14 @@ export interface PlacedSymbolFields {
   fields?: readonly SchField[];
 }
 
-/** mm (library, Y up) to KiCad's internal units (nm, Y down). */
-const iu = (x: number, y: number): [number, number] => [Math.round(x * 1e6), Math.round(-y * 1e6)];
-const iuLen = (v: number) => Math.round(v * 1e6);
-const mm = (nm: number) => messageTextFromValue(nm, "mm");
+/** mm (library, Y up) to the schematic's internal units, Y down: `SCH_IU_PER_MM` is 1e4, so one IU is 100 nm (base_units.h), and `EDA_SHAPE::Compare`'s
+ *  `EPSILON` of 2 is 200 nm (r7 A7-L1: this counted in nanometres). */
+const SCH_IU_PER_MM = 1e4;
+const NM_PER_IU = 1e6 / SCH_IU_PER_MM;
+const iu = (x: number, y: number): [number, number] => [Math.round(x * SCH_IU_PER_MM), Math.round(-y * SCH_IU_PER_MM)];
+const iuLen = (v: number) => Math.round(v * SCH_IU_PER_MM);
+/** A length in IU as the message writes it (`messageTextFromValue` takes nanometres). */
+const mm = (iuValue: number) => messageTextFromValue(iuValue * NM_PER_IU, "mm");
 
 interface Pin {
   number: string;
@@ -99,8 +103,10 @@ function shapeOfResolved(g: LibGraphic): Shape | null {
     case "rectangle":
       return { ...base, type: 1, start: iu(...g.start), end: iu(...g.end), width: iuLen(g.stroke_width), fill: g.fill };
     case "polyline": {
+      // a `SHAPE_T::POLY` keeps its points in `m_poly`; the parser leaves `m_start` / `m_end` at (0, 0), so `TEST_PT( m_start ..)` ties and the
+      // order falls to the vertex count, then the vertices (r7 A7-L1)
       const pts = g.pts.map(([x, y]) => iu(x, y));
-      return { ...base, type: 4, start: pts[0] ?? [0, 0], end: pts[pts.length - 1] ?? [0, 0], pts, width: iuLen(g.stroke_width), fill: g.fill };
+      return { ...base, type: 4, start: [0, 0], end: [0, 0], pts, width: iuLen(g.stroke_width), fill: g.fill };
     }
     case "circle": {
       const c = iu(...g.center);
@@ -120,7 +126,7 @@ function shapeOfLibrary(g: LibrarySymbolGraphic): Shape | null {
       return { ...base, type: 1, start: iu(g.start.x, g.start.y), end: iu(g.end.x, g.end.y), width: iuLen(g.stroke_mm), fill: g.fill };
     case "polyline": {
       const pts = g.pts.map((p) => iu(p.x, p.y));
-      return { ...base, type: 4, start: pts[0] ?? [0, 0], end: pts[pts.length - 1] ?? [0, 0], pts, width: iuLen(g.stroke_mm), fill: g.fill };
+      return { ...base, type: 4, start: [0, 0], end: [0, 0], pts, width: iuLen(g.stroke_mm), fill: g.fill };
     }
     case "circle": {
       const c = iu(g.center.x, g.center.y);
@@ -240,7 +246,8 @@ export function diffSymbols(schematic: SchematicLibSymbol, library: LibrarySymbo
         continue;
       }
       const [lx, ly] = iu(other.at.x, other.at.y);
-      const moved = f.at[0] - placed.at[0] !== lx || f.at[1] - placed.at[1] !== ly;
+      // the placed field's offset (nanometres) in IU: `SCH_ITEM::compare` tests the position exactly, at 100 nm
+      const moved = Math.round((f.at[0] - placed.at[0]) / NM_PER_IU) !== lx || Math.round((f.at[1] - placed.at[1]) / NM_PER_IU) !== ly;
       if (moved || privateNames.has(other.name)) out.push(`Field '${f.name}' differs: ${describeField(f.name, f.text)}; ${describeField(other.name, other.text)}.`);
     }
   }
