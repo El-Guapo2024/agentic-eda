@@ -401,6 +401,8 @@ Rows reviewed: Pin Properties, the Pin Table, library Symbol Properties (units, 
 Rows reviewed: the Footprint Editor's own Pad Properties dialog (`components/footprint/PadPropertiesDialog.tsx`, a different component from the board's), Default Pad Properties and Add Pad, the Pad Table, and library Footprint Properties' attributes. The C++ is `dialog_pad_properties.cpp`, `dialog_fp_edit_pad_table.cpp`, `dialog_footprint_properties_fp_editor.cpp`, `pad.cpp` and `tools/pad_tool.cpp`.
 
 ### E7-F1. The Footprint Editor's Pad Properties does not run `padValuesOK`: it refuses a plated hole that reaches the pad's edge, its messages are not KiCad's, and it gives no warnings (medium)
+
+**Fixed** on task-r7-fp-editor: c8a5ca2e (padValuesOK in the library dialog; `Footprint::validate_pad_values` for library pads).
 - **What differs.**
   - Ours: `PadPropertiesDialog.tsx:88-106` sends `edit_pad`. The server's `validate_pad` (`crates/ops/src/lib.rs:6146`) calls `Footprint::validate` (`crates/model/src/footprint.rs:520-585`).
   - `Footprint::validate` refuses a plated pad with `drill >= min(size)` (`:572`, `:577`) with "drill {d} nm is not smaller than the {w} x {h} nm pad, so there is no annular ring". The result is a toast.
@@ -420,6 +422,8 @@ Rows reviewed: the Footprint Editor's own Pad Properties dialog (`components/foo
 - **Already known?** No (fixed on the board dialog only).
 
 ### E7-F2. Changing "Pad type" changes only the type: the layers, the hole and the number stay; there is no Edge Connector or SMD Aperture type, and the Connector preset writes `smd` (high)
+
+**Fixed** on task-r7-fp-editor: c8a5ca2e (`kicad-port/padType.ts::padTypeSelected`; Edge Connector and SMD Aperture; the Connector preset sets `kicad.connector`).
 - **What differs.**
   - Ours:
     - `PadPropertiesDialog.tsx:135` does `set("kind", ...)` only. `KIND_OPTIONS` (`:19-23`) has three entries.
@@ -439,6 +443,8 @@ Rows reviewed: the Footprint Editor's own Pad Properties dialog (`components/foo
 - **Already known?** No. PARITY section 3 calls the presets "partial by design", but not this.
 
 ### E7-F3. OK in Pad Properties on a real pad does not set the Add Pad master or the last pad number, and Default Pad Properties has no number field (medium)
+
+**Fixed** on task-r7-fp-editor: c8a5ca2e.
 - **What differs.**
   - Ours: `PadPropertiesDialog.tsx:99-105` stores `defaultPad` in default mode only. The Number row is hidden in default mode (`:128`).
   - KiCad's `TransferDataFromWindow` writes the master for every pad:
@@ -455,6 +461,8 @@ Rows reviewed: the Footprint Editor's own Pad Properties dialog (`components/foo
 - **Already known?** No.
 
 ### E7-F4. Pad Table: a Type change does not apply `PAD::SetAttribute`'s layer and number rules (medium)
+
+**Fixed** on task-r7-fp-editor: c8a5ca2e (`padType.ts::setPadAttribute`; a hole-less pad made plated takes 0.8 mm where KiCad leaves 0, as the IR refuses no hole).
 - **What differs.**
   - Ours: `components/footprint/PadTableDialog.tsx:137-145` changes the kind and the drill (`?? 800_000`).
   - KiCad's `PAD::SetAttribute` (`pad.cpp:1370-1411`):
@@ -466,6 +474,8 @@ Rows reviewed: the Footprint Editor's own Pad Properties dialog (`components/foo
 - **Already known?** Only the missing Connector and Aperture types (the file header).
 
 ### E7-F5. Library Footprint Properties: "SMD" and "Through hole" are two check boxes, not KiCad's "Component type" choice, and the labels are not KiCad's (medium)
+
+**Fixed** on task-r7-fp-editor: c8a5ca2e.
 - **What differs.**
   - Ours: `components/footprint/FootprintPropertiesDialog.tsx:138-153` lets both boxes be ticked, and the writer then writes `(attr smd through_hole)` (`footprint_lib.rs:370-376`).
   - KiCad: `m_componentTypeChoices` is { "Through hole", "SMD", "Unspecified" }, a single choice. Its labels are "Not in schematic", "Exclude from position files", "Exclude from bill of materials", "Do not populate", "Exempt from courtyard requirement", "Allow bridged solder mask apertures between pads", and the zone choice "Use zone setting".
@@ -475,11 +485,15 @@ Rows reviewed: the Footprint Editor's own Pad Properties dialog (`components/foo
 - **Already known?** No. PARITY section 5 says "identical".
 
 ### E7-F6. Switching the hole between Round and Slot replaces the size with fixed values (low)
+
+**Left (low)**: GAPS.md item 19.
 - **What differs.** `PadPropertiesDialog.tsx:192,195` substitutes 0.8 mm or 0.6 x 1.0 mm. KiCad's `OnDrillShapeSelected` keeps `m_holeX` / `m_holeY`, so a 1.0 mm round hole becomes a 1.0 x 1.0 oblong. KiCad's labels are "Round" / "Oblong".
 - **Severity.** Low.
 - **Already known?** No.
 
 ### E7-F7. Smaller, in the same dialog (low)
+
+**Left (low)**: GAPS.md item 19 (the PARITY-fpedit "PTH-only thermal" rows corrected, 258abd35).
 - The THT preset `["*.Cu","F.Mask","B.Mask"]` and the master's `*.Cu *.Mask` compare as different strings, so a pad placed by Add Pad shows no preset as current. KiCad reads both forms the same way.
 - Our type label is "Through hole"; KiCad's is "Through-hole".
 - PARITY section 3 lists a "PTH-only thermal" pad connection, which does not exist. The code's four choices are right; the document is stale.
@@ -499,6 +513,8 @@ Rows reviewed: the Footprint Editor's own Pad Properties dialog (`components/foo
 ## Part E. Exports and board control
 
 ### X7-1. Export Footprints adds only the names the project library lacks; KiCad saves every board footprint, as edited on the board, over the library's (medium)
+
+**Fixed** on task-r7-fp-editor: 902380f0 (`Cmd::ExportFootprintsToLibrary`; the instance's fields and attributes are not written, PARITY-boardctl section 5).
 - **What differs.**
   - Ours: `web/studio/src/actions/boardControlActions.ts:245-266` filters to the names not yet in the project footprint library and runs `open_footprint_for_edit` for each. A footprint already there is skipped, and the board's per-instance edits (GAPS 9, `DrawingsSection::footprint_edits`: pad type, size, hole, margins, fields) are never exported. The toast is our own: "%d footprint(s) added to the project footprint library, %d already there."
   - KiCad: `PCB_EDIT_FRAME::ExportFootprintsToLibrary` (`footprint_libraries_utils.cpp:647-697`) loops over every placed footprint:
@@ -515,6 +531,8 @@ Rows reviewed: the Footprint Editor's own Pad Properties dialog (`components/foo
 - **Already known?** In part. PARITY-boardctl section 5 describes the "add the missing names" design but not the lost edits or the overwrite.
 
 ### C7-12. Repair Board: a narrower duplicate-id scan, orphan nets taken from zones rather than pads, and an undo step that KiCad does not make (low)
+
+**Left (low)**: GAPS.md item 35.
 - **What differs.**
   - Ours: `crates/ops/src/board_control.rs:414-482` (`repair_board`).
     - It scans tracks, vias, zones, drawings, texts, groups and dimensions in that order.
@@ -537,6 +555,8 @@ Rows reviewed: the Footprint Editor's own Pad Properties dialog (`components/foo
 These rows were read against `board_editor_control.cpp`, `board_inspection_tool.cpp`, `pcb_control.cpp` and `ratsnest_view_item.cpp`. A footprint standing for its pads in Highlight Net (selection) and in Hide Net is already P11-11 (`p11-p18.md`), so it is not repeated here.
 
 ### C7-1. Zone Priority: a zone that lies inside another zone's hole is counted as overlapping it (medium)
+
+**Fixed** on task-r7-fp-editor: a8ef86f4.
 - **What differs.**
   - Ours: `crates/ops/src/board_control.rs:216-231` (`overlapping_zones`) uses `ring_contains(&c.outline, zone.outline[0])` and `edges_touch`, on the outer ring only. It ignores `Zone::holes`, although `zones_intersect` (`:89-100`) does honour them.
   - KiCad: `getOverlappingZones` tests `aZone->Outline()->Collide( candidate->Outline() )`, which goes through the triangulation and so has no triangles in the holes, and `Outline()->Contains( CVertex( 0 ) )`. `containsSingle` says: "If the point is inside a hole it is outside of the polygon".
@@ -546,6 +566,8 @@ These rows were read against `board_editor_control.cpp`, `board_inspection_tool.
 - **Already known?** No.
 
 ### C7-2. The Zone Priority menu's enable test is a bounding box on the first layer only; the PARITY row is stale (medium)
+
+**Fixed** on task-r7-fp-editor: a8ef86f4 (`kicad-port/zoneOverlap.ts`; the PARITY-boardctl row corrected, 258abd35).
 - **What differs.**
   - Ours: `web/studio/src/kicad-port/pcbSelectionSummary.ts:29-38` (`overlappingZones`) decides `zoneCanRaise` / `zoneCanLower` from the bounding boxes, with `other.layer !== zone.layer` (the first layer only) and no outline test.
   - KiCad: `ZONE_PRIORITY_CONTEXT_MENU::update` calls the real `getOverlappingZones`, which intersects the layer sets and then tests the outlines.
@@ -558,6 +580,8 @@ These rows were read against `board_editor_control.cpp`, `board_inspection_tool.
 - **Already known?** No.
 
 ### C7-3. Ratsnest Mode (All to Visible) and the Appearance radio buttons keep the Local Ratsnest tool's pad flags; KiCad resets them on every change (medium)
+
+**Fixed** on task-r7-fp-editor: a8ef86f4.
 - **What differs.**
   - Ours: `actions/boardControlActions.ts:58-65` and `withViewSlice` (`state/store.tsx:1269-1282`) clear `bcx.localRatsnestPads` only when `showRatsnest` itself changes.
   - KiCad: `PCB_CONTROL::RatsnestModeCycle` and `APPEARANCE_CONTROLS::onRatsnestMode` always call `SetElementVisibility( LAYER_RATSNEST, m_ShowGlobalRatsnest )`. `BOARD::SetElementVisibility` then sets `SetLocalRatsnestVisible( isEnabled )` on every pad.
@@ -567,6 +591,8 @@ These rows were read against `board_editor_control.cpp`, `board_inspection_tool.
 - **Already known?** No.
 
 ### C7-4. Highlight Net (selection) with several nets overwrites the last-highlight memory; KiCad leaves it alone (medium)
+
+**Fixed** on task-r7-fp-editor: a8ef86f4.
 - **What differs.**
   - Ours: `withHighlight` (`kicad-port/boardControlState.ts:70-73`) sets `lastHighlight` on every change.
   - KiCad: `highlightNet`'s multi-net branch does `m_currentlyHighlighted = netcodes; return true;` before it reaches `m_lastHighlighted = netcodes`.
@@ -576,6 +602,8 @@ These rows were read against `board_editor_control.cpp`, `board_inspection_tool.
 - **Already known?** No.
 
 ### C7-5. Highlight Net (selection) drops the unconnected net (code 0) (low)
+
+**Left (low)**: GAPS.md item 35.
 - **What differs.**
   - Ours: `netsOfSelection` (`kicad-port/boardControl.ts:116-135`) skips an empty net.
   - KiCad: it inserts `GetNetCode()` whatever it is. A selected pad with no net therefore highlights the unconnected items, and with a GND pad it gives a two-net highlight.
@@ -584,6 +612,8 @@ These rows were read against `board_editor_control.cpp`, `board_inspection_tool.
 - **Already known?** No.
 
 ### C7-6. Hide / Show Net in Ratsnest acts on the item under the cursor when nothing is selected, and shows a toast of our own (medium)
+
+**Fixed** on task-r7-fp-editor: a8ef86f4 (the cursor fallback and the toast; the footprint part stays P11-11's).
 - **What differs.**
   - Ours: `boardControlActions.ts:115-125` uses `requestSelection()` (the selection, else the item under the cursor). With no net it toasts "Select an item on the net to hide in the ratsnest.".
   - KiCad: `doHideRatsnestNet` reads `GetSelection()` only and keeps nets with `GetNetCode() > 0`. The action is disabled by `haveNetCond` (`pcb_edit_frame.cpp`), so there is no message.
@@ -592,6 +622,8 @@ These rows were read against `board_editor_control.cpp`, `board_inspection_tool.
 - **Already known?** The footprint part is P11-11; the cursor fallback and the toast are new.
 
 ### C7-7. A ratsnest line whose two ends coincide is invisible; KiCad draws a 0.4 mm cross (medium)
+
+**Fixed** on task-r7-fp-editor: a8ef86f4.
 - **What differs.**
   - Ours: `components/canvas/painter.ts:1049-1077` always does `moveTo(a); lineTo(b)`.
   - KiCad: `RATSNEST_VIEW_ITEM::ViewDraw` has `if ( source == target )` and draws two lines of `CROSS_SIZE = 200000`. The dynamic ratsnest has the same case.
@@ -600,11 +632,15 @@ These rows were read against `board_editor_control.cpp`, `board_inspection_tool.
 - **Already known?** No.
 
 ### C7-8. The curved ratsnest is a quadratic curve with 0.03·L bulge; KiCad's is `DrawCurve( source, center, center, target )` with `center` offset 0.1·L, a 0.075·L bulge (low)
+
+**Left (low)**: GAPS.md item 35 (the PARITY-boardctl row no longer says identical, 258abd35).
 - **What differs.** `painter.ts:1060-1071`. `ctx.bezierCurveTo(cx, cy, cx, cy, bx, by)` with KiCad's `center` would be exact.
 - **Severity.** Low (cosmetic).
 - **Already known?** In a code comment only; the PARITY row says "identical".
 
 ### C7-9. Ratsnest colours: the highlighted net is drawn in the selection-shadow colour at 2.5 px, and the other lines are not dimmed (low)
+
+**Left (low)**: GAPS.md item 35.
 - **What differs.**
   - KiCad keeps one width and brightens a highlighted net's own colour: `adjustColor( color, 0.8, color.a + 0.4 )`.
   - With a highlight or a local ratsnest active, KiCad sets `dimStatic`, which halves the alpha of every other line.
@@ -612,6 +648,8 @@ These rows were read against `board_editor_control.cpp`, `board_inspection_tool.
 - **Already known?** No.
 
 ### C7-10. Local Ratsnest picks a pad by its box, not `PAD::HitTest`, and leaves the selection alone (low)
+
+**Left (low)**: GAPS.md item 35.
 - **What differs.**
   - Ours: `boardControlPick.ts:21-34` (`padAt`) hits the pad's box.
   - KiCad: `selectionClear`, then `selectionCursor` with `PadFilter`, which hits the real shape. A click in the corner of a round pad's box therefore falls through to the footprint, and KiCad leaves the clicked item selected.
@@ -619,6 +657,8 @@ These rows were read against `board_editor_control.cpp`, `board_inspection_tool.
 - **Already known?** No.
 
 ### C7-11. The net under the cursor (when nothing is selected) is the nearest pad *centre* or a track within 10 px, not KiCad's collector (low)
+
+**Left (low)**: GAPS.md item 35.
 - **What differs.**
   - Ours: `components/canvas/netAtCursor.ts:11-37`.
   - KiCad: `highlightNet` uses the items' `HitTest`, `SetPreferredLayer( activeLayer )`, `SetIgnoreNoNets( true )` and a high-contrast filter, then takes `collector[0]`.
@@ -734,9 +774,9 @@ These rows were read against `board_editor_control.cpp`, `board_inspection_tool.
 
 **Doc corrections for a fixer:**
 - GAPS 34 / PARITY-sch 49: the Simulation Model port is about 28k lines, not 14.7k.
-- PARITY-fpedit section 3: the "Validation" and "PTH-only thermal" rows.
-- PARITY-fpedit section 5: "Attributes identical".
-- PARITY-boardctl:41: the zone priority entries are no longer always enabled.
-- PARITY-boardctl's curved ratsnest row.
+- PARITY-fpedit section 3: the "Validation" and "PTH-only thermal" rows. **Fixed** on task-r7-fp-editor: 258abd35.
+- PARITY-fpedit section 5: "Attributes identical". **Fixed** on task-r7-fp-editor: 258abd35.
+- PARITY-boardctl:41: the zone priority entries are no longer always enabled. **Fixed** on task-r7-fp-editor: 258abd35.
+- PARITY-boardctl's curved ratsnest row. **Fixed** on task-r7-fp-editor: 258abd35 (the "Ratsnest drawing rules" row).
 - PARITY-sch 38.1: Tune's Save fails on imported sheets.
 - PARITY-symedit: the "confirmed against builtin symbols" note for pin orientation.
