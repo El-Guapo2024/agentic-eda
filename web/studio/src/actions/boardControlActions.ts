@@ -11,8 +11,7 @@ import { localRatsnestPadsAfter, type BoardControlState, type BoardExportKind } 
 import { postRepairBoard } from "../api/boardControl";
 import { cliExporterUnavailable } from "../state/cliExporters";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
-import { fetchFootprintLibraryNames } from "../api/client";
-import type { Cmd, ZonePriorityMove } from "../api/types";
+import type { ZonePriorityMove } from "../api/types";
 import { highlightedNets, netsOfSelection, ratsnestModeCycle, selectedCopperZones, setNetsHidden, swapHighlight } from "../kicad-port/boardControl";
 
 export interface BoardControlContext {
@@ -240,27 +239,15 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
   m.set("pcbnew.EditorControl.generateBOM", exportDialog("pcb_bom"));
   m.set("pcbnew.EditorControl.exportFootprintAssociations", exportDialog("cmp"));
 
-  // ExportFootprints ("Footprints..." under File > Export, `ExportFootprintsToLibrary( false )`): saves a copy of every footprint of the
-  // board into a library. The studio has the one project footprint library (`design.footprint_library`) rather than a library table to pick
-  // from, and a placed footprint is its named footprint (a library entry reaches the board only once it is published), so each distinct
-  // footprint the board uses that is not an entry yet becomes one (`Cmd::OpenFootprintForEdit` copies what the board resolves the name to).
-  // KiCad skips a footprint with no library item name, and its "link the board footprints to the exported ones" option has nothing to do.
+  // ExportFootprints ("Footprints..." under File > Export, `PCB_EDIT_FRAME::ExportFootprintsToLibrary`): every footprint of the board, as the board has it (its
+  // pad edits and 3D models), saved over the project footprint library's entry of its name (`SaveFootprint( .., true )`), the last instance of a name
+  // winning -- `Cmd::ExportFootprintsToLibrary` (crates/ops/src/board_control.rs). The studio has the one project library rather than a library table, so
+  // KiCad's "Export footprints to library:" question and its "link the board footprints" option have nothing to do. KiCad says nothing when it is done;
+  // a board with no footprints is refused with "No footprints to export!" (r7 X7-1).
   m.set(
     "pcbnew.EditorControl.exportFootprints",
     pcbOnly(() => {
-      const names = [...new Set((board?.parts ?? []).map((p) => p.footprint).filter((n): n is string => !!n))];
-      if (names.length === 0) {
-        toast("No footprints to export!");
-        return;
-      }
-      void fetchFootprintLibraryNames()
-        .then(async (lib) => {
-          const entries = new Set(lib.project ?? []);
-          const todo = names.filter((n) => !entries.has(n));
-          if (todo.length > 0 && !(await api.cmdBatch(todo.map((name): Cmd => ({ op: "open_footprint_for_edit", name }))))) return;
-          toast(`${todo.length} footprint(s) added to the project footprint library, ${names.length - todo.length} already there.`);
-        })
-        .catch((e: unknown) => toast(e instanceof Error ? e.message : String(e), "error"));
+      void api.cmd({ op: "export_footprints_to_library" });
     })
   );
 

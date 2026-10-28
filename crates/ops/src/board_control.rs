@@ -472,6 +472,131 @@ pub fn repair_board(design: &mut Design, nets: &[Net]) -> RepairReport {
     report
 }
 
+// ------------------------------------------------------------------ export footprints
+
+/// What [`export_footprints_to_library`] did: the names written as new entries and the entries written over.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExportFootprintsReport {
+    pub added: Vec<String>,
+    pub replaced: Vec<String>,
+}
+
+/// One library pad with a board pad edit laid on: the geometry through the engine pad ([`eda_model::fp_edit::apply_pad_edit`], the rule the board uses), the
+/// margins into the pad's kept file forms. A pad whose type changed takes its new kind's layers (an empty list: the writer's defaults for the kind) and stops
+/// being an edge connector.
+fn library_pad_with_edit(pad: &eda_model::ir::LibraryPad, e: &eda_model::fp_edit::PadEdit) -> eda_model::ir::LibraryPad {
+    let mut engine = pad.to_engine_pad();
+    eda_model::fp_edit::apply_pad_edit(&mut engine, e);
+    let geometry = eda_model::ir::LibraryPad::from_engine_pad(&engine);
+    let mut out = pad.clone();
+    out.shape = geometry.shape;
+    out.size = geometry.size;
+    out.offset = geometry.offset;
+    out.drill = geometry.drill;
+    out.drill_slot = geometry.drill_slot;
+    out.rot = geometry.rot;
+    out.roundrect_ratio = geometry.roundrect_ratio;
+    out.trapezoid_delta = geometry.trapezoid_delta;
+    out.chamfer_ratio = geometry.chamfer_ratio;
+    out.chamfer_corners = geometry.chamfer_corners;
+    out.custom = geometry.custom;
+    out.stack = geometry.stack;
+    if geometry.kind != pad.kind {
+        out.kind = geometry.kind;
+        out.layers = Vec::new();
+        out.kicad.connector = false;
+    }
+    if let Some(m) = e.solder_mask_margin {
+        out.kicad.solder_mask_margin = Some(m);
+    }
+    if let Some(m) = e.solder_paste_margin {
+        out.kicad.solder_paste_margin = Some(m);
+    }
+    if let Some(r) = e.solder_paste_margin_ratio {
+        out.kicad.solder_paste_margin_ratio = Some(r);
+    }
+    out
+}
+
+/// `PCB_EDIT_FRAME::ExportFootprintsToLibrary` (File > Export > Footprints...): every footprint of the board is saved to the library as the board has it,
+/// over an entry of the same name (`adapter->SaveFootprint( nickname, fpCopy, true )`, `true` being overwrite), in board order, so the last instance of a name
+/// wins; a footprint with no library item name is skipped ("Handle old boards."). The library is the project footprint library (`design.footprint_library`):
+/// the studio has the one, not a library table to choose from, so KiCad's "Export footprints to library:" question and its "Update board footprints to link to
+/// exported footprints" option have nothing to do (the board's footprints already name it).
+///
+/// "As the board has it" is the entry the board resolves with that instance's own pad edits and 3D models laid on (GAPS 9, `DrawingsSection::footprint_edits`):
+/// - an entry that is published (the board's footprints follow it) gets the edits laid on its pads, so what the editor keeps of the file stays;
+/// - any other footprint -- an entry not published, which the board does not show, or no entry yet -- is written from the footprint the board shows
+///   ([`eda_model::ConstraintModel::footprint_of`], the instance's edits included), as KiCad overwrites the library item with the board's copy: its pads,
+///   art, courtyard and models replace an unpublished entry's (whose name, description, attributes and fields stay).
+///
+/// What the instance's edit has beyond its pads and models (its Reference and Value layouts, user fields and attributes) is not written: the library entry keeps
+/// its own, where KiCad's copy takes the board's (with the reference reset to `REF**`, which an entry here always is).
+pub fn export_footprints_to_library(design: &mut Design, model: &eda_model::ConstraintModel) -> Result<ExportFootprintsReport, Vec<CheckResult>> {
+    // `GetBoard()->GetFirstFootprint() == nullptr`: "No footprints to export!"
+    let named: Vec<&eda_model::Part> = model.parts.iter().filter(|p| p.footprint.as_deref().is_some_and(|n| !n.is_empty())).collect();
+    if model.parts.is_empty() {
+        return Err(fail("ops_export_footprints", "board", "No footprints to export!"));
+    }
+    // The last instance of each name, in board order.
+    let mut last: BTreeMap<String, &eda_model::Part> = BTreeMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for part in named {
+        let name = part.footprint.clone().unwrap_or_default();
+        if !last.contains_key(&name) {
+            order.push(name.clone());
+        }
+        last.insert(name, part);
+    }
+    let mut report = ExportFootprintsReport::default();
+    for name in order {
+        let part = last[&name];
+        let edit = design.footprint_edit(&part.reference).cloned();
+        let lib = design.footprint_library.get_or_insert_with(Default::default);
+        match lib.by_name_mut(&name) {
+            Some(entry) if entry.published => {
+                if let Some(edit) = &edit {
+                    let engine = entry.to_engine_footprint();
+                    let mut pads = entry.pads.clone();
+                    for e in &edit.pads {
+                        if let Some(i) = eda_model::fp_edit::pad_index(&engine, &e.number, e.nth) {
+                            pads[i] = library_pad_with_edit(&entry.pads[i], e);
+                        }
+                    }
+                    entry.pads = pads;
+                    if let Some(models) = &edit.models3d {
+                        entry.models3d = models.clone();
+                        entry.model = models.first().map(|m| m.path.clone());
+                    }
+                }
+                report.replaced.push(name);
+            }
+            existing => {
+                let Some(fp) = model.footprint_of(part) else { continue };
+                let mut fresh = eda_model::ir::LibraryFootprint::from_engine_footprint(&fp);
+                fresh.name = name.clone();
+                if let Some(entry) = existing {
+                    // the board's pads, art, courtyard and models over the entry's; its name, description, attributes and fields stay
+                    entry.pads = fresh.pads;
+                    entry.graphics = fresh.graphics;
+                    entry.texts = fresh.texts;
+                    entry.courtyard = fresh.courtyard;
+                    entry.model = fresh.model;
+                    entry.models3d = fresh.models3d;
+                    entry.pad_edit = None;
+                    entry.assign_missing_ids();
+                    report.replaced.push(name);
+                } else {
+                    fresh.assign_missing_ids();
+                    lib.footprints.push(fresh);
+                    report.added.push(name);
+                }
+            }
+        }
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use eda_model::units::mm;
@@ -743,6 +868,60 @@ mod tests {
         assert_eq!(d.drawings.as_ref().unwrap().aux_origin, None);
         set_grid_origin(&mut d, Some(pt(Nm::ZERO, Nm::ZERO))).unwrap();
         assert_eq!(d.drawings.as_ref().unwrap().grid_origin, None);
+    }
+
+    /// `ExportFootprintsToLibrary`: every board footprint saved over the library entry of its name, as the board has it (r7 X7-1).
+    #[test]
+    fn export_footprints_writes_the_boards_edited_footprint_over_the_library_entry() {
+        use eda_model::fp_edit::{FootprintEdit, PadEdit};
+        let part = |r: &str| -> eda_model::Part { serde_json::from_value(serde_json::json!({ "reference": r, "package": "0402", "footprint": "0402", "pins": [] })).unwrap() };
+        let mut model = eda_model::ConstraintModel { parts: vec![part("C1"), part("C2")], ..Default::default() };
+        let mut d = design(vec![]);
+        // no entry yet: added from what the board shows
+        let r = export_footprints_to_library(&mut d, &model).unwrap();
+        assert_eq!(r.added, vec!["0402".to_string()]);
+        let builtin = eda_model::footprint::builtin("0402").unwrap();
+        let entry = d.footprint_library.as_ref().unwrap().by_name("0402").unwrap();
+        assert_eq!(entry.pads.len(), 2);
+        assert_eq!(entry.pads[0].size, builtin.pads[0].size);
+
+        // an entry that is there and not published: the board's copy over it, the last instance of the name winning
+        let mut pad_edit = PadEdit::none("1", 1);
+        pad_edit.size = Some((mm(1.2), mm(1.4)));
+        model.instance_footprints.insert("C2".into(), eda_model::fp_edit::patched_footprint(&builtin, std::slice::from_ref(&pad_edit)));
+        d.footprint_library.as_mut().unwrap().by_name_mut("0402").unwrap().description = "mine".into();
+        let r = export_footprints_to_library(&mut d, &model).unwrap();
+        assert_eq!(r.replaced, vec!["0402".to_string()], "\"already there\" is overwritten (SaveFootprint( .., true ))");
+        let entry = d.footprint_library.as_ref().unwrap().by_name("0402").unwrap();
+        assert_eq!(entry.pads.iter().find(|p| p.number == "1").unwrap().size, (mm(1.2), mm(1.4)), "C2's edited pad");
+        assert_eq!(entry.description, "mine", "what the board does not have stays");
+
+        // a published entry: the instance's pad edit is laid on its pads, which keep what the editor kept of the file
+        {
+            let entry = d.footprint_library.as_mut().unwrap().by_name_mut("0402").unwrap();
+            entry.published = true;
+            for p in entry.pads.iter_mut() {
+                p.size = (mm(0.6), mm(0.5));
+                p.kicad.tokens = vec!["(pinfunction \"A\")".into()];
+            }
+        }
+        model.instance_footprints.clear();
+        let mut edit = FootprintEdit::new("C2");
+        let mut e = PadEdit::none("2", 1);
+        e.size = Some((mm(0.9), mm(0.8)));
+        e.solder_mask_margin = Some(mm(0.05));
+        edit.pads = vec![e];
+        d.drawings.get_or_insert_with(Default::default).footprint_edits = vec![edit];
+        export_footprints_to_library(&mut d, &model).unwrap();
+        let entry = d.footprint_library.as_ref().unwrap().by_name("0402").unwrap();
+        let p2 = entry.pads.iter().find(|p| p.number == "2").unwrap();
+        assert_eq!(p2.size, (mm(0.9), mm(0.8)));
+        assert_eq!(p2.kicad.solder_mask_margin, Some(mm(0.05)));
+        assert_eq!(p2.kicad.tokens, vec!["(pinfunction \"A\")".to_string()]);
+        assert_eq!(entry.pads.iter().find(|p| p.number == "1").unwrap().size, (mm(0.6), mm(0.5)), "an unedited pad is the entry's");
+
+        // a board with no footprints
+        assert_eq!(export_footprints_to_library(&mut design(vec![]), &eda_model::ConstraintModel::default()).unwrap_err()[0].hint.as_deref(), Some("No footprints to export!"));
     }
 
     #[test]

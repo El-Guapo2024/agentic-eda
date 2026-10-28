@@ -769,6 +769,9 @@ pub enum Cmd {
     /// `pcbnew.Control.repairBoard` (`BOARD_EDITOR_CONTROL::RepairBoard`): see [`board_control::repair_board`].
     /// Refused when there is nothing to repair, so no empty undo step is pushed.
     RepairBoard,
+    /// `pcbnew.EditorControl.exportFootprints` (`PCB_EDIT_FRAME::ExportFootprintsToLibrary`): every footprint of the board, as the board has it, saved to the
+    /// project footprint library over an entry of the same name -- see [`board_control::export_footprints_to_library`]. A Footprint Editor step (it edits the library).
+    ExportFootprintsToLibrary,
     /// The board items the IR gained with GAPS.md item 24 (package P16): text boxes, reference images, points and the hatch fill of shapes -- one verb family, see
     /// [`pcb_items::PcbItemCmd`]. On the wire: `{"op": "pcb_item", "verb": "add_text_box", "text_box": {..}}`.
     PcbItem(pcb_items::PcbItemCmd),
@@ -2235,7 +2238,8 @@ impl Cmd {
             | Cmd::MoveFootprintText { .. }
             | Cmd::CreateFootprintArray { .. }
             | Cmd::ExplodePad { .. }
-            | Cmd::RecombinePad { .. } => Domain::FootprintEditor,
+            | Cmd::RecombinePad { .. }
+            | Cmd::ExportFootprintsToLibrary => Domain::FootprintEditor,
             Cmd::OpenSymbolForEdit { .. }
             | Cmd::NewSymbol { .. }
             | Cmd::DeleteLibrarySymbol { .. }
@@ -2462,6 +2466,7 @@ impl Cmd {
             Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
             Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
             Cmd::RepairBoard => vec!["repair_board"],
+            Cmd::ExportFootprintsToLibrary => vec!["export_footprints"],
 
             Cmd::MoveSymbol { id, .. }
             | Cmd::DragSymbol { id, .. }
@@ -2975,6 +2980,7 @@ impl<'a> Board<'a> {
             Cmd::SetGridOrigin { at } => board_control::set_grid_origin(&mut self.design, *at),
             Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
             Cmd::SetSchematicPage { page, title_block } => page_settings::set_schematic_page(&mut self.design, page, title_block),
+            Cmd::ExportFootprintsToLibrary => board_control::export_footprints_to_library(&mut self.design, self.model).map(|_| ()),
             Cmd::RepairBoard => {
                 let report = board_control::repair_board(&mut self.design, &self.model.nets);
                 if report.repaired == 0 {
