@@ -16,7 +16,7 @@ import { cleanHistory, initialNavHistory, pushToHistory, type NavHistory } from 
 import { revisionOf } from "../kicad-port/checkRevision";
 import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, refilterDrc, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
-import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type CarryStep, type SharedView } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, routeCancel, type CarryStep, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -65,6 +65,9 @@ import type { BreakState } from "../kicad-port/schBreak";
 import type { SheetImportPlan } from "../kicad-port/schImportSheet";
 import type { PinPlacement } from "../components/schematic/schPinTool";
 import type { AlignEdge } from "../kicad-port/alignDistribute";
+
+/** A router session this studio is drawing: a route, a pair or a drag (R7-R1). */
+const isRouterDraw = (d: { kind: string } | null | undefined): boolean => d?.kind === "route" || d?.kind === "diffpair" || d?.kind === "drag";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
 /**
@@ -2465,7 +2468,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     // `postUndo`/`board::undo`'s own doc for the backend half of this.
     undo: async (opts?: { keepTool?: boolean }) => {
       if (!opts?.keepTool) dispatch({ type: "CLEAR_SELECTION" });
-      const reply = await postUndo(stateRef.current.tab === "schematic" ? "schematic" : "pcb");
+      const domain = stateRef.current.tab === "schematic" ? "schematic" : "pcb";
+      let reply = await postUndo(domain);
+      // R7-R1: the server refuses while a route session is open (`UndoRedoBlock`); one this studio is not drawing (left by a page reload) is ended and
+      // the undo asked again
+      if (!reply.ok && (reply as { route_session?: boolean }).route_session && !isRouterDraw(stateRef.current.drawState)) {
+        await routeCancel();
+        reply = await postUndo(domain);
+      }
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
     },
@@ -2482,7 +2492,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     redo: async () => {
       dispatch({ type: "CLEAR_SELECTION" });
-      const reply = await postRedo(stateRef.current.tab === "schematic" ? "schematic" : "pcb");
+      const domain = stateRef.current.tab === "schematic" ? "schematic" : "pcb";
+      let reply = await postRedo(domain);
+      if (!reply.ok && (reply as { route_session?: boolean }).route_session && !isRouterDraw(stateRef.current.drawState)) {
+        await routeCancel();
+        reply = await postRedo(domain);
+      }
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
     },

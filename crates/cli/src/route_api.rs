@@ -473,6 +473,20 @@ pub fn cancel(dir: &Path, cell: &RouteCell) -> Value {
     }
 }
 
+/// R7-R1: `/api/undo` and `/api/redo` on the board while a route, a pair or a drag session is open. `ROUTER_TOOL::prepareInteractive` (and
+/// `performDragging` / `InlineDrag`) set `frame()->UndoRedoBlock( true )` until `finishInteractive`, and `PCB_BASE_EDIT_FRAME::RestoreCopyFromUndoList`
+/// / `RestoreCopyFromRedoList` return at once while it is set (`undo_redo.cpp`: `if( UndoRedoBlocked() ) return;`): an undo must not change the board
+/// under a session whose world, displaced tracks and commit were computed from it. The studio sends Ctrl+Z while routing to Undo Last Segment and never
+/// here; this guards every other client. The footprint and symbol editors keep their own undo (their own domains). The reply carries `route_session`,
+/// so a studio that has no route of its own (a session left by a page reload) can end it and ask again.
+pub fn undo_redo_blocked(cell: &RouteCell, scope: Option<eda_ops::Domain>) -> Option<Value> {
+    if matches!(scope, Some(eda_ops::Domain::FootprintEditor | eda_ops::Domain::SymbolEditor)) {
+        return None;
+    }
+    let live = cell.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+    live.then(|| json!({ "ok": false, "route_session": true, "message": "Undo and redo are blocked while a route is in progress (Esc ends it)." }))
+}
+
 /// `POST /api/route/mode`: `{mode}` (`"mark_obstacles" | "walkaround" | "shove"`) -- `ROUTER_TOOL::ChangeRouterMode` /
 /// `CycleRouterMode` (`settings.SetMode( mode )`) applied to the session that is running right now (a route or a diff pair), so
 /// the next `move` already uses it; a drag keeps the mode it started in (`DRAGGER::Start`: `m_currentMode = Settings().Mode()`). With no session there is nothing to change (the studio keeps the mode for the next one).
@@ -1102,6 +1116,24 @@ mod tests {
         assert_ne!(tracks(), before, "the routes were committed");
         board::undo(&dir, "test", Some(eda_ops::Domain::Pcb)).unwrap();
         assert_eq!(tracks(), before, "one undo takes the three autorouted connections away");
+    }
+
+    /// R7-R1 (`frame()->UndoRedoBlock( true )` while routing): with a route session open, an undo or a redo of the board is refused and the board
+    /// stays as it is; the footprint and symbol editors' own undo is not the board's; once the session ends, undo works again.
+    #[test]
+    fn an_undo_is_refused_while_a_route_session_is_open() {
+        let dir = scratch("undo_blocked");
+        setup(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        assert!(undo_redo_blocked(&cell, Some(eda_ops::Domain::Pcb)).is_none(), "no session, nothing blocked");
+        start_with(&dir, &cell, json!({ "mode": "walkaround" }));
+        let refused = undo_redo_blocked(&cell, Some(eda_ops::Domain::Pcb)).expect("blocked while routing");
+        assert_eq!((refused["ok"].clone(), refused["route_session"].clone()), (json!(false), json!(true)), "{refused}");
+        assert!(undo_redo_blocked(&cell, None).is_some() && undo_redo_blocked(&cell, Some(eda_ops::Domain::Schematic)).is_some());
+        assert!(undo_redo_blocked(&cell, Some(eda_ops::Domain::FootprintEditor)).is_none());
+        assert!(undo_redo_blocked(&cell, Some(eda_ops::Domain::SymbolEditor)).is_none());
+        cancel(&dir, &cell);
+        assert!(undo_redo_blocked(&cell, Some(eda_ops::Domain::Pcb)).is_none(), "the session ended");
     }
 
     /// findings p5 F2-3: Esc commits what the clicks fixed (`ROUTER_TOOL::performRouting`: the cancel branch breaks out of the loop, and

@@ -951,6 +951,9 @@ fn handle(
         ("POST", "/api/appearance") => respond(stream, "200 OK", "application/json", crate::appearance_api::post(dir, &String::from_utf8_lossy(&body)).to_string().as_bytes()),
         ("POST", "/api/undo") => {
             let scope = request_domain(&body);
+            if let Some(refused) = route_api::undo_redo_blocked(route_session, scope) {
+                return respond(stream, "200 OK", "application/json", refused.to_string().as_bytes());
+            }
             let reply = match board::undo(dir, "ui", scope) {
                 Ok(summary) => json!({ "ok": true, "message": summary }),
                 Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
@@ -959,6 +962,9 @@ fn handle(
         }
         ("POST", "/api/redo") => {
             let scope = request_domain(&body);
+            if let Some(refused) = route_api::undo_redo_blocked(route_session, scope) {
+                return respond(stream, "200 OK", "application/json", refused.to_string().as_bytes());
+            }
             let reply = match board::redo(dir, "ui", scope) {
                 Ok(summary) => json!({ "ok": true, "message": summary }),
                 Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
