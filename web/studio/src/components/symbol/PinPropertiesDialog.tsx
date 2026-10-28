@@ -19,10 +19,11 @@ import { angleDegToOrientation, orientationToAngleDeg, PIN_ORIENTATIONS, type Pi
 import { pinOccupiedMessage, pinPlacementOccupant } from "../../kicad-port/pinPlacement";
 import { alternatesError, PIN_SHAPE_OPTIONS as SHAPE_OPTIONS, PIN_TYPE_OPTIONS as ELECTRICAL_TYPE_OPTIONS } from "../../kicad-port/symPinAlternates";
 import { pinTemplateOf } from "../../kicad-port/symPinTemplate";
-import { synchronizePins } from "../../kicad-port/symPinSync";
+import { changePinLength, synchronizePins } from "../../kicad-port/symPinSync";
 import { commonBodyStylesBox, commonUnitsBox, pinOffGridMessage, pinUnitsOnOk, syncPinsMessage } from "../../kicad-port/symPinDialog";
 import { askConfirm } from "../library/libraryDialogs";
 import { PinAlternatesGrid } from "./PinAlternatesGrid";
+import { displayY, storedY } from "../../kicad-port/pinTable";
 
 const ORIENTATION_LABELS: Record<PinOrientation, string> = { right: "Right", left: "Left", up: "Up", down: "Down" };
 
@@ -82,8 +83,11 @@ export function PinPropertiesDialog() {
     // "Only show the warning if the position has been changed": a pin off KiCad's standard grid asks first; No keeps the dialog open
     const offGrid = pinOffGridMessage(pin.at, form.at);
     if (offGrid && !(await askConfirm({ title: "Confirmation", message: offGrid, okLabel: "Yes", cancelLabel: "No" }))) return; // `IsOK`: Yes / No
-    // `SetUnit( m_checkApplyToAllParts->GetValue() ? 0 : m_frame->GetUnit() )`, the same for the body style: a disabled box is unchecked for the unit
-    const edited: LibrarySymbolPin = { ...form, ...pinUnitsOnOk(unitsBox.checked, stylesBox.checked, state.activeUnit, state.activeBodyStyle) };
+    // `SetUnit( m_checkApplyToAllParts->GetValue() ? 0 : m_frame->GetUnit() )`, the same for the body style: a disabled box is unchecked for the unit.
+    // `SetOrientation( .. ); SetPosition( newPos ); ChangeLength( m_pinLength )`: the length changes from the pin's own with the body end kept, so the
+    // connection point moves from the typed position (r7 E7-S2)
+    const placed = changePinLength({ ...form, length_mm: pin.length_mm }, form.length_mm);
+    const edited: LibrarySymbolPin = { ...placed, ...pinUnitsOnOk(unitsBox.checked, stylesBox.checked, state.activeUnit, state.activeBodyStyle) };
     // `EditPinProperties` saves the sticky defaults (`g_LastPin*`) when OK is pressed, for an edited pin and for a new one before `PlacePin` places it -- so a
     // declined "Place Pin Anyway" keeps the new look too. Merely selecting a pin saves nothing.
     dispatch({ type: "SET_PIN_TEMPLATE", pin: pinTemplateOf(edited) });
@@ -160,7 +164,8 @@ export function PinPropertiesDialog() {
 
             <span>Position</span>
             <span>
-              {len(form.at.x, (x) => set("at", { ...form.at, x }))} {len(form.at.y, (y) => set("at", { ...form.at, y }))}
+              {/* `m_posY.SetValue( m_origPos.y )`: KiCad's internal Y, which points down -- the file's Y negated (r7 E7-S3) */}
+              {len(form.at.x, (x) => set("at", { ...form.at, x }))} {len(displayY(form.at.y), (y) => set("at", { ...form.at, y: storedY(y) }))}
             </span>
 
             <span>Visible</span>
