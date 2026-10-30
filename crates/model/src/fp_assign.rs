@@ -141,7 +141,7 @@ impl ConstraintModel {
                         }
                     }
                 }
-                PlacementRule::Keepout { refs, .. } | PlacementRule::ThermalGroup { refs } => rename_all(refs),
+                PlacementRule::Keepout { refs, .. } | PlacementRule::ThermalGroup { refs } | PlacementRule::Module { refs, .. } => rename_all(refs),
             }
         }
         self.instance_footprints = rekey(std::mem::take(&mut self.instance_footprints), map);

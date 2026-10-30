@@ -98,7 +98,7 @@ fn narrow(model: &ConstraintModel, placed: &BTreeSet<&str>) -> ConstraintModel {
             .iter()
             .filter(|r| match r {
                 PlacementRule::Proximity { a, b, .. } | PlacementRule::Separation { a, b, .. } => keep_part(a) && keep_part(b),
-                PlacementRule::Keepout { refs, .. } | PlacementRule::ThermalGroup { refs } => refs.iter().all(|r| keep_part(r)),
+                PlacementRule::Keepout { refs, .. } | PlacementRule::ThermalGroup { refs } | PlacementRule::Module { refs, .. } => refs.iter().all(|r| keep_part(r)),
             })
             .cloned()
             .collect(),

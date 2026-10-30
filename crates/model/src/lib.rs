@@ -1155,6 +1155,11 @@ pub enum PlacementRule {
     },
     Keepout { zone: String, refs: Vec<String> },
     ThermalGroup { refs: Vec<String> },
+    /// A named functional block: these parts belong together, and `name`
+    /// is what the block is called -- the schematic sheet it is drawn on and
+    /// the placement module it becomes. Without one a block is named after
+    /// its part with the most pads.
+    Module { name: String, refs: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

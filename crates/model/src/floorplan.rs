@@ -111,11 +111,20 @@ pub fn partition(model: &ConstraintModel) -> (Vec<Module>, Vec<String>) {
         i
     }
     let mut touched = vec![false; ids.len()];
+    // A named module joins its parts as a chain of proximity pairs would.
+    let mut pairs: Vec<(&String, &String)> = Vec::new();
     for r in &model.placement_rules {
-        let (a, b) = match r {
-            PlacementRule::Proximity { a, b, .. } => (a, b),
-            _ => continue,
-        };
+        match r {
+            PlacementRule::Proximity { a, b, .. } => pairs.push((a, b)),
+            PlacementRule::Module { refs, .. } => match refs.as_slice() {
+                [only] => pairs.push((only, only)),
+                [first, rest @ ..] => pairs.extend(rest.iter().map(|r| (first, r))),
+                [] => {}
+            },
+            _ => {}
+        }
+    }
+    for (a, b) in pairs {
         let (Some(&ia), Some(&ib)) = (index.get(a.as_str()), index.get(b.as_str())) else { continue };
         touched[ia] = true;
         touched[ib] = true;
@@ -187,7 +196,12 @@ pub fn partition(model: &ConstraintModel) -> (Vec<Module>, Vec<String>) {
                 .unwrap_or_default();
             let edge = refs.iter().filter_map(|r| model.part(r)).any(is_edge_connector);
             let largest = refs.iter().filter_map(|r| part_extent(model, r)).fold((Nm::ZERO, Nm::ZERO), |a, b| (a.0.max(b.0), a.1.max(b.1)));
-            Module { name: format!("mod_{lead}"), refs, area, edge, largest }
+            // A module the intent named keeps that name (the first one whose parts it holds).
+            let named = model.placement_rules.iter().find_map(|r| match r {
+                PlacementRule::Module { name, refs: m } if m.iter().any(|x| refs.contains(x)) => Some(name.clone()),
+                _ => None,
+            });
+            Module { name: named.unwrap_or_else(|| format!("mod_{lead}")), refs, area, edge, largest }
         })
         .collect();
     modules.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.name.cmp(&b.name)));
