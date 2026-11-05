@@ -272,7 +272,7 @@ impl LibSet {
         self.by_name.get(name).map(|&i| &self.entries[i])
     }
 
-    #[cfg(test)]
+    /// Every library of the set, sorted as the trees sort them (hidden ones too).
     pub(crate) fn entries(&self) -> &[LibEntry] {
         &self.entries
     }
@@ -544,7 +544,7 @@ fn reserved_nickname(nickname: &str) -> Option<String> {
 
 /// The studio never writes KiCad's own configuration: a board folder that is KiCad's configuration folder (or lies inside it) has no project tables of its own to edit,
 /// and the file such an edit would write is KiCad's global table.
-fn refuse_kicads_configuration(env: &Env, dir: &Path) -> Result<(), String> {
+pub(crate) fn refuse_kicads_configuration(env: &Env, dir: &Path) -> Result<(), String> {
     let Some(config) = &env.config_dir else { return Ok(()) };
     let (board, config) = (std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()), std::fs::canonicalize(config).unwrap_or_else(|_| config.clone()));
     if board.starts_with(&config) {
@@ -813,6 +813,54 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
     v["ok"] = json!(true);
     v["added"] = json!({ "kind": kind.name(), "nickname": nickname, "uri": uri, "path": path.display().to_string(), "created": created });
     v
+}
+
+/// A library the library editors' Save Library As wrote (`crate::library_save_api`), put in the board's table: `SYMBOL_EDIT_FRAME::addLibTableEntry( aLibFile,
+/// PROJECT )` (the nickname is the file's name, and a nickname a library already has takes `%s%d` from 1 until it is free), or with `replace` the row of
+/// that nickname pointed at the new path (`replaceLibTableEntry`: its type set to `KiCad`). A row of KiCad's global table is KiCad's and is not rewritten here.
+/// The path is written as a table writes one (`NormalizePath`). The answer is the nickname and the path as written.
+pub(crate) fn put_library_row(dir: &Path, kind: TableKind, path: &Path, replace: Option<&str>) -> Result<(String, String), String> {
+    let env = Env::discover();
+    refuse_kicads_configuration(&env, dir)?;
+    refuse_inside_kicads_configuration(&env, path)?;
+    let vars = env.vars(dir, &crate::text_variables::project_variables(dir));
+    let uri = lt::normalize_path(path, &normalize_vars(&env, &vars, dir), Some(dir));
+    let mut table = project_table(dir, kind)?;
+    let nickname = match replace {
+        Some(nick) => {
+            let Some(row) = table.rows.iter_mut().find(|r| r.nickname == nick) else {
+                return Err(format!("The library '{nick}' is a row of KiCad's global table, which the studio reads and never writes: add the new library to the project's table instead."));
+            };
+            row.uri = uri.clone();
+            row.lib_type = lt::KICAD_TYPE.to_string();
+            nick.to_string()
+        }
+        None => {
+            let stem = lt::fix_nickname(&path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+            let taken = |n: &str| table.has_row(n) || n == PROJECT_LIBRARY || load_with(env.clone(), dir, kind).libs().iter().any(|l| l.nickname == n && l.is_available());
+            let mut nickname = stem.clone();
+            let mut suffix = 1;
+            while taken(&nickname) {
+                nickname = format!("{stem}{suffix}");
+                suffix += 1;
+            }
+            table.rows.push(lt::Row { nickname: nickname.clone(), uri: uri.clone(), lib_type: lt::KICAD_TYPE.to_string(), ..Default::default() });
+            nickname
+        }
+    };
+    lt::write_table(&project_table_path(dir, kind), &table)?;
+    Ok((nickname, uri))
+}
+
+/// A library file the studio is asked to write that lies in KiCad's own configuration folder: refused, as every write there is.
+pub(crate) fn refuse_inside_kicads_configuration(env: &Env, path: &Path) -> Result<(), String> {
+    let Some(config) = &env.config_dir else { return Ok(()) };
+    let config = std::fs::canonicalize(config).unwrap_or_else(|_| config.clone());
+    let at = path.parent().and_then(|p| std::fs::canonicalize(p).ok()).map(|p| p.join(path.file_name().unwrap_or_default())).unwrap_or_else(|| path.to_path_buf());
+    if at.starts_with(&config) {
+        return Err(format!("{} is in KiCad's own configuration folder, which the studio never writes.", path.display()));
+    }
+    Ok(())
 }
 
 /// `POST /api/path_variables` `{variables: [{name, value}]}`: Configure Paths' OK for the board's own variables (KiCad's are read only here). The name rules are the

@@ -596,15 +596,18 @@ pub const LIBRARY_VERSION: i64 = 20250324;
 /// (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol`, where `aIncludeData` is true for a library).
 pub fn export_kicad_sym_library_with(syms: &[&eda_model::ir::LibrarySymbol], embedded: &std::collections::BTreeMap<String, eda_model::embedded_files::EmbeddedFiles>) -> String {
     use std::fmt::Write as _;
-    let mut out = String::new();
-    // 20250324 (jumper pin groups): a version where `~` is a text of its own (from 20250318; an empty text is `""`) and where the body styles are still told from the
-    // sub-symbols (before 20250827 `(body_styles ..)` was not needed)
-    writeln!(out, "(kicad_symbol_lib (version {LIBRARY_VERSION}) (generator \"eda\") (generator_version \"1.0\")").unwrap();
+    let mut out = library_header();
     for sym in syms {
         write_symbol(&mut out, sym, embedded.get(&sym.lib_id));
     }
     writeln!(out, ")").unwrap();
     out
+}
+
+/// The first line of a library this writer makes (`formatLibraryHeader`), with its line break. 20250324 (jumper pin groups): a version where `~` is a text of
+/// its own (from 20250318; an empty text is `""`) and where the body styles are still told from the sub-symbols (before 20250827 `(body_styles ..)` was not needed).
+pub(crate) fn library_header() -> String {
+    format!("(kicad_symbol_lib (version {LIBRARY_VERSION}) (generator \"eda\") (generator_version \"1.0\")\n")
 }
 
 fn write_symbol(out: &mut String, sym: &eda_model::ir::LibrarySymbol, embedded: Option<&eda_model::embedded_files::EmbeddedFiles>) {

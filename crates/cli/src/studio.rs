@@ -815,6 +815,13 @@ fn handle(
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
         ("GET", "/api/library/project") => respond(stream, "200 OK", "application/json", crate::library_api::project_symbols(dir).to_string().as_bytes()),
+        // Save, Save Library As and Revert of the library editors into the libraries of the tables (`crate::library_save_api`): which libraries can be written,
+        // which symbols differ from their file, what the file holds, and the two writes.
+        ("GET", "/api/library/writable") => respond(stream, "200 OK", "application/json", crate::library_save_api::writable(dir, &query_value(target, "kind")).to_string().as_bytes()),
+        ("GET", "/api/library/modified") => respond(stream, "200 OK", "application/json", crate::library_save_api::modified(dir, &query_value(target, "kind")).to_string().as_bytes()),
+        ("GET", "/api/library/saved") => respond(stream, "200 OK", "application/json", crate::library_save_api::saved(dir, &query_value(target, "kind"), &query_value(target, "id"), &query_value(target, "lib")).to_string().as_bytes()),
+        ("POST", "/api/library/save") => respond(stream, "200 OK", "application/json", crate::library_save_api::save(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/library/save_as") => respond(stream, "200 OK", "application/json", crate::library_save_api::save_library_as(dir, &body).to_string().as_bytes()),
         // The library tables (`crate::library_tables`): KiCad's global ones, read only, and the board's own `sym-lib-table` / `fp-lib-table`, which the Manage Symbol Libraries
         // and Manage Footprint Libraries dialogs edit; New Library and Add Existing Library; the board's path variables (Configure Paths); and the folder listing the browse
         // buttons use in place of a native file dialog.

@@ -12,6 +12,8 @@ import { fetchLibrarySymbolFlat, fetchSymbolEditorNames } from "../api/client";
 import { fetchAnySymbol, fetchSymbolKicadSymText, parseSymbolText, pickTextFile, readClipboardText, saveCanvasPng, saveTextFile, writeClipboardText } from "../api/libraryClient";
 import { ensureUniqueLibId, escapeLibIdName, joinLibName, PROJECT_LIBRARY, splitLibName, symbolLibIdError, symbolNameInUse, symbolNameInUseAs } from "../kicad-port/libraryNames";
 import { PROJECT_SYMBOL_LIB } from "../kicad-port/symEditActions";
+import { symbolTarget } from "../kicad-port/librarySave";
+import { getLibraryTree } from "../state/libraryTree";
 import { clipboardTextForSymbols, looksLikeSymbolText } from "../kicad-port/symClipboard";
 import { bareName, descendantsOf, treeConditions } from "../kicad-port/symFields";
 import { planImport, planPaste } from "../kicad-port/symImportPlan";
@@ -39,9 +41,11 @@ async function names(): Promise<{ all: string[]; project: Set<string>; derived: 
   return { all: r.names, project: new Set(r.project ?? []), derived: r.derived ?? {} };
 }
 
-/** The library a new symbol lands in: the target's own (`getTargetLib()`), else the project library. */
+/** The library a new symbol lands in: the target's own (`getTargetLib()`: the tree's selected symbol or library row, else the open symbol), else the project library. */
 export function targetLibrary(c: SymCtx): string {
-  return splitLibName(targetIds(c)[0] ?? "").lib || PROJECT_SYMBOL_LIB;
+  const st = c.api.getState();
+  const t = symbolTarget(st.treeSelection, getLibraryTree("symbol").selectedLibs, st.libId);
+  return t.kind === "library" ? t.lib : t.kind === "symbol" ? splitLibName(t.id).lib || PROJECT_SYMBOL_LIB : PROJECT_SYMBOL_LIB;
 }
 
 async function runBatch(c: SymCtx, cmds: Cmd[]): Promise<boolean> {

@@ -79,6 +79,7 @@ pub use footprint_scan::{is_numbered_pad, scan_footprint, FootprintSummary};
 mod symbol_lib;
 // A symbol library that is a folder of `.kicad_sym` files (KiCad 10's `Device.kicad_symdir`), read as the one library text it stands for.
 mod symbol_lib_dir;
+pub mod library_save;
 pub use symbol_lib_dir::{can_read_symbol_library, read_symbol_library_text, symbol_library_files, symbol_library_modified, symbol_library_name, SYMBOL_LIB_DIR_EXT, SYMBOL_LIB_FILE_EXT};
 pub use symbol_lib::{default_symbol_library_root, sim_fields_of, export_kicad_sym, export_kicad_sym_library, export_kicad_sym_library_with, find_symbol_library_file, list_symbol_libraries, list_symbols_in_file, list_symbols_in_library, resolve_library_symbols, resolve_library_symbols_with, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 

@@ -265,10 +265,13 @@ pub fn load(library: &Path, name: &str) -> Result<DesignBlock, String> {
 /// `/proc/self/status` and the folder's mode bits are tested as the kernel does (owner bits for the owner, else group bits for a member, else the other bits;
 /// root may always write). POSIX ACLs and a read-only mount are not seen. Elsewhere (no `/proc`) it falls back to "some write bit is set".
 pub fn is_writable(library: &Path) -> bool {
-    let Ok(meta) = std::fs::metadata(library) else { return false };
-    if !meta.is_dir() {
-        return false;
-    }
+    library.is_dir() && may_write(library)
+}
+
+/// `access( path, W_OK ) == 0` for a file or a folder that exists (`wxFileName::IsFileWritable`, `IsDirWritable`), by the test [`is_writable`] describes; false
+/// for a path with nothing there. The library writers' check (`crate::library_save`).
+pub fn may_write(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else { return false };
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;

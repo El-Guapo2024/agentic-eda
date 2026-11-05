@@ -27,7 +27,7 @@ export interface CommonDialogsState {
   /** `PANEL_GRID_SETTINGS` ("Edit Grids..."): the editor whose Grids page of the Preferences is showing, or null when the dialog is closed. */
   grids: GridEditor | null;
   /** `SAVE_AS_DIALOG` ("Save Footprint As", the Footprint Editor's Save As): the footprint being saved and whether it is the one loaded, or null when closed. */
-  saveFootprintAs: { name: string; loaded: boolean } | null;
+  saveFootprintAs: SaveFootprintAsRequest | null;
 }
 
 const CLOSED: CommonDialogsState = { group: null, about: false, page: null, gridOrigin: false, grids: null, saveFootprintAs: null };
@@ -81,6 +81,13 @@ export function setGridsDialogOpen(editor: GridEditor | null): void {
   set({ ...current, grids: editor });
 }
 
-export function setSaveFootprintAs(request: { name: string; loaded: boolean } | null): void {
+/** The Save Footprint As dialog's request; `again` is the dialog shown again after its New Library... with the name typed and the library made (`ID_MAKE_NEW_LIBRARY`). */
+export interface SaveFootprintAsRequest {
+  name: string;
+  loaded: boolean;
+  again?: { name: string; lib: string };
+}
+
+export function setSaveFootprintAs(request: SaveFootprintAsRequest | null): void {
   set({ ...current, saveFootprintAs: request });
 }

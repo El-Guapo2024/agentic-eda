@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { splitLibName } from "../../kicad-port/libraryNames";
 import { buildTreeGroups, defaultGroupOpen, needsLoading, type InstalledLib, type TreeGroup, type TreeItem } from "../../kicad-port/libraryTreeModel";
 import { isGroupOpen, libraryLabel, pinnedFirst } from "../../kicad-port/libraryTreeState";
+import { modifiedLabel } from "../../kicad-port/librarySave";
 import { collapseAllLibraries, expandAllLibraries, selectLibraries, setLibraryOpen, useLibraryTree, type TreeKind } from "../../state/libraryTree";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 
@@ -42,6 +43,8 @@ export interface LibraryTreeProps {
   current: string | null;
   /** A line to add to the tooltip of an item (a derived symbol says what it derives from). */
   hints?: Readonly<Record<string, string>>;
+  /** The items and libraries not saved to their library's file yet, marked " *" (`SYMBOL_TREE_SYNCHRONIZING_ADAPTER::GetValue`). */
+  modified?: ReadonlySet<string>;
   multi?: boolean;
   onSelect: (names: string[]) => void;
   /** Double click / Enter: `EditSymbol` / `EditFootprint`. */
@@ -54,7 +57,7 @@ const NO_LIBS: readonly InstalledLib[] = [];
 const NOTHING_LOADED: ReadonlyMap<string, readonly string[]> = new Map();
 const NOT_LOADING: ReadonlySet<string> = new Set();
 
-export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = NOTHING_LOADED, loading = NOT_LOADING, onLoadLibrary, onSearch, searchIndex = "idle", selected, current, hints, multi, onSelect, onOpen, menu }: LibraryTreeProps) {
+export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = NOTHING_LOADED, loading = NOT_LOADING, onLoadLibrary, onSearch, searchIndex = "idle", selected, current, hints, modified = NOT_LOADING, multi, onSelect, onOpen, menu }: LibraryTreeProps) {
   const ui = useLibraryTree(kind);
   const [filter, setFilter] = useState("");
   const [ctx, setCtx] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
@@ -208,7 +211,7 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
                 onContextMenu={(e) => onContextMenu(e, null, g.lib)}
               >
                 <span style={{ width: 10 }}>{isGroupOpenNow ? "▾" : "▸"}</span>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{libraryLabel(g.lib, ui.pinned)}</span>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{modifiedLabel(libraryLabel(g.lib, ui.pinned), modified.has(g.lib))}</span>
                 <span style={{ color: libSelected ? "inherit" : "var(--chrome-text-dim)", fontWeight: 400 }}>{isLoading ? "…" : count}</span>
               </div>
               {isGroupOpenNow &&
@@ -240,7 +243,7 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
                         background: isSel ? "var(--chrome-selected-bg)" : "transparent",
                       }}
                     >
-                      {splitLibName(it.name).item}
+                      {modifiedLabel(splitLibName(it.name).item, modified.has(it.name))}
                     </div>
                   );
                 })}

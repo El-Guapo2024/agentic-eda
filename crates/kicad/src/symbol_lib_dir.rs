@@ -26,8 +26,7 @@
 //!     file's time and size: a file put back with an older time is not seen as a change.
 //!
 //! Writing a folder library (`SCH_IO_KICAD_SEXPR_LIB_CACHE::Save`'s folder branch: a file per symbol, `EscapeString( name, CTX_FILENAME ).kicad_sym`
-//! for a new one) is not ported: the studio writes no library of a table (every edit is the design's own symbol library, `design.json`), and its New
-//! Library makes a `.kicad_sym` file, as `SYMBOL_EDIT_FRAME::AddLibraryFile` does.
+//! for a new one) is `crate::library_save`; the studio's New Library makes a `.kicad_sym` file, as `SYMBOL_EDIT_FRAME::AddLibraryFile` does.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

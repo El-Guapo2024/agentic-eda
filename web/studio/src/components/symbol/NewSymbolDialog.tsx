@@ -10,6 +10,9 @@ import { storedPinNameOffsetMm } from "../../kicad-port/symPinDialog";
 import { useEffect, useState } from "react";
 import { fetchSymbolEditorNames } from "../../api/client";
 import { splitLibName } from "../../kicad-port/libraryNames";
+import { isTableLibrary, libraryOfId, symbolTarget } from "../../kicad-port/librarySave";
+import { fetchLibraryItemsNow } from "../../api/librarySaveClient";
+import { getLibraryTree } from "../../state/libraryTree";
 import { newSymbolNameCheck, symbolExistsMessage, uniqueSymbolLibId } from "../../kicad-port/symEditActions";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { useStudioState } from "../../state/store";
@@ -42,6 +45,8 @@ export function NewSymbolDialog() {
   const [showPinNames, setShowPinNames] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** `getTargetLib()`: the library the new symbol goes in -- the tree's selected library row or symbol's, else the open symbol's, else the project library. */
+  const [lib, setLib] = useState("eda");
 
   // Each opening starts fresh, on the free name the action has always made ("Untitled", "Untitled_1", ...) until the person types one.
   useEffect(() => {
@@ -61,9 +66,14 @@ export function NewSymbolDialog() {
     setError(null);
     setBusy(false);
     let stopped = false;
+    const st = api.getState();
+    const t = symbolTarget(st.treeSelection, getLibraryTree("symbol").selectedLibs, st.libId);
+    const target = t.kind === "library" ? t.lib : t.kind === "symbol" ? libraryOfId(t.id) : "eda";
+    setLib(target);
     void fetchSymbolEditorNames()
-      .then((r) => {
-        if (!stopped) setName((cur) => (cur === "" ? splitLibName(uniqueSymbolLibId(r.names)).item : cur));
+      .then(async (r) => {
+        const inFile = isTableLibrary(target) ? (await fetchLibraryItemsNow("symbol", target)).map((n) => `${target}:${n}`) : [];
+        if (!stopped) setName((cur) => (cur === "" ? splitLibName(uniqueSymbolLibId([...r.names, ...inFile], "Untitled", target)).item : cur));
       })
       .catch(() => {
         if (!stopped) setName((cur) => (cur === "" ? "Untitled" : cur));
@@ -81,11 +91,13 @@ export function NewSymbolDialog() {
     let existing: string[] = [];
     try {
       const r = await fetchSymbolEditorNames();
-      existing = [...r.names, ...(r.project ?? [])];
+      // `SymbolNameInUse( newName, lib )`: the library's names, its file's too
+      const inFile = isTableLibrary(lib) ? (await fetchLibraryItemsNow("symbol", lib)).map((n) => `${lib}:${n}`) : [];
+      existing = [...r.names, ...(r.project ?? []), ...inFile];
     } catch {
       /* backend busy: the `new_symbol` verb refuses a duplicate name anyway */
     }
-    const check = newSymbolNameCheck(name, existing);
+    const check = newSymbolNameCheck(name, existing, lib);
     if (check.error) return setError(check.error);
     // KiCad's validator words for a taken name. Its dialog would then offer "Overwrite"; `new_symbol` has no such option (the project
     // library's entry would be replaced by an empty one), so ours says the same words and asks for another name.
@@ -97,6 +109,7 @@ export function NewSymbolDialog() {
       // else SetPinNameOffset( 0 );` -- an inside offset of 0 is 1 internal unit, 0.0001 mm.
       const offsetMm = storedPinNameOffsetMm(namesInside, pinNameOffsetMm, "new_symbol");
       const done = await api.newSymbol({
+        lib,
         name: check.name,
         reference,
         unitCount,

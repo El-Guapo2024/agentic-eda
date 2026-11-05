@@ -6,11 +6,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SymbolEditorNames } from "../../api/types";
 import { fetchFootprintLibraryNames, fetchSymbolEditorNames } from "../../api/client";
+import { fetchModified } from "../../api/librarySaveClient";
 import { fetchAllInstalledItems, fetchInstalledItems, fetchInstalledLibraries, knownInstalledItems, knownInstalledLibraries, knownSearchIndex, onInstalledLibrariesReset, type LibraryKind } from "../../api/libraryIndexClient";
 import type { InstalledLib, TreeItem } from "../../kicad-port/libraryTreeModel";
 
 const listeners = new Set<() => void>();
 const NO_DERIVED: Readonly<Record<string, string>> = {};
+const NONE_MODIFIED: ReadonlySet<string> = new Set();
 
 /** Tell every mounted library tree to re-read its names now. */
 export function notifyLibraryChanged(): void {
@@ -24,6 +26,8 @@ export interface LibraryNames {
   items: TreeItem[];
   /** The derived symbols of the project library, each with its parent (`(extends ...)`); empty for the footprint tree. */
   derived: Readonly<Record<string, string>>;
+  /** The items (`Lib:Name`) and the libraries whose design copy is not what the library's file holds: the tree marks them " *" (`IsSymbolModified`). */
+  modified: ReadonlySet<string>;
   refresh: () => Promise<void>;
   /** KiCad's installed libraries (names, counts where cheap). */
   installed: InstalledLib[];
@@ -41,6 +45,7 @@ export interface LibraryNames {
 export function useLibraryNames(kind: LibraryKind): LibraryNames {
   const [items, setItems] = useState<TreeItem[]>([]);
   const [derived, setDerived] = useState<Readonly<Record<string, string>>>(NO_DERIVED);
+  const [modified, setModified] = useState<ReadonlySet<string>>(NONE_MODIFIED);
   const [installed, setInstalled] = useState<InstalledLib[]>(() => knownInstalledLibraries(kind) ?? []);
   const [loaded, setLoaded] = useState<ReadonlyMap<string, readonly string[]>>(() => knownInstalledItems(kind));
   const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
@@ -68,6 +73,13 @@ export function useLibraryNames(kind: LibraryKind): LibraryNames {
       setDerived((prev) => (JSON.stringify(prev) === JSON.stringify(d ?? NO_DERIVED) ? prev : d ?? NO_DERIVED));
     } catch {
       /* the backend is busy or restarting: keep the list we have */
+    }
+    try {
+      const m = await fetchModified(kind);
+      const next = [...m.items, ...m.libraries].sort();
+      setModified((prev) => (prev.size === next.length && next.every((n) => prev.has(n)) ? prev : new Set(next)));
+    } catch {
+      /* keep the marks we have */
     }
   }, [kind]);
 
@@ -152,5 +164,5 @@ export function useLibraryNames(kind: LibraryKind): LibraryNames {
       });
   }, [kind]);
 
-  return { items, derived, refresh, installed, loaded, loading, load, searchIndex, ensureSearchIndex };
+  return { items, derived, modified, refresh, installed, loaded, loading, load, searchIndex, ensureSearchIndex };
 }

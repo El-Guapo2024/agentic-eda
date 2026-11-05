@@ -20,6 +20,10 @@ const MENU: (string | null)[] = [
   "pcbnew.ModuleEditor.newFootprint",
   "pcbnew.ModuleEditor.createFootprint",
   null,
+  "common.Control.save",
+  "common.Control.saveAs",
+  "common.Control.revert",
+  null,
   "pcbnew.ModuleEditor.cutFootprint",
   "pcbnew.ModuleEditor.copyFootprint",
   "pcbnew.ModuleEditor.pasteFootprint",
@@ -68,6 +72,7 @@ export function FootprintLibraryPanel() {
       searchIndex={names.searchIndex}
       selected={selected}
       current={state.name}
+      modified={names.modified}
       onSelect={(names) => dispatch({ type: "SET_TREE_SELECTION", name: names[0] ?? null })}
       onOpen={(name) => {
         dispatch({ type: "SET_TREE_SELECTION", name });

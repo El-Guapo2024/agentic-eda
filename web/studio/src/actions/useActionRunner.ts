@@ -13,6 +13,7 @@
 // the exact same flow the M/Escape keyboard shortcuts do, and
 // Canvas.tsx no longer needs any keydown handling of its own.
 
+import { saveSymbolLibraryAs } from "./librarySaveOps";
 import { useCallback, useMemo, useRef } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
 import { toCmdDimension } from "../kicad-port/dimensionConvert";
@@ -2408,10 +2409,10 @@ export function useActionRunner() {
         if (state.tab === "symbol") symDispatch({ type: "SET_NEW_SYMBOL_OPEN", open: true });
       });
 
-      // Ctrl+Shift+S (saveLibraryAs) -- SYMBOL_EDIT_FRAME::saveLibrary( ..., aNewFile ): the library as a new `.kicad_sym`, here a download of the
-      // whole project library.
+      // Ctrl+Shift+S (saveLibraryAs) -- SYMBOL_EDIT_FRAME::SaveLibraryAs -> saveLibrary( lib, true ): the target library as a new `.kicad_sym` and a row of the
+      // project's table (components/library/SaveLibraryAsDialog.tsx, actions/librarySaveOps.ts).
       m.set("eeschema.SymbolLibraryControl.saveLibraryAs", () => {
-        if (state.tab === "symbol") void symApi.exportLibraryKicadSym();
+        if (state.tab === "symbol") saveSymbolLibraryAs(symApi, (message, kind = "info") => symDispatch({ type: "TOAST", message, kind }));
       });
     }
 
