@@ -1,6 +1,7 @@
-// The schematic's shape tools -- Draw Rectangle / Circle / Arc / Bezier Curve / Text Box (`SCH_DRAWING_TOOLS::DrawShape`), Draw Rule Area
-// (`DrawRuleArea`) and Place Directive Label (`TwoClickPlace`): what a click does in each, the preview painted while one is in progress, and what
-// finishing commits. The geometry state machines are kicad-port/schShapeEdit.ts and polygonGeom.ts; the verbs are `sch_edit` `add_graphic`.
+// The schematic's shape tools -- Draw Rectangle / Circle / Arc / Bezier Curve / Text Box (`SCH_DRAWING_TOOLS::DrawShape`) and Draw Rule Area
+// (`DrawRuleArea`): what a click does in each, the preview painted while one is in progress, and what finishing commits. A text box is DrawShape's: the
+// first click is a corner, the box follows the cursor, the second click is the other corner, and only then does Text Box Properties open
+// (`DIALOG_TEXT_PROPERTIES`); OK adds it, selected, and the tool stays armed. The geometry state machines are kicad-port/schShapeEdit.ts and polygonGeom.ts; the verbs are `sch_edit` `add_graphic`.
 import type { Dispatch } from "react";
 import type { Schematic } from "../../api/types";
 import type { SchGraphic, SchGraphicInput, SchGraphicShape } from "../../api/schEditTypes";
@@ -24,8 +25,8 @@ export const SHAPE_TOOL_KIND: Partial<Record<ToolId, ShapeToolKind>> = {
   sch_textbox: "text_box",
 };
 
-/** Does this tool's click go through `shapeToolClick`? */
-export const isSchShapeTool = (tool: ToolId): boolean => tool in SHAPE_TOOL_KIND || tool === "sch_rule_area" || tool === "sch_directive";
+/** Does this tool's click go through `shapeToolClick`? (Place Directive Label is a placing tool with an item in the hand: actions/schPlaceActions.ts.) */
+export const isSchShapeTool = (tool: ToolId): boolean => tool in SHAPE_TOOL_KIND || tool === "sch_rule_area";
 
 /** The rule area's leader mode: `line_mode == LINE_MODE_FREE ? DIRECT : DEG45`, set on every event of `DrawRuleArea`'s loop. */
 export const leaderModeOf = (lineMode: LineMode): LeaderMode => (lineMode === LINE_MODE_FREE ? "direct" : "deg45");
@@ -77,10 +78,6 @@ export function finishRuleArea(env: Pick<ShapeToolEnv, "sch" | "dispatch" | "api
  */
 export function shapeToolClick(env: ShapeToolEnv, at: readonly [number, number], double = false): void {
   const { tool, dispatch } = env;
-  if (tool === "sch_directive") {
-    dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "directive", at: xy(at) } });
-    return;
-  }
   const draw = env.draw?.kind === "sch_shape" ? env.draw : null;
   if (tool === "sch_rule_area") {
     const mode = leaderModeOf(env.lineMode);

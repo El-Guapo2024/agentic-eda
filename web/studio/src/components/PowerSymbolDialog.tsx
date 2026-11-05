@@ -1,3 +1,8 @@
+// INACTIVE (2026-11-05, task-u1-schplace): not mounted. Place Power (`P`) now opens KiCad's chooser filtered to power symbols (`PlaceSymbol` with
+// `FilterPowerSymbols( true )`, components/SymbolChooserDialog.tsx) before the click, and the chosen symbol rides the cursor (actions/schPlaceActions.ts),
+// R / X / Y turning it there. This quick-pick, opened after the click with the orientation as a field, is kept as it was in case the old flow is wanted
+// again; its presets are the built-in power rails the chooser lists where KiCad's libraries are not installed (crates/cli/src/library_api.rs).
+//
 // `P` (sch_drawing_tools.cpp PlaceSymbol, power filter): real eeschema
 // opens the full symbol chooser filtered to power-type symbols *before*
 // the item follows the cursor; this app has no searchable chooser yet

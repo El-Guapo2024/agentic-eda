@@ -3,7 +3,7 @@
 //
 //   __eda.actions({ all? })    -> [{ id, label, enabled, reason? }]   the actions the runner handles on this tab (all: plus the KiCad actions with no handler)
 //   await __eda.run(id, args?) -> { ok, error?, revision, dialog?, toast? }   runs the action as a menu click does and waits for its /api/ round trips
-//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], entered, counts, grid, gridOverrides, snap, dialogs, open, sheetPath, view, activeLayer, appearance, viewer3d }
+//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], entered, counts, grid, gridOverrides, snap, dialogs, open, sheetPath, view, activeLayer, appearance, viewer3d, carry }
 //   __eda.viewer3dScreen(ref)  -> { x, y } | null   where a part is on the 3D canvas (CSS px from its top-left), for hovering it without guessing pixels
 //   __eda.errors(since?)       -> [{ time, message }]   console.error, uncaught errors, rejected promises, 5xx replies and the error toasts since the page loaded
 //
@@ -26,6 +26,8 @@ import { gridEditorOfTab } from "../kicad-port/gridSettings";
 import { highlightedNets } from "../kicad-port/boardControl";
 import { lastSnapReport, type SnapReport } from "../kicad-port/snapReport";
 import { cliExporterUnavailable } from "../state/cliExporters";
+import { getSchCarry } from "../state/schCarryStore";
+import { describeCarried } from "../kicad-port/schPlaceTool";
 import {
   ErrorLog,
   appearanceSummary,
@@ -85,6 +87,8 @@ export interface HookState {
   appearance: AppearanceSummary;
   /** The 3D viewer's own readout (components/viewer3d/viewer3dProbe.ts): the time to the first real model, the models in, the part under the pointer, whether the camera is moving; null off the 3D tab. */
   viewer3d: Viewer3dSnapshot | null;
+  /** The item a schematic placing tool holds, riding the cursor (kicad-port/schPlaceTool.ts `describeCarried`, with `queue`: how many labels of a multi-line entry wait, and `drawn`: its preview has arrived); null when none. */
+  carry: Record<string, unknown> | null;
 }
 
 export interface EdaTestHook {
@@ -253,6 +257,10 @@ function build(latest: { current: Latest }): EdaTestHook {
         activeLayer: studio.tab === "pcb" ? studio.activeLayer : null,
         appearance: appearanceSummary(studio),
         viewer3d: studio.tab === "3d" ? viewer3dProbe.snapshot() : null,
+        carry: (() => {
+          const c = getSchCarry();
+          return c ? { tool: c.tool, ...describeCarried(c.item), queue: c.queue.length, keep: c.keep, drawn: c.preview != null } : null;
+        })(),
       };
     },
 

@@ -70,7 +70,6 @@ import { BoardSetupDialog } from "./components/BoardSetupDialog";
 import { LabelDialog } from "./components/LabelDialog";
 import { SheetDialog } from "./components/SheetDialog";
 import { BusUnfoldDialog } from "./components/BusUnfoldDialog";
-import { PowerSymbolDialog } from "./components/PowerSymbolDialog";
 import { SchTextDialog } from "./components/SchTextDialog";
 import { SchToolDialogs } from "./components/SchToolDialogs";
 import { SchPasteSpecialDialog } from "./components/SchPasteSpecialDialog";
@@ -299,7 +298,6 @@ function StudioFrame() {
       <LabelDialog />
       <SheetDialog />
       <BusUnfoldDialog />
-      <PowerSymbolDialog />
       <SchTextDialog />
       <SchToolDialogs />
       <SchPasteSpecialDialog />

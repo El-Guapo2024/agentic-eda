@@ -18,8 +18,8 @@ Notes:
 
 **Top 12, all areas:**
 1. X1: the Plot dialog is Gerber only -- **done (task-u1-plot)**
-2. P1: teardrops
-3. S1: placing labels, power symbols and text
+2. P1: teardrops -- **done (task-u1-pcb)**; per-pad parameters left
+3. S1: placing labels, power symbols and text -- **done (task-u1-schplace)**
 4. R1: dragging a footprint with its tracks -- **done (task-u1-drag)**
 5. L1: saving into table libraries
 6. F1+F2: Footprint Editor fields and dimmed tools
@@ -171,10 +171,10 @@ Notes:
 
 ## Schematic editor
 
-- **S1 [BD] Placing labels, power symbols and text.**
-  - You click first and the dialog comes after, and nothing follows the cursor before the click. In KiCad the dialog comes first, then the item rides the cursor.
-  - Place Power is a text field with presets, not the chooser filtered to power symbols, and its rotation is set in the dialog.
-  - M. PARITY-sch §3, §3a.
+- **S1 [BD] Placing labels, power symbols and text.** **done (task-u1-schplace)**: the dialog first (Place Power: the chooser filtered to power symbols), then the item rides the cursor, R / X / Y turn it there, one undo step per placement (PARITY-sch §54).
+  - Left: Properties of a power symbol in the hand; the right-button menu of the item in the hand; the label dialog lists the sheet in view's labels only (no other sheets, bus aliases); "Place all units" and the global/local power preference; the placed item is not left selected; Repeat puts a power symbol 100 mil down, not at the cursor.
+  - (was: you click first and the dialog comes after, and nothing follows the cursor before the click; Place Power is a text field with presets, its rotation set in the dialog.)
+  - M. PARITY-sch §3, §3a, §54.
 - **S2 [FM] Design variants.** No Add, Remove or Edit Variant, no per-variant DNP or fields, and no variant columns in the Fields Table or the placement files. XL. ui-parity-missing (3 rows); PARITY-sch §13, §25.
 - **S3 [FM] Schematic Setup.**
   - Formatting lacks the text sizes, line widths, and junction and hop-over sizes.
@@ -242,7 +242,7 @@ Notes:
   - Some sheet-pin drag cases differ.
   - Swap and Properties skip the commit clean-up (C3-M1).
   - The no-connect tool doesn't remove an existing flag.
-  - Enter doesn't finish a wire.
+  - Enter doesn't finish a wire. **done (task-u1-schplace)**: Enter is KiCad's `cursorClick`, a click where the cursor is (it does not finish a wire in KiCad either), and End now keeps the segment to the cursor (PARITY-sch §2, §54).
   - S. PARITY-sch §2, §46.
 - **S19 [BD] Bus unfold, swap and groups.**
   - Unfold from Bus has no member submenus and no ghost.

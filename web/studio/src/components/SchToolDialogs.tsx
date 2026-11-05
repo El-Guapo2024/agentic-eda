@@ -1,5 +1,6 @@
 // The small dialogs the schematic edit and drawing tools open (`StudioState.schToolDialog`): a drawn text box's text and look
-// (`DIALOG_TEXT_PROPERTIES` as `DrawShape` opens it), a directive label's fields (`DIALOG_LABEL_PROPERTIES` as `createNewLabel` opens it).
+// (`DIALOG_TEXT_PROPERTIES` as `DrawShape` opens it), a directive label's fields (`DIALOG_LABEL_PROPERTIES` as `createNewLabel` opens it, before the
+// label rides the cursor).
 import { useState, type ReactNode } from "react";
 import type { DirectiveShape, SchFill, SchGraphic, SchHAlign, SchLineStyle, SchToolDialog, SchVAlign } from "../api/schEditTypes";
 import { graphicsEqual } from "../kicad-port/schProperties";
@@ -14,6 +15,10 @@ import { CleanupPinsDialog, SyncPinsDialog } from "./SchPinDialogs";
 import { LabelPropertiesDialog, SheetPropertiesDialog, ShapePropertiesDialog, StrokePropertiesDialog, TextPropertiesDialog } from "./SchPropertiesDialogs";
 import { SchImageDialog } from "./SchImageDialog";
 import { commitGraphic } from "./schematic/schShapeTools";
+import { lastPlaced, rememberPlaced } from "../kicad-port/schLastPlaced";
+import { poleOfSpin, spinOfPole, type CarriedDirective } from "../kicad-port/schPlaceTool";
+import { carryItem, changeCarried } from "../actions/schPlaceActions";
+import { getSchCarry, setSchCarry } from "../state/schCarryStore";
 
 const DEFAULT_TEXT_SIZE_NM = 1_270_000; // SCHEMATIC_SETTINGS::m_DefaultTextSize, 50 mil
 const DIRECTIVE_POLE_NM = 2_540_000; // SCH_DIRECTIVE_LABEL's default pin length, 100 mil
@@ -168,17 +173,29 @@ const ORIENTATIONS: Array<{ label: string; millideg: number }> = [
   { label: "Down", millideg: 270_000 },
 ];
 
-/** A new directive label's fields (`createNewLabel` -> `DIALOG_LABEL_PROPERTIES`); with `edit`, that directive label's Properties: its fields start from the label's own and OK replaces it in place. */
+/**
+ * A new directive label's fields (`createNewLabel` -> `DIALOG_LABEL_PROPERTIES`): OK puts the label in the hand, riding the cursor until the click that
+ * places it (actions/schPlaceActions.ts), and Properties (`E`) of the one in the hand opens this again on it. It starts with the tools' last spin and the
+ * last directive shape (`m_lastTextOrientation`, `m_lastNetClassFlagShape`) and leaves them for the next. With `edit`, that placed directive label's
+ * Properties: its fields start from the label's own and OK replaces it in place.
+ */
 function DirectiveDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { kind: "directive" }>; edit?: SchGraphic }) {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const flag = edit?.shape.type === "directive" ? edit.shape : null;
-  const [netclass, setNetclass] = useState(flag?.netclass ?? "");
-  const [componentClass, setComponentClass] = useState(flag?.component_class ?? "");
-  const [shape, setShape] = useState<DirectiveShape>(flag?.shape ?? "round"); // m_lastNetClassFlagShape starts as F_ROUND
-  const [orientation, setOrientation] = useState(flag?.orientation ?? 0); // m_lastTextOrientation starts as SPIN_STYLE::RIGHT
-  const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
+  const carried = !edit ? getSchCarry() : null;
+  const inHand = carried?.editing && carried.item.kind === "directive" ? carried.item : null;
+  const last = lastPlaced();
+  const [netclass, setNetclass] = useState(flag?.netclass ?? inHand?.netclass ?? "");
+  const [componentClass, setComponentClass] = useState(flag?.component_class ?? inHand?.componentClass ?? "");
+  const [shape, setShape] = useState<DirectiveShape>(flag?.shape ?? inHand?.shape ?? last.directiveShape); // m_lastNetClassFlagShape starts as F_ROUND
+  const [orientation, setOrientation] = useState(flag?.orientation ?? inHand?.orientation ?? poleOfSpin(last.spin)); // m_lastTextOrientation starts as SPIN_STYLE::RIGHT
+  const close = () => {
+    const now = getSchCarry();
+    if (!edit && now?.editing) setSchCarry({ ...now, editing: false });
+    dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
+  };
   const submit = () => {
     if (!state.schematic) return;
     if (edit && flag) {
@@ -187,8 +204,15 @@ function DirectiveDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { ki
       void api.cmd({ op: "sch_edit", verb: "edit_graphic", id: edit.id, graphic: next }).then((ok) => ok && close());
       return;
     }
-    commitGraphic({ sch: state.schematic, dispatch, api }, { shape: { type: "directive", at: dialog.at, orientation, shape, pin_length_nm: DIRECTIVE_POLE_NM, netclass, component_class: componentClass } });
-    close();
+    const item: CarriedDirective = { kind: "directive", netclass, componentClass, shape, orientation, pinLengthNm: inHand?.pinLengthNm ?? DIRECTIVE_POLE_NM };
+    dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
+    if (inHand) {
+      changeCarried(item);
+      return;
+    }
+    // `m_lastTextOrientation = labelItem->GetSpinStyle()`, `m_lastNetClassFlagShape = labelItem->GetShape()`
+    rememberPlaced({ spin: spinOfPole(orientation), directiveShape: shape });
+    carryItem({ api }, "sch_directive", item, [dialog.at.x, dialog.at.y]);
   };
   return (
     <Shell title="Directive Label Properties" onCancel={close} onOk={submit} okLabel="OK" canOk>

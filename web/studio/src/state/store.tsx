@@ -129,11 +129,8 @@ export type ToolId =
   /** `pcbnew.InteractiveDrawing.drawTable` (`DRAWING_TOOL::DrawTable`): the first click is the table's first corner, the cursor sizes the grid (`DrawState`'s `"table"` kind), the second opens Table Properties. */
   | "table"
   // ---------------------------------------------------- eeschema placement
-  // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp TwoClickPlace/
-  // SingleClickPlace) -- SchematicView.tsx's own doc has the full
-  // click-then-small-dialog flow these arm (a deliberate, documented
-  // simplification of source's "dialog pops up immediately, item then
-  // follows the cursor" order -- see PARITY-sch.md).
+  // `L`/Ctrl+`L`/`H`/`P`/`T` (sch_drawing_tools.cpp TwoClickPlace / PlaceSymbol): KiCad's order -- the dialog or chooser first, then the item rides
+  // the cursor until the click that places it (actions/schPlaceActions.ts); `Q` (SingleClickPlace) places on each click.
   | "sch_label_local"
   | "sch_label_global"
   | "sch_label_hier"
@@ -201,11 +198,11 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   measure: "Measure: click a start point, click again for the end point. Click anywhere to start a new measurement, Esc to clear",
   dimension: "Dimension: click the first feature point, then the second",
   table: "Table: click the first corner, move to size the grid, click again to set it (Esc to cancel)",
-  sch_label_local: "Label: click where to place it",
-  sch_label_global: "Global Label: click where to place it",
-  sch_label_hier: "Hierarchical Label: click where to place it",
-  sch_power: "Power Symbol: click a pin (snaps to the nearest one)",
-  sch_text: "Text: click where to place it",
+  sch_label_local: "Label: click to make one, then click to place it (R, X, Y turn it; Esc drops it)",
+  sch_label_global: "Global Label: click to make one, then click to place it (R, X, Y turn it; Esc drops it)",
+  sch_label_hier: "Hierarchical Label: click to make one, then click to place it (R, X, Y turn it; Esc drops it)",
+  sch_power: "Power Symbol: click to choose one, then click to place it (R, X, Y turn it; Esc drops it)",
+  sch_text: "Text: click to make one, then click to place it (R, X, Y turn it; Esc drops it)",
   sch_no_connect: "No Connect: click a pin to flag it unconnected",
   sch_bus_entry: "Bus Entry: click a point on a bus to tap a wire into it",
   sch_junction: "Junction: click where wires/pins meet (three or more directions) to join them, Esc to finish",
@@ -221,7 +218,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_textbox: "Text Box: click one corner, then the opposite one, then enter the text. Esc to cancel",
   sch_table: "Table: click the first corner, move to size the grid, click again to set its text and borders. Esc to cancel",
   sch_rule_area: "Rule Area: click the corners, double-click or press End to close it, Backspace to remove the last corner. Esc to cancel",
-  sch_directive: "Directive Label: click where to place it",
+  sch_directive: "Directive Label: click to make one, then click to place it (R, X, Y turn it; Esc drops it)",
   sch_break: "Break / Slice: move the new end of the wire, click to drop it, Esc to cancel",
   sch_sheet_pin: "Place Pins from Sheet: click over a sheet, then click along its border to drop each pin. Esc to cancel",
   zoom_area: "Zoom to Selection Area: drag a rectangle (left button zooms in, right button zooms out), Esc to cancel",
@@ -692,7 +689,7 @@ export interface StudioState {
   currentViaIndex: number;
   /** The text tool/E-to-edit dialog: "add" (fresh, at a clicked point) or "edit" (an existing text's id). */
   textDialog: { mode: "add"; at: [Nm, Nm] } | { mode: "edit"; id: string } | null;
-  /** `L`/Ctrl+`L`/`H`: a just-clicked point waiting for LabelDialog to confirm its text (and, for global/hierarchical, its shape) before `add_label` commits -- same "draw/click first, dialog last" shape as `zonePending`. */
+  /** `L`/Ctrl+`L`/`H`: LabelDialog is open on the point the tool's first click (or hotkey) made the label at; OK puts the label in the hand (actions/schPlaceActions.ts, `createNewLabel`). */
   schLabelPending: { at: [Nm, Nm]; scope: LabelScope } | null;
   /** `S`: a sheet's two corners, waiting for SheetDialog to name it before `add_sheet` commits (or, with `source`, before `import_sheet` does). */
   schSheetPending: { at: [Nm, Nm]; size: [Nm, Nm]; source?: SheetImportPlan } | null;
@@ -704,9 +701,9 @@ export interface StudioState {
   busUnfoldPicker: { bus: string; entryAt: [Nm, Nm]; members: string[] } | null;
   /** `F1`/Insert (`SCH_FRAME::m_items_to_repeat`): the Cmd(s) of the last thing placed, so "Repeat Last Item" can place a copy. */
   schRepeat: Cmd[];
-  /** `P`: a just-clicked point (already pin-snapped, see SchematicView.tsx's `pinSnapPoints`) waiting for PowerSymbolDialog to confirm which rail. */
+  /** `P`: Place Power's chooser is open (SymbolChooserDialog's power mode) on the point the tool's first click (or hotkey) was at; OK puts the power symbol in the hand. */
   schPowerPending: { at: [Nm, Nm] } | null;
-  /** `T`: a just-clicked point waiting for SchTextDialog to confirm the content. */
+  /** `T`: SchTextDialog is open on the point the tool's first click (or hotkey) made the text at; OK puts the text in the hand (`createNewText`). */
   schTextPending: { at: [Nm, Nm] } | null;
   /** The dialog one of the schematic edit/drawing tools has open (text box text, directive label fields, ...): components/SchToolDialogs.tsx. */
   schToolDialog: SchToolDialog | null;
@@ -726,9 +723,9 @@ export interface StudioState {
   exportNetlistDialogOpen: boolean;
   /** `A`: the symbol SymbolChooserDialog confirmed, waiting for a canvas click to place it (`sch_place_symbol` tool) -- `referencePrefix` seeds `nextReference`'s own next-free-number placement (this app's own choice: a real id immediately, not a "U?" placeholder -- see `Cmd::AddSymbol`'s doc and PARITY-sch.md). `unit`: which unit of a multi-unit symbol to place (the chooser's own unit picker, shown when `SymbolLibraryEntry.unit_count > 1`; omitted/1 for a single-unit part). */
   armedSymbol: { libId: string; referencePrefix: string; unit?: number; /** Place Next Symbol Unit: the unit goes in under this existing reference (and value/footprint), once, instead of taking the next free reference. */ ref?: string; value?: string; footprint?: string } | null;
-  /** `createNewLabel`'s own "last text used" (`m_lastTextOrientation`-style session memory, see `incrementLabelText`) -- seeds the next LabelDialog with an auto-incremented suggestion instead of starting blank every time, so placing a same-shaped bus of labels (DATA0, DATA1, DATA2...) doesn't mean re-typing the whole name each click. */
+  /** No longer read (2026-11-05): LabelDialog starts empty, as `createNewLabel`'s dialog does; a label steps on through Repeat (Insert) and Increment instead. */
   lastLabelText: string;
-  /** `P`'s own last-chosen rail (e.g. "power:GND") -- seeds PowerSymbolDialog so placing several of the same rail in a row (common -- a row of decoupling caps all going to GND) only needs one pick. */
+  /** The INACTIVE PowerSymbolDialog's last rail; Place Power's chooser has its own Recently Used (`m_powerHistoryList`, state/chooserRecent.ts). */
   lastPowerLibId: string;
 
   view: ViewTransform;

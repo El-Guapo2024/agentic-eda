@@ -23,6 +23,8 @@ export interface ChooserFilter {
   /** Only footprints one of these wildcard patterns matches (the symbol's `ki_fp_filters`). */
   fpFilters?: string[];
   excludePower?: boolean;
+  /** Place Power's chooser: only power symbols (`SYMBOL_LIBRARY_FILTER::FilterPowerSymbols( true )`). */
+  onlyPower?: boolean;
 }
 
 function filterQuery(f: ChooserFilter | undefined): string {
@@ -31,6 +33,7 @@ function filterQuery(f: ChooserFilter | undefined): string {
   if (f.pins && f.pins > 0) q += `&pins=${f.pins}`;
   if (f.fpFilters && f.fpFilters.length > 0) q += `&fp_filters=${encodeURIComponent(f.fpFilters.join(" "))}`;
   if (f.excludePower) q += "&power=exclude";
+  else if (f.onlyPower) q += "&power=only";
   return q;
 }
 
@@ -78,11 +81,13 @@ export interface SearchAnswer {
   matches: number;
   truncated: boolean;
   libraries: SearchLibrary[];
+  /** With `onlyPower`: the libraries read so far that hold a power symbol (the power chooser's tree shows only those). */
+  powerLibraries?: string[];
 }
 
 /** The search over every installed library (`GET /api/library/search`): the best matches, grouped by library, best first. */
 export async function searchInstalled(kind: ChooserKind, query: string, filter?: ChooserFilter, signal?: AbortSignal): Promise<SearchAnswer> {
-  const r = await get<{ status: "ready" | "indexing"; indexed: number; total: number; matches: number; truncated: boolean; libraries: { name: string; description?: string; score: number; items: WireItem[] }[]; error?: string }>(
+  const r = await get<{ status: "ready" | "indexing"; indexed: number; total: number; matches: number; truncated: boolean; libraries: { name: string; description?: string; score: number; items: WireItem[] }[]; power_libraries?: string[]; error?: string }>(
     `/api/library/search?kind=${kind}&q=${encodeURIComponent(query)}${filterQuery(filter)}`,
     signal
   );
@@ -93,6 +98,7 @@ export async function searchInstalled(kind: ChooserKind, query: string, filter?:
     matches: r.matches,
     truncated: r.truncated,
     libraries: r.libraries.map((l) => ({ name: l.name, description: l.description, score: l.score, items: l.items.map((w) => toItem(l.name, w)) })),
+    ...(r.power_libraries ? { powerLibraries: r.power_libraries } : {}),
   };
 }
 

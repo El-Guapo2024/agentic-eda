@@ -214,6 +214,9 @@ pub(crate) struct Filter {
     pub(crate) fp_filters: Vec<String>,
     /// A power symbol is left out of the Symbol Chooser (`P` is their own tool).
     pub(crate) exclude_power: bool,
+    /// Only power symbols: the chooser Place Power opens (`SYMBOL_LIBRARY_FILTER::FilterPowerSymbols( true )`, which `PANEL_SYMBOL_CHOOSER` turns into
+    /// the tree filter `aNode.m_IsPower`).
+    pub(crate) only_power: bool,
 }
 
 impl Filter {
@@ -222,7 +225,13 @@ impl Filter {
             pins: pins.trim().parse::<usize>().ok().filter(|&n| n > 0),
             fp_filters: fp_filters.split_whitespace().map(str::to_lowercase).collect(),
             exclude_power: power == "exclude",
+            only_power: power == "only",
         }
+    }
+
+    /// Whether a symbol passes the power part of the filter.
+    fn symbol_passes(&self, power: bool) -> bool {
+        !(self.exclude_power && power) && !(self.only_power && !power)
     }
 
     fn footprint_passes(&self, lib: &str, name: &str, numbered_pads: u32) -> bool {
@@ -485,7 +494,7 @@ fn footprint_item(name: &str, f: &FootprintSummary, score: Option<u32>) -> Value
 pub(crate) fn entries_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, filter: &Filter) -> Value {
     let mut v = match kind {
         Kind::Symbol => match symbol_lib(src, lib) {
-            Ok(idx) => json!({ "lib": lib, "entries": idx.summaries.iter().filter(|s| !(filter.exclude_power && s.power)).map(|s| symbol_item(s, None)).collect::<Vec<_>>() }),
+            Ok(idx) => json!({ "lib": lib, "entries": idx.summaries.iter().filter(|s| filter.symbol_passes(s.power)).map(|s| symbol_item(s, None)).collect::<Vec<_>>() }),
             Err(e) => return json!({ "error": e }),
         },
         Kind::Footprint => match footprint_lib(src, lib) {
@@ -521,7 +530,8 @@ struct Hit {
 ///
 /// While the thread that indexes every library has not finished the answer is `"status": "indexing"` with `indexed` of `total` libraries done
 /// and the matches among those; an empty query only starts that thread. `matches` counts every match, `truncated` says the items sent are
-/// the best `limit` of them.
+/// the best `limit` of them. With the power chooser's filter (`only_power`) the answer also names the libraries read so far that hold a power symbol
+/// (`power_libraries`, even for an empty query): the libraries its tree shows.
 pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str, filter: &Filter, limit: usize) -> Value {
     let finished = ensure_background_index(kind, src);
     let libs = libraries_in(kind, src);
@@ -533,6 +543,7 @@ pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str,
     let mut indexed_count = 0usize;
     let mut sym_libs: Vec<Option<Arc<SymbolLib>>> = Vec::new();
     let mut fp_libs: Vec<Option<Arc<FootprintLib>>> = Vec::new();
+    let mut power_libraries: Vec<String> = Vec::new();
     for (li, info) in libs.iter().enumerate() {
         // A library the thread has not reached is skipped while it runs; once it is done, one it lacks (changed on disk since) is indexed here. The
         // cache is asked once per library: whether a folder library changed is a look at each of its files (`Kind::modified`).
@@ -553,6 +564,11 @@ pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str,
         if have {
             indexed_count += 1;
         }
+        // The power chooser's tree has only the libraries that hold a power symbol (`LIB_TREE_MODEL_ADAPTER` hides a library whose items the
+        // filter all hides): which of the libraries read so far do.
+        if kind == Kind::Symbol && filter.only_power && sym_libs[li].as_ref().is_some_and(|idx| idx.summaries.iter().any(|s| s.power)) {
+            power_libraries.push(info.name.clone());
+        }
         if matchers.is_empty() {
             continue;
         }
@@ -560,7 +576,7 @@ pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str,
             Kind::Symbol => {
                 if let Some(idx) = &sym_libs[li] {
                     for (i, (s, terms)) in idx.summaries.iter().zip(&idx.terms).enumerate() {
-                        if filter.exclude_power && s.power {
+                        if !filter.symbol_passes(s.power) {
                             continue;
                         }
                         let score = score_item(&matchers, terms);
@@ -624,14 +640,18 @@ pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str,
         })
         .collect();
 
-    json!({
+    let mut answer = json!({
         "status": if done { "ready" } else { "indexing" },
         "indexed": indexed_count,
         "total": libs.len(),
         "matches": matches,
         "truncated": truncated,
         "libraries": libraries,
-    })
+    });
+    if filter.only_power {
+        answer["power_libraries"] = json!(power_libraries);
+    }
+    answer
 }
 
 pub(crate) fn search(dir: &Path, kind: Kind, query: &str, filter: &Filter, limit: usize) -> Value {
@@ -935,6 +955,26 @@ mod tests {
         assert_eq!(names_of(&capped).len(), 2);
         assert_eq!(capped["truncated"], true);
         assert!(capped["matches"].as_u64().unwrap() > 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Place Power's chooser (`FilterPowerSymbols( true )`): only power symbols, and its tree only the libraries that hold one.
+    #[test]
+    fn the_power_filter_keeps_only_power_symbols_and_names_the_libraries_that_hold_one() {
+        let root = symbol_root("only_power");
+        index_all(Kind::Symbol, &root);
+        let only = Filter::parse("", "", "only");
+        assert!(only.only_power && !only.exclude_power);
+        let d = entries_in(Kind::Symbol, &root, "Device", &only);
+        let names: Vec<&str> = d["entries"].as_array().unwrap().iter().map(|i| i["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["GND"]);
+        assert_eq!(entries_in(Kind::Symbol, &root, "Amplifier_Operational", &only)["entries"].as_array().unwrap().len(), 0);
+        assert_eq!(names_of(&search_in(Kind::Symbol, &root, "gnd", &only, 50)), ["Device:GND"]);
+        assert!(names_of(&search_in(Kind::Symbol, &root, "lm358", &only, 50)).is_empty());
+        // an empty query still names the libraries the tree shows; without the filter there is no such list
+        let empty = search_in(Kind::Symbol, &root, "", &only, 50);
+        assert_eq!(empty["power_libraries"], json!(["Device"]), "{empty}");
+        assert!(search_in(Kind::Symbol, &root, "", &Filter::default(), 50).get("power_libraries").is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 
