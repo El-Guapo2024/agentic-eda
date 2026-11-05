@@ -62,15 +62,17 @@ impl RoutingBoard {
             return Vec::new();
         }
         let mut result = vec![item];
+        let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::from([item]);
         let mut stack = vec![item];
-        // Depth first, as the Java recurses; the result is a set, so the
-        // order of visiting does not show.
+        // Depth first, as the Java recurses; the result is a set (a
+        // `HashSet` there: a scan of the list made the optimizer quadratic
+        // on a ground net), so the order of visiting does not show.
         while let Some(at) = stack.pop() {
             for c in self.normal_contacts(at) {
                 if net > 0 && !self.board.items[c].contains_net(net) {
                     continue;
                 }
-                if !result.contains(&c) {
+                if seen.insert(c) {
                     result.push(c);
                     stack.push(c);
                 }

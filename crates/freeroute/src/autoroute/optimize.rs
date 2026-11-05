@@ -191,6 +191,8 @@ pub struct Attempt {
     pub item: usize,
     /// The ripped connections' items, by number descending.
     pub ripped: Vec<usize>,
+    /// The items left unconnected before the rip-up (see [`route_attempt`]).
+    pub stuck: std::collections::HashSet<usize>,
     incomplete_count_before: usize,
     via_count_before: usize,
     /// How its connections are routed again.
@@ -257,6 +259,7 @@ impl Optimizer {
         if ripped.iter().any(|&i| rb.item(i).is_user_fixed()) {
             return None;
         }
+        let stuck = pass_items(rb).into_iter().collect();
         rb.generate_snapshot();
         rb.remove_items(&ripped, false);
         for net in rb.item(item).nets.clone() {
@@ -276,7 +279,7 @@ impl Optimizer {
             rb.board.settings.preferred_direction_costs.iter().map(|&c| (c, c)).collect()
         };
         let params = RouteParams { start_ripup_costs, trace_costs, remove_unconnected_vias: true, search_margin: 0 };
-        Some(Attempt { item, ripped, incomplete_count_before, via_count_before, params })
+        Some(Attempt { item, ripped, stuck, incomplete_count_before, via_count_before, params })
     }
 
     /// Weigh the attempt and keep it or undo it. The end of
@@ -356,11 +359,22 @@ pub fn combine_traces(rb: &mut RoutingBoard, net: i32) -> bool {
 /// Route the ripped connections again: up to [`MAX_AUTOROUTE_PASSES`]
 /// passes, each ending with the tails removed, and the tails once more.
 /// `BatchAutorouter.autoroute_passes_for_optimizing_item`.
+///
+/// Differs: an item already left unconnected before the rip-up
+/// ([`Attempt::stuck`]) is routed only if it is of the item's own nets.
+/// The Java routes every unconnected item of the board, so on a board the
+/// autorouter could not finish, each attempt searched again, six passes
+/// over, for connections that had already failed: on a 139-part board with
+/// three such nets, 15 s an attempt and hours a pass. What the rip-up and
+/// the routing after it leave open is routed as the Java routes it, so on a
+/// finished board nothing changes; on an unfinished one this gives up the
+/// chance that the room a rip-up makes lets a failed net through.
 pub fn route_attempt(rb: &mut RoutingBoard, attempt: &Attempt) {
+    let nets = rb.item(attempt.item).nets.clone();
     let mut pass_no = 1;
     let mut still_unrouted = true;
     while still_unrouted && pass_no <= MAX_AUTOROUTE_PASSES {
-        let items = pass_items(rb);
+        let items: Vec<usize> = pass_items(rb).into_iter().filter(|i| !attempt.stuck.contains(i) || rb.item(*i).nets.iter().any(|n| nets.contains(n))).collect();
         if items.is_empty() {
             still_unrouted = false;
         } else {
