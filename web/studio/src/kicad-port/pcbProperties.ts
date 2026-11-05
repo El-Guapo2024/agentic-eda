@@ -31,6 +31,7 @@ import { fillOf, SHAPE_FILL_CHOICES } from "./shapeFill";
 import { NO_ENDING, type LineEnding, type LineEndingStyle } from "./lineEnding";
 import { registerTableProperties, tableItemOf, tableItemsOf } from "./pcbTableProperties";
 import { PLACEMENT_SOURCE_CHOICES } from "./multichannel";
+import { zoneEditCmd as zoneCmd } from "./zoneCmd";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -344,42 +345,6 @@ const norm180 = (a: number): number => {
 /** KiCad's orientation of a footprint (`FOOTPRINT::GetOrientationDegrees`, counter-clockwise on the screen, in (-180, 180]): the backend's `orientation`, which is half a
  * turn from `-rot` for a back footprint made or flipped here; `-rot` from an older backend. */
 export const fpOrientation = (part: Pick<Part, "rot" | "orientation">): number => norm180(part.orientation ?? -(part.rot ?? 0));
-
-/** `ZONE_DESC`'s settings, as `edit_zone` takes them: every field of the zone with `patch` laid over it (the verb replaces the zone's settings wholesale). */
-function zoneCmd(z: Zone, patch: Partial<Zone>): Cmd {
-  const s = { ...z, ...patch };
-  return {
-    op: "edit_zone",
-    id: z.id,
-    net: s.net,
-    layer: s.layer,
-    clearance: s.clearance,
-    min_thickness: s.min_thickness,
-    thermal_gap: s.thermal_gap,
-    thermal_spoke_width: s.thermal_spoke_width,
-    pad_connection: s.pad_connection,
-    priority: s.priority,
-    island_removal_mode: s.island_removal_mode,
-    min_island_area: s.min_island_area,
-    fill_mode: s.fill_mode,
-    hatch_thickness: s.hatch_thickness,
-    hatch_gap: s.hatch_gap,
-    hatch_orientation_mdeg: s.hatch_orientation_mdeg,
-    hatch_smoothing_level: s.hatch_smoothing_level,
-    hatch_smoothing_value: s.hatch_smoothing_value,
-    hatch_hole_min_area: s.hatch_hole_min_area,
-    hatch_border_algorithm: s.hatch_border_algorithm,
-    smoothing: s.smoothing,
-    corner_radius: s.corner_radius,
-    is_rule_area: s.is_rule_area,
-    keepout_tracks: s.keepout_tracks,
-    keepout_vias: s.keepout_vias,
-    keepout_pads: s.keepout_pads,
-    keepout_copper_pour: s.keepout_copper_pour,
-    keepout_footprints: s.keepout_footprints,
-    ...(s.placement ? { placement: s.placement } : {}),
-  };
-}
 
 /** `edit_text` takes every field of the text: the current ones with `patch` laid over them. */
 function textCmd(t: BoardText, patch: Partial<{ content: string; angle: number; layer: string; size_nm: Nm; stroke_width: Nm; justify: BoardText["justify"]; mirror: boolean }>): Cmd {

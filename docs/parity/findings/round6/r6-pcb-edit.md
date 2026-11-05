@@ -62,7 +62,7 @@ The studio resets the width every time a tool is armed (`useActionRunner.ts:656-
 - **Severity:** medium. The file differs from what KiCad's tool would write, and the shape is drawn filled. It is not high because the outline is still read as an outline.
 - **Already known?** Only for the Footprint Editor (r4 E4-F1, fixed). The board's tool is not listed.
 
-### A6-3 (medium). A new text (Text tool) is never bold: `InferBold` is not ported, and a copper text at KiCad's defaults is bold in KiCad **Fixed** on task-r6-pcb-edit: b2fe2c35 (the dialog has no Bold control: Open)
+### A6-3 (medium). A new text (Text tool) is never bold: `InferBold` is not ported, and a copper text at KiCad's defaults is bold in KiCad **Fixed** on task-r6-pcb-edit: b2fe2c35 (the dialog's Bold control: fixed on task-u1-pcb, d39d97cc)
 - **What differs:**
   - **Ours.** `web/studio/src/kicad-port/layerDefaults.ts:90` (`newTextStyle`) and `components/TextDialog.tsx:74-77` build the extras with the glyph width, italic and valign, but no bold. `InferBold` appears nowhere in `crates/` or `web/studio/src`. Our text dialog has no Bold control.
   - **KiCad.** `DRAWING_TOOL::PlaceText` (drawing_tool.cpp:1058-1060):

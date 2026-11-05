@@ -827,8 +827,20 @@ pub enum Cmd {
         extra: Option<eda_model::board_text::TextExtra>,
     },
     /// Replace a text's content and styling in place. Its id and position
-    /// do not change (see `MoveText` for that).
-    EditText { id: String, content: String, angle: Millideg, layer: String, size_nm: Nm, stroke_width: Nm, justify: TextJustify, mirror: bool },
+    /// do not change (see `MoveText` for that). `bold` is the Text Properties dialog's Bold button (`DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`'s
+    /// `SetBoldFlag( m_bold->IsChecked() )`), kept in the text's `TextExtra`; absent leaves it as it is.
+    EditText {
+        id: String,
+        content: String,
+        angle: Millideg,
+        layer: String,
+        size_nm: Nm,
+        stroke_width: Nm,
+        justify: TextJustify,
+        mirror: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bold: Option<bool>,
+    },
     /// Remove a text by id.
     DeleteText { id: String },
     /// Move a text to a new position, keeping its id and styling.
@@ -3070,8 +3082,8 @@ impl<'a> Board<'a> {
 
             Cmd::AddText { text } => self.add_text(text.clone()),
             Cmd::PlaceText { text, extra } => self.place_board_text(text.clone(), extra.clone()),
-            Cmd::EditText { id, content, angle, layer, size_nm, stroke_width, justify, mirror } => {
-                self.edit_text(id, content.clone(), *angle, layer.clone(), *size_nm, *stroke_width, *justify, *mirror)
+            Cmd::EditText { id, content, angle, layer, size_nm, stroke_width, justify, mirror, bold } => {
+                self.edit_text(id, content.clone(), *angle, layer.clone(), *size_nm, *stroke_width, *justify, *mirror, *bold)
             }
             Cmd::DeleteText { id } => self.delete_text(id),
             Cmd::MoveText { id, x, y } => self.move_text(id, *x, *y),
@@ -4702,7 +4714,7 @@ impl<'a> Board<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn edit_text(&mut self, id: &str, content: String, angle: Millideg, layer: String, size_nm: Nm, stroke_width: Nm, justify: TextJustify, mirror: bool) -> Result<(), Vec<CheckResult>> {
+    fn edit_text(&mut self, id: &str, content: String, angle: Millideg, layer: String, size_nm: Nm, stroke_width: Nm, justify: TextJustify, mirror: bool, bold: Option<bool>) -> Result<(), Vec<CheckResult>> {
         if layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text needs a layer")]);
         }
@@ -4729,6 +4741,16 @@ impl<'a> Board<'a> {
             if stroked {
                 x.auto_thickness = false;
             }
+        }
+        // `SetBoldFlag`: the bold of the text's extras, made for it when it had none; an extra left saying nothing goes, as the importer keeps none.
+        if let Some(bold) = bold {
+            if bold && dr.text_extra(id).is_none() {
+                dr.text_extras.push(eda_model::board_text::TextExtra { id: id.to_string(), ..Default::default() });
+            }
+            if let Some(x) = dr.text_extras.iter_mut().find(|x| x.id == id) {
+                x.bold = bold;
+            }
+            dr.text_extras.retain(|x| x.id != id || !x.is_default());
         }
         Ok(())
     }

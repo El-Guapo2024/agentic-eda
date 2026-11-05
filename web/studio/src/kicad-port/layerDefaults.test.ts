@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { TextGraphicsDefaults } from "../api/types";
-import { FACTORY_TEXT_GRAPHICS, STROKE_TOOLS, drawStrokeWidthNm, graphicPolygonStyle, inferBold, isBackLayer, layerClassOf, lineThicknessNm, newTextStyle, steppedDrawStroke, strokeStepKept, textStyleOf } from "./layerDefaults";
+import { FACTORY_TEXT_GRAPHICS, STROKE_TOOLS, boldTogglePenNm, drawStrokeWidthNm, graphicPolygonStyle, inferBold, isBackLayer, layerClassOf, lineThicknessNm, newTextStyle, steppedDrawStroke, strokeStepKept, textStyleOf } from "./layerDefaults";
 
 // The same cases as crates/model/src/rules.rs `a_new_item_takes_the_default_of_its_layer_class`.
 const defaults: TextGraphicsDefaults = {
@@ -90,4 +90,13 @@ test("a new text is bold when its class's pen is nearer the bold pen than the no
   // The smaller of width and height; a tie is not bold (`<`).
   assert.equal(inferBold(200_000, 1_000_000, 2_000_000), true);
   assert.equal(inferBold(162_500, 1_000_000, 1_000_000), false, "exactly half-way between 0.2 and 0.125");
+});
+
+test("the Text Properties dialog's Bold button sets the bold or the normal pen of the smaller size (onBoldToggle; P4)", () => {
+  assert.equal(boldTogglePenNm(true, 1_500_000, 1_500_000), 300_000);
+  assert.equal(boldTogglePenNm(false, 1_500_000, 1_500_000), 187_500);
+  assert.equal(boldTogglePenNm(true, 1_000_000, 2_000_000), 200_000);
+  // And the pen it sets is the one InferBold calls bold (onThickness).
+  assert.equal(inferBold(boldTogglePenNm(true, 1_000_000, 1_000_000), 1_000_000, 1_000_000), true);
+  assert.equal(inferBold(boldTogglePenNm(false, 1_000_000, 1_000_000), 1_000_000, 1_000_000), false);
 });

@@ -38,6 +38,7 @@ import { modifyResultCmds } from "../kicad-port/shapeFill";
 import { healShapes, isLineModifiable, lineSelectionError, modifyLines, simplifyPolygonRing, type LineRoutine, type ModifyResult } from "../kicad-port/pcbModify";
 import { boardOutlineRings } from "../kicad-port/pcbOutline";
 import { breakTrack, filletTracks, type EditBoard, type EditTrack } from "../kicad-port/pcbTrackEdit";
+import { changeTrackWidthCmds } from "../kicad-port/changeTrackWidth";
 import { askConfirm } from "../components/library/libraryDialogs";
 
 /** Values the dialogs start from, remembered between invocations like the C++ `static`s. */
@@ -219,7 +220,8 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
   m.set("pcbnew.InteractiveEdit.mirrorVertically", mirror("topBottom"));
 
   // ------------------------------------------------- Change Track Width / Via Size
-  // EDIT_TOOL::ChangeTrackWidth: every selected track gets the current track width, every via the current via size and drill.
+  // EDIT_TOOL::ChangeTrackWidth: every selected track gets the current track width, every via the current via size and drill, asked of the board's lists
+  // by the chosen index now (`GetCurrentTrackWidth` / `GetCurrentViaSize`; round 7 R7-5), one undo step -- kicad-port/changeTrackWidth.ts.
   m.set(
     "pcbnew.InteractiveEdit.changeTrackWidth",
     pcbOnly(() => {
@@ -228,11 +230,9 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
         const k = itemKind(board, id);
         return k === "track" || k === "via";
       });
-      if (ids.length === 0) return;
-      const rules = board.board_rules;
-      const width = state.currentTrackWidthNm ?? rules?.track_width ?? 250_000;
-      const via = state.currentViaPreset ?? { diameter: rules?.via_diameter ?? 600_000, drill: rules?.via_drill ?? 300_000 };
-      void api.cmd({ op: "edit_tracks_and_vias", ids, track_width: { kind: "value", nm: width }, via_size: { kind: "value", diameter: via.diameter, drill: via.drill } });
+      const choice = { trackWidthIndex: state.currentTrackWidthIndex, viaSizeIndex: state.currentViaIndex, useCustomTrackVia: state.pcbx.useCustomTrackVia, custom: state.pcbx.customTrackVia };
+      const cmds = changeTrackWidthCmds(board, ids, choice);
+      if (cmds.length > 0) void api.cmdBatch(cmds);
     })
   );
 

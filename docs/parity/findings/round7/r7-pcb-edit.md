@@ -18,7 +18,7 @@ Scope:
 
 ## Part A: the round-6 merges
 
-### R7-1 (medium). Teardrops: a track whose end lies inside a via or round pad but off its centre gets no teardrop, nor does a track that crosses one. kicad-cli 25ec2335 gives both.
+### R7-1 (medium). Teardrops: a track whose end lies inside a via or round pad but off its centre gets no teardrop, nor does a track that crosses one. kicad-cli 25ec2335 gives both. **Fixed** on task-u1-pcb: 77605fb1
 - **What differs.**
   - **Ours.** `crates/connectivity/src/teardrop.rs:874-881` (`generate_teardrops`) keeps a track only when its first or last point *equals* the anchor's centre (`if first == anchor.center ... else if last == anchor.center ... else { continue; }`). The module doc (`:41-46`) justifies this: "this model's router and hand-drawn tracks always land exactly on a pad/via center".
     - That claim does not hold for imported boards.
@@ -46,7 +46,7 @@ Scope:
 - **Severity.** medium. A teardrop zone is missing where KiCad, rebuilding the same board, makes one. It is common on imported boards.
 - **Already known?** No. GAPS items 8 and 13 list "round anchors only" and "one segment only". The module doc lists the exact-centre test as a deliberate scope, but GAPS does not, and the 25ec2335 crossing case is not mentioned anywhere.
 
-### R7-2 (medium). Swap moves zones by their first corner and never swaps their layers. KiCad's `ZONE::SetPosition` is a no-op, so a zone stays where it is and swaps layers with another zone.
+### R7-2 (medium). Swap moves zones by their first corner and never swaps their layers. KiCad's `ZONE::SetPosition` is a no-op, so a zone stays where it is and swaps layers with another zone. **Fixed** on task-u1-pcb: 83b2f208
 - **What differs.**
   - **Ours.** `web/kicad-port/pcbSwap.ts:46-51` gives a zone `pos` = its first corner (`ZONE::GetPosition`, which is right) and `layer: null`. `planSwap` then sends `move_items` for the zone (`:80-81`) and never a layer change for it.
   - **KiCad 8303b2ad** `pcbnew/zone.h:116`: `void SetPosition( const VECTOR2I& aPos ) override {}`. The same holds in 25ec2335, `zone.h:112`. So in `EDIT_TOOL::Swap` (`edit_tool_move_fct.cpp:175-178`, `a->SetPosition( aPos ); b->SetPosition( bPos );`) a zone does not move. The item it is paired with does move, to the zone's first corner.
@@ -59,7 +59,7 @@ Scope:
 - **Severity.** medium (a wrong result: zones moved that KiCad leaves in place).
 - **Already known?** No. GAPS item 8's "Missing (round 6)" lists arc tracks, dimensions, groups and others, not zones. Round 6 E6-2 added zones as movable.
 
-### R7-3 (medium). A text box drawn with the Draw Text Box tool is never bold. KiCad's tool gives it `m_textAttrs`, which `InferBold` set, so a copper text box at the defaults is bold.
+### R7-3 (medium). A text box drawn with the Draw Text Box tool is never bold. KiCad's tool gives it `m_textAttrs`, which `InferBold` set, so a copper text box at the defaults is bold. **Fixed** on task-u1-pcb: 4c623fad
 - **What differs.**
   - **Ours.** `web/kicad-port/pcbTextBox.ts:381-404` (`newTextBox`) passes the class's size, glyph width, thickness, italic and mirror, but no `bold`. `boardTextBoxOf` then defaults it to `false` (`:370`). Round 6 A6-3 added `inferBold` to the Text tool only (`layerDefaults.ts:90-104`, used by `TextDialog.tsx`).
   - **KiCad 8303b2ad** `pcbnew/tools/drawing_tool.cpp`:
@@ -92,7 +92,7 @@ Scope:
 
 ## Part B: rows no round reviewed
 
-### R7-5 (medium). Change Track Width / Via Size (`changeTrackWidth`) uses the cached track width and via size, not `GetCurrentTrackWidth()` / `GetCurrentViaSize()`. This is C6-2's defect, left in this action.
+### R7-5 (medium). Change Track Width / Via Size (`changeTrackWidth`) uses the cached track width and via size, not `GetCurrentTrackWidth()` / `GetCurrentViaSize()`. This is C6-2's defect, left in this action. **Fixed** on task-u1-pcb: a1c485b1
 - **What differs.**
   - **Ours.** `web/actions/pcbEditSweep.ts:233-234`:
     ```ts
@@ -198,10 +198,10 @@ Reuse rule: no new active duplicate of kicad-cli or a linked C++ library. The te
 
 | # | Finding | Severity |
 |---|---|---|
-| R7-1 | Teardrops: a track ending off-centre inside a via/round pad, or crossing it, gets none; kicad-cli 25ec2335 makes one (or two for a crossing) | medium |
-| R7-2 | Swap moves zones by their first corner and keeps their layers; KiCad's `ZONE::SetPosition` is a no-op and two zones swap layers | medium |
-| R7-3 | Draw Text Box: no `InferBold`, so a copper text box at the defaults is not bold | medium |
-| R7-5 | Change Track Width / Via Size uses the cached width and via size, not `GetCurrentTrackWidth` / `GetCurrentViaSize` | medium |
+| R7-1 | Teardrops: a track ending off-centre inside a via/round pad, or crossing it, gets none; kicad-cli 25ec2335 makes one (or two for a crossing) | medium Fixed |
+| R7-2 | Swap moves zones by their first corner and keeps their layers; KiCad's `ZONE::SetPosition` is a no-op and two zones swap layers | medium Fixed |
+| R7-3 | Draw Text Box: no `InferBold`, so a copper text box at the defaults is not bold | medium Fixed |
+| R7-5 | Change Track Width / Via Size uses the cached width and via size, not `GetCurrentTrackWidth` / `GetCurrentViaSize` | medium Fixed |
 | R7-4 | Via check: a knockout text is its strokes' convex hull, KiCad's is the rotated bounding rectangle | low |
 | R7-6 | ModifyLines: only KiCad quirks left (fillet's `(0,0)` end, extend's int distances); recorded as matching | low |
 
