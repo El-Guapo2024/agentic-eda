@@ -2451,7 +2451,7 @@ export function useActionRunner() {
 
     // The frame-wide actions (zoom, grid, save, print, library tree, select) of those two editors, on their own canvas and store, and the unregistering of the toolbar actions they do not support.
     // After the shared actions above: on those two tabs the frame's own handler is the one that stands where both have one.
-    registerEditorFrameActions(m, { tab: state.tab, fpApi, fpDispatch, symApi, symDispatch });
+    registerEditorFrameActions(m, { tab: state.tab, fpApi, fpDispatch, symApi, symDispatch, prefs: state.prefs });
 
     // The schematic editor's control actions (eeschema.EditorControl / NavigateTool / InspectionTool / Interactive.increment*).
     registerSchControlActions(m, { tab: state.tab, state, api, dispatch, requestSelection, symApi, symDispatch, control: schControl, controlDispatch: schControlDispatch });

@@ -35,13 +35,15 @@ import { isMac } from "../../platform";
 import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
 import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
 import { distToSegment } from "../canvas/itemHitTest";
+import { symbolGraphicDistance } from "../../kicad-port/libEditorHit";
 import { polyBegin, polyContinue, polyFinish } from "../../kicad-port/symPolyDraw";
 import { newPinFromClick } from "../../kicad-port/symPinTemplate";
 import { pinShown } from "../../kicad-port/symPinText";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { stackedPinMenuState } from "../../kicad-port/stackedPins";
-import { newTextBox, textBoxDistanceNm } from "../../kicad-port/symTextBox";
+import { newTextBox } from "../../kicad-port/symTextBox";
+import { carriedItems } from "../../kicad-port/symCarry";
 import "../../styles/canvas.css";
 
 const SHAPE_TOOL_KIND: Partial<Record<SymToolId, SymShapeKind>> = {
@@ -72,41 +74,13 @@ function graphicPoints(g: LibrarySymbolGraphic): [number, number][] {
       return [toNm(g.at)];
     case "text_box":
       return [toNm(g.start), toNm(g.end)];
+    case "bezier":
+      return [toNm(g.start), toNm(g.c1), toNm(g.c2), toNm(g.end)];
   }
 }
 
-function graphicHitDistance(g: LibrarySymbolGraphic, wx: number, wy: number): number {
-  if (g.kind === "circle") {
-    const [cx, cy] = mmPointToNm(g.center);
-    const r = g.radius_mm * 1e6;
-    return Math.abs(Math.hypot(wx - cx, wy - cy) - r);
-  }
-  if (g.kind === "text") {
-    const [tx, ty] = mmPointToNm(g.at);
-    return Math.hypot(wx - tx, wy - ty);
-  }
-  // `SCH_TEXTBOX::HitTest`: anywhere in the box
-  if (g.kind === "text_box") return textBoxDistanceNm(g, wx, wy);
-  if (g.kind === "rectangle") {
-    const [x0, y0] = mmPointToNm(g.start);
-    const [x1, y1] = mmPointToNm(g.end);
-    const pts: [number, number][] = [
-      [x0, y0],
-      [x1, y0],
-      [x1, y1],
-      [x0, y1],
-      [x0, y0],
-    ];
-    let best = Infinity;
-    for (let i = 0; i + 1 < pts.length; i++) best = Math.min(best, distToSegment(wx, wy, pts[i]![0], pts[i]![1], pts[i + 1]![0], pts[i + 1]![1]));
-    return best;
-  }
-  const pts = graphicPoints(g);
-  let best = Infinity;
-  for (let i = 0; i + 1 < pts.length; i++) best = Math.min(best, distToSegment(wx, wy, pts[i]![0], pts[i]![1], pts[i + 1]![0], pts[i + 1]![1]));
-  if (g.kind === "polyline" && pts.length > 2) best = Math.min(best, distToSegment(wx, wy, pts[pts.length - 1]![0], pts[pts.length - 1]![1], pts[0]![0], pts[0]![1]));
-  return best;
-}
+/** `SCH_SHAPE::HitTest` and its kin: the distance from a world point to the graphic as drawn (a bezier's curve, a text box's inside), `kicad-port/libEditorHit.ts`. */
+const graphicHitDistance = (g: LibrarySymbolGraphic, wx: number, wy: number): number => symbolGraphicDistance(g, wx, wy);
 
 /** Distance from a world point to a pin's own body-to-tip line, resolved the exact same way the painter draws it (`resolvePin` with an identity transform). */
 function pinHitDistance(pin: LibrarySymbolPin, wx: number, wy: number): number {
@@ -205,8 +179,24 @@ export function SymbolEditorCanvas() {
     const p = snap.point(state.activeTool, [wx, wy], snapMods(e), toolCategory(state.activeTool));
     return [p[0], p[1]];
   };
-  /** The tools that place something: the grid helper sees every move, so the marker and the snap lines follow the cursor. */
-  const placing = state.activeTool === "pin" || state.activeTool === "text" || state.activeTool === "anchor" || state.activeTool.startsWith("draw_");
+  /** The tools that place something, and anything carried: the grid helper sees every move, so the marker and the snap lines follow the cursor. */
+  const placing = state.carry != null || state.activeTool === "pin" || state.activeTool === "text" || state.activeTool === "anchor" || state.activeTool.startsWith("draw_");
+  /** The grid what is carried goes to: a pin's the connectable one, a text's the text one, a paste's the coarsest of what it holds (`GetItemGrid`, `GetSelectionGrid`). */
+  const carryCategory = (): GridCategory => {
+    const c = state.carry;
+    if (!c) return toolCategory(state.activeTool);
+    if (c.kind === "pin") return "connectable";
+    if (c.kind === "text") return "text";
+    const cats: GridCategory[] = [...c.pins.map((): GridCategory => "connectable"), ...c.graphics.map((g): GridCategory => (g.kind === "text" ? "text" : "graphics"))];
+    return selectionGrid(cats, gridOf);
+  };
+  /** Where the carried items' anchor goes for the cursor at (`wx`, `wy`): `grid.Align` / `BestSnapAnchor` of the tool, as a click of it would. */
+  const carryPoint = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, wx: number, wy: number): [number, number] => {
+    const tool = state.carry?.kind === "pin" ? "pin" : state.carry?.kind === "text" ? "text" : "move";
+    const p = snap.point(tool, [wx, wy], snapMods(e), carryCategory());
+    return [p[0], p[1]];
+  };
+  const carried = useMemo(() => (state.carry ? carriedItems(state.carry) : null), [state.carry]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -290,7 +280,7 @@ export function SymbolEditorCanvas() {
       showHiddenPins: state.showHiddenPins,
       showPinNumbers: state.showPinNumbers,
       showPinAltIcons: state.showPinAltIcons,
-      pendingText: state.pendingText,
+      carried,
       fields: shownFields,
     });
     // What the grid helper shows: the snap marker, the snap lines, the construction geometry.
@@ -301,7 +291,7 @@ export function SymbolEditorCanvas() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sym, shownFields, state.view, state.selection, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, state.pendingText, containerSize, snapTick]);
+  }, [sym, shownFields, state.view, state.selection, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, containerSize, snapTick]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -386,6 +376,14 @@ export function SymbolEditorCanvas() {
     }
     if (e.button !== 0) return;
 
+    if (state.carry) {
+      // the click that places what is carried (`TwoClickPlace`'s second click, the move's drop): where the snapped cursor has brought it
+      const [cx, cy] = carryPoint(e, wx, wy);
+      dispatch({ type: "SET_CARRY_DELTA", deltaNm: [cx - state.carry.originNm[0], cy - state.carry.originNm[1]] });
+      void api.placeCarry();
+      return;
+    }
+
     const [sx, sy] = placing ? toolPoint(e, wx, wy) : [wx, wy];
 
     if (state.activeTool === "pin" && sym) {
@@ -424,14 +422,8 @@ export function SymbolEditorCanvas() {
     }
 
     if (state.activeTool === "text") {
-      // `TwoClickPlace` (SCH_TEXT_T): the first click asks for the text (DIALOG_TEXT_PROPERTIES), which then follows the cursor; the second click places it.
-      if (state.pendingText) {
-        const target = drawTarget(state);
-        void api.addGraphic({ kind: "text", unit: target.unit, body_style: target.bodyStyle, text: state.pendingText.text, at: nmPointToMm(sx, sy), angle_deg: state.pendingText.angleDeg, size_mm: state.pendingText.sizeMm });
-        dispatch({ type: "SET_PENDING_TEXT", pending: null });
-      } else {
-        dispatch({ type: "SET_TEXT_DIALOG", at: [sx, sy] });
-      }
+      // `TwoClickPlace` (SCH_TEXT_T): the first click asks for the text (DIALOG_TEXT_PROPERTIES), which then follows the cursor; the second click places it (above).
+      dispatch({ type: "SET_TEXT_DIALOG", dialog: { atNm: [sx, sy] } });
       return;
     }
 
@@ -463,8 +455,11 @@ export function SymbolEditorCanvas() {
     const [wx, wy] = worldAt(e);
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
     const motion = gestureRef.current?.move(e.clientX, e.clientY, e.timeStamp);
-    // The tools that place something: the grid helper sees every move, so the marker and the snap lines follow the cursor.
-    if (placing) toolPoint(e, wx, wy);
+    // The tools that place something: the grid helper sees every move, so the marker and the snap lines follow the cursor; what is carried follows it.
+    if (state.carry) {
+      const [cx, cy] = carryPoint(e, wx, wy);
+      dispatch({ type: "SET_CARRY_DELTA", deltaNm: [cx - state.carry.originNm[0], cy - state.carry.originNm[1]] });
+    } else if (placing) toolPoint(e, wx, wy);
     const drag = dragRef.current;
     if (!drag) return;
     if (drag.kind === "pan") {
@@ -515,6 +510,12 @@ export function SymbolEditorCanvas() {
 
   const onWheel = (e: WheelEvent) => {
     e.preventDefault();
+    // `SCH_SELECTION_TOOL::Main`: Shift+Alt+wheel increments the primary part (`ACTIONS::INCREMENT{ ±1, 0 }`), Ctrl+Alt+wheel the secondary one -- up is +1
+    const ctrl = isMac() ? e.metaKey : e.ctrlKey;
+    if (state.activeTool === "select" && !state.carry && e.altKey && (e.shiftKey !== ctrl)) {
+      void api.incrementSelection(e.deltaY < 0 || e.deltaX < 0 ? 1 : -1, e.shiftKey ? 0 : 1);
+      return;
+    }
     userMovedRef.current = true;
     const rect = containerRef.current!.getBoundingClientRect();
     const input: WheelInput = { deltaX: e.deltaX, deltaY: e.deltaY, shiftKey: e.shiftKey, ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey, mac: isMac(), altKey: e.altKey, x: e.clientX - rect.left, y: e.clientY - rect.top };
@@ -523,11 +524,13 @@ export function SymbolEditorCanvas() {
   };
   useNonPassiveWheel(containerRef, onWheel); // React's onWheel is passive: preventDefault() would be ignored and logged
 
-  /** `SCH_EDIT_TOOL::Properties` on a graphic of the symbol: a text box has Text Box Properties, a rectangle, circle, arc or polygon Shape Properties (a plain text has none yet). */
+  /** `SYMBOL_EDITOR_EDIT_TOOL::Properties` on a graphic of the symbol: a text has Text Properties (`editTextProperties`), a text box Text Box Properties, a rectangle, circle, arc,
+   * polygon or curve Shape Properties. */
   const openGraphicProperties = (id: string) => {
     const g = api.graphicById(id);
-    if (!g || g.kind === "text") return;
-    if (g.kind === "text_box") dispatch({ type: "SET_TEXT_BOX_DIALOG", dialog: { id, box: g } });
+    if (!g) return;
+    if (g.kind === "text") dispatch({ type: "SET_TEXT_DIALOG", dialog: { id } });
+    else if (g.kind === "text_box") dispatch({ type: "SET_TEXT_BOX_DIALOG", dialog: { id, box: g } });
     else dispatch({ type: "SET_SHAPE_DIALOG_ID", id });
   };
 
@@ -544,9 +547,6 @@ export function SymbolEditorCanvas() {
     else if (hit?.kind === "field") dispatch({ type: "SET_PROPERTIES_OPEN", open: true, field: libFieldName(hit.id) ?? undefined });
     else if (hit?.kind === "graphic") openGraphicProperties(hit.id);
   };
-
-  // `SYMBOL_EDITOR_EDIT_TOOL::Rotate`: the selection about one point, one undo step (the store's `rotateSelection`).
-  const rotatePinSelection = useCallback((ccw: boolean) => void api.rotateSelection(ccw), [api]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && state.drawState) {
@@ -578,12 +578,13 @@ export function SymbolEditorCanvas() {
     if (hit && !state.selection.has(hit.id)) dispatch({ type: "SET_SELECTION", refs: [hit.id] });
     const refs = hit ? (state.selection.has(hit.id) ? [...state.selection] : [hit.id]) : [...state.selection];
     const pinRefs = refs.filter((r) => api.pinById(r));
-    const propertied = refs.filter((r) => {
-      const g = api.graphicById(r);
-      return !!g && g.kind !== "text";
-    });
+    const propertied = refs.filter((r) => !!api.graphicById(r));
+    // `SYMBOL_EDITOR_EDIT_TOOL::Init`'s selection tool menu: the four transforms on anything selected (`SCH_CONDITIONS::NotEmpty`), then Properties on one item
     const entries: MenuEntry[] = [
-      { label: "Rotate CCW (R)", onSelect: () => rotatePinSelection(true), disabled: pinRefs.length === 0 },
+      { label: "Rotate Counterclockwise (R)", onSelect: () => void api.rotateSelection(true), disabled: refs.length === 0 },
+      { label: "Rotate Clockwise (Shift+R)", onSelect: () => void api.rotateSelection(false), disabled: refs.length === 0 },
+      { label: "Mirror Vertically (Y)", onSelect: () => void api.mirrorSelection("v"), disabled: refs.length === 0 },
+      { label: "Mirror Horizontally (X)", onSelect: () => void api.mirrorSelection("h"), disabled: refs.length === 0 },
       { label: "Pin Properties...", onSelect: () => dispatch({ type: "SET_PIN_PROPERTIES_ID", id: pinRefs[0]! }), disabled: pinRefs.length !== 1 },
       // `SCH_EDIT_TOOL::Properties` on the one graphic that is selected: Shape Properties or Text Box Properties
       ...(refs.length === 1 && propertied.length === 1 ? ([{ label: "Properties...", onSelect: () => openGraphicProperties(propertied[0]!) }] as MenuEntry[]) : []),

@@ -16,7 +16,9 @@ export type ResolvedGraphic =
   | { kind: "polyline"; pts: [number, number][]; strokeWidthNm: number; fill: LibFill }
   | { kind: "circle"; center: [number, number]; radiusNm: number; strokeWidthNm: number; fill: LibFill }
   | { kind: "arc"; start: [number, number]; mid: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill }
-  | { kind: "text"; content: string; at: [number, number]; angleDeg: number; sizeNm: number };
+  | { kind: "text"; content: string; at: [number, number]; angleDeg: number; sizeNm: number }
+  /** A library symbol's bezier (the Symbol Editor's; a placed symbol's engine drawing has its polyline instead): `SCH_PAINTER`'s `DrawCurve( start, c1, c2, end )`. */
+  | { kind: "bezier"; start: [number, number]; c1: [number, number]; c2: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill };
 
 export interface ResolvedLibSymbol {
   graphics: ResolvedGraphic[];

@@ -2,7 +2,8 @@
 // `batch` verb -- one commit, one undo step, as each C++ function pushes one `SCH_COMMIT`:
 //
 // - `DoDelete`: the selected pins and graphics, and in Synchronized Pins Mode the twin of each pin in every other unit ([`deletePlan`]).
-// - `Rotate`: the selection a quarter turn about the pin's own position (one item) or the selection's centre snapped to the half grid ([`rotatePlan`]).
+// - `Rotate` and `Mirror`: the pivot of a selection of several items, its centre snapped to the half grid ([`rotatePivot`]); the turn of each kind of item is
+//   `symTransform.ts`'s ([`rotatePlan`] is the pins-only form of it, kept for its callers).
 // - `RepeatPin` (Insert): the last placed pin again, one step further, with its name and number incremented ([`repeatPin`]).
 // - `Duplicate` (Ctrl+D): copies of the selected items, a pin with a number taking `GetMaxPinNumber() + 1` ([`duplicateItems`]).
 // - `Paste` (Ctrl+V): the copied items on the unit and body style being edited ([`pastedItems`]).
@@ -95,9 +96,11 @@ export function rotatePivot(
   graphics: readonly LibrarySymbolGraphic[],
   gridMm: number,
   boxOf: (g: LibrarySymbolGraphic) => { minX: number; minY: number; maxX: number; maxY: number } | null,
+  /** The boxes of the selected items that are neither pins nor graphics -- the fields (`SCH_FIELD_T` is not a text type: its box is merged like a shape's). */
+  otherBoxes: readonly { minX: number; minY: number; maxX: number; maxY: number }[] = [],
 ): MmPoint | null {
   const texts = graphics.filter((g) => g.kind === "text");
-  if (pinBoxes.length === 0 && graphics.length > 0 && texts.length === graphics.length) {
+  if (pinBoxes.length === 0 && otherBoxes.length === 0 && graphics.length > 0 && texts.length === graphics.length) {
     let sx = 0;
     let sy = 0;
     for (const g of texts) {
@@ -112,7 +115,7 @@ export function rotatePivot(
     const snap = (v: number) => (half > 0 ? kiRound(kiRound(v / half) * half) : v);
     return { x: snap(cx) / IU_PER_MM, y: -snap(cy) / IU_PER_MM };
   }
-  const boxes = [...pinBoxes];
+  const boxes = [...pinBoxes, ...otherBoxes];
   for (const g of graphics) {
     if (g.kind === "text") continue;
     const b = boxOf(g);

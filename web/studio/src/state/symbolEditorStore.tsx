@@ -24,15 +24,21 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, PushPinField, SymbolPropertiesFields } from "../api/types";
 import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolEditorNames, fetchSymbolForEditor, postCmd, postRedo, postUndo } from "../api/client";
-import { ensureSymbolInProject } from "../api/libraryClient";
+import { ensureSymbolInProject, parseSymbolText, readClipboardText, symbolItemsText, writeClipboardText } from "../api/libraryClient";
+import { bareSymbolForms } from "../kicad-port/symClipboard";
 import { joinLibName } from "../kicad-port/libraryNames";
 import { PROJECT_SYMBOL_LIB } from "../kicad-port/symEditActions";
 import { allFields, wireField } from "../kicad-port/symFields";
-import { movedRows } from "../kicad-port/symFieldLayout";
 import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchronizePins } from "../kicad-port/symPinSync";
 import { DEFAULT_PIN_TEMPLATE, samePinTemplate, type PinTemplate } from "../kicad-port/symPinTemplate";
-import { deletePlan, duplicateItems, pastedItems, placedPinWithId, repeatPin, rotatePivot, rotatePlan } from "../kicad-port/symEditItems";
-import { pinBoxAt } from "../kicad-port/schPins";
+import { deletePlan, duplicateItems, pastedItems, placedPinWithId, repeatPin, rotatePivot } from "../kicad-port/symEditItems";
+import { mirrorSelection as mirrorItems, rotateSelection as rotateItems, type MirrorAxis } from "../kicad-port/symTransform";
+import { libFieldBox, libFieldName, movedRows, schFieldOf } from "../kicad-port/symFieldLayout";
+import type { FieldRow } from "../kicad-port/symFields";
+import { pinBoxAt, pinTextBoxes } from "../kicad-port/schPins";
+import { planSymbolIncrement, type IncrementItem } from "../kicad-port/symIncrement";
+import { pickSymbolItem } from "../kicad-port/libEditorHit";
+import { pinLabelsShown } from "../kicad-port/symPinText";
 import { symbolGraphicBox } from "../kicad-port/itemBoxes";
 import { resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
 import { measureStrokeText } from "../components/text/strokeFont";
@@ -40,6 +46,7 @@ import { pinOccupiedMessage, pinPlacementOccupant } from "../kicad-port/pinPlace
 import { askConfirm } from "../components/library/libraryDialogs";
 import { INITIAL_LAST_TEXT_BOX, type LastTextBox, type LibTextBox } from "../kicad-port/symTextBox";
 import type { ViewTransform } from "./store";
+import { carriedItems, pastedText, rebased, snappedOrigin, type SymCarry } from "../kicad-port/symCarry";
 
 export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_lines" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "draw_textbox" | "text" | "anchor";
 
@@ -155,16 +162,19 @@ export interface SymbolEditorState {
    * (`g_lastPin = pin->m_Uuid`): the ids are the server's, so `PIN_PLACED` (sent after the add and its refetch) takes the id of the pin of the symbol that is the
    * pin as placed, and Repeat finds it by that id, as it is now (moved, renumbered or renamed since). */
   lastPlacedPin: { libId: string | null; pin: LibrarySymbolPin } | null;
-  /** `SYMBOL_EDITOR_EDIT_TOOL::Copy`'s clipboard of items (pins and graphics), for Paste. Kept in the editor session, not on the system clipboard. */
-  copiedItems: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[] } | null;
+  /** `SYMBOL_EDITOR_EDIT_TOOL::Copy`'s items (pins and graphics) and the `.kicad_sym` text it put on the system clipboard: Paste of that same text takes these (nothing lost
+   * on the way), and so does a Paste where the browser will not read the clipboard. */
+  copiedItems: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; text: string | null } | null;
   /** `g_LastPin*`: the look the next pin starts with -- the last pin placed or edited (see `kicad-port/symPinTemplate.ts`). */
   pinTemplate: PinTemplate;
   /** `updateSymbolFields`: the Update Symbol Fields dialog (`DIALOG_UPDATE_SYMBOL_FIELDS`) is open on the symbol being edited. */
   updateFieldsOpen: boolean;
-  /** `placeSymbolText` / the Text tool: where the click landed, in internal µm; the Text Properties dialog asks for the text. */
-  textDialog: { atNm: [number, number] } | null;
-  /** The text the dialog was OK'd with, following the cursor until the click that places it (`TwoClickPlace`'s `item` while `IS_MOVING`). */
-  pendingText: { text: string; sizeMm: number; angleDeg: number } | null;
+  /** Text Properties (`DIALOG_TEXT_PROPERTIES` of a `SCH_TEXT`): `atNm` is where the Text tool's click landed (internal µm; the dialog makes the text the click carries),
+   * `id` a text of the symbol being edited (a double click, `E`, Properties in the context menu: `SYMBOL_EDITOR_EDIT_TOOL::editTextProperties`). */
+  textDialog: { atNm: [number, number] } | { id: string } | null;
+  /** What follows the cursor until a click places it (kicad-port/symCarry.ts): the Pin tool's pin and the Text tool's text after their dialogs (`TwoClickPlace`'s `item` while
+   * `IS_MOVING`), and the new items of Paste and Duplicate (the move they start). */
+  carry: SymCarry | null;
   /** Text Box Properties (`DIALOG_TEXT_PROPERTIES` of a `SCH_TEXTBOX`): `id` is the box being edited, `null` for the one the Text Box tool has just drawn and the dialog is about to add. */
   textBoxDialog: { id: string | null; box: LibTextBox } | null;
   /** Shape Properties (`DIALOG_SHAPE_PROPERTIES`): the shape it is open on (double click, `E`, the context menu). */
@@ -225,7 +235,7 @@ const initialState: SymbolEditorState = {
   pinTemplate: DEFAULT_PIN_TEMPLATE,
   updateFieldsOpen: false,
   textDialog: null,
-  pendingText: null,
+  carry: null,
   textBoxDialog: null,
   shapeDialogId: null,
   lastTextBox: INITIAL_LAST_TEXT_BOX,
@@ -274,12 +284,17 @@ export type SymAction =
   | { type: "PIN_PLACED"; pin: LibrarySymbolPin }
   /** `RepeatDrawItem`: `selectionClear`, then `selectItem` of the repeated pin -- the last placed one, by the id `PIN_PLACED` found (r4 E4-2). */
   | { type: "SELECT_LAST_PLACED_PIN" }
-  | { type: "SET_COPIED_ITEMS"; items: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[] } | null }
+  | { type: "SET_COPIED_ITEMS"; items: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; text: string | null } | null }
+  /** After Paste or Duplicate placed its items: they are the selection (the move leaves them selected) -- the pins and graphics the symbol has now that it had not in `before`. */
+  | { type: "SELECT_ADDED"; before: string[] }
   /** `g_LastPin*`: the look the next pin starts with. */
   | { type: "SET_PIN_TEMPLATE"; pin: PinTemplate }
   | { type: "SET_UPDATE_FIELDS_OPEN"; open: boolean }
-  | { type: "SET_TEXT_DIALOG"; at: [number, number] | null }
-  | { type: "SET_PENDING_TEXT"; pending: { text: string; sizeMm: number; angleDeg: number } | null }
+  | { type: "SET_TEXT_DIALOG"; dialog: { atNm: [number, number] } | { id: string } | null }
+  /** Starts (or drops, with null) what the cursor carries; a text carried sets `m_lastTextAngle`. */
+  | { type: "SET_CARRY"; carry: SymCarry | null }
+  /** The snapped cursor moved: the carried items follow it. */
+  | { type: "SET_CARRY_DELTA"; deltaNm: [number, number] }
   /** Opens Text Box Properties on a box (`id` set: an existing one), or closes it. A box the tool drew (`id` null) is added by the dialog's OK, which also makes its looks the next box's. */
   | { type: "SET_TEXT_BOX_DIALOG"; dialog: { id: string | null; box: LibTextBox } | null }
   /** `m_lastTextBold`, `m_lastTextItalic`, `m_lastTextAngle`, `m_lastTextJust`, `m_lastFillStyle`, `m_lastStroke`: the looks of the box the tool has just added, for the next. */
@@ -337,13 +352,14 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
     case "ESCAPE": {
       // `IsCancelInteractive()` in the drawing tools: with a shape (or the text to place) in hand, Escape drops that and the tool stays armed;
       // only without one does it leave the tool.
-      if (state.drawState != null || state.pendingText != null) return { ...state, drawState: null, pendingText: null, textDialog: null };
+      // (Escape with Paste's or Duplicate's items in hand reverts their commit: nothing is added)
+      if (state.drawState != null || state.carry != null) return { ...state, drawState: null, carry: null, textDialog: null };
       const inProgress = state.activeTool !== "select" || state.movePreview != null;
       if (inProgress) return { ...state, activeTool: "select", drawState: null, movePreview: null };
       return { ...state, selection: new Set() };
     }
     case "SET_ACTIVE_TOOL":
-      return { ...state, activeTool: action.tool, drawState: null, pendingText: null, textDialog: null };
+      return { ...state, activeTool: action.tool, drawState: null, carry: null, textDialog: null };
     case "SET_DRAW_STATE":
       return { ...state, drawState: action.draw };
     case "SET_MOVE_PREVIEW":
@@ -404,21 +420,31 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
     }
     case "SET_COPIED_ITEMS":
       return { ...state, copiedItems: action.items };
+    case "SELECT_ADDED": {
+      const before = new Set(action.before);
+      const added = [...(state.symbol?.pins ?? []), ...(state.symbol?.graphics ?? [])].map((i) => i.id).filter((id): id is string => !!id && !before.has(id));
+      return { ...state, selection: new Set(added) };
+    }
     case "SET_PIN_TEMPLATE":
       // The poll re-reads the selected pin every ~700ms: a template it already has must not re-render the editor.
       return samePinTemplate(state.pinTemplate, action.pin) ? state : { ...state, pinTemplate: action.pin };
     case "SET_UPDATE_FIELDS_OPEN":
       return { ...state, updateFieldsOpen: action.open };
     case "SET_TEXT_DIALOG":
-      return { ...state, textDialog: action.at ? { atNm: action.at } : null };
+      return { ...state, textDialog: action.dialog };
+    case "SET_CARRY": {
+      const text = action.carry?.kind === "text" ? action.carry.graphics[0] : undefined;
+      return { ...state, carry: action.carry, textDialog: null, lastTextAngle: text?.kind === "text" ? text.angle_deg : state.lastTextAngle };
+    }
+    case "SET_CARRY_DELTA":
+      if (!state.carry || (state.carry.deltaNm[0] === action.deltaNm[0] && state.carry.deltaNm[1] === action.deltaNm[1])) return state;
+      return { ...state, carry: { ...state.carry, deltaNm: action.deltaNm } };
     case "SET_TEXT_BOX_DIALOG":
       return { ...state, textBoxDialog: action.dialog, drawState: null };
     case "SET_LAST_TEXT_BOX":
       return { ...state, lastTextBox: action.last };
     case "SET_SHAPE_DIALOG_ID":
       return { ...state, shapeDialogId: action.id };
-    case "SET_PENDING_TEXT":
-      return { ...state, pendingText: action.pending, textDialog: null, lastTextAngle: action.pending ? action.pending.angleDeg : state.lastTextAngle };
     case "TOAST":
       return { ...state, toast: { message: action.message, kind: action.kind } };
     case "TOAST_CLEAR":
@@ -485,16 +511,27 @@ export interface SymbolEditorApi {
   deletePin: (id: string) => Promise<void>;
   /** `SYMBOL_EDITOR_EDIT_TOOL::DoDelete`: the given pins and graphics, with the twins of the pins in Synchronized Pins Mode, as ONE undo step (kicad-port/symEditItems.ts). */
   deleteItems: (ids: readonly string[]) => Promise<void>;
-  /** `SYMBOL_EDITOR_EDIT_TOOL::Rotate`: the selected pins a quarter turn about one point, one undo step (`rotatePlan`). */
+  /** `SYMBOL_EDITOR_EDIT_TOOL::Rotate`: every selected pin, graphic and field a quarter turn about one point, one undo step (kicad-port/symTransform.ts). */
   rotateSelection: (ccw: boolean) => Promise<void>;
+  /** `SYMBOL_EDITOR_EDIT_TOOL::Mirror`: the selection mirrored left-right (`h`, `mirrorH`) or top-bottom (`v`, `mirrorV`) about the same point, one undo step. */
+  mirrorSelection: (axis: MirrorAxis) => Promise<void>;
+  /** `SCH_TOOL_BASE::Increment`: the selected pins' numbers or names (the one under the cursor) and texts moved by `delta` in their `index`-th part, one undo step. */
+  incrementSelection: (delta: number, index: number) => Promise<void>;
   /** `SYMBOL_EDITOR_DRAWING_TOOLS::RepeatDrawItem` -> `RepeatPin` (Insert): the last placed pin again, one step on, numbered and named one up. */
-  repeatLastPin: () => Promise<void>;
-  /** `SYMBOL_EDITOR_EDIT_TOOL::Duplicate` (Ctrl+D): the selected pins and graphics copied in place, numbered `GetMaxPinNumber() + 1`. */
+  repeatLastPin: (stepMm?: number, labelDelta?: number) => Promise<void>;
+  /** `SYMBOL_EDITOR_EDIT_TOOL::Duplicate` (Ctrl+D): copies of the selected pins and graphics, numbered `GetMaxPinNumber() + 1`, carried from the cursor until a click places them. */
   duplicateSelection: () => Promise<void>;
-  /** `SYMBOL_EDITOR_EDIT_TOOL::Copy` / `Cut` (Ctrl+C / Ctrl+X): the selected pins and graphics onto the editor's clipboard (Cut then deletes them). */
+  /** `SYMBOL_EDITOR_EDIT_TOOL::Copy` / `Cut` (Ctrl+C / Ctrl+X): the selected pins and graphics onto the system clipboard as `.kicad_sym` text, and the editor's (Cut then deletes them). */
   copySelection: (cut: boolean) => Promise<void>;
-  /** `SYMBOL_EDITOR_EDIT_TOOL::Paste` (Ctrl+V): the clipboard's items on the unit and body style being edited. */
+  /** `SYMBOL_EDITOR_EDIT_TOOL::Paste` (Ctrl+V): the clipboard's symbol's items (a text of the clipboard when it is not a symbol), on the unit and body style being edited,
+   * carried from the cursor until a click places them. */
   pasteItems: () => Promise<void>;
+  /** After Pin Properties of the Pin tool's new pin: the pin follows the cursor until a click places it (`TwoClickPlace`). */
+  carryPin: (pin: LibrarySymbolPin) => void;
+  /** After Text Properties of the Text tool's new text: the text follows the cursor until a click places it. */
+  carryText: (text: LibrarySymbolGraphic) => void;
+  /** The click that places what is carried: `PlacePin` for a pin, the commit of a text, Paste or Duplicate (one undo step). */
+  placeCarry: () => Promise<void>;
   editPin: (id: string, pin: LibrarySymbolPin) => Promise<boolean>;
   pushPinProperty: (sourcePinId: string, field: PushPinField) => Promise<void>;
   addGraphic: (graphic: LibrarySymbolGraphic) => Promise<void>;
@@ -559,6 +596,69 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
     },
     [refresh]
   );
+
+  /** The symbol's own fields (a derived symbol keeps its own list) with `changed` put in: a field it inherits that is changed becomes its own copy (`moveFields`, `edit_library_symbol_fields`). */
+  const ownFieldsWith = (changed: readonly FieldRow[]): FieldRow[] => {
+    const st = stateRef.current;
+    const own = allFields(st.derivedOwn ?? st.symbol!);
+    for (const f of changed) {
+      const i = own.findIndex((o) => o.name === f.name);
+      if (i < 0) own.push(f);
+      else own[i] = f;
+    }
+    return own;
+  };
+
+  /**
+   * `SYMBOL_EDITOR_EDIT_TOOL::Rotate` / `Mirror` of the selection, one undo step: every selected pin, graphic and field (kicad-port/symTransform.ts), about the lone item's
+   * position or the selection's half-grid centre -- `GetNearestHalfGridPosition( selection.GetCenter() )`, the merged `GetBoundingBox()` of what is selected: a pin's line,
+   * name and number (`PIN_LAYOUT_CACHE::GetPinBoundingBox`), a graphic's box, a field's box, texts left out. Only the selection moves (no pin of another unit).
+   */
+  const pivotFor = (sym: LibrarySymbol, pins: readonly LibrarySymbolPin[], graphics: readonly LibrarySymbolGraphic[], fields: readonly FieldRow[]) => {
+    const st = stateRef.current;
+    const texts = { namesHidden: !!sym.pin_names_hidden, numbersHidden: !!sym.pin_numbers_hidden, nameOffsetNm: (sym.pin_name_offset_mm ?? 0) * 1e6 };
+    const identity = symbolTransformMatrix(0, null);
+    const pinBoxes = pins.map((p) => {
+      const r = resolvePin({ number: p.number, name: p.name, electrical_type: p.electrical_type, shape: p.shape, at: [p.at.x, p.at.y], angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: p.body_style, hidden: p.hidden }, identity, [0, 0]);
+      return pinBoxAt(r.tip, r.root, p.name, p.number, texts, measureStrokeText, (p.name_size_mm ?? 1.27) * 1e6, (p.number_size_mm ?? 1.27) * 1e6);
+    });
+    const boxOf = (g: LibrarySymbolGraphic) => {
+      const b = symbolGraphicBox(g);
+      return b ? { minX: b[0], minY: b[1], maxX: b[2], maxY: b[3] } : null;
+    };
+    const fieldBoxes = fields.map((f) => libFieldBox(schFieldOf(f, st.activeUnit, sym.unit_count), measureStrokeText));
+    return pins.length + graphics.length + fields.length > 1 ? rotatePivot(pinBoxes, graphics, st.gridNm / 1e6, boxOf, fieldBoxes) : null;
+  };
+
+  const transform = async (op: { kind: "rotate"; ccw: boolean } | { kind: "mirror"; axis: MirrorAxis }) => {
+    const st = stateRef.current;
+    const libId = st.libId;
+    const sym = st.symbol;
+    if (!libId || !sym) return;
+    if (st.carry) {
+      // Rotate / Mirror of what is carried (`item->IsMoving()`: the preview is refreshed, nothing is committed): the items where they are now, about their own pivot
+      const c = rebased(st.carry);
+      const res = op.kind === "rotate" ? rotateItems({ pins: c.pins, graphics: c.graphics, fields: [], centre: pivotFor(sym, c.pins, c.graphics, []) }, op.ccw) : mirrorItems({ pins: c.pins, graphics: c.graphics, fields: [], centre: pivotFor(sym, c.pins, c.graphics, []) }, op.axis);
+      if (res) dispatch({ type: "SET_CARRY", carry: { ...c, pins: res.pins, graphics: res.graphics } });
+      return;
+    }
+    if (st.selection.size === 0) return;
+    const ids = [...st.selection];
+    const pins = sym.pins.filter((p) => p.id && st.selection.has(p.id));
+    const graphics = sym.graphics.filter((g) => g.id && st.selection.has(g.id));
+    const names = new Set(ids.map(libFieldName).filter((n): n is string => !!n));
+    const fields = allFields(sym).filter((f) => names.has(f.name));
+    if (pins.length + graphics.length + fields.length === 0) return;
+    const selection = { pins, graphics, fields, centre: pivotFor(sym, pins, graphics, fields) };
+    const res = op.kind === "rotate" ? rotateItems(selection, op.ccw) : mirrorItems(selection, op.axis);
+    if (!res) return;
+    const cmds: Cmd[] = [
+      ...res.pins.map((p): Cmd => ({ op: "edit_symbol_pin", lib_id: libId, id: p.id!, pin: p })),
+      ...res.graphics.map((g): Cmd => ({ op: "replace_symbol_graphic", lib_id: libId, id: g.id!, graphic: g })),
+      ...(res.fields.length > 0 ? [{ op: "edit_library_symbol_fields", lib_id: libId, fields: ownFieldsWith(res.fields).map(wireField) } as Cmd] : []),
+    ];
+    if (cmds.length > 0) await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
+  };
 
   const api: SymbolEditorApi = {
     getState: () => stateRef.current,
@@ -685,31 +785,41 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       dispatch({ type: "CLEAR_SELECTION" });
       if (cmds.length > 0) await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
-    rotateSelection: async (ccw) => {
+    incrementSelection: async (delta, index) => {
       const st = stateRef.current;
       const libId = st.libId;
       const sym = st.symbol;
-      if (!libId || !sym || st.selection.size === 0) return;
-      const ids = [...st.selection];
-      const pins = ids.map((id) => sym.pins.find((p) => p.id === id)).filter((p): p is LibrarySymbolPin => !!p);
-      // `selection.GetCenter()`: every selected item's `GetBoundingBox()` -- a pin's line, name and number (`PIN_LAYOUT_CACHE::GetPinBoundingBox`), a graphic's box.
+      const mouse = st.cursorNm;
+      if (!libId || !sym || !mouse) return;
+      // `RequestSelection( incrementable )`: the selected pins and texts, else the one under the cursor
+      let ids = [...st.selection];
+      if (ids.length === 0) {
+        const hit = pickSymbolItem(sym, mouse.x, mouse.y, st.view.scale, st.activeUnit, st.activeBodyStyle, st.showHiddenPins);
+        if (hit) ids = [hit.id];
+      }
       const texts = { namesHidden: !!sym.pin_names_hidden, numbersHidden: !!sym.pin_numbers_hidden, nameOffsetNm: (sym.pin_name_offset_mm ?? 0) * 1e6 };
       const identity = symbolTransformMatrix(0, null);
-      const boxes = pins.map((p) => {
-        const r = resolvePin({ number: p.number, name: p.name, electrical_type: p.electrical_type, shape: p.shape, at: [p.at.x, p.at.y], angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: p.body_style, hidden: p.hidden }, identity, [0, 0]);
-        return pinBoxAt(r.tip, r.root, p.name, p.number, texts, measureStrokeText, (p.name_size_mm ?? 1.27) * 1e6, (p.number_size_mm ?? 1.27) * 1e6);
-      });
-      // The selected graphics of every unit and body style (an imported body is `Name_0_1` / `Name_1_1`), texts left out as `SELECTION::GetCenter` does (r4 E4-1).
-      const graphics = sym.graphics.filter((g) => g.id && st.selection.has(g.id));
-      const boxOf = (g: LibrarySymbolGraphic) => {
-        const b = symbolGraphicBox(g);
-        return b ? { minX: b[0], minY: b[1], maxX: b[2], maxY: b[3] } : null;
-      };
-      const turned = rotatePlan(pins, ids.length, ccw, st.gridNm / 1e6, [], rotatePivot(boxes, graphics, st.gridNm / 1e6, boxOf));
-      const cmds: Cmd[] = turned.map((p): Cmd => ({ op: "edit_symbol_pin", lib_id: libId, id: p.id!, pin: p }));
+      const items: IncrementItem[] = [];
+      for (const id of ids) {
+        const p = sym.pins.find((x) => x.id === id);
+        if (p) {
+          const r = resolvePin({ number: p.number, name: p.name, electrical_type: p.electrical_type, shape: p.shape, at: [p.at.x, p.at.y], angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: p.body_style, hidden: p.hidden }, identity, [0, 0]);
+          const shown = pinLabelsShown(sym, st.showPinNumbers);
+          const boxes = pinTextBoxes(r.tip, r.root, shown.names ? p.name : null, shown.numbers ? p.number : "", texts, measureStrokeText, (p.name_size_mm ?? 1.27) * 1e6, (p.number_size_mm ?? 1.27) * 1e6);
+          items.push({ kind: "pin", pin: p, nameBox: boxes.name, numberBox: boxes.number });
+          continue;
+        }
+        const g = sym.graphics.find((x) => x.id === id);
+        if (g?.kind === "text") items.push({ kind: "text", text: g });
+      }
+      const plan = planSymbolIncrement(items, [mouse.x, mouse.y], delta, index);
+      if (!plan) return;
+      const cmds: Cmd[] = [...plan.pins.map((pin): Cmd => ({ op: "edit_symbol_pin", lib_id: libId, id: pin.id!, pin })), ...plan.texts.map((graphic): Cmd => ({ op: "replace_symbol_graphic", lib_id: libId, id: graphic.id!, graphic }))];
       if (cmds.length > 0) await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
-    repeatLastPin: async () => {
+    rotateSelection: (ccw) => transform({ kind: "rotate", ccw }),
+    mirrorSelection: (axis) => transform({ kind: "mirror", axis }),
+    repeatLastPin: async (stepMm, labelDelta) => {
       const st = stateRef.current;
       const libId = st.libId;
       const sym = st.symbol;
@@ -718,7 +828,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       // `RepeatDrawItem` finds `g_lastPin` in the symbol by UUID (`test->m_Uuid == g_lastPin`); a pin deleted since is not repeated.
       const source = last.pin.id ? sym.pins.find((p) => p.id === last.pin.id) : undefined;
       if (!source) return;
-      const pin = repeatPin(source);
+      const pin = repeatPin(source, stepMm, labelDelta);
       // `PlacePin`: the occupied-spot question in sync mode, then the images in the other units -- as the Pin tool's placement does.
       const syncMode = synchronizePins(st.syncPins, sym.unit_count, !!sym.units_locked);
       const occupant = pinPlacementOccupant(pin, sym.pins, syncMode);
@@ -741,35 +851,101 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
     },
     duplicateSelection: async () => {
       const st = stateRef.current;
-      const libId = st.libId;
       const sym = st.symbol;
-      if (!libId || !sym || st.selection.size === 0) return;
+      if (!st.libId || !sym || st.selection.size === 0 || st.carry) return;
+      // `SYMBOL_EDITOR_EDIT_TOOL::Duplicate`: the copies (`RequestSelection( nonFields )`), then `SCH_ACTIONS::move` from the cursor -- they follow it until a click
       const d = duplicateItems([...st.selection], sym.pins, sym.graphics);
-      const cmds: Cmd[] = [...d.pins.map((pin): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin })), ...d.graphics.map((graphic): Cmd => ({ op: "add_symbol_graphic", lib_id: libId, graphic }))];
+      if (d.pins.length + d.graphics.length === 0) return;
       dispatch({ type: "CLEAR_SELECTION" });
-      if (cmds.length > 0) await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
+      dispatch({ type: "SET_CARRY", carry: { kind: "duplicate", pins: d.pins, graphics: d.graphics, originNm: snappedOrigin(st.cursorNm, st.gridNm), deltaNm: [0, 0] } });
     },
     copySelection: async (cut) => {
       const st = stateRef.current;
       const sym = st.symbol;
-      if (!sym || st.selection.size === 0) return;
+      if (!st.libId || !sym || st.selection.size === 0) return;
       const ids = [...st.selection];
+      // `Copy`: `RequestSelection( nonFields )` -- the pins and the graphics
       const pins = sym.pins.filter((p) => p.id && ids.includes(p.id));
       const graphics = sym.graphics.filter((g) => g.id && ids.includes(g.id));
       if (pins.length + graphics.length === 0) return;
-      dispatch({ type: "SET_COPIED_ITEMS", items: { pins, graphics } });
-      if (cut) await api.deleteItems(ids);
+      // the symbol with only these items, as `FormatLibSymbol` writes it, on the system clipboard (so a paste in KiCad takes it too); the editor keeps the items as well
+      let text: string | null = null;
+      try {
+        text = bareSymbolForms(await symbolItemsText(st.libId, [...pins, ...graphics].map((i) => i.id!)));
+        if (!(await writeClipboardText(text))) dispatch({ type: "TOAST", message: "The browser would not share the clipboard; Paste still works in this editor.", kind: "info" });
+      } catch (e) {
+        dispatch({ type: "TOAST", message: e instanceof Error ? e.message : String(e), kind: "error" });
+      }
+      dispatch({ type: "SET_COPIED_ITEMS", items: { pins, graphics, text } });
+      if (cut) await api.deleteItems([...pins, ...graphics].map((i) => i.id!));
     },
     pasteItems: async () => {
       const st = stateRef.current;
-      const libId = st.libId;
       const sym = st.symbol;
       // `Paste`: nothing on a derived symbol (`symbol->IsDerived()`)
-      if (!libId || !sym || !st.copiedItems || st.derivedOwn) return;
-      const items = pastedItems(st.copiedItems, st.activeUnit, st.activeBodyStyle);
-      const cmds: Cmd[] = [...items.pins.map((pin): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin })), ...items.graphics.map((graphic): Cmd => ({ op: "add_symbol_graphic", lib_id: libId, graphic }))];
+      if (!st.libId || !sym || st.derivedOwn || st.carry) return;
+      const clip = await readClipboardText();
+      let items: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[] };
+      if (st.copiedItems && (clip === null || clip === st.copiedItems.text)) {
+        items = st.copiedItems;
+      } else if (clip !== null && clip !== "") {
+        try {
+          // `ParseLibSymbols( clipboardData )`: the first symbol's drawn items (its fields stay behind)
+          const parsed = await parseSymbolText(clip);
+          const first = parsed.symbols[0];
+          if (!first) return;
+          items = { pins: first.pins, graphics: first.graphics };
+        } catch {
+          // "If it's not a symbol then paste as text"
+          items = { pins: [], graphics: [pastedText(clip)] };
+        }
+      } else {
+        return;
+      }
+      const placed = pastedItems(items, st.activeUnit, st.activeBodyStyle);
+      if (placed.pins.length + placed.graphics.length === 0) return;
       dispatch({ type: "CLEAR_SELECTION" });
-      if (cmds.length > 0) await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
+      dispatch({ type: "SET_CARRY", carry: { kind: "paste", pins: placed.pins, graphics: placed.graphics, originNm: snappedOrigin(st.cursorNm, st.gridNm), deltaNm: [0, 0] } });
+    },
+    carryPin: (pin) => {
+      // `TwoClickPlace`: after `CreatePin`'s dialog the pin follows the cursor (`item->SetPosition( cursorPos )`) until the click that places it
+      dispatch({ type: "SET_CARRY", carry: { kind: "pin", pins: [pin], graphics: [], originNm: [Math.round(pin.at.x * 1e6), Math.round(-pin.at.y * 1e6)], deltaNm: [0, 0] } });
+    },
+    carryText: (text) => {
+      dispatch({ type: "SET_CARRY", carry: { kind: "text", pins: [], graphics: [text], originNm: [Math.round((text.kind === "text" ? text.at.x : 0) * 1e6), Math.round(-(text.kind === "text" ? text.at.y : 0) * 1e6)], deltaNm: [0, 0] } });
+    },
+    placeCarry: async () => {
+      const st = stateRef.current;
+      const libId = st.libId;
+      const sym = st.symbol;
+      const c = st.carry;
+      if (!libId || !sym || !c) return;
+      const { pins, graphics } = carriedItems(c);
+      const syncMode = synchronizePins(st.syncPins, sym.unit_count, !!sym.units_locked);
+      // `PlacePin`: the pin the Pin tool carries, and a lone pin a move drops (`SYMBOL_EDITOR_MOVE_TOOL`: `selection.GetSize() == 1 && .. SCH_PIN_T`), ask first when they land on
+      // another pin in Synchronized Pins Mode; a refusal deletes the new pin (or reverts the paste)
+      const lonePin = pins.length === 1 && graphics.length === 0 ? pins[0]! : null;
+      if (lonePin) {
+        const occupant = pinPlacementOccupant(lonePin, sym.pins, syncMode);
+        if (occupant && !(await askConfirm({ title: "Confirmation", message: pinOccupiedMessage(occupant.unit), okLabel: "Place Pin Anyway" }))) {
+          dispatch({ type: "SET_CARRY", carry: null });
+          return;
+        }
+      }
+      if (c.kind === "pin" && lonePin) {
+        // a new pin (not pasted) gets its images in the other units in sync mode (`CreateImagePins`) and leaves its look for the next one (`g_LastPin*`)
+        const images = syncMode ? imagePinsFor(lonePin, sym.unit_count) : [];
+        const cmds: Cmd[] = [lonePin, ...images].map((p): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin: p }));
+        dispatch({ type: "SET_CARRY", carry: null });
+        if (await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds })) dispatch({ type: "PIN_PLACED", pin: lonePin });
+        return;
+      }
+      const before = [...sym.pins, ...sym.graphics].map((i) => i.id).filter((id): id is string => !!id);
+      const cmds: Cmd[] = [...pins.map((pin): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin })), ...graphics.map((graphic): Cmd => ({ op: "add_symbol_graphic", lib_id: libId, graphic }))];
+      dispatch({ type: "SET_CARRY", carry: null });
+      if (cmds.length === 0) return;
+      // one commit: "Paste", "Duplicate", "Draw Text"
+      if ((await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds })) && (c.kind === "paste" || c.kind === "duplicate")) dispatch({ type: "SELECT_ADDED", before });
     },
     editPin: async (id, pin) => {
       const st = stateRef.current;

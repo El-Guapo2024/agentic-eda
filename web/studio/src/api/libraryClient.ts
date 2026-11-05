@@ -29,6 +29,12 @@ export async function parseSymbolText(text: string): Promise<ParsedSymbols> {
   return { symbols: (r.symbols ?? []).map(withDefaults), warnings: r.warnings ?? [] };
 }
 
+/** `SYMBOL_EDITOR_EDIT_TOOL::Copy`: the symbol `libId` with only the pins and graphics `ids`, as `.kicad_sym` text (`POST /api/symbol/clipboard/copy`). */
+export async function symbolItemsText(libId: string, ids: readonly string[]): Promise<string> {
+  const r = await postText<{ text?: string; error?: string }>("/api/symbol/clipboard/copy", JSON.stringify({ lib_id: libId, ids }));
+  return r.text ?? "";
+}
+
 /** `.kicad_mod` text -> the editable footprint (the IR omits empty lists, so they are filled in here like `fetchFootprint` does). */
 export async function parseFootprintText(text: string): Promise<ParsedFootprint> {
   const r = await postText<{ footprint: LibraryFootprint; warnings?: string[]; error?: string }>("/api/footprint/parse", text);

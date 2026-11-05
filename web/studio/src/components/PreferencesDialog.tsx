@@ -11,7 +11,7 @@
 // `onTrackpadDefaults`). On macOS the Ctrl column reads "Cmd" and Alt reads "Option", as in the C++.
 import { useEffect, useState } from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
-import { assignScrollModifier, MOUSE_SCROLL_DEFAULTS, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
+import { assignScrollModifier, MOUSE_SCROLL_DEFAULTS, sanitizePinStepMils, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
 import { isMac } from "../platform";
 
 const COLUMNS: { value: ScrollModifier; label: string }[] = [
@@ -45,7 +45,7 @@ export function PreferencesDialog() {
   const valid = scrollModSetValid(draft);
   const submit = () => {
     if (!valid) return;
-    dispatch({ type: "SET_PREFERENCES", prefs: { ...draft, rotationStepDeg: sanitizeRotationStep(Number(rotationText), state.prefs.rotationStepDeg) } });
+    dispatch({ type: "SET_PREFERENCES", prefs: sanitizePreferences({ ...draft, rotationStepDeg: sanitizeRotationStep(Number(rotationText), state.prefs.rotationStepDeg) }) });
     close();
   };
   const set = (patch: Partial<Preferences>) => setDraft((d) => ({ ...d, ...patch }));
@@ -149,6 +149,26 @@ export function PreferencesDialog() {
             <input type="checkbox" data-testid="pref-allow-pin-swaps" checked={draft.allowUnconstrainedPinSwaps} onChange={(e) => set({ allowUnconstrainedPinSwaps: e.target.checked })} />
             Allow unconstrained pin swaps
           </label>
+
+          {heading("Editing Options (Symbol Editor): Repeated Items")}
+          <div className="filter-row" title="How far Repeat Pin puts the next pin (forced to a multiple of 25 mils).">
+            <span style={{ width: 170 }}>Pitch of repeated pins:</span>
+            <input
+              type="number"
+              aria-label="Pitch of repeated pins"
+              data-testid="pref-sym-pin-pitch"
+              style={{ width: 70 }}
+              step={25}
+              value={draft.symRepeatPinStepMils}
+              onChange={(e) => set({ symRepeatPinStepMils: Number(e.target.value) })}
+              onBlur={() => set({ symRepeatPinStepMils: sanitizePinStepMils(draft.symRepeatPinStepMils, state.prefs.symRepeatPinStepMils) })}
+            />
+            <span>mils</span>
+          </div>
+          <div className="filter-row" title="What Repeat Pin adds to the pin's number and name.">
+            <span style={{ width: 170 }}>Label increment:</span>
+            <input type="number" aria-label="Label increment" data-testid="pref-sym-label-increment" style={{ width: 70 }} min={-10} max={10} step={1} value={draft.symRepeatLabelDelta} onChange={(e) => set({ symRepeatLabelDelta: Number(e.target.value) })} />
+          </div>
 
           {heading("Magnetic Points (PCB Editor)")}
           {(

@@ -18,6 +18,7 @@ import { revertFootprint, revertSymbol, saveAllSymbols, saveFootprint, saveSymbo
 import { getDockLayout, setDockColumnCollapsed } from "../state/dockLayoutStore";
 import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
+import type { Preferences } from "../kicad-port/preferences";
 
 /** common_tools.cpp doZoomInOut: "Step must be AT LEAST 1.3" -- the factor of one Zoom In / Zoom Out step. */
 const ZOOM_STEP = 1.3;
@@ -28,6 +29,8 @@ export interface EditorFrameContext {
   fpDispatch: Dispatch<FpAction>;
   symApi: SymbolEditorApi;
   symDispatch: Dispatch<SymAction>;
+  /** The studio's preferences (the Symbol Editor's Repeated Items: `SYMBOL_EDITOR_SETTINGS::m_Repeat`); the defaults when absent. */
+  prefs?: Pick<Preferences, "symRepeatPinStepMils" | "symRepeatLabelDelta">;
 }
 
 /** The canvas of the editor frame on screen (only one editor is mounted at a time). */
@@ -138,20 +141,25 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
       else if (target.dialog === "symbol") ctx.symDispatch({ type: "SET_PROPERTIES_OPEN", open: true, field: target.field ? (libFieldName(target.field) ?? undefined) : undefined });
       else {
         const g = ctx.symApi.graphicById(target.id);
-        if (!g || g.kind === "text") return;
-        if (g.kind === "text_box") ctx.symDispatch({ type: "SET_TEXT_BOX_DIALOG", dialog: { id: target.id, box: g } });
+        if (!g) return;
+        // `editTextProperties` for a text, `editTextBoxProperties` for a text box, `editShapeProperties` for the rest
+        if (g.kind === "text") ctx.symDispatch({ type: "SET_TEXT_DIALOG", dialog: { id: target.id } });
+        else if (g.kind === "text_box") ctx.symDispatch({ type: "SET_TEXT_BOX_DIALOG", dialog: { id: target.id, box: g } });
         else ctx.symDispatch({ type: "SET_SHAPE_DIALOG_ID", id: target.id });
       }
     });
-    // Rotate (R / Shift+R, `SYMBOL_EDITOR_EDIT_TOOL::Rotate`): the selected pins a quarter turn, counter-clockwise or clockwise, about the pin itself or the
-    // selection's half-grid centre, one undo step (shapes do not turn here yet).
-    const rotatePins = (ccw: boolean) => () => {
+    // Rotate (R / Shift+R, `SYMBOL_EDITOR_EDIT_TOOL::Rotate`) and Mirror Horizontally / Vertically (`Mirror`): every selected pin, graphic and field a quarter turn or
+    // mirrored, about the lone item's position or the selection's half-grid centre, one undo step (kicad-port/symTransform.ts).
+    // (with something carried -- a pin or a text being placed, Paste's or Duplicate's items -- they turn what is carried, `item->IsMoving()`)
+    const transform = (run: () => Promise<void>) => () => {
       const st = ctx.symApi.getState();
-      if (st.activeTool !== "select") return;
-      void ctx.symApi.rotateSelection(ccw);
+      if (st.activeTool !== "select" && !st.carry) return;
+      void run();
     };
-    m.set("eeschema.InteractiveEdit.rotateCCW", rotatePins(true));
-    m.set("eeschema.InteractiveEdit.rotateCW", rotatePins(false));
+    m.set("eeschema.InteractiveEdit.rotateCCW", transform(() => ctx.symApi.rotateSelection(true)));
+    m.set("eeschema.InteractiveEdit.rotateCW", transform(() => ctx.symApi.rotateSelection(false)));
+    m.set("eeschema.InteractiveEdit.mirrorH", transform(() => ctx.symApi.mirrorSelection("h")));
+    m.set("eeschema.InteractiveEdit.mirrorV", transform(() => ctx.symApi.mirrorSelection("v")));
     // Delete (`SYMBOL_EDITOR_EDIT_TOOL::DoDelete`): the selected pins and graphics, with the pins' twins in Synchronized Pins Mode, one undo step.
     m.set("common.Interactive.delete", () => {
       const st = ctx.symApi.getState();
@@ -165,7 +173,9 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     m.set("common.Interactive.copy", () => idle() && void ctx.symApi.copySelection(false));
     m.set("common.Interactive.paste", () => void ctx.symApi.pasteItems());
     m.set("common.Interactive.duplicate", () => idle() && void ctx.symApi.duplicateSelection());
-    m.set("eeschema.InteractiveEdit.repeatDrawItem", () => void ctx.symApi.repeatLastPin());
+    // (`m_Repeat.pin_step` in mils and `m_Repeat.label_delta`, Preferences > Symbol Editor > Editing Options)
+    m.set("eeschema.InteractiveEdit.repeatDrawItem", () => void ctx.symApi.repeatLastPin((ctx.prefs?.symRepeatPinStepMils ?? 100) * 0.0254, ctx.prefs?.symRepeatLabelDelta ?? 1));
+
     // Selection tool (`ACTIONS::selectionTool`).
     m.set("common.InteractiveSelection.selectionTool", () => ctx.symDispatch({ type: "SET_ACTIVE_TOOL", tool: "select" }));
     // Show Datasheet (`ACTIONS::showDatasheet`): the open symbol's datasheet field, opened like the schematic's does.

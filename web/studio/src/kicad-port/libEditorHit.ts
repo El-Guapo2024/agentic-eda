@@ -8,7 +8,7 @@
 import type { CmdShape, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, LibraryFootprint } from "../api/types";
 import { distToSegment, shapeHitDistance } from "../components/canvas/itemHitTest";
 import { libPointToInternalNm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
-import { cmdShapeToShape } from "./itemBoxes";
+import { cmdShapeToShape, libBezierPointsNm } from "./itemBoxes";
 import { textBoxDistanceNm } from "./symTextBox";
 
 /** The two editors' tolerance: `Math.max( 80, 6 px )` in um. */
@@ -92,6 +92,8 @@ export function symbolGraphicDistance(g: LibrarySymbolGraphic, x: number, y: num
     const [x1, y1] = um(g.end);
     pts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
   } else if (g.kind === "arc") pts = [um(g.start), um(g.mid), um(g.end)];
+  // `EDA_SHAPE::hitTest` of a bezier: the segments of its curve (`m_bezierPoints`)
+  else if (g.kind === "bezier") pts = libBezierPointsNm(g);
   else pts = g.pts.map(um);
   let best = Infinity;
   for (let i = 0; i + 1 < pts.length; i++) best = Math.min(best, distToSegment(x, y, pts[i]![0], pts[i]![1], pts[i + 1]![0], pts[i + 1]![1]));
