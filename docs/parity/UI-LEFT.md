@@ -174,10 +174,10 @@ Notes:
 
 ## Schematic editor
 
-- **S1 [BD] Placing labels, power symbols and text.** **done (task-u1-schplace)**: the dialog first (Place Power: the chooser filtered to power symbols), then the item rides the cursor, R / X / Y turn it there, one undo step per placement (PARITY-sch §53).
+- **S1 [BD] Placing labels, power symbols and text.** **done (task-u1-schplace)**: the dialog first (Place Power: the chooser filtered to power symbols), then the item rides the cursor, R / X / Y turn it there, one undo step per placement (PARITY-sch §54).
   - Left: Properties of a power symbol in the hand; the right-button menu of the item in the hand; the label dialog lists the sheet in view's labels only (no other sheets, bus aliases); "Place all units" and the global/local power preference; the placed item is not left selected; Repeat puts a power symbol 100 mil down, not at the cursor.
   - (was: you click first and the dialog comes after, and nothing follows the cursor before the click; Place Power is a text field with presets, its rotation set in the dialog.)
-  - M. PARITY-sch §3, §3a, §53.
+  - M. PARITY-sch §3, §3a, §54.
 - **S2 [FM] Design variants.** No Add, Remove or Edit Variant, no per-variant DNP or fields, and no variant columns in the Fields Table or the placement files. XL. ui-parity-missing (3 rows); PARITY-sch §13, §25.
 - **S3 [FM] Schematic Setup.**
   - Formatting lacks the text sizes, line widths, and junction and hop-over sizes.
@@ -245,7 +245,7 @@ Notes:
   - Some sheet-pin drag cases differ.
   - Swap and Properties skip the commit clean-up (C3-M1).
   - The no-connect tool doesn't remove an existing flag.
-  - Enter doesn't finish a wire. **done (task-u1-schplace)**: Enter is KiCad's `cursorClick`, a click where the cursor is (it does not finish a wire in KiCad either), and End now keeps the segment to the cursor (PARITY-sch §2, §53).
+  - Enter doesn't finish a wire. **done (task-u1-schplace)**: Enter is KiCad's `cursorClick`, a click where the cursor is (it does not finish a wire in KiCad either), and End now keeps the segment to the cursor (PARITY-sch §2, §54).
   - S. PARITY-sch §2, §46.
 - **S19 [BD] Bus unfold, swap and groups.**
   - Unfold from Bus has no member submenus and no ghost.

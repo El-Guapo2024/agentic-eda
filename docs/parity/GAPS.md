@@ -189,7 +189,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   - L2: a schematic with only graphics (QA `groups_load_save`) is refused on import. **Left (low)**
   - Also left: a label field's bold, thickness and `show_name` (M5's last part); the colours and a free text's bold and italic are kept in the files but not
     drawn; a project's drawing sheet file and `.include` model files are not carried; `${U1A:FIELD}` cross-references by the letter form only.
-- Placing in KiCad's order (2026-11-05, `task-u1-schplace`, `PARITY-sch.md` section 53; UI-LEFT S1): Place Label, Global Label, Hierarchical Label,
+- Placing in KiCad's order (2026-11-05, `task-u1-schplace`, `PARITY-sch.md` section 54; UI-LEFT S1): Place Label, Global Label, Hierarchical Label,
   Directive Label and Text open their dialog first (the hotkey where the cursor is, `PrimeTool`) and Place Power opens the Symbol Chooser filtered to power
   symbols (`FilterPowerSymbols( true )`); the item then rides the cursor, drawn from the server's preview of the very command the click sends (`POST
   /api/sch/place_preview`), until a click places it as one undo step; R / Shift+R / X / Y turn it, E reopens its dialog, Increment steps its text, Esc /
@@ -410,7 +410,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   a warning, kept in the table, not read), Edit Options..., 3D model search paths (Configure Paths lists KiCad's variables; the `3D Models` paths are the footprint's own text); KiCad's
   regular-expression (`/re/`) and relational (`voltage>3.3`) search words; the Footprint selector's list and the 3D preview of the Footprint Chooser; the chooser places a symbol in its normal
   body style (Cycle Body Style changes it afterwards, item 12); Change Symbols lists only the libraries the design references; power symbols are placed by `P`, whose chooser
-  is this one filtered to them (2026-11-05, `task-u1-schplace`, `PARITY-sch.md` sections 3a and 53), not offered here.
+  is this one filtered to them (2026-11-05, `task-u1-schplace`, `PARITY-sch.md` sections 3a and 54), not offered here.
 - Port from: `common/libraries/{library_manager,library_table,library_table_parser}.cpp`, `common/libraries/lib_table_grid_data_model.cpp`, `common/dialogs/{dialog_edit_library_tables,dialog_configure_paths}.cpp`,
   `eeschema/dialogs/panel_sym_lib_table.cpp`, `pcbnew/dialogs/panel_fp_lib_table.cpp`, `common/lib_tree_model_adapter.cpp`, `common/footprint_info.cpp`, `eeschema/symbol_chooser_frame.cpp`,
   `pcbnew/footprint_chooser_frame.cpp`.
