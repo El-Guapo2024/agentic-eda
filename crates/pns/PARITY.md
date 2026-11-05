@@ -49,8 +49,8 @@ exists rather than letting you rediscover it.
    KiCad pass branches on "does this line contain an arc" (the optimizer skips such a
    line, `Simplify` keeps an arc's points) the same branch is taken. The router makes
    arcs of its own since Stage 10 step 2: the rounded corners of `CORNER_MODE`.
-4. **No component dragger, no multi-selection drag.** Single-item
-   (segment/via) drag only. Diff pairs (Stage 7) and length tuning
+4. ~~**No component dragger, no multi-selection drag.** Single-item
+   (segment/via) drag only.~~ **Ported 2026-11-05 (Stage 22):** `COMPONENT_DRAGGER` and `MULTI_DRAGGER`. Diff pairs (Stage 7) and length tuning
    (Stage 8: single track, pair and skew, KiCad's placers and tool) are
    ported; KiCad's dragger has no pair mode, so there is nothing to port for a
    pair drag.
@@ -1386,6 +1386,56 @@ The router side of `work/findings/round7/r7-route-rules.md` section R, each re-r
 - Left (low), in GAPS item 7: R7-R6 (`startWithVia` outlives the tool), R7-R7 (Autoroute's active layer afterwards), R7-R8 (the mode toasts), R7-R9
   (`COMPONENT_DRAGGER` / `MULTI_DRAGGER`).
 - Gates: see the HANDOFF row.
+
+## Stage 22 -- the component and multi-track draggers (branch `task-u1-drag`, 2026-11-05)
+
+`D` on a footprint drags it with its tracks, and `D` on several selected tracks drags them together: `pns_component_dragger.{h,cpp}` ->
+`src/component_dragger.rs`, `pns_multi_dragger.{h,cpp}` -> `src/multi_dragger.rs`, with `ROUTER::StartDragging( aP, ITEM_SET )` (`Router::drag_start_component`,
+`drag_start_multi`) and `ROUTER_TOOL::InlineDrag`'s part of it (the studio, `kicad-port/dragTool.ts` `findGroupDragTarget`, `components/canvas/dragging.ts`
+`startGroupDrag`, `Canvas.tsx`). UI-LEFT R1, GAPS item 7 R7-R9.
+
+- **`COMPONENT_DRAGGER`.** `Start` collects, for each routable solid of the set, the tracks linked at its joint (`FindJoint( solid->Pos(), solid )`; here
+  only those on a layer of the pad, the joint having no layers of its own): a track whose other end is a joint with a pad of the set moves as it is
+  (`m_fixedItems`), a line whose far end is one moves as it is too, every other line is a connection whose end at the pad follows the pad. `Drag`
+  branches the world each position, moves the solids by `aP - m_p0` (`SOLID::SetPos`: the shape, the connection points and -- through the rule resolver --
+  the hole), the fixed items by the same, and drags each connection's vertex at the pad with `LINE::DragCorner` (45 degrees, no snap). `FixRoute` commits
+  unless `CheckColliding( m_draggedItems )` (the moved pads and tracks by `Node::item_colliding`, the new lines segment by segment), with Ctrl+click
+  (`aForceCommit`) or Highlight collisions' "Allow DRC violations" past it. `GetForceMarkObstaclesMode` is false and there is no hint.
+- **The extra joints** (`QueryJoints( solid->Hull().BBox(), .. )`, a track that ends inside a pad off its centre) are ported with KiCad's own test,
+  `li->Collide( solid, .. )`, which two items of one net never pass ("same nets? no clearance!", the hole being of the net too): as in KiCad at 8303b2ad
+  such a track stays where it is when the footprint moves (`a_track_ending_off_the_pad_centre_stays_where_it_is`).
+- **`MULTI_DRAGGER`.** `Start` assembles one line per selected track, finds the strict corner or leader segment under the cursor (or the nearest), the mode
+  (`DM_CORNER` turns every line so its corner is last, and falls back to `DM_SEGMENT` at a non-trivial end, the lines staying turned as in KiCad) and the
+  primary line. `Drag` tries the three postures (`tryPosture`) and resolves the position per mode: `clipToOtherLine` (Highlight collisions, always
+  committable), the two walk orders and the one that lengthens the lines least (Walk around, `SetLengthLimit( true, 3.0 )`), one shove of all the lines as
+  heads (Shove, `SHP_SHOVE | SHP_DONT_OPTIMIZE`). `FixRoute` reads `m_dragStatus` only (no Ctrl). `dragCornerInternal` took the `aPreferredEndingDirection`
+  it uses (`Line::drag_corner45_preferring`); `SEG::LineDistance( .., true )` and `LineProject` are `seg_ops`.
+- **`InlineDrag`.** The drag starts at the dragged item nearest the cursor, snapped (`snapToItem`), or -- one footprint -- at its anchor, where KiCad warps
+  the cursor (`GetMoveWarpsCursor()`, on by default; the studio holds the cursor there, `heldCursor`); a component drag's cursor is on the wire grid
+  (`updateEndItem` with no net: `snapToItem( nullptr )`), a multi-track drag's snaps onto the dragged nets only (`MULTI_DRAGGER::CurrentNets`). A click
+  before the first move does nothing (`hasMouseMoved`), a click the dragger refuses ends the drag with nothing committed and no message (the loop
+  `break`s whatever `FixRoute` says), Esc cancels, Ctrl+Z drops it (R7-R1). The selection rules are `EDIT_TOOL::Drag`'s: a selection with footprints
+  keeps them, the footprint (or a pad of it) under the cursor is the hover one, locked items stay out ("Selection contains locked items."), `G` on more
+  than one footprint does nothing (`CanInlineDrag`), and two or more tracks, all `PCB_TRACE_T` (no arc, no via), are a multi-track drag.
+- **The commit** (`ROUTER::CommitRouting`, `PNS_KICAD_IFACE::Commit`'s `m_fpOffsets`): the footprints move by the offset and an IR track all of whose items
+  moved as they are moves whole, keeping its id (`UpdateItem`), as `Cmd::MoveItems`; the connections' lines replace their tracks (with what those keep of
+  themselves) as `Cmd::CommitRoute`; both are one `Cmd::Batch`, one undo step (`RouteCommit::moved_footprints`, `moved_tracks`, `move_by`).
+- The preview: the footprints drawn moved as a PCB move draws them (pads, graphics, fields, the dynamic ratsnest, the courtyard conflicts:
+  `InlineDrag`'s preview items), the following lines and the multi-track drag's lines as the dragger's dashed lines, red when they collide.
+- **Differs:** see the module docs. A pad of several solids (a padstack) moves all of them, where `FindItemByParent( pad )` hands KiCad's dragger the
+  first; a footprint's own Edge.Cuts and Margin graphics are board shapes here and stay; a moved pad's own hole is not asked as `CheckColliding`'s probe;
+  geometry-dependent rules see a moved pad where the board has it; the multi-track Shove has no springback (a shove per position from the world without
+  the lines) and does not lock the heads' ends; a position the multi-track drag cannot resolve shows its lines flagged colliding (KiCad shows the world
+  without them); the leader segments are not reselected after the commit and the selection is not cleared at the start (nor restored on Esc); the
+  closest item's net is not highlighted while dragging; the commit is of the click's position, dragged first (KiCad commits the last motion's); the
+  router reads the mode the drag started in (`MULTI_DRAGGER::Drag` reads `Settings().Mode()` live, though its shove exists only if it started in Shove).
+- Tests: `component_dragger.rs` (5: KiCad's corners worked by hand, the fixed tracks, the refusal and Ctrl, the off-centre and other-layer tracks),
+  `multi_dragger.rs` (6: segment and corner drags to the nanometre, the fallback to `DM_SEGMENT`, a crossing line left out, shove and walk round, Highlight
+  collisions committing, `clipToOtherLine`), `tests/component_drag.rs` (4: the tracks stay on the moved pads in every mode, a refused drag ends, a
+  multi-track drag, and on KiCad's `pic_programmer` and `backspace1` eleven drags leave no new collision and no loose track end); route_api (3: one undo
+  step, a refused drag, two tracks); slow: `gate_vs_kicad::component_drags_add_no_violation_to_kicad_clis_drc` (drags on `pic_programmer` and
+  `backspace1` committed through the `Cmd::Batch`: kicad-cli finds no new clearance, short, crossing, hole, edge, track-width, dangling-track or
+  unconnected-items violation); web: `dragTool.test.ts` (3); browser: `web/studio/e2e/component-drag.check.js` (component, esc, refused, multi).
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 

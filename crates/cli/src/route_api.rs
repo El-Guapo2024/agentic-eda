@@ -326,9 +326,17 @@ pub fn via(cell: &RouteCell, body: &[u8]) -> Value {
 }
 
 /// `Cmd::CommitRoute` of a router's commit: with each new track's source (its mask and group go to it) and the entered group `group` (the
-/// new items join it), r5 R5-2.
-fn commit_cmd(commit: eda_pns::router::RouteCommit, group: Option<String>) -> eda_ops::Cmd {
-    eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds, track_sources: commit.track_sources, group }
+/// new items join it), r5 R5-2. A component drag's commit moves its footprints, and the tracks it moved whole, in the same step
+/// (`PNS_KICAD_IFACE::Commit`: `m_commit->Modify( footprint ); footprint->SetPosition( p_new )` in the one `BOARD_COMMIT`): `Cmd::Batch` of
+/// `Cmd::MoveItems` (a footprint and a track keep their ids, the routing stays) and the `Cmd::CommitRoute`.
+pub(crate) fn commit_cmd(commit: eda_pns::router::RouteCommit, group: Option<String>) -> eda_ops::Cmd {
+    let moved: Vec<String> = commit.moved_footprints.iter().chain(&commit.moved_tracks).cloned().collect();
+    let (dx, dy) = commit.move_by;
+    let route = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds, track_sources: commit.track_sources, group };
+    if moved.is_empty() {
+        return route;
+    }
+    eda_ops::Cmd::Batch { cmds: vec![eda_ops::Cmd::MoveItems { ids: moved, dx, dy }, route] }
 }
 
 /// `group` of a request that starts a session: the group the board editor has entered (`PCB_SELECTION_TOOL::GetEnteredGroup()`), if any.
@@ -524,8 +532,12 @@ pub fn set_settings(cell: &RouteCell, body: &[u8]) -> Value {
 // a second cell, so there is exactly one "what's this board session doing
 // right now" slot to reason about.
 
-fn drag_kind_name(kind: Option<eda_pns::dragger::DragKind>) -> &'static str {
-    match kind {
+fn drag_kind_name(router: &Router) -> &'static str {
+    // `DRAG_COMPONENT` (`COMPONENT_DRAGGER`) and `MULTI_DRAGGER`
+    if let Some(group) = router.drag_group_kind() {
+        return group;
+    }
+    match router.drag_kind() {
         Some(eda_pns::dragger::DragKind::Segment) => "segment",
         Some(eda_pns::dragger::DragKind::Via) => "via",
         Some(eda_pns::dragger::DragKind::Arc) => "arc",
@@ -537,7 +549,7 @@ fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -
     json!({
         "ok": true,
         // `DM_SEGMENT` (the whole segment slides), `DM_CORNER` (a vertex follows the cursor), `DM_VIA` or `DM_ARC` (the arc's curvature follows it)
-        "drag": drag_kind_name(router.drag_kind()),
+        "drag": drag_kind_name(router),
         // `DM_VIA` of a virtual via (the joint where tracks meet, `DRAGGER::checkVirtualVia`): no via is drawn (`ROUTER_PREVIEW_ITEM`: "if( v->IsVirtual() ) return") or committed
         "virtual_via": router.drag_virtual_via(),
         "colliding": preview.colliding,
@@ -555,7 +567,14 @@ fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -
         // the drag is still in progress (see `DragPreview::fanout`'s own
         // doc comment) -- empty for a corner drag.
         "fanout": preview.fanout.iter().map(|l| json!({ "layer": router.layer_name(l.layer), "width": l.width, "pts": pts_json(&l.pts) })).collect::<Vec<_>>(),
+        // a component drag: how far the footprints and their pads have moved (`aP - m_p0`); `fanout` is the lines that follow the pads
+        "offset": preview.offset.map(|(dx, dy)| json!([dx, dy])),
     })
+}
+
+/// The tracks or footprints a group drag takes (`drag_start`'s `footprints` or `tracks`): a list of board ids.
+fn ids_of(req: &Value, key: &str) -> Vec<String> {
+    req.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
 
 /// `POST /api/route/drag_start`: `{x, y, layer, settings?, free_angle?, drag_locked?}` (`mode` at the top level still works). A locked item is refused
@@ -582,6 +601,27 @@ pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     let free_angle = req.get("free_angle").and_then(Value::as_bool).unwrap_or(false);
     let drag_locked = req.get("drag_locked").and_then(Value::as_bool).unwrap_or(false);
+    // `ROUTER::StartDragging( aP, ITEM_SET )`: a selection of footprints (`COMPONENT_DRAGGER`) or of several tracks (`MULTI_DRAGGER`)
+    let (footprints, tracks) = (ids_of(&req, "footprints"), ids_of(&req, "tracks"));
+    if !footprints.is_empty() || tracks.len() > 1 {
+        // "Warp mouse to origin of moved object" (`GetMoveWarpsCursor()`), on unless the request says otherwise
+        let warp = req.get("warp").and_then(Value::as_bool).unwrap_or(true);
+        let started = if !footprints.is_empty() { router.drag_start_component(at, &footprints, warp) } else { router.drag_start_multi(at, &tracks) };
+        return match started {
+            Ok(start) => {
+                let mut reply = router.drag_preview(start).map(|p| drag_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
+                if let Some(obj) = reply.as_object_mut() {
+                    // where the drag starts (`m_p0`): the footprint's anchor, where KiCad warps the cursor, or the dragged item nearest the cursor
+                    obj.insert("start".into(), json!([start.x, start.y]));
+                    obj.insert("footprints".into(), json!(router.drag_footprints()));
+                    obj.insert("line_tracks".into(), json!(router.drag_line_tracks()));
+                }
+                *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
+                reply
+            }
+            Err(message) => err(message),
+        };
+    }
     match router.drag_start_locked(at, layer, free_angle, drag_locked) {
         Ok(()) => {
             let mut reply = router.drag_preview(at).map(|p| drag_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
@@ -623,6 +663,19 @@ pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let at = point_of(&req);
     let force_commit = req.get("force_commit").and_then(Value::as_bool).unwrap_or(false);
     let marking = router.drag_forces_mark_obstacles();
+    // `InlineDrag`: a component or multi-track drag leaves its loop at the click whatever `FixRoute` says -- a refused one commits nothing and
+    // the drag is over (no message: KiCad shows none)
+    if router.drag_group_kind().is_some() {
+        let commit = router.drag_finish_with(at, force_commit);
+        let group = router.entered_group.clone();
+        *guard = None;
+        drop(guard);
+        let Some(commit) = commit else { return json!({ "ok": false, "dragging": false, "refused": true, "message": "" }) };
+        return match board::step(dir, commit_cmd(commit, group), true, "ui") {
+            Ok(summary) => json!({ "ok": true, "message": summary }),
+            Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+        };
+    }
     // `performDragging`: "if( m_router->FixRoute( m_endSnapPoint, m_endItem, false, forceCommit ) ) break;" -- a click the drag refuses
     // leaves it going (`dragging`), the hint up (findings p5 F3-2)
     let Some(commit) = router.drag_finish_with(at, force_commit) else {
@@ -1610,5 +1663,124 @@ mod tests {
         assert_eq!(via(&cell, &body(json!({ "enabled": true, "via_type": "blind", "span": ["F.Cu", "In7.Cu"] })))["ok"], json!(false));
         assert_eq!(via(&cell, &body(json!({ "enabled": true, "via_type": "tented" })))["ok"], json!(false));
         assert_eq!(via(&cell, &body(json!({ "enabled": true, "via_type": "through", "span": ["F.Cu", "B.Cu"] })))["ok"], json!(true));
+    }
+
+    /// A 20 mm board with `R1` (two 1 mm SMD pads 2 mm apart, at (5, 10) and (7, 10)), `R2` and `R3` (one pad each, at (15, 10) and (15, 16)),
+    /// N1 routed from R1.1 to R2.1 and N2 from R1.2 to R3.1, and the `tracks` given besides.
+    fn setup_footprints(dir: &Path, mut tracks: Vec<Track>) {
+        use eda_model::footprint::{Footprint, Pad, PadKind, PadShape};
+        let smd = |n: &str, x: Nm| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, Nm::ZERO), size: (mm(1.0), mm(1.0)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = |name: &str, pads: Vec<Pad>| Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let part = |r: &str, f: &str, pins: usize| eda_model::Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(f.into()), pins: (1..=pins).map(|i| eda_model::Pin { number: i.to_string(), name: None, kind: eda_model::PinKind::Passive }).collect(), body_nm: None, symbol: None, datasheet: None, edge: None };
+        let net = |n: &str, pins: &[&str]| eda_model::Net { name: n.into(), pins: pins.iter().map(|s| s.to_string()).collect() };
+        let model = ConstraintModel {
+            parts: vec![part("R1", "TWO", 2), part("R2", "PAD1", 1), part("R3", "PAD1", 1)],
+            nets: vec![net("N1", &["R1.1", "R2.1"]), net("N2", &["R1.2", "R3.1"]), net("GND", &[])],
+            footprints: vec![fp("TWO", vec![smd("1", Nm::ZERO), smd("2", mm(2.0))]), fp("PAD1", vec![smd("1", Nm::ZERO)])],
+            ..ConstraintModel::default()
+        };
+        let intent_path = dir.join("intent.yaml");
+        std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
+        tracks.push(track("t1", "N1", &[p(mm(5.0), mm(10.0)), p(mm(5.0), mm(8.0)), p(mm(13.0), mm(8.0)), p(mm(15.0), mm(10.0))]));
+        tracks.push(track("t2", "N2", &[p(mm(7.0), mm(10.0)), p(mm(7.0), mm(16.0)), p(mm(15.0), mm(16.0))]));
+        let at = |id: &str, x: f64, y: f64| eda_model::ir::FootprintInstance { id: id.into(), at: p(mm(x), mm(y)), rot: 0, side: eda_model::ir::Side::Top, label: Default::default() };
+        let design = Design {
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+            schema: eda_model::ir::SCHEMA_VERSION,
+            provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            nets: None,
+            placement: Some(PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.0), Nm::ZERO), p(mm(20.0), mm(20.0)), p(Nm::ZERO, mm(20.0))], footprints: vec![at("R1", 5.0, 10.0), at("R2", 15.0, 10.0), at("R3", 15.0, 16.0)], modules: vec![] }),
+            routing: Some(RoutingSection { tracks, vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
+            drawings: None,
+        };
+        board::save(dir, &design).unwrap();
+        let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
+        std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    }
+
+    fn footprint_at(dir: &Path, id: &str) -> Point {
+        let (_, design, _) = board::load(dir).unwrap();
+        design.placement.unwrap().footprints.iter().find(|f| f.id == id).unwrap().at
+    }
+
+    /// D on a footprint (`drag_start` with `footprints`: `COMPONENT_DRAGGER`): the drag starts at the footprint's anchor (where `InlineDrag` warps
+    /// the cursor), each move reports how far the footprint has gone and the lines that follow its pads, and the release moves the footprint and
+    /// replaces its tracks in ONE undo step (`Cmd::Batch` of `MoveItems` and `CommitRoute`).
+    #[test]
+    fn a_footprint_dragged_with_d_takes_its_tracks_along_in_one_undo_step() {
+        let dir = scratch("component_drag");
+        setup_footprints(&dir, vec![]);
+        let before = tracks_of(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        let started = drag_start(&dir, &cell, &body(json!({ "x": 5_200_000, "y": 10_100_000, "layer": "F.Cu", "footprints": ["R1"] })));
+        assert_eq!((started["ok"].clone(), started["drag"].clone()), (json!(true), json!("component")), "{started}");
+        assert_eq!(started["start"], json!([5_000_000, 10_000_000]), "the footprint's anchor: {started}");
+        assert_eq!(started["footprints"], json!(["R1"]));
+        let moved = drag_move(&cell, &body(json!({ "x": 6_000_000, "y": 12_000_000 })));
+        assert_eq!(moved["offset"], json!([1_000_000, 2_000_000]), "{moved}");
+        assert_eq!(moved["colliding"], json!(false), "{moved}");
+        assert_eq!(moved["fanout"].as_array().map(Vec::len), Some(2), "both tracks follow: {moved}");
+        let done = drag_finish(&dir, &cell, &body(json!({ "x": 6_000_000, "y": 12_000_000 })));
+        assert_eq!(done["ok"], json!(true), "{done}");
+        assert!(cell.lock().unwrap().is_none(), "the session is over");
+        assert_eq!(footprint_at(&dir, "R1"), p(mm(6.0), mm(12.0)));
+        let after = tracks_of(&dir);
+        assert_eq!(after.len(), 2, "{after:?}");
+        // each track now ends on its moved pad, its far end where it was
+        let ends = |net: &str| after.iter().find(|(n, _)| n == net).map(|(_, pts)| (pts[0], *pts.last().unwrap())).unwrap_or_else(|| panic!("{net}: {after:?}"));
+        // (the board's net names are KiCad's: `/N1`)
+        let (a, b) = ends("/N1");
+        assert!([a, b].contains(&p(mm(6.0), mm(12.0))) && [a, b].contains(&p(mm(15.0), mm(10.0))), "N1: {after:?}");
+        let (a, b) = ends("/N2");
+        assert!([a, b].contains(&p(mm(8.0), mm(12.0))) && [a, b].contains(&p(mm(15.0), mm(16.0))), "N2: {after:?}");
+        // one undo puts the footprint and both tracks back
+        board::undo(&dir, "test", None).expect("undo");
+        assert_eq!(footprint_at(&dir, "R1"), p(mm(5.0), mm(10.0)));
+        assert_eq!(tracks_of(&dir), before);
+    }
+
+    /// `InlineDrag`: a click `COMPONENT_DRAGGER::FixRoute` refuses (a pad on another net's track) ends the drag with nothing committed and no
+    /// message (`refused`, `dragging: false`). (Ctrl+click commits it in the router -- `eda_pns`'s `a_refused_component_drag_ends_and_ctrl_commits_it`
+    /// -- and the studio's gates then judge the violation, as they judge every commit.)
+    #[test]
+    fn a_refused_footprint_drag_ends_without_a_commit() {
+        let dir = scratch("component_drag_refused");
+        setup_footprints(&dir, vec![track("g", "GND", &[p(mm(1.0), mm(4.0)), p(mm(12.0), mm(4.0))])]);
+        let cell: RouteCell = Mutex::new(None);
+        drag_start(&dir, &cell, &body(json!({ "x": 5_000_000, "y": 10_000_000, "layer": "F.Cu", "footprints": ["R1"] })));
+        let moved = drag_move(&cell, &body(json!({ "x": 5_000_000, "y": 4_000_000 })));
+        assert_eq!(moved["colliding"], json!(true), "R1 on the GND track: {moved}");
+        let done = drag_finish(&dir, &cell, &body(json!({ "x": 5_000_000, "y": 4_000_000 })));
+        assert_eq!((done["ok"].clone(), done["refused"].clone(), done["dragging"].clone()), (json!(false), json!(true), json!(false)), "{done}");
+        assert!(cell.lock().unwrap().is_none(), "the drag is over");
+        assert_eq!(footprint_at(&dir, "R1"), p(mm(5.0), mm(10.0)));
+    }
+
+    /// D on two selected tracks (`drag_start` with `tracks`: `MULTI_DRAGGER`): they move together, one undo step.
+    #[test]
+    fn two_selected_tracks_are_dragged_together() {
+        let dir = scratch("multi_drag");
+        setup_board(&dir, vec![track("a", "SIG", &[p(mm(2.0), mm(10.0)), p(mm(18.0), mm(10.0))]), track("b", "GND", &[p(mm(2.0), mm(12.0)), p(mm(18.0), mm(12.0))])], vec![]);
+        let cell: RouteCell = Mutex::new(None);
+        let started = drag_start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 10_050_000, "layer": "F.Cu", "tracks": ["a", "b"] })));
+        assert_eq!((started["ok"].clone(), started["drag"].clone()), (json!(true), json!("multi")), "{started}");
+        assert_eq!(started["start"], json!([10_000_000, 10_000_000]), "snapped onto a: {started}");
+        let mut lines = started["line_tracks"].as_array().unwrap().clone();
+        lines.sort_by_key(|v| v.to_string());
+        assert_eq!(lines, vec![json!("a"), json!("b")]);
+        let moved = drag_move(&cell, &body(json!({ "x": 10_000_000, "y": 8_000_000 })));
+        assert_eq!(moved["fanout"].as_array().map(Vec::len), Some(2), "{moved}");
+        let done = drag_finish(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000 })));
+        assert_eq!(done["ok"], json!(true), "{done}");
+        let after = tracks_of(&dir);
+        assert!(after.iter().any(|(n, pts)| n == "SIG" && pts.iter().any(|q| q.y == mm(8.0))), "{after:?}");
+        assert!(after.iter().any(|(n, pts)| n == "GND" && pts.iter().any(|q| q.y == mm(10.0))), "b follows 2 mm below a: {after:?}");
+        board::undo(&dir, "test", None).expect("undo");
+        assert_eq!(tracks_of(&dir).len(), 2);
+        assert!(tracks_of(&dir).iter().all(|(_, pts)| pts.len() == 2), "one undo puts both back");
     }
 }

@@ -225,6 +225,9 @@ pub struct DragPreview {
     /// `dragShove` only: the line `m_lastDragSolution` takes from this position (the shoved line, split at the anchor when the optimizer
     /// runs, not optimized), what a later failed position shows again.
     pub(crate) solution: Option<(Vec<Point>, Vec<crate::arcs::ArcPts>)>,
+    /// A component drag (`COMPONENT_DRAGGER`, [`crate::router::Router::drag_start_component`]) only: how far its footprints' pads have moved
+    /// (`aP - m_p0`); `fanout` is then the lines that follow them and the tracks that move with them. `None` for every other drag.
+    pub offset: Option<(Nm, Nm)>,
 }
 
 /// What a finished drag replaces/adds -- `crate::router::Router` turns

@@ -678,6 +678,13 @@ export function routeDragStart(x: Nm, y: Nm, layer: string, settings?: RouterSet
   return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerSettingsToWire(settings) : undefined, free_angle: freeAngle ? true : undefined, drag_locked: dragLocked ? true : undefined, group: routerEnteredGroup ?? undefined });
 }
 
+/** `ROUTER::StartDragging( aP, ITEM_SET )` of a selection (`ROUTER_TOOL::InlineDrag`): `footprints` is `COMPONENT_DRAGGER` -- the footprints move, the tracks on
+ * their pads follow; `warp` ("Warp mouse to origin of moved object", on by default) starts a drag of one footprint at its anchor -- and `tracks` (two or more)
+ * `MULTI_DRAGGER`. The reply's `start` is where the drag starts. */
+export function routeDragStartGroup(x: Nm, y: Nm, layer: string, group: { footprints?: string[]; tracks?: string[]; warp?: boolean }, settings?: RouterSettings): Promise<DragPreview> {
+  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerSettingsToWire(settings) : undefined, footprints: group.footprints, tracks: group.tracks, warp: group.warp === false ? false : undefined, group: routerEnteredGroup ?? undefined });
+}
+
 export function routeDragMove(x: Nm, y: Nm): Promise<DragPreview> {
   return postJson("/api/route/drag_move", { x: Math.round(x), y: Math.round(y) });
 }

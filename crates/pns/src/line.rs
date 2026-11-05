@@ -259,27 +259,35 @@ impl Line {
     /// `LINE::dragCorner45` with `m_snapThreshhold = snap`: [`Self::drag_corner45`] after `snapDraggedCorner` has pulled the
     /// cursor onto the point where two nearby segments of the line, at an obtuse angle, would meet.
     pub fn drag_corner45_snapped(&mut self, p: Point, index: usize, snap: Nm) {
+        self.drag_corner45_preferring(p, index, snap, crate::direction45::Direction45::Undefined);
+    }
+
+    /// `LINE::DragCorner( aP, aIndex, false, aPreferredEndingDirection )` (`dragCorner45`): [`Self::drag_corner45_snapped`], with the leg that
+    /// ends at the cursor taken in the direction `preferred` when one of the two ways of turning ends in it (`dragCornerInternal`'s
+    /// `aPreferredEndingDirection`, which `MULTI_DRAGGER::Drag` gives the lines that follow the primary one: the primary's last direction).
+    /// `Undefined` prefers nothing.
+    pub fn drag_corner45_preferring(&mut self, p: Point, index: usize, snap: Nm, preferred: crate::direction45::Direction45) {
         let n_segs = self.pts.len().saturating_sub(1);
         let width = self.width;
         let p = self.snap_dragged_corner(p, index, snap);
         let new_pts = if index == 0 {
             let mut rev = self.pts.clone();
             rev.reverse();
-            let mut out = drag_corner_internal(&rev, p);
+            let mut out = drag_corner_internal_preferring(&rev, p, preferred);
             out.reverse();
             out
         } else if index >= n_segs {
-            drag_corner_internal(&self.pts, p)
+            drag_corner_internal_preferring(&self.pts, p, preferred)
         } else {
             // "Are we next to an arc? Insert a new point so we slice correctly"
             let mut pts = self.pts.clone();
             if self.pt_on_arc_of(&pts, index + 1) {
                 pts.insert(index + 1, pts[index + 1]);
             }
-            let mut path = drag_corner_internal(&pts[..=index], p);
+            let mut path = drag_corner_internal_preferring(&pts[..=index], p, preferred);
             let mut tail: Vec<Point> = pts[index..].to_vec();
             tail.reverse();
-            let mut tail = drag_corner_internal(&tail, p);
+            let mut tail = drag_corner_internal_preferring(&tail, p, preferred);
             tail.reverse();
             path.extend(tail);
             path
@@ -590,7 +598,7 @@ impl Line {
 /// trace to `p` leaves in that segment's own heading, or at least turns
 /// obtusely from the previous one; falls back to a fresh trace from the
 /// chain's first point.
-fn drag_corner_internal(origin: &[Point], p: Point) -> Vec<Point> {
+fn drag_corner_internal_preferring(origin: &[Point], p: Point, preferred: crate::direction45::Direction45) -> Vec<Point> {
     use crate::direction45::{AngleType, CornerMode, Direction45};
     let trace = |from: Point, diag: bool| Direction45::Undefined.build_initial_trace(from, p, diag, CornerMode::Mitered45);
     if origin.len() == 1 {
@@ -619,7 +627,13 @@ fn drag_corner_internal(origin: &[Point], p: Point) -> Vec<Point> {
             let dir = Direction45::from_seg(path[0], path[1]);
             paths.push((path, dir));
         }
-        picked = paths.iter().find(|(_, d)| *d == d_start).map(|(pp, _)| pp.clone());
+        // "if( aPreferredEndingDirection != DIRECTION_45::UNDEFINED )": the path whose last leg runs that way
+        if preferred != Direction45::Undefined {
+            picked = paths.iter().find(|(pp, _)| Direction45::from_seg(pp[pp.len() - 2], pp[pp.len() - 1]) == preferred).map(|(pp, _)| pp.clone());
+        }
+        if picked.is_none() {
+            picked = paths.iter().find(|(_, d)| *d == d_start).map(|(pp, _)| pp.clone());
+        }
         if picked.is_none() {
             picked = paths.iter().find(|(_, d)| d.angle_to(&d_prev) == AngleType::Obtuse).map(|(pp, _)| pp.clone());
         }

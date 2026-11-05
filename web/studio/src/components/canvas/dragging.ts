@@ -3,13 +3,13 @@
 // helpers, same split: this is the thin client-side glue (hit-test the
 // cursor, turn a click/move into the right `/api/route/drag_*` call and
 // `DrawState` update), not a second copy of `eda_pns::dragger::Dragger`'s
-// own algorithm.
+// own algorithm. `D` on a selection of footprints or of several tracks is `startGroupDrag` (`COMPONENT_DRAGGER`, `MULTI_DRAGGER`).
 import type { BoardState, CmdReply } from "../../api/types";
 import type { RouterSettings } from "../../kicad-port/routerSettings";
-import { routeDragFinish, routeDragStart } from "../../api/client";
+import { routeDragFinish, routeDragStart, routeDragStartGroup } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
-import type { DragDrawState } from "../../kicad-port/dragTool";
+import type { DragDrawState, GroupDragTarget } from "../../kicad-port/dragTool";
 import { pickSelectionCandidates, type SelectionFilter } from "./selectionCandidates";
 import { askConfirm } from "../library/libraryDialogs";
 
@@ -57,6 +57,40 @@ export function findDraggableAt(
     if (via) return { kind: "via", id, layer: fallbackLayer };
   }
   return null;
+}
+
+/** `D` on a selection (`ROUTER_TOOL::InlineDrag` -> `ROUTER::StartDragging( p, itemsToDrag )`): start the component or multi-track drag of `target`
+ * with the cursor at `(x, y)` and arm the drag tool. The footprints of a component drag are drawn moved by its `offset` (the painter's move
+ * preview); its cursor is held on where the drag started (`start`: one footprint's anchor, where KiCad warps the pointer). */
+export async function startGroupDrag(x: number, y: number, target: GroupDragTarget, board: BoardState, settings: RouterSettings, layer: string, dispatch: Dispatch<Action>): Promise<void> {
+  const group = target.kind === "footprints" ? { footprints: target.refs } : { tracks: target.ids };
+  const preview = await routeDragStartGroup(x, y, layer, group, settings);
+  if (!preview.ok) {
+    dispatch({ type: "TOAST", message: preview.message ?? "Nothing to drag there.", kind: "error" });
+    return;
+  }
+  const first = target.kind === "tracks" ? board.routing?.tracks.find((t) => t.id === target.ids[0]) : undefined;
+  const draw: DragDrawState = {
+    kind: "drag",
+    dragKind: target.kind === "footprints" ? "component" : "multi",
+    net: null,
+    layer: first?.layer ?? layer,
+    width: first?.width ?? 0,
+    lineTracks: preview.line_tracks ?? [],
+    pts: preview.pts,
+    colliding: preview.colliding,
+    displaced: preview.displaced,
+    displacedVias: preview.displaced_vias,
+    fanout: preview.fanout,
+    footprints: preview.footprints ?? (target.kind === "footprints" ? target.refs : undefined),
+    offset: preview.offset ?? null,
+    start: preview.start ?? [x, y],
+    grabbed: [x, y],
+    moved: false,
+    nets: target.kind === "tracks" ? [...new Set(target.ids.map((id) => board.routing?.tracks.find((t) => t.id === id)?.net).filter((n): n is string => !!n))] : undefined,
+  };
+  dispatch({ type: "SET_DRAW_STATE", draw });
+  dispatch({ type: "SET_ACTIVE_TOOL", tool: "drag" });
 }
 
 /** `D`: grab `hit` at `(x, y)` and arm the drag tool. Shows an error toast
@@ -125,8 +159,9 @@ export const DRAG_VIOLATION_HINT = "Track violates DRC. (Ctrl+Click to commit an
  * (`DRAGGER::FixRoute`); `forceCommit` (Ctrl+click) commits the violation of a
  * drag that only marks obstacles. */
 export async function finishInlineDrag(x: number, y: number, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">, forceCommit = false): Promise<void> {
-  const reply = (await routeDragFinish(x, y, forceCommit)) as CmdReply & { dragging?: boolean };
-  if (!reply.ok) dispatch({ type: "TOAST", message: reply.message || "Can't drop it there -- still colliding.", kind: "error" });
+  const reply = (await routeDragFinish(x, y, forceCommit)) as CmdReply & { dragging?: boolean; refused?: boolean };
+  // `InlineDrag`: a component or multi-track drag the router refuses ends with nothing committed, and KiCad says nothing (`refused`)
+  if (!reply.ok && !reply.refused) dispatch({ type: "TOAST", message: reply.message || "Can't drop it there -- still colliding.", kind: "error" });
   // `performDragging`: a click `FixRoute` refuses leaves the drag going (`if( m_router->FixRoute( .. ) ) break;`)
   if (!reply.ok && reply.dragging) return;
   dispatch({ type: "SET_DRAW_STATE", draw: null });

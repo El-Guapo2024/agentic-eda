@@ -26,7 +26,14 @@
 //                     (`DRAGGER::FixRoute`), and Ctrl+click commits a violation of
 //                     a drag that only marks obstacles
 //   Esc            -> cancel, nothing committed
-import type { DragPreview } from "../api/types";
+//
+// `D` with footprints selected (or a footprint under the cursor) is `COMPONENT_DRAGGER` (`dragKind: "component"`): the footprints follow the cursor
+// -- held on the anchor of a single one, where KiCad warps the pointer, and on the wire grid (`updateEndItem` with no net: `snapToItem( nullptr )`)
+// -- and every track on their pads follows them (`fanout`). `D` with several tracks selected is `MULTI_DRAGGER` (`"multi"`). Both are `InlineDrag`'s:
+// a click before the cursor has moved does nothing, and a click the router refuses ends the drag with nothing committed (`refused`).
+import type { BoardState, DragPreview } from "../api/types";
+import { itemKind, padParent } from "./pcbItems";
+import { isLocked } from "./pcbTransform";
 
 /** Mirrors `state/store.tsx`'s `DrawState`'s "drag" variant exactly --
  * duplicated rather than imported, same convention `RouteDrawState` already
@@ -39,7 +46,7 @@ export interface DragDrawState {
    * slid sideways and its neighbours turned or stretched to follow (`DM_SEGMENT`).
    * `"via"`: `pts` is just the via's own live position (one point) -- its attached
    * tracks' live shape is `fanout`, not `pts`. */
-  dragKind: "corner" | "segment" | "via" | "arc";
+  dragKind: "corner" | "segment" | "via" | "arc" | "component" | "multi";
   /** Not echoed by `DragPreview` -- captured once from the board at
    * `drag_start` and kept across every subsequent preview, same as
    * `RouteDrawState.net`. */
@@ -65,6 +72,17 @@ export interface DragDrawState {
   /** Via drag only: the via's own directly-attached tracks, already
    * stretched to follow it live -- see `DragPreview.fanout`'s own doc. */
   fanout?: { layer: string; width: number; pts: [number, number][] }[];
+  /** `"component"` (`COMPONENT_DRAGGER`) only: the footprints dragged (drawn moved by `offset`), how far they have moved (`aP - m_p0`), where the
+   * drag started (`start`: the footprint's anchor, onto which KiCad warps the cursor) and where the pointer was at `D` (`grabbed`). `fanout` is then
+   * the lines that follow the pads and the tracks that move with them; for `"multi"` it is the dragged lines. */
+  footprints?: string[];
+  offset?: [number, number] | null;
+  start?: [number, number];
+  grabbed?: [number, number];
+  /** `"component"` and `"multi"`: the cursor has moved since `D` (`InlineDrag`'s `hasMouseMoved`); a click before that does nothing. */
+  moved?: boolean;
+  /** `"multi"`: the dragged lines' nets (`MULTI_DRAGGER::CurrentNets`), the only ones the cursor snaps onto. */
+  nets?: string[];
 }
 
 /** The `DrawState` "drag" patch for a successful `DragPreview` reply,
@@ -74,6 +92,8 @@ export interface DragDrawState {
 export function dragStateFromPreview(current: DragDrawState, preview: DragPreview): DragDrawState {
   return {
     ...current,
+    offset: preview.offset ?? current.offset ?? null,
+    moved: true,
     pts: preview.pts,
     colliding: preview.colliding,
     restored: preview.restored ?? false,
@@ -82,4 +102,38 @@ export function dragStateFromPreview(current: DragDrawState, preview: DragPrevie
     displacedVias: preview.displaced_vias,
     fanout: preview.fanout,
   };
+}
+
+/** What `D` drags when it is not one track or via: the footprints of the selection (`COMPONENT_DRAGGER`) or two or more tracks (`MULTI_DRAGGER`). */
+export type GroupDragTarget = { kind: "footprints"; refs: string[] } | { kind: "tracks"; ids: string[] };
+
+/**
+ * `EDIT_TOOL::Drag`'s `RequestSelection` filter and `ROUTER_TOOL::CanInlineDrag`, for the selection drags (pcbnew/tools/edit_tool.cpp, router_tool.cpp):
+ *   * a selection that is not the hover one and holds a footprint keeps its footprints only ("Remove non-footprints so box-selection will drag
+ *     footprints"); with nothing selected, the footprint under the cursor (a pad stands for it: `FilterCollectorForFreePads`) is the hover selection;
+ *   * locked items are dropped (`FilterCollectorForLockedItems`): `lockedOut` says so (`ReportFilteredLockedItems`);
+ *   * footprints drag together, but not freely ("Footprints cannot be dragged freely": `G` on more than one does nothing -- one footprint is a
+ *     `DraggableItems` item, so `G` on one drags it as `D` does);
+ *   * two or more tracks, all of them tracks (`CountType( PCB_TRACE_T ) == Size()`: an arc track or a via in the selection refuses it), drag together.
+ * `null` when the selection is none of these: `D` then drags the one track or via under the cursor (`findDraggableAt`).
+ */
+export function findGroupDragTarget(board: BoardState, selection: readonly string[], hovered: string | null, freeAngle: boolean): { target: GroupDragTarget | null; lockedOut: boolean } {
+  const isHover = selection.length === 0;
+  const items = isHover ? (hovered ? [hovered] : []) : [...selection];
+  const asItem = (id: string) => (itemKind(board, id) === "pad" ? (padParent(board, id) ?? id) : id);
+  const ids = [...new Set(items.map(asItem))];
+  const footprints = ids.filter((id) => itemKind(board, id) === "part");
+  if (footprints.length > 0 && (!isHover || ids.length === 1)) {
+    const refs = footprints.filter((r) => !isLocked(board, r));
+    const lockedOut = refs.length < footprints.length;
+    if (refs.length === 0) return { target: null, lockedOut };
+    if (freeAngle && refs.length > 1) return { target: null, lockedOut };
+    return { target: { kind: "footprints", refs }, lockedOut };
+  }
+  if (!isHover && ids.length > 1) {
+    const unlocked = ids.filter((id) => !isLocked(board, id));
+    const tracks = unlocked.filter((id) => itemKind(board, id) === "track" && !board.routing?.tracks.find((t) => t.id === id)?.arc_mid);
+    if (tracks.length > 1 && tracks.length === unlocked.length) return { target: { kind: "tracks", ids: tracks }, lockedOut: unlocked.length < ids.length };
+  }
+  return { target: null, lockedOut: false };
 }

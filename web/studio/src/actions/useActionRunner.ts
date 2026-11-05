@@ -46,7 +46,8 @@ import { planSwap } from "../kicad-port/pcbSwap";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { continueDiffPairFromEnd, finishDiffPairRoute, toggleDiffPairVia } from "../components/canvas/diffPairRouting";
-import { findDraggableAt, startInlineDrag } from "../components/canvas/dragging";
+import { findDraggableAt, startGroupDrag, startInlineDrag } from "../components/canvas/dragging";
+import { findGroupDragTarget } from "../kicad-port/dragTool";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
 import { connectedStartCount, expandedSelection, planSelectConnection } from "../kicad-port/pcbConnection";
@@ -555,6 +556,18 @@ export function useActionRunner() {
     // pcbnew's tool stack never overlapping two interactive placements.
     const startDragAtCursor = (freeAngle: boolean) => () => {
       if (!state.board || !state.cursorNm || state.drawState) return;
+      // `EDIT_TOOL::Drag` -> `CanInlineDrag` -> `InlineDrag`: a selection of footprints (or the footprint under the cursor) is `COMPONENT_DRAGGER`, one of
+      // several tracks `MULTI_DRAGGER` (kicad-port/dragTool.ts `findGroupDragTarget`)
+      const hovered = state.selection.size === 0 ? (requestSelection()[0] ?? null) : null;
+      const group = findGroupDragTarget(state.board, [...state.selection], hovered, freeAngle);
+      if (group.target) {
+        void startGroupDrag(state.cursorNm.x, state.cursorNm.y, group.target, state.board, state.routerSettings, state.activeLayer ?? state.board.layers[0] ?? "F.Cu", dispatch);
+        return;
+      }
+      if (group.lockedOut) {
+        dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+        return;
+      }
       const toleranceNm = Math.max(150_000, 6 / state.view.scale);
       const onePixelNm = 1 / state.view.scale;
       const hit = findDraggableAt(state.board, state.selection, state.cursorNm.x, state.cursorNm.y, toleranceNm, onePixelNm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);

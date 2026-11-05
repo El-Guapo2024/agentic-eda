@@ -291,7 +291,8 @@ export type DrawState =
    * manually kept in sync, same convention as the "route" variant above). */
   | {
       kind: "drag";
-      dragKind: "corner" | "segment" | "via" | "arc";
+      /** `"component"`: `D` on footprints (`COMPONENT_DRAGGER`); `"multi"`: `D` on several tracks (`MULTI_DRAGGER`) -- see kicad-port/dragTool.ts. */
+      dragKind: "corner" | "segment" | "via" | "arc" | "component" | "multi";
       net: string | null;
       layer: string;
       width: Nm;
@@ -315,6 +316,15 @@ export type DrawState =
       /** Via drag only: its own directly-attached tracks, already
        * stretched to follow it live, each with its own real width. */
       fanout?: { layer: string; width: Nm; pts: [Nm, Nm][] }[];
+      /** Component drag only: the footprints dragged, how far they have moved, where the drag started (the anchor the cursor is held on) and where the pointer was then. */
+      footprints?: string[];
+      offset?: [Nm, Nm] | null;
+      start?: [Nm, Nm];
+      grabbed?: [Nm, Nm];
+      /** Component and multi-track drags: the cursor has moved since `D` (`InlineDrag`'s `hasMouseMoved`): a click before that does nothing. */
+      moved?: boolean;
+      /** Multi-track drag only: the dragged lines' nets, the only ones the cursor snaps onto. */
+      nets?: string[];
     }
   /** `6` (gap #7 task item 6, pcbnew.InteractiveRouter.DiffPair ->
    * `eda_pns::diff_pair::DiffPairPlacer`): an in-progress differential-

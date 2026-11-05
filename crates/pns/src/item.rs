@@ -133,6 +133,28 @@ impl Solid {
     pub fn routable(&self) -> bool {
         !self.edge && !self.is_text() && !self.is_keepout() && !self.is_obstacle()
     }
+
+    /// `SOLID::SetPos( aCenter )`: the solid at `pos`, its shape and connection points moved with it (`m_shape->Move( aCenter - m_pos )`,
+    /// `m_anchorPoints` likewise) -- what `COMPONENT_DRAGGER::Drag` does to each pad of a dragged footprint.
+    pub fn moved_to(&self, pos: Point) -> Solid {
+        let (dx, dy) = (pos.x - self.pos.x, pos.y - self.pos.y);
+        let anchor_points = self.anchor_points.iter().map(|p| Point { x: p.x + dx, y: p.y + dy }).collect();
+        Solid { pos, shape: translate_shape(&self.shape, dx, dy), anchor_points, ..self.clone() }
+    }
+}
+
+/// `SHAPE::Move( aVector )`: `shape` moved by `(dx, dy)`.
+pub fn translate_shape(shape: &Shape, dx: Nm, dy: Nm) -> Shape {
+    let t = |p: Point| Point { x: p.x + dx, y: p.y + dy };
+    match shape {
+        Shape::Circle { c, r } => Shape::Circle { c: t(*c), r: *r },
+        Shape::Stadium { a, b, r } => Shape::Stadium { a: t(*a), b: t(*b), r: *r },
+        Shape::Rect { x0, y0, x1, y1 } => Shape::Rect { x0: *x0 + dx, y0: *y0 + dy, x1: *x1 + dx, y1: *y1 + dy },
+        Shape::RoundRect { x0, y0, x1, y1, r } => Shape::RoundRect { x0: *x0 + dx, y0: *y0 + dy, x1: *x1 + dx, y1: *y1 + dy, r: *r },
+        Shape::Polygon { pts } => Shape::Polygon { pts: pts.iter().map(|p| t(*p)).collect() },
+        Shape::Strokes { segs, r } => Shape::Strokes { segs: segs.iter().map(|s| eda_drc::kimath::Seg::new(t(s.a), t(s.b))).collect(), r: *r },
+        Shape::Compound { parts } => Shape::Compound { parts: parts.iter().map(|p| translate_shape(p, dx, dy)).collect() },
+    }
 }
 
 /// `PNS::SEGMENT` -- one straight copper segment of a track. A multi-point

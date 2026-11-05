@@ -2150,7 +2150,7 @@ export interface DragPreview {
   line_tracks?: string[];
   /** What `DRAGGER::Start` grabbed: the whole segment (`DM_SEGMENT`, it slides sideways, its neighbours following at 45 degrees), one
    * vertex (`DM_CORNER`), a via (`DM_VIA`) or an arc track (`DM_ARC`: its curvature follows the cursor, tangent to the tracks next to it). */
-  drag?: "segment" | "corner" | "via" | "arc";
+  drag?: "segment" | "corner" | "via" | "arc" | "component" | "multi";
   /** A `"via"` drag of a virtual via (`DRAGGER::checkVirtualVia`): the end of a segment where tracks meet with no pad or via -- the junction moves, no via is drawn or committed. */
   virtual_via?: boolean;
   colliding: boolean;
@@ -2174,6 +2174,11 @@ export interface DragPreview {
    * which reuse the one active session width) since each attached track
    * can genuinely have a different width from its neighbors. */
   fanout: { layer: string; width: Nm; pts: [Nm, Nm][] }[];
+  /** `"component"` (`COMPONENT_DRAGGER`) only: how far the footprints and their pads have moved (`aP - m_p0`); `fanout` is the lines that follow the pads. */
+  offset?: [Nm, Nm] | null;
+  /** `drag_start` of a `"component"` or `"multi"` drag: where it starts (`m_p0`: the footprint's anchor, or the dragged item nearest the cursor), and the footprints. */
+  start?: [Nm, Nm];
+  footprints?: string[];
 }
 
 /** A via of a pair (`PNS::VIA`, as `DIFF_PAIR_PLACER` places them): one per net, a `viaGap()` apart. */

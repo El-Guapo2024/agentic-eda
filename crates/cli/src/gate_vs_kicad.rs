@@ -973,4 +973,69 @@ mod tests {
         assert!(group_has("sig", &uuid_of(&route)), "the route made in the entered group joined it");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Component drags (`COMPONENT_DRAGGER`, `crates/pns/PARITY.md` Stage 22) against kicad-cli's DRC (slow tier): on `pic_programmer` (KiCad's
+    /// demo board) and `backspace1`, footprints with tracks on their pads dragged 0.4 mm in each mode (`D` on a footprint, `InlineDrag`: the
+    /// footprint moves with the cursor, every track ending on one of its pads follows), committed the way the studio commits them
+    /// (`route_api::commit_cmd`: one `Cmd::Batch` of `MoveItems` -- the footprint -- and `CommitRoute`, applied by `eda_ops::Board`): kicad-cli
+    /// finds no new copper violation, no new dangling track and no new unconnected item.
+    #[test]
+    fn component_drags_add_no_violation_to_kicad_clis_drc() {
+        use eda_model::ir::Point;
+        use eda_pns::router::Router;
+        use eda_pns::settings::Mode;
+        if !kicad_available() {
+            return;
+        }
+        let kinds = ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "track_width", "track_dangling", "unconnected_items"];
+        let mut judged = 0;
+        // backspace1 has two routed footprints: J1 in two modes and directions, and U1 (whose pads the router finds too close to each other, so it
+        // refuses every drag of it, as KiCad's `CheckColliding` would)
+        let boards: [(&str, &[&str]); 2] = [("pic_programmer", &["C2", "C6", "D1", "D10", "D3", "C9"]), ("backspace1", &["J1", "U1", "J1"])];
+        for (board, fps) in boards {
+            let Some((design, model)) = qa_board(board) else {
+                eprintln!("KiCad's QA corpus not found; skipping");
+                return;
+            };
+            let dir = scratch(&format!("cdrag_{board}"));
+            let before = all_track_report(&design, &model, &dir, &kinds);
+            let baseline = counts_of(&before);
+            let vectors = [(mm(0.4), Nm::ZERO), (Nm::ZERO, mm(-0.4)), (mm(-0.3), mm(0.3))];
+            for (k, fp) in fps.iter().enumerate() {
+                let mode = [Mode::Shove, Mode::Walkaround, Mode::MarkObstacles][k % 3];
+                let by = vectors[k % vectors.len()];
+                let mut router = Router::new(&design, &model);
+                router.settings.mode = mode;
+                let Ok(start) = router.drag_start_component(Point { x: Nm::ZERO, y: Nm::ZERO }, &[fp.to_string()], true) else { continue };
+                let to = Point { x: start.x + by.0, y: start.y + by.1 };
+                router.drag_preview(to);
+                let Some(commit) = router.drag_finish(to) else {
+                    eprintln!("{board} {fp} {mode:?} {by:?}: the router refuses it");
+                    continue;
+                };
+                assert_eq!(commit.moved_footprints, vec![fp.to_string()]);
+                let replaced = commit.remove_track_ids.len();
+                let cmd = crate::route_api::commit_cmd(commit, None);
+                assert!(matches!(&cmd, eda_ops::Cmd::Batch { cmds } if matches!(cmds.first(), Some(eda_ops::Cmd::MoveItems { .. }))), "one step: the footprint moved and the tracks replaced");
+                let mut b = eda_ops::Board::new(design.clone(), &model, mm(0.1), mm(0.3));
+                b.apply(&cmd).unwrap_or_else(|e| panic!("{board} {fp}: the commit applies: {e:?}"));
+                let mut after = b.into_design();
+                after.assign_missing_ids();
+                let now = all_track_report(&after, &model, &dir, &kinds);
+                let counts = counts_of(&now);
+                eprintln!("{board} {mode:?} {fp} by {by:?}: {replaced} tracks replaced: {counts:?} (before {baseline:?})");
+                if counts != baseline {
+                    eprintln!("    new: {:?}", now.iter().filter(|v| !before.contains(v)).collect::<Vec<_>>());
+                }
+                for kind in kinds {
+                    let (was, got) = (baseline.get(kind).copied().unwrap_or(0), counts.get(kind).copied().unwrap_or(0));
+                    assert!(got <= was, "{board} {mode:?} {fp} by {by:?}: kicad-cli reports {got} {kind} (the board had {was})");
+                }
+                judged += 1;
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        eprintln!("{judged} component drags judged by kicad-cli");
+        assert!(judged >= 6, "{judged} component drags judged");
+    }
 }

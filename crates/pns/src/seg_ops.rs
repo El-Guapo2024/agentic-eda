@@ -122,6 +122,36 @@ pub fn line_distance(s: Seg2, p: Point) -> Nm {
     Nm::new(eda_drc::kimath::isqrt(dist_sq))
 }
 
+/// `SEG::LineDistance( aP, aDetermineSide = true )`: [`line_distance`] with the sign of the side of the line `p` is on (`sgn( det ) * dist`).
+pub fn line_distance_signed(s: Seg2, p: Point) -> Nm {
+    let (a, b) = s;
+    let pp = a.y.get() as i128 - b.y.get() as i128;
+    let q = b.x.get() as i128 - a.x.get() as i128;
+    let r = -pp * a.x.get() as i128 - q * a.y.get() as i128;
+    let det = pp * p.x.get() as i128 + q * p.y.get() as i128 + r;
+    let dist = line_distance(s, p);
+    if det < 0 {
+        -dist
+    } else if det > 0 {
+        dist
+    } else {
+        Nm::ZERO
+    }
+}
+
+/// `SEG::LineProject( aP )`: the foot of the perpendicular from `p` to the infinite line through the segment (`A` when it is a point).
+pub fn line_project(s: Seg2, p: Point) -> Point {
+    let (a, b) = s;
+    let d = vec_of(a, b);
+    let l_squared = d.0 * d.0 + d.1 * d.1;
+    if l_squared == 0 {
+        return a;
+    }
+    let ap = vec_of(a, p);
+    let t = d.0 * ap.0 + d.1 * ap.1;
+    Point { x: a.x + Nm::new(rescale(t, d.0, l_squared) as i64), y: a.y + Nm::new(rescale(t, d.1, l_squared) as i64) }
+}
+
 /// `SEG::Contains( aP )`: within `SquaredDistance <= 3` of the segment.
 pub fn contains(s: Seg2, p: Point) -> bool {
     eda_drc::kimath::Seg::new(s.0, s.1).sq_distance_to_point(p) <= 3

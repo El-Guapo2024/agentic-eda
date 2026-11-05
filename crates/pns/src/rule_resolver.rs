@@ -220,6 +220,9 @@ struct SolidInfo {
     /// The footprint a pad is of.
     footprint: Option<String>,
     keepout: Option<Keepout>,
+    /// Where the pad is on the board (`PAD::GetPosition`): its hole is there. A pad the component dragger moves (`SOLID::SetPos`) takes its hole
+    /// along ([`RuleResolver::pad_hole_of`]).
+    centre: Option<Point>,
 }
 
 /// `PNS_PCBNEW_RULE_RESOLVER`, built once for a world ([`crate::from_ir`]).
@@ -357,7 +360,7 @@ impl RuleResolver {
             ids.insert(pad.id.clone(), items.len() as u32);
             let special = it.overrides.clearance.is_some();
             items.push(it);
-            info.push(SolidInfo { hole, annulus, special, footprint: Some(pad.footprint_ref.clone()), keepout: None });
+            info.push(SolidInfo { hole, annulus, special, footprint: Some(pad.footprint_ref.clone()), keepout: None, centre: Some(pad.center) });
         }
         let layer_index = |name: &str| layer_names.iter().position(|l| l == name).map(|i| i as i32);
         if let Some(rt) = &design.routing {
@@ -570,6 +573,17 @@ impl RuleResolver {
     /// The drilled hole of a pad of the world (`SOLID::Hole()`), if it has one.
     pub fn pad_hole(&self, s: &Solid) -> Option<&Shape> {
         self.info_of(s)?.hole.as_ref().map(|(h, _, _)| h)
+    }
+
+    /// [`Self::pad_hole`] where the solid is now: a pad the component dragger moved (`COMPONENT_DRAGGER::Drag`: `snew->SetPos( p_next )`) has its
+    /// hole moved with it (`SOLID::SetPos` moves `m_hole` too), not left where the board has the pad.
+    pub fn pad_hole_of(&self, s: &Solid) -> Option<Shape> {
+        let info = self.info_of(s)?;
+        let hole = &info.hole.as_ref()?.0;
+        Some(match info.centre {
+            Some(c) if c != s.pos => crate::item::translate_shape(hole, s.pos.x - c.x, s.pos.y - c.y),
+            _ => hole.clone(),
+        })
     }
 
     /// The footprint a pad of the world belongs to.

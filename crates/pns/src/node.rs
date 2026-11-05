@@ -963,7 +963,8 @@ impl Node {
     pub fn hole_of<'a>(&self, item: &'a Item) -> Option<(Shape, Side<'a>)> {
         match item {
             Item::Via(v) if !v.is_virtual && v.drill > Nm::ZERO && self.rules.is_some() => Some((Shape::Circle { c: v.pos, r: v.drill / 2 }, Side::via_hole(v))),
-            Item::Solid(s) => self.rules.as_ref()?.pad_hole(s).map(|h| (h.clone(), Side::PadHole(s))),
+            // where the pad is now: one the component dragger moved has its hole with it (`SOLID::SetPos`)
+            Item::Solid(s) => self.rules.as_ref()?.pad_hole_of(s).map(|h| (h, Side::PadHole(s))),
             _ => None,
         }
     }
@@ -1318,6 +1319,47 @@ impl Node {
             }
         }
         cluster
+    }
+
+    /// `NODE::CheckColliding( aItem )` of an item of this node (`QueryColliding( aItem, obs, { m_limitCount = 1 } )`): the first item it collides
+    /// with, itself apart ("Collisions with self aren't a thing; don't spend time on them"). A via is asked with its hole (`aHead->Hole()`), a
+    /// virtual item collides with nothing ("By default, virtual items cannot collide"). What `COMPONENT_DRAGGER::FixRoute` asks of each pad and
+    /// track it moved. **Differs:** a pad's own hole is not asked as the probe's (`aHead->HasHole()`: its hole clearance and hole to hole against
+    /// the world); its copper and the world's holes are.
+    pub fn item_colliding(&self, rules: &BoardRules, id: ItemId) -> Option<Obstacle> {
+        let item = self.items.get(&id)?;
+        if item.is_virtual() {
+            return None;
+        }
+        if let Item::Via(v) = item {
+            return self.via_colliding(v, rules, &[id], QueryOpts::default()).into_iter().next();
+        }
+        let shape = item.shape(item.layers().start());
+        let bbox = Self::bbox_of(item);
+        let margin = self.search_margin(rules);
+        let bbox = (bbox.0 - margin, bbox.1 - margin, bbox.2 + margin, bbox.3 + margin);
+        let mut ids = self.index.query(bbox);
+        ids.sort_unstable();
+        ids.into_iter().filter(|&o| o != id).find_map(|o| self.items.get(&o).and_then(|other| self.item_collision(rules, o, other, &shape, Side::Item(item), item.layers(), QueryOpts::default())))
+    }
+
+    /// `NODE::QueryJoints( aBox, aJoints, aLayerMask, aKindMask )`: the joints inside `bbox` (`x0, y0, x1, y1`, edges included: `BOX2I::Contains`) on a
+    /// layer of `layers` that link at least one item of `kind_mask` -- each as its position, net and links. In one order (by position, then net).
+    pub fn joints_in(&self, bbox: (Nm, Nm, Nm, Nm), layers: LayerRange, kind_mask: u8) -> Vec<(Point, Net, Vec<ItemId>)> {
+        let mut out: Vec<(Point, Net, Vec<ItemId>)> = self
+            .joints
+            .iter()
+            .filter(|(k, j)| {
+                let p = k.pos();
+                j.layers.overlaps(&layers) && p.x >= bbox.0 && p.x <= bbox.2 && p.y >= bbox.1 && p.y <= bbox.3 && j.links.iter().any(|id| self.items.get(id).is_some_and(|it| kind_bit(it.kind()) & kind_mask != 0))
+            })
+            .map(|(k, j)| {
+                let net = j.links.iter().find_map(|id| self.items.get(id)).map(|it| it.net().clone()).unwrap_or(None);
+                (k.pos(), net, j.links.clone())
+            })
+            .collect();
+        out.sort_by(|a, b| (a.0.x, a.0.y, a.1.as_deref()).cmp(&(b.0.x, b.0.y, b.1.as_deref())));
+        out
     }
 
     /// First (any) obstacle -- `NODE::CheckColliding`'s "does one exist"

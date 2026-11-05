@@ -29,6 +29,7 @@
 pub mod arc_drag;
 pub mod arcs;
 pub mod chain;
+pub mod component_dragger;
 pub mod diff_pair;
 pub mod delay;
 pub mod dp_meander_placer;
@@ -47,6 +48,7 @@ pub mod line_placer;
 pub mod meander;
 pub mod meander_placer;
 pub mod mouse_trail;
+pub mod multi_dragger;
 pub mod node;
 pub mod optimizer;
 pub mod router;
