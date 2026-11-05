@@ -1628,7 +1628,7 @@ fn outline_errors_json(design: &eda_model::ir::Design, model: Option<&eda_model:
 /// the one and only place this geometry is computed
 /// (`eda_connectivity::dimension::compute_dimension_geometry`) -- a
 /// renderer never re-derives it.
-fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
+pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
     use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
 
     let (kind, height, horizontal, leader_length) = match d.kind {
@@ -2482,13 +2482,19 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
 /// raw, as this route once did, no footprint with a library nickname
 /// (every installed KiCad one) could be fetched back after opening it.
 fn footprint_json(dir: &Path, name: &str) -> Result<Value, Vec<CheckResult>> {
-    let (_, design, _) = board::load(dir)?;
+    let (meta, design, model) = board::load(dir)?;
     let fp = design
         .footprint_library
         .as_ref()
         .and_then(|l| l.by_name(name))
         .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "this footprint has not been opened in the Footprint Editor yet")])?;
-    serde_json::to_value(fp).map_err(|e| vec![CheckResult::fail("board_bad_design", name, e.to_string())])
+    let mut v = serde_json::to_value(fp).map_err(|e| vec![CheckResult::fail("board_bad_design", name, e.to_string())])?;
+    // The dimensions, zones, text boxes ... (`eda_model::fp_items`) in the board's display shapes, for the board's painters (`crate::fp_items_json`).
+    if !fp.items.is_empty() {
+        let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, eda_model::text_vars::Clock::utc_now()));
+        v["display"] = crate::fp_items_json::display_json(fp, &tv);
+    }
+    Ok(v)
 }
 
 /// `GET /api/footprint_library` -- every footprint name available to open:

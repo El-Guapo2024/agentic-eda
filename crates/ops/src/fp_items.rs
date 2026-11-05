@@ -75,12 +75,13 @@ pub enum FpItemCmd {
     /// field->SetVisible( false )`), never removed.
     Delete { footprint: String, ids: Vec<String> },
     /// `DIALOG_TEXT_PROPERTIES` on a field (`FOOTPRINT_EDIT_FRAME::OnEditItemRequest`: `case PCB_FIELD_T: ShowTextPropertiesDialog`) and the canvas's field edits: the field
-    /// `name` shows `text` and is laid out as `layout` says (its `visible` is the field's Show). Refused for a field the footprint does not have, an empty Reference
-    /// ("The reference designator cannot be empty."), a glyph size out of range and a layer that is empty.
+    /// `name` shows `text` and is laid out as `layout` says (its `visible` is the field's Show). An empty `text` leaves the field's text as it is (`if(
+    /// !m_SingleLineText->GetValue().IsEmpty() ) m_item->SetText( .. )`). Refused for a field the footprint does not have, a glyph size out of range and a layer that is empty.
     EditField { footprint: String, name: String, text: String, layout: FieldLayout },
     /// `DIALOG_SHAPE_PROPERTIES::TransferDataFromWindow` (`ShowGraphicItemPropertiesDialog`): the graphic replaced by `shape`, keeping its id and its kept line style.
     SetGraphic { footprint: String, id: String, shape: Shape },
-    /// `DIALOG_TEXT_PROPERTIES` on a text of the footprint (`case PCB_TEXT_T`): the text replaced by `text`, its place included, keeping its id.
+    /// `DIALOG_TEXT_PROPERTIES` on a text of the footprint (`case PCB_TEXT_T`): the text replaced by `text`, its place included, keeping its id; an empty content leaves
+    /// the text's own (the dialog sets the text only when the box is not empty).
     SetText { footprint: String, id: String, text: Text },
     /// `DRAWING_TOOL` placing an item of [`FpItem`]'s kinds in the footprint (Draw Dimension, Draw Rule Area, Draw Text Box, Place Point, Place Reference Image, Add Barcode,
     /// Draw Table): the item's `id`, if the caller sent one, is ignored.
@@ -453,13 +454,9 @@ impl Board<'_> {
             }
             FpItemCmd::SetText { id, text, .. } => {
                 check_text_look(id, &text.layer, &[text.size_nm])?;
-                if text.content.trim().is_empty() {
-                    // `NoPrintableChars` (`wxString::Trim` both ends, then empty): `DIALOG_TEXT_PROPERTIES::TransferDataFromWindow` deletes such a text -- not this verb: the
-                    // studio sends a delete for it.
-                    return Err(fail("ops_bad_text", id, "the text has no printable character"));
-                }
                 let slot = fp.texts.iter_mut().find(|t| &t.id == id).ok_or_else(|| fail("ops_unknown_text", id, "no text with this id"))?;
-                *slot = Text { id: id.clone(), ..text.clone() };
+                let content = if text.content.is_empty() { slot.content.clone() } else { text.content.clone() };
+                *slot = Text { id: id.clone(), content, ..text.clone() };
                 Ok(())
             }
             FpItemCmd::Add { item, .. } => {
@@ -624,10 +621,9 @@ fn delete(fp: &mut LibraryFootprint, ids: &[String]) -> Result<(), Vec<CheckResu
 fn edit_field(fp: &mut LibraryFootprint, name: &str, text: &str, layout: &FieldLayout) -> Result<(), Vec<CheckResult>> {
     use eda_model::fp_edit::LIBRARY_REFERENCE_TEXT;
     check_text_look(name, &layout.layer, &[layout.size.0, layout.size.1])?;
-    // `DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`: "if( m_fpText->GetId() == FIELD_T::REFERENCE && .. IsEmpty() ) DisplayError( this, _( "The reference designator cannot be empty." ) )".
-    if name == "Reference" && text.trim().is_empty() {
-        return Err(fail("ops_bad_field", name, "The reference designator cannot be empty."));
-    }
+    // an empty box leaves the text as it is
+    let current = current_field_text(fp, name).ok_or_else(|| fail("ops_unknown_field", name, "the footprint has no such field"))?;
+    let text = if text.is_empty() { current.as_str() } else { text };
     let shown_default = match name {
         "Reference" => Some(LIBRARY_REFERENCE_TEXT.to_string()),
         "Value" => Some(fp.name.clone()),
@@ -662,6 +658,18 @@ fn edit_field(fp: &mut LibraryFootprint, name: &str, text: &str, layout: &FieldL
         }
     }
     Ok(())
+}
+
+/// The text the field `name` of `fp` shows (`REF**` and the footprint's name for a Reference and a Value of no text of their own), `None` for a field it does not have.
+pub fn current_field_text(fp: &LibraryFootprint, name: &str) -> Option<String> {
+    use eda_model::fp_edit::LIBRARY_REFERENCE_TEXT;
+    match name {
+        "Reference" => Some(fp.reference.as_ref().and_then(|l| l.text.clone()).unwrap_or_else(|| LIBRARY_REFERENCE_TEXT.to_string())),
+        "Value" => Some(fp.value.as_ref().and_then(|l| l.text.clone()).unwrap_or_else(|| fp.name.clone())),
+        "Datasheet" => fp.datasheet.as_ref().map(|l| l.text.clone().unwrap_or_default()),
+        "Description" => fp.description_field.as_ref().map(|l| l.text.clone().unwrap_or_default()),
+        _ => fp.fields.iter().find(|f| f.name == name).map(|f| f.value.clone()),
+    }
 }
 
 /// [`FpItemCmd::Set`]: the item `id` replaced by `item`, which must be of its kind.

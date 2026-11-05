@@ -204,7 +204,9 @@ fn edit_field_is_the_text_dialog_on_a_field() {
     // the text KiCad shows by default is no override
     b.apply(&item(FpItemCmd::EditField { footprint: NAME.into(), name: "Value".into(), text: NAME.into(), layout: eda_model::fp_edit::default_library_value_layout() })).unwrap();
     assert_eq!(fp(&b).value.as_ref().unwrap().text, None);
-    assert_eq!(refusal(&mut b, FpItemCmd::EditField { footprint: NAME.into(), name: "Reference".into(), text: " ".into(), layout: l.clone() }), "ops_bad_field: The reference designator cannot be empty.");
+    // an empty box leaves the text as it was
+    b.apply(&item(FpItemCmd::EditField { footprint: NAME.into(), name: "Reference".into(), text: String::new(), layout: l.clone() })).unwrap();
+    assert_eq!(fp(&b).reference.as_ref().unwrap().text.as_deref(), Some("U**"));
     let mut tiny = l.clone();
     tiny.size = (Nm::new(10), Nm::new(10));
     assert!(refusal(&mut b, FpItemCmd::EditField { footprint: NAME.into(), name: "Reference".into(), text: "U**".into(), layout: tiny }).starts_with("ops_bad_text"));
