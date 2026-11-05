@@ -134,7 +134,10 @@ function sameLayerTracks(board: BoardState, ids: readonly string[]): boolean {
 
 // ------------------------------------------------------------------ polygon sources
 
-/** The outlines of a polygon-like item: a rectangle's four corners, a polygon's points, a zone's outline (`CreateLines` / `CreateTracks`). */
+/**
+ * The outlines of a polygon-like item: a rectangle's four corners, a polygon's points, a zone's outline and then each of its holes (`CreateLines` /
+ * `CreateTracks`: `processPolySet( *zone->Outline(), .. )` takes `COutline( oi )` and then every `CHole( oi, hi )`).
+ */
 export function sourceRings(board: BoardState, id: string): P[][] | null {
   const s = board.drawings?.shapes.find((sh) => sh.id === id);
   if (s) {
@@ -143,7 +146,7 @@ export function sourceRings(board: BoardState, id: string): P[][] | null {
     return null;
   }
   const z = board.routing?.zones.find((zz) => zz.id === id);
-  if (z && z.outline.length >= 3) return [z.outline.map((p) => [p[0], p[1]] as P)];
+  if (z && z.outline.length >= 3) return [z.outline, ...(z.holes ?? []).filter((h) => h.length >= 3)].map((ring) => ring.map((p) => [p[0], p[1]] as P));
   return null;
 }
 

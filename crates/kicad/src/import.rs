@@ -1574,6 +1574,42 @@ fn merge_net_classes(model: &mut eda_model::ConstraintModel, project_json: &str,
         project_classes.append(&mut model.board.net_classes);
         model.board.net_classes = project_classes;
     }
+    // Each class's schematic columns (`readNetClass`: `wire_width` and `bus_width` in mils, `getInSchUnits`; `line_style` when a number; `schematic_color` when a
+    // string, `COLOR4D::UNSPECIFIED` -- what KiCad writes for none -- being none), for the classes the board keeps and the Default class.
+    for class in classes.into_iter().flatten() {
+        let Some(name) = class.get("name").and_then(|v| v.as_str()) else { continue };
+        if name != "Default" && !model.board.net_classes.iter().any(|c| c.name == name) {
+            continue;
+        }
+        let mils = |key: &str| class.get(key).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).map(|m| Nm::new(eda_model::units::kiround(m * 254.0) * 100));
+        let look = eda_model::sch_setup::NetClassSchematic {
+            wire_width: mils("wire_width"),
+            bus_width: mils("bus_width"),
+            line_style: class.get("line_style").and_then(|v| v.as_i64()).map(|s| s as i32),
+            color: class.get("schematic_color").and_then(|v| v.as_str()).and_then(eda_model::sch_setup::color_from_project),
+        };
+        // the Default class's KiCad defaults are no setting of the project's own
+        let look = if name == "Default" { strip_default_class_defaults(look) } else { look };
+        if !look.is_empty() {
+            model.board.net_class_schematic.insert(name.to_string(), look);
+        }
+    }
+}
+
+/// The Default class's schematic columns without the values that are KiCad's own defaults for it (6 and 12 mils, solid), so a project that says nothing new
+/// leaves the board with no setting of its own.
+fn strip_default_class_defaults(mut look: eda_model::sch_setup::NetClassSchematic) -> eda_model::sch_setup::NetClassSchematic {
+    let d = eda_model::sch_setup::NetClassSchematic::default_class(None);
+    if look.wire_width == d.wire_width {
+        look.wire_width = None;
+    }
+    if look.bus_width == d.bus_width {
+        look.bus_width = None;
+    }
+    if look.line_style == d.line_style {
+        look.line_style = None;
+    }
+    look
 }
 
 /// Merge a `.kicad_pro`'s `board.design_settings.rules` object -- the
@@ -3049,10 +3085,9 @@ pub(crate) struct ReadZone {
     pub thieving: Option<String>,
     /// The `(pts ..)` of the rings when one has an arc (`DrawingsSection::zone_arcs`).
     pub arc_rings: Option<Vec<String>>,
-    /// The zone's per-layer `(property ..)` forms, one per line (`DrawingsSection::zone_layer_props`).
+    /// The zone's per-layer `(property ..)` forms this reader cannot take apart, one per line (`DrawingsSection::zone_layer_props`); a layer's hatch offset is
+    /// `Zone::hatch_offsets`.
     pub layer_props: Option<String>,
-    /// The second number of `(hatch edge 0.5)`, nm (`ZONE::GetBorderHatchPitch`; `parseZONE`'s `case T_hatch`), when the form has one.
-    pub hatch_pitch: Option<Nm>,
 }
 
 /// `PCB_IO_KICAD_SEXPR_PARSER::parseZONE` for one `(zone ..)` (see [`import_zones`]): `net_names` is the file's net table, `copper_layers` the copper layers the
@@ -3087,6 +3122,9 @@ pub(crate) fn read_zone(z: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_l
     if let Some(n) = sexpr::find(z, "name") {
         zone.name = sexpr::txt(n, 1).unwrap_or("").to_string();
     }
+    // The pitch (`hatchPitch = parseBoardUnits( "hatch pitch" )`, `ZONE::GetDefaultHatchPitch()` when there is no `(hatch ..)`); clamped once the corners
+    // are read (`SetBorderDisplayStyle( hatchStyle, hatchPitch, true )` for a zone of more than two corners), below.
+    zone.border_hatch_pitch = sexpr::find(z, "hatch").and_then(|h| sexpr::num(h, 2)).map(mm_to_nm).unwrap_or(eda_model::ir::DEFAULT_ZONE_BORDER_HATCH_PITCH);
     zone.border_style = match sexpr::find(z, "hatch").and_then(|h| sexpr::txt(h, 1)) {
         Some("edge") => eda_model::ir::ZoneBorderStyle::Edge,
         Some("full") => eda_model::ir::ZoneBorderStyle::Full,
@@ -3227,6 +3265,11 @@ pub(crate) fn read_zone(z: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_l
     let mut outlines = outlines.into_iter();
     zone.outline = outlines.next().unwrap_or_default();
     zone.holes = outlines.collect();
+    // `if( zone->GetNumCorners() > 2 ) zone->SetBorderDisplayStyle( hatchStyle, hatchPitch, true )`: the pitch within
+    // `ZONE_BORDER_HATCH_MINDIST_MM`..`ZONE_BORDER_HATCH_MAXDIST_MM`.
+    if zone.outline.len() + zone.holes.iter().map(Vec::len).sum::<usize>() > 2 {
+        zone.border_hatch_pitch = zone.border_hatch_pitch.clamp(eda_model::ir::ZONE_BORDER_HATCH_MIN_PITCH, eda_model::ir::ZONE_BORDER_HATCH_MAX_PITCH);
+    }
     let fill = sexpr::find(z, "fill");
     let is_thieving = fill.and_then(|f| sexpr::find(f, "mode")).and_then(|m| sexpr::txt(m, 1)) == Some("thieving");
     let thieving = fill.filter(|_| is_thieving).map(|f| sexpr::find(f, "thieving").map(|t| sexpr::to_text(&Sexpr::List(t.to_vec()))).unwrap_or_else(|| "(thieving)".to_string()));
@@ -3234,11 +3277,22 @@ pub(crate) fn read_zone(z: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_l
     let rings: Vec<&[Sexpr]> = sexpr::find_all(z, "polygon").filter(|p| poly_points(p).is_some()).filter_map(|p| sexpr::find(p, "pts")).collect();
     let has_arc = rings.iter().any(|pts| pts[1..].iter().any(|i| i.as_list().and_then(sexpr::tag) == Some("arc")));
     let arc_rings = has_arc.then(|| rings.iter().map(|pts| sexpr::to_text(&Sexpr::List(pts.to_vec()))).collect());
-    // `ZONE::LayerProperties` (`parseZONE`'s `T_property`), one line each.
-    let props: Vec<String> = sexpr::find_all(z, "property").map(|p| sexpr::to_text(&Sexpr::List(p.to_vec()))).collect();
+    // `ZONE::LayerProperties` (`parseZONE`'s `T_property`, `parseZoneLayerProperty`): `(property (layer "F.Cu") (hatch_position (xy x y)))`, the layer's
+    // hatch offset (`ZONE_LAYER_PROPERTIES::hatching_offset`, `parseXY` in board units). A property this reader cannot take apart is kept as the file wrote
+    // it, one line each (the legacy `DrawingsSection::zone_layer_props`).
+    let mut props: Vec<String> = Vec::new();
+    for p in sexpr::find_all(z, "property") {
+        let layer = sexpr::find(p, "layer").and_then(|l| sexpr::txt(l, 1));
+        let xy = sexpr::find(p, "hatch_position").and_then(|h| sexpr::find(h, "xy")).and_then(|xy| Some((sexpr::num(xy, 1)?, sexpr::num(xy, 2)?)));
+        match (layer, xy) {
+            (Some(layer), Some((x, y))) => {
+                zone.hatch_offsets.insert(layer.to_string(), eda_model::setup_pages::HatchOffset { x_nm: mm_to_nm(x), y_nm: mm_to_nm(y) });
+            }
+            _ => props.push(sexpr::to_text(&Sexpr::List(p.to_vec()))),
+        }
+    }
     let layer_props = (!props.is_empty()).then(|| props.join("\n"));
-    let hatch_pitch = sexpr::find(z, "hatch").and_then(|h| sexpr::num(h, 2)).map(mm_to_nm);
-    Some(ReadZone { zone, thieving, arc_rings, layer_props, hatch_pitch })
+    Some(ReadZone { zone, thieving, arc_rings, layer_props })
 }
 
 /// Points of a `gr_poly`'s (or a zone's) `(pts ...)` list: `xy` entries verbatim, and an `(arc (start ..) (mid ..) (end ..))` of KiCad 9's polygons as the polyline

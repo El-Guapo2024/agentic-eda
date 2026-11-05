@@ -467,7 +467,7 @@ pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: 
             None => Vec::new(),
         };
         let filled = current.as_ref().is_some_and(|e| !e.unfilled);
-        write_zone(&mut out, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &layer_fills, filled, enabled_layers: None, thieving: None, arc_rings: None, layer_props: None, hatch_pitch: None });
+        write_zone(&mut out, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &layer_fills, filled, enabled_layers: None, thieving: None, arc_rings: None, layer_props: None });
         written.entry(z.id.clone()).or_default().push(uuid);
     }
     for s in &picked.shapes {

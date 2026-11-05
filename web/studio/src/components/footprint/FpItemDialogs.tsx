@@ -87,7 +87,7 @@ export function FpDimensionDialog() {
 function settingsOf(z: CmdZone): ZoneFormSettings {
   const out = { ...DEFAULT_FORM_SETTINGS } as Record<string, unknown>;
   for (const k of Object.keys(DEFAULT_FORM_SETTINGS)) if ((z as unknown as Record<string, unknown>)[k] !== undefined) out[k] = (z as unknown as Record<string, unknown>)[k];
-  for (const k of ["smoothing", "corner_radius", "placement"]) if ((z as unknown as Record<string, unknown>)[k] !== undefined) out[k] = (z as unknown as Record<string, unknown>)[k];
+  for (const k of ["smoothing", "corner_radius", "placement", "border_style", "border_hatch_pitch", "hatch_offsets"]) if ((z as unknown as Record<string, unknown>)[k] !== undefined) out[k] = (z as unknown as Record<string, unknown>)[k];
   return out as unknown as ZoneFormSettings;
 }
 

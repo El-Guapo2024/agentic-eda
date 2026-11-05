@@ -17,14 +17,28 @@ use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextBorde
 
 use crate::{fmt_mm_f, mm, sexpr_str};
 
-/// `ZONE_SETTINGS`'s default hatch pitch (`ZONE::GetDefaultHatchPitch()`, 0.5 mm): the second
-/// number of `(hatch edge 0.5)`. Display only.
-const DEFAULT_HATCH_PITCH: &str = "0.5";
-
 /// A teardrop zone's own settings, as `TEARDROP_MANAGER::createTeardrop` (`pcbnew/teardrop/teardrop.cpp`)
 /// gives them: no clearance of its own, the thinnest zone KiCad allows (0.0254 mm), full pad
 /// connection, islands kept. Its outline is the final shape, so the fill must not eat into it.
 const TEARDROP_MIN_THICKNESS: &str = "0.0254";
+
+/// `ZONE::LayerProperties()`' hatch offsets of `zone` as KiCad holds them: the zone's own (`Zone::hatch_offsets`), and for the layers those do not name, the
+/// ones the file's text of a design imported before they were kept says (`DrawingsSection::zone_layer_props`: `(property (layer "F.Cu") (hatch_position
+/// (xy x y)))`, `parseZoneLayerProperty`), in nanometres. Only the layers the zone is on. What Zone Properties' "Hatch offset overrides" table shows.
+pub fn zone_hatch_offsets(zone: &Zone, legacy: Option<&str>) -> eda_model::setup_pages::HatchOffsets {
+    let mut out: eda_model::setup_pages::HatchOffsets = zone.hatch_offsets.iter().filter(|(l, _)| zone.is_on_layer(l)).map(|(l, o)| (l.clone(), *o)).collect();
+    for line in legacy.into_iter().flat_map(str::lines) {
+        let Ok(crate::sexpr::Sexpr::List(p)) = crate::sexpr::parse(line) else { continue };
+        let layer = crate::sexpr::find(&p, "layer").and_then(|l| crate::sexpr::txt(l, 1));
+        let xy = crate::sexpr::find(&p, "hatch_position").and_then(|h| crate::sexpr::find(h, "xy")).and_then(|xy| Some((crate::sexpr::num(xy, 1)?, crate::sexpr::num(xy, 2)?)));
+        if let (Some(layer), Some((x, y))) = (layer, xy) {
+            if zone.is_on_layer(layer) && !out.contains_key(layer) {
+                out.insert(layer.to_string(), eda_model::setup_pages::HatchOffset { x_nm: crate::mm_to_nm(x), y_nm: crate::mm_to_nm(y) });
+            }
+        }
+    }
+    out
+}
 
 /// What [`write_zone`] needs besides the zone itself.
 pub(crate) struct ZoneArgs<'a> {
@@ -49,9 +63,6 @@ pub(crate) struct ZoneArgs<'a> {
     /// The zone's own per-layer settings as the file wrote them (`DrawingsSection::zone_layer_props`), one per line: written after the fill for the layers the
     /// zone is on (`for( const auto& [layer, properties] : aZone->LayerProperties() ) format( properties, 0, layer )`).
     pub layer_props: Option<&'a str>,
-    /// `ZONE::GetBorderHatchPitch()`, the second number of `(hatch edge 0.5)`: a library footprint's zone keeps the pitch its file gave it
-    /// (`FootprintItems::zone_hatch_pitch`); `None` is [`DEFAULT_HATCH_PITCH`], what a board's zone is written with.
-    pub hatch_pitch: Option<Nm>,
 }
 
 /// `PCB_IO_KICAD_SEXPR::formatLayers( layers, aEnumerateLayers, aIsZone )` for a zone: `(layers "F.Cu" "B.Cu")`. A zone on copper layers lists each of them
@@ -114,8 +125,8 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
             ZoneBorderStyle::Full => "full",
         }
     };
-    let pitch = a.hatch_pitch.map_or_else(|| DEFAULT_HATCH_PITCH.to_string(), mm);
-    writeln!(out, "\t\t(hatch {hatch} {pitch})").unwrap();
+    // `formatInternalUnits( aZone->GetBorderHatchPitch() )`: the zone's own pitch (0.5 mm, `ZONE::GetDefaultHatchPitch()`, unless it was read or edited otherwise).
+    writeln!(out, "\t\t(hatch {hatch} {})", mm(z.border_hatch_pitch)).unwrap();
     if z.priority > 0 {
         writeln!(out, "\t\t(priority {})", z.priority).unwrap();
     }
@@ -217,8 +228,16 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
         write!(out, " {t}").unwrap();
     }
     writeln!(out, ")").unwrap();
+    // `for( const auto& [layer, properties] : aZone->LayerProperties() ) format( properties, 0, layer )`: each layer's hatch offset, in `PCB_LAYER_ID` order
+    // (`std::map<PCB_LAYER_ID, ..>`), for the layers the zone is on. A design imported before the offsets were kept has the file's text instead
+    // (`DrawingsSection::zone_layer_props`), written for the layers the structured offsets do not name.
+    let mut offsets: Vec<(&String, &eda_model::setup_pages::HatchOffset)> = z.hatch_offsets.iter().filter(|(l, _)| z.is_on_layer(l)).collect();
+    offsets.sort_by_key(|(l, _)| (eda_model::layers::pcb_layer_id(l).unwrap_or(u32::MAX), l.to_string()));
+    for (layer, o) in offsets {
+        writeln!(out, "\t\t(property (layer {}) (hatch_position (xy {} {})))", sexpr_str(layer), mm(o.x_nm), mm(o.y_nm)).unwrap();
+    }
     for prop in a.layer_props.into_iter().flat_map(|p| p.lines()) {
-        let on = prop.split("(layer \"").nth(1).and_then(|r| r.split('"').next()).is_none_or(|l| z.is_on_layer(l));
+        let on = prop.split("(layer \"").nth(1).and_then(|r| r.split('"').next()).is_none_or(|l| z.is_on_layer(l) && !z.hatch_offsets.contains_key(l));
         if on {
             writeln!(out, "\t\t{prop}").unwrap();
         }

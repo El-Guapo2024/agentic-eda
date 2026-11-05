@@ -16,6 +16,7 @@
 
 pub mod command;
 pub mod deck;
+pub mod ibis;
 pub mod library;
 pub mod netlist;
 pub mod ngspice;

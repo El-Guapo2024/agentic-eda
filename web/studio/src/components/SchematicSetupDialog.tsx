@@ -1,53 +1,62 @@
-// "Schematic Setup..." (eeschema.EditorControl.schematicSetup -- eeschema/
-// dialogs/dialog_schematic_setup.cpp): a tree of pages on the left and the
-// page on the right, like Board Setup's. The pages this app has a backing
-// setting for are General > Formatting (the connection grid, the inter-sheet references) and the two of Electrical Rules:
+// "Schematic Setup..." (eeschema.EditorControl.schematicSetup -- eeschema/dialogs/dialog_schematic_setup.cpp): a tree of pages on the left and the page on
+// the right, like Board Setup's, with every page of KiCad's treebook in its order (`DIALOG_SCHEMATIC_SETUP::DIALOG_SCHEMATIC_SETUP`):
 //
-//   Formatting           eeschema/dialogs/panel_setup_formatting.cpp -- Connection grid spacing, written to the
-//                        derived project's `schematic.connection_grid_size` for kicad-cli's `endpoint_off_grid`, and
-//                        Inter-sheet References (`schematic.drawing.intersheets_ref_*`)
-//   Violation Severity   common/dialogs/panel_setup_severities.cpp over eeschema/erc/erc_settings.cpp --
-//                        the severity of each ERC check (schematicSetup/ErcSeveritiesPage.tsx), written
-//                        to the derived project's `erc.rule_severities` for kicad-cli
-//   Pin Conflicts Map    eeschema/dialogs/panel_setup_pinmap.cpp over eeschema/erc/erc_settings.cpp
+//   General           Formatting            panel_setup_formatting.cpp (schematicSetup/FormattingPage.tsx): every row; the connection grid is ERC's
+//                                           `endpoint_off_grid` grid, the junction dot size is drawn on the sheet
+//                     Annotation            panel_eeschema_annotation_options.cpp (AnnotationPage.tsx): the unit notation, order and numbering
+//                     Field Name Templates  panel_template_fieldnames.cpp (FieldNameTemplatesPage.tsx): the project's templates, Visible and URL
+//                     BOM Presets           panel_bom_presets.cpp (BomPresetsPage.tsx): the project's saved BOM and BOM formatting presets
+//   Electrical Rules  Violation Severity    common/dialogs/panel_setup_severities.cpp over eeschema/erc/erc_settings.cpp (ErcSeveritiesPage.tsx)
+//                     Pin Conflicts Map     eeschema/dialogs/panel_setup_pinmap.cpp over eeschema/erc/erc_settings.cpp (below)
+//   Project           Net Classes           common/dialogs/panel_setup_netclasses.cpp with `aIsEEschema` -- Board Setup's page (boardSetup/NetClassesPage.tsx,
+//                                           `editor="sch"`) over the same table, showing the wire and bus thickness, colour and line style columns
+//                     Bus Alias Definitions panel_setup_buses.cpp (BusAliasesPage.tsx)
+//                     Text Variables        common/dialogs/panel_text_variables.cpp -- Board Setup's page (boardSetup/TextVariablesPage.tsx): one list for both
+//   Schematic Data    Embedded Files        the shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the schematic's list (the root sheet's)
 //
-// Schematic Data > Embedded Files is the shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the schematic's list (the root sheet's, `SCHEMATIC`'s).
+// Each page's Apply is one undoable /api/cmd verb (or one `batch`), as Board Setup's are; the settings live in the derived project (`.kicad_pro`'s `schematic`
+// object and `net_settings`) that kicad-cli reads. Not ported: "Import Settings from Another Project..." (`onAuxiliaryAction`; Board Setup has none either).
 //
-// The real dialog's other pages (annotation, field name templates, net classes, text
-// variables, ...) are not ported -- see PARITY-sch.md -- so they are not shown as dead tabs.
-// General > Formatting has the settings of its panel the design keeps, the connection grid and the inter-sheet references
-// (schematicSetup/FormattingPage.tsx).
+// The pin map grid is PANEL_SETUP_PINMAP's: the lower triangle of the 11 pin types ("NC is not included in the pin map as it generates errors
+// separately"), clicking a cell cycles OK -> Warning -> Error -> OK (`changeErrorLevel`) and the verb writes both mirrored cells. "Reset to
+// defaults" is `ResetPanel` -> `ERC_SETTINGS::ResetPinMap`. Every click is one undoable `set_erc_pin_map_cell` / `reset_erc_pin_map` /api/cmd.
+// The map actually used by ERC is the design's own `schematic.erc_pin_map` (absent = KiCad's default) -- GET /api/sch/erc_pin_map reports it.
 //
-// The pin map grid is PANEL_SETUP_PINMAP's: the lower triangle of the 11 pin
-// types ("NC is not included in the pin map as it generates errors
-// separately"), clicking a cell cycles OK -> Warning -> Error -> OK
-// (`changeErrorLevel`) and the verb writes both mirrored cells. "Reset to
-// defaults" is `ResetPanel` -> `ERC_SETTINGS::ResetPinMap`. Every click is
-// one undoable `set_erc_pin_map_cell` / `reset_erc_pin_map` /api/cmd.
-// The map actually used by ERC is the design's own `schematic.erc_pin_map`
-// (absent = KiCad's default) -- GET /api/sch/erc_pin_map reports it.
-//
-// A marker menu's "Edit violation severities..." opens this dialog on Violation Severity,
-// "Edit pin-to-pin conflict map..." on the Pin Conflicts Map and "Edit connection grid spacing..."
-// on Formatting (`ShowSchematicSetupDialog( _( "Violation Severity" ) )` / `"Pin Conflicts Map"` / `"Formatting"`).
+// A marker menu's "Edit violation severities..." opens this dialog on Violation Severity, "Edit pin-to-pin conflict map..." on the Pin Conflicts Map, "Edit
+// connection grid spacing..." on Formatting and an undefined net class's "Edit Netclasses..." on Net Classes (`ShowSchematicSetupDialog( _( "Violation Severity" ) )`,
+// `"Pin Conflicts Map"`, `"Formatting"`, `"Net Classes"`).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchErcPinMap } from "../api/client";
 import type { ErcPinMapReply } from "../api/types";
 import { PINMAP_TYPE_COUNT, PIN_TYPE_LABELS, levelGlyph, levelTooltip, nextLevel, triangleCells } from "../kicad-port/ercPinMap";
-import { getCheckerView, setErcView } from "../state/checkerView";
+import { getCheckerView, setErcView, type SchSetupPage } from "../state/checkerView";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { NetClassesPage } from "./boardSetup/NetClassesPage";
+import { TextVariablesPage } from "./boardSetup/TextVariablesPage";
+import { AnnotationPage } from "./schematicSetup/AnnotationPage";
+import { BomPresetsPage } from "./schematicSetup/BomPresetsPage";
+import { BusAliasesPage } from "./schematicSetup/BusAliasesPage";
 import { ErcSeveritiesPage } from "./schematicSetup/ErcSeveritiesPage";
+import { FieldNameTemplatesPage } from "./schematicSetup/FieldNameTemplatesPage";
 import { FormattingPage } from "./schematicSetup/FormattingPage";
 import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
 import "../styles/boardSetup.css";
 
-type Page = "formatting" | "severities" | "pinmap" | "embedded_files";
+type Page = SchSetupPage;
 
 const SCHEMATIC_OWNER = { kind: "schematic" } as const;
 
-/** KiCad's page tree (`DIALOG_SCHEMATIC_SETUP`'s treebook), with its page names; the pages that are not here have nothing in the model to edit. */
+/** KiCad's page tree (`DIALOG_SCHEMATIC_SETUP`'s treebook), with its page names, in its order. */
 const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; label: string }> }> = [
-  { title: "General", pages: [{ id: "formatting", label: "Formatting" }] },
+  {
+    title: "General",
+    pages: [
+      { id: "formatting", label: "Formatting" },
+      { id: "annotation", label: "Annotation" },
+      { id: "field_templates", label: "Field Name Templates" },
+      { id: "bom_presets", label: "BOM Presets" },
+    ],
+  },
   {
     title: "Electrical Rules",
     pages: [
@@ -55,8 +64,18 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
       { id: "pinmap", label: "Pin Conflicts Map" },
     ],
   },
+  {
+    title: "Project",
+    pages: [
+      { id: "netclasses", label: "Net Classes" },
+      { id: "bus_aliases", label: "Bus Alias Definitions" },
+      { id: "text_variables", label: "Text Variables" },
+    ],
+  },
   { title: "Schematic Data", pages: [{ id: "embedded_files", label: "Embedded Files" }] },
 ];
+const PAGE_IDS: Page[] = TREE.flatMap((g) => g.pages.map((p) => p.id));
+const PAGE_LABEL = Object.fromEntries(TREE.flatMap((g) => g.pages.map((p) => [p.id, p.label]))) as Record<Page, string>;
 
 const LEVEL_COLORS = ["#2e9e57", "#d9a21b", "#d64545"];
 const CELL = 26;
@@ -70,10 +89,26 @@ export function SchematicSetupDialog() {
   const [page, setPage] = useState<Page>("formatting");
   const [map, setMap] = useState<ErcPinMapReply | null>(null);
   const [hover, setHover] = useState<{ row: number; col: number } | null>(null);
-  // The severity and formatting pages have edits not applied yet; Close asks first.
-  const [unapplied, setUnapplied] = useState(false);
-  const [formattingUnapplied, setFormattingUnapplied] = useState(false);
+  // The pages that have edits not applied yet, marked in the tree; Close asks first.
+  const [unapplied, setUnapplied] = useState<ReadonlySet<Page>>(new Set());
   const [askDiscard, setAskDiscard] = useState(false);
+  const markers = useMemo(
+    () =>
+      Object.fromEntries(
+        PAGE_IDS.map((id) => [
+          id,
+          (dirty: boolean) =>
+            setUnapplied((prev) => {
+              if (prev.has(id) === dirty) return prev;
+              const next = new Set(prev);
+              if (dirty) next.add(id);
+              else next.delete(id);
+              return next;
+            }),
+        ])
+      ) as Record<Page, (dirty: boolean) => void>,
+    []
+  );
 
   const reload = useCallback(async () => {
     try {
@@ -85,8 +120,7 @@ export function SchematicSetupDialog() {
 
   useEffect(() => {
     if (!open) return;
-    setUnapplied(false);
-    setFormattingUnapplied(false);
+    setUnapplied(new Set());
     setAskDiscard(false);
     // A marker menu names the page it wants; without one the dialog opens on its first page, as KiCad's does.
     const wanted = getCheckerView().erc.setupPage;
@@ -101,10 +135,12 @@ export function SchematicSetupDialog() {
 
   const leave = useCallback(() => dispatch({ type: "SET_SCH_DIALOG", dialog: null }), [dispatch]);
   const close = useCallback(() => {
-    if (unapplied || formattingUnapplied) setAskDiscard(true);
+    if (unapplied.size > 0) setAskDiscard(true);
     else leave();
-  }, [unapplied, formattingUnapplied, leave]);
-  const dirty = useMemo(() => [...(formattingUnapplied ? ["formatting" as Page] : []), ...(unapplied ? ["severities" as Page] : [])], [unapplied, formattingUnapplied]);
+  }, [unapplied, leave]);
+  useEffect(() => {
+    if (unapplied.size === 0) setAskDiscard(false);
+  }, [unapplied]);
 
   if (!open) return null;
 
@@ -144,15 +180,21 @@ export function SchematicSetupDialog() {
                 {group.pages.map((p) => (
                   <button key={p.id} className={`bs-nav-item${page === p.id ? " active" : ""}`} aria-current={page === p.id ? "page" : undefined} onClick={() => setPage(p.id)}>
                     <span>{p.label}</span>
-                    {dirty.includes(p.id) && <span className="bs-dot" title="Changes not applied yet" />}
+                    {unapplied.has(p.id) && <span className="bs-dot" title="Changes not applied yet" />}
                   </button>
                 ))}
               </div>
             ))}
           </nav>
 
-          <FormattingPage hidden={page !== "formatting"} onDirty={setFormattingUnapplied} />
-          <ErcSeveritiesPage hidden={page !== "severities"} onDirty={setUnapplied} />
+          <FormattingPage hidden={page !== "formatting"} onDirty={markers.formatting} />
+          <AnnotationPage hidden={page !== "annotation"} onDirty={markers.annotation} />
+          <FieldNameTemplatesPage hidden={page !== "field_templates"} onDirty={markers.field_templates} />
+          <BomPresetsPage hidden={page !== "bom_presets"} onDirty={markers.bom_presets} />
+          <ErcSeveritiesPage hidden={page !== "severities"} onDirty={markers.severities} />
+          <NetClassesPage editor="sch" hidden={page !== "netclasses"} onDirty={markers.netclasses} />
+          <BusAliasesPage hidden={page !== "bus_aliases"} onDirty={markers.bus_aliases} />
+          <TextVariablesPage hidden={page !== "text_variables"} onDirty={markers.text_variables} />
           <EmbeddedFilesPanel owner={SCHEMATIC_OWNER} run={api.cmd} hidden={page !== "embedded_files"} version={state.version} />
 
           <section className="bs-page" hidden={page !== "pinmap"} aria-label="Pin Conflicts Map">
@@ -219,7 +261,12 @@ export function SchematicSetupDialog() {
         <div className="dialog-footer">
           {askDiscard && (
             <>
-              <span style={{ marginRight: "auto", fontSize: 11, color: "var(--chrome-warn)" }}>{[formattingUnapplied ? "Formatting" : "", unapplied ? "Violation Severity" : ""].filter(Boolean).join(" and ")} has changes that were not applied. Close and lose them?</span>
+              <span style={{ marginRight: "auto", fontSize: 11, color: "var(--chrome-warn)" }}>
+                {PAGE_IDS.filter((id) => unapplied.has(id))
+                  .map((id) => PAGE_LABEL[id])
+                  .join(", ")}{" "}
+                {unapplied.size === 1 ? "has" : "have"} changes that were not applied. Close and lose them?
+              </span>
               <button onClick={() => setAskDiscard(false)}>Keep editing</button>
               <button className="primary" onClick={leave}>
                 Discard and close

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { STALE_NOTICE, isStale, revisionAfterOwnEdit, revisionOf, statusNotes, type CheckStatus } from "./checkRevision";
+import { STALE_NOTICE, ZONE_FILL_WARNING, isStale, revisionAfterOwnEdit, revisionOf, statusNotes, unfilledZoneWarning, type CheckStatus } from "./checkRevision";
 
 test("a report is current while the board is on the revision it was computed on", () => {
   assert.equal(isStale("r1", "r1"), false);
@@ -77,11 +77,16 @@ test("a run in progress wins over out of date: its result is on the way", () => 
   assert.deepEqual(statusNotes({ ...quiet, drcRunning: true, drcStale: true }), ["DRC running…"]);
 });
 
-test("the status bar says when KiCad's zone filler is running and how many zones are still outlines, on the PCB tab only", () => {
+test("the status bar says when KiCad's zone filler is running, on the PCB tab only, and has no standing note for zones not filled (R7-Z2)", () => {
   assert.deepEqual(statusNotes({ ...quiet, zoneFillRunning: true }), ["Filling zones…"]);
-  assert.deepEqual(statusNotes({ ...quiet, zonesUnfilled: 1 }), ["1 zone not filled (B)"]);
-  assert.deepEqual(statusNotes({ ...quiet, zonesUnfilled: 3 }), ["3 zones not filled (B)"]);
-  assert.deepEqual(statusNotes({ ...quiet, zoneFillRunning: true, zonesUnfilled: 3 }), ["Filling zones…"], "the run in progress wins");
-  assert.deepEqual(statusNotes({ ...quiet, tab: "schematic", zonesUnfilled: 3, zoneFillRunning: true }), []);
-  assert.deepEqual(statusNotes({ ...quiet, zonesUnfilled: 0 }), []);
+  assert.deepEqual(statusNotes({ ...quiet, tab: "schematic", zoneFillRunning: true }), []);
+});
+
+test("unfilledZoneCheck: KiCad's sentence when a pour is not filled, nothing when all are, when only rule areas are left, or after Don't show again", () => {
+  assert.equal(ZONE_FILL_WARNING, "Not all zones are filled. Use Edit > Fill All Zones (B) if you wish to see all fills.");
+  assert.equal(unfilledZoneWarning([{ filled: true }, { filled: false }], [], false), ZONE_FILL_WARNING);
+  assert.equal(unfilledZoneWarning([{ filled: true }], [{ is_rule_area: false }], false), null);
+  assert.equal(unfilledZoneWarning([{ filled: false }], [], true), null, "m_DoNotShowAgain.zone_fill_warning");
+  assert.equal(unfilledZoneWarning(null, [{ is_rule_area: true }], false), null, "no fill report: a rule area is never one to fill");
+  assert.equal(unfilledZoneWarning(null, [{ is_rule_area: false }], false), ZONE_FILL_WARNING);
 });

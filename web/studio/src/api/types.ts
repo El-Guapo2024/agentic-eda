@@ -82,6 +82,9 @@ export interface Pad {
   stack_layers?: PadStackLayer[] | null;
   /** A plated through-hole pad that removes the layers nothing connects it on (Remove Unused Pads): the copper layers that have its ring (`eda_connectivity::flashed_layers`). */
   flashed?: string[] | null;
+  /** `PAD::GetPinFunction`, `GetPinType`: the schematic pin's name and electrical type, as the board file is written with them (`(pinfunction ..)`, `(pintype ..)`); absent for none. */
+  pin_function?: string | null;
+  pin_type?: string | null;
 }
 
 /** `eda_model::padstack::PadStackMode` (`PADSTACK::MODE`). */
@@ -332,6 +335,8 @@ export interface Part {
   /** The footprint's own `(solder_paste_margin ..)` (nm) and `(solder_paste_margin_ratio ..)` (`GetLocalSolderPasteMargin`, `..Ratio`); absent when it has none. */
   paste_margin?: Nm;
   paste_margin_ratio?: number;
+  /** The footprint was read from a board file, whose tokens of it are kept (the footprint's paste margins are set there). */
+  from_board_file?: boolean;
 }
 
 /** `Part.zone`: what Footprint Properties and Pad Properties show in their zone fields. `null` is "inherited". */
@@ -352,6 +357,38 @@ export interface Track {
   pts: [Nm, Nm][];
   /** The arc's mid point when this track is a KiCad arc (`PCB_ARC`; `pts` is then its tessellation), else null/absent. */
   arc_mid?: [Nm, Nm] | null;
+  /** A solder-mask opening (`PCB_TRACK::HasSolderMask`) with its own margin (null: the board's); absent for none. */
+  mask?: { margin: Nm | null } | null;
+}
+
+/** `eda_model::via_extra::ViaDrillProps`: a backdrill or tertiary drill (`PADSTACK::DRILL_PROPS`). */
+export interface ViaDrillProps {
+  size: Nm;
+  start: string;
+  end: string;
+}
+/** `eda_model::via_extra::PostMachiningProps`. */
+export interface PostMachiningProps {
+  mode: "counterbore" | "countersink";
+  size: Nm;
+  depth: Nm;
+  /** Tenths of a degree. */
+  angle_ddeg: number;
+}
+/** `eda_model::via_extra::ViaProps`: a via's padstack settings beyond its size and drill; a key left out is "From board stackup" or none. */
+export interface ViaProps {
+  front_tenting?: boolean;
+  back_tenting?: boolean;
+  front_covering?: boolean;
+  back_covering?: boolean;
+  front_plugging?: boolean;
+  back_plugging?: boolean;
+  capping?: boolean;
+  filling?: boolean;
+  backdrill?: ViaDrillProps;
+  tertiary_drill?: ViaDrillProps;
+  front_post_machining?: PostMachiningProps;
+  back_post_machining?: PostMachiningProps;
 }
 
 export interface Via {
@@ -370,6 +407,8 @@ export interface Via {
   type?: "blind" | "buried" | "micro" | null;
   /** With `unconnected`: the copper layers that have its ring. */
   flashed?: string[] | null;
+  /** What its tokens say of the tenting, covering, plugging, capping, filling, backdrill and post-machining; absent for none. */
+  props?: ViaProps | null;
 }
 
 /** `crates/model/src/ir.rs` `PadConnection` ("ZONE_CONNECTION") -- exact Rust variant names on the wire (no `rename_all`, see api/types.ts's own convention note below). */
@@ -452,7 +491,22 @@ export interface ZoneSettingsFields {
   smoothing?: ZoneSmoothing;
   /** The chamfer distance or fillet radius, nm; only meaningful with `smoothing`. */
   corner_radius?: Nm;
+  /**
+   * `ZONE_SETTINGS::m_ZoneBorderDisplayStyle` ("Outline display": Line / Hatched / Fully hatched): how the outline is drawn (`ZONE::HatchBorder`); it never changes the
+   * copper. Absent from a backend that predates it and from an `edit_zone` that keeps the zone's.
+   */
+  border_style?: ZoneBorderStyle;
+  /** `ZONE_SETTINGS::m_BorderHatchPitch` ("Outline hatch pitch", 0.1 to 2 mm, `ZONE::GetDefaultHatchPitch()` 0.5 mm), nm. */
+  border_hatch_pitch?: Nm;
+  /**
+   * `ZONE_SETTINGS::m_LayerProperties`' `hatching_offset` ("Hatch offset overrides" of the Hatched Fill tab): per copper layer of the zone, how far its hatched fill's
+   * pattern is moved. A layer that is not here takes Board Setup > Zone Hatch Offsets'. Absent: none (and, on an `edit_zone`, the zone's kept).
+   */
+  hatch_offsets?: Record<string, { x_nm: Nm; y_nm: Nm }>;
 }
+
+/** `ZONE_BORDER_DISPLAY_STYLE` as the file writes it (`(hatch none|edge|full ..)`): `NO_HATCH`, `DIAGONAL_EDGE`, `DIAGONAL_FULL`. */
+export type ZoneBorderStyle = "none" | "edge" | "full";
 
 /**
  * `crates/model/src/ir.rs` `Zone`'s rule-area (keepout) fields, task item
@@ -597,6 +651,9 @@ interface ShapeCommon {
   end_ending?: LineEnding;
   /** The net of a shape on a copper layer; absent for none. */
   net?: string;
+  /** A solder-mask opening of a shape on outer copper (`PCB_SHAPE::HasSolderMask`), and its own margin (absent: the board's). */
+  solder_mask?: boolean;
+  solder_mask_margin?: Nm;
 }
 
 export type Shape =
@@ -626,6 +683,14 @@ export interface BoardText {
   mirror: boolean;
   /** `EDA_TEXT::IsBold` (the text's `TextExtra::bold`); absent from a backend built before the Text Properties dialog had its Bold button. */
   bold?: boolean;
+  /** The rest of `TextExtra`: italic, the vertical justification (absent: centred), the glyph width when it is not `size` (the height), knockout, the
+   * automatic stroke width (no `(thickness ..)` in the file) and the outline font face (absent: KiCad's stroke font). */
+  italic?: boolean;
+  valign?: "top" | "bottom" | null;
+  width?: Nm | null;
+  knockout?: boolean;
+  auto_thickness?: boolean;
+  face?: string | null;
 }
 
 export interface Drawings {
@@ -1105,6 +1170,8 @@ export interface BoardState {
      */
     /** The Default net class: its sizes (and the micro-via / differential-pair ones, when set). `name` is "Default", `nets` empty. */
     default_class?: NetClass;
+    /** The schematic's columns of the net classes (Schematic Setup > Net Classes), by class name ("Default" for the Default class); a class with none is absent. */
+    net_class_schematic?: Record<string, NetClassSchematic>;
     constraints?: Constraints;
     /** True when the minimums are stated (an imported project, or an edit); false for the unstated ones of an intent. */
     constraints_explicit?: boolean;
@@ -1227,6 +1294,78 @@ export interface LayerSetup {
 export interface NetClassSettings {
   default: NetClass;
   classes: NetClass[];
+  /** The schematic's columns of the same table, by class name ("Default" for the Default class): Schematic Setup > Net Classes edits them, Board Setup sends them back as it found them. */
+  schematic?: Record<string, NetClassSchematic>;
+}
+
+/** `eda_model::sch_setup::NetClassSchematic`: a net class's Eeschema columns (`PANEL_SETUP_NETCLASSES` with `aIsEEschema`). Each absent value is "not set". */
+export interface NetClassSchematic {
+  /** "Wire Thickness", nm. */
+  wire_width?: Nm | null;
+  /** "Bus Thickness", nm. */
+  bus_width?: Nm | null;
+  /** "Color": `rgb(r, g, b)` / `rgba(r, g, b, a)` as `COLOR4D::ToCSSString` writes it; absent is the layer's colour. */
+  color?: string | null;
+  /** "Line Style": 0 solid, 1 dashed, 2 dotted, 3 dash-dot, 4 dash-dot-dot; absent is "<Not defined>". */
+  line_style?: number | null;
+}
+
+/** `eda_model::sch_setup::SchFormatting`: Schematic Setup > General > Formatting but the connection grid and the inter-sheet references. */
+export interface SchFormatting {
+  default_text_size_nm: Nm;
+  overbar_offset_ratio: number;
+  text_offset_ratio: number;
+  label_size_ratio: number;
+  default_line_width_nm: Nm;
+  pin_symbol_size_nm: Nm;
+  /** None, Smallest, Small, Default, Large, Largest. */
+  junction_size_choice: number;
+  /** None, Smallest, Small, Medium, Large, Largest. */
+  hop_over_size_choice: number;
+  dash_ratio: number;
+  gap_ratio: number;
+  opo_v_precision: number;
+  opo_v_range: string;
+  opo_i_precision: number;
+  opo_i_range: string;
+}
+
+/** `eda_model::sch_setup::AnnotationSettings`: Schematic Setup > General > Annotation but the unit notation. */
+export interface AnnotationSettings {
+  /** 0 by X, 1 by Y. */
+  sort_order: number;
+  /** 0 first free after the start number, 1 sheet number x 100, 2 sheet number x 1000. */
+  method: number;
+  start_num: number;
+  reuse_designators: boolean;
+}
+
+/** `eda_model::sch_setup::TemplateFieldName`: one row of Field Name Templates. */
+export interface TemplateFieldName {
+  name: string;
+  visible: boolean;
+  url: boolean;
+}
+
+/** `eda_model::ir::BusAlias`: one row of Bus Alias Definitions. */
+export interface BusAliasDef {
+  name: string;
+  members: string[];
+}
+
+/** GET /api/sch/setup: Schematic Setup's Annotation, Field Name Templates, BOM Presets and Bus Alias Definitions pages as the design holds them. */
+export interface SchSetupReply {
+  ok: boolean;
+  message?: string;
+  annotation: AnnotationSettings;
+  /** The unit notation: the first unit's id ('A' = 65 or '1' = 49) and the separator (0, '.', '-', '_') as character codes. */
+  subpart_first_id: number;
+  subpart_id_separator: number;
+  field_name_templates: TemplateFieldName[];
+  /** The names of the project's saved BOM presets and BOM formatting presets. */
+  bom_presets: string[];
+  bom_fmt_presets: string[];
+  bus_aliases: BusAliasDef[];
 }
 
 /** `eda_model::rules::Constraints` -- Board Setup > Design Rules > Constraints (`rules.*` of the `.kicad_pro`), nm unless noted. */
@@ -1793,6 +1932,16 @@ export type Cmd =
   | { op: "track_via_nets"; ids: string[]; net: string | null; apply_anyway?: boolean; change_pads?: boolean }
   | { op: "set_zone_name"; id: string; name: string }
   | { op: "replace_shape"; id: string; shape: CmdShape }
+  /** The Properties panel's text style rows of a board text (crates/ops/src/pcb_props.rs `edit_text_style`): a key left out is unchanged. */
+  | { op: "edit_text_style"; id: string; width_nm?: Nm; valign?: "top" | "center" | "bottom"; bold?: boolean; italic?: boolean; knockout?: boolean; auto_thickness?: boolean }
+  /** "Soldermask" and "Soldermask Margin Override" of tracks and shapes on outer copper (`set_solder_mask`); `margin` null is the board's. */
+  | { op: "set_solder_mask"; ids: string[]; solder_mask: boolean; margin: Nm | null }
+  /** "Corner Radius" of rectangles (`set_corner_radius`). */
+  | { op: "set_corner_radius"; ids: string[]; radius: Nm }
+  /** A via's tenting, covering, plugging, capping, filling, backdrill and post-machining, whole (`set_via_props`). */
+  | { op: "set_via_props"; id: string; props: ViaProps }
+  /** A footprint's own paste margins (`set_footprint_paste_margin`); null is the board's. */
+  | { op: "set_footprint_paste_margin"; part: string; margin: Nm | null; ratio: number | null }
   /**
    * The Footprint Properties and Pad Properties dialogs' OK, and the Properties panel's footprint, field and pad rows (crates/ops/src/fp_edit.rs): what is given
    * replaces what the footprint has -- the Reference layout, the Value layout, the whole list of user fields, the attributes (type, board only, exclude from
@@ -1928,6 +2077,11 @@ export type Cmd =
   | { op: "clear_erc_exclusions" }
   | { op: "set_connection_grid"; mils: number }
   | { op: "set_intersheet_refs"; settings: IntersheetRefs }
+  | { op: "set_sch_formatting"; settings: SchFormatting }
+  | { op: "set_annotation_settings"; settings: AnnotationSettings; subpart_first_id: number; subpart_id_separator: number }
+  | { op: "set_field_name_templates"; fields: TemplateFieldName[] }
+  | { op: "set_bom_presets"; bom_presets: string[]; bom_fmt_presets: string[] }
+  | { op: "set_bus_aliases"; aliases: BusAliasDef[] }
   // The SPICE simulator's settings (`NGSPICE_SETTINGS`, the project's `schematic.ngspice`) and the workbook's text (crates/ops/src/simulator.rs).
   | { op: "set_simulator"; ngspice: { workbook_filename: string; fix_include_paths: boolean; model_mode: number } | null; workbook: string | null }
   /** Symbol Fields Table's Apply (dialog_symbol_fields_table.cpp) -- ONE verb for the whole staged batch so a single undo reverts it all. Applied remove -> rename -> add -> edits; edits address the FINAL field names. */
@@ -2377,6 +2531,14 @@ export interface FillReport {
   source: FillSource | null;
 }
 
+/** POST /api/fill/preview (the Zone Manager's Update Displayed Zones): the fills kicad-cli made of the board with the staged edits, kept nowhere. */
+export interface FillPreviewReply {
+  ok: boolean;
+  message?: string;
+  seconds?: number;
+  zones?: FillZone[];
+}
+
 /** POST /api/fill/kicad: kicad-cli's filler ran (`ok`), or could not (`message`). */
 export interface KicadFillReply {
   ok: boolean;
@@ -2505,6 +2667,9 @@ export interface LibSymbol {
   unit_names?: Record<string, string>;
   /** `LIB_SYMBOL::GetUnitCount` (`m_unitCount`); absent from a backend that does not send it, when the highest unit of a pin or graphic stands in (`unitCountOf`). */
   unit_count?: number;
+  /** `LIB_SYMBOL::GetDescription` and `GetKeyWords`. */
+  description?: string;
+  keywords?: string;
 }
 
 /** GET /api/schematic's `lib_symbols`: every distinct lib_id used on the sheet, keyed by that lib_id ("Device:R", "power:GND", ...). */
@@ -2571,6 +2736,8 @@ export interface SchematicSymbol {
   exclude_from_bom?: boolean;
   exclude_from_board?: boolean;
   exclude_from_sim?: boolean;
+  /** `SCH_SYMBOL::GetExcludedFromPosFiles` (`(in_pos_files no)`). */
+  exclude_from_pos_files?: boolean;
   /** Where its Reference, Value, ... are drawn (absent from a backend built before fields had positions: painter.ts places them by its own rule then). */
   fields?: SchField[];
   fields_autoplaced?: FieldsAutoplaced;
@@ -2646,6 +2813,9 @@ export interface SchematicWire {
   members?: string[];
   /** The stroke Wire/Bus Properties set (width, style, colour); absent when the wire has the default one. */
   stroke?: SchStroke;
+  /** What the wire's net class draws it with where its own stroke says nothing (`SCH_LINE::GetPenWidth` / `GetLineColor` / `GetEffectiveLineStyle`): the class's
+   *  wire (or bus) width, its colour (null: the layer's) and line style (null: solid). Absent from an older backend. */
+  class_look?: { width_nm?: Nm | null; color?: string | null; style?: number | null };
   /** `SCH_DRAWING_TOOLS::findWireLabelDriverName`: the wire's connection's `LocalName()` on this sheet path when the net's driver is a local or a global label,
    *  absent otherwise (a power symbol, a hierarchical label, a pin, or no driver). A local or global label put down on the wire takes it with no dialog (r2 C-L5). */
   label_driver?: string;
@@ -2680,6 +2850,8 @@ export interface SchematicLabel {
   auto_rotate?: boolean;
   /** The label's fields where `AutoplaceFields` puts them: a global label's Sheet References first, then its own (its net class, ...). */
   fields?: SchLabelField[];
+  /** The font colour (`SchExtras::text_attrs`); absent is the layer's. */
+  color?: import("./schEditTypes").SchColor | null;
 }
 
 /** One field of a label (`SCH_FIELD` of an `SCH_LABEL_BASE`), placed: `shown` is its text as drawn (a global label's Sheet References read as the pages its name is on). */
@@ -2723,6 +2895,11 @@ export interface SchematicText {
   vertical?: boolean;
   h?: "left" | "center" | "right";
   v?: "top" | "center" | "bottom";
+  /** `SchExtras::text_attrs`: bold, italic, the font colour (absent: the layer's) and the hyperlink (absent: none). */
+  bold?: boolean;
+  italic?: boolean;
+  color?: import("./schEditTypes").SchColor | null;
+  href?: string | null;
 }
 
 /** A title block as `GET /api/state` / `GET /api/schematic` report it (`TITLE_BLOCK`): `comments[0]` is KiCad's comment 1, up to nine, trailing empty ones dropped. */
@@ -2834,6 +3011,22 @@ export interface Schematic {
    *  no separator and 'A' (`SCHEMATIC_SETTINGS::SubReference`). */
   subpart_id_separator?: number | null;
   subpart_first_id?: number | null;
+  /** Schematic Setup > Formatting as the sheet is drawn by it (the sizes as KiCad reads them back); absent from an older backend. */
+  setup?: SchematicSetupLook;
+}
+
+/** The schematic's `setup`: what Schematic Setup decides of how the sheet is drawn. */
+export interface SchematicSetupLook {
+  /** `SCHEMATIC_SETTINGS::GetJunctionSize`: the junction dot's diameter (100 nm is "None": no dot). */
+  junction_diameter_nm: Nm;
+  /** The Default net class's wire width. */
+  default_wire_width_nm: Nm;
+  default_line_width_nm: Nm;
+  default_text_size_nm: Nm;
+  pin_symbol_size_nm: Nm;
+  dash_ratio: number;
+  gap_ratio: number;
+  hop_over_size_choice: number;
 }
 
 // ---------------------------------------------------------------- Symbol library
@@ -3240,6 +3433,8 @@ export interface SchFormattingReply {
   custom: boolean;
   /** Inter-sheet References, KiCad's defaults when the design set none (an older backend sends none). */
   intersheet_refs?: IntersheetRefs;
+  /** The page's other settings as the design stores them, KiCad's defaults when it set none (an older backend sends none). */
+  formatting?: SchFormatting;
 }
 
 /** GET /api/sch/erc_severities: the ERC severities Schematic Setup > Violation Severity edits. */

@@ -78,6 +78,8 @@ mod sheet_drop_api;
 mod sheet_import;
 #[cfg(test)]
 mod sch_hierarchy_tests;
+#[cfg(test)]
+mod sch_setup_tests;
 mod studio;
 mod view_api;
 mod appearance_api;
@@ -303,7 +305,9 @@ pub(crate) fn resolve_symbol_libraries_of(dir: &Path, model: &mut ConstraintMode
     let libs = std::cell::OnceCell::new();
     let warnings = eda_kicad::resolve_library_symbols_with(model, |lib_name| {
         let libs = libs.get_or_init(|| library_tables::libs(dir, Kind::Symbol));
-        libs.lib_path(Kind::Symbol, lib_name).ok().filter(|p| p.is_file())
+        // a `.kicad_sym` file, or a `.kicad_symdir` folder (KiCad 10's form, the only one kicad-symbols ships now): `find_symbol_library_file`
+        // takes both for the installed root, and a table's row names either
+        libs.lib_path(Kind::Symbol, lib_name).ok().filter(|p| p.is_file() || eda_kicad::can_read_symbol_library(p))
     });
     for w in warnings {
         eprintln!("symbol library: {w}");

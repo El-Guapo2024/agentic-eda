@@ -477,6 +477,15 @@ impl BoardItems {
         self.edit_style(shape_id, |st| st.corner_radius = radius.max(Nm::ZERO));
     }
 
+    /// Give the shape `shape_id` a solder-mask opening or take it away (`PCB_SHAPE::SetHasSolderMask`), with its own margin (`SetLocalSolderMaskMargin`; `None` takes
+    /// the board's). A shape without an opening keeps no margin.
+    pub fn set_solder_mask(&mut self, shape_id: &str, solder_mask: bool, margin: Option<crate::ir::Nm>) {
+        self.edit_style(shape_id, |st| {
+            st.solder_mask = solder_mask;
+            st.solder_mask_margin = if solder_mask { margin } else { None };
+        });
+    }
+
     /// The net of the shape `shape_id`, if it is on one.
     pub fn net_of(&self, shape_id: &str) -> Option<&str> {
         self.style_of(shape_id).and_then(|st| st.net.as_deref())

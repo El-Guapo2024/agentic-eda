@@ -19,7 +19,7 @@ import { ancestors } from "../../kicad-port/groupTree";
 import { artBounds, artHitDistance, unionBox } from "../../kicad-port/fpArt";
 import { outlineDistance } from "../../kicad-port/padOutline";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
-import { distToPolyline, distToSegment, pointInPolygon, polygonArea, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox } from "./itemHitTest";
+import { distToPolyline, distToSegment, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox, zoneArea, zoneContainsPoint, zoneEdgeDistance } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
 import { objectOn } from "../../kicad-port/appearance";
 import { isAnyFill } from "../../kicad-port/shapeFill";
@@ -299,15 +299,18 @@ export function collectSelectionCandidates(
   }
   for (const z of board.routing?.zones ?? []) {
     if (z.outline.length < 3) continue;
-    const inside = pointInPolygon(xNm, yNm, z.outline);
-    const edgeDist = distToPolyline(xNm, yNm, [...z.outline, z.outline[0]!]);
+    // `PCB_COLLECTOR::Inspect`: a zone is hit on a side of its outline or of one of its holes (`HitTestForCorner( accuracy * 2 ) || HitTestForEdge( accuracy )`,
+    // every contour), or inside its area -- inside the outline and in none of its holes (`zoneContainsPoint`, standing in for `HitTestFilledArea`, which
+    // reads the fill; a rule area's is `m_Poly->Contains`). A click deep in a hole is outside the zone: its slop is the distance to the hole's side.
+    const inside = zoneContainsPoint(z, xNm, yNm);
+    const edgeDist = zoneEdgeDistance(z, xNm, yNm);
     // Zone borders are deliberately treated as "small" (source: "Zone
     // borders are very specific, so make them small") so clicking right
     // on the outline of a zone picks the outline, not the (usually much
     // bigger) fill.
     const nearEdge = edgeDist <= toleranceNm / 2;
     const d = inside ? 0 : edgeDist;
-    const area = nearEdge ? 1 : polygonArea(z.outline);
+    const area = nearEdge ? 1 : zoneArea(z);
     consider("zone", z.id, d, area, zonePickLayer(z, layerVisible, activeLayer), z.id, !!z.is_rule_area);
   }
   for (const s of board.drawings?.shapes ?? []) {

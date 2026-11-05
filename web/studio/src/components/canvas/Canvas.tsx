@@ -77,13 +77,13 @@ import { useActionRunner } from "../../actions/useActionRunner";
 import { SchContextMenu } from "../schematic/SchContextMenu";
 import { buildPcbMenu } from "./pcbMenuBuilder";
 import type { MenuNode } from "../../kicad/types";
-import { findNearestCorner, moveCorner } from "../../kicad-port/zonePointEditor";
+import { findNearestContourCorner, flatVertices, moveContourCorner, zoneContours, zoneOutlineCmd } from "../../kicad-port/zonePointEditor";
 import { zoneLayers } from "../../kicad-port/zoneLayers";
 import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { cellAddress, cellById, drawTableSession, tableById } from "../../kicad-port/tables";
 import { openDrawnTableDialog } from "../../state/tableDialogs";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
-import { leaderModeOf, zoneClick, zoneFinish } from "../../kicad-port/pcbDrawZone";
+import { leaderModeOf, newZoneInitial, zoneClick, zoneCommitPlan, zoneFinish, zoneFirstCorner } from "../../kicad-port/pcbDrawZone";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
 import { displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
@@ -98,6 +98,8 @@ import "../../styles/canvas.css";
 function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
   const out: Record<string, unknown> = {};
   for (const k of Object.keys({ ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS })) out[k] = (zone as unknown as Record<string, unknown>)[k];
+  // `m_LayerProperties = aSource.LayerProperties()`: the hatch offset overrides too.
+  if (zone.hatch_offsets && Object.keys(zone.hatch_offsets).length > 0) out.hatch_offsets = zone.hatch_offsets;
   return out as unknown as ZoneSettingsFields & RuleAreaFields;
 }
 
@@ -174,7 +176,7 @@ type DragState =
   | { kind: "move"; refs: string[]; pivotNm?: [number, number]; flipPivotNm?: [number, number]; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
   /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
-  | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][] }
+  | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][]; /** The zone's holes at drag-start: `cornerIndex` is a global vertex index over the outline then the holes (`CIterateWithHoles`). */ baseHoles: [number, number][][] }
   /** The same for a graphic shape's handle (kicad-port/pcbPointEdit.ts): `base` is the shape at drag-start, every move recomputes from it. */
   | { kind: "shapePoint"; shapeId: string; base: Shape; point: EditPoint }
   /** A selected tuning pattern's edit point (`PCB_TUNING_PATTERN::MakeEditPoints`) being dragged: the pattern is tuned again through an edit session (`genStartEdit` .. `genFinishEdit`). */
@@ -218,7 +220,7 @@ export function Canvas() {
   const gestureRef = useRef<ClickDragGesture | null>(null);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
   /** pcb_point_editor.cpp's live corner-drag preview -- local, like `marquee` above, since only this component's own render loop needs it. */
-  const [zoneCornerPreview, setZoneCornerPreview] = useState<{ zoneId: string; outline: [number, number][] } | null>(null);
+  const [zoneCornerPreview, setZoneCornerPreview] = useState<{ zoneId: string; outline: [number, number][]; holes?: [number, number][][] } | null>(null);
   /** The live preview of a graphic shape's handle drag (the shape as it would be once dropped). */
   const [shapePointPreview, setShapePointPreview] = useState<{ id: string; shape: Shape } | null>(null);
   const moveMode = state.activeTool === "move";
@@ -665,19 +667,26 @@ export function Canvas() {
       // `ZONE_CREATE_HELPER::OnComplete`: the locked corners, the leader's and loop's corners in the 45/90-degree modes, simplified (round 5 A5-5).
       const outline = zoneFinish(draw.pts, finishCursor(draw.pts), leaderModeOf(state.pcbx.angleSnapMode, drawCtrlRef.current));
       if (outline) {
-        // zone_create_helper.cpp commitZone(): a cutout subtracts from its source zone and a
-        // "similar" zone copies its settings -- neither shows the properties dialog (only
-        // createNewZone() does); a plain draw still goes through ZoneDialog.
+        // zone_create_helper.cpp commitZone() (kicad-port/pcbDrawZone.ts `zoneCommitPlan`): a cutout subtracts from its source zone, a "similar" zone copies its
+        // settings, and a plain draw takes the settings the zone dialog was OK'd with at the first corner (`zoneInfo.ExportSetting( *newZone )`); the new zone is
+        // selected ("Draw Zone", then `selectItem`).
         const mode = state.pcbx.zoneDrawMode;
         const source = mode ? api.zoneById(mode.sourceId) : undefined;
-        if (mode?.mode === "cutout" && source) {
+        const plan = zoneCommitPlan(mode, !!source, draw.settings);
+        const selectNew = (id: string | null) => {
+          if (id) dispatch({ type: "SET_SELECTION", refs: [id] });
+        };
+        if (plan.kind === "cutout" && source) {
           void api.cmd({ op: "zone_cutout", id: source.id, cutout: outline.map(([x, y]) => ({ x, y })) }).then(() => dispatch({ type: "SET_SELECTION", refs: [] }));
-        } else if (mode?.mode === "similar" && source) {
-          void api.addZone(source.net, source.layer, outline, zoneSettingsOf(source), { layers: [...zoneLayers(source)] });
-        } else if (mode?.mode === "stitch") {
+        } else if (plan.kind === "similar" && source) {
+          void api.addZone(source.net, source.layer, outline, zoneSettingsOf(source), { layers: [...zoneLayers(source)] }).then(selectNew);
+        } else if (plan.kind === "stitch") {
           // KiCad 10's `ZONE_MODE::STITCH` (zone_create_helper.cpp): a via stitching with the outline, its defaults filled in (`InitializeDefaults`), and its properties dialog before any via is made.
           openViaStitchDialog(null, newViaStitch(outline, board?.board_rules?.via_diameter ?? 0, board?.board_rules?.via_drill ?? 0));
-        } else {
+        } else if (plan.kind === "add") {
+          const z = plan.zone;
+          void api.addZone(z.net, z.layers[0] ?? activeLayerName(state.activeLayer, "F.Cu"), outline, z.settings, { layers: z.layers, name: z.name, locked: z.locked }).then(selectNew);
+        } else if (plan.kind === "ask") {
           dispatch({ type: "SET_ZONE_PENDING", outline });
         }
       }
@@ -908,11 +917,22 @@ export function Canvas() {
       // `DRAWING_TOOL::DrawZone` (kicad-port/pcbDrawZone.ts): a click on the first corner closes the outline; the line mode bends the leg in.
       if (state.activeTool === "zone") {
         const draw = state.drawState;
+        // `ZONE_CREATE_HELPER::OnFirstPoint`: Add Filled Zone and Add Rule Area ask for the new zone's settings before the first corner is locked in
+        // (`createNewZone`'s dialog, ZoneDialog.tsx); its OK starts the outline at this point, its Cancel leaves the tool armed with nothing drawn. With every
+        // corner deleted again (Backspace) there is no polygon in progress, and `OnGeometryChange` dropped the zone: the next corner asks again.
+        if ((draw?.kind !== "zone" || draw.pts.length === 0) && zoneFirstCorner(state.pcbx.zoneDrawMode) === "ask") {
+          if (state.pcbx.zoneCreate) return;
+          const layer = activeLayerName(state.activeLayer, board.layers[0] ?? "F.Cu");
+          const highlighted = [state.netHighlight, ...state.bcx.netHighlightMore].filter((n): n is string => !!n);
+          const initial = newZoneInitial(board, { layer, ruleArea: state.nextZoneIsRuleArea, highlighted, selection: [...state.selection], defaults: { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS } });
+          dispatch({ type: "PCBX", patch: { zoneCreate: { at: [sx, sy], initial } } });
+          return;
+        }
         const click = zoneClick(draw?.kind === "zone" ? draw.pts : [], [sx, sy], leaderModeOf(state.pcbx.angleSnapMode, snapMods(e).ctrl));
         // `ZONE_CREATE_HELPER::OnFirstPoint`: `RunAction( ACTIONS::selectionClear )` (round 5 A5-6).
         if (draw?.kind !== "zone") dispatch({ type: "SET_SELECTION", refs: [] });
         if (click.finish) finishDraw();
-        else dispatch({ type: "SET_DRAW_STATE", draw: { kind: "zone", pts: click.pts } });
+        else dispatch({ type: "SET_DRAW_STATE", draw: { kind: "zone", pts: click.pts, ...(draw?.kind === "zone" && draw.settings ? { settings: draw.settings } : {}) } });
         return;
       }
 
@@ -1082,10 +1102,12 @@ export function Canvas() {
       const zone = api.zoneById(soleId);
       // `PCB_POINT_EDITOR::OnSelectionChange`: `if( !item || item->IsLocked() ) return 0;` -- a locked zone (or one in a locked group) has no handles.
       if (zone && !isLocked(board, zone.id)) {
-        const idx = findNearestCorner(zone.outline, wx, wy, zoneCornerToleranceNm(state.view.scale));
+        // every contour's corners are handles, the holes' too (`BuildForPolyOutline` over `CIterateWithHoles`)
+        const [outline, ...holes] = zoneContours(zone);
+        const idx = findNearestContourCorner([outline!, ...holes], wx, wy, zoneCornerToleranceNm(state.view.scale));
         if (idx != null) {
-          dragRef.current = { kind: "zoneCorner", zoneId: zone.id, cornerIndex: idx, baseOutline: zone.outline };
-          setZoneCornerPreview({ zoneId: zone.id, outline: zone.outline });
+          dragRef.current = { kind: "zoneCorner", zoneId: zone.id, cornerIndex: idx, baseOutline: outline!, baseHoles: holes };
+          setZoneCornerPreview({ zoneId: zone.id, outline: outline!, holes });
           return;
         }
       }
@@ -1391,7 +1413,8 @@ export function Canvas() {
       // `grid.BestSnapAnchor( pos, snapLayers, grid.GetItemGrid( item ), { item } )`: on the zone's layer, not onto the zone itself.
       const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set((([zone]) => (zone ? zoneLayers(zone) : [state.activeLayer ?? "F.Cu"]))([board?.routing?.zones.find((z) => z.id === drag.zoneId)])), category: "current", skip: new Set([drag.zoneId]) });
       const [sx, sy] = [p[0], p[1]];
-      setZoneCornerPreview({ zoneId: drag.zoneId, outline: moveCorner(drag.baseOutline, drag.cornerIndex, sx, sy) });
+      const [outline, ...holes] = moveContourCorner([drag.baseOutline, ...drag.baseHoles], drag.cornerIndex, sx, sy);
+      setZoneCornerPreview({ zoneId: drag.zoneId, outline: outline!, holes });
     } else if (drag.kind === "tuneHandle") {
       if (!motion?.dragging) return;
       drag.drag.move(wx, wy);
@@ -1466,11 +1489,12 @@ export function Canvas() {
       pendingClickRef.current = null;
       setMarquee(null);
     } else if (drag.kind === "zoneCorner") {
-      const orig = drag.baseOutline[drag.cornerIndex]!;
-      const final = zoneCornerPreview?.outline[drag.cornerIndex];
-      if (final && (final[0] !== orig[0] || final[1] !== orig[1])) {
-        api.cmd({ op: "set_zone_outline", id: drag.zoneId, outline: (zoneCornerPreview?.outline ?? drag.baseOutline).map(([x, y]) => ({ x, y })) });
-      }
+      const base = [drag.baseOutline, ...drag.baseHoles];
+      const orig = flatVertices(base)[drag.cornerIndex];
+      const moved = zoneCornerPreview ? [zoneCornerPreview.outline, ...(zoneCornerPreview.holes ?? [])] : null;
+      const final = moved ? flatVertices(moved)[drag.cornerIndex] : undefined;
+      // one `set_zone_outline`, the holes with it when the zone has them (a hole's corner moved)
+      if (orig && final && moved && (final[0] !== orig[0] || final[1] !== orig[1])) api.cmd(zoneOutlineCmd(drag.zoneId, moved, drag.baseHoles.length > 0));
       setZoneCornerPreview(null);
     } else if (drag.kind === "tuneHandle") {
       void drag.drag.finish(api);

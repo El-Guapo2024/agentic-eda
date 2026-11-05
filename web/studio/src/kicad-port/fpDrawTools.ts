@@ -263,6 +263,8 @@ const ZONE_SETTING_KEYS = [
   "clearance", "min_thickness", "thermal_gap", "thermal_spoke_width", "pad_connection", "priority", "island_removal_mode", "min_island_area", "fill_mode",
   "hatch_thickness", "hatch_gap", "hatch_orientation_mdeg", "hatch_smoothing_level", "hatch_smoothing_value", "hatch_hole_min_area", "hatch_border_algorithm",
   "smoothing", "corner_radius", "is_rule_area", "keepout_tracks", "keepout_vias", "keepout_pads", "keepout_copper_pour", "keepout_footprints", "placement",
+  // the outline display and the hatch offset overrides (`AcceptOptions`): an unchanged offsets grid sends none, and the zone keeps its own
+  "border_style", "border_hatch_pitch", "hatch_offsets",
 ] as const;
 
 /**

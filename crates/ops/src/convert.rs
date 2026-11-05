@@ -8,8 +8,10 @@
 //! * `BOUNDING_HULL`: the union of everything *with* its line width (closed graphics, open graphics, tracks
 //!   and vias: `makePolysFromOpenGraphics`), grown by `gap` with round corners.
 //!
-//! The IR polygon has no holes, so an outline with holes comes back fractured into one ring
-//! (`ShapePolySet::fracture`, as `zone_cutout` and the boolean routines do). The result is read-only
+//! A zone is taken with its holes (`poly.Append( *zone->Outline() )`), and each resulting outline keeps its holes (`polys.back().AddHole( .. )`): a zone made
+//! from the result has them ([`ConvertedPolys::polys`]). The IR polygon has no holes, so for a polygon an outline with holes comes back fractured into one
+//! ring (`ShapePolySet::fracture`, as `zone_cutout` and the boolean routines do), and that slit ring, converted back to a zone, gives its holes back
+//! (`unfractureSingle`): zone to polygon and back keeps the holes, as KiCad's does. The result is read-only
 //! geometry: the studio sends the polygons (and the deletion of what `consumed` lists) back as ordinary
 //! `add_shape` / `add_zone` / `delete_*` commands.
 //!
@@ -38,8 +40,11 @@ pub enum ConvertStrategy {
 /// What `getPolys` produced.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConvertedPolys {
-    /// One ring per resulting outline (holes bridged into it).
+    /// One ring per resulting outline (holes bridged into it): what a polygon is made of (the IR polygon has no holes).
     pub rings: Vec<Vec<Point>>,
+    /// Each resulting outline with its holes (`polys.emplace_back( polySet.COutline( ii ) )`, then `AddHole( polySet.Hole( ii, jj ) )`): what a zone or a rule
+    /// area is made of. A fractured outline (a polygon that was a zone with holes) is taken apart into its outline and holes again (`unfractureSingle`).
+    pub polys: Vec<(Vec<Point>, Vec<Vec<Point>>)>,
     /// The ids that contributed (`SKIP_STRUCT`): what "Delete source objects after conversion" removes.
     pub consumed: Vec<String>,
 }
@@ -423,15 +428,33 @@ pub fn polys_from_items(design: &Design, ids: &[String], strategy: ConvertStrate
     for (id, item) in &items {
         let radius = design.drawings.as_ref().map(|d| d.board_items.corner_radius_of(id)).unwrap_or(Nm::ZERO);
         let Some((ring, width, filled)) = closed_ring(item, strategy, radius) else { continue };
+        // `case PCB_ZONE_T: poly.Append( *zone->Outline() )`: the zone's outline with its holes, each wound against the outline as a hole of a
+        // `SHAPE_POLY_SET` is (a file's zone may have its holes either way round; the fracture below bridges a hole only so).
+        let outline_ccw = eda_clipper2::area(&ring) > 0.0;
+        let holes: Vec<Vec<Point64>> = match item {
+            Item::Zone(z) => z
+                .holes
+                .iter()
+                .filter(|h| h.len() >= 3)
+                .map(|h| {
+                    let mut hole: Vec<Point64> = h.iter().map(|p| pt64(*p)).collect();
+                    if (eda_clipper2::area(&hole) > 0.0) == outline_ccw {
+                        hole.reverse();
+                    }
+                    hole
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
         if strategy == ConvertStrategy::BoundingHull {
             // `TransformShapeToPolygon( ..., ignoreLineWidth = false )`: the shape with its line (a filled one grown by half the width, an outline one as a ring).
             let zone = matches!(item, Item::Zone(_));
-            let hull = if zone { ShapePolySet::from_outline(ring) } else { stroke_closed(&ring, width, filled) };
+            let hull = if zone { ShapePolySet { polys: vec![std::iter::once(ring).chain(holes).collect()] } } else { stroke_closed(&ring, width, filled) };
             for p in hull.polys {
                 set.add_polygon(p);
             }
         } else {
-            set.add_outline(ring);
+            set.add_polygon(std::iter::once(ring).chain(holes).collect());
         }
         consumed.push(id.clone());
     }
@@ -457,6 +480,7 @@ pub fn polys_from_items(design: &Design, ids: &[String], strategy: ConvertStrate
     }
 
     let mut rings = Vec::new();
+    let mut polys = Vec::new();
     if !set.is_empty() {
         // Hulls and the union may leave holes; the IR polygon bridges them into the ring.
         let mut fractured = set.clone();
@@ -467,8 +491,18 @@ pub fn polys_from_items(design: &Design, ids: &[String], strategy: ConvertStrate
                 rings.push(ring);
             }
         }
+        // A zone keeps the holes: each outline with its own, a single slit outline (a polygon made of a zone with holes) taken apart again.
+        for poly in &set.polys {
+            let mut whole = poly.clone();
+            if whole.len() == 1 {
+                eda_shape_poly_set::fracture::unfracture_single(&mut whole);
+            }
+            let mut contours = whole.iter().map(|c| c.iter().map(pt).collect::<Vec<Point>>());
+            let Some(outline) = contours.next().filter(|o| o.len() >= 3) else { continue };
+            polys.push((outline, contours.filter(|h| h.len() >= 3).collect()));
+        }
     }
-    ConvertedPolys { rings, consumed }
+    ConvertedPolys { rings, polys, consumed }
 }
 
 #[cfg(test)]
@@ -660,6 +694,33 @@ mod tests {
         let far = (mm(0.0) + Nm::new(150), mm(0.0));
         let d = design(vec![seg(p(0.0, 0.0), p(10.0, 0.0), mm(0.1)), seg(p(10.0, 0.0), p(5.0, 8.0), mm(0.1)), seg(p(5.0, 8.0), far, mm(0.1))]);
         assert!(polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, Nm::ZERO).rings.is_empty());
+    }
+
+    /// UI-LEFT P8: a zone with a hole (`poly.Append( *zone->Outline() )`) gives a zone with that hole (`polys.back().AddHole( .. )`), and a polygon (one
+    /// fractured ring, the IR polygon has no holes) made of it gives the hole back when it is converted to a zone again (`unfractureSingle`): zone to polygon
+    /// and back keeps the hole.
+    #[test]
+    fn a_zone_keeps_its_hole_through_a_polygon_and_back() {
+        let sq = |x0: f64, y0: f64, x1: f64, y1: f64| vec![Point { x: mm(x0), y: mm(y0) }, Point { x: mm(x1), y: mm(y0) }, Point { x: mm(x1), y: mm(y1) }, Point { x: mm(x0), y: mm(y1) }];
+        let mut d = design(vec![]);
+        d.routing.as_mut().unwrap().zones.push(Zone { id: "z1".into(), net: "GND".into(), layer: "F.Cu".into(), outline: sq(0.0, 0.0, 10.0, 10.0), holes: vec![sq(3.0, 3.0, 6.0, 6.0)], ..Default::default() });
+        for strategy in [ConvertStrategy::Centerline, ConvertStrategy::BoundingHull] {
+            let r = polys_from_items(&d, &["z1".to_string()], strategy, Nm::ZERO);
+            assert_eq!(r.polys.len(), 1, "{strategy:?}");
+            let (outline, holes) = &r.polys[0];
+            assert!((area(outline) - 100e12).abs() < 1e6 && holes.len() == 1 && (area(&holes[0]) - 9e12).abs() < 1e6, "{strategy:?}: {:?}", r.polys);
+            // The polygon of it: one ring, the hole bridged in (91 mm^2 of copper).
+            assert_eq!(r.rings.len(), 1);
+            let bridged: f64 = { let mut a = 0.0; let ring = &r.rings[0]; for i in 0..ring.len() { let (p, q) = (ring[i], ring[(i + 1) % ring.len()]); a += (p.x.area(q.y) - q.x.area(p.y)) as f64; } a / 2.0 };
+            assert!((bridged.abs() - 91e12).abs() < 1e6, "{strategy:?}: {bridged}");
+        }
+        // That polygon, converted to a zone: the hole again.
+        let ring = polys_from_items(&d, &["z1".to_string()], ConvertStrategy::Centerline, Nm::ZERO).rings.remove(0);
+        let p = design(vec![Shape::Polygon { id: String::new(), layer: "F.Cu".into(), stroke_width: mm(0.1), filled: true, pts: ring }]);
+        let r = polys_from_items(&p, &ids(&p), ConvertStrategy::Centerline, Nm::ZERO);
+        assert_eq!(r.polys.len(), 1);
+        let (outline, holes) = &r.polys[0];
+        assert!((area(outline) - 100e12).abs() < 1e6 && holes.len() == 1 && (area(&holes[0]) - 9e12).abs() < 1e6, "{:?}", r.polys);
     }
 
     #[test]

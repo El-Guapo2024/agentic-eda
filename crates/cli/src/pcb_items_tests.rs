@@ -918,3 +918,62 @@ fn fill_all_regenerates_a_via_stitching_over_the_new_fill() {
     let ours: std::collections::BTreeSet<(Nm, Nm)> = after.routing.as_ref().unwrap().vias.iter().filter(|x| v.member_ids.contains(&x.id)).map(|x| (x.at.x, x.at.y)).collect();
     assert_eq!(ours, kicad, "the fill put the stitching's vias back where KiCad's Update put them");
 }
+
+// ------------------------------------------------------------------------------------------------------------------------------ zones (UI-LEFT P8)
+
+/// The edit of a zone's border display and hatch offsets (`Cmd::EditZone`) is one step, served by `/api/state` (`border_style`, `border_hatch_pitch`,
+/// `hatch_offsets`), and undone whole.
+#[test]
+fn a_zones_border_display_and_hatch_offsets_reach_the_studio_and_undo() {
+    let dir = scratch("zone_display");
+    setup(&dir);
+    let sq = vec![Point { x: mm(2.0), y: mm(2.0) }, Point { x: mm(12.0), y: mm(2.0) }, Point { x: mm(12.0), y: mm(12.0) }, Point { x: mm(2.0), y: mm(12.0) }];
+    step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: sq }, false, "test").unwrap();
+    let z = load(&dir).unwrap().1.routing.unwrap().zones[0].clone();
+    assert_eq!((state(&dir)["routing"]["zones"][0]["border_style"].clone(), state(&dir)["routing"]["zones"][0]["border_hatch_pitch"].clone()), (serde_json::json!("edge"), serde_json::json!(500_000)));
+    let mut cmd: serde_json::Value = serde_json::json!({ "op": "edit_zone", "id": z.id, "net": "GND", "layer": "F.Cu", "clearance": z.clearance, "min_thickness": z.min_thickness,
+        "thermal_gap": z.thermal_gap, "thermal_spoke_width": z.thermal_spoke_width, "pad_connection": z.pad_connection, "priority": 0, "island_removal_mode": z.island_removal_mode,
+        "min_island_area": z.min_island_area, "fill_mode": z.fill_mode, "hatch_thickness": z.hatch_thickness, "hatch_gap": z.hatch_gap, "hatch_orientation_mdeg": 0,
+        "hatch_smoothing_level": 0, "hatch_smoothing_value": z.hatch_smoothing_value, "hatch_hole_min_area": z.hatch_hole_min_area, "hatch_border_algorithm": z.hatch_border_algorithm });
+    cmd["border_style"] = serde_json::json!("full");
+    cmd["border_hatch_pitch"] = serde_json::json!(1_000_000);
+    cmd["hatch_offsets"] = serde_json::json!({ "F.Cu": { "x_nm": 250_000, "y_nm": -100_000 } });
+    step(&dir, serde_json::from_value(cmd).expect("the studio's edit_zone"), false, "test").unwrap();
+    let zone = state(&dir)["routing"]["zones"][0].clone();
+    assert_eq!((zone["border_style"].clone(), zone["border_hatch_pitch"].clone(), zone["hatch_offsets"].clone()), (serde_json::json!("full"), serde_json::json!(1_000_000), serde_json::json!({ "F.Cu": { "x_nm": 250_000, "y_nm": -100_000 } })));
+    assert!(zone.get("fill_epoch").is_none(), "the epochs are not the studio's");
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    let zone = state(&dir)["routing"]["zones"][0].clone();
+    assert_eq!((zone["border_style"].clone(), zone["hatch_offsets"].clone()), (serde_json::json!("edge"), serde_json::json!({})));
+}
+
+/// R7-Z1 through the board's own history: a zone filled on F.Cu, moved to B.Cu and back by two Zone Properties edits, has no fill; an undo of the second edit
+/// leaves it unfilled on B.Cu, an undo of the first gives the fill back (the zone as it was, with the epoch the fill was made at).
+#[test]
+fn an_unfill_sticks_through_edits_and_undo_gives_the_fill_back() {
+    let dir = scratch("unfill_sticks");
+    setup(&dir);
+    let sq = vec![Point { x: mm(2.0), y: mm(2.0) }, Point { x: mm(12.0), y: mm(2.0) }, Point { x: mm(12.0), y: mm(12.0) }, Point { x: mm(2.0), y: mm(12.0) }];
+    step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: sq }, false, "test").unwrap();
+    let z = load(&dir).unwrap().1.routing.unwrap().zones[0].clone();
+    let ring = eda_kicad::zone_fills::KicadRing { island: false, pts: vec![[2_500_000, 2_500_000], [11_500_000, 2_500_000], [11_500_000, 11_500_000], [2_500_000, 11_500_000]] };
+    let entry = eda_kicad::zone_fills::ZoneEntry { layers: [("F.Cu".to_string(), vec![ring])].into(), ..eda_kicad::zone_fills::ZoneEntry::of(&z) };
+    eda_kicad::zone_fills::store(&dir, &eda_kicad::zone_fills::KicadFills::new("kicad-cli test".into(), String::new(), 0, [(z.id.clone(), entry)].into())).unwrap();
+    let on = |layer: &str| -> Cmd {
+        serde_json::from_value(serde_json::json!({ "op": "edit_zone", "id": z.id, "net": "GND", "layer": layer, "layers": [layer], "clearance": z.clearance, "min_thickness": z.min_thickness,
+            "thermal_gap": z.thermal_gap, "thermal_spoke_width": z.thermal_spoke_width, "pad_connection": z.pad_connection, "priority": 0, "island_removal_mode": z.island_removal_mode,
+            "min_island_area": z.min_island_area, "fill_mode": z.fill_mode, "hatch_thickness": z.hatch_thickness, "hatch_gap": z.hatch_gap, "hatch_orientation_mdeg": 0,
+            "hatch_smoothing_level": 0, "hatch_smoothing_value": z.hatch_smoothing_value, "hatch_hole_min_area": z.hatch_hole_min_area, "hatch_border_algorithm": z.hatch_border_algorithm }))
+        .unwrap()
+    };
+    let filled = |dir: &Path| crate::fill_api::report(dir, false).unwrap()["zones"].as_array().unwrap().iter().any(|e| e["filled"] == true);
+    assert!(filled(&dir));
+    step(&dir, on("B.Cu"), false, "test").unwrap();
+    assert!(!filled(&dir));
+    step(&dir, on("F.Cu"), false, "test").unwrap();
+    assert!(!filled(&dir), "back on F.Cu, still no fill: the unfill sticks");
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert!(!filled(&dir), "on B.Cu again");
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert!(filled(&dir), "the zone as it was when it was filled: the fill comes back");
+}

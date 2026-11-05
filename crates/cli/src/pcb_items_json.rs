@@ -197,4 +197,11 @@ fn endings_json(json: &mut Value, shape: &eda_model::ir::Shape, items: &eda_mode
     if st.corner_radius > Nm::ZERO && matches!(shape, eda_model::ir::Shape::Rect { .. }) {
         json["corner_radius"] = json!(st.corner_radius);
     }
+    // A solder-mask opening of a shape on outer copper (`PCB_SHAPE::HasSolderMask`) and its own margin (`GetLocalSolderMaskMargin`; absent: the board's).
+    if st.solder_mask {
+        json["solder_mask"] = json!(true);
+        if let Some(m) = st.solder_mask_margin {
+            json["solder_mask_margin"] = json!(m);
+        }
+    }
 }

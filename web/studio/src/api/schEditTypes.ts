@@ -194,6 +194,12 @@ export type SchEditCmd =
   | { verb: "edit_sheet"; id: string; name?: string; file?: string }
   /** Wire/Bus, Line and Junction Properties: the stroke of the wires, buses, bus entries and graphic lines named, the diameter and colour of the junctions (a colour with every channel 0 is the layer's own). */
   | { verb: "set_stroke"; ids: string[]; width_nm?: Nm; style?: SchLineStyle; color?: SchColor; diameter_nm?: Nm }
+  /** The Properties panel's Bold, Italic, Color and Hyperlink of free texts and Color of labels (`SchExtras::text_attrs`); a key left out is unchanged. */
+  | { verb: "set_text_attrs"; ids: string[]; bold?: boolean; italic?: boolean; color?: SchColor; href?: string }
+  /** "Start X" .. "End Y" of a wire, a bus or a graphic line: its first and/or last point. */
+  | { verb: "set_line_ends"; id: string; start?: PointXY; end?: PointXY }
+  /** "Exclude From Position Files" of symbols (every placed unit of each reference on the sheet in view). */
+  | { verb: "set_exclude_from_pos_files"; ids: string[]; exclude: boolean }
   /** Swap Pins: the pins (item ids `pin:<reference>:<number>`, in selection order) of one symbol trade places, one after the other. */
   | { verb: "swap_pins"; pins: string[] }
   /** Swap Pin Labels: the net labels on the pins trade texts in selection order. */

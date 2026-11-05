@@ -2,7 +2,7 @@
 //
 // The new corner is not the cursor: it is the point of the outline nearest the cursor.
 //
-//   zone, polygon      the nearest side of the outline (every contour, no distance limit: the side the cursor is nearest to wins), `SEG::NearestPoint( cursorPos )`
+//   zone, polygon      the nearest side of the outline or of one of its holes (every contour, no distance limit: the side the cursor is nearest to wins), `SEG::NearestPoint( cursorPos )`
 //                      on it, inserted before that side's end (`InsertVertex( nextNearestIdx, nearestPoint )`); "Do not add points that have the same coordinates as
 //                      ones that already belong to polygon, instead, add a point in the middle of the side";
 //   segment            split at the nearest point of the segment: the first half ends there, a copy of it starts there (`Split Segment`);
@@ -11,6 +11,7 @@
 // `cursorPos` is `getViewControls()->GetCursorPosition()`, the cursor on the grid, which the caller gives. Pure: no store, no DOM. Unit-tested in pcbAddCorner.test.ts.
 import type { BoardState, Cmd, CmdShape, Shape } from "../api/types";
 import { shapeToCmd } from "./pcbPointEdit";
+import { zoneContours, zoneOutlineCmd } from "./zonePointEditor";
 import { circumcircle, splitArcAt, type P } from "./trackArc";
 
 export type { P };
@@ -50,25 +51,42 @@ export function distanceToSegment(a: P, b: P, p: P): number {
  * inserted at the end of that side -- the middle of the side when that point is already one of its ends. The ring is left alone (null) with fewer than two points.
  */
 export function addCornerToRing(ring: readonly P[], cursor: P): P[] | null {
-  const n = ring.length;
-  if (n < 2) return null;
-  let best = -1;
+  return addCornerToContours([ring], cursor)?.[0] ?? null;
+}
+
+/**
+ * [`addCornerToRing`] on a polygon with holes (a zone's `zoneContours`): `addCorner` walks the corners of the outline and of every hole
+ * (`Iterate( 0, OutlineCount() - 1, IterateHoles = true )`; at `IsEndContour` the side runs back to `firstPointInContour`), keeps the first side nearest the
+ * cursor (`distance < nearestDist`) and inserts the new corner at the end of that side, in its own contour (`InsertVertex( nextNearestIdx, .. )`). A contour of
+ * fewer than two points has no side; null when no contour has one.
+ */
+export function addCornerToContours(contours: readonly (readonly P[])[], cursor: P): P[][] | null {
+  let best: { contour: number; i: number } | null = null;
   let bestDist = Infinity;
-  for (let i = 0; i < n; i++) {
-    const d = distanceToSegment(ring[i]!, ring[(i + 1) % n]!, cursor);
-    if (d < bestDist) {
-      bestDist = d;
-      best = i;
+  contours.forEach((ring, c) => {
+    const n = ring.length;
+    if (n < 2) return;
+    for (let i = 0; i < n; i++) {
+      const d = distanceToSegment(ring[i]!, ring[(i + 1) % n]!, cursor);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { contour: c, i };
+      }
     }
-  }
-  const origin = ring[best]!;
-  const jj = (best + 1) % n;
+  });
+  if (!best) return null;
+  const { contour, i } = best as { contour: number; i: number };
+  const ring = contours[contour]!;
+  const origin = ring[i]!;
+  const jj = (i + 1) % ring.length;
   const end = ring[jj]!;
   let at = nearestOnSegment(origin, end, cursor);
   if (same(at, origin) || same(at, end)) at = [half(origin[0] + end[0]), half(origin[1] + end[1])];
-  const out = ring.map((p): P => [p[0], p[1]]);
-  out.splice(jj, 0, at);
-  return out;
+  return contours.map((c, k) => {
+    const out = c.map((p): P => [p[0], p[1]]);
+    if (k === contour) out.splice(jj, 0, at);
+    return out;
+  });
 }
 
 /** `Split Segment`: the segment `start`-`end` cut at the point of it nearest `cursor`, as the two segments it becomes; null when that point is one of its ends (nothing to cut). */
@@ -113,13 +131,17 @@ export function splitArcAtCursor(start: P, mid: P, end: P, cursor: P): [{ start:
  * What `Create Corner` (Add Corner) edits: the one selected item that `PCB_POINT_EDITOR::CanAddCorner` accepts -- a zone, a polygon, a segment or an arc (a rectangle,
  * a circle and a curve have no corner to add).
  */
-export type CornerTarget = { kind: "zone"; id: string; ring: P[] } | { kind: "polygon"; id: string; shape: Extract<Shape, { kind: "polygon" }> } | { kind: "segment"; id: string; shape: Extract<Shape, { kind: "segment" }> } | { kind: "arc"; id: string; shape: Extract<Shape, { kind: "arc" }> };
+export type CornerTarget = { kind: "zone"; id: string; ring: P[]; /** The zone's holes (`Zone::holes`): `addCorner` searches their sides too. */ holes: P[][] } | { kind: "polygon"; id: string; shape: Extract<Shape, { kind: "polygon" }> } | { kind: "segment"; id: string; shape: Extract<Shape, { kind: "segment" }> } | { kind: "arc"; id: string; shape: Extract<Shape, { kind: "arc" }> };
 
 export function cornerTarget(board: BoardState | null, selection: ReadonlySet<string>): CornerTarget | null {
   if (!board || selection.size !== 1) return null;
   const id = [...selection][0]!;
   const zone = board.routing?.zones.find((z) => z.id === id);
-  if (zone) return zone.teardrop ? null : { kind: "zone", id, ring: zone.outline.map(([x, y]) => [x, y] as P) };
+  if (zone) {
+    if (zone.teardrop) return null;
+    const [ring, ...holes] = zoneContours(zone);
+    return { kind: "zone", id, ring: ring!, holes };
+  }
   const shape = board.drawings?.shapes.find((s) => s.id === id);
   if (shape?.kind === "polygon") return { kind: "polygon", id, shape };
   if (shape?.kind === "segment") return { kind: "segment", id, shape };
@@ -132,8 +154,8 @@ export function addCornerCmds(target: CornerTarget, cursor: P): Cmd[] | null {
   const copy = (shape: Shape, patch: Partial<CmdShape>): CmdShape => ({ ...shapeToCmd(shape), ...patch }) as CmdShape;
   switch (target.kind) {
     case "zone": {
-      const ring = addCornerToRing(target.ring, cursor);
-      return ring ? [{ op: "set_zone_outline", id: target.id, outline: ring.map(([x, y]) => ({ x, y })) }] : null;
+      const contours = addCornerToContours([target.ring, ...target.holes], cursor);
+      return contours ? [zoneOutlineCmd(target.id, contours, target.holes.length > 0)] : null;
     }
     case "polygon": {
       const ring = addCornerToRing(target.shape.pts, cursor);

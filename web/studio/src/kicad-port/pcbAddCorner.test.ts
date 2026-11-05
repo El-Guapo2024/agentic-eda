@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState } from "../api/types";
-import { addCornerCmds, addCornerToRing, cornerTarget, nearestOnArc, nearestOnSegment, splitArcAtCursor, splitSegmentAt, type P } from "./pcbAddCorner";
+import { addCornerCmds, addCornerToContours, addCornerToRing, cornerTarget, nearestOnArc, nearestOnSegment, splitArcAtCursor, splitSegmentAt, type P } from "./pcbAddCorner";
 
 const square: P[] = [
   [0, 0],
@@ -139,4 +139,40 @@ test("the commands of Add Corner: a zone's outline set, a polygon replaced in pl
   assert.equal(arc.length, 2);
   assert.equal(arc[0]!.op, "replace_shape");
   assert.equal(arc[1]!.op, "add_shape");
+});
+
+test("a zone with a hole: the nearest side of any contour takes the corner, in that contour, and the command carries the holes", () => {
+  const hole: P[] = [
+    [2_000, 2_000],
+    [4_000, 2_000],
+    [4_000, 4_000],
+    [2_000, 4_000],
+  ];
+  // 300 inside the hole, near its right side: the hole gets the corner (4 000, 3 000), at the end of that side
+  const out = addCornerToContours([square, hole], [3_700, 3_000])!;
+  assert.deepEqual(out[0], square);
+  assert.deepEqual(out[1], [
+    [2_000, 2_000],
+    [4_000, 2_000],
+    [4_000, 3_000],
+    [4_000, 4_000],
+    [2_000, 4_000],
+  ]);
+  // the hole's closing side (2 000, 4 000) -> (2 000, 2 000): the corner goes in front of the hole's first point
+  assert.deepEqual(addCornerToContours([square, hole], [2_300, 2_500])![1]![0], [2_000, 2_500]);
+  // nearer the outline: the outline gets it
+  assert.deepEqual(addCornerToContours([square, hole], [9_800, 5_000])![0]!.length, 5);
+
+  const b = board([], [{ id: "z", net: "GND", layer: "F.Cu", outline: square, holes: [hole], teardrop: false }]);
+  const target = cornerTarget(b, new Set(["z"]))!;
+  assert.equal(target.kind, "zone");
+  const cmds = addCornerCmds(target, [3_700, 3_000])!;
+  assert.deepEqual(cmds, [
+    {
+      op: "set_zone_outline",
+      id: "z",
+      outline: square.map(([x, y]) => ({ x, y })),
+      holes: [[{ x: 2_000, y: 2_000 }, { x: 4_000, y: 2_000 }, { x: 4_000, y: 3_000 }, { x: 4_000, y: 4_000 }, { x: 2_000, y: 4_000 }]],
+    },
+  ]);
 });

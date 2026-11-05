@@ -12,7 +12,7 @@
 //! flags. A label's own fields (its net class, ...) are Label Properties' grid ([`label_fields_after`]).
 
 use crate::{empty_schematic_section, Board};
-use eda_model::ir::{LabelKind, LabelShape, Millideg, SchematicSection, TextJustify, TextVAlign, Nm};
+use eda_model::ir::{LabelKind, LabelShape, Millideg, Point, SchematicSection, TextJustify, TextVAlign, Nm};
 use eda_model::sch_extras::{JunctionLook, LabelLook, LabelSpin, SchColor, SchLineStyle, SchStroke};
 use eda_model::CheckResult;
 use std::collections::{BTreeMap, BTreeSet};
@@ -306,6 +306,121 @@ impl<'a> Board<'a> {
         }
         if let Some(f) = new_file {
             s.file = f;
+        }
+        Ok(())
+    }
+
+    /// The panel's Bold, Italic, Color and Hyperlink of free texts and Color of labels: see [`SchCmd::SetTextAttrs`](crate::sch_edit::SchCmd::SetTextAttrs). A
+    /// label's bold or italic, or its hyperlink, is refused: they are Label Properties' (`EditLabel`) and `SCH_LABEL_BASE_DESC` masks the hyperlink. Refused when
+    /// nothing changes.
+    pub(crate) fn set_sch_text_attrs(&mut self, ids: &[String], bold: Option<bool>, italic: Option<bool>, color: Option<SchColor>, href: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        if ids.is_empty() {
+            return Err(fail("ops_nothing_selected", "text", "no items given"));
+        }
+        let sch = self.schematic_mut()?;
+        for id in ids {
+            let text = sch.texts.iter().any(|t| &t.id == id);
+            let label = sch.labels.iter().any(|l| &l.id == id);
+            if !text && !label {
+                return Err(fail("ops_unknown_item", id, "no free text or label with this id"));
+            }
+            if label && (bold.is_some() || italic.is_some() || href.is_some()) {
+                return Err(fail("ops_bad_text", id, "a label's bold and italic are set in Label Properties, and a label has no hyperlink"));
+            }
+            if sch.extras.is_locked(id) {
+                return Err(fail("ops_locked", id, "the item is locked"));
+            }
+        }
+        let before = sch.extras.text_attrs.clone();
+        for id in ids {
+            let mut a = sch.extras.text_attrs.get(id).cloned().unwrap_or_default();
+            if let Some(b) = bold {
+                a.bold = b;
+            }
+            if let Some(i) = italic {
+                a.italic = i;
+            }
+            if let Some(c) = color {
+                a.color = specified(c);
+            }
+            if let Some(h) = href {
+                a.href = (!h.trim().is_empty()).then(|| h.trim().to_string());
+            }
+            if a.is_default() {
+                sch.extras.text_attrs.remove(id);
+            } else {
+                sch.extras.text_attrs.insert(id.clone(), a);
+            }
+        }
+        if sch.extras.text_attrs == before {
+            return Err(fail("ops_nothing_to_change", "text", "the items already have these attributes"));
+        }
+        Ok(())
+    }
+
+    /// The panel's Exclude From Position Files of symbols: see [`SchCmd::SetExcludeFromPosFiles`](crate::sch_edit::SchCmd::SetExcludeFromPosFiles). Refused when nothing
+    /// changes.
+    pub(crate) fn set_exclude_from_pos_files(&mut self, ids: &[String], exclude: bool) -> Result<(), Vec<CheckResult>> {
+        if ids.is_empty() {
+            return Err(fail("ops_nothing_selected", "attributes", "select a symbol first"));
+        }
+        let sch = self.schematic_mut()?;
+        let mut keys = Vec::new();
+        for id in ids {
+            let units: Vec<u32> = sch.symbols.iter().filter(|s| &s.id == id).map(|s| s.unit).collect();
+            if units.is_empty() {
+                return Err(fail("ops_unknown_symbol", id, "no symbol instance with this reference"));
+            }
+            keys.extend(units.into_iter().map(|u| eda_model::ir::field_key(id, u)));
+        }
+        let before = sch.extras.excluded_from_pos_files.clone();
+        for k in keys {
+            if exclude {
+                sch.extras.excluded_from_pos_files.insert(k);
+            } else {
+                sch.extras.excluded_from_pos_files.remove(&k);
+            }
+        }
+        if sch.extras.excluded_from_pos_files == before {
+            return Err(fail("ops_nothing_to_change", "attributes", "the symbols already have this attribute"));
+        }
+        Ok(())
+    }
+
+    /// The panel's Start X/Y and End X/Y of a wire, a bus or a graphic line: see [`SchCmd::SetLineEnds`](crate::sch_edit::SchCmd::SetLineEnds). A line
+    /// whose ends would meet is refused, as a zero-length line is no line (`SCH_LINE_WIRE_BUS_TOOL::finishSegments` deletes it).
+    pub(crate) fn set_sch_line_ends(&mut self, id: &str, start: Option<Point>, end: Option<Point>) -> Result<(), Vec<CheckResult>> {
+        if start.is_none() && end.is_none() {
+            return Err(fail("ops_bad_wire", id, "nothing to change: give a new start, a new end, or both"));
+        }
+        let sch = self.schematic_mut()?;
+        if sch.extras.is_locked(id) {
+            return Err(fail("ops_locked", id, "the item is locked"));
+        }
+        let is_wire = sch.wires.iter().any(|w| w.id == id);
+        let pts = if let Some(w) = sch.wires.iter_mut().find(|w| w.id == id) {
+            &mut w.pts
+        } else if let Some(l) = sch.lines.iter_mut().find(|l| l.id == id) {
+            &mut l.pts
+        } else {
+            return Err(fail("ops_unknown_item", id, "no wire, bus or graphic line with this id"));
+        };
+        let mut next = pts.clone();
+        if let (Some(s), Some(first)) = (start, next.first_mut()) {
+            *first = s;
+        }
+        if let (Some(e), Some(last)) = (end, next.last_mut()) {
+            *last = e;
+        }
+        if next == *pts {
+            return Err(fail("ops_nothing_to_change", id, "the line already ends there"));
+        }
+        if next.len() == 2 && next[0] == next[1] {
+            return Err(fail("ops_bad_wire", id, "a line needs two different end points"));
+        }
+        *pts = next;
+        if is_wire {
+            self.commit_clean_up()?;
         }
         Ok(())
     }

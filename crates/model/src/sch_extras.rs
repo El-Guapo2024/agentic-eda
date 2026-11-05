@@ -210,6 +210,21 @@ pub struct SchExtras {
     /// project was imported. Only the root sheet's extras hold it. Additive. (Counts in `writes_nothing`.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_schematic: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Schematic Setup > General > Formatting, the page's settings other than the connection grid and the inter-sheet references above
+    /// ([`crate::sch_setup::SchFormatting`]: the default text size and line width, the pin symbol size, the junction and hop-over sizes, the label ratios, the
+    /// dashed lines, the operating-point overlay). Written to the derived project's `schematic.drawing`. `None`: KiCad's defaults, or what an imported project
+    /// said (read into this). Only the root sheet's extras hold it. Additive. (Counts in `writes_nothing`.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formatting: Option<crate::sch_setup::SchFormatting>,
+    /// Schematic Setup > General > Annotation but the unit notation ([`crate::sch_setup::AnnotationSettings`]: the order, the numbering, the start number and
+    /// "Allow reference reuse"), the project's `annotation.*`, `annotate_start_num` and `reuse_designators`. `None`: KiCad's defaults. Only the root sheet's extras
+    /// hold it. Additive. (Counts in `writes_nothing`.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<crate::sch_setup::AnnotationSettings>,
+    /// Schematic Setup > General > Field Name Templates (`SCHEMATIC_SETTINGS::m_TemplateFieldNames`, the project's `drawing.field_names`), in order. Empty: none.
+    /// Only the root sheet's extras hold it. Additive. (Counts in `writes_nothing`.)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_name_templates: Vec<crate::sch_setup::TemplateFieldName>,
 }
 
 /// `NGSPICE_SETTINGS` (`eeschema/sim/spice_settings.cpp`), the `.kicad_pro`'s `schematic.ngspice` object: `workbook_filename` (relative to the project), `fix_include_paths`
@@ -559,6 +574,9 @@ impl SchExtras {
     /// severities and the grid are no part of the schematic KiCad's files draw -- they go to the derived project -- so they are not in `is_empty`.
     pub fn writes_nothing(&self) -> bool {
         self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none() && self.intersheet_refs.is_none() && self.ngspice.is_none() && self.sim_workbook.is_none() && self.subpart_id_separator.is_none() && self.subpart_first_id.is_none() && self.project_schematic.is_none()
+            && self.formatting.is_none()
+            && self.annotation.is_none()
+            && self.field_name_templates.is_empty()
     }
 
     /// The net class a label's fields give its net (`SCH_LABEL_BASE`'s `Netclass` field; the first that is not empty), if any.

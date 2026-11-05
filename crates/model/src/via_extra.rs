@@ -213,6 +213,216 @@ impl ViaExtra {
     }
 }
 
+/// A via's backdrill or tertiary drill as the Properties panel edits it (`PADSTACK::DRILL_PROPS`: `(backdrill (size ..) (layers start end))`); see [`ViaProps`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViaDrillProps {
+    #[serde(deserialize_with = "crate::units::de")]
+    pub size: crate::units::Nm,
+    pub start: String,
+    pub end: String,
+}
+
+/// `PAD_DRILL_POST_MACHINING_MODE`'s two modes a file writes (`NOT_POST_MACHINED` is written as nothing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostMachiningMode {
+    Counterbore,
+    Countersink,
+}
+
+/// `PADSTACK::POST_MACHINING_PROPS` as the panel edits it: `(front_post_machining counterbore (size ..) (depth ..) (angle ..))`, the angle in tenths of a degree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PostMachiningProps {
+    pub mode: PostMachiningMode,
+    #[serde(default, deserialize_with = "crate::units::de")]
+    pub size: crate::units::Nm,
+    #[serde(default, deserialize_with = "crate::units::de")]
+    pub depth: crate::units::Nm,
+    #[serde(default)]
+    pub angle_ddeg: i32,
+}
+
+/// What the Properties panel shows and sets of a via's padstack beyond its size and drill (`TRACK_VIA_DESC`, pcb_track.cpp at 8303b2ad): the tenting, covering and
+/// plugging of each side (`has_solder_mask`, `has_covering`, `has_plugging`; `None` is "From board stackup"), the capping and filling of the hole, the backdrill and
+/// tertiary drill, and the post-machining of each side. Read from and written to the via's tokens ([`ViaExtra::props`], [`ViaExtra::set_props`]) in the words
+/// `PCB_IO_KICAD_SEXPR::format( const PCB_TRACK* )` writes, so the reader and writer that keep the tokens carry them as they always did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViaProps {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front_tenting: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back_tenting: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front_covering: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back_covering: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front_plugging: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back_plugging: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capping: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filling: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backdrill: Option<ViaDrillProps>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tertiary_drill: Option<ViaDrillProps>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front_post_machining: Option<PostMachiningProps>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back_post_machining: Option<PostMachiningProps>,
+}
+
+/// The tags of the tokens [`ViaProps`] reads and writes.
+const PROPS_TAGS: &[&str] = &["tenting", "capping", "covering", "plugging", "filling", "backdrill", "tertiary_drill", "front_post_machining", "back_post_machining"];
+
+fn tag_of(token: &str) -> Option<&str> {
+    token.strip_prefix('(')?.split(|c: char| c.is_whitespace() || c == '(' || c == ')').next()
+}
+
+/// `parseOptBool`: `yes`, `no` or `none`.
+fn opt_bool(word: Option<&String>) -> Option<bool> {
+    match word.map(String::as_str) {
+        Some("yes") | Some("true") => Some(true),
+        Some("no") | Some("false") => Some(false),
+        _ => None,
+    }
+}
+
+/// `KICAD_FORMAT::FormatOptBool`: `(key yes)`, `(key no)` or `(key none)`.
+fn fmt_opt_bool(key: &str, v: Option<bool>) -> String {
+    format!("({key} {})", match v {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "none",
+    })
+}
+
+/// `formatInternalUnits`: millimetres, no trailing zeros.
+fn fmt_mm(v: crate::units::Nm) -> String {
+    let s = format!("{:.6}", v.as_f64() / 1_000_000.0);
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" { "0".to_string() } else { s.to_string() }
+}
+
+/// `Quotew`: a layer name in double quotes.
+fn quoted(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+impl ViaExtra {
+    /// `parseFrontBackOptBool` of the token `name`: `(name (front yes) (back none))`, or the legacy tenting words `(tenting front back)` / `(tenting none)`.
+    fn front_back(&self, name: &str, legacy: bool) -> (Option<bool>, Option<bool>) {
+        let Some(w) = self.token_words(name) else { return (None, None) };
+        if legacy && w.first().is_some_and(|t| t != "(") {
+            let (mut front, mut back) = (None, None);
+            for t in w.iter().take_while(|t| *t != ")") {
+                match t.as_str() {
+                    "front" => front = Some(true),
+                    "back" => back = Some(true),
+                    "none" => (front, back) = (None, None),
+                    _ => {}
+                }
+            }
+            return (front, back);
+        }
+        (opt_bool(field(&w, "front").and_then(|f| f.first())), opt_bool(field(&w, "back").and_then(|f| f.first())))
+    }
+
+    fn opt_flag(&self, name: &str) -> Option<bool> {
+        self.token_words(name).and_then(|w| opt_bool(w.first()))
+    }
+
+    fn post_machining_props(&self, front: bool) -> Option<PostMachiningProps> {
+        let p = self.post_machining(front);
+        let mode = match p.mode {
+            2 => PostMachiningMode::Counterbore,
+            3 => PostMachiningMode::Countersink,
+            _ => return None,
+        };
+        Some(PostMachiningProps { mode, size: p.size, depth: p.depth, angle_ddeg: p.angle })
+    }
+
+    /// The via's [`ViaProps`], as `parsePCB_VIA` reads its tokens.
+    pub fn props(&self) -> ViaProps {
+        let (front_tenting, back_tenting) = self.front_back("tenting", true);
+        let (front_covering, back_covering) = self.front_back("covering", false);
+        let (front_plugging, back_plugging) = self.front_back("plugging", false);
+        let drill = |d: Option<ViaBackdrill>| d.filter(|d| d.size > crate::units::Nm::ZERO).map(|d| ViaDrillProps { size: d.size, start: d.start, end: d.end });
+        ViaProps {
+            front_tenting,
+            back_tenting,
+            front_covering,
+            back_covering,
+            front_plugging,
+            back_plugging,
+            capping: self.opt_flag("capping"),
+            filling: self.opt_flag("filling"),
+            backdrill: drill(self.secondary_drill()),
+            tertiary_drill: drill(self.tertiary_drill()),
+            front_post_machining: self.post_machining_props(true),
+            back_post_machining: self.post_machining_props(false),
+        }
+    }
+
+    /// The via's tokens with `props` in place of what they said of those settings, in the words `format( const PCB_TRACK* )` writes: the drills and the post-machining
+    /// first (KiCad writes them before the layers, which the via's own tokens follow here), then the others where KiCad writes them, before a `(padstack ..)` or
+    /// `(teardrops ..)` token and after everything else. A side KiCad would write as `none` with the other side unset is not written at all (`has_value()` on neither).
+    pub fn set_props(&mut self, props: &ViaProps) {
+        self.tokens.retain(|t| !tag_of(t).is_some_and(|tag| PROPS_TAGS.contains(&tag)));
+        let mut head = Vec::new();
+        let drill = |name: &str, d: &ViaDrillProps| format!("({name} (size {}) (layers {} {}))", fmt_mm(d.size), quoted(&d.start), quoted(&d.end));
+        if let Some(d) = props.backdrill.as_ref().filter(|d| d.size > crate::units::Nm::ZERO) {
+            head.push(drill("backdrill", d));
+        }
+        if let Some(d) = props.tertiary_drill.as_ref().filter(|d| d.size > crate::units::Nm::ZERO) {
+            head.push(drill("tertiary_drill", d));
+        }
+        let pm = |name: &str, p: &PostMachiningProps| {
+            let mut t = format!("({name} {}", match p.mode {
+                PostMachiningMode::Counterbore => "counterbore",
+                PostMachiningMode::Countersink => "countersink",
+            });
+            if p.size > crate::units::Nm::ZERO {
+                t.push_str(&format!(" (size {})", fmt_mm(p.size)));
+            }
+            if p.depth > crate::units::Nm::ZERO {
+                t.push_str(&format!(" (depth {})", fmt_mm(p.depth)));
+            }
+            if p.angle_ddeg > 0 {
+                let a = format!("{:.4}", p.angle_ddeg as f64 / 10.0);
+                t.push_str(&format!(" (angle {})", a.trim_end_matches('0').trim_end_matches('.')));
+            }
+            t.push(')');
+            t
+        };
+        if let Some(p) = &props.front_post_machining {
+            head.push(pm("front_post_machining", p));
+        }
+        if let Some(p) = &props.back_post_machining {
+            head.push(pm("back_post_machining", p));
+        }
+        let mut tail = Vec::new();
+        let pair = |name: &str, front: Option<bool>, back: Option<bool>| (front.is_some() || back.is_some()).then(|| format!("({name} {} {})", fmt_opt_bool("front", front), fmt_opt_bool("back", back)));
+        tail.extend(pair("tenting", props.front_tenting, props.back_tenting));
+        if props.capping.is_some() {
+            tail.push(fmt_opt_bool("capping", props.capping));
+        }
+        tail.extend(pair("covering", props.front_covering, props.back_covering));
+        tail.extend(pair("plugging", props.front_plugging, props.back_plugging));
+        if props.filling.is_some() {
+            tail.push(fmt_opt_bool("filling", props.filling));
+        }
+        let at = self.tokens.iter().position(|t| matches!(tag_of(t), Some("padstack") | Some("teardrops"))).unwrap_or(self.tokens.len());
+        self.tokens.splice(at..at, tail);
+        self.tokens.splice(0..0, head);
+    }
+}
+
 /// `(name yes)` or `(name no)`: a file token that is one boolean setting. A bare `(name)` is `yes` (`parseMaybeAbsentBool( true )`).
 fn flag_token(token: &str) -> Option<(&str, bool)> {
     let inner = token.strip_prefix('(')?.strip_suffix(')')?;
@@ -263,6 +473,47 @@ mod tests {
         assert_eq!(e.post_machining(true), PostMachining { mode: 3, size: crate::units::Nm::new(900_000), depth: crate::units::Nm::ZERO, angle: 900 });
         assert_eq!(e.post_machining(false), PostMachining::default());
         assert_eq!(extra(&[]).secondary_drill(), None);
+    }
+
+    #[test]
+    fn a_vias_props_are_read_as_parse_pcb_via_reads_them_and_written_as_format_writes_them() {
+        let e = extra(&["(remove_unused_layers yes)", "(keep_end_layers no)", "(tenting (front yes) (back no))", "(capping yes)", "(covering (front no) (back none))", "(filling no)", "(teardrops (best_length_ratio 0.5))"]);
+        let p = e.props();
+        assert_eq!((p.front_tenting, p.back_tenting, p.capping, p.front_covering, p.back_covering, p.filling, p.front_plugging), (Some(true), Some(false), Some(true), Some(false), None, Some(false), None));
+        // The legacy tenting words: `front back` tents both sides, `none` neither.
+        assert_eq!(extra(&["(tenting front back)"]).props().back_tenting, Some(true));
+        assert_eq!(extra(&["(tenting none)"]).props().front_tenting, None);
+        // Written back: the drills and post-machining first, the others before the teardrops, in `format`'s order; an unchanged set leaves the tokens as they were.
+        let mut w = e.clone();
+        w.set_props(&p);
+        assert_eq!(w.tokens, ["(remove_unused_layers yes)", "(keep_end_layers no)", "(tenting (front yes) (back no))", "(capping yes)", "(covering (front no) (back none))", "(filling no)", "(teardrops (best_length_ratio 0.5))"]);
+        let mut q = p.clone();
+        q.front_tenting = None;
+        q.back_tenting = None;
+        q.front_plugging = Some(true);
+        q.backdrill = Some(ViaDrillProps { size: crate::units::Nm::new(450_000), start: "B.Cu".into(), end: "In2.Cu".into() });
+        q.front_post_machining = Some(PostMachiningProps { mode: PostMachiningMode::Countersink, size: crate::units::Nm::new(900_000), depth: crate::units::Nm::ZERO, angle_ddeg: 900 });
+        w.set_props(&q);
+        assert_eq!(
+            w.tokens,
+            [
+                "(backdrill (size 0.45) (layers \"B.Cu\" \"In2.Cu\"))",
+                "(front_post_machining countersink (size 0.9) (angle 90))",
+                "(remove_unused_layers yes)",
+                "(keep_end_layers no)",
+                "(capping yes)",
+                "(covering (front no) (back none))",
+                "(plugging (front yes) (back none))",
+                "(filling no)",
+                "(teardrops (best_length_ratio 0.5))",
+            ]
+        );
+        assert_eq!(w.props(), q, "what is written reads back the same");
+        assert_eq!(w.unconnected_layers(), UnconnectedLayers::RemoveAll, "the other tokens stay");
+        // Nothing set leaves nothing behind.
+        let mut z = extra(&["(tenting (front yes) (back yes))"]);
+        z.set_props(&ViaProps::default());
+        assert!(z.is_default());
     }
 
     #[test]

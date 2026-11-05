@@ -43,6 +43,7 @@ mod padstack_io;
 mod pcb;
 mod pcb_generated;
 mod pcb_items;
+pub use pcb_items::zone_hatch_offsets;
 mod pcb_table;
 mod clipboard;
 pub use clipboard::{export_pcb_clipboard, export_pcb_clipboard_with, parse_pcb_clipboard, pcb_clipboard_zone_fills, ClipFootprint, ClipGroup, ClipRef, Clipboard};
@@ -102,7 +103,7 @@ mod sch_import;
 mod sch_crossref;
 mod sheet_file;
 pub use sheet_file::{load_sheet_file, referenced_sheet_files};
-pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, import_kicad_sch_tree_with, import_kicad_sch_with, pin_kind_from_electrical_type, reconcile, transform_local_point, ImportOptions};
+pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, import_kicad_sch_tree_with, import_kicad_sch_with, pin_kind_from_electrical_type, project_bus_aliases, reconcile, transform_local_point, ImportOptions};
 
 // The review workflow's share of the derived project: the waived DRC and ERC violations as KiCad's marker texts, and the per-check ERC severities.
 pub mod drc_exclusions;
@@ -110,6 +111,7 @@ pub mod erc_exclusions;
 // An imported project's Schematic Setup (`.kicad_pro`'s `schematic` object): the unit notation and the rest kept for the derived project (r7 H5, M1).
 pub mod project_schematic;
 pub use pcb::effective_erc_severities;
+pub use pcb::{put_class_schematic, write_schematic_setup};
 pub use pcb::exact_pattern;
 // The zone fills kicad-cli makes (Fill All Zones, B): read back from a refilled board and kept as derived data beside `design.json`.
 pub mod zone_fills;

@@ -182,7 +182,7 @@ fn every_kind_of_item_of_a_footprint_is_read_into_its_items_with_the_boards_read
     assert_eq!((z.net.as_str(), z.name.as_str(), z.layer_set(), z.outline.len()), ("", "keepout", vec!["F.Cu", "B.Cu"], 4));
     assert_eq!(z.outline[0], p(-1.85, -1.4625));
     assert!(z.uuid.is_empty(), "the uuid is kept with the others' (kicad.uuids)");
-    assert_eq!(it.zone_hatch_pitch.get(&z.id), Some(&mm(0.508)));
+    assert_eq!(z.border_hatch_pitch, mm(0.508), "the zone keeps the file's hatch pitch (`Zone::border_hatch_pitch`)");
 
     // the text box, the point, the image, the barcode, the table
     assert_eq!(it.text_boxes.len(), 1);

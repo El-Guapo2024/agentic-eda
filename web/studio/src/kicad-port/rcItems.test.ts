@@ -382,7 +382,7 @@ test("an ERC marker's Inspect and Fix entries (InspectERCErrorMenuText, FixERCEr
   assert.equal(ercFixEntry("lib_symbol_issues")!.label, "Manage Symbol Libraries...");
   assert.equal(ercFixEntry("lib_symbol_mismatch")!.label, "Update Symbol...");
   for (const check of ["unannotated", "duplicate_reference"]) assert.deepEqual(ercFixEntry(check)!.command, { kind: "action", id: "eeschema.EditorControl.annotate", select: false });
-  assert.equal(ercFixEntry("undefined_netclass"), null, "Net Classes is a page of Schematic Setup this app does not have");
+  assert.deepEqual(ercFixEntry("undefined_netclass"), { label: "Edit Netclasses...", command: { kind: "sch_setup", page: "netclasses" } }, "Schematic Setup on its Net Classes page");
   assert.equal(ercFixEntry("wire_dangling"), null);
 });
 

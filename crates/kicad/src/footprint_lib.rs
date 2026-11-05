@@ -656,7 +656,6 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
             thieving: None,
             arc_rings: None,
             layer_props: None,
-            hatch_pitch: items.zone_hatch_pitch.get(&z.id).copied(),
         };
         crate::pcb_items::write_zone(&mut out, z, &args);
         written.entry(z.id.clone()).or_default().push(uuid);

@@ -221,13 +221,21 @@ test("a footprint's Clearance Override (empty: none) and Zone Connection Style g
 test("a pad: where it is, and what it is; its number and net are read-only, its type, shape, size and hole are edited", () => {
   const b = board();
   assert.deepEqual(names(b, ["U1.1"]), [
-    ["Basic Properties", ["Position X", "Position Y", "Net"]],
-    ["Pad Properties", ["Pad Type", "Pad Shape", "Pad Number", "Size X", "Size Y", "Hole Shape", "Hole Size X"]],
+    ["Basic Properties", ["Position X", "Position Y", "Net", "Orientation"]],
+    ["Pad Properties", ["Pad Type", "Pad Shape", "Pad Number", "Pin Name", "Pin Type", "Size X", "Size Y", "Hole Shape", "Hole Size X", "Fabrication Property", "Copper Layers", "Pad To Die Length", "Pad To Die Delay"]],
+    ["Post-machining Properties", ["Top Post-machining", "Bottom Post-machining"]],
+    ["Backdrill Properties", ["Backdrill Mode"]],
+    ["Overrides", ["Clearance Override", "Soldermask Margin Override", "Solderpaste Margin Override", "Solderpaste Margin Ratio Override", "Zone Connection Style", "Thermal Relief Spoke Width", "Thermal Relief Spoke Angle", "Thermal Relief Gap"]],
+    ["Teardrops", ["Enable Teardrops", "Best Length Ratio", "Max Length", "Best Width Ratio", "Max Width", "Curved Teardrops", "Prefer Zone Connections", "Allow Teardrops To Span Two Tracks", "Max Width Ratio"]],
   ]);
+  const OVERRIDES = ["Clearance Override", "Soldermask Margin Override", "Solderpaste Margin Override", "Solderpaste Margin Ratio Override", "Zone Connection Style", "Thermal Relief Spoke Width", "Thermal Relief Spoke Angle", "Thermal Relief Gap"];
   const writable = pcbGrid(b, ["U1.1"], "mm").groups.flatMap((g) => g.rows).filter((r) => r.writable).map((r) => r.name);
-  assert.deepEqual(writable, ["Position X", "Position Y", "Pad Type", "Pad Shape", "Size X", "Size Y"], "an SMD pad has no hole to edit; its net and number have no verb");
+  assert.deepEqual(writable, ["Position X", "Position Y", "Orientation", "Pad Type", "Pad Shape", "Size X", "Size Y", "Copper Layers", ...OVERRIDES], "an SMD pad has no hole to edit; its net and number have no verb");
   const th = pcbGrid(b, ["U1.2"], "mm").groups.flatMap((g) => g.rows).filter((r) => r.writable).map((r) => r.name);
-  assert.deepEqual(th, ["Position X", "Position Y", "Pad Type", "Pad Shape", "Size X", "Hole Shape", "Hole Size X"], "a through-hole pad can edit its hole");
+  assert.deepEqual(th, ["Position X", "Position Y", "Orientation", "Pad Type", "Pad Shape", "Size X", "Hole Shape", "Hole Size X", "Copper Layers", ...OVERRIDES], "a through-hole pad can edit its hole");
+  // A read-only row says why in its tooltip.
+  assert.match(rowOf(b, ["U1.1"], "Net")!.note ?? "", /from the schematic/);
+  assert.match(rowOf(b, ["U1.1"], "Backdrill Mode")!.note ?? "", /not modelled/);
   // A pad that does not say its kind and shape (an older backend) is read from its flags.
   assert.equal(rowOf(b, ["U1.2"], "Pad Type")!.value, "through_hole");
   assert.equal(rowOf(b, ["U1.2"], "Pad Shape")!.value, "circle");
@@ -239,14 +247,20 @@ test("a pad: where it is, and what it is; its number and net are read-only, its 
 test("a track and an arc: lock, layer, net, then width and the two end points", () => {
   const b = board();
   const track: Array<[string, string[]]> = [["Basic Properties", ["Locked", "Layer", "Net", "Width", "Start X", "Start Y", "End X", "End Y"]]];
+  // On an outer copper layer a track has its solder mask rows (`isExternalLayerTrack`).
+  assert.deepEqual(names(b, ["trk_a"]), [...track, ["Technical Layers", ["Soldermask", "Soldermask Margin Override"]]]);
+  assert.deepEqual(names(b, ["trk_arc"]), [...track, ["Technical Layers", ["Soldermask", "Soldermask Margin Override"]]]);
+  b.routing!.tracks[0]!.layer = "In1.Cu";
   assert.deepEqual(names(b, ["trk_a"]), track);
-  assert.deepEqual(names(b, ["trk_arc"]), track);
 });
 
 test("a via: position, lock, net, and its Via Properties group", () => {
   assert.deepEqual(names(board(), ["via_a"]), [
     ["Basic Properties", ["Position X", "Position Y", "Locked", "Net"]],
-    ["Via Properties", ["Diameter", "Hole", "Layer Top", "Layer Bottom", "Via Type"]],
+    ["Via Properties", ["Diameter", "Hole", "Layer Top", "Layer Bottom", "Via Type", "Front tenting", "Back tenting", "Front covering", "Back covering", "Front plugging", "Back plugging", "Capping", "Filling"]],
+    ["Backdrill", ["Backdrill Mode"]],
+    ["Post-machining", ["Front Post-machining", "Back Post-machining"]],
+    ["Teardrops", ["Enable Teardrops", "Best Length Ratio", "Max Length", "Best Width Ratio", "Max Width", "Curved Teardrops", "Allow Teardrops To Span Two Tracks", "Max Width Ratio"]],
   ]);
 });
 
@@ -267,7 +281,7 @@ test("a copper zone and a rule area: what each has, and none of a zone's positio
 test("text: position, layer, lock, orientation, then its Text Properties", () => {
   assert.deepEqual(names(board(), ["txt_a"]), [
     ["Basic Properties", ["Position X", "Position Y", "Layer", "Locked", "Orientation"]],
-    ["Text Properties", ["Text", "Thickness", "Mirrored", "Width", "Height", "Horizontal Justification"]],
+    ["Text Properties", ["Text", "Font", "Auto Thickness", "Thickness", "Italic", "Bold", "Mirrored", "Width", "Height", "Horizontal Justification", "Vertical Justification", "Knockout"]],
   ]);
 });
 
@@ -276,12 +290,12 @@ test("a shape shows the geometry its kind has", () => {
   const shape = (id: string) => names(b, [id]).find(([g]) => g === "Shape Properties")![1];
   // KiCad 10's line endings, on the open shapes only (`isOpenShape`).
   const ENDINGS = ["Start Shape", "Start Length", "Start Width", "Start Stroke Width", "End Shape", "End Length", "End Width", "End Stroke Width"];
-  assert.deepEqual(shape("shp_seg"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Line Width", ...ENDINGS]);
-  assert.deepEqual(shape("shp_rect"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Width", "Height", "Line Width", "Fill"]);
-  assert.deepEqual(shape("shp_arc"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Line Width", "Angle", ...ENDINGS]);
-  assert.deepEqual(shape("shp_circle"), ["Shape", "Center X", "Center Y", "Radius", "Line Width", "Fill"]);
-  assert.deepEqual(shape("shp_poly"), ["Shape", "Line Width", "Fill"]);
-  assert.deepEqual(shape("shp_bez"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Line Width", ...ENDINGS], "a Bezier is not filled");
+  assert.deepEqual(shape("shp_seg"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Line Width", "Line Style", ...ENDINGS]);
+  assert.deepEqual(shape("shp_rect"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Width", "Height", "Corner Radius", "Line Width", "Line Style", "Fill"]);
+  assert.deepEqual(shape("shp_arc"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Line Width", "Line Style", "Angle", ...ENDINGS]);
+  assert.deepEqual(shape("shp_circle"), ["Shape", "Center X", "Center Y", "Radius", "Line Width", "Line Style", "Fill"]);
+  assert.deepEqual(shape("shp_poly"), ["Shape", "Line Width", "Line Style", "Fill"]);
+  assert.deepEqual(shape("shp_bez"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Line Width", "Line Style", ...ENDINGS], "a Bezier is not filled");
   // Position is the polygon's alone; every shape has a layer and a lock; none has a net.
   assert.deepEqual(names(b, ["shp_poly"])[0], ["Basic Properties", ["Position X", "Position Y", "Locked", "Layer"]]);
   assert.deepEqual(names(b, ["shp_seg"])[0], ["Basic Properties", ["Locked", "Layer"]]);
@@ -293,10 +307,13 @@ test("dimensions: the kinds share the text and layer rows and each adds its own"
   assert.deepEqual(rows("dim_a")["Dimension Properties"], ["Prefix", "Suffix", "Override Text", "Units", "Units Format", "Precision", "Suppress Trailing Zeroes", "Arrow Direction", "Crossbar Height", "Extension Line Overshoot"]);
   assert.deepEqual(rows("dim_ortho")["Dimension Properties"], rows("dim_a")["Dimension Properties"], "an orthogonal dimension is an aligned one with a locked axis");
   assert.deepEqual(rows("dim_rad")["Dimension Properties"], ["Prefix", "Suffix", "Override Text", "Units", "Units Format", "Precision", "Suppress Trailing Zeroes", "Leader Length"]);
-  assert.deepEqual(rows("dim_lead")["Dimension Properties"], ["Text"], "a leader has its text and none of the measuring");
+  assert.deepEqual(rows("dim_lead")["Dimension Properties"], ["Text", "Text Frame"], "a leader has its text and its frame, and none of the measuring");
   assert.deepEqual(rows("dim_ctr")["Dimension Properties"], ["Prefix", "Suffix", "Override Text", "Units", "Units Format", "Precision", "Suppress Trailing Zeroes"], "a centre mark has the measuring rows and none of the geometry");
   assert.deepEqual(rows("dim_a")["Basic Properties"], ["Position X", "Position Y", "Layer", "Locked"]);
-  assert.deepEqual(rows("dim_a")["Text Properties"], ["Thickness", "Width", "Height", "Keep Aligned with Dimension", "Orientation"]);
+  assert.deepEqual(rows("dim_a")["Text Properties"], ["Font", "Auto Thickness", "Thickness", "Italic", "Bold", "Mirrored", "Width", "Height", "Horizontal Justification", "Keep Upright", "Color", "Keep Aligned with Dimension", "Orientation"]);
+  // What a dimension's label has of an ordinary text's but this model does not: read-only, saying why.
+  assert.equal(rowOf(b, ["dim_a"], "Mirrored")!.writable, false);
+  assert.match(rowOf(b, ["dim_a"], "Mirrored")!.note ?? "", /dimension/);
 });
 
 test("a group has a name and a lock, and no position or layer", () => {
@@ -393,10 +410,14 @@ test("a footprint: position moves it by the difference, orientation turns it abo
   assert.deepEqual(edit(b, ["U1"], "Locked", true), [{ op: "set_locked", ids: ["U1"], locked: true }]);
 });
 
-test("a footprint's reference, value and library link are read-only", () => {
+test("a footprint's reference is a rename (one footprint at a time); its library link and description are read-only, as KiCad's (NO_SETTER)", () => {
   const b = board();
-  for (const name of ["Reference", "Library Link", "Library Description", "Keywords", "Component Class"]) assert.equal(rowOf(b, ["U1"], name)!.writable, false, name);
+  for (const name of ["Library Link", "Library Description", "Keywords", "Component Class"]) assert.equal(rowOf(b, ["U1"], name)!.writable, false, name);
   assert.deepEqual(edit(b, ["U1"], "Library Link", "other"), [], "an edit of a read-only row sends nothing");
+  assert.equal(rowOf(b, ["U1"], "Reference")!.writable, true);
+  assert.deepEqual(edit(b, ["U1"], "Reference", "U7"), [{ op: "rename_symbol", id: "U1", new_id: "U7" }]);
+  assert.equal(pcbRow(b, ["U1", "R1"], "Reference", "mm")!.writable, false, "two footprints cannot take one reference");
+  assert.match(pcbRow(b, ["U1", "R1"], "Reference", "mm")!.note ?? "", /one at a time/);
 });
 
 test("a pad's position moves its footprint", () => {
@@ -437,7 +458,76 @@ test("a via: diameter and hole keep each other in order", () => {
   const small = pcbEdit(b, ["via_a"], "Diameter", 300, "mm");
   assert.equal(small.ok, false, "the diameter may not shrink to the hole");
   assert.deepEqual(edit(b, ["via_a"], "Net", "VCC"), [{ op: "set_item_net", ids: ["via_a"], net: "VCC" }]);
-  assert.equal(rowOf(b, ["via_a"], "Layer Top")!.writable, false);
+  // The layer pair and the type: set_via_layers (`SanitizeLayers` is the verb's).
+  assert.deepEqual(edit(b, ["via_a"], "Layer Bottom", "F.Cu"), [{ op: "set_via_layers", ids: ["via_a"], to_layer: "F.Cu" }]);
+  assert.deepEqual(edit(b, ["via_a"], "Via Type", "Micro"), [{ op: "set_via_layers", ids: ["via_a"], kind: "micro" }]);
+});
+
+test("a via's tenting, covering, plugging, capping and filling, its backdrill and post-machining: set_via_props with the via's props and the one change", () => {
+  const b = board();
+  const via = b.routing!.vias[0]!;
+  assert.equal(rowOf(b, ["via_a"], "Front tenting")!.value, "from_board");
+  assert.deepEqual(edit(b, ["via_a"], "Front tenting", "yes"), [{ op: "set_via_props", id: "via_a", props: { front_tenting: true } }]);
+  via.props = { front_tenting: true, capping: false };
+  assert.deepEqual(edit(b, ["via_a"], "Front tenting", "from_board"), [{ op: "set_via_props", id: "via_a", props: { capping: false } }], "From board stackup is no value of its own");
+  assert.equal(rowOf(b, ["via_a"], "Capping")!.value, "no");
+  // `SetBackdrillMode`: the new drill is 1.1 times the via's, from the side it drills to that same layer.
+  assert.deepEqual(edit(b, ["via_a"], "Backdrill Mode", "bottom"), [{ op: "set_via_props", id: "via_a", props: { front_tenting: true, capping: false, backdrill: { size: 330, start: "B.Cu", end: "B.Cu" } } }]);
+  via.props = { backdrill: { size: 450, start: "B.Cu", end: "In1.Cu" } };
+  assert.deepEqual(names(b, ["via_a"]).find(([g]) => g === "Backdrill")![1], ["Backdrill Mode", "Bottom Backdrill Size", "Bottom Backdrill Must-Cut"]);
+  assert.equal(rowOf(b, ["via_a"], "Bottom Backdrill Size")!.value, 450);
+  assert.deepEqual(edit(b, ["via_a"], "Bottom Backdrill Must-Cut", "B.Cu"), [{ op: "set_via_props", id: "via_a", props: { backdrill: { size: 450, start: "B.Cu", end: "B.Cu" } } }]);
+  assert.deepEqual(edit(b, ["via_a"], "Backdrill Mode", "no_backdrill"), [{ op: "set_via_props", id: "via_a", props: {} }]);
+  // Post-machining: the size of a counterbore or a countersink, the depth of a counterbore, the angle of a countersink.
+  assert.deepEqual(edit(b, ["via_a"], "Front Post-machining", "countersink"), [{ op: "set_via_props", id: "via_a", props: { backdrill: { size: 450, start: "B.Cu", end: "In1.Cu" }, front_post_machining: { size: 0, depth: 0, angle_ddeg: 0, mode: "countersink" } } }]);
+  via.props = { front_post_machining: { mode: "countersink", size: 900, depth: 0, angle_ddeg: 900 } };
+  assert.deepEqual(names(b, ["via_a"]).find(([g]) => g === "Post-machining")![1], ["Front Post-machining", "Front Post-machining Size", "Front Post-machining Angle", "Back Post-machining"]);
+  assert.equal(rowOf(b, ["via_a"], "Front Post-machining Angle")!.value, 90);
+  assert.deepEqual(edit(b, ["via_a"], "Front Post-machining Angle", 82), [{ op: "set_via_props", id: "via_a", props: { front_post_machining: { mode: "countersink", size: 900, depth: 0, angle_ddeg: 820 } } }]);
+});
+
+test("a track's and a shape's solder mask: set_solder_mask; the margin is kept only with an opening", () => {
+  const b = board();
+  assert.deepEqual(edit(b, ["trk_a"], "Soldermask", true), [{ op: "set_solder_mask", ids: ["trk_a"], solder_mask: true, margin: null }]);
+  assert.equal(rowOf(b, ["trk_a"], "Soldermask Margin Override")!.writable, false);
+  b.routing!.tracks[0]!.mask = { margin: null };
+  assert.deepEqual(edit(b, ["trk_a"], "Soldermask Margin Override", 50_000), [{ op: "set_solder_mask", ids: ["trk_a"], solder_mask: true, margin: 50_000 }]);
+  const sh = b.drawings!.shapes[1]!;
+  sh.layer = "F.Cu";
+  assert.deepEqual(names(b, ["shp_rect"]).find(([g]) => g === "Technical Layers")![1], ["Soldermask", "Soldermask Margin Override"]);
+  assert.deepEqual(edit(b, ["shp_rect"], "Soldermask", true), [{ op: "set_solder_mask", ids: ["shp_rect"], solder_mask: true, margin: null }]);
+  // A rectangle's corner radius: set_corner_radius, not more than half its shorter side.
+  assert.deepEqual(edit(b, ["shp_rect"], "Corner Radius", 1000), [{ op: "set_corner_radius", ids: ["shp_rect"], radius: 1000 }]);
+  const tooBig = pcbEdit(b, ["shp_rect"], "Corner Radius", 3000, "mm");
+  assert.equal(tooBig.ok, false);
+  assert.equal(rowOf(b, ["shp_seg"], "Line Style")!.writable, false);
+  assert.match(rowOf(b, ["shp_seg"], "Line Style")!.note ?? "", /solid/);
+});
+
+test("a pad's overrides: its margins are its edit, its clearance and thermal relief its zone overrides; the teardrop rows go once the board has teardrops", () => {
+  const b = board();
+  const u1 = b.parts[0]!;
+  assert.deepEqual(edit(b, ["U1.1"], "Soldermask Margin Override", 25_000), [{ op: "edit_board_pad", part: "U1", edit: { number: "1", nth: 1, solder_mask_margin: 25_000 } }]);
+  u1.pads![0]!.mask_margin = 25_000;
+  u1.pads![0]!.edit = { number: "1", nth: 1, solder_mask_margin: 25_000 };
+  assert.deepEqual(edit(b, ["U1.1"], "Soldermask Margin Override", ""), [{ op: "edit_board_pad", part: "U1", edit: { number: "1", nth: 1 } }], "an empty cell takes the override away");
+  assert.deepEqual(edit(b, ["U1.1"], "Clearance Override", 200_000), [
+    { op: "set_pad_zone_overrides", part: "U1", pad: "1", zone_connection: null, thermal_gap: null, thermal_spoke_width: null, thermal_spoke_angle_mdeg: null, clearance: 200_000 },
+  ]);
+  assert.equal(rowOf(b, ["U1.1"], "Thermal Relief Spoke Angle")!.value, 90, "a rectangle's default spoke angle (`DefaultThermalSpokeAngleForShape`)");
+  assert.equal(rowOf(b, ["U1.2"], "Thermal Relief Spoke Angle")!.value, 45, "a circle's");
+  // `RangeIntValidator<minZoneWidth, INT_MAX>`
+  assert.equal(pcbEdit(b, ["U1.1"], "Thermal Relief Spoke Width", 1000, "mm").ok, false);
+  // Orientation: the pad's own angle turned with its footprint (U1 is turned 90 clockwise: KiCad's -90).
+  assert.equal(rowOf(b, ["U1.1"], "Orientation")!.value, -90);
+  assert.deepEqual(edit(b, ["U1.1"], "Orientation", 0), [{ op: "edit_board_pad", part: "U1", edit: { number: "1", nth: 1, solder_mask_margin: 25_000, rot: 270 } }]);
+  // Teardrops: Board Setup's parameters, read-only; none once the board has teardrop zones (`(legacy_teardrops yes)`).
+  b.routing!.teardrop_settings = { enabled: true, target_vias: true, target_pth_pads: true, target_smd_pads: false, best_length_ratio: 0.5, best_width_ratio: 1, max_len_nm: 1_000_000, max_width_nm: 2_000_000, width_to_size_filter_ratio: 0.9 };
+  assert.equal(rowOf(b, ["U1.2"], "Enable Teardrops")!.value, true);
+  assert.equal(rowOf(b, ["U1.1"], "Enable Teardrops")!.value, false, "SMD pads are not targeted");
+  assert.equal(rowOf(b, ["via_a"], "Enable Teardrops")!.writable, false);
+  b.routing!.zones.push({ ...b.routing!.zones[0]!, id: "td_1", teardrop: true });
+  assert.equal(rowOf(b, ["via_a"], "Enable Teardrops"), undefined);
 });
 
 test("a zone: one edit_zone with every setting and the one that changed", () => {
@@ -495,11 +585,28 @@ test("a text: every edit is an edit_text with the rest of the text as it was", (
   assert.deepEqual(edit(b, ["txt_a"], "Orientation", -90), [{ ...base, angle: 270_000 }], "an angle is kept in 0 to 360");
   assert.deepEqual(edit(b, ["txt_a"], "Layer", "F.Fab"), [{ ...base, layer: "F.Fab" }]);
   assert.deepEqual(edit(b, ["txt_a"], "Thickness", 200), [{ ...base, stroke_width: 200 }]);
-  assert.deepEqual(edit(b, ["txt_a"], "Height", 1500), [{ ...base, size_nm: 1500 }]);
-  assert.deepEqual(edit(b, ["txt_a"], "Width", 1500), [{ ...base, size_nm: 1500 }], "the text is square: width and height are one size");
+  // `SetTextHeight` alone: a square text keeps its width (the text's `TextExtra` takes it); `SetTextWidth` alone is the text's style.
+  assert.deepEqual(edit(b, ["txt_a"], "Height", 1500), [{ ...base, size_nm: 1500 }, { op: "edit_text_style", id: "txt_a", width_nm: 1000 }]);
+  assert.deepEqual(edit(b, ["txt_a"], "Width", 1500), [{ op: "edit_text_style", id: "txt_a", width_nm: 1500 }], "the width is not tied to the height");
   assert.deepEqual(edit(b, ["txt_a"], "Mirrored", true), [{ ...base, mirror: true }]);
   assert.deepEqual(edit(b, ["txt_a"], "Horizontal Justification", "left"), [{ ...base, justify: "left" }]);
   assert.deepEqual(edit(b, ["txt_a"], "Position X", 71_000), [{ op: "move_items", ids: ["txt_a"], dx: 1_000, dy: 0 }]);
+  // The rest of the text's style (`TextExtra`): edit_text_style, one key at a time.
+  const style = (patch: Record<string, unknown>) => [{ op: "edit_text_style", id: "txt_a", ...patch }];
+  assert.deepEqual(edit(b, ["txt_a"], "Italic", true), style({ italic: true }));
+  assert.deepEqual(edit(b, ["txt_a"], "Bold", true), style({ bold: true }));
+  assert.deepEqual(edit(b, ["txt_a"], "Vertical Justification", "bottom"), style({ valign: "bottom" }));
+  assert.deepEqual(edit(b, ["txt_a"], "Knockout", true), style({ knockout: true }));
+  assert.deepEqual(edit(b, ["txt_a"], "Auto Thickness", true), style({ auto_thickness: true }));
+  assert.equal(rowOf(b, ["txt_a"], "Font")!.value, "KiCad Font");
+  assert.equal(rowOf(b, ["txt_a"], "Font")!.writable, false);
+  // A text with an automatic width: a thickness typed ends it (`SetTextThickness`).
+  const t = b.drawings!.texts[0]!;
+  t.auto_thickness = true;
+  t.width = 1200;
+  assert.equal(rowOf(b, ["txt_a"], "Width")!.value, 1200);
+  assert.deepEqual(edit(b, ["txt_a"], "Thickness", 200), [{ ...base, stroke_width: 200 }, ...style({ auto_thickness: false })]);
+  assert.deepEqual(edit(b, ["txt_a"], "Height", 1500), [{ ...base, size_nm: 1500 }], "a text with a width of its own keeps it");
 });
 
 test("a shape's geometry is set the way the EDA_SHAPE setters do", () => {
@@ -675,9 +782,10 @@ test("a field is an item of the board: REF:Name names it, and the caption says s
 test("a field: position, layer, orientation, then its text properties; a user field's text is its own", () => {
   const b = edited();
   assert.deepEqual(names(b, ["U1:Reference"]), [
-    ["Basic Properties", ["Position X", "Position Y", "Layer", "Orientation"]],
-    ["Text Properties", ["Text", "Thickness", "Italic", "Bold", "Mirrored", "Visible", "Width", "Height", "Horizontal Justification", "Vertical Justification", "Knockout", "Keep Upright"]],
+    ["Basic Properties", ["Position X", "Position Y", "Layer", "Locked", "Orientation"]],
+    ["Text Properties", ["Text", "Font", "Auto Thickness", "Thickness", "Italic", "Bold", "Mirrored", "Visible", "Width", "Height", "Horizontal Justification", "Vertical Justification", "Knockout", "Keep Upright"]],
   ]);
+  assert.equal(rowOf(b, ["U1:Reference"], "Locked")!.writable, false, "a field is locked with its footprint here");
   assert.equal(rowOf(b, ["U1:Reference"], "Text")!.writable, false, "the reference comes from the schematic");
   assert.equal(rowOf(b, ["U1:Value"], "Text")!.writable, false);
   assert.equal(rowOf(b, ["U1:Vendor"], "Text")!.writable, true);
@@ -720,7 +828,7 @@ test("a field's orientation is its absolute angle: the footprint's own turn is t
 test("a footprint lists its attributes and each is an edit_board_footprint with the others as they were", () => {
   const b = edited();
   assert.deepEqual(names(b, ["U1"]).map(([g]) => g), ["Basic Properties", "Fields", "Footprint Properties", "Attributes", "Overrides"]);
-  assert.deepEqual(names(b, ["U1"]).find(([g]) => g === "Attributes")![1], ["Component Type", "Not in Schematic", "Exclude From Position Files", "Exclude From Bill of Materials", "Do not Populate"]);
+  assert.deepEqual(names(b, ["U1"]).find(([g]) => g === "Attributes")![1], ["Not in Schematic", "Exclude From Position Files", "Exclude From Bill of Materials", "Do not Populate"], "KiCad's panel has no Component Type row");
   assert.deepEqual(names(b, ["U1"]).find(([g]) => g === "Overrides")![1], ["Exempt From Courtyard Requirement", "Clearance Override", "Solderpaste Margin Override", "Solderpaste Margin Ratio Override", "Zone Connection Style"]);
   const all = { kind: "smd", board_only: false, exclude_from_pos_files: false, exclude_from_bom: false, dnp: false, allow_missing_courtyard: false };
   assert.deepEqual(edit(b, ["U1"], "Do not Populate", true), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, dnp: true } }]);
@@ -728,7 +836,6 @@ test("a footprint lists its attributes and each is an edit_board_footprint with 
   assert.deepEqual(edit(b, ["U1"], "Exclude From Bill of Materials", true), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, exclude_from_bom: true } }]);
   assert.deepEqual(edit(b, ["U1"], "Not in Schematic", true), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, board_only: true } }]);
   assert.deepEqual(edit(b, ["U1"], "Exempt From Courtyard Requirement", true), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, allow_missing_courtyard: true } }]);
-  assert.deepEqual(edit(b, ["U1"], "Component Type", "through_hole"), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, kind: "through_hole" } }]);
   assert.deepEqual(edit(b, ["U1"], "Do not Populate", false), [], "already so");
   // Several footprints: one command each.
   const two = edited();

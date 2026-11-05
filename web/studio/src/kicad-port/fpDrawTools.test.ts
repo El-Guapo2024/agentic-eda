@@ -115,6 +115,10 @@ test("DrawZone( ruleArea ): the outline on the active layer, no net, ZONE_SETTIN
   assert.deepEqual([edited.layer, (edited as { layers?: string[] }).layers, (edited as { name?: string }).name, edited.keepout_footprints, edited.id], ["F.Cu", ["F.Cu", "B.Cu"], undefined, true, "zone_1"]);
   const plain = fpZoneWithSettings({ ...z, layers: ["F.Cu", "B.Cu"] } as unknown as CmdZone, { is_rule_area: false }, ["F.SilkS"], "Keep");
   assert.deepEqual([plain.layer, (plain as { layers?: string[] }).layers, (plain as { name?: string }).name], ["F.SilkS", undefined, "Keep"]);
+  // the outline display and its pitch go onto the zone; an offsets grid left unchanged (none sent) keeps the zone's own
+  const hatched = { ...z, hatch_offsets: { "F.Cu": { x_nm: MM, y_nm: 0 } } } as unknown as CmdZone;
+  const styled = fpZoneWithSettings(hatched, { is_rule_area: true, border_style: "full", border_hatch_pitch: 2 * MM } as never, ["F.Cu"], "");
+  assert.deepEqual([styled.border_style, styled.border_hatch_pitch, styled.hatch_offsets], ["full", 2 * MM, { "F.Cu": { x_nm: MM, y_nm: 0 } }]);
 });
 
 test("PlacePoint, DrawBarcode and PlaceReferenceImage make their item at the click on the active layer", () => {

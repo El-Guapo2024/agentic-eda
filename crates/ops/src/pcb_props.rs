@@ -12,10 +12,24 @@
 //! * `EDA_SHAPE::SetStartX/SetEndX/SetCenterX/SetRadius/SetRectangleWidth` ("Start X", "Radius", "Width" ...):
 //!   [`Cmd::ReplaceShape`](crate::Cmd::ReplaceShape) -- the shape with its new geometry, in place, keeping its id and its lock (the
 //!   studio plans the geometry the way those setters do, `kicad-port/pcbProperties.ts`).
+//!
+//! Five more came with the rows the panel lacked (UI-LEFT P2, `task-u1-props`), each over an overlay the board reader and writer already keep:
+//!
+//! * `EDA_TEXT::SetItalic`, `SetBold`, `SetVertJustify`, `SetTextWidth`, `SetAutoThickness` and `BOARD_ITEM::SetIsKnockout` of a board text:
+//!   [`Cmd::EditTextStyle`](crate::Cmd::EditTextStyle), over the text's `TextExtra`;
+//! * `PCB_TRACK::SetHasSolderMask` / `SetLocalSolderMaskMargin` and the same of a `PCB_SHAPE` ("Soldermask", "Soldermask Margin Override"):
+//!   [`Cmd::SetSolderMask`](crate::Cmd::SetSolderMask), over `track_masks` and the shapes' styles;
+//! * `EDA_SHAPE::SetCornerRadius` ("Corner Radius"): [`Cmd::SetCornerRadius`](crate::Cmd::SetCornerRadius);
+//! * a via's tenting, covering, plugging, capping, filling, backdrill and post-machining (`TRACK_VIA_DESC`): [`Cmd::SetViaProps`](crate::Cmd::SetViaProps),
+//!   over the via's tokens ([`eda_model::via_extra::ViaProps`]);
+//! * `FOOTPRINT::SetLocalSolderPasteMargin` / `SetLocalSolderPasteMarginRatio`: [`Cmd::SetFootprintPasteMargin`](crate::Cmd::SetFootprintPasteMargin), over
+//!   the footprint's tokens of a board read from a file.
 
 use eda_model::units::Nm;
 use super::Board;
-use eda_model::ir::{tessellate_arc, Point, Shape, Track, TRACK_ARC_SEGMENTS};
+use eda_model::board_text::TextExtra;
+use eda_model::ir::{tessellate_arc, Point, Shape, TextVAlign, Track, TRACK_ARC_SEGMENTS};
+use eda_model::via_extra::{ViaExtra, ViaProps};
 use eda_model::CheckResult;
 use std::collections::BTreeSet;
 
@@ -113,6 +127,219 @@ impl Board<'_> {
         // A solid fill takes the place of a hatch.
         if solid {
             dr.board_items.set_hatch(id, None);
+        }
+        Ok(())
+    }
+}
+
+/// What [`Cmd::EditTextStyle`](crate::Cmd::EditTextStyle) sets of a board text; `None` leaves it as it is.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct TextStyleEdit {
+    pub width_nm: Option<Nm>,
+    pub valign: Option<TextVAlign>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub knockout: Option<bool>,
+    pub auto_thickness: Option<bool>,
+}
+
+/// `IsExternalCopperLayer`: the front or the back copper.
+fn is_outer_copper(layer: &str) -> bool {
+    layer == "F.Cu" || layer == "B.Cu"
+}
+
+impl Board<'_> {
+    /// `Cmd::EditTextStyle`: the board text `id`'s glyph width (`SetTextWidth`; the height is `Text::size_nm`, a width equal to it keeps no entry), vertical
+    /// justification, bold, italic, knockout and automatic stroke width (`SetAutoThickness`: the file then has no `(thickness ..)`, and the text is drawn with
+    /// `GetPenSizeForNormal`, or `GetPenSizeForBold` for a bold one, of its smaller size -- which `Text::stroke_width` takes). Refused when nothing changes.
+    pub(crate) fn edit_text_style(&mut self, id: &str, edit: &TextStyleEdit) -> Result<(), Vec<CheckResult>> {
+        let d = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_text", id, "the board has no drawings yet"))?;
+        let ti = d.texts.iter().position(|t| t.id == id).ok_or_else(|| fail("ops_unknown_text", id, "no text with this id"))?;
+        if edit.width_nm.is_some_and(|w| w <= Nm::ZERO) {
+            return Err(fail("ops_bad_text", id, "a text's width must be greater than zero"));
+        }
+        let before = d.text_extra(id).cloned().unwrap_or(TextExtra { id: id.to_string(), ..Default::default() });
+        let mut extra = before.clone();
+        let height = d.texts[ti].size_nm;
+        if let Some(w) = edit.width_nm {
+            extra.width_nm = (w != height).then_some(w);
+        }
+        if let Some(v) = edit.valign {
+            extra.valign = v;
+        }
+        if let Some(b) = edit.bold {
+            extra.bold = b;
+        }
+        if let Some(i) = edit.italic {
+            extra.italic = i;
+        }
+        if let Some(k) = edit.knockout {
+            extra.knockout = k;
+        }
+        if let Some(a) = edit.auto_thickness {
+            extra.auto_thickness = a;
+        }
+        let stroke_before = d.texts[ti].stroke_width;
+        if extra.auto_thickness {
+            // `EDA_TEXT::GetEffectiveTextPenWidth` with no thickness: the pen of the smaller of the glyph's two sizes.
+            let size = extra.width_nm.unwrap_or(height).min(height);
+            d.texts[ti].stroke_width = eda_model::pcb_items::auto_pen_nm(size, extra.bold);
+        }
+        if extra == before && d.texts[ti].stroke_width == stroke_before {
+            return Err(fail("ops_nothing_to_change", id, "the text already has this style"));
+        }
+        match (d.text_extras.iter().position(|e| e.id == id), extra.is_default()) {
+            (Some(i), true) => {
+                d.text_extras.remove(i);
+            }
+            (Some(i), false) => d.text_extras[i] = extra,
+            (None, false) => d.text_extras.push(extra),
+            (None, true) => {}
+        }
+        Ok(())
+    }
+
+    /// `Cmd::SetSolderMask`: a solder-mask opening on every named track and shape (`SetHasSolderMask`), with its own margin (`SetLocalSolderMaskMargin`; `None`
+    /// is the board's). Only an item on an outer copper layer has one (the rows' `isExternalLayerTrack` / `isExternalCuLayer`); a track or shape without an
+    /// opening keeps no margin (the file writes `(solder_mask_margin ..)` only after a mask layer).
+    pub(crate) fn set_solder_mask(&mut self, ids: &[String], solder_mask: bool, margin: Option<Nm>) -> Result<(), Vec<CheckResult>> {
+        if ids.is_empty() {
+            return Err(fail("ops_bad_mask", "set_solder_mask", "no items given"));
+        }
+        let mut tracks = Vec::new();
+        let mut shapes = Vec::new();
+        for id in ids {
+            if let Some(t) = self.design.routing.as_ref().and_then(|r| r.tracks.iter().find(|t| &t.id == id)) {
+                if !is_outer_copper(&t.layer) {
+                    return Err(fail("ops_bad_mask", id, "only a track on the front or back copper has a solder mask opening"));
+                }
+                tracks.push(id.clone());
+            } else if let Some(s) = self.design.drawings.as_ref().and_then(|d| d.shapes.iter().find(|s| s.id() == id)) {
+                if !is_outer_copper(s.layer()) {
+                    return Err(fail("ops_bad_mask", id, "only a shape on the front or back copper has a solder mask opening"));
+                }
+                shapes.push(id.clone());
+            } else {
+                return Err(fail("ops_unknown_item", id, "no track or shape with this id"));
+            }
+        }
+        let d = self.drawings_mut();
+        let before = (d.track_masks.clone(), d.board_items.shape_styles.clone());
+        for id in &tracks {
+            d.track_masks.retain(|m| &m.id != id);
+            if solder_mask {
+                d.track_masks.push(eda_model::track_mask::TrackMask { id: id.clone(), margin });
+            }
+        }
+        d.track_masks.sort_by(|a, b| a.id.cmp(&b.id));
+        for id in &shapes {
+            d.board_items.set_solder_mask(id, solder_mask, margin);
+        }
+        if (d.track_masks.clone(), d.board_items.shape_styles.clone()) == before {
+            return Err(fail("ops_nothing_to_change", "set_solder_mask", "the items already have this solder mask opening"));
+        }
+        Ok(())
+    }
+
+    /// `Cmd::SetCornerRadius`: `EDA_SHAPE::SetCornerRadius` of every named rectangle. The row's validator: not below zero, not more than half the shorter side.
+    pub(crate) fn set_corner_radius(&mut self, ids: &[String], radius: Nm) -> Result<(), Vec<CheckResult>> {
+        if ids.is_empty() {
+            return Err(fail("ops_bad_shape", "set_corner_radius", "no shapes given"));
+        }
+        if radius < Nm::ZERO {
+            return Err(fail("ops_bad_shape", "set_corner_radius", "Value must be greater than or equal to 0"));
+        }
+        let d = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_shape", "set_corner_radius", "the board has no drawings yet"))?;
+        for id in ids {
+            match d.shapes.iter().find(|s| s.id() == id) {
+                Some(Shape::Rect { start, end, .. }) => {
+                    let half = (end.x - start.x).abs().min((end.y - start.y).abs()) / 2;
+                    if radius > half {
+                        return Err(fail("ops_bad_shape", id, "the corner radius cannot be more than half the rectangle's shorter side"));
+                    }
+                }
+                Some(_) => return Err(fail("ops_bad_shape", id, "only a rectangle has a corner radius")),
+                None => return Err(fail("ops_unknown_shape", id, "no shape with this id")),
+            }
+        }
+        if ids.iter().all(|id| d.board_items.corner_radius_of(id) == radius) {
+            return Err(fail("ops_nothing_to_change", "set_corner_radius", "the rectangles already have this corner radius"));
+        }
+        for id in ids {
+            d.board_items.set_corner_radius(id, radius);
+        }
+        Ok(())
+    }
+
+    /// `Cmd::SetViaProps`: the via `id`'s tenting, covering, plugging, capping, filling, backdrill and post-machining become `props` (the studio works out a row's
+    /// new value the way the `PCB_VIA` / `PADSTACK` setters do, `kicad-port/viaProps.ts`). The drills' layers must be copper layers of the board and their sizes
+    /// above zero. The Rust DRC's tenting table (`DrawingsSection::via_tenting`, by position and net) follows the tenting. Refused when nothing changes.
+    pub(crate) fn set_via_props(&mut self, id: &str, props: &ViaProps) -> Result<(), Vec<CheckResult>> {
+        let board_copper = self.model.board.layers.clone();
+        for d in [&props.backdrill, &props.tertiary_drill].into_iter().flatten() {
+            if d.size <= Nm::ZERO {
+                return Err(fail("ops_bad_via", id, "a backdrill's size must be greater than zero"));
+            }
+            for layer in [&d.start, &d.end] {
+                if !board_copper.iter().any(|l| l == layer) {
+                    return Err(fail("ops_bad_via", layer, "Via layer is outside the board stack."));
+                }
+            }
+        }
+        for p in [&props.front_post_machining, &props.back_post_machining].into_iter().flatten() {
+            if p.size < Nm::ZERO || p.depth < Nm::ZERO || !(0..=1800).contains(&p.angle_ddeg) {
+                return Err(fail("ops_bad_via", id, "a post-machining size or depth cannot be negative, nor its angle outside 0 to 180 degrees"));
+            }
+        }
+        let (at, net) = {
+            let v = self.design.routing.as_ref().and_then(|rt| rt.vias.iter().find(|v| v.id == id)).ok_or_else(|| fail("ops_unknown_via", id, "no via with this id"))?;
+            (v.at, v.net.clone())
+        };
+        let before = self.design.drawings.as_ref().and_then(|d| d.via_extra(id)).cloned().unwrap_or(ViaExtra { id: id.to_string(), ..Default::default() });
+        let mut extra = before.clone();
+        extra.set_props(props);
+        if extra == before {
+            return Err(fail("ops_nothing_to_change", id, "the via already has these properties"));
+        }
+        let dr = self.drawings_mut();
+        match (dr.via_extras.iter().position(|e| e.id == id), extra.is_default()) {
+            (Some(i), true) => {
+                dr.via_extras.remove(i);
+            }
+            (Some(i), false) => dr.via_extras[i] = extra,
+            (None, false) => dr.via_extras.push(extra),
+            (None, true) => {}
+        }
+        dr.via_tenting.retain(|t| !(t.at == at && t.net == net));
+        if props.front_tenting.is_some() || props.back_tenting.is_some() {
+            dr.via_tenting.push(eda_model::ir::ViaTenting { at, net, front: props.front_tenting, back: props.back_tenting });
+        }
+        Ok(())
+    }
+
+    /// `Cmd::SetFootprintPasteMargin`: `FOOTPRINT::SetLocalSolderPasteMargin` / `SetLocalSolderPasteMarginRatio` (`None` takes the board's). The board writes them
+    /// only from a footprint's tokens of a board read from a file (`FootprintExtra::tokens`, `(solder_paste_margin ..)` and `(solder_paste_margin_ratio ..)`), so a
+    /// footprint placed from the intent, which has none, is refused.
+    pub(crate) fn set_footprint_paste_margin(&mut self, part: &str, margin: Option<Nm>, ratio: Option<f64>) -> Result<(), Vec<CheckResult>> {
+        let fmt = |v: f64| {
+            let s = format!("{v:.6}");
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        };
+        let d = self.design.drawings.as_mut().ok_or_else(|| fail("ops_no_board_file_footprint", part, "this footprint was not read from a board file"))?;
+        let e = d.footprint_extras.iter_mut().find(|e| e.id == part).ok_or_else(|| fail("ops_no_board_file_footprint", part, "a footprint placed from the intent has no footprint-level paste margin; set the pads' margins"))?;
+        let before = e.tokens.clone();
+        let tag = |t: &str| t.strip_prefix('(').and_then(|r| r.split_whitespace().next()).map(str::to_string);
+        let mut set = |name: &str, aliases: &[&str], value: Option<String>| {
+            let at = e.tokens.iter().position(|t| tag(t).is_some_and(|n| n == name || aliases.contains(&n.as_str())));
+            e.tokens.retain(|t| !tag(t).is_some_and(|n| n == name || aliases.contains(&n.as_str())));
+            if let Some(v) = value {
+                e.tokens.insert(at.unwrap_or(e.tokens.len()).min(e.tokens.len()), format!("({name} {v})"));
+            }
+        };
+        set("solder_paste_margin", &[], margin.map(|m| fmt(m.as_f64() / 1_000_000.0)));
+        set("solder_paste_margin_ratio", &["solder_paste_ratio"], ratio.map(fmt));
+        if e.tokens == before {
+            return Err(fail("ops_nothing_to_change", part, "the footprint already has these paste margins"));
         }
         Ok(())
     }

@@ -280,19 +280,11 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     Ok(ParsedFootprint { footprint: fp, embedded, warnings })
 }
 
-/// The hatch pitch a zone has when its file says none (`parseZONE`'s `int hatchPitch = ZONE::GetDefaultHatchPitch()`, 0.5 mm), and the pitches
-/// `ZONE::SetBorderDisplayStyle` keeps a pitch between (`ZONE_BORDER_HATCH_MINDIST_MM`, `ZONE_BORDER_HATCH_MAXDIST_MM`, `pcbnew/zones.h`).
-const DEFAULT_HATCH_PITCH: Nm = Nm::new(500_000);
-const MIN_HATCH_PITCH: Nm = Nm::new(100_000);
-const MAX_HATCH_PITCH: Nm = Nm::new(2_000_000);
-
-/// The file uuid of each item of [`eda_model::fp_items::FootprintItems`] the reader took, in step with its list, until the items have their ids; and each zone's
-/// hatch pitch.
+/// The file uuid of each item of [`eda_model::fp_items::FootprintItems`] the reader took, in step with its list, until the items have their ids.
 #[derive(Default)]
 struct ItemsRead {
     dimensions: Vec<Option<String>>,
     zones: Vec<Option<String>>,
-    zone_pitches: Vec<Option<Nm>>,
     text_boxes: Vec<Option<String>>,
     points: Vec<Option<String>>,
     images: Vec<Option<String>>,
@@ -307,8 +299,9 @@ impl ItemsRead {
     /// footprint file's (`m_requiredVersion`). False when the form says what the item cannot hold, and the caller keeps it as the file wrote it:
     /// - the board's reader gives none (`parseDIMENSION`'s pre-6.0 form, a zone with no outline, a table whose cells are off its grid, an image that is no image),
     /// - a lock (`(locked yes)`): a library footprint has nowhere to keep one,
-    /// - a zone's fill (`(filled_polygon ..)`), its teardrop, copper thieving, per-layer settings or the arcs of its outline, which a board keeps beside the zone
-    ///   (`DrawingsSection::zone_thieving` ..) and a footprint has no place for.
+    /// - a zone's fill (`(filled_polygon ..)`), its teardrop, copper thieving, a per-layer setting the reader cannot take apart or the arcs of its outline, which a
+    ///   board keeps beside the zone (`DrawingsSection::zone_thieving` ..) and a footprint has no place for. The hatch pitch and the layers' hatch offsets
+    ///   (`(property (layer ..) (hatch_position ..))`) are the zone's own (`Zone::border_hatch_pitch`, `Zone::hatch_offsets`).
     ///
     /// A zone of a library footprint has no net (whatever `(net ..)` says: a footprint's copper zone takes the net of its pad once placed, which this editor does
     /// not model), and its uuid is kept with the others' (`LibraryFootprintKeep::uuids`), not in `Zone::uuid`; a table's too, its cells keeping theirs.
@@ -332,8 +325,6 @@ impl ItemsRead {
                 }
                 items.zones.push(eda_model::ir::Zone { net: String::new(), uuid: String::new(), ..read.zone });
                 self.zones.push(uuid);
-                // `SetBorderDisplayStyle( hatchStyle, hatchPitch, true )` clamps the pitch
-                self.zone_pitches.push(read.hatch_pitch.map(|p| p.clamp(MIN_HATCH_PITCH, MAX_HATCH_PITCH)).filter(|p| *p != DEFAULT_HATCH_PITCH));
             }
             "fp_text_box" | "gr_text_box" => {
                 let Some(t) = crate::pcb_textbox::read(child, version) else { return false };
@@ -365,7 +356,7 @@ impl ItemsRead {
         true
     }
 
-    /// Once the items have their ids: each one's uuid into `fp.kicad.uuids`, and each zone's hatch pitch that is not 0.5 mm into `fp.items.zone_hatch_pitch`.
+    /// Once the items have their ids: each one's uuid into `fp.kicad.uuids`.
     fn keep_uuids(self, fp: &mut LibraryFootprint) {
         let it = &fp.items;
         let ids = (it.dimensions.iter().map(|d| d.id.clone()).zip(self.dimensions))
@@ -376,9 +367,7 @@ impl ItemsRead {
             .chain(it.barcodes.iter().map(|b| b.id.clone()).zip(self.barcodes))
             .chain(it.tables.iter().map(|t| t.id.clone()).zip(self.tables));
         let uuids: Vec<(String, String)> = ids.filter_map(|(id, u)| Some((id, u?))).collect();
-        let pitches: Vec<(String, Nm)> = it.zones.iter().map(|z| z.id.clone()).zip(self.zone_pitches).filter_map(|(id, p)| Some((id, p?))).collect();
         fp.kicad.uuids.extend(uuids);
-        fp.items.zone_hatch_pitch.extend(pitches);
     }
 }
 

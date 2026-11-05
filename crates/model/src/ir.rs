@@ -649,7 +649,7 @@ impl SchLine {
 /// import. Scoped at the `Design` level (not per-sheet) because that is
 /// how real KiCad actually resolves them: `SCHEMATIC::GetBusAlias` searches
 /// the one project-wide list regardless of which sheet is asking.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BusAlias {
     pub name: String,
@@ -1510,6 +1510,25 @@ impl ZoneBorderStyle {
     }
 }
 
+/// `ZONE::GetDefaultHatchPitch()` (`ZONE_BORDER_HATCH_DIST_MM`, 0.5 mm): the pitch of a new zone's border hatch, the second number of `(hatch edge 0.5)`.
+pub const DEFAULT_ZONE_BORDER_HATCH_PITCH: Nm = Nm::new(500_000);
+/// `ZONE_BORDER_HATCH_MINDIST_MM` (0.1 mm): the smallest border hatch pitch (`ZONE::SetBorderDisplayStyle` clamps to it, the zone dialogs refuse less).
+pub const ZONE_BORDER_HATCH_MIN_PITCH: Nm = Nm::new(100_000);
+/// `ZONE_BORDER_HATCH_MAXDIST_MM` (2 mm): the largest border hatch pitch.
+pub const ZONE_BORDER_HATCH_MAX_PITCH: Nm = Nm::new(2_000_000);
+
+fn default_zone_border_hatch_pitch() -> Nm {
+    DEFAULT_ZONE_BORDER_HATCH_PITCH
+}
+
+fn is_default_zone_border_hatch_pitch(v: &Nm) -> bool {
+    *v == DEFAULT_ZONE_BORDER_HATCH_PITCH
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
 /// `ZONE_SETTINGS::SMOOTHING_*` (`(fill (smoothing chamfer|fillet) (radius r))`): how the
 /// zone outline's corners are rounded or cut before the fill is made. The studio's own
 /// filler does not smooth yet (`docs/parity/GAPS.md` item 13); the setting is carried so
@@ -1731,6 +1750,31 @@ pub struct Zone {
     /// `ZONE::GetHatchStyle()`: `(hatch none|edge|full ..)`. Display only.
     #[serde(default, skip_serializing_if = "ZoneBorderStyle::is_default")]
     pub border_style: ZoneBorderStyle,
+    /// `ZONE::GetBorderHatchPitch()`: the second number of `(hatch edge 0.5)`, the distance between the lines of the border hatch (`ZONE::HatchBorder`; twice
+    /// it between the full diagonals of `DIAGONAL_FULL`). Display only. Within [`ZONE_BORDER_HATCH_MIN_PITCH`]..=[`ZONE_BORDER_HATCH_MAX_PITCH`]
+    /// (`ZONE::SetBorderDisplayStyle` clamps a file's; the zone dialogs refuse a pitch outside). Additive: absent reads as KiCad's default, 0.5 mm.
+    #[serde(default = "default_zone_border_hatch_pitch", skip_serializing_if = "is_default_zone_border_hatch_pitch")]
+    #[serde(deserialize_with = "crate::units::de")]
+    pub border_hatch_pitch: Nm,
+    /// `ZONE::LayerProperties()`: the zone's own hatch offset per copper layer (`ZONE_LAYER_PROPERTIES::hatching_offset`, the Hatched Fill tab's "Hatch offset
+    /// overrides" of Zone Properties), over the board's (Board Setup > Zone Hatch Offsets). Read from and written as `(property (layer "F.Cu") (hatch_position
+    /// (xy x y)))` (`parseZoneLayerProperty`, `format( const ZONE_LAYER_PROPERTIES& )`): an offset of 0, 0 is an override too. Only the layers the zone is on
+    /// count (`ZONE::SetLayerSet` erases the others, `ZONE::Flip` moves them to the other side). Empty for a zone with none; a design imported before this was
+    /// kept holds the file's text in [`DrawingsSection::zone_layer_props`] instead, which the writer falls back to.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub hatch_offsets: std::collections::BTreeMap<String, crate::setup_pages::HatchOffset>,
+    /// How many edits since the zone was made emptied its fill, as KiCad's `ZONE::UnFill()` does (the point editor's reshape) and `ZONE::SetLayerSet` to another
+    /// set does (`unFillLocked()`, then `m_FilledPolysList.clear()`): an outline that is not a rigid motion of the one before, a layer set changed other than by
+    /// a flip. A fill (derived data beside `design.json`, `eda_kicad::zone_fills`) is the zone's only while this is the count it was made at, so an edit that
+    /// brings the zone back to the shape it was filled with does not bring the fill back (round 7 R7-Z1), and an undo, whose snapshot holds the count from
+    /// before, does (KiCad's undo copy holds the fill). Bumped by `eda_ops` after every command; never sent to the studio.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub fill_epoch: u32,
+    /// How many flips since the zone was made put it on the other side's layers: `ZONE::Flip` calls `SetLayerSet( flipped )`, which clears `m_isFilled`, then
+    /// puts the mirrored copper back with `SetFilledPolysList`. A fill made at another count is kept, moved, but the zone is not filled (`(fill yes)` is not
+    /// written), even after a second flip brings it back (R7-Z1). Bumped by `eda_ops`; never sent to the studio.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub flip_epoch: u32,
     /// `ZONE::GetCornerSmoothingType()`.
     #[serde(default, skip_serializing_if = "ZoneSmoothing::is_none")]
     pub smoothing: ZoneSmoothing,
@@ -1780,20 +1824,29 @@ impl Zone {
     }
 
     /// `ZONE::SetLayerSet`: the zone is on exactly these layers (nothing changes for an empty list). They are kept once each in the UI order and
-    /// `layer` is the first of them (`GetFirstLayer`); a set of one layer is the plain `layer`.
+    /// `layer` is the first of them (`GetFirstLayer`); a set of one layer is the plain `layer`. Another set than the zone's drops the hatch offsets of the
+    /// layers it leaves out (`std::erase_if( m_layerProperties, .. !aLayerSet.Contains( item.first ) )`).
     pub fn set_layer_set<S: AsRef<str>>(&mut self, layers: &[S]) {
         let mut set: Vec<String> = layers.iter().map(|l| l.as_ref().to_string()).collect();
         set.sort_by_key(|l| (crate::layers::ui_order_rank(l), l.clone()));
         set.dedup();
         let Some(first) = set.first() else { return };
+        if self.layer_set().into_iter().ne(set.iter().map(String::as_str)) {
+            self.hatch_offsets.retain(|l, _| set.contains(l));
+        }
         self.layer = first.clone();
         self.layers = if set.len() > 1 { set } else { Vec::new() };
     }
 
-    /// `ZONE::Flip`'s layer half: every layer of the set goes to the one `map` names.
+    /// `ZONE::Flip`'s layer half: every layer of the set goes to the one `map` names, and so does each layer's hatch offset (`layerPropertiesCopy`, then
+    /// `m_layerProperties[ FlipLayer( oldLayer ) ] = properties` after `SetLayerSet( flipped )`; a set the flip leaves as it was keeps its old entries too).
     pub fn map_layers(&mut self, map: impl Fn(&str) -> String) {
         let set: Vec<String> = self.layer_set().into_iter().map(|l| map(l)).collect();
+        let offsets = self.hatch_offsets.clone();
         self.set_layer_set(&set);
+        for (layer, offset) in offsets {
+            self.hatch_offsets.insert(map(&layer), offset);
+        }
     }
 }
 
@@ -1836,6 +1889,10 @@ impl Default for Zone {
             parent_footprint: None,
             name: String::new(),
             border_style: ZoneBorderStyle::default(),
+            border_hatch_pitch: DEFAULT_ZONE_BORDER_HATCH_PITCH,
+            hatch_offsets: std::collections::BTreeMap::new(),
+            fill_epoch: 0,
+            flip_epoch: 0,
             smoothing: ZoneSmoothing::default(),
             corner_radius: Nm::ZERO,
             placement: Default::default(),

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { leaderModeOf, zoneClick, zoneFinish, zoneLeader, zoneLoop } from "./pcbDrawZone";
+import { leaderModeOf, newZoneInitial, newZoneNet, uniqueZonePriority, zoneClick, zoneCommitPlan, zoneFinish, zoneFirstCorner, zoneLeader, zoneLoop } from "./pcbDrawZone";
+import type { BoardState } from "../api/types";
 
 test("a click on the first corner closes the zone or polygon (NewPointClosesOutline, round 4 C-4)", () => {
   const pts: [number, number][] = [[0, 0], [10, 0], [10, 10]];
@@ -52,4 +53,52 @@ test("finishing simplifies the outline: collinear and repeated corners go, the s
   assert.deepEqual(zoneFinish([[0, 0], [10, 0], [10, 0], [10, 10]], [10, 10], "direct"), [[0, 0], [10, 0], [10, 10]]);
   assert.deepEqual(zoneFinish([[5, 0], [10, 0], [10, 10], [0, 10], [0, 0]], [0, 0], "direct"), [[10, 0], [10, 10], [0, 10], [0, 0]]);
   assert.equal(zoneFinish([[0, 0], [10, 0]], [10, 0], "direct"), null, "fewer than three corners: no zone");
+});
+
+
+const defaults = { clearance: 500_000, min_thickness: 250_000, thermal_gap: 500_000, thermal_spoke_width: 500_000, pad_connection: "Thermal", priority: 0, island_removal_mode: "Always", min_island_area: 0, fill_mode: "Polygons", hatch_thickness: 1, hatch_gap: 1, hatch_orientation_mdeg: 0, hatch_smoothing_level: 0, hatch_smoothing_value: 0.1, hatch_hole_min_area: 0.15, hatch_border_algorithm: 1, is_rule_area: false, keepout_tracks: false, keepout_vias: false, keepout_pads: false, keepout_copper_pour: false, keepout_footprints: false } as const;
+const zone = (id: string, priority: number, more: Record<string, unknown> = {}) => ({ id, net: "GND", layer: "F.Cu", outline: [], teardrop: false, ...defaults, priority, ...more });
+const board = {
+  parts: [{ ref: "R1", placed: true, pads: [{ num: "1", net: "+3V3" }] }],
+  routing: { tracks: [{ id: "t1", net: "SIG", layer: "F.Cu", pts: [], width: 1 }], vias: [], zones: [zone("z0", 0), zone("z1", 1), zone("z3", 3), zone("ra", 2, { is_rule_area: true }), zone("td", 2, { teardrop: true }), zone("silk", 2, { layer: "F.SilkS" })] },
+} as unknown as BoardState;
+
+test("setUniquePriority: the first priority no copper pour holds (rule areas, teardrops and non-copper zones do not count)", () => {
+  assert.equal(uniqueZonePriority(board.routing!.zones), 2);
+  assert.equal(uniqueZonePriority([]), 0);
+});
+
+test("createNewZone's net: the highlighted net, else the first selected connected item's, else none", () => {
+  assert.equal(newZoneNet(board, ["VBUS"], ["t1"]), "VBUS");
+  assert.equal(newZoneNet(board, [], ["t1", "R1.1"]), "SIG");
+  assert.equal(newZoneNet(board, [], ["R1.1"]), "+3V3", "a pad");
+  assert.equal(newZoneNet(board, [], ["R1"]), "", "a footprint is no connected item");
+  assert.equal(newZoneNet(board, [], []), "", "<no net>");
+});
+
+test("createNewZone's settings: the drawing layer alone, a rule area for Add Rule Area, the unique priority on copper only", () => {
+  const z = newZoneInitial(board, { layer: "B.Cu", ruleArea: false, highlighted: [], selection: ["t1"], defaults });
+  assert.deepEqual([z.net, z.layers, z.name, z.locked, z.settings.priority, z.settings.is_rule_area], ["SIG", ["B.Cu"], "", false, 2, false]);
+  const ra = newZoneInitial(board, { layer: "F.Cu", ruleArea: true, highlighted: [], selection: [], defaults });
+  assert.equal(ra.settings.is_rule_area, true);
+  assert.equal(newZoneInitial(board, { layer: "F.Cu", ruleArea: true, highlighted: ["GND"], selection: [], defaults }).net, "", "a rule area takes no net");
+  assert.equal(ra.settings.priority, 2, "a rule area on copper gets one too (`setUniquePriority` runs on the layers)");
+  assert.equal(newZoneInitial(board, { layer: "F.SilkS", ruleArea: false, highlighted: [], selection: [], defaults }).settings.priority, 0, "not on copper: the default");
+});
+
+test("the zone tool's order: Add Filled Zone and Add Rule Area ask first, the cutout, similar zone and via stitching draw at once", () => {
+  assert.equal(zoneFirstCorner(null), "ask");
+  assert.equal(zoneFirstCorner({ mode: "cutout", sourceId: "z0" }), "draw");
+  assert.equal(zoneFirstCorner({ mode: "similar", sourceId: "z0" }), "draw");
+  assert.equal(zoneFirstCorner({ mode: "stitch", sourceId: "" }), "draw");
+});
+
+test("commitZone: the drawn zone takes the dialog's settings; a cutout or similar zone its source's; no source, nothing", () => {
+  const settings = newZoneInitial(board, { layer: "F.Cu", ruleArea: false, highlighted: ["GND"], selection: [], defaults });
+  assert.deepEqual(zoneCommitPlan(null, false, settings), { kind: "add", zone: settings });
+  assert.deepEqual(zoneCommitPlan(null, false, undefined), { kind: "ask" });
+  assert.deepEqual(zoneCommitPlan({ mode: "cutout", sourceId: "z0" }, true, settings), { kind: "cutout", sourceId: "z0" });
+  assert.deepEqual(zoneCommitPlan({ mode: "similar", sourceId: "z0" }, true, undefined), { kind: "similar", sourceId: "z0" });
+  assert.deepEqual(zoneCommitPlan({ mode: "cutout", sourceId: "gone" }, false, undefined), { kind: "none" });
+  assert.deepEqual(zoneCommitPlan({ mode: "stitch", sourceId: "" }, false, undefined), { kind: "stitch" });
 });

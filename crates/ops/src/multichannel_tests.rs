@@ -364,6 +364,9 @@ fn the_placement_of_a_rule_area_is_edited_with_the_zone_and_only_a_rule_area_has
             smoothing: None,
             corner_radius: None,
             placement,
+            border_style: None,
+            border_hatch_pitch: None,
+            hatch_offsets: None,
         }
     };
     let wanted = PlacementArea { enabled: true, source_type: PlacementSourceType::ComponentClass, source: "Passives".into() };
@@ -556,6 +559,9 @@ fn repeat_layout_copies_the_other_items_on_the_layers_both_areas_have() {
             smoothing: None,
             corner_radius: None,
             placement: None,
+            border_style: None,
+            border_hatch_pitch: None,
+            hatch_offsets: None,
         };
         b.apply(&cmd).unwrap();
     }

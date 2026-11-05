@@ -1416,7 +1416,8 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
             let used = schematic_lib_ids(snapshot.schematic.as_ref(), snapshot.sheet_contents.as_ref());
             let symbol_library = follow_published(current.symbol_library, snapshot.symbol_library.as_ref(), &used);
             // The sheets' own content (`sheet_contents`) is schematic too: an edit inside a sheet is undone with the root.
-            eda_model::ir::Design { schematic: snapshot.schematic, sheet_contents: snapshot.sheet_contents, nets: snapshot.nets, symbol_library, ..current }
+            // The project's bus aliases are the schematic's too (Schematic Setup > Bus Alias Definitions, Import Sheet).
+            eda_model::ir::Design { schematic: snapshot.schematic, sheet_contents: snapshot.sheet_contents, nets: snapshot.nets, symbol_library, bus_aliases: snapshot.bus_aliases, ..current }
         }
         // GAPS.md #8: the Footprint Editor's own scope touches only
         // `footprint_library`, same reasoning `Schematic`'s own arm
@@ -1427,7 +1428,7 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
         // The Symbol Editor tab's own scope, same independence
         // `FootprintEditor`'s own arm documents.
         Some(Domain::SymbolEditor) => eda_model::ir::Design { symbol_library: snapshot.symbol_library, ..current },
-        Some(Domain::Pcb) => eda_model::ir::Design { schematic: current.schematic, sheet_contents: current.sheet_contents, nets: current.nets, footprint_library: current.footprint_library, symbol_library: current.symbol_library, ..snapshot },
+        Some(Domain::Pcb) => eda_model::ir::Design { schematic: current.schematic, sheet_contents: current.sheet_contents, nets: current.nets, footprint_library: current.footprint_library, symbol_library: current.symbol_library, bus_aliases: current.bus_aliases, ..snapshot },
     }
 }
 
@@ -1903,6 +1904,11 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetItemNet { ids, net } => format!("net-set {} --net {net}", ids.join(" ")),
         Cmd::SetZoneName { id, name } => format!("zone name {id} --name {name:?}"),
         Cmd::ReplaceShape { id, .. } => format!("shape replace {id}"),
+        Cmd::EditTextStyle { id, .. } => format!("text style {id}"),
+        Cmd::SetSolderMask { ids, solder_mask, .. } => format!("solder-mask {} {}", if *solder_mask { "on" } else { "off" }, ids.join(" ")),
+        Cmd::SetCornerRadius { ids, radius } => format!("shape corner-radius {} {}", mm(*radius), ids.join(" ")),
+        Cmd::SetViaProps { id, .. } => format!("via props {id}"),
+        Cmd::SetFootprintPasteMargin { part, .. } => format!("footprint paste-margin {part}"),
         Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => {
             let mut what: Vec<&str> = Vec::new();
             if reference.is_some() {
@@ -1979,6 +1985,11 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::ClearErcExclusions => "schematic erc-unexclude --all".to_string(),
         Cmd::SetConnectionGrid { mils } => format!("schematic connection-grid {mils}"),
         Cmd::SetIntersheetRefs { settings } => format!("schematic intersheet-refs {}", if settings.show { "shown" } else { "hidden" }),
+        Cmd::SetSchFormatting { .. } => "schematic setup formatting".to_string(),
+        Cmd::SetAnnotationSettings { .. } => "schematic setup annotation".to_string(),
+        Cmd::SetFieldNameTemplates { fields } => format!("schematic setup field-name-templates ({})", fields.len()),
+        Cmd::SetBomPresets { .. } => "schematic setup bom-presets".to_string(),
+        Cmd::SetBusAliases { aliases } => format!("schematic setup bus-aliases ({})", aliases.len()),
         Cmd::SetSimulator { workbook, .. } => format!("schematic simulator{}", if workbook.is_some() { " (workbook)" } else { "" }),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteLabel { id } => format!("schematic delete-label {id}"),
@@ -2229,6 +2240,11 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetItemNet { .. } => "net-set",
         Cmd::SetZoneName { .. } => "zone",
         Cmd::ReplaceShape { .. } => "shape",
+        Cmd::EditTextStyle { .. } => "text",
+        Cmd::SetSolderMask { .. } => "solder-mask",
+        Cmd::SetCornerRadius { .. } => "shape",
+        Cmd::SetViaProps { .. } => "via",
+        Cmd::SetFootprintPasteMargin { .. } => "footprint",
         Cmd::EditBoardFootprint { .. } => "footprint-edit",
         Cmd::EditBoardField { .. } => "field-edit",
         Cmd::EditBoardPad { .. } => "pad-edit",
@@ -2261,6 +2277,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
         Cmd::SetConnectionGrid { .. } => "schematic-connection-grid",
         Cmd::SetIntersheetRefs { .. } => "schematic-intersheet-refs",
+        Cmd::SetSchFormatting { .. } | Cmd::SetAnnotationSettings { .. } | Cmd::SetFieldNameTemplates { .. } | Cmd::SetBomPresets { .. } | Cmd::SetBusAliases { .. } => "schematic-setup",
         Cmd::SetSimulator { .. } => "schematic-simulator",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
@@ -3980,7 +3997,7 @@ pub(crate) mod tests {
         assert_eq!(count(&dir, "track_width"), 0);
 
         // Violation Severity: the clearance check turned off reports nothing, whatever the rules.
-        let tight = eda_model::rules::NetClassSettings { default: eda_model::NetClass { clearance: Some(mm(0.3)), ..defaults.default.clone() }, classes: vec![] };
+        let tight = eda_model::rules::NetClassSettings { default: eda_model::NetClass { clearance: Some(mm(0.3)), ..defaults.default.clone() }, classes: vec![], schematic: Default::default() };
         step(&dir, Cmd::SetNetClasses { settings: tight }, false, "ui").unwrap();
         assert!(count(&dir, "clearance") >= 1);
         step(&dir, Cmd::SetRuleSeverities { severities: [("clearance".to_string(), "ignore".to_string())].into() }, false, "ui").unwrap();

@@ -11,10 +11,16 @@
 // dialog asks it what it would do first (`POST /api/sch/annotate`, nothing written) so the message window shows it, then sends the `annotate` verb --
 // one undo step -- when there is something to change. Not here: the "Clear Annotation" button -- this design names a part by its reference, so
 // two symbols cannot both be `R?`; "Reset existing annotations" numbers again at once.
-import { useEffect, useState } from "react";
+//
+// The order, the numbering and the start number are the project's (Schematic Setup > Annotation, `SCHEMATIC_SETTINGS::m_Annotate*`): the dialog starts from them
+// (`TransferDataToWindow`) and, when it closes with others, leaves them there (`~DIALOG_ANNOTATE`, which marks the schematic modified) -- one undoable
+// `set_annotation_settings` that keeps the project's unit notation and reference reuse.
+import { useEffect, useRef, useState } from "react";
+import { fetchSchSetup } from "../api/client";
 import { fetchAnnotateReport } from "../api/hierarchyClient";
+import type { SchSetupReply } from "../api/types";
 import type { AnnotateMessage } from "../api/hierarchyTypes";
-import { annotateCmd, annotateRequest, annotateSelectionOf, rememberAnnotateSettings, rememberedAnnotateSettings, scopeOnOpen, type AnnotateSelection, type AnnotateSettings } from "../kicad-port/schAnnotate";
+import { annotateCmd, annotateRequest, annotateSelectionOf, rememberAnnotateSettings, rememberedAnnotateSettings, scopeOnOpen, startNumber, type AnnotateSelection, type AnnotateSettings } from "../kicad-port/schAnnotate";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 
 const severityColor: Record<AnnotateMessage["severity"], string> = { action: "var(--chrome-text)", warning: "#d4a017", error: "#e5484d" };
@@ -31,15 +37,40 @@ export function AnnotateDialog() {
   const [messages, setMessages] = useState<AnnotateMessage[]>([]);
   const [busy, setBusy] = useState(false);
 
+  // the project's annotation settings as the dialog found them
+  const project = useRef<SchSetupReply | null>(null);
   useEffect(() => {
     if (!open) return;
     setSettings({ ...rememberedAnnotateSettings(), scope: scopeOnOpen(rememberedAnnotateSettings().scope, selection) });
     setMessages([]);
+    project.current = null;
+    void fetchSchSetup()
+      .then((r) => {
+        if (!r.ok) return;
+        project.current = r;
+        const a = r.annotation;
+        setSettings((s) => {
+          const next: AnnotateSettings = { ...s, sort: a.sort_order === 1 ? "y" : "x", algo: a.method === 1 ? "sheet_x100" : a.method === 2 ? "sheet_x1000" : "first_free", start: String(a.start_num) };
+          rememberAnnotateSettings(next);
+          return next;
+        });
+      })
+      .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   if (!open) return null;
-  const close = () => dispatch({ type: "SET_ANNOTATE_DIALOG_OPEN", open: false });
+  const close = () => {
+    dispatch({ type: "SET_ANNOTATE_DIALOG_OPEN", open: false });
+    // `~DIALOG_ANNOTATE`: the order, numbering and start number go back into the project when they changed
+    const p = project.current;
+    if (!p) return;
+    const sort_order = settings.sort === "y" ? 1 : 0;
+    const method = settings.algo === "sheet_x100" ? 1 : settings.algo === "sheet_x1000" ? 2 : 0;
+    const start_num = startNumber(settings.start);
+    if (sort_order === p.annotation.sort_order && method === p.annotation.method && start_num === p.annotation.start_num) return;
+    void api.cmd({ op: "set_annotation_settings", settings: { ...p.annotation, sort_order, method, start_num }, subpart_first_id: p.subpart_first_id, subpart_id_separator: p.subpart_id_separator });
+  };
   const update = (patch: Partial<AnnotateSettings>) =>
     setSettings((s) => {
       const next = { ...s, ...patch };

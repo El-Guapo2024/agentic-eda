@@ -1,0 +1,15 @@
+# The board web/studio/e2e/sim-model.check.js runs on (UI-LEFT M1, the Simulation Model dialog's built-in models and IBIS): an RC (R1 1k, C1 1u) with
+# a diode across C1 (`Device:D`, its library symbol's Sim.Device D and Sim.Pins "1=K 2=A"), driven by a DC source (`Simulation_SPICE:VDC`, 5 V), and
+# a second diode D2 the check gives an IBIS model of web/studio/e2e/sim-model-io.ibs (tools/run-all-checks.sh copies it into the board folder as
+# models/io.ibs, and sim-model-diode.lib as models/diode.lib). `eda board new web/studio/e2e/sim-model-board.yaml -o <dir>`, then `eda board serve -C <dir>`. No ngspice is needed: the
+# netlist the check reads is kicad-cli's.
+parts:
+  - { reference: V1, value: "5", symbol: "Simulation_SPICE:VDC", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: R1, value: 1k, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: C1, value: 1u, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: D1, value: 1N4148, symbol: "Device:D", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: D2, value: IO, symbol: "Device:D", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+nets:
+  - { name: IN, pins: [V1.1, R1.1] }
+  - { name: MID, pins: [R1.2, C1.1, D1.2, D2.2] }
+  - { name: GND, pins: [V1.2, C1.2, D1.1, D2.1] }
