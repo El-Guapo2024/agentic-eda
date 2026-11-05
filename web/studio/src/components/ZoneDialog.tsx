@@ -29,8 +29,11 @@
 // The same dialog, in "edit" mode (state.zoneEditId), re-opens on an
 // existing zone's current settings and commits everything through
 // `edit_zone` alone (outline unchanged -- no point editor yet).
+//
+// The form is one for both frames (the footprint editor's `OnEditItemRequest` and its Draw Rule Area run the same `InvokeRuleAreaEditor`, `InvokeCopperZonesEditor` and
+// `InvokeNonCopperZonesEditor`): `ZoneDialog` below is the board's host of `ZoneForm`, components/footprint/FpItemDialogs.tsx the Footprint Editor's.
 import { useEffect, useMemo, useState } from "react";
-import type { Cmd, FillMode, IslandRemovalMode, PadConnection, RuleAreaFields, ZoneSettingsFields, ZoneSmoothing } from "../api/types";
+import type { Cmd, FillMode, IslandRemovalMode, PadConnection, PlacementArea, RuleAreaFields, ZoneSettingsFields, ZoneSmoothing } from "../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo } from "../state/units";
 import { fetchPlacementSources } from "../api/multichannelClient";
@@ -45,8 +48,64 @@ import { deleteCmd } from "../kicad-port/pcbConvert";
 import { rememberZoneConversion } from "../actions/pcbConvertSweep";
 import { LengthRow, lengthText, useLengthField } from "./pcbDialogKit";
 
-type ZoneFormSettings = ZoneSettingsFields & RuleAreaFields;
-const DEFAULT_FORM_SETTINGS: ZoneFormSettings = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
+export type ZoneFormSettings = ZoneSettingsFields & RuleAreaFields;
+export const DEFAULT_FORM_SETTINGS: ZoneFormSettings = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
+
+/** "Create Zone from Selection"'s Conversion Settings, as the form holds them. */
+export interface ZoneConvertChoice {
+  strategy: "centerline" | "bounding_hull";
+  gapNm: number;
+  deleteOriginals: boolean;
+}
+
+/** What the form starts from when it opens (`TransferDataToWindow`). `net` null: a new zone nothing was picked for (it starts on the first net). */
+export interface ZoneFormInit {
+  net: string | null;
+  layers: string[];
+  name: string;
+  locked: boolean;
+  settings: ZoneFormSettings;
+  conv?: ZoneConvertChoice;
+}
+
+/** What OK hands the host: the net as the dialog has it, the layer set (and its first layer), the name, the lock, the settings (a rule area's placement in them) and the conversion's choice. */
+export interface ZoneFormResult {
+  net: string;
+  layers: string[];
+  firstLayer: string;
+  name: string;
+  locked: boolean;
+  form: ZoneFormSettings;
+  convert: ZoneConvertChoice | null;
+}
+
+/** What the form needs from the editor it is open in. */
+export interface ZoneHost {
+  /** A new value opens the form afresh: `init()` is read again. */
+  openKey: string;
+  init: () => ZoneFormInit;
+  /** The placement the Placement tab starts from. */
+  placement: PlacementArea | undefined;
+  /** An existing zone: "... Properties", OK and the Delete button. */
+  editing: boolean;
+  /** `zoneDuplicate`'s dialog. */
+  duplicate: boolean;
+  /** "Create Zone / Rule Area from Selection": the Conversion Settings box. */
+  convert: boolean;
+  nets: string[];
+  copperLayers: string[];
+  optionalLayers: string[];
+  layerName: (layer: string) => string;
+  units: Parameters<typeof nmTo>[1];
+  /** Whether the editor keeps a lock for the zone (the Locked box). */
+  lockable: boolean;
+  /** The corners of the outline a new zone will have, for the line under the form. */
+  outlinePoints: number | null;
+  placementSources: () => Promise<PlacementChoices>;
+  submit: (r: ZoneFormResult) => Promise<void>;
+  remove: (() => void) | null;
+  close: () => void;
+}
 
 /** `ZONE::GetDoNotAllow*` -- task item 3's five keepout restrictions. */
 const KEEPOUT_OPTIONS: { key: Exclude<keyof RuleAreaFields, "is_rule_area" | "placement">; label: string }[] = [
@@ -97,6 +156,7 @@ function LengthInput({ valueNm, unit, onChange, disabled, testid }: { valueNm: n
 
 const SECTION: React.CSSProperties = { color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 };
 
+/** The board's dialog: a new outline's (`state.zonePending`), an existing zone's (`state.zoneEditId`), a duplicate's (`zoneDuplicate`), Create Zone from Selection's. */
 export function ZoneDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
@@ -117,6 +177,96 @@ export function ZoneDialog() {
     return [...set].sort();
   }, [state.board]);
 
+  // Create Zone / Rule Area from Selection: the dialog's "Conversion Settings" box (`DIALOG_COPPER_ZONE( ..., aConvertSettings )`; round 6 D6-2).
+  const convert = addOutline != null ? state.pcbx.zoneConvert : null;
+  const copperLayers = state.board?.layers ?? [];
+  const optionalLayers = enabledOptionalLayers(state.board?.board_rules?.layer_setup);
+  const lockedIds = state.board?.locked;
+
+  if (!open) return null;
+
+  const close = () => {
+    dispatch({ type: "SET_ZONE_PENDING", outline: null });
+    dispatch({ type: "SET_ZONE_EDIT_ID", id: null });
+    if (dupZone) dispatch({ type: "BCX", patch: { duplicateZoneId: null } });
+    dispatch({ type: "PCBX", patch: { zoneConvert: null } });
+  };
+
+  const host: ZoneHost = {
+    openKey: `${editId ?? ""}|${dupId ?? ""}`,
+    // (Re)populate whenever the dialog opens on a *different* target -- never on every render, or a mid-edit keystroke would be clobbered by
+    // this same effect re-reading the (not yet re-fetched) board.
+    init: () => {
+      if (editZone) return { net: editZone.net, layers: [...zoneLayers(editZone)], name: editZone.name ?? "", locked: !!lockedIds?.includes(editZone.id), settings: { ...editZone } };
+      // `zoneSettings << *oldZone`: the copy starts from the original's net, layers, name, lock and settings.
+      if (dupZone) return { net: dupZone.net, layers: [...zoneLayers(dupZone)], name: dupZone.name ?? "", locked: !!lockedIds?.includes(dupZone.id), settings: { ...dupZone } };
+      // `createNewZone`: the zone is on the layer the tool was started on -- a technical layer gets the non-copper dialog.
+      const fresh: ZoneFormInit = { net: null, layers: [activeLayerName(state.activeLayer, copperLayers[0] ?? "F.Cu")], name: "", locked: false, settings: { ...DEFAULT_FORM_SETTINGS, is_rule_area: state.nextZoneIsRuleArea } };
+      dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
+      if (convert) fresh.conv = { strategy: convert.strategy, gapNm: convert.gapNm, deleteOriginals: convert.deleteOriginals };
+      return fresh;
+    },
+    placement: (editZone ?? dupZone)?.placement,
+    editing: !!editZone,
+    duplicate: !!dupZone,
+    convert: !!convert,
+    nets,
+    copperLayers,
+    optionalLayers,
+    layerName: (l) => layerDisplayName(state.board?.board_rules?.layer_setup, l),
+    units,
+    lockable: true,
+    outlinePoints: addOutline ? addOutline.length : null,
+    placementSources: () => fetchPlacementSources().then((r): PlacementChoices => (r.ok ? { sheets: r.sheets, classes: r.classes, groups: r.groups } : NO_CHOICES)),
+    remove: editZone
+      ? () => {
+          api.cmd({ op: "delete_zone", id: editZone.id });
+          close();
+        }
+      : null,
+    close,
+    submit: async ({ net: effectiveNet, layers, firstLayer, name, locked, form, convert: chosen }) => {
+      const settings = form;
+      if (editZone) {
+        const cmds: Cmd[] = [{ op: "edit_zone", ...form, id: editZone.id, net: effectiveNet, layer: firstLayer, layers }];
+        if ((editZone.name ?? "") !== name && !settings.is_rule_area) cmds.push({ op: "set_zone_name", id: editZone.id, name });
+        if (!!lockedIds?.includes(editZone.id) !== locked) cmds.push({ op: "set_locked", ids: [editZone.id], locked });
+        const ok = cmds.length === 1 ? await api.cmd(cmds[0]!) : await api.cmdBatch(cmds);
+        if (ok) close();
+      } else if (addOutline) {
+        const extra = { layers, name: settings.is_rule_area ? "" : name, locked };
+        if (convert && chosen) {
+          // "Create Zone from Selection": `getPolys( m_userSettings )` with what the box holds now (nothing to convert: nothing is done), a zone with the dialog's
+          // settings for every outline, then the converted sources go -- all one undo step, as `CreatePolys` pushes one commit (round 5 B5-10): the zones join a
+          // step held open, which the removal (or a bare commit) closes.
+          rememberZoneConversion(chosen);
+          const reply = await convertPolys(convert.ids, chosen.strategy, chosen.gapNm);
+          if (!reply.ok || reply.rings.length === 0 || !state.board) {
+            close();
+            return;
+          }
+          const board = state.board;
+          for (const outline of reply.rings) await api.addZone(effectiveNet, firstLayer, outline, form, extra, "hold");
+          const deleteCmds: Cmd[] = chosen.deleteOriginals ? reply.consumed.map((id) => deleteCmd(board, id)) : [];
+          if (deleteCmds.length > 0) await api.cmdBatch(deleteCmds, "commit");
+          else await postCarry("commit");
+        } else await api.addZone(effectiveNet, firstLayer, addOutline, form, extra);
+        close();
+      } else if (dupZone) {
+        // `ZoneDuplicate`: the copy is unfilled (fills are derived here), has the dialog's settings, and -- on the same layers as the original --
+        // is offset a bit so it can be picked.
+        const sameLayers = zoneLayers(dupZone).join("|") === layers.join("|");
+        await api.addZone(effectiveNet, firstLayer, duplicatedZoneOutline(dupZone.outline, sameLayers), form, { layers, name: settings.is_rule_area ? "" : name, locked });
+        close();
+      }
+    },
+  };
+  return <ZoneForm host={host} />;
+}
+
+export function ZoneForm({ host }: { host: ZoneHost }) {
+  const units = host.units;
+  const nets = host.nets;
   // `null`: a new zone nothing was picked for (it starts on the first net); `""`: on no net (`<no net>`).
   const [net, setNet] = useState<string | null>(null);
   /** The layers checked in the list (`ZONE_SETTINGS::m_Layers`), in the order the board lists them. */
@@ -127,71 +277,45 @@ export function ZoneDialog() {
   // The Placement tab of a rule area (`DIALOG_RULE_AREA_PROPERTIES`): the sheets, component classes and groups the board offers, and what is chosen among them.
   const [sources, setSources] = useState<PlacementChoices | null>(null);
   const [placement, setPlacement] = useState<PlacementForm>(() => placementFormOf(undefined, NO_CHOICES));
-  // Create Zone / Rule Area from Selection: the dialog's "Conversion Settings" box (`DIALOG_COPPER_ZONE( ..., aConvertSettings )`; round 6 D6-2).
-  const convert = addOutline != null ? state.pcbx.zoneConvert : null;
+  const convert = host.convert;
   const [convStrategy, setConvStrategy] = useState<"centerline" | "bounding_hull">("centerline");
   const convGap = useLengthField(0);
   const [convDelete, setConvDelete] = useState(false);
+  const copperLayers = host.copperLayers;
+  const optionalLayers = host.optionalLayers;
 
-  const copperLayers = state.board?.layers ?? [];
-  const optionalLayers = enabledOptionalLayers(state.board?.board_rules?.layer_setup);
-  const lockedIds = state.board?.locked;
-
-  // (Re)populate whenever the dialog opens on a *different* target --
-  // never on every render, or a mid-edit keystroke would be clobbered by
-  // this same effect re-reading the (not yet re-fetched) board.
   useEffect(() => {
-    if (!open) return;
-    if (editZone) {
-      setNet(editZone.net);
-      setLayers([...zoneLayers(editZone)]);
-      setName(editZone.name ?? "");
-      setLocked(!!lockedIds?.includes(editZone.id));
-      setSettings({ ...editZone });
-    } else if (dupZone) {
-      // `zoneSettings << *oldZone`: the copy starts from the original's net, layers, name, lock and settings.
-      setNet(dupZone.net);
-      setLayers([...zoneLayers(dupZone)]);
-      setName(dupZone.name ?? "");
-      setLocked(!!lockedIds?.includes(dupZone.id));
-      setSettings({ ...dupZone });
-    } else {
-      // `createNewZone`: the zone is on the layer the tool was started on -- a technical layer gets the non-copper dialog.
-      setNet(null);
-      setLayers([activeLayerName(state.activeLayer, copperLayers[0] ?? "F.Cu")]);
-      setName("");
-      setLocked(false);
-      setSettings({ ...DEFAULT_FORM_SETTINGS, is_rule_area: state.nextZoneIsRuleArea });
-      dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
-      if (convert) {
-        setConvStrategy(convert.strategy);
-        convGap.setText(lengthText(convert.gapNm, units));
-        setConvDelete(convert.deleteOriginals);
-      }
+    const init = host.init();
+    setNet(init.net);
+    setLayers(init.layers);
+    setName(init.name);
+    setLocked(init.locked);
+    setSettings(init.settings);
+    if (init.conv) {
+      setConvStrategy(init.conv.strategy);
+      convGap.setText(lengthText(init.conv.gapNm, units));
+      setConvDelete(init.conv.deleteOriginals);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, editId, dupId]);
+  }, [host.openKey]);
 
   // What the Placement tab offers is read from the board when the dialog opens; the form starts from the zone's own placement once it has them.
   useEffect(() => {
-    if (!open) return;
     let live = true;
     setSources(null);
-    void fetchPlacementSources()
-      .then((r) => {
+    void host
+      .placementSources()
+      .then((found) => {
         if (!live) return;
-        const found: PlacementChoices = r.ok ? { sheets: r.sheets, classes: r.classes, groups: r.groups } : NO_CHOICES;
         setSources(found);
-        setPlacement(placementFormOf((editZone ?? dupZone)?.placement, found));
+        setPlacement(placementFormOf(host.placement, found));
       })
       .catch(() => live && setSources(NO_CHOICES));
     return () => {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, editId, dupId]);
-
-  if (!open) return null;
+  }, [host.openKey]);
 
   const kind = zoneDialogKind(settings.is_rule_area, layers);
   const choices = zoneLayerChoices(kind, copperLayers, optionalLayers);
@@ -208,12 +332,7 @@ export function ZoneDialog() {
   };
   const toggleLayer = (layer: string, on: boolean) => setLayers(orderedLayerSet(on ? [...layers, layer] : layers.filter((l) => l !== layer), listed));
 
-  const close = () => {
-    dispatch({ type: "SET_ZONE_PENDING", outline: null });
-    dispatch({ type: "SET_ZONE_EDIT_ID", id: null });
-    if (dupZone) dispatch({ type: "BCX", patch: { duplicateZoneId: null } });
-    dispatch({ type: "PCBX", patch: { zoneConvert: null } });
-  };
+  const close = host.close;
 
   // panel_zone_properties.cpp's AcceptOptions(): the one cross-field check
   // this app's backend also enforces (`ops_bad_zone`) -- caught here too
@@ -233,50 +352,18 @@ export function ZoneDialog() {
     if (!canSubmit) return;
     // The zone's net is the form's own; the settings carry the rest (a spread of the zone being edited would bring its old net and layer back over the form's).
     const form = { ...settings, ...(settings.is_rule_area ? { placement: placementOf(placement) } : {}) };
-    if (editZone) {
-      const cmds: Cmd[] = [{ op: "edit_zone", ...form, id: editZone.id, net: effectiveNet, layer: firstLayer, layers }];
-      if ((editZone.name ?? "") !== name && !settings.is_rule_area) cmds.push({ op: "set_zone_name", id: editZone.id, name });
-      if (!!lockedIds?.includes(editZone.id) !== locked) cmds.push({ op: "set_locked", ids: [editZone.id], locked });
-      const ok = cmds.length === 1 ? await api.cmd(cmds[0]!) : await api.cmdBatch(cmds);
-      if (ok) close();
-    } else if (addOutline) {
-      const extra = { layers, name: settings.is_rule_area ? "" : name, locked };
-      if (convert) {
-        // "Create Zone from Selection": `getPolys( m_userSettings )` with what the box holds now (nothing to convert: nothing is done), a zone with the dialog's
-        // settings for every outline, then the converted sources go -- all one undo step, as `CreatePolys` pushes one commit (round 5 B5-10): the zones join a
-        // step held open, which the removal (or a bare commit) closes.
-        const chosen = { strategy: convStrategy, gapNm: convGapNm ?? 0, deleteOriginals: convDelete };
-        rememberZoneConversion(chosen);
-        const reply = await convertPolys(convert.ids, chosen.strategy, chosen.gapNm);
-        if (!reply.ok || reply.rings.length === 0 || !state.board) {
-          close();
-          return;
-        }
-        const board = state.board;
-        for (const outline of reply.rings) await api.addZone(effectiveNet, firstLayer, outline, form, extra, "hold");
-        const deleteCmds: Cmd[] = chosen.deleteOriginals ? reply.consumed.map((id) => deleteCmd(board, id)) : [];
-        if (deleteCmds.length > 0) await api.cmdBatch(deleteCmds, "commit");
-        else await postCarry("commit");
-      } else await api.addZone(effectiveNet, firstLayer, addOutline, form, extra);
-      close();
-    } else if (dupZone) {
-      // `ZoneDuplicate`: the copy is unfilled (fills are derived here), has the dialog's settings, and -- on the same layers as the original --
-      // is offset a bit so it can be picked.
-      const sameLayers = zoneLayers(dupZone).join("|") === layers.join("|");
-      await api.addZone(effectiveNet, firstLayer, duplicatedZoneOutline(dupZone.outline, sameLayers), form, { layers, name: settings.is_rule_area ? "" : name, locked });
-      close();
-    }
+    await host.submit({ net: effectiveNet, layers, firstLayer, name, locked, form, convert: convert ? { strategy: convStrategy, gapNm: convGapNm ?? 0, deleteOriginals: convDelete } : null });
   };
 
   const title = convert
     ? convertZoneTitle(kind)
-    : editZone
+    : host.editing
     ? kind === "rule-area"
       ? "Rule Area Properties"
       : kind === "non-copper"
         ? "Non-copper Zone Properties"
         : "Zone Properties"
-    : dupZone
+    : host.duplicate
       ? "Zone Properties -- Duplicate Zone onto Layer"
       : kind === "rule-area"
         ? "Rule Area Properties -- New Rule Area"
@@ -336,7 +423,7 @@ export function ZoneDialog() {
             <div role="group" aria-label="Zone layers" style={{ maxHeight: 130, overflowY: "auto", border: "1px solid var(--chrome-border, #444)", padding: "2px 6px" }}>
               {listed.map((l) => (
                 <label key={l} className="filter-row" style={{ display: "block" }} data-zone-layer={l}>
-                  <input type="checkbox" data-testid={`zone-layer-${l}`} checked={layers.includes(l)} onChange={(e) => toggleLayer(l, e.target.checked)} /> {layerDisplayName(state.board?.board_rules?.layer_setup, l)}
+                  <input type="checkbox" data-testid={`zone-layer-${l}`} checked={layers.includes(l)} onChange={(e) => toggleLayer(l, e.target.checked)} /> {host.layerName(l)}
                 </label>
               ))}
             </div>
@@ -347,9 +434,11 @@ export function ZoneDialog() {
               {NO_NET_ZONE_WARNING}
             </p>
           )}
-          <label className="filter-row" style={{ display: "block", marginTop: 8 }} title="BOARD_ITEM::IsLocked() -- a locked zone is not moved or edited by the selection tools">
-            <input type="checkbox" checked={locked} onChange={(e) => setLocked(e.target.checked)} data-testid="zone-locked" /> Locked
-          </label>
+          {host.lockable && (
+            <label className="filter-row" style={{ display: "block", marginTop: 8 }} title="BOARD_ITEM::IsLocked() -- a locked zone is not moved or edited by the selection tools">
+              <input type="checkbox" checked={locked} onChange={(e) => setLocked(e.target.checked)} data-testid="zone-locked" /> Locked
+            </label>
+          )}
 
           {kind === "rule-area" ? (
             <>
@@ -565,16 +654,11 @@ export function ZoneDialog() {
             </>
           )}
 
-          {addOutline && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>{addOutline.length} point outline.</p>}
+          {host.outlinePoints != null && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>{host.outlinePoints} point outline.</p>}
         </div>
         <div className="dialog-footer">
-          {editZone && (
-            <button
-              onClick={() => {
-                api.cmd({ op: "delete_zone", id: editZone.id });
-                close();
-              }}
-            >
+          {host.remove && (
+            <button onClick={host.remove} data-testid="zone-delete">
               {settings.is_rule_area ? "Delete Rule Area" : "Delete Zone"}
             </button>
           )}
@@ -582,7 +666,7 @@ export function ZoneDialog() {
             Cancel
           </button>
           <button className="primary" disabled={!canSubmit} onClick={submit} data-testid="zone-ok">
-            {editZone || convert ? "OK" : settings.is_rule_area ? "Add Rule Area" : "Add Zone"}
+            {host.editing || convert ? "OK" : settings.is_rule_area ? "Add Rule Area" : "Add Zone"}
           </button>
         </div>
       </div>
