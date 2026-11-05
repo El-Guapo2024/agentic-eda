@@ -1627,6 +1627,41 @@ pub fn place_file_names(stem: &str, side: &str, format: &str, single_file: bool)
     }
 }
 
+/// Whether a `pcb export <kind>` run writes a folder of files (one per layer) rather than the one file its `-o` names: Gerbers and drill files
+/// always; the plots in the modes KiCad's Plot dialog uses (`DIALOG_PLOT::transferPlotParamsToJob`: SVG, PostScript and DXF `GEN_MODE::MULTI`,
+/// PDF `ALL_LAYERS_SEPARATE_FILE`), PNG always (`JOB_EXPORT_PCB_PNG::m_genMode` is `MULTI`, and `pcb export png` has no mode flag). A plot
+/// asked for as one document (`--mode-single`, `--mode-multipage`) or with no mode flag writes the one file `-o` names.
+fn pcb_dir_kind(kind: &str, args: &[String]) -> bool {
+    let has = |flag: &str| args.iter().any(|a| a == flag);
+    match kind {
+        "svg" | "ps" | "dxf" => has("--mode-multi"),
+        "pdf" => has("--mode-separate"),
+        "png" => true,
+        _ => DIR_KINDS.contains(&kind),
+    }
+}
+
+/// The netlist's extension for its `--format` (`EESCHEMA_JOBS_HANDLER::JobExportNetlist`'s `fileExt`, `FILEEXT::*NetlistFileExtension`):
+/// KiCad's and OrcadPCB2's `.net`, CadStar's `.frp`, SPICE's and the SPICE model's `.cir`, the XML's `.xml`, PADS' `.asc`, Allegro's `.txt`.
+pub fn netlist_ext(format: &str) -> &'static str {
+    match format {
+        "kicadxml" => "xml",
+        "cadstar" => "frp",
+        "spice" | "spicemodel" => "cir",
+        "pads" => "asc",
+        "allegro" => "txt",
+        _ => "net",
+    }
+}
+
+fn sch_ext_for(kind: &str, args: &[String]) -> &'static str {
+    if kind == "netlist" {
+        let format = args.iter().position(|a| a == "--format").and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or("kicadsexpr");
+        return netlist_ext(format);
+    }
+    sch_ext(kind)
+}
+
 fn sch_ext(kind: &str) -> &'static str {
     match kind {
         "netlist" => "net",
@@ -1729,18 +1764,53 @@ fn check_kind(kind: &str) -> Result<(), Vec<CheckResult>> {
 /// F.Cu,B.Cu`, `--format csv`). Returns `{ ok, engine, files }`, files
 /// relative to `root`.
 pub fn export_pcb(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
+    export_pcb_into(design, model, work, root, name, kind, args, &root.join("export").join("kicad").join(kind))
+}
+
+/// [`export_pcb`] into `out_dir` (the Plot and Generate Drill Files dialogs' "Output directory", `PCB_PLOT_PARAMS::m_outputDirectory`): a folder
+/// of files where the run writes one per layer ([`pcb_dir_kind`]), else `<out_dir>/<name>.<ext>`. The files are listed relative to `root`.
+#[allow(clippy::too_many_arguments)]
+pub fn export_pcb_into(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, kind: &str, args: &[String], out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
     check_kind(kind)?;
     // A placement file's name is decorated by the dialog's rules (`place_file_names`), so its export is its own function, whatever its format:
     // the Gerber X3 writer's `-pnp_top.gbr` / `-pnp_bottom.gbr` too, where the generic path would write `<name>.pos` (X5-4). One file of
     // both sides (KiCad's default) unless the caller asks otherwise.
     if kind == "pos" {
-        return export_pcb_placement(design, model, work, root, name, args, true);
+        return export_pcb_placement_into(design, model, work, root, name, args, true, out_dir);
     }
     let cli = need_cli()?;
     let stem = file_stem(name);
     let (pcb, _) = export_board(design, model, work, &stem)?;
-    let out_dir = root.join("export").join("kicad").join(kind);
-    run_export(&cli, "pcb", kind, args, &pcb, &out_dir, DIR_KINDS.contains(&kind), pcb_ext_for(kind, args), &stem, root)
+    run_export(&cli, "pcb", kind, args, &pcb, out_dir, pcb_dir_kind(kind, args), pcb_ext_for(kind, args), &stem, root)
+}
+
+/// The Generate Drill Files dialog's "Generate Report File..." (`DIALOG_GENDRILL::onGenReportFile`: `GenDrillReportFile( <board>-drl.rpt )`
+/// in the output folder) by kicad-cli, whose `pcb export drill --generate-report --report-path <file>` writes the report beside a set of drill
+/// files (`PCBNEW_JOBS_HANDLER::JobExportDrill`): the drill files go to a scratch folder of `work` and only the report, at `report`, is
+/// kept. `args` are the dialog's drill options (the format decides the writer, `EXCELLON_WRITER` or `GERBER_WRITER`). Returns
+/// `{ ok, engine, files }` with the report relative to `root`.
+pub fn export_drill_report(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, args: &[String], report: &Path) -> Result<Value, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let stem = file_stem(name);
+    let (pcb, _) = export_board(design, model, work, &stem)?;
+    let scratch = work.join("drill-report");
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
+    if let Some(parent) = report.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
+    }
+    let _ = std::fs::remove_file(report);
+    let mut run_args = args.to_vec();
+    run_args.extend(["--generate-report".to_string(), "--report-path".into(), report.to_string_lossy().into_owned()]);
+    let mut out_arg = scratch.to_string_lossy().into_owned();
+    out_arg.push('/');
+    let out = run_export_command(&cli, "pcb", "drill", &run_args, &pcb, &out_arg)?;
+    let _ = std::fs::remove_dir_all(&scratch);
+    if !out.status.success() || !report.is_file() {
+        return Err(fail("kicad_cli_export", "drill", format!("kicad-cli pcb export drill failed: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))));
+    }
+    let rel = report.strip_prefix(root).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| report.to_string_lossy().to_string());
+    Ok(json!({ "ok": true, "engine": format!("kicad-cli {}", cli_version(&cli)), "files": [rel] }))
 }
 
 /// `kicad-cli pcb export pos` with the names `DIALOG_GEN_FOOTPRINT_POSITION` gives its files ([`place_file_names`]): `<name>-all`, or
@@ -1749,14 +1819,19 @@ pub fn export_pcb(design: &Design, model: &ConstraintModel, work: &Path, root: &
 /// Returns `{ ok, engine, files }` as [`export_pcb`], with the runs' `log` when they said anything (the served lane's built by
 /// [`api::jobs::success_log`], since the job answers with no message on success).
 pub fn export_pcb_placement(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, args: &[String], single_file: bool) -> Result<Value, Vec<CheckResult>> {
+    export_pcb_placement_into(design, model, work, root, name, args, single_file, &root.join("export").join("kicad").join("pos"))
+}
+
+/// [`export_pcb_placement`] into `out_dir` (the dialog's "Output directory").
+#[allow(clippy::too_many_arguments)]
+pub fn export_pcb_placement_into(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, args: &[String], single_file: bool, out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
     check_kind("pos")?;
     let cli = need_cli()?;
     let stem = file_stem(name);
     let (pcb, _) = export_board(design, model, work, &stem)?;
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
     let names = place_file_names(&stem, value("--side").unwrap_or("both"), value("--format").unwrap_or("ascii"), single_file);
-    let out_dir = root.join("export").join("kicad").join("pos");
-    std::fs::create_dir_all(&out_dir).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
+    std::fs::create_dir_all(out_dir).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
     let mut files: Vec<String> = Vec::new();
     let mut served = false;
     let mut log = String::new();
@@ -1860,12 +1935,17 @@ pub fn export_specctra(design: &Design, model: &ConstraintModel, work: &Path, na
 /// `<root>/export/kicad/sch-<kind>/` (kinds: `netlist`, `bom`, `pdf`, `svg`,
 /// `dxf`, `ps`, `png`), named after the project like [`export_pcb`].
 pub fn export_sch(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
+    export_sch_into(design, model, work, root, name, kind, args, &root.join("export").join("kicad").join(format!("sch-{kind}")))
+}
+
+/// [`export_sch`] into `out_dir` (the Plot Schematic dialog's "Output directory"). A netlist is named by its `--format` ([`netlist_ext`]).
+#[allow(clippy::too_many_arguments)]
+pub fn export_sch_into(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, kind: &str, args: &[String], out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
     check_kind(kind)?;
     let cli = need_cli()?;
     let stem = file_stem(name);
     let (sch, _) = export_schematic(design, model, work, &stem)?;
-    let out_dir = root.join("export").join("kicad").join(format!("sch-{kind}"));
-    run_export(&cli, "sch", kind, args, &sch, &out_dir, SCH_DIR_KINDS.contains(&kind), sch_ext(kind), &stem, root)
+    run_export(&cli, "sch", kind, args, &sch, out_dir, SCH_DIR_KINDS.contains(&kind), sch_ext_for(kind, args), &stem, root)
 }
 
 /// kicad-cli's two netlists the simulator reads (`crates/sim`): `--format spice` (the circuit, `NETLIST_EXPORTER_SPICE` with
@@ -2569,6 +2649,57 @@ fi"#;
         let gerber = export_pcb(&design, &model, &work, &dir, "board", "pos", &args(&["--format", "gerber", "--side", "front"])).expect("the Gerber placement file");
         assert_eq!(files(&gerber), vec!["export/kicad/pos/board-pnp_top.gbr"]);
         assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), "front", "the same one-kicad-cli-run-per-file path");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// X1, X2, X3 (UI-LEFT): a plot goes into the dialog's output folder, as one file per layer in the modes KiCad's dialogs use
+    /// (`--mode-multi`, `--mode-separate`: `-o <folder>/`) or as one document (`--mode-multipage`, `--mode-single`: `-o <folder>/<name>.<ext>`);
+    /// a netlist is named by its format; the drill report is written where it is asked for, and the drill files of its run are not kept.
+    #[test]
+    fn plots_go_into_the_dialogs_folder_one_file_per_layer_or_one_document_and_the_netlist_is_named_by_its_format() {
+        let dir = board_dir("plot-into");
+        let (design, model) = empty_design();
+        let mut env = Env::take();
+        env.set(
+            "EDA_KICAD_CLI",
+            script(
+                &dir,
+                "plot.sh",
+                "out=\"\"; prev=\"\"; report=\"\"\nfor a in \"$@\"; do\n  if [ \"$prev\" = \"-o\" ]; then out=\"$a\"; fi\n  if [ \"$prev\" = \"--report-path\" ]; then report=\"$a\"; fi\n  prev=\"$a\"\ndone\necho \"$1 $2 $3 -o $out\" >> \"$FAKE_PLOT_LOG\"\ncase \"$out\" in\n  */) mkdir -p \"$out\"; echo x > \"${out}board-F_Cu.$3\"; echo x > \"${out}board-B_Cu.$3\" ;;\n  *) echo x > \"$out\" ;;\nesac\nif [ -n \"$report\" ]; then echo report > \"$report\"; fi",
+            ),
+        );
+        let log = dir.join("plot.log");
+        env.set("FAKE_PLOT_LOG", &log);
+        env.set(api::server::ENV, "0");
+        let work = dir.join("work");
+        let args = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let files = |v: &Value| v["files"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>();
+        let out = dir.join("plots");
+
+        let separate = export_pcb_into(&design, &model, &work, &dir, "board", "pdf", &args(&["--mode-separate", "--layers", "F.Cu,B.Cu"]), &out).expect("one PDF per layer");
+        assert_eq!(files(&separate), vec!["plots/board-B_Cu.pdf", "plots/board-F_Cu.pdf"]);
+        let one = export_pcb_into(&design, &model, &work, &dir, "board", "pdf", &args(&["--mode-multipage", "--layers", "F.Cu,B.Cu"]), &out.join("one")).expect("one PDF document");
+        assert_eq!(files(&one), vec!["plots/one/board.pdf"]);
+        let dxf = export_pcb_into(&design, &model, &work, &dir, "board", "dxf", &args(&["--mode-single"]), &out.join("dxf")).expect("one DXF document");
+        assert_eq!(files(&dxf), vec!["plots/dxf/board.dxf"]);
+        let svg = export_pcb_into(&design, &model, &work, &dir, "board", "svg", &args(&["--mode-multi"]), &out.join("svg")).expect("one SVG per layer");
+        assert_eq!(files(&svg), vec!["plots/svg/board-B_Cu.svg", "plots/svg/board-F_Cu.svg"]);
+        let png = export_pcb_into(&design, &model, &work, &dir, "board", "png", &args(&["--dpi", "300"]), &out.join("png")).expect("one PNG per layer");
+        assert_eq!(files(&png).len(), 2, "PNG is always a folder (no mode flag): {:?}", files(&png));
+        let lines = std::fs::read_to_string(&log).unwrap();
+        assert!(lines.contains(&format!("pcb export pdf -o {}/", out.display())) && lines.contains(&format!("-o {}", out.join("one").join("board.pdf").display())), "{lines}");
+
+        for (format, ext) in [("kicadsexpr", "net"), ("orcadpcb2", "net"), ("cadstar", "frp"), ("spice", "cir"), ("spicemodel", "cir"), ("pads", "asc"), ("allegro", "txt"), ("kicadxml", "xml")] {
+            let folder = out.join(format!("net-{format}"));
+            let net = export_sch_into(&design, &model, &work, &dir, "board", "netlist", &args(&["--format", format]), &folder).expect("the netlist");
+            assert_eq!(files(&net), vec![format!("plots/net-{format}/board.{ext}")], "{format}");
+        }
+
+        let report = out.join("drill").join("board-drl.rpt");
+        let r = export_drill_report(&design, &model, &work, &dir, "board", &args(&["--format", "excellon"]), &report).expect("the report");
+        assert_eq!(files(&r), vec!["plots/drill/board-drl.rpt"]);
+        assert_eq!(std::fs::read_dir(out.join("drill")).unwrap().count(), 1, "the report alone: its run's drill files are not kept");
+        assert!(std::fs::read_to_string(&log).unwrap().contains("pcb export drill -o"), "the report is kicad-cli's");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
