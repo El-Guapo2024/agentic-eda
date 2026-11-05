@@ -399,3 +399,58 @@ fn label_properties_keep_the_labels_own_fields_as_the_dialogs_ok_does() {
     ok(&mut b, fields_cmd("lbl_l", vec![]));
     assert!(!sch_of(&b).extras.label_fields.contains_key("lbl_l"));
 }
+
+// ------------------------------------------------------------------- the Properties panel's rows of UI-LEFT S7 (task-u1-props)
+
+#[test]
+fn set_text_attrs_keeps_a_free_texts_bold_italic_colour_and_hyperlink_and_a_labels_colour() {
+    let mut s = text_sheet();
+    s.labels.push(NetLabel { id: "lbl_l".into(), net: "A".into(), at: p(mm(5.08), Nm::ZERO), kind: LabelKind::Local });
+    let (m, d) = board(s);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let attrs = |ids_: &[&str], bold, italic, color, href: Option<&str>| SchCmd::SetTextAttrs { ids: ids(ids_), bold, italic, color, href: href.map(str::to_string) };
+    ok(&mut b, attrs(&["txt_a"], Some(true), None, Some(red()), Some(" https://kicad.org ")));
+    let a = &sch_of(&b).extras.text_attrs["txt_a"];
+    assert_eq!((a.bold, a.italic, a.color, a.href.as_deref()), (true, false, Some(red()), Some("https://kicad.org")));
+    ok(&mut b, attrs(&["lbl_l"], None, None, Some(red()), None));
+    assert_eq!(sch_of(&b).extras.text_attrs["lbl_l"].color, Some(red()));
+    // UNSPECIFIED and no hyperlink take them away, and an entry that says nothing goes.
+    ok(&mut b, attrs(&["txt_a", "lbl_l"], None, None, Some(SchColor { r: 0, g: 0, b: 0, a: 0 }), None));
+    ok(&mut b, attrs(&["txt_a"], Some(false), None, None, Some("")));
+    assert!(sch_of(&b).extras.text_attrs.is_empty(), "{:?}", sch_of(&b).extras.text_attrs);
+    assert_eq!(err(&mut b, attrs(&["lbl_l"], Some(true), None, None, None)), "ops_bad_text", "a label's bold is Label Properties'");
+    assert_eq!(err(&mut b, attrs(&["nope"], None, None, Some(red()), None)), "ops_unknown_item");
+    assert_eq!(err(&mut b, attrs(&["txt_a"], Some(false), None, None, None)), "ops_nothing_to_change");
+}
+
+#[test]
+fn set_line_ends_moves_a_wires_or_a_lines_end_and_cleans_the_sheet_up() {
+    let mut s = SchematicSection::default();
+    s.wires.push(Wire { id: "wire_a".into(), net: "N".into(), pins: vec![], pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(10.16), Nm::ZERO)], bus: false });
+    s.lines.push(SchLine { id: "sln_a".into(), pts: vec![p(Nm::ZERO, mm(5.08)), p(mm(5.08), mm(5.08))], width_nm: Nm::ZERO });
+    let (m, d) = board(s);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let ends = |id: &str, start: Option<Point>, end: Option<Point>| SchCmd::SetLineEnds { id: id.into(), start, end };
+    ok(&mut b, ends("wire_a", None, Some(p(mm(12.7), Nm::ZERO))));
+    assert_eq!(sch_of(&b).wires.iter().map(|w| w.pts.clone()).collect::<Vec<_>>(), vec![vec![p(Nm::ZERO, Nm::ZERO), p(mm(12.7), Nm::ZERO)]]);
+    ok(&mut b, ends("sln_a", Some(p(mm(1.27), mm(5.08))), None));
+    assert_eq!(sch_of(&b).lines[0].pts, vec![p(mm(1.27), mm(5.08)), p(mm(5.08), mm(5.08))]);
+    assert_eq!(err(&mut b, ends("sln_a", None, Some(p(mm(1.27), mm(5.08))))), "ops_bad_wire", "a line whose ends meet is no line");
+    assert_eq!(err(&mut b, ends("sln_a", None, None)), "ops_bad_wire");
+    assert_eq!(err(&mut b, ends("nope", Some(p(Nm::ZERO, Nm::ZERO)), None)), "ops_unknown_item");
+}
+
+#[test]
+fn set_exclude_from_pos_files_marks_every_placed_unit_of_the_reference() {
+    let mut s = SchematicSection::default();
+    let sym = |unit: u32, y: Nm| eda_model::ir::SymbolInstance { id: "U1".into(), at: p(Nm::ZERO, y), rot: 0, mirrored: false, mirror_y: false, lib_id: "Amp:Dual".into(), unit, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+    s.symbols = vec![sym(1, Nm::ZERO), sym(2, mm(10.16))];
+    let (m, d) = board(s);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    ok(&mut b, SchCmd::SetExcludeFromPosFiles { ids: ids(&["U1"]), exclude: true });
+    assert_eq!(sch_of(&b).extras.excluded_from_pos_files.iter().cloned().collect::<Vec<_>>(), ["U1", "U1#2"]);
+    assert_eq!(err(&mut b, SchCmd::SetExcludeFromPosFiles { ids: ids(&["U1"]), exclude: true }), "ops_nothing_to_change");
+    ok(&mut b, SchCmd::SetExcludeFromPosFiles { ids: ids(&["U1"]), exclude: false });
+    assert!(sch_of(&b).extras.excluded_from_pos_files.is_empty());
+    assert_eq!(err(&mut b, SchCmd::SetExcludeFromPosFiles { ids: ids(&["U9"]), exclude: true }), "ops_unknown_symbol");
+}

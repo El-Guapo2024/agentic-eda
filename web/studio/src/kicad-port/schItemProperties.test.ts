@@ -120,18 +120,36 @@ test("a symbol: where it is and how it is turned, its fields, and its attributes
   const s = sheet();
   assert.deepEqual(names(s, ["R1"]), [
     ["Basic Properties", ["Locked", "Position X", "Position Y", "Orientation", "Mirror X", "Mirror Y"]],
-    ["Fields", ["Reference", "Value", "Library Link", "Datasheet", "Footprint"]],
-    ["Attributes", ["Exclude From Simulation", "Exclude From Bill of Materials", "Exclude From Board", "Do not Populate"]],
+    ["Fields", ["Reference", "Value", "Library Link", "Library Description", "Keywords", "Datasheet", "Footprint"]],
+    ["Attributes", ["Exclude From Simulation", "Exclude From Bill of Materials", "Exclude From Board", "Exclude From Position Files", "Do not Populate"]],
+    ["Pin Display", ["Show Pin Number", "Show Pin Name", "Pin Name Position Offset"]],
   ]);
-  assert.deepEqual(names(s, ["U1"])[1], ["Fields", ["Reference", "Value", "Library Link", "Datasheet", "Footprint", "MPN"]], "an MPN, when the part has one");
+  // A field of the symbol is a row of its own (`SCH_PROPERTIES_PANEL::rebuildProperties`): a user field, when the symbol has one.
+  const u1 = s.symbols[1]!;
+  u1.fields = ["Reference", "Value", "Footprint", "Datasheet", "MPN"].map((name) => ({ name, text: name === "MPN" ? "STM32F103" : "", at: [0, 0], vertical: false, h: "left", v: "center", visible: false, id: `fld:U1:${name}`, owner: "U1" }));
+  assert.deepEqual(names(s, ["U1"])[1], ["Fields", ["Reference", "Value", "Library Link", "Library Description", "Keywords", "Datasheet", "Footprint", "MPN"]], "an MPN, when the part has one");
+  assert.equal(rowOf(s, ["U1"], "MPN")!.value, "STM32F103");
+  assert.deepEqual(edit(s, ["U1"], "MPN", "STM32F105"), [{ op: "sch_edit", verb: "edit_field", id: "fld:U1:MPN", text: "STM32F105" }]);
+  // Two symbols, one with the field: the row is there, and setting it adds the field to the other (`AddField`).
+  assert.equal(rowOf(s, ["U1", "R1"], "MPN")!.value, null);
+  assert.deepEqual(edit(s, ["U1", "R1"], "MPN", "X"), [
+    { op: "sch_edit", verb: "edit_field", id: "fld:U1:MPN", text: "X" },
+    { op: "sch_edit", verb: "add_user_field", id: "R1", name: "MPN", text: "X" },
+  ]);
+  assert.equal(rowOf(s, ["R1"], "MPN"), undefined, "R1 alone has no MPN");
 });
 
 test("a power symbol is a symbol without a mirror, a value of its own to edit, or attributes", () => {
   const s = sheet();
+  // A power symbol is a SCH_SYMBOL: KiCad lists its mirror and attributes too; here they are read-only.
   assert.deepEqual(names(s, ["#PWR01"]), [
-    ["Basic Properties", ["Locked", "Position X", "Position Y", "Orientation"]],
-    ["Fields", ["Reference", "Value", "Library Link"]],
+    ["Basic Properties", ["Locked", "Position X", "Position Y", "Orientation", "Mirror X", "Mirror Y"]],
+    ["Fields", ["Reference", "Value", "Library Link", "Library Description", "Keywords"]],
+    ["Attributes", ["Exclude From Simulation", "Exclude From Bill of Materials", "Exclude From Board", "Exclude From Position Files", "Do not Populate"]],
+    ["Pin Display", ["Show Pin Number", "Show Pin Name", "Pin Name Position Offset"]],
   ]);
+  assert.equal(rowOf(s, ["#PWR01"], "Mirror X")!.writable, false);
+  assert.equal(rowOf(s, ["#PWR01"], "Do not Populate")!.writable, false);
   assert.equal(rowOf(s, ["#PWR01"], "Value")!.value, "GND");
   assert.equal(rowOf(s, ["#PWR01"], "Value")!.writable, false);
   assert.equal(rowOf(s, ["#PWR01"], "Reference")!.writable, false);
@@ -144,7 +162,11 @@ test("wires, buses and lines: the end points, the length and the stroke", () => 
   assert.deepEqual(names(s, ["wire_bus"]), names(s, ["wire_a"]));
   assert.deepEqual(names(s, ["sln_a"]), [["Basic Properties", ["Locked", "Start X", "Start Y", "End X", "End Y", "Length", "Line Style", "Line Width", "Color"]]], "a graphic line has a line style, a wire a wire style");
   assert.equal(rowOf(s, ["wire_a"], "Length")!.value, 15_000, "the whole run: 10 mm along and 5 mm up");
-  assert.equal(rowOf(s, ["wire_a"], "Start X")!.writable, false, "an end point is dragged, not typed");
+  // `SCH_LINE::SetStartX`: an end point is typed, and goes there (set_line_ends); a locked wire's is not.
+  assert.equal(rowOf(s, ["wire_a"], "Start X")!.writable, true);
+  assert.deepEqual(edit(s, ["wire_a"], "End Y", 6_000), [{ op: "sch_edit", verb: "set_line_ends", id: "wire_a", end: { x: 10_000, y: 6_000 } }]);
+  assert.deepEqual(edit(s, ["sln_a"], "Start X", 1_000), [{ op: "sch_edit", verb: "set_line_ends", id: "sln_a", start: { x: 1_000, y: 9_000 } }]);
+  assert.equal(rowOf(s, ["wire_bus"], "Start X")!.writable, false, "the bus is locked");
 });
 
 test("a junction, a bus entry and a no-connect flag", () => {
@@ -156,16 +178,21 @@ test("a junction, a bus entry and a no-connect flag", () => {
 
 test("labels and text", () => {
   const s = sheet();
-  assert.deepEqual(names(s, ["lbl_a"]), [["Basic Properties", ["Locked"]], ["Text Properties", ["Text"]]]);
-  assert.deepEqual(names(s, ["lbl_g"]), [["Basic Properties", ["Locked", "Shape"]], ["Text Properties", ["Text"]]]);
+  assert.deepEqual(names(s, ["lbl_a"]), [["Basic Properties", ["Locked"]], ["Text Properties", ["Text", "Font", "Auto Thickness", "Italic", "Bold", "Horizontal Justification", "Vertical Justification", "Color", "Text Size"]]]);
+  assert.deepEqual(names(s, ["lbl_g"]), [["Basic Properties", ["Locked", "Shape"]], ["Text Properties", ["Text", "Font", "Auto Thickness", "Italic", "Bold", "Horizontal Justification", "Vertical Justification", "Color", "Text Size"]]]);
   assert.deepEqual(names(s, ["lbl_h"]), names(s, ["lbl_g"]));
-  assert.deepEqual(names(s, ["txt_a"]), [["Basic Properties", ["Locked"]], ["Text Properties", ["Text", "Text Size"]]]);
-  assert.deepEqual(names(s, ["shp_dir"]), [["Basic Properties", ["Locked", "Shape", "Pin length"]]], "a directive label has no text of its own");
+  assert.deepEqual(names(s, ["txt_a"]), [["Basic Properties", ["Locked"]], ["Text Properties", ["Text", "Font", "Auto Thickness", "Italic", "Bold", "Horizontal Justification", "Vertical Justification", "Color", "Hyperlink", "Text Size"]]], "a free text has a hyperlink, a label none");
+  assert.deepEqual(names(s, ["shp_dir"]), [["Basic Properties", ["Locked", "Shape", "Pin length"]], ["Text Properties", ["Font", "Auto Thickness", "Color", "Text Size"]]], "a directive label has no text of its own");
 });
 
 test("a sheet, and the shapes a sheet is drawn with", () => {
   const s = sheet();
-  assert.deepEqual(names(s, ["sheet_a"]), [["Basic Properties", ["Locked", "Sheet Name"]], ["Fields", ["Sheetfile"]]]);
+  assert.deepEqual(names(s, ["sheet_a"]), [
+    ["Basic Properties", ["Locked", "Sheet Name", "Border Width", "Border Color", "Background Color"]],
+    ["Attributes", ["Exclude From Board", "Exclude From Simulation", "Exclude From Bill of Materials", "Do not Populate"]],
+    ["Fields", ["Sheetfile", "Sheetname"]],
+  ]);
+  assert.match(rowOf(s, ["sheet_a"], "Border Width")!.note ?? "", /not kept/);
   const shape = (id: string) => Object.fromEntries(names(s, [id]))["Shape Properties"];
   assert.deepEqual(shape("shp_rect"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Width", "Height", "Corner Radius", "Line Width", "Line Style", "Line Color", "Fill", "Fill Color"]);
   assert.deepEqual(shape("shp_circle"), ["Shape", "Center X", "Center Y", "Radius", "Line Width", "Line Style", "Line Color", "Fill", "Fill Color"]);
@@ -174,19 +201,21 @@ test("a sheet, and the shapes a sheet is drawn with", () => {
   assert.deepEqual(shape("shp_poly"), ["Shape", "Line Width", "Line Style", "Line Color", "Fill", "Fill Color"]);
 });
 
-test("a text box has its text rows before its shape rows, and neither a fill nor a corner radius", () => {
+test("a text box has its margins and text rows before its shape rows, and no corner radius; its fill is read-only", () => {
   assert.deepEqual(names(sheet(), ["shp_box"]), [
     ["Basic Properties", ["Locked"]],
-    ["Text Properties", ["Text", "Italic", "Bold", "Horizontal Justification", "Vertical Justification", "Text Size"]],
-    ["Shape Properties", ["Start X", "Start Y", "End X", "End Y", "Width", "Height", "Line Width", "Line Style", "Line Color"]],
+    ["Margins", ["Margin Left", "Margin Top", "Margin Right", "Margin Bottom"]],
+    ["Text Properties", ["Text", "Font", "Auto Thickness", "Italic", "Bold", "Mirrored", "Horizontal Justification", "Vertical Justification", "Color", "Hyperlink", "Text Size"]],
+    ["Shape Properties", ["Start X", "Start Y", "End X", "End Y", "Width", "Height", "Line Width", "Line Style", "Line Color", "Fill", "Fill Color"]],
   ]);
+  assert.equal(rowOf(sheet(), ["shp_box"], "Fill")!.writable, false);
 });
 
 test("a rule area has its attributes and the polygon's look, unfilled (this editor draws it as an outline)", () => {
   assert.deepEqual(names(sheet(), ["shp_rule"]), [
     ["Basic Properties", ["Locked"]],
     ["Attributes", ["Exclude From Board", "Exclude From Simulation", "Exclude From Bill of Materials", "Do not Populate"]],
-    ["Shape Properties", ["Shape", "Line Width", "Line Style", "Line Color"]],
+    ["Shape Properties", ["Shape", "Line Width", "Line Style", "Line Color", "Fill", "Fill Color"]],
   ]);
 });
 
@@ -196,7 +225,8 @@ test("the registry has no property twice for one class", () => {
     for (const p of SCH_PROPERTIES.getProperties(type)) {
       const owner = seen.get(p.name);
       // A name two classes register (a label's Shape and a directive label's) is one row: the one the item has.
-      assert.ok(owner === undefined || p.name === "Shape", `${type}: ${p.name} from ${owner} and ${p.owner}`);
+      // So is a symbol's Unit and Body Style, which SCH_ITEM registers hidden for the library editors and SCH_SYMBOL for the sheet.
+      assert.ok(owner === undefined || p.name === "Shape" || p.name === "Unit" || p.name === "Body Style", `${type}: ${p.name} from ${owner} and ${p.owner}`);
       seen.set(p.name, p.owner);
     }
   }
@@ -236,7 +266,7 @@ test("several items: the shared value or none", () => {
   assert.equal(rowOf(s, ["R1", "U1"], "Orientation")!.value, null);
   assert.deepEqual(names(s, ["R1", "lbl_a"]), [["Basic Properties", ["Locked"]]], "a symbol and a label share the lock");
   assert.deepEqual(names(s, ["wire_a", "wire_bus"]), names(s, ["wire_a"]));
-  assert.deepEqual(names(s, ["lbl_a", "txt_a"]), [["Basic Properties", ["Locked"]], ["Text Properties", ["Text"]]], "labels and texts share the text");
+  assert.deepEqual(names(s, ["lbl_a", "txt_a"]), [["Basic Properties", ["Locked"]], ["Text Properties", ["Text", "Font", "Auto Thickness", "Italic", "Bold", "Horizontal Justification", "Vertical Justification", "Color", "Text Size"]]], "labels and texts share the text rows, but for the hyperlink");
   assert.equal(schRow(s, ["wire_a", "shp_rect"], "Wire Style", "mm"), null);
 });
 
@@ -405,7 +435,7 @@ test("an image is a SCH_BITMAP with the rows of SCH_BITMAP_DESC; its scale and s
   const rows = schGrid(s, ["img_a"], "mm").groups.map((g) => [g.caption, g.rows.map((r) => r.name)]);
   assert.deepEqual(rows.map((r) => r[0]), ["Basic Properties", "Image Properties"]);
   assert.deepEqual(rows[0]![1], ["Locked", "Position X", "Position Y"]);
-  assert.deepEqual(rows[1]![1], ["Scale", "Width", "Height"]);
+  assert.deepEqual(rows[1]![1], ["Scale", "Transform Offset X", "Transform Offset Y", "Width", "Height"]);
   // 120 px at 254 ppi are 12 mm
   const sent = (name: string, value: number) => {
     const cmds = edit(s, ["img_a"], name, value);
@@ -419,4 +449,64 @@ test("an image is a SCH_BITMAP with the rows of SCH_BITMAP_DESC; its scale and s
   assert.ok(!("data" in half.graphic.shape) && !("px" in half.graphic.shape) && !("hash" in half.graphic.shape), "no pixels and none of the state's description go back");
   assert.deepEqual(edit(s, ["img_a"], "Scale", 1), []);
   assert.deepEqual(edit(s, ["img_a"], "Position X", 51_000_000), [{ op: "sch_move", verb: "move", ids: ["img_a"], dx: 1_000_000, dy: 0 }]);
+});
+
+// ------------------------------------------------------------------------------------------------------------ the rows of UI-LEFT S7
+
+test("a symbol of several units and body styles: Unit (read-only here) and Body Style (set_body_style); the pin display is the library symbol's", () => {
+  const s = sheet();
+  s.lib_symbols["Amp:Dual"] = { graphics: [], pins: [], unit_count: 2, body_style_count: 2, unit_names: { "2": "B side" }, pin_names_hidden: true, description: "Dual op-amp", keywords: "opamp" } as never;
+  const basic = names(s, ["U2"])[0]![1];
+  assert.deepEqual(basic, ["Pin numbers", "Pin names", "Locked", "Position X", "Position Y", "Orientation", "Mirror X", "Mirror Y", "Unit", "Body Style"], "SYMBOL's rows first, as KiCad's walk puts them");
+  const unit = rowOf(s, ["U2"], "Unit")!;
+  assert.deepEqual(unit.choices, [{ label: "A", value: 1 }, { label: "B side", value: 2 }], "`GetUnitDisplayName`: the unit's name, else its letter");
+  assert.equal(unit.writable, false);
+  assert.match(unit.note ?? "", /Place Next Unit/);
+  assert.deepEqual(edit(s, ["U2"], "Body Style", "Alternate"), [{ op: "sch_edit", verb: "set_body_style", ids: ["U2"], style: 2 }]);
+  assert.equal(rowOf(s, ["U2"], "Pin names")!.value, false);
+  assert.equal(rowOf(s, ["U2"], "Pin numbers")!.writable, false);
+  assert.equal(rowOf(s, ["U2"], "Library Description")!.value, "Dual op-amp");
+  assert.equal(rowOf(s, ["U2"], "Keywords")!.value, "opamp");
+  assert.deepEqual(edit(s, ["U2"], "Exclude From Position Files", true), [{ op: "sch_edit", verb: "set_exclude_from_pos_files", ids: ["U2"], exclude: true }]);
+});
+
+test("a free text's and a label's font rows: bold, italic, colour and hyperlink are set_text_attrs, a label's size and look edit_label, its justification its spin", () => {
+  const s = sheet();
+  assert.deepEqual(edit(s, ["txt_a"], "Bold", true), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["txt_a"], bold: true }]);
+  assert.deepEqual(edit(s, ["txt_a"], "Color", "#ff0000"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["txt_a"], color: { r: 255, g: 0, b: 0, a: 255 } }]);
+  assert.deepEqual(edit(s, ["txt_a"], "Hyperlink", " https://kicad.org "), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["txt_a"], href: "https://kicad.org" }]);
+  assert.deepEqual(edit(s, ["txt_a"], "Vertical Justification", "top"), [{ op: "sch_edit", verb: "edit_text", id: "txt_a", v: "top" }]);
+  assert.equal(rowOf(s, ["txt_a"], "Font")!.value, "Default Font");
+  assert.equal(rowOf(s, ["txt_a"], "Font")!.writable, false);
+  // A label: its size and look are Label Properties', its colour its text attributes.
+  assert.equal(rowOf(s, ["lbl_a"], "Text Size")!.value, 1_270_000, "50 mil when it has none of its own");
+  assert.deepEqual(edit(s, ["lbl_a"], "Text Size", 2_000_000), [{ op: "sch_edit", verb: "edit_label", id: "lbl_a", size_nm: 2_000_000 }]);
+  assert.deepEqual(edit(s, ["lbl_a"], "Italic", true), [{ op: "sch_edit", verb: "edit_label", id: "lbl_a", italic: true }]);
+  assert.deepEqual(edit(s, ["lbl_g"], "Color", "#0000ff"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["lbl_g"], color: { r: 0, g: 0, b: 255, a: 255 } }]);
+  // `SCH_LABEL_BASE::SetSpinStyle`: left against the anchor for a label running right; right for one running left. With no spin of its own, the label runs
+  // away from the wire that ends at it (wire_a starts there and runs right: the label runs left).
+  assert.equal(rowOf(s, ["lbl_a"], "Horizontal Justification")!.value, "right");
+  s.labels[0]!.spin = "right";
+  assert.equal(rowOf(s, ["lbl_a"], "Horizontal Justification")!.value, "left");
+  assert.deepEqual(edit(s, ["lbl_a"], "Horizontal Justification", "right"), [{ op: "sch_edit", verb: "edit_label", id: "lbl_a", spin: "left" }]);
+  s.labels[0]!.spin = "up";
+  assert.deepEqual(edit(s, ["lbl_a"], "Horizontal Justification", "right"), [{ op: "sch_edit", verb: "edit_label", id: "lbl_a", spin: "bottom" }], "a vertical label stays vertical");
+  assert.equal(schEdit(s, ["lbl_a"], "Horizontal Justification", "center", "mm").ok, false, "a label is justified left or right of its anchor");
+  assert.equal(rowOf(s, ["lbl_a"], "Vertical Justification")!.writable, false);
+});
+
+test("a sheet's fields are rows: the Sheetfile is the field's text, not the root-relative key (B3-M1)", () => {
+  const s = sheet();
+  const sh = s.sheets[0]!;
+  sh.file = "power/power.kicad_sch";
+  sh.fields = [
+    { name: "Sheetname", text: "Power", at: [0, 0], vertical: false, h: "left", v: "bottom", visible: true, id: "fld:sheet_a:Sheetname", owner: "sheet_a" },
+    { name: "Sheetfile", text: "power.kicad_sch", at: [0, 0], vertical: false, h: "left", v: "top", visible: true, id: "fld:sheet_a:Sheetfile", owner: "sheet_a" },
+  ];
+  assert.equal(rowOf(s, ["sheet_a"], "Sheetfile")!.value, "power.kicad_sch");
+  assert.equal(rowOf(s, ["sheet_a"], "Sheetfile")!.writable, false, "a file in a folder of its own is not renamed here");
+  assert.deepEqual(edit(s, ["sheet_a"], "Sheetname", "Supply"), [{ op: "sch_edit", verb: "edit_sheet", id: "sheet_a", name: "Supply" }]);
+  sh.file = "power.kicad_sch";
+  assert.deepEqual(edit(s, ["sheet_a"], "Sheetfile", "supply.kicad_sch"), [{ op: "sch_edit", verb: "edit_sheet", id: "sheet_a", file: "supply.kicad_sch" }]);
+  assert.deepEqual(edit(s, ["sheet_a"], "Sheetfile", "power"), [], "the same file without its extension");
 });

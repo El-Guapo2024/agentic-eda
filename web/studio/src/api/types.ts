@@ -2556,6 +2556,9 @@ export interface LibSymbol {
   unit_names?: Record<string, string>;
   /** `LIB_SYMBOL::GetUnitCount` (`m_unitCount`); absent from a backend that does not send it, when the highest unit of a pin or graphic stands in (`unitCountOf`). */
   unit_count?: number;
+  /** `LIB_SYMBOL::GetDescription` and `GetKeyWords`. */
+  description?: string;
+  keywords?: string;
 }
 
 /** GET /api/schematic's `lib_symbols`: every distinct lib_id used on the sheet, keyed by that lib_id ("Device:R", "power:GND", ...). */
@@ -2622,6 +2625,8 @@ export interface SchematicSymbol {
   exclude_from_bom?: boolean;
   exclude_from_board?: boolean;
   exclude_from_sim?: boolean;
+  /** `SCH_SYMBOL::GetExcludedFromPosFiles` (`(in_pos_files no)`). */
+  exclude_from_pos_files?: boolean;
   /** Where its Reference, Value, ... are drawn (absent from a backend built before fields had positions: painter.ts places them by its own rule then). */
   fields?: SchField[];
   fields_autoplaced?: FieldsAutoplaced;
@@ -2731,6 +2736,8 @@ export interface SchematicLabel {
   auto_rotate?: boolean;
   /** The label's fields where `AutoplaceFields` puts them: a global label's Sheet References first, then its own (its net class, ...). */
   fields?: SchLabelField[];
+  /** The font colour (`SchExtras::text_attrs`); absent is the layer's. */
+  color?: import("./schEditTypes").SchColor | null;
 }
 
 /** One field of a label (`SCH_FIELD` of an `SCH_LABEL_BASE`), placed: `shown` is its text as drawn (a global label's Sheet References read as the pages its name is on). */
@@ -2774,6 +2781,11 @@ export interface SchematicText {
   vertical?: boolean;
   h?: "left" | "center" | "right";
   v?: "top" | "center" | "bottom";
+  /** `SchExtras::text_attrs`: bold, italic, the font colour (absent: the layer's) and the hyperlink (absent: none). */
+  bold?: boolean;
+  italic?: boolean;
+  color?: import("./schEditTypes").SchColor | null;
+  href?: string | null;
 }
 
 /** A title block as `GET /api/state` / `GET /api/schematic` report it (`TITLE_BLOCK`): `comments[0]` is KiCad's comment 1, up to nine, trailing empty ones dropped. */

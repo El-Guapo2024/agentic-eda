@@ -240,6 +240,33 @@ pub enum SchCmd {
         #[serde(default)]
         file: Option<String>,
     },
+    /// The Properties panel's text rows that no dialog verb sets (UI-LEFT S7): "Bold", "Italic", "Color" and "Hyperlink" of free texts (`EDA_TEXT::SetBold`,
+    /// `SetItalic`, `SetTextColor`, `SetHyperlink`) and the "Color" of labels, kept in `SchExtras::text_attrs` (which the reader and writer carry). A field left
+    /// out is unchanged; a colour with every channel 0 is `COLOR4D::UNSPECIFIED`; an empty hyperlink is none. A label's bold and italic are Label Properties'
+    /// (`EditLabel`), and a label has no hyperlink (`SCH_LABEL_BASE_DESC` masks it).
+    SetTextAttrs {
+        ids: Vec<String>,
+        #[serde(default)]
+        bold: Option<bool>,
+        #[serde(default)]
+        italic: Option<bool>,
+        #[serde(default)]
+        color: Option<SchColor>,
+        #[serde(default)]
+        href: Option<String>,
+    },
+    /// "Exclude From Position Files" of symbols (`SCH_SYMBOL::SetExcludedFromPosFilesProp`, `(in_pos_files no)`): every placed unit of each listed reference on the
+    /// sheet in view (`SchExtras::excluded_from_pos_files`, by the placement's key).
+    SetExcludeFromPosFiles { ids: Vec<String>, exclude: bool },
+    /// "Start X", "Start Y", "End X", "End Y" of a wire, a bus or a graphic line (`SCH_LINE::SetStartX` ..): its first and/or last point goes there, and the sheet
+    /// is cleaned up as a commit cleans it (`SCHEMATIC::CleanUp`: wires merged and split, junctions where they are needed).
+    SetLineEnds {
+        id: String,
+        #[serde(default)]
+        start: Option<Point>,
+        #[serde(default)]
+        end: Option<Point>,
+    },
     /// Wire/Bus, Line and Junction Properties (`DIALOG_WIRE_BUS_PROPERTIES::TransferDataFromWindow`, `DIALOG_LINE_PROPERTIES`, `DIALOG_JUNCTION_PROPS`):
     /// the stroke of every listed wire, bus, bus entry and graphic line (`width_nm` 0 is the default width, `style`, `color`) and the diameter and colour
     /// of every listed junction (`diameter_nm` 0 is the default). A colour with every channel 0 is `COLOR4D::UNSPECIFIED`, the layer's own colour. A
@@ -296,7 +323,8 @@ impl SchCmd {
             SchCmd::AutoplaceFields { ids } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddUserField { id, .. } | SchCmd::RemoveUserField { id, .. } => vec![id.as_str()],
             SchCmd::PinHelper { pins, .. } => pins.iter().map(String::as_str).collect(),
-            SchCmd::SetStroke { ids, .. } => ids.iter().map(String::as_str).collect(),
+            SchCmd::SetStroke { ids, .. } | SchCmd::SetTextAttrs { ids, .. } | SchCmd::SetExcludeFromPosFiles { ids, .. } => ids.iter().map(String::as_str).collect(),
+            SchCmd::SetLineEnds { id, .. } => vec![id.as_str()],
             SchCmd::SwapPins { pins } | SchCmd::SwapPinLabels { pins } => pins.iter().map(String::as_str).collect(),
             SchCmd::SwapUnitLabels { ids } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddSheetPin { sheet, .. } => vec![sheet.as_str()],
@@ -335,6 +363,9 @@ impl SchCmd {
             SchCmd::EditText { id, .. } => format!("schematic edit-text {id}"),
             SchCmd::EditSheet { id, .. } => format!("schematic edit-sheet {id}"),
             SchCmd::SetStroke { ids, .. } => format!("schematic stroke {}", ids.join(" ")),
+            SchCmd::SetTextAttrs { ids, .. } => format!("schematic text-attrs {}", ids.join(" ")),
+            SchCmd::SetExcludeFromPosFiles { ids, exclude } => format!("schematic pos-files {} {}", if *exclude { "exclude" } else { "include" }, ids.join(" ")),
+            SchCmd::SetLineEnds { id, .. } => format!("schematic line-ends {id}"),
             SchCmd::SwapPins { pins } => format!("schematic swap-pins {}", pins.join(" ")),
             SchCmd::SwapPinLabels { pins } => format!("schematic swap-pin-labels {}", pins.join(" ")),
             SchCmd::SwapUnitLabels { ids } => format!("schematic swap-unit-labels {}", ids.join(" ")),
@@ -359,6 +390,9 @@ impl SchCmd {
             SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => "schematic-fields",
             SchCmd::EditSheet { .. } => "schematic-sheet",
             SchCmd::SetStroke { .. } => "schematic-stroke",
+            SchCmd::SetTextAttrs { .. } => "schematic-text",
+            SchCmd::SetExcludeFromPosFiles { .. } => "schematic-attributes",
+            SchCmd::SetLineEnds { .. } => "schematic-wire",
             SchCmd::SwapPins { .. } | SchCmd::SwapPinLabels { .. } | SchCmd::SwapUnitLabels { .. } | SchCmd::PinHelper { .. } => "schematic-pins",
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => "schematic-group",
         }
@@ -368,7 +402,7 @@ impl SchCmd {
     /// of the names of the nets drawn inside it, so those are read from the drawing like any other edit (`Cmd::edits_connectivity`).
     pub fn edits_connectivity(&self) -> bool {
         match self {
-            SchCmd::SetStroke { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => false,
+            SchCmd::SetStroke { .. } | SchCmd::SetTextAttrs { .. } | SchCmd::SetExcludeFromPosFiles { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => false,
             // a group is a set of names; it moves, joins and leaves nothing
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => false,
             // a field's text is a reference, a net or a sheet's name; its place and look are layout
@@ -444,6 +478,9 @@ impl<'a> Board<'a> {
             SchCmd::EditText { id, text, size_nm, angle, h, v } => self.edit_sch_text(id, text.as_deref(), *size_nm, *angle, *h, *v),
             SchCmd::EditSheet { id, name, file } => self.edit_sch_sheet(id, name.as_deref(), file.as_deref()),
             SchCmd::SetStroke { ids, width_nm, style, color, diameter_nm } => self.set_sch_stroke(ids, *width_nm, *style, *color, *diameter_nm),
+            SchCmd::SetTextAttrs { ids, bold, italic, color, href } => self.set_sch_text_attrs(ids, *bold, *italic, *color, href.as_deref()),
+            SchCmd::SetLineEnds { id, start, end } => self.set_sch_line_ends(id, *start, *end),
+            SchCmd::SetExcludeFromPosFiles { ids, exclude } => self.set_exclude_from_pos_files(ids, *exclude),
             SchCmd::SwapPins { pins } => self.swap_pins(pins),
             SchCmd::SwapPinLabels { pins } => self.swap_pin_labels(pins),
             SchCmd::SwapUnitLabels { ids } => self.swap_unit_labels(ids),

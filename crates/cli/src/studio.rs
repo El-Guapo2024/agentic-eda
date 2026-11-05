@@ -1957,6 +1957,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "exclude_from_bom": s.exclude_from_bom,
                 "exclude_from_board": s.exclude_from_board,
                 "exclude_from_sim": s.exclude_from_sim,
+                // `SCH_SYMBOL::GetExcludedFromPosFiles` (`SchExtras::excluded_from_pos_files`, by the placement's key).
+                "exclude_from_pos_files": sch.extras.excluded_from_pos_files.contains(&owner),
             });
             // The Value and Footprint the painter writes for a symbol that has no `fields` (a sheet read from a KiCad file), as `${NAME}` makes them read.
             if let Some(shown) = shown.as_ref().and_then(|sh| sh.symbol_shown_json(&owner)) {
@@ -2057,7 +2059,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     net_of_pin(&pin_net, &reference, &number).map(str::to_string)
                 })
             });
-            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields })
+            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields, "color": sch.extras.text_attrs.get(&l.id).and_then(|a| a.color) })
         })
         .collect();
     let texts: Vec<Value> = sch
@@ -2396,6 +2398,11 @@ pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir
         "id": t.id, "content": t.content, "at": [t.at.x, t.at.y], "angle": t.angle as f64 / 1000.0, "size_nm": t.size_nm, "vertical": vertical,
         "h": match j.h { TextJustify::Left => "left", TextJustify::Center => "center", TextJustify::Right => "right" },
         "v": match j.v { TextVAlign::Top => "top", TextVAlign::Center => "center", TextVAlign::Bottom => "bottom" },
+        // What the text's `SchExtras::text_attrs` say: bold, italic, its colour (absent: the layer's) and its hyperlink (absent: none).
+        "bold": sch.extras.text_attrs.get(&t.id).is_some_and(|a| a.bold),
+        "italic": sch.extras.text_attrs.get(&t.id).is_some_and(|a| a.italic),
+        "color": sch.extras.text_attrs.get(&t.id).and_then(|a| a.color),
+        "href": sch.extras.text_attrs.get(&t.id).and_then(|a| a.href.clone()),
     })
 }
 
@@ -2472,7 +2479,7 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
         pins.extend(a.1.iter().filter(|p| !normal.1.contains(p)).map(|p| pin(p, 2)));
     }
     // how the symbol's pins show their texts (`(pin_names (hide yes) (offset x))`, `(pin_numbers (hide yes))`)
-    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })
+    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "keywords": s.connectivity.keywords, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })
 }
 
 /// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document
