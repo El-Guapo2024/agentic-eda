@@ -218,9 +218,10 @@ pub fn export_sch_into(dir: &Path, kind: &str, args: &[String], out_dir: &Path) 
 
 /// `kicad-cli sch export bom` with the Symbol Fields Table's settings as KiCad's `BOM_PRESET` / `BOM_FMT_PRESET` JSON, into `output` (a path relative to the
 /// board directory; default `export/kicad/sch-bom/<name>.csv`): `{ ok, engine, files }`.
-pub fn export_sch_bom(dir: &Path, preset: &Value, fmt: &Value, output: Option<&Path>) -> Result<Value, Vec<CheckResult>> {
+/// `extra` are further kicad-cli arguments (a design variant's `--variant <name>`).
+pub fn export_sch_bom(dir: &Path, preset: &Value, fmt: &Value, output: Option<&Path>, extra: &[String]) -> Result<Value, Vec<CheckResult>> {
     let (design, model) = load_with_schematic(dir)?;
-    eda_kicad_engine::export_sch_bom(&design, &model, &work(dir), dir, &project_name(dir), preset, fmt, output.map(|o| dir.join(o)).as_deref())
+    eda_kicad_engine::export_sch_bom_with(&design, &model, &work(dir), dir, &project_name(dir), preset, fmt, output.map(|o| dir.join(o)).as_deref(), extra)
 }
 
 /// `kicad-cli sym export svg [args...]` on `kicad_sym` (a library file's text): `{ ok, engine, files }`, one SVG per unit.

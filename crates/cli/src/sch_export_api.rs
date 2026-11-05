@@ -94,7 +94,7 @@ pub(crate) fn bom_presets(req: &Value) -> Result<(Value, Value), String> {
     Ok((preset, fmt))
 }
 
-/// `POST /api/sch/bom`: `{spec, fmt, path?}` -- the Export tab's table settings and format, and the file to write (default `export/kicad/sch-bom/<name>.csv`).
+/// `POST /api/sch/bom`: `{spec, fmt, path?, variant?}` -- the Export tab's table settings and format, and the file to write (default `export/kicad/sch-bom/<name>.csv`).
 /// Written by `kicad-cli sch export bom` from the saved design; `{ok, files, engine, text}` with the file's text for the preview line.
 pub fn bom(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
@@ -109,7 +109,8 @@ pub fn bom(dir: &Path, body: &[u8]) -> Value {
         },
         None => None,
     };
-    with_text(dir, reply(kicad_engine::export_sch_bom(dir, &preset, &fmt, output.as_deref())))
+    // the variant the table shows (`DIALOG_SYMBOL_FIELDS_TABLE::OnExport`: the data model's current variant), `--variant` for kicad-cli
+    with_text(dir, reply(kicad_engine::export_sch_bom(dir, &preset, &fmt, output.as_deref(), &crate::fab_api::variant_args(&req))))
 }
 
 /// The text of the one file a successful export wrote, so the browser can offer it for saving.

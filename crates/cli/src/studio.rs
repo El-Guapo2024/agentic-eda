@@ -1978,6 +1978,11 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if let Some(shown) = shown.as_ref().and_then(|sh| sh.symbol_shown_json(&owner)) {
                 symbol["shown"] = shown;
             }
+            // Its records of the design variants (KiCad 25ec2335 `SCH_SYMBOL_INSTANCE::m_Variants`, `SchExtras::symbol_variants`), which the studio lays over the
+            // symbol while one is the current variant: by name, each flag it sets and each field text.
+            if let Some(records) = sch.extras.symbol_variants.get(&s.id) {
+                symbol["variants"] = json!(records);
+            }
             symbol
         })
         .collect();
@@ -2215,6 +2220,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         // the project's unit notation (the root's `SchExtras::subpart_*`, r7 H5), which the sheet draws a unit's reference by
         "subpart_id_separator": design.schematic.as_ref().and_then(|r| r.extras.subpart_id_separator),
         "subpart_first_id": design.schematic.as_ref().and_then(|r| r.extras.subpart_first_id),
+        // the design variants (KiCad 25ec2335 `SCHEMATIC::GetVariantNames` with `GetVariantDescription`), the same on every sheet
+        "variants": eda_model::variants::names(design).into_iter().map(|n| json!({ "description": design.schematic.as_ref().and_then(|r| r.extras.variants.get(&n)).cloned().unwrap_or_default(), "name": n })).collect::<Vec<_>>(),
     })
 }
 

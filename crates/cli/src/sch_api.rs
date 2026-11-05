@@ -72,7 +72,30 @@ fn staged_schematic(req: &Value, design: &eda_model::ir::Design) -> Result<(eda_
     Ok((sch, base))
 }
 
-/// `POST /api/sch/fields_table`: `{spec?, changes?, preset?}` ->
+/// The design variant the table shows (`variant`: a variant's name; absent, empty or `< Default >` is the default variant) and its staged edits (`variant_edits`,
+/// [`fields_table::VariantFieldEdit`]s), laid over the staged schematic `sch` (KiCad 25ec2335 `SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::SetCurrentVariant`: the grid
+/// shows that variant's values, the edits of every visited variant kept until Apply). Returns the variant's name and `sch` with the variant edits on it; the
+/// view the grid shows is [`eda_model::variants::resolve_section`] of it. An edit made on a later sheet path's row is an edit to the screen's symbol, shown on
+/// each of its rows, as a field edit is ([`fields_table::path_aliases`]).
+fn staged_variant(req: &Value, design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, sch: &eda_model::ir::SchematicSection) -> Result<(String, eda_model::ir::SchematicSection), String> {
+    let variant = req.get("variant").and_then(Value::as_str).map(str::trim).filter(|v| !v.eq_ignore_ascii_case(eda_model::variants::DEFAULT_VARIANT_NAME)).unwrap_or("").to_string();
+    let mut staged = sch.clone();
+    if let Some(v) = req.get("variant_edits").filter(|v| !v.is_null()) {
+        let edits: Vec<fields_table::VariantFieldEdit> = serde_json::from_value(v.clone()).map_err(|e| format!("bad variant edits: {e}"))?;
+        let aliases = fields_table::path_aliases(design);
+        let mut mapped: Vec<fields_table::VariantFieldEdit> = Vec::new();
+        for e in edits {
+            let own = aliases.get(&e.id).cloned().unwrap_or_else(|| e.id.clone());
+            for id in std::iter::once(own.clone()).chain(aliases.iter().filter(|(_, of)| **of == own).map(|(a, _)| a.clone())) {
+                mapped.push(fields_table::VariantFieldEdit { id, ..e.clone() });
+            }
+        }
+        fields_table::apply_variant_edits(&mut staged, model, &mapped)?;
+    }
+    Ok((variant, staged))
+}
+
+/// `POST /api/sch/fields_table`: `{spec?, changes?, preset?, variant?, variant_edits?}` ->
 /// `{ok, spec, presets, user_fields, rows: [{refs, flag, item_number, cells, mixed, children}]}`. `preset` is the name of one of KiCad's built-in views
 /// (`BOM_PRESET::BuiltInPresets`, `presets` lists them): it is applied to `spec` (`ApplyBomPreset`) before the table is built, and the spec that comes back is the result.
 pub fn fields_table(dir: &Path, body: &[u8]) -> Value {
@@ -95,7 +118,19 @@ pub fn fields_table(dir: &Path, body: &[u8]) -> Value {
             None => return err(format!("no built-in preset named '{name}'")),
         };
     }
-    let table = fields_table::build_table_over(&sch, &base, &model, &spec);
+    let (variant, staged) = match staged_variant(&req, &design, &model, &sch) {
+        Ok(v) => v,
+        Err(e) => return err(e),
+    };
+    let table = if variant.is_empty() {
+        fields_table::build_table_over(&staged, &base, &model, &spec)
+    } else {
+        // the variant's values, its filters (`ResolveDNP( sheet, m_currentVariant )`) and the cells it differs in from the symbols' own
+        let shown = eda_model::variants::resolve_section(&staged, &variant);
+        let mut t = fields_table::build_table_over(&shown, &eda_model::variants::resolve_section(&base, &variant), &model, &spec);
+        fields_table::mark_variant_overrides(&mut t.rows, &shown, &staged, &model, &spec);
+        t
+    };
     let presets: Vec<&str> = TableSpec::built_in().into_iter().map(|(n, _)| n).collect();
     json!({ "ok": true, "spec": spec, "presets": presets, "user_fields": fields_table::user_field_names(&sch), "rows": table.rows })
 }
@@ -121,7 +156,7 @@ fn safe_relative(path: &str) -> Result<PathBuf, String> {
     Ok(p.to_path_buf())
 }
 
-/// `POST /api/sch/bom_export`: `{spec?, fmt?, changes?, path?, preview?}`.
+/// `POST /api/sch/bom_export`: `{spec?, fmt?, changes?, path?, preview?, variant?, variant_edits?}`.
 /// `preview: true` (or no `path`) returns `{ok, text}` only
 /// (`PreviewRefresh`); otherwise writes `path` (relative to the board
 /// directory, default `export/<intent>-bom.csv`) like `OnExport`, creating
@@ -144,7 +179,12 @@ pub fn bom_export(dir: &Path, body: &[u8]) -> Value {
         Ok(f) => f,
         Err(e) => return err(e),
     };
-    let text = fields_table::export_bom_over(&sch, &base, &model, &spec, &fmt);
+    // the variant the table shows (`OnExport` exports the data model's current variant)
+    let (variant, staged) = match staged_variant(&req, &design, &model, &sch) {
+        Ok(v) => v,
+        Err(e) => return err(e),
+    };
+    let text = fields_table::export_bom_over(&eda_model::variants::resolve_section(&staged, &variant), &eda_model::variants::resolve_section(&base, &variant), &model, &spec, &fmt);
     let preview = req.get("preview").and_then(Value::as_bool).unwrap_or(false);
     let Some(path) = req.get("path").and_then(Value::as_str) else {
         let stem = PathBuf::from(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();

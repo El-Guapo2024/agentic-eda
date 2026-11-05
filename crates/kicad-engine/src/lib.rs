@@ -2008,6 +2008,12 @@ fn set_bom_presets(work: &Path, stem: &str, preset: &Value, fmt: &Value) -> Resu
 /// Returns `{ ok, engine, files }` like [`export_sch`], the one file relative to `root`.
 #[allow(clippy::too_many_arguments)]
 pub fn export_sch_bom(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, preset: &Value, fmt: &Value, output: Option<&Path>) -> Result<Value, Vec<CheckResult>> {
+    export_sch_bom_with(design, model, work, root, name, preset, fmt, output, &[])
+}
+
+/// [`export_sch_bom`] with further arguments for kicad-cli (the design variant's `--variant <name>`, KiCad 25ec2335).
+#[allow(clippy::too_many_arguments)]
+pub fn export_sch_bom_with(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, preset: &Value, fmt: &Value, output: Option<&Path>, extra: &[String]) -> Result<Value, Vec<CheckResult>> {
     let cli = need_cli()?;
     let stem = file_stem(name);
     let (sch, _) = export_schematic(design, model, work, &stem)?;
@@ -2019,7 +2025,7 @@ pub fn export_sch_bom(design: &Design, model: &ConstraintModel, work: &Path, roo
     let started = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
     let named = |v: &Value| v.get("name").and_then(Value::as_str).unwrap_or("").to_string();
     let mut cmd = cli_command(&cli, None);
-    cmd.args(["sch", "export", "bom", "--preset"]).arg(named(preset)).arg("--format-preset").arg(named(fmt)).arg("-o").arg(&output).arg(&sch);
+    cmd.args(["sch", "export", "bom", "--preset"]).arg(named(preset)).arg("--format-preset").arg(named(fmt)).args(extra).arg("-o").arg(&output).arg(&sch);
     let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
     let written = output.metadata().and_then(|m| m.modified()).is_ok_and(|t| t >= started);
     if !out.status.success() || !written {
