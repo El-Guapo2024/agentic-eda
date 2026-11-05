@@ -16,6 +16,7 @@ import type { BoardBarcode, BoardDrillChart, BoardDrillMap, BoardDrillMark, Boar
 import type { MicrowaveCmd } from "./microwaveTypes";
 import type { EmbeddedCmd } from "./embeddedTypes";
 import type { TableCmdWire } from "./tableTypes";
+import type { FootprintItemsDisplay, FootprintItemsIr, FpItemCmd } from "./fpItemTypes";
 import type { TuningPattern } from "./tuneTypes";
 import type { LineEnding } from "../kicad-port/lineEnding";
 import type { RouteSizesInfo } from "../kicad-port/routerSizes";
@@ -908,6 +909,8 @@ export interface CmdDimension {
   extension_offset: Nm;
   extension_height: Nm;
   arrow_direction: ArrowDirection;
+  /** `Dimension::text_pos`: a radial dimension's or a leader's text anchor (`SetTextPos`), as the Draw Dimension tool leaves it; absent = placed by the geometry pass. */
+  text_pos?: PointXY;
 }
 
 // ------------------------------------------------------- Footprint Editor
@@ -1048,6 +1051,10 @@ export interface LibraryFootprint extends FootprintPropertiesFields {
   /** `PAD_TOOL::InPadEditMode`: the pad being edited as graphic shapes (Edit Pad as Graphic Shapes), until Finish Pad Edit recombines it (kicad-port/padEditMode.ts). Absent when none is. */
   pad_edit?: PadEditMode | null;
   kicad?: LibraryKeep;
+  /** The dimensions, zones, text boxes, points, images, barcodes, tables and groups (`eda_model::fp_items`), as the IR has them; absent when none. */
+  items?: FootprintItemsIr;
+  /** The same items in the board's display shapes, for the board's painters (`crates/cli/src/fp_items_json.rs`); absent when none. */
+  display?: FootprintItemsDisplay;
 }
 
 /** `crates/model/src/ir.rs` `PadEditMode`: the pad flagged `ENTERED`, and what its explode set aside (the custom pad's zone option and proxy items, which the recombine gives back). */
@@ -2028,6 +2035,8 @@ export type Cmd =
   | ({ op: "sch_move" } & SchMoveCmd)
   /** The board's text boxes, reference images, points and hatch fills (crates/ops/src/pcb_items.rs) -- see api/pcbItemTypes.ts. */
   | ({ op: "pcb_item" } & PcbItemCmd)
+  /** The Footprint Editor's verbs on any item of the open footprint (`crates/ops/src/fp_items.rs`). */
+  | ({ op: "fp_item" } & FpItemCmd)
   /** The microwave tools: a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own (crates/ops/src/microwave.rs) -- see api/microwaveTypes.ts. */
   | ({ op: "microwave" } & MicrowaveCmd)
   | ({ op: "embedded" } & EmbeddedCmd)

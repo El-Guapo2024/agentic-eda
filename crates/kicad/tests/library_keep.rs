@@ -118,14 +118,18 @@ fn a_footprints_attributes_margins_net_ties_zones_points_and_groups_are_written_
     let text = export_kicad_mod(&fp);
     // `allow_soldermask_bridges` was read and never written
     assert!(text.contains("(attr smd allow_soldermask_bridges)"), "{text}");
-    for kept in ["(solder_mask_margin 0.033)", "(clearance 0.04)", "(net_tie_pad_groups \"1, 2\")", "(duplicate_pad_numbers_are_jumpers no)", "(point (at 3 3)", "(zone (net 0)", "(group \"\""] {
+    for kept in ["(solder_mask_margin 0.033)", "(clearance 0.04)", "(net_tie_pad_groups \"1, 2\")", "(duplicate_pad_numbers_are_jumpers no)", "(point (at 3 3)", "(zone (layer \"F.Cu\") (uuid \"66666666-0000-4000-8000-000000000001\")", "(group \"\""] {
         assert!(text.contains(kept), "{kept} is kept: {text}");
     }
+    // the point, the zone and the group are the footprint's items (`FootprintItems`), the zone with no net
+    assert_eq!((fp.items.points.len(), fp.items.zones.len(), fp.items.groups.len()), (1, 1, 1));
+    assert!(fp.kicad.tokens.iter().all(|t| !t.starts_with("(zone") && !t.starts_with("(point") && !t.starts_with("(group")), "{:?}", fp.kicad.tokens);
     // the group names its members by the uuids the file gave them, which are kept
-    assert!(text.contains("(uuid \"22222222-0000-4000-8000-000000000001\")") && text.contains("(uuid \"44444444-0000-4000-8000-000000000002\")"), "{text}");
+    assert!(text.contains("(members \"22222222-0000-4000-8000-000000000001\" \"44444444-0000-4000-8000-000000000002\")"), "{text}");
     let back = parse_library_footprint(&text).expect("parses back").footprint;
     assert_eq!(back.kicad.tokens, fp.kicad.tokens);
     assert_eq!(back.kicad.uuids, fp.kicad.uuids);
+    assert_eq!(back.items, fp.items);
 }
 
 #[test]

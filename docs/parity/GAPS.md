@@ -747,7 +747,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/tools/pcb_selection_tool.cpp`, `edit_tool.cpp`, `pcb_editor_conditions.cpp`, `board_inspection_tool.cpp`, `router/router_tool.cpp`.
 
 ### 17. Groups
-**Mostly done on the board (2026-10-08/09, `4c041a6`) and on the schematic sheet (2026-10-13, `task-sch-groups`, not merged); the footprint editor has none.** Hit: sometimes. Blocks: no. Package P6 (board) and P10 (schematic).
+**Mostly done on the board (2026-10-08/09, `4c041a6`) and on the schematic sheet (2026-10-13, `task-sch-groups`, not merged); the footprint editor's since 2026-11-05 (`task-u1-fpedit`, item 19).** Hit: sometimes. Blocks: no. Package P6 (board) and P10 (schematic).
 - Done: Group, Ungroup, whole-group selection, enter and leave, Add Items, Remove Items and Group Properties (`Cmd::EditGroup`); groups nest (`EDA_GROUP`; `crates/model/src/groups.rs`,
   `crates/ops/src/pcb_groups.rs`); move, rotate, flip, Delete, Duplicate, Copy and Paste take the whole tree; the entered group is drawn with its box and name; the `.kicad_pcb` file and the clipboard hold the tree.
 - Done 2026-10-10 (`task-pcb-edit-details`): items drawn, pasted, duplicated or arrayed while a group is entered join it (`BOARD_COMMIT::Push`; `Cmd::InGroup`, `crates/ops/src/pcb_groups.rs`; `PARITY-pcb.md` section 16).
@@ -758,7 +758,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-10-27 (`task-r2-pcb-edit`): a group of one is kept on import, Paste, Duplicate and Create Array; a group's lock is read back; a tuning pattern is a member both ways; a footprint's own groups are kept
   (`FootprintExtra::groups`); Group Items locks the group of a locked item and leaves pads and fields out; Group Properties has Locked and takes any library link (`LIB_ID::Parse( .., true )` never fails); text boxes,
   barcodes, images and generators are groupable.
-- Missing: what the router commits is not made in the entered group (package P5); no groups in the footprint editor; the `group` verb used by itself nests a group made of items that share a group into it (KiCad does that
+- Missing: what the router commits is not made in the entered group (package P5); the footprint editor has Group, Ungroup and Group Properties (the name) but no Enter Group, Add Items or Remove Items; the `group` verb used by itself nests a group made of items that share a group into it (KiCad does that
   only with the group entered, which the studio sends as `in_group`). (Create Array copies groups: `array.rs` uses `collect_copies`, PARITY-pcb.md section 17.) On the sheet: Reorganize into Module Sheets drops the groups of the sheets it takes items out of; a lone group's turn point counts a text or a label by its anchor; Group Properties does not take the view to a row's item; the Align and Distribute verbs are not group-aware.
 - Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp`.
 
@@ -799,13 +799,19 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   - E7-S22: Save As with Rename All opens the renamed copy; KiCad loads the typed name (probably a KiCad bug): kept as a deliberate difference. **Left (low)**
   - E7-S23: "No symbol selected." keeps a full stop; Cut / Delete / Rename on a symbol that cannot be edited do not say KiCad's words (or return silently for Rename). **Left (low)**
 - Missing: Explode and Recombine of a custom pad (item 31); a placed symbol gets a library text box as its border and fill only, not its text (the engine's `SymbolGraphic` has no text box), keeps the alternate pin function a file picked (round 5, PARITY-sch section 48) but the studio cannot choose one or draw its name; the border's colour and
-  a custom fill colour (the style is kept since the review, not edited) and Private to Symbol Editor of a library shape and text box; a plain text of a symbol and the Footprint Editor's graphics and texts have no Properties dialog (a new footprint text has its Footprint Text Properties since round 4, an existing one not yet); a footprint text has no vertical justification, italic or keep-upright; the fields table has no simulation fields; no named body styles;
+  a custom fill colour (the style is kept since the review, not edited) and Private to Symbol Editor of a library shape and text box; a plain text of a symbol has no Properties dialog (the Footprint Editor's texts, fields and graphics have theirs since UI-LEFT F1, below); a footprint text has no vertical justification, italic or keep-upright; the fields table has no simulation fields; no named body styles;
   Symbol Properties has no unit display names grid and no Pin Connections tab (both kept in the file, and the unit names in the schematic's cache since round 6); a pad's fabrication property and margins are kept, not edited, in the library Pad Properties; the board's Footprint Properties still has two mandatory rows. (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
 - Round 7 (2026-10-28, `task-r7-fp-editor`; `PARITY-fpedit.md` section 18): Pad Properties' pad type is KiCad's five (Edge Connector and SMD Aperture too) and a choice resets the layers, the hole and the number
   (`PadTypeSelected`); OK runs `padValuesOK` (warnings shown, a plated hole that reaches the pad edge applied) and makes the pad Add Pad's master with its number the last; the Pad Table's Type is `PAD::SetAttribute`;
   library Footprint Properties has "Component type:" and KiCad's attribute labels. Left (low):
   - E7-F6: switching the hole between Round and Slot puts fixed sizes in (0.8 mm, 0.6 x 1.0 mm); KiCad's `OnDrillShapeSelected` keeps the size, and its label is "Oblong".
   - E7-F7: the THT preset (`F.Mask B.Mask`) and a pad's `*.Mask` compare as different strings, so the Add Pad master shows no preset as current.
+- UI-LEFT F1 and F2 (2026-11-05, `task-u1-fpedit`; `PARITY-fpedit.md` section 20): the Footprint Editor's fields are on the canvas (drawn by the board's field painter, picked, dragged, turned, mirrored; a delete hides one) and a double click or E opens the item's
+  dialog as `FOOTPRINT_EDIT_FRAME::OnEditItemRequest` does (Footprint Reference / Value / Field / Text Properties, the shape's Properties, the new kinds' dialogs); a library footprint holds its dimensions, zones, text boxes, points, images, barcodes, tables
+  and groups as items (`LibraryFootprint::items`, read and written by the board's readers and writers, kicad-cli keeps every one) and every tool of the editor's toolbars that was dimmed runs: Mirror, Group / Ungroup, the line modes, Sketch Pads / Graphic
+  Items / Text Items, the Appearance manager, the five dimension tools, Draw Rule Area, Draw Text Box, Place Point, Draw Table, Add Barcode, Place Reference Image; Rotate turns any item about `EDIT_TOOL`'s pivot; Set Anchor moves the new items; Save As keeps
+  what is kept by item id. Every edit is one `fp_item` verb, one undo step. Left: the Properties pane (Y3); Duplicate, Create Array and the clipboard of fields and the new kinds; a footprint's barcode and image drawn as boxes; the items kept as text (a locked
+  item, a filled zone) are not drawn; the Appearance manager's presets, viewports and selection filter.
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
 
 ### 20. Schematic view controls
@@ -911,6 +917,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Missing: the hatch lines of a hatched fill (`EDA_SHAPE::UpdateHatching`; drawn as the outline); the footprint editor's model has no field for a stroke type, a hatch, a vertical justification, bold, italic or keep upright, so a
   footprint saved from the editor loses them; no verb edits a footprint's graphics on the board (the footprint editor does); the title block's variables in a footprint text; the mask-only pads (`FootprintExtra::graphics`
   with a pad number) are not written back; a library footprint's pads on the silkscreen are not read and Pad Properties has no field for a pad's technical layers; the Value and user fields are not in the 3D view.
+- UI-LEFT F2 (2026-11-05, `task-u1-fpedit`): in the Footprint Editor a library footprint's zones, dimensions, text boxes, points, images, barcodes, tables and groups are items it draws and edits (`LibraryFootprint::items`, `PARITY-fpedit.md` section 20); a
+  footprint on the board still carries them as the text of their forms (`FootprintExtra`), not drawn, and the board's Update Footprint from Library does not bring the library's items onto the board.
 - Port from: `pcbnew/footprint.cpp`, `pcbnew/pcb_shape.cpp`, `pcbnew/pcb_text.cpp`, `pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.cpp` (`format( FOOTPRINT )`), `pcb_io_kicad_sexpr_parser.cpp`
   (`parseFOOTPRINT_unchecked`), `pcbnew/pcb_painter.cpp` (`draw( FOOTPRINT )`).
 

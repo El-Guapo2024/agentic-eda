@@ -51,6 +51,31 @@ export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
   "pcbnew.InteractiveEdit.rotateCw",
   // Properties (E): `EDIT_TOOL::Properties`, a pad's Pad Properties or, with nothing selected, Footprint Properties (actions/editorFrameActions.ts).
   "pcbnew.InteractiveEdit.properties",
+  // Mirror Horizontally / Vertically (`EDIT_TOOL::Mirror`, both frames' top toolbar) -- UI-LEFT F2.
+  "pcbnew.InteractiveEdit.mirrorHoriontally",
+  "pcbnew.InteractiveEdit.mirrorVertically",
+  // The line modes (`PCB_ACTIONS::lineModeFree` / `lineMode90` / `lineMode45`): the board's `PCB_CONTROL`, the footprint editor's `FOOTPRINT_EDITOR_CONTROL::ChangeLineMode`.
+  "pcbnew.EditorControl.lineModeFree",
+  "pcbnew.EditorControl.lineModeOrthonal",
+  "pcbnew.EditorControl.lineMode45",
+  // Sketch Pads / Graphic Items / Text Items (`PCB_VIEWER_TOOLS`, both frames' left toolbar).
+  "pcbnew.Control.padDisplayMode",
+  "pcbnew.Control.graphicOutlines",
+  "pcbnew.Control.textOutlines",
+  // Show Appearance Manager (the board's right dock, the footprint editor's `FOOTPRINT_EDITOR_CONTROL::ToggleLayersManager`).
+  "pcbnew.Control.showLayersManager",
+  // `DRAWING_TOOL`'s tools for the footprint's dimensions, rule areas, text boxes, points, tables, barcodes and reference images (actions/editorFrameActions.ts, UI-LEFT F2).
+  "pcbnew.InteractiveDrawing.alignedDimension",
+  "pcbnew.InteractiveDrawing.orthogonalDimension",
+  "pcbnew.InteractiveDrawing.centerDimension",
+  "pcbnew.InteractiveDrawing.radialDimension",
+  "pcbnew.InteractiveDrawing.leader",
+  "pcbnew.InteractiveDrawing.ruleArea",
+  "pcbnew.InteractiveDrawing.textbox",
+  "pcbnew.InteractiveDrawing.placePoint",
+  "pcbnew.InteractiveDrawing.drawTable",
+  "pcbnew.InteractiveDrawing.barcode",
+  "pcbnew.InteractiveDrawing.placeReferenceImage",
 ]);
 
 /** Symbol-editor-frame-only actions (`SYMBOL_EDIT_FRAME`'s tools): enabled on the Symbol tab only. */

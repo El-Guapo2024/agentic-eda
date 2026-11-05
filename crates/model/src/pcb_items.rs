@@ -555,7 +555,7 @@ impl BoardItems {
 }
 
 /// Give the items of one kind without an id the deterministic one, taking them in the order `key` gives (not the order they were listed in).
-fn assign_ids<T, K: Ord>(items: &mut [T], prefix: &str, existing: &mut std::collections::BTreeSet<String>, id: impl Fn(&mut T) -> &mut String, seed: impl Fn(&T) -> String, key: impl Fn(&T) -> K) {
+pub(crate) fn assign_ids<T, K: Ord>(items: &mut [T], prefix: &str, existing: &mut std::collections::BTreeSet<String>, id: impl Fn(&mut T) -> &mut String, seed: impl Fn(&T) -> String, key: impl Fn(&T) -> K) {
     let mut order: Vec<usize> = (0..items.len()).collect();
     order.sort_by_key(|&i| key(&items[i]));
     for i in order {

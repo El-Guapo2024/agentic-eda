@@ -18,6 +18,8 @@ import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import { isCanvasTab, type EditorAdapter } from "./editorAdapter";
 import { getCommonOptions, setCommonOptions } from "../state/commonOptions";
 import { crossHairModeForAction } from "../kicad-port/crosshair";
+import { nextContrastMode } from "../kicad-port/appearance";
+import { fpContrastMode } from "../kicad-port/fpAppearance";
 import { LIBRARY_EDITOR_FIT_MARGIN, boxCentre, centerViewOn, setScaleAboutCentre, zoomFitBox, zoomListFor, zoomPresetScale } from "../kicad-port/zoomFit";
 import { canvasRect, emitCanvasEvent } from "./canvasEvents";
 import { registerSelectionActions } from "./commonSelectionActions";
@@ -152,9 +154,13 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   // dimmed). The Symbol Editor has no layers.
   if (tab === "pcb") m.set("common.Control.highContrastMode", () => dispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
   else if (tab === "footprint") m.set("common.Control.highContrastMode", () => ctx.fpDispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
-  // ACTIONS::highContrastModeCycle (`H`) -- PCB_CONTROL::HighContrastModeCycle: the same switch, which `useActionRunner.ts` registers for the board. In the Footprint
-  // Editor it is that editor's own; the schematic and the Symbol Editor have no layers, so it is not offered there.
-  if (tab === "footprint") m.set("common.Control.highContrastModeCycle", () => ctx.fpDispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
+  // ACTIONS::highContrastModeCycle (`H`) -- PCB_CONTROL::HighContrastModeCycle: normal -> dimmed -> hidden -> normal, which `useActionRunner.ts` registers for the board. In the
+  // Footprint Editor it is that editor's own (its Appearance manager's Inactive layers); the schematic and the Symbol Editor have no layers, so it is not offered there.
+  if (tab === "footprint")
+    m.set("common.Control.highContrastModeCycle", () => {
+      const st = ctx.fpApi.getState();
+      ctx.fpDispatch({ type: "SET_CONTRAST_MODE", mode: nextContrastMode(fpContrastMode(st.highContrast, st.contrastHidden)) });
+    });
   else if (tab === "schematic" || tab === "symbol") m.delete("common.Control.highContrastModeCycle");
 
   // PCB_ACTIONS::magneticSnapActiveLayer / magneticSnapAllLayers -- PCB_CONTROL::SnapMode: `settings.allLayers = false / true`

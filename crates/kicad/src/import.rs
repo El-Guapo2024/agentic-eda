@@ -3065,209 +3065,234 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
     let mut arc_rings = Vec::new();
     let mut layer_props = Vec::new();
     for (z, parent) in all {
-        // `SetIslandRemovalMode( ISLAND_REMOVAL_MODE::ALWAYS )` and priority 0 before parsing.
-        let mut zone = Zone { parent_footprint: parent, ..Zone::default() };
-        // `(net N)` (code) or, in newer files, `(net "name")`. Then `parseZONE`'s `legacyNetnameFromFile`: a `(net_name ..)` that is not the name of the zone's net
-        // ("Can happens which old boards, with nonexistent nets ... or after being edited by hand") puts the zone on the net of that name, a new one if the board has
-        // none (`FindNet`, else a new `NETINFO_ITEM`). The name is never converted to the new overbar notation (`overbar`), so in a file older than 20210606 a zone on
-        // `~RESET~` (net `~{RESET}`) is on a new net `~RESET~` of its own, as kicad-cli 10.99.0's upgrade of such a file has it.
-        if let Some(n) = sexpr::find(z, "net") {
-            zone.net = net_of(n, net_names);
-        }
-        if let Some(name) = sexpr::find(z, "net_name").and_then(|n| sexpr::txt(n, 1)).filter(|name| !name.is_empty() && *name != zone.net) {
-            zone.net = name.to_string();
-        }
-        // `T_layer` (a zone on one layer) and `T_layers` (`parseBoardItemLayersAsMask`: the wildcards `*.Cu`, `F&B.Cu` and `*.Mask` stand for the layers they name).
-        let mut names: Vec<&str> = Vec::new();
-        if let Some(l) = sexpr::find(z, "layer") {
-            names.extend(sexpr::txt(l, 1));
-        }
-        if let Some(l) = sexpr::find(z, "layers") {
-            names.extend((1..l.len()).filter_map(|i| sexpr::txt(l, i)));
-        }
-        let mut layers: Vec<String> = expand_layer_names(&names, copper_layers);
-        if let Some(p) = sexpr::find(z, "priority") {
-            zone.priority = sexpr::num(p, 1).unwrap_or(0.0).max(0.0) as u32;
-        }
-        // `(name "..")` and `(hatch none|edge|full <pitch>)`; an absent `hatch` is `NO_HATCH` in the parser.
-        if let Some(n) = sexpr::find(z, "name") {
-            zone.name = sexpr::txt(n, 1).unwrap_or("").to_string();
-        }
-        zone.border_style = match sexpr::find(z, "hatch").and_then(|h| sexpr::txt(h, 1)) {
-            Some("edge") => eda_model::ir::ZoneBorderStyle::Edge,
-            Some("full") => eda_model::ir::ZoneBorderStyle::Full,
-            _ => eda_model::ir::ZoneBorderStyle::None,
-        };
-        // The pitch (`hatchPitch = parseBoardUnits( "hatch pitch" )`, `ZONE::GetDefaultHatchPitch()` when there is no `(hatch ..)`); clamped once the corners
-        // are read (`SetBorderDisplayStyle( hatchStyle, hatchPitch, true )` for a zone of more than two corners), below.
-        zone.border_hatch_pitch = sexpr::find(z, "hatch").and_then(|h| sexpr::num(h, 2)).map(mm_to_nm).unwrap_or(eda_model::ir::DEFAULT_ZONE_BORDER_HATCH_PITCH);
-        if let Some(cp) = sexpr::find(z, "connect_pads") {
-            match sexpr::txt(cp, 1) {
-                Some("yes") => zone.pad_connection = PadConnection::Full,
-                Some("no") => zone.pad_connection = PadConnection::None,
-                Some("thru_hole_only") => zone.pad_connection = PadConnection::ThtThermal,
-                _ => {}
-            }
-            if let Some(c) = sexpr::find(cp, "clearance").and_then(|c| sexpr::num(c, 1)) {
-                zone.clearance = mm_to_nm(c);
-            }
-        }
-        if let Some(t) = sexpr::find(z, "min_thickness").and_then(|t| sexpr::num(t, 1)) {
-            zone.min_thickness = mm_to_nm(t);
-        }
-        if let Some(f) = sexpr::find(z, "fill") {
-            if let Some(m) = sexpr::find(f, "mode") {
-                if sexpr::txt(m, 1) == Some("hatch") {
-                    zone.fill_mode = FillMode::HatchPattern;
-                }
-            }
-            let um = |k: &str| sexpr::find(f, k).and_then(|v| sexpr::num(v, 1)).map(mm_to_nm);
-            let raw = |k: &str| sexpr::find(f, k).and_then(|v| sexpr::num(v, 1));
-            if let Some(v) = um("hatch_thickness") {
-                zone.hatch_thickness = v;
-            }
-            if let Some(v) = um("hatch_gap") {
-                zone.hatch_gap = v;
-            }
-            if let Some(v) = raw("hatch_orientation") {
-                zone.hatch_orientation_mdeg = ((v * 1000.0).round() as i64).rem_euclid(360_000) as _;
-            }
-            if let Some(v) = raw("hatch_smoothing_level") {
-                zone.hatch_smoothing_level = v as i32;
-            }
-            if let Some(v) = raw("hatch_smoothing_value") {
-                zone.hatch_smoothing_value = v;
-            }
-            if let Some(v) = raw("hatch_min_hole_area") {
-                zone.hatch_hole_min_area = v;
-            }
-            // `(hatch_border_algorithm hatch_thickness|min_thickness)`: which width the hatch border is drawn with.
-            match sexpr::find(f, "hatch_border_algorithm").and_then(|v| sexpr::txt(v, 1)) {
-                Some("hatch_thickness") => zone.hatch_border_algorithm = 1,
-                Some("min_thickness") => zone.hatch_border_algorithm = 0,
-                _ => {}
-            }
-            if let Some(v) = um("thermal_gap") {
-                zone.thermal_gap = v;
-            }
-            if let Some(v) = um("thermal_bridge_width") {
-                zone.thermal_spoke_width = v;
-            }
-            if let Some(v) = raw("island_removal_mode") {
-                zone.island_removal_mode = match v as i64 {
-                    1 => IslandRemovalMode::Never,
-                    2 => IslandRemovalMode::Area,
-                    _ => IslandRemovalMode::Always,
-                };
-            }
-            // `parseBoardUnits( T_island_area_min ) * pcbIUScale.IU_PER_MM`: mm^2 in the file, nm^2 here.
-            if let Some(v) = raw("island_area_min") {
-                zone.min_island_area = mm_to_nm(v).get() * eda_model::units::NM_PER_MM;
-            }
-            // `(smoothing none|chamfer|fillet)` and `(radius r)`; both are ignored for a rule area (`parseZONE`).
-            let smoothing = sexpr::find(f, "smoothing").and_then(|v| sexpr::txt(v, 1));
-            let radius = um("radius");
-            if sexpr::find(z, "keepout").is_none() && sexpr::find(z, "placement").is_none() {
-                zone.smoothing = match smoothing {
-                    Some("chamfer") => eda_model::ir::ZoneSmoothing::Chamfer,
-                    Some("fillet") => eda_model::ir::ZoneSmoothing::Fillet,
-                    _ => eda_model::ir::ZoneSmoothing::None,
-                };
-                zone.corner_radius = radius.unwrap_or(Nm::ZERO);
-            }
-        }
-        // The keepout flags start as `ZONE::ZONE` gives them, from `ZONE_SETTINGS::ZONE_SETTINGS` (`ExportSetting`): tracks, vias and pads kept out, copper pours and
-        // footprints allowed. `case T_keepout` then sets pads and footprints allowed ("Initialize these two because their tokens won't appear in older files") and each
-        // flag the block names; one it does not name keeps its default. So a rule area made by `(placement ..)` alone (QA `vme-wren`) keeps out tracks, vias and pads.
-        if sexpr::find(z, "keepout").is_some() || sexpr::find(z, "placement").is_some() {
-            (zone.keepout_tracks, zone.keepout_vias, zone.keepout_pads, zone.keepout_copper_pour, zone.keepout_footprints) = (true, true, true, false, false);
-        }
-        if let Some(k) = sexpr::find(z, "keepout") {
-            zone.is_rule_area = true;
-            zone.keepout_pads = false;
-            zone.keepout_footprints = false;
-            let flag = |key: &str, current: bool| match sexpr::find(k, key).and_then(|v| sexpr::txt(v, 1)) {
-                Some("not_allowed") => true,
-                Some("allowed") => false,
-                _ => current,
-            };
-            zone.keepout_tracks = flag("tracks", zone.keepout_tracks);
-            zone.keepout_vias = flag("vias", zone.keepout_vias);
-            zone.keepout_copper_pour = flag("copperpour", zone.keepout_copper_pour);
-            zone.keepout_pads = flag("pads", zone.keepout_pads);
-            zone.keepout_footprints = flag("footprints", zone.keepout_footprints);
-        }
-        // `T_placement` of `parseZONE`: `(enabled yes|no)` and one source, `(sheetname ..)`, `(component_class ..)` or `(group ..)`; the last of them in the file stands.
-        if let Some(pl) = sexpr::find(z, "placement") {
-            zone.is_rule_area = true;
-            for item in &pl[1..] {
-                let Some(list) = item.as_list() else { continue };
-                match sexpr::tag(list) {
-                    Some("enabled") => zone.placement.enabled = sexpr::txt(list, 1) == Some("yes"),
-                    Some(token) => {
-                        if let Some(source_type) = eda_model::multichannel::PlacementSourceType::from_token(token) {
-                            zone.placement.source_type = source_type;
-                            zone.placement.source = sexpr::txt(list, 1).unwrap_or("").to_string();
-                        }
-                    }
-                    None => {}
-                }
-            }
-        }
-        if let Some(a) = sexpr::find(z, "attr") {
-            zone.teardrop = sexpr::find(a, "teardrop").is_some();
-        }
-
-        // The zone keeps its whole layer set (`ZONE::SetLayerSet`): the copper layers the board has and the technical and user layers KiCad names. A copper layer the
-        // board lacks is dropped (`GetLayerSet() & boardCopperLayers`); a set with no copper layer left is a non-copper zone (`fillNonCopperZone`), which has no net
-        // (`if( !zone->IsOnCopperLayer() ) zone->SetNetCode( NETINFO_LIST::UNCONNECTED )`).
-        layers.retain(|l| if eda_model::layers::is_copper_layer_name(l) { copper_layers.contains(l) } else { eda_model::layers::is_optional_layer(l) });
-        let outlines: Vec<Vec<Point>> = sexpr::find_all(z, "polygon").filter_map(poly_points).collect();
-        if outlines.is_empty() || layers.is_empty() {
+        let Some(read) = read_zone(z, net_names, copper_layers) else {
             notes.zones_skipped += 1;
             continue;
-        }
-        zone.set_layer_set(&layers);
-        if !zone.is_on_copper_layer() {
-            zone.net = String::new();
-        }
-        // `ZONE::m_Uuid` (`(uuid ..)`, `(tstamp ..)` before KiCad 8): the tie between zones of equal priority is decided by it (`ZONE::HigherPriority`).
-        zone.uuid = sexpr::find(z, "uuid").or_else(|| sexpr::find(z, "tstamp")).and_then(|u| sexpr::txt(u, 1)).unwrap_or("").to_string();
-        // `case T_polygon` then `ZONE::AddPolygon`: the first `(polygon ...)` is the outline, every later one a hole in it (`m_Poly->AddHole( aPolygon )`).
-        let mut outlines = outlines.into_iter();
-        zone.outline = outlines.next().unwrap_or_default();
-        zone.holes = outlines.collect();
-        // `if( zone->GetNumCorners() > 2 ) zone->SetBorderDisplayStyle( hatchStyle, hatchPitch, true )`: the pitch within
-        // `ZONE_BORDER_HATCH_MINDIST_MM`..`ZONE_BORDER_HATCH_MAXDIST_MM`.
-        if zone.outline.len() + zone.holes.iter().map(Vec::len).sum::<usize>() > 2 {
-            zone.border_hatch_pitch = zone.border_hatch_pitch.clamp(eda_model::ir::ZONE_BORDER_HATCH_MIN_PITCH, eda_model::ir::ZONE_BORDER_HATCH_MAX_PITCH);
-        }
-        let fill = sexpr::find(z, "fill");
-        let is_thieving = fill.and_then(|f| sexpr::find(f, "mode")).and_then(|m| sexpr::txt(m, 1)) == Some("thieving");
-        thieving.push(fill.filter(|_| is_thieving).map(|f| sexpr::find(f, "thieving").map(|t| sexpr::to_text(&Sexpr::List(t.to_vec()))).unwrap_or_else(|| "(thieving)".to_string())));
-        // The rings that made the outline and holes above (those with three points or more), as the file wrote them, when one has an arc.
-        let rings: Vec<&[Sexpr]> = sexpr::find_all(z, "polygon").filter(|p| poly_points(p).is_some()).filter_map(|p| sexpr::find(p, "pts")).collect();
-        let has_arc = rings.iter().any(|pts| pts[1..].iter().any(|i| i.as_list().and_then(sexpr::tag) == Some("arc")));
-        arc_rings.push(has_arc.then(|| rings.iter().map(|pts| sexpr::to_text(&Sexpr::List(pts.to_vec()))).collect()));
-        // `ZONE::LayerProperties` (`parseZONE`'s `T_property`, `parseZoneLayerProperty`): `(property (layer "F.Cu") (hatch_position (xy x y)))`, the layer's
-        // hatch offset (`ZONE_LAYER_PROPERTIES::hatching_offset`, `parseXY` in board units). A property this reader cannot take apart is kept as the file wrote
-        // it, one line each (the legacy `DrawingsSection::zone_layer_props`).
-        let mut props: Vec<String> = Vec::new();
-        for p in sexpr::find_all(z, "property") {
-            let layer = sexpr::find(p, "layer").and_then(|l| sexpr::txt(l, 1));
-            let xy = sexpr::find(p, "hatch_position").and_then(|h| sexpr::find(h, "xy")).and_then(|xy| Some((sexpr::num(xy, 1)?, sexpr::num(xy, 2)?)));
-            match (layer, xy) {
-                (Some(layer), Some((x, y))) => {
-                    zone.hatch_offsets.insert(layer.to_string(), eda_model::setup_pages::HatchOffset { x_nm: mm_to_nm(x), y_nm: mm_to_nm(y) });
-                }
-                _ => props.push(sexpr::to_text(&Sexpr::List(p.to_vec()))),
-            }
-        }
-        layer_props.push((!props.is_empty()).then(|| props.join("\n")));
-        out.push(zone);
+        };
+        thieving.push(read.thieving);
+        arc_rings.push(read.arc_rings);
+        layer_props.push(read.layer_props);
+        out.push(Zone { parent_footprint: parent, ..read.zone });
         refs.zones.push(ItemRef::of(z));
     }
     (out, thieving, arc_rings, layer_props)
+}
+
+/// One `(zone ..)` as [`import_zones`] reads it, with what the zone's form says beyond [`Zone`].
+pub(crate) struct ReadZone {
+    pub zone: Zone,
+    /// The `(thieving ..)` settings of a copper thieving zone (`DrawingsSection::zone_thieving`).
+    pub thieving: Option<String>,
+    /// The `(pts ..)` of the rings when one has an arc (`DrawingsSection::zone_arcs`).
+    pub arc_rings: Option<Vec<String>>,
+    /// The zone's per-layer `(property ..)` forms this reader cannot take apart, one per line (`DrawingsSection::zone_layer_props`); a layer's hatch offset is
+    /// `Zone::hatch_offsets`.
+    pub layer_props: Option<String>,
+}
+
+/// `PCB_IO_KICAD_SEXPR_PARSER::parseZONE` for one `(zone ..)` (see [`import_zones`]): `net_names` is the file's net table, `copper_layers` the copper layers the
+/// board has. `None` for a zone with no outline or no layer this board has (`notes.zones_skipped`). The zone has no parent footprint: the caller says whose it is. A
+/// footprint of a library reads its zones with this too (`parseFOOTPRINT_unchecked`'s `case T_zone`), with no net table and every copper layer.
+pub(crate) fn read_zone(z: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String]) -> Option<ReadZone> {
+    // `SetIslandRemovalMode( ISLAND_REMOVAL_MODE::ALWAYS )` and priority 0 before parsing.
+    let mut zone = Zone::default();
+    // `(net N)` (code) or, in newer files, `(net "name")`. Then `parseZONE`'s `legacyNetnameFromFile`: a `(net_name ..)` that is not the name of the zone's net
+    // ("Can happens which old boards, with nonexistent nets ... or after being edited by hand") puts the zone on the net of that name, a new one if the board has
+    // none (`FindNet`, else a new `NETINFO_ITEM`). The name is never converted to the new overbar notation (`overbar`), so in a file older than 20210606 a zone on
+    // `~RESET~` (net `~{RESET}`) is on a new net `~RESET~` of its own, as kicad-cli 10.99.0's upgrade of such a file has it.
+    if let Some(n) = sexpr::find(z, "net") {
+        zone.net = net_of(n, net_names);
+    }
+    if let Some(name) = sexpr::find(z, "net_name").and_then(|n| sexpr::txt(n, 1)).filter(|name| !name.is_empty() && *name != zone.net) {
+        zone.net = name.to_string();
+    }
+    // `T_layer` (a zone on one layer) and `T_layers` (`parseBoardItemLayersAsMask`: the wildcards `*.Cu`, `F&B.Cu` and `*.Mask` stand for the layers they name).
+    let mut names: Vec<&str> = Vec::new();
+    if let Some(l) = sexpr::find(z, "layer") {
+        names.extend(sexpr::txt(l, 1));
+    }
+    if let Some(l) = sexpr::find(z, "layers") {
+        names.extend((1..l.len()).filter_map(|i| sexpr::txt(l, i)));
+    }
+    let mut layers: Vec<String> = expand_layer_names(&names, copper_layers);
+    if let Some(p) = sexpr::find(z, "priority") {
+        zone.priority = sexpr::num(p, 1).unwrap_or(0.0).max(0.0) as u32;
+    }
+    // `(name "..")` and `(hatch none|edge|full <pitch>)`; an absent `hatch` is `NO_HATCH` in the parser.
+    if let Some(n) = sexpr::find(z, "name") {
+        zone.name = sexpr::txt(n, 1).unwrap_or("").to_string();
+    }
+    // The pitch (`hatchPitch = parseBoardUnits( "hatch pitch" )`, `ZONE::GetDefaultHatchPitch()` when there is no `(hatch ..)`); clamped once the corners
+    // are read (`SetBorderDisplayStyle( hatchStyle, hatchPitch, true )` for a zone of more than two corners), below.
+    zone.border_hatch_pitch = sexpr::find(z, "hatch").and_then(|h| sexpr::num(h, 2)).map(mm_to_nm).unwrap_or(eda_model::ir::DEFAULT_ZONE_BORDER_HATCH_PITCH);
+    zone.border_style = match sexpr::find(z, "hatch").and_then(|h| sexpr::txt(h, 1)) {
+        Some("edge") => eda_model::ir::ZoneBorderStyle::Edge,
+        Some("full") => eda_model::ir::ZoneBorderStyle::Full,
+        _ => eda_model::ir::ZoneBorderStyle::None,
+    };
+    if let Some(cp) = sexpr::find(z, "connect_pads") {
+        match sexpr::txt(cp, 1) {
+            Some("yes") => zone.pad_connection = PadConnection::Full,
+            Some("no") => zone.pad_connection = PadConnection::None,
+            Some("thru_hole_only") => zone.pad_connection = PadConnection::ThtThermal,
+            _ => {}
+        }
+        if let Some(c) = sexpr::find(cp, "clearance").and_then(|c| sexpr::num(c, 1)) {
+            zone.clearance = mm_to_nm(c);
+        }
+    }
+    if let Some(t) = sexpr::find(z, "min_thickness").and_then(|t| sexpr::num(t, 1)) {
+        zone.min_thickness = mm_to_nm(t);
+    }
+    if let Some(f) = sexpr::find(z, "fill") {
+        if let Some(m) = sexpr::find(f, "mode") {
+            if sexpr::txt(m, 1) == Some("hatch") {
+                zone.fill_mode = FillMode::HatchPattern;
+            }
+        }
+        let um = |k: &str| sexpr::find(f, k).and_then(|v| sexpr::num(v, 1)).map(mm_to_nm);
+        let raw = |k: &str| sexpr::find(f, k).and_then(|v| sexpr::num(v, 1));
+        if let Some(v) = um("hatch_thickness") {
+            zone.hatch_thickness = v;
+        }
+        if let Some(v) = um("hatch_gap") {
+            zone.hatch_gap = v;
+        }
+        if let Some(v) = raw("hatch_orientation") {
+            zone.hatch_orientation_mdeg = ((v * 1000.0).round() as i64).rem_euclid(360_000) as _;
+        }
+        if let Some(v) = raw("hatch_smoothing_level") {
+            zone.hatch_smoothing_level = v as i32;
+        }
+        if let Some(v) = raw("hatch_smoothing_value") {
+            zone.hatch_smoothing_value = v;
+        }
+        if let Some(v) = raw("hatch_min_hole_area") {
+            zone.hatch_hole_min_area = v;
+        }
+        // `(hatch_border_algorithm hatch_thickness|min_thickness)`: which width the hatch border is drawn with.
+        match sexpr::find(f, "hatch_border_algorithm").and_then(|v| sexpr::txt(v, 1)) {
+            Some("hatch_thickness") => zone.hatch_border_algorithm = 1,
+            Some("min_thickness") => zone.hatch_border_algorithm = 0,
+            _ => {}
+        }
+        if let Some(v) = um("thermal_gap") {
+            zone.thermal_gap = v;
+        }
+        if let Some(v) = um("thermal_bridge_width") {
+            zone.thermal_spoke_width = v;
+        }
+        if let Some(v) = raw("island_removal_mode") {
+            zone.island_removal_mode = match v as i64 {
+                1 => IslandRemovalMode::Never,
+                2 => IslandRemovalMode::Area,
+                _ => IslandRemovalMode::Always,
+            };
+        }
+        // `parseBoardUnits( T_island_area_min ) * pcbIUScale.IU_PER_MM`: mm^2 in the file, nm^2 here.
+        if let Some(v) = raw("island_area_min") {
+            zone.min_island_area = mm_to_nm(v).get() * eda_model::units::NM_PER_MM;
+        }
+        // `(smoothing none|chamfer|fillet)` and `(radius r)`; both are ignored for a rule area (`parseZONE`).
+        let smoothing = sexpr::find(f, "smoothing").and_then(|v| sexpr::txt(v, 1));
+        let radius = um("radius");
+        if sexpr::find(z, "keepout").is_none() && sexpr::find(z, "placement").is_none() {
+            zone.smoothing = match smoothing {
+                Some("chamfer") => eda_model::ir::ZoneSmoothing::Chamfer,
+                Some("fillet") => eda_model::ir::ZoneSmoothing::Fillet,
+                _ => eda_model::ir::ZoneSmoothing::None,
+            };
+            zone.corner_radius = radius.unwrap_or(Nm::ZERO);
+        }
+    }
+    // The keepout flags start as `ZONE::ZONE` gives them, from `ZONE_SETTINGS::ZONE_SETTINGS` (`ExportSetting`): tracks, vias and pads kept out, copper pours and
+    // footprints allowed. `case T_keepout` then sets pads and footprints allowed ("Initialize these two because their tokens won't appear in older files") and each
+    // flag the block names; one it does not name keeps its default. So a rule area made by `(placement ..)` alone (QA `vme-wren`) keeps out tracks, vias and pads.
+    if sexpr::find(z, "keepout").is_some() || sexpr::find(z, "placement").is_some() {
+        (zone.keepout_tracks, zone.keepout_vias, zone.keepout_pads, zone.keepout_copper_pour, zone.keepout_footprints) = (true, true, true, false, false);
+    }
+    if let Some(k) = sexpr::find(z, "keepout") {
+        zone.is_rule_area = true;
+        zone.keepout_pads = false;
+        zone.keepout_footprints = false;
+        let flag = |key: &str, current: bool| match sexpr::find(k, key).and_then(|v| sexpr::txt(v, 1)) {
+            Some("not_allowed") => true,
+            Some("allowed") => false,
+            _ => current,
+        };
+        zone.keepout_tracks = flag("tracks", zone.keepout_tracks);
+        zone.keepout_vias = flag("vias", zone.keepout_vias);
+        zone.keepout_copper_pour = flag("copperpour", zone.keepout_copper_pour);
+        zone.keepout_pads = flag("pads", zone.keepout_pads);
+        zone.keepout_footprints = flag("footprints", zone.keepout_footprints);
+    }
+    // `T_placement` of `parseZONE`: `(enabled yes|no)` and one source, `(sheetname ..)`, `(component_class ..)` or `(group ..)`; the last of them in the file stands.
+    if let Some(pl) = sexpr::find(z, "placement") {
+        zone.is_rule_area = true;
+        for item in &pl[1..] {
+            let Some(list) = item.as_list() else { continue };
+            match sexpr::tag(list) {
+                Some("enabled") => zone.placement.enabled = sexpr::txt(list, 1) == Some("yes"),
+                Some(token) => {
+                    if let Some(source_type) = eda_model::multichannel::PlacementSourceType::from_token(token) {
+                        zone.placement.source_type = source_type;
+                        zone.placement.source = sexpr::txt(list, 1).unwrap_or("").to_string();
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    if let Some(a) = sexpr::find(z, "attr") {
+        zone.teardrop = sexpr::find(a, "teardrop").is_some();
+    }
+
+    // The zone keeps its whole layer set (`ZONE::SetLayerSet`): the copper layers the board has and the technical and user layers KiCad names. A copper layer the
+    // board lacks is dropped (`GetLayerSet() & boardCopperLayers`); a set with no copper layer left is a non-copper zone (`fillNonCopperZone`), which has no net
+    // (`if( !zone->IsOnCopperLayer() ) zone->SetNetCode( NETINFO_LIST::UNCONNECTED )`).
+    layers.retain(|l| if eda_model::layers::is_copper_layer_name(l) { copper_layers.contains(l) } else { eda_model::layers::is_optional_layer(l) });
+    let outlines: Vec<Vec<Point>> = sexpr::find_all(z, "polygon").filter_map(poly_points).collect();
+    if outlines.is_empty() || layers.is_empty() {
+        return None;
+    }
+    zone.set_layer_set(&layers);
+    if !zone.is_on_copper_layer() {
+        zone.net = String::new();
+    }
+    // `ZONE::m_Uuid` (`(uuid ..)`, `(tstamp ..)` before KiCad 8): the tie between zones of equal priority is decided by it (`ZONE::HigherPriority`).
+    zone.uuid = sexpr::find(z, "uuid").or_else(|| sexpr::find(z, "tstamp")).and_then(|u| sexpr::txt(u, 1)).unwrap_or("").to_string();
+    // `case T_polygon` then `ZONE::AddPolygon`: the first `(polygon ...)` is the outline, every later one a hole in it (`m_Poly->AddHole( aPolygon )`).
+    let mut outlines = outlines.into_iter();
+    zone.outline = outlines.next().unwrap_or_default();
+    zone.holes = outlines.collect();
+    // `if( zone->GetNumCorners() > 2 ) zone->SetBorderDisplayStyle( hatchStyle, hatchPitch, true )`: the pitch within
+    // `ZONE_BORDER_HATCH_MINDIST_MM`..`ZONE_BORDER_HATCH_MAXDIST_MM`.
+    if zone.outline.len() + zone.holes.iter().map(Vec::len).sum::<usize>() > 2 {
+        zone.border_hatch_pitch = zone.border_hatch_pitch.clamp(eda_model::ir::ZONE_BORDER_HATCH_MIN_PITCH, eda_model::ir::ZONE_BORDER_HATCH_MAX_PITCH);
+    }
+    let fill = sexpr::find(z, "fill");
+    let is_thieving = fill.and_then(|f| sexpr::find(f, "mode")).and_then(|m| sexpr::txt(m, 1)) == Some("thieving");
+    let thieving = fill.filter(|_| is_thieving).map(|f| sexpr::find(f, "thieving").map(|t| sexpr::to_text(&Sexpr::List(t.to_vec()))).unwrap_or_else(|| "(thieving)".to_string()));
+    // The rings that made the outline and holes above (those with three points or more), as the file wrote them, when one has an arc.
+    let rings: Vec<&[Sexpr]> = sexpr::find_all(z, "polygon").filter(|p| poly_points(p).is_some()).filter_map(|p| sexpr::find(p, "pts")).collect();
+    let has_arc = rings.iter().any(|pts| pts[1..].iter().any(|i| i.as_list().and_then(sexpr::tag) == Some("arc")));
+    let arc_rings = has_arc.then(|| rings.iter().map(|pts| sexpr::to_text(&Sexpr::List(pts.to_vec()))).collect());
+    // `ZONE::LayerProperties` (`parseZONE`'s `T_property`, `parseZoneLayerProperty`): `(property (layer "F.Cu") (hatch_position (xy x y)))`, the layer's
+    // hatch offset (`ZONE_LAYER_PROPERTIES::hatching_offset`, `parseXY` in board units). A property this reader cannot take apart is kept as the file wrote
+    // it, one line each (the legacy `DrawingsSection::zone_layer_props`).
+    let mut props: Vec<String> = Vec::new();
+    for p in sexpr::find_all(z, "property") {
+        let layer = sexpr::find(p, "layer").and_then(|l| sexpr::txt(l, 1));
+        let xy = sexpr::find(p, "hatch_position").and_then(|h| sexpr::find(h, "xy")).and_then(|xy| Some((sexpr::num(xy, 1)?, sexpr::num(xy, 2)?)));
+        match (layer, xy) {
+            (Some(layer), Some((x, y))) => {
+                zone.hatch_offsets.insert(layer.to_string(), eda_model::setup_pages::HatchOffset { x_nm: mm_to_nm(x), y_nm: mm_to_nm(y) });
+            }
+            _ => props.push(sexpr::to_text(&Sexpr::List(p.to_vec()))),
+        }
+    }
+    let layer_props = (!props.is_empty()).then(|| props.join("\n"));
+    Some(ReadZone { zone, thieving, arc_rings, layer_props })
 }
 
 /// Points of a `gr_poly`'s (or a zone's) `(pts ...)` list: `xy` entries verbatim, and an `(arc (start ..) (mid ..) (end ..))` of KiCad 9's polygons as the polyline

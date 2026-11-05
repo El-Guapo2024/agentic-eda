@@ -14,7 +14,7 @@ Notes:
 - These findings still have open parts:
   - E3-1 (high);
   - D-A1, B-M4/D3-M5/D4-M1, C3-M1, B3-M1, A-3, D-8, D-10, C-2 and R3-6 (medium, rounds 2-4).
-- `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor.
+- `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor. **Footprint Editor: 2 left since task-u1-fpedit** (Create Footprint, the Properties pane).
 
 **Top 12, all areas:**
 1. X1: the Plot dialog is Gerber only -- **done (task-u1-plot)**
@@ -22,7 +22,7 @@ Notes:
 3. S1: placing labels, power symbols and text -- **done (task-u1-schplace)**
 4. R1: dragging a footprint with its tracks -- **done (task-u1-drag)**
 5. L1: saving into table libraries
-6. F1+F2: Footprint Editor fields and dimmed tools
+6. F1+F2: Footprint Editor fields and dimmed tools -- **done (task-u1-fpedit)**; the Properties pane (Y3) left
 7. Y1: Symbol Editor Rotate
 8. P2/S7: Properties panel rows -- **done (task-u1-props)**
 9. S3: Schematic Setup pages -- **done (task-u1-schsetup)**
@@ -334,14 +334,16 @@ Notes:
 
 ## Footprint editor
 
-- **F1 [FM] Fields and texts on the canvas.**
-  - Reference, Value and user fields are not drawn or pickable.
-  - Texts and graphics have no Properties dialog.
+- **F1 [FM] Fields and texts on the canvas.** **done (task-u1-fpedit)**, PARITY-fpedit §20: the Reference, the Value and the user fields are drawn, picked, dragged, turned and mirrored (a delete hides one); a double click or E opens the item's dialog (Footprint Reference / Value / Field / Text Properties, the shape's Properties, Pad Properties, the new kinds' dialogs, Group Properties).
+  - Left: a footprint text's bold, italic, vertical justification and keep-upright are not in the model (F5), so its dialog leaves them out (a field has them); Duplicate and Create Array of a field.
+  - ~~Reference, Value and user fields are not drawn or pickable.~~
+  - ~~Texts and graphics have no Properties dialog.~~
   - M. PARITY-fpedit §13, §15, §17.
-- **F2 [FM] Dimmed tools.**
-  - Mirror, Group and Ungroup, the line modes, the sketch and outline modes, the Appearance manager and the Properties pane.
-  - Dimensions, rule areas and keepouts, text boxes, tables, barcodes, points and reference images.
-  - A footprint's zones and dimensions are kept but not drawn.
+- **F2 [FM] Dimmed tools.** **done (task-u1-fpedit)**, PARITY-fpedit §20: every tool listed below runs on the footprint's items, one undo step each; a library footprint holds its zones, dimensions, text boxes, points, images, barcodes, tables and groups as items (read and written by the board's readers and writers, kicad-cli keeps them), drawn and editable; Set Anchor moves them (F7's zones and dimensions).
+  - Left: the Properties pane (Y3, another task); Create Footprint (the wizards); a barcode and a reference image are drawn as their boxes; Duplicate, Create Array and the clipboard of the new kinds; the Appearance manager's presets, viewports and Selection Filter; items still kept as text (a locked item, a filled zone) are not drawn; the board's footprints still carry these items as text (GAPS 25).
+  - ~~Mirror, Group and Ungroup, the line modes, the sketch and outline modes, the Appearance manager and the Properties pane.~~
+  - ~~Dimensions, rule areas and keepouts, text boxes, tables, barcodes, points and reference images.~~
+  - ~~A footprint's zones and dimensions are kept but not drawn.~~
   - L. editor_toolbar_support.json; fpedit §8, §16.
 - **F3 [BD] Ctrl+E from the board.**
   - It edits the library entry, with no link back to that footprint.
@@ -361,7 +363,7 @@ Notes:
   - No fabrication property or pad-to-die length.
   - Round/Slot resets the size, and the type is named "Slot" where KiCad says "Oblong" (E7-F6/F7).
   - M. fpedit §3, §18.
-- **F7 [BD] Set Anchor.** It leaves zones, dimensions and the courtyard override behind (E3-1). S. r3 E3-1.
+- **F7 [BD] Set Anchor.** It leaves zones, dimensions and the courtyard override behind (E3-1). S. r3 E3-1. (task-u1-fpedit: the zones, dimensions, text boxes, images, barcodes and tables move with it now, as `MoveAnchorPosition` does; the courtyard override and the items still kept as text do not.)
 - **F8 [FM] Missing tools and settings.**
   - No Import Graphics and no preference pages.
   - The rotation is fixed at 90°.

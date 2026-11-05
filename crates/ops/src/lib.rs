@@ -67,6 +67,7 @@ pub mod via_place;
 pub use via_layers::ViaLayerEdit;
 mod pad_nets;
 mod fp_lib_fields;
+pub mod fp_items;
 mod sym_derive;
 mod fix_shapes;
 mod fp_edit;
@@ -796,6 +797,10 @@ pub enum Cmd {
     /// The board items the IR gained with GAPS.md item 24 (package P16): text boxes, reference images, points and the hatch fill of shapes -- one verb family, see
     /// [`pcb_items::PcbItemCmd`]. On the wire: `{"op": "pcb_item", "verb": "add_text_box", "text_box": {..}}`.
     PcbItem(pcb_items::PcbItemCmd),
+    /// The Footprint Editor's verbs on any item of the open footprint (UI-LEFT F1, F2): Move, Rotate, Mirror, Delete of pads, graphics, texts, fields and the items
+    /// `eda_model::fp_items` adds; a field's Text Properties; Shape Properties; the dimensions, zones, text boxes, points, images, barcodes and tables; Group and Ungroup.
+    /// One verb family, see [`fp_items::FpItemCmd`]. On the wire: `{"op": "fp_item", "verb": "mirror", "footprint": "..", "ids": [..], ..}`.
+    FpItem(fp_items::FpItemCmd),
     /// The files embedded in a board, a schematic, a footprint or a symbol (GAPS.md items 24 and 30): the Embedded Files panel's Add, Remove and Embed fonts, the tool actions
     /// `common.Embed.embededFile` and `removeFile`, and Collect and Embed 3D Models -- one verb family, see [`embedded::EmbeddedCmd`]. On the wire:
     /// `{"op": "embedded", "verb": "add", "owner": {"kind": "board"}, "name": "part.step", "data": "<base64>"}`.
@@ -2343,6 +2348,7 @@ impl Cmd {
             | Cmd::CreateFootprintArray { .. }
             | Cmd::ExplodePad { .. }
             | Cmd::RecombinePad { .. }
+            | Cmd::FpItem(_)
             | Cmd::ExportFootprintsToLibrary => Domain::FootprintEditor,
             Cmd::OpenSymbolForEdit { .. }
             | Cmd::NewSymbol { .. }
@@ -2669,6 +2675,7 @@ impl Cmd {
             | Cmd::CreateFootprintArray { footprint, .. }
             | Cmd::ExplodePad { footprint, .. }
             | Cmd::RecombinePad { footprint } => vec![footprint.as_str()],
+            Cmd::FpItem(c) => vec![c.footprint()],
 
             Cmd::PutLibrarySymbol { symbol, .. } => vec![symbol.lib_id.as_str()],
             Cmd::RenameLibrarySymbol { lib_id, .. } | Cmd::SetSymbolAnchor { lib_id, .. } => vec![lib_id.as_str()],
@@ -3325,6 +3332,7 @@ impl<'a> Board<'a> {
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::PcbItem(c) => self.apply_pcb_item(c),
+            Cmd::FpItem(c) => self.apply_fp_item(c),
             Cmd::Embedded(c) => self.apply_embedded(c),
             Cmd::Microwave(c) => self.apply_microwave(c),
             Cmd::Specctra { session, name } => self.import_specctra_session(session, name),
@@ -6283,7 +6291,8 @@ impl<'a> Board<'a> {
     /// `RotatePoint` is a no-op): the fields (Reference and Value at their default places when they have no layout of their own, the
     /// Datasheet and Description when the footprint has them, every user field), the pads, the graphics and texts move; each 3D model's
     /// offset follows, in millimetres with y up (`m_Offset.x += IUTomm( moveVector.x ); m_Offset.y -= IUTomm( moveVector.y )`).
-    /// Differs: the kept items the editor does not draw (`kicad.tokens`: zones, dimensions, ...) stay put, and the `courtyard`
+    /// The footprint's dimensions, text boxes, images, barcodes, tables and zones move too (`GraphicalItems()`, `Zones()`), its points do not, as in KiCad.
+    /// Differs: the items still kept as text (`kicad.tokens`: a locked or filled zone, ...) stay put, and the `courtyard`
     /// half-extents override is centred on the origin by definition (KiCad has no such override: its courtyard is the F.CrtYd graphics,
     /// which move).
     fn set_footprint_anchor(&mut self, name: &str, at: Point) -> Result<(), Vec<CheckResult>> {
@@ -6311,6 +6320,8 @@ impl<'a> Board<'a> {
             m.offset[0] += dx.mm();
             m.offset[1] -= dy.mm();
         }
+        // the dimensions, text boxes, images, barcodes, tables and zones (`GraphicalItems()`, `Zones()`), not the points
+        fp_items::move_items_with_anchor(fp, dx, dy);
         Ok(())
     }
 
@@ -6980,6 +6991,8 @@ mod pcb_transform_tests;
 mod array_tests;
 #[cfg(test)]
 mod fp_array_tests;
+#[cfg(test)]
+mod fp_items_tests;
 #[cfg(test)]
 mod pad_edit_tests;
 #[cfg(test)]

@@ -30,6 +30,8 @@ export interface CheckedContext {
   polar?: boolean;
   /** The measure tool is the tool in force. */
   measureArmed?: boolean;
+  /** The Footprint Editor's line mode, display modes and Appearance pane (`FOOTPRINT_EDIT_FRAME::setupUIConditions`). */
+  fpView?: { lineMode: "direct" | "45" | "90"; sketchPads: boolean; sketchGraphics: boolean; sketchText: boolean; appearanceShown: boolean };
 }
 
 /** The Footprint Editor's tool-arming actions and the tool each arms (`FpToolId`). */
@@ -44,6 +46,17 @@ export const FP_TOOL_OF_ACTION: Readonly<Record<string, string>> = {
   "pcbnew.InteractiveDrawing.bezier": "draw_bezier",
   "pcbnew.InteractiveDrawing.text": "text",
   "pcbnew.InteractiveDrawing.setAnchor": "anchor",
+  "pcbnew.InteractiveDrawing.alignedDimension": "dim_aligned",
+  "pcbnew.InteractiveDrawing.orthogonalDimension": "dim_orthogonal",
+  "pcbnew.InteractiveDrawing.centerDimension": "dim_center",
+  "pcbnew.InteractiveDrawing.radialDimension": "dim_radial",
+  "pcbnew.InteractiveDrawing.leader": "dim_leader",
+  "pcbnew.InteractiveDrawing.ruleArea": "rule_area",
+  "pcbnew.InteractiveDrawing.textbox": "textbox",
+  "pcbnew.InteractiveDrawing.placePoint": "point",
+  "pcbnew.InteractiveDrawing.drawTable": "table",
+  "pcbnew.InteractiveDrawing.barcode": "barcode",
+  "pcbnew.InteractiveDrawing.placeReferenceImage": "ref_image",
 };
 
 /** The Symbol Editor's tool-arming actions and the tool each arms (`SymToolId`). */
@@ -91,6 +104,7 @@ export function actionChecked(name: string, c: CheckedContext): boolean | undefi
     case "eeschema.EditorTool.showHierarchy":
       return c.dock.shown.hierarchy && !c.dock.leftCollapsed;
     case "pcbnew.Control.showLayersManager":
+      if (c.tab === "footprint") return c.fpView?.appearanceShown;
       return c.tab === "pcb" ? !c.dock.rightCollapsed && c.rightDockTab === "appearance" : undefined;
     case "common.Control.showLibraryTree":
       return c.tab === "footprint" || c.tab === "symbol" ? !c.dock.treeCollapsed : undefined;
@@ -104,6 +118,17 @@ export function actionChecked(name: string, c: CheckedContext): boolean | undefi
       return c.tab === "symbol" ? (c.sym.showPinAltIcons ?? true) : undefined;
     case "eeschema.SymbolLibraryControl.toggleSyncedPinsMode":
       return c.tab === "symbol" ? c.sym.syncPins : undefined;
+  }
+  // `FOOTPRINT_EDIT_FRAME::setupUIConditions`: the line mode the editor's settings hold (`OnAngleSnapModeChanged` selects its button), `CHECK( !cond.PadFillDisplay() )` and the
+  // graphics and text fill.
+  if (c.tab === "footprint" && c.fpView) {
+    const v = c.fpView;
+    if (name === "pcbnew.EditorControl.lineModeFree") return v.lineMode === "direct";
+    if (name === "pcbnew.EditorControl.lineModeOrthonal") return v.lineMode === "90";
+    if (name === "pcbnew.EditorControl.lineMode45") return v.lineMode === "45";
+    if (name === "pcbnew.Control.padDisplayMode") return v.sketchPads;
+    if (name === "pcbnew.Control.graphicOutlines") return v.sketchGraphics;
+    if (name === "pcbnew.Control.textOutlines") return v.sketchText;
   }
   if (c.tab === "footprint" && name in FP_TOOL_OF_ACTION) return c.fpTool === FP_TOOL_OF_ACTION[name];
   if (c.tab === "symbol" && name in SYM_TOOL_OF_ACTION) return c.symTool === SYM_TOOL_OF_ACTION[name];
