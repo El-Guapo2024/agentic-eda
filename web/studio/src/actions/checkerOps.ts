@@ -561,6 +561,12 @@ export function runDrcEntry(ctx: CheckerCtx, entry: MarkerEntry, v: DrcViolation
 /** An Inspect or Fix entry of an ERC finding (`InspectERCError`, `FixERCError`): the finding's main item is what the action works on. */
 export function runErcEntry(ctx: CheckerCtx, entry: MarkerEntry, v: ErcViolation): void {
   const c = entry.command;
+  // "Edit Netclasses..." (`ShowSchematicSetupDialog( _( "Net Classes" ) )`): Schematic Setup on that page
+  if (c.kind === "sch_setup") {
+    setErcView({ setupPage: c.page });
+    ctx.dispatch({ type: "SET_SCH_DIALOG", dialog: "setup" });
+    return;
+  }
   if (c.kind !== "action") return;
   const main = v.items?.find((i) => i.id)?.id ?? v.location ?? null;
   selectThenRun(ctx, "schematic", c.id, c.select && main ? main : null);

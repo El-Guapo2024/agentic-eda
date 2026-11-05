@@ -114,6 +114,7 @@ mod zone_unfill;
 pub mod rule_editor;
 pub use rule_editor::DrcRuleAction;
 mod sch_annotate;
+mod sch_setup;
 mod sch_clipboard;
 pub mod sch_control;
 mod sch_variants;
@@ -1546,6 +1547,30 @@ pub enum Cmd {
     /// Schematic Setup > Formatting > Inter-sheet References (`panel_setup_formatting.cpp`): whether a global label shows the pages its net is on, its own page among
     /// them, abbreviated, and the prefix and suffix (`SCHEMATIC_SETTINGS::m_IntersheetRefs*`). KiCad's defaults are stored as none. One undo step.
     SetIntersheetRefs { settings: eda_model::sch_extras::IntersheetRefs },
+    /// Schematic Setup > General > Formatting, the rest of the page (`panel_setup_formatting.cpp`): the default text size and line width, the pin symbol size,
+    /// the junction dot and hop-over sizes, the label offset and margin ratios, the overbar offset, the dashed lines and the operating-point overlay
+    /// (`eda_model::sch_setup::SchFormatting`). KiCad's defaults are stored as none. One undo step.
+    SetSchFormatting { settings: eda_model::sch_setup::SchFormatting },
+    /// Schematic Setup > General > Annotation (`panel_eeschema_annotation_options.cpp`): the order, the numbering, the start number, "Allow reference reuse"
+    /// and the symbol unit notation -- the first unit's id ('A' or '1') and the separator (0, '.', '-', '_') as character codes. One undo step.
+    SetAnnotationSettings {
+        settings: eda_model::sch_setup::AnnotationSettings,
+        #[serde(default = "unit_a")]
+        subpart_first_id: u32,
+        #[serde(default)]
+        subpart_id_separator: u32,
+    },
+    /// Schematic Setup > General > Field Name Templates (`panel_template_fieldnames.cpp`): the project's templates in order, each with Visible and URL.
+    SetFieldNameTemplates { fields: Vec<eda_model::sch_setup::TemplateFieldName> },
+    /// Schematic Setup > General > BOM Presets (`panel_bom_presets.cpp`): the names of the project's saved BOM and BOM formatting presets to keep (the page deletes).
+    SetBomPresets {
+        #[serde(default)]
+        bom_presets: Vec<String>,
+        #[serde(default)]
+        bom_fmt_presets: Vec<String>,
+    },
+    /// Schematic Setup > Project > Bus Alias Definitions (`panel_setup_buses.cpp`): every alias of the project with its members. One undo step.
+    SetBusAliases { aliases: Vec<eda_model::ir::BusAlias> },
     /// The SPICE simulator's settings and workbook (`crate::simulator`): `ngspice` is the `.kicad_pro`'s `schematic.ngspice`
     /// (`NGSPICE_SETTINGS`, none for KiCad's defaults), `workbook` the text of the `.wbk` Save Workbook writes (`SIMULATOR_FRAME_UI::SaveWorkbook`),
     /// none for no workbook. Both are replaced as sent; refused when nothing changes.
@@ -2213,6 +2238,11 @@ pub enum Cmd {
 
 /// A schematic with nothing on it: what the first schematic verb creates, and the screen a new
 /// hierarchical sheet starts with.
+/// 'A', the first unit's id when a command does not say (`SCHEMATIC_SETTINGS::m_SubpartFirstId`'s default).
+fn unit_a() -> u32 {
+    'A' as u32
+}
+
 fn empty_schematic_section() -> SchematicSection {
     SchematicSection {
         symbols: vec![],
@@ -2297,6 +2327,11 @@ impl Cmd {
             | Cmd::ClearErcExclusions
             | Cmd::SetConnectionGrid { .. }
             | Cmd::SetIntersheetRefs { .. }
+            | Cmd::SetSchFormatting { .. }
+            | Cmd::SetAnnotationSettings { .. }
+            | Cmd::SetFieldNameTemplates { .. }
+            | Cmd::SetBomPresets { .. }
+            | Cmd::SetBusAliases { .. }
             | Cmd::SetSimulator { .. }
             | Cmd::AddLabel { .. }
             | Cmd::DeleteLabel { .. }
@@ -2396,6 +2431,9 @@ impl Cmd {
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.edits_connectivity(),
             // A severity table and the findings waived are about the report, not the drawing.
             Cmd::SetErcSeverities { .. } | Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions | Cmd::SetConnectionGrid { .. } | Cmd::SetIntersheetRefs { .. } | Cmd::SetSimulator { .. } => false,
+            // Schematic Setup's sizes, field templates and BOM presets are how the sheet is drawn and listed, not what it connects (a bus alias does connect,
+            // and the unit notation names the nets of a symbol's units: those two are traced again).
+            Cmd::SetSchFormatting { .. } | Cmd::SetFieldNameTemplates { .. } | Cmd::SetBomPresets { .. } => false,
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
@@ -2446,6 +2484,10 @@ impl Cmd {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::spans_both_editors),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.spans_both_editors(),
             Cmd::RenameSymbol { .. } | Cmd::Annotate { .. } | Cmd::IncrementAnnotations { .. } => true,
+            // the project's net classes: Board Setup and Schematic Setup edit the one table (the board's sizes, the sheet's wires), so either tab takes it back
+            Cmd::SetNetClasses { .. } => true,
+            // the project's text variables: Board Setup's and Schematic Setup's Text Variables page are one list, `${NAME}` read on the board and on the sheet
+            Cmd::SetTextVariables { .. } => true,
             // the board's footprint and the symbol's Footprint field are put right together
             Cmd::ExchangeFootprints { .. } => true,
             // the footprints' references and the symbols' go together
@@ -2626,6 +2668,11 @@ impl Cmd {
             Cmd::ClearErcExclusions => vec!["erc_exclusions"],
             Cmd::SetConnectionGrid { .. } => vec!["connection_grid"],
             Cmd::SetIntersheetRefs { .. } => vec!["intersheet_refs"],
+            Cmd::SetSchFormatting { .. } => vec!["formatting"],
+            Cmd::SetAnnotationSettings { .. } => vec!["annotation"],
+            Cmd::SetFieldNameTemplates { .. } => vec!["field_name_templates"],
+            Cmd::SetBomPresets { .. } => vec!["bom_presets"],
+            Cmd::SetBusAliases { .. } => vec!["bus_aliases"],
             Cmd::SetSimulator { .. } => vec!["simulator"],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
@@ -3081,6 +3128,11 @@ impl<'a> Board<'a> {
             Cmd::SetErcSeverities { severities } => review::set_erc_severities(&mut self.design, severities),
             Cmd::SetConnectionGrid { mils } => review::set_connection_grid(&mut self.design, *mils),
             Cmd::SetIntersheetRefs { settings } => review::set_intersheet_refs(&mut self.design, settings),
+            Cmd::SetSchFormatting { settings } => sch_setup::set_formatting(&mut self.design, settings),
+            Cmd::SetAnnotationSettings { settings, subpart_first_id, subpart_id_separator } => sch_setup::set_annotation(&mut self.design, settings, *subpart_first_id, *subpart_id_separator),
+            Cmd::SetFieldNameTemplates { fields } => sch_setup::set_field_name_templates(&mut self.design, fields),
+            Cmd::SetBomPresets { bom_presets, bom_fmt_presets } => sch_setup::set_bom_presets(&mut self.design, bom_presets, bom_fmt_presets),
+            Cmd::SetBusAliases { aliases } => sch_setup::set_bus_aliases(&mut self.design, aliases),
             Cmd::SetSimulator { ngspice, workbook } => simulator::set_simulator(&mut self.design, ngspice.as_ref(), workbook.as_deref()),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::EditDrcRule { action, entry, name, rule } => rule_editor::edit_drc_rule(&mut self.design, self.model, *action, *entry, name, rule.as_ref()),

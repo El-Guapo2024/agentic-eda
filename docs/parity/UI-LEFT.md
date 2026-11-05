@@ -25,10 +25,10 @@ Notes:
 6. F1+F2: Footprint Editor fields and dimmed tools
 7. Y1: Symbol Editor Rotate
 8. P2/S7: Properties panel rows -- **done (task-u1-props)**
-9. S3: Schematic Setup pages
+9. S3: Schematic Setup pages -- **done (task-u1-schsetup)**
 10. P8: zones -- **done (task-u1-zones)**
 11. S2: design variants -- **done (task-u1-variants)**
-12. M1: the Simulation Model dialog
+12. M1: the Simulation Model dialog -- **done (task-u1-simmodel)**
 
 ## PCB editor
 
@@ -169,6 +169,13 @@ Notes:
   - R, F and E on a carried text (A6-6).
   - The Select Net menu's order.
   - S. PARITY-pcb §1, §8, §24.
+- **P29 [BD] Found during the u1 batch (2026-11-05), not yet fixed.**
+  - A new board rule area starts with every keepout off; KiCad keeps out tracks, vias and pads (found by task-u1-fpedit).
+  - `layerPresets.ts` `layerGroupOp` leaves Edge.Cuts out of the copper group; KiCad's `presetAllCopper` counts it (task-u1-fpedit).
+  - Barcode Properties validates the old preview if OK is pressed within about 200 ms of typing (task-u1-fpedit).
+  - The existing single-track D drag snaps the cursor onto items of any net; KiCad snaps only onto the dragged line's net (task-u1-drag).
+  - Add / Remove / Chamfer Corner and Simplify empty a zone's fill; in KiCad only the corner drag calls `UnFill()` (task-u1-zones).
+  - S. The tasks' PARITY sections.
 
 ## Schematic editor
 
@@ -177,15 +184,17 @@ Notes:
   - (was: you click first and the dialog comes after, and nothing follows the cursor before the click; Place Power is a text field with presets, its rotation set in the dialog.)
   - M. PARITY-sch §3, §3a, §54.
 - **S1b [BD] Place Symbol (A) has no symbol following the cursor** (found by task-u1-schplace). After the chooser, it waits for a click with nothing drawn at the cursor; KiCad carries the symbol, with R/X/Y while carried. The `POST /api/sch/place_preview` endpoint from task-u1-schplace can draw it. S. PARITY-sch §54.
-- **S2 [FM] Design variants.** **done (task-u1-variants)**: Add, Remove, Edit Description, Rename and Copy Design Variant (Tools > Variants, the schematic toolbar's selector with "Add New Design Variant...", the Fields Table's "Schematic variants:" list), each in KiCad 25ec2335's words; a symbol's DNP, exclusion flags and field texts per variant, shown and edited for the current variant on the canvas, in Symbol Properties (the title names the variant), the Properties panel, the attribute toggles and the Fields Table (the variant's cells highlighted); KiCad's `(variant ..)` records and `schematic.variants` read and written, the board's `(variants ..)` and footprint variants derived; the PCB editor's own selector; "Design variant:" enabled in Plot, Generate Placement Files and Plot Schematic, and the Fields Table's BOM export is its variant's: kicad-cli's `--variant` (PARITY-sch §56). Left:
+- **S2 [FM] Design variants.** **done (task-u1-variants)**: Add, Remove, Edit Description, Rename and Copy Design Variant (Tools > Variants, the schematic toolbar's selector with "Add New Design Variant...", the Fields Table's "Schematic variants:" list), each in KiCad 25ec2335's words; a symbol's DNP, exclusion flags and field texts per variant, shown and edited for the current variant on the canvas, in Symbol Properties (the title names the variant), the Properties panel, the attribute toggles and the Fields Table (the variant's cells highlighted); KiCad's `(variant ..)` records and `schematic.variants` read and written, the board's `(variants ..)` and footprint variants derived; the PCB editor's own selector; "Design variant:" enabled in Plot, Generate Placement Files and Plot Schematic, and the Fields Table's BOM export is its variant's: kicad-cli's `--variant` (PARITY-sch §58). Left:
   - A variant's own symbol (Set / Clear Variant Symbol) and pin map; a sheet's own variants; `${VARIANT}` / `${VARIANT_DESC}` in texts; a variant field's `${..}` on the canvas.
   - The PCB canvas and Properties panel per board variant (the board's selector feeds the dialogs only); a variant footprint; a pasted symbol's records.
   - A record is the reference's, on every path of a screen shown twice.
-  - XL. PARITY-sch §13, §25, §56.
-- **S3 [FM] Schematic Setup.**
-  - Formatting lacks the text sizes, line widths, and junction and hop-over sizes.
-  - No Annotation, Field Name Templates, Net Classes or Bus Alias pages, so ERC's "Edit Netclasses…" fix is missing.
-  - L. PARITY-sch §9, §28.
+  - XL. PARITY-sch §13, §25, §58.
+- **S3 [FM] Schematic Setup.** **done (task-u1-schsetup)**: every page of KiCad's tree -- Formatting's every row, Annotation, Field Name Templates, BOM Presets, Net Classes (Board Setup's page with the Eeschema columns, one table for both), Bus Alias Definitions, Text Variables -- each Apply one undoable verb, the settings in the derived `.kicad_pro` kicad-cli reads; ERC's "Edit Netclasses…" opens Net Classes (PARITY-sch §56). Left:
+  - Import Settings from Another Project… (Board Setup has none either).
+  - Hop-overs are not drawn; the text sizes, label ratios, pin symbol size and overbar ratio reach kicad-cli but not the studio's own drawing.
+  - "Allow reference reuse" is stored, not applied (no designator tracker); the URL column has no URL editor; the studio saves no BOM presets of its own.
+  - The net class table lists Default first (KiCad: last).
+  - L. PARITY-sch §9, §28, §56.
 - **S4 [BD] Symbol Properties.**
   - No unit choice, pin table, font or colour.
   - U, V and F open the full dialog.
@@ -529,10 +538,11 @@ Notes:
 
 ## Simulator
 
-- **M1 [FM] Simulation Model dialog.**
-  - Only "SPICE model from file".
-  - No built-in device or source models with a parameter grid, no IBIS, no Code tab, and no "Save parameter in Value field".
-  - XL. GAPS 34; PARITY-sch §49, §51.
+- **M1 [FM] Simulation Model dialog.** **done (task-u1-simmodel)**: "Built-in SPICE model" with KiCad's Device and Device type choices, the Parameters grid (every model's parameters copied from the C++ by `tools/extract-sim-models.js`, in KiCad's categories), the Code tab, "Save parameter '%s (%s)' in Value field", the inference of passives and DC sources, OK writing the fields as `WriteFields` does; IBIS files list their components, pins, pin models, differential pins and waveforms; kicad-cli's netlist of what the dialog wrote is KiCad's generator's (PARITY-sch §57). Left:
+  - IBIS: KIBIS's model tables, checks and SPICE (kicad-cli writes the SPICE).
+  - A library `.model`'s parameters in the grid; arithmetic in the grid; K's inductor choice.
+  - OK is its own undo step and adds hidden fields (KiCad's inference adds visible ones).
+  - XL. GAPS 34; PARITY-sch §49, §51, §57.
 - **M2 [KO] Batch runs (`ngspice -b`).**
   - No live plot, and Stop throws the results away.
   - A measurement, Fourier or tuner change starts a new run.

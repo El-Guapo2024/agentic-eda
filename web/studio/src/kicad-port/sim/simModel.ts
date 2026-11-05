@@ -29,13 +29,17 @@ export interface SymbolPin {
 /** One model of a library as `POST /api/sim/model/library` sends it (`crates/cli/src/sim_model_api.rs`). */
 export interface LibraryModelInfo {
   name: string;
-  kind: "subckt" | "model";
+  /** "ibis": a component of an IBIS file (`eda_sim::ibis`), with its pins, each pin's models and the differential pins. */
+  kind: "subckt" | "model" | "ibis";
   /** `Sim.Device` / `Sim.Type` the model writes (`GenerateDevice`, `GenerateDeviceSubtype`). */
   device: string;
   type: string;
   /** The model's pins in order: a subcircuit's ports, or a device's pin names ("<S>" optional); none for a raw SPICE element. */
   pins: string[];
   code: string;
+  ibisPins?: [string, string][];
+  pinModels?: string[][];
+  diffPins?: string[];
 }
 
 /** `_( "Not Connected" )`. */

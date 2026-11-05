@@ -77,6 +77,11 @@ pub struct NetClassSettings {
     /// The `Default` class: every net no pattern claims. Its `name` is `Default` and its `nets` empty.
     pub default: NetClass,
     pub classes: Vec<NetClass>,
+    /// The schematic's columns of the same table (Schematic Setup > Net Classes, `PANEL_SETUP_NETCLASSES` with `aIsEEschema`), by class name (`Default` for the
+    /// Default class): the wire and bus widths, the colour, the line style. Board Setup and Schematic Setup edit one table, as KiCad's two dialogs edit the one
+    /// `NET_SETTINGS` of the project; each sends the columns it does not show as it found them. Additive: a page sent without it sets none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub schematic: BTreeMap<String, crate::sch_setup::NetClassSchematic>,
 }
 
 /// Design Rules > Constraints: the board-wide minimums DRC holds every item to
@@ -593,6 +598,7 @@ impl RulesOverlay {
             }
             b.default_class = Some(nc.default.clone());
             b.net_classes = nc.classes.clone();
+            b.net_class_schematic = nc.schematic.iter().filter(|(_, l)| !l.is_empty()).map(|(k, v)| (k.clone(), v.clone())).collect();
         }
         if let Some(c) = &self.constraints {
             c.write_to(&mut model.board);
@@ -679,6 +685,12 @@ pub fn validate_net_classes(s: &NetClassSettings) -> Result<(), CheckResult> {
             }
         }
     }
+    for (name, look) in &s.schematic {
+        if name != "Default" && !s.classes.iter().any(|c| &c.name == name) {
+            return bad(name, "the schematic columns name a net class the page does not have".into());
+        }
+        look.validate().map_err(|why| CheckResult::fail("ops_bad_netclasses", name.as_str(), why))?;
+    }
     Ok(())
 }
 
@@ -702,7 +714,7 @@ pub fn net_class_settings_of(b: &BoardRules) -> NetClassSettings {
     default.clearance = Some(b.clearance);
     default.via_diameter = Some(b.via_diameter);
     default.via_drill = Some(b.via_drill);
-    NetClassSettings { default, classes: b.net_classes.clone() }
+    NetClassSettings { default, classes: b.net_classes.clone(), schematic: b.net_class_schematic.clone() }
 }
 
 #[cfg(test)]
@@ -781,7 +793,7 @@ mod tests {
 
         let overlay = RulesOverlay {
             constraints: Some(Constraints { min_clearance_nm: Nm::new(300_000), ..Constraints::of(&before) }),
-            net_classes: Some(NetClassSettings { default: NetClass { track_width: Some(Nm::new(250_000)), clearance: Some(Nm::new(180_000)), ..net_class_settings_of(&before).default }, classes: vec![class("signal", &["SPI_*", "I2C_?"])] }),
+            net_classes: Some(NetClassSettings { default: NetClass { track_width: Some(Nm::new(250_000)), clearance: Some(Nm::new(180_000)), ..net_class_settings_of(&before).default }, classes: vec![class("signal", &["SPI_*", "I2C_?"])], schematic: Default::default() }),
             ..Default::default()
         };
         overlay.apply(&mut model);
@@ -840,7 +852,7 @@ mod tests {
 
     #[test]
     fn net_class_pages_refuse_what_the_panel_refuses() {
-        let settings = |classes: Vec<NetClass>| NetClassSettings { default: NetClass { name: "Default".into(), nets: vec![], ..class("x", &[]) }, classes };
+        let settings = |classes: Vec<NetClass>| NetClassSettings { default: NetClass { name: "Default".into(), nets: vec![], ..class("x", &[]) }, classes, schematic: Default::default() };
         assert!(validate_net_classes(&settings(vec![class("power", &["VBUS"]), class("signal", &["SPI_*"])])).is_ok());
         for (bad, why) in [
             (vec![class("a", &["X"]), class("a", &["Y"])], "duplicate"),

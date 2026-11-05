@@ -13,8 +13,10 @@
 //!
 //! Each is one undo step, as KiCad's `VARIANT_PROXY_UNDO_ITEM` (and the commit of the symbols' records with it) is.
 //!
-//! **Differs**: an empty description keeps the variant in the list (`SCHEMATIC::SetVariantDescription` erases the entry of `m_VariantDescriptions`, so a
-//! variant no symbol differs in is not in the project file KiCad saves next, and is gone when it is opened again).
+//! **Differs**: an empty description keeps the variant in the list. KiCad 25ec2335 drops it at the next save and reopen when no symbol differs in it:
+//! `SCHEMATIC::SetVariantDescription` (`schematic.cpp:3190-3198`) does `if( aDescription.IsEmpty() ) descriptions.erase( aVariantName );`, the project file is
+//! written from that map alone (`schematic_settings.cpp:274-290`), the schematic writes no record without differentials (`sch_io_kicad_sexpr.cpp:1073-1076`),
+//! and `SCHEMATIC::LoadVariants` (`schematic.cpp:3201-3223`) knows only those two sources.
 
 use eda_model::variants::{self, Flag};
 use eda_model::CheckResult;

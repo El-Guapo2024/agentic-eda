@@ -18,7 +18,7 @@
 //     kicad-cli's report does not carry the rule, but it names it in the violation's text -- `DRC_CONSTRAINT::GetName` is "rule '<name>'" for a custom
 //     rule and the bare name of an implicit one -- so the rule is read from there ([`violatingRule`]). The menu also offers "all '<check>' violations"
 //     -- every violation of the check -- on the board and on the schematic, which KiCad's does not.
-//   - The ERC "Edit Netclasses..." fix opens Schematic Setup > Net Classes, a page this app does not have; its entry is left out.
+//   - The ERC "Edit Netclasses..." fix opens Schematic Setup > Net Classes (`SCH_EDIT_TOOL::FixERCError`: `ShowSchematicSetupDialog( _( "Net Classes" ) )`).
 import type { DrcExclusionSpec, DrcReport, DrcViolation, ErcReport, ErcViolation, RuleSeverity } from "../api/types";
 import { nextMarkerIndex, prevMarkerIndex } from "./checkerNav";
 import { severitiesToSend, severityOf, type SeverityItem } from "./boardSetupRules";
@@ -241,7 +241,9 @@ export type MarkerCommand =
   | { kind: "action"; id: string; select: boolean }
   | { kind: "properties" }
   | { kind: "inspect_clearance" }
-  | { kind: "inspect_constraints" };
+  | { kind: "inspect_constraints" }
+  /** `ShowSchematicSetupDialog( page )`: Schematic Setup on one of its pages. */
+  | { kind: "sch_setup"; page: "netclasses" };
 
 /** One of those entries: the text of the menu item (`GetRunMenuCommandDescription` of the action, or the dialog's own words) and what it does. */
 export interface MarkerEntry {
@@ -321,7 +323,7 @@ export function ercInspectEntry(check: string): MarkerEntry | null {
   return null;
 }
 
-/** `SCH_EDIT_TOOL::FixERCErrorMenuText` and `FixERCError` (without "Edit Netclasses...", which needs Schematic Setup's Net Classes page). */
+/** `SCH_EDIT_TOOL::FixERCErrorMenuText` and `FixERCError`. */
 export function ercFixEntry(check: string): MarkerEntry | null {
   const act = (label: string, id: string, select = false): MarkerEntry => ({ label, command: { kind: "action", id, select } });
   switch (check) {
@@ -336,6 +338,9 @@ export function ercFixEntry(check: string): MarkerEntry | null {
     case "unannotated":
     case "duplicate_reference":
       return act("Annotate Schematic...", "eeschema.EditorControl.annotate");
+    // `ERCE_UNDEFINED_NETCLASS`: `_( "Edit Netclasses..." )`, and `ShowSchematicSetupDialog( _( "Net Classes" ) )`
+    case "undefined_netclass":
+      return { label: "Edit Netclasses...", command: { kind: "sch_setup", page: "netclasses" } };
     default:
       return null;
   }

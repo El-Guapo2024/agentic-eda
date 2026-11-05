@@ -20,10 +20,12 @@ export function rgba(c: SchColor): string {
   return `rgba(${c.r},${c.g},${c.b},${(c.a / 255).toFixed(3)})`;
 }
 
-/** The dash pattern for a line style at stroke width `w` (`correction` 1.0: dash 11w, gap 4w, dot 0.2w). */
-export function dashPattern(style: SchLineStyle | undefined, w: number): number[] {
-  const dash = 11 * w;
-  const gap = 4 * w;
+/** The dash pattern for a line style at stroke width `w` (`RENDER_SETTINGS::GetDashLength` / `GetGapLength` / `GetDotLength` with `correction` 1.0: dash
+ *  `max( dash ratio - 1, 1 ) * w`, gap `max( gap ratio + 1, 1 ) * w`, dot 0.2w). The ratios are Schematic Setup > Formatting's Dashed Lines (12 and 3 by
+ *  default: dash 11w, gap 4w; `SCH_EDIT_FRAME::LoadProjectSettings` sets them from `m_DashedLineDashRatio` / `m_DashedLineGapRatio`). */
+export function dashPattern(style: SchLineStyle | undefined, w: number, ratios?: { dash: number; gap: number }): number[] {
+  const dash = Math.max((ratios?.dash ?? 12) - 1, 1) * w;
+  const gap = Math.max((ratios?.gap ?? 3) + 1, 1) * w;
   const dot = 0.2 * w;
   switch (style) {
     case "dash":

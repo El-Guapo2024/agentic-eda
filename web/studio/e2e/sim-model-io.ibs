@@ -1,0 +1,27 @@
+[IBIS Ver]   5.1
+[File Name]  io.ibs
+[File Rev]   1.0
+[Component]  CHIP
+[Manufacturer] none
+[Package]
+| variable typ min max
+R_pkg 0.1 NA NA
+L_pkg 1n NA NA
+C_pkg 1p NA NA
+[Pin]  signal_name  model_name  R_pin  L_pin  C_pin
+1      OUT          drv         NA     NA     NA
+2      GND          GND         NA     NA     NA
+3      IOP          io_sel      NA     NA     NA
+4      ION          io_sel      NA     NA     NA
+[Diff Pin] inv_pin vdiff tdelay_typ tdelay_min tdelay_max
+3          4       0.1   0          NA         NA
+[Model Selector] io_sel
+io33   3.3 V IO
+io18   1.8 V IO
+[Model] drv
+Model_type Output
+[Model] io33
+Model_type I/O
+[Model] io18
+Model_type I/O
+[End]

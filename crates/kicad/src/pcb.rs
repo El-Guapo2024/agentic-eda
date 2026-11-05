@@ -864,6 +864,9 @@ fn project_net_settings(model: &ConstraintModel) -> serde_json::Value {
             }
         }
     }
+    if let Some(d) = default.as_object_mut() {
+        put_class_schematic(d, "Default", &b.net_class_schematic);
+    }
     classes.push(default);
     // A class's place in the list is its priority (`panel_setup_netclasses.cpp`: `SetPriority( row )`; the Default class has the lowest); `NetClass::priority` is the router's own.
     for (row, c) in b.net_classes.iter().enumerate() {
@@ -872,6 +875,9 @@ fn project_net_settings(model: &ConstraintModel) -> serde_json::Value {
             if let Some(v) = v {
                 j[key] = serde_json::json!(mm_f(v));
             }
+        }
+        if let Some(o) = j.as_object_mut() {
+            put_class_schematic(o, &c.name, &b.net_class_schematic);
         }
         classes.push(j);
     }
@@ -940,6 +946,61 @@ pub fn effective_erc_severities(design: &Design) -> BTreeMap<String, String> {
     severities
 }
 
+/// Schematic Setup's Formatting, Annotation and Field Name Templates (the root's extras) into the derived project's `schematic` object, as
+/// `SCHEMATIC_SETTINGS`' `PARAM`s write them (`schematic_settings.cpp`: the sizes in mils, the ratios as they are, `drawing.field_names` as
+/// `{ name, visible, url }`). A page the design never set writes nothing, so the imported project's own keys -- or KiCad's defaults -- stand.
+/// The object is said to be at `SCHEMATIC_SETTINGS`' schema 1 once a Formatting key is written: at schema 0, KiCad would copy the label offset
+/// ratio over the margin ratio (`registerMigration( 0, 1 )`).
+pub fn write_schematic_setup(schematic: &mut serde_json::Value, extras: &eda_model::sch_extras::SchExtras) {
+    let mils = |nm: Nm| nm.get() as f64 / eda_model::units::NM_PER_MIL as f64;
+    if let Some(f) = &extras.formatting {
+        let drawing = &mut schematic["drawing"];
+        drawing["default_text_size"] = serde_json::json!(mils(f.default_text_size_nm));
+        drawing["default_line_thickness"] = serde_json::json!(mils(f.default_line_width_nm));
+        drawing["pin_symbol_size"] = serde_json::json!(mils(f.pin_symbol_size_nm));
+        drawing["text_offset_ratio"] = serde_json::json!(f.text_offset_ratio);
+        drawing["label_size_ratio"] = serde_json::json!(f.label_size_ratio);
+        drawing["overbar_offset_ratio"] = serde_json::json!(f.overbar_offset_ratio);
+        drawing["junction_size_choice"] = serde_json::json!(f.junction_size_choice);
+        drawing["hop_over_size_choice"] = serde_json::json!(f.hop_over_size_choice);
+        drawing["dashed_lines_dash_length_ratio"] = serde_json::json!(f.dash_ratio);
+        drawing["dashed_lines_gap_length_ratio"] = serde_json::json!(f.gap_ratio);
+        drawing["operating_point_overlay_v_precision"] = serde_json::json!(f.opo_v_precision);
+        drawing["operating_point_overlay_v_range"] = serde_json::json!(f.opo_v_range);
+        drawing["operating_point_overlay_i_precision"] = serde_json::json!(f.opo_i_precision);
+        drawing["operating_point_overlay_i_range"] = serde_json::json!(f.opo_i_range);
+        schematic["meta"] = serde_json::json!({ "version": 1 });
+    }
+    if let Some(a) = &extras.annotation {
+        schematic["annotation"]["sort_order"] = serde_json::json!(a.sort_order);
+        schematic["annotation"]["method"] = serde_json::json!(a.method);
+        schematic["annotate_start_num"] = serde_json::json!(a.start_num);
+        schematic["reuse_designators"] = serde_json::json!(a.reuse_designators);
+    }
+    if !extras.field_name_templates.is_empty() {
+        schematic["drawing"]["field_names"] = serde_json::json!(extras.field_name_templates.iter().map(|t| serde_json::json!({ "name": t.name, "visible": t.visible, "url": t.url })).collect::<Vec<_>>());
+    }
+}
+
+/// A net class's schematic columns as `NET_SETTINGS`' `saveNetclass` writes them into `net_settings.classes[]` (`common/project/net_settings.cpp`): the
+/// widths in mils (`schIUScale.IUToMils`), the line style as its number, the colour as `COLOR4D` writes it -- `rgba(0, 0, 0, 0.000)` for none, as KiCad writes
+/// a class with no colour of its own. The Default class gets KiCad's defaults for what it leaves unset (`NETCLASS( Default, true )`).
+pub fn put_class_schematic(class: &mut serde_json::Map<String, serde_json::Value>, name: &str, looks: &BTreeMap<String, eda_model::sch_setup::NetClassSchematic>) {
+    let mils = |nm: Nm| nm.get() as f64 / eda_model::units::NM_PER_MIL as f64;
+    let own = looks.get(name);
+    let look = if name == "Default" { eda_model::sch_setup::NetClassSchematic::default_class(own) } else { own.cloned().unwrap_or_default() };
+    if let Some(w) = look.wire_width {
+        class.insert("wire_width".into(), serde_json::json!(mils(w)));
+    }
+    if let Some(w) = look.bus_width {
+        class.insert("bus_width".into(), serde_json::json!(mils(w)));
+    }
+    if let Some(s) = look.line_style {
+        class.insert("line_style".into(), serde_json::json!(s));
+    }
+    class.insert("schematic_color".into(), serde_json::json!(look.color.as_deref().unwrap_or(eda_model::sch_setup::UNSPECIFIED_COLOR)));
+}
+
 /// The schema `board.design_settings` is at when it lists its exclusions as records: 3 (`BOARD_DESIGN_SETTINGS::migrateSchema2to3` is the step that makes them).
 const DRC_EXCLUSION_RECORDS_SCHEMA: u32 = 3;
 /// The schema the `erc` section is at when it lists its exclusions as records: 1 (a section at 0 lists pipe-delimited texts).
@@ -992,6 +1053,16 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
         drawing["intersheets_ref_short"] = serde_json::json!(iref.short);
         drawing["intersheets_ref_prefix"] = serde_json::json!(iref.prefix);
         drawing["intersheets_ref_suffix"] = serde_json::json!(iref.suffix);
+    }
+    if let Some(sch) = design.schematic.as_ref() {
+        write_schematic_setup(&mut project["schematic"], &sch.extras);
+    }
+    // Project > Bus Alias Definitions (`PROJECT_FILE`'s `schematic.bus_aliases`, where KiCad 10 keeps them: `{ "<name>": ["<member>", ..] }`). The derived
+    // schematic still carries them as legacy `(bus_alias ..)` blocks too, which KiCad reads into the same list (`SCH_SCREEN::AddBusAlias`, a definition
+    // it already has being kept once).
+    if !design.bus_aliases.is_empty() {
+        let aliases: serde_json::Map<String, serde_json::Value> = design.bus_aliases.iter().filter(|a| !a.name.trim().is_empty()).map(|a| (a.name.trim().to_string(), serde_json::json!(a.members))).collect();
+        project["schematic"]["bus_aliases"] = serde_json::Value::Object(aliases);
     }
     let waived_erc = crate::erc_exclusions::project_entries(design.schematic.as_ref().map_or(&[][..], |s| s.erc_exclusions.as_slice()));
     if !waived_erc.is_empty() {

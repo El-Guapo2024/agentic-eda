@@ -13,13 +13,15 @@
 // The "Show" column of the fields table (`DIALOG_SYMBOL_PROPERTIES`) shows or hides each of the four fields and of the user-defined ones that follow them (the text of
 // each of those is edited here, Add Field makes one -- hidden, as KiCad's `OnAddField` does -- and the x beside it removes it: one undo step with the rest), and the Body style choice (Standard / Alternate, only for a symbol
 // whose library symbol has two) puts the symbol in the other body style (`SCH_EDIT_FRAME::SelectBodyStyle`): both go in the same undo step as the texts. The Footprint
-// field's Browse... button opens the Footprint Chooser.
+// field's Browse... button opens the Footprint Chooser. A template of Schematic Setup > Field Name Templates the symbol lacks is a row of its own, empty and shown
+// as the template says, and OK adds it (`DIALOG_SYMBOL_PROPERTIES::TransferDataToWindow`: "Add in any template fieldnames not yet defined").
 //
 // Design variants (KiCad 25ec2335 `DIALOG_SYMBOL_PROPERTIES`): the title names the current variant (" - <variant> Design Variant"), the texts and the Attributes box
 // ("Exclude from simulation", "Exclude from board", "Do not populate", "Exclude from bill of materials", "Exclude from position files") show the variant's values
 // (`GetFieldText( .., variant )`, `GetDNP( sheet, variant )`) and OK sets them in that variant (`SetText( text, sheet, variant )`, `SetDNP( .., variant )`: one
 // `set_symbol_variant`); the Reference is set only in the default variant, and adding or removing a field, its visibility and the body style are the symbol's.
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { fetchSchSetup } from "../api/client";
 import { fetchAnySymbol } from "../api/libraryClient";
 import type { Cmd } from "../api/types";
 import { uniquePinCount } from "../kicad-port/footprintFilter";
@@ -109,8 +111,21 @@ export function SymbolPropertiesDialog() {
     setDatasheet(symbol.datasheet ?? "");
     setShown(Object.fromEntries((symbol.fields ?? []).filter((f) => (MAIN_FIELDS as readonly string[]).includes(f.name)).map((f) => [f.name, f.visible])));
     setBodyStyle(symbol.body_style || 1);
-    setUserRows(userFieldsOf(symbol.fields).map((f) => ({ key: nextKey.current++, name: f.name, text: f.text, shown: f.visible, isNew: false, removed: false, was: { text: f.text, visible: f.visible } })));
+    const own = userFieldsOf(symbol.fields).map((f) => ({ key: nextKey.current++, name: f.name, text: f.text, shown: f.visible, isNew: false, removed: false, was: { text: f.text, visible: f.visible } }));
+    setUserRows(own);
     setFlags(baseSymbol ? variantFlags(baseSymbol, variant) : null);
+    // "Add in any template fieldnames not yet defined" (`TransferDataToWindow`, Schematic Setup > Field Name Templates): a row for each template the symbol lacks, shown as
+    // the template's Visible box says; OK adds it, empty, as KiCad's OK does. Not on a sheet whose fields have no places yet (it could not show one).
+    if ((symbol.fields?.length ?? 0) > 0) {
+      const has = new Set([...MAIN_FIELDS, ...own.map((r) => r.name)]);
+      void fetchSchSetup()
+        .then((r) => {
+          if (!r.ok) return;
+          const missing = r.field_name_templates.filter((t) => !has.has(t.name));
+          if (missing.length > 0) setUserRows((rows) => [...rows, ...missing.map((t) => ({ key: nextKey.current++, name: t.name, text: "", shown: t.visible, isNew: true, removed: false }))]);
+        })
+        .catch(() => undefined);
+    }
     setError(null);
     const focusTarget = { reference: refInput, value: valueInput, footprint: footprintInput, datasheet: datasheetInput }[open?.field ?? "reference"];
     // Let the dialog mount before stealing focus.
@@ -358,7 +373,10 @@ export function SymbolPropertiesDialog() {
           reference={symbol.id}
           onClose={() => setEditingSimModel(false)}
           // the Simulation Model dialog wrote the fields itself (its own undo step): the rows show them as the symbol has them now
-          onWritten={(written) =>
+          onWritten={(all) => {
+            // the Value (the primary parameter saved there) is the dialog's own box; the rest are user rows
+            const { Value: writtenValue, ...written } = all;
+            if (writtenValue !== undefined) setValue(writtenValue);
             setUserRows((rows) => {
               let out = rows.filter((r) => !(r.name in written && written[r.name] === "" && !r.isNew));
               out = out.map((r) => (r.name in written && written[r.name] !== "" ? { ...r, text: written[r.name]!, removed: false, was: { text: written[r.name]!, visible: r.was?.visible ?? r.shown } } : r));
@@ -366,8 +384,8 @@ export function SymbolPropertiesDialog() {
                 if (text !== "" && !out.some((r) => r.name === name)) out.push({ key: nextKey.current++, name, text, shown: false, isNew: false, removed: false, was: { text, visible: false } });
               }
               return out;
-            })
-          }
+            });
+          }}
         />
       )}
       {choosingFootprint && (
