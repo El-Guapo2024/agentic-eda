@@ -795,6 +795,7 @@ mod tests {
             datasheet: None,
             description_field: None,
             kicad: Default::default(),
+            items: Default::default(),
         };
 
         let text = export_kicad_mod(&fp);

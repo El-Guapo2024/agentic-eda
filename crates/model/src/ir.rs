@@ -1746,7 +1746,7 @@ pub struct Zone {
 }
 
 impl Zone {
-    fn id_seed(&self) -> String {
+    pub(crate) fn id_seed(&self) -> String {
         let pts: Vec<String> = self.outline.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
         format!("{}|{}|{}", self.net, self.layer, pts.join(";"))
     }
@@ -2395,7 +2395,7 @@ pub struct Dimension {
 }
 
 impl Dimension {
-    fn id_seed(&self) -> String {
+    pub(crate) fn id_seed(&self) -> String {
         format!("{:?}|{},{}|{},{}", self.kind, self.start.x, self.start.y, self.end.x, self.end.y)
     }
 }
@@ -3806,6 +3806,10 @@ pub struct LibraryFootprint {
     /// What the file says that the editor does not edit, kept for the writer ([`crate::lib_keep::LibraryFootprintKeep`]).
     #[serde(default, skip_serializing_if = "crate::lib_keep::LibraryFootprintKeep::is_empty")]
     pub kicad: crate::lib_keep::LibraryFootprintKeep,
+    /// The footprint's dimensions, zones, text boxes, points, images, barcodes, tables and groups ([`crate::fp_items`]), in its own frame. Additive: absent in an older
+    /// `design.json` reads as "none" (such a footprint kept them as `kicad.tokens`, which the writer still writes back).
+    #[serde(default, skip_serializing_if = "crate::fp_items::FootprintItems::is_empty")]
+    pub items: crate::fp_items::FootprintItems,
 }
 
 impl Default for LibraryFootprint {
@@ -3833,6 +3837,7 @@ impl Default for LibraryFootprint {
             datasheet: None,
             description_field: None,
             kicad: Default::default(),
+            items: Default::default(),
         }
     }
 }
@@ -3930,6 +3935,8 @@ impl LibraryFootprint {
                 self.texts[i].id = id;
             }
         }
+        // the dimensions, zones, text boxes, ... and the groups ([`crate::fp_items`])
+        self.items.assign_missing_ids(&mut existing);
     }
 
     /// `FOOTPRINT::GetNextPadNumber( aLastPadNumber )` (`footprint.cpp:3357`): the prefix of `last` (`UTIL::GetRefDesPrefix`: its trailing digits and `?` taken off) and
