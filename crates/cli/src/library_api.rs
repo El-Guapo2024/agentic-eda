@@ -104,12 +104,15 @@ pub fn symbol(dir: &Path, lib_id: &str) -> Value {
     }
 }
 
+/// The power symbols the built-in table offers Place Power where KiCad's libraries are not installed.
+const BUILTIN_POWER: [&str; 9] = ["power:GND", "power:+5V", "power:+3V3", "power:+12V", "power:-12V", "power:VCC", "power:VDD", "power:VSS", "power:PWR_FLAG"];
+
 /// `GET /api/library/project`: the symbols the chooser lists beside the installed libraries -- the project's own and the ones the design uses --
 /// as `{"entries": [{"id": "Lib:Name", "source", "placed", "description", "reference", "units", "pins", "power", "keywords"}]}`, sorted by id.
 /// `source` is `project` (an entry of the project symbol library: authored here, imported, or the copy a placed symbol keeps -- editable), `design`
 /// (the board's model resolves it: the intent's own or an installed one it already uses) or `builtin` (the small table that stands in for
-/// `Device:R`, `C`, `L`, `D`, `LED` where KiCad's libraries are not installed). `placed` is set for a symbol with an instance on the schematic,
-/// KiCad's "Already Placed" group.
+/// `Device:R`, `C`, `L`, `D`, `LED`, and the common power rails, where KiCad's libraries are not installed). `placed` is set for a symbol (or power
+/// symbol) with an instance on the schematic, KiCad's "Already Placed" group.
 pub fn project_symbols(dir: &Path) -> Value {
     let (_, design, model) = match board::load(dir) {
         Ok(loaded) => loaded,
@@ -120,6 +123,8 @@ pub fn project_symbols(dir: &Path) -> Value {
         Some(root) => {
             for sch in std::iter::once(root).chain(design.sheet_contents.iter().flat_map(|c| c.values())) {
                 placed.extend(sch.symbols.iter().map(|s| s.lib_id.clone()).filter(|id| !id.is_empty()));
+                // a power symbol is an `SCH_SYMBOL` too: Place Power's chooser lists the placed ones (`PlaceSymbol`'s `alreadyPlaced` walks every one)
+                placed.extend(sch.power_symbols.iter().map(|p| p.lib_id.clone()).filter(|id| !id.is_empty()));
             }
         }
         // No stored schematic: the studio shows the one derived from the intent, whose symbols are the parts' own.
@@ -151,6 +156,13 @@ pub fn project_symbols(dir: &Path) -> Value {
     }
     for s in eda_model::symbol::builtin_catalog() {
         put(&s.lib_id, "builtin", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "");
+    }
+    // Place Power's chooser where KiCad's libraries are not installed: the common rails the built-in symbols draw (`symbol::builtin` has one for any
+    // `power:<net>`; these are the names the old Power Symbol dialog offered).
+    for id in BUILTIN_POWER {
+        if let Some(s) = eda_model::symbol::builtin(id) {
+            put(&s.lib_id, "builtin", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "");
+        }
     }
     json!({ "entries": entries.into_values().collect::<Vec<_>>() })
 }
@@ -342,16 +354,17 @@ mod tests {
     fn the_choosers_project_list_has_the_project_library_what_is_placed_and_the_stand_ins() {
         let dir = scratch_board(
             "project",
-            r#"{"schema":1,"provenance":{"engine_version":"0","intent_hash":"x","seed":0,"stage_hashes":[]},
+            r##"{"schema":1,"provenance":{"engine_version":"0","intent_hash":"x","seed":0,"stage_hashes":[]},
                 "placement":{"outline":[],"footprints":[],"modules":[]},
                 "schematic":{"symbols":[
                     {"id":"R1","at":{"x":0,"y":0},"rot":0,"lib_id":"Device:R"},
                     {"id":"U1","at":{"x":9000,"y":0},"rot":0,"lib_id":"Mine:Part"},
-                    {"id":"U2","at":{"x":19000,"y":0},"rot":0,"lib_id":"Amp:LM358"}],"wires":[]},
+                    {"id":"U2","at":{"x":19000,"y":0},"rot":0,"lib_id":"Amp:LM358"}],"wires":[],
+                    "power_symbols":[{"id":"#PWR01","lib_id":"power:GND","at":{"x":0,"y":9000},"rot":0,"net":"GND","pin":""}]},
                 "symbol_library":{"symbols":[
                     {"lib_id":"Mine:Part","reference_prefix":"U","description":"My part","keywords":"mine custom","unit_count":2,"pins":[{"number":"1","name":"A","electrical_type":"input","shape":"line","at":{"x":0,"y":0},"angle_deg":0,"length_mm":2.54,"unit":1},{"number":"1","name":"A","electrical_type":"input","shape":"line","at":{"x":0,"y":0},"angle_deg":0,"length_mm":2.54,"unit":2},{"number":"2","name":"B","electrical_type":"output","shape":"line","at":{"x":0,"y":2.54},"angle_deg":0,"length_mm":2.54,"unit":1}]},
                     {"lib_id":"eda:Unused","description":"Never placed"},
-                    {"lib_id":"Amp:LM358","reference_prefix":"U","description":"Dual op-amp","published":true,"unit_count":3}]}}"#,
+                    {"lib_id":"Amp:LM358","reference_prefix":"U","description":"Dual op-amp","published":true,"unit_count":3}]}}"##,
         );
         let v = project_symbols(&dir);
         let entries = v["entries"].as_array().unwrap_or_else(|| panic!("{v}"));
@@ -364,7 +377,10 @@ mod tests {
         assert_eq!(by("Device:R")["placed"], true);
         assert_eq!(by("Device:R")["source"], "design", "the model resolves it: the built-in table or the library file");
         assert_eq!(by("Device:LED")["source"], "builtin");
-        assert!(entries.iter().all(|e| e["id"].as_str().is_some_and(|id| !id.starts_with("power:"))), "power symbols are not in the list");
+        // the power symbols are flagged (the Symbol Chooser leaves them out, Place Power's takes only them): the built-in rails, and a placed one is "Already Placed"
+        assert!(entries.iter().filter(|e| e["id"].as_str().is_some_and(|id| id.starts_with("power:"))).all(|e| e["power"] == true));
+        assert_eq!((by("power:+3V3")["source"].clone(), by("power:+3V3")["placed"].clone()), (json!("builtin"), json!(false)));
+        assert_eq!(by("power:GND")["placed"], true, "{v}");
         assert!(entries.windows(2).all(|w| w[0]["id"].as_str() <= w[1]["id"].as_str()), "sorted by id");
         let _ = std::fs::remove_dir_all(&dir);
     }

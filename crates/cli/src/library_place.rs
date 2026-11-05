@@ -9,6 +9,7 @@
 //!     (`Cmd::EmbedLibSymbol`, KiCad's `SCH_SCREEN::AddLibSymbol`), then adds the instance with the library's own Value and Footprint where the
 //!     command left them empty (a new `SCH_SYMBOL` copies its fields from the `LIB_SYMBOL`), then the library's Datasheet. One undo step takes
 //!     all of it back.
+//!   * `AddPowerSymbol { lib_id }` (Place Power's chooser) keeps the power symbol's definition first, the same way.
 //!   * `SetSymbolLibIds { changes }` (Edit Symbol Library Links) keeps the definition of every installed symbol it links to first, the same way.
 //!   * `PlaceFootprint { footprint }` carries the footprint's pads, graphics and courtyard as `definition`.
 //!   * `ExchangeFootprints` carries the library copy of each footprint it puts a part on (`library`), and a symbol's Footprint field that is edited
@@ -29,7 +30,7 @@ fn places_from_libraries(cmd: &Cmd) -> bool {
     match cmd {
         Cmd::Batch { cmds } => cmds.iter().any(places_from_libraries),
         Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => places_from_libraries(cmd),
-        Cmd::AddSymbol { .. } | Cmd::SetSymbolLibIds { .. } | Cmd::PlaceFootprint { .. } | Cmd::ExchangeFootprints { .. } => true,
+        Cmd::AddSymbol { .. } | Cmd::AddPowerSymbol { .. } | Cmd::SetSymbolLibIds { .. } | Cmd::PlaceFootprint { .. } | Cmd::ExchangeFootprints { .. } => true,
         Cmd::EditSymbolFields { footprint: Some(f), .. } => !f.trim().is_empty(),
         Cmd::SetSymbolFields { edits, .. } => edits.iter().any(|e| e.field == "Footprint"),
         _ => false,
@@ -84,6 +85,16 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
                 cmds.push(Cmd::EditSymbolFields { id: id.clone(), value: None, footprint: None, datasheet: Some(datasheet.to_string()) });
             }
             Some(Cmd::Batch { cmds })
+        }
+        // Place Power (`PlaceSymbol` with the power filter): a power symbol chosen out of an installed library (`power:+3V3`) is an `SCH_SYMBOL` like any
+        // other, made from its `LIB_SYMBOL`: its definition goes in with it, as `AddSymbol`'s does, so it draws as the library draws it. The design's own
+        // definition, and the built-in rail where no library has the name, stand.
+        Cmd::AddPowerSymbol { lib_id, .. } => {
+            if !lacks_definition(lib_id, design, model) {
+                return None;
+            }
+            let (definition, _) = crate::library_search::installed_symbol(symbols, lib_id)?;
+            Some(Cmd::Batch { cmds: vec![Cmd::EmbedLibSymbol { symbol: definition }, cmd.clone()] })
         }
         Cmd::SetSymbolLibIds { changes, .. } => {
             let mut embeds: Vec<Cmd> = Vec::new();
@@ -306,6 +317,38 @@ mod tests {
         let Some(Cmd::Batch { cmds }) = rewrite(&batch, &design(), &model, &root, &root) else { panic!() };
         assert!(matches!(cmds[0], Cmd::DeleteWire { .. }) && matches!(cmds[1], Cmd::Batch { .. }));
         assert!(rewrite(&Cmd::Batch { cmds: vec![Cmd::DeleteWire { id: "w".into() }] }, &design(), &model, &root, &root).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Place Power: a power symbol out of an installed library goes in with its definition, as Place Symbol's does (`PlaceSymbol` makes both from
+    /// their `LIB_SYMBOL`); one the design draws already, or a rail no library has, is left as it is.
+    #[test]
+    fn placing_an_installed_power_symbol_keeps_its_definition_first() {
+        let root = std::env::temp_dir().join(format!("eda-library-place-power-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("power.kicad_sym"),
+            r##"(kicad_symbol_lib (version 20251024)
+        (symbol "+3V3" (power) (property "Reference" "#PWR") (property "Value" "+3V3") (property "Description" "Power symbol creates a global label with name \"+3V3\"")
+            (symbol "+3V3_0_1" (polyline (pts (xy -0.762 1.27) (xy 0 2.54)) (stroke (width 0) (type default)) (fill (type none))))
+            (symbol "+3V3_1_1" (pin power_in line (at 0 0 90) (length 0) hide (name "+3V3") (number "1")))))"##,
+        )
+        .unwrap();
+        let place = |lib_id: &str| Cmd::AddPowerSymbol { lib_id: lib_id.into(), at: Point { x: mm(10.0), y: mm(10.0) }, rot_millideg: 90_000, net: "+3V3".into(), pin: String::new(), annotate: None };
+        let model = ConstraintModel::default();
+        let out = rewrite(&place("power:+3V3"), &design(), &model, &root, &root).expect("rewritten");
+        let Cmd::Batch { cmds } = out else { panic!("{out:?}") };
+        assert_eq!(cmds.len(), 2);
+        assert!(matches!(&cmds[0], Cmd::EmbedLibSymbol { symbol } if symbol.lib_id == "power:+3V3" && symbol.power), "{:?}", cmds[0]);
+        assert!(matches!(&cmds[1], Cmd::AddPowerSymbol { lib_id, rot_millideg: 90_000, net, .. } if lib_id == "power:+3V3" && net == "+3V3"));
+        // no library has it: the built-in rail draws it
+        assert!(rewrite(&place("power:VBAT"), &design(), &model, &root, &root).is_none());
+        // the design keeps a definition of it
+        let mut d = design();
+        d.symbol_library = Some(Default::default());
+        d.symbol_library.as_mut().unwrap().symbols.push(eda_model::ir::LibrarySymbol::new_empty("power:+3V3"));
+        assert!(rewrite(&place("power:+3V3"), &d, &model, &root, &root).is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 

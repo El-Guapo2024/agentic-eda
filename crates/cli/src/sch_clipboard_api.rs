@@ -67,7 +67,7 @@ fn recall_screens(fragment: &SchFragment) -> BTreeMap<String, SchematicSection> 
 const MAX_PASTED_TEXT: usize = 100;
 
 /// The board as the studio shows it: a board with no stored schematic has the one derived from its intent.
-fn loaded(dir: &Path) -> Result<(board::Meta, Design, ConstraintModel), Value> {
+pub(crate) fn loaded(dir: &Path) -> Result<(board::Meta, Design, ConstraintModel), Value> {
     let (meta, mut design, model) = board::load(dir).map_err(|e| err(board::reasons(&e)))?;
     if design.schematic.is_none() {
         let derived = board::derived_schematic(&design, &model).map_err(|e| err(board::reasons(&e)))?;
@@ -129,6 +129,47 @@ fn pin_points(f: &SchFragment) -> Vec<Point> {
     out
 }
 
+/// What `cmd` adds to the sheet `sheet` (a `/`-joined path, `""` for the root) when it is tried on a copy of `design` -- nothing is stored: the new
+/// items in the shapes `GET /api/schematic` has them, with the library symbols they draw with. The paste preview, and the item a placing tool carries
+/// before the click that places it (`crate::sch_place_api`).
+pub(crate) fn tried_preview(meta: &board::Meta, design: Design, model: &mut ConstraintModel, sheet: &str, cmd: Cmd) -> Result<Value, Value> {
+    let before = crate::studio::schematic_json_of(&design, model, sheet);
+    let cmd = if sheet.is_empty() { cmd } else { Cmd::OnSheet { sheet: sheet.to_string(), cmd: Box::new(cmd) } };
+    let drawn_before = design.clone();
+    let mut tried = Board::new(design, model, meta.snap_nm, meta.spacing_nm);
+    if let Err(e) = tried.apply(&cmd) {
+        return Err(err(board::reasons(&e)));
+    }
+    let mut after_design = tried.design().clone();
+    drop(tried);
+    board::reconcile_schematic(&mut after_design, model, Some(&drawn_before));
+    let after = crate::studio::schematic_json_of(&after_design, model, sheet);
+
+    let by_id = |v: &Value| v.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+    let by_id_unit = |v: &Value| format!("{}#{}", by_id(v), v.get("unit").and_then(Value::as_u64).unwrap_or(1));
+    let symbols = new_items(&before, &after, "symbols", &by_id_unit);
+    let power = new_items(&before, &after, "power_symbols", &by_id);
+    let mut lib_ids: Vec<&str> = symbols.iter().filter_map(|s| s.get("lib_id").and_then(Value::as_str)).chain(power.iter().filter_map(|s| s.get("lib_id").and_then(Value::as_str))).collect();
+    lib_ids.sort_unstable();
+    lib_ids.dedup();
+    let lib_symbols: serde_json::Map<String, Value> = lib_ids.iter().filter_map(|id| Some((id.to_string(), after.get("lib_symbols")?.get(*id)?.clone()))).collect();
+    Ok(json!({
+        "symbols": symbols,
+        "power_symbols": power,
+        "wires": new_items(&before, &after, "wires", &by_id),
+        "labels": new_items(&before, &after, "labels", &by_id),
+        "texts": new_items(&before, &after, "texts", &by_id),
+        "sheets": new_items(&before, &after, "sheets", &by_id),
+        "no_connects": new_items(&before, &after, "no_connects", &by_id),
+        "bus_entries": new_items(&before, &after, "bus_entries", &by_id),
+        "junctions": new_items(&before, &after, "junctions", &by_id),
+        "lines": new_items(&before, &after, "lines", &by_id),
+        "graphics": new_items(&before, &after, "graphics", &by_id),
+        "groups": new_items(&before, &after, "groups", &by_id),
+        "lib_symbols": lib_symbols,
+    }))
+}
+
 /// `POST /api/sch/clipboard/parse`.
 pub fn parse(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
@@ -155,42 +196,11 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return e,
     };
-    let before = crate::studio::schematic_json_of(&design, &model, &sheet);
     let paste = Cmd::PasteSch { fragment: fragment.clone(), dx: Nm::ZERO, dy: Nm::ZERO, mode, numbering: Default::default() };
-    let cmd = if sheet.is_empty() { paste } else { Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(paste) } };
-    let drawn_before = design.clone();
-    let mut tried = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
-    if let Err(e) = tried.apply(&cmd) {
-        return err(board::reasons(&e));
-    }
-    let mut after_design = tried.design().clone();
-    drop(tried);
-    board::reconcile_schematic(&mut after_design, &mut model, Some(&drawn_before));
-    let after = crate::studio::schematic_json_of(&after_design, &model, &sheet);
-
-    let by_id = |v: &Value| v.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-    let by_id_unit = |v: &Value| format!("{}#{}", by_id(v), v.get("unit").and_then(Value::as_u64).unwrap_or(1));
-    let symbols = new_items(&before, &after, "symbols", &by_id_unit);
-    let power = new_items(&before, &after, "power_symbols", &by_id);
-    let mut lib_ids: Vec<&str> = symbols.iter().filter_map(|s| s.get("lib_id").and_then(Value::as_str)).chain(power.iter().filter_map(|s| s.get("lib_id").and_then(Value::as_str))).collect();
-    lib_ids.sort_unstable();
-    lib_ids.dedup();
-    let lib_symbols: serde_json::Map<String, Value> = lib_ids.iter().filter_map(|id| Some((id.to_string(), after.get("lib_symbols")?.get(*id)?.clone()))).collect();
-    let preview = json!({
-        "symbols": symbols,
-        "power_symbols": power,
-        "wires": new_items(&before, &after, "wires", &by_id),
-        "labels": new_items(&before, &after, "labels", &by_id),
-        "texts": new_items(&before, &after, "texts", &by_id),
-        "sheets": new_items(&before, &after, "sheets", &by_id),
-        "no_connects": new_items(&before, &after, "no_connects", &by_id),
-        "bus_entries": new_items(&before, &after, "bus_entries", &by_id),
-        "junctions": new_items(&before, &after, "junctions", &by_id),
-        "lines": new_items(&before, &after, "lines", &by_id),
-        "graphics": new_items(&before, &after, "graphics", &by_id),
-        "groups": new_items(&before, &after, "groups", &by_id),
-        "lib_symbols": lib_symbols,
-    });
+    let preview = match tried_preview(&meta, design, &mut model, &sheet, paste) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
 
     let anchor = match (duplicate, cursor) {
         (true, Some(c)) => closest_anchor(&fragment.section, &pin_points(&fragment), c),
