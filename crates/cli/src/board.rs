@@ -2635,7 +2635,7 @@ pub fn run(
                 let stroke_width = mm_arg(&flag(rest, "--width").unwrap_or_else(|| "0.15".into()))?;
                 let justify = parse_justify(flag(rest, "--justify").as_deref())?;
                 let mirror = has(rest, "--mirror");
-                step_with(&dir, Cmd::EditText { id, content, angle, layer, size_nm, stroke_width, justify, mirror }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::EditText { id, content, angle, layer, size_nm, stroke_width, justify, mirror, bold: None }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "delete" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "text delete", "usage: eda board text delete <id>"))?;
@@ -2808,6 +2808,26 @@ pub(crate) mod tests {
         save(dir, &design).unwrap();
         let meta = Meta { intent: intent_path.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    }
+
+    /// Round 7 R7-3 / P4: the studio's state says whether a board text is bold (`TextExtra::bold`, what the Text Properties dialog's Bold button starts as), and
+    /// `edit_text`'s `bold` sets it.
+    #[test]
+    fn the_studio_state_says_whether_a_board_text_is_bold() {
+        let dir = scratch("text_bold_state");
+        setup(&dir);
+        let text = Text { id: String::new(), content: "R7".into(), at: Point { x: mm(3.0), y: mm(12.0) }, angle: 0, layer: "F.Cu".into(), size_nm: mm(1.5), stroke_width: mm(0.3), justify: Default::default(), mirror: false };
+        step(&dir, Cmd::AddText { text }, false, "ui").unwrap();
+        let id = load(&dir).unwrap().1.drawings.unwrap().texts[0].id.clone();
+        let bold = |dir: &Path| {
+            let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+            crate::studio::state(dir, &job, crate::text_vars_json::clock_of("/api/state")).unwrap()["drawings"]["texts"][0]["bold"].clone()
+        };
+        assert_eq!(bold(&dir), serde_json::json!(false));
+        let edit = Cmd::EditText { id, content: "R7".into(), angle: 0, layer: "F.Cu".into(), size_nm: mm(1.5), stroke_width: mm(0.3), justify: Default::default(), mirror: false, bold: Some(true) };
+        step(&dir, edit, false, "ui").unwrap();
+        assert_eq!(bold(&dir), serde_json::json!(true));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3061,7 +3081,7 @@ pub(crate) mod tests {
         assert_ne!(body(&a), body(&b), "the plots differ: 'Notes' is not 'User.1'");
         step(&plain, Cmd::SetBoardLayers { settings: { let mut p = a_layers_page(); p.names.clear(); p.names.insert("User.1".into(), "Notes".into()); p } }, false, "ui").unwrap();
         let text_id = load(&plain).unwrap().1.drawings.unwrap().texts[0].id.clone();
-        step(&plain, Cmd::EditText { id: text_id, content: "on Notes / Notes".into(), angle: 0, layer: "User.1".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: Default::default(), mirror: false }, false, "ui").unwrap();
+        step(&plain, Cmd::EditText { id: text_id, content: "on Notes / Notes".into(), angle: 0, layer: "User.1".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: Default::default(), mirror: false, bold: None }, false, "ui").unwrap();
         assert_eq!(body(&plot(&with)), body(&plot(&plain)), "the LAYER variable on a renamed layer is the user's name, as the studio shows it");
 
         // kicad-cli's own rewrite of the derived board file keeps what the page set: the names, the types and the layers.

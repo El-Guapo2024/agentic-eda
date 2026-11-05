@@ -1412,6 +1412,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     eda_model::ir::TextJustify::Right => "right",
                 },
                 "mirror": t.mirror,
+                // `EDA_TEXT::IsBold` (`TextExtra::bold`): what the Text Properties dialog's Bold button starts as (`m_bold->Check( m_item->IsBold() )`).
+                "bold": d.text_extra(&t.id).is_some_and(|x| x.bold),
             }))).collect::<Vec<_>>(),
             // Task item 5 -- see `eda_model::ir::Group`'s own doc. A tuning pattern (a `PCB_GENERATOR`, which is a `PCB_GROUP`) is listed with the groups so that it selects as one
             // (`generator` names what it is); `tuning_patterns` has the pattern itself.
