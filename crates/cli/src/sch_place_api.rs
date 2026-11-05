@@ -94,4 +94,46 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("design.json")).unwrap(), before, "a preview stores nothing");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Place Power with KiCad's libraries installed: the preview and the click both bring `power:+3V3`'s definition (`library_place`), the placed power
+    /// symbol draws and exports as the library draws it, one undo takes the symbol and its definition back. The slow tier asks kicad-cli's ERC: no library
+    /// finding (`lib_symbol_issues`, `lib_symbol_mismatch`) comes with it.
+    #[test]
+    fn an_installed_power_symbol_is_previewed_and_placed_with_its_library_definition_and_undo_takes_both_back() {
+        if eda_kicad::find_symbol_library_file(&eda_kicad::default_symbol_library_root(), "power").is_none() {
+            eprintln!("no KiCad power library installed (KICAD_PATH); skipping");
+            return;
+        }
+        let dir = board("power_place");
+        let place = json!({ "op": "add_power_symbol", "lib_id": "power:+3V3", "at": { "x": mm(1.27).get() * 40, "y": mm(1.27).get() * 40 }, "rot_millideg": 0, "net": "+3V3", "pin": "" });
+        let v = preview(&dir, place.clone());
+        assert!(v["preview"]["lib_symbols"]["power:+3V3"]["graphics"].as_array().is_some_and(|g| !g.is_empty()), "the preview draws the library's symbol: {v}");
+        let erc_counts = |dir: &Path| -> std::collections::BTreeMap<String, u64> {
+            let erc = crate::kicad_engine::erc(dir).expect("kicad-cli runs ERC");
+            erc["counts"].as_object().map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_u64().unwrap_or(0))).collect()).unwrap_or_default()
+        };
+        let slow = std::env::var_os("EDA_SLOW_TESTS").is_some() && eda_kicad_engine::find_cli().is_some();
+        let base = if slow { erc_counts(&dir) } else { Default::default() };
+
+        crate::board::step(&dir, serde_json::from_value(place).unwrap(), false, "test").unwrap();
+        let (_, design, model) = crate::board::load(&dir).unwrap();
+        let kept = design.symbol_library.as_ref().and_then(|l| l.by_lib_id("power:+3V3")).expect("the definition is kept with the schematic");
+        assert!(kept.power && kept.published);
+        assert!(model.symbol_of("power:+3V3").is_some_and(|s| s.power && !s.graphics.is_empty()));
+        let sch = design.schematic.as_ref().unwrap();
+        assert_eq!(sch.power_symbols.iter().map(|p| (p.lib_id.as_str(), p.net.as_str())).collect::<Vec<_>>(), [("power:+3V3", "+3V3")]);
+        if slow {
+            let after = erc_counts(&dir);
+            eprintln!("kicad-cli ERC before placing power:+3V3 {base:?}, after {after:?}");
+            for kind in ["lib_symbol_issues", "lib_symbol_mismatch", "unannotated", "duplicate_reference"] {
+                assert_eq!(after.get(kind).copied().unwrap_or(0), base.get(kind).copied().unwrap_or(0), "placing the power symbol added {kind}: before {base:?}, after {after:?}");
+            }
+        }
+
+        crate::board::undo(&dir, "test", Some(eda_ops::Domain::Schematic)).unwrap();
+        let (_, design, _) = crate::board::load(&dir).unwrap();
+        assert!(design.schematic.as_ref().is_none_or(|s| s.power_symbols.is_empty()), "the power symbol is gone");
+        assert!(design.symbol_library.as_ref().is_none_or(|l| l.by_lib_id("power:+3V3").is_none()), "and its definition with it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
