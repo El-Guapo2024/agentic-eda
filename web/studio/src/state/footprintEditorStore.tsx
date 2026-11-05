@@ -23,8 +23,21 @@ import type { BezierGeom } from "../kicad-port/bezierGeom";
 import type { AngleSnapMode } from "../kicad-port/pcbParityState";
 import type { FlipDirectionWire, FpItemWire } from "../api/fpItemTypes";
 import { fpAllIds, fpGroupCmd, fpLeaves, fpMirrorCmd, fpMoveCmd, fpRotateCmd, fpUngroupCmd, type Snap } from "../kicad-port/fpItems";
+import type { FpDimDraw, FpDimKind, FpDrawnTable } from "../kicad-port/fpDrawTools";
+import type { BoardTextBox, CmdBarcode } from "../api/pcbItemTypes";
+import type { CmdZone } from "../api/types";
 
-export type FpToolId = "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_bezier" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor" | "enumerate";
+export type FpToolId =
+  | "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_bezier" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor" | "enumerate"
+  // `DRAWING_TOOL`'s tools for the items of `eda_model::fp_items` (kicad-port/fpDrawTools.ts): Draw Dimension of each kind, Draw Rule Area, Draw Text Box, Place Point,
+  // Draw Table, Add Barcode, Place Reference Image
+  | "dim_aligned" | "dim_orthogonal" | "dim_center" | "dim_radial" | "dim_leader" | "rule_area" | "textbox" | "point" | "table" | "barcode" | "ref_image";
+
+/** The dimension kind each Draw Dimension tool draws. */
+export const FP_DIM_TOOL_KIND: Partial<Record<FpToolId, FpDimKind>> = { dim_aligned: "aligned", dim_orthogonal: "orthogonal", dim_center: "center", dim_radial: "radial", dim_leader: "leader" };
+
+/** The tools of the fp_items kinds: Escape drops what one holds and keeps it armed (each one's `cleanup()`); a second Escape leaves it. */
+export const FP_ITEM_TOOLS: ReadonlySet<FpToolId> = new Set<FpToolId>(["dim_aligned", "dim_orthogonal", "dim_center", "dim_radial", "dim_leader", "rule_area", "textbox", "point", "table", "barcode", "ref_image"]);
 
 export const FP_TOOL_MESSAGES: Record<FpToolId, string> = {
   select: "Select item(s)",
@@ -39,7 +52,34 @@ export const FP_TOOL_MESSAGES: Record<FpToolId, string> = {
   text: "Click to place text",
   anchor: "Place the footprint anchor: click the new origin of the footprint",
   enumerate: "Renumber pads: click each pad in the order it should be numbered; click a numbered pad again to take its number back; double-click to finish, Esc to cancel",
+  dim_aligned: "Aligned dimension: click the start, the end, then the height",
+  dim_orthogonal: "Orthogonal dimension: click the start, the end, then the height (the cursor's side sets horizontal or vertical)",
+  dim_center: "Center dimension: click the centre, then the end of an arm",
+  dim_radial: "Radial dimension: click the centre, then a point on the circle",
+  dim_leader: "Leader: click the arrow's point, then the end of the line; the text is asked for next",
+  rule_area: "Rule area: click points, Enter/double-click to finish, Esc to cancel",
+  textbox: "Text box: click one corner, then the opposite one",
+  point: "Point: click to put a point down (Esc ends the tool)",
+  table: "Table: click the first corner, then the opposite one to size the grid",
+  barcode: "Barcode: click to place it (Esc ends the tool)",
+  ref_image: "Reference image: click to choose an image file, then click to put it down",
 };
+
+/**
+ * What a tool of the fp_items kinds holds between its clicks (a polygon's or a box's corners are `drawState`'s): a dimension at SET_END or SET_HEIGHT (`DrawDimension`), a
+ * table's first corner (`DrawTable`), the image the cursor holds by its centre (`PlaceReferenceImage`).
+ */
+export type FpItemDraw =
+  | { tool: "dimension"; draw: FpDimDraw }
+  | { tool: "table"; origin: [Nm, Nm] }
+  | { tool: "ref_image"; name: string; data: string; img: HTMLImageElement; w: Nm; h: Nm };
+
+/** An item a tool made whose Properties dialog is open on it before it is added: OK adds it (one `fp_item add`), Cancel drops it. */
+export type FpPendingItem =
+  | { kind: "textbox"; box: BoardTextBox }
+  | { kind: "barcode"; barcode: CmdBarcode }
+  | { kind: "table"; drawn: FpDrawnTable }
+  | { kind: "zone"; zone: CmdZone };
 
 /** Same "click to add a point(s), commit on the last one" shape the PCB tab's own `DrawState` uses, narrowed to what the footprint editor's graphics tools need (no route/zone/measure concept here). `arc`/`bezier`: the construction managers' state, see the PCB tab's `DrawState`. */
 export type FpDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier"; pts: [Nm, Nm][]; arc?: ArcGeom; bezier?: BezierGeom };
@@ -135,6 +175,10 @@ export interface FootprintEditorState {
   itemDialog: { id: string; kind: string } | null;
   /** `FOOTPRINT_EDITOR_SETTINGS::m_AngleSnapMode` (`pcbnew.EditorControl.lineModeFree` / `lineModeOrthonal` / `lineMode45`): the footprint editor's own line mode, 45 degrees by default. */
   lineMode: AngleSnapMode;
+  /** The fp_items tools' state between clicks (`FpItemDraw`). */
+  itemDraw: FpItemDraw | null;
+  /** The item a tool made whose dialog is open on it (`FpPendingItem`). */
+  pendingItem: FpPendingItem | null;
   /** `PCB_VIEWERS_SETTINGS_BASE::m_ViewersDisplay`: `m_DisplayPadFill` off (Sketch Pads, `pcbnew.Control.padDisplayMode`), `m_DisplayGraphicsFill` off (`graphicOutlines`), `m_DisplayTextFill` off (`textOutlines`). */
   sketchPads: boolean;
   sketchGraphics: boolean;
@@ -194,6 +238,8 @@ const initialState: FootprintEditorState = {
   shapeDialogId: null,
   itemDialog: null,
   lineMode: "45",
+  itemDraw: null,
+  pendingItem: null,
   sketchPads: false,
   sketchGraphics: false,
   sketchText: false,
@@ -249,6 +295,8 @@ export type FpAction =
   | { type: "SET_TEXT_EDIT_ID"; id: string | null }
   | { type: "SET_SHAPE_DIALOG_ID"; id: string | null }
   | { type: "SET_ITEM_DIALOG"; dialog: { id: string; kind: string } | null }
+  | { type: "SET_ITEM_DRAW"; draw: FpItemDraw | null }
+  | { type: "SET_PENDING_ITEM"; item: FpPendingItem | null }
   | { type: "SET_LINE_MODE"; mode: AngleSnapMode }
   | { type: "SET_DISPLAY"; patch: Partial<Pick<FootprintEditorState, "sketchPads" | "sketchGraphics" | "sketchText">> }
   | { type: "SET_LAYER_VISIBLE"; key: string; visible: boolean }
@@ -298,10 +346,12 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
     case "SET_SELECTION":
       return { ...state, selection: new Set(action.refs) };
     case "CLEAR_SELECTION":
-      return { ...state, selection: new Set(), activeTool: "select", drawState: null, movePreview: null, padPropertiesId: null, enumerate: null, textDialog: null, carriedText: null, carriedPad: null };
+      return { ...state, selection: new Set(), activeTool: "select", drawState: null, movePreview: null, padPropertiesId: null, enumerate: null, textDialog: null, carriedText: null, carriedPad: null, itemDraw: null };
     case "ESCAPE": {
       // `PlaceText`: `IsCancelInteractive` with a text carried drops the text (`cleanup()`) and keeps the tool; without one it pops the tool.
       if (state.carriedText || state.textDialog) return { ...state, carriedText: null, textDialog: null };
+      // The fp_items tools (`DrawDimension`, `DrawTable`, `PlaceReferenceImage`, `drawShape`, `DrawZone`): `IsCancelInteractive` with something in hand is `cleanup()`, the tool stays.
+      if (FP_ITEM_TOOLS.has(state.activeTool) && (state.itemDraw || state.drawState)) return { ...state, itemDraw: null, drawState: null };
       const inProgress = state.activeTool !== "select" || state.drawState != null || state.movePreview != null;
       // `evt->IsCancelInteractive()` in EnumeratePads: `commit.Revert()` -- nothing was sent, so dropping the tool's state is the revert.
       if (inProgress) return { ...state, activeTool: "select", drawState: null, movePreview: null, enumerate: null, carriedPad: null };
@@ -309,7 +359,7 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
     }
     case "SET_ACTIVE_TOOL":
       // Another tool (`evt->IsActivate()`): a carried text or pad is dropped (`cleanup()`).
-      return { ...state, activeTool: action.tool, drawState: null, textDialog: null, carriedText: null, carriedPad: null };
+      return { ...state, activeTool: action.tool, drawState: null, textDialog: null, carriedText: null, carriedPad: null, itemDraw: null };
     case "SET_TEXT_DIALOG":
       return { ...state, textDialog: action.text };
     case "SET_CARRIED_TEXT":
@@ -379,6 +429,10 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return { ...state, shapeDialogId: action.id };
     case "SET_ITEM_DIALOG":
       return { ...state, itemDialog: action.dialog };
+    case "SET_ITEM_DRAW":
+      return { ...state, itemDraw: action.draw };
+    case "SET_PENDING_ITEM":
+      return { ...state, pendingItem: action.item };
     case "SET_LINE_MODE":
       return { ...state, lineMode: action.mode };
     case "SET_DISPLAY":

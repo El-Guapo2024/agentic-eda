@@ -64,6 +64,18 @@ export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
   "pcbnew.Control.textOutlines",
   // Show Appearance Manager (the board's right dock, the footprint editor's `FOOTPRINT_EDITOR_CONTROL::ToggleLayersManager`).
   "pcbnew.Control.showLayersManager",
+  // `DRAWING_TOOL`'s tools for the footprint's dimensions, rule areas, text boxes, points, tables, barcodes and reference images (actions/editorFrameActions.ts, UI-LEFT F2).
+  "pcbnew.InteractiveDrawing.alignedDimension",
+  "pcbnew.InteractiveDrawing.orthogonalDimension",
+  "pcbnew.InteractiveDrawing.centerDimension",
+  "pcbnew.InteractiveDrawing.radialDimension",
+  "pcbnew.InteractiveDrawing.leader",
+  "pcbnew.InteractiveDrawing.ruleArea",
+  "pcbnew.InteractiveDrawing.textbox",
+  "pcbnew.InteractiveDrawing.placePoint",
+  "pcbnew.InteractiveDrawing.drawTable",
+  "pcbnew.InteractiveDrawing.barcode",
+  "pcbnew.InteractiveDrawing.placeReferenceImage",
 ]);
 
 /** Symbol-editor-frame-only actions (`SYMBOL_EDIT_FRAME`'s tools): enabled on the Symbol tab only. */

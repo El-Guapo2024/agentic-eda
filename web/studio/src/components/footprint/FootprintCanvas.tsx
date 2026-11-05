@@ -8,7 +8,7 @@
 // board-scale content to need them for.
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CmdShape, LibraryPad, PadKind } from "../../api/types";
-import { useFpApi, useFpDispatch, useFpState, type FpToolId } from "../../state/footprintEditorStore";
+import { FP_ITEM_TOOLS, useFpApi, useFpDispatch, useFpState, type FpToolId } from "../../state/footprintEditorStore";
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
 import { paintFootprint } from "./footprintPainter";
 import { useFootprintChecker } from "../../state/footprintChecker";
@@ -48,6 +48,7 @@ import { fpEditTarget, fpFields, fpHitTest, fpItemKind, fpSelectionTarget, fpCan
 import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
 import { leaderModeOf, zoneClick, zoneFinish, zoneLeader } from "../../kicad-port/pcbDrawZone";
 import { isGroup } from "../../kicad-port/groupTree";
+import { fpItemToolClick, fpItemToolFinish, fpItemToolMotion, fpItemToolSnap, paintFpItemToolPreview } from "./fpItemTools";
 import "../../styles/canvas.css";
 
 const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier">> = {
@@ -188,6 +189,9 @@ export function FootprintCanvas() {
   const snapMods = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): FootprintSnapMods => ({ ctrl: isMac() ? e.metaKey : e.ctrlKey, shift: e.shiftKey });
   /** What each placing tool asks `BestSnapAnchor` for: the shape and text tools the active layer and their grid; the pad and anchor tools (and the pickers) every layer. */
   const toolOpts = (tool: string): FootprintPointOpts => {
+    // the tools of the dimensions, rule areas, text boxes ... (components/footprint/fpItemTools.ts): each one's `BestSnapAnchor` layers and grid
+    const item = fpItemToolSnap(tool as FpToolId);
+    if (item) return item;
     if (tool.startsWith("draw_")) return { category: "graphics" };
     if (tool === "text") return { category: "text" };
     return { category: "current", layers: "all" };
@@ -205,7 +209,7 @@ export function FootprintCanvas() {
   };
   const flipDirection = useStudioState().prefs.flipDirection;
   /** The tools whose clicks go through the grid helper: the marker and the rubber band follow them on every move. */
-  const placing = state.activeTool === "pad" || state.activeTool === "text" || state.activeTool === "anchor" || state.activeTool.startsWith("draw_");
+  const placing = state.activeTool === "pad" || state.activeTool === "text" || state.activeTool === "anchor" || state.activeTool.startsWith("draw_") || FP_ITEM_TOOLS.has(state.activeTool);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -323,6 +327,8 @@ export function FootprintCanvas() {
       layerOpacity: state.layerOpacity,
     });
     // What the grid helper shows: the snap marker and its icon, the snap lines, the construction geometry.
+    // what the dimension, table and reference image tools hold (components/footprint/fpItemTools.ts)
+    paintFpItemToolPreview(ctx, state.view, state, rubber ? [rubber.x, rubber.y] : null);
     const snapOverlay = snap.overlay();
     if (snapOverlay) {
       const k = state.view.scale || 1;
@@ -332,7 +338,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.contrastHidden]);
+  }, [fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -379,6 +385,11 @@ export function FootprintCanvas() {
   const finishDraw = useCallback(() => {
     const draw = state.drawState;
     if (!draw) return;
+    // A rule area's outline closes as a polygon's does; the text box's two corners take nothing from Enter (components/footprint/fpItemTools.ts).
+    if (FP_ITEM_TOOLS.has(state.activeTool)) {
+      fpItemToolFinish({ state, dispatch, api }, snap.lastPoint() ?? (state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null), lineModeCtrl);
+      return;
+    }
     // An arc ends only when its three points are in (ARC_GEOM_MANAGER); Enter / a double-click leave it running.
     if (draw.shapeKind === "arc") return;
     if (draw.shapeKind === "bezier") {
@@ -467,6 +478,12 @@ export function FootprintCanvas() {
     if (state.activeTool === "anchor") {
       void api.setAnchor({ x: sx, y: sy });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+      return;
+    }
+
+    // The dimensions, rule areas, text boxes, points, tables, barcodes and reference images (components/footprint/fpItemTools.ts).
+    if (FP_ITEM_TOOLS.has(state.activeTool)) {
+      fpItemToolClick({ state, dispatch, api }, [sx, sy], isMac() ? e.metaKey : e.ctrlKey);
       return;
     }
 
@@ -569,6 +586,7 @@ export function FootprintCanvas() {
     const draw = state.drawState;
     // The tools that place something: the grid helper sees every move, so the marker, the snap lines and the rubber band follow the cursor.
     const cursor = placing ? toolPoint(e, wx, wy) : null;
+    if (cursor && state.itemDraw) fpItemToolMotion({ state, dispatch, api }, cursor, isMac() ? e.metaKey : e.ctrlKey);
     if (draw && (draw.arc || draw.bezier) && cursor) {
       const [sx, sy] = cursor;
       if (draw.arc) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, arc: arcMotion(draw.arc, [sx, sy], arcAngleSnap(state.lineMode, e)) } });
@@ -626,6 +644,11 @@ export function FootprintCanvas() {
   const onDoubleClick = (e: React.MouseEvent) => {
     // The Renumber Pads tool owns the double click (it finishes the tool); it must not also open a pad's properties.
     if (state.activeTool === "enumerate" || performance.now() < dblSuppressUntil.current) return;
+    // A tool of the dimensions, rule areas ... owns the double click: its clicks were the two presses; a rule area's outline closes. No item's dialog opens.
+    if (FP_ITEM_TOOLS.has(state.activeTool)) {
+      if (state.drawState) finishDraw();
+      return;
+    }
     if (state.drawState) {
       finishDraw();
       return;

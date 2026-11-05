@@ -17,7 +17,9 @@ import { worldToScreen, zoomAbout, type ViewTransform } from "../kicad-port/view
 import { revertFootprint, revertSymbol, saveAllSymbols, saveFootprint, saveSymbol } from "./librarySaveOps";
 import { fpEditTarget, type Snap } from "../kicad-port/fpItems";
 import { getDockLayout, setDockColumnCollapsed } from "../state/dockLayoutStore";
-import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
+import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintEditorStore";
+import { asPickedImage } from "./imageFiles";
+import { fpChooseImage } from "../components/footprint/fpItemTools";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 
 /** common_tools.cpp doZoomInOut: "Step must be AT LEAST 1.3" -- the factor of one Zoom In / Zoom Out step. */
@@ -123,6 +125,31 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     m.set("pcbnew.EditorControl.lineModeFree", () => ctx.fpDispatch({ type: "SET_LINE_MODE", mode: "direct" }));
     m.set("pcbnew.EditorControl.lineModeOrthonal", () => ctx.fpDispatch({ type: "SET_LINE_MODE", mode: "90" }));
     m.set("pcbnew.EditorControl.lineMode45", () => ctx.fpDispatch({ type: "SET_LINE_MODE", mode: "45" }));
+    // The right toolbar's tools for the footprint's dimensions, rule areas, text boxes, points, tables, barcodes and reference images: `DRAWING_TOOL`'s on the footprint
+    // (components/footprint/fpItemTools.ts has their clicks). `if( m_isFootprintEditor && !m_frame->GetModel() ) return 0;`; choosing the tool in force again leaves it.
+    const armItemTool = (tool: FpToolId) => () => {
+      const st = ctx.fpApi.getState();
+      if (!st.name) return toast("Open a footprint first.");
+      void ctx.fpApi.setTool(st.activeTool === tool ? "select" : tool);
+    };
+    m.set("pcbnew.InteractiveDrawing.alignedDimension", armItemTool("dim_aligned"));
+    m.set("pcbnew.InteractiveDrawing.orthogonalDimension", armItemTool("dim_orthogonal"));
+    m.set("pcbnew.InteractiveDrawing.centerDimension", armItemTool("dim_center"));
+    m.set("pcbnew.InteractiveDrawing.radialDimension", armItemTool("dim_radial"));
+    m.set("pcbnew.InteractiveDrawing.leader", armItemTool("dim_leader"));
+    m.set("pcbnew.InteractiveDrawing.ruleArea", armItemTool("rule_area"));
+    m.set("pcbnew.InteractiveDrawing.textbox", armItemTool("textbox"));
+    m.set("pcbnew.InteractiveDrawing.placePoint", armItemTool("point"));
+    m.set("pcbnew.InteractiveDrawing.drawTable", armItemTool("table"));
+    m.set("pcbnew.InteractiveDrawing.barcode", armItemTool("barcode"));
+    // Place Reference Image asks for the file at once (the tool is primed with a click); a parameter that is a picked image ({ name, data }) is the file already chosen.
+    const m2 = m as Map<string, (param?: unknown) => void>;
+    m2.set("pcbnew.InteractiveDrawing.placeReferenceImage", (param?: unknown) => {
+      const st = ctx.fpApi.getState();
+      if (!st.name) return toast("Open a footprint first.");
+      if (st.activeTool === "ref_image" && !param) return void ctx.fpApi.setTool("select");
+      void ctx.fpApi.setTool("ref_image").then(() => fpChooseImage({ dispatch: ctx.fpDispatch }, asPickedImage(param)));
+    });
     // The display modes of the left toolbar (`PCB_VIEWER_TOOLS::ShowPadNumbers` family: `PadDisplayMode`, `GraphicOutlines`, `TextOutlines`).
     m.set("pcbnew.Control.padDisplayMode", () => ctx.fpDispatch({ type: "SET_DISPLAY", patch: { sketchPads: !ctx.fpApi.getState().sketchPads } }));
     m.set("pcbnew.Control.graphicOutlines", () => ctx.fpDispatch({ type: "SET_DISPLAY", patch: { sketchGraphics: !ctx.fpApi.getState().sketchGraphics } }));

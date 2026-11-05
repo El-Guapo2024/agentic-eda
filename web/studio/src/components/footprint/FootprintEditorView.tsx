@@ -17,6 +17,7 @@ import { FootprintCheckerDialog } from "./FootprintCheckerDialog";
 import { FootprintCreateArrayDialog } from "./FootprintArrayDialog";
 import { FpTextDialog, FpTextEditDialog } from "./FpTextDialog";
 import { FpShapeDialog } from "./FpShapeDialog";
+import { FpBarcodeDialog, FpDimensionDialog, FpRefImageDialog, FpTableDialog, FpTextBoxDialog, FpZoneDialog } from "./FpItemDialogs";
 import { LibraryDialogHost } from "../library/libraryDialogs";
 import { DockColumn } from "../panels/Dock";
 import { Toolbar } from "../Toolbar";
@@ -135,6 +136,12 @@ export function FootprintEditorView() {
       <FpTextDialog />
       <FpTextEditDialog />
       <FpShapeDialog />
+      <FpDimensionDialog />
+      <FpZoneDialog />
+      <FpTextBoxDialog />
+      <FpBarcodeDialog />
+      <FpTableDialog />
+      <FpRefImageDialog />
       <PadTableDialog />
       <PushPadPropertiesDialog />
       <LoadFromBoardDialog />

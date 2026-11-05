@@ -46,6 +46,17 @@ export const FP_TOOL_OF_ACTION: Readonly<Record<string, string>> = {
   "pcbnew.InteractiveDrawing.bezier": "draw_bezier",
   "pcbnew.InteractiveDrawing.text": "text",
   "pcbnew.InteractiveDrawing.setAnchor": "anchor",
+  "pcbnew.InteractiveDrawing.alignedDimension": "dim_aligned",
+  "pcbnew.InteractiveDrawing.orthogonalDimension": "dim_orthogonal",
+  "pcbnew.InteractiveDrawing.centerDimension": "dim_center",
+  "pcbnew.InteractiveDrawing.radialDimension": "dim_radial",
+  "pcbnew.InteractiveDrawing.leader": "dim_leader",
+  "pcbnew.InteractiveDrawing.ruleArea": "rule_area",
+  "pcbnew.InteractiveDrawing.textbox": "textbox",
+  "pcbnew.InteractiveDrawing.placePoint": "point",
+  "pcbnew.InteractiveDrawing.drawTable": "table",
+  "pcbnew.InteractiveDrawing.barcode": "barcode",
+  "pcbnew.InteractiveDrawing.placeReferenceImage": "ref_image",
 };
 
 /** The Symbol Editor's tool-arming actions and the tool each arms (`SymToolId`). */
