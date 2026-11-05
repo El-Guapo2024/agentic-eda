@@ -20,7 +20,7 @@ Notes:
 1. X1: the Plot dialog is Gerber only
 2. P1: teardrops
 3. S1: placing labels, power symbols and text
-4. R1: dragging a footprint with its tracks
+4. R1: dragging a footprint with its tracks -- **done (task-u1-drag)**
 5. L1: saving into table libraries
 6. F1+F2: Footprint Editor fields and dimmed tools
 7. Y1: Symbol Editor Rotate
@@ -275,10 +275,11 @@ Notes:
 
 ## Router
 
-- **R1 [FM] The footprint and multi-track draggers.**
-  - D on a footprint doesn't drag it with its tracks (COMPONENT_DRAGGER).
-  - D on several tracks does nothing (MULTI_DRAGGER).
-  - L. GAPS 7 R7-R9; pns Stage 21.
+- **R1 [FM] The footprint and multi-track draggers. done (task-u1-drag)** -- pns Stage 22.
+  - ~~D on a footprint doesn't drag it with its tracks (COMPONENT_DRAGGER).~~ Done: the footprint follows the cursor with its pads, the tracks on them follow, one undo step.
+  - ~~D on several tracks does nothing (MULTI_DRAGGER).~~ Done: the selected tracks drag together, in the three router modes.
+  - Left: the multi-track Shove has no springback; the selection is not cleared at the start, restored on Esc, or set to the leader segments after a multi-track drag; the closest net is not highlighted while dragging; a footprint's own Edge.Cuts / Margin graphics stay (board shapes in this model).
+  - L. GAPS 7 R7-R9; pns Stages 21-22.
 - **R2 [FM] Diff pairs.**
   - No arcs in the pair router or the tuners (F4-2).
   - The blind, buried and microvia commands do nothing in the pair tool.

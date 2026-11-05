@@ -118,6 +118,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-u1-drag` | UI-LEFT R1: `D` on a footprint drags it with its tracks (`COMPONENT_DRAGGER`), `D` on several tracks drags them together (`MULTI_DRAGGER`); `crates/pns/PARITY.md` Stage 22 | Done, gated (pns, eda-cli, web, kicad-cli proof, browser check `component-drag.check.js`) | multi-track Shove springback; reselecting the leader segments; see GAPS item 7 |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

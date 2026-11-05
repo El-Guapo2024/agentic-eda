@@ -6,7 +6,8 @@
 //! Scoped down from upstream the same way the rest of this crate is (see
 //! `PARITY.md`): single-track routing and single-item dragging only, no
 //! diff pairs/meandering/tuning (`PNS_MODE_ROUTE_SINGLE` is the only
-//! `ROUTER_MODE` this port implements), and the commit granularity is
+//! `ROUTER_MODE` this port implements; the pairs, the tuner and the component and multi-track drags of
+//! Stages 7, 8 and 22 have come since), and the commit granularity is
 //! "whole finished lines" rather than upstream's per-segment `AddItem`/
 //! `RemoveItem`/`UpdateItem` diff (this project's own `Track` IR is
 //! already a whole polyline -- see [`RouteCommit`]'s own doc comment).
