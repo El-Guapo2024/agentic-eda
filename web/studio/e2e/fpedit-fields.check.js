@@ -99,6 +99,19 @@
     return name;
   };
   const near = (a, b, tol = 1) => Math.abs(a - b) <= tol;
+  // the library tree and the table dialogs (as e2e/library-save.check.js drives them)
+  const treeRow = (id) => document.querySelector(`[role=treeitem][data-name="${CSS.escape(id)}"]`);
+  const libRow = (lib) => [...document.querySelectorAll(".library-tree-group")].find((g) => g.textContent.replace(/[▾▸]/g, "").trim().replace(/\s*\*?\s*[\d…]*$/, "").replace(/^☆ /, "") === lib);
+  const isOpen = (lib) => libRow(lib)?.textContent.trim().startsWith("▾");
+  const itemRow = async (id) => {
+    const lib = id.split(":")[0];
+    if (await until(() => libRow(lib), 6000)) if (!isOpen(lib)) { libRow(lib).click(); await sleep(250); }
+    return until(() => treeRow(id), 6000);
+  };
+  const selectItem = async (id) => { const r = await itemRow(id); r?.click(); await sleep(300); return !!r; };
+  const savedFootprint = async (id) => (await json(`/api/library/saved?kind=footprint&id=${encodeURIComponent(id)}`)).footprint;
+  const tables = () => json("/api/library_tables");
+  const LIB = `FeLib${Date.now().toString(36)}`;
 
   // --------------------------------------------------------------------------------------------------------------------------- run
   const libraryBefore = await fpNames();
@@ -251,8 +264,50 @@
     await __eda.run("pcbnew.EditorControl.lineMode45");
   });
 
+  await scenario("the footprint saved into a library of the tables and opened again from its file keeps its fields, its group and its items", async (t) => {
+    if (!name) return t(false, "no footprint");
+    const before = await footprint(name);
+    await __eda.run("common.Control.newLibrary");
+    const nd = await until(() => dialog("New Footprint Library"), 4000);
+    if (!t(nd, "New Footprint Library opens")) return;
+    await until(() => nd.querySelector("#lt-folder")?.value, 4000);
+    await type(nd.querySelector("#lt-name"), LIB);
+    button(nd, "Create").click();
+    if (!t(await until(() => !dialog("New Footprint Library"), 6000), `${LIB} made`)) return;
+    await selectItem(name);
+    await __eda.run("common.Control.saveAs");
+    const d = await until(() => dialog("Save Footprint As"), 3000);
+    if (!t(d, "Save Footprint As opens")) return;
+    await until(() => d.querySelector(`[data-lib="${LIB}"]`), 4000);
+    await type(d.querySelector('[aria-label="Name"]'), "FeFp1");
+    d.querySelector(`[data-lib="${LIB}"]`).click();
+    await sleep(100);
+    button(d, "Save").click();
+    const id = `${LIB}:FeFp1`;
+    const saved = await until(async () => savedFootprint(id), 6000);
+    if (!t(saved, `Save As wrote ${id} into the library's folder`)) return;
+    // forget the design's copy, open it from the tree: it comes from the .kicad_mod
+    await cmd({ op: "delete_library_footprint", name: id });
+    await until(async () => !(await fpNames()).includes(id), 4000);
+    const r = await itemRow(id);
+    if (!t(r, "the tree lists it from the library's folder")) return;
+    r.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    const back = await until(async () => { const v = await footprint(id); return v && !v.error ? v : null; }, 6000);
+    if (!t(back, "reopened from the file")) return;
+    t(back.reference?.text === before.reference?.text && back.reference?.layer === before.reference?.layer && back.reference?.angle === before.reference?.angle, `the Reference as it was edited: ${JSON.stringify(back.reference && [back.reference.text, back.reference.layer, back.reference.angle])}`);
+    const groups = back.items?.groups ?? [];
+    t(groups.length === (before.items?.groups ?? []).length && groups.every((g) => g.member_ids.length === 2), `the groups and their members: ${JSON.stringify(groups.map((g) => g.member_ids))}`);
+    t(groups.some((g) => g.member_ids.includes("field:Value")), "a field is still a member of its group");
+    t(back.graphics.length === before.graphics.length, `the graphics: ${back.graphics.length} of ${before.graphics.length}`);
+    for (const kind of ["dimensions", "text_boxes"]) t((back.items?.[kind] ?? []).length === (before.items?.[kind] ?? []).length, `the ${kind}: ${(back.items?.[kind] ?? []).length} of ${(before.items?.[kind] ?? []).length}`);
+    made.push(id);
+  });
+
   // ------------------------------------------------------------------------------------------------------------------------ the end
   for (const n of await fpNames()) if (!libraryBefore.includes(n)) await cmd({ op: "delete_library_footprint", name: n });
+  // the check's library out of the project table (its folder stays in the board's directory)
+  const v = await tables();
+  if (v?.tables?.footprint) await post("/api/library_tables", { kind: "footprint", rows: v.tables.footprint.project.rows.filter((r) => !r.nickname.startsWith("FeLib")) });
   check.ok = results.every((r) => r.ok);
   check.done = true;
 })();
