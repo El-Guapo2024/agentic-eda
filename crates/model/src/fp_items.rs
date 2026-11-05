@@ -4,7 +4,8 @@
 //! KiCad keeps all of them on the `FOOTPRINT` itself (`FOOTPRINT::GraphicalItems()` holds the dimensions, text boxes, images, barcodes and tables beside the shapes and
 //! texts; `Zones()`, `Points()` and `Groups()` hold the rest), in the footprint's own frame like its pads, and the Footprint Editor draws and edits them with the board
 //! editor's tools (`FOOTPRINT_EDIT_FRAME` runs `DRAWING_TOOL`, `EDIT_TOOL`, `PCB_GROUP_TOOL` and `ZONE_CREATE_HELPER` on its one footprint). Before this module the
-//! footprint reader kept each of them as the text of its form ([`crate::lib_keep::LibraryFootprintKeep::tokens`]), written back where KiCad writes it and never drawn.
+//! footprint reader kept each of them as the text of its form ([`crate::lib_keep::LibraryFootprintKeep::tokens`]), written back where KiCad writes it and never drawn; what these
+//! types cannot hold (a lock, a zone's fill, thieving, per-layer settings or arcs, a group naming such an item) still is.
 //!
 //! The types are the board's ([`Dimension`], [`Zone`], [`TextBox`], [`PcbPoint`], [`RefImage`], [`Barcode`], [`Table`], [`Group`]): the fields mean the same, read in
 //! the footprint's frame instead of the board's -- the frame of [`crate::ir::LibraryPad::at`], seen from the top, un-rotated. A zone of a footprint has no net
