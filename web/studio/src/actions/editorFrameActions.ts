@@ -15,7 +15,7 @@ import { rotateCarriedPad } from "../kicad-port/fpPadPlacer";
 import { newPadFromMaster } from "../kicad-port/padSettings";
 import { worldToScreen, zoomAbout, type ViewTransform } from "../kicad-port/view";
 import { revertFootprint, revertSymbol, saveAllSymbols, saveFootprint, saveSymbol } from "./librarySaveOps";
-import { getDockLayout, setDockColumnCollapsed } from "../state/dockLayoutStore";
+import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import type { Preferences } from "../kicad-port/preferences";
@@ -178,6 +178,8 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
 
     // Selection tool (`ACTIONS::selectionTool`).
     m.set("common.InteractiveSelection.selectionTool", () => ctx.symDispatch({ type: "SET_ACTIVE_TOOL", tool: "select" }));
+    // Show Properties (`ACTIONS::showProperties`, `SYMBOL_EDIT_FRAME::ToggleProperties`): the frame's own Properties pane, below the Libraries tree
+    m.set("common.Control.showProperties", () => toggleDockPane("symProperties"));
     // Show Datasheet (`ACTIONS::showDatasheet`): the open symbol's datasheet field, opened like the schematic's does.
     m.set("common.Control.showDatasheet", () => {
       const sym = ctx.symApi.getState().symbol;

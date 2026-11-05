@@ -32,9 +32,13 @@ import { altIconStrokes, pinAltIcon, type PinAltIcon } from "../../kicad-port/sy
 import { DEFAULT_PIN_TEXTS, PIN_TEXT_SIZE_NM, shownPinName, type PinTexts } from "../schematic/pinText";
 import { polyPreview } from "../../kicad-port/symPolyDraw";
 import { boxOfTextBox, layoutLibTextBox, type LibTextBox } from "../../kicad-port/symTextBox";
+import { bezierFromClicks } from "../../kicad-port/symBezier";
 
 /** `eeschema.SymbolDrawing.*` shapes in progress: `lines` (Draw Lines) and `polygon` (Draw Polygons) are the same open-ended polyline tool. */
-export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "textbox";
+export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "bezier" | "textbox";
+
+/** Half the side of an edit point's square, screen pixels (`EDIT_POINT::POINT_SIZE` is 10). */
+export const POINT_EDIT_HALF_PX = 5;
 
 /** Half the cap height, the shift that centres stroke text on its line (`MIDDLE_OFFSET_FACTOR` of `components/schematic/painter.ts`). */
 const MIDDLE_OFFSET_FACTOR = 0.35;
@@ -159,6 +163,21 @@ function drawLibTextBox(ctx: CanvasRenderingContext2D, g: LibTextBox, color: str
 /** Rubber-band preview for the graphics tool currently in progress -- points already internal-space (µm), same convention the Footprint/PCB editors' own `drawInProgress` uses. */
 function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: { shapeKind: SymShapeKind; pts: [number, number][] } | null, cursorNm: { x: number; y: number } | null) {
   if (!draw) return;
+  if (draw.shapeKind === "bezier") {
+    // `CalcEdit( cursorPos )` of the bezier's edit state, as `AddToPreview( item->Clone() )` shows it
+    const b = bezierFromClicks(draw.pts, cursorNm ? [cursorNm.x, cursorNm.y] : null);
+    if (!b) return;
+    ctx.save();
+    ctx.strokeStyle = layerColor("selection");
+    ctx.lineWidth = hairlineNm(view, 1.5);
+    ctx.setLineDash([hairlineNm(view, 4), hairlineNm(view, 3)]);
+    ctx.beginPath();
+    ctx.moveTo(b.start[0], b.start[1]);
+    ctx.bezierCurveTo(b.c1[0], b.c1[1], b.c2[0], b.c2[1], b.end[0], b.end[1]);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
   // The floating vertex of a poly shape (`EDA_SHAPE::calcEdit`) follows the cursor.
   const pts = polyPreview(draw.pts, cursorNm ? [cursorNm.x, cursorNm.y] : null);
   if (pts.length < 2) return;
@@ -210,6 +229,9 @@ export interface SymPaintOptions {
   /** What the cursor carries until a click places it -- the Pin tool's pin and the Text tool's text after their dialogs, the items of Paste and Duplicate -- where they are now
    * (kicad-port/symCarry.ts `carriedItems`): drawn as the selection, over the symbol (`m_view->AddToPreview( item )`). */
   carried?: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[] } | null;
+  /** The point editor (`SCH_POINT_EDITOR`) on the one selected shape: its edit points and indicator lines (internal nm), and the shape as a drag of one point has it so far
+   * (`replace`, drawn in place of the symbol's). */
+  pointEditor?: { points: [number, number][]; lines: [[number, number], [number, number]][]; replace?: LibrarySymbolGraphic } | null;
   /** The symbol's fields that are on show (kicad-port/symFieldLayout.ts `fieldsOnShow`: the ones with a text, the hidden ones only while Show Hidden Fields is on). */
   fields?: SchField[];
 }
@@ -278,7 +300,9 @@ export function paintSymbol(
     else if (g.kind === "text") drawLibText(ctx, g, color);
     else drawRealGraphic(ctx, resolveGraphic(g), color);
   };
-  for (const g of symbol.graphics) {
+  const replace = opts.pointEditor?.replace;
+  for (const stored of symbol.graphics) {
+    const g = replace && replace.id === stored.id ? replace : stored;
     if (!visibleHere(g.unit, g.body_style, opts.activeUnit, opts.activeBodyStyle)) continue;
     const mv = moved(g.id);
     ctx.save();
@@ -338,6 +362,28 @@ export function paintSymbol(
 
   drawOrigin(ctx, view);
   drawInProgress(ctx, view, opts.drawState, opts.cursorNm);
+  // `EDIT_POINTS_PAINTER`: the indicator lines, then a square at each edit point
+  if (opts.pointEditor) {
+    ctx.save();
+    ctx.strokeStyle = layerColor("selection");
+    ctx.lineWidth = hairlineNm(view, 1);
+    ctx.setLineDash([hairlineNm(view, 3), hairlineNm(view, 3)]);
+    ctx.beginPath();
+    for (const [a, b] of opts.pointEditor.lines) {
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(b[0], b[1]);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const half = hairlineNm(view, POINT_EDIT_HALF_PX);
+    ctx.fillStyle = "#1a1a1a";
+    for (const [x, y] of opts.pointEditor.points) {
+      ctx.fillRect(x - half, y - half, 2 * half, 2 * half);
+      ctx.strokeRect(x - half, y - half, 2 * half, 2 * half);
+    }
+    ctx.restore();
+  }
+
   // what the cursor carries, where it is now, as the selection (`AddToPreview`)
   if (opts.carried) {
     for (const g of opts.carried.graphics) {

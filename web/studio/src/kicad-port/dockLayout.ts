@@ -17,7 +17,9 @@
 // second folds the first, like a drawer: both open leave a 160 px canvas in an 800 px window). The studio's own panes (the Appearance dock)
 // follow the same two switches.
 
-export type DockPaneId = "netNavigator" | "hierarchy" | "properties" | "selectionFilter";
+/** `symProperties` is the Symbol Editor's own Properties pane (symbol_edit_frame.cpp: `defaultPropertiesPaneInfo`, below the Libraries tree on the left, shown by
+ *  default -- `SYMBOL_EDITOR_SETTINGS::m_AuiPanels.show_properties`); KiCad keeps its shown state per frame, so it is not the schematic's pane. */
+export type DockPaneId = "netNavigator" | "hierarchy" | "properties" | "selectionFilter" | "symProperties";
 
 /** `wxAuiPaneInfo::Position()` of each pane of the schematic frame's left column (lower = higher up); the order panes are drawn in. */
 export const SCH_LEFT_COLUMN_ORDER: readonly DockPaneId[] = ["netNavigator", "hierarchy", "properties", "selectionFilter"];
@@ -54,8 +56,8 @@ export function defaultDockLayout(windowWidth: number): DockLayout {
     // `show_schematic_hierarchy` and `show_properties` default true; the Appearance manager is shown by default in pcbnew too.
     // `show_net_nav_panel` defaults false. Whether the Net Navigator is OPEN is the schematic control store's (`netNavigatorOpen`, which its action and its check
     // mark read), passed in below; this flag is not read for it.
-    shown: { netNavigator: false, hierarchy: true, properties: true, selectionFilter: true },
-    folded: { netNavigator: false, hierarchy: false, properties: false, selectionFilter: false },
+    shown: { netNavigator: false, hierarchy: true, properties: true, selectionFilter: true, symProperties: true },
+    folded: { netNavigator: false, hierarchy: false, properties: false, selectionFilter: false, symProperties: false },
   };
 }
 
@@ -84,7 +86,8 @@ export function togglePane(layout: DockLayout, id: DockPaneId, windowWidth = Inf
   const next: DockLayout = { ...layout, shown: { ...layout.shown, [id]: show } };
   if (show) {
     next.folded = { ...layout.folded, [id]: false };
-    return setColumnCollapsed(next, "left", false, windowWidth); // every pane here is docked in the left column
+    // every frame pane here is docked in the left column; the Symbol Editor's Properties sits in its Libraries column
+    return setColumnCollapsed(next, id === "symProperties" ? "tree" : "left", false, windowWidth);
   }
   return next;
 }

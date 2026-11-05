@@ -54,6 +54,7 @@ export const SYM_TOOL_OF_ACTION: Readonly<Record<string, string>> = {
   "eeschema.InteractiveDrawing.drawRectangle": "draw_rect",
   "eeschema.InteractiveDrawing.drawCircle": "draw_circle",
   "eeschema.InteractiveDrawing.drawArc": "draw_arc",
+  "eeschema.InteractiveDrawing.drawBezier": "draw_bezier",
   "eeschema.SymbolDrawing.drawSymbolLines": "draw_lines",
   "eeschema.SymbolDrawing.drawSymbolPolygon": "draw_polygon",
   "eeschema.SymbolDrawing.drawSymbolTextBox": "draw_textbox",
@@ -87,6 +88,7 @@ export function actionChecked(name: string, c: CheckedContext): boolean | undefi
     // The panes: `ACTIONS::showProperties` / `SCH_ACTIONS::showHierarchy` toggle a pane of the board and schematic frames' left column; the library tree is
     // the library editors' own column; the Appearance manager is the board editor's right dock.
     case "common.Control.showProperties":
+      if (c.tab === "symbol") return c.dock.shown.symProperties && !c.dock.treeCollapsed;
       return c.tab === "pcb" || c.tab === "schematic" ? c.dock.shown.properties && !c.dock.leftCollapsed : undefined;
     case "eeschema.EditorTool.showHierarchy":
       return c.dock.shown.hierarchy && !c.dock.leftCollapsed;

@@ -48,7 +48,7 @@ import { INITIAL_LAST_TEXT_BOX, type LastTextBox, type LibTextBox } from "../kic
 import type { ViewTransform } from "./store";
 import { carriedItems, pastedText, rebased, snappedOrigin, type SymCarry } from "../kicad-port/symCarry";
 
-export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_lines" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "draw_textbox" | "text" | "anchor";
+export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_lines" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "draw_bezier" | "draw_textbox" | "text" | "anchor";
 
 export const SYM_TOOL_MESSAGES: Record<SymToolId, string> = {
   select: "Select item(s)",
@@ -60,13 +60,14 @@ export const SYM_TOOL_MESSAGES: Record<SymToolId, string> = {
   draw_rect: "Rectangle: click one corner, then the opposite one",
   draw_circle: "Circle: click center, then a point on the edge",
   draw_polygon: "Polygon: click points, Enter/double-click to finish (the shape closes), Esc to cancel",
+  draw_bezier: "Bezier curve: click the start, the end, then the first and the second control point; Enter or double-click finishes it early, Esc cancels",
   draw_textbox: "Text box: click one corner, then the opposite one, then enter the text",
   text: "Text: click where it goes, then type it",
   anchor: "Move the symbol anchor: click the point that becomes the symbol's origin",
 };
 
 /** Same "click to add point(s), commit on the last one" shape the Footprint Editor's own `FpDrawState` uses. Points are internal-space µm (see this file's own unit-convention doc). `lines` is the open multi-point polyline (`drawSymbolLines`), `polygon` the closed one. */
-export type SymDrawState = { kind: "shape"; shapeKind: "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "textbox"; pts: [number, number][] };
+export type SymDrawState = { kind: "shape"; shapeKind: "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "bezier" | "textbox"; pts: [number, number][] };
 
 /** `DIALOG_SAVE_SYMBOL_AS` (Save As / Save Copy As): which of the two it is. */
 export interface SaveAsRequest {
