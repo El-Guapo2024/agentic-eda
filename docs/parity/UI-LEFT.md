@@ -28,7 +28,7 @@ Notes:
 9. S3: Schematic Setup pages -- **done (task-u1-schsetup)**
 10. P8: zones -- **done (task-u1-zones)**
 11. S2: design variants
-12. M1: the Simulation Model dialog
+12. M1: the Simulation Model dialog -- **done (task-u1-simmodel)**
 
 ## PCB editor
 
@@ -527,10 +527,11 @@ Notes:
 
 ## Simulator
 
-- **M1 [FM] Simulation Model dialog.**
-  - Only "SPICE model from file".
-  - No built-in device or source models with a parameter grid, no IBIS, no Code tab, and no "Save parameter in Value field".
-  - XL. GAPS 34; PARITY-sch §49, §51.
+- **M1 [FM] Simulation Model dialog.** **done (task-u1-simmodel)**: "Built-in SPICE model" with KiCad's Device and Device type choices, the Parameters grid (every model's parameters copied from the C++ by `tools/extract-sim-models.js`, in KiCad's categories), the Code tab, "Save parameter '%s (%s)' in Value field", the inference of passives and DC sources, OK writing the fields as `WriteFields` does; IBIS files list their components, pins, pin models, differential pins and waveforms; kicad-cli's netlist of what the dialog wrote is KiCad's generator's (PARITY-sch §57). Left:
+  - IBIS: KIBIS's model tables, checks and SPICE (kicad-cli writes the SPICE).
+  - A library `.model`'s parameters in the grid; arithmetic in the grid; K's inductor choice.
+  - OK is its own undo step and adds hidden fields (KiCad's inference adds visible ones).
+  - XL. GAPS 34; PARITY-sch §49, §51, §57.
 - **M2 [KO] Batch runs (`ngspice -b`).**
   - No live plot, and Stop throws the results away.
   - A measurement, Fourier or tuner change starts a new run.
