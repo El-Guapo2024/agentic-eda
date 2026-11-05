@@ -10,6 +10,7 @@ import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, Bo
 import type { LengthUnit } from "../state/units";
 import type { PcbQueryRequest, PcbQueryResponse } from "../kicad-port/pcbQuery";
 import type { SchMovePatch } from "./schEditTypes";
+import type { SchPastePreview } from "../kicad-port/schClipboard";
 
 import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
 import { fileStem, schematicSaveNames } from "../kicad-port/saveAs";
@@ -296,6 +297,20 @@ export async function postMovePreview(body: { sheet: string; cmds: Cmd[] }): Pro
     const r = await fetch("/api/sch/move_preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = (await r.json()) as (SchMovePatch & { ok: boolean }) | { ok: false };
     return j.ok ? (j as SchMovePatch) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What the command a placing tool's click would send adds to the sheet in view (`POST /api/sch/place_preview`): the item that rides the cursor, drawn as
+ * the commit will draw it (kicad-port/schPlaceTool.ts). Null when the server refuses the command or cannot be reached.
+ */
+export async function postPlacePreview(body: { sheet: string; cmd: Cmd }): Promise<SchPastePreview | null> {
+  try {
+    const r = await fetch("/api/sch/place_preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = (await r.json()) as { ok: true; preview: SchPastePreview } | { ok: false };
+    return j.ok ? j.preview : null;
   } catch {
     return null;
   }

@@ -37,6 +37,8 @@ export interface ChooserOptions {
   keep?: (item: ChooserItem) => boolean;
   /** The item to open on (`Lib:Name`): the one last used, or the symbol's current footprint. */
   preselect: string | null;
+  /** The name the tree keeps its open libraries under (`LIB_TREE`'s `m_LibTree` settings key: "symbols", or "power" for Place Power's); the kind by default. */
+  treeKey?: string;
 }
 
 export interface SearchStatus {
@@ -72,8 +74,11 @@ export interface Chooser {
 
 const DEBOUNCE_MS = 200;
 
-/** The libraries that were open when a chooser was last closed (`m_LibTree.open_libs`), per kind, for this page's life. */
-const rememberedOpen: Record<ChooserKind, Set<string>> = { symbol: new Set(), footprint: new Set() };
+/** The libraries that were open when a chooser was last closed (`m_LibTree.open_libs`), per tree (`treeKey`), for this page's life. */
+const rememberedOpen = new Map<string, Set<string>>();
+
+/** How often the power chooser asks again which libraries hold a power symbol while the server is still reading them. */
+const POWER_LIBS_POLL_MS = 500;
 
 export function useChooser(o: ChooserOptions): Chooser {
   const { kind, active } = o;
@@ -92,6 +97,10 @@ export function useChooser(o: ChooserOptions): Chooser {
 
   const filterKey = JSON.stringify(o.filter ?? {});
   const searching = parseQuery(debounced).length > 0;
+  const treeKey = o.treeKey ?? kind;
+  const onlyPower = !!o.filter?.onlyPower;
+  /** With the power filter: the installed libraries that hold a power symbol, as far as the server has read them (null until it answers). */
+  const [powerLibs, setPowerLibs] = useState<ReadonlySet<string> | null>(null);
 
   // Open: start from a clean slate, ask for the library names and start the server reading them.
   const preselect = o.preselect;
@@ -104,7 +113,7 @@ export function useChooser(o: ChooserOptions): Chooser {
     setOpenItems(new Set());
     setSelectedKey(null);
     moved.current = false;
-    const start = new Set(rememberedOpen[kind]);
+    const start = new Set(rememberedOpen.get(treeKey) ?? []);
     if (preselect) start.add(splitId(preselect).lib);
     setOpenGroups(start);
     let cancelled = false;
@@ -123,10 +132,38 @@ export function useChooser(o: ChooserOptions): Chooser {
   openRef.current = openGroups;
   useEffect(
     () => () => {
-      rememberedOpen[kind] = new Set([...openRef.current].filter((l) => !l.startsWith("--")));
+      rememberedOpen.set(treeKey, new Set([...openRef.current].filter((l) => !l.startsWith("--"))));
     },
-    [kind]
+    [treeKey]
   );
+
+  // The power chooser's tree shows the libraries with a power symbol (`LIB_TREE_MODEL_ADAPTER` hides a library whose items the power filter all hides):
+  // the server names them as it reads the libraries, so it is asked again until it has read them all.
+  useEffect(() => {
+    if (!active || !onlyPower) {
+      setPowerLibs(null);
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ask = async () => {
+      try {
+        const answer = await searchInstalled(kind, "", o.filter);
+        if (cancelled) return;
+        setPowerLibs(new Set(answer.powerLibraries ?? []));
+        if (answer.status === "indexing") timer = setTimeout(() => void ask(), POWER_LIBS_POLL_MS);
+      } catch {
+        if (!cancelled) setPowerLibs(new Set());
+      }
+    };
+    void ask();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, kind, onlyPower]);
+  const shownInstalled = useMemo(() => (onlyPower ? installed.filter((l) => powerLibs?.has(l.name)) : installed), [installed, onlyPower, powerLibs]);
 
   // The search text, after the debounce.
   const setQuery = useCallback((q: string) => {
@@ -208,13 +245,13 @@ export function useChooser(o: ChooserOptions): Chooser {
         placed: kept(o.placed),
         project: kept(o.project),
         extra: o.extra ? { label: o.extra.label, items: kept(o.extra.items) ?? [] } : undefined,
-        installed,
+        installed: shownInstalled,
         loaded,
         results: results ? results.libraries : null,
         pinned,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [kind, searching, debounced, o.recent, o.placed, o.project, o.extra, installed, loaded, results, pinned, kept]
+    [kind, searching, debounced, o.recent, o.placed, o.project, o.extra, shownInstalled, loaded, results, pinned, kept]
   );
   const rows = useMemo(() => visibleRows(groups, { groups: openGroups, items: openItems, searching }, kind), [groups, openGroups, openItems, searching, kind]);
 
@@ -319,7 +356,7 @@ export function useChooser(o: ChooserOptions): Chooser {
       error,
     },
     loading,
-    libraries: installed.length,
+    libraries: shownInstalled.length,
   };
 }
 

@@ -1,10 +1,11 @@
 // What the schematic drawing tool remembers of the last label and text it put down, so the next dialog opens with it: `SCH_DRAWING_TOOLS::m_lastTextOrientation`,
-// `m_lastTextBold`, `m_lastTextItalic`, `m_lastGlobalLabelShape`, `m_lastAutoLabelRotateOnPlacement`, `m_lastTextHJustify`, `m_lastTextVJustify` and `m_lastTextAngle`
+// `m_lastTextBold`, `m_lastTextItalic`, `m_lastGlobalLabelShape`, `m_lastAutoLabelRotateOnPlacement`, `m_lastTextHJustify`, `m_lastTextVJustify`, `m_lastTextAngle` and
+// `m_lastNetClassFlagShape`
 // (eeschema/tools/sch_drawing_tools.cpp at 8303b2ad). Per session, like the tool's: a reload starts again from the values the tool is constructed with.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { LabelShape } from "../api/types";
-import type { SchHAlign, SchVAlign } from "../api/schEditTypes";
+import type { DirectiveShape, SchHAlign, SchVAlign } from "../api/schEditTypes";
 
 export type LabelSpinName = "right" | "up" | "left" | "bottom";
 
@@ -21,9 +22,11 @@ export interface LastPlaced {
   textH: SchHAlign;
   textV: SchVAlign;
   textVertical: boolean;
+  /** The shape of the last directive label (`m_lastNetClassFlagShape`, constructed as `LABEL_FLAG_SHAPE::F_ROUND`). */
+  directiveShape: DirectiveShape;
 }
 
-const INITIAL: LastPlaced = { spin: "right", bold: false, italic: false, shape: "input", autoRotate: false, textH: "center", textV: "center", textVertical: false };
+const INITIAL: LastPlaced = { spin: "right", bold: false, italic: false, shape: "input", autoRotate: false, textH: "center", textV: "center", textVertical: false, directiveShape: "round" };
 
 let last: LastPlaced = { ...INITIAL };
 

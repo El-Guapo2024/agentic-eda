@@ -7,8 +7,14 @@
 // every other eeschema placement tool in this app uses, and SchematicView.tsx's onPointerDown is what sends `add_symbol` when the sheet is clicked. The server
 // keeps the definition of an installed symbol with the schematic in that same command (crates/cli/src/library_place.rs), so it draws, exports and passes ERC.
 //
+// `P` (Place Power: `PlaceSymbol` with `filter.FilterPowerSymbols( true )` and `m_powerHistoryList`) opens the same chooser on power symbols only: titled
+// "Choose Power Symbol" (`DIALOG_SYMBOL_CHOOSER`), the tree filtered to `aNode.m_IsPower` (a library with none is not shown), its own Recently Used, the
+// placed power symbols as Already Placed, no footprint (`m_show_footprints = false`), and "Place repeated copies" (`m_keepSymbol`). OK puts the chosen
+// power symbol in the hand (actions/schPlaceActions.ts): it rides the cursor until the click that places it with `add_power_symbol` (with its
+// library definition, crates/cli/src/library_place.rs), the net its Value. Cancel places nothing and Place Power stays armed.
+//
 // Not ported: the regular-expression and relational search words (a word is searched as text, with `*` and `?`), the Footprint selector's list of footprints
-// (the Choose button opens the Footprint Chooser instead), and power symbols, which `P` places.
+// (the Choose button opens the Footprint Chooser instead), and "Place all units" (and, for Place Symbol, "Place repeated copies").
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchProjectFootprintDrawing, fetchFootprintDetails, fetchProjectSymbolDrawing, fetchProjectSymbols, fetchSymbolDetails, type ProjectSymbol, type SymbolDetails } from "../api/libraryChooserClient";
 import { fetchInstalledLibraries } from "../api/libraryIndexClient";
@@ -16,7 +22,8 @@ import type { LibraryFootprint, LibrarySymbol } from "../api/types";
 import { chosenOf, type ChooserItem, type ChooserRow } from "../kicad-port/libChooser";
 import { unitLetter } from "../kicad-port/unitLetter";
 import { recentItems, rememberChosen } from "../state/chooserRecent";
-import { useStudioDispatch, useStudioState } from "../state/store";
+import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { carryItem } from "../actions/schPlaceActions";
 import { ChooserDetails, Linkified } from "./chooser/ChooserDetails";
 import { FootprintPreview, SymbolPreview } from "./chooser/ChooserPreview";
 import { LibChooserTree } from "./chooser/LibChooserTree";
@@ -25,7 +32,9 @@ import { FootprintChooserDialog } from "./FootprintChooserDialog";
 import "../styles/chooser.css";
 
 const SYMBOL_FILTER = { excludePower: true } as const;
+const POWER_FILTER = { onlyPower: true } as const;
 const notPower = (item: ChooserItem) => !item.power;
+const isPower = (item: ChooserItem) => !!item.power;
 
 interface Loaded {
   id: string;
@@ -35,13 +44,18 @@ interface Loaded {
 }
 
 export function SymbolChooserDialog() {
-  const open = useStudioState().symbolChooserOpen;
-  return open ? <SymbolChooser /> : null;
+  const state = useStudioState();
+  // Place Power's chooser: opened by its first click (`schPowerPending` is where the click was)
+  if (state.schPowerPending) return <SymbolChooser power at={state.schPowerPending.at} />;
+  return state.symbolChooserOpen ? <SymbolChooser power={false} /> : null;
 }
 
-function SymbolChooser() {
+function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] }) {
   const dispatch = useStudioDispatch();
-  const close = () => dispatch({ type: "SET_SYMBOL_CHOOSER_OPEN", open: false });
+  const api = useStudioApi();
+  const close = () => dispatch(power ? { type: "SET_SCH_POWER_PENDING", pending: null } : { type: "SET_SYMBOL_CHOOSER_OPEN", open: false });
+  /** "Place repeated copies" (`m_keepSymbol`, unchecked as the dialog is made). */
+  const [keep, setKeep] = useState(false);
 
   // The project's own symbols and the ones the design uses, and the names of the installed libraries (a symbol of those is read from the library file).
   const [project, setProject] = useState<ProjectSymbol[]>([]);
@@ -60,11 +74,12 @@ function SymbolChooser() {
     };
   }, []);
 
-  const recent = recentItems("symbol");
-  const placed = useMemo(() => project.filter((p) => p.placed && !p.power), [project]);
+  const recent = recentItems(power ? "power" : "symbol");
+  const wanted = power ? isPower : notPower;
+  const placed = useMemo(() => project.filter((p) => p.placed && wanted(p)), [project, wanted]);
   // The project's libraries are the ones KiCad does not have; the stand-in table only where KiCad's libraries are not installed.
-  const own = useMemo(() => project.filter((p) => !p.power && !installedNames.has(p.lib) && (p.source !== "builtin" || installedNames.size === 0)), [project, installedNames]);
-  const chooser = useChooser({ kind: "symbol", active: true, recent, placed, project: own, filter: SYMBOL_FILTER, keep: notPower, preselect: recent[0]?.id ?? null });
+  const own = useMemo(() => project.filter((p) => wanted(p) && !installedNames.has(p.lib) && (p.source !== "builtin" || installedNames.size === 0)), [project, installedNames, wanted]);
+  const chooser = useChooser({ kind: "symbol", active: true, recent, placed, project: own, filter: power ? POWER_FILTER : SYMBOL_FILTER, keep: wanted, preselect: recent[0]?.id ?? null, treeKey: power ? "power" : "symbols" });
 
   const chosen = chosenOf(chooser.selectedRow);
   const id = chosen?.item.id ?? null;
@@ -135,7 +150,13 @@ function SymbolChooser() {
       const lib = c.item.id.slice(0, Math.max(0, c.item.id.indexOf(":")));
       const details = shown && shown.id === c.item.id ? shown.info : installedNames.has(lib) ? await fetchSymbolDetails(c.item.id).catch(() => null) : null;
       const reference = details?.reference || c.item.reference || "";
-      rememberChosen("symbol", { ...c.item, reference, value: details?.value ?? c.item.value, footprint: details?.footprint ?? c.item.footprint, units: details?.units ?? c.item.units, pins: details?.pins ?? c.item.pins, description: details?.description ?? c.item.description });
+      rememberChosen(power ? "power" : "symbol", { ...c.item, reference, value: details?.value ?? c.item.value, footprint: details?.footprint ?? c.item.footprint, units: details?.units ?? c.item.units, pins: details?.pins ?? c.item.pins, description: details?.description ?? c.item.description });
+      if (power) {
+        // `new SCH_SYMBOL( *libSymbol, ... )`: the power symbol rides the cursor; the net it names is its Value (`SCH_PIN::GetDefaultNetName` of a power pin)
+        close();
+        carryItem({ api }, "sch_power", { kind: "power", libId: c.item.id, net: details?.value || c.item.value || c.item.name, rotMillideg: 0 }, at ?? [0, 0], [], keep);
+        return;
+      }
       dispatch({
         type: "SET_ARMED_SYMBOL",
         symbol: {
@@ -151,7 +172,7 @@ function SymbolChooser() {
       close();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chooser, shown, installedNames, unitPick, units, footprintOverride, dispatch]
+    [chooser, shown, installedNames, unitPick, units, footprintOverride, dispatch, power, keep, at]
   );
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -181,7 +202,7 @@ function SymbolChooser() {
         <div className="dialog chooser-dialog" onKeyDown={onKeyDown} {...chooserFocusGuard} role="dialog" aria-label="Symbol Chooser">
           <div className="dialog-header">
             <span>
-              Symbol Chooser
+              {power ? "Choose Power Symbol" : "Symbol Chooser"}
               {chooser.libraries > 0 ? ` (${chooser.libraries} libraries)` : ""}
             </span>
           </div>
@@ -217,7 +238,7 @@ function SymbolChooser() {
                   ))}
                 </div>
               )}
-              {id && (
+              {id && !power && (
                 <>
                   <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
                     <span style={{ fontWeight: 600 }}>Footprint</span>
@@ -249,6 +270,11 @@ function SymbolChooser() {
             </div>
           </div>
           <div className="dialog-footer">
+            {power && (
+              <label style={{ marginRight: "auto" }} title="Keep the symbol selected for subsequent clicks.">
+                <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} data-chooser-keep /> Place repeated copies
+              </label>
+            )}
             <button onClick={close} data-chooser-cancel>
               Cancel
             </button>

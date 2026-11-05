@@ -20,8 +20,8 @@
 // Scope: see PARITY-sch.md for the full per-action table.
 import { isTerminalPoint } from "../kicad-port/schTerminalPoint";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { LabelScope, Schematic } from "../api/types";
-import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
+import type { Schematic } from "../api/types";
+import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { fetchHierarchy } from "../api/schControlClient";
 import { placeUnfoldLabel, unfoldEntrySize } from "../kicad-port/schBusUnfold";
 import { boundsOfPoints, fitTransform } from "./canvas/view";
@@ -95,6 +95,9 @@ import { pickNewMemberAt } from "../actions/schGroupActions";
 import { pasteOffset, previewIds, withPaste } from "../kicad-port/schClipboard";
 import { cancelSchPaste, useSchPaste } from "../state/schPasteStore";
 import { useSchImageHand } from "../state/schImageHand";
+import { cancelSchCarry, noteCarryCursor, useSchCarry } from "../state/schCarryStore";
+import { isCarryTool, PREVIEW_AT } from "../kicad-port/schPlaceTool";
+import { beginItem, placeCarried } from "../actions/schPlaceActions";
 import { imageSizeNm, SCALE_PPM } from "../kicad-port/refImage";
 import { useImageVersion } from "./canvas/imageCache";
 import "../styles/canvas.css";
@@ -122,13 +125,6 @@ type DragState =
    * committing a drag.
    */
   | { kind: "move"; refs: string[]; startWorld: [number, number]; /** `BestDragOrigin`: the point of the held items the drag holds them by. */ origin: [number, number]; moved: boolean; vertices?: Record<string, number[]> };
-
-/** Which `add_label` scope each of the three label tools commits -- `L`/Ctrl+`L`/`H`, see useActionRunner.ts's own `eeschema.InteractiveDrawing.place*Label` bindings for how each one arms its tool id. */
-const LABEL_TOOL_SCOPE: Partial<Record<ToolId, LabelScope>> = {
-  sch_label_local: "local",
-  sch_label_global: "global",
-  sch_label_hier: "hierarchical",
-};
 
 /**
  * Every pin's resolved world-space tip, for the junction analysis (`JUNCTION_HELPERS::AnalyzePoint`) and the wire tool's auto-finish on a pin. Only symbols with real
@@ -179,6 +175,8 @@ export function SchematicView() {
   const simVersion = simUi.version;
   /** The paste being carried (`SCH_EDITOR_CONTROL::Paste` -> the Move tool): the items it would add, until a click drops them or Escape throws them away. */
   const paste = useSchPaste();
+  /** The label, text, directive label or power symbol a placing tool holds (state/schCarryStore.ts): it rides the cursor until a click places it. */
+  const carry = useSchCarry();
   /** The image Place Image holds (state/schImageHand.ts), and the number of bitmaps that have arrived: the sheet is painted again for either. */
   const imageHand = useSchImageHand();
   const imageVersion = useImageVersion();
@@ -330,13 +328,29 @@ export function SchematicView() {
   const pasteDx = paste && pasteSnap ? pasteOffset(paste.anchor, [pasteSnap[0], pasteSnap[1]])[0] : 0;
   const pasteDy = paste && pasteSnap ? pasteOffset(paste.anchor, [pasteSnap[0], pasteSnap[1]])[1] : 0;
   const pasteShown = paste != null && pasteSnap != null;
-  const displaySch: Schematic | null = useMemo(() => (baseDisplaySch && paste && pasteShown ? withPaste(baseDisplaySch, paste.preview, pasteDx, pasteDy) : baseDisplaySch), [baseDisplaySch, paste, pasteShown, pasteDx, pasteDy]);
-  const pasteSelection = useMemo(() => (paste && pasteShown ? new Set(previewIds(paste.preview)) : null), [paste, pasteShown]);
+  // The item a placing tool holds (`TwoClickPlace`'s `m_view->AddToPreview( item )`, `PlaceSymbol`'s `addSymbol`): the server's drawing of the command the
+  // placing click will send, made at `PREVIEW_AT`, shifted to the cursor as the tool's grid snaps it (`BestSnapAnchor`), and drawn selected (it is the
+  // selection while it rides). Until the pointer moves it is where it was made.
+  const carrying = carry != null && carry.preview != null && carry.tool === state.activeTool && carry.sheet.join("/") === state.currentSheetPath.join("/");
+  const carrySnap = carrying ? (state.cursorNm ? (snap.lastPoint() ?? snap.align([state.cursorNm.x, state.cursorNm.y], NO_MODS, toolCategory(state.activeTool))) : carry.at) : null;
+  const carryDx = carrySnap ? carrySnap[0] - PREVIEW_AT[0] : 0;
+  const carryDy = carrySnap ? carrySnap[1] - PREVIEW_AT[1] : 0;
+  const displaySch: Schematic | null = useMemo(() => {
+    if (baseDisplaySch && paste && pasteShown) return withPaste(baseDisplaySch, paste.preview, pasteDx, pasteDy);
+    if (baseDisplaySch && carrying && carry?.preview) return withPaste(baseDisplaySch, carry.preview, carryDx, carryDy);
+    return baseDisplaySch;
+  }, [baseDisplaySch, paste, pasteShown, pasteDx, pasteDy, carrying, carry?.preview, carryDx, carryDy]);
+  const pasteSelection = useMemo(() => (paste && pasteShown ? new Set(previewIds(paste.preview)) : carrying && carry?.preview ? new Set(previewIds(carry.preview)) : null), [paste, pasteShown, carrying, carry?.preview]);
   // A paste belongs to the sheet it was started on and to the select tool: leaving the sheet, the tab or the tool throws it away.
   useEffect(() => {
     if (paste && (paste.sheet.join("/") !== state.currentSheetPath.join("/") || state.activeTool !== "select")) cancelSchPaste();
   }, [paste, state.currentSheetPath, state.activeTool]);
   useEffect(() => () => void cancelSchPaste(), []);
+  // An item in the hand belongs to its tool and its sheet: leaving either (or the tab) throws it away, as `cleanup()` does when the tool ends.
+  useEffect(() => {
+    if (carry && (carry.tool !== state.activeTool || carry.sheet.join("/") !== state.currentSheetPath.join("/"))) cancelSchCarry();
+  }, [carry, state.activeTool, state.currentSheetPath]);
+  useEffect(() => () => void cancelSchCarry(), []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -725,7 +739,19 @@ export function SchematicView() {
           return;
         }
 
-        // Draw Rectangle / Circle / Arc / Bezier / Text Box / Rule Area and Place Directive Label (components/schematic/schShapeTools.ts).
+        // Place Label / Global Label / Hierarchical Label / Directive Label / Text and Place Power (`TwoClickPlace`, `PlaceSymbol`, actions/schPlaceActions.ts):
+        // with nothing in the hand the click makes the item -- its dialog or chooser opens, or a label on a labelled wire takes that name -- and it then
+        // rides the cursor; with an item in the hand the click places it where `BestSnapAnchor` puts the cursor on the tool's grid (labels, directive
+        // labels and power symbols on the connectable grid, text on the text grid: a label or power symbol on a pin's end joins it by position, as in
+        // KiCad). The tool stays armed.
+        if (isCarryTool(state.activeTool)) {
+          const at = snapToGrid(wx, wy);
+          if (carry && carry.tool === state.activeTool) placeCarried({ api }, at);
+          else beginItem({ api, dispatch }, state.activeTool, at);
+          return;
+        }
+
+        // Draw Rectangle / Circle / Arc / Bezier / Text Box / Rule Area (components/schematic/schShapeTools.ts).
         if (isSchShapeTool(state.activeTool)) {
           shapeToolClick({ tool: state.activeTool, draw: state.drawState, sch, lineMode: state.schLineMode, dispatch, api }, shapeSnap(wx, wy));
           return;
@@ -766,27 +792,8 @@ export function SchematicView() {
           return;
         }
 
-        // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp SingleClickPlace/
-        // TwoClickPlace): every one of these tools stays armed after a
-        // click (same as the wire tool above) for chained placement --
-        // real eeschema does too (Escape, or the hotkey again, is how you
-        // leave the tool). Every one clicks where `BestSnapAnchor` puts the cursor, on the grid of its category (labels, power symbols and no-connects on the
-        // connectable grid, text on the text grid): a label or power symbol on a pin's end connects to it by position, as in KiCad.
-        const labelScope = LABEL_TOOL_SCOPE[state.activeTool];
-        if (labelScope) {
-          const snapped = snapToGrid(wx, wy);
-          dispatch({ type: "SET_SCH_LABEL_PENDING", pending: { at: snapped, scope: labelScope } });
-          return;
-        }
-        if (state.activeTool === "sch_power") {
-          const snapped = snapToGrid(wx, wy);
-          dispatch({ type: "SET_SCH_POWER_PENDING", pending: { at: snapped } });
-          return;
-        }
-        if (state.activeTool === "sch_text") {
-          dispatch({ type: "SET_SCH_TEXT_PENDING", pending: { at: snapToGrid(wx, wy) } });
-          return;
-        }
+        // `Q` (sch_drawing_tools.cpp SingleClickPlace) and the bus entry tool: a click places one where `BestSnapAnchor` puts the cursor (the
+        // connectable grid), and the tool stays armed for the next one, as real eeschema's does (Escape, or the hotkey again, leaves it).
         if (state.activeTool === "sch_no_connect") {
           const [sx, sy] = snapToGrid(wx, wy);
           api.cmd({ op: "add_no_connect", at: { x: sx, y: sy } });
@@ -908,7 +915,11 @@ export function SchematicView() {
         modsRef.current = { ctrl: isMac() ? e.metaKey : e.ctrlKey, shift: e.shiftKey };
 
         // The snapping of the tool in force follows the cursor (`BestSnapAnchor` runs on every event of a KiCad tool): the marker, the snap line, the point a rubber band goes to.
-        if (SCH_PLACING_TOOLS.has(state.activeTool) && !dragRef.current) snapToGrid(wx, wy);
+        if (SCH_PLACING_TOOLS.has(state.activeTool) && !dragRef.current) {
+          const p = snapToGrid(wx, wy);
+          // where the placing tool's hotkey puts its item down (the tool's own `cursorPos`); only while one is armed
+          noteCarryCursor(isCarryTool(state.activeTool) ? p : null);
+        } else noteCarryCursor(null);
 
         if (armedKind && state.selection.size > 0) {
           // `SCH_MOVE_TOOL::doMoveSelection`: the selection is held by its reference point (`BestDragOrigin`: the nearest pin or origin of what is held to where it was picked up)
@@ -1033,7 +1044,13 @@ export function SchematicView() {
           return;
         }
         if (draw?.kind !== "wire") return;
-        commitDrawn(draw.pts);
+        // `doDrawSegments`: a double-click is a click and then the finish, and End (`finishInteractive`, `cursorDblClick`) finishes the segments as
+        // they are -- the one that runs to the cursor included (`finishSegments` keeps the last non-null segment). A real double-click's presses put
+        // that point in already; the commit drops the zero-length repeat.
+        const [wx, wy] = toWorld(e.clientX, e.clientY);
+        const tail = wireTail(draw.pts[draw.pts.length - 1]!, snapToGrid(wx, wy), state.schLineMode, state.schPosture, elbowRef.current);
+        elbowRef.current = null;
+        commitDrawn([...draw.pts, ...(tail as [number, number][])]);
         dispatch({ type: "SET_DRAW_STATE", draw: null });
       }}
       onPointerUp={(e) => {

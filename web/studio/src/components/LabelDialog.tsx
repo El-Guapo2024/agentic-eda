@@ -1,35 +1,28 @@
-// `L`/Ctrl+`L`/`H` (sch_drawing_tools.cpp TwoClickPlace/createNewLabel):
-// SchematicView.tsx's onPointerDown captures the click position into
-// state.schLabelPending (scope already decided by which hotkey armed the
-// tool), and this dialog is what turns that into a real label --
-// same "click/draw first, small dialog last" shape ZoneDialog/TextDialog
-// already use, not source's own "dialog pops up immediately, item then
-// follows the cursor" order (see PARITY-sch.md for that documented
-// adaptation).
+// `L`/Ctrl+`L`/`H` (sch_drawing_tools.cpp TwoClickPlace/createNewLabel): the dialog a new label is made with, KiCad's order -- the tool's first click (or
+// its hotkey, where the cursor is) opens it, and OK puts the label in the hand: it rides the cursor (actions/schPlaceActions.ts, drawn by
+// SchematicView) until the click that places it with one `place_label` command, one undo step. Cancel makes nothing and the tool stays armed
+// (`createNewLabel` returns false).
 //
-// The dialog is `DIALOG_LABEL_PROPERTIES` as `createNewLabel` opens it: the text, the
-// shape of a global or hierarchical label, which way the text runs, its size and style,
-// and the "Auto" check of a global or hierarchical label
-// (`SCH_LABEL_BASE::AutoRotateOnPlacement`), which has the label take the spin of what
-// it is placed on (`SCH_EDIT_FRAME::AutoRotateItem`; kicad-port/schAutoRotate.ts shows
-// the spin it will give). What was last chosen is the next dialog's start, as the
-// tool's `m_lastTextOrientation`, `m_lastGlobalLabelShape` and
-// `m_lastAutoLabelRotateOnPlacement` are (kicad-port/schLastPlaced.ts). OK is one
-// `place_label` command, one undo step.
+// The dialog is `DIALOG_LABEL_PROPERTIES` as `createNewLabel` opens it on a new label (`aNew`): the text, starting empty, with the labels of the same
+// kind on the sheet to pick from (KiCad's combo box: the labels of every screen, a global label's also the global power symbols' nets; here the
+// sheet in view's), the shape of a global or hierarchical label, which way the text runs, its size and style, and the "Auto" check of a global or
+// hierarchical label (`SCH_LABEL_BASE::AutoRotateOnPlacement`), which has the label take the spin of what it is placed on
+// (`SCH_EDIT_FRAME::AutoRotateItem`; kicad-port/schAutoRotate.ts shows the spin it will give). "Multiple label input" takes one label per line
+// (`m_cbMultiLine`, new labels only): the first rides the cursor and each click brings the next (`itemsToPlace`). What was last chosen is the next
+// dialog's start, as the tool's `m_lastTextOrientation`, `m_lastGlobalLabelShape` and `m_lastAutoLabelRotateOnPlacement` are (kicad-port/schLastPlaced.ts).
 //
-// Auto-increment (dialog_label_properties doesn't have this itself --
-// it's `createNewLabel`'s *caller*, via `SCH_LABEL_BASE::IncrementLabel`,
-// that seeds a chained placement's next suggestion): state.lastLabelText
-// is incremented once per successful placement, so stamping down a bus of
-// labels (DATA0, DATA1, DATA2...) only means confirming the suggestion,
-// not re-typing it.
+// Properties (`E`) of the label in the hand opens this dialog on it (`editing`): OK changes the label that rides, Cancel leaves it as it was.
+//
+// A label's auto-increment is KiCad's: Repeat Last Item (Insert) places another copy with its text stepped on (`IncrementLabel`), and Increment acts on
+// the label in the hand (kicad-port/schPlaceTool.ts). Until 2026-11-05 this dialog suggested the last text stepped on instead; KiCad's starts empty.
 import { useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { incrementLabelText } from "../kicad-port/incrementLabelText";
 import { labelOrientationForPoint, orientationSceneOf } from "../kicad-port/schAutoRotate";
 import { lastPlaced, rememberPlaced, type LabelSpinName } from "../kicad-port/schLastPlaced";
 import { mmToNm, nmToMm } from "../kicad-port/schProperties";
-import { labelNameFromWire, placeLabelCmd } from "../kicad-port/schLabelName";
+import { LABEL_TOOL_OF, labelsOfEntry, type CarriedLabel } from "../kicad-port/schPlaceTool";
+import { carryItem, changeCarried } from "../actions/schPlaceActions";
+import { getSchCarry, setSchCarry, useSchCarry } from "../state/schCarryStore";
 import { inferSpin } from "./schematic/labelShape";
 import type { LabelShape } from "../api/types";
 
@@ -48,58 +41,71 @@ const TITLE: Record<"local" | "global" | "hierarchical", string> = {
   hierarchical: "Hierarchical Label Properties",
 };
 
+const DEFAULT_SIZE_NM = 1_270_000; // SCHEMATIC_SETTINGS::m_DefaultTextSize, 50 mil
+
+/** The label in the hand whose Properties are open, if they are. */
+function carriedBeingEdited(): CarriedLabel | null {
+  const c = getSchCarry();
+  return c?.editing && c.item.kind === "label" ? c.item : null;
+}
+
 export function LabelDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const pending = state.schLabelPending;
+  const carry = useSchCarry();
+  const editing = carry?.editing && carry.item.kind === "label" ? carry.item : null;
 
   const [text, setText] = useState("");
+  const [multiLine, setMultiLine] = useState(false);
   const [shape, setShape] = useState<LabelShape>("input");
   // "" is "From the wire": the spin is read off the wire the label ends at when it is placed, and kept (KiCad's label always has a spin of its own)
   const [spin, setSpin] = useState<LabelSpinName | "">("right");
   const [auto, setAuto] = useState(false);
-  const [size, setSize] = useState(nmToMm(1_270_000));
+  const [size, setSize] = useState(nmToMm(DEFAULT_SIZE_NM));
   const [bold, setBold] = useState(false);
   const [italic, setItalic] = useState(false);
 
-  // Re-seed on every fresh click (not on every keystroke) -- same
-  // dependency shape TextDialog.tsx's own re-seed effect uses.
-  // r2 C-L5, `createNewLabel`: a local or global label put down on a wire whose driver is a label takes that label's name, and no dialog opens
-  // ("Auto-create from attached wire"); it has what the tool last placed (spin, style, shape, Auto).
-  const named = pending && state.schematic ? labelNameFromWire(state.schematic.wires, pending.at, pending.scope) : null;
+  // Seeded on every opening, not on every keystroke: from the label in the hand, or from what the tool last placed.
   useEffect(() => {
     if (!pending) return;
+    const from = carriedBeingEdited();
     const last = lastPlaced();
-    if (named && state.schematic) {
-      void api.cmd(
-        placeLabelCmd({ at: pending.at, scope: pending.scope, text: named, shape: last.shape, spin: last.spin, plainSpin: last.spin || inferSpin(state.schematic.wires, pending.at), sizeNm: null, bold: last.bold, italic: last.italic, autoRotate: pending.scope !== "local" && last.autoRotate })
-      );
-      dispatch({ type: "SET_SCH_LABEL_PENDING", pending: null });
-      return;
-    }
-    setText(incrementLabelText(state.lastLabelText));
-    setShape(last.shape);
-    setSpin(last.spin);
-    setAuto(last.autoRotate);
-    setSize(nmToMm(1_270_000));
-    setBold(last.bold);
-    setItalic(last.italic);
+    setText(from?.text ?? "");
+    setMultiLine(false);
+    setShape(from?.shape ?? last.shape);
+    setSpin(from ? from.spin : last.spin);
+    setAuto(from?.autoRotate ?? last.autoRotate);
+    setSize(nmToMm(from?.sizeNm ?? DEFAULT_SIZE_NM));
+    setBold(from?.bold ?? last.bold);
+    setItalic(from?.italic ?? last.italic);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending?.at[0], pending?.at[1], pending?.scope]);
 
   const sch = state.schematic;
   const supportsAuto = pending !== null && pending.scope !== "local";
-  // what the label would be without "Auto", and what "Auto" makes of it where it is put down
+  // what the label would be without "Auto", and what "Auto" makes of it where it is made (`TransferDataFromWindow` runs `AutoRotateItem` there)
   const plainSpin: LabelSpinName | null = useMemo(() => (pending && sch ? spin || inferSpin(sch.wires, pending.at) : null), [pending, sch, spin]);
   const autoSpin: LabelSpinName | null = useMemo(
     () => (pending && sch && plainSpin ? labelOrientationForPoint(orientationSceneOf(sch), pending.at, plainSpin) : null),
     [pending, sch, plainSpin]
   );
   const autoOn = supportsAuto && auto;
+  // The labels of the same kind to pick from (`m_existingLabelArray`), and the nets of the power symbols for a global label.
+  const existing = useMemo(() => {
+    if (!pending || !sch || pending.scope === "hierarchical") return [];
+    const names = new Set(sch.labels.filter((l) => l.scope === pending.scope).map((l) => l.net));
+    if (pending.scope === "global") for (const p of sch.power_symbols) names.add(p.net);
+    return [...names].sort();
+  }, [pending, sch]);
 
-  if (!pending || named) return null;
-  const close = () => dispatch({ type: "SET_SCH_LABEL_PENDING", pending: null });
+  if (!pending) return null;
+  const close = () => {
+    const now = getSchCarry();
+    if (now?.editing) setSchCarry({ ...now, editing: false });
+    dispatch({ type: "SET_SCH_LABEL_PENDING", pending: null });
+  };
 
   const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
@@ -107,12 +113,20 @@ export function LabelDialog() {
   const canAdd = text.trim().length > 0 && sizeOk;
 
   const submit = () => {
-    if (!canAdd) return;
-    void api.cmd(placeLabelCmd({ at: pending.at, scope: pending.scope, text, shape, spin, plainSpin, sizeNm, bold, italic, autoRotate: autoOn }));
+    if (!canAdd || sizeNm === null) return;
+    // With Auto the label has the spin of what it was made on (`AutoRotateItem` in `TransferDataFromWindow`), and keeps it while it rides
+    const madeSpin: LabelSpinName | "" = autoOn && autoSpin ? autoSpin : spin;
+    const base: CarriedLabel = { kind: "label", scope: pending.scope, text, shape, spin: madeSpin, sizeNm: sizeNm === DEFAULT_SIZE_NM ? null : sizeNm, bold, italic, autoRotate: autoOn };
+    dispatch({ type: "SET_SCH_LABEL_PENDING", pending: null });
+    if (editing) {
+      changeCarried(base);
+      return;
+    }
+    const labels = labelsOfEntry(base, text, multiLine);
+    if (labels.length === 0) return;
     // the tool remembers what it was last given (`m_lastTextOrientation`, `m_lastTextBold`, `m_lastTextItalic`, `m_lastGlobalLabelShape`, `m_lastAutoLabelRotateOnPlacement`)
-    rememberPlaced({ spin, bold, italic, ...(supportsAuto ? { shape, autoRotate: auto } : {}) });
-    dispatch({ type: "SET_LAST_LABEL_TEXT", text });
-    close();
+    rememberPlaced({ spin: madeSpin, bold, italic, ...(supportsAuto ? { shape, autoRotate: auto } : {}) });
+    carryItem({ api }, LABEL_TOOL_OF[pending.scope], labels[0]!, [pending.at[0], pending.at[1]], labels.slice(1));
   };
 
   return (
@@ -123,15 +137,46 @@ export function LabelDialog() {
         </div>
         <div className="dialog-body">
           <div className="kv-grid" style={{ gridTemplateColumns: "96px 1fr" }}>
-            <span>Net name</span>
-            <input
-              autoFocus
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submit();
-              }}
-            />
+            <span>Label</span>
+            {multiLine ? (
+              <textarea autoFocus aria-label="Label" rows={5} value={text} onChange={(e) => setText(e.target.value)} />
+            ) : (
+              <input
+                autoFocus
+                aria-label="Label"
+                list={existing.length > 0 ? "label-dialog-existing" : undefined}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submit();
+                }}
+              />
+            )}
+            {existing.length > 0 && (
+              <datalist id="label-dialog-existing">
+                {existing.map((n) => (
+                  <option key={n} value={n} />
+                ))}
+              </datalist>
+            )}
+            {!editing && (
+              <>
+                <span />
+                <label>
+                  <input
+                    type="checkbox"
+                    aria-label="Multiple label input"
+                    checked={multiLine}
+                    onChange={(e) => {
+                      // `onMultiLabelCheck`: back to one line keeps the first line
+                      if (!e.target.checked) setText((t) => t.split("\n")[0] ?? "");
+                      setMultiLine(e.target.checked);
+                    }}
+                  />{" "}
+                  Multiple label input
+                </label>
+              </>
+            )}
             {pending.scope !== "local" && (
               <>
                 <span>Shape</span>
@@ -183,7 +228,7 @@ export function LabelDialog() {
         <div className="dialog-footer">
           <button onClick={close}>Cancel</button>
           <button className="primary" disabled={!canAdd} onClick={submit}>
-            Add
+            OK
           </button>
         </div>
       </div>

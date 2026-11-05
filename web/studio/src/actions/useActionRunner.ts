@@ -97,6 +97,7 @@ import { deleteCmds } from "../kicad-port/schDelete";
 import { withoutLocked } from "../kicad-port/schLock";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { registerSchEditActions } from "./schEditActions";
+import { registerSchPlaceActions } from "./schPlaceActions";
 import { registerSchClipboardActions } from "./schClipboardActions";
 import { cancelSchPaste } from "../state/schPasteStore";
 import { deleteLastPoint } from "../components/schematic/schShapeTools";
@@ -1355,17 +1356,10 @@ export function useActionRunner() {
       })
     );
 
-    // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp): arm/disarm each
-    // placement tool, same toggle shape as the wire tool above --
-    // SchematicView.tsx's onPointerDown owns the actual click behavior
-    // (pin-snap, open the right pending-dialog state, or for `Q`, commit
-    // immediately).
+    // `Q` and the bus entry tool (sch_drawing_tools.cpp SingleClickPlace): arm/disarm the tool, same toggle shape as the wire tool above --
+    // SchematicView.tsx's onPointerDown commits each click. `L`/Ctrl+`L`/`H`/`T`/`P` and Place Directive Label, whose item rides the cursor
+    // before the click that places it, are actions/schPlaceActions.ts's (registered last, below).
     const toggleSchTool = (tool: Exclude<ToolId, "select">) => schematicOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === tool ? "select" : tool }));
-    m.set("eeschema.InteractiveDrawing.placeLabel", toggleSchTool("sch_label_local"));
-    m.set("eeschema.InteractiveDrawing.placeGlobalLabel", toggleSchTool("sch_label_global"));
-    m.set("eeschema.InteractiveDrawing.placeHierarchicalLabel", toggleSchTool("sch_label_hier"));
-    m.set("eeschema.InteractiveDrawing.placePowerSymbol", toggleSchTool("sch_power"));
-    m.set("eeschema.InteractiveDrawing.placeSchematicText", toggleSchTool("sch_text"));
     m.set("eeschema.InteractiveDrawing.placeNoConnect", toggleSchTool("sch_no_connect"));
     m.set("eeschema.InteractiveDrawing.placeBusWireEntry", toggleSchTool("sch_bus_entry"));
     // `A`: unlike the others above, this opens the chooser dialog first
@@ -2458,6 +2452,10 @@ export function useActionRunner() {
       // and with a route, a pair or a drag live (`performRouting` / `performDragging`: `IsZoneFillAction( evt )` -> `wxBell()`, R7-R1)
       if (run) m.set(id, () => (redoRefused(state.tab, state.activeTool, state.drawState) || routerKey("fill") ? undefined : run()));
     }
+
+    // The placing tools whose item rides the cursor (Place Label, Global Label, Hierarchical Label, Directive Label, Text, Power), and every action as
+    // their loops answer it while an item rides (`TwoClickPlace`, `PlaceSymbol`): last, as it wraps what everything above registered.
+    registerSchPlaceActions(m, { state, dispatch, api, cursorSnapped });
 
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch, schControl, schControlDispatch]);

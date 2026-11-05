@@ -100,7 +100,7 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   m.set("eeschema.InteractiveEdit.toText", convert("text"));
   m.set("eeschema.InteractiveEdit.toTextBox", convert("text_box"));
 
-  // Draw Rectangles / Circles / Arcs / Bezier Curve / Text Boxes / Rule Areas and Place Directive Labels -- SCH_DRAWING_TOOLS::DrawShape / DrawRuleArea / TwoClickPlace:
+  // Draw Rectangles / Circles / Arcs / Bezier Curve / Text Boxes / Rule Areas -- SCH_DRAWING_TOOLS::DrawShape / DrawRuleArea:
   // each arms its tool, which stays armed for the next item until Esc (the click behaviour is components/schematic/schShapeTools.ts, called by SchematicView).
   const arm = (tool: ToolId) =>
     schematicOnly(() => {
@@ -115,7 +115,7 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   m.set("eeschema.InteractiveDrawing.drawTextBox", arm("sch_textbox"));
   m.set("eeschema.InteractiveDrawing.drawTable", arm("sch_table"));
   m.set("eeschema.InteractiveDrawing.drawRuleArea", arm("sch_rule_area"));
-  m.set("eeschema.InteractiveDrawing.placeClassLabel", arm("sch_directive"));
+  // (Place Directive Label, whose label rides the cursor, is actions/schPlaceActions.ts's.)
 
   // Create Corner / Remove Corner -- SCH_POINT_EDITOR::addCorner / removeCorner on the single selected polygon or rule area (kicad-port/schPolyCorners.ts). Like the menu
   // entries (`addCornerCondition` / `removeCornerCondition`) they exist only with the pointer on the outline / on one of its corners.
