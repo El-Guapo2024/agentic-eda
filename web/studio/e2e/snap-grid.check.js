@@ -301,6 +301,8 @@
     const ix = Math.floor((area.x0 + (area.x1 - area.x0) * 0.35) / 1_270_000) * 1_270_000 + 600_000; // 600_000 past a 50 mil grid line: the 10 mil grid and the 50 mil one disagree here
     const iy = Math.floor((area.y0 + (area.y1 - area.y0) * 0.35) / 1_270_000) * 1_270_000 + 600_000;
     check("schematic: the text tool is armed", await setTool("eeschema.InteractiveDrawing.placeSchematicText", "sch_text"), state().tool);
+    // `TwoClickPlace` makes the text at once (Text Properties opens where the cursor is); Cancel makes none and the tool stays armed, snapping the cursor
+    if (/Text Properties/.test(state().dialogs.join(" "))) { button("Cancel")?.click(); await sleep(250); }
     const schOverridesWere = state().gridOverrides;
     if (!schOverridesWere) await run("common.Control.toggleGridOverrides");
     s = await hover(ix, iy);

@@ -209,23 +209,23 @@
     });
 
     // ----- a label names the net
-    await scenario("label: L, a click on a wire and the dialog's net name put a label there, and the wire's net takes its name; one undo step", async (t) => {
+    await scenario("label: L opens the dialog, its net name puts the label in the hand, a click on a wire places it there, and the wire's net takes its name; one undo step", async (t) => {
       const yw = Y0 + 16 * G;
       await drawWire([[X0, yw], [X0 + 10 * G, yw]]);
       const wire = (await sch()).wires.find((w) => w.pts[0][1] === yw && w.pts[0][0] === X0);
       if (!t(!!wire, "the wire is there")) return;
       const netBefore = wire.net;
       const labelsBefore = new Set((await sch()).labels.map((l) => l.id));
+      // `TwoClickPlace`: the hotkey makes the label at once (its dialog), the label then rides the cursor, and a click places it
       await run("eeschema.InteractiveDrawing.placeLabel");
-      await sleep(300);
-      await clickAt(X0 + 4 * G, yw);
       const dlg = await until(() => document.querySelector(".dialog input[autofocus], .dialog .kv-grid input"), 4000);
-      t(!!dlg, `a click opens the label dialog (${__eda.state().dialogs})`);
+      t(!!dlg, `L opens the label dialog (${__eda.state().dialogs})`);
       if (!dlg) return;
       setValue(dlg, "P20_SENSE");
       await sleep(100);
       dlg.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      await sleep(900);
+      await until(() => __eda.state().carry?.drawn, 6000);
+      await clickAt(X0 + 4 * G, yw);
       await toSelect();
       const s1 = await sch();
       const label = newOf(labelsBefore, s1.labels)[0];
