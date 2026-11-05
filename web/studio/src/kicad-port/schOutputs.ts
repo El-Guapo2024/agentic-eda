@@ -42,7 +42,6 @@ export const SCH_CLI_LIMITS = {
   lineWidth: "kicad-cli has no flag for the minimum line width",
   dxfUnits: "kicad-cli always exports DXF in mm",
   openFile: "the studio runs in a browser and does not open files on the server; the files are listed below",
-  variant: "the studio has no design variants",
   browse: "the studio runs in a browser: type the folder, relative to the board's folder",
 } as const;
 
@@ -107,6 +106,8 @@ export interface SchPlotRequest {
   /** `"<id>/<id>/..."` -- only meaningful when `plot_all` is false; empty = the root sheet. */
   sheet_path: string;
   output_directory: string;
+  /** "Design variant:" (KiCad 25ec2335 `SCH_PLOT_OPTS::m_variant`, kicad-cli's `--variant`): absent for the default. */
+  variant?: string;
 }
 
 /** "Plot All Pages" (`OnPlotAll`) or "Plot Current Page" (`OnPlotCurrent`). */

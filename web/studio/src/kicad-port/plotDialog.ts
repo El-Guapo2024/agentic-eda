@@ -11,7 +11,7 @@
 //
 // kicad-cli is the only plot engine. Where it has no flag for a control, the control is shown disabled with the reason (`KICAD_CLI_LIMITS`):
 // "Use drill/place file origin" for PostScript, SVG, PDF and PNG, SVG's precision, the PDF metadata,
-// DXF's "Use KiCad font to plot text", the two PDF popup boxes apart (one flag clears both), the design variant (the studio has none).
+// DXF's "Use KiCad font to plot text", the two PDF popup boxes apart (one flag clears both). The design variant is kicad-cli's `--variant` (KiCad 25ec2335).
 // "Generate Gerber job file" has no flag either, but works: unticked, the backend deletes the job file kicad-cli always writes.
 //
 // Dependency-free on purpose (tsconfig.test.json).
@@ -56,7 +56,6 @@ export const KICAD_CLI_LIMITS = {
   pdfMetadata: "kicad-cli always generates the PDF metadata (it has no flag to leave it out)",
   pdfPopups: "kicad-cli sets both together (--no-property-popups)",
   dxfFont: "kicad-cli always plots DXF text with the KiCad font (it has no flag for DXF fonts)",
-  variant: "the studio has no design variants",
   browse: "the studio runs in a browser: type the folder, relative to the board's folder",
   openDir: "the studio runs in a browser and cannot open a folder of the server; the files are listed below after a plot",
 } as const;

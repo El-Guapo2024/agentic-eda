@@ -14,18 +14,33 @@
 // each of those is edited here, Add Field makes one -- hidden, as KiCad's `OnAddField` does -- and the x beside it removes it: one undo step with the rest), and the Body style choice (Standard / Alternate, only for a symbol
 // whose library symbol has two) puts the symbol in the other body style (`SCH_EDIT_FRAME::SelectBodyStyle`): both go in the same undo step as the texts. The Footprint
 // field's Browse... button opens the Footprint Chooser.
+//
+// Design variants (KiCad 25ec2335 `DIALOG_SYMBOL_PROPERTIES`): the title names the current variant (" - <variant> Design Variant"), the texts and the Attributes box
+// ("Exclude from simulation", "Exclude from board", "Do not populate", "Exclude from bill of materials", "Exclude from position files") show the variant's values
+// (`GetFieldText( .., variant )`, `GetDNP( sheet, variant )`) and OK sets them in that variant (`SetText( text, sheet, variant )`, `SetDNP( .., variant )`: one
+// `set_symbol_variant`); the Reference is set only in the default variant, and adding or removing a field, its visibility and the body style are the symbol's.
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { fetchAnySymbol } from "../api/libraryClient";
 import type { Cmd } from "../api/types";
 import { uniquePinCount } from "../kicad-port/footprintFilter";
 import { bodyStyleCount, setBodyStyleCmd } from "../kicad-port/schBodyStyle";
 import { addUserFieldCmd, fieldTextCmd, fieldVisibilityCmds, newUserFieldName, ownerKey, removeUserFieldCmd, STANDARD_SYMBOL_FIELDS, userFieldNameError, userFieldsOf } from "../kicad-port/schFieldEdit";
+import { setSymbolVariantCmd, symbolInVariant, symbolPropertiesTitle, variantFlags, type VariantFlagKey, type VariantFlags } from "../kicad-port/designVariants";
 import { expandStackedPinNotation } from "../kicad-port/stackedPins";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { FootprintChooserDialog } from "./FootprintChooserDialog";
 import { SimModelDialog } from "./simulator/SimModelDialog";
 
 const MAIN_FIELDS = STANDARD_SYMBOL_FIELDS;
+
+/** `DIALOG_SYMBOL_PROPERTIES_BASE`'s Attributes box, in its order, with the tooltips it gives three of them. */
+const ATTRIBUTE_BOXES: ReadonlyArray<[VariantFlagKey, string, string | undefined]> = [
+  ["exclude_from_sim", "Exclude from simulation", undefined],
+  ["exclude_from_board", "Exclude from board", "This is useful for adding symbols that only get exported to the bill of materials but\nnot required to layout the board such as mechanical fasteners and enclosures"],
+  ["dnp", "Do not populate", undefined],
+  ["exclude_from_bom", "Exclude from bill of materials", "This is useful for adding symbols for board footprints such as fiducials\nand logos that you do not want to appear in the bill of materials export"],
+  ["exclude_from_pos_files", "Exclude from position files", "This is useful for adding symbols that should not be included in the \nexported position files used for pick and place machines"],
+];
 
 /** A user-defined field's row: what the symbol has (`was`), or a field added here (`isNew`), as it stands now. */
 interface UserRow {
@@ -43,7 +58,10 @@ export function SymbolPropertiesDialog() {
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const open = state.symbolProperties;
-  const symbol = open ? api.symbolById(open.id) : undefined;
+  const variant = state.schVariant;
+  const baseSymbol = open ? api.symbolById(open.id) : undefined;
+  // the symbol as the current variant shows it (`GetFieldText( .., variant )`)
+  const symbol = useMemo(() => (baseSymbol ? symbolInVariant(baseSymbol, variant) : undefined), [baseSymbol, variant]);
 
   const [reference, setReference] = useState("");
   const [value, setValue] = useState("");
@@ -55,6 +73,8 @@ export function SymbolPropertiesDialog() {
   const [bodyStyle, setBodyStyle] = useState(1);
   /** The user-defined fields of the symbol, the ones it has and the ones added here. */
   const [userRows, setUserRows] = useState<UserRow[]>([]);
+  /** The Attributes box, as the current variant has them (`m_cbExcludeFromSim->SetValue( GetExcludedFromSim( &sheetPath, variantName ) )` ...). */
+  const [flags, setFlags] = useState<VariantFlags | null>(null);
   const nextKey = useRef(0);
   // The Footprint field's browse button: the Footprint Chooser, narrowed by this symbol's pin count and its library symbol's footprint filters.
   const [choosingFootprint, setChoosingFootprint] = useState(false);
@@ -90,13 +110,14 @@ export function SymbolPropertiesDialog() {
     setShown(Object.fromEntries((symbol.fields ?? []).filter((f) => (MAIN_FIELDS as readonly string[]).includes(f.name)).map((f) => [f.name, f.visible])));
     setBodyStyle(symbol.body_style || 1);
     setUserRows(userFieldsOf(symbol.fields).map((f) => ({ key: nextKey.current++, name: f.name, text: f.text, shown: f.visible, isNew: false, removed: false, was: { text: f.text, visible: f.visible } })));
+    setFlags(baseSymbol ? variantFlags(baseSymbol, variant) : null);
     setError(null);
     const focusTarget = { reference: refInput, value: valueInput, footprint: footprintInput, datasheet: datasheetInput }[open?.field ?? "reference"];
     // Let the dialog mount before stealing focus.
     const t = setTimeout(() => focusTarget.current?.select(), 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open?.id, open?.field]);
+  }, [open?.id, open?.field, variant]);
 
   if (!open || !symbol) return null;
   const close = () => dispatch({ type: "SET_SYMBOL_PROPERTIES", value: null });
@@ -107,7 +128,8 @@ export function SymbolPropertiesDialog() {
       setError("Reference cannot be blank.");
       return;
     }
-    const renamed = trimmedRef !== symbol.id;
+    // `if( currentVariant.IsEmpty() ) m_symbol->SetRef( .. )`: a variant keeps the reference
+    const renamed = variant === "" && trimmedRef !== symbol.id;
     if (renamed && api.symbolById(trimmedRef)) {
       setError(`"${trimmedRef}" is already used by another symbol.`);
       return;
@@ -127,10 +149,35 @@ export function SymbolPropertiesDialog() {
     // style, all by the reference the symbol has now, and the new reference last (a rename moves what is kept under the old one; the server's parts are not renamed until the
     // step is done, so a field edit after it would miss its symbol)
     const owner = ownerKey({ id: symbol.id, unit: symbol.unit });
-    const cmds: Cmd[] = [{ op: "edit_symbol_fields", id: symbol.id, value, footprint, datasheet }];
+    const cmds: Cmd[] = variant === "" ? [{ op: "edit_symbol_fields", id: symbol.id, value, footprint, datasheet }] : [];
     for (const r of userRows) if (r.removed && !r.isNew) cmds.push(removeUserFieldCmd(symbol.id, r.name));
+    // a field added here is the symbol's, with its text (`AddField( field )`), in a variant too
     for (const r of added) cmds.push(addUserFieldCmd(symbol.id, r.name, r.text));
-    for (const r of kept) if (!r.isNew && r.was && r.text !== r.was.text) cmds.push(fieldTextCmd(owner, r.name, r.text));
+    // the texts: the symbol's own in the default variant; in a variant, the ones changed here are the variant's (`tmp->SetText( variantText, &currentSheet, currentVariant )`)
+    const variantFields: Record<string, string> = {};
+    if (variant !== "") {
+      const was = { Value: symbol.value ?? "", Footprint: symbol.footprint ?? "", Datasheet: symbol.datasheet ?? "" };
+      if (value !== was.Value) variantFields.Value = value;
+      if (footprint !== was.Footprint) variantFields.Footprint = footprint;
+      if (datasheet !== was.Datasheet) variantFields.Datasheet = datasheet;
+    }
+    for (const r of kept) {
+      if (r.isNew || !r.was || r.text === r.was.text) continue;
+      if (variant === "") cmds.push(fieldTextCmd(owner, r.name, r.text));
+      else variantFields[r.name] = r.text;
+    }
+    // the Attributes box, in the current variant (`SetExcludedFromSim( .., &currentSheet, currentVariant )` ...); only what changed
+    const was = baseSymbol ? variantFlags(baseSymbol, variant) : null;
+    const changedFlags: Partial<VariantFlags> = {};
+    if (flags && was) for (const k of Object.keys(flags) as VariantFlagKey[]) if (flags[k] !== was[k]) changedFlags[k] = flags[k];
+    if (variant !== "") {
+      const v = setSymbolVariantCmd(variant, [symbol.id], { flags: changedFlags, fields: variantFields });
+      if (v) cmds.push(v);
+    } else {
+      const { exclude_from_pos_files: pos, ...attrs } = changedFlags;
+      if (Object.keys(attrs).length > 0) cmds.push({ op: "set_symbol_attrs", ids: [symbol.id], ...attrs });
+      if (pos !== undefined) cmds.push({ op: "sch_edit", verb: "set_exclude_from_pos_files", ids: [symbol.id], exclude: pos });
+    }
     const wanted: Record<string, boolean> = { ...shown };
     for (const r of kept) wanted[r.name.trim()] = r.shown;
     cmds.push(...fieldVisibilityCmds(owner, [...(symbol.fields ?? []), ...added.map((r) => ({ name: r.name.trim(), visible: false }))], wanted));
@@ -163,7 +210,7 @@ export function SymbolPropertiesDialog() {
     <div className="dialog-backdrop" onClick={close}>
       <div className="dialog" style={{ width: 480 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
-          <span>Symbol Properties</span>
+          <span data-testid="symbol-properties-title">{symbolPropertiesTitle(variant)}</span>
         </div>
         <div className="dialog-body">
           <div className="kv-grid" style={{ gridTemplateColumns: "90px 1fr auto" }}>
@@ -171,6 +218,8 @@ export function SymbolPropertiesDialog() {
             <input
               ref={refInput}
               value={reference}
+              disabled={variant !== ""}
+              title={variant !== "" ? "The reference is the same in every design variant: set it in the default variant." : undefined}
               onChange={(e) => setReference(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") submit();
@@ -261,6 +310,16 @@ export function SymbolPropertiesDialog() {
               </>
             )}
           </div>
+          {flags && (
+            <fieldset style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 2 }} data-testid="symbol-attributes">
+              <legend>Attributes</legend>
+              {ATTRIBUTE_BOXES.map(([key, label, tip]) => (
+                <label key={key} title={tip} className="toggle">
+                  <input type="checkbox" checked={flags[key]} onChange={(e) => setFlags({ ...flags, [key]: e.target.checked })} data-testid={`symbol-attr-${key}`} /> {label}
+                </label>
+              ))}
+            </fieldset>
+          )}
           {hasPlaces && (
             <p style={{ margin: "8px 0 0" }}>
               <button

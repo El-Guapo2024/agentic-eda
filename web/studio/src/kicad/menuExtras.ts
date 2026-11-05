@@ -16,6 +16,32 @@ export const SCHEMATIC_EDITOR_MENU_EXTRAS: MenuExtras = {
   Tools: [{ type: "separator" }, { type: "item", action: "studio.Sheets.reorganize", label: "Reorganize into Module Sheets" }],
 };
 
+/**
+ * Entries appended to a submenu, by its path ("Tools/Variants"): KiCad 25ec2335's Tools > Variants submenu (eeschema/menubar.cpp) has Rename Design Variant... and
+ * Copy Design Variant... after the three the generated menus (8303b2ad) list; their labels are 25ec2335's `SCH_ACTIONS::renameVariant` / `copyVariant` friendly names.
+ */
+export const SCHEMATIC_EDITOR_SUBMENU_EXTRAS: MenuExtras = {
+  "Tools/Variants": [
+    { type: "item", action: "eeschema.EditorControl.renameVariant", label: "Rename Design Variant..." },
+    { type: "item", action: "eeschema.EditorControl.copyVariant", label: "Copy Design Variant..." },
+  ],
+};
+
+/** `items` with `extras` appended to the submenus their keys name, `path` being the menu labels down to `items`. */
+function withSubmenuItems(items: MenuNode[], path: string, extras: MenuExtras): MenuNode[] {
+  return items.map((n) => {
+    if (n.type !== "submenu") return n;
+    const here = `${path}/${n.label}`;
+    const inner = withSubmenuItems(n.items, here, extras);
+    return { ...n, items: extras[here] ? [...inner, ...extras[here]!] : inner };
+  });
+}
+
+/** `menus` with `extras` appended to the submenus named by their paths; the generated JSON stays KiCad's. */
+export function withSubmenuExtras<T extends { menus: { label: string; items: MenuNode[] }[] }>(file: T, extras: MenuExtras): T {
+  return { ...file, menus: file.menus.map((m) => ({ ...m, items: withSubmenuItems(m.items, m.label, extras) })) };
+}
+
 /** `menus` with `extras` appended to the top-level menus they name (a menu the file does not have is skipped); the generated JSON stays KiCad's. */
 export function withMenuExtras<T extends { menus: { label: string; items: MenuNode[] }[] }>(file: T, extras: MenuExtras): T {
   return { ...file, menus: file.menus.map((m) => (extras[m.label] ? { ...m, items: [...m.items, ...extras[m.label]!] } : m)) };

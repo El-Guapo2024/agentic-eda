@@ -10,6 +10,7 @@ import { LibLinksDialog } from "./LibLinksDialog";
 import { PageNumberDialog } from "./PageNumberDialog";
 import { SymbolCheckerDialog } from "./SymbolCheckerDialog";
 import { SymbolDiffDialog } from "./SymbolDiffDialog";
+import { DesignVariantDialogs } from "../DesignVariantDialogs";
 
 export function SchControlHost() {
   const { dialog } = useSchControlState();
@@ -28,6 +29,7 @@ export function SchControlHost() {
       {dialog?.kind === "symbol_check" && <SymbolCheckerDialog onClose={close} />}
       {dialog?.kind === "import_sheet" && <ImportSheetDialog forceSheet={dialog.forceSheet} initialPath={dialog.initialPath} onClose={close} />}
       {dialog?.kind === "symbol_diff" && <SymbolDiffDialog reference={dialog.ref} onClose={close} />}
+      {dialog?.kind === "variant" && <DesignVariantDialogs />}
     </>
   );
 }
