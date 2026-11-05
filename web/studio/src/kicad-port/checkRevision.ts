@@ -62,8 +62,6 @@ export interface CheckStatus {
   ercStale: boolean;
   /** kicad-cli's zone filler is running (B). */
   zoneFillRunning?: boolean;
-  /** The copper zones with no fill that is current (never filled, unfilled, or edited since): they show as outlines until the next fill. */
-  zonesUnfilled?: number;
 }
 
 /**
@@ -78,9 +76,28 @@ export function statusNotes(s: CheckStatus): string[] {
   if (s.ercRunning) notes.push("ERC running…");
   if (!s.drcRunning && s.drcStale && s.tab === "pcb") notes.push("DRC out of date");
   if (!s.ercRunning && s.ercStale && s.tab === "schematic") notes.push("ERC out of date");
-  if (s.tab === "pcb") {
-    if (s.zoneFillRunning) notes.push("Filling zones…");
-    else if ((s.zonesUnfilled ?? 0) > 0) notes.push(`${s.zonesUnfilled} zone${s.zonesUnfilled === 1 ? "" : "s"} not filled (B)`);
-  }
+  // Zones with no fill get no standing note (R7-Z2): KiCad says so only when the zone display is switched to filled (`unfilledZoneWarning`).
+  if (s.tab === "pcb" && s.zoneFillRunning) notes.push("Filling zones…");
   return notes;
+}
+
+/**
+ * `PCB_CONTROL::unfilledZoneCheck`'s message, `KeyNameFromKeyCode( PCB_ACTIONS::zoneFillAll.GetHotKey() )` being B. KiCad shows it in the info bar for 5 s
+ * (`ShowMessageFor( msg, 5000, wxICON_WARNING )`) with a "Don't show again" link.
+ */
+export const ZONE_FILL_WARNING = "Not all zones are filled. Use Edit > Fill All Zones (B) if you wish to see all fills.";
+/** `infobar->ShowMessageFor( msg, 5000, .. )`. */
+export const ZONE_FILL_WARNING_MS = 5000;
+
+/**
+ * `PCB_CONTROL::unfilledZoneCheck`, run by `ZoneDisplayMode` on `zoneDisplayFilled` only (not on the toggle, not on opening a board): the warning when a zone of the
+ * board that is not a rule area is not filled (`!zone->GetIsRuleArea() && !zone->IsFilled()`), unless "Don't show again" was clicked
+ * (`m_DoNotShowAgain.zone_fill_warning`); else null. `fills` is what `GET /api/fill` lists: an entry per zone and layer of the board's pours -- not the rule areas, not a
+ * footprint's own zones (`board()->Zones()` has none of those) -- `filled` when the zone has a fill that is current; `null` when it is not known, then `zones` (the
+ * board's, rule areas left out) all count as not filled.
+ */
+export function unfilledZoneWarning(fills: readonly { filled: boolean }[] | null, zones: readonly { is_rule_area?: boolean }[], dismissed: boolean): string | null {
+  if (dismissed) return null;
+  const unfilled = fills ? fills.some((f) => !f.filled) : zones.some((z) => !z.is_rule_area);
+  return unfilled ? ZONE_FILL_WARNING : null;
 }

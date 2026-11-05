@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { CmdShape, Shape } from "../api/types";
 import { arcCenter } from "./pcbGeom";
-import { activeEditPoint, canRemoveCorner, chamferCorner, incrementArcEditMode, moveRingPoint, moveShapePoint, nearestVertex, removeCorner, ringEditPoints, shapeEditPoints } from "./pcbPointEdit";
+import { activeEditPoint, canRemoveCorner, chamferContourCorner, chamferCorner, contourEditPoints, incrementArcEditMode, moveContourPoint, moveRingPoint, moveShapePoint, nearestContourVertex, nearestVertex, removeCorner, ringEditPoints, shapeEditPoints } from "./pcbPointEdit";
 
 const base = { id: "s", layer: "F.Fab", stroke_width: 100_000, filled: false };
 const arcShape = (start: [number, number], mid: [number, number], end: [number, number]): Shape => ({ ...base, kind: "arc", start, mid, end });
@@ -164,4 +164,60 @@ test("the arc editing modes cycle in KiCad's order", () => {
   assert.equal(incrementArcEditMode("keep_center_adjust_angle_radius"), "keep_center_ends_adjust_angle");
   assert.equal(incrementArcEditMode("keep_center_ends_adjust_angle"), "keep_endpoints_or_start_direction");
   assert.equal(incrementArcEditMode("keep_endpoints_or_start_direction"), "keep_center_adjust_angle_radius");
+});
+
+// ------------------------------------------------------------------------------ zones with holes
+
+const outline10: [number, number][] = [
+  [0, 0],
+  [100_000_000, 0],
+  [100_000_000, 100_000_000],
+  [0, 100_000_000],
+];
+const hole: [number, number][] = [
+  [20_000_000, 20_000_000],
+  [40_000_000, 20_000_000],
+  [40_000_000, 40_000_000],
+  [20_000_000, 40_000_000],
+];
+
+test("edit points of a zone with a hole: every contour's corners (global v<i>), then a side per corner, each contour closed on itself", () => {
+  const pts = contourEditPoints([outline10, hole]);
+  assert.deepEqual(pts.filter((p) => p.kind === "corner").map((p) => p.id), ["v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"]);
+  assert.deepEqual(pts.find((p) => p.id === "v4")!.pos, [20_000_000, 20_000_000]);
+  // m3 closes the outline (v3 -> v0), m7 the hole (v7 -> v4)
+  assert.deepEqual(pts.find((p) => p.id === "m3")!.pos, [0, 50_000_000]);
+  assert.deepEqual(pts.find((p) => p.id === "m7")!.pos, [20_000_000, 30_000_000]);
+  assert.deepEqual(contourEditPoints([outline10]), ringEditPoints(outline10), "one contour is a plain ring");
+});
+
+test("moving a hole's corner or side moves that hole only; a side carries both its ends", () => {
+  const pts = contourEditPoints([outline10, hole]);
+  const v5 = moveContourPoint([outline10, hole], pts.find((p) => p.id === "v5")!, [45_000_000, 15_000_000])!;
+  assert.deepEqual(v5[0], outline10);
+  assert.deepEqual(v5[1]![1], [45_000_000, 15_000_000]);
+  const m7 = moveContourPoint([outline10, hole], pts.find((p) => p.id === "m7")!, [10_000_000, 30_000_000])!;
+  assert.deepEqual(m7[1], [
+    [10_000_000, 20_000_000],
+    [40_000_000, 20_000_000],
+    [40_000_000, 40_000_000],
+    [10_000_000, 40_000_000],
+  ]);
+  assert.equal(moveContourPoint([outline10, hole], { id: "v99", kind: "corner", pos: [0, 0] }, [1, 1]), null);
+});
+
+test("Chamfer Corner on a hole: the nearest vertex of any contour, its neighbours its own contour's", () => {
+  const g = nearestContourVertex([outline10, hole], [41_000_000, 41_000_000]);
+  assert.equal(g, 6);
+  const out = chamferContourCorner([outline10, hole], g)!;
+  assert.deepEqual(out[0], outline10, "the outline is left alone");
+  // the hole's corner (40, 40) mm becomes two points 5 mm away along its two sides (a quarter of 20 mm is 5 mm): along the side from v5, then toward v7
+  assert.deepEqual(out[1], [
+    [20_000_000, 20_000_000],
+    [40_000_000, 20_000_000],
+    [40_000_000, 35_000_000],
+    [35_000_000, 40_000_000],
+    [20_000_000, 40_000_000],
+  ]);
+  assert.equal(chamferContourCorner([outline10, hole], 8), null);
 });

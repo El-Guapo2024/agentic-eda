@@ -1,6 +1,7 @@
 // Zone fill check (GAPS.md package P13; item 13): the zone fill is KiCad's, through kicad-cli, and nobody else's. Fill All Zones (B) runs kicad-cli's filler on a copy of the
 // derived board and the fills are kept beside the design; the board shows the last fill, as KiCad does with auto-refill off; a zone never filled, or reshaped since, is drawn as an
-// outline (a zone moved keeps its fill moved, one edited in Zone Properties keeps it as it was). The scenarios: a board with nothing filled; B (the status bar says so while it runs, the toast says what filled and how long it took, the derived .kicad_pcb carries
+// outline (a zone moved keeps its fill moved, one edited in Zone Properties keeps it as it was). The scenarios: a board with nothing filled (no standing note; Draw Zone Fills says
+// "Not all zones are filled...", R7-Z2); B (the status bar says so while it runs, the toast says what filled and how long it took, the derived .kicad_pcb carries
 // kicad-cli's rings); an edit elsewhere leaves the fills, Zone Properties keep a zone's fill, a move carries it, a reshape empties that zone only, Undo giving it back; Fill Selected Zones and Unfill Selected Zones; Unfill
 // All Zones; the Zone Manager (the preview with a tab per layer of the zone, Auto-Assign Priorities on zones that overlap, its Refill zones box); the lock in Zone Properties; a zone on no net kept on no net by Zone Properties' OK;
 // "Refill all zones before performing DRC" and the Plot dialog's "Check zone fills before plotting".
@@ -63,7 +64,10 @@
       const f = await fill();
       t(f.source === null, "no fill has been made: no source");
       t(f.zones.length >= 2 && f.zones.every((z) => z.filled === false && z.fragments.length === 0 && z.area_nm2 === 0), `every zone is unfilled (${f.zones.length} zone layers)`);
-      t(notes().some((n) => /\d+ zones? not filled \(B\)/.test(n)), `the status bar says ${JSON.stringify(notes())}`);
+      // R7-Z2: no standing note; KiCad says it only on switching the zone display to filled (`unfilledZoneCheck`), for 5 s, in the info bar.
+      t(notes().every((n) => !/not filled/.test(n)), `the status bar has no standing note (${JSON.stringify(notes())})`);
+      const shown = await __eda.run("pcbnew.Control.zoneDisplayEnable");
+      t(/^Not all zones are filled\. Use Edit > Fill All Zones \(B\) if you wish to see all fills\.$/.test(shown.toast ?? document.body.textContent.match(/Not all zones are filled[^.]*\.[^.]*\./)?.[0] ?? ""), `Draw Zone Fills says KiCad's sentence (${shown.toast})`);
       t((await rings(A.layer)) === 0, "the derived .kicad_pcb has no filled_polygon: a board that was never filled is written unfilled");
     });
 
@@ -122,8 +126,7 @@
       t(JSON.stringify(Object.entries(now).filter(([k]) => !k.startsWith(A.id))) === JSON.stringify(Object.entries(before).filter(([k]) => !k.startsWith(A.id))), "zone B keeps its fill");
       t(f.source?.stale === 1 && f.source.zones === f.zones.length - f.zones.filter((z) => z.id === A.id).length, `the source counts the zone out of date (${JSON.stringify(f.source)})`);
       // the page learns of the edit with its next poll of the fills, a second or so after the server: wait for it rather than a fixed time
-      for (let i = 0; i < 40 && !notes().some((n) => /1 zone not filled \(B\)/.test(n)); i++) await sleep(200);
-      t(notes().some((n) => /1 zone not filled \(B\)/.test(n)), `the status bar counts it (${JSON.stringify(notes())})`);
+      t(notes().every((n) => !/not filled/.test(n)), `no standing note counts it (R7-Z2: ${JSON.stringify(notes())})`);
       t((await rings(A.layer)) === (A.layer === B.layer ? await rings(B.layer) : 0), "and the derived .kicad_pcb is written without its rings, as KiCad writes a zone it has emptied");
       await undo();
       const back = await waitFill((x) => x.zones.every((z) => z.filled));

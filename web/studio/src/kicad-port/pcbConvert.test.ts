@@ -70,6 +70,17 @@ test("source rings: a rectangle's corners, a polygon's points, a zone's outline"
   assert.deepEqual(ringEdges([[0, 0], [0, 0], [3, 0], [3, 3]]), [[[0, 0], [3, 0]], [[3, 0], [3, 3]], [[3, 3], [0, 0]]]);
 });
 
+test("source rings of a zone with holes: the outline, then each hole (processPolySet); Create Lines draws every side of them", () => {
+  const z = { ...zone("z", [[0, 0], [100, 0], [100, 100], [0, 100]]), holes: [[[20, 20], [40, 20], [40, 40]], [[1, 1], [2, 2]]] };
+  const b = board({ routing: { tracks: [], vias: [], zones: [z] } } as unknown as Partial<BoardState>);
+  assert.deepEqual(sourceRings(b, "z"), [
+    [[0, 0], [100, 0], [100, 100], [0, 100]],
+    [[20, 20], [40, 20], [40, 40]],
+  ], "a hole of fewer than three corners is none");
+  const plan = planConvertToLines(b, ["z"], "F.SilkS", 150, false);
+  assert.equal(plan.cmds.length, 7, "four sides of the outline and three of the hole");
+});
+
 test("Create Lines: a rectangle gives four segments with its width, and the source goes when asked", () => {
   const b = board({ drawings: drawings([rect("r", 0, 0, 10, 5, 130)]) });
   const plan = planConvertToLines(b, ["r"], "F.SilkS", 150, true);

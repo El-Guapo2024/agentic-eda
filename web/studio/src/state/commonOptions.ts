@@ -22,6 +22,8 @@ export interface CommonOptions {
   drawBoundingBoxes: boolean;
   /** `PCB_SELECTION_TOOL::m_selectionMode` / `SCH_SELECTION_TOOL`'s: which tool a drag on empty space starts. Default rectangle. */
   selectionMode: SelectionAreaMode;
+  /** `COMMON_SETTINGS::m_DoNotShowAgain.zone_fill_warning`: "Don't show again" was clicked on the unfilled-zones warning (`PCB_CONTROL::unfilledZoneCheck`). */
+  zoneFillWarningDismissed: boolean;
 }
 
 export const DEFAULT_COMMON_OPTIONS: CommonOptions = {
@@ -29,6 +31,7 @@ export const DEFAULT_COMMON_OPTIONS: CommonOptions = {
   alwaysShowCursor: true,
   drawBoundingBoxes: false,
   selectionMode: "rect",
+  zoneFillWarningDismissed: false,
 };
 
 const STORAGE_KEY = "eda-studio.common-options";
@@ -52,6 +55,7 @@ export function parseCommonOptions(raw: string | null): CommonOptions {
       alwaysShowCursor: typeof j.alwaysShowCursor === "boolean" ? j.alwaysShowCursor : d.alwaysShowCursor,
       drawBoundingBoxes: typeof j.drawBoundingBoxes === "boolean" ? j.drawBoundingBoxes : d.drawBoundingBoxes,
       selectionMode: j.selectionMode === "rect" || j.selectionMode === "lasso" ? j.selectionMode : d.selectionMode,
+      zoneFillWarningDismissed: typeof j.zoneFillWarningDismissed === "boolean" ? j.zoneFillWarningDismissed : d.zoneFillWarningDismissed,
     };
   } catch {
     return DEFAULT_COMMON_OPTIONS;

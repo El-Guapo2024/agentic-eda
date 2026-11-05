@@ -9,6 +9,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
+import type { NewZoneSettings } from "../kicad-port/pcbDrawZone";
 import type { RouteSizesInfo } from "../kicad-port/routerSizes";
 import type { BoardState, BoardText, Cmd, CmdDimension, CmdText, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Nm, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
@@ -356,7 +357,8 @@ export type DrawState =
       /** The message panel's sizes: see kicad-port/dpTool.ts. */
       sizes?: RouteSizesInfo;
     }
-  | { kind: "zone"; pts: [Nm, Nm][] }
+  /** `settings`: what the zone takes when it is finished -- the zone dialog's OK at the first corner (kicad-port/pcbDrawZone.ts `NewZoneSettings`); absent for a cutout, a similar zone or a via stitching (their source's or their own dialog). */
+  | { kind: "zone"; pts: [Nm, Nm][]; settings?: NewZoneSettings }
   | {
       kind: "shape";
       shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
@@ -577,6 +579,9 @@ export const DEFAULT_ZONE_SETTINGS: ZoneSettingsFields = {
   hatch_border_algorithm: 1,
   smoothing: "none",
   corner_radius: 0,
+  // `m_ZoneBorderDisplayStyle = DIAGONAL_EDGE`, `m_BorderHatchPitch = mmToIU( ZONE_BORDER_HATCH_DIST_MM )`.
+  border_style: "edge",
+  border_hatch_pitch: 500_000,
 };
 
 export interface StudioState {
@@ -783,7 +788,7 @@ export interface StudioState {
   boardPadPropertiesId: string | null;
   /** pcbnew.Control.showNetInspector ("Net Inspector") -- a basic net/pad-count list, not KiCad's full dockable inspector. */
   netInspectorOpen: boolean;
-  toast: { message: string; kind: "error" | "info" } | null;
+  toast: { message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed" } | null;
 
   /** Cursor position in board µm, for the status bar's X/Y/dx/dy/dist. */
   cursorNm: { x: number; y: number } | null;
@@ -1142,7 +1147,8 @@ export type Action =
   | { type: "SET_ITEM_PROPERTIES_ID"; id: string | null }
   | { type: "SET_BOARD_PAD_PROPERTIES_ID"; id: string | null }
   | { type: "SET_NET_INSPECTOR_OPEN"; open: boolean }
-  | { type: "TOAST"; message: string; kind: "error" | "info" }
+  /** `ms`: how long it stays (`WX_INFOBAR::ShowMessageFor`), else the kind's own; `dontShowAgain`: the info bar's "Don't show again" link, which sets that common option. */
+  | { type: "TOAST"; message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed" }
   | { type: "TOAST_CLEAR" }
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
@@ -1406,7 +1412,7 @@ function reducer(state: StudioState, action: Action): StudioState {
         schTextPending: null,
         armedSymbol: null,
         symbolProperties: null,
-        pcbx: { ...state.pcbx, moveQueue: [], movingIndividually: false, zoneDrawMode: null },
+        pcbx: { ...state.pcbx, moveQueue: [], movingIndividually: false, zoneDrawMode: null, zoneCreate: null },
       };
     case "ESCAPE": {
       // pcb_selection_tool.cpp's IsCancel() handler, tiered exactly like
@@ -1445,7 +1451,7 @@ function reducer(state: StudioState, action: Action): StudioState {
           schTextPending: null,
           armedSymbol: null,
           symbolProperties: null,
-          pcbx: { ...state.pcbx, moveQueue: [], movingIndividually: false, zoneDrawMode: null },
+          pcbx: { ...state.pcbx, moveQueue: [], movingIndividually: false, zoneDrawMode: null, zoneCreate: null },
           // `LocalRatsnestTool`'s finalize handler: leaving the picker with Esc puts every pad's local ratsnest flag back to the global state.
           bcx: state.activeTool === "local_ratsnest" ? { ...state.bcx, localRatsnestPads: [] } : state.bcx,
         };
@@ -1554,7 +1560,7 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_NET_INSPECTOR_OPEN":
       return { ...state, netInspectorOpen: action.open };
     case "TOAST":
-      return { ...state, toast: { message: action.message, kind: action.kind } };
+      return { ...state, toast: { message: action.message, kind: action.kind, ms: action.ms, dontShowAgain: action.dontShowAgain } };
     case "TOAST_CLEAR":
       return { ...state, toast: null };
     case "SET_CURSOR":
@@ -1889,7 +1895,8 @@ export interface StudioApi {
    * Cmd (the CLI, this app's own tests) keeps its exact three-field shape.
    */
   /** `carry` "hold": the zone and its settings join a step held open (Create Zone from Selection's several zones and the sources' removal are one undo step). */
-  addZone: (net: string, layer: string, outline: [Nm, Nm][], settings: ZoneSettingsFields & RuleAreaFields, extra?: { layers?: string[]; name?: string; locked?: boolean }, carry?: CarryStep) => Promise<void>;
+  /** Resolves to the new zone's id (null when it was not made). `extra.holes`: the zone's holes (a zone made from a selection that had some). */
+  addZone: (net: string, layer: string, outline: [Nm, Nm][], settings: ZoneSettingsFields & RuleAreaFields, extra?: { layers?: string[]; name?: string; locked?: boolean; holes?: [Nm, Nm][][] }, carry?: CarryStep) => Promise<string | null>;
   /**
    * B ("Fill All Zones"), or Fill Selected Zones with `ids`: kicad-cli's filler runs (seconds; `state.zoneFillRunning` meanwhile, the board stays editable) and its fills
    * are kept beside the design; then they are read (`state.zoneFill`). A run already in flight is not doubled.
@@ -2580,27 +2587,38 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     addZone: async (net, layer, outline, settings, extra, carry) => {
       // The board as the backend has it now (several zones can be added one after the other, e.g. "Create Zone from Selection").
       const board = await fetchState().catch(() => null);
-      if (!board) return;
+      if (!board) return null;
       const before = allItemIds(board);
-      const ok = await runCmd({ op: "add_zone", net, layer, outline: outline.map(([x, y]) => ({ x, y })) }, carry);
-      if (!ok) return;
-      // Read the board from the backend: `stateRef` only catches up on the next render, which is after this continuation, so the new
-      // zone would not be in it yet and its settings (a rule area's flags, say) would never be applied.
-      const after = await fetchState().catch(() => null);
-      if (!after) return;
-      const newId = [...allItemIds(after)].find((id) => !before.has(id));
-      if (!newId) return;
       // Default-valued settings need no follow-up at all -- `add_zone`
       // already landed on exactly that.
       const defaults = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
-      const unchanged = (Object.keys(defaults) as (keyof typeof defaults)[]).every((k) => settings[k] === defaults[k]);
-      // The layer list (`ZONE_SETTINGS::m_Layers`), the name and the lock ride on the zone just made, in one undo step with the settings.
+      const unchanged = (Object.keys(defaults) as (keyof typeof defaults)[]).every((k) => settings[k] === defaults[k]) && Object.keys(settings.hatch_offsets ?? {}).length === 0;
+      // The layer list (`ZONE_SETTINGS::m_Layers`), the name, the lock and the holes ride on the zone just made.
       const layers = extra?.layers && extra.layers.length > 1 ? extra.layers : undefined;
+      const holes = extra?.holes?.filter((h) => h.length >= 3) ?? [];
+      const followUp = !unchanged || !!layers || !!extra?.name || !!extra?.locked || holes.length > 0;
+      // KiCad makes the zone with its settings applied (`zoneInfo.ExportSetting( *newZone )`) in one commit ("Draw Zone"; findings P13-5): the add holds the step
+      // open for the commands that follow it, the last of them closes it -- unless the caller carries the step itself (Create Zone from Selection's "hold").
+      const ok = await runCmd({ op: "add_zone", net, layer, outline: outline.map(([x, y]) => ({ x, y })) }, carry ?? (followUp ? "begin" : undefined));
+      if (!ok) return null;
+      // Read the board from the backend: `stateRef` only catches up on the next render, which is after this continuation, so the new
+      // zone would not be in it yet and its settings (a rule area's flags, say) would never be applied.
+      const after = await fetchState().catch(() => null);
+      const newId = after ? [...allItemIds(after)].find((id) => !before.has(id)) : undefined;
+      if (!newId) {
+        if (!carry && followUp) await postCarry("commit");
+        return null;
+      }
       const follow: Cmd[] = [];
       if (!unchanged || layers) follow.push({ op: "edit_zone", ...settings, id: newId, net, layer, ...(layers ? { layers } : {}) });
       if (extra?.name) follow.push({ op: "set_zone_name", id: newId, name: extra.name });
       if (extra?.locked) follow.push({ op: "set_locked", ids: [newId], locked: true });
-      if (follow.length > 0) await runBatch(follow, carry);
+      if (holes.length > 0) follow.push({ op: "set_zone_outline", id: newId, outline: outline.map(([x, y]) => ({ x, y })), holes: holes.map((h) => h.map(([x, y]) => ({ x, y }))) });
+      if (follow.length > 0) {
+        const done = await runBatch(follow, carry ?? "commit");
+        if (!done && !carry) await postCarry("commit");
+      }
+      return newId;
     },
     // edit_tool.cpp copyToClipboard: the selection (a pad stands for its footprint, a locked item is copied) as KiCad's own clipboard text, measured
     // from the cursor's grid point or the point Copy with Reference picked -- on the system clipboard, where KiCad can paste it, and here.

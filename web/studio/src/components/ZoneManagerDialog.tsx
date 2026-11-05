@@ -4,12 +4,12 @@
 // highest. "Auto-Assign Priorities" works the order out from what the overlaps hold (`AutoAssignZonePriorities`, `eda_ops::zone_priority`) and stages it. A preview on the right
 // shows the selected zone one layer per tab (`ZONE_PREVIEW_NOTEBOOK`, components/ZonePreview.tsx). Moves are staged in the dialog; Cancel drops them. "Refill zones" runs
 // KiCad's filler (kicad-cli) when OK is pressed. "Edit zone..." applies them and opens the Zone Properties dialog on the selected zone (the properties panel KiCad embeds here is
-// that dialog in this studio).
-//
-// Not ported: "Update Displayed Zones" (a fill of the dialog's staged copies; the preview shows the fills the board holds, and the staged priorities take effect with OK and a fill).
+// that dialog in this studio). "Update Displayed Zones" (`OnUpdateDisplayedZonesClick`: "Update filled areas shown in dialog, according to the new current settings") fills
+// the dialog's staged copies with kicad-cli (`POST /api/fill/preview`: the staged edits on a copy of the board) and the preview shows those fills; the board and its own
+// fills are untouched, and OK applies the staged priorities with the fills the zones had (`OnOk` puts `filled_zone_to_restore` back): the copies' fills are not kept.
 import { useEffect, useMemo, useState } from "react";
-import type { Cmd } from "../api/types";
-import { fetchAutoZonePriorities } from "../api/client";
+import type { Cmd, FillZone } from "../api/types";
+import { fetchAutoZonePriorities, postFillPreview } from "../api/client";
 import { ZonePreview } from "./ZonePreview";
 import { filterZones, moveZone, stagedPriorities, zoneOrder, type ZoneMove } from "../kicad-port/boardControl";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -32,6 +32,9 @@ export function ZoneManagerDialog() {
   const [exact, setExact] = useState<Record<string, number> | null>(null);
   const [refill, setRefill] = useState(false);
   const [note, setNote] = useState("");
+  // The fills of the staged copies (Update Displayed Zones), shown by the preview in place of the board's; null until the button is pressed. `m_isFillingZones`.
+  const [shownFills, setShownFills] = useState<FillZone[] | null>(null);
+  const [filling, setFilling] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -42,6 +45,8 @@ export function ZoneManagerDialog() {
     setExact(null);
     setRefill(false);
     setNote("");
+    setShownFills(null);
+    setFilling(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -81,10 +86,31 @@ export function ZoneManagerDialog() {
       setNote(`Auto-assign failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
+  /** `*zone = *zoneClone`: each zone with a new priority takes it with every other setting as it is. */
+  const stagedCmds = (): Cmd[] => changed.map((z) => ({ op: "edit_zone", ...z, priority: rank[z.id]! }));
   const apply = async (): Promise<boolean> => {
-    // `*zone = *zoneClone`: each zone with a new priority takes it with every other setting as it is.
-    const cmds: Cmd[] = changed.map((z) => ({ op: "edit_zone", ...z, priority: rank[z.id]! }));
+    const cmds = stagedCmds();
     return cmds.length === 0 ? true : api.cmdBatch(cmds);
+  };
+  // `OnUpdateDisplayedZonesClick`: `if( m_isFillingZones ) return;`, the clones filled (`m_filler->Fill( board->Zones() )` with the clones swapped in), the preview
+  // redrawn (`OnZoneSelectionChanged`), the board's own zones swapped back.
+  const updateDisplayed = async () => {
+    if (filling) return;
+    setFilling(true);
+    setNote("Filling zones…");
+    try {
+      const reply = await postFillPreview(stagedCmds());
+      if (!reply.ok || !reply.zones) {
+        setNote(`Zones not filled: ${reply.message ?? "kicad-cli could not fill them"}`);
+        return;
+      }
+      setShownFills(reply.zones);
+      setNote(`Displayed zones updated (${(reply.seconds ?? 0).toFixed(1)} s); OK applies the priorities, the board keeps its fills.`);
+    } catch (e) {
+      setNote(`Zones not filled: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setFilling(false);
+    }
   };
   const ok = async () => {
     if (!(await apply())) return;
@@ -173,7 +199,7 @@ export function ZoneManagerDialog() {
               </button>
             </div>
           </div>
-          <ZonePreview zone={selectedZone} fills={state.zoneFill?.zones ?? []} outlinePolys={state.board?.outline_polys} outline={state.board?.outline ?? null} />
+          <ZonePreview zone={selectedZone} fills={shownFills ?? state.zoneFill?.zones ?? []} outlinePolys={state.board?.outline_polys} outline={state.board?.outline ?? null} />
           </div>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 8 }} data-testid="zone-manager-note">
             {note || (changed.length > 0 ? `${changed.length} zone(s) will change priority.` : "Priorities are as the board has them.")}
@@ -183,6 +209,9 @@ export function ZoneManagerDialog() {
           <label className="toggle" style={{ marginRight: "auto" }} title="Refill zones after changes made on board">
             <input type="checkbox" checked={refill} onChange={(e) => setRefill(e.target.checked)} data-testid="zone-manager-refill" /> Refill zones
           </label>
+          <button disabled={filling} onClick={() => void updateDisplayed()} data-testid="zone-manager-update-displayed" title="Update filled areas shown in dialog, according to the new current settings">
+            Update Displayed Zones
+          </button>
           <button disabled={!selected} onClick={() => void edit()} title="Apply the priority changes and edit the selected zone's properties">
             Edit zone…
           </button>

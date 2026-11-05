@@ -34,6 +34,8 @@ import { triangulate, type Triangle } from "../../kicad-port/polyTriangulate";
 import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
 import { layerIsVisible, layerStateKey, isCopper } from "../../kicad-port/layerPresets";
 import { zoneCopperLayers, zoneIsOnCopper, zoneLayers } from "../../kicad-port/zoneLayers";
+import { flatVertices, zoneContours } from "../../kicad-port/zonePointEditor";
+import { cachedZoneHatchLines } from "../../kicad-port/zoneHatch";
 import { drcMarkerObject } from "../../kicad-port/appearance";
 import { drawFootprintArt } from "./fpArtPaint";
 import { isAnyFill } from "../../kicad-port/shapeFill";
@@ -143,7 +145,7 @@ export interface PaintOptions {
   /** common.Interactive.measureTool's ruler label, same unit the status bar shows. */
   units: LengthUnit;
   /** pcb_point_editor.cpp's zone corner-drag preview (Canvas.tsx's own local state, only set while a drag is live) -- lets drawZoneHandles show the corner actually moving, not the last-committed outline, while the drag is in progress. */
-  zoneCornerPreview: { zoneId: string; outline: [Nm, Nm][] } | null;
+  zoneCornerPreview: { zoneId: string; outline: [Nm, Nm][]; /** The zone's holes as the drag has them (a hole's corner can be the one dragged). */ holes?: [Nm, Nm][][] } | null;
   /** The same for a graphic shape's handle drag (kicad-port/pcbPointEdit.ts): the shape as it would be once dropped, drawn instead of the committed one. */
   shapePointPreview: { id: string; shape: Shape } | null;
   /** Index into `drcViolations` the dialog's list currently has clicked/focused, drawn with LAYER_DRC_HIGHLIGHTED instead of its own severity color -- null when the dialog hasn't focused one (every marker then just shows its own error/warning color). */
@@ -554,16 +556,12 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
  * triangulation) are developer debug views, not ported.
  */
 /** `ZONE::GetIsRuleArea()` keepouts (task item 3) never have fill data and
- * are never copper -- KiCad draws one as a hatched outline labelled with
- * which items it disallows, regardless of the current zone display mode
- * (solid/outline), since there is no "fill" concept for one to toggle.
- * This port's stand-in: a dashed outline in a dedicated color, a light
- * diagonal hatch, and an abbreviated restriction label at the centroid. */
+ * are never copper -- KiCad draws one as its outline with the border hatch
+ * of its "Outline display" (`ZONE::HatchBorder`, kicad-port/zoneHatch.ts),
+ * regardless of the current zone display mode (solid/outline), since there
+ * is no "fill" concept for one to toggle. This port keeps its own colour,
+ * a dashed outline and an abbreviated restriction label at the centroid. */
 const RULE_AREA_COLOR = "#ff8c00";
-/** World-space hatch spacing, µm (0.8 mm) -- a fixed physical pitch, same
- * convention a real cross-hatch fill pattern uses, so it reads as a
- * consistent density at any zoom rather than a fixed screen-pixel count. */
-const RULE_AREA_HATCH_PITCH_NM = 800_000;
 
 function ruleAreaLabel(z: Zone): string {
   const parts: string[] = [];
@@ -589,28 +587,11 @@ function traceZone(ctx: CanvasRenderingContext2D, z: Zone) {
 function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, selected: boolean) {
   const color = selected ? layerColor("selection") : RULE_AREA_COLOR;
 
-  ctx.save();
-  ctx.beginPath();
-  traceZone(ctx, z);
-  ctx.clip("evenodd");
-  // Diagonal (45-degree) hatch across the outline's bounding box, clipped
-  // to the real outline above -- KiCad's own keepout rendering is a
-  // proper cross-hatch fill pattern; this is a lighter stand-in with the
-  // same intent (visually distinct from solid copper, at a glance).
+  // The border hatch (`GetHatchLines()`), as for any zone.
   const xs = z.outline.map((p) => p[0]);
   const ys = z.outline.map((p) => p[1]);
   const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-  const span = y1 - y0;
-  ctx.strokeStyle = color;
-  ctx.globalAlpha = 0.35;
-  ctx.lineWidth = hairlineNm(view, 1);
-  for (let d = x0 - span; d < x1; d += RULE_AREA_HATCH_PITCH_NM) {
-    ctx.beginPath();
-    ctx.moveTo(d, y0);
-    ctx.lineTo(d + span, y1);
-    ctx.stroke();
-  }
-  ctx.restore();
+  strokeHatchLines(ctx, view, z, color);
 
   ctx.beginPath();
   traceZone(ctx, z);
@@ -623,6 +604,20 @@ function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zon
   const cx = (x0 + x1) / 2;
   const cy = (y0 + y1) / 2;
   drawStrokeText(ctx, ruleAreaLabel(z), cx, cy, { sizeNm: Math.max(hairlineNm(view, 11), 300_000), justify: "center", color });
+}
+
+/** `for( const SEG& hatchLine : aZone->GetHatchLines() ) m_gal->DrawLine( hatchLine.A, hatchLine.B )`, at the outline width (`m_outlineWidth`: one pixel). */
+function strokeHatchLines(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, color: string) {
+  const lines = cachedZoneHatchLines(z);
+  if (lines.length === 0) return;
+  ctx.beginPath();
+  for (const [a, b] of lines) {
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = hairlineNm(view, 1);
+  ctx.stroke();
 }
 
 /** A fill's triangles, cached per fill (`CacheTriangulation`): from each island's outline and holes when the backend sent them (`?polys=1`), else from its fractured ring. */
@@ -643,10 +638,13 @@ function fillOf(opts: PaintOptions, id: string, layer: string) {
 }
 
 /**
- * One zone on one of its layers, in `color`: its fill (solid, or only the fractured ring's edges or the triangles, per `zoneDisplayMode`) when it has one, else its outline,
- * dashed -- and the selection's outline on top. A copper pour and a non-copper zone (silkscreen, mask, paste, a user layer) are drawn the same way.
+ * One zone on one of its layers, in `color`: its fill (solid, or only the fractured ring's edges or the triangles, per `zoneDisplayMode`) when it has one, then -- whether
+ * or not it has one -- its outline and border hatch as `PCB_PAINTER::draw( const ZONE* )` strokes them on the zone's own layer (every contour as a polyline, then
+ * `GetHatchLines()`, at the outline width, one pixel, in the layer's colour at full opacity: `color.WithAlpha( 1.0 )`), and the selection's outline on top. A copper
+ * pour and a non-copper zone (silkscreen, mask, paste, a user layer) are drawn the same way. `alpha` is the fill's (the layer's and the zones' opacity), `outlineAlpha`
+ * the outline's (the layer's).
  */
-function paintZoneOnLayer(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, layerName: string, color: string, alpha: number, selected: boolean, opts: PaintOptions) {
+function paintZoneOnLayer(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, layerName: string, color: string, alpha: number, selected: boolean, opts: PaintOptions, outlineAlpha = 1) {
   const fill = fillOf(opts, z.id, layerName);
   withAlpha(ctx, alpha, () => {
     if (opts.zoneDisplayMode !== "outline" && fill && fill.fragments.length > 0) {
@@ -685,27 +683,31 @@ function paintZoneOnLayer(ctx: CanvasRenderingContext2D, view: ViewTransform, z:
         }
         ctx.stroke();
       }
-      if (selected) {
-        // Source's selection shadow is a separate highlight layer this
-        // app doesn't model; stroking the zone's own (unfractured)
-        // outline on top reads the same "this one's selected" cue
-        // outline mode already uses, without recoloring the copper.
-        ctx.beginPath();
-        traceZone(ctx, z);
-        ctx.strokeStyle = layerColor("selection");
-        ctx.lineWidth = hairlineNm(view, 2.5);
-        ctx.stroke();
-      }
-      return;
     }
+  });
+  // The outline and its hatch over the fill (the zone's own layer is drawn above its fill layer), whether or not there is a fill; then the selection's.
+  // (`allowDrawOutline = GetHatchStyle() != INVISIBLE_BORDER`: only a teardrop KiCad made has that style, and teardrops are drawn by `drawZones` itself.)
+  withAlpha(ctx, outlineAlpha, () => {
     ctx.beginPath();
     traceZone(ctx, z);
-    ctx.strokeStyle = selected ? layerColor("selection") : color;
-    ctx.lineWidth = hairlineNm(view, selected ? 2.5 : 1.5);
-    ctx.setLineDash([hairlineNm(view, 5), hairlineNm(view, 3)]);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = hairlineNm(view, 1);
     ctx.stroke();
-    ctx.setLineDash([]);
+    strokeHatchLines(ctx, view, z, color);
   });
+  if (selected) {
+    // Source's selection shadow is a separate highlight layer this
+    // app doesn't model; stroking the zone's own (unfractured)
+    // outline on top reads the same "this one's selected" cue,
+    // without recoloring the copper.
+    withAlpha(ctx, outlineAlpha, () => {
+      ctx.beginPath();
+      traceZone(ctx, z);
+      ctx.strokeStyle = layerColor("selection");
+      ctx.lineWidth = hairlineNm(view, 2.5);
+      ctx.stroke();
+    });
+  }
 }
 
 /** Which of the painter's three copper passes a copper layer belongs to. */
@@ -752,7 +754,7 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
         });
         continue;
       }
-      paintZoneOnLayer(ctx, view, z, layerName, copperPaint(layerColor(key), z.net, opts), layerAlpha(opts, layerName) * zoneAlpha, selected, opts);
+      paintZoneOnLayer(ctx, view, z, layerName, copperPaint(layerColor(key), z.net, opts), layerAlpha(opts, layerName) * zoneAlpha, selected, opts, layerAlpha(opts, layerName));
     }
   }
 }
@@ -1660,7 +1662,7 @@ function drawShapeHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, bo
 
 /**
  * pcb_point_editor.cpp's corner handles for a single selected zone --
- * small squares at each outline vertex, filled solid (selection color) so
+ * small squares at each vertex of its outline and holes, filled solid (selection color) so
  * they read as grabbable. Shows the live drag preview's outline while one
  * of this zone's own corners is being dragged (`opts.zoneCornerPreview`),
  * the committed outline otherwise. Only ever one zone's handles at a time
@@ -1673,13 +1675,15 @@ function drawZoneHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, boa
   const id = [...opts.selection][0]!;
   const zone = board.routing?.zones.find((z) => z.id === id);
   if (!zone) return;
-  const outline = opts.zoneCornerPreview?.zoneId === id ? opts.zoneCornerPreview.outline : zone.outline;
+  // A handle on every corner of every contour, the holes' too (`POLYGON_POINT_EDIT_BEHAVIOR::BuildForPolyOutline` over `CIterateWithHoles`).
+  const preview = opts.zoneCornerPreview?.zoneId === id ? opts.zoneCornerPreview : null;
+  const corners = preview ? [...preview.outline, ...(preview.holes ?? []).flat()] : flatVertices(zoneContours(zone));
   const r = hairlineNm(view, 4);
   ctx.save();
   ctx.fillStyle = layerColor("selection");
   ctx.strokeStyle = "rgba(0,0,0,0.6)";
   ctx.lineWidth = hairlineNm(view, 1);
-  for (const [x, y] of outline) {
+  for (const [x, y] of corners) {
     ctx.beginPath();
     ctx.rect(x - r, y - r, r * 2, r * 2);
     ctx.fill();

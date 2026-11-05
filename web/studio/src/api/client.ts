@@ -6,7 +6,7 @@
 
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillPreviewReply, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { PcbQueryRequest, PcbQueryResponse } from "../kicad-port/pcbQuery";
 import type { SchMovePatch } from "./schEditTypes";
@@ -190,6 +190,17 @@ export async function postFillKicad(zones?: string[]): Promise<KicadFillReply> {
   const res = await fetch("/api/fill/kicad", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(zones && zones.length > 0 ? { zones } : {}) });
   if (!res.ok) return { ok: false, message: `HTTP ${res.status}` };
   return (await res.json()) as KicadFillReply;
+}
+
+/**
+ * The Zone Manager's Update Displayed Zones (`DIALOG_ZONE_MANAGER::OnUpdateDisplayedZonesClick`): kicad-cli's filler runs on the board with the dialog's staged edits
+ * (`cmds`, the `edit_zone`s OK would send) applied to a copy, and answers the fills of that copy -- nothing is kept, the board and its fills are as they were ("Do not use
+ * a commit here since we're operating on cloned zones"). Never throws for a run that could not happen: `ok` is false and `message` says why.
+ */
+export async function postFillPreview(cmds: Cmd[]): Promise<FillPreviewReply> {
+  const res = await fetch("/api/fill/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmds }) });
+  if (!res.ok) return { ok: false, message: `HTTP ${res.status}` };
+  return (await res.json()) as FillPreviewReply;
 }
 
 /** Unfill All Zones (Ctrl+B), or only `zones`: the fills are taken away, the zones are outlines until the next fill. */
@@ -677,6 +688,8 @@ export interface ConvertPolysReply {
   ok: boolean;
   message?: string;
   rings: [Nm, Nm][][];
+  /** The same result unfractured, an outline and its holes each (`polys.back().AddHole( .. )`): what a zone made from the selection takes, holes and all. Absent from an older backend. */
+  polys?: { outline: [Nm, Nm][]; holes: [Nm, Nm][][] }[];
   consumed: string[];
 }
 

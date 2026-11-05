@@ -860,6 +860,9 @@ fn handle(
         // beside design.json (`crate::fill_api`). `{"zones": [ids]}` fills the selected zones only (the others keep the fill they had). A kicad-cli route, so it runs off the
         // loop like DRC. `/api/fill/clear` (Unfill All Zones / Unfill Selected Zones) only forgets fills, so it answers inline.
         ("POST", "/api/fill/kicad") => offload(stream, lane, dir, job, path, &body, |dir, body| crate::fill_api::refill(dir, crate::fill_api::zones_asked(body))),
+        // The Zone Manager's "Update Displayed Zones": kicad-cli fills a copy of the board with the dialog's staged zone settings (`{"cmds": [..]}`), and the fills
+        // come back for the dialog's preview, not kept (`crate::fill_api::preview`). A kicad-cli route, so it runs off the loop too.
+        ("POST", "/api/fill/preview") => offload(stream, lane, dir, job, path, &body, crate::fill_api::preview),
         // The Zone Manager's Auto-Assign Priorities (`eda_ops::zone_priority`): the priorities KiCad would give the copper pours, worked out and not applied.
         ("GET", "/api/zone_priorities/auto") => respond(stream, "200 OK", "application/json", crate::fill_api::auto_priorities(dir).to_string().as_bytes()),
         ("POST", "/api/fill/clear") => respond(stream, "200 OK", "application/json", crate::fill_api::clear(dir, crate::fill_api::zones_asked(&body)).to_string().as_bytes()),
@@ -1389,6 +1392,10 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "name": z.name,
                 // The rule area's placement source (`ZONE::GetPlacementAreaEnabled` and the source type and name): the Placement tab of Zone Properties and what Repeat Layout reads.
                 "placement": z.placement,
+                // `ZONE::GetHatchStyle()` / `GetBorderHatchPitch()`: Zone Properties' "Outline display" and "Outline hatch pitch", and the border hatch the canvas draws
+                // (`ZONE::HatchBorder`). `ZONE::LayerProperties()`' hatch offsets: the Hatched Fill tab's "Hatch offset overrides".
+                "border_style": z.border_style, "border_hatch_pitch": z.border_hatch_pitch,
+                "hatch_offsets": eda_kicad::zone_hatch_offsets(z, design.drawings.as_ref().and_then(|d| d.zone_layer_props.iter().find(|t| t.id == z.id)).map(|t| t.settings.as_str())),
             })).collect::<Vec<_>>(),
             // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList`/
             // `m_DiffPairDimensionsList` -- the Board Setup "Track Widths &

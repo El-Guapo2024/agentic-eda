@@ -110,6 +110,7 @@ mod pcb_transform;
 mod tuning;
 mod zone_overrides;
 pub mod zone_priority;
+mod zone_unfill;
 pub mod rule_editor;
 pub use rule_editor::DrcRuleAction;
 mod sch_annotate;
@@ -512,6 +513,18 @@ pub enum Cmd {
         /// for; [`eda_model::multichannel::PlacementArea`]). `None` leaves what the zone has.
         #[serde(default)]
         placement: Option<eda_model::multichannel::PlacementArea>,
+        /// `ZONE_SETTINGS::m_ZoneBorderDisplayStyle`: the dialogs' "Outline display" (Line, Hatched, Fully hatched; `PANEL_ZONE_PROPERTIES::AcceptOptions`,
+        /// `DIALOG_RULE_AREA_PROPERTIES`, `DIALOG_NON_COPPER_ZONES_EDITOR`). `None` leaves what the zone has.
+        #[serde(default)]
+        border_style: Option<eda_model::ir::ZoneBorderStyle>,
+        /// `ZONE_SETTINGS::m_BorderHatchPitch`: "Outline hatch pitch", 0.1 to 2 mm (`m_outlineHatchPitch.Validate( ZONE_BORDER_HATCH_MINDIST_MM,
+        /// ZONE_BORDER_HATCH_MAXDIST_MM )`). `None` leaves what the zone has.
+        #[serde(default)]
+        border_hatch_pitch: Option<Nm>,
+        /// `ZONE_SETTINGS::m_LayerProperties`' hatch offsets: the Hatched Fill tab's "Hatch offset overrides" (layer -> offset), the whole table
+        /// (`AcceptOptions` clears every `hatching_offset`, then sets the table's rows). Only copper layers the zone is on. `None` leaves what the zone has.
+        #[serde(default)]
+        hatch_offsets: Option<eda_model::setup_pages::HatchOffsets>,
     },
 
     /// Task item 4: Board Setup > Teardrops' settings page -- whole-struct
@@ -2936,7 +2949,11 @@ impl<'a> Board<'a> {
         let edge_before = if matches!(cmd, Cmd::ReplaceBoard { .. }) { None } else { outline::snapshot(&self.design, self.model) };
         let shared_before = self.shared_screens_before();
         let pages_before = (self.design.schematic.is_some() && (matches!(cmd.domain(), Domain::Schematic) || matches!(cmd, Cmd::Batch { .. }))).then(|| eda_model::sheet_list::walk(&self.design));
+        // (a board brought in whole has zones of its own, not edits of these: their fills are the file's, filed as they are)
+        let zones_before = if matches!(cmd, Cmd::ReplaceBoard { .. }) { None } else { self.zones_before() };
         self.apply_cmd(cmd)?;
+        // an edit that emptied a zone's fill (or flipped it) is counted on the zone, so the unfill sticks (R7-Z1, `zone_unfill.rs`)
+        self.tidy_zone_fills(zones_before);
         self.tidy_shared_screens(shared_before, cmd.numbering());
         // the page numbers KiCad keeps: a new sheet path numbered, a page shown kept when the walk moves (`sheet_list::keep_pages`)
         if let Some(before) = pages_before {
@@ -3082,6 +3099,9 @@ impl<'a> Board<'a> {
                 smoothing,
                 corner_radius,
                 placement,
+                border_style,
+                border_hatch_pitch,
+                hatch_offsets,
             } => self.edit_zone(
                 id,
                 net,
@@ -3112,6 +3132,7 @@ impl<'a> Board<'a> {
                 *smoothing,
                 *corner_radius,
                 placement.as_ref(),
+                ZoneDisplayEdit { border_style: *border_style, border_hatch_pitch: *border_hatch_pitch, hatch_offsets: hatch_offsets.as_ref() },
             ),
 
             Cmd::AddShape { shape } => self.add_shape(shape.clone()),
@@ -4243,6 +4264,7 @@ impl<'a> Board<'a> {
         smoothing: Option<eda_model::ir::ZoneSmoothing>,
         corner_radius: Option<Nm>,
         placement: Option<&eda_model::multichannel::PlacementArea>,
+        display: ZoneDisplayEdit<'_>,
     ) -> Result<(), Vec<CheckResult>> {
         // "" (no net) is normal for a rule area, and allowed for an
         // ordinary zone too -- see `add_zone`'s matching comment.
@@ -4281,9 +4303,20 @@ impl<'a> Board<'a> {
         if corner_radius.is_some_and(|r| r < Nm::ZERO) {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "the outline smoothing size cannot be negative")]);
         }
+        // `m_outlineHatchPitch.Validate( mmToIU( ZONE_BORDER_HATCH_MINDIST_MM ), mmToIU( ZONE_BORDER_HATCH_MAXDIST_MM ) )`.
+        if display.border_hatch_pitch.is_some_and(|p| !(eda_model::ir::ZONE_BORDER_HATCH_MIN_PITCH..=eda_model::ir::ZONE_BORDER_HATCH_MAX_PITCH).contains(&p)) {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "the outline hatch pitch must be between 0.1 and 2 mm")]);
+        }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
         let z = rt.zones.iter_mut().find(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
-        if layers.is_some_and(|l| !l.is_empty()) || !z.is_on_layer(layer) {
+        let relayer = layers.is_some_and(|l| !l.is_empty()) || !z.is_on_layer(layer);
+        // The Hatch offset overrides table offers the zone's copper layers only (`LAYER_PROPERTIES_GRID_TABLE` over `m_settings->m_Layers`, the non-copper
+        // layers forbidden).
+        let on = |l: &str| if relayer { wanted.iter().any(|w| w == l) } else { z.is_on_layer(l) };
+        if let Some(bad) = display.hatch_offsets.and_then(|o| o.keys().find(|l| !eda_model::layers::is_copper_layer_name(l) || !on(l))) {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, format!("{bad} is not a copper layer of the zone: it cannot have a hatch offset"))]);
+        }
+        if relayer {
             z.set_layer_set(&wanted);
         }
         // A zone on no copper layer has no net.
@@ -4321,6 +4354,20 @@ impl<'a> Board<'a> {
             z.placement = if is_rule_area { pl.clone() } else { Default::default() };
         } else if !is_rule_area {
             z.placement = Default::default();
+        }
+        // `ZONE_SETTINGS::ExportSetting`: `SetBorderDisplayStyle( m_ZoneBorderDisplayStyle, m_BorderHatchPitch, true )` and `SetLayerProperties( m_LayerProperties )`.
+        if let Some(style) = display.border_style {
+            z.border_style = style;
+        }
+        if let Some(pitch) = display.border_hatch_pitch {
+            z.border_hatch_pitch = pitch;
+        }
+        if let Some(offsets) = display.hatch_offsets {
+            z.hatch_offsets = offsets.clone();
+            // The structured offsets replace the file's text the zone was imported with (`DrawingsSection::zone_layer_props`).
+            if let Some(dr) = self.design.drawings.as_mut() {
+                dr.zone_layer_props.retain(|t| t.id != id);
+            }
         }
         Ok(())
     }
@@ -4552,7 +4599,9 @@ impl<'a> Board<'a> {
             }
             for z in rt.zones.iter_mut() {
                 if z.layer_set().into_iter().any(|l| map.contains_key(l)) {
-                    z.map_layers(|l| map.get(l).map_or_else(|| l.to_string(), |d| (*d).to_string()));
+                    // `swapBoardItem`: `aItem->SetLayerSet( newLayers )` -- no flip, so the hatch offsets of the layers left are dropped, not moved.
+                    let set: Vec<String> = z.layer_set().into_iter().map(|l| map.get(l).map_or_else(|| l.to_string(), |d| (*d).to_string())).collect();
+                    z.set_layer_set(&set);
                 }
             }
             // `if( via->GetViaType() == VIATYPE::THROUGH ) continue;` --
@@ -6987,3 +7036,14 @@ mod sch_net_collision_tests;
 mod sch_sheet_pin_tests;
 #[cfg(test)]
 mod multichannel_tests;
+#[cfg(test)]
+mod zone_unfill_tests;
+
+/// The display half of `Cmd::EditZone` (Zone Properties' "Outline display" and "Outline hatch pitch", and the Hatched Fill tab's "Hatch offset overrides"):
+/// `None` leaves what the zone has.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ZoneDisplayEdit<'a> {
+    pub border_style: Option<eda_model::ir::ZoneBorderStyle>,
+    pub border_hatch_pitch: Option<Nm>,
+    pub hatch_offsets: Option<&'a eda_model::setup_pages::HatchOffsets>,
+}

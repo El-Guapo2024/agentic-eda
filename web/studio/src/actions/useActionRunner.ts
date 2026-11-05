@@ -81,7 +81,8 @@ import { registerCommonActions, type ActionHandler } from "./commonActions";
 import { makeEditorAdapter } from "./editorAdapter";
 import { cancelAreaTool, getCommonTool } from "../state/commonTool";
 import { commonChecked } from "../kicad-port/commonChecked";
-import { useCommonOptions } from "../state/commonOptions";
+import { getCommonOptions, useCommonOptions } from "../state/commonOptions";
+import { unfilledZoneWarning, ZONE_FILL_WARNING_MS } from "../kicad-port/checkRevision";
 import { registerEditorFrameActions } from "./editorFrameActions";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import { netAtClick, registerSchControlActions, schControlChecked } from "./schControlActions";
@@ -983,6 +984,13 @@ export function useActionRunner() {
         // two can never disagree.
         // `performRouting`: `evt->IsAction( &PCB_ACTIONS::properties )` runs `ACT_CustomTrackWidth` (R7-R5)
         if (routerKey("properties")) return;
+        // `DrawZone`: `started && evt->IsAction( &PCB_ACTIONS::properties )` -> `OnEditItemRequest( zoneTool.GetZone() )`: the settings of the zone being drawn
+        // (kicad-port/pcbDrawZone.ts); a cutout or a similar zone has none of its own here.
+        const zoneDraw = state.drawState;
+        if (state.activeTool === "zone" && zoneDraw?.kind === "zone" && zoneDraw.settings && zoneDraw.pts.length > 0) {
+          dispatch({ type: "PCBX", patch: { zoneCreate: { at: null, initial: zoneDraw.settings } } });
+          return;
+        }
         const ref = requestSelection()[0];
         if (ref) openPropertiesFor(ref, api, dispatch);
       })
@@ -1073,7 +1081,15 @@ export function useActionRunner() {
     // fill data at all (above) -- how one that does paints. Source's
     // other two modes (fracture-borders/triangulation) are developer
     // debug views, not ported -- see painter.ts's drawZones doc.
-    m.set("pcbnew.Control.zoneDisplayEnable", pcbOnly(() => dispatch({ type: "SET_ZONE_DISPLAY_MODE", mode: "filled" })));
+    // `PCB_CONTROL::ZoneDisplayMode` on `zoneDisplayFilled`: `unfilledZoneCheck()` first -- a 5 s warning when a zone is not filled (R7-Z2) -- then the mode.
+    m.set(
+      "pcbnew.Control.zoneDisplayEnable",
+      pcbOnly(() => {
+        const warning = unfilledZoneWarning(state.zoneFill?.zones ?? null, state.board?.routing?.zones ?? [], getCommonOptions().zoneFillWarningDismissed);
+        if (warning) dispatch({ type: "TOAST", message: warning, kind: "info", ms: ZONE_FILL_WARNING_MS, dontShowAgain: "zoneFillWarningDismissed" });
+        dispatch({ type: "SET_ZONE_DISPLAY_MODE", mode: "filled" });
+      })
+    );
     m.set("pcbnew.Control.zoneDisplayDisable", pcbOnly(() => dispatch({ type: "SET_ZONE_DISPLAY_MODE", mode: "outline" })));
     m.set(
       "pcbnew.Control.zoneDisplayToggle",

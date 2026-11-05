@@ -43,6 +43,7 @@ mod padstack_io;
 mod pcb;
 mod pcb_generated;
 mod pcb_items;
+pub use pcb_items::zone_hatch_offsets;
 mod pcb_table;
 mod clipboard;
 pub use clipboard::{export_pcb_clipboard, export_pcb_clipboard_with, parse_pcb_clipboard, pcb_clipboard_zone_fills, ClipFootprint, ClipGroup, ClipRef, Clipboard};

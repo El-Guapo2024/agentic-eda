@@ -35,7 +35,8 @@ import { itemKind } from "../kicad-port/pcbItems";
 import { isLocked } from "../kicad-port/pcbTransform";
 import { mirrorReferencePoint, mirrorableIds, planMirror, type FlipDirection } from "../kicad-port/pcbMirror";
 import { modifyResultCmds } from "../kicad-port/shapeFill";
-import { healShapes, isLineModifiable, lineSelectionError, modifyLines, simplifyPolygonRing, type LineRoutine, type ModifyResult } from "../kicad-port/pcbModify";
+import { healShapes, isLineModifiable, lineSelectionError, modifyLines, simplifyPolygonRing, simplifyZoneContours, type LineRoutine, type ModifyResult } from "../kicad-port/pcbModify";
+import { zoneOutlineCmd } from "../kicad-port/zonePointEditor";
 import { boardOutlineRings } from "../kicad-port/pcbOutline";
 import { breakTrack, filletTracks, type EditBoard, type EditTrack } from "../kicad-port/pcbTrackEdit";
 import { changeTrackWidthCmds } from "../kicad-port/changeTrackWidth";
@@ -304,7 +305,7 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
   m.set("pcbnew.InteractiveEdit.dogboneCorners", modifyLinesAction("dogbone"));
   m.set("pcbnew.InteractiveEdit.extendLines", modifyLinesAction("extend"));
 
-  // EDIT_TOOL::SimplifyPolygons: polygons and zones, `SimplifyOutlines( tolerance )`.
+  // EDIT_TOOL::SimplifyPolygons: polygons and zones (their holes too), `SimplifyOutlines( tolerance )`.
   m.set(
     "pcbnew.InteractiveEdit.simplifyPolygons",
     pcbOnly(() => {
@@ -335,8 +336,10 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
               // `commit.Modify( item ); poly.SimplifyOutlines( .. )`: the same polygon, its id, group and lock kept (round 3 D-10)
               cmds.push({ op: "replace_shape", id, shape: { kind: "polygon", layer: s.layer, stroke_width: s.stroke_width, filled: s.filled, pts: ring.map(([x, y]) => ({ x, y })) } });
             } else if (z) {
-              const ring = simplifyPolygonRing(z.outline, toleranceNm);
-              if (ring && ring.length >= 3) cmds.push({ op: "set_zone_outline", id, outline: ring.map(([x, y]) => ({ x, y })) });
+              // `zone->Outline()->SimplifyOutlines( .. )`: the outline and every hole; the holes go with the outline when the zone has some
+              const holes = (z.holes ?? []).filter((h) => h.length >= 3);
+              const next = simplifyZoneContours(z.outline, holes, toleranceNm);
+              if (next) cmds.push(zoneOutlineCmd(id, [next.outline, ...next.holes], holes.length > 0));
             }
           }
           void applyEdit(cmds, removed, cmds.length === 0 ? "Nothing to simplify within that tolerance." : null);

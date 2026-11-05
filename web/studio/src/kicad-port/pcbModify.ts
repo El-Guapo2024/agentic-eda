@@ -466,6 +466,22 @@ export function simplifyPolygonRing(pts: readonly Pt[], toleranceNm: number): [n
   return simplified;
 }
 
+/**
+ * `EDIT_TOOL::SimplifyPolygons` on a zone: `zone->Outline()->SimplifyOutlines( tolerance )`, which simplifies every contour of the polygon set, the holes as
+ * the outline (`for( SHAPE_LINE_CHAIN& path : paths ) path.Simplify( aTolerance )`). The outline and the holes after it, or null when nothing changed or the
+ * outline would be left with fewer than three corners. A hole that is left with fewer than three is dropped (the IR keeps no degenerate hole; KiCad keeps
+ * the chain, which encloses nothing).
+ */
+export function simplifyZoneContours(outline: readonly Pt[], holes: readonly (readonly Pt[])[], toleranceNm: number): { outline: [number, number][]; holes: [number, number][][] } | null {
+  const copy = (ring: readonly Pt[]): [number, number][] => ring.map((p) => [p[0], p[1]]);
+  const ring = simplifyPolygonRing(outline, toleranceNm);
+  const simplifiedHoles = holes.map((h) => simplifyPolygonRing(h, toleranceNm));
+  if (!ring && simplifiedHoles.every((h) => h === null)) return null;
+  const out = ring ?? copy(outline);
+  if (out.length < 3) return null;
+  return { outline: out, holes: simplifiedHoles.map((h, i) => h ?? copy(holes[i]!)).filter((h) => h.length >= 3) };
+}
+
 // ---------------------------------------------------------------------- Heal
 
 type HealShape =
