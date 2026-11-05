@@ -415,7 +415,22 @@ fn drawn_items(item: &[Sexpr], tilde_is_empty: bool, warnings: &mut Vec<String>)
                 Some("text") => {
                     if let (Some(content), Some(at)) = (sexpr::txt(child, 1), sexpr::find(child, "at")) {
                         if let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) {
-                            graphics.push(LibrarySymbolGraphic::Text { id: String::new(), unit, body_style: style, text: content.to_string(), at: SPoint { x, y }, angle_deg: sexpr::num(at, 3).unwrap_or(0.0), size_mm: font_size(child).unwrap_or(1.27) });
+                            // the looks the text has as members (bold, italic, the justification); the rest of its style is kept beside it (`text_style`)
+                            let looks = text_style(child);
+                            let (h_align, v_align) = text_justify(&looks.justify);
+                            graphics.push(LibrarySymbolGraphic::Text {
+                                id: String::new(),
+                                unit,
+                                body_style: style,
+                                text: content.to_string(),
+                                at: SPoint { x, y },
+                                angle_deg: sexpr::num(at, 3).unwrap_or(0.0),
+                                size_mm: font_size(child).unwrap_or(1.27),
+                                bold: looks.bold,
+                                italic: looks.italic,
+                                h_align,
+                                v_align,
+                            });
                         }
                     }
                 }
@@ -424,10 +439,12 @@ fn drawn_items(item: &[Sexpr], tilde_is_empty: bool, warnings: &mut Vec<String>)
                         pins.push(pin);
                     }
                 }
-                Some("bezier") => {
-                    warnings.push("bezier curves are kept as the file has them, but the symbol editor does not draw or edit them".to_string());
-                    kept.push(eda_model::lib_keep::KeptSymbolItem { unit, body_style: style, text: sexpr::to_text(&Sexpr::List(child.to_vec())) });
-                }
+                // `SCH_IO_KICAD_SEXPR_PARSER::parseSymbolBezier`: `(bezier [private] (pts (xy ..) (xy ..) (xy ..) (xy ..)) (stroke ..) (fill ..))` -- start, the two control
+                // points, end. One that does not have the four points is kept as the file wrote it.
+                Some("bezier") => match bezier(child, unit, style) {
+                    Some(b) => graphics.push(b),
+                    None => kept.push(eda_model::lib_keep::KeptSymbolItem { unit, body_style: style, text: sexpr::to_text(&Sexpr::List(child.to_vec())) }),
+                },
                 Some("text_box") => match text_box(child, unit, style) {
                     Some(tb) => graphics.push(tb),
                     None => warnings.push("a text box without a position or a size was left out".to_string()),
@@ -436,7 +453,7 @@ fn drawn_items(item: &[Sexpr], tilde_is_empty: bool, warnings: &mut Vec<String>)
             }
             if graphics.len() > drawn {
                 strokes.push(stroke_type(child));
-                styles.push((sexpr::tag(child) == Some("text")).then(|| text_style(child)).filter(|t| !t.is_default()));
+                styles.push((sexpr::tag(child) == Some("text")).then(|| kept_text_style(child)).filter(|t| !t.is_default()));
             }
         }
     }
@@ -459,6 +476,39 @@ fn text_style(item: &[Sexpr]) -> eda_model::lib_keep::KeptTextStyle {
     }
     t.hidden |= sexpr::find(item, "hide").is_some_and(|h| sexpr::txt(h, 1).map(|v| v == "yes").unwrap_or(true));
     t
+}
+
+/// What a symbol text's style keeps beside the text: [`text_style`] without what [`LibrarySymbolGraphic::Text`] holds itself (bold, italic, the left / right / top / bottom
+/// of its justification).
+fn kept_text_style(item: &[Sexpr]) -> eda_model::lib_keep::KeptTextStyle {
+    let mut t = text_style(item);
+    t.bold = false;
+    t.italic = false;
+    t.justify.retain(|w| !matches!(w.as_str(), "left" | "right" | "top" | "bottom"));
+    t
+}
+
+/// `(justify ..)`'s words as a text's alignment (`parseEDA_TEXT`): centred on an axis it does not name.
+fn text_justify(words: &[String]) -> (FieldHAlign, FieldVAlign) {
+    let (mut h, mut v) = (FieldHAlign::Center, FieldVAlign::Center);
+    for w in words {
+        match w.as_str() {
+            "left" => h = FieldHAlign::Left,
+            "right" => h = FieldHAlign::Right,
+            "top" => v = FieldVAlign::Top,
+            "bottom" => v = FieldVAlign::Bottom,
+            _ => {}
+        }
+    }
+    (h, v)
+}
+
+/// `SCH_IO_KICAD_SEXPR_PARSER::parseSymbolBezier`: the four `(xy ..)` of `(pts ..)` are the start, the first and second control points and the end (`SetStart`,
+/// `SetBezierC1`, `SetBezierC2`, `SetEnd`); the stroke and the fill as any shape's.
+fn bezier(item: &[Sexpr], unit: u32, body_style: u32) -> Option<LibrarySymbolGraphic> {
+    let pts: Vec<SPoint> = sexpr::find_all(sexpr::find(item, "pts")?, "xy").filter_map(|xy| Some(SPoint { x: sexpr::num(xy, 1)?, y: sexpr::num(xy, 2)? })).collect();
+    let [start, c1, c2, end] = <[SPoint; 4]>::try_from(pts).ok()?;
+    Some(LibrarySymbolGraphic::Bezier { id: String::new(), unit, body_style, start, c1, c2, end, stroke_mm: stroke_width(item), fill: fill_of(item) })
 }
 
 /// What [`drawn_items`] finds: the graphics, the pins, the highest unit, whether there is a second body style, each graphic's stroke type and text style, and the items
@@ -603,7 +653,7 @@ mod tests {
                 LibrarySymbolGraphic::Polyline { id: String::new(), unit: 1, body_style: 1, pts: vec![SPoint { x: 0.0, y: 0.0 }, SPoint { x: 1.0, y: 1.0 }, SPoint { x: 2.0, y: 0.0 }], stroke_mm: 0.2, fill: LibraryFill::Outline },
                 LibrarySymbolGraphic::Circle { id: String::new(), unit: 2, body_style: 1, center: SPoint { x: 0.5, y: 0.5 }, radius_mm: 1.5, stroke_mm: 0.254, fill: LibraryFill::None },
                 LibrarySymbolGraphic::Arc { id: String::new(), unit: 1, body_style: 1, start: SPoint { x: 1.0, y: 0.0 }, mid: SPoint { x: 0.0, y: 1.0 }, end: SPoint { x: -1.0, y: 0.0 }, stroke_mm: 0.254, fill: LibraryFill::None },
-                LibrarySymbolGraphic::Text { id: String::new(), unit: 1, body_style: 1, text: "hello".into(), at: SPoint { x: 0.0, y: -4.0 }, angle_deg: 90.0, size_mm: 1.5 },
+                LibrarySymbolGraphic::Text { id: String::new(), unit: 1, body_style: 1, text: "hello".into(), at: SPoint { x: 0.0, y: -4.0 }, angle_deg: 90.0, size_mm: 1.5, bold: false, italic: false, h_align: Default::default(), v_align: Default::default() },
             ],
             pins: vec![pin("1", 1, 1, false), pin("2", 1, 1, true), pin("3", 2, 1, false), pin("1", 1, 2, false)],
             published: false,
@@ -806,12 +856,11 @@ mod tests {
         assert_eq!((child.description.as_str(), child.datasheet.as_str()), ("derived", ""), "its own properties only: the Datasheet is the parent's until flattened");
         let value = child.field("Value").unwrap();
         assert_eq!((value.text.as_str(), value.at.x, value.at.y, value.size_mm, value.bold, value.h_align, value.v_align), ("CH", 1.0, 2.0, 1.0, true, FieldHAlign::Left, FieldVAlign::Bottom));
-        assert_eq!(parsed.warnings.len(), 1, "{:?}", parsed.warnings);
-        assert!(parsed.warnings.iter().any(|w| w.contains("bezier")), "a bezier is still left out, and said so; a text box no longer is");
+        assert!(parsed.warnings.is_empty(), "a bezier and a text box are read: {:?}", parsed.warnings);
 
         let section = eda_model::ir::SymbolLibrarySection { symbols: parsed.symbols, ..Default::default() };
         let flat = section.flatten("Child").unwrap();
-        assert_eq!((flat.pins.len(), flat.graphics.len()), (1, 2), "the base's pin, its rectangle and its text box");
+        assert_eq!((flat.pins.len(), flat.graphics.len()), (1, 3), "the base's pin, its rectangle, its bezier and its text box");
         assert_eq!((flat.datasheet.as_str(), flat.description.as_str()), ("http://x", "derived"));
         assert_eq!(flat.field("Value").unwrap().text, "CH");
     }

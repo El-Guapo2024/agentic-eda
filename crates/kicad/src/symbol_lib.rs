@@ -626,6 +626,19 @@ pub(crate) fn write_symbol_named(out: &mut String, sym: &eda_model::ir::LibraryS
 pub(crate) fn write_symbol_named_with(out: &mut String, sym: &eda_model::ir::LibrarySymbol, outer_name: &str, embedded: Option<&eda_model::embedded_files::EmbeddedFiles>) {
     use std::fmt::Write as _;
 
+    // a text read before its looks were members of the text has them in the kept style: written from the text, as an edit would have them
+    let absorbed;
+    let sym = if sym.kicad.text_styles.is_empty() {
+        sym
+    } else {
+        absorbed = {
+            let mut s = sym.clone();
+            s.absorb_kept_text_styles();
+            s
+        };
+        &absorbed
+    };
+
     // the sub-blocks are named for the block they are in: `<bare>_<unit>_<style>` of `outer_name` (a symbol's own copy in the cache, `GATE_1`, has `GATE_1_1_1`: KiCad refuses
     // a sub-block whose name does not start with its parent's)
     let block_name = outer_name.rsplit(':').next().unwrap_or(outer_name);
@@ -790,22 +803,40 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphi
         G::Arc { start, mid, end, stroke_mm, fill: f, .. } => {
             writeln!(out, "\t\t\t(arc (start {}) (mid {}) (end {}) {} {})", pt(*start), pt(*mid), pt(*end), stroke(*stroke_mm), fill(*f)).unwrap();
         }
-        G::Text { text, at, angle_deg, size_mm, .. } => {
-            // `EDA_TEXT::Format`: the size, then what the file said beyond it (the pen, bold, italic, the justification, hidden)
+        G::Text { text, at, angle_deg, size_mm, bold, italic, h_align, v_align, .. } => {
+            use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
+            // `EDA_TEXT::Format`: the size, the pen the file gave, bold and italic; `(justify ..)` with the horizontal word, then the vertical one (each left out when
+            // centred), then what else the file said there; hidden
             let style = text_style.cloned().unwrap_or_default();
             let mut font = format!("(size {} {})", crate::fmt_mm_f(*size_mm), crate::fmt_mm_f(*size_mm));
             if let Some(t) = style.thickness_mm {
                 font.push_str(&format!(" (thickness {})", crate::fmt_mm_f(t)));
             }
-            if style.bold {
+            if *bold || style.bold {
                 font.push_str(" bold");
             }
-            if style.italic {
+            if *italic || style.italic {
                 font.push_str(" italic");
             }
-            let justify = if style.justify.is_empty() { String::new() } else { format!(" (justify {})", style.justify.join(" ")) };
+            let mut words: Vec<&str> = Vec::new();
+            match h_align {
+                FieldHAlign::Left => words.push("left"),
+                FieldHAlign::Right => words.push("right"),
+                FieldHAlign::Center => {}
+            }
+            match v_align {
+                FieldVAlign::Top => words.push("top"),
+                FieldVAlign::Bottom => words.push("bottom"),
+                FieldVAlign::Center => {}
+            }
+            words.extend(style.justify.iter().map(String::as_str).filter(|w| !matches!(*w, "left" | "right" | "top" | "bottom")));
+            let justify = if words.is_empty() { String::new() } else { format!(" (justify {})", words.join(" ")) };
             let hide = if style.hidden { " (hide yes)" } else { "" };
             writeln!(out, "\t\t\t(text {} (at {} {} {}) (effects (font {font}){justify}{hide}))", crate::sexpr_str(text), crate::fmt_mm_f(at.x), crate::fmt_mm_f(at.y), crate::fmt_mm_f(*angle_deg)).unwrap();
+        }
+        // `formatBezier`: the four points (start, the two control points, end), the stroke and the fill
+        G::Bezier { start, c1, c2, end, stroke_mm, fill: f, .. } => {
+            writeln!(out, "\t\t\t(bezier (pts (xy {}) (xy {}) (xy {}) (xy {})) {} {})", pt(*start), pt(*c1), pt(*c2), pt(*end), stroke(*stroke_mm), fill(*f)).unwrap();
         }
         // `SCH_IO_KICAD_SEXPR_LIB_CACHE::saveTextBox`: the box is its start, its angle and the size from the start to the opposite corner (both in the symbol's Y-up mm), the four margins, the
         // stroke and the fill, and `EDA_TEXT::Format`'s effects. A border of no width is the width -1 of a schematic's units, 0.0001 mm (`STROKE_PARAMS`); the file's default

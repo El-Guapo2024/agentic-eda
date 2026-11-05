@@ -73,6 +73,66 @@ fn a_symbols_private_fields_stroke_styles_text_styles_unit_names_and_beziers_are
     assert_eq!(back.kicad, q.kicad, "the second round trip changes nothing");
 }
 
+/// UI-LEFT Y2: a bezier is a graphic of the symbol (`SCH_SHAPE` of `SHAPE_T::BEZIER`, `parseSymbolBezier`): its start, two control points and end, its stroke and fill, on its unit
+/// and body style -- drawn, edited and moved with the rest, no longer kept aside as the file's text.
+#[test]
+fn a_bezier_is_a_graphic_with_its_four_points_written_back_by_formatbezier() {
+    use eda_model::ir::{LibraryFill, LibrarySymbolGraphic};
+    use eda_model::symbol::SPoint;
+    let q = one_symbol(QUAD);
+    assert!(q.kicad.items.is_empty(), "nothing is kept aside: {:?}", q.kicad.items);
+    let b = q.graphics.iter().find(|g| matches!(g, LibrarySymbolGraphic::Bezier { .. })).expect("the bezier is a graphic");
+    let LibrarySymbolGraphic::Bezier { unit, body_style, start, c1, c2, end, stroke_mm, fill, .. } = b else { unreachable!() };
+    assert_eq!((*unit, *body_style), (1, 0), "Q_1_0");
+    assert_eq!((*start, *c1, *c2, *end), (SPoint { x: 0.0, y: 0.0 }, SPoint { x: 1.0, y: 2.0 }, SPoint { x: 3.0, y: 2.0 }, SPoint { x: 4.0, y: 0.0 }));
+    assert_eq!((*stroke_mm, *fill), (0.0, LibraryFill::None));
+    // written as `formatBezier` writes it, read back the same
+    let text = written(&q);
+    assert!(text.contains("(bezier (pts (xy 0 0) (xy 1 2) (xy 3 2) (xy 4 0)) (stroke (width 0) (type default)) (fill (type none)))"), "{text}");
+    let back = one_symbol(&text);
+    assert_eq!(back.graphics.iter().filter(|g| matches!(g, LibrarySymbolGraphic::Bezier { .. })).count(), 1);
+    // a placed symbol draws it as `BEZIER_POLY::GetPoly`'s polyline
+    let engine = b.to_engine_graphics();
+    let eda_model::symbol::SymbolGraphic::Polyline { pts, .. } = &engine[0] else { panic!("{engine:?}") };
+    assert!(pts.len() > 4 && pts.first() == Some(start) && pts.last() == Some(end), "{pts:?}");
+    // a bezier with fewer points than four is kept as the file wrote it
+    let odd = one_symbol(r#"(kicad_symbol_lib (version 20251024) (symbol "B" (symbol "B_1_1" (bezier (pts (xy 0 0) (xy 1 1) (xy 2 0)) (stroke (width 0) (type default)) (fill (type none))))))"#);
+    assert_eq!((odd.graphics.len(), odd.kicad.items.len()), (0, 1));
+}
+
+/// UI-LEFT Y4: a text's bold, italic and justification are the text's own (`DIALOG_TEXT_PROPERTIES` edits them, Mirror flips the justification); its pen stays in the kept
+/// style. A design written before keeps them in the kept style: the writer and every edit take them from there (`absorb_kept_text_styles`).
+#[test]
+fn a_texts_bold_italic_and_justification_are_the_texts_own_and_an_older_kept_style_still_counts() {
+    use eda_model::ir::LibrarySymbolGraphic;
+    use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
+    let q = one_symbol(QUAD);
+    let t = q.graphics.iter().find(|g| matches!(g, LibrarySymbolGraphic::Text { .. })).unwrap();
+    let LibrarySymbolGraphic::Text { id, bold, italic, h_align, v_align, .. } = t else { unreachable!() };
+    assert_eq!((*bold, *italic, *h_align, *v_align), (true, false, FieldHAlign::Left, FieldVAlign::Bottom));
+    let kept = q.kicad.text_styles.get(id).expect("the pen is kept");
+    assert_eq!((kept.thickness_mm, kept.bold, kept.justify.is_empty()), (Some(0.238), false, true), "{kept:?}");
+
+    // the same symbol as a design of 2026-10-23 holds it: the looks in the kept style, the text centred and plain
+    let mut old = q.clone();
+    for g in &mut old.graphics {
+        if let LibrarySymbolGraphic::Text { bold, h_align, v_align, .. } = g {
+            *bold = false;
+            *h_align = FieldHAlign::Center;
+            *v_align = FieldVAlign::Center;
+        }
+    }
+    let style = old.kicad.text_styles.get_mut(id).unwrap();
+    style.bold = true;
+    style.justify = vec!["left".into(), "bottom".into()];
+    assert_eq!(written(&old), written(&q), "the writer takes the kept looks");
+    old.absorb_kept_text_styles();
+    assert_eq!(old, q, "absorbed: the text has them, the kept style its pen");
+    let mut again = old.clone();
+    again.absorb_kept_text_styles();
+    assert_eq!(again, old, "idempotent");
+}
+
 #[test]
 fn an_item_common_to_every_body_style_is_written_in_its_units_style_0_sub_symbol() {
     // `SaveSymbol` writes `GetUnitDrawItems` by (unit, body style): an item of body style 0 is in `Q_1_0`, as the file had it, not copied into `Q_1_1`

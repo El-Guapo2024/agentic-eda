@@ -2974,7 +2974,7 @@ fn edit_symbol_text_changes_content_angle_and_size_but_not_position() {
     let m = net_model();
     let mut b = board(&m);
     b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
-    b.apply(&Cmd::AddSymbolGraphic { lib_id: "Test:Sym".into(), graphic: LibrarySymbolGraphic::Text { id: String::new(), unit: 0, body_style: 0, text: "note".into(), at: eda_model::symbol::SPoint::new(0.0, 0.0), angle_deg: 0.0, size_mm: 1.27 } }).unwrap();
+    b.apply(&Cmd::AddSymbolGraphic { lib_id: "Test:Sym".into(), graphic: LibrarySymbolGraphic::Text { id: String::new(), unit: 0, body_style: 0, text: "note".into(), at: eda_model::symbol::SPoint::new(0.0, 0.0), angle_deg: 0.0, size_mm: 1.27, bold: false, italic: false, h_align: Default::default(), v_align: Default::default() } }).unwrap();
     let id = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap().graphics[0].id().to_string();
 
     b.apply(&Cmd::EditSymbolText { lib_id: "Test:Sym".into(), id: id.clone(), text: "renamed".into(), angle_deg: 90.0, size_mm: 2.0 }).unwrap();

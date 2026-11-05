@@ -81,7 +81,9 @@ pub(crate) fn symbol_in(dir: &Path, design: &eda_model::ir::Design, model: &Cons
 /// [`symbol_in`] over symbol libraries already read (a caller that resolves many symbols reads the tables once).
 pub(crate) fn symbol_in_libs<S: LibSource + ?Sized>(libs: &S, design: &eda_model::ir::Design, model: &ConstraintModel, lib_id: &str) -> Option<(LibrarySymbol, bool)> {
     if let Some(sym) = design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)) {
-        return Some((sym.clone(), true));
+        let mut sym = sym.clone();
+        sym.absorb_kept_text_styles();
+        return Some((sym, true));
     }
     // The library file of the tables first: the builtin table's hand-ported `Device:R` is a stand-in for it.
     if let Some(sym) = installed_symbol_in(libs, lib_id) {
@@ -192,7 +194,44 @@ pub fn symbol_kicad_sym_any(dir: &Path, lib_id: &str) -> Result<String, Vec<Chec
 pub fn symbol_flattened(dir: &Path, lib_id: &str) -> Result<LibrarySymbol, Vec<CheckResult>> {
     let (_, design, _) = board::load(dir)?;
     let lib = design.symbol_library.as_ref().ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "the project symbol library is empty")])?;
-    lib.flatten(lib_id).map_err(|e| vec![CheckResult::fail("ops_bad_symbol", lib_id, e)])
+    let mut flat = lib.flatten(lib_id).map_err(|e| vec![CheckResult::fail("ops_bad_symbol", lib_id, e)])?;
+    flat.absorb_kept_text_styles();
+    Ok(flat)
+}
+
+/// `POST /api/symbol/clipboard/copy` -- `{"lib_id", "ids": [..]}`: the clipboard text of `SYMBOL_EDITOR_EDIT_TOOL::Copy` for the Symbol Editor's selection. KiCad flags every
+/// drawn item that is not selected `STRUCT_DELETED`, copies the symbol (the copy leaves those out, the fields stay) and writes the copy with
+/// `SCH_IO_KICAD_SEXPR::FormatLibSymbol`: the symbol -- its properties and fields -- with only the selected pins and graphics. Here the symbol is the one the editor draws (a
+/// derived symbol's flat one), written by the library writer; `{"text"}` is that `.kicad_sym` (the client takes the `(symbol ..)` form out of it, as Copy of a whole symbol
+/// does), or `{"error"}`. Nothing selected among the pins and graphics is an empty `ids` and still copies the symbol's fields, as KiCad's does not run (`!selection.GetSize()`).
+pub fn symbol_items_copy(dir: &Path, body: &[u8]) -> Value {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        lib_id: String,
+        ids: Vec<String>,
+    }
+    let req: Req = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => return json!({ "error": format!("bad request: {e}") }),
+    };
+    if req.ids.is_empty() {
+        return json!({ "error": "nothing is selected" });
+    }
+    let mut sym = match symbol_flattened(dir, &req.lib_id) {
+        Ok(s) => s,
+        Err(e) => return json!({ "error": board::reasons(&e) }),
+    };
+    let keep: std::collections::BTreeSet<&str> = req.ids.iter().map(String::as_str).collect();
+    sym.graphics.retain(|g| keep.contains(g.id()));
+    sym.pins.retain(|p| keep.contains(p.id.as_str()));
+    // what the file kept beside an item that is not copied goes with it (a bezier kept as text by an older reader is not an item of the selection)
+    sym.kicad.items.clear();
+    let ids: std::collections::BTreeSet<String> = sym.graphics.iter().map(|g| g.id().to_string()).collect();
+    sym.kicad.stroke_types.retain(|id, _| ids.contains(id));
+    sym.kicad.text_styles.retain(|id, _| ids.contains(id));
+    // a derived symbol is copied as the flat one (`partCopy` of the symbol the editor holds): no parent to name
+    sym.extends = None;
+    json!({ "text": eda_kicad::export_kicad_sym_library(&[&sym]) })
 }
 
 /// The derived `.kicad_mod` of any footprint (`Export Current Footprint...`).
@@ -382,6 +421,38 @@ mod tests {
         assert_eq!((by("power:+3V3")["source"].clone(), by("power:+3V3")["placed"].clone()), (json!("builtin"), json!(false)));
         assert_eq!(by("power:GND")["placed"], true, "{v}");
         assert!(entries.windows(2).all(|w| w[0]["id"].as_str() <= w[1]["id"].as_str()), "sorted by id");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// UI-LEFT Y5: the Symbol Editor's Copy puts `.kicad_sym` text on the clipboard (`SYMBOL_EDITOR_EDIT_TOOL::Copy`): the symbol with its fields and only the selected pins and
+    /// graphics, which Paste reads back -- here or in KiCad (`ParseLibSymbols`).
+    #[test]
+    fn copy_of_items_is_the_symbol_with_only_the_selected_pins_and_graphics_as_kicad_sym_text() {
+        let dir = scratch_board(
+            "items-copy",
+            r##"{"schema":2,"provenance":{"engine_version":"0","intent_hash":"x","seed":0,"stage_hashes":[]},
+                "placement":{"outline":[],"footprints":[],"modules":[]},
+                "symbol_library":{"symbols":[
+                    {"lib_id":"Mine:Part","reference_prefix":"U","description":"My part",
+                     "graphics":[{"kind":"rectangle","id":"r","unit":0,"start":{"x":-2.54,"y":-2.54},"end":{"x":2.54,"y":2.54},"stroke_mm":0.254},
+                                 {"kind":"text","id":"t","unit":0,"text":"Hi","at":{"x":0,"y":1.27},"size_mm":1.27,"h_align":"left"},
+                                 {"kind":"bezier","id":"b","unit":0,"start":{"x":0,"y":0},"c1":{"x":1,"y":2},"c2":{"x":3,"y":2},"end":{"x":4,"y":0},"stroke_mm":0}],
+                     "pins":[{"id":"p1","number":"1","name":"A","electrical_type":"input","shape":"line","at":{"x":-5.08,"y":0},"angle_deg":0,"length_mm":2.54,"unit":1},
+                             {"id":"p2","number":"2","name":"B","electrical_type":"output","shape":"line","at":{"x":5.08,"y":0},"angle_deg":180,"length_mm":2.54,"unit":1}]}]}}"##,
+        );
+        let v = symbol_items_copy(&dir, br#"{"lib_id":"Mine:Part","ids":["p2","t","b"]}"#);
+        let text = v["text"].as_str().unwrap_or_else(|| panic!("{v}"));
+        let parsed = eda_kicad::parse_library_symbols(text).unwrap();
+        let sym = &parsed.symbols[0];
+        assert_eq!(sym.pins.iter().map(|p| p.number.as_str()).collect::<Vec<_>>(), ["2"]);
+        assert_eq!(sym.graphics.iter().map(|g| match g {
+            eda_model::ir::LibrarySymbolGraphic::Text { h_align, .. } => format!("text {h_align:?}"),
+            eda_model::ir::LibrarySymbolGraphic::Bezier { .. } => "bezier".to_string(),
+            other => format!("{other:?}"),
+        }).collect::<Vec<_>>(), ["text Left", "bezier"]);
+        assert_eq!(sym.description, "My part", "the fields come with it");
+        assert!(symbol_items_copy(&dir, br#"{"lib_id":"Mine:Part","ids":[]}"#)["error"].is_string());
+        assert!(symbol_items_copy(&dir, br#"{"lib_id":"Mine:Nope","ids":["p1"]}"#)["error"].is_string());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

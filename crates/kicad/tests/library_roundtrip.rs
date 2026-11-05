@@ -233,9 +233,17 @@ fn symbol_sample(root: &Path, n: usize) -> Vec<(PathBuf, String)> {
             }
         }
     }
-    // symbols of known shapes: beziers, unit names, a private field, a power symbol, symbols excluded from the position files, a DeMorgan symbol
+    // symbols of known shapes: beziers (every symbol of the libraries that has one, UI-LEFT Y2: read as graphics, not kept as text), unit names, a private field, a power
+    // symbol, symbols excluded from the position files, a DeMorgan symbol
     for (lib, name) in [
         ("Auxiliary_Items", "Spring"),
+        ("Auxiliary_Items", "Spacer"),
+        ("Auxiliary_Items", "LightPipe"),
+        ("Auxiliary_Items", "Power_Supply"),
+        ("Auxiliary_Items", "Washer"),
+        ("Auxiliary_Items", "Battery"),
+        ("Auxiliary_Items", "Split_Washer"),
+        ("Auxiliary_Items", "Antenna_Internal"),
         ("Device", "Thermal_Jumper"),
         ("Transistor_FET", "Q_Dual_NMOS_PMOS_G1S2G2D2S1D1"),
         ("FPGA_Altera_MAX10", "10M04SCE144"),
