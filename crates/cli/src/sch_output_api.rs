@@ -43,7 +43,8 @@ pub(crate) fn page_of(design: &Design, path: &[&str]) -> Option<String> {
 
 /// The colour themes kicad-cli plots with, in the order the dialog's "Color theme:" lists them (`SETTINGS_MANAGER::GetColorSettingsList`, sorted
 /// by name): the two built-in ones (`COLOR_SETTINGS::CreateBuiltinColorSettings`), each by the key `--theme` takes and the name it shows. kicad-cli
-/// runs on a settings folder of its own (`eda_kicad_engine::cli_command`), so it knows no user or system theme.
+/// runs on a settings folder of its own (`eda_kicad_engine::cli_command`), so it knows no user or system theme. The dialog plots with KiCad
+/// Default unless one is chosen (`getColorSettings`: no selection is `COLOR_BUILTIN_DEFAULT`, dialog_plot_schematic.cpp:280-289).
 pub(crate) const THEMES: [(&str, &str); 2] = [("_builtin_classic", "KiCad Classic"), ("_builtin_default", "KiCad Default")];
 
 /// The Plot Schematic dialog's formats (`DIALOG_PLOT_SCHEMATIC::getPlotFileFormat`: Postscript, PDF, SVG, DXF, PNG) by kicad-cli's

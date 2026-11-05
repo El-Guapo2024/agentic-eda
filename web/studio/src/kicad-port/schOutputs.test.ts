@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { buildSchNetlistRequest, buildSchPlotRequest, DEFAULT_SCH_PLOT_FORM, SCH_COLOR_THEMES, SCH_NETLIST_FORMATS, SCH_PLOT_FORMATS, schPlotEnables, summarizeOutputs } from "./schOutputs";
 
 // X9 (r2-editors-exports): the dialog's own initial state, not SCH_PLOT_OPTS' constructor.
-test("the plot dialog starts as KiCad's: PDF, colour, the first theme, drawing sheet, no background colour, the PDF options on", () => {
+test("the plot dialog starts as KiCad's: PDF, colour, KiCad Default (getColorSettings with no selection), drawing sheet, no background colour, the PDF options on", () => {
   assert.deepEqual(buildSchPlotRequest(DEFAULT_SCH_PLOT_FORM), {
     format: "pdf",
     color: true,
-    theme: "_builtin_classic",
+    theme: "_builtin_default",
     plot_drawing_sheet: true,
     background: false,
     pdf_property_popups: true,

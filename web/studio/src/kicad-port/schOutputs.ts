@@ -23,7 +23,11 @@ export const SCH_PLOT_FORMATS: ReadonlyArray<{ id: SchPlotFormat; label: string 
 ];
 
 /** "Color theme:" -- `SETTINGS_MANAGER::GetColorSettingsList()`, sorted by name, of the themes kicad-cli knows (it runs with a settings folder of
- * its own, so the two built-in ones), by the key `--theme` takes. The choice starts at its first item (`m_colorTheme->SetSelection( 0 )`). */
+ * its own, so the two built-in ones), by the key `--theme` takes. Outside job mode the plot uses KiCad Default: `TransferDataToWindow` never
+ * selects a theme (the `SetSelection( 0 )` fallback at dialog_plot_schematic.cpp:123-124 is the job branch's, and the base's `SetSelection( 0 )`
+ * runs on the still empty choice), so `getColorSettings()` sees `selection < 0` and returns `::GetColorSettings( COLOR_BUILTIN_DEFAULT )`
+ * (dialog_plot_schematic.cpp:280-289; `COLOR_BUILTIN_DEFAULT = "_builtin_default"`, color_settings.cpp:34). The studio shows that theme
+ * selected rather than wx's blank choice. */
 export const SCH_COLOR_THEMES: ReadonlyArray<{ key: string; name: string }> = [
   { key: "_builtin_classic", name: "KiCad Classic" },
   { key: "_builtin_default", name: "KiCad Default" },
@@ -62,13 +66,13 @@ export interface SchPlotForm {
   currentSheetIds: string[];
 }
 
-/** What `DIALOG_PLOT_SCHEMATIC` starts with (`dialog_plot_schematic_base.cpp`): PDF (`m_plotFormatOpt->SetSelection( 1 )`), Color, the first
- * theme, "Plot drawing sheet" checked, "Plot background color" unchecked (`m_plotBackgroundColor` has no SetValue), the three PDF options
+/** What `DIALOG_PLOT_SCHEMATIC` starts with (`dialog_plot_schematic_base.cpp`): PDF (`m_plotFormatOpt->SetSelection( 1 )`), Color, KiCad
+ * Default (see `SCH_COLOR_THEMES`), "Plot drawing sheet" checked, "Plot background color" unchecked (`m_plotBackgroundColor` has no SetValue), the three PDF options
  * checked, 300 DPI anti-aliased. */
 export const DEFAULT_SCH_PLOT_FORM: SchPlotForm = {
   format: "pdf",
   color: true,
-  theme: "_builtin_classic",
+  theme: "_builtin_default",
   plotDrawingSheet: true,
   useBackgroundColor: false,
   pdfPropertyPopups: true,
