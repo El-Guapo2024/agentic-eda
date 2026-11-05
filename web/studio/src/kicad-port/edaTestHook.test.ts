@@ -113,7 +113,10 @@ test("the board and the schematic lists carry every kind the editors select", ()
 });
 
 test("the library editors' lists leave out items that have no id", () => {
-  assert.deepEqual(footprintLists({ pads: [{ id: "p1" }, {}], graphics: [{ id: "g1" }], texts: [{ id: "t1" }] }), { pad: ["p1"], graphic: ["g1"], text: ["t1"] });
+  const fp = footprintLists({ pads: [{ id: "p1" }, {}], graphics: [{ id: "g1" }], texts: [{ id: "t1" }], fields: [{ name: "MPN" }], items: { groups: [{ id: "grp_1" }, {}] }, display: { dimensions: [{ id: "dim_1" }] } });
+  assert.deepEqual([fp.pad, fp.graphic, fp.text, fp.group, fp.dimension, fp.zone], [["p1"], ["g1"], ["t1"], ["grp_1"], ["dim_1"], []]);
+  // the fields as the Footprint Editor's canvas names them (kicad-port/fpItems.ts): the Reference and the Value always
+  assert.deepEqual(fp.field, ["field:Reference", "field:Value", "field:MPN"]);
   assert.deepEqual(symbolLists({ pins: [{ id: "n1" }, { id: undefined }], graphics: [{ id: "g1" }] }), { pin: ["n1"], graphic: ["g1"] });
   assert.deepEqual(Object.values(footprintLists(null)).flat(), []);
   assert.deepEqual(Object.values(symbolLists(undefined)).flat(), []);
