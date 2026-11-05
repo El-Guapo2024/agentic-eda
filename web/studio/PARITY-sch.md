@@ -631,9 +631,8 @@ The pane was a read-only summary of one symbol (reference, value, footprint, MPN
 | Rectangle, circle, arc, Bezier, polygon, text box, rule area, directive label | **done** through `edit_graphic` (the graphic replaced in place, its id, order and lock kept): Locked; Start and End X/Y, Center X/Y, Radius, Width, Height, Corner Radius, Line Width, Line Style, Line Color, Fill and Fill Color (writeable for a colour fill) by kind; a text box's Text, Italic, Bold, justifications and Text Size; a rule area's four attributes; a directive label's Shape and Pin length | `SCH_SHAPE_DESC`, `SCH_TEXTBOX_DESC`, `SCH_RULE_AREA_DESC`, `SCH_DIRECTIVE_LABEL_DESC`, `EDA_SHAPE_DESC` |
 | A selection of several | **done**: the rows every item has; Locked for any mix; a lock, a value or an attribute set on several symbols is one batch, one Ctrl+Z; a reference is read-only for several | `PROPERTIES_PANEL::rebuildProperties` |
 
-**Approximations, and what is left.** What the IR has no place for is not registered: a label's font, bold, italic, size, justification and colour, a sheet's border and fill and its exclusion flags, a symbol's
-pin names and numbers shown and its description, extra fields and a field's own position (the overlap fix's), a text's orientation (KiCad masks it too; use `R`), a directive label's text, a text box's four margins,
-Unit and Body Style. Wire end points are read-only. A command made on this tab now refetches the sheet at once (`state/store.tsx:runCmd`), so a cell shows what the board answered without waiting for the poll.
+**Approximations, and what is left.** Since section 55 (2026-11-05, `task-u1-props`) every row KiCad 8303b2ad registers for these classes is registered (wired where the model has the value,
+read-only with the reason as the row's tooltip where it has not), and the symbol's and the sheet's fields are rows as `SCH_PROPERTIES_PANEL::rebuildProperties` adds them: see section 55. A command made on this tab now refetches the sheet at once (`state/store.tsx:runCmd`), so a cell shows what the board answered without waiting for the poll.
 Tests: `kicad-port/schItemProperties.ts` (25 cases: every class's list in order, the setters, several items). Verified in the browser on the scratch board of `PARITY-pcb.md` section 23 with one of every item added:
 symbol, power symbol, wire, bus entry, junction, three labels, text, graphic line, sheet, rectangle, circle, arc, polygon, text box, rule area and directive label, every editable row edited and undone to the exact sheet; three symbols given a value and a
 do-not-populate were one Ctrl+Z each; a symbol, a label, a text and a junction locked together were one Ctrl+Z (`e2e/properties-panel.check.js` repeats all of it on the Schematic tab).
@@ -1531,6 +1530,40 @@ placed with its definition, one undo taking both back, kicad-cli's ERC adding no
 a label turned through R, X, Y and Shift+R while it rides, a text turned and edited while it rides; Choose Power Symbol, GND turned and placed with
 KiCad's symbol; the keys; a label named from its wire and Repeat; Enter and End in the wire tool. `sch-edit.check.js` and `snap-grid.check.js` follow the
 new order.
+
+## 55. The Properties panel: every row of KiCad's registrations, and the fields as rows (UI-LEFT S7, GAPS.md item 10; KiCad 8303b2ad `eeschema/sch_item.cpp::SCH_ITEM_DESC`, `sch_symbol.cpp::SCH_SYMBOL_DESC` (`GetUnitDisplayName`, `GetBodyStyleDescription`, `SetShowPinNames`), `lib_symbol.cpp::LIB_SYMBOL_DESC` (the rows it gives `SYMBOL`), `common/eda_text.cpp::EDA_TEXT_DESC`, `sch_text.cpp::SCH_TEXT_DESC`, `sch_label.cpp` (`SCH_LABEL_DESC`, `SCH_DIRECTIVE_LABEL_DESC`, `SCH_LABEL_BASE::SetSpinStyle`, `GetSpinStyle`), `sch_line.cpp::SCH_LINE_DESC`, `sch_junction.cpp`, `sch_bus_entry.cpp`, `sch_sheet.cpp::SCH_SHEET_DESC`, `common/eda_shape.cpp::EDA_SHAPE_DESC` (`fillAvailable`), `sch_shape.cpp::SCH_SHAPE_DESC`, `sch_textbox.cpp::SCH_TEXTBOX_DESC`, `sch_rule_area.cpp`, `sch_bitmap.cpp::SCH_BITMAP_DESC`, `widgets/sch_properties_panel.cpp` (`rebuildProperties`, `SCH_SYMBOL_FIELD_PROPERTY`, `SCH_SHEET_FIELD_PROPERTY`); 2026-11-05, `task-u1-props`)
+
+Each schematic class lists the rows KiCad's registrations give it, in KiCad's groups and order: `kicad-port/schPropertiesKicad.test.ts` replays the C++ calls through the ported manager for the
+symbol, the text, the four labels, the line, the junction, the bus entry, the sheet, the shape, the text box, the rule area and the image. The fields are rows the way `rebuildProperties` adds them
+(`syncFieldRows`): every field of the selected symbols (and sheets) that no class registers becomes a row of "Fields", in `std::set` order the first time it is met and kept after (shown while a
+selection has the field), its value "" on a symbol without it; setting it there adds the field (`AddField`).
+
+| Class | Rows added, and how they are edited | KiCad |
+|---|---|---|
+| Symbol | SYMBOL's Pin numbers and Pin names (with a library symbol) and, from `LIB_SYMBOL_DESC`, **Pin Display**: Show Pin Number, Show Pin Name, Pin Name Position Offset -- read-only: the library symbol's, shared by every placement here; Library Description, Keywords (read-only, as KiCad's); Unit (the units by name or letter; read-only: no verb switches a placed unit); Body Style ("Standard", "Alternate"; `set_body_style`); Exclude From Position Files (`set_exclude_from_pos_files`, every placed unit of the reference); the fields as rows (Datasheet, Footprint, the user's: `edit_field`, `edit_symbol_fields`, `add_user_field`) in place of the old fixed Datasheet, Footprint and MPN rows; a power symbol's mirror and attributes are shown read-only | `SCH_SYMBOL_DESC`, `LIB_SYMBOL_DESC`, `SCH_SYMBOL_FIELD_PROPERTY` |
+| Free text | Font (read-only, "Default Font"), Auto Thickness (read-only), Italic, Bold, Color, Hyperlink -- `set_text_attrs` over `SchExtras::text_attrs`; Horizontal and Vertical Justification (`edit_text`) | `EDA_TEXT_DESC`, `SCH_TEXT_DESC` |
+| Labels | Font, Auto Thickness (read-only); Italic, Bold, Text Size (`edit_label`, Label Properties' look); Color (`set_text_attrs`); Horizontal Justification as the spin (`SetSpinStyle`: left against the anchor running right or up, right running left or down; "Center" is refused); Vertical Justification read-only (bottom); no Hyperlink (`SCH_LABEL_BASE_DESC` masks it) | `SCH_LABEL_DESC` |
+| Directive label | Font, Auto Thickness, Color, Text Size (read-only: its text size is not modelled); its Text, pen, Italic, Bold and justifications masked as KiCad masks them | `SCH_DIRECTIVE_LABEL_DESC` |
+| Wire, bus, graphic line | Start X/Y and End X/Y writeable (`set_line_ends`: the end goes there, nothing joined to it follows, as `SetStartX` does; the commit's clean-up merges, splits and puts junctions; a locked one is read-only); Length read-only (KiCad's `SetLength` moves the end along the line) | `SCH_LINE_DESC` |
+| Sheet | Border Width, Border Color, Background Color and the four attributes (read-only: a sheet's look and flags are not kept: UI-LEFT S8); **Fields**: Sheetfile and Sheetname rows, the Sheetfile the field's own text, not the root-relative key (B3-M1; writeable through `edit_sheet` for a sheet whose file has no folder of its own) | `SCH_SHEET_DESC`, `SCH_SHEET_FIELD_PROPERTY` |
+| Text box | Font, Auto Thickness, Mirrored, Color, Hyperlink (read-only); **Margins**: Margin Left, Top, Right, Bottom (read-only: the model keeps one margin for the four sides); Fill and Fill Color shown, read-only (`fillAvailable` gives a schematic text box them) | `SCH_TEXTBOX_DESC` |
+| Shape, rule area, image | Fill Mode registered (a symbol's shapes only: never on the sheet); a rule area's Fill and Fill Color shown, read-only (drawn as an outline); an image's Transform Offset X/Y (read-only: scaled about its centre) | `SCH_SHAPE_DESC`, `SCH_RULE_AREA_DESC`, `SCH_BITMAP_DESC` |
+
+The verbs (`crates/ops/src/sch_props.rs`, `SchCmd` in `sch_edit.rs`): `set_text_attrs` (a free text's bold, italic, colour and hyperlink; a label's colour; a label's bold or italic is refused, they are
+Label Properties'), `set_line_ends` (a wire's, a bus's or a graphic line's first and last point, then the clean-up for a wire), `set_exclude_from_pos_files`; each one undo step, refused when nothing
+changes. They set overlays the readers and writers already keep (`text_attrs`, `excluded_from_pos_files`). The state sends a text's `bold`, `italic`, `color`, `href`, a label's `color`, a symbol's
+`exclude_from_pos_files` and a library symbol's `keywords`. `inferSpin` moved to the pure `kicad-port/labelSpin.ts` (labelShape.ts re-exports it).
+
+**Differs, and what is left.**
+- Read-only here, editable in KiCad: a symbol's pin display (per placement in KiCad, per lib_id here: S10), its Unit, a sheet's border, background and attributes, a text box's margins, fill, colour and
+  hyperlink, a directive label's text size, an image's transform offset, a line's length, the font of every text, a sheet's own user fields, and the Sheetfile of a sheet in a folder of its own.
+- The Fill row of a schematic shape keeps the studio's FILL_T choices (none, body outline, body background, fill colour) where KiCad's `EDA_SHAPE` row shows `UI_FILL_MODE` (none, solid, the hatches).
+- KiCad's symbol has a Description field (KiCad 8's fifth mandatory field); the model has none, so there is no Description row.
+- The field rows stay registered once met (as KiCad's do), so their order across a session is the order they were first met.
+
+Tests: `kicad-port/schPropertiesKicad.test.ts` (15: the table, class by class), `schItemProperties.test.ts` (29, with the field rows, Unit and Body Style, the text and label rows and the sheet's
+fields), Rust `crates/ops/src/sch_props_tests.rs` (the three verbs). Browser: `e2e/props-rows.check.js` edits a free text's Bold and Hyperlink, a label's Text Size and Italic, a wire's End X and a
+symbol's Exclude From Position Files and checks the pin display's tooltip and the field rows, each read back from `/api/schematic` and undone (with the board half: `PARITY-pcb.md` section 67).
 
 ## Manual click-through needed
 

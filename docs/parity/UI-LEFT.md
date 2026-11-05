@@ -24,7 +24,7 @@ Notes:
 5. L1: saving into table libraries
 6. F1+F2: Footprint Editor fields and dimmed tools
 7. Y1: Symbol Editor Rotate
-8. P2/S7: Properties panel rows
+8. P2/S7: Properties panel rows -- **done (task-u1-props)**
 9. S3: Schematic Setup pages
 10. P8: zones
 11. S2: design variants
@@ -37,10 +37,10 @@ Notes:
   - One segment, straight edges, no track-to-track; no fit to other nets' clearance, no mask teardrops.
   - Not kept current as you edit: you re-run Add All Teardrops.
   - L. GAPS 8/13/35; PARITY-pcb §15, §62 D6-1, §66; r7 R7-1.
-- **P2 [BD] Properties panel.**
-  - No rows for padstacks, via tenting, backdrill and post-machining, text font, bold, italic, vertical justification and colour, shape line style and colour, mask expansion, per-item teardrops, or a footprint's clearance and paste margin.
-  - The reference, value, library link and wire ends are read-only, and a text's width is tied to its height.
-  - M. GAPS 10; PARITY-pcb §23.
+- **P2 [BD] Properties panel.** **done (task-u1-props)**: every class lists KiCad's registered rows in KiCad's groups and order (a test replays the C++); via tenting, covering, plugging, capping, filling, backdrill, post-machining, layers and type, track and shape solder mask, corner radius, text italic, bold, vertical justification, width apart from height, knockout and automatic pen, a pad's orientation, copper layers and overrides, a footprint's reference and (board-file) paste margins are edited; Component Type, which KiCad's panel lacks, is gone (PARITY-pcb §67). Left, read-only with the reason as the tooltip:
+  - Fonts, a shape's line style (P5), every teardrop row (P1's per-item parameters), a pad's number, pin name and type, post-machining, backdrill, fabrication property and pad-to-die, a dimension's label style.
+  - A footprint placed from the intent has no paste margin of its own; text colour is masked on board text, as in KiCad.
+  - M. GAPS 10; PARITY-pcb §23, §67.
 - **P3 [FM] Track & Via and Pad Properties.**
   - No via protection (IPC-4761 tenting, covering, plugging, filling), backdrill or post-machining.
   - No pad fabrication property, pin function or pad-to-die length.
@@ -195,11 +195,10 @@ Notes:
   - A free text's bold, italic and colour are kept but not drawn.
   - A label's own fields can't be clicked or moved, and a hand-moved one is autoplaced again.
   - M. GAPS 12; PARITY-sch §39, §52.
-- **S7 [BD] Properties panel.**
-  - No rows for label font, justification and colour, sheet border, fill and attributes, pin display, user fields, Unit or Body Style.
-  - Wire ends are read-only.
-  - Sheetfile shows the internal key (B3-M1).
-  - M. PARITY-sch §17, §30, §45.
+- **S7 [BD] Properties panel.** **done (task-u1-props)**: every class lists KiCad's registered rows (a test replays the C++), and the symbol's and sheet's fields are rows as KiCad's panel adds them; a label's size, bold, italic, colour and justification, a text's bold, italic, colour and hyperlink, wire ends, Body Style, Exclude From Position Files and user fields are edited; Sheetfile shows the field's own text (B3-M1) (PARITY-sch §55). Left, read-only with the reason as the tooltip:
+  - Fonts; a symbol's pin display (one library symbol per lib_id) and its Unit (no verb switches a placed unit).
+  - A sheet's border, fill and attributes (not kept: S8); a text box's margins, fill, colour and hyperlink; an image's transform offset.
+  - M. PARITY-sch §17, §30, §45, §55.
 - **S8 [FM] Hierarchy.**
   - The Navigator has no Edit Page Number, Rename, New or Delete Top-Level Sheet, and no net highlight.
   - A KiCad 10 project with several top-level sheets is folded under one root.
