@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { CmdShape, Shape } from "../api/types";
-import { healShapes, modifyLines, pointInRings, simplifyChain, simplifyPolygonRing, testSegmentHit } from "./pcbModify";
+import { healShapes, modifyLines, pointInRings, simplifyChain, simplifyPolygonRing, simplifyZoneContours, testSegmentHit } from "./pcbModify";
 import { modifyResultCmds } from "./shapeFill";
 
 const seg = (id: string, ax: number, ay: number, bx: number, by: number, layer = "F.SilkS", w = 150): Shape => ({ kind: "segment", id, layer, stroke_width: w, filled: false, start: [ax, ay], end: [bx, by] });
@@ -191,6 +191,24 @@ test("simplifyPolygonRing returns null when nothing changed and the new ring in 
   const out = simplifyPolygonRing(noisy, 5);
   assert.ok(out);
   assert.equal(out!.length, 4);
+});
+
+test("Simplify on a zone simplifies its holes too (SimplifyOutlines: every contour); a hole that degenerates goes", () => {
+  const square: [number, number][] = [[0, 0], [10000, 0], [10000, 10000], [0, 10000]];
+  const hole: [number, number][] = [[2000, 2000], [3000, 2002], [4000, 2000], [4000, 4000], [2000, 4000]];
+  assert.equal(simplifyZoneContours(square, [[[2000, 2000], [4000, 2000], [4000, 4000]]], 5), null, "nothing to simplify");
+  const out = simplifyZoneContours(square, [hole], 5)!;
+  assert.deepEqual(out.outline, square, "the outline, already simple, is as it was");
+  assert.deepEqual(out.holes, [[[2000, 2000], [4000, 2000], [4000, 4000], [2000, 4000]]]);
+  // a sliver hole of three nearly collinear corners simplifies away
+  const sliver: [number, number][] = [[6000, 6000], [7000, 6001], [8000, 6000]];
+  const gone = simplifyZoneContours(square, [hole, sliver], 5)!;
+  assert.equal(gone.holes.length, 1);
+  // an outline that is noisy is simplified while its hole stays
+  const noisy: [number, number][] = [[0, 0], [5000, 2], [10000, 0], [10000, 10000], [0, 10000]];
+  const both = simplifyZoneContours(noisy, [hole.slice(0, 1).concat(hole.slice(2))], 5)!;
+  assert.equal(both.outline.length, 4);
+  assert.equal(both.holes[0]!.length, 4);
 });
 
 test("heal shapes: two lines with a small gap are joined at the intersection of their lines (ConnectBoardShapes)", () => {

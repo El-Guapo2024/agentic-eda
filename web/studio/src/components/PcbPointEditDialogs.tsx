@@ -2,12 +2,13 @@
 //
 //   PointEntryDialog     WX_PT_ENTRY_DIALOG ("Move Corner to Location" / "Move Midpoint to Location"): X and Y.
 //   VertexEditorPane     PCB_VERTEX_EDITOR_PANE ("Edit Vertices", pcbnew/widgets/vertex_editor_pane.cpp): a floating table of the
-//                        selected polygon's or zone's vertices; each edited cell is its own undo step ("Edit Vertex"), and the
+//                        selected polygon's or zone's vertices (a zone's holes' too, `CIterateWithHoles`); each edited cell is its own undo step ("Edit Vertex"), and the
 //                        table follows the selection.
 import { useMemo, useState } from "react";
 import { closeSweepDialog } from "../actions/pcbSweepDialogs";
 import { applyCommands } from "../actions/pcbSweepKit";
 import { shapeToCmd } from "../kicad-port/pcbPointEdit";
+import { flatVertices, moveContourCorner, zoneContours, zoneOutlineCmd } from "../kicad-port/zonePointEditor";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { DialogShell, LengthRow, lengthText, parseLength, useLengthField } from "./pcbDialogKit";
 
@@ -34,17 +35,27 @@ type Ring = [number, number][];
 interface VertexItem {
   kind: "zone" | "shape";
   id: string;
+  /** Every vertex, in `CIterateWithHoles` order: a zone's outline, then each of its holes. */
   ring: Ring;
+  /** The contours the vertices belong to (`ring` is them one after the other): one for a polygon shape, the outline and each hole for a zone. */
+  contours: Ring[];
 }
 
-/** `getPoly()`: the outline of the one selected zone or polygon shape. */
+/** `getPoly()`: the outline of the one selected zone (with its holes, `ZONE::Outline()`) or polygon shape. */
 function vertexItemOf(board: ReturnType<typeof useStudioState>["board"], selection: ReadonlySet<string>): VertexItem | null {
   if (!board || selection.size !== 1) return null;
   const id = [...selection][0]!;
   const zone = board.routing?.zones.find((z) => z.id === id);
-  if (zone) return zone.teardrop ? null : { kind: "zone", id, ring: zone.outline.map((p) => [p[0], p[1]] as [number, number]) };
+  if (zone) {
+    if (zone.teardrop) return null;
+    const contours = zoneContours(zone);
+    return { kind: "zone", id, ring: flatVertices(contours), contours };
+  }
   const shape = board.drawings?.shapes.find((s) => s.id === id);
-  if (shape?.kind === "polygon") return { kind: "shape", id, ring: shape.pts.map((p) => [p[0], p[1]] as [number, number]) };
+  if (shape?.kind === "polygon") {
+    const ring = shape.pts.map((p) => [p[0], p[1]] as [number, number]);
+    return { kind: "shape", id, ring, contours: [ring] };
+  }
   return null;
 }
 
@@ -71,7 +82,8 @@ export function VertexEditorPane() {
     const ring = item.ring.map((p) => [p[0], p[1]] as [number, number]);
     ring[i]![axis] = value;
     if (item.kind === "zone") {
-      await api.cmd({ op: "set_zone_outline", id: item.id, outline: ring.map(([x, y]) => ({ x, y })) });
+      // `poly->SetVertex( idx, vertex )` on the vertex's own contour: one "Edit Vertex" step, the holes sent when the zone has them
+      await api.cmd(zoneOutlineCmd(item.id, moveContourCorner(item.contours, i, ring[i]![0], ring[i]![1]), item.contours.length > 1));
       return;
     }
     const shape = api.shapeById(item.id);

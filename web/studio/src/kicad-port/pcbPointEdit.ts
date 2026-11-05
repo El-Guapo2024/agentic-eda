@@ -1,6 +1,6 @@
 // Port of the point editor behind pcbnew's corner actions (pcbnew/tools/pcb_point_editor.cpp and
 // common/tool/point_editor_behavior.cpp at 8303b2ad): the edit points of a graphic shape, a polygon or
-// a zone outline, which of them is "active" under the pointer, and what moving one to a place does --
+// a zone outline (with its holes), which of them is "active" under the pointer, and what moving one to a place does --
 // the segment / circle / rectangle / curve / polygon behaviours and the three arc editing modes
 // (`ARC_EDIT_MODE`), plus the polygon corner operations (Remove Corner, Chamfer Corner).
 //
@@ -11,6 +11,7 @@
 
 import type { CmdShape, Shape } from "../api/types";
 import { arcCenter, arcReversed, computeChamferPoints, eq, fromIU, kiRound, norm, resize, rotatePoint, segIntersect, segNearestPoint, toIU, vadd, vsub, angleOf, type Arc, type V } from "./pcbGeom";
+import { relativeIndex } from "./zonePointEditor";
 
 type P = [number, number];
 
@@ -33,6 +34,26 @@ export function ringEditPoints(ring: readonly P[]): EditPoint[] {
     const a = ring[i]!;
     const b = ring[(i + 1) % ring.length]!;
     out.push({ id: `m${i}`, kind: "midpoint", pos: [Math.trunc((a[0] + b[0]) / 2), Math.trunc((a[1] + b[1]) / 2)] });
+  }
+  return out;
+}
+
+/**
+ * The edit points of a polygon with holes (a zone's outline and holes, `zoneContours`): `POLYGON_POINT_EDIT_BEHAVIOR::BuildForPolyOutline` over
+ * `CIterateWithHoles` -- a point per vertex of every contour (`v<global index>`), then a line per side (`m<i>`: the side from vertex `i` to the next of its
+ * contour, the contour's last vertex back to its first, `IsContourEnd` / `GetContourStartIdx`). One contour gives what [`ringEditPoints`] gives.
+ */
+export function contourEditPoints(contours: readonly (readonly P[])[]): EditPoint[] {
+  const out: EditPoint[] = [];
+  let g = 0;
+  for (const ring of contours) for (const p of ring) out.push({ id: `v${g++}`, kind: "corner", pos: [p[0], p[1]] });
+  g = 0;
+  for (const ring of contours) {
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i]!;
+      const b = ring[(i + 1) % ring.length]!;
+      out.push({ id: `m${g++}`, kind: "midpoint", pos: [Math.trunc((a[0] + b[0]) / 2), Math.trunc((a[1] + b[1]) / 2)] });
+    }
   }
   return out;
 }
@@ -171,6 +192,56 @@ export function chamferCorner(ring: readonly P[], index: number): P[] | null {
   const out = ring.map((p) => [p[0], p[1]] as P);
   out.splice(index, 1, fromIU(res.updatedA.b), fromIU(res.updatedB.b));
   return out;
+}
+
+// --------------------------------------------------------------- polygons with holes (zones)
+
+/**
+ * [`moveRingPoint`] on a polygon with holes (`contourEditPoints`' ids): a vertex `v<i>` of any contour is set (`SHAPE_POLY_SET::SetVertex( i, .. )`), a
+ * side `m<i>` carries both its ends, the second being the next vertex of the same contour. Null when the point names no vertex or side.
+ */
+export function moveContourPoint(contours: readonly (readonly P[])[], point: EditPoint, to: readonly [number, number]): P[][] | null {
+  const kind = point.id[0];
+  if (kind !== "v" && kind !== "m") return null;
+  const at = relativeIndex(contours, Number(point.id.slice(1)));
+  if (!at) return null;
+  const local: EditPoint = { ...point, id: `${kind}${at.index}` };
+  const moved = moveRingPoint(contours[at.contour]!, local, to);
+  if (!moved) return null;
+  return contours.map((c, i) => (i === at.contour ? moved : c.map((p) => [p[0], p[1]] as P)));
+}
+
+/**
+ * `chamferCorner`'s search: the vertex nearest `at` over every contour, holes included (`Iterate( 0, OutlineCount() - 1, IterateHoles = true )`,
+ * `CVertex( curr_idx ).Distance( cursorPos )` with a strict `<`, so the first of equally near vertices): a global index.
+ */
+export function nearestContourVertex(contours: readonly (readonly P[])[], at: readonly [number, number]): number {
+  let best = 0;
+  let bestD = Infinity;
+  let g = 0;
+  for (const ring of contours) {
+    for (const p of ring) {
+      const d = Math.hypot(p[0] - at[0], p[1] - at[1]);
+      if (d < bestD) {
+        bestD = d;
+        best = g;
+      }
+      g++;
+    }
+  }
+  return best;
+}
+
+/**
+ * `chamferCorner` on global vertex `global` of a polygon with holes: its neighbours are the ones of its own contour (`GetNeighbourIndexes`), and the two chamfer
+ * ends take its place in that contour (`RemoveVertex( nearestIdx )`, then `InsertVertex( nearestIdx, .. )` twice). Null when it cannot be chamfered.
+ */
+export function chamferContourCorner(contours: readonly (readonly P[])[], global: number): P[][] | null {
+  const at = relativeIndex(contours, global);
+  if (!at) return null;
+  const ring = chamferCorner(contours[at.contour]!, at.index);
+  if (!ring) return null;
+  return contours.map((c, i) => (i === at.contour ? ring : c.map((p) => [p[0], p[1]] as P)));
 }
 
 // ------------------------------------------------------------------------------ arc editing
