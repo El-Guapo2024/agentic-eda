@@ -158,6 +158,9 @@ pub(crate) fn pad_json(design: &Design, model: &ConstraintModel, fp: &FootprintI
         // A plated through-hole pad that removes the layers nothing connects it on (`remove_unused_layers`): the copper layers it has copper on, what the
         // connectivity says (`eda_connectivity::flashed_layers`).
         "flashed": flashed_here,
+        // `PAD::GetPinFunction`, `GetPinType`: the schematic pin's, as the board file is written with them (`updateComponentPadConnections`).
+        "pin_function": model.symbol_links.get(&fp.id).and_then(|l| l.pins.get(&pad.number)).map(|(f, _)| f).filter(|f| !f.is_empty()),
+        "pin_type": model.symbol_links.get(&fp.id).and_then(|l| l.pins.get(&pad.number)).map(|(_, t)| t).filter(|t| !t.is_empty()),
     })
 }
 

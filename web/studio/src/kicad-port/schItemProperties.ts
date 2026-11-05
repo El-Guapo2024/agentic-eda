@@ -13,15 +13,19 @@
 // points, a symbol's fields) it is read-only here: the field positions are the overlap fix's, and a wire's end points are dragged (`G`) so what they join follows.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardTable, BoardTableCell, Cmd, LabelShape, PointXY, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire, PowerSymbol, SchJunction, SchLine, BusEntry, Sheet } from "../api/types";
+import type { BoardTable, BoardTableCell, Cmd, LabelShape, LibSymbol, PointXY, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire, PowerSymbol, SchJunction, SchLine, BusEntry, Sheet } from "../api/types";
 import type { SchColor, SchGraphic, SchGraphicShape, SchLineStyle } from "../api/schEditTypes";
 import type { LengthUnit } from "../state/units";
 import { buildGrid, extractValueAndWritability, planEdit, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
 import { colorToHex, hexToColor, isUnspecified, strokeEditCmd, UNSPECIFIED_COLOR } from "./schProperties";
+import { inferSpin, type LabelSpin } from "./labelSpin";
 import { circumcircle } from "./trackArc";
 import { DEFAULT_PPI, imageSizeNm, SCALE_PPM, scaleForHeightNm, scaleForWidthNm } from "./refImage";
 import { registerSchTableProperties, schTableItemOf } from "./schTableProperties";
+import { defaultTextBoxMargin } from "./schTextBox";
+import { unitCountOf } from "./schUnits";
+import { letterSubReference } from "./unitLetter";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -336,6 +340,8 @@ const FILL_CHOICES: Choice[] = [
 ];
 
 const ATTRIBUTES = "Attributes";
+/** A label's text with no size of its own: 50 mil (`LabelLook::text_size_nm`). */
+const LABEL_SIZE_NM = 1_270_000;
 const TEXT_PROPS = "Text Properties";
 const SHAPE_PROPS = "Shape Properties";
 
@@ -354,8 +360,31 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   });
 
   // ------------------------------------------------------------------------------------------------------------- SCH_SYMBOL
+  // `SCH_ITEM_DESC`'s Unit, Body Style and Private are the Symbol Editor's (`SetIsHiddenFromDesignEditors`): no rows here.
+  add({ owner: "SCH_ITEM", name: "Unit", kind: "string", hiddenFromDesignEditors: true, get: () => "" });
+  add({ owner: "SCH_ITEM", name: "Body Style", kind: "string", hiddenFromDesignEditors: true, get: () => "" });
+  add({ owner: "SCH_ITEM", name: "Private", kind: "bool", hiddenFromDesignEditors: true, get: () => false });
+
+  // `SCH_SYMBOL_DESC`: SYMBOL's two pin rows, then the symbol's own; `LIB_SYMBOL_DESC` adds three more of SYMBOL's ("Pin Display"), which a placed symbol has too.
+  pm.inheritsAfter("SCH_SYMBOL", "SYMBOL");
   pm.inheritsAfter("SCH_SYMBOL", "SCH_ITEM");
   const isReal = (i: SchItem): boolean => !!i.symbol;
+  const libOf = (i: SchItem, c: SchCtx): LibSymbol | undefined => {
+    const id = i.symbol?.lib_id ?? i.power?.lib_id;
+    return id ? c.sch.lib_symbols[id] : undefined;
+  };
+  // `SCH_SYMBOL::SetShowPinNames` and kin set the placement's own copy of its library symbol; here one library symbol of a lib_id serves every placement.
+  const PIN_DISPLAY_REASON = "The pin display is the library symbol's, shared by every placement of it here (one library symbol per lib_id): set it in the Symbol Editor.";
+  // `hasLibPart`
+  const hasLibPart = (i: SchItem, c: SchCtx): boolean => !!libOf(i, c);
+  add({ owner: "SYMBOL", name: "Pin numbers", kind: "bool", get: (i, c) => !libOf(i, c)?.pin_numbers_hidden, available: hasLibPart, readOnlyReason: PIN_DISPLAY_REASON });
+  add({ owner: "SYMBOL", name: "Pin names", kind: "bool", get: (i, c) => !libOf(i, c)?.pin_names_hidden, available: hasLibPart, readOnlyReason: PIN_DISPLAY_REASON });
+  const PIN_DISPLAY = "Pin Display";
+  add({ owner: "SYMBOL", name: "Show Pin Number", kind: "bool", get: (i, c) => !libOf(i, c)?.pin_numbers_hidden, readOnlyReason: PIN_DISPLAY_REASON }, PIN_DISPLAY);
+  add({ owner: "SYMBOL", name: "Show Pin Name", kind: "bool", get: (i, c) => !libOf(i, c)?.pin_names_hidden, readOnlyReason: PIN_DISPLAY_REASON }, PIN_DISPLAY);
+  // `GetPinNameOffset`, the library's `(pin_names (offset ..))` (mm in the state): KiCad's default 20 mils.
+  add({ owner: "SYMBOL", name: "Pin Name Position Offset", kind: "int", display: "size", get: (i, c) => Math.round((libOf(i, c)?.pin_name_offset ?? 0.508) * 1_000_000), readOnlyReason: PIN_DISPLAY_REASON }, PIN_DISPLAY);
+
   /** `FilterSelectionForLockedItems`: `sch_move` leaves a locked item where it is and refuses to move nothing. */
   const unlocked = (i: SchItem, c: SchCtx): boolean => !c.locked.has(i.id);
   const move = (axis: 0 | 1) => (i: SchItem, v: PropValue, c: SchCtx): Cmd[] => {
@@ -363,8 +392,9 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     const delta = Math.round(num(v)) - at[axis];
     return delta === 0 ? [] : [{ op: "sch_move", verb: "move", ids: [symbolTarget(i, c)], dx: axis === 0 ? delta : 0, dy: axis === 1 ? delta : 0 }];
   };
-  add({ owner: "SCH_SYMBOL", name: "Position X", kind: "int", display: "coord", get: (i) => posOf(i)[0], writeable: unlocked, set: move(0) });
-  add({ owner: "SCH_SYMBOL", name: "Position Y", kind: "int", display: "coord", get: (i) => posOf(i)[1], writeable: unlocked, set: move(1) });
+  const LOCKED = "The item is locked: unlock it to move it.";
+  add({ owner: "SCH_SYMBOL", name: "Position X", kind: "int", display: "coord", get: (i) => posOf(i)[0], writeable: unlocked, readOnlyReason: LOCKED, set: move(0) });
+  add({ owner: "SCH_SYMBOL", name: "Position Y", kind: "int", display: "coord", get: (i) => posOf(i)[1], writeable: unlocked, readOnlyReason: LOCKED, set: move(1) });
   add({
     owner: "SCH_SYMBOL",
     name: "Orientation",
@@ -381,12 +411,14 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     },
   });
   // KiCad's flag names: "Mirror X" is the symbol flipped about the X axis (`SYM_MIRROR_X`, the `Y` key); the state calls it `mirror: "x"`.
+  const NO_MIRROR = "A power symbol is not mirrored here: it turns about its anchor.";
   add({
     owner: "SCH_SYMBOL",
     name: "Mirror X",
     kind: "bool",
     get: (i) => i.symbol?.mirror === "x",
-    available: isReal,
+    writeable: isReal,
+    readOnlyReason: NO_MIRROR,
     set: (i, v) => (i.symbol!.mirror === "x" === Boolean(v) ? [] : [{ op: "mirror_symbol_vertical", id: i.symbol!.id, unit: i.symbol!.unit }]),
   });
   add({
@@ -394,7 +426,8 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     name: "Mirror Y",
     kind: "bool",
     get: (i) => i.symbol?.mirror === "y",
-    available: isReal,
+    writeable: isReal,
+    readOnlyReason: NO_MIRROR,
     set: (i, v) => (i.symbol!.mirror === "y" === Boolean(v) ? [] : [{ op: "mirror_symbol", id: i.symbol!.id, unit: i.symbol!.unit }]),
   });
 
@@ -407,31 +440,54 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       kind: "string",
       get: (i) => i.symbol?.id ?? i.power?.id ?? "",
       writeable: (i, c) => isReal(i) && c.count === 1,
+      readOnlyReason: (i) => (i.power ? "A power symbol's reference is not edited: its value is the net it stands for." : "Two symbols cannot share a reference: rename them one at a time."),
       validate: (v) => (String(v).trim() === "" ? "A reference cannot be empty." : null),
       set: (i, v) => (!i.symbol || i.symbol.id === String(v).trim() ? [] : [{ op: "rename_symbol", id: i.symbol.id, new_id: String(v).trim() }]),
     },
     FIELDS
   );
-  const field = (name: string, key: "value" | "footprint" | "datasheet", power?: (p: PowerSymbol) => string): void => {
-    add(
-      {
-        owner: "SCH_SYMBOL",
-        name,
-        kind: "string",
-        get: (i) => (i.symbol ? (i.symbol[key] ?? "") : i.power && power ? power(i.power) : ""),
-        available: power ? undefined : isReal,
-        writeable: isReal,
-        set: (i, v) => (!i.symbol || (i.symbol[key] ?? "") === String(v) ? [] : [{ op: "edit_symbol_fields", id: i.symbol.id, [key]: String(v) } as Cmd]),
-      },
-      FIELDS
-    );
-  };
-  field("Value", "value", (p) => p.net);
+  add(
+    {
+      owner: "SCH_SYMBOL",
+      name: "Value",
+      kind: "string",
+      get: (i) => (i.symbol ? (i.symbol.value ?? "") : (i.power?.net ?? "")),
+      writeable: isReal,
+      readOnlyReason: "A power symbol's value is the net it stands for: edit its Value field.",
+      set: (i, v) => (!i.symbol || (i.symbol.value ?? "") === String(v) ? [] : [{ op: "edit_symbol_fields", id: i.symbol.id, value: String(v) }]),
+    },
+    FIELDS
+  );
   add({ owner: "SCH_SYMBOL", name: "Library Link", kind: "string", get: (i) => i.symbol?.lib_id ?? i.power?.lib_id ?? "" }, FIELDS);
-  // The fields a symbol has as rows are added by name by `SCH_PROPERTIES_PANEL::rebuildProperties`, sorted: Datasheet, Footprint, MPN here.
-  field("Datasheet", "datasheet");
-  field("Footprint", "footprint");
-  add({ owner: "SCH_SYMBOL", name: "MPN", kind: "string", get: (i) => i.symbol?.mpn ?? "", available: (i) => !!i.symbol?.mpn }, FIELDS);
+  add({ owner: "SCH_SYMBOL", name: "Library Description", kind: "string", get: (i, c) => libOf(i, c)?.description ?? "" }, FIELDS);
+  add({ owner: "SCH_SYMBOL", name: "Keywords", kind: "string", get: (i, c) => libOf(i, c)?.keywords ?? "" }, FIELDS);
+  // "Unit" (`SetUnitProp`, `multiUnit`): the units by display name (`GetUnitDisplayName`: the unit's name, else its letter). No verb switches a placed unit.
+  add({
+    owner: "SCH_SYMBOL",
+    name: "Unit",
+    kind: "enum",
+    choices: (i, c) => {
+      const lib = libOf(i, c);
+      return Array.from({ length: unitCountOf(lib) }, (_, k) => ({ label: lib?.unit_names?.[String(k + 1)] ?? letterSubReference(k + 1), value: k + 1 }));
+    },
+    get: (i) => i.symbol?.unit ?? 1,
+    available: (i, c) => isReal(i) && unitCountOf(libOf(i, c)) > 1,
+    readOnlyReason: "No verb switches a placed unit to another here (the sheet keys a placement by its unit): place the other unit with Place Next Unit.",
+  });
+  // "Body Style" (`SetBodyStyleProp`, `multiBodyStyle`): "Standard" and "Alternate" for a De Morgan symbol (`GetBodyStyleDescription`), `set_body_style`.
+  const BODY_STYLES = ["Standard", "Alternate"];
+  add({
+    owner: "SCH_SYMBOL",
+    name: "Body Style",
+    kind: "enum",
+    choices: () => BODY_STYLES.map((label) => ({ label, value: label })),
+    get: (i) => BODY_STYLES[(i.symbol?.body_style ?? 1) - 1] ?? "Standard",
+    available: (i, c) => isReal(i) && (libOf(i, c)?.body_style_count ?? 1) > 1,
+    set: (i, v) => {
+      const style = BODY_STYLES.indexOf(String(v)) + 1;
+      return style < 1 || style === (i.symbol!.body_style ?? 1) ? [] : [{ op: "sch_edit", verb: "set_body_style", ids: [i.symbol!.id], style }];
+    },
+  });
 
   const attribute = (name: string, key: "exclude_from_sim" | "exclude_from_bom" | "exclude_from_board" | "dnp"): void => {
     add(
@@ -439,8 +495,9 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         owner: "SCH_SYMBOL",
         name,
         kind: "bool",
-        get: (i) => !!i.symbol![key],
-        available: isReal,
+        get: (i) => !!i.symbol?.[key],
+        writeable: isReal,
+        readOnlyReason: "A power symbol has no attributes of its own here.",
         set: (i, v) => (!!i.symbol![key] === Boolean(v) ? [] : [{ op: "set_symbol_attrs", ids: [i.symbol!.id], [key]: Boolean(v) } as Cmd]),
       },
       ATTRIBUTES
@@ -449,12 +506,32 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   attribute("Exclude From Simulation", "exclude_from_sim");
   attribute("Exclude From Bill of Materials", "exclude_from_bom");
   attribute("Exclude From Board", "exclude_from_board");
+  add(
+    {
+      owner: "SCH_SYMBOL",
+      name: "Exclude From Position Files",
+      kind: "bool",
+      get: (i) => !!i.symbol?.exclude_from_pos_files,
+      writeable: isReal,
+      readOnlyReason: "A power symbol has no attributes of its own here.",
+      set: (i, v) => (!!i.symbol!.exclude_from_pos_files === Boolean(v) ? [] : [{ op: "sch_edit", verb: "set_exclude_from_pos_files", ids: [i.symbol!.id], exclude: Boolean(v) }]),
+    },
+    ATTRIBUTES
+  );
   attribute("Do not Populate", "dnp");
 
   // ---------------------------------------------------------------------------------------------------------- EDA_TEXT, SCH_TEXT
+  // `EDA_TEXT_DESC` (common/eda_text.cpp) over a free text (`text`), a label (`label`), a text box (`graphic` text_box) and a directive label: a free text's
+  // bold, italic, colour and hyperlink are its `text_attrs` (`set_text_attrs`), its size and justification `edit_text`'s; a label's size, bold and italic are
+  // Label Properties' (`edit_label`), its colour its `text_attrs`; a text box's are its shape's.
   pm.registerType("EDA_TEXT");
   const isTextBox = (i: SchItem): boolean => i.graphic?.shape.type === "text_box";
   const textBox = (i: SchItem): Extract<SchGraphicShape, { type: "text_box" }> => i.graphic!.shape as Extract<SchGraphicShape, { type: "text_box" }>;
+  const attrsCmd = (i: SchItem, patch: { bold?: boolean; italic?: boolean; color?: SchColor; href?: string }): Cmd => ({ op: "sch_edit", verb: "set_text_attrs", ids: [i.id], ...patch });
+  const labelCmd = (i: SchItem, patch: { size_nm?: number; bold?: boolean; italic?: boolean; spin?: LabelSpin }): Cmd => ({ op: "sch_edit", verb: "edit_label", id: i.id, ...patch });
+  const BOX_REASON = "A text box's font colour and hyperlink are kept as the file had them, not shown or edited here.";
+  // Orientation: every schematic text masks it ("Orientation is exposed differently in schematic").
+  add({ owner: "EDA_TEXT", name: "Orientation", kind: "double", display: "degree", get: () => 0 });
   add(
     {
       owner: "EDA_TEXT",
@@ -472,21 +549,42 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     },
     TEXT_PROPS
   );
-  const boxFlag = (name: string, key: "italic" | "bold"): void => {
+  // "Font" (`GetFontProp`): eeschema's "Default Font" first. The model keeps no face for a schematic text.
+  add({ owner: "EDA_TEXT", name: "Font", kind: "string", get: () => "Default Font", readOnlyReason: "The model keeps no font face for a schematic text: KiCad's default font is drawn." }, TEXT_PROPS);
+  /** Bold, the way each kind keeps it. */
+  const boldOf = (i: SchItem): boolean => !!(i.text?.bold ?? i.label?.bold ?? (isTextBox(i) ? textBox(i).bold : false));
+  // "Auto Thickness": a schematic text has no pen of its own here -- KiCad's for its size, `GetPenSizeForBold` once bold (`EDA_TEXT::SetBold`).
+  add({ owner: "EDA_TEXT", name: "Auto Thickness", kind: "bool", get: (i) => !boldOf(i), readOnlyReason: "A schematic text keeps no pen of its own here: KiCad's for its size (a bold one's is GetPenSizeForBold)." }, TEXT_PROPS);
+  add({ owner: "EDA_TEXT", name: "Thickness", kind: "int", display: "size", get: () => 0 }, TEXT_PROPS);
+  const flag = (name: "Italic" | "Bold", key: "italic" | "bold"): void => {
     add(
       {
         owner: "EDA_TEXT",
         name,
         kind: "bool",
-        get: (i) => !!textBox(i)[key],
-        available: isTextBox,
-        set: (i, v) => (!!textBox(i)[key] === Boolean(v) ? [] : [withShape(i.graphic!, { ...textBox(i), [key]: Boolean(v) })]),
+        get: (i) => !!(i.text?.[key] ?? i.label?.[key] ?? (isTextBox(i) ? textBox(i)[key] : false)),
+        set: (i, v) => {
+          const on = Boolean(v);
+          if (i.text) return !!i.text[key] === on ? [] : [attrsCmd(i, { [key]: on })];
+          if (i.label) return !!i.label[key] === on ? [] : [labelCmd(i, { [key]: on })];
+          if (isTextBox(i)) return !!textBox(i)[key] === on ? [] : [withShape(i.graphic!, { ...textBox(i), [key]: on })];
+          return [];
+        },
       },
       TEXT_PROPS
     );
   };
-  boxFlag("Italic", "italic");
-  boxFlag("Bold", "bold");
+  flag("Italic", "italic");
+  flag("Bold", "bold");
+  // A text box has the row (`SCH_TEXTBOX_DESC` masks the width, height and pen, not the mirror); no schematic text is mirrored here.
+  add({ owner: "EDA_TEXT", name: "Mirrored", kind: "bool", get: () => false, readOnlyReason: "A schematic text box is not mirrored here." }, TEXT_PROPS);
+  add({ owner: "EDA_TEXT", name: "Visible", kind: "bool", get: () => true, available: () => false }, TEXT_PROPS);
+  add({ owner: "EDA_TEXT", name: "Width", kind: "int", display: "size", get: () => 0 }, TEXT_PROPS);
+  add({ owner: "EDA_TEXT", name: "Height", kind: "int", display: "size", get: () => 0 }, TEXT_PROPS);
+  // A label's justification is the side of its anchor it runs to (`SCH_LABEL_BASE::SetSpinStyle`: left against the anchor when it runs right or up, right when
+  // it runs left or down, and bottom); its spin, when none was set, is read off the wire it ends on.
+  const spinOf = (i: SchItem, c: SchCtx): LabelSpin => i.label!.spin ?? inferSpin(c.sch.wires, i.label!.at);
+  const labelHJ = (i: SchItem, c: SchCtx): "left" | "right" => (spinOf(i, c) === "right" || spinOf(i, c) === "up" ? "left" : "right");
   add(
     {
       owner: "EDA_TEXT",
@@ -497,9 +595,18 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         { label: "Center", value: "center" },
         { label: "Right", value: "right" },
       ],
-      get: (i) => textBox(i).h_align ?? "left",
-      available: isTextBox,
-      set: (i, v) => ((textBox(i).h_align ?? "left") === v ? [] : [withShape(i.graphic!, { ...textBox(i), h_align: String(v) as "left" | "center" | "right" })]),
+      get: (i, c) => (i.text ? (i.text.h ?? "left") : i.label ? labelHJ(i, c) : isTextBox(i) ? (textBox(i).h_align ?? "left") : "left"),
+      validate: (v, i) => (i.label && v === "center" ? "A label is justified left or right of its anchor (the side it runs to)." : null),
+      set: (i, v, c) => {
+        if (i.text) return (i.text.h ?? "left") === v ? [] : [{ op: "sch_edit", verb: "edit_text", id: i.id, h: String(v) as "left" | "center" | "right" }];
+        if (i.label) {
+          if (labelHJ(i, c) === v) return [];
+          const vertical = spinOf(i, c) === "up" || spinOf(i, c) === "bottom";
+          return [labelCmd(i, { spin: v === "left" ? (vertical ? "up" : "right") : vertical ? "bottom" : "left" })];
+        }
+        if (isTextBox(i)) return (textBox(i).h_align ?? "left") === v ? [] : [withShape(i.graphic!, { ...textBox(i), h_align: String(v) as "left" | "center" | "right" })];
+        return [];
+      },
     },
     TEXT_PROPS
   );
@@ -513,16 +620,49 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         { label: "Center", value: "center" },
         { label: "Bottom", value: "bottom" },
       ],
-      get: (i) => textBox(i).v_align ?? "top",
-      available: isTextBox,
-      set: (i, v) => ((textBox(i).v_align ?? "top") === v ? [] : [withShape(i.graphic!, { ...textBox(i), v_align: String(v) as "top" | "center" | "bottom" })]),
+      get: (i) => (i.text ? (i.text.v ?? "bottom") : i.label ? "bottom" : isTextBox(i) ? (textBox(i).v_align ?? "top") : "bottom"),
+      writeable: (i) => !i.label,
+      readOnlyReason: "A label sits on its anchor: its vertical justification is bottom (SetSpinStyle).",
+      set: (i, v) => {
+        if (i.text) return (i.text.v ?? "bottom") === v ? [] : [{ op: "sch_edit", verb: "edit_text", id: i.id, v: String(v) as "top" | "center" | "bottom" }];
+        if (isTextBox(i)) return (textBox(i).v_align ?? "top") === v ? [] : [withShape(i.graphic!, { ...textBox(i), v_align: String(v) as "top" | "center" | "bottom" })];
+        return [];
+      },
+    },
+    TEXT_PROPS
+  );
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Color",
+      kind: "color",
+      get: (i) => colorValue(i.text?.color ?? i.label?.color),
+      writeable: (i) => !!i.text || !!i.label,
+      readOnlyReason: BOX_REASON,
+      set: (i, v) => (colorValue(i.text?.color ?? i.label?.color) === String(v) ? [] : [attrsCmd(i, { color: colorOf(String(v)) })]),
+    },
+    TEXT_PROPS
+  );
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Hyperlink",
+      kind: "string",
+      get: (i) => i.text?.href ?? "",
+      writeable: (i) => !!i.text,
+      readOnlyReason: BOX_REASON,
+      set: (i, v) => ((i.text!.href ?? "") === String(v).trim() ? [] : [attrsCmd(i, { href: String(v).trim() })]),
     },
     TEXT_PROPS
   );
 
   pm.inheritsAfter("SCH_TEXT", "SCH_ITEM");
   pm.inheritsAfter("SCH_TEXT", "EDA_TEXT");
-  // "Orientation is exposed differently in schematic; mask the base for now" -- and the pen, the mirror and the width and height are not a schematic text's.
+  pm.mask("SCH_TEXT", "EDA_TEXT", "Mirrored");
+  pm.mask("SCH_TEXT", "EDA_TEXT", "Width");
+  pm.mask("SCH_TEXT", "EDA_TEXT", "Height");
+  pm.mask("SCH_TEXT", "EDA_TEXT", "Thickness");
+  // "Text Size" (`SetSchTextSize`): a free text's, a label's (Label Properties' size), a text box's.
   const textSize = (owner: string): void => {
     add(
       {
@@ -530,12 +670,15 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         name: "Text Size",
         kind: "int",
         display: "size",
-        get: (i) => (i.text ? i.text.size_nm : isTextBox(i) ? textBox(i).size_nm : 0),
+        get: (i) => (i.text ? i.text.size_nm : i.label ? (i.label.size_nm ?? LABEL_SIZE_NM) : isTextBox(i) ? textBox(i).size_nm : LABEL_SIZE_NM),
+        writeable: (i) => !!i.text || !!i.label || isTextBox(i),
+        readOnlyReason: "A directive label's text size is not modelled: it is drawn at 50 mil.",
         // `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM`: "Don't allow text to disappear" (0.01 to 1000 mm)
         validate: (v, _i, c) => (num(v) < 10_000 ? tooSmall(10_000, "size", c.units) : num(v) > 1_000_000_000 ? "Value must be less than or equal to 1000 mm" : null),
         set: (i, v) => {
           const size = Math.round(num(v));
           if (i.text) return i.text.size_nm === size ? [] : [{ op: "sch_edit", verb: "edit_text", id: i.id, size_nm: size }];
+          if (i.label) return (i.label.size_nm ?? LABEL_SIZE_NM) === size ? [] : [labelCmd(i, { size_nm: size })];
           return isTextBox(i) && textBox(i).size_nm !== size ? [withShape(i.graphic!, { ...textBox(i), size_nm: size })] : [];
         },
       },
@@ -543,6 +686,8 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     );
   };
   textSize("SCH_TEXT");
+  // "Orientation is exposed differently in schematic; mask the base for now"
+  pm.mask("SCH_TEXT", "EDA_TEXT", "Orientation");
 
   // ------------------------------------------------------------------------------------------------------------------- labels
   pm.inheritsAfter("SCH_LABEL_BASE", "SCH_TEXT");
@@ -565,15 +710,10 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     available: hasLabelShape,
     set: (i, v) => (i.label!.shape === v ? [] : [{ op: "sch_edit", verb: "edit_label", id: i.id, shape: String(v) as LabelShape }]),
   });
-  // A label's size is not in this model; a text's is (`Text Size` is `SCH_TEXT`'s, and a label inherits it).
-  pm.overrideAvailability("SCH_LABEL", "SCH_TEXT", "Text Size", () => false);
-  pm.overrideAvailability("SCH_GLOBALLABEL", "SCH_TEXT", "Text Size", () => false);
-  pm.overrideAvailability("SCH_HIERLABEL", "SCH_TEXT", "Text Size", () => false);
-  pm.overrideAvailability("SCH_DIRECTIVE_LABEL", "SCH_TEXT", "Text Size", () => false);
+  pm.mask("SCH_LABEL_BASE", "EDA_TEXT", "Hyperlink");
 
   // The directive label (`SCH_DIRECTIVE_LABEL`): a flag with a pole, drawn from an `SchGraphic`.
   pm.inheritsAfter("SCH_DIRECTIVE_LABEL", "SCH_LABEL_BASE");
-  pm.mask("SCH_DIRECTIVE_LABEL", "EDA_TEXT", "Text");
   const directive = (i: SchItem): Extract<SchGraphicShape, { type: "directive" }> => i.graphic!.shape as Extract<SchGraphicShape, { type: "directive" }>;
   add({
     owner: "SCH_DIRECTIVE_LABEL",
@@ -597,6 +737,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
     set: (i, v) => (directive(i).pin_length_nm === num(v) ? [] : [withShape(i.graphic!, { ...directive(i), pin_length_nm: Math.round(num(v)) })]),
   });
+  for (const name of ["Text", "Thickness", "Italic", "Bold", "Horizontal Justification", "Vertical Justification"]) pm.mask("SCH_DIRECTIVE_LABEL", "EDA_TEXT", name);
 
   // --------------------------------------------------------------------------------------------------------------- SCH_LINE
   pm.inheritsAfter("SCH_LINE", "SCH_ITEM");
@@ -607,17 +748,38 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     const p = pts(i);
     return (which === "start" ? p[0] : p[p.length - 1])?.[axis] ?? 0;
   };
-  // The end points of a wire are dragged, not typed: what they join follows (`G`); these rows show where they are.
-  add({ owner: "SCH_LINE", name: "Start X", kind: "int", display: "coord", get: lineEnd("start", 0) });
-  add({ owner: "SCH_LINE", name: "Start Y", kind: "int", display: "coord", get: lineEnd("start", 1) });
-  add({ owner: "SCH_LINE", name: "End X", kind: "int", display: "coord", get: lineEnd("end", 0) });
-  add({ owner: "SCH_LINE", name: "End Y", kind: "int", display: "coord", get: lineEnd("end", 1) });
+  // `SCH_LINE::SetStartX` .. `SetEndY`: the end point goes where it is typed (`set_line_ends`; nothing joined to it follows, as in KiCad), then the commit's
+  // clean-up merges and splits wires and puts the junctions.
+  const lineEndRow = (name: string, which: "start" | "end", axis: 0 | 1): void => {
+    add({
+      owner: "SCH_LINE",
+      name,
+      kind: "int",
+      display: "coord",
+      get: lineEnd(which, axis),
+      writeable: unlocked,
+      readOnlyReason: LOCKED,
+      set: (i, v) => {
+        const p = pts(i);
+        const at = (which === "start" ? p[0] : p[p.length - 1]) ?? [0, 0];
+        const n = Math.round(num(v));
+        if (at[axis] === n) return [];
+        const next = axis === 0 ? { x: n, y: at[1] } : { x: at[0], y: n };
+        return [{ op: "sch_edit", verb: "set_line_ends", id: i.id, [which]: next } as Cmd];
+      },
+    });
+  };
+  lineEndRow("Start X", "start", 0);
+  lineEndRow("Start Y", "start", 1);
+  lineEndRow("End X", "end", 0);
+  lineEndRow("End Y", "end", 1);
   add({
     owner: "SCH_LINE",
     name: "Length",
     kind: "double",
     display: "size",
     get: (i) => Math.round(pts(i).slice(1).reduce((n, p, k) => n + Math.hypot(p[0] - pts(i)[k]![0], p[1] - pts(i)[k]![1]), 0)),
+    readOnlyReason: "A line's length is not typed here (SetLength moves its end along it): move its end point.",
   });
   add({
     owner: "SCH_LINE",
@@ -688,6 +850,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   add({ owner: "SCH_BUS_ENTRY_BASE", name: "Color", kind: "color", get: (i) => strokeOf(i).color, set: (i, v) => (strokeOf(i).color === String(v) ? [] : strokeCmds(i, { color: colorOf(String(v)) })) });
 
   // ------------------------------------------------------------------------------------------------------------------ SCH_SHEET
+  // `SCH_SHEET_DESC`: the name, the border and background, the attributes. Its fields (Sheetfile, Sheetname, the user's) are rows the panel adds (`fieldRows`).
   pm.inheritsAfter("SCH_SHEET", "SCH_ITEM");
   add({
     owner: "SCH_SHEET",
@@ -697,20 +860,14 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     validate: (v) => (String(v).trim() === "" ? "A sheet needs a name." : null),
     set: (i, v) => (i.sheet!.name === String(v).trim() ? [] : [{ op: "sch_edit", verb: "edit_sheet", id: i.id, name: String(v).trim() }]),
   });
-  add(
-    {
-      owner: "SCH_SHEET",
-      name: "Sheetfile",
-      kind: "string",
-      get: (i) => i.sheet!.file,
-      validate: (v) => (String(v).trim() === "" ? "A sheet must have a valid file name." : null),
-      set: (i, v) => {
-        const file = String(v).trim();
-        return file === i.sheet!.file || file === i.sheet!.file.replace(/\.kicad_sch$/, "") ? [] : [{ op: "sch_edit", verb: "edit_sheet", id: i.id, file }];
-      },
-    },
-    FIELDS
-  );
+  // A sheet's border, background and attributes are not kept by the model (a sheet file's `(stroke ..)`, `(fill ..)` and flags are not read): KiCad's defaults.
+  const SHEET_LOOK = "A sheet's border, background and attributes are not kept by the model: it is drawn and written with KiCad's defaults.";
+  add({ owner: "SCH_SHEET", name: "Border Width", kind: "int", display: "size", get: () => 0, readOnlyReason: SHEET_LOOK });
+  add({ owner: "SCH_SHEET", name: "Border Color", kind: "color", get: () => "", readOnlyReason: SHEET_LOOK });
+  add({ owner: "SCH_SHEET", name: "Background Color", kind: "color", get: () => "", readOnlyReason: SHEET_LOOK });
+  for (const name of ["Exclude From Board", "Exclude From Simulation", "Exclude From Bill of Materials", "Do not Populate"]) {
+    add({ owner: "SCH_SHEET", name, kind: "bool", get: () => false, readOnlyReason: SHEET_LOOK }, ATTRIBUTES);
+  }
 
   // ----------------------------------------------------------------------------------------------- EDA_SHAPE, SCH_SHAPE and kin
   pm.registerType("EDA_SHAPE");
@@ -789,7 +946,8 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     SHAPE_PROPS
   );
   add({ owner: "EDA_SHAPE", name: "Angle", kind: "double", display: "degree", get: (i) => arcAngle(shapeOf(i) as Extract<SchGraphicShape, { type: "arc" }>), available: typeIs("arc") }, SHAPE_PROPS);
-  const fillAvailable = typeIs("polygon", "rectangle", "circle", "bezier");
+  // `fillAvailable`: a polygon, a rectangle, a circle or a Bezier -- which a text box (a rectangle) and a rule area (a polygon) are too.
+  const fillAvailable = typeIs("polygon", "rectangle", "circle", "bezier", "text_box", "rule_area");
   add(
     {
       owner: "EDA_SHAPE",
@@ -818,6 +976,8 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
 
   pm.inheritsAfter("SCH_SHAPE", "SCH_ITEM");
   pm.inheritsAfter("SCH_SHAPE", "EDA_SHAPE");
+  // "Fill Mode" (`FILL_T`): a symbol's shapes only (`isSymbolItem`, the Symbol Editor's); a shape on the sheet has the Fill row.
+  add({ owner: "SCH_SHAPE", name: "Fill Mode", kind: "enum", choices: () => FILL_CHOICES, get: (i) => i.graphic!.fill ?? "none", available: () => false }, SHAPE_PROPS);
 
   // The text box: a rectangle that holds text. A text box is not filled in this editor (`fillAvailable` says so for `SCH_TEXTBOX`), and a rectangle's shape is not a choice.
   pm.inheritsAfter("SCH_TEXTBOX", "SCH_SHAPE");
@@ -825,14 +985,27 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   pm.inheritsAfter("SCH_TEXTBOX", "EDA_TEXT");
   pm.mask("SCH_TEXTBOX", "EDA_SHAPE", "Shape");
   pm.mask("SCH_TEXTBOX", "EDA_SHAPE", "Corner Radius");
-  pm.overrideAvailability("SCH_TEXTBOX", "EDA_SHAPE", "Fill", () => false);
-  pm.overrideAvailability("SCH_TEXTBOX", "EDA_SHAPE", "Fill Color", () => false);
+  pm.mask("SCH_TEXTBOX", "EDA_TEXT", "Width");
+  pm.mask("SCH_TEXTBOX", "EDA_TEXT", "Height");
+  pm.mask("SCH_TEXTBOX", "EDA_TEXT", "Thickness");
+  // `fillAvailable` gives a schematic text box its fill rows (only a board's text box and table cell are left without); not edited here.
+  pm.overrideWriteability("SCH_TEXTBOX", "EDA_SHAPE", "Fill", () => false, "A text box's fill is not edited here.");
+  pm.overrideWriteability("SCH_TEXTBOX", "EDA_SHAPE", "Fill Color", () => false, "A text box's fill is not edited here.");
+  // "Margins": the model keeps one margin for the four sides (`margin_nm`; 0 is `GetLegacyTextMargin`), so the rows show it, read-only.
+  const MARGINS = "Margins";
+  const margin = (i: SchItem): number => textBox(i).margin_nm || defaultTextBoxMargin(textBox(i).size_nm, i.graphic!.width_nm ?? 0);
+  for (const side of ["Left", "Top", "Right", "Bottom"]) {
+    add({ owner: "SCH_TEXTBOX", name: `Margin ${side}`, kind: "int", display: "size", get: margin, readOnlyReason: "The model keeps one margin for the four sides of a text box: set it in Text Box Properties." }, MARGINS);
+  }
   textSize("SCH_TEXTBOX");
+  pm.mask("SCH_TEXTBOX", "EDA_TEXT", "Orientation");
 
   // The rule area: a polygon with exclusion flags (`SCH_RULE_AREA`).
   pm.inheritsAfter("SCH_RULE_AREA", "SCH_SHAPE");
   pm.inheritsAfter("SCH_RULE_AREA", "SCH_ITEM");
   pm.inheritsAfter("SCH_RULE_AREA", "EDA_SHAPE");
+  pm.overrideWriteability("SCH_RULE_AREA", "EDA_SHAPE", "Fill", () => false, "A rule area is drawn as an outline here: its fill is not edited.");
+  pm.overrideWriteability("SCH_RULE_AREA", "EDA_SHAPE", "Fill Color", () => false, "A rule area is drawn as an outline here: its fill is not edited.");
   const rule = (i: SchItem): Extract<SchGraphicShape, { type: "rule_area" }> => i.graphic!.shape as Extract<SchGraphicShape, { type: "rule_area" }>;
   const ruleFlag = (name: string, key: "exclude_from_board" | "exclude_from_sim" | "exclude_from_bom" | "dnp"): void => {
     add(
@@ -894,6 +1067,10 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       IMAGE_PROPS
     );
   };
+  // "Transform Offset X/Y" (`SetTransformOriginOffset*`): the point the image is scaled and turned about, relative to its centre -- not kept by the model.
+  for (const axis of ["X", "Y"]) {
+    add({ owner: "SCH_BITMAP", name: `Transform Offset ${axis}`, kind: "int", display: "size", get: () => 0, readOnlyReason: "An image is scaled about its centre here: the model keeps no transform origin offset." }, IMAGE_PROPS);
+  }
   imageSide("Width");
   imageSide("Height");
 
@@ -910,22 +1087,107 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
 /** The registry of the schematic editor's properties. */
 export const SCH_PROPERTIES: PropertyManager<SchItem, SchCtx, Cmd> = build();
 
+// ----------------------------------------------------------------------------------------------------------------------- field rows
+
+/** `SCH_PROPERTIES_PANEL::m_currentSymbolFieldNames` / `m_currentSheetFieldNames`: the fields of the symbols and sheets selected now, by name. */
+const currentSymbolFields = new Set<string>();
+const currentSheetFields = new Set<string>();
+
+/** A symbol's fields by name (`GetFields()`, none private here): the state's, else the four a symbol always has. A power symbol's are its Reference and Value. */
+function symbolFieldNames(i: SchItem): string[] {
+  if (i.symbol) return i.symbol.fields?.map((f) => f.name) ?? ["Reference", "Value", "Footprint", "Datasheet"];
+  return i.power?.fields?.map((f) => f.name) ?? ["Reference", "Value"];
+}
+
+const sheetFieldNames = (i: SchItem): string[] => i.sheet!.fields?.map((f) => f.name) ?? ["Sheetname", "Sheetfile"];
+
+/** The text of the field `name` of a symbol (`SCH_SYMBOL_FIELD_PROPERTY::getter`: "" when it has none). */
+function symbolFieldText(i: SchItem, name: string): string {
+  const f = (i.symbol?.fields ?? i.power?.fields)?.find((x) => x.name === name);
+  if (f) return f.text;
+  if (i.symbol && name === "Footprint") return i.symbol.footprint ?? "";
+  if (i.symbol && name === "Datasheet") return i.symbol.datasheet ?? "";
+  return "";
+}
+
+/** `SCH_SYMBOL_FIELD_PROPERTY`: a field of the selected symbols as a row of "Fields"; setting it on a symbol that lacks the field adds it (`AddField`). */
+function symbolFieldProperty(name: string): PD {
+  return {
+    owner: "SCH_SYMBOL",
+    name,
+    kind: "string",
+    get: (i) => symbolFieldText(i, name),
+    available: () => currentSymbolFields.has(name),
+    writeable: (i) => !!i.symbol,
+    readOnlyReason: "A power symbol's fields are its Reference and Value.",
+    set: (i, v) => {
+      const s = i.symbol!;
+      const text = String(v);
+      if (symbolFieldText(i, name) === text) return [];
+      const f = s.fields?.find((x) => x.name === name);
+      if (f?.id) return [{ op: "sch_edit", verb: "edit_field", id: f.id, text }];
+      if (name === "Footprint" || name === "Datasheet") return [{ op: "edit_symbol_fields", id: s.id, [name.toLowerCase()]: text } as Cmd];
+      return [{ op: "sch_edit", verb: "add_user_field", id: s.id, name, text }];
+    },
+  };
+}
+
+/** `SCH_SHEET_FIELD_PROPERTY`: a field of the selected sheets as a row: the Sheetname, the Sheetfile (the field's own text, not the root-relative key: B3-M1) and the user's. */
+function sheetFieldProperty(name: string): PD {
+  const text = (i: SchItem): string => i.sheet!.fields?.find((f) => f.name === name)?.text ?? (name === "Sheetname" ? i.sheet!.name : name === "Sheetfile" ? i.sheet!.file : "");
+  return {
+    owner: "SCH_SHEET",
+    name,
+    kind: "string",
+    get: text,
+    available: () => currentSheetFields.has(name),
+    // A sheet whose file is in a folder of its own is not renamed here: `edit_sheet` takes a bare file name.
+    writeable: (i) => name === "Sheetname" || (name === "Sheetfile" && !i.sheet!.file.includes("/")),
+    readOnlyReason: name === "Sheetfile" ? "The file of a sheet in a folder of its own is not renamed here: the verb takes a bare file name." : "A sheet's own fields are kept as the file had them, not edited here.",
+    validate: (v) => (String(v).trim() !== "" ? null : name === "Sheetfile" ? "A sheet must have a valid file name." : "A sheet needs a name."),
+    set: (i, v) => {
+      const next = String(v).trim();
+      if (next === text(i) || (name === "Sheetfile" && next === text(i).replace(/\.kicad_sch$/, ""))) return [];
+      return [{ op: "sch_edit", verb: "edit_sheet", id: i.id, ...(name === "Sheetname" ? { name: next } : { file: next }) }];
+    },
+  };
+}
+
+/**
+ * `SCH_PROPERTIES_PANEL::rebuildProperties`: the field names of the selected symbols and sheets become the current ones, and a name no class registers yet
+ * gets a field row ("Fields"), which stays registered (shown while a selection has the field), as KiCad's do.
+ */
+export function syncFieldRows(items: readonly SchItem[]): void {
+  currentSymbolFields.clear();
+  currentSheetFields.clear();
+  for (const i of items) {
+    if (i.type === "SCH_SYMBOL") for (const n of symbolFieldNames(i)) currentSymbolFields.add(n);
+    else if (i.type === "SCH_SHEET") for (const n of sheetFieldNames(i)) currentSheetFields.add(n);
+  }
+  // `std::set<wxString>`: in code-unit order
+  for (const name of [...currentSymbolFields].sort()) if (!SCH_PROPERTIES.getProperty("SCH_SYMBOL", name)) SCH_PROPERTIES.addProperty(symbolFieldProperty(name), "Fields");
+  for (const name of [...currentSheetFields].sort()) if (!SCH_PROPERTIES.getProperty("SCH_SHEET", name)) SCH_PROPERTIES.addProperty(sheetFieldProperty(name), "Fields");
+}
+
 // ----------------------------------------------------------------------------------------------------------------------- the panel
 
 /** The grid the Properties panel shows for a selection of schematic items. */
 export function schGrid(sch: Schematic, ids: Iterable<string>, units: LengthUnit): GridModel {
   const items = schItemsOf(sch, ids);
+  syncFieldRows(items);
   return buildGrid(SCH_PROPERTIES, items, schContext(sch, units, items.length), schFriendlyName);
 }
 
 /** The commands an edit of one row sets on the selection, or why it is refused. */
 export function schEdit(sch: Schematic, ids: Iterable<string>, name: string, value: PropValue, units: LengthUnit): EditPlan<Cmd> {
   const items = schItemsOf(sch, ids);
+  syncFieldRows(items);
   return planEdit(SCH_PROPERTIES, items, name, value, schContext(sch, units, items.length));
 }
 
 /** `extractValueAndWritability` for one named property of a selection. */
 export function schRow(sch: Schematic, ids: Iterable<string>, name: string, units: LengthUnit): ReturnType<typeof extractValueAndWritability> {
   const items = schItemsOf(sch, ids);
+  syncFieldRows(items);
   return extractValueAndWritability(SCH_PROPERTIES, items, name, schContext(sch, units, items.length));
 }

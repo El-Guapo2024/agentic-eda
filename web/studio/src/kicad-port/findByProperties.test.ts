@@ -33,7 +33,8 @@ const row = (rows: readonly FindRow[], name: string): FindRow => {
 test("one track: its visible properties in the alphabetical order of their names, with Type, and no hidden ones", () => {
   const b = rowsOf(["trk_a"]);
   assert.equal(b.caption, "Track");
-  assert.deepEqual(names(b.rows), ["End X", "End Y", "Layer", "Locked", "Net", "Start X", "Start Y", "Type", "Width"]);
+  // A track on outer copper has its solder mask rows (`TRACK_VIA_DESC`'s "Technical Layers").
+  assert.deepEqual(names(b.rows), ["End X", "End Y", "Layer", "Locked", "Net", "Soldermask", "Soldermask Margin Override", "Start X", "Start Y", "Type", "Width"]);
   assert.equal(row(b.rows, "Type").display, "Track");
   assert.equal(row(b.rows, "Width").display, "0.2 mm");
   assert.equal(row(b.rows, "Width").raw, 200_000);

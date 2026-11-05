@@ -1156,6 +1156,43 @@ pub enum Cmd {
     /// A shape's new geometry (and whatever else of it changed), in place: the id and the lock stay. The panel's "Start X", "Radius",
     /// "Width" and the like (`EDA_SHAPE` setters) send the whole shape.
     ReplaceShape { id: String, shape: Shape },
+    /// "Width", "Vertical Justification", "Bold", "Italic", "Knockout" and "Auto Thickness" of a board text (`EDA_TEXT::SetTextWidth`, `SetVertJustify`, `SetBold`,
+    /// `SetItalic`, `SetAutoThickness`, `BOARD_ITEM::SetIsKnockout`), kept in the text's `TextExtra`; a field left out is unchanged.
+    EditTextStyle {
+        id: String,
+        #[serde(default)]
+        width_nm: Option<Nm>,
+        #[serde(default)]
+        valign: Option<eda_model::ir::TextVAlign>,
+        #[serde(default)]
+        bold: Option<bool>,
+        #[serde(default)]
+        italic: Option<bool>,
+        #[serde(default)]
+        knockout: Option<bool>,
+        #[serde(default)]
+        auto_thickness: Option<bool>,
+    },
+    /// "Soldermask" and "Soldermask Margin Override" of tracks and shapes on an outer copper layer (`PCB_TRACK::SetHasSolderMask`, `SetLocalSolderMaskMargin`,
+    /// and `PCB_SHAPE`'s): `margin` `None` is the board's.
+    SetSolderMask {
+        ids: Vec<String>,
+        solder_mask: bool,
+        #[serde(default)]
+        margin: Option<Nm>,
+    },
+    /// "Corner Radius" of rectangles (`EDA_SHAPE::SetCornerRadius`).
+    SetCornerRadius { ids: Vec<String>, radius: Nm },
+    /// A via's tenting, covering, plugging, capping, filling, backdrill and post-machining (`TRACK_VIA_DESC`'s rows past "Via Type"), all at once.
+    SetViaProps { id: String, props: eda_model::via_extra::ViaProps },
+    /// "Solderpaste Margin Override" and "Solderpaste Margin Ratio Override" of a footprint (`FOOTPRINT::SetLocalSolderPasteMargin`, `..Ratio`); `None` is the board's.
+    SetFootprintPasteMargin {
+        part: String,
+        #[serde(default)]
+        margin: Option<Nm>,
+        #[serde(default)]
+        ratio: Option<f64>,
+    },
 
     // ------------------------------------------- footprints as editable objects (see [`fp_edit`])
     /// `DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow`: what is given replaces what the footprint `part` has -- the Reference
@@ -2431,7 +2468,9 @@ impl Cmd {
             Cmd::ReorganizeSheets => vec!["sheets"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::MirrorItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
-            Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } => vec![id.as_str()],
+            Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } | Cmd::EditTextStyle { id, .. } | Cmd::SetViaProps { id, .. } => vec![id.as_str()],
+            Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
             Cmd::MigrateBoardModels { replacements } => replacements.keys().map(String::as_str).collect(),
@@ -3128,6 +3167,14 @@ impl<'a> Board<'a> {
             Cmd::SetItemNet { ids, net } => self.set_item_net(ids, net),
             Cmd::SetZoneName { id, name } => self.set_zone_name(id, name),
             Cmd::ReplaceShape { id, shape } => self.replace_shape(id, shape.clone()),
+            Cmd::EditTextStyle { id, width_nm, valign, bold, italic, knockout, auto_thickness } => self.edit_text_style(
+                id,
+                &pcb_props::TextStyleEdit { width_nm: *width_nm, valign: *valign, bold: *bold, italic: *italic, knockout: *knockout, auto_thickness: *auto_thickness },
+            ),
+            Cmd::SetSolderMask { ids, solder_mask, margin } => self.set_solder_mask(ids, *solder_mask, *margin),
+            Cmd::SetCornerRadius { ids, radius } => self.set_corner_radius(ids, *radius),
+            Cmd::SetViaProps { id, props } => self.set_via_props(id, props),
+            Cmd::SetFootprintPasteMargin { part, margin, ratio } => self.set_footprint_paste_margin(part, *margin, *ratio),
             Cmd::Batch { cmds } => {
                 let saved = self.design.clone();
                 // One commit: the verbs' clean-up runs once, at the end (`SCH_EDIT_TOOL::DoDelete` deletes every item, then the junctions, then

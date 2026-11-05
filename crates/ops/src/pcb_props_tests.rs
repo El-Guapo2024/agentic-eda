@@ -3,6 +3,7 @@
 
 use super::pcb_transform_tests::{board, design, drawings, ids, model, p, routing, track};
 use super::*;
+use eda_model::ir::TextVAlign;
 use eda_model::units::{mm, um};
 
 fn with_arc() -> Design {
@@ -147,4 +148,106 @@ fn a_panel_edit_of_several_items_is_one_batch_that_either_all_lands_or_none_does
     let bad = Cmd::Batch { cmds: vec![Cmd::SetZoneName { id: "zone_a".into(), name: "other".into() }, Cmd::EditTrack { id: "trk_nope".into(), start: Some(p(Nm::ZERO, Nm::ZERO)), end: None }] };
     assert!(b.apply(&bad).is_err());
     assert_eq!(routing(&b).zones[0].name, "pour", "the first command of a refused batch is taken back");
+}
+
+// ------------------------------------------------------------------- the rows of UI-LEFT P2 (task-u1-props)
+
+#[test]
+fn edit_text_style_keeps_the_texts_italic_bold_valign_width_knockout_and_automatic_pen_in_its_text_extra() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let style = |width_nm, valign, bold, italic, knockout, auto_thickness| Cmd::EditTextStyle { id: "txt_a".into(), width_nm, valign, bold, italic, knockout, auto_thickness };
+    b.apply(&style(Some(mm(1.5)), Some(TextVAlign::Bottom), None, Some(true), Some(true), None)).unwrap();
+    let x = drawings(&b).text_extra("txt_a").unwrap().clone();
+    assert_eq!((x.width_nm, x.valign, x.italic, x.knockout, x.bold), (Some(mm(1.5)), TextVAlign::Bottom, true, true, false));
+    // A field left out is unchanged; the automatic pen is GetPenSizeForBold of the smaller size once the text is bold.
+    b.apply(&style(None, None, Some(true), None, None, Some(true))).unwrap();
+    let x = drawings(&b).text_extra("txt_a").unwrap().clone();
+    assert!(x.italic && x.bold && x.auto_thickness);
+    assert_eq!(drawings(&b).texts[0].stroke_width, mm(0.2), "a fifth of the 1 mm height (the width is 1.5 mm)");
+    // A width equal to the height keeps no width; nothing left over keeps no entry.
+    b.apply(&style(Some(mm(1.0)), Some(TextVAlign::Center), Some(false), Some(false), Some(false), Some(false))).unwrap();
+    assert!(drawings(&b).text_extra("txt_a").is_none(), "{:?}", drawings(&b).text_extra("txt_a"));
+    assert_eq!(b.apply(&style(None, None, None, None, None, None)).unwrap_err()[0].check, "ops_nothing_to_change");
+    assert_eq!(b.apply(&Cmd::EditTextStyle { id: "txt_nope".into(), width_nm: None, valign: None, bold: Some(true), italic: None, knockout: None, auto_thickness: None }).unwrap_err()[0].check, "ops_unknown_text");
+    assert_eq!(b.apply(&style(Some(Nm::ZERO), None, None, None, None, None)).unwrap_err()[0].check, "ops_bad_text");
+}
+
+#[test]
+fn set_solder_mask_opens_the_mask_of_tracks_and_shapes_on_outer_copper_only() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().shapes.push(Shape::Rect { id: "shp_cu".into(), layer: "F.Cu".into(), stroke_width: mm(0.1), filled: true, start: p(Nm::ZERO, Nm::ZERO), end: p(mm(4.0), mm(2.0)) });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::SetSolderMask { ids: ids(&["trk_a", "shp_cu"]), solder_mask: true, margin: Some(mm(0.05)) }).unwrap();
+    assert_eq!(drawings(&b).track_mask("trk_a").map(|t| t.margin), Some(Some(mm(0.05))));
+    let st = drawings(&b).board_items.style_of("shp_cu").unwrap();
+    assert_eq!((st.solder_mask, st.solder_mask_margin), (true, Some(mm(0.05))));
+    // Taking the opening away takes the margin with it, and an empty style is not kept.
+    b.apply(&Cmd::SetSolderMask { ids: ids(&["trk_a", "shp_cu"]), solder_mask: false, margin: Some(mm(0.05)) }).unwrap();
+    assert!(drawings(&b).track_mask("trk_a").is_none() && drawings(&b).board_items.style_of("shp_cu").is_none());
+    assert_eq!(b.apply(&Cmd::SetSolderMask { ids: ids(&["shp_seg"]), solder_mask: true, margin: None }).unwrap_err()[0].check, "ops_bad_mask", "a silkscreen line has no mask opening");
+    assert_eq!(b.apply(&Cmd::SetSolderMask { ids: ids(&["trk_a"]), solder_mask: false, margin: None }).unwrap_err()[0].check, "ops_nothing_to_change");
+}
+
+#[test]
+fn set_corner_radius_rounds_a_rectangle_up_to_half_its_shorter_side() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    b.apply(&Cmd::SetCornerRadius { ids: ids(&["shp_rect"]), radius: mm(1.0) }).unwrap();
+    assert_eq!(drawings(&b).board_items.corner_radius_of("shp_rect"), mm(1.0));
+    assert_eq!(b.apply(&Cmd::SetCornerRadius { ids: ids(&["shp_rect"]), radius: mm(2.6) }).unwrap_err()[0].check, "ops_bad_shape", "the rectangle is 5 mm tall");
+    assert_eq!(b.apply(&Cmd::SetCornerRadius { ids: ids(&["shp_seg"]), radius: mm(1.0) }).unwrap_err()[0].check, "ops_bad_shape");
+    b.apply(&Cmd::SetCornerRadius { ids: ids(&["shp_rect"]), radius: Nm::ZERO }).unwrap();
+    assert!(drawings(&b).board_items.style_of("shp_rect").is_none());
+}
+
+#[test]
+fn set_via_props_writes_the_tokens_kicad_writes_and_the_drcs_tenting_follows() {
+    use eda_model::via_extra::{PostMachiningMode, PostMachiningProps, ViaDrillProps, ViaProps};
+    let m = model(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let props = ViaProps {
+        front_tenting: Some(true),
+        back_tenting: Some(false),
+        filling: Some(true),
+        backdrill: Some(ViaDrillProps { size: mm(0.45), start: "B.Cu".into(), end: "In2.Cu".into() }),
+        back_post_machining: Some(PostMachiningProps { mode: PostMachiningMode::Counterbore, size: mm(0.9), depth: mm(0.3), angle_ddeg: 0 }),
+        ..Default::default()
+    };
+    b.apply(&Cmd::SetViaProps { id: "via_a".into(), props: props.clone() }).unwrap();
+    let e = drawings(&b).via_extra("via_a").unwrap();
+    assert_eq!(e.props(), props);
+    assert_eq!(e.tokens, ["(backdrill (size 0.45) (layers \"B.Cu\" \"In2.Cu\"))", "(back_post_machining counterbore (size 0.9) (depth 0.3))", "(tenting (front yes) (back no))", "(filling yes)"]);
+    let t = &drawings(&b).via_tenting;
+    assert_eq!((t.len(), t[0].front, t[0].back), (1, Some(true), Some(false)));
+    // Back to the board's stackup for all of it: no entry, no tenting row.
+    b.apply(&Cmd::SetViaProps { id: "via_a".into(), props: ViaProps::default() }).unwrap();
+    assert!(drawings(&b).via_extra("via_a").is_none() && drawings(&b).via_tenting.is_empty());
+    let bad = ViaProps { backdrill: Some(ViaDrillProps { size: mm(0.45), start: "B.Cu".into(), end: "In7.Cu".into() }), ..Default::default() };
+    assert_eq!(b.apply(&Cmd::SetViaProps { id: "via_a".into(), props: bad }).unwrap_err()[0].hint.as_deref(), Some("Via layer is outside the board stack."));
+    assert_eq!(b.apply(&Cmd::SetViaProps { id: "via_a".into(), props: ViaProps::default() }).unwrap_err()[0].check, "ops_nothing_to_change");
+    assert_eq!(b.apply(&Cmd::SetViaProps { id: "via_nope".into(), props: props.clone() }).unwrap_err()[0].check, "ops_unknown_via");
+}
+
+#[test]
+fn set_footprint_paste_margin_edits_a_board_files_footprint_tokens_and_refuses_one_placed_from_the_intent() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().footprint_extras.push(eda_model::ir::FootprintExtra { id: "U1".into(), tokens: vec!["(descr \"x\")".into(), "(solder_paste_margin -0.1)".into()], ..Default::default() });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::SetFootprintPasteMargin { part: "U1".into(), margin: Some(um(-50.0)), ratio: Some(-0.05) }).unwrap();
+    let e = drawings(&b).footprint_extras.iter().find(|e| e.id == "U1").unwrap();
+    assert_eq!(e.tokens, ["(descr \"x\")", "(solder_paste_margin -0.05)", "(solder_paste_margin_ratio -0.05)"], "the margin stays where the file had it");
+    let facts = eda_kicad_facts(&e.tokens);
+    assert_eq!(facts, (Some(um(-50.0)), Some(-0.05)));
+    b.apply(&Cmd::SetFootprintPasteMargin { part: "U1".into(), margin: None, ratio: None }).unwrap();
+    assert_eq!(drawings(&b).footprint_extras[0].tokens, ["(descr \"x\")"]);
+    assert_eq!(b.apply(&Cmd::SetFootprintPasteMargin { part: "U2".into(), margin: Some(um(10.0)), ratio: None }).unwrap_err()[0].check, "ops_no_board_file_footprint");
+}
+
+/// `(solder_paste_margin ..)` and `(solder_paste_margin_ratio ..)` read back the way `eda_kicad::footprint_file_facts` reads them (millimetres to nanometres).
+fn eda_kicad_facts(tokens: &[String]) -> (Option<Nm>, Option<f64>) {
+    let num = |name: &str| tokens.iter().find_map(|t| t.strip_prefix(&format!("({name} ")).and_then(|r| r.strip_suffix(')')).and_then(|v| v.parse::<f64>().ok()));
+    (num("solder_paste_margin").map(|v| Nm::kiround(v * 1_000_000.0)), num("solder_paste_margin_ratio"))
 }

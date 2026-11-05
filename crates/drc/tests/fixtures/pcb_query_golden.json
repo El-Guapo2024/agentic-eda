@@ -38,6 +38,16 @@
       "value": 50000000
      },
      {
+      "name": "Soldermask",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Soldermask Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
       "name": "Layer",
       "kind": "layer",
       "value": "F.Cu"
@@ -101,6 +111,16 @@
      },
      {
       "name": "End Y",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Soldermask",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Soldermask Margin Override",
       "kind": "int",
       "value": 0
      },
@@ -170,6 +190,16 @@
       "value": 10000000
      },
      {
+      "name": "Soldermask",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Soldermask Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
       "name": "Layer",
       "kind": "layer",
       "value": "B.Cu"
@@ -233,6 +263,16 @@
       "name": "End Y",
       "kind": "int",
       "value": 60000000
+     },
+     {
+      "name": "Soldermask",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Soldermask Margin Override",
+      "kind": "int",
+      "value": 0
      },
      {
       "name": "Layer",
@@ -300,6 +340,16 @@
       "value": 60300000
      },
      {
+      "name": "Soldermask",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Soldermask Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
       "name": "Layer",
       "kind": "layer",
       "value": "F.Cu"
@@ -363,6 +413,16 @@
       "name": "End Y",
       "kind": "int",
       "value": 10000000
+     },
+     {
+      "name": "Soldermask",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Soldermask Margin Override",
+      "kind": "int",
+      "value": 0
      },
      {
       "name": "Layer",
@@ -429,8 +489,63 @@
      },
      {
       "name": "Via Type",
-      "kind": "str",
+      "kind": "enum",
       "value": "Through"
+     },
+     {
+      "name": "Front tenting",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Back tenting",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Front covering",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Back covering",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Front plugging",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Back plugging",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Capping",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Filling",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Backdrill Mode",
+      "kind": "enum",
+      "value": "No backdrill"
+     },
+     {
+      "name": "Front Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Back Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
      },
      {
       "name": "Net Class",
@@ -441,6 +556,46 @@
       "name": "Net",
       "kind": "net",
       "value": "GND"
+     },
+     {
+      "name": "Enable Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Best Length Ratio",
+      "kind": "double",
+      "value": 0.5
+     },
+     {
+      "name": "Max Length",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Best Width Ratio",
+      "kind": "double",
+      "value": 1
+     },
+     {
+      "name": "Max Width",
+      "kind": "int",
+      "value": 2000000
+     },
+     {
+      "name": "Curved Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Allow Teardrops To Span Two Tracks",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Max Width Ratio",
+      "kind": "double",
+      "value": 0.9
      },
      {
       "name": "Position X",
@@ -500,8 +655,58 @@
      },
      {
       "name": "Via Type",
-      "kind": "str",
+      "kind": "enum",
       "value": "Blind"
+     },
+     {
+      "name": "Front tenting",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Back tenting",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Front covering",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Back covering",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Front plugging",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Back plugging",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Capping",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Filling",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Front Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Back Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
      },
      {
       "name": "Net Class",
@@ -512,6 +717,46 @@
       "name": "Net",
       "kind": "net",
       "value": "VCC"
+     },
+     {
+      "name": "Enable Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Best Length Ratio",
+      "kind": "double",
+      "value": 0.5
+     },
+     {
+      "name": "Max Length",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Best Width Ratio",
+      "kind": "double",
+      "value": 1
+     },
+     {
+      "name": "Max Width",
+      "kind": "int",
+      "value": 2000000
+     },
+     {
+      "name": "Curved Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Allow Teardrops To Span Two Tracks",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Max Width Ratio",
+      "kind": "double",
+      "value": 0.9
      },
      {
       "name": "Position X",
@@ -571,8 +816,58 @@
      },
      {
       "name": "Via Type",
-      "kind": "str",
+      "kind": "enum",
       "value": "Buried"
+     },
+     {
+      "name": "Front tenting",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Back tenting",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Front covering",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Back covering",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Front plugging",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Back plugging",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Capping",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Filling",
+      "kind": "enum",
+      "value": "From board stackup"
+     },
+     {
+      "name": "Front Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Back Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
      },
      {
       "name": "Net Class",
@@ -583,6 +878,46 @@
       "name": "Net",
       "kind": "net",
       "value": "VCC"
+     },
+     {
+      "name": "Enable Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Best Length Ratio",
+      "kind": "double",
+      "value": 0.5
+     },
+     {
+      "name": "Max Length",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Best Width Ratio",
+      "kind": "double",
+      "value": 1
+     },
+     {
+      "name": "Max Width",
+      "kind": "int",
+      "value": 2000000
+     },
+     {
+      "name": "Curved Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Allow Teardrops To Span Two Tracks",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Max Width Ratio",
+      "kind": "double",
+      "value": 0.9
      },
      {
       "name": "Position X",
@@ -821,6 +1156,16 @@
       "value": "1"
      },
      {
+      "name": "Pin Name",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Pin Type",
+      "kind": "str",
+      "value": ""
+     },
+     {
       "name": "Size X",
       "kind": "int",
       "value": 600000
@@ -841,6 +1186,61 @@
       "value": 0
      },
      {
+      "name": "Top Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Bottom Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Backdrill Mode",
+      "kind": "enum",
+      "value": "No backdrill"
+     },
+     {
+      "name": "Fabrication Property",
+      "kind": "enum",
+      "value": "None"
+     },
+     {
+      "name": "Copper Layers",
+      "kind": "enum",
+      "value": "All copper layers"
+     },
+     {
+      "name": "Pad To Die Length",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Pad To Die Delay",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Soldermask Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Thermal Relief Spoke Width",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Thermal Relief Spoke Angle",
+      "kind": "double",
+      "value": 90
+     },
+     {
+      "name": "Thermal Relief Gap",
+      "kind": "int",
+      "value": 0
+     },
+     {
       "name": "Net Class",
       "kind": "str",
       "value": "Default"
@@ -849,6 +1249,51 @@
       "name": "Net",
       "kind": "net",
       "value": "GND"
+     },
+     {
+      "name": "Enable Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Best Length Ratio",
+      "kind": "double",
+      "value": 0.5
+     },
+     {
+      "name": "Max Length",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Best Width Ratio",
+      "kind": "double",
+      "value": 1
+     },
+     {
+      "name": "Max Width",
+      "kind": "int",
+      "value": 2000000
+     },
+     {
+      "name": "Curved Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Prefer Zone Connections",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Allow Teardrops To Span Two Tracks",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Max Width Ratio",
+      "kind": "double",
+      "value": 0.9
      }
     ],
     "footprint": {
@@ -980,6 +1425,16 @@
       "value": "2"
      },
      {
+      "name": "Pin Name",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Pin Type",
+      "kind": "str",
+      "value": ""
+     },
+     {
       "name": "Size X",
       "kind": "int",
       "value": 800000
@@ -995,6 +1450,61 @@
       "value": 400000
      },
      {
+      "name": "Top Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Bottom Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Backdrill Mode",
+      "kind": "enum",
+      "value": "No backdrill"
+     },
+     {
+      "name": "Fabrication Property",
+      "kind": "enum",
+      "value": "None"
+     },
+     {
+      "name": "Copper Layers",
+      "kind": "enum",
+      "value": "All copper layers"
+     },
+     {
+      "name": "Pad To Die Length",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Pad To Die Delay",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Soldermask Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Thermal Relief Spoke Width",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Thermal Relief Spoke Angle",
+      "kind": "double",
+      "value": 45
+     },
+     {
+      "name": "Thermal Relief Gap",
+      "kind": "int",
+      "value": 0
+     },
+     {
       "name": "Net Class",
       "kind": "str",
       "value": "HV,Default"
@@ -1003,6 +1513,51 @@
       "name": "Net",
       "kind": "net",
       "value": "VCC"
+     },
+     {
+      "name": "Enable Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Best Length Ratio",
+      "kind": "double",
+      "value": 0.5
+     },
+     {
+      "name": "Max Length",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Best Width Ratio",
+      "kind": "double",
+      "value": 1
+     },
+     {
+      "name": "Max Width",
+      "kind": "int",
+      "value": 2000000
+     },
+     {
+      "name": "Curved Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Prefer Zone Connections",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Allow Teardrops To Span Two Tracks",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Max Width Ratio",
+      "kind": "double",
+      "value": 0.9
      }
     ],
     "footprint": {
@@ -1131,6 +1686,16 @@
       "value": "3"
      },
      {
+      "name": "Pin Name",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Pin Type",
+      "kind": "str",
+      "value": ""
+     },
+     {
       "name": "Size X",
       "kind": "int",
       "value": 800000
@@ -1151,6 +1716,61 @@
       "value": 0
      },
      {
+      "name": "Top Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Bottom Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Backdrill Mode",
+      "kind": "enum",
+      "value": "No backdrill"
+     },
+     {
+      "name": "Fabrication Property",
+      "kind": "enum",
+      "value": "None"
+     },
+     {
+      "name": "Copper Layers",
+      "kind": "enum",
+      "value": "All copper layers"
+     },
+     {
+      "name": "Pad To Die Length",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Pad To Die Delay",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Soldermask Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Thermal Relief Spoke Width",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Thermal Relief Spoke Angle",
+      "kind": "double",
+      "value": 90
+     },
+     {
+      "name": "Thermal Relief Gap",
+      "kind": "int",
+      "value": 0
+     },
+     {
       "name": "Net Class",
       "kind": "str",
       "value": "HV,Default"
@@ -1159,6 +1779,51 @@
       "name": "Net",
       "kind": "net",
       "value": "VCC"
+     },
+     {
+      "name": "Enable Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Best Length Ratio",
+      "kind": "double",
+      "value": 0.5
+     },
+     {
+      "name": "Max Length",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Best Width Ratio",
+      "kind": "double",
+      "value": 1
+     },
+     {
+      "name": "Max Width",
+      "kind": "int",
+      "value": 2000000
+     },
+     {
+      "name": "Curved Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Prefer Zone Connections",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Allow Teardrops To Span Two Tracks",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Max Width Ratio",
+      "kind": "double",
+      "value": 0.9
      }
     ],
     "footprint": {
@@ -1287,6 +1952,16 @@
       "value": "4"
      },
      {
+      "name": "Pin Name",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Pin Type",
+      "kind": "str",
+      "value": ""
+     },
+     {
       "name": "Size X",
       "kind": "int",
       "value": 500000
@@ -1307,6 +1982,61 @@
       "value": 0
      },
      {
+      "name": "Top Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Bottom Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Backdrill Mode",
+      "kind": "enum",
+      "value": "No backdrill"
+     },
+     {
+      "name": "Fabrication Property",
+      "kind": "enum",
+      "value": "None"
+     },
+     {
+      "name": "Copper Layers",
+      "kind": "enum",
+      "value": "All copper layers"
+     },
+     {
+      "name": "Pad To Die Length",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Pad To Die Delay",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Soldermask Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Thermal Relief Spoke Width",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Thermal Relief Spoke Angle",
+      "kind": "double",
+      "value": 90
+     },
+     {
+      "name": "Thermal Relief Gap",
+      "kind": "int",
+      "value": 0
+     },
+     {
       "name": "Net Class",
       "kind": "str",
       "value": "Fast"
@@ -1315,6 +2045,51 @@
       "name": "Net",
       "kind": "net",
       "value": "USB_P"
+     },
+     {
+      "name": "Enable Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Best Length Ratio",
+      "kind": "double",
+      "value": 0.5
+     },
+     {
+      "name": "Max Length",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Best Width Ratio",
+      "kind": "double",
+      "value": 1
+     },
+     {
+      "name": "Max Width",
+      "kind": "int",
+      "value": 2000000
+     },
+     {
+      "name": "Curved Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Prefer Zone Connections",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Allow Teardrops To Span Two Tracks",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Max Width Ratio",
+      "kind": "double",
+      "value": 0.9
      }
     ],
     "footprint": {
@@ -1429,6 +2204,16 @@
       "name": "Text",
       "kind": "str",
       "value": "U1"
+     },
+     {
+      "name": "Font",
+      "kind": "str",
+      "value": "KiCad Font"
+     },
+     {
+      "name": "Auto Thickness",
+      "kind": "bool",
+      "value": false
      },
      {
       "name": "Thickness",
@@ -1600,6 +2385,16 @@
       "value": "MCU"
      },
      {
+      "name": "Font",
+      "kind": "str",
+      "value": "KiCad Font"
+     },
+     {
+      "name": "Auto Thickness",
+      "kind": "bool",
+      "value": false
+     },
+     {
       "name": "Thickness",
       "kind": "int",
       "value": 150000
@@ -1767,6 +2562,16 @@
       "name": "Text",
       "kind": "str",
       "value": "ACME"
+     },
+     {
+      "name": "Font",
+      "kind": "str",
+      "value": "KiCad Font"
+     },
+     {
+      "name": "Auto Thickness",
+      "kind": "bool",
+      "value": false
      },
      {
       "name": "Thickness",
@@ -2057,6 +2862,16 @@
       "value": "1"
      },
      {
+      "name": "Pin Name",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Pin Type",
+      "kind": "str",
+      "value": ""
+     },
+     {
       "name": "Size X",
       "kind": "int",
       "value": 600000
@@ -2077,6 +2892,61 @@
       "value": 0
      },
      {
+      "name": "Top Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Bottom Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Backdrill Mode",
+      "kind": "enum",
+      "value": "No backdrill"
+     },
+     {
+      "name": "Fabrication Property",
+      "kind": "enum",
+      "value": "None"
+     },
+     {
+      "name": "Copper Layers",
+      "kind": "enum",
+      "value": "All copper layers"
+     },
+     {
+      "name": "Pad To Die Length",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Pad To Die Delay",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Soldermask Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Thermal Relief Spoke Width",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Thermal Relief Spoke Angle",
+      "kind": "double",
+      "value": 90
+     },
+     {
+      "name": "Thermal Relief Gap",
+      "kind": "int",
+      "value": 0
+     },
+     {
       "name": "Net Class",
       "kind": "str",
       "value": "Default"
@@ -2085,6 +2955,51 @@
       "name": "Net",
       "kind": "net",
       "value": "GND"
+     },
+     {
+      "name": "Enable Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Best Length Ratio",
+      "kind": "double",
+      "value": 0.5
+     },
+     {
+      "name": "Max Length",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Best Width Ratio",
+      "kind": "double",
+      "value": 1
+     },
+     {
+      "name": "Max Width",
+      "kind": "int",
+      "value": 2000000
+     },
+     {
+      "name": "Curved Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Prefer Zone Connections",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Allow Teardrops To Span Two Tracks",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Max Width Ratio",
+      "kind": "double",
+      "value": 0.9
      }
     ],
     "footprint": {
@@ -2197,6 +3112,16 @@
       "name": "Text",
       "kind": "str",
       "value": "R1"
+     },
+     {
+      "name": "Font",
+      "kind": "str",
+      "value": "KiCad Font"
+     },
+     {
+      "name": "Auto Thickness",
+      "kind": "bool",
+      "value": false
      },
      {
       "name": "Thickness",
@@ -2366,6 +3291,16 @@
       "value": "10k"
      },
      {
+      "name": "Font",
+      "kind": "str",
+      "value": "KiCad Font"
+     },
+     {
+      "name": "Auto Thickness",
+      "kind": "bool",
+      "value": false
+     },
+     {
       "name": "Thickness",
       "kind": "int",
       "value": 150000
@@ -2531,6 +3466,16 @@
       "name": "Text",
       "kind": "str",
       "value": "ACME"
+     },
+     {
+      "name": "Font",
+      "kind": "str",
+      "value": "KiCad Font"
+     },
+     {
+      "name": "Auto Thickness",
+      "kind": "bool",
+      "value": false
      },
      {
       "name": "Thickness",
@@ -2819,6 +3764,16 @@
       "value": "1"
      },
      {
+      "name": "Pin Name",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Pin Type",
+      "kind": "str",
+      "value": ""
+     },
+     {
       "name": "Size X",
       "kind": "int",
       "value": 600000
@@ -2839,6 +3794,61 @@
       "value": 0
      },
      {
+      "name": "Top Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Bottom Post-machining",
+      "kind": "enum",
+      "value": "Not post-machined"
+     },
+     {
+      "name": "Backdrill Mode",
+      "kind": "enum",
+      "value": "No backdrill"
+     },
+     {
+      "name": "Fabrication Property",
+      "kind": "enum",
+      "value": "None"
+     },
+     {
+      "name": "Copper Layers",
+      "kind": "enum",
+      "value": "All copper layers"
+     },
+     {
+      "name": "Pad To Die Length",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Pad To Die Delay",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Soldermask Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Thermal Relief Spoke Width",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Thermal Relief Spoke Angle",
+      "kind": "double",
+      "value": 90
+     },
+     {
+      "name": "Thermal Relief Gap",
+      "kind": "int",
+      "value": 0
+     },
+     {
       "name": "Net Class",
       "kind": "str",
       "value": "HV,Default"
@@ -2847,6 +3857,51 @@
       "name": "Net",
       "kind": "net",
       "value": "HV1"
+     },
+     {
+      "name": "Enable Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Best Length Ratio",
+      "kind": "double",
+      "value": 0.5
+     },
+     {
+      "name": "Max Length",
+      "kind": "int",
+      "value": 1000000
+     },
+     {
+      "name": "Best Width Ratio",
+      "kind": "double",
+      "value": 1
+     },
+     {
+      "name": "Max Width",
+      "kind": "int",
+      "value": 2000000
+     },
+     {
+      "name": "Curved Teardrops",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Prefer Zone Connections",
+      "kind": "bool",
+      "value": true
+     },
+     {
+      "name": "Allow Teardrops To Span Two Tracks",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Max Width Ratio",
+      "kind": "double",
+      "value": 0.9
      }
     ],
     "footprint": {
@@ -2959,6 +4014,16 @@
       "name": "Text",
       "kind": "str",
       "value": "R2"
+     },
+     {
+      "name": "Font",
+      "kind": "str",
+      "value": "KiCad Font"
+     },
+     {
+      "name": "Auto Thickness",
+      "kind": "bool",
+      "value": false
      },
      {
       "name": "Thickness",
@@ -3128,6 +4193,16 @@
       "value": "10k"
      },
      {
+      "name": "Font",
+      "kind": "str",
+      "value": "KiCad Font"
+     },
+     {
+      "name": "Auto Thickness",
+      "kind": "bool",
+      "value": false
+     },
+     {
       "name": "Thickness",
       "kind": "int",
       "value": 150000
@@ -3295,6 +4370,16 @@
       "value": "Other"
      },
      {
+      "name": "Font",
+      "kind": "str",
+      "value": "KiCad Font"
+     },
+     {
+      "name": "Auto Thickness",
+      "kind": "bool",
+      "value": false
+     },
+     {
       "name": "Thickness",
       "kind": "int",
       "value": 150000
@@ -3417,6 +4502,11 @@
       "value": 150000
      },
      {
+      "name": "Line Style",
+      "kind": "enum",
+      "value": "Solid"
+     },
+     {
       "name": "Start Shape",
       "kind": "enum",
       "value": "None"
@@ -3527,9 +4617,19 @@
       "value": 5000000
      },
      {
+      "name": "Corner Radius",
+      "kind": "int",
+      "value": 0
+     },
+     {
       "name": "Line Width",
       "kind": "int",
       "value": 100000
+     },
+     {
+      "name": "Line Style",
+      "kind": "enum",
+      "value": "Solid"
      },
      {
       "name": "Fill",
@@ -3567,6 +4667,11 @@
     "net": "",
     "props": [
      {
+      "name": "Knockout",
+      "kind": "bool",
+      "value": false
+     },
+     {
       "name": "Orientation",
       "kind": "double",
       "value": 90
@@ -3577,9 +4682,29 @@
       "value": "hello"
      },
      {
+      "name": "Font",
+      "kind": "str",
+      "value": "KiCad Font"
+     },
+     {
+      "name": "Auto Thickness",
+      "kind": "bool",
+      "value": false
+     },
+     {
       "name": "Thickness",
       "kind": "int",
       "value": 150000
+     },
+     {
+      "name": "Italic",
+      "kind": "bool",
+      "value": false
+     },
+     {
+      "name": "Bold",
+      "kind": "bool",
+      "value": false
      },
      {
       "name": "Mirrored",
@@ -3598,6 +4723,11 @@
      },
      {
       "name": "Horizontal Justification",
+      "kind": "enum",
+      "value": "Center"
+     },
+     {
+      "name": "Vertical Justification",
       "kind": "enum",
       "value": "Center"
      },
@@ -4041,32 +5171,54 @@
     "Affects Cursor Snap",
     "Affects Placement",
     "Affects Routing",
+    "Allow Teardrops To Span Two Tracks",
     "Angle",
     "Arrow Direction",
     "Associated Layer",
     "Auto Thickness",
+    "Back Post-machining",
+    "Back Post-machining Angle",
+    "Back Post-machining Depth",
+    "Back Post-machining Size",
+    "Back covering",
+    "Back plugging",
+    "Back tenting",
+    "Backdrill Mode",
     "Barcode Type",
+    "Best Length Ratio",
+    "Best Width Ratio",
     "Bold",
     "Border",
     "Border Color",
     "Border Style",
     "Border Width",
+    "Bottom Backdrill Must-Cut",
+    "Bottom Backdrill Size",
+    "Bottom Counterbore Depth",
+    "Bottom Countersink Angle",
+    "Bottom Post-machining",
+    "Bottom Post-machining Size",
+    "Capping",
     "Cell Separators",
     "Center X",
     "Center Y",
     "Clearance",
     "Clearance Override",
+    "Color",
     "Column Width",
     "Component Class",
-    "Component Type",
+    "Copper Layers",
+    "Corner Radius",
     "Corner Radius Ratio",
     "Corner Radius Size",
     "Crossbar Height",
+    "Curved Teardrops",
     "Decimal Places",
     "Diameter",
     "Do not Populate",
     "Drill",
     "Enable",
+    "Enable Teardrops",
     "End Length",
     "End Shape",
     "End Stroke Width",
@@ -4081,9 +5233,18 @@
     "Extent X",
     "Extent Y",
     "External Border",
+    "Fabrication Property",
     "Fill",
     "Fill Mode",
+    "Filling",
     "Font",
+    "Front Post-machining",
+    "Front Post-machining Angle",
+    "Front Post-machining Depth",
+    "Front Post-machining Size",
+    "Front covering",
+    "Front plugging",
+    "Front tenting",
     "Grid Type",
     "Guarded Net",
     "Guide Cross",
@@ -4099,6 +5260,7 @@
     "Hole Size Y",
     "Hole Span",
     "Horizontal Justification",
+    "Hyperlink",
     "Italic",
     "Keep Aligned with Dimension",
     "Keep Out Footprints",
@@ -4116,6 +5278,7 @@
     "Leader Length",
     "Library Description",
     "Library Link",
+    "Line Style",
     "Line Width",
     "Locked",
     "Margin Bottom",
@@ -4124,6 +5287,9 @@
     "Margin Top",
     "Margin X",
     "Margin Y",
+    "Max Length",
+    "Max Width",
+    "Max Width Ratio",
     "Minimum Island Area",
     "Minimum Width",
     "Mirrored",
@@ -4132,6 +5298,7 @@
     "Net",
     "Net Class",
     "Not in Schematic",
+    "Number Box",
     "Offset X",
     "Offset Y",
     "Orientation",
@@ -4140,13 +5307,18 @@
     "Pad Connections",
     "Pad Number",
     "Pad Shape",
+    "Pad To Die Delay",
+    "Pad To Die Length",
     "Pad Type",
     "Phi Extent",
     "Phi Spacing",
+    "Pin Name",
+    "Pin Type",
     "Pitch",
     "Position X",
     "Position Y",
     "Precision",
+    "Prefer Zone Connections",
     "Prefix",
     "Priority",
     "Radius",
@@ -4169,6 +5341,8 @@
     "Size Y",
     "Smoothing Amount",
     "Smoothing Effort",
+    "Soldermask",
+    "Soldermask Margin Override",
     "Solderpaste Margin Override",
     "Solderpaste Margin Ratio Override",
     "Source Name",
@@ -4185,11 +5359,20 @@
     "Suppress Trailing Zeroes",
     "Symbol Size",
     "Text",
+    "Text Frame",
     "Text Size",
     "Thermal Relief Gap",
+    "Thermal Relief Spoke Angle",
     "Thermal Relief Spoke Width",
+    "Thermal Spoke Template",
     "Thickness",
     "Tick Interval",
+    "Top Backdrill Must-Cut",
+    "Top Backdrill Size",
+    "Top Counterbore Depth",
+    "Top Countersink Angle",
+    "Top Post-machining",
+    "Top Post-machining Size",
     "Type",
     "Units",
     "Units Format",

@@ -553,15 +553,22 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/dialogs/dialog_footprint_properties.cpp`, `dialog_pad_properties.cpp`, `pcbnew/pcb_field.cpp`, `pcbnew/footprint.cpp`, `pcbnew/tools/board_editor_control.cpp` (`PlaceFootprint`).
 
 ### 10. The Properties panel
-**Mostly done (2026-10-08, `bd712d3`; footprint fields, attributes and pads 10-09).** Hit: constantly. Blocks: no.
+**Done (2026-10-08, `bd712d3`; footprint fields, attributes and pads 10-09; every registered row 2026-11-05, `task-u1-props`).** Hit: constantly. Blocks: no.
 - Done (`kicad-port/{propertyManager,propertyGrid,pcbProperties,schItemProperties}.ts`, `components/panels/{PropertyGrid,PropertiesPanel}.tsx`; `PARITY-pcb.md` section 23, `PARITY-sch.md` section 17): the pane is KiCad's
   property grid. `PROPERTY_MANAGER` is ported (class registry, `InheritsAfter` / `Mask` / `ReplaceProperty` / `OverrideAvailability`, the ordering walk), so each class lists what KiCad's registration lists, in
   KiCad's order, on the board and on the sheet; a selection shows the rows every item has, the value they share or `<...>`, and an edit goes out as ONE `batch` (one undo step). Every edit is an existing verb
   except four added where none fit (`crates/ops/src/pcb_props.rs`: `edit_track`, `set_item_net`, `set_zone_name`, `replace_shape`). Footprint fields, attributes and pad rows edit since item 9.
 - Measured: 87 `node --test` cases, 9 Rust tests for the four verbs; `web/studio/e2e/properties-panel.check.js` edits every editable row of every kind and undoes it.
-- Missing: what the IR has no place for is not registered: a pad's trapezoid, chamfered and custom shapes (in the IR and Pad Properties since 2026-10-10, not checked in this panel), padstacks, via tenting and backdrill, board text's fonts, bold, italic, vertical justification and
-  colour, a shape's line style and colour, a sheet's border and fill, symbol pin names and numbers, extra fields; a footprint's reference, value and library link text are read-only (they come from the
-  schematic and the intent: item 26); a wire's end points and length are read-only; the grid is not in the Footprint and Symbol editors; a footprint's position lands on the placement grid like every pose.
+- **Every registered row (2026-11-05, `task-u1-props`, UI-LEFT P2 and S7; PARITY-pcb.md section 67, PARITY-sch.md section 55):** each board and schematic class lists what KiCad 8303b2ad's
+  registrations list, in KiCad's groups and order (`pcbPropertiesKicad.test.ts`, `schPropertiesKicad.test.ts` replay the C++ calls), and a symbol's and a sheet's fields are rows as
+  `SCH_PROPERTIES_PANEL::rebuildProperties` adds them. New wired rows: a via's tenting, covering, plugging, capping, filling, backdrill, post-machining, layers and type; a track's and a shape's solder
+  mask; a rectangle's corner radius; a board text's italic, bold, vertical justification, width, knockout and automatic pen; a pad's orientation, copper layers and overrides; a footprint's reference
+  and (from a board file) paste margins; a schematic text's bold, italic, colour, hyperlink and justification; a label's size, bold, italic, colour and horizontal justification; wire ends; body style;
+  Exclude From Position Files; the field rows; the Sheetfile as its own text (B3-M1). Five board verbs and three schematic ones were added (`pcb_props.rs`, `sch_props.rs`).
+- Left (read-only with the reason as the row's tooltip): fonts; a board shape's line style (UI-LEFT P5); every teardrop row (item 8); a pad's number, pin name and type, post-machining, backdrill,
+  fabrication property and pad-to-die; a dimension's italic, bold, mirror, justification and text frame; a symbol's pin display (one library symbol per lib_id), its Unit (no verb switches a placed
+  unit); a sheet's border, background and attributes; a text box's margins, fill, colour and hyperlink; an image's transform offset; a footprint's paste margins when it was placed from the intent.
+  The grid is not in the Footprint and Symbol editors; a footprint's position lands on the placement grid like every pose.
 - Port from: `common/widgets/properties_panel.cpp`, `common/properties/property_mgr.cpp`, `pcbnew/widgets/pcb_properties_panel.cpp`, `eeschema/widgets/sch_properties_panel.cpp`.
 
 ### 11. The DRC and ERC dialogs

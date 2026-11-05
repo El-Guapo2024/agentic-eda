@@ -1291,6 +1291,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             // `FOOTPRINT_DESC`'s Library Description, Keywords, Component Class and the solder paste overrides: what the board file said of the footprint
             // (`FootprintExtra`: its `(descr ..)`, `(tags ..)`, `(component_classes ..)`, `(solder_paste_margin ..)`, `(solder_paste_margin_ratio ..)`).
             if let Some(e) = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == part.reference)) {
+                // The footprint was read from a board file: its own tokens are kept (`set_footprint_paste_margin` edits them).
+                p["from_board_file"] = json!(true);
                 let facts = eda_kicad::footprint_file_facts(&e.tokens);
                 if let Some(d) = facts.description {
                     p["lib_description"] = json!(d);
@@ -1333,6 +1335,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "pts": t.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
                 // The arc's mid point when this track is a KiCad arc (`Track::arc`), so an edit that re-sends the track keeps it an arc.
                 "arc_mid": t.arc().map(|(_, m, _)| [m.x, m.y]),
+                // A solder-mask opening of a track on an outer copper layer (`PCB_TRACK::HasSolderMask`, `DrawingsSection::track_masks`): `{ margin }`, the margin
+                // `None` when the board's applies; absent for no opening.
+                "mask": design.drawings.as_ref().and_then(|d| d.track_mask(&t.id)).map(|m| json!({ "margin": m.margin })),
             })).collect::<Vec<_>>(),
             "vias": r.vias.iter().map(|v| {
                 let extra = design.drawings.as_ref().and_then(|d| d.via_extra(&v.id));
@@ -1345,6 +1350,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     // `VIATYPE` when it is not a through via (`blind`, `buried`, `micro`; `DrawingsSection::via_extras`).
                     "type": extra.map(|e| e.kind).filter(|k| *k != eda_model::via_extra::ViaKind::Through),
                     "flashed": flashed.vias.get(&v.id),
+                    // The tenting, covering, plugging, capping, filling, backdrill and post-machining the via's tokens say (`eda_model::via_extra::ViaProps`); absent for none.
+                    "props": extra.map(|e| e.props()).filter(|p| *p != eda_model::via_extra::ViaProps::default()),
                 })
             }).collect::<Vec<_>>(),
             "zones": r.zones.iter().map(|z| json!({
@@ -1425,6 +1432,14 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "mirror": t.mirror,
                 // `EDA_TEXT::IsBold` (`TextExtra::bold`): what the Text Properties dialog's Bold button starts as (`m_bold->Check( m_item->IsBold() )`).
                 "bold": d.text_extra(&t.id).is_some_and(|x| x.bold),
+                // The rest of the text's `TextExtra` the Properties panel shows: italic, the vertical justification, the glyph width when it is not the
+                // height (`EDA_TEXT::GetTextWidth`), knockout, the automatic stroke width and the font face (absent: false, centred, square, none).
+                "italic": d.text_extra(&t.id).is_some_and(|x| x.italic),
+                "valign": d.text_extra(&t.id).map(|x| x.valign).filter(|v| *v != eda_model::ir::TextVAlign::Center),
+                "width": d.text_extra(&t.id).and_then(|x| x.width_nm),
+                "knockout": d.text_extra(&t.id).is_some_and(|x| x.knockout),
+                "auto_thickness": d.text_extra(&t.id).is_some_and(|x| x.auto_thickness),
+                "face": d.text_extra(&t.id).and_then(|x| x.face.clone()),
             }))).collect::<Vec<_>>(),
             // Task item 5 -- see `eda_model::ir::Group`'s own doc. A tuning pattern (a `PCB_GENERATOR`, which is a `PCB_GROUP`) is listed with the groups so that it selects as one
             // (`generator` names what it is); `tuning_patterns` has the pattern itself.
@@ -1949,6 +1964,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "exclude_from_bom": s.exclude_from_bom,
                 "exclude_from_board": s.exclude_from_board,
                 "exclude_from_sim": s.exclude_from_sim,
+                // `SCH_SYMBOL::GetExcludedFromPosFiles` (`SchExtras::excluded_from_pos_files`, by the placement's key).
+                "exclude_from_pos_files": sch.extras.excluded_from_pos_files.contains(&owner),
             });
             // The Value and Footprint the painter writes for a symbol that has no `fields` (a sheet read from a KiCad file), as `${NAME}` makes them read.
             if let Some(shown) = shown.as_ref().and_then(|sh| sh.symbol_shown_json(&owner)) {
@@ -2049,7 +2066,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     net_of_pin(&pin_net, &reference, &number).map(str::to_string)
                 })
             });
-            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields })
+            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields, "color": sch.extras.text_attrs.get(&l.id).and_then(|a| a.color) })
         })
         .collect();
     let texts: Vec<Value> = sch
@@ -2388,6 +2405,11 @@ pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir
         "id": t.id, "content": t.content, "at": [t.at.x, t.at.y], "angle": t.angle as f64 / 1000.0, "size_nm": t.size_nm, "vertical": vertical,
         "h": match j.h { TextJustify::Left => "left", TextJustify::Center => "center", TextJustify::Right => "right" },
         "v": match j.v { TextVAlign::Top => "top", TextVAlign::Center => "center", TextVAlign::Bottom => "bottom" },
+        // What the text's `SchExtras::text_attrs` say: bold, italic, its colour (absent: the layer's) and its hyperlink (absent: none).
+        "bold": sch.extras.text_attrs.get(&t.id).is_some_and(|a| a.bold),
+        "italic": sch.extras.text_attrs.get(&t.id).is_some_and(|a| a.italic),
+        "color": sch.extras.text_attrs.get(&t.id).and_then(|a| a.color),
+        "href": sch.extras.text_attrs.get(&t.id).and_then(|a| a.href.clone()),
     })
 }
 
@@ -2464,7 +2486,7 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
         pins.extend(a.1.iter().filter(|p| !normal.1.contains(p)).map(|p| pin(p, 2)));
     }
     // how the symbol's pins show their texts (`(pin_names (hide yes) (offset x))`, `(pin_numbers (hide yes))`)
-    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })
+    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "keywords": s.connectivity.keywords, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })
 }
 
 /// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document
