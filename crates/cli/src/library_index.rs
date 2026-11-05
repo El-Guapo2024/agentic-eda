@@ -2,8 +2,9 @@
 //! (`/api/library/index`, `/api/library/items`, `/api/library/all`).
 //!
 //! KiCad's footprint libraries (`<Library>.pretty/<Footprint>.kicad_mod`, 155 of them in KiCad.app) and symbol libraries
-//! (`<Library>.kicad_sym`, 223 files, 220 MB, the biggest 15 MB) are far too large to ship to the browser or to parse up
-//! front, so the tree is filled in lazily and every answer is cached:
+//! (`<Library>.kicad_sym`, 223 files, 220 MB, the biggest 15 MB; KiCad 10's kicad-symbols ships each as a `<Library>.kicad_symdir` folder of one
+//! `.kicad_sym` per symbol, read as the one library text it stands for, `eda_kicad::read_symbol_library_text`) are far too large to ship to the browser
+//! or to parse up front, so the tree is filled in lazily and every answer is cached:
 //!
 //!   - **index**: the library names only -- a `read_dir` of the root (and, for footprints, a `read_dir` of each library for
 //!     its count). The tree draws these collapsed.
@@ -62,11 +63,21 @@ impl Kind {
         }
     }
 
-    /// The path of library `lib` under `root`: a `.pretty` directory or a `.kicad_sym` file.
+    /// The path of library `lib` under `root`: a `.pretty` directory, or a `.kicad_sym` file (else a `.kicad_symdir` folder library,
+    /// `eda_kicad::find_symbol_library_file`; the `.kicad_sym` path when there is neither).
     pub(crate) fn library_path(self, root: &Path, lib: &str) -> PathBuf {
         match self {
             Kind::Footprint => root.join(format!("{lib}.pretty")),
-            Kind::Symbol => root.join(format!("{lib}.kicad_sym")),
+            Kind::Symbol => eda_kicad::find_symbol_library_file(root, lib).unwrap_or_else(|| root.join(format!("{lib}.kicad_sym"))),
+        }
+    }
+
+    /// When library `path` of this kind last changed, for the caches: a footprint folder's or a symbol file's modification time, a symbol folder
+    /// library's latest (`eda_kicad::symbol_library_modified`: its files are edited in place).
+    pub(crate) fn modified(self, path: &Path) -> Option<SystemTime> {
+        match self {
+            Kind::Footprint => modified(path),
+            Kind::Symbol => eda_kicad::symbol_library_modified(path),
         }
     }
 }
@@ -87,10 +98,10 @@ pub(crate) fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// Where the libraries of one kind come from. A library is a nickname that names a `.kicad_sym` file (symbols) or a `.pretty` folder (footprints), and what
+/// Where the libraries of one kind come from. A library is a nickname that names a `.kicad_sym` file or a folder of them (symbols) or a `.pretty` folder (footprints), and what
 /// the trees, the choosers and the lookups need of a source is only that: the nickname's path, the list of nicknames to show, and a few words about each.
 pub(crate) trait LibSource: Send + Sync {
-    /// The file (symbols) or folder (footprints) of library `lib`, or why this source has none by that name.
+    /// The file or folder (symbols) or folder (footprints) of library `lib`, or why this source has none by that name.
     fn lib_path(&self, kind: Kind, lib: &str) -> Result<PathBuf, String>;
     /// The libraries the trees and the choosers list, sorted by name (case-insensitively, like the tree).
     fn listed(&self, kind: Kind) -> Arc<Vec<LibraryInfo>>;
@@ -193,7 +204,7 @@ fn scan_root(kind: Kind, root: &Path) -> Arc<Vec<LibraryInfo>> {
                     let name = path.file_stem().and_then(|s| s.to_str())?.to_string();
                     match kind {
                         Kind::Footprint if ext == "pretty" && path.is_dir() => Some(LibraryInfo { count: Some(count_footprints(&path)), name }),
-                        Kind::Symbol if ext == "kicad_sym" && path.is_file() => Some(LibraryInfo { name, count: None }),
+                        Kind::Symbol => eda_kicad::symbol_library_name(&path).map(|name| LibraryInfo { name, count: None }),
                         _ => None,
                     }
                 })
@@ -201,6 +212,8 @@ fn scan_root(kind: Kind, root: &Path) -> Arc<Vec<LibraryInfo>> {
         })
         .unwrap_or_default();
     libs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
+    // `Device.kicad_sym` and `Device.kicad_symdir` are one library, the file (`find_symbol_library_file`)
+    libs.dedup_by(|b, a| a.name == b.name);
     let libs = Arc::new(libs);
     lock(cache()).libraries.insert(key, (stamp, libs.clone()));
     libs
@@ -226,7 +239,7 @@ pub(crate) fn count_footprints(dir: &Path) -> usize {
     std::fs::read_dir(dir).map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("kicad_mod")).count()).unwrap_or(0)
 }
 
-/// The names of the top-level `(symbol "Name" ...)` forms of a `.kicad_sym` file's text, in file order. A single pass over the bytes, keeping only the
+/// The names of the top-level `(symbol "Name" ...)` forms of a `.kicad_sym` file's text (or a folder library's, `eda_kicad::read_symbol_library_text`), in file order. A single pass over the bytes, keeping only the
 /// paren depth: a symbol's own units and body styles are `(symbol "Name_1_1" ...)` forms NESTED inside it (depth 3), and a quoted string -- a pin name,
 /// a property value, a description -- may hold parentheses, so strings are skipped whole. Building the s-expression tree of a 15 MB library just to
 /// list its names would cost far more than this and keep the whole tree alive.
@@ -281,7 +294,7 @@ pub(crate) fn scan_symbol_names(text: &str) -> Vec<String> {
 /// The item names of library `lib` of a source (sorted), cached against the library's modification time.
 fn items_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str) -> Result<Arc<Vec<String>>, String> {
     let path = src.lib_path(kind, lib)?;
-    let stamp = modified(&path);
+    let stamp = kind.modified(&path);
     if stamp.is_none() {
         return Err(format!("no library {lib:?} is installed"));
     }
@@ -294,7 +307,7 @@ fn items_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str) -> Result<Arc
     let mut names = match kind {
         Kind::Footprint => footprint_names(&path),
         Kind::Symbol => {
-            let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let text = eda_kicad::read_symbol_library_text(&path)?;
             let mut names = scan_symbol_names(&text);
             names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b)));
             names.dedup();
@@ -492,6 +505,38 @@ mod tests {
         std::fs::write(&lib, r#"(kicad_symbol_lib (symbol "R") (symbol "C") (symbol "L"))"#).unwrap();
         let fresh = items_in(Kind::Symbol, &root, "Device").unwrap();
         assert_eq!(fresh.as_slice(), ["C", "L", "R"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// KiCad 10's folder libraries (`Device.kicad_symdir/`, a `.kicad_sym` per symbol): listed by the folder's stem, their items the symbols of all
+    /// their files, listed again when one file changes; a name both a file and a folder give is one library, the file.
+    #[test]
+    fn folder_symbol_libraries_are_listed_and_their_items_are_the_symbols_of_their_files() {
+        let root = temp_root("symdir");
+        let dir = root.join("Device.kicad_symdir");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("R.kicad_sym"), r#"(kicad_symbol_lib (version 20251024) (symbol "R" (symbol "R_1_1")))"#).unwrap();
+        std::fs::write(dir.join("C.kicad_sym"), r#"(kicad_symbol_lib (version 20251024) (symbol "C"))"#).unwrap();
+        std::fs::write(dir.join("C_Small.kicad_sym"), r#"(kicad_symbol_lib (version 20251024) (symbol "C_Small" (extends "C")))"#).unwrap();
+        std::fs::write(root.join("Amp.kicad_sym"), r#"(kicad_symbol_lib (symbol "LM358"))"#).unwrap();
+        std::fs::create_dir_all(root.join("NotALibrary")).unwrap();
+
+        let libs = libraries_in(Kind::Symbol, &root);
+        assert_eq!(libs.as_slice(), [LibraryInfo { name: "Amp".into(), count: None }, LibraryInfo { name: "Device".into(), count: None }], "a .kicad_symdir folder is a library; another folder is not");
+        assert_eq!(root.lib_path(Kind::Symbol, "Device").unwrap(), dir);
+        let first = items_in(Kind::Symbol, &root, "Device").unwrap();
+        assert_eq!(first.as_slice(), ["C", "C_Small", "R"]);
+        assert!(Arc::ptr_eq(&first, &items_in(Kind::Symbol, &root, "Device").unwrap()), "the second ask is served from the cache");
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(dir.join("R.kicad_sym"), r#"(kicad_symbol_lib (version 20251024) (symbol "R") (symbol "R_US"))"#).unwrap();
+        assert_eq!(items_in(Kind::Symbol, &root, "Device").unwrap().as_slice(), ["C", "C_Small", "R", "R_US"], "a file of the folder edited in place");
+
+        std::fs::create_dir_all(root.join("Amp.kicad_symdir")).unwrap();
+        std::fs::write(root.join("Amp.kicad_symdir").join("TL072.kicad_sym"), r#"(kicad_symbol_lib (symbol "TL072"))"#).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(root.join("touch"), "").unwrap();
+        assert_eq!(libraries_in(Kind::Symbol, &root).iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["Amp", "Device"], "Amp once");
+        assert_eq!(items_in(Kind::Symbol, &root, "Amp").unwrap().as_slice(), ["LM358"], "the file's");
         let _ = std::fs::remove_dir_all(&root);
     }
 

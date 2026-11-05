@@ -299,7 +299,7 @@ fn footprint_cache() -> &'static FootprintCache {
     C.get_or_init(Default::default)
 }
 
-/// The file of symbol library `lib`.
+/// The file (or folder library, KiCad 10's `.kicad_symdir`) of symbol library `lib`.
 fn symbol_path<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<PathBuf, String> {
     src.lib_path(Kind::Symbol, lib)
 }
@@ -310,10 +310,11 @@ fn footprint_dir<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<PathBuf, S
 }
 
 /// The index of symbol library `lib` of a source, built if it is not cached (or the file changed since): one read of the file and one pass
-/// over its text.
+/// over its text -- a folder library's text being the one its files make (`eda_kicad::read_symbol_library_text`), which [`installed_symbol`]
+/// reads again to cut a symbol out by the span the index keeps.
 pub(crate) fn symbol_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<Arc<SymbolLib>, String> {
     let path = symbol_path(src, lib)?;
-    let stamp = modified(&path);
+    let stamp = Kind::Symbol.modified(&path);
     if stamp.is_none() {
         return Err(format!("no library {lib:?} is installed"));
     }
@@ -322,7 +323,7 @@ pub(crate) fn symbol_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<Ar
             return Ok(hit.clone());
         }
     }
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let text = eda_kicad::read_symbol_library_text(&path)?;
     let mut summaries = eda_kicad::scan_symbols(&text);
     eda_kicad::inherit_symbol_summaries(&mut summaries);
     summaries.sort_by(|a, b| natural_cmp(&a.name, &b.name).then_with(|| a.name.cmp(&b.name)));
@@ -338,7 +339,7 @@ pub(crate) fn symbol_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<Ar
 fn cached_symbol_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Option<Arc<SymbolLib>> {
     let path = symbol_path(src, lib).ok()?;
     let hit = lock(symbol_cache()).get(&path).cloned()?;
-    (hit.stamp == modified(&path)).then_some(hit)
+    (hit.stamp == Kind::Symbol.modified(&path)).then_some(hit)
 }
 
 /// The index of footprint library `lib` of a source: every `.kicad_mod` of the `.pretty` directory read once and scanned.
@@ -386,13 +387,6 @@ fn index_lib<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str) -> Result<()
     match kind {
         Kind::Symbol => symbol_lib(src, lib).map(|_| ()),
         Kind::Footprint => footprint_lib(src, lib).map(|_| ()),
-    }
-}
-
-fn indexed<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str) -> bool {
-    match kind {
-        Kind::Symbol => cached_symbol_lib(src, lib).is_some(),
-        Kind::Footprint => cached_footprint_lib(src, lib).is_some(),
     }
 }
 
@@ -448,10 +442,14 @@ pub(crate) fn parse_lib_table(text: &str) -> HashMap<String, String> {
     text.lines().filter_map(|l| Some((quoted(l, "(name \"")?, quoted(l, "(descr \"")?))).collect()
 }
 
-/// The library descriptions the installed tables carry (the Description column of a library row), from `<root>/../template/`.
+/// The library descriptions the installed tables carry (the Description column of a library row), from `<root>/../template/` (an install's
+/// `PATHS::GetStockTemplatesPath`), else from `<root>/` itself, where the libraries' own repositories (kicad-symbols, kicad-footprints) keep the table
+/// their install copies to the template folder -- a checkout of them named by `KICAD_PATH`.
 pub(crate) fn library_descriptions(kind: Kind, root: &Path) -> Arc<HashMap<String, String>> {
     static CACHE: OnceLock<Descriptions> = OnceLock::new();
-    let Some(path) = root.parent().map(|p| p.join("template").join(if kind == Kind::Symbol { "sym-lib-table" } else { "fp-lib-table" })) else { return Arc::default() };
+    let file = if kind == Kind::Symbol { "sym-lib-table" } else { "fp-lib-table" };
+    let Some(installed) = root.parent().map(|p| p.join("template").join(file)) else { return Arc::default() };
+    let path = if !installed.is_file() && root.join(file).is_file() { root.join(file) } else { installed };
     let stamp = modified(&path);
     let cache = CACHE.get_or_init(Default::default);
     if let Some((s, hit)) = lock(cache).get(&path) {
@@ -536,14 +534,24 @@ pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str,
     let mut sym_libs: Vec<Option<Arc<SymbolLib>>> = Vec::new();
     let mut fp_libs: Vec<Option<Arc<FootprintLib>>> = Vec::new();
     for (li, info) in libs.iter().enumerate() {
-        // A library the thread has not reached is skipped while it runs; once it is done, one it lacks (changed on disk since) is indexed here.
-        let have = indexed(kind, src, &info.name) || (done && index_lib(kind, src, &info.name).is_ok());
+        // A library the thread has not reached is skipped while it runs; once it is done, one it lacks (changed on disk since) is indexed here. The
+        // cache is asked once per library: whether a folder library changed is a look at each of its files (`Kind::modified`).
+        let have = match kind {
+            Kind::Symbol => {
+                let idx = cached_symbol_lib(src, &info.name).or_else(|| done.then(|| symbol_lib(src, &info.name).ok()).flatten());
+                let have = idx.is_some();
+                sym_libs.push(idx);
+                have
+            }
+            Kind::Footprint => {
+                let idx = cached_footprint_lib(src, &info.name).or_else(|| done.then(|| footprint_lib(src, &info.name).ok()).flatten());
+                let have = idx.is_some();
+                fp_libs.push(idx);
+                have
+            }
+        };
         if have {
             indexed_count += 1;
-        }
-        match kind {
-            Kind::Symbol => sym_libs.push(if have { cached_symbol_lib(src, &info.name) } else { None }),
-            Kind::Footprint => fp_libs.push(if have { cached_footprint_lib(src, &info.name) } else { None }),
         }
         if matchers.is_empty() {
             continue;
@@ -639,7 +647,7 @@ pub(crate) fn installed_symbol<S: LibSource + ?Sized>(src: &S, lib_id: &str) -> 
     }
     let idx = symbol_lib(src, lib).ok()?;
     let summary = idx.find(name)?.clone();
-    let text = std::fs::read_to_string(symbol_path(src, lib).ok()?).ok()?;
+    let text = eda_kicad::read_symbol_library_text(&symbol_path(src, lib).ok()?).ok()?;
     let mut sym = eda_kicad::parse_symbol(&text, &idx.summaries, name)?;
     sym.lib_id = lib_id.to_string();
     sym.assign_missing_ids();
@@ -851,6 +859,34 @@ mod tests {
         std::fs::write(&file, r#"(kicad_symbol_lib (symbol "A" (property "Description" "second")) (symbol "B"))"#).unwrap();
         let fresh = symbol_lib(&root, "L").unwrap();
         assert_eq!((fresh.summaries[0].description.as_str(), fresh.summaries.len()), ("second", 2));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A KiCad 10 folder library (`Amplifier_Operational.kicad_symdir/`, a file per symbol): the chooser indexes the symbols of all its files, a derived
+    /// symbol takes its base's units, pins and description from the base's file, and the one picked is cut out of the folder's text and opened.
+    #[test]
+    fn a_folder_library_is_indexed_searched_and_opened_like_a_file() {
+        let root = temp_root("symdir");
+        let dir = root.join("Amplifier_Operational.kicad_symdir");
+        std::fs::create_dir_all(&dir).unwrap();
+        for sym in eda_kicad::scan_symbols(AMPS) {
+            std::fs::write(dir.join(format!("{}.kicad_sym", sym.name)), format!("(kicad_symbol_lib (version 20251024)\n{}\n)\n", eda_kicad::symbol_text(AMPS, &sym))).unwrap();
+        }
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3, "a file per symbol");
+        let e = entries_in(Kind::Symbol, &root, "Amplifier_Operational", &Filter::default());
+        let names: Vec<&str> = e["entries"].as_array().unwrap().iter().map(|i| i["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["LM358", "LM2904", "TL072"], "{e}");
+        assert_eq!((e["entries"][1]["units"].clone(), e["entries"][1]["pins"].clone()), (json!(3), json!(8)), "LM2904 has the units and pins of LM358, another file's");
+        assert_eq!(e["entries"][1]["description"], "Low-Power, Dual Operational Amplifier, DIP-8/SOIC-8");
+        index_all(Kind::Symbol, &root);
+        assert_eq!(names_of(&search_in(Kind::Symbol, &root, "LM358", &Filter::default(), 50))[0], "Amplifier_Operational:LM358");
+        let d = details_in(Kind::Symbol, &root, "Amplifier_Operational:LM2904");
+        assert_eq!(d["symbol"]["pins"].as_array().map(Vec::len), Some(8), "{d}");
+        assert_eq!(d["symbol"]["lib_id"], "Amplifier_Operational:LM2904");
+        // a file of the folder changes: the index is built again
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(dir.join("TL072.kicad_sym"), r#"(kicad_symbol_lib (symbol "TL072" (property "Description" "changed")))"#).unwrap();
+        assert_eq!(symbol_lib(&root, "Amplifier_Operational").unwrap().find("TL072").unwrap().description, "changed");
         let _ = std::fs::remove_dir_all(&root);
     }
 

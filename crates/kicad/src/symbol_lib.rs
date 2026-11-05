@@ -15,7 +15,11 @@
 //! properties differ" (this is how KiCad's own library expresses a family
 //! of fixed-voltage regulators, `AMS1117-3.3`/`AMS1117-5.0`/... all
 //! extending `AP1117-15`) -- resolved here by re-parsing the base symbol
-//! from the same file and borrowing its graphics/pins/power flag.
+//! from the same file and borrowing its graphics/pins/power flag. A KiCad 10
+//! folder library (`Device.kicad_symdir/`, a file per symbol, a parent in
+//! another file than the symbol that extends it) is read as the one text its
+//! files make (`symbol_lib_dir::read_symbol_library_text`), so "the same
+//! file" is the whole folder, as `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load` reads it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -27,7 +31,8 @@ use eda_model::{resolve_lib_id, ConstraintModel};
 use crate::sexpr::{self, Sexpr};
 
 /// Environment variable overriding where KiCad's own symbol libraries (a
-/// directory of `<Library>.kicad_sym` files) live.
+/// directory of `<Library>.kicad_sym` files or `<Library>.kicad_symdir`
+/// folders) live.
 pub const SYMBOL_LIBRARY_ROOT_ENV: &str = "EDA_KICAD_SYMBOLS";
 
 /// Where KiCad's standard symbol libraries live: `SYMBOL_LIBRARY_ROOT_ENV`
@@ -41,21 +46,29 @@ pub fn default_symbol_library_root() -> PathBuf {
     crate::footprint_lib::kicad_shared_dir("symbols")
 }
 
-/// The `.kicad_sym` file a library name (`"Device"`, `"Regulator_Linear"`)
-/// names, under `lib_root`. `None` when it does not exist.
+/// The library a library name (`"Device"`, `"Regulator_Linear"`) names
+/// under `lib_root`: the file `<name>.kicad_sym`, else the folder library
+/// `<name>.kicad_symdir` (KiCad 10's form, the only one kicad-symbols ships
+/// now; see `symbol_lib_dir`). `None` when neither exists. When both do,
+/// the file is the library, as it was before folders were read.
 pub fn find_symbol_library_file(lib_root: &Path, lib_name: &str) -> Option<PathBuf> {
-    let path = lib_root.join(format!("{lib_name}.kicad_sym"));
-    path.is_file().then_some(path)
+    let file = lib_root.join(format!("{lib_name}.{}", crate::SYMBOL_LIB_FILE_EXT));
+    if file.is_file() {
+        return Some(file);
+    }
+    let dir = lib_root.join(format!("{lib_name}.{}", crate::SYMBOL_LIB_DIR_EXT));
+    dir.is_dir().then_some(dir)
 }
 
-/// A parsed `.kicad_sym` file's whole symbol table, keyed by the bare
-/// symbol name (no library prefix) -- cached per absolute path, since a
-/// library like `Device.kicad_sym` is large (hundreds of symbols) and
-/// resolving several parts from the same library must not re-parse it
-/// from scratch each time.
+/// A parsed `.kicad_sym` file's (or folder library's) whole symbol table,
+/// keyed by the bare symbol name (no library prefix) -- cached per absolute
+/// path, since a library like `Device.kicad_sym` is large (hundreds of
+/// symbols) and resolving several parts from the same library must not
+/// re-parse it from scratch each time.
 type LibraryTable = HashMap<String, LibSymbol>;
 
-/// Each parsed library with the modification time of the file it was read from: a library of the board's own tables is edited, and a changed file is read again.
+/// Each parsed library with the modification time of the file (or folder library) it was read from (`symbol_library_modified`): a library of the board's own
+/// tables is edited, and a changed file is read again.
 fn cache() -> &'static Mutex<HashMap<PathBuf, (Option<std::time::SystemTime>, std::sync::Arc<LibraryTable>)>> {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, (Option<std::time::SystemTime>, std::sync::Arc<LibraryTable>)>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -99,7 +112,7 @@ pub fn list_symbols_in_library(lib_root: &Path, lib_name: &str) -> Vec<LibSymbol
     list_symbols_in_file(&path, lib_name)
 }
 
-/// [`list_symbols_in_library`] for a library whose file the caller already knows (the libraries of the board's library tables).
+/// [`list_symbols_in_library`] for a library whose file (or folder) the caller already knows (the libraries of the board's library tables).
 pub fn list_symbols_in_file(path: &Path, lib_name: &str) -> Vec<LibSymbol> {
     let Ok(table) = load_library_table(path) else { return Vec::new() };
     let mut out: Vec<LibSymbol> = table
@@ -114,8 +127,9 @@ pub fn list_symbols_in_file(path: &Path, lib_name: &str) -> Vec<LibSymbol> {
     out
 }
 
-/// Every `.kicad_sym` file directly under `lib_root`, as bare library
-/// names (`"Device"`, not `"Device.kicad_sym"`) -- what `A`'s symbol
+/// Every `.kicad_sym` file and `.kicad_symdir` folder directly under
+/// `lib_root`, as bare library names (`"Device"`, not `"Device.kicad_sym"`;
+/// a name both forms give is listed once) -- what `A`'s symbol
 /// chooser treats as "the libraries we already load" when it also wants
 /// real installed-library content, not just the hand-ported `builtin`
 /// catalog. Empty, not an error, when `lib_root` doesn't exist (the
@@ -124,16 +138,15 @@ pub fn list_symbols_in_file(path: &Path, lib_name: &str) -> Vec<LibSymbol> {
 /// offer beyond `builtin`").
 pub fn list_symbol_libraries(lib_root: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(lib_root) else { return Vec::new() };
-    let mut names: Vec<String> = entries
-        .filter_map(|e| e.ok())
-        .filter_map(|e| e.path().file_stem().and_then(|s| s.to_str()).map(String::from).filter(|_| e.path().extension().and_then(|x| x.to_str()) == Some("kicad_sym")))
-        .collect();
+    let mut names: Vec<String> = entries.filter_map(|e| e.ok()).filter_map(|e| crate::symbol_library_name(&e.path())).collect();
     names.sort();
+    names.dedup();
     names
 }
 
+/// The symbol table of the library at `path`, a `.kicad_sym` file or a folder library (`read_symbol_library_text`), cached.
 fn load_library_table(path: &Path) -> Result<std::sync::Arc<LibraryTable>, String> {
-    let stamp = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    let stamp = crate::symbol_library_modified(path);
     {
         let guard = cache().lock().unwrap();
         if let Some((s, t)) = guard.get(path) {
@@ -142,7 +155,7 @@ fn load_library_table(path: &Path) -> Result<std::sync::Arc<LibraryTable>, Strin
             }
         }
     }
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let text = crate::read_symbol_library_text(path)?;
     let table = parse_symbol_library(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     let table = std::sync::Arc::new(table);
     cache().lock().unwrap().insert(path.to_path_buf(), (stamp, table.clone()));
@@ -441,19 +454,19 @@ fn parse_pin(item: &[Sexpr], unit: u32) -> Option<LibPin> {
 /// most parts (a plain resistor, a generic IC), not an error. Returns one
 /// human-readable warning per symbol that resolved to a file that exists
 /// but failed to parse.
-/// The fields named `Sim.*` of the library symbol `symbol_name` in the `.kicad_sym` at `path` (following `extends` to its parents, the nearest field of a
-/// name winning, as `LIB_SYMBOL::Flatten` lays a derived symbol's fields over its parent's), in the order the file has them. Cached per file and
-/// modification time, like the library table.
+/// The fields named `Sim.*` of the library symbol `symbol_name` in the `.kicad_sym` (or folder library) at `path` (following `extends` to its parents, the
+/// nearest field of a name winning, as `LIB_SYMBOL::Flatten` lays a derived symbol's fields over its parent's), in the order the file has them. Cached per
+/// file and modification time, like the library table.
 pub fn sim_fields_of(path: &Path, symbol_name: &str) -> Vec<(String, String)> {
     type SimTable = HashMap<String, Vec<(String, String)>>;
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, (Option<std::time::SystemTime>, std::sync::Arc<SimTable>)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let stamp = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    let stamp = crate::symbol_library_modified(path);
     let cached = cache.lock().ok().and_then(|g| g.get(path).filter(|(s, _)| *s == stamp).map(|(_, t)| t.clone()));
     let table = match cached {
         Some(t) => t,
         None => {
-            let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
+            let Ok(text) = crate::read_symbol_library_text(path) else { return Vec::new() };
             let Ok(tree) = sexpr::parse(&text) else { return Vec::new() };
             let Some(root) = tree.as_list() else { return Vec::new() };
             let mut own: HashMap<String, (Option<String>, Vec<(String, String)>)> = HashMap::new();
@@ -499,7 +512,7 @@ pub fn resolve_library_symbols(model: &mut ConstraintModel, lib_root: &Path) -> 
     resolve_library_symbols_with(model, |lib_name| find_symbol_library_file(lib_root, lib_name))
 }
 
-/// [`resolve_library_symbols`] with the way a library's nickname finds its `.kicad_sym` file left to the caller -- the libraries of the board's library
+/// [`resolve_library_symbols`] with the way a library's nickname finds its `.kicad_sym` file (or folder library) left to the caller -- the libraries of the board's library
 /// tables, where a nickname and a file name are two things. `find` is asked only for libraries the model needs.
 pub fn resolve_library_symbols_with(model: &mut ConstraintModel, mut find: impl FnMut(&str) -> Option<PathBuf>) -> Vec<String> {
     let have: std::collections::BTreeSet<String> = model.symbols.iter().map(|s| s.lib_id.clone()).collect();

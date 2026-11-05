@@ -196,15 +196,15 @@ fn footprint_sample(root: &Path, n: usize) -> Vec<PathBuf> {
     out
 }
 
-/// About `n` symbols by (library file, name): one from every few libraries, then derived and multi-unit ones until there are at least
-/// a dozen of each.
+/// About `n` symbols by (library file or KiCad 10 `.kicad_symdir` folder, name): one from every few libraries, then derived and multi-unit ones until
+/// there are at least a dozen of each.
 fn symbol_sample(root: &Path, n: usize) -> Vec<(PathBuf, String)> {
-    let libs = sorted_dir(root, "kicad_sym");
+    let libs: Vec<PathBuf> = eda_kicad::list_symbol_libraries(root).iter().filter_map(|name| eda_kicad::find_symbol_library_file(root, name)).collect();
     let mut out: Vec<(PathBuf, String)> = Vec::new();
     let (mut derived, mut multi) = (0, 0);
     let step = (libs.len() / n).max(1);
     for (k, lib) in libs.iter().enumerate() {
-        let text = std::fs::read_to_string(lib).unwrap_or_default();
+        let text = eda_kicad::read_symbol_library_text(lib).unwrap_or_default();
         let sums = eda_kicad::scan_symbols(&text);
         if sums.is_empty() {
             continue;
@@ -244,8 +244,8 @@ fn symbol_sample(root: &Path, n: usize) -> Vec<(PathBuf, String)> {
         ("74xx", "74LS00"),
         ("Device", "R"),
     ] {
-        let path = root.join(format!("{lib}.kicad_sym"));
-        if path.exists() && !out.iter().any(|(l, n)| *l == path && n == name) {
+        let Some(path) = eda_kicad::find_symbol_library_file(root, lib) else { continue };
+        if !out.iter().any(|(l, n)| *l == path && n == name) {
             out.push((path, name.to_string()));
         }
     }
@@ -448,7 +448,7 @@ fn kicad_writes_the_installed_symbols_the_same_after_the_symbol_editors_round_tr
     std::fs::create_dir_all(&ours).unwrap();
     let mut items = Vec::new();
     for (k, (lib, name)) in sample.iter().enumerate() {
-        let text = std::fs::read_to_string(lib).unwrap();
+        let text = eda_kicad::read_symbol_library_text(lib).unwrap();
         let (one, chain) = symbol_library_of(&text, name);
         let parsed = eda_kicad::parse_library_symbols(&one).unwrap_or_else(|e| panic!("{}:{name}: {e}", lib.display()));
         let syms: Vec<&eda_model::ir::LibrarySymbol> = parsed.symbols.iter().collect();

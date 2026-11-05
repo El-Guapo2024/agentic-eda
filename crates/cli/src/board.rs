@@ -5047,7 +5047,7 @@ pub(crate) mod tests {
     /// and default Footprint, and one undo takes the instance AND the definition back (redo brings both). Needs KiCad.app's libraries.
     #[test]
     fn placing_an_installed_symbol_keeps_its_definition_and_undo_takes_it_back() {
-        if !eda_kicad::default_symbol_library_root().join("Amplifier_Operational.kicad_sym").is_file() {
+        if eda_kicad::find_symbol_library_file(&eda_kicad::default_symbol_library_root(), "Amplifier_Operational").is_none() {
             eprintln!("no KiCad symbol libraries installed; skipping");
             return;
         }
@@ -5069,7 +5069,7 @@ pub(crate) mod tests {
         assert_eq!((part.value.as_deref(), part.footprint.as_deref(), part.pins.len()), (Some("LM358"), None, 8), "a new instance starts with its library symbol's Value");
         assert!(part.datasheet.as_deref().is_some_and(|d| d.contains("lm2904")), "and its Datasheet: {:?}", part.datasheet);
         // A symbol with a default footprint brings it: the part names it, and it resolves from the footprint library so the PCB can place the part.
-        if eda_kicad::default_symbol_library_root().join("Regulator_Linear.kicad_sym").is_file() && eda_kicad::default_footprint_library_root().join("Package_TO_SOT_SMD.pretty").is_dir() {
+        if eda_kicad::find_symbol_library_file(&eda_kicad::default_symbol_library_root(), "Regulator_Linear").is_some() && eda_kicad::default_footprint_library_root().join("Package_TO_SOT_SMD.pretty").is_dir() {
             step(&dir, Cmd::AddSymbol { annotate: None, id: "U95".into(), lib_id: "Regulator_Linear:AMS1117-3.3".into(), at: Point { x: mm(240.0), y: mm(20.0) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
             let (_, _, model) = load(&dir).unwrap();
             let reg = model.part("U95").unwrap();
@@ -5117,7 +5117,7 @@ pub(crate) mod tests {
             eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
             return;
         }
-        if eda_kicad_engine::find_cli().is_none() || !eda_kicad::default_symbol_library_root().join("Amplifier_Operational.kicad_sym").is_file() {
+        if eda_kicad_engine::find_cli().is_none() || eda_kicad::find_symbol_library_file(&eda_kicad::default_symbol_library_root(), "Amplifier_Operational").is_none() {
             eprintln!("no kicad-cli or no KiCad symbol libraries; skipping");
             return;
         }
@@ -5209,15 +5209,14 @@ pub(crate) mod tests {
             eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
             return;
         }
-        let device = eda_kicad::default_symbol_library_root().join("Device.kicad_sym");
-        if eda_kicad_engine::find_cli().is_none() || !device.is_file() {
+        let Some(device) = eda_kicad::find_symbol_library_file(&eda_kicad::default_symbol_library_root(), "Device").filter(|_| eda_kicad_engine::find_cli().is_some()) else {
             eprintln!("no kicad-cli or no KiCad symbol libraries; skipping");
             return;
-        }
+        };
         let dir = scratch("tables_erc");
         setup_schematic(&dir);
         // MyParts: one symbol, KiCad's Device:R under another library's name
-        let text = std::fs::read_to_string(&device).unwrap();
+        let text = eda_kicad::read_symbol_library_text(&device).unwrap();
         let summaries = eda_kicad::scan_symbols(&text);
         let r = summaries.iter().find(|s| s.name == "R").expect("Device has R");
         std::fs::create_dir_all(dir.join("libs")).unwrap();

@@ -392,9 +392,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   The derived KiCad project carries the tables and the variables (`derive_project`), so kicad-cli ERC (`lib_symbol_issues`), DRC (`lib_footprint_issues`) and the 3D export resolve the same libraries
   (slow-tier tests); `eda import-kicad` brings a project's own tables and variables along. Tests: Rust unit tests for the format, the variables, the resolution, the routes, the import and a
   place-from-table round trip; 13 web unit tests; `e2e/library-tables.check.js` (53 checks).
+- Done (2026-11-03, `task-symdir`): **folder symbol libraries**, KiCad 10's `Device.kicad_symdir/` (a `.kicad_sym` per symbol, the only form kicad-symbols ships, so with `KICAD_PATH` on it the
+  studio had found no symbol library and drawn every part with the built-in symbols). `crates/kicad/src/symbol_lib_dir.rs` ports `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load`'s folder branch (every
+  `*.kicad_sym` into one symbol map, a later name replacing an earlier one, parents linked across files), `CanReadLibrary` and `isLibraryPathValid`; every reader takes the folder's one text, and
+  the table dialog adds one ("KiCad (folder with .kicad_sym files)"). Differs and the unported writing side: `PARITY-common.md` section 14.
 - Missing: saving the editors' symbols and footprints into a table library's file (they write the project library of `design.json`; a library made with New Library stays empty until a file is put
-  into it), Add Library by drop (a browser drop has no path), Reset and Migrate Libraries, formats other than KiCad's (listed with a warning, kept in the table, not read), symbol folders of
-  `.kicad_sym` files, Edit Options..., 3D model search paths (Configure Paths lists KiCad's variables; the `3D Models` paths are the footprint's own text); KiCad's
+  into it; writing a folder library, `Save`'s file per symbol, comes with it), Add Library by drop (a browser drop has no path), Reset and Migrate Libraries, formats other than KiCad's (listed with
+  a warning, kept in the table, not read), Edit Options..., 3D model search paths (Configure Paths lists KiCad's variables; the `3D Models` paths are the footprint's own text); KiCad's
   regular-expression (`/re/`) and relational (`voltage>3.3`) search words; the Footprint selector's list and the 3D preview of the Footprint Chooser; the chooser places a symbol in its normal
   body style (Cycle Body Style changes it afterwards, item 12); Change Symbols lists only the libraries the design references; power symbols are placed by `P`, not offered here.
 - Port from: `common/libraries/{library_manager,library_table,library_table_parser}.cpp`, `common/libraries/lib_table_grid_data_model.cpp`, `common/dialogs/{dialog_edit_library_tables,dialog_configure_paths}.cpp`,
@@ -1319,7 +1323,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   `crates/cli/src/library_tables.rs`); Manage Symbol Libraries, Manage Footprint Libraries, Configure Paths, New Library and Add Library (`components/libraryTables/`, `actions/libraryTableActions.ts`);
   the derived KiCad project and `eda import-kicad` carry the tables and the variables; `GET /api/3dmodel` reads a model path with the board's variables (`library_tables::ModelNames`).
 - Left: saving the Symbol and Footprint editors' work into a table library's file (the editors write the project library; Save, Save As and Export would write the library the row names), the library
-  drop (a browser drop carries no path), Reset and Migrate Libraries, Edit Options..., symbol folders of `.kicad_sym` files, formats other than KiCad's, the 3D model search paths and Migrate 3D Models (P14).
+  drop (a browser drop carries no path), Reset and Migrate Libraries, Edit Options..., writing a folder symbol library (`.kicad_symdir`, read since 2026-11-03), formats other than KiCad's, the 3D model search paths and Migrate 3D Models (P14).
 - KiCad: `common/libraries/{library_manager,library_table,library_table_parser}.cpp`, `common/libraries/lib_table_grid_data_model.cpp`, `common/dialogs/{dialog_edit_library_tables,dialog_configure_paths}.cpp`,
   `eeschema/dialogs/panel_sym_lib_table.cpp`, `pcbnew/dialogs/panel_fp_lib_table.cpp`, `eeschema/tools/symbol_editor_control.cpp` and `pcbnew/tools/pcb_control.cpp` (`AddLibrary`, `NewLibrary`).
 - Conflicts: P17 and P18 build on it; P2 (`library_place.rs`).

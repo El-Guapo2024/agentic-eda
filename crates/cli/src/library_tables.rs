@@ -137,7 +137,8 @@ pub(crate) fn project_table_path(dir: &Path, kind: TableKind) -> PathBuf {
 }
 
 /// The libraries of KiCad's library folder as a table of their own, for a machine whose KiCad has no table to read: one row per `.kicad_sym` file or
-/// `.pretty` folder, named by its file name.
+/// `.kicad_symdir` folder library (KiCad 10's kicad-symbols ships only these) or `.pretty` folder, named by its file name. A name both a file and a folder
+/// give is the file's row, as `eda_kicad::find_symbol_library_file` reads the file.
 fn folder_table(kind: TableKind, root: &Path) -> LoadedTable {
     let mut rows: Vec<lt::Row> = std::fs::read_dir(root)
         .map(|entries| {
@@ -148,7 +149,7 @@ fn folder_table(kind: TableKind, root: &Path) -> LoadedTable {
                     let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("");
                     let name = path.file_stem().and_then(|s| s.to_str())?.to_string();
                     let wanted = match kind {
-                        TableKind::Symbol => ext == "kicad_sym" && path.is_file(),
+                        TableKind::Symbol => eda_kicad::symbol_library_name(&path).is_some(),
                         TableKind::Footprint => ext == "pretty" && path.is_dir(),
                         TableKind::DesignBlock => ext == eda_kicad::design_block::LIBRARY_EXT && path.is_dir(),
                     };
@@ -157,7 +158,9 @@ fn folder_table(kind: TableKind, root: &Path) -> LoadedTable {
                 .collect()
         })
         .unwrap_or_default();
-    rows.sort_by(|a, b| a.nickname.cmp(&b.nickname));
+    // `Device.kicad_sym` sorts before `Device.kicad_symdir`
+    rows.sort_by(|a, b| a.nickname.cmp(&b.nickname).then_with(|| a.uri.cmp(&b.uri)));
+    rows.dedup_by(|b, a| a.nickname == b.nickname);
     let loaded = rows.iter().map(|_| LoadedRow { ok: true, ..Default::default() }).collect();
     LoadedTable { path: root.join(kind.file_name()), scope: Scope::Global, table: Table { kind, version: Some(lt::TABLE_VERSION), rows }, rows: loaded }
 }
@@ -252,7 +255,10 @@ impl LibSet {
             .collect();
         entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
         let by_name = entries.iter().enumerate().map(|(i, e)| (e.name.clone(), i)).collect();
-        // The set is another set when a library came or went, moved, or changed on disk.
+        // The set is another set when a library came or went, moved, or changed on disk. A folder symbol library (`.kicad_symdir`) counts by the folder's
+        // own time: a file of it added, removed or renamed, and KiCad's save (which writes a sibling temp file and renames it over the old one). The time of
+        // each of its files (`Kind::modified`, what the caches of one library's content check) is a look at every file -- kicad-symbols has 22,910 -- on
+        // every request; a file edited in place leaves the set as it was, and so the all-names answer of the trees (`library_index::all`).
         let mut text = format!("{kind:?}");
         for e in &entries {
             let stamp = modified(&e.path).and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
@@ -361,7 +367,8 @@ fn rows_in(req: &Value) -> Result<Vec<lt::Row>, Value> {
         .collect())
 }
 
-/// `GuessPluginTypeFromLibPath`: a table file is a nested table; KiCad's own formats are told by their extension.
+/// `GuessPluginTypeFromLibPath`: a table file is a nested table; KiCad's own formats are told by their extension, and a symbol library also by being a
+/// folder of `.kicad_sym` files (`SCH_IO_KICAD_SEXPR::CanReadLibrary`, KiCad 10's `.kicad_symdir`).
 fn guess_type(kind: TableKind, path: &Path) -> Option<&'static str> {
     if path.is_file() {
         if let Ok(t) = std::fs::read_to_string(path).map_err(|_| ()).and_then(|t| Table::parse(&t).map_err(|_| ())) {
@@ -372,7 +379,7 @@ fn guess_type(kind: TableKind, path: &Path) -> Option<&'static str> {
     }
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     match kind {
-        TableKind::Symbol => (ext == "kicad_sym").then_some(lt::KICAD_TYPE),
+        TableKind::Symbol => (ext == eda_kicad::SYMBOL_LIB_FILE_EXT || (path.is_dir() && eda_kicad::can_read_symbol_library(path))).then_some(lt::KICAD_TYPE),
         TableKind::Footprint => (ext == "pretty").then_some(lt::KICAD_TYPE),
         // `DESIGN_BLOCK_IO_MGR::GuessPluginTypeFromLibPath` asks `CanReadLibrary`, which looks for a file with the extension *inside* the folder and so never finds
         // one in a real library (a library holds only block folders); the folder's own extension is what tells it here.
@@ -791,8 +798,10 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
         if let Some(why) = lt::check_row(kind, &row, &path) {
             return bad(why);
         }
-        if kind == TableKind::Symbol && !has_ext {
-            return bad("Choose a .kicad_sym file.");
+        // a folder is a folder library, KiCad 10's `.kicad_symdir` ("KiCad (folder with .kicad_sym files)" of `PANEL_SYM_LIB_TABLE`'s browse menu, any
+        // folder its `wxDirDialog` lets one pick), nicknamed by `GetName()` as a file is
+        if kind == TableKind::Symbol && !has_ext && !path.is_dir() {
+            return bad("Choose a .kicad_sym file, or a folder of .kicad_sym files.");
         }
     }
     let uri = lt::normalize_path(&path, &normalize_vars(env, &vars, dir), Some(dir));
@@ -861,8 +870,8 @@ pub(crate) fn set_variables_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
 
 /// `GET /api/fs/list?path=&what=`: the stand-in for the native file dialog the browse buttons open in KiCad -- a page cannot see the machine's folders, the
 /// server can. The folders of `path` (variables allowed, relative to the board's folder; a file stands for its folder), and the files `what` asks for:
-/// `symbol` (.kicad_sym), `table` (a library table), nothing but folders for `footprint` and `design_block` (a `.pretty` or `.kicad_blocks` folder is flagged: it is the
-/// library) and `folder`.
+/// `symbol` (.kicad_sym), `table` (a library table), nothing but folders for `footprint`, `design_block`, `symbol_folder` (a folder library of symbols) and
+/// `folder`. A `.pretty`, `.kicad_blocks` or `.kicad_symdir` folder is flagged: it is the library.
 pub(crate) fn browse(dir: &Path, typed: &str, what: &str) -> Value {
     browse_with(&Env::discover(), dir, typed, what)
 }
@@ -899,7 +908,7 @@ pub(crate) fn browse_with(env: &Env, dir: &Path, typed: &str, what: &str) -> Val
             }
         };
         if wanted {
-            entries.push((name.clone(), is_dir, is_dir && (name.ends_with(".pretty") || name.ends_with(".kicad_blocks"))));
+            entries.push((name.clone(), is_dir, is_dir && (name.ends_with(".pretty") || name.ends_with(".kicad_blocks") || name.ends_with(".kicad_symdir"))));
         }
     }
     entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
@@ -1068,6 +1077,53 @@ pub(crate) mod tests {
         let set = m.set(Kind::Symbol);
         assert_eq!(names(&set), ["Amp", "Device"], "a row per library file");
         assert_eq!(set.describe(Kind::Symbol, "Amp"), None);
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    /// KiCad 10's folder libraries (kicad-symbols ships `Device.kicad_symdir/`, a `.kicad_sym` per symbol): with no table to read, each is a row of the
+    /// folder's table, named by its stem; a row naming one is a library that reads (`isLibraryPathValid`: the folder exists), of type KiCad when the
+    /// type is left blank (`CanReadLibrary`); Add Existing takes one ("KiCad (folder with .kicad_sym files)"), and the browser flags it as a library.
+    #[test]
+    fn a_folder_of_symbol_files_is_a_library_of_the_tables() {
+        let m = machine("symdir", false);
+        std::fs::remove_file(m.share.join("template").join("sym-lib-table")).unwrap();
+        let symbols = m.share.join("symbols");
+        for lib in ["Device", "Amp"] {
+            std::fs::remove_file(symbols.join(format!("{lib}.kicad_sym"))).unwrap();
+        }
+        let dir = symbols.join("Device.kicad_symdir");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("R.kicad_sym"), "(kicad_symbol_lib (version 20251024) (symbol \"R\"))").unwrap();
+        std::fs::write(symbols.join("Amp.kicad_sym"), "(kicad_symbol_lib (symbol \"LM358\"))").unwrap();
+        // the same name as a file and as a folder: one row, the file's
+        std::fs::create_dir_all(symbols.join("Amp.kicad_symdir")).unwrap();
+        let loaded = load_with(m.env(), &m.board, TableKind::Symbol);
+        assert!(matches!(&loaded.global_origin, GlobalOrigin::Folder(_)), "{:?}", loaded.global_origin);
+        let set = m.set(Kind::Symbol);
+        assert_eq!(names(&set), ["Amp", "Device"]);
+        assert_eq!(set.find("Device").unwrap().path, dir);
+        assert!(set.find("Amp").unwrap().path.ends_with("Amp.kicad_sym"));
+        assert_eq!(crate::library_index::items_in_for_tests(Kind::Symbol, &set, "Device").unwrap(), ["R"]);
+
+        let env = m.env();
+        let shared = m.root.join("shared");
+        let team = shared.join("Team.kicad_symdir");
+        std::fs::create_dir_all(&team).unwrap();
+        std::fs::write(team.join("X.kicad_sym"), "(kicad_symbol_lib (symbol \"X\"))").unwrap();
+        std::fs::create_dir_all(shared.join("plain")).unwrap();
+        let checked = check_rows_with(&env, &m.board, &req(json!({ "kind": "symbol", "rows": [row("Team", &team.display().to_string()), row("Plain", &shared.join("plain").display().to_string())] })));
+        assert_eq!(checked["results"][0]["error"], "", "{checked}");
+        assert_eq!(checked["results"][0]["guess"], "KiCad");
+        assert_eq!(checked["results"][1]["error"], "", "an empty folder loads as an empty library");
+        assert!(checked["results"][1]["guess"].is_null(), "but CanReadLibrary does not know it: {checked}");
+        let added = add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "path": team.display().to_string() })));
+        assert_eq!(added["added"]["nickname"], "Team", "{added}");
+        assert_eq!(added["added"]["uri"], team.display().to_string());
+        assert_eq!(crate::library_index::items_in_for_tests(Kind::Symbol, &m.set(Kind::Symbol), "Team").unwrap(), ["X"]);
+        assert!(add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "path": shared.join("nothing").display().to_string() })))["error"].as_str().unwrap().contains("not found"));
+        let listed = browse_with(&env, &m.board, &shared.display().to_string(), "symbol_folder");
+        let entries: Vec<(String, bool)> = listed["entries"].as_array().unwrap().iter().map(|e| (e["name"].as_str().unwrap().to_string(), e["library"].as_bool().unwrap())).collect();
+        assert_eq!(entries, [("plain".to_string(), false), ("Team.kicad_symdir".to_string(), true)]);
         let _ = std::fs::remove_dir_all(&m.root);
     }
 
