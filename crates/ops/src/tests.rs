@@ -3261,9 +3261,34 @@ fn the_plot_dialogs_store_their_choices_in_the_board() {
     assert_eq!(plot.board_layers(&m.board.layers), vec!["F.Cu", "F.Mask", "Edge.Cuts"]);
     assert_eq!(b.apply(&cmd).unwrap_err()[0].check, "ops_plot_settings");
     // The drill dialog sends only its Origin.
-    b.apply(&Cmd::SetPlotSettings { layers: None, use_aux_origin: Some(false) }).unwrap();
+    b.apply(&Cmd::SetPlotSettings { layers: None, use_aux_origin: Some(false), plot_on_all_layers: None, options: None }).unwrap();
     let plot = eda_model::plot_params::PlotParams::of_design(b.design());
     assert_eq!((plot.flag("useauxorigin"), plot.board_layers(&m.board.layers)), (Some(false), vec!["F.Cu".to_string(), "F.Mask".into(), "Edge.Cuts".into()]));
+}
+
+/// X1 (UI-LEFT): the Plot dialog's other controls are stored as `DIALOG_PLOT::applyPlotSettings` stores them: "Plot on All Layers" in the
+/// list's order, the format, the drill marks, the scale, every format's options and the output folder, by the tokens `PCB_PLOT_PARAMS::Format`
+/// writes. A token the settings do not have, or a value of the wrong kind, is refused with the board left as it was.
+#[test]
+fn the_plot_dialog_stores_every_control_in_the_boards_plot_settings() {
+    let m = net_model();
+    let mut b = board(&m);
+    let cmd: Cmd = serde_json::from_str(
+        r#"{"op":"set_plot_settings","plot_on_all_layers":["Edge.Cuts","F.Fab","Edge.Cuts"],"options":{"outputformat":"4","drillshape":"2","scaleselection":"0","plotframeref":"yes","pdf_single_document":"yes","outputdirectory":"plots\\pdf/"}}"#,
+    )
+    .unwrap();
+    b.apply(&cmd).unwrap();
+    let plot = eda_model::plot_params::PlotParams::of_design(b.design());
+    assert_eq!(plot.plot_on_all_layers, vec!["Edge.Cuts", "F.Fab"], "the list's order, once each");
+    assert_eq!((plot.int("outputformat"), plot.int("drillshape"), plot.int("scaleselection")), (Some(4), Some(2), Some(0)));
+    assert_eq!((plot.flag("plotframeref"), plot.flag("pdf_single_document")), (Some(true), Some(true)));
+    assert_eq!(plot.output_directory(), "plots/pdf/", "backslashes made forward slashes");
+    assert_eq!(b.apply(&cmd).unwrap_err()[0].check, "ops_plot_settings", "nothing changed");
+    for bad in [r#"{"op":"set_plot_settings","options":{"viasonmask":"yes"}}"#, r#"{"op":"set_plot_settings","options":{"mirror":"maybe"}}"#, r#"{"op":"set_plot_settings","plot_on_all_layers":["Nope.Cu"]}"#] {
+        let cmd: Cmd = serde_json::from_str(bad).unwrap();
+        assert_eq!(b.apply(&cmd).unwrap_err()[0].check, "ops_plot_settings", "{bad}");
+    }
+    assert_eq!(eda_model::plot_params::PlotParams::of_design(b.design()), plot, "a refused edit leaves the settings");
 }
 
 /// r4 X4-4: Export IPC-2581's BOM columns kept in the board (`DIALOG_EXPORT_2581::TransferDataFromWindow`, the project's `m_IP2581Bom`); all

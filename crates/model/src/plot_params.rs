@@ -303,6 +303,154 @@ impl PlotParams {
         let v = item.trim_start_matches('(').trim_end_matches(')').split_whitespace().nth(1)?;
         Some(matches!(v, "yes" | "true"))
     }
+
+    /// The value of a number item as `PCB_PLOT_PARAMS_PARSER::parseInt( aMin, aMax )` reads it (`atoi`, then clamped to the token's range,
+    /// [`option_kind`]): `(drillshape 7)` is 2.
+    pub fn int(&self, key: &str) -> Option<i64> {
+        let item = self.item(key)?;
+        let v = item.trim_start_matches('(').trim_end_matches(')').split_whitespace().nth(1)?;
+        let digits: String = v.chars().enumerate().take_while(|(i, c)| c.is_ascii_digit() || (*i == 0 && (*c == '-' || *c == '+'))).map(|(_, c)| c).collect();
+        let n = digits.parse::<i64>().unwrap_or(0);
+        Some(match option_kind(key) {
+            Some(OptionKind::Int(lo, hi)) => n.clamp(lo, hi),
+            _ => n,
+        })
+    }
+
+    /// `m_outputDirectory`: the `(outputdirectory "..")` item's text (`NeedSYMBOLorNUMBER`, so an unquoted `plots/` too), "" when the block has none.
+    pub fn output_directory(&self) -> String {
+        let Some(item) = self.item("outputdirectory") else { return String::new() };
+        let body = item.trim().strip_prefix("(outputdirectory").unwrap_or("").trim().strip_suffix(')').unwrap_or("").trim();
+        match body.strip_prefix('"').and_then(|b| b.strip_suffix('"')) {
+            Some(quoted) => {
+                // The DSN lexer's escapes, as `OUTPUTFORMATTER::Quotew` writes them.
+                let mut out = String::new();
+                let mut chars = quoted.chars();
+                while let Some(c) = chars.next() {
+                    if c == '\\' {
+                        match chars.next() {
+                            Some('n') => out.push('\n'),
+                            Some('r') => out.push('\r'),
+                            Some(o) => out.push(o),
+                            None => {}
+                        }
+                    } else {
+                        out.push(c);
+                    }
+                }
+                out
+            }
+            None => body.to_string(),
+        }
+    }
+
+    /// Sets the item `key` in `PCB_PLOT_PARAMS::Format`'s place for it ([`FORMAT_TOKENS`]' order) when the block has none yet, so a board
+    /// written back lists its items as KiCad writes them.
+    fn set_item_in_order(&mut self, key: &str, text: String) {
+        let open = format!("({key} ");
+        if let Some(i) = self.items.iter_mut().find(|i| i.starts_with(&open)) {
+            *i = text;
+            return;
+        }
+        let rank = |k: &str| FORMAT_TOKENS.iter().position(|t| *t == k);
+        let mine = rank(key);
+        let at = self.items.iter().position(|i| {
+            let tag = i.trim_start_matches('(').split(|c: char| c.is_whitespace() || c == ')').next().unwrap_or("");
+            matches!((rank(tag), mine), (Some(theirs), Some(mine)) if theirs > mine)
+        });
+        match at {
+            Some(i) => self.items.insert(i, text),
+            None => self.items.push(text),
+        }
+    }
+
+    /// One of the Plot dialog's controls stored back as `DIALOG_PLOT::applyPlotSettings` stores it (and the Generate Drill Files dialog's
+    /// output folder, `DIALOG_GENDRILL::updateConfig`): `key` is the token `PCB_PLOT_PARAMS::Format` writes for it, `value` its text --
+    /// `yes`/`no` for a switch, a number for a choice (clamped to the token's range as the parser clamps it), the folder as typed for
+    /// `outputdirectory` (backslashes made forward slashes: `dirStr.Replace( wxT( "\\" ), wxT( "/" ) )`). `gerberprecision` 6 is no item at
+    /// all (`Format` writes it only when it is not `gbrDefaultPrecision`). Refused: a token `Format` does not write, the layer sets (their own
+    /// fields) and the dash ratios (Text & Graphics > Formatting's), and a value that is none of its kind's.
+    pub fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let kind = option_kind(key).ok_or_else(|| format!("the plot settings have no option {key:?}"))?;
+        match kind {
+            OptionKind::Bool => {
+                let v = match value {
+                    "yes" | "true" => "yes",
+                    "no" | "false" => "no",
+                    _ => return Err(format!("{key} is yes or no, not {value:?}")),
+                };
+                self.set_item_in_order(key, format!("({key} {v})"));
+            }
+            OptionKind::Int(lo, hi) => {
+                let n: i64 = value.trim().parse().map_err(|_| format!("{key} is a number, not {value:?}"))?;
+                let n = n.clamp(lo, hi);
+                if key == "gerberprecision" && n == 6 {
+                    self.items.retain(|i| !i.starts_with("(gerberprecision"));
+                } else {
+                    self.set_item_in_order(key, format!("({key} {n})"));
+                }
+            }
+            OptionKind::Text => {
+                let dir = value.replace('\\', "/");
+                let quoted = format!("\"{}\"", dir.replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r"));
+                self.set_item_in_order(key, format!("({key} {quoted})"));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl PlotParams {
+    /// Every control the dialogs store ([`option_kind`]), as the block says it or as `PCB_PLOT_PARAMS::PCB_PLOT_PARAMS` starts it when the
+    /// block has no item for it: `yes`/`no`, a number (clamped as the parser clamps it), the output folder's text.
+    pub fn dialog_values(&self) -> std::collections::BTreeMap<String, String> {
+        let defaults = PlotParams::kicad_default();
+        let mut out = std::collections::BTreeMap::new();
+        for token in FORMAT_TOKENS.iter().copied().chain(["gerberprecision"]) {
+            let Some(kind) = option_kind(token) else { continue };
+            let value = match kind {
+                OptionKind::Bool => {
+                    let on = self.flag(token).or_else(|| defaults.flag(token)).unwrap_or(false);
+                    (if on { "yes" } else { "no" }).to_string()
+                }
+                OptionKind::Int(..) => self.int(token).or_else(|| defaults.int(token)).unwrap_or(if token == "gerberprecision" { 6 } else { 0 }).to_string(),
+                OptionKind::Text => self.output_directory(),
+            };
+            out.insert(token.to_string(), value);
+        }
+        out
+    }
+}
+
+/// What a token of `PCB_PLOT_PARAMS::Format` holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptionKind {
+    /// `KICAD_FORMAT::FormatBool`.
+    Bool,
+    /// `parseInt( min, max )`.
+    Int(i64, i64),
+    /// `outputdirectory`.
+    Text,
+}
+
+/// The kind of each token the dialogs store ([`PlotParams::set_option`]); `None` for the layer sets, the dash ratios and anything `Format`
+/// does not write. The ranges are the parser's: `gerberprecision` `gbrDefaultPrecision - 1 .. gbrDefaultPrecision`, `svgprecision`
+/// `SVG_PRECISION_MIN .. SVG_PRECISION_MAX`, `pngdpi` `MIN_PNG_DPI .. MAX_PNG_DPI`, `outputformat` `PLOT_FORMAT::FIRST_FORMAT .. LAST_FORMAT`
+/// (HPGL 0, Gerber 1, PostScript 2, DXF 3, PDF 4, SVG 5, PNG 6), `drillshape` 0..2 (`DRILL_MARKS`), `scaleselection` 0..4, `mode` 1..2.
+pub fn option_kind(key: &str) -> Option<OptionKind> {
+    Some(match key {
+        "gerberprecision" => OptionKind::Int(5, 6),
+        "svgprecision" => OptionKind::Int(3, 6),
+        "pngdpi" => OptionKind::Int(72, 2400),
+        "outputformat" => OptionKind::Int(0, 6),
+        "drillshape" => OptionKind::Int(0, 2),
+        "scaleselection" => OptionKind::Int(0, 4),
+        "mode" => OptionKind::Int(1, 2),
+        "outputdirectory" => OptionKind::Text,
+        "dashed_line_dash_ratio" | "dashed_line_gap_ratio" => return None,
+        k if FORMAT_TOKENS.contains(&k) => OptionKind::Bool,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -345,6 +493,44 @@ mod tests {
         assert_eq!(p.items[1], "(usegerberextensions yes)");
         p.set_item("gerberprecision", "5");
         assert_eq!(p.items.last().unwrap(), "(gerberprecision 5)");
+    }
+
+    /// The Plot dialog's controls stored back (`DIALOG_PLOT::applyPlotSettings`): each in `Format`'s place, the numbers clamped as the parser
+    /// clamps them, the folder quoted as `Quotew` quotes it and read back.
+    #[test]
+    fn dialog_options_are_stored_in_formats_place_and_read_back() {
+        let mut p = PlotParams::kicad_default();
+        p.set_option("drillshape", "2").unwrap();
+        assert_eq!(p.int("drillshape"), Some(2));
+        p.set_option("scaleselection", "9").unwrap();
+        assert_eq!(p.item("scaleselection"), Some("(scaleselection 4)"), "clamped to 0..4");
+        p.set_option("outputformat", "4").unwrap();
+        assert_eq!(p.int("outputformat"), Some(4));
+        p.set_option("plotframeref", "yes").unwrap();
+        assert_eq!(p.flag("plotframeref"), Some(true));
+        assert!(p.set_option("plotframeref", "maybe").is_err());
+        assert!(p.set_option("layerselection", "0x0").is_err(), "the layer sets are their own fields");
+        assert!(p.set_option("dashed_line_dash_ratio", "3").is_err(), "the dash ratios are Formatting's");
+        assert!(p.set_option("viasonmask", "yes").is_err(), "a token Format no longer writes");
+        p.set_option("outputdirectory", "plots\\gerber \"a\"/").unwrap();
+        assert_eq!(p.item("outputdirectory"), Some("(outputdirectory \"plots/gerber \\\"a\\\"/\")"));
+        assert_eq!(p.output_directory(), "plots/gerber \"a\"/");
+        assert_eq!(PlotParams { items: vec!["(outputdirectory plots/)".into()], ..Default::default() }.output_directory(), "plots/", "a bare symbol too");
+        // The default precision is no item; 5 is written.
+        p.set_option("gerberprecision", "5").unwrap();
+        assert_eq!(p.item("gerberprecision"), Some("(gerberprecision 5)"));
+        let at = |p: &PlotParams, t: &str| p.items.iter().position(|i| i.starts_with(&format!("({t} "))).unwrap();
+        assert!(at(&p, "creategerberjobfile") < at(&p, "gerberprecision") && at(&p, "gerberprecision") < at(&p, "dashed_line_dash_ratio"), "in Format's place: {:?}", p.items);
+        p.set_option("gerberprecision", "6").unwrap();
+        assert!(p.item("gerberprecision").is_none());
+        // A block that lacks an item (an older board) gets it in its place, not at the end.
+        let mut old = PlotParams { items: vec!["(usegerberextensions no)".into(), "(outputdirectory \"\")".into()], ..Default::default() };
+        old.set_option("mirror", "yes").unwrap();
+        assert_eq!(old.items, vec!["(usegerberextensions no)", "(mirror yes)", "(outputdirectory \"\")"]);
+        // What the dialog starts from: the block's own, the defaults for what it lacks.
+        let v = old.dialog_values();
+        assert_eq!((v["mirror"].as_str(), v["usegerberextensions"].as_str(), v["drillshape"].as_str(), v["gerberprecision"].as_str(), v["sketchdnponfab"].as_str()), ("yes", "no", "1", "6", "yes"));
+        assert!(!v.contains_key("dashed_line_dash_ratio") && v.contains_key("useauxorigin"));
     }
 }
 

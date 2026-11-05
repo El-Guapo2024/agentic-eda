@@ -753,6 +753,13 @@ pub enum Cmd {
         layers: Option<Vec<String>>,
         #[serde(default)]
         use_aux_origin: Option<bool>,
+        /// "Plot on All Layers", checked ones in the list's order (`SetPlotOnAllLayersSequence`).
+        #[serde(default)]
+        plot_on_all_layers: Option<Vec<String>>,
+        /// The dialogs' other controls, by the token `PCB_PLOT_PARAMS::Format` writes for each (`"drillshape": "2"`, `"plotframeref": "yes"`,
+        /// `"outputdirectory": "plots/"`): see [`eda_model::plot_params::PlotParams::set_option`].
+        #[serde(default)]
+        options: Option<std::collections::BTreeMap<String, String>>,
     },
     /// Export IPC-2581's BOM columns, kept for the next opening as `DIALOG_EXPORT_2581::TransferDataFromWindow` keeps them in the project --
     /// see [`board_control::set_ipc2581_bom`].
@@ -2975,7 +2982,9 @@ impl<'a> Board<'a> {
             Cmd::MergeZones { ids } => board_control::merge_zones(&mut self.design, ids).map(|_| ()),
             Cmd::SetZonePriority { id, to } => board_control::set_zone_priority(&mut self.design, id, *to),
             Cmd::SetAuxOrigin { at } => board_control::set_aux_origin(&mut self.design, *at),
-            Cmd::SetPlotSettings { layers, use_aux_origin } => board_control::set_plot_settings(&mut self.design, &self.model.board.layers, layers.as_deref(), *use_aux_origin),
+            Cmd::SetPlotSettings { layers, use_aux_origin, plot_on_all_layers, options } => {
+                board_control::set_plot_settings_with(&mut self.design, &self.model.board.layers, layers.as_deref(), *use_aux_origin, plot_on_all_layers.as_deref(), options.as_ref())
+            }
             Cmd::SetIpc2581Bom { bom } => board_control::set_ipc2581_bom(&mut self.design, bom),
             Cmd::SetGridOrigin { at } => board_control::set_grid_origin(&mut self.design, *at),
             Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
