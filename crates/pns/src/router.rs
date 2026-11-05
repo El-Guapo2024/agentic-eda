@@ -98,6 +98,11 @@ pub struct RouteCommit {
     /// its source's solder-mask opening, and `Commit` files it in its source's group (`m_replacementMap`). A track with no source is a new one,
     /// which joins the entered group. r5 R5-2.
     pub track_sources: Vec<(usize, String)>,
+    /// A component drag (`COMPONENT_DRAGGER`): the footprints it moved (`PNS_KICAD_IFACE::Commit`'s `m_fpOffsets`: `footprint->SetPosition( p_orig +
+    /// offset )`) and the IR tracks it moved whole, keeping their ids (`UpdateItem` of a fixed item), both by [`Self::move_by`]. Empty for every other commit.
+    pub moved_footprints: Vec<String>,
+    pub moved_tracks: Vec<String>,
+    pub move_by: (Nm, Nm),
 }
 
 impl RouteCommit {
@@ -136,6 +141,14 @@ pub struct Continuation {
     pub via_gap: Nm,
 }
 
+/// A drag of a set of items (`ROUTER::StartDragging( aP, ITEM_SET aStartItems, .. )`): of nothing but solids, a footprint's pads
+/// (`COMPONENT_DRAGGER`, `m_state = DRAG_COMPONENT`), or of more than one track (`MULTI_DRAGGER`).
+#[derive(Debug, Clone)]
+enum GroupDrag {
+    Component(crate::component_dragger::ComponentDragger),
+    Multi(crate::multi_dragger::MultiDragger),
+}
+
 /// `isStartingPointRoutable`'s refusal of a start on a non-plated pad.
 const NPTH_START: &str = "Cannot start routing from a non-plated hole.";
 
@@ -156,6 +169,11 @@ pub struct Router {
     /// session, mutually exclusive with `session`/`drag` the same way
     /// those two already are with each other.
     diff: Option<crate::dp_placer::DiffPairPlacer>,
+    /// A component or multi-track drag ([`GroupDrag`]): a drag session as [`Self::drag`] is, the two never both.
+    group_drag: Option<GroupDrag>,
+    /// Where each footprint of the board is (`FOOTPRINT::GetPosition`): a component drag of one footprint starts there (`InlineDrag`: "Use
+    /// footprint anchor to warp mouse").
+    footprint_at: HashMap<String, Point>,
     /// This session restarted from the other end of a route whose fixed part was committed (`ROUTER::ContinueFromEnd`): what it commits
     /// is one undo step with that earlier commit (`APPEND_UNDO`). The caller that applies the commits keeps it.
     pub append_undo: bool,
@@ -185,7 +203,8 @@ impl Router {
         let (world, layers) = crate::from_ir::build_node(design, model);
         let via_kinds = design.drawings.iter().flat_map(|d| d.via_extras.iter()).filter(|e| e.kind != ViaKind::Through).map(|e| (e.id.clone(), e.kind)).collect();
         let track_pins = design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| !t.pins.is_empty()).map(|t| (t.id.clone(), t.pins.clone())).collect();
-        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false, entered_group: None, user_diff_pair: None, via_kinds, track_pins, drag_mode: None, use_connected_track_width: true }
+        let footprint_at = design.placement.iter().flat_map(|p| p.footprints.iter()).map(|f| (f.id.clone(), f.at)).collect();
+        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, group_drag: None, footprint_at, append_undo: false, entered_group: None, user_diff_pair: None, via_kinds, track_pins, drag_mode: None, use_connected_track_width: true }
     }
 
     /// The type of the board's via `id` (a through via unless the board says otherwise).
@@ -205,7 +224,7 @@ impl Router {
     }
 
     pub fn is_dragging(&self) -> bool {
-        self.drag.is_some()
+        self.drag.is_some() || self.group_drag.is_some()
     }
 
     pub fn is_routing_diff_pair(&self) -> bool {
@@ -274,6 +293,7 @@ impl Router {
         let mut placer = LinePlacer::start(&self.world, start_pos, pick.as_ref().map(|p| p.item), net, layer, width);
         let Some(pick) = pick else {
             self.drag = None;
+            self.group_drag = None;
             self.diff = None;
             self.session = Some(Session { placer, pending_via_layer: None, world: None, splits: Vec::new(), pending_via_kind: ViaKind::Through, placed_vias: Vec::new() });
             return Ok(());
@@ -296,6 +316,7 @@ impl Router {
             placer.exclude_end.push(pick.item);
         }
         self.drag = None;
+        self.group_drag = None;
         self.diff = None;
         self.session = Some(Session { placer, pending_via_layer: None, world, splits, pending_via_kind: ViaKind::Through, placed_vias: Vec::new() });
         Ok(())
@@ -1161,6 +1182,7 @@ impl Router {
         let dragger = crate::dragger::Dragger::start_checked(&self.world, at, item_id, free_angle)?;
         self.session = None;
         self.diff = None;
+        self.group_drag = None;
         self.drag = Some(dragger);
         self.drag_mode = Some(self.settings.mode);
         Ok(())
@@ -1171,6 +1193,9 @@ impl Router {
     pub fn drag_preview(&mut self, at: Point) -> Option<crate::dragger::DragPreview> {
         let settings = self.drag_settings();
         let (world, rules) = (&self.world, &self.rules);
+        if let Some(g) = self.group_drag.as_mut() {
+            return Some(Self::group_preview(g, world, rules, &settings, at));
+        }
         self.drag.as_mut().map(|d| d.drag(world, rules, &settings, at))
     }
 
@@ -1181,6 +1206,13 @@ impl Router {
 
     /// The IR tracks the dragged line stands on: what the cursor must not snap to while dragging (`checkSnap`).
     pub fn drag_line_tracks(&self) -> Vec<String> {
+        if let Some(GroupDrag::Multi(m)) = &self.group_drag {
+            // `checkSnap`: none of the dragged lines is snapped onto
+            let mut out: Vec<String> = m.lines().iter().flat_map(|l| l.original_line.segment_ids.iter()).filter_map(|id| self.world.get(*id).and_then(|it| it.source_track_id()).map(str::to_string)).collect();
+            out.sort_unstable();
+            out.dedup();
+            return out;
+        }
         self.drag.as_ref().map(|d| d.line_tracks(&self.world)).unwrap_or_default()
     }
 
@@ -1201,6 +1233,7 @@ impl Router {
 
     pub fn drag_cancel(&mut self) {
         self.drag = None;
+        self.group_drag = None;
     }
 
     /// `DRAGGER::FixRoute( false )`: [`Self::drag_finish_with`] without the Ctrl.
@@ -1217,6 +1250,9 @@ impl Router {
     /// open, so the caller can keep adjusting or explicitly cancel.
     pub fn drag_finish_with(&mut self, at: Point, force_commit: bool) -> Option<RouteCommit> {
         let settings = self.drag_settings();
+        if self.group_drag.is_some() {
+            return self.group_drag_finish(at, force_commit, &settings);
+        }
         let drag_commit = self.drag.as_mut()?.finish(&self.world, &self.rules, &settings, at, force_commit)?;
         let mut commit = RouteCommit { remove_track_ids: drag_commit.remove_track_ids, remove_via_ids: drag_commit.remove_via_ids, ..RouteCommit::default() };
         for (k, line) in drag_commit.tracks.iter().enumerate() {
@@ -1246,6 +1282,194 @@ impl Router {
         }
         self.drop_redundant(&mut commit);
         self.drag = None;
+        Some(commit)
+    }
+
+    // ------------------------------------------------------------- component and multi-track drags (`D` on a selection)
+
+    /// The solids of the footprints `refs` (`ROUTER_TOOL::InlineDrag`'s `itemsToDrag` of a footprint selection): every pad's
+    /// (`FindItemByParent( pad )`), the copper graphics and texts of the footprint (`footprint->GraphicalItems()` on a copper layer), and the
+    /// footprint's keepout rule areas (`footprint->Zones()`, `FindItemsByParent( zone )`). In id order.
+    fn footprint_solids(&self, refs: &[String]) -> Vec<ItemId> {
+        let resolver = self.world.rule_resolver();
+        let mut out: Vec<ItemId> = self
+            .world
+            .iter()
+            .filter_map(|(id, it)| {
+                let Item::Solid(s) = it else { return None };
+                let fp = resolver.and_then(|r| r.footprint_of(s)).map(str::to_string);
+                let keepout_fp = resolver.and_then(|r| r.keepout(s)).and_then(|k| k.parent_footprint.clone());
+                let text_fp = s.source.strip_prefix(crate::item::Solid::TEXT_SOURCE).and_then(|t| t.rsplit_once(':')).map(|(fp, _)| fp.to_string());
+                let pad_fp = s.source.split_once('.').map(|(fp, _)| fp.to_string()).filter(|_| !s.edge && !s.is_graphic() && !s.is_text() && !s.is_keepout() && !s.is_obstacle());
+                let of = fp.or(keepout_fp).or(text_fp).or(pad_fp)?;
+                refs.contains(&of).then_some(id)
+            })
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// `TOOL_BASE::snapToItem( aItem, aP )` of the item of `items` nearest `at` (`InlineDrag`'s "Snap to closest item": the least
+    /// `shape->SquaredDistance( p0, 0 )`): a pad snaps to its centre (or the nearest of its connection points), a track to the nearer end when
+    /// `at` is within half its width of one, else to the nearest point of it. **Differs:** that point is not then put on the grid along the
+    /// segment (`AlignToSegment`); the studio has put the cursor on the grid.
+    fn snap_to_nearest(&self, at: Point, items: &[ItemId]) -> Point {
+        let probe = eda_drc::kimath::Shape::Circle { c: at, r: Nm::ZERO };
+        let nearest = items.iter().filter_map(|&id| self.world.get(id).map(|it| (it.shape(it.layers().start()).clearance_to(&probe).0, id))).min_by_key(|&(d, id)| (d, id));
+        let Some((_, id)) = nearest else { return at };
+        let sq = |a: Point, b: Point| (a.x - b.x).area(a.x - b.x) + (a.y - b.y).area(a.y - b.y);
+        match self.world.get(id) {
+            Some(Item::Solid(s)) if !s.anchor_points.is_empty() => *s.anchor_points.iter().min_by_key(|&&p| sq(p, at)).unwrap_or(&s.pos),
+            Some(Item::Solid(s)) => s.pos,
+            Some(it @ (Item::Segment(_) | Item::Arc(_))) => {
+                let (a, b) = it.track_ends().unwrap_or((at, at));
+                let w_sq = (it.width() / 2).area(it.width() / 2);
+                let (da, db) = (sq(at, a), sq(at, b));
+                if da < w_sq || db < w_sq {
+                    if da < db { a } else { b }
+                } else if let Item::Segment(seg) = it {
+                    seg.seg().nearest_point(at)
+                } else {
+                    at
+                }
+            }
+            _ => at,
+        }
+    }
+
+    /// `ROUTER::StartDragging( aP, aStartItems )` of the footprints `refs` (`InlineDrag` with a footprint selection): a `COMPONENT_DRAGGER` of
+    /// their solids. The drag starts at the item of theirs nearest `at`, snapped (see [`Self::snap_to_nearest`]); a drag of one footprint with
+    /// `warp` (KiCad's "Warp mouse to origin of moved object", `GetMoveWarpsCursor()`, on by default) starts at the footprint's anchor, where KiCad
+    /// warps the cursor (`tweakedMousePos = footprint->GetPosition()`). The point it starts at is returned. Replaces any route or drag in progress.
+    /// "nothing to drag" when the footprints have no solid (`StartDragging` of an empty set returns false).
+    pub fn drag_start_component(&mut self, at: Point, refs: &[String], warp: bool) -> Result<Point, String> {
+        let items = self.footprint_solids(refs);
+        if items.is_empty() {
+            return Err("nothing to drag".into());
+        }
+        let mut p = self.snap_to_nearest(at, &items);
+        if refs.len() == 1 && warp {
+            if let Some(&fp) = self.footprint_at.get(&refs[0]) {
+                p = fp;
+            }
+        }
+        let dragger = crate::component_dragger::ComponentDragger::start(&self.world, &self.rules, p, refs.to_vec(), &items);
+        self.session = None;
+        self.diff = None;
+        self.drag = None;
+        self.group_drag = Some(GroupDrag::Component(dragger));
+        self.drag_mode = Some(self.settings.mode);
+        Ok(p)
+    }
+
+    /// `ROUTER::StartDragging( aP, aStartItems )` of the board tracks `tracks` (`InlineDrag` with a selection of tracks: every segment and arc of
+    /// each, `FindItemByParent`): a `MULTI_DRAGGER`, started at the one nearest `at`, snapped (see [`Self::snap_to_nearest`]). The point it starts at
+    /// is returned. "nothing to drag" when it does not start (`MULTI_DRAGGER::Start` returns false).
+    pub fn drag_start_multi(&mut self, at: Point, tracks: &[String]) -> Result<Point, String> {
+        let mut items: Vec<ItemId> = self.world.iter().filter(|(_, it)| it.is_track() && it.source_track_id().is_some_and(|t| tracks.iter().any(|x| x == t))).map(|(id, _)| id).collect();
+        // the selection's order: by track as selected, then along the track
+        items.sort_by_key(|&id| {
+            let it = self.world.get(id);
+            let track = it.and_then(|i| i.source_track_id()).and_then(|t| tracks.iter().position(|x| x == t)).unwrap_or(usize::MAX);
+            let index = match it {
+                Some(Item::Segment(s)) => s.source_track.as_ref().map_or(0, |(_, i)| *i),
+                _ => 0,
+            };
+            (track, index, id)
+        });
+        let p = self.snap_to_nearest(at, &items);
+        let dragger = crate::multi_dragger::MultiDragger::start(&self.world, p, &items).ok_or("nothing to drag")?;
+        self.session = None;
+        self.diff = None;
+        self.drag = None;
+        self.group_drag = Some(GroupDrag::Multi(dragger));
+        self.drag_mode = Some(self.settings.mode);
+        Ok(p)
+    }
+
+    /// The drag in progress is of a set of items: `"component"` (`COMPONENT_DRAGGER`) or `"multi"` (`MULTI_DRAGGER`). A click such a drag refuses
+    /// ends it (`InlineDrag` leaves its loop whatever `FixRoute` says), where the single drag of the router tool goes on (`performDragging`).
+    pub fn drag_group_kind(&self) -> Option<&'static str> {
+        match &self.group_drag {
+            Some(GroupDrag::Component(_)) => Some("component"),
+            Some(GroupDrag::Multi(_)) => Some("multi"),
+            None => None,
+        }
+    }
+
+    /// The component drag's footprints, by reference.
+    pub fn drag_footprints(&self) -> Vec<String> {
+        match &self.group_drag {
+            Some(GroupDrag::Component(c)) => c.footprints.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// `ROUTER::moveDragging` of a group drag: the preview of `Drag( aP )`. A component drag shows its moved pads by [`crate::dragger::DragPreview::offset`]
+    /// and the lines that follow them -- with the tracks it moves as they are -- as `fanout`; a multi-track drag its lines as `fanout`, and what
+    /// it shoves aside.
+    fn group_preview(g: &mut GroupDrag, world: &Node, rules: &eda_model::BoardRules, settings: &RoutingSettings, at: Point) -> crate::dragger::DragPreview {
+        match g {
+            GroupDrag::Component(c) => {
+                let drag = c.drag(world, at);
+                let colliding = crate::component_dragger::ComponentDragger::colliding(&drag, rules);
+                let mut fanout: Vec<Line> = drag.lines.iter().map(|l| Line { segment_ids: Vec::new(), ..l.clone() }).collect();
+                for (_, moved) in &drag.fixed {
+                    let Some(it) = drag.node.get(*moved) else { continue };
+                    let mut line = Line::new(it.net().clone(), it.layers().start(), it.width());
+                    match it {
+                        Item::Segment(s) => line.pts = vec![s.a, s.b],
+                        Item::Arc(a) => line.append_arc(a.arc),
+                        _ => continue,
+                    }
+                    fanout.push(line);
+                }
+                crate::dragger::DragPreview { colliding, fanout, offset: Some(drag.offset), ..Default::default() }
+            }
+            GroupDrag::Multi(m) => {
+                let drag = m.drag(world, rules, settings, at);
+                let fanout = drag.lines.iter().map(|(_, l)| l.clone()).collect();
+                crate::dragger::DragPreview { colliding: drag.colliding, fanout, displaced_lines: drag.displaced_lines, displaced_vias: drag.displaced_vias, ..Default::default() }
+            }
+        }
+    }
+
+    /// `ROUTER::FixRoute` of a group drag (`m_dragger->FixRoute( aForceCommit )`, after the position the click is at): the commit, or `None`
+    /// when the dragger refuses it -- and the drag is over either way (`InlineDrag`).
+    fn group_drag_finish(&mut self, at: Point, force_commit: bool, settings: &RoutingSettings) -> Option<RouteCommit> {
+        let mut g = self.group_drag.take()?;
+        let (world, rules) = (&self.world, &self.rules);
+        let mut commit = RouteCommit::default();
+        match &mut g {
+            GroupDrag::Component(c) => {
+                c.drag(world, at);
+                let cc = c.fix_route(world, rules, settings, force_commit)?;
+                commit.remove_track_ids = cc.remove_track_ids;
+                for (k, line) in cc.tracks.iter().enumerate() {
+                    let tracks = self.line_tracks(line, None);
+                    commit.push_tracks(tracks, cc.sources.get(k).and_then(Option::as_deref));
+                }
+                commit.moved_footprints = cc.footprints;
+                commit.moved_tracks = cc.moved_tracks;
+                commit.move_by = cc.offset;
+            }
+            GroupDrag::Multi(m) => {
+                m.drag(world, rules, settings, at);
+                let mc = m.fix_route(world, rules, settings)?;
+                commit.remove_track_ids = mc.remove_track_ids;
+                commit.remove_via_ids = mc.remove_via_ids;
+                for (k, line) in mc.tracks.iter().enumerate() {
+                    let tracks = self.line_tracks(line, None);
+                    commit.push_tracks(tracks, mc.sources.get(k).and_then(Option::as_deref));
+                }
+                for (source_via, pos) in &mc.vias {
+                    let Some(v) = self.find_via_by_source(source_via) else { continue };
+                    commit.vias.push(eda_model::ir::Via { id: source_via.clone(), net: v.net.as_deref().unwrap_or("").to_string(), at: *pos, drill: v.drill, diameter: v.diameter, from_layer: self.layer_name(v.layers.start()).to_string(), to_layer: self.layer_name(v.layers.end()).to_string() });
+                    Self::note_via_kind(&mut commit, self.kind_of_via(Some(source_via)));
+                }
+            }
+        }
+        self.drop_redundant(&mut commit);
         Some(commit)
     }
 
@@ -1295,6 +1519,7 @@ impl Router {
         let placer = crate::dp_placer::DiffPairPlacer::start_with(&self.world, &self.rules, &self.settings, start_item, at, layer, self.layers.all(), self.use_connected_track_width, self.user_diff_pair)?;
         self.session = None;
         self.drag = None;
+        self.group_drag = None;
         self.diff = Some(placer);
         Ok(())
     }
