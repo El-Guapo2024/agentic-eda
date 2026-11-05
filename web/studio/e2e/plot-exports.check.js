@@ -1,7 +1,9 @@
-// Plot and fabrication outputs check (GAPS.md item 33, package P20): File > Fabrication Outputs and File > Export of the board editor and File > Plot of the
-// schematic editor, every file written by kicad-cli. The Plot dialog (Gerbers: the default layer list, one file per layer and the job file, a layer left out
-// is not plotted), Generate Drill Files (one merged .drl, or PTH and NPTH apart), Generate Placement Files (CSV and ASCII, per side), STEP, VRML, IPC-D-356,
-// IPC-2581, ODB++ and the board's Bill of Materials, and Plot Schematic (PDF, SVG one file per sheet). Each is opened with its action, run with its own
+// Plot and fabrication outputs check (GAPS.md items 33 and 37, package P20, UI-LEFT X1-X4): File > Fabrication Outputs and File > Export of the board editor
+// and File > Plot / Export > Netlist of the schematic editor, every file written by kicad-cli. The Plot dialog (Gerbers: the default layer list, one file per layer
+// and the job file, a layer left out is not plotted; PostScript, SVG, DXF, PDF, PNG into the output folder, the one-document PDF, kicad-cli's limits disabled,
+// Generate Drill Files... over it), Generate Drill Files (one merged .drl, or PTH and NPTH apart; Gerber X2 with maps, Excellon in inches with a PDF map, the
+// report file), Generate Placement Files (CSV and ASCII, per side), STEP, VRML, IPC-D-356, IPC-2581, ODB++ and the board's Bill of Materials, Plot Schematic
+// (PDF, SVG one file per sheet, PostScript, DXF, PNG) and Export Netlist (every format). Each is opened with its action, run with its own
 // button, and judged by what the server answered (`/api/fab/*`, `/api/sch/plot`, captured as they come back: `ok`, the engine and the files written in
 // the board's `export/kicad/<kind>/`) and by the dialog's result panel; none of them edits the design except the Plot and Drill dialogs' choices, which KiCad
 // stores in the board's plot settings (no undo step, as KiCad's `applyPlotSettings` pushes none: r4 X4-3; put back here; the revision is the same at the end).
@@ -27,7 +29,7 @@
     window.fetch = async (input, init) => {
       const r = await real(input, init);
       const url = typeof input === "string" ? input : input?.url ?? "";
-      const m = /\/api\/(fab\/[a-z0-9_]+|sch\/plot)(\?|$)/.exec(url);
+      const m = /\/api\/(fab\/[a-z0-9_]+|sch\/plot|sch\/netlist)(\?|$)/.exec(url);
       if (m && (init?.method ?? "GET") === "POST") {
         let req = null;
         try { req = init?.body ? JSON.parse(init.body) : null; } catch { /* not JSON */ }
@@ -39,12 +41,23 @@
 
   // ------------------------------------------------------------------------------------------------------------------------ helpers
   const run = (id, args) => __eda.run(id, args);
-  const dialog = () => document.querySelector(".dialog");
+  // The dialog on top: the last one shown (a dialog opened from another hides it, as KiCad's modal child covers its parent).
+  const dialog = () => [...document.querySelectorAll(".dialog")].filter((d) => d.offsetParent !== null).pop() ?? null;
   const header = () => dialog()?.querySelector(".dialog-header")?.textContent.trim() ?? null;
   const buttonText = (root, re) => [...(root?.querySelectorAll(".dialog-footer button") ?? [])].find((b) => re.test(b.textContent.trim()));
   const labelled = (text) => [...(dialog()?.querySelectorAll("label") ?? [])].find((l) => l.textContent.trim().startsWith(text));
   const box = (text) => labelled(text)?.querySelector("input");
   const close = async () => { for (let i = 0; i < 3 && dialog(); i++) { buttonText(dialog(), /^(Close|Cancel)$/)?.click(); await sleep(300); } };
+  /** A React-controlled select or text input set as a user would. */
+  const choose = async (el, value) => {
+    const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
+    el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+    await sleep(200);
+  };
+  const testid = (id) => dialog()?.querySelector(`[data-testid=${id}]`);
+  /** The Plot dialog's "Include Layers" checkbox of a layer. */
+  const includeBox = (layer) => dialog()?.querySelector(`[data-testid=plot-include-layers] [data-layer="${layer}"] input`);
   const version = () => fetch("/api/version", { cache: "no-store" }).then((r) => r.text());
   /** Opens a dialog by its action, checks its title; resolves to whether it is open. */
   const open = async (t, action, title) => {
@@ -92,22 +105,22 @@
   (async () => {
     await scenario("Plot (Gerbers): the default layers are the copper, mask, paste, silkscreen and outline; Plot writes one Gerber per layer and the job file; a layer left out is not plotted", async (t) => {
       if (!(await open(t, "pcbnew.EditorControl.generateGerbers", "Plot"))) return;
-      const ticked = [...dialog().querySelectorAll("label.toggle input[type=checkbox]")].filter((i) => i.checked && !i.dataset.testid).map((i) => i.closest("label").textContent.trim());
+      const ticked = [...dialog().querySelectorAll("[data-testid=plot-include-layers] label.toggle input[type=checkbox]")].filter((i) => i.checked).map((i) => i.closest("label").textContent.trim());
       t(copper.every((l) => ticked.some((x) => x.startsWith(l))) && ["Edge.Cuts"].every((l) => ticked.some((x) => x.startsWith(l))), `every copper layer and Edge.Cuts start ticked (${ticked.join(", ")})`);
-      let res = await press(/^Plot$/, "fab/gerbers");
+      let res = await press(/^Plot$/, "fab/plot");
       const files = judged(t, "Gerbers", res, /\.(g[a-z0-9]+|gbrjob)$/i);
       t(files.some((f) => /\.gbrjob$/.test(f)), "with the job file (.gbrjob)");
       const gerbers = files.filter((f) => !/\.gbrjob$/.test(f));
       t(gerbers.length === (res.reply?.req?.layers ?? []).length, `one Gerber per layer asked for (${gerbers.length} for ${(res.reply?.req?.layers ?? []).length})`);
       t(res.reply?.req?.check_zones === true, "Check zone fills before plotting is on by default (DIALOG_PLOT::m_zoneFillCheck)");
       // Leave B.SilkS out.
-      const silk = [...dialog().querySelectorAll("label.toggle")].find((l) => l.textContent.trim().startsWith("B.Silk"))?.querySelector("input");
+      const silk = includeBox("B.SilkS");
       if (t(!!silk, "the list has B.Silkscreen")) {
         silk.click();
         // The server lists the files modified since a second before the run (`run_export`: mtimes are coarse on some file systems), so the second plot waits
         // that second out; otherwise the first run's B.SilkS file would be listed again.
         await sleep(1500);
-        res = await press(/^Plot$/, "fab/gerbers");
+        res = await press(/^Plot$/, "fab/plot");
         t(res.reply?.body?.ok === true && !(res.reply?.req?.layers ?? []).includes("B.SilkS"), `the second plot asks for the layers without B.SilkS (${(res.reply?.req?.layers ?? []).join(",")})`);
         t((res.reply?.body?.files ?? []).filter((f) => !/\.gbrjob$/.test(f)).length === gerbers.length - 1, `and writes one Gerber fewer (${(res.reply?.body?.files ?? []).length})`);
         // r3 X3-3: `applyPlotSettings` stored the checklist in the board before the plot (no undo step, r4 X4-3), and the plot took the origin from the board.
@@ -135,13 +148,13 @@
       await until(() => __eda.state().revision === v, 10000); // the page's poll picks the new board up
       await sleep(300);
       if (!(await open(t, "pcbnew.EditorControl.generateGerbers", "Plot"))) return;
-      const paste = [...dialog().querySelectorAll("label.toggle")].find((l) => l.textContent.trim().startsWith("F.Paste"))?.querySelector("input");
+      const paste = includeBox("F.Paste");
       t(paste && paste.checked === false, "F.Paste starts unchecked, as the board's selection says");
       t(box("Use drill/place file origin")?.checked === true, "Use drill/place file origin starts checked (useauxorigin yes)");
       await close();
       if (!(await open(t, "pcbnew.EditorControl.generateDrillFiles", "Generate Drill Files"))) return;
-      t(dialog().querySelector("select")?.value === "aux", `the drill Origin starts at the drill/place file origin (${dialog().querySelector("select")?.value})`);
-      const res = await press(/^Generate Drill File$/, "fab/drill");
+      t(testid("drill-origin")?.value === "aux", `the drill Origin starts at the drill/place file origin (${testid("drill-origin")?.value})`);
+      const res = await press(/^Generate$/, "fab/drill");
       t(/^Created file '.*-PTH\.drl'\n(Created file '.*'\n)*Done\.$/.test(res.reply?.body?.message ?? ""), `the writer's report (${JSON.stringify(res.reply?.body?.message)})`);
       t(res.panel.message.startsWith("Created file"), "and the dialog shows it");
       await close();
@@ -157,22 +170,101 @@
 
     await scenario("Generate Drill Files: the plated and non-plated holes in two Excellon files (KiCad's default), or in one with \"PTH and NPTH in single file\"", async (t) => {
       if (!(await open(t, "pcbnew.EditorControl.generateDrillFiles", "Generate Drill Files"))) return;
-      let res = await press(/^Generate Drill File$/, "fab/drill");
+      let res = await press(/^Generate$/, "fab/drill");
       const apart = judged(t, "drill", res, /\.(drl|gbr)$/i);
       t(res.reply?.req?.merge_pth_npth === false && res.reply?.req?.alt_drill_mode === false, "two files and routed slots by default (m_Check_Merge_PTH_NPTH, m_altDrillMode unchecked)");
       t(apart.some((f) => /-PTH\.drl$/.test(f)), `apart: ${apart.map(base).join(", ")}`);
       box("PTH and NPTH in single file")?.click();
       await sleep(1500); // the second-long window of the file list, as above
-      res = await press(/^Generate Drill File$/, "fab/drill");
+      res = await press(/^Generate$/, "fab/drill");
       const merged = res.reply?.body?.files ?? [];
       t(res.reply?.body?.ok === true && res.reply?.req?.merge_pth_npth === true && !merged.some((f) => /PTH\.drl$/i.test(f)), `merged: ${merged.map(base).join(", ")}`);
       box("PTH and NPTH in single file")?.click();
+    });
+
+    await scenario("Plot (X1): every format of KiCad's dialog -- PostScript, SVG, DXF, PDF, PNG -- one file per layer into the output folder; each format's box; kicad-cli's limits disabled", async (t) => {
+      const before = await plotParams();
+      if (!(await open(t, "pcbnew.EditorControl.generateGerbers", "Plot"))) return;
+      const formats = [...(testid("plot-format")?.options ?? [])].map((o) => o.textContent.trim());
+      t(JSON.stringify(formats) === JSON.stringify(["Gerber", "Postscript", "SVG", "DXF", "PDF", "PNG"]), `the formats, in KiCad's order (${formats.join(", ")})`);
+      t(testid("plot-gerber-options") && box("Generate Gerber job file")?.disabled === true && box("Generate Gerber job file")?.checked === true, "Gerber: its box, the job file always written (disabled, kicad-cli has no flag)");
+      t(testid("plot-drill-marks")?.disabled === true && testid("plot-drill-marks")?.value === "0", "Gerber: no drill marks (SetPlotFormat)");
+      // Three layers, into a folder of the board's.
+      for (const l of [...dialog().querySelectorAll("[data-testid=plot-include-layers] [data-layer] input")]) if (l.checked !== ["F.Cu", "B.Cu", "Edge.Cuts"].includes(l.closest("[data-layer]").dataset.layer)) l.click();
+      await choose(testid("plot-output-dir"), "plots/e2e/");
+      for (const [format, ext] of [["ps", "ps"], ["svg", "svg"], ["dxf", "dxf"], ["pdf", "pdf"], ["png", "png"]]) {
+        await choose(testid("plot-format"), format);
+        t(!!testid(`plot-${format}-options`), `${format}: its options box is shown`);
+        if (format === "pdf") t(box("Use drill/place file origin")?.disabled === true, "PDF: the drill/place file origin is disabled (kicad-cli has no flag)");
+        if (format === "dxf") t(box("Use KiCad font to plot text")?.disabled === true, "DXF: the KiCad font box is disabled (kicad-cli has no flag)");
+        if (format === "ps") t(box("Mirrored plot")?.disabled === false && box("Use drill/place file origin")?.disabled === true, "PostScript: mirror on, origin off (SetPlotFormat)");
+        await sleep(1100); // the second-long window of the file list
+        const res = await press(/^Plot$/, "fab/plot");
+        const files = judged(t, format, res, new RegExp(`\\.${ext}$`, "i"));
+        t(files.length === 3 && files.every((f) => f.startsWith("plots/e2e/")), `${format}: one file per layer, in the output folder (${files.map(base).join(", ")})`);
+        t(/^Plotted to '.*'\.\n(Plotted to '.*'\.\n)*Done\.$/.test(res.reply?.body?.message ?? ""), `${format}: the plotter's report (${JSON.stringify(res.reply?.body?.message).slice(0, 120)})`);
+      }
+      // PDF's "Single document": one file of every layer.
+      await choose(testid("plot-format"), "pdf");
+      testid("plot-pdf-single")?.click();
+      await sleep(1100);
+      const one = await press(/^Plot$/, "fab/plot");
+      t(one.reply?.body?.ok === true && (one.reply?.body?.files ?? []).length === 1, `PDF, Single document: one file (${(one.reply?.body?.files ?? []).map(base).join(", ")})`);
+      const stored = await plotParams();
+      t(stored?.options?.outputformat === "4" && stored?.options?.pdf_single_document === "yes" && stored?.options?.outputdirectory === "plots/e2e/", `applyPlotSettings stored the format, the PDF option and the folder (${JSON.stringify(stored?.options ?? {}).slice(0, 160)})`);
+      // "Generate Drill Files..." from the Plot dialog: the drill dialog over it, with the same output folder.
+      buttonText(dialog(), /^Generate Drill Files\.\.\.$/)?.click();
+      await sleep(600);
+      t(header() === "Generate Drill Files" && testid("drill-output-dir")?.value === "plots/e2e/", `the drill dialog opens over the Plot dialog with its folder (${header()}, ${testid("drill-output-dir")?.value})`);
+      buttonText(dialog(), /^Close$/)?.click();
+      await sleep(500);
+      t(header() === "Plot", "closing it shows the Plot dialog again");
+      await close();
+      const put = await post({ op: "set_plot_settings", layers: before?.layers ?? [], use_aux_origin: before?.use_aux_origin ?? false, plot_on_all_layers: before?.plot_on_all_layers ?? [], options: before?.options ?? {} });
+      t(put.ok, `the plot settings are put back (${JSON.stringify(put).slice(0, 120)})`);
+      await until(async () => (await plotParams())?.options?.outputdirectory === (before?.options?.outputdirectory ?? ""), 15000);
+      rev0 = await version();
+    });
+
+    await scenario("Generate Drill Files (X2): Gerber X2 drill files with a map, an Excellon map in PDF, inches and suppressed zeros, and the report file", async (t) => {
+      if (!(await open(t, "pcbnew.EditorControl.generateDrillFiles", "Generate Drill Files"))) return;
+      t(testid("drill-map-format")?.value === "gerberx2" && testid("drill-generate-map")?.checked === false, "the map: Gerber X2, unchecked (dialog_gendrill_base.cpp)");
+      t(testid("drill-precision")?.textContent === "3:3", `Excellon in mm: precision 3:3 (${testid("drill-precision")?.textContent})`);
+      labelled("Gerber X2")?.querySelector("input")?.click();
+      await sleep(200);
+      t(testid("drill-units")?.disabled === true && box("Mirror Y axis")?.disabled === true && box("Generate tenting layers")?.disabled === false, "Gerber X2: the Excellon controls disabled, the tenting box enabled (onFileFormatSelection)");
+      t(/^4\.[56]$/.test(testid("drill-precision")?.textContent ?? ""), `Gerber X2: the board's precision (${testid("drill-precision")?.textContent})`);
+      testid("drill-generate-map")?.click();
+      await sleep(1100);
+      let res = await press(/^Generate$/, "fab/drill");
+      let files = judged(t, "Gerber X2 drill", res, /\.gbr$/i);
+      t(files.some((f) => /-drl_map\.gbr$/.test(f)) && files.some((f) => /-drl\.gbr$/.test(f)), `drill files and maps (${files.map(base).join(", ")})`);
+      t(res.reply?.req?.format === "gerber" && res.reply?.req?.generate_map === true, "the request says so");
+      labelled("Excellon")?.querySelector("input")?.click();
+      await sleep(200);
+      await choose(testid("drill-map-format"), "pdf");
+      await choose(testid("drill-units"), "in");
+      await choose(testid("drill-zeros"), "suppressleading");
+      t(testid("drill-precision")?.textContent === "2:4", "inches: 2:4");
+      await sleep(1100);
+      res = await press(/^Generate$/, "fab/drill");
+      files = res.reply?.body?.files ?? [];
+      t(res.reply?.body?.ok === true && files.some((f) => /\.drl$/.test(f)) && files.some((f) => /-drl_map\.pdf$/.test(f)), `Excellon with PDF maps (${files.map(base).join(", ")})`);
+      res = await press(/^Generate Report File\.\.\.$/, "fab/drill_report");
+      t(res.reply?.body?.ok === true && /^Report file '.*-drl\.rpt' created\.$/.test(res.reply?.body?.message ?? ""), `the report file (${res.reply?.body?.message})`);
+      // Back to KiCad's defaults for the next scenarios (the dialog keeps its choices).
+      testid("drill-generate-map")?.click();
+      await choose(testid("drill-units"), "mm");
+      await choose(testid("drill-zeros"), "decimal");
+      await choose(testid("drill-map-format"), "gerberx2");
     });
 
     await scenario("Generate Placement Files: CSV with both sides in KiCad's -all-pos file, or the -top-pos and -bottom-pos ones; ASCII", async (t) => {
       if (!(await open(t, "pcbnew.EditorControl.generatePosFile", "Generate Placement Files"))) return;
       const radio = (name, i) => dialog().querySelectorAll(`input[name="${name}"]`)[i];
       t(radio("pos-format", 0)?.checked === true && !dialog().querySelector('input[name="pos-side"]'), "Plain text first, and no side choice (KiCad's dialog always does both sides)");
+      // X4: kicad-cli 10.99's `pcb export pos` has no Exclude from BOM flag, and the studio no design variants: both shown disabled; the output folder is the dialog's.
+      t(box("Exclude all footprints with the Exclude from BOM flag set")?.disabled === true && labelled("Design variant:")?.querySelector("select")?.disabled === true && !!testid("pos-output-dir"), "Exclude from BOM and the design variant disabled, the output directory offered");
       radio("pos-format", 1)?.click(); // CSV
       await sleep(150);
       let res = await press(/^Generate/, "fab/pos");
@@ -284,19 +376,55 @@
       // `dialog_plot_schematic_base.cpp`: PDF selected, "Plot background color" unchecked.
       t(radio("PDF")?.checked === true && radio("Plot background color")?.checked === false, "the dialog starts at PDF with no background colour, as KiCad's");
       radio("PDF")?.click();
-      radio("Plot all pages")?.click();
       await sleep(150);
-      let res = await press(/^Plot$/, "sch/plot");
+      let res = await press(/^Plot All Pages$/, "sch/plot");
       const pdf = judged(t, "PDF", res, /\.pdf$/i);
       t(pdf.length === 1, `one PDF (${pdf.length})`);
       radio("SVG")?.click();
       await sleep(150);
-      res = await press(/^Plot$/, "sch/plot");
+      res = await press(/^Plot All Pages$/, "sch/plot");
       const svg = judged(t, "SVG", res, /\.svg$/i);
       const sheets = (await fetch("/api/sch/hierarchy", { cache: "no-store" }).then((r) => r.json()).catch(() => null));
       const count = (n) => (n ? 1 + (n.children ?? []).reduce((a, c) => a + count(c), 0) : 0);
       const want = sheets?.root ? count(sheets.root) : Array.isArray(sheets?.sheets) ? sheets.sheets.length : null;
       t(want == null || svg.length === want, `one SVG per sheet (${svg.length}${want != null ? ` for ${want}` : ""})`);
+      await close();
+      [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === "PCB")?.click();
+      await sleep(800);
+    });
+
+    await scenario("Plot Schematic (X3): PostScript, DXF and PNG, the theme and the PDF options; Export Netlist: every format", async (t) => {
+      [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === "Schematic")?.click();
+      await sleep(1200);
+      if (!(await open(t, "common.Control.plot", "Plot Schematic"))) return;
+      const radio = (text) => labelled(text)?.querySelector("input");
+      // The dialog keeps the last plot's choices (DIALOG_SHIM's saved state): the scenario before left it at SVG.
+      radio("PDF")?.click();
+      await sleep(200);
+      const themes = [...(testid("sch-plot-theme")?.options ?? [])].map((o) => o.textContent.trim());
+      t(JSON.stringify(themes) === JSON.stringify(["KiCad Classic", "KiCad Default"]), `the colour themes kicad-cli knows (${themes.join(", ")})`);
+      t(box("Generate property popups")?.disabled === false, "PDF: its options enabled");
+      for (const [label, ext] of [["Postscript", "ps"], ["DXF", "dxf"], ["PNG", "png"]]) {
+        radio(label)?.click();
+        await sleep(200);
+        if (label === "DXF") t(box("Generate property popups")?.disabled === true && box("Plot background color")?.disabled === true, "DXF: no PDF options, no background (onPlotFormatSelection, onColorMode)");
+        await sleep(1100);
+        const res = await press(/^Plot All Pages$/, "sch/plot");
+        const files = judged(t, `schematic ${label}`, res, new RegExp(`\\.${ext}$`, "i"));
+        t(res.reply?.req?.format === ext, `${label}: asked for ${ext}`);
+      }
+      radio("PDF")?.click();
+      await sleep(150);
+      await close();
+      if (!(await open(t, "eeschema.EditorControl.exportNetlist", "Export Netlist"))) return;
+      for (const [id, ext] of [["kicad", "net"], ["orcadpcb2", "net"], ["allegro", "txt"], ["cadstar", "frp"], ["pads", "asc"], ["spice", "cir"], ["spicemodel", "cir"], ["xml", "xml"]]) {
+        testid(`netlist-tab-${id}`)?.click();
+        await sleep(1200);
+        if (id === "spice") t(box("Save all voltages")?.disabled === true, "SPICE: its options disabled (kicad-cli has no flag)");
+        const res = await press(/^Export Netlist$/, "sch/netlist");
+        const files = (res.reply?.body?.files ?? []).filter((f) => !/\/devices$/.test(f));
+        t(res.reply?.body?.ok === true && files.length === 1 && files[0].endsWith(`.${ext}`), `${id}: ${files.map(base).join(", ")}`);
+      }
       await close();
       [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === "PCB")?.click();
       await sleep(800);
