@@ -118,6 +118,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-u1-schplace` | UI-LEFT S1 (and S18's Enter): labels, directive labels, texts and power symbols placed in KiCad's order -- the dialog or the power chooser first, then the item rides the cursor (`POST /api/sch/place_preview`), R / X / Y turn it; PARITY-sch §53 | done, gated (eda-cli 606/0, web 2717, `sch-place` 10/10, `sch-edit`, `sch-details-2`, `snap-grid` green) | the lows in PARITY-sch §53 |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
