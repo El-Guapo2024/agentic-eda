@@ -161,6 +161,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
         writeln!(out, "\t\t)").unwrap();
     }
     writeln!(out, "\t)").unwrap();
+    // The design variants (`formatHeader` > `formatVariants`, after the setup and the properties).
+    crate::variant_io::write_board_variants(&mut out, design);
 
     // ---- nets ----
     writeln!(out, "\t(net 0 \"\")").unwrap();
@@ -968,6 +970,12 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
             project["schematic"]["subpart_first_id"] = serde_json::json!(first);
         }
     }
+    // The design variants (KiCad 25ec2335 `SCHEMATIC_SETTINGS::m_VariantDescriptions`, `schematic.variants`), which kicad-cli's `--variant` looks a name up in
+    // (`SCHEMATIC::SetCurrentVariant` takes only a name it has); a variant no symbol differs in is in no schematic file, only here.
+    let variants = crate::project_schematic::variants_json(design);
+    if !variants.is_empty() {
+        project["schematic"]["variants"] = serde_json::Value::Array(variants);
+    }
     let mut erc = serde_json::json!({ "rule_severities": effective_erc_severities(design) });
     if let Some(m) = custom_erc_pin_map(design) {
         erc["pin_map"] = serde_json::json!(m);
@@ -1327,6 +1335,8 @@ pub(crate) fn write_footprint(
         writeln!(out, ")").unwrap();
     }
     write_attr(out, &extra.attrs, own_extra.is_some_and(|e| e.allow_soldermask_bridges));
+    // The footprint's records of the design variants (`format( FOOTPRINT )`'s `(variant ..)`), from the symbol's as Update PCB from Schematic puts them there.
+    crate::variant_io::write_footprint_variants(out, design, part.value.as_deref(), &fp.id, extra.attrs.dnp, extra.attrs.exclude_from_bom, extra.attrs.exclude_from_pos_files);
 
     // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).
     let mut pads: Vec<(usize, &Pad)> = footprint.pads.iter().enumerate().collect();

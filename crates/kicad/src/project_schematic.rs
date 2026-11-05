@@ -25,6 +25,7 @@ const LEFT_OUT: &[&str] = &[
     "legacy_lib_dir",
     "legacy_lib_list",
     "page_layout_descr_file",
+    "variants",
     "drawing.intersheets_ref_show",
     "drawing.intersheets_ref_own_page",
     "drawing.intersheets_ref_short",
@@ -97,7 +98,39 @@ pub fn apply(extras: &mut SchExtras, project_json: &str) {
     if let Some(ng) = ngspice(schematic) {
         extras.ngspice = Some(ng);
     }
+    extras.variants = variants(schematic);
     extras.project_schematic = kept(schematic);
+}
+
+/// The design variants of a project's `schematic.variants` (KiCad 25ec2335 `SCHEMATIC_SETTINGS`' `PARAM_LAMBDA<nlohmann::json>( "variants" )` loader: an
+/// array, each entry with a `name` kept with its `description`, empty when it has none; anything else is no variant), name -> description.
+pub fn variants(schematic: &Value) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for entry in schematic.get("variants").and_then(Value::as_array).into_iter().flatten() {
+        if let Some(name) = entry.get("name").and_then(Value::as_str) {
+            out.insert(name.to_string(), entry.get("description").and_then(Value::as_str).unwrap_or_default().to_string());
+        }
+    }
+    out
+}
+
+/// The `schematic.variants` array the derived project gets (the same `PARAM_LAMBDA`'s writer: `{ "name" }` per variant, `"description"` only when it is not
+/// empty, in the map's order): every variant of the design ([`eda_model::variants::names`], so a name only a symbol's record carries is listed too, as
+/// `SCHEMATIC::LoadVariants` registers it) with the description the root keeps. Empty for a design with none.
+pub fn variants_json(design: &eda_model::ir::Design) -> Vec<Value> {
+    let descriptions = design.schematic.as_ref().map(|s| &s.extras.variants);
+    eda_model::variants::names(design)
+        .into_iter()
+        .map(|name| {
+            let mut entry = Map::new();
+            let description = descriptions.and_then(|d| d.get(&name)).cloned().unwrap_or_default();
+            entry.insert("name".into(), Value::String(name));
+            if !description.is_empty() {
+                entry.insert("description".into(), Value::String(description));
+            }
+            Value::Object(entry)
+        })
+        .collect()
 }
 
 /// The project's top-level sheets (`PROJECT_FILE::GetTopLevelSheets`, `schematic.top_level_sheets`: each a `filename` relative to the project and the `name`
