@@ -203,7 +203,7 @@ fn symbols_saved_into_a_folder_library_read_back_and_kicad_cli_loads_it() {
     let mut c = symbol_of(&saved, "Device", "C");
     edit(&mut c);
     let packed = dir.join("Packed.kicad_sym");
-    save_symbol_library_as(&lib, &packed, &[SymbolSave { symbol: &c, embedded: None }]).unwrap();
+    save_symbol_library_as(Some(&lib), &packed, &[SymbolSave { symbol: &c, embedded: None }]).unwrap();
     let packed_text = std::fs::read_to_string(&packed).unwrap();
     assert_eq!(eda_kicad::scan_symbols(&packed_text).len(), eda_kicad::scan_symbols(&saved).len());
     assert_eq!(written(&symbol_of(&packed_text, "Packed", "C")), written(&c));

@@ -301,26 +301,34 @@ fn save_symbols_in_folder(dir: &Path, symbols: &[SymbolSave]) -> Result<LibraryW
     Ok(out)
 }
 
-/// `SYMBOL_EDIT_FRAME::saveLibrary( aLibrary, aNewFile = true )` -> `SYMBOL_LIBRARY_MANAGER::SaveLibrary` to a new file: every symbol of the library at `src`
-/// (a file or a folder; the library's buffer holds them all, `getLibraryBuffer`), the ones of `symbols` in place of their saved forms, as one `.kicad_sym` at
-/// `dst` -- `SCH_IO_KICAD_SEXPR::SaveLibrary` writes the cache to the new path as a file. `src` may not exist yet (a library made and never saved).
-pub fn save_symbol_library_as(src: &Path, dst: &Path, symbols: &[SymbolSave]) -> Result<LibraryWrite, String> {
-    let mut blocks: Vec<Block> = if src.is_dir() {
-        let text = crate::read_symbol_library_text(src)?;
-        let all = read_blocks(&text).ok_or_else(|| parse_error_message(src))?;
+/// Every symbol form of the library at `path` as `Load` leaves it (a folder's files joined, a name defined twice the later one), or none for a path with
+/// nothing there; a library with a file that does not read is refused (`HasParseError`).
+fn saved_blocks(path: &Path) -> Result<Vec<Block>, String> {
+    if path.is_dir() {
         // a folder whose file does not read is refused as `Load` would leave it ("loaded with errors")
-        for file in crate::symbol_library_files(src) {
+        for file in crate::symbol_library_files(path) {
             if std::fs::read_to_string(&file).ok().and_then(|t| read_blocks(&t)).is_none() {
-                return Err(parse_error_message(src));
+                return Err(parse_error_message(path));
             }
         }
-        all
-    } else {
-        match std::fs::read_to_string(src) {
-            Ok(text) => read_blocks(&text).ok_or_else(|| parse_error_message(src))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(format!("{}: {e}", src.display())),
-        }
+        let text = crate::read_symbol_library_text(path)?;
+        return read_blocks(&text).ok_or_else(|| parse_error_message(path));
+    }
+    match std::fs::read_to_string(path) {
+        Ok(text) => read_blocks(&text).ok_or_else(|| parse_error_message(path)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+/// `SYMBOL_EDIT_FRAME::saveLibrary( aLibrary, aNewFile = true )` -> `SYMBOL_LIBRARY_MANAGER::SaveLibrary` to a new file: every symbol of the library at `src`
+/// (a file or a folder; the library's buffer holds them all, `getLibraryBuffer`), the ones of `symbols` in place of their saved forms, as one `.kicad_sym` at
+/// `dst` -- `SCH_IO_KICAD_SEXPR::SaveLibrary` writes the cache to the new path as a file. `src` may not exist yet (a library made and never saved); `None`
+/// is no library at all (the studio's own project library, whose symbols are all in `symbols`).
+pub fn save_symbol_library_as(src: Option<&Path>, dst: &Path, symbols: &[SymbolSave]) -> Result<LibraryWrite, String> {
+    let mut blocks: Vec<Block> = match src {
+        None => Vec::new(),
+        Some(src) => saved_blocks(src)?,
     };
     let written: Vec<Block> = symbols.iter().map(written_block).collect();
     for w in &written {
@@ -540,7 +548,7 @@ mod tests {
         let mut edited = symbol("Mine:Zeta");
         edited.reference_prefix = "Q".into();
         let dst = dir.join("Copy.kicad_sym");
-        save_symbol_library_as(&lib, &dst, &[SymbolSave { symbol: &edited, embedded: None }]).unwrap();
+        save_symbol_library_as(Some(&lib), &dst, &[SymbolSave { symbol: &edited, embedded: None }]).unwrap();
         let text = std::fs::read_to_string(&dst).unwrap();
         assert_eq!(crate::scan_symbols(&text).into_iter().map(|s| s.name).collect::<Vec<_>>(), ["Zeta", "Alpha"]);
         assert!(text.contains("\"Reference\" \"Q\""));

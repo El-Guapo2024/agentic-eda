@@ -45,6 +45,7 @@ mod graphics_api;
 mod library_api;
 mod library_index;
 mod library_place;
+mod library_save_api;
 mod library_search;
 mod library_tables;
 mod text_variables;
