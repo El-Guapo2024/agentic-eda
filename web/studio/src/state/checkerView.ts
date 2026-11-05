@@ -11,6 +11,9 @@ import { SHOW_ALL, type RcFilter } from "../kicad-port/rcItems";
 import type { RuleSeverity } from "../api/types";
 
 /** `m_Notebook`'s pages in DIALOG_DRC (`dialog_drc_base.fbp`), plus the Lint page this app adds. */
+/** The pages of Schematic Setup (components/SchematicSetupDialog.tsx), which a marker menu or an action can open it on. */
+export type SchSetupPage = "formatting" | "annotation" | "field_templates" | "bom_presets" | "severities" | "pinmap" | "netclasses" | "bus_aliases" | "text_variables" | "embedded_files";
+
 export type DrcTab = "violations" | "unconnected" | "parity" | "ignored" | "lint";
 /** DIALOG_ERC's pages ("Violations", "Ignored Tests") plus Lint. */
 export type ErcTab = "erc" | "ignored" | "lint";
@@ -30,7 +33,7 @@ export interface CheckerView {
     /** The schematic's severity table as last read (`GET /api/sch/erc_severities`): what the marker menu needs to say a check's severity when the finding is waived. */
     severities: Record<string, RuleSeverity> | null;
     /** The page Schematic Setup opens on (a marker menu's "Edit violation severities..." / "Edit pin-to-pin conflict map..." / "Edit connection grid spacing..."); null = the first. */
-    setupPage: "severities" | "pinmap" | "formatting" | "embedded_files" | null;
+    setupPage: SchSetupPage | null;
   };
 }
 

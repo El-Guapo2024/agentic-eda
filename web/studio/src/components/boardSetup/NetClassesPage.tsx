@@ -6,18 +6,26 @@
 // A pattern is read the way KiCad reads it (`EDA_COMBINED_MATCHER( pattern, CTX_NETCLASS )`, kicad-port/netPattern.ts): as a wildcard pattern (`*` any run of characters, `?` one character)
 // or as a regular expression (`USB_D[PM]`, `(CLK|DAT)[0-3]`), and the whole net name has to match. A net is in every class with a pattern that matches it, and has the settings of all of
 // them (`GetEffectiveNetClass`): where several set one, the class higher in the table wins -- a class's place in the table is its priority; the Up and Down buttons move a class -- and the
-// Default class gives the rest. Not ported: the PCB colour and the schematic wire columns; the tuning profile of a class is on the Tuning Profiles page.
+// Default class gives the rest. Not ported: the PCB colour (the Appearance panel's Net Classes tab holds it); the tuning profile of a class is on the Tuning Profiles page.
+//
+// Schematic Setup > Project > Net Classes is the same panel (`PANEL_SETUP_NETCLASSES( .., aIsEEschema = true )`) over the same table: `editor="sch"` shows the
+// Eeschema columns instead of the board's (`ShowHideColumns( "0 11 12 13 14" )`: Wire Thickness, Bus Thickness, Color, Line Style), the Default row's colour and
+// line style read-only (`loadNetclasses`) and its widths required (`GRID_CELL_MARK_AS_NULLABLE( false )`). Either page sends the whole table, the columns it does
+// not show as it found them, so the two dialogs edit one set as KiCad's edit the project's one `NET_SETTINGS`; Undo from either tab takes it back.
 import { useEffect, useMemo, useState } from "react";
 import { useStudioState } from "../../state/store";
+import { LINE_STYLE_NAMES, SCH_COLOR_HELP, cssFromHex, defaultClassSchematic, hexFromCss, lineStyleOfRow, lineStyleRow, schematicColumnsIssue, schematicOf, schematicToSend } from "../../kicad-port/schSetup";
 import { applyAssignments, assignmentRows, boardNetNames, classOfNet, classesOfNet, effectiveClassName, netClassSettingsOf, netsMatching, validateNetClasses, type AssignmentRow, type NetClassIssue } from "../../kicad-port/boardSetupRules";
 import { hasRegexSyntax, isRegex } from "../../kicad-port/netPattern";
-import type { NetClass } from "../../api/types";
+import type { NetClass, NetClassSchematic } from "../../api/types";
 import { LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
 
 interface Draft {
   def: NetClass;
   classes: NetClass[];
   rows: AssignmentRow[];
+  /** The schematic's columns by class name (Schematic Setup's; Board Setup carries them as found). */
+  schematic: Record<string, NetClassSchematic>;
 }
 
 type SizeField = "clearance" | "track_width" | "via_diameter" | "via_drill" | "microvia_diameter" | "microvia_drill" | "diff_pair_width" | "diff_pair_gap";
@@ -40,7 +48,8 @@ function newClassName(taken: readonly string[]): string {
   for (let i = 1; ; i++) if (!used.has(`netclass ${i}`)) return `Netclass ${i}`;
 }
 
-export function NetClassesPage({ hidden, onDirty }: PageProps) {
+export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & { editor?: "pcb" | "sch" }) {
+  const sch = editor === "sch";
   const state = useStudioState();
   const board = state.board;
   const rules = board?.board_rules;
@@ -49,8 +58,8 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
 
   const source = useMemo<Draft | undefined>(() => {
     if (!rules) return undefined;
-    const { default: def, classes } = netClassSettingsOf(rules);
-    return { def, classes, rows: assignmentRows(classes) };
+    const { default: def, classes, schematic } = netClassSettingsOf(rules);
+    return { def, classes, rows: assignmentRows(classes), schematic: { ...(schematic ?? {}) } };
   }, [rules]);
   const page = usePageDraft<Draft>(source);
   const apply = usePageApply();
@@ -60,6 +69,12 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
   const [selRow, setSelRow] = useState<number | null>(null);
   const draft = page.draft;
   const issues: NetClassIssue[] = draft ? validateNetClasses(draft.def, draft.classes, draft.rows) : [];
+  // the Eeschema columns' checks (Schematic Setup's page only: Board Setup sends them as it found them)
+  const schIssues: { row: number; message: string }[] = !draft || !sch ? [] : [draft.def, ...draft.classes].flatMap((c, row) => {
+    const look = row === 0 ? defaultClassSchematic(draft.schematic.Default) : schematicOf(draft.schematic, c.name);
+    const m = schematicColumnsIssue(look, row === 0);
+    return m ? [{ row, message: m }] : [];
+  });
   const issueAt = new Map<string, string>();
   for (const i of issues) if (!issueAt.has(`${i.row}:${i.field}`)) issueAt.set(`${i.row}:${i.field}`, i.message);
   // Assignment rows count from 0 in the issues list too, but they are not classes: keep them apart.
@@ -86,7 +101,18 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
   const rename = (row: number, name: string) =>
     page.edit((d) => {
       const old = d.classes[row - 1]!.name;
-      return { ...d, classes: d.classes.map((c, j) => (j === row - 1 ? { ...c, name } : c)), rows: d.rows.map((r) => (r.netclass === old ? { ...r, netclass: name } : r)) };
+      // the class's schematic columns go with its name
+      const schematic = { ...d.schematic };
+      if (schematic[old] && !d.classes.some((c, j) => j !== row - 1 && c.name === old)) {
+        schematic[name] = schematic[old]!;
+        delete schematic[old];
+      }
+      return { ...d, classes: d.classes.map((c, j) => (j === row - 1 ? { ...c, name } : c)), rows: d.rows.map((r) => (r.netclass === old ? { ...r, netclass: name } : r)), schematic };
+    });
+  const setLook = (row: number, patch: Partial<NetClassSchematic>) =>
+    page.edit((d) => {
+      const name = row === 0 ? "Default" : d.classes[row - 1]!.name;
+      return { ...d, schematic: { ...d.schematic, [name]: { ...(d.schematic[name] ?? {}), ...patch } } };
     });
   const addClass = () => {
     if (!draft) return;
@@ -96,7 +122,11 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
   const removeClass = () => {
     if (!draft || selClass === 0) return;
     const gone = draft.classes[selClass - 1]!.name;
-    page.edit((d) => ({ ...d, classes: d.classes.filter((_, j) => j !== selClass - 1), rows: d.rows.filter((r) => r.netclass !== gone) }));
+    page.edit((d) => {
+      const schematic = { ...d.schematic };
+      delete schematic[gone];
+      return { ...d, classes: d.classes.filter((_, j) => j !== selClass - 1), rows: d.rows.filter((r) => r.netclass !== gone), schematic };
+    });
     setSelClass(Math.min(selClass, draft.classes.length - 1));
     setSelRow(null);
   };
@@ -130,9 +160,17 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
       apply.setMessage({ text: `${issues[0]!.message} Fix the values marked in red first.`, bad: true });
       return;
     }
+    if (schIssues.length > 0) {
+      apply.setMessage({ text: `${schIssues[0]!.message} Fix the values marked in red first.`, bad: true });
+      return;
+    }
     // A row typed as `a|b` becomes two patterns; a row with nothing in it is dropped (applyAssignments).
     const classes = applyAssignments(draft.classes, draft.rows).map((c) => ({ ...c, name: c.name.trim() }));
-    void apply.run({ op: "set_net_classes", settings: { default: { ...draft.def, name: "Default", nets: [] }, classes } }, page.markClean);
+    // the schematic columns under the names as sent (a name is trimmed as the class is)
+    const looks: Record<string, NetClassSchematic> = {};
+    for (const [k, v] of Object.entries(draft.schematic)) looks[k.trim()] = v;
+    const schematic = schematicToSend(looks, ["Default", ...classes.map((c) => c.name)]);
+    void apply.run({ op: "set_net_classes", settings: { default: { ...draft.def, name: "Default", nets: [] }, classes, schematic } }, page.markClean);
   };
 
   const selected = selRow !== null && draft ? draft.rows[selRow] : undefined;
@@ -154,13 +192,22 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
               <thead>
                 <tr>
                   <th>Name</th>
-                  {COLUMNS.map((c) => (
-                    <th key={c.field} title={c.title}>
-                      {c.label}
-                    </th>
-                  ))}
-                  <th title="Routing order: nets of a class with a higher priority are routed first (this app's own setting, not a KiCad one)">Priority</th>
-                  <th title="Nets of the board whose first class this is (a net in several classes is listed under the one that takes precedence)">Nets</th>
+                  {!sch &&
+                    COLUMNS.map((c) => (
+                      <th key={c.field} title={c.title}>
+                        {c.label}
+                      </th>
+                    ))}
+                  {sch && (
+                    <>
+                      <th title="Schematic wire thickness">Wire Thickness</th>
+                      <th title="Bus wire thickness">Bus Thickness</th>
+                      <th title="Schematic wire color">Color</th>
+                      <th title="Schematic wire line style">Line Style</th>
+                    </>
+                  )}
+                  {!sch && <th title="Routing order: nets of a class with a higher priority are routed first (this app's own setting, not a KiCad one)">Priority</th>}
+                  {!sch && <th title="Nets of the board whose first class this is (a net in several classes is listed under the one that takes precedence)">Nets</th>}
                 </tr>
               </thead>
               <tbody>
@@ -173,30 +220,48 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
                         <input type="text" className={`bs-name${issueAt.has(`${row}:name`) ? " bs-invalid" : ""}`} aria-label={`Netclass ${row} name`} title={issueAt.get(`${row}:name`)} value={c.name} spellCheck={false} onFocus={() => setSelClass(row)} onChange={(e) => rename(row, e.target.value)} />
                       )}
                     </td>
-                    {COLUMNS.map((col) => (
-                      <td key={col.field}>
-                        <LengthField
-                          ariaLabel={`${row === 0 ? "Default" : c.name} ${col.label}`}
-                          title={issueAt.get(`${row}:${col.field}`) ?? col.title}
-                          units={units}
-                          optional={row !== 0 || !col.required}
-                          value={c[col.field]}
-                          invalid={issueAt.has(`${row}:${col.field}`)}
-                          width={66}
-                          onChange={(v) => setClass(row, { [col.field]: v })}
-                        />
+                    {!sch &&
+                      COLUMNS.map((col) => (
+                        <td key={col.field}>
+                          <LengthField
+                            ariaLabel={`${row === 0 ? "Default" : c.name} ${col.label}`}
+                            title={issueAt.get(`${row}:${col.field}`) ?? col.title}
+                            units={units}
+                            optional={row !== 0 || !col.required}
+                            value={c[col.field]}
+                            invalid={issueAt.has(`${row}:${col.field}`)}
+                            width={66}
+                            onChange={(v) => setClass(row, { [col.field]: v })}
+                          />
+                        </td>
+                      ))}
+                    {sch && <SchematicCells row={row} name={row === 0 ? "Default" : c.name} look={row === 0 ? defaultClassSchematic(draft.schematic.Default) : schematicOf(draft.schematic, c.name)} units={units} issue={schIssues.find((i) => i.row === row)?.message} onChange={(patch) => setLook(row, patch)} />}
+                    {!sch && (
+                      <td>
+                        <NumberField ariaLabel={`${row === 0 ? "Default" : c.name} Priority`} title={issueAt.get(`${row}:priority`)} width={44} value={c.priority} invalid={issueAt.has(`${row}:priority`)} onChange={(v) => setClass(row, { priority: v ?? Number.NaN })} />
                       </td>
-                    ))}
-                    <td>
-                      <NumberField ariaLabel={`${row === 0 ? "Default" : c.name} Priority`} title={issueAt.get(`${row}:priority`)} width={44} value={c.priority} invalid={issueAt.has(`${row}:priority`)} onChange={(v) => setClass(row, { priority: v ?? Number.NaN })} />
-                    </td>
-                    <td>{owned.get(c.name) ?? 0}</td>
+                    )}
+                    {!sch && <td>{owned.get(c.name) ?? 0}</td>}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
           <p className="bs-note">Sizes are in {units}.</p>
+          {sch && (
+            <p className="bs-note" style={{ fontStyle: "italic" }}>
+              {SCH_COLOR_HELP}
+            </p>
+          )}
+          {sch && schIssues.length > 0 && (
+            <ul className="bs-issues">
+              {schIssues.slice(0, 4).map((i, k) => (
+                <li key={k}>
+                  {i.row === 0 ? "Default" : draft.classes[i.row - 1]?.name || `Netclass ${i.row}`}: {i.message}
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="bs-toolbar">
             <button onClick={addClass}>Add Netclass</button>
             <button onClick={removeClass} disabled={selClass === 0}>
@@ -305,5 +370,46 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
         </>
       )}
     </PageFrame>
+  );
+}
+
+/**
+ * The Eeschema columns of one row (`GRID_WIREWIDTH` .. `GRID_LINESTYLE`): the widths in the editor's units (blank: not set, but on the Default row, which must have
+ * them), the colour (a swatch; "none" is `COLOR4D::UNSPECIFIED`, the wire layer's colour) and the line style (`g_lineStyleNames`). The Default row's colour and
+ * line style are read-only (`loadNetclasses`: `SetReadOnly( aRow, GRID_SCHEMATIC_COLOR )`, `GRID_LINESTYLE`).
+ */
+function SchematicCells({ row, name, look, units, issue, onChange }: { row: number; name: string; look: NetClassSchematic; units: import("../../state/units").LengthUnit; issue?: string; onChange: (patch: Partial<NetClassSchematic>) => void }) {
+  const isDefault = row === 0;
+  const hex = hexFromCss(look.color);
+  return (
+    <>
+      <td>
+        <LengthField ariaLabel={`${name} Wire Thickness`} title={issue ?? "Schematic wire thickness"} units={units} optional={!isDefault} value={look.wire_width ?? undefined} invalid={!!issue && /Wire/.test(issue)} width={66} onChange={(v) => onChange({ wire_width: v ?? null })} />
+      </td>
+      <td>
+        <LengthField ariaLabel={`${name} Bus Thickness`} title={issue ?? "Bus wire thickness"} units={units} optional={!isDefault} value={look.bus_width ?? undefined} invalid={!!issue && /Bus/.test(issue)} width={66} onChange={(v) => onChange({ bus_width: v ?? null })} />
+      </td>
+      <td style={{ whiteSpace: "nowrap" }}>
+        {isDefault ? (
+          <span className="bs-unit" title="The Default class's wires have the wire layer's colour.">(layer colour)</span>
+        ) : (
+          <>
+            <input type="color" aria-label={`${name} Color`} title="Schematic wire color" value={hex ?? "#000000"} style={{ width: 32, opacity: hex ? 1 : 0.35 }} onChange={(e) => onChange({ color: cssFromHex(e.target.value) })} />
+            <button aria-label={`${name} Color none`} title="No colour of its own: the wire layer's" disabled={!hex} onClick={() => onChange({ color: null })}>
+              ×
+            </button>
+          </>
+        )}
+      </td>
+      <td>
+        <select aria-label={`${name} Line Style`} title="Schematic wire line style" disabled={isDefault} value={lineStyleRow(look.line_style)} onChange={(e) => onChange({ line_style: lineStyleOfRow(Number(e.target.value)) })}>
+          {LINE_STYLE_NAMES.map((n, i) => (
+            <option key={n} value={i}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </td>
+    </>
   );
 }
