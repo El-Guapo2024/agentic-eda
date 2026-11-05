@@ -75,6 +75,8 @@ mod sheet_drop_api;
 mod sheet_import;
 #[cfg(test)]
 mod sch_hierarchy_tests;
+#[cfg(test)]
+mod sch_setup_tests;
 mod studio;
 mod view_api;
 mod appearance_api;
