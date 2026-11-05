@@ -354,7 +354,7 @@ Notes:
 - **F8 [FM] Missing tools and settings.**
   - No Import Graphics and no preference pages.
   - The rotation is fixed at 90°.
-  - No Save Library As.
+  - ~~No Save Library As.~~ **done (task-u1-libsave)**: a library row's Save As makes a new `.pretty` with its row and copies every footprint into it (PARITY-fpedit §19).
   - M. GAPS 28; fpedit §14, §17; PARITY-common §6.
 - **F9 [BD] Footprint Checker.** Reference and Value aren't checked, and markers sit on the first item. S. GAPS 29; fpedit §12.
 - **F10 [CO] Arrays and numbering.**
@@ -385,8 +385,8 @@ Notes:
 - **Y6 [BD] Pin Table.** No summary, no Count or text-size columns, and raw type tokens (E7-S15). S.
 - **Y7 [BD] Small differences.**
   - Pin Properties has an extra Delete Pin (E7-S4), and a power symbol's Exclude boxes are disabled too early (E7-S9).
-  - Save As doesn't ask before overwriting, doesn't refuse a read-only library, and opens the wrong unit after a Duplicate (E7-S19..21).
-  - Save Library As is a download.
+  - ~~Save As doesn't ask before overwriting, doesn't refuse a read-only library~~ **done (task-u1-libsave)** (E7-S19, S20); Duplicate still opens the first copy at unit 1 (E7-S21).
+  - ~~Save Library As is a download.~~ **done (task-u1-libsave)**: a new `.kicad_sym` with a row of the project table, or the library's row pointed at it (PARITY-common §16).
   - No Find/Replace.
   - Export SVG uses kicad-cli's theme (X11).
   - S. r7 E7-S*; GAPS 37.
@@ -454,10 +454,11 @@ Notes:
 
 ## Libraries and choosers
 
-- **L1 [FM] Saving into table libraries.**
-  - Both editors write only to the project library, and a New Library stays empty.
-  - Folder (`.kicad_symdir`) libraries are read-only.
-  - L. GAPS 5; PARITY-common §14.
+- **L1 [FM] Saving into table libraries.** **done (task-u1-libsave)**: Save, Save All, Save As, Save Copy As, Save Library As and Revert in both editors write into the `.kicad_sym` file, the `.kicad_symdir` folder or the `.pretty` folder the table names (a New Library is filled by them); every library listed in Save As, read-only ones refused with KiCad's words; New Symbol goes into the target library; the trees mark what is not saved ` *` (PARITY-common §16). Left:
+  - Delete and Rename of a library's symbol or footprint stay in the design (the file keeps the old one); New Footprint is the project library's.
+  - Save Library As has no "Do not update library tables" or global-table entry; KiCad 25ec2335's Save As Packed / Unpacked are not ported.
+  - The library file is not watched for changes made outside the studio.
+  - L. GAPS 5; PARITY-common §14, §16.
 - **L2 [FM] Manage Libraries.**
   - No Reset or Migrate Libraries, and no Edit Options.
   - The project table only.

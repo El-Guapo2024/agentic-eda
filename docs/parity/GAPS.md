@@ -373,7 +373,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `tools/sch_editor_control.cpp`, `dialogs/dialog_annotate.cpp`.
 
 ### 5. Access to the installed libraries
-**Mostly closed (the choosers 2026-10-08, `80e972d`; library tables 2026-10-10, `task-lib-tables`): the choosers, the library trees and the lookups read the libraries KiCad's library tables name, the board has library tables of its own and the dialogs to edit them exist. Saving into a table library's file is open.** Hit: every session that adds a part. Package P3.
+**Mostly closed (the choosers 2026-10-08, `80e972d`; library tables 2026-10-10, `task-lib-tables`; saving into them 2026-11-05, `task-u1-libsave`): the choosers, the library trees and the lookups read the libraries KiCad's library tables name, the board has library tables of its own and the dialogs to edit them exist, and the two library editors save into a table library's file or folder.** Hit: every session that adds a part. Package P3.
 - Done: **the Symbol Chooser is KiCad's** (`components/SymbolChooserDialog.tsx`, `components/chooser/`, `kicad-port/libChooser.ts`): a tree of "-- Recently Used --", "-- Already Placed --",
   the project's own libraries and all 222 installed ones, a search scored as `EDA_COMBINED_MATCHER` does, a row per unit, the symbol's drawing, its default footprint and the description pane.
   **The Footprint Chooser** (`components/FootprintChooserDialog.tsx`): the 155 installed footprint libraries with the same search, the drawing, the description, and, for a symbol, "Filter by
@@ -396,8 +396,15 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   studio had found no symbol library and drawn every part with the built-in symbols). `crates/kicad/src/symbol_lib_dir.rs` ports `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load`'s folder branch (every
   `*.kicad_sym` into one symbol map, a later name replacing an earlier one, parents linked across files), `CanReadLibrary` and `isLibraryPathValid`; every reader takes the folder's one text, and
   the table dialog adds one ("KiCad (folder with .kicad_sym files)"). Differs and the unported writing side: `PARITY-common.md` section 14.
-- Missing: saving the editors' symbols and footprints into a table library's file (they write the project library of `design.json`; a library made with New Library stays empty until a file is put
-  into it; writing a folder library, `Save`'s file per symbol, comes with it), Add Library by drop (a browser drop has no path), Reset and Migrate Libraries, formats other than KiCad's (listed with
+- Done (2026-11-05, `task-u1-libsave`, UI-LEFT L1, `PARITY-common.md` section 16): **saving into the libraries of the tables**. The editors' copy of a library's symbol or footprint (`Lib:Name` in
+  `design.json`) is KiCad's library buffer: Save (Ctrl+S) writes it into the `.kicad_sym` file, the `.kicad_symdir` folder (`SCH_IO_KICAD_SEXPR_LIB_CACHE::Save`'s folder branch: each symbol in its own
+  file, `EscapeString( name, CTX_FILENAME ).kicad_sym` for a new one) or the `.pretty` folder the table names (`crates/kicad/src/library_save.rs`, the symbols not saved kept as the file has them;
+  `crates/cli/src/library_save_api.rs`); Save All, Revert, Save As and Save Copy As into any table library (every library listed, a read-only one refused with KiCad's words, the name tested against
+  the library's file in any case, New Library... makes a real library), New Symbol into the target library, Save Library As in both editors (a new file or folder and its table row), the tree's
+  ` *` on what is not saved. kicad-cli loads and plots what was saved (`crates/kicad/tests/library_save.rs`, slow tier); `e2e/library-save.check.js` 6/6. Left: Delete and Rename of a library's
+  item stay in the design (the file keeps the old one), New Footprint is the project library's, Save Library As offers no "Do not update library tables" or global table entry, the library file is
+  not watched, and a symbol kept from a newer file is written under this writer's `(version 20250324)`.
+- Missing: Add Library by drop (a browser drop has no path), Reset and Migrate Libraries, formats other than KiCad's (listed with
   a warning, kept in the table, not read), Edit Options..., 3D model search paths (Configure Paths lists KiCad's variables; the `3D Models` paths are the footprint's own text); KiCad's
   regular-expression (`/re/`) and relational (`voltage>3.3`) search words; the Footprint selector's list and the 3D preview of the Footprint Chooser; the chooser places a symbol in its normal
   body style (Cycle Body Style changes it afterwards, item 12); Change Symbols lists only the libraries the design references; power symbols are placed by `P`, not offered here.

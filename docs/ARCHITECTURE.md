@@ -42,6 +42,10 @@ never edited as masters.
   `.kicad/` project carries them (`<board>/.kicad/sym-lib-table`, `fp-lib-table`, and the variables
   as `text_variables` with `KIPRJMOD` the board's folder), so kicad-cli reads the same libraries.
   `eda import-kicad` brings a real project's tables and text variables along into the board's folder.
+  The library files the tables name are inputs too: the library editors edit the design's copy of a
+  library's symbol or footprint (KiCad's library buffer, an undoable verb like every edit) and write the
+  file only on Save, Save As and Save Library As (`crates/cli/src/library_save_api.rs`, into a path a
+  table row names or one the same request adds), never as part of undo.
 - **One shared history**: `.history/undo|redo` snapshots, each tagged with
   its author (`ui`, `cli`, `agent`, ...). A direct edit of `design.json`
   (detected against `.history/head.json`) becomes its own `file` step, so
