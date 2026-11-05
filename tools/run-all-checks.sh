@@ -22,7 +22,7 @@
 # mcu30-routed (`eda place` then `eda route`), mcu30-zones (routed, with a GND pour on F.Cu and B.Cu), mcu30-sheet (mcu30 with KiCad's QA
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
 # examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), multichannel and
-# simulator (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
+# simulator and sim-model (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
 # copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR).
 #
 # Needs: Playwright with Chromium ($PLAYWRIGHT_MODULE, default ~/tools/pw/node_modules/playwright/index.mjs), kicad-cli on the PATH
@@ -146,6 +146,8 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
             "$eda" board new "$e2e/multichannel-board.yaml" -o "$d" ;;
         simulator)
             "$eda" board new "$e2e/simulator-board.yaml" -o "$d" ;;
+        sim-model) # sim-model.check.js: the built-in models, and an IBIS file in the board folder
+            "$eda" board new "$e2e/sim-model-board.yaml" -o "$d" && mkdir -p "$d/models" && cp "$e2e/sim-model-io.ibs" "$d/models/io.ibs" && cp "$e2e/sim-model-diode.lib" "$d/models/diode.lib" ;;
         *) echo "unknown board kind $kind"; return 1 ;;
     esac
 }

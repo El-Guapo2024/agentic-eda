@@ -1,0 +1,3 @@
+* A diode model for web/studio/e2e/sim-model.check.js (the library half of the Simulation Model dialog)
+.model D1N4148 D(Is=2.52n N=1.752 Rs=0.568 BV=100 IBV=100u)
+.model DFAST D(Is=1e-14 N=1)

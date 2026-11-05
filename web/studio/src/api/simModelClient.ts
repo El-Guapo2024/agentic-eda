@@ -22,6 +22,8 @@ export interface SimLibraryReply {
   models: LibraryModelInfo[];
   /** The info bar's lines (KiCad's words). */
   messages: string[];
+  /** An IBIS file: its models are components. */
+  ibis?: boolean;
 }
 
 async function post<T>(url: string, body: unknown): Promise<T> {

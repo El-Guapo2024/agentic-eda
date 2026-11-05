@@ -314,7 +314,10 @@ export function SymbolPropertiesDialog() {
           reference={symbol.id}
           onClose={() => setEditingSimModel(false)}
           // the Simulation Model dialog wrote the fields itself (its own undo step): the rows show them as the symbol has them now
-          onWritten={(written) =>
+          onWritten={(all) => {
+            // the Value (the primary parameter saved there) is the dialog's own box; the rest are user rows
+            const { Value: writtenValue, ...written } = all;
+            if (writtenValue !== undefined) setValue(writtenValue);
             setUserRows((rows) => {
               let out = rows.filter((r) => !(r.name in written && written[r.name] === "" && !r.isNew));
               out = out.map((r) => (r.name in written && written[r.name] !== "" ? { ...r, text: written[r.name]!, removed: false, was: { text: written[r.name]!, visible: r.was?.visible ?? r.shown } } : r));
@@ -322,8 +325,8 @@ export function SymbolPropertiesDialog() {
                 if (text !== "" && !out.some((r) => r.name === name)) out.push({ key: nextKey.current++, name, text, shown: false, isNew: false, removed: false, was: { text, visible: false } });
               }
               return out;
-            })
-          }
+            });
+          }}
         />
       )}
       {choosingFootprint && (
