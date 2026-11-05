@@ -26,7 +26,7 @@ Notes:
 7. Y1: Symbol Editor Rotate
 8. P2/S7: Properties panel rows
 9. S3: Schematic Setup pages
-10. P8: zones
+10. P8: zones -- **done (task-u1-zones)**
 11. S2: design variants
 12. M1: the Simulation Model dialog
 
@@ -59,12 +59,13 @@ Notes:
   - It refuses a move, swap or delete that breaks a complete net, and a pasted copy keeps its nets, so moving the copy is refused.
   - KiCad never refuses. This may be an intended safety rule.
   - S. GAPS 8; PARITY-pcb §22.
-- **P8 [BD] Zones.**
-  - The outline is drawn first and the dialog comes after; KiCad opens the dialog first.
-  - No outline display style or per-zone hatch offsets, and no Update Displayed Zones in the Zone Manager.
-  - The point editor, Simplify, Convert and the hit test ignore holes.
-  - An unfill doesn't stick (R7-Z1), and a "N zones not filled" note stays up (R7-Z2).
-  - M. PARITY-pcb §8, §11, §52; GAPS 13.
+- **P8 [BD] Zones.** **done (task-u1-zones)**: Add Filled Zone and Add Rule Area open the zone dialog at the first corner (`createNewZone`: the net of the highlight or the selection, the first unused priority), Cancel draws nothing and keeps the tool armed, the zone takes the dialog's settings in one undo step and is selected, E during the draw edits them; the outline display (Line / Hatched / Fully hatched), its pitch and the per-zone hatch offsets are read, written, edited and drawn (`ZONE::HatchBorder`); the Zone Manager's Update Displayed Zones; holes in the point editor, Simplify, Create Lines / Tracks, Create Zone / Polygon from Selection and the hit test; an unfill sticks and Undo gives the fill back (R7-Z1); no standing "not filled" note, KiCad's 5 s warning on Draw Zone Fills (R7-Z2). PARITY-pcb §67. Left:
+  - A zone's settings are not sticky (`Edit_Zone_Params`' `SetDefaultZoneSettings`; Board Setup has no Zones page).
+  - Properties (E) while drawing a cutout or a similar zone does nothing; Escape in the dialog is its Cancel.
+  - A zone picked by its inside stands in for `HitTestFilledArea`: an unfilled pour is picked by a click inside it.
+  - Add / remove / chamfer corner and Simplify empty the zone's fill (KiCad keeps the stale fill: only the corner drag `UnFill()`s).
+  - The IR polygon has no holes, so a zone made a polygon is a slit ring (its holes come back when it is made a zone again).
+  - M. PARITY-pcb §8, §11, §52, §67; GAPS 13.
 - **P9 [FM] Net Inspector.**
   - It is a modal dialog, not a docked panel.
   - No Group by Netclass or custom groups, no time-domain columns, and no Rename, Delete or Add Net.
