@@ -19,7 +19,7 @@ import { inferSpin } from "../components/schematic/labelShape";
 import { labelNameFromWire } from "../kicad-port/schLabelName";
 import { lastPlaced } from "../kicad-port/schLastPlaced";
 import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnotate";
-import { afterPlaced, carryKey, incrementCarried, mirrorCarried, placeCmd, previewCmd, rotateCarried, scopeOfTool, type CarriedItem, type CarryTool } from "../kicad-port/schPlaceTool";
+import { afterPlaced, armedKey, carryKey, incrementCarried, isCarryTool, mirrorCarried, placeCmd, previewCmd, rotateCarried, scopeOfTool, type CarriedItem, type CarryTool } from "../kicad-port/schPlaceTool";
 import { carryCursor, getSchCarry, setSchCarry, type SchCarry } from "../state/schCarryStore";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
 
@@ -161,6 +161,8 @@ export function registerSchPlaceActions(registry: ActionMap, ctx: PlaceContext):
   for (const [id, run] of [...registry]) {
     registry.set(id, (param) => {
       const carry = getSchCarry();
+      // armed with nothing in the hand: `TwoClickPlace` leaves on Undo
+      if (!carry && isCarryTool(ctx.state.activeTool) && armedKey(ctx.state.activeTool, id) === "leave") return void ctx.dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
       // an item made on this sheet with this tool; anything else is not the tool's to answer
       if (!carry || ctx.state.activeTool !== carry.tool) return run(param);
       const k = carryKey(carry.tool, id, ACTIVATES.has(id));

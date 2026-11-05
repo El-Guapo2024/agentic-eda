@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   afterPlaced,
+  armedKey,
   carryKey,
   CARRY_TOOL_ACTIONS,
   incrementCarried,
@@ -182,4 +183,12 @@ test("while an item rides, the tool's loop answers the keys before anyone else",
 test("a directive label starts on the label tools' last spin and leaves its pole as their last", () => {
   assert.deepEqual(["right", "up", "left", "bottom", ""].map((s) => poleOfSpin(s as never)), [0, 90_000, 180_000, 270_000, 0]);
   assert.deepEqual([0, 90_000, 180_000, 270_000, 360_000].map(spinOfPole), ["right", "up", "left", "bottom", "right"]);
+});
+
+test("armed with nothing in the hand, Undo leaves TwoClickPlace's tools (undoing nothing) and is Place Power's to pass on", () => {
+  assert.equal(armedKey("sch_label_local", "common.Interactive.undo"), "leave");
+  assert.equal(armedKey("sch_text", "common.Interactive.undo"), "leave");
+  assert.equal(armedKey("sch_directive", "common.Interactive.undo"), "leave");
+  assert.equal(armedKey("sch_power", "common.Interactive.undo"), "pass");
+  assert.equal(armedKey("sch_label_global", "common.Interactive.redo"), "pass");
 });

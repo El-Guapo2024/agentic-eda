@@ -9,7 +9,8 @@
 // otherwise the next click makes a new item.
 //
 // While the item rides, the tool's own loop answers the keys before anyone else (`evt->IsAction( ... )` in each loop):
-//   * Esc and Undo drop the item and the tool stays (`cleanup()`); with nothing carried Esc leaves the tool. Delete drops it too.
+//   * Esc and Undo drop the item and the tool stays (`cleanup()`); with nothing carried Esc leaves the tool, and so does Undo in `TwoClickPlace` (undoing
+//     nothing). Delete drops the item too.
 //   * The tool's own hotkey is a click (`isSyntheticClick`): it places the item.
 //   * Another tool is refused: "Press <ESC> to cancel item creation." (`PlaceSymbol`: "... symbol creation."); the Move tool is ignored quietly.
 //   * Rotate, Mirror, Properties and Autoplace Fields go to the edit tool, which acts on the selection -- the item -- and the preview follows.
@@ -314,6 +315,14 @@ export function carryKey(tool: CarryTool, action: string, activates: boolean): C
   const inc = INCREMENTS[action];
   if (inc) return { do: "increment", ...inc };
   return { do: "pass" };
+}
+
+/**
+ * What an action does while `tool` is armed with nothing in the hand: `TwoClickPlace` takes Undo as it takes Esc -- "else { m_frame->PopTool( aEvent );
+ * break; }", the event not passed on, so nothing is undone -- where `PlaceSymbol` checks Undo only with a symbol in hand and lets it through.
+ */
+export function armedKey(tool: CarryTool, action: string): "leave" | "pass" {
+  return tool !== "sch_power" && action === "common.Interactive.undo" ? "leave" : "pass";
 }
 
 // --------------------------------------------------------------------------------------------------------------------------- reading

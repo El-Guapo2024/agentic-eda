@@ -150,7 +150,7 @@
     });
 
     // ----- a global label turned while it rides
-    await scenario("Place Global Label: Ctrl+L, OK, then R turns the label in the hand (up), X mirrors it back across (it stays up), Shift+R turns it back; the click places it so", async (t) => {
+    await scenario("Place Global Label: Ctrl+L, OK, then R, X, Y and Shift+R turn the label in the hand as SCH_EDIT_TOOL turns a label; the click places it as turned", async (t) => {
       const s0 = await sch();
       await hoverAt(X0, Y0 + 6 * G);
       await run("eeschema.InteractiveDrawing.placeGlobalLabel");
@@ -318,7 +318,7 @@
     });
 
     // ----- the keys while an item rides
-    await scenario("While a label rides: another tool is refused, Esc drops it and keeps the tool, Undo and Delete drop it, the tool's hotkey places it, a second Esc leaves", async (t) => {
+    await scenario("While a label rides: another tool is refused, Esc drops it and keeps the tool, a second Esc leaves, Undo and Delete drop it, Increment steps it, the tool's hotkey places it", async (t) => {
       const s0 = await sch();
       const make = async (name) => {
         await run("eeschema.InteractiveDrawing.placeLabel");
@@ -335,6 +335,15 @@
       t(!state().carry && state().tool === "sch_label_local", "Esc drops it, the tool stays armed");
       await escape();
       t(state().tool === "select", "a second Esc leaves the tool");
+      // Cancel in the dialog makes nothing and keeps the tool; Undo with nothing in the hand then leaves it and undoes nothing (`PopTool`, the event not passed on)
+      await run("eeschema.InteractiveDrawing.placeLabel");
+      const cancelled = await opened(/^Label Properties/);
+      if (cancelled) buttonText(cancelled, "Cancel").click();
+      await sleep(300);
+      t(!dialog() && !state().carry && state().tool === "sch_label_local", "Cancel makes nothing and keeps the tool");
+      await __eda.run("common.Interactive.undo");
+      await sleep(500);
+      t(state().tool === "select" && same(await snapshot(), base), "Undo then leaves the tool and undoes nothing");
       if (!t(await make("E2E_KEY1"), "a label rides again")) return;
       await __eda.run("common.Interactive.undo");
       await sleep(400);
