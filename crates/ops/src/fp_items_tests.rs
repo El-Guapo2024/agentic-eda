@@ -280,3 +280,18 @@ fn the_verbs_are_footprint_editor_steps_read_from_the_studios_json() {
     b.apply(&c).unwrap();
     assert_eq!(fp(&b).items.points[0].size_nm, eda_model::pcb_items::DEFAULT_POINT_SIZE_NM);
 }
+
+#[test]
+fn set_anchor_moves_the_graphical_items_and_the_zones_not_the_points() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = with_footprint(&m);
+    b.apply(&item(FpItemCmd::Add { footprint: NAME.into(), item: FpItem::Dimension(dimension("", DimensionKind::Aligned { height: mm(1.0) }, p(Nm::ZERO, Nm::ZERO), p(mm(5.0), Nm::ZERO))) })).unwrap();
+    b.apply(&item(FpItemCmd::Add { footprint: NAME.into(), item: FpItem::Zone(zone("", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (mm(2.0), Nm::ZERO), (mm(2.0), mm(2.0))])) })).unwrap();
+    b.apply(&item(FpItemCmd::Add { footprint: NAME.into(), item: FpItem::Point(PcbPoint::new("F.Fab", p(mm(1.0), mm(1.0)))) })).unwrap();
+    // `FOOTPRINT::MoveAnchorPosition( -cursorPos )`: the click point becomes the origin
+    b.apply(&Cmd::SetFootprintAnchor { name: NAME.into(), at: p(mm(1.0), mm(2.0)) }).unwrap();
+    let f = fp(&b);
+    assert_eq!(f.items.dimensions[0].start, p(mm(-1.0), mm(-2.0)));
+    assert_eq!(f.items.zones[0].outline[0], p(mm(-1.0), mm(-2.0)));
+    assert_eq!(f.items.points[0].at, p(mm(1.0), mm(1.0)), "`m_points` is not in MoveAnchorPosition's lists");
+}

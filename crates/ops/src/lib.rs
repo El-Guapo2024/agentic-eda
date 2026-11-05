@@ -6143,7 +6143,8 @@ impl<'a> Board<'a> {
     /// `RotatePoint` is a no-op): the fields (Reference and Value at their default places when they have no layout of their own, the
     /// Datasheet and Description when the footprint has them, every user field), the pads, the graphics and texts move; each 3D model's
     /// offset follows, in millimetres with y up (`m_Offset.x += IUTomm( moveVector.x ); m_Offset.y -= IUTomm( moveVector.y )`).
-    /// Differs: the kept items the editor does not draw (`kicad.tokens`: zones, dimensions, ...) stay put, and the `courtyard`
+    /// The footprint's dimensions, text boxes, images, barcodes, tables and zones move too (`GraphicalItems()`, `Zones()`), its points do not, as in KiCad.
+    /// Differs: the items still kept as text (`kicad.tokens`: a locked or filled zone, ...) stay put, and the `courtyard`
     /// half-extents override is centred on the origin by definition (KiCad has no such override: its courtyard is the F.CrtYd graphics,
     /// which move).
     fn set_footprint_anchor(&mut self, name: &str, at: Point) -> Result<(), Vec<CheckResult>> {
@@ -6171,6 +6172,8 @@ impl<'a> Board<'a> {
             m.offset[0] += dx.mm();
             m.offset[1] -= dy.mm();
         }
+        // the dimensions, text boxes, images, barcodes, tables and zones (`GraphicalItems()`, `Zones()`), not the points
+        fp_items::move_items_with_anchor(fp, dx, dy);
         Ok(())
     }
 

@@ -380,6 +380,13 @@ fn transform(fp: &mut LibraryFootprint, ids: &BTreeSet<String>, x: Xform) {
     }
 }
 
+/// `FOOTPRINT::MoveAnchorPosition`'s part of the items of [`eda_model::fp_items`]: every graphical item (`GraphicalItems()`: the dimensions, text boxes, images, barcodes and
+/// tables) and every zone moves by `(dx, dy)`; the points do not (`m_points` is not in KiCad's list, so a point stays where it was in the footprint's frame).
+pub(crate) fn move_items_with_anchor(fp: &mut LibraryFootprint, dx: Nm, dy: Nm) {
+    let ids: BTreeSet<String> = fp.items.ids().filter(|id| !fp.items.points.iter().any(|p| p.id == *id) && !fp.items.groups.iter().any(|g| g.id == *id)).map(String::from).collect();
+    transform(fp, &ids, Xform::Move { dx, dy });
+}
+
 /// The checks `DIALOG_TEXT_PROPERTIES::TransferDataFromWindow` and the Properties panel make of a text's look: a layer, and a glyph size in KiCad's range.
 fn check_text_look(what: &str, layer: &str, sizes: &[Nm]) -> Result<(), Vec<CheckResult>> {
     if layer.is_empty() {
