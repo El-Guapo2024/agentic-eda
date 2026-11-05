@@ -218,7 +218,7 @@
     t(g && g.start.x === -3_000_000, "one undo takes the mirror back");
   });
 
-  await scenario("F2: Group makes a group of the selection; a click on a member selects it, a drag moves it; Ungroup", async (t) => {
+  await scenario("F2: Group makes a group of the selection; a click on a member selects it, a drag moves it; Group Properties; Ungroup", async (t) => {
     if (!name || !line) return t(false, "no line");
     await __eda.run("common.Interactive.unselectAll").catch(() => {});
     await selectAt(0, (line.start.y + line.end.y) / 2);
@@ -236,6 +236,14 @@
     fp = await footprint(name);
     const moved = fp.graphics.find((x) => x.id === line.id);
     t(moved && near(moved.start.x, line.start.x + 1_000_000, 300_000) && fp.value && near(fp.value.at.x, 1_000_000, 300_000), `the drag moves both: ${JSON.stringify([moved?.start, fp.value?.at])}`);
+    // E on the group: Group Properties (`case PCB_GROUP_T: groupProperties`), its name one undo step
+    await __eda.run("pcbnew.InteractiveEdit.properties");
+    const gd = await until(() => dialog("Group Properties"), 3000);
+    if (t(gd, "E on the group opens Group Properties")) {
+      await type(tid("fp-group-name"), "body");
+      tid("fp-group-ok").click();
+      t(await until(async () => ((await footprint(name)).items?.groups ?? [])[0]?.name === "body", 3000), "OK names the group");
+    }
     await __eda.run("common.Interactive.ungroup");
     await sleep(600);
     t(((await footprint(name)).items?.groups ?? []).length === 0, "Ungroup dissolves it");

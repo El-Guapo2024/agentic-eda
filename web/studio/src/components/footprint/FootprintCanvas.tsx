@@ -656,7 +656,8 @@ export function FootprintCanvas() {
     const [wx, wy] = worldAt(e);
     const hit = hitTest(wx, wy);
     // `PCB_SELECTION_TOOL`'s double click -> `EDIT_TOOL::Properties` -> `FOOTPRINT_EDIT_FRAME::OnEditItemRequest`: the item's own dialog (a group's Group Properties)
-    if (hit && fp) openProperties(fpEditTarget(fp, [hit.id]));
+    // A double click on a group enters it in KiCad (`EnterGroup`), and the next one opens the member's dialog; this editor enters no group, so the member's dialog opens at once.
+    if (hit && fp) openProperties(fpEditTarget(fp, [hit.kind === "group" ? hit.item : hit.id]));
   };
 
   /** `FOOTPRINT_EDIT_FRAME::OnEditItemRequest`: the dialog of the item (kicad-port/fpItems.ts `fpEditTarget`). */
