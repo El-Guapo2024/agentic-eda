@@ -296,7 +296,11 @@
       setValue(fieldOf("Pin name"), "A1");
       await sleep(100);
       buttonText(dialog(), "OK")?.click();
-      await sleep(900);
+      await sleep(600);
+      // `TwoClickPlace`: the pin follows the cursor after the dialog, and the next click places it
+      t(((await symbol(SYM)).pins ?? []).length === 0, "OK carries the pin: none is placed yet");
+      await clickAt(-5_080_000, 0);
+      await sleep(400);
       await toSelect();
       // Insert: SYMBOL_EDITOR_PIN_TOOL::RepeatPin -- 100 mil down for a horizontal pin, IncrementString on the name and the number
       await run("eeschema.InteractiveEdit.repeatDrawItem");
@@ -363,7 +367,9 @@
       setValue(fieldOf("Pin name"), "TMPL");
       setValue(fieldOf("Pin length"), 5.08);
       buttonText(dialog(), "OK")?.click();
-      await sleep(900);
+      await sleep(600);
+      await clickAt(-2_540_000, 5_080_000); // the click that places the carried pin (`TwoClickPlace`)
+      await sleep(400);
       // The next click starts from that look, but without the name.
       await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
       await clickAt(-2_540_000, 7_620_000);

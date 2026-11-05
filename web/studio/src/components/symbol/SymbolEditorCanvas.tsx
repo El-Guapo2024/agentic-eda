@@ -82,7 +82,7 @@ function graphicPoints(g: LibrarySymbolGraphic): [number, number][] {
 }
 
 /** `SCH_SHAPE::HitTest` and its kin: the distance from a world point to the graphic as drawn (a bezier's curve, a text box's inside), `kicad-port/libEditorHit.ts`. */
-const graphicHitDistance = (g: LibrarySymbolGraphic, wx: number, wy: number): number => symbolGraphicDistance(g, wx, wy);
+const graphicHitDistance = (g: LibrarySymbolGraphic, wx: number, wy: number): number => symbolGraphicDistance(g, wx, wy, measureStrokeText);
 
 /** Distance from a world point to a pin's own body-to-tip line, resolved the exact same way the painter draws it (`resolvePin` with an identity transform). */
 function pinHitDistance(pin: LibrarySymbolPin, wx: number, wy: number): number {
@@ -401,9 +401,8 @@ export function SymbolEditorCanvas() {
     if (e.button !== 0) return;
 
     if (state.carry) {
-      // the click that places what is carried (`TwoClickPlace`'s second click, the move's drop): where the snapped cursor has brought it
-      const [cx, cy] = carryPoint(e, wx, wy);
-      dispatch({ type: "SET_CARRY_DELTA", deltaNm: [cx - state.carry.originNm[0], cy - state.carry.originNm[1]] });
+      // the click that places what is carried (`TwoClickPlace`'s second click, the move's drop): where it is drawn -- KiCad sets the item's position on motion
+      // (`item->SetPosition( cursorPos )`, `moveItem` on `IsMotion()`), and the click places it as it is
       void api.placeCarry();
       return;
     }

@@ -10,6 +10,7 @@ import { distToSegment, shapeHitDistance } from "../components/canvas/itemHitTes
 import { libPointToInternalNm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
 import { cmdShapeToShape, libBezierPointsNm } from "./itemBoxes";
 import { textBoxDistanceNm } from "./symTextBox";
+import { libTextBoxNm } from "./symText";
 
 /** The two editors' tolerance: `Math.max( 80, 6 px )` in um. */
 export function pickTolerance(scale: number): number {
@@ -74,13 +75,18 @@ export function pickFootprintItem(fp: LibraryFootprint, x: number, y: number, sc
 
 const um = (p: { x: number; y: number }): [number, number] => libPointToInternalNm([p.x, p.y]);
 
-/** Distance from a point to a library symbol graphic's outline, in internal um. */
-export function symbolGraphicDistance(g: LibrarySymbolGraphic, x: number, y: number): number {
+/** Distance from a point to a library symbol graphic's outline, in internal um. With `measure` (the stroke font's advance) a text is hit by its box (`SCH_TEXT::HitTest`:
+ *  `GetBoundingBox()` inflated by the accuracy), which a justified text needs -- its anchor is a corner of it; without, by its anchor. */
+export function symbolGraphicDistance(g: LibrarySymbolGraphic, x: number, y: number, measure?: (text: string, sizeNm: number) => number): number {
   if (g.kind === "circle") {
     const [cx, cy] = um(g.center);
     return Math.abs(Math.hypot(x - cx, y - cy) - g.radius_mm * 1e6);
   }
   if (g.kind === "text") {
+    if (measure) {
+      const b = libTextBoxNm(g, measure);
+      return Math.hypot(Math.max(b.minX - x, 0, x - b.maxX), Math.max(b.minY - y, 0, y - b.maxY));
+    }
     const [tx, ty] = um(g.at);
     return Math.hypot(x - tx, y - ty);
   }

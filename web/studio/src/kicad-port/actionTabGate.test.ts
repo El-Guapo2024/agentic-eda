@@ -155,3 +155,11 @@ test("Repeat Last Item (Insert) is live on the Schematic and the Symbol tabs (r2
   assert.equal(isActionEnabledForTab("eeschema.InteractiveEdit.repeatDrawItem", "schematic", true), true);
   assert.equal(isActionEnabledForTab("eeschema.InteractiveEdit.repeatDrawItem", "pcb", true), false);
 });
+
+test("Mirror, Draw Bezier Curve and Increment are the Symbol tab's too (UI-LEFT Y2, Y5): SYMBOL_EDITOR_EDIT_TOOL and SYMBOL_EDITOR_DRAWING_TOOLS run them", () => {
+  for (const name of ["eeschema.InteractiveEdit.mirrorH", "eeschema.InteractiveEdit.mirrorV", "eeschema.InteractiveDrawing.drawBezier", "eeschema.Interactive.incrementPrimary", "eeschema.Interactive.decrementSecondary"]) {
+    assert.equal(isActionEnabledForTab(name, "symbol", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "schematic", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "pcb", true), false, name);
+  }
+});

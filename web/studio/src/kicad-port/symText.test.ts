@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_SYMBOL_TEXT_SIZE_MM, noPrintableChars, textAngleDeg, textFormOf, textFromForm, textSizeError, type LibText } from "./symText";
+import { DEFAULT_SYMBOL_TEXT_SIZE_MM, libTextBoxNm, noPrintableChars, textAngleDeg, textFormOf, textFromForm, textSizeError, type LibText } from "./symText";
 
 test("a text of only blanks has no printable characters", () => {
   assert.equal(noPrintableChars(""), true);
@@ -35,4 +35,16 @@ test("DIALOG_TEXT_PROPERTIES of a symbol's text: the form is the text's looks, O
   const notCommon = textFromForm({ ...t, unit: 0, body_style: 0 }, form, 2, 1);
   assert.ok(notCommon.ok && notCommon.text.unit === 2 && notCommon.text.body_style === 1, "unchecked: the unit and body style being edited");
   assert.deepEqual(textFromForm(t, { ...form, size: "0" }, 1, 1), { ok: false, error: "Text size must be between 0.01 mm and 1000 mm." });
+});
+
+test("SCH_TEXT::GetBoundingBox of a symbol's text: a left-top text lies right of and below its anchor, a vertical one runs up the sheet", () => {
+  const measure = (text: string, sizeNm: number) => text.length * sizeNm;
+  const t: LibText = { kind: "text", unit: 0, body_style: 1, text: "AB", at: { x: 1, y: 2 }, angle_deg: 0, size_mm: 1, h_align: "left", v_align: "top" };
+  const b = libTextBoxNm(t, measure);
+  assert.ok(b.minX >= 1_000_000 - 200_000 && b.minX < 1_100_000 && b.maxX > 3_000_000 - 1, `right of the anchor: ${JSON.stringify(b)}`);
+  assert.ok(b.minY >= -2_000_000 - 200_000 && b.maxY > -2_000_000 + 900_000, `below it (+y down): ${JSON.stringify(b)}`);
+  const v = libTextBoxNm({ ...t, angle_deg: 90 }, measure);
+  assert.ok(v.maxY <= -2_000_000 + 200_000 && v.minY < -2_000_000 - 1_900_000, `a vertical text runs up from its anchor: ${JSON.stringify(v)}`);
+  const c = libTextBoxNm({ ...t, h_align: "center", v_align: "center" }, measure);
+  assert.ok(c.minX < 1_000_000 && c.maxX > 1_000_000 && c.minY < -2_000_000 && c.maxY > -2_000_000, "a centred text is round its anchor");
 });

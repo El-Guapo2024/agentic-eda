@@ -1,6 +1,7 @@
 // The Text tool's dialog rules (`DIALOG_TEXT_PROPERTIES`, eeschema/dialogs/dialog_text_properties.cpp, as `SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace`
 // uses it for `eeschema.SymbolDrawing.placeSymbolText`, and `SYMBOL_EDITOR_EDIT_TOOL::editTextProperties` for a text that is there: UI-LEFT Y4).
 import type { FieldHAlign, FieldVAlign, LibrarySymbolGraphic } from "../api/types";
+import { defaultPenNm, textOrigin } from "./schText";
 
 /** `cfg->m_Defaults.text_size` = `DEFAULT_TEXT_SIZE` (eeschema/default_values.h): 50 mil. */
 export const DEFAULT_SYMBOL_TEXT_SIZE_MM = 1.27;
@@ -80,4 +81,25 @@ export function textFromForm(prev: LibText, form: TextForm, unit: number, bodySt
       body_style: form.commonStyles ? 0 : bodyStyle,
     },
   };
+}
+
+/**
+ * `SCH_TEXT::GetBoundingBox` of a symbol's text, in the editor's internal nm (+y down): the line of text where `SCH_PAINTER` draws it -- its baseline start `textOrigin` from the
+ * anchor in the text's own axes, the cap height above it -- turned up the sheet for a vertical text. `measure` is the stroke font's advance.
+ */
+export function libTextBoxNm(t: Pick<LibText, "text" | "at" | "angle_deg" | "size_mm" | "bold" | "h_align" | "v_align">, measure: (text: string, sizeNm: number) => number): { minX: number; minY: number; maxX: number; maxY: number } {
+  const sizeNm = t.size_mm * 1e6;
+  const thickness = t.bold ? Math.round(sizeNm / 5) : defaultPenNm(sizeNm);
+  const advance = measure(t.text, sizeNm);
+  const [dx, dy] = textOrigin(advance, sizeNm, thickness, t.h_align ?? "center", t.v_align ?? "center");
+  // the text's own box: from the baseline start, the advance along, the cap height above
+  const u0 = dx - thickness / 2;
+  const u1 = dx + advance + thickness / 2;
+  const v0 = dy - sizeNm - thickness / 2;
+  const v1 = dy + thickness / 2;
+  const [ax, ay] = [t.at.x * 1e6, -t.at.y * 1e6];
+  const vertical = Math.abs(t.angle_deg % 180) === 90;
+  // `ctx.rotate( -PI / 2 )`: (u, v) of the text is (x + v, y - u) of the sheet
+  const corners: [number, number][] = vertical ? [[ax + v0, ay - u0], [ax + v1, ay - u1]] : [[ax + u0, ay + v0], [ax + u1, ay + v1]];
+  return { minX: Math.min(corners[0]![0], corners[1]![0]), minY: Math.min(corners[0]![1], corners[1]![1]), maxX: Math.max(corners[0]![0], corners[1]![0]), maxY: Math.max(corners[0]![1], corners[1]![1]) };
 }
