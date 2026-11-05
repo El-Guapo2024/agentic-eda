@@ -14,6 +14,7 @@ import { libFieldName } from "../kicad-port/symFieldLayout";
 import { rotateCarriedPad } from "../kicad-port/fpPadPlacer";
 import { newPadFromMaster } from "../kicad-port/padSettings";
 import { worldToScreen, zoomAbout, type ViewTransform } from "../kicad-port/view";
+import { revertFootprint, revertSymbol, saveAllSymbols, saveFootprint, saveSymbol } from "./librarySaveOps";
 import { getDockLayout, setDockColumnCollapsed } from "../state/dockLayoutStore";
 import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
@@ -69,11 +70,19 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
   // Show Grid.
   m.set("common.Control.toggleGrid", () => (fp ? ctx.fpDispatch({ type: "TOGGLE_GRID_VISIBLE" }) : ctx.symDispatch({ type: "TOGGLE_GRID_VISIBLE" })));
 
-  // Save / Save All: every edit of a library entry is stored in design.json as it is made (an undoable verb); there is no separate library file to write.
-  // Export (File menu) writes the derived .kicad_mod / .kicad_sym.
-  const saved = () => toast(fp ? "Footprint saved: every edit is stored in the design as you make it (File > Export writes a .kicad_mod)." : "Symbol saved: every edit is stored in the design as you make it (File > Export writes a .kicad_sym).");
-  m.set("common.Control.save", saved);
-  m.set("common.Control.saveAll", saved);
+  // Save / Save All / Revert (actions/librarySaveOps.ts): a library's symbol or footprint is edited as the design's copy (KiCad's library buffer); Save writes it
+  // into the library's file the table names (`SYMBOL_EDIT_FRAME::Save`, `FOOTPRINT_EDITOR_CONTROL::Save`), Revert puts the file's version back. The project
+  // library's edits are stored in the design as they are made. Export (File menu) writes the derived .kicad_mod / .kicad_sym.
+  const failed = (e: unknown) => toast(e instanceof Error ? e.message : String(e), "error");
+  if (fp) {
+    m.set("common.Control.save", () => void saveFootprint(ctx.fpApi, toast).catch(failed));
+    m.set("common.Control.saveAll", () => void saveFootprint(ctx.fpApi, toast).catch(failed));
+    m.set("common.Control.revert", () => void revertFootprint(ctx.fpApi, toast).catch(failed));
+  } else {
+    m.set("common.Control.save", () => void saveSymbol(ctx.symApi, toast).catch(failed));
+    m.set("common.Control.saveAll", () => void saveAllSymbols(toast).catch(failed));
+    m.set("common.Control.revert", () => void revertSymbol(ctx.symApi, toast).catch(failed));
+  }
   // Print: the browser's print of the frame (styles/layout.css reduces the page to the canvas column).
   m.set("common.Control.print", () => window.print());
 

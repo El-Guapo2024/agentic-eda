@@ -24,9 +24,11 @@ const labelOf = new Map((actionsData as ActionsFile).actions.map((a) => [a.name,
 const MENU: { name: string; needs: "library" | "symbol" | "derived" | "related" }[] = [
   { name: "eeschema.SymbolLibraryControl.newSymbol", needs: "library" },
   { name: "eeschema.SymbolLibraryControl.deriveFromExistingSymbol", needs: "symbol" },
+  { name: "common.Control.save", needs: "library" },
   { name: "eeschema.SymbolLibraryControl.saveLibraryAs", needs: "library" },
   { name: "eeschema.SymbolLibraryControl.saveSymbolAs", needs: "symbol" },
   { name: "eeschema.SymbolLibraryControl.saveSymbolCopyAs", needs: "symbol" },
+  { name: "common.Control.revert", needs: "library" },
   { name: "eeschema.SymbolLibraryControl.importSymbol", needs: "library" },
   { name: "eeschema.SymbolLibraryControl.exportSymbol", needs: "symbol" },
   { name: "eeschema.SymbolLibraryControl.cutSymbol", needs: "symbol" },
@@ -84,6 +86,7 @@ export function SymbolLibraryPanel() {
       selected={selected}
       current={state.libId}
       hints={derivedHints}
+      modified={names.modified}
       multi
       onSelect={(names) => dispatch({ type: "SET_TREE_SELECTION", names })}
       onOpen={(name) => {

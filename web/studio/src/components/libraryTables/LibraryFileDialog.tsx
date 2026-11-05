@@ -20,10 +20,10 @@ import "../../styles/libraryTables.css";
 
 export function LibraryFileDialog() {
   const req = useLibraryTableDialogs().library;
-  return req ? <FileBody key={`${req.kind}:${req.create}`} kind={req.kind} create={req.create} /> : null;
+  return req ? <FileBody key={`${req.kind}:${req.create}`} kind={req.kind} create={req.create} onDone={req.onDone} /> : null;
 }
 
-function FileBody({ kind, create }: { kind: TableKind; create: boolean }) {
+function FileBody({ kind, create, onDone }: { kind: TableKind; create: boolean; onDone?: (nickname: string | null) => void }) {
   const dispatch = useStudioDispatch();
   const [view, setView] = useState<LibraryTablesView | null>(null);
   const [folder, setFolder] = useState("");
@@ -60,7 +60,11 @@ function FileBody({ kind, create }: { kind: TableKind; create: boolean }) {
     };
   }, [kind]);
 
-  const close = () => closeLibraryFile();
+  // the dialog that opened this one hears what came of it (`AddLibraryFile` returns the new file, or an empty name)
+  const close = (made: string | null = null) => {
+    closeLibraryFile();
+    onDone?.(made);
+  };
   const target = create ? `${folder.replace(/\/+$/, "")}/${name}${name.endsWith(ext) ? "" : ext}` : path;
 
   const setThePath = (p: string) => {
@@ -93,7 +97,7 @@ function FileBody({ kind, create }: { kind: TableKind; create: boolean }) {
           setLibraryOpen(kind, lib, true);
           selectLibraries(kind, [lib]);
         }
-        close();
+        close(lib);
       } else if ("error" in answer) {
         setError(answer.error);
       }
@@ -105,7 +109,7 @@ function FileBody({ kind, create }: { kind: TableKind; create: boolean }) {
   };
 
   return (
-    <div className="dialog-backdrop" onClick={close}>
+    <div className="dialog-backdrop" onClick={() => close()}>
       <div className="dialog lt-small" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === "Escape" && browse === null && close()} role="dialog" aria-label={title}>
         <div className="dialog-header">
           <span>{title}</span>
@@ -152,7 +156,7 @@ function FileBody({ kind, create }: { kind: TableKind; create: boolean }) {
           {error && <div className="lt-error" role="alert" style={{ marginTop: 8 }}>{error}</div>}
         </div>
         <div className="dialog-footer">
-          <button onClick={close}>Cancel</button>
+          <button onClick={() => close()}>Cancel</button>
           <button className="primary" disabled={busy} onClick={() => void ok()}>
             {create ? "Create" : "Add"}
           </button>

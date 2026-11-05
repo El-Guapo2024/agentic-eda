@@ -67,6 +67,8 @@ export interface SaveAsRequest {
   openCopy: boolean;
   /** The symbol being saved. */
   libId: string;
+  /** The dialog shown again after its New Library... (`ID_MAKE_NEW_LIBRARY`: "Go round again to ask for the symbol name"): the name typed and the library made. */
+  again?: { name: string; lib: string };
 }
 
 /** A `.kicad_sym` file read for Import Symbol: the symbols in it, for the selection dialog (`DIALOG_IMPORT_SYMBOL_SELECT`). */
@@ -432,6 +434,8 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
  * of 0 -- and writes 0 when it is outside), and a parent symbol is the Derive dialog's question, so neither is a field here.
  */
 export interface NewSymbolRequest {
+  /** The library it goes in (`getTargetLib()`); the project library when absent. A library of the tables gets it in its buffer: Save writes the file. */
+  lib?: string;
   /** `GetName()`'s form: trimmed, spaces to underscores, LIB_ID specials escaped -- `newSymbolNameCheck` makes it. */
   name: string;
   /** "Default reference designator" (KiCad's "U"). */
@@ -576,7 +580,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       }
     },
     newSymbol: async (request) => {
-      const libId = joinLibName(PROJECT_SYMBOL_LIB, request.name);
+      const libId = joinLibName(request.lib ?? PROJECT_SYMBOL_LIB, request.name);
       // `CreateNewSymbol` makes the symbol and then sets what the dialog asked (`NEW_SYMBOL_PROPERTIES`) as one edit: the batch is one
       // undo step, and a name the verb refuses rolls the whole thing back.
       const reply = await postCmd(

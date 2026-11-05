@@ -10,8 +10,9 @@ export interface LibraryTableDialogs {
   tables: TableKind | null;
   /** Configure Paths. */
   paths: boolean;
-  /** New Library (`create`) or Add Library (an existing one) for this kind. */
-  library: { kind: TableKind; create: boolean } | null;
+  /** New Library (`create`) or Add Library (an existing one) for this kind; `onDone` hears the new library's nickname, or null when it was not made (the Save As
+   * dialogs' New Library..., which go round again with it). */
+  library: { kind: TableKind; create: boolean; onDone?: (nickname: string | null) => void } | null;
 }
 
 const CLOSED: LibraryTableDialogs = { tables: null, paths: false, library: null };
@@ -56,8 +57,8 @@ export function closeConfigurePaths(): void {
 }
 
 /** `common.Control.newLibrary` (`create`) and `common.Control.addLibrary`. */
-export function openLibraryFile(kind: TableKind, create: boolean): void {
-  set({ ...current, library: { kind, create } });
+export function openLibraryFile(kind: TableKind, create: boolean, onDone?: (nickname: string | null) => void): void {
+  set({ ...current, library: { kind, create, onDone } });
 }
 
 export function closeLibraryFile(): void {

@@ -1,31 +1,37 @@
 // `SAVE_SYMBOL_AS_DIALOG` (eeschema/symbol_editor/symbol_editor.cpp, "Save Symbol As"): the name of the copy, the library it goes in, a "New
-// Library..." button and the validator `saveSymbolCopyAs` runs on OK -- "A library must be specified.", "Symbol must have a name.", and for a
-// name the library already has "Symbol '%s' already exists in library '%s'. Do you want to overwrite it?" (OK says "Overwrite"; cancelling
-// it keeps this dialog open, as the validator returning false does). `eeschema.SymbolLibraryControl.saveSymbolAs` also opens the copy
-// afterwards, `saveSymbolCopyAs` leaves the editor where it was. The library list is the library nicknames of the tree: the project
-// library's own and the ones of library files its symbols come from -- a new nickname starts a new library in the project.
+// Library..." button and the validator `saveSymbolCopyAs` runs on OK -- "A library must be specified.", "Symbol must have a name.", a library that cannot be
+// written ("Library '%s' is read-only. Choose a different library to save the symbol '%s' to."), and for a name the library already has -- in any case
+// (`SymbolNameInUse`), the symbol's own name included -- "Symbol '%s' already exists in library '%s'. Do you want to overwrite it?" (OK says "Overwrite";
+// cancelling it keeps this dialog open, as the validator returning false does). `eeschema.SymbolLibraryControl.saveSymbolAs` also opens the copy
+// afterwards, `saveSymbolCopyAs` leaves the editor where it was. The library list is `GetLibraryItemsForListDialog`'s: every library of the tables with its
+// description, the pinned ones first, and the project library; the names a library has are the design's and its file's. New Library... is `AddLibraryFile( true )`:
+// this dialog closes, the New Library dialog makes the file and its row, and this dialog comes back on the new library with the name typed ("Go round again").
+// The copy goes into the library's buffer (the design), as `SYMBOL_SAVE_AS_HANDLER::DoSave` puts it with `UpdateSymbol`: Save writes the library's file.
 //
 // A derived symbol (`symbol->IsDerived()`) adds the check box "Flatten/remove symbol inheritance (current parent symbols: ...)", and the validator's other questions: a name in the
 // symbol's own ancestry or descent is refused, and when the parents the copy takes along conflict too the question is "Overwrite All / Rename All / Cancel"
 // (kicad-port/symSaveAsPlan.ts holds the rules; `SYMBOL_SAVE_AS_HANDLER::DoSave` is what `performSaveAs` writes).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
-import { joinLibName, libraryGroups, libraryNicknameIllegalChar, PROJECT_LIBRARY, saveAsSymbolName, splitLibName, symbolLibIdError } from "../../kicad-port/libraryNames";
+import { PROJECT_LIBRARY, splitLibName } from "../../kicad-port/libraryNames";
 import { bareName } from "../../kicad-port/symFields";
 import { chainConflicts, savePlan, savingIntoOwnInheritance, type ConflictStrategy } from "../../kicad-port/symSaveAsPlan";
+import { isTableLibrary, libraryRowLabel, saveAsLibraryRows, symbolSaveAsCheck, takenInLibrary } from "../../kicad-port/librarySave";
 import { askSaveAsConflicts, performSaveAs, saveAsContext } from "../../actions/symbolLibraryOps";
-import { askText } from "../library/libraryDialogs";
-import { useLibraryNames } from "../library/useLibraryNames";
+import { fetchLibraryItemsNow, fetchWritableLibraries, type WritableLibrary } from "../../api/librarySaveClient";
+import { openLibraryFile } from "../../state/libraryTableDialogs";
+import { useLibraryTree } from "../../state/libraryTree";
 
 export function SaveSymbolAsDialog() {
   const state = useSymState();
   const dispatch = useSymDispatch();
   const api = useSymApi();
-  const { items } = useLibraryNames("symbol");
+  const { pinned } = useLibraryTree("symbol");
   const req = state.saveAs;
   const [name, setName] = useState("");
   const [lib, setLib] = useState(PROJECT_LIBRARY);
   const [extraLibs, setExtraLibs] = useState<string[]>([]);
+  const [tables, setTables] = useState<WritableLibrary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** The names of the symbol's parents, nearest first (empty unless it is derived), and the check box that drops them. */
@@ -36,9 +42,9 @@ export function SaveSymbolAsDialog() {
   useEffect(() => {
     if (!req) return;
     const { lib: l, item } = splitLibName(req.libId);
-    setName(item);
-    setLib(l || PROJECT_LIBRARY);
-    setExtraLibs([]);
+    setName(req.again?.name ?? item);
+    setLib(req.again ? req.again.lib : l || PROJECT_LIBRARY);
+    setExtraLibs(req.again?.lib ? [req.again.lib] : []);
     setError(null);
     setFlatten(false);
     setParents([]);
@@ -48,51 +54,38 @@ export function SaveSymbolAsDialog() {
     void saveAsContext({ api, dispatch }, req.libId)
       .then((ctx) => !stopped && setParents(ctx.chain.slice(1).map((p) => bareName(p.lib_id))))
       .catch(() => undefined);
+    void fetchWritableLibraries("symbol")
+      .then((l) => !stopped && setTables(l))
+      .catch(() => undefined);
     return () => {
       stopped = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [req]);
 
-  const libs = useMemo(() => {
-    const out = new Set<string>([PROJECT_LIBRARY]);
-    for (const g of libraryGroups(items)) out.add(g.lib);
-    for (const l of extraLibs) out.add(l);
-    return [...out].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-  }, [items, extraLibs]);
+  const libs = useMemo(() => saveAsLibraryRows(tables, pinned, extraLibs), [tables, pinned, extraLibs]);
 
   if (!req) return null;
   const close = () => dispatch({ type: "SET_SAVE_AS", request: null });
 
-  const newLibrary = async () => {
-    const entered = await askText({
-      title: "New Library",
-      label: "Library nickname:",
-      okLabel: "Create",
-      validate: (v) => {
-        const t = v.trim();
-        if (t === "") return "A library must be specified.";
-        const c = libraryNicknameIllegalChar(t);
-        return c ? `A library nickname cannot contain "${c}".` : null;
-      },
-    });
-    if (entered === null) return;
-    const t = entered.trim();
-    setExtraLibs((l) => [...l, t]);
-    setLib(t);
+  // `ID_MAKE_NEW_LIBRARY`: the dialog ends, `AddLibraryFile( true )` makes the library, and the dialog is shown again on it (`params.m_LibraryName =
+  // newLibrary.GetName()`, empty when none was made) with the name typed
+  const newLibrary = () => {
+    const typed = name;
+    close();
+    openLibraryFile("symbol", true, (made) => dispatch({ type: "SET_SAVE_AS", request: { ...req, again: { name: typed, lib: made ?? "" } } }));
   };
 
   const save = async () => {
     // `dialogValidatorFunc`, in its order.
-    if (lib === "") return setError("A library must be specified.");
-    const typed = saveAsSymbolName(name);
-    if (typed === "") return setError("Symbol must have a name.");
-    const newLibId = joinLibName(lib, typed);
-    const illegal = symbolLibIdError(newLibId);
-    if (illegal) return setError(illegal);
+    const checked = symbolSaveAsCheck(lib, name, libs);
+    if ("error" in checked) return setError(checked.error);
+    const { name: typed, libId: newLibId } = checked;
     setBusy(true);
     try {
       const ctx = await saveAsContext({ api, dispatch }, req.libId);
+      // the names the library has: the design's and, for a library of the tables, its file's
+      ctx.taken = takenInLibrary(lib, isTableLibrary(lib) ? await fetchLibraryItemsNow("symbol", lib) : [], [...ctx.taken]);
       const { inAncestry, inDescendants } = savingIntoOwnInheritance(ctx.chain, newLibId, ctx.taken, (id) => ctx.derived[id]);
       if (inAncestry) return setError(`Symbol '${bareName(req.libId)}' cannot replace another symbol '${typed}' that it descends from`);
       if (inDescendants) return setError(`Symbol '${bareName(req.libId)}' cannot replace another symbol '${typed}' that is a descendent of it.`);
@@ -100,13 +93,17 @@ export function SaveSymbolAsDialog() {
       // name just replaces the entry with the same content
       let strategy: ConflictStrategy = "overwrite";
       const conflicts = chainConflicts({ chain: ctx.chain, newLibId, flatten, taken: ctx.taken });
-      if (conflicts.length > 0 && newLibId !== req.libId) {
+      if (conflicts.length > 0) {
         const answer = await askSaveAsConflicts(lib, bareName(req.libId), typed, conflicts);
         if (answer === null) return;
         strategy = answer;
       }
       const puts = savePlan({ chain: ctx.chain, flat: ctx.flat, newLibId, flatten, strategy, taken: ctx.taken });
-      if (await performSaveAs({ api, dispatch }, req, puts, ctx.taken)) close();
+      if (await performSaveAs({ api, dispatch }, req, puts, ctx.taken)) {
+        // the copy is in the library's buffer (the tree marks the library " *"); Save writes the library's file
+        if (isTableLibrary(lib)) dispatch({ type: "TOAST", message: `${typed} is in ${lib}, not saved yet: Save (Ctrl+S) writes the library.`, kind: "info" });
+        close();
+      }
     } finally {
       setBusy(false);
     }
@@ -134,16 +131,21 @@ export function SaveSymbolAsDialog() {
             }}
           />
           <label style={{ display: "block", margin: "10px 0 4px" }}>Save in library:</label>
-          <div role="listbox" aria-label="Save in library" style={{ border: "1px solid var(--chrome-border)", maxHeight: 150, overflowY: "auto" }}>
-            {libs.map((l) => (
+          <div role="listbox" aria-label="Save in library" style={{ border: "1px solid var(--chrome-border)", maxHeight: 180, overflowY: "auto" }}>
+            {libs.map((r) => (
               <div
-                key={l}
+                key={r.name}
                 role="option"
-                aria-selected={l === lib}
-                onClick={() => setLib(l)}
-                style={{ padding: "3px 8px", cursor: "pointer", background: l === lib ? "var(--chrome-selected-bg)" : undefined, color: l === lib ? "var(--chrome-selected-text)" : undefined }}
+                aria-selected={r.name === lib}
+                data-lib={r.name}
+                onClick={() => {
+                  setLib(r.name);
+                  setError(null);
+                }}
+                style={{ display: "flex", gap: 12, padding: "3px 8px", cursor: "pointer", background: r.name === lib ? "var(--chrome-selected-bg)" : undefined, color: r.name === lib ? "var(--chrome-selected-text)" : undefined }}
               >
-                {l}
+                <span style={{ minWidth: 120 }}>{libraryRowLabel(r)}</span>
+                <span style={{ opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.description}</span>
               </div>
             ))}
           </div>
@@ -159,7 +161,7 @@ export function SaveSymbolAsDialog() {
           )}
         </div>
         <div className="dialog-footer">
-          <button onClick={() => void newLibrary()} style={{ marginRight: "auto" }}>
+          <button onClick={newLibrary} style={{ marginRight: "auto" }}>
             New Library...
           </button>
           <button onClick={close}>Cancel</button>
