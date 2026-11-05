@@ -3062,6 +3062,9 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             Some("full") => eda_model::ir::ZoneBorderStyle::Full,
             _ => eda_model::ir::ZoneBorderStyle::None,
         };
+        // The pitch (`hatchPitch = parseBoardUnits( "hatch pitch" )`, `ZONE::GetDefaultHatchPitch()` when there is no `(hatch ..)`); clamped once the corners
+        // are read (`SetBorderDisplayStyle( hatchStyle, hatchPitch, true )` for a zone of more than two corners), below.
+        zone.border_hatch_pitch = sexpr::find(z, "hatch").and_then(|h| sexpr::num(h, 2)).map(mm_to_nm).unwrap_or(eda_model::ir::DEFAULT_ZONE_BORDER_HATCH_PITCH);
         if let Some(cp) = sexpr::find(z, "connect_pads") {
             match sexpr::txt(cp, 1) {
                 Some("yes") => zone.pad_connection = PadConnection::Full,
@@ -3198,6 +3201,11 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
         let mut outlines = outlines.into_iter();
         zone.outline = outlines.next().unwrap_or_default();
         zone.holes = outlines.collect();
+        // `if( zone->GetNumCorners() > 2 ) zone->SetBorderDisplayStyle( hatchStyle, hatchPitch, true )`: the pitch within
+        // `ZONE_BORDER_HATCH_MINDIST_MM`..`ZONE_BORDER_HATCH_MAXDIST_MM`.
+        if zone.outline.len() + zone.holes.iter().map(Vec::len).sum::<usize>() > 2 {
+            zone.border_hatch_pitch = zone.border_hatch_pitch.clamp(eda_model::ir::ZONE_BORDER_HATCH_MIN_PITCH, eda_model::ir::ZONE_BORDER_HATCH_MAX_PITCH);
+        }
         let fill = sexpr::find(z, "fill");
         let is_thieving = fill.and_then(|f| sexpr::find(f, "mode")).and_then(|m| sexpr::txt(m, 1)) == Some("thieving");
         thieving.push(fill.filter(|_| is_thieving).map(|f| sexpr::find(f, "thieving").map(|t| sexpr::to_text(&Sexpr::List(t.to_vec()))).unwrap_or_else(|| "(thieving)".to_string())));
@@ -3205,8 +3213,20 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
         let rings: Vec<&[Sexpr]> = sexpr::find_all(z, "polygon").filter(|p| poly_points(p).is_some()).filter_map(|p| sexpr::find(p, "pts")).collect();
         let has_arc = rings.iter().any(|pts| pts[1..].iter().any(|i| i.as_list().and_then(sexpr::tag) == Some("arc")));
         arc_rings.push(has_arc.then(|| rings.iter().map(|pts| sexpr::to_text(&Sexpr::List(pts.to_vec()))).collect()));
-        // `ZONE::LayerProperties` (`parseZONE`'s `T_property`), one line each.
-        let props: Vec<String> = sexpr::find_all(z, "property").map(|p| sexpr::to_text(&Sexpr::List(p.to_vec()))).collect();
+        // `ZONE::LayerProperties` (`parseZONE`'s `T_property`, `parseZoneLayerProperty`): `(property (layer "F.Cu") (hatch_position (xy x y)))`, the layer's
+        // hatch offset (`ZONE_LAYER_PROPERTIES::hatching_offset`, `parseXY` in board units). A property this reader cannot take apart is kept as the file wrote
+        // it, one line each (the legacy `DrawingsSection::zone_layer_props`).
+        let mut props: Vec<String> = Vec::new();
+        for p in sexpr::find_all(z, "property") {
+            let layer = sexpr::find(p, "layer").and_then(|l| sexpr::txt(l, 1));
+            let xy = sexpr::find(p, "hatch_position").and_then(|h| sexpr::find(h, "xy")).and_then(|xy| Some((sexpr::num(xy, 1)?, sexpr::num(xy, 2)?)));
+            match (layer, xy) {
+                (Some(layer), Some((x, y))) => {
+                    zone.hatch_offsets.insert(layer.to_string(), eda_model::setup_pages::HatchOffset { x_nm: mm_to_nm(x), y_nm: mm_to_nm(y) });
+                }
+                _ => props.push(sexpr::to_text(&Sexpr::List(p.to_vec()))),
+            }
+        }
         layer_props.push((!props.is_empty()).then(|| props.join("\n")));
         out.push(zone);
         refs.zones.push(ItemRef::of(z));

@@ -57,11 +57,29 @@ pub struct FilledShape {
     pub holes: Vec<Vec<eda_model::ir::Point>>,
     /// `Zone::layer_set`, in its UI order.
     pub layers: Vec<String>,
+    /// `Zone::fill_epoch` when the zone was filled: an edit since that emptied the zone (KiCad's `UnFill()`) has another, and the fill is not the zone's any
+    /// more, whatever the zone's shape is now (R7-Z1).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub fill_epoch: u32,
+    /// `Zone::flip_epoch` when the zone was filled: a flip since to the other side's layers has another, and the zone keeps the copper, moved, but is not
+    /// filled (`ZONE::Flip`'s `SetLayerSet` clears `m_isFilled`; R7-Z1).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub flip_epoch: u32,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 impl FilledShape {
     pub fn of(zone: &Zone) -> Self {
-        FilledShape { outline: zone.outline.clone(), holes: zone.holes.clone(), layers: zone.layer_set().into_iter().map(str::to_string).collect() }
+        FilledShape {
+            outline: zone.outline.clone(),
+            holes: zone.holes.clone(),
+            layers: zone.layer_set().into_iter().map(str::to_string).collect(),
+            fill_epoch: zone.fill_epoch,
+            flip_epoch: zone.flip_epoch,
+        }
     }
 }
 
@@ -107,7 +125,12 @@ impl KicadFills {
     /// - the fill moved, turned or mirrored with the zone when the zone's outline and holes are that same rigid motion of the ones it was filled with (`ZONE::Move`:
     ///   `pair.second->Move( offset )`; `ZONE::Rotate`: `pair.second->Rotate( aAngle, aCentre )`; `ZONE::Mirror`), and on the other side's layers when the motion is a
     ///   mirror and the layers went to the other side (`ZONE::Flip`: `SetFilledPolysList( GetBoard()->FlipLayer( oldLayer ), shape )`);
-    /// - none when the outline was reshaped (the point editor's `m_zone.UnFill()`), when the layers changed otherwise (`ZONE::SetLayerSet` unfills), and for a rule area.
+    /// - none when the outline was reshaped (the point editor's `m_zone.UnFill()`), when the layers changed otherwise (`ZONE::SetLayerSet` unfills), and for a rule area;
+    /// - none, too, once an edit has emptied the zone since its fill (`Zone::fill_epoch` is not the shape's), even when a later edit brings the zone back to the shape
+    ///   and layers it was filled with: KiCad's `unFillLocked()` / `UnFill()` threw the copper away (round 7 R7-Z1). An undo restores the zone with the epoch it had,
+    ///   so the fill comes back with it, as KiCad's undo copy holds the fill;
+    /// - the fill, not filled (`unfilled`), after a flip to the other side's layers since (`Zone::flip_epoch`), a second flip back included: `ZONE::Flip`'s
+    ///   `SetLayerSet( flipped )` clears `m_isFilled` and `SetFilledPolysList` puts the mirrored copper back.
     ///
     /// Differs: a zone on both outer layers flipped keeps its layer set, and is taken as mirrored (each fill stays on its layer), as the before and after alone cannot
     /// tell the two apart.
@@ -120,8 +143,14 @@ impl KicadFills {
             return None;
         }
         let was = entry.shape.as_ref()?;
+        if was.fill_epoch != zone.fill_epoch {
+            return None;
+        }
+        let flipped_since = was.flip_epoch != zone.flip_epoch;
         let (motion, layer_of) = follow(was, zone)?;
-        let Some(motion) = motion else { return Some(Cow::Borrowed(entry)) };
+        let Some(motion) = motion else {
+            return Some(if flipped_since && !entry.unfilled { Cow::Owned(ZoneEntry { unfilled: true, ..entry.clone() }) } else { Cow::Borrowed(entry) });
+        };
         let layers = entry
             .layers
             .iter()
@@ -132,7 +161,7 @@ impl KicadFills {
             .collect();
         // `ZONE::Flip` of a one-sided zone: `SetLayerSet( flipped )` sees another set and unfills (`m_isFilled = false`), then `SetFilledPolysList` puts the
         // mirrored fill back without setting the flag -- the copper is there, `IsFilled()` is false (R6-Z3)
-        let unfilled = entry.unfilled || !layer_of.is_empty();
+        let unfilled = entry.unfilled || !layer_of.is_empty() || flipped_since;
         Some(Cow::Owned(ZoneEntry { sig: entry.sig.clone(), layers, unfilled, shape: entry.shape.clone() }))
     }
 
@@ -292,6 +321,34 @@ impl Motion {
 /// rounded to the nanometre, and the motion is worked out from two of them.
 const MOTION_TOLERANCE_NM: f64 = 4.0;
 
+/// What an edit did to a zone's fill, as KiCad's `ZONE` treats it ([`fill_after_edit`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FillAfterEdit {
+    /// The fill stays (moved with the zone, or as it was): the outline, holes and layers are unchanged (Zone Properties' settings, `Edit_Zone_Params` does no
+    /// `UnFill()`), or the zone was moved, turned or mirrored (`ZONE::Move` / `Rotate` / `Mirror` move `m_FilledPolysList`), or flipped keeping its layer set
+    /// (`SetLayerSet` of the same set does nothing).
+    Kept,
+    /// The fill is gone: the outline was reshaped (the point editor's `m_zone.UnFill()`) or the layer set changed other than by a flip (`ZONE::SetLayerSet`:
+    /// `unFillLocked()`, `m_FilledPolysList.clear()`).
+    Emptied,
+    /// The zone was flipped to the other side's layers: `ZONE::Flip` clears `m_isFilled` (`SetLayerSet( flipped )`) and puts the mirrored copper back
+    /// (`SetFilledPolysList`).
+    Flipped,
+}
+
+/// [`FillAfterEdit`] of the edit that took `before` to `after` (the same zone): what `eda_ops` counts in `Zone::fill_epoch` and `Zone::flip_epoch` after
+/// every command, so an emptied fill stays empty whatever later edits do (round 7 R7-Z1).
+pub fn fill_after_edit(before: &Zone, after: &Zone) -> FillAfterEdit {
+    if before.outline == after.outline && before.holes == after.holes && before.layer_set() == after.layer_set() {
+        return FillAfterEdit::Kept;
+    }
+    match follow(&FilledShape::of(before), after) {
+        None => FillAfterEdit::Emptied,
+        Some((_, layer_of)) if !layer_of.is_empty() => FillAfterEdit::Flipped,
+        Some(_) => FillAfterEdit::Kept,
+    }
+}
+
 /// The rigid motion that takes the zone `was` to `zone`, and where each of its layers went: `Some((None, _))` when nothing moved (the fill stays as it was),
 /// `Some((Some(motion), layers))` for a move, turn, mirror or flip, `None` when the zone was reshaped or its layers changed otherwise.
 fn follow(was: &FilledShape, zone: &Zone) -> Option<(Option<Motion>, HashMap<String, String>)> {
@@ -386,6 +443,9 @@ pub fn zone_signature(z: &Zone) -> String {
     );
     // The holes, for a zone that has them (a zone without keeps the fingerprint it had before holes were kept).
     let text = if z.holes.is_empty() { text } else { format!("{text}|{:?}", z.holes) };
+    // Likewise the hatch offsets of the zone's own layers (they move a hatched fill), and the edits that emptied or flipped the zone since it was made (R7-Z1).
+    let text = if z.hatch_offsets.is_empty() { text } else { format!("{text}|offsets {:?}", z.hatch_offsets) };
+    let text = if z.fill_epoch == 0 && z.flip_epoch == 0 { text } else { format!("{text}|epochs {} {}", z.fill_epoch, z.flip_epoch) };
     blake3::hash(text.as_bytes()).to_hex()[..16].to_string()
 }
 
@@ -1197,5 +1257,44 @@ mod tests {
         assert!(old.current(&z).is_some());
         // a rule area never has one
         assert!(fills.current(&Zone { is_rule_area: true, ..moved(&z, |q| Point { x: q.x + mm(1.0), y: q.y }) }).is_none());
+    }
+
+    /// R7-Z1: a fill is the zone's only at the epochs it was made at. `fill_epoch` moved on (an edit emptied the zone since): no fill, even with the zone back
+    /// at the shape it was filled with; `flip_epoch` moved on (flipped to the other side since): the copper, not filled, even flipped back. The fingerprint of a
+    /// zone with neither epoch nor hatch offset is the one it had before they were kept.
+    #[test]
+    fn a_fill_is_the_zones_only_at_the_epochs_it_was_made_at() {
+        let (fills, z) = filled_rect();
+        assert!(fills.current(&z).is_some_and(|e| !e.unfilled));
+        let emptied = Zone { fill_epoch: 1, ..z.clone() };
+        assert!(fills.current(&emptied).is_none(), "the same shape, emptied since");
+        let flipped_back = Zone { flip_epoch: 2, ..z.clone() };
+        let e = fills.current(&flipped_back).expect("the copper is kept");
+        assert!(e.unfilled && e.layers["F.Cu"].len() == 1);
+        assert_eq!(fills.tally(&design(vec![flipped_back])), (0, 1), "out of date");
+        // the fingerprints: epochs and hatch offsets count only once there are some
+        assert_eq!(zone_signature(&Zone { fill_epoch: 0, flip_epoch: 0, ..z.clone() }), zone_signature(&z));
+        assert_ne!(zone_signature(&emptied), zone_signature(&z));
+        let offset = Zone { hatch_offsets: [("F.Cu".to_string(), eda_model::setup_pages::HatchOffset::default())].into(), ..z.clone() };
+        assert_ne!(zone_signature(&offset), zone_signature(&z));
+        assert!(matches!(fills.current(&offset), Some(Cow::Borrowed(_))), "a hatch offset edited keeps the fill as it was, out of date");
+    }
+
+    /// `fill_after_edit`: what an edit did to a zone's fill, as `eda_ops` counts it after every command.
+    #[test]
+    fn what_an_edit_does_to_a_fill() {
+        let (_, z) = filled_rect();
+        let mirror = |q: Point| Point { x: mm(30.0) - q.x, y: q.y };
+        assert_eq!(fill_after_edit(&z, &Zone { clearance: mm(2.0), ..z.clone() }), FillAfterEdit::Kept);
+        assert_eq!(fill_after_edit(&z, &moved(&z, |q| Point { x: q.x + mm(3.0), y: q.y - mm(1.0) })), FillAfterEdit::Kept);
+        assert_eq!(fill_after_edit(&z, &moved(&z, mirror)), FillAfterEdit::Kept, "a mirror on its own layer");
+        assert_eq!(fill_after_edit(&z, &Zone { layer: "B.Cu".into(), ..moved(&z, mirror) }), FillAfterEdit::Flipped);
+        assert_eq!(fill_after_edit(&z, &Zone { layer: "B.Cu".into(), ..z.clone() }), FillAfterEdit::Emptied, "another layer, no flip");
+        let mut reshaped = z.clone();
+        reshaped.outline[1].x += mm(1.0);
+        assert_eq!(fill_after_edit(&z, &reshaped), FillAfterEdit::Emptied);
+        let mut holed = z.clone();
+        holed.holes = vec![vec![Point { x: mm(12.0), y: mm(11.0) }, Point { x: mm(13.0), y: mm(11.0) }, Point { x: mm(13.0), y: mm(12.0) }]];
+        assert_eq!(fill_after_edit(&z, &holed), FillAfterEdit::Emptied, "a cutout");
     }
 }

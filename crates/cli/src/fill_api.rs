@@ -227,19 +227,58 @@ pub(crate) fn carry_copied_fills(dir: &Path, before: &Design, cmd: &eda_ops::Cmd
 pub(crate) fn report(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckResult>> {
     let (_, design, _) = board::load(dir)?;
     let cache = cached(dir);
-    let copper = cache.as_ref().map(|k| k.copper(&design)).unwrap_or_default();
+    let zones_json = zone_entries(&design, cache.as_ref(), with_polys);
+    let source = cache.as_ref().map(|k| {
+        let (current, stale) = k.tally(&design);
+        json!({ "engine": k.engine, "revision": k.revision, "seconds": k.seconds(), "zones": current, "stale": stale })
+    });
+    Ok(json!({ "zones": zones_json, "source": source }))
+}
+
+/// The Zone Manager's "Update Displayed Zones" (`DIALOG_ZONE_MANAGER::OnUpdateDisplayedZonesClick`): KiCad's filler run on the dialog's copies of the zones, with
+/// the settings and priorities the dialog holds (`m_zoneSettingsBag.UpdateClonedZones()`, then `ZONE_FILLER::Fill` over the clones swapped into the board), and
+/// the preview shows those fills; the board's zones keep theirs (`OnOk` gives each zone the clone's settings and puts its own fill back). Here the dialog sends
+/// what it holds as the commands OK would apply (`{ "cmds": [edit_zone, ..] }`); they are applied to a copy of the design in memory (no save, no history step),
+/// kicad-cli fills that copy (`eda_kicad_engine::refill_zones`, the only filler there is), and the fills come back as `GET /api/fill`'s zone entries without being
+/// kept: `{ ok, seconds, zones: [{ id, net, layer, filled, area_nm2, fragments }] }` or `{ ok: false, message }`.
+pub(crate) fn preview(dir: &Path, body: &[u8]) -> Value {
+    let (design, model) = match staged_design(dir, body) {
+        Ok(v) => v,
+        Err(e) => return json!({ "ok": false, "message": board::reasons(&e) }),
+    };
+    match eda_kicad_engine::refill_zones(&design, &model, &dir.join(".kicad")) {
+        Ok(fills) => json!({ "ok": true, "engine": fills.engine, "seconds": fills.seconds(), "zones": zone_entries(&design, Some(&fills), false) }),
+        Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+    }
+}
+
+/// The design of the board in `dir` with the commands of a preview request (`{ "cmds": [..] }`) applied in memory: what [`preview`] fills.
+fn staged_design(dir: &Path, body: &[u8]) -> Result<(Design, eda_model::ConstraintModel), Vec<CheckResult>> {
+    let req: Value = serde_json::from_slice(body).map_err(|e| vec![CheckResult::fail("fill_bad_request", "preview", format!("not JSON: {e}"))])?;
+    let cmds: Vec<eda_ops::Cmd> = serde_json::from_value(req.get("cmds").cloned().unwrap_or_else(|| json!([]))).map_err(|e| vec![CheckResult::fail("fill_bad_request", "preview", format!("not commands: {e}"))])?;
+    let (meta, design, model) = board::load(dir)?;
+    let mut b = eda_ops::Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
+    for cmd in &cmds {
+        b.apply(cmd)?;
+    }
+    Ok((b.into_design(), model))
+}
+
+/// One entry per zone and layer of `design` with the fill `cache` holds for it (`GET /api/fill`'s `zones`, [`report`]).
+fn zone_entries(design: &Design, cache: Option<&KicadFills>, with_polys: bool) -> Vec<Value> {
+    let copper = cache.map(|k| k.copper(design)).unwrap_or_default();
     let zones: &[eda_model::ir::Zone] = design.routing.as_ref().map(|r| r.zones.as_slice()).unwrap_or(&[]);
 
     // One entry per zone and layer: a zone on several layers (`Zone::layers`) has a fill on each, under the same id.
-    let zones_json: Vec<Value> = zones
+    zones
         .iter()
         // A rule area has no fill, ever, and nor has an outline of fewer than three corners or a footprint's own zone (kicad-cli fills none of them): they are not in the
         // report, unless a file stored a fill for one.
-        .filter(|z| zone_fills::fillable(z) || (!z.is_rule_area && z.outline.len() >= 3 && cache.as_ref().is_some_and(|k| k.current(z).is_some())))
+        .filter(|z| zone_fills::fillable(z) || (!z.is_rule_area && z.outline.len() >= 3 && cache.is_some_and(|k| k.current(z).is_some())))
         .flat_map(|z| z.layer_set().into_iter().map(move |layer| (z, layer)))
         .map(|(z, layer)| {
             let fill = copper.get(&z.id, layer);
-            let filled = cache.as_ref().is_some_and(|k| k.current(z).is_some());
+            let filled = cache.is_some_and(|k| k.current(z).is_some());
             let fragments: Vec<Value> = fill.map(|f| f.polys.iter().map(|poly| json!(poly[0].iter().map(|p| [p.x, p.y]).collect::<Vec<_>>())).collect()).unwrap_or_default();
             let mut zone = json!({
                 "id": z.id, "net": z.net, "layer": layer,
@@ -260,12 +299,7 @@ pub(crate) fn report(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckRes
             }
             zone
         })
-        .collect();
-    let source = cache.as_ref().map(|k| {
-        let (current, stale) = k.tally(&design);
-        json!({ "engine": k.engine, "revision": k.revision, "seconds": k.seconds(), "zones": current, "stale": stale })
-    });
-    Ok(json!({ "zones": zones_json, "source": source }))
+        .collect()
 }
 
 #[cfg(test)]
@@ -488,5 +522,35 @@ mod tests {
         assert!(cached(&empty).is_none());
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    /// "Update Displayed Zones": the dialog's staged settings are applied to a copy of the design in memory -- the board on disk is untouched, and no history
+    /// step is made -- and the copy's fills are reported as `GET /api/fill` reports the board's (`zone_entries`). A command that fails is the request's error.
+    #[test]
+    fn update_displayed_zones_fills_a_staged_copy_and_leaves_the_board_alone() {
+        let a = square("za", "", "F.Cu", Nm::ZERO);
+        let dir = board_dir("preview", vec![a.clone()]);
+        let before = std::fs::read(dir.join("design.json")).unwrap();
+        let mut staged = a.clone();
+        staged.priority = 7;
+        let cmd = json!({ "op": "edit_zone", "id": "za", "net": "GND", "layer": "F.Cu", "clearance": staged.clearance, "min_thickness": staged.min_thickness,
+            "thermal_gap": staged.thermal_gap, "thermal_spoke_width": staged.thermal_spoke_width, "pad_connection": staged.pad_connection, "priority": 7,
+            "island_removal_mode": staged.island_removal_mode, "min_island_area": staged.min_island_area, "fill_mode": staged.fill_mode,
+            "hatch_thickness": staged.hatch_thickness, "hatch_gap": staged.hatch_gap, "hatch_orientation_mdeg": 0, "hatch_smoothing_level": 0,
+            "hatch_smoothing_value": staged.hatch_smoothing_value, "hatch_hole_min_area": staged.hatch_hole_min_area, "hatch_border_algorithm": staged.hatch_border_algorithm });
+        let body = serde_json::to_vec(&json!({ "cmds": [cmd] })).unwrap();
+        let (design, _) = staged_design(&dir, &body).expect("staged");
+        assert_eq!(design.routing.as_ref().unwrap().zones[0].priority, 7);
+        assert_eq!(std::fs::read(dir.join("design.json")).unwrap(), before, "the board is not edited");
+        // the copy's fill, as kicad-cli would make it, reported per zone and layer
+        let fills = KicadFills::new("kicad-cli".into(), String::new(), 0, BTreeMap::from([("za".to_string(), ZoneEntry { shape: Some(zone_fills::FilledShape::of(&staged)), ..fill_of(&staged, "F.Cu") })]));
+        let entries = zone_entries(&design, Some(&fills), false);
+        assert_eq!(entries.len(), 1);
+        assert_eq!((entries[0]["id"].as_str(), entries[0]["filled"].as_bool(), entries[0]["fragments"].as_array().map(Vec::len)), (Some("za"), Some(true), Some(1)));
+        // a command the board refuses is the answer
+        let bad = serde_json::to_vec(&json!({ "cmds": [{ "op": "delete_zone", "id": "nope" }] })).unwrap();
+        assert!(staged_design(&dir, &bad).is_err());
+        assert_eq!(preview(&dir, b"not json")["ok"], false);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

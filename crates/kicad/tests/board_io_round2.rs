@@ -631,3 +631,58 @@ fn a_zones_layer_properties_are_kept() {
     let out = export(&design, &model);
     assert!(blocks(&out, "zone")[0].contains("(property (layer \"F.Cu\") (hatch_position (xy 1 1)))"), "{out}");
 }
+
+/// UI-LEFT P8: a zone's border display (`(hatch full 1.2)`) is read and written back with its own pitch (`ZONE::GetBorderHatchPitch`), and the pitch is clamped
+/// to 0.1..2 mm as `parseZONE`'s `SetBorderDisplayStyle( hatchStyle, hatchPitch, true )` clamps it.
+#[test]
+fn a_zones_border_hatch_pitch_is_read_clamped_and_written_back() {
+    let zone = |hatch: &str| {
+        board(&format!(
+            r#" (zone (net 1) (net_name "A") (layer "F.Cu") (uuid "44444444-4444-4444-4444-444444444444") {hatch} (connect_pads (clearance 0.5)) (min_thickness 0.25)
+  (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+  (polygon (pts (xy 95 95) (xy 125 95) (xy 125 125) (xy 95 125))))"#
+        ))
+    };
+    for (hatch, style, pitch_nm, written) in [
+        ("(hatch full 1.2)", eda_model::ir::ZoneBorderStyle::Full, 1_200_000, "(hatch full 1.2)"),
+        ("(hatch edge 5)", eda_model::ir::ZoneBorderStyle::Edge, 2_000_000, "(hatch edge 2)"),
+        ("(hatch none 0.01)", eda_model::ir::ZoneBorderStyle::None, 100_000, "(hatch none 0.1)"),
+        // no `(hatch ..)`: `NO_HATCH` at `ZONE::GetDefaultHatchPitch()`
+        ("", eda_model::ir::ZoneBorderStyle::None, 500_000, "(hatch none 0.5)"),
+    ] {
+        let (design, model, _) = import_kicad_pcb(&zone(hatch)).expect("parses");
+        let z = &design.routing.as_ref().unwrap().zones[0];
+        assert_eq!((z.border_style, z.border_hatch_pitch.get()), (style, pitch_nm), "{hatch}");
+        let out = export(&design, &model);
+        assert!(blocks(&out, "zone")[0].contains(written), "{hatch}: {out}");
+    }
+}
+
+/// UI-LEFT P8: a zone's hatch offsets (`ZONE::LayerProperties`, `parseZoneLayerProperty`) are the zone's own, by layer, an offset of 0, 0 included
+/// (`format( const ZONE_LAYER_PROPERTIES& )` writes any `hatching_offset.has_value()`), and only those of the layers the zone is on are written.
+#[test]
+fn a_zones_hatch_offsets_are_read_by_layer_and_written_for_its_layers() {
+    let text = board(
+        r#" (zone (net 1) (net_name "A") (layers "F.Cu" "B.Cu") (uuid "44444444-4444-4444-4444-444444444444") (hatch edge 0.5) (connect_pads (clearance 0.5)) (min_thickness 0.25)
+  (fill (mode hatch) (thermal_gap 0.5) (thermal_bridge_width 0.5) (hatch_thickness 0.5) (hatch_gap 1) (hatch_orientation 0) (hatch_border_algorithm hatch_thickness) (hatch_min_hole_area 0.3))
+  (property (layer "B.Cu") (hatch_position (xy 0 0)))
+  (property (layer "F.Cu") (hatch_position (xy 1.5 -2)))
+  (polygon (pts (xy 95 95) (xy 125 95) (xy 125 125) (xy 95 125))))"#,
+    );
+    let (mut design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let z = &design.routing.as_ref().unwrap().zones[0];
+    let mm = |v: f64| eda_model::units::Nm::new((v * 1e6) as i64);
+    assert_eq!(z.hatch_offsets.get("F.Cu"), Some(&eda_model::setup_pages::HatchOffset { x_nm: mm(1.5), y_nm: mm(-2.0) }));
+    assert_eq!(z.hatch_offsets.get("B.Cu"), Some(&eda_model::setup_pages::HatchOffset::default()));
+    assert!(design.drawings.as_ref().is_none_or(|d| d.zone_layer_props.is_empty()), "the offsets are structured, not kept as text");
+    let out = export(&design, &model);
+    let block = blocks(&out, "zone")[0].to_string();
+    // `PCB_LAYER_ID` order: F.Cu (0) before B.Cu (2)
+    let (f, b) = (block.find("(property (layer \"F.Cu\") (hatch_position (xy 1.5 -2)))").expect(&block), block.find("(property (layer \"B.Cu\") (hatch_position (xy 0 0)))").expect(&block));
+    assert!(f < b, "{block}");
+    // On F.Cu alone (`SetLayerSet`), the zone loses B.Cu's offset.
+    design.routing.as_mut().unwrap().zones[0].set_layer_set(&["F.Cu"]);
+    assert_eq!(design.routing.as_ref().unwrap().zones[0].hatch_offsets.keys().collect::<Vec<_>>(), ["F.Cu"]);
+    let out = export(&design, &model);
+    assert!(!blocks(&out, "zone")[0].contains("\"B.Cu\") (hatch_position"), "{out}");
+}
