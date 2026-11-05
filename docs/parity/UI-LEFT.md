@@ -169,6 +169,13 @@ Notes:
   - R, F and E on a carried text (A6-6).
   - The Select Net menu's order.
   - S. PARITY-pcb §1, §8, §24.
+- **P29 [BD] Found during the u1 batch (2026-11-05), not yet fixed.**
+  - A new board rule area starts with every keepout off; KiCad keeps out tracks, vias and pads (found by task-u1-fpedit).
+  - `layerPresets.ts` `layerGroupOp` leaves Edge.Cuts out of the copper group; KiCad's `presetAllCopper` counts it (task-u1-fpedit).
+  - Barcode Properties validates the old preview if OK is pressed within about 200 ms of typing (task-u1-fpedit).
+  - The existing single-track D drag snaps the cursor onto items of any net; KiCad snaps only onto the dragged line's net (task-u1-drag).
+  - Add / Remove / Chamfer Corner and Simplify empty a zone's fill; in KiCad only the corner drag calls `UnFill()` (task-u1-zones).
+  - S. The tasks' PARITY sections.
 
 ## Schematic editor
 
