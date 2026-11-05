@@ -1,11 +1,11 @@
-# Rules for every port agent in the eda lane (agentic-eda, on ws-agentic-eda)
+# Rules for every port agent in the eda lane (agentic-eda, on the AWS box)
 
-You are a port agent on the agentic-eda repo, a Rust + TypeScript port of KiCad's editors (the web studio is `web/studio`). The lead (another Claude session) reviews, gates and merges your branch. Several agents work on this box at the same time, each in its own git worktree: stay in yours, never touch `/home/team_braneboard_com/work/agentic-eda` (main's checkout) or another worktree, never push or merge `main`.
+You are a port agent on the agentic-eda repo, a Rust + TypeScript port of KiCad's editors (the web studio is `web/studio`). The lead (another Claude session) reviews, gates and merges your branch. Several agents work on this box at the same time, each in its own git worktree: stay in yours, never touch `/home/ubuntu/work/agentic-eda` (main's checkout) or another worktree, never push or merge `main`.
 
 Read first in your worktree: `docs/HANDOFF.md` ("How the work was run", "Known pitfalls", "Gates"), `docs/ARCHITECTURE.md`, `docs/parity/GAPS.md` for your package's item.
 
 ## Parity: port from the real KiCad code
-- KiCad's source is `$KICAD_SRC_DIR` (`/home/team_braneboard_com/src/kicad-src-8303b2ad`, commit 8303b2ad). Port from it, never from memory. Read the C++ of every function you port, cite it (`file.cpp::Function`) in the doc comment, and keep KiCad's behaviour, defaults, messages (word for word) and edge cases. Where you must differ, say so in the doc comment and in the PARITY section.
+- KiCad's source is `$KICAD_SRC_DIR` (`/home/ubuntu/src/kicad-src-8303b2ad`, commit 8303b2ad). Port from it, never from memory. Read the C++ of every function you port, cite it (`file.cpp::Function`) in the doc comment, and keep KiCad's behaviour, defaults, messages (word for word) and edge cases. Where you must differ, say so in the doc comment and in the PARITY section.
 - The rules that do not change: `design.json` plus the intent is the only source of truth (KiCad files are derived); kicad-cli is the only DRC, ERC, plot, export and zone-fill engine (exceptions only as the handoff names them); every edit is one undoable `/api/cmd` verb.
 
 ## Code
@@ -32,9 +32,19 @@ Read first in your worktree: `docs/HANDOFF.md` ("How the work was run", "Known p
 Logical steps on your branch, messages in the repo's style (`git log`), each ending with:
 
     Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-    Claude-Session: https://claude.ai/code/session_018eAWc4qjKVQDxtCKwM4JXN
+    Claude-Session: https://claude.ai/code/session_013btviUBJcwH8uJvDPugVBZ
 
-Push your branch to origin. Final report (short): what is done, commits, gate results with numbers, what is unverified or left, and decisions the lead should check.
+Do not push (the lead pushes after merging). Final report (short): what is done, commits, gate results with numbers, what is unverified or left, and decisions the lead should check.
 
 ## Test scope (the user, 2026-10-28: overrides the gate list above)
 Run only what your change touches: `cargo check --workspace --tests --keep-going` (0 warnings), the tests of the crates you changed (`cargo test -p <crate>`), the web unit tests and typecheck if you changed web/studio, and the slow kicad-cli tests and browser checks for the feature you changed. Do NOT run the full `tools/check.sh fast`, the full `run-all-checks`, or the parity report (unless your change is in the KiCad readers/writers, then the reexport part only). The lead runs the full suite once on main after merging.
+
+## This box (AWS, 2026-11-05)
+- Main's checkout is `/home/ubuntu/work/agentic-eda`; worktrees are `/home/ubuntu/work/agentic-eda-<task>`.
+- KiCad libraries: run eda with `KICAD_PATH=$HOME/src/kicad-libs`. The symbols there are in KiCad 10's folder form (`*.kicad_symdir`).
+- KiCad source:
+  - `$HOME/src/kicad-src-8303b2ad` is the default.
+  - `$HOME/src/kicad-src-25ec2335` is for KiCad 10 items newer than 8303b2ad. Cite those as "KiCad 25ec2335".
+- kicad-cli: nightly 10.99.0 (4fe1ca2060). Three slow tests fail on this box before any change: corpus `through_hole_headers` seed 0, `gate_vs_kicad` shove on mcu30, and `pad_details`. They are not yours to fix.
+- Tools: Playwright is in `~/tools/pw`. There is no ngspice. 16 cores are shared by up to four agents, so use `CARGO_BUILD_JOBS=3`.
+- The work list is `docs/parity/UI-LEFT.md`. Mark each entry you finish there: **done (task-<name>)**, plus a short note on what is left.
