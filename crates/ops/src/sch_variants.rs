@@ -124,8 +124,9 @@ impl<'a> Board<'a> {
 
     /// The current variant's edit of the symbols `ids` (`SCH_SYMBOL::SetDNP` / `SetExcludedFromBOM` / `SetExcludedFromBoard` / `SetExcludedFromSim` /
     /// `SetExcludedFromPosFiles` and `SetFieldText` with the variant): each flag given and each field text given, on the record of `variant` of every reference,
-    /// as `eda_model::variants::set_flag` and `set_field` keep it. The references are the sheet in view's; an annotated one's units on the other sheets get the
-    /// same edit, as `SetAttribute` collects them and `SyncOtherUnits` keeps the fields. A field the symbol does not have, `Reference` and an empty or unknown
+    /// as `eda_model::variants::set_flag` and `set_field` keep it. The references are looked for on every sheet (the Fields Table covers the design; a later sheet
+    /// path's reference is its screen's symbol); an annotated one's units on every sheet get the same edit, as `SetAttribute` collects them and `SyncOtherUnits`
+    /// keeps the fields, an unannotated one only the sheet in view's. A field the symbol does not have, `Reference` and an empty or unknown
     /// variant are refused. Nothing that changes nothing is refused: the dialog's OK sends every field.
     pub(crate) fn set_symbol_variant(&mut self, variant: &str, ids: &[String], flags: &VariantFlags, fields: &BTreeMap<String, String>) -> Result<(), Vec<CheckResult>> {
         if variant.is_empty() {
@@ -138,17 +139,20 @@ impl<'a> Board<'a> {
         if fields.contains_key("Reference") {
             return Err(fail("ops_variant_reference", "Reference", "the reference is the same in every design variant"));
         }
-        {
-            let sch = self.schematic()?;
-            for id in ids {
-                if !sch.symbols.iter().any(|s| &s.id == id) {
-                    return Err(fail("ops_unknown_symbol", id, "no symbol instance with this reference"));
-                }
-                for name in fields.keys() {
-                    let standard = matches!(name.as_str(), "Value" | "Footprint" | "Datasheet");
-                    if !standard && !sch.user_fields.get(id).is_some_and(|m| m.contains_key(name)) {
-                        return Err(fail("ops_unknown_item", id, format!("the symbol has no field '{name}'")));
-                    }
+        // The Symbol Fields Table covers the whole design (`fields_table::project_view`), so a reference is looked for on every sheet, and the row of a later
+        // sheet path stands for the screen's symbol (`fields_table::path_aliases`), as a field edit does.
+        let aliases = crate::fields_table::path_aliases(&self.design);
+        let ids: Vec<String> = ids.iter().map(|id| aliases.get(id).cloned().unwrap_or_else(|| id.clone())).collect();
+        self.schematic()?;
+        for id in &ids {
+            let homes: Vec<&eda_model::ir::SchematicSection> = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).filter(|s| s.symbols.iter().any(|x| &x.id == id)).collect();
+            if homes.is_empty() {
+                return Err(fail("ops_unknown_symbol", id, "no symbol instance with this reference"));
+            }
+            for name in fields.keys() {
+                let standard = matches!(name.as_str(), "Value" | "Footprint" | "Datasheet");
+                if !standard && !homes.iter().any(|h| h.user_fields.get(id).is_some_and(|m| m.contains_key(name))) {
+                    return Err(fail("ops_unknown_item", id, format!("the symbol has no field '{name}'")));
                 }
             }
         }
