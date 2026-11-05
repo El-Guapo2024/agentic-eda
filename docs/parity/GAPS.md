@@ -568,9 +568,18 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (`eda_kicad::erc_exclusions::rule`): not `endpoint_off_grid` and `unconnected_wire_endpoint` (a marker at each end of one wire, and the report names the wire once), `generic-*`, `unresolved_variable`,
   `field_name_whitespace`, `label_multiple_wires`, `four_way_junction`, `no_connect_connected`, `hier_label_mismatch`, `similar_*`, `same_local_global_*`, `bus_definition_conflict`, `duplicate_pins`; a DRC check whose marker
   carries a layer (`copper_sliver`, `starved_thermal`, `generic-*`, `unresolved_variable`) is waived in the studio alone too. **The records are what kicad-cli 10.99.0-5334 reads**: an older kicad-cli
-  (up to the pinned source, `8303b2ad`) reads the pipe-delimited texts only and would ignore them. Not ported: the ERC Fix entry "Edit Netclasses..." (Schematic Setup has no Net Classes page), Report all errors
-  for each track (`--all-track-errors`), the cross-probe options, the other pages of Schematic Setup > Formatting (text sizes, line widths, junction and hop-over sizes; the inter-sheet references are done, item 12), and a file dialog
-  for Save... (the page downloads the report).
+  (up to the pinned source, `8303b2ad`) reads the pipe-delimited texts only and would ignore them. Not ported: Report all errors
+  for each track (`--all-track-errors`), the cross-probe options, and a file dialog for Save... (the page downloads the report). (The ERC Fix entry "Edit Netclasses..." and the rest of
+  Schematic Setup are done: next bullet.)
+- Done 2026-11-05 (`task-u1-schsetup`, UI-LEFT S3; `PARITY-sch.md` section 54): **Schematic Setup has every page of KiCad's dialog**: Formatting's every row (text size, line width, pin symbol size,
+  the label ratios, the junction dot and hop-over sizes, dashed lines, the operating-point overlay; the connection grid refused in `UNIT_BINDER`'s words), Annotation (the unit notation, order,
+  numbering, reference reuse; the Annotate dialog starts from them and leaves its choice in them), Field Name Templates (Symbol Properties offers them), BOM Presets, Net Classes (Board Setup's page
+  with the wire and bus thickness, colour and line style columns: one table for both dialogs), Bus Alias Definitions and Text Variables; ERC's "Edit Netclasses..." opens it on Net Classes. Each Apply
+  is one undoable verb; the settings are the project's (`schematic` and `net_settings` of the `.kicad_pro`, read from an imported one and written to the derived one); the sheet draws the junction
+  dots, the class's wire width, colour and line style, the default line width and the dash ratios; kicad-cli reads the bus aliases from the project and the classes the page defines (slow tests).
+  Left: Import Settings from Another Project (Board Setup has none either); hop-overs are not drawn; the text sizes, label ratios, pin symbol size and overbar ratio are kicad-cli's (the studio's
+  own drawing keeps its sizes); "Allow reference reuse" is stored but the studio's numbering has no designator tracker; the URL column has no URL editor behind it; the studio saves no BOM presets
+  of its own; the net class table lists Default first, as Board Setup's page does (KiCad lists it last).
 - Done 2026-10-27 (`task-r3-sch-files`; `PARITY-sch.md` section 45, round-3 slice D): the ERC check table is KiCad 25ec2335's (the box's kicad-cli: 55 checks, nine of them new,
   so a project's severities for them come in and Setup takes them); a project's pin map keeps its good cells; the library, footprint, netclass, sheet-name and unit-footprint
   markers carry 25ec2335's sheet paths. Left: a pin-to-pin error ignored from the menu comes back on the next run (KiCad keeps it ignored until the project is reopened).

@@ -25,7 +25,7 @@ Notes:
 6. F1+F2: Footprint Editor fields and dimmed tools
 7. Y1: Symbol Editor Rotate
 8. P2/S7: Properties panel rows
-9. S3: Schematic Setup pages
+9. S3: Schematic Setup pages -- **done (task-u1-schsetup)**
 10. P8: zones
 11. S2: design variants
 12. M1: the Simulation Model dialog
@@ -176,10 +176,12 @@ Notes:
   - Place Power is a text field with presets, not the chooser filtered to power symbols, and its rotation is set in the dialog.
   - M. PARITY-sch §3, §3a.
 - **S2 [FM] Design variants.** No Add, Remove or Edit Variant, no per-variant DNP or fields, and no variant columns in the Fields Table or the placement files. XL. ui-parity-missing (3 rows); PARITY-sch §13, §25.
-- **S3 [FM] Schematic Setup.**
-  - Formatting lacks the text sizes, line widths, and junction and hop-over sizes.
-  - No Annotation, Field Name Templates, Net Classes or Bus Alias pages, so ERC's "Edit Netclasses…" fix is missing.
-  - L. PARITY-sch §9, §28.
+- **S3 [FM] Schematic Setup.** **done (task-u1-schsetup)**: every page of KiCad's tree -- Formatting's every row, Annotation, Field Name Templates, BOM Presets, Net Classes (Board Setup's page with the Eeschema columns, one table for both), Bus Alias Definitions, Text Variables -- each Apply one undoable verb, the settings in the derived `.kicad_pro` kicad-cli reads; ERC's "Edit Netclasses…" opens Net Classes (PARITY-sch §54). Left:
+  - Import Settings from Another Project… (Board Setup has none either).
+  - Hop-overs are not drawn; the text sizes, label ratios, pin symbol size and overbar ratio reach kicad-cli but not the studio's own drawing.
+  - "Allow reference reuse" is stored, not applied (no designator tracker); the URL column has no URL editor; the studio saves no BOM presets of its own.
+  - The net class table lists Default first (KiCad: last).
+  - L. PARITY-sch §9, §28, §54.
 - **S4 [BD] Symbol Properties.**
   - No unit choice, pin table, font or colour.
   - U, V and F open the full dialog.
