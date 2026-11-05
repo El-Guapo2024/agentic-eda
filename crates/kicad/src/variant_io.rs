@@ -34,6 +34,13 @@ pub(crate) fn write_board_variants(out: &mut String, design: &Design) {
     writeln!(out, ")").unwrap();
 }
 
+/// Whether a board item or footprint token kept as text from a `.kicad_pcb` (`DrawingsSection::raw_items`, a footprint's kept tokens) is a variant list or a
+/// footprint variant that the design's schematic now says instead: a design with a schematic has its variants there, and the writer derives the board's
+/// from it ([`write_board_variants`], [`write_footprint_variants`]); a board read alone keeps the file's.
+pub(crate) fn superseded(design: &Design, kept: &str) -> bool {
+    design.schematic.is_some() && (kept.starts_with("(variants") || kept.starts_with("(variant "))
+}
+
 /// The symbol of reference `id` and the section it is on (the root's, else a sheet screen's).
 fn symbol_of<'a>(design: &'a Design, id: &str) -> Option<(&'a SchematicSection, &'a SymbolInstance)> {
     design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).find_map(|sch| sch.symbols.iter().find(|s| s.id == id).map(|s| (sch, s)))

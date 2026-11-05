@@ -1558,6 +1558,11 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
         "activity": activity,
         "job": job.lock().map(|j| j.clone()).unwrap_or_default(),
     }))
+    .map(|mut v: Value| {
+        // the design variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, which the board's `(variants ..)` gets from the schematic)
+        v["variants"] = json!(design_variants_json(&design));
+        v
+    })
 }
 
 /// One `Shape` as JSON: every variant carries `id`/`kind`/`layer`/
@@ -2221,8 +2226,15 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "subpart_id_separator": design.schematic.as_ref().and_then(|r| r.extras.subpart_id_separator),
         "subpart_first_id": design.schematic.as_ref().and_then(|r| r.extras.subpart_first_id),
         // the design variants (KiCad 25ec2335 `SCHEMATIC::GetVariantNames` with `GetVariantDescription`), the same on every sheet
-        "variants": eda_model::variants::names(design).into_iter().map(|n| json!({ "description": design.schematic.as_ref().and_then(|r| r.extras.variants.get(&n)).cloned().unwrap_or_default(), "name": n })).collect::<Vec<_>>(),
+        "variants": design_variants_json(design),
     })
+}
+
+/// The design variants as the studio's state lists them (`[{ name, description }]`, by name): KiCad 25ec2335 `SCHEMATIC::GetVariantNames` with each one's
+/// `GetVariantDescription` (`eda_model::variants`).
+fn design_variants_json(design: &eda_model::ir::Design) -> Vec<Value> {
+    let descriptions = design.schematic.as_ref().map(|r| &r.extras.variants);
+    eda_model::variants::names(design).into_iter().map(|n| json!({ "description": descriptions.and_then(|d| d.get(&n)).cloned().unwrap_or_default(), "name": n })).collect()
 }
 
 /// The file of the screen the breadcrumb ends on (`""` for the root): the title block of the sheet in view names it. The sheets

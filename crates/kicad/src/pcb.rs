@@ -543,7 +543,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     }
 
     // The items nothing reads (a text box, a reference image, a target ..), as the file had them.
-    for item in design.drawings.iter().flat_map(|d| d.raw_items.iter()) {
+    for item in design.drawings.iter().flat_map(|d| d.raw_items.iter()).filter(|t| !crate::variant_io::superseded(design, t)) {
         writeln!(out, "\t{item}").unwrap();
     }
 
@@ -1275,7 +1275,8 @@ pub(crate) fn write_footprint(
     if let Some(e) = own_extra {
         // Its description, tags, jumper pad groups, Datasheet and Description fields ..., as the file had them, while the part is on the footprint they describe.
         if e.source_name == lib_name_written {
-            for token in &e.tokens {
+            // a footprint variant the file had is the schematic's to say when the design has one (`crate::variant_io`)
+            for token in e.tokens.iter().filter(|t| !crate::variant_io::superseded(design, t)) {
                 writeln!(out, "\t\t{token}").unwrap();
             }
         }
