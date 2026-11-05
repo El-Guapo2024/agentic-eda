@@ -133,6 +133,15 @@ pub struct SchExtras {
     /// written back, so the board's position files leave them out as KiCad's do. Additive.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub excluded_from_pos_files: std::collections::BTreeSet<String>,
+    /// The design's variants (KiCad 25ec2335 `SCHEMATIC_SETTINGS::m_VariantDescriptions`, the `.kicad_pro`'s `schematic.variants`): name -> description (empty
+    /// for none), in name order as KiCad's `std::map` keeps them. Only the root sheet's extras hold it; see [`crate::variants`]. Additive. (Counts in
+    /// `writes_nothing`, not in `is_empty`: it is a project setting, no part of the drawing.)
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub variants: BTreeMap<String, String>,
+    /// The records the symbols of this sheet keep of the variants (KiCad 25ec2335 `SCH_SYMBOL_INSTANCE::m_Variants`, `(variant ..)` inside the symbol's
+    /// `(instances ..)`): by reference, then by variant name. A reference with none has no entry. See [`crate::variants`]. Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub symbol_variants: BTreeMap<String, BTreeMap<String, crate::variants::SymbolVariant>>,
     /// The items whose fields are where Autoplace Fields put them (`SCH_ITEM::m_fieldsAutoplaced`, `(fields_autoplaced yes)` in the file), by
     /// `field_key` (a symbol's reference, `#<unit>` after it for a unit but the first), a power symbol's or a sheet's id. Moving, turning, re-justifying or
     /// editing the place of one of the fields takes the item out of it (`SetFieldsAutoplaced( AUTOPLACE_NONE )`); turning the symbol, editing a field's
@@ -558,7 +567,7 @@ impl SchExtras {
     /// Whether design.json has nothing to say for `extras` (it is then not written): [`is_empty`](Self::is_empty), no table of ERC severities and no connection grid. The
     /// severities and the grid are no part of the schematic KiCad's files draw -- they go to the derived project -- so they are not in `is_empty`.
     pub fn writes_nothing(&self) -> bool {
-        self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none() && self.intersheet_refs.is_none() && self.ngspice.is_none() && self.sim_workbook.is_none() && self.subpart_id_separator.is_none() && self.subpart_first_id.is_none() && self.project_schematic.is_none()
+        self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none() && self.intersheet_refs.is_none() && self.ngspice.is_none() && self.sim_workbook.is_none() && self.subpart_id_separator.is_none() && self.subpart_first_id.is_none() && self.project_schematic.is_none() && self.variants.is_empty()
     }
 
     /// The net class a label's fields give its net (`SCH_LABEL_BASE`'s `Netclass` field; the first that is not empty), if any.
@@ -673,6 +682,7 @@ impl SchExtras {
             && self.local_power.is_empty()
             && self.global_power.is_empty()
             && self.excluded_from_pos_files.is_empty()
+            && self.symbol_variants.is_empty()
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()
             && self.pin_swaps.is_empty()
