@@ -120,9 +120,13 @@ fn flat_entry(section: &SymbolLibrarySection, lib_id: &str) -> Option<LibrarySym
     section.flatten(lib_id).ok().or_else(|| section.by_lib_id(lib_id).cloned())
 }
 
-/// The design's symbols of library `lib`, by `lib_id`.
+/// The design's symbols of library `lib`, by `lib_id` (a bare `lib_id` is the project library's).
 fn buffered_symbols<'a>(design: &'a Design, lib: &str) -> Vec<&'a LibrarySymbol> {
-    design.symbol_library.as_ref().map(|l| l.symbols.iter().filter(|s| split(&s.lib_id).0 == lib).collect()).unwrap_or_default()
+    let of = |id: &str| match split(id).0 {
+        "" => PROJECT_LIBRARY.to_string(),
+        l => l.to_string(),
+    };
+    design.symbol_library.as_ref().map(|l| l.symbols.iter().filter(|s| of(&s.lib_id) == lib).collect()).unwrap_or_default()
 }
 
 /// `SYMBOL_LIBRARY_MANAGER::IsSymbolModified` for the design's symbols of library `lib` at `path`: the ones whose text differs from the file's symbol, or

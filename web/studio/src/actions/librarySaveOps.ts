@@ -118,6 +118,8 @@ export async function saveFootprint(api: FootprintEditorApi, toast: Toast): Prom
   const st = api.getState();
   const id = footprintSaveTarget(st.treeSelection, getLibraryTree("footprint").selectedLibs, st.name);
   if (!id) return;
+  // `if( padTool->InPadEditMode() ) m_toolManager->RunAction( PCB_ACTIONS::recombinePad )`: a pad being edited as shapes is a pad again first
+  if (st.footprint?.pad_edit) await api.editPadShapes();
   if (!isTableLibrary(libraryOfId(id))) return toast(FOOTPRINT_SAVED_IN_DESIGN);
   const r = await saveToLibrary({ kind: "footprint", id });
   if (r.ok) {
