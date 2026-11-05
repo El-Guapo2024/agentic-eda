@@ -1062,7 +1062,9 @@ fn handle(
         // (`offload`), like DRC.
         ("POST", "/api/fab/kicad") => offload(stream, lane, dir, job, path, &body, fab_api::kicad),
         ("POST", "/api/fab/gerbers") => offload(stream, lane, dir, job, path, &body, fab_api::gerbers),
+        ("POST", "/api/fab/plot") => offload(stream, lane, dir, job, path, &body, fab_api::plot),
         ("POST", "/api/fab/drill") => offload(stream, lane, dir, job, path, &body, fab_api::drill),
+        ("POST", "/api/fab/drill_report") => offload(stream, lane, dir, job, path, &body, fab_api::drill_report_file),
         ("POST", "/api/fab/pos") => offload(stream, lane, dir, job, path, &body, fab_api::pos),
         ("POST", "/api/fab/bom") => offload(stream, lane, dir, job, path, &body, |dir, _| fab_api::bom(dir)),
         ("POST", "/api/sch/plot") => offload(stream, lane, dir, job, path, &body, sch_output_api::plot),
@@ -1576,7 +1578,16 @@ fn plot_params_json(design: &eda_model::ir::Design, model: &eda_model::Constrain
     let plot = eda_model::plot_params::PlotParams::of_design(design);
     let bom = design.drawings.as_ref().and_then(|d| d.ipc2581_bom.clone()).unwrap_or_default();
     let sch_revision = design.schematic.as_ref().and_then(|s| s.title_block.as_ref()).map(|t| t.rev.clone()).unwrap_or_default();
-    json!({ "layers": plot.board_layers(&model.board.layers), "use_aux_origin": plot.flag("useauxorigin").unwrap_or(false), "ipc2581_bom": bom, "sch_revision": sch_revision })
+    // The Plot dialog's other controls (`DIALOG_PLOT::TransferDataToWindow`): "Plot on All Layers" and every token `PCB_PLOT_PARAMS::Format` writes,
+    // the defaults for those the board lacks (`PlotParams::dialog_values`).
+    json!({
+        "layers": plot.board_layers(&model.board.layers),
+        "use_aux_origin": plot.flag("useauxorigin").unwrap_or(false),
+        "plot_on_all_layers": plot.plot_on_all_layers,
+        "options": plot.dialog_values(),
+        "ipc2581_bom": bom,
+        "sch_revision": sch_revision
+    })
 }
 
 /// What `kicad-cli pcb drc` reports as `invalid_outline` ("Board has malformed outline") for this board, from the live port of the same check:
