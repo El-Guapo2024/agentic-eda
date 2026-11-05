@@ -38,6 +38,7 @@ import { picker } from "./pcbPicker";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 import type { PickerSession } from "../kicad-port/pickerHost";
 import type { MicrowaveCmd } from "../api/microwaveTypes";
+import { currentTrackWidth as currentTrackWidthOf } from "../kicad-port/changeTrackWidth";
 
 type FootprintTool = "gap" | "stub" | "arc_stub" | "function_shape";
 
@@ -55,9 +56,13 @@ const PROMPT: Record<FootprintTool, string> = {
  */
 let shapeScalesRead = false;
 
-/** `GetCurrentTrackWidth()`: the track width the router would draw with now. */
+/**
+ * `GetCurrentTrackWidth()` (microwave_footprint.cpp:52, 220, microwave_inductor.cpp:295): asked of the board's list by the chosen index now, not the width
+ * snapshot taken when an entry was picked (round 7 R7-5; kicad-port/changeTrackWidth.ts).
+ */
 function currentTrackWidth(st: StudioState): number {
-  return st.currentTrackWidthNm ?? st.board?.board_rules?.track_width ?? 250_000;
+  if (!st.board) return st.currentTrackWidthNm ?? 250_000;
+  return currentTrackWidthOf(st.board, st.currentTrackWidthIndex, st.pcbx.useCustomTrackVia, st.pcbx.customTrackVia.trackNm);
 }
 
 export function registerMicrowaveActions(m: Map<string, (param?: unknown) => void>, ctx: SweepCtx): void {
