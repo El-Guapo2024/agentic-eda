@@ -552,7 +552,7 @@ export interface Routing {
   teardrop_settings: TeardropSettings;
 }
 
-/** `crates/model/src/ir.rs` `TeardropSettings` -- `pcbnew/teardrop/teardrop_parameters.h`'s `TEARDROP_PARAMETERS`/`TEARDROP_PARAMETERS_LIST`, collapsed into one shared settings block (round anchors only -- see `eda_connectivity::teardrop`'s own doc for the full scope). */
+/** `crates/model/src/ir.rs` `TeardropSettings` -- `pcbnew/teardrop/teardrop_parameters.h`'s `TEARDROP_PARAMETERS`/`TEARDROP_PARAMETERS_LIST`, collapsed into one shared settings block (vias and pads of every shape but a custom one -- see `eda_connectivity::teardrop`'s own doc for the full scope). */
 export interface TeardropSettings {
   enabled: boolean;
   target_vias: boolean;

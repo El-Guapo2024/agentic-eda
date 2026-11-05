@@ -11,10 +11,19 @@
 //!
 //! ## Scope (each a documented, bounded cut, not an oversight)
 //!
-//! - **Round anchors only** (a via, or a pad `TEARDROP_MANAGER::IsRound` calls round: a circle, or an oval as wide as it is high). A rectangular or
-//!   round-rect pad -- the common SMD case -- never gets a teardrop here; `m_UseRoundShapesOnly` is a real (if normally-off) upstream setting for exactly this
-//!   restriction, and this port behaves as if it were always on. For a round anchor the outline is KiCad's own construction, point for point
-//!   ([`teardrop_polygon`]; round 4's C-1, proven against kicad-cli's own teardrops by `crates/kicad/tests/teardrops_kicad_cli.rs`).
+//! - **Vias and every pad shape but a custom one** (round 7, UI-LEFT P1). A via and a pad `TEARDROP_MANAGER::IsRound` calls round (a circle, or an oval as wide
+//!   as it is high) get KiCad's construction for a round anchor, point for point ([`compute_teardrop_polygon`]; round 4's C-1). A rectangle, a rounded or
+//!   chamfered rectangle, a trapezoid and a long oval -- the common SMD pads -- get the construction for the others, as `m_UseRoundShapesOnly` is off by
+//!   default (`TEARDROP_PARAMETERS_LIST()`): the pad's own polygon (`PAD::TransformShapeToPolygon`, [`pad_polygon`]) clipped to the teardrop's width
+//!   (`computeAnchorPoints`' `force_clip`), A and B refused inside the pad, D kept inside the copper the track enters, no symmetric re-fit. Both are proven
+//!   against kicad-cli's own teardrops by `crates/kicad/tests/teardrops_kicad_cli.rs`. Not ported: a custom pad (`MergePrimitivesAsPolygon`; skipped), a
+//!   padstack's other layers (the pad's main shape stands for every layer).
+//! - **The anchors a track meets, found as `UpdateTeardrops` finds them** (25ec2335; round 7 R7-1). Each straight segment of a track's polyline is a
+//!   `PCB_TRACK` of its own (the writer writes each as a `(segment ..)`), and each of its ends is hit-tested against the anchor (`PCB_VIA::HitTest`: the circle;
+//!   `PAD::HitTest`: the pad's polygon), not compared with its centre: an end inside the anchor but off its centre gets its teardrop, and a track crossing the
+//!   anchor's centre (`PCB_TRACK::HitTest( pos )`) gets one on each side (`buildCrossingStub`). A track that touches the anchor with neither end in it nor
+//!   over its centre goes through `findAnchorPointsOnTrack` as it does in KiCad (a teardrop where its centreline crosses the outline). The same-net test stands
+//!   for KiCad's connectivity (`GetConnectedPadsAndVias`, whose items' copper collides).
 //! - **Arc tracks** (`PCB_ARC_T`, round 5's A5-1) follow the real arc: the crossing with its polyline, the reference segment found on it, and 25ec2335's
 //!   two refinements (the polyline's points moved onto the arc, the corners kept `maxError` inside an arc's edge), as the kicad-cli 25ec2335 this is proven
 //!   against does (`crates/kicad/tests/teardrops_kicad_cli.rs` has arc cases both ways round).
@@ -22,6 +31,9 @@
 //!   limit; `computeChordThroughShape`'s graze test on the extended centreline, arcs exempt, in place of 8303b2ad's `computeEmergingTrackLength`) as well as
 //!   the arc geometry. Not ported from 25ec2335: `computeFittedTeardropPolygon` (a teardrop shrunk or dropped where it would come within clearance of
 //!   another net's copper, `collidesWithOtherNets`) and the solder-mask teardrops (`createAndAddTeardropWithMask`).
+//! - **One parameter block for every anchor**: Board Setup's ([`TeardropSettings`]). KiCad reads each via's and pad's own `TEARDROP_PARAMETERS`
+//!   (`via->GetTeardropParams()`, `pad->GetTeardropParams()`, which Board Setup's round and rect blocks only seed, `DIALOG_GLOBAL_EDIT_TEARDROPS::processItem`);
+//!   this model keeps an item's `(teardrops ..)` only as the file's tokens (`ViaExtra::tokens`, a pad's `ext.tokens`), unread.
 //! - **Straight edges only** (`m_CurvedEdges` is not modeled -- always
 //!   `false`, which is also upstream's own factory default). No Bezier
 //!   curve, no multi-segment curve approximation.
@@ -35,18 +47,13 @@
 //!   target kinds are ported.
 //! - **No in-zone-fill exclusion filter** (`m_TdOnPadsInZones`): a pad
 //!   already covered by a same-net zone fill still gets a teardrop here.
-//! - A track must touch the anchor at one of its own polyline endpoints
-//!   *exactly* (`Track::pts` first/last `== ` the anchor's center) --
-//!   this model's router and hand-drawn tracks always land exactly on a
-//!   pad/via center (see `crates/connectivity`'s own convention
-//!   throughout, e.g. `cleanup.rs`), so this is the real connectivity
-//!   test here, not a simplification of a fuzzier upstream rule.
 
-use eda_model::footprint::placed_pads;
-use eda_model::ir::{Design, Point, TeardropSettings, Nm, Zone};
-use eda_model::{ConstraintModel, PadKind, PadShape};
+use eda_model::footprint::to_board;
+use eda_model::ir::{Design, FootprintInstance, Point, Side, TeardropSettings, Nm, Zone};
+use eda_model::{ConstraintModel, Pad, PadKind, PadShape};
 use eda_clipper2::Point64;
-use eda_shape_poly_set::basic_shapes::ErrorLoc;
+use eda_shape_poly_set::basic_shapes::{circle_polygon, oval_polygon, round_chamfered_rect_polygon, trapezoid_polygon, ErrorLoc};
+use eda_shape_poly_set::hatch::point_inside;
 use eda_shape_poly_set::ShapePolySet;
 use std::collections::HashMap;
 
@@ -70,12 +77,51 @@ fn reach_includes(reach: &Reach, layer: &str, board_layers: &[String]) -> bool {
     }
 }
 
+/// What `TEARDROP_MANAGER` reads of the via or pad a teardrop is built on (`aOther` / `aCandidate`).
 struct Anchor {
-    center: Point,
-    /// `TEARDROP_MANAGER::GetWidth`: a via's diameter, a pad's smaller size.
-    width: Nm,
+    /// `GetPosition()`: a via's centre, a pad's position (its shape offset not added).
+    center: Point64,
+    /// `TEARDROP_MANAGER::GetWidth`: a via's diameter, a pad's smaller size (`std::min( pad->GetSize( aLayer ).x, .y )`, the size of the pad's own frame).
+    width: i64,
     net: String,
     reach: Reach,
+    kind: AnchorKind,
+    /// The outline `findAnchorPointsOnTrack`, `computeChordThroughShape` and `computeAnchorPoints` build on: a round anchor's circle about its position
+    /// (`TransformCircleToPolygon( .., aOtherPos, GetWidth( .. ) / 2, maxError, ERROR_INSIDE, 16 )`), any other pad's own polygon.
+    outline: Vec<Point64>,
+}
+
+enum AnchorKind {
+    /// `PCB_VIA`: round, and hit by a point within `GetWidth() / 2` of its centre (`PCB_VIA::HitTest`).
+    Via,
+    /// `PAD`: `round` is `TEARDROP_MANAGER::IsRound`; `poly` the pad's copper (`PAD::GetEffectivePolygon( layer, ERROR_INSIDE )`, which `PAD::HitTest` asks),
+    /// `bounding_radius` `PAD::GetBoundingRadius()`.
+    Pad { round: bool, poly: Vec<Point64>, bounding_radius: i64 },
+}
+
+impl Anchor {
+    fn is_round(&self) -> bool {
+        match self.kind {
+            AnchorKind::Via => true,
+            AnchorKind::Pad { round, .. } => round,
+        }
+    }
+
+    /// `PCB_VIA::HitTest( aPosition, 0 )`: `rel_pos.x² + rel_pos.y² <= max_dist²` in doubles, `max_dist = GetWidth() / 2`; `PAD::HitTest( aPosition, 0, aLayer )`:
+    /// within the bounding radius, then `GetEffectivePolygon( aLayer, ERROR_INSIDE )->Contains( aPosition )`.
+    fn hit_test(&self, p: Point64) -> bool {
+        let (dx, dy) = (p.x - self.center.x, p.y - self.center.y);
+        match &self.kind {
+            AnchorKind::Via => {
+                let max_dist = (self.width / 2) as f64;
+                (dx as f64) * (dx as f64) + (dy as f64) * (dy as f64) <= max_dist * max_dist
+            }
+            AnchorKind::Pad { poly, bounding_radius, .. } => {
+                let d2 = dx as i128 * dx as i128 + dy as i128 * dy as i128;
+                d2 <= *bounding_radius as i128 * *bounding_radius as i128 && point_inside(poly, p)
+            }
+        }
+    }
 }
 
 /// "REF.PIN" -> net name (same lookup `eda_connectivity::items` builds).
@@ -89,8 +135,77 @@ fn net_of_pin_map(model: &ConstraintModel) -> HashMap<String, String> {
     map
 }
 
+/// How KiCad turns a pad's own frame onto the board: `PAD::GetOrientation()` in degrees, the file's `(at x y angle)` (`eda_kicad::pad_file_angle`: the model's
+/// turns are clockwise on the screen, KiCad's counter-clockwise, and a bottom footprint's pad turns the other way under the mirror), and whether the pad's own
+/// frame is mirrored first (a bottom footprint: the model keeps a footprint as seen from the top and mirrors x on placement, KiCad's file holds the pad flipped).
+fn kicad_pad_frame(fp: &FootprintInstance, lp: &Pad) -> (f64, bool) {
+    let bottom = fp.side == Side::Bottom;
+    let pad_rot = if bottom { -(lp.rot as i64) } else { lp.rot as i64 };
+    (-((fp.rot as i64 + pad_rot) as f64) / 1000.0, bottom)
+}
+
+/// A point of a pad's own frame, as the model holds it (its position the origin, before its rotation), turned as KiCad turns the pad's shape (`SHAPE_POLY_SET::
+/// Rotate( GetOrientation() )`, `RotatePoint` on every vertex: exact on the quarter turns, KiCad's sine and cosine elsewhere).
+fn pad_frame_turn(orientation: f64, mirrored: bool, p: Point64) -> Point64 {
+    eda_shape_poly_set::basic_shapes::rotate_point_degrees(if mirrored { Point64::new(-p.x, p.y) } else { p }, orientation)
+}
+
+/// `PAD::TransformShapeToPolygon( aBuffer, aLayer, 0, maxError, ERROR_INSIDE )` (`pcbnew/pad.cpp`) of the pad `lp` of `fp`, whose position on the board is
+/// `center`: a circle (and an oval as wide as it is high) `TransformCircleToPolygon` of half the width at `ShapePos`, a longer oval `TransformOvalToPolygon`
+/// between its ends turned by the orientation, a rectangle and a trapezoid `TransformTrapezoidToPolygon`, a rounded or chamfered rectangle
+/// `TransformRoundChamferedRectToPolygon` (`PAD_MIN_SEG_PER_CIRCLE_COUNT` 16), these built about the origin, turned by the pad's orientation and moved to
+/// `ShapePos` (the position plus the turned shape offset). `None` for a custom pad (`MergePrimitivesAsPolygon` is not ported here).
+fn pad_polygon(fp: &FootprintInstance, lp: &Pad, center: Point64) -> Option<Vec<Point64>> {
+    let (orientation, mirrored) = kicad_pad_frame(fp, lp);
+    let turn = |p: Point64| pad_frame_turn(orientation, mirrored, p);
+    let (w, h) = (lp.size.0.get(), lp.size.1.get());
+    let (dx, dy) = (w / 2, h / 2);
+    let off = lp.ext.offset.map_or(Point64::new(0, 0), |(x, y)| turn(Point64::new(x.get(), y.get())));
+    let shape_pos = Point64::new(center.x + off.x, center.y + off.y);
+    let local = match lp.shape {
+        // "Note: dx == dy is not guaranteed for circle pads in legacy boards".
+        PadShape::Circle => return Some(circle_polygon(shape_pos, dx, MAX_ERROR, ErrorLoc::Inside, 16)),
+        PadShape::Oval if dx == dy => return Some(circle_polygon(shape_pos, dx, MAX_ERROR, ErrorLoc::Inside, 16)),
+        PadShape::Oval => {
+            // `VECTOR2I delta( dx - half_width, dy - half_width ); RotatePoint( delta, GetOrientation() );` (an oval is its own mirror image).
+            let half_width = dx.min(dy);
+            let delta = eda_shape_poly_set::basic_shapes::rotate_point_degrees(Point64::new(dx - half_width, dy - half_width), orientation);
+            let (a, b) = (Point64::new(shape_pos.x - delta.x, shape_pos.y - delta.y), Point64::new(shape_pos.x + delta.x, shape_pos.y + delta.y));
+            return Some(oval_polygon(a, b, half_width * 2, MAX_ERROR, ErrorLoc::Inside, 16));
+        }
+        PadShape::Rect => trapezoid_polygon((w, h), 0, 0, MAX_ERROR),
+        PadShape::Trapezoid => {
+            let d = lp.ext.trapezoid_delta.unwrap_or((Nm::ZERO, Nm::ZERO));
+            trapezoid_polygon((w, h), d.0.get() / 2, d.1.get() / 2, MAX_ERROR)
+        }
+        PadShape::RoundRect => round_chamfered_rect_polygon((w, h), eda_model::pad_geom::round_rect_radius(lp).get(), 0.0, 0, MAX_ERROR),
+        PadShape::ChamferedRect => round_chamfered_rect_polygon((w, h), eda_model::pad_geom::round_rect_radius(lp).get(), lp.ext.chamfer_ratio.unwrap_or(0.0), lp.ext.chamfer_corners.bits(), MAX_ERROR),
+        PadShape::Custom => return None,
+    };
+    Some(
+        local
+            .into_iter()
+            .map(|p| {
+                let q = turn(p);
+                Point64::new(q.x + shape_pos.x, q.y + shape_pos.y)
+            })
+            .collect(),
+    )
+}
+
+/// `PAD::GetBoundingRadius()` (`BuildEffectivePolygon( ERROR_OUTSIDE )`): the farthest vertex of the pad's `ERROR_OUTSIDE` polygon from its position, and half
+/// the drill. Here the `ERROR_INSIDE` polygon's farthest vertex, grown by `maxError` when the pad has curves (a deliberate approximation: the radius only
+/// bounds `PAD::HitTest` and sets how far `computeTeardropPolygon` casts its ray into the pad, which reaches the far side either way).
+fn pad_bounding_radius(lp: &Pad, poly: &[Point64], center: Point64) -> i64 {
+    let far = poly.iter().map(|p| euclidean_norm(p.x - center.x, p.y - center.y)).max().unwrap_or(0);
+    let curved = !matches!(lp.shape, PadShape::Rect | PadShape::Trapezoid) && !(lp.shape == PadShape::ChamferedRect && eda_model::pad_geom::round_rect_radius(lp) == Nm::ZERO);
+    let drill = lp.drill.map_or(0, |d| d.get()).max(lp.drill_slot.map_or(0, |(a, b)| a.get().max(b.get())));
+    (far + if curved { MAX_ERROR } else { 0 }).max((drill as f64 / 2.0).round() as i64)
+}
+
 fn collect_anchors(design: &Design, model: &ConstraintModel, settings: &TeardropSettings) -> Vec<Anchor> {
     let mut anchors = Vec::new();
+    let round_outline = |c: Point64, w: i64| circle_polygon(c, w / 2, MAX_ERROR, ErrorLoc::Inside, 16);
 
     if settings.target_vias {
         if let Some(rt) = &design.routing {
@@ -98,7 +213,9 @@ fn collect_anchors(design: &Design, model: &ConstraintModel, settings: &Teardrop
                 if v.net.is_empty() {
                     continue;
                 }
-                anchors.push(Anchor { center: v.at, width: v.diameter, net: v.net.clone(), reach: Reach::Span(v.from_layer.clone(), v.to_layer.clone()) });
+                let center = p64(v.at);
+                let width = v.diameter.get();
+                anchors.push(Anchor { center, width, net: v.net.clone(), reach: Reach::Span(v.from_layer.clone(), v.to_layer.clone()), kind: AnchorKind::Via, outline: round_outline(center, width) });
             }
         }
     }
@@ -109,31 +226,28 @@ fn collect_anchors(design: &Design, model: &ConstraintModel, settings: &Teardrop
             for fp in &pl.footprints {
                 let Some(part) = model.part(&fp.id) else { continue };
                 let Some(footprint) = model.footprint_of(part) else { continue };
-                let Some(placed) = placed_pads(model, part, fp) else { continue };
-                let mut lib_pads: Vec<&eda_model::Pad> = footprint.pads.iter().collect();
-                lib_pads.sort_by(|a, b| a.number.cmp(&b.number));
-
-                for (pad, lp) in placed.into_iter().zip(lib_pads.iter()) {
-                    // `TEARDROP_MANAGER::IsRound`: a circle, or an oval as wide as it is high.
-                    if !(pad.shape == PadShape::Circle || (pad.shape == PadShape::Oval && pad.size.0 == pad.size.1)) {
-                        continue; // round anchors only -- see module doc
-                    }
+                for lp in &footprint.pads {
                     let is_pth = lp.kind == PadKind::ThroughHole;
                     let is_npth = lp.kind == PadKind::NonPlatedHole;
                     if is_npth {
                         continue; // no copper connection to tear-drop at all
                     }
+                    // `DIALOG_GLOBAL_EDIT_TEARDROPS::TransferDataFromWindow`: PTH pads by "PTH pads", SMD and edge connector pads by "SMD pads".
                     if is_pth && !settings.target_pth_pads {
                         continue;
                     }
                     if !is_pth && !settings.target_smd_pads {
                         continue;
                     }
-                    let net = net_of_pin.get(&format!("{}.{}", fp.id, pad.number)).cloned().unwrap_or_default();
+                    let net = net_of_pin.get(&format!("{}.{}", fp.id, lp.number)).cloned().unwrap_or_default();
                     if net.is_empty() {
                         continue;
                     }
-                    let width = pad.size.0.min(pad.size.1);
+                    let center = p64(to_board(fp, lp.at));
+                    let Some(poly) = pad_polygon(fp, lp, center) else { continue };
+                    let width = lp.size.0.get().min(lp.size.1.get());
+                    // `TEARDROP_MANAGER::IsRound`: a circle, or an oval as wide as it is high.
+                    let round = lp.shape == PadShape::Circle || (lp.shape == PadShape::Oval && lp.size.0 == lp.size.1);
                     let reach = if is_pth {
                         // A plated through-hole pad spans the whole copper
                         // stack, same convention `eda_connectivity::items`
@@ -141,9 +255,13 @@ fn collect_anchors(design: &Design, model: &ConstraintModel, settings: &Teardrop
                         let (first, last) = (model.board.layers.first().cloned().unwrap_or_default(), model.board.layers.last().cloned().unwrap_or_default());
                         Reach::Span(first, last)
                     } else {
-                        Reach::Layer(if fp.side == eda_model::ir::Side::Top { "F.Cu".to_string() } else { "B.Cu".to_string() })
+                        // An SMD pad is on its footprint's side, or on the other one (`Pad::opposite_side`).
+                        let front = (fp.side == Side::Top) != lp.opposite_side;
+                        Reach::Layer(if front { "F.Cu".to_string() } else { "B.Cu".to_string() })
                     };
-                    anchors.push(Anchor { center: pad.center, width, net, reach });
+                    let bounding_radius = pad_bounding_radius(lp, &poly, center);
+                    let outline = if round { round_outline(center, width) } else { poly.clone() };
+                    anchors.push(Anchor { center, width, net, reach, kind: AnchorKind::Pad { round, poly, bounding_radius }, outline });
                 }
             }
         }
@@ -158,6 +276,11 @@ const MAX_ERROR: i64 = 5_000;
 
 fn p64(p: Point) -> Point64 {
     Point64::new(p.x.get(), p.y.get())
+}
+
+/// `( a + b ) / 2` of two `VECTOR2I`s: `VECTOR2<int>::operator/( double )` rounds each coordinate (`KiROUND( x / aFactor )`), half away from zero.
+fn half_sum(a: Point64, b: Point64) -> Point64 {
+    Point64::new(((a.x + b.x) as f64 / 2.0).round() as i64, ((a.y + b.y) as f64 / 2.0).round() as i64)
 }
 
 fn pt(p: Point64) -> Point {
@@ -268,28 +391,32 @@ fn area(pts: &[Point64]) -> f64 {
     (a * 0.5).abs()
 }
 
-/// `TEARDROP_MANAGER::computeAnchorPoints` (`pcbnew/teardrop/teardrop_utils.cpp`) for a round anchor: the anchor's circle (`TransformCircleToPolygon( .., ERROR_INSIDE,
-/// 16 )`), clipped to a band `min( m_TdMaxWidth, preferred_width )` wide along the teardrop's axis when the width is constrained, then C and E are the hull
-/// neighbours of B and A in the convex hull of A, B and that polygon, swapped if that gives the larger pentagon. `pts` is `[A, B, _, D, _]`.
-fn compute_anchor_points(settings: &TeardropSettings, center: Point64, width: i64, pts: &mut [Point64; 5]) -> bool {
+
+/// `TEARDROP_MANAGER::computeAnchorPoints` (`pcbnew/teardrop/teardrop_utils.cpp`, 25ec2335): the anchor's outline (a round anchor's circle, a pad's polygon),
+/// clipped to a band `preferred_width` wide (or `m_TdMaxWidth` when that is narrower) along the teardrop's axis when the width is constrained -- always for a
+/// pad that is not round ("the teardrop height use the smaller value of X and Y sizes") -- then C and E are the hull neighbours of B and A in the convex hull
+/// of A, B and that polygon, swapped if that gives the larger pentagon. `pts` is `[A, B, _, D, _]`. ("A max width of 0 means no limit, so a min against it
+/// would clip the shape to nothing.")
+fn compute_anchor_points(settings: &TeardropSettings, anchor: &Anchor, pts: &mut [Point64; 5]) -> bool {
+    let width = anchor.width;
     let preferred_width = (width as f64 * settings.best_width_ratio).round() as i64;
-    let force_clip = settings.best_width_ratio < 1.0;
-    let circle = eda_shape_poly_set::basic_shapes::circle_polygon(center, width / 2, MAX_ERROR, ErrorLoc::Inside, 16);
-    let mut c_buffer = ShapePolySet::from_outline(circle);
+    let force_clip = settings.best_width_ratio < 1.0 || !anchor.is_round();
+    let mut c_buffer = ShapePolySet::from_outline(anchor.outline.clone());
 
     let max_width = settings.max_width_nm.get();
     if force_clip || (max_width > 0 && max_width < preferred_width) {
-        let halfsize = max_width.min(preferred_width) / 2;
-        let ref_on_track = Point64::new((pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2);
+        let halfsize = (if max_width > 0 { max_width.min(preferred_width) } else { preferred_width }) / 2;
+        // `( aPts[0] + aPts[1] ) / 2`: `VECTOR2I::operator/( double )`, `KiROUND` of each half.
+        let ref_on_track = half_sum(pts[0], pts[1]);
         let (ax, ay) = (pts[3].x - ref_on_track.x, pts[3].y - ref_on_track.y);
-        // `EDA_ANGLE( teardrop_axis )`, and `clipping_rect.Rotate( -orient )`.
-        let orient = (ay as f64).atan2(ax as f64);
+        // `EDA_ANGLE orient( teardrop_axis )`, degrees, and `clipping_rect.Rotate( -orient )` (`RotatePoint` on each corner) then `Move( ref_on_track )`.
+        let orient = deg_angle(ax as f64, ay as f64);
         let len = euclidean_norm(ax, ay);
         let rect = [Point64::new(0, -halfsize), Point64::new(0, halfsize), Point64::new(len, halfsize), Point64::new(len, -halfsize)];
         let rect: Vec<Point64> = rect
             .iter()
             .map(|&p| {
-                let r = eda_shape_poly_set::basic_shapes::rotate_point(p, -orient);
+                let r = eda_shape_poly_set::basic_shapes::rotate_point_degrees(p, -orient);
                 Point64::new(r.x + ref_on_track.x, r.y + ref_on_track.y)
             })
             .collect();
@@ -633,28 +760,29 @@ fn chain_chain_intersect(outline: &[Point64], poly: &[Point64]) -> Vec<Point64> 
     hits
 }
 
-/// `TEARDROP_MANAGER::computeChordThroughShape` (`pcbnew/teardrop/teardrop_utils.cpp`, 25ec2335) for a straight track and a round anchor (a via, or a round
-/// pad: `TransformCircleToPolygon( shapebuffer, pos, radius, maxError, ERROR_INSIDE, 16 )`): the length of the copper span of the track's centreline, extended
-/// both ways by the polygon's box diagonal plus the track's length, that holds `inside`. The crossings are projected on the direction, sorted, and the span
-/// between two neighbours whose middle is inside the polygon and that brackets `inside` is the answer. A zero-length track, fewer than two crossings or no such
-/// span answer `i64::MAX` ("keep the teardrop"). (The arc's `std::numeric_limits<int>::max()` is the caller's.)
-fn chord_through_round_anchor(center: Point64, radius: i64, start: Point64, end: Point64, inside: Point64) -> i64 {
+
+/// `TEARDROP_MANAGER::computeChordThroughShape` (`pcbnew/teardrop/teardrop_utils.cpp`, 25ec2335) for a straight track and the anchor's `outline` (a round
+/// anchor's circle, `TransformCircleToPolygon( shapebuffer, pos, radius, maxError, ERROR_INSIDE, 16 )`, or a pad's polygon,
+/// `PAD::TransformShapeToPolygon( shapebuffer, aLayer, 0, maxError, ERROR_INSIDE )`): the length of the copper span of the track's centreline, extended both ways
+/// by the polygon's box diagonal plus the track's length, that holds `inside`. The crossings are projected on the direction, sorted, and the span between two
+/// neighbours whose middle is inside the polygon and that brackets `inside` is the answer. A zero-length track, fewer than two crossings or no such span answer
+/// `i64::MAX` ("keep the teardrop"). (The arc's `std::numeric_limits<int>::max()` is the caller's.)
+fn chord_through_shape(outline: &[Point64], start: Point64, end: Point64, inside: Point64) -> i64 {
     let (dx, dy) = ((end.x - start.x) as f64, (end.y - start.y) as f64);
     let len = dx.hypot(dy);
-    if len == 0.0 {
+    if len == 0.0 || outline.is_empty() {
         return i64::MAX;
     }
-    let outline = eda_shape_poly_set::basic_shapes::circle_polygon(center, radius, MAX_ERROR, ErrorLoc::Inside, 16);
     let (dir_x, dir_y) = (dx / len, dy / len);
-    // `VECTOR2I mid = ( start + end ) / 2`: integer division.
-    let mid = Point64::new((start.x + end.x) / 2, (start.y + end.y) / 2);
+    // `VECTOR2I mid = ( start + end ) / 2`: `VECTOR2I::operator/( double )`, `KiROUND` of each half.
+    let mid = half_sum(start, end);
     // `shapebuffer.BBox().Diagonal()`: the box's size, `VECTOR2I::EuclideanNorm`.
     let (min_x, max_x) = outline.iter().fold((i64::MAX, i64::MIN), |(a, b), p| (a.min(p.x), b.max(p.x)));
     let (min_y, max_y) = outline.iter().fold((i64::MAX, i64::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
     let reach = (euclidean_norm(max_x - min_x, max_y - min_y) as f64 + len).round();
     let off = Point64::new((dir_x * reach).round() as i64, (dir_y * reach).round() as i64);
     let (ext_start, ext_end) = (Point64::new(mid.x - off.x, mid.y - off.y), Point64::new(mid.x + off.x, mid.y + off.y));
-    let pts = chain_intersect(&outline, ext_start, ext_end);
+    let pts = chain_intersect(outline, ext_start, ext_end);
     // "Degenerate/tangent-only crossings should not drop the teardrop."
     if pts.len() < 2 {
         return i64::MAX;
@@ -666,7 +794,7 @@ fn chord_through_round_anchor(center: Point64, radius: i64, start: Point64, end:
     for ii in 0..proj.len() - 1 {
         let m = (proj[ii] + proj[ii + 1]) / 2.0;
         let span_mid = Point64::new(ext_start.x + (dir_x * m).round() as i64, ext_start.y + (dir_y * m).round() as i64);
-        if !eda_shape_poly_set::hatch::point_inside(&outline, span_mid) {
+        if !point_inside(outline, span_mid) {
             continue;
         }
         if inside_proj >= proj[ii] && inside_proj <= proj[ii + 1] {
@@ -677,76 +805,166 @@ fn chord_through_round_anchor(center: Point64, radius: i64, start: Point64, end:
     i64::MAX
 }
 
-/// The teardrop of one track (a segment, or an arc when `arc` is its `(start, mid, end)`) at a round anchor (a via, or a pad `TEARDROP_MANAGER::IsRound`
-/// calls round), with straight edges: the pentagon `[A, B, C, D, E]` of `TEARDROP_MANAGER::computeTeardropPolygon` (`pcbnew/teardrop/teardrop_utils.cpp`). A
-/// and B are on the track, C and E on the anchor's outline, D just behind the anchor's centre.
+/// `SEG( a, b ).NearestPoint( p )` (`seg.cpp`): the end when `p` projects outside the segment, else `A + rescale( t, d, l² )`.
+fn seg_nearest_point(a: Point64, b: Point64, p: Point64) -> Point64 {
+    let (dx, dy) = ((b.x - a.x) as i128, (b.y - a.y) as i128);
+    let l2 = dx * dx + dy * dy;
+    if l2 == 0 {
+        return a;
+    }
+    let t = dx * (p.x - a.x) as i128 + dy * (p.y - a.y) as i128;
+    if t < 0 {
+        return a;
+    }
+    if t > l2 {
+        return b;
+    }
+    Point64::new(a.x + rescale(t, dx, l2) as i64, a.y + rescale(t, dy, l2) as i64)
+}
+
+/// `SEG( a, b ).SquaredDistance( p )` (`seg.cpp`, 25ec2335): an end's when `p` projects outside, else the Lagrange identity `cross² / |ab|²`, `KiROUND`ed.
+fn seg_squared_distance(a: Point64, b: Point64, p: Point64) -> i128 {
+    let (abx, aby) = ((b.x - a.x) as i128, (b.y - a.y) as i128);
+    let (apx, apy) = ((p.x - a.x) as i128, (p.y - a.y) as i128);
+    let e = apx * abx + apy * aby;
+    if e <= 0 {
+        return apx * apx + apy * apy;
+    }
+    let f = abx * abx + aby * aby;
+    if e >= f {
+        let (bpx, bpy) = ((p.x - b.x) as i128, (p.y - b.y) as i128);
+        return bpx * bpx + bpy * bpy;
+    }
+    let cross = (abx * apy - aby * apx) as f64;
+    let g = cross * cross / f as f64;
+    if !(g >= 0.0) {
+        return 0;
+    }
+    g.round() as i128
+}
+
+/// `TestSegmentHit( aRefPoint, aStart, aEnd, aDist )` (`trigo.cpp`): outside the box grown by `dist`, no; along a vertical or horizontal segment, the offset
+/// across it; else `SquaredDistance < ( dist + 1 )²`.
+fn test_segment_hit(p: Point64, start: Point64, end: Point64, dist: i64) -> bool {
+    let (xmin, xmax) = (start.x.min(end.x), start.x.max(end.x));
+    let (ymin, ymax) = (start.y.min(end.y), start.y.max(end.y));
+    if ymin - p.y > dist || p.y - ymax > dist || xmin - p.x > dist || p.x - xmax > dist {
+        return false;
+    }
+    if start.x == end.x && p.y > ymin && p.y < ymax {
+        return (start.x - p.x).abs() <= dist;
+    }
+    if start.y == end.y && p.x > xmin && p.x < xmax {
+        return (start.y - p.y).abs() <= dist;
+    }
+    seg_squared_distance(start, end, p) < (dist as i128 + 1) * (dist as i128 + 1)
+}
+
+/// One `PCB_TRACK` as `UpdateTeardrops` walks `m_board->Tracks()`: a straight segment (`PCB_TRACE_T`), or a track arc (`PCB_ARC_T`) when `arc` is set.
+struct TrackItem {
+    start: Point64,
+    end: Point64,
+    arc: Option<TrackArc>,
+    width: i64,
+}
+
+impl TrackItem {
+    /// The KiCad items of a track: an arc is one (`Track::arc`, round 5's A5-1), a polyline one segment per pair of points, as the writer writes it
+    /// (`crates/kicad/src/pcb.rs`: a `(segment ..)` per pair). A straight "arc" is the segment between its ends.
+    fn of(t: &eda_model::ir::Track) -> Vec<TrackItem> {
+        let width = t.width.get();
+        if let Some((s, m, e)) = t.arc() {
+            return vec![TrackItem { start: p64(s), end: p64(e), arc: TrackArc::new(s, m, e, t.width), width }];
+        }
+        t.pts.windows(2).map(|w| TrackItem { start: p64(w[0]), end: p64(w[1]), arc: None, width }).collect()
+    }
+
+    /// `PCB_TRACK::HitTest( aPosition )` (`TestSegmentHit` within half the width) and `PCB_ARC::HitTest( aPosition )` (an end within half the width, else the
+    /// distance to the circle within it and the point's angle inside the arc's), with no accuracy.
+    fn hit_test(&self, p: Point64) -> bool {
+        let Some(arc) = &self.arc else { return test_segment_hit(p, self.start, self.end, self.width / 2) };
+        let max_dist = self.width as f64 / 2.0;
+        let dist = |a: Point64| ((p.x - a.x) as f64).hypot((p.y - a.y) as f64);
+        if dist(self.start) <= max_dist || dist(self.end) <= max_dist {
+            return true;
+        }
+        let c = Point64::new(arc.center.0 as i64, arc.center.1 as i64);
+        let rel = (p.x - c.x, p.y - c.y);
+        if (euclidean_norm(rel.0, rel.1) as f64 - arc.radius).abs() > max_dist {
+            return false;
+        }
+        // `GetAngle()` (signed), `GetArcAngleStart()` (0 .. 360) and `EDA_ANGLE( relpos )`, degrees.
+        let (sa, ca) = (deg_normalize(deg_angle((arc.start.x - c.x) as f64, (arc.start.y - c.y) as f64)), arc.central_angle().to_degrees());
+        let hit = deg_normalize(deg_angle(rel.0 as f64, rel.1 as f64) - sa);
+        if ca < 0.0 {
+            hit >= 360.0 + ca
+        } else {
+            hit <= ca
+        }
+    }
+
+    /// `buildCrossingStub`'s end: the point of the track's centreline nearest `p` (`SEG::NearestPoint`, `SHAPE_ARC::NearestPoint`).
+    fn nearest_point(&self, p: Point64) -> Point64 {
+        match &self.arc {
+            Some(arc) => arc.nearest_point(p),
+            None => seg_nearest_point(self.start, self.end, p),
+        }
+    }
+}
+
+/// `TEARDROP_MANAGER::computeTeardropPolygon` with straight edges and one track (`pcbnew/teardrop/teardrop_utils.cpp`, 25ec2335): the pentagon `[A, B, C, D, E]`
+/// of the teardrop of `item` (a segment, an arc, or a crossing's stub) at `anchor`. A and B are on the track, C and E on the anchor's outline, D just behind
+/// the anchor's centre.
 ///
-/// - `findAnchorPointsOnTrack`: the track's end inside the anchor is `start`; the teardrop's length is measured from where the track crosses the anchor's
-///   outline (`aIntersection = pts[0].p; start = aIntersection;`), `KiROUND( width * m_BestLengthRatio )` capped by `m_TdMaxLen`, and by the chord past the
-///   outline (`actualTdLen = std::min( targetLength, SEG( start, end ).Length() )`).
+/// - `findAnchorPointsOnTrack`: the track's end inside the anchor is made its start (`if( !aOther->HitTest( start, 0 ) ) std::swap( start, end )`); the teardrop's
+///   length is measured from where the track crosses the anchor's outline (`aIntersection = pts[0].p; start = aIntersection;`), `KiROUND( width *
+///   m_BestLengthRatio )` capped by `m_TdMaxLen`, and by the chord past the outline (`actualTdLen = std::min( targetLength, SEG( start, end ).Length() )`).
 /// - An arc (`PCB_ARC_T`, round 5's A5-1): the crossing is the outline's with the arc's polyline (`arc.ConvertToPolyline( maxError )`), and the reference
 ///   segment is the polyline's last one whose start is nearer the crossing than `actualTdLen`, walked from the far end ("find the best teardrop end point on
 ///   the arc"), with `actualTdLen` less that start's distance from the crossing.
-/// - The graze filter is 25ec2335's `computeChordThroughShape` ([`chord_through_round_anchor`]), which leaves arcs out.
-/// - A and B: `start + vecT * len ± perp * width / 2`, the doubles truncated into a `VECTOR2I`.
-/// - D: `intersection - vecVia * ( effectiveDist + 1 um )`, `effectiveDist` the larger of the centre's projection on the axis and the radius, clamped to the far
-///   side of the circle less 2 um. (`vecVia` is `vecT`: one track, and an arc keeps its own track.)
-/// - C and E: [`compute_anchor_points`].
+/// - A and B: `start + vecT * len ± perp * width / 2`, the doubles truncated into a `VECTOR2I`. For a pad that is not round, either inside the pad refuses the
+///   teardrop ("To build a polygonal valid shape pointA and point B must be outside the pad").
+/// - D: `intersection - vecVia * ( effectiveDist + 1 um )`, `effectiveDist` the larger of the centre's projection on the axis and the radius, clamped for a
+///   round anchor to the far side of its circle less 2 um, and for any other pad to where a ray cast into it from the crossing first leaves its copper, less
+///   2 um ("so pointD stays inside the copper the track enters"). (`vecVia` is `vecT`: one track, and an arc keeps its own track.)
+/// - C and E: [`compute_anchor_points`]; for a round anchor entered off its centre, made symmetric about the track's axis.
 ///
-/// `width` is `TEARDROP_MANAGER::GetWidth`: a via's diameter, a pad's smaller size. `near` is the track's end at the anchor, `far` its other end. Returns `None`
-/// for the skips of `UpdateTeardrops` and `findAnchorPointsOnTrack` (a skip, not an error). Not ported: `m_AllowUseTwoTracks` (the teardrop is cut at the
-/// track's end) and curved edges. The off-centre adjustment of C and E is ported: a straight track ends on the anchor's centre here (see the module doc), but
-/// an arc's reference segment passes beside it.
-fn teardrop_polygon(center: Point, width: Nm, near: Point, far: Point, arc: Option<(Point, Point, Point)>, track_width: Nm, settings: &TeardropSettings) -> Option<Vec<Point>> {
-    let (w, tw) = (width.get(), track_width.get());
+/// Returns `None` for the skips of `findAnchorPointsOnTrack` and `computeTeardropPolygon` (a skip, not an error). Not ported: `m_AllowUseTwoTracks` (the
+/// teardrop is cut at the track's end), curved edges, and a custom pad's `effectiveDist`.
+fn compute_teardrop_polygon(anchor: &Anchor, item: &TrackItem, settings: &TeardropSettings) -> Option<Vec<Point64>> {
+    let (w, tw) = (anchor.width, item.width);
     let radius = w / 2;
-    if radius <= 0 || tw <= 0 || near != center {
+    if radius <= 0 || tw <= 0 {
         return None;
     }
-    // `UpdateTeardrops` (25ec2335): "Ensure a teardrop shape can be built: track width must be < teardrop width and filter width. A max width of 0 means no
-    // limit, not "nothing fits"." (8303b2ad had no `m_TdMaxWidth > 0` guard; round 6 D6-1.)
-    let max_width = settings.max_width_nm.get();
-    if (max_width > 0 && tw >= max_width) || tw as f64 >= w as f64 * settings.best_width_ratio || tw as f64 >= w as f64 * settings.width_to_size_filter_ratio {
-        return None;
-    }
-    let c = p64(center);
-    let (start, end) = (p64(near), p64(far));
-    // `PCB_VIA::HitTest( pos )`: the far end inside the anchor too, "The track is entirely inside the via".
-    let inside = |p: Point64| ((p.x - c.x) as f64).powi(2) + ((p.y - c.y) as f64).powi(2) <= (radius as f64) * (radius as f64);
-    if inside(end) {
-        return None;
-    }
-
-    let outline = eda_shape_poly_set::basic_shapes::circle_polygon(c, radius, MAX_ERROR, ErrorLoc::Inside, 16);
-    // The track's own polyline when it is an arc (`SHAPE_ARC( GetStart(), GetMid(), GetEnd(), GetWidth() ).ConvertToPolyline( maxError )`).
-    let track_arc = arc.and_then(|(s, m, e)| TrackArc::new(s, m, e, track_width));
-    let arc_poly = track_arc.as_ref().map(|a| a.polyline(MAX_ERROR));
-    let hits = match &arc_poly {
-        Some(poly) => chain_chain_intersect(&outline, poly).first().copied().into_iter().collect::<Vec<_>>(),
-        None => chain_intersect(&outline, start, end),
-    };
-    // `UpdateTeardrops` (25ec2335): "Reject tangential grazes, but keep short radial entries." -- `computeChordThroughShape( track, via, layer, inside end )
-    // < track->GetWidth()`, which answers "no limit" for an arc ("Arcs are genuine entries"). It replaced 8303b2ad's `computeEmergingTrackLength`, which
-    // refused a track emerging from the anchor by less than its width, arcs included (round 6 D6-1: this port follows 25ec2335, the kicad-cli it is proven
-    // against, for every teardrop rule).
-    if arc.is_none() && chord_through_round_anchor(c, radius, start, end, start) < tw {
-        return None;
-    }
-    let intersection = *hits.first()?;
+    let c = anchor.center;
+    let outline = &anchor.outline;
 
     // `findAnchorPointsOnTrack`.
     let mut target_length = (w as f64 * settings.best_length_ratio).round() as i64;
     if settings.max_len_nm.get() > 0 {
         target_length = target_length.min(settings.max_len_nm.get());
     }
-    let mut start = intersection;
-    let mut end = end;
+    let (mut start, mut end) = (item.start, item.end);
+    // "aTrack is expected to have one end inside the via/pad and the other end outside so ensure the start point is inside the via/pad".
+    let need_swap = !anchor.hit_test(start);
+    if need_swap {
+        std::mem::swap(&mut start, &mut end);
+    }
+    // The track's own polyline when it is an arc (`SHAPE_ARC( GetStart(), GetMid(), GetEnd(), GetWidth() ).ConvertToPolyline( maxError )`).
+    let hits = match &item.arc {
+        Some(arc) => chain_chain_intersect(outline, &arc.polyline(MAX_ERROR)).first().copied().into_iter().collect::<Vec<_>>(),
+        None => chain_intersect(outline, start, end),
+    };
+    // "Ensure a intersection point was found, otherwise we cannot built the teardrop using this track (it is fully outside or inside the pad/via shape)".
+    let intersection = *hits.first()?;
+    start = intersection;
     let mut stub_len = target_length.min(euclidean_norm(end.x - start.x, end.y - start.y));
-    if let Some(track_arc) = &track_arc {
+    if let Some(track_arc) = &item.arc {
         // "if aTrack is an arc, find the best teardrop end point on the arc": the arc from the anchor's end outwards (`arc.Reverse()` when the anchor is at
         // the arc's end). 25ec2335 (the kicad-cli this port is proven against) then moves the polyline's points onto the arc ("The conversion places its
         // corner points slightly outside the arc. Move them onto the arc so they can be used as points on the track centerline.").
-        let oriented = if p64(near) == track_arc.start { *track_arc } else { track_arc.reversed() };
+        let oriented = if need_swap { track_arc.reversed() } else { *track_arc };
         let poly: Vec<Point64> = oriented.polyline(MAX_ERROR).into_iter().map(|p| oriented.nearest_point(p)).collect();
         let ref_length_point = start;
         if poly.len() > 2 {
@@ -764,6 +982,7 @@ fn teardrop_polygon(center: Point, width: Nm, near: Point, far: Point, arc: Opti
             }
         }
     }
+    // "The start and end points must be different to calculate a valid polygon shape".
     if start == end {
         return None;
     }
@@ -774,39 +993,70 @@ fn teardrop_polygon(center: Point, width: Nm, near: Point, far: Point, arc: Opti
     let (tx, ty) = (vx / norm, vy / norm);
     // 25ec2335: "The canvas draws an arc track as short straight lines that can sit up to the max deviation inside the true edge. Keep the corners inside the
     // track by that amount so they cannot show past the drawn edge." (`std::max( GetWidth() / 4, GetWidth() / 2 - maxError )` for an arc.)
-    let track_halfwidth = if arc.is_some() { (tw / 4).max(tw / 2 - MAX_ERROR) } else { tw / 2 };
+    let track_halfwidth = if item.arc.is_some() { (tw / 4).max(tw / 2 - MAX_ERROR) } else { tw / 2 };
     let hw = track_halfwidth as f64;
     let len = stub_len as f64;
     let point_b = Point64::new(start.x + (tx * len + ty * hw) as i64, start.y + (ty * len - tx * hw) as i64);
     let point_a = Point64::new(start.x + (tx * len - ty * hw) as i64, start.y + (ty * len + tx * hw) as i64);
+    // "To build a polygonal valid shape pointA and point B must be outside the pad. It can be inside with some pad shapes having very different X and X sizes".
+    if !anchor.is_round() && (anchor.hit_test(point_a) || anchor.hit_test(point_b)) {
+        return None;
+    }
 
     let r = radius as f64;
     let (icx, icy) = ((c.x - intersection.x) as f64, (c.y - intersection.y) as f64);
     let proj_on_track = -(icx * tx + icy * ty);
     let mut effective_dist = proj_on_track.max(r);
     let offset = 1_000.0; // pcbIUScale.mmToIU( 0.001 )
-    let disc = proj_on_track * proj_on_track - (icx * icx + icy * icy - r * r);
-    if disc >= 0.0 {
-        let far_edge = proj_on_track + disc.sqrt();
-        let max_allowed = (far_edge - 2.0 * offset).max(0.0);
-        if effective_dist > max_allowed {
-            effective_dist = max_allowed;
+    match &anchor.kind {
+        AnchorKind::Pad { round: false, poly, bounding_radius } => {
+            // "For non-round pads, clamp effectiveDist so pointD stays inside the copper the track enters rather than spiking out the far side on an oblique entry
+            // that only grazes a corner": a ray from the crossing into the pad, as long as the pad's circumscribed radius allows, and the first crossing past
+            // which a probe is outside the copper.
+            let reach = effective_dist + 2.0 * *bounding_radius as f64 + offset;
+            let ray_end = Point64::new(intersection.x + (-tx * reach).round() as i64, intersection.y + (-ty * reach).round() as i64);
+            let mut crossings: Vec<f64> = chain_intersect(poly, intersection, ray_end)
+                .into_iter()
+                .map(|h| euclidean_norm(h.x - intersection.x, h.y - intersection.y) as f64)
+                .filter(|&d| d > offset)
+                .collect();
+            crossings.sort_by(|a, b| a.total_cmp(b));
+            let mut exit_edge = 0.0;
+            for d in crossings {
+                let probe = Point64::new(intersection.x + (-tx * (d + offset)).round() as i64, intersection.y + (-ty * (d + offset)).round() as i64);
+                if !point_inside(poly, probe) {
+                    exit_edge = d;
+                    break;
+                }
+            }
+            // "exitEdge == 0 means -vecVia does not penetrate the pad (a tangential graze); collapse pointD onto the entry".
+            effective_dist = effective_dist.min((exit_edge - 2.0 * offset).max(0.0));
+        }
+        _ => {
+            // "For round pads/vias, clamp effectiveDist so pointD stays inside the pad circle."
+            let disc = proj_on_track * proj_on_track - (icx * icx + icy * icy - r * r);
+            if disc >= 0.0 {
+                let far_edge = proj_on_track + disc.sqrt();
+                let max_allowed = (far_edge - 2.0 * offset).max(0.0);
+                if effective_dist > max_allowed {
+                    effective_dist = max_allowed;
+                }
+            }
         }
     }
     let point_d = Point64::new(intersection.x + (-tx * (effective_dist + offset)).round() as i64, intersection.y + (-ty * (effective_dist + offset)).round() as i64);
 
     let mut pts = [point_a, point_b, Point64::new(0, 0), point_d, Point64::new(0, 0)];
-    if !compute_anchor_points(settings, c, w, &mut pts) {
+    if !compute_anchor_points(settings, anchor, &mut pts) {
         return None;
     }
 
     // "For off-center track connections, the convex hull produces asymmetric anchor points (C and E at different distances from the track axis). Recompute
-    // them to be symmetric so the teardrop flares out evenly from the track on both sides." An arc's reference segment is such an axis (round 5's A5-1); a
-    // straight track through the centre never is.
+    // them to be symmetric so the teardrop flares out evenly from the track on both sides." (`if( IsRound( aOther, layer ) )`.)
     let (pvx, pvy) = (-ty, tx);
     let (pox, poy) = ((c.x - intersection.x) as f64, (c.y - intersection.y) as f64);
     let perp_dist_to_center = pox * pvx + poy * pvy;
-    if perp_dist_to_center.abs() > radius as f64 * 0.1 {
+    if anchor.is_round() && perp_dist_to_center.abs() > radius as f64 * 0.1 {
         let d = perp_dist_to_center.abs();
         if d < radius as f64 {
             let max_symmetric = radius as f64 - d;
@@ -817,7 +1067,6 @@ fn teardrop_polygon(center: Point, width: Nm, near: Point, far: Point, arc: Opti
             }
             let sym_half_width = max_symmetric.min(max_half_width as f64);
             if sym_half_width > track_halfwidth as f64 {
-                let r = radius as f64;
                 let int_pt = (intersection.x as f64, intersection.y as f64);
                 // `findCircleLineIntersection`: the circle's crossing with the axis' parallel at `perp_dist`, the one nearer the track's entry.
                 let find = |perp_dist: f64| -> Point64 {
@@ -842,7 +1091,38 @@ fn teardrop_polygon(center: Point, width: Nm, near: Point, far: Point, arc: Opti
             }
         }
     }
-    Some(pts.iter().map(|&p| pt(p)).collect())
+    Some(pts.to_vec())
+}
+
+/// `TEARDROP_MANAGER::UpdateTeardrops`' work for one track item and one anchor it is connected to (25ec2335, the pad and the via loops alike): the width
+/// filters ("track width must be < teardrop width and filter width. A max width of 0 means no limit"), the ends hit-tested ("The track is entirely inside the
+/// pad"), `computeChordThroughShape`'s graze filter for a track with one end inside ("Reject tangential grazes, but keep short radial entries"), then the
+/// teardrop -- or, for a track crossing the anchor's centre with neither end inside, one teardrop per side, each on a stub from one of the track's ends to
+/// the point of the track nearest the centre (`buildCrossingStub`; round 7 R7-1).
+fn teardrops_for(anchor: &Anchor, item: &TrackItem, settings: &TeardropSettings) -> Vec<Vec<Point64>> {
+    let (w, tw) = (anchor.width as f64, item.width);
+    let max_width = settings.max_width_nm.get();
+    if (max_width > 0 && tw >= max_width) || tw as f64 >= w * settings.best_width_ratio || tw as f64 >= w * settings.width_to_size_filter_ratio {
+        return Vec::new();
+    }
+    let (start_hits, end_hits) = (anchor.hit_test(item.start), anchor.hit_test(item.end));
+    if start_hits && end_hits {
+        return Vec::new();
+    }
+    // Arcs are exempt ("Arcs are genuine entries, not the short straight grazes this filter targets").
+    if start_hits != end_hits && item.arc.is_none() && chord_through_shape(&anchor.outline, item.start, item.end, if start_hits { item.start } else { item.end }) < tw {
+        return Vec::new();
+    }
+    if !start_hits && !end_hits && item.hit_test(anchor.center) {
+        // "A track crossing the pad earns one teardrop per side, not one over the whole track." The stub is a straight `PCB_TRACK` of the track's width, aimed
+        // along its centreline at the crossed centre.
+        let crossed = item.nearest_point(anchor.center);
+        return [item.end, item.start]
+            .into_iter()
+            .filter_map(|from| compute_teardrop_polygon(anchor, &TrackItem { start: from, end: crossed, arc: None, width: tw }, settings))
+            .collect();
+    }
+    compute_teardrop_polygon(anchor, item, settings).into_iter().collect()
 }
 
 /// Every teardrop this board's current tracks/vias/pads call for, given
@@ -869,19 +1149,10 @@ pub fn generate_teardrops(design: &Design, model: &ConstraintModel, settings: &T
             if !reach_includes(&anchor.reach, &t.layer, &model.board.layers) {
                 continue;
             }
-            // An arc track is one item (`PCB_ARC`): its other end is the arc's, not the next point of its tessellation (round 5's A5-1).
-            let arc = t.arc();
-            let (first, last) = (*t.pts.first().unwrap(), *t.pts.last().unwrap());
-            let (near, far) = if first == anchor.center {
-                (first, if arc.is_some() { last } else { t.pts[1] })
-            } else if last == anchor.center {
-                (last, if arc.is_some() { first } else { t.pts[t.pts.len() - 2] })
-            } else {
-                continue;
-            };
-
-            if let Some(outline) = teardrop_polygon(anchor.center, anchor.width, near, far, arc, t.width, settings) {
-                out.push(Zone { id: String::new(), net: anchor.net.clone(), layer: t.layer.clone(), outline, teardrop: true, ..Default::default() });
+            for item in TrackItem::of(t) {
+                for outline in teardrops_for(anchor, &item, settings) {
+                    out.push(Zone { id: String::new(), net: anchor.net.clone(), layer: t.layer.clone(), outline: outline.into_iter().map(pt).collect(), teardrop: true, ..Default::default() });
+                }
             }
         }
     }
@@ -964,14 +1235,17 @@ mod tests {
     /// `computeChordThroughShape`: the copper span of the extended centreline that holds the inside end; arcs and a line missing the shape answer "no limit".
     #[test]
     fn the_chord_through_a_round_anchor_is_measured_on_the_extended_centreline() {
-        let c = Point64::new(0, 0);
+        let circle = circle_polygon(Point64::new(0, 0), 300_000, MAX_ERROR, ErrorLoc::Inside, 16);
         // Through the centre: the inscribed polygon's width along x, within maxError of the diameter (ERROR_INSIDE).
-        let d = chord_through_round_anchor(c, 300_000, Point64::new(0, 0), Point64::new(350_000, 0), Point64::new(0, 0));
+        let d = chord_through_shape(&circle, Point64::new(0, 0), Point64::new(350_000, 0), Point64::new(0, 0));
         assert!((600_000 - 2 * MAX_ERROR..=600_000).contains(&d), "{d}");
         // A graze: a short track whose inside end is near the rim, off the centre line.
-        let g = chord_through_round_anchor(c, 300_000, Point64::new(-50_000, 290_000), Point64::new(50_000, 290_000), Point64::new(0, 290_000));
+        let g = chord_through_shape(&circle, Point64::new(-50_000, 290_000), Point64::new(50_000, 290_000), Point64::new(0, 290_000));
         assert!(g < 200_000, "{g}");
-        assert_eq!(chord_through_round_anchor(c, 300_000, Point64::new(5, 5), Point64::new(5, 5), Point64::new(5, 5)), i64::MAX, "a zero-length track");
+        assert_eq!(chord_through_shape(&circle, Point64::new(5, 5), Point64::new(5, 5), Point64::new(5, 5)), i64::MAX, "a zero-length track");
+        // A rectangle's polygon: the span across it along the track (a 1.5 x 1 mm pad entered along its length).
+        let rect = round_chamfered_rect_polygon((1_500_000, 1_000_000), 0, 0.0, 0, MAX_ERROR);
+        assert_eq!(chord_through_shape(&rect, Point64::new(0, 0), Point64::new(5_000_000, 0), Point64::new(0, 0)), 1_500_000);
     }
 
     #[test]
@@ -1019,13 +1293,126 @@ mod tests {
         assert_eq!(out[0].layer, "B.Cu", "a PTH pad's teardrop must follow the track's own layer, not assume F.Cu");
     }
 
+    /// The board point (x, y) in mm.
+    fn at(x: f64, y: f64) -> Point {
+        Point { x: mm(x), y: mm(y) }
+    }
+
+    /// A kicad-cli outline, nanometres.
+    fn outline(pts: &[(i64, i64)]) -> Vec<Point> {
+        pts.iter().map(|&(x, y)| Point { x: Nm::new(x), y: Nm::new(y) }).collect()
+    }
+
+    /// `two_pad_model` with R1 an SMD pad of `shape` and `size` (mm) at (100, 145) mm, for the rectangle cases kicad-cli was run on.
+    fn smd_pad_model(shape: PadShape, size: (f64, f64), roundrect_ratio: Option<f64>) -> (Design, ConstraintModel) {
+        let (mut design, mut model) = two_pad_model();
+        model.footprints.push(Footprint {
+            name: "SMDPAD".into(),
+            pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(size.0), mm(size.1)), shape, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio }],
+            courtyard: None,
+            model: None,
+            courtyard_outlines: vec![],
+            models3d: vec![],
+            art: Default::default(),
+        });
+        model.parts[0].footprint = Some("SMDPAD".into());
+        model.parts[0].package = Some("SMDPAD".into());
+        design.placement.as_mut().unwrap().footprints[0].at = at(100.0, 145.0);
+        (design, model)
+    }
+
+    fn track(pts: Vec<Point>, width: f64) -> Track {
+        Track { id: String::new(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(width), pts, arc_mid_offset: None }
+    }
+
+    fn via(x: f64, y: f64, d: f64) -> Via {
+        Via { id: String::new(), net: "N1".into(), at: at(x, y), drill: mm(0.3), diameter: mm(d), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+    }
+
+    /// UI-LEFT P1: `m_UseRoundShapesOnly` is off by default, so a rectangular SMD pad gets its teardrop, clipped to the pad's smaller side
+    /// (`computeAnchorPoints`' `force_clip`). The outline is kicad-cli's own (`crates/kicad/tests/teardrops_kicad_cli.rs`, the first pad case).
     #[test]
-    fn a_non_round_smd_pad_never_gets_a_teardrop() {
-        // two_pad_model's own 0603 package -- rectangular pads, round
-        // anchors only (see module doc).
+    fn a_rectangular_smd_pad_gets_kicad_clis_teardrop() {
+        let (mut design, model) = smd_pad_model(PadShape::Rect, (1.5, 1.0), None);
+        design.routing.as_mut().unwrap().tracks.push(track(vec![at(100.0, 145.0), at(105.0, 145.0)], 0.25));
+        let out = generate_teardrops(&design, &model, &enabled_settings());
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].outline, outline(&[(101250000, 145125000), (101250000, 144875000), (100750000, 144500000), (99999000, 145000000), (100750000, 145500000)]));
+        // "SMD pads" off: none.
+        let off = TeardropSettings { enabled: true, target_smd_pads: false, ..Default::default() };
+        assert!(generate_teardrops(&design, &model, &off).is_empty());
+    }
+
+    /// A track crossing a rounded rectangle's centre gets one teardrop on each side (`buildCrossingStub`), as kicad-cli makes them.
+    #[test]
+    fn a_track_crossing_a_rounded_rectangle_gets_a_teardrop_on_each_side() {
+        let (mut design, model) = smd_pad_model(PadShape::RoundRect, (1.5, 1.0), Some(0.25));
+        design.routing.as_mut().unwrap().tracks.push(track(vec![at(97.0, 145.0), at(103.0, 145.0)], 0.2));
+        let mut out: Vec<_> = generate_teardrops(&design, &model, &enabled_settings()).into_iter().map(|z| z.outline).collect();
+        out.sort_by_key(|o| o[0].x);
+        assert_eq!(
+            out,
+            vec![
+                outline(&[(98750000, 144900000), (98750000, 145100000), (99404329, 145480970), (100001000, 145000000), (99404329, 144519030)]),
+                outline(&[(101250000, 145100000), (101250000, 144900000), (100595671, 144519030), (99999000, 145000000), (100595671, 145480970)]),
+            ]
+        );
+    }
+
+    /// Round 7 R7-1: `UpdateTeardrops` hit-tests the track's ends against the via (`via->HitTest( track->GetStart() )`), so a track starting 0.1 mm off a
+    /// 0.8 mm via's centre gets the teardrop kicad-cli gives it (the finding's case; C and E made symmetric about the track's axis).
+    #[test]
+    fn a_track_ending_off_centre_inside_the_via_gets_its_teardrop() {
         let (mut design, model) = two_pad_model();
-        let a = pad_center(&design, &model, "R1", "1");
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.15), pts: vec![a, Point { x: a.x + mm(5.0), y: a.y }], arc_mid_offset: None });
+        let rt = design.routing.as_mut().unwrap();
+        rt.vias.push(via(100.0, 100.0, 0.8));
+        rt.tracks.push(track(vec![at(100.1, 100.0), at(105.0, 100.0)], 0.2));
+        let out = generate_teardrops(&design, &model, &enabled_settings());
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].outline, outline(&[(100796578, 100100000), (100796578, 99900000), (100153073, 99630448), (99995578, 100000000), (100153073, 100369552)]));
+    }
+
+    /// Round 7 R7-1: a track running through a via ("a track that merely crosses the via earns a teardrop on each side") gets two, kicad-cli's.
+    #[test]
+    fn a_track_crossing_the_via_gets_one_teardrop_on_each_side() {
+        let (mut design, model) = two_pad_model();
+        let rt = design.routing.as_mut().unwrap();
+        rt.vias.push(via(120.0, 100.0, 0.8));
+        rt.tracks.push(track(vec![at(115.0, 100.0), at(125.0, 100.0)], 0.2));
+        let mut out: Vec<_> = generate_teardrops(&design, &model, &enabled_settings()).into_iter().map(|z| z.outline).collect();
+        out.sort_by_key(|o| o[0].x);
+        assert_eq!(
+            out,
+            vec![
+                outline(&[(119203422, 99900000), (119203422, 100100000), (119846927, 100369552), (120004422, 100000000), (119846927, 99630448)]),
+                outline(&[(120796578, 100100000), (120796578, 99900000), (120153073, 99630448), (119995578, 100000000), (120153073, 100369552)]),
+            ]
+        );
+    }
+
+    /// A polyline is a `(segment ..)` per pair of points: one bending on a via is two segments that each end on it, and each gets its teardrop (kicad-cli's).
+    #[test]
+    fn a_polyline_bending_on_a_via_gets_a_teardrop_for_each_segment() {
+        let (mut design, model) = two_pad_model();
+        let rt = design.routing.as_mut().unwrap();
+        rt.vias.push(via(150.0, 100.0, 0.8));
+        rt.tracks.push(track(vec![at(150.0, 95.0), at(150.0, 100.0), at(155.0, 100.0)], 0.2));
+        let mut out: Vec<_> = generate_teardrops(&design, &model, &enabled_settings()).into_iter().map(|z| z.outline).collect();
+        out.sort_by_key(|o| o[0].x);
+        assert_eq!(
+            out,
+            vec![
+                outline(&[(150100000, 99203422), (149900000, 99203422), (149630448, 99846927), (150000000, 100004422), (150369552, 99846927)]),
+                outline(&[(150796578, 100100000), (150796578, 99900000), (150153073, 99630448), (149995578, 100000000), (150153073, 100369552)]),
+            ]
+        );
+    }
+
+    /// A custom pad is skipped (`MergePrimitivesAsPolygon` is not ported).
+    #[test]
+    fn a_custom_pad_gets_no_teardrop() {
+        let (mut design, model) = smd_pad_model(PadShape::Custom, (1.0, 1.0), None);
+        design.routing.as_mut().unwrap().tracks.push(track(vec![at(100.0, 145.0), at(105.0, 145.0)], 0.2));
         assert!(generate_teardrops(&design, &model, &enabled_settings()).is_empty());
     }
 
