@@ -9,7 +9,7 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { BoardTextBox, CmdTextBox, TextBoxHAlign, TextBoxVAlign } from "../api/pcbItemTypes";
 import type { BoardState, PointXY, Nm } from "../api/types";
-import { isBackLayer, lineThicknessNm, textStyleOf } from "./layerDefaults";
+import { inferBold, isBackLayer, lineThicknessNm, textStyleOf } from "./layerDefaults";
 
 export type P = [number, number];
 /** How wide a line of text is, micrometres. */
@@ -376,7 +376,10 @@ export function boardTextBoxOf(c: CmdTextBox): BoardTextBox {
 
 /**
  * The text box the Draw Text Box tool makes between two corners on `layer` (`DRAWING_TOOL::DrawRectangle` with `m_textAttrs` from `BOARD_DESIGN_SETTINGS`): the layer's text size and pen,
- * italic when the class says so, mirrored on a back layer, left and top, a border of the layer's line width, the default margins.
+ * italic when the class says so, mirrored on a back layer, left and top, a border of the layer's line width, the default margins. Bold as `InferBold` makes it of the
+ * class's size and pen (round 7 R7-3): `DRAWING_TOOL::Reset` and `drawShape` set `m_textAttrs` and run `InferBold( &m_textAttrs )` whenever the layer changes
+ * (drawing_tool.cpp:321-323, 2376-2378, 2510-2512 at 8303b2ad), and the box is given them (`pcb_textbox->SetAttributes( m_textAttrs )`, :2532, :2574), so a copper
+ * text box at KiCad's defaults (1.5 mm, 0.3 mm) is bold and a silkscreen one (1.0 mm, 0.1 mm) is not.
  */
 export function newTextBox(board: Pick<BoardState, "board_rules">, layer: string, start: P, end: P): BoardTextBox {
   const defaults = board.board_rules?.text_graphics;
@@ -399,6 +402,7 @@ export function newTextBox(board: Pick<BoardState, "board_rules">, layer: string
     halign: "left",
     valign: "top",
     mirror: isBackLayer(layer),
+    bold: inferBold(style.thicknessNm, style.widthNm, style.heightNm),
     italic: style.italic,
   });
 }
