@@ -174,17 +174,13 @@ fn serve_file(stream: &mut TcpStream, root: &Path, rel: &str) -> Result<(), Stri
     }
 }
 
-/// Where the real `kicad-cli` binary lives -- `EDA_KICAD_CLI` if set
-/// (it is not on PATH in this dev environment), else KiCad's own
-/// default macOS install location. Same "env var, then a sane default"
-/// shape as `ui_dir`.
+/// Where the real `kicad-cli` binary lives: the one every other export
+/// runs ([`eda_kicad_engine::find_cli`]: `EDA_KICAD_CLI`, then PATH, then
+/// KiCad's macOS install), else that macOS location, so the error names
+/// where it was looked for. The macOS location alone left the 3D view
+/// without kicad-cli on Linux.
 fn kicad_cli_path() -> PathBuf {
-    if let Ok(p) = std::env::var("EDA_KICAD_CLI") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
-    }
-    PathBuf::from("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli")
+    eda_kicad_engine::find_cli().unwrap_or_else(|| PathBuf::from("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"))
 }
 
 /// What the background GLB-export thread (spawned by [`serve_board_glb`])
@@ -313,8 +309,7 @@ fn serve_board_glb(stream: &mut TcpStream, dir: &Path, job: &Job, glb: &GlbJob, 
 /// for one syscall -- consistent with this whole module's existing
 /// approach to anything std doesn't cover (it already shells out to
 /// kicad-cli itself). Unix-only (`process_group`/negative-pid-as-group
-/// is POSIX), matching this file's existing macOS-only assumptions
-/// elsewhere (e.g. kicad_cli_path's default).
+/// is POSIX).
 fn kill_process_group(child: &std::process::Child) {
     let _ = std::process::Command::new("kill").arg("-9").arg("--").arg(format!("-{}", child.id())).status();
 }
