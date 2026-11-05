@@ -187,11 +187,18 @@
       if (!(await open(t, "pcbnew.EditorControl.generateGerbers", "Plot"))) return;
       const formats = [...(testid("plot-format")?.options ?? [])].map((o) => o.textContent.trim());
       t(JSON.stringify(formats) === JSON.stringify(["Gerber", "Postscript", "SVG", "DXF", "PDF", "PNG"]), `the formats, in KiCad's order (${formats.join(", ")})`);
-      t(testid("plot-gerber-options") && box("Generate Gerber job file")?.disabled === true && box("Generate Gerber job file")?.checked === true, "Gerber: its box, the job file always written (disabled, kicad-cli has no flag)");
+      t(testid("plot-gerber-options") && box("Generate Gerber job file")?.disabled === false && box("Generate Gerber job file")?.checked === true, "Gerber: its box, the job file ticked (KiCad's default)");
       t(testid("plot-drill-marks")?.disabled === true && testid("plot-drill-marks")?.value === "0", "Gerber: no drill marks (SetPlotFormat)");
       // Three layers, into a folder of the board's.
       for (const l of [...dialog().querySelectorAll("[data-testid=plot-include-layers] [data-layer] input")]) if (l.checked !== ["F.Cu", "B.Cu", "Edge.Cuts"].includes(l.closest("[data-layer]").dataset.layer)) l.click();
       await choose(testid("plot-output-dir"), "plots/e2e/");
+      // "Generate Gerber job file" unticked: no .gbrjob (kicad-cli writes it, the server deletes it).
+      testid("plot-job-file")?.click();
+      await sleep(1100);
+      const gerbers = await press(/^Plot$/, "fab/plot");
+      const gfiles = judged(t, "Gerber, no job file", gerbers, /\.gbr$/i);
+      t(gfiles.length === 3 && !/Created Gerber job file/.test(gerbers.reply?.body?.message ?? ""), `three Gerbers and no job file (${gfiles.map(base).join(", ")})`);
+      testid("plot-job-file")?.click();
       for (const [format, ext] of [["ps", "ps"], ["svg", "svg"], ["dxf", "dxf"], ["pdf", "pdf"], ["png", "png"]]) {
         await choose(testid("plot-format"), format);
         t(!!testid(`plot-${format}-options`), `${format}: its options box is shown`);
@@ -403,6 +410,7 @@
       await sleep(200);
       const themes = [...(testid("sch-plot-theme")?.options ?? [])].map((o) => o.textContent.trim());
       t(JSON.stringify(themes) === JSON.stringify(["KiCad Classic", "KiCad Default"]), `the colour themes kicad-cli knows (${themes.join(", ")})`);
+      t(testid("sch-plot-theme")?.value === "_builtin_default", `KiCad Default selected (getColorSettings with no selection: ${testid("sch-plot-theme")?.value})`);
       t(box("Generate property popups")?.disabled === false, "PDF: its options enabled");
       for (const [label, ext] of [["Postscript", "ps"], ["DXF", "dxf"], ["PNG", "png"]]) {
         radio(label)?.click();
