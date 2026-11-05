@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates safety_power.yaml: the desktop PCB fab's safety + power board (option A, 2026-10-28).
+"""Generates safety_power.yaml: the UV-laser PCB fab's safety + power board (2026-11-01 brief; design in README.md, parts in PARTS.md).
 Lengths in um (intent schema 1). Re-run after edits: python3 gen_safety_power.py > safety_power.yaml"""
 import yaml, collections
 parts, nets = [], collections.defaultdict(list)
@@ -11,6 +11,7 @@ def part(ref, value, pins, package=None, footprint=None, lcsc=None, mpn=None, sy
     for k, v in (('mpn', mpn), ('lcsc', lcsc), ('package', package), ('footprint', footprint), ('symbol', symbol)):
         if v: d[k] = v
     d['pins'] = [P(*p) if isinstance(p, tuple) else P(p) for p in pins]; parts.append(d)
+    if ref.startswith('J'): d['edge'] = True                  # every J on this board takes a cable from the machine
     if BLOCK[0]: blocks.setdefault(BLOCK[0], []).append(ref)
 def conn(ref, *pairs):
     for pin, net in pairs:
@@ -25,6 +26,8 @@ def CP(val, plus, minus):
     c = nx('C'); part(c, val, [(1, 'passive', '+'), (2, 'passive', '-')], footprint='Capacitor_SMD:CP_Elec_6.3x7.7', lcsc='C72478', mpn='RVT1V101M0607', symbol='Device:C_Polarized'); conn(c, ('1', plus), ('2', minus))
 def D(val, k, a, pkg='SOD-123', fp=None, lcsc=None, mpn=None):
     d = nx('D'); part(d, val, [(1, 'passive', 'K'), (2, 'passive', 'A')], package=None if fp else pkg, footprint=fp, lcsc=lcsc, mpn=mpn, symbol='Device:D'); conn(d, ('1', k), ('2', a))
+def FLY(k, a): D('1N4148W', k, a, lcsc='C81598')               # coil flyback, small coils (relays on this board)
+def FLYC(k, a): D('SS34', k, a, pkg='SMA', lcsc='C8678')       # coil flyback, contactor coils off the board
 def LED(net, r='10k', color='green'):
     a = f'{net}_LED'; R(r, net, a); d = nx('D')
     part(d, f'LED {color}', [(1, 'passive', 'K'), (2, 'passive', 'A')], package='0603', lcsc='C2286' if color == 'red' else None, symbol='Device:LED'); conn(d, ('1', 'GND'), ('2', a))
@@ -35,6 +38,25 @@ def J(ref, value, fp, *nets_, lcsc=None):
     part(ref, value, [str(i + 1) if n else (str(i + 1), 'nc') for i, n in enumerate(nets_)], footprint=fp, lcsc=lcsc); conn(ref, *[(str(i + 1), n) for i, n in enumerate(nets_)])
 def FUSE(ref, rating, a, b):
     part(ref, f'ATO {rating}', ['1', '2'], footprint=ATO, lcsc='C668119', mpn='XF-507P', symbol='Device:Fuse'); conn(ref, ('1', a), ('2', b))
+
+# Omron G7SA-3A1B DC24: force-guided (EN 50205 class A), 3NO + 1NC. KiCad has no footprint, so it is drawn here from Omron's
+# "Printed Circuit Board Design Diagram" (catalog J152-E1, p.5), turned to the top view. Two rows 10.16 apart; columns 0, 13.97,
+# 19.05, 30.48, 35.56 from the coil pins; holes 1.4 dia; body 40 x 13, the coil column 1.83 in from its end. Origin = body centre.
+G7SA_FP = 'Relay_Safety:Omron_G7SA-3A1B'
+_cols = [-18170, -4200, 880, 12310, 17390]
+_pads = [('1', 0, -5080), ('23', 1, -5080), ('24', 2, -5080), ('43', 3, -5080), ('44', 4, -5080),
+         ('0', 0, 5080), ('11', 1, 5080), ('12', 2, 5080), ('33', 3, 5080), ('34', 4, 5080)]
+FOOTPRINTS = [{'name': G7SA_FP, 'courtyard': [20250, 6750],
+               'pads': [{'number': n, 'at': [_cols[c], y], 'size': [2400, 2400], 'shape': 'rect' if n == '0' else 'circle',
+                         'kind': 'through_hole', 'drill': 1400} for n, c, y in _pads]}]
+def G7SA(ref, coil_p, coil_n, contacts):
+    """contacts: {'nc': (11, 12 nets), 'no1': (23, 24), 'no2': (33, 34), 'no3': (43, 44)}; an absent pole is left unconnected."""
+    poles = {'nc': ('11', '12'), 'no1': ('23', '24'), 'no2': ('33', '34'), 'no3': ('43', '44')}
+    used = {p for k in contacts for p in poles[k]}
+    pins = [('0', 'passive', 'A1'), ('1', 'passive', 'A2')] + [(p, 'passive' if p in used else 'nc', p) for k in ('nc', 'no1', 'no2', 'no3') for p in poles[k]]
+    part(ref, 'G7SA-3A1B DC24', pins, footprint=G7SA_FP, lcsc='C968857', mpn='G7SA-3A1B DC24')
+    conn(ref, ('0', coil_p), ('1', coil_n), *[(p, n) for k, (a, b) in contacts.items() for p, n in zip(poles[k], (a, b))])
+    FLY(coil_p, coil_n)
 
 block('Power input')
 # --- 24 V input: main fuse, bidirectional TVS, ideal-diode reverse-polarity protection (MX74700T, -100 V rated, + 1.6 mOhm FET) ---
@@ -50,18 +72,20 @@ part('Q1', 'BSC016N06NS', [(1, 'passive', 'S'), (2, 'passive', 'S'), (3, 'passiv
 conn('Q1', ('1', 'VIN_F'), ('2', 'VIN_F'), ('3', 'VIN_F'), ('4', 'IDEAL_GATE'), ('5', 'V24'))
 CP('100uF 35V', 'V24', 'GND'); CP('100uF 35V', 'V24', 'GND')
 LED('V24')
+# control 24 V for the safety chain and the contactor coils (about 0.5 A), PTC-protected
+part('F7', 'PTC 1.1A', ['1', '2'], footprint='Fuse:Fuse_1812_4532Metric', lcsc='C70119', mpn='mSMD110-33V', symbol='Device:Polyfuse'); conn('F7', ('1', 'V24'), ('2', 'V24_CTL'))
 
 block('Switched 24V outputs')
-# --- switched 24 V (cut by E-stop through RUN) ---
+# --- 24 V cut by RUN (E-stop, over-temperature, MCU stop) ---
 def JQC(ref, out):
     part(ref, 'JQC-3FF-24V', [(11, 'passive', 'COM'), (12, 'nc', 'NC'), (14, 'passive', 'NO'), ('A1', 'passive', 'coil+'), ('A2', 'passive', 'coil-')],
          footprint='Relay_THT:Relay_SPDT_Hongfa_JQC-3FF_0XX-1Z', lcsc='C3638', mpn='JQC-3FF/24VDC-1HS(551)', symbol='Relay:JQC-3FF-024-1H')
-    conn(ref, ('11', 'V24'), ('14', out), ('A1', 'RUN'), ('A2', 'GND')); D('1N4148W', 'RUN', 'GND', lcsc='C81598')
+    conn(ref, ('11', 'V24'), ('14', out), ('A1', 'RUN'), ('A2', 'GND')); FLY('RUN', 'GND')
 JQC('K1', 'V24_MOT_SW'); FUSE('F2', '15A', 'V24_MOT_SW', 'V24_MOT'); J('J2', 'MOTION 24V', TB2, 'V24_MOT', 'GND', lcsc='C8465'); LED('V24_MOT')
-JQC('K2', 'V24_TH_SW'); FUSE('F3', '10A', 'V24_TH_SW', 'V24_TH'); J('J3', 'TOOLHEAD 24V', TB2, 'V24_TH', 'GND', lcsc='C8465'); LED('V24_TH')
+JQC('K2', 'V24_VAC_SW'); FUSE('F3', '2A', 'V24_VAC_SW', 'V24_VAC'); J('J3', 'PUMP/VALVE 24V', TB2, 'V24_VAC', 'GND', lcsc='C8465'); LED('V24_VAC')  # pump 10 W + valve < 3 W: 0.5 A; the 0.5 mm track carries 2 A
 block('Unswitched 24V outputs')
-# --- unswitched 24 V ---
-FUSE('F4', '5A', 'V24', 'V24_AUX'); J('J4', 'FANS/PUMPS 24V', TB2, 'V24_AUX', 'GND', lcsc='C8465'); LED('V24_AUX')
+# --- 24 V that stays on after a stop ---
+FUSE('F4', '5A', 'V24', 'V24_AUX'); J('J4', 'AUX 24V (fans, controller 5V supply)', TB2, 'V24_AUX', 'GND', lcsc='C8465'); LED('V24_AUX')
 FUSE('F5', '3A', 'V24', 'V24_LED'); J('J5', 'LED STRIP 24V', TB2, 'V24_LED', 'GND', lcsc='C8465'); LED('V24_LED')
 FUSE('F6', '5A', 'V24', 'V24_BUCK')
 
@@ -84,88 +108,93 @@ block('Buck 5V')
 BUCK('U2', 'V5', '100k', '17.8k')    # 0.75 * (1 + 100/17.8) = 4.96 V
 J('J7', 'CAMERAS 5V', TB2, 'V5', 'GND', lcsc='C8465'); LED('V5', r='1k')
 
-block('Laser chain')
-# --- control 24 V, PTC-protected ---
-part('F7', 'PTC 1.1A', ['1', '2'], footprint='Fuse:Fuse_1812_4532Metric', lcsc='C70119', mpn='mSMD110-33V', symbol='Device:Polyfuse'); conn('F7', ('1', 'V24'), ('2', 'V24_CTL'))
-
-# --- laser chain (contact A of every switch, dry, in series, to the laser source's interlock) ---
-sw = [('J8', 'E-STOP', 'ESTOP_B'), ('J9', 'DOOR 1', 'DOOR1_B'), ('J10', 'DOOR 2', 'DOOR2_B'), ('J11', 'KEY', 'KEY_B'), ('J12', 'TOOL LOCK', 'TOOL_B')]
-for i, (ref, name, b) in enumerate(sw):
-    J(ref, name, MC(4), f'LCH{i}', f'LCH{i + 1}', 'V24_CTL', b)
-def G5V(ref, pins):
-    part(ref, 'G5V-2-DC24', [(1, 'passive', 'coil'), (16, 'passive', 'coil'), (4, 'passive', 'COM1'), (6, 'passive', 'NC1'), (8, 'passive', 'NO1'), (13, 'passive', 'COM2'), (11, 'passive', 'NC2'), (9, 'passive', 'NO2')],
-         footprint='Relay_THT:Relay_DPDT_Omron_G5V-2', lcsc='C39593', mpn='G5V-2-DC24', symbol='Relay:G5V-2')
-    for p in parts[-1]['pins']:
-        if p['number'] not in pins: p['kind'] = 'nc'
-    conn(ref, *pins.items())
-G5V('K3', {'1': 'V24_CTL', '16': 'FANOK_COIL', '4': 'LCH5', '8': 'LCH6'})   # fan-OK contact closes the chain
-J('JP1', 'FAN BYPASS (test)', 'Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical', 'LCH5', 'LCH6')
-J('J13', 'LASER INTERLOCK', MC(2), 'LCH0', 'LCH6')
-
-block('Machine power latch')
-# --- machine power latch: E-stop contact B + reset -> K4 self-hold -> RUN; MCU can only drop it ---
-G5V('K4', {'1': 'LATCH_COIL', '16': 'PERMIT_LS', '4': 'ESTOP_B', '8': 'LATCH_COIL', '13': 'V24_CTL', '9': 'RUN'})
-D('1N4148W', 'LATCH_COIL', 'PERMIT_LS', lcsc='C81598')
-J('J14', 'RESET BUTTON', MC(2), 'ESTOP_B', 'LATCH_COIL')
-J('J15', 'MAINS CONTACTOR COIL', MC(2), 'RUN', 'GND')
-D('SS34', 'RUN', 'GND', pkg='SMA', lcsc='C8678')
+cnt['K'] = 2  # K1, K2 are the switched-output relays
+block('Safety level 1: E-stop')
+# --- level 1, two channels: E-stop NC1 (+ the hot-plate over-temperature cut-out) -> K3, E-stop NC2 -> K4; RESET latches both, each holds
+# itself through its own NO; RUN = K3 NO in series with K4 NO. RESET only reaches the coils when every safety relay is off (their NCs) and
+# every contactor is off (the mirror-contact loop on J11): a welded contact blocks the restart. The MCU can only drop RUN (PERMIT_LS). ---
+J('J8', 'E-STOP (2 NC)', MC(4), 'V24_CTL', 'ES_A', 'V24_CTL', 'ES_B')
+J('J9', 'HOT-PLATE CUT-OUT (NC)', MC(2), 'ES_A', 'OT_A')
+J('J10', 'RESET (NO)', MC(2), 'OT_A', 'RST_IN')
+J('J11', 'CONTACTOR MIRROR NCs (KM1, KMA, KMB in series)', MC(2), 'FB_IN', 'RST_OK')
+G7SA('K3', 'L1A', 'PERMIT_LS', {'nc': ('RST_IN', 'RST_1'), 'no1': ('OT_A', 'L1A'), 'no2': ('V24_CTL', 'RUN_M')})
+G7SA('K4', 'L1B', 'PERMIT_LS', {'nc': ('RST_1', 'RST_2'), 'no1': ('ES_B', 'L1B'), 'no2': ('RUN_M', 'RUN')})
+FLY('L1A', 'RST_OK'); FLY('L1B', 'RST_OK')   # reset steering: RST_OK feeds both coils, neither coil feeds the other
+J('J12', 'KM1 HOT-PLATE CONTACTOR COIL', MC(2), 'RUN', 'GND'); FLYC('RUN', 'GND')
 LED('RUN', color='red')
 
-block('MCU readback')
-# --- isolated readback / permit to the MCU (EL357N) ---
+block('Safety level 2: laser and UV lamps')
+# --- level 2, two channels, fed from RUN: doors 1 and 2 + key (+ airflow on channel A, jumper bypass for tests) -> K5 / K6.
+# K5 NO -> KMA coil, K6 NO -> KMB coil: KMA and KMB sit in series on the mains of the laser's 12 V supply and the lamp drivers.
+# The lamps also need K5 NO + K6 NO in series to the KML coil, which the MCU switches (the drivers only dim to 10 %). ---
+J('J13', 'DOOR 1 (2 NC)', MC(4), 'RUN', 'D1A', 'RUN', 'D1B')
+J('J14', 'DOOR 2 (2 NC)', MC(4), 'D1A', 'D2A', 'D1B', 'D2B')
+J('J15', 'KEY (2 NC)', MC(4), 'D2A', 'KYA', 'D2B', 'L2B')
+J('J16', 'EXTRACTOR AIRFLOW (NO, closed = flowing)', MC(2), 'KYA', 'L2A')
+J('JP1', 'AIRFLOW BYPASS (tests only)', 'Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical', 'KYA', 'L2A')
+G7SA('K5', 'L2A', 'GND', {'nc': ('RST_2', 'RST_3'), 'no1': ('RUN', 'KMA_C'), 'no2': ('RUN', 'LAMP_M')})
+G7SA('K6', 'L2B', 'GND', {'nc': ('RST_3', 'FB_IN'), 'no1': ('RUN', 'KMB_C'), 'no2': ('LAMP_M', 'LAMP_V')})
+J('J17', 'KMA + KMB COILS (laser + lamp mains)', MC(4), 'KMA_C', 'GND', 'KMB_C', 'GND'); FLYC('KMA_C', 'GND'); FLYC('KMB_C', 'GND')
+J('J18', 'KML LAMP CONTACTOR COIL', MC(2), 'LAMP_V', 'LAMP_LS'); FLYC('LAMP_V', 'LAMP_LS')
+LED('KMA_C', color='amber')
+
+block('MCU interface')
+# --- the MCU's side, isolated (EL357N): 7 status lines in, 3 commands out (PERMIT can only drop RUN; LAMP and EXTRACTOR only switch
+# coils whose power the safety chain already controls) ---
 def OPTO(a_net, k_net, c_net, e_net, value='EL357N'):
     u = nx('U'); part(u, value, [(1, 'passive', 'A'), (2, 'passive', 'K'), (3, 'passive', 'E'), (4, 'passive', 'C')],
                       footprint='Package_SO:SOP-4_3.8x4.1mm_P2.54mm', lcsc='C42379244', mpn='EL357N(C)(TA)-G'); conn(u, ('1', a_net), ('2', k_net), ('3', e_net), ('4', c_net)); return u
-def FET(kind, g, s, d):
-    q = nx('Q') if cnt['Q'] else (nx('Q'), nx('Q'))[1]; n = kind == 'N'
-    part(q, 'AO3400A' if n else 'AO3401A', [(1, 'signal', 'G'), (2, 'passive', 'S'), (3, 'passive', 'D')], package='SOT-23', lcsc='C20917' if n else 'C15127', mpn='AO3400A' if n else 'AO3401A')
-    conn(q, ('1', g), ('2', s), ('3', d))
+def FET(g, s, d):
+    q = nx('Q') if cnt['Q'] else (nx('Q'), nx('Q'))[1]
+    part(q, 'AO3400A', [(1, 'signal', 'G'), (2, 'passive', 'S'), (3, 'passive', 'D')], package='SOT-23', lcsc='C20917', mpn='AO3400A'); conn(q, ('1', g), ('2', s), ('3', d))
+def COMMAND(cmd, drain):
+    """MCU pin -> opto -> 24 V side gate pull-up -> N-FET pulling `drain` low."""
+    R('330', cmd, f'{cmd}_A'); OPTO(f'{cmd}_A', 'GND_MCU', f'{cmd}_P', f'{cmd}_G')
+    R('22k', 'V24_CTL', f'{cmd}_P'); R('10k', f'{cmd}_G', 'GND'); FET(f'{cmd}_G', 'GND', drain)
 nx('U'); nx('U'); nx('U')  # U1, U2 are the bucks, U3 the ideal diode
-R('330', 'MCU_PERMIT', 'PERMIT_A'); OPTO('PERMIT_A', 'GND_MCU', 'V24_CTL_P', 'PERMIT_G')
-R('22k', 'V24_CTL', 'V24_CTL_P'); R('10k', 'PERMIT_G', 'GND'); FET('N', 'PERMIT_G', 'GND', 'PERMIT_LS')
+COMMAND('MCU_PERMIT', 'PERMIT_LS')
+COMMAND('MCU_LAMP', 'LAMP_LS')
+COMMAND('MCU_EXTR', 'EXTR_LS')
+J('J19', 'EXTRACTOR RELAY COIL', MC(2), 'V24_AUX', 'EXTR_LS'); FLYC('V24_AUX', 'EXTR_LS')
 rb = []
-for src, name, r in [('ESTOP_B', 'RB_ESTOP', '10k'), ('DOOR1_B', 'RB_DOOR1', '10k'), ('DOOR2_B', 'RB_DOOR2', '10k'), ('KEY_B', 'RB_KEY', '10k'),
-                     ('TOOL_B', 'RB_TOOL', '10k'), ('RUN', 'RB_RUN', '10k'), ('FANOK', 'RB_FAN', '680'), ('SSR_P', 'RB_HEAT', '10k')]:
-    R(r, src, f'{name}_A'); OPTO(f'{name}_A', 'GND', name, 'GND_MCU'); R('10k', '3V3_MCU', name); rb.append(name)
-J('J16', 'MCU', 'Connector_JST:JST_XH_B12B-XH-A_1x12_P2.50mm_Vertical', '3V3_MCU', 'GND_MCU', *rb, 'MCU_PERMIT', 'GND_MCU')
+for src, name in [('ES_B', 'RB_ESTOP'), ('OT_A', 'RB_OVERTEMP'), ('D2A', 'RB_DOORS'), ('KYA', 'RB_KEY'), ('L2A', 'RB_AIRFLOW'), ('RUN', 'RB_RUN'), ('KMA_C', 'RB_LASER')]:
+    R('10k', src, f'{name}_A'); OPTO(f'{name}_A', 'GND', name, 'GND_MCU'); R('10k', '3V3_MCU', name); rb.append(name)
+J('J20', 'MCU', 'Connector_JST:JST_XH_B12B-XH-A_1x12_P2.50mm_Vertical', '3V3_MCU', 'GND_MCU', *rb, 'MCU_PERMIT', 'MCU_LAMP', 'MCU_EXTR')
 
-block('Fan check')
-# --- fume-fan tach -> retriggerable one-shot (220 ms) -> K3 ---
-J('J17', 'FAN TACH', MC(2), 'TACH', 'GND')
-R('10k', 'V5', 'TACH')
-part('U' + str(cnt['U'] + 1), 'SN74LVC1G123', [(1, 'signal', '~A'), (2, 'signal', 'B'), (3, 'signal', '~CLR'), (4, 'ground', 'GND'), (5, 'signal', 'Q'), (6, 'passive', 'Cext'), (7, 'passive', 'RCext'), (8, 'power', 'VCC')],
-     footprint='Package_SO:SSOP-8_2.95x2.8mm_P0.65mm', lcsc='C123302', mpn='SN74LVC1G123DCTR', symbol='74xGxx:74LVC1G123'); u = parts[-1]['reference']; nx('U')
-conn(u, ('1', 'GND'), ('2', 'TACH'), ('3', 'V5'), ('4', 'GND'), ('5', 'FANOK'), ('6', 'CEXT'), ('7', 'RCEXT'), ('8', 'V5'))
-C('2.2uF', 'CEXT', 'RCEXT'); R('100k', 'RCEXT', 'V5'); C('100nF', 'V5', 'GND'); R('100k', 'FANOK', 'GND')
-FET('N', 'FANOK', 'GND', 'FANOK_COIL'); D('1N4148W', 'V24_CTL', 'FANOK_COIL', lcsc='C81598')
-
-block('Hot-plate over-temp')
-# --- hot-plate over-temperature (ratiometric, fail-safe on open and short), gates the SSR feed ---
-J('J18', 'PLATE NTC 100k', MC(2), 'NTC_N', 'GND')
-R('10k 1%', 'V5', 'NTC_N'); C('100nF', 'NTC_N', 'GND')
-R('39k 1%', 'V5', 'HOT_REF'); R('1k 1%', 'HOT_REF', 'GND')      # 0.125 V: NTC 100k/3950 at ~270 C
-R('1k 1%', 'V5', 'OPEN_REF'); R('100k 1%', 'OPEN_REF', 'GND')    # 4.95 V: sensor open (colder than about -10 C)
-part('U' + str(cnt['U'] + 1), 'LM393', [(1, 'signal', 'OUT1'), (2, 'signal', 'IN1-'), (3, 'signal', 'IN1+'), (4, 'ground', 'GND'), (5, 'signal', 'IN2+'), (6, 'signal', 'IN2-'), (7, 'signal', 'OUT2'), (8, 'power', 'VCC')],
-     package='SOIC-8', lcsc='C7955', mpn='LM393DR2G', symbol='Comparator:LM393'); u = parts[-1]['reference']; nx('U')
-conn(u, ('1', 'OT_OK'), ('2', 'HOT_REF'), ('3', 'NTC_N'), ('4', 'GND'), ('5', 'OPEN_REF'), ('6', 'NTC_N'), ('7', 'OT_OK'), ('8', 'V5'))
-R('10k', 'V5', 'OT_OK'); C('100nF', 'V5', 'GND')
-FET('N', 'OT_OK', 'GND', 'HEAT_PD'); R('6.8k', 'HEAT_G', 'HEAT_PD'); R('10k', 'RUN', 'HEAT_G'); FET('P', 'HEAT_G', 'RUN', 'SSR_P')
-J('J19', 'SSR OUT', MC(2), 'SSR_P', 'SSR_N')
-J('J20', 'HEATER FROM MCU', MC(2), None, 'SSR_N')
-
-block('CAN pass-through')
-# --- CAN pass-through to the tool head ---
-J('J21', 'CAN IN', MC(2), 'CANH', 'CANL'); J('J22', 'CAN TO TOOLHEAD', MC(2), 'CANH', 'CANL')
 block('Mechanical')
 for h in range(1, 5): part(f'H{h}', 'M3', [('1', 'nc')], footprint='MountingHole:MountingHole_3.2mm_M3_Pad')
 
-W, H = 100000, 80000
-power = ['VIN_RAW', 'VIN_F', 'V24', 'V24_MOT_SW', 'V24_MOT', 'V24_TH_SW', 'V24_TH', 'V24_AUX', 'V24_LED', 'V24_BUCK', 'V19', 'V5', 'SW1', 'SW2']
-doc = {'parts': parts, 'nets': [{'name': n, 'pins': p} for n, p in nets.items()],
-       'placement_rules': [{'kind': 'proximity', 'a': refs[0], 'b': r, 'max_mm': 30.0, 'reason': f'same block: {name}'} for name, refs in blocks.items() if name != 'Mechanical' for r in refs[1:]]
-                          + [{'kind': 'module', 'name': name, 'refs': refs} for name, refs in blocks.items()],
+# LCSC numbers for the parts the helpers leave open, from the JLC parts database (2026-11-03): UNI-ROYAL 0603 1 % thick film,
+# YAGEO/Samsung X7R, KENTO/NationStar 0603 LEDs, DEGSON 15EDGRC-3.81 right-angle headers (the Phoenix MC 1,5/..-G-3,81 pattern;
+# check the DEGSON drawing against the KiCad footprint before ordering), JST XH, XFCN 2.54 header.
+LCSC = {('10k', '0603'): 'C25804', ('49.9k', '0603'): 'C23184', ('100k', '0603'): 'C25803', ('4.12k', '0603'): 'C23041',
+        ('17.8k', '0603'): 'C22821', ('1k', '0603'): 'C21190', ('330', '0603'): 'C23138', ('22k', '0603'): 'C31850',
+        ('100nF 50V', '0603'): 'C14663', ('100nF', '0603'): 'C14663', ('22nF', '0603'): 'C21122',
+        ('LED green', '0603'): 'C12624', ('LED amber', '0603'): 'C89811',
+        MC(2): 'C507005', MC(4): 'C507007', 'Connector_JST:JST_XH_B12B-XH-A_1x12_P2.50mm_Vertical': 'C158027'}
+for p in parts:
+    if not p.get('lcsc'):
+        l = LCSC.get((p['value'], p.get('package'))) or LCSC.get(p.get('footprint'))
+        if l: p['lcsc'] = l
+for p in parts:
+    if p['reference'] == 'JP1' and not p.get('lcsc'): p['lcsc'] = 'C492401'
+
+W, H = 220000, 160000
+# Track widths on 2 oz copper (IPC-2221 outer): V24, the trunk to every fused branch, 2 mm (about 6 A at 20 C rise); the other
+# power nets 1 mm (5 A fuses: about 20 C rise at 5 A). The nets that reach a SOT-23-6 or SO-8 pin (U1, U2, U3) route at 0.5 mm,
+# the widest that enters those pads; V24's own small pads (U3.4, R1.1) get a hand-drawn neck. The 20 A path (VIN_RAW, VIN_F,
+# V24 to K1, V24_MOT_SW, V24_MOT) is carried by F.Cu pours, added after routing with solid pad connections. Order 2 oz copper.
+fine = ['VIN_F', 'V24_BUCK', 'SW1', 'SW2']
+power = ['VIN_RAW', 'V24_MOT_SW', 'V24_MOT', 'V24_VAC_SW', 'V24_VAC', 'V24_AUX', 'V24_LED', 'V19', 'V5']
+doc = {'parts': parts, 'nets': [{'name': n, 'pins': p} for n, p in nets.items()], 'footprints': FOOTPRINTS,
+       'placement_rules': [{'kind': 'proximity', 'a': refs[0], 'b': r, 'max_mm': 50.0, 'reason': f'same block: {name}'} for name, refs in blocks.items() if name != 'Mechanical' for r in refs[1:]]
+                          + [{'kind': 'proximity', 'a': a, 'b': b, 'max_mm': mx, 'reason': 'the 20 A path (supply in -> ideal diode -> motion relay -> fuse -> out) kept short'}
+                             for a, b, mx in (('J1', 'F1', 15.0), ('F1', 'Q1', 15.0), ('Q1', 'K1', 30.0), ('K1', 'F2', 15.0), ('F2', 'J2', 15.0))]
+                          + [{'kind': 'module', 'name': name, 'refs': refs} for name, refs in blocks.items() if name != 'Mechanical'],
        'board': {'layers': ['F.Cu', 'B.Cu'], 'outline': [{'x': 0, 'y': 0}, {'x': W, 'y': 0}, {'x': W, 'y': H}, {'x': 0, 'y': H}],
-                 'net_classes': [{'name': 'power', 'nets': power, 'track_width': 1500}],
-                 'pours': [{'net': 'GND', 'layer': 'B.Cu'}]}}
-print('# Desktop PCB fab: safety + power board (option A). Generated by gen_safety_power.py; edit that, not this.')
+                 'net_classes': [{'name': 'trunk', 'nets': ['V24'], 'track_width': 2000}, {'name': 'power', 'nets': power, 'track_width': 1000},
+                                 {'name': 'power_fine', 'nets': fine, 'track_width': 500}],
+                 'pours': [{'net': 'GND', 'layer': 'B.Cu'}],
+                 'tuning': {'optimizer_passes': 0}}}  # the FreeRouting port's optimiser takes > 50 min on this board; routing alone 40 s
+print('# UV-laser PCB fab: safety + power board. Generated by gen_safety_power.py; edit that, not this.')
 print(yaml.safe_dump(doc, sort_keys=False, width=200))

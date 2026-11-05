@@ -1,0 +1,5 @@
+{
+  "intent": "../safety_power.yaml",
+  "snap_nm": 100000,
+  "spacing_nm": 600000
+}

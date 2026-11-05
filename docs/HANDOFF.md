@@ -2,7 +2,13 @@
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
-## Start here (2026-10-30)
+## Start here (2026-11-02)
+
+- **The box is an AWS VM** (ubuntu@35.87.172.218) since 2026-11-01; the GCP box is gone. The studio runs in tmux session `serve` on port 8766. The user tunnels with their own `bbw` tool (`bbw url agentic-eda-aws` -> http://localhost:28766); when it says "failed to fetch", the tunnel dropped: ask them to re-run it.
+- **First board, redesigned for the UV-laser fab (2026-11-01 brief):** `designs/safety-power/` (README: decisions and board; PARTS.md: the machine's parts, mains budget, unknowns). Two-level G7SA force-guided chain, contactors off-board. Datasheets in `~/datasheets/pcbfab/`. The user's rules: parts researched from data; economical but reliable mass-produced parts.
+- **PDFs on this box:** no poppler; use the venv `pdfenv` (pypdf, pymupdf) under the session scratchpad, or recreate it (`python3 -m venv pdfenv && pdfenv/bin/pip install pypdf pymupdf`), and render pages with fitz.
+
+## Earlier start-here notes (2026-10-30)
 
 **State:** main is pushed and everything is merged; no branch is open. The user wants a WORKING VERSION to build boards with first; the review rounds are paused and their remaining findings are a backlog.
 - **The studio is running** on the box in tmux session `serve`: `KICAD_PATH=~/src/kicad-libs target/release/eda board serve -C work/safety-power --port 8766 --ui web/studio/dist` (the first board; release build of 2026-10-30). The user reaches it with `ssh -L 8766:localhost:8766 ws-agentic-eda` -> http://localhost:8766.
