@@ -2,6 +2,26 @@
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
+## Start here (2026-11-05)
+
+- **Main merged three porting fixes (2026-11-05):**
+  - `task-opt-speed`: the FreeRouting optimizer. An attempt now routes the items left unconnected before its rip-up only if they are of the item's own nets. This differs from the Java, which routes every unconnected item of the board, six passes over, and is documented at `route_attempt` in `crates/freeroute/src/autoroute/optimize.rs`. On a board the router could not finish, each attempt re-searched the failed nets. On safety-power that took 15 s an attempt and hours a pass; the whole route is now 100 s with 1 optimizer pass and 244 s with 3 (vias 97 -> 85). `connected_set` tracks membership in a `HashSet`, as the Java does.
+  - `task-studio-cli`: the studio's 3D view finds kicad-cli through `eda_kicad_engine::find_cli`. It had looked only at the macOS path.
+  - `task-symdir`: KiCad 10 folder symbol libraries (`.kicad_symdir`, one `.kicad_sym` per symbol) are read as `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load` does, in `crates/kicad/src/symbol_lib_dir.rs`. The box's kicad-symbols checkout comes only in this form, so before this the tools fell back to their built-in symbols. The differences are in `PARITY-common.md` §14 and GAPS item 5. Writing a folder library is not ported.
+- **Push:** the box had no GitHub login. It now has an SSH key (`~/.ssh/id_ed25519`, "agentic-eda-aws box"). Once the user adds it on GitHub, set the remote to `git@github.com:El-Guapo2024/agentic-eda.git` and push.
+- **Full suite on main 219520e9:** Rust 4201 passed, 3 failed, 25 ignored; web typecheck ok, 2703 unit tests, build ok; 13m23s. The 3 failures come from this box, not the code:
+  - corpus `through_hole_headers` seed 0 fails `schematic_sheet_density`: 42% empty against a 40% limit. It fails the same way at db6b3046.
+  - `gate_vs_kicad` shove-toward-the-edge fails because it reads the box's own `work/mcu30`.
+  - `pad_details`: the box's newer kicad-cli plots two zero-size dots on In2.Cu.
+- **This box (AWS):**
+  - kicad-cli is nightly 202610272031 (10.99.0-unknown-4fe1ca2060). The earlier green runs used the GCP box's 25ec2335.
+  - There is no `~/tools`, so Playwright (`tools/run-all-checks.sh`) and ngspice are not installed. Set them up as "Not in git" says before running browser or simulator checks.
+  - There is no gdb or perf.
+- **Board work paused by the user (2026-11-03):** see "Open" at the end of `designs/safety-power/README.md`. It covers the key switch's contacts against J15, and the two-machine split (a LumenPnP on Opulo's open boards, plus the laser machine).
+- **Small backlog from this round:**
+  - The optimizer's `pass_items` still scans `handled` as a list.
+  - `web/studio/e2e/library-tables.check.js` names `Device.kicad_sym`, which the box's folder-form libraries lack.
+
 ## Start here (2026-11-02)
 
 - **The box is an AWS VM** (ubuntu@35.87.172.218) since 2026-11-01; the GCP box is gone. The studio runs in tmux session `serve` on port 8766. The user tunnels with their own `bbw` tool (`bbw url agentic-eda-aws` -> http://localhost:28766); when it says "failed to fetch", the tunnel dropped: ask them to re-run it.
@@ -180,6 +200,8 @@ Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Pyth
 - **The user's boards in `work/`** are the user's own and not needed for development. The real ones are on the Mac; the box's `work/mcu30` is a near-empty scratch, backed up in `~/backups/` before the nanometre work. Don't undo or reorganize them without asking. After `task-nanometres` merges, they are migrated on first load, one way.
 
 ## Gates of the last main
+
+- **`219520e9`** (the AWS box, 2026-11-05, three fixes merged): `tools/check.sh full` gave Rust 4201 passed, 3 failed (this box's, listed in "Start here (2026-11-05)"), 25 ignored; web 2703; build ok. `cargo check --workspace --tests` had no warnings. Browser checks were not run, since the box has no Playwright.
 
 - **`fd3f1b5`** (the box, 2026-10-23, every task of the list merged): `tools/check.sh fast` Rust 3627 passed, 0 failed, 25 ignored; web typecheck ok, 2449 unit tests. `tools/run-all-checks.sh -j 3`: 42 passed, 0 failed of 42 in 1382 s.
 
