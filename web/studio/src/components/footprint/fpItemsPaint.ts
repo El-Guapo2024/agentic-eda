@@ -10,7 +10,9 @@ import type { FieldInfo } from "../../api/types";
 import type { FootprintItemsDisplay } from "../../api/fpItemTypes";
 import type { ViewTransform } from "../../kicad-port/view";
 import { hairlineNm } from "../../kicad-port/view";
-import { drawDimensions, drawFields, drawRuleArea, realLayerKey, withAlpha, type PaintOptions } from "../canvas/painter";
+import { drawDimensions, drawFields, drawRuleArea, layerAlpha, realLayerKey, withAlpha, type PaintOptions } from "../canvas/painter";
+import { PLAIN_APPEARANCE } from "../canvas/appearancePaint";
+import { fpObjectOpacity, fpOpacities } from "../../kicad-port/fpAppearance";
 import { drawPcbItems } from "../canvas/pcbItemsPaint";
 import { drawTables } from "../canvas/tablePaint";
 import { layerColor } from "../canvas/layers";
@@ -24,6 +26,8 @@ export interface FpItemsPaintOptions {
   layerVisible: Record<string, boolean>;
   layerOpacity: Record<string, number>;
   highContrast: boolean;
+  /** Inactive layers "Hide" (`HIGH_CONTRAST_MODE::HIDDEN`): with `highContrast`, what is not on the active layer is not drawn. */
+  contrastHidden?: boolean;
   activeLayer: string;
   sketchText: boolean;
   sketchGraphics: boolean;
@@ -44,6 +48,8 @@ function boardOptions(o: FpItemsPaintOptions): PaintOptions {
     layerOpacity: o.layerOpacity,
     activeLayer: o.highContrast ? layerStateKey(o.activeLayer) : null,
     highContrast: o.highContrast,
+    // the Objects tab's opacities (`PCB_DISPLAY_OPTIONS`, all 1 to begin with in this editor) and the HIDDEN contrast mode, as the board's painters read them
+    appearance: { ...PLAIN_APPEARANCE, opacity: fpOpacities(o.layerOpacity), contrastHidden: !!o.contrastHidden },
     gridNm: 0,
     gridVisible: false,
     movePreview: null,
@@ -108,7 +114,7 @@ export function paintFpItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
           drawRuleArea(ctx, view, asBoard, selected);
           continue;
         }
-        withAlpha(ctx, 0.8, () => {
+        withAlpha(ctx, 0.8 * fpObjectOpacity(o.layerOpacity, "zones") * layerAlpha(opts, layerStateKey(z.layer)), () => {
           ctx.beginPath();
           for (const ring of [z.outline_xy, ...(z.holes_xy ?? [])]) {
             ring.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
@@ -146,6 +152,7 @@ export function paintFpItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
       const mv = moved(o, i.id);
       const [x0, y0] = [i.x - i.w / 2 + (mv?.dxNm ?? 0), i.y - i.h / 2 + (mv?.dyNm ?? 0)];
       ctx.save();
+      ctx.globalAlpha *= fpObjectOpacity(o.layerOpacity, "bitmaps") * layerAlpha(opts, layerStateKey(i.layer)); // Images' opacity (`m_imageOpacity`), the contrast mode
       ctx.strokeStyle = o.selection.has(i.id) ? layerColor("selection") : layerColor(realLayerKey(i.layer));
       ctx.lineWidth = hairlineNm(view, 1.5);
       ctx.strokeRect(x0, y0, i.w, i.h);

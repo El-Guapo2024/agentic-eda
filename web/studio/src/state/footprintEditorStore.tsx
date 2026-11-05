@@ -148,6 +148,8 @@ export interface FootprintEditorState {
   layerOpacity: Record<string, number>;
   /** The Appearance manager is shown (the frame's right column). */
   appearanceShown: boolean;
+  /** `HIGH_CONTRAST_MODE::HIDDEN` (the Appearance manager's Inactive layers "Hide"): with `highContrast`, what is not on the active layer is not drawn at all. */
+  contrastHidden: boolean;
   toast: { message: string; kind: "error" | "info" } | null;
 }
 
@@ -198,6 +200,7 @@ const initialState: FootprintEditorState = {
   layerVisible: {},
   layerOpacity: {},
   appearanceShown: true,
+  contrastHidden: false,
   toast: null,
 };
 
@@ -252,6 +255,8 @@ export type FpAction =
   | { type: "SET_LAYERS_VISIBLE"; visible: Record<string, boolean> }
   | { type: "SET_LAYER_OPACITY"; key: string; opacity: number }
   | { type: "SET_APPEARANCE_SHOWN"; shown: boolean }
+  /** The Appearance manager's Inactive layers (`m_ContrastModeDisplay`): Normal, Dim or Hide. */
+  | { type: "SET_CONTRAST_MODE"; mode: "normal" | "dimmed" | "hidden" }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" };
 
@@ -278,6 +283,7 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
         layerVisible: state.layerVisible,
         layerOpacity: state.layerOpacity,
         appearanceShown: state.appearanceShown,
+        contrastHidden: state.contrastHidden,
       };
     case "FOOTPRINT_OK":
       return { ...state, footprint: action.footprint, error: null };
@@ -321,7 +327,8 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
     case "SET_GRID_NM":
       return { ...state, gridNm: action.um };
     case "TOGGLE_HIGH_CONTRAST":
-      return { ...state, highContrast: !state.highContrast };
+      // `PCB_CONTROL::HighContrastMode`: NORMAL becomes DIMMED, anything else NORMAL
+      return { ...state, highContrast: !state.highContrast, contrastHidden: false };
     case "TOGGLE_GRID_VISIBLE":
       return { ...state, gridVisible: !state.gridVisible };
     case "SET_ACTIVE_LAYER":
@@ -384,6 +391,8 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return { ...state, layerOpacity: { ...state.layerOpacity, [action.key]: action.opacity } };
     case "SET_APPEARANCE_SHOWN":
       return { ...state, appearanceShown: action.shown };
+    case "SET_CONTRAST_MODE":
+      return { ...state, highContrast: action.mode !== "normal", contrastHidden: action.mode === "hidden" };
     case "TOAST":
       return { ...state, toast: { message: action.message, kind: action.kind } };
     case "TOAST_CLEAR":

@@ -21,6 +21,8 @@ import { polygonDistance, tableBox } from "./tables";
 import { bezierPolyline } from "./bezierPoly";
 import { groupLeaves, isGroup, parentGroup } from "./groupTree";
 import { arcShapeCenter } from "./pcbItems";
+import { fpFieldSelectable, fpItemSelectable, fpLayersSelectable, fpPadSelectable, fpShapeSelectable, fpTextSelectable, fpZoneSelectable, type FpVisibility } from "./fpAppearance";
+import { zoneLayers } from "./zoneLayers";
 
 export const FP_FIELD_PREFIX = "field:";
 export const fpFieldId = (name: string): string => `${FP_FIELD_PREFIX}${name}`;
@@ -328,29 +330,37 @@ function inBox(b: Box | null, wx: number, wy: number, tol: number): boolean {
  * The topmost item under `(wx, wy)` (`PCB_SELECTION_TOOL::selectPoint`'s collector, narrowed to one): pads first, then the fields and the texts (a hidden field is
  * not shown and so not picked), the text boxes, points, images, barcodes and tables, the dimensions, the graphics, and the zones by their outline (or inside a
  * rule area). `tol` is the click's slop in nm.
+ *
+ * With `vis` (the Appearance manager's switches, kicad-port/fpAppearance.ts) only what `PCB_SELECTION_TOOL::Selectable` lets through is picked: an item on a hidden
+ * layer, or whose object row is off or at opacity 0, is not, and with high contrast only an item on the active layer is. Without it every item can be picked.
  */
-export function fpHitTest(fp: Fp, wx: number, wy: number, tol: number): { kind: FpItemKind; id: string } | null {
+export function fpHitTest(fp: Fp, wx: number, wy: number, tol: number, vis?: FpVisibility): { kind: FpItemKind; id: string } | null {
   for (let i = fp.pads.length - 1; i >= 0; i--) {
     const p = fp.pads[i]!;
+    if (vis && !fpPadSelectable(vis, p.layers)) continue;
     if (p.id && padContains(p, wx, wy)) return { kind: "pad", id: p.id };
   }
-  for (const f of [...fpFields(fp)].reverse()) if (f.visible && f.text && inBox(fieldBox(f), wx, wy, tol / 2)) return { kind: "field", id: f.id };
+  for (const f of [...fpFields(fp)].reverse()) if (f.visible && f.text && (!vis || fpFieldSelectable(vis, f)) && inBox(fieldBox(f), wx, wy, tol / 2)) return { kind: "field", id: f.id };
   for (let i = fp.texts.length - 1; i >= 0; i--) {
     const t = fp.texts[i]!;
+    if (vis && !fpTextSelectable(vis, t)) continue;
     if (t.id && inBox(turnedTextBox(textOfCmd(t)), wx, wy, tol / 2)) return { kind: "text", id: t.id };
   }
   const d = displayOf(fp);
-  for (const item of extraItems({ drawings: d as never }).reverse()) if (extraHitDistance(item, wx, wy) <= tol) return { kind: item.kind as FpItemKind, id: item.id };
-  for (const t of [...d.tables].reverse()) if (inBox(tableBox(t), wx, wy, tol)) return { kind: "table", id: t.id };
+  for (const item of extraItems({ drawings: d as never }).reverse()) if ((!vis || fpItemSelectable(vis, item.kind, item.layer)) && extraHitDistance(item, wx, wy) <= tol) return { kind: item.kind as FpItemKind, id: item.id };
+  for (const t of [...d.tables].reverse()) if ((!vis || fpLayersSelectable(vis, [t.layer])) && inBox(tableBox(t), wx, wy, tol)) return { kind: "table", id: t.id };
   for (const dim of [...d.dimensions].reverse()) {
+    if (vis && !fpLayersSelectable(vis, [dim.layer])) continue;
     const near = dim.lines.some(([a, b]) => distToSegment(wx, wy, a[0], a[1], b[0], b[1]) <= Math.max(tol, dim.stroke_width / 2));
     if (near || inBox(fpItemBounds(fp, dim.id), wx, wy, 0) && Math.hypot(wx - dim.text_at[0], wy - dim.text_at[1]) <= dim.text_size_nm * Math.max(dim.text.length, 1) * 0.35) return { kind: "dimension", id: dim.id };
   }
   for (let i = fp.graphics.length - 1; i >= 0; i--) {
     const g = fp.graphics[i]!;
+    if (vis && !fpShapeSelectable(vis, g)) continue;
     if (g.id && shapeHitDistance(g, wx, wy) <= Math.max(tol, g.stroke_width / 2)) return { kind: "graphic", id: g.id };
   }
   for (const z of [...d.zones].reverse()) {
+    if (vis && !fpZoneSelectable(vis, zoneLayers(z))) continue;
     const ring = zoneRing(z);
     let edge = Infinity;
     for (let i = 0; i < ring.length; i++) {

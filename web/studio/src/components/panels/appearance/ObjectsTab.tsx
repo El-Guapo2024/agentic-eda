@@ -1,10 +1,13 @@
 // The Objects tab (`APPEARANCE_CONTROLS::rebuildObjects`, rows from `s_objectSettings`): what the board shows besides its layers -- a colour chip where the
 // object has a theme colour, an eye, the name, and an opacity slider for tracks, vias, pads, zones and filled shapes. Footprint Text drags References and
 // Values along with it (`onObjectVisibilityChanged`).
+//
+// The row (`ObjectRowView`) takes its state and its handlers as props: the Footprint Editor's Appearance manager (components/footprint/FootprintAppearancePanel.tsx)
+// draws its rows (`s_allowedInFpEditor`) with it, on its own store.
 import { useAppearanceView } from "./useAppearanceView";
 import { Eye, Pane, Swatch } from "./shared";
 import { layerColor } from "../../canvas/layers";
-import { OBJECT_ROWS, type ObjectId } from "../../../kicad-port/appearance";
+import { OBJECT_ROWS, type ObjectId, type ObjectRow } from "../../../kicad-port/appearance";
 import { objectChecked } from "../../../kicad-port/appearanceOps";
 
 /** The theme colour an object is drawn in, where it has one of its own (the chip `theme->GetColor( layer )` gives a row); the others are drawn in the layer's colour. */
@@ -21,6 +24,34 @@ const COLOR_KEY: Partial<Record<ObjectId, string>> = {
   grid: "LAYER_GRID",
 };
 
+/**
+ * One object's row (`rebuildObjects`' `appendObject`): the chip, the eye ("Show or hide <name>", none for a row without a checkbox), the name, and -- for a row with
+ * an opacity -- the slider ("Set opacity of <name>"), `opacity` 0..1.
+ */
+export function ObjectRowView({ row, checked, opacity, onToggle, onOpacity }: { row: ObjectRow & { id: ObjectId }; checked: boolean; opacity?: number; onToggle: () => void; onOpacity?: (value: number) => void }) {
+  const id = row.id;
+  const colorKey = COLOR_KEY[id];
+  return (
+    <div className="ap-row" data-object={id} title={row.tooltip}>
+      <Swatch css={colorKey ? layerColor(colorKey) : null} hidden={!colorKey} title={colorKey ? "Color of this object (set by the color theme)" : undefined} />
+      <Eye on={checked} disabled={!row.checkbox} title={`Show or hide ${row.label.toLowerCase()}`} onToggle={onToggle} />
+      <span className={row.opacity ? "ap-label-fixed" : "ap-name"}>{row.label}</span>
+      {row.opacity && (
+        <input
+          className="ap-slider grow"
+          type="range"
+          min={0}
+          max={100}
+          value={Math.round((opacity ?? 1) * 100)}
+          aria-label={`Set opacity of ${row.label.toLowerCase()}`}
+          title={`Set opacity of ${row.label.toLowerCase()}`}
+          onChange={(e) => onOpacity?.(Number(e.target.value) / 100)}
+        />
+      )}
+    </div>
+  );
+}
+
 export function ObjectsTab() {
   const { state, op, dispatch } = useAppearanceView();
   return (
@@ -29,25 +60,15 @@ export function ObjectsTab() {
         if (row.id === null) return <div key={`s${i}`} className="ap-spacer" />;
         const id = row.id;
         const checked = objectChecked(state, id);
-        const colorKey = COLOR_KEY[id];
         return (
-          <div className="ap-row" key={id} data-object={id} title={row.tooltip}>
-            <Swatch css={colorKey ? layerColor(colorKey) : null} hidden={!colorKey} title={colorKey ? "Color of this object (set by the color theme)" : undefined} />
-            <Eye on={checked} disabled={!row.checkbox} title={`Show or hide ${row.label.toLowerCase()}`} onToggle={() => op({ op: "object", id, visible: !checked })} />
-            <span className={row.opacity ? "ap-label-fixed" : "ap-name"}>{row.label}</span>
-            {row.opacity && (
-              <input
-                className="ap-slider grow"
-                type="range"
-                min={0}
-                max={100}
-                value={Math.round(state.appearance.opacity[row.opacity] * 100)}
-                aria-label={`Set opacity of ${row.label.toLowerCase()}`}
-                title={`Set opacity of ${row.label.toLowerCase()}`}
-                onChange={(e) => op({ op: "opacity", key: row.opacity!, value: Number(e.target.value) / 100 })}
-              />
-            )}
-          </div>
+          <ObjectRowView
+            key={id}
+            row={{ ...row, id }}
+            checked={checked}
+            opacity={row.opacity ? state.appearance.opacity[row.opacity] : undefined}
+            onToggle={() => op({ op: "object", id, visible: !checked })}
+            onOpacity={(value) => op({ op: "opacity", key: row.opacity!, value })}
+          />
         );
       })}
       {/* Not a row of KiCad's Objects tab: Preferences > Display Options "Show pad numbers" (`m_DisplayPadNumbers`, `pcbnew.Control.showPadNumbers`), kept where the studio's panel always had it. */}

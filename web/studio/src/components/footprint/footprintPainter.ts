@@ -31,6 +31,7 @@ import type { FootprintItemsDisplay } from "../../api/fpItemTypes";
 import { paintFpFields, paintFpItems } from "./fpItemsPaint";
 import { layerIsVisible } from "../../kicad-port/layerPresets";
 import { objectOn } from "../../kicad-port/appearance";
+import { fpPadOnLayer, fpPadShown, fpShapeOpacity, fpTextShown } from "../../kicad-port/fpAppearance";
 
 /** Footprint-local layer name ("F.SilkS") -> colors.json's real key, same punctuation swap `painter.ts`'s own `realLayerKey` uses. */
 function realLayerKey(layer: string): string {
@@ -375,6 +376,8 @@ export interface FpPaintOptions {
   movePreview: { refs: string[]; dxNm: number; dyNm: number } | null;
   /** High Contrast Mode (`common.Control.highContrastMode`): what is not on `activeLayer` is drawn dimmed. */
   highContrast?: boolean;
+  /** `HIGH_CONTRAST_MODE::HIDDEN` (Inactive layers "Hide"): with `highContrast`, what is not on `activeLayer` is not drawn. */
+  contrastHidden?: boolean;
   activeLayer?: string;
   /** The Footprint Checker's markers (`PCB_MARKER`s of the editor's board): where, how severe, and whether the dialog has it selected. */
   markers?: { at: [number, number]; severity: string; selected: boolean }[];
@@ -391,12 +394,12 @@ export interface FpPaintOptions {
 const DIMMED_ALPHA = 0.25;
 
 /**
- * `PCB_PAINTER`'s `m_contrastModeDisplay == DIMMED`: with High Contrast Mode on, an item not on the active layer is dimmed. A pad is copper (and mask and paste)
- * and this editor's layer box offers only silkscreen, fab and courtyard, so its pads are always off the active layer.
+ * `PCB_PAINTER`'s `m_contrastModeDisplay`: with High Contrast Mode on, an item not on the active layer is dimmed (DIMMED) or not drawn (HIDDEN). A pad is on the active
+ * layer when one of its layers is it (`PAD::IsOnLayer`: `*.Cu` is every copper layer), which the Appearance manager's copper rows can make it.
  */
 function contrastAlpha(opts: FpPaintOptions, layer: string | null): number {
   if (!opts.highContrast || !opts.activeLayer) return 1;
-  return layer === opts.activeLayer ? 1 : DIMMED_ALPHA;
+  return layer === opts.activeLayer ? 1 : opts.contrastHidden ? 0 : DIMMED_ALPHA;
 }
 
 /** The slice of `FpDrawState` the painter reads. */
@@ -432,6 +435,7 @@ export function paintFootprint(
     layerVisible: visible,
     layerOpacity: opts.layerOpacity ?? {},
     highContrast: !!opts.highContrast,
+    contrastHidden: !!opts.contrastHidden,
     activeLayer: opts.activeLayer ?? "F.SilkS",
     sketchText: !!opts.sketchText,
     sketchGraphics: !!opts.sketchGraphics,
@@ -447,14 +451,15 @@ export function paintFootprint(
     if (!layerIsVisible(visible, g.layer)) continue;
     const mv = moved(g.id);
     ctx.save();
-    ctx.globalAlpha *= contrastAlpha(opts, g.layer) * opacity(g.layer);
+    // `GetColor`'s per-type opacity: a filled shape takes Filled Shapes', a copper one Tracks' (kicad-port/fpAppearance.ts `fpShapeOpacity`)
+    ctx.globalAlpha *= contrastAlpha(opts, g.layer) * opacity(g.layer) * fpShapeOpacity(g, opts.layerOpacity);
     if (mv) ctx.translate(mv.dxNm, mv.dyNm);
     drawGraphic(ctx, view, g, opts.selection.has(g.id ?? ""), !!opts.sketchGraphics);
     ctx.restore();
   }
   if (objectOn(visible, "footprint_text")) {
     for (const t of footprint.texts) {
-      if (!layerIsVisible(visible, t.layer)) continue;
+      if (!layerIsVisible(visible, t.layer) || !fpTextShown(visible, t.content)) continue;
       const mv = moved(t.id);
       ctx.save();
       ctx.globalAlpha *= contrastAlpha(opts, t.layer) * opacity(t.layer);
@@ -469,10 +474,10 @@ export function paintFootprint(
     for (const p of footprint.pads) {
       // a pad shows while one of its layers does (`PAD::ViewGetLOD`); one that names none is on the front copper
       const layers = p.layers.length > 0 ? p.layers : ["F.Cu"];
-      if (!layers.some((l) => (l.startsWith("*.") ? ["F", "B"].some((side) => layerIsVisible(visible, `${side}.${l.slice(2)}`)) : layerIsVisible(visible, l)))) continue;
+      if (!fpPadShown(layers, visible)) continue;
       const mv = moved(p.id);
       ctx.save();
-      ctx.globalAlpha *= contrastAlpha(opts, null) * (opts.layerOpacity?.["obj:pads"] ?? 1);
+      ctx.globalAlpha *= contrastAlpha(opts, opts.activeLayer && fpPadOnLayer(layers, opts.activeLayer) ? opts.activeLayer : null) * (opts.layerOpacity?.["obj:pads"] ?? 1);
       if (mv) ctx.translate(mv.dxNm, mv.dyNm);
       drawPad(ctx, view, p, { selected: opts.selection.has(p.id ?? ""), sketch: !!opts.sketchPads });
       ctx.restore();

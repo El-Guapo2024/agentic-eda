@@ -20,6 +20,7 @@ import { FpShapeDialog } from "./FpShapeDialog";
 import { LibraryDialogHost } from "../library/libraryDialogs";
 import { DockColumn } from "../panels/Dock";
 import { Toolbar } from "../Toolbar";
+import { FootprintAppearancePanel } from "./FootprintAppearancePanel";
 
 /**
  * `DIALOG_ENUM_PADS` (pcbnew/dialogs/dialog_enum_pads.cpp): the prefix, start number and step of `pcbnew.PadTool.enumeratePads`. OK arms the click-to-number
@@ -125,6 +126,8 @@ export function FootprintEditorView() {
           <FootprintCanvas />
         </div>
         <Toolbar id="drawing" editor="footprint" />
+        {/* The "LayersManager" pane (footprint_edit_frame.cpp: `.Right().Layer( 3 )`, outside the drawing toolbar's `.Right().Layer( 2 )`), while `appearanceShown` (ToggleLayersManager). */}
+        {state.appearanceShown && <FootprintAppearancePanel />}
       </div>
       <PadPropertiesDialog />
       <FootprintLibraryPropertiesDialog />

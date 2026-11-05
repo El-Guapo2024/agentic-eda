@@ -313,6 +313,7 @@ export function FootprintCanvas() {
       cursorNm: constrained ? { x: constrained.end[0], y: constrained.end[1] } : rubber,
       movePreview: state.movePreview,
       highContrast: state.highContrast,
+      contrastHidden: state.contrastHidden,
       activeLayer: state.activeLayer,
       markers: checkMarkers,
       sketchPads: state.sketchPads,
@@ -331,7 +332,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode]);
+  }, [fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.contrastHidden]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -349,12 +350,12 @@ export function FootprintCanvas() {
     (wx: number, wy: number): { kind: string; id: string; item: string } | null => {
       if (!fp) return null;
       const tol = Math.max(80_000, 6 / state.view.scale);
-      const hit = fpHitTest(fp, wx, wy, tol);
+      const hit = fpHitTest(fp, wx, wy, tol, { layerVisible: state.layerVisible, layerOpacity: state.layerOpacity, highContrast: state.highContrast, activeLayer: state.activeLayer }); // what is hidden is not picked (`Selectable`)
       if (!hit) return null;
       const id = fpSelectionTarget(fp, hit.id);
       return { kind: id === hit.id ? hit.kind : "group", id, item: hit.id };
     },
-    [fp, state.view.scale]
+    [fp, state.view.scale, state.layerVisible, state.layerOpacity, state.highContrast, state.activeLayer]
   );
 
   /** One mouse event of the Renumber Pads tool: the numberable pads under the swept path take (or, on a click, give back) their number. */
