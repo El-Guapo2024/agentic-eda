@@ -649,7 +649,7 @@ impl SchLine {
 /// import. Scoped at the `Design` level (not per-sheet) because that is
 /// how real KiCad actually resolves them: `SCHEMATIC::GetBusAlias` searches
 /// the one project-wide list regardless of which sheet is asking.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BusAlias {
     pub name: String,

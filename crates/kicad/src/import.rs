@@ -1574,6 +1574,42 @@ fn merge_net_classes(model: &mut eda_model::ConstraintModel, project_json: &str,
         project_classes.append(&mut model.board.net_classes);
         model.board.net_classes = project_classes;
     }
+    // Each class's schematic columns (`readNetClass`: `wire_width` and `bus_width` in mils, `getInSchUnits`; `line_style` when a number; `schematic_color` when a
+    // string, `COLOR4D::UNSPECIFIED` -- what KiCad writes for none -- being none), for the classes the board keeps and the Default class.
+    for class in classes.into_iter().flatten() {
+        let Some(name) = class.get("name").and_then(|v| v.as_str()) else { continue };
+        if name != "Default" && !model.board.net_classes.iter().any(|c| c.name == name) {
+            continue;
+        }
+        let mils = |key: &str| class.get(key).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).map(|m| Nm::new(eda_model::units::kiround(m * 254.0) * 100));
+        let look = eda_model::sch_setup::NetClassSchematic {
+            wire_width: mils("wire_width"),
+            bus_width: mils("bus_width"),
+            line_style: class.get("line_style").and_then(|v| v.as_i64()).map(|s| s as i32),
+            color: class.get("schematic_color").and_then(|v| v.as_str()).and_then(eda_model::sch_setup::color_from_project),
+        };
+        // the Default class's KiCad defaults are no setting of the project's own
+        let look = if name == "Default" { strip_default_class_defaults(look) } else { look };
+        if !look.is_empty() {
+            model.board.net_class_schematic.insert(name.to_string(), look);
+        }
+    }
+}
+
+/// The Default class's schematic columns without the values that are KiCad's own defaults for it (6 and 12 mils, solid), so a project that says nothing new
+/// leaves the board with no setting of its own.
+fn strip_default_class_defaults(mut look: eda_model::sch_setup::NetClassSchematic) -> eda_model::sch_setup::NetClassSchematic {
+    let d = eda_model::sch_setup::NetClassSchematic::default_class(None);
+    if look.wire_width == d.wire_width {
+        look.wire_width = None;
+    }
+    if look.bus_width == d.bus_width {
+        look.bus_width = None;
+    }
+    if look.line_style == d.line_style {
+        look.line_style = None;
+    }
+    look
 }
 
 /// Merge a `.kicad_pro`'s `board.design_settings.rules` object -- the
