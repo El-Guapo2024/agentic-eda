@@ -91,7 +91,8 @@ function focusNext(from: HTMLElement): void {
 function PropertyRow({ row, units, commit, fail }: RowProps) {
   const mixed = row.value === null;
   return (
-    <div className={`prop-row${row.writable ? "" : " readonly"}`} data-prop={row.name} title={row.name}>
+    // A row the studio cannot edit where KiCad can says why in its tooltip (`GridRow.note`).
+    <div className={`prop-row${row.writable ? "" : " readonly"}`} data-prop={row.name} data-note={row.note} title={row.note ? `${row.name}: ${row.note}` : row.name}>
       <span className="prop-label">{row.name}</span>
       <div className="prop-value">{row.writable ? <Editor row={row} units={units} commit={commit} fail={fail} /> : <ReadOnly row={row} units={units} mixed={mixed} />}</div>
     </div>
@@ -105,7 +106,7 @@ function ReadOnly({ row, units, mixed }: { row: GridRow; units: LengthUnit; mixe
   if (row.kind === "color") return value === "" ? <span className="prop-ro">default</span> : <span className="prop-swatch" style={{ background: String(value) }} title={String(value)} />;
   const text = formatValue(row, value, units);
   return (
-    <span className="prop-ro" title={text}>
+    <span className="prop-ro" title={row.note ? `${text} (${row.note})` : text}>
       {text}
     </span>
   );

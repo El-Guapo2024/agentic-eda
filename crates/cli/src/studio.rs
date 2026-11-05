@@ -1284,6 +1284,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             // `FOOTPRINT_DESC`'s Library Description, Keywords, Component Class and the solder paste overrides: what the board file said of the footprint
             // (`FootprintExtra`: its `(descr ..)`, `(tags ..)`, `(component_classes ..)`, `(solder_paste_margin ..)`, `(solder_paste_margin_ratio ..)`).
             if let Some(e) = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == part.reference)) {
+                // The footprint was read from a board file: its own tokens are kept (`set_footprint_paste_margin` edits them).
+                p["from_board_file"] = json!(true);
                 let facts = eda_kicad::footprint_file_facts(&e.tokens);
                 if let Some(d) = facts.description {
                     p["lib_description"] = json!(d);
@@ -1326,6 +1328,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "pts": t.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
                 // The arc's mid point when this track is a KiCad arc (`Track::arc`), so an edit that re-sends the track keeps it an arc.
                 "arc_mid": t.arc().map(|(_, m, _)| [m.x, m.y]),
+                // A solder-mask opening of a track on an outer copper layer (`PCB_TRACK::HasSolderMask`, `DrawingsSection::track_masks`): `{ margin }`, the margin
+                // `None` when the board's applies; absent for no opening.
+                "mask": design.drawings.as_ref().and_then(|d| d.track_mask(&t.id)).map(|m| json!({ "margin": m.margin })),
             })).collect::<Vec<_>>(),
             "vias": r.vias.iter().map(|v| {
                 let extra = design.drawings.as_ref().and_then(|d| d.via_extra(&v.id));
@@ -1338,6 +1343,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     // `VIATYPE` when it is not a through via (`blind`, `buried`, `micro`; `DrawingsSection::via_extras`).
                     "type": extra.map(|e| e.kind).filter(|k| *k != eda_model::via_extra::ViaKind::Through),
                     "flashed": flashed.vias.get(&v.id),
+                    // The tenting, covering, plugging, capping, filling, backdrill and post-machining the via's tokens say (`eda_model::via_extra::ViaProps`); absent for none.
+                    "props": extra.map(|e| e.props()).filter(|p| *p != eda_model::via_extra::ViaProps::default()),
                 })
             }).collect::<Vec<_>>(),
             "zones": r.zones.iter().map(|z| json!({
@@ -1418,6 +1425,14 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "mirror": t.mirror,
                 // `EDA_TEXT::IsBold` (`TextExtra::bold`): what the Text Properties dialog's Bold button starts as (`m_bold->Check( m_item->IsBold() )`).
                 "bold": d.text_extra(&t.id).is_some_and(|x| x.bold),
+                // The rest of the text's `TextExtra` the Properties panel shows: italic, the vertical justification, the glyph width when it is not the
+                // height (`EDA_TEXT::GetTextWidth`), knockout, the automatic stroke width and the font face (absent: false, centred, square, none).
+                "italic": d.text_extra(&t.id).is_some_and(|x| x.italic),
+                "valign": d.text_extra(&t.id).map(|x| x.valign).filter(|v| *v != eda_model::ir::TextVAlign::Center),
+                "width": d.text_extra(&t.id).and_then(|x| x.width_nm),
+                "knockout": d.text_extra(&t.id).is_some_and(|x| x.knockout),
+                "auto_thickness": d.text_extra(&t.id).is_some_and(|x| x.auto_thickness),
+                "face": d.text_extra(&t.id).and_then(|x| x.face.clone()),
             }))).collect::<Vec<_>>(),
             // Task item 5 -- see `eda_model::ir::Group`'s own doc. A tuning pattern (a `PCB_GENERATOR`, which is a `PCB_GROUP`) is listed with the groups so that it selects as one
             // (`generator` names what it is); `tuning_patterns` has the pattern itself.

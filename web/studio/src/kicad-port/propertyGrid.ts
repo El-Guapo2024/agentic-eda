@@ -25,6 +25,8 @@ export interface GridRow {
   choices: readonly Choice[] | null;
   /** A `std::optional` property: an empty cell is no value. */
   optional?: boolean;
+  /** Not KiCad's: why the row is read-only here where KiCad's is not (`PropertyDef.readOnlyReason` of the first item that gives one), shown as its tooltip. */
+  note?: string;
 }
 
 export interface GridGroup {
@@ -54,7 +56,11 @@ interface Extracted {
   value: PropValue | null;
   writable: boolean;
   choices: readonly Choice[] | null;
+  /** The first item's `readOnlyReason`, when the row is not writable for it. */
+  note?: string;
 }
+
+
 
 /**
  * `extractValueAndWritability`: null when the property is not available for the whole selection (a class lacks it, the item does not have it, it is hidden, or
@@ -66,6 +72,7 @@ export function extractValueAndWritability<I extends PropItem, C, K>(pm: Propert
   let value: PropValue | null = null;
   let writable = true;
   let choices: readonly Choice[] | null = null;
+  let note: string | undefined;
   let first = true;
   for (const item of items) {
     const property = pm.getProperty(item.type, name, item, ctx);
@@ -79,7 +86,10 @@ export function extractValueAndWritability<I extends PropItem, C, K>(pm: Propert
     } else if (!sameChoices(c, choices)) {
       return null;
     }
-    if (!pm.isWriteableFor(item.type, property, item, ctx)) writable = false;
+    if (!pm.isWriteableFor(item.type, property, item, ctx)) {
+      writable = false;
+      note ??= pm.readOnlyReasonFor(item.type, property, item, ctx) ?? undefined;
+    }
     const v = property.get(item, ctx);
     if (!different && have && v !== value) {
       different = true;
@@ -89,7 +99,7 @@ export function extractValueAndWritability<I extends PropItem, C, K>(pm: Propert
       have = true;
     }
   }
-  return { value: different ? null : value, writable, choices };
+  return { value: different ? null : value, writable, choices, ...(note ? { note } : {}) };
 }
 
 /** `PROPERTIES_PANEL::rebuildProperties` for a selection, in selection order. */
@@ -127,7 +137,16 @@ export function buildGrid<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>
     if (!property || property.hidden || property.hiddenFromDesignEditors) continue;
     const got = extractValueAndWritability(pm, items, name, ctx);
     if (!got) continue;
-    const row: GridRow = { name: property.name, kind: property.kind, display: property.display ?? "default", value: got.value, writable: got.writable, choices: got.choices, ...(property.optional ? { optional: true } : {}) };
+    const row: GridRow = {
+      name: property.name,
+      kind: property.kind,
+      display: property.display ?? "default",
+      value: got.value,
+      writable: got.writable,
+      choices: got.choices,
+      ...(property.optional ? { optional: true } : {}),
+      ...(got.note ? { note: got.note } : {}),
+    };
     const group = property.group ?? "";
     const list = byGroup.get(group) ?? [];
     list.push({ row, at: order.get(property) ?? 0 });
@@ -142,6 +161,22 @@ export function buildGrid<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>
     groups.push({ name, caption: name === "" ? BASIC_PROPERTIES : name, rows: list.map((e) => e.row) });
   }
   return { caption, count: items.length, groups };
+}
+
+/**
+ * The rows a class lists, whatever the item (no `SetAvailableFunc` asked): `group/name` of every property of `type` that is not hidden from the panel
+ * (`SetIsHiddenFromPropertiesManager`, `SetIsHiddenFromDesignEditors`), the groups in the class's order and the rows in display order -- what
+ * `rebuildProperties` would list for an item that has them all. The tests compare it with a table of KiCad's own registrations.
+ */
+export function registeredRows<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>, type: string): string[] {
+  const order = pm.getDisplayOrder(type);
+  const props = pm.getProperties(type).filter((p) => !p.hidden && !p.hiddenFromDesignEditors);
+  const out: string[] = [];
+  for (const group of pm.getGroupDisplayOrder(type)) {
+    const rows = props.filter((p) => (p.group ?? "") === group).sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+    for (const p of rows) out.push(`${group}/${p.name}`);
+  }
+  return out;
 }
 
 /** What `planEdit` answers. */

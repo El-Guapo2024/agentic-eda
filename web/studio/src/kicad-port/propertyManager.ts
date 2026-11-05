@@ -60,6 +60,11 @@ export interface PropertyDef<I extends PropItem = PropItem, C = unknown, K = unk
   get: (item: I, ctx: C) => PropValue;
   /** The setter: the commands that make `item` have `value`; empty when it already has it. Absent: the row is read-only. */
   set?: (item: I, value: PropValue, ctx: C) => K[];
+  /**
+   * Not KiCad's: why the studio shows this row read-only where KiCad edits it (the model has no place for the value, or no verb sets it), for the row's tooltip.
+   * A function answers for one item (null: no reason for that item).
+   */
+  readOnlyReason?: string | ((item: I, ctx: C) => string | null);
 }
 
 const key = (owner: string, name: string): string => `${owner}\u0000${name.toLowerCase()}`;
@@ -74,6 +79,8 @@ interface ClassDesc<I extends PropItem, C, K> {
   masked: Set<string>;
   availabilityOverrides: Map<string, (item: I, ctx: C) => boolean>;
   writeabilityOverrides: Map<string, (item: I, ctx: C) => boolean>;
+  /** The studio's reason for an `OverrideWriteability` that makes a row read-only (`PropertyDef.readOnlyReason` of the class's own). */
+  writeabilityReasons: Map<string, string>;
   replaced: Set<string>;
   /** The groups this class itself introduced, "" first (`m_groupDisplayOrder` before a rebuild). */
   ownGroups: string[];
@@ -98,6 +105,7 @@ export class PropertyManager<I extends PropItem = PropItem, C = unknown, K = unk
         masked: new Set(),
         availabilityOverrides: new Map(),
         writeabilityOverrides: new Map(),
+        writeabilityReasons: new Map(),
         replaced: new Set(),
         ownGroups: [""],
         all: [],
@@ -155,9 +163,10 @@ export class PropertyManager<I extends PropItem = PropItem, C = unknown, K = unk
     this.getClass(derived).availabilityOverrides.set(key(base, name), fn);
   }
 
-  /** `OverrideWriteability`: the same for writeability. */
-  overrideWriteability(derived: string, base: string, name: string, fn: (item: I, ctx: C) => boolean): void {
+  /** `OverrideWriteability`: the same for writeability. `reason` (not KiCad's) is the tooltip of the row when the override makes it read-only here and not in KiCad. */
+  overrideWriteability(derived: string, base: string, name: string, fn: (item: I, ctx: C) => boolean, reason?: string): void {
     this.getClass(derived).writeabilityOverrides.set(key(base, name), fn);
+    if (reason) this.getClass(derived).writeabilityReasons.set(key(base, name), reason);
   }
 
   /** `PROPERTY_MANAGER::Rebuild`. */
@@ -266,6 +275,20 @@ export class PropertyManager<I extends PropItem = PropItem, C = unknown, K = unk
     if (property.writeable && !property.writeable(item, ctx)) return false;
     const override = this.classes.get(type)?.writeabilityOverrides.get(key(property.base ?? property.owner, property.name));
     return override ? override(item, ctx) : true;
+  }
+
+  /** Not KiCad's: why the row is read-only for `item` -- the class's own override's reason when that override refuses it, else the property's `readOnlyReason`. */
+  readOnlyReasonFor(type: string, property: PropertyDef<I, C, K>, item: I, ctx: C): string | null {
+    const k = key(property.base ?? property.owner, property.name);
+    const cls = this.classes.get(type);
+    const override = cls?.writeabilityOverrides.get(k);
+    if (override && !override(item, ctx)) {
+      const r = cls?.writeabilityReasons.get(k);
+      if (r) return r;
+    }
+    const own = property.readOnlyReason;
+    if (own === undefined) return null;
+    return typeof own === "string" ? own : own(item, ctx);
   }
 
   /** `IsOfType( derived, base )`. */

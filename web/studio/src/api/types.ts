@@ -81,6 +81,9 @@ export interface Pad {
   stack_layers?: PadStackLayer[] | null;
   /** A plated through-hole pad that removes the layers nothing connects it on (Remove Unused Pads): the copper layers that have its ring (`eda_connectivity::flashed_layers`). */
   flashed?: string[] | null;
+  /** `PAD::GetPinFunction`, `GetPinType`: the schematic pin's name and electrical type, as the board file is written with them (`(pinfunction ..)`, `(pintype ..)`); absent for none. */
+  pin_function?: string | null;
+  pin_type?: string | null;
 }
 
 /** `eda_model::padstack::PadStackMode` (`PADSTACK::MODE`). */
@@ -331,6 +334,8 @@ export interface Part {
   /** The footprint's own `(solder_paste_margin ..)` (nm) and `(solder_paste_margin_ratio ..)` (`GetLocalSolderPasteMargin`, `..Ratio`); absent when it has none. */
   paste_margin?: Nm;
   paste_margin_ratio?: number;
+  /** The footprint was read from a board file, whose tokens of it are kept (the footprint's paste margins are set there). */
+  from_board_file?: boolean;
 }
 
 /** `Part.zone`: what Footprint Properties and Pad Properties show in their zone fields. `null` is "inherited". */
@@ -351,6 +356,38 @@ export interface Track {
   pts: [Nm, Nm][];
   /** The arc's mid point when this track is a KiCad arc (`PCB_ARC`; `pts` is then its tessellation), else null/absent. */
   arc_mid?: [Nm, Nm] | null;
+  /** A solder-mask opening (`PCB_TRACK::HasSolderMask`) with its own margin (null: the board's); absent for none. */
+  mask?: { margin: Nm | null } | null;
+}
+
+/** `eda_model::via_extra::ViaDrillProps`: a backdrill or tertiary drill (`PADSTACK::DRILL_PROPS`). */
+export interface ViaDrillProps {
+  size: Nm;
+  start: string;
+  end: string;
+}
+/** `eda_model::via_extra::PostMachiningProps`. */
+export interface PostMachiningProps {
+  mode: "counterbore" | "countersink";
+  size: Nm;
+  depth: Nm;
+  /** Tenths of a degree. */
+  angle_ddeg: number;
+}
+/** `eda_model::via_extra::ViaProps`: a via's padstack settings beyond its size and drill; a key left out is "From board stackup" or none. */
+export interface ViaProps {
+  front_tenting?: boolean;
+  back_tenting?: boolean;
+  front_covering?: boolean;
+  back_covering?: boolean;
+  front_plugging?: boolean;
+  back_plugging?: boolean;
+  capping?: boolean;
+  filling?: boolean;
+  backdrill?: ViaDrillProps;
+  tertiary_drill?: ViaDrillProps;
+  front_post_machining?: PostMachiningProps;
+  back_post_machining?: PostMachiningProps;
 }
 
 export interface Via {
@@ -369,6 +406,8 @@ export interface Via {
   type?: "blind" | "buried" | "micro" | null;
   /** With `unconnected`: the copper layers that have its ring. */
   flashed?: string[] | null;
+  /** What its tokens say of the tenting, covering, plugging, capping, filling, backdrill and post-machining; absent for none. */
+  props?: ViaProps | null;
 }
 
 /** `crates/model/src/ir.rs` `PadConnection` ("ZONE_CONNECTION") -- exact Rust variant names on the wire (no `rename_all`, see api/types.ts's own convention note below). */
@@ -596,6 +635,9 @@ interface ShapeCommon {
   end_ending?: LineEnding;
   /** The net of a shape on a copper layer; absent for none. */
   net?: string;
+  /** A solder-mask opening of a shape on outer copper (`PCB_SHAPE::HasSolderMask`), and its own margin (absent: the board's). */
+  solder_mask?: boolean;
+  solder_mask_margin?: Nm;
 }
 
 export type Shape =
@@ -625,6 +667,14 @@ export interface BoardText {
   mirror: boolean;
   /** `EDA_TEXT::IsBold` (the text's `TextExtra::bold`); absent from a backend built before the Text Properties dialog had its Bold button. */
   bold?: boolean;
+  /** The rest of `TextExtra`: italic, the vertical justification (absent: centred), the glyph width when it is not `size` (the height), knockout, the
+   * automatic stroke width (no `(thickness ..)` in the file) and the outline font face (absent: KiCad's stroke font). */
+  italic?: boolean;
+  valign?: "top" | "bottom" | null;
+  width?: Nm | null;
+  knockout?: boolean;
+  auto_thickness?: boolean;
+  face?: string | null;
 }
 
 export interface Drawings {
@@ -1786,6 +1836,16 @@ export type Cmd =
   | { op: "track_via_nets"; ids: string[]; net: string | null; apply_anyway?: boolean; change_pads?: boolean }
   | { op: "set_zone_name"; id: string; name: string }
   | { op: "replace_shape"; id: string; shape: CmdShape }
+  /** The Properties panel's text style rows of a board text (crates/ops/src/pcb_props.rs `edit_text_style`): a key left out is unchanged. */
+  | { op: "edit_text_style"; id: string; width_nm?: Nm; valign?: "top" | "center" | "bottom"; bold?: boolean; italic?: boolean; knockout?: boolean; auto_thickness?: boolean }
+  /** "Soldermask" and "Soldermask Margin Override" of tracks and shapes on outer copper (`set_solder_mask`); `margin` null is the board's. */
+  | { op: "set_solder_mask"; ids: string[]; solder_mask: boolean; margin: Nm | null }
+  /** "Corner Radius" of rectangles (`set_corner_radius`). */
+  | { op: "set_corner_radius"; ids: string[]; radius: Nm }
+  /** A via's tenting, covering, plugging, capping, filling, backdrill and post-machining, whole (`set_via_props`). */
+  | { op: "set_via_props"; id: string; props: ViaProps }
+  /** A footprint's own paste margins (`set_footprint_paste_margin`); null is the board's. */
+  | { op: "set_footprint_paste_margin"; part: string; margin: Nm | null; ratio: number | null }
   /**
    * The Footprint Properties and Pad Properties dialogs' OK, and the Properties panel's footprint, field and pad rows (crates/ops/src/fp_edit.rs): what is given
    * replaces what the footprint has -- the Reference layout, the Value layout, the whole list of user fields, the attributes (type, board only, exclude from

@@ -1903,6 +1903,11 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetItemNet { ids, net } => format!("net-set {} --net {net}", ids.join(" ")),
         Cmd::SetZoneName { id, name } => format!("zone name {id} --name {name:?}"),
         Cmd::ReplaceShape { id, .. } => format!("shape replace {id}"),
+        Cmd::EditTextStyle { id, .. } => format!("text style {id}"),
+        Cmd::SetSolderMask { ids, solder_mask, .. } => format!("solder-mask {} {}", if *solder_mask { "on" } else { "off" }, ids.join(" ")),
+        Cmd::SetCornerRadius { ids, radius } => format!("shape corner-radius {} {}", mm(*radius), ids.join(" ")),
+        Cmd::SetViaProps { id, .. } => format!("via props {id}"),
+        Cmd::SetFootprintPasteMargin { part, .. } => format!("footprint paste-margin {part}"),
         Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => {
             let mut what: Vec<&str> = Vec::new();
             if reference.is_some() {
@@ -2228,6 +2233,11 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetItemNet { .. } => "net-set",
         Cmd::SetZoneName { .. } => "zone",
         Cmd::ReplaceShape { .. } => "shape",
+        Cmd::EditTextStyle { .. } => "text",
+        Cmd::SetSolderMask { .. } => "solder-mask",
+        Cmd::SetCornerRadius { .. } => "shape",
+        Cmd::SetViaProps { .. } => "via",
+        Cmd::SetFootprintPasteMargin { .. } => "footprint",
         Cmd::EditBoardFootprint { .. } => "footprint-edit",
         Cmd::EditBoardField { .. } => "field-edit",
         Cmd::EditBoardPad { .. } => "pad-edit",

@@ -14,7 +14,7 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import { stitchPosition } from "./viaStitch";
-import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadConnection, PadShapeName, Part, PlacementArea, PlacementSourceType, PointXY, Shape, Track, Nm, Via, Zone } from "../api/types";
+import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadConnection, PadShapeName, Part, PlacementArea, PlacementSourceType, PointXY, Shape, Track, Nm, UnconnectedLayers, Via, ViaProps, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
 import { enabledOptionalLayers, layerDisplayName } from "./boardLayers";
 import { effectiveClassName } from "./boardSetupRules";
@@ -23,7 +23,7 @@ import { editAttrsCmd, editFieldCmd, editPadCmd, fieldById, localAngleOf } from 
 import { arcShapeCenter, padById } from "./pcbItems";
 import { shapeToCmd } from "./pcbPointEdit";
 import { circumcircle } from "./trackArc";
-import { buildGrid, extractValueAndWritability, planEdit, positiveInt, rangeInt, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
+import { buildGrid, extractValueAndWritability, planEdit, positiveInt, rangeInt, tooLarge, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
 import type { BoardBarcode, BoardDrillMap, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
 import { registerExtraItemProperties } from "./pcbItemProperties";
@@ -32,6 +32,32 @@ import { NO_ENDING, type LineEnding, type LineEndingStyle } from "./lineEnding";
 import { registerTableProperties, tableItemOf, tableItemsOf } from "./pcbTableProperties";
 import { PLACEMENT_SOURCE_CHOICES } from "./multichannel";
 import { zoneEditCmd as zoneCmd } from "./zoneCmd";
+import { padZoneForm, setPadZoneCmd, type PadZoneForm } from "./padZone";
+import {
+  BACKDRILL_MODE_CHOICES,
+  backdrillEnd,
+  backdrillMode,
+  backdrillSize,
+  CAPPING_CHOICES,
+  COVERING_CHOICES,
+  FILLING_CHOICES,
+  modeOf,
+  PLUGGING_CHOICES,
+  POST_MACHINING_MODE_CHOICES,
+  postMachiningKey,
+  postMachiningMode,
+  TENTING_CHOICES,
+  withBackdrillEnd,
+  withBackdrillMode,
+  withBackdrillSize,
+  withFlag,
+  withPostMachining,
+  withPostMachiningMode,
+  type BackdrillMode,
+  type FlagKey,
+  type PostMachiningMode,
+  type SideMode,
+} from "./viaProps";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -103,12 +129,14 @@ export interface PcbCtx {
   copperLayers: readonly string[];
   /** Copper, then the technical and user layers in `LSET::TechAndUserUIOrder`, then any other layer something on the board is drawn on. */
   allLayers: readonly string[];
+  /** How many items are selected: a reference names one footprint, so it is edited only on its own. */
+  count: number;
 }
 
 /** `LSET::TechAndUserUIOrder`, the layers a board item can be drawn on besides copper (the 18 technical layers KiCad starts a board with; a board's own set is `enabledOptionalLayers`). */
 export const TECH_LAYERS: readonly string[] = ["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Dwgs.User", "Cmts.User", "Eco1.User", "Eco2.User", "Edge.Cuts", "Margin", "F.CrtYd", "B.CrtYd", "F.Fab", "B.Fab"];
 
-export function pcbContext(board: BoardState, units: LengthUnit): PcbCtx {
+export function pcbContext(board: BoardState, units: LengthUnit, count = 1): PcbCtx {
   const nets = new Set<string>();
   for (const p of board.parts) for (const pad of p.pads ?? []) if (pad.net) nets.add(pad.net);
   const rt = board.routing;
@@ -126,6 +154,7 @@ export function pcbContext(board: BoardState, units: LengthUnit): PcbCtx {
     nets: [...nets].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })),
     copperLayers: copper,
     allLayers: all,
+    count,
   };
 }
 
@@ -336,6 +365,49 @@ const norm360 = (a: number): number => ((a % 360) + 360) % 360;
 const xy = (p: readonly [number, number]): PointXY => ({ x: p[0], y: p[1] });
 const num = (v: PropValue): number => (typeof v === "number" ? v : Number(v));
 const NO_NET = "<no net>";
+/** `KICAD_FONT_NAME`: the stroke font's name in the Font row. */
+const KICAD_FONT_NAME = "KiCad Font";
+
+/** `ENUM_MAP<ZONE_CONNECTION>` (footprint.cpp, pad.cpp). */
+const ZONE_CONNECTION_CHOICES: Choice[] = [
+  { label: "Inherited", value: "inherited" },
+  { label: "None", value: "None" },
+  { label: "Thermal reliefs", value: "Thermal" },
+  { label: "Solid", value: "Full" },
+  { label: "Thermal reliefs for PTH", value: "ThtThermal" },
+];
+/** `ENUM_MAP<PAD_DRILL_POST_MACHINING_MODE>` (pad.cpp). */
+const POST_MACHINING_CHOICES: Choice[] = [
+  { label: "Not post-machined", value: "not_post_machined" },
+  { label: "Counterbore", value: "counterbore" },
+  { label: "Countersink", value: "countersink" },
+];
+/** `ENUM_MAP<BACKDRILL_MODE>` (pad.cpp). */
+const BACKDRILL_CHOICES: Choice[] = [
+  { label: "No backdrill", value: "no_backdrill" },
+  { label: "Backdrill bottom", value: "bottom" },
+  { label: "Backdrill top", value: "top" },
+  { label: "Backdrill both", value: "both" },
+];
+/** `ENUM_MAP<PAD_PROP>` (pad.cpp). */
+const PAD_PROP_CHOICES: Choice[] = [
+  { label: "None", value: "none" },
+  { label: "BGA pad", value: "bga" },
+  { label: "Fiducial, global to board", value: "fiducial_glob" },
+  { label: "Fiducial, local to footprint", value: "fiducial_loc" },
+  { label: "Test point pad", value: "testpoint" },
+  { label: "Heatsink pad", value: "heatsink" },
+  { label: "Castellated pad", value: "castellated" },
+  { label: "Mechanical pad", value: "mechanical" },
+  { label: "Press-fit pad", value: "pressfit" },
+];
+/** `ENUM_MAP<UNCONNECTED_LAYER_MODE>` (pad.cpp), the values `PadStack::unconnected` names them by. */
+const UNCONNECTED_CHOICES: Choice[] = [
+  { label: "All copper layers", value: "keep_all" },
+  { label: "Connected layers only", value: "remove_all" },
+  { label: "Front, back and connected layers", value: "remove_except_start_and_end" },
+  { label: "Start and end layers only", value: "start_end_only" },
+];
 
 /** `Normalize180`: an angle in (-180, 180]. */
 const norm180 = (a: number): number => {
@@ -485,21 +557,6 @@ const isTextOrField = (i: PcbItem): boolean => i.type === "PCB_TEXT" || i.type =
 const POSITION_X = "Position X";
 const POSITION_Y = "Position Y";
 
-/** A `PCB_TEXT` property of a footprint's field (`Knockout`, `Keep Upright`): a check box that sets one flag of the field's layout. */
-function fieldFlag2(_pm: PropertyManager<PcbItem, PcbCtx, Cmd>, add: (def: PropertyDef<PcbItem, PcbCtx, Cmd>, group?: string) => void, name: string, key: "knockout" | "keep_upright", read: (f: FieldInfo) => boolean): void {
-  add(
-    {
-      owner: "PCB_TEXT",
-      name,
-      kind: "bool",
-      get: (i) => read(i.field!),
-      available: (i) => i.type === "PCB_FIELD",
-      set: (i, v) => (read(i.field!) === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field!, { [key]: Boolean(v) })]),
-    },
-    "Text Properties"
-  );
-}
-
 function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   const pm = new PropertyManager<PcbItem, PcbCtx, Cmd>();
   const add = (def: PD, group = "") => pm.addProperty(def, group);
@@ -553,7 +610,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     owner: "BOARD_ITEM",
     name: "Locked",
     kind: "bool",
-    get: (i, c) => c.locked.has(i.id),
+    get: (i, c) => c.locked.has(i.field ? i.part!.ref : i.id),
     set: (i, v, c) => (c.locked.has(i.id) === Boolean(v) ? [] : [{ op: "set_locked", ids: [i.id], locked: Boolean(v) }]),
   });
 
@@ -572,7 +629,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       return [];
     },
   });
-  const netOf = (i: PcbItem): string => i.track?.net ?? i.via?.net ?? i.zone?.net ?? i.pad?.net ?? "";
+  const netOf = (i: PcbItem): string => i.track?.net ?? i.via?.net ?? i.zone?.net ?? i.pad?.net ?? i.shape?.net ?? "";
   // `BOARD_CONNECTED_ITEM_DESC`: "Net Class", the name of the net's effective class, hidden from the panel (it is how a rule says `A.Net_Class`).
   add({ owner: "BOARD_CONNECTED_ITEM", name: "Net Class", kind: "string", hidden: true, get: (i, c) => (netOf(i) === "" ? "Default" : effectiveClassName(c.board.board_rules?.net_classes ?? [], netOf(i))) });
   add({
@@ -584,6 +641,36 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     validate: (v, i) => (v === "" && (i.track || i.via) ? "A track or a via needs a net." : null),
     set: (i, v) => (netOf(i) === String(v) || i.pad ? [] : [{ op: "set_item_net", ids: [i.id], net: String(v) }]),
   });
+
+  // "Teardrops" (`BOARD_CONNECTED_ITEM_DESC`): a pad's and a via's own teardrop parameters, on a board whose teardrops are not legacy ones (`supportsTeardrops`:
+  // `!GetBoard()->LegacyTeardrops()` and a pad or a via; "Prefer Zone Connections" a pad only). The studio's teardrops are zones it makes from Board Setup's one set of
+  // parameters for every anchor (`AddAllTeardrops`), and the board file is written `(legacy_teardrops yes)` while it has any -- so, as in KiCad on that file, the
+  // rows are gone once a board has teardrops; before, they show what Board Setup would give the item, read-only (each item's own `(teardrops ..)` of a board file is
+  // kept as written, unread: GAPS 8).
+  const TEARDROPS = "Teardrops";
+  const TD_REASON = "Each pad's and via's own teardrop parameters are not read: Board Setup's Teardrops page serves every anchor (a board file's `(teardrops ..)` is kept as written).";
+  const supportsTeardrops = (i: PcbItem, c: PcbCtx): boolean => (i.type === "PAD" || i.type === "PCB_VIA") && !(c.board.routing?.zones ?? []).some((z) => z.teardrop);
+  const td = (c: PcbCtx): Partial<NonNullable<BoardState["routing"]>["teardrop_settings"]> => c.board.routing?.teardrop_settings ?? {};
+  /** Does Board Setup put teardrops on this anchor: the vias, the plated through-hole pads, the SMD pads. */
+  const tdTargeted = (i: PcbItem, c: PcbCtx): boolean => {
+    const s = td(c);
+    if (!s.enabled) return false;
+    if (i.via) return !!s.target_vias;
+    return i.pad?.th ? !!s.target_pth_pads : !!s.target_smd_pads;
+  };
+  const tdRow = (name: string, kind: "bool" | "double" | "int", get: (i: PcbItem, c: PcbCtx) => PropValue, available = supportsTeardrops): void => {
+    add({ owner: "BOARD_CONNECTED_ITEM", name, kind, ...(kind === "int" ? { display: "size" as const } : {}), get, available, readOnlyReason: TD_REASON }, TEARDROPS);
+  };
+  tdRow("Enable Teardrops", "bool", tdTargeted);
+  tdRow("Best Length Ratio", "double", (_i, c) => td(c).best_length_ratio ?? 0.5);
+  tdRow("Max Length", "int", (_i, c) => td(c).max_len_nm ?? 1_000_000);
+  tdRow("Best Width Ratio", "double", (_i, c) => td(c).best_width_ratio ?? 1);
+  tdRow("Max Width", "int", (_i, c) => td(c).max_width_nm ?? 2_000_000);
+  // The studio's teardrops have straight edges and never span two tracks (PARITY-pcb §15).
+  tdRow("Curved Teardrops", "bool", () => false);
+  tdRow("Prefer Zone Connections", "bool", () => true, (i, c) => i.type === "PAD" && supportsTeardrops(i, c));
+  tdRow("Allow Teardrops To Span Two Tracks", "bool", () => false);
+  tdRow("Max Width Ratio", "double", (_i, c) => td(c).width_to_size_filter_ratio ?? 0.9);
 
   // ------------------------------------------------------------------------------------------------------------------ FOOTPRINT
   pm.inheritsAfter("FOOTPRINT", "BOARD_ITEM");
@@ -617,35 +704,32 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       return Math.abs(delta) < 1e-9 ? [] : [{ op: "rotate_items", ids: [part.ref], pivot: xy(part.at), angle_millideg: Math.round(delta * 1000) }];
     },
   });
-  // The texts are read-only: a footprint's reference and library link come from the schematic and the intent (the fields' own layout is the Reference and
-  // Value items' to edit, and a user field's text the field's). `FOOTPRINT_DESC`'s "Footprint Properties": Library Link, Library Description (`GetLibDescription`,
-  // the file's `(descr ..)`), Keywords (`(tags ..)`) and Component Class (`GetComponentClassAsString`: the footprint's own classes, sorted and joined by ","
-  // as `GetFullClassNameForConstituents` names a composite class; the classes the project's assignment rules add are kicad-cli's DRC's, not shown here).
-  add({ owner: "FOOTPRINT", name: "Reference", kind: "string", get: (i) => i.part!.fields?.[0]?.text ?? i.part!.ref }, "Fields");
+  // `FOOTPRINT_DESC`'s "Fields" and "Footprint Properties": the Reference (`SetReference`: a rename, the symbol's with it -- `rename_symbol` renames the board's part
+  // in the same step; one footprint at a time, as two cannot share a reference), then the read-only Library Link (`GetFPIDAsString`), Library Description
+  // (`GetLibDescription`, the file's `(descr ..)`), Keywords (`(tags ..)`) and Component Class (`GetComponentClassAsString`: the footprint's own classes, sorted and
+  // joined by "," as `GetFullClassNameForConstituents` names a composite class; the classes the project's assignment rules add are kicad-cli's DRC's, not shown here).
+  add(
+    {
+      owner: "FOOTPRINT",
+      name: "Reference",
+      kind: "string",
+      get: (i) => i.part!.fields?.[0]?.text ?? i.part!.ref,
+      writeable: (_i, c) => c.count === 1,
+      readOnlyReason: "Two footprints cannot share a reference: rename them one at a time.",
+      validate: (v) => (String(v).trim() === "" ? "A reference cannot be empty." : null),
+      set: (i, v) => (i.part!.ref === String(v).trim() ? [] : [{ op: "rename_symbol", id: i.part!.ref, new_id: String(v).trim() }]),
+    },
+    "Fields"
+  );
   add({ owner: "FOOTPRINT", name: "Library Link", kind: "string", get: (i) => i.part!.footprint ?? "" }, "Footprint Properties");
   add({ owner: "FOOTPRINT", name: "Library Description", kind: "string", get: (i) => i.part!.lib_description ?? "" }, "Footprint Properties");
   add({ owner: "FOOTPRINT", name: "Keywords", kind: "string", get: (i) => i.part!.keywords ?? "" }, "Footprint Properties");
   add({ owner: "FOOTPRINT", name: "Component Class", kind: "string", get: (i) => [...(i.part!.component_classes ?? [])].sort().join(",") }, "Footprint Properties");
-  // `FOOTPRINT_DESC`'s "Attributes" and "Overrides": the type (the dialog's "Component Type"; KiCad's panel has no row for it), "Not in Schematic", "Exclude From
-  // Position Files", "Exclude From Bill of Materials", "Do not Populate" and "Exempt From Courtyard Requirement" are all written to the footprint's `(attr ..)`.
+  // `FOOTPRINT_DESC`'s "Attributes" and "Overrides": "Not in Schematic", "Exclude From Position Files", "Exclude From Bill of Materials", "Do not Populate" and
+  // "Exempt From Courtyard Requirement" are all written to the footprint's `(attr ..)`. (The footprint's type, SMD or through hole, is the dialog's "Component Type"
+  // radio: KiCad's panel has no row for it.)
   const ATTRIBUTES = "Attributes";
   const hasAttrs = (i: PcbItem): boolean => !!i.part!.attrs;
-  add(
-    {
-      owner: "FOOTPRINT",
-      name: "Component Type",
-      kind: "enum",
-      choices: () => [
-        { label: "Through hole", value: "through_hole" },
-        { label: "SMD", value: "smd" },
-        { label: "Unspecified", value: "unspecified" },
-      ],
-      get: (i) => i.part!.attrs?.kind ?? "unspecified",
-      available: hasAttrs,
-      set: (i, v) => (i.part!.attrs!.kind === v ? [] : [editAttrsCmd(i.part!, { kind: String(v) as "smd" | "through_hole" | "unspecified" })]),
-    },
-    ATTRIBUTES
-  );
   const attribute = (name: string, key: "board_only" | "exclude_from_pos_files" | "exclude_from_bom" | "dnp" | "allow_missing_courtyard", group: string): void => {
     add(
       {
@@ -684,23 +768,51 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     "Overrides"
   );
-  // "Solderpaste Margin Override" and "Solderpaste Margin Ratio Override": the footprint's own `(solder_paste_margin ..)` / `(solder_paste_margin_ratio ..)`, shown;
-  // no verb sets them yet.
-  add({ owner: "FOOTPRINT", name: "Solderpaste Margin Override", kind: "int", display: "size", optional: true, get: (i) => i.part!.paste_margin ?? "" }, "Overrides");
-  add({ owner: "FOOTPRINT", name: "Solderpaste Margin Ratio Override", kind: "double", display: "ratio", optional: true, get: (i) => i.part!.paste_margin_ratio ?? "" }, "Overrides");
+  // "Solderpaste Margin Override" and "Solderpaste Margin Ratio Override": the footprint's own `(solder_paste_margin ..)` / `(solder_paste_margin_ratio ..)`,
+  // `set_footprint_paste_margin` (each keeping the other). The board writes them from a board file's tokens of the footprint only: a footprint placed from the
+  // intent has none to set.
+  const PASTE_REASON = "A footprint placed from the intent has no footprint-level paste margin here: set its pads' margins (Pad Properties, or a pad's Overrides).";
+  const pasteCmd = (part: Part, margin: number | null, ratio: number | null): Cmd => ({ op: "set_footprint_paste_margin", part: part.ref, margin, ratio });
+  add(
+    {
+      owner: "FOOTPRINT",
+      name: "Solderpaste Margin Override",
+      kind: "int",
+      display: "size",
+      optional: true,
+      get: (i) => i.part!.paste_margin ?? "",
+      writeable: (i) => !!i.part!.from_board_file,
+      readOnlyReason: PASTE_REASON,
+      set: (i, v) => {
+        const next = v === "" ? null : Math.round(num(v));
+        return (i.part!.paste_margin ?? null) === next ? [] : [pasteCmd(i.part!, next, i.part!.paste_margin_ratio ?? null)];
+      },
+    },
+    "Overrides"
+  );
+  add(
+    {
+      owner: "FOOTPRINT",
+      name: "Solderpaste Margin Ratio Override",
+      kind: "double",
+      display: "ratio",
+      optional: true,
+      get: (i) => i.part!.paste_margin_ratio ?? "",
+      writeable: (i) => !!i.part!.from_board_file,
+      readOnlyReason: PASTE_REASON,
+      set: (i, v) => {
+        const next = v === "" ? null : num(v);
+        return (i.part!.paste_margin_ratio ?? null) === next ? [] : [pasteCmd(i.part!, i.part!.paste_margin ?? null, next)];
+      },
+    },
+    "Overrides"
+  );
   add(
     {
       owner: "FOOTPRINT",
       name: "Zone Connection Style",
       kind: "enum",
-      // `ENUM_MAP<ZONE_CONNECTION>`
-      choices: () => [
-        { label: "Inherited", value: "inherited" },
-        { label: "None", value: "None" },
-        { label: "Thermal reliefs", value: "Thermal" },
-        { label: "Solid", value: "Full" },
-        { label: "Thermal reliefs for PTH", value: "ThtThermal" },
-      ],
+      choices: () => ZONE_CONNECTION_CHOICES,
       get: (i) => i.part!.zone?.connection ?? "inherited",
       set: (i, v) => {
         const next = v === "inherited" ? null : (String(v) as PadConnection);
@@ -716,17 +828,42 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   pm.mask("PAD", "BOARD_CONNECTED_ITEM", "Layer");
   pm.mask("PAD", "BOARD_ITEM", "Locked");
   // A pad's net is the schematic's: shown, not edited (no verb re-nets a pad).
-  pm.overrideWriteability("PAD", "BOARD_CONNECTED_ITEM", "Net", () => false);
-  // `PAD_DESC` as far as this model has the data: the type, shape, size, corner radius and hole are edited through `edit_board_pad`; a pad's number, pin name and
-  // type, post-machining, backdrill, fabrication property, copper layers, pad-to-die, the zone connection overrides and thermal reliefs are not (the margins
-  // and clearance overrides are the Pad Properties dialog's).
+  pm.overrideWriteability("PAD", "BOARD_CONNECTED_ITEM", "Net", () => false, "A pad's net comes from the schematic (Update PCB from Schematic); no verb re-nets one pad.");
+  // `PAD_DESC`. The type, shape, size, corner radius, hole and orientation are edited through `edit_board_pad`, the margins too (the pad's edit), and the zone
+  // overrides through `set_pad_zone_overrides`; the number, the pin's name and type, the post-machining, the backdrill, the fabrication property and the
+  // pad-to-die length and delay are shown read-only (each says why).
   const padKind = (p: Pad): string => p.kind ?? (p.th ? "through_hole" : "smd");
   const padShape = (p: Pad): string => p.shape ?? (p.round ? (Math.abs(p.w - p.h) < 1 ? "circle" : "oval") : "rect");
   const padSize = (p: Pad): [number, number] => p.size ?? [p.w, p.h];
   const shortest = (p: Pad): number => Math.min(...padSize(p));
   const canHaveHole = (i: PcbItem): boolean => padKind(i.pad!) !== "smd";
+  /** `isCopperPad`: anything but a mechanical hole. */
+  const isCopperPad = (i: PcbItem): boolean => padKind(i.pad!) !== "non_plated_hole";
+  /** `hasNormalPadstack`: one shape for every copper layer (a front/inner/back or custom padstack is sized in Pad Properties only). */
+  const hasNormalPadstack = (i: PcbItem): boolean => (i.pad!.stack?.mode ?? "normal") === "normal";
   const edit = (i: PcbItem, patch: Parameters<typeof editPadCmd>[2]): Cmd[] => [editPadCmd(i.part!, i.pad!, patch)];
   const PAD = "Pad Properties";
+  // `PAD::GetOrientationDegrees`: the pad's angle on the board (KiCad's counter-clockwise one), its own in the footprint's frame turned with the footprint -- the
+  // way a field's is (`localAngleOf`); `SetOrientationDegrees` sets it there, which is the edit's `rot` (clockwise, the footprint's frame).
+  const padOrientation = (i: PcbItem): number => {
+    const part = i.part!;
+    const sense = part.side === "bottom" ? -1 : 1;
+    return norm180(sense * -(i.pad!.rot ?? 0) - (part.rot ?? 0));
+  };
+  add({
+    owner: "PAD",
+    name: "Orientation",
+    kind: "double",
+    display: "degree",
+    get: padOrientation,
+    set: (i, v) => {
+      if (Math.abs(norm180(padOrientation(i) - num(v))) < 1e-9) return [];
+      const local = localAngleOf(i.part!, Math.round(num(v) * 1000)) / 1000;
+      return edit(i, { rot: norm360(-local) });
+    },
+  });
+  pm.overrideAvailability("PAD", "BOARD_CONNECTED_ITEM", "Net", isCopperPad);
+  pm.overrideAvailability("PAD", "BOARD_CONNECTED_ITEM", "Net Class", isCopperPad);
   add(
     {
       owner: "PAD",
@@ -765,11 +902,16 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         { label: "Custom", value: "custom" },
       ],
       get: (i) => padShape(i.pad!),
+      available: hasNormalPadstack,
       set: (i, v) => (padShape(i.pad!) === v ? [] : edit(i, { shape: String(v) as PadShapeName })),
     },
     PAD
   );
-  add({ owner: "PAD", name: "Pad Number", kind: "string", get: (i) => i.pad!.num }, PAD);
+  add({ owner: "PAD", name: "Pad Number", kind: "string", get: (i) => i.pad!.num, available: isCopperPad, readOnlyReason: "No verb renumbers one pad on the board (the schematic's pins are matched by number): renumber in the Footprint Editor." }, PAD);
+  // `SetPinFunction`, `SetPinType`: the schematic's pin, as Update PCB from Schematic sets them (`updateComponentPadConnections`) and the board file is written with.
+  const FROM_PIN = "Set from the schematic's pin (Update PCB from Schematic), as the board file is written; not edited on the board.";
+  add({ owner: "PAD", name: "Pin Name", kind: "string", get: (i) => i.pad!.pin_function ?? "", readOnlyReason: FROM_PIN }, PAD);
+  add({ owner: "PAD", name: "Pin Type", kind: "string", get: (i) => i.pad!.pin_type ?? "", readOnlyReason: FROM_PIN }, PAD);
   const sizeRow = (name: "Size X" | "Size Y", axis: 0 | 1): void => {
     add(
       {
@@ -778,8 +920,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         kind: "int",
         display: "size",
         get: (i) => padSize(i.pad!)[axis],
-        // "Circle pads have no usable y-size"
-        available: (i) => axis === 0 || padShape(i.pad!) !== "circle",
+        // "Custom padstacks can't have size modified through panel"; "Circle pads have no usable y-size"
+        available: (i) => hasNormalPadstack(i) && (axis === 0 || padShape(i.pad!) !== "circle"),
         validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
         set: (i, v) => {
           const [w, h] = padSize(i.pad!);
@@ -794,7 +936,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   sizeRow("Size X", 0);
   sizeRow("Size Y", 1);
   // `hasRoundRadius` (`PAD_UTILS::PadHasMeaningfulRoundingRadius`): a rounded rectangle and a chamfered one have a radius that means anything.
-  const hasRadius = (i: PcbItem): boolean => padShape(i.pad!) === "round_rect" || padShape(i.pad!) === "chamfered_rect";
+  const hasRadius = (i: PcbItem): boolean => hasNormalPadstack(i) && (padShape(i.pad!) === "round_rect" || padShape(i.pad!) === "chamfered_rect");
   const ratio = (p: Pad): number => p.ratio ?? 0.25;
   add(
     {
@@ -870,6 +1012,154 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   hole("Hole Size X", 0);
   hole("Hole Size Y", 1);
 
+  // "Post-machining Properties" and "Backdrill Properties" (KiCad 10): a pad's counterbore, countersink and backdrill. The board's pads have no place for them --
+  // a pad of a board read from a file keeps its tokens as the file wrote them, unread -- so the rows show the pad without, read-only.
+  const NOT_MODELLED = "A pad's post-machining and backdrill are not modelled (a board file's tokens are kept as written, unread).";
+  const isRoundHole = (i: PcbItem): boolean => !i.pad!.slot;
+  const POST_MACHINING = "Post-machining Properties";
+  for (const side of ["Top", "Bottom"] as const) {
+    add({ owner: "PAD", name: `${side} Post-machining`, kind: "enum", choices: () => POST_MACHINING_CHOICES, get: () => "not_post_machined", available: isRoundHole, readOnlyReason: NOT_MODELLED }, POST_MACHINING);
+    // Available for a counterbore or a countersink: never, as no pad has either here.
+    add({ owner: "PAD", name: `${side} Post-machining Size`, kind: "int", display: "size", get: () => 0, available: () => false, readOnlyReason: NOT_MODELLED }, POST_MACHINING);
+    add({ owner: "PAD", name: `${side} Counterbore Depth`, kind: "int", display: "size", get: () => 0, available: () => false, readOnlyReason: NOT_MODELLED }, POST_MACHINING);
+    add({ owner: "PAD", name: `${side} Countersink Angle`, kind: "double", display: "degree", get: () => 0, available: () => false, readOnlyReason: NOT_MODELLED }, POST_MACHINING);
+  }
+  const BACKDRILL = "Backdrill Properties";
+  add({ owner: "PAD", name: "Backdrill Mode", kind: "enum", choices: () => BACKDRILL_CHOICES, get: () => "no_backdrill", readOnlyReason: NOT_MODELLED }, BACKDRILL);
+  for (const side of ["Bottom", "Top"] as const) {
+    add({ owner: "PAD", name: `${side} Backdrill Size`, kind: "int", display: "size", optional: true, get: () => "", available: () => false, readOnlyReason: NOT_MODELLED }, BACKDRILL);
+    add({ owner: "PAD", name: `${side} Backdrill Must-Cut`, kind: "enum", choices: (_i, c) => layerChoicesOf(c, c.copperLayers), get: () => "", available: () => false, readOnlyReason: NOT_MODELLED }, BACKDRILL);
+  }
+  // `ENUM_MAP<PAD_PROP>`: the pad's fabrication property. Not modelled (a board file's `(property pad_prop_..)` is kept as written).
+  add(
+    {
+      owner: "PAD",
+      name: "Fabrication Property",
+      kind: "enum",
+      choices: () => PAD_PROP_CHOICES,
+      get: () => "none",
+      readOnlyReason: "A pad's fabrication property is not modelled (a board file's `(property ..)` is kept as written, unread).",
+    },
+    PAD
+  );
+  // `PAD::SetUnconnectedLayerMode`: the padstack's (`PadStack::unconnected`), through the pad's edit.
+  add(
+    {
+      owner: "PAD",
+      name: "Copper Layers",
+      kind: "enum",
+      choices: () => UNCONNECTED_CHOICES,
+      get: (i) => i.pad!.stack?.unconnected ?? "keep_all",
+      set: (i, v) => {
+        const now = i.pad!.stack?.unconnected ?? "keep_all";
+        if (now === v) return [];
+        return edit(i, { stack: { ...(i.pad!.stack ?? { mode: "normal" }), unconnected: String(v) as UnconnectedLayers } });
+      },
+    },
+    PAD
+  );
+  add({ owner: "PAD", name: "Pad To Die Length", kind: "int", display: "size", get: () => 0, available: isCopperPad, readOnlyReason: "A pad's pad-to-die length is not modelled (a board file's `(die_length ..)` is kept as written, unread)." }, PAD);
+  add({ owner: "PAD", name: "Pad To Die Delay", kind: "int", display: "time", get: () => 0, available: isCopperPad, readOnlyReason: "A pad's pad-to-die delay is not modelled (a board file's `(die_delay ..)` is kept as written, unread)." }, PAD);
+
+  // "Overrides": the margins are the pad's edit (`solder_mask_margin`, `solder_paste_margin`, `solder_paste_margin_ratio`: a key left out is the library's), the
+  // clearance, the zone connection and the thermal relief are the pad's zone overrides (`set_pad_zone_overrides`, every one of them at once, `null` inherited).
+  const OVERRIDES = "Overrides";
+  const zoneOf = (i: PcbItem): PadZoneForm => padZoneForm(i.part, i.pad!.num);
+  const zoneSetCmd = (i: PcbItem, patch: Partial<PadZoneForm>): Cmd[] => {
+    const now = zoneOf(i);
+    const next = { ...now, ...patch };
+    return JSON.stringify(next) === JSON.stringify(now) ? [] : [setPadZoneCmd(i.part!.ref, i.pad!.num, next)];
+  };
+  const optionalLength = (v: PropValue): number | null => (v === "" ? null : Math.round(num(v)));
+  add(
+    {
+      owner: "PAD",
+      name: "Clearance Override",
+      kind: "int",
+      display: "size",
+      optional: true,
+      get: (i) => zoneOf(i).clearance ?? "",
+      validate: (v, _i, c) => (v !== "" && num(v) < 0 ? tooSmall(0, "size", c.units) : null),
+      set: (i, v) => zoneSetCmd(i, { clearance: optionalLength(v) }),
+    },
+    OVERRIDES
+  );
+  const margin = (name: string, read: (p: Pad) => number | null | undefined, key: "solder_mask_margin" | "solder_paste_margin" | "solder_paste_margin_ratio", ratio: boolean): void => {
+    add(
+      {
+        owner: "PAD",
+        name,
+        kind: ratio ? "double" : "int",
+        display: ratio ? "ratio" : "size",
+        optional: true,
+        get: (i) => read(i.pad!) ?? "",
+        set: (i, v) => {
+          const now = read(i.pad!) ?? null;
+          const next = v === "" ? null : ratio ? num(v) : Math.round(num(v));
+          return now === next ? [] : edit(i, { [key]: next ?? undefined });
+        },
+      },
+      OVERRIDES
+    );
+  };
+  margin("Soldermask Margin Override", (p) => p.mask_margin, "solder_mask_margin", false);
+  margin("Solderpaste Margin Override", (p) => p.paste_margin, "solder_paste_margin", false);
+  margin("Solderpaste Margin Ratio Override", (p) => p.paste_ratio, "solder_paste_margin_ratio", true);
+  add(
+    {
+      owner: "PAD",
+      name: "Zone Connection Style",
+      kind: "enum",
+      choices: () => ZONE_CONNECTION_CHOICES,
+      get: (i) => zoneOf(i).connection ?? "inherited",
+      set: (i, v) => zoneSetCmd(i, { connection: v === "inherited" ? null : (String(v) as PadConnection) }),
+    },
+    OVERRIDES
+  );
+  add(
+    {
+      owner: "PAD",
+      name: "Thermal Relief Spoke Width",
+      kind: "int",
+      display: "size",
+      optional: true,
+      get: (i) => zoneOf(i).spokeWidth ?? "",
+      // `RangeIntValidator<minZoneWidth, INT_MAX>` (`ZONE_THICKNESS_MIN_VALUE_MM`, 0.025 mm)
+      validate: (v, _i, c) => (v === "" ? null : rangeInt(25_000, Number.MAX_SAFE_INTEGER, "size", c.units)(v)),
+      set: (i, v) => zoneSetCmd(i, { spokeWidth: optionalLength(v) }),
+    },
+    OVERRIDES
+  );
+  // `PADSTACK::ThermalSpokeAngle`: the pad's own, else `DefaultThermalSpokeAngleForShape` (90 degrees for an oval or a rectangle of any kind, 45 for the rest).
+  const defaultSpokeAngle = (p: Pad): number => (["oval", "rect", "round_rect", "chamfered_rect"].includes(padShape(p)) ? 90 : 45);
+  add(
+    {
+      owner: "PAD",
+      name: "Thermal Relief Spoke Angle",
+      kind: "double",
+      display: "degree",
+      get: (i) => (zoneOf(i).spokeAngleMdeg ?? defaultSpokeAngle(i.pad!) * 1000) / 1000,
+      set: (i, v) => {
+        const mdeg = Math.round(norm360(num(v)) * 1000);
+        return mdeg === (zoneOf(i).spokeAngleMdeg ?? defaultSpokeAngle(i.pad!) * 1000) ? [] : zoneSetCmd(i, { spokeAngleMdeg: mdeg });
+      },
+    },
+    OVERRIDES
+  );
+  add(
+    {
+      owner: "PAD",
+      name: "Thermal Relief Gap",
+      kind: "int",
+      display: "size",
+      optional: true,
+      get: (i) => zoneOf(i).gap ?? "",
+      validate: (v, _i, c) => (v === "" ? null : positiveInt(v, "size", c.units)),
+      set: (i, v) => zoneSetCmd(i, { gap: optionalLength(v) }),
+    },
+    OVERRIDES
+  );
+
   // ------------------------------------------------------------------------------------------------------------ PCB_TRACK, PCB_ARC
   pm.inheritsAfter("PCB_TRACK", "BOARD_CONNECTED_ITEM");
   add({
@@ -905,6 +1195,38 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   trackEnd("Start Y", "start", 1, POSITION_Y);
   trackEnd("End X", "end", 0);
   trackEnd("End Y", "end", 1);
+  // "Technical Layers" (`isExternalLayerTrack`): a track's own solder-mask opening and margin (`DrawingsSection::track_masks`, `set_solder_mask`). The model keeps a
+  // margin only with an opening, so the margin is writeable when the track has one.
+  const isOuterTrack = (i: PcbItem): boolean => i.track!.layer === "F.Cu" || i.track!.layer === "B.Cu";
+  add(
+    {
+      owner: "PCB_TRACK",
+      name: "Soldermask",
+      kind: "bool",
+      get: (i) => !!i.track!.mask,
+      available: isOuterTrack,
+      set: (i, v) => (!!i.track!.mask === Boolean(v) ? [] : [{ op: "set_solder_mask", ids: [i.id], solder_mask: Boolean(v), margin: i.track!.mask?.margin ?? null }]),
+    },
+    "Technical Layers"
+  );
+  add(
+    {
+      owner: "PCB_TRACK",
+      name: "Soldermask Margin Override",
+      kind: "int",
+      display: "size",
+      optional: true,
+      get: (i) => i.track!.mask?.margin ?? "",
+      available: isOuterTrack,
+      writeable: (i) => !!i.track!.mask,
+      readOnlyReason: "The model keeps a margin only for a track with a solder mask opening: tick Soldermask first.",
+      set: (i, v) => {
+        const next = v === "" ? null : Math.round(num(v));
+        return (i.track!.mask?.margin ?? null) === next ? [] : [{ op: "set_solder_mask", ids: [i.id], solder_mask: true, margin: next }];
+      },
+    },
+    "Technical Layers"
+  );
   pm.inheritsAfter("PCB_ARC", "PCB_TRACK");
 
   // ----------------------------------------------------------------------------------------------------------------------- PCB_VIA
@@ -942,29 +1264,159 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     VIA
   );
-  // The layer pair has no verb (KiCad does not let a drawn via change its span from the dialog either): shown, with the type it makes.
-  add({ owner: "PCB_VIA", name: "Layer Top", kind: "enum", choices: (_i, c) => choicesOf(c.copperLayers), get: (i) => i.via!.from }, VIA);
-  add({ owner: "PCB_VIA", name: "Layer Bottom", kind: "enum", choices: (_i, c) => choicesOf(c.copperLayers), get: (i) => i.via!.to }, VIA);
+  // "Layer Top", "Layer Bottom" and "Via Type" (`SetTopLayer`, `SetBottomLayer`, `SetViaType`): `set_via_layers`, which sanitises the pair as Track & Via
+  // Properties does (`SanitizeLayers`: a through via spans the board, a pair given back to front is turned round) and refuses what `ValidateViaParameters` does.
+  add({
+    owner: "PCB_VIA",
+    name: "Layer Top",
+    kind: "enum",
+    choices: (_i, c) => choicesOf(c.copperLayers),
+    get: (i) => i.via!.from,
+    set: (i, v) => (i.via!.from === v ? [] : [{ op: "set_via_layers", ids: [i.id], from_layer: String(v) }]),
+  }, VIA);
+  add({
+    owner: "PCB_VIA",
+    name: "Layer Bottom",
+    kind: "enum",
+    choices: (_i, c) => choicesOf(c.copperLayers),
+    get: (i) => i.via!.to,
+    set: (i, v) => (i.via!.to === v ? [] : [{ op: "set_via_layers", ids: [i.id], to_layer: String(v) }]),
+  }, VIA);
+  /** `GetViaType()` when the via says it (`ENUM_MAP<VIATYPE>`: Through, Blind, Buried, Micro), else worked out from the span. */
+  const viaType = (i: PcbItem, c: PcbCtx): string => {
+    const v = i.via!;
+    if (v.type === "micro") return "Micro";
+    if (v.type === "blind") return "Blind";
+    if (v.type === "buried") return "Buried";
+    const first = c.copperLayers[0];
+    const last = c.copperLayers[c.copperLayers.length - 1];
+    const outer = (l: string): boolean => l === first || l === last;
+    if ((v.from === first && v.to === last) || (v.from === last && v.to === first)) return "Through";
+    return outer(v.from) || outer(v.to) ? "Blind" : "Buried";
+  };
   add(
     {
       owner: "PCB_VIA",
       name: "Via Type",
-      kind: "string",
-      get: (i, c) => {
-        const v = i.via!;
-        // `GetViaType()` when the via says it (`ENUM_MAP<VIATYPE>`: Through, Blind, Buried, Micro), else worked out from the span
-        if (v.type === "micro") return "Micro";
-        if (v.type === "blind") return "Blind";
-        if (v.type === "buried") return "Buried";
-        const first = c.copperLayers[0];
-        const last = c.copperLayers[c.copperLayers.length - 1];
-        const outer = (l: string): boolean => l === first || l === last;
-        if ((v.from === first && v.to === last) || (v.from === last && v.to === first)) return "Through";
-        return outer(v.from) || outer(v.to) ? "Blind" : "Buried";
-      },
+      kind: "enum",
+      choices: () => choicesOf(["Through", "Blind", "Buried", "Micro"]),
+      get: viaType,
+      set: (i, v, c) => (viaType(i, c) === v ? [] : [{ op: "set_via_layers", ids: [i.id], kind: String(v).toLowerCase() as "through" | "blind" | "buried" | "micro" }]),
     },
     VIA
   );
+  // The tenting, covering, plugging, capping and filling (`PADSTACK::OUTER_LAYER_PROPS`, `DRILL_PROPS`), then "Backdrill" and "Post-machining": the via's
+  // `props` (its tokens), set whole by `set_via_props` with the one change the `PCB_VIA` / `PADSTACK` setter makes (kicad-port/viaProps.ts).
+  const propsOf = (i: PcbItem): ViaProps => i.via!.props ?? {};
+  const propsCmd = (i: PcbItem, next: ViaProps): Cmd[] => (JSON.stringify(next) === JSON.stringify(propsOf(i)) ? [] : [{ op: "set_via_props", id: i.id, props: next }]);
+  const sideRow = (name: string, key: FlagKey, choices: Choice[]): void => {
+    add({ owner: "PCB_VIA", name, kind: "enum", choices: () => choices, get: (i) => modeOf(propsOf(i)[key]), set: (i, v) => propsCmd(i, withFlag(propsOf(i), key, String(v) as SideMode)) }, VIA);
+  };
+  sideRow("Front tenting", "front_tenting", TENTING_CHOICES);
+  sideRow("Back tenting", "back_tenting", TENTING_CHOICES);
+  sideRow("Front covering", "front_covering", COVERING_CHOICES);
+  sideRow("Back covering", "back_covering", COVERING_CHOICES);
+  sideRow("Front plugging", "front_plugging", PLUGGING_CHOICES);
+  sideRow("Back plugging", "back_plugging", PLUGGING_CHOICES);
+  sideRow("Capping", "capping", CAPPING_CHOICES);
+  sideRow("Filling", "filling", FILLING_CHOICES);
+
+  const BACKDRILL_GROUP = "Backdrill";
+  // `canHaveBackdrill`: a through via, or one that already has a backdrill.
+  const canHaveBackdrill = (i: PcbItem, c: PcbCtx): boolean => viaType(i, c) === "Through" || backdrillMode(propsOf(i)) !== "no_backdrill";
+  const drillsFrom = (top: boolean) => (i: PcbItem): boolean => {
+    const m = backdrillMode(propsOf(i));
+    return m === "both" || m === (top ? "top" : "bottom");
+  };
+  add(
+    {
+      owner: "PCB_VIA",
+      name: "Backdrill Mode",
+      kind: "enum",
+      choices: () => BACKDRILL_MODE_CHOICES,
+      get: (i) => backdrillMode(propsOf(i)),
+      available: canHaveBackdrill,
+      set: (i, v) => (backdrillMode(propsOf(i)) === v ? [] : propsCmd(i, withBackdrillMode(propsOf(i), String(v) as BackdrillMode, i.via!.drill))),
+    },
+    BACKDRILL_GROUP
+  );
+  for (const [side, top] of [
+    ["Bottom", false],
+    ["Top", true],
+  ] as const) {
+    add(
+      {
+        owner: "PCB_VIA",
+        name: `${side} Backdrill Size`,
+        kind: "int",
+        display: "size",
+        optional: true,
+        get: (i) => backdrillSize(propsOf(i), top) ?? "",
+        available: drillsFrom(top),
+        validate: (v, _i, c) => (v !== "" && num(v) < 0 ? tooSmall(0, "size", c.units) : null),
+        set: (i, v) => {
+          const next = v === "" ? null : Math.round(num(v));
+          return backdrillSize(propsOf(i), top) === next ? [] : propsCmd(i, withBackdrillSize(propsOf(i), top, next));
+        },
+      },
+      BACKDRILL_GROUP
+    );
+    add(
+      {
+        owner: "PCB_VIA",
+        name: `${side} Backdrill Must-Cut`,
+        kind: "enum",
+        choices: (_i, c) => choicesOf(c.copperLayers),
+        get: (i) => backdrillEnd(propsOf(i), top),
+        available: drillsFrom(top),
+        set: (i, v) => (backdrillEnd(propsOf(i), top) === v ? [] : propsCmd(i, withBackdrillEnd(propsOf(i), top, String(v)))),
+      },
+      BACKDRILL_GROUP
+    );
+  }
+
+  const POST_MACHINING_GROUP = "Post-machining";
+  for (const [side, front] of [
+    ["Front", true],
+    ["Back", false],
+  ] as const) {
+    const mode = (i: PcbItem): string => postMachiningMode(propsOf(i), front);
+    const pm_ = (i: PcbItem) => propsOf(i)[postMachiningKey(front)];
+    add(
+      {
+        owner: "PCB_VIA",
+        name: `${side} Post-machining`,
+        kind: "enum",
+        choices: () => POST_MACHINING_MODE_CHOICES,
+        get: mode,
+        set: (i, v) => (mode(i) === v ? [] : propsCmd(i, withPostMachiningMode(propsOf(i), front, String(v) as PostMachiningMode))),
+      },
+      POST_MACHINING_GROUP
+    );
+    const pmRow = (name: string, field: "size" | "depth" | "angle_ddeg", available: (m: string) => boolean): void => {
+      const angle = field === "angle_ddeg";
+      add(
+        {
+          owner: "PCB_VIA",
+          name: `${side} Post-machining ${name}`,
+          kind: angle ? "double" : "int",
+          display: angle ? "degree" : "size",
+          get: (i) => (angle ? (pm_(i)?.angle_ddeg ?? 0) / 10 : (pm_(i)?.[field] ?? 0)),
+          available: (i) => available(mode(i)),
+          validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, angle ? "degree" : "size", c.units) : null),
+          set: (i, v) => {
+            const n = angle ? Math.round(num(v) * 10) : Math.round(num(v));
+            return (pm_(i)?.[field] ?? 0) === n ? [] : propsCmd(i, withPostMachining(propsOf(i), front, field, n));
+          },
+        },
+        POST_MACHINING_GROUP
+      );
+    };
+    // Size: a counterbore or a countersink; Depth: a counterbore; Angle: a countersink.
+    pmRow("Size", "size", (m) => m === "counterbore" || m === "countersink");
+    pmRow("Depth", "depth", (m) => m === "counterbore");
+    pmRow("Angle", "angle_ddeg", (m) => m === "countersink");
+  }
 
   // ------------------------------------------------------------------------------------------------------------------------- ZONE
   pm.inheritsAfter("ZONE", "BOARD_CONNECTED_ITEM");
@@ -1113,8 +1565,12 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
 
   // ------------------------------------------------------------------------------------------------------------- EDA_TEXT, PCB_TEXT, PCB_FIELD
   pm.registerType("EDA_TEXT");
+  // `EDA_TEXT_DESC` (common/eda_text.cpp), over a board text (`text`), a footprint's field (`field`) and a dimension's label (`dim`). A free text's italic, bold,
+  // vertical justification, glyph width, knockout and automatic stroke width are its `TextExtra` (`edit_text_style`); the rest of it is `edit_text`'s.
   /** The angle of the text of a text item, a field or a dimension, degrees (a text's and a field's is KiCad's counter-clockwise one). */
   const textAngle = (i: PcbItem): number => (i.text ? i.text.angle : i.field ? i.field.angle : i.dim!.keep_text_aligned ? i.dim!.computed_text_angle : i.dim!.text_angle) / 1000;
+  const styleCmd = (t: BoardText, patch: Omit<Extract<Cmd, { op: "edit_text_style" }>, "op" | "id">): Cmd => ({ op: "edit_text_style", id: t.id, ...patch });
+  const NOT_A_DIM_ROW = "A dimension's label is drawn by the dimension: its italic, bold, mirror, justification and keep-upright are not modelled.";
   add({
     owner: "EDA_TEXT",
     name: "Orientation",
@@ -1138,10 +1594,35 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       get: (i) => (i.field ? i.field.text : i.text!.content),
       available: isTextOrField,
       writeable: (i) => !i.field || isUserField(i),
+      readOnlyReason: "A footprint's Reference and Value come from the schematic: edit them there, or the footprint's Reference row.",
       set: (i, v) => {
         if (i.field) return i.field.text === String(v) || !isUserField(i) ? [] : [editFieldCmd(i.part!, i.field, {}, String(v))];
         return i.text!.content === String(v) ? [] : [textCmd(i.text!, { content: String(v) })];
       },
+    },
+    TEXT
+  );
+  // "Font" (`SetFontProp`): KiCad's stroke font or an installed one. Only the stroke font is drawn here; an outline font a board file names is kept by name.
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Font",
+      kind: "string",
+      get: (i) => i.text?.face ?? KICAD_FONT_NAME,
+      readOnlyReason: "Only KiCad's stroke font is drawn here (no installed fonts are listed); an outline font a board file names is kept by name.",
+    },
+    TEXT
+  );
+  // "Auto Thickness" (`SetAutoThickness`): the text has no stroke width of its own and is drawn with `GetPenSizeForNormal` / `GetPenSizeForBold`.
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Auto Thickness",
+      kind: "bool",
+      get: (i) => (i.text ? !!i.text.auto_thickness : i.field ? i.field.thickness === 0 : i.dim!.text_thickness_nm == null),
+      writeable: (i) => !!i.text,
+      readOnlyReason: (i) => (i.field ? "A footprint field's automatic stroke width is not modelled: set its Thickness." : "A dimension's label keeps its own pen (15% of its size unless set)."),
+      set: (i, v) => (!!i.text!.auto_thickness === Boolean(v) ? [] : [styleCmd(i.text!, { auto_thickness: Boolean(v) })]),
     },
     TEXT
   );
@@ -1157,36 +1638,42 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
       set: (i, v) => {
         const w = Math.round(num(v));
-        if (thickness(i) === w) return [];
+        if (thickness(i) === w && !i.text?.auto_thickness) return [];
         if (i.field) return [editFieldCmd(i.part!, i.field, { thickness: w })];
-        return [i.text ? textCmd(i.text, { stroke_width: w }) : dimCmd(i.dim!, { text_thickness_nm: w })];
+        if (!i.text) return [dimCmd(i.dim!, { text_thickness_nm: w })];
+        // `SetTextThickness` ends the automatic width (`GetAutoThickness` is a thickness of 0).
+        return [...(thickness(i) === w ? [] : [textCmd(i.text, { stroke_width: w })]), ...(i.text.auto_thickness ? [styleCmd(i.text, { auto_thickness: false })] : [])];
       },
     },
     TEXT
   );
-  // Italic, Bold, Visible, Vertical Justification, Keep Upright and Knockout are a footprint field's: the free-standing text of this model has no place for them.
-  const fieldFlag = (name: string, key: "italic" | "bold" | "visible" | "knockout" | "keep_upright", read: (f: FieldInfo) => boolean): void => {
+  const textFlag = (name: "Italic" | "Bold", key: "italic" | "bold"): void => {
     add(
       {
         owner: "EDA_TEXT",
         name,
         kind: "bool",
-        get: (i) => read(i.field!),
-        available: isFieldItem,
-        set: (i, v) => (read(i.field!) === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field!, { [key]: Boolean(v) })]),
+        get: (i) => (i.field ? i.field[key] : i.text ? !!i.text[key] : false),
+        writeable: (i) => !i.dim,
+        readOnlyReason: NOT_A_DIM_ROW,
+        set: (i, v) => {
+          if (i.field) return i.field[key] === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field, { [key]: Boolean(v) })];
+          return !!i.text![key] === Boolean(v) ? [] : [styleCmd(i.text!, { [key]: Boolean(v) })];
+        },
       },
       TEXT
     );
   };
-  fieldFlag("Italic", "italic", (f) => f.italic);
-  fieldFlag("Bold", "bold", (f) => f.bold);
+  textFlag("Italic", "italic");
+  textFlag("Bold", "bold");
   add(
     {
       owner: "EDA_TEXT",
       name: "Mirrored",
       kind: "bool",
-      get: (i) => (i.field ? i.field.mirror : i.text!.mirror),
-      available: isTextOrField,
+      get: (i) => (i.field ? i.field.mirror : i.text ? i.text.mirror : false),
+      writeable: (i) => !i.dim,
+      readOnlyReason: NOT_A_DIM_ROW,
       set: (i, v) => {
         if (i.field) return i.field.mirror === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field, { mirror: Boolean(v) })];
         return i.text!.mirror === Boolean(v) ? [] : [textCmd(i.text!, { mirror: Boolean(v) })];
@@ -1194,10 +1681,23 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     TEXT
   );
-  fieldFlag("Visible", "visible", (f) => f.visible);
-  // This model's free text is square (one size for width and height): both rows read and write it. A field has a width and a height of its own.
+  // "Visible" (`isField`: a field's only).
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Visible",
+      kind: "bool",
+      get: (i) => i.field!.visible,
+      available: isFieldItem,
+      set: (i, v) => (i.field!.visible === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field!, { visible: Boolean(v) })]),
+    },
+    TEXT
+  );
+  // "Width" and "Height" (`SetTextWidth`, `SetTextHeight`): a free text's height is its `size`, its width the `TextExtra` width when it has one (else the height).
+  // A dimension's label is square in this model: both rows set its size.
+  const textWidth = (t: BoardText): number => t.width ?? t.size;
   const size = (name: "Width" | "Height"): void => {
-    const own = (i: PcbItem): number => (i.text ? i.text.size : i.field ? (name === "Width" ? i.field.w : i.field.h) : i.dim!.text_size_nm);
+    const own = (i: PcbItem): number => (i.text ? (name === "Width" ? textWidth(i.text) : i.text.size) : i.field ? (name === "Width" ? i.field.w : i.field.h) : i.dim!.text_size_nm);
     add(
       {
         owner: "EDA_TEXT",
@@ -1213,7 +1713,13 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
             const f = i.field;
             return [editFieldCmd(i.part!, f, { size: name === "Width" ? [s, f.h] : [f.w, s] })];
           }
-          return [i.text ? textCmd(i.text, { size_nm: s }) : dimCmd(i.dim!, { text_size_nm: s })];
+          if (i.text) {
+            const t = i.text;
+            if (name === "Width") return [styleCmd(t, { width_nm: s })];
+            // The height alone: a square text keeps its width.
+            return [textCmd(t, { size_nm: s }), ...(t.width == null ? [styleCmd(t, { width_nm: t.size })] : [])];
+          }
+          return [dimCmd(i.dim!, { text_size_nm: s })];
         },
       },
       TEXT
@@ -1231,8 +1737,9 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         { label: "Center", value: "center" },
         { label: "Right", value: "right" },
       ],
-      get: (i) => (i.field ? (i.field.halign < 0 ? "left" : i.field.halign > 0 ? "right" : "center") : i.text!.justify),
-      available: isTextOrField,
+      get: (i) => (i.field ? (i.field.halign < 0 ? "left" : i.field.halign > 0 ? "right" : "center") : i.text ? i.text.justify : "center"),
+      writeable: (i) => !i.dim,
+      readOnlyReason: NOT_A_DIM_ROW,
       set: (i, v) => {
         if (i.field) {
           const halign = v === "left" ? -1 : v === "right" ? 1 : 0;
@@ -1253,27 +1760,64 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         { label: "Center", value: "center" },
         { label: "Bottom", value: "bottom" },
       ],
-      get: (i) => (i.field!.valign < 0 ? "top" : i.field!.valign > 0 ? "bottom" : "center"),
-      available: isFieldItem,
+      get: (i) => (i.field ? (i.field.valign < 0 ? "top" : i.field.valign > 0 ? "bottom" : "center") : (i.text?.valign ?? "center")),
       set: (i, v) => {
-        const valign = v === "top" ? -1 : v === "bottom" ? 1 : 0;
-        return i.field!.valign === valign ? [] : [editFieldCmd(i.part!, i.field!, { valign })];
+        if (i.field) {
+          const valign = v === "top" ? -1 : v === "bottom" ? 1 : 0;
+          return i.field.valign === valign ? [] : [editFieldCmd(i.part!, i.field, { valign })];
+        }
+        return (i.text!.valign ?? "center") === v ? [] : [styleCmd(i.text!, { valign: String(v) as "top" | "center" | "bottom" })];
       },
     },
     TEXT
   );
+  // "Color" and "Hyperlink": a board text masks both (`PCB_TEXT_DESC`, `PCB_FIELD_DESC`); a dimension's label shows its colour, which a board file has no place for.
+  add({ owner: "EDA_TEXT", name: "Color", kind: "color", get: () => "", readOnlyReason: "A board item has no colour of its own in the board file: it is drawn in its layer's colour." }, TEXT);
+  add({ owner: "EDA_TEXT", name: "Hyperlink", kind: "string", get: () => "" }, TEXT);
 
   pm.inheritsAfter("PCB_TEXT", "BOARD_ITEM");
   pm.inheritsAfter("PCB_TEXT", "EDA_TEXT");
-  // `PCB_TEXT_DESC`: Knockout and Keep Upright (a footprint's text only).
-  fieldFlag2(pm, add, "Knockout", "knockout", (f) => f.knockout);
-  fieldFlag2(pm, add, "Keep Upright", "keep_upright", (f) => f.upright);
+  pm.mask("PCB_TEXT", "EDA_TEXT", "Color");
+  // `PCB_TEXT_DESC`: Knockout (`BOARD_ITEM::SetIsKnockout`, any board text) and Keep Upright (a footprint's text only: `isFootprintText`).
+  add(
+    {
+      owner: "PCB_TEXT",
+      base: "BOARD_ITEM",
+      name: "Knockout",
+      kind: "bool",
+      get: (i) => (i.field ? i.field.knockout : !!i.text?.knockout),
+      set: (i, v) => {
+        if (i.field) return i.field.knockout === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field, { knockout: Boolean(v) })];
+        return !!i.text!.knockout === Boolean(v) ? [] : [styleCmd(i.text!, { knockout: Boolean(v) })];
+      },
+    },
+    TEXT
+  );
+  add(
+    {
+      owner: "PCB_TEXT",
+      base: "EDA_TEXT",
+      name: "Keep Upright",
+      kind: "bool",
+      get: (i) => (i.field ? i.field.upright : false),
+      // A dimension's label has the row too (`PCB_TEXT`'s override is its own class's): not modelled for it.
+      writeable: (i) => !!i.field,
+      readOnlyReason: NOT_A_DIM_ROW,
+      set: (i, v) => (i.field!.upright === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field!, { keep_upright: Boolean(v) })]),
+    },
+    TEXT
+  );
+  pm.overrideAvailability("PCB_TEXT", "EDA_TEXT", "Keep Upright", isFieldItem);
+  pm.mask("PCB_TEXT", "EDA_TEXT", "Hyperlink");
 
   // `PCB_FIELD_DESC`: a field is a PCB_TEXT with a name; its position and layer are the field's own, it has no lock of its own (its footprint's is).
   pm.inheritsAfter("PCB_FIELD", "BOARD_ITEM");
   pm.inheritsAfter("PCB_FIELD", "PCB_TEXT");
   pm.inheritsAfter("PCB_FIELD", "EDA_TEXT");
-  pm.mask("PCB_FIELD", "BOARD_ITEM", "Locked");
+  pm.mask("PCB_FIELD", "EDA_TEXT", "Hyperlink");
+  pm.mask("PCB_FIELD", "EDA_TEXT", "Color");
+  // KiCad's field has a lock of its own (`BOARD_ITEM::SetLocked`); here it is locked with its footprint.
+  pm.overrideWriteability("PCB_FIELD", "BOARD_ITEM", "Locked", () => false, "A footprint's field is locked with its footprint here: lock the footprint.");
 
   // ------------------------------------------------------------------------------------------------------------------ PCB_TABLE, PCB_TABLECELL
   registerTableProperties(pm, { add });
@@ -1357,6 +1901,25 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   };
   rectSide("Width", 0);
   rectSide("Height", 1);
+  // "Corner Radius" (`SetCornerRadius`, the shape's style); the validator: not more than half the shorter side, not below zero.
+  const cornerRadius = (i: PcbItem): number => (i.shape as Extract<Shape, { kind: "rect" }>).corner_radius ?? 0;
+  add(
+    {
+      owner: "EDA_SHAPE",
+      name: "Corner Radius",
+      kind: "int",
+      display: "size",
+      get: cornerRadius,
+      available: isRect,
+      validate: (v, i, c) => {
+        const s = i.shape as Extract<Shape, { kind: "rect" }>;
+        const max = Math.floor(Math.min(Math.abs(s.end[0] - s.start[0]), Math.abs(s.end[1] - s.start[1])) / 2);
+        return num(v) > max ? tooLarge(max, "size", c.units) : num(v) < 0 ? tooSmall(0, "size", c.units) : null;
+      },
+      set: (i, v) => (cornerRadius(i) === Math.round(num(v)) ? [] : [{ op: "set_corner_radius", ids: [i.id], radius: Math.round(num(v)) }]),
+    },
+    SHAPE
+  );
   add(
     {
       owner: "EDA_SHAPE",
@@ -1369,6 +1932,26 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     SHAPE
   );
+  // "Line Style" (`ENUM_MAP<LINE_STYLE>`): a board shape is drawn and written solid here (`(stroke (type solid))`), its file's style not kept (UI-LEFT P5).
+  add(
+    {
+      owner: "EDA_SHAPE",
+      name: "Line Style",
+      kind: "enum",
+      choices: () => [
+        { label: "Solid", value: "solid" },
+        { label: "Dashed", value: "dash" },
+        { label: "Dotted", value: "dot" },
+        { label: "Dash-Dot", value: "dash_dot" },
+        { label: "Dash-Dot-Dot", value: "dash_dot_dot" },
+      ],
+      get: () => "solid",
+      readOnlyReason: "A board shape is drawn and written solid: the model has no line style for it yet (a board file's dashes are not kept).",
+    },
+    SHAPE
+  );
+  // "Line Color" and "Fill Color" are a schematic shape's: `PCB_SHAPE_DESC` masks both.
+  add({ owner: "EDA_SHAPE", name: "Line Color", kind: "color", get: () => "" }, SHAPE);
   add({ owner: "EDA_SHAPE", name: "Angle", kind: "double", display: "degree", get: (i) => arcAngle(i.shape as Extract<Shape, { kind: "arc" }>), available: (i) => kindOf(i) === "arc" }, SHAPE);
   add(
     {
@@ -1387,6 +1970,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     SHAPE
   );
+
+  add({ owner: "EDA_SHAPE", name: "Fill Color", kind: "color", get: () => "", available: (i) => kindOf(i) === "polygon" || kindOf(i) === "rect" || kindOf(i) === "circle" }, SHAPE);
 
   // KiCad 10's line endings (`_EDA_SHAPE_DESC`, after Fill Color): Start Shape, Start Length, Start Width, Start Stroke Width and the End ones, on an open shape (`isOpenShape`).
   // The enum lists the styles in `ENUM_MAP<LINE_ENDING_STYLE>`'s order: None, Arrow, Circle, Square, Open Arrow.
@@ -1465,8 +2050,47 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   pm.overrideAvailability("PCB_SHAPE", "EDA_SHAPE", "Center X", isCircle);
   pm.overrideAvailability("PCB_SHAPE", "EDA_SHAPE", "Center Y", isCircle);
   pm.overrideAvailability("PCB_SHAPE", "EDA_SHAPE", "Radius", isCircle);
-  // A drawn shape has no net in this model (a copper graphic is not part of the netlist).
-  pm.overrideAvailability("PCB_SHAPE", "BOARD_CONNECTED_ITEM", "Net", () => false);
+  pm.mask("PCB_SHAPE", "EDA_SHAPE", "Line Color");
+  pm.mask("PCB_SHAPE", "EDA_SHAPE", "Fill Color");
+  // `isCopper`: a shape on copper has a net -- shown (the board file's `(net ..)`, the shape's style), not edited: no verb re-nets a shape.
+  pm.overrideAvailability("PCB_SHAPE", "BOARD_CONNECTED_ITEM", "Net", (i) => isCopper(i.shape!.layer));
+  pm.overrideWriteability("PCB_SHAPE", "BOARD_CONNECTED_ITEM", "Net", () => false, "No verb sets a shape's net: it is kept as the board file had it.");
+  // "Pad Primitives": a custom pad's shapes in the Footprint Editor's pad edit mode (`isPadEditMode`), never on the board.
+  add({ owner: "PCB_SHAPE", name: "Number Box", kind: "bool", get: () => false, available: () => false }, "Pad Primitives");
+  add({ owner: "PCB_SHAPE", name: "Thermal Spoke Template", kind: "bool", get: () => false, available: () => false }, "Pad Primitives");
+  // "Technical Layers": a solder-mask opening of a shape on the front or back copper (`isExternalCuLayer`), `set_solder_mask`. The model keeps a margin only with
+  // an opening, so the margin is writeable when the shape has one.
+  const TECH = "Technical Layers";
+  const isOuterCopper = (layer: string): boolean => layer === "F.Cu" || layer === "B.Cu";
+  add(
+    {
+      owner: "PCB_SHAPE",
+      name: "Soldermask",
+      kind: "bool",
+      get: (i) => !!i.shape!.solder_mask,
+      available: (i) => isOuterCopper(i.shape!.layer),
+      set: (i, v) => (!!i.shape!.solder_mask === Boolean(v) ? [] : [{ op: "set_solder_mask", ids: [i.id], solder_mask: Boolean(v), margin: i.shape!.solder_mask_margin ?? null }]),
+    },
+    TECH
+  );
+  add(
+    {
+      owner: "PCB_SHAPE",
+      name: "Soldermask Margin Override",
+      kind: "int",
+      display: "size",
+      optional: true,
+      get: (i) => i.shape!.solder_mask_margin ?? "",
+      available: (i) => isOuterCopper(i.shape!.layer),
+      writeable: (i) => !!i.shape!.solder_mask,
+      readOnlyReason: "The model keeps a margin only for a shape with a solder mask opening: tick Soldermask first.",
+      set: (i, v) => {
+        const next = v === "" ? null : Math.round(num(v));
+        return (i.shape!.solder_mask_margin ?? null) === next ? [] : [{ op: "set_solder_mask", ids: [i.id], solder_mask: true, margin: next }];
+      },
+    },
+    TECH
+  );
 
   // ------------------------------------------------------------------------------------------------------------ dimensions
   pm.inheritsAfter("PCB_DIMENSION_BASE", "PCB_TEXT");
@@ -1588,11 +2212,11 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     pm.inheritsAfter(derived, "PCB_DIMENSION_BASE");
   };
   /** The overrides every dimension class repeats (they are not inherited): the text, vertical justification, hyperlink and knockout of an ordinary text are not a dimension's. */
-  const dimensionOverrides = (derived: string, keepText: boolean): void => {
-    if (!keepText) pm.overrideAvailability(derived, "EDA_TEXT", "Text", () => false);
-    // Mirrored and Horizontal Justification are text properties this model's dimension does not carry.
-    pm.overrideAvailability(derived, "EDA_TEXT", "Mirrored", () => false);
-    pm.overrideAvailability(derived, "EDA_TEXT", "Horizontal Justification", () => false);
+  const dimensionOverrides = (derived: string): void => {
+    pm.overrideAvailability(derived, "EDA_TEXT", "Text", () => false);
+    pm.overrideAvailability(derived, "EDA_TEXT", "Vertical Justification", () => false);
+    pm.overrideAvailability(derived, "EDA_TEXT", "Hyperlink", () => false);
+    pm.overrideAvailability(derived, "BOARD_ITEM", "Knockout", () => false);
   };
   alignedBases("PCB_DIM_ALIGNED");
   add(
@@ -1623,11 +2247,11 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     DIMENSION
   );
-  dimensionOverrides("PCB_DIM_ALIGNED", false);
+  dimensionOverrides("PCB_DIM_ALIGNED");
 
   alignedBases("PCB_DIM_ORTHOGONAL");
   pm.inheritsAfter("PCB_DIM_ORTHOGONAL", "PCB_DIM_ALIGNED");
-  dimensionOverrides("PCB_DIM_ORTHOGONAL", false);
+  dimensionOverrides("PCB_DIM_ORTHOGONAL");
 
   alignedBases("PCB_DIM_RADIAL");
   add(
@@ -1645,13 +2269,28 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     DIMENSION
   );
-  dimensionOverrides("PCB_DIM_RADIAL", false);
+  dimensionOverrides("PCB_DIM_RADIAL");
 
   alignedBases("PCB_DIM_LEADER");
-  // "Text Frame" (`DIM_TEXT_BORDER`) has no place in this model.
-  dimensionOverrides("PCB_DIM_LEADER", true);
+  // "Text Frame" (`ENUM_MAP<DIM_TEXT_BORDER>`: None, Rectangle, Circle) has no place in this model: a leader's text is drawn without one.
+  add(
+    {
+      owner: "PCB_DIM_LEADER",
+      name: "Text Frame",
+      kind: "enum",
+      choices: () => [
+        { label: "None", value: "none" },
+        { label: "Rectangle", value: "rectangle" },
+        { label: "Circle", value: "circle" },
+      ],
+      get: () => "none",
+      readOnlyReason: "A leader's text frame is not modelled: the text is drawn without one.",
+    },
+    DIMENSION
+  );
+  dimensionOverrides("PCB_DIM_LEADER");
   alignedBases("PCB_DIM_CENTER");
-  dimensionOverrides("PCB_DIM_CENTER", false);
+  dimensionOverrides("PCB_DIM_CENTER");
 
   // ----------------------------------------------------------------------------------------------------------------- PCB_GROUP
   pm.registerType("EDA_GROUP");
@@ -1685,16 +2324,18 @@ export const PCB_PROPERTIES: PropertyManager<PcbItem, PcbCtx, Cmd> = build();
 
 /** The grid the Properties panel shows for a selection of board items. */
 export function pcbGrid(board: BoardState, ids: Iterable<string>, units: LengthUnit): GridModel {
-  const ctx = pcbContext(board, units);
-  return buildGrid(PCB_PROPERTIES, pcbItemsOf(board, ids), ctx, pcbFriendlyName);
+  const items = pcbItemsOf(board, ids);
+  return buildGrid(PCB_PROPERTIES, items, pcbContext(board, units, items.length), pcbFriendlyName);
 }
 
 /** The commands an edit of one row sets on the selection, or why it is refused. */
 export function pcbEdit(board: BoardState, ids: Iterable<string>, name: string, value: PropValue, units: LengthUnit): EditPlan<Cmd> {
-  return planEdit(PCB_PROPERTIES, pcbItemsOf(board, ids), name, value, pcbContext(board, units));
+  const items = pcbItemsOf(board, ids);
+  return planEdit(PCB_PROPERTIES, items, name, value, pcbContext(board, units, items.length));
 }
 
 /** `extractValueAndWritability` for one named property of a selection (tests and the panel's tooltips). */
 export function pcbRow(board: BoardState, ids: Iterable<string>, name: string, units: LengthUnit): ReturnType<typeof extractValueAndWritability> {
-  return extractValueAndWritability(PCB_PROPERTIES, pcbItemsOf(board, ids), name, pcbContext(board, units));
+  const items = pcbItemsOf(board, ids);
+  return extractValueAndWritability(PCB_PROPERTIES, items, name, pcbContext(board, units, items.length));
 }
