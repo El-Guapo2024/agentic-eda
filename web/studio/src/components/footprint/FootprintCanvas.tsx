@@ -20,7 +20,6 @@ import { picker } from "../../actions/pcbPicker";
 import { isMac } from "../../platform";
 import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
 import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
-import { distToSegment } from "../canvas/itemHitTest";
 import { nextPadNumber } from "../../kicad-port/padNumbering";
 import { padCanHaveNumber } from "../../kicad-port/fpEditActions";
 import { padEditMenu, padToolsBlocked } from "../../kicad-port/padEditMode";
@@ -45,6 +44,10 @@ import { heldCursor } from "../../kicad-port/heldCursor";
 import { FootprintSnap, type FootprintPointOpts, type FootprintSnapMods } from "./footprintSnap";
 import { paintSnapOverlay } from "../canvas/snapOverlayPainter";
 import { layerColor } from "../canvas/layers";
+import { fpEditTarget, fpFields, fpHitTest, fpItemKind, fpSelectionTarget, fpCanMirror, type FpEditTarget } from "../../kicad-port/fpItems";
+import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
+import { leaderModeOf, zoneClick, zoneFinish, zoneLeader } from "../../kicad-port/pcbDrawZone";
+import { isGroup } from "../../kicad-port/groupTree";
 import "../../styles/canvas.css";
 
 const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier">> = {
@@ -95,39 +98,26 @@ function shapePoints(s: CmdShape): [number, number][] {
   }
 }
 
-function graphicHitDistance(s: CmdShape, wx: number, wy: number): number {
-  if (s.kind === "bezier") {
-    const poly = shapePoints(s);
-    let best = Infinity;
-    for (let i = 0; i + 1 < poly.length; i++) best = Math.min(best, distToSegment(wx, wy, poly[i]![0], poly[i]![1], poly[i + 1]![0], poly[i + 1]![1]));
-    return best;
+/**
+ * Where the rubber band of the drawing tool in force ends with the cursor at `cursor`, under the footprint editor's line mode (`FOOTPRINT_EDITOR_SETTINGS::m_AngleSnapMode`):
+ * a line's second point is `drawShape`'s (`GetVectorSnapped45` / `90`, kicad-port/pcbShapeSnap.ts), a polygon's leader `DrawZone`'s (`POLYGON_GEOM_MANAGER`, kicad-port/pcbDrawZone.ts).
+ * Ctrl frees a line and constrains a rectangle or a circle, as on the board; the canvas reads it at the last pointer event.
+ */
+let lineModeCtrl = false;
+function rubberEndFor(mode: "direct" | "45" | "90", draw: { shapeKind: string; pts: [number, number][] }, cursor: [number, number]): { end: [number, number]; leader?: [number, number][] } {
+  const last = draw.pts[draw.pts.length - 1];
+  if (!last) return { end: cursor };
+  if (draw.shapeKind === "segment" || draw.shapeKind === "rect" || draw.shapeKind === "circle") return { end: shapeSecondPoint(draw.shapeKind, mode, lineModeCtrl, last, cursor) };
+  if (draw.shapeKind === "polygon") {
+    const leader = zoneLeader(draw.pts, cursor, leaderModeOf(mode, lineModeCtrl));
+    return { end: leader[leader.length - 1] ?? cursor, leader };
   }
-  if (s.kind === "circle") {
-    const r = Math.hypot(s.end.x - s.center.x, s.end.y - s.center.y);
-    return Math.abs(Math.hypot(wx - s.center.x, wy - s.center.y) - r);
-  }
-  if (s.kind === "rect") {
-    const pts: [number, number][] = [
-      [s.start.x, s.start.y],
-      [s.end.x, s.start.y],
-      [s.end.x, s.end.y],
-      [s.start.x, s.end.y],
-      [s.start.x, s.start.y],
-    ];
-    let best = Infinity;
-    for (let i = 0; i + 1 < pts.length; i++) best = Math.min(best, distToSegment(wx, wy, pts[i]![0], pts[i]![1], pts[i + 1]![0], pts[i + 1]![1]));
-    return best;
-  }
-  const pts = shapePoints(s);
-  let best = Infinity;
-  for (let i = 0; i + 1 < pts.length; i++) best = Math.min(best, distToSegment(wx, wy, pts[i]![0], pts[i]![1], pts[i + 1]![0], pts[i + 1]![1]));
-  if (s.kind === "polygon" && pts.length > 2) best = Math.min(best, distToSegment(wx, wy, pts[pts.length - 1]![0], pts[pts.length - 1]![1], pts[0]![0], pts[0]![1]));
-  return best;
+  return { end: cursor };
 }
 
 type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] }
-  | { kind: "move"; refs: string[]; moveKind: "pad" | "graphic" | "text"; startWorld: [number, number]; snapOrigin: [number, number] };
+  | { kind: "move"; refs: string[]; moveKind: string; startWorld: [number, number]; snapOrigin: [number, number] };
 
 /** The shape a point-counted tool commits: the layer class's width and, for a polygon, KiCad's fill rule (kicad-port/fpDrawDefaults.ts). */
 function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier", pts: [number, number][], layer: string): CmdShape | null {
@@ -154,7 +144,12 @@ export function FootprintCanvas() {
   const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridNm, gridList, gridOverrides);
   /** `GetSelectionGrid`: the category of the coarsest grid of what is held. */
   const heldCategory = (ids: readonly string[]): GridCategory => {
-    const cats = ids.map((id): GridCategory => (api.padById(id) ? "connectable" : api.graphicById(id) ? "graphics" : "text"));
+    // `GetItemGrid`: a pad on the connected-items grid, a text or a field on the text grid, every other item on the graphics grid.
+    const f = state.footprint;
+    const cats = ids.map((id): GridCategory => {
+      const kind = f ? fpItemKind(f, id) : null;
+      return kind === "pad" ? "connectable" : kind === "text" || kind === "field" ? "text" : "graphics";
+    });
     return selectionGrid(cats, gridOf);
   };
   // The grid helper of the tool in force (kicad-port/pcbGridHelper.ts, footprintSnap.ts), kept fed with the view, the grid, the overrides and the open footprint's items: a click goes
@@ -303,18 +298,28 @@ export function FootprintCanvas() {
     const carriedAt = snap.lastPoint() ?? (state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null);
     if (shown && carriedAt && state.activeTool === "pad") shown = { ...shown, pads: [...shown.pads, { ...carriedPadAt(carriedAt[0], carriedAt[1]), id: undefined }] };
     if (shown && carriedAt && state.carriedText) shown = { ...shown, texts: [...shown.texts, { ...state.carriedText, id: undefined, at: { x: carriedAt[0], y: carriedAt[1] } }] };
-    paintFootprint(ctx, state.view, width, height, shown, {
+    // The fields (`PCB_FIELD`s) and the dimensions, zones, text boxes ... of the footprint (kicad-port/fpItems.ts), drawn by the board's painters.
+    const painted = shown && fp ? { ...shown, fieldsToDraw: fpFields(fp), display: fp.display } : shown;
+    // the rubber band follows the cursor the grid helper gave (a snapped one), not the pointer -- and the line mode's constraint (`drawShape`, `DrawZone`)
+    const rubber = placing && snap.lastPoint() ? { x: snap.lastPoint()![0], y: snap.lastPoint()![1] } : state.cursorNm;
+    const draw = state.drawState;
+    const constrained = draw && rubber && !draw.arc && !draw.bezier ? rubberEndFor(state.lineMode, draw, [rubber.x, rubber.y]) : null;
+    paintFootprint(ctx, state.view, width, height, painted, {
       selection: session ? new Set([...state.selection, ...session.assigned.keys()]) : state.selection,
       gridNm: state.gridNm,
-      gridVisible: state.gridVisible,
+      gridVisible: state.gridVisible && state.layerVisible["obj:grid"] !== false,
       gridOrigin: [gridOrigin.x, gridOrigin.y],
-      drawState: state.drawState,
-      // the rubber band follows the cursor the grid helper gave (a snapped one), not the pointer
-      cursorNm: placing && snap.lastPoint() ? { x: snap.lastPoint()![0], y: snap.lastPoint()![1] } : state.cursorNm,
+      drawState: draw && constrained?.leader ? { ...draw, leader: constrained.leader } : draw,
+      cursorNm: constrained ? { x: constrained.end[0], y: constrained.end[1] } : rubber,
       movePreview: state.movePreview,
       highContrast: state.highContrast,
       activeLayer: state.activeLayer,
       markers: checkMarkers,
+      sketchPads: state.sketchPads,
+      sketchGraphics: state.sketchGraphics,
+      sketchText: state.sketchText,
+      layerVisible: state.layerVisible,
+      layerOpacity: state.layerOpacity,
     });
     // What the grid helper shows: the snap marker and its icon, the snap lines, the construction geometry.
     const snapOverlay = snap.overlay();
@@ -326,7 +331,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber]);
+  }, [fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -336,24 +341,18 @@ export function FootprintCanvas() {
     [state.view]
   );
 
-  /** Topmost pad/graphic/text under a world point, pad first (copper reads above art, same visual tier the painter uses). */
+  /**
+   * Topmost item under a world point (kicad-port/fpItems.ts `fpHitTest`: pads, then fields and texts, the text boxes and the other items, dimensions, graphics, zones), and what a
+   * click on it selects: the outermost group that holds it (`PCB_SELECTION_TOOL`'s group promotion; this editor enters no group).
+   */
   const hitTest = useCallback(
-    (wx: number, wy: number): { kind: "pad" | "graphic" | "text"; id: string } | null => {
+    (wx: number, wy: number): { kind: string; id: string; item: string } | null => {
       if (!fp) return null;
-      for (let i = fp.pads.length - 1; i >= 0; i--) {
-        const p = fp.pads[i]!;
-        if (p.id && padContains(p, wx, wy)) return { kind: "pad", id: p.id };
-      }
       const tol = Math.max(80_000, 6 / state.view.scale);
-      for (let i = fp.texts.length - 1; i >= 0; i--) {
-        const t = fp.texts[i]!;
-        if (t.id && Math.hypot(wx - t.at.x, wy - t.at.y) <= Math.max(tol, t.size_nm / 2)) return { kind: "text", id: t.id };
-      }
-      for (let i = fp.graphics.length - 1; i >= 0; i--) {
-        const g = fp.graphics[i]!;
-        if (g.id && graphicHitDistance(g, wx, wy) <= tol) return { kind: "graphic", id: g.id };
-      }
-      return null;
+      const hit = fpHitTest(fp, wx, wy, tol);
+      if (!hit) return null;
+      const id = fpSelectionTarget(fp, hit.id);
+      return { kind: id === hit.id ? hit.kind : "group", id, item: hit.id };
     },
     [fp, state.view.scale]
   );
@@ -389,10 +388,13 @@ export function FootprintCanvas() {
       dispatch({ type: "SET_DRAW_STATE", draw: null });
       return;
     }
-    const shape = footprintToShapeArg(draw.shapeKind, draw.pts, state.activeLayer);
+    // a polygon ends as `ZONE_CREATE_HELPER::OnComplete` makes it: the locked corners and the leader's (kicad-port/pcbDrawZone.ts `zoneFinish`)
+    const at = snap.lastPoint() ?? (state.cursorNm ? ([state.cursorNm.x, state.cursorNm.y] as [number, number]) : null);
+    const pts = draw.shapeKind === "polygon" && at ? (zoneFinish(draw.pts, at, leaderModeOf(state.lineMode, lineModeCtrl)) ?? draw.pts) : draw.pts;
+    const shape = footprintToShapeArg(draw.shapeKind, pts, state.activeLayer);
     if (shape) void api.addGraphic(shape);
     dispatch({ type: "SET_DRAW_STATE", draw: null });
-  }, [state.drawState, state.activeLayer, state.cursorNm, state.gridNm, api, dispatch]);
+  }, [state.drawState, state.activeLayer, state.cursorNm, state.gridNm, state.lineMode, api, dispatch]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     // Throws for a synthesized pointer (the Enter-key click of common.Control.cursorClick), which has no real pointer to capture.
@@ -471,7 +473,7 @@ export function FootprintCanvas() {
     // DRAWING_TOOL::drawArc: centre, start, end -- ARC_GEOM_MANAGER decides what each click means and when the arc is done.
     if (shapeKind === "arc") {
       const prev = state.drawState?.shapeKind === "arc" ? state.drawState.arc : undefined;
-      const { geom, arc } = arcClick(prev, [sx, sy], arcAngleSnap("45", e));
+      const { geom, arc } = arcClick(prev, [sx, sy], arcAngleSnap(state.lineMode, e));
       if (arc) void api.addGraphic({ kind: "arc", layer: state.activeLayer, stroke_width: fpStrokeWidthNm(state.activeLayer), filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) });
       dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "arc", pts: arcClickPoints(geom), arc: geom } : null });
       return;
@@ -484,9 +486,27 @@ export function FootprintCanvas() {
       dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "bezier", pts: [], bezier: geom } : null });
       return;
     }
+    if (shapeKind === "polygon") {
+      // `DRAWING_TOOL::DrawZone` for a graphic polygon (`ZONE_MODE::GRAPHIC_POLYGON`): `POLYGON_GEOM_MANAGER` in the line mode -- a click on the first corner closes the outline,
+      // in the 45- and 90-degree modes a click locks in the leader's bend and its end.
+      const already = state.drawState?.shapeKind === "polygon" ? state.drawState.pts : [];
+      const mode = leaderModeOf(state.lineMode, isMac() ? e.metaKey : e.ctrlKey);
+      const click = zoneClick(already, [sx, sy], mode);
+      if (click.finish) {
+        const outline = zoneFinish(already, [sx, sy], mode);
+        const shape = outline ? footprintToShapeArg("polygon", outline, state.activeLayer) : null;
+        if (shape) void api.addGraphic(shape);
+        dispatch({ type: "SET_DRAW_STATE", draw: null });
+      } else {
+        dispatch({ type: "SET_DRAW_STATE", draw: { kind: "shape", shapeKind: "polygon", pts: click.pts } });
+      }
+      return;
+    }
     if (shapeKind) {
       const already = state.drawState?.shapeKind === shapeKind ? state.drawState.pts : [];
-      const pts: [number, number][] = [...already, [sx, sy]];
+      // `drawShape`'s second point under the line mode (a line) or Ctrl (a rectangle, a circle): `GetVectorSnapped45` / `GetVectorSnapped90`
+      const point: [number, number] = already.length > 0 && (shapeKind === "segment" || shapeKind === "rect" || shapeKind === "circle") ? shapeSecondPoint(shapeKind, state.lineMode, isMac() ? e.metaKey : e.ctrlKey, already[already.length - 1]!, [sx, sy]) : [sx, sy];
+      const pts: [number, number][] = [...already, point];
       if (pts.length >= (AUTO_FINISH[shapeKind] ?? Infinity)) {
         const shape = footprintToShapeArg(shapeKind, pts, state.activeLayer);
         if (shape) void api.addGraphic(shape);
@@ -534,6 +554,7 @@ export function FootprintCanvas() {
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    lineModeCtrl = isMac() ? e.metaKey : e.ctrlKey;
     const [wx, wy] = worldAt(e);
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
     const motion = gestureRef.current?.move(e.clientX, e.clientY, e.timeStamp);
@@ -549,7 +570,7 @@ export function FootprintCanvas() {
     const cursor = placing ? toolPoint(e, wx, wy) : null;
     if (draw && (draw.arc || draw.bezier) && cursor) {
       const [sx, sy] = cursor;
-      if (draw.arc) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, arc: arcMotion(draw.arc, [sx, sy], arcAngleSnap("45", e)) } });
+      if (draw.arc) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, arc: arcMotion(draw.arc, [sx, sy], arcAngleSnap(state.lineMode, e)) } });
       else if (draw.bezier) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, bezier: bezierMotion(draw.bezier, [sx, sy]) } });
     }
     // The armed Move (a Duplicate's pick-up): the selection follows the snapped cursor from where it was picked up.
@@ -610,7 +631,26 @@ export function FootprintCanvas() {
     }
     const [wx, wy] = worldAt(e);
     const hit = hitTest(wx, wy);
-    if (hit?.kind === "pad") dispatch({ type: "SET_PAD_PROPERTIES_ID", id: hit.id });
+    // `PCB_SELECTION_TOOL`'s double click -> `EDIT_TOOL::Properties` -> `FOOTPRINT_EDIT_FRAME::OnEditItemRequest`: the item's own dialog (a group's Group Properties)
+    if (hit && fp) openProperties(fpEditTarget(fp, [hit.id]));
+  };
+
+  /** `FOOTPRINT_EDIT_FRAME::OnEditItemRequest`: the dialog of the item (kicad-port/fpItems.ts `fpEditTarget`). */
+  const openProperties = (target: FpEditTarget) => {
+    if (!target) return;
+    switch (target.dialog) {
+      case "pad":
+        return dispatch({ type: "SET_PAD_PROPERTIES_ID", id: target.id });
+      case "field":
+      case "text":
+        return dispatch({ type: "SET_TEXT_EDIT_ID", id: target.id });
+      case "shape":
+        return dispatch({ type: "SET_SHAPE_DIALOG_ID", id: target.id });
+      case "footprint":
+        return dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
+      default:
+        return dispatch({ type: "SET_ITEM_DIALOG", dialog: { id: target.id, kind: target.dialog } });
+    }
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -676,8 +716,17 @@ export function FootprintCanvas() {
     const padRefs = refs.filter((r) => api.padById(r));
     /** An entry that runs a registered KiCad action (PAD_TOOL's selection-menu items, `PAD_TOOL::Init`). */
     const act = (name: string, label: string, disabled = false): MenuEntry => ({ label, onSelect: () => run(name), disabled: disabled || !isEnabled(name) });
+    const anyGroup = !!fp && refs.some((r) => isGroup(fp.items?.groups ?? [], r));
     const entries: MenuEntry[] = [
-      { label: "Rotate 90° (R)", onSelect: () => padRefs.forEach((id) => void api.rotatePad(id, 1)), disabled: padRefs.length === 0 },
+      // `EDIT_TOOL::Init`'s transform submenu: Rotate Counterclockwise / Clockwise, Mirror Horizontally / Vertically (`canMirror`)
+      act("pcbnew.InteractiveEdit.rotateCcw", "Rotate Counterclockwise (R)", refs.length === 0),
+      act("pcbnew.InteractiveEdit.rotateCw", "Rotate Clockwise (Shift+R)", refs.length === 0),
+      act("pcbnew.InteractiveEdit.mirrorHoriontally", "Mirror Horizontally", !fp || !fpCanMirror(fp, refs)),
+      act("pcbnew.InteractiveEdit.mirrorVertically", "Mirror Vertically", !fp || !fpCanMirror(fp, refs)),
+      act("pcbnew.InteractiveEdit.properties", "Properties... (E)", refs.length > 1),
+      // `PCB_GROUP_TOOL`'s Grouping menu: Group (two or more items), Ungroup (a group among them)
+      act("common.Interactive.group", "Group Items", refs.length < 2),
+      act("common.Interactive.ungroup", "Ungroup Items", !anyGroup),
       { label: "Duplicate (Ctrl+D)", onSelect: () => void api.duplicateSelection(false), disabled: refs.length === 0 },
       { label: "Duplicate and Increment (Ctrl+Shift+D)", onSelect: () => void api.duplicateSelection(true), disabled: refs.length === 0 },
       act("pcbnew.Array.createArray", "Create Array... (Ctrl+T)", refs.length === 0),

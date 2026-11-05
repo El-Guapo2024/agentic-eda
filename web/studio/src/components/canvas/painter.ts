@@ -586,7 +586,7 @@ function traceZone(ctx: CanvasRenderingContext2D, z: Zone) {
   }
 }
 
-function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, selected: boolean) {
+export function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, selected: boolean) {
   const color = selected ? layerColor("selection") : RULE_AREA_COLOR;
 
   ctx.save();
@@ -1004,7 +1004,7 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
  * (`PCB_DIM_ALIGNED::updateText`: `FULL_CIRCLE - EDA_ANGLE( crossbarCenter )`, `ANGLE_VERTICAL` for a vertical crossbar), so it is negated
  * for the canvas as `drawTexts` negates a text's: a vertical dimension reads bottom to top (round 3 A-4).
  */
-function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+export function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
   const dimensions = board.drawings?.dimensions ?? [];
   for (const d of dimensions as Dimension[]) {
     if (!layerIsVisible(opts.layerVisible, d.layer)) continue;

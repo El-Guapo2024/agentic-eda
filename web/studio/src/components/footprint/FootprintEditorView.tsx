@@ -15,7 +15,8 @@ import { PushPadPropertiesDialog } from "./PushPadPropertiesDialog";
 import { LoadFromBoardDialog } from "./LoadFromBoardDialog";
 import { FootprintCheckerDialog } from "./FootprintCheckerDialog";
 import { FootprintCreateArrayDialog } from "./FootprintArrayDialog";
-import { FpTextDialog } from "./FpTextDialog";
+import { FpTextDialog, FpTextEditDialog } from "./FpTextDialog";
+import { FpShapeDialog } from "./FpShapeDialog";
 import { LibraryDialogHost } from "../library/libraryDialogs";
 import { DockColumn } from "../panels/Dock";
 import { Toolbar } from "../Toolbar";
@@ -129,6 +130,8 @@ export function FootprintEditorView() {
       <FootprintLibraryPropertiesDialog />
       <RenumberPadsDialog />
       <FpTextDialog />
+      <FpTextEditDialog />
+      <FpShapeDialog />
       <PadTableDialog />
       <PushPadPropertiesDialog />
       <LoadFromBoardDialog />

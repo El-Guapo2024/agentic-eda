@@ -26,6 +26,11 @@ import type { ArcGeom } from "../../kicad-port/arcGeom";
 import type { BezierGeom } from "../../kicad-port/bezierGeom";
 import { drawStrokeText } from "../text/strokeFont";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
+import type { FieldInfo } from "../../api/types";
+import type { FootprintItemsDisplay } from "../../api/fpItemTypes";
+import { paintFpFields, paintFpItems } from "./fpItemsPaint";
+import { layerIsVisible } from "../../kicad-port/layerPresets";
+import { objectOn } from "../../kicad-port/appearance";
 
 /** Footprint-local layer name ("F.SilkS") -> colors.json's real key, same punctuation swap `painter.ts`'s own `realLayerKey` uses. */
 function realLayerKey(layer: string): string {
@@ -177,7 +182,7 @@ function paintCustomPrimitives(ctx: CanvasRenderingContext2D, pad: LibraryPad, c
   }
 }
 
-function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: LibraryPad, opts: { selected: boolean }) {
+function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: LibraryPad, opts: { selected: boolean; sketch?: boolean }) {
   // `PAD::SetOffset`: the copper shape sits at `at + rotate(offset)`
   // (offset is defined in the pad's own, pre-rotation local frame, so it
   // turns with the pad) while the drill stays exactly at `at` -- the two
@@ -207,6 +212,12 @@ function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: Librar
     ctx.fillStyle = layerColor("f_cu");
     ctx.fill();
     paintCustomPrimitives(ctx, pad, layerColor("f_cu"), 0);
+  } else if (opts.sketch) {
+    // Sketch Pads (`m_DisplayPadFill` off, `pcbnew.Control.padDisplayMode`): the pad's outline, a line of one and a half pixels, as the board's painter draws it.
+    tracePadPath(ctx, pad);
+    ctx.strokeStyle = opts.selected ? layerColor("selection") : layerColor("f_cu");
+    ctx.lineWidth = hairlineNm(view, opts.selected ? 2.5 : 1.5);
+    ctx.stroke();
   } else {
     tracePadPath(ctx, pad);
     ctx.fillStyle = layerColor("f_cu");
@@ -246,7 +257,7 @@ function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: Librar
   }
 }
 
-function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: CmdShape) {
+function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: CmdShape, sketch = false) {
   ctx.beginPath();
   switch (s.kind) {
     case "segment":
@@ -288,26 +299,29 @@ function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: CmdShape) {
       return;
     }
   }
-  if (s.filled) ctx.fill();
+  // Sketch Graphic Items (`m_DisplayGraphicsFill` off): a filled shape is its outline only.
+  if (s.filled && !sketch) ctx.fill();
   ctx.stroke();
 }
 
-function drawGraphic(ctx: CanvasRenderingContext2D, view: ViewTransform, s: CmdShape, selected: boolean) {
+function drawGraphic(ctx: CanvasRenderingContext2D, view: ViewTransform, s: CmdShape, selected: boolean, sketch = false) {
   ctx.save();
   const color = selected ? layerColor("selection") : layerColor(realLayerKey(s.layer));
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineWidth = Math.max(s.stroke_width, hairlineNm(view, selected ? 2 : 1));
+  // Sketch Graphic Items draws every graphic in line mode, a pixel wide (`m_DisplayGraphicsFill` off: `m_gal->SetLineWidth( m_pcbSettings.m_outlineWidth )`).
+  ctx.lineWidth = sketch ? hairlineNm(view, selected ? 2 : 1) : Math.max(s.stroke_width, hairlineNm(view, selected ? 2 : 1));
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  drawShapeGeometry(ctx, s);
+  drawShapeGeometry(ctx, s, sketch);
   ctx.restore();
 }
 
-function drawText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: CmdText, selected: boolean) {
+function drawText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: CmdText, selected: boolean, sketch = false) {
   const color = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
   const angleRad = (-t.angle / 1000) * (Math.PI / 180);
-  drawStrokeText(ctx, t.content, t.at.x, t.at.y, { sizeNm: Math.max(t.size_nm, hairlineNm(view, 8)), thicknessNm: t.stroke_width, justify: t.justify, angleRad, mirror: t.mirror, color });
+  // Sketch Text Items (`m_DisplayTextFill` off): the text in line mode, a pixel wide. A `${REFERENCE}` shows as written: the editor's board is a footprint holder (kicad-port/fpItems.ts).
+  drawStrokeText(ctx, t.content, t.at.x, t.at.y, { sizeNm: Math.max(t.size_nm, hairlineNm(view, 8)), thicknessNm: sketch ? hairlineNm(view, 1) : t.stroke_width, justify: t.justify, angleRad, mirror: t.mirror, color });
 }
 
 /** Rubber-band preview for the graphics tool currently in progress (click-to-add-points, same convention the PCB tab's own `drawInProgress` uses -- including drawing it in the selection color regardless of target layer). */
@@ -324,7 +338,8 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw
     return;
   }
   const pts = draw.pts.slice();
-  if (cursorNm) pts.push([cursorNm.x, cursorNm.y]);
+  if (draw.leader && draw.leader.length > 0) pts.push(...draw.leader);
+  else if (cursorNm) pts.push([cursorNm.x, cursorNm.y]);
   if (pts.length < 2) return;
   ctx.save();
   ctx.strokeStyle = layerColor("selection");
@@ -363,6 +378,13 @@ export interface FpPaintOptions {
   activeLayer?: string;
   /** The Footprint Checker's markers (`PCB_MARKER`s of the editor's board): where, how severe, and whether the dialog has it selected. */
   markers?: { at: [number, number]; severity: string; selected: boolean }[];
+  /** The display modes of the left toolbar: Sketch Pads, Sketch Graphic Items, Sketch Text Items. */
+  sketchPads?: boolean;
+  sketchGraphics?: boolean;
+  sketchText?: boolean;
+  /** The Appearance manager's switches (layers by name or state key, objects under `obj:<id>`) and opacities; absent = everything shown, opaque. */
+  layerVisible?: Record<string, boolean>;
+  layerOpacity?: Record<string, number>;
 }
 
 /** What High Contrast Mode leaves of an item off the active layer (the board painter's `layerAlpha` uses the same 0.25). */
@@ -381,6 +403,8 @@ function contrastAlpha(opts: FpPaintOptions, layer: string | null): number {
 export interface FpPaintDrawState {
   shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
   pts: [Nm, Nm][];
+  /** A polygon's leader from its last corner to the cursor, bent by the line mode (`POLYGON_GEOM_MANAGER::m_leaderPts`); drawn in place of the straight rubber band. */
+  leader?: [Nm, Nm][];
   arc?: ArcGeom;
   bezier?: BezierGeom;
 }
@@ -390,7 +414,7 @@ export function paintFootprint(
   view: ViewTransform,
   widthPx: number,
   heightPx: number,
-  footprint: { pads: LibraryPad[]; graphics: CmdShape[]; texts: CmdText[] } | null,
+  footprint: { pads: LibraryPad[]; graphics: CmdShape[]; texts: CmdText[]; fieldsToDraw?: FieldInfo[]; display?: FootprintItemsDisplay } | null,
   opts: FpPaintOptions
 ) {
   if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridNm, opts.gridOrigin ?? [0, 0]);
@@ -401,32 +425,58 @@ export function paintFootprint(
   }
 
   const moved = (id: string | undefined) => (id && opts.movePreview?.refs.includes(id) ? opts.movePreview : null);
+  const visible = opts.layerVisible ?? {};
+  const opacity = (layer: string) => opts.layerOpacity?.[layer] ?? 1;
+  const itemOpts = {
+    selection: opts.selection,
+    layerVisible: visible,
+    layerOpacity: opts.layerOpacity ?? {},
+    highContrast: !!opts.highContrast,
+    activeLayer: opts.activeLayer ?? "F.SilkS",
+    sketchText: !!opts.sketchText,
+    sketchGraphics: !!opts.sketchGraphics,
+    movePreview: opts.movePreview,
+  };
+
+  // The zones, tables, dimensions, text boxes, points, barcodes and images of the footprint (kicad-port/fpItems.ts), under the graphics.
+  if (footprint.display) paintFpItems(ctx, view, footprint.display, itemOpts);
 
   // Graphics first (silkscreen/fab/courtyard art), then pads on top, same
   // "copper reads above art" ordering the PCB tab's own painter uses.
   for (const g of footprint.graphics) {
+    if (!layerIsVisible(visible, g.layer)) continue;
     const mv = moved(g.id);
     ctx.save();
-    ctx.globalAlpha *= contrastAlpha(opts, g.layer);
+    ctx.globalAlpha *= contrastAlpha(opts, g.layer) * opacity(g.layer);
     if (mv) ctx.translate(mv.dxNm, mv.dyNm);
-    drawGraphic(ctx, view, g, opts.selection.has(g.id ?? ""));
+    drawGraphic(ctx, view, g, opts.selection.has(g.id ?? ""), !!opts.sketchGraphics);
     ctx.restore();
   }
-  for (const t of footprint.texts) {
-    const mv = moved(t.id);
-    ctx.save();
-    ctx.globalAlpha *= contrastAlpha(opts, t.layer);
-    if (mv) ctx.translate(mv.dxNm, mv.dyNm);
-    drawText(ctx, view, t, opts.selection.has(t.id ?? ""));
-    ctx.restore();
+  if (objectOn(visible, "footprint_text")) {
+    for (const t of footprint.texts) {
+      if (!layerIsVisible(visible, t.layer)) continue;
+      const mv = moved(t.id);
+      ctx.save();
+      ctx.globalAlpha *= contrastAlpha(opts, t.layer) * opacity(t.layer);
+      if (mv) ctx.translate(mv.dxNm, mv.dyNm);
+      drawText(ctx, view, t, opts.selection.has(t.id ?? ""), !!opts.sketchText);
+      ctx.restore();
+    }
   }
-  for (const p of footprint.pads) {
-    const mv = moved(p.id);
-    ctx.save();
-    ctx.globalAlpha *= contrastAlpha(opts, null);
-    if (mv) ctx.translate(mv.dxNm, mv.dyNm);
-    drawPad(ctx, view, p, { selected: opts.selection.has(p.id ?? "") });
-    ctx.restore();
+  // The Reference, the Value and the other fields (`PCB_FIELD`s of the footprint), by the board's field painter.
+  if (footprint.fieldsToDraw) paintFpFields(ctx, view, footprint.fieldsToDraw, itemOpts);
+  if (objectOn(visible, "pads")) {
+    for (const p of footprint.pads) {
+      // a pad shows while one of its layers does (`PAD::ViewGetLOD`); one that names none is on the front copper
+      const layers = p.layers.length > 0 ? p.layers : ["F.Cu"];
+      if (!layers.some((l) => (l.startsWith("*.") ? ["F", "B"].some((side) => layerIsVisible(visible, `${side}.${l.slice(2)}`)) : layerIsVisible(visible, l)))) continue;
+      const mv = moved(p.id);
+      ctx.save();
+      ctx.globalAlpha *= contrastAlpha(opts, null) * (opts.layerOpacity?.["obj:pads"] ?? 1);
+      if (mv) ctx.translate(mv.dxNm, mv.dyNm);
+      drawPad(ctx, view, p, { selected: opts.selection.has(p.id ?? ""), sketch: !!opts.sketchPads });
+      ctx.restore();
+    }
   }
 
   drawAnchor(ctx, view);
