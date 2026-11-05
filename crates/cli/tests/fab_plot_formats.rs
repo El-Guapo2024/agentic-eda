@@ -136,6 +136,13 @@ fn every_pcb_plot_format_drill_format_schematic_plot_and_netlist_writes_its_file
             assert!(files.iter().any(|f| f.ends_with(".gbrjob")), "the job file: {files:?}");
         }
     }
+    // "Generate Gerber job file" unticked: kicad-cli writes the job file anyway, the route deletes it.
+    assert_eq!(studio.cmd(json!({ "op": "set_plot_settings", "options": { "creategerberjobfile": "no", "outputdirectory": "plots/nojob/" } }))["ok"], true);
+    let nojob = studio.written("Gerber, no job file", &studio.post("/api/fab/plot", json!({ "format": "gerber", "layers": layers })));
+    assert!(nojob.iter().all(|f| !f.ends_with(".gbrjob")), "no job file reported: {nojob:?}");
+    let on_disk: Vec<String> = std::fs::read_dir(studio.board.join("plots/nojob")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(on_disk.len() == 4 && on_disk.iter().all(|f| !f.ends_with(".gbrjob")), "and none on disk: {on_disk:?}");
+    assert_eq!(studio.cmd(json!({ "op": "set_plot_settings", "options": { "creategerberjobfile": "yes" } }))["ok"], true);
     // One document: PDF's "Single document" (stored) and DXF's (the session's).
     assert_eq!(studio.cmd(json!({ "op": "set_plot_settings", "options": { "pdf_single_document": "yes", "outputdirectory": "plots/one/" } }))["ok"], true);
     let pdf = studio.written("one PDF", &studio.post("/api/fab/plot", json!({ "format": "pdf", "layers": layers })));

@@ -10,8 +10,9 @@
 // POST /api/fab/plot, which reads them back and maps each onto kicad-cli's flag (crates/cli/src/fab_api.rs `plot_args`).
 //
 // kicad-cli is the only plot engine. Where it has no flag for a control, the control is shown disabled with the reason (`KICAD_CLI_LIMITS`):
-// the Gerber job file (always written), "Use drill/place file origin" for PostScript, SVG, PDF and PNG, SVG's precision, the PDF metadata,
+// "Use drill/place file origin" for PostScript, SVG, PDF and PNG, SVG's precision, the PDF metadata,
 // DXF's "Use KiCad font to plot text", the two PDF popup boxes apart (one flag clears both), the design variant (the studio has none).
+// "Generate Gerber job file" has no flag either, but works: unticked, the backend deletes the job file kicad-cli always writes.
 //
 // Dependency-free on purpose (tsconfig.test.json).
 
@@ -50,7 +51,6 @@ export const PLOT_MAX_SCALE = 100.0;
 
 /** Why a control the dialog has is disabled here: kicad-cli has no flag for it (or the studio no such thing). */
 export const KICAD_CLI_LIMITS = {
-  jobFile: "kicad-cli always writes the Gerber job file (it has no flag to leave it out)",
   auxOrigin: "kicad-cli pcb export ps, svg, pdf and png have no flag for the drill/place file origin",
   svgPrecision: "kicad-cli plots SVG with 4 digits below 1 mm (it has no precision flag)",
   pdfMetadata: "kicad-cli always generates the PDF metadata (it has no flag to leave it out)",

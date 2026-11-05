@@ -333,7 +333,13 @@ export function PlotDialog() {
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3px 12px" }}>
                     <div>
                       <Check label="Use Protel filename extensions" title={"Use Protel Gerber extensions (.GBL, .GTL, etc...)\nNo longer recommended. The official extension is .gbr"} checked={f.protelExt} onChange={(v) => set({ protelExt: v })} />
-                      <Check label="Generate Gerber job file" title={`Not available: ${KICAD_CLI_LIMITS.jobFile}`} checked disabled />
+                      <Check
+                        label="Generate Gerber job file"
+                        title={"Generate a Gerber job file that contains info about the board,\nand the list of generated Gerber plot files"}
+                        checked={f.jobFile}
+                        onChange={(v) => set({ jobFile: v })}
+                        testid="plot-job-file"
+                      />
                       <label style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3 }}>
                         Coordinate format:
                         <select value={f.coordFormat} onChange={(e) => set({ coordFormat: Number(e.target.value) })}>

@@ -280,8 +280,10 @@ fn fab_layer_args(plot: &eda_model::plot_params::PlotParams, a: &mut Vec<String>
 ///   (`--no-property-popups`, front and back together) and "Background Color" (`--bg-color`, colour mode only);
 /// - PNG: "DPI:" (`--dpi`) and "Anti-alias" (`--no-antialias`).
 ///
-/// Differs (no kicad-cli flag; the dialog shows each disabled with the reason): "Generate Gerber job file" (kicad-cli always writes it),
-/// "Use drill/place file origin" in PostScript, SVG, PDF and PNG (none of those commands has it; KiCad's PostScript plot turns it off too),
+/// "Generate Gerber job file" has no flag either: kicad-cli always writes the job file (`JOB_EXPORT_PCB_GERBERS::m_createJobsFile`), so
+/// [`plot`] deletes it after the run when the box is unticked ([`drop_job_files`]) -- the same files as KiCad's dialog, by another mechanism.
+///
+/// Differs (no kicad-cli flag; the dialog shows each disabled with the reason): "Use drill/place file origin" in PostScript, SVG, PDF and PNG (none of those commands has it; KiCad's PostScript plot turns it off too),
 /// SVG's "Precision:" (kicad-cli plots with `SVG_PRECISION_DEFAULT`, 4), PDF's "Generate metadata from AUTHOR && SUBJECT variables" (always on,
 /// `JOB_EXPORT_PCB_PDF::m_pdfMetadata`), the two property popup boxes apart (one flag clears both), DXF's "Use KiCad font to plot text"
 /// (always the KiCad font, `JOB_EXPORT_PCB_DXF::m_useKiCadFont`) and DXF's black and white (KiCad's dialog plots DXF in black, kicad-cli in the
@@ -463,6 +465,18 @@ pub(crate) fn plot_report(files: &[String], layer_suffixes: &[String]) -> String
     lines.join("\n")
 }
 
+/// "Generate Gerber job file" unticked (`PCB_PLOTTER::Plot`: `if( jobfile_writer && m_plotOpts.GetCreateGerberJobFile() )` writes it, else
+/// nothing): kicad-cli has no flag to leave the job file out (`m_createJobsFile` is always true), so the `.gbrjob` its run wrote is deleted, and
+/// the files the plot reports are the others. Differs in mechanism only: KiCad never writes the file, here it is written and then removed.
+/// `files` are relative to `dir`.
+pub(crate) fn drop_job_files(dir: &Path, files: Vec<String>) -> Vec<String> {
+    let (jobs, kept): (Vec<String>, Vec<String>) = files.into_iter().partition(|f| f.ends_with(".gbrjob"));
+    for job in jobs {
+        let _ = std::fs::remove_file(dir.join(job));
+    }
+    kept
+}
+
 /// `BOARD::GetLayerName` as `BuildPlotFileName` puts it in a file name: the name the board gives the layer, else KiCad's standard one
 /// (`F.Silkscreen`), its dots made underscores.
 fn layer_file_suffix(model: &eda_model::ConstraintModel, layer: &str) -> String {
@@ -510,7 +524,11 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
     let args = plot_args(format, &layers, &plot, &PlotSession::of_request(&req));
     let mut v = reply(kicad_engine::export_into(dir, format.kind(), &args, &out_dir));
     if v["ok"].as_bool().unwrap_or(false) {
-        let files: Vec<String> = v["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
+        let mut files: Vec<String> = v["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
+        if format == PlotFormat::Gerber && !plot.flag("creategerberjobfile").unwrap_or(true) {
+            files = drop_job_files(dir, files);
+            v["files"] = json!(files);
+        }
         let suffixes: Vec<String> = ui_order(&layers).iter().map(|l| layer_file_suffix(&model, l)).collect();
         v["message"] = Value::String(plot_report(&files, &suffixes));
         v["format"] = Value::String(format.kind().into());
@@ -1015,6 +1033,22 @@ mod tests {
         let refused = output_folder(dir, "../elsewhere", "gerbers", &vars).unwrap_err();
         assert!(refused.starts_with("Could not write plot files to folder '../elsewhere'."), "{refused}");
         assert!(output_folder(dir, "/tmp/x", "gerbers", &vars).is_err());
+    }
+
+    /// "Generate Gerber job file" unticked: the `.gbrjob` kicad-cli always writes is deleted and not reported; the Gerbers stay.
+    #[test]
+    fn an_unticked_job_file_box_leaves_no_job_file() {
+        let dir = std::env::temp_dir().join(format!("eda_fab_api_jobfile_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("o")).unwrap();
+        for f in ["o/b-F_Cu.gbr", "o/b-job.gbrjob"] {
+            std::fs::write(dir.join(f), "x").unwrap();
+        }
+        let kept = drop_job_files(&dir, vec!["o/b-F_Cu.gbr".into(), "o/b-job.gbrjob".into()]);
+        assert_eq!(kept, vec!["o/b-F_Cu.gbr"]);
+        assert!(!dir.join("o/b-job.gbrjob").exists() && dir.join("o/b-F_Cu.gbr").exists());
+        assert_eq!(plot_report(&kept, &["F_Cu".to_string()]), "Plotted to 'o/b-F_Cu.gbr'.\nDone.", "no Created Gerber job file line");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `PCB_PLOTTER::Plot`'s report: "Plotted to '%s'." per file in the plotted order, the job file, "Done.".
