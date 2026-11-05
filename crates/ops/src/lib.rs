@@ -6841,6 +6841,8 @@ mod array_tests;
 #[cfg(test)]
 mod fp_array_tests;
 #[cfg(test)]
+mod fp_items_tests;
+#[cfg(test)]
 mod pad_edit_tests;
 #[cfg(test)]
 mod unused_pads_tests;
