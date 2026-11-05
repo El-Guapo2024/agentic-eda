@@ -3,7 +3,8 @@
 //!
 //! The pixels are the file inside `(data "..." "...")`, base64 in lines of 76 characters. They are kept as that text without its line breaks and written back as it was: KiCad
 //! itself writes the bytes it read (`BITMAP_BASE::SaveImageData` writes `m_imageData` while the image is untouched), so a board that goes through the studio carries the same file.
-//! A footprint's own `(image ..)` (a reference image inside a footprint, never drawn on the board) is part of the footprint (`FootprintExtra::tokens`).
+//! A board footprint's own `(image ..)` (a reference image inside a footprint, never drawn on the board) is part of the footprint (`FootprintExtra::tokens`); a
+//! library footprint's is read and written with these (`FootprintItems::images`, [`crate::footprint_import`]).
 
 use std::fmt::Write as _;
 
@@ -76,6 +77,13 @@ pub(crate) fn read_all(root: &[Sexpr], refs: &mut Vec<crate::import_items::ItemR
 /// One reference image as `format( const PCB_REFERENCE_IMAGE* )` writes it; returns its uuid.
 pub(crate) fn write(out: &mut String, img: &RefImage, locked: bool) -> String {
     let uuid = crate::duid_for(&format!("refimage:{}", img.id), &img.id);
+    write_with_uuid(out, img, locked, &uuid);
+    uuid
+}
+
+/// [`write`] with the uuid given (a library footprint's image keeps the uuid its file gave it). The scale is for a file older than [`FIRST_TRUE_PPI_SCALE`], as
+/// both the board writer and the footprint writer (`export_kicad_mod`, version 20240108) stamp.
+pub(crate) fn write_with_uuid(out: &mut String, img: &RefImage, locked: bool, uuid: &str) {
     write!(out, "\t(image\n\t\t(at {} {}) (layer {})", mm(img.at.x), mm(img.at.y), sexpr_str(&img.layer)).unwrap();
     if let Some(scale) = file_scale(img.scale_ppm, &img.data) {
         write!(out, " (scale {scale})").unwrap();
@@ -84,7 +92,6 @@ pub(crate) fn write(out: &mut String, img: &RefImage, locked: bool) -> String {
         write!(out, " (locked yes)").unwrap();
     }
     writeln!(out, "\n{}\t\t(uuid \"{uuid}\")\n\t)", crate::sch_extras_io::data_str(&img.data, "\t\t")).unwrap();
-    uuid
 }
 
 #[cfg(test)]

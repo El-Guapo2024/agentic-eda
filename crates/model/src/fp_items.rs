@@ -18,8 +18,9 @@ use crate::barcode::Barcode;
 use crate::ir::{next_item_id, Dimension, Group, Zone};
 use crate::pcb_items::{PcbPoint, RefImage, TextBox};
 use crate::table::Table;
+use crate::units::Nm;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// See the module doc.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -49,6 +50,10 @@ pub struct FootprintItems {
     /// `(group ..)` (`FOOTPRINT::Groups()`): see the module doc for what a member is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<Group>,
+    /// `ZONE::GetBorderHatchPitch()` of a zone whose file gave it a pitch other than 0.5 mm (the second number of `(hatch edge 0.508)`, which [`Zone`] has no field
+    /// for and a board's zone is written without), by the zone's id: display only, kept so the file is written back as it was. A zone without an entry is 0.5 mm.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "crate::units::de")]
+    pub zone_hatch_pitch: BTreeMap<String, Nm>,
 }
 
 impl FootprintItems {

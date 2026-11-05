@@ -179,6 +179,14 @@ impl Refs {
 /// kept as a member of the outer one. Inner groups are made first, so their ids are known when the group that holds them is named. Every group with a
 /// member on the board is kept, a group of one too (`resolveGroups` keeps every group); the second list is the ids of the groups the file locks.
 pub(crate) fn build_groups(by_uuid: &HashMap<String, Vec<String>>, raw_groups: &[RawGroup], names: std::collections::BTreeSet<String>) -> (Vec<Group>, Vec<String>) {
+    let (groups, locked, _) = build_groups_with_uuids(by_uuid, raw_groups, names);
+    (groups, locked)
+}
+
+/// [`build_groups`], with the file uuid of each group it made (in step with the groups; `None` for a group the file gave none), for a reader that keeps the uuids
+/// (a library footprint's, [`crate::footprint_import`]).
+#[allow(clippy::type_complexity)]
+pub(crate) fn build_groups_with_uuids(by_uuid: &HashMap<String, Vec<String>>, raw_groups: &[RawGroup], names: std::collections::BTreeSet<String>) -> (Vec<Group>, Vec<String>, Vec<Option<String>>) {
     #[derive(Clone)]
     enum Built {
         Kept(String),
@@ -188,6 +196,8 @@ pub(crate) fn build_groups(by_uuid: &HashMap<String, Vec<String>>, raw_groups: &
         by_uuid: &'a HashMap<String, Vec<String>>,
         by_group_uuid: HashMap<&'a str, &'a RawGroup>,
         groups: Vec<Group>,
+        /// The file uuid of each of `groups`.
+        uuids: Vec<Option<String>>,
         /// The ids of the groups that were `(locked yes)`.
         locked: Vec<String>,
         names: std::collections::BTreeSet<String>,
@@ -236,6 +246,7 @@ pub(crate) fn build_groups(by_uuid: &HashMap<String, Vec<String>>, raw_groups: &
                     self.locked.push(id.clone());
                 }
                 self.groups.push(group);
+                self.uuids.push(g.uuid.clone());
                 Built::Kept(id)
             };
             if let Some(k) = key {
@@ -245,7 +256,7 @@ pub(crate) fn build_groups(by_uuid: &HashMap<String, Vec<String>>, raw_groups: &
         }
     }
     let nested: std::collections::HashSet<&str> = raw_groups.iter().flat_map(|g| g.members.iter().map(String::as_str)).filter(|m| raw_groups.iter().any(|g| g.uuid.as_deref() == Some(*m))).collect();
-    let mut walk = Walk { by_uuid, by_group_uuid: raw_groups.iter().filter_map(|g| g.uuid.as_deref().map(|u| (u, g))).collect(), groups: Vec::new(), locked: Vec::new(), names, visiting: Vec::new(), done: HashMap::new() };
+    let mut walk = Walk { by_uuid, by_group_uuid: raw_groups.iter().filter_map(|g| g.uuid.as_deref().map(|u| (u, g))).collect(), groups: Vec::new(), uuids: Vec::new(), locked: Vec::new(), names, visiting: Vec::new(), done: HashMap::new() };
     for g in raw_groups {
         // An inner group is made by the group that holds it.
         if g.uuid.as_deref().is_some_and(|u| nested.contains(u)) {
@@ -253,7 +264,7 @@ pub(crate) fn build_groups(by_uuid: &HashMap<String, Vec<String>>, raw_groups: &
         }
         walk.build(g);
     }
-    (walk.groups, walk.locked)
+    (walk.groups, walk.locked, walk.uuids)
 }
 
 /// One `(group ..)` of the file, members still named by uuid.
@@ -271,17 +282,18 @@ pub(crate) struct RawGroup {
 
 /// `PCB_IO_KICAD_SEXPR_PARSER::parseGROUP`: `(group "name" [locked] (uuid ..) [(locked yes)] [(lib_id ..)] (members "uuid" ..))`.
 pub(crate) fn import_groups(root: &[Sexpr]) -> Vec<RawGroup> {
-    sexpr::find_all(root, "group")
-        .map(|g| {
-            let name = g.get(1).and_then(Sexpr::text).unwrap_or("").to_string();
-            let uuid = sexpr::find(g, "uuid").or_else(|| sexpr::find(g, "id")).and_then(|u| sexpr::txt(u, 1)).map(str::to_string);
-            let members = sexpr::find(g, "members").map(|m| m.iter().skip(1).filter_map(Sexpr::text).map(str::to_string).collect()).unwrap_or_default();
-            // `parseGROUP`: `(locked yes)`, or the bare `locked` files before 20221130 write after the name (`else if( token == T_locked ) groupInfo.locked = true`).
-            let locked = is_locked(g);
-            let lib_id = sexpr::find(g, "lib_id").and_then(|l| sexpr::txt(l, 1)).and_then(|t| eda_model::groups::check_design_block_id(t).ok()).unwrap_or_default();
-            RawGroup { name, uuid, members, locked, lib_id }
-        })
-        .collect()
+    sexpr::find_all(root, "group").map(read_group).collect()
+}
+
+/// One `(group ..)` as [`import_groups`] reads it; a footprint's own groups are read by the same `parseGROUP` (`parseFOOTPRINT_unchecked`'s `case T_group`).
+pub(crate) fn read_group(g: &[Sexpr]) -> RawGroup {
+    let name = g.get(1).and_then(Sexpr::text).unwrap_or("").to_string();
+    let uuid = sexpr::find(g, "uuid").or_else(|| sexpr::find(g, "id")).and_then(|u| sexpr::txt(u, 1)).map(str::to_string);
+    let members = sexpr::find(g, "members").map(|m| m.iter().skip(1).filter_map(Sexpr::text).map(str::to_string).collect()).unwrap_or_default();
+    // `parseGROUP`: `(locked yes)`, or the bare `locked` files before 20221130 write after the name (`else if( token == T_locked ) groupInfo.locked = true`).
+    let locked = is_locked(g);
+    let lib_id = sexpr::find(g, "lib_id").and_then(|l| sexpr::txt(l, 1)).and_then(|t| eda_model::groups::check_design_block_id(t).ok()).unwrap_or_default();
+    RawGroup { name, uuid, members, locked, lib_id }
 }
 
 fn xy(list: &[Sexpr]) -> Option<Point> {
@@ -306,125 +318,134 @@ fn flag(item: &[Sexpr], key: &str) -> bool {
 /// measured value and text are not read: both are recomputed from the feature points and the
 /// format settings (`dim->Update()` in KiCad, `compute_dimension_geometry` here).
 pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimension> {
-    let defaults = DimensionSettings::default();
     let mut out = Vec::new();
     for d in sexpr::find_all(root, "dimension") {
-        let Some(ty) = sexpr::find(d, "type").and_then(|t| sexpr::txt(t, 1)) else { continue };
-        let Some(pts) = sexpr::find(d, "pts") else { continue };
-        let mut points = sexpr::find_all(pts, "xy").filter_map(xy);
-        let (Some(start), Some(end)) = (points.next(), points.next()) else { continue };
-        let layer = sexpr::find(d, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Cmts.User").to_string();
-        let height = um_of(d, "height").unwrap_or(Nm::ZERO);
-        let kind = match ty {
-            "aligned" => DimensionKind::Aligned { height },
-            // `PCB_DIM_ORTHOGONAL::DIR`: HORIZONTAL 0, VERTICAL 1.
-            "orthogonal" => DimensionKind::Orthogonal { height, horizontal: sexpr::find(d, "orientation").and_then(|o| sexpr::num(o, 1)).unwrap_or(0.0) as i64 == 0 },
-            "radial" => DimensionKind::Radial { leader_length: um_of(d, "leader_length").unwrap_or(Nm::ZERO) },
-            "leader" => DimensionKind::Leader,
-            "center" => DimensionKind::Center,
-            _ => continue,
-        };
-
-        // (format (prefix ..) (suffix ..) (units N) (units_format N) (precision N) [(override_value ..)] [(suppress_zeroes ..)])
-        let format = sexpr::find(d, "format");
-        let text_of = |key: &str| format.and_then(|f| sexpr::find(f, key)).and_then(|v| sexpr::txt(v, 1)).unwrap_or("").to_string();
-        let int_of = |key: &str| format.and_then(|f| sexpr::find(f, key)).and_then(|v| sexpr::num(v, 1)).map(|n| n as i64);
-        let units = match int_of("units") {
-            Some(0) => DimensionUnits::Inch,
-            Some(1) => DimensionUnits::Mil,
-            Some(2) => DimensionUnits::Mm,
-            _ => DimensionUnits::Automatic,
-        };
-        let units_format = match int_of("units_format") {
-            Some(1) => DimensionUnitsFormat::BareSuffix,
-            Some(2) => DimensionUnitsFormat::ParenSuffix,
-            _ => DimensionUnitsFormat::NoSuffix,
-        };
-        // `DIM_PRECISION` as KiCad stores it: 0..=5 are 0 to 5 decimals, 6..=9 the four unit-dependent `V_VV..` levels, kept
-        // as they are so the file KiCad reads back has its own level (`PCB_DIMENSION_BASE::GetValueText` resolves them).
-        let precision = match int_of("precision") {
-            Some(p @ 0..=9) => p as u8,
-            _ => defaults.precision,
-        };
-        let override_text = format.and_then(|f| sexpr::find(f, "override_value")).and_then(|v| sexpr::txt(v, 1)).map(str::to_string);
-        let suppress_trailing_zeros = format.map(|f| flag(f, "suppress_zeroes")).unwrap_or(false);
-
-        // (style (thickness ..) (arrow_length ..) (text_position_mode N) (arrow_direction ..) (extension_height ..) (extension_offset ..) [(keep_text_aligned yes)])
-        let style = sexpr::find(d, "style");
-        let st = |key: &str| style.and_then(|s| um_of(s, key));
-        let text_position = match style.and_then(|s| sexpr::find(s, "text_position_mode")).and_then(|v| sexpr::num(v, 1)) {
-            Some(m) if m as i64 == 1 => DimensionTextPosition::Inline,
-            _ => DimensionTextPosition::Outside,
-        };
-        // The pre-6.0 default; the style block overrides it either way.
-        let arrow_direction = match style.and_then(|s| sexpr::find(s, "arrow_direction")).and_then(|v| sexpr::txt(v, 1)) {
-            Some("inward") => ArrowDirection::Inward,
-            _ => ArrowDirection::Outward,
-        };
-        // "new format: default to keep text aligned off unless token is present"
-        let keep_text_aligned = style.map(|s| flag(s, "keep_text_aligned")).unwrap_or(false);
-        // `DIM_TEXT_BORDER`: parseDIMENSION only accepts `(text_frame ..)` inside a leader's style, and only a leader writes it. The number is clamped to the four borders
-        // (`textFrame = std::clamp( textFrame, 0, 3 )`): 7 is a rounded rectangle, -1 none.
-        let text_frame = if matches!(kind, DimensionKind::Leader) {
-            match style.and_then(|s| sexpr::find(s, "text_frame")).and_then(|v| sexpr::num(v, 1)).map(|n| (n as i64).clamp(0, 3)) {
-                Some(1) => DimensionTextBorder::Rectangle,
-                Some(2) => DimensionTextBorder::Circle,
-                Some(3) => DimensionTextBorder::RoundRect,
-                _ => DimensionTextBorder::None,
-            }
-        } else {
-            DimensionTextBorder::None
-        };
-
-        // The text: its size and pen, and (when the label is not kept aligned) its angle.
-        let text = sexpr::find(d, "gr_text");
-        let font = text.and_then(|t| sexpr::find(t, "effects")).and_then(|e| sexpr::find(e, "font"));
-        let text_size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::mm_to_nm).unwrap_or(defaults.text_size_nm);
-        let text_thickness_nm = font.and_then(|f| um_of(f, "thickness"));
-        let text_angle = text
-            .and_then(|t| sexpr::find(t, "at"))
-            .and_then(|a| sexpr::num(a, 3))
-            .map(|deg| ((deg * 1000.0).round() as i64).rem_euclid(360_000) as u32)
-            .unwrap_or(0);
-        // A radial's and a leader's text is the user's: their `updateGeometry` draw to it and never set it (`text_position_mode` only
-        // recomputes an aligned/orthogonal text). Keep the file's `(at x y)` for the geometry pass and the writer.
-        let text_pos = if matches!(kind, DimensionKind::Radial { .. } | DimensionKind::Leader) {
-            text.and_then(|t| sexpr::find(t, "at")).and_then(|a| {
-                let x = sexpr::num(a, 1)?;
-                let y = sexpr::num(a, 2)?;
-                Some(Point { x: crate::mm_to_nm(x), y: crate::mm_to_nm(y) })
-            })
-        } else {
-            None
-        };
-
-        refs.dimensions.push(ItemRef::of(d));
-        out.push(Dimension {
-            id: String::new(),
-            layer,
-            kind,
-            start,
-            end,
-            prefix: text_of("prefix"),
-            suffix: text_of("suffix"),
-            override_text,
-            units,
-            units_format,
-            precision,
-            suppress_trailing_zeros,
-            text_position,
-            keep_text_aligned,
-            text_angle,
-            text_size_nm,
-            stroke_width: st("thickness").unwrap_or(defaults.stroke_width),
-            arrow_length: st("arrow_length").unwrap_or(defaults.arrow_length),
-            extension_offset: st("extension_offset").unwrap_or(defaults.extension_offset),
-            extension_height: st("extension_height").unwrap_or(defaults.extension_height),
-            arrow_direction,
-            text_thickness_nm,
-            text_pos,
-            text_frame,
-        });
+        if let Some(dim) = read_dimension(d) {
+            refs.dimensions.push(ItemRef::of(d));
+            out.push(dim);
+        }
     }
     out
+}
+
+/// One `(dimension ..)` as [`import_dimensions`] reads it (`parseDIMENSION`); `None` for the pre-6.0 form (no `(type ..)`), a dimension with no two feature
+/// points or a type KiCad does not know. A footprint's own dimension is read by the same code (`parseFOOTPRINT_unchecked`'s `case T_dimension`), in the
+/// footprint's frame.
+pub(crate) fn read_dimension(d: &[Sexpr]) -> Option<Dimension> {
+    let defaults = DimensionSettings::default();
+    let ty = sexpr::find(d, "type").and_then(|t| sexpr::txt(t, 1))?;
+    let pts = sexpr::find(d, "pts")?;
+    let mut points = sexpr::find_all(pts, "xy").filter_map(xy);
+    let (Some(start), Some(end)) = (points.next(), points.next()) else { return None };
+    let layer = sexpr::find(d, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Cmts.User").to_string();
+    let height = um_of(d, "height").unwrap_or(Nm::ZERO);
+    let kind = match ty {
+        "aligned" => DimensionKind::Aligned { height },
+        // `PCB_DIM_ORTHOGONAL::DIR`: HORIZONTAL 0, VERTICAL 1.
+        "orthogonal" => DimensionKind::Orthogonal { height, horizontal: sexpr::find(d, "orientation").and_then(|o| sexpr::num(o, 1)).unwrap_or(0.0) as i64 == 0 },
+        "radial" => DimensionKind::Radial { leader_length: um_of(d, "leader_length").unwrap_or(Nm::ZERO) },
+        "leader" => DimensionKind::Leader,
+        "center" => DimensionKind::Center,
+        _ => return None,
+    };
+
+    // (format (prefix ..) (suffix ..) (units N) (units_format N) (precision N) [(override_value ..)] [(suppress_zeroes ..)])
+    let format = sexpr::find(d, "format");
+    let text_of = |key: &str| format.and_then(|f| sexpr::find(f, key)).and_then(|v| sexpr::txt(v, 1)).unwrap_or("").to_string();
+    let int_of = |key: &str| format.and_then(|f| sexpr::find(f, key)).and_then(|v| sexpr::num(v, 1)).map(|n| n as i64);
+    let units = match int_of("units") {
+        Some(0) => DimensionUnits::Inch,
+        Some(1) => DimensionUnits::Mil,
+        Some(2) => DimensionUnits::Mm,
+        _ => DimensionUnits::Automatic,
+    };
+    let units_format = match int_of("units_format") {
+        Some(1) => DimensionUnitsFormat::BareSuffix,
+        Some(2) => DimensionUnitsFormat::ParenSuffix,
+        _ => DimensionUnitsFormat::NoSuffix,
+    };
+    // `DIM_PRECISION` as KiCad stores it: 0..=5 are 0 to 5 decimals, 6..=9 the four unit-dependent `V_VV..` levels, kept
+    // as they are so the file KiCad reads back has its own level (`PCB_DIMENSION_BASE::GetValueText` resolves them).
+    let precision = match int_of("precision") {
+        Some(p @ 0..=9) => p as u8,
+        _ => defaults.precision,
+    };
+    let override_text = format.and_then(|f| sexpr::find(f, "override_value")).and_then(|v| sexpr::txt(v, 1)).map(str::to_string);
+    let suppress_trailing_zeros = format.map(|f| flag(f, "suppress_zeroes")).unwrap_or(false);
+
+    // (style (thickness ..) (arrow_length ..) (text_position_mode N) (arrow_direction ..) (extension_height ..) (extension_offset ..) [(keep_text_aligned yes)])
+    let style = sexpr::find(d, "style");
+    let st = |key: &str| style.and_then(|s| um_of(s, key));
+    let text_position = match style.and_then(|s| sexpr::find(s, "text_position_mode")).and_then(|v| sexpr::num(v, 1)) {
+        Some(m) if m as i64 == 1 => DimensionTextPosition::Inline,
+        _ => DimensionTextPosition::Outside,
+    };
+    // The pre-6.0 default; the style block overrides it either way.
+    let arrow_direction = match style.and_then(|s| sexpr::find(s, "arrow_direction")).and_then(|v| sexpr::txt(v, 1)) {
+        Some("inward") => ArrowDirection::Inward,
+        _ => ArrowDirection::Outward,
+    };
+    // "new format: default to keep text aligned off unless token is present"
+    let keep_text_aligned = style.map(|s| flag(s, "keep_text_aligned")).unwrap_or(false);
+    // `DIM_TEXT_BORDER`: parseDIMENSION only accepts `(text_frame ..)` inside a leader's style, and only a leader writes it. The number is clamped to the four borders
+    // (`textFrame = std::clamp( textFrame, 0, 3 )`): 7 is a rounded rectangle, -1 none.
+    let text_frame = if matches!(kind, DimensionKind::Leader) {
+        match style.and_then(|s| sexpr::find(s, "text_frame")).and_then(|v| sexpr::num(v, 1)).map(|n| (n as i64).clamp(0, 3)) {
+            Some(1) => DimensionTextBorder::Rectangle,
+            Some(2) => DimensionTextBorder::Circle,
+            Some(3) => DimensionTextBorder::RoundRect,
+            _ => DimensionTextBorder::None,
+        }
+    } else {
+        DimensionTextBorder::None
+    };
+
+    // The text: its size and pen, and (when the label is not kept aligned) its angle.
+    let text = sexpr::find(d, "gr_text");
+    let font = text.and_then(|t| sexpr::find(t, "effects")).and_then(|e| sexpr::find(e, "font"));
+    let text_size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::mm_to_nm).unwrap_or(defaults.text_size_nm);
+    let text_thickness_nm = font.and_then(|f| um_of(f, "thickness"));
+    let text_angle = text
+        .and_then(|t| sexpr::find(t, "at"))
+        .and_then(|a| sexpr::num(a, 3))
+        .map(|deg| ((deg * 1000.0).round() as i64).rem_euclid(360_000) as u32)
+        .unwrap_or(0);
+    // A radial's and a leader's text is the user's: their `updateGeometry` draw to it and never set it (`text_position_mode` only
+    // recomputes an aligned/orthogonal text). Keep the file's `(at x y)` for the geometry pass and the writer.
+    let text_pos = if matches!(kind, DimensionKind::Radial { .. } | DimensionKind::Leader) {
+        text.and_then(|t| sexpr::find(t, "at")).and_then(|a| {
+            let x = sexpr::num(a, 1)?;
+            let y = sexpr::num(a, 2)?;
+            Some(Point { x: crate::mm_to_nm(x), y: crate::mm_to_nm(y) })
+        })
+    } else {
+        None
+    };
+
+    Some(Dimension {
+        id: String::new(),
+        layer,
+        kind,
+        start,
+        end,
+        prefix: text_of("prefix"),
+        suffix: text_of("suffix"),
+        override_text,
+        units,
+        units_format,
+        precision,
+        suppress_trailing_zeros,
+        text_position,
+        keep_text_aligned,
+        text_angle,
+        text_size_nm,
+        stroke_width: st("thickness").unwrap_or(defaults.stroke_width),
+        arrow_length: st("arrow_length").unwrap_or(defaults.arrow_length),
+        extension_offset: st("extension_offset").unwrap_or(defaults.extension_offset),
+        extension_height: st("extension_height").unwrap_or(defaults.extension_height),
+        arrow_direction,
+        text_thickness_nm,
+        text_pos,
+        text_frame,
+    })
 }

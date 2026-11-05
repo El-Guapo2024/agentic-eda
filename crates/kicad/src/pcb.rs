@@ -336,7 +336,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             let thieving = design.drawings.as_ref().and_then(|d| d.zone_thieving.iter().find(|t| t.id == z.id)).map(|t| t.settings.as_str());
             let layer_props = design.drawings.as_ref().and_then(|d| d.zone_layer_props.iter().find(|t| t.id == z.id)).map(|t| t.settings.as_str());
             let arc_rings = design.drawings.as_ref().and_then(|d| d.zone_arcs.iter().find(|a| a.id == z.id)).filter(|a| a.shape == eda_model::ir::ZoneArcs::shape_of(z)).map(|a| a.rings.as_slice());
-            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fills: &layer_fills, filled, enabled_layers: Some(&enabled), thieving, arc_rings, layer_props });
+            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fills: &layer_fills, filled, enabled_layers: Some(&enabled), thieving, arc_rings, layer_props, hatch_pitch: None });
             zone_blocks.push((z.parent_footprint.clone(), block));
         }
     }

@@ -2,7 +2,8 @@
 //! `PCB_IO_KICAD_SEXPR::format( const PCB_TEXTBOX* )`, for [`eda_model::pcb_items::TextBox`].
 //!
 //! The box's looks are an `(effects ..)` like any text's, read and written by the code of [`crate::board_text_io`] (a text box is a `Text` and a `TextExtra` to it).
-//! A footprint's own `(fp_text_box ..)` is not read here: it is part of the footprint (`FootprintExtra::tokens`).
+//! A board footprint's own `(fp_text_box ..)` is not read here: it is part of the footprint (`FootprintExtra::tokens`). A library footprint's is read and written
+//! with these (`FootprintItems::text_boxes`, [`crate::footprint_import`]).
 
 use eda_model::units::Nm;
 use std::fmt::Write as _;
@@ -157,7 +158,15 @@ fn as_text(t: &TextBox) -> (Text, eda_model::board_text::TextExtra) {
 /// One text box as `format( const PCB_TEXTBOX* )` writes it; returns its uuid.
 pub(crate) fn write(out: &mut String, t: &TextBox, locked: bool) -> String {
     let uuid = crate::duid_for(&format!("textbox:{}", t.id), &t.id);
-    write!(out, "\t(gr_text_box {}", sexpr_str(&t.text)).unwrap();
+    write_as(out, t, locked, "gr_text_box", &uuid);
+    uuid
+}
+
+/// [`write`] with the tag and the uuid given: `format( const PCB_TEXTBOX* )` writes a text box of a footprint as `fp_text_box` (`parentFP ? "fp_text_box" :
+/// "gr_text_box"`), and a library footprint's keeps the uuid its file gave it. The positions and the angle are the footprint's own frame (`formatInternalUnits(
+/// .., parentFP )`, `angle -= parentFP->GetOrientation()`), which a library footprint's are already in.
+pub(crate) fn write_as(out: &mut String, t: &TextBox, locked: bool, tag: &str, uuid: &str) {
+    write!(out, "\t({tag} {}", sexpr_str(&t.text)).unwrap();
     if locked {
         write!(out, " (locked yes)").unwrap();
     }
@@ -182,7 +191,6 @@ pub(crate) fn write(out: &mut String, t: &TextBox, locked: bool) -> String {
         write!(out, " (color {c})").unwrap();
     }
     writeln!(out, ") (knockout {})\n\t)", if t.knockout { "yes" } else { "no" }).unwrap();
-    uuid
 }
 
 #[cfg(test)]

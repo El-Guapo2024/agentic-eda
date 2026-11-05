@@ -290,7 +290,7 @@ pub fn resolve_library_footprints_with(model: &mut ConstraintModel, mut find: im
 fn write_library_fields(out: &mut String, fp: &eda_model::ir::LibraryFootprint) {
     use eda_model::fp_edit::{default_library_reference_layout, default_library_value_layout, new_library_field_layout, LIBRARY_REFERENCE_TEXT};
     let one = |out: &mut String, name: &str, text: &str, l: &eda_model::fp_edit::FieldLayout| {
-        let uuid = fp.kicad.uuids.get(&format!("field:{name}")).cloned().unwrap_or_else(|| crate::duid(&format!("fpfield:{}:{name}", fp.name)));
+        let uuid = field_uuid(fp, name);
         let mut tmp = String::new();
         crate::fp_fields::write_property(&mut tmp, name, text, l, eda_model::ir::Side::Top, 0, &uuid);
         for line in tmp.lines() {
@@ -316,6 +316,37 @@ fn write_library_fields(out: &mut String, fp: &eda_model::ir::LibraryFootprint) 
         let mut l = f.layout.clone().unwrap_or_else(new_library_field_layout);
         l.visible = f.visible;
         one(out, &f.name, &f.value, &l);
+    }
+}
+
+/// The uuid the field `name` of `fp` is written with: the file's (`LibraryFootprintKeep::uuids`, by `field:<name>`), else one made from the footprint's name.
+fn field_uuid(fp: &eda_model::ir::LibraryFootprint, name: &str) -> String {
+    fp.kicad.uuids.get(&format!("field:{name}")).cloned().unwrap_or_else(|| crate::duid(&format!("fpfield:{}:{name}", fp.name)))
+}
+
+/// The names of the fields [`write_library_fields`] writes.
+fn written_field_names(fp: &eda_model::ir::LibraryFootprint) -> Vec<&str> {
+    let mut names = vec!["Reference", "Value"];
+    if fp.datasheet.is_some() {
+        names.push("Datasheet");
+    }
+    if fp.description_field.is_some() {
+        names.push("Description");
+    }
+    names.extend(fp.fields.iter().map(|f| f.name.as_str()));
+    names
+}
+
+/// `FOOTPRINT::cmp_drawings`' first key for the dimensions, `Type()`: `PCB_DIM_ALIGNED_T`, `PCB_DIM_LEADER_T`, `PCB_DIM_CENTER_T`, `PCB_DIM_RADIAL_T`,
+/// `PCB_DIM_ORTHOGONAL_T` (`include/core/typeinfo.h`).
+fn dimension_type_rank(d: &eda_model::ir::Dimension) -> u8 {
+    use eda_model::ir::DimensionKind;
+    match d.kind {
+        DimensionKind::Aligned { .. } => 0,
+        DimensionKind::Leader => 1,
+        DimensionKind::Center => 2,
+        DimensionKind::Radial { .. } => 3,
+        DimensionKind::Orthogonal { .. } => 4,
     }
 }
 
@@ -347,6 +378,12 @@ pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
 
 /// [`export_kicad_mod`] for a footprint that embeds files: `(embedded_fonts ..)` and `(embedded_files ..)` with the data (`PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* )` for a
 /// library, where `aWriteData` is true), before the models as KiCad writes them. The fonts a footprint does not embed are dropped (`ClearEmbeddedFonts`).
+///
+/// The footprint's items ([`eda_model::fp_items::FootprintItems`]) are written where `format( const FOOTPRINT* )` writes them, with the board's writers of each
+/// (`format( const PCB_DIMENSION_BASE* )`, `ZONE`, `PCB_TEXTBOX`, ...), one tab in as every child of the footprint is: the drawings in `FOOTPRINT::cmp_drawings`'
+/// order of types (the shapes, the images, the texts, the text boxes, the tables, the barcodes, the dimensions), the points, the pads, the zones, then the groups
+/// with their members' uuids. Within a type the items keep the footprint's order (KiCad sorts them by layer and uuid; its reader does not care). Each item keeps
+/// the uuid its file gave it (`LibraryFootprintKeep::uuids`); a new one gets one made from its id.
 pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &eda_model::embedded_files::EmbeddedFiles) -> String {
     use eda_model::ir::Shape;
     use std::fmt::Write as _;
@@ -401,9 +438,15 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
         writeln!(out, "\t{t}").unwrap();
     }
 
+    // Every item's id and the uuid it is written with: a group names its members by uuid (`format( const PCB_GROUP* )`).
+    let mut written: std::collections::BTreeMap<String, Vec<String>> = written_field_names(fp).into_iter().map(|n| (format!("field:{n}"), vec![field_uuid(fp, n)])).collect();
+    // An item's uuid: the file's (`LibraryFootprintKeep::uuids`), else one made from its id (`kind` keeps the kinds apart).
+    let uuid_of = |kind: &str, id: &str| fp.kicad.uuids.get(id).cloned().unwrap_or_else(|| crate::duid(&format!("{kind}:{id}")));
+    let items = &fp.items;
     let fp_fill = |filled: bool| if filled { "yes" } else { "no" };
     for g in &fp.graphics {
         let uuid = fp.kicad.uuids.get(g.id()).cloned().unwrap_or_else(|| crate::duid(&format!("fpgraphic:{}", g.id())));
+        written.entry(g.id().to_string()).or_default().push(uuid.clone());
         let layer = crate::sexpr_str(g.layer());
         // the line style the file had (`LibraryFootprintKeep::stroke_types`), else KiCad's `solid`
         let solid = fp.kicad.stroke_types.get(g.id()).map(String::as_str).unwrap_or("solid");
@@ -444,9 +487,56 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
         .unwrap();
     }
 
+    // The reference images, which `FOOTPRINT::cmp_drawings` puts after the shapes and before the texts (`PCB_REFERENCE_IMAGE_T`).
+    for img in &items.images {
+        let uuid = uuid_of("fpimage", &img.id);
+        crate::pcb_image::write_with_uuid(&mut out, img, false, &uuid);
+        written.entry(img.id.clone()).or_default().push(uuid);
+    }
+
     for t in &fp.texts {
         let uuid = fp.kicad.uuids.get(&t.id).cloned().unwrap_or_else(|| crate::duid(&format!("fptext:{}", t.id)));
         write_fp_text(&mut out, t, &uuid, fp.kicad.text_extra(&t.id), !fp.kicad.unlocked_texts.contains(&t.id));
+        written.entry(t.id.clone()).or_default().push(uuid);
+    }
+
+    // Then, in `cmp_drawings`' order of types, the text boxes (`fp_text_box`: `format( const PCB_TEXTBOX* )`'s tag for a text box of a footprint), the tables, the
+    // barcodes and the dimensions; an item of one type after another in the order the footprint has them.
+    for t in &items.text_boxes {
+        let uuid = uuid_of("fptextbox", &t.id);
+        crate::pcb_textbox::write_as(&mut out, t, false, "fp_text_box", &uuid);
+        written.entry(t.id.clone()).or_default().push(uuid);
+    }
+    for t in &items.tables {
+        let uuid = uuid_of("fptable", &t.id);
+        crate::pcb_table::write_with_uuid(&mut out, t, false, &uuid);
+        written.entry(t.id.clone()).or_default().push(uuid);
+    }
+    for b in &items.barcodes {
+        let uuid = uuid_of("fpbarcode", &b.id);
+        crate::barcode_io::write_with_uuid(&mut out, b, false, &uuid);
+        written.entry(b.id.clone()).or_default().push(uuid);
+    }
+    let mut dims: Vec<&eda_model::ir::Dimension> = items.dimensions.iter().collect();
+    dims.sort_by_key(|d| dimension_type_rank(d));
+    for d in dims {
+        // The text and its place, which KiCad works out again when it reads the file (`dim->Update()`), as the board's writer gives them. The text is the dimension
+        // (`PCB_DIMENSION_BASE` is a `PCB_TEXT`): it is written with the dimension's uuid, as KiCad writes it.
+        let geom = eda_connectivity::dimension::compute_dimension_geometry(d);
+        let uuid = uuid_of("fpdimension", &d.id);
+        crate::pcb_items::write_dimension(
+            &mut out,
+            d,
+            &crate::pcb_items::DimensionArgs { uuid: &uuid, text_uuid: &uuid, locked: false, text: &geom.text, text_at: (geom.text_at.x, geom.text_at.y), text_angle_millideg: geom.text_angle },
+        );
+        written.entry(d.id.clone()).or_default().push(uuid);
+    }
+
+    // The points (`Points()`), after the drawings and before the pads.
+    for p in &items.points {
+        let uuid = uuid_of("fppoint", &p.id);
+        crate::pcb_point::write_with_uuid(&mut out, p, &uuid);
+        written.entry(p.id.clone()).or_default().push(uuid);
     }
 
     for pad in &fp.pads {
@@ -462,6 +552,7 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
             eda_model::PadKind::NonPlatedHole => "np_thru_hole",
         };
         let uuid = fp.kicad.uuids.get(&pad.id).cloned().unwrap_or_else(|| crate::duid(&format!("fppad:{}:{}:{}:{}", pad.id, pad.number, pad.at.x, pad.at.y)));
+        written.entry(pad.id.clone()).or_default().push(uuid.clone());
         let angle_deg = crate::pad_file_angle(eda_model::ir::Side::Top, 0, pad.rot);
         write!(out, "\t(pad {} {kind} {shape} (at {} {} {angle_deg})", crate::sexpr_str(&pad.number), crate::mm(pad.at.x), crate::mm(pad.at.y)).unwrap();
         write!(out, " (size {} {})", crate::mm(pad.size.0), crate::mm(pad.size.1)).unwrap();
@@ -550,10 +641,36 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
         writeln!(out, ")").unwrap();
     }
 
-    // The kept items the editor does not draw (zones, points, dimensions, images, text boxes, tables, barcodes), after the pads as KiCad writes them.
+    // The zones (`Zones()`), after the pads: a rule area or a zone of the footprint, with no net (`format( const ZONE* )` writes one only for a copper zone of a
+    // net), on the layers of its set (a library footprint has no board to take the enabled ones from), never filled. A zone with no area is not written, as the
+    // board's writer does not write one.
+    for z in items.zones.iter().filter(|z| z.outline.len() >= 3) {
+        let uuid = uuid_of("fpzone", &z.id);
+        let args = crate::pcb_items::ZoneArgs {
+            net: 0,
+            locked: false,
+            uuid: &uuid,
+            fills: &[],
+            filled: false,
+            enabled_layers: None,
+            thieving: None,
+            arc_rings: None,
+            layer_props: None,
+            hatch_pitch: items.zone_hatch_pitch.get(&z.id).copied(),
+        };
+        crate::pcb_items::write_zone(&mut out, z, &args);
+        written.entry(z.id.clone()).or_default().push(uuid);
+    }
+
+    // The kept items the editor does not draw, as the file wrote them (a zone, a group, ... the reader could not hold, and every one of an older `design.json`
+    // that kept them all so), after the pads as KiCad writes them.
     for t in fp.kicad.tokens.iter().filter(|t| is_kept_item(t)) {
         writeln!(out, "\t{t}").unwrap();
     }
+
+    // The groups (`Groups()`) last, their members by the uuids just written; a group none of whose members was written is not (`if( memberIds.empty() ) return;`).
+    let groups: Vec<&eda_model::ir::Group> = items.groups.iter().collect();
+    crate::pcb_items::write_groups(&mut out, &groups, &written, &|g| uuid_of("fpgroup", &g.id), &|_| false);
 
     // The embedded files, before the models as KiCad writes them.
     crate::embedded::write_owner(&mut out, embedded, 1, false);

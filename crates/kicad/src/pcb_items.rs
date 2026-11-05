@@ -49,6 +49,9 @@ pub(crate) struct ZoneArgs<'a> {
     /// The zone's own per-layer settings as the file wrote them (`DrawingsSection::zone_layer_props`), one per line: written after the fill for the layers the
     /// zone is on (`for( const auto& [layer, properties] : aZone->LayerProperties() ) format( properties, 0, layer )`).
     pub layer_props: Option<&'a str>,
+    /// `ZONE::GetBorderHatchPitch()`, the second number of `(hatch edge 0.5)`: a library footprint's zone keeps the pitch its file gave it
+    /// (`FootprintItems::zone_hatch_pitch`); `None` is [`DEFAULT_HATCH_PITCH`], what a board's zone is written with.
+    pub hatch_pitch: Option<Nm>,
 }
 
 /// `PCB_IO_KICAD_SEXPR::formatLayers( layers, aEnumerateLayers, aIsZone )` for a zone: `(layers "F.Cu" "B.Cu")`. A zone on copper layers lists each of them
@@ -111,7 +114,8 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
             ZoneBorderStyle::Full => "full",
         }
     };
-    writeln!(out, "\t\t(hatch {hatch} {DEFAULT_HATCH_PITCH})").unwrap();
+    let pitch = a.hatch_pitch.map_or_else(|| DEFAULT_HATCH_PITCH.to_string(), mm);
+    writeln!(out, "\t\t(hatch {hatch} {pitch})").unwrap();
     if z.priority > 0 {
         writeln!(out, "\t\t(priority {})", z.priority).unwrap();
     }
