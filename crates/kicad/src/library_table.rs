@@ -865,15 +865,9 @@ pub fn check_row(kind: TableKind, row: &Row, path: &Path) -> Option<String> {
         return Some(format!("The studio reads KiCad-format libraries only; a '{}' library is not read here.", row.lib_type));
     }
     match kind {
-        TableKind::Symbol => {
-            if path.is_dir() {
-                Some(format!("'{}' is a folder of symbol files, which the studio does not read; add the .kicad_sym files themselves.", path.display()))
-            } else if !path.is_file() {
-                Some(format!("Library '{}' not found.", path.display()))
-            } else {
-                None
-            }
-        }
+        // `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load`'s `isLibraryPathValid`: a `.kicad_sym` file that exists, or a folder library (KiCad 10's `.kicad_symdir`,
+        // `eda_kicad::read_symbol_library_text`) that does -- an empty folder too, which loads as an empty library.
+        TableKind::Symbol => (!path.is_file() && !path.is_dir()).then(|| format!("Library '{}' not found.", path.display())),
         TableKind::Footprint => (!path.is_dir()).then(|| format!("Footprint library '{}' not found.", path.display())),
         // `DESIGN_BLOCK_IO::DesignBlockEnumerate` is what `CheckTableRow` runs, and a folder it cannot open is "Design block '<path>' does not exist."
         TableKind::DesignBlock => (!path.is_dir()).then(|| format!("Design block '{}' does not exist.", path.display())),
@@ -1568,7 +1562,7 @@ mod tests {
         assert_eq!(check_row(TableKind::Footprint, &sym("KiCad"), &root.join("b.pretty")), None);
         assert!(check_row(TableKind::Symbol, &sym("KiCad"), &root.join("zz.kicad_sym")).unwrap().ends_with("zz.kicad_sym' not found."));
         assert!(check_row(TableKind::Footprint, &sym("KiCad"), &root.join("zz.pretty")).unwrap().starts_with("Footprint library '"));
-        assert!(check_row(TableKind::Symbol, &sym("KiCad"), &root.join("folder")).unwrap().contains("folder of symbol files"));
+        assert_eq!(check_row(TableKind::Symbol, &sym("KiCad"), &root.join("folder")), None, "a folder is a folder library (KiCad 10), read as its files");
         assert!(check_row(TableKind::Footprint, &sym("KiCad"), &root.join("a.kicad_sym")).is_some(), "a footprint library is a folder");
         assert_eq!(check_row(TableKind::Symbol, &sym("Bogus"), &root).unwrap(), "Unknown library type Bogus ");
         assert!(check_row(TableKind::Symbol, &sym("Legacy"), &root).unwrap().contains("KiCad-format libraries only"));

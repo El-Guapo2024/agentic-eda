@@ -229,6 +229,82 @@ pub fn scan_symbols(text: &str) -> Vec<SymbolSummary> {
     out
 }
 
+/// What `SCH_IO_KICAD_SEXPR_PARSER::ParseLib` reads at the top of one `.kicad_sym` file, found the way [`scan_symbols`] finds its symbols (strings
+/// skipped whole, parentheses counted): the `(version N)` of the header and every top-level `(symbol "Name" ...)` with its byte span.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct LibraryForms {
+    /// The `N` of `(version N)`, as written.
+    pub(crate) version: Option<String>,
+    /// Each symbol's name (unescaped) and the span of its whole form, in file order.
+    pub(crate) symbols: Vec<(String, Range<usize>)>,
+}
+
+/// [`LibraryForms`] of `.kicad_sym` text. `None` when the text is not a `(kicad_symbol_lib ...)` form (`ParseLib`'s `parseHeader( T_kicad_symbol_lib, .. )`
+/// refuses it). A symbol cut off before its end is left out, as [`scan_symbols`] leaves it; a bare (unquoted) name is a name, as `parseLibSymbol`'s
+/// `IsSymbol( token )` takes either.
+pub(crate) fn library_forms(text: &str) -> Option<LibraryForms> {
+    let b = text.as_bytes();
+    let start = skip_ws(b, 0);
+    if b.get(start) != Some(&b'(') {
+        return None;
+    }
+    let tag_at = skip_ws(b, start + 1);
+    let tag_end = word_end(b, tag_at);
+    if &b[tag_at..tag_end] != b"kicad_symbol_lib" {
+        return None;
+    }
+    let mut out = LibraryForms::default();
+    // the symbol whose form is open at depth 2: where it starts and its name
+    let mut open: Option<(usize, String)> = None;
+    let (mut i, mut depth) = (tag_end, 1usize);
+    while i < b.len() {
+        match b[i] {
+            b'"' => i = string_end(b, i),
+            b'(' => {
+                let tag_end = word_end(b, i + 1);
+                let mut next = i + 1;
+                if depth == 1 {
+                    let at = skip_ws(b, tag_end);
+                    match &b[i + 1..tag_end] {
+                        b"symbol" => {
+                            let name = read_string(text, at).or_else(|| {
+                                let end = word_end(b, at);
+                                (end > at).then(|| (text[at..end].to_string(), end))
+                            });
+                            if let Some((name, after)) = name {
+                                open = Some((i, name));
+                                next = after;
+                            }
+                        }
+                        b"version" => {
+                            let end = word_end(b, at);
+                            out.version = Some(text[at..end].to_string());
+                            next = end;
+                        }
+                        _ => {}
+                    }
+                }
+                depth += 1;
+                i = next;
+            }
+            b')' => {
+                depth -= 1;
+                if depth == 1 {
+                    if let Some((from, name)) = open.take() {
+                        out.symbols.push((name, from..i + 1));
+                    }
+                }
+                i += 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    Some(out)
+}
+
 /// A derived symbol takes from its base what it does not have: the units, the pins, and every property it leaves empty -- how KiCad flattens it
 /// (`LIB_SYMBOL::Flatten`), and what the chooser shows (`AMS1117-3.3` has the pins of `AP1117-15`). One level at a time, to the end of the chain.
 pub fn inherit(list: &mut [SymbolSummary]) {
@@ -412,22 +488,19 @@ mod tests {
     }
 
     /// The real libraries, when KiCad.app is installed: every library scans, the big ones quickly, and the names agree with the
-    /// names-only scan the library trees use.
+    /// names-only scan the library trees use. A library is a `.kicad_sym` file or (KiCad 10's kicad-symbols) a `.kicad_symdir` folder.
     #[test]
     fn the_installed_libraries_scan() {
         let root = crate::default_symbol_library_root();
-        let Ok(entries) = std::fs::read_dir(&root) else {
+        if !root.is_dir() {
             eprintln!("no KiCad symbol libraries at {}; skipping", root.display());
             return;
-        };
+        }
         let started = std::time::Instant::now();
         let (mut files, mut symbols, mut bytes) = (0usize, 0usize, 0usize);
-        for e in entries.filter_map(|e| e.ok()) {
-            let path = e.path();
-            if path.extension().and_then(|x| x.to_str()) != Some("kicad_sym") {
-                continue;
-            }
-            let text = std::fs::read_to_string(&path).unwrap();
+        for name in crate::list_symbol_libraries(&root) {
+            let path = crate::find_symbol_library_file(&root, &name).unwrap();
+            let text = crate::read_symbol_library_text(&path).unwrap();
             let mut list = scan_symbols(&text);
             inherit(&mut list);
             assert!(!list.is_empty(), "{} lists no symbol", path.display());
@@ -442,7 +515,7 @@ mod tests {
         eprintln!("scanned {files} libraries, {symbols} symbols, {} MB in {:?}", bytes / 1_000_000, started.elapsed());
         assert!(files > 100 && symbols > 10_000);
 
-        let text = std::fs::read_to_string(root.join("Amplifier_Operational.kicad_sym")).unwrap();
+        let text = crate::read_symbol_library_text(&crate::find_symbol_library_file(&root, "Amplifier_Operational").unwrap()).unwrap();
         let mut list = scan_symbols(&text);
         inherit(&mut list);
         let lm358 = list.iter().find(|s| s.name == "LM358").expect("LM358 ships with KiCad");

@@ -170,8 +170,9 @@ export interface FolderListing {
   truncated: boolean;
 }
 
-/** What the browse buttons list: the folders of `path` and the files `what` asks for (`symbol`: .kicad_sym, `table`: a library table; folders only for `footprint`, `design_block` and `folder`). */
-export async function browseFolder(path: string, what: "symbol" | "footprint" | "design_block" | "table" | "folder"): Promise<FolderListing> {
+/** What the browse buttons list: the folders of `path` and the files `what` asks for (`symbol`: .kicad_sym, `table`: a library table; folders only for `symbol_folder`, `footprint`,
+ *  `design_block` and `folder`). */
+export async function browseFolder(path: string, what: "symbol" | "symbol_folder" | "footprint" | "design_block" | "table" | "folder"): Promise<FolderListing> {
   const r = await send<FolderListing & { error?: string }>(`/api/fs/list?path=${encodeURIComponent(path)}&what=${what}`);
   if (r.error) throw new ApiError(r.error);
   return r;

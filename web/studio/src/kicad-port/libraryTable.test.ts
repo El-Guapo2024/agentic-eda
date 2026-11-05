@@ -34,6 +34,8 @@ const row = (nickname: string, uri: string, extra: Partial<TableRow> = {}): Tabl
 test("a nickname is the file's name; a footprint library that is not a .pretty keeps its whole name (browseLibrariesHandler, AddLibrary)", () => {
   assert.equal(nicknameForFile("symbol", "My Parts.kicad_sym"), "My Parts");
   assert.equal(nicknameForFile("symbol", "Device.kicad_sym"), "Device");
+  // a KiCad 10 folder library: `GetName()` of the folder, as of a file
+  assert.equal(nicknameForFile("symbol", "Device.kicad_symdir"), "Device");
   assert.equal(nicknameForFile("footprint", "Snap.pretty"), "Snap");
   assert.equal(nicknameForFile("footprint", "plain_folder"), "plain_folder");
   assert.equal(nicknameForFile("footprint", "folder.v2"), "folder.v2", "not a .pretty: the whole name");

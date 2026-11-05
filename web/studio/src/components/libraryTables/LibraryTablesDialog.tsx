@@ -326,6 +326,8 @@ function TablesBody({ kind }: { kind: TableKind }) {
     kind === "symbol"
       ? [
           { what: "symbol", label: "KiCad (.kicad_sym)" },
+          // `PANEL_SYM_LIB_TABLE`'s browse menu: "Add folder-based entry right after KiCad file-based entry" (KiCad 10's `.kicad_symdir` libraries)
+          { what: "symbol_folder", label: "KiCad (folder with .kicad_sym files)" },
           { what: "table", label: "Table (nested library table)" },
         ]
       : kind === "footprint"
