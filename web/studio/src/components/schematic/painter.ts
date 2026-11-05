@@ -31,7 +31,8 @@
 // the dangling-pin indicator circle is not drawn), and no electrical-pin
 // -type annotation text (off by default in the real schematic editor
 // too, so this is not actually a gap).
-import type { BusEntry, ErcViolation, LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire, Sheet } from "../../api/types";
+import type { BusEntry, ErcViolation, LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSetupLook, SchematicSymbol, SchematicText, SchematicWire, Sheet } from "../../api/types";
+import { junctionDrawn, junctionRadiusNm } from "../../kicad-port/schSetup";
 import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
@@ -358,6 +359,8 @@ function drawKicadText(ctx: CanvasRenderingContext2D, text: string, anchor: [num
 
 /** The field ids the sheet being painted has selected: a selected field is drawn in the selection colour (set by `paintSchematic` for the length of one paint). */
 let paintedSelection: ReadonlySet<string> = new Set();
+/** Schematic Setup's look of the sheet being painted (the schematic's `setup`): the dashed lines' ratios and the junction dot's size. */
+let paintedSetup: SchematicSetupLook | undefined;
 /** "Show Hidden Fields" while the sheet is being painted (`SCH_PAINTER::draw( SCH_FIELD )`: a hidden field is drawn, in the hidden-items colour, only while it is on). */
 let paintedShowHiddenFields = false;
 
@@ -439,7 +442,8 @@ function fillPaint(fill: LibFill): "none" | "outline" | "background" {
 /** sch_shape.cpp's stroke-width resolution: an explicit positive width wins (clamped to a sane minimum); zero means "use the schematic's own default line thickness"; negative explicitly means "no stroke" (rare -- a hatch-only shape). */
 function effectiveStrokeWidthNm(strokeWidthNm: number): number | null {
   if (strokeWidthNm > 0) return Math.max(strokeWidthNm, 21_200);
-  if (strokeWidthNm === 0) return 152_400; // DEFAULT_LINE_WIDTH_MILS, 6 mil
+  // `SCHEMATIC_SETTINGS::m_DefaultLineWidth`: Schematic Setup > Formatting's "Default line width" (DEFAULT_LINE_WIDTH_MILS, 6 mil, unless set)
+  if (strokeWidthNm === 0) return paintedSetup?.default_line_width_nm ?? 152_400;
   return null;
 }
 
@@ -890,10 +894,18 @@ function drawBusEntry(ctx: CanvasRenderingContext2D, view: ViewTransform, be: Bu
   ctx.restore();
 }
 
-/** The stroke Wire/Bus Properties set over the layer's defaults: the line width (`fallbackNm` when none), its dash pattern and its own colour (null: the layer's). */
-function strokeLook(st: SchStroke | null | undefined, fallbackNm: number): { width: number; dash: number[]; color: string | null } {
-  const width = st?.width_nm ? st.width_nm : fallbackNm;
-  return { width, dash: dashPattern(st?.style, width), color: st?.color && (st.color.r || st.color.g || st.color.b || st.color.a) ? rgba(st.color) : null };
+/** `LINE_STYLE` by number (a net class's `line_style`): 0 solid, 1 dashed, 2 dotted, 3 dash-dot, 4 dash-dot-dot. */
+const CLASS_LINE_STYLES = ["solid", "dash", "dot", "dash_dot", "dash_dot_dot"] as const;
+
+/** The stroke Wire/Bus Properties set over the layer's defaults: the line width (`fallbackNm` when none), its dash pattern and its own colour (null: the layer's).
+ *  `cls` is what the wire's net class draws it with where the stroke says nothing (`SCH_LINE::GetPenWidth`, `GetEffectiveLineStyle`, `GetLineColor` over
+ *  `GetEffectiveNetClass()`: Schematic Setup > Net Classes); the dashes take Formatting's ratios. */
+function strokeLook(st: SchStroke | null | undefined, fallbackNm: number, cls?: SchematicWire["class_look"]): { width: number; dash: number[]; color: string | null } {
+  const width = st?.width_nm ? st.width_nm : cls?.width_nm ? cls.width_nm : fallbackNm;
+  const style = st?.style && st.style !== "default" ? st.style : cls?.style !== undefined && cls?.style !== null ? CLASS_LINE_STYLES[cls.style] : st?.style;
+  const own = st?.color && (st.color.r || st.color.g || st.color.b || st.color.a) ? rgba(st.color) : null;
+  const ratios = paintedSetup ? { dash: paintedSetup.dash_ratio, gap: paintedSetup.gap_ratio } : undefined;
+  return { width, dash: dashPattern(style, width, ratios), color: own ?? cls?.color ?? null };
 }
 
 /**
@@ -973,6 +985,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   const display = opts.display ?? DEFAULT_SCH_DISPLAY;
   paintedSelection = opts.selection;
   paintedShowHiddenFields = display.showHiddenFields;
+  paintedSetup = sch.setup;
 
   // The images lie under everything else on the sheet (`LAYER_DRAW_BITMAPS`).
   paintImages(ctx, view, sch.graphics ?? [], opts.selection, (sch.sheet_path ?? []).map((c) => c.id).join("/"));
@@ -988,7 +1001,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     // wire, just `LAYER_BUS` instead of `LAYER_WIRE` -- same convention
     // real eeschema uses (a visibly different, blue by default, color; not
     // a different line width).
-    const look = strokeLook(w.stroke, 150_000);
+    const look = strokeLook(w.stroke, w.bus ? 304_800 : 152_400, w.class_look);
     ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : (look.color ?? layerColor(w.bus ? "LAYER_BUS" : "LAYER_WIRE"));
     ctx.lineWidth = Math.max(on ? Math.max(300_000, look.width * 2) : look.width, hair * (on ? 2.5 : 1));
     ctx.setLineDash(look.dash);
@@ -1007,9 +1020,18 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // on a wire's interior, i.e. a T) now also get a dot.
   const junctionAnchors: Array<[number, number]> = [...sch.power_symbols.map((p) => p.at), ...sch.labels.map((l) => l.at)];
   ctx.fillStyle = layerColor("LAYER_JUNCTION");
+  // Schematic Setup > Formatting's junction dot size (`SCHEMATIC_SETTINGS::GetJunctionSize`), at least 1.7 times the width of the wire it joins (`getEffectiveShape`)
+  const dotDiameter = sch.setup?.junction_diameter_nm ?? JUNCTION_RADIUS_NM * 2;
+  const wireWidthAt = (x: number, y: number): number => {
+    // the wire the dot joins: one that ends there (a dot on the middle of a wire has one ending there too, the T's stem), else the Default class's width
+    const w = sch.wires.find((v) => !v.bus && v.pts.some((p) => p[0] === x && p[1] === y));
+    return w?.stroke?.width_nm || w?.class_look?.width_nm || sch.setup?.default_wire_width_nm || 152_400;
+  };
   for (const [x, y] of junctionPoints(sch.wires, junctionAnchors)) {
+    const r = junctionRadiusNm(dotDiameter, wireWidthAt(x, y));
+    if (!junctionDrawn(r)) continue;
     ctx.beginPath();
-    ctx.arc(x, y, Math.max(JUNCTION_RADIUS_NM, hair * 2), 0, Math.PI * 2);
+    ctx.arc(x, y, Math.max(r, hair * 2), 0, Math.PI * 2);
     ctx.fill();
   }
   // Explicit junctions (`J`, `SCH_JUNCTION`): the same dot, drawn wherever one was placed -- on a crossing it is what joins the two
@@ -1019,7 +1041,9 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     const own = j.look?.color && (j.look.color.r || j.look.color.g || j.look.color.b || j.look.color.a) ? rgba(j.look.color) : null;
     ctx.fillStyle = opts.selection.has(j.id) ? layerColor("LAYER_SELECTION_SHADOWS") : (own ?? layerColor("LAYER_JUNCTION"));
     ctx.beginPath();
-    ctx.arc(j.at[0], j.at[1], Math.max(j.look?.diameter_nm ? j.look.diameter_nm / 2 : JUNCTION_RADIUS_NM, hair * 2), 0, Math.PI * 2);
+    const r = junctionRadiusNm(j.look?.diameter_nm ? j.look.diameter_nm : dotDiameter, wireWidthAt(j.at[0], j.at[1]));
+    if (!junctionDrawn(r) && !opts.selection.has(j.id)) continue;
+    ctx.arc(j.at[0], j.at[1], Math.max(r, hair * 2), 0, Math.PI * 2);
     ctx.fill();
   }
 
