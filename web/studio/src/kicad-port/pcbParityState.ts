@@ -6,6 +6,7 @@ import type { TuneHoverReply, TuneKind, TuneSettings } from "../api/tuneTypes";
 import type { LayerPairSettings } from "./layerPairs";
 import { DEFAULT_CUSTOM_TRACK_VIA, type CustomTrackVia } from "./routerVia";
 import { DEFAULT_ARC_EDIT_MODE, type ArcEditMode } from "./pcbPointEdit";
+import type { NewZoneSettings } from "./pcbDrawZone";
 
 /**
  * `DRAWING_TOOL::m_stroke`'s width once `incWidth`/`decWidth` have stepped it on `layer`. A graphic starts at the line thickness of its layer's class (Board Setup >
@@ -82,6 +83,12 @@ export interface PcbParityState {
   arcEditMode: ArcEditMode;
   /** `PCB_BASE_EDIT_FRAME::m_vertexEditorPane` is open ("Edit Corners..."): the floating table of the selected polygon's or zone's vertices. */
   vertexEditorOpen: boolean;
+  /**
+   * The zone dialog, open for a zone being drawn with Add Filled Zone or Add Rule Area (kicad-port/pcbDrawZone.ts): at its first corner (`at`, `ZONE_CREATE_HELPER::
+   * OnFirstPoint` -> `createNewZone`; the corner is locked in on OK), or with Properties (E) during the draw (`at` null: `OnEditItemRequest( zoneTool.GetZone() )`).
+   * `initial` is what the dialog starts from. Absent (or null): no such dialog.
+   */
+  zoneCreate?: { at: [number, number] | null; initial: NewZoneSettings } | null;
 }
 
 /**

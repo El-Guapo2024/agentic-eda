@@ -177,6 +177,9 @@
       t((await count()) === 0, "the track is undone");
       await __eda.run("pcbnew.InteractiveDrawing.zone"); await sleep(400);
       await click(toScreen, fx, fy);
+      // `createNewZone`: the first corner asks for the zone's settings first (UI-LEFT P8); OK locks it in.
+      for (let i = 0; i < 20 && !document.querySelector('[data-testid="zone-ok"]'); i++) await sleep(150);
+      document.querySelector('[data-testid="zone-ok"]')?.click(); await sleep(300);
       await click(toScreen, fx + 10, fy);
       await __eda.run("common.Interactive.redo"); await sleep(800);
       t((await count()) === 0, "Redo did nothing while the outline is open");

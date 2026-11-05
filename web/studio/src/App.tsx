@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { StudioProvider, useStudioDispatch, useStudioState } from "./state/store";
+import { setCommonOptions } from "./state/commonOptions";
 import { FootprintEditorProvider } from "./state/footprintEditorStore";
 import { SymbolEditorProvider } from "./state/symbolEditorStore";
 import { SchControlProvider } from "./state/schControlStore";
@@ -105,7 +106,7 @@ function Toast() {
   const dispatch = useStudioDispatch();
   useEffect(() => {
     if (!state.toast) return;
-    const t = setTimeout(() => dispatch({ type: "TOAST_CLEAR" }), state.toast.kind === "info" ? 2500 : 6000);
+    const t = setTimeout(() => dispatch({ type: "TOAST_CLEAR" }), state.toast.ms ?? (state.toast.kind === "info" ? 2500 : 6000));
     return () => clearTimeout(t);
   }, [state.toast, dispatch]);
   if (!state.toast) return null;
@@ -127,6 +128,22 @@ function Toast() {
       }}
     >
       {state.toast.message}
+      {state.toast.dontShowAgain && (
+        // The info bar's `wxHyperlinkCtrl( infobar, wxID_ANY, _( "Don't show again" ), .. )`: sets the option and dismisses the bar.
+        <a
+          href="#"
+          data-testid="toast-dont-show-again"
+          style={{ marginLeft: 12, color: "inherit" }}
+          onClick={(e) => {
+            e.preventDefault();
+            const key = state.toast?.dontShowAgain;
+            if (key) setCommonOptions({ [key]: true });
+            dispatch({ type: "TOAST_CLEAR" });
+          }}
+        >
+          Don't show again
+        </a>
+      )}
     </div>
   );
 }

@@ -451,7 +451,22 @@ export interface ZoneSettingsFields {
   smoothing?: ZoneSmoothing;
   /** The chamfer distance or fillet radius, nm; only meaningful with `smoothing`. */
   corner_radius?: Nm;
+  /**
+   * `ZONE_SETTINGS::m_ZoneBorderDisplayStyle` ("Outline display": Line / Hatched / Fully hatched): how the outline is drawn (`ZONE::HatchBorder`); it never changes the
+   * copper. Absent from a backend that predates it and from an `edit_zone` that keeps the zone's.
+   */
+  border_style?: ZoneBorderStyle;
+  /** `ZONE_SETTINGS::m_BorderHatchPitch` ("Outline hatch pitch", 0.1 to 2 mm, `ZONE::GetDefaultHatchPitch()` 0.5 mm), nm. */
+  border_hatch_pitch?: Nm;
+  /**
+   * `ZONE_SETTINGS::m_LayerProperties`' `hatching_offset` ("Hatch offset overrides" of the Hatched Fill tab): per copper layer of the zone, how far its hatched fill's
+   * pattern is moved. A layer that is not here takes Board Setup > Zone Hatch Offsets'. Absent: none (and, on an `edit_zone`, the zone's kept).
+   */
+  hatch_offsets?: Record<string, { x_nm: Nm; y_nm: Nm }>;
 }
+
+/** `ZONE_BORDER_DISPLAY_STYLE` as the file writes it (`(hatch none|edge|full ..)`): `NO_HATCH`, `DIAGONAL_EDGE`, `DIAGONAL_FULL`. */
+export type ZoneBorderStyle = "none" | "edge" | "full";
 
 /**
  * `crates/model/src/ir.rs` `Zone`'s rule-area (keepout) fields, task item
@@ -2362,6 +2377,14 @@ export interface FillSource {
 export interface FillReport {
   zones: FillZone[];
   source: FillSource | null;
+}
+
+/** POST /api/fill/preview (the Zone Manager's Update Displayed Zones): the fills kicad-cli made of the board with the staged edits, kept nowhere. */
+export interface FillPreviewReply {
+  ok: boolean;
+  message?: string;
+  seconds?: number;
+  zones?: FillZone[];
 }
 
 /** POST /api/fill/kicad: kicad-cli's filler ran (`ok`), or could not (`message`). */

@@ -78,7 +78,7 @@ export function ZonePreview({ zone, fills, outlinePolys, outline }: { zone: Zone
           {edges.length > 0 && <path d={path(edges)} fill="none" stroke={layerColor("board_edge")} strokeWidth={view.scale * 1.2} fillRule="evenodd" />}
           {zone && shownLayer && fill && fill.filled && fill.fragments.length > 0 && <path data-testid="zone-preview-fill" d={path(fill.fragments as Pt[][])} fill={color} fillOpacity={0.85} stroke="none" fillRule="nonzero" />}
           {zone && shownLayer && (
-            <path data-testid="zone-preview-outline" d={path([zone.outline as Pt[]])} fill="none" stroke={color} strokeWidth={view.scale * 1.2} strokeDasharray={fill && fill.filled && fill.fragments.length > 0 ? undefined : `${view.scale * 6} ${view.scale * 4}`} />
+            <path data-testid="zone-preview-outline" d={path([zone.outline as Pt[], ...((zone.holes ?? []) as Pt[][])])} fill="none" stroke={color} strokeWidth={view.scale * 1.2} strokeDasharray={fill && fill.filled && fill.fragments.length > 0 ? undefined : `${view.scale * 6} ${view.scale * 4}`} />
           )}
         </g>
       </svg>
