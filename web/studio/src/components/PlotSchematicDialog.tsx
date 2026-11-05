@@ -1,19 +1,22 @@
-// File > Plot... on the Schematic tab -- eeschema's DIALOG_PLOT_SCHEMATIC
-// (dialog_plot_schematic.cpp, SCH_PLOT_OPTS): output format, colour vs.
-// black and white, "Plot drawing sheet", "Plot background color", page size,
-// and all pages vs. the current one. The real dialog also offers PostScript/
-// DXF/PNG, a colour-theme chooser and PDF property popups -- not wired here
-// (see PARITY-sch.md section 10); kicad-cli has no page-size override, so
-// that real option is not offered either.
+// File > Plot... on the Schematic tab -- eeschema's DIALOG_PLOT_SCHEMATIC (dialog_plot_schematic.cpp and dialog_plot_schematic_base.cpp,
+// KiCad 8303b2ad, SCH_PLOT_OPTS), with its controls, labels and defaults: "Output directory:", "Design variant:", Output Format (Postscript,
+// PDF, SVG, DXF, PNG), the Options (Page size, Plot drawing sheet, Output mode, Color theme, Plot background color, Minimum line width), the
+// PDF, DXF and PNG options, "Open file after plot", the messages, "Plot All Pages", "Plot Current Page" and Close. The enable rules
+// (`onPlotFormatSelection`, `onColorMode`) and the request are kicad-port/schOutputs.ts.
 //
-// POSTs to /api/sch/plot (crates/cli/src/sch_output_api.rs), which runs
-// `kicad-cli sch export svg|pdf` on the exported schematic and writes into
-// this board's own export/kicad/ folder (one .svg per sheet, or one
-// multi-page .pdf).
+// POSTs to /api/sch/plot (crates/cli/src/sch_output_api.rs), which runs `kicad-cli sch export <format>` on the exported schematic with each
+// option mapped onto its flag, into the dialog's output folder (relative to the board's folder; empty: export/kicad/sch-<format>/). The
+// controls kicad-cli has no flag for (page size, minimum line width, DXF units) and the ones a browser cannot do (open the file, browse for a
+// folder) are shown disabled with the reason; the studio has no design variants.
 import { useEffect, useState } from "react";
 import { postSchPlot } from "../api/client";
-import { buildSchPlotRequest, DEFAULT_SCH_PLOT_FORM, summarizeOutputs, type SchPlotForm } from "../kicad-port/schOutputs";
+import { buildSchPlotRequest, DEFAULT_SCH_PLOT_FORM, SCH_CLI_LIMITS, SCH_COLOR_THEMES, SCH_PAGE_SIZES, SCH_PLOT_FORMATS, schPlotEnables, summarizeOutputs, type SchPlotForm, type SchPlotScope } from "../kicad-port/schOutputs";
 import { useStudioDispatch, useStudioState } from "../state/store";
+
+/** The choices of the last plot (`DIALOG_SHIM::LoadControlState` restores them), while the page lives. */
+let kept: SchPlotForm = DEFAULT_SCH_PLOT_FORM;
+
+const dim = { color: "var(--chrome-text-dim)", fontSize: 11 } as const;
 
 export function PlotSchematicDialog() {
   const state = useStudioState();
@@ -21,26 +24,32 @@ export function PlotSchematicDialog() {
   const open = state.schPlotDialogOpen;
   const currentSheetIds = (state.schematic?.sheet_path ?? []).map((s) => s.id);
 
-  const [form, setForm] = useState<SchPlotForm>(DEFAULT_SCH_PLOT_FORM);
+  const [form, setForm] = useState<SchPlotForm>(kept);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    // The choices of the last plot stay (`DIALOG_SHIM::LoadControlState` restores them); only the result is cleared.
+    setForm(kept);
     setResult(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   if (!open) return null;
   const close = () => dispatch({ type: "SET_SCH_PLOT_DIALOG_OPEN", open: false });
-  const set = (patch: Partial<SchPlotForm>) => setForm((prev) => ({ ...prev, ...patch }));
+  const set = (patch: Partial<SchPlotForm>) =>
+    setForm((prev) => {
+      const next = { ...prev, ...patch };
+      kept = next;
+      return next;
+    });
+  const en = schPlotEnables(form);
 
-  const plot = async () => {
+  const plot = async (scope: SchPlotScope) => {
     setBusy(true);
     setResult(null);
     try {
-      const reply = await postSchPlot(buildSchPlotRequest({ ...form, currentSheetIds }));
+      const reply = await postSchPlot(buildSchPlotRequest({ ...form, currentSheetIds }, scope));
       const files = reply.files ?? [];
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? summarizeOutputs(files) : "Plot failed."), files });
     } finally {
@@ -50,48 +59,111 @@ export function PlotSchematicDialog() {
 
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 440 }} onClick={(e) => e.stopPropagation()}>
+      <div className="dialog" style={{ width: 600 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">Plot Schematic</div>
         <div className="dialog-body" style={{ paddingTop: 10 }}>
-          <fieldset style={{ marginBottom: 10 }}>
-            <legend>Output format</legend>
-            <label style={{ display: "block" }}>
-              <input type="radio" checked={form.format === "pdf"} onChange={() => set({ format: "pdf" })} /> PDF (one page per sheet)
-            </label>
-            <label style={{ display: "block" }}>
-              <input type="radio" checked={form.format === "svg"} onChange={() => set({ format: "svg" })} /> SVG (one file per sheet)
-            </label>
-          </fieldset>
-          <fieldset style={{ marginBottom: 10 }}>
-            <legend>Pages</legend>
-            <label style={{ display: "block" }}>
-              <input type="radio" checked={form.scope === "all"} onChange={() => set({ scope: "all" })} /> Plot all pages (every sheet in the hierarchy)
-            </label>
-            <label style={{ display: "block" }}>
-              <input type="radio" checked={form.scope === "current"} onChange={() => set({ scope: "current" })} /> Plot current page only
-            </label>
-          </fieldset>
-          <fieldset style={{ marginBottom: 10 }}>
-            <legend>Options</legend>
-            <label style={{ display: "block" }}>
-              <input type="radio" checked={form.color} onChange={() => set({ color: true })} /> Color
-            </label>
-            <label style={{ display: "block" }}>
-              <input type="radio" checked={!form.color} onChange={() => set({ color: false })} /> Black and white
-            </label>
-            <label style={{ display: "block", marginTop: 6 }}>
-              <input type="checkbox" checked={form.plotDrawingSheet} onChange={(e) => set({ plotDrawingSheet: e.target.checked })} /> Plot drawing sheet (frame and title block)
-            </label>
-            <label style={{ display: "block", opacity: form.color ? 1 : 0.5 }} title="Plot the background color if the output format supports it">
-              <input type="checkbox" disabled={!form.color} checked={form.useBackgroundColor} onChange={(e) => set({ useBackgroundColor: e.target.checked })} /> Plot background color
-            </label>
-          </fieldset>
-          <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", marginBottom: 10 }}>
-            Output directory: <code>export/kicad/sch-svg/</code> or <code>sch-pdf/</code> (inside this board's own directory), written by <code>kicad-cli sch export</code>.
+          <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }} title="Target directory for plot files. Can be absolute or relative to the schematic main file location.">
+            Output directory:
+            <input type="text" value={form.outputDirectory} placeholder={`export/kicad/sch-${form.format}/`} onChange={(e) => set({ outputDirectory: e.target.value })} style={{ flex: 1 }} data-testid="sch-plot-output-dir" />
+            <button disabled title={`Not available: ${SCH_CLI_LIMITS.browse}`}>…</button>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, opacity: 0.6 }} title={`Not available: ${SCH_CLI_LIMITS.variant}`}>
+            Design variant:
+            <select disabled value="">
+              <option value="">Default</option>
+            </select>
+          </label>
+          <div style={{ display: "flex", gap: 12 }}>
+            <fieldset style={{ minWidth: 110 }}>
+              <legend>Output Format</legend>
+              {SCH_PLOT_FORMATS.map((f) => (
+                <label key={f.id} style={{ display: "block" }}>
+                  <input type="radio" name="sch-plot-format" checked={form.format === f.id} onChange={() => set({ format: f.id })} /> {f.label}
+                </label>
+              ))}
+            </fieldset>
+            <div style={{ flex: 1 }}>
+              <fieldset style={{ marginBottom: 8 }}>
+                <legend>Options</legend>
+                <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 8px", alignItems: "center" }}>
+                  <span style={{ opacity: 0.6 }}>Page size:</span>
+                  <select disabled value={SCH_PAGE_SIZES[0]} title={`Not available: ${SCH_CLI_LIMITS.pageSize}`}>
+                    {SCH_PAGE_SIZES.map((p) => (
+                      <option key={p}>{p}</option>
+                    ))}
+                  </select>
+                  <span />
+                  <label title="Plot the drawing sheet border and title block">
+                    <input type="checkbox" checked={form.plotDrawingSheet} onChange={(e) => set({ plotDrawingSheet: e.target.checked })} /> Plot drawing sheet
+                  </label>
+                  <span>Output mode:</span>
+                  <select value={form.color ? "color" : "bw"} onChange={(e) => set({ color: e.target.value === "color" })} data-testid="sch-plot-mode">
+                    <option value="color">Color</option>
+                    <option value="bw">Black and White</option>
+                  </select>
+                  <span style={{ opacity: en.theme ? 1 : 0.5 }}>Color theme:</span>
+                  <select value={form.theme} disabled={!en.theme} title="Select the color theme to use for plotting" onChange={(e) => set({ theme: e.target.value })} data-testid="sch-plot-theme">
+                    {SCH_COLOR_THEMES.map((t) => (
+                      <option key={t.key} value={t.key}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span />
+                  <label style={{ opacity: en.background ? 1 : 0.5 }} title="Plot the background color if the output format supports it">
+                    <input type="checkbox" disabled={!en.background} checked={form.useBackgroundColor} onChange={(e) => set({ useBackgroundColor: e.target.checked })} /> Plot background color
+                  </label>
+                  <span style={{ opacity: 0.6 }}>Minimum line width:</span>
+                  <span style={{ opacity: 0.6 }} title={`Selection of the default pen thickness used to draw items, when their thickness is set to 0. -- not available: ${SCH_CLI_LIMITS.lineWidth}`}>
+                    <input type="text" disabled value="0.1524" size={8} readOnly /> mm
+                  </span>
+                </div>
+              </fieldset>
+              <fieldset style={{ marginBottom: 8, opacity: en.pdfOptions ? 1 : 0.5 }}>
+                <legend>PDF Options</legend>
+                <label style={{ display: "block" }}>
+                  <input type="checkbox" disabled={!en.pdfOptions} checked={form.pdfPropertyPopups} onChange={(e) => set({ pdfPropertyPopups: e.target.checked })} /> Generate property popups
+                </label>
+                <label style={{ display: "block" }}>
+                  <input type="checkbox" disabled={!en.pdfOptions} checked={form.pdfHierarchicalLinks} onChange={(e) => set({ pdfHierarchicalLinks: e.target.checked })} /> Generate clickable links for hierarchical elements
+                </label>
+                <label style={{ display: "block" }} title="Generate PDF document properties from AUTHOR and SUBJECT text variables">
+                  <input type="checkbox" disabled={!en.pdfOptions} checked={form.pdfMetadata} onChange={(e) => set({ pdfMetadata: e.target.checked })} /> Generate metadata from AUTHOR &amp;&amp; SUBJECT variables
+                </label>
+              </fieldset>
+              <fieldset style={{ marginBottom: 8, opacity: 0.6 }}>
+                <legend>DXF Options</legend>
+                <label title={`Not available: ${SCH_CLI_LIMITS.dxfUnits}`}>
+                  Export units:{" "}
+                  <select disabled value="mm">
+                    <option value="in">Inches</option>
+                    <option value="mm">Millimeters</option>
+                  </select>
+                </label>
+              </fieldset>
+              {en.pngOptions && (
+                <fieldset style={{ marginBottom: 8 }}>
+                  <legend>PNG Options</legend>
+                  <label>
+                    DPI:{" "}
+                    <input type="number" min={72} max={2400} value={form.pngDpi} onChange={(e) => set({ pngDpi: Math.min(2400, Math.max(72, Number(e.target.value) || 300)) })} style={{ width: 70 }} />
+                  </label>{" "}
+                  <label>
+                    <input type="checkbox" checked={form.pngAntialias} onChange={(e) => set({ pngAntialias: e.target.checked })} /> Anti-alias
+                  </label>
+                </fieldset>
+              )}
+              <fieldset style={{ marginBottom: 8, opacity: 0.6 }}>
+                <legend>Other Options</legend>
+                <label title={`Open output file with associated application after successful plot -- not available: ${SCH_CLI_LIMITS.openFile}`}>
+                  <input type="checkbox" disabled checked={false} readOnly /> Open file after plot
+                </label>
+              </fieldset>
+            </div>
           </div>
           {result && (
             <div className={result.ok ? "panel-empty" : "problem-row"} style={{ fontSize: 11 }}>
-              <b>{result.message}</b>
+              <b style={{ whiteSpace: "pre-line" }}>{result.message}</b>
               {result.files.length > 0 && (
                 <ul style={{ margin: "6px 0 0 16px", padding: 0 }}>
                   {result.files.map((f) => (
@@ -101,10 +173,14 @@ export function PlotSchematicDialog() {
               )}
             </div>
           )}
+          {!result && <div style={dim}>Written by kicad-cli sch export, KiCad's own plotter.</div>}
         </div>
         <div className="dialog-footer">
-          <button className="primary" onClick={plot} disabled={busy}>
-            {busy ? "Plotting…" : "Plot"}
+          <button className="primary" onClick={() => plot("all")} disabled={busy}>
+            {busy ? "Plotting…" : "Plot All Pages"}
+          </button>
+          <button onClick={() => plot("current")} disabled={busy}>
+            Plot Current Page
           </button>
           <button onClick={close}>Close</button>
         </div>
