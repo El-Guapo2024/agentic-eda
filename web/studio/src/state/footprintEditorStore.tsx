@@ -592,7 +592,14 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
     getState: () => stateRef.current,
     openFootprint: async (name) => {
       dispatch({ type: "SET_NAME", name });
-      await ensureFootprintInProject(name); // an installed KiCad footprint is copied into the project library first, or the verb below would open a blank one
+      // an installed KiCad footprint is copied into the project library first, or the verb below would open a blank one; when that fails, nothing is opened
+      const problem = await ensureFootprintInProject(name);
+      if (problem) {
+        const message = `Footprint '${name}' could not be loaded: ${problem}`;
+        dispatch({ type: "FOOTPRINT_ERR", message });
+        dispatch({ type: "TOAST", message, kind: "error" });
+        return;
+      }
       await postCmd({ op: "open_footprint_for_edit", name }, false);
       const footprint = await fetchFootprint(name);
       dispatch({ type: "FOOTPRINT_OK", footprint });
