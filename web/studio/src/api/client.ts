@@ -6,7 +6,7 @@
 
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillPreviewReply, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillPreviewReply, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm, SchSetupReply } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { PcbQueryRequest, PcbQueryResponse } from "../kicad-port/pcbQuery";
 import type { SchMovePatch } from "./schEditTypes";
@@ -849,6 +849,11 @@ export async function fetchErcSeverities(): Promise<ErcSeveritiesReply> {
 /** The settings of Schematic Setup > Formatting the design keeps (the connection grid). */
 export async function fetchSchFormatting(): Promise<SchFormattingReply> {
   return getJson<SchFormattingReply>("/api/sch/formatting");
+}
+
+/** Schematic Setup's Annotation, Field Name Templates, BOM Presets and Bus Alias Definitions pages (`GET /api/sch/setup`). */
+export async function fetchSchSetup(): Promise<SchSetupReply> {
+  return getJson<SchSetupReply>("/api/sch/setup");
 }
 
 /** `POST /api/inspect/clearance`: `reportClearance` for two items (`aAt`/`bAt`, in nanometres, say which segment of a track was meant). */

@@ -12,7 +12,7 @@ use eda_ops::{Cmd, Domain};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-fn scratch(name: &str) -> PathBuf {
+pub(crate) fn scratch(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("eda_cli_sch_hierarchy_{}_{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
@@ -26,7 +26,7 @@ fn example(file: &str) -> (PathBuf, ConstraintModel) {
 }
 
 /// mcu30's flat schematic as the engine draws it, in a scratch board.
-fn mcu30_board(name: &str) -> PathBuf {
+pub(crate) fn mcu30_board(name: &str) -> PathBuf {
     let dir = scratch(name);
     let (intent, model) = example("mcu_board_30plus.yaml");
     let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
@@ -262,7 +262,7 @@ fn a_cut_sheet_comes_back_from_the_clipboard_after_the_board_was_edited() {
 
 // ------------------------------------------------------------------------------------------------------ the slow tier: kicad-cli
 
-fn kicad_cli_ready() -> bool {
+pub(crate) fn kicad_cli_ready() -> bool {
     if std::env::var_os("EDA_SLOW_TESTS").is_none() {
         eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
         return false;
@@ -275,7 +275,7 @@ fn kicad_cli_ready() -> bool {
 }
 
 /// kicad-cli's ERC of the board as the studio would run it: the kinds of the findings, with how many.
-fn erc_kinds(dir: &Path) -> std::collections::BTreeMap<String, usize> {
+pub(crate) fn erc_kinds(dir: &Path) -> std::collections::BTreeMap<String, usize> {
     let report = crate::kicad_engine::erc(dir).expect("kicad-cli loads the hierarchy and runs ERC");
     let mut kinds = std::collections::BTreeMap::new();
     for v in report["violations"].as_array().into_iter().flatten() {
@@ -686,11 +686,11 @@ fn slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it() {
 
 // ---------------------------------------------------------------------------------------- a label's own fields
 
-fn edit_label_fields(id: &str, fields: Vec<eda_model::sch_extras::LabelField>) -> Cmd {
+pub(crate) fn edit_label_fields(id: &str, fields: Vec<eda_model::sch_extras::LabelField>) -> Cmd {
     Cmd::SchEdit(eda_ops::sch_edit::SchCmd::EditLabel { id: id.into(), text: None, shape: None, spin: None, size_nm: None, bold: None, italic: None, auto_rotate: None, fields: Some(fields) })
 }
 
-fn netclass(text: &str) -> eda_model::sch_extras::LabelField {
+pub(crate) fn netclass(text: &str) -> eda_model::sch_extras::LabelField {
     eda_model::sch_extras::LabelField { name: "Netclass".into(), text: text.into(), visible: true, italic: true }
 }
 
@@ -758,7 +758,7 @@ fn define_high_current(dir: &Path) {
 }
 
 /// The classes kicad-cli's netlist puts the net of `pin` ("REF.PIN") in (`<net .. class="A,B">`).
-fn kicad_classes_of_pin(dir: &Path, pin: &str) -> Vec<String> {
+pub(crate) fn kicad_classes_of_pin(dir: &Path, pin: &str) -> Vec<String> {
     let done = crate::kicad_engine::export_sch(dir, "netlist", &["--format".to_string(), "kicadxml".to_string()]).unwrap();
     let xml = std::fs::read_to_string(dir.join(done["files"][0].as_str().unwrap())).unwrap();
     let (r, n) = pin.split_once('.').unwrap();

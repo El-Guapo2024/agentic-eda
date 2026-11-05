@@ -260,8 +260,32 @@ pub fn formatting(dir: &Path) -> Value {
         Err(e) => return err(board::reasons(&e)),
     };
     let own = design.schematic.as_ref().and_then(|s| s.extras.connection_grid_mils);
+    // the page's other settings (`eda_model::sch_setup::SchFormatting`) as stored -- what the page shows, out-of-range sizes included, as KiCad's panel shows them
+    let formatting = design.schematic.as_ref().and_then(|s| s.extras.formatting.clone()).unwrap_or_default();
     // Inter-sheet References (`SCHEMATIC_SETTINGS::m_IntersheetRefs*`), KiCad's defaults when the design set none
-    json!({ "ok": true, "connection_grid_mils": own.unwrap_or(eda_model::sch_extras::DEFAULT_CONNECTION_GRID_MILS), "min_connection_grid_mils": eda_model::sch_extras::MIN_CONNECTION_GRID_MILS, "max_connection_grid_mils": eda_model::sch_extras::MAX_CONNECTION_GRID_MILS, "custom": own.is_some(), "intersheet_refs": eda_kicad::design_intersheet_refs(&design) })
+    json!({ "ok": true, "connection_grid_mils": own.unwrap_or(eda_model::sch_extras::DEFAULT_CONNECTION_GRID_MILS), "min_connection_grid_mils": eda_model::sch_extras::MIN_CONNECTION_GRID_MILS, "max_connection_grid_mils": eda_model::sch_extras::MAX_CONNECTION_GRID_MILS, "custom": own.is_some(), "intersheet_refs": eda_kicad::design_intersheet_refs(&design), "formatting": formatting })
+}
+
+/// `GET /api/sch/setup`: the Schematic Setup pages that keep project settings, as the design holds them now -- General > Annotation (the order, numbering,
+/// start number, reference reuse and the unit notation's first id and separator), Field Name Templates, BOM Presets (the names of the project's saved presets)
+/// and Project > Bus Alias Definitions. KiCad's defaults where the design set none.
+pub fn setup(dir: &Path) -> Value {
+    let (_, design, _) = match board::load(dir) {
+        Ok(v) => v,
+        Err(e) => return err(board::reasons(&e)),
+    };
+    let extras = design.schematic.as_ref().map(|s| s.extras.clone()).unwrap_or_default();
+    let names = |key: &str| -> Vec<String> { extras.project_schematic.as_ref().and_then(|p| p.get(key)).and_then(Value::as_array).map(|a| a.iter().filter_map(|p| p.get("name").and_then(Value::as_str)).map(String::from).collect()).unwrap_or_default() };
+    json!({
+        "ok": true,
+        "annotation": extras.annotation.clone().unwrap_or_default(),
+        "subpart_first_id": extras.subpart_first_id.unwrap_or('A' as u32),
+        "subpart_id_separator": extras.subpart_id_separator.unwrap_or(0),
+        "field_name_templates": extras.field_name_templates,
+        "bom_presets": names("bom_presets"),
+        "bom_fmt_presets": names("bom_fmt_presets"),
+        "bus_aliases": design.bus_aliases,
+    })
 }
 
 #[cfg(test)]

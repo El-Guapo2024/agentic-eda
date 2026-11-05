@@ -25,7 +25,7 @@ Notes:
 6. F1+F2: Footprint Editor fields and dimmed tools
 7. Y1: Symbol Editor Rotate
 8. P2/S7: Properties panel rows -- **done (task-u1-props)**
-9. S3: Schematic Setup pages
+9. S3: Schematic Setup pages -- **done (task-u1-schsetup)**
 10. P8: zones -- **done (task-u1-zones)**
 11. S2: design variants
 12. M1: the Simulation Model dialog
@@ -178,10 +178,12 @@ Notes:
   - M. PARITY-sch §3, §3a, §54.
 - **S1b [BD] Place Symbol (A) has no symbol following the cursor** (found by task-u1-schplace). After the chooser, it waits for a click with nothing drawn at the cursor; KiCad carries the symbol, with R/X/Y while carried. The `POST /api/sch/place_preview` endpoint from task-u1-schplace can draw it. S. PARITY-sch §54.
 - **S2 [FM] Design variants.** No Add, Remove or Edit Variant, no per-variant DNP or fields, and no variant columns in the Fields Table or the placement files. XL. ui-parity-missing (3 rows); PARITY-sch §13, §25.
-- **S3 [FM] Schematic Setup.**
-  - Formatting lacks the text sizes, line widths, and junction and hop-over sizes.
-  - No Annotation, Field Name Templates, Net Classes or Bus Alias pages, so ERC's "Edit Netclasses…" fix is missing.
-  - L. PARITY-sch §9, §28.
+- **S3 [FM] Schematic Setup.** **done (task-u1-schsetup)**: every page of KiCad's tree -- Formatting's every row, Annotation, Field Name Templates, BOM Presets, Net Classes (Board Setup's page with the Eeschema columns, one table for both), Bus Alias Definitions, Text Variables -- each Apply one undoable verb, the settings in the derived `.kicad_pro` kicad-cli reads; ERC's "Edit Netclasses…" opens Net Classes (PARITY-sch §56). Left:
+  - Import Settings from Another Project… (Board Setup has none either).
+  - Hop-overs are not drawn; the text sizes, label ratios, pin symbol size and overbar ratio reach kicad-cli but not the studio's own drawing.
+  - "Allow reference reuse" is stored, not applied (no designator tracker); the URL column has no URL editor; the studio saves no BOM presets of its own.
+  - The net class table lists Default first (KiCad: last).
+  - L. PARITY-sch §9, §28, §56.
 - **S4 [BD] Symbol Properties.**
   - No unit choice, pin table, font or colour.
   - U, V and F open the full dialog.
