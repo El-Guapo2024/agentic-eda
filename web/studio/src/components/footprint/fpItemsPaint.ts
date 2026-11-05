@@ -13,7 +13,7 @@ import { hairlineNm } from "../../kicad-port/view";
 import { drawDimensions, drawFields, drawRuleArea, layerAlpha, realLayerKey, withAlpha, type PaintOptions } from "../canvas/painter";
 import { PLAIN_APPEARANCE } from "../canvas/appearancePaint";
 import { fpObjectOpacity, fpOpacities } from "../../kicad-port/fpAppearance";
-import { drawPcbItems } from "../canvas/pcbItemsPaint";
+import { drawBarcode, drawPcbItems } from "../canvas/pcbItemsPaint";
 import { drawTables } from "../canvas/tablePaint";
 import { layerColor } from "../canvas/layers";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
@@ -131,20 +131,23 @@ export function paintFpItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
   }
   inTwoPasses(ctx, d.tables, o, (tables) => drawTables(ctx, view, board({ tables }), opts));
   inTwoPasses(ctx, d.dimensions, o, (dimensions) => drawDimensions(ctx, view, board({ dimensions }), opts));
-  // text boxes, barcodes and points; a barcode is its box with a cross until a shape is served for it (`drawBarcode`)
-  const extras = [...d.text_boxes.map((t) => ({ id: t.id, t })), ...d.barcodes.map((b) => ({ id: b.id, b })), ...d.points.map((p) => ({ id: p.id, p }))];
+  // text boxes and points
+  const extras = [...d.text_boxes.map((t) => ({ id: t.id, t })), ...d.points.map((p) => ({ id: p.id, p }))];
   inTwoPasses(ctx, extras, o, (subset) =>
     drawPcbItems(
       ctx,
       view,
       board({
         text_boxes: subset.flatMap((x) => ("t" in x ? [x.t] : [])),
-        barcodes: subset.flatMap((x) => ("b" in x ? [x.b] : [])),
         points: subset.flatMap((x) => ("p" in x ? [x.p] : [])),
       }),
       opts
     )
   );
+  // a barcode: `drawBarcode` without asking the board's `GET /api/barcode_shape` (which knows a board's barcodes only): its box with a cross
+  inTwoPasses(ctx, d.barcodes, o, (barcodes) => {
+    for (const b of barcodes) if (layerIsVisible(o.layerVisible, b.layer)) withAlpha(ctx, layerAlpha(opts, layerStateKey(b.layer)), () => drawBarcode(ctx, view, b, o.selection.has(b.id)));
+  });
   // a reference image: its box, crossed, in its layer's colour
   if (objectOn(o.layerVisible, "bitmaps")) {
     for (const i of d.images) {

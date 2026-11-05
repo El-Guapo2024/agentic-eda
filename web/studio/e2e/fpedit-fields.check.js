@@ -3,7 +3,8 @@
 // a double click on a graphic opens its Shape Properties (`DIALOG_SHAPE_PROPERTIES`); R turns any item, Mirror Horizontally / Vertically mirror the selection on its layers
 // (`EDIT_TOOL::Mirror`), Group and Ungroup make and break a group (`PCB_GROUP_TOOL`) and a click on a member selects the group; the 45-degree line mode bends a line; a dimension
 // and a text box are drawn with their tools; every edit is one undo step of the Footprint Editor; the footprint saved into a library of the tables (Save As) and opened again
-// from its file keeps its fields, its groups, its dimension and its text box -- and kicad-cli's `fp export svg` loads the file.
+// from its file keeps its fields, its groups, its dimension and its text box (that kicad-cli loads such a file, `fp upgrade` keeps every item and `fp export svg`
+// plots it, is the slow test `kicad_cli_loads_and_keeps_every_item_our_writer_writes` of `crates/kicad/tests/fp_items_io.rs`).
 //
 // Run it in the page of a served board -- `page.evaluate( src )` in Playwright through `e2e/run-check.mjs` -- on a COPY of a board (`eda board new
 // examples/mcu_board_30plus.yaml -o <dir>`, then `eda board serve -C <dir> --port N --ui web/studio/dist`). It makes footprints and a library of its own (nickname `FeLib`),
@@ -264,6 +265,42 @@
     await __eda.run("pcbnew.EditorControl.lineMode45");
   });
 
+  await scenario("F2: a dimension and a text box drawn with their tools, each one undo step", async (t) => {
+    if (!name) return t(false, "no footprint");
+    const MM = 1_000_000;
+    const items = async (kind) => ((await footprint(name)).items?.[kind] ?? []);
+    // Draw Aligned Dimension: origin, end, then the height
+    await arm("pcbnew.InteractiveDrawing.alignedDimension", "dim_aligned");
+    await clickAt(-4 * MM, -8 * MM);
+    await clickAt(4 * MM, -8 * MM);
+    await clickAt(0, -10 * MM);
+    const dims = await until(async () => { const d = await items("dimensions"); return d.length > 0 ? d : null; });
+    t(dims && dims[0].kind?.kind === "aligned" && dims[0].start.x === -4 * MM && dims[0].end.x === 4 * MM, `an aligned dimension: ${JSON.stringify(dims && [dims[0].kind, dims[0].start, dims[0].end])}`);
+    await key("Escape");
+    await key("Escape");
+    // Draw Text Box: two corners, then Text Box Properties
+    await arm("pcbnew.InteractiveDrawing.textbox", "textbox");
+    await clickAt(2 * MM, 10 * MM, { shift: true });
+    await clickAt(10 * MM, 13 * MM, { shift: true });
+    const dlg = await until(() => tid("pcb-text-box-properties"));
+    if (t(dlg, "Text Box Properties opens on the box")) {
+      const el = tid("ptb-text");
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, "SAVED");
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      await sleep(100);
+      tid("ptb-ok").click();
+    }
+    const boxes = await until(async () => { const b = await items("text_boxes"); return b.length > 0 ? b : null; });
+    t(boxes && boxes[0].text === "SAVED", `the text box: ${JSON.stringify(boxes && [boxes[0].text, boxes[0].start, boxes[0].end])}`);
+    await key("Escape");
+    await key("Escape");
+    await undo();
+    t((await items("text_boxes")).length === 0, "one undo takes the text box away");
+    await redo();
+    t((await items("text_boxes")).length === 1, "redo brings it back");
+  });
+
   await scenario("the footprint saved into a library of the tables and opened again from its file keeps its fields, its group and its items", async (t) => {
     if (!name) return t(false, "no footprint");
     const before = await footprint(name);
@@ -292,14 +329,21 @@
     const r = await itemRow(id);
     if (!t(r, "the tree lists it from the library's folder")) return;
     r.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-    const back = await until(async () => { const v = await footprint(id); return v && !v.error ? v : null; }, 6000);
-    if (!t(back, "reopened from the file")) return;
+    // (the editor copies the library's footprint into the design, then opens it: wait for its content, not for the first answer)
+    const back = await until(async () => { const v = await footprint(id); return v && !v.error && v.graphics.length > 0 ? v : null; }, 12000);
+    if (!back) {
+      const v = await footprint(id);
+      const fpState = __eda.state();
+      return t(false, `reopened from the file: ${JSON.stringify({ error: v.error, graphics: v.graphics.length, pads: v.pads.length, tab: fpState.tab, lists: Object.fromEntries(Object.entries(fpState.lists ?? {}).map(([k, l]) => [k, l.length])) })}; names ${JSON.stringify((await fpNames()).filter((n) => n.startsWith("FeLib")))}`);
+    }
+    t(true, "reopened from the file");
     t(back.reference?.text === before.reference?.text && back.reference?.layer === before.reference?.layer && back.reference?.angle === before.reference?.angle, `the Reference as it was edited: ${JSON.stringify(back.reference && [back.reference.text, back.reference.layer, back.reference.angle])}`);
     const groups = back.items?.groups ?? [];
     t(groups.length === (before.items?.groups ?? []).length && groups.every((g) => g.member_ids.length === 2), `the groups and their members: ${JSON.stringify(groups.map((g) => g.member_ids))}`);
     t(groups.some((g) => g.member_ids.includes("field:Value")), "a field is still a member of its group");
     t(back.graphics.length === before.graphics.length, `the graphics: ${back.graphics.length} of ${before.graphics.length}`);
-    for (const kind of ["dimensions", "text_boxes"]) t((back.items?.[kind] ?? []).length === (before.items?.[kind] ?? []).length, `the ${kind}: ${(back.items?.[kind] ?? []).length} of ${(before.items?.[kind] ?? []).length}`);
+    for (const kind of ["dimensions", "text_boxes"]) t((before.items?.[kind] ?? []).length > 0 && (back.items?.[kind] ?? []).length === (before.items?.[kind] ?? []).length, `the ${kind}: ${(back.items?.[kind] ?? []).length} of ${(before.items?.[kind] ?? []).length}`);
+    t(back.items?.text_boxes?.[0]?.text === "SAVED", `the text box's text: ${back.items?.text_boxes?.[0]?.text}`);
     made.push(id);
   });
 
