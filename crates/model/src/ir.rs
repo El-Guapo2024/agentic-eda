@@ -1205,9 +1205,9 @@ pub struct TeardropSettings {
     /// `TEARDROP_PARAMETERS_LIST::m_TargetPTHPads`.
     #[serde(default = "default_td_target")]
     pub target_pth_pads: bool,
-    /// `TEARDROP_PARAMETERS_LIST::m_TargetSMDPads`. In practice this only
-    /// ever matches a *round* SMD pad -- see `eda_connectivity::teardrop`'s
-    /// doc on why non-round shapes aren't ported.
+    /// `TEARDROP_PARAMETERS_LIST::m_TargetSMDPads`: SMD and edge connector
+    /// pads of every shape but a custom one (`m_UseRoundShapesOnly` is off,
+    /// KiCad's default; see `eda_connectivity::teardrop`'s doc).
     #[serde(default = "default_td_target")]
     pub target_smd_pads: bool,
     /// `TEARDROP_PARAMETERS::m_BestLengthRatio`.

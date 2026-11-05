@@ -10,7 +10,7 @@ How to read it:
 
 Notes:
 - Every task branch is merged (`git branch -r --no-merged main` is empty), so every "not merged" in GAPS.md is stale.
-- Four medium round-7 PCB findings were never fixed: R7-1, R7-2, R7-3 and R7-5 (`r7-pcb-edit.md`).
+- Four medium round-7 PCB findings were never fixed: R7-1, R7-2, R7-3 and R7-5 (`r7-pcb-edit.md`). **Fixed on task-u1-pcb.**
 - These findings still have open parts:
   - E3-1 (high);
   - D-A1, B-M4/D3-M5/D4-M1, C3-M1, B3-M1, A-3, D-8, D-10, C-2 and R3-6 (medium, rounds 2-4).
@@ -32,12 +32,11 @@ Notes:
 
 ## PCB editor
 
-- **P1 [BD] Teardrops.**
-  - Made only on vias and round pads: none on rectangular or rounded-rectangle SMD pads.
+- **P1 [BD] Teardrops.** **done (task-u1-pcb)**: SMD pads of every shape but a custom one, tracks ending off centre in a via or pad or crossing one (R7-1), each polyline segment its own track; 39 kicad-cli outlines point for point (PARITY-pcb §66). Left:
+  - Each via's and pad's own teardrop parameters are not read (the file's tokens are kept, unread); Board Setup's one block serves every anchor. Custom pads get none.
   - One segment, straight edges, no track-to-track; no fit to other nets' clearance, no mask teardrops.
   - Not kept current as you edit: you re-run Add All Teardrops.
-  - None where a track ends off centre in a via or pad, or crosses one (R7-1).
-  - L. GAPS 8/13/35; PARITY-pcb §15, §62 D6-1; r7 R7-1.
+  - L. GAPS 8/13/35; PARITY-pcb §15, §62 D6-1, §66; r7 R7-1.
 - **P2 [BD] Properties panel.**
   - No rows for padstacks, via tenting, backdrill and post-machining, text font, bold, italic, vertical justification and colour, shape line style and colour, mask expansion, per-item teardrops, or a footprint's clearance and paste margin.
   - The reference, value, library link and wire ends are read-only, and a text's width is tied to its height.
@@ -47,14 +46,13 @@ Notes:
   - No pad fabrication property, pin function or pad-to-die length.
   - A custom padstack's per-layer thermal and clearance can't be edited, and neither can via padstacks. A zone's force-flash is kept but not applied.
   - M. PARITY-pcb §10, §26, §43, §44, §56; r2 A5.
-- **P4 [BD] Board text.**
-  - The Text dialog has no Bold, and a new copper text box is never bold (R7-3).
+- **P4 [BD] Board text.** **done (task-u1-pcb)** for Bold: the Text dialog has KiCad's Bold, and a new copper text box is bold as `InferBold` makes it (R7-3; PARITY-pcb §66). Left:
+  - The Text dialog has no Italic.
   - A text is centred on its anchor whatever its vertical justification.
   - Outline and TrueType fonts are drawn in the stroke font.
   - M. PARITY-pcb §39, §60 B5-2, §62 A6-3.
 - **P5 [BD] Line styles.** Dashed and dotted lines, arcs and rectangles are drawn and saved solid; the model has no line style. M. GAPS 2; PARITY-pcb §37; r5 B5-5.
-- **P6 [BD] Swap (Alt+S).**
-  - It moves zones by their first corner instead of swapping their layers (R7-2).
+- **P6 [BD] Swap (Alt+S).** **done (task-u1-pcb)** for zones: a zone stays put and two zones swap layers, as `ZONE::SetPosition` is a no-op (R7-2; PARITY-pcb §66). Left:
   - Arcs, dimensions, groups, tables, text boxes, barcodes and points are not swapped, and neither is a pad with a pad.
   - M. r7 R7-2; r6 E6-2.
 - **P7 [BD] Strict mode, on by default.**
@@ -131,8 +129,7 @@ Notes:
   - There is no coverage pass for overlapping footprints.
   - Select Connection doesn't follow a chain of graphic lines.
   - S. PARITY-pcb §3, §22; GAPS 18.
-- **P23 [BD] Vias and sizes.**
-  - Change Track Width / Via Size uses stale sizes (R7-5).
+- **P23 [BD] Vias and sizes.** **done (task-u1-pcb)** for R7-5: Change Track Width / Via Size and the microwave tools take the sizes the board's lists give now (`GetCurrentTrackWidth`, `GetCurrentViaSize`), a microvia its class's (PARITY-pcb §66). Left:
   - The via ghost isn't drawn at its snap point (C6-7).
   - With Allow DRC violations on, a violating via is placed silently (C6-6).
   - The via check misses unflashed PTH layers, and copper text boxes, tables and dimensions (C6-4/5, R7-4).

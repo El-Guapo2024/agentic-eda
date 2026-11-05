@@ -426,8 +426,8 @@ export function BoardSetupDialog() {
           <section className="bs-page" hidden={page !== "teardrops"} aria-label="Teardrops">
             <h3 className="bs-title">Teardrops</h3>
               <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>
-                `pcbnew/teardrop/*` (task item 4). Round anchors only -- a via, or a round through-hole/SMD pad; a rectangular or round-rect pad never gets one (see `eda_connectivity::teardrop`'s own
-                doc for the full scope: straight edges only, single track segment only, no track-to-track teardrops).
+                `pcbnew/teardrop/*` (task item 4). Vias and pads of every shape but a custom one, as KiCad's "Round pads only" is off by default (see `eda_connectivity::teardrop`'s own
+                doc for the full scope: straight edges only, single track segment only, no track-to-track teardrops, one set of settings for every via and pad).
               </p>
               <label className="filter-row" style={{ display: "block" }}>
                 <input type="checkbox" checked={td.enabled} onChange={(e) => setTdField("enabled", e.target.checked)} /> Enable teardrops
@@ -438,10 +438,10 @@ export function BoardSetupDialog() {
                 <input type="checkbox" checked={td.target_vias} onChange={(e) => setTdField("target_vias", e.target.checked)} /> Vias
               </label>
               <label className="filter-row" style={{ display: "block" }}>
-                <input type="checkbox" checked={td.target_pth_pads} onChange={(e) => setTdField("target_pth_pads", e.target.checked)} /> Through-hole pads (round only)
+                <input type="checkbox" checked={td.target_pth_pads} onChange={(e) => setTdField("target_pth_pads", e.target.checked)} /> Through-hole pads
               </label>
               <label className="filter-row" style={{ display: "block" }}>
-                <input type="checkbox" checked={td.target_smd_pads} onChange={(e) => setTdField("target_smd_pads", e.target.checked)} /> SMD pads (round only)
+                <input type="checkbox" checked={td.target_smd_pads} onChange={(e) => setTdField("target_smd_pads", e.target.checked)} /> SMD pads
               </label>
 
               <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Shape</p>

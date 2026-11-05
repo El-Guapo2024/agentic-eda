@@ -118,6 +118,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-u1-pcb` | UI-LEFT P1, P4, P6 (zones), P23 (R7-5): teardrops on SMD pads of every shape but a custom one and on tracks off a via's or pad's centre or crossing it (R7-1); Swap leaves zones in place and swaps two zones' layers (R7-2); a bold copper text box and the Text dialog's Bold (R7-3, P4; `Cmd::EditText` has an optional `bold`); Change Track Width / Via Size and the microwave tools take the live sizes (R7-5). PARITY-pcb §66 | done; targeted gates green, the teardrop kicad-cli proof 39/39, `pcb-edit-r7` 6/6 | each pad's and via's own teardrop parameters; custom-pad teardrops; the Text dialog's Italic; Swap of the other kinds (GAPS 8, UI-LEFT P1/P4/P6/P23) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

@@ -104,6 +104,16 @@ export function inferBold(penNm: Nm, widthNm: Nm, heightNm: Nm): boolean {
 }
 
 /**
+ * The Text Properties dialog's Bold button (`DIALOG_TEXT_PROPERTIES::onBoldToggle`, dialog_text_properties.cpp:396-406 at 8303b2ad): checking it sets the thickness
+ * to `GetPenSizeForBold`, unchecking it to `GetPenSizeForNormal`, of the smaller of the width and the height. (`onThickness`, :430-436, goes the other way:
+ * the button follows a thickness typed in, [`inferBold`].)
+ */
+export function boldTogglePenNm(bold: boolean, widthNm: Nm, heightNm: Nm): Nm {
+  const size = Math.min(widthNm, heightNm);
+  return Math.round(size / (bold ? 5 : 8));
+}
+
+/**
  * The width a graphic being drawn on `activeLayer` (as the state holds it: a key like "f_silks" or a copper layer's name) gets: the layer class's line thickness, unless `incWidth` / `decWidth` have stepped it on this layer (KiCad
  * resets `m_stroke` to the class's width when a drawing tool finds another layer than its `m_layer`, so a step on another layer is gone; see `strokeStepKept`).
  */

@@ -182,6 +182,17 @@ test("newTextBox: the layer's text defaults, left and top, the default margins, 
   assert.equal(newTextBox(board, "F.Cu", [0, 0], [1000, 1000]).size, 1_500_000);
 });
 
+test("newTextBox: bold as InferBold makes it of the class's size and pen (round 7 R7-3)", () => {
+  const board = { board_rules: { text_graphics: undefined } } as unknown as BoardState;
+  // Copper, 1.5 mm and 0.3 mm: the bold pen (0.3 mm) is nearer than the normal one (0.1875 mm).
+  const cu = newTextBox(board, "F.Cu", [0, 0], [1000, 1000]);
+  assert.equal(cu.bold, true);
+  assert.equal(cu.thickness, 300_000, "the class's pen is kept");
+  assert.equal(textBoxToCmd(cu).bold, true, "and sent");
+  // Silkscreen, 1.0 mm and 0.1 mm: |0.1 - 0.2| > |0.1 - 0.125|.
+  assert.equal(newTextBox(board, "F.SilkS", [0, 0], [1000, 1000]).bold, false);
+});
+
 test("textBoxToCmd: the state record as the verb takes it, and back", () => {
   const b = box({ text: "x", line_style: "dash", bold: true, thickness_auto: true, thickness: 200, width: 900, size: 1_000 });
   const cmd = textBoxToCmd(b);

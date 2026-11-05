@@ -1177,7 +1177,7 @@ fn add_edit_move_delete_text() {
     let id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
     assert!(!id.is_empty());
 
-    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: mm(1.2), stroke_width: mm(0.2), justify: TextJustify::Left, mirror: true }).unwrap();
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: mm(1.2), stroke_width: mm(0.2), justify: TextJustify::Left, mirror: true, bold: None }).unwrap();
     let t = &b.design().drawings.as_ref().unwrap().texts[0];
     assert_eq!(t.content, "REV B");
     assert_eq!(t.layer, "F.Fab");
@@ -1190,7 +1190,7 @@ fn add_edit_move_delete_text() {
 
     b.apply(&Cmd::DeleteText { id: id.clone() }).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().texts.is_empty());
-    assert_eq!(b.apply(&Cmd::EditText { id, content: String::new(), angle: 0, layer: "F.Fab".into(), size_nm: mm(0.1), stroke_width: mm(0.01), justify: TextJustify::Center, mirror: false }).unwrap_err()[0].check, "ops_unknown_text");
+    assert_eq!(b.apply(&Cmd::EditText { id, content: String::new(), angle: 0, layer: "F.Fab".into(), size_nm: mm(0.1), stroke_width: mm(0.01), justify: TextJustify::Center, mirror: false, bold: None }).unwrap_err()[0].check, "ops_unknown_text");
 }
 
 /// What an imported board text kept beyond `Text`'s fields (`DrawingsSection::text_extras`) follows the text's verbs: it stays through an edit that leaves the size and the
@@ -1209,17 +1209,47 @@ fn a_texts_imported_looks_follow_its_edits_and_leave_with_it() {
     let extra = |b: &Board| b.design().drawings.as_ref().unwrap().text_extra(&id).cloned();
 
     // The same size and stroke width: moved, turned, restyled otherwise, and the looks stay.
-    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: mm(1.0), stroke_width: mm(0.125), justify: TextJustify::Left, mirror: true }).unwrap();
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: mm(1.0), stroke_width: mm(0.125), justify: TextJustify::Left, mirror: true, bold: None }).unwrap();
     assert_eq!(extra(&b).map(|x| (x.width_nm, x.auto_thickness, x.bold)), Some((Some(mm(0.8)), true, true)));
     // A new size is square again.
-    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: mm(1.5), stroke_width: mm(0.125), justify: TextJustify::Left, mirror: true }).unwrap();
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: mm(1.5), stroke_width: mm(0.125), justify: TextJustify::Left, mirror: true, bold: None }).unwrap();
     assert_eq!(extra(&b).map(|x| (x.width_nm, x.auto_thickness, x.bold)), Some((None, true, true)));
     // A stroke width given is not the automatic one.
-    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: mm(1.5), stroke_width: mm(0.2), justify: TextJustify::Left, mirror: true }).unwrap();
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: mm(1.5), stroke_width: mm(0.2), justify: TextJustify::Left, mirror: true, bold: None }).unwrap();
     assert_eq!(extra(&b).map(|x| (x.width_nm, x.auto_thickness, x.bold)), Some((None, false, true)));
 
     b.apply(&Cmd::DeleteText { id: id.clone() }).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().text_extras.is_empty(), "the looks leave with the text");
+}
+
+/// Round 7 R7-3 / P4: the Text Properties dialog's Bold (`DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`, `SetBoldFlag( m_bold->IsChecked() )`) is `edit_text`'s
+/// `bold`: it makes the text's extras when it had none, keeps the rest of what they say, and an extra left saying nothing goes. Absent, the bold is left as it is.
+#[test]
+fn edit_text_sets_and_clears_bold_in_the_texts_extras() {
+    use eda_model::board_text::TextExtra;
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.Cu".into(), size_nm: mm(1.5), stroke_width: mm(0.3), justify: TextJustify::Left, mirror: false } }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
+    let edit = |bold: Option<bool>| Cmd::EditText { id: id.clone(), content: "REV A".into(), angle: 0, layer: "F.Cu".into(), size_nm: mm(1.5), stroke_width: mm(0.3), justify: TextJustify::Left, mirror: false, bold };
+    let extras = |b: &Board| b.design().drawings.as_ref().unwrap().text_extras.clone();
+
+    b.apply(&edit(Some(true))).unwrap();
+    assert_eq!(extras(&b), vec![TextExtra { id: id.clone(), bold: true, ..Default::default() }], "an extra is made to hold the bold");
+    b.apply(&edit(None)).unwrap();
+    assert!(extras(&b)[0].bold, "absent leaves the bold as it is");
+    b.apply(&edit(Some(false))).unwrap();
+    assert!(extras(&b).is_empty(), "an extra left saying nothing goes");
+
+    // An imported text's other looks stay when its bold is cleared.
+    let mut d = b.design().clone();
+    d.drawings.as_mut().unwrap().text_extras = vec![TextExtra { id: id.clone(), italic: true, bold: true, ..Default::default() }];
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&edit(Some(false))).unwrap();
+    assert_eq!(extras(&b), vec![TextExtra { id: id.clone(), italic: true, ..Default::default() }]);
+    // The verb reads without the field, as every caller before it sent it.
+    let plain: Cmd = serde_json::from_str(&format!(r#"{{"op":"edit_text","id":"{id}","content":"X","angle":0,"layer":"F.Cu","size_nm":1500000,"stroke_width":300000,"justify":"left","mirror":false}}"#)).unwrap();
+    assert!(matches!(plain, Cmd::EditText { bold: None, .. }));
 }
 
 /// Round 5's B5-2: the board's Text tool places its text with `PlaceText`'s `textAttrs` -- the class's glyph width (not the height), italic and the bottom
@@ -1483,7 +1513,7 @@ fn only_part_edits_and_flip_clear_routing() {
         Cmd::DeleteShape { id: "x".into() },
         Cmd::MoveShape { id: "x".into(), dx: Nm::ZERO, dy: Nm::ZERO },
         Cmd::AddText { text: Text { id: String::new(), content: String::new(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(0.1), stroke_width: mm(0.01), justify: TextJustify::Center, mirror: false } },
-        Cmd::EditText { id: "x".into(), content: String::new(), angle: 0, layer: "F.SilkS".into(), size_nm: mm(0.1), stroke_width: mm(0.01), justify: TextJustify::Center, mirror: false },
+        Cmd::EditText { id: "x".into(), content: String::new(), angle: 0, layer: "F.SilkS".into(), size_nm: mm(0.1), stroke_width: mm(0.01), justify: TextJustify::Center, mirror: false, bold: None },
         Cmd::DeleteText { id: "x".into() },
         Cmd::MoveText { id: "x".into(), x: Nm::ZERO, y: Nm::ZERO },
         Cmd::Duplicate { ids: vec!["x".into()] },
