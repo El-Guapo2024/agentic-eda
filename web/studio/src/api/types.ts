@@ -844,6 +844,8 @@ export interface CmdDimension {
   extension_offset: Nm;
   extension_height: Nm;
   arrow_direction: ArrowDirection;
+  /** `Dimension::text_pos`: a radial dimension's or a leader's text anchor (`SetTextPos`), as the Draw Dimension tool leaves it; absent = placed by the geometry pass. */
+  text_pos?: PointXY;
 }
 
 // ------------------------------------------------------- Footprint Editor
