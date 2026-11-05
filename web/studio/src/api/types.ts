@@ -1050,6 +1050,10 @@ export interface BoardState {
   plot_params?: {
     layers: string[];
     use_aux_origin: boolean;
+    /** "Plot on All Layers" (`m_plotOnAllLayersSequence`). */
+    plot_on_all_layers?: string[];
+    /** Every other token `PCB_PLOT_PARAMS::Format` writes (`"drillshape": "1"`, `"plotframeref": "no"`, `"outputdirectory": ""`, ..), KiCad's defaults for those the board lacks (`PlotParams::dialog_values`). */
+    options?: Record<string, string>;
     /** Export IPC-2581's BOM columns as the dialog last kept them (`PROJECT_FILE::m_IP2581Bom`), and the root schematic's title block revision (`schRevision`). */
     ipc2581_bom?: import("../kicad-port/ipc2581Bom").Ipc2581Bom;
     sch_revision?: string;
@@ -1686,7 +1690,7 @@ export type Cmd =
   | { op: "set_zone_priority"; id: string; to: ZonePriorityMove }
   /** `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin` -- the drill/place file origin; `null` resets it to (0, 0). */
   | { op: "set_aux_origin"; at: PointXY | null }
-  | { op: "set_plot_settings"; layers?: string[]; use_aux_origin?: boolean }
+  | { op: "set_plot_settings"; layers?: string[]; use_aux_origin?: boolean; plot_on_all_layers?: string[]; options?: Record<string, string> }
   /** Export IPC-2581's BOM columns kept for the next opening (`DIALOG_EXPORT_2581::TransferDataFromWindow`); no undo step, as KiCad's project file has none. */
   | { op: "set_ipc2581_bom"; bom: import("../kicad-port/ipc2581Bom").Ipc2581Bom }
   /** `common.Control.gridSetOrigin` / `gridResetOrigin` / `editGridOrigin` -- the point the editing grid is anchored at; `null` resets it to (0, 0). */

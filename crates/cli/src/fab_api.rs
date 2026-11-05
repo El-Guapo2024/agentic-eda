@@ -96,6 +96,446 @@ pub(crate) fn plot_params_of(design: &eda_model::ir::Design) -> eda_model::plot_
     eda_model::plot_params::PlotParams::of_design(design)
 }
 
+/// The Plot dialog's formats, in its choice's order (`DIALOG_PLOT::getPlotFormat`: Gerber, Postscript, SVG, DXF, PDF, PNG). HPGL, which
+/// `PLOT_FORMAT` still numbers, is no longer offered by the dialog ("no longer supported") nor plotted by kicad-cli (`pcb export hpgl`:
+/// "No longer supported as of KiCad 10.0.").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlotFormat {
+    Gerber,
+    PostScript,
+    Svg,
+    Dxf,
+    Pdf,
+    Png,
+}
+
+impl PlotFormat {
+    /// The name the studio's request and `eda fab plot --format` use.
+    pub(crate) fn from_name(name: &str) -> Option<PlotFormat> {
+        Some(match name {
+            "gerber" | "gerbers" => PlotFormat::Gerber,
+            "ps" | "postscript" => PlotFormat::PostScript,
+            "svg" => PlotFormat::Svg,
+            "dxf" => PlotFormat::Dxf,
+            "pdf" => PlotFormat::Pdf,
+            "png" => PlotFormat::Png,
+            _ => return None,
+        })
+    }
+
+    /// `(outputformat n)`, `PLOT_FORMAT` (HPGL 0, Gerber 1, POST 2, DXF 3, PDF 4, SVG 5, PNG 6), as `DIALOG_PLOT::TransferDataToWindow` selects
+    /// it: anything else (HPGL, "no longer supported") leaves the choice at its first item, Gerber.
+    pub(crate) fn from_outputformat(n: i64) -> PlotFormat {
+        match n {
+            2 => PlotFormat::PostScript,
+            3 => PlotFormat::Dxf,
+            4 => PlotFormat::Pdf,
+            5 => PlotFormat::Svg,
+            6 => PlotFormat::Png,
+            _ => PlotFormat::Gerber,
+        }
+    }
+
+    /// kicad-cli's `pcb export` command for it.
+    pub(crate) fn kind(self) -> &'static str {
+        match self {
+            PlotFormat::Gerber => "gerbers",
+            PlotFormat::PostScript => "ps",
+            PlotFormat::Svg => "svg",
+            PlotFormat::Dxf => "dxf",
+            PlotFormat::Pdf => "pdf",
+            PlotFormat::Png => "png",
+        }
+    }
+}
+
+/// What the Plot dialog plots with that `PCB_PLOT_PARAMS::Format` does not write into the board, so KiCad keeps it only in the session's
+/// settings (`m_svgFitPagetoBoard`, `m_PDFBackgroundColor`, `m_DXFExportAsMultiLayeredFile`) or in the dialog's controls (the PostScript fine
+/// scale adjusts and width correction, `m_XScaleAdjust`, `m_YScaleAdjust`, `m_PSWidthAdjust`): the studio's dialog keeps them and sends them
+/// with each plot.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PlotSession {
+    /// SVG Options > "Fit page to board".
+    pub svg_fit_page_to_board: bool,
+    /// PDF Options > "Background Color", a CSS colour (`COLOR4D::ToCSSString`); `None` is `COLOR4D::UNSPECIFIED`.
+    pub pdf_background_color: Option<String>,
+    /// DXF Options > "Single document".
+    pub dxf_single_document: bool,
+    /// Postscript Options > "X scale factor:", "Y scale factor:" and "Track width correction:" (mm), as `applyPlotSettings` constrained them.
+    pub ps_x_scale: f64,
+    pub ps_y_scale: f64,
+    pub ps_width_adjust_mm: f64,
+}
+
+impl Default for PlotSession {
+    /// `PCB_PLOT_PARAMS`' defaults: no fit, no background, one file per layer, scales 1 and no width correction.
+    fn default() -> Self {
+        PlotSession { svg_fit_page_to_board: false, pdf_background_color: None, dxf_single_document: false, ps_x_scale: 1.0, ps_y_scale: 1.0, ps_width_adjust_mm: 0.0 }
+    }
+}
+
+impl PlotSession {
+    /// From a `POST /api/fab/plot` body; a colour that is no CSS colour kicad-cli reads (`#rrggbb`, `#rrggbbaa`, `rgb(..)`, `rgba(..)`) is none.
+    pub(crate) fn of_request(req: &Value) -> PlotSession {
+        let d = PlotSession::default();
+        let num = |k: &str, dflt: f64| req.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(dflt);
+        let color = req.get("pdf_background_color").and_then(Value::as_str).map(str::trim).filter(|c| is_css_color(c)).map(str::to_string);
+        PlotSession {
+            svg_fit_page_to_board: req.get("svg_fit_page_to_board").and_then(Value::as_bool).unwrap_or(d.svg_fit_page_to_board),
+            pdf_background_color: color,
+            dxf_single_document: req.get("dxf_single_document").and_then(Value::as_bool).unwrap_or(d.dxf_single_document),
+            ps_x_scale: num("ps_x_scale", d.ps_x_scale),
+            ps_y_scale: num("ps_y_scale", d.ps_y_scale),
+            ps_width_adjust_mm: num("ps_width_adjust_mm", d.ps_width_adjust_mm),
+        }
+    }
+}
+
+/// `#rrggbb`, `#rrggbbaa`, `rgb(r,g,b)` or `rgba(r,g,b,a)`: what `kicad-cli pcb export pdf --bg-color` reads.
+fn is_css_color(c: &str) -> bool {
+    if let Some(hex) = c.strip_prefix('#') {
+        return (hex.len() == 6 || hex.len() == 8) && hex.chars().all(|h| h.is_ascii_hexdigit());
+    }
+    let inner = c.strip_prefix("rgba(").or_else(|| c.strip_prefix("rgb(")).and_then(|r| r.strip_suffix(')'));
+    inner.is_some_and(|i| {
+        let parts: Vec<&str> = i.split(',').map(str::trim).collect();
+        (parts.len() == 3 || parts.len() == 4) && parts.iter().all(|p| p.parse::<f64>().is_ok())
+    })
+}
+
+/// `selectionToScale` (`dialog_plot.cpp`): the Scaling choice's Auto, 1:1, 3:2, 2:1, 3:1 -- kicad-cli's `--scale`, 0 for auto.
+pub(crate) fn selection_to_scale(selection: i64) -> &'static str {
+    match selection {
+        0 => "0",
+        2 => "1.5",
+        3 => "2",
+        4 => "3",
+        _ => "1",
+    }
+}
+
+/// `LSET::UIOrder`: the copper stack from the front, then `TechAndUserUIOrder` (the adhesives, pastes, silkscreens, masks, the user drawing
+/// layers, Edge.Cuts, Margin, the courtyards, the fab layers, then `User.1` ..): the order the dialog's checklist lists the layers in and plots
+/// them in (`GetLayerSelection().UIOrder()`, the pages of a one-document PDF).
+pub(crate) fn ui_order(layers: &[String]) -> Vec<String> {
+    const TECH: [&str; 18] = ["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Dwgs.User", "Cmts.User", "Eco1.User", "Eco2.User", "Edge.Cuts", "Margin", "F.CrtYd", "B.CrtYd", "F.Fab", "B.Fab"];
+    let rank = |l: &str| -> u32 {
+        if l == "F.Cu" {
+            0
+        } else if l == "B.Cu" {
+            31
+        } else if let Some(n) = l.strip_prefix("In").and_then(|r| r.strip_suffix(".Cu")).and_then(|n| n.parse::<u32>().ok()) {
+            n
+        } else if let Some(i) = TECH.iter().position(|t| *t == l) {
+            100 + i as u32
+        } else if let Some(n) = l.strip_prefix("User.").and_then(|n| n.parse::<u32>().ok()) {
+            200 + n
+        } else {
+            u32::MAX
+        }
+    };
+    let mut v: Vec<String> = Vec::new();
+    for l in layers {
+        if !v.contains(l) {
+            v.push(l.clone());
+        }
+    }
+    v.sort_by_key(|l| rank(l));
+    v
+}
+
+/// The three DNP flags and the pad sketches, the same on every format (`DIALOG_PLOT::init_Dialog` / `applyPlotSettings`, see [`gerber_args`]).
+fn fab_layer_args(plot: &eda_model::plot_params::PlotParams, a: &mut Vec<String>) {
+    let on = |key: &str, default: bool| plot.flag(key).unwrap_or(default);
+    if on("sketchpadsonfab", false) {
+        a.push("--sketch-pads-on-fab-layers".into());
+        if on("plotpadnumbers", false) {
+            a.push("--sketch-pad-numbers".into());
+        }
+    }
+    let (hide, sketch, crossout) = (on("hidednponfab", false), on("sketchdnponfab", true), on("crossoutdnponfab", true));
+    if hide {
+        a.push("--hide-DNP-footprints-on-fab-layers".into());
+    } else if sketch || crossout {
+        a.push("--sketch-DNP-footprints-on-fab-layers".into());
+        a.push("--crossout-DNP-footprints-on-fab-layers".into());
+    }
+}
+
+/// `kicad-cli pcb export <format>` arguments for the Plot dialog's plot of `layers` with the board's plot settings (`DIALOG_PLOT::Plot` plots
+/// with `m_plotOpts`, which `applyPlotSettings` has just stored) and the session's ([`PlotSession`]); kicad-cli's job for each command sets
+/// the same `PCB_PLOT_PARAMS` (`PCB_PLOTTER::PlotJobToPlotOpts`) as the dialog's controls do:
+/// - every format: "Plot on All Layers" (`--common-layers`, in the list's order), "Plot drawing sheet" (`--include-border-title`; SVG's
+///   command plots it unless `--exclude-drawing-sheet`), "Subtract soldermask from silkscreen", the pad sketches and the DNP options;
+/// - Gerber: [`gerber_args`] and "Use drill/place file origin" (`--use-drill-file-origin`);
+/// - the others: "Drill marks:" (`--drill-shape-opt`) and "Scaling:" (`--scale`, [`selection_to_scale`]); "Mirrored plot" and "Negative
+///   plot" (PostScript, SVG, PDF, PNG); black and white as `applyPlotSettings` sets it (SVG and PDF as their Output mode says, PNG never,
+///   PostScript always);
+/// - PostScript: one file per layer (`--mode-multi`, `transferPlotParamsToJob`'s `GEN_MODE::MULTI`), the fine scale adjusts, the width
+///   correction (mm) and "Force A4 output";
+/// - SVG: one file per layer (`--mode-multi`) and "Fit page to board";
+/// - DXF: "Single document" (`--mode-single`, else `--mode-multi`), "Plot graphic items using their contours" (`--use-contours`), "Export
+///   units:" (`--output-units`) and "Use drill/place file origin" (`--use-drill-origin`);
+/// - PDF: "Single document" (`--mode-multipage`: one page per layer in one file, else `--mode-separate`), the property popups
+///   (`--no-property-popups`, front and back together) and "Background Color" (`--bg-color`, colour mode only);
+/// - PNG: "DPI:" (`--dpi`) and "Anti-alias" (`--no-antialias`).
+///
+/// "Generate Gerber job file" has no flag either: kicad-cli always writes the job file (`JOB_EXPORT_PCB_GERBERS::m_createJobsFile`), so
+/// [`plot`] deletes it after the run when the box is unticked ([`drop_job_files`]) -- the same files as KiCad's dialog, by another mechanism.
+///
+/// Differs (no kicad-cli flag; the dialog shows each disabled with the reason): "Use drill/place file origin" in PostScript, SVG, PDF and PNG (none of those commands has it; KiCad's PostScript plot turns it off too),
+/// SVG's "Precision:" (kicad-cli plots with `SVG_PRECISION_DEFAULT`, 4), PDF's "Generate metadata from AUTHOR && SUBJECT variables" (always on,
+/// `JOB_EXPORT_PCB_PDF::m_pdfMetadata`), the two property popup boxes apart (one flag clears both), DXF's "Use KiCad font to plot text"
+/// (always the KiCad font, `JOB_EXPORT_PCB_DXF::m_useKiCadFont`) and DXF's black and white (KiCad's dialog plots DXF in black, kicad-cli in the
+/// layers' colours). `--use-contours` also sets the graphic items' sketch mode (`m_plotGraphicItemsUsingContours`), which the dialog leaves
+/// filled. The colour theme is kicad-cli's PCB Editor default (the dialog plots with the PCB editor's theme, `cfg->m_ColorTheme`).
+pub(crate) fn plot_args(format: PlotFormat, layers: &[String], plot: &eda_model::plot_params::PlotParams, session: &PlotSession) -> Vec<String> {
+    let on = |key: &str, default: bool| plot.flag(key).unwrap_or(default);
+    let layers = ui_order(layers);
+    if format == PlotFormat::Gerber {
+        let mut a = gerber_args(&layers, plot);
+        if on("useauxorigin", false) {
+            a.push("--use-drill-file-origin".into());
+        }
+        return a;
+    }
+    let mut a: Vec<String> = vec!["--layers".into(), layers.join(",")];
+    if !plot.plot_on_all_layers.is_empty() {
+        a.extend(["--common-layers".into(), plot.plot_on_all_layers.join(",")]);
+    }
+    match format {
+        PlotFormat::Svg => {
+            if !on("plotframeref", false) {
+                a.push("--exclude-drawing-sheet".into());
+            }
+        }
+        _ => {
+            if on("plotframeref", false) {
+                a.push("--include-border-title".into());
+            }
+        }
+    }
+    if on("subtractmaskfromsilk", false) {
+        a.push("--subtract-soldermask".into());
+    }
+    fab_layer_args(plot, &mut a);
+    a.extend(["--drill-shape-opt".into(), plot.int("drillshape").unwrap_or(1).to_string()]);
+    a.extend(["--scale".into(), selection_to_scale(plot.int("scaleselection").unwrap_or(1)).into()]);
+    let mirror_negative = |a: &mut Vec<String>| {
+        if on("mirror", false) {
+            a.push("--mirror".into());
+        }
+        if on("psnegative", false) {
+            a.push("--negative".into());
+        }
+    };
+    let black_and_white = on("plot_black_and_white", true);
+    match format {
+        PlotFormat::PostScript => {
+            a.push("--mode-multi".into());
+            a.push("--black-and-white".into());
+            mirror_negative(&mut a);
+            a.extend(["--track-width-correction".into(), format!("{}", session.ps_width_adjust_mm)]);
+            a.extend(["--x-scale-factor".into(), format!("{}", session.ps_x_scale)]);
+            a.extend(["--y-scale-factor".into(), format!("{}", session.ps_y_scale)]);
+            if on("psa4output", false) {
+                a.push("--force-a4".into());
+            }
+        }
+        PlotFormat::Svg => {
+            a.push("--mode-multi".into());
+            if black_and_white {
+                a.push("--black-and-white".into());
+            }
+            mirror_negative(&mut a);
+            if session.svg_fit_page_to_board {
+                a.push("--fit-page-to-board".into());
+            }
+        }
+        PlotFormat::Dxf => {
+            a.push(if session.dxf_single_document { "--mode-single" } else { "--mode-multi" }.into());
+            if on("dxfpolygonmode", true) {
+                a.push("--use-contours".into());
+            }
+            a.extend(["--output-units".into(), if on("dxfimperialunits", true) { "in" } else { "mm" }.into()]);
+            if on("useauxorigin", false) {
+                a.push("--use-drill-origin".into());
+            }
+        }
+        PlotFormat::Pdf => {
+            a.push(if on("pdf_single_document", false) { "--mode-multipage" } else { "--mode-separate" }.into());
+            if black_and_white {
+                a.push("--black-and-white".into());
+            }
+            mirror_negative(&mut a);
+            if !on("pdf_front_fp_property_popups", true) && !on("pdf_back_fp_property_popups", true) {
+                a.push("--no-property-popups".into());
+            }
+            if let (false, Some(c)) = (black_and_white, session.pdf_background_color.as_ref()) {
+                a.extend(["--bg-color".into(), c.clone()]);
+            }
+        }
+        PlotFormat::Png => {
+            mirror_negative(&mut a);
+            a.extend(["--dpi".into(), plot.int("pngdpi").unwrap_or(300).to_string()]);
+            if !on("pngantialias", true) {
+                a.push("--no-antialias".into());
+            }
+        }
+        PlotFormat::Gerber => unreachable!(),
+    }
+    a
+}
+
+/// The dialogs' "Output directory:" as the plot writes into it (`DIALOG_PLOT::Plot`, `DIALOG_GENDRILL::genDrillAndMapFiles`: `ExpandTextVars`
+/// with the board's resolver, then `EnsureFileDirectoryExists( &outputDir, boardFilename )`, which makes a relative folder the board file's and
+/// creates it): `typed` with its `${..}` expanded by `resolve` (`BOARD::ResolveTextVar`), relative to the board's folder `dir`. Differs: an
+/// empty folder is the studio's `export/kicad/<kind>/` (KiCad's is the board file's own folder, which here holds `design.json` and its
+/// history), and a folder outside the board's (an absolute path elsewhere, a `..` that climbs out) is refused, since the studio is served
+/// to a browser and writes only into the board it serves: "Could not write plot files to folder '%s'.", KiCad's words for a folder it cannot
+/// make, with the reason. `ExpandEnvVarSubstitutions` is not run.
+pub(crate) fn output_folder(dir: &Path, typed: &str, default_kind: &str, resolve: &eda_model::text_vars::Resolver) -> Result<std::path::PathBuf, String> {
+    let expanded = eda_model::text_vars::expand_text_vars(typed, Some(resolve), 0, 0).replace('\\', "/");
+    let expanded = expanded.trim();
+    if expanded.is_empty() {
+        return Ok(dir.join("export").join("kicad").join(default_kind));
+    }
+    let refuse = || format!("Could not write plot files to folder '{expanded}'.\nThe output directory must be inside the board's folder.");
+    let rel = match Path::new(expanded).strip_prefix(dir) {
+        Ok(inside) => inside.to_path_buf(),
+        Err(_) if Path::new(expanded).is_absolute() => return Err(refuse()),
+        Err(_) => Path::new(expanded).to_path_buf(),
+    };
+    let mut clean = std::path::PathBuf::new();
+    for part in rel.components() {
+        match part {
+            std::path::Component::Normal(p) => clean.push(p),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !clean.pop() {
+                    return Err(refuse());
+                }
+            }
+            _ => return Err(refuse()),
+        }
+    }
+    Ok(dir.join(clean))
+}
+
+/// The board's own text variables (`BOARD::ResolveTextVar`: the title block, the project's variables, `${PROJECTNAME}`, ..), for a folder name.
+fn board_resolver(dir: &Path) -> Box<dyn Fn(&str) -> Option<String>> {
+    let Ok((meta, design, model)) = board::load(dir) else { return Box::new(|_| None) };
+    let project = crate::text_vars_json::project(dir, &meta.intent, eda_model::text_vars::Clock::utc_now());
+    let shown = crate::text_vars_json::PcbShown::new(dir, &design, &model, project);
+    let board = shown.board().clone();
+    Box::new(move |token| board.resolve(token, 0))
+}
+
+/// A dialog's own "Output directory:" (the placement and Plot Schematic dialogs keep theirs in the dialog, `DIALOG_SHIM`'s saved control
+/// state), as [`output_folder`] resolves it.
+pub(crate) fn request_output_folder(dir: &Path, typed: &str, kind: &str) -> Result<std::path::PathBuf, String> {
+    if typed.trim().is_empty() {
+        return Ok(dir.join("export").join("kicad").join(kind));
+    }
+    output_folder(dir, typed, kind, &*board_resolver(dir))
+}
+
+/// The board's output folder for `kind` ([`output_folder`] of the plot settings' `outputdirectory`, which the Plot and Generate Drill Files
+/// dialogs share).
+pub(crate) fn board_output_folder(dir: &Path, plot: &eda_model::plot_params::PlotParams, kind: &str) -> Result<std::path::PathBuf, String> {
+    output_folder(dir, &plot.output_directory(), kind, &*board_resolver(dir))
+}
+
+/// The plot's report as `PCB_PLOTTER::Plot` writes it, word for word: "Plotted to '%s'." for each file in the order the layers are plotted
+/// (`UIOrder`; a one-document plot is one file), the Gerber job file's "Created Gerber job file '%s'." (`GERBER_JOBFILE_WRITER::CreateJobFile`),
+/// then `ReportTail( _( "Done." ) )`. `files` are the files the run wrote (sorted by name); `layers` the plotted ones, by the names the files
+/// carry (`BuildPlotFileName`: the layer's name with its dots made underscores).
+pub(crate) fn plot_report(files: &[String], layer_suffixes: &[String]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut left: Vec<&String> = files.iter().filter(|f| !f.ends_with(".gbrjob")).collect();
+    for suffix in layer_suffixes {
+        let tail = format!("-{suffix}.");
+        if let Some(i) = left.iter().position(|f| Path::new(f.as_str()).file_name().is_some_and(|n| n.to_string_lossy().contains(&tail))) {
+            lines.push(format!("Plotted to '{}'.", left.remove(i)));
+        }
+    }
+    lines.extend(left.iter().map(|f| format!("Plotted to '{f}'.")));
+    lines.extend(files.iter().filter(|f| f.ends_with(".gbrjob")).map(|f| format!("Created Gerber job file '{f}'.")));
+    lines.push("Done.".into());
+    lines.join("\n")
+}
+
+/// "Generate Gerber job file" unticked (`PCB_PLOTTER::Plot`: `if( jobfile_writer && m_plotOpts.GetCreateGerberJobFile() )` writes it, else
+/// nothing): kicad-cli has no flag to leave the job file out (`m_createJobsFile` is always true), so the `.gbrjob` its run wrote is deleted, and
+/// the files the plot reports are the others. Differs in mechanism only: KiCad never writes the file, here it is written and then removed.
+/// `files` are relative to `dir`.
+pub(crate) fn drop_job_files(dir: &Path, files: Vec<String>) -> Vec<String> {
+    let (jobs, kept): (Vec<String>, Vec<String>) = files.into_iter().partition(|f| f.ends_with(".gbrjob"));
+    for job in jobs {
+        let _ = std::fs::remove_file(dir.join(job));
+    }
+    kept
+}
+
+/// `BOARD::GetLayerName` as `BuildPlotFileName` puts it in a file name: the name the board gives the layer, else KiCad's standard one
+/// (`F.Silkscreen`), its dots made underscores.
+fn layer_file_suffix(model: &eda_model::ConstraintModel, layer: &str) -> String {
+    let name = model.board.layer_setup.names.get(layer).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| eda_model::text_vars::standard_layer_name(layer));
+    name.replace('.', "_")
+}
+
+/// `POST /api/fab/plot`: the Plot dialog's Plot (`DIALOG_PLOT::Plot`), any format, after the dialog has stored its controls in the board's
+/// plot settings (`applyPlotSettings`, the `set_plot_settings` verb): `{"format": "gerber"|"ps"|"svg"|"dxf"|"pdf"|"png", "layers": [..],
+/// "check_zones": bool, ..}` plus the [`PlotSession`] values. An omitted format is the board's `outputformat`, omitted layers its selection.
+/// "Check zone fills before plotting" runs KiCad's filler first where a zone has no current fill (`ZONE_FILLER_TOOL::CheckAllZones`,
+/// `crate::fill_api::ensure_filled`). Writes into the board's output folder ([`board_output_folder`]). "No layer selected, Nothing to plot"
+/// when no layer is checked (KiCad's test is on the stored selection, which keeps the copper layers the board lacks, so on most boards it
+/// never fires and the plot writes nothing; here the checked layers are tested).
+pub fn plot(dir: &Path, body: &[u8]) -> Value {
+    let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let (design, model) = match board::load(dir) {
+        Ok((_, d, m)) => (d, m),
+        Err(e) => return err(board::reasons(&e)),
+    };
+    let plot = plot_params_of(&design);
+    let format = match req.get("format").and_then(Value::as_str) {
+        Some(name) => match PlotFormat::from_name(name) {
+            Some(f) => f,
+            None => return err(format!("unknown plot format {name:?} (expected gerber, ps, svg, dxf, pdf or png)")),
+        },
+        None => PlotFormat::from_outputformat(plot.int("outputformat").unwrap_or(1)),
+    };
+    let layers: Vec<String> = match req.get("layers").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        None => board_plot_layers(&plot, &model.board.layers),
+    };
+    if layers.is_empty() {
+        return err("No layer selected, Nothing to plot");
+    }
+    let out_dir = match board_output_folder(dir, &plot, format.kind()) {
+        Ok(d) => d,
+        Err(why) => return err(why),
+    };
+    if req.get("check_zones").and_then(Value::as_bool).unwrap_or(false) {
+        if let Err(why) = crate::fill_api::ensure_filled(dir) {
+            return err(format!("Zones not filled before plotting: {why}"));
+        }
+    }
+    let args = plot_args(format, &layers, &plot, &PlotSession::of_request(&req));
+    let mut v = reply(kicad_engine::export_into(dir, format.kind(), &args, &out_dir));
+    if v["ok"].as_bool().unwrap_or(false) {
+        let mut files: Vec<String> = v["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
+        if format == PlotFormat::Gerber && !plot.flag("creategerberjobfile").unwrap_or(true) {
+            files = drop_job_files(dir, files);
+            v["files"] = json!(files);
+        }
+        let suffixes: Vec<String> = ui_order(&layers).iter().map(|l| layer_file_suffix(&model, l)).collect();
+        v["message"] = Value::String(plot_report(&files, &suffixes));
+        v["format"] = Value::String(format.kind().into());
+    }
+    v
+}
+
 /// `kicad-cli pcb export drill` (Excellon), as the Generate Drill Files dialog asks for it (`DIALOG_GENDRILL::genDrillAndMapFiles`):
 /// `merge_pth_npth` is "PTH and NPTH in single file" (`m_Check_Merge_PTH_NPTH`, unchecked by default, so two files), and oval holes are
 /// routed (`SetRouteModeForOvalHoles( !m_altDrillMode )`, `G00`/`M15`..) unless "Use alternate drill mode" (`alt_drill_mode`, `G85`) is checked.
@@ -108,6 +548,100 @@ pub(crate) fn drill_args(merge_pth_npth: bool, alt_drill_mode: bool, report: boo
     }
     if report {
         a.push("--generate-report".into());
+    }
+    a
+}
+
+/// The Generate Drill Files dialog's controls (`dialog_gendrill_base.cpp`, with its defaults): Format Excellon or Gerber X2; for Excellon
+/// "Mirror Y axis", "Minimal header", "PTH and NPTH in single file", "Use alternate drill mode for oval holes", Units (Millimeters) and
+/// Zeros ("Decimal format (recommended)"); for Gerber X2 "Generate tenting layers"; "Generate map:" (unchecked) and its format (Gerber X2,
+/// `m_choiceDrillMap->SetSelection( 1 )`). The Origin is the board's (`with_aux_origin`), the Gerber precision the board's plot settings'
+/// (`gerberWriter.SetFormat( m_plotOpts.GetGerberPrecision() )`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DrillOptions {
+    pub gerber: bool,
+    pub mirror_y: bool,
+    pub minimal_header: bool,
+    pub merge_pth_npth: bool,
+    pub alt_drill_mode: bool,
+    pub units_mm: bool,
+    /// `decimal`, `suppressleading`, `suppresstrailing` or `keep` (`EXCELLON_WRITER::ZEROS_FMT`, the choice's order).
+    pub zeros: String,
+    pub generate_tenting: bool,
+    pub generate_map: bool,
+    /// `ps`, `gerberx2`, `dxf`, `svg` or `pdf` (`m_choiceDrillMap`'s Postscript, Gerber X2, DXF, SVG, PDF).
+    pub map_format: String,
+    pub gerber_precision: i64,
+}
+
+impl Default for DrillOptions {
+    fn default() -> Self {
+        DrillOptions {
+            gerber: false,
+            mirror_y: false,
+            minimal_header: false,
+            merge_pth_npth: false,
+            alt_drill_mode: false,
+            units_mm: true,
+            zeros: "decimal".into(),
+            generate_tenting: false,
+            generate_map: false,
+            map_format: "gerberx2".into(),
+            gerber_precision: 6,
+        }
+    }
+}
+
+impl DrillOptions {
+    /// From a `POST /api/fab/drill` body; an unknown zeros or map format is the default one.
+    pub(crate) fn of_request(req: &Value, gerber_precision: i64) -> DrillOptions {
+        let d = DrillOptions::default();
+        let flag = |k: &str, dflt: bool| req.get(k).and_then(Value::as_bool).unwrap_or(dflt);
+        let pick = |k: &str, allowed: &[&str], dflt: &str| req.get(k).and_then(Value::as_str).filter(|v| allowed.contains(v)).unwrap_or(dflt).to_string();
+        DrillOptions {
+            gerber: req.get("format").and_then(Value::as_str) == Some("gerber"),
+            mirror_y: flag("mirror_y", d.mirror_y),
+            minimal_header: flag("minimal_header", d.minimal_header),
+            merge_pth_npth: flag("merge_pth_npth", d.merge_pth_npth),
+            alt_drill_mode: flag("alt_drill_mode", d.alt_drill_mode),
+            units_mm: flag("units_mm", d.units_mm),
+            zeros: pick("zeros", &["decimal", "suppressleading", "suppresstrailing", "keep"], &d.zeros),
+            generate_tenting: flag("generate_tenting", d.generate_tenting),
+            generate_map: flag("generate_map", d.generate_map),
+            map_format: pick("map_format", &["ps", "gerberx2", "dxf", "svg", "pdf"], &d.map_format),
+            gerber_precision: if gerber_precision == 5 { 5 } else { 6 },
+        }
+    }
+}
+
+/// `kicad-cli pcb export drill` for the dialog's controls (`DIALOG_GENDRILL::genDrillAndMapFiles`; kicad-cli's job,
+/// `PCBNEW_JOBS_HANDLER::JobExportDrill`, drives the same writers with the same setters): Excellon's `SetFormat( metric, zeros, .. )`,
+/// `SetOptions( mirror, minimal header, offset, merge )` and `SetRouteModeForOvalHoles( !m_altDrillMode )` (the controls `onFileFormatSelection`
+/// disables for Gerber X2 are not sent then), Gerber X2's precision and tenting layers, the map and its format. kicad-cli's own defaults
+/// differ from the dialog's on two (`--excellon-oval-format alternate`, one file), so both are always given.
+pub(crate) fn drill_dialog_args(o: &DrillOptions) -> Vec<String> {
+    let mut a: Vec<String> = vec!["--format".into(), if o.gerber { "gerber" } else { "excellon" }.into()];
+    if o.gerber {
+        a.extend(["--gerber-precision".into(), o.gerber_precision.to_string()]);
+        if o.generate_tenting {
+            a.push("--generate-tenting".into());
+        }
+    } else {
+        a.extend(["--excellon-units".into(), if o.units_mm { "mm" } else { "in" }.into()]);
+        a.extend(["--excellon-zeros-format".into(), o.zeros.clone()]);
+        a.extend(["--excellon-oval-format".into(), if o.alt_drill_mode { "alternate" } else { "route" }.into()]);
+        if o.mirror_y {
+            a.push("--excellon-mirror-y".into());
+        }
+        if o.minimal_header {
+            a.push("--excellon-min-header".into());
+        }
+        if !o.merge_pth_npth {
+            a.push("--excellon-separate-th".into());
+        }
+    }
+    if o.generate_map {
+        a.extend(["--generate-map".into(), "--map-format".into(), o.map_format.clone()]);
     }
     a
 }
@@ -240,12 +774,22 @@ pub(crate) fn with_aux_origin(kind: &str, mut args: Vec<String>, req: &Value) ->
     args
 }
 
-/// `POST /api/fab/drill`: `{"merge_pth_npth": bool, "alt_drill_mode": bool, "use_aux_origin": bool}`, the Generate Drill Files dialog's
-/// "PTH and NPTH in single file", "Use alternate drill mode" and Origin (each unchecked / Absolute by default, as in KiCad's dialog).
+/// `POST /api/fab/drill`: the Generate Drill Files dialog's Generate (`DIALOG_GENDRILL::genDrillAndMapFiles`), with its controls
+/// ([`DrillOptions`]: `"format": "excellon"|"gerber"`, `"mirror_y"`, `"minimal_header"`, `"merge_pth_npth"`, `"alt_drill_mode"`, `"units_mm"`,
+/// `"zeros"`, `"generate_tenting"`, `"generate_map"`, `"map_format"`) and `"use_aux_origin"`, the Origin. Writes into the board's output
+/// folder (the plot settings' `outputdirectory`, which the dialog stores first with its Origin, `updateConfig`).
 pub fn drill(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let flag = |k: &str| req.get(k).and_then(Value::as_bool).unwrap_or(false);
-    let mut v = reply(kicad_engine::export(dir, "drill", &with_aux_origin("drill", drill_args(flag("merge_pth_npth"), flag("alt_drill_mode"), false), &req)));
+    let plot = match board::load(dir) {
+        Ok((_, d, _)) => plot_params_of(&d),
+        Err(e) => return err(board::reasons(&e)),
+    };
+    let out_dir = match board_output_folder(dir, &plot, "drill") {
+        Ok(d) => d,
+        Err(why) => return err(why.replace("plot files", "drill and/or map files")),
+    };
+    let opts = DrillOptions::of_request(&req, plot.int("gerberprecision").unwrap_or(6));
+    let mut v = reply(kicad_engine::export_into(dir, "drill", &with_aux_origin("drill", drill_dialog_args(&opts), &req), &out_dir));
     if v["ok"].as_bool().unwrap_or(false) {
         let files: Vec<String> = v["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
         v["message"] = Value::String(drill_report(&files));
@@ -253,20 +797,49 @@ pub fn drill(dir: &Path, body: &[u8]) -> Value {
     v
 }
 
-/// `EXCELLON_WRITER::CreateDrillandMapFilesSet`'s report, word for word: "Created file '%s'" for each drill file (no full stop), "Created
-/// file '%s'." for each map file (`GENDRILL_WRITER_BASE::CreateMapFilesSet`), then `ReportTail( _( "Done." ) )`.
-/// The files come sorted by name; the writer writes the plated layer pairs first and the NPTH file last (`CreateDrillandMapFilesSet`'s
-/// `hole_sets`, `doing_npth` last), so that is the order here.
+/// `POST /api/fab/drill_report`: "Generate Report File..." (`DIALOG_GENDRILL::onGenReportFile`): `<board>-drl.rpt` (`fn.GetName() + "-drl"`,
+/// `FILEEXT::ReportFileExtension`) in the output folder, written by kicad-cli ([`kicad_engine::export_drill_report`]) with the same body as
+/// [`drill`]. KiCad's dialog asks for the file's name in a save dialog; here it is that default name. Its message is KiCad's: "Report file
+/// '%s' created." Differs: kicad-cli writes the report with the selected format's writer; KiCad's dialog tests the format the wrong way round
+/// (`if( m_rbExcellon->GetValue() == 0 )` builds the `EXCELLON_WRITER` for Gerber X2), so its report is the other writer's.
+pub fn drill_report_file(dir: &Path, body: &[u8]) -> Value {
+    let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let plot = match board::load(dir) {
+        Ok((_, d, _)) => plot_params_of(&d),
+        Err(e) => return err(board::reasons(&e)),
+    };
+    let out_dir = match board_output_folder(dir, &plot, "drill") {
+        Ok(d) => d,
+        Err(why) => return err(why.replace("plot files", "drill and/or map files")),
+    };
+    let stem = eda_kicad_engine::file_stem(&kicad_engine::project_name(dir));
+    let report = out_dir.join(format!("{stem}-drl.rpt"));
+    let opts = DrillOptions::of_request(&req, plot.int("gerberprecision").unwrap_or(6));
+    let args = with_aux_origin("drill", drill_dialog_args(&DrillOptions { generate_map: false, ..opts }), &req);
+    match kicad_engine::export_drill_report(dir, &args, &report) {
+        Ok(mut v) => {
+            let file = v["files"][0].as_str().unwrap_or_default().to_string();
+            v["message"] = Value::String(format!("Report file '{file}' created."));
+            v
+        }
+        Err(e) => err(format!("Failed to create file '{}'.\n{}", report.strip_prefix(dir).unwrap_or(&report).display(), board::reasons(&e))),
+    }
+}
+
+/// The drill writers' report, word for word: `EXCELLON_WRITER::CreateDrillandMapFilesSet`'s "Created file '%s'" for each Excellon drill file
+/// (no full stop), "Created file '%s'." for each Gerber X2 drill or protection file (`GERBER_WRITER::CreateDrillandMapFilesSet`) and each map
+/// file (`GENDRILL_WRITER_BASE::CreateMapFilesSet`), then `ReportTail( _( "Done." ) )`. The files come sorted by name; the writers write the
+/// plated layer pairs first, the NPTH file last (`hole_sets`, `doing_npth` last) and the maps after every drill file, so that is the order here.
 pub(crate) fn drill_report(files: &[String]) -> String {
     let mut files: Vec<&String> = files.iter().collect();
-    files.sort_by_key(|f| f.contains("-NPTH"));
+    files.sort_by_key(|f| (f.contains("-drl_map"), f.contains("-NPTH")));
     let mut lines: Vec<String> = files.iter().map(|f| if f.ends_with(".drl") { format!("Created file '{f}'") } else { format!("Created file '{f}'.") }).collect();
     lines.push("Done.".into());
     lines.join("\n")
 }
 
 /// `POST /api/fab/pos`: `{"format": "csv"|"ascii", "side": "front"|"back"|"both",
-/// "units_mm": bool, "smd_only": bool, "exclude_fp_th": bool, "exclude_dnp": bool, "single_file": bool}`. A footprint marked "exclude from position files" is never
+/// "units_mm": bool, "smd_only": bool, "exclude_fp_th": bool, "exclude_dnp": bool, "single_file": bool, "output_directory": ".."}`. A footprint marked "exclude from position files" is never
 /// in the file; the other three options leave out SMD-less, through-hole and Do-Not-Populate footprints. `single_file` is the dialog's
 /// "Generate single file with both front and back positions" (checked by default): off with both sides, the top and the bottom are two
 /// files, named as KiCad names them (`<name>-all-pos.csv`, `<name>-top-pos.csv`, `<name>-bottom-pos.csv`).
@@ -289,7 +862,12 @@ pub fn pos(dir: &Path, body: &[u8]) -> Value {
     }
     let single_file = req.get("single_file").and_then(Value::as_bool).unwrap_or(true);
     let args = if gerber { args } else { with_aux_origin("pos", args, &req) };
-    let mut v = match kicad_engine::export_pos(dir, &args, single_file) {
+    // "Output directory:" (`m_outputDirectoryName`, the dialog's own).
+    let out_dir = match request_output_folder(dir, req.get("output_directory").and_then(Value::as_str).unwrap_or(""), "pos") {
+        Ok(d) => d,
+        Err(why) => return err(why),
+    };
+    let mut v = match kicad_engine::export_pos_into(dir, &args, single_file, &out_dir) {
         Ok(v) => v,
         Err(e) => return err(board::reasons(&e)),
     };
@@ -377,6 +955,128 @@ mod tests {
         assert_eq!(dnp("yes", "yes", "yes"), vec!["--hide-DNP-footprints-on-fab-layers"]);
         assert_eq!(dnp("no", "yes", "no"), vec!["--sketch-DNP-footprints-on-fab-layers", "--crossout-DNP-footprints-on-fab-layers"]);
         assert!(dnp("no", "no", "no").is_empty());
+    }
+
+    /// X1 (UI-LEFT): each of the Plot dialog's formats with KiCad's defaults (`PCB_PLOT_PARAMS`), and each option on: the flag kicad-cli has
+    /// for it, in the mode the dialog plots in (one file per layer; one document when "Single document" is checked).
+    #[test]
+    fn every_plot_format_maps_the_dialogs_options_onto_kicad_clis_flags() {
+        use eda_model::plot_params::PlotParams;
+        let l: Vec<String> = vec!["B.Cu".into(), "Edge.Cuts".into(), "F.Cu".into()];
+        let plot = PlotParams::kicad_default();
+        let s = PlotSession::default();
+        let args = |f: PlotFormat, p: &PlotParams, s: &PlotSession| plot_args(f, &l, p, s).join(" ");
+        let dnp = "--sketch-DNP-footprints-on-fab-layers --crossout-DNP-footprints-on-fab-layers";
+        // The layers in `UIOrder`: the copper stack from the front, then the technical layers.
+        assert_eq!(args(PlotFormat::Gerber, &plot, &s), format!("--layers F.Cu,B.Cu,Edge.Cuts --no-protel-ext --precision 6 {dnp}"));
+        assert_eq!(args(PlotFormat::Pdf, &plot, &s), format!("--layers F.Cu,B.Cu,Edge.Cuts {dnp} --drill-shape-opt 1 --scale 1 --mode-separate --black-and-white"));
+        assert_eq!(args(PlotFormat::Svg, &plot, &s), format!("--layers F.Cu,B.Cu,Edge.Cuts --exclude-drawing-sheet {dnp} --drill-shape-opt 1 --scale 1 --mode-multi --black-and-white"), "SVG's command plots the sheet unless told not to");
+        assert_eq!(args(PlotFormat::PostScript, &plot, &s), format!("--layers F.Cu,B.Cu,Edge.Cuts {dnp} --drill-shape-opt 1 --scale 1 --mode-multi --black-and-white --track-width-correction 0 --x-scale-factor 1 --y-scale-factor 1"));
+        assert_eq!(args(PlotFormat::Dxf, &plot, &s), format!("--layers F.Cu,B.Cu,Edge.Cuts {dnp} --drill-shape-opt 1 --scale 1 --mode-multi --use-contours --output-units in"));
+        assert_eq!(args(PlotFormat::Png, &plot, &s), format!("--layers F.Cu,B.Cu,Edge.Cuts {dnp} --drill-shape-opt 1 --scale 1 --dpi 300"), "PNG is never black and white (applyPlotSettings)");
+
+        let mut own = plot.clone();
+        own.plot_on_all_layers = vec!["F.Fab".into(), "Edge.Cuts".into()];
+        for (k, v) in [
+            ("plotframeref", "yes"),
+            ("subtractmaskfromsilk", "yes"),
+            ("sketchpadsonfab", "yes"),
+            ("plotpadnumbers", "yes"),
+            ("hidednponfab", "yes"),
+            ("drillshape", "2"),
+            ("scaleselection", "2"),
+            ("mirror", "yes"),
+            ("psnegative", "yes"),
+            ("plot_black_and_white", "no"),
+            ("psa4output", "yes"),
+            ("pdf_single_document", "yes"),
+            ("pdf_front_fp_property_popups", "no"),
+            ("pdf_back_fp_property_popups", "no"),
+            ("dxfpolygonmode", "no"),
+            ("dxfimperialunits", "no"),
+            ("useauxorigin", "yes"),
+            ("pngdpi", "600"),
+            ("pngantialias", "no"),
+        ] {
+            own.set_option(k, v).unwrap();
+        }
+        let session = PlotSession { svg_fit_page_to_board: true, pdf_background_color: Some("#ffffff".into()), dxf_single_document: true, ps_x_scale: 1.01, ps_y_scale: 0.99, ps_width_adjust_mm: -0.05 };
+        let common = "--layers F.Cu,B.Cu,Edge.Cuts --common-layers F.Fab,Edge.Cuts";
+        let fab = "--sketch-pads-on-fab-layers --sketch-pad-numbers --hide-DNP-footprints-on-fab-layers";
+        assert_eq!(args(PlotFormat::Pdf, &own, &session), format!("{common} --include-border-title --subtract-soldermask {fab} --drill-shape-opt 2 --scale 1.5 --mode-multipage --mirror --negative --no-property-popups --bg-color #ffffff"));
+        assert_eq!(args(PlotFormat::Svg, &own, &session), format!("{common} --subtract-soldermask {fab} --drill-shape-opt 2 --scale 1.5 --mode-multi --mirror --negative --fit-page-to-board"));
+        assert_eq!(args(PlotFormat::PostScript, &own, &session), format!("{common} --include-border-title --subtract-soldermask {fab} --drill-shape-opt 2 --scale 1.5 --mode-multi --black-and-white --mirror --negative --track-width-correction -0.05 --x-scale-factor 1.01 --y-scale-factor 0.99 --force-a4"), "PostScript is always black and white");
+        assert_eq!(args(PlotFormat::Dxf, &own, &session), format!("{common} --include-border-title --subtract-soldermask {fab} --drill-shape-opt 2 --scale 1.5 --mode-single --output-units mm --use-drill-origin"), "no mirror or negative in DXF");
+        assert_eq!(args(PlotFormat::Png, &own, &session), format!("{common} --include-border-title --subtract-soldermask {fab} --drill-shape-opt 2 --scale 1.5 --mirror --negative --dpi 600 --no-antialias"));
+        assert!(args(PlotFormat::Gerber, &own, &session).ends_with("--use-drill-file-origin"), "the Gerber plot's origin");
+        // The background is a colour-mode option, and only one of the two popup boxes off keeps the popups (one flag clears both).
+        own.set_option("plot_black_and_white", "yes").unwrap();
+        own.set_option("pdf_back_fp_property_popups", "yes").unwrap();
+        let pdf = args(PlotFormat::Pdf, &own, &session);
+        assert!(!pdf.contains("--bg-color") && !pdf.contains("--no-property-popups") && pdf.contains("--black-and-white"), "{pdf}");
+        assert_eq!(["0", "1", "2", "3", "4"].map(|n| selection_to_scale(n.parse().unwrap())), ["0", "1", "1.5", "2", "3"], "Auto, 1:1, 3:2, 2:1, 3:1");
+        assert_eq!(PlotFormat::from_outputformat(0), PlotFormat::Gerber, "HPGL, no longer supported: the choice stays at Gerber");
+        assert_eq!(PlotSession::of_request(&serde_json::json!({ "pdf_background_color": "url(x)" })).pdf_background_color, None, "no CSS colour");
+    }
+
+    /// The dialogs' "Output directory:": relative to the board's folder, its text variables expanded, created by the export; empty is the
+    /// studio's `export/kicad/<kind>/`; a folder outside the board's is refused in KiCad's words.
+    #[test]
+    fn the_output_folder_is_the_boards_own() {
+        let dir = Path::new("/boards/b");
+        let vars = |t: &str| (t == "REVISION").then(|| "B".to_string());
+        assert_eq!(output_folder(dir, "", "gerbers", &vars).unwrap(), dir.join("export/kicad/gerbers"));
+        assert_eq!(output_folder(dir, "plots/rev${REVISION}/", "gerbers", &vars).unwrap(), dir.join("plots/revB"));
+        assert_eq!(output_folder(dir, "./a/../gerbers", "gerbers", &vars).unwrap(), dir.join("gerbers"));
+        assert_eq!(output_folder(dir, "plots\\win", "gerbers", &vars).unwrap(), dir.join("plots/win"), "backslashes as KiCad stores them");
+        assert_eq!(output_folder(dir, "/boards/b/out", "gerbers", &vars).unwrap(), dir.join("out"), "an absolute path inside the board's folder");
+        let refused = output_folder(dir, "../elsewhere", "gerbers", &vars).unwrap_err();
+        assert!(refused.starts_with("Could not write plot files to folder '../elsewhere'."), "{refused}");
+        assert!(output_folder(dir, "/tmp/x", "gerbers", &vars).is_err());
+    }
+
+    /// "Generate Gerber job file" unticked: the `.gbrjob` kicad-cli always writes is deleted and not reported; the Gerbers stay.
+    #[test]
+    fn an_unticked_job_file_box_leaves_no_job_file() {
+        let dir = std::env::temp_dir().join(format!("eda_fab_api_jobfile_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("o")).unwrap();
+        for f in ["o/b-F_Cu.gbr", "o/b-job.gbrjob"] {
+            std::fs::write(dir.join(f), "x").unwrap();
+        }
+        let kept = drop_job_files(&dir, vec!["o/b-F_Cu.gbr".into(), "o/b-job.gbrjob".into()]);
+        assert_eq!(kept, vec!["o/b-F_Cu.gbr"]);
+        assert!(!dir.join("o/b-job.gbrjob").exists() && dir.join("o/b-F_Cu.gbr").exists());
+        assert_eq!(plot_report(&kept, &["F_Cu".to_string()]), "Plotted to 'o/b-F_Cu.gbr'.\nDone.", "no Created Gerber job file line");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `PCB_PLOTTER::Plot`'s report: "Plotted to '%s'." per file in the plotted order, the job file, "Done.".
+    #[test]
+    fn the_plot_report_is_the_plotters() {
+        let files: Vec<String> = ["o/b-B_Cu.gbr", "o/b-Edge_Cuts.gbr", "o/b-F_Cu.gbr", "o/b-job.gbrjob"].map(String::from).to_vec();
+        let order: Vec<String> = ["F_Cu", "B_Cu", "Edge_Cuts"].map(String::from).to_vec();
+        assert_eq!(plot_report(&files, &order), "Plotted to 'o/b-F_Cu.gbr'.\nPlotted to 'o/b-B_Cu.gbr'.\nPlotted to 'o/b-Edge_Cuts.gbr'.\nCreated Gerber job file 'o/b-job.gbrjob'.\nDone.");
+        assert_eq!(plot_report(&["o/b.pdf".to_string()], &order), "Plotted to 'o/b.pdf'.\nDone.", "one document");
+        assert_eq!(ui_order(&["User.2".into(), "F.Fab".into(), "In1.Cu".into(), "B.Cu".into(), "F.Cu".into(), "F.SilkS".into(), "User.1".into()]), vec!["F.Cu", "In1.Cu", "B.Cu", "F.SilkS", "F.Fab", "User.1", "User.2"]);
+    }
+
+    /// X2 (UI-LEFT): the Generate Drill Files dialog's controls onto `kicad-cli pcb export drill`'s flags.
+    #[test]
+    fn the_drill_dialogs_controls_become_kicad_clis_flags() {
+        let d = DrillOptions::default();
+        assert_eq!(drill_dialog_args(&d).join(" "), "--format excellon --excellon-units mm --excellon-zeros-format decimal --excellon-oval-format route --excellon-separate-th", "KiCad's defaults");
+        let excellon = DrillOptions { mirror_y: true, minimal_header: true, merge_pth_npth: true, alt_drill_mode: true, units_mm: false, zeros: "suppressleading".into(), generate_map: true, map_format: "pdf".into(), ..d.clone() };
+        assert_eq!(
+            drill_dialog_args(&excellon).join(" "),
+            "--format excellon --excellon-units in --excellon-zeros-format suppressleading --excellon-oval-format alternate --excellon-mirror-y --excellon-min-header --generate-map --map-format pdf"
+        );
+        let gerber = DrillOptions { gerber: true, generate_tenting: true, mirror_y: true, gerber_precision: 5, ..d.clone() };
+        assert_eq!(drill_dialog_args(&gerber).join(" "), "--format gerber --gerber-precision 5 --generate-tenting", "the Excellon-only controls are disabled for Gerber X2");
+        let req = serde_json::json!({ "format": "gerber", "zeros": "nonsense", "map_format": "svg", "generate_map": true });
+        let o = DrillOptions::of_request(&req, 4);
+        assert!(o.gerber && o.zeros == "decimal" && o.map_format == "svg" && o.gerber_precision == 6);
+        assert_eq!(drill_report(&["o/b-PTH-drl_map.gbr".into(), "o/b-NPTH.drl".into(), "o/b-PTH.drl".into(), "o/b-NPTH-drl_map.gbr".into()]), "Created file 'o/b-PTH.drl'\nCreated file 'o/b-NPTH.drl'\nCreated file 'o/b-PTH-drl_map.gbr'.\nCreated file 'o/b-NPTH-drl_map.gbr'.\nDone.", "the maps after every drill file");
     }
 
     #[test]

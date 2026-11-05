@@ -369,8 +369,18 @@ export interface FabDrillOptions {
   use_aux_origin: boolean;
 }
 
-export function postFabDrill(opts: FabDrillOptions): Promise<FabReply> {
+export function postFabDrill(opts: FabDrillOptions | Record<string, unknown>): Promise<FabReply> {
   return postJson<FabReply>("/api/fab/drill", opts);
+}
+
+/** The Generate Drill Files dialog's "Generate Report File..." (`DIALOG_GENDRILL::onGenReportFile`): the same body as `postFabDrill`. */
+export function postFabDrillReport(opts: Record<string, unknown>): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/drill_report", opts);
+}
+
+/** The Plot dialog's Plot, any format (crates/cli/src/fab_api.rs `plot`): the body `kicad-port/plotDialog.ts`'s `plotRequest` builds. */
+export function postFabPlot(body: Record<string, unknown>): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/plot", body);
 }
 
 export interface FabPosOptions {
@@ -391,6 +401,8 @@ export interface FabPosOptions {
   negate_x?: boolean;
   /** "Include board edge layer" (`m_cbIncludeBoardEdge`; Gerber X3). */
   board_edge?: boolean;
+  /** "Output directory:" (`m_outputDirectoryName`), relative to the board's folder; empty is `export/kicad/pos/`. */
+  output_directory?: string;
 }
 
 export function postFabPos(opts: FabPosOptions): Promise<FabReply> {

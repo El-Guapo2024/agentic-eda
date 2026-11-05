@@ -348,8 +348,25 @@ pub fn set_aux_origin(design: &mut Design, at: Option<Point>) -> Result<(), Vec<
 /// as `SetUseAuxOrigin( m_origin->GetSelection() == 1 )`): the checklist as the layer selection
 /// ([`eda_model::plot_params::PlotParams::set_dialog_layer_selection`]) and "Use drill/place file origin" as `useauxorigin`. `None`
 /// leaves that part as it is (the drill dialog has no checklist). Nothing changed is refused, so no empty undo step is pushed (KiCad does
-/// not mark the board modified either). Differs: the dialogs' other controls are not ported, so only these two are stored.
+/// not mark the board modified either). The dialogs' other controls are [`set_plot_settings_with`]'s.
 pub fn set_plot_settings(design: &mut Design, board_copper: &[String], layers: Option<&[String]>, use_aux_origin: Option<bool>) -> Result<(), Vec<CheckResult>> {
+    set_plot_settings_with(design, board_copper, layers, use_aux_origin, None, None)
+}
+
+/// [`set_plot_settings`] with the rest of what `DIALOG_PLOT::applyPlotSettings` builds `tempOptions` from: "Plot on All Layers" in the list's
+/// order (`SetPlotOnAllLayersSequence( commonLayers )`, the checked items as `GetCheckedItems` returns them; `PCB_PLOT_PARAMS::Format` writes
+/// them as a set, so only the session keeps the order, as KiCad's board in memory does), and every other control by the token
+/// `PCB_PLOT_PARAMS::Format` writes for it (`options`, [`eda_model::plot_params::PlotParams::set_option`]: the format, the drill marks, the
+/// scale, the Gerber, PostScript, DXF, SVG, PNG and PDF options, the output folder). The Generate Drill Files dialog sends its Origin and its
+/// output folder (`DIALOG_GENDRILL::updateConfig`). A layer name or option KiCad's settings do not have is refused, the board left as it was.
+pub fn set_plot_settings_with(
+    design: &mut Design,
+    board_copper: &[String],
+    layers: Option<&[String]>,
+    use_aux_origin: Option<bool>,
+    plot_on_all_layers: Option<&[String]>,
+    options: Option<&BTreeMap<String, String>>,
+) -> Result<(), Vec<CheckResult>> {
     let before = eda_model::plot_params::PlotParams::of_design(design);
     let mut plot = before.clone();
     if let Some(layers) = layers {
@@ -357,6 +374,21 @@ pub fn set_plot_settings(design: &mut Design, board_copper: &[String], layers: O
     }
     if let Some(aux) = use_aux_origin {
         plot.set_item("useauxorigin", if aux { "yes" } else { "no" });
+    }
+    if let Some(common) = plot_on_all_layers {
+        let mut seq: Vec<String> = Vec::new();
+        for l in common {
+            if eda_model::layers::pcb_layer_id(l).is_none() {
+                return Err(fail("ops_plot_settings", "plot_on_all_layers", &format!("{l:?} is no board layer")));
+            }
+            if !seq.contains(l) {
+                seq.push(l.clone());
+            }
+        }
+        plot.plot_on_all_layers = seq;
+    }
+    for (key, value) in options.into_iter().flatten() {
+        plot.set_option(key, value).map_err(|why| fail("ops_plot_settings", key, &why))?;
     }
     if plot == before {
         return Err(fail("ops_plot_settings", "plot_params", "the plot settings are already these"));

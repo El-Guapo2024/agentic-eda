@@ -1858,10 +1858,12 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetZonePriority { id, to } => format!("zone priority {id} --to {}", serde_json::to_value(to).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default()),
         Cmd::SetAuxOrigin { at: Some(p) } => format!("drill-origin --at {},{}", mm(p.x), mm(p.y)),
         Cmd::SetAuxOrigin { at: None } => "drill-origin --reset".to_string(),
-        Cmd::SetPlotSettings { layers, use_aux_origin } => format!(
-            "plot-settings{}{}",
+        Cmd::SetPlotSettings { layers, use_aux_origin, plot_on_all_layers, options } => format!(
+            "plot-settings{}{}{}{}",
             layers.as_ref().map(|l| format!(" --layers {}", l.join(","))).unwrap_or_default(),
-            use_aux_origin.map(|a| format!(" --use-aux-origin {a}")).unwrap_or_default()
+            use_aux_origin.map(|a| format!(" --use-aux-origin {a}")).unwrap_or_default(),
+            plot_on_all_layers.as_ref().map(|l| format!(" --plot-on-all-layers {}", l.join(","))).unwrap_or_default(),
+            options.iter().flatten().map(|(k, v)| format!(" --{k} {v:?}")).collect::<String>()
         ),
         Cmd::SetIpc2581Bom { bom } => format!("ipc2581-bom {}", serde_json::to_string(bom).unwrap_or_default()),
         Cmd::SetGridOrigin { at: Some(p) } => format!("grid-origin --at {},{}", mm(p.x), mm(p.y)),
@@ -3917,7 +3919,7 @@ pub(crate) mod tests {
         step(&dir, Cmd::MoveTo { part: "R1".into(), x: mm(12.0), y: mm(10.0) }, false, "test").unwrap();
         let moved = r1(&dir);
         assert_ne!(moved, was);
-        step(&dir, Cmd::SetPlotSettings { layers: None, use_aux_origin: Some(true) }, false, "test").unwrap();
+        step(&dir, Cmd::SetPlotSettings { layers: None, use_aux_origin: Some(true), plot_on_all_layers: None, options: None }, false, "test").unwrap();
         assert_eq!(aux(&dir).as_deref(), Some("(useauxorigin yes)"), "the choice is kept in design.json");
 
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();

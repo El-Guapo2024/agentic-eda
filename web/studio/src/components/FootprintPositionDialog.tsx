@@ -11,8 +11,13 @@
 // `PLACEFILE_GERBER_WRITER::GetPlaceFileName`) and reports as
 // `CreateAsciiFiles` does ("No footprint for automated placement." when no
 // footprint qualifies). Both sides always, as KiCad's dialog (it has no side
-// choice). Not offered: "Exclude all footprints with the Exclude from BOM flag
-// set" (kicad-cli has no flag for it; shown disabled) and the design variant.
+// choice). "Output directory:" is the dialog's own (`m_outputDirectoryName`,
+// kept between openings as `DIALOG_SHIM` keeps it), relative to the board's
+// folder; empty is `export/kicad/pos/`. Shown disabled with the reason:
+// "Exclude all footprints with the Exclude from BOM flag set" (kicad-cli
+// 10.99's `pcb export pos` still has no flag for it; only the api-server's
+// position job has `exclude_from_bom`), the design variant (kicad-cli has
+// `--variant`, the studio has no design variants) and the folder browser.
 import { useState } from "react";
 import { postFabPos, type FabPosOptions } from "../api/client";
 import { useStudioDispatch, useStudioState } from "../state/store";
@@ -31,6 +36,7 @@ export function FootprintPositionDialog() {
   const [boardEdge, setBoardEdge] = useState(false);
   // m_useDrillPlaceOrigin starts checked in KiCad's dialog.
   const [useAuxOrigin, setUseAuxOrigin] = useState(true);
+  const [outputDirectory, setOutputDirectory] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
 
@@ -54,6 +60,7 @@ export function FootprintPositionDialog() {
         single_file: singleFile,
         negate_x: !gerber && negateX,
         board_edge: gerber && boardEdge,
+        output_directory: outputDirectory,
       });
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Position file written." : "Failed."), files: reply.files ?? [] });
     } finally {
@@ -66,6 +73,17 @@ export function FootprintPositionDialog() {
       <div className="dialog" style={{ width: 440 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">Generate Placement Files</div>
         <div className="dialog-body" style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, opacity: 0.6 }} title="Not available: the studio has no design variants">
+            Design variant:
+            <select disabled value="">
+              <option value="">Default</option>
+            </select>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }} title="Target directory for plot files. Can be absolute or relative to the board file location.">
+            Output directory:
+            <input type="text" value={outputDirectory} placeholder="export/kicad/pos/" onChange={(e) => setOutputDirectory(e.target.value)} style={{ flex: 1 }} data-testid="pos-output-dir" />
+            <button disabled title="Not available: the studio runs in a browser: type the folder, relative to the board's folder">…</button>
+          </label>
           <div>
             <div style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginBottom: 6 }}>Format:</div>
             {(
@@ -105,7 +123,7 @@ export function FootprintPositionDialog() {
               <input type="checkbox" disabled={gerber} checked={!gerber && excludeDnp} onChange={(e) => setExcludeDnp(e.target.checked)} data-testid="pos-exclude-dnp" />
               Exclude all footprints with the Do Not Populate flag set
             </label>
-            <label className="toggle" title="Not available: kicad-cli has no option for it" style={{ opacity: 0.5 }}>
+            <label className="toggle" title="Not available: kicad-cli pcb export pos has no flag for it" style={{ opacity: 0.5 }}>
               <input type="checkbox" disabled checked={false} readOnly />
               Exclude all footprints with the Exclude from BOM flag set
             </label>
@@ -127,7 +145,7 @@ export function FootprintPositionDialog() {
             </label>
           </div>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)" }}>
-            Output directory: <code>export/kicad/pos/</code>, named as KiCad names it: <code>-all-pos</code> for one file, <code>-top-pos</code> and{" "}
+            Files are named as KiCad names them: <code>-all-pos</code> for one file, <code>-top-pos</code> and{" "}
             <code>-bottom-pos</code> for two, <code>-pnp_top.gbr</code> and <code>-pnp_bottom.gbr</code> for Gerber X3. Written by <code>kicad-cli pcb export pos</code>, so it is KiCad's own file.
           </div>
           {result && (

@@ -41,19 +41,68 @@ pub(crate) fn page_of(design: &Design, path: &[&str]) -> Option<String> {
     eda_model::sheet_list::walk(design).into_iter().find(|e| e.path.iter().map(String::as_str).eq(path.iter().copied())).map(|e| e.effective_page())
 }
 
-/// `kicad-cli sch export svg|pdf` arguments for the plot dialog's options.
-pub(crate) fn plot_args(req: &Value, page: Option<String>) -> Vec<String> {
+/// The colour themes kicad-cli plots with, in the order the dialog's "Color theme:" lists them (`SETTINGS_MANAGER::GetColorSettingsList`, sorted
+/// by name): the two built-in ones (`COLOR_SETTINGS::CreateBuiltinColorSettings`), each by the key `--theme` takes and the name it shows. kicad-cli
+/// runs on a settings folder of its own (`eda_kicad_engine::cli_command`), so it knows no user or system theme. The dialog plots with KiCad
+/// Default unless one is chosen (`getColorSettings`: no selection is `COLOR_BUILTIN_DEFAULT`, dialog_plot_schematic.cpp:280-289).
+pub(crate) const THEMES: [(&str, &str); 2] = [("_builtin_classic", "KiCad Classic"), ("_builtin_default", "KiCad Default")];
+
+/// The Plot Schematic dialog's formats (`DIALOG_PLOT_SCHEMATIC::getPlotFileFormat`: Postscript, PDF, SVG, DXF, PNG) by kicad-cli's
+/// `sch export` command. HPGL is no format of the dialog ("no longer supported"); kicad-cli still has `sch export hpgl`, whose pen options do
+/// nothing ("Deprecated.  Has no effect."), so it is not offered either.
+pub(crate) const FORMATS: [&str; 5] = ["ps", "pdf", "svg", "dxf", "png"];
+
+/// `kicad-cli sch export ps|pdf|svg|dxf|png` arguments for the plot dialog's options (`DIALOG_PLOT_SCHEMATIC::plotSchematic`'s `SCH_PLOT_OPTS`,
+/// which kicad-cli's job fills the same way, `CLI::SCH_EXPORT_PLOT_COMMAND::doPerform`):
+/// - "Output mode:" Black and White (`--black-and-white`); in colour, "Color theme:" (`--theme`, a [`THEMES`] key);
+/// - "Plot drawing sheet" (`--exclude-drawing-sheet` when off);
+/// - "Plot background color" (`--no-background-color` when off), for the formats the dialog enables it on (`onColorMode`: PostScript, PDF, SVG,
+///   PNG; kicad-cli reads the flag on those four only) and only in colour (`m_useBackgroundColor && plotter->GetColorMode()`);
+/// - PDF Options (`--exclude-pdf-property-popups`, `--exclude-pdf-hierarchical-links`, `--exclude-pdf-metadata` when off);
+/// - PNG Options (`--dpi`, `--no-antialias`);
+/// - Plot Current Page (`--pages` with the sheet's page number, [`page_of`]).
+///
+/// Differs (no kicad-cli flag; the dialog shows each disabled with the reason): "Page size:" (kicad-cli plots at the schematic's size,
+/// `m_pageSizeSelect = PAGE_SIZE_AUTO`), "Minimum line width:", DXF's "Export units:" (kicad-cli always exports in mm, as KiCad's own comment
+/// in `onPlotFormatSelection` says), "Open file after plot" and the design variant (the studio has none). The hop-over and the default font
+/// are the defaults of both (no hop-over scale, the KiCad font).
+pub(crate) fn plot_args_for(format: &str, req: &Value, page: Option<String>) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
-    if !bool_of(req, "color", true) {
+    let color = bool_of(req, "color", true);
+    if !color {
         a.push("--black-and-white".into());
+    } else if let Some(theme) = req.get("theme").and_then(Value::as_str).filter(|t| THEMES.iter().any(|(k, _)| k == t)) {
+        a.extend(["--theme".into(), theme.into()]);
     }
     if !bool_of(req, "plot_drawing_sheet", true) {
         a.push("--exclude-drawing-sheet".into());
     }
     // `m_useBackgroundColor` only has an effect in colour mode.
-    if bool_of(req, "color", true) && !bool_of(req, "background", true) {
+    if format != "dxf" && color && !bool_of(req, "background", true) {
         a.push("--no-background-color".into());
     }
+    if format == "pdf" {
+        for (key, flag) in [("pdf_property_popups", "--exclude-pdf-property-popups"), ("pdf_hierarchical_links", "--exclude-pdf-hierarchical-links"), ("pdf_metadata", "--exclude-pdf-metadata")] {
+            if !bool_of(req, key, true) {
+                a.push(flag.into());
+            }
+        }
+    }
+    if format == "png" {
+        // `m_pngDPI`: a spin control of 72 .. 2400 (`MIN_PNG_DPI`, `MAX_PNG_DPI`), 300 to start.
+        let dpi = req.get("png_dpi").and_then(Value::as_i64).unwrap_or(300).clamp(72, 2400);
+        a.extend(["--dpi".into(), dpi.to_string()]);
+        if !bool_of(req, "png_antialias", true) {
+            a.push("--no-antialias".into());
+        }
+    }
+    a.extend(pages_args(req, page));
+    a
+}
+
+/// `--pages`: the pages asked for, else the current page's (Plot Current Page).
+fn pages_args(req: &Value, page: Option<String>) -> Vec<String> {
+    let mut a: Vec<String> = Vec::new();
     let pages: Vec<String> = req.get("pages").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
     if !pages.is_empty() {
         a.extend(["--pages".into(), pages.join(",")]);
@@ -65,18 +114,21 @@ pub(crate) fn plot_args(req: &Value, page: Option<String>) -> Vec<String> {
     a
 }
 
-/// `POST /api/sch/plot`: `{"format": "svg"|"pdf", "color": bool,
-/// "plot_drawing_sheet": bool, "background": bool, "plot_all": bool,
-/// "sheet_path": "<placement id>/<id>/..." (when `plot_all` is false),
-/// "pages": ["1", "3"]}` -- the `DIALOG_PLOT_SCHEMATIC` options
-/// (`SCH_PLOT_OPTS`) kicad-cli has. Omitted fields take `SCH_PLOT_OPTS`'s
-/// own defaults (colour, drawing sheet, background, every sheet).
+/// `POST /api/sch/plot`: `{"format": "ps"|"pdf"|"svg"|"dxf"|"png", "color": bool, "theme": "_builtin_default", "plot_drawing_sheet": bool,
+/// "background": bool, "pdf_property_popups": bool, "pdf_hierarchical_links": bool, "pdf_metadata": bool, "png_dpi": n, "png_antialias": bool,
+/// "plot_all": bool, "sheet_path": "<placement id>/<id>/..." (when `plot_all` is false), "pages": ["1", "3"], "output_directory": ".."}` --
+/// the `DIALOG_PLOT_SCHEMATIC` options (`SCH_PLOT_OPTS`) kicad-cli has ([`plot_args_for`]). Omitted fields take `SCH_PLOT_OPTS`'s own
+/// defaults (colour, drawing sheet, background, every sheet); an omitted format is SVG. The output directory is the dialog's (relative to
+/// the board's folder, KiCad's "relative to the schematic main file location", [`crate::fab_api::output_folder`]); empty is
+/// `export/kicad/sch-<format>/`.
 pub fn plot(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let kind = match req.get("format").and_then(Value::as_str) {
-        Some("pdf") => "pdf",
-        Some("svg") | None => "svg",
-        Some(other) => return err(format!("unknown plot format {other:?} (expected \"svg\" or \"pdf\")")),
+        None => "svg",
+        Some(f) => match FORMATS.iter().find(|k| **k == f) {
+            Some(k) => k,
+            None => return err(format!("unknown plot format {f:?} (expected ps, pdf, svg, dxf or png)")),
+        },
     };
     let page = if bool_of(&req, "plot_all", true) {
         None
@@ -92,17 +144,49 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
             None => return err(format!("no sheet at path {sheet_path:?}")),
         }
     };
-    reply(kicad_engine::export_sch(dir, kind, &plot_args(&req, page)))
+    let out_dir = match output_dir_of(dir, &req, &format!("sch-{kind}")) {
+        Ok(d) => d,
+        Err(why) => return err(why),
+    };
+    let mut v = reply(kicad_engine::export_sch_into(dir, kind, &plot_args_for(kind, &req, page), &out_dir));
+    if v["ok"].as_bool().unwrap_or(false) {
+        v["format"] = Value::String(kind.into());
+    }
+    v
 }
 
-/// `POST /api/sch/netlist`: `{"format": "kicad"|"xml"}` -- KiCad's `.net`
-/// (`kicadsexpr`) or the generic `.xml` (`kicadxml`).
+/// The dialog's "Output directory:" (`output_directory`), resolved as the board's plot folder is ([`crate::fab_api::output_folder`], with the
+/// schematic's text variables as `DIALOG_PLOT_SCHEMATIC::getOutputPath` expands them: here the board's, which carry the same title block and
+/// project variables).
+fn output_dir_of(dir: &Path, req: &Value, default_kind: &str) -> Result<std::path::PathBuf, String> {
+    let typed = req.get("output_directory").and_then(Value::as_str).unwrap_or("");
+    crate::fab_api::request_output_folder(dir, typed, default_kind)
+}
+
+/// The Export Netlist dialog's pages (`DIALOG_EXPORT_NETLIST`'s notebook: KiCad, OrcadPCB2, Allegro, CadStar, PADS, SPICE, SPICE Model) by the
+/// studio's name, with kicad-cli's `--format` for each (`JOB_EXPORT_SCH_NETLIST::FORMAT`). `xml` (`kicadxml`, the intermediate netlist) is
+/// kicad-cli's too but no page of KiCad's dialog (it feeds the BOM and custom exporters).
+pub(crate) const NETLIST_FORMATS: [(&str, &str); 8] = [
+    ("kicad", "kicadsexpr"),
+    ("orcadpcb2", "orcadpcb2"),
+    ("allegro", "allegro"),
+    ("cadstar", "cadstar"),
+    ("pads", "pads"),
+    ("spice", "spice"),
+    ("spicemodel", "spicemodel"),
+    ("xml", "kicadxml"),
+];
+
+/// `POST /api/sch/netlist`: `{"format": "kicad"|"orcadpcb2"|"allegro"|"cadstar"|"pads"|"spice"|"spicemodel"|"xml"}` -- `kicad-cli sch export
+/// netlist --format ..` ([`NETLIST_FORMATS`]), named `<name>.<ext>` by the format (`eda_kicad_engine::netlist_ext`, `FilenamePrms`' extension;
+/// KiCad's dialog asks for the name in a save dialog that starts with it). The SPICE page's options ("Use current sheet as root", the four
+/// "Save all .." directives, "Run external simulator command:") have no kicad-cli flag: its job writes the netlist with the simulation command
+/// and none of them (`EESCHEMA_JOBS_HANDLER::JobExportNetlist`: `OPTION_SIM_COMMAND`), which is the page with every box unchecked.
 pub fn netlist(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let format = match req.get("format").and_then(Value::as_str) {
-        Some("xml") => "kicadxml",
-        Some("kicad") | None => "kicadsexpr",
-        Some(other) => return err(format!("unknown netlist format {other:?} (expected \"kicad\" or \"xml\")")),
+    let name = req.get("format").and_then(Value::as_str).unwrap_or("kicad");
+    let Some((_, format)) = NETLIST_FORMATS.iter().find(|(n, cli)| *n == name || *cli == name) else {
+        return err(format!("unknown netlist format {name:?} (expected kicad, orcadpcb2, allegro, cadstar, pads, spice, spicemodel or xml)"));
     };
     reply(kicad_engine::export_sch(dir, "netlist", &["--format".to_string(), format.to_string()]))
 }
@@ -112,15 +196,34 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// X3 (UI-LEFT): every format of the dialog and each of its options that kicad-cli has.
+    #[test]
+    fn every_schematic_plot_format_and_option_becomes_kicad_clis_flag() {
+        assert_eq!(plot_args_for("pdf", &json!({ "theme": "_builtin_classic" }), None), vec!["--theme", "_builtin_classic"], "colour, the theme, the background plotted");
+        assert_eq!(plot_args_for("pdf", &json!({ "theme": "nonsense" }), None), Vec::<String>::new(), "a theme kicad-cli does not know is not passed");
+        assert_eq!(plot_args_for("svg", &json!({ "color": false, "theme": "_builtin_classic", "background": false }), None), vec!["--black-and-white"], "the theme and the background are colour-mode options");
+        assert_eq!(plot_args_for("ps", &json!({ "background": false }), None), vec!["--no-background-color"]);
+        assert!(plot_args_for("dxf", &json!({ "background": false }), None).is_empty(), "DXF has no background option (onColorMode, kicad-cli)");
+        assert_eq!(
+            plot_args_for("pdf", &json!({ "pdf_property_popups": false, "pdf_hierarchical_links": false, "pdf_metadata": false }), None),
+            vec!["--exclude-pdf-property-popups", "--exclude-pdf-hierarchical-links", "--exclude-pdf-metadata"]
+        );
+        assert!(plot_args_for("svg", &json!({ "pdf_metadata": false }), None).is_empty(), "the PDF options are the PDF's");
+        assert_eq!(plot_args_for("png", &json!({}), None), vec!["--dpi", "300"]);
+        assert_eq!(plot_args_for("png", &json!({ "png_dpi": 5000, "png_antialias": false }), None), vec!["--dpi", "2400", "--no-antialias"], "the spin control's range");
+        assert_eq!(plot_args_for("pdf", &json!({ "plot_all": false, "plot_drawing_sheet": false }), Some("2".into())), vec!["--exclude-drawing-sheet", "--pages", "2"]);
+        assert_eq!(THEMES.map(|(_, n)| n), ["KiCad Classic", "KiCad Default"], "sorted by name, as GetColorSettingsList sorts them");
+    }
+
     #[test]
     fn plot_options_become_kicad_cli_flags() {
-        assert!(plot_args(&json!({}), None).is_empty(), "defaults are kicad-cli's own");
-        assert_eq!(plot_args(&json!({ "color": false, "plot_drawing_sheet": false }), None), vec!["--black-and-white", "--exclude-drawing-sheet"]);
-        assert_eq!(plot_args(&json!({ "background": false }), None), vec!["--no-background-color"]);
+        assert!(plot_args_for("pdf", &json!({}), None).is_empty(), "defaults are kicad-cli's own");
+        assert_eq!(plot_args_for("pdf", &json!({ "color": false, "plot_drawing_sheet": false }), None), vec!["--black-and-white", "--exclude-drawing-sheet"]);
+        assert_eq!(plot_args_for("pdf", &json!({ "background": false }), None), vec!["--no-background-color"]);
         // No background flag in black and white: it only applies in colour mode.
-        assert_eq!(plot_args(&json!({ "color": false, "background": false }), None), vec!["--black-and-white"]);
-        assert_eq!(plot_args(&json!({ "plot_all": false }), Some("1".into())), vec!["--pages", "1"]);
-        assert_eq!(plot_args(&json!({ "pages": ["2", "3"] }), None), vec!["--pages", "2,3"]);
+        assert_eq!(plot_args_for("pdf", &json!({ "color": false, "background": false }), None), vec!["--black-and-white"]);
+        assert_eq!(plot_args_for("pdf", &json!({ "plot_all": false }), Some("1".into())), vec!["--pages", "1"]);
+        assert_eq!(plot_args_for("pdf", &json!({ "pages": ["2", "3"] }), None), vec!["--pages", "2,3"]);
     }
 
     /// Round 4's X4-2: "current page only" passes the sheet's own page number, which kicad-cli's `--pages` matches
@@ -158,6 +261,6 @@ mod tests {
         assert_eq!(page_of(&design, &["b"]).as_deref(), Some("2"));
         assert_eq!(page_of(&design, &[]).as_deref(), Some("1"));
         assert_eq!(page_of(&design, &["c"]), None);
-        assert_eq!(plot_args(&json!({ "plot_all": false }), Some("5".into())), vec!["--pages", "5"]);
+        assert_eq!(plot_args_for("pdf", &json!({ "plot_all": false }), Some("5".into())), vec!["--pages", "5"]);
     }
 }
