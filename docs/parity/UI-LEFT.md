@@ -17,7 +17,7 @@ Notes:
 - `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor.
 
 **Top 12, all areas:**
-1. X1: the Plot dialog is Gerber only
+1. X1: the Plot dialog is Gerber only -- **done (task-u1-plot)**
 2. P1: teardrops
 3. S1: placing labels, power symbols and text
 4. R1: dragging a footprint with its tracks
@@ -397,17 +397,12 @@ Notes:
 
 ## Fab outputs and exports
 
-- **X1 [FM] PCB Plot is Gerber only.**
-  - No PDF, SVG, DXF, PS or HPGL.
-  - None of the options: drawing sheet, values and references, sketch pads, DNP, drill marks, Protel extensions, job file, X2, netlist attributes, subtract mask, output folder, Run DRC. kicad-cli has a flag for each.
-  - L. GAPS 37; PARITY-boardctl §5.
-- **X2 [FM] Drill files.** No Gerber X2 drill files, map files, units, zeros, mirror or minimal header. M. GAPS 37.
-- **X3 [FM] Schematic exports.**
-  - Schematic Plot is PDF and SVG only, with no theme or page size.
-  - Netlist export is KiCad and XML only: no SPICE, CADSTAR, OrcadPCB2, Allegro or PADS.
-  - kicad-cli has them all.
-  - S. PARITY-sch §10.
-- **X4 [FM] Placement files.** Exclude from BOM is disabled, and there is no variant choice. S. GAPS 37; r2 X8.
+- **X1 [FM] PCB Plot is Gerber only.** **done (task-u1-plot)**: Gerber, PostScript, SVG, DXF, PDF, PNG with every option of `DIALOG_PLOT`, Plot on All Layers, the output folder, Run DRC, the mask alert. HPGL is not offered (KiCad's dialog dropped it; kicad-cli: "No longer supported"); 8303b2ad's dialog has no values/references boxes. Left, disabled with the reason: the job file, the origin outside Gerber/DXF, SVG precision, PDF metadata, the PDF popups apart, DXF's font, the design variant.
+  - L. GAPS 37; PARITY-boardctl §5, §8.
+- **X2 [FM] Drill files.** **done (task-u1-plot)**: Excellon and Gerber X2, map files and their format, units, zeros, precision, mirror, minimal header, tenting layers, the output folder, Generate Report File. Left: the report is the selected format's writer's (KiCad's dialog inverts the test). M. GAPS 37; PARITY-boardctl §8.
+- **X3 [FM] Schematic exports.** **done (task-u1-plot)**: Plot Schematic has PostScript, PDF, SVG, DXF, PNG, the colour theme, the PDF and PNG options, the output folder, Plot All / Current Page; Export Netlist has KiCad, OrcadPCB2, Allegro, CadStar, PADS, SPICE, SPICE Model (and XML). Left, disabled with the reason (no kicad-cli flag): page size, minimum line width, DXF units, the SPICE page's options, Open file after plot, custom exporters, the variant.
+  - S. PARITY-sch §10, §53.
+- **X4 [FM] Placement files.** **done (task-u1-plot)** as far as kicad-cli goes: kicad-cli 10.99 (4fe1ca2060) still has no Exclude from BOM flag for `pcb export pos` (disabled with the reason; the api-server's position job has `exclude_from_bom`, unused), and the variant choice is disabled (kicad-cli has `--variant`, the studio has no variants, S2); the dialog's output folder is wired. S. GAPS 37; r2 X8.
 - **X5 [BD] Small differences.**
   - Sketched fab pads at 0.1 mm (X3-9).
   - An export with warnings shows none (X5-1).

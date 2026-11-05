@@ -118,6 +118,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-u1-plot` | UI-LEFT X1-X4: the Plot dialog is KiCad's (six formats, every option, Plot on All Layers, output folder, Run DRC), the drill dialog's every control and report, Plot Schematic's five formats, theme and PDF/PNG options, every netlist format, the placement dialog's folder; all through kicad-cli's flags (`/api/fab/plot`, `set_plot_settings` with `options`) | done, gated (targeted tests, slow `fab_plot_formats`, browser check `plot-exports` 17/17) | what kicad-cli has no flag for is disabled with the reason (GAPS 37); no design variants; no route serves an export to the browser |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
