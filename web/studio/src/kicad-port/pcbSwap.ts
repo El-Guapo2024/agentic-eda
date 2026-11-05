@@ -7,6 +7,12 @@
 //   items of the same type the layers ("We can also do a layer swap safely for two objects of the same type, except groups"). Two footprints also swap
 //   their orientation and side; a selection of footprints only is `swap_chain`, which does that (round 6 E6-2 for every other kind).
 //
+// - A zone (round 7 R7-2): `ZONE::SetPosition` is a no-op (zone.h:116, `void SetPosition( const VECTOR2I& aPos ) override {}`), so a zone never moves, while
+//   the item it is paired with still moves to the zone's `GetPosition`, its first corner. Two zones are "two objects of the same type", so their layers swap
+//   through `ZONE::GetLayer` (zone.cpp:501: the layer of a set of exactly one, else `UNDEFINED_LAYER`) and `ZONE::SetLayer` (zone.cpp:550, `SetLayerSet(
+//   LSET( { aLayer } ) )`). LSET's list constructor skips a negative layer (common/lset.cpp:44) and `SetLayerSet` returns on an empty set (zone.cpp:556), so
+//   a zone on several layers given a single-layer zone's layer becomes a zone on that layer alone, and the single-layer zone keeps its own.
+//
 // Not swapped here (left out of the selection): arc tracks, dimensions, groups, tables, text boxes, barcodes and points, whose `SetPosition` this model
 // has no verb for (an arc's moves only its start, a dimension's only its start, a group's is its box's centre). Two footprints in a selection that has other
 // kinds too swap their positions but not their orientation or side. Two pads are not swapped as pads (`PAD::SwapShapePositions`): a pad is its footprint.
@@ -14,6 +20,8 @@ import type { BoardState, Cmd } from "../api/types";
 import { shapePosition } from "./pcbConvert";
 import { itemKind, padParent } from "./pcbItems";
 import { isLocked } from "./pcbTransform";
+import { zoneEditCmd } from "./zoneCmd";
+import { zoneLayers } from "./zoneLayers";
 
 type Kind = "part" | "via" | "shape" | "text" | "zone";
 
@@ -21,6 +29,7 @@ interface SwapItem {
   id: string;
   kind: Kind;
   pos: readonly [number, number];
+  /** `GetLayer()`, for the kinds whose layers swap; null for the others, and for a zone on several layers (`UNDEFINED_LAYER`). */
   layer: string | null;
 }
 
@@ -44,10 +53,11 @@ function swapItem(board: BoardState, id: string): SwapItem | null {
       return t ? { id, kind, pos: [t.x, t.y], layer: t.layer } : null;
     }
     case "zone": {
-      // `ZONE::GetPosition`: its first corner.
+      // `ZONE::GetPosition`: its first corner. `ZONE::GetLayer`: the layer of a zone on one, else `UNDEFINED_LAYER`.
       const z = board.routing?.zones.find((x) => x.id === id);
       const c = z?.outline[0];
-      return c ? { id, kind, pos: [c[0], c[1]], layer: null } : null;
+      const layers = z ? zoneLayers(z) : [];
+      return c ? { id, kind, pos: [c[0], c[1]], layer: layers.length === 1 ? layers[0]! : null } : null;
     }
     default:
       return null;
@@ -67,8 +77,20 @@ export function planSwap(board: BoardState, selection: readonly string[]): Cmd[]
   const pos = items.map((x) => x.pos);
   const layer = items.map((x) => x.layer);
   for (let i = 0; i < items.length - 1; i++) {
-    [pos[i], pos[i + 1]] = [pos[i + 1]!, pos[i]!];
-    if (items[i]!.kind === items[i + 1]!.kind && items[i]!.kind !== "part") [layer[i], layer[i + 1]] = [layer[i + 1]!, layer[i]!];
+    const [a, b] = [items[i]!, items[i + 1]!];
+    // `a->SetPosition( bPos ); b->SetPosition( aPos );` of the positions as the previous pair left them; `ZONE::SetPosition` does nothing.
+    const [aPos, bPos] = [pos[i]!, pos[i + 1]!];
+    if (a.kind !== "zone") pos[i] = bPos;
+    if (b.kind !== "zone") pos[i + 1] = aPos;
+    if (a.kind !== b.kind || a.kind === "part") continue;
+    const [aLayer, bLayer] = [layer[i] ?? null, layer[i + 1] ?? null];
+    if (a.kind === "zone") {
+      // `SetLayer( UNDEFINED_LAYER )` leaves a zone as it is (an empty `LSET`).
+      if (bLayer != null) layer[i] = bLayer;
+      if (aLayer != null) layer[i + 1] = aLayer;
+    } else {
+      [layer[i], layer[i + 1]] = [bLayer, aLayer];
+    }
   }
   const cmds: Cmd[] = [];
   items.forEach((x, i) => {
@@ -82,6 +104,10 @@ export function planSwap(board: BoardState, selection: readonly string[]): Cmd[]
     } else if (x.kind === "text") {
       const t = board.drawings!.texts.find((q) => q.id === x.id)!;
       cmds.push({ op: "edit_text", id: x.id, content: t.content, angle: t.angle, layer: to, size_nm: t.size, stroke_width: t.stroke_width, justify: t.justify, mirror: t.mirror });
+    } else if (x.kind === "zone") {
+      // `SetLayerSet( LSET( { aLayer } ) )`: the zone is on that one layer now, every other setting as it was.
+      const z = board.routing!.zones.find((q) => q.id === x.id)!;
+      cmds.push(zoneEditCmd(z, { layer: to, layers: [to] }));
     }
   });
   return cmds.length > 0 ? cmds : null;
