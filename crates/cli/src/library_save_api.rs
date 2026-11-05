@@ -305,6 +305,10 @@ pub(crate) fn save(dir: &Path, body: &[u8]) -> Value {
             let written = if symbols.is_empty() {
                 Vec::new()
             } else {
+                // "Copy .kicad_symb file to .bak."
+                if let Err(e) = ls::backup_file(&entry.path) {
+                    return bad(e);
+                }
                 match ls::save_symbols(&entry.path, &saves(&design, &symbols)) {
                     Ok(w) => w.written,
                     Err(e) => return json!({ "error": format!("Failed to save changes to symbol library file '{path}'."), "detail": e }),
@@ -400,6 +404,9 @@ pub(crate) fn save_library_as(dir: &Path, body: &[u8]) -> Value {
                 None => buffered_symbols(&design, PROJECT_LIBRARY).into_iter().cloned().collect(),
             };
             let shown = dst.display().to_string();
+            if let Err(e) = ls::backup_file(&dst) {
+                return bad(e);
+            }
             if let Err(e) = ls::save_symbol_library_as(src.as_deref(), &dst, &saves(&design, &symbols)) {
                 return json!({ "error": format!("Failed to save changes to symbol library file '{shown}'."), "detail": e });
             }

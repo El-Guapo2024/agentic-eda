@@ -57,6 +57,7 @@ fn save_writes_the_modified_symbols_into_the_library_file_and_nothing_else() {
     let r = save(&dir, br#"{"kind":"symbol","lib":"Mine"}"#);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(r["message"], format!("Symbol library file '{}' saved.", file.display()));
+    assert_eq!(std::fs::read_to_string(dir.join("libs").join("Mine.bak")).unwrap(), LIB, "the file as it was is kept as Mine.bak (`backupFile`)");
     let text = std::fs::read_to_string(&file).unwrap();
     assert!(text.contains("\t(symbol \"Alpha\" (extends \"Zeta\")\n\t\t(property \"Reference\" \"U\" (at 0 0 0))"), "Alpha is kept as the file had it: {text}");
     assert!(text.contains("\"Reference\" \"Q\""), "{text}");

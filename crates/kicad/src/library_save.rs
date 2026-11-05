@@ -121,6 +121,19 @@ pub(crate) fn write_atomically(path: &Path, text: &str) -> Result<PathBuf, Strin
     Ok(path)
 }
 
+/// `SYMBOL_EDIT_FRAME::backupFile( fn, "bak" )`, before a symbol library file is written: a file that exists is copied to the same name with the extension
+/// `.bak`, an older backup replaced ("Failed to save backup to '%s'."). A folder library, or a file not there yet, has none.
+pub fn backup_file(path: &Path) -> Result<(), String> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    let backup = path.with_extension("bak");
+    if backup.is_file() {
+        let _ = std::fs::remove_file(&backup);
+    }
+    std::fs::copy(path, &backup).map(|_| ()).map_err(|_| format!("Failed to save backup to '{}'.", backup.display()))
+}
+
 // ------------------------------------------------------------------------------------------------ symbols
 
 /// One top-level `(symbol ...)` form of a library: its name, its text (from `(symbol` to its closing parenthesis) and the symbol it extends.
@@ -433,6 +446,18 @@ mod tests {
         }));
         s.assign_missing_ids();
         s
+    }
+
+    #[test]
+    fn a_library_file_is_backed_up_before_it_is_written() {
+        let dir = temp_dir("backup");
+        let lib = dir.join("Mine.kicad_sym");
+        backup_file(&lib).unwrap();
+        assert!(!dir.join("Mine.bak").exists(), "nothing to back up");
+        std::fs::write(&lib, LIB).unwrap();
+        std::fs::write(dir.join("Mine.bak"), "old").unwrap();
+        backup_file(&lib).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("Mine.bak")).unwrap(), LIB);
     }
 
     #[test]
