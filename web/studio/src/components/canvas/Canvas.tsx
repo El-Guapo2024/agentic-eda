@@ -31,14 +31,14 @@ import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
 import { EXTRA_KINDS, extraItemLabel } from "../../kicad-port/pcbExtraItems";
 import { fieldById } from "../../kicad-port/fpFields";
 import { isGroup, substituteSelection, topLevelGroup, withinScope } from "../../kicad-port/groupTree";
-import type { ToolId } from "../../state/store";
+import type { DrawState, ToolId } from "../../state/store";
 import type { RuleAreaFields, Shape, Zone, ZoneSettingsFields } from "../../api/types";
 import { activeEditPoint, cmdShapeToShape, moveShapePoint, shapeEditPoints, shapeToCmd, type EditPoint } from "../../kicad-port/pcbPointEdit";
 import { reshapeCmds } from "../../kicad-port/shapeFill";
 import { applyCommands } from "../../actions/pcbSweepKit";
 import { picker } from "../../actions/pcbPicker";
 import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
-import { paintBoard } from "./painter";
+import { paintBoard, type PaintOptions } from "./painter";
 import { buildPaintAppearance } from "./appearancePaint";
 import { netsContext } from "../../kicad-port/appearanceNets";
 import { isStale } from "../../kicad-port/checkRevision";
@@ -108,6 +108,13 @@ function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
 const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone", "shape", "text", "dimension", "pad", "field", ...EXTRA_KINDS]);
 
 /** The tools whose clicks go through a grid helper: `BestSnapAnchor` on every event, or the router's `snapToItem`. */
+/** The move preview a component drag paints its footprints with: the carry of a PCB move (`kind: "pcb"`: the footprints with their pads, graphics and fields, as
+ * `InlineDrag` previews them) translated by the drag's `offset`. */
+function componentDragPreview(draw: DrawState | null): PaintOptions["movePreview"] {
+  if (draw?.kind !== "drag" || draw.dragKind !== "component" || !draw.footprints?.length || !draw.offset) return null;
+  return { refs: draw.footprints, dxNm: draw.offset[0], dyNm: draw.offset[1], kind: "pcb" };
+}
+
 const PLACING_TOOLS = new Set<string>(["route", "diffpair", "tune", "drag", "via", "zone", "draw_segment", "draw_arc", "draw_bezier", "draw_rect", "draw_circle", "draw_polygon", "text", "dimension", "table", "measure", "drill_origin", "local_ratsnest", "picker"]);
 
 /** wx_view_controls.cpp onButton: MiddleDown/RightDown both start DRAG_PANNING by default (m_dragMiddle/m_dragRight == MOUSE_DRAG_ACTION::PAN). A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
@@ -413,7 +420,9 @@ export function Canvas() {
       highContrast: state.highContrast,
       gridNm: state.gridNm,
       gridVisible: state.gridVisible,
-      movePreview: state.movePreview,
+      // a component drag (`COMPONENT_DRAGGER`) draws its footprints where the drag has them, as a move would (`InlineDrag`'s preview of the footprint's
+      // graphics, pads and fields, moved by `offset`; the dynamic ratsnest and the courtyard conflicts follow)
+      movePreview: state.movePreview ?? componentDragPreview(state.drawState),
       sketchPads: state.sketchPads,
       sketchTracks: state.sketchTracks,
       sketchVias: state.sketchVias,
@@ -478,6 +487,28 @@ export function Canvas() {
     const draw = state.drawState;
     // `PlaceTuningPattern` reads `controls->GetMousePosition()`: the pattern follows the pointer, not the grid.
     if (tool === "tune") return [wx, wy];
+    // `COMPONENT_DRAGGER` has no net, so `updateEndItem` puts the cursor on the wire grid (`snapToItem( nullptr, mousePos )`); a drag of one footprint holds
+    // it on the footprint's anchor, where `InlineDrag` warps the pointer (kicad-port/heldCursor.ts)
+    if (tool === "drag" && draw?.kind === "drag" && draw.dragKind === "component") {
+      const mouse: [number, number] = draw.footprints?.length === 1 && draw.start && draw.grabbed ? heldCursor(draw.start, draw.grabbed, [wx, wy]) : [wx, wy];
+      const p = snap.align("route", mouse, mods, "wires");
+      return [p[0], p[1]];
+    }
+    // `MULTI_DRAGGER::CurrentNets()` are the dragged lines' nets: `updateEndItem` snaps onto an item of one of them (`pickSingleItem( mousePos, net, .. )` for each,
+    // the first found), never onto the dragged lines themselves (`checkSnap`), else the cursor goes on the wire grid
+    if (tool === "drag" && draw?.kind === "drag" && draw.dragKind === "multi") {
+      const skip = new Set(draw.lineTracks ?? []);
+      // (a net no item is on: the wire grid, as `snapToItem( nullptr )` gives it, with the snap readout reported)
+      let p = snap.routePoint([wx, wy], mods, { net: "\u0001", isEnd: true, skip });
+      for (const net of draw.nets ?? []) {
+        const q = snap.routePoint([wx, wy], mods, { net, isEnd: true, skip });
+        if (snap.routePicked()) {
+          p = q;
+          break;
+        }
+      }
+      return [p[0], p[1]];
+    }
     if (tool === "route" || tool === "diffpair" || tool === "drag") {
       const started = draw?.kind === "route" || draw?.kind === "diffpair" || draw?.kind === "drag";
       // what the cursor does not snap onto: the line a drag is dragging (`checkSnap`), the item a route started on (`pickSingleItem( .., { m_startItem } )`)
@@ -866,6 +897,9 @@ export function Canvas() {
       // commits it -- see dragging.ts's own doc on why that's always a
       // finish, never a "fix this leg and keep going".
       if (state.activeTool === "drag") {
+        // `InlineDrag`: `hasMouseMoved && ( IsMouseUp( BUT_LEFT ) || IsClick( BUT_LEFT ) )` -- a component or multi-track drag ignores a click before any move
+        const draw = state.drawState;
+        if (draw?.kind === "drag" && (draw.dragKind === "component" || draw.dragKind === "multi") && !draw.moved) return;
         if (state.drawState?.kind === "drag") void finishInlineDrag(sx, sy, dispatch, api, snapMods(e).ctrl);
         else dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
         return;

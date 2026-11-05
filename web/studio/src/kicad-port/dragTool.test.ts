@@ -53,3 +53,51 @@ test("a position the drag cannot resolve shows the last valid line, flagged; a d
   const legal = dragStateFromPreview({ ...marking, restored: true }, basePreview());
   assert.equal(legal.restored, false);
 });
+
+// ------------------------------------------------------------ D on a selection: COMPONENT_DRAGGER and MULTI_DRAGGER
+
+import { findGroupDragTarget } from "./dragTool";
+import type { BoardState, Pad, Part } from "../api/types";
+
+function board(partial: Partial<BoardState>): BoardState {
+  return { name: "t", dir: "", outline: null, layers: ["F.Cu", "B.Cu"], snap: 100, parts: [], rules: [], routing: null, drawings: null, checks: [], activity: [], job: "idle", ...partial } as BoardState;
+}
+const pad = (num: string, x: number, y: number): Pad => ({ num, net: null, x, y, w: 600, h: 600, round: false, th: false });
+const part = (ref: string, at: [number, number]): Part =>
+  ({ ref, value: null, package: null, mpn: null, footprint: null, block: null, placed: true, size: [2000, 1000], at, rot: 0, side: "top", label: "above", courtyard: [at[0] - 1000, at[1] - 500, at[0] + 1000, at[1] + 500], pads: [pad("1", at[0], at[1])] }) as Part;
+const track = (id: string, arc = false) => ({ id, net: "GND", layer: "F.Cu", width: 200, pts: [[0, 0], [1000, 0]] as [number, number][], arc_mid: arc ? ([500, 200] as [number, number]) : null });
+const routing = (tracks: ReturnType<typeof track>[]) => ({ tracks, vias: [{ id: "v1", net: "GND", x: 0, y: 0, d: 600, drill: 300 }], zones: [], track_width_presets: [], via_presets: [], teardrop_settings: {} }) as unknown as BoardState["routing"];
+
+test("D on footprints: a selection that holds one keeps its footprints only, the footprint (or pad) under the cursor drags it, a locked one stays", () => {
+  const b = board({ parts: [part("U1", [0, 0]), part("U2", [5000, 0]), part("U3", [9000, 0])], routing: routing([track("t1"), track("t2")]), locked: ["U3"] });
+  // "Remove non-footprints so box-selection will drag footprints"
+  assert.deepEqual(findGroupDragTarget(b, ["t1", "U1", "U2"], null, false).target, { kind: "footprints", refs: ["U1", "U2"] });
+  // the hover selection: the footprint, or the pad that stands for it (`FilterCollectorForFreePads`)
+  assert.deepEqual(findGroupDragTarget(b, [], "U2", false).target, { kind: "footprints", refs: ["U2"] });
+  assert.deepEqual(findGroupDragTarget(b, [], "U1.1", false).target, { kind: "footprints", refs: ["U1"] });
+  // `FilterCollectorForLockedItems`
+  assert.deepEqual(findGroupDragTarget(b, ["U3"], null, false), { target: null, lockedOut: true });
+  assert.deepEqual(findGroupDragTarget(b, ["U1", "U3"], null, false), { target: { kind: "footprints", refs: ["U1"] }, lockedOut: true });
+  // "Footprints cannot be dragged freely" -- but one footprint is a `DraggableItems` item, which `G` drags as `D` does
+  assert.equal(findGroupDragTarget(b, ["U1", "U2"], null, true).target, null);
+  assert.deepEqual(findGroupDragTarget(b, ["U1"], null, true).target, { kind: "footprints", refs: ["U1"] });
+});
+
+test("D on tracks: two or more, all of them tracks (`CountType( PCB_TRACE_T ) == Size()`), drag together; one track, an arc or a via among them does not", () => {
+  const b = board({ parts: [part("U1", [0, 0])], routing: routing([track("t1"), track("t2"), track("t3"), track("a1", true)]) });
+  assert.deepEqual(findGroupDragTarget(b, ["t1", "t2", "t3"], null, false).target, { kind: "tracks", ids: ["t1", "t2", "t3"] });
+  assert.equal(findGroupDragTarget(b, ["t1"], null, false).target, null, "one track is the single drag");
+  assert.equal(findGroupDragTarget(b, ["t1", "a1"], null, false).target, null, "an arc track is no PCB_TRACE_T");
+  assert.equal(findGroupDragTarget(b, ["t1", "v1"], null, false).target, null, "a via either");
+  assert.equal(findGroupDragTarget(b, [], "t1", false).target, null, "the hover selection is the track under the cursor: the single drag");
+});
+
+test("a component drag's preview keeps its footprints and start, takes the offset and marks the cursor as moved", () => {
+  const current = baseDraw({ dragKind: "component", footprints: ["U1"], start: [0, 0], grabbed: [100, 50], offset: [0, 0], moved: false, pts: [] });
+  const next = dragStateFromPreview(current, basePreview({ drag: "component", pts: [], offset: [1000, -2000], fanout: [{ layer: "F.Cu", width: 200, pts: [[1000, -2000], [5000, 0]] }] }));
+  assert.deepEqual(next.offset, [1000, -2000]);
+  assert.deepEqual(next.footprints, ["U1"]);
+  assert.deepEqual(next.start, [0, 0]);
+  assert.equal(next.moved, true);
+  assert.equal(next.fanout?.length, 1);
+});

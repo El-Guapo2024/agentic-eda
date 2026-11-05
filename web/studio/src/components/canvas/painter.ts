@@ -1245,6 +1245,9 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
       // a virtual via (a junction of tracks) is not drawn: `ROUTER_PREVIEW_ITEM` returns for `v->IsVirtual()`
       if (!draw.virtualVia) strokeViaGhost(ctx, view, x, y, draw.viaDiameter ?? 600_000, color);
       for (const leg of draw.fanout ?? []) strokeDashedPolyline(ctx, view, leg.pts, layerColor(copperColorKey(leg.layer)), leg.width, false);
+    } else if (draw.dragKind === "component" || draw.dragKind === "multi") {
+      // `COMPONENT_DRAGGER`: the lines that follow the pads (the footprints themselves are drawn moved by the move preview); `MULTI_DRAGGER`: the dragged lines
+      for (const leg of draw.fanout ?? []) strokeDashedPolyline(ctx, view, leg.pts, draw.colliding ? violationColor : layerColor(copperColorKey(leg.layer)), leg.width, false);
     } else {
       strokeDashedPolyline(ctx, view, draw.pts, color, draw.width, false);
     }
