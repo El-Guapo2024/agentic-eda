@@ -127,11 +127,13 @@ struct Targets {
     tables: BTreeSet<String>,
     /// Footprint fields on their own (`REF:Reference`): text a footprint carries, moved without it.
     fields: BTreeSet<String>,
+    /// Tuning patterns (`PCB_TUNING_PATTERN`, a `PCB_GENERATOR`): their tracks are in `tracks`, their origin, end and base lines move with them.
+    patterns: BTreeSet<String>,
 }
 
 impl Targets {
     fn is_empty(&self) -> bool {
-        self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.board_items.is_empty() && self.tables.is_empty() && self.fields.is_empty()
+        self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.board_items.is_empty() && self.tables.is_empty() && self.fields.is_empty() && self.patterns.is_empty()
     }
 }
 
@@ -176,6 +178,12 @@ impl Board<'_> {
             }
         } else if dr.tables.iter().any(|t| t.id == id) {
             out.tables.insert(id.to_string());
+        } else if let Some(p) = dr.tuning_patterns.iter().find(|p| p.id == id) {
+            // A tuning pattern is a group too (`PCB_TUNING_PATTERN` is a `PCB_GENERATOR` is a `PCB_GROUP`): `PCB_GROUP::Move`, `Rotate` and `Flip` take its tracks along,
+            // and the pattern moves its origin, end and base lines (`PCB_TUNING_PATTERN::Move`, `Rotate`, `Flip` outside an edit)
+            out.patterns.insert(id.to_string());
+            let on_board = |m: &String| self.design.routing.as_ref().is_some_and(|rt| rt.tracks.iter().any(|t| &t.id == m));
+            out.tracks.extend(p.member_ids.iter().filter(|m| on_board(m)).cloned());
         } else {
             return false;
         }
@@ -336,6 +344,48 @@ impl Board<'_> {
             crate::pcb_items::transform_board_items(dr, &targets.board_items, x, copper);
             for t in dr.tables.iter_mut().filter(|t| targets.tables.contains(&t.id)) {
                 super::pcb_tables::transform_table(t, x, copper);
+            }
+        }
+        // The tuning patterns (`PCB_TUNING_PATTERN::Move` / `Rotate` / `Flip` outside an edit, its tracks moved above as its members):
+        // - Move: `m_origin += aMoveVector; m_end += aMoveVector;` and `m_baseLine->Move( aMoveVector )`, the coupled base line too;
+        // - Rotate: `PCB_GENERATOR::Rotate` (`RotatePoint( m_origin, .. )`), `RotatePoint( m_end, .. )`, the base lines rotated;
+        // - Flip: `PCB_GENERATOR::Flip` mirrors the origin (`PCB_GENERATOR::baseMirror`) and sets the layer of the pattern and its tracks to the other side
+        //   (`SetLayer( FlipLayer( GetLayer() ) )`, which `PCB_TUNING_PATTERN::SetLayer` hands to its tracks), then `PCB_GROUP::Flip` flips each track -- back to
+        //   the layer it was on -- and `PCB_TUNING_PATTERN::baseMirror` mirrors the origin back, the base lines, puts the origin and the end on the base line's ends
+        //   and swaps the side of the first meander. So a pattern turned over is mirrored where it is, on its own layer (`GetLayer()` is its first track's): what
+        //   Mirror makes of it.
+        if !targets.patterns.is_empty() {
+            let members: BTreeSet<String> = self.design.drawings.as_ref().map(|dr| dr.tuning_patterns.iter().filter(|p| targets.patterns.contains(&p.id)).flat_map(|p| p.member_ids.iter().cloned()).collect()).unwrap_or_default();
+            if x.is_flip() {
+                // the tracks of a pattern go back to their layer (the flip above took them to the other side; `transform_track` has no generator to ask)
+                if let Some(rt) = self.design.routing.as_mut() {
+                    for t in rt.tracks.iter_mut().filter(|t| members.contains(&t.id)) {
+                        t.layer = flip_layer(&t.layer, copper);
+                    }
+                }
+            }
+            if let Some(dr) = self.design.drawings.as_mut() {
+                for p in dr.tuning_patterns.iter_mut().filter(|p| targets.patterns.contains(&p.id)) {
+                    for q in p.base_line.iter_mut().chain(p.base_line_coupled.iter_mut()) {
+                        *q = x.point(*q);
+                    }
+                    if let Xform::Flip { .. } = x {
+                        match (p.base_line.first(), p.base_line.last()) {
+                            (Some(&first), Some(&last)) => {
+                                p.origin = first;
+                                p.end = last;
+                            }
+                            _ => {
+                                p.origin = x.point(p.origin);
+                                p.end = x.point(p.end);
+                            }
+                        }
+                        p.initial_side = if p.initial_side == eda_model::tuning::PatternSide::Right { eda_model::tuning::PatternSide::Left } else { eda_model::tuning::PatternSide::Right };
+                    } else {
+                        p.origin = x.point(p.origin);
+                        p.end = x.point(p.end);
+                    }
+                }
             }
         }
         // `BOARD::FlipLayer` is `m_layers[..].m_opposite`: a user layer typed front or back flips to its pair (`recalcOpposites`), which `::FlipLayer`

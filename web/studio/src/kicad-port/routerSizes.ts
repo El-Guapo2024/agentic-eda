@@ -81,6 +81,9 @@ export function diffPairLabel(p: PairDims, fmt: (nm: Nm) => string): string {
 
 /** What `ROUTER_TOOL::UpdateMessagePanel` shows of a route: the server's start reply (`sizes`) and the studio's own settings. */
 export interface RouteSizesInfo {
+  /** `sizes.TrackWidth()` when it is not the width routed: `updateSizesAfterRouterEvent` asked it again on a new layer and the head kept its own
+   *  (`LINE_PLACER::UpdateSizes`); the message panel shows it, as KiCad's shows `sizes.TrackWidth()`. */
+  width?: Nm | null;
   width_source?: string;
   clearance?: Nm | null;
   clearance_source?: string | null;
@@ -139,8 +142,93 @@ export function routerMessagePanel(
   else items.push({ upper: "Routing Track", lower: "(no net)" });
   items.push({ upper: "Corner Style", lower: cornerStyleName(settings.freeAngle, settings.cornerMode) });
   items.push({ upper: "Mode", lower: routerModeName(settings.mode) });
-  items.push({ upper: `Track Width: ${fmt(route.width)}`, lower: `(from ${sizes?.width_source ?? ""})` });
+  items.push({ upper: `Track Width: ${fmt(sizes?.width ?? route.width)}`, lower: `(from ${sizes?.width_source ?? ""})` });
   if (sizes?.clearance != null) items.push({ upper: `Min Clearance: ${fmt(sizes.clearance)}`, lower: `(from ${sizes.clearance_source ?? ""})` });
   if (route.pair) items.push({ upper: `Diff Pair Gap: ${fmt(route.gap)}`, lower: `(from ${sizes?.gap_source ?? ""})` });
   return items;
+}
+
+/** What `ROUTER_TOOL::updateSizesAfterRouterEvent` left in the router's sizes (`/api/route/fix`, `/layer`, `/dp_fix`'s `sizes`, UI-LEFT R5): the message
+ *  panel's clearance and its source always; the width and its source when they were asked again -- the routed width too when the head took it
+ *  (`width_applied`), else the sizes' own beside it (`width`); a pair's gap and its source. */
+export interface RouterEventSizes {
+  clearance: Nm;
+  clearance_source: string;
+  width?: Nm | null;
+  width_source?: string | null;
+  width_applied?: boolean;
+  gap?: Nm | null;
+  gap_source?: string | null;
+}
+
+/** [`RouterEventSizes`] folded into a route's or a pair's draw state: `{ width, gap, sizes }` to spread over it. */
+export function withEventSizes<T extends { width: Nm; gap?: Nm; sizes?: RouteSizesInfo }>(draw: T, ev: RouterEventSizes | null | undefined): T {
+  if (!ev) return draw;
+  const sizes: RouteSizesInfo = { ...(draw.sizes ?? {}), clearance: ev.clearance, clearance_source: ev.clearance_source };
+  let width = draw.width;
+  if (ev.width != null) {
+    if (ev.width_applied) {
+      width = ev.width;
+      sizes.width = null;
+    } else {
+      sizes.width = ev.width === draw.width ? null : ev.width;
+    }
+    if (ev.width_source != null) sizes.width_source = ev.width_source;
+  }
+  let gap = draw.gap;
+  if (ev.gap != null) {
+    gap = ev.gap;
+    if (ev.gap_source != null) sizes.gap_source = ev.gap_source;
+  }
+  return { ...draw, width, ...(gap !== undefined ? { gap } : {}), sizes };
+}
+
+/** The board editor's length units as the toolbar boxes print them: `mm`, `mil` (KiCad's MILS) or `in`. */
+export type BoxUnit = "mm" | "mil" | "in";
+
+/** `ComboBoxUnits( aUnits, aValue, aIncludeLabel )` (toolbars_pcb_editor.cpp): "%.3f" mm, "%.2f" mils, "%.5f" in, with " mm" / " mils" / " in". */
+export function comboBoxUnits(unit: BoxUnit, nm: Nm, label = true): string {
+  const [value, digits, text] = unit === "mm" ? [nm / 1e6, 3, " mm"] : unit === "mil" ? [nm / 25_400, 2, " mils"] : [nm / 25_400_000, 5, " in"];
+  return value.toFixed(digits) + (label ? text : "");
+}
+
+/** `GetUnitPair`: the other system's unit, mils beside a metric unit and millimetres beside an imperial one (the last one used of each, by default these). */
+function secondaryUnit(unit: BoxUnit): BoxUnit {
+  return unit === "mm" ? "mil" : "mm";
+}
+
+/** The separator and "Edit Pre-defined Sizes..." the two boxes end with (`aShowEdit`). */
+export const BOX_SEPARATOR = "---";
+export const BOX_EDIT_SIZES = "Edit Pre-defined Sizes...";
+
+/**
+ * `PCB_EDIT_FRAME::UpdateTrackWidthSelectBox( m_SelTrackWidthBox, true, true )`, the auxiliary toolbar's Track Width box (UI-LEFT R7): "Track: use netclass
+ * width", then "Track: %s (%s)" for each Pre-defined Sizes track width (`m_TrackWidthList[1..]`), then "---" and "Edit Pre-defined Sizes...".
+ */
+export function trackWidthBoxLabels(presets: readonly Nm[], unit: BoxUnit): string[] {
+  const other = secondaryUnit(unit);
+  return ["Track: use netclass width", ...presets.map((w) => `Track: ${comboBoxUnits(unit, w)} (${comboBoxUnits(other, w)})`), BOX_SEPARATOR, BOX_EDIT_SIZES];
+}
+
+/** `UpdateViaSizeSelectBox( m_SelViaSizeBox, true, true )`: "Via: use netclass sizes", then "Via: %s (%s)" -- "diameter / hole" with the unit after the hole, or
+ *  the diameter alone for a via of no hole -- then "---" and "Edit Pre-defined Sizes...". */
+export function viaSizeBoxLabels(presets: readonly { diameter: Nm; drill: Nm }[], unit: BoxUnit): string[] {
+  const other = secondaryUnit(unit);
+  const text = (u: BoxUnit, v: { diameter: Nm; drill: Nm }) => (v.drill > 0 ? `${comboBoxUnits(u, v.diameter, false)} / ${comboBoxUnits(u, v.drill, true)}` : comboBoxUnits(u, v.diameter, true));
+  return ["Via: use netclass sizes", ...presets.map((v) => `Via: ${text(unit, v)} (${text(other, v)})`), BOX_SEPARATOR, BOX_EDIT_SIZES];
+}
+
+/**
+ * What a pick in either box does (`PCB_EDIT_FRAME::Tracks_and_Vias_Size_Event`, `ID_AUX_TOOLBAR_PCB_TRACK_WIDTH` / `_VIA_SIZE`): the separator puts the
+ * selection back; the last entry puts it back and opens Board Setup's "Pre-defined Sizes"; any other is the list's index (`SetTrackWidthIndex( ii )`,
+ * which also turns custom sizes off, and for a track `m_TempOverrideTrackWidth = true`), and then `trackViaSizeChanged` re-sizes a route in progress.
+ * **"Use Starting Track Width" stays as it is** (`m_UseConnectedTrackWidth` is untouched; the toggle shows it): the override lasts the route in progress,
+ * and `prepareInteractive` clears it at the next start. (`m_UseConnectedTrackWidth = false` is the `ID_POPUP_PCB_SELECT_WIDTH*` case of the same
+ * function, which no menu of 8303b2ad reaches: the router's width menu handles those ids itself, `TRACK_WIDTH_MENU::eventHandler`, and does not skip
+ * the event.)
+ */
+export function sizeBoxPick(selection: number, count: number): { kind: "index"; index: number } | { kind: "none" } | { kind: "edit" } {
+  if (selection === count - 2) return { kind: "none" };
+  if (selection === count - 1) return { kind: "edit" };
+  return { kind: "index", index: selection };
 }

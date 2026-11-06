@@ -24,7 +24,7 @@ import { cancelInteractiveRoute, continueInteractiveRouteFromEnd, startInteracti
 import { withTrackSnapping } from "../kicad-port/routerSettings";
 import { chosenDiffPair, chosenTrackWidthOf, routeWidthAfterChange, stepDiffPairIndex, stepTrackWidth } from "../kicad-port/routerSizes";
 import { clearRouteQueue, startRouteQueue, type QueueOutcome } from "../components/canvas/routeQueue";
-import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpSetDims, dpUndoSegment, fetchErc, routeAttemptFinish, downloadKicadPcb, downloadKicadSchematic, postSwapPreview } from "../api/client";
+import { routeMove, routeUndoSegment, dpMove, dpSetDims, dpUndoSegment, fetchErc, routeAttemptFinish, downloadKicadPcb, downloadKicadSchematic, postSwapPreview } from "../api/client";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
@@ -46,7 +46,7 @@ import { STROKE_TOOLS, steppedDrawStroke, strokeStepKept } from "../kicad-port/l
 import { planSwap } from "../kicad-port/pcbSwap";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
-import { continueDiffPairFromEnd, finishDiffPairRoute, toggleDiffPairVia } from "../components/canvas/diffPairRouting";
+import { attemptFinishDiffPairRoute, continueDiffPairFromEnd } from "../components/canvas/diffPairRouting";
 import { findDraggableAt, startGroupDrag, startInlineDrag } from "../components/canvas/dragging";
 import { findGroupDragTarget } from "../kicad-port/dragTool";
 import { openPropertiesFor } from "../components/canvas/properties";
@@ -115,8 +115,6 @@ import { registerDesignBlockActions } from "./designBlockActions";
 import { designBlockChecked, useDesignBlocksUi } from "../state/designBlocks";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { registerPcbEditSweep } from "./pcbEditSweep";
-import { viaChoiceOf } from "./routerViaActions";
-import { chosenViaOf } from "../kicad-port/routerVia";
 import { registerPcbMenuActions } from "./pcbMenuActions";
 import { registerAppearanceActions } from "./appearanceActions";
 import { nextContrastMode } from "../kicad-port/appearance";
@@ -124,9 +122,7 @@ import { registerPcbFindActions } from "./pcbFindActions";
 import { registerPcbEditDetailsActions } from "./pcbEditDetailsActions";
 import { dragOriginFor, modificationSnapFor } from "../state/modificationSnap";
 import { toggledUnits } from "../kicad-port/unitToggle";
-import { layerPairsOf } from "./pcbRouterSweep";
 import { picker } from "./pcbPicker";
-import { otherLayerOfPair } from "../kicad-port/layerPairs";
 import { useCliExporters } from "../state/cliExporters";
 import { cliExporterReason } from "../kicad-port/cliExporters";
 
@@ -416,37 +412,12 @@ export function useActionRunner() {
     if (state.drawState?.kind === "route") {
       const draw = state.drawState;
       const cursor = state.cursorNm ?? { x: draw.pts[draw.pts.length - 1]?.[0] ?? 0, y: draw.pts[draw.pts.length - 1]?.[1] ?? 0 };
-      // Re-request the preview at the last known cursor after a backend
-      // state change (via armed, a segment undone, width changed) that
-      // doesn't itself move the cursor -- same reasoning as Canvas.tsx's
-      // own `/` handler.
-      const refreshPreview = () => {
-        routeMove(cursor.x, cursor.y).then((preview) => {
-          if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) });
-        });
-      };
       m.set(
         "pcbnew.InteractiveRouter.AttemptFinish",
         pcbOnly(() => void attemptFinishInteractiveRoute(cursor.x, cursor.y, draw, dispatch, api))
       );
-      // V: arm "drop a via here, continue on the other layer" for the next
-      // fix (see Router::toggle_via's own doc comment) -- not an immediate
-      // commit the way this app's old client-only router made it.
-      m.set(
-        "pcbnew.Control.layerToggle",
-        pcbOnly(() => {
-          if (!state.board) return;
-          // `layerToggle` (router_tool.cpp): the other layer of the board's layer pair ("Set Layer Pair...", actions/pcbRouterSweep.ts).
-          const toLayer = otherLayerOfPair(layerPairsOf(state.board, state.pcbx.layerPairs).current, draw.layer);
-          // `ACT_PlaceThroughVia` -> `onViaCommand` -> `handleLayerSwitch( aEvent, true )`: sized as every other via command (R6-R1) -- no size while
-          // the net class's are in use (the server asks the rules for the route's net: its class, a `.kicad_dru` via rule), else the chosen entry or custom size
-          const size = chosenViaOf("through", viaChoiceOf(state));
-          routeToggleVia(!draw.placingVia, size?.diameter, size?.drill, toLayer).then(() => {
-            dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, placingVia: !draw.placingVia, pendingViaLayer: toLayer } });
-            refreshPreview();
-          });
-        })
-      );
+      // V (`ACT_PlaceThroughVia` -> `onViaCommand` -> `handleLayerSwitch( aEvent, true )`) is actions/routerViaActions.ts's, registered after this: the
+      // implicit target is the nearest ratsnest anchor's layer (UI-LEFT R5), sized as every other via command (R6-R1).
       m.set(
         "pcbnew.InteractiveRouter.UndoLastSegment",
         pcbOnly(() => {
@@ -474,7 +445,8 @@ export function useActionRunner() {
         const sizes = draw.sizes ? { ...draw.sizes, width_source: step.index > 0 ? "user choice" : (draw.sizes.rule_width_source ?? draw.sizes.width_source) } : undefined;
         const d = { ...draw, width: next, widthOverride: step.override, sizes };
         dispatch({ type: "SET_DRAW_STATE", draw: d });
-        routeMove(cursor.x, cursor.y, undefined, next).then((preview) => {
+        // `UseNetClassTrack()` at entry 0, which `updateSizesAfterRouterEvent` reads (UI-LEFT R5)
+        routeMove(cursor.x, cursor.y, undefined, next, step.index === 0).then((preview) => {
           if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(d, preview) });
         });
       };
@@ -495,7 +467,7 @@ export function useActionRunner() {
         const dims = chosenDiffPair(presets, index, false, null) ?? (draw.sizes?.rule_width != null && draw.sizes.rule_gap != null ? { width: draw.sizes.rule_width, gap: draw.sizes.rule_gap, viaGap: draw.sizes.rule_via_gap ?? draw.sizes.rule_gap } : undefined);
         if (!dims) return;
         const sizes = draw.sizes ? { ...draw.sizes, width_source: index > 0 ? "user choice" : (draw.sizes.rule_width_source ?? ""), gap_source: index > 0 ? "user choice" : (draw.sizes.rule_gap_source ?? "") } : undefined;
-        void dpSetDims(dims.width, dims.gap, dims.viaGap).then(() =>
+        void dpSetDims(dims.width, dims.gap, dims.viaGap, index === 0).then(() =>
           dpMove(cursor.x, cursor.y).then((preview) => {
             if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview({ ...draw, sizes }, preview) });
           })
@@ -503,9 +475,10 @@ export function useActionRunner() {
       };
       m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cyclePair(1)));
       m.set("pcbnew.EditorControl.trackWidthDec", pcbOnly(() => cyclePair(-1)));
+      // F: `routerAttemptFinish` -> `ROUTER::Finish` with the P line as the trace -- the coupled pair at the nearest anchor, never the cursor (UI-LEFT R2)
       m.set(
         "pcbnew.InteractiveRouter.AttemptFinish",
-        pcbOnly(() => void finishDiffPairRoute(cursor.x, cursor.y, dispatch, api))
+        pcbOnly(() => void attemptFinishDiffPairRoute(cursor.x, cursor.y, draw, dispatch, api))
       );
       // Ctrl+E: `ROUTER::ContinueFromEnd` restarts the placer of the same mode, so a pair goes on from the other end as a pair
       m.set(
@@ -515,15 +488,7 @@ export function useActionRunner() {
           void continueDiffPairFromEnd(end, draw, dispatch, api);
         })
       );
-      // `V` (`layerToggle`): the other layer of the board's layer pair ("Set Layer Pair...", actions/pcbRouterSweep.ts)
-      m.set(
-        "pcbnew.Control.layerToggle",
-        pcbOnly(() => {
-          if (!state.board) return;
-          // sized as the single track's V (R6-R1, R7-R2): the chosen entry or custom size, none while the net class's are in use
-          void toggleDiffPairVia(draw, cursor, otherLayerOfPair(layerPairsOf(state.board, state.pcbx.layerPairs).current, draw.layer), dispatch, chosenViaOf("through", viaChoiceOf(state)) ?? undefined);
-        })
-      );
+      // `V` is actions/routerViaActions.ts's in the pair tool too (`handleLayerSwitch`: the nearest ratsnest anchor's layer, UI-LEFT R5)
       m.set(
         "pcbnew.InteractiveRouter.UndoLastSegment",
         pcbOnly(() => {
@@ -597,10 +562,12 @@ export function useActionRunner() {
     m.set("pcbnew.InteractiveRouter.SettingsDialog", pcbOnly(() => dispatch({ type: "SET_ROUTER_SETTINGS_DIALOG_OPEN", open: true })));
     // `7` / `8` / `9` (`PCB_ACTIONS::tuneSingleTrack` / `tuneDiffPair` / `tuneDiffPairSkew`, `DRAWING_TOOL::PlaceTuningPattern`): arms the length tuner -- hover a track to
     // read its length, click to start a pattern on it, click again where it ends (the canvas does the clicking: components/canvas/tuneRouting.ts). The tool's settings are
-    // Board Setup's Length-tuning Patterns page for the kind, over what the Tuning Pattern dialog (Ctrl+L) set.
+    // Board Setup's Length-tuning Patterns page for the kind, over what the Tuning Pattern dialog (Ctrl+L) and the 1-4 keys set while the tool runs: each time the tool
+    // is entered they start from the page again (`PlaceTuningPattern`: `meanderSettings = bds.m_SingleTrackMeanderSettings` ..), its corner style and single-sided too.
     const startTuner = (mode: "single" | "diffpair" | "skew") =>
       pcbOnly(() => {
         void cancelTune(state, dispatch);
+        dispatch({ type: "PCBX", patch: { tuneSettings: {} } });
         dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: false, mode });
         dispatch({ type: "SET_DRAW_STATE", draw: null });
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "tune" });
@@ -2217,9 +2184,15 @@ export function useActionRunner() {
           // width (the server's `CT_WIDTH`). By index, so a preset equal to the Default class's width is still chosen (r4 R4-8).
           const width = chosenTrackWidthOf(board.routing?.track_width_presets ?? [], state.currentTrackWidthIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia.trackNm);
           const settings = withTrackSnapping(state.routerSettings, state.prefs.magneticTracks);
+          // `RouteSelected`: `PCB_LAYER_ID originalLayer = frame->GetActiveLayer();` -- "Try to return to the original layer as indicating the user's
+          // preferred layer for autorouting tracks. The layer can be changed by the user to finish tracks that can't complete automatically, but should be
+          // changed back after." Each connection starts from it and gives it back when it ends (`prepareInteractive` saves the active layer, which
+          // `RouteSelected` has just set back to `originalLayer`; `finishInteractive` restores it), R7-R7
+          const originalLayer = state.activeLayer ?? copperLayers[0] ?? "F.Cu";
           const handOver = async (at: [number, number], layer: string): Promise<QueueOutcome> => {
             dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
-            return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch, undefined, state.bcx.autoTrackWidth)) ? "live" : "done";
+            if (api.getState().activeLayer !== originalLayer) dispatch({ type: "SET_ACTIVE_LAYER", layer: originalLayer });
+            return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch, undefined, state.bcx.autoTrackWidth, undefined, originalLayer)) ? "live" : "done";
           };
           // "We want autorouted tracks to all be in one undo group except for any tracks that need to be manually finished." (R6-R4)
           let groupStart = true;

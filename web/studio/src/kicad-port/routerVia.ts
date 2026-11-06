@@ -41,6 +41,9 @@ export interface ViaPlan {
   pair: [string, string];
   /** `switchLayerOnViaPlacement`: `Sizes().PairedLayer( currentLayer )`, else `GetLayerTop()`. */
   toLayer: string;
+  /** The router's sizes' layer pairs after the command (`sizes.ClearLayerPairs(); .. sizes.AddLayerPair( currentLayer, targetLayer )`): what the next
+   *  Place Through Via reads `PairedLayer` from. */
+  sizesPairs: Record<string, string>;
 }
 
 /** A refusal: `return 0` from `handleLayerSwitch`, with the infobar message when it shows one. */
@@ -59,6 +62,17 @@ export interface ViaPlanInput {
   layerPair: LayerPair;
   /** For a `selectLayer` command, what the layer picker returned (`SelectOneLayer`); null: cancelled. Ignored otherwise. */
   picked?: string | null;
+  /** Place Through Via's implicit target (`m_router->GetNearestRatnestAnchor( otherEnd, otherEndLayers, otherEndItem )`): the first layer of the nearest
+   *  unconnected anchor of the route's net (`otherEndLayers.Start()`, the server's `/api/route/ratsnest_anchor`); null when there is none. */
+  ratsnestLayer?: string | null;
+  /** The router's sizes' layer pairs before the command (`m_router->Sizes().PairedLayer( .. )`): the board's layer pair from the route's start
+   *  (`prepareInteractive`'s `AddLayerPair( m_Route_Layer_TOP, m_Route_Layer_BOTTOM )`), then the last via command's ([`ViaPlan.sizesPairs`]). */
+  sizesPairs?: Readonly<Record<string, string>>;
+}
+
+/** `SIZES_SETTINGS::AddLayerPair( aL1, aL2 )` on an empty map: `m_layerPairs[bottom] = top; m_layerPairs[top] = bottom;`. */
+export function layerPairMap(a: string, b: string): Record<string, string> {
+  return a === b ? { [a]: a } : { [a]: b, [b]: a };
 }
 
 /** The layers the layer picker offers (`SelectOneLayer( currentLayer, not_allowed_ly )`, `not_allowed_ly = LSET::AllNonCuMask()`, plus the current layer for a via that is not a through via: "One cannot place a blind/buried via on only one layer"). */
@@ -78,13 +92,17 @@ const index = (copper: readonly string[], layer: string) => copper.indexOf(layer
  *    to the pair's top; one layer only is "Via needs 2 different layers.";
  *  - then the pair `(currentLayer, targetLayer)` goes into the sizes, and after the via the route goes on on the layer paired with the one it
  *    was on, or the pair's top (`switchLayerOnViaPlacement`).
- * Place Through Via's implicit target (the nearest ratsnest anchor's layer, `GetNearestRatnestAnchor`) is not here: the studio's `V` is the
- * layer pair's other layer (actions/pcbMenuActions.ts).
+ * - no target for a through via (Place Through Via, V): "Try to switch to the nearest ratnest item's layer if we have one" -- with no anchor
+ *   (`GetNearestRatnestAnchor` false) the board's layer pair, "use the layer of the other end, unless it is the same layer as the currently active
+ *   layer, in which case use the layer pair (if applicable)": the layer paired with the current one in the router's sizes (`PairedLayer`), else the
+ *   anchor's layer, which may be the current one -- a through via spans the board, and the route goes on on that layer (UI-LEFT R5).
  */
 export function planViaCommand(input: ViaPlanInput): ViaPlan | ViaRefusal {
   const { cmd, copper, layerPair } = input;
   let currentLayer = input.currentLayer;
   if (currentLayer == null) return { ok: false, message: null };
+  // `m_router->GetCurrentLayer()`, whatever `currentLayer` is set to below
+  const routingLayer: string = currentLayer;
   let viaType: ViaType = cmd.type;
   let targetLayer: string | null = null;
   if (cmd.selectLayer) {
@@ -99,10 +117,22 @@ export function planViaCommand(input: ViaPlanInput): ViaPlan | ViaRefusal {
   const back = copper[copper.length - 1] ?? "B.Cu";
   // "Convert blind/buried via to a through hole one, if it goes through all layers"
   if (viaType !== "through" && ((targetLayer === back && currentLayer === front) || (targetLayer === front && currentLayer === back))) viaType = "through";
-  if (targetLayer == null) {
-    // the through via's implicit target is not this function's (see the doc comment); a through command always comes with a picked layer here
-    if (viaType === "through") return { ok: false, message: null };
-    const { a: pairTop, b: pairBottom } = layerPair;
+  const { a: pairTop, b: pairBottom } = layerPair;
+  if (targetLayer == null && viaType === "through") {
+    // "Implicit layer selection": "Try to switch to the nearest ratnest item's layer if we have one"
+    const other = input.ratsnestLayer ?? null;
+    if (other == null) {
+      // "use the default layer pair"
+      currentLayer = pairTop;
+      targetLayer = pairBottom;
+    } else {
+      // `m_router->Sizes().PairedLayer( m_router->GetCurrentLayer() )`
+      const paired = input.sizesPairs?.[routingLayer];
+      // "Closest ratsnest layer is the same as the active layer - assume the via is being placed for other routing reasons and switch the layer"
+      if (currentLayer === other && paired != null) targetLayer = paired;
+      else targetLayer = other;
+    }
+  } else if (targetLayer == null) {
     if (currentLayer === pairTop || currentLayer === pairBottom) {
       // "the current layer is on the defined layer pair, swap to the other side"
       currentLayer = pairTop;
@@ -119,9 +149,9 @@ export function planViaCommand(input: ViaPlanInput): ViaPlan | ViaRefusal {
   const pair: [string, string] = i <= j ? [currentLayer, targetLayer] : [targetLayer, currentLayer];
   const span: [string, string] = viaType === "through" ? [front, back] : pair;
   // `switchLayerOnViaPlacement`: `PairedLayer( m_router->GetCurrentLayer() )`, else `GetLayerTop()`
-  const routing = input.currentLayer;
+  const routing = routingLayer;
   const toLayer = routing === pair[0] ? pair[1] : routing === pair[1] ? pair[0] : pair[0];
-  return { ok: true, viaType, span, pair, toLayer };
+  return { ok: true, viaType, span, pair, toLayer, sizesPairs: layerPairMap(pair[0], pair[1]) };
 }
 
 /** The effective net class's value of a setting for `net` (`NET_SETTINGS::GetEffectiveNetClass`: the classes it is in, highest priority first, then Default). */
@@ -251,4 +281,18 @@ export function routerLayerTarget(cmd: "next" | "prev" | string, current: string
     target = cmd;
   }
   return target === current ? null : target;
+}
+
+/** The router tool's two modes as the studio names its tools (`ROUTER_TOOL::MainLoop` runs both: `routeSingleTrack`, `routeDiffPair`). */
+const ROUTER_TOOLS: ReadonlySet<string> = new Set(["route", "diffpair"]);
+
+/**
+ * `m_startWithVia` across a tool change (R7-R6): `ROUTER_TOOL::MainLoop` clears it on entry ("`m_router->SetMode( mode ); m_cancelled = false;
+ * m_startWithVia = false;`"), so V pressed with the route tool armed, then leaving the tool and coming back, starts no via. Switching between the
+ * single-track and the pair tool does not enter `MainLoop` again (`if( m_inRouterTool ) return 0;`, the mode actions are handled inside its loop): the
+ * flag stays.
+ */
+export function startWithViaAfterToolChange(prevTool: string, nextTool: string, startWithVia: boolean | undefined): boolean | undefined {
+  if (!startWithVia) return startWithVia;
+  return ROUTER_TOOLS.has(nextTool) && !ROUTER_TOOLS.has(prevTool) ? false : startWithVia;
 }

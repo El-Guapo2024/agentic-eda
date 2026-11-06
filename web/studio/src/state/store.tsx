@@ -9,6 +9,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
+import { slidePattern } from "../components/canvas/tuneRouting";
 import type { NewZoneSettings } from "../kicad-port/pcbDrawZone";
 import type { FpDimDraw } from "../kicad-port/fpDrawTools";
 import type { RouteSizesInfo } from "../kicad-port/routerSizes";
@@ -36,6 +37,7 @@ import { dragOriginFor, modificationSnapFor } from "./modificationSnap";
 import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, loadAngleSnapMode, saveAngleSnapMode, type PcbParityState } from "../kicad-port/pcbParityState";
+import { startWithViaAfterToolChange } from "../kicad-port/routerVia";
 import { strokeStepKept } from "../kicad-port/layerDefaults";
 import { substituteSelection } from "../kicad-port/groupTree";
 import { substituteSchSelection } from "../kicad-port/schGroups";
@@ -281,6 +283,8 @@ export type DrawState =
       sizes?: RouteSizesInfo;
       /** `m_TempOverrideTrackWidth`: see kicad-port/routeTool.ts. */
       widthOverride?: boolean;
+      /** The router's sizes' layer pairs (`PairedLayer`): see kicad-port/routeTool.ts. */
+      sizesPairs?: Record<string, string>;
     }
   /** `D` (gap #7 stage 5, `pcbnew.InteractiveRouter.Drag45Degree` ->
    * `eda_pns::dragger::Dragger`, driven through crates/cli/src/route_api.rs's
@@ -358,6 +362,8 @@ export type DrawState =
       originalActiveLayer?: string;
       /** The message panel's sizes: see kicad-port/dpTool.ts. */
       sizes?: RouteSizesInfo;
+      /** The router's sizes' layer pairs (`PairedLayer`): see kicad-port/dpTool.ts. */
+      sizesPairs?: Record<string, string>;
     }
   /** `settings`: what the zone takes when it is finished -- the zone dialog's OK at the first corner (kicad-port/pcbDrawZone.ts `NewZoneSettings`); absent for a cutout, a similar zone or a via stitching (their source's or their own dialog). */
   | { kind: "zone"; pts: [Nm, Nm][]; settings?: NewZoneSettings }
@@ -1499,9 +1505,13 @@ function reducer(state: StudioState, action: Action): StudioState {
       const board = p != null && p.kind !== "sch_move" && p.kind !== "sch_drag";
       return { ...state, movePreview: board ? { ...p, rotateStepDeg: state.prefs.rotationStepDeg, flipDirection: state.prefs.flipDirection } : p };
     }
-    case "SET_ACTIVE_TOOL":
+    case "SET_ACTIVE_TOOL": {
       // (the ends of the wires Pin Helpers handed to the Drag tool are the Drag tool's: they go when it does)
-      return { ...state, activeTool: action.tool, schSheetImport: action.tool === "sch_import_sheet" ? state.schSheetImport : null, schPickedEnds: action.tool === "drag" ? state.schPickedEnds : null };
+      // `MainLoop`'s `m_startWithVia = false` on entering the router tool (R7-R6)
+      const startWithVia = startWithViaAfterToolChange(state.activeTool, action.tool, state.pcbx.startWithVia);
+      const pcbx = startWithVia === state.pcbx.startWithVia ? state.pcbx : { ...state.pcbx, startWithVia };
+      return { ...state, activeTool: action.tool, pcbx, schSheetImport: action.tool === "sch_import_sheet" ? state.schSheetImport : null, schPickedEnds: action.tool === "drag" ? state.schPickedEnds : null };
+    }
     case "SET_VIEW":
       return { ...state, view: action.view };
     case "SET_SCHEMATIC_VIEW":
@@ -2403,6 +2413,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const settle = async (sent: boolean, ok: boolean) => {
         if (carrying && (!sent || !ok)) await postCarry("commit");
       };
+      // A tuning pattern moved on its own (`doMoveSelection` of a lone generator, `genStartEdit` / `genUpdateEdit` / `genFinishEdit`): it slides along its track
+      // and is tuned again there, not carried off it (components/canvas/tuneRouting.ts `slidePattern`)
+      if (kind === "pcb" && refs.length === 1 && !rotateQuarterTurns && !flipped && !(ops?.length) && !carrying && !(stateRef.current.pcbx.movingIndividually && stateRef.current.pcbx.moveQueue.length > 0)) {
+        const pattern = stateRef.current.board?.drawings?.tuning_patterns?.find((p) => p.id === refs[0]);
+        if (pattern) {
+          if (dxNm !== 0 || dyNm !== 0) await slidePattern(dispatch, api, pattern, dxNm, dyNm);
+          advanceMoveQueue();
+          return;
+        }
+      }
       // Any mix of PCB items: turned and flipped about where it was picked up, then moved, as one batch (`planCarry`).
       if (kind === "pcb") {
         const board = stateRef.current.board;

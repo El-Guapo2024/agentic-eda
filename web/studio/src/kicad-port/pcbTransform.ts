@@ -42,8 +42,9 @@ export function groupOf(board: BoardState, id: string): string | null {
  * is as good as locked when anything below it is -- a group with a locked member, however deep.
  */
 export function isLocked(board: BoardState, id: string): boolean {
-  // a tuning pattern (a `PCB_GENERATOR`) and its tracks are changed through the pattern -- its properties and its edit points -- not moved, turned or flipped
-  const locked = new Set([...(board.locked ?? []), ...(board.drawings?.groups ?? []).filter((g) => g.generator).map((g) => g.id)]);
+  // a tuning pattern (a `PCB_GENERATOR`, a group of its tracks) is moved, turned and flipped like any group (`PCB_TUNING_PATTERN::Move`, `Rotate`, `Flip`), and
+  // locked only when it is (`IsLocked`); a pattern moved on its own slides along its track (`commitMove`, `slidePattern`)
+  const locked = new Set(board.locked ?? []);
   if (locked.has(id)) return true;
   // A footprint's field is as locked as the footprint (`PCB_TEXT::IsLocked`: "|| GetParentFootprint()->IsLocked()").
   const field = parseFieldId(id);

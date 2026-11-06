@@ -2453,6 +2453,8 @@ export interface RouteFixReply {
    * session's own runs at this point). */
   real_end?: boolean;
   preview?: RoutePreview;
+  /** `updateSizesAfterRouterEvent` after the fix (on the via's other layer after a via), UI-LEFT R5. */
+  sizes?: RouterEventSizes | null;
 }
 
 /** `POST /api/route/drag_{start,move,finish}` (gap #7 stage 5, `D`):
@@ -2567,6 +2569,21 @@ export interface DpFixReply {
   blocked: boolean;
   real_end?: boolean;
   preview?: DiffPairPreview;
+  /** `updateSizesAfterRouterEvent` on the layer the pair goes on on (UI-LEFT R5). */
+  sizes?: RouterEventSizes | null;
+}
+
+/** What `ROUTER_TOOL::updateSizesAfterRouterEvent` leaves in the router's sizes after a fix, a via or a layer switch (UI-LEFT R5, crates/cli
+ *  route_api.rs `event_sizes_json`): the clearance asked again on the layer, and the width (a pair's: its width and gap) when asked again, with
+ *  their sources; `width_applied` when the head took the width. */
+export interface RouterEventSizes {
+  clearance: Nm;
+  clearance_source: string;
+  width?: Nm | null;
+  width_source?: string | null;
+  width_applied?: boolean;
+  gap?: Nm | null;
+  gap_source?: string | null;
 }
 
 /** `7` / `8` / `9`: which `pcbnew.LengthTuner.*` the tool is running. */

@@ -10,13 +10,17 @@
 //! `CheckFit` for a pair: each line collides with nothing in the world (the pair being tuned is not in it), and the shape keeps four widths from
 //! the shapes before it.
 //!
-//! Differences from KiCad as in [`crate::meander_placer`]: no pad-to-die length, the lines stop where the track width changes.
+//! The pair is started on a segment or an arc of either net (`SEGMENT_T | ARC_T`): `AssembleDiffPair` pairs arcs by their centre and radius, and a stretch
+//! of the pair through arcs keeps them as arcs (`addCornersUntilIndex`'s `AddArc( arcP, arcN )`). Each net's length counts the pad-to-die length of the
+//! pads its path ends on.
+//!
+//! Differences from KiCad as in [`crate::meander_placer`]: the lines stop where the track width changes.
 
 use crate::chain::ShapeLineChain;
 use crate::delay::DelayParams;
 use crate::diff_pair::{dp_coupled_net_name, dp_net_polarity};
 use crate::item::{net_of, Item, ItemId, Net};
-use crate::kigeom::{common_parallel_projection, ki_round_nm, Seg};
+use crate::kigeom::{common_parallel_projection, ki_round_nm, Seg, ShapeArc};
 use crate::line::Line;
 use crate::meander::{tune_line_length, MeanderEnv, MeanderSettings, MeanderShape, MeanderSide, MeanderType, MeanderedLine};
 use crate::meander_placer::{chain_collides, chain_of, Tuned, TuningStatus};
@@ -51,6 +55,56 @@ fn stadium_sq_distance(seg: &Seg, p: Point, width_nm: Nm) -> i128 {
     d.area(d)
 }
 
+/// What `Shape( -1 )->SquaredDistance( p )` of an arc track is (`SHAPE::SquaredDistance`: the distance to the arc's outline at its width, zero inside it).
+fn arc_sq_distance(arc: &crate::arcs::ArcPts, p: Point, width_nm: Nm) -> i128 {
+    let d = Nm::new(arc.distance_to(p).round() as i64) - width_nm / 2;
+    let d = d.max(Nm::ZERO);
+    d.area(d)
+}
+
+/// `SHAPE_ARC::BBox( 0 ).Centre()` (`SHAPE::Centre`: the box of the start, the middle, the end and the quadrant points the arc passes, `update_values`),
+/// the centre of the box by `BOX2I::Centre`'s integer halves.
+fn arc_bbox_centre(a: &ShapeArc) -> Point {
+    let mut pts = vec![a.start, a.mid, a.end];
+    let mut start_angle = a.start_angle();
+    let mut end_angle = start_angle + a.central_angle();
+    // "we always count quadrants clockwise (increasing angle)"
+    if start_angle > end_angle {
+        std::mem::swap(&mut start_angle, &mut end_angle);
+    }
+    let (q0, q1) = ((start_angle / 90.0).ceil() as i64, (end_angle / 90.0).floor() as i64);
+    if a.radius() < (i32::MAX as f64) / 2.0 {
+        let r = Nm::new(a.radius().round() as i64);
+        let c = a.center();
+        for q in q0..=q1 {
+            pts.push(match q.rem_euclid(4) {
+                0 => Point { x: c.x + r, y: c.y },
+                1 => Point { x: c.x, y: c.y + r },
+                2 => Point { x: c.x - r, y: c.y },
+                _ => Point { x: c.x, y: c.y - r },
+            });
+        }
+    }
+    let (x0, x1) = (pts.iter().map(|p| p.x).min().unwrap(), pts.iter().map(|p| p.x).max().unwrap());
+    let (y0, y1) = (pts.iter().map(|p| p.y).min().unwrap(), pts.iter().map(|p| p.y).max().unwrap());
+    Point { x: x0 + Nm::new((x1 - x0).get() / 2), y: y0 + Nm::new((y1 - y0).get() / 2) }
+}
+
+/// A track item of a pair as `AssembleDiffPair` compares it: a segment or an arc (`ITEM::SEGMENT_T | ITEM::ARC_T`), with its width and layer.
+enum Track {
+    Seg(Seg),
+    Arc(crate::arcs::ArcPts, ShapeArc),
+}
+
+/// The segment or arc `id` of `world`: its geometry, width, layer and net.
+fn track_of(world: &Node, id: ItemId) -> Option<(Track, Nm, i32, Net)> {
+    match world.get(id) {
+        Some(Item::Segment(s)) => Some((Track::Seg(Seg::new(s.a, s.b)), s.width, s.layer, s.net.clone())),
+        Some(Item::Arc(a)) => Some((Track::Arc(a.arc, a.arc.shape_nm()), a.width, a.layer, a.net.clone())),
+        _ => None,
+    }
+}
+
 /// The best pair of a segment of the clicked line and a segment of the partner net `findNItem` has found so far.
 struct BestPair {
     dist_sq: i128,
@@ -58,40 +112,61 @@ struct BestPair {
     found: Option<(ItemId, ItemId)>,
 }
 
-/// `TOPOLOGY::AssembleDiffPair( aStart, aPair )`.
+/// `TOPOLOGY::AssembleDiffPair( aStart, aPair )`: the segment or arc `start` and the nearest parallel segment (an arc of the same centre) of the coupled
+/// net on its layer make the pair; their lines are P and N. Segments are paired when they have the same width, are parallel within
+/// `DP_PARALLELITY_THRESHOLD` and face each other (`commonParallelProjection`), arcs when they have the same width and centres within the threshold; of
+/// those, the nearest to the clicked item, then the one nearest the clicked item's centre (`Shape( -1 )->Centre()`). The gap is the distance between the two
+/// segments (the difference of the two radii) less the width.
 pub fn assemble_diff_pair(world: &Node, start: ItemId) -> Option<PairAssembly> {
-    let Some(Item::Segment(start_seg)) = world.get(start) else { return None };
-    let ref_net = start_seg.net.clone();
+    let (start_track, _, layer, ref_net) = track_of(world, start)?;
     let ref_name = ref_net.as_deref()?.to_string();
     let coupled_name = dp_coupled_net_name(&ref_name)?;
     let coupled_net = net_of(&coupled_name);
     let lp = world.assemble_line_with(start, assemble_opts())?;
 
-    let layer = start_seg.layer;
-    let mut n_items: Vec<ItemId> = world.iter().filter(|(_, it)| matches!(it, Item::Segment(s) if s.net == coupled_net && s.layer == layer)).map(|(id, _)| id).collect();
+    // `AllItemsInNet( coupledNet )`: the segments and arcs of the coupled net on the layers of the start item
+    let mut n_items: Vec<ItemId> = world.iter().filter(|(_, it)| matches!(it, Item::Segment(s) if s.net == coupled_net && s.layer == layer) || matches!(it, Item::Arc(a) if a.net == coupled_net && a.layer == layer)).map(|(id, _)| id).collect();
     n_items.sort_unstable();
 
-    let seg_nm = |id: ItemId| -> Option<(Seg, Nm)> {
-        match world.get(id) {
-            Some(Item::Segment(s)) => Some((Seg::new(s.a, s.b), s.width)),
-            _ => None,
-        }
+    // `aStart->Shape( -1 )->Centre()`: a segment's middle (`SHAPE_SEGMENT::Centre`), an arc's box's centre
+    let center = match &start_track {
+        Track::Seg(s) => Point { x: s.a.x + ki_round_nm((s.b.x - s.a.x).as_f64() / 2.0), y: s.a.y + ki_round_nm((s.b.y - s.a.y).as_f64() / 2.0) },
+        Track::Arc(_, shape) => arc_bbox_centre(shape),
     };
-    let (start_nm, _) = seg_nm(start)?;
-    // `Shape( -1 )->Centre()`
-    let center = Point { x: start_nm.a.x + ki_round_nm((start_nm.b.x - start_nm.a.x).as_f64() / 2.0), y: start_nm.a.y + ki_round_nm((start_nm.b.y - start_nm.a.y).as_f64() / 2.0) };
 
     // `findNItem( p_item )`
     let find_n_item = |best: &mut BestPair, p_item: ItemId| {
-        let Some((p_seg, p_width)) = seg_nm(p_item) else { return };
+        let Some((p_track, p_width, _, _)) = track_of(world, p_item) else { return };
         for &n_item in &n_items {
-            let Some((n_seg, n_width)) = seg_nm(n_item) else { continue };
-            if n_width != p_width || !p_seg.approx_parallel(&n_seg, DP_PARALLELITY_THRESHOLD) || common_parallel_projection(p_seg, n_seg).is_none() {
-                continue;
-            }
-            let dist_sq = n_seg.squared_distance_seg(&p_seg);
+            let Some((n_track, n_width, _, _)) = track_of(world, n_item) else { continue };
+            // `if( n_item->Kind() != p_item->Kind() ) continue;`
+            let dist_sq = match (&p_track, &n_track) {
+                (Track::Seg(p_seg), Track::Seg(n_seg)) => {
+                    if n_width != p_width || !p_seg.approx_parallel(n_seg, DP_PARALLELITY_THRESHOLD) || common_parallel_projection(*p_seg, *n_seg).is_none() {
+                        continue;
+                    }
+                    n_seg.squared_distance_seg(p_seg)
+                }
+                (Track::Arc(_, p_arc), Track::Arc(_, n_arc)) => {
+                    if n_width != p_width {
+                        continue;
+                    }
+                    let (cp, cn) = (p_arc.center(), n_arc.center());
+                    let (dx, dy) = (cn.x - cp.x, cn.y - cp.y);
+                    if dx.area(dx) + dy.area(dy) > DP_PARALLELITY_THRESHOLD.area(DP_PARALLELITY_THRESHOLD) {
+                        continue;
+                    }
+                    // `SEG::Square( p_arc->CArc().GetRadius() - n_arc->CArc().GetRadius() )`: the difference of the radii as an integer, squared
+                    let d = (p_arc.radius() - n_arc.radius()) as i64 as i128;
+                    d * d
+                }
+                _ => continue,
+            };
             if dist_sq <= best.dist_sq {
-                let dist_target_sq = stadium_sq_distance(&n_seg, center, n_width);
+                let dist_target_sq = match &n_track {
+                    Track::Seg(n_seg) => stadium_sq_distance(n_seg, center, n_width),
+                    Track::Arc(pts, _) => arc_sq_distance(pts, center, n_width),
+                };
                 if dist_target_sq < best.dist_target_sq {
                     best.dist_target_sq = dist_target_sq;
                     best.dist_sq = dist_sq;
@@ -103,9 +178,14 @@ pub fn assemble_diff_pair(world: &Node, start: ItemId) -> Option<PairAssembly> {
     let mut best = BestPair { dist_sq: i128::MAX, dist_target_sq: i128::MAX, found: None };
     find_n_item(&mut best, start);
     if best.found.is_none() {
-        // the other tracks that end where the clicked one does
+        // the other tracks that end where the clicked one does (`linked->Anchor( i )` of a segment or an arc)
+        let anchors = match world.get(start) {
+            Some(Item::Segment(s)) => [s.a, s.b],
+            Some(Item::Arc(a)) => [a.start(), a.end()],
+            _ => return None,
+        };
         let mut links: Vec<ItemId> = Vec::new();
-        for anchor in [start_seg.a, start_seg.b] {
+        for anchor in anchors {
             if let Some(j) = world.joint_at(anchor, &ref_net) {
                 for &l in &j.links {
                     if l != start && !links.contains(&l) {
@@ -116,7 +196,8 @@ pub fn assemble_diff_pair(world: &Node, start: ItemId) -> Option<PairAssembly> {
         }
         links.sort_unstable();
         for l in links {
-            if matches!(world.get(l), Some(Item::Segment(_))) {
+            // (`findNItem` of a via or a pad finds nothing: the coupled items are segments and arcs, of the other kind)
+            if matches!(world.get(l), Some(Item::Segment(_) | Item::Arc(_))) {
                 find_n_item(&mut best, l);
             }
         }
@@ -128,15 +209,17 @@ pub fn assemble_diff_pair(world: &Node, start: ItemId) -> Option<PairAssembly> {
     if dp_net_polarity(&ref_name) < 0 {
         std::mem::swap(&mut lp, &mut ln);
     }
-    // "Segments are parallel -> compute pair gap"
-    let gap = match (seg_nm(ref_item), seg_nm(coupled_item)) {
-        (Some((r, _)), Some((c, _))) => {
+    let gap = match (track_of(world, ref_item), track_of(world, coupled_item)) {
+        // "Segments are parallel -> compute pair gap"
+        (Some((Track::Seg(r), ..)), Some((Track::Seg(c), ..))) => {
             let dir = (r.b.x - r.a.x, r.b.y - r.a.y);
             let disp = (r.b.x - c.b.x, r.b.y - c.b.y);
             let cross = dir.0.area(disp.1) - dir.1.area(disp.0);
             let norm = crate::kigeom::norm_i(dir.0, dir.1).max(Nm::new(1)).get() as i128;
             Nm::new((cross.abs() / norm) as i64) - lp.width
         }
+        // `(int) std::abs( refArc->CArc().GetRadius() - coupledArc->CArc().GetRadius() ) - lp.Width()`
+        (Some((Track::Arc(_, r), ..)), Some((Track::Arc(_, c), ..))) => Nm::new((r.radius() - c.radius()).abs() as i64) - lp.width,
         _ => Nm::new(-1),
     };
     Some(PairAssembly { net_p: lp.net.clone(), net_n: ln.net.clone(), width: lp.width, gap, p: lp, n: ln })
@@ -301,23 +384,22 @@ pub struct SkewSetup {
     pub own_is_p: bool,
 }
 
-/// `MEANDER_SKEW_PLACER::Start`'s side of the pair: the partner's tuning path is the length the clicked line is tuned against.
+/// `MEANDER_SKEW_PLACER::Start`'s side of the pair: the partner's tuning path is the length the clicked line is tuned against. The clicked item is a
+/// segment or an arc (`SEGMENT_T | ARC_T`); each net's length and delay count the pad-to-die length and delay of the pads its path ends on
+/// (`m_padToDieLengthP + lineLength( m_tunedPathP, .. )`).
 pub fn skew_setup(world: &Node, env: &LengthEnv, start: ItemId) -> Result<SkewSetup, String> {
-    let Some(Item::Segment(seg)) = world.get(start) else { return Err("Please select a differential pair track you want to tune.".into()) };
+    let Some((_, _, _, net)) = track_of(world, start) else { return Err("Please select a differential pair track you want to tune.".into()) };
     let pair = assemble_diff_pair(world, start).ok_or(NO_PAIR_FOR_SKEW)?;
     if pair.p.segment_ids.is_empty() || pair.n.segment_ids.is_empty() {
         return Err("Unable to find the lines of the pair.".into());
     }
-    let len = |ids: &[ItemId]| assemble_tuning_path(world, ids[0]).map(|p| p.length(world, env));
+    let len = |ids: &[ItemId]| assemble_tuning_path(world, ids[0]).map(|p| p.full_length(world, env));
     let (len_p, len_n) = (len(&pair.p.segment_ids).ok_or("Please select a differential pair track you want to tune.")?, len(&pair.n.segment_ids).ok_or("Please select a differential pair track you want to tune.")?);
-    // `lineDelay` of each net's path, by the profile of the clicked net's class
-    let params = seg.net.as_deref().and_then(|net| env.delay_params(net));
-    let delay = |ids: &[ItemId]| match (&params, assemble_tuning_path(world, ids[0])) {
-        (Some(p), Some(path)) => path.delay(world, env, p),
-        _ => 0,
-    };
+    // `m_padToDieDelayP + lineDelay( m_tunedPathP, .. )` of each net's path, by the profile of the clicked net's class
+    let params = net.as_deref().and_then(|net| env.delay_params(net));
+    let delay = |ids: &[ItemId]| assemble_tuning_path(world, ids[0]).map_or(0, |path| path.full_delay(world, env, params.as_ref()));
     let (delay_p, delay_n) = (delay(&pair.p.segment_ids), delay(&pair.n.segment_ids));
-    let own_is_p = pair.net_p == seg.net;
+    let own_is_p = pair.net_p == net;
     let (own_length, coupled_length, partner_net) = if own_is_p { (len_p, len_n, pair.net_n.clone()) } else { (len_n, len_p, pair.net_p.clone()) };
     let (own_delay, coupled_delay) = if own_is_p { (delay_p, delay_n) } else { (delay_n, delay_p) };
     Ok(SkewSetup { partner_net, own_length, coupled_length, own_delay, coupled_delay, own_is_p })
@@ -327,9 +409,15 @@ pub const NO_PAIR: &str = "Unable to find complementary differential pair net fo
 
 impl DpMeanderPlacer {
     /// `DP_MEANDER_PLACER::Start( aP, aStartItem )`.
+    ///
+    /// The clicked item is a segment or an arc (`SEGMENT_T | ARC_T`); the pattern starts at the point of a segment nearest `at`, at the nearer end of an
+    /// arc (`getSnappedStartPoint`).
     pub fn start(world: &Node, env: &LengthEnv, start: ItemId, at: Point, settings: MeanderSettings) -> Result<DpMeanderPlacer, String> {
-        let Some(Item::Segment(seg)) = world.get(start) else { return Err("Please select a track whose length you want to tune.".into()) };
-        let current_start = Seg::new(seg.a, seg.b).nearest_point(at);
+        let (current_start, net) = match world.get(start) {
+            Some(Item::Segment(seg)) => (Seg::new(seg.a, seg.b).nearest_point(at), seg.net.clone()),
+            Some(Item::Arc(a)) => (if crate::seg_ops::length(at, a.start()) <= crate::seg_ops::length(at, a.end()) { a.start() } else { a.end() }, a.net.clone()),
+            _ => return Err("Please select a track whose length you want to tune.".into()),
+        };
         let mut pair = assemble_diff_pair(world, start).ok_or(NO_PAIR)?;
         if pair.gap < Nm::ZERO {
             pair.gap = env.rules.diff_pair_gap_of(pair.net_p.as_deref().unwrap_or(""));
@@ -339,13 +427,15 @@ impl DpMeanderPlacer {
         }
         let path_p = assemble_tuning_path(world, pair.p.segment_ids[0]).ok_or("Please select a track whose length you want to tune.")?;
         let path_n = assemble_tuning_path(world, pair.n.segment_ids[0]).ok_or("Please select a track whose length you want to tune.")?;
-        let (len_p, len_n) = (path_p.length(world, env), path_n.length(world, env));
+        // `m_padToDieLengthP + lineLength( m_tunedPathP, .. )`, the same for N: each net with the pad-to-die length of the pads its path ends on
+        let (len_p, len_n) = (path_p.full_length(world, env), path_n.full_length(world, env));
         // `m_netClass = conItem->GetEffectiveNetClass()`: the clicked net's class, and its tuning profile
-        let delay_params = seg.net.as_deref().and_then(|net| env.delay_params(net));
-        let (delay_p, delay_n) = match &delay_params {
-            Some(p) => (path_p.delay(world, env, p), path_n.delay(world, env, p)),
-            None => (0, 0),
-        };
+        let delay_params = net.as_deref().and_then(|net| env.delay_params(net));
+        // `origPathDelay()`: `totalP = m_padToDieDelayP + lineDelay( m_tunedPathP, .. )` and `totalN = m_padToDieDelayP + lineDelay( m_tunedPathN, .. )` -- KiCad
+        // adds P's pad-to-die delay to N's line too (8303b2ad), and so does this
+        let (die_p, die_n) = (path_p.pad_to_die(world, env).1, path_n.pad_to_die(world, env).1);
+        let line_delay = |path: &TuningPath, die: i64| path.full_delay(world, env, delay_params.as_ref()) - die;
+        let (delay_p, delay_n) = (die_p + line_delay(&path_p, die_p), die_p + line_delay(&path_n, die_n));
         let mut w = world.clone();
         w.remove_line_segments(&pair.p);
         w.remove_line_segments(&pair.n);
@@ -562,26 +652,74 @@ impl DpMeanderPlacer {
         }
         result.set_baseline_offset(offset);
 
-        // `addCornersUntilIndex`: the corners of the two lines, up to the given vertex of each (a chain without arcs)
+        // `addCornersUntilIndex`: the corners of the two lines, up to the given vertex of each; an arc of both lines is `AddArc( arcP, arcN )`, and
+        // where only one line has an arc here the other's corners are added until it has its arc too
         let (mut cur_p, mut cur_n): (isize, isize) = (0, 0);
-        let corner_at = |chain: &ShapeLineChain, i: isize| -> Point {
-            // `GetSegment( i ).A`: a negative index counts from the last segment, and the last point's "segment" is the point itself
+        // `getItem( aChain, aIndex )`: the arc the vertex starts (with its ends) or the segment's ends; `GetSegment( i )`: a negative index counts from the
+        // last segment, and the last point's "segment" is the point itself
+        let item_at = |chain: &ShapeLineChain, i: isize| -> (Option<ShapeArc>, Point) {
+            // (`IsArcSegment( size_t )` of a negative index is false)
+            if i >= 0 && (i as usize) < chain.point_count() && chain.is_arc_segment(i as usize) {
+                let arc = chain.arc(chain.arc_index(i as usize) as usize).clone();
+                let start = arc.start;
+                return (Some(arc), start);
+            }
             let n = chain.segment_count() as isize;
             let i = if i < 0 { i + n } else { i };
             if i >= 0 && i < n {
-                chain.c_segment(i as usize).a
+                (None, chain.c_segment(i as usize).a)
             } else {
-                chain.c_last_point()
+                (None, chain.c_last_point())
             }
         };
         let mut add_corners_until = |result: &mut MeanderedLine, env: &FitEnv, tuned_p: &ShapeLineChain, tuned_n: &ShapeLineChain, last_p: isize, last_n: isize| {
+            let check = |cur: isize, last: isize| cur <= last && cur != -1;
             loop {
-                let p_ok = cur_p <= last_p && cur_p != -1;
-                let n_ok = cur_n <= last_n && cur_n != -1;
+                let (mut p_ok, mut n_ok) = (check(cur_p, last_p), check(cur_n, last_n));
                 if !p_ok && !n_ok {
                     break;
                 }
-                result.add_corner(env, corner_at(tuned_p, cur_p), corner_at(tuned_n, cur_n));
+                let (p_arc, p_start) = item_at(tuned_p, cur_p);
+                let (mut n_arc, mut n_start) = item_at(tuned_n, cur_n);
+                match (&p_arc, &n_arc) {
+                    (None, None) => result.add_corner(env, p_start, n_start),
+                    (Some(pa), Some(na)) => result.add_arc(env, pa, na),
+                    (Some(pa), None) => {
+                        result.add_corner(env, p_start, n_start);
+                        // "Find arc in N"
+                        loop {
+                            n_ok = check(cur_n, last_n);
+                            if !n_ok {
+                                break;
+                            }
+                            cur_n = tuned_n.next_shape(cur_n);
+                            (n_arc, n_start) = item_at(tuned_n, cur_n);
+                            if let Some(na) = &n_arc {
+                                result.add_arc(env, pa, na);
+                                break;
+                            }
+                            result.add_corner(env, p_start, n_start);
+                        }
+                    }
+                    (None, Some(na)) => {
+                        let na = na.clone();
+                        result.add_corner(env, p_start, n_start);
+                        // "Find arc in P"
+                        loop {
+                            p_ok = check(cur_p, last_p);
+                            if !p_ok {
+                                break;
+                            }
+                            cur_p = tuned_p.next_shape(cur_p);
+                            let (pa, ps) = item_at(tuned_p, cur_p);
+                            if let Some(pa) = &pa {
+                                result.add_arc(env, pa, &na);
+                                break;
+                            }
+                            result.add_corner(env, ps, n_start);
+                        }
+                    }
+                }
                 if p_ok {
                     cur_p = tuned_p.next_shape(cur_p);
                 }
@@ -685,7 +823,7 @@ mod tests {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
         rules.clearance = mm(0.15);
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules }
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules, pad_to_die: Default::default() }
     }
 
     fn pad(net: &str, at: Point) -> Item {
@@ -785,6 +923,119 @@ mod tests {
         let delay = placer.tuning_delay_result();
         assert!((delay - 280_000_000).abs() < 300_000, "the pair takes {delay} as");
         assert!((placer.tuning_length_result() - Nm::new(placer.settings().target_length.opt())).abs() < um(20.0));
+    }
+
+    fn arc(net: &str, start: Point, mid: Point, end: Point) -> Item {
+        Item::Arc(crate::item::Arc::new(net_of(net), 0, mm(0.2), crate::arcs::ArcPts::new(start, mid, end), None, false))
+    }
+
+    /// A pair that turns a corner on two arcs of one centre (P outside at r 5 mm, N inside at r 4.6 mm: a pitch of 0.4 mm, a gap of 0.2 mm), then runs on
+    /// downwards: P from (0, 0) along to (20, 0) mm, round to (25, 5) mm and down to (25, 30) mm; N alongside.
+    fn arc_board() -> (Node, ItemId, ItemId, ItemId) {
+        let mut w = Node::new();
+        let named = |net: &str, at: Point, name: &str| Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: mm(0.15) }, source: name.into(), edge: false, rule: 0, anchor_points: Vec::new() });
+        w.add(named("USB_P", p(0, 0), "J1.1"));
+        w.add(named("USB_N", p(0, 400_000), "J1.2"));
+        w.add(named("USB_P", p(25_000_000, 30_000_000), "U1.1"));
+        w.add(named("USB_N", p(24_600_000, 30_000_000), "U1.2"));
+        let s45 = std::f64::consts::FRAC_1_SQRT_2;
+        let mid = |r: f64| p(20_000_000 + (r * s45).round() as i64, 5_000_000 - (r * s45).round() as i64);
+        let sp = w.add(seg("USB_P", p(0, 0), p(20_000_000, 0)));
+        let ap = w.add(arc("USB_P", p(20_000_000, 0), mid(5_000_000.0), p(25_000_000, 5_000_000)));
+        w.add(seg("USB_P", p(25_000_000, 5_000_000), p(25_000_000, 30_000_000)));
+        w.add(seg("USB_N", p(0, 400_000), p(20_000_000, 400_000)));
+        let an = w.add(arc("USB_N", p(20_000_000, 400_000), mid(4_600_000.0), p(24_600_000, 5_000_000)));
+        w.add(seg("USB_N", p(24_600_000, 5_000_000), p(24_600_000, 30_000_000)));
+        (w, sp, ap, an)
+    }
+
+    /// F4-2: `TOPOLOGY::AssembleDiffPair` pairs an arc with the arc of the coupled net that has its centre (within `DP_PARALLELITY_THRESHOLD`), the gap being the
+    /// difference of the radii less the width; a straight segment is paired with the straight one.
+    #[test]
+    fn a_pair_is_assembled_from_an_arc_by_its_centre_and_radius() {
+        let (w, sp, ap, an) = arc_board();
+        let pair = assemble_diff_pair(&w, ap).expect("a pair from the arc");
+        assert_eq!((pair.net_p.as_deref(), pair.net_n.as_deref()), (Some("USB_P"), Some("USB_N")));
+        assert!((pair.gap - mm(0.2)).abs() <= Nm::new(2), "|5 - 4.6| mm - 0.2 mm: {}", pair.gap);
+        assert_eq!((pair.p.pts.first().copied(), pair.p.pts.last().copied()), (Some(p(0, 0)), Some(p(25_000_000, 30_000_000))), "the whole P line, through its arc");
+        assert_eq!(pair.p.arcs.len(), 1);
+        let from_n = assemble_diff_pair(&w, an).expect("a pair from the N arc");
+        assert_eq!(from_n.net_p.as_deref(), Some("USB_P"));
+        assert!((from_n.gap - mm(0.2)).abs() <= Nm::new(2));
+        let from_seg = assemble_diff_pair(&w, sp).expect("a pair from the straight");
+        assert_eq!(from_seg.gap, mm(0.2));
+        // an arc of the other net with another centre is no partner
+        let mut w2 = Node::new();
+        let a = w2.add(arc("USB_P", p(0, 0), p(1_000_000, 1_000_000), p(2_000_000, 0)));
+        w2.add(arc("USB_N", p(0, 3_000_000), p(1_000_000, 4_000_000), p(2_000_000, 3_000_000)));
+        assert!(assemble_diff_pair(&w2, a).is_none());
+    }
+
+    /// F4-2: `DP_MEANDER_PLACER::Start` takes an arc (`SEGMENT_T | ARC_T`; the pattern starts at its nearer end, `getSnappedStartPoint`), and a pattern
+    /// across the corner keeps the two arcs as arcs (`addCornersUntilIndex`'s `AddArc( arcP, arcN )`) while the straights on either side are meandered.
+    #[test]
+    fn a_pair_is_tuned_from_an_arc_and_across_its_arcs() {
+        let (w, _, ap, _) = arc_board();
+        let placer = DpMeanderPlacer::start(&w, &env(), ap, p(21_000_000, 100_000), settings(60_000_000)).expect("a placer on the arc");
+        assert_eq!(placer.current_start(), p(20_000_000, 0), "the arc's nearer end");
+        let (w, sp, _, _) = arc_board();
+        let base = assemble_diff_pair(&w, sp).unwrap();
+        let mut placer = DpMeanderPlacer::start(&w, &env(), sp, p(5_000_000, 0), settings(60_000_000)).expect("a placer");
+        let orig = placer.orig_path_length();
+        assert!((orig - (mm(20.0) + mm(25.0) + Nm::new((5_000_000.0 * std::f64::consts::FRAC_PI_2) as i64))).abs() < um(2.0), "P is the longer: {orig}");
+        assert!(placer.do_move(p(25_000_000, 25_000_000)));
+        let t = placer.tuned();
+        let corner_arc = |c: &ShapeLineChain, r: f64| c.arcs().iter().any(|a| (a.center().x - mm(20.0)).abs() < um(1.0) && (a.center().y - mm(5.0)).abs() < um(1.0) && (a.radius() - r).abs() < 1_000.0);
+        assert!(corner_arc(&t.tuned_p, 5_000_000.0), "P keeps its corner arc: {:?}", t.tuned_p.arcs());
+        assert!(corner_arc(&t.tuned_n, 4_600_000.0), "N keeps its corner arc: {:?}", t.tuned_n.arcs());
+        let len = placer.tuning_length_result();
+        assert!(len > orig + mm(5.0), "the pair was lengthened: {len} from {orig}");
+        assert!((len - mm(60.0)).abs() < mm(0.1), "{len}");
+        assert_eq!(placer.tuning_status(), TuningStatus::Tuned);
+        // the pair keeps the pitch where it is coupled: the meandered P is 0.4 mm from N
+        let d = t.tuned_p.points().iter().map(|&q| (0..t.tuned_n.segment_count()).map(|i| t.tuned_n.c_segment(i).distance(q)).min().unwrap()).min().unwrap();
+        assert!((d - mm(0.4)).abs() < um(3.0), "closest approach {d}");
+        let _ = base;
+    }
+
+    /// F4-2: `MEANDER_SKEW_PLACER::Start` takes an arc of the pair too; the skew of the arc pair is the length P has more than N round the corner.
+    #[test]
+    fn the_skew_of_a_pair_is_set_up_from_an_arc() {
+        let (w, _, ap, an) = arc_board();
+        let setup = skew_setup(&w, &env(), an).expect("a skew setup from the N arc");
+        assert!(!setup.own_is_p);
+        let skew = setup.coupled_length - setup.own_length;
+        // P is 0.4 mm longer on the straights (it ends 0.4 mm further) and 0.4 mm x pi/2 longer round the corner
+        let expected = Nm::new((400_000.0 * std::f64::consts::FRAC_PI_2) as i64);
+        assert!((skew - expected).abs() < um(2.0), "{skew} vs {expected}");
+        assert!(skew_setup(&w, &env(), ap).expect("from the P arc").own_is_p);
+        let mut st = MeanderSettings::default();
+        st.spacing = mm(1.0);
+        st.set_target_skew(0);
+        st.keep_endpoints = true;
+        let mut placer = crate::meander_placer::MeanderPlacer::start_skew(&w, &env(), an, p(24_600_000, 5_000_000), st, setup.coupled_length, setup.coupled_delay).expect("a skew placer on the arc");
+        assert!(placer.do_move(p(24_600_000, 25_000_000)));
+        assert!(placer.tuning_length_result().abs() <= um(100.0), "N lengthened to P: skew {}", placer.tuning_length_result());
+        assert_eq!(placer.tuning_status(), TuningStatus::Tuned);
+    }
+
+    /// `DP_MEANDER_PLACER::Start`: each net counts the pad-to-die length of its own pads (`m_padToDieLengthP`, `m_padToDieLengthN`), the pair being its longer
+    /// net; the delay of N takes P's pad-to-die delay, as KiCad 8303b2ad's `origPathDelay` adds it (`totalN = m_padToDieDelayP + lineDelay( m_tunedPathN, .. )`).
+    #[test]
+    fn each_net_of_a_pair_counts_the_pad_to_die_length_of_its_pads() {
+        let (w, sp, _, _) = arc_board();
+        let mut e = env();
+        e.pad_to_die = [("J1.2".to_string(), (mm(3.0), 5_000_000)), ("U1.2".to_string(), (mm(1.0), 0)), ("J1.1".to_string(), (Nm::ZERO, 2_000_000))].into();
+        let placer = DpMeanderPlacer::start(&w, &e, sp, p(5_000_000, 0), settings(60_000_000)).expect("a placer");
+        let (lp, ln) = placer.net_lengths();
+        let plain = DpMeanderPlacer::start(&w, &env(), sp, p(5_000_000, 0), settings(60_000_000)).unwrap().net_lengths();
+        assert_eq!((lp, ln), (plain.0, plain.1 + mm(4.0)));
+        assert_eq!(placer.orig_path_length(), ln, "N is the longer now");
+        assert_eq!(placer.orig_path_delay(), 2_000_000, "both nets' delays carry P's 2 ps (KiCad's), none has a profile");
+        // the skew tuner sees the same lengths
+        let setup = skew_setup(&w, &e, sp).unwrap();
+        assert_eq!((setup.own_length, setup.coupled_length), (lp, ln));
+        assert_eq!((setup.own_delay, setup.coupled_delay), (2_000_000, 5_000_000), "each net its own pads' delay (`MEANDER_SKEW_PLACER::Start`)");
     }
 
     #[test]

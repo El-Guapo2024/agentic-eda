@@ -117,6 +117,10 @@ pub struct RoutingSettings {
     /// arc), 45 or 90 degrees (`DIRECTION_45::BuildInitialTrace`). Also read by the optimizer's merge (its bypasses are built in this mode) and
     /// for smart pads (45-degree modes only). Default `MITERED_45`.
     pub corner_mode: crate::direction45::CornerMode,
+    /// `TOOL_BASE::pickSingleItem`'s `maxSlopRadius = std::max( m_gridHelper->GetGrid().x, m_gridHelper->GetGrid().y )`: with nothing exactly under the
+    /// cursor, what the route starts or ends on may be this far from it -- the board editor's grid, which the router is not otherwise told; the studio
+    /// sends it with the settings (`grab_radius`, UI-LEFT R7, findings p5 F2-11). Not a KiCad setting. Default 0.5 mm, what stood in for the grid before.
+    pub grab_radius: Nm,
 }
 
 impl RoutingSettings {
@@ -153,6 +157,7 @@ impl Default for RoutingSettings {
             optimize_entire_dragged_track: false,
             auto_posture: true,
             corner_mode: crate::direction45::CornerMode::Mitered45,
+            grab_radius: Nm::new(500_000),
         }
     }
 }

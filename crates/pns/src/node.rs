@@ -1416,6 +1416,94 @@ impl Node {
         best.map(|(id, p, _)| (id, p))
     }
 
+    /// `ROUTER::QueryHoverItems( aP, aSlopRadius )`: every item whose shape is under `pos` (`slop` 0: `NODE::HitTest`) or within `slop` of it (a 1 nm
+    /// segment at the point queried with `m_overrideClearance = aSlopRadius`), on any layer; virtual vias left out. In the item table's order.
+    pub fn hover_items(&self, pos: Point, slop: Nm) -> Vec<ItemId> {
+        let probe = Shape::Circle { c: pos, r: Nm::ZERO };
+        let mut out = Vec::new();
+        for id in self.index.query(probe.bbox(slop)) {
+            let Some(item) = self.items.get(&id) else { continue };
+            if item.is_virtual() {
+                continue;
+            }
+            let shape = item.shape(item.layers().start());
+            let hit = if slop > Nm::ZERO { probe.clearance_to(&shape).0 <= slop } else { shape.collides(&probe, Nm::ZERO).is_some() };
+            if hit {
+                out.push(id);
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// `TOOL_BASE::pickSingleItem( aWhere, aNet, aLayer, aIgnorePads = false, aAvoidItems )`: what is at `pos` -- first exactly under it, then (with nothing
+    /// there) within `slop`, the grab radius (`maxSlopRadius`, the grid; [`crate::settings::RoutingSettings::grab_radius`]) -- ranked as KiCad ranks it:
+    /// a routable pad or via on the layer `tl` nearest by its centre (`prioritized[0]`), a track or arc there nearest by its nearer end (`[1]`), then
+    /// the same kinds on any layer (`[2]`, `[3]`); with `net` (`aNet`) only items of that net, and with `layer` (`aLayer >= 0`) only one on that layer is
+    /// returned. **Not ported:** a free pad under the cursor and an item of no net in Highlight collisions (`prioritized[0]` / `[4]`'s special cases), the
+    /// layers' visibility and high contrast (the studio's). UI-LEFT R7, findings p5 F2-11.
+    pub fn pick_single_item(&self, pos: Point, net: Option<&Net>, layer: Option<i32>, tl: i32, slop: Nm, avoid: &[ItemId]) -> Option<ItemId> {
+        let sq = |a: Point| (a.x - pos.x).area(a.x - pos.x) + (a.y - pos.y).area(a.y - pos.y);
+        for slop in [Nm::ZERO, slop] {
+            let mut prioritized: [Option<(i128, ItemId)>; 4] = [None; 4];
+            for id in self.hover_items(pos, slop) {
+                let Some(item) = self.items.get(&id) else { continue };
+                let routable = match item {
+                    Item::Solid(s) => s.routable() && !s.edge,
+                    _ => true,
+                };
+                if !routable || avoid.contains(&id) || net.is_some_and(|n| !same_net(item.net(), n)) {
+                    continue;
+                }
+                let on_tl = item.layers().overlaps_layer(tl);
+                let (d, any, here) = match item {
+                    Item::Via(v) => (sq(v.pos), 2, 0),
+                    Item::Solid(s) => (sq(s.pos), 2, 0),
+                    _ => (item.track_ends().map_or(i128::MAX, |(a, b)| sq(a).min(sq(b))), 3, 1),
+                };
+                let mut keep = |k: usize| {
+                    if prioritized[k].is_none_or(|(bd, bid)| (d, id) < (bd, bid)) {
+                        prioritized[k] = Some((d, id));
+                    }
+                };
+                keep(any);
+                if on_tl {
+                    keep(here);
+                }
+            }
+            if prioritized.iter().any(Option::is_some) {
+                return prioritized.iter().flatten().map(|(_, id)| *id).find(|id| layer.is_none_or(|l| self.items.get(id).is_some_and(|it| it.layers().overlaps_layer(l))));
+            }
+        }
+        None
+    }
+
+    /// `TOOL_BASE::snapToItem( aItem, aP )`: where a cursor at `p` lands on the item [`Self::pick_single_item`] picked -- a pad's anchor point nearest it
+    /// (its centre when it has none), a via's centre, a track's end when `p` is within half the width of one (`distA_sq < w_sq || distB_sq < w_sq`),
+    /// else the point of the track nearest `p` (`AlignToSegment`, `AlignToArc`; the grid alignment along it is the studio's), with the track: the route
+    /// starts or ends in the middle of it.
+    pub fn snap_to_item(&self, id: ItemId, p: Point) -> Option<(Point, Option<ItemId>)> {
+        let sq = |a: Point| (a.x - p.x).area(a.x - p.x) + (a.y - p.y).area(a.y - p.y);
+        match self.items.get(&id)? {
+            Item::Solid(s) => Some((s.anchor_points.iter().copied().min_by_key(|a| sq(*a)).unwrap_or(s.pos), None)),
+            Item::Via(v) => Some((v.pos, None)),
+            item => {
+                let (a, b) = item.track_ends()?;
+                let w_sq = (item.width() / 2).area(item.width() / 2);
+                if sq(a) < w_sq || sq(b) < w_sq {
+                    return Some((if sq(a) < sq(b) { a } else { b }, None));
+                }
+                let on = match item {
+                    Item::Segment(s) => eda_drc::kimath::Seg::new(s.a, s.b).nearest_point(p),
+                    Item::Arc(arc) => arc.arc.nearest_point(p),
+                    _ => return None,
+                };
+                // the point nearest may be an end itself: then it is a plain end, not the middle of the track
+                Some((on, (on != a && on != b).then_some(id)))
+            }
+        }
+    }
+
     /// Nearest item whose own *shape* (not just its anchor points) comes
     /// within `max_dist` of `pos` -- for hit-testing a drag-start click
     /// anywhere along a track, not just at its ends. [`Self::nearest_anchor`]

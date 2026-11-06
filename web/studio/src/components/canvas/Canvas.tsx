@@ -58,7 +58,7 @@ import { SELECT_NET_TITLE, selectNetLabels, snapViaPosition, viaNet, type ViaPla
 import { startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { clearRouteQueue } from "./routeQueue";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
-import { routeMove, routeDragMove, dpMove, fetchState, setRouterEnteredGroup } from "../../api/client";
+import { routeMove, routeDragMove, dpMove, fetchState, setRouterEnteredGroup, setRouterGrid } from "../../api/client";
 import { finishInlineDrag } from "./dragging";
 import { dragStateFromPreview } from "../../kicad-port/dragTool";
 import { startDiffPairRoute, fixDiffPairRoute, finishDiffPairRoute } from "./diffPairRouting";
@@ -317,6 +317,8 @@ export function Canvas() {
   useEffect(() => () => snap.reset(), [snap]);
   // the router's sessions start with the entered group, which their new items join (r5 R5-2)
   useEffect(() => setRouterEnteredGroup(state.enteredGroupId), [state.enteredGroupId]);
+  // the router's grab radius is the grid (`pickSingleItem`'s `maxSlopRadius`, UI-LEFT R7)
+  useEffect(() => setRouterGrid(state.gridNm), [state.gridNm]);
 
   // The canvas's backing size tracks its container's actual box, not a
   // value computed once at mount -- a side panel opening/closing or the
@@ -886,7 +888,7 @@ export function Canvas() {
           const width = chosenTrackWidthOf(board.routing?.track_width_presets ?? [], state.currentTrackWidthIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia.trackNm);
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
           // `m_startWithVia` (V before the route started, actions/routerViaActions.ts): the route starts with a via armed, and the flag is spent
-          const startWithVia = state.pcbx.startWithVia ? { size: chosenViaOf("through", viaChoiceOf(state)), pair: layerPairsOf(board, state.pcbx.layerPairs).current } : undefined;
+          const startWithVia = state.pcbx.startWithVia ? { size: chosenViaOf("through", viaChoiceOf(state)), pair: layerPairsOf(board, state.pcbx.layerPairs).current, copper: board.layers } : undefined;
           if (startWithVia) dispatch({ type: "PCBX", patch: { startWithVia: false } });
           void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked(), state.bcx.autoTrackWidth, startWithVia);
           return;
@@ -907,7 +909,7 @@ export function Canvas() {
           const custom = state.pcbx.customDiffPair;
           const dims = chosenDiffPair(board.routing?.diff_pair_presets ?? [], state.pcbx.diffPairIndex, state.pcbx.useCustomDiffPair, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : null);
           // `m_startWithVia` for a pair too (R7-R3), spent at the start
-          const startWithVia = state.pcbx.startWithVia ? { size: chosenViaOf("through", viaChoiceOf(state)), pair: layerPairsOf(board, state.pcbx.layerPairs).current } : undefined;
+          const startWithVia = state.pcbx.startWithVia ? { size: chosenViaOf("through", viaChoiceOf(state)), pair: layerPairsOf(board, state.pcbx.layerPairs).current, copper: board.layers } : undefined;
           if (startWithVia) dispatch({ type: "PCBX", patch: { startWithVia: false } });
           void startDiffPairRoute(sx, sy, layer, dispatch, dims, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), state.bcx.autoTrackWidth, startWithVia);
           return;

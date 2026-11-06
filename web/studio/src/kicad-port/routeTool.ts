@@ -56,6 +56,10 @@ export interface RouteDrawState {
   sizes?: RouteSizesInfo;
   /** `m_TempOverrideTrackWidth`: a width was chosen while routing (W, the width menu), so the route no longer keeps the width it inherited. */
   widthOverride?: boolean;
+  /** The router's sizes' layer pairs (`SIZES_SETTINGS::m_layerPairs`, `PairedLayer`): the board's layer pair from the start (`prepareInteractive`), then
+   *  each via command's own (`handleLayerSwitch`: `ClearLayerPairs(); AddLayerPair( currentLayer, targetLayer )`) -- read by Place Through Via's implicit
+   *  target (kicad-port/routerVia.ts `planViaCommand`, UI-LEFT R5). */
+  sizesPairs?: Record<string, string>;
 }
 
 /** The `DrawState` "route" patch for a successful `RoutePreview` reply,

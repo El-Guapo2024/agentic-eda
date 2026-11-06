@@ -6,7 +6,7 @@
 
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillPreviewReply, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm, SchSetupReply } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillPreviewReply, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RouterEventSizes, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm, SchSetupReply } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { PcbQueryRequest, PcbQueryResponse } from "../kicad-port/pcbQuery";
 import type { SchMovePatch } from "./schEditTypes";
@@ -620,6 +620,19 @@ export function setRouterEnteredGroup(group: string | null): void {
   routerEnteredGroup = group;
 }
 
+/** The board editor's grid, sent as the router's grab radius with each session's settings (`TOOL_BASE::pickSingleItem`: `maxSlopRadius = std::max(
+ *  m_gridHelper->GetGrid().x, m_gridHelper->GetGrid().y )`, UI-LEFT R7): what a route or a drag starts or ends on may be this far from the cursor. The
+ *  canvas keeps it current. */
+let routerGrabRadius: number | null = null;
+export function setRouterGrid(gridNm: number | null): void {
+  routerGrabRadius = gridNm != null && gridNm > 0 ? Math.round(gridNm) : null;
+}
+
+/** `routerSettingsToWire` with the grab radius. */
+function routerWire(settings: RouterSettings): Record<string, string | boolean | number> {
+  return { ...routerSettingsToWire(settings), ...(routerGrabRadius != null ? { grab_radius: routerGrabRadius } : {}) };
+}
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return (await r.json()) as T;
@@ -631,19 +644,20 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 /** `width` undefined: the width list is on "use net class" (`UseNetClassTrack()`), and the server takes the start net's width through the rules (`ImportSizes`). */
 /** `autoTrackWidth`: "Use Starting Track Width" (`m_UseConnectedTrackWidth`): the width of the track the start is on or joined to wins over `width` (the server's default: on). */
 export function routeStart(x: Nm, y: Nm, layer: string, width: Nm | undefined, settings: RouterSettings, autoTrackWidth?: boolean): Promise<RoutePreview> {
-  return postJson("/api/route/start", { x, y, layer, width, auto_track_width: autoTrackWidth, settings: routerSettingsToWire(settings), group: routerEnteredGroup ?? undefined });
+  return postJson("/api/route/start", { x, y, layer, width, auto_track_width: autoTrackWidth, settings: routerWire(settings), group: routerEnteredGroup ?? undefined });
 }
 
 /** `OK` in Interactive Router Settings while a route, drag or diff pair is running: the new `ROUTING_SETTINGS` apply from the next move (`ok: false` when none is: the studio keeps them for the next one). */
 export function routeSetSettings(settings: RouterSettings): Promise<{ ok: boolean }> {
-  return postJson("/api/route/settings", { settings: routerSettingsToWire(settings) });
+  return postJson("/api/route/settings", { settings: routerWire(settings) });
 }
 
 /** `flipPosture`/`width` fold in the `/` and `W` hotkeys -- see
  * `Router::flip_posture`'s own doc comment on why they ride along with the
  * next cursor move instead of being their own round trip. */
-export function routeMove(x: Nm, y: Nm, flipPosture?: boolean, width?: Nm): Promise<RoutePreview> {
-  return postJson("/api/route/move", { x, y, flip_posture: flipPosture, width });
+/** `useNetClass` with `width`: the width is the list's first entry, the net class's (`UseNetClassTrack()`, which `updateSizesAfterRouterEvent` reads). */
+export function routeMove(x: Nm, y: Nm, flipPosture?: boolean, width?: Nm, useNetClass?: boolean): Promise<RoutePreview> {
+  return postJson("/api/route/move", { x, y, flip_posture: flipPosture, width, ...(width != null && useNetClass != null ? { use_net_class: useNetClass } : {}) });
 }
 
 export function routeFix(x: Nm, y: Nm): Promise<RouteFixReply> {
@@ -661,8 +675,15 @@ export function routeToggleVia(enabled: boolean, diameter?: Nm, drill?: Nm, toLa
 }
 
 /** A layer key while routing (`ROUTER_TOOL::onLayerCommand`, R6-R3): `switched` when the head moved to `layer` (`ROUTER::SwitchLayer`); not switched, the caller arms a via to it. */
-export function routeSwitchLayer(layer: string): Promise<{ ok: boolean; message?: string; switched?: boolean }> {
-  return postJson("/api/route/layer", { layer });
+export function routeSwitchLayer(layer: string, at?: { x: Nm; y: Nm }): Promise<{ ok: boolean; message?: string; switched?: boolean; sizes?: RouterEventSizes | null }> {
+  // `at`: the cursor, where `updateSizesAfterRouterEvent` asks the sizes again on the new layer (UI-LEFT R5)
+  return postJson("/api/route/layer", { layer, ...(at ? { x: Math.round(at.x), y: Math.round(at.y) } : {}) });
+}
+
+/** `ROUTER::GetNearestRatnestAnchor` with the head at `(x, y)`, for the route or the pair in progress: Place Through Via's implicit target is the first of
+ *  `layers` (`handleLayerSwitch`, UI-LEFT R5). `found` false when there is none. */
+export function routeRatsnestAnchor(x: Nm, y: Nm): Promise<{ ok: boolean; message?: string; found?: boolean; at?: [Nm, Nm]; layers?: [string, string] }> {
+  return postJson("/api/route/ratsnest_anchor", { x: Math.round(x), y: Math.round(y) });
 }
 
 export function routeFinish(x: Nm, y: Nm): Promise<CmdReply> {
@@ -717,14 +738,14 @@ export function routeSetMode(mode: RouteMode): Promise<{ ok: boolean }> {
  * (`ROUTER_TOOL::performDragging`'s dialog): without it the backend refuses one, with `locked: true` in the reply. */
 export function routeDragStart(x: Nm, y: Nm, layer: string, settings?: RouterSettings, freeAngle?: boolean, dragLocked?: boolean): Promise<DragPreview> {
   // The backend reads whole nanometres (`as_i64`): a fractional cursor position would silently become (0, 0) there -- "nothing to drag there".
-  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerSettingsToWire(settings) : undefined, free_angle: freeAngle ? true : undefined, drag_locked: dragLocked ? true : undefined, group: routerEnteredGroup ?? undefined });
+  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerWire(settings) : undefined, free_angle: freeAngle ? true : undefined, drag_locked: dragLocked ? true : undefined, group: routerEnteredGroup ?? undefined });
 }
 
 /** `ROUTER::StartDragging( aP, ITEM_SET )` of a selection (`ROUTER_TOOL::InlineDrag`): `footprints` is `COMPONENT_DRAGGER` -- the footprints move, the tracks on
  * their pads follow; `warp` ("Warp mouse to origin of moved object", on by default) starts a drag of one footprint at its anchor -- and `tracks` (two or more)
  * `MULTI_DRAGGER`. The reply's `start` is where the drag starts. */
 export function routeDragStartGroup(x: Nm, y: Nm, layer: string, group: { footprints?: string[]; tracks?: string[]; warp?: boolean }, settings?: RouterSettings): Promise<DragPreview> {
-  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerSettingsToWire(settings) : undefined, footprints: group.footprints, tracks: group.tracks, warp: group.warp === false ? false : undefined, group: routerEnteredGroup ?? undefined });
+  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerWire(settings) : undefined, footprints: group.footprints, tracks: group.tracks, warp: group.warp === false ? false : undefined, group: routerEnteredGroup ?? undefined });
 }
 
 export function routeDragMove(x: Nm, y: Nm): Promise<DragPreview> {
@@ -750,14 +771,15 @@ export function dpStart(x: Nm, y: Nm, layer: string, dims?: { width: Nm; gap: Nm
     gap: dims ? Math.round(dims.gap) : undefined,
     via_gap: dims?.viaGap !== undefined ? Math.round(dims.viaGap) : undefined,
     auto_track_width: autoTrackWidth,
-    settings: settings ? routerSettingsToWire(settings) : undefined,
+    settings: settings ? routerWire(settings) : undefined,
     group: routerEnteredGroup ?? undefined,
   });
 }
 
 /** `ROUTER_TOOL::DpDimensionsDialog` while a pair is being routed: the new width, gap and via gap apply from the next move (`ok: false` when no pair is running). */
-export function dpSetDims(width: Nm, gap: Nm, viaGap?: Nm): Promise<{ ok: boolean }> {
-  return postJson("/api/route/dp_dims", { width: Math.round(width), gap: Math.round(gap), via_gap: viaGap !== undefined ? Math.round(viaGap) : undefined });
+/** `useNetClass`: the pair list's first entry (`UseNetClassDiffPair()`, which `updateSizesAfterRouterEvent` reads). */
+export function dpSetDims(width: Nm, gap: Nm, viaGap?: Nm, useNetClass?: boolean): Promise<{ ok: boolean }> {
+  return postJson("/api/route/dp_dims", { width: Math.round(width), gap: Math.round(gap), via_gap: viaGap !== undefined ? Math.round(viaGap) : undefined, ...(useNetClass != null ? { use_net_class: useNetClass } : {}) });
 }
 
 export function dpMove(x: Nm, y: Nm, flipPosture?: boolean): Promise<DiffPairPreview> {
@@ -769,8 +791,15 @@ export function dpFix(x: Nm, y: Nm): Promise<DpFixReply> {
 }
 
 /** `V` for a pair (`ROUTER::ToggleViaPlacement`): the head ends in a pair of vias, and the next fix places them and goes on from them on `toLayer`. */
-export function dpToggleVia(enabled: boolean, toLayer?: string, diameter?: Nm, drill?: Nm): Promise<{ ok: boolean }> {
-  return postJson("/api/route/dp_via", { enabled, to_layer: toLayer, diameter, drill });
+/** `viaType`: the router's blind/buried and micro via commands in the pair tool (`handleLayerSwitch`, UI-LEFT R2); a through via without it. */
+export function dpToggleVia(enabled: boolean, toLayer?: string, diameter?: Nm, drill?: Nm, viaType?: string): Promise<{ ok: boolean; message?: string }> {
+  return postJson("/api/route/dp_via", { enabled, to_layer: toLayer, diameter, drill, ...(viaType && viaType !== "through" ? { via_type: viaType } : {}) });
+}
+
+/** AttemptFinish (`F`) while a pair is routed (`ROUTER::Finish` with the P line as the trace, UI-LEFT R2): the pair is finished on the coupled pair at the
+ *  nearest unconnected anchor (`finished`), or goes on with its end where it got (`warp`, `preview`); it is never finished at the cursor. */
+export function dpAttemptFinish(x: Nm, y: Nm): Promise<{ ok: boolean; message?: string; finished?: boolean; warp?: [Nm, Nm]; preview?: DiffPairPreview }> {
+  return postJson("/api/route/dp_attempt_finish", { x: Math.round(x), y: Math.round(y) });
 }
 
 /** Route From Other End for a pair (`ROUTER::ContinueFromEnd` restarts the placer of the same mode, Ctrl+E): what the pair has fixed is committed and a new pair starts at the far end of the connection, heading for where this one's head ended. The reply is the new pair's preview, with `committed` and `from`. */

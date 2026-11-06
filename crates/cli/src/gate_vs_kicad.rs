@@ -241,6 +241,55 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// UI-LEFT R2 (findings p5 F4-2: `DP_PRIMITIVE_PAIR` and `BuildFromPrimitivePair` take `ARC_T`): on `dp_test` with two concentric arc tracks of /D+ and
+    /// /D- (radii 3 and 3.45 mm, the pair's pitch apart) in the open board, a pair started on the arcs goes on from their free ends in Walk around and in
+    /// Shove, and kicad-cli finds no clearance, short, crossing, hole, edge, diff-pair gap or track width violation the board did not have; the arcs are
+    /// `(arc ..)` tracks of the file and the pair's legs start on their ends.
+    #[test]
+    fn a_pair_from_two_arc_ends_passes_kicad_clis_drc() {
+        if !kicad_available() {
+            return;
+        }
+        let Some((mut design, model)) = pair_board() else {
+            eprintln!("KiCad's QA corpus not found; skipping");
+            return;
+        };
+        let p = |x, y| eda_model::ir::Point { x, y };
+        let (c, s45) = (p(mm(120.0), mm(115.0)), std::f64::consts::FRAC_1_SQRT_2);
+        let arc = |id: &str, net: &str, r: Nm| {
+            let start = p(c.x, c.y - r);
+            let mid = p(c.x - Nm::kiround(r.as_f64() * s45), c.y - Nm::kiround(r.as_f64() * s45));
+            eda_model::ir::Track { id: id.into(), ..eda_model::ir::Track::new_arc(net.into(), "F.Cu".into(), mm(0.2), start, mid, p(c.x - r, c.y)) }
+        };
+        let rt = design.routing.as_mut().unwrap();
+        rt.tracks.push(arc("arc_dp", "/D+", mm(3.0)));
+        rt.tracks.push(arc("arc_dn", "/D-", mm(3.45)));
+        design.assign_missing_ids();
+        let dir = scratch("pair_arcs_drc");
+        let baseline = pair_counts(&design, &model, &dir);
+        eprintln!("the board with the arcs: {baseline:?}");
+        let (from_p, from_n) = (p(c.x, c.y - mm(3.0)), p(c.x, c.y - mm(3.45)));
+        for (mode, at) in [(eda_pns::settings::Mode::Walkaround, p(mm(127.0), mm(108.0))), (eda_pns::settings::Mode::Shove, p(mm(124.0), mm(108.0)))] {
+            let mut router = eda_pns::router::Router::new(&design, &model);
+            router.settings.mode = mode;
+            router.start_diff_pair(from_p, "F.Cu").unwrap_or_else(|e| panic!("{mode:?}: the pair starts on the arcs: {e}"));
+            let pv = router.diff_pair_preview(at).expect("a pair is running");
+            assert!(!pv.colliding && pv.head_a.point_count() >= 2, "{mode:?}: the pair does not fit: {pv:?}");
+            assert_eq!((pv.head_a.first(), pv.head_b.first()), (Some(from_p), Some(from_n)), "{mode:?}: it leaves the arcs' free ends");
+            let commit = router.finish_diff_pair(at).expect("a pair that fits commits");
+            let after = apply_commit(&design, &commit);
+            let counts = pair_counts(&after, &model, &dir);
+            eprintln!("{mode:?} -> {at:?} ({} tracks): {counts:?}", commit.tracks.len());
+            for kind in ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "diff_pair_gap_out_of_range", "track_width"] {
+                let (was, now) = (baseline.get(kind).copied().unwrap_or(0), counts.get(kind).copied().unwrap_or(0));
+                assert!(now <= was, "{mode:?}: kicad-cli reports {now} {kind} (the board had {was}) after the pair from the arcs");
+            }
+            let text = eda_kicad::export_kicad_pcb(&after, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap_or_else(|e| panic!("write: {e:?}"));
+            assert!(text.matches("(arc").count() >= 2, "{mode:?}: the arcs are (arc ..) tracks of the file");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_gate_never_fails_a_pair_kicad_cli_reports_clean_on_mcu30() {
         if !kicad_available() {
