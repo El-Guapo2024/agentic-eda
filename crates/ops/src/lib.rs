@@ -1301,6 +1301,14 @@ pub enum Cmd {
     },
     /// "Remove 3D model" (`OnRemove3DModel`): the model at `index` (0-based) leaves the list. Refused for a position the list has none at.
     RemoveBoardModel { part: String, index: usize },
+    /// The 3D Models tab's Extruded 3D Body box (`PANEL_FP_PROPERTIES_3D_MODEL::TransferDataFromWindow`, [`fp_models`]): the footprint `part`'s body becomes `body` (`None`: the box
+    /// off, `ClearExtrudedBody`), its layer the top side's. Refused, in KiCad's words, for a height of zero or less and a standoff not below the height, and when nothing changes;
+    /// one undo step.
+    SetExtrudedBody {
+        part: String,
+        #[serde(default)]
+        body: Option<eda_model::extruded_body::ExtrudedBody>,
+    },
     /// Put the model at `from` where `to` is (0-based), the others keeping their order; refused for a position the list has none at.
     MoveBoardModel { part: String, from: usize, to: usize },
     /// Migrate 3D Models (`DIALOG_MIGRATE_3D_MODELS::OnReplaceClick`): every model of every footprint on the board whose file name is a key of `replacements` takes the name it maps to --
@@ -2641,6 +2649,7 @@ impl Cmd {
             Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
+            Cmd::SetExtrudedBody { part, .. } => vec![part.as_str()],
             Cmd::MigrateBoardModels { replacements } => replacements.keys().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
@@ -3367,6 +3376,7 @@ impl<'a> Board<'a> {
             Cmd::SetBoardModels { part, models } => self.set_board_models(part, models),
             Cmd::AddBoardModel { part, model, at } => self.add_board_model(part, model, *at),
             Cmd::RemoveBoardModel { part, index } => self.remove_board_model(part, *index),
+            Cmd::SetExtrudedBody { part, body } => self.set_extruded_body(part, body.as_ref()),
             Cmd::MoveBoardModel { part, from, to } => self.move_board_model(part, *from, *to),
             Cmd::EditBoardModel { part, index, path, offset, scale, rotate, opacity, show } => {
                 self.edit_board_model(part, *index, &eda_model::fp_models::ModelPatch { path: path.clone(), offset: *offset, scale: *scale, rotate: *rotate, opacity: *opacity, show: *show })

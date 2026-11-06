@@ -339,6 +339,48 @@ export interface Part {
   paste_margin_ratio?: number;
   /** The footprint was read from a board file, whose tokens of it are kept (the footprint's paste margins are set there). */
   from_board_file?: boolean;
+  /** The footprint's Extruded 3D Body (`EXTRUDED_3D_BODY`, crates/cli/src/extruded_body_api.rs `body_json`); absent when it has none. */
+  extruded_body?: ExtrudedBodyInfo;
+  /** A back footprint whose `models` are held half a turn from its board file's numbers (read by a reader of before 2026-10-25): the 3D Models tab shows them turned back
+   *  (kicad-port/fpModels.ts `tabRows`). Absent = false. */
+  models_turned?: boolean;
+}
+
+/** A body as `set_extruded_body` sends it (eda_model::extruded_body::ExtrudedBody; what is left out is KiCad's default). */
+export interface ExtrudedBodyCmd {
+  height: Nm;
+  standoff?: Nm;
+  layer?: string;
+  material?: ExtrudedBodyInfo["material"];
+  /** Its own colour, 0..1; null or absent: the material's (`COLOR4D::UNSPECIFIED`). */
+  color?: [number, number, number, number] | null;
+  offset?: [number, number, number];
+  scale?: [number, number, number];
+  rotate?: [number, number, number];
+  show?: boolean;
+}
+
+/** `Part.extruded_body`: the body as the footprint has it, and the outline KiCad's 3D view extrudes (`GetExtrusionOutline`) with the pins (`GetExtrusionPinOutline`), board nm. */
+export interface ExtrudedBodyInfo {
+  /** `m_height`, `m_standoff`: nm. */
+  height: Nm;
+  standoff: Nm;
+  /** `auto`, `pad_bbox` or a layer's name, the footprint's own side's (`F.CrtYd`, `F.Fab`, `F.SilkS`). */
+  layer: string;
+  material: "plastic" | "matte" | "metal" | "copper";
+  /** The colour it is drawn in, 0..1 (its own, else its material's: `GetDefaultColor`); `color_set` says it is its own. */
+  color: [number, number, number, number];
+  color_set: boolean;
+  /** Millimetres; scale; degrees. */
+  offset: [number, number, number];
+  scale: [number, number, number];
+  rotate: [number, number, number];
+  show: boolean;
+  /** The footprint's position, nm: what the body's rotation and scale are about. */
+  at: [Nm, Nm];
+  /** Polygons, each its outline then its holes, each a list of `[x, y]` nm, before the body's own transform (`ApplyExtrusionTransform`). */
+  outline: Array<Array<Array<[Nm, Nm]>>>;
+  pins: Array<Array<Array<[Nm, Nm]>>>;
 }
 
 /** `Part.zone`: what Footprint Properties and Pad Properties show in their zone fields. `null` is "inherited". */
@@ -2095,6 +2137,9 @@ export type Cmd =
    * refused too. One undo step each.
    */
   | { op: "set_board_models"; part: string; models: Model3dCmd[] }
+  /** The 3D Models tab's Extruded 3D Body box (`PANEL_FP_PROPERTIES_3D_MODEL::TransferDataFromWindow`, crates/ops/src/fp_models.rs `set_extruded_body`): the footprint's body, or none (`null`: the box off); one
+   *  undo step. Lengths nm, the layer the top side's. */
+  | { op: "set_extruded_body"; part: string; body: ExtrudedBodyCmd | null }
   | { op: "add_board_model"; part: string; model: Model3dCmd; at?: number }
   | { op: "remove_board_model"; part: string; index: number }
   | { op: "move_board_model"; part: string; from: number; to: number }

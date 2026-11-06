@@ -259,7 +259,7 @@ export function Migrate3dModelsDialog() {
         </div>
       </div>
       {pick === "folder" && <Model3dChooserDialog mode="folder" title="Add 3D Model Search Directory" onChoose={(dir) => void addDirectory(dir)} onCancel={() => setPick(null)} />}
-      {pick === "file" && <Model3dChooserDialog only="step" title="Select 3D Model File" onChoose={openFile} onCancel={() => setPick(null)} />}
+      {pick === "file" && <Model3dChooserDialog only="candidates" title="Select 3D Model File" onChoose={openFile} onCancel={() => setPick(null)} />}
     </div>
   );
 }

@@ -20,11 +20,11 @@ import { ActionIcon } from "../Toolbar";
 import type { Viewer3DApi } from "./Viewer3D";
 
 const file = toolbarData as unknown as Viewer3dToolbarsFile;
-const own = new Map<string, Viewer3dAction>(file.actions.map((a) => [a.name, a]));
+const own = new Map<string, Viewer3dAction>([...file.actions, ...(file.otherActions ?? [])].map((a) => [a.name, a]));
 const common = new Map((actionsData as ActionsFile).actions.map((a) => [a.name, a]));
 
-/** What a toolbar item shows: its label, tooltip, hotkey and KiCad icon, from the 3D action table or, for the shared zoom actions, actions.json. */
-function describe(name: string): { label: string; tooltip: string; hotkey: string | null; icon: string | null } {
+/** What a toolbar item shows: its label, tooltip, hotkey and KiCad icon, from the 3D action table or, for the shared zoom actions, actions.json. The right-click menu shows the same. */
+export function describe(name: string): { label: string; tooltip: string; hotkey: string | null; icon: string | null } {
   const a = own.get(name);
   if (a) return { label: a.label, tooltip: a.tooltip, hotkey: a.hotkey, icon: a.icon };
   const c = common.get(name);

@@ -674,6 +674,11 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
     // The embedded files, before the models as KiCad writes them.
     crate::embedded::write_owner(&mut out, embedded, 1, false);
 
+    // The Extruded 3D Body, after the embedded files and before the models ("Save extruded 3D body info.").
+    if let Some(body) = &fp.extruded_body {
+        crate::extruded_body_io::write(&mut out, body, 1);
+    }
+
     // The 3D models: the list, else the one path of an older entry, placed as it comes.
     let models: Vec<Model3d> = if fp.models3d.is_empty() { fp.model.iter().map(Model3d::identity).collect() } else { fp.models3d.clone() };
     write_models(&mut out, &models, 1);
@@ -912,6 +917,7 @@ mod tests {
             description_field: None,
             kicad: Default::default(),
             items: Default::default(),
+            extruded_body: None,
         };
 
         let text = export_kicad_mod(&fp);

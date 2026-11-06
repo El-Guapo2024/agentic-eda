@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { defaultChoices, migrateCmds, previewRow, rechoose, replacementsOf, savedSearchDirs, USER_SELECTED_SCORE, userSelectedDisplay, withPickedFile, withSearchDir, type MissingModel } from "./migrate3d";
+import { AUTO_MIGRATE_NOTICE_MS, autoMigrateNotice, defaultChoices, migrateCmds, previewRow, rechoose, replacementsOf, savedSearchDirs, USER_SELECTED_SCORE, userSelectedDisplay, withPickedFile, withSearchDir, type MissingModel } from "./migrate3d";
 
 const cand = (path: string, score = 1000) => ({ path, display: `${path.split("/").pop()}   —   dir`, score });
 const missing = (name: string, candidates: ReturnType<typeof cand>[], over: Partial<MissingModel> = {}): MissingModel => ({
@@ -64,4 +64,11 @@ test("a search folder is kept once, and the saved list is empty when the browser
   assert.deepEqual(withSearchDir(["a"], "b"), ["a", "b"]);
   assert.deepEqual(withSearchDir(["a", "b"], "a"), ["a", "b"]);
   assert.deepEqual(typeof localStorage === "undefined" ? [] : savedSearchDirs(), []);
+});
+
+test("the load notice counts the references nothing was matched to, in KiCad's words, and there is none when all were", () => {
+  assert.equal(autoMigrateNotice(0), null);
+  assert.equal(autoMigrateNotice(1), "1 WRL 3D model could not be matched to an equivalent STEP model.");
+  assert.equal(autoMigrateNotice(3), "3 WRL 3D models could not be matched to equivalent STEP models.");
+  assert.equal(AUTO_MIGRATE_NOTICE_MS, 10000);
 });

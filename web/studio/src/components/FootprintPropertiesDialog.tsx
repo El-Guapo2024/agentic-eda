@@ -14,7 +14,7 @@
 // (components/PcbGlobalEditDialogs.tsx, `ShowExchangeFootprintsDialog( aFootprint, updateMode, true )`).
 //
 // The 3D Models tab (`PANEL_FP_PROPERTIES_3D_MODEL`, components/footprint/FootprintModelsPanel.tsx) edits a copy of the footprint's list of models; OK sends it as one
-// `set_board_models` in the same batch when it differs (kicad-port/fpModels.ts `boardModelsCmds`).
+// `set_board_models` in the same batch when it differs (kicad-port/fpModels.ts `boardModelsCmds`), and the tab's Extruded 3D Body box one `set_extruded_body` (`bodyCmds`).
 //
 // The Embedded Files tab is the shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the footprint's own list; each of its edits is a verb of its own, sent at
 // once (KiCad applies it with the dialog's OK).
@@ -30,7 +30,7 @@ import { useActionRunner } from "../actions/useActionRunner";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, nmFrom, nmTo } from "../state/units";
-import { boardModelsCmds, rowsOf, type ModelRow } from "../kicad-port/fpModels";
+import { bodyCmds, bodyDraftOf, bodyDraftProblem, boardModelsCmds, tabRows, type BodyDraft, type ModelRow } from "../kicad-port/fpModels";
 import { fpOrientation } from "../kicad-port/pcbProperties";
 import { FootprintModelsPanel } from "./footprint/FootprintModelsPanel";
 import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
@@ -81,6 +81,8 @@ export function FootprintPropertiesDialog() {
   // The 3D Models tab: a copy of the footprint's list, which OK sends when it differs.
   const [tab, setTab] = useState<"general" | "models" | "embedded">("general");
   const [models, setModels] = useState<ModelRow[]>([]);
+  // and its Extruded 3D Body box (`EXTRUDED_3D_BODY`): KiCad's controls, which OK sends as one `set_extruded_body` when they changed the body
+  const [body, setBody] = useState<BodyDraft>(() => bodyDraftOf({}));
 
   // Fill the form when the dialog opens on a footprint -- not on every poll, or a keystroke would be lost to the next refresh.
   useEffect(() => {
@@ -99,7 +101,9 @@ export function FootprintPropertiesDialog() {
     setFpZone(footprintZoneForm(part));
     setPadNum(padNumbers(part)[0] ?? "");
     setPadZones({});
-    setModels(rowsOf(part.models));
+    // the numbers the file has (`kicad-port/fpModels.ts` `tabRows`)
+    setModels(tabRows(part));
+    setBody(bodyDraftOf(part));
     setTab("general");
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -163,6 +167,13 @@ export function FootprintPropertiesDialog() {
     if (edit.reference || edit.value || edit.fields || edit.attrs) cmds.push(edit);
     // The 3D Models tab: the whole list, when it is not the footprint's own (`m_footprint->Models() = ...` in `TransferDataFromWindow`).
     cmds.push(...boardModelsCmds(part, models));
+    // The Extruded 3D Body box: `TransferDataFromWindow` refuses the OK, with its message, for a height or a standoff it does not take.
+    const bodyProblem = bodyDraftProblem(body);
+    if (bodyProblem) {
+      setTab("models");
+      return setError(`Extruded 3D Body: ${bodyProblem}`);
+    }
+    cmds.push(...bodyCmds(part, body));
 
     // The pose, as the move, rotate, flip and lock tools do it (the footprint's own position and side; the fields follow).
     const at = part.at ?? [0, 0];
@@ -226,7 +237,7 @@ export function FootprintPropertiesDialog() {
               </button>
             ))}
           </div>
-          {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ part: part.ref }} units={units} />}
+          {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ part: part.ref }} units={units} body={body} onBody={setBody} />}
           {tab === "embedded" && <EmbeddedFilesPanel owner={{ kind: "footprint", reference: part.ref }} run={api.cmd} version={state.version} />}
           <div style={{ display: tab === "general" ? undefined : "none" }}>
           <div style={{ overflowX: "auto" }}>

@@ -142,3 +142,54 @@ export function resolve3DAction(e: KeyInput, isMac: boolean): Action3D | null {
       return null;
   }
 }
+
+/** One entry of the 3D view's right-click menu: an action by its KiCad name, a separator, or a submenu with its title and icon. */
+export type ContextItem3D = { action: string } | { separator: true } | { submenu: string; icon: string; items: ContextItem3D[] };
+
+/**
+ * `EDA_3D_CONTROLLER::Init`: the menu a right click on the view opens (`m_menu`, a click that was not a drag): Zoom In and Zoom Out (`ACTIONS::zoomInCenter`,
+ * `zoomOutCenter`), the six views (top, bottom, right, left, front, back, in that order), the "Rotate Board" submenu (X, Y and Z, clockwise then counterclockwise, a
+ * separator between the axes), Flip Board and the "Move Board" submenu (left, right, up, down).
+ */
+export const CONTEXT_MENU_3D: readonly ContextItem3D[] = [
+  { action: "common.Control.zoomInCenter" },
+  { action: "common.Control.zoomOutCenter" },
+  { separator: true },
+  { action: "3DViewer.Control.viewTop" },
+  { action: "3DViewer.Control.viewBottom" },
+  { action: "3DViewer.Control.viewRight" },
+  { action: "3DViewer.Control.viewLeft" },
+  { action: "3DViewer.Control.viewFront" },
+  { action: "3DViewer.Control.viewBack" },
+  { separator: true },
+  {
+    submenu: "Rotate Board",
+    icon: "rotate_cw",
+    items: [
+      { action: "3DViewer.Control.rotateXclockwise" },
+      { action: "3DViewer.Control.rotateXcounterclockwise" },
+      { separator: true },
+      { action: "3DViewer.Control.rotateYclockwise" },
+      { action: "3DViewer.Control.rotateYcounterclockwise" },
+      { separator: true },
+      { action: "3DViewer.Control.rotateZclockwise" },
+      { action: "3DViewer.Control.rotateZcounterclockwise" },
+    ],
+  },
+  { action: "3DViewer.Control.flipView" },
+  { submenu: "Move Board", icon: "move", items: [{ action: "3DViewer.Control.moveLeft" }, { action: "3DViewer.Control.moveRight" }, { action: "3DViewer.Control.moveUp" }, { action: "3DViewer.Control.moveDown" }] },
+];
+
+/** What a menu action of the 3D view does, as the toolbar and the keys do it; `flip` is Flip Board (the viewer's flip switch), null for a name that is none of them. */
+export function contextAction3D(name: string): Action3D | { kind: "flipSwitch" } | null {
+  const view = /^3DViewer\.Control\.view(Top|Bottom|Front|Back|Left|Right)$/.exec(name);
+  if (view) return { kind: "viewPreset", preset: view[1]!.toLowerCase() as ViewFacePreset };
+  const rot = /^3DViewer\.Control\.rotate([XYZ])(clockwise|counterclockwise)$/.exec(name);
+  if (rot) return { kind: "rotate", axis: rot[1]!.toLowerCase() as RotateAxis, dir: rot[2] === "clockwise" ? "cw" : "ccw" };
+  const move = /^3DViewer\.Control\.move(Left|Right|Up|Down)$/.exec(name);
+  if (move) return { kind: "pan", direction: move[1]!.toLowerCase() as PanDirection };
+  if (name === "common.Control.zoomInCenter") return { kind: "zoomIn" };
+  if (name === "common.Control.zoomOutCenter") return { kind: "zoomOut" };
+  if (name === "3DViewer.Control.flipView") return { kind: "flipSwitch" };
+  return null;
+}

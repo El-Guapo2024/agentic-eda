@@ -22,10 +22,14 @@ export interface MenuEntry {
   icon?: ReactNode;
   /** Drawn pressed, like a checked menu item (the group's current member). */
   checked?: boolean;
+  /** A submenu (`ACTION_MENU::Add( submenu )`): the entry opens it to its right when the pointer is over it; `onSelect` is not called. */
+  submenu?: MenuEntry[];
 }
 
-export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; entries: MenuEntry[]; onClose: () => void }) {
+export function ContextMenu({ x, y, entries, onClose, nested = false }: { x: number; y: number; entries: MenuEntry[]; onClose: () => void; /** A submenu: its parent closes it (no listeners of its own). */ nested?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
+  /** The submenu open, and where (the right edge of its entry). */
+  const [sub, setSub] = useState<{ index: number; x: number; y: number } | null>(null);
   /** Where the menu really goes: the click point, moved back inside the window when it would run off the right or bottom edge (a long menu then scrolls). */
   const [at, setAt] = useState({ left: x, top: y });
   useLayoutEffect(() => {
@@ -40,6 +44,7 @@ export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; 
   }, [x, y, entries]);
 
   useEffect(() => {
+    if (nested) return;
     const onDocDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
@@ -59,7 +64,7 @@ export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; 
       document.removeEventListener("pointerdown", onDocDown, true);
       document.removeEventListener("keydown", onKey, true);
     };
-  }, [onClose]);
+  }, [onClose, nested]);
 
   // The menu is a React child of the canvas, whose `onPointerDown` closes the menu (and clears or re-targets the selection) -- so a press on an entry used to
   // unmount the menu before its `click` could fire, and the entry never ran. Presses and releases inside the menu stay inside it.
@@ -76,8 +81,19 @@ export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; 
           role="menuitem"
           title={entry.hint}
           aria-disabled={entry.disabled}
-          onClick={() => {
+          onMouseEnter={(e) => {
+            if (entry.submenu && !entry.disabled) {
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setSub({ index: i, x: r.right, y: r.top });
+            } else setSub(null);
+          }}
+          onClick={(e) => {
             if (entry.disabled) return;
+            if (entry.submenu) {
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setSub({ index: i, x: r.right, y: r.top });
+              return;
+            }
             entry.onSelect();
             onClose();
           }}
@@ -90,9 +106,12 @@ export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; 
           ) : (
             <span>{entry.label}</span>
           )}
+          {entry.submenu && <span style={{ float: "right", marginLeft: 12 }}>{"\u25B8"}</span>}
         </div>
         )
       )}
+      {/* Inside this menu's element, so a press in the submenu is not a press outside the menu. */}
+      {sub && entries[sub.index]?.submenu && <ContextMenu x={sub.x} y={sub.y} entries={entries[sub.index]!.submenu!} onClose={onClose} nested />}
     </div>
   );
 }

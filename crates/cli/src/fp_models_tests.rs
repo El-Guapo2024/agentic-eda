@@ -378,7 +378,7 @@ fn migrate_3d_models_lists_the_missing_vrml_models_with_their_candidates_and_rep
     eda_model::fp_models::set_models(&mut model.footprints[0], &[placed.clone(), Model3d::identity(there)]);
     std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
 
-    let roots = Roots { models: lib.clone(), project: dir.clone(), extra: vec![] };
+    let roots = Roots { models: lib.clone(), project: dir.clone(), extra: vec![], aliases: Vec::new() };
     let listing = vec![Root { name: "KIPRJMOD".into(), path: dir.canonicalize().unwrap() }, Root { name: "KICAD10_3DMODEL_DIR".into(), path: lib.canonicalize().unwrap() }];
     let answer = migrate_in(&dir, "", &roots, &listing, &|_| None);
     assert_eq!(answer.status, "200 OK", "{}", String::from_utf8_lossy(&answer.body));
@@ -422,4 +422,92 @@ fn migrate_3d_models_lists_the_missing_vrml_models_with_their_candidates_and_rep
     assert_eq!(w["missing"][0]["candidates"].as_array().unwrap().len(), 4);
     let refused = migrate_in(&dir, "/api/3dmodel/migrate?dirs=/etc", &roots, &listing, &|_| None);
     assert_eq!(refused.status, "403 Forbidden");
+}
+
+/// Migrate 3D Models at load (`DIALOG_MIGRATE_3D_MODELS::AutoMigrateByFilename` and `CountUnresolvedWrlReferences`, which `PCB_EDIT_FRAME::OnBoardLoaded` runs): each missing `.wrl` or
+/// `.wrz` the catalog has a file of the same normalised stem for is replaced by it -- the one in a folder of the reference's folder's name first -- in one step; the rest are counted
+/// for the info bar; a board with nothing to replace gets no step.
+#[test]
+fn a_board_opened_has_its_vrml_models_migrated_by_file_name_in_one_step_and_the_rest_counted() {
+    use crate::model3d_api::Roots;
+    use crate::model3d_tab_api::{auto_migrate_in, Root};
+    let dir = scratch("auto_migrate_models");
+    setup(&dir);
+    let lib = scratch("auto_migrate_models_library");
+    for f in ["Resistor_SMD.3dshapes/R_0603_1608Metric.step", "Capacitor_SMD.3dshapes/R_0603_1608Metric.step", "Other.3dshapes/C-0805.igs", "Resistor_SMD.3dshapes/R_0603_1608Metric_Pad.step"] {
+        std::fs::create_dir_all(lib.join(f).parent().unwrap()).unwrap();
+        std::fs::write(lib.join(f), "ISO-10303-21;").unwrap();
+    }
+    let roots = Roots { models: lib.clone(), project: dir.clone(), extra: vec![], aliases: Vec::new() };
+    let listing = vec![Root { name: "KIPRJMOD".into(), path: dir.canonicalize().unwrap() }, Root { name: "KICAD10_3DMODEL_DIR".into(), path: lib.canonicalize().unwrap() }];
+    let ask = |dir: &std::path::Path| -> serde_json::Value {
+        let r = auto_migrate_in(dir, "/api/3dmodel/automigrate", &roots, &listing, &|_| None);
+        assert_eq!(r.status, "200 OK", "{}", String::from_utf8_lossy(&r.body));
+        serde_json::from_slice(&r.body).unwrap()
+    };
+    // a board with no VRML reference: nothing to do, no step
+    let v = ask(&dir);
+    assert_eq!((v["cmd"].clone(), v["unresolved"].clone(), v["missing"].clone()), (serde_json::Value::Null, serde_json::json!(0), serde_json::json!(0)), "{v}");
+
+    // three old references: one with a STEP in a folder of its own folder's name (and another in a folder of another name), one with an IGES of the same stem
+    // spelled with a dash, one nothing stands for
+    let (r0603, c0805, gone) = ("${KICAD6_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.wrl", "${KISYS3DMOD}/Capacitor_SMD.3dshapes/C_0805.wrz", "${KICAD6_3DMODEL_DIR}/Gone.3dshapes/Nothing_Like_It.wrl");
+    let placed = Model3d { offset: [0.5, 0.0, 0.25], rotate: [0.0, 0.0, 90.0], ..Model3d::identity(r0603) };
+    let intent = dir.join("intent.yaml");
+    let mut model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+    eda_model::fp_models::set_models(&mut model.footprints[0], &[placed.clone(), Model3d::identity(c0805), Model3d::identity(gone)]);
+    std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+    let v = ask(&dir);
+    assert_eq!(
+        v["replacements"],
+        serde_json::json!({ r0603: "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step", c0805: "${KICAD10_3DMODEL_DIR}/Other.3dshapes/C-0805.igs" }),
+        "the same stem in the folder of the reference's folder's name; an IGES file, `-` and `_` one stem, a .wrz like a .wrl; the four-edits-away file is no match: {v}"
+    );
+    assert_eq!((v["unresolved"].clone(), v["missing"].clone()), (serde_json::json!(1), serde_json::json!(3)), "one reference nothing stands for, which the info bar counts");
+    // the page sends the command it answers: one undo step, the placement kept, and the next opening has only the unmatched one left
+    let cmd: Cmd = serde_json::from_value(v["cmd"].clone()).unwrap();
+    step(&dir, cmd, false, "ui").unwrap();
+    let now = sent(&dir, "U1").unwrap();
+    assert_eq!(now.iter().map(|m| m.path.as_str()).collect::<Vec<_>>(), ["${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step", "${KICAD10_3DMODEL_DIR}/Other.3dshapes/C-0805.igs", gone]);
+    assert_eq!((now[0].offset, now[0].rotate), (placed.offset, placed.rotate), "the placement stays");
+    let again = ask(&dir);
+    assert_eq!((again["cmd"].clone(), again["unresolved"].clone()), (serde_json::Value::Null, serde_json::json!(1)), "{again}");
+    undo(&dir, "ui", Some(Domain::Pcb)).unwrap();
+    assert_eq!(sent(&dir, "U1").unwrap()[0].path, r0603, "one undo takes the migration back");
+}
+
+/// The slow tier: kicad-cli reads the Extruded 3D Body this studio writes -- `pcb upgrade` writes it back with the same numbers (and a uuid of its own: KiCad 25ec2335's
+/// `SEXPR_BOARD_FILE_VERSION` 20260930), which this studio's reader reads to the same body -- on the front and, the footprint flipped, on the back with the back's layer.
+#[test]
+fn kicad_cli_reads_the_extruded_body_this_studio_writes() {
+    use eda_model::extruded_body::{ExtrudedBody, ExtrusionMaterial};
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() || eda_kicad_engine::find_cli().is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 (and have kicad-cli) to run it");
+        return;
+    }
+    let dir = scratch("extruded_body_kicad_cli_proof");
+    setup(&dir);
+    let body = ExtrudedBody { height: mm(2.5), standoff: mm(0.3), layer: "F.Fab".into(), material: ExtrusionMaterial::Metal, color: Some([0.1, 0.5, 0.9, 1.0]), offset: [0.5, -0.25, 0.1], scale: [1.0, 1.5, 1.0], rotate: [0.0, 0.0, 30.0], show: true };
+    step(&dir, Cmd::SetExtrudedBody { part: "U1".into(), body: Some(body.clone()) }, false, "test").unwrap();
+    let work = dir.join("kicad");
+    std::fs::create_dir_all(&work).unwrap();
+    let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    for (round, back_layer) in [("front", "\"F.Fab\""), ("back", "\"B.Fab\"")] {
+        if round == "back" {
+            step(&dir, Cmd::FlipItems { ids: vec!["U1".into()], pivot: eda_model::ir::Point { x: mm(5.0), y: mm(5.0) }, direction: eda_ops::FlipDirection::LeftRight }, false, "test").unwrap();
+        }
+        let ours = derived_board(&dir);
+        let theirs_path = work.join(format!("{round}.kicad_pcb"));
+        std::fs::write(&theirs_path, &ours).unwrap();
+        kicad_cli(&work, &["pcb".as_ref(), "upgrade".as_ref(), "--force".as_ref(), theirs_path.as_os_str()]).unwrap_or_else(|e| panic!("kicad-cli upgrades the board: {e}"));
+        let theirs = std::fs::read_to_string(&theirs_path).unwrap();
+        let block = words(footprint_block(&theirs, "U1"));
+        let typed = &block[block.find("(model (type extruded)").unwrap_or_else(|| panic!("KiCad kept the body ({round}): {block}"))..];
+        assert!(typed.contains(&format!("(layer {back_layer})")), "the layer of the footprint's side ({round}): {typed}");
+        for want in ["(overall_height 2.5)", "(body_pcb_gap 0.3)", "(material metal)", "(color 0.1 0.5 0.9 1)", "(offset (xyz 0.5 -0.25 0.1) )", "(scale (xyz 1 1.5 1) )", "(rotate (xyz 0 0 30) )", "(hide no)"] {
+            assert!(typed.contains(want), "{want} ({round}): {typed}");
+        }
+        let (back, _, _) = eda_kicad::import_kicad_pcb(&theirs).unwrap();
+        assert_eq!(back.extruded_body("U1"), Some(body.clone()), "read back from KiCad's own file ({round})");
+    }
 }

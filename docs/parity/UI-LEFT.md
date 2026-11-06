@@ -516,24 +516,19 @@ Notes:
 
 ## 3D viewer
 
-- **D1 [BD] The scene.**
-  - Trapezoid, chamfered and custom pads are drawn as boxes.
-  - NPTH holes aren't cut from the board.
-  - Inner copper takes the F/B colour.
-  - Paste-only pads are grown (V7-1).
-  - No per-layer ambient or specular.
-  - M. GAPS 23/27/31; PARITY-3d §3, §5.
-- **D2 [FM] Controls.**
-  - No right-click menu, 3D Navigator, layer presets, saved viewports or preferences page.
-  - The PCB selection isn't highlighted.
-  - M. PARITY-3d §1-§5.
-- **D3 [FM] Layer tree.** No Values, Footprint Text or Off-board Silkscreen rows. S. PARITY-3d §5.
-- **D4 [FM] Models.**
-  - No X3D or IGES, and no Extruded 3D Body.
-  - Migrate 3D Models doesn't run at load.
-  - KiCad 5 path aliases aren't used.
-  - A bottom-side footprint's tab shows top-side numbers.
-  - M. GAPS 30; PARITY-3d §6; PARITY-pcb §31.
+- **D1 [BD] The scene.** **done (task-u3-3d)**: every pad in its real shape (trapezoid, chamfered, custom, a turned one turned), the body less every through and non-plated hole (`GET /api/board3d`), vias as rings with barrels, inner copper drawn when the body does not hide it and in its own PCB editor colour, the pads' openings in the solder mask, no paste margin for a pad with no copper (V7-1), `render_3d_opengl`'s ambient, specular, shininess and transparency per layer (PARITY-3d §3, §9). Left:
+  - A track's, a shape's or an untented via's own mask opening (the pads' openings are done).
+  - Tracks and zones are not cut at the holes (a track stops where it ends in one).
+  - A custom pad's paste margin, the off-board pads, plated vs bare copper, counterbores and backdrills.
+  - The lights are three.js's: the shading is close to KiCad's, not the same.
+- **D2 [FM] Controls.** **done (task-u3-3d)**: the right-click menu with its Rotate Board and Move Board submenus, the 3D Navigator, layer presets (Follow PCB Editor, Follow PCB Plot Settings, "legacy colors", saved ones), saved viewports, Preferences > 3D Viewer > General and Realtime Rendering, the PCB selection drawn in the selection colour and a click in 3D selecting the footprint (PARITY-3d §2, §5, §9). Left:
+  - The presets' and viewports' Ctrl+Tab / Shift+Tab switchers.
+  - The Render Options and While Moving preferences (not offered).
+  - The viewports are not written into the derived `.kicad_pro`.
+- **D3 [FM] Layer tree.** **done (task-u3-3d)**: the Values, Footprint Text (KiCad's meta-control) and Off-board Silkscreen rows (the silkscreen clipped to the board while it is off), and the 3D Navigator row. Left: the silkscreen is not clipped at the holes or the mask. PARITY-3d §5.
+- **D4 [FM] Models.** **done (task-u3-3d)**: X3D, IGES and .wrz models through kicad-cli's conversion; the Extruded 3D Body read, written, drawn and set in the board's 3D Models tab; Migrate 3D Models when the board opens, with KiCad's notice; KiCad 5 aliases (`${KISYS3DMOD}`, `ALIAS:file`, a `3Dresolver.cfg` migrated into path variables); a bottom-side footprint's tab shows the file's numbers (PARITY-3d §6, GAPS 30). Left:
+  - The body's Export..., the body in the tab's preview and in the Footprint Editor's dialog.
+  - Migrate's folder picker over the whole disk.
 - **D5 [KO] Raytracing.** It is out of scope, and a part with no model shows its F.Fab box. XL. PARITY-3d §2, §6.
 
 ## Import
