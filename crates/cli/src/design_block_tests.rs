@@ -436,6 +436,9 @@ fn a_block_placed_as_a_sheet_is_a_sheet_of_its_own_in_a_linked_group() {
     let files = eda_kicad::export_kicad_sch_tree(&after, &model, &eda_kicad::ExportMeta { date: "2026-11-06", title: "t" }, "board.kicad_sch").unwrap();
     let top = &files.iter().find(|(n, _)| n == "board.kicad_sch").unwrap().1;
     assert!(top.contains("(property \"Rail\" \"3V3\"") && top.contains("(property \"Owner\" \"Power team\""), "the fields are written");
+    // Save Current Sheet as Design Block from that sheet opens with the sheet's fields (`SaveSheetAsDesignBlock`: "Copy all fields from the sheet to the design block")
+    let p = api::prepare_with(&env, &dir, &req(json!({ "what": "sheet", "sheet": sheet.id, "lib": "Power" })));
+    assert_eq!(p["fields"], json!([{ "name": "Rail", "value": "3V3" }, { "name": "Owner", "value": "Power team" }]), "{p}");
     undo(&dir, "test", Some(Domain::Schematic)).unwrap();
     let (_, back, _) = load(&dir).unwrap();
     assert!(back.schematic.as_ref().unwrap().sheets.is_empty() && back.schematic.as_ref().unwrap().extras.groups.is_empty());

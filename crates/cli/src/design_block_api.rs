@@ -306,7 +306,30 @@ fn sheet_made(dir: &Path, sheet_path: &str) -> Result<Made, String> {
     let wanted = file.as_deref().map(eda_kicad::sheet_file_in_work).unwrap_or_else(|| "board.kicad_sch".into());
     let text = files.into_iter().find(|(n, _)| *n == wanted).map(|(_, t)| t).ok_or_else(|| format!("The file of the sheet ({wanted}) was not written."))?;
     let items = section.symbols.len() + section.power_symbols.len() + section.wires.len() + section.labels.len() + section.texts.len();
-    Ok(Made { text, default_name: sheet_block_name(&name), fields: Vec::new(), items })
+    Ok(Made { text, default_name: sheet_block_name(&name), fields: sheet_user_fields(&design, sheet_path), items })
+}
+
+/// "Copy all fields from the sheet to the design block" (`SaveSheetAsDesignBlock`, `UpdateDesignBlockFromSheet`, 8303b2ad eeschema/sch_design_block_utils.cpp): every
+/// field of the sheet but its name and its file (`FIELD_T::SHEET_NAME`, `SHEET_FILENAME`), by name, in the sheet's order -- here the sheet's user fields
+/// (`SchExtras::sheet_fields` of the screen that holds the sheet). The root sheet has none.
+fn sheet_user_fields(design: &eda_model::ir::Design, sheet_path: &str) -> Vec<(String, String)> {
+    let Some(mut section) = design.schematic.as_ref() else { return Vec::new() };
+    let mut fields: Vec<(String, String)> = Vec::new();
+    for id in sheet_path.split('/').filter(|s| !s.is_empty()) {
+        let Some(sheet) = section.sheets.iter().find(|s| s.id == id) else { return Vec::new() };
+        fields = section.extras.sheet_fields.get(id).into_iter().flatten().map(|f| (f.name.clone(), f.text.clone())).collect();
+        let Some(next) = design.sheet_contents.as_ref().and_then(|c| c.get(&sheet.file)) else { return fields };
+        section = next;
+    }
+    // `blk.GetFields()[name] = text`: a name met twice keeps its first place and takes the later text
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (n, v) in fields {
+        match out.iter_mut().find(|(x, _)| *x == n) {
+            Some(slot) => slot.1 = v,
+            None => out.push((n, v)),
+        }
+    }
+    out
 }
 
 /// The name Save Current Sheet as Design Block opens with: `SaveSheetAsDesignBlock`'s `wxFileName fn = wxFileNameFromPath( aSheetPath.Last()->GetName() );
