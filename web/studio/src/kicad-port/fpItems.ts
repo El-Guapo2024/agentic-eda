@@ -178,11 +178,13 @@ function fieldBox(f: FieldInfo): Box {
 }
 
 /** A text of the footprint's box: its anchor is where the text box is centred (or its top or bottom edge sits: the kept vertical justification, UI-LEFT F5), as
- *  footprintPainter.ts draws it -- the box of `textBoundingBox` is about the baseline, so it moves down as `fieldBox`'s does. */
+ *  footprintPainter.ts draws it -- the painter puts the baseline `0.36 h` below a centred text's anchor (`0.72 h` below a top-justified one's, on a bottom-justified
+ *  one's) and the glyphs' middle `0.36 h` above the baseline, where `textBoundingBox` centres its box; so a centred text's box is about its anchor and a top- or
+ *  bottom-justified one's is moved `0.36 h` down or up. */
 function cmdTextBox(fp: Fp, t: CmdText): Box {
   const valign = t.id ? textLookOf(fp as { kicad?: Record<string, unknown> }, t.id).valign : 0;
   const base = textOfCmd(t);
-  const down = valign > 0 ? 0 : valign < 0 ? 0.72 * base.size : 0.36 * base.size;
+  const down = valign > 0 ? -0.36 * base.size : valign < 0 ? 0.36 * base.size : 0;
   const rad = (-base.angle / 1000) * (Math.PI / 180);
   return turnedTextBox({ ...base, x: base.x - down * Math.sin(rad), y: base.y + down * Math.cos(rad) });
 }
