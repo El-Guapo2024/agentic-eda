@@ -305,3 +305,37 @@ fn the_table_of_kicads_own_qa_sheet_is_plotted_the_same_after_our_reader_and_wri
     }
     let _ = SCH_DEFAULT_PEN_NM;
 }
+
+/// A sheet table whose cells hold text expressions and colours of their own (Table Cell Properties' "Text color:" and "Background fill:"): kicad-cli plots each
+/// cell's text as the studio shows it (`SCH_TABLECELL::GetShownText`: the variables, `${CELL(..)}`, then `EXPRESSION_EVALUATOR`), inked where we lay it out, the
+/// text in its colour and the cell filled with its own.
+#[test]
+fn kicad_cli_plots_a_sheet_tables_expressions_and_colours_as_the_studio_shows_them() {
+    let Some(cli) = slow() else { return };
+    let dir = scratch("expr");
+    let mut t = Table::new_sch_grid(Point { x: mm(30.48), y: mm(40.64) }, 2, 3, mm(40.64), mm(7.62), mm(1.27));
+    let texts = ["@{1+2*3}", "Row @{${ROW}*10}", "@{upper(\"abc\")}", "@{${CELL(\"A0\")} + 1}", "@{fixed(2/3, 3)}", "@{if(${COL}==1, \"right\", \"left\")}"];
+    for (c, text) in t.cells.iter_mut().zip(texts) {
+        c.text = text.to_string();
+    }
+    let red = eda_model::sch_extras::SchColor { r: 255, g: 0, b: 0, a: 255 };
+    let blue = eda_model::sch_extras::SchColor { r: 0, g: 0, b: 255, a: 255 };
+    t.cells[0].fill = eda_model::sch_extras::SchFill::Color;
+    t.cells[0].fill_color = Some(red);
+    t.cells[1].style.color = Some(blue);
+    let design = sheet_of(vec![t]);
+    let t = design.schematic.as_ref().unwrap().extras.tables[0].clone();
+    let shown: Vec<String> = (0..t.cells.len()).map(|i| t.row_col(i)).map(|(r, c)| sch_cell_draw(&t, r, c, &|_: &str| None).shown).collect();
+    assert_eq!(shown, vec!["7", "Row 0", "ABC", "8", "0.667", "right"]);
+    let file = export_kicad_sch(&design, &ConstraintModel::default(), &META).unwrap();
+    std::fs::write(dir.join("sheet.kicad_sch"), &file).unwrap();
+    let svg = plot(&cli, &dir.join("sheet.kicad_sch"), &dir.join("out"));
+    // every line where we put it, with the text we show (`expected_text` draws from `sch_cell_draw`)
+    assert_text_placed_as_kicad_cli_plots_it(&t, &svg, "the table of expressions");
+    // the colours: the first cell's fill, and the second cell's text drawn blue
+    assert!(svg.contains("fill:#FF0000"), "kicad-cli fills the first cell red: {}", &svg[..svg.len().min(4000)]);
+    let row0 = svg.find("<desc>Row 0</desc>").expect("the second cell's text is plotted");
+    let before = &svg[..row0];
+    let style = &before[before.rfind("<g style=").expect("its group has a style")..];
+    assert!(style.contains("stroke:#0000FF"), "kicad-cli draws the second cell's text blue: {style}");
+}

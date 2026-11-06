@@ -645,29 +645,27 @@ impl Table {
         self.angle = if self.angle == 90_000 { 0 } else { 90_000 };
     }
 
-    /// `PCB_TABLE::Flip( aCentre, aFlipDirection )`: the table is turned over to `layer`. Its columns (`left_right`) or rows run the other way, the text of its cells
-    /// is mirrored when the layers are side specific (`PCB_TEXTBOX::Flip`), and it lies where the mirror image of its box about the axis through `centre` is, with the
-    /// angle it had. (KiCad finishes with a move by the table's width or height whose reason cannot be measured -- kicad-cli does not flip -- so the place is the
-    /// mirror image's.)
+    /// `PCB_TABLE::Flip( aCentre, aFlipDirection )` as KiCad 25ec2335 has it (a table of the board, not of a footprint): the table is turned over to `layer`. Each cell
+    /// is flipped about the table's origin with the grid at angle 0 (`PCB_TEXTBOX::Flip`: its text angle becomes `-angle` for a left-right flip and `180 - angle` for a
+    /// top-bottom one, and it is mirrored when the layers are side specific), the columns are reversed (`m_cells` and `m_colWidths`; the rows are not: "flipping a cell
+    /// turns its text 180 degrees and the grid is laid out in the frame the cells read in, so that turn reverses the rows already"), the grid is laid out again at the
+    /// new angle (`Normalize`, then `Rotate( GetPosition(), -originalAngle )`), and the table is moved so the corner of its box (`GetBoundingBox`: the first and the last
+    /// cell) is the mirror image's: `2 * aCentre.x - right, top` left-right, `left, 2 * aCentre.y - bottom` top-bottom. So a table flipped top-bottom is at 180 degrees
+    /// with its text upside down and mirrored, read from the other side of the board.
+    ///
+    /// **Differs from 8303b2ad**, whose `Flip` reversed the rows of a top-bottom flip as well as turning the cells, and ended with a move by the table's width or height
+    /// (`translation`, which put the table beside the mirror image); KiCad 25ec2335 took both out, and that is the KiCad of this port's kicad-cli. **Differs** for a
+    /// merged cell: KiCad reverses the cells of a row one by one, which leaves a merged cell at the right end of its block; here the merged cell is put back at the
+    /// block's left end (the covered cells after it), so the table stays a grid.
     pub fn flip(&mut self, centre: Point, left_right: bool, layer: String, mirror_text: bool) {
         if !self.is_well_formed() {
             return;
         }
         let orig = self.bounding_box();
         let target = if left_right { Point { x: 2 * centre.x - orig.x1, y: orig.y0 } } else { Point { x: orig.x0, y: 2 * centre.y - orig.y1 } };
-        let (rows, cols) = (self.row_count(), self.col_count());
-        if left_right {
-            for r in 0..rows {
-                self.cells[r * cols..(r + 1) * cols].reverse();
-            }
-            self.col_widths.reverse();
-        } else {
-            let old = std::mem::take(&mut self.cells);
-            let mut lines: Vec<Vec<TableCell>> = old.chunks(cols).map(<[TableCell]>::to_vec).collect();
-            lines.reverse();
-            self.cells = lines.into_iter().flatten().collect();
-            self.row_heights.reverse();
-        }
+        self.reverse_columns();
+        let a = self.angle % 360_000;
+        self.angle = if left_right { (360_000 - a) % 360_000 } else { (180_000 + 360_000 - a) % 360_000 };
         if mirror_text {
             for c in &mut self.cells {
                 c.style.mirror = !c.style.mirror;
@@ -676,6 +674,25 @@ impl Table {
         self.layer = layer;
         let now = self.bounding_box();
         self.translate(target.x - now.x0, target.y - now.y0);
+    }
+
+    /// The columns of the table in the other order (`m_cells[rowOffset + col] = oldCells[rowOffset + GetColCount() - 1 - col]`, `m_colWidths` likewise), with a merged
+    /// cell moved back to the left end of its block.
+    fn reverse_columns(&mut self) {
+        let (rows, cols) = (self.row_count(), self.col_count());
+        for r in 0..rows {
+            self.cells[r * cols..(r + 1) * cols].reverse();
+        }
+        self.col_widths.reverse();
+        for r in 0..rows {
+            for c in 0..cols {
+                let span = self.cells[r * cols + c].col_span as usize;
+                // a block that was at old columns `k ..= k + span - 1` is now at `c - span + 1 ..= c`, its merged cell at `c`
+                if span > 1 && c + 1 >= span && self.cells[r * cols + c].row_span > 0 {
+                    self.cells.swap(r * cols + c, r * cols + c + 1 - span);
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------------------------------------------------------- structure edits
@@ -1050,14 +1067,49 @@ mod tests {
         assert!(t.cells.iter().all(|c| c.style.mirror));
         let b = t.bounding_box();
         assert_eq!((b.x0, b.x1, b.y0, b.y1), (Nm::new(-70_000_000), Nm::new(-10_000_000), Nm::new(5_000_000), Nm::new(15_000_000)));
-        // top-bottom reverses the rows instead
+        // top-bottom (KiCad 25ec2335): the cells turned 180 degrees and the columns reversed in the table's own order, so on the screen the columns keep their order and the
+        // rows run upward; the box is the mirror image's, with no move beside it
         let mut u = grid(2, 2);
         u.row_heights = vec![Nm::new(5_000_000), Nm::new(8_000_000)];
         u.flip(Point { x: Nm::ZERO, y: Nm::ZERO }, false, "B.SilkS".into(), false);
-        assert_eq!(u.row_heights, vec![Nm::new(8_000_000), Nm::new(5_000_000)]);
-        assert_eq!(u.texts(), vec![vec!["c2", "c3"], vec!["c0", "c1"]]);
+        assert_eq!(u.angle, 180_000);
+        assert_eq!(u.row_heights, vec![Nm::new(5_000_000), Nm::new(8_000_000)]);
+        assert_eq!(u.texts(), vec![vec!["c1", "c0"], vec!["c3", "c2"]]);
         let b = u.bounding_box();
-        assert_eq!((b.y0, b.y1), (Nm::new(-13_000_000), Nm::ZERO));
+        assert_eq!((b.x0, b.x1, b.y0, b.y1), (Nm::ZERO, Nm::new(20_000_000), Nm::new(-13_000_000), Nm::ZERO));
+        // cell "c1" (first row, second column: x 10..20, y 0..5) is now at x 10..20, y -5..0; "c2" (second row, first column) at x 0..10, y -13..-5
+        let at = |t: &Table, text: &str| (0..t.cells.len()).map(|i| t.row_col(i)).find(|&(r, c)| t.cell(r, c).unwrap().text == text).map(|(r, c)| t.cell_box(r, c)).unwrap();
+        let c1 = at(&u, "c1");
+        assert_eq!((c1.x0, c1.x1, c1.y0, c1.y1), (Nm::new(10_000_000), Nm::new(20_000_000), Nm::new(-5_000_000), Nm::ZERO));
+        let c2 = at(&u, "c2");
+        assert_eq!((c2.x0, c2.x1, c2.y0, c2.y1), (Nm::ZERO, Nm::new(10_000_000), Nm::new(-13_000_000), Nm::new(-5_000_000)));
+        // flipped back it is the table it was
+        u.flip(Point { x: Nm::ZERO, y: Nm::ZERO }, false, "F.SilkS".into(), false);
+        assert_eq!((u.angle, u.at, u.texts()), (0, Point { x: Nm::ZERO, y: Nm::ZERO }, grid(2, 2).texts()));
+        // a table at an angle: left-right gives -angle, top-bottom 180 - angle, the box where the mirror image's is
+        let mut w = grid(2, 3);
+        w.rotate(Point { x: Nm::ZERO, y: Nm::ZERO }, 30_000);
+        let before = w.bounding_box();
+        w.flip(Point { x: Nm::new(1_000_000), y: Nm::ZERO }, true, "B.SilkS".into(), true);
+        assert_eq!(w.angle, 330_000);
+        let after = w.bounding_box();
+        assert_eq!((after.x0, after.y0), (Nm::new(2_000_000) - before.x1, before.y0));
+        let mut v = grid(2, 3);
+        v.rotate(Point { x: Nm::ZERO, y: Nm::ZERO }, 30_000);
+        v.flip(Point { x: Nm::ZERO, y: Nm::new(4_000_000) }, false, "B.SilkS".into(), true);
+        assert_eq!(v.angle, 150_000);
+        assert_eq!((v.bounding_box().x0, v.bounding_box().y0), (before.x0, Nm::new(8_000_000) - before.y1));
+    }
+
+    #[test]
+    fn a_merged_cell_stays_at_the_left_end_of_its_block_when_the_columns_are_reversed() {
+        let mut t = grid(2, 3);
+        assert!(t.merge(&[(0, 0), (0, 1)]));
+        t.flip(Point { x: Nm::ZERO, y: Nm::ZERO }, true, "B.SilkS".into(), true);
+        assert!(t.is_well_formed());
+        assert_eq!((t.cell(0, 1).unwrap().col_span, t.cell(0, 2).unwrap().col_span), (2, 0));
+        assert_eq!(t.cell(0, 1).unwrap().text, "c0\nc1");
+        assert_eq!(t.cell(0, 0).unwrap().text, "c2");
     }
 
     #[test]

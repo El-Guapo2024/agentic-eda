@@ -115,6 +115,7 @@ pub fn reference_point(clip: &Clipboard) -> Point {
             ClipRef::Barcode(i) => (7, i),
             ClipRef::TextBox(i) => (8, i),
             ClipRef::Image(i) => (9, i),
+            ClipRef::Table(i) => (10, i),
             ClipRef::Group(_) => return None,
         })
     };
@@ -188,6 +189,12 @@ pub fn reference_point(clip: &Clipboard) -> Point {
     for (i, m) in clip.images.iter().enumerate() {
         if free(9, i) {
             consider(m.at);
+        }
+    }
+    // `PCB_TABLE::GetPosition`: the corner of its first cell
+    for (i, t) in clip.tables.iter().enumerate() {
+        if free(10, i) {
+            consider(t.at);
         }
     }
     // (a point is in no group, `IsGroupableType`)
@@ -272,6 +279,7 @@ fn collect_group(clip: &Clipboard, group: usize, out: &mut Vec<Point>, seen: &mu
             ClipRef::Barcode(i) => out.extend(clip.barcodes.get(i).map(|b| b.at)),
             ClipRef::TextBox(i) => out.extend(clip.text_boxes.get(i).map(text_box_position)),
             ClipRef::Image(i) => out.extend(clip.images.get(i).map(|m| m.at)),
+            ClipRef::Table(i) => out.extend(clip.tables.get(i).map(|t| t.at)),
             ClipRef::Group(i) => collect_group(clip, i, out, seen),
         }
     }

@@ -17,8 +17,8 @@
 //!   eeschema/sch_symbol.cpp      `SCH_SYMBOL::ResolveTextVar` (a field by name, FOOTPRINT_*, UNIT, SYMBOL_*, DNP, EXCLUDE_FROM_*, NET_NAME(n) ..., then the sheet)
 //!   eeschema/sch_field.cpp, sch_text.cpp, sch_item.cpp   `GetShownText`, `ResolveText`: which resolvers an item's text goes through
 //!
-//! The `@{..}` math expressions (`common/text_eval`) are evaluated for their arithmetic after each pass, as 25ec2335's `ResolveTextVars` does
-//! ([`evaluate_math`]); their functions, strings and units are not ported.
+//! The `@{..}` expressions (`common/text_eval`) are evaluated after each pass, as `ResolveTextVars` does ([`evaluate_math`], [`crate::text_eval`]: the
+//! arithmetic, strings, SI prefixes, units and functions; the date, E-series and version-control functions are not ported).
 //! Not ported: `VCSHASH` / `VCSSHORTHASH` (the project's git hash: left as written) and design variants. Simulation `OP` values are left as written here and
 //! resolved by the studio, which holds the last run (`web/studio/src/kicad-port/sim/opVars.ts`).
 
@@ -235,12 +235,20 @@ pub fn resolve_text_vars(source: &str, resolver: &Resolver, depth: &mut usize) -
     text
 }
 
-/// `EXPRESSION_EVALUATOR::Evaluate` (KiCad 25ec2335 `common/text_eval`) for its arithmetic: each `@{..}` whose expression is numbers, `+ - * / % ^`, the six
+/// `EXPRESSION_EVALUATOR::Evaluate`: each `@{..}` replaced by its value -- [`crate::text_eval::evaluate`], the evaluator with its strings, functions, SI prefixes and
+/// units (task-u5-pcbitems).
+pub fn evaluate_math(text: &str) -> String {
+    crate::text_eval::evaluate(text)
+}
+
+/// **INACTIVE** (replaced by [`crate::text_eval::evaluate`], which [`evaluate_math`] calls; kept as the user's rule keeps a replaced port): the arithmetic half of
+/// `EXPRESSION_EVALUATOR::Evaluate` (KiCad 25ec2335 `common/text_eval`): each `@{..}` whose expression is numbers, `+ - * / % ^`, the six
 /// comparisons, signs and parentheses is replaced by its value, written as `VALUE_UTILS::ToString` writes a number (a whole number without a decimal
 /// point, else the shortest form). `text_eval.lemon`'s precedence: comparisons, then `+ -`, then `* / %`, then a sign, then `^` (right to left).
 /// **Differs**: the functions, strings, units and variables of the grammar are not ported, and an expression this cannot read (or a division by zero) is
 /// left as written, where KiCad reports an error.
-pub fn evaluate_math(text: &str) -> String {
+#[allow(dead_code)]
+pub fn evaluate_math_arithmetic_only(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     // (a literal `\@{..}` is an escape marker by now, `<<<ESC_AT:..}`, which holds no `@{`)

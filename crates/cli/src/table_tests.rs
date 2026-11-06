@@ -157,3 +157,63 @@ fn the_move_preview_carries_a_held_sheet_table_where_it_would_be() {
     assert_eq!(line(&v).1, serde_json::json!("TITLE 0"), "${{ROW}} of the first row of a sheet table is 0");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): a board table whose cells hold text expressions (`@{..}`) is plotted by kicad-cli with each cell's text as the studio shows it
+/// (`PCB_TABLECELL::GetShownText`: the variables, then `EXPRESSION_EVALUATOR`), and a table flipped top to bottom (KiCad 25ec2335 `PCB_TABLE::Flip`: turned half round on
+/// the back) is written so that kicad-cli draws its border where the studio draws it.
+#[test]
+fn kicad_cli_plots_a_board_tables_expressions_and_its_flip_as_the_studio_shows_them() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    if eda_kicad_engine::find_cli().is_none() {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    }
+    let dir = scratch("tables_expr_plot");
+    setup(&dir);
+    let mut t = Table::new_grid("Dwgs.User", Point { x: mm(5.0), y: mm(5.0) }, 2, 3, mm(40.0), mm(6.0), mm(0.15));
+    let texts = ["@{1+2*3}", "Row @{${ROW}*10}", "@{upper(\"abc\")}", "@{if(${COL}==2, \"second\", \"first\")}", "@{round(3.14159, 2)}", "@{10k / 4} ohm"];
+    for (c, text) in t.cells.iter_mut().zip(texts) {
+        c.text = text.to_string();
+    }
+    step(&dir, Cmd::Table(TableCmd::Add { table: t }), false, "test").unwrap();
+    let tables = the_tables(&dir);
+    let shown: Vec<String> = {
+        let t = &tables[0];
+        let board = eda_model::text_vars::PcbBoard::default();
+        let mut v: Vec<String> = (0..t.cells.len()).map(|i| t.row_col(i)).map(|(r, c)| eda_model::table_text::pcb_cell_resolved(&t.cell(r, c).unwrap().text, &t.layer, r, c, &board)).collect();
+        v.sort();
+        v
+    };
+    // a board counts its rows and columns from 1
+    let mut want: Vec<String> = ["7", "Row 10", "ABC", "second", "3.14", "2500 ohm"].into_iter().map(String::from).collect();
+    want.sort();
+    assert_eq!(shown, want);
+    let mut drawn = plotted_texts(&plot(&dir, "Dwgs.User"));
+    drawn.sort();
+    assert_eq!(drawn, shown, "kicad-cli evaluates every cell's expression as the studio shows it");
+
+    // flipped top to bottom about its own middle: on B.SilkS at 180 degrees, its border where our model has it
+    let id = tables[0].id.clone();
+    let pivot = tables[0].bounding_box().center();
+    step(&dir, Cmd::FlipItems { ids: vec![id.clone()], pivot, direction: eda_ops::FlipDirection::TopBottom }, false, "test").unwrap();
+    let flipped = the_tables(&dir).into_iter().find(|x| x.id == id).unwrap();
+    assert_eq!((flipped.layer.as_str(), flipped.angle), ("Dwgs.User", 180_000), "Dwgs.User is no side's: it stays, and the table is turned");
+    let lines = plotted_lines(&plot(&dir, "Dwgs.User"));
+    for l in flipped.borders() {
+        let (a, b) = ((l.a.x, l.a.y), (l.b.x, l.b.y));
+        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+        let want = [a.0, a.1, b.0, b.1];
+        assert!(lines.iter().any(|g| g.iter().zip(&want).all(|(x, y)| (*x - *y).abs() <= Nm::new(2000))), "kicad-cli draws no line {want:?} of the flipped table; it drew {lines:?}");
+    }
+    // and its text: the columns are the other way round in the table's own order (`m_cells` reversed), so the cell that asked for column 2 is in column 1 now
+    let board = eda_model::text_vars::PcbBoard::default();
+    let mut shown_now: Vec<String> = (0..flipped.cells.len()).map(|i| flipped.row_col(i)).map(|(r, c)| eda_model::table_text::pcb_cell_resolved(&flipped.cell(r, c).unwrap().text, &flipped.layer, r, c, &board)).collect();
+    shown_now.sort();
+    assert!(shown_now.contains(&"first".to_string()), "{shown_now:?}");
+    let mut drawn = plotted_texts(&plot(&dir, "Dwgs.User"));
+    drawn.sort();
+    assert_eq!(drawn, shown_now, "kicad-cli draws the flipped table's text as the studio shows it");
+}

@@ -90,6 +90,7 @@ import { boardDimensionStyle, dimensionPointAt, moveDimensionPoint, type DimPoin
 import { toCmdDimension } from "../../kicad-port/dimensionConvert";
 import { fetchDimensionPreview } from "../../api/dimensionPreview";
 import { cellAddress, cellById, drawTableSession, tableById } from "../../kicad-port/tables";
+import { cellsBetween, cellUnder, onlyCells } from "../../kicad-port/tableCells";
 import { openDrawnTableDialog } from "../../state/tableDialogs";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
 import { leaderModeOf, newZoneInitial, zoneClick, zoneCommitPlan, zoneFinish, zoneFirstCorner } from "../../kicad-port/pcbDrawZone";
@@ -186,6 +187,8 @@ type DragState =
   | { kind: "zoom"; button: 1 | 2; anchor: { x: number; y: number }; lastY: number; moved: boolean }
   | { kind: "move"; refs: string[]; pivotNm?: [number, number]; flipPivotNm?: [number, number]; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
+  /** `selectTableCells`: a drag from a cell of `table` selects the cells under it, from the selection it began with (`before`); `candidates` is what the press would have picked, for a release that is a click. */
+  | { kind: "cells"; table: string; startWorld: [number, number]; before: string[]; modifiers: ClickModifiers; candidates: SelectionCandidate[]; moved: boolean }
   /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
   | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][]; /** The zone's holes at drag-start: `cornerIndex` is a global vertex index over the outline then the holes (`CIterateWithHoles`). */ baseHoles: [number, number][][] }
   /** The same for a graphic shape's handle (kicad-port/pcbPointEdit.ts): `base` is the shape at drag-start, every move recomputes from it. */
@@ -366,7 +369,7 @@ export function Canvas() {
       // gate (plain idle hover near the edge in the Select tool never
       // autopans in real KiCad either).
       const drag = dragRef.current;
-      const interactive = drag?.kind === "box" || drag?.kind === "move" || s.drawState != null;
+      const interactive = drag?.kind === "box" || drag?.kind === "move" || drag?.kind === "cells" || s.drawState != null;
       const pointer = lastPointerScreenRef.current;
       if (!interactive || !pointer) return;
       const screenSize = containerSizeRef.current;
@@ -1273,6 +1276,16 @@ export function Canvas() {
       }, LONG_PRESS_MS),
     };
 
+    // `PCB_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )`: a drag from a table cell (`hoverCells.Collect( board(), { PCB_TABLECELL_T }, DragOrigin )`, whatever lies over
+    // it) selects the cells under it (`selectTableCells`) when the selection is empty or only cells -- with any other selection it moves, as below. The press itself
+    // picks nothing: a release with no drag is the click (kicad-port/tableCells.ts).
+    const tablesNow = (board?.drawings?.tables ?? []).filter((t) => state.layerVisible[t.layer] !== false);
+    const under = state.activeTool === "select" && tablesNow.length > 0 ? cellUnder(tablesNow, wx, wy, 5 * onePixelNm) : null;
+    if (under && onlyCells(state.selection, board?.drawings?.tables ?? [])) {
+      dragRef.current = { kind: "cells", table: under.table.id, startWorld: [wx, wy], before: [...state.selection], modifiers, candidates: runPick(false), moved: false };
+      return;
+    }
+
     const candidates = runPick(false);
 
     if (candidates.length > 1) {
@@ -1528,6 +1541,12 @@ export function Canvas() {
       const [sx, sy] = [p[0], p[1]];
       const next = moveShapePoint(drag.base, drag.point, [sx, sy], state.pcbx.arcEditMode);
       setShapePointPreview(next ? { id: drag.shapeId, shape: cmdShapeToShape(next, drag.shapeId) } : null);
+    } else if (drag.kind === "cells") {
+      if (!motion?.dragging) return;
+      if (!drag.moved) clearLongPress();
+      drag.moved = true;
+      const table = board?.drawings?.tables?.find((t) => t.id === drag.table);
+      if (table) dispatch({ type: "SET_SELECTION", refs: cellsBetween(table, drag.startWorld, [wx, wy], drag.before, drag.modifiers), raw: true });
     } else if (drag.kind === "box") {
       if (!motion?.dragging) return; // a click with a little jitter, not a rectangle
       const rect = containerRef.current!.getBoundingClientRect();
@@ -1565,6 +1584,13 @@ export function Canvas() {
         }
       }
       pendingClickRef.current = null;
+    } else if (drag.kind === "cells") {
+      // released where it was pressed: the click the press deferred (`selectPoint`)
+      if (!drag.moved) {
+        if (drag.candidates.length > 1) disambiguate(drag.candidates, drag.modifiers, e.clientX, e.clientY);
+        else if (drag.candidates.length === 1) dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, drag.candidates[0]!.id, drag.modifiers) });
+        else if (!hasModifier(drag.modifiers)) dispatch({ type: "CLEAR_SELECTION" });
+      }
     } else if (drag.kind === "box" && board) {
       if (!marquee) {
         // Truly zero movement (not even the sub-pixel jitter that

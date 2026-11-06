@@ -5,13 +5,14 @@ import { useEffect, useState } from "react";
 import { startPaste } from "../actions/schClipboardActions";
 import { PASTE_SPECIAL_OPTIONS, type SchPasteMode } from "../kicad-port/schClipboard";
 import { closePasteSpecial, usePasteSpecialOpen } from "../state/schPasteStore";
-import { useStudioDispatch, useStudioState } from "../state/store";
+import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 
 export function SchPasteSpecialDialog() {
   const open = usePasteSpecialOpen();
   const state = useStudioState();
   const dispatch = useStudioDispatch();
+  const api = useStudioApi();
   // `PASTE_MODE pasteMode = annotateAutomatic ? UNIQUE_ANNOTATIONS : REMOVE_ANNOTATIONS`: the box opens on the mode a plain Paste uses.
   const [mode, setMode] = useState<SchPasteMode>("unique");
   const [clearNets, setClearNets] = useState(false);
@@ -27,7 +28,7 @@ export function SchPasteSpecialDialog() {
 
   const ok = () => {
     closePasteSpecial();
-    void startPaste({ state, dispatch }, { mode, duplicate: false });
+    void startPaste({ state, dispatch, api }, { mode, duplicate: false });
   };
 
   return (
