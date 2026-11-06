@@ -110,11 +110,24 @@ export function newZoneNet(board: BoardState, highlighted: readonly string[], se
  * m_params.m_layer )`, "Do not copy over layer properties"), the net above (none for a rule area), a rule area when the tool is Add Rule Area (`SetIsRuleArea( m_params.m_keepout )`),
  * and, on a copper layer, the first unused priority (`setUniquePriority`).
  */
+/**
+ * `ZONE_SETTINGS::ZONE_SETTINGS()` (pcbnew/zone_settings.cpp): `SetDoNotAllowZoneFills( false ); SetDoNotAllowVias( true ); SetDoNotAllowTracks( true );
+ * SetDoNotAllowPads( true ); SetDoNotAllowFootprints( false );` -- what a new rule area keeps out (Add Rule Area's dialog opens on it; found by task-u1-fpedit,
+ * UI-LEFT P29).
+ */
+export const ZONE_SETTINGS_KEEPOUTS: Pick<RuleAreaFields, "keepout_tracks" | "keepout_vias" | "keepout_pads" | "keepout_copper_pour" | "keepout_footprints"> = {
+  keepout_tracks: true,
+  keepout_vias: true,
+  keepout_pads: true,
+  keepout_copper_pour: false,
+  keepout_footprints: false,
+};
+
 export function newZoneInitial(
   board: BoardState,
   opts: { layer: string; ruleArea: boolean; highlighted: readonly string[]; selection: readonly string[]; defaults: ZoneSettingsFields & RuleAreaFields }
 ): NewZoneSettings {
-  const settings: ZoneSettingsFields & RuleAreaFields = { ...opts.defaults, is_rule_area: opts.ruleArea };
+  const settings: ZoneSettingsFields & RuleAreaFields = { ...opts.defaults, ...(opts.ruleArea ? ZONE_SETTINGS_KEEPOUTS : {}), is_rule_area: opts.ruleArea };
   if (isCopperLayerName(opts.layer)) settings.priority = uniqueZonePriority(board.routing?.zones ?? []);
   // A rule area takes no net (`ExportSetting`: `if( !m_isRuleArea ) aTarget.SetNetCode( m_Netcode )`).
   return { net: opts.ruleArea ? "" : newZoneNet(board, opts.highlighted, opts.selection), layers: [opts.layer], name: "", locked: false, settings };

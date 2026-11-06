@@ -122,7 +122,8 @@ test("the commands of Add Corner: a zone's outline set, a polygon replaced in pl
     [{ id: "z", net: "GND", layer: "F.Cu", outline: [[0, 0], [10_000, 0], [10_000, 10_000], [0, 10_000]], teardrop: false }]
   );
   const zone = addCornerCmds(cornerTarget(b, new Set(["z"]))!, [4_000, 700])!;
-  assert.deepEqual(zone, [{ op: "set_zone_outline", id: "z", outline: [{ x: 0, y: 0 }, { x: 4_000, y: 0 }, { x: 10_000, y: 0 }, { x: 10_000, y: 10_000 }, { x: 0, y: 10_000 }] }]);
+  // `addCorner`: `zone->SetNeedRefill( true )`, the fill stays as it was (`keep_fill`, UI-LEFT P29)
+  assert.deepEqual(zone, [{ op: "set_zone_outline", id: "z", outline: [{ x: 0, y: 0 }, { x: 4_000, y: 0 }, { x: 10_000, y: 0 }, { x: 10_000, y: 10_000 }, { x: 0, y: 10_000 }], keep_fill: true }]);
 
   const poly = addCornerCmds(cornerTarget(b, new Set(["poly"]))!, [10_900, 6_000])!;
   assert.equal(poly.length, 1);
@@ -173,6 +174,7 @@ test("a zone with a hole: the nearest side of any contour takes the corner, in t
       id: "z",
       outline: square.map(([x, y]) => ({ x, y })),
       holes: [[{ x: 2_000, y: 2_000 }, { x: 4_000, y: 2_000 }, { x: 4_000, y: 3_000 }, { x: 4_000, y: 4_000 }, { x: 2_000, y: 4_000 }]],
+      keep_fill: true,
     },
   ]);
 });

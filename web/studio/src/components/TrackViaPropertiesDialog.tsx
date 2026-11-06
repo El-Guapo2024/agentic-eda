@@ -85,10 +85,10 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
       if (!pre.ok) return setError(pre.message);
       if (!pre.ask) break;
       if (pre.ask.check === "ops_net_change_shorts") {
-        if (!(await askConfirm({ title: "Confirmation", message: pre.ask.message, okLabel: "Apply Anyway", cancelLabel: "Cancel Changes" }))) return onClose();
+        if (!(await askConfirm({ title: "Confirmation", message: pre.ask.message, okLabel: "Apply Anyway", cancelLabel: "Cancel Changes", doNotShowKey: "dialog_track_via_properties.cpp:confirmShortingNets" }))) return onClose();
         cmds = withNetAnswers(cmds, { apply_anyway: true });
       } else {
-        cmds = withNetAnswers(cmds, { change_pads: await askConfirm({ title: "Confirmation", message: pre.ask.message, okLabel: "Change Nets", cancelLabel: "Leave Nets Unchanged" }) });
+        cmds = withNetAnswers(cmds, { change_pads: await askConfirm({ title: "Confirmation", message: pre.ask.message, okLabel: "Change Nets", cancelLabel: "Leave Nets Unchanged", doNotShowKey: "dialog_track_via_properties.cpp:confirmPadChange" }) });
         break;
       }
     }

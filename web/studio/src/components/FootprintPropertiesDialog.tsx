@@ -16,8 +16,8 @@
 // The 3D Models tab (`PANEL_FP_PROPERTIES_3D_MODEL`, components/footprint/FootprintModelsPanel.tsx) edits a copy of the footprint's list of models; OK sends it as one
 // `set_board_models` in the same batch when it differs (kicad-port/fpModels.ts `boardModelsCmds`), and the tab's Extruded 3D Body box one `set_extruded_body` (`bodyCmds`).
 //
-// The Embedded Files tab is the shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the footprint's own list; each of its edits is a verb of its own, sent at
-// once (KiCad applies it with the dialog's OK).
+// The Embedded Files tab is the shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the footprint's own list: the dialog holds the panel's copy, and OK sends
+// it as one `embedded apply` in the same batch (`TransferDataFromWindow`, kicad-port/embeddedFiles.ts `applyCmd`).
 //
 // UI-LEFT P14 (task-u5-pcbfp): the grid's four mandatory rows (`PCB_FIELD::IsMandatory`: Reference, Value, Datasheet, Description; "The first 4 fields are
 // mandatory."), the Reference and Value texts edited and carried to the schematic symbol as Update Schematic from PCB would (`BACK_ANNOTATE`'s references and
@@ -40,6 +40,8 @@ import { bodyCmds, bodyDraftOf, bodyDraftProblem, boardModelsCmds, tabRows, type
 import { fpOrientation } from "../kicad-port/pcbProperties";
 import { FootprintModelsPanel } from "./footprint/FootprintModelsPanel";
 import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
+import { applyCmd, EMPTY_DRAFT, type EmbeddedDraft } from "../kicad-port/embeddedFiles";
+import type { EmbeddedListing } from "../api/embeddedTypes";
 import { AngleOverrideInput, OverrideInput } from "./footprint/PadPropertiesDialog";
 
 /** One row of the grid. `from` is the field it started as (null for a row added here). */
@@ -88,6 +90,8 @@ export function FootprintPropertiesDialog() {
   const [padZones, setPadZones] = useState<Record<string, PadZoneForm>>({});
   // The 3D Models tab: a copy of the footprint's list, which OK sends when it differs.
   const [tab, setTab] = useState<"general" | "models" | "embedded">("general");
+  // The Embedded Files tab's copy of the footprint's list (`m_localFiles`), which OK sends
+  const [embedded, setEmbedded] = useState<{ draft: EmbeddedDraft; listing: EmbeddedListing | null }>({ draft: EMPTY_DRAFT, listing: null });
   const [models, setModels] = useState<ModelRow[]>([]);
   // and its Extruded 3D Body box (`EXTRUDED_3D_BODY`): KiCad's controls, which OK sends as one `set_extruded_body` when they changed the body
   const [body, setBody] = useState<BodyDraft>(() => bodyDraftOf({}));
@@ -114,6 +118,7 @@ export function FootprintPropertiesDialog() {
     setModels(tabRows(part));
     setBody(bodyDraftOf(part));
     setTab("general");
+    setEmbedded({ draft: EMPTY_DRAFT, listing: null });
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, part?.ref]);
@@ -207,6 +212,9 @@ export function FootprintPropertiesDialog() {
 
     // The zone connection of the footprint, and of every pad whose fields were changed: the overlay the zone filler reads.
     cmds.push(...zoneCmds(part, fpZone, padZones));
+    // The Embedded Files tab's copy (`PANEL_EMBEDDED_FILES::TransferDataFromWindow`)
+    const embeddedCmd = applyCmd({ kind: "footprint", reference: part.ref }, embedded.listing, embedded.draft);
+    if (embeddedCmd) cmds.push(embeddedCmd);
     // The footprint's own paste margins (`SetLocalSolderPasteMargin`, `SetLocalSolderPasteMarginRatio`).
     if (paste.margin !== (part.paste_margin ?? null) || paste.ratio !== (part.paste_margin_ratio ?? null)) cmds.push({ op: "set_footprint_paste_margin", part: part.ref, margin: paste.margin, ratio: paste.ratio });
     // The Reference and Value texts, carried to the schematic's symbol as Update Schematic from PCB would (`BACK_ANNOTATE::applyChangelist`: the value, then the
@@ -259,7 +267,9 @@ export function FootprintPropertiesDialog() {
             ))}
           </div>
           {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ part: part.ref }} units={units} body={body} onBody={setBody} />}
-          {tab === "embedded" && <EmbeddedFilesPanel owner={{ kind: "footprint", reference: part.ref }} run={api.cmd} version={state.version} />}
+          {tab === "embedded" && (
+            <EmbeddedFilesPanel owner={{ kind: "footprint", reference: part.ref }} run={api.cmd} version={state.version} draft={embedded.draft} onDraft={(draft, listing) => setEmbedded({ draft, listing })} />
+          )}
           <div style={{ display: tab === "general" ? undefined : "none" }}>
           <div style={{ overflowX: "auto" }}>
             <table style={{ borderCollapse: "collapse", fontSize: 12 }} data-testid="footprint-fields-grid">

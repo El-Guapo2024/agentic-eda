@@ -11,6 +11,7 @@ import type { Part } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
 import { drawStrokeText } from "../text/strokeFont";
 import { layerStateKey, isCopper } from "../../kicad-port/layerPresets";
+import { keptReadableInFlippedView } from "../../kicad-port/flipView";
 import { artLayerShown, artTextAsField, artTextShown, graphicsOf, layerRank, layersOf, type ArtShape } from "../../kicad-port/fpArt";
 import { fieldAsText } from "../../kicad-port/fpFields";
 import { opacityOf } from "./appearancePaint";
@@ -58,12 +59,12 @@ export function drawFootprintArt(ctx: CanvasRenderingContext2D, view: ViewTransf
     if (!t.text || !artTextShown(opts.layerVisible, part, t)) continue;
     // the footprint selected, or the text on its own (UI-LEFT P15)
     const color = selected || opts.selection.has(t.id) ? layerColor("selection") : layerColor(realLayerKey(t.layer));
-    withAlpha(ctx, layerAlpha(opts, layerStateKey(t.layer)), () => drawArtText(ctx, view, t, color, !!opts.sketchText));
+    withAlpha(ctx, layerAlpha(opts, layerStateKey(t.layer)), () => drawArtText(ctx, view, t, color, !!opts.sketchText, opts.viewFlipped));
   }
 }
 
 /** One text, a line at a time: the lines step down the text's own axis by the interline, the block placed on the anchor by the vertical justification. */
-function drawArtText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: NonNullable<Part["texts"]>[number], color: string, sketch: boolean): void {
+function drawArtText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: NonNullable<Part["texts"]>[number], color: string, sketch: boolean, viewFlipped = false): void {
   const text = fieldAsText(artTextAsField(t));
   const lines = t.text.split("\n");
   const sizeNm = Math.max(t.h, hairlineNm(view, 8));
@@ -86,6 +87,7 @@ function drawArtText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: NonN
       mirror: t.mirror,
       italic: t.italic,
       color,
+      keepReadable: keptReadableInFlippedView(viewFlipped, t.layer),
     });
   });
 }

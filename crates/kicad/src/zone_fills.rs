@@ -131,6 +131,8 @@ impl KicadFills {
     ///   `pair.second->Move( offset )`; `ZONE::Rotate`: `pair.second->Rotate( aAngle, aCentre )`; `ZONE::Mirror`), and on the other side's layers when the motion is a
     ///   mirror and the layers went to the other side (`ZONE::Flip`: `SetFilledPolysList( GetBoard()->FlipLayer( oldLayer ), shape )`);
     /// - none when the outline was reshaped (the point editor's `m_zone.UnFill()`), when the layers changed otherwise (`ZONE::SetLayerSet` unfills), and for a rule area;
+    /// - the fill as it was made, out of date, when the outline was reshaped by an edit that keeps it (`ZONE::SetNeedRefill( true )`: Add / Remove / Chamfer Corner,
+    ///   Simplify Shapes -- `Cmd::SetZoneOutline`'s `keep_fill`, which counts no emptying edit, so the epoch is still the fill's) on the layers it was made on;
     /// - none, too, once an edit has emptied the zone since its fill (`Zone::fill_epoch` is not the shape's), even when a later edit brings the zone back to the shape
     ///   and layers it was filled with: KiCad's `unFillLocked()` / `UnFill()` threw the copper away (round 7 R7-Z1). An undo restores the zone with the epoch it had,
     ///   so the fill comes back with it, as KiCad's undo copy holds the fill;
@@ -152,7 +154,11 @@ impl KicadFills {
             return None;
         }
         let flipped_since = was.flip_epoch != zone.flip_epoch;
-        let (motion, layer_of) = follow(was, zone)?;
+        let Some((motion, layer_of)) = follow(was, zone) else {
+            // reshaped, and no edit has emptied it since (`fill_epoch`): the corner edits that leave the copper as it was (`SetNeedRefill( true )`, UI-LEFT P29)
+            let layers: Vec<&str> = zone.layer_set();
+            return (!flipped_since && was.layers.iter().map(String::as_str).eq(layers)).then_some(Cow::Borrowed(entry));
+        };
         let Some(motion) = motion else {
             return Some(if flipped_since && !entry.unfilled { Cow::Owned(ZoneEntry { unfilled: true, ..entry.clone() }) } else { Cow::Borrowed(entry) });
         };
@@ -1204,9 +1210,11 @@ mod tests {
         assert_eq!(f.polys.len(), 1);
         assert_eq!(f.polys[0][0][1], Point64::new(9_250_000, 500_000));
 
-        // An edit elsewhere on the board changes nothing about the zone; reshaping the zone empties it (the point editor's `UnFill()`).
+        // An edit elsewhere on the board changes nothing about the zone; reshaping the zone empties it (the point editor's `UnFill()`, counted on the zone:
+        // `Zone::fill_epoch`, `eda_ops`' `tidy_zone_fills`).
         let mut moved = z.clone();
         moved.outline[2] = Point { x: mm(11.0), y: mm(10.0) };
+        moved.fill_epoch += 1;
         assert!(fills.current(&moved).is_none() && fills.rings(&moved, "F.Cu").is_empty());
         let d2 = design(vec![moved.clone()]);
         assert_eq!(fills.tally(&d2), (0, 1), "one zone out of date");
@@ -1342,7 +1350,10 @@ mod tests {
         assert_eq!(fills.rings(&edited, "F.Cu").len(), 1);
         let mut reshaped = z.clone();
         reshaped.outline[2].x += mm(1.0);
-        assert!(fills.current(&reshaped).is_none());
+        // reshaped by an edit that keeps the fill (`SetNeedRefill( true )`: no emptying edit counted), the copper as it was; by one that empties it, none
+        assert!(matches!(fills.current(&reshaped), Some(Cow::Borrowed(_))), "Add / Remove / Chamfer Corner keep the old copper");
+        reshaped.fill_epoch += 1;
+        assert!(fills.current(&reshaped).is_none(), "a corner dragged (`UnFill()`) empties it");
         // a fill kept before the shape was: only the unchanged zone has it
         let mut old = fills.clone();
         old.zones.get_mut("z").unwrap().shape = None;

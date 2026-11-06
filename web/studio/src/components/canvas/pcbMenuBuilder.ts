@@ -96,7 +96,8 @@ export function trackViaWidthMenu(state: StudioState, board: BoardState): MenuNo
   const out: MenuNode[] = [
     { type: "item", action: "pcbnew.EditorControl.autoTrackWidth", label: "Use Starting Track Width", checked: auto },
     { type: "item", action: "studio.Router.useNetclassSizes", label: "Use Net Class Values", checked: useIndex && widthIndex === 0 && viaIndex === 0 },
-    { type: "item", action: "pcbnew.InteractiveRouter.CustomTrackViaSize", label: "Use Custom Values...", checked: custom },
+    // `ID_POPUP_PCB_SELECT_CUSTOM_WIDTH`: the custom sizes in use from the click, then the dialog (`studio.Router.useCustomTrackVia`)
+    { type: "item", action: "studio.Router.useCustomTrackVia", label: "Use Custom Values...", checked: custom },
     { type: "separator" },
   ];
   widths.forEach((w, i) => {

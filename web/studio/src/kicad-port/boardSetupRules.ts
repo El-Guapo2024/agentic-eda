@@ -531,7 +531,8 @@ export function predefinedSizesCmds(widths: readonly Nm[], vias: ReadonlyArray<V
  */
 export function validatePredefinedSizes(vias: ReadonlyArray<ViaPreset>, diffPairs: ReadonlyArray<DiffPairPreset>): string | null {
   for (const v of vias) {
-    const message = validateViaParameters(v.diameter, v.drill);
+    // a drill of 0 is the empty cell (`AppendViaSize`'s `if( aDrill > 0 )`): `std::nullopt` to `ValidateViaParameters`
+    const message = validateViaParameters(v.diameter, v.drill > 0 ? v.drill : null);
     if (message) return message;
   }
   for (const d of diffPairs) {

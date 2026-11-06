@@ -234,6 +234,15 @@ export interface StrokeTextOptions {
   /** font.h's ITALIC_TILT shear, applied the same way stroke_font.cpp's GetTextAsGlyphs does (a per-point x-shear proportional to y, not a font substitution -- stroke fonts have no separate italic glyph set). */
   italic?: boolean;
   color: string;
+  /**
+   * The board view is flipped (`PCB_DISPLAY_OPTIONS::m_FlipBoardView`) and the text is not side specific: it is drawn with its mirror toggled so it reads
+   * as it did, kept over the same part of the canvas (`PCB_PAINTER::draw( const PCB_TEXT* )`: `if( m_gal->IsFlippedX() && !aText->IsSideSpecific() )`,
+   * the anchor moved by the text's width along its direction -- added, or taken away for a mirrored text -- for a left or a right justification). With
+   * `readableAnchorKept`, the anchor stays (the dimension's text, `attrs.m_Mirrored = !attrs.m_Mirrored` and no more; a pad's centred number,
+   * `GAL::BitmapText`'s `attrs.m_Mirrored = m_globalFlipX`).
+   */
+  keepReadable?: boolean;
+  readableAnchorKept?: boolean;
 }
 
 const DEFAULT_THICKNESS_FACTOR = 1 / 8;
@@ -250,14 +259,19 @@ const ITALIC_TILT = 1 / 8;
  */
 export function drawStrokeText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, opts: StrokeTextOptions): void {
   if (!text) return;
-  const { sizeNm, justify = "left", angleRad = 0, mirror = false, italic = false, color } = opts;
+  const { sizeNm, justify = "left", angleRad = 0, italic = false, color } = opts;
   const thickness = opts.thicknessNm ?? sizeNm * DEFAULT_THICKNESS_FACTOR;
   const { glyphs: placed, width, overbars } = layout(text, sizeNm);
   const startX = justify === "center" ? -width / 2 : justify === "right" ? -width : 0;
+  let mirror = opts.mirror ?? false;
+  // `textWidth`: the text's width, negative for a right justification, none centred, along the text's direction
+  const shift = opts.keepReadable && !opts.readableAnchorKept ? (justify === "center" ? 0 : justify === "right" ? -width : width) * (mirror ? -1 : 1) : 0;
+  if (opts.keepReadable) mirror = !mirror;
 
   ctx.save();
   ctx.translate(x, y);
   if (angleRad) ctx.rotate(angleRad);
+  if (shift) ctx.translate(shift, 0);
   if (mirror) ctx.scale(-1, 1);
   // x' = x - tilt*y: y is negative "up" in this glyph space (FONT_OFFSET),
   // so this shifts ascenders right of the baseline -- a conventional

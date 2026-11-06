@@ -103,7 +103,9 @@ fn copper_keeps_the_boards_edge_clearance_from_the_outline_not_its_net_classs() 
     // KiCad's default copper-to-edge clearance is 0.5 mm; the router's epsilon is the board's DRC epsilon, 0.5 um.
     assert_eq!(near(mm(0.3), &default), (true, true), "300 um from the edge is inside 500");
     assert_eq!(near(mm(0.498), &default), (true, true), "two microns inside the clearance");
-    assert_eq!(near(Nm::new(499_499), &default), (true, true), "a nanometre more than the epsilon inside the clearance");
+    assert_eq!(near(Nm::new(499_498), &default), (true, true), "two nanometres more than the epsilon inside the clearance");
+    // `collideSimple`'s `clearance + lineWidthH + lineWidthI - 1` ("the hulls are built to exactly the clearance distance"): 1 nm more goes
+    assert_eq!(near(Nm::new(499_499), &default), (false, false), "a nanometre more than the epsilon inside the clearance: collideSimple's extra 1");
     assert_eq!(near(Nm::new(499_500), &default), (false, false), "the router's 0.5 um epsilon (`COLLISION_SEARCH_OPTIONS::m_useClearanceEpsilon`) lets half a micron go");
     assert_eq!(near(mm(0.5), &default), (false, false), "exactly the clearance is clear");
     assert_eq!(near(mm(0.6), &default), (false, false));

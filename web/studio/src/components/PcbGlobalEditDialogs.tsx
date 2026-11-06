@@ -7,6 +7,7 @@
 import { useMemo, useState } from "react";
 import { closeSweepDialog } from "../actions/pcbSweepDialogs";
 import type { ExchangeOptions, Shape } from "../api/types";
+import type { BoardTextBox } from "../api/pcbItemTypes";
 import { DEFAULT_CLEANUP_GRAPHICS, planCleanupGraphics, type CleanupGraphicsOptions, type CleanupGraphicsPlan, type GlobalDeletionOptions } from "../kicad-port/pcbGlobalEdit";
 import { setAllOptions, type MatchChoice, type MatchMode, type ReportLine } from "../kicad-port/pcbExchange";
 import { DialogShell, LengthRow, useEscape, useLengthField } from "./pcbDialogKit";
@@ -75,13 +76,13 @@ export function GlobalDeletionDialog({ options, currentLayer, onOk }: { options:
   );
 }
 
-export function CleanupGraphicsDialog({ shapes, options, onOk }: { shapes: readonly Shape[]; options: CleanupGraphicsOptions; onOk: (o: CleanupGraphicsOptions) => void }) {
+export function CleanupGraphicsDialog({ shapes, textBoxes = [], options, onOk }: { shapes: readonly Shape[]; textBoxes?: readonly BoardTextBox[]; options: CleanupGraphicsOptions; onOk: (o: CleanupGraphicsOptions) => void }) {
   const [o, setO] = useState<CleanupGraphicsOptions>({ ...DEFAULT_CLEANUP_GRAPHICS, ...options });
   const tol = useLengthField(options.toleranceNm);
   const tolerance = tol.parse();
   const opts: CleanupGraphicsOptions = { ...o, toleranceNm: tolerance ?? o.toleranceNm };
   // `doCleanup( true )` after every change: the dry run that lists what Update PCB will do.
-  const plan: CleanupGraphicsPlan = useMemo(() => planCleanupGraphics(shapes, { ...o, toleranceNm: tolerance ?? o.toleranceNm }, true), [shapes, o, tolerance]);
+  const plan: CleanupGraphicsPlan = useMemo(() => planCleanupGraphics(shapes, { ...o, toleranceNm: tolerance ?? o.toleranceNm }, true, textBoxes), [shapes, textBoxes, o, tolerance]);
   const any = o.mergeRects || o.deleteRedundant || o.fixBoardOutlines;
   return (
     <DialogShell

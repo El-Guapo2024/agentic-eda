@@ -321,7 +321,10 @@ impl Router {
         if !self.settings.allow_drc_violations() {
             // `isStartingPointRoutable`: "If the only reason we collide is track width; it's better to allow the user to start anyway and just
             // highlight the resulting collisions, so they can change width later."
-            let collides = |w: Nm| self.world.first_colliding(&eda_drc::kimath::Shape::Stadium { a: start_pos, b: start_pos, r: w / 2 }, &net, LayerRange::single(layer), &self.rules, &[]).is_some();
+            // `m_world->CheckColliding( &dummyStartLine, ITEM::ANY_T )`: the router's world itself, where the board edge in a castellated pad's hole
+            // is no collision (`QueryEdgeExclusions`, `QueryOpts::root_world`)
+            let opts = crate::node::QueryOpts { root_world: true, ..Default::default() };
+            let collides = |w: Nm| !self.world.colliding_with(&eda_drc::kimath::Shape::Stadium { a: start_pos, b: start_pos, r: w / 2 }, &net, LayerRange::single(layer), &self.rules, &[], opts).is_empty();
             if collides(width) && collides(self.rules.track_width_min_nm) {
                 return Err("The routing start point violates DRC.".into());
             }
@@ -754,8 +757,8 @@ impl Router {
         for run in &runs {
             node.add_line(run, None, false);
         }
-        for (v, _) in &placer.fixed_vias {
-            node.add(Item::Via(crate::item::Via { diameter: v.diameter.max(Nm::new(1)), drill: v.drill.max(Nm::new(1)), ..v.clone() }));
+        for v in placer.placed_vias() {
+            node.add(Item::Via(crate::item::Via { diameter: v.diameter.max(Nm::new(1)), drill: v.drill.max(Nm::new(1)), ..v }));
         }
         let current_end = head.last().unwrap_or_else(|| placer.fixed_start());
         let (from, layers) = if head.segment_count() > 0 {
@@ -1162,7 +1165,8 @@ impl Router {
         // two runs, at the very start of the route (a via before any segment), or at its end (a route finished on a via). A via is where the
         // walk or the shove left it, which is where the run before it ends and the run after it starts.
         if let Some(s) = self.session() {
-            for (k, (v, _)) in s.placer.fixed_vias.iter().enumerate() {
+            // where a later leg's shove left it (`FixRoute` adds it to `m_lastNode` as an ordinary via)
+            for (k, v) in s.placer.placed_vias().iter().enumerate() {
                 let kind = s.placed_vias.get(k).map_or(ViaKind::Through, |p| p.kind);
                 commit.vias.push(eda_model::ir::Via {
                     id: String::new(),
@@ -1491,7 +1495,9 @@ impl Router {
                 let keepout_fp = resolver.and_then(|r| r.keepout(s)).and_then(|k| k.parent_footprint.clone());
                 let text_fp = s.source.strip_prefix(crate::item::Solid::TEXT_SOURCE).and_then(|t| t.rsplit_once(':')).map(|(fp, _)| fp.to_string());
                 let pad_fp = s.source.split_once('.').map(|(fp, _)| fp.to_string()).filter(|_| !s.edge && !s.is_graphic() && !s.is_text() && !s.is_keepout() && !s.is_obstacle());
-                let of = fp.or(keepout_fp).or(text_fp).or(pad_fp)?;
+                // the footprint's own Edge.Cuts and Margin graphics (`InlineDrag`'s `GraphicalItems()` on Edge_Cuts or Margin)
+                let edge_fp = s.edge.then(|| crate::from_ir::edge_footprint(&s.source)).flatten().map(str::to_string);
+                let of = fp.or(keepout_fp).or(text_fp).or(pad_fp).or(edge_fp)?;
                 refs.contains(&of).then_some(id)
             })
             .collect();

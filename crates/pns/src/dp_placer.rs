@@ -636,7 +636,7 @@ impl DiffPairPlacer {
         let norm_sq = |v: crate::diff_pair::Vec2| v.0.area(v.0) + v.1.area(v.1);
         while iter < MAX_ITER {
             // `m_currentNode->QueryColliding( &virtHead, ..)`: its copper and its hole
-            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false, head_hole: None, head_via: None };
+            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false, head_hole: None, head_via: None, root_world: false };
             let mut obstacles = node.via_colliding(&virt, rules, &[], opts);
             obstacles.sort_by_key(|o| o.id);
             let Some(obs) = obstacles.first() else { break };

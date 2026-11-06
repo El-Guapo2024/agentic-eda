@@ -111,7 +111,7 @@ export async function startInlineDrag(x: number, y: number, hit: DraggableHit, b
   }
   // `ROUTER_TOOL::performDragging` (`D` while the router tool is active): a locked item asks first, and "Drag Anyway" unlocks it for the drag
   if (!preview.ok && preview.locked) {
-    const anyway = await askConfirm({ title: "Confirmation", message: "The selected item is locked.", okLabel: "Drag Anyway" });
+    const anyway = await askConfirm({ title: "Confirmation", message: "The selected item is locked.", okLabel: "Drag Anyway", doNotShowKey: "router_tool.cpp:performDragging" }); // `dlg.DoNotShowCheckbox( __FILE__, __LINE__ )`
     if (!anyway) return;
     preview = await routeDragStart(x, y, hit.layer, settings, freeAngle, true);
   }

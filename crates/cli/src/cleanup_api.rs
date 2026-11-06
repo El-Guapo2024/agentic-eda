@@ -110,8 +110,10 @@ pub fn apply(dir: &Path, body: &[u8]) -> Value {
         vias: vec![],
         lock_tracks: vec![],
         via_kinds: vec![],
-        track_sources: vec![],
+        // the runs of a cut polyline after its first take its mask opening and group; a merged track and a polyline's first run keep their id
+        track_sources: report.sources.clone(),
         group: None,
+        keep_track_ids: report.kept_track_indices(),
     };
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => json!({ "ok": true, "message": summary, "changes": changes_json }),

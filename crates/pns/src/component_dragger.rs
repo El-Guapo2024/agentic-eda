@@ -45,7 +45,9 @@
 //! **Differs:**
 //! - a pad made of several solids (a padstack whose shape changes from layer to layer, `syncPad`'s solids) moves all of them; KiCad's
 //!   `FindItemByParent( pad )` hands the dragger the first one only;
-//! - a footprint's own Edge.Cuts and Margin graphics are board shapes in this model (the importer makes them so), so they are not moved;
+//! - (no longer a difference) a footprint's own Edge.Cuts and Margin graphics -- its art since the importer keeps them there -- are among the
+//!   solids dragged (`InlineDrag`: `GraphicalItems()` on Edge_Cuts or Margin, `itemsToDrag.Add( solid )`; `from_ir::edge_source`), so a pad
+//!   keeps its distance to the footprint's own slot or edge as the footprint moves;
 //! - a pad's own hole is not asked as the probe of `CheckColliding` (see [`crate::node::Node::item_colliding`]); the world's holes are, and a
 //!   moved pad's hole moves with it ([`crate::rule_resolver::RuleResolver::pad_hole_of`]);
 //! - the rules that look at an item's geometry (`A.intersectsArea( .. )`) see a moved pad where the board has it.

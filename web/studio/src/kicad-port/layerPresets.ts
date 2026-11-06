@@ -265,16 +265,19 @@ export function hideAllButActive(v: PresetView): PresetView {
 export type LayerGroupOp = "show_copper" | "hide_copper" | "show_non_copper" | "hide_non_copper";
 
 /**
- * The four copper / non-copper entries of the layer list's menu. Hiding copper or non-copper layers moves the active layer to the first layer
- * left on when it was one of those hidden (`SetActiveLayer( *visible.Seq().begin() )`).
+ * The four copper / non-copper entries of the layer list's menu, over `presetAllCopper.layers` -- `LSET( LSET::AllCuMask() ).set( Edge_Cuts )`: the board
+ * outline goes with the copper (`ID_SHOW_ALL_COPPER_LAYERS`: `visible |= presetAllCopper.layers`; `ID_HIDE_ALL_NON_COPPER`: `visible &= presetAllCopper.layers`,
+ * so Edge.Cuts stays on). Hiding copper or non-copper layers moves the active layer to the first layer left on when it was one of those hidden
+ * (`SetActiveLayer( *visible.Seq().begin() )`).
  */
 export function layerGroupOp(v: PresetView, op: LayerGroupOp): PresetView {
   const visible = new Set(v.visibleLayers);
+  const inCopperGroup = (l: string) => isCopper(l) || l === "Edge.Cuts";
   for (const l of v.universe) {
-    if (op === "show_copper" && isCopper(l)) visible.add(l);
-    else if (op === "hide_copper" && isCopper(l)) visible.delete(l);
-    else if (op === "show_non_copper" && !isCopper(l)) visible.add(l);
-    else if (op === "hide_non_copper" && !isCopper(l)) visible.delete(l);
+    if (op === "show_copper" && inCopperGroup(l)) visible.add(l);
+    else if (op === "hide_copper" && inCopperGroup(l)) visible.delete(l);
+    else if (op === "show_non_copper" && !inCopperGroup(l)) visible.add(l);
+    else if (op === "hide_non_copper" && !inCopperGroup(l)) visible.delete(l);
   }
   let activeLayer = v.activeLayer;
   if ((op === "hide_copper" || op === "hide_non_copper") && (activeLayer === null || !visible.has(activeLayer)) && visible.size > 0) activeLayer = firstLayer(visible);

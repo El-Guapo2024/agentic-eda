@@ -1579,6 +1579,9 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // Collect and Embed 3D Models: the model files the footprints name are read here, into the command (`crate::embedded_api`).
     let with_models = crate::embedded_api::with_collected_models(cmd, dir, &design, &model)?;
     let cmd = with_models.as_ref().unwrap_or(cmd);
+    // The Embedded Files panel's OK with "Embed fonts" ticked: the files of the fonts the board's texts use are read here, into the command (`crate::embedded_api`).
+    let with_fonts = crate::embedded_api::with_text_fonts(cmd, &design);
+    let cmd = with_fonts.as_ref().unwrap_or(cmd);
     // KiCad 10's via stitching: the vias a `set_via_stitch` leaves out are placed here, from the zone fills (`crate::via_stitch_api`).
     let with_vias = crate::via_stitch_api::with_planned_vias(cmd, dir, &design, &model, meta.snap_nm, meta.spacing_nm);
     let cmd = with_vias.as_ref().unwrap_or(cmd);

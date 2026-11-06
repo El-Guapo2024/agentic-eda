@@ -594,7 +594,9 @@ impl Board<'_> {
                 shown_reference: None,
                 zone_overrides: f.zone_overrides.clone(),
                 extra: f.extra.clone(),
-                reuse_unplaced: true,
+                // A footprint with no library name is the fresh one `SaveSelection` made to own a copied pad (`new FOOTPRINT( m_board )`), never a part
+                // of this board: it pastes as a footprint of that one pad even when the part the pad came from is not on the board (r3 B-7).
+                reuse_unplaced: !f.name.is_empty(),
                 annotation: mode,
             });
         }

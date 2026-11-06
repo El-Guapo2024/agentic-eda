@@ -32,6 +32,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Cmd, FillMode, IslandRemovalMode, PadConnection, PlacementArea, RuleAreaFields, ZoneSettingsFields, ZoneSmoothing } from "../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { ZONE_SETTINGS_KEEPOUTS } from "../kicad-port/pcbDrawZone";
 import { nmFrom, nmTo } from "../state/units";
 import { fetchPlacementSources } from "../api/multichannelClient";
 import { chooseMode, NO_CHOICES, placementFormOf, placementOf, placementOptions, placementSelection, type PlacementChoices, type PlacementForm } from "../kicad-port/multichannel";
@@ -213,7 +214,8 @@ export function ZoneDialog() {
       // `zoneSettings << *oldZone`: the copy starts from the original's net, layers, name, lock and settings.
       if (dupZone) return { net: dupZone.net, layers: [...zoneLayers(dupZone)], name: dupZone.name ?? "", locked: !!lockedIds?.includes(dupZone.id), settings: { ...dupZone } };
       // `createNewZone`: the zone is on the layer the tool was started on -- a technical layer gets the non-copper dialog.
-      const fresh: ZoneFormInit = { net: null, layers: [activeLayerName(state.activeLayer, copperLayers[0] ?? "F.Cu")], name: "", locked: false, settings: { ...DEFAULT_FORM_SETTINGS, is_rule_area: state.nextZoneIsRuleArea } };
+      // a new rule area keeps out what `ZONE_SETTINGS::ZONE_SETTINGS()` does (tracks, vias, pads)
+      const fresh: ZoneFormInit = { net: null, layers: [activeLayerName(state.activeLayer, copperLayers[0] ?? "F.Cu")], name: "", locked: false, settings: { ...DEFAULT_FORM_SETTINGS, ...(state.nextZoneIsRuleArea ? ZONE_SETTINGS_KEEPOUTS : {}), is_rule_area: state.nextZoneIsRuleArea } };
       dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
       if (convert) fresh.conv = { strategy: convert.strategy, gapNm: convert.gapNm, deleteOriginals: convert.deleteOriginals };
       return fresh;
