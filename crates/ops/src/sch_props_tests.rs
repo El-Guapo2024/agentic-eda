@@ -178,11 +178,13 @@ fn sheet_properties_rename_the_sheet() {
     ok(&mut b, edit_sheet("sheet_a", Some(" Power "), None));
     assert_eq!(sch_of(&b).sheets[0].name, "Power", "the name is trimmed");
     assert_eq!(sch_of(&b).sheets[0].id, "sheet_a", "a rename keeps the id");
-    assert_eq!(err(&mut b, edit_sheet("sheet_a", Some("B"), None)), "ops_sheet_name_taken");
     assert_eq!(err(&mut b, edit_sheet("sheet_a", Some("   "), None)), "ops_bad_sheet");
     assert_eq!(err(&mut b, edit_sheet("sheet_a", Some("Power"), None)), "ops_sheet_unchanged");
     assert_eq!(err(&mut b, edit_sheet("nope", Some("x"), None)), "ops_unknown_sheet");
     assert_eq!(files(&b), vec!["a.kicad_sch", "b.kicad_sch"]);
+    // UI-LEFT S21: the name another sheet has is allowed (`DIALOG_SHEET_PROPERTIES` has no such check); ERC's `duplicate_sheet_names` reports it
+    ok(&mut b, edit_sheet("sheet_a", Some("B"), None));
+    assert_eq!(sch_of(&b).sheets.iter().filter(|s| s.name == "B").count(), 2);
 }
 
 #[test]
@@ -632,10 +634,13 @@ fn a_virtual_roots_top_level_sheets_are_added_and_deleted_but_not_the_last_and_n
     assert_eq!((new.name.as_str(), new.file.as_str()), ("My Power", "my_power.kicad_sch"), "the file is the name, underscores for spaces, in lower case");
     assert_eq!(new.page, "4", "the lowest page no sheet shows: the root 1, A 2, B 3");
     assert!(files(&b).contains(&"my_power.kicad_sch".to_string()));
-    // the same name again gets a file of its own
-    assert_eq!(err(&mut b, SchCmd::AddTopLevelSheet { name: "My Power".into() }), "ops_sheet_name_taken");
+    // the same name again gets a file of its own (KiCad 25ec2335's hierarchy pane refuses no name: ERC reports `duplicate_sheet_names`, UI-LEFT S21)
     ok(&mut b, SchCmd::AddTopLevelSheet { name: "my power".into() });
     assert_eq!(sch_of(&b).sheets.last().unwrap().file, "my_power_1.kicad_sch");
+    ok(&mut b, SchCmd::AddTopLevelSheet { name: "My Power".into() });
+    assert_eq!(sch_of(&b).sheets.last().unwrap().file, "my_power_2.kicad_sch");
+    let again = sch_of(&b).sheets.last().unwrap().id.clone();
+    ok(&mut b, SchCmd::DeleteTopLevelSheet { id: again });
     for id in ["sheet_a", "sheet_b", &new.id] {
         ok(&mut b, SchCmd::DeleteTopLevelSheet { id: id.to_string() });
     }

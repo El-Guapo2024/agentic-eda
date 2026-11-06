@@ -233,7 +233,7 @@ function StudioFrame() {
         <div className="canvas-col">
           {state.tab === "pcb" && <Canvas />}
           {/* the questions a board tool asks (Drag Anyway to a locked item) go through the same yes/no bus the library editors use: it needs a host on this tab too */}
-          {state.tab === "pcb" && <LibraryDialogHost />}
+          {(state.tab === "pcb" || state.tab === "schematic") && <LibraryDialogHost />}
           {state.tab === "schematic" && <SchematicView />}
           {isFootprint && <FootprintEditorView />}
           {isSymbolEditor && <SymbolEditorView />}

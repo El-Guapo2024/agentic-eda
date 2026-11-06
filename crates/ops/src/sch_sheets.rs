@@ -632,9 +632,8 @@ impl<'a> Board<'a> {
             if size.0 <= Nm::ZERO || size.1 <= Nm::ZERO {
                 return Err(vec![CheckResult::fail("ops_bad_sheet", name, "a sheet needs a positive size")]);
             }
-            if self.schematic_mut_or_create().sheets.iter().any(|s| s.name == name) {
-                return Err(vec![CheckResult::fail("ops_sheet_name_taken", name, format!("a sheet named '{name}' already exists on this sheet"))]);
-            }
+            // a name another sheet has is allowed (the sheet dialog has no such check; ERC reports `duplicate_sheet_names`, UI-LEFT S21)
+            self.schematic_mut_or_create();
             let mut screens = content.screens.clone();
             screens.insert(OWN.to_string(), content.root.clone());
             let placement = SheetInstance { id: String::new(), name: name.to_string(), file: OWN.to_string(), at, size, pins: vec![], page: String::new() };

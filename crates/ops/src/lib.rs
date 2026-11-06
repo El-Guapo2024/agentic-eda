@@ -5712,10 +5712,9 @@ impl<'a> Board<'a> {
         if size.0 <= Nm::ZERO || size.1 <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_sheet", name, "a sheet needs a positive size")]);
         }
+        // A name another sheet has is allowed, as `DIALOG_SHEET_PROPERTIES` allows it: ERC reports it (`ERCE_DUPLICATE_SHEET_NAME`, "Duplicate sheet names
+        // within a given sheet"; UI-LEFT S21). The studio refused it until then.
         let sch = self.schematic_mut_or_create();
-        if sch.sheets.iter().any(|s| s.name == name) {
-            return Err(vec![CheckResult::fail("ops_sheet_name_taken", name, format!("a sheet named '{name}' already exists on this sheet"))]);
-        }
         sch.sheets.push(SheetInstance { id: String::new(), name: name.to_string(), file: file.clone(), at, size, pins: vec![], page: String::new() });
         sch.assign_missing_ids();
         // a file nothing uses yet gets its own empty screen; one that is already there is shared

@@ -1,8 +1,10 @@
 // `S` (SCH_DRAWING_TOOLS::DrawSheet): the second click of the sheet rectangle lands in
 // state.schSheetPending (the two corners, sized by kicad-port/schSheet.ts's `sizeSheet`), and this is
 // `EditSheetProperties` -- the name and the file of the new sheet, "Untitled Sheet" / "untitled.kicad_sch"
-// by default. Confirming commits `add_sheet` (a new empty screen for a new file, a shared one for a file
-// another sheet already shows); cancelling leaves nothing behind, like `cleanup()` in the C++.
+// as every new sheet starts (`DrawSheet`: `SetText( wxT( "Untitled Sheet" ) )`, `wxT( "untitled" ) + ext`; the file does not follow the name, and a name another
+// sheet has is allowed: ERC reports it, UI-LEFT S21). Confirming commits `add_sheet` (a new empty screen for a new file); a file a sheet of the hierarchy
+// already shows is linked only after `ChangeSheetFile`'s question, "'%s' already exists.\n\nLink '%s' to this file?" (Cancel keeps the dialog open);
+// cancelling leaves nothing behind, like `cleanup()` in the C++.
 //
 // Same "draw first, small dialog last" shape LabelDialog/TextDialog use (PARITY-sch.md).
 //
@@ -12,7 +14,9 @@ import { useEffect, useState } from "react";
 import { fetchSheetFileCheck } from "../api/hierarchyClient";
 import type { SheetFileCheck } from "../api/hierarchyTypes";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { DEFAULT_SHEET_FILE, defaultSheetFile, uniqueSheetName } from "../kicad-port/schSheet";
+import { DEFAULT_SHEET_FILE, DEFAULT_SHEET_NAME, linkQuestion } from "../kicad-port/schSheet";
+import { fetchHierarchy } from "../api/schControlClient";
+import { askConfirm } from "./library/libraryDialogs";
 import { rememberedAnnotateSettings } from "../kicad-port/schAnnotate";
 import { describeCheck, importNumbering, importSheetCmd, sheetFileOfFile, sheetNameOfFile } from "../kicad-port/schImportSheet";
 import { sendAndSelectNew } from "./schematic/schImportTool";
@@ -23,21 +27,17 @@ export function SheetDialog() {
   const api = useStudioApi();
   const pending = state.schSheetPending;
 
-  const [name, setName] = useState("");
+  const [name, setName] = useState(DEFAULT_SHEET_NAME);
   const [file, setFile] = useState(DEFAULT_SHEET_FILE);
-  /** Whether the user typed their own file name: until then the file follows the name. */
-  const [fileEdited, setFileEdited] = useState(false);
   /** What taking the file in brings (an import only): null while the server is reading it. */
   const [check, setCheck] = useState<SheetFileCheck | null>(null);
   const source = pending?.source;
 
   useEffect(() => {
     if (!pending) return;
-    const taken = (state.schematic?.sheets ?? []).map((s) => s.name);
-    const fresh = pending.source ? uniqueSheetName(taken, sheetNameOfFile(pending.source.path)) : uniqueSheetName(taken);
-    setName(fresh);
-    setFile(pending.source ? sheetFileOfFile(pending.source.path) : fresh === "Untitled Sheet" ? DEFAULT_SHEET_FILE : defaultSheetFile(fresh));
-    setFileEdited(false);
+    // `DrawSheet`: "Untitled Sheet" / `untitled.kicad_sch`, or for a sheet from a file its name (`fn.GetName()`) and a copy of it
+    setName(pending.source ? sheetNameOfFile(pending.source.path) : DEFAULT_SHEET_NAME);
+    setFile(pending.source ? sheetFileOfFile(pending.source.path) : DEFAULT_SHEET_FILE);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending?.at[0], pending?.at[1], pending?.size[0], pending?.size[1]]);
 
@@ -56,13 +56,17 @@ export function SheetDialog() {
 
   if (!pending) return null;
   const close = () => dispatch({ type: "SET_SCH_SHEET_PENDING", pending: null });
-  const taken = (state.schematic?.sheets ?? []).some((s) => s.name === name.trim());
   const described = check?.ok ? describeCheck(check) : null;
   const blocked = source ? !check || !check.ok || check.blocked : false;
-  const valid = name.trim() !== "" && file.trim() !== "" && !/[\\/]/.test(file) && !taken && !blocked;
+  const valid = name.trim() !== "" && file.trim() !== "" && !/[\\/]/.test(file) && !blocked;
 
   const submit = async () => {
     if (!valid) return;
+    if (!source) {
+      // `ChangeSheetFile` for a new sheet: a file the hierarchy already shows (`SearchHierarchy`) is linked only if the user says so
+      const question = linkQuestion(file, await fetchHierarchy().catch(() => []));
+      if (question && !(await askConfirm({ title: "Confirmation", message: question, okLabel: "OK", cancelLabel: "Cancel" }))) return;
+    }
     close();
     if (source) {
       const ok = await sendAndSelectNew(api, dispatch, importSheetCmd(source, { name, file, at: pending.at, size: pending.size }, importNumbering(rememberedAnnotateSettings())));
@@ -85,10 +89,7 @@ export function SheetDialog() {
             <input
               autoFocus
               value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                if (!fileEdited) setFile(defaultSheetFile(e.target.value));
-              }}
+              onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") void submit();
               }}
@@ -96,19 +97,14 @@ export function SheetDialog() {
             <span>File name</span>
             <input
               value={file}
-              onChange={(e) => {
-                setFile(e.target.value);
-                setFileEdited(true);
-              }}
+              onChange={(e) => setFile(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") void submit();
               }}
             />
           </div>
-          <div style={{ fontSize: 11, marginTop: 8, minHeight: 16, color: taken || /[\\/]/.test(file) ? "#ff6666" : undefined, opacity: taken || /[\\/]/.test(file) ? 1 : 0.7 }}>
-            {taken
-              ? `A sheet named '${name.trim()}' already exists on this sheet.`
-              : /[\\/]/.test(file)
+          <div style={{ fontSize: 11, marginTop: 8, minHeight: 16, color: /[\\/]/.test(file) ? "#ff6666" : undefined, opacity: /[\\/]/.test(file) ? 1 : 0.7 }}>
+            {/[\\/]/.test(file)
                 ? "A sheet file is a bare file name (no folders)."
                 : source
                   ? `A copy of ${source.path} goes in the project${check?.dest_file ? ` as ${check.dest_file}` : ""}${source.keepAnnotations ? "; the symbols keep their references" : "; its symbols are numbered anew"}.`
