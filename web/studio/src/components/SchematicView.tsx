@@ -23,6 +23,8 @@ import { existingSingleClickItem } from "../kicad-port/schSingleClick";
 import { arcMotion } from "../kicad-port/arcGeom";
 import { drawStrokeText } from "./text/strokeFont";
 import { schArcEditMode } from "../kicad-port/schArcEdit";
+import { ARC_DRAW_MODES } from "../kicad-port/arcGeom";
+import { ARC_MODE_ACTIONS, CYCLE_ARC_DRAW_MODE, schArcDrawMode } from "../kicad-port/schArcDraw";
 import { eeFindHandle, handlePos, POINT_SIZE_PX, type EeHandle } from "../kicad-port/eePointEdit";
 import { schDrag, schPointEditor, schShapeFrom } from "../kicad-port/schPointEdit";
 import { paintEditPoints } from "./schematic/schArcEditPaint";
@@ -837,7 +839,7 @@ export function SchematicView() {
 
         // Draw Rectangle / Circle / Arc / Bezier / Text Box / Rule Area (components/schematic/schShapeTools.ts).
         if (isSchShapeTool(state.activeTool)) {
-          shapeToolClick({ tool: state.activeTool, draw: state.drawState, sch, lineMode: state.schLineMode, dispatch, api }, shapeSnap(wx, wy));
+          shapeToolClick({ tool: state.activeTool, draw: state.drawState, sch, lineMode: state.schLineMode, dispatch, api, scale: state.schematicView.scale }, shapeSnap(wx, wy));
           return;
         }
 
@@ -1146,7 +1148,13 @@ export function SchematicView() {
         // `AddStandardSubMenus`: the Zoom submenu over the eeschema zoom list, the Grid submenu over the Schematic Editor's grids
         const other = state.units === "mm" ? "mil" : "mm";
         const std = { zoom: zoomMenuEntries(zoomListFor("schematic"), state.schematicView.scale), grid: gridMenuEntries(gridSettingsList, gridNm, (nm) => formatLength(nm, state.units), (nm) => formatLength(nm, other)) };
-        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps, inGroup: state.schEnteredGroupId != null, unit: underPointer }), std) });
+        const nodes = schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps, inGroup: state.schEnteredGroupId != null, unit: underPointer }), std);
+        // KiCad 25ec2335's `EE_GRAPHIC_TOOL` menu while Draw Arc is armed (`inDrawingArc`, order 200): the five modes as check items, then Cycle Arc Drawing Mode
+        const arcModes: MenuNode[] =
+          state.activeTool === "sch_arc"
+            ? [...ARC_DRAW_MODES.map((m): MenuNode => ({ type: "item", action: ARC_MODE_ACTIONS[m].action, label: ARC_MODE_ACTIONS[m].label, checked: m === schArcDrawMode() })), { type: "item", action: CYCLE_ARC_DRAW_MODE, label: "Cycle Arc Drawing Mode" }, { type: "separator" }]
+            : [];
+        setContextMenu({ x: e.clientX, y: e.clientY, nodes: [...arcModes, ...nodes] });
       }}
       onDoubleClick={(e) => {
         // A double-click on a hierarchical sheet enters it (`SCH_SELECTION_TOOL` -> `SCH_ACTIONS::enterSheet`); on any other item it opens its Properties

@@ -7,6 +7,8 @@
 // drag-and-drop handlers, Import Non-KiCad Schematic, the remote symbol panel, Show Hidden
 // Fields, Show Pin Alternate Icons, Annotate Automatically, the internal restartMove and updateNetHighlighting events. The design variants
 // (KiCad 25ec2335 `SCH_EDITOR_CONTROL::AddVariant` ...) open components/DesignVariantDialogs.tsx; the attribute toggles act on the current variant.
+import { ARC_DRAW_MODES } from "../kicad-port/arcGeom";
+import { ARC_MODE_ACTIONS, schArcDrawMode } from "../kicad-port/schArcDraw";
 import type { Dispatch } from "react";
 import type { Action as StudioAction, StudioApi, StudioState } from "../state/store";
 import type { SchControlAction, SchControlState } from "../state/schControlStore";
@@ -63,6 +65,9 @@ export function schControlChecked(name: string, ctx: Pick<SchControlContext, "co
     case "eeschema.EditorControl.showNetNavigator":
       return ctx.control.netNavigatorOpen;
     default: {
+      // KiCad 25ec2335's Draw Arc modes are `TOOLBAR_STATE::TOGGLE`: the mode in force is pressed while the tool runs (`SelectToolbarAction( DrawArcForMode( mode ) )`)
+      const arcMode = ARC_DRAW_MODES.find((m) => ARC_MODE_ACTIONS[m].action === name);
+      if (arcMode) return ctx.state.activeTool === "sch_arc" && schArcDrawMode() === arcMode;
       const key = ATTRIBUTE_ACTIONS[name];
       if (!key) return undefined;
       const sch = ctx.state.schematic;

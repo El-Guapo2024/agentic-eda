@@ -5,3 +5,6 @@ License: CC-BY-SA 4.0 -- https://creativecommons.org/licenses/by-sa/4.0/
 
 The DRC Rule Editor's constraint pictures (constraint_*.png) are KiCad's rendered bitmaps from resources/bitmaps_png/png at the same commit
 (constraint_<name>.png for light, constraint_<name>_dark.png for dark), under the same license.
+
+The Draw Arc mode icons (add_arc_center, add_arc_start_end_mid, add_arc_start_end_center, add_arc_tangent, add_arc_start_dir_end) are KiCad 10's, newer than
+that commit: resources/bitmaps_png/sources/{light,dark} at 25ec2335f2, under the same license.

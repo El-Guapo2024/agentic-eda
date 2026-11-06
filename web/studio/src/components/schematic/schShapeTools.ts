@@ -9,7 +9,10 @@
 // back a point. The same manager as the board's (kicad-port/arcGeom.ts, unchanged between the two commits for this mode); the grid snaps the points (no angle
 // snap: the schematic's loop sets none). The arc is committed as the board commits one (`ApplyToShape`: the start and end in increasing angle), selected, and
 // the tool stays armed (`SHAPE_DRAW_RESULT::NEXT_SHAPE`). 8303b2ad's `DrawShape` had two clicks and a 90-degree arc (`calcEdit`'s state 1: schShapeEdit.ts).
-// Not ported: 25ec2335's other four arc modes (start-end-mid, start-end-centre, tangent, start-direction-end) and their toolbar palette.
+// 25ec2335's other four arc modes (UI-LEFT-2 SS3): start-end-mid, start-end-centre (`/` the major arc), tangent (a first click on a drawn arc, polyline, bezier
+// or graphic line seeds it there -- `ARC_MODE_SESSION::PlacePoint` -- and each committed arc seeds the next, `ArcTangentSeedNear`) and start-direction-end, chosen by
+// the five `drawArc*` actions or `cycleArcDrawMode` (kicad-port/schArcDraw.ts keeps the setting; arcGeom.ts and arcConstruction.ts the construction). Their
+// clicked ends are kept exactly (`ApplyToShape`'s `SetArcGeometry( start, mid, end )`).
 import type { Dispatch } from "react";
 import type { Schematic } from "../../api/types";
 import type { SchGraphic, SchGraphicInput, SchGraphicShape } from "../../api/schEditTypes";
@@ -18,7 +21,9 @@ import { addPoint, deleteLastCorner, finalOutline, newPointClosesOutline, newPol
 import { LINE_MODE_FREE, type LineMode } from "../../kicad-port/schLineMode";
 import { graphicId } from "../../kicad-port/schIds";
 import { beginEdit, calcEdit, continueEdit, toShape, type ShapeToolKind } from "../../kicad-port/schShapeEdit";
-import { ARC_SET_ANGLE, ARC_SET_ORIGIN, arcClick, arcRemoveLastPoint, arcToThreePoints, type ArcGeom } from "../../kicad-port/arcGeom";
+import { ARC_SET_ANGLE, ARC_SET_ORIGIN, arcClick, arcHasTangentSeed, arcRemoveLastPoint, arcSetTangentSeed, arcToThreePoints, newArcGeomIn, type ArcGeom } from "../../kicad-port/arcGeom";
+import { arcTangentSeedNear } from "../../kicad-port/arcTangentSeed";
+import { schArcDrawMode, schTangentSeedAt } from "../../kicad-port/schArcDraw";
 import { drawArcPreview } from "../canvas/arcPreview";
 import type { LengthUnit } from "../../state/units";
 import { layerColor } from "../canvas/layers";
@@ -51,6 +56,8 @@ export interface ShapeToolEnv {
   lineMode: LineMode;
   dispatch: Dispatch<Action>;
   api: StudioApi;
+  /** The view's scale (px per nm): the tangent seed's pick distance (`ARC_SEED_PICK_PIXELS`). */
+  scale?: number;
 }
 
 /** Add a graphic and select it when it lands (`m_selectionTool->AddItemToSel( item )` after the commit). */
@@ -125,6 +132,7 @@ export function shapeToolClick(env: ShapeToolEnv, at: readonly [number, number],
 
 /** The arc a construction stands for, as the verbs take it: `ApplyToShape` (the start and end in increasing angle) and `GetArcMid`; null while it has no sweep. */
 export function arcShapeOf(g: ArcGeom): SchGraphicShape | null {
+  if (g.step === ARC_SET_ORIGIN && !arcHasTangentSeed(g)) return null;
   const a = arcToThreePoints(g);
   if (!a) return null;
   return { type: "arc", start: xy(a.start), mid: xy(a.mid), end: xy(a.end) };
@@ -137,10 +145,22 @@ export function arcShapeOf(g: ArcGeom): SchGraphicShape | null {
  */
 function arcToolClick(env: ShapeToolEnv, prev: ArcGeom | null, at: readonly [number, number]): void {
   if (!prev) env.dispatch({ type: "SET_SELECTION", refs: [] });
-  const { geom, arc } = arcClick(prev, [at[0], at[1]], false);
+  // `StartArcDrawMode`: a new arc in the mode the settings hold
+  const g = prev ?? newArcGeomIn(schArcDrawMode());
+  // `ARC_MODE_SESSION::PlacePoint`: the first click of a TANGENT arc on a graphic seeds the arc there instead of placing a start point
+  if (g.mode === "tangent" && g.step === ARC_SET_ORIGIN && !g.hasSeed) {
+    const seed = schTangentSeedAt(env.sch, at, env.scale ?? 1);
+    if (seed) {
+      env.dispatch({ type: "SET_DRAW_STATE", draw: { kind: "sch_shape", arc: arcSetTangentSeed(g, seed.start, seed.direction, seed.directionIsAxis) } });
+      return;
+    }
+  }
+  const { geom, arc } = arcClick(g, [at[0], at[1]], false);
   if (arc) {
-    env.dispatch({ type: "SET_DRAW_STATE", draw: null });
     commitGraphic(env, { shape: { type: "arc", start: xy(arc.start), mid: xy(arc.mid), end: xy(arc.end) } });
+    // `if( result == NEXT_SHAPE && cfg->m_ArcDrawMode == ARC_DRAW_MODE::TANGENT ) tangentSeed = ArcTangentSeedNear( *arc, lastClick )`: the next arc leaves this one's end
+    const seed = schArcDrawMode() === "tangent" ? arcTangentSeedNear({ kind: "arc", start: arc.start, mid: arc.mid, end: arc.end }, at) : null;
+    env.dispatch({ type: "SET_DRAW_STATE", draw: seed ? { kind: "sch_shape", arc: arcSetTangentSeed(newArcGeomIn("tangent"), seed.start, seed.direction, seed.directionIsAxis) } : null });
     return;
   }
   env.dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "sch_shape", arc: geom } : null });
@@ -155,7 +175,8 @@ export function finishShapeDraw(env: ShapeToolEnv, cursor: readonly [number, num
   else if (draw.arc) {
     // an arc that has its end angle goes in as it stands (a click at the cursor completes it); one short of that is dropped
     env.dispatch({ type: "SET_DRAW_STATE", draw: null });
-    const shape = draw.arc.step === ARC_SET_ANGLE ? arcShapeOf(draw.arc) : null;
+    // (`OnProperties`: an exact mode's arc once it is determined)
+    const shape = draw.arc.step === ARC_SET_ANGLE || (draw.arc.mode && draw.arc.mode !== "center_start_end") ? arcShapeOf(draw.arc) : null;
     if (shape) commitGraphic(env, { shape });
   }
 }
@@ -163,7 +184,7 @@ export function finishShapeDraw(env: ShapeToolEnv, cursor: readonly [number, num
 /** `deleteLastPoint` (Backspace, or Undo, while a rule area is in progress): drop the last corner, and the whole item when none is left. */
 export function deleteLastPoint(draw: SchShapeDraw, dispatch: Dispatch<Action>): void {
   if (draw.arc) {
-    // `MULTISTEP_GEOM_MANAGER::RemoveLastPoint`: back a step; back at the centre, nothing is left of the arc
+    // `MULTISTEP_GEOM_MANAGER::RemoveLastPoint`: back a step; back at the first point, nothing is left of the arc (a seed goes with it: `ARC_MODE_SESSION::RemoveLastPoint`)
     const g = arcRemoveLastPoint(draw.arc);
     dispatch({ type: "SET_DRAW_STATE", draw: g.step === ARC_SET_ORIGIN ? null : { kind: "sch_shape", arc: g } });
     return;

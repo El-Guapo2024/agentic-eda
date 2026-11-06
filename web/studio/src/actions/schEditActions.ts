@@ -26,7 +26,8 @@ import { registerSchSheetPinActions } from "./schSheetPinActions";
 import { registerSchSymbolActions } from "./schSymbolActions";
 import { beginBreak } from "../components/schematic/schBreakTool";
 import { deleteLastPoint, finishShapeDraw } from "../components/schematic/schShapeTools";
-import { arcToggleClockwise } from "../kicad-port/arcGeom";
+import { ARC_DRAW_MODES, arcSetMode, arcToggleClockwise, incrementArcDrawMode, type ArcDrawMode } from "../kicad-port/arcGeom";
+import { ARC_MODE_ACTIONS, CYCLE_ARC_DRAW_MODE, schArcDrawMode, setSchArcDrawMode } from "../kicad-port/schArcDraw";
 import { setSchArcEditMode } from "../kicad-port/schArcEdit";
 import { ARC_EDIT_MODE_LABEL, type ArcEditMode } from "../kicad-port/pcbPointEdit";
 import type { BreakMode } from "../kicad-port/schBreak";
@@ -114,6 +115,22 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   m.set("eeschema.InteractiveDrawing.drawRectangle", arm("sch_rect"));
   m.set("eeschema.InteractiveDrawing.drawCircle", arm("sch_circle"));
   m.set("eeschema.InteractiveDrawing.drawArc", arm("sch_arc"));
+  // KiCad 25ec2335's five Draw Arc actions (`SCH_ACTIONS::drawArcCenter` .. `drawArcStartDirEnd`, each with its `ARC_DRAW_MODE` as the parameter): `StartArcDrawMode`
+  // stores the mode and arms the tool; with an arc being drawn the mode changes under it (`ARC_MODE_SESSION::HandleModeEvent` -> `SetMode`: the start is kept between
+  // two modes that start at the start). `cycleArcDrawMode` (Alt+/) moves to the next mode while the tool is armed (kicad-port/schArcDraw.ts; UI-LEFT-2 SS3).
+  const arcDraw = state.drawState?.kind === "sch_shape" ? state.drawState : null;
+  const setArcMode = (mode: ArcDrawMode) => {
+    setSchArcDrawMode(mode);
+    if (state.activeTool !== "sch_arc") {
+      ctx.dispatch({ type: "SET_DRAW_STATE", draw: null });
+      ctx.dispatch({ type: "SET_ACTIVE_TOOL", tool: "sch_arc" });
+    } else if (arcDraw?.arc) {
+      ctx.dispatch({ type: "SET_DRAW_STATE", draw: { ...arcDraw, arc: arcSetMode(arcDraw.arc, mode) } });
+    }
+    ctx.dispatch({ type: "TOAST", message: ARC_MODE_ACTIONS[mode].label, kind: "info" });
+  };
+  for (const mode of ARC_DRAW_MODES) m.set(ARC_MODE_ACTIONS[mode].action, schematicOnly(() => setArcMode(mode)));
+  if (state.activeTool === "sch_arc") m.set(CYCLE_ARC_DRAW_MODE, schematicOnly(() => setArcMode(incrementArcDrawMode(schArcDrawMode()))));
   m.set("eeschema.InteractiveDrawing.drawBezier", arm("sch_bezier"));
   m.set("eeschema.InteractiveDrawing.drawTextBox", arm("sch_textbox"));
   m.set("eeschema.InteractiveDrawing.drawTable", arm("sch_table"));
