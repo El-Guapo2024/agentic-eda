@@ -70,6 +70,7 @@ import type { BreakState } from "../kicad-port/schBreak";
 import type { SheetImportPlan } from "../kicad-port/schImportSheet";
 import type { PinPlacement } from "../components/schematic/schPinTool";
 import type { AlignEdge } from "../kicad-port/alignDistribute";
+import { withBoardImagePixels, withSheetImagePixels } from "../actions/imagePixels";
 
 /** A router session this studio is drawing: a route, a pair or a drag (R7-R1). */
 const isRouterDraw = (d: { kind: string } | null | undefined): boolean => d?.kind === "route" || d?.kind === "diffpair" || d?.kind === "drag";
@@ -2232,6 +2233,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   /** One undo step for N Cmds (`Cmd::Batch`); a lone Cmd is sent as itself. */
   const runBatch = async (cmds: Cmd[], carry?: CarryStep): Promise<boolean> => {
     if (cmds.length === 0) return true;
+    // A turn or a flip of reference images turns their pixels too (`BITMAP_BASE::Rotate` / `Mirror`; the browser redraws them, actions/imagePixels.ts): in the same batch, one undo step.
+    if (stateRef.current.tab === "pcb") cmds = await withBoardImagePixels(stateRef.current.board, cmds);
     return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds }, carry);
   };
 
@@ -2338,7 +2341,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     transformSchItems: async (ids, turn, vertices) => {
       if (ids.length === 0) return;
-      await runCmd(turnCmd(ids, turn, vertices));
+      // an image's pixels turn with it (`SCH_BITMAP::Rotate`, `Mirror*`; actions/imagePixels.ts)
+      await runCmd(await withSheetImagePixels(stateRef.current.schematic, turnCmd(ids, turn, vertices), stateRef.current.currentSheetPath));
     },
     commitSchHeld: async (preview) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
@@ -2356,7 +2360,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // backend refuses, leaves the import standing as a step of its own.
       const carrying = carriedPlacementRef.current;
       carriedPlacementRef.current = false;
-      const ok = cmd ? await runCmd(cmd, carrying ? "commit" : undefined) : false;
+      const ok = cmd ? await runCmd(await withSheetImagePixels(stateRef.current.schematic, cmd, stateRef.current.currentSheetPath), carrying ? "commit" : undefined) : false;
       if (carrying && !ok) await postCarry("commit");
     },
     cmd: (c) => runCmd(c),

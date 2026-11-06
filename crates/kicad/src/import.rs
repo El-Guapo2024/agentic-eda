@@ -2321,6 +2321,16 @@ fn import_footprints(
                 }
             }
         }
+        // Its text boxes, images, points and barcodes (`crate::fp_board_items_io`), in the frame its definition is held in: a footprint on the back is held in the library's frame,
+        // half a turn from the file's orientation (below), and its items with it.
+        {
+            let held = FootprintInstance { id: reference.clone(), at: Point { x, y }, rot: if side == Side::Bottom { (rot + 180_000) % 360_000 } else { rot }, side, label: Default::default() };
+            let (items, uuids) = crate::fp_board_items_io::read_items(fp, file_version, &held, side == Side::Bottom);
+            for (id, u) in uuids {
+                slots.insert(u, format!("item:{id}"));
+            }
+            extra.items = items;
+        }
         // The footprint's own groups (`resolveGroups` makes them like a board's), each member by its place; a member that is not one of those is left out.
         for g in sexpr::find_all(fp, "group") {
             let members: Vec<String> = sexpr::find(g, "members").map(|m| m.iter().skip(1).filter_map(Sexpr::text).filter_map(|u| slots.get(u).cloned()).collect()).unwrap_or_default();
@@ -2429,6 +2439,9 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
             // KiCad 10's typed model, the Extruded 3D Body (`(model (type extruded) (overall_height ..) (body_pcb_gap ..) ..)`: `parseFOOTPRINT`'s `case T_model:` "Typed
             // model") is the footprint's body (`crate::extruded_body_io`, below); a typed model of another type has no path for `models_from` to take, and is kept as the file wrote it.
             Some("model") => sexpr::txt(item, 1).is_none() && !crate::extruded_body_io::is_extruded(item),
+            // A text box, an image, a point or a barcode is one of the footprint's items (`FootprintExtra::items`, UI-LEFT P17), read below once the pose is known; a locked one
+            // stays the text of its form.
+            Some(t) if crate::fp_board_items_io::ITEM_TAGS.contains(&t) && crate::fp_board_items_io::is_read_item(item, file_version) => false,
             Some(t) => !OWN.contains(&t),
             None => false,
         };

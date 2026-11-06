@@ -39,6 +39,7 @@ mod bold_text;
 mod overbar;
 mod via_io;
 mod fp_art_io;
+mod fp_board_items_io;
 mod fp_fields;
 mod pad_shape;
 mod padstack_io;

@@ -32,6 +32,9 @@ pub enum SchCmd {
     /// Replace a drawn graphic in place, keeping its place in the drawing order and its lock (what the
     /// properties dialogs and the point editor commit).
     EditGraphic { id: String, graphic: SchGraphic },
+    /// The pixels of an image replaced, its centre and scale kept: what `SCH_BITMAP::Rotate`, `MirrorHorizontally` and `MirrorVertically` do to them
+    /// (`REFERENCE_IMAGE::Rotate` / `Flip` -> `BITMAP_BASE::Rotate` / `Mirror`), turned by the browser and sent in the batch of the turn (UI-LEFT P17).
+    SetImageData { id: String, data: String },
     /// Delete a placed hierarchical sheet (`SCH_EDIT_TOOL::DoDelete` on a `SCH_SHEET`): the sheet symbol and its
     /// pins go; the file's content stays in the project (another sheet may use it, or it may be placed again).
     DeleteSheet { id: String },
@@ -421,7 +424,7 @@ impl SchCmd {
             SchCmd::AddGraphic { .. } => vec!["graphic"],
             SchCmd::UpdateLibrarySymbols { lib_ids } => lib_ids.iter().map(String::as_str).collect(),
             SchCmd::SetBodyStyle { ids, .. } => ids.iter().map(String::as_str).collect(),
-            SchCmd::DeleteGraphic { id } | SchCmd::EditGraphic { id, .. } | SchCmd::DeleteSheet { id } | SchCmd::DeleteSheetPin { id } | SchCmd::EditSheetPin { id, .. } | SchCmd::ChangeSymbol { id, .. } => vec![id.as_str()],
+            SchCmd::DeleteGraphic { id } | SchCmd::EditGraphic { id, .. } | SchCmd::SetImageData { id, .. } | SchCmd::DeleteSheet { id } | SchCmd::DeleteSheetPin { id } | SchCmd::EditSheetPin { id, .. } | SchCmd::ChangeSymbol { id, .. } => vec![id.as_str()],
             SchCmd::SetSheetProps { id, .. } | SchCmd::SetSheetFields { id, .. } | SchCmd::DeleteTopLevelSheet { id } => vec![id.as_str()],
             SchCmd::AddTopLevelSheet { name } => vec![name.as_str()],
             SchCmd::EditLabel { id, .. } | SchCmd::EditText { id, .. } | SchCmd::EditSheet { id, .. } | SchCmd::EditField { id, .. } => vec![id.as_str()],
@@ -451,6 +454,7 @@ impl SchCmd {
             SchCmd::AddGraphic { graphic } => format!("schematic draw {}", graphic_kind_name(&graphic.shape)),
             SchCmd::DeleteGraphic { id } => format!("schematic delete-graphic {id}"),
             SchCmd::EditGraphic { id, .. } => format!("schematic edit-graphic {id}"),
+            SchCmd::SetImageData { id, data } => format!("schematic image-pixels {id} ({} bytes of data)", data.len() / 4 * 3),
             SchCmd::DeleteSheet { id } => format!("schematic delete-sheet {id}"),
             SchCmd::AddSheetPin { sheet, name, .. } => format!("schematic sheet-pin add {sheet} {name}"),
             SchCmd::DeleteSheetPin { id } => format!("schematic sheet-pin delete {id}"),
@@ -499,7 +503,7 @@ impl SchCmd {
     pub fn kind(&self) -> &'static str {
         match self {
             SchCmd::SetLocked { .. } => "schematic-lock",
-            SchCmd::AddGraphic { .. } | SchCmd::DeleteGraphic { .. } | SchCmd::EditGraphic { .. } => "schematic-graphic",
+            SchCmd::AddGraphic { .. } | SchCmd::DeleteGraphic { .. } | SchCmd::EditGraphic { .. } | SchCmd::SetImageData { .. } => "schematic-graphic",
             SchCmd::DeleteSheet { .. } | SchCmd::AddSheetPin { .. } | SchCmd::DeleteSheetPin { .. } | SchCmd::EditSheetPin { .. } => "schematic-sheet",
             SchCmd::ChangeSymbol { .. } | SchCmd::UpdateLibrarySymbols { .. } | SchCmd::SetBodyStyle { .. } => "schematic-symbol",
             SchCmd::EditLabel { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } => "schematic-text",
@@ -529,6 +533,8 @@ impl SchCmd {
             // a sheet's style and attributes name no net; its user fields are text variables of what it shows (`SCH_SHEET::ResolveTextVar`), which a label's
             // `${..}` may read, so they are read from the drawing again
             SchCmd::SetSheetProps { .. } => false,
+            // an image's pixels
+            SchCmd::SetImageData { .. } => false,
             // a group is a set of names; it moves, joins and leaves nothing
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => false,
             // a field's text is a reference, a net or a sheet's name; its place and look are layout
@@ -546,6 +552,7 @@ impl<'a> Board<'a> {
             SchCmd::AddGraphic { graphic } => add_graphic(self.schematic_mut_or_create(), graphic.clone()),
             SchCmd::DeleteGraphic { id } => delete_graphic(self.schematic_mut()?, id),
             SchCmd::EditGraphic { id, graphic } => edit_graphic(self.schematic_mut()?, id, graphic.clone()),
+            SchCmd::SetImageData { id, data } => set_image_data(self.schematic_mut()?, id, data),
             SchCmd::DeleteSheet { id } => {
                 let pins: Vec<Point> = self.schematic_mut()?.sheets.iter().filter(|s| &s.id == id).flat_map(|s| s.pins.iter().map(|p| p.at)).collect();
                 delete_sheet(self.schematic_mut()?, id)?;
@@ -875,6 +882,21 @@ fn edit_graphic(sch: &mut SchematicSection, id: &str, mut graphic: SchGraphic) -
     }
     sch.extras.graphics[i] = graphic;
     Ok(())
+}
+
+/// [`SchCmd::SetImageData`]: the image's file replaced by `data` (PNG, JPEG, GIF or BMP, base64), everything else kept.
+fn set_image_data(sch: &mut SchematicSection, id: &str, data: &str) -> Result<(), Vec<CheckResult>> {
+    let data = eda_model::image_info::compact(data);
+    if eda_model::image_info::header_of_base64(&data).is_none() {
+        return Err(vec![CheckResult::fail("ops_bad_graphic", id, "an image needs the data of a PNG, JPEG, GIF or BMP file")]);
+    }
+    match sch.extras.graphics.iter_mut().find(|g| g.id == id).map(|g| &mut g.shape) {
+        Some(SchGraphicKind::Image { data: old, .. }) => {
+            *old = data;
+            Ok(())
+        }
+        _ => Err(vec![CheckResult::fail("ops_unknown_graphic", id, "no image with this id on the sheet")]),
+    }
 }
 
 fn delete_sheet(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<CheckResult>> {

@@ -1294,6 +1294,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 }
                 // Its silkscreen, fab drawings and texts (`graphics`, `texts`), board space.
                 crate::fp_art_json::add_art(&mut p, part, fp, footprint);
+                // Its text boxes, images, points and barcodes (`items`), board space (UI-LEFT P17).
+                crate::fp_board_items_json::add_items(&mut p, &design, &model, part, fp, &tv);
             }
             p["at"] = json!([fp.at.x, fp.at.y]);
             p["rot"] = json!(fp.rot as f64 / 1000.0);

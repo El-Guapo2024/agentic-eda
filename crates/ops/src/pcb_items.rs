@@ -7,10 +7,10 @@
 //! Ported from `PCB_TEXTBOX::Rotate` / `::Flip` / `::Move` (`pcbnew/pcb_textbox.cpp`), `EDA_SHAPE::rotate` / `::flip` (`common/eda_shape.cpp`),
 //! `DIALOG_TEXTBOX_PROPERTIES::TransferDataFromWindow` (`pcbnew/dialogs/dialog_textbox_properties.cpp`).
 
-use super::pcb_transform::{flip_layer, side_specific, FlipDirection, Xform};
+use super::pcb_transform::{flip_layer, FlipDirection, Xform};
 use super::Board;
 use eda_model::barcode::{Barcode, BarcodeKind, EccLevel};
-use eda_model::ir::{DrawingsSection, Millideg, Point, Shape, Nm};
+use eda_model::ir::{DrawingsSection, Point, Shape, Nm};
 use eda_model::grid_item::GridItem;
 use eda_model::via_stitch::ViaStitch;
 use eda_model::line_ending::LineEnding;
@@ -487,6 +487,13 @@ impl<'a> Board<'a> {
         if eda_model::image_info::header_of_base64(&data).is_none() {
             return Err(fail("ops_bad_ref_image", id, "the data is not a PNG, JPEG, GIF or BMP file"));
         }
+        // The image of a footprint (`U1~img_..`, `eda_model::fp_items_place::board_id`): the pixels a turn or a flip of the footprint sends (UI-LEFT P17).
+        if let Some((reference, item)) = eda_model::fp_items_place::parse_board_id(id) {
+            let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_ref_image", id, "the board has no drawings yet"))?;
+            let image = dr.footprint_extras.iter_mut().filter(|e| e.id == reference).flat_map(|e| e.items.images.iter_mut()).find(|i| i.id == item);
+            image.ok_or_else(|| fail("ops_unknown_ref_image", id, "no reference image with this id"))?.data = data;
+            return Ok(());
+        }
         self.ref_image_mut(id)?.data = data;
         Ok(())
     }
@@ -547,22 +554,25 @@ impl<'a> Board<'a> {
     }
 }
 
-/// `PCB_POINT::Rotate` / `::Flip`: the position goes where the transform puts it (`RotatePoint`, `MIRROR`) and a flip puts the point on the other side's layer.
-pub(crate) fn transform_point(p: &mut PcbPoint, x: Xform, copper: usize) {
-    p.at = x.point(p.at);
-    if let Xform::Flip { .. } = x {
-        p.layer = flip_layer(&p.layer, copper);
+/// The board's `Xform` as the model's ([`eda_model::fp_items_place::ItemXform`]), where the transforms of these kinds are ported once for the board's items and a footprint's.
+pub(crate) fn item_xform(x: Xform) -> eda_model::fp_items_place::ItemXform {
+    use eda_model::fp_items_place::ItemXform;
+    match x {
+        Xform::Move { dx, dy } => ItemXform::Move { dx, dy },
+        Xform::Rotate { pivot, angle } => ItemXform::Rotate { pivot, angle },
+        Xform::Flip { pivot, dir } => ItemXform::Flip { pivot, top_bottom: matches!(dir, FlipDirection::TopBottom) },
     }
 }
 
-/// `PCB_REFERENCE_IMAGE::Move` / `::Rotate` / `::Flip` as far as the position and the layer go: the centre goes where the transform puts it, and a flip puts the image on
-/// the other side's layer. The pixels are not turned or mirrored (that takes a decoder: `BITMAP_BASE::Rotate` / `::Mirror`), so a quarter turn of a single image about its own
-/// centre changes nothing -- GAPS.md item 24 lists it.
+/// `PCB_POINT::Move` / `::Rotate` / `::Flip` ([`eda_model::fp_items_place::transform_point`]).
+pub(crate) fn transform_point(p: &mut PcbPoint, x: Xform, copper: usize) {
+    eda_model::fp_items_place::transform_point(p, item_xform(x), &|l| flip_layer(l, copper));
+}
+
+/// `PCB_REFERENCE_IMAGE::Move` / `::Rotate` / `::Flip` as far as the position and the layer go ([`eda_model::fp_items_place::transform_ref_image`]); the pixels are turned and
+/// mirrored by the browser, which sends them with the verb (`set_ref_image_data`, [`eda_model::fp_items_place::ImageXform`]).
 pub(crate) fn transform_ref_image(i: &mut RefImage, x: Xform, copper: usize) {
-    i.at = x.point(i.at);
-    if let Xform::Flip { .. } = x {
-        i.layer = flip_layer(&i.layer, copper);
-    }
+    eda_model::fp_items_place::transform_ref_image(i, item_xform(x), &|l| flip_layer(l, copper));
 }
 
 /// `PCB_BARCODE::SetErrorCorrection`: a Micro QR code has no High level, so a High one is Quartile.
@@ -572,143 +582,18 @@ pub(crate) fn normalize_barcode(b: &mut Barcode) {
     }
 }
 
-/// `PCB_BARCODE::Move` / `::Rotate` / `::Flip`: the centre goes where the transform puts it, a turn adds to the barcode's own angle (`Xform::Rotate`'s is clockwise, the file's
-/// counter-clockwise, so it is taken off), a flip puts the barcode on the other side's layer and a top-bottom one turns it half a turn; the symbol is mirrored on a back layer when it is drawn.
+/// `PCB_BARCODE::Move` / `::Rotate` / `::Flip` ([`eda_model::fp_items_place::transform_barcode`]).
 pub(crate) fn transform_barcode(b: &mut Barcode, x: Xform, copper: usize) {
-    b.at = x.point(b.at);
-    match x {
-        Xform::Move { .. } => {}
-        Xform::Rotate { angle, .. } => b.angle = norm360(b.angle as i64 - angle) as Millideg,
-        Xform::Flip { dir, .. } => {
-            if matches!(dir, FlipDirection::TopBottom) {
-                b.angle = norm360(b.angle as i64 + 180_000) as Millideg;
-            }
-            b.layer = flip_layer(&b.layer, copper);
-        }
-    }
+    eda_model::fp_items_place::transform_barcode(b, item_xform(x), &|l| flip_layer(l, copper));
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------- the transform verbs
 
-fn norm360(a: i64) -> i64 {
-    a.rem_euclid(360_000)
-}
+pub use eda_model::fp_items_place::corners_in_sequence;
 
-/// Whether a text angle in millidegrees is a multiple of 90 degrees (`EDA_ANGLE::IsCardinal`).
-fn is_cardinal(angle: Millideg) -> bool {
-    angle % 90_000 == 0
-}
-
-/// `EDA_SHAPE::GetCornersInSequence( angle )` of a text box: the four corners in the order the text's frame has them (top left, top right, bottom right, bottom left of the
-/// text as it reads), for a rectangle (its bounding box turned to the angle's quadrant) and for a polygon (the corners that sit furthest left, up, right and down).
-pub fn corners_in_sequence(t: &TextBox, angle: Millideg) -> [Point; 4] {
-    let angle = angle % 360_000;
-    if t.pts.is_empty() || is_cardinal(angle) {
-        let [x0, y0, x1, y1] = t.bounds();
-        let (lt, rt, rb, lb) = (Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 });
-        return match angle {
-            90_000 => [lb, lt, rt, rb],
-            180_000 => [rb, lb, lt, rt],
-            270_000 => [rt, rb, lb, lt],
-            _ => [lt, rt, rb, lb],
-        };
-    }
-    let mut corners = t.pts.clone();
-    while corners.len() < 4 {
-        let last = *corners.last().unwrap_or(&Point { x: Nm::ZERO, y: Nm::ZERO });
-        corners.push(Point { x: last.x + Nm::new(10), y: last.y + Nm::new(10) });
-    }
-    let (mut min_x, mut max_x, mut min_y, mut max_y) = (corners[0], corners[0], corners[0], corners[0]);
-    for c in &corners {
-        if c.x < min_x.x {
-            min_x = *c;
-        }
-        if c.x > max_x.x {
-            max_x = *c;
-        }
-        if c.y < min_y.y {
-            min_y = *c;
-        }
-        if c.y > max_y.y {
-            max_y = *c;
-        }
-    }
-    if angle < 90_000 {
-        [min_x, min_y, max_x, max_y]
-    } else if angle < 180_000 {
-        [max_y, min_x, min_y, max_x]
-    } else if angle < 270_000 {
-        [max_x, max_y, min_x, min_y]
-    } else {
-        [min_y, max_x, max_y, min_x]
-    }
-}
-
-/// `PCB_TEXTBOX::Move` / `::Rotate` / `::Flip` (with `EDA_SHAPE::rotate` / `::flip`). `Xform::Rotate`'s angle is clockwise on the screen, so the text's own angle (KiCad's,
-/// counter-clockwise) loses it. A rectangle turned by anything but a quarter turn becomes the polygon of its four corners; a polygon whose text angle is again a multiple
-/// of 90 degrees becomes a rectangle again, started at the first corner of the text's frame. A flip puts the box on the other side's layer, negates (left-right) or
-/// reflects (top-bottom) the text angle, and mirrors the glyphs of a box on a layer that belongs to a side.
+/// `PCB_TEXTBOX::Move` / `::Rotate` / `::Flip` ([`eda_model::fp_items_place::transform_text_box`]).
 pub(crate) fn transform_text_box(t: &mut TextBox, x: Xform, copper: usize) {
-    match x {
-        Xform::Move { .. } => {
-            t.start = x.point(t.start);
-            t.end = x.point(t.end);
-            for p in t.pts.iter_mut() {
-                *p = x.point(*p);
-            }
-        }
-        Xform::Rotate { angle, .. } => {
-            if t.pts.is_empty() {
-                if angle.rem_euclid(90_000) == 0 {
-                    t.start = x.point(t.start);
-                    t.end = x.point(t.end);
-                } else {
-                    // "Convert non-cardinally-rotated rect to a diamond"
-                    let (s, e) = (t.start, t.end);
-                    let corners = [s, Point { x: e.x, y: s.y }, e, Point { x: s.x, y: e.y }];
-                    t.pts = corners.iter().map(|c| x.point(*c)).collect();
-                    t.start = t.pts[0];
-                    t.end = t.pts[2];
-                }
-            } else {
-                for p in t.pts.iter_mut() {
-                    *p = x.point(*p);
-                }
-                t.start = t.pts[0];
-                t.end = t.pts[2];
-            }
-            t.angle = norm360(t.angle as i64 - angle) as Millideg;
-            if is_cardinal(t.angle) && !t.pts.is_empty() {
-                let corners = corners_in_sequence(t, t.angle);
-                let diag = Point { x: corners[2].x - corners[0].x, y: corners[2].y - corners[0].y };
-                let (dx, dy) = (diag.x.abs(), diag.y.abs());
-                let c0 = corners[0];
-                t.start = c0;
-                t.end = match t.angle {
-                    90_000 => Point { x: c0.x + dx, y: c0.y - dy },
-                    180_000 => Point { x: c0.x - dx, y: c0.y - dy },
-                    270_000 => Point { x: c0.x - dx, y: c0.y + dy },
-                    _ => Point { x: c0.x + dx, y: c0.y + dy },
-                };
-                t.pts.clear();
-            }
-        }
-        Xform::Flip { dir, .. } => {
-            t.start = x.point(t.start);
-            t.end = x.point(t.end);
-            for p in t.pts.iter_mut() {
-                *p = x.point(*p);
-            }
-            t.angle = match dir {
-                FlipDirection::LeftRight => norm360(-(t.angle as i64)),
-                FlipDirection::TopBottom => norm360(180_000 - t.angle as i64),
-            } as Millideg;
-            t.layer = flip_layer(&t.layer, copper);
-            if side_specific(&t.layer) {
-                t.mirror = !t.mirror;
-            }
-        }
-    }
+    eda_model::fp_items_place::transform_text_box(t, item_xform(x), &|l| flip_layer(l, copper));
 }
 
 /// Move, turn or flip the items of the kinds this module adds that `ids` names (`Cmd::MoveItems`, `RotateItems`, `FlipItems`).

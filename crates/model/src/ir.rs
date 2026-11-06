@@ -3329,6 +3329,14 @@ pub struct FootprintExtra {
     /// ([`DrawingsSection::embedded`]) -- see [`crate::embedded_files`]. A footprint on a board saved by KiCad names a model it embeds here and in the board's list.
     #[serde(default, skip_serializing_if = "crate::embedded_files::EmbeddedFiles::is_empty")]
     pub embedded: crate::embedded_files::EmbeddedFiles,
+    /// The footprint's text boxes, reference images, points and barcodes (`fp_text_box`, `(image ..)`, `(point ..)`, `(barcode ..)` inside the footprint: UI-LEFT P17), the
+    /// library footprint's model ([`crate::fp_items::FootprintItems`], only those four kinds), in the frame of the footprint's pads like its art -- a move, a turn or a flip of
+    /// the footprint carries them ([`crate::fp_items_place::placed`]). The footprint's own, as KiCad's footprint owns them: Duplicate, Paste and Create Array copy them with
+    /// the footprint, Update and Change Footprint reset them with the rest of this record. An image's pixels are as the board has them (`FOOTPRINT::Rotate` and `Flip` turn
+    /// and mirror them: the browser does it, see [`crate::fp_items_place::ImageXform`]). Written while the part is on the footprint they were read from
+    /// ([`Self::source_name`]). A locked one stays among [`Self::tokens`]. Additive: an older `design.json` kept them all in [`Self::tokens`].
+    #[serde(default, skip_serializing_if = "crate::fp_items::FootprintItems::is_empty")]
+    pub items: crate::fp_items::FootprintItems,
 }
 
 /// A visible footprint text item (`PCB_FIELD`/`PCB_TEXT` parented to a

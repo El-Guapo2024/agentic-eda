@@ -42,6 +42,7 @@ import { flatVertices, zoneContours } from "../../kicad-port/zonePointEditor";
 import { cachedZoneHatchLines } from "../../kicad-port/zoneHatch";
 import { drcMarkerObject } from "../../kicad-port/appearance";
 import { drawFootprintArt } from "./fpArtPaint";
+import { drawFootprintItems } from "./fpBoardItemsPaint";
 import { isAnyFill } from "../../kicad-port/shapeFill";
 import { orderedStackLayers } from "../../kicad-port/padStack";
 import { drawPcbItems, drawRefImages } from "./pcbItemsPaint";
@@ -427,6 +428,8 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
 
   // The footprint's own silkscreen, fab and assembly drawings and its texts (`part.graphics`, `part.texts`), each on its layer and over the pads.
   drawFootprintArt(ctx, view, part, opts);
+  // Its text boxes, barcodes and points (`part.items`, UI-LEFT P17); its images are drawn with the board's, under everything.
+  drawFootprintItems(ctx, view, part, opts);
 
   // The Reference, the Value and the user fields are drawn by `drawFields` once the backend says where they are (`part.fields`); an older backend's footprint has
   // only its reference, drawn beside the courtyard the way it always was.

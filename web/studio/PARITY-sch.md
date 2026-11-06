@@ -1761,6 +1761,14 @@ mirrored, a sheet's props and fields, the top-level verbs), `search` (+2: regex,
 `sch_setup` (+1: `set_bom_view`), and `crates/kicad/tests/sch_text_looks.rs` (4, two slow with kicad-cli: the looks and the label's places, a sheet's style and
 attributes). Browser (mcu30 with KiCad's libraries): `sch-text-looks` 2/2, `sch-hierarchy-menu` 5/5, `sch-fields-presets` 3/3, `sch-find-regex` 3/3.
 
+## 62. Rotate and Mirror turn an image's pixels (UI-LEFT P17; `task-u5-pcbitems`, 2026-11-06; KiCad 8303b2ad `eeschema/sch_bitmap.cpp` (`SCH_BITMAP::Rotate`, `MirrorHorizontally`, `MirrorVertically`), `common/reference_image.cpp` (`REFERENCE_IMAGE::Rotate`, `Flip`), `common/bitmap_base.cpp` (`BITMAP_BASE::Rotate`, `Mirror`, `updateImageDataBuffer`))
+
+| Behaviour | Status | KiCad file:function |
+|---|---|---|
+| R / Shift+R, X and Y of an image on the sheet, alone or in a selection, and the turns made while it is held | **ported, done by the browser** (PARITY-pcb.md section 78): `SCH_BITMAP::Rotate` is `REFERENCE_IMAGE::Rotate( .., ccw ? ANGLE_90 : ANGLE_270 )` -- one or three quarter turns counter-clockwise of the bitmap -- and `MirrorHorizontally` / `MirrorVertically` are `Flip( LEFT_RIGHT )` / `Flip( TOP_BOTTOM )`, the bitmap mirrored; the browser redraws the file through the turns of the command, encodes it (a PNG, a JPEG staying a JPEG, its definition kept) and sends it as `sch_edit set_image_data` (`SchCmd::SetImageData`: the file replaced, centre and scale kept, a file that is no image refused) in a batch with the `sch_move` turn: one undo step. **Differs**: a turn sent without the browser (the CLI) moves the image and leaves its pixels; the held preview (`move_preview`) shows the image's place, not its turned pixels | `SCH_BITMAP::Rotate`, `MirrorHorizontally`, `MirrorVertically`, `BITMAP_BASE::Rotate`, `Mirror` |
+
+Tests: `crates/cli/src/fp_board_items_tests.rs` (`a_sheet_image_takes_the_pixels_a_turn_sends_in_the_same_step`), `kicad-port/imagePixels.test.ts` (the sheet's turns); browser `e2e/fp-kinds.check.js`'s sheet scenario (R, X, Y, one undo each).
+
 ## Manual click-through needed
 
 The in-app browser pane could not be used this session (hidden pane, per

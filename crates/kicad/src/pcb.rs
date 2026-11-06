@@ -1471,6 +1471,10 @@ pub(crate) fn write_footprint(
     // The footprint's silkscreen, fab drawings and texts (`fp_line`, `fp_arc`, ..., `fp_text user`), in its own frame -- a bottom-side footprint's mirrored
     // like its pads and on the other side's layers: after the fields and before the pads, where `format( FOOTPRINT )` writes the drawings.
     crate::fp_art_io::write_art(out, &footprint.art, fp);
+    // Its text boxes, images, barcodes and points (`FootprintExtra::items`, UI-LEFT P17), while the part is on the footprint they were read from.
+    if let Some(e) = own_extra.filter(|e| !e.items.is_empty() && e.source_name == lib_name_written) {
+        crate::fp_board_items_io::write_items(out, &e.items, as_placed, turn);
+    }
 
     // Net assignment: look up which net (if any) this pad's "REF.PIN" belongs to.
     let pin_net = |number: &str| -> Option<&str> {
@@ -1828,6 +1832,7 @@ pub(crate) fn write_footprint(
                     match kind {
                         "art" => Some(crate::duid_for(&format!("footprint:{}:art:{rest}", fp.id), &fp.id)),
                         "arttext" => Some(crate::duid_for(&format!("footprint:{}:arttext:{rest}", fp.id), &fp.id)),
+                        "item" => e.items.has(rest).then(|| crate::fp_board_items_io::item_uuid(&fp.id, rest)),
                         "pad" => pad_uuids.get(m).cloned(),
                         "uuid" => own_courtyard.is_some().then(|| rest.to_string()),
                         "field" => match rest {
