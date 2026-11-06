@@ -2,6 +2,30 @@
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
+## Start here (2026-11-07): the UI list is done, apart from what needs the user
+
+- **`docs/parity/UI-LEFT.md`: 113 of 124 entries are done**, in batches u1 to u6, about 35 branches, all merged and pushed.
+  - Each entry says what is left inside it.
+  - The 11 not done:
+    - The 10 KO entries, kept out by the user's decisions (A1: Import Netlist, the footprint wizards, Hyperlynx and .rpt export, the viewer windows, Calculator Tools, the app shell). The others are raytracing, the batch simulator, browser limits, the one-library-symbol-per-lib_id model, and Annotate Automatically.
+    - P7, **pending the user's decision**: Strict mode, on by default, refuses a move, swap, delete, drop or append that breaks a complete net, and KiCad never refuses. A refused strict drop ends the carry with nothing left (task-u6-regress).
+- **The gates on main 2026-11-07:**
+  - `tools/check.sh full`: Rust 4771 passed, 3 failed (the box's three, below), 25 ignored; web 3330; build ok.
+  - `tools/run-all-checks.sh -j 3`: 112 of 114 passed. simulator fails because there is no ngspice; placement-u5's Escape was a load race, since fixed and passing twice under load.
+- **The studio was restarted** at 14:11 on that build.
+- **Agents' leftovers worth a later round**, each written in its entry's "Left" and its PARITY section:
+  - The hit test: board texts are still measured by their box, and the area pass and `CoverageRatio` use text boxes; KiCad uses strokes.
+  - The edit tools take the first of several candidates, where KiCad shows the clarification menu.
+  - Per-path design-variant flags on shared screens.
+  - The simulator, unverified against a real ngspice.
+  - The ERC exclusions of about 11 check types that stay in the studio.
+  - The Ctrl+E copy dropping dimensions, zones and tables drawn in it.
+- **Lessons recorded:**
+  - Agents must never build in main's checkout (the brief says so now).
+  - About a third of merged branches broke another area's browser check, so run each merged branch's checks on main, and the whole suite at the end.
+  - PARITY section numbers clash at every parallel merge.
+  - `pgrep -f` self-matching hung one helper for 12 h.
+
 ## Start here (2026-11-06): equalizing the UI with KiCad
 
 - **The user's direction (2026-11-05):** "make sure we match everything KiCad can do, keep equalizing", meaning the studio UI.
