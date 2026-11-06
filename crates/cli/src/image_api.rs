@@ -81,9 +81,13 @@ fn file_reply(data: &str) -> Reply {
 pub(crate) fn pcb_image(dir: &Path, target: &str) -> Reply {
     let id = query_value(target, "id");
     match crate::board::load(dir) {
-        Ok((_, design, _)) => match design.drawings.as_ref().and_then(|d| d.board_items.images.iter().find(|i| i.id == id)) {
+        Ok((_, design, model)) => match design.drawings.as_ref().and_then(|d| d.board_items.images.iter().find(|i| i.id == id)) {
             Some(img) => file_reply(&img.data),
-            None => not_found("no reference image with this id"),
+            // an image of a footprint (`U1~img_..`, UI-LEFT P17)
+            None => match crate::fp_board_items_json::placed_image(&design, &model, &id) {
+                Some(img) => file_reply(&img.data),
+                None => not_found("no reference image with this id"),
+            },
         },
         Err(e) => not_found(&crate::board::reasons(&e)),
     }

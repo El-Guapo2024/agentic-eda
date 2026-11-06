@@ -89,6 +89,9 @@ mod component_classes_tests;
 #[path = "pcb_items_tests.rs"]
 mod pcb_items_tests;
 #[cfg(test)]
+#[path = "fp_board_items_tests.rs"]
+mod fp_board_items_tests;
+#[cfg(test)]
 #[path = "microwave_tests.rs"]
 mod microwave_tests;
 #[cfg(test)]

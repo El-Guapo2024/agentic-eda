@@ -3,8 +3,8 @@
 //!
 //! The pixels are the file inside `(data "..." "...")`, base64 in lines of 76 characters. They are kept as that text without its line breaks and written back as it was: KiCad
 //! itself writes the bytes it read (`BITMAP_BASE::SaveImageData` writes `m_imageData` while the image is untouched), so a board that goes through the studio carries the same file.
-//! A board footprint's own `(image ..)` (a reference image inside a footprint, never drawn on the board) is part of the footprint (`FootprintExtra::tokens`); a
-//! library footprint's is read and written with these (`FootprintItems::images`, [`crate::footprint_import`]).
+//! A board footprint's own `(image ..)` (a reference image inside a footprint, which KiCad draws on the board with the footprint's children: `PCB_VIEW::Add`) is read and
+//! written with these too (`FootprintExtra::items`, [`crate::fp_board_items_io`], UI-LEFT P17), and so is a library footprint's (`FootprintItems::images`, [`crate::footprint_import`]).
 
 use std::fmt::Write as _;
 

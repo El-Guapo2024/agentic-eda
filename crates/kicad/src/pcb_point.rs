@@ -1,6 +1,6 @@
 //! A board's points (`(point (at x y) (size s) (layer ..) (uuid ..))`, KiCad's `PCB_POINT`) read and written: `PCB_IO_KICAD_SEXPR_PARSER::parsePCB_POINT` and
-//! `PCB_IO_KICAD_SEXPR::format( const PCB_POINT* )`, for [`eda_model::pcb_items::PcbPoint`]. A board footprint's own `(point ..)` is part of the footprint (`FootprintExtra::tokens`); a library footprint's is read and written with these
-//! (`FootprintItems::points`, [`crate::footprint_import`]).
+//! `PCB_IO_KICAD_SEXPR::format( const PCB_POINT* )`, for [`eda_model::pcb_items::PcbPoint`]. A board footprint's own `(point ..)` is read and written with these too
+//! (`FootprintExtra::items`, [`crate::fp_board_items_io`], UI-LEFT P17), and so is a library footprint's (`FootprintItems::points`, [`crate::footprint_import`]).
 //! The parser takes `at`, `size`, `layer` and `uuid` and nothing else -- no `locked` -- and the writer writes the same four.
 
 use std::fmt::Write as _;

@@ -230,8 +230,10 @@ fn failed(status: &'static str, error: &str) -> Answer {
 /// `GET /api/barcode_shape?id=..`: the shape of the barcode of the board `id` names, `pending` (202) while kicad-cli plots it.
 pub(crate) fn shape_route(dir: &Path, target: &str) -> Answer {
     let id = crate::image_api::query_value(target, "id");
-    let Ok((_, design, _)) = crate::board::load(dir) else { return failed("404 Not Found", "the board could not be read") };
-    let Some(b) = design.drawings.as_ref().and_then(|d| d.barcodes.iter().find(|b| b.id == id)).cloned() else { return failed("404 Not Found", "no barcode with this id") };
+    let Ok((_, design, model)) = crate::board::load(dir) else { return failed("404 Not Found", "the board could not be read") };
+    // a board's barcode, or a footprint's (`U1~bar_..`, UI-LEFT P17: on the board, the footprint's variables resolved)
+    let found = design.drawings.as_ref().and_then(|d| d.barcodes.iter().find(|b| b.id == id)).cloned().or_else(|| crate::fp_board_items_json::placed_barcode(&design, &model, &id));
+    let Some(b) = found else { return failed("404 Not Found", "no barcode with this id") };
     match shown_text(dir, &b, target) {
         Ok(text) if text.is_empty() => Answer { status: "200 OK", body: json!({ "status": "ready", "paths": [] }).to_string() },
         Ok(text) => answer(&lookup(&b, &text)),
