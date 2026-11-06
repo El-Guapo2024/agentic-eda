@@ -4,91 +4,48 @@
 //! Ported from `SCH_IO_KICAD_SEXPR::saveText` / `saveField` (the writer), `SCH_IO_KICAD_SEXPR_PARSER::parseSchText` / `parseSchField` (the reader),
 //! `SCH_GLOBALLABEL::SCH_GLOBALLABEL` (the Sheet References field every global label has, first) and `SCH_LABEL_BASE::AutoplaceFields` (where the fields go).
 //!
-//! The fields are placed by `AutoplaceFields`, as KiCad places a label's fields while they are autoplaced; a field moved by hand in KiCad is read back to
-//! that place. The Sheet References are shown or hidden by Schematic Setup (`m_IntersheetRefsShow`, `RecomputeIntersheetRefs`), whatever the file says.
+//! The fields are where `eda_engine::label_fields` has them: placed by `AutoplaceFields` while the label's fields are autoplaced (`(fields_autoplaced yes)`),
+//! else at the places the user gave them (`SchematicSection::field_layout` under the label's id), which a file without `(fields_autoplaced ..)` gives too
+//! (`parseSchText`: `SetFieldsAutoplaced( AUTOPLACE_NONE )` until the token is read). The Sheet References are shown or hidden by Schematic Setup
+//! (`m_IntersheetRefsShow`, `RecomputeIntersheetRefs`), whatever the file says.
 
-use eda_model::units::Nm;
 use crate::sexpr::{self, Sexpr};
-use eda_model::ir::{LabelKind, NetLabel, Point, SchematicSection};
-use eda_model::kicad_font::HJustify;
-use eda_model::kicad_geom::{self, Spin, TextStyle};
-use eda_model::sch_extras::{LabelField, LabelSpin, INTERSHEET_REFS_FIELD};
+use eda_model::ir::{FieldPlacement, NetLabel, Point, SchematicSection, TextJustify, TextVAlign};
+use eda_model::kicad_font::{HJustify, VJustify};
+use eda_model::sch_extras::{LabelField, INTERSHEET_REFS_FIELD};
 use std::fmt::Write as _;
 
-/// The height of a label's field text: `SCH_FIELD`'s default, 50 mil.
-const FIELD_SIZE_NM: f64 = 1_270_000.0;
-
-/// One field of a label, where `AutoplaceFields` puts it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PlacedLabelField {
-    pub name: String,
-    pub text: String,
-    pub visible: bool,
-    pub italic: bool,
-    /// The global label's Sheet References.
-    pub intersheet_refs: bool,
-    pub at: Point,
-    pub vertical: bool,
-    pub h: HJustify,
-}
-
-fn spin_of(s: LabelSpin) -> Spin {
-    match s {
-        LabelSpin::Right => Spin::Right,
-        LabelSpin::Up => Spin::Up,
-        LabelSpin::Left => Spin::Left,
-        LabelSpin::Bottom => Spin::Bottom,
-    }
-}
+pub use eda_engine::label_fields::PlacedLabelField;
 
 /// The fields of label `l` of `sch`, placed: a global label's Sheet References first (shown when `show_intersheet_refs`), then the label's own fields in order.
 pub fn label_fields_placed(sch: &SchematicSection, l: &NetLabel, show_intersheet_refs: bool) -> Vec<PlacedLabelField> {
-    let global = matches!(l.kind, LabelKind::Global { .. });
-    let own = sch.extras.label_fields.get(&l.id).map(Vec::as_slice).unwrap_or(&[]);
-    if own.is_empty() && !global {
-        return Vec::new();
-    }
-    let mut fields: Vec<(LabelField, bool)> = Vec::new();
-    if global {
-        fields.push((LabelField { name: INTERSHEET_REFS_FIELD.into(), text: "${INTERSHEET_REFS}".into(), visible: show_intersheet_refs, italic: false }, true));
-    }
-    fields.extend(own.iter().cloned().map(|f| (f, false)));
-    let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
-    let size_iu = look.text_size_nm() / Nm::new(eda_model::units::SCH_IU_NM);
-    let fx = TextStyle { size_iu, thickness_iu: if look.bold { eda_model::kicad_font::kiround(size_iu as f64 / 5.0) } else { 0 }, h: HJustify::Left, v: eda_model::kicad_font::VJustify::Center };
-    let spin = spin_of(crate::label_spin_of(sch, l));
-    let at = (l.at.x.as_f64(), l.at.y.as_f64());
-    let body = match &l.kind {
-        LabelKind::Global { shape } => kicad_geom::global_label_rect(&fx, &l.net, at, spin, *shape),
-        LabelKind::Hierarchical { .. } => kicad_geom::hier_label_rect(&fx, &l.net, at, spin),
-        LabelKind::Local => {
-            let turns = if matches!(spin, Spin::Up | Spin::Bottom) { 1 } else { 0 };
-            kicad_geom::local_label_rect(&fx, &l.net, at, turns)
-        }
-    };
-    let body_len = body.w().max(body.h());
-    let sizes: Vec<(bool, f64)> = fields.iter().map(|(_, isr)| (*isr, FIELD_SIZE_NM)).collect();
-    let places = kicad_geom::autoplace_label_fields(&fx, global, body_len, spin, at, &sizes);
-    fields
-        .into_iter()
-        .zip(places)
-        .map(|((f, isr), p)| PlacedLabelField { name: f.name, text: f.text, visible: f.visible, italic: f.italic, intersheet_refs: isr, at: Point { x: Nm::kiround(p.at.0), y: Nm::kiround(p.at.1) }, vertical: p.vertical, h: p.h })
-        .collect()
+    eda_engine::label_fields::placed(sch, l, show_intersheet_refs)
 }
 
-/// `saveField` for each field of the label: `(property "name" "text" (at x y angle) (effects (font (size 1.27 1.27) [(italic yes)]) (justify left|right) [(hide yes)]))`.
+/// `saveField` for each field of the label: `(property "name" "text" (at x y angle) (effects (font [(face ..)] (size 1.27 1.27) [(italic yes)] [(color ..)])
+/// (justify left|right [top|bottom]) [(hide yes)]))`, with the font face and colour Field Properties set (`SchExtras::field_looks` under the label's id).
 pub(crate) fn write_label_fields(out: &mut String, sch: &SchematicSection, l: &NetLabel, show_intersheet_refs: bool) {
     for f in label_fields_placed(sch, l, show_intersheet_refs) {
+        let look = sch.extras.field_look(&l.id, &f.name);
+        let face = look.and_then(|k| k.font.as_deref()).map(|n| format!("(face {}) ", crate::sexpr_str(n))).unwrap_or_default();
+        let color = look.and_then(|k| k.color).map(|c| format!(" (color {} {} {} {})", c.r, c.g, c.b, crate::sch_extras_io::alpha_str(c.a))).unwrap_or_default();
         let italic = if f.italic { " (italic yes)" } else { "" };
-        let justify = match f.h {
-            HJustify::Left => " (justify left)",
-            HJustify::Right => " (justify right)",
-            HJustify::Center => "",
-        };
+        let mut j = String::new();
+        match f.h {
+            HJustify::Left => j.push_str(" left"),
+            HJustify::Right => j.push_str(" right"),
+            HJustify::Center => {}
+        }
+        match f.v {
+            VJustify::Top => j.push_str(" top"),
+            VJustify::Bottom => j.push_str(" bottom"),
+            VJustify::Center => {}
+        }
+        let justify = if j.is_empty() { String::new() } else { format!(" (justify{j})") };
         let hide = if f.visible { "" } else { " (hide yes)" };
         let _ = writeln!(
             out,
-            "\t\t(property {} {} (at {} {} {}) (effects (font (size 1.27 1.27){italic}){justify}{hide}))",
+            "\t\t(property {} {} (at {} {} {}) (effects (font {face}(size 1.27 1.27){italic}{color}){justify}{hide}))",
             crate::sexpr_str(&f.name),
             crate::sexpr_str(&f.text),
             crate::mm(f.at.x),
@@ -96,6 +53,59 @@ pub(crate) fn write_label_fields(out: &mut String, sch: &SchematicSection, l: &N
             if f.vertical { 90 } else { 0 }
         );
     }
+}
+
+/// The places of a label's fields as the file has them, when they are not autoplaced: `parseSchText` sets `AUTOPLACE_NONE` until it reads
+/// `(fields_autoplaced [yes])`, and a label with no field is autoplaced. Each `(property ..)`'s anchor as an offset from the label's `at`, its angle and its
+/// `(justify ..)` (`parseEDA_TEXT`: centre and centre when there is none), by the field's canonical name (`Intersheetrefs` for a global label's Sheet
+/// References, `Netclass` for "Net Class"). `None` when the fields are autoplaced.
+pub(crate) fn read_label_field_places(item: &[Sexpr], global: bool, label_at: Point) -> Option<Vec<FieldPlacement>> {
+    if crate::sch_extras_io::parse_bool(item, "fields_autoplaced").unwrap_or(false) {
+        return None;
+    }
+    let mut out = Vec::new();
+    for p in sexpr::find_all(item, "property") {
+        let Some(name) = sexpr::txt(p, 1) else { continue };
+        if name.is_empty() {
+            continue;
+        }
+        let name = if global && (name.eq_ignore_ascii_case(INTERSHEET_REFS_FIELD) || name.eq_ignore_ascii_case("Intersheet References")) {
+            INTERSHEET_REFS_FIELD
+        } else if name == "Net Class" {
+            eda_model::sch_extras::NETCLASS_FIELD
+        } else {
+            name
+        };
+        let Some(at) = sexpr::find(p, "at") else { continue };
+        let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
+        let angle = sexpr::num(at, 3).unwrap_or(0.0);
+        let look = crate::sch_extras_io::read_effects(p);
+        let has = |w: &str| look.justify.iter().any(|j| j == w);
+        let h = if has("left") {
+            TextJustify::Left
+        } else if has("right") {
+            TextJustify::Right
+        } else {
+            TextJustify::Center
+        };
+        let v = if has("top") {
+            TextVAlign::Top
+        } else if has("bottom") {
+            TextVAlign::Bottom
+        } else {
+            TextVAlign::Center
+        };
+        let (x, y) = (crate::import::sch_mm_to_nm(x), crate::import::sch_mm_to_nm(y));
+        out.push(FieldPlacement {
+            dx: x - label_at.x,
+            dy: y - label_at.y,
+            angle: if eda_model::kicad_geom::keep_upright_is_vertical(angle) { 90_000 } else { 0 },
+            h,
+            v,
+            ..FieldPlacement::at_origin(name)
+        });
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// `parseSchText`'s `(property ..)`s of a label: its own fields, in order (`parseSchField`). A global label's Sheet References is not one of them: it is the label's

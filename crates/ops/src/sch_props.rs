@@ -101,6 +101,43 @@ pub(crate) fn label_fields_after(id: &str, fields: &[eda_model::sch_extras::Labe
     Ok(out)
 }
 
+/// What [`SchCmd::SetTextAttrs`](crate::sch_edit::SchCmd::SetTextAttrs) changes; a member left out is unchanged.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TextAttrsEdit {
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub color: Option<SchColor>,
+    pub href: Option<String>,
+    pub font: Option<String>,
+    pub exclude_from_sim: Option<bool>,
+}
+
+/// What [`SchCmd::SetSheetProps`](crate::sch_edit::SchCmd::SetSheetProps) changes; a member left out is unchanged.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SheetPropsEdit {
+    pub border_width_nm: Option<Nm>,
+    pub border_color: Option<SchColor>,
+    pub fill_color: Option<SchColor>,
+    pub exclude_from_sim: Option<bool>,
+    pub exclude_from_bom: Option<bool>,
+    pub exclude_from_board: Option<bool>,
+    pub dnp: Option<bool>,
+}
+
+/// `DEFAULT_FONT_NAME` (`include/font/kicad_font_name.h`, "Default Font"): the font choice that is the text's default font, no font of its own.
+pub(crate) const DEFAULT_FONT_NAME: &str = "Default Font";
+
+/// `EDA_TEXT::ValidateHyperlink`: none, a page of this schematic (`IsGotoPageHref`: "#" and the page), or a URL with a scheme (`wxURI::Create( aURL ) &&
+/// uri.HasScheme()`: letters, digits, `+`, `-` and `.` after a letter, then ':').
+pub(crate) fn valid_hyperlink(url: &str) -> bool {
+    if url.is_empty() || url.starts_with('#') {
+        return true;
+    }
+    let Some((scheme, _)) = url.split_once(':') else { return false };
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic()) && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
 impl<'a> Board<'a> {
     /// Label Properties: see [`SchCmd::EditLabel`](crate::sch_edit::SchCmd::EditLabel).
     pub(crate) fn edit_sch_label(&mut self, id: &str, text: Option<&str>, shape: Option<LabelShape>, spin: Option<LabelSpin>, look: LabelLookEdit) -> Result<(), Vec<CheckResult>> {
@@ -310,22 +347,37 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// The panel's Bold, Italic, Color and Hyperlink of free texts and Color of labels: see [`SchCmd::SetTextAttrs`](crate::sch_edit::SchCmd::SetTextAttrs). A
-    /// label's bold or italic, or its hyperlink, is refused: they are Label Properties' (`EditLabel`) and `SCH_LABEL_BASE_DESC` masks the hyperlink. Refused when
-    /// nothing changes.
-    pub(crate) fn set_sch_text_attrs(&mut self, ids: &[String], bold: Option<bool>, italic: Option<bool>, color: Option<SchColor>, href: Option<&str>) -> Result<(), Vec<CheckResult>> {
+    /// The panel's Bold, Italic, Color and Hyperlink of free texts and Color of labels, and the Font, Color, Link and Exclude from simulation of Text, Label and
+    /// Text Box Properties: see [`SchCmd::SetTextAttrs`](crate::sch_edit::SchCmd::SetTextAttrs). A label's bold or italic, its hyperlink or its exclusion, and a
+    /// text box's bold or italic, are refused: they are Label Properties' (`EditLabel`), `SCH_LABEL_BASE_DESC` masks the hyperlink, and a text box keeps its
+    /// own (`EditGraphic`). A hyperlink that is neither "#<page>" nor a URL with a scheme is refused with `DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`'s
+    /// message. Refused when nothing changes.
+    pub(crate) fn set_sch_text_attrs(&mut self, ids: &[String], edit: &TextAttrsEdit) -> Result<(), Vec<CheckResult>> {
         if ids.is_empty() {
             return Err(fail("ops_nothing_selected", "text", "no items given"));
+        }
+        if let Some(h) = edit.href.as_deref() {
+            if !valid_hyperlink(h.trim()) {
+                return Err(fail(
+                    "ops_bad_hyperlink",
+                    h,
+                    "Invalid hyperlink destination. Please enter either a valid URL (e.g. file:// or http(s)://) or \"#<page number>\" to create a hyperlink to a page in this schematic.",
+                ));
+            }
         }
         let sch = self.schematic_mut()?;
         for id in ids {
             let text = sch.texts.iter().any(|t| &t.id == id);
             let label = sch.labels.iter().any(|l| &l.id == id);
-            if !text && !label {
-                return Err(fail("ops_unknown_item", id, "no free text or label with this id"));
+            let text_box = sch.extras.graphics.iter().any(|g| &g.id == id && matches!(g.shape, eda_model::sch_extras::SchGraphicKind::TextBox { .. }));
+            if !text && !label && !text_box {
+                return Err(fail("ops_unknown_item", id, "no free text, text box or label with this id"));
             }
-            if label && (bold.is_some() || italic.is_some() || href.is_some()) {
-                return Err(fail("ops_bad_text", id, "a label's bold and italic are set in Label Properties, and a label has no hyperlink"));
+            if label && (edit.bold.is_some() || edit.italic.is_some() || edit.href.is_some() || edit.exclude_from_sim.is_some()) {
+                return Err(fail("ops_bad_text", id, "a label's bold and italic are set in Label Properties, and a label has no hyperlink or simulation exclusion"));
+            }
+            if text_box && (edit.bold.is_some() || edit.italic.is_some()) {
+                return Err(fail("ops_bad_text", id, "a text box's bold and italic are set with its shape"));
             }
             if sch.extras.is_locked(id) {
                 return Err(fail("ops_locked", id, "the item is locked"));
@@ -334,17 +386,25 @@ impl<'a> Board<'a> {
         let before = sch.extras.text_attrs.clone();
         for id in ids {
             let mut a = sch.extras.text_attrs.get(id).cloned().unwrap_or_default();
-            if let Some(b) = bold {
+            if let Some(b) = edit.bold {
                 a.bold = b;
             }
-            if let Some(i) = italic {
+            if let Some(i) = edit.italic {
                 a.italic = i;
             }
-            if let Some(c) = color {
+            if let Some(c) = edit.color {
                 a.color = specified(c);
             }
-            if let Some(h) = href {
+            if let Some(h) = edit.href.as_deref() {
                 a.href = (!h.trim().is_empty()).then(|| h.trim().to_string());
+            }
+            if let Some(f) = edit.font.as_deref() {
+                // `FONT_CHOICE::GetFontSelection`: the first choice, "Default Font", is no font of the text's own (`nullptr`)
+                let f = f.trim();
+                a.font = (!f.is_empty() && f != DEFAULT_FONT_NAME).then(|| f.to_string());
+            }
+            if let Some(x) = edit.exclude_from_sim {
+                a.exclude_from_sim = x;
             }
             if a.is_default() {
                 sch.extras.text_attrs.remove(id);
@@ -354,6 +414,118 @@ impl<'a> Board<'a> {
         }
         if sch.extras.text_attrs == before {
             return Err(fail("ops_nothing_to_change", "text", "the items already have these attributes"));
+        }
+        Ok(())
+    }
+
+    /// Sheet Properties' Style and Attributes: see [`SchCmd::SetSheetProps`](crate::sch_edit::SchCmd::SetSheetProps).
+    pub(crate) fn set_sheet_props(&mut self, id: &str, e: &SheetPropsEdit) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        if !sch.sheets.iter().any(|s| s.id == id) {
+            return Err(fail("ops_unknown_sheet", id, "no sheet with this id"));
+        }
+        if sch.extras.is_locked(id) {
+            return Err(fail("ops_locked", id, "the sheet is locked"));
+        }
+        if e.border_width_nm.is_some_and(|w| w < Nm::ZERO) {
+            return Err(fail("ops_bad_sheet", id, "a border cannot be thinner than nothing"));
+        }
+        let mut p = sch.extras.sheet_props_of(id);
+        if let Some(w) = e.border_width_nm {
+            p.border_width_nm = w;
+        }
+        if let Some(c) = e.border_color {
+            p.border_color = specified(c);
+        }
+        if let Some(c) = e.fill_color {
+            p.fill_color = specified(c);
+        }
+        if let Some(v) = e.exclude_from_sim {
+            p.exclude_from_sim = v;
+        }
+        if let Some(v) = e.exclude_from_bom {
+            p.exclude_from_bom = v;
+        }
+        if let Some(v) = e.exclude_from_board {
+            p.exclude_from_board = v;
+        }
+        if let Some(v) = e.dnp {
+            p.dnp = v;
+        }
+        if !sch.extras.set_sheet_props(id, p) {
+            return Err(fail("ops_nothing_to_change", id, "the sheet already has these properties"));
+        }
+        Ok(())
+    }
+
+    /// New Top-Level Sheet: see [`SchCmd::AddTopLevelSheet`](crate::sch_edit::SchCmd::AddTopLevelSheet).
+    pub(crate) fn add_top_level_sheet(&mut self, name: &str) -> Result<(), Vec<CheckResult>> {
+        let name = name.trim();
+        let sch = self.schematic()?;
+        if !sch.extras.virtual_root {
+            return Err(fail("ops_not_top_level", name, "this design's root sheet is its only top-level sheet: a sheet is added to it with Draw Sheet"));
+        }
+        // `if( dlg.ShowModal() == wxID_OK && !dlg.GetValue().IsEmpty() )`
+        if name.is_empty() {
+            return Err(fail("ops_bad_sheet", "sheet", "a sheet needs a name"));
+        }
+        // "Generate a unique filename": `name.Replace( " ", "_" ).Lower()` and `.kicad_sch`
+        let stem = name.replace(' ', "_").to_lowercase();
+        let stem = stem.strip_suffix(".kicad_sch").map(str::to_string).unwrap_or(stem);
+        let taken = |f: &str| self.design.sheet_contents.as_ref().is_some_and(|c| c.contains_key(f));
+        let mut file = format!("{stem}.kicad_sch");
+        let mut n = 1;
+        while taken(&file) {
+            file = format!("{stem}_{n}.kicad_sch");
+            n += 1;
+        }
+        // the lowest whole page number no sheet path shows (`PageNumberExists`)
+        let pages: BTreeSet<String> = eda_model::sheet_list::walk(&self.design).iter().map(|e| e.effective_page()).collect();
+        let page = (1..).find(|n: &u32| !pages.contains(&n.to_string())).unwrap_or(1).to_string();
+        // the root's grid of top-level sheets (`combine_top_level_sheets`): five to a row, one inch apart
+        let i = sch.sheets.len() as i64;
+        const GRID: Nm = Nm::new(25_400_000);
+        let at = Point { x: GRID * (1 + 2 * (i % 5)), y: GRID * (1 + 2 * (i / 5)) };
+        self.add_sheet(name, &file, at, (Nm::new(12_700_000), Nm::new(3_810_000)))?;
+        let sch = self.schematic_mut()?;
+        if let Some(s) = sch.sheets.last_mut() {
+            s.page = page;
+        }
+        Ok(())
+    }
+
+    /// Sheet Properties' user fields: see [`SchCmd::SetSheetFields`](crate::sch_edit::SchCmd::SetSheetFields).
+    pub(crate) fn set_sheet_fields(&mut self, id: &str, fields: &[eda_model::sch_extras::LabelField]) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        if !sch.sheets.iter().any(|s| s.id == id) {
+            return Err(fail("ops_unknown_sheet", id, "no sheet with this id"));
+        }
+        if sch.extras.is_locked(id) {
+            return Err(fail("ops_locked", id, "the sheet is locked"));
+        }
+        let mut kept: Vec<eda_model::sch_extras::LabelField> = Vec::new();
+        for f in fields {
+            let name = f.name.trim();
+            // "if( field.GetName( false ).IsEmpty() && field.GetText().IsEmpty() ) continue": an empty row is dropped
+            if name.is_empty() && f.text.is_empty() {
+                continue;
+            }
+            if name.is_empty() {
+                return Err(fail("ops_bad_field", id, "Fields must have a name."));
+            }
+            if name.eq_ignore_ascii_case("Sheetname") || name.eq_ignore_ascii_case("Sheetfile") || kept.iter().any(|k| k.name == name) {
+                return Err(fail("ops_field_exists", id, format!("Field name '{name}' already in use.")));
+            }
+            kept.push(eda_model::sch_extras::LabelField { name: name.to_string(), ..f.clone() });
+        }
+        let before = sch.extras.sheet_fields.get(id).cloned().unwrap_or_default();
+        if kept == before {
+            return Err(fail("ops_nothing_to_change", id, "the sheet already has these fields"));
+        }
+        if kept.is_empty() {
+            sch.extras.sheet_fields.remove(id);
+        } else {
+            sch.extras.sheet_fields.insert(id.to_string(), kept);
         }
         Ok(())
     }

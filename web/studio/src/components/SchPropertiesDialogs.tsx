@@ -4,10 +4,11 @@
 // (`DIALOG_SHAPE_PROPERTIES`). A text box and a directive label reopen the dialogs that created them (SchToolDialogs.tsx).
 //
 // Each OK sends one command (kicad-port/schProperties.ts builds it from what the user changed), so it is one undo step; nothing is sent when nothing changed.
-// What the drawing model has no place for is not offered: fonts, bold/italic and text colours, a sheet's border and fill and extra fields. A label's own fields (its net
-// class, ...) are the grid of Label Properties; a global label's Sheet References row is shown, Schematic Setup shows or hides it.
+// A free text's and a label's font, colour, a text's bold, italic, link and "Exclude from simulation" (UI-LEFT S6) are `set_text_attrs` (kicad-port/textLooks.ts),
+// batched with the dialog's other command. A label's own fields (its net class, ...) are the grid of Label Properties; a global label's Sheet References row is
+// shown, Schematic Setup shows or hides it.
 import { useState, type ReactNode } from "react";
-import type { LabelShape, Schematic, SchematicLabel, SchematicText } from "../api/types";
+import type { Cmd, LabelShape, Schematic, SchematicLabel, SchematicText, Sheet } from "../api/types";
 import type { LabelFieldEdit, SchColor, SchFill, SchGraphic, SchLineStyle } from "../api/schEditTypes";
 import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, labelFieldDisplayName, newLabelField, ownLabelFields, mmToNm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, nmToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -16,6 +17,8 @@ import { inferSpin } from "./schematic/labelShape";
 import { labelOrientationForPoint, orientationSceneOf } from "../kicad-port/schAutoRotate";
 import { textLie } from "../kicad-port/schTextItem";
 import type { SchHAlign, SchVAlign } from "../api/schEditTypes";
+import { chosenFont, DEFAULT_FONT, HYPERLINK_ERROR, oneStep, textAttrsCmd, validHyperlink } from "../kicad-port/textLooks";
+import { ColorSwatch, FontSelect, LinkField, useFontFamilies, useLinkChoices } from "./TextLookControls";
 
 const LABEL_SHAPES: Array<{ value: LabelShape; label: string }> = [
   { value: "input", label: "Input" },
@@ -84,6 +87,10 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const [size, setSize] = useState(nmToMm(label.size_nm && label.size_nm > 0 ? label.size_nm : 1_270_000));
   const [bold, setBold] = useState(!!label.bold);
   const [italic, setItalic] = useState(!!label.italic);
+  // the Font choice and the Color swatch (`m_fontCtrl`, `m_textColorSwatch`), `set_text_attrs`
+  const families = useFontFamilies();
+  const [font, setFont] = useState(label.font || DEFAULT_FONT);
+  const [color, setColor] = useState(label.color ?? null);
   // the grid of the label's own fields (`m_grid` over `m_fields`), a global label's Sheet References above them
   const [fields, setFields] = useState<LabelFieldEdit[]>(() => ownLabelFields(label).map((f) => ({ ...f, name: labelFieldDisplayName(f.name) })));
   const isr = (label.fields ?? []).find((f) => f.intersheet_refs) ?? null;
@@ -97,7 +104,14 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const canOk = text.trim().length > 0 && sizeOk;
   // while "Auto" is on the label takes the spin of what it is connected to (`AutoRotateItem`): the select shows the one it will get
   const autoSpin = auto ? labelOrientationForPoint(orientationSceneOf(sch), label.at, turn) : null;
-  const submit = () => canOk && void send(labelEditCmd(label, spin, { text, shape, spin: turn, sizeNm, bold, italic, autoRotate: supportsAuto ? auto : undefined, fields }));
+  const submit = () =>
+    canOk &&
+    void send(
+      oneStep([
+        labelEditCmd(label, spin, { text, shape, spin: turn, sizeNm, bold, italic, autoRotate: supportsAuto ? auto : undefined, fields }),
+        textAttrsCmd(label.id, { font: label.font, color: label.color }, { font: chosenFont(font), color }, false),
+      ])
+    );
   return (
     <SchDialogShell title={title} width={380} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
@@ -131,6 +145,8 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
             </label>
           </>
         )}
+        <span>Font:</span>
+        <FontSelect families={families} current={label.font} value={font} onChange={setFont} />
         <span>Text size (mm)</span>
         <input value={size} onChange={(e) => setSize(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
         <span>Style</span>
@@ -142,6 +158,8 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
             <input type="checkbox" checked={italic} onChange={(e) => setItalic(e.target.checked)} /> Italic
           </label>
         </span>
+        <span>Color:</span>
+        <ColorSwatch label="Label color" color={color} onChange={setColor} />
       </Grid>
       <table className="label-fields" aria-label="Label fields" style={{ width: "100%", marginTop: 8, borderCollapse: "collapse" }}>
         <thead>
@@ -212,16 +230,55 @@ function TextForm({ text }: { text: SchematicText }) {
   // how the text sits on its anchor, in its own axes (`m_hAlignLeft` ... `m_vAlignBottom`)
   const [h, setH] = useState<SchHAlign>(lie.h);
   const [v, setV] = useState<SchVAlign>(lie.v);
+  // the looks `DIALOG_TEXT_PROPERTIES` sets beyond these (UI-LEFT S6): Font, Bold, Italic, Color, Link, Exclude from simulation
+  const families = useFontFamilies();
+  const links = useLinkChoices();
+  const [font, setFont] = useState(text.font || DEFAULT_FONT);
+  const [bold, setBold] = useState(!!text.bold);
+  const [italic, setItalic] = useState(!!text.italic);
+  const [color, setColor] = useState(text.color ?? null);
+  const [href, setHref] = useState(text.href ?? "");
+  const [excludeFromSim, setExcludeFromSim] = useState(!!text.exclude_from_sim);
+  const [problem, setProblem] = useState<string | null>(null);
   const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
   const sizeOk = sizeNm !== null && sizeNm >= 10_000 && sizeNm <= 1_000_000_000;
   const canOk = content.length > 0 && sizeOk;
-  const submit = () => canOk && void send(textEditCmd(text, { content, sizeNm, vertical, h, v }));
+  const submit = () => {
+    if (!canOk) return;
+    // `EDA_TEXT::ValidateHyperlink`: the dialog stays open on a link it refuses
+    if (!validHyperlink(href.trim())) return setProblem(HYPERLINK_ERROR);
+    void send(
+      oneStep([
+        textEditCmd(text, { content, sizeNm, vertical, h, v }),
+        textAttrsCmd(text.id, { font: text.font, color: text.color, href: text.href, bold: text.bold, italic: text.italic, excludeFromSim: text.exclude_from_sim }, { font: chosenFont(font), color, href, bold, italic, excludeFromSim }, true),
+      ])
+    );
+  };
   return (
-    <SchDialogShell title="Text Properties" width={420} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
+    <SchDialogShell title="Text Properties" width={460} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
         <span>Text</span>
         <textarea autoFocus rows={4} value={content} onChange={(e) => setContent(e.target.value)} />
+        <span />
+        <LinkField href={href} onChange={(h2) => (setHref(h2), setProblem(null))} choices={links} />
+        <span />
+        <label>
+          <input type="checkbox" aria-label="Exclude from simulation" checked={excludeFromSim} onChange={(e) => setExcludeFromSim(e.target.checked)} /> Exclude from simulation
+        </label>
+        <span>Font:</span>
+        <FontSelect families={families} current={text.font} value={font} onChange={setFont} />
+        <span>Style</span>
+        <span style={{ display: "flex", gap: 14 }}>
+          <label>
+            <input type="checkbox" aria-label="Bold" checked={bold} onChange={(e) => setBold(e.target.checked)} /> Bold
+          </label>
+          <label>
+            <input type="checkbox" aria-label="Italic" checked={italic} onChange={(e) => setItalic(e.target.checked)} /> Italic
+          </label>
+        </span>
+        <span>Color:</span>
+        <ColorSwatch label="Text color" color={color} onChange={setColor} />
         <span>Text size (mm)</span>
         <input value={size} onChange={(e) => setSize(e.target.value)} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
         <span>Orientation</span>
@@ -242,6 +299,11 @@ function TextForm({ text }: { text: SchematicText }) {
           <option value="bottom">Bottom</option>
         </select>
       </Grid>
+      {problem && (
+        <p style={{ color: "var(--chrome-danger)", fontSize: 11, marginTop: 8 }} data-testid="text-properties-error">
+          {problem}
+        </p>
+      )}
     </SchDialogShell>
   );
 }
@@ -253,28 +315,167 @@ export function SheetPropertiesDialog({ id }: { id: string }) {
   return sheet ? <SheetForm key={id} sheet={sheet} /> : null;
 }
 
-function SheetForm({ sheet }: { sheet: { id: string; name: string; file: string; page?: string } }) {
+/** The look the writer has always given a sheet with no style of its own (`SheetProps::legacy`): a 6 mil border, a pale yellow fill. */
+const LEGACY_SHEET = { border_width_nm: 152_400, border_color: null as SchColor | null, fill_color: { r: 255, g: 255, b: 194, a: 255 } as SchColor | null };
+
+type SheetUserField = { name: string; text: string; visible: boolean; italic: boolean };
+
+/**
+ * Sheet Properties (`DIALOG_SHEET_PROPERTIES`): the name, file and page, the user fields (`SCH_FIELD`s of `FIELD_T::SHEET_USER`: Add Field gives `Field<N>`,
+ * `GetUserFieldName( m_fields->size() )`, hidden; Move Up / Down; Delete), the Attributes (Exclude from simulation, bill of materials, board; Do not populate)
+ * and the Style (the border's width and colour, the fill colour). OK is one step: `edit_sheet` / `set_sheet_page`, `set_sheet_fields`, `set_sheet_props`.
+ */
+function SheetForm({ sheet }: { sheet: Sheet }) {
   const here = useStudioState().currentSheetPath;
   const close = useClose();
   const send = useSend(close);
   const [name, setName] = useState(sheet.name);
   const [file, setFile] = useState(sheet.file);
   const [page, setPage] = useState(sheet.page ?? "");
+  const own = sheet.props ?? null;
+  const [fields, setFields] = useState<SheetUserField[]>(() => (sheet.user_fields ?? []).map((f) => ({ name: f.name, text: f.text, visible: f.visible ?? true, italic: !!f.italic })));
+  const [excludeFromSim, setExcludeFromSim] = useState(!!own?.exclude_from_sim);
+  const [excludeFromBom, setExcludeFromBom] = useState(!!own?.exclude_from_bom);
+  const [excludeFromBoard, setExcludeFromBoard] = useState(!!own?.exclude_from_board);
+  const [dnp, setDnp] = useState(!!own?.dnp);
+  const [border, setBorder] = useState(nmToMm(own ? (own.border_width_nm ?? 0) : LEGACY_SHEET.border_width_nm));
+  const [borderColor, setBorderColor] = useState<SchColor | null>(own ? (own.border_color ?? null) : LEGACY_SHEET.border_color);
+  const [fillColor, setFillColor] = useState<SchColor | null>(own ? (own.fill_color ?? null) : LEGACY_SHEET.fill_color);
+  const [problem, setProblem] = useState<string | null>(null);
   // A sheet must have a name and a valid file name; a page number is letters and digits only (`wxFILTER_ALPHANUMERIC`).
   const fileOk = file.trim().length > 0 && !/[\\/]/.test(file);
   const pageOk = /^[\p{L}\p{N}]*$/u.test(page.trim());
-  const canOk = name.trim().length > 0 && fileOk && pageOk;
-  const submit = () => canOk && void send(sheetEditCmd(sheet, { name, file, page }, [...here, sheet.id]));
+  const borderNm = mmToNm(border);
+  const canOk = name.trim().length > 0 && fileOk && pageOk && borderNm !== null && borderNm >= 0;
+  const setField = (i: number, change: Partial<SheetUserField>) => setFields((fs) => fs.map((f, k) => (k === i ? { ...f, ...change } : f)));
+  const move = (i: number, by: -1 | 1) =>
+    setFields((fs) => {
+      const j = i + by;
+      if (j < 0 || j >= fs.length) return fs;
+      const next = [...fs];
+      [next[i], next[j]] = [next[j]!, next[i]!];
+      return next;
+    });
+  const submit = () => {
+    if (!canOk) return;
+    // `Validate`: "Fields must have a name." for a field with a text and no name
+    if (fields.some((f) => f.name.trim() === "" && f.text !== "")) return setProblem("Fields must have a name.");
+    const names = fields.filter((f) => f.name.trim() !== "").map((f) => f.name.trim());
+    const dup = names.find((n, i) => names.indexOf(n) !== i || ["sheetname", "sheetfile"].includes(n.toLowerCase()));
+    if (dup) return setProblem(`Field name '${dup}' already in use.`);
+    const was = (sheet.user_fields ?? []).map((f) => ({ name: f.name, text: f.text, visible: f.visible ?? true, italic: !!f.italic }));
+    const kept = fields.filter((f) => f.name.trim() !== "" || f.text !== "");
+    const fieldsCmd = JSON.stringify(kept) === JSON.stringify(was) ? null : ({ op: "sch_edit", verb: "set_sheet_fields", id: sheet.id, fields: kept } as unknown as Cmd);
+    const was2 = own ?? LEGACY_SHEET;
+    const props: Record<string, unknown> = {};
+    const sameColor = (a: SchColor | null | undefined, b: SchColor | null | undefined) => JSON.stringify(a && a.a > 0 ? a : null) === JSON.stringify(b && b.a > 0 ? b : null);
+    if (borderNm !== (was2.border_width_nm ?? 0)) props.border_width_nm = borderNm;
+    if (!sameColor(borderColor, was2.border_color)) props.border_color = borderColor ?? UNSPECIFIED_COLOR;
+    if (!sameColor(fillColor, was2.fill_color)) props.fill_color = fillColor ?? UNSPECIFIED_COLOR;
+    if (excludeFromSim !== !!own?.exclude_from_sim) props.exclude_from_sim = excludeFromSim;
+    if (excludeFromBom !== !!own?.exclude_from_bom) props.exclude_from_bom = excludeFromBom;
+    if (excludeFromBoard !== !!own?.exclude_from_board) props.exclude_from_board = excludeFromBoard;
+    if (dnp !== !!own?.dnp) props.dnp = dnp;
+    const propsCmd = Object.keys(props).length > 0 ? ({ op: "sch_edit", verb: "set_sheet_props", id: sheet.id, ...props } as unknown as Cmd) : null;
+    const edit = sheetEditCmd(sheet, { name, file, page }, [...here, sheet.id]);
+    const editCmds: Cmd[] = edit ? ((edit as { op: string; cmds?: Cmd[] }).op === "batch" ? ((edit as { cmds: Cmd[] }).cmds ?? []) : [edit]) : [];
+    void send(oneStep([propsCmd, fieldsCmd, ...editCmds]));
+  };
   return (
-    <SchDialogShell title="Sheet Properties" width={440} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
+    <SchDialogShell title="Sheet Properties" width={560} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
         <span>Sheet name</span>
         <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
         <span>Sheet file name</span>
         <input value={file} onChange={(e) => setFile(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} title="A file the project has is shown; a new name moves this sheet's content to it (or copies it when another sheet shows the old file)" />
-        <span>Page number</span>
-        <input value={page} onChange={(e) => setPage(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="by order" />
       </Grid>
+      <table className="label-fields" aria-label="Sheet fields" style={{ width: "100%", marginTop: 8, borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ textAlign: "left" }}>Name</th>
+            <th style={{ textAlign: "left" }}>Value</th>
+            <th>Show</th>
+            <th>Italic</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {fields.map((f, i) => (
+            <tr key={i}>
+              <td>
+                <input aria-label={`Sheet field ${i + 1} name`} value={f.name} onChange={(e) => setField(i, { name: e.target.value })} style={{ width: 110 }} />
+              </td>
+              <td>
+                <input aria-label={`Sheet field ${i + 1} value`} value={f.text} onChange={(e) => setField(i, { text: e.target.value })} />
+              </td>
+              <td style={{ textAlign: "center" }}>
+                <input type="checkbox" aria-label={`Sheet field ${i + 1} shown`} checked={f.visible} onChange={(e) => setField(i, { visible: e.target.checked })} />
+              </td>
+              <td style={{ textAlign: "center" }}>
+                <input type="checkbox" aria-label={`Sheet field ${i + 1} italic`} checked={f.italic} onChange={(e) => setField(i, { italic: e.target.checked })} />
+              </td>
+              <td style={{ whiteSpace: "nowrap" }}>
+                <button type="button" title="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
+                  ↑
+                </button>
+                <button type="button" title="Move down" disabled={i === fields.length - 1} onClick={() => move(i, 1)}>
+                  ↓
+                </button>
+                <button type="button" aria-label={`Delete sheet field ${i + 1}`} title="Delete field" onClick={() => setFields((fs) => fs.filter((_, k) => k !== i))}>
+                  ✕
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <button
+        type="button"
+        aria-label="Add field"
+        title="Add field"
+        style={{ marginTop: 4 }}
+        // `OnAddField`: `GetUserFieldName( m_fields->size() )` over the two mandatory rows and the user ones, hidden
+        onClick={() => setFields((fs) => [...fs, { name: `Field${fs.length + 2}`, text: "", visible: false, italic: false }])}
+      >
+        + Add Field
+      </button>
+      <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap" }}>
+        <fieldset style={{ flex: 1, minWidth: 220 }}>
+          <legend>Attributes</legend>
+          <Grid>
+            <span>Page number:</span>
+            <input value={page} onChange={(e) => setPage(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="by order" />
+          </Grid>
+          <label style={{ display: "block" }}>
+            <input type="checkbox" checked={excludeFromSim} onChange={(e) => setExcludeFromSim(e.target.checked)} /> Exclude from simulation
+          </label>
+          <label style={{ display: "block" }} title={"This is useful for adding symbols for board footprints such as fiducials\nand logos that you do not want to appear in the bill of materials export"}>
+            <input type="checkbox" checked={excludeFromBom} onChange={(e) => setExcludeFromBom(e.target.checked)} /> Exclude from bill of materials
+          </label>
+          <label style={{ display: "block" }} title={"This is useful for adding symbols that only get exported to the bill of materials but\nnot required to layout the board such as mechanical fasteners and enclosures"}>
+            <input type="checkbox" checked={excludeFromBoard} onChange={(e) => setExcludeFromBoard(e.target.checked)} /> Exclude from board
+          </label>
+          <label style={{ display: "block" }}>
+            <input type="checkbox" checked={dnp} onChange={(e) => setDnp(e.target.checked)} /> Do not populate
+          </label>
+        </fieldset>
+        <fieldset style={{ flex: 1, minWidth: 220 }}>
+          <legend>Style</legend>
+          <Grid>
+            <span>Border width (mm):</span>
+            <input aria-label="Border width" value={border} onChange={(e) => setBorder(e.target.value)} title="0 is the schematic's default line width" />
+            <span>Border color:</span>
+            <ColorSwatch label="Border color" color={borderColor} onChange={setBorderColor} />
+            <span>Fill color:</span>
+            <ColorSwatch label="Background color" color={fillColor} onChange={setFillColor} />
+          </Grid>
+        </fieldset>
+      </div>
+      {problem && (
+        <p style={{ color: "var(--chrome-danger)", fontSize: 11, marginTop: 8 }} data-testid="sheet-properties-error">
+          {problem}
+        </p>
+      )}
     </SchDialogShell>
   );
 }

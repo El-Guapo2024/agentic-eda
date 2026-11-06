@@ -354,16 +354,29 @@ impl<'a> Board<'a> {
             if let Some(look) = src.extras.label_looks.get(&l.id) {
                 sch.extras.label_looks.insert(new_id.clone(), *look);
             }
+            // its font and colour (`SchExtras::text_attrs`), the places its fields were put by hand (`field_layout` under its id) and their looks
+            if let Some(a) = src.extras.text_attrs.get(&l.id) {
+                sch.extras.text_attrs.insert(new_id.clone(), a.clone());
+            }
+            if let Some(places) = src.field_layout.get(&l.id) {
+                sch.field_layout.insert(new_id.clone(), places.clone());
+            }
+            if let Some(looks) = src.extras.field_looks.get(&l.id) {
+                sch.extras.field_looks.insert(new_id.clone(), looks.clone());
+            }
             // and its own fields (its net class, ...)
             if let Some(fields) = src.extras.label_fields.get(&l.id) {
                 sch.extras.label_fields.insert(new_id, fields.clone());
             }
         }
-        // a pasted text keeps its justification
+        // a pasted text keeps its justification, and its bold, italic, font, colour, link and exclusion (`SchExtras::text_attrs`)
         for (k, t) in src.texts.iter().enumerate() {
             let Some(new_id) = sch.texts.get(first_text + k).map(|n| n.id.clone()) else { continue };
             if let Some(j) = src.extras.text_justify.get(&t.id) {
-                sch.extras.text_justify.insert(new_id, *j);
+                sch.extras.text_justify.insert(new_id.clone(), *j);
+            }
+            if let Some(a) = src.extras.text_attrs.get(&t.id) {
+                sch.extras.text_attrs.insert(new_id, a.clone());
             }
         }
         // hierarchical sheets: each a new sheet, with copies of the screens it shows (the sheet part of `SCH_EDITOR_CONTROL::Paste`)

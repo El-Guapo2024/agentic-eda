@@ -271,6 +271,8 @@ pub(crate) fn combine_top_level_sheets(parts: Vec<(String, String, SheetFile)>) 
         }
     }
     root.assign_missing_ids();
+    // the root is the project, not a sheet of its own (`SCHEMATIC::m_rootSheet`, `IsVirtualRootSheet`): the navigator shows its sheets as the roots
+    root.extras.virtual_root = true;
     SheetFile { root, screens, lib_symbols, bus_aliases, notes }
 }
 

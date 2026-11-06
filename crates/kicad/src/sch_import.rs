@@ -650,8 +650,10 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut label_uuid: Vec<Option<String>> = Vec::new();
     // each label's spin and look, parallel to `labels`: the file's own, not an inference from the wires
     let mut label_geometry: Vec<(eda_model::sch_extras::LabelSpin, crate::sch_extras_io::EffectsLook)> = Vec::new();
-    // each label's font colour, parallel to `labels` (`SchExtras::text_attrs`, r7 M5)
-    let mut label_colors: Vec<Option<eda_model::sch_extras::SchColor>> = Vec::new();
+    // each label's font colour and face, parallel to `labels` (`SchExtras::text_attrs`, r7 M5)
+    let mut label_colors: Vec<(Option<eda_model::sch_extras::SchColor>, Option<String>)> = Vec::new();
+    // each label's field places when they are not autoplaced, parallel to `labels` (`field_layout` under the label's id, `eda_engine::label_fields`)
+    let mut label_field_places: Vec<Option<Vec<eda_model::ir::FieldPlacement>>> = Vec::new();
     // each label's own fields (`parseSchText`'s properties), parallel to `labels`
     let mut label_fields_read: Vec<Vec<eda_model::sch_extras::LabelField>> = Vec::new();
     for (tag, global) in [("label", None), ("global_label", Some(true)), ("hierarchical_label", Some(false))] {
@@ -680,8 +682,10 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             label_locked.push(is_locked(l));
             label_uuid.push(uuid_of(l));
             label_geometry.push((spin, look));
-            label_colors.push(crate::sch_extras_io::read_text_attrs(l).color);
+            let attrs = crate::sch_extras_io::read_text_attrs(l);
+            label_colors.push((attrs.color, attrs.font));
             label_fields_read.push(crate::label_fields::read_label_fields(l, tag == "global_label"));
+            label_field_places.push(crate::label_fields::read_label_field_places(l, tag == "global_label", labels.last().map(|x| x.at).unwrap_or_default()));
         }
     }
 
@@ -716,8 +720,27 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     // the pages of a sheet on the paths after its first (`SchExtras::sheet_pages`)
     let mut sheet_pages: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> = std::collections::BTreeMap::new();
     let mut sheet_user_fields: Vec<(String, Vec<eda_model::sch_extras::LabelField>)> = Vec::new();
+    // each sheet's style and attributes (`SchExtras::sheet_props`), by its id
+    let mut sheet_props_read: Vec<(String, eda_model::sch_extras::SheetProps)> = Vec::new();
     for s in sexpr::find_all(root, "sheet") {
         let id = sexpr::find(s, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
+        // `parseSheet`: `(stroke ..)` sets the border's width and colour, `(fill ..)` the background colour, `in_bom` / `on_board` the inverted exclusions
+        if !id.is_empty() {
+            let mut props = eda_model::sch_extras::SheetProps { border_width_nm: Nm::new(152_400), border_color: None, fill_color: None, exclude_from_sim: false, exclude_from_bom: false, exclude_from_board: false, dnp: false };
+            if sexpr::find(s, "stroke").is_some() {
+                let (width, _, color) = crate::sch_extras_io::parse_stroke(s);
+                props.border_width_nm = width;
+                props.border_color = color;
+            }
+            props.fill_color = sexpr::find(s, "fill").and_then(|f| sexpr::find(f, "color")).and_then(crate::sch_extras_io::parse_color).filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0));
+            props.exclude_from_sim = crate::sch_extras_io::parse_bool(s, "exclude_from_sim").unwrap_or(false);
+            props.exclude_from_bom = !crate::sch_extras_io::parse_bool(s, "in_bom").unwrap_or(true);
+            props.exclude_from_board = !crate::sch_extras_io::parse_bool(s, "on_board").unwrap_or(true);
+            props.dnp = crate::sch_extras_io::parse_bool(s, "dnp").unwrap_or(false);
+            if props != eda_model::sch_extras::SheetProps::legacy() {
+                sheet_props_read.push((id.clone(), props));
+            }
+        }
         let name = sheet_property_text(s, "Sheetname").unwrap_or_default();
         let file = sheet_property_text(s, "Sheetfile").unwrap_or_default();
         // the sheet's user fields (r2 B-L1): every property but the two mandatory ones
@@ -851,6 +874,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             }
         }
         sch.extras.sheet_fields.extend(sheet_user_fields);
+        sch.extras.sheet_props.extend(sheet_props_read);
         // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
         for (id, (spin, look)) in sch.labels.iter().map(|l| l.id.clone()).zip(label_geometry) {
             if id.is_empty() {
@@ -869,11 +893,17 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
                 sch.extras.label_fields.insert(id, fields);
             }
         }
+        // Where a label's fields are when the file has them placed by hand (no `(fields_autoplaced ..)`): `field_layout` under the label's id.
+        for (id, places) in sch.labels.iter().map(|l| l.id.clone()).zip(label_field_places) {
+            if let (false, Some(places)) = (id.is_empty(), places) {
+                sch.field_layout.insert(id, places);
+            }
+        }
         // A text's, a text box's, a label's and a directive label's attributes beyond what the item keeps (`SchExtras::text_attrs`, r7 H4, M5); the default keeps
         // no entry.
         let attrs = sch.texts.iter().map(|t| t.id.clone()).zip(text_attrs)
             .chain(sch.extras.graphics.iter().map(|g| g.id.clone()).zip(graphic_attrs))
-            .chain(sch.labels.iter().map(|l| l.id.clone()).zip(label_colors.into_iter().map(|color| eda_model::sch_extras::TextAttrs { color, ..Default::default() })));
+            .chain(sch.labels.iter().map(|l| l.id.clone()).zip(label_colors.into_iter().map(|(color, font)| eda_model::sch_extras::TextAttrs { color, font, ..Default::default() })));
         for (id, a) in attrs.filter(|(id, a)| !id.is_empty() && !a.is_default()).collect::<Vec<_>>() {
             sch.extras.text_attrs.insert(id, a);
         }

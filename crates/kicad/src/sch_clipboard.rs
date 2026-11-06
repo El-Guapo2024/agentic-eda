@@ -652,7 +652,7 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         // the label's spin, size, bold and italic go on the clipboard (`SCH_IO_KICAD_SEXPR::saveText`)
         let (angle, effects) = crate::label_effects(sch, l, tag == "label");
         let _ = writeln!(out, "\n\t\t(at {x} {y} {angle})");
-        if tag == "global_label" || sch.extras.label_fields.get(&l.id).is_some_and(|f| !f.is_empty()) {
+        if eda_engine::label_fields::has_fields(sch, l) && !eda_engine::label_fields::hand_placed(sch, &l.id) {
             let _ = writeln!(out, "\t\t(fields_autoplaced yes)");
         }
         let _ = writeln!(out, "\t\t{effects}");
@@ -667,8 +667,10 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         note_item_uuid(&t.id, &uuid);
         // upright angle and the justification, as the file writes them (`KeepUpright`, `EDA_TEXT::Format`)
         let angle = if eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0) { 90.0 } else { 0.0 };
-        let effects = crate::sch_extras_io::text_effects_str(t.size_nm, sch.extras.text_justify_of(&t.id));
-        let _ = writeln!(out, "\t(text {}\n\t\t(exclude_from_sim no)\n\t\t(at {x} {y} {})\n\t\t{effects}\n\t\t(uuid \"{uuid}\")\n\t)", sexpr_str(&t.content), fmt_mm_f(angle));
+        // with its look (`SchExtras::text_attrs`: bold, italic, font, colour, link) and exclude from simulation, as `saveText` writes them
+        let attrs = sch.extras.text_attrs.get(&t.id).cloned().unwrap_or_default();
+        let effects = crate::sch_extras_io::text_effects_with(t.size_nm, sch.extras.text_justify_of(&t.id), &attrs);
+        let _ = writeln!(out, "\t(text {}\n\t\t(exclude_from_sim {})\n\t\t(at {x} {y} {})\n\t\t{effects}\n\t\t(uuid \"{uuid}\")\n\t)", sexpr_str(&t.content), if attrs.exclude_from_sim { "yes" } else { "no" }, fmt_mm_f(angle));
     }
 
     // Hierarchical sheets: the sheet symbols, with their pins; their screens are not in the text.

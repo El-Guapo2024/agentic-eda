@@ -2234,6 +2234,7 @@ export type Cmd =
   | { op: "set_annotation_settings"; settings: AnnotationSettings; subpart_first_id: number; subpart_id_separator: number }
   | { op: "set_field_name_templates"; fields: TemplateFieldName[] }
   | { op: "set_bom_presets"; bom_presets: string[]; bom_fmt_presets: string[] }
+  | { op: "set_bom_view"; save?: Record<string, unknown>; delete?: string; view?: Record<string, unknown> }
   | { op: "set_bus_aliases"; aliases: BusAliasDef[] }
   // The SPICE simulator's settings (`NGSPICE_SETTINGS`, the project's `schematic.ngspice`) and the workbook's text (crates/ops/src/simulator.rs).
   | { op: "set_simulator"; ngspice: { workbook_filename: string; fix_include_paths: boolean; model_mode: number } | null; workbook: string | null }
@@ -3062,6 +3063,10 @@ export interface SchematicLabel {
   fields?: SchLabelField[];
   /** The font colour (`SchExtras::text_attrs`); absent is the layer's. */
   color?: import("./schEditTypes").SchColor | null;
+  /** The font Label Properties chose (`SchExtras::text_attrs`): absent is the default; "KiCad Font" the stroke font; anything else an outline font's family. */
+  font?: string | null;
+  /** The label's fields were placed by hand (`GetFieldsAutoplaced() == AUTOPLACE_NONE`): they stay where they are until Autoplace Fields. */
+  fields_hand_placed?: boolean;
 }
 
 /** One field of a label (`SCH_FIELD` of an `SCH_LABEL_BASE`), placed: `shown` is its text as drawn (a global label's Sheet References read as the pages its name is on). */
@@ -3076,7 +3081,15 @@ export interface SchLabelField {
   at: [Nm, Nm];
   vertical: boolean;
   h: "left" | "center" | "right";
+  /** Its vertical justification (centre while autoplaced; a field placed by hand keeps its own). */
+  v?: "top" | "center" | "bottom";
   size_nm: Nm;
+  /** The id the field is picked, moved and edited by (`fld:<label id>:<name>`), and the label's id. */
+  id?: string;
+  owner?: string;
+  /** Its font face and colour (`SchExtras::field_looks` under the label's id); absent is the default font and the layer's colour. */
+  font?: string | null;
+  color?: { r: number; g: number; b: number; a: number } | null;
 }
 
 /** Schematic Setup > Formatting > Inter-sheet References (`SCHEMATIC_SETTINGS::m_IntersheetRefs*`). */
@@ -3110,6 +3123,9 @@ export interface SchematicText {
   italic?: boolean;
   color?: import("./schEditTypes").SchColor | null;
   href?: string | null;
+  /** The font Text Properties chose (absent: the default font) and its "Exclude from simulation". */
+  font?: string | null;
+  exclude_from_sim?: boolean;
 }
 
 /** A title block as `GET /api/state` / `GET /api/schematic` report it (`TITLE_BLOCK`): `comments[0]` is KiCad's comment 1, up to nine, trailing empty ones dropped. */
@@ -3165,6 +3181,21 @@ export interface Sheet {
   /** The sheet's name and file where KiCad's Autoplace Fields puts them. */
   fields?: SchField[];
   fields_autoplaced?: FieldsAutoplaced;
+  /** Sheet Properties' Style and Attributes (`SchExtras::sheet_props`); absent: the look the studio has always written, a 6 mil border and a pale yellow fill, no attribute. */
+  props?: SheetProps | null;
+  /** The sheet's user fields (`SchExtras::sheet_fields`: `SCH_FIELD`s past Sheetname and Sheetfile), in order. */
+  user_fields?: Array<{ name: string; text: string; visible?: boolean; italic?: boolean }> | null;
+}
+
+/** See `Sheet::props`: the border's width (0: the default line width) and colour, the background colour (absent: KiCad's UNSPECIFIED), the four attributes. */
+export interface SheetProps {
+  border_width_nm?: Nm;
+  border_color?: import("./schEditTypes").SchColor | null;
+  fill_color?: import("./schEditTypes").SchColor | null;
+  exclude_from_sim?: boolean;
+  exclude_from_bom?: boolean;
+  exclude_from_board?: boolean;
+  dnp?: boolean;
 }
 
 /** One step of the breadcrumb from the root down to the sheet `GET /api/schematic?sheet=...` actually returned -- empty for the root itself. */
@@ -3200,6 +3231,8 @@ export interface Schematic {
   lines?: SchLine[];
   /** Drawn shapes, text boxes, rule areas and directive labels -- see `SchGraphic` (api/schEditTypes.ts). Absent from a backend built before they existed. */
   graphics?: SchGraphic[];
+  /** A text box's and a directive label's font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id; absent: KiCad's defaults. */
+  graphic_text_attrs?: Record<string, { font?: string; color?: import("./schEditTypes").SchColor; href?: string; exclude_from_sim?: boolean }>;
   /** The tables of this sheet (`SCH_TABLE`, `crates/cli/src/table_json.rs` `sch_table_json`): the board's `BoardTable` shape with an empty layer. Absent from a backend built before sheet tables. */
   tables?: BoardTable[];
   /** Ids of locked items (Lock / Unlock). Absent from a backend built before locks existed. */
@@ -3802,6 +3835,9 @@ export interface FieldsTableReply {
   spec: FieldsTableSpec;
   /** The names of KiCad's built-in views (`BOM_PRESET::BuiltInPresets`), which a request can apply with `preset`. */
   presets?: string[];
+  /** The built-in views with their columns, and the project's own (`schematic.bom_presets`), so the box can show which one the view is (`syncBomPresetSelection`). */
+  built_in_presets?: Array<{ name: string; spec: FieldsTableSpec }>;
+  user_presets?: Array<{ name: string; spec: FieldsTableSpec }>;
   user_fields: string[];
   rows: FieldsTableRow[];
 }
@@ -3831,7 +3867,9 @@ export interface SchSearchData {
   find: string;
   replace: string;
   match_case: boolean;
-  mode: "plain" | "whole_word" | "wildcard";
+  mode: "plain" | "whole_word" | "wildcard" | "regex";
+  /** The dialog's Regular Expression box, kept ticked under Whole words only (which wins: `updateFlags`); the server reads `mode`. */
+  regex_box?: boolean;
   search_hidden_fields: boolean;
   search_pins: boolean;
   search_net_names: boolean;
@@ -3851,7 +3889,7 @@ export interface FindMatch {
   page?: string;
   /** The sheet's place in the page order: matches come sorted by it. */
   sheet_rank?: number;
-  kind: "field" | "label" | "text" | "pin" | "label_field";
+  kind: "field" | "label" | "text" | "pin" | "label_field" | "power_field" | "sheet_field" | "sheet_pin" | "text_box" | "directive_field";
   /** Symbol reference / label id / text id that owns the match. */
   id: string;
   /** Field name or pin number (empty for labels/text). */

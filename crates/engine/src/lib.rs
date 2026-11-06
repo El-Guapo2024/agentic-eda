@@ -18,6 +18,7 @@ pub mod fields_edit;
 mod flat;
 pub mod geometry;
 pub mod hier;
+pub mod label_fields;
 pub mod net_labels;
 pub mod nets;
 pub mod obstacles;

@@ -38,10 +38,19 @@
 // the symbol's, in every variant. Apply sends the symbol's edits and each variant's as one step (`ApplyData`'s loop over `storedVariants`); the export
 // is the shown variant's.
 //
-// Not ported (PARITY-sch.md): the scope selector (this table covers the current design's symbols), saved view presets of one's own, the sidebar
-// field-name templates, and the variant symbol overrides (Set / Clear Variant Symbol).
+// UI-LEFT S11 (kicad-port/bomPresets.ts): the scope ("Entire Project", "Current Sheet Only", "Current Sheet and Down" and KiCad 25ec2335's "Selection": `OnScope`,
+// `RebuildRows`; every open starts on the whole project, as 25ec2335 does not save it); the view presets of the project (`rebuildBomPresetsWidget`: the
+// built-in and the project's in name order, "---", "Save preset..." -- "BOM preset name:" / "Save BOM Preset", a built-in name refused, "Overwrite existing
+// preset?" -- and "Delete preset..." -- "Delete Preset" / "Select preset:"), the box showing the preset the view is (`syncBomPresetSelection`); the field name
+// templates as hidden columns and the project's saved view (`schematic.bom_settings`) from the server; "Save changes?" with Save / Discard Changes / Cancel on a close with staged edits (`HandleUnsavedChanges`).
+// **Differs**: a preset is saved to the project when it is saved (KiCad keeps them until the dialog closes); there is no "Rename" of a preset (KiCad has none:
+// save under the new name and delete the old one).
+//
+// Not ported (PARITY-sch.md): the variant symbol overrides (Set / Clear Variant Symbol).
 import { useEffect, useRef, useState } from "react";
 import { exportBom, fetchFieldsTable } from "../api/client";
+import { DELETE_PRESET, deletePresetCmd, matchingPreset, PRESET_SEPARATOR, presetChoices, READ_ONLY_PRESET, SAVE_PRESET, savePresetCmd, savePresetOutcome, SCOPE_CHOICES, UNSAVED_CHANGES, type FieldsTableScope } from "../kicad-port/bomPresets";
+import { SchDialogShell } from "./SchDialogShell";
 import { useColorScheme } from "../hooks/useColorScheme";
 import { DEFAULT_VARIANT_NAME, trimName, validateCopyNameInTable, validateNewVariantName, variantDescription, variantNamesForUI } from "../kicad-port/designVariants";
 import { AddVariantDialog, DescriptionEntryDialog, TextEntryDialog } from "./DesignVariantDialogs";
@@ -125,6 +134,15 @@ export function SymbolFieldsTableDialog() {
   const [preview, setPreview] = useState("");
   const [exportMsg, setExportMsg] = useState<string | null>(null);
 
+  // the scope (`m_scope`) and the preset box's dialogs: the name to save under, the overwrite question, the read-only refusal, the preset to delete
+  const [scope, setScope] = useState<FieldsTableScope>("all");
+  // the scope's request keys: the sheet in view and, for "Selection", what is selected on it (`updateSelectionItems`)
+  const scopeKeys = { scope, sheet_path: state.currentSheetPath, selection: scope === "selection" ? [...state.selection] : [] };
+  const [presetDialog, setPresetDialog] = useState<{ kind: "save"; name: string } | { kind: "overwrite"; name: string } | { kind: "error"; message: string } | { kind: "delete"; pick: string } | null>(null);
+  const [lastPreset, setLastPreset] = useState<string>("");
+  const [askClose, setAskClose] = useState(false);
+  const [fieldDialog, setFieldDialog] = useState<{ kind: "rename" | "remove"; name: string } | null>(null);
+
   const requestId = useRef(0);
 
   // A fresh open starts from the dialog's default view with nothing staged -- on the Export tab when Generate Bill of Materials opened it (`ShowExportTab`).
@@ -143,13 +161,16 @@ export function SymbolFieldsTableDialog() {
     setExportMsg(null);
     setVariantEdits([]);
     setVariantDialog(null);
+    setScope("all");
+    setPresetDialog(null);
+    setAskClose(false);
   }, [open]);
 
   // Re-run the grid whenever the view, the staged changes or the schematic itself changed.
   useEffect(() => {
     if (!open) return;
     const id = ++requestId.current;
-    void fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes, undefined, { variant, variant_edits: variantEdits }).then((reply) => {
+    void fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes, undefined, { variant, variant_edits: variantEdits, ...scopeKeys }).then((reply) => {
       if (id !== requestId.current) return;
       if (!reply.ok) {
         setError(reply.message ?? "Could not build the table.");
@@ -159,13 +180,14 @@ export function SymbolFieldsTableDialog() {
       setTable(reply);
       if (spec === null) setSpec(reply.spec);
     });
-  }, [open, spec, changes, state.schematic, variant, variantEdits]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, spec, changes, state.schematic, variant, variantEdits, scope, state.currentSheetPath, scope === "selection" ? state.selection : null]);
 
   // Export preview (`PreviewRefresh`) follows the same inputs while that tab is showing.
   useEffect(() => {
     if (!open || tab !== "export" || !spec) return;
     let cancelled = false;
-    void exportBom(spec, fmt, isEmptyChanges(changes) ? null : changes, undefined, undefined, { variant, variant_edits: variantEdits }).then((reply) => {
+    void exportBom(spec, fmt, isEmptyChanges(changes) ? null : changes, undefined, undefined, { variant, variant_edits: variantEdits, ...scopeKeys }).then((reply) => {
       if (cancelled) return;
       if (reply.ok) {
         setPreview(reply.text ?? "");
@@ -177,16 +199,35 @@ export function SymbolFieldsTableDialog() {
     return () => {
       cancelled = true;
     };
-  }, [open, tab, spec, fmt, changes, state.schematic, variant, variantEdits]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, tab, spec, fmt, changes, state.schematic, variant, variantEdits, scope, state.currentSheetPath]);
 
   if (!open) return null;
 
   const dirty = !isEmptyChanges(changes) || variantEdits.length > 0;
+  // **Differs**: `savePresetsToSchematic` keeps the view the table closes on as the project's next one (`m_BomSettings`); here a close is no edit (an undo
+  // step for it would be one the user never made), so the view the table opens on is the project's saved one only as it came with the project.
   const closeNow = () => dispatch({ type: "SET_SCH_DIALOG", dialog: null });
   const close = () => {
-    // `OnClose`'s HandleUnsavedChanges: "Save changes?"
-    if (dirty && !window.confirm("Discard the changes that have not been applied?")) return;
+    // `OnClose`: `HandleUnsavedChanges( this, _( "Save changes?" ), .. )` -- Save applies, Discard Changes closes, Cancel stays
+    if (dirty) return setAskClose(true);
     closeNow();
+  };
+  const builtInNames = (table?.built_in_presets ?? []).map((p) => p.name).concat(table?.built_in_presets ? [] : presets);
+  const userNames = (table?.user_presets ?? []).map((p) => p.name);
+  const presetBox = presetChoices(builtInNames, userNames);
+  const currentPreset = spec ? matchingPreset(spec, [...(table?.built_in_presets ?? []), ...(table?.user_presets ?? [])]) : null;
+  // `onBomPresetChanged`: the separator is no choice, the two actions open their dialogs, a preset is applied
+  const onPresetBox = (value: string) => {
+    if (value === PRESET_SEPARATOR) return;
+    if (value === SAVE_PRESET) return setPresetDialog({ kind: "save", name: lastPreset });
+    if (value === DELETE_PRESET) return setPresetDialog({ kind: "delete", pick: userNames[0] ?? "" });
+    if (userNames.includes(value)) setLastPreset(value);
+    void applyPreset(value);
+  };
+  const savePreset = async (name: string) => {
+    if (!spec) return;
+    if (await api.cmd(savePresetCmd(spec, name))) setLastPreset(name);
   };
 
   const updateSpec = (patch: Partial<FieldsTableSpec>) => setSpec((s) => (s ? { ...s, ...patch } : s));
@@ -195,7 +236,7 @@ export function SymbolFieldsTableDialog() {
   // `ApplyBomPreset`: one of KiCad's built-in views, its columns, grouping and the two filters replacing the current ones (a user field stays, hidden)
   const applyPreset = async (name: string) => {
     if (!spec || name === "") return;
-    const reply = await fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes, name, { variant, variant_edits: variantEdits });
+    const reply = await fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes, name, { variant, variant_edits: variantEdits, ...scopeKeys });
     if (!reply.ok) {
       setError(reply.message ?? "Could not apply the preset.");
       return;
@@ -271,10 +312,15 @@ export function SymbolFieldsTableDialog() {
     setNewField("");
   };
 
-  const renameField = (name: string) => {
-    if (!spec) return;
-    const to = window.prompt("New field name", name);
-    if (to === null || to.trim() === name) return;
+  // `OnRenameField`: `wxTextEntryDialog( this, _( "New field name:" ), _( "Rename Field" ), fieldName )`; the same name changes nothing, a name in use is refused
+  // ("Field name %s already exists.")
+  const renameField = (name: string) => setFieldDialog({ kind: "rename", name });
+  const doRename = (name: string, to: string) => {
+    if (!spec || to.trim() === name) return;
+    if (spec.columns.some((c) => c.name.toLowerCase() === to.trim().toLowerCase())) {
+      dispatch({ type: "TOAST", message: `Field name ${to.trim()} already exists.`, kind: "error" });
+      return;
+    }
     const problem = validNewFieldName(spec, to);
     if (problem) {
       dispatch({ type: "TOAST", message: problem, kind: "error" });
@@ -285,7 +331,9 @@ export function SymbolFieldsTableDialog() {
     setSpec(specRenameColumn(spec, name, to.trim()));
   };
 
-  const removeField = (name: string) => {
+  // `OnRemoveField`: "Are you sure you want to remove the field '%s'?"
+  const removeField = (name: string) => setFieldDialog({ kind: "remove", name });
+  const doRemove = (name: string) => {
     if (!spec) return;
     setChanges(stageRemoveField(changes, name));
     setVariantEdits(variantEditsRemoved(variantEdits, name));
@@ -476,11 +524,17 @@ export function SymbolFieldsTableDialog() {
                     Filter
                     <input value={spec.filter} placeholder="Reference…" style={{ fontSize: 11 }} onChange={(e) => updateSpec({ filter: e.target.value })} />
                   </label>
+                  <select aria-label="Scope" value={scope} style={{ fontSize: 11 }} onChange={(e) => setScope(e.target.value as FieldsTableScope)}>
+                    {SCOPE_CHOICES.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
                   <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    Preset
-                    <select aria-label="Preset" value="" style={{ fontSize: 11 }} onChange={(e) => void applyPreset(e.target.value)}>
-                      <option value="">Apply a view…</option>
-                      {presets.map((p) => (
+                    View presets:
+                    <select aria-label="Preset" value={currentPreset ?? PRESET_SEPARATOR} style={{ fontSize: 11 }} onChange={(e) => onPresetBox(e.target.value)}>
+                      {presetBox.map((p) => (
                         <option key={p} value={p}>
                           {p}
                         </option>
@@ -623,6 +677,117 @@ export function SymbolFieldsTableDialog() {
           <button onClick={close}>Close</button>
         </div>
       </div>
+      {/* the preset box's dialogs and the close question, over the table */}
+      {(presetDialog || askClose || fieldDialog) && (
+        <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+          {fieldDialog?.kind === "rename" && (
+            <TextEntryDialog
+              title="Rename Field"
+              prompt="New field name:"
+              initial={fieldDialog.name}
+              onCancel={() => setFieldDialog(null)}
+              onOk={(t) => {
+                const from = fieldDialog.name;
+                setFieldDialog(null);
+                doRename(from, t);
+              }}
+            />
+          )}
+          {fieldDialog?.kind === "remove" && (
+            <SchDialogShell title="Confirmation" width={360} onCancel={() => setFieldDialog(null)} okLabel="OK" onOk={() => (setFieldDialog(null), doRemove(fieldDialog.name))}>
+              <p style={{ margin: 0 }} data-testid="fields-table-remove-field">{`Are you sure you want to remove the field '${fieldDialog.name}'?`}</p>
+            </SchDialogShell>
+          )}
+          {presetDialog?.kind === "save" && (
+            <TextEntryDialog
+              title="Save BOM Preset"
+              prompt="BOM preset name:"
+              initial={presetDialog.name}
+              onCancel={() => setPresetDialog(null)}
+              onOk={(t) => {
+                const name = t.trim();
+                if (!name) return setPresetDialog(null);
+                const outcome = savePresetOutcome(name, builtInNames, userNames);
+                if (outcome === "read_only") return setPresetDialog({ kind: "error", message: READ_ONLY_PRESET });
+                if (outcome === "overwrite") return setPresetDialog({ kind: "overwrite", name });
+                setPresetDialog(null);
+                void savePreset(name);
+              }}
+            />
+          )}
+          {presetDialog?.kind === "overwrite" && (
+            <SchDialogShell title="Confirmation" width={340} cancelLabel="Cancel" okLabel="OK" onCancel={() => setPresetDialog(null)} onOk={() => (setPresetDialog(null), void savePreset(presetDialog.name))}>
+              <p style={{ margin: 0 }} data-testid="fields-table-overwrite">
+                Overwrite existing preset?
+              </p>
+            </SchDialogShell>
+          )}
+          {presetDialog?.kind === "error" && (
+            <SchDialogShell title="Error" width={340} cancelLabel="OK" onCancel={() => setPresetDialog(null)}>
+              <p style={{ margin: 0, whiteSpace: "pre-wrap" }} data-testid="fields-table-preset-error">
+                {presetDialog.message}
+              </p>
+            </SchDialogShell>
+          )}
+          {presetDialog?.kind === "delete" && (
+            <SchDialogShell
+              title="Delete Preset"
+              width={340}
+              canOk={presetDialog.pick !== ""}
+              onCancel={() => setPresetDialog(null)}
+              onOk={() => {
+                const name = presetDialog.pick;
+                setPresetDialog(null);
+                if (name) void api.cmd(deletePresetCmd(name));
+              }}
+            >
+              <div style={{ marginBottom: 6 }}>Select preset:</div>
+              <select aria-label="Presets" size={Math.max(2, Math.min(8, userNames.length))} style={{ width: "100%" }} value={presetDialog.pick} onChange={(e) => setPresetDialog({ kind: "delete", pick: e.target.value })}>
+                {userNames.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </SchDialogShell>
+          )}
+          {askClose && (
+            <div className="dialog-backdrop" onClick={() => setAskClose(false)}>
+              <div className="dialog" style={{ width: 380 }} onClick={(e) => e.stopPropagation()}>
+                <div className="dialog-header">
+                  <span>{UNSAVED_CHANGES.title}</span>
+                </div>
+                <div className="dialog-body">
+                  <p style={{ marginTop: 0 }} data-testid="fields-table-save-changes">
+                    {UNSAVED_CHANGES.message}
+                  </p>
+                  <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>{UNSAVED_CHANGES.detail}</p>
+                </div>
+                <div className="dialog-footer">
+                  <button
+                    onClick={() => {
+                      setAskClose(false);
+                      closeNow();
+                    }}
+                  >
+                    {UNSAVED_CHANGES.discard}
+                  </button>
+                  <button onClick={() => setAskClose(false)}>{UNSAVED_CHANGES.cancel}</button>
+                  <button
+                    className="primary"
+                    onClick={async () => {
+                      setAskClose(false);
+                      if (await apply()) closeNow();
+                    }}
+                  >
+                    {UNSAVED_CHANGES.save}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       {/* the variant dialogs over the table: their clicks and keys are theirs, not the table's */}
       {variantDialog && (
         <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
