@@ -58,7 +58,7 @@ Notes:
 - **P6 [BD] Swap (Alt+S).** **done (task-u1-pcb)** for zones: a zone stays put and two zones swap layers, as `ZONE::SetPosition` is a no-op (R7-2; PARITY-pcb §66). Left:
   - Arcs, dimensions, groups, tables, text boxes, barcodes and points are not swapped, and neither is a pad with a pad.
   - M. r7 R7-2; r6 E6-2.
-- **P7 [BD] Strict mode, on by default.**
+- **P7 [BD] Strict mode, on by default.** **Decided by the user 2026-11-07: Strict stays on by default** (the studio's safety net; it can be switched off for KiCad's behaviour).
   - It refuses a move, swap or delete that breaks a complete net, and a pasted copy keeps its nets, so moving the copy is refused.
   - KiCad never refuses. This may be an intended safety rule.
   - S. GAPS 8; PARITY-pcb §22.
