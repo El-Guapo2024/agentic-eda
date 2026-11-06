@@ -511,6 +511,41 @@ fn kicad_cli_loads_derived_symbols_keeps_them_through_sym_upgrade_and_plots_a_fl
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): Export Symbol as SVG (`POST /api/sym/svg`) plots in the theme it is given -- `--theme`, which kicad-cli's
+/// `JobSymExportSvg` reads with `::GetColorSettings( m_colorTheme )` -- and with the hidden items as `SYMBOL_EDIT_FRAME::SVGPlotSymbol` plots them (a fresh
+/// `SCH_RENDER_SETTINGS`: `m_ShowHiddenPins` and `m_ShowHiddenFields` on): the Classic theme's pin colour is not the Default theme's, a hidden pin is drawn
+/// only with `include_hidden_pins`, and a theme kicad-cli does not know leaves its own.
+#[test]
+fn the_symbol_svg_route_plots_in_the_theme_it_is_given_with_the_hidden_pins() {
+    if !slow() {
+        return;
+    }
+    if eda_kicad_engine::find_cli().is_none() {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    }
+    let dir = scratch("u5_symbol_svg_theme");
+    setup(&dir);
+    let mut sym = base_symbol();
+    sym.pins[1].hidden = true;
+    step(&dir, Cmd::PutLibrarySymbol { symbol: sym, overwrite: false }, false, "test").unwrap();
+    let plot = |req: serde_json::Value| {
+        let r = crate::sch_export_api::symbol_svg(&dir, req.to_string().as_bytes());
+        assert_eq!(r["ok"], serde_json::json!(true), "{r}");
+        r["svg"]["text"].as_str().unwrap().lines().filter(|l| !l.starts_with("<title>")).collect::<Vec<_>>().join("\n")
+    };
+    let default = plot(serde_json::json!({ "lib_id": "Lib:Base", "theme": "_builtin_default", "include_hidden_pins": true, "include_hidden_fields": true }));
+    let classic = plot(serde_json::json!({ "lib_id": "Lib:Base", "theme": "_builtin_classic", "include_hidden_pins": true, "include_hidden_fields": true }));
+    let colours = |svg: &str| -> std::collections::BTreeSet<String> { svg.match_indices("stroke:#").map(|(i, _)| svg[i + 7..i + 14].to_string()).collect() };
+    assert_ne!(colours(&default), colours(&classic), "the two themes plot in different colours: {:?} / {:?}", colours(&default), colours(&classic));
+    let unknown = plot(serde_json::json!({ "lib_id": "Lib:Base", "theme": "nonsense", "include_hidden_pins": true, "include_hidden_fields": true }));
+    assert_eq!(colours(&unknown), colours(&default), "a theme kicad-cli does not know is not passed: its own (the default) plots");
+    let without = plot(serde_json::json!({ "lib_id": "Lib:Base", "theme": "_builtin_default" }));
+    let pins = |svg: &str| svg.matches("<desc>P").count();
+    assert!(pins(&default) > pins(&without), "the hidden pin's name is plotted only with include_hidden_pins ({} / {})", pins(&default), pins(&without));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ============================================================================================================================================= pin alternate functions
 
 fn mcu_with_alternates() -> LibrarySymbol {

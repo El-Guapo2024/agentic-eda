@@ -147,8 +147,9 @@ export async function fetchRatsnest(): Promise<Ratsnest> {
  * copy of the board, and the DRC then judges the board with that fill (the fills are kept
  * like B's).
  */
-export async function fetchDrc(refillZones = false, schematicParity = false): Promise<DrcReport> {
-  const asked = [refillZones ? "refill_zones=1" : "", schematicParity ? "schematic_parity=1" : ""].filter(Boolean).join("&");
+export async function fetchDrc(refillZones = false, schematicParity = false, allTrackErrors = false): Promise<DrcReport> {
+  // `allTrackErrors`: the options menu's "Report All Errors for Each Track" (`--all-track-errors`).
+  const asked = [refillZones ? "refill_zones=1" : "", schematicParity ? "schematic_parity=1" : "", allTrackErrors ? "all_track_errors=1" : ""].filter(Boolean).join("&");
   const r = await getJson<DrcReport & { error?: string }>(asked ? `/api/drc?${asked}` : "/api/drc");
   if (r.error) throw new ApiError(r.error);
   return r;
@@ -382,6 +383,8 @@ export interface FabReply {
   message?: string;
   /** What kicad-cli printed on a run that worked: its warnings and progress lines (`run_export`). */
   log?: string;
+  /** The lines of `log` that report no file the run wrote: kicad-cli's warnings and notes (`eda_kicad_engine::warnings_of`), for the dialogs' Messages. */
+  warnings?: string[];
   /** The design revision the export was made from (the /api/version stamp), like every kicad-cli reply. */
   revision?: string;
 }

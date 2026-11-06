@@ -48,6 +48,13 @@ pub struct SchExtras {
     /// KiCad's defaults. `crate::erc_checks` lists the keys. Additive. (Counts in `is_empty`: a table is a reason to write `extras`.)
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub erc_severities: BTreeMap<String, String>,
+    /// The ERC dialog's "Ignore all 'Conflict problem between pins' violations" on a pin-to-pin *error* (`DIALOG_ERC::OnERCItemRClick`,
+    /// `ID_SET_SEVERITY_TO_IGNORE`): KiCad ignores `ERCE_PIN_TO_PIN_ERROR` too, not only the warning `pin_to_pin` stands for, but keeps that only in the
+    /// session -- a project has no key for the error's slot (`ERC_ITEM::GetItemsWithSeverities` stops before `pinTableError`), so kicad-cli and a reopened
+    /// project report the errors again (r3 D3-M2). The studio remembers it here and leaves the pin-to-pin errors out of its own report while `pin_to_pin` is
+    /// ignored (`erc_checks::PIN_TO_PIN_ERROR_SLOT` in a severity table sets it). Nothing of it reaches the derived project. Additive. (Counts in `writes_nothing`.)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pin_to_pin_errors_ignored: bool,
     /// Schematic Setup > Formatting > Connection grid spacing (`SCHEMATIC_SETTINGS::m_ConnectionGridSize`, `panel_setup_formatting.cpp`): the grid, in mils, that wire ends and
     /// pins are expected to be on -- ERC's `endpoint_off_grid` judges by it. Written to the derived project as `schematic.connection_grid_size`, where kicad-cli reads it. `None`:
     /// KiCad's default, 50 mils. Additive. (Counts in `writes_nothing`, not in `is_empty`: it is a project setting, no part of the drawing.)
@@ -750,6 +757,7 @@ impl SchExtras {
             && self.variants.is_empty()
             && !self.virtual_root
             && self.root_page.is_empty()
+            && !self.pin_to_pin_errors_ignored
     }
 
     /// The net class a label's fields give its net (`SCH_LABEL_BASE`'s `Netclass` field; the first that is not empty), if any.

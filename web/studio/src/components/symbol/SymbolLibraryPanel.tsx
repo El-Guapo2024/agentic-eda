@@ -52,8 +52,10 @@ export function SymbolLibraryPanel() {
 
   const selected = useMemo(() => state.treeSelection, [state.treeSelection]);
   const { pinned } = useLibraryTree("symbol");
-  /** A derived symbol's row says what it derives from (KiCad draws a derived symbol in italics). */
+  /** A derived symbol's row is in italics, as KiCad draws an alias (`SetItalic( !node->m_IsRoot )`), and its tooltip says what it derives from. KiCad's tree does not
+   *  nest it under its parent: both sit at the library's level, in the tree's order. */
   const derivedHints = useMemo(() => Object.fromEntries(Object.entries(names.derived).map(([id, parent]) => [id, `derived from ${bareName(parent)}`])), [names.derived]);
+  const aliases = useMemo(() => new Set(Object.keys(names.derived)), [names.derived]);
 
   // `LIBRARY_EDITOR_CONTROL::AddContextMenuItems` adds Pin / Unpin Library before `Init`'s entries and Hide Library Tree after them.
   const menu = (sel: string[], libs: string[]): MenuEntry[] => {
@@ -86,6 +88,7 @@ export function SymbolLibraryPanel() {
       selected={selected}
       current={state.libId}
       hints={derivedHints}
+      aliases={aliases}
       modified={names.modified}
       multi
       onSelect={(names) => dispatch({ type: "SET_TREE_SELECTION", names })}

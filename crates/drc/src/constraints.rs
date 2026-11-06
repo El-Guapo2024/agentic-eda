@@ -592,6 +592,9 @@ pub struct Settings {
     pub solder_paste_margin_ratio: f64,
     /// `GetEnabledLayers()`.
     pub enabled_layers: BTreeSet<String>,
+    /// The project's tuning profiles and the profile each net class names (`TuningProfileParameters()`, `NETCLASS::GetTuningProfile`): the implicit rules
+    /// of step 4 of `loadImplicitRules`.
+    pub tuning_profiles: eda_model::setup_pages::TuningProfiles,
 }
 
 impl Settings {
@@ -618,6 +621,7 @@ impl Settings {
             solder_paste_margin: r.solder_mask.paste_margin_nm,
             solder_paste_margin_ratio: r.solder_mask.paste_margin_ratio,
             enabled_layers: enabled,
+            tuning_profiles: r.tuning_profiles.clone(),
         }
     }
 }
@@ -890,6 +894,66 @@ impl RuleEngine {
         // The netclass rules are sorted by their first constraint's minimum so that the right one fires when `A` and `B` are in two classes.
         clearance_rules.sort_by_key(|r| r.constraints[0].value.min());
         for r in clearance_rules.into_iter().chain(item_rules) {
+            self.add_rule(r);
+        }
+
+        // 4) tuning profile rules (KiCad 25ec2335 `loadImplicitRules`' `addTuningSingleRule` / `addTuningDifferentialRules`): for each class -- the
+        // Default class, the classes, the composite classes -- that names a profile the project has (a composite one takes its first constituent's that
+        // names one, else the Default class's: `makeEffectiveNetclass`, `addMissingDefaults`), one rule per layer of the profile with a width
+        let tuning = self.settings.tuning_profiles.clone();
+        let profile_of = |class: &ClassView| -> Option<&eda_model::setup_pages::TuningProfile> {
+            let own = |name: &str| tuning.class_profiles.get(name).filter(|n| !n.is_empty()).cloned();
+            let name = if class.name.contains(',') { class.name.split(',').find_map(own).or_else(|| own("Default")) } else { own(&class.name) }?;
+            tuning.profiles.iter().find(|p| p.name == name)
+        };
+        let mut tuning_rules: Vec<Rule> = Vec::new();
+        for nc in classes {
+            let Some(profile) = profile_of(nc) else { continue };
+            let nc_name = nc.name.replace('\'', "\\'");
+            let rule_name = format!("tuning profile '{}'", profile.name);
+            for entry in profile.layer_entries.iter().filter(|e| e.width_nm > Nm::ZERO) {
+                let width = entry.width_nm.get();
+                let width_constraint = || {
+                    let mut c = Constraint::new(CType::TrackWidth);
+                    c.value.min = Some(bds.track_min_width.get().max(width));
+                    c.value.opt = Some(width);
+                    c.value.max = Some(width);
+                    c
+                };
+                if profile.profile_type == eda_model::setup_pages::ProfileType::Single {
+                    let mut r = Rule::implicit(rule_name.clone(), ImplicitSource::TuningProfile);
+                    r.condition = Some(Condition::new(&format!("A.hasExactNetclass('{nc_name}') && A.Layer == '{}'", entry.signal_layer)));
+                    r.constraints.push(width_constraint());
+                    tuning_rules.push(r);
+                    continue;
+                }
+                let gap = entry.diff_pair_gap_nm.get();
+                if gap <= 0 {
+                    continue;
+                }
+                let in_pair = format!("A.hasExactNetclass('{nc_name}') && A.Layer == '{}' && A.inDiffPair('*')", entry.signal_layer);
+                let mut r = Rule::implicit(rule_name.clone(), ImplicitSource::TuningProfile);
+                r.condition = Some(Condition::new(&in_pair));
+                r.constraints.push(width_constraint());
+                tuning_rules.push(r);
+                let mut r = Rule::implicit(rule_name.clone(), ImplicitSource::TuningProfile);
+                r.condition = Some(Condition::new(&in_pair));
+                let mut c = Constraint::new(CType::DiffPairGap);
+                c.value.min = Some(bds.min_clearance.get().max(gap));
+                c.value.opt = Some(gap);
+                c.value.max = Some(gap);
+                r.constraints.push(c);
+                tuning_rules.push(r);
+                // "A narrower diffpair gap overrides the netclass min clearance"
+                if nc.clearance.as_ref().is_some_and(|(cl, _)| gap < cl.get()) {
+                    let mut r = Rule::implicit(rule_name.clone(), ImplicitSource::TuningProfile);
+                    r.condition = Some(Condition::new(&format!("A.hasExactNetclass('{nc_name}') && A.Layer == '{}' && AB.isCoupledDiffPair()", entry.signal_layer)));
+                    r.constraints.push(Constraint::with_min(CType::Clearance, gap));
+                    tuning_rules.push(r);
+                }
+            }
+        }
+        for r in tuning_rules {
             self.add_rule(r);
         }
 

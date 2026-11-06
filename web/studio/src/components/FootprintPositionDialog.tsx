@@ -22,6 +22,7 @@
 // (`exporter.SetVariant( getSelectedVariant() )`).
 import { useEffect, useState } from "react";
 import { postFabPos, type FabPosOptions } from "../api/client";
+import { withWarnings } from "../kicad-port/schOutputs";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { VariantChoice } from "./VariantChoice";
 
@@ -73,7 +74,7 @@ export function FootprintPositionDialog() {
         output_directory: outputDirectory,
         ...(variant ? { variant } : {}),
       });
-      setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Position file written." : "Failed."), files: reply.files ?? [] });
+      setResult({ ok: reply.ok, message: reply.ok ? withWarnings(reply, reply.message ?? "Position file written.") : (reply.message ?? "Failed."), files: reply.files ?? [] });
     } finally {
       setBusy(false);
     }

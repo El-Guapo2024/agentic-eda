@@ -573,9 +573,92 @@ fn library_pad_with_edit(pad: &eda_model::ir::LibraryPad, e: &eda_model::fp_edit
 ///   ([`eda_model::ConstraintModel::footprint_of`], the instance's edits included), as KiCad overwrites the library item with the board's copy: its pads,
 ///   art, courtyard and models replace an unpublished entry's (whose name, description, attributes and fields stay).
 ///
-/// What the instance's edit has beyond its pads and models (its Reference and Value layouts, user fields and attributes) is not written: the library entry keeps
-/// its own, where KiCad's copy takes the board's (with the reference reset to `REF**`, which an entry here always is).
+/// The instance's fields and attributes are written by [`crate::Board::export_footprints`] (UI-LEFT X5): this function alone writes the pads and models, and the
+/// library entry keeps its own fields.
 pub fn export_footprints_to_library(design: &mut Design, model: &eda_model::ConstraintModel) -> Result<ExportFootprintsReport, Vec<CheckResult>> {
+    export_footprints_with(design, model, &BTreeMap::new())
+}
+
+/// What `footprint->Duplicate()` carries of a board footprint beyond its pads and models, laid on the library entry of its name: the Reference (its layout; the
+/// text `fpCopy->SetReference( "REF**" )` makes, which an entry here always shows), the Value with the board's text (an entry's Value names the footprint unless
+/// it has a text of its own), the Datasheet, the Description and the user fields, and the attributes (`FOOTPRINT::m_attributes`: the type, Not in schematic,
+/// the BOM and position-file exclusions, DNP, the courtyard exemption).
+fn lay_instance_fields(entry: &mut eda_model::ir::LibraryFootprint, copy: &eda_model::ir::LibraryFootprint) {
+    let mut reference = copy.reference.clone();
+    if let Some(l) = reference.as_mut() {
+        l.text = None;
+    }
+    entry.reference = reference;
+    entry.reference_visible = copy.reference_visible;
+    let mut value = copy.value.clone();
+    let item_name = entry.name.rsplit(':').next().unwrap_or(&entry.name).to_string();
+    if let Some(l) = value.as_mut() {
+        if l.text.as_deref().is_some_and(|t| t == entry.name || t == item_name) {
+            l.text = None;
+        }
+    }
+    entry.value = value;
+    entry.value_visible = copy.value_visible;
+    let mut fields = Vec::new();
+    for f in &copy.fields {
+        match f.name.as_str() {
+            "Datasheet" | "Description" => {
+                let mut l = f.layout.clone().unwrap_or_else(eda_model::fp_edit::new_library_field_layout);
+                l.visible = f.visible;
+                l.text = Some(f.value.clone());
+                if f.name == "Datasheet" {
+                    entry.datasheet = Some(l);
+                } else {
+                    entry.description_field = Some(l);
+                }
+            }
+            _ => fields.push(f.clone()),
+        }
+    }
+    entry.fields = fields;
+    entry.attributes = copy.attributes.clone();
+}
+
+impl<'a> crate::Board<'a> {
+    /// `PCB_EDIT_FRAME::ExportFootprintsToLibrary` (`footprint_libraries_utils.cpp`): `footprint->Duplicate( IGNORE_PARENT_GROUP )` of every placed footprint,
+    /// `SetReference( "REF**" )`, saved over the entry of its name. The duplicate is the copy Edit Footprint makes of the instance (`LoadFootprintFromBoard`'s
+    /// clone: [`Self::open_footprint_from_board`], the fields turned to the front as `FootprintSave` turns the footprint), with the symbol's fields the board
+    /// gives it (`BOARD_NETLIST_UPDATER::updateFootprintParameters`: Datasheet, Description, the simulation and user fields, hidden at the origin on the
+    /// fabrication layer, as the board writer writes them) where the instance has none of that name; the pads and models are [`export_footprints_to_library`]'s.
+    /// Differs: a footprint read from a board file keeps the fields that file gave it among its kept tokens, which are not read back here; the entry keeps its
+    /// own Datasheet and Description then.
+    pub(crate) fn export_footprints(&mut self) -> Result<ExportFootprintsReport, Vec<CheckResult>> {
+        let model = self.model;
+        let saved = self.design.footprint_library.as_ref().map(|l| l.board_copies.clone());
+        let mut copies: BTreeMap<String, eda_model::ir::LibraryFootprint> = BTreeMap::new();
+        for part in model.parts.iter().filter(|p| p.footprint.as_deref().is_some_and(|n| !n.is_empty())) {
+            let name = part.footprint.clone().unwrap_or_default();
+            if self.open_footprint_from_board(&part.reference).is_err() {
+                continue;
+            }
+            let Some(mut copy) = self.design.footprint_library.as_mut().and_then(|l| l.board_copies.pop()).map(|c| c.footprint) else { continue };
+            let read_from_file = self.design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == part.reference));
+            if let Some(link) = model.symbol_links.get(&part.reference).filter(|_| !read_from_file) {
+                for (field, text) in &link.fields {
+                    if !copy.fields.iter().any(|f| f.name == *field) {
+                        let mut layout = eda_model::fp_edit::FieldLayout::new(eda_model::ir::Point { x: eda_model::units::Nm::ZERO, y: eda_model::units::Nm::ZERO }, "F.Fab");
+                        layout.visible = false;
+                        copy.fields.push(eda_model::ir::FootprintField { name: field.clone(), value: text.clone(), visible: false, layout: Some(layout) });
+                    }
+                }
+            }
+            // the last instance of a name wins
+            copies.insert(name, copy);
+        }
+        if let Some(lib) = self.design.footprint_library.as_mut() {
+            lib.board_copies = saved.unwrap_or_default();
+        }
+        export_footprints_with(&mut self.design, model, &copies)
+    }
+}
+
+/// [`export_footprints_to_library`], each entry also given the fields of `copies` (the board's duplicate of its name's last instance), when there is one.
+fn export_footprints_with(design: &mut Design, model: &eda_model::ConstraintModel, copies: &BTreeMap<String, eda_model::ir::LibraryFootprint>) -> Result<ExportFootprintsReport, Vec<CheckResult>> {
     // `GetBoard()->GetFirstFootprint() == nullptr`: "No footprints to export!"
     let named: Vec<&eda_model::Part> = model.parts.iter().filter(|p| p.footprint.as_deref().is_some_and(|n| !n.is_empty())).collect();
     if model.parts.is_empty() {
@@ -612,6 +695,9 @@ pub fn export_footprints_to_library(design: &mut Design, model: &eda_model::Cons
                         entry.model = models.first().map(|m| m.path.clone());
                     }
                 }
+                if let Some(copy) = copies.get(&name) {
+                    lay_instance_fields(entry, copy);
+                }
                 report.replaced.push(name);
             }
             existing => {
@@ -627,9 +713,15 @@ pub fn export_footprints_to_library(design: &mut Design, model: &eda_model::Cons
                     entry.model = fresh.model;
                     entry.models3d = fresh.models3d;
                     entry.pad_edit = None;
+                    if let Some(copy) = copies.get(&name) {
+                        lay_instance_fields(entry, copy);
+                    }
                     entry.assign_missing_ids();
                     report.replaced.push(name);
                 } else {
+                    if let Some(copy) = copies.get(&name) {
+                        lay_instance_fields(&mut fresh, copy);
+                    }
                     fresh.assign_missing_ids();
                     lib.footprints.push(fresh);
                     report.added.push(name);

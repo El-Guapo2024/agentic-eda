@@ -127,13 +127,15 @@ struct Targets {
     tables: BTreeSet<String>,
     /// Footprint fields on their own (`REF:Reference`): text a footprint carries, moved without it.
     fields: BTreeSet<String>,
+    /// A footprint's own texts on their own (`REF~t<k>`, [`crate::fp_texts`]).
+    fp_texts: BTreeSet<String>,
     /// Tuning patterns (`PCB_TUNING_PATTERN`, a `PCB_GENERATOR`): their tracks are in `tracks`, their origin, end and base lines move with them.
     patterns: BTreeSet<String>,
 }
 
 impl Targets {
     fn is_empty(&self) -> bool {
-        self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.board_items.is_empty() && self.tables.is_empty() && self.fields.is_empty() && self.patterns.is_empty()
+        self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.board_items.is_empty() && self.tables.is_empty() && self.fields.is_empty() && self.fp_texts.is_empty() && self.patterns.is_empty()
     }
 }
 
@@ -160,6 +162,10 @@ impl Board<'_> {
         }
         if self.resolve_field(id).is_some() {
             out.fields.insert(id.to_string());
+            return true;
+        }
+        if self.resolve_fp_text(id).is_some() {
+            out.fp_texts.insert(id.to_string());
             return true;
         }
         let Some(dr) = &self.design.drawings else { return false };
@@ -369,6 +375,9 @@ impl Board<'_> {
         // A field of a footprint that is itself being transformed goes with the footprint, not on its own.
         let own_fields: BTreeSet<String> = targets.fields.iter().filter(|f| !parse_field_id(f).is_some_and(|(r, _)| targets.parts.contains(r))).cloned().collect();
         self.transform_fields(&own_fields, x, copper)?;
+        // A footprint's own text likewise (UI-LEFT P15).
+        let own_texts: BTreeSet<String> = targets.fp_texts.iter().filter(|t| !crate::fp_texts::parse_fp_text_id(t).is_some_and(|(r, _)| targets.parts.contains(r))).cloned().collect();
+        self.transform_fp_texts(&own_texts, x, copper)?;
 
         if let Some(rt) = self.design.routing.as_mut() {
             for t in rt.tracks.iter_mut().filter(|t| targets.tracks.contains(&t.id)) {

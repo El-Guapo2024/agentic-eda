@@ -34,14 +34,27 @@ fn units_of(req: &Value) -> Units {
 
 /// Run `f` on the rule board of the design in `dir`.
 fn with_rule_board(dir: &Path, units: Units, f: impl FnOnce(&RuleBoard) -> Value) -> Value {
-    let (_, design, model) = match board::load(dir) {
+    let (meta, design, model) = match board::load(dir) {
         Ok(v) => v,
         Err(e) => return fail(board::reasons(&e)),
     };
     let drc_board = eda_drc::board::build(&design, &model);
-    let dru = model.board.custom_rules_text.clone();
+    let dru = model.board.custom_rules_text.as_deref().map(|text| expanded_rules(dir, &meta.intent, &design, &model, text));
     let rb = RuleBoard::new(&design, &model, &drc_board, units, dru.as_deref());
+    if dru.as_deref().is_some_and(|t| t.to_lowercase().contains("fromto")) {
+        rb.enable_from_to();
+    }
     f(&rb)
+}
+
+/// The rules text as `DRC_ENGINE::loadRules` reads it (UI-LEFT B6): each line's text variables expanded (`ExpandTextVars( str, &resolver, INTERNAL )`, the resolver
+/// `BOARD::ResolveTextVar( token, 0 )`: the project's variables and the board's own, `${REF:FIELD}` by the footprint's reference), but a component class
+/// selector (`${Class:..}`, `IsComponentClassSelector`), which the rule parser reads itself; a variable nothing resolves stays, and the parser says
+/// "Unresolved text variable".
+pub(crate) fn expanded_rules(dir: &Path, intent: &str, design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, text: &str) -> String {
+    let shown = crate::text_vars_json::PcbShown::new(dir, design, model, crate::text_vars_json::project(dir, intent, eda_model::text_vars::Clock::utc_now()));
+    let resolver = |token: &str| if token.to_uppercase().starts_with("CLASS:") { None } else { shown.board().resolve(token, 0) };
+    text.lines().map(|line| eda_model::text_vars::expand_text_vars(line, Some(&resolver), 0, 0)).collect::<Vec<_>>().join("\n")
 }
 
 /// `POST /api/inspect/clearance`.
@@ -329,11 +342,17 @@ mod tests {
 
 /// `POST /api/pcb/query`: Find by Properties' Query tab (`eda_drc::query`), each footprint with the sheet and the component classes the board's rule board
 /// gives it (`GetSheetname`, `GetComponentClass`, R6-D3), as `DIALOG_FIND_BY_PROPERTIES::selectMatchingFromQuery` evaluates the board's real footprints.
-/// A board that does not load answers with the request's facts alone.
+/// The geometry functions (`intersectsCourtyard`, `intersectsArea`, `enclosedByArea`) read each item's shape, the board's footprints and areas from it, and `fromTo` its
+/// copper paths (`FROM_TO_CACHE`, UI-LEFT B6). A board that does not load answers with the request's facts alone.
 pub fn pcb_query(dir: &Path, body: &[u8]) -> Value {
     let Ok((_, design, model)) = board::load(dir) else { return eda_drc::query::handle(body) };
     let drc_board = eda_drc::board::build(&design, &model);
     let rb = RuleBoard::new(&design, &model, &drc_board, Units::Mm, None);
     let facts = |reference: &str| rb.footprint_item(reference).and_then(|it| it.footprint.as_ref().map(|f| (f.sheet.clone(), f.classes.clone())));
-    eda_drc::query::handle_with(body, &facts)
+    let item = |id: &str| rb.shaped_item(id);
+    let env = rb.env_for_rules();
+    // the from-to cache only when the query asks for it (it is the whole board's connectivity)
+    let asks_from_to = String::from_utf8_lossy(body).to_lowercase().contains("fromto");
+    let board_facts = eda_drc::query::BoardFacts { footprint: Some(&facts), item: Some(&item), footprints: env.footprints.clone(), areas: env.areas.clone(), from_to: asks_from_to.then(|| eda_drc::from_to::of_board(&rb)) };
+    eda_drc::query::handle_on(body, &board_facts)
 }

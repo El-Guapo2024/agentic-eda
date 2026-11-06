@@ -37,7 +37,7 @@
   const dialog = () => document.querySelector(".dialog");
   const buttonText = (root, text) => [...(root?.querySelectorAll("button") ?? [])].find((b) => b.textContent.trim() === text);
   /** The field after a label of a dialog's grid (`<span>Label</span><input>`). */
-  const fieldOf = (label) => { const s = [...(dialog()?.querySelectorAll(".kv-grid > span") ?? [])].find((e) => e.textContent.trim() === label); const n = s?.nextElementSibling; return n?.matches("input,select") ? n : n?.querySelector("input,select") ?? null; };
+  const fieldOf = (label) => { const s = [...(dialog()?.querySelectorAll(".kv-grid > span") ?? [])].find((e) => e.textContent.trim().replace(/:$/, "") === label); const n = s?.nextElementSibling; return n?.matches("input,select") ? n : n?.querySelector("input,select") ?? null; };
   const setValue = (el, v) => {
     const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, "value").set.call(el, String(v));

@@ -515,14 +515,17 @@ export function tunerText(value: SpiceValue, series: Tuner["series"]): string {
   return `${stripZeros(formatFixed(v, 3))}${prefix}`;
 }
 
-/** `TUNER_SLIDER::TUNER_SLIDER`: the range from half to twice the value; for a potentiometer, 0 to 1. Null with KiCad's reason when the item
- *  is not tunable. */
+/** `TUNER_SLIDER::TUNER_SLIDER`: the range from half to twice the value; for a potentiometer ("Special case for potentiometers because we don't
+ *  have value ranges implemented yet": `SIM_MODEL::TYPE::R_POT`, whose tuner parameter is its wiper's `pos`), 0 to 1 from its position, or 0.5
+ *  when the model has none. Null with KiCad's reason when the item is not tunable. */
 export function newTuner(circuit: Circuit | null, ref: string): Tuner | { error: string } {
   const item = circuit?.items.find((i) => i.ref === ref);
   if (!item) return { error: `${ref} not found` };
   if (!item.tuner) return { error: `${ref} has simulation model of type '${item.sim_device ?? item.device} ${item.sim_type ?? ""}'.\n\nOnly passive R, L, C models and voltage and current sources may be tuned.` };
-  const value = SpiceValue.parse(item.tuner.value);
-  const t: Tuner = { ref, item: item.name, param: item.tuner.param, min: SpiceValue.of(0.5).mul(value), max: SpiceValue.of(2.0).mul(value), value, text: "", series: "", multi: false, steps: 5 };
+  const pot = item.tuner.param === "pos";
+  const value = pot ? SpiceValue.parse(item.tuner.value !== "" ? item.tuner.value : "0.5") : SpiceValue.parse(item.tuner.value);
+  const [min, max] = pot ? [SpiceValue.of(0), SpiceValue.of(1)] : [SpiceValue.of(0.5).mul(value), SpiceValue.of(2.0).mul(value)];
+  const t: Tuner = { ref, item: item.name, param: item.tuner.param, min, max, value, text: "", series: "", multi: false, steps: 5 };
   t.text = tunerText(t.value, t.series);
   return t;
 }
@@ -603,6 +606,13 @@ export function multiRunSteps(tuners: Tuner[], limit = 12): Map<string, number>[
   };
   gen(0);
   return steps;
+}
+
+/** The run labels of a multi-run trace (`updateTrace`: "Generate labels for each run based on tuner values"): each step's tuned values as
+ *  `<ref>=<SPICE_VALUE( value ).ToSpiceString()>`, joined by ", ", for the first `runs` steps. KiCad walks a step's `std::map` of tuner pointers;
+ *  the tuners' own order is used here. */
+export function multiRunLabels(steps: readonly Map<string, number>[], runs: number): string[] {
+  return steps.slice(0, Math.max(0, runs)).map((step) => [...step].map(([ref, v]) => `${ref}=${SpiceValue.of(v).toSpiceString()}`).join(", "));
 }
 
 // ------------------------------------------------------------------------------------------------------------- the workbook

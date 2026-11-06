@@ -23,6 +23,7 @@ import { asPickedImage } from "./imageFiles";
 import { fpChooseImage } from "../components/footprint/fpItemTools";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import type { Preferences } from "../kicad-port/preferences";
+import { showSymFind, symFindNext, symReplaceAll, symReplaceAndFindNext } from "./symFindOps";
 
 /** common_tools.cpp doZoomInOut: "Step must be AT LEAST 1.3" -- the factor of one Zoom In / Zoom Out step. */
 const ZOOM_STEP = 1.3;
@@ -252,6 +253,15 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
       }
       else toast(`Cannot open datasheet '${target.text}': only absolute http(s)/file URLs can be opened from a browser.`, "error");
     });
+
+    // Find / Find and Replace (`SCH_FIND_REPLACE_TOOL`, which the Symbol Editor registers too): over the symbol being edited, with its own dialog and cursor
+    // (actions/symFindOps.ts) -- the schematic's handlers of the same names are replaced on this tab.
+    m.set("common.Interactive.find", () => showSymFind(false, ctx.symApi));
+    m.set("common.Interactive.findAndReplace", () => showSymFind(true, ctx.symApi));
+    m.set("common.Interactive.findNext", () => void symFindNext(ctx.symApi, ctx.symDispatch, false));
+    m.set("common.Interactive.findPrevious", () => void symFindNext(ctx.symApi, ctx.symDispatch, true));
+    m.set("common.Interactive.replaceAndFindNext", () => void symReplaceAndFindNext(ctx.symApi, ctx.symDispatch));
+    m.set("common.Interactive.replaceAll", () => void symReplaceAll(ctx.symApi));
   }
 
   // Everything on this editor's toolbars that is not supported here is not registered, so nothing reads as live that would do nothing.

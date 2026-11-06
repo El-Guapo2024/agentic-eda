@@ -62,7 +62,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     // (`unconnected-(U1-NC1-Pad12)`, `SCH_PIN::GetDefaultNetName( .., aForceNoConnect = true )`), which Update PCB from Schematic puts on the pad
     // (`BOARD_NETLIST_UPDATER::updateComponentPadConnections`). A footprint read from a KiCad file keeps the pads the file gave no net.
     let unconnected = unconnected_pin_nets(design, model, &footprints, &parts_by_ref);
-    let from_schematic = FromSchematic { unconnected: unconnected.clone(), root_sheetfile: format!("{}.kicad_sch", meta.title) };
+    let from_schematic = FromSchematic { unconnected: unconnected.clone(), root_sheetfile: format!("{}.kicad_sch", meta.title), forced: fills.map(|f| f.forced.clone()).unwrap_or_default() };
     // Net name -> number, sorted by name, 1-indexed (0 is the unconnected net).
     let mut net_names: Vec<&str> = model.nets.iter().map(|n| n.name.as_str()).chain(unconnected.values().map(String::as_str)).collect();
     net_names.sort();
@@ -422,8 +422,13 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             }
             let uuid = crate::duid_for(&seed, &v.id);
             written.entry(v.id.clone()).or_default().push(uuid.clone());
-            // The via's type and the tokens after its layers (`remove_unused_layers`, `tenting`, `padstack`, ..) as the file had them.
-            let (kind, tokens) = crate::via_io::words(design.drawings.as_ref().and_then(|d| d.via_extra(&v.id)));
+            // The via's type and the tokens after its layers (`remove_unused_layers`, `tenting`, `padstack`, ..) as the file had them, the layers the last fill
+            // forced it to flash on in its `(zone_layer_connections ..)`.
+            let mut extra = design.drawings.as_ref().and_then(|d| d.via_extra(&v.id)).cloned();
+            if let Some(e) = extra.as_mut() {
+                with_forced_layers(&mut e.tokens, fills.and_then(|f| f.forced.get(&v.id)));
+            }
+            let (kind, tokens) = crate::via_io::words(extra.as_ref());
             writeln!(
                 out,
                 "\t(via{kind} (at {x} {y}) (size {dia}) (drill {drill}) (layers {} {}){tokens}{lock} (net {n}) (uuid \"{uuid}\"))",
@@ -1163,7 +1168,9 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
         defaults["dimension_precision"] = precision;
         defaults["dimensions"] = dims;
     }
-    let waived = crate::drc_exclusions::project_entries(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()));
+    // (a check whose marker names its layer is listed on each copper layer of the board: `drc_exclusions::markers_on`)
+    let copper: Vec<String> = model.board.layers.iter().filter(|l| eda_model::layers::is_copper_layer_name(l)).cloned().collect();
+    let waived = crate::drc_exclusions::project_entries_on(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()), &copper);
     if !waived.is_empty() {
         project["board"]["design_settings"]["drc_exclusions"] = serde_json::Value::Array(waived);
         // The entries are structured records (`kiapi.board.DrcExclusion`), the form of a section at schema 3. A section that says it is at 2 or less is what KiCad
@@ -1190,6 +1197,18 @@ pub(crate) struct FromSchematic {
     pub unconnected: BTreeMap<String, String>,
     /// The root sheet's file (`<title>.kicad_sch`): the `(sheetfile ..)` of a footprint whose symbol is on the root.
     pub root_sheetfile: String,
+    /// The layers the last fill forced a pad (`REF.NUM`) or via (its id) to flash on (`KicadFills::forced`, `ZLO_FORCE_FLASHED`): written as the item's
+    /// `(zone_layer_connections ..)`, as KiCad's writer writes its overrides, so that a DRC that does not refill sees the flashing the fill made.
+    pub forced: BTreeMap<String, Vec<String>>,
+}
+
+/// `tokens` with their `(zone_layer_connections ..)` naming `layers` (`format( const PAD* )`, `format( const PCB_TRACK* )`: the layers whose override is
+/// `ZLO_FORCE_FLASHED`), for an item that has the token (one that removes its unconnected layers); an item without it is left as it is.
+pub(crate) fn with_forced_layers(tokens: &mut [String], layers: Option<&Vec<String>>) {
+    let Some(layers) = layers else { return };
+    for t in tokens.iter_mut().filter(|t| t.starts_with("(zone_layer_connections")) {
+        *t = format!("(zone_layer_connections{})", layers.iter().map(|l| format!(" {}", sexpr_str(l))).collect::<String>());
+    }
 }
 
 /// The nets the derived board gives the pads the model has on no net: "REF.PIN" -> `unconnected-(..)` (a pin the schematic has alone, its own net in
@@ -1366,7 +1385,10 @@ pub(crate) fn write_footprint(
         // Its description, tags, jumper pad groups, Datasheet and Description fields ..., as the file had them, while the part is on the footprint they describe.
         if e.source_name == lib_name_written {
             // a footprint variant the file had is the schematic's to say when the design has one (`crate::variant_io`)
-            for token in e.tokens.iter().filter(|t| !crate::variant_io::superseded(design, t)) {
+            // a field the footprint now has of its own (Footprint Properties' Datasheet or Description, a user field) is written from the edit, not from the file's
+            // `(property ..)`: KiCad's reader would take the later of two (`parseFOOTPRINT_unchecked`'s `HasField`)
+            let own_field = |t: &str| extra.edit.is_some_and(|ed| ed.fields.iter().any(|f| t.starts_with(&format!("(property {} ", sexpr_str(&f.name)))));
+            for token in e.tokens.iter().filter(|t| !crate::variant_io::superseded(design, t) && !own_field(t)) {
                 writeln!(out, "\t\t{token}").unwrap();
             }
         }
@@ -1438,6 +1460,16 @@ pub(crate) fn write_footprint(
     // The footprint's own solder mask margin (`FOOTPRINT::SetLocalSolderMaskMargin`), which the pads that have none of their own take (`PAD::GetSolderMaskExpansion`).
     if let Some(m) = own_extra.and_then(|e| e.solder_mask_margin) {
         writeln!(out, "\t\t(solder_mask_margin {})", mm(m)).unwrap();
+    }
+    // A footprint placed from the intent: the paste margins Footprint Properties set (`FootprintEdit::solder_paste_margin`, `..ratio`; one from a board file has them
+    // among its tokens), after the mask margin as `format( FOOTPRINT )` writes them.
+    if own_extra.is_none() {
+        if let Some(m) = extra.edit.and_then(|e| e.solder_paste_margin) {
+            writeln!(out, "\t\t(solder_paste_margin {})", mm(m)).unwrap();
+        }
+        if let Some(r) = extra.edit.and_then(|e| e.solder_paste_ratio) {
+            writeln!(out, "\t\t(solder_paste_margin_ratio {})", crate::fmt_double_2_str(r)).unwrap();
+        }
     }
     if let Some(&(first, first_pad)) = pads.first() {
         let facts = design.pad_zone_facts(&fp.id, &footprint.name, first, footprint.pads.len(), &first_pad.number);
@@ -1613,6 +1645,11 @@ pub(crate) fn write_footprint(
         let stack_modelled = !pad.ext.stack.is_default();
         if pad.kind == PadKind::ThroughHole {
             out.push_str(&crate::padstack_io::unconnected_text(pad.ext.stack.unconnected));
+            // the layers the last fill forced it to flash on, for a pad whose file kept no `(zone_layer_connections ..)` of its own (`format( const PAD* )`)
+            let kept_own = pad_infos.and_then(|p| p.get(pad_idx)).is_some_and(|i| i.tokens.iter().any(|t| t.starts_with("(zone_layer_connections")));
+            if let (true, false, Some(layers)) = (pad.ext.stack.unconnected.removes(), kept_own, from_schematic.forced.get(&format!("{}.{}", fp.id, pad.number))) {
+                write!(out, " (zone_layer_connections{})", layers.iter().map(|l| format!(" {}", sexpr_str(l))).collect::<String>()).unwrap();
+            }
         }
         // A non-plated hole has no net by definition -- nothing to look up.
         if pad.kind != PadKind::NonPlatedHole {
@@ -1626,16 +1663,21 @@ pub(crate) fn write_footprint(
         // connectivity checks leave it be (`PAD::IsFreePad`). Written after the net, as `format( const PAD* )` does.
         // A pad of a footprint made here has its pin's (`updateComponentPadConnections`: `SetPinFunction( net.GetPinFunction() )`, `SetPinType( net.GetPinType() )`).
         let from_pin = link.filter(|_| pad_infos.is_none() && pad.kind != PadKind::NonPlatedHole).and_then(|l| l.pins.get(&pad.number));
-        let function = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_function.as_str()).or(from_pin.map(|(f, _)| f.as_str()));
+        // A pad edit's Pin Name and Pin Type (the Properties panel's, `PAD::SetPinFunction` / `SetPinType`) over what the file or the schematic pin gave.
+        let pad_edit = extra.edit.and_then(|e| e.pad(&pad.number, nth));
+        let function = pad_edit.and_then(|e| e.pin_function.as_deref()).or(pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_function.as_str())).or(from_pin.map(|(f, _)| f.as_str()));
         if let Some(function) = function.filter(|t| !t.is_empty()) {
             write!(out, " (pinfunction {})", sexpr_str(function)).unwrap();
         }
-        let pin_type = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_type.as_str()).or(from_pin.map(|(_, t)| t.as_str()));
+        let pin_type = pad_edit.and_then(|e| e.pin_type.as_deref()).or(pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_type.as_str())).or(from_pin.map(|(_, t)| t.as_str()));
         if let Some(pin_type) = pin_type.filter(|t| !t.is_empty()) {
             write!(out, " (pintype {})", sexpr_str(pin_type)).unwrap();
         }
-        // The pad's other tokens as the file had them (`remove_unused_layers`, `teardrops`, `tenting`, `property pad_prop_heatsink`, `die_length`, ..).
-        for token in pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.tokens.as_slice()).unwrap_or_default() {
+        // The pad's other tokens as the file had them (`remove_unused_layers`, `teardrops`, `tenting`, `property pad_prop_heatsink`, `die_length`, ..), with what a pad
+        // edit sets of them in their place (the fabrication property, the pad-to-die length and delay, the teardrop parameters).
+        let mut kept = crate::fp_fields::pad_kept_tokens(pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.tokens.as_slice()).unwrap_or_default(), pad_edit);
+        with_forced_layers(&mut kept, from_schematic.forced.get(&format!("{}.{}", fp.id, pad.number)));
+        for token in &kept {
             // A design from before the padstack was modelled kept these as tokens; once the pad has a padstack of its own they are written from it.
             if stack_modelled && ["(remove_unused_layers", "(keep_end_layers", "(padstack"].iter().any(|t| token.starts_with(t)) {
                 continue;
@@ -4264,6 +4306,48 @@ mod tests {
         assert!(design.drawings.as_ref().unwrap().via_tenting.iter().any(|t| (t.front, t.back) == (Some(false), Some(false))));
     }
 
+    /// UI-LEFT P3: what Pad Properties and the Properties panel set on a pad goes in its place among the pad's tokens, as `format( const PAD* )` writes it: the
+    /// fabrication property (none for `pad_prop_none`), the pad-to-die length and delay (in picoseconds; nothing for 0), the teardrop parameters, and the pin name
+    /// and type over the board file's.
+    #[test]
+    fn a_pad_edits_property_die_length_delay_teardrops_and_pin_are_written_in_place_of_the_files() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (net 1 "N")
+  (footprint "Test:Heatsink" (layer "F.Cu") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (attr smd)
+    (fp_rect (start -5 -5) (end 5 5) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd rect (at -2 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 1 "N") (pinfunction "A") (teardrops (best_length_ratio 0.5) (enabled yes)) (die_length 0.25) (property pad_prop_heatsink))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+  )
+)"#;
+        let (mut design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let td = eda_model::teardrop_params::TeardropParams { enabled: true, best_length_ratio: 0.7, ..Default::default() };
+        let mut edit = eda_model::fp_edit::FootprintEdit::new("U1");
+        edit.set_pad(eda_model::fp_edit::PadEdit { property: Some("pad_prop_none".into()), die_length: Some(Nm::ZERO), die_delay: Some(12_500_000), teardrops: Some(td), pin_function: Some("B".into()), ..eda_model::fp_edit::PadEdit::none("1", 1) });
+        edit.set_pad(eda_model::fp_edit::PadEdit { property: Some("pad_prop_testpoint".into()), die_length: Some(Nm::new(1_500_000)), pin_type: Some("passive".into()), ..eda_model::fp_edit::PadEdit::none("2", 1) });
+        design.drawings.as_mut().unwrap().footprint_edits = vec![edit];
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let pad = |number: &str| out.lines().find(|l| l.contains(&format!("(pad \"{number}\" "))).unwrap_or_else(|| panic!("pad {number}")).trim().to_string();
+        let one = pad("1");
+        assert!(one.contains("(pinfunction \"B\")") && !one.contains("\"A\""), "{one}");
+        assert!(!one.contains("die_length") && !one.contains("(property"), "{one}");
+        assert!(one.contains(&format!("{} (die_delay 12.5)", td.format())), "{one}");
+        let two = pad("2");
+        assert!(two.contains("(pintype \"passive\")") && two.contains("(property pad_prop_testpoint)") && two.contains("(die_length 1.5)"), "{two}");
+        // kicad-cli's reader would see what our reader sees.
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let pads = &back.drawings.as_ref().unwrap().footprint_extras[0].pads;
+        assert_eq!(eda_model::teardrop_params::TeardropParams::from_tokens(&pads[0].tokens), Some(td));
+        assert_eq!((pads[0].pin_function.as_str(), pads[1].pin_type.as_str()), ("B", "passive"));
+    }
+
     /// A pad keeps the tokens its fields do not stand for: the unconnected-layer mode (`remove_unused_layers`, `keep_end_layers`), `zone_layer_connections`, its teardrop
     /// settings, its tenting, a `(property pad_prop_heatsink)` (a heatsink pad, a castellated one ..), `die_length` (the pad-to-die length a length check adds), whatever a newer
     /// KiCad adds. The writer dropped all of them: the corpus has them on thousands of pads of two dozen boards.
@@ -4377,6 +4461,23 @@ mod tests {
         let swapped = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(!swapped.contains("(tags \"jumper solder\")") && !swapped.contains("duplicate_pad_numbers_are_jumpers"), "{swapped}");
         assert!(swapped.contains("(gr_text_box"), "the board's items stay");
+        // UI-LEFT P14: a Datasheet the footprint was given its own (Footprint Properties) is written once, from the edit, not also as the file had it.
+        let (mut edited, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let mut l = eda_model::fp_edit::FieldLayout::new(eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, "F.Fab");
+        l.visible = false;
+        let field = eda_model::fp_edit::UserField { name: "Datasheet".into(), text: "https://example.com/jp.pdf".into(), layout: l };
+        let edits = &mut edited.drawings.as_mut().unwrap().footprint_edits;
+        match edits.iter_mut().find(|e| e.id == "JP1") {
+            Some(e) => e.fields.push(field),
+            None => {
+                let mut e = eda_model::fp_edit::FootprintEdit::new("JP1");
+                e.fields.push(field);
+                edits.push(e);
+            }
+        }
+        let out = export_kicad_pcb(&edited, &model, &meta()).unwrap();
+        assert_eq!(out.matches("(property \"Datasheet\"").count(), 1, "{out}");
+        assert!(out.contains("(property \"Datasheet\" \"https://example.com/jp.pdf\"") && out.contains("(property \"Description\" \"Jumper\""), "{out}");
     }
 
     /// A footprint's courtyard is written as the file had it, so a courtyard of four lines or a circle is still that and the footprint matches the library's copy (a courtyard

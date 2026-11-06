@@ -30,6 +30,8 @@ pub struct Tuner {
     /// `SPICE_GENERATOR::ItemName`.
     pub item: String,
     pub value: f64,
+    /// A potentiometer's wiper (`SPICE_GENERATOR_R_POT::TunerCommand`: `altermod @<item>[position]=<value>`), not an `alter` of the item.
+    pub position: bool,
 }
 
 /// What one run asks of ngspice after the netlist.
@@ -102,7 +104,13 @@ pub fn driver(controls: &Controls, netlist: &str, raw_stem: &str) -> Result<(Str
         if t.item.is_empty() || !t.value.is_finite() {
             return Err(format!("cannot tune {:?} to {}", t.item, t.value));
         }
-        c.push_str(&format!("alter @{}={}\n", t.item, fmt_g(t.value)));
+        // `SPICE_GENERATOR_IDEAL::TunerCommand`, `SPICE_GENERATOR_SOURCE::TunerCommand`: `alter @{}={:g}`; `SPICE_GENERATOR_R_POT::TunerCommand`:
+        // `altermod @{}[position]={:g}`
+        if t.position {
+            c.push_str(&format!("altermod @{}[position]={}\n", t.item, fmt_g(t.value)));
+        } else {
+            c.push_str(&format!("alter @{}={}\n", t.item, fmt_g(t.value)));
+        }
     }
     c.push_str("run\n");
     // `OnSimRefresh` of a pole-zero analysis: "Simulation results:" and `print all` in the console.
@@ -207,7 +215,7 @@ mod tests {
             command: ".tran 10u 5m".into(),
             options: crate::netlist::OPTION_DEFAULT_FLAGS,
             model_mode: 4,
-            tuners: vec![Tuner { item: "R1".into(), value: 1500.0 }],
+            tuners: vec![Tuner { item: "R1".into(), value: 1500.0, position: false }],
             user_signals: vec![(0, "V(out)*2".into(), "V(\"out\")*2".into())],
             measurements: vec![(0, "MAX V(out)".into())],
             fourier: vec![("1k".into(), "V(out)".into())],
@@ -218,6 +226,19 @@ mod tests {
             "* KiCad SPICE simulator\n.control\nunset ngbehavior\nsource .kicad/sim/run.cir\nset ngbehavior=ltpsa\nalter @R1=1500\nrun\necho let user0 = V(out)*2\nlet user0 = V(\"out\")*2\necho meas TRAN meas_result_0 MAX V(out)\nmeas TRAN meas_result_0 MAX V(out)\nfourier 1k V(out)\nset filetype=binary\nwrite sim.raw\nquit\n.endc\n.end\n"
         );
         assert_eq!(raw, RawFiles { main: "sim.raw".into(), second: None });
+    }
+
+    /// `SPICE_GENERATOR_R_POT::TunerCommand`: a potentiometer's wiper is `altermod @<item>[position]=<value>`, beside an ideal passive's `alter`.
+    #[test]
+    fn a_potentiometer_is_tuned_by_its_wiper() {
+        let controls = Controls {
+            command: ".op".into(),
+            options: 0,
+            tuners: vec![Tuner { item: "ARV1".into(), value: 0.25, position: true }, Tuner { item: "R1".into(), value: 2200.0, position: false }],
+            ..Default::default()
+        };
+        let (c, _) = driver(&controls, "run.cir", "sim").unwrap();
+        assert!(c.contains("altermod @ARV1[position]=0.25\nalter @R1=2200\nrun\n"), "{c}");
     }
 
     #[test]

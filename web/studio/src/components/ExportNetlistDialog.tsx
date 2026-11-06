@@ -9,7 +9,7 @@
 // box unchecked), "Run external simulator command:" and the custom exporters (the studio runs no external command).
 import { useEffect, useState } from "react";
 import { postSchNetlist } from "../api/client";
-import { buildSchNetlistRequest, NETLIST_CLI_LIMITS, SCH_NETLIST_FORMATS, SPICE_OPTIONS, summarizeOutputs, type SchNetlistFormat } from "../kicad-port/schOutputs";
+import { buildSchNetlistRequest, NETLIST_CLI_LIMITS, SCH_NETLIST_FORMATS, SPICE_OPTIONS, summarizeOutputs, withWarnings, type SchNetlistFormat } from "../kicad-port/schOutputs";
 import { useStudioDispatch, useStudioState } from "../state/store";
 
 export function ExportNetlistDialog() {
@@ -36,7 +36,7 @@ export function ExportNetlistDialog() {
     try {
       const reply = await postSchNetlist(buildSchNetlistRequest(format));
       const files = reply.files ?? [];
-      setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? summarizeOutputs(files) : "Export failed."), files });
+      setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? withWarnings(reply, summarizeOutputs(files)) : "Export failed."), files });
     } finally {
       setBusy(false);
     }

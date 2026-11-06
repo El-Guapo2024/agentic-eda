@@ -340,6 +340,27 @@ pub struct PadEdit {
     /// fields above are the pad's front shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stack: Option<crate::padstack::PadStack>,
+    /// `PAD::GetTeardropParams() = ..` (Pad Properties' Teardrops tab, the Properties panel's Teardrops rows): the pad's own teardrop parameters, which govern
+    /// its teardrops in place of Board Setup's ([`crate::teardrop_params`]). Written as the pad's `(teardrops ..)`, replacing one a board file gave it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teardrops: Option<crate::teardrop_params::TeardropParams>,
+    /// `PAD::SetProperty` (Pad Properties' "Fabrication property"): the word the file writes, `pad_prop_bga`, `pad_prop_fiducial_loc`, `pad_prop_fiducial_glob`,
+    /// `pad_prop_testpoint`, `pad_prop_heatsink`, `pad_prop_castellated`, `pad_prop_mechanical`, `pad_prop_pressfit`, or `pad_prop_none` for none (nothing written).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property: Option<String>,
+    /// `PAD::SetPadToDieLength` ("Pad to die length"), nm; 0 is none (`(die_length ..)` is written only when it is not).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::units::de")]
+    pub die_length: Option<Nm>,
+    /// `PAD::SetPadToDieDelay` ("Pad to die delay"), in KiCad's time unit, attoseconds (`IU_PER_PS` is 1e6); 0 is none. Written in picoseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub die_delay: Option<i64>,
+    /// `PAD::SetPinFunction` (the Properties panel's "Pin Name"): what the board says the pad's pin is called; empty is none. Over the schematic pin's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_function: Option<String>,
+    /// `PAD::SetPinType` (the Properties panel's "Pin Type"): the electrical type's canonical name (`passive`, `bidirectional` ..); empty is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_type: Option<String>,
 }
 
 impl PadEdit {
@@ -366,6 +387,12 @@ impl PadEdit {
             && self.chamfer_corners.is_none()
             && self.custom.is_none()
             && self.stack.is_none()
+            && self.teardrops.is_none()
+            && self.property.is_none()
+            && self.die_length.is_none()
+            && self.die_delay.is_none()
+            && self.pin_function.is_none()
+            && self.pin_type.is_none()
     }
 
     /// Whether this edit changes the pad's geometry the engine knows (shape, size, hole, type, rotation, corner radius, the copper's
@@ -462,6 +489,14 @@ pub struct FootprintEdit {
     /// off, `ClearExtrudedBody`); `None` is the body the footprint has from its board file ([`crate::ir::FootprintExtra::extruded_body`]). The layer is the top side's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extruded_body: Option<crate::extruded_body::ExtrudedBodyEdit>,
+    /// `FOOTPRINT::SetLocalSolderPasteMargin` (Footprint Properties' "Solder paste absolute clearance", the Properties panel's "Solderpaste Margin Override") of a
+    /// footprint placed from the intent; a footprint read from a board file keeps its own among its tokens (`FootprintExtra::tokens`). `None` is the board's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::units::de")]
+    pub solder_paste_margin: Option<Nm>,
+    /// `FOOTPRINT::SetLocalSolderPasteMarginRatio` ("Solder paste relative clearance"), likewise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solder_paste_ratio: Option<f64>,
     /// The files the footprint embeds, when the Embedded Files tab set them: the whole list (`FOOTPRINT`'s `EMBEDDED_FILES`; see [`crate::embedded_files`]). `None` is the list the
     /// footprint has from its board file ([`crate::ir::FootprintExtra::embedded`]); `Some` of an empty list is a footprint that embeds nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -475,7 +510,7 @@ impl FootprintEdit {
 
     /// Whether nothing is edited (the entry is then dropped).
     pub fn is_empty(&self) -> bool {
-        self.reference.is_none() && self.value.is_none() && self.fields.is_empty() && self.attrs.is_none() && self.pads.is_empty() && self.models3d.is_none() && self.embedded.is_none() && self.extruded_body.is_none()
+        self.reference.is_none() && self.value.is_none() && self.fields.is_empty() && self.attrs.is_none() && self.pads.is_empty() && self.models3d.is_none() && self.embedded.is_none() && self.extruded_body.is_none() && self.solder_paste_margin.is_none() && self.solder_paste_ratio.is_none()
     }
 
     /// The edit of the `nth` pad numbered `number`.
@@ -529,6 +564,22 @@ impl Design {
         }
         let (dnp, no_bom) = self.symbol_bom_flags(id);
         FootprintAttrs::derived(footprint, dnp, no_bom)
+    }
+
+    /// What a board file said of the `index`-th pad of footprint `id` (`FootprintExtra::pads`, kept in the footprint's pad order), when the footprint still has the
+    /// `pad_count` pads it was read with.
+    pub fn pad_mask_info(&self, id: &str, index: usize, pad_count: usize) -> Option<&crate::ir::PadMaskInfo> {
+        let pads = &self.drawings.as_ref()?.footprint_extras.iter().find(|e| e.id == id)?.pads;
+        (pads.len() == pad_count).then(|| pads.get(index)).flatten()
+    }
+
+    /// The `index`-th pad's own teardrop parameters (`PAD::GetTeardropParams`), the `nth` with its `number`, of footprint `id` with `pad_count` pads: its edit's, else
+    /// the `(teardrops ..)` its board file gave it; `None` when it has none, and Board Setup's block serves it ([`crate::teardrop_params`]).
+    pub fn pad_teardrops(&self, id: &str, index: usize, pad_count: usize, number: &str, nth: u32) -> Option<crate::teardrop_params::TeardropParams> {
+        if let Some(own) = self.footprint_edit(id).and_then(|e| e.pad(number, nth.max(1))).and_then(|p| p.teardrops) {
+            return Some(own);
+        }
+        crate::teardrop_params::TeardropParams::from_tokens(&self.pad_mask_info(id, index, pad_count)?.tokens)
     }
 }
 

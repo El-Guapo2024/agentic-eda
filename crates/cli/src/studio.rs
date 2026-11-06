@@ -700,8 +700,9 @@ fn handle(
         ("GET", "/api/drc") => {
             // `?refill_zones=1`: the DRC dialog's "Refill all zones before performing DRC". `&schematic_parity=1`: "Test for parity between PCB and schematic".
             let asked = |name: &str| target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv.split_once('=').is_some_and(|(k, v)| k == name && v == "1"));
-            let (refill, parity) = (asked("refill_zones"), asked("schematic_parity"));
-            offload(stream, lane, dir, job, &format!("{path} refill={refill} parity={parity}"), &[], move |dir, _| crate::kicad_engine::drc_with(dir, refill, parity).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
+            // `&all_track_errors=1`: its options menu's "Report All Errors for Each Track" (`--all-track-errors`).
+            let opts = eda_kicad_engine::DrcOptions { refill_zones: asked("refill_zones"), schematic_parity: asked("schematic_parity"), all_track_errors: asked("all_track_errors") };
+            offload(stream, lane, dir, job, &format!("{path} refill={} parity={} all_track_errors={}", opts.refill_zones, opts.schematic_parity, opts.all_track_errors), &[], move |dir, _| crate::kicad_engine::drc_with_options(dir, opts).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
         }
         ("GET", "/api/erc") => offload(stream, lane, dir, job, path, &[], |dir, _| crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }))),
         // The dialogs' "Save...": kicad-cli's own report file (`ERC_REPORT`, `DRC_REPORT`), for the severities and units the dialog shows.
@@ -727,6 +728,8 @@ fn handle(
         ("POST", "/api/drawing_sheet/upload") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::upload(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
+        // The Symbol Editor's Find and Replace: the schematic's matcher over the texts of the symbol being edited (`sch_api::find_text`).
+        ("POST", "/api/find/text") => respond(stream, "200 OK", "application/json", sch_api::find_text(&body).to_string().as_bytes()),
         // Annotate Schematic's message window and the other dialogs that work across sheets (`crate::sch_hierarchy_api`).
         ("POST", "/api/sch/annotate") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::annotate(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/next_reference") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::next_reference(dir, &body).to_string().as_bytes()),
@@ -1249,7 +1252,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     let b = eda_ops::Board::new(design.clone(), &model, meta.snap_nm, meta.spacing_nm);
     let view = eda_ops::view::view(&b, &model)?;
     // The copper layers the pads and vias that remove their unconnected layers (Remove Unused Pads) keep: empty, and not asked for, when none does.
-    let flashed = eda_connectivity::flashed_layers(&design, &model);
+    // With the layers the last fill forced them to flash on (`ZLO_FORCE_FLASHED`, kicad-cli's, kept in the fill cache).
+    let forced = eda_kicad::zone_fills::load(dir).map(|f| f.forced).unwrap_or_default();
+    let flashed = eda_connectivity::flashed_layers_with_forced(&design, &model, &forced);
     let block_of: std::collections::HashMap<String, String> = view["parts"]
         .as_array()
         .map(|ps| ps.iter().filter_map(|p| Some((p["ref"].as_str()?.to_string(), p["block"].as_str().unwrap_or("").to_string()))).collect())
@@ -1298,6 +1303,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                             // The pad's own layers, for the 3D viewer's paste (r6 V6-5).
                             if let (Some(f), Some(obj)) = (footprint.as_ref(), v.as_object_mut()) {
                                 obj.insert("layers".into(), json!(crate::fp_json::pad_file_layers(&design, fp, f, pad)));
+                                // Its own teardrop parameters, fabrication property, pad-to-die length and delay, pin name and type (UI-LEFT P3).
+                                crate::fp_json::add_pad_facts(obj, &design, fp, f, pad, *nth);
                             }
                             v
                         }
@@ -1307,7 +1314,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 .collect();
             if let Some(footprint) = &footprint {
                 // The footprint's fields as laid out on the board, and its attributes.
-                p["fields"] = json!(crate::fp_json::fields_json(&design, part, fp, footprint));
+                p["fields"] = json!(crate::fp_json::fields_json(&design, &model, part, fp, footprint));
                 tv.annotate_fields(&part.reference, &mut p["fields"]);
                 p["attrs"] = crate::fp_json::attrs_json(&design, fp, footprint);
                 // A multi-gate footprint's units (`FOOTPRINT::GetUnitInfo`), for Swap Gate Nets' menu: absent for fewer than two.
@@ -1317,6 +1324,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 }
                 // Its silkscreen, fab drawings and texts (`graphics`, `texts`), board space.
                 crate::fp_art_json::add_art(&mut p, part, fp, footprint);
+                // the board's variables in its texts (the title block's ..), and the lines of its hatched graphics (UI-LEFT P15)
+                tv.annotate_art_texts(&part.reference, footprint, &mut p["texts"]);
+                crate::fp_art_json::add_hatch_lines(&mut p, &design, &model, fp, footprint);
             }
             p["at"] = json!([fp.at.x, fp.at.y]);
             p["rot"] = json!(fp.rot as f64 / 1000.0);
@@ -1391,6 +1401,14 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 if let Some(r) = facts.paste_margin_ratio {
                     p["paste_margin_ratio"] = json!(r);
                 }
+            } else if let Some(e) = design.footprint_edit(&part.reference) {
+                // a footprint placed from the intent: the paste margins Footprint Properties gave it (`FootprintEdit::solder_paste_margin`, `..ratio`; UI-LEFT P14)
+                if let Some(m) = e.solder_paste_margin {
+                    p["paste_margin"] = json!(m);
+                }
+                if let Some(r) = e.solder_paste_ratio {
+                    p["paste_margin_ratio"] = json!(r);
+                }
             }
         }
         parts.push(p);
@@ -1434,6 +1452,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     "flashed": flashed.vias.get(&v.id),
                     // The tenting, covering, plugging, capping, filling, backdrill and post-machining the via's tokens say (`eda_model::via_extra::ViaProps`); absent for none.
                     "props": extra.map(|e| e.props()).filter(|p| *p != eda_model::via_extra::ViaProps::default()),
+                    // Its own teardrop parameters (`PCB_VIA::GetTeardropParams`, `eda_model::teardrop_params`); absent when Board Setup's block serves it.
+                    "teardrops": extra.and_then(|e| e.teardrops()),
                 })
             }).collect::<Vec<_>>(),
             "zones": r.zones.iter().map(|z| json!({
@@ -2132,6 +2152,19 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // a text box's (and a directive label's) font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id, for its Properties and
     // its drawing: kept beside the graphics, which the edit verbs take back whole
     let graphic_text_attrs: serde_json::Map<String, Value> = sch.extras.graphics.iter().filter_map(|g| Some((g.id.clone(), serde_json::to_value(sch.extras.text_attrs.get(&g.id)?).ok()?))).collect();
+    // a text box's shown text (`SCH_TEXTBOX::GetShownText`: the sheet's variables, as a free text's), by the graphic's id, where `${..}` or `@{..}` changes it
+    // (UI-LEFT B5): beside the graphics, not in them, as the edit verbs take a graphic back whole
+    let graphic_shown: serde_json::Map<String, Value> = sch
+        .extras
+        .graphics
+        .iter()
+        .filter_map(|g| match (&g.shape, &shown) {
+            (eda_model::sch_extras::SchGraphicKind::TextBox { text, .. }, Some(sh)) => Some((g.id.clone(), sh.text_shown(text), text)),
+            _ => None,
+        })
+        .filter(|(_, shown, raw)| shown != *raw)
+        .map(|(id, shown, _)| (id, Value::String(shown)))
+        .collect();
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
     let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
@@ -2219,7 +2252,11 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         .power_symbols
         .iter()
         .map(|p| {
-            let mut v = json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": eda_engine::fields::power_fields(&sch, p).iter().map(|f| page_field_json_in(&sch, &p.id, f)).collect::<Vec<_>>(), "fields_autoplaced": fields_autoplaced_json(&sch, &p.id) });
+            let mut fields: Vec<Value> = eda_engine::fields::power_fields(&sch, p).iter().map(|f| page_field_json_in(&sch, &p.id, f)).collect();
+            if let Some(sh) = &shown {
+                sh.annotate_power_fields(p, &mut fields);
+            }
+            let mut v = json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": fields, "fields_autoplaced": fields_autoplaced_json(&sch, &p.id) });
             // what its Symbol Properties set beyond the Reference and Value (`SchExtras::power_props`): its Footprint, Datasheet, flags and user fields
             if let Some(props) = sch.extras.power_props.get(&p.id) {
                 v["props"] = json!(props);
@@ -2347,6 +2384,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "junctions": junctions,
         "lines": lines,
         "graphics": graphics,
+        "graphic_shown": graphic_shown,
         "graphic_text_attrs": graphic_text_attrs,
         "tables": tables,
         "locked": locked,
@@ -2393,6 +2431,12 @@ fn schematic_setup_json(design: &eda_model::ir::Design, model: &eda_model::Const
         "dash_ratio": f.dash_ratio,
         "gap_ratio": f.gap_ratio,
         "hop_over_size_choice": f.hop_over_size_choice,
+        // the operating-point overlay's formats (`m_OPO_VPrecision`, `m_OPO_VRange`, `m_OPO_IPrecision`, `m_OPO_IRange`), which
+        // `RefreshOperatingPointDisplay` gives `GetOperatingPoint`
+        "opo_v_precision": f.opo_v_precision,
+        "opo_v_range": f.opo_v_range,
+        "opo_i_precision": f.opo_i_precision,
+        "opo_i_range": f.opo_i_range,
     })
 }
 
