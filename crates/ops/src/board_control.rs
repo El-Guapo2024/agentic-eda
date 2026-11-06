@@ -993,6 +993,8 @@ mod tests {
         let model = eda_model::ConstraintModel::default();
         let mut d = design(vec![square("a", "F.Cu", "", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 1), square("b", "F.Cu", "", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 4), square("ghost", "F.Cu", "NOPE", Nm::new(90_000), Nm::ZERO, Nm::new(1_000), 0)]);
         d.placement = Some(serde_json::from_value(serde_json::json!({ "outline": [{ "x": 0, "y": 0 }, { "x": 1, "y": 0 }, { "x": 1, "y": 1 }], "footprints": [] })).unwrap());
+        // a track on the zone's ghost net: `RepairBoard` re-parents a track's net, not a zone's (r7 C7-12)
+        d.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "trk_g".into(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::new(200_000), pts: vec![pt(Nm::new(90_000), Nm::ZERO), pt(Nm::new(95_000), Nm::ZERO)], arc_mid_offset: None });
         let mut board = Board::new(d, &model, mm(0.1), mm(0.3));
         let cmd = |j: serde_json::Value| serde_json::from_value::<Cmd>(j).unwrap();
         board.apply(&cmd(serde_json::json!({ "op": "set_zone_priority", "id": "a", "to": "raise" }))).unwrap();
@@ -1003,7 +1005,7 @@ mod tests {
         assert_eq!(board.design().drawings.as_ref().unwrap().aux_origin, Some(pt(Nm::new(3_000), Nm::new(4_000))));
         board.apply(&cmd(serde_json::json!({ "op": "set_aux_origin", "at": null }))).unwrap();
         assert_eq!(board.design().drawings.as_ref().unwrap().aux_origin, None);
-        // The ghost zone's net is not in the (empty) netlist: one problem, then none.
+        // The ghost track's net is not in the (empty) netlist: one problem, then none.
         board.apply(&cmd(serde_json::json!({ "op": "repair_board" }))).unwrap();
         assert_eq!(board.design().nets.as_ref().unwrap()[0].name, "NOPE");
         // The next load reads the board's own netlist back (`board::load` lets `design.nets` replace the intent's).
