@@ -68,6 +68,8 @@ import { finishEditPattern, fixTune, hoverTune, moveTune, startTune, TuneHandleD
 import { handleAt } from "../../kicad-port/tuneTool";
 import { dpStateFromPreview } from "../../kicad-port/dpTool";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
+import { MENU_LIMIT, clarificationRows } from "../../kicad-port/clarificationMenu";
+import { setMenuHighlight } from "../../state/commonTool";
 import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, leftDragOutcome, motionPan } from "../../kicad-port/viewControls";
 import { wheelInputOf } from "../../hooks/canvasWheel";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
@@ -253,7 +255,7 @@ export function Canvas() {
   };
   const moveMode = state.activeTool === "move";
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[]; clarification?: boolean } | null>(null);
   /** The right-click menu of whichever tool owns the click (kicad-port/pcbContextMenu.ts): nested, with the menu bar's own entries. */
   const [pcbMenu, setPcbMenu] = useState<{ x: number; y: number; nodes: MenuNode[] } | null>(null);
   const longPressRef = useRef<{ timer: ReturnType<typeof setTimeout>; startScreen: [number, number] } | null>(null);
@@ -662,21 +664,42 @@ export function Canvas() {
    * always taking the topmost -- plus source's own "Select All" entry,
    * which applies the SAME click modifier to every candidate at once
    * rather than just the one eventually clicked.
+   *
+   * The rows are `SELECTION_TOOL::doSelectionMenu`'s (kicad-port/clarificationMenu.ts, UI-LEFT P22): the first nine numbered, each chosen by its number
+   * key, "Select All" by A, and -- when the guess left items out (`HasAdditionalItems()`: `more` gives every candidate) -- "Show More Choices..." (M), which
+   * opens the menu again with all of them (`aCollector->Combine()`). The row under the pointer brightens its item, "Select All" every item.
    */
   const disambiguate = useCallback(
-    (candidates: SelectionCandidate[], modifiers: ClickModifiers, screenX: number, screenY: number) => {
+    (candidates: SelectionCandidate[], modifiers: ClickModifiers, screenX: number, screenY: number, more?: () => SelectionCandidate[]) => {
       if (candidates.length === 0) return;
       if (candidates.length === 1) {
         dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, candidates[0]!.id, modifiers) });
         return;
       }
+      const shown = candidates.slice(0, MENU_LIMIT);
       const pick = (c: SelectionCandidate) => dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, c.id, modifiers) });
-      const entries: MenuEntry[] = candidates.map((c) => ({ label: candidateLabel(c), onSelect: () => pick(c) }));
-      entries.push({
-        label: "Select All",
-        onSelect: () => dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, candidates.map((c) => c.id), modifiers) }),
-      });
-      setContextMenu({ x: screenX, y: screenY, entries });
+      const all = more?.() ?? [];
+      const hasMore = all.length > candidates.length;
+      const rows = clarificationRows(shown.map(candidateLabel), { mac: isMac(), more: hasMore });
+      const entries: MenuEntry[] = [];
+      for (const row of rows) {
+        if (row.kind === "item") {
+          const c = shown[row.index]!;
+          entries.push({ label: row.label, accel: row.accel, onSelect: () => pick(c), onHover: (over) => setMenuHighlight(over ? [c.id] : []) });
+        } else if (row.kind === "all") {
+          entries.push({ label: "", onSelect: () => {}, separator: true });
+          entries.push({
+            label: row.label,
+            accel: row.accel,
+            onSelect: () => dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, candidates.map((c) => c.id), modifiers) }),
+            onHover: (over) => setMenuHighlight(over ? candidates.map((c) => c.id) : []),
+          });
+        } else {
+          // `showMoreChoices = true`: the menu again, every candidate in it, and no "Show More Choices..."
+          entries.push({ label: row.label, accel: row.accel, onSelect: () => setTimeout(() => disambiguate(all, modifiers, screenX, screenY), 0) });
+        }
+      }
+      setContextMenu({ x: screenX, y: screenY, entries, clarification: true });
     },
     [dispatch, state.selection, candidateLabel]
   );
@@ -1273,7 +1296,7 @@ export function Canvas() {
 
     if (candidates.length > 1) {
       clearLongPress();
-      disambiguate(candidates, modifiers, e.clientX, e.clientY);
+      disambiguate(candidates, modifiers, e.clientX, e.clientY, () => runPick(true));
       return;
     }
 
@@ -1782,7 +1805,18 @@ export function Canvas() {
     >
       <canvas ref={canvasRef} />
       {!board && <div className="pcb-canvas-empty">{state.boardError ?? "Loading board…"}</div>}
-      {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} entries={contextMenu.entries} onClose={() => setContextMenu(null)} />}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          entries={contextMenu.entries}
+          onClose={() => {
+            // `getView()->Remove( &highlightGroup )`: nothing stays brightened once the clarification menu is gone
+            if (contextMenu.clarification) setMenuHighlight([]);
+            setContextMenu(null);
+          }}
+        />
+      )}
       {pcbMenu && <SchContextMenu x={pcbMenu.x} y={pcbMenu.y} nodes={pcbMenu.nodes} onClose={() => setPcbMenu(null)} />}
     </div>
   );

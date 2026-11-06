@@ -49,6 +49,8 @@ export interface CommonToolState {
   menu: SelectionMenu | null;
   /** The items every match of the open Find dialog's search text sits on, brightened (`SCH_FIND_REPLACE_TOOL::UpdateFind`). */
   findHighlights: readonly string[];
+  /** The items the clarification menu's row under the pointer stands for, brightened (`doSelectionMenu`'s `highlight( current, BRIGHTENED, .. )`); every item for "Select All". */
+  menuHighlight?: readonly string[];
 }
 
 const IDLE: CommonToolState = { hover: null, lasso: null, zoomArea: null, measure: null, menu: null, findHighlights: [] };
@@ -89,6 +91,13 @@ export function setZoomArea(zoomArea: ZoomAreaSession | null): void {
 
 export function setMeasure(measure: MeasureSession | null): void {
   set({ ...current, measure });
+}
+
+/** The clarification menu pointed at a row (its item, or every item for "Select All"), or at none (`unhighlight`). */
+export function setMenuHighlight(ids: readonly string[]): void {
+  const was = current.menuHighlight ?? [];
+  const same = ids.length === was.length && ids.every((id, i) => id === was[i]);
+  if (!same) set({ ...current, menuHighlight: ids });
 }
 
 export function setFindHighlights(ids: readonly string[]): void {
