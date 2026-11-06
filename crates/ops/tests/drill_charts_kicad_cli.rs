@@ -235,3 +235,86 @@ fn backdrills_post_machining_layer_names_and_imperial_holes_are_charted_as_kicad
     let d = refreshed_against_kicad(&cli, &filtered, "backdrills_filtered");
     assert_eq!(rows(&d).len(), 1 + 5 + 1);
 }
+
+/// Drill Chart Properties' OK (`edit_drill_chart`): the columns the dialog shows, in its order, a heading and an alignment of the user's, a minimum width, mils to four
+/// places, no vias and no totals, the grouping without the layer span, the strokes -- written by us and read by kicad-cli as the dialog meant them: `pcb upgrade --force`
+/// rebuilds the stale chart from what the file says, and builds the chart we built. (Inches are not the units here: a column sized to a text of inches comes out 60 um wider
+/// than kicad-cli's, the `″` glyph's ink measured wider by `autosize` -- millimetres and mils agree to the nanometre.)
+#[test]
+fn drill_chart_properties_written_by_us_are_read_by_kicad_cli_as_the_dialog_meant() {
+    if slow_tests_off() {
+        return;
+    }
+    let (Some(cli), Some(text)) = (kicad_cli(), kitchen_sink()) else {
+        eprintln!("skipped: needs kicad-cli and KiCad 25ec2335's api_kitchen_sink.kicad_pcb (KICAD10_QA_DATA)");
+        return;
+    };
+    use eda_model::drill_chart::{DrillChartColumn, DrillChartColumnId, DrillGroupKey, TableAlign};
+    use eda_ops::drill_chart::{profile_of, DrillChartEdit};
+    let (d, m, _) = import_kicad_pcb(&text).unwrap();
+    let (t, c) = chart_of(&d);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let mut sites = DrillChartColumn::default_of(DrillChartColumnId::SiteCount);
+    sites.heading = "HOLES".into();
+    sites.align = TableAlign::Left;
+    sites.width_nm = mm(25.0);
+    let mut columns = vec![DrillChartColumn::default_of(DrillChartColumnId::DrillDiameter), sites, DrillChartColumn::default_of(DrillChartColumnId::Symbol), DrillChartColumn::default_of(DrillChartColumnId::Plating)];
+    columns[0].heading = "DIA".into();
+    let mut group_by = profile_of(b.design()).group_by;
+    group_by.retain(|k| *k != DrillGroupKey::Span);
+    let edit = DrillChartEdit {
+        layer: "Cmts.User".into(),
+        units: TableUnits::Mils,
+        precision: 4,
+        columns,
+        filter: DrillChartFilter { vias: false, ..c.filter },
+        show_totals: false,
+        group_by,
+        external_border: false,
+        header_separator: true,
+        row_separators: true,
+        column_separators: false,
+        border_width_nm: mm(0.25),
+        separators_width_nm: mm(0.05),
+    };
+    b.apply(&Cmd::PcbItem(PcbItemCmd::EditDrillChart { id: t.id.clone(), chart: edit.clone() })).unwrap();
+    let written = export(b.design(), &m);
+    let (kicad, _) = upgraded(&cli, &written, "properties");
+    assert_same_chart("properties", b.design(), &kicad);
+    let (kt, kc) = chart_of(&kicad);
+    assert_eq!((kt.layer.as_str(), kc.units, kc.precision, kc.show_totals, kc.filter), ("Cmts.User", TableUnits::Mils, 4, false, edit.filter), "the General page and the filter, as kicad-cli kept them");
+    assert_eq!(kc.columns, chart_of(b.design()).1.columns, "the columns, their headings, alignment and widths");
+    assert_eq!((kt.border.external, kt.border.header, kt.border.stroke.width_nm), (false, true, mm(0.25)), "the border");
+    assert_eq!((kt.separators.rows, kt.separators.cols, kt.separators.stroke.width_nm), (true, false, mm(0.05)), "the separators");
+    assert!(!profile_of(&kicad).is_grouped_by(DrillGroupKey::Span), "the grouping is the board's");
+    assert_eq!(kt.cells.iter().take(4).map(|c| c.text.as_str()).collect::<Vec<_>>(), ["DIA", "HOLES", "SYM", "PLATED"]);
+}
+
+/// Drill Groups' mark of a group (`set_drill_profile`: a letter and a description) and Freeze assignments, written by us and kept by kicad-cli: `pcb upgrade --force` keeps the
+/// profile's assignment and draws the chart's row with the letter, as we draw it.
+#[test]
+fn a_groups_mark_set_here_is_the_one_kicad_cli_charts() {
+    if slow_tests_off() {
+        return;
+    }
+    let (Some(cli), Some(text)) = (kicad_cli(), kitchen_sink()) else {
+        eprintln!("skipped: needs kicad-cli and KiCad 25ec2335's api_kitchen_sink.kicad_pcb (KICAD10_QA_DATA)");
+        return;
+    };
+    use eda_model::drill_chart::{DrillMarkMode, DrillSymbolAssignment};
+    use eda_ops::drill_chart::{profile_of, DrillGroupMark, DrillProfileEdit};
+    let (d, m, _) = import_kicad_pcb(&text).unwrap();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    assert!(b.refresh_drill_charts());
+    let key = chart_of(b.design()).1.row_keys[&1].clone();
+    let mark = DrillSymbolAssignment { mode: DrillMarkMode::Letter, shape_index: 0, letter: "Q".into(), description: "mounting".into() };
+    b.apply(&Cmd::PcbItem(PcbItemCmd::SetDrillProfile { profile: DrillProfileEdit { assignment: Some(DrillGroupMark { key: key.clone(), mark: mark.clone() }), ..Default::default() } })).unwrap();
+    let (kicad, _) = upgraded(&cli, &export(b.design(), &m), "groups");
+    assert_eq!(profile_of(&kicad).assignments.get(&key), Some(&mark), "kicad-cli kept the mark");
+    assert_same_chart("groups", b.design(), &kicad);
+    let (kt, kc) = chart_of(&kicad);
+    let sym = kc.symbol_column as usize;
+    assert_eq!(kt.cells[kt.col_count() + sym].text, "Q", "the row's symbol cell is the letter");
+    assert!(!kc.row_shapes.contains_key(&1), "a letter draws no shape");
+}
+
