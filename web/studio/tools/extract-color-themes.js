@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Extracts what the PCB colour themes need beyond the "KiCad Default" colours of src/kicad/colors.json (tools/extract-colors.js) into
+// Extracts what the colour themes need beyond the "KiCad Default" colours of src/kicad/colors.json (tools/extract-colors.js) into
 // src/kicad/color_themes.json:
 //
 //   KICAD_SRC_DIR=/path/to/plain/checkout node tools/extract-color-themes.js [--check]
@@ -8,7 +8,11 @@
 //     `CLR( "board.anchor", LAYER_ANCHOR )`, ...): the JSON key KiCad writes a colour under and the layer it is the colour of. These are the
 //     colours a PCB theme holds (`SaveColorSettings( cs, "board" )` stores this namespace and nothing else), so they are the layers the board
 //     editor's theme decides.
-//   * `classic`: the "KiCad Classic" built-in theme (`s_classicTheme`, common/settings/builtin_color_themes.h) for those layers, as `#rrggbbaa`.
+//   * `schematicParams`: the schematic namespace the same way (`CLR( "schematic.wire", LAYER_WIRE )`, ...), the colours the schematic editor's and
+//     the symbol editor's themes decide (`SaveColorSettings( cs, "schematic" )`). Its one other param, `schematic.override_item_colors` (a
+//     `PARAM<bool>`, not a colour), is the Colors page's "Override individual item colors" (kicad-port/colorTheme.ts).
+//   * `classic`: the "KiCad Classic" built-in theme (`s_classicTheme`, common/settings/builtin_color_themes.h) for those layers (both namespaces),
+//     as `#rrggbbaa`; a layer it leaves out (`LAYER_SCHEMATIC_PAGE_LIMITS`) or gives `UNSPECIFIED_COLOR` (`LAYER_NOTES_BACKGROUND`) is not listed.
 //     Its entries name the legacy palette (`COLOR4D( BLUE )`, `COLOR4D( RED ).WithAlpha( 0.5 )`), which is `colorRefs()`'s table
 //     (common/gal/color4d.cpp, stored blue, green, red -- `StructColors`' field order) read through `COLOR4D::COLOR4D( EDA_COLOR_T )`
 //     (alpha 1); `CSS_COLOR( r, g, b, a )` and `COLOR4D( r, g, b, a )` are read as extract-colors.js reads them. Where the file has a
@@ -100,11 +104,11 @@ function entryColor(expr, refs) {
   return null;
 }
 
-/** `CLR( "board.xxx", LAYER )` of `COLOR_SETTINGS::COLOR_SETTINGS`, in order. */
-function boardParams() {
+/** `CLR( "<ns>.xxx", LAYER )` of `COLOR_SETTINGS::COLOR_SETTINGS` for one namespace ("board", "schematic"), in order. */
+function namespaceParams(ns) {
   const cpp = readKicadFile(SETTINGS_CPP);
   const out = [];
-  const re = /CLR\(\s*"(board\.[\w.]+)"\s*,\s*([A-Za-z_]\w*)\s*\)/g;
+  const re = new RegExp(`CLR\\(\\s*"(${ns}\\.[\\w.]+)"\\s*,\\s*([A-Za-z_]\\w*)\\s*\\)`, "g");
   let m;
   while ((m = re.exec(cpp))) out.push({ key: m[1], layer: m[2] });
   return out;
@@ -112,8 +116,9 @@ function boardParams() {
 
 function main() {
   const check = process.argv.includes("--check");
-  const params = boardParams();
-  const wanted = new Set(params.map((p) => p.layer));
+  const params = namespaceParams("board");
+  const schParams = namespaceParams("schematic");
+  const wanted = new Set([...params, ...schParams].map((p) => p.layer));
   const refs = colorRefs();
   const names = edaColorNames();
   for (const n of names) if (!refs[n]) throw new Error(`colorRefs() has no ${n}`);
@@ -123,13 +128,13 @@ function main() {
   const re = /\{\s*([A-Za-z_]\w*)\s*,\s*((?:CSS_COLOR|COLOR4D)\([^{}]*?\)(?:\.WithAlpha\(\s*[\d.]+\s*\))?)\s*\}/g;
   let m;
   while ((m = re.exec(body))) {
-    if (!wanted.has(m[1])) continue;
+    if (!wanted.has(m[1]) || /UNSPECIFIED_COLOR/.test(m[2])) continue;
     const c = entryColor(m[2].replace(/\s+/g, " ").replace(/\( /g, "( ").trim(), refs);
     if (c) classic[m[1]] = c;
     else skipped.push(`${m[1]}: ${m[2]}`);
   }
   const notes = skipped.length ? `not read: ${skipped.join("; ")}` : undefined;
-  const data = { meta: meta([SETTINGS_CPP, THEMES_H, COLOR4D_CPP, COLOR4D_H], notes), classicName: "KiCad Classic", boardParams: params, classic };
+  const data = { meta: meta([SETTINGS_CPP, THEMES_H, COLOR4D_CPP, COLOR4D_H], notes), classicName: "KiCad Classic", boardParams: params, schematicParams: schParams, classic };
   if (check) {
     const disk = JSON.parse(readFileSync(OUT, "utf8"));
     const same = JSON.stringify({ ...disk, meta: undefined }) === JSON.stringify({ ...data, meta: undefined });
@@ -137,7 +142,7 @@ function main() {
     process.exit(same ? 0 : 1);
   }
   writeJson(OUT, data);
-  console.log(`${params.length} board colour keys, ${Object.keys(classic).length} KiCad Classic colours${notes ? ` (${notes})` : ""}`);
+  console.log(`${params.length} board and ${schParams.length} schematic colour keys, ${Object.keys(classic).length} KiCad Classic colours${notes ? ` (${notes})` : ""}`);
 }
 
 main();

@@ -11,7 +11,16 @@ import {
   addTheme,
   builtinThemes,
   dropdownName,
+  editorThemeName,
   findTheme,
+  fpColorPageKeys,
+  fpColorPageRows,
+  importThemes,
+  schColorPageKeys,
+  schColorPageRows,
+  schSaveColors,
+  withEditorTheme,
+  withSymbolTheme,
   parseStoredThemes,
   pcbColorPageKeys,
   pcbColorPageRows,
@@ -29,7 +38,7 @@ import {
 import { carryRenamedClass, netclassColorUpdates } from "./appearanceNets";
 
 const colors = JSON.parse(readFileSync("src/kicad/colors.json", "utf8")) as { colors: Record<string, string> };
-const themes = JSON.parse(readFileSync("src/kicad/color_themes.json", "utf8")) as { classic: Record<string, string>; boardParams: Array<{ key: string; layer: string }> };
+const themes = JSON.parse(readFileSync("src/kicad/color_themes.json", "utf8")) as { classic: Record<string, string>; boardParams: Array<{ key: string; layer: string }>; schematicParams: Array<{ key: string; layer: string }> };
 const DATA: ThemeData = { defaults: colors.colors, classic: themes.classic, boardKeys: themes.boardParams.map((p) => p.layer) };
 
 test("the board namespace is COLOR_SETTINGS' `board.*` params, every one with KiCad's default and a Classic colour", () => {
@@ -163,4 +172,99 @@ test("a net class renamed on the Net Classes page keeps its colour under the new
   assert.deepEqual(carryRenamedClass(stored, "usb", "usb2", ["usb"]), stored);
   assert.deepEqual(netclassColorUpdates(stored, stored, ["power"]), [{ name: "usb", color: null }]);
   assert.deepEqual(netclassColorUpdates(stored, stored, ["power", "usb"]), []);
+});
+
+test("the schematic namespace is COLOR_SETTINGS' `schematic.*` params, each with KiCad's default; Classic's colours where s_classicTheme has one", () => {
+  assert.equal(themes.schematicParams.length, 47);
+  assert.deepEqual(themes.schematicParams[0], { key: "schematic.anchor", layer: "LAYER_SCHEMATIC_ANCHOR" });
+  assert.ok(themes.schematicParams.some((p) => p.key === "schematic.wire" && p.layer === "LAYER_WIRE"));
+  assert.ok(themes.schematicParams.some((p) => p.key === "schematic.shadow" && p.layer === "LAYER_SELECTION_SHADOWS"));
+  for (const p of themes.schematicParams) assert.match(DATA.defaults[p.layer] ?? "", /^#[0-9a-f]{8}$/, p.layer);
+  // CSS_COLOR( 0, 150, 0, 1 ) by default, COLOR4D( GREEN ) -- (0, 132, 0) in colorRefs() -- in Classic; Classic has no page limits and no notes background
+  assert.equal(DATA.defaults.LAYER_WIRE, "#009600ff");
+  assert.equal(DATA.classic.LAYER_WIRE, "#008400ff");
+  assert.equal(DATA.classic.LAYER_SHEET_BACKGROUND, "#ffffff00"); // COLOR4D( WHITE ).WithAlpha( 0.0 )
+  assert.equal(DATA.classic.LAYER_SCHEMATIC_PAGE_LIMITS, undefined);
+  assert.equal(DATA.classic.LAYER_NOTES_BACKGROUND, undefined);
+  // KiCad Default holds both namespaces when the data names the schematic one
+  const both: ThemeData = { ...DATA, schematicKeys: themes.schematicParams.map((p) => p.layer) };
+  const def = builtinThemes(both)[0]!;
+  assert.equal(def.colors.LAYER_WIRE, DATA.defaults.LAYER_WIRE);
+  assert.equal(def.colors.F_Cu, DATA.defaults.F_Cu);
+});
+
+test("each editor's theme: pcbnew's, eeschema's and the Footprint Editor's own, the Symbol Editor's the schematic editor's unless told otherwise", () => {
+  const s0 = EMPTY_STORED_THEMES;
+  assert.deepEqual(["pcb", "footprint", "schematic", "symbol"].map((e) => editorThemeName(s0, e as "pcb")), [DEFAULT_THEME, DEFAULT_THEME, DEFAULT_THEME, DEFAULT_THEME]);
+  const s1 = withEditorTheme(withEditorTheme(s0, "schematic", BUILTIN_CLASSIC), "footprint", "night");
+  assert.equal(editorThemeName(s1, "schematic"), BUILTIN_CLASSIC);
+  assert.equal(editorThemeName(s1, "symbol"), BUILTIN_CLASSIC, "m_UseEeschemaColorSettings is on by default");
+  assert.equal(editorThemeName(s1, "footprint"), "night");
+  assert.equal(editorThemeName(s1, "pcb"), DEFAULT_THEME);
+  // "Use theme:" with a theme of its own; back to "Use schematic editor color theme" keeps that m_ColorTheme for later
+  const s2 = withSymbolTheme(s1, false, BUILTIN_DEFAULT);
+  assert.equal(editorThemeName(s2, "symbol"), BUILTIN_DEFAULT);
+  const s3 = withSymbolTheme(s2, true, "ignored");
+  assert.equal(editorThemeName(s3, "symbol"), BUILTIN_CLASSIC);
+  assert.equal(s3.symTheme, BUILTIN_DEFAULT);
+  assert.equal(withEditorTheme(s3, "pcb", DEFAULT_THEME), s3, "nothing changed, the same store");
+  // the store's text keeps the new choices; an old store reads as it was written
+  assert.deepEqual(parseStoredThemes(serializeStoredThemes(s3)), s3);
+  assert.deepEqual(parseStoredThemes(JSON.stringify({ pcbTheme: "x", themes: [] })), { pcbTheme: "x", themes: [] });
+});
+
+test("the schematic Colors page: SCH_LAYER_ID_START .. END but the excluded ones, sorted by LayerName(); the sheet's own colours only while overriding", () => {
+  const rows = schColorPageRows(false);
+  const all = schColorPageRows(true);
+  assert.equal(all.length, 48);
+  assert.equal(rows.length, 46);
+  assert.equal(schColorPageKeys().length, 48);
+  assert.ok(!rows.some((r) => r.key === "LAYER_SHEET" || r.key === "LAYER_SHEET_BACKGROUND"));
+  assert.deepEqual(all.slice(0, 6).map((r) => r.label), ["Anchors", "Axes (symbol editor only)", "Background", "Bus junctions", "Buses", "Cursor"]);
+  assert.ok(all.some((r) => r.label === "Schematic text & graphics" && r.key === "LAYER_NOTES"));
+  for (const excluded of ["LAYER_NOTES_BACKGROUND", "LAYER_DANGLING", "LAYER_NET_COLOR_HIGHLIGHT", "LAYER_GROUP"]) assert.ok(!schColorPageKeys().includes(excluded), excluded);
+  // "Sheet references" and "Shape fills" have no param: no default to reset to
+  for (const k of ["LAYER_INTERSHEET_REFS", "LAYER_SHAPES_BACKGROUND"]) assert.equal(DATA.defaults[k], undefined, k);
+  // every other row is a colour of the schematic namespace
+  const sch = new Set(themes.schematicParams.map((p) => p.layer));
+  assert.deepEqual(schColorPageKeys().filter((k) => !sch.has(k)), ["LAYER_INTERSHEET_REFS", "LAYER_SHAPES_BACKGROUND"]);
+  // saveCurrentTheme: no layer but the backgrounds is saved pure white
+  assert.deepEqual(schSaveColors({ LAYER_WIRE: "#ffffffff", LAYER_SCHEMATIC_BACKGROUND: "#ffffffff", LAYER_SHEET_BACKGROUND: "#ffffffff", LAYER_BUS: "#ffffff80" }), {
+    LAYER_WIRE: "#fcfcfcff",
+    LAYER_SCHEMATIC_BACKGROUND: "#ffffffff",
+    LAYER_SHEET_BACKGROUND: "#ffffffff",
+    LAYER_BUS: "#ffffff80",
+  });
+});
+
+test("the Footprint Editor's Colors page: F.Cu, Internal Layers, B.Cu, then the GAL layers with a board colour but the vias' and holes', by name", () => {
+  const rows = fpColorPageRows();
+  assert.deepEqual(rows.slice(0, 3).map((r) => [r.key, r.label]), [["F_Cu", "F.Cu"], ["In1_Cu", "Internal Layers"], ["B_Cu", "B.Cu"]]);
+  assert.deepEqual(rows.slice(3).map((r) => r.label), [
+    "Anchors", "Background", "Board outline area", "Courtyard collision shadow", "Cursor", "DRC errors", "DRC exclusions", "DRC highlighted", "DRC warnings",
+    "Drawing sheet", "Grid", "Grid axes", "Helper items", "Locked item shadow", "Non-plated holes", "Page limits", "Points", "Ratsnest",
+  ]);
+  const board = new Set(DATA.boardKeys);
+  assert.deepEqual(fpColorPageKeys().filter((k) => !board.has(k)), []);
+});
+
+test("Import Theme...: a file's theme is the person's under its filename, replacing one of that filename; a built-in's filename is not taken", () => {
+  const s0 = { pcbTheme: "user", themes: [{ filename: "nord", name: "Old Nord", colors: {} }] };
+  const r = importThemes(s0, [{ filename: "nord", name: "Nord", colors: { F_Cu: "#b3474dff" } }, { filename: BUILTIN_CLASSIC, name: "Mine", colors: {} }]);
+  assert.deepEqual(r.filenames, ["nord", `${BUILTIN_CLASSIC}_imported`]);
+  assert.deepEqual(r.stored.themes.map((t) => [t.filename, t.name]), [["nord", "Nord"], [`${BUILTIN_CLASSIC}_imported`, "Mine"]]);
+  const reg = themeRegistry(DATA, r.stored);
+  assert.equal(findTheme(reg, "nord").colors.F_Cu, "#b3474dff");
+  assert.equal(findTheme(reg, BUILTIN_CLASSIC).readOnly, true);
+});
+
+test("a theme's override flag and the file's other entries are kept by the store and by a colour edit", () => {
+  const s0 = { pcbTheme: "user", themes: [{ filename: "t", name: "T", colors: {}, overrideSchItemColors: true, extra: { gerbview: { grid: "rgb(1, 2, 3)" } } }] };
+  assert.deepEqual(parseStoredThemes(serializeStoredThemes(s0)), s0);
+  const reg = themeRegistry(DATA, s0);
+  assert.equal(findTheme(reg, "t").overrideSchItemColors, true);
+  const s1 = setThemeColors(s0, reg, "t", { LAYER_WIRE: "#ff0000ff" });
+  assert.deepEqual(s1.themes[0], { ...s0.themes[0], colors: { LAYER_WIRE: "#ff0000ff" } });
+  const s2 = setThemeColors(s1, themeRegistry(DATA, s1), "t", {}, false);
+  assert.equal(s2.themes[0]!.overrideSchItemColors, false);
 });
