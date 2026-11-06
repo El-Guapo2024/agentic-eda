@@ -84,6 +84,14 @@
   });
 
   await scenario("Footprint Chooser: Show 3D viewer in own window follows the selection and closes when unticked", async (t) => {
+    // The scenario before cancelled its chooser, which leaves Place Footprint waiting for a click (`BOARD_EDITOR_CONTROL::PlaceFootprint`: `if( fp == nullptr )
+    // continue;`). A then would end the tool (`placeFootprint` is `AF_ACTIVATE`: the loop's `evt->IsActivate()` pops it), so Escape ends it first
+    // (`IsCancelInteractive()` with no footprint: `PopTool`) and A starts it again, with its chooser.
+    if (E.state().placeFootprint !== "idle") {
+      await run("common.Interactive.cancel");
+      await until(() => E.state().placeFootprint === "idle", 3000);
+    }
+    t(E.state().placeFootprint === "idle", `Place Footprint is not running (${E.state().placeFootprint})`);
     await run("pcbnew.EditorControl.placeFootprint");
     const root = await until(() => document.querySelector("[data-footprint-chooser]"), 6000);
     if (!t(root, "the chooser opens")) return;
