@@ -32,7 +32,10 @@ export function ownerKey(sym: { id: string; unit: number }): string {
   return sym.unit <= 1 ? sym.id : `${sym.id}#${sym.unit}`;
 }
 
-export type FieldOwnerKind = "symbol" | "power" | "sheet";
+export type FieldOwnerKind = "symbol" | "power" | "sheet" | "label";
+
+/** The sheet as the field items are read from it: a label's fields are items too (`SCH_LABEL_BASE::m_fields`), when the scene has them. */
+export type FieldSheet = Pick<Schematic, "symbols" | "power_symbols" | "sheets"> & Partial<Pick<Schematic, "labels">>;
 
 /** One field of the sheet with the item that owns it. `field.id` is always set. */
 export interface FieldItem {
@@ -42,8 +45,11 @@ export interface FieldItem {
   field: SchField & { id: string };
 }
 
-/** Every field of the sheet, in drawing order: the sheets', the power symbols', the symbols'. */
-export function fieldItems(sch: Pick<Schematic, "symbols" | "power_symbols" | "sheets">): FieldItem[] {
+/**
+ * Every field of the sheet, in drawing order: the sheets', the power symbols', the symbols', the labels'. A label's field (a global label's Sheet References, its net
+ * class, any other) reads as a field of the label: its text the one it draws (the Sheet References' pages), its size the default (`LabelField` keeps none).
+ */
+export function fieldItems(sch: FieldSheet): FieldItem[] {
   const out: FieldItem[] = [];
   const push = (owner: string, ownerKind: FieldOwnerKind, fields: SchField[] | undefined) => {
     for (const f of fields ?? []) {
@@ -54,11 +60,18 @@ export function fieldItems(sch: Pick<Schematic, "symbols" | "power_symbols" | "s
   for (const s of sch.sheets) push(s.id, "sheet", s.fields);
   for (const p of sch.power_symbols) push(p.id, "power", p.fields);
   for (const s of sch.symbols) push(ownerKey(s), "symbol", s.fields);
+  for (const l of sch.labels ?? []) {
+    for (const f of l.fields ?? []) {
+      const id = f.id ?? fieldId(l.id, f.name);
+      const field: SchField & { id: string } = { name: f.name, text: f.shown, at: f.at, vertical: f.vertical, h: f.h, v: f.v ?? "center", visible: f.visible, id, owner: l.id, size_nm: f.size_nm, italic: f.italic, font: f.font, color: f.color };
+      out.push({ id, owner: l.id, ownerKind: "label", field });
+    }
+  }
   return out;
 }
 
 /** The field `id` names, or null. */
-export function findField(sch: Pick<Schematic, "symbols" | "power_symbols" | "sheets">, id: string): FieldItem | null {
+export function findField(sch: FieldSheet, id: string): FieldItem | null {
   return fieldItems(sch).find((f) => f.id === id) ?? null;
 }
 
@@ -107,7 +120,7 @@ export const isShownField = (f: SchField): boolean => f.visible && f.text.length
  * The field under the point, within `tolNm` of its box; of several the one with the smallest box (the one least likely to be what a click on a crowded spot did not
  * mean). Null when none.
  */
-export function hitField(sch: Pick<Schematic, "symbols" | "power_symbols" | "sheets">, x: number, y: number, tolNm: number, measure: Measure): string | null {
+export function hitField(sch: FieldSheet, x: number, y: number, tolNm: number, measure: Measure): string | null {
   let best: { id: string; area: number } | null = null;
   for (const it of fieldItems(sch)) {
     if (!isShownField(it.field)) continue;
@@ -120,7 +133,7 @@ export function hitField(sch: Pick<Schematic, "symbols" | "power_symbols" | "she
 }
 
 /** The ids of the shown fields a marquee takes: those the box overlaps (`crossing`) or encloses. */
-export function boxFields(sch: Pick<Schematic, "symbols" | "power_symbols" | "sheets">, box: readonly [number, number, number, number], crossing: boolean, measure: Measure): string[] {
+export function boxFields(sch: FieldSheet, box: readonly [number, number, number, number], crossing: boolean, measure: Measure): string[] {
   const [x0, y0, x1, y1] = box;
   const out: string[] = [];
   for (const it of fieldItems(sch)) {
@@ -196,9 +209,11 @@ export function fieldVisibilityCmds(owner: string, fields: readonly Pick<SchFiel
 }
 
 /** Autoplace Fields (`SCH_EDIT_TOOL::AutoplaceFields`) on the selection: the items that have fields, and the items of the fields selected. Null when it holds neither. */
-export function autoplaceCmd(sch: Pick<Schematic, "symbols" | "power_symbols" | "sheets">, selection: readonly string[]): Cmd | null {
+export function autoplaceCmd(sch: FieldSheet, selection: readonly string[]): Cmd | null {
   const owners = new Set<string>();
-  const known = new Set<string>([...sch.symbols.map((s) => s.id), ...sch.power_symbols.map((p) => p.id), ...sch.sheets.map((s) => s.id)]);
+  // a label with fields too (`SCH_LABEL_BASE::AutoplaceFields`): its fields placed by hand go back under it
+  const labels = (sch.labels ?? []).filter((l) => (l.fields ?? []).length > 0).map((l) => l.id);
+  const known = new Set<string>([...sch.symbols.map((s) => s.id), ...sch.power_symbols.map((p) => p.id), ...sch.sheets.map((s) => s.id), ...labels]);
   for (const id of selection) {
     const f = parseFieldId(id);
     if (f) owners.add(f.owner);

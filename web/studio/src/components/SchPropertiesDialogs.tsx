@@ -4,8 +4,9 @@
 // (`DIALOG_SHAPE_PROPERTIES`). A text box and a directive label reopen the dialogs that created them (SchToolDialogs.tsx).
 //
 // Each OK sends one command (kicad-port/schProperties.ts builds it from what the user changed), so it is one undo step; nothing is sent when nothing changed.
-// What the drawing model has no place for is not offered: fonts, bold/italic and text colours, a sheet's border and fill and extra fields. A label's own fields (its net
-// class, ...) are the grid of Label Properties; a global label's Sheet References row is shown, Schematic Setup shows or hides it.
+// A free text's and a label's font, colour, a text's bold, italic, link and "Exclude from simulation" (UI-LEFT S6) are `set_text_attrs` (kicad-port/textLooks.ts),
+// batched with the dialog's other command. A label's own fields (its net class, ...) are the grid of Label Properties; a global label's Sheet References row is
+// shown, Schematic Setup shows or hides it.
 import { useState, type ReactNode } from "react";
 import type { LabelShape, Schematic, SchematicLabel, SchematicText } from "../api/types";
 import type { LabelFieldEdit, SchColor, SchFill, SchGraphic, SchLineStyle } from "../api/schEditTypes";
@@ -16,6 +17,8 @@ import { inferSpin } from "./schematic/labelShape";
 import { labelOrientationForPoint, orientationSceneOf } from "../kicad-port/schAutoRotate";
 import { textLie } from "../kicad-port/schTextItem";
 import type { SchHAlign, SchVAlign } from "../api/schEditTypes";
+import { chosenFont, fontChoices, HYPERLINK_ERROR, oneStep, textAttrsCmd, validHyperlink } from "../kicad-port/textLooks";
+import { ColorSwatch, FontSelect, LinkField, useFontFamilies, useLinkChoices } from "./TextLookControls";
 
 const LABEL_SHAPES: Array<{ value: LabelShape; label: string }> = [
   { value: "input", label: "Input" },
@@ -84,6 +87,10 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const [size, setSize] = useState(nmToMm(label.size_nm && label.size_nm > 0 ? label.size_nm : 1_270_000));
   const [bold, setBold] = useState(!!label.bold);
   const [italic, setItalic] = useState(!!label.italic);
+  // the Font choice and the Color swatch (`m_fontCtrl`, `m_textColorSwatch`), `set_text_attrs`
+  const families = useFontFamilies();
+  const [font, setFont] = useState(() => fontChoices([], label.font).selected);
+  const [color, setColor] = useState(label.color ?? null);
   // the grid of the label's own fields (`m_grid` over `m_fields`), a global label's Sheet References above them
   const [fields, setFields] = useState<LabelFieldEdit[]>(() => ownLabelFields(label).map((f) => ({ ...f, name: labelFieldDisplayName(f.name) })));
   const isr = (label.fields ?? []).find((f) => f.intersheet_refs) ?? null;
@@ -97,7 +104,14 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const canOk = text.trim().length > 0 && sizeOk;
   // while "Auto" is on the label takes the spin of what it is connected to (`AutoRotateItem`): the select shows the one it will get
   const autoSpin = auto ? labelOrientationForPoint(orientationSceneOf(sch), label.at, turn) : null;
-  const submit = () => canOk && void send(labelEditCmd(label, spin, { text, shape, spin: turn, sizeNm, bold, italic, autoRotate: supportsAuto ? auto : undefined, fields }));
+  const submit = () =>
+    canOk &&
+    void send(
+      oneStep([
+        labelEditCmd(label, spin, { text, shape, spin: turn, sizeNm, bold, italic, autoRotate: supportsAuto ? auto : undefined, fields }),
+        textAttrsCmd(label.id, { font: label.font, color: label.color }, { font: chosenFont(font), color }, false),
+      ])
+    );
   return (
     <SchDialogShell title={title} width={380} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
@@ -131,6 +145,8 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
             </label>
           </>
         )}
+        <span>Font:</span>
+        <FontSelect families={families} current={label.font} value={font} onChange={setFont} />
         <span>Text size (mm)</span>
         <input value={size} onChange={(e) => setSize(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
         <span>Style</span>
@@ -142,6 +158,8 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
             <input type="checkbox" checked={italic} onChange={(e) => setItalic(e.target.checked)} /> Italic
           </label>
         </span>
+        <span>Color:</span>
+        <ColorSwatch label="Label color" color={color} onChange={setColor} />
       </Grid>
       <table className="label-fields" aria-label="Label fields" style={{ width: "100%", marginTop: 8, borderCollapse: "collapse" }}>
         <thead>
@@ -212,16 +230,55 @@ function TextForm({ text }: { text: SchematicText }) {
   // how the text sits on its anchor, in its own axes (`m_hAlignLeft` ... `m_vAlignBottom`)
   const [h, setH] = useState<SchHAlign>(lie.h);
   const [v, setV] = useState<SchVAlign>(lie.v);
+  // the looks `DIALOG_TEXT_PROPERTIES` sets beyond these (UI-LEFT S6): Font, Bold, Italic, Color, Link, Exclude from simulation
+  const families = useFontFamilies();
+  const links = useLinkChoices();
+  const [font, setFont] = useState(() => fontChoices([], text.font).selected);
+  const [bold, setBold] = useState(!!text.bold);
+  const [italic, setItalic] = useState(!!text.italic);
+  const [color, setColor] = useState(text.color ?? null);
+  const [href, setHref] = useState(text.href ?? "");
+  const [excludeFromSim, setExcludeFromSim] = useState(!!text.exclude_from_sim);
+  const [problem, setProblem] = useState<string | null>(null);
   const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
   const sizeOk = sizeNm !== null && sizeNm >= 10_000 && sizeNm <= 1_000_000_000;
   const canOk = content.length > 0 && sizeOk;
-  const submit = () => canOk && void send(textEditCmd(text, { content, sizeNm, vertical, h, v }));
+  const submit = () => {
+    if (!canOk) return;
+    // `EDA_TEXT::ValidateHyperlink`: the dialog stays open on a link it refuses
+    if (!validHyperlink(href.trim())) return setProblem(HYPERLINK_ERROR);
+    void send(
+      oneStep([
+        textEditCmd(text, { content, sizeNm, vertical, h, v }),
+        textAttrsCmd(text.id, { font: text.font, color: text.color, href: text.href, bold: text.bold, italic: text.italic, excludeFromSim: text.exclude_from_sim }, { font: chosenFont(font), color, href, bold, italic, excludeFromSim }, true),
+      ])
+    );
+  };
   return (
-    <SchDialogShell title="Text Properties" width={420} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
+    <SchDialogShell title="Text Properties" width={460} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
         <span>Text</span>
         <textarea autoFocus rows={4} value={content} onChange={(e) => setContent(e.target.value)} />
+        <span />
+        <LinkField href={href} onChange={(h2) => (setHref(h2), setProblem(null))} choices={links} />
+        <span />
+        <label>
+          <input type="checkbox" aria-label="Exclude from simulation" checked={excludeFromSim} onChange={(e) => setExcludeFromSim(e.target.checked)} /> Exclude from simulation
+        </label>
+        <span>Font:</span>
+        <FontSelect families={families} current={text.font} value={font} onChange={setFont} />
+        <span>Style</span>
+        <span style={{ display: "flex", gap: 14 }}>
+          <label>
+            <input type="checkbox" aria-label="Bold" checked={bold} onChange={(e) => setBold(e.target.checked)} /> Bold
+          </label>
+          <label>
+            <input type="checkbox" aria-label="Italic" checked={italic} onChange={(e) => setItalic(e.target.checked)} /> Italic
+          </label>
+        </span>
+        <span>Color:</span>
+        <ColorSwatch label="Text color" color={color} onChange={setColor} />
         <span>Text size (mm)</span>
         <input value={size} onChange={(e) => setSize(e.target.value)} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
         <span>Orientation</span>
@@ -242,6 +299,11 @@ function TextForm({ text }: { text: SchematicText }) {
           <option value="bottom">Bottom</option>
         </select>
       </Grid>
+      {problem && (
+        <p style={{ color: "var(--chrome-danger)", fontSize: 11, marginTop: 8 }} data-testid="text-properties-error">
+          {problem}
+        </p>
+      )}
     </SchDialogShell>
   );
 }

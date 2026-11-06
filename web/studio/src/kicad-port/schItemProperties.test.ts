@@ -479,7 +479,10 @@ test("a free text's and a label's font rows: bold, italic, colour and hyperlink 
   assert.deepEqual(edit(s, ["txt_a"], "Hyperlink", " https://kicad.org "), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["txt_a"], href: "https://kicad.org" }]);
   assert.deepEqual(edit(s, ["txt_a"], "Vertical Justification", "top"), [{ op: "sch_edit", verb: "edit_text", id: "txt_a", v: "top" }]);
   assert.equal(rowOf(s, ["txt_a"], "Font")!.value, "Default Font");
-  assert.equal(rowOf(s, ["txt_a"], "Font")!.writable, false);
+  // the face is the text's `text_attrs` (UI-LEFT S6): "Default Font" is none
+  assert.deepEqual(edit(s, ["txt_a"], "Font", "KiCad Font"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["txt_a"], font: "KiCad Font" }]);
+  assert.deepEqual(edit(s, ["txt_a"], "Font", "Default Font"), []);
+  assert.deepEqual(edit(s, ["lbl_a"], "Font", "DejaVu Sans"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["lbl_a"], font: "DejaVu Sans" }]);
   // A label: its size and look are Label Properties', its colour its text attributes.
   assert.equal(rowOf(s, ["lbl_a"], "Text Size")!.value, 1_270_000, "50 mil when it has none of its own");
   assert.deepEqual(edit(s, ["lbl_a"], "Text Size", 2_000_000), [{ op: "sch_edit", verb: "edit_label", id: "lbl_a", size_nm: 2_000_000 }]);

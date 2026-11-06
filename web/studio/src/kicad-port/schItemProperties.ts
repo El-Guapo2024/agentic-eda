@@ -565,8 +565,25 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     },
     TEXT_PROPS
   );
-  // "Font" (`GetFontProp`): eeschema's "Default Font" first. The model keeps no face for a schematic text.
-  add({ owner: "EDA_TEXT", name: "Font", kind: "string", get: () => "Default Font", readOnlyReason: "The model keeps no font face for a schematic text: KiCad's default font is drawn." }, TEXT_PROPS);
+  // "Font" (`GetFontProp` / `SetFontProp`): eeschema's "Default Font" first; a free text's and a label's face is its `text_attrs` (`set_text_attrs`, UI-LEFT S6).
+  // A text box's and a directive label's are edited in their dialogs.
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Font",
+      kind: "string",
+      get: (i) => i.text?.font ?? i.label?.font ?? "Default Font",
+      writeable: (i) => !!(i.text || i.label),
+      readOnlyReason: "A text box's font is set in Text Box Properties; a directive label has none.",
+      set: (i, v) => {
+        const next = String(v).trim();
+        const font = next === "Default Font" ? "" : next;
+        const now = i.text?.font ?? i.label?.font ?? "";
+        return font === now ? [] : [{ op: "sch_edit", verb: "set_text_attrs", ids: [i.id], font } as Cmd];
+      },
+    },
+    TEXT_PROPS
+  );
   /** Bold, the way each kind keeps it. */
   const boldOf = (i: SchItem): boolean => !!(i.text?.bold ?? i.label?.bold ?? (isTextBox(i) ? textBox(i).bold : false));
   // "Auto Thickness": a schematic text has no pen of its own here -- KiCad's for its size, `GetPenSizeForBold` once bold (`EDA_TEXT::SetBold`).

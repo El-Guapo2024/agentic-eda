@@ -2,7 +2,9 @@
 // (`DIALOG_TEXT_PROPERTIES` as `DrawShape` opens it), a directive label's fields (`DIALOG_LABEL_PROPERTIES` as `createNewLabel` opens it, before the
 // label rides the cursor).
 import { useState, type ReactNode } from "react";
-import type { DirectiveShape, SchFill, SchGraphic, SchHAlign, SchLineStyle, SchToolDialog, SchVAlign } from "../api/schEditTypes";
+import type { DirectiveShape, SchColor, SchFill, SchGraphic, SchHAlign, SchLineStyle, SchToolDialog, SchVAlign } from "../api/schEditTypes";
+import { chosenFont, fontChoices, HYPERLINK_ERROR, oneStep, textAttrsCmd, validHyperlink } from "../kicad-port/textLooks";
+import { ColorSwatch, FontSelect, LinkField, useFontFamilies, useLinkChoices } from "./TextLookControls";
 import { graphicsEqual } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
@@ -134,23 +136,56 @@ function TextBoxDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { kind
   const [width, setWidth] = useState(edit?.width_nm ?? 0);
   const [style, setStyle] = useState<SchLineStyle>(edit?.line_style ?? "default");
   const [fill, setFill] = useState<SchFill>(edit?.fill ?? "none");
+  // the border's and the fill's colours (`m_borderColorSwatch`, `m_fillColorSwatch`), and for a text box that exists, its text's font, colour, link and
+  // "Exclude from simulation" (`SchExtras::text_attrs`, `set_text_attrs`, UI-LEFT S6). **Differs**: a text box being drawn gets these after it is placed.
+  const [borderColor, setBorderColor] = useState<SchColor | null>(edit?.color && edit.color.a > 0 ? edit.color : null);
+  const [fillColor, setFillColor] = useState<SchColor | null>(edit?.fill_color && edit.fill_color.a > 0 ? edit.fill_color : null);
+  const attrs = edit ? state.schematic?.graphic_text_attrs?.[edit.id] : undefined;
+  const families = useFontFamilies();
+  const links = useLinkChoices();
+  const [font, setFont] = useState(() => fontChoices([], attrs?.font).selected);
+  const [color, setColor] = useState<SchColor | null>(attrs?.color ?? null);
+  const [href, setHref] = useState(attrs?.href ?? "");
+  const [excludeFromSim, setExcludeFromSim] = useState(!!attrs?.exclude_from_sim);
+  const [problem, setProblem] = useState<string | null>(null);
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
   const submit = () => {
     if (!text.trim() || !state.schematic) return;
+    if (!validHyperlink(href.trim())) return setProblem(HYPERLINK_ERROR);
     const shape = { type: "text_box" as const, start: dialog.start, end: dialog.end, text, angle: vertical ? 90_000 : 0, size_nm: size, bold, italic, h_align: h, v_align: v, margin_nm: box?.margin_nm };
+    const colors: Partial<SchGraphic> = { color: borderColor ?? undefined, fill_color: fillColor ?? undefined };
     if (edit) {
-      const next: SchGraphic = { ...edit, shape, width_nm: width, line_style: style, fill };
-      if (graphicsEqual(next, edit)) return close();
-      void api.cmd({ op: "sch_edit", verb: "edit_graphic", id: edit.id, graphic: next }).then((ok) => ok && close());
+      const { color: _c, fill_color: _f, ...rest } = edit;
+      const next: SchGraphic = { ...rest, shape, width_nm: width, line_style: style, fill, ...(borderColor ? { color: borderColor } : {}), ...(fillColor ? { fill_color: fillColor } : {}) };
+      const cmd = oneStep([
+        graphicsEqual(next, edit) ? null : { op: "sch_edit", verb: "edit_graphic", id: edit.id, graphic: next },
+        textAttrsCmd(edit.id, { font: attrs?.font, color: attrs?.color, href: attrs?.href, excludeFromSim: attrs?.exclude_from_sim }, { font: chosenFont(font), color, href, excludeFromSim }, false),
+      ]);
+      if (!cmd) return close();
+      void api.cmd(cmd).then((ok) => ok && close());
       return;
     }
-    commitGraphic({ sch: state.schematic, dispatch, api }, { shape, width_nm: width, line_style: style, fill });
+    commitGraphic({ sch: state.schematic, dispatch, api }, { shape, width_nm: width, line_style: style, fill, ...colors });
     close();
   };
   return (
     <Shell title="Text Box Properties" onCancel={close} onOk={submit} okLabel="OK" canOk={text.trim().length > 0 && size >= 10_000 && size <= 1_000_000_000}>
       <span>Text</span>
       <textarea autoFocus rows={4} value={text} onChange={(e) => setText(e.target.value)} />
+      {edit && (
+        <>
+          <span />
+          <LinkField href={href} onChange={(h2) => (setHref(h2), setProblem(null))} choices={links} />
+          <span />
+          <label>
+            <input type="checkbox" aria-label="Exclude from simulation" checked={excludeFromSim} onChange={(e) => setExcludeFromSim(e.target.checked)} /> Exclude from simulation
+          </label>
+          <span>Font:</span>
+          <FontSelect families={families} current={attrs?.font} value={font} onChange={setFont} />
+          <span>Color:</span>
+          <ColorSwatch label="Text color" color={color} onChange={setColor} />
+        </>
+      )}
       <span>Text size (um)</span>
       <input type="number" min={100} step={50} value={size} onChange={(e) => setSize(Number(e.target.value))} />
       <span>Style</span>
@@ -199,6 +234,18 @@ function TextBoxDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { kind
         <option value="reverse_hatch">Reverse hatch</option>
         <option value="cross_hatch">Cross-hatch</option>
       </select>
+      <span>Border color:</span>
+      <ColorSwatch label="Border color" color={borderColor} onChange={setBorderColor} />
+      <span>Fill color:</span>
+      <ColorSwatch label="Fill color" color={fillColor} onChange={setFillColor} />
+      {problem && (
+        <>
+          <span />
+          <p style={{ color: "var(--chrome-danger)", fontSize: 11, margin: 0 }} data-testid="text-box-properties-error">
+            {problem}
+          </p>
+        </>
+      )}
     </Shell>
   );
 }

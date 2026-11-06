@@ -2048,15 +2048,10 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     let junctions: Vec<Value> = sch.junctions.iter().map(|j| json!({ "id": j.id, "at": [j.at.x, j.at.y], "look": sch.extras.junction_looks.get(&j.id) })).collect();
     let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_nm": l.width_nm, "stroke": sch.extras.strokes.get(&l.id) })).collect();
     // Drawn shapes, text boxes, rule areas, directive labels and images (`SchGraphic`, serialized as stored; an image is described, its pixels are `GET /api/sch_image`) and the ids of locked items.
-    let mut graphics: Value = crate::image_api::sch_graphics_json(&sch.extras.graphics);
-    // a text box's font, colour, link and simulation exclusion (`SchExtras::text_attrs`), for its Properties and its drawing
-    if let Some(list) = graphics.as_array_mut() {
-        for g in list.iter_mut() {
-            if let Some(a) = g.get("id").and_then(Value::as_str).and_then(|id| sch.extras.text_attrs.get(id)) {
-                g["text_attrs"] = serde_json::to_value(a).unwrap_or(Value::Null);
-            }
-        }
-    }
+    let graphics: Value = crate::image_api::sch_graphics_json(&sch.extras.graphics);
+    // a text box's (and a directive label's) font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id, for its Properties and
+    // its drawing: kept beside the graphics, which the edit verbs take back whole
+    let graphic_text_attrs: serde_json::Map<String, Value> = sch.extras.graphics.iter().filter_map(|g| Some((g.id.clone(), serde_json::to_value(sch.extras.text_attrs.get(&g.id)?).ok()?))).collect();
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
     let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
@@ -2260,6 +2255,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "junctions": junctions,
         "lines": lines,
         "graphics": graphics,
+        "graphic_text_attrs": graphic_text_attrs,
         "tables": tables,
         "locked": locked,
         "groups": groups,

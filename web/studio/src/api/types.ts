@@ -2977,6 +2977,10 @@ export interface SchematicLabel {
   fields?: SchLabelField[];
   /** The font colour (`SchExtras::text_attrs`); absent is the layer's. */
   color?: import("./schEditTypes").SchColor | null;
+  /** The font Label Properties chose (`SchExtras::text_attrs`): absent is the default; "KiCad Font" the stroke font; anything else an outline font's family. */
+  font?: string | null;
+  /** The label's fields were placed by hand (`GetFieldsAutoplaced() == AUTOPLACE_NONE`): they stay where they are until Autoplace Fields. */
+  fields_hand_placed?: boolean;
 }
 
 /** One field of a label (`SCH_FIELD` of an `SCH_LABEL_BASE`), placed: `shown` is its text as drawn (a global label's Sheet References read as the pages its name is on). */
@@ -2991,7 +2995,15 @@ export interface SchLabelField {
   at: [Nm, Nm];
   vertical: boolean;
   h: "left" | "center" | "right";
+  /** Its vertical justification (centre while autoplaced; a field placed by hand keeps its own). */
+  v?: "top" | "center" | "bottom";
   size_nm: Nm;
+  /** The id the field is picked, moved and edited by (`fld:<label id>:<name>`), and the label's id. */
+  id?: string;
+  owner?: string;
+  /** Its font face and colour (`SchExtras::field_looks` under the label's id); absent is the default font and the layer's colour. */
+  font?: string | null;
+  color?: { r: number; g: number; b: number; a: number } | null;
 }
 
 /** Schematic Setup > Formatting > Inter-sheet References (`SCHEMATIC_SETTINGS::m_IntersheetRefs*`). */
@@ -3025,6 +3037,9 @@ export interface SchematicText {
   italic?: boolean;
   color?: import("./schEditTypes").SchColor | null;
   href?: string | null;
+  /** The font Text Properties chose (absent: the default font) and its "Exclude from simulation". */
+  font?: string | null;
+  exclude_from_sim?: boolean;
 }
 
 /** A title block as `GET /api/state` / `GET /api/schematic` report it (`TITLE_BLOCK`): `comments[0]` is KiCad's comment 1, up to nine, trailing empty ones dropped. */
@@ -3115,6 +3130,8 @@ export interface Schematic {
   lines?: SchLine[];
   /** Drawn shapes, text boxes, rule areas and directive labels -- see `SchGraphic` (api/schEditTypes.ts). Absent from a backend built before they existed. */
   graphics?: SchGraphic[];
+  /** A text box's and a directive label's font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id; absent: KiCad's defaults. */
+  graphic_text_attrs?: Record<string, { font?: string; color?: import("./schEditTypes").SchColor; href?: string; exclude_from_sim?: boolean }>;
   /** The tables of this sheet (`SCH_TABLE`, `crates/cli/src/table_json.rs` `sch_table_json`): the board's `BoardTable` shape with an empty layer. Absent from a backend built before sheet tables. */
   tables?: BoardTable[];
   /** Ids of locked items (Lock / Unlock). Absent from a backend built before locks existed. */
