@@ -107,7 +107,11 @@ export function drawRefImages(ctx: CanvasRenderingContext2D, view: ViewTransform
   }
   for (const { image: i, part } of ofFootprints) {
     const dim = layerAlpha(opts, layerStateKey(i.layer));
-    withAlpha(ctx, dim, () => paintRefImage(ctx, view, i, colourAlpha(i.layer) * opacity, opts.selection.has(part.ref)));
+    // a footprint in a preview that is not the carry (Pack and Move's block: painter.ts `drawFootprint` moves it by the preview's offset) takes its image along
+    const preview = opts.movePreview && opts.movePreview.kind !== "pcb" && opts.movePreview.refs.includes(part.ref) ? opts.movePreview : null;
+    const own = preview?.perRefOffsetNm?.[part.ref];
+    const shown = preview ? { ...i, x: i.x + preview.dxNm + (own?.[0] ?? 0), y: i.y + preview.dyNm + (own?.[1] ?? 0) } : i;
+    withAlpha(ctx, dim, () => paintRefImage(ctx, view, shown, colourAlpha(i.layer) * opacity, opts.selection.has(part.ref)));
   }
 }
 
