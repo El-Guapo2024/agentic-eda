@@ -1565,7 +1565,7 @@ export function Canvas() {
       if (!motion?.dragging) return;
       const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set([drag.base.layer]), category: "graphics", skip: new Set([drag.shapeId]) });
       const [sx, sy] = [p[0], p[1]];
-      const next = moveShapePoint(drag.base, drag.point, [sx, sy], state.pcbx.arcEditMode);
+      const next = moveShapePoint(drag.base, drag.point, [sx, sy], state.prefs.pcbArcEditMode);
       setShapePointPreview(next ? { id: drag.shapeId, shape: cmdShapeToShape(next, drag.shapeId) } : null);
     } else if (drag.kind === "cells") {
       if (!motion?.dragging) return;

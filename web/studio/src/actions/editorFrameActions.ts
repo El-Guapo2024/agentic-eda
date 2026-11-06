@@ -28,8 +28,10 @@ import { showSymFind, symFindNext, symReplaceAll, symReplaceAndFindNext } from "
 /** common_tools.cpp doZoomInOut: "Step must be AT LEAST 1.3" -- the factor of one Zoom In / Zoom Out step. */
 const ZOOM_STEP = 1.3;
 
-import { ARC_EDIT_MODE_LABEL, type ArcEditMode } from "../kicad-port/pcbPointEdit";
+import { ARC_EDIT_MODE_LABEL, incrementArcEditMode, type ArcEditMode } from "../kicad-port/pcbPointEdit";
+import { fpArcEditMode, fpArcEditModeIndex } from "../kicad-port/fpPointEdit";
 import { setSymArcEditMode } from "../kicad-port/symPointEdit";
+import { snapGridNm } from "../components/canvas/gridHelper";
 
 export interface EditorFrameContext {
   tab: string;
@@ -38,7 +40,9 @@ export interface EditorFrameContext {
   symApi: SymbolEditorApi;
   symDispatch: Dispatch<SymAction>;
   /** The studio's preferences (the Symbol Editor's Repeated Items: `SYMBOL_EDITOR_SETTINGS::m_Repeat`); the defaults when absent. */
-  prefs?: Pick<Preferences, "symRepeatPinStepMils" | "symRepeatLabelDelta" | "fpRotationStepDeg">;
+  prefs?: Pick<Preferences, "symRepeatPinStepMils" | "symRepeatLabelDelta" | "fpRotationStepDeg" | "fpArcEditMode">;
+  /** Changes some of the studio's preferences (`SET_PREFERENCES` with the rest kept): the Footprint Editor's arc mode actions set `fpArcEditMode`. */
+  setPrefs?: (patch: Partial<Preferences>) => void;
 }
 
 /** The canvas of the editor frame on screen (only one editor is mounted at a time). */
@@ -105,7 +109,8 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     m.set("common.Interactive.selectSetRect", () => void ctx.fpApi.setTool("select"));
     // `updateModificationPoint`'s grid snap of a several-item pivot (`grid.BestSnapAnchor( refPt, nullptr )`), on the footprint editor's grid.
     const gridSnap: Snap = (p) => {
-      const g = ctx.fpApi.getState().gridNm || 1;
+      // (`grid.SetUseGrid( GetGridSnapping() )`: no grid while the Footprint Editor does not snap to it)
+      const g = snapGridNm(ctx.fpApi.getState().gridNm) || 1;
       return [Math.round(p[0] / g) * g, Math.round(p[1] / g) * g];
     };
     // Rotate Counterclockwise / Clockwise (R / Shift+R, `EDIT_TOOL::Rotate`): the selection -- pads, graphics, texts, fields, dimensions, zones, text boxes ..., groups -- a turn of the
@@ -142,6 +147,18 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     m.set("common.Interactive.copy", () => fpIdle() && void ctx.fpApi.copySelection(false));
     m.set("common.Interactive.cut", () => fpIdle() && void ctx.fpApi.copySelection(true));
     m.set("common.Interactive.paste", () => fpIdle() && void ctx.fpApi.pasteItems());
+    // `PCB_POINT_EDITOR::changeArcEditMode` in the Footprint Editor: Ctrl+Space (`cycleArcEditMode`) and the three `pointEditorArcKeep*` actions set
+    // `FOOTPRINT_EDITOR_SETTINGS::m_ArcEditMode` (`frame()->GetFootprintEditorSettings()`), the mode its point editor drags an arc in and Preferences > Footprint Editor >
+    // Editing Options shows (kicad-port/fpPointEdit.ts; UI-LEFT-2 FF7)
+    const fpArcMode = (mode: ArcEditMode | "cycle") => () => {
+      const next = mode === "cycle" ? incrementArcEditMode(fpArcEditMode(ctx.prefs?.fpArcEditMode ?? 0)) : mode;
+      ctx.setPrefs?.({ fpArcEditMode: fpArcEditModeIndex(next) });
+      toast(`Arc editing: ${ARC_EDIT_MODE_LABEL[next]}`);
+    };
+    m.set("common.Interactive.cycleArcEditMode", fpArcMode("cycle"));
+    m.set("pcbnew.PointEditor.arcKeepCenter", fpArcMode("keep_center_adjust_angle_radius"));
+    m.set("pcbnew.PointEditor.arcKeepEndpoint", fpArcMode("keep_endpoints_or_start_direction"));
+    m.set("pcbnew.PointEditor.arcKeepRadius", fpArcMode("keep_center_ends_adjust_angle"));
     // Group / Ungroup (Ctrl+G / Ctrl+Shift+G, `PCB_GROUP_TOOL::Group` in the footprint editor, `GROUP_TOOL::Ungroup`).
     m.set("common.Interactive.group", () => void ctx.fpApi.groupSelection());
     m.set("common.Interactive.ungroup", () => void ctx.fpApi.ungroupSelection());

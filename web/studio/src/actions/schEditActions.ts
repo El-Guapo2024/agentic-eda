@@ -28,8 +28,7 @@ import { beginBreak } from "../components/schematic/schBreakTool";
 import { deleteLastPoint, finishShapeDraw } from "../components/schematic/schShapeTools";
 import { ARC_DRAW_MODES, arcSetMode, arcToggleClockwise, incrementArcDrawMode, type ArcDrawMode } from "../kicad-port/arcGeom";
 import { ARC_MODE_ACTIONS, CYCLE_ARC_DRAW_MODE, schArcDrawMode, setSchArcDrawMode } from "../kicad-port/schArcDraw";
-import { setSchArcEditMode } from "../kicad-port/schArcEdit";
-import { ARC_EDIT_MODE_LABEL, type ArcEditMode } from "../kicad-port/pcbPointEdit";
+import { ARC_EDIT_MODE_LABEL, incrementArcEditMode, type ArcEditMode } from "../kicad-port/pcbPointEdit";
 import type { BreakMode } from "../kicad-port/schBreak";
 import { nextUnitToPlace, unitCountOf } from "../kicad-port/schUnits";
 import { addCorner, canAddCorner, canRemoveCorner, removeCorner } from "../kicad-port/schPolyCorners";
@@ -220,8 +219,10 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   if (draw?.poly || draw?.arc) m.set("eeschema.InteractiveDrawing.deleteLastPoint", schematicOnly(() => deleteLastPoint(draw, ctx.dispatch)));
   // `SCH_POINT_EDITOR::changeArcEditMode`: Ctrl+Space (`cycleArcEditMode`) and the three `pointEditorArcKeep*` actions set `m_Drawing.arc_edit_mode`, the mode the
   // arc point editor drags in (kicad-port/schArcEdit.ts; UI-LEFT S13)
+  // -- the schematic editor's setting, Preferences > Schematic Editor > Editing Options' "Arc editing mode:" (`Preferences.schArcEditMode`, UI-LEFT-2 FF7)
   const arcMode = (mode: ArcEditMode | "cycle") => () => {
-    const next = setSchArcEditMode(mode);
+    const next = mode === "cycle" ? incrementArcEditMode(ctx.state.prefs.schArcEditMode) : mode;
+    ctx.dispatch({ type: "SET_PREFERENCES", prefs: { ...ctx.state.prefs, schArcEditMode: next } });
     ctx.dispatch({ type: "TOAST", message: `Arc editing: ${ARC_EDIT_MODE_LABEL[next]}`, kind: "info" });
   };
   m.set("common.Interactive.cycleArcEditMode", arcMode("cycle"));

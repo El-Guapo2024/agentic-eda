@@ -79,7 +79,8 @@ export interface PcbParityState {
   useCustomTrackVia: boolean;
   /** "Create Zone / Rule Area from Selection" (convert_tool.cpp `CreatePolys`): what the zone dialog does once the first outline's zone is added -- the other outlines the conversion made get the same settings, then the source items go. */
   zoneConvert: ZoneConvertPending | null;
-  /** `PCBNEW_SETTINGS::m_ArcEditMode`: how editing an arc's handles recomputes the arc (kicad-port/pcbPointEdit.ts). */
+  /** INACTIVE since UI-LEFT-2 FF7 (task-v2-prefs): the session's copy of `PCBNEW_SETTINGS::m_ArcEditMode`. The mode is the preference `pcbArcEditMode` now (kept with the
+   *  person's settings, as KiCad keeps it in pcbnew.json); this field is kept, read by nothing. */
   arcEditMode: ArcEditMode;
   /** `PCB_BASE_EDIT_FRAME::m_vertexEditorPane` is open ("Edit Corners..."): the floating table of the selected polygon's or zone's vertices. */
   vertexEditorOpen: boolean;

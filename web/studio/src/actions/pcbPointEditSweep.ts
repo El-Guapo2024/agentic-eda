@@ -132,7 +132,7 @@ export function registerPcbPointEditSweep(m: Map<string, () => void>, ctx: Sweep
               return;
             }
             if (t.item.kind !== "shape") return;
-            const next = moveShapePoint(t.item.shape, point, [x, y], state.pcbx.arcEditMode);
+            const next = moveShapePoint(t.item.shape, point, [x, y], state.prefs.pcbArcEditMode);
             if (!next) {
               toast("That position is not possible for this point.");
               return;
@@ -201,10 +201,11 @@ export function registerPcbPointEditSweep(m: Map<string, () => void>, ctx: Sweep
   );
 
   // ------------------------------------------------------------------- arc editing modes
-  // PCB_POINT_EDITOR::changeArcEditMode: the parameter of each action (or `IncrementArcEditMode` for the cycle) becomes the mode.
+  // PCB_POINT_EDITOR::changeArcEditMode: the parameter of each action (or `IncrementArcEditMode` for the cycle) becomes the mode -- the board editor's setting
+  // (`frame()->GetPcbNewSettings()->m_ArcEditMode = mode`), which Preferences > PCB Editor > Editing Options shows as "Arc editing mode:" (UI-LEFT-2 FF7).
   const setMode = (mode: ArcEditMode | "cycle") => () => {
-    const next = mode === "cycle" ? incrementArcEditMode(state.pcbx.arcEditMode) : mode;
-    dispatch({ type: "PCBX", patch: { arcEditMode: next } });
+    const next = mode === "cycle" ? incrementArcEditMode(state.prefs.pcbArcEditMode) : mode;
+    dispatch({ type: "SET_PREFERENCES", prefs: { ...state.prefs, pcbArcEditMode: next } });
     toast(`Arc editing: ${ARC_EDIT_MODE_LABEL[next]}`);
   };
   // (`SCH_POINT_EDITOR::changeArcEditMode` takes the same four actions for the schematic's own mode, registered before: another tab keeps its handler)
