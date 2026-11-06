@@ -44,6 +44,7 @@ mod append_api;
 mod design_block_api;
 mod graphics_api;
 mod library_api;
+mod library_convert;
 mod library_index;
 mod library_place;
 mod library_save_api;

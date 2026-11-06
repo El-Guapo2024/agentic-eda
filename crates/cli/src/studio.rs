@@ -836,6 +836,9 @@ fn handle(
         ("POST", "/api/library_tables/check") => respond(stream, "200 OK", "application/json", crate::library_tables::check_rows(dir, &body).to_string().as_bytes()),
         ("GET", "/api/library_tables/normalize") => respond(stream, "200 OK", "application/json", crate::library_tables::normalize(dir, &query_value(target, "path")).to_string().as_bytes()),
         ("POST", "/api/library_tables/add") => respond(stream, "200 OK", "application/json", crate::library_tables::add_library(dir, &body).to_string().as_bytes()),
+        // Reset Libraries (the global table written anew) and Migrate Libraries (kicad-cli converts a library of another format into the KiCad one beside it)
+        ("POST", "/api/library_tables/reset") => respond(stream, "200 OK", "application/json", crate::library_tables::reset_global(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/library_tables/migrate") => respond(stream, "200 OK", "application/json", crate::library_tables::migrate_rows(dir, &body).to_string().as_bytes()),
         ("POST", "/api/path_variables") => respond(stream, "200 OK", "application/json", crate::library_tables::set_variables(dir, &body).to_string().as_bytes()),
         ("GET", "/api/fs/list") => respond(stream, "200 OK", "application/json", crate::library_tables::browse(dir, &query_value(target, "path"), &query_value(target, "what")).to_string().as_bytes()),
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.

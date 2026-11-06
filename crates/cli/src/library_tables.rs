@@ -7,7 +7,10 @@
 //! tables are put together -- is `eda_kicad::library_table`; this module is what needs the machine: where KiCad's configuration is, which variables it
 //! defines, the project's files.
 //!
-//! The global tables are KiCad's and are only ever read. Nothing here writes into KiCad's configuration folder.
+//! The global tables are the user's, in KiCad's configuration folder: the Global Libraries tab of Manage Libraries edits them and Reset Libraries writes them
+//! anew, as KiCad's dialogs do (`PANEL_SYM_LIB_TABLE::TransferDataFromWindow`, `onReset`), and Configure Paths writes KiCad's path variables into its
+//! `kicad_common.json` (`DIALOG_CONFIGURE_PATHS`). Those three files, and a table one of the tables chains, are all the studio writes there; a board folder that
+//! is KiCad's configuration folder is refused, and so is a library made inside it.
 //!
 //! [`libs`] is the one entry point the rest of the server uses: the libraries of one kind for a board, as a [`LibSet`] (a [`LibSource`], so the index, the
 //! choosers and the lookups work over it exactly as they do over a plain folder of library files).
@@ -136,6 +139,32 @@ pub(crate) fn project_table_path(dir: &Path, kind: TableKind) -> PathBuf {
     dir.join(kind.file_name())
 }
 
+/// The table KiCad installs (`LIBRARY_MANAGER::StockTablePath`: `PATHS::GetStockTemplatesPath()`, `template/sym-lib-table`), which a first run's global table chains
+/// and Reset Libraries chains again. A checkout of KiCad's library repositories (`KICAD_PATH` with no `template/` folder) has it beside the libraries instead
+/// (`symbols/sym-lib-table`, `footprints/fp-lib-table`: the files KiCad's install copies into `template/`), and that one stands in for it.
+pub(crate) fn stock_table(env: &Env, kind: TableKind) -> PathBuf {
+    let installed = env.stock.templates.join(kind.file_name());
+    if installed.is_file() {
+        return installed;
+    }
+    let beside = match kind {
+        TableKind::Symbol => env.stock.symbols.join(kind.file_name()),
+        TableKind::Footprint => env.stock.footprints.join(kind.file_name()),
+        TableKind::DesignBlock => env.stock.design_blocks.join(kind.file_name()),
+    };
+    if beside.is_file() {
+        beside
+    } else {
+        installed
+    }
+}
+
+/// The global table of this kind in KiCad's configuration folder (`LIBRARY_MANAGER::DefaultGlobalTablePath`: `PATHS::GetUserSettingsPath()` and the table's file
+/// name), whether or not KiCad has written it yet; `None` when this machine has no KiCad configuration folder.
+pub(crate) fn global_table_path(env: &Env, kind: TableKind) -> Option<PathBuf> {
+    env.config_dir.as_ref().map(|d| d.join(kind.file_name()))
+}
+
 /// The libraries of KiCad's library folder as a table of their own, for a machine whose KiCad has no table to read: one row per `.kicad_sym` file or
 /// `.kicad_symdir` folder library (KiCad 10's kicad-symbols ships only these) or `.pretty` folder, named by its file name. A name both a file and a folder
 /// give is the file's row, as `eda_kicad::find_symbol_library_file` reads the file.
@@ -189,7 +218,7 @@ pub(crate) fn load_with(env: Env, dir: &Path, kind: TableKind) -> Loaded {
         }
     }
     if global.is_none() {
-        let stock = env.stock.templates.join(kind.file_name());
+        let stock = stock_table(&env, kind);
         if let Ok(t) = LoadedTable::load(&stock, kind, Scope::Global, &vars) {
             global = Some(t);
             origin = GlobalOrigin::Stock(stock);
@@ -251,7 +280,11 @@ impl LibSet {
         let mut entries: Vec<LibEntry> = libs
             .into_iter()
             .filter(|l| l.is_available())
-            .map(|l| LibEntry { name: l.nickname, path: l.path, description: l.description, scope: l.scope, hidden: l.hidden })
+            .filter_map(|l| {
+                // a library of another format is read as the KiCad copy kicad-cli makes of it (`library_convert`); one that does not convert is not a library
+                let path = if lt::convertible(kind.table_kind(), &l.lib_type) { crate::library_convert::readable(kind.table_kind(), &l.path).ok()? } else { l.path };
+                Some(LibEntry { name: l.nickname, path, description: l.description, scope: l.scope, hidden: l.hidden })
+            })
             .collect();
         entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
         let by_name = entries.iter().enumerate().map(|(i, e)| (e.name.clone(), i)).collect();
@@ -391,7 +424,8 @@ fn row_json(kind: TableKind, row: &lt::Row, loaded: Option<&LoadedRow>, vars: &V
     let path = vars.expand_uri(&row.uri, base);
     let error = match loaded {
         Some(l) if !l.ok => Some(l.error.clone()),
-        _ => lt::check_row(kind, row, &path),
+        // a library of another format is read through kicad-cli: what it said when it could not convert the library
+        _ => lt::check_row(kind, row, &path).or_else(|| lt::convertible(kind, &row.lib_type).then(|| crate::library_convert::status(kind, &path)).flatten()),
     };
     let status = if error.is_some() { "error" } else if row.is_table() { "table" } else { "ok" };
     let mut v = json!({
@@ -410,21 +444,26 @@ fn table_json(kind: TableKind, t: &LoadedTable, vars: &Vars) -> Value {
     let base = t.path.parent().map(Path::to_path_buf).unwrap_or_default();
     json!({
         "path": t.path.display().to_string(),
+        "writable": eda_kicad::design_block::may_write(&t.path),
         "rows": t.table.rows.iter().zip(&t.rows).map(|(r, l)| row_json(kind, r, Some(l), vars, &base)).collect::<Vec<_>>(),
     })
 }
 
-fn global_note(kind: TableKind, origin: &GlobalOrigin) -> String {
+fn global_note(kind: TableKind, origin: &GlobalOrigin, target: Option<&Path>) -> String {
     let name = kind.file_name();
+    let then = match target {
+        Some(t) => format!(" OK writes these rows as your global table, {}.", t.display()),
+        None => " It cannot be written: this machine has no KiCad configuration folder (run KiCad once, or set KICAD_CONFIG_HOME).".to_string(),
+    };
     match origin {
-        GlobalOrigin::Config(_) => format!("This is KiCad's own global {name}. The studio reads it and never writes it: change it in KiCad (Preferences, Manage Libraries)."),
-        GlobalOrigin::Stock(p) => format!("KiCad has written no global {name} in its configuration folder, so the studio reads the table KiCad installs ({}) -- the one KiCad creates on its first run. The studio never writes a global table.", p.display()),
-        GlobalOrigin::Folder(p) => format!("No library table was found: the library files in {} are listed, each as its own row. The studio never writes a global table.", p.display()),
-        GlobalOrigin::Missing => "No KiCad library table or library folder was found on this machine.".to_string(),
+        GlobalOrigin::Config(p) => format!("Your global {name}, in KiCad's configuration folder ({}): OK writes your changes to it, as KiCad's dialog does.", p.display()),
+        GlobalOrigin::Stock(p) => format!("KiCad has written no global {name} in its configuration folder yet, so the table KiCad installs ({}) is shown -- the one KiCad's first run offers.{then}", p.display()),
+        GlobalOrigin::Folder(p) => format!("No library table was found: the library files in {} are listed, each as its own row.{then}", p.display()),
+        GlobalOrigin::Missing => format!("No KiCad library table or library folder was found on this machine.{then}"),
     }
 }
 
-/// The two tables of one kind: the global one (read only) and the board's.
+/// The two tables of one kind: the global one (KiCad's configuration folder's, or the one KiCad installs until that is written) and the board's.
 fn kind_json(l: &Loaded) -> Value {
     let kind = l.kind;
     let global_path = match &l.global_origin {
@@ -440,14 +479,16 @@ fn kind_json(l: &Loaded) -> Value {
     let global_rows = l.global.as_ref().map(|t| table_json(kind, t, &l.vars)["rows"].clone()).unwrap_or_else(|| json!([]));
     let project_rows = l.project.as_ref().map(|t| table_json(kind, t, &l.vars)["rows"].clone()).unwrap_or_else(|| json!([]));
     let taken: Vec<String> = l.libs().into_iter().map(|lib| lib.nickname).collect();
+    let target = global_table_path(&l.env, kind);
     json!({
         "kind": kind.name(),
         "file": kind.file_name(),
         "supports_visibility": kind.supports_visibility(),
-        "types": lt::known_types(kind),
+        "types": lt::offered_types(kind),
         "new_library_name": unique_name(&taken),
-        "global": { "scope": "global", "path": global_path.display().to_string(), "exists": l.global.is_some(), "writable": false, "origin": origin,
-                    "note": global_note(kind, &l.global_origin), "error": l.global_error, "rows": global_rows },
+        "global": { "scope": "global", "path": global_path.display().to_string(), "exists": l.global.is_some(), "writable": target.is_some(), "origin": origin,
+                    "target": target.as_ref().map(|t| t.display().to_string()), "stock": stock_table(&l.env, kind).display().to_string(),
+                    "note": global_note(kind, &l.global_origin, target.as_deref()), "error": l.global_error, "rows": global_rows },
         "project": { "scope": "project", "path": l.project_path.display().to_string(), "exists": l.project_path.is_file(), "writable": true,
                      "error": l.project_error, "rows": project_rows },
     })
@@ -519,6 +560,8 @@ pub(crate) fn view_with(env: &Env, dir: &Path) -> Value {
             "undefined": undefined_variables(&loaded),
             "reserved": ["KIPRJMOD"],
             "file": lt::PATH_VARIABLES_FILE,
+            "global_file": env.config_dir.as_ref().map(|d| d.join("kicad_common.json").display().to_string()),
+            "search_paths": search_paths(env, dir),
         },
     })
 }
@@ -542,13 +585,13 @@ fn reserved_nickname(nickname: &str) -> Option<String> {
     (nickname == PROJECT_LIBRARY).then(|| format!("The nickname '{PROJECT_LIBRARY}' is the studio's own project library (the ids eda:Name): choose another."))
 }
 
-/// The studio never writes KiCad's own configuration: a board folder that is KiCad's configuration folder (or lies inside it) has no project tables of its own to edit,
-/// and the file such an edit would write is KiCad's global table.
+/// A board folder that is KiCad's configuration folder (or lies inside it) has no project tables of its own to edit: the file such an edit would write is KiCad's
+/// global table, which only the Global Libraries tab writes.
 pub(crate) fn refuse_kicads_configuration(env: &Env, dir: &Path) -> Result<(), String> {
     let Some(config) = &env.config_dir else { return Ok(()) };
     let (board, config) = (std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()), std::fs::canonicalize(config).unwrap_or_else(|_| config.clone()));
     if board.starts_with(&config) {
-        return Err(format!("{} is KiCad's own configuration folder: the studio reads KiCad's global library tables and never writes them. Open a board folder of your own to edit a project's tables.", dir.display()));
+        return Err(format!("{} is KiCad's own configuration folder, not a board's: open a board folder of your own to edit a project's tables (the Global Libraries tab edits KiCad's global ones).", dir.display()));
     }
     Ok(())
 }
@@ -570,9 +613,6 @@ pub(crate) fn set_table(dir: &Path, body: &[u8]) -> Value {
 }
 
 pub(crate) fn set_table_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
-    if let Err(e) = refuse_kicads_configuration(env, dir) {
-        return bad(e);
-    }
     let req = match parse_body(body) {
         Ok(r) => r,
         Err(e) => return e,
@@ -580,6 +620,29 @@ pub(crate) fn set_table_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
     let kind = match kind_in(&req) {
         Ok(k) => k,
         Err(e) => return e,
+    };
+    // Which table: the board's (the Project tab), KiCad's global one (`PANEL_SYM_LIB_TABLE::TransferDataFromWindow`: `globalTable->Save()`), or a table one of them
+    // chains (`LIB_TABLE_NOTEBOOK_PANEL::SaveTable` of a tab opened on it). Nothing else is written: a chained table must be one the tables name.
+    let scope = req.get("scope").and_then(Value::as_str).unwrap_or("project");
+    let path = match scope {
+        "project" => {
+            if let Err(e) = refuse_kicads_configuration(env, dir) {
+                return bad(e);
+            }
+            project_table_path(dir, kind)
+        }
+        "global" => match global_table_path(env, kind) {
+            Some(p) => p,
+            None => return bad("There is no KiCad configuration folder on this machine, so there is no global library table to write (run KiCad once, or set KICAD_CONFIG_HOME)."),
+        },
+        "nested" => {
+            let asked = std::fs::canonicalize(text(&req, "path")).unwrap_or_else(|_| PathBuf::from(text(&req, "path")));
+            if !chained_tables(&load_with(env.clone(), dir, kind)).contains(&asked) {
+                return bad(format!("{} is not a table the library tables chain: the studio writes only the tables they name.", asked.display()));
+            }
+            asked
+        }
+        other => return bad(format!("scope is project, global or nested, not '{other}'")),
     };
     let rows = match rows_in(&req) {
         Ok(r) => r,
@@ -596,19 +659,19 @@ pub(crate) fn set_table_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
         let shown = rows.iter().enumerate().filter(|(_, r)| !r.uri.trim().is_empty()).map(|(k, _)| k).nth(row).unwrap_or(row);
         return json!({ "error": message, "row": shown, "column": "nickname" });
     }
-    // a row whose format was left blank takes the one its path says (`GuessPluginTypeFromLibPath`)
+    // a row whose format was left blank takes the one its path says (`GuessPluginTypeFromLibPath`); a relative path is relative to the table's folder
     let vars = env.vars(dir, &crate::text_variables::project_variables(dir));
+    let base = path.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
     let kept: Vec<lt::Row> = kept
         .into_iter()
         .map(|mut r| {
             if r.lib_type.trim().is_empty() {
-                r.lib_type = guess_type(kind, &vars.expand_uri(&r.uri, dir)).unwrap_or(lt::KICAD_TYPE).to_string();
+                r.lib_type = guess_type(kind, &vars.expand_uri(&r.uri, &base)).unwrap_or(lt::KICAD_TYPE).to_string();
             }
             r
         })
         .collect();
-    let path = project_table_path(dir, kind);
-    if kept.is_empty() && !path.is_file() {
+    if kept.is_empty() && !path.is_file() && scope == "project" {
         let mut v = view_with(env, dir);
         v["ok"] = json!(true);
         return v;
@@ -616,11 +679,137 @@ pub(crate) fn set_table_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
     let mut table = Table::new(kind);
     table.rows = kept;
     if let Err(e) = lt::write_table(&path, &table) {
-        return bad(e);
+        let what = if scope == "global" { "global" } else { "project" };
+        return bad(format!("Error saving {what} library table:\n\n{e}"));
     }
     let mut v = view_with(env, dir);
     v["ok"] = json!(true);
     v
+}
+
+/// Every table the global and project tables chain, as read (resolved paths): the only tables besides those two that a write may name.
+fn chained_tables(l: &Loaded) -> Vec<PathBuf> {
+    fn walk(t: &LoadedTable, out: &mut Vec<PathBuf>) {
+        for loaded in &t.rows {
+            if let Some(child) = &loaded.child {
+                out.push(child.path.clone());
+                walk(child, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for t in l.global.iter().chain(l.project.iter()) {
+        walk(t, &mut out);
+    }
+    out
+}
+
+/// `POST /api/library_tables/reset` `{kind}`: Reset Libraries (`PANEL_SYM_LIB_TABLE::onReset`, `PANEL_FP_LIB_TABLE::onReset`) -- `LIBRARY_MANAGER::CreateGlobalTable(
+/// type, true )`: the global table in KiCad's configuration folder written anew with one row, `(lib (name "KiCad") (type "Table") (uri "<the table KiCad installs>")
+/// (options "") (descr "KiCad Default Libraries"))`. It takes place at once, whatever the dialog's OK or Cancel (KiCad: "this action takes place even if the dialog is
+/// canceled"); the dialog asks first ("This action will reset your global library table on disk and cannot be undone.") when the table has rows. The answer is the view.
+pub(crate) fn reset_global(dir: &Path, body: &[u8]) -> Value {
+    reset_global_with(&Env::discover(), dir, body)
+}
+
+pub(crate) fn reset_global_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
+    let req = match parse_body(body) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let kind = match kind_in(&req) {
+        Ok(k) => k,
+        Err(e) => return e,
+    };
+    let Some(path) = global_table_path(env, kind) else {
+        return bad("There is no KiCad configuration folder on this machine, so there is no global library table to reset (run KiCad once, or set KICAD_CONFIG_HOME).");
+    };
+    let mut table = Table::new(kind);
+    table.rows = vec![lt::Row {
+        nickname: "KiCad".into(),
+        uri: stock_table(env, kind).display().to_string(),
+        lib_type: lt::NESTED_TYPE.into(),
+        description: "KiCad Default Libraries".into(),
+        ..Default::default()
+    }];
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = lt::write_table(&path, &table) {
+        return bad(format!("Error saving global library table:\n\n{e}"));
+    }
+    let mut v = view_with(env, dir);
+    v["ok"] = json!(true);
+    v
+}
+
+/// `POST /api/library_tables/migrate` `{kind, rows: [{nickname, uri, type, options}], overwrite: [index...], plan?: bool}`: Migrate Libraries
+/// (`PANEL_SYM_LIB_TABLE::onConvertLegacyLibraries`, `PANEL_FP_LIB_TABLE::onMigrateLibraries`) for the rows the person selected, as the grid holds them. The rows of
+/// KiCad's own format (and, for symbols, Database ones) are not migrated; none left is "Select one or more rows containing libraries to save as current KiCad
+/// format.". Each row's library is converted by kicad-cli ([`crate::library_convert::migrate`]) into the KiCad library beside it, and the answer gives the row's new
+/// path (written as a table writes it, `NormalizePath`), type `KiCad` and options (a symbol row's are cleared, a footprint row's kept); the grid takes them and OK
+/// writes the table. A destination that exists is not touched unless its row's index is in `overwrite`: with `plan` the answer only says, per row, where it would
+/// go and whether that exists, so the dialog can ask KiCad's question first ("File '%s' already exists. Do you want overwrite this file?" / "Folder '%s' already
+/// exists. Do you want overwrite any existing footprints?", Yes / No / Cancel). `{results: [{row, error?, uri?, type?, options?, dest, exists}]}`.
+pub(crate) fn migrate_rows(dir: &Path, body: &[u8]) -> Value {
+    migrate_rows_with(&Env::discover(), dir, body, &|kind, from, to| crate::library_convert::migrate(kind, from, to))
+}
+
+pub(crate) fn migrate_rows_with(env: &Env, dir: &Path, body: &[u8], migrate: &dyn Fn(TableKind, &Path, &Path) -> Result<(), String>) -> Value {
+    let req = match parse_body(body) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let kind = match kind_in(&req) {
+        Ok(k) => k,
+        Err(e) => return e,
+    };
+    let rows = match rows_in(&req) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let plan = req.get("plan").and_then(Value::as_bool).unwrap_or(false);
+    let overwrite: Vec<usize> = req.get("overwrite").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect()).unwrap_or_default();
+    let base = match req.get("table").and_then(Value::as_str).filter(|t| !t.is_empty()) {
+        Some(t) => Path::new(t).parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf()),
+        None => dir.to_path_buf(),
+    };
+    let migratable = |r: &lt::Row| r.lib_type != lt::KICAD_TYPE && !(kind == TableKind::Symbol && r.lib_type == "Database");
+    if !rows.iter().any(migratable) {
+        return bad("Select one or more rows containing libraries to save as current KiCad format.");
+    }
+    let vars = env.vars(dir, &crate::text_variables::project_variables(dir));
+    let norm_vars = normalize_vars(env, &vars, dir);
+    let results: Vec<Value> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| migratable(r))
+        .map(|(i, r)| {
+            let source = vars.expand_uri(&r.uri, &base);
+            if !source.exists() {
+                return json!({ "row": i, "error": format!("Library '{}' not found.", r.uri) });
+            }
+            let Some(dest) = crate::library_convert::migrated_path(kind, &source) else {
+                return json!({ "row": i, "error": "Design block libraries have no other format to migrate from." });
+            };
+            let exists = dest.exists();
+            if plan || (exists && !overwrite.contains(&i)) {
+                return json!({ "row": i, "dest": dest.display().to_string(), "exists": exists, "skipped": !plan });
+            }
+            if let Err(e) = refuse_inside_kicads_configuration(env, &dest) {
+                return json!({ "row": i, "error": e });
+            }
+            match migrate(kind, &source, &dest) {
+                Ok(()) => json!({
+                    "row": i, "dest": dest.display().to_string(), "exists": exists,
+                    "uri": lt::normalize_path(&dest, &norm_vars, Some(dir)), "type": lt::KICAD_TYPE,
+                    "options": if kind == TableKind::Symbol { String::new() } else { r.options.clone() },
+                }),
+                Err(e) => json!({ "row": i, "error": e, "dest": dest.display().to_string() }),
+            }
+        })
+        .collect();
+    json!({ "results": results })
 }
 
 /// `POST /api/library_tables/check` `{kind, rows}`: `CheckTableRow` for each row as it stands in the grid -- where its path leads and why it cannot be read.
@@ -829,7 +1018,7 @@ pub(crate) fn put_library_row(dir: &Path, kind: TableKind, path: &Path, replace:
     let nickname = match replace {
         Some(nick) => {
             let Some(row) = table.rows.iter_mut().find(|r| r.nickname == nick) else {
-                return Err(format!("The library '{nick}' is a row of KiCad's global table, which the studio reads and never writes: add the new library to the project's table instead."));
+                return Err(format!("The library '{nick}' is a row of KiCad's global table, which Save Library As does not update here: add the new library to the project's table, or change the global row in Manage Libraries."));
             };
             row.uri = uri.clone();
             row.lib_type = lt::KICAD_TYPE.to_string();
@@ -858,62 +1047,165 @@ pub(crate) fn refuse_inside_kicads_configuration(env: &Env, path: &Path) -> Resu
     let config = std::fs::canonicalize(config).unwrap_or_else(|_| config.clone());
     let at = path.parent().and_then(|p| std::fs::canonicalize(p).ok()).map(|p| p.join(path.file_name().unwrap_or_default())).unwrap_or_else(|| path.to_path_buf());
     if at.starts_with(&config) {
-        return Err(format!("{} is in KiCad's own configuration folder, which the studio never writes.", path.display()));
+        return Err(format!("{} is in KiCad's own configuration folder, where the studio writes only the global library tables and KiCad's path variables.", path.display()));
     }
     Ok(())
 }
 
-/// `POST /api/path_variables` `{variables: [{name, value}]}`: Configure Paths' OK for the board's own variables (KiCad's are read only here). The name rules are the
-/// dialog's: capitals, digits and `_`, `KIPRJMOD` reserved, a name and a path both there.
+/// The rows of one grid of Configure Paths, checked as `DIALOG_CONFIGURE_PATHS::TransferDataFromWindow` and `OnGridCellChanging` check them: a row with neither a name
+/// nor a path is dropped; else both are needed ("Environment variable name cannot be empty.", "Environment variable path cannot be empty."), the name is a variable
+/// name (`ENV_VAR_NAME_VALIDATOR`: capitals, digits and `_`) and not `KIPRJMOD`. A variable the real environment defines is taken as it is ("Don't check for
+/// consistency on external variables"). `Err` is `{error, row, column, scope}` for the row refused.
+fn checked_variables(list: &[Value], scope: &str, external: &dyn Fn(&str) -> bool) -> Result<BTreeMap<String, String>, Value> {
+    let mut vars: BTreeMap<String, String> = BTreeMap::new();
+    for (row, item) in list.iter().enumerate() {
+        let (name, value) = (text(item, "name").trim().to_string(), text(item, "value").trim().to_string());
+        let fail = |column: &str, message: String| json!({ "error": message, "row": row, "column": column, "scope": scope });
+        if !name.is_empty() && external(&name) {
+            vars.insert(name, value);
+            continue;
+        }
+        if name.is_empty() && value.is_empty() {
+            continue;
+        }
+        if name.is_empty() {
+            return Err(fail("name", "Environment variable name cannot be empty.".into()));
+        }
+        if value.is_empty() {
+            return Err(fail("value", "Environment variable path cannot be empty.".into()));
+        }
+        if name == "KIPRJMOD" {
+            return Err(fail("name", "The name KIPRJMOD is reserved, and cannot be used.".into()));
+        }
+        if !lt::is_variable_name(&name) {
+            return Err(fail("name", format!("'{name}' is not a variable name: capital letters, digits (not first) and underscores only.")));
+        }
+        if value.contains(['"', '\n', '\r']) {
+            return Err(fail("value", "A path cannot hold a double quote or a line break.".into()));
+        }
+        if vars.insert(name.clone(), value).is_some() {
+            return Err(fail("name", format!("Two variables are named {name}.")));
+        }
+    }
+    Ok(vars)
+}
+
+/// What `kicad_common.json`'s `environment.vars` holds after Configure Paths' OK with KiCad's variables `listed` (`TransferDataFromWindow` then
+/// `COMMON_SETTINGS`' `environment.vars` writer): a variable KiCad predefines and that keeps its default value is not kept ("Default values are never persisted"); one
+/// the real environment defines keeps the value the file had for it, or none ("Vars that existed in JSON are persisted, but if they were overridden externally, we
+/// persist the old value"); every other one listed is kept; one not listed is gone ("Remove deleted env vars").
+pub(crate) fn persisted_global_vars(env: &Env, listed: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let defaults: BTreeMap<String, String> = lt::global_env_vars(env.major, &env.stock, &BTreeMap::new(), &BTreeMap::new()).into_iter().map(|v| (v.name, v.value)).collect();
+    let mut out = BTreeMap::new();
+    for (name, value) in listed {
+        if env.real.get(name).is_some_and(|v| !v.is_empty()) {
+            if let Some(old) = env.configured.get(name) {
+                out.insert(name.clone(), old.clone());
+            }
+            continue;
+        }
+        if defaults.get(name) == Some(value) {
+            continue;
+        }
+        out.insert(name.clone(), value.clone());
+    }
+    out
+}
+
+/// Write `environment.vars` of `kicad_common.json` in KiCad's configuration folder, every other setting of the file kept.
+fn write_global_vars(env: &Env, vars: &BTreeMap<String, String>) -> Result<(), String> {
+    let Some(config) = &env.config_dir else {
+        return Err("There is no KiCad configuration folder on this machine, so KiCad's path variables cannot be written (run KiCad once, or set KICAD_CONFIG_HOME).".into());
+    };
+    let path = config.join("kicad_common.json");
+    let mut doc: Value = match std::fs::read_to_string(&path) {
+        Ok(t) => serde_json::from_str(&t).map_err(|e| format!("{} cannot be read, so it is not written: {e}", path.display()))?,
+        Err(_) => json!({}),
+    };
+    if !doc.is_object() {
+        return Err(format!("{} is not a settings file, so it is not written.", path.display()));
+    }
+    if !doc.get("environment").is_some_and(Value::is_object) {
+        doc["environment"] = json!({});
+    }
+    doc["environment"]["vars"] = Value::Object(vars.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect());
+    let text = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
+    let tmp = config.join(".kicad_common.json.eda-tmp");
+    std::fs::write(&tmp, text + "\n").map_err(|e| format!("{}: {e}", path.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// `POST /api/path_variables` `{variables?: [{name, value}], global?: [{name, value}]}`: Configure Paths' OK. `global` is KiCad's own variables -- the dialog's one
+/// grid in KiCad (`DIALOG_CONFIGURE_PATHS`), written where KiCad keeps them, `kicad_common.json`'s `environment.vars` ([`persisted_global_vars`]); they are also
+/// the 3D model search paths (`FILENAME_RESOLVER::createPathList`). `variables` is the board's own (a studio addition: KiCad's project text variables named like a
+/// path variable). The name rules are the dialog's ([`checked_variables`]).
 pub(crate) fn set_variables(dir: &Path, body: &[u8]) -> Value {
     set_variables_with(&Env::discover(), dir, body)
 }
 
 pub(crate) fn set_variables_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
-    if let Err(e) = refuse_kicads_configuration(env, dir) {
-        return bad(e);
-    }
     let req = match parse_body(body) {
         Ok(r) => r,
         Err(e) => return e,
     };
-    let Some(list) = req.get("variables").and_then(Value::as_array) else { return bad("variables is a list") };
-    let mut vars: BTreeMap<String, String> = BTreeMap::new();
-    for (row, item) in list.iter().enumerate() {
-        let (name, value) = (text(item, "name").trim().to_string(), text(item, "value").trim().to_string());
-        let fail = |column: &str, message: String| json!({ "error": message, "row": row, "column": column });
-        if name.is_empty() && value.is_empty() {
-            continue;
+    let project = req.get("variables").and_then(Value::as_array);
+    let global = req.get("global").and_then(Value::as_array);
+    if project.is_none() && global.is_none() {
+        return bad("variables (the board's) or global (KiCad's) is a list");
+    }
+    let project = match project.map(|l| checked_variables(l, "project", &|_| false)).transpose() {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let global = match global.map(|l| checked_variables(l, "global", &|n| env.real.get(n).is_some_and(|v| !v.is_empty()))).transpose() {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if let Some(vars) = project {
+        if let Err(e) = refuse_kicads_configuration(env, dir) {
+            return bad(e);
         }
-        if name.is_empty() {
-            return fail("name", "Environment variable name cannot be empty.".into());
-        }
-        if value.is_empty() {
-            return fail("value", "Environment variable path cannot be empty.".into());
-        }
-        if name == "KIPRJMOD" {
-            return fail("name", "The name KIPRJMOD is reserved, and cannot be used.".into());
-        }
-        if !lt::is_variable_name(&name) {
-            return fail("name", format!("'{name}' is not a variable name: capital letters, digits (not first) and underscores only."));
-        }
-        if value.contains(['"', '\n', '\r']) {
-            return fail("value", "A path cannot hold a double quote or a line break.".into());
-        }
-        if vars.insert(name.clone(), value).is_some() {
-            return fail("name", format!("Two variables are named {name}."));
+        // The board's variables are the project's text variables (Board Setup > Text Variables is the other view of the list): the ones this dialog does not list,
+        // those not named like a path variable, stay as they are.
+        let mut all: BTreeMap<String, String> = crate::text_variables::project_variables(dir).into_iter().filter(|(name, _)| !lt::is_variable_name(name)).collect();
+        all.extend(vars);
+        if let Err(e) = crate::text_variables::set_project_variables(dir, &all) {
+            return bad(e);
         }
     }
-    // The board's variables are the project's text variables (Board Setup > Text Variables is the other view of the list): the ones this dialog does not list,
-    // those not named like a path variable, stay as they are.
-    let mut all: BTreeMap<String, String> = crate::text_variables::project_variables(dir).into_iter().filter(|(name, _)| !lt::is_variable_name(name)).collect();
-    all.extend(vars);
-    if let Err(e) = crate::text_variables::set_project_variables(dir, &all) {
-        return bad(e);
+    let mut env = env.clone();
+    if let Some(vars) = global {
+        let kept = persisted_global_vars(&env, &vars);
+        if let Err(e) = write_global_vars(&env, &kept) {
+            return bad(e);
+        }
+        env.configured = kept;
     }
-    let mut v = view_with(env, dir);
+    let mut v = view_with(&env, dir);
     v["ok"] = json!(true);
     v
+}
+
+/// The 3D model search paths (`FILENAME_RESOLVER::createPathList`, `GetKicadPaths`): `${KIPRJMOD}` first, then every path variable of KiCad's but
+/// `KICAD_PTEMPLATES`, the `KICAD*_FOOTPRINT_DIR` ones and a value that is a URL, and `KICADn_3DMODEL_DIR` when none of them is a 3D model folder. KiCad 8303b2ad
+/// has no page that edits the list (nothing calls `FILENAME_RESOLVER::UpdatePathList`; Configure Paths' 3D grid is gone and its error strings are what is left):
+/// the list is the path variables, which Configure Paths edits.
+fn search_paths(env: &Env, dir: &Path) -> Vec<Value> {
+    let mut out = vec![json!({ "alias": "${KIPRJMOD}", "path": dir.display().to_string() })];
+    let mut has_models = false;
+    for v in env.global_vars() {
+        let footprints = v.name.starts_with("KICAD") && v.name.ends_with("_FOOTPRINT_DIR");
+        if v.name == "KICAD_PTEMPLATES" || footprints || v.value.contains("://") {
+            continue;
+        }
+        has_models |= v.name.starts_with("KICAD") && v.name.ends_with("_3DMODEL_DIR");
+        out.push(json!({ "alias": format!("${{{}}}", v.name), "path": v.value }));
+    }
+    if !has_models {
+        let name = format!("KICAD{}_3DMODEL_DIR", env.major);
+        out.push(json!({ "alias": format!("${{{name}}}"), "path": env.real.get(&name).cloned().unwrap_or_default() }));
+    }
+    out
 }
 
 /// `GET /api/fs/list?path=&what=`: the stand-in for the native file dialog the browse buttons open in KiCad -- a page cannot see the machine's folders, the
@@ -1229,14 +1521,14 @@ pub(crate) mod tests {
         let m = machine("missing", true);
         let row = |nick: &str, uri: &str| lt::Row { nickname: nick.into(), uri: uri.into(), lib_type: "KiCad".into(), ..Default::default() };
         let mut sym = Table::new(TableKind::Symbol);
-        sym.rows = vec![row("Gone", "${KIPRJMOD}/libs/Gone.kicad_sym"), lt::Row { disabled: true, ..row("Off", "${KICAD10_SYMBOL_DIR}/Device.kicad_sym") }, lt::Row { lib_type: "Legacy".into(), ..row("Old", "${KICAD10_SYMBOL_DIR}/Device.kicad_sym") }];
+        sym.rows = vec![row("Gone", "${KIPRJMOD}/libs/Gone.kicad_sym"), lt::Row { disabled: true, ..row("Off", "${KICAD10_SYMBOL_DIR}/Device.kicad_sym") }, lt::Row { lib_type: "Database".into(), ..row("Old", "${KICAD10_SYMBOL_DIR}/Device.kicad_sym") }];
         lt::write_table(&project_table_path(&m.board, TableKind::Symbol), &sym).unwrap();
         assert_eq!(names(&m.set(Kind::Symbol)), ["Amp", "Device"]);
         let all = load_with(m.env(), &m.board, TableKind::Symbol).libs();
         let by = |n: &str| all.iter().find(|l| l.nickname == n).unwrap().clone();
         assert!(by("Gone").error.as_deref().is_some_and(|e| e.ends_with("Gone.kicad_sym' not found.")));
         assert!(by("Off").disabled && by("Off").error.is_none());
-        assert!(by("Old").error.as_deref().is_some_and(|e| e.contains("KiCad-format libraries only")));
+        assert!(by("Old").error.as_deref().is_some_and(|e| e.contains("a 'Database' library is not read here")));
         let _ = std::fs::remove_dir_all(&m.root);
     }
 
@@ -1265,16 +1557,21 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_view_shows_the_global_table_read_only_with_what_it_chains() {
+    fn the_view_shows_the_global_table_with_what_it_chains() {
         let m = machine("view", true);
         let v = view_with(&m.env(), &m.board);
         let sym = &v["tables"]["symbol"];
         assert_eq!((v["major"].clone(), v["version"].clone()), (json!(10), json!("10.99")));
         assert_eq!(sym["supports_visibility"], true);
         assert_eq!(v["tables"]["footprint"]["supports_visibility"], false);
-        assert_eq!((sym["global"]["writable"].clone(), sym["project"]["writable"].clone()), (json!(false), json!(true)));
+        assert_eq!((sym["global"]["writable"].clone(), sym["project"]["writable"].clone()), (json!(true), json!(true)));
         assert_eq!(sym["global"]["origin"], "config");
-        assert!(sym["global"]["note"].as_str().unwrap().contains("never writes it"));
+        assert_eq!(sym["global"]["target"], json!(m.config.join("sym-lib-table").display().to_string()));
+        assert!(sym["global"]["note"].as_str().unwrap().contains("OK writes your changes to it"));
+        assert_eq!(sym["global"]["stock"], json!(m.share.join("template").join("sym-lib-table").display().to_string()));
+        // the Library Format column offers what `PANEL_FP_LIB_TABLE::populatePluginList` offers: no Allegro, no IPC-2581
+        let fp_types = v["tables"]["footprint"]["types"].as_array().unwrap();
+        assert!(fp_types.contains(&json!("gEDA / Lepton EDA")) && !fp_types.contains(&json!("Allegro")) && !fp_types.contains(&json!("IPC-2581")));
         let kicad = &sym["global"]["rows"][0];
         assert_eq!((kicad["nickname"].clone(), kicad["type"].clone(), kicad["status"].clone()), (json!("KiCad"), json!("Table"), json!("table")));
         let chained: Vec<&str> = kicad["table"]["rows"].as_array().unwrap().iter().map(|r| r["nickname"].as_str().unwrap()).collect();
@@ -1510,13 +1807,15 @@ pub(crate) mod tests {
             { "nickname": "T2", "uri": "/no/such", "type": "Table" },
             { "nickname": "L", "uri": "/x", "type": "Legacy" },
             row("E", ""),
+            { "nickname": "D", "uri": "/x", "type": "Database" },
         ] })));
         let res = r["results"].as_array().unwrap();
         assert_eq!(res[0]["error"], "");
         assert!(res[1]["error"].as_str().unwrap().ends_with("Nope.kicad_sym' not found."));
         assert_eq!(res[2]["error"], "");
         assert!(res[3]["error"].as_str().unwrap().starts_with("Nested table '/no/such' not found"));
-        assert!(res[4]["error"].as_str().unwrap().contains("KiCad-format libraries only"));
+        assert_eq!(res[4]["error"], "Library '/x' not found.", "a legacy library is read through kicad-cli: it has to be there");
+        assert!(res[6]["error"].as_str().unwrap().contains("a 'Database' library is not read here"));
         assert_eq!(res[5]["error"], "", "a row with no path is dropped on OK, not an error now");
         assert_eq!(res[2]["guess"], "Table");
         assert_eq!(res[0]["guess"], "KiCad");
@@ -1525,7 +1824,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn kicads_own_configuration_folder_is_never_written() {
+    fn a_board_in_kicads_configuration_folder_has_no_project_tables_to_write() {
         let m = machine("neverwrite", true);
         let env = m.env();
         let before: Vec<String> = ["sym-lib-table", "fp-lib-table"].iter().map(|f| std::fs::read_to_string(m.config.join(f)).unwrap()).collect();
@@ -1542,6 +1841,165 @@ pub(crate) mod tests {
         assert!(!m.config.join("sub").join("sym-lib-table").exists() && !m.config.join(lt::PATH_VARIABLES_FILE).exists());
         // a board folder of its own is fine
         assert_eq!(set_table_with(&env, &m.board, &req(json!({ "kind": "symbol", "rows": [row("Mine", "/x/Mine.kicad_sym")] })))["ok"], true);
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    /// `PANEL_SYM_LIB_TABLE::TransferDataFromWindow`: the Global Libraries tab's rows go through `VerifyTable` and into the global table in KiCad's configuration
+    /// folder; a table it chains is written when its tab changed (`LIB_TABLE_NOTEBOOK_PANEL::SaveTable`); any other path is refused.
+    #[test]
+    fn the_global_tab_writes_kicads_global_table_and_a_chained_tab_its_own_table() {
+        let m = machine("globalwrite", true);
+        let env = m.env();
+        let kicad_row = json!({ "nickname": "KiCad", "uri": m.share.join("template").join("sym-lib-table").display().to_string(), "type": "Table", "descr": "KiCad Default Libraries" });
+        // VerifyTable's checks as for the project's
+        let bad_rows = set_table_with(&env, &m.board, &req(json!({ "kind": "symbol", "scope": "global", "rows": [kicad_row.clone(), row("", "/x/a.kicad_sym")] })));
+        assert_eq!((bad_rows["error"].clone(), bad_rows["row"].clone()), (json!("Library must have a nickname."), json!(1)));
+        let ok = set_table_with(&env, &m.board, &req(json!({ "kind": "symbol", "scope": "global", "rows": [kicad_row.clone(), row("Mine", "${KICAD10_SYMBOL_DIR}/Amp.kicad_sym")] })));
+        assert_eq!(ok["ok"], true, "{ok}");
+        let written = std::fs::read_to_string(m.config.join("sym-lib-table")).unwrap();
+        assert!(written.contains("(name \"Mine\")") && written.contains("(name \"KiCad\")"), "{written}");
+        assert!(!project_table_path(&m.board, TableKind::Symbol).exists(), "the board's table is not touched");
+        assert!(names(&m.set(Kind::Symbol)).contains(&"Mine"), "the libraries follow the global table");
+        // the chained table: its own file, and only a table the tables name
+        let chained = std::fs::canonicalize(m.share.join("template").join("sym-lib-table")).unwrap();
+        let r = set_table_with(&env, &m.board, &req(json!({ "kind": "symbol", "scope": "nested", "path": chained.display().to_string(), "rows": [row("Device", "${KICAD10_SYMBOL_DIR}/Device.kicad_sym")] })));
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(!std::fs::read_to_string(&chained).unwrap().contains("\"Amp\""), "the chained table lost its Amp row");
+        let stray = m.root.join("stray-sym-lib-table");
+        std::fs::write(&stray, "(sym_lib_table (version 7))").unwrap();
+        let r = set_table_with(&env, &m.board, &req(json!({ "kind": "symbol", "scope": "nested", "path": stray.display().to_string(), "rows": [] })));
+        assert!(r["error"].as_str().unwrap().contains("is not a table the library tables chain"), "{r}");
+        assert_eq!(std::fs::read_to_string(&stray).unwrap(), "(sym_lib_table (version 7))");
+        // a machine with no KiCad configuration folder has no global table to write
+        let mut none = env.clone();
+        none.config_dir = None;
+        assert!(set_table_with(&none, &m.board, &req(json!({ "kind": "symbol", "scope": "global", "rows": [kicad_row] })))["error"].as_str().unwrap().contains("no KiCad configuration folder"));
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    /// `LIBRARY_MANAGER::CreateGlobalTable( type, true )`: one row naming the table KiCad installs; KiCad's first run writes no global table, and Reset writes one.
+    #[test]
+    fn reset_libraries_writes_the_global_table_as_one_row_naming_the_installed_table() {
+        let m = machine("reset", false);
+        let env = m.env();
+        let before = view_with(&env, &m.board);
+        assert_eq!(before["tables"]["footprint"]["global"]["origin"], "stock", "no global table yet: the installed one is shown");
+        let v = reset_global_with(&env, &m.board, &req(json!({ "kind": "footprint" })));
+        assert_eq!(v["ok"], true, "{v}");
+        let t = Table::parse(&std::fs::read_to_string(m.config.join("fp-lib-table")).unwrap()).unwrap();
+        assert_eq!(t.rows.len(), 1);
+        let r = &t.rows[0];
+        assert_eq!((r.nickname.as_str(), r.lib_type.as_str(), r.description.as_str()), ("KiCad", "Table", "KiCad Default Libraries"));
+        assert_eq!(PathBuf::from(&r.uri), m.share.join("template").join("fp-lib-table"));
+        assert_eq!(v["tables"]["footprint"]["global"]["origin"], "config");
+        assert_eq!(names(&m.set(Kind::Footprint)), ["Package_SO", "Resistor_SMD"], "the libraries come through the chained table");
+        // a library checkout with no template/ folder: the table beside the libraries stands in for the installed one
+        std::fs::remove_dir_all(m.share.join("template")).unwrap();
+        std::fs::write(m.share.join("symbols").join("sym-lib-table"), "(sym_lib_table\n\t(version 7)\n\t(lib (name \"Device\") (type \"KiCad\") (uri \"${KICAD10_SYMBOL_DIR}/Device.kicad_sym\") (options \"\") (descr \"\"))\n)\n").unwrap();
+        assert_eq!(stock_table(&env, TableKind::Symbol), m.share.join("symbols").join("sym-lib-table"));
+        reset_global_with(&env, &m.board, &req(json!({ "kind": "symbol" })));
+        assert_eq!(names(&m.set(Kind::Symbol)), ["Device"]);
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    /// Migrate Libraries: the selected rows of another format, each converted into the KiCad library beside it, the row given its new path, type and options.
+    #[test]
+    fn migrate_libraries_converts_the_selected_foreign_rows_and_asks_before_overwriting() {
+        let m = machine("migrate", true);
+        let env = m.env();
+        std::fs::write(m.board.join("old.lib"), "EESchema-LIBRARY Version 2.4").unwrap();
+        std::fs::write(m.board.join("taken.lib"), "EESchema-LIBRARY Version 2.4").unwrap();
+        std::fs::write(m.board.join("taken.kicad_sym"), "(kicad_symbol_lib)").unwrap();
+        let converted = std::cell::RefCell::new(Vec::new());
+        let fake = |kind: TableKind, from: &Path, to: &Path| -> Result<(), String> {
+            converted.borrow_mut().push((kind, from.to_path_buf(), to.to_path_buf()));
+            std::fs::write(to, "(kicad_symbol_lib (version 20241209))").map_err(|e| e.to_string())
+        };
+        let rows = json!([
+            { "nickname": "Old", "uri": "${KIPRJMOD}/old.lib", "type": "Legacy", "options": "x=1" },
+            { "nickname": "Dev", "uri": "${KICAD10_SYMBOL_DIR}/Device.kicad_sym", "type": "KiCad" },
+            { "nickname": "Taken", "uri": "${KIPRJMOD}/taken.lib", "type": "Legacy" },
+            { "nickname": "Gone", "uri": "${KIPRJMOD}/gone.lib", "type": "EAGLE" },
+        ]);
+        // nothing of another format among the rows chosen
+        let none = migrate_rows_with(&env, &m.board, &req(json!({ "kind": "symbol", "rows": [rows[1].clone()] })), &fake);
+        assert_eq!(none["error"], "Select one or more rows containing libraries to save as current KiCad format.");
+        // the plan: where each would go and whether it is there already
+        let plan = migrate_rows_with(&env, &m.board, &req(json!({ "kind": "symbol", "rows": rows, "plan": true })), &fake);
+        let res = plan["results"].as_array().unwrap();
+        assert_eq!(res.len(), 3, "the KiCad row is not migrated: {plan}");
+        assert_eq!((res[0]["row"].clone(), res[0]["exists"].clone()), (json!(0), json!(false)));
+        assert_eq!((res[1]["row"].clone(), res[1]["exists"].clone()), (json!(2), json!(true)));
+        assert_eq!(res[2]["error"], "Library '${KIPRJMOD}/gone.lib' not found.");
+        assert!(converted.borrow().is_empty(), "a plan converts nothing");
+        // the run: the existing destination is skipped unless the person said to overwrite it
+        let run = migrate_rows_with(&env, &m.board, &req(json!({ "kind": "symbol", "rows": rows })), &fake);
+        let res = run["results"].as_array().unwrap();
+        assert_eq!((res[0]["uri"].clone(), res[0]["type"].clone(), res[0]["options"].clone()), (json!("${KIPRJMOD}/old.kicad_sym"), json!("KiCad"), json!("")), "a symbol row's options are cleared: {run}");
+        assert_eq!(res[1]["skipped"], true);
+        assert_eq!(std::fs::read_to_string(m.board.join("taken.kicad_sym")).unwrap(), "(kicad_symbol_lib)");
+        let run = migrate_rows_with(&env, &m.board, &req(json!({ "kind": "symbol", "rows": rows, "overwrite": [2] })), &fake);
+        assert_eq!(run["results"][1]["uri"], "${KIPRJMOD}/taken.kicad_sym");
+        assert!(std::fs::read_to_string(m.board.join("taken.kicad_sym")).unwrap().contains("20241209"));
+        // footprints: `<name>.pretty` beside the file, the row's options kept
+        let fp = migrate_rows_with(&env, &m.board, &req(json!({ "kind": "footprint", "rows": [{ "nickname": "E", "uri": "${KIPRJMOD}/old.lib", "type": "Eagle", "options": "k=v" }], "plan": true })), &fake);
+        assert_eq!(fp["results"][0]["dest"], json!(m.board.join("old.pretty").display().to_string()));
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    /// Configure Paths' OK for KiCad's own variables: `kicad_common.json`'s `environment.vars`, by `COMMON_SETTINGS`' rules, every other setting kept.
+    #[test]
+    fn kicads_path_variables_are_written_to_kicad_common_json_by_kicads_rules() {
+        let mut m = machine("globalvars", true);
+        m.env.remove("KICAD10_SYMBOL_DIR"); // not defined outside: KiCad's default holds
+        std::fs::write(m.config.join("kicad_common.json"), "{\"appearance\": {\"icon_scale\": 0}, \"environment\": {\"vars\": {\"OLD\": \"/old\"}}}").unwrap();
+        let env = m.env();
+        let default_sym = env.global_vars().into_iter().find(|v| v.name == "KICAD10_SYMBOL_DIR").unwrap().value;
+        let list = json!([
+            { "name": "KICAD10_SYMBOL_DIR", "value": default_sym },
+            { "name": "KICAD10_FOOTPRINT_DIR", "value": "/elsewhere" },
+            { "name": "TEAM_LIBS", "value": " /team " },
+        ]);
+        let v = set_variables_with(&env, &m.board, &req(json!({ "global": list })));
+        assert_eq!(v["ok"], true, "{v}");
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(m.config.join("kicad_common.json")).unwrap()).unwrap();
+        // the default is not kept; the one the environment defines keeps the file's value (it had none); OLD was deleted from the grid
+        assert_eq!(doc["environment"]["vars"], json!({ "TEAM_LIBS": "/team" }), "{doc}");
+        assert_eq!(doc["appearance"]["icon_scale"], 0, "the rest of the file is kept");
+        let g = v["variables"]["global"].as_array().unwrap();
+        assert!(g.iter().any(|x| x["name"] == "TEAM_LIBS" && x["value"] == "/team"), "the view reads the file again");
+        // KiCad's words for a row with no path
+        let r = set_variables_with(&env, &m.board, &req(json!({ "global": [{ "name": "X", "value": "" }] })));
+        assert_eq!((r["error"].clone(), r["scope"].clone(), r["column"].clone()), (json!("Environment variable path cannot be empty."), json!("global"), json!("value")));
+        // the 3D model search paths: KIPRJMOD, then the variables but the footprint folders
+        let sp: Vec<String> = v["variables"]["search_paths"].as_array().unwrap().iter().map(|x| x["alias"].as_str().unwrap().to_string()).collect();
+        assert_eq!(sp[0], "${KIPRJMOD}");
+        assert!(sp.contains(&"${KICAD10_3DMODEL_DIR}".to_string()) && sp.contains(&"${TEAM_LIBS}".to_string()));
+        assert!(!sp.iter().any(|a| a.contains("FOOTPRINT_DIR")), "{sp:?}");
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    /// The slow tier: an Eagle library of the board's table is read through kicad-cli's conversion and listed, searched and opened like a KiCad library.
+    #[test]
+    fn an_eagle_library_of_the_tables_is_read_through_kicad_cli() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() || eda_kicad_engine::find_cli().is_none() {
+            eprintln!("skipped: set EDA_SLOW_TESTS=1 with kicad-cli installed");
+            return;
+        }
+        let Some(qa) = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from) else {
+            eprintln!("skipped: KICAD_QA_DATA is not set");
+            return;
+        };
+        let m = machine("eagle", true);
+        let lbr = qa.join("pcbnew/plugins/eagle/lbr/SparkFun-GPS.lbr");
+        let r = set_table_with(&m.env(), &m.board, &req(json!({ "kind": "footprint", "rows": [{ "nickname": "GPS", "uri": lbr.display().to_string(), "type": "Eagle" }] })));
+        assert_eq!(r["ok"], true, "{r}");
+        let set = m.set(Kind::Footprint);
+        let gps = set.find("GPS").expect("the Eagle library is a library of the tables");
+        assert!(gps.path.join("NEO-M8P.kicad_mod").is_file(), "read as kicad-cli's KiCad copy: {}", gps.path.display());
+        assert!(!eda_kicad::library_save::is_footprint_library_writable(&gps.path), "and read only, as KiCad's Eagle plugin is");
+        let v = view_with(&m.env(), &m.board);
+        assert_eq!(v["tables"]["footprint"]["project"]["rows"][0]["status"], "ok");
         let _ = std::fs::remove_dir_all(&m.root);
     }
 
