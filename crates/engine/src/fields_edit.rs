@@ -9,7 +9,7 @@
 //! A field is named by an id the studio selects it by, `fld:<owner key>:<field name>`; the owner key is the key of
 //! `SchematicSection::field_layout` (a symbol's reference, `#<unit>` after it for any unit but the first, a power symbol's or a sheet's id).
 
-use eda_model::ir::{field_key, FieldPlacement, Point, PowerSymbol, SchematicSection, SheetInstance, SymbolInstance, TextJustify, TextVAlign};
+use eda_model::ir::{field_key, FieldPlacement, NetLabel, Point, PowerSymbol, SchematicSection, SheetInstance, SymbolInstance, TextJustify, TextVAlign};
 use eda_model::kicad_font::{HJustify, VJustify};
 use eda_model::sch_extras::AutoplaceAlgo;
 use eda_model::ConstraintModel;
@@ -38,6 +38,8 @@ pub enum OwnerKind {
     Symbol,
     Power,
     Sheet,
+    /// A label's own fields (`SCH_LABEL_BASE::m_fields`, `crate::label_fields`): the key is the label's id, the frame the sheet's own about its anchor.
+    Label,
 }
 
 /// One item with fields, as the editor sees it: its frame on the sheet, its fields' texts, and what it needs to place them.
@@ -57,12 +59,22 @@ pub struct OwnerCtx {
     geom: Option<SymbolGeom>,
     power: Option<PowerSymbol>,
     sheet: Option<SheetInstance>,
+    label: Option<NetLabel>,
 }
 
 impl OwnerCtx {
     /// The item with `key` on `sch`, or `None`: no such item, a symbol the model has no part for, or a sheet read from a KiCad file (whose symbols
     /// are placed by their own origin, which the fields here are not measured from).
     pub fn new(sch: &SchematicSection, model: &ConstraintModel, key: &str) -> Option<OwnerCtx> {
+        // a label's fields are placed about its anchor on the sheet, whatever file the sheet came from
+        if let Some(l) = sch.labels.iter().find(|l| l.id == key) {
+            if !crate::label_fields::has_fields(sch, l) {
+                return None;
+            }
+            let show = label_isr_shown(sch);
+            let specs = crate::label_fields::placed(sch, l, show).into_iter().map(|f| FieldSpec { italic: f.italic, ..FieldSpec::new(&f.name, f.text, f.visible) }).collect();
+            return Some(OwnerCtx { kind: OwnerKind::Label, key: key.to_string(), at: l.at, rot: 0, mirrored: false, width: 0.0, specs, sym: None, geom: None, power: None, sheet: None, label: Some(l.clone()) });
+        }
         if sch.imported_from_kicad {
             return None;
         }
@@ -76,16 +88,16 @@ impl OwnerCtx {
             let geom = SymbolGeom::of(&sym, part, resolved.as_ref());
             let specs = fields::symbol_specs_in(sch, &sym, Some(part), resolved.as_ref().map(|r| r.datasheet.as_str()).unwrap_or(""));
             let (rot, mirrored) = crate::symgeom::kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
-            return Some(OwnerCtx { kind: OwnerKind::Symbol, key: key.to_string(), at: sym.at, rot, mirrored, width: geom.width, specs, sym: Some(sym), geom: Some(geom), power: None, sheet: None });
+            return Some(OwnerCtx { kind: OwnerKind::Symbol, key: key.to_string(), at: sym.at, rot, mirrored, width: geom.width, specs, sym: Some(sym), geom: Some(geom), power: None, sheet: None, label: None });
         }
         if let Some(p) = sch.power_symbols.iter().find(|p| p.id == key) {
             let flag = p.lib_id == "power:PWR_FLAG";
             let specs = vec![FieldSpec::new("Reference", p.id.clone(), false), FieldSpec::new("Value", p.net.clone(), !flag)];
-            return Some(OwnerCtx { kind: OwnerKind::Power, key: key.to_string(), at: p.at, rot: p.rot, mirrored: false, width: 0.0, specs, sym: None, geom: None, power: Some(p.clone()), sheet: None });
+            return Some(OwnerCtx { kind: OwnerKind::Power, key: key.to_string(), at: p.at, rot: p.rot, mirrored: false, width: 0.0, specs, sym: None, geom: None, power: Some(p.clone()), sheet: None, label: None });
         }
         if let Some(s) = sch.sheets.iter().find(|s| s.id == key) {
             let specs = vec![FieldSpec::new("Sheetname", s.name.clone(), true), FieldSpec::new("Sheetfile", s.file.clone(), true)];
-            return Some(OwnerCtx { kind: OwnerKind::Sheet, key: key.to_string(), at: s.at, rot: 0, mirrored: false, width: 0.0, specs, sym: None, geom: None, power: None, sheet: Some(s.clone()) });
+            return Some(OwnerCtx { kind: OwnerKind::Sheet, key: key.to_string(), at: s.at, rot: 0, mirrored: false, width: 0.0, specs, sym: None, geom: None, power: None, sheet: Some(s.clone()), label: None });
         }
         None
     }
@@ -97,6 +109,11 @@ impl OwnerCtx {
 
     pub fn geom(&self) -> Option<&SymbolGeom> {
         self.geom.as_ref()
+    }
+
+    /// The label this is the fields of.
+    pub fn label(&self) -> Option<&NetLabel> {
+        self.label.as_ref()
     }
 
     /// The placements the fields have now, one per spec: what the section keeps, else what Autoplace Fields would give (live), else the item's default.
@@ -111,6 +128,11 @@ impl OwnerCtx {
                 let auto = fields::sheet_placements(self.sheet.as_ref().expect("a sheet"));
                 let stored = sch.field_layout.get(&self.key);
                 self.specs.iter().map(|sp| stored.and_then(|s| s.iter().find(|p| p.name == sp.name)).or_else(|| auto.iter().find(|p| p.name == sp.name)).cloned().expect("a placement for each sheet field")).collect()
+            }
+            OwnerKind::Label => {
+                let l = self.label.as_ref().expect("a label");
+                let l = sch.labels.iter().find(|x| x.id == l.id).unwrap_or(l);
+                crate::label_fields::placed(sch, l, label_isr_shown(sch)).iter().map(|f| crate::label_fields::placement_of(l, f)).collect()
             }
         }
     }
@@ -198,6 +220,12 @@ impl OwnerCtx {
                     })
                     .collect()
             }
+            // `SCH_LABEL_BASE::AutoplaceFields`: every field where it puts them (a label's fields have no `do_not_autoplace`)
+            OwnerKind::Label => {
+                let l = self.label.as_ref().expect("a label");
+                let l = sch.labels.iter().find(|x| x.id == l.id).unwrap_or(l);
+                crate::label_fields::autoplaced(sch, l, label_isr_shown(sch)).iter().map(|f| crate::label_fields::placement_of(l, f)).collect()
+            }
             OwnerKind::Sheet => {
                 let home = fields::sheet_placements(self.sheet.as_ref().expect("a sheet"));
                 self.specs
@@ -219,6 +247,11 @@ impl OwnerCtx {
             }
         }
     }
+}
+
+/// Whether a global label's Sheet References are shown (Schematic Setup > Formatting, kept on the root sheet: a sheet's own section says so only on the root).
+fn label_isr_shown(sch: &SchematicSection) -> bool {
+    sch.extras.intersheet_refs.as_ref().is_some_and(|r| r.show)
 }
 
 /// `AUTOPLACER::getDrawableArea`: the paper inside the drawing sheet's 10 mm margins.

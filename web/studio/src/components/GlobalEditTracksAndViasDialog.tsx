@@ -4,22 +4,38 @@
 // fidelity CleanupTracksDialog.tsx already established for this port
 // (nothing in the read dialog base ever calls SetValue(true) on them).
 //
-// The Scope box (Tracks; Vias with its tri-state box over the Through, Blind
-// and Buried types) and the Filter Items box (net, net class, layer, track
-// width, via diameter, selected items only) are kicad-port/globalEditTracksVias.ts;
-// the net and the class are remembered for the session as `g_netFilter` and
-// `g_netclassFilter` are, and the net starts on the highlighted net. A via's
-// type is what its layers say, and its layer for the layer filter is the top
-// of its span; this model has no microvia type, no padstack / annular-ring
-// concept and no IPC-4761 protection feature, so the Microvias box and those
-// two Action rows are not here (PARITY-pcb.md section 13). The Action side
-// edits the layer (tracks), the track width and the via size, or sets every
-// item to the values of its net class (`BoardRules::width_of` /
-// `via_diameter_of` / `via_drill_of`).
+// The Scope box (Tracks; Vias with its tri-state box over the Through,
+// Microvias, Blind and Buried types) and the Filter Items box (net, net class,
+// layer, track width, via diameter, selected items only) are
+// kicad-port/globalEditTracksVias.ts; the net and the class are remembered for
+// the session as `g_netFilter` and `g_netclassFilter` are, and the net starts
+// on the highlighted net. A via's type is the one it carries (`GetViaType()`),
+// else what its layers say, and its layer for the layer filter is the top of
+// its span. The Action side edits the layer (tracks), the track width, the via
+// size, the via annular rings (`SetUnconnectedLayerMode`) and the via
+// protection features (an IPC-4761 preset, `setViaConfiguration`), each row
+// "-- leave unchanged --" to begin with, or sets every item to the values of
+// its net class / custom rules (`SetTrackSegmentWidth( .., true )`). One
+// `Cmd::EditTracksAndVias`, one undo step.
 import { useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
-import { initialTracksViasFilter, matchingTracksAndVias, NOTHING_IN_SCOPE, trackViaChoices, viasBoxState, withAllVias, type TracksViasFilter, type TracksViasScope } from "../kicad-port/globalEditTracksVias";
+import type { Ipc4761Preset, UnconnectedLayers } from "../api/types";
+import {
+  GLOBAL_ANNULAR_RING_CHOICES,
+  initialTracksViasFilter,
+  IPC4761_PRESETS,
+  matchingTracksAndVias,
+  NOTHING_IN_SCOPE,
+  trackViaChoices,
+  viasBoxState,
+  withAllVias,
+  type TracksViasFilter,
+  type TracksViasScope,
+} from "../kicad-port/globalEditTracksVias";
+
+/** `INDETERMINATE_ACTION`, the last entry of each choice and the one chosen to begin with. */
+const LEAVE_UNCHANGED = "-- leave unchanged --";
 
 type Action = "specified" | "net_class";
 
@@ -53,6 +69,8 @@ export function GlobalEditTracksAndViasDialog() {
   const [changeViaSize, setChangeViaSize] = useState(false);
   const [viaDiameter, setViaDiameter] = useState(0); // display units
   const [viaDrill, setViaDrill] = useState(0); // display units
+  const [rings, setRings] = useState<UnconnectedLayers | null>(null);
+  const [protection, setProtection] = useState<Ipc4761Preset | null>(null);
   const [busy, setBusy] = useState(false);
 
   if (!open) return null;
@@ -68,6 +86,8 @@ export function GlobalEditTracksAndViasDialog() {
     setBox(null);
     setWidthText(null);
     setSizeText(null);
+    setRings(null);
+    setProtection(null);
     dispatch({ type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN", open: false });
   };
 
@@ -87,6 +107,9 @@ export function GlobalEditTracksAndViasDialog() {
         track_width: action === "net_class" ? { kind: "net_class" } : changeTrackWidth ? { kind: "value", nm: Math.round(nmFrom(trackWidth, unit)) } : null,
         via_size: action === "net_class" ? { kind: "net_class" } : changeViaSize ? { kind: "value", diameter: Math.round(nmFrom(viaDiameter, unit)), drill: Math.round(nmFrom(viaDrill, unit)) } : null,
         layer: action === "specified" && changeLayer && newLayer ? newLayer : null,
+        // the via rows are "Set to specified values:" rows (`onActionButtonChange` enables them with it)
+        unconnected: action === "specified" ? rings : null,
+        protection: action === "specified" ? protection : null,
       });
       if (ok) close();
     } finally {
@@ -120,6 +143,9 @@ export function GlobalEditTracksAndViasDialog() {
           <div style={{ marginLeft: 22, marginBottom: 8 }}>
             <label className="filter-row" style={{ display: "block" }}>
               <input type="checkbox" checked={scope.through} onChange={(e) => setScope({ ...scope, through: e.target.checked })} aria-label="Through vias" /> Through vias
+            </label>
+            <label className="filter-row" style={{ display: "block" }}>
+              <input type="checkbox" checked={scope.micro} onChange={(e) => setScope({ ...scope, micro: e.target.checked })} aria-label="Microvias" /> Microvias
             </label>
             <label className="filter-row" style={{ display: "block" }}>
               <input type="checkbox" checked={scope.blind} onChange={(e) => setScope({ ...scope, blind: e.target.checked })} aria-label="Blind vias" /> Blind vias
@@ -201,10 +227,10 @@ export function GlobalEditTracksAndViasDialog() {
 
           <div style={GROUP_TITLE}>Action</div>
           <label className="filter-row" style={{ display: "block" }}>
-            <input type="radio" checked={action === "specified"} onChange={() => setAction("specified")} /> Set to specified values
+            <input type="radio" checked={action === "specified"} onChange={() => setAction("specified")} aria-label="Set to specified values" /> Set to specified values:
           </label>
           <label className="filter-row" style={{ display: "block", marginBottom: 6 }}>
-            <input type="radio" checked={action === "net_class"} onChange={() => setAction("net_class")} /> Set to net class values
+            <input type="radio" checked={action === "net_class"} onChange={() => setAction("net_class")} aria-label="Set to net class / custom rule values" /> Set to net class / custom rule values
           </label>
 
           {action === "specified" && (
@@ -231,6 +257,33 @@ export function GlobalEditTracksAndViasDialog() {
               <span />
               <span>Via drill:</span>
               <input type="number" value={viaDrill} disabled={!changeViaSize} onChange={(e) => setViaDrill(Number(e.target.value))} />
+
+              <span />
+              <span>Via annular rings:</span>
+              <select value={rings ?? ""} onChange={(e) => setRings(e.target.value === "" ? null : (e.target.value as UnconnectedLayers))} aria-label="Via annular rings">
+                {GLOBAL_ANNULAR_RING_CHOICES.map(([k, label]) => (
+                  <option key={k} value={k}>
+                    {label}
+                  </option>
+                ))}
+                <option value="">{LEAVE_UNCHANGED}</option>
+              </select>
+
+              <span />
+              <span>Via protection features:</span>
+              <select
+                value={protection ?? ""}
+                onChange={(e) => setProtection(e.target.value === "" ? null : (e.target.value as Ipc4761Preset))}
+                title="Select which protection feature according to IPC-4761 the via should have."
+                aria-label="Via protection features"
+              >
+                {IPC4761_PRESETS.map(([k, label]) => (
+                  <option key={k} value={k}>
+                    {label}
+                  </option>
+                ))}
+                <option value="">{LEAVE_UNCHANGED}</option>
+              </select>
             </div>
           )}
 
@@ -240,7 +293,7 @@ export function GlobalEditTracksAndViasDialog() {
         </div>
         <div className="dialog-footer">
           <button onClick={close}>Close</button>
-          <button className="primary" onClick={apply} disabled={busy || ids.length === 0 || (action === "specified" && !changeLayer && !changeTrackWidth && !changeViaSize)}>
+          <button className="primary" onClick={apply} disabled={busy || ids.length === 0 || (action === "specified" && !changeLayer && !changeTrackWidth && !changeViaSize && rings == null && protection == null)}>
             Apply and Close
           </button>
         </div>

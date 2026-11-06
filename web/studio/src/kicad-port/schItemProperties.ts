@@ -565,8 +565,25 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     },
     TEXT_PROPS
   );
-  // "Font" (`GetFontProp`): eeschema's "Default Font" first. The model keeps no face for a schematic text.
-  add({ owner: "EDA_TEXT", name: "Font", kind: "string", get: () => "Default Font", readOnlyReason: "The model keeps no font face for a schematic text: KiCad's default font is drawn." }, TEXT_PROPS);
+  // "Font" (`GetFontProp` / `SetFontProp`): eeschema's "Default Font" first; a free text's and a label's face is its `text_attrs` (`set_text_attrs`, UI-LEFT S6).
+  // A text box's and a directive label's are edited in their dialogs.
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Font",
+      kind: "string",
+      get: (i) => i.text?.font ?? i.label?.font ?? "Default Font",
+      writeable: (i) => !!(i.text || i.label),
+      readOnlyReason: "A text box's font is set in Text Box Properties; a directive label has none.",
+      set: (i, v) => {
+        const next = String(v).trim();
+        const font = next === "Default Font" ? "" : next;
+        const now = i.text?.font ?? i.label?.font ?? "";
+        return font === now ? [] : [{ op: "sch_edit", verb: "set_text_attrs", ids: [i.id], font } as Cmd];
+      },
+    },
+    TEXT_PROPS
+  );
   /** Bold, the way each kind keeps it. */
   const boldOf = (i: SchItem): boolean => !!(i.text?.bold ?? i.label?.bold ?? (isTextBox(i) ? textBox(i).bold : false));
   // "Auto Thickness": a schematic text has no pen of its own here -- KiCad's for its size, `GetPenSizeForBold` once bold (`EDA_TEXT::SetBold`).
@@ -876,13 +893,50 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     validate: (v) => (String(v).trim() === "" ? "A sheet needs a name." : null),
     set: (i, v) => (i.sheet!.name === String(v).trim() ? [] : [{ op: "sch_edit", verb: "edit_sheet", id: i.id, name: String(v).trim() }]),
   });
-  // A sheet's border, background and attributes are not kept by the model (a sheet file's `(stroke ..)`, `(fill ..)` and flags are not read): KiCad's defaults.
-  const SHEET_LOOK = "A sheet's border, background and attributes are not kept by the model: it is drawn and written with KiCad's defaults.";
-  add({ owner: "SCH_SHEET", name: "Border Width", kind: "int", display: "size", get: () => 0, readOnlyReason: SHEET_LOOK });
-  add({ owner: "SCH_SHEET", name: "Border Color", kind: "color", get: () => "", readOnlyReason: SHEET_LOOK });
-  add({ owner: "SCH_SHEET", name: "Background Color", kind: "color", get: () => "", readOnlyReason: SHEET_LOOK });
-  for (const name of ["Exclude From Board", "Exclude From Simulation", "Exclude From Bill of Materials", "Do not Populate"]) {
-    add({ owner: "SCH_SHEET", name, kind: "bool", get: () => false, readOnlyReason: SHEET_LOOK }, ATTRIBUTES);
+  // A sheet's border, background and attributes (`SCH_SHEET_DESC`: "Border Width", "Border Color", "Background Color", the four attributes) are its
+  // `SchExtras::sheet_props` (`set_sheet_props`, UI-LEFT S8); a sheet with none of its own has the look the studio always wrote, a 6 mil border and a pale fill.
+  const sheetProps = (i: SchItem) => i.sheet!.props ?? { border_width_nm: 152_400, border_color: null, fill_color: { r: 255, g: 255, b: 194, a: 255 } };
+  const sheetCmd = (i: SchItem, patch: Record<string, unknown>): Cmd => ({ op: "sch_edit", verb: "set_sheet_props", id: i.id, ...patch }) as unknown as Cmd;
+  add({
+    owner: "SCH_SHEET",
+    name: "Border Width",
+    kind: "int",
+    display: "size",
+    get: (i) => sheetProps(i).border_width_nm ?? 0,
+    validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
+    set: (i, v) => ((sheetProps(i).border_width_nm ?? 0) === Math.round(num(v)) ? [] : [sheetCmd(i, { border_width_nm: Math.round(num(v)) })]),
+  });
+  add({
+    owner: "SCH_SHEET",
+    name: "Border Color",
+    kind: "color",
+    get: (i) => colorValue(sheetProps(i).border_color),
+    set: (i, v) => (colorValue(sheetProps(i).border_color) === String(v) ? [] : [sheetCmd(i, { border_color: colorOf(String(v)) })]),
+  });
+  add({
+    owner: "SCH_SHEET",
+    name: "Background Color",
+    kind: "color",
+    get: (i) => colorValue(sheetProps(i).fill_color),
+    set: (i, v) => (colorValue(sheetProps(i).fill_color) === String(v) ? [] : [sheetCmd(i, { fill_color: colorOf(String(v)) })]),
+  });
+  const SHEET_FLAGS: Array<[string, "exclude_from_board" | "exclude_from_sim" | "exclude_from_bom" | "dnp"]> = [
+    ["Exclude From Board", "exclude_from_board"],
+    ["Exclude From Simulation", "exclude_from_sim"],
+    ["Exclude From Bill of Materials", "exclude_from_bom"],
+    ["Do not Populate", "dnp"],
+  ];
+  for (const [name, key] of SHEET_FLAGS) {
+    add(
+      {
+        owner: "SCH_SHEET",
+        name,
+        kind: "bool",
+        get: (i) => !!(i.sheet!.props as Record<string, unknown> | null | undefined)?.[key],
+        set: (i, v) => (!!(i.sheet!.props as Record<string, unknown> | null | undefined)?.[key] === Boolean(v) ? [] : [sheetCmd(i, { [key]: Boolean(v) })]),
+      },
+      ATTRIBUTES
+    );
   }
 
   // ----------------------------------------------------------------------------------------------- EDA_SHAPE, SCH_SHAPE and kin

@@ -439,18 +439,20 @@ impl DpPrimitivePair {
         DpPrimitivePair { prim_p: None, prim_n: None, anchor_p, anchor_n }
     }
 
-    /// `DP_PRIMITIVE_PAIR::Directional`: the pair ends on track segments, which have a heading.
+    /// `DP_PRIMITIVE_PAIR::Directional`: the pair ends on tracks, segments or arcs (`m_primP->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T )`),
+    /// which have a heading.
     pub fn directional(&self) -> bool {
-        matches!(self.prim_p, Some(Item::Segment(_)))
+        self.prim_p.as_ref().is_some_and(Item::is_track)
     }
 
     /// `anchorDirection`: the heading of a track at the end it is joined at, pointing away from the track (the way the pair
-    /// goes on); undefined for anything but a track.
+    /// goes on); undefined for anything but a track (`!aItem->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T )`). For an arc it is KiCad's too:
+    /// the direction of `Anchor( 0 ) - Anchor( 1 )` (or back), the chord from the far end, not the arc's tangent at the end.
     fn anchor_direction(item: &Item, p: Point) -> Direction45 {
-        match item {
-            Item::Segment(s) if s.a == p => direction_of(vsub(s.a, s.b)),
-            Item::Segment(s) => direction_of(vsub(s.b, s.a)),
-            _ => Direction45::Undefined,
+        match item.track_ends() {
+            Some((a, b)) if a == p => direction_of(vsub(a, b)),
+            Some((a, b)) => direction_of(vsub(b, a)),
+            None => Direction45::Undefined,
         }
     }
 
@@ -762,7 +764,9 @@ impl DpGateways {
             return;
         };
         let pad_or_via = |i: &Item| matches!(i, Item::Solid(_) | Item::Via(_));
-        let track = |i: &Item| matches!(i, Item::Segment(_));
+        // `aPair.PrimP()->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T ) && aPair.PrimN()->OfKind( .. )`: a pair of arc ends continues as a pair of
+        // segment ends does (findings p5 F4-2)
+        let track = |i: &Item| i.is_track();
         let (p0_p, p0_n);
         let shape: Shape;
         if pad_or_via(prim_p) && pad_or_via(prim_n) {

@@ -1,6 +1,6 @@
 // The right-hand dock: Appearance and the selection filter (KiCad), plus
-// Activity (not a KiCad panel -- docked here, where KiCad's Search panel
-// goes, per the task).
+// Activity (not a KiCad panel: the log of who edited the board). KiCad's
+// Search panel is a pane of its own under the canvas (panels/BottomDock.tsx).
 import { useStudioDispatch, useStudioState } from "../../state/store";
 import type { RightDockTab } from "../../state/store";
 import { AppearancePanel } from "./AppearancePanel";

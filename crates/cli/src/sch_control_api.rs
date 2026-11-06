@@ -14,12 +14,32 @@ use std::path::Path;
 /// `SCH_SHEET_LIST::BuildSheetList` walks them (`eda_model::sheet_list::walk`: depth first, a screen's sheets by place); `page` is the page each
 /// sheet path shows (`SCH_SHEET_PATH::GetPageNumber`: the one stored for it, else its place in the walk, the root being 1), the one the derived
 /// `.kicad_sch` gives it. The studio sorts it by page for Next / Previous Sheet and sorts each sheet's children by page in the Hierarchy Navigator.
-pub fn hierarchy(dir: &Path) -> Value {
+///
+/// `virtual_root` says the root is KiCad 10's virtual root (`SchExtras::virtual_root`: a project of several top-level sheets), whose sheets the navigator shows
+/// as roots (`HIERARCHY_PANE::UpdateHierarchyTree`: one tree item per `GetTopLevelSheets()` entry under the hidden project row). With `net` (the
+/// `?net=` of the request, the net Highlight Net lit), each sheet says whether its screen has that net (`HIERARCHY_PANE::UpdateNetHighlight`:
+/// `ConnectionGraph()->GetAllSubgraphs( net )`'s sheets): a wire, a label or a power symbol of it. **Differs**: a screen shown on several paths keeps one name
+/// per wire (its first path's), so the other paths' rows of a local net are not lit.
+pub fn hierarchy(dir: &Path, net: &str) -> Value {
     match kicad_engine::load_with_schematic(dir) {
-        Ok((design, _)) => json!({
-            "ok": true,
-            "sheets": eda_model::sheet_list::walk(&design).into_iter().map(|h| { let page = h.effective_page(); json!({ "path": h.path, "name": h.name, "file": h.file, "page": page }) }).collect::<Vec<_>>(),
-        }),
+        Ok((design, _)) => {
+            let has_net = |file: &str| -> bool {
+                let screen = if file.is_empty() { design.schematic.as_ref() } else { design.sheet_contents.as_ref().and_then(|c| c.get(file)) };
+                screen.is_some_and(|sch| sch.wires.iter().any(|w| w.net == net) || sch.labels.iter().any(|l| l.net == net) || sch.power_symbols.iter().any(|p| p.net == net))
+            };
+            json!({
+                "ok": true,
+                "virtual_root": design.schematic.as_ref().is_some_and(|s| s.extras.virtual_root),
+                "sheets": eda_model::sheet_list::walk(&design).into_iter().map(|h| {
+                    let page = h.effective_page();
+                    let mut v = json!({ "path": h.path, "name": h.name, "file": h.file, "page": page });
+                    if !net.is_empty() {
+                        v["net"] = json!(has_net(&h.file));
+                    }
+                    v
+                }).collect::<Vec<_>>(),
+            })
+        }
         Err(e) => err(crate::board::reasons(&e)),
     }
 }

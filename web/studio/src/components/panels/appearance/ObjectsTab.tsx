@@ -1,11 +1,12 @@
 // The Objects tab (`APPEARANCE_CONTROLS::rebuildObjects`, rows from `s_objectSettings`): what the board shows besides its layers -- a colour chip where the
-// object has a theme colour, an eye, the name, and an opacity slider for tracks, vias, pads, zones and filled shapes. Footprint Text drags References and
-// Values along with it (`onObjectVisibilityChanged`).
+// object has a theme colour (a double click edits it in the board editor's theme: themeSwatch.tsx), an eye, the name, and an opacity slider for tracks, vias,
+// pads, zones and filled shapes. Footprint Text drags References and Values along with it (`onObjectVisibilityChanged`).
 //
 // The row (`ObjectRowView`) takes its state and its handlers as props: the Footprint Editor's Appearance manager (components/footprint/FootprintAppearancePanel.tsx)
 // draws its rows (`s_allowedInFpEditor`) with it, on its own store.
 import { useAppearanceView } from "./useAppearanceView";
 import { Eye, Pane, Swatch } from "./shared";
+import { useThemeSwatchEdit } from "./themeSwatch";
 import { layerColor } from "../../canvas/layers";
 import { OBJECT_ROWS, type ObjectId, type ObjectRow } from "../../../kicad-port/appearance";
 import { objectChecked } from "../../../kicad-port/appearanceOps";
@@ -28,12 +29,17 @@ const COLOR_KEY: Partial<Record<ObjectId, string>> = {
  * One object's row (`rebuildObjects`' `appendObject`): the chip, the eye ("Show or hide <name>", none for a row without a checkbox), the name, and -- for a row with
  * an opacity -- the slider ("Set opacity of <name>"), `opacity` 0..1.
  */
-export function ObjectRowView({ row, checked, opacity, onToggle, onOpacity }: { row: ObjectRow & { id: ObjectId }; checked: boolean; opacity?: number; onToggle: () => void; onOpacity?: (value: number) => void }) {
+export function ObjectRowView({ row, checked, opacity, onToggle, onOpacity, onEditColor }: { row: ObjectRow & { id: ObjectId }; checked: boolean; opacity?: number; onToggle: () => void; onOpacity?: (value: number) => void; onEditColor?: (colorKey: string) => void }) {
   const id = row.id;
   const colorKey = COLOR_KEY[id];
   return (
     <div className="ap-row" data-object={id} title={row.tooltip}>
-      <Swatch css={colorKey ? layerColor(colorKey) : null} hidden={!colorKey} title={colorKey ? "Color of this object (set by the color theme)" : undefined} />
+      <Swatch
+        css={colorKey ? layerColor(colorKey) : null}
+        hidden={!colorKey}
+        title={colorKey ? (onEditColor ? "Left double click or middle click for color change, right click for menu" : "Color of this object (set by the color theme)") : undefined}
+        onEdit={colorKey && onEditColor ? () => onEditColor(colorKey) : undefined}
+      />
       <Eye on={checked} disabled={!row.checkbox} title={`Show or hide ${row.label.toLowerCase()}`} onToggle={onToggle} />
       <span className={row.opacity ? "ap-label-fixed" : "ap-name"}>{row.label}</span>
       {row.opacity && (
@@ -54,6 +60,8 @@ export function ObjectRowView({ row, checked, opacity, onToggle, onOpacity }: { 
 
 export function ObjectsTab() {
   const { state, op, dispatch } = useAppearanceView();
+  // the chips edit the board editor's colour theme (`OnColorSwatchChanged`), with KiCad's default as the dialog's default (`theme->GetDefaultColor( layer )`)
+  const theme = useThemeSwatchEdit();
   return (
     <div className="ap-scroll">
       {OBJECT_ROWS.map((row, i) => {
@@ -68,6 +76,7 @@ export function ObjectsTab() {
             opacity={row.opacity ? state.appearance.opacity[row.opacity] : undefined}
             onToggle={() => op({ op: "object", id, visible: !checked })}
             onOpacity={(value) => op({ op: "opacity", key: row.opacity!, value })}
+            onEditColor={(key) => theme.edit(key, "object")}
           />
         );
       })}
@@ -78,6 +87,7 @@ export function ObjectsTab() {
           Show pad numbers
         </label>
       </Pane>
+      {theme.dialog}
     </div>
   );
 }

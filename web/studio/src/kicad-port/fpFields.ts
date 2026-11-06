@@ -62,6 +62,8 @@ export function layoutOf(f: FieldInfo): FieldLayoutCmd {
     italic: f.italic,
     keep_upright: f.upright,
     knockout: f.knockout,
+    // the field's outline font, so an edit of anything else keeps it (Edit Text & Graphics Properties sets it)
+    ...(f.face ? { face: f.face } : {}),
   };
 }
 

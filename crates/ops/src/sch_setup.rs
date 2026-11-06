@@ -86,6 +86,54 @@ pub(crate) fn set_bom_presets(design: &mut Design, bom_presets: &[String], bom_f
     Ok(())
 }
 
+/// `Cmd::SetBomView`: the Symbol Fields Table's "Save preset..." (`onBomPresetChanged`: `wxTextEntryDialog( .., _( "BOM preset name:" ), _( "Save BOM Preset" ) )`, a
+/// built-in name refused, an existing one of the project's overwritten after "Overwrite existing preset?"), "Delete preset..." and the view the table closes on
+/// (`savePresetsToSchematic`: `m_BomSettings`), in the project's `schematic.bom_presets` and `schematic.bom_settings` (`SCHEMATIC_SETTINGS`). A preset is
+/// `bom_settings.cpp`'s JSON as the studio sends it.
+pub(crate) fn set_bom_view(design: &mut Design, save: Option<&serde_json::Value>, delete: Option<&str>, view: Option<&serde_json::Value>) -> Done {
+    /// `BOM_PRESET::BuiltInPresets`' names (read-only, `m_readOnly`).
+    const BUILT_IN: [&str; 4] = ["Default Editing", "Grouped By Value", "Grouped By Value and Footprint", "Attributes"];
+    let sch = design.schematic.get_or_insert_with(crate::empty_schematic_section);
+    let mut project = sch.extras.project_schematic.clone().unwrap_or_default();
+    let before = project.clone();
+    let mut list: Vec<serde_json::Value> = project.get("bom_presets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let name_of = |p: &serde_json::Value| p.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+    if let Some(p) = save {
+        let name = name_of(p);
+        if BUILT_IN.contains(&name.as_str()) {
+            return Err(vec![CheckResult::fail("ops_bad_bom_presets", name.as_str(), "Default presets cannot be modified.\nPlease use a different name.")]);
+        }
+        if p.get("fields_ordered").and_then(|f| f.as_array()).is_none() {
+            return Err(vec![CheckResult::fail("ops_bad_bom_presets", name.as_str(), "a preset needs its columns (fields_ordered)")]);
+        }
+        match list.iter_mut().find(|q| name_of(q) == name) {
+            Some(q) => *q = p.clone(),
+            None => list.push(p.clone()),
+        }
+    }
+    if let Some(name) = delete {
+        if BUILT_IN.contains(&name) {
+            return Err(vec![CheckResult::fail("ops_bad_bom_presets", name, "Default presets cannot be modified.\nPlease use a different name.")]);
+        }
+        let n = list.len();
+        list.retain(|q| name_of(q) != name);
+        if list.len() == n {
+            return Err(vec![CheckResult::fail("ops_bad_bom_presets", name, format!("the project has no preset named {name:?}"))]);
+        }
+    }
+    if save.is_some() || delete.is_some() {
+        project.insert("bom_presets".into(), serde_json::Value::Array(list));
+    }
+    if let Some(v) = view {
+        project.insert("bom_settings".into(), v.clone());
+    }
+    if project == before {
+        return no_change("bom_settings", "the table's presets and view are already so");
+    }
+    sch.extras.project_schematic = (!project.is_empty()).then_some(project);
+    Ok(())
+}
+
 /// `Cmd::SetBusAliases`: `PANEL_SETUP_BUSES::TransferDataFromWindow` over `SCHEMATIC::SetBusAliases` and the project's `schematic.bus_aliases`. The grid's own
 /// vetoes are refused with its words: two aliases of one name ("Alias name '%s' already in use.", `OnAliasesGridCellChanging`, names compared as typed) and an
 /// empty member ("Member net/alias name cannot be empty.", `OnMemberGridCellChanging`). A member typed as a space-separated list is several members, as the
@@ -183,5 +231,24 @@ mod tests {
         let kept = d.schematic.as_ref().unwrap().extras.project_schematic.clone().unwrap();
         assert_eq!(kept["bom_presets"], serde_json::json!([ { "name": "Other" } ]));
         assert_eq!(set_bom_presets(&mut d, &["Nope".into()], &[]).unwrap_err()[0].check, "ops_bad_bom_presets");
+    }
+
+    #[test]
+    fn the_fields_tables_presets_are_saved_overwritten_and_deleted_in_the_project_and_a_built_in_one_is_not() {
+        let mut d = design();
+        let preset = |name: &str, filter: &str| serde_json::json!({ "name": name, "fields_ordered": [{ "name": "Reference", "label": "Reference", "show": true, "group_by": false }], "sort_field": "Reference", "sort_asc": true, "filter_string": filter, "group_symbols": true, "exclude_dnp": false, "include_excluded_from_bom": false });
+        set_bom_view(&mut d, Some(&preset("Mine", "")), None, None).unwrap();
+        set_bom_view(&mut d, Some(&preset("Mine", "R*")), None, None).unwrap();
+        let project = d.schematic.as_ref().unwrap().extras.project_schematic.clone().unwrap();
+        let list = project["bom_presets"].as_array().unwrap();
+        assert_eq!(list.len(), 1, "saved under a name it has is an overwrite");
+        assert_eq!(list[0]["filter_string"], "R*");
+        let e = set_bom_view(&mut d, Some(&preset("Attributes", "")), None, None).unwrap_err();
+        assert_eq!(e[0].hint.as_deref().unwrap_or_default(), "Default presets cannot be modified.\nPlease use a different name.");
+        set_bom_view(&mut d, None, None, Some(&preset("", "C*"))).unwrap();
+        assert_eq!(d.schematic.as_ref().unwrap().extras.project_schematic.as_ref().unwrap()["bom_settings"]["filter_string"], "C*");
+        set_bom_view(&mut d, None, Some("Mine"), None).unwrap();
+        assert!(d.schematic.as_ref().unwrap().extras.project_schematic.as_ref().unwrap()["bom_presets"].as_array().unwrap().is_empty());
+        assert_eq!(set_bom_view(&mut d, None, Some("Mine"), None).unwrap_err()[0].check, "ops_bad_bom_presets");
     }
 }

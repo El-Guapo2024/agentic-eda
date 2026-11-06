@@ -740,8 +740,9 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         // Label Properties gave it, else away from the wire the label ends
         let (angle, effects) = label_effects(sch, l, tag == "label");
         writeln!(out, " (at {x} {y} {angle})").unwrap();
-        // `saveText`: `(fields_autoplaced yes)` for a label with fields (they are where `AutoplaceFields` puts them), then its fields
-        if tag == "global_label" || sch.extras.label_fields.get(&l.id).is_some_and(|f| !f.is_empty()) {
+        // `saveText`: `(fields_autoplaced yes)` for a label with fields that are where `AutoplaceFields` puts them (not placed by hand:
+        // `eda_engine::label_fields`), then its fields
+        if eda_engine::label_fields::has_fields(sch, l) && !eda_engine::label_fields::hand_placed(sch, &l.id) {
             writeln!(out, "\t\t(fields_autoplaced yes)").unwrap();
         }
         writeln!(out, "\t\t{effects}").unwrap();
@@ -842,9 +843,19 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
     note_item_uuid(&s.id, &uuid);
     writeln!(out, "\t(sheet").unwrap();
     writeln!(out, "\t\t(at {x} {y}) (size {w} {h})").unwrap();
+    // `saveSheet`: the attributes (`FormatBool`: exclude_from_sim, in_bom, on_board, dnp), the border (`STROKE_PARAMS( width, SOLID, color ).Format`: no
+    // `(color ..)` when it is UNSPECIFIED) and the background colour (`(fill (color ..))`, all zeroes when UNSPECIFIED), as Sheet Properties set them
+    // (`SchExtras::sheet_props`). A sheet with no attribute set writes none of the four, which KiCad reads as the same.
+    let props = sch.extras.sheet_props_of(&s.id);
+    if props.has_attributes() {
+        let yn = |b: bool| if b { "yes" } else { "no" };
+        writeln!(out, "\t\t(exclude_from_sim {}) (in_bom {}) (on_board {}) (dnp {})", yn(props.exclude_from_sim), yn(!props.exclude_from_bom), yn(!props.exclude_from_board), yn(props.dnp)).unwrap();
+    }
     write!(out, "{}", fields_autoplaced_token(sch, &s.id)).unwrap();
-    writeln!(out, "\t\t(stroke (width 0.1524) (type solid))").unwrap();
-    writeln!(out, "\t\t(fill (color 255 255 194 1.0000))").unwrap();
+    let border_color = props.border_color.map(|c| format!(" (color {} {} {} {})", c.r, c.g, c.b, sch_extras_io::alpha_str(c.a))).unwrap_or_default();
+    writeln!(out, "\t\t(stroke (width {}) (type solid){border_color})", sch_mm(props.border_width_nm)).unwrap();
+    let fill = props.fill_color.unwrap_or(eda_model::sch_extras::SchColor { r: 0, g: 0, b: 0, a: 0 });
+    writeln!(out, "\t\t(fill (color {} {} {} {}))", fill.r, fill.g, fill.b, sch_extras_io::alpha_str(fill.a)).unwrap();
     writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
     if sch.extras.is_locked(&s.id) {
         writeln!(out, "\t\t(locked yes)").unwrap();
@@ -1127,19 +1138,7 @@ fn label_shape_token(shape: eda_model::ir::LabelShape) -> &'static str {
 /// the wire that ends there (to the right of a wire that comes from the left, upward from one that comes from below, and so on); a label no wire ends at
 /// reads to the right.
 pub(crate) fn label_spin_of(sch: &eda_model::ir::SchematicSection, l: &NetLabel) -> eda_model::sch_extras::LabelSpin {
-    use eda_model::sch_extras::LabelSpin;
-    if let Some(spin) = sch.extras.label_spins.get(&l.id) {
-        return *spin;
-    }
-    match eda_engine::obstacles::label_run_dir(sch, l) {
-        // the wire is above the label: the text hangs below it, reading up and ending at the anchor
-        (0, 1) => LabelSpin::Bottom,
-        // the wire is below: the text rises from the anchor
-        (0, -1) => LabelSpin::Up,
-        // the wire is on the right: the text runs left
-        (-1, 0) => LabelSpin::Left,
-        _ => LabelSpin::Right,
-    }
+    eda_engine::label_fields::label_spin(sch, l)
 }
 
 /// Schematic Setup > Formatting > Inter-sheet References of the design (kept on the root sheet): KiCad's defaults when it set none.
@@ -1303,11 +1302,9 @@ pub(crate) fn label_effects(sch: &eda_model::ir::SchematicSection, l: &NetLabel,
     let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
     let vertical_justify = if local { " bottom" } else { "" };
     // the font colour (`EDA_TEXT::Format`'s `(color ..)`, last in `(font ..)`, r7 M5)
-    let mut font = FieldLook { size_nm: look.text_size_nm().as_f64(), bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font();
-    if let Some(c) = sch.extras.text_attrs.get(&l.id).and_then(|a| a.color) {
-        font.pop();
-        font.push_str(&format!(" (color {} {} {} {}))", c.r, c.g, c.b, sch_extras_io::alpha_str(c.a)));
-    }
+    // and the font face Label Properties chose (`(face ..)`, first in `(font ..)`)
+    let attrs = sch.extras.text_attrs.get(&l.id);
+    let font = FieldLook { size_nm: look.text_size_nm().as_f64(), bold: look.bold, italic: look.italic, face: attrs.and_then(|a| a.font.clone()), color: attrs.and_then(|a| a.color), ..FieldLook::DEFAULT }.font();
     (angle, format!("(effects {font} (justify {justify}{vertical_justify}))"))
 }
 

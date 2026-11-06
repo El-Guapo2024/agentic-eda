@@ -62,6 +62,9 @@ mod fp_assign_tests;
 #[path = "pad_nets_tests.rs"]
 mod pad_nets_tests;
 #[cfg(test)]
+#[path = "net_edit_tests.rs"]
+mod net_edit_tests;
+#[cfg(test)]
 #[path = "fp_library_tests.rs"]
 mod fp_library_tests;
 #[cfg(test)]
@@ -261,6 +264,8 @@ pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Desig
     let renames = crate::net_names::kicad_names(design, &model, &drawn);
     crate::net_names::apply(&mut model, &renames);
     crate::net_names::remember_intent_names(&mut model, &intent_nets);
+    // The Net Inspector's renames and deletes of the board's nets, on top of the names the schematic gives them (`board_net_edits`).
+    crate::board_net_edits::apply(design, &mut model);
     model.symbol_links = drawn.links;
     Ok(model)
 }
@@ -1619,7 +1624,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     let pad_edits = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.footprint_edits.iter().map(|e| (e.id.clone(), e.pads.clone(), e.models3d.clone())).collect::<Vec<_>>()).unwrap_or_default();
     // A rename moves the intent's part under a new reference and an exchange puts a part on another footprint: the model is built again for the design that
     // results, as the next load will build it.
-    let renames = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| (dr.renamed_parts.clone(), dr.footprint_assignments.clone())).unwrap_or_default();
+    let renames = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| (dr.renamed_parts.clone(), dr.footprint_assignments.clone(), dr.net_renames.clone())).unwrap_or_default();
     let intent_file = |d: &eda_model::ir::Design| d.drawings.as_ref().and_then(|dr| dr.intent_file.clone());
     // A new stackup (Board Setup's, or the copper layers a placed design block grows, `AppendBoard`'s `SetCopperLayerCount`): the copper is judged on the layers that result.
     let stackup = |d: &eda_model::ir::Design| d.drawings.as_ref().and_then(|dr| dr.rules.as_ref()).and_then(|r| r.stackup.clone());
@@ -1817,14 +1822,18 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditText { id, content, layer, .. } => format!("text edit {id} --content {content:?} --layer {layer}"),
         Cmd::DeleteText { id } => format!("text delete {id}"),
         Cmd::MoveText { id, x, y } => format!("text move {id} --to {},{}", mm(*x), mm(*y)),
-        Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, .. } => {
-            format!("global-edit text-and-graphics --shapes {} --texts {} --dimensions {}{}", shape_ids.len(), text_ids.len(), dimension_ids.len(), if *layer_defaults { " --layer-defaults" } else { "" })
+        Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, footprint, .. } => {
+            let fp = footprint.field_ids.len() + footprint.text_ids.len() + footprint.shape_ids.len();
+            format!("global-edit text-and-graphics --shapes {} --texts {} --dimensions {}{}{}", shape_ids.len(), text_ids.len(), dimension_ids.len(), if fp > 0 { format!(" --footprint-items {fp}") } else { String::new() }, if *layer_defaults { " --layer-defaults" } else { "" })
         }
         Cmd::SetViaLayers { ids, edit } => format!("via-layers {}{}{}{}", ids.join(","), edit.kind.map(|k| format!(" --type {k:?}")).unwrap_or_default(), edit.from_layer.as_ref().map(|l| format!(" --from {l}")).unwrap_or_default(), edit.to_layer.as_ref().map(|l| format!(" --to {l}")).unwrap_or_default()),
         Cmd::RemoveUnusedPads { selected, vias, pads, remove, .. } => format!("remove-unused-pads {}{}{}{}", if *remove { "--remove" } else { "--restore" }, if *vias { " --vias" } else { "" }, if *pads { " --pads" } else { "" }, selected.as_ref().map(|s| format!(" --selected {}", s.len())).unwrap_or_default()),
         Cmd::SwapPadNets { ids, .. } => format!("swap-pad-nets {}", ids.join(" ")),
         Cmd::SwapGateNets { ids, target, .. } => format!("swap-gate-nets {}{}", ids.join(" "), target.as_ref().map(|t| format!(" --with {t}")).unwrap_or_default()),
         Cmd::TrackViaNets { ids, net, .. } => format!("track-via-nets {}{}", ids.join(" "), net.as_ref().map(|n| format!(" --net {n}")).unwrap_or_default()),
+        Cmd::RenameNet { from, to } => format!("net rename {from:?} {to:?}"),
+        Cmd::DeleteNets { names } => format!("net delete {}", names.iter().map(|n| format!("{n:?}")).collect::<Vec<_>>().join(" ")),
+        Cmd::AddNet { name } => format!("net add {name:?}"),
         Cmd::SetTeardropSettings { .. } => "board-setup teardrops".to_string(),
         Cmd::AddAllTeardrops => "teardrops add-all".to_string(),
         Cmd::RemoveAllTeardrops => "teardrops remove-all".to_string(),
@@ -2001,6 +2010,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetAnnotationSettings { .. } => "schematic setup annotation".to_string(),
         Cmd::SetFieldNameTemplates { fields } => format!("schematic setup field-name-templates ({})", fields.len()),
         Cmd::SetBomPresets { .. } => "schematic setup bom-presets".to_string(),
+        Cmd::SetBomView { save, delete, .. } => format!("schematic fields-table view{}{}", save.as_ref().and_then(|p| p.get("name")).and_then(|n| n.as_str()).map(|n| format!(" --save {n:?}")).unwrap_or_default(), delete.as_ref().map(|n| format!(" --delete {n:?}")).unwrap_or_default()),
         Cmd::SetBusAliases { aliases } => format!("schematic setup bus-aliases ({})", aliases.len()),
         Cmd::SetSimulator { workbook, .. } => format!("schematic simulator{}", if workbook.is_some() { " (workbook)" } else { "" }),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
@@ -2197,6 +2207,9 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetViaLayers { .. } => "via-layers",
         Cmd::SwapPadNets { .. } | Cmd::SwapGateNets { .. } => "swap-nets",
         Cmd::TrackViaNets { .. } => "track-via-nets",
+        Cmd::RenameNet { .. } => "net-rename",
+        Cmd::DeleteNets { .. } => "net-delete",
+        Cmd::AddNet { .. } => "net-add",
         Cmd::SetTeardropSettings { .. } => "board-setup-teardrops",
         Cmd::AddAllTeardrops => "teardrops-add-all",
         Cmd::RemoveAllTeardrops => "teardrops-remove-all",
@@ -2296,7 +2309,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
         Cmd::SetConnectionGrid { .. } => "schematic-connection-grid",
         Cmd::SetIntersheetRefs { .. } => "schematic-intersheet-refs",
-        Cmd::SetSchFormatting { .. } | Cmd::SetAnnotationSettings { .. } | Cmd::SetFieldNameTemplates { .. } | Cmd::SetBomPresets { .. } | Cmd::SetBusAliases { .. } => "schematic-setup",
+        Cmd::SetSchFormatting { .. } | Cmd::SetAnnotationSettings { .. } | Cmd::SetFieldNameTemplates { .. } | Cmd::SetBomPresets { .. } | Cmd::SetBomView { .. } | Cmd::SetBusAliases { .. } => "schematic-setup",
         Cmd::SetSimulator { .. } => "schematic-simulator",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",

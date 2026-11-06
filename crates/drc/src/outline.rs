@@ -71,6 +71,13 @@ impl BoardOutline {
         best.map(|i| self.polys.outline(i).iter().map(|p| Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect()).unwrap_or_default()
     }
 
+    /// The holes (the board's cutouts) of the outline [`Self::main_ring`] takes, each as a ring; none when there is no outline.
+    pub fn main_holes(&self) -> Vec<Vec<Point>> {
+        let best = (0..self.polys.outline_count()).max_by(|&a, &b| eda_clipper2::area(self.polys.outline(a)).abs().total_cmp(&eda_clipper2::area(self.polys.outline(b)).abs()));
+        let Some(i) = best else { return Vec::new() };
+        (0..self.polys.hole_count(i)).map(|h| self.polys.hole(i, h).iter().map(|p| Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect()).collect()
+    }
+
     /// Is `p` on the board: inside an outline and in none of its holes? (A point on an edge counts as on.)
     pub fn contains(&self, p: Point) -> bool {
         (0..self.polys.outline_count()).any(|i| {

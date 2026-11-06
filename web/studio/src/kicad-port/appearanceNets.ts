@@ -207,7 +207,7 @@ export function netMenu(net: string): NetMenuItem[] {
 
 /**
  * `buildNetClassMenu`: the menu of a class. The Default class has no colour entries. "Use Color from Schematic" is there and disabled while the
- * class has no schematic colour (`ncColor == COLOR4D::UNSPECIFIED`) -- the studio keeps none.
+ * class has no schematic colour (`ncColor == COLOR4D::UNSPECIFIED`): `schematicColor`, the class's colour of Schematic Setup > Net Classes, or null.
  */
 export function netclassMenu(name: string, isDefault: boolean, schematicColor: string | null = null): NetMenuItem[] {
   const head: NetMenuItem[] = isDefault
@@ -232,4 +232,32 @@ export function netclassMenu(name: string, isDefault: boolean, schematicColor: s
 /** The tooltip of a net's eye (`OnNetGridMouseEvent`). */
 export function netEyeTip(net: string, visible: boolean): string {
   return `${visible ? "Click to hide ratsnest for" : "Click to show ratsnest for"} ${net}`;
+}
+
+/**
+ * A class renamed on the Net Classes page takes what is kept by its name with it (`PANEL_SETUP_NETCLASSES`: the PCB Color, Tuning Profile and the
+ * schematic's columns are cells of the class's row, so they follow the row when its name cell changes): each map's entry under `old` moves to
+ * `name`. Nothing moves while another class of the page still has the old name (`others`), whose entry it then still is.
+ */
+export function carryRenamedClass<T>(byName: Readonly<Record<string, T>>, old: string, name: string, others: readonly string[]): Record<string, T> {
+  const out = { ...byName };
+  if (old === name || others.includes(old) || out[old] === undefined) return out;
+  out[name] = out[old]!;
+  delete out[old];
+  return out;
+}
+
+/**
+ * The Appearance panel's net class colours after the Net Classes page's Apply (`TransferDataFromWindow`: `if( !nc->IsDefault() ) .. nc->SetPcbColor(
+ * GetCellValue( aRow, GRID_PCB_COLOR ) )` for each class of the page; a class no longer on the page is gone with its colour): the
+ * `netclass_color` edits that turn `stored` into the page's `colors` for its `classes` (the Default class has none). So a renamed class keeps its
+ * colour under its new name and the old name's entry goes.
+ */
+export function netclassColorUpdates(stored: Readonly<Record<string, string>>, colors: Readonly<Record<string, string>>, classes: readonly string[]): Array<{ name: string; color: string | null }> {
+  const out: Array<{ name: string; color: string | null }> = [];
+  for (const n of new Set([...Object.keys(stored), ...classes])) {
+    const want = classes.includes(n) ? (colors[n] ?? null) : null;
+    if ((stored[n] ?? null) !== want) out.push({ name: n, color: want });
+  }
+  return out;
 }

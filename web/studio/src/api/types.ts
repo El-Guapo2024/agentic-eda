@@ -173,6 +173,8 @@ export interface FieldInfo {
   langle: number;
   /** True once the layout is stored in the design; false for the default placement. */
   custom: boolean;
+  /** `EDA_TEXT::GetFontName`: the outline font the field is set in; absent for KiCad's stroke font. */
+  face?: string;
 }
 
 /** `FootprintAttrs` as the studio state names them. */
@@ -218,7 +220,7 @@ export type FpGraphic =
   | (FpGraphicCommon & { kind: "bezier"; start: [Nm, Nm]; c1: [Nm, Nm]; c2: [Nm, Nm]; end: [Nm, Nm] });
 
 /** One text of a placed footprint (`fp_text user`, `Part.texts`): the keys of a field, at the absolute angle it has on the board, variables resolved. */
-export type FpTextInfo = Pick<FieldInfo, "id" | "text" | "x" | "y" | "angle" | "w" | "h" | "thickness" | "layer" | "halign" | "valign" | "mirror" | "bold" | "italic" | "upright" | "knockout"> & {
+export type FpTextInfo = Pick<FieldInfo, "id" | "text" | "x" | "y" | "angle" | "w" | "h" | "thickness" | "layer" | "halign" | "valign" | "mirror" | "bold" | "italic" | "upright" | "knockout" | "face"> & {
   /** Set when the text is exactly `${REFERENCE}` or `${VALUE}`: the Appearance panel's References and Values rows switch it (`PCB_TEXT::ViewGetLOD`). */
   role?: "reference" | "value";
 };
@@ -1684,12 +1686,57 @@ export interface FieldLayoutCmd {
   knockout?: boolean;
   /** The text shown when it is not the footprint's reference or the part's value. */
   text?: string | null;
+  /** `(font (face ..))`: an outline font; absent or null is KiCad's stroke font. */
+  face?: string | null;
 }
 export interface UserFieldCmd {
   name: string;
   text: string;
   layout: FieldLayoutCmd;
 }
+
+/** `eda_ops::FootprintItems`: the footprints' items Edit Text & Graphics Properties changes. */
+export interface GlobalEditFootprintItems {
+  field_ids?: string[];
+  text_ids?: string[];
+  shape_ids?: string[];
+}
+
+/** `eda_ops::TextRows`: "Set to specified values:"'s text rows; an absent key is "-- leave unchanged --". */
+export interface GlobalEditTextRows {
+  width?: Nm | null;
+  height?: Nm | null;
+  auto_thickness?: boolean;
+  bold?: boolean | null;
+  italic?: boolean | null;
+  /** "KiCad Font" or a family. */
+  font?: string | null;
+  keep_upright?: boolean | null;
+  visible?: boolean | null;
+  center_on_footprint?: boolean;
+}
+
+/** `eda_ops::Ipc4761Preset` (`VIA_PROTECTION_UI_MIXIN::IPC4761_PRESET` before `CUSTOM`). */
+export type Ipc4761Preset =
+  | "from_board"
+  | "none"
+  | "ia"
+  | "ib"
+  | "ia_inverted"
+  | "iia"
+  | "iib"
+  | "iia_inverted"
+  | "iiia"
+  | "iiib"
+  | "iiia_inverted"
+  | "iva"
+  | "ivb"
+  | "iva_inverted"
+  | "v"
+  | "via"
+  | "vib"
+  | "via_inverted"
+  | "vii";
 /** `eda_model::fp_edit::FootprintAttrs`. */
 export interface FootprintAttrsCmd {
   kind: "unspecified" | "smd" | "through_hole";
@@ -1832,10 +1879,19 @@ export type Cmd =
    * is already filtered (net/net-class/layer/width/"selected only" are
    * this dialog's own client-side job -- see `GlobalEditTracksAndViasDialog.tsx`).
    * `track_width`/`via_size` omitted (or `null`) leaves that property
-   * alone; this model has only one via "type" (no through/micro/blind/
-   * buried distinction, no padstack/annular-ring concept).
+   * alone. `unconnected` and `protection` are the via rows of "Set to specified values:".
    */
-  | { op: "edit_tracks_and_vias"; ids: string[]; track_width?: SizeSpec | null; via_size?: ViaSizeSpec | null; layer?: string | null }
+  | {
+      op: "edit_tracks_and_vias";
+      ids: string[];
+      track_width?: SizeSpec | null;
+      via_size?: ViaSizeSpec | null;
+      layer?: string | null;
+      /** "Via annular rings:" (`PADSTACK::SetUnconnectedLayerMode`). */
+      unconnected?: UnconnectedLayers | null;
+      /** "Via protection features:" (an IPC-4761 preset, kicad-port/globalEditTracksVias.ts `IPC4761_PRESETS`). */
+      protection?: Ipc4761Preset | null;
+    }
   /** Board Setup > Teardrops (task item 4): whole-struct replace. */
   | { op: "set_teardrop_settings"; settings: TeardropSettings }
   /** Regenerate the board's whole teardrop set from the current settings/tracks/vias/pads -- replaces, never appends to, this command's own previous output. */
@@ -1980,16 +2036,24 @@ export type Cmd =
   | { op: "delete_text"; id: string }
   | { op: "move_text"; id: string; x: Nm; y: Nm }
   /**
-   * `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close",
-   * scoped to the free-standing board items this model has: graphics,
-   * text and dimensions (no footprint reference/value fields, tables or
-   * barcodes exist as editable board items here -- see PARITY-pcb.md).
-   * Every field omitted (or `null`) leaves that property alone;
-   * `layer_defaults` is "Set to layer default values:" and ignores the
-   * fields. Filtering (scope, layer, "selected only") is
-   * `kicad-port/globalEditTextGraphics.ts`'s client-side job.
+   * `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close" (crates/ops/src/pcb_global_edit.rs): the board's graphics, texts (text boxes and
+   * table cells among them) and dimensions, and the footprints' fields (`REF:Name`), own texts (`REF~t<k>`) and graphics (`REF~g<k>`, the k-th of
+   * `Part.graphics`). Every field omitted (or `null`) leaves that property alone; `layer_defaults` is "Set to layer default values:" and ignores the
+   * fields. Filtering (scope, layer, parent reference and footprint, "selected only") is `kicad-port/globalEditTextGraphics.ts`'s client-side job.
    */
-  | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; dimension_ids?: string[]; layer_defaults?: boolean; layer?: string | null; line_width?: Nm | null; text_size?: Nm | null; text_thickness?: Nm | null }
+  | {
+      op: "edit_text_and_graphics";
+      shape_ids?: string[];
+      text_ids?: string[];
+      dimension_ids?: string[];
+      layer_defaults?: boolean;
+      layer?: string | null;
+      line_width?: Nm | null;
+      text_size?: Nm | null;
+      text_thickness?: Nm | null;
+      footprint?: GlobalEditFootprintItems;
+      rows?: GlobalEditTextRows;
+    }
   /** Cmd+D (`EDIT_TOOL::Duplicate`): exact copies of the named items in place, under fresh ids -- footprints (as new parts), tracks, vias, zones, shapes, texts, dimensions, groups (with copies of their members). See crates/ops/src/lib.rs `Cmd::Duplicate`. */
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
@@ -2037,6 +2101,10 @@ export type Cmd =
   | { op: "set_item_net"; ids: string[]; net: string }
   /** Track & Via Properties' net and its questions (crates/ops/src/pad_nets.rs `track_via_nets`): `net` null leaves every net; the answers left out make a question a refusal. */
   | { op: "track_via_nets"; ids: string[]; net: string | null; apply_anyway?: boolean; change_pads?: boolean }
+  /** The Net Inspector's Rename Selected Net, Delete Selected Net(s) and Add Net (`PCB_NET_INSPECTOR_PANEL`; crates/ops/src/net_edit.rs). Net names are the stored (escaped) ones. */
+  | { op: "rename_net"; from: string; to: string }
+  | { op: "delete_nets"; names: string[] }
+  | { op: "add_net"; name: string }
   | { op: "set_zone_name"; id: string; name: string }
   | { op: "replace_shape"; id: string; shape: CmdShape }
   /** The Properties panel's text style rows of a board text (crates/ops/src/pcb_props.rs `edit_text_style`): a key left out is unchanged. */
@@ -2211,6 +2279,7 @@ export type Cmd =
   | { op: "set_annotation_settings"; settings: AnnotationSettings; subpart_first_id: number; subpart_id_separator: number }
   | { op: "set_field_name_templates"; fields: TemplateFieldName[] }
   | { op: "set_bom_presets"; bom_presets: string[]; bom_fmt_presets: string[] }
+  | { op: "set_bom_view"; save?: Record<string, unknown>; delete?: string; view?: Record<string, unknown> }
   | { op: "set_bus_aliases"; aliases: BusAliasDef[] }
   // The SPICE simulator's settings (`NGSPICE_SETTINGS`, the project's `schematic.ngspice`) and the workbook's text (crates/ops/src/simulator.rs).
   | { op: "set_simulator"; ngspice: { workbook_filename: string; fix_include_paths: boolean; model_mode: number } | null; workbook: string | null }
@@ -2430,6 +2499,8 @@ export interface RouteFixReply {
    * session's own runs at this point). */
   real_end?: boolean;
   preview?: RoutePreview;
+  /** `updateSizesAfterRouterEvent` after the fix (on the via's other layer after a via), UI-LEFT R5. */
+  sizes?: RouterEventSizes | null;
 }
 
 /** `POST /api/route/drag_{start,move,finish}` (gap #7 stage 5, `D`):
@@ -2544,6 +2615,21 @@ export interface DpFixReply {
   blocked: boolean;
   real_end?: boolean;
   preview?: DiffPairPreview;
+  /** `updateSizesAfterRouterEvent` on the layer the pair goes on on (UI-LEFT R5). */
+  sizes?: RouterEventSizes | null;
+}
+
+/** What `ROUTER_TOOL::updateSizesAfterRouterEvent` leaves in the router's sizes after a fix, a via or a layer switch (UI-LEFT R5, crates/cli
+ *  route_api.rs `event_sizes_json`): the clearance asked again on the layer, and the width (a pair's: its width and gap) when asked again, with
+ *  their sources; `width_applied` when the head took the width. */
+export interface RouterEventSizes {
+  clearance: Nm;
+  clearance_source: string;
+  width?: Nm | null;
+  width_source?: string | null;
+  width_applied?: boolean;
+  gap?: Nm | null;
+  gap_source?: string | null;
 }
 
 /** `7` / `8` / `9`: which `pcbnew.LengthTuner.*` the tool is running. */
@@ -3022,6 +3108,10 @@ export interface SchematicLabel {
   fields?: SchLabelField[];
   /** The font colour (`SchExtras::text_attrs`); absent is the layer's. */
   color?: import("./schEditTypes").SchColor | null;
+  /** The font Label Properties chose (`SchExtras::text_attrs`): absent is the default; "KiCad Font" the stroke font; anything else an outline font's family. */
+  font?: string | null;
+  /** The label's fields were placed by hand (`GetFieldsAutoplaced() == AUTOPLACE_NONE`): they stay where they are until Autoplace Fields. */
+  fields_hand_placed?: boolean;
 }
 
 /** One field of a label (`SCH_FIELD` of an `SCH_LABEL_BASE`), placed: `shown` is its text as drawn (a global label's Sheet References read as the pages its name is on). */
@@ -3036,7 +3126,15 @@ export interface SchLabelField {
   at: [Nm, Nm];
   vertical: boolean;
   h: "left" | "center" | "right";
+  /** Its vertical justification (centre while autoplaced; a field placed by hand keeps its own). */
+  v?: "top" | "center" | "bottom";
   size_nm: Nm;
+  /** The id the field is picked, moved and edited by (`fld:<label id>:<name>`), and the label's id. */
+  id?: string;
+  owner?: string;
+  /** Its font face and colour (`SchExtras::field_looks` under the label's id); absent is the default font and the layer's colour. */
+  font?: string | null;
+  color?: { r: number; g: number; b: number; a: number } | null;
 }
 
 /** Schematic Setup > Formatting > Inter-sheet References (`SCHEMATIC_SETTINGS::m_IntersheetRefs*`). */
@@ -3070,6 +3168,9 @@ export interface SchematicText {
   italic?: boolean;
   color?: import("./schEditTypes").SchColor | null;
   href?: string | null;
+  /** The font Text Properties chose (absent: the default font) and its "Exclude from simulation". */
+  font?: string | null;
+  exclude_from_sim?: boolean;
 }
 
 /** A title block as `GET /api/state` / `GET /api/schematic` report it (`TITLE_BLOCK`): `comments[0]` is KiCad's comment 1, up to nine, trailing empty ones dropped. */
@@ -3125,6 +3226,21 @@ export interface Sheet {
   /** The sheet's name and file where KiCad's Autoplace Fields puts them. */
   fields?: SchField[];
   fields_autoplaced?: FieldsAutoplaced;
+  /** Sheet Properties' Style and Attributes (`SchExtras::sheet_props`); absent: the look the studio has always written, a 6 mil border and a pale yellow fill, no attribute. */
+  props?: SheetProps | null;
+  /** The sheet's user fields (`SchExtras::sheet_fields`: `SCH_FIELD`s past Sheetname and Sheetfile), in order. */
+  user_fields?: Array<{ name: string; text: string; visible?: boolean; italic?: boolean }> | null;
+}
+
+/** See `Sheet::props`: the border's width (0: the default line width) and colour, the background colour (absent: KiCad's UNSPECIFIED), the four attributes. */
+export interface SheetProps {
+  border_width_nm?: Nm;
+  border_color?: import("./schEditTypes").SchColor | null;
+  fill_color?: import("./schEditTypes").SchColor | null;
+  exclude_from_sim?: boolean;
+  exclude_from_bom?: boolean;
+  exclude_from_board?: boolean;
+  dnp?: boolean;
 }
 
 /** One step of the breadcrumb from the root down to the sheet `GET /api/schematic?sheet=...` actually returned -- empty for the root itself. */
@@ -3160,6 +3276,8 @@ export interface Schematic {
   lines?: SchLine[];
   /** Drawn shapes, text boxes, rule areas and directive labels -- see `SchGraphic` (api/schEditTypes.ts). Absent from a backend built before they existed. */
   graphics?: SchGraphic[];
+  /** A text box's and a directive label's font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id; absent: KiCad's defaults. */
+  graphic_text_attrs?: Record<string, { font?: string; color?: import("./schEditTypes").SchColor; href?: string; exclude_from_sim?: boolean }>;
   /** The tables of this sheet (`SCH_TABLE`, `crates/cli/src/table_json.rs` `sch_table_json`): the board's `BoardTable` shape with an empty layer. Absent from a backend built before sheet tables. */
   tables?: BoardTable[];
   /** Ids of locked items (Lock / Unlock). Absent from a backend built before locks existed. */
@@ -3762,6 +3880,9 @@ export interface FieldsTableReply {
   spec: FieldsTableSpec;
   /** The names of KiCad's built-in views (`BOM_PRESET::BuiltInPresets`), which a request can apply with `preset`. */
   presets?: string[];
+  /** The built-in views with their columns, and the project's own (`schematic.bom_presets`), so the box can show which one the view is (`syncBomPresetSelection`). */
+  built_in_presets?: Array<{ name: string; spec: FieldsTableSpec }>;
+  user_presets?: Array<{ name: string; spec: FieldsTableSpec }>;
   user_fields: string[];
   rows: FieldsTableRow[];
 }
@@ -3791,7 +3912,9 @@ export interface SchSearchData {
   find: string;
   replace: string;
   match_case: boolean;
-  mode: "plain" | "whole_word" | "wildcard";
+  mode: "plain" | "whole_word" | "wildcard" | "regex";
+  /** The dialog's Regular Expression box, kept ticked under Whole words only (which wins: `updateFlags`); the server reads `mode`. */
+  regex_box?: boolean;
   search_hidden_fields: boolean;
   search_pins: boolean;
   search_net_names: boolean;
@@ -3811,7 +3934,7 @@ export interface FindMatch {
   page?: string;
   /** The sheet's place in the page order: matches come sorted by it. */
   sheet_rank?: number;
-  kind: "field" | "label" | "text" | "pin" | "label_field";
+  kind: "field" | "label" | "text" | "pin" | "label_field" | "power_field" | "sheet_field" | "sheet_pin" | "text_box" | "directive_field";
   /** Symbol reference / label id / text id that owns the match. */
   id: string;
   /** Field name or pin number (empty for labels/text). */

@@ -70,16 +70,28 @@ Notes:
   - Add / remove / chamfer corner and Simplify empty the zone's fill (KiCad keeps the stale fill: only the corner drag `UnFill()`s).
   - The IR polygon has no holes, so a zone made a polygon is a slit ring (its holes come back when it is made a zone again).
   - M. PARITY-pcb §8, §11, §52, §68; GAPS 13.
-- **P9 [FM] Net Inspector.**
-  - It is a modal dialog, not a docked panel.
-  - No Group by Netclass or custom groups, no time-domain columns, and no Rename, Delete or Add Net.
-  - M. GAPS 29; PARITY-pcb §32d.
-- **P10 [FM] Search panel.** There is no docked panel: Show Search Panel and Interactive.search jump to the Activity tab. M. GAPS 21; PARITY-pcb §7a, §32b.
-- **P11 [FM] Colour theme.** It can't be edited: the swatches are read-only and Use Color from Schematic is dimmed. Renaming a net class loses its colour. M. GAPS 18; PARITY-pcb §24.
-- **P12 [FM] Global edits.**
-  - Edit Text & Graphics has no footprint reference, value, field or graphic scopes, no By-parent filters, and no font, bold, keep-upright or visible rows.
-  - Edit Track & Via has no microvia, annular-ring or IPC-4761 presets.
-  - M. GAPS 35; PARITY-pcb §13.
+- **P9 [FM] Net Inspector.** **done (task-u3-panels)**: a docked pane under the canvas (View > Panels > Net Inspector, checked; the Appearance panel's button), with the search box and the configure button; Group by Netclass and custom groups (`EDA_COMBINED_MATCHER`, KiCad's prompt), their sums, opened and closed; Show Time Domain Details (the tuning profiles' delays from `CalculateLengthDetails`); Show / Hide Columns; a double click or Enter highlights the rows' nets, the board's highlight selects their rows; Rename / Delete / Add Net with KiCad's prompts and messages, each one undo step (the board's net renamed or deleted on its pads and copper, the schematic's netlist left as it is); the settings kept per person. PARITY-pcb §73. Left:
+  - The columns cannot be dragged into another order or resized, so the header menu has no Auto-fit entries; the pane docks at the bottom only.
+  - With Strict on, a routed net cannot be deleted (its copper would short on no net); turn Strict off to delete it, as KiCad allows.
+  - A renamed net's class follows its new name's patterns, and a custom rule that names it is not rewritten. KiCad's rename and delete are not undoable, ours are.
+  - The report is a download (no file dialog).
+  - M. GAPS 29; PARITY-pcb §32d, §73.
+- **P10 [FM] Search panel.** **done (task-u3-panels)**: a docked pane under the canvas, shown by Search (Ctrl+G), View > Panels > Search and Find's "Show search panel" link, the box focused; the Footprints, Zones, Nets, Ratsnest, Text, Groups and Drills tabs with KiCad's columns and permissive matching; the sort and the heading clicks; selecting rows selects their items on the board and pans or zooms to them (the nets highlighted on Nets and Ratsnest); a double click opens the properties (Board Setup's Net Classes for a net); Ctrl+A, Ctrl+C, Copy; Search Hidden Fields and Search Metadata kept per person. The Activity tab is no longer involved. PARITY-pcb §74. Left:
+  - X and Y are from the page origin (no display-origin setting); the columns are fixed, not resizable.
+  - A net no item names is not on the Nets tab; the schematic has no Search pane.
+  - S. GAPS 21, 29; PARITY-pcb §7a, §32b, §74.
+- **P11 [FM] Colour theme.** **done (task-u3-panels)**: Preferences > PCB Editor > Colors (the theme list, New Theme... with KiCad's prompt and "Theme already exists!", each layer's swatch with Copy / Paste / Revert to saved color, Reset Colors to Defaults); the Appearance panel's layer and object swatches edit the editor's theme, and a read-only theme says KiCad's message; the board is drawn in the chosen theme; the themes are the person's, kept in the browser like the other preferences; Use Color from Schematic takes the class's schematic colour; a class renamed in Board Setup keeps its colour (PARITY-pcb §75). Left:
+  - KiCad has no Duplicate button: New Theme... starts from the shown theme's colours, which is the duplicate.
+  - No preview board (the page draws on the board while it is up) and no theme files in or out ("Open Theme Folder").
+  - The Footprint Editor uses the board editor's theme; the schematic and symbol editors have no Colors page.
+  - Undo of a net class rename does not bring the colour back to the old name (the colour is outside the undo history).
+  - S. GAPS 18; PARITY-pcb §24, §75.
+- **P12 [FM] Global edits.** **done (task-u3-panels)**: Edit Text & Graphics Properties walks the footprints first, as `TransferDataFromWindow` does: Reference designators, Values, Other footprint fields (and a `${REFERENCE}` / `${VALUE}` field or text with its box), Footprint graphic items and Footprint text items; By layer, By parent reference designator and By parent footprint library link (wildcards, remembered for the session), Selected items only through the footprint and its group; KiCad's Action rows -- Layer, Visible (fields only), Line thickness, Font ("KiCad Font" or a family; a field's face is now read and written), Bold, Italic, Text width and height apart, Text thickness with auto, Keep upright, Center on footprint -- each "-- leave unchanged --" to begin with, and Set to layer default values over the layer-class grid. Edit Track & Via Properties has the Microvias box (a via's own type), Via annular rings and Via protection features (KiCad's 19 IPC-4761 presets). Each OK is one undo step. PARITY-pcb §76. Left:
+  - Footprint dimensions picks nothing: a footprint's dimensions, text boxes, tables and barcodes are kept as the text of their forms (GAPS 25).
+  - A footprint's hidden texts and its courtyard's own graphics are not reached; a footprint graphic or text edited gives the instance its own copy of the footprint (the library's art is shared).
+  - The library link filter compares the part's footprint name (a built-in package's bare `0603`, not the KiCad footprint it is written as).
+  - A dimension's label: one size, no bold, italic or font, its "auto" thickness written as the pen; a value box takes a number, not an expression.
+  - S. GAPS 35; PARITY-pcb §13, §76.
 - **P13 [BD] Dimensions.** **done (task-u2-lines)**: each kind has `DrawDimension`'s click sequence (an aligned and an orthogonal one's height click, a centre mark, a radial one and a leader done at the second, a leader's dialog at once, the tool armed after) and a live preview of the whole dimension (`POST /api/dimension/preview`); a leader's text frame (none, rectangle, circle) is drawn, edited in the dialog and the Properties panel, and stops its lines; the point editor drags the feature points, the crossbar ends, a radial's knee and the text, a dragged text is placed by hand (`text_position_mode 2`, now read, kept and written; it was read as 0) and follows its crossbar; the dialog has KiCad's Position mode with Manual (PARITY-pcb §69). Left:
   - The height step of a slanted aligned dimension stays on the grid (KiCad turns the grid off); no width keys, layer change or Properties during the draw.
   - A manual text's left or right justification is not flipped past the crossbar's middle (the IR's dimension text is always centred); no font, bold, italic or mirror.
@@ -214,20 +226,20 @@ Notes:
   - Only the Normal and De Morgan body styles exist.
   - Alternates are synced to the reference's units on the sheet in view only; the Symbol Unit submenu's Duplicate is not possible.
   - M. GAPS 12/19; PARITY-sch §48, §59; r5 D5-H3.
-- **S6 [BD] Text looks.**
-  - Font face, colour and hyperlink can't be edited.
-  - A free text's bold, italic and colour are kept but not drawn.
-  - A label's own fields can't be clicked or moved, and a hand-moved one is autoplaced again.
-  - M. GAPS 12; PARITY-sch §39, §52.
+- **S6 [BD] Text looks.** **done (task-u3-schtext)**: Text, Label and Text Box Properties edit the Font (KiCad's choices and the machine's families), the Color and, for a text and a text box, the Link (the hierarchy's pages, `ValidateHyperlink`'s message) and Exclude from simulation (`set_text_attrs`, `(face ..)` written and read); a free text's bold, italic and colour and a label's and a text box's colour are drawn; a label's fields (the Sheet References included) are items -- clicked, dragged, turned and edited on the canvas (Field Properties with Font and Color), and a field placed by hand stays (no `(fields_autoplaced ..)`, read back from KiCad) until Autoplace Fields; the Properties panel's Font row edits a text's and a label's face (PARITY-sch §60). Left:
+  - An outline font is drawn with the stroke font; a text placed with T or a text box being drawn takes its font, colour and link after it is placed.
+  - A label's field keeps no size, bold or shown name; a field added to a label placed by hand goes where Autoplace Fields puts it.
+  - (was: font, colour and link not editable; a free text's bold, italic and colour not drawn; a label's fields neither clicked nor kept where moved.)
+  - M. GAPS 12; PARITY-sch §39, §52, §60.
 - **S7 [BD] Properties panel.** **done (task-u1-props)**: every class lists KiCad's registered rows (a test replays the C++), and the symbol's and sheet's fields are rows as KiCad's panel adds them; a label's size, bold, italic, colour and justification, a text's bold, italic, colour and hyperlink, wire ends, Body Style, Exclude From Position Files and user fields are edited; Sheetfile shows the field's own text (B3-M1) (PARITY-sch §55). Left, read-only with the reason as the tooltip:
-  - Fonts; a symbol's pin display (one library symbol per lib_id). (Its Unit is `set_symbol_unit` since task-u2-symprops.)
-  - A sheet's border, fill and attributes (not kept: S8); a text box's margins, fill, colour and hyperlink; an image's transform offset.
+  - A text box's and a directive label's font; a symbol's pin display (one library symbol per lib_id). (Its Unit is `set_symbol_unit` since task-u2-symprops; a text's and a label's Font and a sheet's border, fill and attributes are editable since task-u3-schtext.)
+  - A text box's margins, fill, colour and hyperlink (its dialog edits the last three); an image's transform offset.
   - M. PARITY-sch §17, §30, §45, §55.
-- **S8 [FM] Hierarchy.**
-  - The Navigator has no Edit Page Number, Rename, New or Delete Top-Level Sheet, and no net highlight.
-  - A KiCad 10 project with several top-level sheets is folded under one root.
-  - A sheet's colours and DNP and BOM flags aren't kept or editable, and there is no Add Field on a sheet.
-  - M. PARITY-sch §30, §40, §50, §52; r2 B-L1, r6 C6-L2, r7 A7-L3.
+- **S8 [FM] Hierarchy.** **done (task-u3-schtext)**: the Navigator's right-click menu -- Edit Page Number, Rename in place, Delete Top-Level Sheet ("Delete top-level sheet '%s'?..." / "Cannot delete the last top-level sheet."), New Top-Level Sheet ("Enter name for new top-level sheet:"), Expand / Collapse All -- and its net highlight (the sheets holding the highlighted net in `LAYER_BRIGHTENED`); a KiCad 10 project's top-level sheets shown as roots of their own (`virtual_root`); a sheet's border width and colour, fill colour and Exclude from simulation / bill of materials / board and Do not populate kept, written, read, drawn (fill, DNP cross) and edited in Sheet Properties and the Properties panel; Add Field, Move and Delete of a sheet's user fields in Sheet Properties (PARITY-sch §60). Left:
+  - New Top-Level Sheet on a design whose root is its only top-level sheet (offered disabled); the derived files keep the root that places a project's top-level sheets.
+  - A sheet's attributes are its own on every path and variant and are not given to its symbols in the studio's own tables; a sheet with no style of its own is drawn unfilled (written with the old pale fill).
+  - The rows read "name file · page N" (A7-L3); a local net on a screen shown twice lights its first path's row only.
+  - M. PARITY-sch §30, §40, §50, §52, §60; r2 B-L1, r6 C6-L2, r7 A7-L3.
 - **S9 [BD] A shared screen (a sheet placed twice).**
   - Annotate numbers only that screen's references.
   - Every path shares one power reference.
@@ -238,12 +250,15 @@ Notes:
   - Ctrl+E edits the shared entry, so every placement changes.
   - A `lib_name` copy is traced as the lib_id's, which can give a wrong net.
   - L. PARITY-sch §48, §50.
-- **S11 [FM] Symbol Fields Table.**
-  - No scope selector, saved presets, field-name templates or "Add field from library".
-  - No Save/Discard question on close.
-  - The Description column may be done (§52 H3).
-  - M. PARITY-sch §7, §25; r5 C5-L9.
-- **S12 [FM] Find/Replace.** No regex, and it doesn't search sheet names, sheet files, pins or library metadata. S. GAPS 1/4; PARITY-sch §8.
+- **S11 [FM] Symbol Fields Table.** **done (task-u3-schtext)**: the scope (Entire Project, Current Sheet Only, Current Sheet and Down, and 25ec2335's Selection); the project's view presets (the box with the built-in and the project's in name order, "Save preset..." -- "BOM preset name:", built-in names refused, "Overwrite existing preset?" -- and "Delete preset...", in `schematic.bom_presets`; the box shows the preset the view is); the field name templates as hidden columns; the project's `bom_settings` view on open; "Save changes?" with Save / Discard Changes / Cancel on a close; Rename Field's and Remove's prompts; the variant columns kept (PARITY-sch §60). Left:
+  - "Add field from library" is not a KiCad feature (its only Add is "New field name:"); KiCad has no Rename of a preset either (save under the new name, delete the old).
+  - A preset is saved when saved (KiCad at the close) and the closing view is not kept as `bom_settings`; with no saved view the user fields are shown.
+  - The Description column, editable BOM Name labels, the grid's context menus, the Group By refusals, the format presets' Save / Delete, Set / Clear Variant Symbol.
+  - M. PARITY-sch §7, §25, §60; r5 C5-L9.
+- **S12 [FM] Find/Replace.** **done (task-u3-schtext)**: Regular Expression (in Find and Replace, Whole words only winning over it; `wxRegEx`'s syntax with `\N` and `&` in the replacement: `eda_model::wx_regex`, the one engine shared with the net class patterns, no crate); the search reaches sheets' names, files and user fields, sheet pins, power symbols' values, text boxes and directive labels' fields beside the symbols' fields and pins; Replace renames a sheet, a sheet pin, a power symbol's net, a text box, a field, not a sheet's file nor a symbol's pin (as KiCad); "Search the current selection only" in both modes (PARITY-sch §60). Left:
+  - Library metadata: KiCad's dialog has no box for `searchMetadata` either; groups and ERC markers are not searched.
+  - The engine's match is leftmost-first (POSIX: leftmost-longest), which shows only in Replace's span with alternations; it does not upper-case the pattern as KiCad does; a power symbol's Reference is found, not replaced.
+  - S. GAPS 1/4; PARITY-sch §8, §60.
 - **S13 [FM] Arcs.** Two clicks make a fixed 90° arc, and there is no arc point editor. M. PARITY-sch §12.
 - **S14 [BD] Annotation.**
   - Placing a unit never fills a free unit of an existing part (D-A1).
@@ -300,35 +315,39 @@ Notes:
   - ~~D on several tracks does nothing (MULTI_DRAGGER).~~ Done: the selected tracks drag together, in the three router modes.
   - Left: the multi-track Shove has no springback; the selection is not cleared at the start, restored on Esc, or set to the leader segments after a multi-track drag; the closest net is not highlighted while dragging; a footprint's own Edge.Cuts / Margin graphics stay (board shapes in this model).
   - L. GAPS 7 R7-R9; pns Stages 21-22.
-- **R2 [FM] Diff pairs.**
-  - No arcs in the pair router or the tuners (F4-2).
-  - The blind, buried and microvia commands do nothing in the pair tool.
-  - F finishes at the cursor.
-  - M. GAPS 7; pns Stages 11-12.
-- **R3 [BD] Length tuner.**
-  - No pad-to-die length or delay, and a time-domain rule gives no target.
-  - A pattern can't be moved or rotated.
-  - The corner style and single-sided settings are ignored.
-  - The status box sits at the cursor.
-  - M. GAPS 7; pns Stage 8; PARITY-pcb §35, §65.
-- **R4 [BD] Autoroute.** It routes inside the outline's summary polygon and ignores cutouts. M. GAPS 27.
-- **R5 [BD] Layers and vias.**
-  - V goes to the layer pair's other layer, not to the nearest ratsnest anchor's.
-  - The clearance isn't re-read after a layer switch.
-  - V armed before a route outlives the tool (R7-R6).
-  - Autoroute leaves the active layer changed (R7-R7).
-  - S. pns Stages 11-21.
+- **R2 [FM] Diff pairs. done (task-u3-router)** -- pns Stage 23.
+  - ~~No arcs in the pair router or the tuners (F4-2).~~ Done: a pair goes on from two arc track ends (`DP_PRIMITIVE_PAIR` / `BuildFromPrimitivePair` with `ARC_T`); the pair and skew tuners take an arc (`AssembleDiffPair` by centre and radius, `addCornersUntilIndex`'s `AddArc`). KiCad's pair placer itself draws mitered corners only.
+  - ~~The blind, buried and microvia commands do nothing in the pair tool.~~ Done: `DIFF_PAIR_PLACER::makeVia`'s via type, committed with it.
+  - ~~F finishes at the cursor.~~ Done: `ROUTER::Finish` with the P line, finished on the coupled pair at the nearest anchor, else the pair goes on.
+  - Left: from the arcs' ends a cursor steeply off their chord direction fits no head, in both modes (seen in the kicad-cli proof's setup; not compared with KiCad).
+  - M. GAPS 7; pns Stages 11-12, 23.
+- **R3 [BD] Length tuner. done (task-u3-router)** -- pns Stage 23 (branch `task-u3-router-tune`).
+  - ~~No pad-to-die length or delay, and a time-domain rule gives no target.~~ Done: the pads' `(die_length ..)` / `(die_delay ..)` count; a time-domain rule gives the target delay (`EditStart`).
+  - ~~A pattern can't be moved or rotated.~~ Done: moved, turned and flipped as a generator with other items; alone it slides along its track and is tuned again.
+  - ~~The corner style and single-sided settings are ignored.~~ Done: the tool's settings start from Board Setup's page each time it is entered.
+  - ~~The status box sits at the cursor.~~ Done: `TUNING_STATUS_VIEW_ITEM::ViewDraw`'s box at the mouse position.
+  - Left: the lone move previews rigidly (the slide is applied at the drop) and its start snaps to segments only; a pair pattern's merged outline; the pattern's message-panel lines; a lone pattern's Duplicate refusal; the time domain for a class whose profile has it off.
+  - M. GAPS 7; pns Stages 8, 23; PARITY-pcb §35, §65.
+- **R4 [BD] Autoroute. done (task-u3-router)**: the autoroute (Route, the FreeRouting port) routes round the board outline's cutouts, keep-outs on every copper layer as KiCad's DSN export writes them, the edge clearance kept from their rims; kicad-cli's DRC is clean. Left: the generated pours still cover the cutout (the fill clears it); FreeRouting's own reading of the cutout keep-out not re-dumped. M. GAPS 27.
+- **R5 [BD] Layers and vias. done (task-u3-router)** -- pns Stage 23.
+  - ~~V goes to the layer pair's other layer, not to the nearest ratsnest anchor's.~~ Done (`GetNearestRatnestAnchor`, the sizes' `PairedLayer`), for a route, a pair and V before a route.
+  - ~~The clearance isn't re-read after a layer switch.~~ Done: `updateSizesAfterRouterEvent` after every fix, via and layer switch (the width and a pair's gap too, as the placers' `UpdateSizes` allow); the message panel shows them.
+  - ~~V armed before a route outlives the tool (R7-R6).~~ Done.
+  - ~~Autoroute leaves the active layer changed (R7-R7).~~ Done.
+  - Left: the router sizes' layer pairs start afresh with each route (KiCad keeps the last route's via pair in `m_savedSizes`).
+  - S. pns Stages 11-21, 23.
 - **R6 [BD] The head's shape.**
   - A fan-out elbow isn't straightened (`optimizeTailHeadTransition`).
   - No hull snap in highlight-collisions mode.
   - `reduceTail` and `handlePullback` are not ported.
   - Earlier vias aren't shoved by a later leg.
   - M. pns Stages 2, 10, 12.
-- **R7 [BD] Grab radius and widths.**
-  - The start and end grab radius is a fixed 0.5 mm, not the grid size.
-  - Automatically Select Track Width stays on after a toolbar pick.
-  - The width keys cycle.
-  - S. pns Stage 12; PARITY-boardctl §4.
+- **R7 [BD] Grab radius and widths. done (task-u3-router)** -- pns Stage 23.
+  - ~~The start and end grab radius is a fixed 0.5 mm, not the grid size.~~ Done: the grid, measured to the copper (`pickSingleItem`'s `maxSlopRadius`, `snapToItem`), for routes, pairs and drags.
+  - ~~Automatically Select Track Width stays on after a toolbar pick.~~ Not KiCad's: at 8303b2ad a toolbar pick sets `m_TempOverrideTrackWidth` and leaves "Automatically select track width" on (`Tracks_and_Vias_Size_Event`'s `ID_AUX_TOOLBAR_PCB_TRACK_WIDTH`); the toolbar's Track Width and Via Size boxes, display-only before, now do exactly that.
+  - ~~The width keys cycle.~~ KiCad's already (Stage 18): the first press of a route at an inherited width overrides it, then the index steps and wraps, as `TrackWidthInc` / `Dec`.
+  - Left: `pickSingleItem`'s free-pad and no-net (Highlight collisions) special cases.
+  - S. pns Stages 12, 23; PARITY-boardctl §4.
 - **R8 [BD] Size dialogs.**
   - An extra Optimizer effort row, and "Use Custom Values…".
   - Pre-defined Sizes' Add isn't pre-filled, and a 0 width is refused.

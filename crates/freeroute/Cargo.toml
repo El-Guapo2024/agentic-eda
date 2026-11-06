@@ -11,6 +11,9 @@ license = "GPL-3.0-only"
 [dependencies]
 # The board and rules it routes, read from `design.json` and the intent.
 eda-model = { path = "../model" }
+# The board outline with its cutouts, as `BOARD::GetBoardPolygonOutlines`
+# makes it of Edge.Cuts: the boundary and its holes (`design::Plan`).
+eda-drc = { path = "../drc" }
 
 [dev-dependencies]
 serde_json = { workspace = true }

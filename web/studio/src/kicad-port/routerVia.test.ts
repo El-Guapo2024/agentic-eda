@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, NetClass } from "../api/types";
 import { chosenTrackWidthOf } from "./routerSizes";
-import { chosenViaEntry, chosenViaOf, chosenViaSize, currentViaSize, routerLayerTarget, DEFAULT_CUSTOM_TRACK_VIA, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
+import { chosenViaEntry, chosenViaOf, chosenViaSize, currentViaSize, layerPairMap, routerLayerTarget, startWithViaAfterToolChange, DEFAULT_CUSTOM_TRACK_VIA, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
 
 const CU4 = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
 const blind: ViaCommand = { type: "blind", selectLayer: false };
@@ -19,14 +19,14 @@ test("the router's via actions carry KiCad's VIA_ACTION_FLAGS", () => {
 
 test("a blind via on a layer of the pair spans the pair, and the route goes on on the pair's other layer", () => {
   const pair = { a: "F.Cu", b: "In1.Cu" };
-  assert.deepEqual(planViaCommand({ cmd: blind, currentLayer: "F.Cu", copper: CU4, layerPair: pair }), { ok: true, viaType: "blind", span: ["F.Cu", "In1.Cu"], pair: ["F.Cu", "In1.Cu"], toLayer: "In1.Cu" });
+  assert.deepEqual(planViaCommand({ cmd: blind, currentLayer: "F.Cu", copper: CU4, layerPair: pair }), { ok: true, viaType: "blind", span: ["F.Cu", "In1.Cu"], pair: ["F.Cu", "In1.Cu"], toLayer: "In1.Cu", sizesPairs: { "F.Cu": "In1.Cu", "In1.Cu": "F.Cu" } });
   // from the bottom layer of the pair: `currentLayer = pairTop; targetLayer = pairBottom`, and `PairedLayer( In1 )` is F.Cu
-  assert.deepEqual(planViaCommand({ cmd: blind, currentLayer: "In1.Cu", copper: CU4, layerPair: pair }), { ok: true, viaType: "blind", span: ["F.Cu", "In1.Cu"], pair: ["F.Cu", "In1.Cu"], toLayer: "F.Cu" });
+  assert.deepEqual(planViaCommand({ cmd: blind, currentLayer: "In1.Cu", copper: CU4, layerPair: pair }), { ok: true, viaType: "blind", span: ["F.Cu", "In1.Cu"], pair: ["F.Cu", "In1.Cu"], toLayer: "F.Cu", sizesPairs: { "F.Cu": "In1.Cu", "In1.Cu": "F.Cu" } });
 });
 
 test("off the pair a blind via goes to the pair's top layer", () => {
   const plan = planViaCommand({ cmd: blind, currentLayer: "B.Cu", copper: CU4, layerPair: { a: "In1.Cu", b: "In2.Cu" } });
-  assert.deepEqual(plan, { ok: true, viaType: "blind", span: ["In1.Cu", "B.Cu"], pair: ["In1.Cu", "B.Cu"], toLayer: "In1.Cu" });
+  assert.deepEqual(plan, { ok: true, viaType: "blind", span: ["In1.Cu", "B.Cu"], pair: ["In1.Cu", "B.Cu"], toLayer: "In1.Cu", sizesPairs: { "In1.Cu": "B.Cu", "B.Cu": "In1.Cu" } });
 });
 
 test("a pair of one layer is a broken via: KiCad's message", () => {
@@ -36,19 +36,19 @@ test("a pair of one layer is a broken via: KiCad's message", () => {
 
 test("the implicit blind via on the F.Cu/B.Cu pair stays a blind via (the through conversion comes before the implicit target, as in KiCad)", () => {
   const plan = planViaCommand({ cmd: blind, currentLayer: "F.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" } });
-  assert.deepEqual(plan, { ok: true, viaType: "blind", span: ["F.Cu", "B.Cu"], pair: ["F.Cu", "B.Cu"], toLayer: "B.Cu" });
+  assert.deepEqual(plan, { ok: true, viaType: "blind", span: ["F.Cu", "B.Cu"], pair: ["F.Cu", "B.Cu"], toLayer: "B.Cu", sizesPairs: { "F.Cu": "B.Cu", "B.Cu": "F.Cu" } });
 });
 
 test("a picked layer: a blind or micro via from one outer layer to the other is a through via", () => {
-  assert.deepEqual(planViaCommand({ cmd: pick("micro"), currentLayer: "B.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" }, picked: "F.Cu" }), { ok: true, viaType: "through", span: ["F.Cu", "B.Cu"], pair: ["F.Cu", "B.Cu"], toLayer: "F.Cu" });
-  assert.deepEqual(planViaCommand({ cmd: pick("micro"), currentLayer: "F.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" }, picked: "In1.Cu" }), { ok: true, viaType: "micro", span: ["F.Cu", "In1.Cu"], pair: ["F.Cu", "In1.Cu"], toLayer: "In1.Cu" });
-  assert.deepEqual(planViaCommand({ cmd: pick("blind"), currentLayer: "In2.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" }, picked: "In1.Cu" }), { ok: true, viaType: "blind", span: ["In1.Cu", "In2.Cu"], pair: ["In1.Cu", "In2.Cu"], toLayer: "In1.Cu" });
+  assert.deepEqual(planViaCommand({ cmd: pick("micro"), currentLayer: "B.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" }, picked: "F.Cu" }), { ok: true, viaType: "through", span: ["F.Cu", "B.Cu"], pair: ["F.Cu", "B.Cu"], toLayer: "F.Cu", sizesPairs: { "F.Cu": "B.Cu", "B.Cu": "F.Cu" } });
+  assert.deepEqual(planViaCommand({ cmd: pick("micro"), currentLayer: "F.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" }, picked: "In1.Cu" }), { ok: true, viaType: "micro", span: ["F.Cu", "In1.Cu"], pair: ["F.Cu", "In1.Cu"], toLayer: "In1.Cu", sizesPairs: { "F.Cu": "In1.Cu", "In1.Cu": "F.Cu" } });
+  assert.deepEqual(planViaCommand({ cmd: pick("blind"), currentLayer: "In2.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" }, picked: "In1.Cu" }), { ok: true, viaType: "blind", span: ["In1.Cu", "In2.Cu"], pair: ["In1.Cu", "In2.Cu"], toLayer: "In1.Cu", sizesPairs: { "In1.Cu": "In2.Cu", "In2.Cu": "In1.Cu" } });
 });
 
 test("a picked layer for a through via: the via spans the board, the route goes on on the picked layer", () => {
-  assert.deepEqual(planViaCommand({ cmd: pick("through"), currentLayer: "F.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" }, picked: "In2.Cu" }), { ok: true, viaType: "through", span: ["F.Cu", "B.Cu"], pair: ["F.Cu", "In2.Cu"], toLayer: "In2.Cu" });
+  assert.deepEqual(planViaCommand({ cmd: pick("through"), currentLayer: "F.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" }, picked: "In2.Cu" }), { ok: true, viaType: "through", span: ["F.Cu", "B.Cu"], pair: ["F.Cu", "In2.Cu"], toLayer: "In2.Cu", sizesPairs: { "F.Cu": "In2.Cu", "In2.Cu": "F.Cu" } });
   // the current layer is allowed for a through via: it stays on it (`PairedLayer` of a pair of one layer)
-  assert.deepEqual(planViaCommand({ cmd: pick("through"), currentLayer: "In1.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" }, picked: "In1.Cu" }), { ok: true, viaType: "through", span: ["F.Cu", "B.Cu"], pair: ["In1.Cu", "In1.Cu"], toLayer: "In1.Cu" });
+  assert.deepEqual(planViaCommand({ cmd: pick("through"), currentLayer: "In1.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" }, picked: "In1.Cu" }), { ok: true, viaType: "through", span: ["F.Cu", "B.Cu"], pair: ["In1.Cu", "In1.Cu"], toLayer: "In1.Cu", sizesPairs: { "In1.Cu": "In1.Cu" } });
 });
 
 test("nothing without a route, a cancelled picker, or a blind via picked to its own layer", () => {
@@ -150,4 +150,41 @@ test("Draw Via takes the board's list entry at the chosen index each time, not t
   assert.deepEqual(currentViaSize(board([{ diameter: 1_000_000, drill: 500_000 }]), 4, false, DEFAULT_CUSTOM_TRACK_VIA), { diameter: 600_000, drill: 300_000 });
   // Custom sizes in use.
   assert.deepEqual(currentViaSize(board([]), 1, true, { trackNm: 1, viaDiameterNm: 900_000, viaDrillNm: 400_000 }), { diameter: 900_000, drill: 400_000 });
+});
+
+// UI-LEFT R5: Place Through Via's implicit target (`handleLayerSwitch`: "Try to switch to the nearest ratnest item's layer if we have one").
+const through = VIA_COMMANDS["pcbnew.InteractiveRouter.PlaceVia"]!;
+
+test("V goes to the layer of the nearest ratsnest anchor, not the layer pair's other layer", () => {
+  const pair = { a: "F.Cu", b: "B.Cu" };
+  const plan = planViaCommand({ cmd: through, currentLayer: "F.Cu", copper: CU4, layerPair: pair, ratsnestLayer: "In2.Cu", sizesPairs: layerPairMap("F.Cu", "B.Cu") });
+  assert.deepEqual(plan, { ok: true, viaType: "through", span: ["F.Cu", "B.Cu"], pair: ["F.Cu", "In2.Cu"], toLayer: "In2.Cu", sizesPairs: { "F.Cu": "In2.Cu", "In2.Cu": "F.Cu" } });
+});
+
+test("V with the anchor on the layer routed goes to the layer paired with it in the router's sizes", () => {
+  // "Closest ratsnest layer is the same as the active layer - assume the via is being placed for other routing reasons and switch the layer"
+  const plan = planViaCommand({ cmd: through, currentLayer: "In1.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" }, ratsnestLayer: "In1.Cu", sizesPairs: layerPairMap("F.Cu", "In1.Cu") });
+  assert.equal(plan.ok && plan.toLayer, "F.Cu");
+  // no paired layer (the board's pair is F.Cu / B.Cu): the anchor's layer, the current one -- a through via, and the route stays on In1.Cu
+  const same = planViaCommand({ cmd: through, currentLayer: "In1.Cu", copper: CU4, layerPair: { a: "F.Cu", b: "B.Cu" }, ratsnestLayer: "In1.Cu", sizesPairs: layerPairMap("F.Cu", "B.Cu") });
+  assert.deepEqual(same, { ok: true, viaType: "through", span: ["F.Cu", "B.Cu"], pair: ["In1.Cu", "In1.Cu"], toLayer: "In1.Cu", sizesPairs: { "In1.Cu": "In1.Cu" } });
+});
+
+test("V with no ratsnest anchor uses the board's layer pair", () => {
+  // "use the default layer pair": currentLayer = pairTop; targetLayer = pairBottom; then `PairedLayer( current )`, else `GetLayerTop()`
+  const pair = { a: "F.Cu", b: "B.Cu" };
+  assert.equal(planViaCommand({ cmd: through, currentLayer: "B.Cu", copper: CU4, layerPair: pair, ratsnestLayer: null }).ok, true);
+  const fromBottom = planViaCommand({ cmd: through, currentLayer: "B.Cu", copper: CU4, layerPair: pair, ratsnestLayer: null });
+  assert.equal(fromBottom.ok && fromBottom.toLayer, "F.Cu");
+  const offPair = planViaCommand({ cmd: through, currentLayer: "In1.Cu", copper: CU4, layerPair: pair, ratsnestLayer: null });
+  assert.equal(offPair.ok && offPair.toLayer, "F.Cu", "off the pair: the pair's top (`GetLayerTop()`)");
+});
+
+test("V pressed before a route is cleared when the router tool is entered again (R7-R6)", () => {
+  assert.equal(startWithViaAfterToolChange("select", "route", true), false, "`MainLoop`: m_startWithVia = false");
+  assert.equal(startWithViaAfterToolChange("select", "diffpair", true), false);
+  assert.equal(startWithViaAfterToolChange("route", "route", true), true, "re-arming inside the tool: `if( m_inRouterTool ) return 0;`");
+  assert.equal(startWithViaAfterToolChange("route", "diffpair", true), true, "a mode switch stays in MainLoop");
+  assert.equal(startWithViaAfterToolChange("route", "select", true), true, "leaving keeps it, the next entry clears it");
+  assert.equal(startWithViaAfterToolChange("select", "route", undefined), undefined);
 });

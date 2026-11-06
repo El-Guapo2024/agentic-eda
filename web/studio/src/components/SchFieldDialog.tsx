@@ -3,14 +3,22 @@
 // undo step, and nothing is sent when nothing changed.
 //
 // Differences from KiCad's dialog, deliberate: the orientation, the position and the justification are those the field has on the sheet (KiCad's dialog shows the
-// angle it stores, which a turned symbol's own transform turns again; the position is the sheet's, as KiCad's `m_field->GetPosition()` is). No font face and no colour:
-// the drawing model has no place for either. The text of a sheet's file is edited from Sheet Properties, as KiCad's dialog disables it too.
+// angle it stores, which a turned symbol's own transform turns again; the position is the sheet's, as KiCad's `m_field->GetPosition()` is). The font face and colour
+// (`m_font`, `m_textColorSwatch`) are `set_field_looks` (`SchExtras::field_looks`), in the batch of the OK. The text of a sheet's file is edited from Sheet
+// Properties, as KiCad's dialog disables it too.
+//
+// A label's field (UI-LEFT S6: its net class, a global label's Sheet References, any other) opens here too: moved, turned or justified by hand it stays where it was
+// put (the label's fields are no longer autoplaced). **Differs**: its size, bold and shown name are not offered (`LabelField` keeps none of them); the Sheet
+// References keep their text and Schematic Setup's visibility.
 import { useState } from "react";
 import { fieldDialogCaption, fieldSizeNm, fieldEditCmd, findField, isStandardSymbolField, FIELD_SIZE_MAX_NM, FIELD_SIZE_MIN_NM, type FieldChanges } from "../kicad-port/schFieldEdit";
 import { mmToNm, nmToMm } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import type { SchField } from "../api/types";
+import type { FieldOwnerKind } from "../kicad-port/schFieldEdit";
+import { chosenFont, DEFAULT_FONT, oneStep } from "../kicad-port/textLooks";
+import { ColorSwatch, FontSelect, useFontFamilies } from "./TextLookControls";
 
 const H_ALIGN: Array<{ value: SchField["h"]; label: string }> = [
   { value: "left", label: "Left" },
@@ -29,7 +37,7 @@ export function FieldPropertiesDialog({ id }: { id: string }) {
   return item ? <FieldForm key={id} owner={item.ownerKind} field={item.field} /> : null;
 }
 
-function FieldForm({ owner, field }: { owner: "symbol" | "power" | "sheet"; field: SchField & { id: string } }) {
+function FieldForm({ owner, field }: { owner: FieldOwnerKind; field: SchField & { id: string } }) {
   const api = useStudioApi();
   const dispatch = useStudioDispatch();
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
@@ -45,15 +53,20 @@ function FieldForm({ owner, field }: { owner: "symbol" | "power" | "sheet"; fiel
   const [visible, setVisible] = useState(field.visible);
   const [nameShown, setNameShown] = useState(!!field.name_shown);
   const [allowAutoplace, setAllowAutoplace] = useState(field.allow_autoplace ?? true);
+  const families = useFontFamilies();
+  const [font, setFont] = useState(field.font || DEFAULT_FONT);
+  const [color, setColor] = useState(field.color && field.color.a > 0 ? field.color : null);
+  const label = owner === "label";
+  const isr = label && field.name === "Intersheetrefs";
   const xNm = mmToNm(x);
   const yNm = mmToNm(y);
   const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
   const sizeOk = sizeNm !== null && sizeNm >= FIELD_SIZE_MIN_NM && sizeNm <= FIELD_SIZE_MAX_NM;
-  const textFixed = field.name === "Sheetfile" || (owner === "power" && field.name === "Reference");
+  const textFixed = field.name === "Sheetfile" || (owner === "power" && field.name === "Reference") || isr;
   // A reference, a value, a sheet's name cannot be emptied (`FIELD_VALIDATOR`); a footprint, a datasheet and a user-defined field of a symbol can
   // a symbol's Value has no validator in `DIALOG_FIELD_PROPERTIES::init`, like its Footprint, Datasheet and user fields: only the Reference must not be empty
-  const textOk = textFixed || field.name === "Footprint" || field.name === "Datasheet" || (owner === "symbol" && (field.name === "Value" || !isStandardSymbolField(field.name))) || text.trim().length > 0;
+  const textOk = textFixed || label || field.name === "Footprint" || field.name === "Datasheet" || (owner === "symbol" && (field.name === "Value" || !isStandardSymbolField(field.name))) || text.trim().length > 0;
   const canOk = sizeOk && xNm !== null && yNm !== null && textOk;
   const submit = () => {
     if (!canOk) return;
@@ -63,14 +76,16 @@ function FieldForm({ owner, field }: { owner: "symbol" | "power" | "sheet"; fiel
       vertical,
       h,
       v,
-      sizeNm: sizeNm!,
-      bold,
       italic,
-      visible,
-      nameShown,
-      allowAutoplace,
+      ...(isr ? {} : { visible }),
+      // a label's field keeps no size, bold, shown name or autoplace flag of its own
+      ...(label ? {} : { sizeNm: sizeNm!, bold, nameShown, allowAutoplace }),
     };
-    const cmd = fieldEditCmd(field, changes);
+    const nextFont = chosenFont(font);
+    const fontChanged = nextFont !== undefined && nextFont !== (field.font ?? "");
+    const colorChanged = (color === null) !== !(field.color && field.color.a > 0) || (color !== null && field.color && (color.r !== field.color.r || color.g !== field.color.g || color.b !== field.color.b || color.a !== field.color.a));
+    const looks = fontChanged || colorChanged ? ({ op: "sch_edit", verb: "set_field_looks", ids: [field.id], ...(fontChanged ? { font: nextFont } : {}), ...(colorChanged ? { color: color ?? { r: 0, g: 0, b: 0, a: 0 } } : {}) } as never) : null;
+    const cmd = oneStep([fieldEditCmd(field, changes), looks]);
     if (!cmd) return close();
     void api.cmd(cmd).then((ok) => ok && close());
   };
@@ -83,8 +98,16 @@ function FieldForm({ owner, field }: { owner: "symbol" | "power" | "sheet"; fiel
         <input value={x} onChange={(e) => setX(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={xNm === null ? { outline: "1px solid var(--error, #d33)" } : undefined} />
         <span>Position Y (mm)</span>
         <input value={y} onChange={(e) => setY(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={yNm === null ? { outline: "1px solid var(--error, #d33)" } : undefined} />
-        <span>Text size (mm)</span>
-        <input value={size} onChange={(e) => setSize(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
+        {!label && (
+          <>
+            <span>Text size (mm)</span>
+            <input value={size} onChange={(e) => setSize(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
+          </>
+        )}
+        <span>Font:</span>
+        <FontSelect families={families} current={field.font} value={font} onChange={setFont} />
+        <span>Color:</span>
+        <ColorSwatch label="Field color" color={color} onChange={setColor} />
         <span>Orientation</span>
         <select value={vertical ? "v" : "h"} onChange={(e) => setVertical(e.target.value === "v")}>
           <option value="h">Horizontal</option>
@@ -92,9 +115,11 @@ function FieldForm({ owner, field }: { owner: "symbol" | "power" | "sheet"; fiel
         </select>
         <span>Style</span>
         <span style={{ display: "flex", gap: 14 }}>
-          <label>
-            <input type="checkbox" checked={bold} onChange={(e) => setBold(e.target.checked)} /> Bold
-          </label>
+          {!label && (
+            <label>
+              <input type="checkbox" checked={bold} onChange={(e) => setBold(e.target.checked)} /> Bold
+            </label>
+          )}
           <label>
             <input type="checkbox" checked={italic} onChange={(e) => setItalic(e.target.checked)} /> Italic
           </label>
@@ -117,15 +142,19 @@ function FieldForm({ owner, field }: { owner: "symbol" | "power" | "sheet"; fiel
         </select>
         <span>Display</span>
         <span style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <label>
-            <input type="checkbox" checked={visible} onChange={(e) => setVisible(e.target.checked)} /> Visible
+          <label title={isr ? "Intersheet reference visibility is controlled globally from Schematic Setup > General > Formatting" : undefined}>
+            <input type="checkbox" checked={visible} disabled={isr} onChange={(e) => setVisible(e.target.checked)} /> Visible
           </label>
-          <label>
-            <input type="checkbox" checked={nameShown} onChange={(e) => setNameShown(e.target.checked)} /> Show field name
-          </label>
-          <label>
-            <input type="checkbox" checked={allowAutoplace} onChange={(e) => setAllowAutoplace(e.target.checked)} /> Allow autoplacement
-          </label>
+          {!label && (
+            <>
+              <label>
+                <input type="checkbox" checked={nameShown} onChange={(e) => setNameShown(e.target.checked)} /> Show field name
+              </label>
+              <label>
+                <input type="checkbox" checked={allowAutoplace} onChange={(e) => setAllowAutoplace(e.target.checked)} /> Allow autoplacement
+              </label>
+            </>
+          )}
         </span>
       </div>
     </SchDialogShell>

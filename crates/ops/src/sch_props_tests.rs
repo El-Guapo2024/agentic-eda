@@ -408,7 +408,7 @@ fn set_text_attrs_keeps_a_free_texts_bold_italic_colour_and_hyperlink_and_a_labe
     s.labels.push(NetLabel { id: "lbl_l".into(), net: "A".into(), at: p(mm(5.08), Nm::ZERO), kind: LabelKind::Local });
     let (m, d) = board(s);
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-    let attrs = |ids_: &[&str], bold, italic, color, href: Option<&str>| SchCmd::SetTextAttrs { ids: ids(ids_), bold, italic, color, href: href.map(str::to_string) };
+    let attrs = |ids_: &[&str], bold, italic, color, href: Option<&str>| SchCmd::SetTextAttrs { ids: ids(ids_), bold, italic, color, href: href.map(str::to_string), font: None, exclude_from_sim: None };
     ok(&mut b, attrs(&["txt_a"], Some(true), None, Some(red()), Some(" https://kicad.org ")));
     let a = &sch_of(&b).extras.text_attrs["txt_a"];
     assert_eq!((a.bold, a.italic, a.color, a.href.as_deref()), (true, false, Some(red()), Some("https://kicad.org")));
@@ -453,4 +453,213 @@ fn set_exclude_from_pos_files_marks_every_placed_unit_of_the_reference() {
     ok(&mut b, SchCmd::SetExcludeFromPosFiles { ids: ids(&["U1"]), exclude: false });
     assert!(sch_of(&b).extras.excluded_from_pos_files.is_empty());
     assert_eq!(err(&mut b, SchCmd::SetExcludeFromPosFiles { ids: ids(&["U9"]), exclude: true }), "ops_unknown_symbol");
+}
+
+// ------------------------------------------------------------------- Text, Label and Text Box Properties' looks (UI-LEFT S6, task-u3-schtext)
+
+fn text_attrs_cmd(ids_: &[&str], font: Option<&str>, href: Option<&str>, exclude: Option<bool>, color: Option<SchColor>) -> SchCmd {
+    SchCmd::SetTextAttrs { ids: ids(ids_), bold: None, italic: None, color, href: href.map(str::to_string), font: font.map(str::to_string), exclude_from_sim: exclude }
+}
+
+#[test]
+fn the_text_dialogs_font_link_and_simulation_exclusion_are_kept_and_default_font_is_no_font() {
+    let mut s = text_sheet();
+    s.labels.push(NetLabel { id: "lbl_l".into(), net: "A".into(), at: p(mm(5.08), Nm::ZERO), kind: LabelKind::Local });
+    s.extras.graphics.push(eda_model::sch_extras::SchGraphic {
+        id: "shp_tb".into(),
+        shape: eda_model::sch_extras::SchGraphicKind::TextBox { start: p(Nm::ZERO, mm(10.0)), end: p(mm(20.0), mm(15.0)), text: "box".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: false, h_align: Default::default(), v_align: Default::default(), margin_nm: Nm::ZERO },
+        width_nm: Nm::ZERO,
+        line_style: Default::default(),
+        color: None,
+        fill: Default::default(),
+        fill_color: None,
+    });
+    let (m, d) = board(s);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    ok(&mut b, text_attrs_cmd(&["txt_a"], Some("KiCad Font"), Some("#2"), Some(true), None));
+    let a = &sch_of(&b).extras.text_attrs["txt_a"];
+    assert_eq!((a.font.as_deref(), a.href.as_deref(), a.exclude_from_sim), (Some("KiCad Font"), Some("#2"), true));
+    // a text box takes a font, a colour, a link and the exclusion; its bold is its shape's
+    ok(&mut b, text_attrs_cmd(&["shp_tb"], Some("DejaVu Sans"), Some("https://kicad.org"), Some(true), Some(red())));
+    assert_eq!(sch_of(&b).extras.text_attrs["shp_tb"].font.as_deref(), Some("DejaVu Sans"));
+    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["shp_tb"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None }), "ops_bad_text");
+    // a label takes a font and a colour, not a link or the exclusion
+    ok(&mut b, text_attrs_cmd(&["lbl_l"], Some("DejaVu Sans"), None, None, None));
+    assert_eq!(sch_of(&b).extras.text_attrs["lbl_l"].font.as_deref(), Some("DejaVu Sans"));
+    assert_eq!(err(&mut b, text_attrs_cmd(&["lbl_l"], None, Some("#1"), None, None)), "ops_bad_text");
+    assert_eq!(err(&mut b, text_attrs_cmd(&["lbl_l"], None, None, Some(true), None)), "ops_bad_text");
+    // `ValidateHyperlink`: a page, a URL with a scheme, or nothing
+    assert_eq!(err(&mut b, text_attrs_cmd(&["txt_a"], None, Some("not a link"), None, None)), "ops_bad_hyperlink");
+    // "Default Font" is the default one (`GetFontSelection` returns `nullptr`): the entry that says nothing else goes
+    ok(&mut b, text_attrs_cmd(&["lbl_l"], Some("Default Font"), None, None, None));
+    assert!(!sch_of(&b).extras.text_attrs.contains_key("lbl_l"));
+}
+
+#[test]
+fn a_hyperlink_is_a_page_or_a_url_with_a_scheme() {
+    for good in ["", "#1", "#A2", "https://kicad.org", "file:///tmp/x.pdf", "mailto:a@b.c"] {
+        assert!(crate::sch_props::valid_hyperlink(good), "{good}");
+    }
+    for bad in ["kicad.org", "1http://x", "a b:c", ":x"] {
+        assert!(!crate::sch_props::valid_hyperlink(bad), "{bad}");
+    }
+}
+
+fn with_label_field() -> SchematicSection {
+    let mut s = SchematicSection::default();
+    s.labels.push(NetLabel { id: "lbl_g".into(), net: "SIG".into(), at: p(mm(10.16), mm(10.16)), kind: LabelKind::Global { shape: LabelShape::Input } });
+    s.extras.label_spins.insert("lbl_g".into(), LabelSpin::Right);
+    s.extras.label_fields.insert("lbl_g".into(), vec![eda_model::sch_extras::LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: true }]);
+    s
+}
+
+fn placed_field(b: &Board, name: &str) -> eda_engine::label_fields::PlacedLabelField {
+    let sch = sch_of(b);
+    let l = sch.labels.iter().find(|l| l.id == "lbl_g").unwrap();
+    eda_engine::label_fields::placed(sch, l, false).into_iter().find(|f| f.name == name).unwrap()
+}
+
+#[test]
+fn a_labels_field_moved_by_hand_stays_and_takes_the_label_out_of_autoplace() {
+    let (m, d) = board(with_label_field());
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let before = placed_field(&b, "Netclass");
+    // `SCH_MOVE_TOOL::moveItem` on the field alone: `parent->SetFieldsAutoplaced( AUTOPLACE_NONE )`
+    b.apply(&Cmd::SchMove(SchMoveCmd::Move { ids: ids(&["fld:lbl_g:Netclass"]), dx: mm(2.54), dy: mm(1.27), turns: Vec::new(), about: None })).unwrap();
+    let moved = placed_field(&b, "Netclass");
+    assert_eq!(moved.at, p(before.at.x + mm(2.54), before.at.y + mm(1.27)));
+    assert!(eda_engine::label_fields::hand_placed(sch_of(&b), "lbl_g"));
+    // the label edited (a new text) keeps the hand-placed field where it is: no autoplace while the fields are not autoplaced
+    ok(&mut b, SchCmd::EditLabel { id: "lbl_g".into(), text: Some("A_MUCH_LONGER_NAME".into()), shape: None, spin: None, size_nm: None, bold: None, italic: None, auto_rotate: None, fields: None });
+    assert_eq!(placed_field(&b, "Netclass").at, moved.at);
+    // the label moved takes it along
+    b.apply(&Cmd::SchMove(SchMoveCmd::Move { ids: ids(&["lbl_g"]), dx: mm(5.08), dy: Nm::ZERO, turns: Vec::new(), about: None })).unwrap();
+    assert_eq!(placed_field(&b, "Netclass").at, p(moved.at.x + mm(5.08), moved.at.y));
+    // Autoplace Fields puts it back under the label and the label's fields are autoplaced again
+    ok(&mut b, SchCmd::AutoplaceFields { ids: ids(&["lbl_g"]) });
+    assert!(!eda_engine::label_fields::hand_placed(sch_of(&b), "lbl_g"));
+    assert_eq!(err(&mut b, SchCmd::AutoplaceFields { ids: ids(&["lbl_g"]) }), "ops_fields_unchanged");
+}
+
+#[test]
+fn field_properties_of_a_labels_field_edits_its_text_and_place_and_keeps_the_sheet_references_text() {
+    let (m, d) = board(with_label_field());
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let field = |id: &str, text: Option<&str>, at: Option<Point>, visible: Option<bool>| SchCmd::EditField { id: id.into(), text: text.map(str::to_string), at, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible, name_shown: None, allow_autoplace: None };
+    ok(&mut b, field("fld:lbl_g:Netclass", Some("LV"), None, None));
+    assert_eq!(sch_of(&b).extras.label_fields["lbl_g"][0].text, "LV");
+    assert!(!eda_engine::label_fields::hand_placed(sch_of(&b), "lbl_g"), "a new text alone keeps the fields autoplaced");
+    ok(&mut b, field("fld:lbl_g:Netclass", None, Some(p(mm(30.48), mm(30.48))), None));
+    assert_eq!(placed_field(&b, "Netclass").at, p(mm(30.48), mm(30.48)));
+    assert!(eda_engine::label_fields::hand_placed(sch_of(&b), "lbl_g"));
+    // the Sheet References keep `${INTERSHEET_REFS}` and Schematic Setup's visibility, and can be placed by hand like any field
+    assert_eq!(err(&mut b, field("fld:lbl_g:Intersheetrefs", Some("x"), None, None)), "ops_field_text_fixed");
+    assert_eq!(err(&mut b, field("fld:lbl_g:Intersheetrefs", None, None, Some(true))), "ops_field_text_fixed");
+    ok(&mut b, field("fld:lbl_g:Intersheetrefs", None, Some(p(mm(40.64), mm(10.16))), None));
+    assert_eq!(placed_field(&b, "Intersheetrefs").at, p(mm(40.64), mm(10.16)));
+    assert_eq!(err(&mut b, field("fld:lbl_g:Netclass", None, Some(p(mm(30.48), mm(30.48))), None)), "ops_field_unchanged");
+}
+
+#[test]
+fn a_label_turned_or_mirrored_turns_its_hand_placed_fields_about_its_anchor() {
+    let (m, d) = board(with_label_field());
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::SchMove(SchMoveCmd::Move { ids: ids(&["fld:lbl_g:Netclass"]), dx: mm(2.54), dy: Nm::ZERO, turns: Vec::new(), about: None })).unwrap();
+    let anchor = sch_of(&b).labels[0].at;
+    let f = placed_field(&b, "Netclass");
+    let (dx, dy) = (f.at.x - anchor.x, f.at.y - anchor.y);
+    b.apply(&Cmd::SchMove(SchMoveCmd::Rotate { ids: ids(&["lbl_g"]), vertices: BTreeMap::new(), ccw: true, about: None, grid: Nm::ZERO })).unwrap();
+    let anchor = sch_of(&b).labels[0].at;
+    let f = placed_field(&b, "Netclass");
+    // `RotatePoint( pt, aCenter, ANGLE_90 )`: (x, y) -> (y, -x), the text vertical
+    assert_eq!((f.at.x - anchor.x, f.at.y - anchor.y, f.vertical), (dy, -dx, true));
+    // a lone label mirrored left-right where it stands (`MirrorSpinStyle( true )`): the anchor stays, the field's x goes to the other side of it
+    let (fx, fy) = (f.at.x - anchor.x, f.at.y - anchor.y);
+    b.apply(&Cmd::SchMove(SchMoveCmd::Mirror { ids: ids(&["lbl_g"]), vertices: BTreeMap::new(), vertical: false, about: None, grid: Nm::ZERO })).unwrap();
+    let anchor = sch_of(&b).labels[0].at;
+    let g = placed_field(&b, "Netclass");
+    assert_eq!((g.at.x - anchor.x, g.at.y - anchor.y), (-fx, fy));
+}
+
+// ------------------------------------------------------------------- Sheet Properties' Style, Attributes and fields; top-level sheets (UI-LEFT S8)
+
+fn sheet_props(id: &str) -> SchCmd {
+    SchCmd::SetSheetProps { id: id.into(), border_width_nm: None, border_color: None, fill_color: None, exclude_from_sim: None, exclude_from_bom: None, exclude_from_board: None, dnp: None }
+}
+
+#[test]
+fn sheet_properties_keep_the_border_the_fill_and_the_attributes_and_the_legacy_look_keeps_no_entry() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(hierarchy(), &m, mm(0.1), mm(0.3));
+    let SchCmd::SetSheetProps { id, .. } = sheet_props("sheet_a") else { unreachable!() };
+    ok(&mut b, SchCmd::SetSheetProps { id: id.clone(), border_width_nm: Some(mm(0.3)), border_color: Some(red()), fill_color: Some(SchColor { r: 0, g: 0, b: 0, a: 0 }), exclude_from_sim: None, exclude_from_bom: Some(true), exclude_from_board: None, dnp: Some(true) });
+    let p = &sch_of(&b).extras.sheet_props["sheet_a"];
+    assert_eq!((p.border_width_nm, p.border_color, p.fill_color, p.exclude_from_bom, p.dnp, p.exclude_from_sim), (mm(0.3), Some(red()), None, true, true, false), "all zeroes is UNSPECIFIED");
+    assert_eq!(err(&mut b, SchCmd::SetSheetProps { id: id.clone(), border_width_nm: None, border_color: None, fill_color: None, exclude_from_sim: None, exclude_from_bom: None, exclude_from_board: None, dnp: Some(true) }), "ops_nothing_to_change");
+    // back to the look the writer has always given a sheet: no entry
+    let legacy = eda_model::sch_extras::SheetProps::legacy();
+    ok(&mut b, SchCmd::SetSheetProps { id: id.clone(), border_width_nm: Some(legacy.border_width_nm), border_color: Some(SchColor { r: 0, g: 0, b: 0, a: 0 }), fill_color: legacy.fill_color, exclude_from_sim: None, exclude_from_bom: Some(false), exclude_from_board: None, dnp: Some(false) });
+    assert!(sch_of(&b).extras.sheet_props.is_empty());
+    assert_eq!(err(&mut b, sheet_props("nope")), "ops_unknown_sheet");
+}
+
+#[test]
+fn sheet_fields_are_named_once_and_an_empty_row_goes() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(hierarchy(), &m, mm(0.1), mm(0.3));
+    let f = |name: &str, text: &str| eda_model::sch_extras::LabelField { name: name.into(), text: text.into(), visible: false, italic: false };
+    ok(&mut b, SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![f("Field2", "x"), f("", ""), f(" Rev ", "B")] });
+    assert_eq!(sch_of(&b).extras.sheet_fields["sheet_a"], vec![f("Field2", "x"), f("Rev", "B")], "the empty row is dropped, a name trimmed");
+    assert_eq!(b.apply(&Cmd::SchEdit(SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![f("", "y")] })).unwrap_err()[0].hint.as_deref().unwrap_or_default(), "Fields must have a name.");
+    assert_eq!(b.apply(&Cmd::SchEdit(SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![f("Rev", "1"), f("Rev", "2")] })).unwrap_err()[0].hint.as_deref().unwrap_or_default(), "Field name 'Rev' already in use.");
+    assert_eq!(err(&mut b, SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![f("Sheetfile", "1")] }), "ops_field_exists", "the mandatory fields' names are taken");
+    ok(&mut b, SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![] });
+    assert!(sch_of(&b).extras.sheet_fields.is_empty());
+}
+
+#[test]
+fn a_virtual_roots_top_level_sheets_are_added_and_deleted_but_not_the_last_and_not_on_an_ordinary_root() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(hierarchy(), &m, mm(0.1), mm(0.3));
+    assert_eq!(err(&mut b, SchCmd::AddTopLevelSheet { name: "Power".into() }), "ops_not_top_level", "a root that is its own top-level sheet");
+    let mut d = hierarchy();
+    d.schematic.as_mut().unwrap().extras.virtual_root = true;
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    ok(&mut b, SchCmd::AddTopLevelSheet { name: "My Power".into() });
+    let new = sch_of(&b).sheets.last().unwrap().clone();
+    assert_eq!((new.name.as_str(), new.file.as_str()), ("My Power", "my_power.kicad_sch"), "the file is the name, underscores for spaces, in lower case");
+    assert_eq!(new.page, "4", "the lowest page no sheet shows: the root 1, A 2, B 3");
+    assert!(files(&b).contains(&"my_power.kicad_sch".to_string()));
+    // the same name again gets a file of its own
+    assert_eq!(err(&mut b, SchCmd::AddTopLevelSheet { name: "My Power".into() }), "ops_sheet_name_taken");
+    ok(&mut b, SchCmd::AddTopLevelSheet { name: "my power".into() });
+    assert_eq!(sch_of(&b).sheets.last().unwrap().file, "my_power_1.kicad_sch");
+    for id in ["sheet_a", "sheet_b", &new.id] {
+        ok(&mut b, SchCmd::DeleteTopLevelSheet { id: id.to_string() });
+    }
+    assert_eq!(sch_of(&b).sheets.len(), 1);
+    let last = sch_of(&b).sheets[0].id.clone();
+    assert_eq!(b.apply(&Cmd::SchEdit(SchCmd::DeleteTopLevelSheet { id: last })).unwrap_err()[0].hint.as_deref().unwrap_or_default(), "Cannot delete the last top-level sheet.");
+}
+
+#[test]
+fn a_pasted_label_keeps_its_hand_placed_fields_and_looks_and_a_pasted_text_its_looks() {
+    use eda_model::sch_clipboard::{PasteMode, SchFragment};
+    let mut section = with_label_field();
+    section.imported_from_kicad = true;
+    section.field_layout.insert("lbl_g".into(), vec![eda_model::ir::FieldPlacement { dx: mm(5.08), dy: mm(2.54), ..eda_model::ir::FieldPlacement::at_origin("Netclass") }]);
+    section.extras.text_attrs.insert("lbl_g".into(), eda_model::sch_extras::TextAttrs { color: Some(red()), font: Some("KiCad Font".into()), ..Default::default() });
+    section.texts.push(SchematicText { id: "txt_c".into(), content: "copied".into(), at: p(Nm::ZERO, Nm::ZERO), angle: 0, size_nm: mm(1.27) });
+    section.extras.text_attrs.insert("txt_c".into(), eda_model::sch_extras::TextAttrs { bold: true, href: Some("#1".into()), ..Default::default() });
+    let fragment = SchFragment { section, ..Default::default() };
+    let (m, d) = board(SchematicSection::default());
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::PasteSch { fragment, dx: mm(25.4), dy: Nm::ZERO, mode: PasteMode::Unique, numbering: Default::default() }).unwrap();
+    let sch = sch_of(&b);
+    let l = sch.labels.iter().find(|l| l.net == "SIG").expect("the pasted label");
+    assert!(eda_engine::label_fields::hand_placed(sch, &l.id), "its fields stay where they were put");
+    assert_eq!(sch.field_layout[&l.id][0].dx, mm(5.08));
+    assert_eq!(sch.extras.text_attrs[&l.id].font.as_deref(), Some("KiCad Font"));
+    let t = sch.texts.iter().find(|t| t.content == "copied").expect("the pasted text");
+    assert!(sch.extras.text_attrs[&t.id].bold && sch.extras.text_attrs[&t.id].href.as_deref() == Some("#1"));
 }

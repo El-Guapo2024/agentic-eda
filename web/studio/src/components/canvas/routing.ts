@@ -13,7 +13,9 @@
 import type { BoardState } from "../../api/types";
 import type { RouterSettings } from "../../kicad-port/routerSettings";
 import { routeAttemptFinish, routeCancel, routeContinueFromEnd, routeFinish, routeFix, routeStart, routeToggleVia } from "../../api/client";
-import { otherLayerOfPair, type LayerPair } from "../../kicad-port/layerPairs";
+import type { LayerPair } from "../../kicad-port/layerPairs";
+import { withEventSizes } from "../../kicad-port/routerSizes";
+import { planThroughVia } from "./routerViaArm";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { drawStateFromPreview, type RouteDrawState } from "../../kicad-port/routeTool";
@@ -31,8 +33,10 @@ import { advanceRouteQueue } from "./routeQueue";
  * (track width, via preset). */
 /** `width` undefined: the server's `ImportSizes` width of the start net (the width list on "use net class"), which the reply carries. */
 /** `startWithVia`: V was pressed before the route started (`ROUTER_TOOL::m_startWithVia`, R6-R5): the route starts with a through via armed, sized as V
- *  sizes one (`size`: none for the net class's), to the other layer of the layer pair `pair`. */
-export async function startInteractiveRoute(x: number, y: number, layer: string, width: number | undefined, settings: RouterSettings, dispatch: Dispatch<Action>, startItem?: string | null, autoTrackWidth?: boolean, startWithVia?: { size: { diameter: number; drill: number } | null; pair: LayerPair }): Promise<boolean> {
+ *  sizes one (`size`: none for the net class's), to Place Through Via's implicit target -- the nearest ratsnest anchor's layer, else the other layer of
+ *  the layer pair `pair` (components/canvas/routerViaArm.ts, UI-LEFT R5); `copper` is the board's copper layers in stack order.
+ *  `originalActiveLayer`: the active layer to give back when the route ends, when it is not `layer` (Autoroute, R7-R7). */
+export async function startInteractiveRoute(x: number, y: number, layer: string, width: number | undefined, settings: RouterSettings, dispatch: Dispatch<Action>, startItem?: string | null, autoTrackWidth?: boolean, startWithVia?: { size: { diameter: number; drill: number } | null; pair: LayerPair; copper: readonly string[] }, originalActiveLayer?: string): Promise<boolean> {
   const preview = await routeStart(x, y, layer, width, settings, autoTrackWidth);
   // `syncZone`'s warning (KiCad's `KIDIALOG`): a rule area the router cannot handle is left out of its world
   for (const w of preview.warnings ?? []) dispatch({ type: "TOAST", message: w, kind: "info" });
@@ -44,15 +48,18 @@ export async function startInteractiveRoute(x: number, y: number, layer: string,
   // `ROUTER_TOOL::prepareInteractive`: `m_originalActiveLayer` is saved whatever the start layer, the route starts on `getStartLayer`'s layer -- the
   // start item's when it is not on the active one -- and that becomes the active layer until the route ends (r5 R5-1; `finishInteractive` always
   // gives `m_originalActiveLayer` back, R6-R6)
-  draw.originalActiveLayer = layer;
+  draw.originalActiveLayer = originalActiveLayer ?? layer;
   if (preview.layer && preview.layer !== layer) dispatch({ type: "SET_ACTIVE_LAYER", layer: preview.layer });
   // `performRouting`: "If the user pressed 'V' before starting to route, enable via placement now" (`handleLayerSwitch( ACT_PlaceThroughVia, true )`)
   if (startWithVia) {
-    const toLayer = otherLayerOfPair(startWithVia.pair, draw.layer);
-    const armed = await routeToggleVia(true, startWithVia.size?.diameter, startWithVia.size?.drill, toLayer);
-    if (armed.ok) {
-      draw.placingVia = true;
-      draw.pendingViaLayer = toLayer;
+    const plan = await planThroughVia({ x, y }, draw.layer, startWithVia.copper, startWithVia.pair, undefined);
+    if (plan.ok) {
+      const armed = await routeToggleVia(true, startWithVia.size?.diameter, startWithVia.size?.drill, plan.toLayer, { viaType: plan.viaType, span: plan.span });
+      if (armed.ok) {
+        draw.placingVia = true;
+        draw.pendingViaLayer = plan.toLayer;
+        draw.sizesPairs = plan.sizesPairs;
+      }
     }
   }
   dispatch({ type: "SET_DRAW_STATE", draw });
@@ -78,7 +85,9 @@ export async function fixInteractiveRoute(x: number, y: number, draw: RouteDrawS
   }
   // a fix places the armed via and goes on on its other layer (`Router::fix` takes the pending via): nothing is armed any more, as in KiCad
   // (`IsPlacingVia()` is false after `FixRoute`), so V or a via command arms the next one rather than taking this one back
-  if (reply.preview) dispatch({ type: "SET_DRAW_STATE", draw: { ...drawStateFromPreview(draw, reply.preview), placingVia: false, pendingViaLayer: undefined } });
+  // `updateSizesAfterRouterEvent` after the fix, on the via's other layer after a via (UI-LEFT R5): the message panel's clearance, and the width when
+  // the head took one
+  if (reply.preview) dispatch({ type: "SET_DRAW_STATE", draw: withEventSizes({ ...drawStateFromPreview(draw, reply.preview), placingVia: false, pendingViaLayer: undefined }, reply.sizes) });
 }
 
 /** Finish the route at `(x, y)` -- Enter/double-click/"F" (AttemptFinish),

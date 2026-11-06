@@ -25,6 +25,7 @@ import { useStudioDispatch, useStudioState } from "../../state/store";
 import { LINE_STYLE_NAMES, SCH_COLOR_HELP, cssFromHex, defaultClassSchematic, hexFromCss, lineStyleOfRow, lineStyleRow, schematicColumnsIssue, schematicOf, schematicToSend } from "../../kicad-port/schSetup";
 import { applyAssignments, assignmentRows, boardNetNames, classOfNet, classesOfNet, effectiveClassName, netClassSettingsOf, netsMatching, validateNetClasses, type AssignmentRow, type NetClassIssue } from "../../kicad-port/boardSetupRules";
 import { hasRegexSyntax, isRegex } from "../../kicad-port/netPattern";
+import { carryRenamedClass, netclassColorUpdates } from "../../kicad-port/appearanceNets";
 import type { Cmd, NetClass, NetClassSchematic } from "../../api/types";
 import { LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
 
@@ -117,18 +118,11 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
   const rename = (row: number, name: string) =>
     page.edit((d) => {
       const old = d.classes[row - 1]!.name;
-      // the class's schematic columns go with its name
-      const schematic = { ...d.schematic };
-      const profiles = { ...d.profiles };
-      const colors = { ...d.colors };
-      if (!d.classes.some((c, j) => j !== row - 1 && c.name === old)) {
-        for (const byName of [schematic, profiles, colors] as Record<string, unknown>[]) {
-          if (byName[old] !== undefined) {
-            byName[name] = byName[old];
-            delete byName[old];
-          }
-        }
-      }
+      // the class's schematic columns, tuning profile and PCB colour go with its name (carryRenamedClass: they are cells of its row in KiCad)
+      const others = d.classes.filter((_, j) => j !== row - 1).map((c) => c.name);
+      const schematic = carryRenamedClass(d.schematic, old, name, others);
+      const profiles = carryRenamedClass(d.profiles, old, name, others);
+      const colors = carryRenamedClass(d.colors, old, name, others);
       return { ...d, classes: d.classes.map((c, j) => (j === row - 1 ? { ...c, name } : c)), rows: d.rows.map((r) => (r.netclass === old ? { ...r, netclass: name } : r)), schematic, profiles, colors };
     });
   const setLook = (row: number, patch: Partial<NetClassSchematic>) =>
@@ -209,10 +203,8 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
     const colors = byTrimmed(draft.colors);
     void apply.run(cmd, () => {
       page.markClean();
-      for (const n of new Set([...Object.keys(storedColors), ...names.slice(1)])) {
-        const want = names.slice(1).includes(n) ? (colors[n] ?? null) : null;
-        if ((storedColors[n] ?? null) !== want) dispatch({ type: "APPEARANCE", op: { op: "netclass_color", name: n, color: want } });
-      }
+      // a renamed class's colour under its new name, the old name's dropped (netclassColorUpdates)
+      for (const u of netclassColorUpdates(storedColors, colors, names.slice(1))) dispatch({ type: "APPEARANCE", op: { op: "netclass_color", name: u.name, color: u.color } });
     });
   };
 

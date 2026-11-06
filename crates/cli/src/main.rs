@@ -93,6 +93,7 @@ mod kicad_lane;
 mod tune_api;
 mod inspect_api;
 mod net_inspector_api;
+mod board_net_edits;
 mod tune_edit;
 
 use eda_model::units::{mm, Nm};

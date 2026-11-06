@@ -29,10 +29,11 @@ impl<'a> FpExtra<'a> {
 
 // ---------------------------------------------------------------------------------------------------------------- writing
 
-/// `(effects (font (size H W) [(thickness T)] [bold] [italic]) [(justify [left|right] [top|bottom] [mirror])])`:
-/// `EDA_TEXT::Format`. The size is written height first; a thickness of 0 is KiCad's auto thickness and is left out.
+/// `(effects (font [(face F)] (size H W) [(thickness T)] [bold] [italic]) [(justify [left|right] [top|bottom] [mirror])])`:
+/// `EDA_TEXT::Format`. The size is written height first; a thickness of 0 is KiCad's auto thickness and is left out; the face is the field's own
+/// (`FieldLayout::face`, none for the stroke font).
 fn effects(l: &FieldLayout) -> String {
-    effects_with(l, None, 0)
+    effects_with(l, l.face.as_deref(), 0)
 }
 
 /// [`effects`] with the font face and the line spacing a text may have (`(face ..)` first, `(line_spacing ..)` after the size, in thousandths: 1000 is
@@ -218,6 +219,8 @@ pub(crate) fn parse_layout(item: &[Sexpr], side: Side, fp_rot: Millideg) -> Fiel
                 l.size = (mm_to_nm_f(sexpr::num(s, 2).unwrap_or(1.0)), mm_to_nm_f(sexpr::num(s, 1).unwrap_or(1.0)));
             }
             l.thickness = sexpr::find(font, "thickness").and_then(|t| sexpr::num(t, 1)).map(mm_to_nm_f).unwrap_or(Nm::ZERO);
+            // `(face "..")`: `EDA_TEXT::SetFont( KIFONT::FONT::GetFont( face ) )` (`parseEDA_TEXT`'s `T_face`)
+            l.face = sexpr::find(font, "face").and_then(|f| sexpr::txt(f, 1)).filter(|f| !f.is_empty()).map(str::to_string);
             l.bold = bool_tok(font, "bold").unwrap_or(false);
             l.italic = bool_tok(font, "italic").unwrap_or(false);
         }
@@ -411,8 +414,11 @@ mod tests {
             l.italic = true;
             l.halign = 1;
             l.valign = -1;
+            // `(font (face ..))` comes back as the field's own (Edit Text & Graphics Properties' Font)
+            l.face = Some("Arial".into());
             let mut out = String::new();
             write_property(&mut out, "Vendor", "ACME", &l, side, rot, "u-3");
+            assert!(out.contains("(effects (font (face \"Arial\") (size "), "{out}");
             let node = parse(&format!("(footprint \"x\" {out})"));
             let p = sexpr::find(&node, "property").unwrap();
             let back = parse_layout(p, side, rot);

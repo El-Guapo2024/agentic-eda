@@ -739,7 +739,7 @@ fn handle(
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),
         // The sheet tree (Next / Previous Sheet, Edit Sheet Page Number): `crate::sch_control_api`.
-        ("GET", "/api/sch/hierarchy") => respond(stream, "200 OK", "application/json", crate::sch_control_api::hierarchy(dir).to_string().as_bytes()),
+        ("GET", "/api/sch/hierarchy") => respond(stream, "200 OK", "application/json", crate::sch_control_api::hierarchy(dir, &query_value(target, "net")).to_string().as_bytes()),
         // Export Symbols...: the library symbols the schematic uses as one `.kicad_sym` (a read; the browser saves it).
         ("POST", "/api/sch/export_symbols") => respond(stream, "200 OK", "application/json", crate::sch_control_api::export_symbols(dir, &body).to_string().as_bytes()),
         ("GET", "/api/ratsnest") => {
@@ -1048,6 +1048,8 @@ fn handle(
         ("POST", "/api/route/dp_fix") => respond(stream, "200 OK", "application/json", route_api::dp_fix(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_via") => respond(stream, "200 OK", "application/json", route_api::dp_via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
+        ("POST", "/api/route/ratsnest_anchor") => respond(stream, "200 OK", "application/json", route_api::ratsnest_anchor(route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/dp_attempt_finish") => respond(stream, "200 OK", "application/json", route_api::dp_attempt_finish(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_continue_from_end") => respond(stream, "200 OK", "application/json", route_api::dp_continue_from_end(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_finish") => respond(stream, "200 OK", "application/json", route_api::dp_finish(dir, route_session, &body).to_string().as_bytes()),
         // 7 / 8 / 9 (P5c): length tuning -- KiCad's tuning pattern tool and its generator items; the session lives in tune_api's own thread-local, not in a cell passed here.
@@ -2065,6 +2067,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_nm": l.width_nm, "stroke": sch.extras.strokes.get(&l.id) })).collect();
     // Drawn shapes, text boxes, rule areas, directive labels and images (`SchGraphic`, serialized as stored; an image is described, its pixels are `GET /api/sch_image`) and the ids of locked items.
     let graphics: Value = crate::image_api::sch_graphics_json(&sch.extras.graphics);
+    // a text box's (and a directive label's) font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id, for its Properties and
+    // its drawing: kept beside the graphics, which the edit verbs take back whole
+    let graphic_text_attrs: serde_json::Map<String, Value> = sch.extras.graphics.iter().filter_map(|g| Some((g.id.clone(), serde_json::to_value(sch.extras.text_attrs.get(&g.id)?).ok()?))).collect();
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
     let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
@@ -2109,7 +2114,15 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                         eda_model::kicad_font::HJustify::Right => "right",
                         eda_model::kicad_font::HJustify::Center => "center",
                     };
-                    json!({ "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "size_nm": 1_270_000 })
+                    let v = match f.v {
+                        eda_model::kicad_font::VJustify::Top => "top",
+                        eda_model::kicad_font::VJustify::Center => "center",
+                        eda_model::kicad_font::VJustify::Bottom => "bottom",
+                    };
+                    // the id the studio selects, moves and edits the field by (`fld:<label id>:<name>`, `eda_engine::fields_edit`), and the font and colour
+                    // Field Properties set (`SchExtras::field_looks` under the label's id)
+                    let look = sch.extras.field_look(&l.id, &f.name);
+                    json!({ "id": eda_engine::fields_edit::field_id(&l.id, &f.name), "owner": l.id, "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "v": v, "size_nm": 1_270_000, "font": look.and_then(|k| k.font.clone()), "color": look.and_then(|k| k.color) })
                 })
                 .collect();
             // the net the label is on, as the tracer named it (the wire under it): Highlight Net takes a label's connection, `conn->Name()`, not its text (r3 A3-M4)
@@ -2123,7 +2136,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     net_of_pin(&pin_net, &reference, &number).map(str::to_string)
                 })
             });
-            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields, "color": sch.extras.text_attrs.get(&l.id).and_then(|a| a.color) })
+            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields, "fields_hand_placed": eda_engine::label_fields::hand_placed(&sch, &l.id), "color": sch.extras.text_attrs.get(&l.id).and_then(|a| a.color), "font": sch.extras.text_attrs.get(&l.id).and_then(|a| a.font.clone()) })
         })
         .collect();
     let texts: Vec<Value> = sch
@@ -2218,6 +2231,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "id": s.id, "name": s.name, "file": s.file, "page": shown_page(s),
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &s.id),
+                // Sheet Properties' Style and Attributes (`SchExtras::sheet_props`; absent: the look the writer has always given a sheet) and the user fields
+                "props": sch.extras.sheet_props.get(&s.id),
+                "user_fields": sch.extras.sheet_fields.get(&s.id),
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
                 // a pin's text is set as Sheet Pin Properties set it (`SchExtras::sheet_pin_looks`): the size, bold and italic are sent when they are not the default's
                 "pins": s.pins.iter().map(|p| {
@@ -2260,6 +2276,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "junctions": junctions,
         "lines": lines,
         "graphics": graphics,
+        "graphic_text_attrs": graphic_text_attrs,
         "tables": tables,
         "locked": locked,
         "groups": groups,
@@ -2503,6 +2520,9 @@ pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir
         "italic": sch.extras.text_attrs.get(&t.id).is_some_and(|a| a.italic),
         "color": sch.extras.text_attrs.get(&t.id).and_then(|a| a.color),
         "href": sch.extras.text_attrs.get(&t.id).and_then(|a| a.href.clone()),
+        // the font Text Properties chose (absent: the default) and "Exclude from simulation"
+        "font": sch.extras.text_attrs.get(&t.id).and_then(|a| a.font.clone()),
+        "exclude_from_sim": sch.extras.text_attrs.get(&t.id).is_some_and(|a| a.exclude_from_sim),
     })
 }
 

@@ -30,8 +30,9 @@ use eda_model::via_extra::ViaKind;
 use eda_model::ConstraintModel;
 use std::collections::HashMap;
 
-/// `ANCHOR_SNAP_NM`-equivalent used for picking a *start* item -- see
-/// `line_placer::SNAP_NM` for the same radius used at the route's end.
+/// **INACTIVE since UI-LEFT R7:** the fixed 0.5 mm a route's start was once picked within; [`RoutingSettings::grab_radius`] (the grid, `pickSingleItem`'s
+/// `maxSlopRadius`) is used, and this is its default.
+#[allow(dead_code)]
 const START_SNAP_NM: Nm = Nm::new(500_000);
 
 /// A track cut in two where a route starts or ends in the middle of one (`SplitAdjacentSegments`, `SplitAdjacentArcs`): the commit gives the IR
@@ -197,6 +198,30 @@ pub struct Router {
     /// track's width ([`crate::settings::inherit_track_width`], r4 R4-1). `m_TempOverrideTrackWidth` is cleared before each start
     /// (`ROUTER_TOOL::prepareInteractive`), so it is not kept here.
     pub use_connected_track_width: bool,
+    /// `BOARD_DESIGN_SETTINGS::UseNetClassTrack()` (`m_trackWidthIndex <= 0 && !m_useCustomTrackVia`): the width list is on its first entry, the net
+    /// class's -- the studio sends no width then. Read by [`Self::update_sizes_after_router_event`]. Default `true`.
+    pub use_net_class_track: bool,
+    /// `SIZES_SETTINGS::TrackWidthIsExplicit()` (`ImportSizes`: `!bds.m_UseConnectedTrackWidth || bds.m_TempOverrideTrackWidth`): the route is not at a
+    /// width it inherited. Set at each start from [`Self::use_connected_track_width`] (`prepareInteractive` clears the override first) and by a width
+    /// chosen while routing ([`Self::set_width`]: `TrackWidthInc` and the width menu set `m_TempOverrideTrackWidth`).
+    pub width_explicit: bool,
+}
+
+/// What `ROUTER_TOOL::updateSizesAfterRouterEvent( aTargetLayer, aPos )` leaves in the router's sizes after a layer switch, a via or a fix (UI-LEFT R5:
+/// "the clearance is re-read after a layer switch"): the clearance of a dummy track of the route's (first) net on the layer at the point, and, when
+/// they were asked again, the track width and the pair's width and gap, each with its source -- what `UpdateMessagePanel` shows. Whether the head takes
+/// a new width is the placers' `UpdateSizes`' affair ([`Router::update_sizes_after_router_event`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EventSizes {
+    pub clearance: Nm,
+    pub clearance_source: String,
+    /// `sizes.TrackWidth()` and `GetWidthSource()` when `TRACK_WIDTH_CONSTRAINT` gave one (`bds.UseNetClassTrack() || !sizes.TrackWidthIsExplicit()`).
+    pub width: Option<(Nm, String)>,
+    /// Whether the head took [`Self::width`] (`LINE_PLACER::UpdateSizes`, `DIFF_PAIR_PLACER::UpdateSizes`).
+    pub width_applied: bool,
+    /// A pair's `DiffPairWidth()` / `DiffPairGap()` and their sources, when asked (`nets.size() >= 2 && ( bds.UseNetClassDiffPair() || !explicit )`).
+    pub diff_pair_width: Option<(Nm, String)>,
+    pub diff_pair_gap: Option<(Nm, String)>,
 }
 
 impl Router {
@@ -205,7 +230,7 @@ impl Router {
         let via_kinds = design.drawings.iter().flat_map(|d| d.via_extras.iter()).filter(|e| e.kind != ViaKind::Through).map(|e| (e.id.clone(), e.kind)).collect();
         let track_pins = design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| !t.pins.is_empty()).map(|t| (t.id.clone(), t.pins.clone())).collect();
         let footprint_at = design.placement.iter().flat_map(|p| p.footprints.iter()).map(|f| (f.id.clone(), f.at)).collect();
-        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, group_drag: None, footprint_at, append_undo: false, entered_group: None, user_diff_pair: None, via_kinds, track_pins, drag_mode: None, use_connected_track_width: true }
+        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, group_drag: None, footprint_at, append_undo: false, entered_group: None, user_diff_pair: None, via_kinds, track_pins, drag_mode: None, use_connected_track_width: true, use_net_class_track: true, width_explicit: false }
     }
 
     /// The type of the board's via `id` (a through via unless the board says otherwise).
@@ -230,6 +255,16 @@ impl Router {
 
     pub fn is_routing_diff_pair(&self) -> bool {
         self.diff.is_some()
+    }
+
+    /// `ROUTER::GetCurrentLayer()`: the layer the route or the pair in progress is routed on, if one is.
+    pub fn current_layer(&self) -> Option<i32> {
+        self.diff.as_ref().map(|d| d.current_layer()).or_else(|| self.session().map(|s| s.placer.current_layer))
+    }
+
+    /// The layer the pair in progress is routed on (`m_router->GetCurrentLayer()` in the pair tool), if one is.
+    pub fn diff_pair_current_layer(&self) -> Option<i32> {
+        self.diff.as_ref().map(|d| d.current_layer())
     }
 
     pub fn layer_index(&self, name: &str) -> Option<i32> {
@@ -375,10 +410,14 @@ impl Router {
     /// replaced by the opt of `VIA_DIAMETER_CONSTRAINT` / `HOLE_SIZE_CONSTRAINT` of a dummy via of the route's net, of `kind`, over `span`
     /// (`SetLayerPair( currentLayer, targetLayer )`) on the layer being routed, when a rule gives one
     /// ([`crate::rule_resolver::RuleResolver::via_size`]); a world without rules has the net class's. `None` when no route is in progress.
+    ///
+    /// A pair asks it of its P net (`m_router->GetCurrentNets()[0]`) on the layer it is routed on: the pair tool's via commands (UI-LEFT R2).
     pub fn net_class_via_size(&self, kind: ViaKind, span: Option<(i32, i32)>, to_layer: Option<i32>) -> Option<(Nm, Nm)> {
-        let s = self.session()?;
-        let layer = s.placer.current_layer;
-        let net = s.placer.net.clone();
+        let (layer, net) = match (&self.diff, self.session()) {
+            (Some(d), _) => (d.current_layer(), d.net_p.clone()),
+            (None, Some(s)) => (s.placer.current_layer, s.placer.net.clone()),
+            (None, None) => return None,
+        };
         let Some(r) = self.world.rule_resolver() else {
             let name = net.as_deref().unwrap_or("");
             return Some((self.rules.via_diameter_of(name), self.rules.via_drill_of(name)));
@@ -424,7 +463,7 @@ impl Router {
     /// `TOOL_BASE::pickSingleItem( pos, nullptr, -1 )` ranks what is there: first what is exactly under the point (`QueryHoverItems( aWhere, 0 )`),
     /// a pad, via or track end on the active layer `layer` (`prioritized[0]`), then a track there whose copper the point is in (`prioritized[1]`),
     /// then the same on any copper layer (`prioritized[2]`, `[3]`: "the same kinds on any layer"); only with nothing there, what is within the
-    /// slop (`maxSlopRadius`, here [`START_SNAP_NM`]: a point that was not snapped, a script's, the API's), on the active layer and then on any. A
+    /// slop (`maxSlopRadius`, the grid: [`RoutingSettings::grab_radius`], UI-LEFT R7; a point that was not snapped, a script's, the API's), by the copper. A
     /// track is taken at the end nearer the point if that is within half the track's width (`snapToItem`), else at the point on its centre line, in
     /// the middle of the track. The route then starts on the item's layer when it is not on the active one ([`Self::start_layer`], r5 R5-1).
     /// **Differs:** the layers' visibility (`IsAnyLayerVisible`) and high contrast are the studio's, not asked here; on any layer the track
@@ -444,8 +483,15 @@ impl Router {
         if let Some(pick) = any_layer_track() {
             return Some(pick);
         }
-        let (item, pos) = self.world.nearest_anchor(at, LayerRange::single(layer), START_SNAP_NM, None).or_else(|| self.world.nearest_anchor(at, all, START_SNAP_NM, None))?;
-        Some(StartPick { item, pos, split: None })
+        // `for( int slopRadius : { 0, maxSlopRadius } )`: with nothing exactly there, what is within the grab radius -- the grid (UI-LEFT R7) -- by its
+        // copper, ranked as above, then `snapToItem` (a track in its middle is split there, as `track_pick`'s)
+        let item = self.world.pick_single_item(at, None, None, layer, self.settings.grab_radius, &[])?;
+        let (pos, split) = self.world.snap_to_item(item, at)?;
+        let split = split.filter(|id| self.world.get(*id).and_then(Item::source_track_id).is_some());
+        if split.is_none() && self.world.get(item).is_some_and(Item::is_track) && !self.world.get(item).and_then(Item::track_ends).is_some_and(|(a, b)| a == pos || b == pos) {
+            return None;
+        }
+        Some(StartPick { item, pos, split })
     }
 
     /// The track on `layer` whose copper `at` is in, as [`Self::pick_start`] takes it: at its end when `at` is within half its width of it, else
@@ -523,8 +569,96 @@ impl Router {
     pub fn set_width(&mut self, width: Nm) -> Option<(Nm, String)> {
         let (width, source) = crate::settings::chosen_track_width(&self.rules, width);
         let s = self.session.as_mut()?;
+        // `m_TempOverrideTrackWidth = true`, then `ImportSizes`: `SetTrackWidthIsExplicit( !m_UseConnectedTrackWidth || m_TempOverrideTrackWidth )`
+        self.width_explicit = true;
         s.placer.width = width;
         Some((width, source))
+    }
+
+    /// `ROUTER_TOOL::updateSizesAfterRouterEvent( aTargetLayer, aPos )` (UI-LEFT R5), run after a layer switch (`handleLayerSwitch`'s `SwitchLayer` branch),
+    /// a via (`switchLayerOnViaPlacement`) and every fix (`performRouting`'s click): the sizes asked again of a dummy track of the route's first net on
+    /// `layer`, from `pos` to `pos` --
+    /// - the clearance `CLEARANCE_CONSTRAINT`'s min when it is at least the board's minimum clearance, else the minimum, "board minimum clearance";
+    /// - with `bds.UseNetClassTrack() || !sizes.TrackWidthIsExplicit()`, `TRACK_WIDTH_CONSTRAINT`: the width becomes `max( m_TrackMinWidth, opt )` when the
+    ///   net class is in use or the width is out of the constraint's range ("Only change the size if we're explicitly using the net class, or we're out
+    ///   of range for our new constraints"); its source is the rule's when it is the opt, "board minimum track width" when it is the minimum, else
+    ///   "existing track";
+    /// - for a pair, with `bds.UseNetClassDiffPair() || !explicit`, the pair's `TRACK_WIDTH_CONSTRAINT` and `DIFF_PAIR_GAP_CONSTRAINT` of the two nets'
+    ///   dummies, the same way (the gap at least the board's minimum clearance) --
+    /// then `m_router->UpdateSizes( sizes )`: the line placer's head takes the width only when it is explicit or nothing is placed yet and the route did
+    /// not start on a segment (`LINE_PLACER::UpdateSizes`); a pair keeps its width when it is not explicit and has fixed something
+    /// (`DIFF_PAIR_PLACER::UpdateSizes`), and takes the gap. `None` with no route or pair in progress. A world without rules has only the clearance
+    /// of the net's class.
+    pub fn update_sizes_after_router_event(&mut self, layer: i32, pos: Point) -> Option<EventSizes> {
+        use crate::rule_resolver::Side;
+        use eda_drc::constraints::CType;
+        let nets: Vec<Net> = match (&self.diff, self.session()) {
+            (Some(d), _) => vec![d.net_p.clone(), d.net_n.clone()],
+            (None, Some(s)) => vec![s.placer.net.clone()],
+            (None, None) => return None,
+        };
+        let rules = &self.rules;
+        let nm = Nm::new;
+        let mut out = EventSizes { clearance: rules.min_clearance_nm, clearance_source: "board minimum clearance".into(), ..EventSizes::default() };
+        let Some(r) = self.world.rule_resolver() else {
+            out.clearance = Node::clearance(rules, &nets[0], &None).max(rules.min_clearance_nm);
+            return Some(out);
+        };
+        let dummy = Side::Track { net: &nets[0], layer, seg: Some((pos, pos)) };
+        if let Some((c, rule)) = r.query_constraint(CType::Clearance, &dummy, None, Some(layer)) {
+            if nm(c.min()) >= rules.min_clearance_nm {
+                out.clearance = nm(c.min());
+                out.clearance_source = rule;
+            }
+        }
+        let explicit = self.width_explicit;
+        let current_width = self.session().map(|s| s.placer.width);
+        if let Some(width) = current_width.filter(|_| self.use_net_class_track || !explicit) {
+            if let Some((c, rule)) = r.query_constraint(CType::TrackWidth, &dummy, None, Some(layer)) {
+                let mut w = width;
+                if self.use_net_class_track || w < rules.track_width_min_nm || w.get() < c.min() || w.get() > c.max() {
+                    w = rules.track_width_min_nm.max(nm(c.opt()));
+                }
+                let source = if w == nm(c.opt()) { rule } else if w == rules.track_width_min_nm { "board minimum track width".into() } else { "existing track".into() };
+                out.width = Some((w, source));
+            }
+        }
+        let use_net_class_dp = self.user_diff_pair.is_none();
+        let mut dp_sizes = None;
+        if nets.len() >= 2 && (use_net_class_dp || !explicit) {
+            if let Some(d) = &self.diff {
+                let dummy_b = Side::Track { net: &nets[1], layer, seg: Some((pos, pos)) };
+                let (mut w, mut g) = (d.sizes.width, d.sizes.gap);
+                if let Some((c, rule)) = r.query_constraint(CType::TrackWidth, &dummy, Some(&dummy_b), Some(layer)) {
+                    if use_net_class_dp || w < rules.track_width_min_nm || w.get() < c.min() || w.get() > c.max() {
+                        w = rules.track_width_min_nm.max(nm(c.opt()));
+                    }
+                    out.diff_pair_width = Some((w, if w == nm(c.opt()) { rule } else { "board minimum track width".into() }));
+                }
+                if let Some((c, rule)) = r.query_constraint(CType::DiffPairGap, &dummy, Some(&dummy_b), Some(layer)) {
+                    if use_net_class_dp || g < rules.min_clearance_nm || g.get() < c.min() || g.get() > c.max() {
+                        g = rules.min_clearance_nm.max(nm(c.opt()));
+                    }
+                    out.diff_pair_gap = Some((g, if g == nm(c.opt()) { rule } else { "board minimum clearance".into() }));
+                }
+                dp_sizes = Some((w, g));
+            }
+        }
+        // `m_router->UpdateSizes( sizes )`
+        if let (Some(s), Some((w, _))) = (self.session.as_mut(), &out.width) {
+            let placed = s.placer.has_placed_anything();
+            if explicit || (!placed && !s.placer.start_on_segment) {
+                s.placer.width = *w;
+                out.width_applied = true;
+            }
+        }
+        if let (Some(d), Some((w, g))) = (self.diff.as_mut(), dp_sizes) {
+            // "When continuing from an existing track in connected-track-width mode, preserve the inherited diff pair width"
+            let keep_width = !explicit && !d.legs().is_empty();
+            out.width_applied = !keep_width && out.diff_pair_width.is_some();
+            d.set_dimensions((!keep_width).then_some(w), Some(g), None);
+        }
+        Some(out)
     }
 
     /// `ROUTER::SwitchLayer` (R6-R3): `m_placer->SetLayer( aLayer )` while a track is routed ([`LinePlacer::set_layer`]); false when no route is in
@@ -647,6 +781,20 @@ impl Router {
         Ok((from, layers, current_end))
     }
 
+    /// `ROUTER::GetNearestRatnestAnchor( aOtherEnd, aOtherEndLayers, aOtherEndItem )` for the route or the pair in progress, its head moved to `at`:
+    /// where the nearest unconnected anchor is and its layers, which `ROUTER_TOOL::handleLayerSwitch` takes as Place Through Via's implicit target
+    /// ("Try to switch to the nearest ratnest item's layer if we have one", UI-LEFT R5). `None` when there is none ("Can't finish something with no
+    /// connections": a route of no net has none).
+    pub fn ratsnest_anchor(&mut self, at: Point) -> Option<(Point, LayerRange)> {
+        if self.diff.is_some() {
+            return self.dp_nearest_ratsnest_anchor(at).ok().map(|(p, l, _)| (p, l));
+        }
+        if self.session().is_none_or(|s| s.placer.net.is_none()) {
+            return None;
+        }
+        self.nearest_ratsnest_anchor(at).ok().map(|(p, l, _)| (p, l))
+    }
+
     /// `ROUTER::Finish` (AttemptFinish, `F`): route to the nearest unconnected anchor of the net (`GetNearestRatnestAnchor`), moving the head
     /// there until its end stops changing (at most five `Move`s), and when it gets there on a layer of the anchor, fix it there (`FixRoute(
     /// otherEnd, otherEndItem, false, false )`) and finish. `Ok` with the commit when it did; `Err` with where the head ended otherwise --
@@ -682,12 +830,27 @@ impl Router {
     /// [`Continuation::commit`] and starts a new pair with [`Self::start_diff_pair`] at [`Continuation::from`], which then heads for [`Continuation::to`].
     /// Nothing is changed, but for the pair's own last `Move` at `at`.
     pub fn continue_diff_pair_from_end(&mut self, at: Point) -> Result<Continuation, String> {
+        let (from, layers, current_end) = self.dp_nearest_ratsnest_anchor(at)?;
+        let d = self.diff.as_mut().ok_or("not routing a diff pair")?;
+        let net = d.net_p.clone();
+        let current = d.current_layer();
+        let layer = if layers.overlaps_layer(current) { current } else { layers.start() };
+        let (width, gap, via_gap) = (d.sizes.width, d.sizes.gap, d.sizes.via_gap);
+        let dp_commit = d.commit();
+        let mut commit = self.build_dp_commit(&dp_commit);
+        self.drop_redundant(&mut commit);
+        self.simplify_pair_legs(&dp_commit, &mut commit);
+        Ok(Continuation { commit, net: net.as_deref().unwrap_or("").to_string(), layer: self.layer_name(layer).to_string(), width, from, to: current_end, gap, via_gap })
+    }
+
+    /// `ROUTER::GetNearestRatnestAnchor` for a pair: the trace is the P line (`placer->Traces()[0]`), the net its net, and what the pair has fixed is in
+    /// the placer's world (`CurrentNode( true )`). The head is the one a `Move` to `at` gives. `(the anchor, its layers, where the head ends)`.
+    fn dp_nearest_ratsnest_anchor(&mut self, at: Point) -> Result<(Point, LayerRange, Point), String> {
         let d = self.diff.as_mut().ok_or("not routing a diff pair")?;
         d.move_to(&self.rules, &self.settings, at);
         let preview = d.preview();
         let net = d.net_p.clone();
         let head = &preview.head_a;
-        // what the pair has fixed is in the placer's world (`CurrentNode( true )`)
         let mut node = d.world().branch();
         let start = d.current_start_p();
         let current_end = head.last().unwrap_or(start);
@@ -709,13 +872,38 @@ impl Router {
             let (id, anchor) = node.nearest_unconnected_item(start, &net).ok_or("Route From Other End: nothing is left to connect to.")?;
             (anchor, node.get(id).map_or(LayerRange::single(preview.layer), |i| i.layers()))
         };
-        let layer = if layers.overlaps_layer(preview.layer) { preview.layer } else { layers.start() };
-        let (width, gap, via_gap) = (d.sizes.width, d.sizes.gap, d.sizes.via_gap);
-        let dp_commit = d.commit();
-        let mut commit = self.build_dp_commit(&dp_commit);
-        self.drop_redundant(&mut commit);
-        self.simplify_pair_legs(&dp_commit, &mut commit);
-        Ok(Continuation { commit, net: net.as_deref().unwrap_or("").to_string(), layer: self.layer_name(layer).to_string(), width, from, to: current_end, gap, via_gap })
+        Ok((from, layers, current_end))
+    }
+
+    /// `ROUTER::Finish` (AttemptFinish, `F`) for a pair: `Finish` is the router's, not the line placer's, and takes `placer->Traces()[0]`, the P line of
+    /// the `DIFF_PAIR_PLACER`. The pair is moved to the nearest unconnected anchor of the P net (`GetNearestRatnestAnchor`) until its end stops changing,
+    /// at most five times -- the pair's `CurrentEnd()` is the point it was last moved to (`m_currentEnd = aP`), so the second `Move` settles it -- and,
+    /// when the anchor is on the layer being routed, fixed there (`FixRoute( otherEnd, otherEndItem, false, false )`): a pair that reached the coupled
+    /// pair there (`m_snapOnTarget`) is finished and committed (`Ok`). Otherwise the route goes on (`Err`, where the pair ends, which the tool warps the
+    /// cursor to): what the fix placed stays fixed, as KiCad's `DIFF_PAIR_PLACER::FixRoute` leaves it when it returns false. UI-LEFT R2 (pns Stage 12's
+    /// "`F` in a diff pair still finishes at the cursor").
+    pub fn attempt_finish_diff_pair(&mut self, at: Point) -> Result<RouteCommit, Point> {
+        let Ok((other_end, layers, _)) = self.dp_nearest_ratsnest_anchor(at) else { return Err(at) };
+        let Some(d) = self.diff.as_mut() else { return Err(at) };
+        // `do { moveResultPoint = placer->CurrentEnd(); Move( otherEnd, otherEndItem ); triesLeft--; } while( placer->CurrentEnd() != moveResultPoint && triesLeft );`
+        let (mut current_end, mut tries, mut move_result) = (at, 5, at);
+        while tries > 0 {
+            move_result = current_end;
+            d.move_to(&self.rules, &self.settings, other_end);
+            current_end = other_end;
+            tries -= 1;
+            if current_end == move_result {
+                break;
+            }
+        }
+        if move_result == other_end && layers.overlaps_layer(d.current_layer()) {
+            if let Some(FixOutcome::Fixed { real_end: true }) = d.fix_route(&self.rules, &self.settings, other_end, false) {
+                if let Some(commit) = self.finish_diff_pair(other_end) {
+                    return Ok(commit);
+                }
+            }
+        }
+        Err(current_end)
     }
 
     /// `ROUTER::UndoLastSegment` (Backspace).
@@ -1176,7 +1364,8 @@ impl Router {
             })
             .min()
             .map(|(_, id)| id);
-        let item_id = via.or_else(|| self.world.item_at(at, LayerRange::single(layer), START_SNAP_NM)).ok_or("nothing to drag there")?;
+        // `updateStartItem( *evt, true )`: within the grab radius, the grid (`maxSlopRadius`, UI-LEFT R7)
+        let item_id = via.or_else(|| self.world.item_at(at, LayerRange::single(layer), self.settings.grab_radius)).ok_or("nothing to drag there")?;
         if drag_locked {
             self.world.set_locked(item_id, false);
         }
@@ -1481,7 +1670,7 @@ impl Router {
     // vias. See that module's own doc comment for what differs from KiCad.
 
     /// `DIFF_PAIR_PLACER::Start` plus `ROUTER::isStartingPointRoutable`'s checks for a pair: resolve whatever is at `at` the same
-    /// way [`Self::start`] does (a real pad/via/track-end within [`START_SNAP_NM`]), then find its differential-pair partner net's
+    /// way [`Self::start`] does ([`Self::pick_start`]: exactly there, then within the grab radius), then find its differential-pair partner net's
     /// nearest item of the same kind ([`crate::dp_placer::find_dp_primitive_pair`]). Replaces any route/drag/diff-pair session already
     /// in progress. The error is KiCad's own message.
     pub fn start_diff_pair(&mut self, at: Point, layer_name: &str) -> Result<(), String> {
@@ -1490,8 +1679,8 @@ impl Router {
         // `FindDpPrimitivePair` then finds its free end, or says "Can't find a suitable starting point. ..."), else nothing (findings p5 F4-6);
         // with nothing on the active layer, what `pickSingleItem` finds on another (`prioritized[2]`, `[3]`), and the pair starts on its layer
         // (`getStartLayer`, r5 R5-1)
-        let hit = self.world.nearest_anchor(at, LayerRange::single(active), START_SNAP_NM, None).map(|(id, _)| id).or_else(|| self.world.segment_at(at, active, None, None, &[]));
-        let Some(start_item) = hit.or_else(|| self.pick_start(at, active).map(|p| p.item)) else {
+        // `pickSingleItem( pos, nullptr, -1 )` (`updateStartItem`): exactly there first, then within the grab radius -- the grid, UI-LEFT R7
+        let Some(start_item) = self.pick_start(at, active).map(|p| p.item) else {
             return Err("Cannot start a differential pair in the middle of nowhere.".into());
         };
         let layer = match self.world.get(start_item) {
@@ -1560,8 +1749,14 @@ impl Router {
 
     /// `ROUTER::ToggleViaPlacement` for a pair (`V`): the head ends in a pair of vias, and the route goes on to `to_layer` from them.
     pub fn toggle_diff_pair_via(&mut self, enabled: bool, diameter: Option<Nm>, drill: Option<Nm>, to_layer: Option<i32>) {
+        self.toggle_diff_pair_via_typed(enabled, diameter, drill, to_layer, ViaKind::Through);
+    }
+
+    /// [`Self::toggle_diff_pair_via`] with the vias' type: the router tool's blind/buried and micro via commands in the pair tool
+    /// (`handleLayerSwitch` is the same function in both modes; `DIFF_PAIR_PLACER::makeVia` takes `m_sizes.ViaType()`), UI-LEFT R2.
+    pub fn toggle_diff_pair_via_typed(&mut self, enabled: bool, diameter: Option<Nm>, drill: Option<Nm>, to_layer: Option<i32>, kind: ViaKind) {
         if let Some(d) = &mut self.diff {
-            d.toggle_via(enabled, diameter, drill, to_layer);
+            d.toggle_via_typed(enabled, diameter, drill, to_layer, kind);
         }
     }
 
@@ -1617,6 +1812,8 @@ impl Router {
             if let Some((a, b)) = &leg.vias {
                 for v in [a, b] {
                     commit.vias.push(eda_model::ir::Via { id: String::new(), net: v.net.as_deref().unwrap_or("").to_string(), at: v.pos, drill: v.drill.max(Nm::new(1)), diameter: v.diameter.max(Nm::new(1)), from_layer: self.layer_name(v.layers.start()).to_string(), to_layer: self.layer_name(v.layers.end()).to_string() });
+                    // `PNS_KICAD_IFACE::AddItem`: `via_board->SetViaType( via->ViaType() )`
+                    Self::note_via_kind(&mut commit, leg.via_kind);
                 }
             }
         }
@@ -2123,7 +2320,9 @@ mod tests {
         let c = Point { x: mm(53.0), y: mm(53.0) };
         let pv = router.preview(c).unwrap();
         assert!(!pv.colliding && pv.head.first() == Some(b), "{pv:?}");
-        // a route of no net along it, 100 um away: no collision
+        // a route of no net along it, 100 um away: no collision. On a 0.1 mm grid (the grab radius, `maxSlopRadius`, UI-LEFT R7) the start is in empty
+        // space; with the 0.5 mm the start and end once snapped within whatever the grid, the track's copper 0.2 mm away is grabbed, as KiCad grabs it
+        router.settings.grab_radius = mm(0.1);
         router.start(Point { x: mm(50.0), y: mm(50.3) }, "F.Cu", mm(0.2)).expect("empty space");
         let pv = router.preview(Point { x: mm(53.0), y: mm(50.3) }).unwrap();
         assert!(!pv.colliding && pv.head.pts.len() == 2, "{pv:?}");

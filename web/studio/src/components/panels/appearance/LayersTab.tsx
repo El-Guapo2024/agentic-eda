@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { useAppearanceView } from "./useAppearanceView";
 import { Eye, Pane, Radios, Swatch } from "./shared";
+import { useThemeSwatchEdit } from "./themeSwatch";
 import { ContextMenu, type MenuEntry } from "../../canvas/ContextMenu";
 import { copperColorKey, layerColor } from "../../canvas/layers";
 import { layerStateKey, type LayerGroupOp, type MenuPresetKind } from "../../../kicad-port/layerPresets";
@@ -14,8 +15,9 @@ import { enabledOptionalLayers, layerDisplayName } from "../../../kicad-port/boa
 import type { ContrastMode } from "../../../kicad-port/appearance";
 
 /**
- * One layer's row (`rebuildLayers`' `appendLayer`): the active-layer indicator, the colour (read-only: the studio's colours come from the theme), the eye ("Show or hide this
- * layer"), the name, and the studio's own opacity slider when `onOpacity` is given. `layerKey` is the row's `data-layer`.
+ * One layer's row (`rebuildLayers`' `appendLayer`): the active-layer indicator, the colour (the theme's; with `onEditColor` a double click or a middle click edits it,
+ * "Double click or middle click for color change, right click for menu"), the eye ("Show or hide this layer"), the name, and the studio's own opacity slider when
+ * `onOpacity` is given. `layerKey` is the row's `data-layer`.
  */
 export function LayerRowView({
   layerKey,
@@ -28,6 +30,7 @@ export function LayerRowView({
   onActivate,
   onToggle,
   onOpacity,
+  onEditColor,
 }: {
   layerKey: string;
   label: string;
@@ -39,11 +42,12 @@ export function LayerRowView({
   onActivate: () => void;
   onToggle: () => void;
   onOpacity?: (value: number) => void;
+  onEditColor?: () => void;
 }) {
   return (
     <div className={`ap-row${active ? " active" : ""}`} data-layer={layerKey} onClick={onActivate}>
       <span className="ap-indicator" />
-      <Swatch css={layerColor(colorKey)} title="Layer color" />
+      <Swatch css={layerColor(colorKey)} title={onEditColor ? "Double click or middle click for color change, right click for menu" : "Layer color"} onEdit={onEditColor} />
       <Eye on={visible} title="Show or hide this layer" onToggle={onToggle} />
       <span className="ap-name" title={nameTitle}>
         {label}
@@ -53,7 +57,7 @@ export function LayerRowView({
   );
 }
 
-function LayerRow({ stateKey, label, colorKey }: { stateKey: string; label: string; colorKey: string }) {
+function LayerRow({ stateKey, label, colorKey, onEditColor }: { stateKey: string; label: string; colorKey: string; onEditColor: () => void }) {
   const { state, dispatch, op } = useAppearanceView();
   const visible = state.layerVisible[stateKey] !== false;
   const opacity = state.layerOpacity[stateKey] ?? 1;
@@ -70,6 +74,7 @@ function LayerRow({ stateKey, label, colorKey }: { stateKey: string; label: stri
       onActivate={() => dispatch({ type: "SET_ACTIVE_LAYER", layer: active ? null : stateKey })}
       onToggle={() => op({ op: "layer", key: stateKey, visible: !visible })}
       onOpacity={(value) => op({ op: "layer_opacity", key: stateKey, value })}
+      onEditColor={onEditColor}
     />
   );
 }
@@ -123,6 +128,8 @@ const GROUP_OPS: readonly LayerMenuCommand[] = ["show_copper", "hide_copper", "s
 export function LayersTab() {
   const { state, op, nets } = useAppearanceView();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // the swatches edit the board editor's colour theme (`OnColorSwatchChanged`)
+  const theme = useThemeSwatchEdit();
   const board = state.board;
   if (!board) return <div className="ap-note">No board.</div>;
   // Board Setup > Board Editor Layers: the layers the board has and the names the user gave them (`BOARD::GetLayerName`).
@@ -137,10 +144,10 @@ export function LayersTab() {
   return (
     <div className="ap-scroll" onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); }}>
       {board.layers.map((layer) => (
-        <LayerRow key={layer} stateKey={layer} label={layerDisplayName(setup, layer)} colorKey={copperColorKey(layer)} />
+        <LayerRow key={layer} stateKey={layer} label={layerDisplayName(setup, layer)} colorKey={copperColorKey(layer)} onEditColor={() => theme.edit(copperColorKey(layer), "layer")} />
       ))}
       {enabledOptionalLayers(setup).map((name) => (
-        <LayerRow key={name} stateKey={layerStateKey(name)} label={layerDisplayName(setup, name)} colorKey={layerStateKey(name)} />
+        <LayerRow key={name} stateKey={layerStateKey(name)} label={layerDisplayName(setup, name)} colorKey={layerStateKey(name)} onEditColor={() => theme.edit(layerStateKey(name), "layer")} />
       ))}
       <Pane title="Layer Display Options">
         <ContrastModeRadios mode={mode} onChange={(m) => op({ op: "contrast", mode: m })} />
@@ -152,6 +159,7 @@ export function LayersTab() {
       </Pane>
       {/* `board.layers.length > 2`: "Only show the internal layer option if internal layers are enabled" */}
       {menu && <ContextMenu x={menu.x} y={menu.y} entries={layerMenuEntries(board.layers.length > 2, run)} onClose={() => setMenu(null)} />}
+      {theme.dialog}
     </div>
   );
 }

@@ -49,13 +49,50 @@ pub struct Scene {
 impl Scene {
     pub fn of(design: Design, model: ConstraintModel) -> Scene {
         let (world, layers) = build_node(&design, &model);
-        let env = LengthEnv::of(&model);
+        let env = LengthEnv::of(&model).with_pad_to_die(pad_to_die(&design, &model));
         Scene { design, model, world, layers, env }
     }
 
     fn net_name(net: &eda_pns::item::Net) -> String {
         net.as_deref().unwrap_or("").to_string()
     }
+}
+
+/// A pad token's number: `(die_length 1.5)` -> `1.5`.
+fn pad_token_value(tokens: &[String], key: &str) -> Option<f64> {
+    tokens.iter().find_map(|t| t.trim().strip_prefix(key).filter(|r| r.starts_with(char::is_whitespace)).and_then(|r| r.trim().trim_end_matches(')').trim().parse::<f64>().ok()))
+}
+
+/// The pad-to-die length and delay of every pad of the board that has one, by its id (`"<ref>.<number>"`, what the router's solids carry): the `(die_length ..)`
+/// (millimetres, `parseBoardUnits`: nanometres) and `(die_delay ..)` (picoseconds, `parseBoardUnits( T_die_delay, EDA_DATA_TYPE::TIME )`: attoseconds,
+/// `IU_PER_PS`) a board file gave the pad, which the IR keeps among the pad's tokens (`PAD::GetPadToDieLength`, `GetPadToDieDelay`). The k-th pad numbered N of a
+/// footprint is the k-th pad numbered N of its footprint's pads, whose tokens are the footprint extra's pad at the same index (as the Net Inspector reads them).
+pub fn pad_to_die(design: &Design, model: &ConstraintModel) -> std::collections::BTreeMap<String, (Nm, i64)> {
+    let mut out = std::collections::BTreeMap::new();
+    let Some(extras) = design.drawings.as_ref().map(|d| &d.footprint_extras) else { return out };
+    if extras.iter().all(|e| e.pads.iter().all(|p| p.tokens.is_empty())) {
+        return out;
+    }
+    let board = eda_drc::board::build(design, model);
+    let mut seen: std::collections::BTreeMap<(String, String), usize> = std::collections::BTreeMap::new();
+    for p in &board.pads {
+        let k = seen.entry((p.footprint_ref.clone(), p.number.clone())).or_insert(0);
+        let nth = *k;
+        *k += 1;
+        let Some(part) = model.part(&p.footprint_ref) else { continue };
+        let Some(fp) = model.footprint_of(part) else { continue };
+        let Some(extra) = extras.iter().find(|e| e.id == p.footprint_ref) else { continue };
+        if extra.pads.len() != fp.pads.len() {
+            continue;
+        }
+        let Some(tokens) = fp.pads.iter().enumerate().filter(|(_, q)| q.number == p.number).nth(nth).and_then(|(i, _)| extra.pads.get(i)).map(|m| &m.tokens) else { continue };
+        let len = pad_token_value(tokens, "(die_length").map_or(Nm::ZERO, |mm| Nm::kiround(mm * 1e6));
+        let delay = pad_token_value(tokens, "(die_delay").map_or(0, |ps| (ps * 1e6).round() as i64);
+        if len != Nm::ZERO || delay != 0 {
+            out.insert(p.id.clone(), (len, delay));
+        }
+    }
+    out
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------- picking
@@ -307,7 +344,10 @@ fn sync_back(p: &mut TuningPattern, s: &MeanderSettings) {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Constraint {
     pub name: String,
+    /// Nanometres, or attoseconds for a time domain rule.
     pub range: TargetRange,
+    /// `constraint.m_IsTimeDomain` (`DRC_CONSTRAINT::OPTIONS::TIME_DOMAIN`): the rule's values are times (`(min 149.5ps)`), the target is a delay.
+    pub time_domain: bool,
 }
 
 /// `PCB_TUNING_PATTERN::CreateNew` / `ShowPropertiesDialog` / `EditStart`'s rule lookup (R7-D4):
@@ -320,7 +360,9 @@ pub struct Constraint {
 /// through the main rule engine (`eda_drc::rule_board::RuleBoard`, the compiled `.kicad_dru` the router, Inspect and the DRC's own checks use): A is the real
 /// start track `track_id` (its width, layer, net class, groups, sheet .. all there), B is none, and a rules file that does not compile gives no rule. The value
 /// is what `MEANDER_SETTINGS::SetTargetLength( const MINOPTMAX& )` makes of it: `SetTargetLength( Opt() )` (the optimum, else the minimum, with the default
-/// tolerance round it), then the rule's own minimum and maximum when it has them. `None` when no rule applies, or the track is not on the board.
+/// tolerance round it), then the rule's own minimum and maximum when it has them. A time domain rule (its values in `ps` or `fs`, `m_IsTimeDomain`) is a delay
+/// in attoseconds, with the delay's default tolerance (`SetTargetLengthDelay`); [`Constraint::time_domain`] says which. `None` when no rule applies, or the
+/// track is not on the board.
 pub fn rule_constraint(design: &Design, model: &ConstraintModel, kind: TuningMode, track_id: &str, layer: &str) -> Option<Constraint> {
     use eda_drc::rule_board::RuleBoard;
     let board = eda_drc::board::build(design, model);
@@ -333,15 +375,13 @@ pub fn rule_constraint(design: &Design, model: &ConstraintModel, kind: TuningMod
         return None;
     }
     let rule = c.parent.and_then(|i| rb.engine().rules.get(i));
-    // `constraint.GetOption( DRC_CONSTRAINT::OPTIONS::TIME_DOMAIN )`: KiCad then sets the target delay (`SetTargetLengthDelay`) and no length. **Differs:** a time
-    // domain rule gives the tuner no target here yet (its values are times, not lengths)
-    if rule.and_then(|r| r.find_constraint(ctype)).is_some_and(|k| k.options & eda_drc::dru::OPT_TIME_DOMAIN != 0) {
-        return None;
-    }
+    // `constraint.GetOption( DRC_CONSTRAINT::OPTIONS::TIME_DOMAIN )` (`m_IsTimeDomain`): the values are attoseconds (`149.5ps` is 149 500 000), and the target is
+    // the delay, `SetTargetLengthDelay( constraint.GetValue() )`, with the delay's default tolerance (0.1 ps) where the rule has no minimum or maximum
+    let time_domain = rule.and_then(|r| r.find_constraint(ctype)).is_some_and(|k| k.options & eda_drc::dru::OPT_TIME_DOMAIN != 0);
     let name = rule.map(|r| r.name.clone()).unwrap_or(c.name.clone());
     let opt = c.value.opt();
-    let tolerance = TargetRange::around(Nm::new(opt));
-    Some(Constraint { name, range: TargetRange { min: c.value.min.unwrap_or(tolerance.min), opt, max: c.value.max.unwrap_or(tolerance.max) } })
+    let tolerance = if time_domain { TargetRange::delay_around(opt) } else { TargetRange::around(Nm::new(opt)) };
+    Some(Constraint { name, range: TargetRange { min: c.value.min.unwrap_or(tolerance.min), opt, max: c.value.max.unwrap_or(tolerance.max) }, time_domain })
 }
 
 /// **INACTIVE** (R7-D4; kept, not deleted, per the user's rule for replaced code): the tuner's old rule lookup, a second evaluator over `BoardRules::custom_rules`
@@ -395,7 +435,7 @@ pub fn constraint_for(rules: &BoardRules, kind: TuningMode, net: &str, partner: 
         }
         let opt = r.opt.or(r.min).unwrap_or(Nm::ZERO);
         let tolerance = TargetRange::around(opt);
-        won = Some(Constraint { name: r.name.clone(), range: TargetRange { min: r.min.map_or(tolerance.min, Nm::get), opt: opt.get(), max: r.max.map_or(tolerance.max, Nm::get) } });
+        won = Some(Constraint { name: r.name.clone(), range: TargetRange { min: r.min.map_or(tolerance.min, Nm::get), opt: opt.get(), max: r.max.map_or(tolerance.max, Nm::get) }, time_domain: false });
     }
     won
 }
@@ -499,21 +539,22 @@ pub fn hover(scene: &Scene, kind: TuningMode, pk: &Pick, settings: &Value) -> Re
     apply_settings(&mut pattern, settings);
     let (partner, constraint) = constrain(scene, &mut pattern, pk);
     let params = scene.env.delay_params(&pk.net);
-    let path_delay = |id: ItemId| match (&params, assemble_tuning_path(&scene.world, id)) {
-        (Some(p), Some(path)) => path.delay(&scene.world, &scene.env, p),
-        _ => 0,
-    };
+    // `origPathDelay()`: the pad-to-die delay of the path's pads with the delay of its lines
+    let path_delay = |id: ItemId| assemble_tuning_path(&scene.world, id).map_or(0, |path| path.full_delay(&scene.world, &scene.env, params.as_ref()));
     let line = scene.world.assemble_line_with(pk.item, eda_pns::tuning_path::assemble_opts()).ok_or("Please select a track whose length you want to tune.")?;
     let (current, nets, label, delay) = match kind {
         TuningMode::Single => {
             let path = assemble_tuning_path(&scene.world, pk.item).ok_or("Please select a track whose length you want to tune.")?;
-            (path.length(&scene.world, &scene.env), None, "current length", path_delay(pk.item))
+            (path.full_length(&scene.world, &scene.env), None, "current length", path_delay(pk.item))
         }
         TuningMode::DiffPair => {
             let pair = assemble_diff_pair(&scene.world, pk.item).ok_or(NO_PAIR)?;
-            let len = |l: &Line| l.segment_ids.first().and_then(|id| assemble_tuning_path(&scene.world, *id)).map(|p| p.length(&scene.world, &scene.env)).unwrap_or(Nm::ZERO);
+            let len = |l: &Line| l.segment_ids.first().and_then(|id| assemble_tuning_path(&scene.world, *id)).map(|p| p.full_length(&scene.world, &scene.env)).unwrap_or(Nm::ZERO);
             let (p, n) = (len(&pair.p), len(&pair.n));
-            let delay = pair.p.segment_ids.first().map_or(0, |id| path_delay(*id)).max(pair.n.segment_ids.first().map_or(0, |id| path_delay(*id)));
+            // `DP_MEANDER_PLACER::origPathDelay`: N's line with P's pad-to-die delay, as KiCad adds it
+            let die = |l: &Line| l.segment_ids.first().and_then(|id| assemble_tuning_path(&scene.world, *id)).map_or(0, |p| p.pad_to_die(&scene.world, &scene.env).1);
+            let (die_p, die_n) = (die(&pair.p), die(&pair.n));
+            let delay = pair.p.segment_ids.first().map_or(0, |id| path_delay(*id)).max(pair.n.segment_ids.first().map_or(0, |id| path_delay(*id)) - die_n + die_p);
             (p.max(n), Some((p, n)), "current length", delay)
         }
         TuningMode::DiffPairSkew => {
@@ -555,11 +596,18 @@ fn constrain(scene: &Scene, pattern: &mut TuningPattern, pk: &Pick) -> (Option<S
     // `EvalRules( .., aStartItem, nullptr, layer )`: the track the pattern starts on (R7-D4)
     let c = rule_constraint(&scene.design, &scene.model, pattern.mode, &pk.track_id, &pk.layer);
     if let Some(c) = &c {
+        // `if( constraint.m_IsTimeDomain ) { SetTargetLengthDelay( constraint.m_Value ); SetTargetLength( MINOPTMAX<int>() ); } else { SetTargetLengthDelay(
+        // MINOPTMAX<int>() ); SetTargetLength( constraint.m_Value ); } m_isTimeDomain = constraint.m_IsTimeDomain;` -- an empty `MINOPTMAX` is `Opt()` 0, the
+        // default tolerance round it; a skew pattern the same with the skew and its delay
+        let (length, delay) = if c.time_domain { (TargetRange::around(Nm::ZERO), c.range) } else { (c.range, TargetRange::delay_around(0)) };
         if pattern.mode == TuningMode::DiffPairSkew {
-            pattern.target_skew = c.range;
+            pattern.target_skew = length;
+            pattern.target_skew_delay = delay;
         } else {
-            pattern.target_length = c.range;
+            pattern.target_length = length;
+            pattern.target_delay = delay;
         }
+        pattern.is_time_domain = c.time_domain;
     }
     (partner, c)
 }
@@ -1007,6 +1055,9 @@ pub struct EditCtx {
     pub end: Point,
     pub pattern: TuningPattern,
     pub settings: Value,
+    /// The cursor the last move of the whole pattern was at (`EDIT_TOOL::doMoveSelection`'s `prevPos`): a move of the pattern alone moves its start and end by
+    /// how far the cursor went since ([`EditCtx::moved_ends`]).
+    pub move_from: Option<Point>,
 }
 
 /// A pattern being tuned again.
@@ -1029,6 +1080,7 @@ fn tuner_for(after: Rc<Scene>, pattern: &TuningPattern, settings: &Value, origin
     let start = segment_near(&after, origin, &pattern.layer, &pattern.base_line).ok_or("Unable to find the track the tuning pattern starts on.")?;
     let (net, width) = match after.world.get(start) {
         Some(Item::Segment(s)) => (Scene::net_name(&s.net), s.width),
+        Some(Item::Arc(a)) => (Scene::net_name(&a.net), a.width),
         _ => return Err("Unable to find the track the tuning pattern starts on.".into()),
     };
     let pk = Pick { item: start, track_id: String::new(), net, layer: pattern.layer.clone(), width, at: origin };
@@ -1057,10 +1109,26 @@ pub fn begin_retune(scene: &Scene, pattern: &TuningPattern, settings: &Value) ->
     let origin = point_setting(settings, "origin").unwrap_or(pattern.origin);
     let end = point_setting(settings, "end").unwrap_or(pattern.end);
     let tuner = tuner_for(after.clone(), pattern, settings, origin)?;
-    Ok(Retune { ctx: EditCtx { reset, after, end, pattern: pattern.clone(), settings: settings.clone() }, tuner })
+    let move_from = point_setting(settings, "move_from");
+    Ok(Retune { ctx: EditCtx { reset, after, end, pattern: pattern.clone(), settings: settings.clone(), move_from }, tuner })
 }
 
 impl EditCtx {
+    /// A pattern moved on its own (`EDIT_TOOL::doMoveSelection` of a lone generator: `genStartEdit`, then per move `item->Move( movement )` -- which in an edit
+    /// moves only `m_origin` and `m_end`, `PCB_TUNING_PATTERN::Move` -- and `genUpdateEdit`): its start and end, moved by the cursor's way since the last move,
+    /// come back onto the line the pattern is on, each to its nearest point (`resetToBaseline`: `m_origin = straightChain.NearestPoint( m_origin )`), and when they
+    /// end up closer than 0.1 mm the pattern keeps its own baseline's ends ("Don't allow points too close"). So the pattern slides along its track. `None` when the
+    /// line is no longer on the board.
+    pub fn moved_ends(&self, origin: Point, end: Point) -> Option<(Point, Point)> {
+        let line = line_of_baseline(&self.after, &self.pattern.base_line, &self.pattern.layer)?;
+        let chain = chain_of(&line);
+        let (o, e) = (chain.nearest_point(origin, true), chain.nearest_point(end, true));
+        if eda_pns::chain::distance(o, e) < um(100.0) {
+            return Some((*self.pattern.base_line.first()?, *self.pattern.base_line.last()?));
+        }
+        Some((o, e))
+    }
+
     /// The start of the pattern moved (its first edit point): the placer is started again at the new origin, on the same board, with the settings the tuner has now.
     pub fn tuner_at(&self, origin: Point, now: &TuningPattern) -> Result<Tuner, String> {
         let mut settings = if self.settings.is_object() { self.settings.clone() } else { json!({}) };

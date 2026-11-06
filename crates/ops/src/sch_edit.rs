@@ -244,6 +244,11 @@ pub enum SchCmd {
     /// `SetItalic`, `SetTextColor`, `SetHyperlink`) and the "Color" of labels, kept in `SchExtras::text_attrs` (which the reader and writer carry). A field left
     /// out is unchanged; a colour with every channel 0 is `COLOR4D::UNSPECIFIED`; an empty hyperlink is none. A label's bold and italic are Label Properties'
     /// (`EditLabel`), and a label has no hyperlink (`SCH_LABEL_BASE_DESC` masks it).
+    ///
+    /// Text, Label and Text Box Properties (UI-LEFT S6) send it too, in the batch of their OK: the "Font" (`FONT_CHOICE`: `font` "" or "Default Font" is the
+    /// default one, `SetFont( nullptr )`), the "Color" swatch, the "Link" (`DIALOG_TEXT_PROPERTIES`: `EDA_TEXT::ValidateHyperlink` -- "#<page>" or a URL with a
+    /// scheme) and "Exclude from simulation" (`SetExcludedFromSim`) of a free text or a text box; a label's font and colour. A text box's bold and italic are
+    /// its shape's (`EditGraphic`).
     SetTextAttrs {
         ids: Vec<String>,
         #[serde(default)]
@@ -254,7 +259,48 @@ pub enum SchCmd {
         color: Option<SchColor>,
         #[serde(default)]
         href: Option<String>,
+        #[serde(default)]
+        font: Option<String>,
+        #[serde(default)]
+        exclude_from_sim: Option<bool>,
     },
+    /// Sheet Properties' Style and Attributes (`DIALOG_SHEET_PROPERTIES::TransferDataFromWindow`: `SetBorderWidth`, `SetBorderColor`, `SetBackgroundColor`,
+    /// `SetExcludedFromSim`, `SetExcludedFromBOM`, `SetExcludedFromBoard`, `SetDNP`) and the Properties panel's rows of a sheet (`SCH_SHEET_DESC`), kept in
+    /// `SchExtras::sheet_props`. A value left out is unchanged; a colour with every channel 0 is `COLOR4D::UNSPECIFIED`; a width of 0 is the default line width.
+    /// Refused when nothing changes. **Differs**: the attributes are the sheet's own on every path (KiCad keeps the sheet's flags per variant).
+    SetSheetProps {
+        id: String,
+        #[serde(default)]
+        border_width_nm: Option<Nm>,
+        #[serde(default)]
+        border_color: Option<SchColor>,
+        #[serde(default)]
+        fill_color: Option<SchColor>,
+        #[serde(default)]
+        exclude_from_sim: Option<bool>,
+        #[serde(default)]
+        exclude_from_bom: Option<bool>,
+        #[serde(default)]
+        exclude_from_board: Option<bool>,
+        #[serde(default)]
+        dnp: Option<bool>,
+    },
+    /// Sheet Properties' fields grid past Sheetname and Sheetfile (`SCH_FIELD`s of `FIELD_T::SHEET_USER`: Add Field, Delete, the Name, Value, Show and Italic
+    /// cells): the sheet's user fields in their new order (`SchExtras::sheet_fields`). `TransferDataFromWindow`'s rules: a field with neither name nor text is
+    /// dropped, one with a text and no name is refused ("Fields must have a name." -- `Validate`), a name used twice is refused ("Field name '%s' already in
+    /// use."), and Sheetname / Sheetfile are the mandatory fields. Refused when nothing changes.
+    SetSheetFields { id: String, fields: Vec<eda_model::sch_extras::LabelField> },
+    /// The Hierarchy Navigator's New Top-Level Sheet (`HIERARCHY_PANE::onRightClick`, `NEW_TOP_LEVEL_SHEET`; `SCHEMATIC::AddTopLevelSheet`): a new sheet named
+    /// `name` with an empty screen of its own, its file the name with spaces as underscores, in lower case, `.kicad_sch` after it, its page the lowest whole
+    /// number no sheet has (`PageNumberExists`). Only for a root that is KiCad 10's virtual root (`SchExtras::virtual_root`), whose sheets are the top-level
+    /// ones; sent to the root. **Differs**: a design whose root is its one top-level sheet is refused (the studio keeps such a root as the design's only one), the
+    /// sheet is put in the root's grid of top-level sheets (`combine_top_level_sheets`), a file the design already has gets `_1`, `_2`, .. (KiCad would write
+    /// both screens to one file), and it is one undo step (KiCad 8303b2ad pushes an empty commit: no undo).
+    AddTopLevelSheet { name: String },
+    /// The Hierarchy Navigator's Delete Top-Level Sheet (`DELETE_TOP_LEVEL_SHEET`; `SCHEMATIC::RemoveTopLevelSheet`): the top-level sheet `id` goes, its file is
+    /// left (KiCad does not delete it either). Refused for the last one ("Cannot delete the last top-level sheet.") and for a root that is not virtual. One undo
+    /// step (KiCad 8303b2ad: none, "This cannot be undone.").
+    DeleteTopLevelSheet { id: String },
     /// "Exclude From Position Files" of symbols (`SCH_SYMBOL::SetExcludedFromPosFilesProp`, `(in_pos_files no)`): every placed unit of each listed reference on the
     /// sheet in view (`SchExtras::excluded_from_pos_files`, by the placement's key).
     SetExcludeFromPosFiles { ids: Vec<String>, exclude: bool },
@@ -376,6 +422,8 @@ impl SchCmd {
             SchCmd::UpdateLibrarySymbols { lib_ids } => lib_ids.iter().map(String::as_str).collect(),
             SchCmd::SetBodyStyle { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::DeleteGraphic { id } | SchCmd::EditGraphic { id, .. } | SchCmd::DeleteSheet { id } | SchCmd::DeleteSheetPin { id } | SchCmd::EditSheetPin { id, .. } | SchCmd::ChangeSymbol { id, .. } => vec![id.as_str()],
+            SchCmd::SetSheetProps { id, .. } | SchCmd::SetSheetFields { id, .. } | SchCmd::DeleteTopLevelSheet { id } => vec![id.as_str()],
+            SchCmd::AddTopLevelSheet { name } => vec![name.as_str()],
             SchCmd::EditLabel { id, .. } | SchCmd::EditText { id, .. } | SchCmd::EditSheet { id, .. } | SchCmd::EditField { id, .. } => vec![id.as_str()],
             SchCmd::PlaceLabel { net, .. } => vec![net.as_str()],
             SchCmd::PlaceText { content, .. } => vec![content.as_str()],
@@ -423,6 +471,10 @@ impl SchCmd {
             SchCmd::RemoveUserField { id, name } => format!("schematic field-remove {id} {name:?}"),
             SchCmd::EditText { id, .. } => format!("schematic edit-text {id}"),
             SchCmd::EditSheet { id, .. } => format!("schematic edit-sheet {id}"),
+            SchCmd::SetSheetProps { id, .. } => format!("schematic sheet-props {id}"),
+            SchCmd::AddTopLevelSheet { name } => format!("schematic top-level-sheet add {name:?}"),
+            SchCmd::DeleteTopLevelSheet { id } => format!("schematic top-level-sheet delete {id}"),
+            SchCmd::SetSheetFields { id, fields } => format!("schematic sheet-fields {id} {}", fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(",")),
             SchCmd::SetStroke { ids, .. } => format!("schematic stroke {}", ids.join(" ")),
             SchCmd::SetTextAttrs { ids, .. } => format!("schematic text-attrs {}", ids.join(" ")),
             SchCmd::SetExcludeFromPosFiles { ids, exclude } => format!("schematic pos-files {} {}", if *exclude { "exclude" } else { "include" }, ids.join(" ")),
@@ -453,7 +505,7 @@ impl SchCmd {
             SchCmd::EditLabel { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } => "schematic-text",
             SchCmd::PlaceLabel { .. } => "schematic-label",
             SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => "schematic-fields",
-            SchCmd::EditSheet { .. } => "schematic-sheet",
+            SchCmd::EditSheet { .. } | SchCmd::SetSheetProps { .. } | SchCmd::SetSheetFields { .. } | SchCmd::AddTopLevelSheet { .. } | SchCmd::DeleteTopLevelSheet { .. } => "schematic-sheet",
             SchCmd::SetStroke { .. } => "schematic-stroke",
             SchCmd::SetTextAttrs { .. } => "schematic-text",
             SchCmd::SetExcludeFromPosFiles { .. } => "schematic-attributes",
@@ -474,6 +526,9 @@ impl SchCmd {
             SchCmd::SetStroke { .. } | SchCmd::SetTextAttrs { .. } | SchCmd::SetExcludeFromPosFiles { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => false,
             // a field's font and colour are its look; a power symbol's footprint, datasheet, flags and user fields name no net
             SchCmd::SetFieldLooks { .. } | SchCmd::SetPowerProps { .. } => false,
+            // a sheet's style and attributes name no net; its user fields are text variables of what it shows (`SCH_SHEET::ResolveTextVar`), which a label's
+            // `${..}` may read, so they are read from the drawing again
+            SchCmd::SetSheetProps { .. } => false,
             // a group is a set of names; it moves, joins and leaves nothing
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => false,
             // a field's text is a reference, a net or a sheet's name; its place and look are layout
@@ -549,7 +604,27 @@ impl<'a> Board<'a> {
             SchCmd::EditText { id, text, size_nm, angle, h, v } => self.edit_sch_text(id, text.as_deref(), *size_nm, *angle, *h, *v),
             SchCmd::EditSheet { id, name, file } => self.edit_sch_sheet(id, name.as_deref(), file.as_deref()),
             SchCmd::SetStroke { ids, width_nm, style, color, diameter_nm } => self.set_sch_stroke(ids, *width_nm, *style, *color, *diameter_nm),
-            SchCmd::SetTextAttrs { ids, bold, italic, color, href } => self.set_sch_text_attrs(ids, *bold, *italic, *color, href.as_deref()),
+            SchCmd::SetSheetProps { id, border_width_nm, border_color, fill_color, exclude_from_sim, exclude_from_bom, exclude_from_board, dnp } => self.set_sheet_props(
+                id,
+                &crate::sch_props::SheetPropsEdit { border_width_nm: *border_width_nm, border_color: *border_color, fill_color: *fill_color, exclude_from_sim: *exclude_from_sim, exclude_from_bom: *exclude_from_bom, exclude_from_board: *exclude_from_board, dnp: *dnp },
+            ),
+            SchCmd::SetSheetFields { id, fields } => self.set_sheet_fields(id, fields),
+            SchCmd::AddTopLevelSheet { name } => self.add_top_level_sheet(name),
+            SchCmd::DeleteTopLevelSheet { id } => {
+                let sch = self.schematic()?;
+                if !sch.extras.virtual_root {
+                    return Err(vec![CheckResult::fail("ops_not_top_level", id, "this design's root sheet is its only top-level sheet")]);
+                }
+                if !sch.sheets.iter().any(|s| &s.id == id) {
+                    return Err(vec![CheckResult::fail("ops_unknown_sheet", id, "no top-level sheet with this id")]);
+                }
+                // `RemoveTopLevelSheet`: "if( ... m_topLevelSheets.size() <= 1 ) return false"
+                if sch.sheets.len() <= 1 {
+                    return Err(vec![CheckResult::fail("ops_last_top_level_sheet", id, "Cannot delete the last top-level sheet.")]);
+                }
+                self.apply_sch_edit(&SchCmd::DeleteSheet { id: id.clone() })
+            }
+            SchCmd::SetTextAttrs { ids, bold, italic, color, href, font, exclude_from_sim } => self.set_sch_text_attrs(ids, &crate::sch_props::TextAttrsEdit { bold: *bold, italic: *italic, color: *color, href: href.clone(), font: font.clone(), exclude_from_sim: *exclude_from_sim }),
             SchCmd::SetLineEnds { id, start, end } => self.set_sch_line_ends(id, *start, *end),
             SchCmd::SetExcludeFromPosFiles { ids, exclude } => self.set_exclude_from_pos_files(ids, *exclude),
             SchCmd::SetPinAlternates { id, unit, alternates, other_units } => self.set_pin_alternates(id, *unit, alternates, *other_units),

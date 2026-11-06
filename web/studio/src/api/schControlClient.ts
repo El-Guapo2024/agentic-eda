@@ -25,6 +25,15 @@ export async function postJson<T>(url: string, body: unknown): Promise<T> {
   return (await r.json()) as T;
 }
 
+/**
+ * The Hierarchy Navigator's read of the tree: the sheets as `fetchHierarchy` lists them, whether the root is KiCad 10's virtual root (its sheets are the project's
+ * top-level ones), and with `net` each sheet's `net`: whether its screen has that net (`HIERARCHY_PANE::UpdateNetHighlight`).
+ */
+export async function fetchHierarchyTree(net?: string | null): Promise<{ sheets: Array<HierarchyEntry & { net?: boolean }>; virtualRoot: boolean }> {
+  const j = await getJson<{ ok: boolean; sheets: Array<HierarchyEntry & { net?: boolean }>; virtual_root?: boolean }>(`/api/sch/hierarchy${net ? `?net=${encodeURIComponent(net)}` : ""}`);
+  return { sheets: j.sheets, virtualRoot: !!j.virtual_root };
+}
+
 /** Every sheet that has content, depth first, the root first (`SCH_SHEET_LIST::BuildSheetList`); `kicad-port/sheetPages.ts` sorts it by page. */
 export async function fetchHierarchy(): Promise<HierarchyEntry[]> {
   const j = await getJson<{ ok: boolean; sheets: HierarchyEntry[] }>("/api/sch/hierarchy");

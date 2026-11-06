@@ -19,6 +19,7 @@
 import colorsData from "../../kicad/colors.json";
 import type { ColorsFile } from "../../kicad/types";
 import { placeholderColor } from "../../kicad/placeholderColors";
+import { pcbThemeColor } from "../../state/colorThemeStore";
 
 const colors = colorsData as ColorsFile;
 
@@ -102,12 +103,24 @@ export const STANDARD_LAYERS: Array<{ key: string; label: string }> = [
 ];
 
 export function layerColor(bucketOrRealKey: string): string {
-  const realKey = BUCKET_TO_KICAD_KEY[bucketOrRealKey] ?? bucketOrRealKey;
+  const realKey = realColorKey(bucketOrRealKey);
+  // The board editor's colour theme (state/colorThemeStore.ts, Preferences > PCB Editor > Colors) decides the layers of its board namespace.
+  const themed = pcbThemeColor(realKey);
+  if (themed) return themed;
   if (colors.meta.generated) {
     const hit = colors.colors[realKey];
     if (hit) return hit;
   }
   return placeholderColor(bucketOrRealKey);
+}
+
+/**
+ * The colors.json id (KiCad's layer id) a bucket or key stands for, the key a colour theme stores it under. `copperColorKey` of an inner
+ * layer past In2.Cu ("in5_cu") has no bucket: it is `In5_Cu` (before the themes it fell through to the grey fallback).
+ */
+export function realColorKey(bucketOrRealKey: string): string {
+  const inner = /^in(\d+)_cu$/.exec(bucketOrRealKey);
+  return BUCKET_TO_KICAD_KEY[bucketOrRealKey] ?? (inner ? `In${inner[1]}_Cu` : bucketOrRealKey);
 }
 
 /** Model copper layer name ("F.Cu") -> this app's bucket key ("f_cu"). */

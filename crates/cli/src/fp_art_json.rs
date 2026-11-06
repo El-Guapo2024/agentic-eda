@@ -87,6 +87,10 @@ pub(crate) fn add_art(p: &mut Value, part: &Part, fp: &FootprintInstance, footpr
                             "upright": t.keep_upright,
                             "knockout": t.knockout,
                         });
+                        // The outline font the text is set in (`FpText::face`); absent for KiCad's stroke font.
+                        if let Some(face) = &art.texts[i].face {
+                            v["face"] = json!(face);
+                        }
                         // The References and Values rows of the Appearance panel switch these two (`PCB_TEXT::ViewGetLOD`).
                         if raw == "${REFERENCE}" || raw == "${VALUE}" {
                             v["role"] = json!(if raw == "${REFERENCE}" { "reference" } else { "value" });

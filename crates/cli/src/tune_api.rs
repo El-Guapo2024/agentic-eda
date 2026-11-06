@@ -301,7 +301,9 @@ pub fn edit_start(dir: &Path, body: &[u8]) -> Value {
 }
 
 /// `POST /api/tune/edit_move` `{handle, x, y}` or `{settings}`: `genUpdateEdit` -- an edit point (0 the start, 1 the end, 2 the width of the meanders and the side
-/// they start on, 3 their spacing) is at `(x, y)`, or the dialog's settings change; the pattern is fitted again.
+/// they start on, 3 their spacing) is at `(x, y)`, or the dialog's settings change; the pattern is fitted again. Handle 4 is the whole pattern moved on its own
+/// (`EDIT_TOOL::doMoveSelection`): `(x, y)` is the cursor, and the start and end move by its way since the last one (`edit_start`'s `settings.move_from` the first
+/// time), back onto the pattern's line ([`tune_edit::EditCtx::moved_ends`]).
 pub fn edit_move(dir: &Path, body: &[u8]) -> Value {
     let req = body_json(body);
     with_session(dir, |s| {
@@ -318,6 +320,20 @@ pub fn edit_move(dir: &Path, body: &[u8]) -> Value {
                     Err(m) => return err(m),
                 },
                 1 => ctx.end = moved.end,
+                4 => {
+                    let from = ctx.move_from.unwrap_or(at);
+                    ctx.move_from = Some(at);
+                    let (dx, dy) = (at.x - from.x, at.y - from.y);
+                    let now = &s.tuner.pattern;
+                    let Some((origin, end)) = ctx.moved_ends(Point { x: now.origin.x + dx, y: now.origin.y + dy }, Point { x: ctx.end.x + dx, y: ctx.end.y + dy }) else {
+                        return err("Unable to find the tracks this tuning pattern was made on: they have been moved or edited since.");
+                    };
+                    match ctx.tuner_at(origin, &s.tuner.pattern) {
+                        Ok(t) => s.tuner = t,
+                        Err(m) => return err(m),
+                    }
+                    ctx.end = end;
+                }
                 _ => {
                     s.tuner.pattern.max_amplitude = moved.max_amplitude;
                     s.tuner.pattern.spacing = moved.spacing;
@@ -395,7 +411,13 @@ pub fn pattern(dir: &Path, body: &[u8]) -> Value {
     let constraint = p.member_ids.first().and_then(|t| tune_edit::rule_constraint(&scene.design, &scene.model, p.mode, t, &p.layer));
     json!({
         "ok": true, "pattern": pattern_json(&p), "mode": mode_name(p.mode), "nets": nets, "info": p.tuning_info(),
-        "constraint": constraint.map(|c| json!({ "name": c.name, "min": c.range.min, "opt": c.range.opt, "max": c.range.max })),
+        // a time domain rule's range is a delay: picoseconds, as the dialog's target delay
+        "constraint": constraint.map(|c| if c.time_domain {
+            let ps = |a: i64| a as f64 / 1e6;
+            json!({ "name": c.name, "time_domain": true, "min": ps(c.range.min), "opt": ps(c.range.opt), "max": ps(c.range.max) })
+        } else {
+            json!({ "name": c.name, "min": c.range.min, "opt": c.range.opt, "max": c.range.max })
+        }),
     })
 }
 
@@ -794,6 +816,146 @@ mod tests {
         assert!((net_ps(&dir, "/SIG") - 122.0).abs() < 0.01);
     }
 
+    /// `PCB_TUNING_PATTERN::CreateNew` / `PlaceTuningPattern`: a pattern starts from Board Setup's Length-tuning Patterns for its kind, the corner style and
+    /// single-sided included -- chamfered corners are 45-degree segments (no arc), and a single-sided meander has every loop on one side of the track.
+    #[test]
+    fn the_corner_style_and_single_sided_of_board_setup_shape_the_meander() {
+        let dir = scratch("chamfer_single_sided");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        let intent = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.board.tuning_patterns.single_track.corner_style = eda_model::setup_pages::CornerStyle::Chamfer;
+        model.board.tuning_patterns.single_track.single_sided = true;
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 24_000_000 } })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        assert_eq!((m["pattern"]["rounded"].as_bool(), m["pattern"]["single_sided"].as_bool()), (Some(false), Some(true)), "{m}");
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        let pts = |m: &Value| -> Vec<Vec<(i64, i64)>> {
+            m["preview"]["pieces"].as_array().unwrap().iter().filter(|p| p["member"] == json!(true)).map(|p| p["pts"].as_array().unwrap().iter().map(|q| (q[0].as_i64().unwrap(), q[1].as_i64().unwrap())).collect()).collect()
+        };
+        let segs = |runs: &[Vec<(i64, i64)>]| runs.iter().flat_map(|r| r.windows(2).map(|w| (w[1].0 - w[0].0, w[1].1 - w[0].1)).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let chamfered = pts(&m);
+        let d = segs(&chamfered);
+        assert!(d.len() > 10, "{m}");
+        // chamfered: every segment is straight along an axis or at 45 degrees (an arc's chords are not), and there are 45-degree ones
+        assert!(d.iter().all(|&(dx, dy)| dx == 0 || dy == 0 || dx.abs() == dy.abs()), "no arc: {d:?}");
+        assert!(d.iter().any(|&(dx, dy)| dx != 0 && dx.abs() == dy.abs()), "a 45-degree chamfer: {d:?}");
+        // single-sided: the meanders go above the track (y < 9.5 mm, the cursor's side) and never below it
+        assert!(chamfered.iter().flatten().all(|q| q.1 <= 9_500_000), "{m}");
+        assert!(chamfered.iter().flatten().any(|q| q.1 < 9_000_000));
+        // the same pattern rounded and on both sides, for contrast
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 24_000_000, "rounded": true, "single_sided": false } })));
+        assert_eq!(s["ok"], json!(true));
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        let rounded = pts(&m);
+        assert!(segs(&rounded).iter().any(|&(dx, dy)| dx != 0 && dy != 0 && dx.abs() != dy.abs()), "rounded corners are arcs");
+        assert!(rounded.iter().flatten().any(|q| q.1 > 9_800_000), "both sides");
+    }
+
+    /// The board's rules as `.kicad_dru` text (what the rule engine compiles).
+    fn with_rules_text(dir: &Path, text: &str) {
+        let intent = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.board.custom_rules_text = Some(text.to_string());
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+    }
+
+    /// `PCB_TUNING_PATTERN::EditStart`: a time domain rule (`(constraint length (min 149.9ps) (opt 150ps) (max 150.1ps))`, `m_IsTimeDomain`) gives the pattern its target
+    /// delay (`SetTargetLengthDelay( constraint.m_Value )`) and makes it a time domain pattern; the status box reads the delay against the rule's range, and the
+    /// pattern is tuned to it. A length rule makes the pattern a length one, whatever the profile (`m_isTimeDomain = constraint.m_IsTimeDomain`).
+    #[test]
+    fn a_time_domain_rule_gives_the_target_delay() {
+        let dir = scratch("delay_rule");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        with_profile(&dir, true);
+        with_rules_text(&dir, "(version 1)\n(rule sig_delay (constraint length (min 149.9ps) (opt 150ps) (max 150.1ps)) (condition \"A.NetName == '/SIG'\"))\n");
+        let h = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
+        assert_eq!(h["ok"], json!(true), "{h}");
+        assert_eq!(h["readout"]["time_domain"], json!(true), "{h}");
+        assert_eq!(h["readout"]["constraint"], "sig_delay");
+        let d = &h["readout"]["delay"];
+        assert_eq!((d["min"].as_f64(), d["opt"].as_f64(), d["max"].as_f64()), (Some(149.9), Some(150.0), Some(150.1)), "the rule's range: {h}");
+        assert_eq!(h["pattern"]["is_time_domain"], json!(true));
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single" })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        let now = m["readout"]["delay"]["current"].as_f64().unwrap();
+        assert!((149.9..=150.1).contains(&now), "{m}");
+        assert_eq!(fix(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })))["ok"], json!(true));
+        let pat = &tune_edit::patterns_of(&design_of(&dir))[0];
+        assert!(pat.is_time_domain && (pat.target_delay.min, pat.target_delay.opt, pat.target_delay.max) == (149_900_000, 150_000_000, 150_100_000), "{pat:?}");
+        assert!((149.85..=150.15).contains(&net_ps(&dir, "/SIG")), "{}", net_ps(&dir, "/SIG"));
+        // the dialog's view of the pattern: the rule's range in picoseconds
+        let pv = pattern(&dir, &body(json!({ "id": pat.id })));
+        assert_eq!((pv["constraint"]["time_domain"].as_bool(), pv["constraint"]["min"].as_f64()), (Some(true), Some(149.9)), "{pv}");
+
+        // kicad-cli measures the delay against the same rule: the tuned net passes it (the 122 ps one would not)
+        if std::env::var_os("EDA_SLOW_TESTS").is_some() && eda_kicad_engine::find_cli().is_some() {
+            let (_, design, model) = board::load(&dir).unwrap();
+            let report = eda_kicad_engine::drc_scratch(&design, &model).expect("kicad-cli runs the DRC");
+            let bad: Vec<_> = report.violations.iter().filter(|v| v.kind == "length_out_of_range").map(|v| v.description.clone()).collect();
+            assert!(bad.is_empty(), "kicad-cli finds the net within 149.9..150.1 ps: {bad:?}");
+            let control = scratch("delay_rule_control");
+            setup(&control, ["SIG", "OTHER"], vec![]);
+            with_profile(&control, true);
+            with_rules_text(&control, "(version 1)\n(rule sig_delay (constraint length (min 149.9ps) (opt 150ps) (max 150.1ps)) (condition \"A.NetName == '/SIG'\"))\n");
+            let (_, design, model) = board::load(&control).unwrap();
+            let report = eda_kicad_engine::drc_scratch(&design, &model).expect("kicad-cli runs the DRC");
+            assert_eq!(report.violations.iter().filter(|v| v.kind == "length_out_of_range").count(), 1, "the control: the untuned 122 ps net is flagged");
+        }
+
+        // a length rule on the net: a length pattern, the profile's time domain notwithstanding
+        let dir = scratch("length_rule_over_profile");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        with_profile(&dir, true);
+        with_rules_text(&dir, "(version 1)\n(rule sig_len (constraint length (min 22mm) (max 22.2mm)))\n");
+        let h = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
+        assert_eq!((h["readout"]["time_domain"].as_bool(), h["readout"]["min"].as_f64()), (Some(false), Some(22.0)), "{h}");
+    }
+
+    /// `MEANDER_PLACER::Start`: the pad-to-die length a board file gave the pads (`(die_length ..)`, kept among the pad's tokens) is part of the tuned length; the
+    /// track is lengthened by what the target asks less what the pads have inside the packages.
+    #[test]
+    fn the_pad_to_die_length_of_the_pads_counts_in_the_tuned_length() {
+        use eda_model::ir::{DrawingsSection, FootprintExtra, PadMaskInfo};
+        let dir = scratch("die_length");
+        let rule = eda_model::CustomRule { name: "sig_length".into(), constraint_type: "length".into(), min: Some(mm(24.0)), max: Some(mm(24.1)), opt: None, layer: None, severity: None, condition: None };
+        setup(&dir, ["SIG", "OTHER"], vec![rule]);
+        let mut design = design_of(&dir);
+        let pad_info = |tokens: Vec<String>| PadMaskInfo { tokens, ..Default::default() };
+        let extra = |id: &str, die: &str| FootprintExtra { id: id.into(), pads: vec![pad_info(vec![format!("(die_length {die})"), "(die_delay 4.5)".into()]), pad_info(vec![])], ..Default::default() };
+        design.drawings.get_or_insert_with(DrawingsSection::default).footprint_extras = vec![extra("U1", "1.5"), extra("U2", "0.5")];
+        board::save(&dir, &design).unwrap();
+        let (_, d, m) = board::load(&dir).unwrap();
+        let die = tune_edit::pad_to_die(&d, &m);
+        assert_eq!(die.get("U1.1"), Some(&(mm(1.5), 4_500_000)), "{die:?}");
+        assert_eq!(die.get("U2.1"), Some(&(mm(0.5), 4_500_000)));
+        assert!(!die.contains_key("U1.2"), "a pad with no pad-to-die length has none");
+        let h = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
+        assert!((h["readout"]["current"].as_f64().unwrap() - 22.0).abs() < 0.01, "20 mm of track and 2 mm inside the packages: {h}");
+        let net = h["pick"]["net"].as_str().unwrap().to_string();
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single" })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let mv_ = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        assert_eq!(mv_["readout"]["status"], "tuned", "{mv_}");
+        let f = fix(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        assert_eq!(f["ok"], json!(true), "{f}");
+        let track = net_mm(&dir, &net);
+        assert!((22.0..=22.1).contains(&track), "the track is 2 mm short of the 24 mm target, the pads have the rest: {track}");
+        // kicad-cli counts the pads' pad-to-die length too (`LENGTH_DELAY_CALCULATION`): the net is within the 24..24.1 mm rule
+        if std::env::var_os("EDA_SLOW_TESTS").is_some() && eda_kicad_engine::find_cli().is_some() {
+            let (_, design, model) = board::load(&dir).unwrap();
+            let report = eda_kicad_engine::drc_scratch(&design, &model).expect("kicad-cli runs the DRC");
+            let bad: Vec<_> = report.violations.iter().filter(|v| v.kind == "length_out_of_range").collect();
+            // the rule is on every net: /OTHER (20 mm) is out of it; /SIG's 22 mm of track alone would be too, so passing it is the 2 mm of the pads counted
+            assert_eq!(bad.len(), 1, "only /OTHER is out of the rule: {:?}", bad.iter().map(|v| (&v.description, &v.items)).collect::<Vec<_>>());
+            assert!(format!("{:?}", bad[0].items).contains("OTHER"), "{:?}", bad[0].items);
+        }
+    }
+
     #[test]
     fn a_profile_without_the_time_domain_leaves_a_pattern_in_length_and_the_dialog_can_ask_for_the_other() {
         let dir = scratch("delay_off");
@@ -912,6 +1074,36 @@ mod tests {
         assert_eq!(edit_move(&dir, &body(json!({ "handle": 1, "x": 15_000_000, "y": 9_500_000 })))["ok"], json!(false), "the session is over");
     }
 
+    /// A pattern moved on its own (`EDIT_TOOL::doMoveSelection` of a lone generator: `genStartEdit`, `PCB_TUNING_PATTERN::Move` in an edit moving only its start
+    /// and end, `genUpdateEdit`'s `resetToBaseline` putting them back on the line): it slides along its track and is tuned again there, one undo step; a move
+    /// across the track takes it nowhere.
+    #[test]
+    fn a_pattern_moved_on_its_own_slides_along_its_track() {
+        let dir = scratch("slide");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
+        mv(&dir, &body(json!({ "x": 16_000_000, "y": 9_000_000 })));
+        let id = fix(&dir, &body(json!({})))["pattern_id"].as_str().unwrap().to_string();
+        let tuned = design_of(&dir);
+        // picked up at (12, 9.5) mm and carried 4 mm along and 1.5 mm off the track
+        let e = edit_start(&dir, &body(json!({ "id": id, "settings": { "move_from": { "x": 12_000_000, "y": 9_500_000 } } })));
+        assert_eq!(e["ok"], json!(true), "{e}");
+        let m = edit_move(&dir, &body(json!({ "handle": 4, "x": 14_000_000, "y": 10_250_000 })));
+        assert_eq!(m["ok"], json!(true), "{m}");
+        assert_eq!((m["pattern"]["origin"].clone(), m["pattern"]["end"].clone()), (json!({ "x": 10_000_000, "y": 9_500_000 }), json!({ "x": 18_000_000, "y": 9_500_000 })), "{m}");
+        let m = edit_move(&dir, &body(json!({ "handle": 4, "x": 16_000_000, "y": 11_000_000 })));
+        assert_eq!((m["pattern"]["origin"].clone(), m["pattern"]["end"].clone()), (json!({ "x": 12_000_000, "y": 9_500_000 }), json!({ "x": 20_000_000, "y": 9_500_000 })), "{m}");
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        let f = fix(&dir, &body(json!({})));
+        assert_eq!(f["ok"], json!(true), "{f}");
+        let pats = tune_edit::patterns_of(&design_of(&dir));
+        assert_eq!(pats.len(), 1);
+        assert_eq!((pats[0].id.as_str(), pats[0].origin, pats[0].end), (id.as_str(), p(mm(12.0), mm(9.5)), p(mm(20.0), mm(9.5))));
+        assert!((net_mm(&dir, "/SIG") - 22.0).abs() < 0.1, "{}", net_mm(&dir, "/SIG"));
+        board::undo(&dir, "test", None).expect("one undo puts the pattern back where it was");
+        assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned));
+    }
+
     #[test]
     fn a_differential_pair_is_tuned_together_and_removed_together() {
         let dir = scratch("pair");
@@ -1011,6 +1203,124 @@ mod tests {
         t.id = format!("trk_arc_{net}");
         design.routing.as_mut().expect("the board has tracks").tracks.push(t);
         board::save(dir, &design).unwrap();
+    }
+
+    /// A pair that goes down and back up round four corners, each a pair of concentric quarter arcs (P at r 2 mm, N inside at 1 mm then outside at 3 mm, so
+    /// the two nets are equally long): from U1 right 3 mm, down 2.5 mm, along the bottom 6 mm, up 2.5 mm, right 3 mm to U2. `n_detour` gives N a 0.7 mm bump on
+    /// the bottom run (1.4 mm longer). Each arc is a track of its own (`PCB_ARC`).
+    fn setup_arc_pair(dir: &Path, n_detour: bool) {
+        let c = |x: f64, y: f64| p(Nm::kiround(x * 1e6), Nm::kiround(y * 1e6));
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let n_bottom = if n_detour { vec![c(12.0, 17.0), c(14.0, 17.0), c(14.0, 17.7), c(15.0, 17.7), c(15.0, 17.0), c(18.0, 17.0)] } else { vec![c(12.0, 17.0), c(18.0, 17.0)] };
+        setup_with(
+            dir,
+            ["USB_P", "USB_N"],
+            vec![],
+            vec![
+                ("/USB_P", vec![c(5.0, 9.5), c(8.0, 9.5)]),
+                ("/USB_P", vec![c(10.0, 11.5), c(10.0, 14.0)]),
+                ("/USB_P", vec![c(12.0, 16.0), c(18.0, 16.0)]),
+                ("/USB_P", vec![c(20.0, 14.0), c(20.0, 11.5)]),
+                ("/USB_P", vec![c(22.0, 9.5), c(25.0, 9.5)]),
+                ("/USB_N", vec![c(5.0, 10.5), c(8.0, 10.5)]),
+                ("/USB_N", vec![c(9.0, 11.5), c(9.0, 14.0)]),
+                ("/USB_N", n_bottom),
+                ("/USB_N", vec![c(21.0, 14.0), c(21.0, 11.5)]),
+                ("/USB_N", vec![c(22.0, 10.5), c(25.0, 10.5)]),
+            ],
+        );
+        let (_, mut design, _) = board::load(dir).unwrap();
+        let arcs = [
+            // (net, centre, radius, from, to): quarter arcs, the middle at 45 degrees between the ends
+            ("/USB_P", (8.0, 11.5), 2.0, (8.0, 9.5), (10.0, 11.5), (1.0, -1.0)),
+            ("/USB_P", (12.0, 14.0), 2.0, (10.0, 14.0), (12.0, 16.0), (-1.0, 1.0)),
+            ("/USB_P", (18.0, 14.0), 2.0, (18.0, 16.0), (20.0, 14.0), (1.0, 1.0)),
+            ("/USB_P", (22.0, 11.5), 2.0, (20.0, 11.5), (22.0, 9.5), (-1.0, -1.0)),
+            ("/USB_N", (8.0, 11.5), 1.0, (8.0, 10.5), (9.0, 11.5), (1.0, -1.0)),
+            ("/USB_N", (12.0, 14.0), 3.0, (9.0, 14.0), (12.0, 17.0), (-1.0, 1.0)),
+            ("/USB_N", (18.0, 14.0), 3.0, (18.0, 17.0), (21.0, 14.0), (1.0, 1.0)),
+            ("/USB_N", (22.0, 11.5), 1.0, (21.0, 11.5), (22.0, 10.5), (-1.0, -1.0)),
+        ];
+        for (i, (net, (cx, cy), r, a, b, (sx, sy))) in arcs.into_iter().enumerate() {
+            let mut t = eda_model::ir::Track::new_arc(net.into(), "F.Cu".into(), mm(0.25), c(a.0, a.1), c(cx + sx * r * s, cy + sy * r * s), c(b.0, b.1));
+            t.id = format!("trk_arc_{i}");
+            design.routing.as_mut().expect("the board has tracks").tracks.push(t);
+        }
+        board::save(dir, &design).unwrap();
+    }
+
+    /// F4-2: the pair tuner started on an arc of a pair (the pattern starts at the arc's nearer end) tunes the pair along the coupled straight, the arcs kept as
+    /// arcs; the skew tuner started on an arc lengthens its net to the partner's. With `EDA_SLOW_TESTS=1` kicad-cli judges them: no length or skew violation of the
+    /// rules they were tuned to (and the untuned skew board is flagged), and every arc an `(arc ..)` of the file.
+    #[test]
+    fn the_pair_and_skew_tuners_start_on_an_arc_and_keep_the_pairs_arcs() {
+        let len_of = |dir: &Path, net: &str| -> f64 {
+            let d = design_of(dir);
+            tracks_of(&d).iter().filter(|t| t.net == net || format!("/{}", t.net) == net).map(|t| match t.arc() {
+                Some((a, m, b)) => eda_pns::arcs::ArcPts::new(a, m, b).length() / 1e6,
+                None => t.pts.windows(2).map(|w| ((w[1].x - w[0].x).as_f64()).hypot((w[1].y - w[0].y).as_f64()) / 1e6).sum::<f64>(),
+            }).sum()
+        };
+        let pair = scratch("arc_pair");
+        setup_arc_pair(&pair, false);
+        let before = len_of(&pair, "/USB_P");
+        assert!((before - (17.0 + 4.0 * std::f64::consts::PI)).abs() < 0.01, "{before}");
+        assert!((len_of(&pair, "/USB_N") - before).abs() < 0.01);
+        // a click on P's second arc, nearer its end at (12, 16) mm: the pattern starts there and runs along the bottom
+        let s = start(&pair, &body(json!({ "x": 11_600_000, "y": 15_900_000, "tolerance": 200_000, "layer": "F.Cu", "mode": "diffpair", "settings": { "target_length": 34_000_000 } })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        assert_eq!(s["origin"], json!({ "x": 12_000_000, "y": 16_000_000 }), "the arc's nearer end: {s}");
+        let m = mv(&pair, &body(json!({ "x": 18_000_000, "y": 15_000_000 })));
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        assert_eq!(fix(&pair, &body(json!({})))["ok"], json!(true));
+        let arcs_left = tracks_of(&design_of(&pair)).iter().filter(|t| t.id.starts_with("trk_arc_")).count();
+        assert_eq!(arcs_left, 8, "the corners are the arcs they were");
+        let (lp, ln) = (len_of(&pair, "/USB_P"), len_of(&pair, "/USB_N"));
+        assert!((lp.max(ln) - 34.0).abs() < 0.1, "{lp} {ln}");
+
+        let sk = scratch("arc_skew");
+        setup_arc_pair(&sk, true);
+        let (p0, n0) = (len_of(&sk, "/USB_P"), len_of(&sk, "/USB_N"));
+        assert!((n0 - p0 - 1.4).abs() < 0.01, "{p0} {n0}");
+        // the skew tuner on P's arc: P is lengthened along the bottom run, the meanders inside the U (the cursor's side)
+        let s = start(&sk, &body(json!({ "x": 11_600_000, "y": 15_900_000, "tolerance": 200_000, "layer": "F.Cu", "mode": "skew" })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let m = mv(&sk, &body(json!({ "x": 18_000_000, "y": 15_000_000 })));
+        assert_eq!(m["readout"]["label"], "current skew", "{m}");
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        assert_eq!(fix(&sk, &body(json!({})))["ok"], json!(true));
+        let (p1, n1) = (len_of(&sk, "/USB_P"), len_of(&sk, "/USB_N"));
+        assert!((p1 - n1).abs() < 0.1, "the skew is tuned away: {p1} {n1}");
+
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() || eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli part skipped (set EDA_SLOW_TESTS=1, with kicad-cli)");
+            return;
+        }
+        let judge = |dir: &Path, rules: &str, kind: &str| -> Vec<String> {
+            let (_, design, mut model) = board::load(dir).unwrap();
+            model.board.custom_rules_text = Some(format!("(version 1)\n{rules}\n"));
+            let report = eda_kicad_engine::drc_scratch(&design, &model).expect("kicad-cli runs the DRC");
+            report.violations.iter().filter(|v| v.kind == kind).map(|v| v.description.clone()).collect()
+        };
+        let usb = |c: &str| format!("(rule \"usb\" (condition \"A.NetName == '/USB_P' || A.NetName == '/USB_N'\") (constraint {c}))");
+        let longest = lp.max(ln);
+        let len = judge(&pair, &usb(&format!("length (min {:.3}mm) (max {:.3}mm)", longest - 0.6, longest + 0.1)), "length_out_of_range");
+        assert!(len.is_empty(), "kicad-cli measures both nets of the pair as this does, along the arcs: {len:?}");
+        let tight = judge(&pair, &usb("length (min 33.9mm) (max 34.1mm)"), "length_out_of_range");
+        assert!(tight.len() <= 1, "the longer net is within 0.1 mm of the 34 mm target: {tight:?}");
+        let skew = judge(&pair, &usb("skew (max 0.6mm) (within_diff_pairs)"), "skew_out_of_range");
+        assert!(skew.is_empty(), "{skew:?}");
+        let (_, design, model) = board::load(&pair).unwrap();
+        let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        assert!(text.matches("\n\t(arc ").count() >= 8, "the corners are `(arc ..)` in the file");
+        let rule_skew = usb("skew (max 0.15mm) (within_diff_pairs)");
+        let control = scratch("arc_skew_control");
+        setup_arc_pair(&control, true);
+        assert_eq!(judge(&control, &rule_skew, "skew_out_of_range").len(), 1, "the control: 1.4 mm of skew is flagged");
+        let after = judge(&sk, &rule_skew, "skew_out_of_range");
+        assert!(after.is_empty(), "after the skew tuner kicad-cli finds the pair within 0.15 mm: {after:?}");
+        let dirty = judge(&pair, "", "clearance");
+        assert!(dirty.is_empty(), "the tuned pair keeps its clearances: {dirty:?}");
     }
 
     #[test]
