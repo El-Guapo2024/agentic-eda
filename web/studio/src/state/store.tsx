@@ -10,6 +10,7 @@ import React, { createContext, useCallback, useContext, useEffect, useReducer, u
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
 import type { NewZoneSettings } from "../kicad-port/pcbDrawZone";
+import type { FpDimDraw } from "../kicad-port/fpDrawTools";
 import type { RouteSizesInfo } from "../kicad-port/routerSizes";
 import type { BoardState, BoardText, Cmd, CmdDimension, CmdText, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Nm, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
@@ -371,11 +372,9 @@ export type DrawState =
       /** `shapeKind === "segment"` only: `DrawLine`'s `committedLines`, the segments of the chain already on the board (start, end), the last one last. */
       committed?: [[Nm, Nm], [Nm, Nm]][];
     }
-  /** Task item 7: two clicks (start, end) for any of the five dimension
-   * kinds -- which one is read from `state.nextDimensionKind` when the
-   * second click commits it (same one-shot-flag convention as zones' own
-   * `nextZoneIsRuleArea`), not stored per-draw here. */
-  | { kind: "dimension"; pts: [Nm, Nm][] }
+  /** `DRAWING_TOOL::DrawDimension` (UI-LEFT P13): the dimension being drawn (`dim`, kicad-port/fpDrawTools.ts `FpDimDraw`: its kind, the step -- the end, then an
+   * aligned or orthogonal one's height -- and the dimension as the preview has it); `pts` its origin, for the rubber band of an older caller. */
+  | { kind: "dimension"; pts: [Nm, Nm][]; dim?: FpDimDraw }
   /** Draw Table (`DRAWING_TOOL::DrawTable`): the first corner, once it is clicked; the grid follows the cursor (kicad-port/tables.ts `drawTableGrid`). */
   | { kind: "table"; origin: [Nm, Nm] }
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */

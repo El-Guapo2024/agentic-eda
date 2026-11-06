@@ -658,15 +658,13 @@ export function useActionRunner() {
         dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "zone" ? "select" : "zone" });
       })
     );
-    // Task item 7: `pcbnew/tools/drawing_tool.cpp`'s `DrawDimension`,
-    // scoped to a plain two-click (start, end) placement for every kind
-    // -- see DimensionPropertiesDialog.tsx and PARITY-pcb.md section 18
-    // for why height/leader-length/orientation are dialog-set afterward
-    // rather than a third interactive "set height" click the way source
-    // has for Aligned/Orthogonal.
+    // `pcbnew/tools/drawing_tool.cpp`'s `DrawDimension` (UI-LEFT P13): each kind's click sequence and live preview, in Canvas.tsx. The same kind again
+    // leaves the tool; another kind starts afresh with that one.
     const armDimension = (kind: CmdDimensionKind["kind"]) => {
+      const same = state.activeTool === "dimension" && state.nextDimensionKind === kind;
       dispatch({ type: "SET_NEXT_DIMENSION_KIND", kind });
-      dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "dimension" ? "select" : "dimension" });
+      if (state.drawState?.kind === "dimension") dispatch({ type: "SET_DRAW_STATE", draw: null });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: same ? "select" : "dimension" });
     };
     m.set("pcbnew.InteractiveDrawing.alignedDimension", pcbOnly(() => armDimension("aligned")));
     m.set("pcbnew.InteractiveDrawing.orthogonalDimension", pcbOnly(() => armDimension("orthogonal")));

@@ -252,7 +252,15 @@ export type PcbItemCmd =
    * dialog's choice), for all of `ids` as one undo step. The hatch lines are worked out when the board is described -- `pcbnew.Control.rehatchShapes` (`PCB_CONTROL::RehatchShapes`,
    * which KiCad posts after every commit, undo and file load) is that, so there is no verb for it. A fill left out changes nothing.
    */
-  | { verb: "set_shape_style"; ids: string[]; fill?: ShapeFill; start_ending?: CmdLineEnding; end_ending?: CmdLineEnding }
+  | {
+      verb: "set_shape_style";
+      ids: string[];
+      fill?: ShapeFill;
+      start_ending?: CmdLineEnding;
+      end_ending?: CmdLineEnding;
+      /** The stroke's line style (`EDA_SHAPE::SetLineStyle`: the shape dialog's "Line style:", the Properties panel's "Line Style"); left out, unchanged (UI-LEFT P5). */
+      line_style?: ShapeLineStyle;
+    }
   /** Place Sub-grid's second click (`DRAWING_TOOL::PlaceSubGrid`) and Grid Item Properties' OK (`DIALOG_GRID_ITEM_PROPERTIES`). */
   | { verb: "add_grid_item"; grid_item: CmdGridItem }
   | { verb: "edit_grid_item"; id: string; grid_item: CmdGridItem }
@@ -343,6 +351,9 @@ export interface BoardDrillMark {
   orientation_deg: number;
   is_slot: boolean;
 }
+
+/** `LINE_STYLE` as the file writes it (`STROKE_PARAMS::GetLineStyleToken`); `default` is the file's `(type default)`, drawn solid. */
+export type ShapeLineStyle = "default" | "solid" | "dash" | "dot" | "dash_dot" | "dash_dot_dot";
 
 /**
  * One line ending as `set_shape_style` takes it (`eda_model::line_ending::LineEnding`): KiCad 10's `(start_shape ..)` / `(end_shape ..)` of a line, an arc or a curve -- the shape dialog's

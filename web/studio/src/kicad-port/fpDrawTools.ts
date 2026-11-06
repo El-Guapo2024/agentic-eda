@@ -20,7 +20,7 @@
 // factory table, kicad-port/layerDefaults.ts), which the studio has no preferences page for.
 //
 // Pure: no store, no DOM. Unit-tested in fpDrawTools.test.ts.
-import type { CmdDimension, CmdDimensionKind, CmdZone, PointXY, ZoneSettingsFields, RuleAreaFields } from "../api/types";
+import type { CmdDimension, CmdDimensionKind, CmdZone, PointXY, TextGraphicsDefaults, ZoneSettingsFields, RuleAreaFields } from "../api/types";
 import type { CmdBarcode, CmdPoint, CmdRefImage } from "../api/pcbItemTypes";
 import type { FpItemWire } from "../api/fpItemTypes";
 import type { TableLineStyleName, TablePatch } from "../api/tableTypes";
@@ -63,6 +63,28 @@ export const FP_DIMENSION_DEFAULTS = {
   extension_offset: 500_000,
 } as const;
 
+/**
+ * The editor's dimension style a new dimension takes (`BOARD_DESIGN_SETTINGS`' `m_Dimension*` and its Text & Graphics defaults): the Footprint Editor's own
+ * (`FP_DIMENSION_STYLE`), or the board's (Board Setup > Dimension Properties and Text & Graphics, kicad-port/dimensionDraw.ts `boardDimensionStyle`) -- the
+ * board editor runs the same `DRAWING_TOOL::DrawDimension`.
+ */
+export interface DimensionEditorStyle {
+  settings: {
+    units: CmdDimension["units"];
+    precision: number;
+    units_format: CmdDimension["units_format"];
+    suppress_trailing_zeros: boolean;
+    text_position: CmdDimension["text_position"];
+    keep_text_aligned: boolean;
+    arrow_length: number;
+    extension_offset: number;
+  };
+  /** The layers' Text & Graphics defaults (`bds.GetTextSize( layer )`, `GetTextThickness`, `GetLineThickness`); absent: KiCad's factory table. */
+  textDefaults?: TextGraphicsDefaults;
+}
+
+export const FP_DIMENSION_STYLE: DimensionEditorStyle = { settings: FP_DIMENSION_DEFAULTS };
+
 /** `PCB_DIMENSION_BASE`'s constructor: 50 mil arrows, which `PCB_DIM_ALIGNED`'s constructor turns into the extension height (`m_arrowLength * s_arrowAngle.Sin()`, 27.5 degrees). */
 const CTOR_ARROW_NM = 1_270_000;
 export const DIM_EXTENSION_HEIGHT_NM = Math.trunc(CTOR_ARROW_NM * Math.sin((27.5 * Math.PI) / 180));
@@ -80,9 +102,9 @@ export interface FpDimDraw {
  * radial kinds take the editor's units and text settings (`setMeasurementAttributes`), the centre mark and the leader keep their constructors' (a leader's text is set by its
  * dialog: `m_overrideTextEnabled = true`, no suffix, not aligned; a centre mark has no text).
  */
-export function fpNewDimension(kind: FpDimKind, layer: string, at: P): CmdDimension {
-  const style = textStyleOf(undefined, layer);
-  const d = FP_DIMENSION_DEFAULTS;
+export function fpNewDimension(kind: FpDimKind, layer: string, at: P, editor: DimensionEditorStyle = FP_DIMENSION_STYLE): CmdDimension {
+  const style = textStyleOf(editor.textDefaults, layer);
+  const d = editor.settings;
   const measured = kind === "aligned" || kind === "orthogonal" || kind === "radial";
   const kindObj: CmdDimensionKind =
     kind === "aligned"
@@ -113,7 +135,7 @@ export function fpNewDimension(kind: FpDimKind, layer: string, at: P): CmdDimens
     text_angle: 0,
     text_size_nm: style.heightNm,
     text_thickness_nm: style.thicknessNm,
-    stroke_width: lineThicknessNm(undefined, layer),
+    stroke_width: lineThicknessNm(editor.textDefaults, layer),
     arrow_length: d.arrow_length,
     extension_offset: d.extension_offset,
     extension_height: DIM_EXTENSION_HEIGHT_NM,
@@ -166,16 +188,19 @@ export function fpDimensionMotion(draw: FpDimDraw, cursor: P, constrained: boole
     const [dx, dy] = [c.x - dim.end.x, c.y - dim.end.y];
     dim.kind.height = Math.trunc(dx * Math.cos(angle) + dy * Math.sin(angle)); // `SetHeight( double )` into an int
   } else if (dim.kind.kind === "orthogonal") {
+    // `BOX2I bbox( GetStart(), GetEnd() - GetStart() )`, not normalised: `Contains` normalises, but `GetLeft()` / `GetRight()` are the start's and the end's x (and
+    // `GetTop()` / `GetBottom()` their y), so "between" holds only for a dimension drawn left to right (top to bottom); `Centre()` halves the size in integers.
     const [x0, x1] = [Math.min(dim.start.x, dim.end.x), Math.max(dim.start.x, dim.end.x)];
     const [y0, y1] = [Math.min(dim.start.y, dim.end.y), Math.max(dim.start.y, dim.end.y)];
     const inside = c.x >= x0 && c.x <= x1 && c.y >= y0 && c.y <= y1; // `BOX2I::Contains`
     let vert = !dim.kind.horizontal;
     if (!inside) {
-      const [cx, cy] = [(x0 + x1) / 2, (y0 + y1) / 2];
-      if (x1 - x0 === 0) vert = true;
-      else if (y1 - y0 === 0) vert = false;
-      else if (c.x > x0 && c.x < x1) vert = false;
-      else if (c.y > y0 && c.y < y1) vert = true;
+      const [w, h] = [dim.end.x - dim.start.x, dim.end.y - dim.start.y];
+      const [cx, cy] = [dim.start.x + Math.trunc(w / 2), dim.start.y + Math.trunc(h / 2)];
+      if (w === 0) vert = true;
+      else if (h === 0) vert = false;
+      else if (c.x > dim.start.x && c.x < dim.end.x) vert = false;
+      else if (c.y > dim.start.y && c.y < dim.end.y) vert = true;
       else vert = Math.abs(c.y - cy) < Math.abs(c.x - cx);
       dim.kind.horizontal = !vert;
     }
@@ -189,8 +214,8 @@ export function fpDimensionMotion(draw: FpDimDraw, cursor: P, constrained: boole
  * one point stays where it is ("Dimensions that have origin and end in the same spot are not valid"); a centre mark, a radial dimension and a leader are then done, an
  * aligned or orthogonal one goes on to its height. At SET_HEIGHT it is done. `commit` is the dimension to add ("Draw Dimension"), after which the tool starts afresh.
  */
-export function fpDimensionClick(draw: FpDimDraw | null, kind: FpDimKind, layer: string, cursor: P, constrained: boolean): { draw: FpDimDraw | null; commit: CmdDimension | null } {
-  if (!draw) return { draw: { kind, step: "end", dim: fpNewDimension(kind, layer, cursor) }, commit: null };
+export function fpDimensionClick(draw: FpDimDraw | null, kind: FpDimKind, layer: string, cursor: P, constrained: boolean, editor: DimensionEditorStyle = FP_DIMENSION_STYLE): { draw: FpDimDraw | null; commit: CmdDimension | null } {
+  if (!draw) return { draw: { kind, step: "end", dim: fpNewDimension(kind, layer, cursor, editor) }, commit: null };
   const moved = fpDimensionMotion(draw, cursor, constrained);
   if (moved.step === "end") {
     if (moved.dim.start.x === moved.dim.end.x && moved.dim.start.y === moved.dim.end.y) return { draw: moved, commit: null };

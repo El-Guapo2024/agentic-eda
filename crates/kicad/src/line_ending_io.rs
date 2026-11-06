@@ -70,7 +70,8 @@ mod tests {
         assert_eq!(dr.board_items.net_of(line.id()), Some("SIG"));
         let out = crate::export_kicad_pcb(&design, &model, &crate::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
         let written = out.lines().find(|l| l.contains("(gr_line (start 0 0)")).unwrap();
-        assert!(written.contains("(stroke (width 0.6) (type solid)) (start_shape arrow (length 3) (width 3)) (end_shape arrow_open (length 3) (width 3) (stroke (width 0.6) (type default)))"), "{written}");
+        // The line's own `(type default)` is kept (UI-LEFT P5), as the ending's is.
+        assert!(written.contains("(stroke (width 0.6) (type default)) (start_shape arrow (length 3) (width 3)) (end_shape arrow_open (length 3) (width 3) (stroke (width 0.6) (type default)))"), "{written}");
         assert!(written.contains("(layer \"F.Cu\") (net "), "{written}");
         assert!(out.lines().any(|l| l.contains("(gr_arc") && l.contains("(end_shape square)")), "{out}");
         // A closed shape draws and writes no ending (`GetStartEnding` of a closed shape is the blank one).
