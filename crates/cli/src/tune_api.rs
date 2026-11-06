@@ -892,6 +892,21 @@ mod tests {
         let pv = pattern(&dir, &body(json!({ "id": pat.id })));
         assert_eq!((pv["constraint"]["time_domain"].as_bool(), pv["constraint"]["min"].as_f64()), (Some(true), Some(149.9)), "{pv}");
 
+        // kicad-cli measures the delay against the same rule: the tuned net passes it (the 122 ps one would not)
+        if std::env::var_os("EDA_SLOW_TESTS").is_some() && eda_kicad_engine::find_cli().is_some() {
+            let (_, design, model) = board::load(&dir).unwrap();
+            let report = eda_kicad_engine::drc_scratch(&design, &model).expect("kicad-cli runs the DRC");
+            let bad: Vec<_> = report.violations.iter().filter(|v| v.kind == "length_out_of_range").map(|v| v.description.clone()).collect();
+            assert!(bad.is_empty(), "kicad-cli finds the net within 149.9..150.1 ps: {bad:?}");
+            let control = scratch("delay_rule_control");
+            setup(&control, ["SIG", "OTHER"], vec![]);
+            with_profile(&control, true);
+            with_rules_text(&control, "(version 1)\n(rule sig_delay (constraint length (min 149.9ps) (opt 150ps) (max 150.1ps)) (condition \"A.NetName == '/SIG'\"))\n");
+            let (_, design, model) = board::load(&control).unwrap();
+            let report = eda_kicad_engine::drc_scratch(&design, &model).expect("kicad-cli runs the DRC");
+            assert_eq!(report.violations.iter().filter(|v| v.kind == "length_out_of_range").count(), 1, "the control: the untuned 122 ps net is flagged");
+        }
+
         // a length rule on the net: a length pattern, the profile's time domain notwithstanding
         let dir = scratch("length_rule_over_profile");
         setup(&dir, ["SIG", "OTHER"], vec![]);
@@ -930,6 +945,15 @@ mod tests {
         assert_eq!(f["ok"], json!(true), "{f}");
         let track = net_mm(&dir, &net);
         assert!((22.0..=22.1).contains(&track), "the track is 2 mm short of the 24 mm target, the pads have the rest: {track}");
+        // kicad-cli counts the pads' pad-to-die length too (`LENGTH_DELAY_CALCULATION`): the net is within the 24..24.1 mm rule
+        if std::env::var_os("EDA_SLOW_TESTS").is_some() && eda_kicad_engine::find_cli().is_some() {
+            let (_, design, model) = board::load(&dir).unwrap();
+            let report = eda_kicad_engine::drc_scratch(&design, &model).expect("kicad-cli runs the DRC");
+            let bad: Vec<_> = report.violations.iter().filter(|v| v.kind == "length_out_of_range").collect();
+            // the rule is on every net: /OTHER (20 mm) is out of it; /SIG's 22 mm of track alone would be too, so passing it is the 2 mm of the pads counted
+            assert_eq!(bad.len(), 1, "only /OTHER is out of the rule: {:?}", bad.iter().map(|v| (&v.description, &v.items)).collect::<Vec<_>>());
+            assert!(format!("{:?}", bad[0].items).contains("OTHER"), "{:?}", bad[0].items);
+        }
     }
 
     #[test]
@@ -1179,6 +1203,124 @@ mod tests {
         t.id = format!("trk_arc_{net}");
         design.routing.as_mut().expect("the board has tracks").tracks.push(t);
         board::save(dir, &design).unwrap();
+    }
+
+    /// A pair that goes down and back up round four corners, each a pair of concentric quarter arcs (P at r 2 mm, N inside at 1 mm then outside at 3 mm, so
+    /// the two nets are equally long): from U1 right 3 mm, down 2.5 mm, along the bottom 6 mm, up 2.5 mm, right 3 mm to U2. `n_detour` gives N a 0.7 mm bump on
+    /// the bottom run (1.4 mm longer). Each arc is a track of its own (`PCB_ARC`).
+    fn setup_arc_pair(dir: &Path, n_detour: bool) {
+        let c = |x: f64, y: f64| p(Nm::kiround(x * 1e6), Nm::kiround(y * 1e6));
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let n_bottom = if n_detour { vec![c(12.0, 17.0), c(14.0, 17.0), c(14.0, 17.7), c(15.0, 17.7), c(15.0, 17.0), c(18.0, 17.0)] } else { vec![c(12.0, 17.0), c(18.0, 17.0)] };
+        setup_with(
+            dir,
+            ["USB_P", "USB_N"],
+            vec![],
+            vec![
+                ("/USB_P", vec![c(5.0, 9.5), c(8.0, 9.5)]),
+                ("/USB_P", vec![c(10.0, 11.5), c(10.0, 14.0)]),
+                ("/USB_P", vec![c(12.0, 16.0), c(18.0, 16.0)]),
+                ("/USB_P", vec![c(20.0, 14.0), c(20.0, 11.5)]),
+                ("/USB_P", vec![c(22.0, 9.5), c(25.0, 9.5)]),
+                ("/USB_N", vec![c(5.0, 10.5), c(8.0, 10.5)]),
+                ("/USB_N", vec![c(9.0, 11.5), c(9.0, 14.0)]),
+                ("/USB_N", n_bottom),
+                ("/USB_N", vec![c(21.0, 14.0), c(21.0, 11.5)]),
+                ("/USB_N", vec![c(22.0, 10.5), c(25.0, 10.5)]),
+            ],
+        );
+        let (_, mut design, _) = board::load(dir).unwrap();
+        let arcs = [
+            // (net, centre, radius, from, to): quarter arcs, the middle at 45 degrees between the ends
+            ("/USB_P", (8.0, 11.5), 2.0, (8.0, 9.5), (10.0, 11.5), (1.0, -1.0)),
+            ("/USB_P", (12.0, 14.0), 2.0, (10.0, 14.0), (12.0, 16.0), (-1.0, 1.0)),
+            ("/USB_P", (18.0, 14.0), 2.0, (18.0, 16.0), (20.0, 14.0), (1.0, 1.0)),
+            ("/USB_P", (22.0, 11.5), 2.0, (20.0, 11.5), (22.0, 9.5), (-1.0, -1.0)),
+            ("/USB_N", (8.0, 11.5), 1.0, (8.0, 10.5), (9.0, 11.5), (1.0, -1.0)),
+            ("/USB_N", (12.0, 14.0), 3.0, (9.0, 14.0), (12.0, 17.0), (-1.0, 1.0)),
+            ("/USB_N", (18.0, 14.0), 3.0, (18.0, 17.0), (21.0, 14.0), (1.0, 1.0)),
+            ("/USB_N", (22.0, 11.5), 1.0, (21.0, 11.5), (22.0, 10.5), (-1.0, -1.0)),
+        ];
+        for (i, (net, (cx, cy), r, a, b, (sx, sy))) in arcs.into_iter().enumerate() {
+            let mut t = eda_model::ir::Track::new_arc(net.into(), "F.Cu".into(), mm(0.25), c(a.0, a.1), c(cx + sx * r * s, cy + sy * r * s), c(b.0, b.1));
+            t.id = format!("trk_arc_{i}");
+            design.routing.as_mut().expect("the board has tracks").tracks.push(t);
+        }
+        board::save(dir, &design).unwrap();
+    }
+
+    /// F4-2: the pair tuner started on an arc of a pair (the pattern starts at the arc's nearer end) tunes the pair along the coupled straight, the arcs kept as
+    /// arcs; the skew tuner started on an arc lengthens its net to the partner's. With `EDA_SLOW_TESTS=1` kicad-cli judges them: no length or skew violation of the
+    /// rules they were tuned to (and the untuned skew board is flagged), and every arc an `(arc ..)` of the file.
+    #[test]
+    fn the_pair_and_skew_tuners_start_on_an_arc_and_keep_the_pairs_arcs() {
+        let len_of = |dir: &Path, net: &str| -> f64 {
+            let d = design_of(dir);
+            tracks_of(&d).iter().filter(|t| t.net == net || format!("/{}", t.net) == net).map(|t| match t.arc() {
+                Some((a, m, b)) => eda_pns::arcs::ArcPts::new(a, m, b).length() / 1e6,
+                None => t.pts.windows(2).map(|w| ((w[1].x - w[0].x).as_f64()).hypot((w[1].y - w[0].y).as_f64()) / 1e6).sum::<f64>(),
+            }).sum()
+        };
+        let pair = scratch("arc_pair");
+        setup_arc_pair(&pair, false);
+        let before = len_of(&pair, "/USB_P");
+        assert!((before - (17.0 + 4.0 * std::f64::consts::PI)).abs() < 0.01, "{before}");
+        assert!((len_of(&pair, "/USB_N") - before).abs() < 0.01);
+        // a click on P's second arc, nearer its end at (12, 16) mm: the pattern starts there and runs along the bottom
+        let s = start(&pair, &body(json!({ "x": 11_600_000, "y": 15_900_000, "tolerance": 200_000, "layer": "F.Cu", "mode": "diffpair", "settings": { "target_length": 34_000_000 } })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        assert_eq!(s["origin"], json!({ "x": 12_000_000, "y": 16_000_000 }), "the arc's nearer end: {s}");
+        let m = mv(&pair, &body(json!({ "x": 18_000_000, "y": 15_000_000 })));
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        assert_eq!(fix(&pair, &body(json!({})))["ok"], json!(true));
+        let arcs_left = tracks_of(&design_of(&pair)).iter().filter(|t| t.id.starts_with("trk_arc_")).count();
+        assert_eq!(arcs_left, 8, "the corners are the arcs they were");
+        let (lp, ln) = (len_of(&pair, "/USB_P"), len_of(&pair, "/USB_N"));
+        assert!((lp.max(ln) - 34.0).abs() < 0.1, "{lp} {ln}");
+
+        let sk = scratch("arc_skew");
+        setup_arc_pair(&sk, true);
+        let (p0, n0) = (len_of(&sk, "/USB_P"), len_of(&sk, "/USB_N"));
+        assert!((n0 - p0 - 1.4).abs() < 0.01, "{p0} {n0}");
+        // the skew tuner on P's arc: P is lengthened along the bottom run, the meanders inside the U (the cursor's side)
+        let s = start(&sk, &body(json!({ "x": 11_600_000, "y": 15_900_000, "tolerance": 200_000, "layer": "F.Cu", "mode": "skew" })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let m = mv(&sk, &body(json!({ "x": 18_000_000, "y": 15_000_000 })));
+        assert_eq!(m["readout"]["label"], "current skew", "{m}");
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        assert_eq!(fix(&sk, &body(json!({})))["ok"], json!(true));
+        let (p1, n1) = (len_of(&sk, "/USB_P"), len_of(&sk, "/USB_N"));
+        assert!((p1 - n1).abs() < 0.1, "the skew is tuned away: {p1} {n1}");
+
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() || eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli part skipped (set EDA_SLOW_TESTS=1, with kicad-cli)");
+            return;
+        }
+        let judge = |dir: &Path, rules: &str, kind: &str| -> Vec<String> {
+            let (_, design, mut model) = board::load(dir).unwrap();
+            model.board.custom_rules_text = Some(format!("(version 1)\n{rules}\n"));
+            let report = eda_kicad_engine::drc_scratch(&design, &model).expect("kicad-cli runs the DRC");
+            report.violations.iter().filter(|v| v.kind == kind).map(|v| v.description.clone()).collect()
+        };
+        let usb = |c: &str| format!("(rule \"usb\" (condition \"A.NetName == '/USB_P' || A.NetName == '/USB_N'\") (constraint {c}))");
+        let longest = lp.max(ln);
+        let len = judge(&pair, &usb(&format!("length (min {:.3}mm) (max {:.3}mm)", longest - 0.6, longest + 0.1)), "length_out_of_range");
+        assert!(len.is_empty(), "kicad-cli measures both nets of the pair as this does, along the arcs: {len:?}");
+        let tight = judge(&pair, &usb("length (min 33.9mm) (max 34.1mm)"), "length_out_of_range");
+        assert!(tight.len() <= 1, "the longer net is within 0.1 mm of the 34 mm target: {tight:?}");
+        let skew = judge(&pair, &usb("skew (max 0.6mm) (within_diff_pairs)"), "skew_out_of_range");
+        assert!(skew.is_empty(), "{skew:?}");
+        let (_, design, model) = board::load(&pair).unwrap();
+        let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        assert!(text.matches("\n\t(arc ").count() >= 8, "the corners are `(arc ..)` in the file");
+        let rule_skew = usb("skew (max 0.15mm) (within_diff_pairs)");
+        let control = scratch("arc_skew_control");
+        setup_arc_pair(&control, true);
+        assert_eq!(judge(&control, &rule_skew, "skew_out_of_range").len(), 1, "the control: 1.4 mm of skew is flagged");
+        let after = judge(&sk, &rule_skew, "skew_out_of_range");
+        assert!(after.is_empty(), "after the skew tuner kicad-cli finds the pair within 0.15 mm: {after:?}");
+        let dirty = judge(&pair, "", "clearance");
+        assert!(dirty.is_empty(), "the tuned pair keeps its clearances: {dirty:?}");
     }
 
     #[test]
