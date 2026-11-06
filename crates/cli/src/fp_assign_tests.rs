@@ -256,7 +256,7 @@ fn kicad_cli_finds_the_footprint_the_symbol_names_after_a_change_footprint() {
     add_alt_library(&dir);
     let baseline = parity(&dir);
     // Change Footprint from the board (the dialog's command)
-    step(&dir, Cmd::ExchangeFootprints { references: vec!["U1".into()], footprint: Some("Alt:WIDE".into()), options: eda_ops::ExchangeOptions::change(), library: Default::default() }, false, "test").unwrap();
+    step(&dir, Cmd::ExchangeFootprints { references: vec!["U1".into()], footprint: Some("Alt:WIDE".into()), options: eda_ops::ExchangeOptions::change(), library: Default::default(), library_items: Default::default() }, false, "test").unwrap();
     let after = parity(&dir);
     assert_eq!(after, baseline, "the schematic names the footprint the board has: nothing new in the parity test");
     for (kind, text) in &after {
@@ -300,7 +300,7 @@ fn the_exchange_plan_tells_which_footprints_are_found_before_a_change() {
 fn change_footprint_for_several_parts_is_one_undo_step_and_selects_nothing_it_cannot_find() {
     let dir = board_with_schematic("change_two");
     add_alt_library(&dir);
-    let both = Cmd::ExchangeFootprints { references: vec!["U1".into(), "U2".into()], footprint: Some("Alt:WIDE".into()), options: eda_ops::ExchangeOptions::change(), library: Default::default() };
+    let both = Cmd::ExchangeFootprints { references: vec!["U1".into(), "U2".into()], footprint: Some("Alt:WIDE".into()), options: eda_ops::ExchangeOptions::change(), library: Default::default(), library_items: Default::default() };
     step(&dir, both, false, "test").unwrap();
     let (_, design, model) = load(&dir).unwrap();
     for r in ["U1", "U2"] {
@@ -315,7 +315,7 @@ fn change_footprint_for_several_parts_is_one_undo_step_and_selects_nothing_it_ca
     assert_eq!((model.part("U1").unwrap().footprint.as_deref(), model.part("U2").unwrap().footprint.as_deref()), (Some("Test:2PAD"), Some("Test:2PAD")), "one Ctrl+Z puts both back");
     assert!(design.drawings.as_ref().is_none_or(|d| d.footprint_assignments.is_empty()));
     // a footprint nobody has is refused and changes nothing
-    let nowhere = Cmd::ExchangeFootprints { references: vec!["U1".into()], footprint: Some("Alt:Nope".into()), options: eda_ops::ExchangeOptions::change(), library: Default::default() };
+    let nowhere = Cmd::ExchangeFootprints { references: vec!["U1".into()], footprint: Some("Alt:Nope".into()), options: eda_ops::ExchangeOptions::change(), library: Default::default(), library_items: Default::default() };
     assert!(step(&dir, nowhere, false, "test").is_err());
     assert_eq!(load(&dir).unwrap().2.part("U1").unwrap().footprint.as_deref(), Some("Test:2PAD"));
 }

@@ -3064,7 +3064,9 @@ impl Design {
         let dr = self.drawings.as_ref();
         // The pad's own clearance and its footprint's are kept apart until the end (the pad's wins).
         let (mut pad_clearance, mut fp_clearance, mut facts) = (None, None, PadZoneFacts::default());
-        if let Some(extra) = dr.and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp_id)) {
+        // (a record of a footprint made here that holds no zone facts -- only the items Update Footprint on Board put on it, say -- leaves the published library's to apply)
+        let own_facts = |e: &&FootprintExtra| e.holds_file_form() || !e.pads.is_empty() || e.clearance.is_some() || e.zone_connection.is_some();
+        if let Some(extra) = dr.and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp_id)).filter(own_facts) {
             let pad = if extra.pads.len() == pad_count { extra.pads.get(pad_idx) } else { None };
             pad_clearance = pad.and_then(|p| p.clearance);
             fp_clearance = extra.clearance;
@@ -3333,11 +3335,29 @@ pub struct FootprintExtra {
     /// The footprint's text boxes, reference images, points and barcodes (`fp_text_box`, `(image ..)`, `(point ..)`, `(barcode ..)` inside the footprint: UI-LEFT P17), the
     /// library footprint's model ([`crate::fp_items::FootprintItems`], only those four kinds), in the frame of the footprint's pads like its art -- a move, a turn or a flip of
     /// the footprint carries them ([`crate::fp_items_place::placed`]). The footprint's own, as KiCad's footprint owns them: Duplicate, Paste and Create Array copy them with
-    /// the footprint, Update and Change Footprint reset them with the rest of this record. An image's pixels are as the board has them (`FOOTPRINT::Rotate` and `Flip` turn
-    /// and mirror them: the browser does it, see [`crate::fp_items_place::ImageXform`]). Written while the part is on the footprint they were read from
-    /// ([`Self::source_name`]). A locked one stays among [`Self::tokens`]. Additive: an older `design.json` kept them all in [`Self::tokens`].
+    /// the footprint, Edit Footprint (Ctrl+E) shows them in its copy and Update Footprint on Board puts the copy's back, and Update and Change Footprint make them the
+    /// library footprint's (`ExchangeFootprint` takes them from the new footprint: `eda_ops`' `fp_exchange`). An image's pixels are as the board has them (`FOOTPRINT::Rotate`
+    /// and `Flip` turn and mirror them: the browser does it, see [`crate::fp_items_place::ImageXform`]). Written while the part is on the footprint they were read from
+    /// ([`Self::source_name`]; a footprint made here keeps the ones the board put on it, [`Self::items_are_for`]). A locked one stays among [`Self::tokens`]. Additive: an
+    /// older `design.json` kept them all in [`Self::tokens`].
     #[serde(default, skip_serializing_if = "crate::fp_items::FootprintItems::is_empty")]
     pub items: crate::fp_items::FootprintItems,
+}
+
+impl FootprintExtra {
+    /// Whether the record holds what a board file said of the footprint -- its fields and other forms among [`Self::tokens`], written while the part is on
+    /// [`Self::source_name`] -- and not only facts the board gave a footprint made here (the items Update Footprint on Board put on it, a mask margin, a uuid an
+    /// exchange kept). The writer takes the fields and the paste margins of a footprint whose record holds none from the symbol and the footprint's edit, as for one with no
+    /// record.
+    pub fn holds_file_form(&self) -> bool {
+        !self.source_name.is_empty()
+    }
+
+    /// Whether [`Self::items`] are the footprint's when the part is on the footprint the board file names `written_name`: the ones read from a file while the part is on
+    /// the footprint they were read from, and the ones the board put on a footprint made here whatever it is on.
+    pub fn items_are_for(&self, written_name: &str) -> bool {
+        !self.holds_file_form() || self.source_name == written_name
+    }
 }
 
 /// A visible footprint text item (`PCB_FIELD`/`PCB_TEXT` parented to a

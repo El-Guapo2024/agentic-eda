@@ -1088,7 +1088,9 @@ pub enum Cmd {
     /// on. The pose, lock and group stay; the pads, their nets by number, the texts, the attributes, the overrides and the models follow the dialog's `options`
     /// (`PCB_EDIT_FRAME::ExchangeFootprint`; see `fp_exchange.rs`). The part's assignment (`DrawingsSection::footprint_assignments`) and, in a change, its symbol's Footprint
     /// field are set; one undo step on both editors. `library` is the library copy of each footprint the command needs (`Lib:Name` -> footprint), which the studio's
-    /// server fills in from the library tables when it is left out: a command has to replay and undo the same on a machine without the libraries.
+    /// server fills in from the library tables when it is left out: a command has to replay and undo the same on a machine without the libraries. `library_items` is,
+    /// likewise, the text boxes, images, points and barcodes of each library footprint that has any (`eda_model::fp_items::FootprintItems`, which the engine footprint does
+    /// not carry): KiCad's exchange takes them from the new footprint.
     ExchangeFootprints {
         references: Vec<String>,
         #[serde(default)]
@@ -1097,6 +1099,8 @@ pub enum Cmd {
         options: ExchangeOptions,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         library: BTreeMap<String, Footprint>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        library_items: BTreeMap<String, eda_model::fp_items::FootprintItems>,
     },
     /// Geographical Reannotate (`pcbnew.ReannotateTool.ShowReannotateDialog`, `DIALOG_BOARD_REANNOTATE`): the footprints on the board renumbered by where they are, in the order,
     /// scope, prefixes and start numbers of `options` (`eda_model::reannotate`); `selection` is the footprints the "Selection" scope names (the studio's selection). Refused when two
@@ -3425,7 +3429,7 @@ impl<'a> Board<'a> {
             Cmd::ImportSymbolGraphics(req) => self.import_symbol_graphics(req),
             Cmd::PasteSpecial { text, at, mode, clear_nets } => self.paste_special(text, *at, *mode, *clear_nets),
             Cmd::PlaceFootprint { footprint, at, reference, value, definition } => self.place_footprint(footprint, *at, reference, value, definition.as_ref()),
-            Cmd::ExchangeFootprints { references, footprint, options, library } => self.exchange_footprints(references, footprint.as_deref(), options, library),
+            Cmd::ExchangeFootprints { references, footprint, options, library, library_items } => self.exchange_footprints(references, footprint.as_deref(), options, library, library_items),
             Cmd::ReannotateBoard { options, selection } => self.reannotate_board(options, selection),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias, lock_tracks, via_kinds, track_sources, group, keep_track_ids } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone(), lock_tracks, via_kinds, track_sources, group.as_deref(), keep_track_ids),
@@ -6609,6 +6613,8 @@ impl<'a> Board<'a> {
             Some(fp) => LibraryFootprint::from_engine_footprint(&fp),
             None => LibraryFootprint::new_empty(name),
         };
+        // under the name it was opened by: a footprint found by its normalized name (`0603` is the installed `Resistor_SMD:R_0603_1608Metric` a part is on) has another
+        lib_fp.name = name.to_string();
         lib_fp.assign_missing_ids();
         self.footprint_library_mut().footprints.push(lib_fp);
         Ok(())

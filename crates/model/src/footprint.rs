@@ -1083,6 +1083,17 @@ pub fn footprint_lib_id(part: &crate::Part) -> String {
     part.package.clone().unwrap_or_default()
 }
 
+/// The `Lib:Name` the libraries know the footprint of `part` by, which Update Footprint from Library loads (`DIALOG_EXCHANGE_FOOTPRINTS::processFootprint( aFootprint,
+/// aFootprint->GetFPID() )`): the board's link ([`footprint_lib_id`]) without the importer's slot ([`without_import_slot`]), and, for a bare name that stands for an
+/// installed KiCad footprint -- a built-in package, as a part's own copy of its footprint may be named (`0603`) -- that footprint ([`kicad_footprint_of_part`]).
+pub fn library_lookup_name(part: &crate::Part, footprints: &[Footprint]) -> String {
+    let id = without_import_slot(&footprint_lib_id(part), footprints);
+    if id.contains(':') {
+        return id;
+    }
+    kicad_footprint_of_part(part).map(|twin| twin.id()).unwrap_or(id)
+}
+
 /// `name` without the importer's `#2`, `#3` ... slot (`eda_kicad::import`'s `dedup_footprint_key`, which keeps apart instances of one library footprint whose pads,
 /// models or graphics differ) when what is left is a footprint of `footprints`: in the file it is still that library's footprint, and the derived board writes it so
 /// (`(footprint "Lib:Name" ..)`). `FOOTPRINT::GetFPIDAsString`, the "Library Link" the rules read, is that written link (R7-D3).

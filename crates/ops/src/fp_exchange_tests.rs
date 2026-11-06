@@ -97,7 +97,7 @@ fn fixture() -> (ConstraintModel, Design) {
 }
 
 fn exchange(references: &[&str], footprint: Option<&str>, options: ExchangeOptions, library: &[Footprint]) -> Cmd {
-    Cmd::ExchangeFootprints { references: references.iter().map(|s| s.to_string()).collect(), footprint: footprint.map(str::to_string), options, library: library.iter().map(|f| (f.name.clone(), f.clone())).collect() }
+    Cmd::ExchangeFootprints { references: references.iter().map(|s| s.to_string()).collect(), footprint: footprint.map(str::to_string), options, library: library.iter().map(|f| (f.name.clone(), f.clone())).collect(), library_items: Default::default() }
 }
 
 fn pose_of(d: &Design, id: &str) -> FootprintInstance {
@@ -305,4 +305,119 @@ fn change_footprint_carries_a_renumbered_pads_net_and_the_netlists_exchange_goes
     let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
     b.apply(&exchange(&["R1"], Some("Test:R_AB"), ExchangeOptions::replace(), &[renumbered])).unwrap();
     assert_eq!(b.design().nets.clone().unwrap()[1].pins, ["R1.2", "R2.2", "R1.3"], "untouched: the schematic's pins by number");
+}
+
+/// UI-LEFT P30: what an exchange keeps of the board file's record of the footprint (`ExchangeFootprint`: `SetUuid`, `SetSheetfile`, `SetSheetname`, `SetFilters`,
+/// `SetStaticComponentClass` always; the clearance overrides, the 3D body and the fields by their options), and that the footprint's items are the new footprint's.
+#[test]
+fn an_exchange_keeps_what_kicad_sets_from_the_old_footprint_and_takes_the_new_ones_items() {
+    use crate::fp_exchange::exchanged_record;
+    use eda_model::embedded_files::{EmbeddedFile, EmbeddedFileType};
+    use eda_model::fp_items::FootprintItems;
+    use eda_model::pcb_items::TextBox;
+    let file = |kind: EmbeddedFileType, name: &str| EmbeddedFile { name: name.into(), kind, data: String::new(), checksum: "0".into() };
+    let old = FootprintExtra {
+        id: "U1".into(),
+        uuid: Some("u-1".into()),
+        sheetname: Some("/".into()),
+        sheetfile: Some("a.kicad_sch".into()),
+        component_classes: vec!["LOGO".into()],
+        solder_mask_margin: Some(mm(0.05)),
+        clearance: Some(mm(0.2)),
+        allow_soldermask_bridges: true,
+        tokens: vec![
+            "(descr \"the board's\")".into(),
+            "(property \"Datasheet\" \"http://x\" (at 0 0 0) (layer \"F.Fab\") (hide yes))".into(),
+            "(property \"Description\" \"A logo\" (at 0 0 0) (layer \"F.Fab\") (hide yes))".into(),
+            "(property \"ki_fp_filters\" \"R_*\")".into(),
+            "(solder_paste_margin -0.03)".into(),
+        ],
+        source_name: "Lib:Logo".into(),
+        courtyard_items: vec!["(fp_rect ..)".into()],
+        extruded_body: Some(Default::default()),
+        embedded: eda_model::embedded_files::EmbeddedFiles { fonts: false, files: vec![file(EmbeddedFileType::Model, "a.step"), file(EmbeddedFileType::Datasheet, "a.pdf")] },
+        items: FootprintItems { text_boxes: vec![TextBox::new("F.SilkS", Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(2.0), y: mm(1.0) }, mm(1.0), mm(0.1))], ..Default::default() },
+        ..Default::default()
+    };
+    let library = FootprintItems { text_boxes: vec![TextBox::new("F.Fab", Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(3.0), y: mm(1.0) }, mm(1.0), mm(0.1))], ..Default::default() };
+    // Update's defaults: the texts stay, the overrides and the models are the library's
+    let r = exchanged_record(Some(&old), true, "U1", &ExchangeOptions::update(), library.clone(), false, "Lib:Logo").record.unwrap();
+    assert_eq!((r.uuid.as_deref(), r.sheetname.as_deref(), r.sheetfile.as_deref(), r.component_classes.as_slice()), (Some("u-1"), Some("/"), Some("a.kicad_sch"), &["LOGO".to_string()][..]));
+    assert_eq!(r.items, library, "the library's items, the board's own gone");
+    assert_eq!(r.tokens, old.tokens[1..4].to_vec(), "the Datasheet and Description fields and the filters; the description and the paste margin are the library's");
+    assert_eq!((r.source_name.as_str(), r.library_frame), ("Lib:Logo", true));
+    assert_eq!((r.solder_mask_margin, r.clearance, r.allow_soldermask_bridges, r.extruded_body.is_some(), r.embedded.files.len()), (None, None, false, false, 0));
+    assert!(r.courtyard_items.is_empty(), "the courtyard is the new footprint's");
+    // every option off: the overrides, the body and the model files stay too, and the paste margin with the file's form
+    let off = ExchangeOptions { reset_clearance_overrides: false, reset_3d_models: false, ..ExchangeOptions::update() };
+    let r = exchanged_record(Some(&old), true, "U1", &off, FootprintItems::default(), false, "Lib:Logo").record.unwrap();
+    assert_eq!((r.solder_mask_margin, r.clearance, r.allow_soldermask_bridges, r.extruded_body.is_some()), (Some(mm(0.05)), Some(mm(0.2)), true, true));
+    assert_eq!(r.embedded.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["a.step"], "the model files, not the datasheet");
+    assert_eq!(r.tokens.last().map(String::as_str), Some("(solder_paste_margin -0.03)"));
+    assert!(r.items.is_empty());
+    // "update/reset text content" on (Change's default): the file's fields go, and with them the record's file form -- the writer gives the symbol's fields
+    let changed = exchanged_record(Some(&old), true, "U1", &ExchangeOptions { reset_clearance_overrides: false, ..ExchangeOptions::change() }, library.clone(), true, "Lib:Other");
+    let r = changed.record.unwrap();
+    assert!(r.tokens.is_empty() && !r.holds_file_form(), "{r:?}");
+    assert_eq!(r.uuid.as_deref(), Some("u-1"));
+    assert_eq!((changed.paste_margin, changed.paste_ratio), (Some(mm(-0.03)), None), "a paste margin kept goes into the footprint's edit");
+    assert!(r.items_are_for("anything"), "a record of no file form: its items are the footprint's whatever it is on");
+    // a record whose file form no longer describes the footprint (the part was put on another before) keeps none of its tokens
+    let r = exchanged_record(Some(&old), false, "U1", &ExchangeOptions::update(), FootprintItems::default(), false, "Lib:Logo").record.unwrap();
+    assert!(r.tokens.is_empty() && !r.holds_file_form());
+    // a footprint made here with nothing to hold has no record; with the library's items it has one, in the library's frame
+    assert_eq!(exchanged_record(None, false, "U1", &ExchangeOptions::change(), FootprintItems::default(), true, "Lib:Other").record, None);
+    let r = exchanged_record(None, false, "U1", &ExchangeOptions::change(), library.clone(), true, "Lib:Other").record.unwrap();
+    assert_eq!((r.items == library, r.library_frame, r.holds_file_form()), (true, true, false));
+}
+
+/// Update Footprint from Library of a part on a built-in package reads the library copy of the footprint the board names (`aFootprint->GetFPID()`: a `0603` resistor is
+/// `Resistor_SMD:R_0603_1608Metric` on the board, which the server's command carries), and the part stays on that name; Update Footprint on Board of a built-in's copy
+/// leaves it on that name too, not on a footprint called `0603` that no library has (it was refused: "library footprint '0603' not found").
+#[test]
+fn a_built_in_packages_update_reads_the_footprint_the_board_names() {
+    let mut r9 = part("R9", "unused", 2);
+    r9.footprint = None;
+    r9.package = Some("0603".into());
+    let model = ConstraintModel { parts: vec![r9.clone()], ..Default::default() };
+    assert_eq!(eda_model::footprint::footprint_lib_id(&r9), "Resistor_SMD:R_0603_1608Metric");
+    let mut design = fixture().1;
+    design.placement.as_mut().unwrap().footprints = vec![pose("R9", mm(40.0), 0, Side::Top)];
+    design.drawings = Some(DrawingsSection::default());
+    let mut installed = model.footprint_of(&r9).expect("the built-in");
+    installed.name = "Resistor_SMD:R_0603_1608Metric".into();
+    installed.pads[0].size = (mm(1.1), mm(1.0));
+    let mut b = Board::new(design.clone(), &model, mm(0.1), mm(0.3));
+    b.apply(&exchange(&["R9"], None, ExchangeOptions::update(), &[installed.clone()])).expect("the update takes the installed footprint");
+    let a = b.design().footprint_assignment("R9").expect("the board keeps the library's copy");
+    assert_eq!((a.footprint.as_str(), a.definition.as_ref().map(|d| d.pads[0].size)), ("Resistor_SMD:R_0603_1608Metric", Some((mm(1.1), mm(1.0)))));
+
+    // a part whose own copy is named after the package (a copy made by an edit of its texts on the board) is updated from the same footprint
+    let mut legacy = design.clone();
+    legacy.drawings.as_mut().unwrap().set_footprint_assignment(FootprintAssignment { reference: "R9".into(), footprint: "0603".into(), definition: model.footprint_of(&r9) });
+    let mut m2 = model.clone();
+    eda_model::fp_assign::apply_footprint_assignments(&legacy, &mut m2);
+    let mut b = Board::new(legacy, &m2, mm(0.1), mm(0.3));
+    b.apply(&exchange(&["R9"], None, ExchangeOptions::update(), &[installed])).expect("the copy named 0603 is updated from Resistor_SMD:R_0603_1608Metric");
+
+    // Ctrl+E and Update Footprint on Board: the part is on the footprint the board names
+    let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
+    b.apply(&Cmd::FpEditor(crate::fp_editor::FpEditorCmd::OpenFromBoard { reference: "R9".into() })).unwrap();
+    let key = eda_model::ir::BoardFootprintCopy::key_of("R9");
+    b.apply(&Cmd::AddFootprintText { footprint: key.clone(), text: eda_model::ir::Text { id: String::new(), content: "NOTE".into(), at: Point { x: Nm::ZERO, y: mm(1.5) }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: Default::default(), mirror: false } }).unwrap();
+    b.apply(&Cmd::FpEditor(crate::fp_editor::FpEditorCmd::SaveToBoard { footprint: key })).unwrap();
+    assert_eq!(b.design().footprint_assignment("R9").map(|a| a.footprint.as_str()), Some("Resistor_SMD:R_0603_1608Metric"));
+}
+
+/// The Footprint Editor's open of a name the model knows another footprint by (Edit Footprint's "Open in library" of a built-in `0603` whose part is on the installed
+/// `Resistor_SMD:R_0603_1608Metric` now): the entry is under the name asked for, so the editor finds what it opened.
+#[test]
+fn a_footprint_opened_by_its_normalized_name_is_the_editors_under_that_name() {
+    let mut installed = r_a();
+    installed.name = "Resistor_SMD:R_0603_1608Metric".into();
+    let model = ConstraintModel { footprints: vec![installed], ..Default::default() };
+    let mut b = Board::new(fixture().1, &model, mm(0.1), mm(0.3));
+    b.apply(&Cmd::OpenFootprintForEdit { name: "0603".into() }).unwrap();
+    let lib = b.design().footprint_library.as_ref().unwrap();
+    assert!(lib.by_name("0603").is_some_and(|f| f.pads.len() == 2), "{:?}", lib.footprints.iter().map(|f| &f.name).collect::<Vec<_>>());
 }

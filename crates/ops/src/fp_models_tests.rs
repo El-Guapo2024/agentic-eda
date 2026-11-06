@@ -277,7 +277,7 @@ fn exchange_for_other(b: &mut Board<'_>, options: ExchangeOptions) {
     let mut other = lopsided();
     other.name = "Test:OTHER".into();
     eda_model::fp_models::set_models(&mut other, &[m("other.step")]);
-    b.apply(&Cmd::ExchangeFootprints { references: vec!["U1".into()], footprint: Some("Test:OTHER".into()), options, library: [("Test:OTHER".to_string(), other)].into() }).unwrap();
+    b.apply(&Cmd::ExchangeFootprints { references: vec!["U1".into()], footprint: Some("Test:OTHER".into()), options, library: [("Test:OTHER".to_string(), other)].into(), library_items: Default::default() }).unwrap();
 }
 
 #[test]

@@ -1366,9 +1366,10 @@ pub(crate) fn write_footprint(
     write_fields(out, as_placed, part, footprint_as_placed, extra, turn.then_some(fp));
     // The symbol's other fields, as Update PCB from Schematic gives them to a footprint made here (`BOARD_NETLIST_UPDATER::updateFootprintParameters`: a
     // field the footprint lacks is added hidden, on F.Fab or B.Fab, at the footprint's origin and orientation): Datasheet, Description, the simulation
-    // fields, the user's. A field the footprint has of its own (Footprint Properties) is the footprint's.
+    // fields, the user's. A field the footprint has of its own (Footprint Properties) is the footprint's. A footprint whose record holds what its board file said
+    // has the file's fields instead (`FootprintExtra::holds_file_form`: a record of facts the board gave a footprint made here holds none).
     let link = model.symbol_links.get(&fp.id);
-    if let Some(link) = link.filter(|_| own_extra.is_none()) {
+    if let Some(link) = link.filter(|_| own_extra.is_none_or(|e| !e.holds_file_form())) {
         let fab = if fp.side == Side::Bottom { "B.Fab" } else { "F.Fab" };
         for (name, text) in &link.fields {
             if extra.edit.is_some_and(|e| e.fields.iter().any(|f| f.name == *name)) {
@@ -1463,7 +1464,7 @@ pub(crate) fn write_footprint(
     }
     // A footprint placed from the intent: the paste margins Footprint Properties set (`FootprintEdit::solder_paste_margin`, `..ratio`; one from a board file has them
     // among its tokens), after the mask margin as `format( FOOTPRINT )` writes them.
-    if own_extra.is_none() {
+    if own_extra.is_none_or(|e| !e.holds_file_form()) {
         if let Some(m) = extra.edit.and_then(|e| e.solder_paste_margin) {
             writeln!(out, "\t\t(solder_paste_margin {})", mm(m)).unwrap();
         }
@@ -1503,8 +1504,9 @@ pub(crate) fn write_footprint(
     // The footprint's silkscreen, fab drawings and texts (`fp_line`, `fp_arc`, ..., `fp_text user`), in its own frame -- a bottom-side footprint's mirrored
     // like its pads and on the other side's layers: after the fields and before the pads, where `format( FOOTPRINT )` writes the drawings.
     crate::fp_art_io::write_art(out, &footprint.art, fp);
-    // Its text boxes, images, barcodes and points (`FootprintExtra::items`, UI-LEFT P17), while the part is on the footprint they were read from.
-    if let Some(e) = own_extra.filter(|e| !e.items.is_empty() && e.source_name == lib_name_written) {
+    // Its text boxes, images, barcodes and points (`FootprintExtra::items`, UI-LEFT P17), while the part is on the footprint they were read from (or, on a footprint made here,
+    // the ones Update Footprint on Board or an exchange put there: `FootprintExtra::items_are_for`).
+    if let Some(e) = own_extra.filter(|e| !e.items.is_empty() && e.items_are_for(&lib_name_written)) {
         crate::fp_board_items_io::write_items(out, &e.items, as_placed, turn);
     }
 

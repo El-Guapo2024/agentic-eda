@@ -316,15 +316,22 @@ pub fn written_name(model: &crate::ConstraintModel, part: &crate::Part) -> Strin
 }
 
 /// The items of the footprint `part` is on, as the board has them (`FootprintExtra::items`): none while the part is on another footprint than the one they were read from
-/// (`FootprintExtra::source_name`), which the writer does not write them for either.
+/// (`FootprintExtra::source_name`), which the writer does not write them for either. The items the board put on a footprint made here are its own whatever it is on
+/// ([`crate::ir::FootprintExtra::items_are_for`]).
 pub fn items_of<'a>(design: &'a crate::ir::Design, model: &crate::ConstraintModel, part: &crate::Part) -> Option<&'a FootprintItems> {
     let e = design.drawings.as_ref()?.footprint_extras.iter().find(|e| e.id == part.reference && !e.items.is_empty())?;
-    (e.source_name == written_name(model, part)).then_some(&e.items)
+    e.items_are_for(&written_name(model, part)).then_some(&e.items)
 }
 
 /// Whether the footprint's items are the four kinds this module places (and nothing else of [`FootprintItems`]).
 pub fn has_placed_kinds(items: &FootprintItems) -> bool {
     !(items.text_boxes.is_empty() && items.images.is_empty() && items.points.is_empty() && items.barcodes.is_empty())
+}
+
+/// The four kinds of `items` this module places (the text boxes, images, points and barcodes): what a board footprint holds as its items. A library footprint's
+/// dimensions, zones, tables and groups are not among them (a board footprint read from a file keeps those as the text of their forms, `FootprintExtra::tokens`).
+pub fn placed_kinds(items: &FootprintItems) -> FootprintItems {
+    FootprintItems { text_boxes: items.text_boxes.clone(), images: items.images.clone(), points: items.points.clone(), barcodes: items.barcodes.clone(), ..Default::default() }
 }
 
 #[cfg(test)]
