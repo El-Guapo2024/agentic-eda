@@ -22,6 +22,9 @@ import { useStudioDispatch, useStudioState } from "../state/store";
 import { assignScrollModifier, MOUSE_SCROLL_DEFAULTS, sanitizePinStepMils, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
 import { isMac } from "../platform";
 import { usePcbColorsPage } from "./PcbColorsPage";
+import { FP_PREFS_TITLES, FP_PREFS_SUBTREE, FpPreferencesPage, fpGraphicsProblem, type FpPrefsExtra, type FpPrefsPage } from "./FpPreferencesPages";
+import { useFpDispatch, useFpState } from "../state/footprintEditorStore";
+import { FACTORY_TEXT_GRAPHICS } from "../kicad-port/layerDefaults";
 import { EDITOR_WINDOWS, getCommonOptions, setWindowOptions, type EditorWindow, type WindowOptions } from "../state/commonOptions";
 import { GRID_MIN_SPACING_RANGE, GRID_THICKNESS_CHOICES, gridMinSpacingValue } from "../kicad-port/grid";
 import { getViewer3DUserSettings, setViewer3DPrefs } from "../state/viewer3dUserSettings";
@@ -29,15 +32,18 @@ import { DEFAULT_VIEWER3D_PREFS, sanitizeViewer3DPrefs, type AntialiasingMode, t
 
 /** The pages of the dialog's tree (`PAGED_DIALOG`'s `wxTreebook`): Mouse and Touchpad, each editor's Display Options, PCB Editor > Colors, 3D Viewer > General
  *  and > Realtime Rendering. */
-type PrefsPage = "mouse" | "pcb_colors" | `display_${EditorWindow}` | "3d_general" | "3d_opengl";
+type PrefsPage = "mouse" | "pcb_colors" | `display_${EditorWindow}` | "3d_general" | "3d_opengl" | FpPrefsPage;
 
 const EDITOR_PAGE_LABEL: Record<EditorWindow, string> = { pcb: "PCB Editor", schematic: "Schematic Editor", footprint: "Footprint Editor", symbol: "Symbol Editor" };
 
 /** Each page's title in the dialog's caption. */
 function pageTitle(page: PrefsPage): string {
   if (page.startsWith("display_")) return "Display Options";
+  if (isFpPage(page)) return FP_PREFS_TITLES[page];
   return ({ mouse: "Mouse and Touchpad", pcb_colors: "Colors", "3d_general": "General", "3d_opengl": "Realtime Rendering" } as Record<string, string>)[page] ?? page;
 }
+
+const isFpPage = (p: string): p is FpPrefsPage => p.startsWith("fp_");
 
 /** `PAGED_DIALOG` opens on the page it was last closed on (its `g_lastPage` by title). */
 let lastPage: PrefsPage = "mouse";
@@ -64,6 +70,12 @@ export function PreferencesDialog() {
     setPageState(p);
   };
   const colors = usePcbColorsPage(open, page === "pcb_colors");
+  // The Footprint Editor's pages (components/FpPreferencesPages.tsx): its rotation step as typed, and its line mode, which they edit beside the preferences.
+  const fpState = useFpState();
+  const fpDispatch = useFpDispatch();
+  const [fpRotationText, setFpRotationText] = useState(String(state.prefs.fpRotationStepDeg));
+  const [fpExtra, setFpExtraState] = useState<FpPrefsExtra>({ lineMode: fpState.lineMode });
+  const setFpExtra = (patch: Partial<FpPrefsExtra>) => setFpExtraState((e) => ({ ...e, ...patch }));
   // each editor's Display Options as edited so far (`PANEL_GAL_OPTIONS` of its frame); OK keeps them
   const [windows, setWindows] = useState<Record<EditorWindow, WindowOptions>>(getCommonOptions().window);
   /** The 3D viewer's settings being edited (state/viewer3dUserSettings.ts), taken on OK as the other pages are. */
@@ -73,6 +85,8 @@ export function PreferencesDialog() {
     if (open) {
       setDraft(state.prefs);
       setRotationText(String(state.prefs.rotationStepDeg));
+      setFpRotationText(String(state.prefs.fpRotationStepDeg));
+      setFpExtraState({ lineMode: fpState.lineMode });
       setPageState(lastPage);
       setWindows(getCommonOptions().window);
       setDraft3d(getViewer3DUserSettings().prefs);
@@ -87,11 +101,22 @@ export function PreferencesDialog() {
     colors.cancel();
     close();
   };
-  const valid = scrollModSetValid(draft);
+  const graphicsProblem = fpGraphicsProblem(draft.fpTextGraphics);
+  const valid = scrollModSetValid(draft) && !graphicsProblem;
   const submit = () => {
     if (!valid) return;
-    dispatch({ type: "SET_PREFERENCES", prefs: sanitizePreferences({ ...draft, rotationStepDeg: sanitizeRotationStep(Number(rotationText), state.prefs.rotationStepDeg) }) });
+    dispatch({
+      type: "SET_PREFERENCES",
+      prefs: sanitizePreferences({
+        ...draft,
+        rotationStepDeg: sanitizeRotationStep(Number(rotationText), state.prefs.rotationStepDeg),
+        // `m_rotationAngle.GetAngleValue()`: the Footprint Editor's own step
+        fpRotationStepDeg: sanitizeRotationStep(Number(fpRotationText), state.prefs.fpRotationStepDeg),
+      }),
+    });
     for (const e of EDITOR_WINDOWS) setWindowOptions(e, windows[e]);
+    // the line mode is the Footprint Editor's (`m_AngleSnapMode`)
+    if (fpExtra.lineMode !== fpState.lineMode) fpDispatch({ type: "SET_LINE_MODE", mode: fpExtra.lineMode });
     colors.commit();
     setViewer3DPrefs(sanitizeViewer3DPrefs(draft3d));
     close();
@@ -193,6 +218,7 @@ export function PreferencesDialog() {
                   [null, EDITOR_PAGE_LABEL[e], 0],
                   [`display_${e}`, "Display Options", 1],
                   ...(e === "pcb" ? [["pcb_colors", "Colors", 1]] : []),
+                  ...(e === "footprint" ? FP_PREFS_SUBTREE : []),
                 ]),
                 // `book->AddPage( new wxPanel( book ), _( "3D Viewer" ) )` and its pages.
                 [null, "3D Viewer", 0],
@@ -202,6 +228,7 @@ export function PreferencesDialog() {
             ).map(([id, label, depth], i) => (
               <div
                 key={`${i}-${label}`}
+                data-testid={id ? `prefs-page-${id}` : undefined}
                 role="treeitem"
                 aria-selected={id !== null && page === id}
                 data-page={id ?? undefined}
@@ -217,6 +244,9 @@ export function PreferencesDialog() {
             {page.startsWith("display_") && displayPage(page.slice("display_".length) as EditorWindow)}
             {page === "3d_general" && <Viewer3DGeneralPage draft={draft3d} set={(patch) => setDraft3d((d) => ({ ...d, ...patch }))} />}
             {page === "3d_opengl" && <Viewer3DOpenGLPage draft={draft3d} set={(patch) => setDraft3d((d) => ({ ...d, ...patch }))} />}
+            {isFpPage(page) && (
+              <FpPreferencesPage page={page} draft={draft} set={set} extra={fpExtra} setExtra={setFpExtra} rotationText={fpRotationText} setRotationText={setFpRotationText} units={state.units} />
+            )}
             {page === "mouse" && (
               <>
               {heading("Pan and Zoom")}
@@ -395,8 +425,14 @@ export function PreferencesDialog() {
               Reset Colors to Defaults
             </button>
           )}
+          {/* `PANEL_FP_EDITOR_GRAPHICS_DEFAULTS::ResetPanel`: KiCad's factory table */}
+          {page === "fp_graphics" && (
+            <button style={{ marginRight: "auto" }} onClick={() => set({ fpTextGraphics: null })} data-testid="fp-prefs-graphics-reset" title={`Reset to ${FACTORY_TEXT_GRAPHICS.silk.line_width_nm / 1e6} mm silkscreen lines and KiCad's other factory values`}>
+              Reset Graphics Defaults to Defaults
+            </button>
+          )}
           <button onClick={cancel}>Cancel</button>
-          <button className="primary" disabled={!valid} onClick={submit}>
+          <button className="primary" disabled={!valid} onClick={submit} data-testid="preferences-ok">
             OK
           </button>
         </div>

@@ -8,7 +8,7 @@
 // copy). Copy, Export, Duplicate read any footprint; Delete and Rename need a project-library entry.
 import type { Dispatch } from "react";
 import type { Cmd } from "../api/types";
-import { fetchFootprintLibraryNames, fetchState } from "../api/client";
+import { fetchFootprintLibraryNames, fetchState, postCmd } from "../api/client";
 import { fetchAnyFootprint, parseFootprintText, pickTextFile } from "../api/libraryClient";
 import { addedPart, insertedMessage, outlineCentre } from "../kicad-port/fpInsert";
 import { duplicateIdCount, repairMessage } from "../kicad-port/fpRepair";
@@ -217,10 +217,31 @@ export async function repairFootprint(c: FpCtx): Promise<void> {
 export async function saveFootprintToBoard(c: FpCtx, parts: readonly { ref: string; footprint: string | null }[], studio?: Dispatch<StudioAction>): Promise<void> {
   const st = c.api.getState();
   if (!st.name) return info(c, "Open a footprint first.");
+  // a footprint loaded from the board goes back on that footprint only (`sourceFootprint`, found by the link): the exchange
+  if (st.footprint?.board_link) return void (await updateLinkedFootprint(c.api, (m, kind) => (kind === "error" ? fail(c, new Error(m)) : info(c, m))));
   const users = parts.filter((p) => p.footprint === st.name).map((p) => p.ref);
   if (users.length === 0) return insertFootprint(c, st.name, studio);
   if (!(await c.api.cmd({ op: "update_footprint_on_board", name: st.name }))) return;
   info(c, `${st.name}: ${users.length === 1 ? users[0] : `${users.length} parts`} on the board now follow${users.length === 1 ? "s" : ""} this footprint`);
+}
+
+/**
+ * `FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard` of a footprint loaded from the board (`GetLink() != niluuid`; Save, and "Insert footprint into PCB" with a link): the board footprint the
+ * copy is linked to is exchanged for it (`fp_editor save_to_board`, one step of the board, "Update Footprint"), and no other. A pad being edited as shapes is recombined first
+ * (`SaveFootprint`). False when the board refused it ("Unable to find the footprint on the main board.\nCannot save." once the footprint is gone).
+ */
+export async function updateLinkedFootprint(api: FootprintEditorApi, say: (message: string, kind: "info" | "error") => void): Promise<boolean> {
+  const st = api.getState();
+  const link = st.footprint?.board_link;
+  if (!st.name || !link) return false;
+  if (st.footprint?.pad_edit) await api.editPadShapes();
+  const reply = await postCmd({ op: "fp_editor", verb: "save_to_board", footprint: st.name }, false);
+  if (!reply.ok) {
+    say(reply.message, "error");
+    return false;
+  }
+  say(`${link.reference} updated on the board.`, "info");
+  return true;
 }
 
 /**

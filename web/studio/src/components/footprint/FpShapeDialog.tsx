@@ -9,6 +9,9 @@ import type { CmdShape } from "../../api/types";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { FP_EDITOR_LAYERS } from "../../kicad-port/fpDrawDefaults";
 import { canFill, fillWidthError } from "../../kicad-port/shapeFill";
+import { FILL_CHOICES, LINE_STYLE_CHOICES, fillChoiceOf, fillOfChoice, shapeLookOf } from "../../kicad-port/fpKeep";
+
+type FillChoice = (typeof FILL_CHOICES)[number]["value"];
 
 const mm = (nm: number) => String(Math.round(nm) / 1e6);
 const nm = (v: string) => Math.round(Number(v) * 1e6) || 0;
@@ -80,7 +83,9 @@ export function FpShapeDialog() {
   const [pts, setPts] = useState<Record<string, [string, string]>>({});
   const [radius, setRadius] = useState("0");
   const [width, setWidth] = useState("0");
-  const [filled, setFilled] = useState(false);
+  const [fill, setFill] = useState<FillChoice>("none");
+  // "Line style:" (`m_lineStyleCombo`, UI-LEFT F5): kept by the graphic's id
+  const [lineStyle, setLineStyle] = useState("solid");
   const [layer, setLayer] = useState("F.SilkS");
   const [errors, setErrors] = useState<string[]>([]);
 
@@ -94,7 +99,9 @@ export function FpShapeDialog() {
     setPts(rec);
     if (shape.kind === "circle") setRadius(mm(Math.hypot(shape.end.x - shape.center.x, shape.end.y - shape.center.y)));
     setWidth(mm(shape.stroke_width));
-    setFilled(shape.filled);
+    const look = shapeLookOf(state.footprint, shape.id ?? "");
+    setFill(fillChoiceOf(shape.filled, look.hatch));
+    setLineStyle(look.line_style === "default" ? "solid" : look.line_style);
     setLayer(shape.layer);
     setErrors([]);
     // only when the dialog opens on a shape, not on every poll of the footprint
@@ -106,14 +113,17 @@ export function FpShapeDialog() {
   const point = (key: string) => ({ x: nm(pts[key]?.[0] ?? "0"), y: nm(pts[key]?.[1] ?? "0") });
   const ok = async () => {
     const stroke = nm(width);
-    const fill = canFill(shape.kind) && filled;
-    const errs = [shapeWidthError(shape.kind, fill, stroke)].filter((e): e is string => !!e);
+    const { filled, hatch } = canFill(shape.kind) ? fillOfChoice(fill) : { filled: false, hatch: null };
+    const errs = [shapeWidthError(shape.kind, filled || hatch !== null, stroke)].filter((e): e is string => !!e);
     setErrors(errs);
     if (errs.length > 0) return; // `HTML_MESSAGE_BOX dlg( this, _( "Error List" ) )`
-    let next: CmdShape = { ...shape, layer, stroke_width: stroke, filled: fill };
+    let next: CmdShape = { ...shape, layer, stroke_width: stroke, filled };
     for (const { key } of pointRows(shape)) next = { ...next, [key]: point(key) } as CmdShape;
     if (next.kind === "circle") next = { ...next, end: { x: next.center.x + nm(radius), y: next.center.y } };
-    if (await api.setGraphic(id, next)) close();
+    // the line style and the hatch are kept by id (`LibraryFootprintKeep`): `m_item->SetLineStyle`, `SetFillMode`
+    const was = shapeLookOf(state.footprint, id);
+    const look = { line_style: lineStyle === "solid" && was.line_style === "default" ? "default" : lineStyle, hatch };
+    if (await api.setGraphic(id, next, look)) close();
   };
   const setPt = (key: string, axis: 0 | 1, v: string) => setPts((p) => ({ ...p, [key]: (axis === 0 ? [v, p[key]?.[1] ?? "0"] : [p[key]?.[0] ?? "0", v]) as [string, string] }));
   const title = `${shapeFriendlyName(shape.kind)} Properties`;
@@ -146,12 +156,23 @@ export function FpShapeDialog() {
             <span>
               <input type="number" step="any" value={width} data-testid="fp-shape-width" onChange={(e) => setWidth(e.target.value)} style={{ width: 80 }} /> mm
             </span>
+            <span>Line style:</span>
+            <select value={lineStyle} data-testid="fp-shape-line-style" onChange={(e) => setLineStyle(e.target.value)}>
+              {LINE_STYLE_CHOICES.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
             {canFill(shape.kind) && (
               <>
                 <span>Fill:</span>
-                <select value={filled ? "solid" : "none"} data-testid="fp-shape-fill" onChange={(e) => setFilled(e.target.value === "solid")}>
-                  <option value="none">None</option>
-                  <option value="solid">Solid</option>
+                <select value={fill} data-testid="fp-shape-fill" onChange={(e) => setFill(e.target.value as FillChoice)}>
+                  {FILL_CHOICES.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
                 </select>
               </>
             )}

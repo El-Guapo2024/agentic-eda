@@ -2690,12 +2690,21 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
 /// (every installed KiCad one) could be fetched back after opening it.
 fn footprint_json(dir: &Path, name: &str) -> Result<Value, Vec<CheckResult>> {
     let (meta, design, model) = board::load(dir)?;
-    let fp = design
-        .footprint_library
-        .as_ref()
+    let lib = design.footprint_library.as_ref();
+    let mut fp = lib
         .and_then(|l| l.by_name(name))
+        .cloned()
         .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "this footprint has not been opened in the Footprint Editor yet")])?;
+    // the settings an older design kept as the file's forms are served as the footprint's own, as the next edit stores them (UI-LEFT F4)
+    let mut tokens = std::mem::take(&mut fp.kicad.tokens);
+    fp.settings.absorb_kept(&mut tokens);
+    fp.kicad.tokens = tokens;
+    let fp = &fp;
     let mut v = serde_json::to_value(fp).map_err(|e| vec![CheckResult::fail("board_bad_design", name, e.to_string())])?;
+    // a footprint loaded from the board: the instance it is linked to and its own name (`FOOTPRINT_EDIT_FRAME::IsCurrentFPFromBoard`, `GetFPID()`, UI-LEFT F3)
+    if let Some(copy) = lib.and_then(|l| l.board_copy(name)) {
+        v["board_link"] = json!({ "reference": copy.reference, "fpid": copy.fpid });
+    }
     // The dimensions, zones, text boxes ... (`eda_model::fp_items`) in the board's display shapes, for the board's painters (`crate::fp_items_json`).
     if !fp.items.is_empty() {
         let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, eda_model::text_vars::Clock::utc_now()));

@@ -43,7 +43,7 @@
     "common.Control.highContrastMode": "supported",
     "common.Control.showLibraryTree": "supported",
     "pcbnew.Control.showLayersManager": "supported",
-    "common.Control.showProperties": "not ported: the footprint editor has no Properties pane yet (the Pad and Footprint Properties dialogs are there)",
+    "common.Control.showProperties": "supported",
     "common.Interactive.selectSetRect": "supported",
     "common.Interactive.selectSetLasso": "supported",
     "pcbnew.PadTool.placePad": "supported",

@@ -5,6 +5,7 @@
 // KiCad: `SYMBOL_EDIT_FRAME::Save`, `saveCurrentSymbol`, `SaveAll` / `saveAllLibraries`, `Revert`, `SaveLibraryAs` (eeschema/symbol_editor/symbol_editor.cpp);
 // `FOOTPRINT_EDITOR_CONTROL::Save`, `SaveAs`, `Revert` and `FOOTPRINT_EDIT_FRAME::SaveFootprint`, `RevertFootprint` (pcbnew/tools/footprint_editor_control.cpp,
 // pcbnew/footprint_libraries_utils.cpp), commit 8303b2ad.
+import { updateLinkedFootprint } from "./footprintLibraryOps";
 import type { Cmd } from "../api/types";
 import { fetchModified, fetchSavedFootprint, fetchSavedLibrary, fetchSavedSymbol, fetchWritableLibraries, saveToLibrary } from "../api/librarySaveClient";
 import { askConfirm } from "../components/library/libraryDialogs";
@@ -116,6 +117,11 @@ export async function revertSymbol(api: SymbolEditorApi, toast: Toast): Promise<
  */
 export async function saveFootprint(api: FootprintEditorApi, toast: Toast): Promise<void> {
   const st = api.getState();
+  // `SaveFootprint`: a footprint loaded from the board is saved to the board -- that footprint only (`SaveFootprintToBoard( false )`, UI-LEFT F3)
+  if (st.footprint?.board_link) {
+    await updateLinkedFootprint(api, (m, kind) => toast(m, kind));
+    return;
+  }
   const id = footprintSaveTarget(st.treeSelection, getLibraryTree("footprint").selectedLibs, st.name);
   if (!id) return;
   // `if( padTool->InPadEditMode() ) m_toolManager->RunAction( PCB_ACTIONS::recombinePad )`: a pad being edited as shapes is a pad again first

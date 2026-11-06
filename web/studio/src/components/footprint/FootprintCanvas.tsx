@@ -39,6 +39,8 @@ import { arcClick, arcMotion, arcRemoveLastPoint } from "../../kicad-port/arcGeo
 import { bezierClick, bezierFinishDouble, bezierMotion, bezierRemoveLastPoint } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "../canvas/curveTools";
 import { fpShape, fpStrokeWidthNm, type FpPointShapeKind } from "../../kicad-port/fpDrawDefaults";
+import { getFpGraphicsDefaults } from "../../state/fpPrefs";
+import { FOOTPRINT_EDITOR_MAGNETIC } from "../../kicad-port/fpSnapScene";
 import { fpNewText } from "../../kicad-port/fpTextTool";
 import { flipCarriedPad } from "../../kicad-port/fpPadPlacer";
 import { useStudioState } from "../../state/store";
@@ -131,7 +133,7 @@ type DragState =
 
 /** The shape a point-counted tool commits: the layer class's width and, for a polygon, KiCad's fill rule (kicad-port/fpDrawDefaults.ts). */
 function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier", pts: [number, number][], layer: string): CmdShape | null {
-  return kind === "bezier" ? null : fpShape(kind as FpPointShapeKind, pts, layer); // a Bezier is built from the construction manager's `BezierCurve`, never from a bare point list
+  return kind === "bezier" ? null : fpShape(kind as FpPointShapeKind, pts, layer, getFpGraphicsDefaults()); // a Bezier is built from the construction manager's `BezierCurve`, never from a bare point list
 }
 
 // `polygon` has no fixed point count (like the PCB tab's own AddShape
@@ -206,7 +208,9 @@ export function FootprintCanvas() {
   });
 
   const fp = state.footprint;
-  snap.update({ footprint: fp, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, gridYs: gridSettingsList.ys, overrides: gridOverrides, origin: [gridOrigin.x, gridOrigin.y], highContrast: state.highContrast, activeLayer: state.activeLayer });
+  // Preferences > Footprint Editor > Editing Options' Magnetic Points (`m_MagneticItems.pads` CAPTURE_ALWAYS or NO_EFFECT, `.graphics`), UI-LEFT F8
+  const magnetic = { ...FOOTPRINT_EDITOR_MAGNETIC, pads: studioPrefs.fpMagneticPads ? ("always" as const) : ("never" as const), graphics: studioPrefs.fpMagneticGraphics };
+  snap.update({ footprint: fp, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, gridYs: gridSettingsList.ys, overrides: gridOverrides, origin: [gridOrigin.x, gridOrigin.y], highContrast: state.highContrast, activeLayer: state.activeLayer, magnetic });
   snap.onChange = () => bumpSnap((n) => n + 1);
   // A tool of its own starts a helper of its own: what the last one remembered (the anchor snapped to, the snap line, the construction geometry) goes with it.
   useEffect(() => {
@@ -426,7 +430,7 @@ export function FootprintCanvas() {
       // A double-click: "use the current point for all remaining points", accept, and reset (no chaining).
       const at = snap.lastPoint() ?? draw.bezier?.lastPoint;
       const curve = draw.bezier && at ? bezierFinishDouble(draw.bezier, at) : null;
-      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, fpStrokeWidthNm(state.activeLayer)));
+      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, fpStrokeWidthNm(state.activeLayer, getFpGraphicsDefaults())));
       dispatch({ type: "SET_DRAW_STATE", draw: null });
       return;
     }
@@ -518,7 +522,7 @@ export function FootprintCanvas() {
     if (shapeKind === "arc") {
       const prev = state.drawState?.shapeKind === "arc" ? state.drawState.arc : undefined;
       const { geom, arc } = arcClick(prev, [sx, sy], arcAngleSnap(state.lineMode, e));
-      if (arc) void api.addGraphic({ kind: "arc", layer: state.activeLayer, stroke_width: fpStrokeWidthNm(state.activeLayer), filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) });
+      if (arc) void api.addGraphic({ kind: "arc", layer: state.activeLayer, stroke_width: fpStrokeWidthNm(state.activeLayer, getFpGraphicsDefaults()), filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) });
       dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "arc", pts: arcClickPoints(geom), arc: geom } : null });
       return;
     }
@@ -526,7 +530,7 @@ export function FootprintCanvas() {
     if (shapeKind === "bezier") {
       const prev = state.drawState?.shapeKind === "bezier" ? state.drawState.bezier : undefined;
       const { geom, curve } = bezierClick(prev, [sx, sy]);
-      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, fpStrokeWidthNm(state.activeLayer)));
+      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, fpStrokeWidthNm(state.activeLayer, getFpGraphicsDefaults())));
       dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "bezier", pts: [], bezier: geom } : null });
       return;
     }
@@ -574,7 +578,7 @@ export function FootprintCanvas() {
         return;
       }
       dispatch({ type: "SET_SELECTION", refs: [] }); // `ACTIONS::selectionClear`
-      dispatch({ type: "SET_TEXT_DIALOG", text: fpNewText(state.activeLayer, { x: sx, y: sy }) });
+      dispatch({ type: "SET_TEXT_DIALOG", text: fpNewText(state.activeLayer, { x: sx, y: sy }, getFpGraphicsDefaults()) });
       return;
     }
 

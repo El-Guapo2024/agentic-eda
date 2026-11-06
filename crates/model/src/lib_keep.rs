@@ -112,6 +112,18 @@ pub struct LibraryFootprintKeep {
     /// The texts that are `(unlocked yes)` (`PCB_TEXT::SetKeepUpright( false )`'s token in a footprint: the text turns with the footprint), by id.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub unlocked_texts: BTreeSet<String>,
+    /// The graphics and texts that are `(locked yes)` (`BOARD_ITEM::IsLocked`; a text of KiCad 5.99 says a bare `locked`), by id (UI-LEFT F5). A pad keeps its
+    /// `(locked yes)` among its own kept forms ([`LibraryPadKeep::tokens`]).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub locked: BTreeSet<String>,
+    /// The texts that are hidden (`fp_text user .. (hide yes)`, or a bare `hide` in an older file's effects: `parsePCB_TEXT` sets `SetVisible( false )` on a text of a
+    /// footprint), by id (UI-LEFT F5). Not drawn and not picked, as `PCB_TEXT::ViewGetLOD` hides a text that is not visible. KiCad's writer drops the flag of a user
+    /// text (`format( const PCB_TEXT* )` writes `(hide yes)` for a field only), so KiCad shows the text again once it has saved the file; the studio's writer keeps it.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub hidden_texts: BTreeSet<String>,
+    /// A graphic's hatched fill (`(fill hatch|reverse_hatch|cross_hatch)`, `EDA_SHAPE::SetFillMode`), by id; the graphic's `filled` is then false (UI-LEFT F5).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub hatches: BTreeMap<String, crate::fp_art::Hatch>,
 }
 
 impl LibraryFootprintKeep {
@@ -121,6 +133,37 @@ impl LibraryFootprintKeep {
 
     pub fn text_extra(&self, id: &str) -> Option<&TextExtra> {
         self.text_extras.iter().find(|e| e.id == id)
+    }
+
+    /// What is kept by item id of `from` (its line style, hatch, text looks, keep-upright, lock, hidden flag), copied to the item `to`: a copy of the item
+    /// (`BOARD_ITEM::Duplicate` clones every attribute but the uuid) looks as the original does.
+    pub fn copy_looks(&mut self, from: &str, to: &str) {
+        if let Some(t) = self.stroke_types.get(from).cloned() {
+            self.stroke_types.insert(to.to_string(), t);
+        }
+        if let Some(h) = self.hatches.get(from).copied() {
+            self.hatches.insert(to.to_string(), h);
+        }
+        if let Some(mut e) = self.text_extra(from).cloned() {
+            e.id = to.to_string();
+            self.text_extras.retain(|x| x.id != to);
+            self.text_extras.push(e);
+        }
+        for set in [&mut self.unlocked_texts, &mut self.locked, &mut self.hidden_texts] {
+            if set.contains(from) {
+                set.insert(to.to_string());
+            }
+        }
+    }
+
+    /// Forget what is kept by the id `id` (the item is gone).
+    pub fn forget(&mut self, id: &str) {
+        self.stroke_types.remove(id);
+        self.hatches.remove(id);
+        self.text_extras.retain(|e| e.id != id);
+        for set in [&mut self.unlocked_texts, &mut self.locked, &mut self.hidden_texts] {
+            set.remove(id);
+        }
     }
 }
 
@@ -193,5 +236,108 @@ impl LibraryPadKeep {
             solder_paste_margin_ratio: master.solder_paste_margin_ratio,
             tokens,
         }
+    }
+}
+
+/// Whether a kept footprint form ([`LibraryFootprintKeep::tokens`]) is an item `FOOTPRINT::MoveAnchorPosition` moves: one of `GraphicalItems()` (a dimension, an image, a
+/// text box, a table, a barcode) or `Zones()`. A point (`m_points` is in neither list), a group (no place of its own) and the footprint's settings do not move.
+pub fn kept_form_moves_with_anchor(token: &str) -> bool {
+    let tag = token.trim_start().trim_start_matches('(').split(|c: char| c.is_whitespace() || c == '(' || c == ')').next().unwrap_or("");
+    matches!(tag, "zone" | "dimension" | "image" | "fp_text_box" | "gr_text_box" | "table" | "barcode")
+}
+
+/// `BOARD_ITEM::Move( aMoveVector )` of an item kept as the text of its form (UI-LEFT F7, `FOOTPRINT::MoveAnchorPosition` of what the editor holds as text: a locked zone,
+/// a filled one, a group's member ...): every point of the form -- the first two numbers of each `(xy ..)`, `(start ..)`, `(end ..)`, `(mid ..)`, `(center ..)` and `(at ..)` --
+/// moved by `(dx, dy)`, written in millimetres as KiCad writes lengths; the rest of the text is left as it was.
+pub fn translate_kept_form(token: &str, dx: Nm, dy: Nm) -> String {
+    const POINT_HEADS: &[&str] = &["xy", "start", "end", "mid", "center", "at"];
+    let b = token.as_bytes();
+    let mut out = String::with_capacity(token.len() + 16);
+    let mut i = 0;
+    // how many numbers of the innermost list still move, and which axis comes next
+    let mut stack: Vec<u8> = Vec::new();
+    while i < b.len() {
+        match b[i] {
+            b'"' => {
+                let start = i;
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    if b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                i = (i + 1).min(b.len());
+                out.push_str(&token[start..i]);
+            }
+            b'(' => {
+                out.push('(');
+                i += 1;
+                let start = i;
+                while i < b.len() && !matches!(b[i], b' ' | b'\t' | b'\r' | b'\n' | b'(' | b')') {
+                    i += 1;
+                }
+                let head = &token[start..i];
+                out.push_str(head);
+                stack.push(if POINT_HEADS.contains(&head) { 2 } else { 0 });
+            }
+            b')' => {
+                out.push(')');
+                stack.pop();
+                i += 1;
+            }
+            c if c.is_ascii_whitespace() => {
+                out.push(c as char);
+                i += 1;
+            }
+            _ => {
+                let start = i;
+                while i < b.len() && !matches!(b[i], b' ' | b'\t' | b'\r' | b'\n' | b'(' | b')' | b'"') {
+                    i += 1;
+                }
+                let atom = &token[start..i];
+                match (stack.last_mut(), atom.parse::<f64>()) {
+                    (Some(left @ 1..=2), Ok(v)) => {
+                        let d = if *left == 2 { dx } else { dy };
+                        *left -= 1;
+                        out.push_str(&mm_text(Nm::from_mm(v) + d));
+                    }
+                    _ => out.push_str(atom),
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A length in millimetres as KiCad's files write one (`FormatInternalUnits`: up to six decimals, no trailing zeros).
+fn mm_text(v: Nm) -> String {
+    let s = format!("{:.6}", v.mm());
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" || s.is_empty() {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::*;
+
+    #[test]
+    fn a_kept_zone_and_dimension_move_with_the_anchor_and_a_point_does_not() {
+        let zone = "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (locked yes) (hatch edge 0.5) (polygon (pts (xy 0 0) (xy 1.5 0) (arc (start 1.5 0) (mid 2 0.5) (end 1.5 1)))) (filled_polygon (layer \"F.Cu\") (pts (xy 0.1 0.1) (xy 1 0.1) (xy 1 1))))";
+        assert!(kept_form_moves_with_anchor(zone));
+        let moved = translate_kept_form(zone, Nm::from_mm(-1.0), Nm::from_mm(0.25));
+        assert_eq!(
+            moved,
+            "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (locked yes) (hatch edge 0.5) (polygon (pts (xy -1 0.25) (xy 0.5 0.25) (arc (start 0.5 0.25) (mid 1 0.75) (end 0.5 1.25)))) (filled_polygon (layer \"F.Cu\") (pts (xy -0.9 0.35) (xy 0 0.35) (xy 0 1.25))))"
+        );
+        let dim = "(dimension (type aligned) (layer \"F.Fab\") (pts (xy 0 0) (xy 2 0)) (height 1) (gr_text \"2 mm\" (at 1 -1 0) (layer \"F.Fab\") (effects (font (size 1 1) (thickness 0.15)))))";
+        assert_eq!(translate_kept_form(dim, Nm::from_mm(1.0), Nm::ZERO), "(dimension (type aligned) (layer \"F.Fab\") (pts (xy 1 0) (xy 3 0)) (height 1) (gr_text \"2 mm\" (at 2 -1 0) (layer \"F.Fab\") (effects (font (size 1 1) (thickness 0.15)))))");
+        assert!(!kept_form_moves_with_anchor("(point (at 1 2) (size 1) (layer \"F.Fab\"))"));
+        assert!(!kept_form_moves_with_anchor("(group \"\" (members \"a\"))"));
+        assert!(!kept_form_moves_with_anchor("(stackup (layer \"F.Cu\"))"));
     }
 }
