@@ -511,6 +511,22 @@ fn default_layers() -> Vec<String> {
 /// outline, the margin) are on whatever the file lists (`BOARD_DESIGN_SETTINGS::SetEnabledLayers`); a technical layer the file does not list is off, as KiCad has it (r2-board-io
 /// F17: `issue18839` lists no adhesive, paste, mask, silkscreen or fabrication layer; every board this studio wrote lists them all). A layer name the file has that is not one of
 /// KiCad's (`Rescue`, a name from before KiCad 5) is skipped. An item on a layer the list does not name keeps its layer and does not turn it on (r4-board-io N6).
+/// What the person is told of the footprints a KiCad 10 board places at a scale other than 1:1 (`ImportNotes::footprints_scaled`): the reader bakes the scale into each
+/// footprint's pads, graphics and texts (`fp_transform`), so the board is the board KiCad shows, but the model has no footprint scale and the board file written back
+/// (version 20241229, `(at ..)`) holds the scaled footprint at 1:1.
+pub fn scaled_footprints_note(references: &[String]) -> String {
+    let n = references.len();
+    let shown: Vec<&str> = references.iter().take(6).map(String::as_str).collect();
+    format!(
+        "{n} footprint{} at a scale other than 1:1 ({}{}): the scale is baked into {} pads, graphics and texts, and the board written back has {} at 1:1.",
+        if n == 1 { "" } else { "s" },
+        shown.join(", "),
+        if n > shown.len() { ", ..." } else { "" },
+        if n == 1 { "its" } else { "their" },
+        if n == 1 { "it" } else { "them" },
+    )
+}
+
 /// The Board Editor Layers page a board file's `(layers ..)` table makes ([`import_layer_setup`]): the layers it enables, the names it gives them and their types. For
 /// Append Board (`PCB_CONTROL::AppendBoard`), whose new layers take the appended file's descriptor (KiCad 25ec2335 `parseLayers`: `if( !m_preserveDestinationStackup ||
 /// !m_board->IsLayerEnabled( .. ) ) m_board->SetLayerDescr( .., layer )`). `None` for a text that is not a board.

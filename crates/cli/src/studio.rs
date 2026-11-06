@@ -951,14 +951,16 @@ fn handle(
                     let _ = session.then(crate::specctra_api::take_session_warning);
                     // a copy of a zone carries its fill (R6-Z1): the design before, to tell the copies from the zones that were there
                     let copied = crate::fill_api::copies_zones(&cmd).then(|| board::load(dir).ok().map(|(_, d, _)| (d, cmd.clone()))).flatten();
+                    // which editor's content the step modified (the page's `IsContentModified`)
+                    let domain = board::step_tag(&cmd);
                     match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
                         Ok(summary) => {
                             if let Some((before, cmd)) = &copied {
                                 crate::fill_api::carry_copied_fills(dir, before, cmd);
                             }
                             match session.then(crate::specctra_api::take_session_warning).flatten() {
-                                Some(w) => json!({ "ok": true, "message": summary, "warning": w }),
-                                None => json!({ "ok": true, "message": summary }),
+                                Some(w) => json!({ "ok": true, "message": summary, "warning": w, "domain": domain }),
+                                None => json!({ "ok": true, "message": summary, "domain": domain }),
                             }
                         }
                         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),

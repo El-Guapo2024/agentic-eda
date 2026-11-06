@@ -259,6 +259,36 @@ fn a_layer_map_moves_a_layer_and_the_report_says_so() {
     });
 }
 
+/// A layer left in the Unmatched list of `DIALOG_MAP_LAYERS` is `UNDEFINED_LAYER` to the importer, which leaves out what is on it. kicad-cli cannot be told that, so the layer
+/// goes to a user layer nothing else goes to and that layer is taken out of the board (`ForeignOptions::drop_layers`, `eda_kicad::drop_board_layer`). Eagle's `tDocu` (the
+/// packages' drawings, on F.Fab by the guess) and `tNames` (the `>NAME` texts, F.SilkS): the board has no F.Fab drawing of a package left, its references are hidden, and the
+/// report says the layers went nowhere.
+#[test]
+fn a_layer_left_unmatched_is_left_out_with_what_is_on_it() {
+    if !slow_and_ready() {
+        return;
+    }
+    let input = plugins_dir().join("eagle/Adafruit-AHT20-PCB/Adafruit AHT20 Temperature & Humidity.brd");
+    with_scratch(|work| {
+        let first = import_foreign_pcb(work, &input, &ForeignOptions::default()).expect("automatic mapping");
+        let on = |text: &str, layer: &str| text.matches(&format!("(layer \"{layer}\")")).count();
+        let fab_before = on(&first.text, "F.Fab");
+        assert!(first.report.layers.iter().any(|l| l.source == "tDocu" && l.kicad.as_deref() == Some("F.Fab")), "{:?}", first.report.layers);
+        let opts = ForeignOptions { drop_layers: vec!["tDocu".into(), "tNames".into()], ..Default::default() };
+        let second = import_foreign_pcb(&work.join("dropped"), &input, &opts).expect("the import with two layers left out");
+        for name in ["tDocu", "tNames"] {
+            let l = second.report.layers.iter().find(|l| l.source == name).unwrap();
+            assert_eq!((l.kicad.as_deref(), l.explicit), (None, true), "{name} went nowhere: {l:?}");
+        }
+        assert!(!second.text.contains("User.45"), "the scratch layer is gone with what was on it");
+        let fab_after = on(&second.text, "F.Fab");
+        assert!(fab_after < fab_before, "the packages' drawings on F.Fab came from tDocu: {fab_before} -> {fab_after}");
+        // the board is still a board our reader takes, with every footprint
+        let (design, _, _) = eda_kicad::import_kicad_pcb(&second.text).expect("readable");
+        assert_eq!(design.placement.as_ref().map(|p| p.footprints.len()), eda_kicad::import_kicad_pcb(&first.text).unwrap().0.placement.as_ref().map(|p| p.footprints.len()));
+    });
+}
+
 /// The design rules and the net classes an importer sets are in the project kicad-cli makes of the board and in no other file: `pcb import` writes the board alone. The Adafruit
 /// AHT20 board has the Eagle net classes `highpower` (a 12 mil width) and `lowpower`, and a minimum clearance of 8 mil; `test_eagle.brd` has 6 mil: the rules are the file's own.
 #[test]

@@ -50,12 +50,15 @@ pub use clipboard::{export_pcb_clipboard, export_pcb_clipboard_with, parse_pcb_c
 pub use pcb::{custom_erc_pin_map, effective_rule_severities, kicad_footprint_orientation, unconnected_pad_nets, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pcb_mapped_with, export_kicad_pcb_with, export_kicad_pro, export_kicad_pro_for};
 
 mod sexpr;
+/// A layer of a board file taken out with what is on it: a source layer left unmatched in the import's layer dialog (`DIALOG_MAP_LAYERS`).
+mod drop_layer;
+pub use drop_layer::drop_board_layer;
 mod page;
 pub use page::drawing_sheet_in;
 mod import;
 mod fp_transform;
 mod import_items;
-pub use import::{board_layer_setup, import_kicad_pcb, merge_project_design_rules, merge_project_dimension_defaults, project_json_for_board, merge_project_net_classes, merge_project_net_classes_for_schematic, parse_project_net_classes_for_schematic, merge_project_predefined_sizes, merge_project_rule_severities, merge_project_setup_pages, merge_project_teardrops, mm_to_nm, parse_project_net_classes, sch_mm_to_nm, parse_rule_severities, ImportNotes};
+pub use import::{board_layer_setup, import_kicad_pcb, scaled_footprints_note, merge_project_design_rules, merge_project_dimension_defaults, project_json_for_board, merge_project_net_classes, merge_project_net_classes_for_schematic, parse_project_net_classes_for_schematic, merge_project_predefined_sizes, merge_project_rule_severities, merge_project_setup_pages, merge_project_teardrops, mm_to_nm, parse_project_net_classes, sch_mm_to_nm, parse_rule_severities, ImportNotes};
 
 mod custom_rules;
 pub use custom_rules::{merge_custom_rules, parse_custom_rules, rule_layer_matches};

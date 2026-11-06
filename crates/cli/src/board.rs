@@ -1289,6 +1289,12 @@ const FILE_TAG: &str = "file";
 /// board's footprint). Undone from the PCB tab or the schematic tab alike, and takes back both halves ([`restore_both`]); the library editors keep their own history.
 const BOTH_TAG: &str = "both";
 
+/// The tag a command's step is kept under: `pcb`, `schematic`, `both`, `footprint_editor` or `symbol_editor` (the studio's `/api/cmd` reply says it, so the page knows
+/// which editor's content a command modified: `IsContentModified`).
+pub(crate) fn step_tag(cmd: &Cmd) -> &'static str {
+    snapshot_tag(cmd)
+}
+
 /// The tag a command's step is kept under.
 fn snapshot_tag(cmd: &Cmd) -> &'static str {
     if cmd.spans_both_editors() {
