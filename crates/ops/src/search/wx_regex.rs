@@ -1,3 +1,7 @@
+//! INACTIVE (2026-11-06): replaced by `eda_model::wx_regex`, the one engine for every use of `wxRegEx` (Find / Replace's and the net class patterns'), which is
+//! a Thompson machine and cannot blow up where this backtracking matcher can (`(a+)+$`). Kept, not deleted, as the repo keeps a replaced port; reached by its
+//! own tests only.
+//!
 //! The regular expressions of Find / Replace's "Regular Expression" (`EDA_SEARCH_MATCH_MODE::REGEX`, `EDA_ITEM::Matches` / `EDA_ITEM::Replace`, common/eda_item.cpp at
 //! 8303b2ad): KiCad compiles the search text with `wxRegEx::Compile( findString, matchCase ? 0 : wxRE_ICASE )` -- POSIX extended syntax (`wxRE_EXTENDED`, the default)
 //! -- and asks `wxRegEx::Matches( text )` (a match anywhere in the text) and `wxRegEx::Replace( &text, replaceString )` (every match, left to right, none

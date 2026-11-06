@@ -228,7 +228,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-11-06 (`task-u3-schtext`, UI-LEFT S11 and S12, `PARITY-sch.md` section 60): the Symbol Fields Table's scope (Entire Project, Current Sheet Only,
   Current Sheet and Down, KiCad 25ec2335's Selection), the project's view presets (Save preset... / Delete preset..., `schematic.bom_presets`, the box showing
   the preset the view is), the field name templates as hidden columns, the project's saved view on open, "Save changes?" on a close (C5-L9's close question
-  done); Find / Replace's Regular Expression (a matcher of `wxRegEx`'s extended syntax, `crates/ops/src/search/wx_regex.rs`), and the search over sheets' names,
+  done); Find / Replace's Regular Expression (`eda_model::wx_regex`, the one engine of the port for `wxRegEx`, shared with the net class patterns), and the search over sheets' names,
   files and fields, sheet pins, power symbols' values, text boxes and directive labels' fields, with Replace where KiCad replaces. **Left**: library metadata
   (no box in KiCad's dialog either), groups and ERC markers in Find; a preset saved at once (KiCad at the close), the closing view not kept as `bom_settings`;
   with no saved view the user fields are shown; the Fields Table's Description column, BOM Name editing, grid menus, Group By refusals.

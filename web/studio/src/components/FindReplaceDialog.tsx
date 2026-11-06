@@ -5,7 +5,7 @@
 //
 // Options ported from the dialog, with its labels (dialog_sch_find_base.cpp): Match case, Whole words only and Regular Expression (`updateFlags`:
 // WHOLEWORD when "Whole words only" is ticked, else REGEX when "Regular Expression" is, else PLAIN; the dialog has no wildcard mode -- the
-// expressions are crates/ops/src/search/wx_regex.rs), Search pin names and numbers (`searchAllPins`), Include hidden fields (`searchAllFields`),
+// expressions are crates/model/src/wx_regex.rs, the engine the net class patterns use too), Search pin names and numbers (`searchAllPins`), Include hidden fields (`searchAllFields`),
 // "Search the current sheet only" (`searchCurrentSheetOnly`; off, the search goes over every sheet of the hierarchy in page order and
 // each match takes you to its sheet), Search net names (`searchNetNames`), "Search the current selection only" (`searchSelectedOnly`, which implies
 // the current sheet; shown in both modes, as the base shows it) and -- in the replace dialog only (`if( aStyle & wxFR_REPLACEDIALOG )`) -- "Replace

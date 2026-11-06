@@ -255,9 +255,9 @@ Notes:
   - A preset is saved when saved (KiCad at the close) and the closing view is not kept as `bom_settings`; with no saved view the user fields are shown.
   - The Description column, editable BOM Name labels, the grid's context menus, the Group By refusals, the format presets' Save / Delete, Set / Clear Variant Symbol.
   - M. PARITY-sch §7, §25, §60; r5 C5-L9.
-- **S12 [FM] Find/Replace.** **done (task-u3-schtext)**: Regular Expression (in Find and Replace, Whole words only winning over it; `wxRegEx`'s extended syntax with `\N` and `&` in the replacement, a matcher of the port's own, no crate); the search reaches sheets' names, files and user fields, sheet pins, power symbols' values, text boxes and directive labels' fields beside the symbols' fields and pins; Replace renames a sheet, a sheet pin, a power symbol's net, a text box, a field, not a sheet's file nor a symbol's pin (as KiCad); "Search the current selection only" in both modes (PARITY-sch §60). Left:
+- **S12 [FM] Find/Replace.** **done (task-u3-schtext)**: Regular Expression (in Find and Replace, Whole words only winning over it; `wxRegEx`'s syntax with `\N` and `&` in the replacement: `eda_model::wx_regex`, the one engine shared with the net class patterns, no crate); the search reaches sheets' names, files and user fields, sheet pins, power symbols' values, text boxes and directive labels' fields beside the symbols' fields and pins; Replace renames a sheet, a sheet pin, a power symbol's net, a text box, a field, not a sheet's file nor a symbol's pin (as KiCad); "Search the current selection only" in both modes (PARITY-sch §60). Left:
   - Library metadata: KiCad's dialog has no box for `searchMetadata` either; groups and ERC markers are not searched.
-  - The matcher tries alternatives left to right (POSIX: the longest) and does not upper-case the pattern as KiCad does; a power symbol's Reference is found, not replaced.
+  - The engine's match is leftmost-first (POSIX: leftmost-longest), which shows only in Replace's span with alternations; it does not upper-case the pattern as KiCad does; a power symbol's Reference is found, not replaced.
   - S. GAPS 1/4; PARITY-sch §8, §60.
 - **S13 [FM] Arcs.** Two clicks make a fixed 90° arc, and there is no arc point editor. M. PARITY-sch §12.
 - **S14 [BD] Annotation.**

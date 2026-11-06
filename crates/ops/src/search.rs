@@ -38,11 +38,13 @@ use eda_model::text_vars::unescape_string;
 use eda_model::ConstraintModel;
 use serde::{Deserialize, Serialize};
 
+// INACTIVE (2026-11-06): replaced by `eda_model::wx_regex` (the one engine of Find / Replace and the net class patterns). Kept, not deleted, with its own tests.
+#[allow(dead_code)]
 mod wx_regex;
-pub use wx_regex::Regex;
+pub use eda_model::wx_regex::{Flavor, Regex};
 
 /// `EDA_SEARCH_MATCH_MODE` (minus `PERMISSIVE`, the search panel's): the dialog's Whole words only (`WHOLEWORD`, which wins over the Regular Expression
-/// box: `updateFlags`), Regular Expression (`REGEX`, [`wx_regex`]) and plain text; `WILDCARD` is no choice of the dialog's.
+/// box: `updateFlags`), Regular Expression (`REGEX`, [`eda_model::wx_regex`]) and plain text; `WILDCARD` is no choice of the dialog's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchMode {
@@ -170,7 +172,7 @@ pub fn matches_text(text: &str, data: &SearchData) -> bool {
     }
     if data.mode == MatchMode::Regex {
         // `regex.Compile( searchText, matchCase ? 0 : wxRE_ICASE )`, then `regex.Matches( text )`; a pattern that does not compile matches nothing
-        return Regex::new(&data.find, !data.match_case).is_ok_and(|re| re.is_match(text));
+        return Regex::compile(&data.find, !data.match_case, Flavor::Find).is_some_and(|re| re.is_match(text));
     }
     let (t, s): (Vec<char>, Vec<char>) = if data.match_case { (text.chars().collect(), data.find.chars().collect()) } else { (upper(text), upper(&data.find)) };
     match data.mode {
@@ -202,7 +204,7 @@ pub fn matches_text(text: &str, data: &SearchData) -> bool {
 pub fn replace_text(text: &str, data: &SearchData) -> Option<String> {
     if data.mode == MatchMode::Regex {
         // `regex.Replace( &text, aSearchData.replaceString )`: every match, `\N` and `&` in the replacement
-        return Regex::new(&data.find, !data.match_case).ok()?.replace_all(text, &data.replace);
+        return Regex::compile(&data.find, !data.match_case, Flavor::Find)?.replace_all(text, &data.replace);
     }
     let orig: Vec<char> = text.chars().collect();
     let (t, s): (Vec<char>, Vec<char>) = if data.match_case { (orig.clone(), data.find.chars().collect()) } else { (upper(text), upper(&data.find)) };
@@ -647,8 +649,10 @@ mod tests {
         assert!(!matches_text("SDA_3", &SearchData { match_case: true, ..re("^s[a-z]+_[0-9]$", "") }));
         assert!(!matches_text("x", &re("(", "")), "a pattern that does not compile matches nothing");
         assert_eq!(replace_text("DATA_7 DATA_8", &re("DATA_([0-9])", "D\\1")).as_deref(), Some("D7 D8"));
-        // a label's strings are escaped as a net name first (`SCH_LABEL_BASE::Replace`)
-        assert_eq!(replace_label_text("A{slash}B", &re("A/B", "C")).as_deref(), Some("C"));
+        // a label's strings are escaped as a net name first (`SCH_LABEL_BASE::Replace`): a `/` becomes `{slash}`, whose `{` is no count, so the expression does
+        // not compile and nothing is replaced -- as in KiCad, where `wxRegEx::Compile` refuses it too
+        assert_eq!(replace_label_text("A{slash}B", &re("A/B", "C")), None);
+        assert_eq!(replace_label_text("AB", &re("A(B)", "\\1\\1")).as_deref(), Some("BB"));
     }
 
     #[test]
