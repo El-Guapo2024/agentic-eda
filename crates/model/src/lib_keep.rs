@@ -156,6 +156,26 @@ impl LibraryFootprintKeep {
         }
     }
 
+    /// What `other` keeps by the id `from` (another footprint's: the clipboard's, or the one copied to it), kept here by the id `to` -- a pasted or copied item looks
+    /// as it did there. Nothing of `to` is kept here before.
+    pub fn copy_looks_from(&mut self, other: &LibraryFootprintKeep, from: &str, to: &str) {
+        self.forget(to);
+        if let Some(t) = other.stroke_types.get(from) {
+            self.stroke_types.insert(to.to_string(), t.clone());
+        }
+        if let Some(h) = other.hatches.get(from) {
+            self.hatches.insert(to.to_string(), *h);
+        }
+        if let Some(e) = other.text_extra(from) {
+            self.text_extras.push(TextExtra { id: to.to_string(), ..e.clone() });
+        }
+        for (dst, src) in [(&mut self.unlocked_texts, &other.unlocked_texts), (&mut self.locked, &other.locked), (&mut self.hidden_texts, &other.hidden_texts)] {
+            if src.contains(from) {
+                dst.insert(to.to_string());
+            }
+        }
+    }
+
     /// Forget what is kept by the id `id` (the item is gone).
     pub fn forget(&mut self, id: &str) {
         self.stroke_types.remove(id);

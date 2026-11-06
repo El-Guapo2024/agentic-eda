@@ -740,10 +740,7 @@ export function FootprintCanvas() {
     }
     if (e.key === "Escape") {
       // `EDIT_TOOL::Duplicate`: a cancelled pick-up `commit.Revert()`s the copies -- the duplicate was the last undo step.
-      if (state.duplicatePending) {
-        dispatch({ type: "SET_DUPLICATE_PENDING", pending: false });
-        void api.undo();
-      }
+      if (state.duplicatePending) void api.cancelPickUp();
       dispatch({ type: "ESCAPE" });
       return;
     }
@@ -803,6 +800,10 @@ export function FootprintCanvas() {
       // `PCB_GROUP_TOOL`'s Grouping menu: Group (two or more items), Ungroup (a group among them)
       act("common.Interactive.group", "Group Items", refs.length < 2),
       act("common.Interactive.ungroup", "Ungroup Items", !anyGroup),
+      // `EDIT_TOOL::Init`'s clipboard rows (UI-LEFT-2 FF1)
+      act("common.Interactive.cut", "Cut (Ctrl+X)", refs.length === 0),
+      act("common.Interactive.copy", "Copy (Ctrl+C)", refs.length === 0),
+      act("common.Interactive.paste", "Paste (Ctrl+V)"),
       { label: "Duplicate (Ctrl+D)", onSelect: () => void api.duplicateSelection(false), disabled: refs.length === 0 },
       { label: "Duplicate and Increment (Ctrl+Shift+D)", onSelect: () => void api.duplicateSelection(true), disabled: refs.length === 0 },
       act("pcbnew.Array.createArray", "Create Array... (Ctrl+T)", refs.length === 0),

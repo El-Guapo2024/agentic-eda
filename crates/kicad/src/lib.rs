@@ -67,7 +67,7 @@ mod custom_rules;
 pub use custom_rules::{merge_custom_rules, parse_custom_rules, rule_layer_matches};
 
 mod footprint_import;
-pub use footprint_import::{parse_library_footprint, ParsedFootprint};
+pub use footprint_import::{parse_clipboard_footprints, parse_library_footprint, ParsedFootprint};
 
 mod footprint_lib;
 pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, export_kicad_mod_with, find_footprint_file, footprint_attributes, footprint_models, kicad_shared_dir, parse_footprint_file, resolve_library_footprints, resolve_library_footprints_with, LIBRARY_ROOT_ENV};

@@ -255,6 +255,36 @@ pub fn symbol_items_copy(dir: &Path, body: &[u8]) -> Value {
     json!({ "text": eda_kicad::export_kicad_sym_library(&[&sym]) })
 }
 
+/// `POST /api/footprint/clipboard/copy` -- the Footprint Editor's Copy / Cut of items (`EDIT_TOOL::copyToClipboard` -> `CLIPBOARD_IO::SaveSelection( .., isFootprintEditor )`,
+/// UI-LEFT-2 FF1): `{"footprint": name, "ids": [...], "reference": {"x": nm, "y": nm}}` gives `{"text": ".."}` -- a `(footprint "clipboard:<uuid>" ..)` of the selected items
+/// measured from the reference point (`eda_ops::fp_copy::clipboard_footprint`), the text KiCad's Footprint Editor puts on the clipboard -- or `{"error": ..}`. A read: the
+/// copy changes nothing (a Cut is the copy and then a delete verb).
+pub fn footprint_items_copy(dir: &Path, body: &[u8]) -> Value {
+    let req: Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return json!({ "error": format!("bad request: {e}") }),
+    };
+    let name = req.get("footprint").and_then(Value::as_str).unwrap_or_default().to_string();
+    let ids: Vec<String> = req.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+    if ids.is_empty() {
+        return json!({ "error": "nothing is selected" });
+    }
+    // field by field: this build's `serde_json` keeps numbers arbitrary-precision (see crate::clipboard_api)
+    let at = |k: &str| req.get("reference").and_then(|r| r.get(k)).and_then(Value::as_i64).unwrap_or(0);
+    let reference = eda_model::ir::Point { x: eda_model::units::Nm::new(at("x")), y: eda_model::units::Nm::new(at("y")) };
+    let (fp, _) = match footprint_any(dir, &name) {
+        Ok(f) => f,
+        Err(e) => return json!({ "error": board::reasons(&e) }),
+    };
+    // `KIID dummy; LIB_ID( "clipboard", dummy.AsString() )`: a fresh id each copy
+    let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let uuid = format!("{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}", (n >> 32) as u32, (n >> 16) as u16, (n >> 4) as u16 & 0xfff, n as u16 & 0xfff, (n as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) & 0xffff_ffff_ffff);
+    match eda_ops::fp_copy::clipboard_footprint(&fp, &ids, reference, &uuid) {
+        Ok(clip) => json!({ "text": eda_kicad::export_kicad_mod(&clip) }),
+        Err(e) => json!({ "error": board::reasons(&e) }),
+    }
+}
+
 /// The derived `.kicad_mod` of any footprint (`Export Current Footprint...`).
 pub fn footprint_kicad_mod_any(dir: &Path, name: &str) -> Result<String, Vec<CheckResult>> {
     let (fp, _) = footprint_any(dir, name)?;

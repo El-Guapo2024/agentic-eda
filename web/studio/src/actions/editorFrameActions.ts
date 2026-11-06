@@ -130,6 +130,18 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     m.set("pcbnew.InteractiveEdit.mirrorVertically", () => ctx.fpApi.getState().selection.size > 0 && void ctx.fpApi.mirrorSelection("top_bottom", gridSnap));
     // Show Properties (`ACTIONS::showProperties`, `FOOTPRINT_EDITOR_CONTROL::ToggleProperties`): the frame's `PCB_PROPERTIES_PANEL` beside the Libraries tree (UI-LEFT Y3).
     m.set("common.Control.showProperties", () => toggleDockPane("fpProperties"));
+    // Copy / Cut / Paste (`EDIT_TOOL::copyToClipboard` / `cutToClipboard`, `PCB_CONTROL::Paste` in the footprint editor, UI-LEFT-2 FF1): KiCad's clipboard footprint text
+    // on the system clipboard both ways; the pasted items ride the cursor until a click, one undo step (state/footprintEditorStore.tsx).
+    const fpIdle = () => ctx.fpApi.getState().activeTool === "select";
+    // Escape while the Move tool carries what Duplicate or Paste made: `commit.Revert()` (once, whether the canvas or the window saw the key)
+    const boardCancel = m.get("common.Interactive.cancel");
+    m.set("common.Interactive.cancel", () => {
+      if (ctx.fpApi.getState().duplicatePending) void ctx.fpApi.cancelPickUp();
+      boardCancel?.();
+    });
+    m.set("common.Interactive.copy", () => fpIdle() && void ctx.fpApi.copySelection(false));
+    m.set("common.Interactive.cut", () => fpIdle() && void ctx.fpApi.copySelection(true));
+    m.set("common.Interactive.paste", () => fpIdle() && void ctx.fpApi.pasteItems());
     // Group / Ungroup (Ctrl+G / Ctrl+Shift+G, `PCB_GROUP_TOOL::Group` in the footprint editor, `GROUP_TOOL::Ungroup`).
     m.set("common.Interactive.group", () => void ctx.fpApi.groupSelection());
     m.set("common.Interactive.ungroup", () => void ctx.fpApi.ungroupSelection());

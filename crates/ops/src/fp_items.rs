@@ -111,6 +111,19 @@ pub enum FpItemCmd {
     Ungroup { footprint: String, ids: Vec<String> },
     /// `DIALOG_GROUP_PROPERTIES`: the group's name.
     SetGroupName { footprint: String, id: String, name: String },
+    /// `EDIT_TOOL::Duplicate` (Ctrl+D) and Duplicate and Increment (Ctrl+Shift+D) in the footprint editor: a copy of every item `ids` names but a field, where it is,
+    /// with its looks, a group with everything below it ([`crate::fp_copy::duplicate`]); with `pad_number` each copied pad that can have a number takes it. The Move
+    /// tool then carries the copies (the studio's carry: one undo step with the drop).
+    Duplicate {
+        footprint: String,
+        ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pad_number: Option<String>,
+    },
+    /// `PCB_CONTROL::Paste` in the footprint editor: the items of the footprint(s) KiCad's clipboard text `text` holds (a `.kicad_mod`'s `(footprint ..)`, or a board's
+    /// `(kicad_pcb ..)`), with their looks, new, the clipboard's origin at `at` ([`crate::fp_copy::paste`]). Refused for a text that is no footprint (the studio
+    /// pastes that as a text item, `add_footprint_text`).
+    Paste { footprint: String, text: String, at: Point },
 }
 
 /// A graphic's looks the library footprint keeps by id ([`eda_model::lib_keep::LibraryFootprintKeep`]): `STROKE_PARAMS`' line style (`solid`, `dash`, `dot`, `dash_dot`,
@@ -165,7 +178,9 @@ impl FpItemCmd {
             | FpItemCmd::Set { footprint, .. }
             | FpItemCmd::Group { footprint, .. }
             | FpItemCmd::Ungroup { footprint, .. }
-            | FpItemCmd::SetGroupName { footprint, .. } => footprint,
+            | FpItemCmd::SetGroupName { footprint, .. }
+            | FpItemCmd::Duplicate { footprint, .. }
+            | FpItemCmd::Paste { footprint, .. } => footprint,
         }
     }
 
@@ -184,6 +199,8 @@ impl FpItemCmd {
             FpItemCmd::Group { ids, .. } => format!("group {} item(s)", ids.len()),
             FpItemCmd::Ungroup { ids, .. } => format!("ungroup {} group(s)", ids.len()),
             FpItemCmd::SetGroupName { id, name, .. } => format!("name group {id} {name:?}"),
+            FpItemCmd::Duplicate { ids, pad_number, .. } => format!("duplicate {} item(s){}", ids.len(), pad_number.as_ref().map(|n| format!(" as pad {n}")).unwrap_or_default()),
+            FpItemCmd::Paste { at, .. } => format!("paste at {:.3},{:.3}", eda_model::units::to_mm(at.x), eda_model::units::to_mm(at.y)),
         };
         format!("footprint {:?}: {verb}", self.footprint())
     }
@@ -383,6 +400,11 @@ fn targets(fp: &LibraryFootprint, ids: &[String]) -> Result<BTreeSet<String>, Ve
         }
     }
     Ok(out)
+}
+
+/// [`transform`] for the copies' verbs (crate::fp_copy, crate::fp_array): `ids` are leaves and fields, no groups.
+pub(crate) fn transform_ids(fp: &mut LibraryFootprint, ids: &BTreeSet<String>, x: Xform) {
+    transform(fp, ids, x);
 }
 
 /// Move or turn every item of `fp` that `ids` holds.
@@ -621,6 +643,24 @@ impl Board<'_> {
             FpItemCmd::SetGroupName { id, name, .. } => {
                 let g = fp.items.groups.iter_mut().find(|g| &g.id == id).ok_or_else(|| fail("ops_unknown_group", id, "no group of this footprint has this id"))?;
                 g.name = name.clone();
+                Ok(())
+            }
+            FpItemCmd::Duplicate { ids, pad_number, .. } => {
+                targets(fp, ids)?;
+                super::fp_copy::duplicate(fp, ids, pad_number.as_deref()).map(|_| ())
+            }
+            FpItemCmd::Paste { text, at, .. } => {
+                let clips = eda_kicad::parse_clipboard_footprints(text).map_err(|e| fail("ops_bad_paste", &fp.name, format!("the clipboard footprint cannot be read: {e}")))?;
+                let clips = clips.ok_or_else(|| fail("ops_bad_paste", &fp.name, "the clipboard holds no footprint"))?;
+                let mut pasted = 0;
+                for c in &clips {
+                    if let Ok(ids) = super::fp_copy::paste(fp, &c.footprint, *at) {
+                        pasted += ids.len();
+                    }
+                }
+                if pasted == 0 {
+                    return Err(fail("ops_bad_paste", &fp.name, "the clipboard footprint has nothing to paste"));
+                }
                 Ok(())
             }
         }

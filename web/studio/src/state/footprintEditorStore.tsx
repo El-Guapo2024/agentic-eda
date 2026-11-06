@@ -10,7 +10,10 @@
 // pad_tool.cpp's own Copy/Paste Pad Properties needs.
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, CmdShape, CmdText, FootprintPropertiesFields, LibraryFootprint, LibraryPad, PointXY, Nm } from "../api/types";
-import { downloadFootprintKicadMod, fetchFootprint, fetchFootprintLibraryNames, postCmd, postRedo, postUndo } from "../api/client";
+import { downloadFootprintKicadMod, fetchFootprint, fetchFootprintLibraryNames, postCarry, postCmd, postRedo, postUndo, type CarryStep } from "../api/client";
+import { readClipboardText, writeClipboardText } from "../api/libraryClient";
+import { fpClipboardKind, fpPlainTextPaste } from "../kicad-port/fpClipboard";
+import { LONG_TEXT_QUESTION } from "../kicad-port/plainTextPaste";
 import { ensureFootprintInProject } from "../api/libraryClient";
 import { duplicatePads, uniqueFootprintName } from "../kicad-port/fpEditActions";
 import { FIRST_LAST_PAD_NUMBER } from "../kicad-port/padNumbering";
@@ -309,6 +312,14 @@ export type FpAction =
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" };
 
+/** The items `after` has that `before` did not, at the top: a new group stands for its members (`placeBoardItems`: "We only need to add the items that aren't inside a
+ *  group currently selected"). */
+function topLevelNew(after: LibraryFootprint, before: Set<string>): string[] {
+  const fresh = [...fpAllIds(after)].filter((id) => !before.has(id));
+  const inNewGroup = new Set((after.items?.groups ?? []).filter((g) => fresh.includes(g.id)).flatMap((g) => g.member_ids));
+  return fresh.filter((id) => !inNewGroup.has(id));
+}
+
 function reducer(state: FootprintEditorState, action: FpAction): FootprintEditorState {
   switch (action.type) {
     case "SET_NAME":
@@ -476,6 +487,20 @@ export interface FootprintEditorApi {
    */
   duplicateSelection: (increment: boolean) => Promise<void>;
   /**
+   * Copy (Ctrl+C) / Cut (Ctrl+X) in the Footprint Editor (`EDIT_TOOL::copyToClipboard` / `cutToClipboard`, UI-LEFT-2 FF1): the selection as KiCad's clipboard footprint
+   * (`CLIPBOARD_IO::SaveSelection`, `.kicad_mod` text measured from the cursor's grid point) on the system clipboard, where KiCad's Footprint Editor can paste it; Cut then
+   * deletes it (one undo step).
+   */
+  copySelection: (cut: boolean) => Promise<boolean>;
+  /**
+   * Paste (Ctrl+V) in the Footprint Editor (`PCB_CONTROL::Paste` -> `pasteFootprintItemsToFootprintEditor`): KiCad's clipboard text (a footprint's, or a board's) as new
+   * items with the clipboard's origin on the cursor, else the text as a text item on the active layer; the items are selected and ride the cursor until a click, the
+   * paste and the drop one undo step (Escape leaves nothing).
+   */
+  pasteItems: () => Promise<void>;
+  /** Escape while the Move tool carries what Duplicate, Paste or Import Graphics made: `commit.Revert()` -- the held step is cancelled, or the step undone. */
+  cancelPickUp: () => Promise<void>;
+  /**
    * The items `ids` just made, selected and carried by the Move tool until a click drops them (Escape undoes what made them): `doMoveSelection` after a Duplicate, and
    * the interactive placement of Import Graphics (`DRAWING_TOOL::PlaceImportedGraphics`, UI-LEFT F8).
    */
@@ -589,9 +614,15 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
     };
   }, [state.name, refresh]);
 
+  /** The carry the server holds open (`carry: "begin"`): Duplicate's or Paste's items and their drop are then one undo step (crates/cli/src/carry.rs). */
+  const carryRef = useRef(false);
+  /** This session's last Copy: Paste falls back to it where the browser will not hand the system clipboard over. */
+  const clipboardRef = useRef<string | null>(null);
+  /** The Move tool carries what Duplicate, Paste or Import Graphics just made (until the drop or Escape): Escape reverts it once. */
+  const pendingRef = useRef(false);
   const runCmd = useCallback(
-    async (cmd: Cmd) => {
-      const reply = await postCmd(cmd, false); // strict has no meaning here -- footprint-library edits never touch board placement/routing gates
+    async (cmd: Cmd, carry?: CarryStep) => {
+      const reply = await postCmd(cmd, false, carry); // strict has no meaning here -- footprint-library edits never touch board placement/routing gates
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
       await refresh();
       return reply.ok;
@@ -654,47 +685,128 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const fp = st.footprint;
       const name = st.name;
       if (!fp || !name) return;
-      const ids = st.selection;
-      const pads = fp.pads.filter((p) => p.id && ids.has(p.id));
-      const graphics = fp.graphics.filter((g) => g.id && ids.has(g.id));
-      const texts = fp.texts.filter((t) => t.id && ids.has(t.id));
-      if (pads.length + graphics.length + texts.length === 0) return;
-      const { pads: newPads, lastPadNumber } = duplicatePads(fp.pads, pads, increment, st.lastPadNumber ?? FIRST_LAST_PAD_NUMBER);
-      const before = new Set([...fp.pads.map((p) => p.id), ...fp.graphics.map((g) => g.id), ...fp.texts.map((t) => t.id)]);
-      const cmds: Cmd[] = [
-        ...newPads.map((pad): Cmd => ({ op: "add_pad", footprint: name, pad })),
-        ...graphics.map((g): Cmd => ({ op: "add_footprint_graphic", footprint: name, shape: { ...g, id: undefined } })),
-        ...texts.map((t): Cmd => ({ op: "add_footprint_text", footprint: name, text: { ...t, id: undefined } })),
-      ];
-      const ok = await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
+      const ids = [...st.selection].filter((id) => !id.startsWith("field:"));
+      if (ids.length === 0) return;
+      // `EDIT_TOOL::Duplicate` in the footprint editor: every kind of item but a field, with its looks, a group with what is below it (`fp_item duplicate`, UI-LEFT-2
+      // FF2); Duplicate and Increment gives the copied pads the next number (kicad-port/fpEditActions.ts `duplicatePads`: all of them the same one)
+      const pads = fp.pads.filter((p) => p.id && fpLeaves(fp, ids).includes(p.id));
+      const { lastPadNumber } = duplicatePads(fp.pads, pads, increment, st.lastPadNumber ?? FIRST_LAST_PAD_NUMBER);
+      const before = new Set(fpAllIds(fp));
+      const ok = await runCmd({ op: "fp_item", verb: "duplicate", footprint: name, ids, ...(increment && pads.length > 0 ? { pad_number: lastPadNumber } : {}) }, "begin");
       if (!ok) return;
+      carryRef.current = true;
       // Read the document straight from the backend: the render that applies `runCmd`'s own refresh may not have happened yet.
       const after = await fetchFootprint(name);
-      const created = [...after.pads.map((p) => p.id), ...after.graphics.map((g) => g.id), ...after.texts.map((t) => t.id)].filter((id): id is string => !!id && !before.has(id));
-      if (increment) dispatch({ type: "SET_LAST_PAD_NUMBER", number: lastPadNumber });
+      const created = topLevelNew(after, before);
+      if (increment && pads.length > 0) dispatch({ type: "SET_LAST_PAD_NUMBER", number: lastPadNumber });
       dispatch({ type: "SET_SELECTION", refs: created });
       // `doMoveSelection( aEvent, &commit, true )`: the copies are glued to the cursor until a click drops them.
       const at = stateRef.current.cursorNm;
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at });
       dispatch({ type: "SET_DUPLICATE_PENDING", pending: true });
+      pendingRef.current = true;
       dispatch({ type: "TOAST", message: `Duplicated ${created.length} item(s)`, kind: "info" });
+    },
+    copySelection: async (cut) => {
+      const st = stateRef.current;
+      const name = st.name;
+      const ids = [...st.selection];
+      if (!name || ids.length === 0) return false;
+      // `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )`: here the cursor on the grid
+      const c = st.cursorNm ?? { x: 0, y: 0 };
+      const g = st.gridNm || 1;
+      const reference = { x: Math.round(c.x / g) * g, y: Math.round(c.y / g) * g };
+      const r = await fetch("/api/footprint/clipboard/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ footprint: name, ids, reference }) });
+      const reply = (await r.json()) as { text?: string; error?: string };
+      if (!reply.text) {
+        dispatch({ type: "TOAST", message: reply.error ?? "Copy failed", kind: "error" });
+        return false;
+      }
+      clipboardRef.current = reply.text;
+      await writeClipboardText(reply.text);
+      dispatch({ type: "TOAST", message: "Selection copied", kind: "info" });
+      // `cutToClipboard`: the copy, then `DeleteItems` of what was copied
+      if (cut) {
+        dispatch({ type: "CLEAR_SELECTION" });
+        await runCmd({ op: "fp_item", verb: "delete", footprint: name, ids });
+      }
+      return true;
+    },
+    pasteItems: async () => {
+      const st = stateRef.current;
+      const fp = st.footprint;
+      const name = st.name;
+      if (!fp || !name) return;
+      const system = await readClipboardText();
+      const text = system != null && system !== "" ? system : clipboardRef.current;
+      if (!text) return;
+      const c = st.cursorNm ?? { x: 0, y: 0 };
+      const g = st.gridNm || 1;
+      const at = { x: Math.round(c.x / g) * g, y: Math.round(c.y / g) * g };
+      // KiCad's text (`CLIPBOARD_IO::Parse`) goes in as items; any other text as a text item on the active layer ("If it wasn't content, then paste as a text object")
+      let cmd: Cmd;
+      if (fpClipboardKind(text) === "kicad") cmd = { op: "fp_item", verb: "paste", footprint: name, text, at };
+      else {
+        const plain = fpPlainTextPaste(text, at, st.activeLayer || "F.SilkS");
+        if (!plain || (plain.longText && !window.confirm(LONG_TEXT_QUESTION))) return;
+        cmd = { op: "add_footprint_text", footprint: name, text: plain.text };
+      }
+      const before = new Set(fpAllIds(fp));
+      const ok = await runCmd(cmd, "begin");
+      if (!ok) return;
+      carryRef.current = true;
+      const after = await fetchFootprint(name);
+      const created = topLevelNew(after, before);
+      if (created.length === 0) {
+        carryRef.current = false;
+        await postCarry("commit");
+        return;
+      }
+      // `placeBoardItems( .., aAnchorAtOrigin = true )`: the clipboard's origin on the cursor, then `PCB_ACTIONS::move` with the commit
+      dispatch({ type: "SET_SELECTION", refs: created });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+      dispatch({ type: "SET_MOVE_ORIGIN", at });
+      dispatch({ type: "SET_DUPLICATE_PENDING", pending: true });
+      pendingRef.current = true;
+    },
+    cancelPickUp: async () => {
+      if (!pendingRef.current) return;
+      pendingRef.current = false;
+      dispatch({ type: "SET_DUPLICATE_PENDING", pending: false });
+      dispatch({ type: "CLEAR_SELECTION" });
+      if (carryRef.current) {
+        carryRef.current = false;
+        const reply = await postCarry("cancel");
+        if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
+        await refresh();
+        return;
+      }
+      await postUndo("footprint_editor");
+      await refresh();
     },
     pickUp: (ids, message) => {
       dispatch({ type: "SET_SELECTION", refs: ids });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorNm });
       dispatch({ type: "SET_DUPLICATE_PENDING", pending: true });
+      pendingRef.current = true;
       if (message) dispatch({ type: "TOAST", message, kind: "info" });
     },
     commitMove: async (refs, dxNm, dyNm) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       dispatch({ type: "SET_DUPLICATE_PENDING", pending: false });
       const name = stateRef.current.name;
-      if (!name || (dxNm === 0 && dyNm === 0)) return;
-      // `EDIT_TOOL::Move`'s commit: every kind of item (pads, graphics, texts, fields, dimensions, zones, text boxes ..., groups) by one `fp_item move`, one undo step.
-      const cmd = fpMoveCmd(name, refs, dxNm, dyNm);
-      if (cmd) await runCmd(cmd);
+      // the drop of what Duplicate or Paste made ends the held step: `commit.Push( _( "Duplicate" ) )` / "Paste", one undo step with the copies
+      pendingRef.current = false;
+      const carry = carryRef.current;
+      carryRef.current = false;
+      const cmd = name && (dxNm !== 0 || dyNm !== 0) ? fpMoveCmd(name, refs, dxNm, dyNm) : null;
+      if (cmd) await runCmd(cmd, carry ? "commit" : undefined);
+      else if (carry) {
+        await postCarry("commit");
+        await refresh();
+      }
     },
     closeFootprint: () => dispatch({ type: "SET_NAME", name: null }),
     refresh,
