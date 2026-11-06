@@ -275,10 +275,41 @@ export type PcbItemCmd =
   | { verb: "place_drill_chart"; layer: string; at: PointXY }
   /** The Properties panel's Units, Decimal Places and Show Totals of a drill chart (`id` is its table's): the chart rebuilt from the board. */
   | { verb: "set_drill_chart"; id: string; units: TableUnits; precision: number; show_totals: boolean; filter: DrillChartFilter }
+  /** Drill Chart Properties' OK ("Edit Drill Chart", `DIALOG_GENERATED_TABLE_PROPERTIES` with `PANEL_DRILL_CHART_OPTIONS`): the chart rebuilt; a new grouping rebuilds every chart. */
+  | { verb: "edit_drill_chart"; id: string; chart: DrillChartEditWire }
+  /** The board's drill symbol profile: Drill Groups' mark of a group and its Freeze assignments (`DIALOG_DRILL_GROUPS`), Board Setup's Drill Chart page; what is left out stays. */
+  | { verb: "set_drill_profile"; profile: DrillProfileEditWire }
   /** KiCad 10's Place Drill Map: a map on a documentation layer that has none. */
   | { verb: "place_drill_map"; layer: string }
   | { verb: "edit_drill_map"; id: string; map: BoardDrillMap }
   | { verb: "delete_drill_map"; id: string };
+
+/** `crates/ops/src/drill_chart.rs` `DrillChartEdit`: what Drill Chart Properties sets on OK. Widths in nm. */
+export interface DrillChartEditWire {
+  layer: string;
+  units: TableUnits;
+  precision: number;
+  columns: { id: string; heading: string; align: "left" | "center" | "right"; width_nm: number }[];
+  filter: DrillChartFilter;
+  show_totals: boolean;
+  group_by: string[];
+  external_border: boolean;
+  header_separator: boolean;
+  row_separators: boolean;
+  column_separators: boolean;
+  border_width_nm: number;
+  separators_width_nm: number;
+}
+
+/** `crates/ops/src/drill_chart.rs` `DrillProfileEdit`: an edit of the board's drill symbol profile; what is left out stays. */
+export interface DrillProfileEditWire {
+  assignment?: { key: string; mark: { mode: "shape" | "letter" | "size_text"; shape_index: number; letter: string; description: string } };
+  freeze_assignments?: boolean;
+  group_by?: string[];
+  mark_policy?: string;
+  size_nm?: number;
+  width_nm?: number;
+}
 
 /** `GENERATED_TABLE_UNITS` (crates/model/src/drill_chart.rs). */
 export type TableUnits = "mm" | "inch" | "mils";
@@ -332,6 +363,7 @@ export interface BoardDrillMap {
 
 /** The board's drill symbol profile (`DRILL_SYMBOL_PROFILE`): the size and width of the marks are what the canvas reads. */
 export interface BoardDrillProfile {
+  name?: string;
   size_nm: number;
   width_nm: number;
   mark_policy: string;

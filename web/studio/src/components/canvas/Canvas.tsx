@@ -18,6 +18,7 @@
 import { useGridDisplay } from "../../state/commonOptions";
 import { gridYOf } from "../../kicad-port/gridSettings";
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";
+import { chartRowCells } from "../../kicad-port/drillChartDialog";
 import { newViaStitch } from "../../kicad-port/viaStitchTool";
 import { chosenDiffPair, chosenTrackWidthOf } from "../../kicad-port/routerSizes";
 import { chosenViaOf, currentViaSize } from "../../kicad-port/routerVia";
@@ -1763,6 +1764,11 @@ export function Canvas() {
         dispatch({ type: "ENTER_GROUP", id: hitGroup });
         return;
       }
+      // `selectChartRow`: a double click on a data row of the one selected drill chart selects that row's cells, not the chart's dialog (kicad-port/drillChartDialog.ts).
+      const chart = board.drawings?.drill_charts?.find((c) => c.table_id === refs[0]);
+      const chartTable = chart ? board.drawings?.tables?.find((t) => t.id === chart.table_id) : undefined;
+      const rowCells = chart && chartTable ? chartRowCells(chart, chartTable, ...worldAt(e)) : null;
+      if (rowCells) return dispatch({ type: "SET_SELECTION", refs: rowCells, raw: true });
       openPropertiesFor(refs[0]!, api, dispatch);
     }
   };

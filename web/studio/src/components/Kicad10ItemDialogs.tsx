@@ -18,12 +18,15 @@ import { defaultPitchNm, layoutOf, modeOf, MODE_CHOICES, movedStitch, PATTERN_CH
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 import { layerColor as layerColorOf } from "./canvas/layers";
+import { DrillChartPropertiesDialog, DrillGroupsDialog } from "./DrillChartDialogs";
 
 export function Kicad10ItemDialogs() {
   return (
     <>
       <GridItemDialog />
       <ViaStitchDialog />
+      <DrillChartPropertiesDialog />
+      <DrillGroupsDialog />
     </>
   );
 }
