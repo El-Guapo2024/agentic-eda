@@ -57,3 +57,12 @@ export function suppressScaledModelsWarning(): void {
     // no storage: shown again next time
   }
 }
+
+/** Preferences > Maintenance's Reset "Don't Show Again" Dialogs (`settings->m_DoNotShowAgain = {}`): the warning is shown again. */
+export function resetScaledModelsWarning(): void {
+  try {
+    globalThis.localStorage?.removeItem(KEY);
+  } catch {
+    // no storage: nothing kept
+  }
+}

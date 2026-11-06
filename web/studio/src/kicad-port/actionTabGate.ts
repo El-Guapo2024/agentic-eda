@@ -36,6 +36,10 @@ export const FOOTPRINT_EDITOR_ONLY: ReadonlySet<string> = new Set([
 export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
   "pcbnew.InteractiveDrawing.arcPosture",
   "pcbnew.InteractiveDrawing.bezier",
+  // `PCB_POINT_EDITOR::changeArcEditMode`'s actions: the point editor runs in both frames, each changing its own setting (UI-LEFT-2 FF7)
+  "pcbnew.PointEditor.arcKeepCenter",
+  "pcbnew.PointEditor.arcKeepEndpoint",
+  "pcbnew.PointEditor.arcKeepRadius",
   "pcbnew.InteractiveEdit.duplicateIncrementPads",
   // Create Array (Ctrl+T): `ARRAY_TOOL` is registered by both frames; the footprint editor's has the pad numbering panels.
   "pcbnew.Array.createArray",

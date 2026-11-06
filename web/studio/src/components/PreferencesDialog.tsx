@@ -1,52 +1,138 @@
-// KiCad's Preferences dialog (`PAGED_DIALOG`, `EDA_BASE_FRAME::ShowPreferences`) with these of its pages: Mouse and Touchpad (below), each editor's Display Options --
-// the Grid Display and Cursor part of it (`PANEL_GAL_OPTIONS`, common/dialogs/panel_gal_options.cpp: Dots / Lines / Small crosses, "Grid thickness:" 0.5 to 10 pixels,
-// "Minimum grid spacing:" 5 to 200 pixels, the three crosshairs and "Always show crosshairs"; each editor keeps its own, state/commonOptions.ts `window`) -- PCB
-// Editor > Colors (components/PcbColorsPage.tsx, `PANEL_PCBNEW_COLOR_SETTINGS`), with the dialog's "Reset Colors to Defaults" on the Colors page, and 3D Viewer >
-// General and > Realtime Rendering (3d-viewer/dialogs/panel_3D_display_options.cpp, panel_3D_opengl_options.cpp: the settings the studio's 3D view honours,
-// kicad-port/viewer3dSettings.ts; the two pages at the end of this file). Not here of Display Options: "Snap to grid:" (Always / When grid shown / Never; the
-// snapping always uses the grid) and the editors' other display settings.
+// KiCad's Preferences dialog (`PAGED_DIALOG`, `EDA_BASE_FRAME::ShowPreferences` in common/eda_base_frame.cpp at KiCad 8303b2ad), its tree in KiCad's order:
 //
-// Port of PANEL_MOUSE_SETTINGS, the "Mouse and Touchpad" page of KiCad's Preferences dialog
-// (common/dialogs/panel_mouse_settings.cpp), opened by `common.SuiteControl.openPreferences` (Ctrl+,), with the board editor's "Step for rotate commands" and
-// "Flip board items" and its "Magnetic Points" of PANEL_PCBNEW_EDIT_OPTIONS (pcbnew/dialogs/panel_edit_options.cpp: Snap to Pads, Snap to Tracks and Vias, Snap
-// to Graphics) below it.
-// Edits `state.prefs` (kicad-port/preferences.ts), which every canvas's wheel, drag and auto-pan handling reads -- see that file's header for exactly which
-// settings are offered and which are not.
+//   Common (components/CommonPreferencesPages.tsx, `PANEL_COMMON_SETTINGS`), Mouse and Touchpad (below, `PANEL_MOUSE_SETTINGS`), Hotkeys
+//   (components/HotkeysPage.tsx, `PANEL_HOTKEYS_EDITOR`);
+//   Symbol Editor > Display Options, Grids, Editing Options, Colors, Toolbars;
+//   Schematic Editor > Display Options, Grids, Editing Options, Colors, Toolbars;
+//   Footprint Editor > Display Options, Grids, Origins & Axes, Editing Options, Colors, Toolbars, Footprint Defaults, Graphics Defaults, User Layer Names;
+//   PCB Editor > Display Options, Grids, Editing Options, Colors, Toolbars;
+//   3D Viewer > General, Toolbars, Realtime Renderer;
+//   Maintenance (`PANEL_MAINTENANCE`).
 //
-// Same behaviours as the C++: the scroll-gesture grid keeps one action per column (`OnScrollRadioButton` moves a
-// displaced action to the first free column), a clash that remains (two "--") shows the warning and refuses OK
-// (`TransferDataFromWindow`), and "Reset to Mouse/Trackpad Defaults" sets the grid (`onMouseDefaults`,
-// `onTrackpadDefaults`). On macOS the Ctrl column reads "Cmd" and Alt reads "Option", as in the C++.
-import { useEffect, useState } from "react";
+// An editor's name is a blank parent page (`book->AddPage( new wxPanel( book ), _( "PCB Editor" ) )`). KiCad's other pages are not here: SpaceMouse, Version
+// Control, Packages and Updates, Plugins, the Schematic Editor's Field Name Templates, Data Sources and Simulator, the PCB Editor's Origins & Axes, the 3D
+// Viewer's Raytracing Renderer, and the Gerber Viewer's and Drawing Sheet Editor's pages (no such editors).
+//
+// Each editor's Display Options is the Grid Display and Cursor part of `PANEL_GAL_OPTIONS` (common/dialogs/panel_gal_options.cpp: Dots / Lines / Small crosses,
+// "Grid thickness:" 0.5 to 10 pixels, "Minimum grid spacing:" 5 to 200 pixels, "Snap to grid:" Always / When grid shown / Never, the three crosshairs and
+// "Always show crosshairs"; each editor keeps its own, state/commonOptions.ts `window`). The Grids pages are Edit Grids' (components/GridsDialog.tsx,
+// `PANEL_GRID_SETTINGS`), the Editing Options pages components/EditingOptionsPages.tsx (and the Footprint Editor's in FpPreferencesPages.tsx), the Colors pages
+// PcbColorsPage.tsx and EditorColorsPages.tsx, the Toolbars pages ToolbarsPage.tsx, the 3D Viewer's at the end of this file.
+//
+// The dialog: "Preferences - <page>" (the title of the page shown), reopened on the page it was left on (`g_lastPage`), OK runs every page's
+// `TransferDataFromWindow` (each page hook's `commit`, components/preferencesPage.ts), Cancel none; the reset button "Reset <page> to Defaults" is the shown
+// page's `ResetPanel` ("Reset to Defaults", greyed, on a page that has none: `PAGED_DIALOG::UpdateResetButton`), with the page's tooltip ("Reset all settings
+// on this page to their default", `RESETTABLE_PANEL::GetResetTooltip`); the info bar shows a page's message (`GetInfoBar()->ShowMessageFor`).
+//
+// Mouse and Touchpad (common/dialogs/panel_mouse_settings.cpp): edits `state.prefs` (kicad-port/preferences.ts), which every canvas's wheel, drag and auto-pan
+// handling reads -- see that file's header for exactly which settings are offered. Same behaviours as the C++: the scroll-gesture grid keeps one action per
+// column (`OnScrollRadioButton` moves a displaced action to the first free column), a clash that remains (two "--") shows the warning and refuses OK
+// (`TransferDataFromWindow`), and "Reset to Mouse/Trackpad Defaults" sets the grid (`onMouseDefaults`, `onTrackpadDefaults`). On macOS the Ctrl column reads
+// "Cmd" and Alt reads "Option", as in the C++.
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
-import { assignScrollModifier, MOUSE_SCROLL_DEFAULTS, sanitizePinStepMils, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
+import { assignScrollModifier, DEFAULT_PREFERENCES, MOUSE_SCROLL_DEFAULTS, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
 import { isMac } from "../platform";
 import { usePcbColorsPage } from "./PcbColorsPage";
-import { FP_PREFS_TITLES, FP_PREFS_SUBTREE, FpPreferencesPage, fpGraphicsProblem, type FpPrefsExtra, type FpPrefsPage } from "./FpPreferencesPages";
+import { FP_PREFS_TITLES, FpPreferencesPage, fpGraphicsProblem, type FpPrefsExtra, type FpPrefsPage } from "./FpPreferencesPages";
 import { useFpDispatch, useFpState } from "../state/footprintEditorStore";
 import { FACTORY_TEXT_GRAPHICS } from "../kicad-port/layerDefaults";
-import { EDITOR_WINDOWS, getCommonOptions, setWindowOptions, type EditorWindow, type WindowOptions } from "../state/commonOptions";
+import { DEFAULT_WINDOW_OPTIONS, EDITOR_WINDOWS, getCommonOptions, setWindowOptions, type EditorWindow, type WindowOptions } from "../state/commonOptions";
+import type { GridSnapping } from "../kicad-port/windowOptions";
 import { GRID_MIN_SPACING_RANGE, GRID_THICKNESS_CHOICES, gridMinSpacingValue } from "../kicad-port/grid";
 import { getViewer3DUserSettings, setViewer3DPrefs } from "../state/viewer3dUserSettings";
 import { DEFAULT_VIEWER3D_PREFS, sanitizeViewer3DPrefs, type AntialiasingMode, type Viewer3DPrefs } from "../kicad-port/viewer3dSettings";
+import { useCommonPage, useMaintenancePage } from "./CommonPreferencesPages";
+import { useHotkeysPage } from "./HotkeysPage";
+import { useEditorColorsPage } from "./EditorColorsPages";
+import { useToolbarsPage } from "./ToolbarsPage";
+import { useFpFieldDefaultsPage, useFpLayerNamesPage } from "./FpDefaultsPages";
+import { PcbEditingOptionsPage, SchEditingOptionsPage, SymEditingOptionsPage, type EditingExtra } from "./EditingOptionsPages";
+import { GridsPageBody, useGridsPages } from "./GridsDialog";
+import type { GridEditor } from "../kicad-port/gridSettings";
+import type { PreferencesPageHandle } from "./preferencesPage";
 
-/** The pages of the dialog's tree (`PAGED_DIALOG`'s `wxTreebook`): Mouse and Touchpad, each editor's Display Options, PCB Editor > Colors, 3D Viewer > General
- *  and > Realtime Rendering. */
-type PrefsPage = "mouse" | "pcb_colors" | `display_${EditorWindow}` | "3d_general" | "3d_opengl" | FpPrefsPage;
+/** The pages of the dialog's tree (`PAGED_DIALOG`'s `wxTreebook`). */
+type PrefsPage =
+  | "common"
+  | "mouse"
+  | "hotkeys"
+  | `display_${EditorWindow}`
+  | "sym_grids"
+  | "sym_edit"
+  | "sym_colors"
+  | "sym_toolbars"
+  | "sch_grids"
+  | "sch_edit"
+  | "sch_colors"
+  | "sch_toolbars"
+  | "fp_grids"
+  | FpPrefsPage
+  | "fp_colors"
+  | "fp_toolbars"
+  | "fp_defaults"
+  | "fp_layer_names"
+  | "pcb_grids"
+  | "pcb_edit"
+  | "pcb_colors"
+  | "pcb_toolbars"
+  | "3d_general"
+  | "3d_toolbars"
+  | "3d_opengl"
+  | "maintenance";
 
-const EDITOR_PAGE_LABEL: Record<EditorWindow, string> = { pcb: "PCB Editor", schematic: "Schematic Editor", footprint: "Footprint Editor", symbol: "Symbol Editor" };
+/** The tree as `ShowPreferences` builds it: [page or null for an editor's blank parent page, label, depth]. */
+const TREE: ReadonlyArray<[PrefsPage | null, string, number]> = [
+  ["common", "Common", 0],
+  ["mouse", "Mouse and Touchpad", 0],
+  ["hotkeys", "Hotkeys", 0],
+  [null, "Symbol Editor", 0],
+  ["display_symbol", "Display Options", 1],
+  ["sym_grids", "Grids", 1],
+  ["sym_edit", "Editing Options", 1],
+  ["sym_colors", "Colors", 1],
+  ["sym_toolbars", "Toolbars", 1],
+  [null, "Schematic Editor", 0],
+  ["display_schematic", "Display Options", 1],
+  ["sch_grids", "Grids", 1],
+  ["sch_edit", "Editing Options", 1],
+  ["sch_colors", "Colors", 1],
+  ["sch_toolbars", "Toolbars", 1],
+  [null, "Footprint Editor", 0],
+  ["display_footprint", "Display Options", 1],
+  ["fp_grids", "Grids", 1],
+  ["fp_axes", FP_PREFS_TITLES.fp_axes, 1],
+  ["fp_edit", FP_PREFS_TITLES.fp_edit, 1],
+  ["fp_colors", "Colors", 1],
+  ["fp_toolbars", "Toolbars", 1],
+  ["fp_defaults", "Footprint Defaults", 1],
+  ["fp_graphics", FP_PREFS_TITLES.fp_graphics, 1],
+  ["fp_layer_names", "User Layer Names", 1],
+  [null, "PCB Editor", 0],
+  ["display_pcb", "Display Options", 1],
+  ["pcb_grids", "Grids", 1],
+  ["pcb_edit", "Editing Options", 1],
+  ["pcb_colors", "Colors", 1],
+  ["pcb_toolbars", "Toolbars", 1],
+  [null, "3D Viewer", 0],
+  ["3d_general", "General", 1],
+  ["3d_toolbars", "Toolbars", 1],
+  ["3d_opengl", "Realtime Renderer", 1],
+  ["maintenance", "Maintenance", 0],
+];
 
-/** Each page's title in the dialog's caption. */
+/** Each page's title in the dialog's caption (`GetPageText`). */
 function pageTitle(page: PrefsPage): string {
-  if (page.startsWith("display_")) return "Display Options";
-  if (isFpPage(page)) return FP_PREFS_TITLES[page];
-  return ({ mouse: "Mouse and Touchpad", pcb_colors: "Colors", "3d_general": "General", "3d_opengl": "Realtime Rendering" } as Record<string, string>)[page] ?? page;
+  return TREE.find(([id]) => id === page)?.[1] ?? page;
 }
 
-const isFpPage = (p: string): p is FpPrefsPage => p.startsWith("fp_");
+/** The Grids pages and the editor each is of. */
+const GRIDS_PAGE: Partial<Record<PrefsPage, GridEditor>> = { sym_grids: "symbol", sch_grids: "schematic", fp_grids: "footprint", pcb_grids: "pcb" };
+
+const isFpPage = (p: string): p is FpPrefsPage => p === "fp_axes" || p === "fp_edit" || p === "fp_graphics";
 
 /** `PAGED_DIALOG` opens on the page it was last closed on (its `g_lastPage` by title). */
-let lastPage: PrefsPage = "mouse";
+let lastPage: PrefsPage = "common";
 
 const COLUMNS: { value: ScrollModifier; label: string }[] = [
   { value: "none", label: "--" },
@@ -57,6 +143,20 @@ const COLUMNS: { value: ScrollModifier; label: string }[] = [
 
 const ROW_KEY: Record<ScrollRow, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV"> = { zoom: "scrollModifierZoom", panH: "scrollModifierPanH", panV: "scrollModifierPanV" };
 
+/** The fields of `Preferences` each page owns, for its `ResetPanel`. */
+const MOUSE_FIELDS: ReadonlyArray<keyof Preferences> = ["scrollModifierZoom", "scrollModifierPanH", "scrollModifierPanV", "reverseScrollZoom", "reverseScrollPanH", "autoPan", "autoPanAcceleration", "dragMiddle", "dragRight", "dragLeft", "motionPanModifier", "horizontalPan", "zoomAcceleration", "zoomSpeedAuto", "zoomSpeed"];
+const PCB_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["rotationStepDeg", "pcbArcEditMode", "flipDirection", "magneticPads", "magneticTracks", "magneticGraphics", "ratsnestThicknessPx", "escClearsNetHighlight", "showCourtyardCollisions"];
+const SCH_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["schArcEditMode", "schEscClearsNetHighlight", "allowUnconstrainedPinSwaps", "schRepeatOffsetXMils", "schRepeatOffsetYMils", "schRepeatLabelIncrement", "schFootprintPreview"];
+const SYM_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["symRepeatPinStepMils", "symRepeatLabelDelta", "symDragPinsWithEdges"];
+
+function defaultsOf(fields: ReadonlyArray<keyof Preferences>): Partial<Preferences> {
+  const out: Partial<Preferences> = {};
+  for (const f of fields) (out as Record<string, unknown>)[f] = DEFAULT_PREFERENCES[f];
+  return out;
+}
+
+const RESET_TOOLTIP = "Reset all settings on this page to their default";
+
 export function PreferencesDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
@@ -65,17 +165,66 @@ export function PreferencesDialog() {
   // The step is typed as text and taken when the dialog is accepted: `m_rotationAngle.GetAngleValue()` in `TransferDataFromWindow`, which keeps the old step for a value that is nothing.
   const [rotationText, setRotationText] = useState(String(state.prefs.rotationStepDeg));
   const [page, setPageState] = useState<PrefsPage>(lastPage);
+  /** The pages shown since the dialog opened: KiCad builds most pages lazily (`AddLazySubPage`), and a page never shown is never transferred on OK. */
+  const [shownPages, setShownPages] = useState<ReadonlySet<PrefsPage>>(new Set([lastPage]));
   const setPage = (p: PrefsPage) => {
     lastPage = p;
     setPageState(p);
+    setShownPages((s) => (s.has(p) ? s : new Set(s).add(p)));
+    const g = GRIDS_PAGE[p];
+    if (g) grids.show(g);
   };
+  // The info bar (`PAGED_DIALOG::GetInfoBar`): a page's message for six seconds.
+  const [info, setInfo] = useState<string | null>(null);
+  const infoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showInfo = (message: string) => {
+    setInfo(message);
+    if (infoTimer.current) clearTimeout(infoTimer.current);
+    infoTimer.current = setTimeout(() => setInfo(null), 6000);
+  };
+  useEffect(() => () => void (infoTimer.current && clearTimeout(infoTimer.current)), []);
+
   const colors = usePcbColorsPage(open, page === "pcb_colors");
+  const common = useCommonPage(open, page === "common");
+  const maintenance = useMaintenancePage(open, page === "maintenance", showInfo);
+  const hotkeys = useHotkeysPage(open, page === "hotkeys");
+  const schColors = useEditorColorsPage("schematic", open, page === "sch_colors");
+  const symColors = useEditorColorsPage("symbol", open, page === "sym_colors");
+  const fpColors = useEditorColorsPage("footprint", open, page === "fp_colors");
+  const toolbars = {
+    pcb_toolbars: useToolbarsPage("pcb", open, page === "pcb_toolbars"),
+    sch_toolbars: useToolbarsPage("schematic", open, page === "sch_toolbars"),
+    fp_toolbars: useToolbarsPage("footprint", open, page === "fp_toolbars"),
+    sym_toolbars: useToolbarsPage("symbol", open, page === "sym_toolbars"),
+    "3d_toolbars": useToolbarsPage("3d", open, page === "3d_toolbars"),
+  };
+  const fpDefaults = useFpFieldDefaultsPage(open, page === "fp_defaults");
+  const fpLayerNames = useFpLayerNamesPage(open, page === "fp_layer_names");
+  const grids = useGridsPages(GRIDS_PAGE[lastPage] ?? null);
+  /** The pages whose state lives in a hook of their own, by id. */
+  const handles: Partial<Record<PrefsPage, PreferencesPageHandle>> = {
+    common,
+    maintenance,
+    hotkeys,
+    sch_colors: schColors,
+    sym_colors: symColors,
+    fp_colors: fpColors,
+    ...toolbars,
+    fp_defaults: fpDefaults,
+    fp_layer_names: fpLayerNames,
+  };
+  const allHandles = [colors as PreferencesPageHandle, ...Object.values(handles)] as PreferencesPageHandle[];
+
   // The Footprint Editor's pages (components/FpPreferencesPages.tsx): its rotation step as typed, and its line mode, which they edit beside the preferences.
   const fpState = useFpState();
   const fpDispatch = useFpDispatch();
   const [fpRotationText, setFpRotationText] = useState(String(state.prefs.fpRotationStepDeg));
   const [fpExtra, setFpExtraState] = useState<FpPrefsExtra>({ lineMode: fpState.lineMode });
   const setFpExtra = (patch: Partial<FpPrefsExtra>) => setFpExtraState((e) => ({ ...e, ...patch }));
+  // What the board's and the schematic's Editing Options edit outside the preferences (their line modes, the ratsnest's curves).
+  const editingExtraNow = (): EditingExtra => ({ pcbConstrain45: state.pcbx.angleSnapMode !== "direct", ratsnestCurved: state.ratsnestCurved, schLineMode: state.schLineMode });
+  const [editingExtra, setEditingExtraState] = useState<EditingExtra>(editingExtraNow);
+  const setEditingExtra = (patch: Partial<EditingExtra>) => setEditingExtraState((e) => ({ ...e, ...patch }));
   // each editor's Display Options as edited so far (`PANEL_GAL_OPTIONS` of its frame); OK keeps them
   const [windows, setWindows] = useState<Record<EditorWindow, WindowOptions>>(getCommonOptions().window);
   /** The 3D viewer's settings being edited (state/viewer3dUserSettings.ts), taken on OK as the other pages are. */
@@ -87,9 +236,13 @@ export function PreferencesDialog() {
       setRotationText(String(state.prefs.rotationStepDeg));
       setFpRotationText(String(state.prefs.fpRotationStepDeg));
       setFpExtraState({ lineMode: fpState.lineMode });
+      setEditingExtraState(editingExtraNow());
       setPageState(lastPage);
+      setShownPages(new Set([lastPage]));
       setWindows(getCommonOptions().window);
       setDraft3d(getViewer3DUserSettings().prefs);
+      grids.restart(GRIDS_PAGE[lastPage] ?? null);
+      setInfo(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -98,11 +251,12 @@ export function PreferencesDialog() {
 
   const close = () => dispatch({ type: "SET_PREFERENCES_DIALOG_OPEN", open: false });
   const cancel = () => {
-    colors.cancel();
+    for (const h of allHandles) h.cancel();
     close();
   };
   const graphicsProblem = fpGraphicsProblem(draft.fpTextGraphics);
-  const valid = scrollModSetValid(draft) && !graphicsProblem;
+  const scrollValid = scrollModSetValid(draft);
+  const valid = scrollValid && !graphicsProblem && allHandles.every((h) => h.valid !== false);
   const submit = () => {
     if (!valid) return;
     dispatch({
@@ -117,11 +271,55 @@ export function PreferencesDialog() {
     for (const e of EDITOR_WINDOWS) setWindowOptions(e, windows[e]);
     // the line mode is the Footprint Editor's (`m_AngleSnapMode`)
     if (fpExtra.lineMode !== fpState.lineMode) fpDispatch({ type: "SET_LINE_MODE", mode: fpExtra.lineMode });
+    // the board's `m_AngleSnapMode = m_cbConstrainHV45Mode->GetValue() ? LEADER_MODE::DEG45 : LEADER_MODE::DIRECT` (written whatever it was), and its ratsnest's curves;
+    // the schematic's `m_Drawing.line_mode = m_choiceLineMode->GetSelection()`
+    // (only when the page was shown: a lazy page never built is never transferred)
+    const angle = editingExtra.pcbConstrain45 ? "45" : "direct";
+    if (shownPages.has("pcb_edit") && angle !== state.pcbx.angleSnapMode) dispatch({ type: "PCBX", patch: { angleSnapMode: angle } });
+    if (editingExtra.ratsnestCurved !== state.ratsnestCurved) dispatch({ type: "TOGGLE_RATSNEST_CURVED" });
+    if (editingExtra.schLineMode !== state.schLineMode) dispatch({ type: "SET_SCH_LINE_MODE", mode: editingExtra.schLineMode });
     colors.commit();
+    for (const h of Object.values(handles)) h?.commit();
+    grids.commit();
     setViewer3DPrefs(sanitizeViewer3DPrefs(draft3d));
     close();
   };
   const set = (patch: Partial<Preferences>) => setDraft((d) => ({ ...d, ...patch }));
+
+  /** The shown page's `ResetPanel`, or null for a page without one (`wxRESETTABLE`). */
+  const pageReset = (): { run: () => void; tooltip: string } | null => {
+    const h = page === "pcb_colors" ? (colors as PreferencesPageHandle) : handles[page];
+    if (h) return h.reset ? { run: h.reset, tooltip: h.resetTooltip ?? (page === "pcb_colors" ? "Reset all colors in this theme to the KiCad defaults" : RESET_TOOLTIP) } : null;
+    const g = GRIDS_PAGE[page];
+    if (g) return { run: () => grids.reset(g), tooltip: RESET_TOOLTIP };
+    if (page === "mouse") return { run: () => set(defaultsOf(MOUSE_FIELDS)), tooltip: RESET_TOOLTIP };
+    if (page === "pcb_edit")
+      return {
+        run: () => {
+          set(defaultsOf(PCB_EDIT_FIELDS));
+          setRotationText(String(DEFAULT_PREFERENCES.rotationStepDeg));
+          setEditingExtra({ pcbConstrain45: false, ratsnestCurved: false });
+        },
+        tooltip: RESET_TOOLTIP,
+      };
+    if (page === "sch_edit")
+      return {
+        run: () => {
+          set(defaultsOf(SCH_EDIT_FIELDS));
+          setEditingExtra({ schLineMode: 1 });
+        },
+        tooltip: RESET_TOOLTIP,
+      };
+    if (page === "sym_edit") return { run: () => set(defaultsOf(SYM_EDIT_FIELDS)), tooltip: RESET_TOOLTIP };
+    if (page.startsWith("display_")) {
+      const e = page.slice("display_".length) as EditorWindow;
+      // `PANEL_GAL_OPTIONS::ResetPanel( defaults )`: the Grid Display and the Cursor of a fresh settings file
+      return { run: () => setWindows((all) => ({ ...all, [e]: { ...all[e], gridStyle: DEFAULT_WINDOW_OPTIONS.gridStyle, gridLineWidth: DEFAULT_WINDOW_OPTIONS.gridLineWidth, gridMinSpacing: DEFAULT_WINDOW_OPTIONS.gridMinSpacing, gridSnap: DEFAULT_WINDOW_OPTIONS.gridSnap, crossHairMode: DEFAULT_WINDOW_OPTIONS.crossHairMode, alwaysShowCursor: DEFAULT_WINDOW_OPTIONS.alwaysShowCursor } })), tooltip: RESET_TOOLTIP };
+    }
+    if (page === "fp_graphics") return { run: () => set({ fpTextGraphics: null }), tooltip: `Reset to ${FACTORY_TEXT_GRAPHICS.silk.line_width_nm / 1e6} mm silkscreen lines and KiCad's other factory values` };
+    return null;
+  };
+  const reset = pageReset();
 
   const row = (label: string, r: ScrollRow, reverse?: { checked: boolean; onChange: (v: boolean) => void }) => (
     <tr>
@@ -188,6 +386,15 @@ export function PreferencesDialog() {
           />
           <span>pixels</span>
         </div>
+        {/* `m_gridSnapOptions` (`grid.snap`, `GRID_SNAPPING`): every snap of the editor asks `GAL::GetGridSnapping` */}
+        <div className="filter-row">
+          <span style={{ width: 170 }}>Snap to grid:</span>
+          <select aria-label="Snap to grid:" data-testid="pref-grid-snap" value={w.gridSnap} onChange={(e) => setW({ gridSnap: e.target.value as GridSnapping })}>
+            <option value="always">Always</option>
+            <option value="with_grid">When grid shown</option>
+            <option value="never">Never</option>
+          </select>
+        </div>
         {heading("Cursor")}
         <div className="filter-row">
           {radio("crosshair", "Small crosshairs", w.crossHairMode === "small", () => setW({ crossHairMode: "small" }))}
@@ -202,30 +409,122 @@ export function PreferencesDialog() {
     );
   };
 
+  const mousePage = (): ReactNode => (
+    <>
+      {heading("Pan and Zoom")}
+      <label className="filter-row" title="When drawing a track or moving an item, pan when approaching the edge of the display.">
+        <input type="checkbox" checked={draft.autoPan} onChange={(e) => set({ autoPan: e.target.checked })} />
+        Automatically pan while moving object
+      </label>
+      <label className="filter-row" title="Zoom faster when scrolling quickly">
+        <input type="checkbox" checked={draft.zoomAcceleration} onChange={(e) => set({ zoomAcceleration: e.target.checked })} />
+        Use zoom acceleration{isMac() ? " (macOS always zooms at a constant rate, as in KiCad)" : ""}
+      </label>
+      <div className="filter-row" title="How far to zoom in for each rotation of the mouse wheel">
+        <span style={{ width: 120 }}>Zoom speed:</span>
+        <input type="range" min={1} max={10} step={1} aria-label="Zoom speed" value={draft.zoomSpeed} disabled={draft.zoomSpeedAuto} onChange={(e) => set({ zoomSpeed: Number(e.target.value) })} />
+        <span style={{ width: 20, textAlign: "right" }}>{draft.zoomSpeed}</span>
+        <label className="filter-row" style={{ margin: 0 }} title="Pick the zoom speed automatically">
+          <input type="checkbox" checked={draft.zoomSpeedAuto} onChange={(e) => set({ zoomSpeedAuto: e.target.checked })} />
+          Automatic
+        </label>
+      </div>
+      <div className="filter-row" title="How fast to pan when moving an object off the edge of the screen">
+        <span style={{ width: 120 }}>Auto pan speed:</span>
+        <input type="range" min={1} max={10} step={1} aria-label="Auto pan speed" value={draft.autoPanAcceleration} onChange={(e) => set({ autoPanAcceleration: Number(e.target.value) })} />
+        <span style={{ width: 20, textAlign: "right" }}>{draft.autoPanAcceleration}</span>
+      </div>
+
+      {/* `PANEL_MOUSE_SETTINGS`' "Drag Gestures": every canvas reads them (kicad-port/viewControls.ts `leftDragOutcome`, `dragActionOf`, `motionPan`) */}
+      {heading("Drag Gestures")}
+      <div className="filter-row">
+        <span style={{ width: 210 }}>Left button drag:</span>
+        <select aria-label="Left button drag" data-testid="pref-drag-left" value={draft.dragLeft} onChange={(e) => set({ dragLeft: e.target.value as Preferences["dragLeft"] })}>
+          <option value="select">Draw selection rectangle</option>
+          <option value="drag_selected">Drag selected objects; otherwise draw selection rectangle</option>
+          <option value="drag_any">Drag any object (selected or not)</option>
+        </select>
+      </div>
+      <div className="filter-row">
+        <span style={{ width: 210 }}>Middle button drag:</span>
+        <select aria-label="Middle button drag" data-testid="pref-drag-middle" value={draft.dragMiddle} onChange={(e) => set({ dragMiddle: e.target.value as Preferences["dragMiddle"] })}>
+          <option value="pan">Pan</option>
+          <option value="zoom">Zoom</option>
+          <option value="none">None</option>
+        </select>
+      </div>
+      <div className="filter-row">
+        <span style={{ width: 210 }}>Right button drag:</span>
+        <select aria-label="Right button drag" data-testid="pref-drag-right" value={draft.dragRight} onChange={(e) => set({ dragRight: e.target.value as Preferences["dragRight"] })}>
+          <option value="pan">Pan</option>
+          <option value="zoom">Zoom</option>
+          <option value="none">None</option>
+        </select>
+      </div>
+      <div className="filter-row">
+        <span style={{ width: 210 }}>Pan on mouse movement with key:</span>
+        <select aria-label="Pan on mouse movement with key" data-testid="pref-motion-pan" value={draft.motionPanModifier} onChange={(e) => set({ motionPanModifier: e.target.value as Preferences["motionPanModifier"] })}>
+          <option value="none">None</option>
+          <option value="alt">{isMac() ? "Option" : "Alt"}</option>
+          <option value="ctrl">{isMac() ? "Cmd" : "Ctrl"}</option>
+          <option value="shift">Shift</option>
+        </select>
+      </div>
+
+      {heading("Scroll Gestures")}
+      <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>Vertical touchpad or scroll wheel movement:</div>
+      <table style={{ borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th />
+            {COLUMNS.map((c) => (
+              <th key={c.value} style={{ fontWeight: 500, padding: "0 10px" }}>
+                {c.label}
+              </th>
+            ))}
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {row("Zoom:", "zoom", { checked: draft.reverseScrollZoom, onChange: (v) => set({ reverseScrollZoom: v }) })}
+          {row("Pan up/down:", "panV")}
+          {row("Pan left/right:", "panH", { checked: draft.reverseScrollPanH, onChange: (v) => set({ reverseScrollPanH: v }) })}
+        </tbody>
+      </table>
+      <label className="filter-row" title="Pan the canvas left and right when scrolling left to right on the touchpad">
+        <input type="checkbox" data-testid="pref-horizontal-pan" checked={draft.horizontalPan} onChange={(e) => set({ horizontalPan: e.target.checked })} />
+        Pan left/right with horizontal movement
+      </label>
+      <div style={{ minHeight: 18, marginTop: 4, fontSize: 12, color: "#ff6666" }}>{scrollValid ? "" : "Only one action can be assigned to each column"}</div>
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <button onClick={() => setDraft((d) => ({ ...d, ...MOUSE_SCROLL_DEFAULTS }))}>Reset to Mouse Defaults</button>
+        <button onClick={() => setDraft((d) => ({ ...d, ...TRACKPAD_SCROLL_DEFAULTS }))}>Reset to Trackpad Defaults</button>
+      </div>
+      <div style={{ fontSize: 11, opacity: 0.65, marginTop: 10 }}>
+        Not offered in the browser: center and warp cursor on zoom (a page cannot move the pointer). A touchpad pinch zooms about the pointer whatever the scroll settings say, as in KiCad.
+      </div>
+    </>
+  );
+
+  const gridsEditor = GRIDS_PAGE[page];
+  const title = pageTitle(page);
+  const wide = page === "hotkeys" || page === "common" || page.endsWith("_edit") || page.endsWith("_toolbars") || page === "fp_defaults";
+
   return (
     <div className="dialog-backdrop" onClick={cancel}>
-      <div className="dialog" style={{ width: page === "pcb_colors" ? 600 : 700, maxWidth: "95vw" }} onClick={(e) => e.stopPropagation()} data-testid="preferences-dialog">
+      <div className="dialog" style={{ width: wide ? 980 : 760, maxWidth: "95vw" }} onClick={(e) => e.stopPropagation()} data-testid="preferences-dialog" role="dialog" aria-label={`Preferences - ${title}`}>
         <div className="dialog-header">
-          <span>Preferences - {pageTitle(page)}</span>
+          <span>Preferences - {title}</span>
         </div>
-        <div className="dialog-body" style={{ display: "flex", gap: 12 }}>
-          {/* The page tree (`PAGED_DIALOG`'s `wxTreebook`): "PCB Editor" is a blank parent page (`book->AddPage( new wxPanel( book ), _( "PCB Editor" ) )`). */}
-          <div role="tree" aria-label="Preferences pages" style={{ width: 150, flexShrink: 0, fontSize: 12, borderRight: "1px solid var(--chrome-border)", paddingRight: 8 }}>
-            {(
-              [
-                ["mouse", "Mouse and Touchpad", 0],
-                ...EDITOR_WINDOWS.flatMap((e) => [
-                  [null, EDITOR_PAGE_LABEL[e], 0],
-                  [`display_${e}`, "Display Options", 1],
-                  ...(e === "pcb" ? [["pcb_colors", "Colors", 1]] : []),
-                  ...(e === "footprint" ? FP_PREFS_SUBTREE : []),
-                ]),
-                // `book->AddPage( new wxPanel( book ), _( "3D Viewer" ) )` and its pages.
-                [null, "3D Viewer", 0],
-                ["3d_general", "General", 1],
-                ["3d_opengl", "Realtime Rendering", 1],
-              ] as [PrefsPage | null, string, number][]
-            ).map(([id, label, depth], i) => (
+        {info && (
+          <div role="status" data-testid="preferences-infobar" style={{ padding: "6px 12px", background: "var(--chrome-accent-bg, rgba(74,163,255,0.15))", fontSize: 12 }}>
+            {info}
+          </div>
+        )}
+        <div className="dialog-body" style={{ display: "flex", gap: 12, maxHeight: "75vh" }}>
+          {/* The page tree (`PAGED_DIALOG`'s `wxTreebook`): an editor's name is a blank parent page (`book->AddPage( new wxPanel( book ), _( "PCB Editor" ) )`). */}
+          <div role="tree" aria-label="Preferences pages" style={{ width: 170, flexShrink: 0, fontSize: 12, borderRight: "1px solid var(--chrome-border)", paddingRight: 8, overflowY: "auto" }}>
+            {TREE.map(([id, label, depth], i) => (
               <div
                 key={`${i}-${label}`}
                 data-testid={id ? `prefs-page-${id}` : undefined}
@@ -239,203 +538,27 @@ export function PreferencesDialog() {
               </div>
             ))}
           </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }} data-page-shown={page}>
             {page === "pcb_colors" && colors.element}
+            {handles[page]?.element}
             {page.startsWith("display_") && displayPage(page.slice("display_".length) as EditorWindow)}
+            {gridsEditor && <GridsPageBody key={gridsEditor} editor={gridsEditor} page={grids.pages[gridsEditor]} setPage={(next) => grids.setPage(gridsEditor, next)} />}
+            {page === "pcb_edit" && <PcbEditingOptionsPage draft={draft} set={set} extra={editingExtra} setExtra={setEditingExtra} rotationText={rotationText} setRotationText={setRotationText} />}
+            {page === "sch_edit" && <SchEditingOptionsPage draft={draft} set={set} extra={editingExtra} setExtra={setEditingExtra} rotationText={rotationText} setRotationText={setRotationText} />}
+            {page === "sym_edit" && <SymEditingOptionsPage draft={draft} set={set} fallbackPinStep={state.prefs.symRepeatPinStepMils} />}
             {page === "3d_general" && <Viewer3DGeneralPage draft={draft3d} set={(patch) => setDraft3d((d) => ({ ...d, ...patch }))} />}
             {page === "3d_opengl" && <Viewer3DOpenGLPage draft={draft3d} set={(patch) => setDraft3d((d) => ({ ...d, ...patch }))} />}
             {isFpPage(page) && (
               <FpPreferencesPage page={page} draft={draft} set={set} extra={fpExtra} setExtra={setFpExtra} rotationText={fpRotationText} setRotationText={setFpRotationText} units={state.units} />
             )}
-            {page === "mouse" && (
-              <>
-              {heading("Pan and Zoom")}
-              <label className="filter-row" title="When drawing a track or moving an item, pan when approaching the edge of the display.">
-                <input type="checkbox" checked={draft.autoPan} onChange={(e) => set({ autoPan: e.target.checked })} />
-                Automatically pan while moving object
-              </label>
-              <label className="filter-row" title="Zoom faster when scrolling quickly">
-                <input type="checkbox" checked={draft.zoomAcceleration} onChange={(e) => set({ zoomAcceleration: e.target.checked })} />
-                Use zoom acceleration{isMac() ? " (macOS always zooms at a constant rate, as in KiCad)" : ""}
-              </label>
-              <div className="filter-row" title="How far to zoom in for each rotation of the mouse wheel">
-                <span style={{ width: 120 }}>Zoom speed:</span>
-                <input type="range" min={1} max={10} step={1} aria-label="Zoom speed" value={draft.zoomSpeed} disabled={draft.zoomSpeedAuto} onChange={(e) => set({ zoomSpeed: Number(e.target.value) })} />
-                <span style={{ width: 20, textAlign: "right" }}>{draft.zoomSpeed}</span>
-                <label className="filter-row" style={{ margin: 0 }} title="Pick the zoom speed automatically">
-                  <input type="checkbox" checked={draft.zoomSpeedAuto} onChange={(e) => set({ zoomSpeedAuto: e.target.checked })} />
-                  Automatic
-                </label>
-              </div>
-              <div className="filter-row" title="How fast to pan when moving an object off the edge of the screen">
-                <span style={{ width: 120 }}>Auto pan speed:</span>
-                <input type="range" min={1} max={10} step={1} aria-label="Auto pan speed" value={draft.autoPanAcceleration} onChange={(e) => set({ autoPanAcceleration: Number(e.target.value) })} />
-                <span style={{ width: 20, textAlign: "right" }}>{draft.autoPanAcceleration}</span>
-              </div>
-
-              {/* `PANEL_MOUSE_SETTINGS`' "Drag Gestures": every canvas reads them (kicad-port/viewControls.ts `leftDragOutcome`, `dragActionOf`, `motionPan`) */}
-              {heading("Drag Gestures")}
-              <div className="filter-row">
-                <span style={{ width: 210 }}>Left button drag:</span>
-                <select aria-label="Left button drag" data-testid="pref-drag-left" value={draft.dragLeft} onChange={(e) => set({ dragLeft: e.target.value as Preferences["dragLeft"] })}>
-                  <option value="select">Draw selection rectangle</option>
-                  <option value="drag_selected">Drag selected objects; otherwise draw selection rectangle</option>
-                  <option value="drag_any">Drag any object (selected or not)</option>
-                </select>
-              </div>
-              <div className="filter-row">
-                <span style={{ width: 210 }}>Middle button drag:</span>
-                <select aria-label="Middle button drag" data-testid="pref-drag-middle" value={draft.dragMiddle} onChange={(e) => set({ dragMiddle: e.target.value as Preferences["dragMiddle"] })}>
-                  <option value="pan">Pan</option>
-                  <option value="zoom">Zoom</option>
-                  <option value="none">None</option>
-                </select>
-              </div>
-              <div className="filter-row">
-                <span style={{ width: 210 }}>Right button drag:</span>
-                <select aria-label="Right button drag" data-testid="pref-drag-right" value={draft.dragRight} onChange={(e) => set({ dragRight: e.target.value as Preferences["dragRight"] })}>
-                  <option value="pan">Pan</option>
-                  <option value="zoom">Zoom</option>
-                  <option value="none">None</option>
-                </select>
-              </div>
-              <div className="filter-row">
-                <span style={{ width: 210 }}>Pan on mouse movement with key:</span>
-                <select aria-label="Pan on mouse movement with key" data-testid="pref-motion-pan" value={draft.motionPanModifier} onChange={(e) => set({ motionPanModifier: e.target.value as Preferences["motionPanModifier"] })}>
-                  <option value="none">None</option>
-                  <option value="alt">{isMac() ? "Option" : "Alt"}</option>
-                  <option value="ctrl">{isMac() ? "Cmd" : "Ctrl"}</option>
-                  <option value="shift">Shift</option>
-                </select>
-              </div>
-
-              {heading("Editing Options (PCB Editor)")}
-              <div className="filter-row" title="Set increment (in degrees) for context menu and hotkey rotation.">
-                <span style={{ width: 170 }}>Step for rotate commands:</span>
-                <input
-                  type="number"
-                  aria-label="Step for rotate commands"
-                  data-testid="pref-rotation-step"
-                  style={{ width: 70 }}
-                  min={0.1}
-                  max={359.9}
-                  step={0.1}
-                  value={rotationText}
-                  onChange={(e) => setRotationText(e.target.value)}
-                />
-                <span>deg</span>
-              </div>
-              <div className="filter-row" title="Which way Change Side / Flip turns a board item over.">
-                <span style={{ width: 170 }}>Flip board items:</span>
-                <label style={{ marginRight: 12 }}>
-                  <input type="radio" name="flip-direction" data-testid="pref-flip-left-right" checked={draft.flipDirection === "left_right"} onChange={() => set({ flipDirection: "left_right" })} /> Left/right
-                </label>
-                <label>
-                  <input type="radio" name="flip-direction" data-testid="pref-flip-top-bottom" checked={draft.flipDirection === "top_bottom"} onChange={() => set({ flipDirection: "top_bottom" })} /> Top/bottom
-                </label>
-              </div>
-
-              {heading("Editing Options (Schematic Editor)")}
-              <label className="filter-row" title="Allow swapping any two pins of a symbol, not only the pins its library declares interchangeable.">
-                <input type="checkbox" data-testid="pref-allow-pin-swaps" checked={draft.allowUnconstrainedPinSwaps} onChange={(e) => set({ allowUnconstrainedPinSwaps: e.target.checked })} />
-                Allow unconstrained pin swaps
-              </label>
-
-              {heading("Editing Options (Symbol Editor): Repeated Items")}
-              <div className="filter-row" title="How far Repeat Pin puts the next pin (forced to a multiple of 25 mils).">
-                <span style={{ width: 170 }}>Pitch of repeated pins:</span>
-                <input
-                  type="number"
-                  aria-label="Pitch of repeated pins"
-                  data-testid="pref-sym-pin-pitch"
-                  style={{ width: 70 }}
-                  step={25}
-                  value={draft.symRepeatPinStepMils}
-                  onChange={(e) => set({ symRepeatPinStepMils: Number(e.target.value) })}
-                  onBlur={() => set({ symRepeatPinStepMils: sanitizePinStepMils(draft.symRepeatPinStepMils, state.prefs.symRepeatPinStepMils) })}
-                />
-                <span>mils</span>
-              </div>
-              <div className="filter-row" title="What Repeat Pin adds to the pin's number and name.">
-                <span style={{ width: 170 }}>Label increment:</span>
-                <input type="number" aria-label="Label increment" data-testid="pref-sym-label-increment" style={{ width: 70 }} min={-10} max={10} step={1} value={draft.symRepeatLabelDelta} onChange={(e) => set({ symRepeatLabelDelta: Number(e.target.value) })} />
-              </div>
-              {/* `PANEL_SYM_EDITING_OPTIONS`' right column: `m_dragPinsWithEdges` */}
-              <label className="filter-row" title="Dragging a side of a rectangle with its point editor takes the pins on that side along.">
-                <input type="checkbox" data-testid="pref-sym-drag-pins-with-edges" checked={draft.symDragPinsWithEdges} onChange={(e) => set({ symDragPinsWithEdges: e.target.checked })} />
-                Keep pins attached when dragging edges
-              </label>
-
-              {heading("Magnetic Points (PCB Editor)")}
-              {(
-                [
-                  ["Snap to Pads:", "magneticPads", "The pads the drawing and move tools snap to: never, only while a track is being routed (KiCad's default), or always."],
-                  ["Snap to Tracks and Vias:", "magneticTracks", "The tracks and vias the drawing and move tools snap to: never, only while a track is being routed (KiCad's default), or always."],
-                ] as const
-              ).map(([label, key, tip]) => (
-                <div className="filter-row" key={key} title={tip}>
-                  <span style={{ width: 170 }}>{label}</span>
-                  <select aria-label={label} value={draft[key]} onChange={(e) => set({ [key]: e.target.value as Preferences[typeof key] })}>
-                    <option value="never">Never</option>
-                    <option value="track-tool">In Track Tool</option>
-                    <option value="always">Always</option>
-                  </select>
-                </div>
-              ))}
-              <label className="filter-row" title="Snap the drawing and move tools to the ends, middles, centres and corners of graphic shapes">
-                <input type="checkbox" checked={draft.magneticGraphics} onChange={(e) => set({ magneticGraphics: e.target.checked })} />
-                Snap to Graphics
-              </label>
-
-              {heading("Scroll Gestures")}
-              <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>Vertical touchpad or scroll wheel movement:</div>
-              <table style={{ borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th />
-                    {COLUMNS.map((c) => (
-                      <th key={c.value} style={{ fontWeight: 500, padding: "0 10px" }}>
-                        {c.label}
-                      </th>
-                    ))}
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {row("Zoom:", "zoom", { checked: draft.reverseScrollZoom, onChange: (v) => set({ reverseScrollZoom: v }) })}
-                  {row("Pan up/down:", "panV")}
-                  {row("Pan left/right:", "panH", { checked: draft.reverseScrollPanH, onChange: (v) => set({ reverseScrollPanH: v }) })}
-                </tbody>
-              </table>
-              <label className="filter-row" title="Pan the canvas left and right when scrolling left to right on the touchpad">
-                <input type="checkbox" data-testid="pref-horizontal-pan" checked={draft.horizontalPan} onChange={(e) => set({ horizontalPan: e.target.checked })} />
-                Pan left/right with horizontal movement
-              </label>
-              <div style={{ minHeight: 18, marginTop: 4, fontSize: 12, color: "#ff6666" }}>{valid ? "" : "Only one action can be assigned to each column"}</div>
-              <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-                <button onClick={() => setDraft((d) => ({ ...d, ...MOUSE_SCROLL_DEFAULTS }))}>Reset to Mouse Defaults</button>
-                <button onClick={() => setDraft((d) => ({ ...d, ...TRACKPAD_SCROLL_DEFAULTS }))}>Reset to Trackpad Defaults</button>
-              </div>
-              <div style={{ fontSize: 11, opacity: 0.65, marginTop: 10 }}>
-                Not offered in the browser: center and warp cursor on zoom (a page cannot move the pointer). A touchpad pinch zooms about the pointer whatever the scroll settings say, as in KiCad.
-              </div>
-              </>
-            )}
+            {page === "mouse" && mousePage()}
           </div>
         </div>
         <div className="dialog-footer">
-          {/* `PAGED_DIALOG`'s reset button: "Reset %s to Defaults" on a page that can be reset (the Colors page's `ResetPanel`) */}
-          {page === "pcb_colors" && (
-            <button style={{ marginRight: "auto" }} title="Reset all colors in this theme to the KiCad defaults" onClick={() => colors.reset()}>
-              Reset Colors to Defaults
-            </button>
-          )}
-          {/* `PANEL_FP_EDITOR_GRAPHICS_DEFAULTS::ResetPanel`: KiCad's factory table */}
-          {page === "fp_graphics" && (
-            <button style={{ marginRight: "auto" }} onClick={() => set({ fpTextGraphics: null })} data-testid="fp-prefs-graphics-reset" title={`Reset to ${FACTORY_TEXT_GRAPHICS.silk.line_width_nm / 1e6} mm silkscreen lines and KiCad's other factory values`}>
-              Reset Graphics Defaults to Defaults
-            </button>
-          )}
+          {/* `PAGED_DIALOG`'s reset button: "Reset %s to Defaults" on a page that can be reset, else "Reset to Defaults" greyed (`UpdateResetButton`) */}
+          <button style={{ marginRight: "auto" }} disabled={!reset} title={reset?.tooltip} data-testid="preferences-reset" onClick={() => reset?.run()}>
+            {reset ? `Reset ${title} to Defaults` : "Reset to Defaults"}
+          </button>
           <button onClick={cancel}>Cancel</button>
           <button className="primary" disabled={!valid} onClick={submit} data-testid="preferences-ok">
             OK

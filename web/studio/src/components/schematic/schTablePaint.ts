@@ -10,6 +10,7 @@ import type { BoardTable, BoardTableCell } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
 import { dashPattern } from "./schGraphicsPainter";
+import { overrideSchItemColors } from "../../state/colorThemeStore";
 import { layoutKicadText, layoutLineAt, resolveFont } from "../../kicad-port/kicadText";
 import { paintLayout } from "../text/kicadTextPaint";
 import { SCH_DEFAULT_PEN_NM, SCH_IU } from "../../kicad-port/schTextSpecs";
@@ -53,7 +54,7 @@ export function paintSchTables(ctx: CanvasRenderingContext2D, view: ViewTransfor
         ctx.fill();
         ctx.restore();
       }
-      const color = selected ? selectedColor : c.color ? rgbaOf(c.color) : base;
+      const color = selected ? selectedColor : c.color && !overrideSchItemColors() ? rgbaOf(c.color) : base;
       // the cell's pen (0: the sheet's default, `getTextThickness`), the glyph's width apart from its height
       const look = { size: [c.size_w || c.size_h, c.size_h] as const, pen: c.pen > 0 ? c.pen : defaultPen, angleDeg, italic: c.italic, bold: c.bold, iu: SCH_IU };
       const font = resolveFont(c.face, c.bold, c.italic);
@@ -75,7 +76,7 @@ export function paintSchTables(ctx: CanvasRenderingContext2D, view: ViewTransfor
     ctx.lineJoin = "round";
     for (const b of t.borders) {
       if (b.width < 0) continue;
-      ctx.strokeStyle = tableSelected ? selectedColor : b.color ? rgbaOf(b.color) : base;
+      ctx.strokeStyle = tableSelected ? selectedColor : b.color && !overrideSchItemColors() ? rgbaOf(b.color) : base;
       ctx.lineWidth = Math.max(b.width, hair * (tableSelected ? 2 : 1));
       const dash = b.style === "solid" || b.style === "default" ? undefined : b.style;
       ctx.setLineDash(dash ? dashPattern(dash, b.width) : []);

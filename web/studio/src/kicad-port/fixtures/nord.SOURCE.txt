@@ -1,0 +1,6 @@
+nord.json: a colour theme file in KiCad's format (KiCad 6's schema, meta.version 3: board and schematic namespaces, nested keys, CSS colour
+strings), one of the community themes KiCad users install into their colors/ folder; colorThemeFile.test.ts reads and writes it.
+
+Source: https://github.com/pointhi/kicad-color-schemes, nord/nord.json at commit 68ea0402f334bdbae175f6ca924743640c07183d (2021-12-05),
+downloaded 2026-11-06 unchanged (sha256 6b4411c515981a25f1734bfe6cfede0f334f39079789f12639c8d3c82e8b7187).
+Licence: CC0 1.0 Universal (the repository's LICENSE), so it may be copied here without conditions.

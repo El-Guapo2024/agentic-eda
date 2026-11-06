@@ -46,10 +46,8 @@ pub(crate) fn filled<F: LibSource + ?Sized>(req: &ImportNetlist, model: &Constra
         }
         let Some(engine) = crate::library_search::installed_engine_footprint(footprints, &full) else { continue };
         if let Some(def) = crate::library_search::installed_footprint(footprints, &full) {
-            let items = eda_model::fp_items_place::placed_kinds(&def.items);
-            if !items.is_empty() {
-                out.library_items.insert(full.clone(), items);
-            }
+            // the library footprint as the Footprint Editor reads it: an exchange gives the board's footprint its record (UI-LEFT PP5)
+            out.library_items.insert(full.clone(), def.clone());
             if !model.footprints.iter().any(|f| f.name == full) {
                 out.definitions.insert(full.clone(), def);
             }

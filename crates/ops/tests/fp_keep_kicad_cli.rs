@@ -17,7 +17,7 @@
 
 use eda_kicad::{export_kicad_pcb, import_kicad_pcb, ExportMeta};
 use eda_model::fp_items::FootprintItems;
-use eda_model::ir::{BoardFootprintCopy, Design, FootprintExtra, Point, Side};
+use eda_model::ir::{BoardFootprintCopy, Design, FootprintExtra, LibraryFootprint, Point, Side};
 use eda_model::pcb_items::TextBox;
 use eda_model::units::mm;
 use eda_model::{ConstraintModel, Footprint};
@@ -91,15 +91,16 @@ const OTHER: &str = r#"(footprint "Other" (version 20241229) (generator "pcbnew"
   (pad "2" smd rect (at 2.5 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
 )"#;
 
-/// The footprint `name` of the library file `text`, as the studio's server hands it to the command: the engine's footprint and its items.
-fn library(name: &str, text: &str) -> (Footprint, FootprintItems) {
+/// The footprint `name` of the library file `text`, as the studio's server hands it to the command: the engine's footprint and the footprint as the Footprint Editor
+/// reads it (its items and record, UI-LEFT PP5).
+fn library(name: &str, text: &str) -> (Footprint, LibraryFootprint) {
     let fp = eda_kicad::parse_footprint_file(text, name).expect("the library footprint");
-    let items = eda_model::fp_items_place::placed_kinds(&eda_kicad::parse_library_footprint(text).expect("the library footprint").footprint.items);
-    (fp, items)
+    let lib = eda_kicad::parse_library_footprint(text).expect("the library footprint").footprint;
+    (fp, lib)
 }
 
 fn exchange(footprint: Option<&str>, options: ExchangeOptions, libs: &[(&str, &str)]) -> Cmd {
-    let libs: Vec<(String, (Footprint, FootprintItems))> = libs.iter().map(|(n, t)| (n.to_string(), library(n, t))).collect();
+    let libs: Vec<(String, (Footprint, LibraryFootprint))> = libs.iter().map(|(n, t)| (n.to_string(), library(n, t))).collect();
     Cmd::ExchangeFootprints {
         references: vec!["U1".into()],
         footprint: footprint.map(str::to_string),

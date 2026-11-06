@@ -15,6 +15,7 @@ import { gridEnvY, gridSizeFor, type GridCategory, type GridOverrides } from "..
 import { reportSnap } from "../../kicad-port/snapReport";
 import type { PcbMagnetic } from "../../kicad-port/snapAnchors";
 import type { Pt } from "../../kicad-port/snapGeom";
+import { getGridSnapping } from "../canvas/gridHelper";
 
 /** Everything about the editor the snapping depends on; the canvas hands it over on every render. */
 export interface FootprintSnapView {
@@ -81,7 +82,7 @@ export class FootprintSnap {
   private env(): GridEnv {
     const v = this.view!;
     const scale = v.scale > 0 ? v.scale : 1;
-    return { scale, gridNm: v.gridNm, visibleGridNm: computeVisibleGridSize(v.gridNm, scale), origin: v.origin, gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides), ...gridEnvY(v) };
+    return { scale, gridNm: v.gridNm, visibleGridNm: computeVisibleGridSize(v.gridNm, scale), origin: v.origin, gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides), ...gridEnvY(v), gridSnapping: getGridSnapping() };
   }
 
   private visibility(): Visibility {
@@ -131,7 +132,7 @@ export class FootprintSnap {
   point(tool: string, world: Pt, mods: FootprintSnapMods, opts: FootprintPointOpts = {}): Pt {
     if (!this.view) return world;
     const h = this.helperFor(tool);
-    h.setUseGrid(!mods.ctrl);
+    h.setUseGrid(getGridSnapping() && !mods.ctrl);
     h.setSnap(!mods.shift);
     const layers: LayerSel = opts.layers ?? (this.view.activeLayer ? new Set([this.view.activeLayer]) : "all");
     const p = whole(h.bestSnapAnchor(world, layers, opts.category ?? "current", opts.skip ?? NO_SKIP));

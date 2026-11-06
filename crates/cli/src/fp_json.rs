@@ -64,9 +64,8 @@ pub(crate) fn fields_json(design: &Design, model: &ConstraintModel, part: &Part,
             out.push(field_json(field_id(&fp.id, name), name, &f.text, &f.layout, fp, true));
             continue;
         }
-        let kept = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id)).and_then(|e| e.tokens.iter().find_map(|t| kept_property_text(t, name)));
-        let linked = model.symbol_links.get(&fp.id).and_then(|l| l.fields.iter().find(|(n, _)| n == name)).map(|(_, t)| t.clone());
-        let text = kept.or(linked).unwrap_or_default();
+        // (a library footprint's record, `FootprintExtra::from_library`, gives the field only where the symbol does not: `eda_ops::fp_editor::board_footprint_field_text`)
+        let text = eda_ops::fp_editor::board_footprint_field_text(design, model, &fp.id, name);
         let mut l = FieldLayout::new(Point { x: Nm::ZERO, y: Nm::ZERO }, if fp.side == eda_model::ir::Side::Bottom { "B.Fab" } else { "F.Fab" });
         l.visible = false;
         out.push(field_json(field_id(&fp.id, name), name, &text, &l, fp, false));
@@ -80,21 +79,6 @@ pub(crate) fn fields_json(design: &Design, model: &ConstraintModel, part: &Part,
 /// `FIELD_T::DATASHEET` and `FIELD_T::DESCRIPTION`'s canonical names.
 pub(crate) const MANDATORY_DATASHEET: &str = "Datasheet";
 pub(crate) const MANDATORY_DESCRIPTION: &str = "Description";
-
-/// The text of a board file's kept `(property "<name>" "<text>" ..)`, unescaped.
-fn kept_property_text(token: &str, name: &str) -> Option<String> {
-    let rest = token.strip_prefix(&format!("(property \"{name}\" \""))?;
-    let mut out = String::new();
-    let mut chars = rest.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => out.push(chars.next()?),
-            '"' => return Some(out),
-            c => out.push(c),
-        }
-    }
-    None
-}
 
 /// The attributes in effect: the edit's, else derived from the pads and the schematic symbol.
 pub(crate) fn attrs_json(design: &Design, fp: &FootprintInstance, footprint: &Footprint) -> Value {

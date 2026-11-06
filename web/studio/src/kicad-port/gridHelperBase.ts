@@ -33,6 +33,11 @@ export interface GridEnv {
   gridSizeOf(category: GridCategory): number;
   /** The Y size of that grid, when the grids are not square (kicad-port/gridOverrides.ts `gridSizeYFor`). */
   gridSizeYOf?(category: GridCategory): number;
+  /**
+   * `GAL::GetGridSnapping()`: the editor's "Snap to grid:" -- Always, or When grid shown while the grid is (kicad-port/windowOptions.ts `gridSnappingActive`). Absent
+   * means on. `canUseGrid` asks it (`m_enableGrid && GetGridSnapping()`).
+   */
+  gridSnapping?: boolean;
 }
 
 export interface Visibility {
@@ -141,9 +146,9 @@ export class GridHelper {
     this.viewSnapPoint.visible = false;
   }
 
-  /** `canUseGrid`. */
+  /** `canUseGrid`: `m_enableGrid && GetGAL()->GetGridSnapping()`. */
   protected canUseGrid(): boolean {
-    return this.enableGrid;
+    return this.enableGrid && this.env.gridSnapping !== false;
   }
 
   // ---- the grid

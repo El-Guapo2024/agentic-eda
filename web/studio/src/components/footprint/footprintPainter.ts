@@ -489,9 +489,10 @@ export function paintFootprint(
   footprint: { pads: LibraryPad[]; graphics: CmdShape[]; texts: CmdText[]; fieldsToDraw?: FieldInfo[]; display?: FootprintItemsDisplay; kicad?: LibraryKeep } | null,
   opts: FpPaintOptions
 ) {
-  if (opts.gridVisible) {
+  // the Footprint Editor's axes are always on (`m_axesEnabled = true`), drawn whether the grid is shown or not, in `LAYER_GRID_AXES`
+  {
     const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
-    paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: opts.gridOrigin ?? [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx }, layerColor("grid"), undefined, "footprint");
+    paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: opts.gridOrigin ?? [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx, visible: opts.gridVisible, axes: d.axes ?? true }, layerColor("grid"), undefined, "footprint", layerColor("grid_axes"));
   }
   drawGridOrigin(ctx, view, opts.gridOrigin, "#1a1a1a"); // the canvas is filled with this colour (FootprintCanvas.tsx)
   // what the texts of this paint are, for `window.__edaText.fp` (components/text/kicadTextPaint.ts)

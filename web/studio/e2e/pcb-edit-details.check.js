@@ -266,7 +266,7 @@
     // ----- the rotation step and the flip direction of the Preferences
     await scenario("the rotation step and the flip direction of the Preferences reach Rotate, Flip and a carried copy", async (t) => {
       const setPrefs = async (stepDeg, flip) => {
-        await __eda.run("common.SuiteControl.openPreferences"); await sleep(500);
+        await __eda.run("common.SuiteControl.openPreferences"); await sleep(500); tid("prefs-page-pcb_edit")?.click(); await sleep(200);
         setValue(tid("pref-rotation-step"), stepDeg); await sleep(100);
         tid(flip === "top_bottom" ? "pref-flip-top-bottom" : "pref-flip-left-right").click(); await sleep(100);
         buttonText(document.querySelector(".dialog"), "OK").click(); await sleep(500);
@@ -277,7 +277,7 @@
       const d90 = delta(p0.rot, (await partOf(refA)).rot);
       t(Math.abs(Math.abs(d90) - 90) < 1e-6, `R turns a quarter by default (${d90})`);
       await undo();
-      await __eda.run("common.SuiteControl.openPreferences"); await sleep(500);
+      await __eda.run("common.SuiteControl.openPreferences"); await sleep(500); tid("prefs-page-pcb_edit")?.click(); await sleep(200);
       const step = tid("pref-rotation-step");
       t(!!step && step.value === "90" && tid("pref-flip-left-right")?.checked === true, "Preferences has the step (90) and the flip direction (left/right) of KiCad's defaults");
       buttonText(document.querySelector(".dialog"), "Cancel").click(); await sleep(300);
@@ -310,7 +310,7 @@
       } finally {
         await setPrefs(90, "left_right");
       }
-      await __eda.run("common.SuiteControl.openPreferences"); await sleep(500);
+      await __eda.run("common.SuiteControl.openPreferences"); await sleep(500); tid("prefs-page-pcb_edit")?.click(); await sleep(200);
       t(tid("pref-rotation-step")?.value === "90" && tid("pref-flip-left-right")?.checked === true, "and the defaults are back");
       buttonText(document.querySelector(".dialog"), "Cancel").click(); await sleep(300);
       t((await snapshot()) === base, "the board is as it was");

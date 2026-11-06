@@ -9,6 +9,11 @@
 // Wired to Viewer3D's camera through a small imperative handle (`Viewer3DApi`, defined in ./Viewer3D) rather than a shared prop-callback/context: Viewer3D
 // creates the handle once its camera exists and hands it to App.tsx via `onReady`; App.tsx passes it straight through here as `api`. Buttons are disabled until
 // `api` is non-null (i.e. until Viewer3D has actually mounted its Three.js scene).
+//
+// With the 3D viewer's "Customize toolbars" on (Preferences > 3D Viewer > Toolbars) the toolbar is the person's (state/toolbarSettings.ts `resolvedToolbar`):
+// separators, spacers and groups as they left them; a group is a button of its first usable tool whose right click lists the others. The zoom box a customised
+// toolbar may hold is left out, as KiCad's 3D frame has no factory for it (`ApplyConfiguration`: "Unable to find control factory").
+import { useState } from "react";
 import actionsData from "../../kicad/actions.json";
 import toolbarData from "../../kicad/viewer3d_toolbars.json";
 import type { ActionsFile, Viewer3dAction, Viewer3dToolbarsFile } from "../../kicad/types";
@@ -17,6 +22,8 @@ import type { PanDirection, RotateAxis, RotateDir } from "../../kicad-port/actio
 import { setDockColumnCollapsed, useDockLayout } from "../../state/dockLayoutStore";
 import { useStudioDispatch, useStudioState } from "../../state/store";
 import { ActionIcon } from "../Toolbar";
+import { ContextMenu } from "../canvas/ContextMenu";
+import { resolvedToolbar, useToolbarSettings } from "../../state/toolbarSettings";
 import type { Viewer3DApi } from "./Viewer3D";
 
 const file = toolbarData as unknown as Viewer3dToolbarsFile;
@@ -64,6 +71,9 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
   const set = (patch: Partial<typeof opts>) => dispatch({ type: "SET_VIEWER3D_OPTIONS", options: patch });
   const toast = (message: string, kind: "info" | "error") => dispatch({ type: "TOAST", message, kind });
   const ready = !!api;
+  useToolbarSettings();
+  const items = resolvedToolbar("3d", "main")?.items ?? file.toolbars[0]!.items;
+  const [groupMenu, setGroupMenu] = useState<{ x: number; y: number; items: string[] } | null>(null);
 
   const handlers: Record<string, Handler> = {
     "3DViewer.Control.reloadBoard": { run: () => api?.reload(), enabled: ready },
@@ -87,20 +97,48 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
 
   return (
     <div className="toolbar" data-toolbar="viewer3d" data-editor="3d">
-      {file.toolbars[0]!.items.map((item, i) => {
+      {items.map((item, i) => {
         if (item.type === "separator") return <div key={i} className="toolbar-separator" role="separator" />;
-        if (item.type !== "action") return null;
-        const h = handlers[item.action];
-        const d = describe(item.action);
+        if (item.type === "spacer") return <div key={i} className="toolbar-spacer" aria-hidden data-spacer={item.size} style={{ width: item.size, flexShrink: 0 }} />;
+        if (item.type === "control") return null;
+        const name = item.type === "group" ? (item.items.find((n) => handlers[n]?.enabled) ?? item.items[0]!) : item.action;
+        const h = handlers[name];
+        const d = describe(name);
         const enabled = !!h?.enabled;
         const tooltip = enabled ? [d.label, d.hotkey ? displayHotkey(d.hotkey) : null].filter(Boolean).join(" — ") : `${d.label} (${h?.reason ?? "not ported yet"})`;
         const pressed = enabled ? h?.checked : undefined;
         return (
-          <button key={i} className={`toolbar-button${pressed ? " active" : ""}`} aria-pressed={pressed} disabled={!enabled} title={tooltip} onClick={() => h?.run()}>
+          <button
+            key={i}
+            className={`toolbar-button${pressed ? " active" : ""}${item.type === "group" ? " has-menu" : ""}`}
+            aria-pressed={pressed}
+            data-action={name}
+            data-group={item.type === "group" ? item.label : undefined}
+            disabled={!enabled}
+            title={item.type === "group" ? `${tooltip} (${item.label}: right click for the others)` : tooltip}
+            onClick={() => h?.run()}
+            onContextMenu={
+              item.type === "group"
+                ? (e) => {
+                    e.preventDefault();
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setGroupMenu({ x: r.left, y: r.bottom, items: item.items });
+                  }
+                : undefined
+            }
+          >
             <ActionIcon iconName={d.icon} />
           </button>
         );
       })}
+      {groupMenu && (
+        <ContextMenu
+          x={groupMenu.x}
+          y={groupMenu.y}
+          onClose={() => setGroupMenu(null)}
+          entries={groupMenu.items.map((n) => ({ label: describe(n).label, icon: <ActionIcon iconName={describe(n).icon} size={16} />, disabled: !handlers[n]?.enabled, onSelect: () => handlers[n]?.run() }))}
+        />
+      )}
     </div>
   );
 }

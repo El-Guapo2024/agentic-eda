@@ -3364,25 +3364,48 @@ pub struct FootprintExtra {
     /// ([`DrawingsSection::embedded`]) -- see [`crate::embedded_files`]. A footprint on a board saved by KiCad names a model it embeds here and in the board's list.
     #[serde(default, skip_serializing_if = "crate::embedded_files::EmbeddedFiles::is_empty")]
     pub embedded: crate::embedded_files::EmbeddedFiles,
-    /// The footprint's text boxes, reference images, points and barcodes (`fp_text_box`, `(image ..)`, `(point ..)`, `(barcode ..)` inside the footprint: UI-LEFT P17), the
-    /// library footprint's model ([`crate::fp_items::FootprintItems`], only those four kinds), in the frame of the footprint's pads like its art -- a move, a turn or a flip of
-    /// the footprint carries them ([`crate::fp_items_place::placed`]). The footprint's own, as KiCad's footprint owns them: Duplicate, Paste and Create Array copy them with
+    /// The footprint's text boxes, reference images, points and barcodes (`fp_text_box`, `(image ..)`, `(point ..)`, `(barcode ..)` inside the footprint: UI-LEFT P17) and
+    /// its dimensions and tables (`(dimension ..)`, `(table ..)`: UI-LEFT PP14), the library footprint's model ([`crate::fp_items::FootprintItems`], those six kinds: a
+    /// footprint's zones are the board's zones of `Zone::parent_footprint`, its groups [`Self::groups`]), in the frame of the footprint's pads like its art -- a move, a turn
+    /// or a flip of the footprint carries them ([`crate::fp_items_place::placed`]). The footprint's own, as KiCad's footprint owns them: Duplicate, Paste and Create Array copy them with
     /// the footprint, Edit Footprint (Ctrl+E) shows them in its copy and Update Footprint on Board puts the copy's back, and Update and Change Footprint make them the
     /// library footprint's (`ExchangeFootprint` takes them from the new footprint: `eda_ops`' `fp_exchange`). An image's pixels are as the board has them (`FOOTPRINT::Rotate`
     /// and `Flip` turn and mirror them: the browser does it, see [`crate::fp_items_place::ImageXform`]). Written while the part is on the footprint they were read from
-    /// ([`Self::source_name`]; a footprint made here keeps the ones the board put on it, [`Self::items_are_for`]). A locked one stays among [`Self::tokens`]. Additive: an
-    /// older `design.json` kept them all in [`Self::tokens`].
+    /// ([`Self::source_name`]; a footprint made here keeps the ones the board put on it, [`Self::items_are_for`]). A locked one is among them ([`Self::locked_items`]); a form
+    /// the board's reader of its kind refuses stays among [`Self::tokens`]. Additive: an older `design.json` kept them all in [`Self::tokens`].
     #[serde(default, skip_serializing_if = "crate::fp_items::FootprintItems::is_empty")]
     pub items: crate::fp_items::FootprintItems,
+    /// The record is the library footprint's, not a board file's (UI-LEFT PP5): what KiCad's footprint holds once it is a clone of the library's (Place Footprint,
+    /// Update and Change Footprint, Update PCB from Schematic's exchange, Update Footprint on Board of a footprint made here): its pads' layer sets, die lengths and
+    /// properties ([`Self::pads`]), its description, tags, jumper groups, private layers and the items no model holds ([`Self::tokens`], written while the part is on
+    /// [`Self::source_name`]), its pads with no copper and its holes, its margins, its 3D body and its items. Its fields are the symbol's and the footprint's edit's,
+    /// as a footprint made here has them (`updateFootprintParameters` after the exchange): [`Self::holds_file_form`] is false. Additive.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_library: bool,
+    /// The ids of [`Self::items`] that are locked (`(locked yes)`, `BOARD_ITEM::IsLocked` of a footprint's child), written so (UI-LEFT PP14: such an item was kept as
+    /// the text of its form). Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locked_items: Vec<String>,
+    /// Where the footprint was when its zones -- the board's zones whose `Zone::parent_footprint` it is, held in the board's frame as KiCad holds a footprint's
+    /// `Zones()` -- were last put where they are ([`crate::fp_items_place::ZonesPose`]). Every command that moves, turns or flips the footprint takes them along
+    /// (`FOOTPRINT::Move`, `SetOrientation` and `Flip` pass the transform to each zone): `eda_ops`' `Board::apply` puts them where this pose and the footprint's say
+    /// (UI-LEFT PP14). `None`: they are where the footprint's pose is now. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zones_pose: Option<crate::fp_items_place::ZonesPose>,
 }
 
 impl FootprintExtra {
     /// Whether the record holds what a board file said of the footprint -- its fields and other forms among [`Self::tokens`], written while the part is on
     /// [`Self::source_name`] -- and not only facts the board gave a footprint made here (the items Update Footprint on Board put on it, a mask margin, a uuid an
-    /// exchange kept). The writer takes the fields and the paste margins of a footprint whose record holds none from the symbol and the footprint's edit, as for one with no
-    /// record.
+    /// exchange kept) or a library footprint's ([`Self::from_library`]). The writer takes the fields and the paste margins of a footprint whose record holds none from
+    /// the symbol and the footprint's edit, as for one with no record.
     pub fn holds_file_form(&self) -> bool {
-        !self.source_name.is_empty()
+        !self.source_name.is_empty() && !self.from_library
+    }
+
+    /// Whether the item `id` of [`Self::items`] is locked ([`Self::locked_items`]).
+    pub fn item_locked(&self, id: &str) -> bool {
+        self.locked_items.iter().any(|l| l == id)
     }
 
     /// Whether [`Self::items`] are the footprint's when the part is on the footprint the board file names `written_name`: the ones read from a file while the part is on

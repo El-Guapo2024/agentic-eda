@@ -61,7 +61,7 @@ test("the Layers tab lists the editor's board: F.Cu, Inner layers, B.Cu, non_cu_
 });
 
 test("a row's name is the board's layer name (In1.Cu is 'Inner layers') or the standard one, its tooltip non_cu_seq's", () => {
-  assert.deepEqual(["F.Cu", "In1.Cu", "B.Cu", "F.SilkS", "Dwgs.User", "F.CrtYd", "F.Adhes", "Edge.Cuts", "User.3"].map(fpLayerLabel), ["F.Cu", "Inner layers", "B.Cu", "F.Silkscreen", "User.Drawings", "F.Courtyard", "F.Adhesive", "Edge.Cuts", "User.3"]);
+  assert.deepEqual(["F.Cu", "In1.Cu", "B.Cu", "F.SilkS", "Dwgs.User", "F.CrtYd", "F.Adhes", "Edge.Cuts", "User.3"].map((n) => fpLayerLabel(n)), ["F.Cu", "Inner layers", "B.Cu", "F.Silkscreen", "User.Drawings", "F.Courtyard", "F.Adhesive", "Edge.Cuts", "User.3"]);
   assert.deepEqual(["F.Cu", "In1.Cu", "B.Cu", "B.Mask", "Edge.Cuts", "Margin", "F.Fab", "User.12"].map(fpLayerTooltip), [
     "Front copper layer",
     "Inner copper layer",

@@ -64,7 +64,11 @@ export function moveArcPoint(shape: ArcShape, role: ArcRole, to: readonly [numbe
   return { type: "arc", start: r(a.start), mid: r(a.mid), end: r(a.end) };
 }
 
-/** `EESCHEMA_SETTINGS::m_Drawing.arc_edit_mode`, kept as KiCad keeps it, in the user's settings (this browser's), not the project's. */
+/**
+ * `EESCHEMA_SETTINGS::m_Drawing.arc_edit_mode`, kept as KiCad keeps it, in the user's settings (this browser's), not the project's.
+ * INACTIVE since UI-LEFT-2 FF7 (task-v2-prefs): the mode is the preference `schArcEditMode` (kicad-port/preferences.ts), which Preferences > Schematic Editor >
+ * Editing Options shows and the point editor and the arc mode actions read and set; `schArcEditMode` / `setSchArcEditMode` are kept, called by nothing.
+ */
 const KEY = "eda.sch.arcEditMode";
 const MODES: readonly ArcEditMode[] = ["keep_center_adjust_angle_radius", "keep_center_ends_adjust_angle", "keep_endpoints_or_start_direction"];
 let mode: ArcEditMode | null = null;

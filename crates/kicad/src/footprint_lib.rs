@@ -339,7 +339,7 @@ fn written_field_names(fp: &eda_model::ir::LibraryFootprint) -> Vec<&str> {
 
 /// `FOOTPRINT::cmp_drawings`' first key for the dimensions, `Type()`: `PCB_DIM_ALIGNED_T`, `PCB_DIM_LEADER_T`, `PCB_DIM_CENTER_T`, `PCB_DIM_RADIAL_T`,
 /// `PCB_DIM_ORTHOGONAL_T` (`include/core/typeinfo.h`).
-fn dimension_type_rank(d: &eda_model::ir::Dimension) -> u8 {
+pub(crate) fn dimension_type_rank(d: &eda_model::ir::Dimension) -> u8 {
     use eda_model::ir::DimensionKind;
     match d.kind {
         DimensionKind::Aligned { .. } => 0,
@@ -528,7 +528,7 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
     // The reference images, which `FOOTPRINT::cmp_drawings` puts after the shapes and before the texts (`PCB_REFERENCE_IMAGE_T`).
     for img in &items.images {
         let uuid = uuid_of("fpimage", &img.id);
-        crate::pcb_image::write_with_uuid(&mut out, img, false, &uuid);
+        crate::pcb_image::write_with_uuid(&mut out, img, fp.kicad.locked.contains(&img.id), &uuid);
         written.entry(img.id.clone()).or_default().push(uuid);
     }
 
@@ -543,17 +543,17 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
     // barcodes and the dimensions; an item of one type after another in the order the footprint has them.
     for t in &items.text_boxes {
         let uuid = uuid_of("fptextbox", &t.id);
-        crate::pcb_textbox::write_as(&mut out, t, false, "fp_text_box", &uuid);
+        crate::pcb_textbox::write_as(&mut out, t, fp.kicad.locked.contains(&t.id), "fp_text_box", &uuid);
         written.entry(t.id.clone()).or_default().push(uuid);
     }
     for t in &items.tables {
         let uuid = uuid_of("fptable", &t.id);
-        crate::pcb_table::write_with_uuid(&mut out, t, false, &uuid);
+        crate::pcb_table::write_with_uuid(&mut out, t, fp.kicad.locked.contains(&t.id), &uuid);
         written.entry(t.id.clone()).or_default().push(uuid);
     }
     for b in &items.barcodes {
         let uuid = uuid_of("fpbarcode", &b.id);
-        crate::barcode_io::write_with_uuid(&mut out, b, false, &uuid);
+        crate::barcode_io::write_with_uuid(&mut out, b, fp.kicad.locked.contains(&b.id), &uuid);
         written.entry(b.id.clone()).or_default().push(uuid);
     }
     let mut dims: Vec<&eda_model::ir::Dimension> = items.dimensions.iter().collect();
@@ -566,7 +566,7 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
         crate::pcb_items::write_dimension(
             &mut out,
             d,
-            &crate::pcb_items::DimensionArgs { uuid: &uuid, text_uuid: &uuid, locked: false, text: &geom.text, text_at: (geom.text_at.x, geom.text_at.y), text_angle_millideg: geom.text_angle },
+            &crate::pcb_items::DimensionArgs { uuid: &uuid, text_uuid: &uuid, locked: fp.kicad.locked.contains(&d.id), text: &geom.text, text_at: (geom.text_at.x, geom.text_at.y), text_angle_millideg: geom.text_angle },
         );
         written.entry(d.id.clone()).or_default().push(uuid);
     }
@@ -687,7 +687,7 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
         let uuid = uuid_of("fpzone", &z.id);
         let args = crate::pcb_items::ZoneArgs {
             net: 0,
-            locked: false,
+            locked: fp.kicad.locked.contains(&z.id),
             uuid: &uuid,
             fills: &[],
             filled: false,

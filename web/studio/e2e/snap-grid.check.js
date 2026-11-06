@@ -9,7 +9,7 @@
 //     with the macOS rule a motion more than 300 ms after the press is a drag, one inside it is not; a drag Escaped before the release commits nothing;
 //   the board's grid (the measure tool: every layer, the current grid): the point goes to the grid, Next / Previous Grid change it, Ctrl turns it off (whole um);
 //   grid overrides on the board: the graphics category ticked in Edit Grids is the grid of the line tool, and Toggle Grid Overrides switches it off;
-//   `BestSnapAnchor`: with Snap to Pads on Always a point near a pad's centre goes to it, Shift turns that off, and the snap line through the pad keeps its y on the way along its
+//   `BestSnapAnchor`: with Snap to pads on Always (Preferences > PCB Editor > Editing Options) a point near a pad's centre goes to it, Shift turns that off, and the snap line through the pad keeps its y on the way along its
 //     row (the hysteresis and the intersections are the unit tests': kicad-port/pcbGridHelper.test.ts -- the snap lines would take over from the anchor in a browser);
 //   the schematic's grid list (Next / Previous Grid cycle the four eeschema grids, the painter's dots follow, Edit Grids has the Schematic page and its overrides), the text
 //     tool on the text grid (10 mil) while overrides are on and on the current grid when off, a wire's first point on the grid and not pulled to a pin far away, and a move
@@ -28,6 +28,14 @@
   const json = (url) => fetch(url).then((r) => r.json());
   const E = window.__eda;
   const state = () => E.state();
+  /** Opens Preferences on PCB Editor > Editing Options (the dialog opens on the page it was left on) and gives its Magnetic Points' "Snap to pads:". */
+  const padsSelect = async () => {
+    await E.run("common.SuiteControl.openPreferences");
+    await sleep(200);
+    document.querySelector('[data-testid="prefs-page-pcb_edit"]')?.click();
+    await sleep(150);
+    return document.querySelector('select[aria-label="Snap to pads:"]');
+  };
   const snap = () => state().snap;
   const near = (a, b, tol = 1) => Array.isArray(a) && Array.isArray(b) && Math.abs(a[0] - b[0]) <= tol && Math.abs(a[1] - b[1]) <= tol;
   const roundTo = (v, g) => Math.round(v / g) * g;
@@ -236,9 +244,8 @@
       const all = st.parts.flatMap((p) => p.pads.map((q) => ({ ref: p.ref, num: q.num, at: [q.x, q.y] })));
       const clear = (q) => Math.min(...all.filter((o) => o !== q).map((o) => Math.hypot(o.at[0] - q.at[0], o.at[1] - q.at[1])));
       const pad = all.filter((q) => q.at[0] >= x0 && q.at[0] <= x1 && q.at[1] >= y0 && q.at[1] <= y1 && Math.abs(q.at[0] - roundTo(q.at[0], g)) > 200_000 && Math.abs(q.at[1] - roundTo(q.at[1], g)) > 200_000).sort((a, b) => clear(b) - clear(a))[0];
-      await run("common.SuiteControl.openPreferences");
-      const padsSel = document.querySelector('select[aria-label="Snap to Pads:"]');
-      check("Preferences has Snap to Pads (Magnetic Points)", !!padsSel);
+      const padsSel = await padsSelect();
+      check("Preferences has Snap to pads (PCB Editor > Editing Options' Magnetic Points)", !!padsSel);
       check("a pad off the grid is on screen to snap to", !!pad);
       if (padsSel && pad) {
         padsWas = padsSel.value;
@@ -262,8 +269,7 @@
         await hover(...nearCentre);
         s = dx === undefined ? null : await hover(pad.at[0] + dx, pad.at[1] + 7 * perPx);
         check("snap line: along the pad's row the point keeps the pad's y and goes to the grid in x", s && s.output[1] === pad.at[1] && s.output[0] === roundTo(pad.at[0] + dx, g), `${JSON.stringify(s?.output)} pad ${pad.at}`);
-        await run("common.SuiteControl.openPreferences");
-        const again = document.querySelector('select[aria-label="Snap to Pads:"]');
+        const again = await padsSelect();
         if (again) setNative(again, padsWas);
         await sleep(80);
         button("OK")?.click();
@@ -427,7 +433,7 @@
   } finally {
     try { delete navigator.platform; } catch { /* not ours */ }
     try {
-      if (padsWas !== null) { await run("common.SuiteControl.openPreferences"); const sel = document.querySelector('select[aria-label="Snap to Pads:"]'); if (sel) setNative(sel, padsWas); await sleep(80); button("OK")?.click(); await sleep(300); }
+      if (padsWas !== null) { const sel = await padsSelect(); if (sel) setNative(sel, padsWas); await sleep(80); button("OK")?.click(); await sleep(300); }
       await toSelect();
       await clickTab(firstTab === "schematic" ? "Schematic" : "PCB");
     } catch { /* the tab and the preference are not worth failing for */ }

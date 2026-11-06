@@ -3,7 +3,7 @@
 import type { StudioState } from "./store";
 import { getGridSettings } from "./gridSettings";
 import { getGridOverrides } from "./gridOverrides";
-import { getSnapOrigin } from "../components/canvas/gridHelper";
+import { getGridSnapping, getSnapOrigin } from "../components/canvas/gridHelper";
 import { toPcbMagnetic } from "../kicad-port/preferences";
 import { dragOriginAnchor, modificationSnap, type ModificationView } from "../kicad-port/modificationAnchor";
 import { snapPoint } from "../components/canvas/gridHelper";
@@ -24,6 +24,7 @@ export function modificationViewOf(state: StudioState): ModificationView | null 
     layerVisible: state.layerVisible,
     highContrast: state.highContrast,
     activeLayer: state.activeLayer,
+    gridSnapping: getGridSnapping(),
   };
 }
 

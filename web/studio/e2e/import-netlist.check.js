@@ -115,7 +115,8 @@
   await scenario("Update PCB applies it; Close hands TP99 to the Move tool; the drop places it; one Undo takes the whole import back", async (t) => {
     await setStrict(false);
     tid("import-netlist-update").click();
-    t(await until(() => tid("import-netlist-label")?.textContent === "Changes Applied to PCB" && messages().some((m) => /^Total/.test(m))), "Changes Applied to PCB");
+    // the panel is cleared for the run (`m_MessageWindow->Clear()`): its totals are the update's
+    t(await until(() => tid("import-netlist-label")?.textContent === "Changes Applied to PCB" && messages().some((m) => /^Changed /.test(m)) && messages().some((m) => /^Total/.test(m))), "Changes Applied to PCB");
     t(messages().includes(`Changed R2 value from ${r2Before} to 470.`), `R2: ${messages().filter((m) => /R2/.test(m))}`);
     t(messages().includes("Removed unused footprint R1.") && messages().includes("Added TP99 (footprint 'TestPoint:TestPoint_Pad_D1.0mm')."), "R1 removed, TP99 added");
     t((await partOf("R2")).value === "470", "R2 is 470 on the board");
@@ -147,9 +148,9 @@
     tid("import-netlist-link-1").click();
     await until(() => messages().some((m) => /^Total/.test(m)));
     tid("import-netlist-update").click();
-    t(await until(() => tid("import-netlist-label")?.textContent === "Changes Applied to PCB" && messages().some((m) => /^Total/.test(m))), "applied");
+    t(await until(() => tid("import-netlist-label")?.textContent === "Changes Applied to PCB" && messages().some((m) => /^Changed /.test(m)) && messages().some((m) => /^Total/.test(m))), "applied");
     tid("import-netlist-close").click();
-    await until(() => E.state().tool === "move");
+    t(await until(() => E.state().tool === "move" && (E.state().moving?.refs ?? []).includes("TP99")), `the Move tool carries TP99: ${JSON.stringify(E.state().moving)}`);
     // far off the board: a placement the gates refuse (the view read again: the carry may have moved it)
     toScreen = (await screenOf()) ?? toScreen;
     await click(-40, -40, 2000);

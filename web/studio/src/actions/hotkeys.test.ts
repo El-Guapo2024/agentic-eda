@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { eventToHotkey, eventToHotkeyCandidates, displayHotkey, effectiveHotkey } from "./hotkeys";
+import { eventToHotkey, eventToHotkeyCandidates, displayHotkey, effectiveHotkey, defaultHotkey, setUserHotkeyOverrides } from "./hotkeys";
 
 function key(partial: Partial<{ key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }>) {
   return { key: "a", ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...partial } as unknown as KeyboardEvent;
@@ -92,8 +92,8 @@ test("eventToHotkeyCandidates: letters, digits and named keys have exactly one s
 test("eventToHotkeyCandidates: Ctrl+'+' typed with Shift also matches KiCad's 'Ctrl++'", () => {
   // changeTrackLayerNext / zoomIn (macOS) are spelled "Ctrl++": the typed "+" already carries the Shift.
   assert.deepEqual(eventToHotkeyCandidates(keyc({ key: "+", code: "Equal", ctrlKey: true, shiftKey: true }), false), ["Ctrl+Shift++", "Ctrl++", "Ctrl+Shift+="]);
-  // no Shift (numpad '+'): only the plain reading
-  assert.deepEqual(eventToHotkeyCandidates(keyc({ key: "+", code: "NumpadAdd", ctrlKey: true }), false), ["Ctrl++"]);
+  // no Shift (numpad '+'): the plain reading, then the number pad's own name (`WXK_NUMPAD_ADD`, "Num Pad +")
+  assert.deepEqual(eventToHotkeyCandidates(keyc({ key: "+", code: "NumpadAdd", ctrlKey: true }), false), ["Ctrl++", "Ctrl+Num Pad +"]);
 });
 
 test("eventToHotkeyCandidates: Ctrl+Shift+'.' (typed as '>') matches similarZone's 'Ctrl+Shift+.'", () => {
@@ -105,4 +105,39 @@ test("eventToHotkeyCandidates: Ctrl+Shift+'.' (typed as '>') matches similarZone
 test("eventToHotkeyCandidates: Cmd stands in for Ctrl on Mac in every alternate", () => {
   const c = eventToHotkeyCandidates(keyc({ key: "+", code: "Equal", metaKey: true, shiftKey: true }), true);
   assert.deepEqual(c, ["Ctrl+Shift++", "Ctrl++", "Ctrl+Shift+="]);
+});
+
+test("eventToHotkeyCandidates: a number pad key also reads as KiCad's Num Pad name; Page Up/Down are PgUp/PgDn", () => {
+  assert.deepEqual(eventToHotkeyCandidates(keyc({ key: "7", code: "Numpad7" }), false), ["7", "Num Pad 7"]);
+  assert.deepEqual(eventToHotkeyCandidates(keyc({ key: "Enter", code: "NumpadEnter", shiftKey: true }), false), ["Shift+Enter", "Shift+Num Pad Enter"]);
+  assert.equal(eventToHotkey(keyc({ key: "PageUp", code: "PageUp" }), false), "PgUp");
+  assert.equal(eventToHotkey(keyc({ key: "PageDown", code: "PageDown", ctrlKey: true }), false), "Ctrl+PgDn");
+});
+
+test("defaultHotkey: the table's wrong defaults, read again from the C++ (`#ifdef __WXMAC__` arms, KiCad 10's Cycle Arc Drawing Mode)", () => {
+  const f1 = { hotkey: "F1", altHotkey: null, macHotkey: null, macAltHotkey: null };
+  assert.deepEqual(defaultHotkey({ ...f1, name: "pcbnew.PointEditor.addCorner" }, false), { hotkey: "Insert", altHotkey: null });
+  assert.deepEqual(defaultHotkey({ ...f1, name: "pcbnew.PointEditor.addCorner" }, true), { hotkey: "F1", altHotkey: null });
+  assert.deepEqual(defaultHotkey({ ...f1, name: "eeschema.InteractiveEdit.repeatDrawItem" }, false), { hotkey: "Insert", altHotkey: null });
+  const zone = { name: "pcbnew.InteractiveDrawing.zone", hotkey: "Ctrl+Alt+Shift+Z", altHotkey: null, macHotkey: null, macAltHotkey: null };
+  assert.deepEqual(defaultHotkey(zone, false), { hotkey: "Ctrl+Shift+Z", altHotkey: null });
+  assert.deepEqual(defaultHotkey(zone, true), { hotkey: "Alt+Z", altHotkey: null });
+  assert.equal(defaultHotkey({ name: "common.InteractiveDrawing.cycleArcDrawMode", hotkey: null, altHotkey: null, macHotkey: null, macAltHotkey: null }, false).hotkey, "Alt+/");
+  // no name: the table as it is
+  assert.deepEqual(defaultHotkey(f1, false), { hotkey: "F1", altHotkey: null });
+});
+
+test("effectiveHotkey: the person's hotkeys (user.hotkeys) first, then the default", () => {
+  const route = { name: "pcbnew.InteractiveRouter.SingleTrack", hotkey: "X", altHotkey: null, macHotkey: null, macAltHotkey: null };
+  try {
+    setUserHotkeyOverrides(new Map([["pcbnew.InteractiveRouter.SingleTrack", { hotkey: "Shift+K", altHotkey: "F9" }]]));
+    assert.deepEqual(effectiveHotkey(route, false), { hotkey: "Shift+K", altHotkey: "F9" });
+    assert.deepEqual(effectiveHotkey(route, true), { hotkey: "Shift+K", altHotkey: "F9" });
+    assert.deepEqual(effectiveHotkey({ ...route, name: "pcbnew.Other.action" }, false), { hotkey: "X", altHotkey: null }, "an action the file does not name keeps its default");
+    setUserHotkeyOverrides(new Map([["pcbnew.InteractiveRouter.SingleTrack", { hotkey: null, altHotkey: null }]]));
+    assert.deepEqual(effectiveHotkey(route, false), { hotkey: null, altHotkey: null }, "a cleared hotkey stays cleared");
+  } finally {
+    setUserHotkeyOverrides(null);
+  }
+  assert.deepEqual(effectiveHotkey(route, false), { hotkey: "X", altHotkey: null });
 });

@@ -121,3 +121,38 @@ test("the Display Options choices: thickness 0.5 .. 10 by 0.5, minimum spacing 5
   assert.equal(gridMinSpacingValue(250), 200);
   assert.equal(gridMinSpacingValue(12.4), 12);
 });
+
+// ---------------------------------------------------------------- UI-LEFT-2 CC5: the axes (`m_axesEnabled`)
+
+test("gridMarks with the axes: the two axes through the world's origin across the screen, minorLineWidth wide, and no grid line on them", () => {
+  const view = { x: 50, y: 50, scale: 1e-5 }; // the world's origin in the middle of a 100 x 100 px screen
+  const lines = gridMarks(view, 100, 100, spec("lines", { axes: true }));
+  const axes = lines.filter((m): m is Extract<GridMark, { kind: "axis" }> => m.kind === "axis");
+  assert.deepEqual(
+    axes.map((a) => [a.x0, a.y0, a.x1, a.y1, a.width]),
+    [
+      [-5_000_000, 0, 5_000_000, 0, 1 / 1e-5],
+      [0, -5_000_000, 0, 5_000_000, 1 / 1e-5],
+    ],
+    "DrawLine( ( worldStart.x, 0 ), ( worldEnd.x, 0 ) ), then the y axis"
+  );
+  const grid = lines.filter((m): m is Extract<GridMark, { kind: "line" }> => m.kind === "line");
+  assert.ok(!grid.some((l) => (l.y0 === 0 && l.y1 === 0) || (l.x0 === 0 && l.x1 === 0)), "`if( m_axesEnabled && y == 0.0 ) continue;`");
+  assert.equal(grid.length, gridMarks(view, 100, 100, spec("lines")).length - 2);
+  // Dots: a dot is where two drawn lines cross, so none lies on an axis
+  const dots = gridMarks(view, 100, 100, spec("dots", { axes: true })).filter((m) => m.kind === "rect") as Extract<GridMark, { kind: "rect" }>[];
+  assert.ok(!dots.some((d) => Math.abs(d.x + d.w / 2) < 1 || Math.abs(d.y + d.h / 2) < 1));
+  // Small crosses skip nothing
+  const crosses = gridMarks(view, 100, 100, spec("small-cross", { axes: true }));
+  assert.ok(crosses.some((m) => m.kind === "cross" && m.x === 0 && m.y === 0));
+  // the grid's origin elsewhere: the axes stay at the world's, and the grid's lines are skipped only where they are at 0
+  const off = gridMarks(view, 100, 100, spec("lines", { axes: true, origin: [500_000, 500_000] }));
+  assert.ok(off.some((m) => m.kind === "axis" && m.y0 === 0) && !off.some((m) => m.kind === "line" && m.y0 === 0));
+  assert.equal(off.filter((m) => m.kind === "line").length, gridMarks(view, 100, 100, spec("lines", { origin: [500_000, 500_000] })).length);
+});
+
+test("gridMarks of a hidden grid: the axes only (DrawGrid draws them before `if( !m_gridVisibility ... ) return;`), nothing without them", () => {
+  const marks = gridMarks(view1, 100, 100, spec("dots", { visible: false, axes: true }));
+  assert.deepEqual(marks.map((m) => m.kind), ["axis", "axis"]);
+  assert.deepEqual(gridMarks(view1, 100, 100, spec("dots", { visible: false })), []);
+});

@@ -30,6 +30,7 @@ import { measureStrokeText } from "../text/strokeFont";
 import { SymbolSnap, type SymbolSnapMods } from "./symbolSnap";
 import { paintSnapOverlay } from "../canvas/snapOverlayPainter";
 import { layerColor } from "../canvas/layers";
+import { snapGridNm } from "../canvas/gridHelper";
 import { handleWheel, leftDragOutcome } from "../../kicad-port/viewControls";
 import { wheelInputOf } from "../../hooks/canvasWheel";
 import { useLibraryViewControls } from "../libraryViewControls";
@@ -55,6 +56,7 @@ import { carriedItems } from "../../kicad-port/symCarry";
 import { bezierFromClicks, bezierGraphic } from "../../kicad-port/symBezier";
 import { addCorner, canAddCorner, eeFindHandle, handlePos, POINT_SIZE_PX, removableCorner, removeCorner, type EeHandle } from "../../kicad-port/eePointEdit";
 import { pinsDraggedWithEdge, symArcEditMode, symDrag, symEditShape, symGraphicFrom, symPointEditor } from "../../kicad-port/symPointEdit";
+import { paintingIn, useColorThemeStamp } from "../../state/colorThemeStore";
 import "../../styles/canvas.css";
 
 const SHAPE_TOOL_KIND: Partial<Record<SymToolId, SymShapeKind>> = {
@@ -304,8 +306,9 @@ export function SymbolEditorCanvas() {
     userMovedRef.current = false;
   }, [state.libId]);
 
-  // Render loop.
-  useEffect(() => {
+  // Render loop, in the Symbol Editor's colour theme (Preferences > Symbol Editor > Colors: its own, or the schematic editor's), redrawn when it changes.
+  const themeStamp = useColorThemeStamp();
+  useEffect(() => paintingIn("symbol", () => {
     const canvas = canvasRef.current;
     if (!canvas || containerSize.width === 0) return;
     const dpr = window.devicePixelRatio || 1;
@@ -351,7 +354,7 @@ export function SymbolEditorCanvas() {
     }
     ctx.restore();
     ctx.restore();
-  }, [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick]);
+  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -703,8 +706,8 @@ export function SymbolEditorCanvas() {
         const shape = g.kind === "polyline" ? symEditShape(g, measureStrokeText) : null;
         if (shape?.kind !== "polygon") return [];
         const tol = POINT_SIZE_PX / (state.view.scale || 1);
-        const grid = state.gridNm || 1;
-        // `GetCursorPosition( !DisableGridSnapping() )`: the cursor on the grid
+        const grid = snapGridNm(state.gridNm) || 1;
+        // `GetCursorPosition( !DisableGridSnapping() )`: the cursor on the grid (while the editor snaps to it)
         const at: [number, number] = [Math.round(wx / grid) * grid, Math.round(wy / grid) * grid];
         const ed = pointEditor && pointEditor.id === g.id ? pointEditor.edit : null;
         const handle = ed ? eeFindHandle(ed, [wx, wy], tol) : null;

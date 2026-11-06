@@ -1,7 +1,7 @@
 // Colour themes of the board editor (UI-LEFT P11; PARITY-pcb.md section 75): Preferences > PCB Editor > Colors, the Appearance panel's swatches, Use Color from
 // Schematic and a net class rename. It drives the dialogs' own controls and reads the canvas's pixels, the store (`localStorage` "eda-studio.color-themes.v1")
 // and `GET /api/state`:
-//   page            the Preferences tree has PCB Editor > Colors; the theme list is KiCad's (the editable "KiCad Default", the two read-only built-ins, ---,
+//   page            the Preferences tree has a Colors page under each editor, PCB Editor > Colors among them; the theme list is KiCad's (the editable "KiCad Default", the two read-only built-ins, ---,
 //                   New Theme...); the page lists 116 layers in createSwatches' order
 //   edit            the Background swatch's dialog (Color Picker, Reset to Default) sets a colour: the board is drawn in it while the dialog is up, OK keeps it and
 //                   the theme is stored
@@ -67,7 +67,8 @@
   const near = (a, b, tol = 3) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
   const openColors = async () => {
     if (!prefs()) { await __eda.run("common.SuiteControl.openPreferences"); await sleep(400); }
-    await click([...prefs().querySelectorAll("[role=treeitem]")].find((e) => e.textContent.trim() === "Colors"), 300);
+    // each editor has a Colors page (UI-LEFT-2 SS9, FF7): the board editor's is PCB Editor > Colors
+    await click(prefs().querySelector('[data-testid="prefs-page-pcb_colors"]'), 300);
     const page = document.querySelector('[data-testid="pcb-colors-page"]');
     if (!page) throw new Error("no Colors page");
     return page;
@@ -94,13 +95,13 @@
     t(near(corner(), DEFAULT_BG), `the board starts on KiCad Default's background (${corner()})`);
     const page = await openColors();
     t(prefs().querySelector(".dialog-header span").textContent.trim() === "Preferences - Colors", "the dialog's title names the page");
-    const tree = [...prefs().querySelectorAll("[role=treeitem]")].map((e) => e.textContent.trim());
-    // each editor has its Display Options page too (UI-LEFT C2, PANEL_GAL_OPTIONS), the board editor's before its Colors as in KiCad's tree; the Footprint Editor's
-    // Origins & Axes, Editing Options and Graphics Defaults (UI-LEFT F8); then 3D Viewer > General and > Realtime Rendering (UI-LEFT D2, task-u3-3d)
+    // KiCad's tree (`EDA_BASE_FRAME::ShowPreferences`): every editor has its Colors page, the board editor's under "PCB Editor" (UI-LEFT-2 CC2, SS9, FF7)
+    const items = [...prefs().querySelectorAll("[role=treeitem]")];
+    const tree = items.map((e) => e.textContent.trim());
+    const parentOf = (id) => { const i = items.findIndex((e) => e.getAttribute("data-testid") === `prefs-page-${id}`); for (let j = i - 1; j >= 0; j--) if (!items[j].getAttribute("data-testid")) return tree[j]; return null; };
     t(
-      tree.join("|") ===
-        "Mouse and Touchpad|PCB Editor|Display Options|Colors|Schematic Editor|Display Options|Footprint Editor|Display Options|Origins & Axes|Editing Options|Graphics Defaults|Symbol Editor|Display Options|3D Viewer|General|Realtime Rendering",
-      `the tree (${tree.join("|")})`
+      [["sym_colors", "Symbol Editor"], ["sch_colors", "Schematic Editor"], ["fp_colors", "Footprint Editor"], ["pcb_colors", "PCB Editor"]].every(([id, editor]) => parentOf(id) === editor && tree[items.findIndex((e) => e.getAttribute("data-testid") === `prefs-page-${id}`)] === "Colors"),
+      `each editor's Colors page (${["sym_colors", "sch_colors", "fp_colors", "pcb_colors"].map(parentOf).join(", ")})`
     );
     const opts = [...themeSelect().options].map((o) => o.textContent);
     t(opts.join("|") === "KiCad Classic (read-only)|KiCad Default (read-only)|KiCad Default|---|New Theme...", `the theme list (${opts.join("|")})`);
