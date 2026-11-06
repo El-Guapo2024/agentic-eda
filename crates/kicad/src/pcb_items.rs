@@ -13,7 +13,7 @@ use eda_model::units::Nm;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextBorder, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Group, IslandRemovalMode, PadConnection, Zone, ZoneBorderStyle, ZoneSmoothing};
+use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextBorder, DimensionUnits, DimensionUnitsFormat, Group, IslandRemovalMode, PadConnection, Zone, ZoneBorderStyle, ZoneSmoothing};
 
 use crate::{fmt_mm_f, mm, sexpr_str};
 
@@ -364,7 +364,7 @@ pub(crate) fn write_dimension(out: &mut String, d: &Dimension, a: &DimensionArgs
         "\t\t(style (thickness {}) (arrow_length {}) (text_position_mode {})",
         mm(d.stroke_width),
         mm(d.arrow_length),
-        if d.text_position == DimensionTextPosition::Inline { 1 } else { 0 }
+        d.text_position.code()
     )
     .unwrap();
     if matches!(d.kind, DimensionKind::Aligned { .. } | DimensionKind::Orthogonal { .. }) {

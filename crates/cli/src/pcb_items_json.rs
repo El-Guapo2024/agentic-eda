@@ -193,6 +193,11 @@ fn endings_json(json: &mut Value, shape: &eda_model::ir::Shape, items: &eda_mode
     if let Some(net) = &st.net {
         json["net"] = json!(net);
     }
+    // A stroke that is not solid (`STROKE_PARAMS::GetLineStyle`: dash, dot, dash_dot, dash_dot_dot), drawn as `STROKE_PARAMS::Stroke` cuts it; the word a footprint's graphic
+    // has (`crate::fp_art_json`). A `default` or `solid` stroke has none (UI-LEFT P5).
+    if !st.line_style.is_solid() {
+        json["dash"] = json!(st.line_style.token());
+    }
     // A rectangle's corner radius (`EDA_SHAPE::GetCornerRadius`), drawn rounded.
     if st.corner_radius > Nm::ZERO && matches!(shape, eda_model::ir::Shape::Rect { .. }) {
         json["corner_radius"] = json!(st.corner_radius);

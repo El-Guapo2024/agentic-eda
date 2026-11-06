@@ -11,22 +11,14 @@
 //! itself does: an arrow points the labelled direction, text sits the
 //! labelled side of the crossbar.
 //!
-//! Not ported here (see PARITY-pcb.md section 18 for the full list):
-//! the crossbar/leader-line "knockout" only approximates inline text's
-//! own rendered width (this model has no real font-metrics engine
-//! anywhere -- `eda_engine::geometry::CHAR_WIDTH_FACTOR`'s own `0.6 *
-//! font_size` heuristic, reused here rather than re-derived, is the same
-//! approximation every other text-overlap check in this project already
-//! accepts); the rectangle/circle a leader's `DIM_TEXT_BORDER` asks for
-//! (the choice itself is kept in the model and written back).
+//! The crossbar's and the leader lines' "knockout" around the text is KiCad's (`CollectKnockedOutSegments`, `segPolyIntersection`,
+//! `segCircleIntersection`): the text's box (`EDA_TEXT::GetTextBox` in the stroke font's metrics, [`eda_model::kicad_font::text_box_iu`], grown as each
+//! kind's `updateGeometry` grows it and turned by the text angle) cuts every line it crosses, wherever the text is -- inline, outside or placed by hand
+//! (`DIM_TEXT_POSITION::MANUAL`, kept in [`Dimension::text_pos`]). A leader's `DIM_TEXT_BORDER` draws the box (`RECTANGLE`) or the circle through it
+//! (`CIRCLE`) around its text, as `PCB_DIM_LEADER::updateGeometry` does (UI-LEFT P13). An outline font's metrics are the stroke font's here (the studio
+//! draws every text in the stroke font).
 
-use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Millideg, Point, Nm};
-
-/// `CHAR_WIDTH_FACTOR` in `crates/engine/src/geometry.rs` -- same
-/// approximation, reused rather than re-derived (see this module's own
-/// header). That constant is in mm-per-character-per-mm-of-font-size;
-/// this crate works in whole nanometres throughout.
-const CHAR_WIDTH_FACTOR: f64 = 0.6;
+use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextBorder, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Millideg, Point, Nm};
 
 const ARROW_HALF_ANGLE_MILLIDEG: i64 = 27_500;
 /// `INWARD_ARROW_LENGTH_TO_HEAD_RATIO` (`pcb_dimension.cpp`): how far an
@@ -44,10 +36,16 @@ const INWARD_TAIL_RATIO: i64 = 2;
 #[derive(Debug, Clone, PartialEq)]
 pub struct DimensionGeometry {
     pub lines: Vec<(Point, Point)>,
+    /// The circles of the dimension (`SHAPE_CIRCLE`): a leader's `DIM_TEXT_BORDER::CIRCLE` frame, `(centre, radius)`.
+    pub circles: Vec<(Point, Nm)>,
     pub text_at: Point,
     pub text_angle: Millideg,
     pub measured_value_nm: Nm,
     pub text: String,
+    /// An aligned or orthogonal dimension's crossbar (`GetCrossbarStart`, `GetCrossbarEnd`): two of its point editor's handles.
+    pub crossbar: Option<(Point, Point)>,
+    /// A radial dimension's knee (`PCB_DIM_RADIAL::GetKnee`): the end pushed out along the radius by the leader length, its point editor's fourth handle.
+    pub knee: Option<Point>,
 }
 
 pub fn compute_dimension_geometry(dim: &Dimension) -> DimensionGeometry {
@@ -201,65 +199,151 @@ fn format_value(dim: &Dimension, measured_value_nm: Nm) -> String {
     text
 }
 
-/// Estimated half-width (nm) of `text` set at `size_nm` -- see this
-/// module's own header on why this, and not real font metrics.
-fn half_width(text: &str, size_nm: Nm) -> Nm {
-    Nm::kiround((text.chars().count() as f64 * CHAR_WIDTH_FACTOR * size_nm.as_f64()) / 2.0)
+/// The pen of the dimension's text (`GetEffectiveTextPenWidth`): its own thickness, or 15 % of the size, which the writer writes for one that has none.
+fn text_pen(dim: &Dimension) -> Nm {
+    dim.text_thickness_nm.unwrap_or_else(|| Nm::kiround(dim.text_size_nm.as_f64() * 0.15))
 }
 
-/// Split `seg` (a crossbar or leader-to-text line) around `text_at`,
-/// knocking out a gap `2*half_width(text)` wide centred there, along the
-/// segment's own direction -- only when `text_at` actually falls near
-/// the segment (inline text sitting on the line); otherwise the segment
-/// is returned whole, same as source's own `CollectKnockedOutSegments`
-/// never splitting a crossbar that an outside-positioned text box
-/// doesn't actually collide with.
-fn knockout(a: Point, b: Point, text_at: Point, text: &str, text_size_nm: Nm) -> Vec<(Point, Point)> {
-    let dir = sub(b, a);
-    let len = norm(dir);
-    if len < 1.0 || text.is_empty() {
-        return vec![(a, b)];
-    }
-    let t = ((text_at.x - a.x).as_f64() * dir.x.as_f64() + (text_at.y - a.y).as_f64() * dir.y.as_f64()) / (len * len);
-    let proj = Point { x: a.x + Nm::kiround(dir.x.as_f64() * t), y: a.y + Nm::kiround(dir.y.as_f64() * t) };
-    // Perpendicular distance from text_at to the line -- only knock out
-    // a gap when the text is genuinely sitting close to the line, not
-    // merely somewhere near its extent (an outside-positioned text's
-    // perpendicular offset is a full text height or more away).
-    let perp_dist = norm(sub(text_at, proj));
-    if perp_dist > text_size_nm.as_f64() {
-        return vec![(a, b)];
-    }
-    let hw = half_width(text, text_size_nm).max(Nm::new(1));
-    let gap_start = Nm::kiround(t * len) - hw;
-    let gap_end = Nm::kiround(t * len) + hw;
-    if gap_start <= Nm::ZERO || gap_end >= Nm::kiround(len) {
-        // The gap swallows (or nearly swallows) the whole segment -- draw nothing.
-        if gap_start <= Nm::ZERO && gap_end >= Nm::kiround(len) {
-            return vec![];
+/// The four corners of the text's box as the dimension's `updateGeometry` collides its lines with it: `GetTextBox( nullptr ).Inflate( grow_x, grow_y )`
+/// (the box of the centred text at `text_at`, `EDA_TEXT::GetTextBox`, in the stroke font's metrics), as `polyBox` is built (origin, (origin.x, end.y),
+/// end, (end.x, origin.y)) and turned about its centre by the text angle (`polyBox.Rotate( GetTextAngle(), textBox.GetCenter() )`, counter-clockwise on
+/// the screen). Also the box's centre and width, which a leader's circle frame is made from.
+fn text_poly(dim: &Dimension, text: &str, text_at: Point, angle: Millideg, grow_x: Nm, grow_y: Nm) -> ([Point; 4], Point, Nm) {
+    use eda_model::kicad_font::{text_box_iu, HJustify, VJustify};
+    let (x0, y0, x1, y1) = text_box_iu(text, dim.text_size_nm.get(), text_pen(dim).get(), HJustify::Center, VJustify::Center);
+    let (x0, y0) = (text_at.x + Nm::new(x0) - grow_x, text_at.y + Nm::new(y0) - grow_y);
+    let (x1, y1) = (text_at.x + Nm::new(x1) + grow_x, text_at.y + Nm::new(y1) + grow_y);
+    let centre = Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+    // `rotate` turns clockwise on the screen; the text angle is counter-clockwise.
+    let turn = |p: Point| rotate_about(p, centre, -(angle as i64));
+    ([turn(Point { x: x0, y: y0 }), turn(Point { x: x0, y: y1 }), turn(Point { x: x1, y: y1 }), turn(Point { x: x1, y: y0 })], centre, x1 - x0)
+}
+
+/// `SHAPE_POLY_SET::Contains` of a point in the (convex, four-cornered) text box: inside by the even-odd rule, as `SHAPE_LINE_CHAIN::PointInside` counts.
+fn poly_contains(poly: &[Point; 4], p: Point) -> bool {
+    let (px, py) = (p.x.as_f64(), p.y.as_f64());
+    let mut inside = false;
+    for i in 0..4 {
+        let (a, b) = (poly[i], poly[(i + 1) % 4]);
+        let (ax, ay, bx, by) = (a.x.as_f64(), a.y.as_f64(), b.x.as_f64(), b.y.as_f64());
+        if (ay > py) != (by > py) && px < (bx - ax) * (py - ay) / (by - ay) + ax {
+            inside = !inside;
         }
     }
-    let mut out = Vec::new();
-    if gap_start > Nm::ZERO {
-        out.push((a, add(a, resize(dir, gap_start))));
+    inside
+}
+
+/// `SEG::Intersect`: where two segments cross, rounded to the nanometre; `None` when they do not (parallel ones included).
+fn seg_intersect(a: Point, b: Point, c: Point, d: Point) -> Option<Point> {
+    let (r, q) = (sub(b, a), sub(d, c));
+    let denom = r.x.as_f64() * q.y.as_f64() - r.y.as_f64() * q.x.as_f64();
+    if denom == 0.0 {
+        return None;
     }
-    if gap_end < Nm::kiround(len) {
-        out.push((add(a, resize(dir, gap_end)), b));
+    let ac = sub(c, a);
+    let t = (ac.x.as_f64() * q.y.as_f64() - ac.y.as_f64() * q.x.as_f64()) / denom;
+    let u = (ac.x.as_f64() * r.y.as_f64() - ac.y.as_f64() * r.x.as_f64()) / denom;
+    if !(0.0..=1.0).contains(&t) || !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    Some(Point { x: a.x + Nm::kiround(r.x.as_f64() * t), y: a.y + Nm::kiround(r.y.as_f64() * t) })
+}
+
+fn dist2(a: Point, b: Point) -> f64 {
+    let d = sub(a, b);
+    d.x.as_f64() * d.x.as_f64() + d.y.as_f64() * d.y.as_f64()
+}
+
+/// `segPolyIntersection( aPoly, aSeg, aStart )`: walking the segment from its start (its end when `!from_start`), the first point where it meets the box;
+/// the far end when it never does; `None` when it starts inside the box, or would end where it starts.
+fn seg_poly_intersection(poly: &[Point; 4], a: Point, b: Point, from_start: bool) -> Option<Point> {
+    let (start, mut endpoint) = if from_start { (a, b) } else { (b, a) };
+    if poly_contains(poly, start) {
+        return None;
+    }
+    for i in 0..4 {
+        if let Some(x) = seg_intersect(poly[i], poly[(i + 1) % 4], a, b) {
+            if dist2(x, start) < dist2(endpoint, start) {
+                endpoint = x;
+            }
+        }
+    }
+    (start != endpoint).then_some(endpoint)
+}
+
+/// `segCircleIntersection( aCircle, aSeg )`: as [`seg_poly_intersection`] from the start, against a circle (`CIRCLE::Contains`, `CIRCLE::Intersect( SEG )`).
+fn seg_circle_intersection(centre: Point, radius: f64, a: Point, b: Point) -> Option<Point> {
+    if dist2(a, centre) < radius * radius {
+        return None;
+    }
+    let mut endpoint = b;
+    let d = sub(b, a);
+    let f = sub(a, centre);
+    let (dx, dy, fx, fy) = (d.x.as_f64(), d.y.as_f64(), f.x.as_f64(), f.y.as_f64());
+    let qa = dx * dx + dy * dy;
+    if qa > 0.0 {
+        let qb = 2.0 * (fx * dx + fy * dy);
+        let qc = fx * fx + fy * fy - radius * radius;
+        let disc = qb * qb - 4.0 * qa * qc;
+        if disc >= 0.0 {
+            for t in [(-qb - disc.sqrt()) / (2.0 * qa), (-qb + disc.sqrt()) / (2.0 * qa)] {
+                if (0.0..=1.0).contains(&t) {
+                    let x = Point { x: a.x + Nm::kiround(dx * t), y: a.y + Nm::kiround(dy * t) };
+                    if dist2(x, a) < dist2(endpoint, a) {
+                        endpoint = x;
+                    }
+                }
+            }
+        }
+    }
+    (a != endpoint).then_some(endpoint)
+}
+
+/// `CollectKnockedOutSegments( aPoly, aSeg, .. )`: the segment `a`-`b` less the part the text's box covers -- 0, 1 or 2 pieces.
+fn knock_out(poly: &[Point; 4], a: Point, b: Point) -> Vec<(Point, Point)> {
+    let (contains_a, contains_b) = (poly_contains(poly, a), poly_contains(poly, b));
+    let end_a = seg_poly_intersection(poly, a, b, true);
+    let end_b = seg_poly_intersection(poly, a, b, false);
+    let mut out = Vec::new();
+    if let Some(ea) = end_a {
+        out.push((a, ea));
+    }
+    if let Some(eb) = end_b {
+        let can_add = match end_a {
+            Some(ea) => !((eb == a && ea == b) || (ea == eb && a == b)),
+            None => true,
+        };
+        if can_add {
+            out.push((eb, b));
+        }
+    }
+    if !contains_a && !contains_b && end_a.is_none() && end_b.is_none() {
+        out.push((a, b));
     }
     out
 }
 
+/// The text where the dimension's `updateText` leaves it: placed by hand (`DIM_TEXT_POSITION::MANUAL`, `text_pos`) it stays; otherwise `computed`.
+fn kept_or(dim: &Dimension, computed: Point) -> Point {
+    match (dim.text_position, dim.text_pos) {
+        (DimensionTextPosition::Manual, Some(p)) => p,
+        _ => computed,
+    }
+}
+
 // --------------------------------------------------------------- aligned
 
-fn aligned_text_position(crossbar_start: Point, crossbar_end: Point, text_position: DimensionTextPosition, keep_aligned: bool, text_size_nm: Nm, stroke_width: Nm) -> (Point, i64) {
+fn aligned_text_position(crossbar_start: Point, crossbar_end: Point, text_position: DimensionTextPosition, keep_aligned: bool, text_size_nm: Nm, pen: Nm) -> (Point, i64) {
     let center = Point { x: (crossbar_start.x + crossbar_end.x) / 2, y: (crossbar_start.y + crossbar_end.y) / 2 };
     let rel_center = sub(crossbar_end, crossbar_start);
     let half = Point { x: rel_center.x / 2, y: rel_center.y / 2 };
 
     let text_at = match text_position {
         DimensionTextPosition::Inline => center,
-        DimensionTextPosition::Outside => {
-            let offset_distance = stroke_width + text_size_nm;
+        // `updateText` does not move a text placed by hand; one with no place of its own sits outside.
+        DimensionTextPosition::Outside | DimensionTextPosition::Manual => {
+            // `textOffsetDistance = GetEffectiveTextPenWidth() + GetTextHeight()`
+            let offset_distance = pen + text_size_nm;
             let rotation = if half.x == Nm::ZERO {
                 if half.y > Nm::ZERO {
                     -90_000
@@ -305,12 +389,15 @@ fn aligned(dim: &Dimension, height: Nm) -> DimensionGeometry {
     let crossbar_start = add(dim.start, cross_offset);
     let crossbar_end = add(dim.end, cross_offset);
 
-    let (text_at, text_angle) = aligned_text_position(crossbar_start, crossbar_end, dim.text_position, dim.keep_text_aligned, dim.text_size_nm, dim.stroke_width);
+    let (text_at, text_angle) = aligned_text_position(crossbar_start, crossbar_end, dim.text_position, dim.keep_text_aligned, dim.text_size_nm, text_pen(dim));
+    let text_at = kept_or(dim, text_at);
     let text_angle = (if dim.keep_text_aligned { text_angle } else { dim.text_angle as i64 }).rem_euclid(360_000) as Millideg;
     let text = format_value(dim, measured_value_nm);
 
     let mut lines = vec![(ext1_start, ext1_end), (ext2_start, ext2_end)];
-    lines.extend(knockout(crossbar_start, crossbar_end, text_at, &text, dim.text_size_nm));
+    // `GetTextBox( nullptr ).Inflate( GetTextWidth() / 2, - GetEffectiveTextPenWidth() )`
+    let (poly, _, _) = text_poly(dim, &text, text_at, text_angle, dim.text_size_nm / 2, -text_pen(dim));
+    lines.extend(knock_out(&poly, crossbar_start, crossbar_end));
 
     let dim_angle = angle_of(dimension);
     match dim.arrow_direction {
@@ -324,7 +411,7 @@ fn aligned(dim: &Dimension, height: Nm) -> DimensionGeometry {
         }
     }
 
-    DimensionGeometry { lines, text_at, text_angle, measured_value_nm, text }
+    DimensionGeometry { lines, circles: Vec::new(), text_at, text_angle, measured_value_nm, text, crossbar: Some((crossbar_start, crossbar_end)), knee: None }
 }
 
 // ------------------------------------------------------------ orthogonal
@@ -349,14 +436,18 @@ fn orthogonal(dim: &Dimension, height: Nm, horizontal: bool) -> DimensionGeometr
 
     let crossbar_center = Point { x: (crossbar_start.x + crossbar_end.x) / 2, y: (crossbar_start.y + crossbar_end.y) / 2 };
     let half = sub(crossbar_center, crossbar_start);
-    let text_at = match dim.text_position {
-        DimensionTextPosition::Inline => crossbar_center,
-        DimensionTextPosition::Outside => {
-            let offset_distance = dim.stroke_width + dim.text_size_nm;
-            let offset = if horizontal { Point { x: Nm::ZERO, y: -offset_distance } } else { Point { x: -offset_distance, y: Nm::ZERO } };
-            add(crossbar_start, add(half, offset))
-        }
-    };
+    let text_at = kept_or(
+        dim,
+        match dim.text_position {
+            DimensionTextPosition::Inline => crossbar_center,
+            DimensionTextPosition::Outside | DimensionTextPosition::Manual => {
+                // `textOffsetDistance = GetEffectiveTextPenWidth() + GetTextHeight()`
+                let offset_distance = text_pen(dim) + dim.text_size_nm;
+                let offset = if horizontal { Point { x: Nm::ZERO, y: -offset_distance } } else { Point { x: -offset_distance, y: Nm::ZERO } };
+                add(crossbar_start, add(half, offset))
+            }
+        },
+    );
     let text_angle = (if dim.keep_text_aligned {
         if half.x.abs() > half.y.abs() {
             0
@@ -370,7 +461,9 @@ fn orthogonal(dim: &Dimension, height: Nm, horizontal: bool) -> DimensionGeometr
 
     let text = format_value(dim, measured_value_nm);
     let mut lines = vec![(ext1_start, ext1_end), (ext2_start, ext2_end)];
-    lines.extend(knockout(crossbar_start, crossbar_end, text_at, &text, dim.text_size_nm));
+    // `PCB_DIM_ORTHOGONAL::updateGeometry`: the same box as an aligned dimension's.
+    let (poly, _, _) = text_poly(dim, &text, text_at, text_angle, dim.text_size_nm / 2, -text_pen(dim));
+    lines.extend(knock_out(&poly, crossbar_start, crossbar_end));
 
     let crossbar_angle = angle_of(sub(crossbar_end, crossbar_start));
     match dim.arrow_direction {
@@ -384,7 +477,7 @@ fn orthogonal(dim: &Dimension, height: Nm, horizontal: bool) -> DimensionGeometr
         }
     }
 
-    DimensionGeometry { lines, text_at, text_angle, measured_value_nm, text }
+    DimensionGeometry { lines, circles: Vec::new(), text_at, text_angle, measured_value_nm, text, crossbar: Some((crossbar_start, crossbar_end)), knee: None }
 }
 
 // ---------------------------------------------------------------- radial
@@ -421,17 +514,24 @@ fn radial(dim: &Dimension, leader_length: Nm) -> DimensionGeometry {
     .rem_euclid(360_000) as Millideg;
 
     let text = format_value(dim, measured_value_nm);
-    lines.extend(knockout(dim.end, knee, text_at, &text, dim.text_size_nm));
-    lines.extend(knockout(knee, text_at, text_at, &text, dim.text_size_nm));
+    // `GetTextBox( nullptr ).Inflate( GetTextWidth() / 2, GetEffectiveTextPenWidth() )`; the arrow's line and the line to the text knocked out by it.
+    let (poly, _, _) = text_poly(dim, &text, text_at, text_angle, dim.text_size_nm / 2, text_pen(dim));
+    lines.extend(knock_out(&poly, dim.end, knee));
+    lines.extend(knock_out(&poly, knee, text_at));
 
     let radial_angle = angle_of(radius_vec);
     lines.extend(arrowhead(dim.end, radial_angle, dim.arrow_length, Nm::ZERO));
 
-    DimensionGeometry { lines, text_at, text_angle, measured_value_nm, text }
+    DimensionGeometry { lines, circles: Vec::new(), text_at, text_angle, measured_value_nm, text, crossbar: None, knee: Some(knee) }
 }
 
 // ---------------------------------------------------------------- leader
 
+/// `PCB_DIM_LEADER::updateGeometry`: the text's box (`GetTextBox( nullptr ).Inflate( GetTextWidth() / 2, GetEffectiveTextPenWidth() * 2 )`, turned by the
+/// text angle) or, for a `DIM_TEXT_BORDER::CIRCLE` frame, the circle through it (radius half the box's width less half the pen) is what the two lines run
+/// to: the arrow's line from `start` (moved in by the extension offset) to where the segment `start`-`end` meets the frame (`end` when it does not), the
+/// arrow at its start, the frame itself when there is text (a `RECTANGLE` as its four sides, a `CIRCLE` as a circle; `ROUNDRECT` draws none, as 8303b2ad's
+/// `switch( m_textBorder )` has no case for it), and, when the arrow's line reaches `end`, the line from `end` to where `end`-text meets the frame.
 fn leader(dim: &Dimension) -> DimensionGeometry {
     let first_line = sub(dim.end, dim.start);
     let measured_value_nm = Nm::kiround(norm(first_line));
@@ -444,13 +544,31 @@ fn leader(dim: &Dimension) -> DimensionGeometry {
     let text_at = dim.text_pos.unwrap_or_else(|| add(dim.end, resize(first_line, dim.text_size_nm.max(Nm::new(1)) * 2)));
     let text_angle = (dim.text_angle as i64).rem_euclid(360_000) as Millideg;
 
-    let mut lines = knockout(start, dim.end, text_at, &text, dim.text_size_nm);
+    let pen = text_pen(dim);
+    let (poly, centre, box_width) = text_poly(dim, &text, text_at, text_angle, dim.text_size_nm / 2, pen * 2);
+    let radius = box_width.as_f64() / 2.0 - pen.as_f64() / 2.0;
+    let (arrow_seg_end, text_seg_end) = if dim.text_frame == DimensionTextBorder::Circle {
+        (seg_circle_intersection(centre, radius, dim.start, dim.end), seg_circle_intersection(centre, radius, dim.end, text_at))
+    } else {
+        (seg_poly_intersection(&poly, dim.start, dim.end, true), seg_poly_intersection(&poly, dim.end, text_at, true))
+    };
+    let arrow_seg_end = arrow_seg_end.unwrap_or(dim.end);
+
+    let mut lines = vec![(start, arrow_seg_end)];
     lines.extend(arrowhead(start, angle_of(first_line), dim.arrow_length, Nm::ZERO));
+    let mut circles = Vec::new();
     if !text.is_empty() {
-        lines.extend(knockout(dim.end, text_at, text_at, &text, dim.text_size_nm));
+        match dim.text_frame {
+            DimensionTextBorder::Rectangle => lines.extend((0..4).map(|i| (poly[i], poly[(i + 1) % 4]))),
+            DimensionTextBorder::Circle => circles.push((centre, Nm::kiround(radius))),
+            DimensionTextBorder::None | DimensionTextBorder::RoundRect => {}
+        }
+    }
+    if let (Some(t), true) = (text_seg_end, arrow_seg_end == dim.end) {
+        lines.push((dim.end, t));
     }
 
-    DimensionGeometry { lines, text_at, text_angle, measured_value_nm, text }
+    DimensionGeometry { lines, circles, text_at, text_angle, measured_value_nm, text, crossbar: None, knee: None }
 }
 
 // ---------------------------------------------------------------- center
@@ -460,7 +578,7 @@ fn center(dim: &Dimension) -> DimensionGeometry {
     let arm = sub(dim.end, dim.start);
     let lines = vec![(sub(center_pt, arm), add(center_pt, arm)), (sub(center_pt, rotate(arm, -90_000)), add(center_pt, rotate(arm, -90_000)))];
 
-    DimensionGeometry { lines, text_at: center_pt, text_angle: 0, measured_value_nm: Nm::ZERO, text: String::new() }
+    DimensionGeometry { lines, circles: Vec::new(), text_at: center_pt, text_angle: 0, measured_value_nm: Nm::ZERO, text: String::new(), crossbar: None, knee: None }
 }
 
 fn rotate_point_set(pts: &mut [Point], pivot: Point, angle_millideg: i64) {
@@ -599,6 +717,62 @@ mod tests {
         let g = compute_dimension_geometry(&dim);
         assert_eq!(g.text, "note");
         assert!(!g.lines.is_empty());
+    }
+
+    /// `DIM_TEXT_POSITION::MANUAL`: `updateText` leaves the text where it was put, for an aligned and an orthogonal dimension alike; the crossbar runs under
+    /// it, knocked out where the text's box covers it (`CollectKnockedOutSegments`), and whole when the text is off it.
+    #[test]
+    fn a_text_placed_by_hand_stays_and_knocks_out_the_crossbar_it_sits_on() {
+        let origin = Point { x: Nm::ZERO, y: Nm::ZERO };
+        for kind in [DimensionKind::Aligned { height: mm(-2.0) }, DimensionKind::Orthogonal { height: mm(-2.0), horizontal: true }] {
+            let mut dim = base_dim(kind, origin, Point { x: mm(20.0), y: Nm::ZERO });
+            let outside = compute_dimension_geometry(&dim);
+            let (cs, ce) = outside.crossbar.expect("a crossbar");
+            assert_eq!((cs.y, ce.y), (mm(-2.0), mm(-2.0)), "{kind:?}");
+            let crossbar_pieces = |g: &DimensionGeometry| g.lines.iter().filter(|(a, b)| a.y == mm(-2.0) && b.y == mm(-2.0)).count();
+            assert_eq!(crossbar_pieces(&outside), 1, "the text outside leaves the crossbar whole: {kind:?}");
+            // On the crossbar, a quarter of the way along.
+            dim.text_position = DimensionTextPosition::Manual;
+            dim.text_pos = Some(Point { x: mm(5.0), y: mm(-2.0) });
+            let manual = compute_dimension_geometry(&dim);
+            assert_eq!(manual.text_at, Point { x: mm(5.0), y: mm(-2.0) }, "{kind:?}");
+            assert_eq!(crossbar_pieces(&manual), 2, "{kind:?}: {:?}", manual.lines);
+            let gap: Vec<Nm> = manual.lines.iter().filter(|(a, b)| a.y == mm(-2.0) && b.y == mm(-2.0)).flat_map(|(a, b)| [a.x, b.x]).collect();
+            // "20" at 1 mm with a 0.15 mm pen: the box is two glyphs and the pen's reach wide (`StringBoundaryLimits`), grown by half the size on each side,
+            // 3.15 mm in all, centred on the text.
+            assert_eq!(gap, vec![Nm::ZERO, mm(5.0) - Nm::new(1_577_381), mm(5.0) + Nm::new(1_577_381), mm(20.0)], "{kind:?}");
+            // A manual mode with no position of its own falls back to the outside place.
+            dim.text_pos = None;
+            assert_eq!(compute_dimension_geometry(&dim).text_at, outside.text_at);
+        }
+    }
+
+    /// `PCB_DIM_LEADER::updateGeometry`: a rectangle frame is the text's grown box as four lines, a circle frame a circle through it, and the line from the
+    /// knee stops at the frame; none draws no frame and the line still stops at the box.
+    #[test]
+    fn a_leaders_frame_is_drawn_round_its_text_and_the_line_stops_at_it() {
+        let mut dim = base_dim(DimensionKind::Leader, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: mm(5.0) });
+        dim.override_text = Some("NOTE".into());
+        dim.text_pos = Some(Point { x: mm(15.0), y: mm(5.0) });
+        let plain = compute_dimension_geometry(&dim);
+        assert!(plain.circles.is_empty());
+        let to_text = *plain.lines.last().unwrap();
+        assert_eq!(to_text.0, dim.end, "the last line starts at the knee");
+        assert!(to_text.1.x > mm(5.0) && to_text.1.x < mm(15.0) && to_text.1.y == mm(5.0), "and stops at the text's box: {to_text:?}");
+        dim.text_frame = DimensionTextBorder::Rectangle;
+        let rect = compute_dimension_geometry(&dim);
+        assert_eq!(rect.lines.len(), plain.lines.len() + 4, "{:?}", rect.lines);
+        assert_eq!(rect.lines.last().unwrap(), &to_text, "the line to the box is the same");
+        dim.text_frame = DimensionTextBorder::Circle;
+        let circle = compute_dimension_geometry(&dim);
+        assert_eq!(circle.lines.len(), plain.lines.len());
+        let (c, r) = circle.circles[0];
+        assert!((c.x - mm(15.0)).abs() < mm(0.1) && (c.y - mm(5.0)).abs() < mm(0.1), "{c:?}");
+        let end = circle.lines.last().unwrap().1;
+        assert!((((end.x - c.x).as_f64()).hypot((end.y - c.y).as_f64()) - r.as_f64()).abs() < 2.0, "the line ends on the circle: {end:?} {c:?} {r:?}");
+        // No text, no frame.
+        dim.override_text = Some(String::new());
+        assert!(compute_dimension_geometry(&dim).circles.is_empty());
     }
 
     #[test]

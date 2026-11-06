@@ -3,7 +3,7 @@
 // (kicad-port/fpArt.ts) -- after the footprint's pads, so a pad's copper lies under the silkscreen that passes over it. They are in board space (the backend placed them), so the
 // transform of a footprint in the hand (painter.ts `drawFootprint`) carries them with the rest.
 //
-// The shapes are drawn by the painter's own shape code (the board's graphics are the same `Shape`s); this adds the stroke's dashes. A hatched fill is drawn as its outline
+// The shapes are drawn by the painter's own shape code (the board's graphics are the same `Shape`s, their dashes too). A hatched fill is drawn as its outline
 // (the hatch lines of `EDA_SHAPE::UpdateHatching` are not ported). A text is drawn in the stroke font a line at a time (`FONT::Draw` steps a multi-line text down by the interline,
 // `STROKE_FONT::GetInterline`); a knockout text is drawn plain.
 
@@ -11,11 +11,11 @@ import type { Part } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
 import { drawStrokeText } from "../text/strokeFont";
 import { layerStateKey, isCopper } from "../../kicad-port/layerPresets";
-import { artLayerShown, artTextAsField, artTextShown, dashPattern, graphicsOf, layerRank, layersOf, type ArtShape } from "../../kicad-port/fpArt";
+import { artLayerShown, artTextAsField, artTextShown, graphicsOf, layerRank, layersOf, type ArtShape } from "../../kicad-port/fpArt";
 import { fieldAsText } from "../../kicad-port/fpFields";
 import { opacityOf } from "./appearancePaint";
 import { layerColor } from "./layers";
-import { drawShapeGeometry, layerAlpha, realLayerKey, withAlpha, type PaintOptions } from "./painter";
+import { drawShapeGeometry, layerAlpha, realLayerKey, shapeDash, withAlpha, type PaintOptions } from "./painter";
 import { hairlineNm } from "./view";
 
 /** `STROKE_FONT::GetInterline`: `FONT_METRICS`' 1.62 glyph heights, times the legacy factor 0.9583 that keeps the old spacing. */
@@ -46,8 +46,8 @@ export function drawFootprintArt(ctx: CanvasRenderingContext2D, view: ViewTransf
       ctx.lineWidth = Math.max(s.stroke_width, hairlineNm(view, selected ? 2 : 1));
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-      if (s.dash) ctx.setLineDash(dashPattern(s.dash, s.stroke_width));
-      drawShapeGeometry(ctx, s, !!opts.sketchGraphics);
+      // A dashed graphic is cut as `STROKE_PARAMS::Stroke` cuts it (kicad-port/strokeDash.ts), piece by piece, with the board's dash ratios.
+      drawShapeGeometry(ctx, s, !!opts.sketchGraphics, shapeDash(s, ctx.lineWidth, opts.dashRatios));
       ctx.restore();
     });
   }

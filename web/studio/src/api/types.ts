@@ -654,6 +654,9 @@ interface ShapeCommon {
   /** A solder-mask opening of a shape on outer copper (`PCB_SHAPE::HasSolderMask`), and its own margin (absent: the board's). */
   solder_mask?: boolean;
   solder_mask_margin?: Nm;
+  /** The stroke's line style when it is not solid (`STROKE_PARAMS::GetLineStyle`: the board's `shape_styles`, a footprint graphic's own); absent for a solid or
+   *  `default` one. Drawn as kicad-port/strokeDash.ts cuts it (UI-LEFT P5). */
+  dash?: FpDash;
 }
 
 export type Shape =
@@ -810,7 +813,10 @@ export interface Group {
 /** `crates/model/src/ir.rs` `DimensionUnits`/`DimensionUnitsFormat`/`DimensionTextPosition`/`ArrowDirection` (task item 7). */
 export type DimensionUnits = "mm" | "mil" | "inch" | "automatic";
 export type DimensionUnitsFormat = "no_suffix" | "bare_suffix" | "paren_suffix";
-export type DimensionTextPosition = "outside" | "inline";
+/** `DIM_TEXT_POSITION`: `manual` keeps the text where it was put (`Dimension.text_pos`: the point editor's text handle, the dialog's Position mode). */
+export type DimensionTextPosition = "outside" | "inline" | "manual";
+/** `DIM_TEXT_BORDER`: a leader's frame round its text. */
+export type DimensionTextBorder = "none" | "rectangle" | "circle" | "round_rect";
 export type ArrowDirection = "inward" | "outward";
 
 /**
@@ -864,6 +870,16 @@ export interface Dimension {
   /** Fully formatted (prefix + value + units suffix + suffix, or the
    * override text if set). Draw this verbatim -- do not reformat `measured_value_nm` again. */
   text: string;
+  /** A leader's circle frame (`DIM_TEXT_BORDER::CIRCLE`), `[[cx, cy], r]` each; absent from an older backend. */
+  circles?: [[Nm, Nm], Nm][];
+  /** The text's own place (`Dimension::text_pos`: a radial's or a leader's text, or one placed by hand); null when the geometry places it. */
+  text_pos?: [Nm, Nm] | null;
+  /** A leader's frame (`DIM_TEXT_BORDER`). */
+  text_frame?: DimensionTextBorder;
+  /** An aligned or orthogonal dimension's crossbar ends (`GetCrossbarStart`, `GetCrossbarEnd`), the point editor's handles; null for the other kinds. */
+  crossbar?: [[Nm, Nm], [Nm, Nm]] | null;
+  /** A radial dimension's knee (`PCB_DIM_RADIAL::GetKnee`); null for the other kinds. */
+  knee?: [Nm, Nm] | null;
 }
 
 /** `crates/model/src/ir.rs` `DimensionSettings` (task item 7) -- Board Setup > Dimension Properties' defaults, applied once at creation (see that struct's own doc on why never retroactively). */
@@ -909,8 +925,11 @@ export interface CmdDimension {
   extension_offset: Nm;
   extension_height: Nm;
   arrow_direction: ArrowDirection;
-  /** `Dimension::text_pos`: a radial dimension's or a leader's text anchor (`SetTextPos`), as the Draw Dimension tool leaves it; absent = placed by the geometry pass. */
+  /** `Dimension::text_pos`: a radial dimension's or a leader's text anchor (`SetTextPos`), as the Draw Dimension tool leaves it, or a text placed by hand
+   *  (`text_position: "manual"`); absent = placed by the geometry pass. */
   text_pos?: PointXY;
+  /** A leader's `DIM_TEXT_BORDER` (`(text_frame N)`); absent = none. */
+  text_frame?: DimensionTextBorder;
 }
 
 // ------------------------------------------------------- Footprint Editor

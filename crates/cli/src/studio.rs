@@ -710,6 +710,8 @@ fn handle(
         ("POST", "/api/sch/fields_table") => respond(stream, "200 OK", "application/json", sch_api::fields_table(dir, &body).to_string().as_bytes()),
         // Move, Drag, Rotate and Mirror previews: the commands applied in memory, the moved geometry back (`crate::sch_move_api`).
         ("POST", "/api/sch/move_preview") => respond(stream, "200 OK", "application/json", sch_move_api::move_preview(dir, &body).to_string().as_bytes()),
+        // A dimension being drawn or reshaped, its geometry and text worked out (`crate::dimension_api`, UI-LEFT P13).
+        ("POST", "/api/dimension/preview") => respond(stream, "200 OK", "application/json", crate::dimension_api::preview(&body).to_string().as_bytes()),
         // The item a placing tool carries before the click that places it (a label, a text, a directive label, a power symbol): its command tried on a copy (`crate::sch_place_api`).
         ("POST", "/api/sch/place_preview") => respond(stream, "200 OK", "application/json", crate::sch_place_api::place_preview(dir, &body).to_string().as_bytes()),
         // The font families the machine has, for Symbol Properties' Font column (`crate::fonts_api`).
@@ -1661,7 +1663,7 @@ fn outline_errors_json(design: &eda_model::ir::Design, model: Option<&eda_model:
 /// (`eda_connectivity::dimension::compute_dimension_geometry`) -- a
 /// renderer never re-derives it.
 pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
-    use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
+    use eda_model::ir::{ArrowDirection, DimensionKind, DimensionUnits, DimensionUnitsFormat};
 
     let (kind, height, horizontal, leader_length) = match d.kind {
         DimensionKind::Aligned { height } => ("aligned", Some(height), None, None),
@@ -1681,10 +1683,7 @@ pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         DimensionUnitsFormat::BareSuffix => "bare_suffix",
         DimensionUnitsFormat::ParenSuffix => "paren_suffix",
     };
-    let text_position = match d.text_position {
-        DimensionTextPosition::Outside => "outside",
-        DimensionTextPosition::Inline => "inline",
-    };
+    let text_position = d.text_position.word();
     let arrow_direction = match d.arrow_direction {
         ArrowDirection::Inward => "inward",
         ArrowDirection::Outward => "outward",
@@ -1720,6 +1719,20 @@ pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         "extension_height": d.extension_height,
         "arrow_direction": arrow_direction,
         "lines": geom.lines.iter().map(|(a, b)| json!([[a.x, a.y], [b.x, b.y]])).collect::<Vec<_>>(),
+        // A leader's circle frame (`DIM_TEXT_BORDER::CIRCLE`): `[[cx, cy], r]` each.
+        "circles": geom.circles.iter().map(|(c, r)| json!([[c.x, c.y], r])).collect::<Vec<_>>(),
+        // The text's own place (`Dimension::text_pos`: a radial's or a leader's text, or one placed by hand), null when the geometry places it; a leader's
+        // frame (`DIM_TEXT_BORDER`: none, rectangle, circle, round_rect); an aligned or orthogonal crossbar's ends and a radial's knee, the point editor's
+        // handles (UI-LEFT P13).
+        "text_pos": d.text_pos.map(|p| json!([p.x, p.y])),
+        "text_frame": match d.text_frame {
+            eda_model::ir::DimensionTextBorder::None => "none",
+            eda_model::ir::DimensionTextBorder::Rectangle => "rectangle",
+            eda_model::ir::DimensionTextBorder::Circle => "circle",
+            eda_model::ir::DimensionTextBorder::RoundRect => "round_rect",
+        },
+        "crossbar": geom.crossbar.map(|(a, b)| json!([[a.x, a.y], [b.x, b.y]])),
+        "knee": geom.knee.map(|k| json!([k.x, k.y])),
         "text_at": [geom.text_at.x, geom.text_at.y],
         "computed_text_angle": geom.text_angle,
         "measured_value_nm": geom.measured_value_nm,
@@ -1728,7 +1741,7 @@ pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
 }
 
 fn dimension_settings_json(s: &eda_model::ir::DimensionSettings) -> Value {
-    use eda_model::ir::{DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
+    use eda_model::ir::{DimensionUnits, DimensionUnitsFormat};
 
     let units = match s.units {
         DimensionUnits::Mm => "mm",
@@ -1741,10 +1754,7 @@ fn dimension_settings_json(s: &eda_model::ir::DimensionSettings) -> Value {
         DimensionUnitsFormat::BareSuffix => "bare_suffix",
         DimensionUnitsFormat::ParenSuffix => "paren_suffix",
     };
-    let text_position = match s.text_position {
-        DimensionTextPosition::Outside => "outside",
-        DimensionTextPosition::Inline => "inline",
-    };
+    let text_position = s.text_position.word();
 
     json!({
         "units": units,

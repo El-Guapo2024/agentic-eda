@@ -1,0 +1,66 @@
+//! `POST /api/dimension/preview`: a dimension the studio is drawing or reshaping, worked out before it is committed (UI-LEFT P13).
+//!
+//! `DRAWING_TOOL::DrawDimension` keeps the dimension it is drawing in a preview (`preview.Add( dimension )`, `m_view->Update( &preview )` on every motion):
+//! the crossbar, the extension lines, the arrows and the text, as the commit will draw them. The point editor (`PCB_POINT_EDITOR`) likewise redraws the
+//! dimension at every move of a handle. The geometry is `eda_connectivity::dimension::compute_dimension_geometry`'s, the one place it is worked out, so the
+//! studio sends the dimension as `add_dimension` / `edit_dimension` take it (`eda_model::ir::Dimension`) and gets back the shape `GET /api/state` gives a
+//! board's dimensions (`crate::studio::dimension_json`): `{ "ok": true, "dimension": {...} }`. Nothing is stored and no history is kept.
+
+use serde_json::{json, Value};
+
+pub(crate) fn preview(body: &[u8]) -> Value {
+    // As `/api/cmd` reads its command: a `Value` first, then the type (the tagged `kind` holds numbers).
+    let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    match serde_json::from_value::<eda_model::ir::Dimension>(req.get("dimension").cloned().unwrap_or(Value::Null)) {
+        Ok(d) => json!({ "ok": true, "dimension": crate::studio::dimension_json(&d) }),
+        Err(e) => json!({ "ok": false, "message": format!("not a dimension: {e}") }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dimension_being_drawn_comes_back_with_its_geometry_and_text() {
+        let dim = json!({
+            "layer": "Cmts.User", "kind": { "kind": "aligned", "height": -2_000_000 },
+            "start": { "x": 0, "y": 0 }, "end": { "x": 20_000_000, "y": 0 },
+            "prefix": "", "suffix": "", "units": "mm", "units_format": "no_suffix", "precision": 2, "suppress_trailing_zeros": true,
+            "text_position": "manual", "keep_text_aligned": true, "text_angle": 0, "text_size_nm": 1_000_000, "stroke_width": 100_000,
+            "arrow_length": 1_270_000, "extension_offset": 500_000, "extension_height": 586_420, "arrow_direction": "outward",
+            "text_pos": { "x": 5_000_000, "y": -2_000_000 }
+        });
+        let v = preview(json!({ "dimension": dim }).to_string().as_bytes());
+        assert_eq!(v["ok"], true, "{v}");
+        let d = &v["dimension"];
+        assert_eq!(d["text"], "20");
+        assert_eq!(d["text_position"], "manual");
+        assert_eq!(d["text_at"], json!([5_000_000, -2_000_000]), "a text placed by hand stays: {d}");
+        assert_eq!(d["crossbar"], json!([[0, -2_000_000], [20_000_000, -2_000_000]]));
+        assert!(d["lines"].as_array().unwrap().len() >= 7);
+        let bad = preview(b"{\"dimension\": {\"layer\": \"F.Fab\"}}");
+        assert_eq!(bad["ok"], false);
+    }
+
+    #[test]
+    fn a_leaders_frame_comes_back_as_lines_or_a_circle() {
+        let leader = |frame: &str| {
+            json!({ "dimension": {
+                "layer": "Cmts.User", "kind": { "kind": "leader" }, "start": { "x": 0, "y": 0 }, "end": { "x": 5_000_000, "y": -5_000_000 },
+                "prefix": "", "suffix": "", "override_text": "NOTE", "units": "inch", "units_format": "no_suffix", "precision": 4, "suppress_trailing_zeros": false,
+                "text_position": "outside", "keep_text_aligned": false, "text_angle": 0, "text_size_nm": 1_000_000, "stroke_width": 100_000,
+                "arrow_length": 1_270_000, "extension_offset": 500_000, "extension_height": 586_420, "arrow_direction": "outward",
+                "text_pos": { "x": 15_000_000, "y": -5_000_000 }, "text_frame": frame
+            }})
+            .to_string()
+        };
+        let none = preview(leader("none").as_bytes());
+        let rect = preview(leader("rectangle").as_bytes());
+        let circle = preview(leader("circle").as_bytes());
+        let lines = |v: &Value| v["dimension"]["lines"].as_array().unwrap().len();
+        assert_eq!(lines(&rect), lines(&none) + 4, "{rect}");
+        assert_eq!(circle["dimension"]["circles"].as_array().unwrap().len(), 1, "{circle}");
+        assert_eq!(circle["dimension"]["text_frame"], "circle");
+    }
+}

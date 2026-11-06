@@ -22,7 +22,7 @@ import { chosenViaOf, currentViaSize } from "../../kicad-port/routerVia";
 import { viaChoiceOf } from "../../actions/routerViaActions";
 import { layerPairsOf } from "../../actions/pcbRouterSweep";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CmdShape, Part } from "../../api/types";
+import type { CmdDimension, CmdShape, Dimension, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
 import { drawStrokeWidthNm, graphicPolygonStyle } from "../../kicad-port/layerDefaults";
 import { activeLayerName, layerIsVisible } from "../../kicad-port/layerPresets";
@@ -38,7 +38,7 @@ import { reshapeCmds } from "../../kicad-port/shapeFill";
 import { applyCommands } from "../../actions/pcbSweepKit";
 import { picker } from "../../actions/pcbPicker";
 import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
-import { paintBoard, type PaintOptions } from "./painter";
+import { boardDashRatios, paintBoard, type PaintOptions } from "./painter";
 import { buildPaintAppearance } from "./appearancePaint";
 import { netsContext } from "../../kicad-port/appearanceNets";
 import { isStale } from "../../kicad-port/checkRevision";
@@ -79,7 +79,10 @@ import { buildPcbMenu } from "./pcbMenuBuilder";
 import type { MenuNode } from "../../kicad/types";
 import { findNearestContourCorner, flatVertices, moveContourCorner, zoneContours, zoneOutlineCmd } from "../../kicad-port/zonePointEditor";
 import { zoneLayers } from "../../kicad-port/zoneLayers";
-import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
+import { fpDimensionClick, fpDimensionMotion } from "../../kicad-port/fpDrawTools";
+import { boardDimensionStyle, dimensionPointAt, moveDimensionPoint, type DimPointId } from "../../kicad-port/dimensionDraw";
+import { toCmdDimension } from "../../kicad-port/dimensionConvert";
+import { fetchDimensionPreview } from "../../api/dimensionPreview";
 import { cellAddress, cellById, drawTableSession, tableById } from "../../kicad-port/tables";
 import { openDrawnTableDialog } from "../../state/tableDialogs";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
@@ -179,6 +182,8 @@ type DragState =
   | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][]; /** The zone's holes at drag-start: `cornerIndex` is a global vertex index over the outline then the holes (`CIterateWithHoles`). */ baseHoles: [number, number][][] }
   /** The same for a graphic shape's handle (kicad-port/pcbPointEdit.ts): `base` is the shape at drag-start, every move recomputes from it. */
   | { kind: "shapePoint"; shapeId: string; base: Shape; point: EditPoint }
+  /** The point editor on a dimension (kicad-port/dimensionDraw.ts): `base` is the dimension at drag-start, `cmd` the dimension as the drag has it so far. */
+  | { kind: "dimPoint"; dimId: string; base: Dimension; point: DimPointId; cmd: CmdDimension | null }
   /** A selected tuning pattern's edit point (`PCB_TUNING_PATTERN::MakeEditPoints`) being dragged: the pattern is tuned again through an edit session (`genStartEdit` .. `genFinishEdit`). */
   | { kind: "tuneHandle"; drag: TuneHandleDrag };
 
@@ -223,6 +228,23 @@ export function Canvas() {
   const [zoneCornerPreview, setZoneCornerPreview] = useState<{ zoneId: string; outline: [number, number][]; holes?: [number, number][][] } | null>(null);
   /** The live preview of a graphic shape's handle drag (the shape as it would be once dropped). */
   const [shapePointPreview, setShapePointPreview] = useState<{ id: string; shape: Shape } | null>(null);
+  // The dimension the Draw Dimension tool is drawing (`id` null) or the point editor is reshaping, as the server works it out (`POST /api/dimension/preview`):
+  // drawn in place of the committed one. Only the latest request's reply is kept.
+  const [dimPreview, setDimPreview] = useState<{ id: string | null; dim: Dimension } | null>(null);
+  const dimPreviewSeq = useRef(0);
+  // Escape, a tool change or a commit that drops the dimension being drawn drops its preview (`preview.Clear()`).
+  useEffect(() => {
+    if (state.drawState?.kind !== "dimension" && dragRef.current?.kind !== "dimPoint") {
+      dimPreviewSeq.current++;
+      setDimPreview(null);
+    }
+  }, [state.drawState]);
+  const requestDimPreview = (cmd: CmdDimension, id: string | null) => {
+    const seq = ++dimPreviewSeq.current;
+    void fetchDimensionPreview(cmd).then((dim) => {
+      if (seq === dimPreviewSeq.current) setDimPreview(dim ? { id, dim } : null);
+    });
+  };
   const moveMode = state.activeTool === "move";
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
@@ -416,6 +438,8 @@ export function Canvas() {
       units: state.units,
       zoneCornerPreview,
       shapePointPreview,
+      dimensionPreview: dimPreview,
+      dashRatios: boardDashRatios(board),
       layerVisible: state.layerVisible,
       layerOpacity: state.layerOpacity,
       activeLayer: state.activeLayer,
@@ -466,7 +490,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, containerSize, imageVersion]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -936,28 +960,30 @@ export function Canvas() {
         return;
       }
 
-      // Task item 7: two clicks (start, end) for whichever of the five
-      // kinds `state.nextDimensionKind` names -- see DimensionPropertiesDialog.tsx
-      // and PARITY-pcb.md section 18 for why this is a plain two-click
-      // commit (defaults filled from Board Setup's DimensionSettings,
-      // edited right after) rather than source's own third "set height"
-      // click with a live preview.
+      // `DRAWING_TOOL::DrawDimension` (UI-LEFT P13, kicad-port/fpDrawTools.ts with the board's style, kicad-port/dimensionDraw.ts): SET_ORIGIN clears the selection
+      // and starts the kind `state.nextDimensionKind` names at the click; SET_END takes the end (a centre mark, a radial dimension and a leader are then done);
+      // an aligned or orthogonal one takes its height at a third click. "Draw Dimension" adds it, selects it (`selectItem`), opens a leader's dialog ("Run the
+      // edit immediately to set the leader text") and the tool stays armed for the next one.
       if (state.activeTool === "dimension") {
-        const draw = state.drawState;
-        if (draw?.kind === "dimension" && draw.pts.length === 1) {
-          const start = draw.pts[0]!;
-          const end: [number, number] = [sx, sy];
-          dispatch({ type: "SET_DRAW_STATE", draw: null });
-          dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
-          const settings = board.drawings?.dimension_settings;
-          if (settings) {
-            const payload = defaultDimensionPayload(state.nextDimensionKind, start, end, activeLayerName(state.activeLayer, "Dwgs.User"), settings, board.board_rules?.text_graphics);
-            void api.addDimension(payload).then((id) => {
-              if (id) dispatch({ type: "SET_DIMENSION_EDIT_ID", id });
+        const draw = state.drawState?.kind === "dimension" ? state.drawState : null;
+        const kind = draw?.dim?.kind ?? state.nextDimensionKind;
+        if (!draw?.dim) dispatch({ type: "SET_SELECTION", refs: [] });
+        const r = fpDimensionClick(draw?.dim ?? null, kind, activeLayerName(state.activeLayer, "Dwgs.User"), [sx, sy], leaderModeOf(state.pcbx.angleSnapMode, snapMods(e).ctrl) !== "direct", boardDimensionStyle(board));
+        dispatch({ type: "SET_DRAW_STATE", draw: r.draw ? { kind: "dimension", pts: [[r.draw.dim.start.x, r.draw.dim.start.y]], dim: r.draw } : null });
+        if (r.draw) requestDimPreview(r.draw.dim, null);
+        else setDimPreview(null);
+        if (r.commit) {
+          const before = new Set((board.drawings?.dimensions ?? []).map((d) => d.id));
+          void api.cmd({ op: "add_dimension", dimension: r.commit }).then((ok) => {
+            if (!ok) return;
+            // (the board as the backend has it now: the store's catches up on the next render)
+            void fetchState().then((now) => {
+              const made = (now.drawings?.dimensions ?? []).find((d) => !before.has(d.id));
+              if (!made) return;
+              dispatch({ type: "SET_SELECTION", refs: [made.id] });
+              if (kind === "leader") dispatch({ type: "SET_DIMENSION_EDIT_ID", id: made.id });
             });
-          }
-        } else {
-          dispatch({ type: "SET_DRAW_STATE", draw: { kind: "dimension", pts: [[sx, sy]] } });
+          });
         }
         return;
       }
@@ -1117,6 +1143,15 @@ export function Canvas() {
         const h = handleAt(pattern.handles, { x: wx, y: wy }, zoneCornerToleranceNm(state.view.scale));
         if (h != null) {
           dragRef.current = { kind: "tuneHandle", drag: new TuneHandleDrag(dispatch, pattern, h) };
+          return;
+        }
+      }
+      // A selected dimension's handles (`PCB_POINT_EDITOR`'s dimension behaviours, kicad-port/dimensionDraw.ts): its feature points, its crossbar ends or knee, its text.
+      const dimension = api.dimensionById(soleId);
+      if (dimension && !isLocked(board, soleId)) {
+        const hit = dimensionPointAt(dimension, [wx, wy], zoneCornerToleranceNm(state.view.scale));
+        if (hit) {
+          dragRef.current = { kind: "dimPoint", dimId: dimension.id, base: dimension, point: hit, cmd: null };
           return;
         }
       }
@@ -1294,6 +1329,15 @@ export function Canvas() {
     const tracking = picker.session() != null ? "picker" : state.activeTool;
     const snapped: [number, number] | null = board && !dragRef.current && !moveMode && PLACING_TOOLS.has(tracking) ? toolPoint(tracking, wx, wy, e) : null;
 
+    // `DrawDimension`'s motion: the end, then an aligned or orthogonal dimension's height, follows the snapped cursor; the preview is the dimension as drawn.
+    if (board && state.activeTool === "dimension" && state.drawState?.kind === "dimension" && state.drawState.dim && snapped) {
+      const next = fpDimensionMotion(state.drawState.dim, snapped, leaderModeOf(state.pcbx.angleSnapMode, snapMods(e).ctrl) !== "direct");
+      if (JSON.stringify(next.dim) !== JSON.stringify(state.drawState.dim.dim)) {
+        dispatch({ type: "SET_DRAW_STATE", draw: { ...state.drawState, dim: next } });
+        requestDimPreview(next.dim, null);
+      }
+    }
+
     // Interactive router (gap #7) live preview: every move asks the
     // backend to re-resolve the head toward the cursor (walkaround/shove/
     // mark-obstacles, same as real pcbnew's router_tool.cpp mouse-move
@@ -1418,6 +1462,14 @@ export function Canvas() {
     } else if (drag.kind === "tuneHandle") {
       if (!motion?.dragging) return;
       drag.drag.move(wx, wy);
+    } else if (drag.kind === "dimPoint") {
+      if (!motion?.dragging) return; // `PCB_POINT_EDITOR::Main` starts editing at the drag
+      // The feature points and the crossbar ends snap onto anything (`SetSnapConstraint( ALL_LAYERS )`); a text, a knee and a centre mark's end do not (`IGNORE_SNAPS`).
+      const snaps = drag.point === "start" || drag.point === "end" ? drag.base.kind !== "center" || drag.point === "start" : drag.point === "crossbar_start" || drag.point === "crossbar_end";
+      const at: [number, number] = snaps ? (([x, y]) => [x, y] as [number, number])(snap.point("point_edit", [wx, wy], snapMods(e), { layers: "all", category: "graphics", skip: new Set([drag.dimId]) })) : [Math.round(wx), Math.round(wy)];
+      const cmd = moveDimensionPoint(drag.base, drag.point, at);
+      drag.cmd = cmd;
+      requestDimPreview(cmd, drag.dimId);
     } else if (drag.kind === "shapePoint") {
       if (!motion?.dragging) return;
       const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set([drag.base.layer]), category: "graphics", skip: new Set([drag.shapeId]) });
@@ -1498,6 +1550,11 @@ export function Canvas() {
       setZoneCornerPreview(null);
     } else if (drag.kind === "tuneHandle") {
       void drag.drag.finish(api);
+    } else if (drag.kind === "dimPoint") {
+      // Dropping the handle edits the dimension in place (`commit.Modify( item )`): one undo step, the preview gone.
+      dimPreviewSeq.current++;
+      setDimPreview(null);
+      if (drag.cmd && JSON.stringify(drag.cmd) !== JSON.stringify(toCmdDimension(drag.base))) void api.cmd({ op: "edit_dimension", id: drag.dimId, dimension: drag.cmd });
     } else if (drag.kind === "shapePoint") {
       // Dropping the handle changes the shape in place (`replace_shape`, as the point editor's `commit.Modify( item )`): it keeps its id, so its group and its hatch; one undo step.
       const preview = shapePointPreview;
