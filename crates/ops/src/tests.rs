@@ -490,10 +490,14 @@ fn track_width_and_via_presets_round_trip_and_reject_bad_entries() {
     b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: mm(0.6), drill: mm(0.3) }, ViaPreset { diameter: mm(0.8), drill: mm(0.4) }] }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().via_presets.len(), 2);
 
-    let e = b.apply(&Cmd::SetTrackWidthPresets { widths: vec![mm(0.2), Nm::ZERO] }).unwrap_err();
+    let e = b.apply(&Cmd::SetTrackWidthPresets { widths: vec![mm(0.2), Nm::new(-1)] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_track");
     // A refused replace must leave the previous list in place.
     assert_eq!(b.design().routing.as_ref().unwrap().track_width_presets, vec![mm(0.15), mm(0.25), mm(0.4)]);
+    // `PANEL_SETUP_TRACKS_AND_VIAS::Validate` checks no width: a 0 (the row Add makes) is a width of the list (r5 R5-10)
+    b.apply(&Cmd::SetTrackWidthPresets { widths: vec![Nm::ZERO, mm(0.2)] }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().track_width_presets, vec![Nm::ZERO, mm(0.2)]);
+    b.apply(&Cmd::SetTrackWidthPresets { widths: vec![mm(0.15), mm(0.25), mm(0.4)] }).unwrap();
 
     let e = b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: mm(0.3), drill: mm(0.3) }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_via");

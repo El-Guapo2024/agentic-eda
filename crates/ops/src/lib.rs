@@ -4272,8 +4272,10 @@ impl<'a> Board<'a> {
     /// Board Setup > Track Widths & Vias' "Track Widths" list -- a plain
     /// whole-list replace (see `Cmd::SetTrackWidthPresets`'s own doc).
     fn set_track_width_presets(&mut self, widths: &[Nm]) -> Result<(), Vec<CheckResult>> {
-        if widths.iter().any(|w| *w <= Nm::ZERO) {
-            return Err(vec![CheckResult::fail("ops_bad_track", "track_width_presets", "every preset width must be positive")]);
+        // `PANEL_SETUP_TRACKS_AND_VIAS::Validate` checks no track width ("Test ONLY for malformed data"): a 0 is a width of the list (the row Add
+        // makes, r5 R5-10); only a negative one, which no grid cell holds, is refused
+        if widths.iter().any(|w| *w < Nm::ZERO) {
+            return Err(vec![CheckResult::fail("ops_bad_track", "track_width_presets", "a preset width cannot be negative")]);
         }
         self.routing_mut().track_width_presets = widths.to_vec();
         Ok(())
