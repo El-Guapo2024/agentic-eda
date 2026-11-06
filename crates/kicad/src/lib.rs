@@ -538,6 +538,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         for (k, path) in ctx.instance_paths.iter().enumerate() {
             let model_path = ctx.instance_sheet_paths.get(k).map(Vec::as_slice).unwrap_or(&[]);
             let reference = eda_model::sheet_list::reference_under(sch, sym, model_path);
+            // a placeholder (`R?1`) is the unannotated `R?` KiCad reads as such (UI-LEFT S14)
+            let reference = eda_model::annotate::shown_reference(&reference);
             writeln!(out, "\t\t\t\t(path \"{path}\"").unwrap();
             writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&reference)).unwrap();
             writeln!(out, "\t\t\t\t\t(unit {})", eda_model::sheet_list::unit_under(sch, sym, model_path)).unwrap();

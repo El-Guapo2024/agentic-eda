@@ -262,7 +262,8 @@ pub fn symbol_specs(sym: &SymbolInstance, part: Option<&Part>, datasheet_of_lib:
     let footprint = if !sym.footprint.is_empty() { sym.footprint.clone() } else { part.map(eda_model::footprint::footprint_lib_id).unwrap_or_default() };
     let datasheet = if !sym.datasheet.is_empty() { sym.datasheet.clone() } else { datasheet_of_lib.to_string() };
     vec![
-        FieldSpec::new("Reference", sym.id.clone(), true),
+        // a placeholder (`R?1`) shows the unannotated `R?` it stands for (UI-LEFT S14)
+        FieldSpec::new("Reference", eda_model::annotate::shown_reference(&sym.id).to_string(), true),
         FieldSpec::new("Value", value, true),
         FieldSpec::new("Footprint", footprint, false),
         FieldSpec::new("Datasheet", datasheet, false),

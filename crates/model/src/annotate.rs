@@ -72,6 +72,16 @@ fn placeholder_mark(reference: &str) -> Option<usize> {
     (!tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit())).then_some(q)
 }
 
+/// The reference as KiCad shows and writes it: a placeholder the sheet importer gave a symbol it could not tell apart (`R?1`, `R?2`) is the unannotated `R?` it
+/// stands for (`SCH_REFERENCE::Split` / `IsAnnotated`: a reference ending in `?`), every other reference as it is. The design keeps the placeholder as the part's
+/// name (two parts cannot both be `R?`); the field drawn on the sheet and the derived `.kicad_sch` say `R?` until Annotate numbers it (UI-LEFT S14).
+pub fn shown_reference(reference: &str) -> &str {
+    match placeholder_mark(reference) {
+        Some(q) => &reference[..=q],
+        None => reference,
+    }
+}
+
 /// Is this reference not annotated: empty, ending in `?` (`R?`), or a placeholder (`R?1`)?
 pub fn is_unannotated(reference: &str) -> bool {
     reference.is_empty() || reference.ends_with('?') || placeholder_mark(reference).is_some()
@@ -680,6 +690,16 @@ mod tests {
         assert_eq!(unit_letters(1), "A");
         assert_eq!(unit_letters(26), "Z");
         assert_eq!(unit_letters(27), "AA");
+    }
+
+    #[test]
+    fn a_placeholder_is_shown_as_the_unannotated_reference_it_stands_for() {
+        assert_eq!(shown_reference("R?1"), "R?");
+        assert_eq!(shown_reference("U?12"), "U?");
+        assert_eq!(shown_reference("R?"), "R?");
+        assert_eq!(shown_reference("R12"), "R12");
+        assert_eq!(shown_reference("#PWR?3"), "#PWR?");
+        assert_eq!(shown_reference(""), "");
     }
 
     #[test]

@@ -379,3 +379,28 @@ fn a_placed_symbol_takes_the_first_free_number_and_a_unit_joins_a_part_that_has_
     assert_eq!(b.placement_reference("", "U", "Test:Dual", "TL999", 2, 2, &first_free).unwrap(), "U3", "another value is another part");
     assert_eq!(b.placement_reference("", "U", "Test:Dual", "TL072", 2, 2, &AnnotateOptions { algo: Algo::FirstFree, start_number: 10, ..Default::default() }).unwrap(), "U11");
 }
+
+/// UI-LEFT S14: a placeholder the importer gave a symbol it could not tell apart (`R?1`, `R?2`: two parts cannot both be `R?` in the design) is `R?` where KiCad shows
+/// and reads it -- the Reference field drawn on the sheet and the derived file's Reference and `(instances .. (reference ..))` -- until Annotate numbers it.
+#[test]
+fn a_placeholder_reference_is_written_and_drawn_as_the_unannotated_r_question_mark() {
+    use eda_model::{Part, Pin, PinKind};
+    let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("10k".into()), package: None, footprint: None, symbol: Some("Device:R".into()), datasheet: None, pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_nm: None, edge: None };
+    let m = ConstraintModel { parts: vec![part("R?1"), part("R?2")], ..Default::default() };
+    let mut d = design();
+    let root = d.schematic.as_mut().unwrap();
+    root.symbols = vec![symbol("R?1", "Device:R", "10k", 1, p(mm(10.16), mm(10.16))), symbol("R?2", "Device:R", "1k", 1, p(mm(30.48), mm(10.16)))];
+    let text = eda_kicad::export_kicad_sch(&d, &m, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+    assert_eq!(text.matches("(reference \"R?\")").count(), 2, "both are R? in the file");
+    assert!(!text.contains("R?1") && !text.contains("R?2"), "no placeholder number reaches KiCad");
+    let specs = eda_engine::fields::symbol_specs(&root_symbol(&d, "R?1"), None, "");
+    assert_eq!(specs[0].text, "R?", "the Reference field shows R?");
+    // annotated, it is a reference like any other
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&annotate(false, AnnotateOrder::XThenY, None, all(Algo::FirstFree, 0))).unwrap();
+    assert!(b.design().schematic.as_ref().unwrap().symbols.iter().all(|s| !eda_model::annotate::is_unannotated(&s.id)));
+}
+
+fn root_symbol(d: &Design, id: &str) -> SymbolInstance {
+    d.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == id).unwrap().clone()
+}
