@@ -21,6 +21,7 @@ import type { LengthUnit } from "../state/units";
 import { enabledOptionalLayers, layerDisplayName } from "./boardLayers";
 import { effectiveClassName } from "./boardSetupRules";
 import { DIM_PRECISION_CHOICES, toCmdDimension } from "./dimensionConvert";
+import { boldToggled, labelLooksOf, labelLooksOfCmd, withLabelLooks, type DimensionLabelLooks } from "./dimensionLabel";
 import { editAttrsCmd, editFieldCmd, editPadCmd, fieldById, localAngleOf } from "./fpFields";
 import { arcShapeCenter, padById } from "./pcbItems";
 import { shapeToCmd } from "./pcbPointEdit";
@@ -1700,7 +1701,14 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   /** The angle of the text of a text item, a field or a dimension, degrees (a text's and a field's is KiCad's counter-clockwise one). */
   const textAngle = (i: PcbItem): number => (i.text ? i.text.angle : i.field ? i.field.angle : i.dim!.keep_text_aligned ? i.dim!.computed_text_angle : i.dim!.text_angle) / 1000;
   const styleCmd = (t: BoardText, patch: Omit<Extract<Cmd, { op: "edit_text_style" }>, "op" | "id">): Cmd => ({ op: "edit_text_style", id: t.id, ...patch });
-  const NOT_A_DIM_ROW = "A dimension's label is drawn by the dimension: its italic, bold, mirror, justification and keep-upright are not modelled.";
+  /** A dimension's label is its own text (UI-LEFT-2 PP11, kicad-port/dimensionLabel.ts): a row of `EDA_TEXT_DESC` / `PCB_TEXT_DESC` sets its looks in one `edit_dimension`. */
+  const dimLooks = (i: PcbItem): DimensionLabelLooks => labelLooksOf(i.dim!);
+  const dimLookCmd = (i: PcbItem, patch: (l: DimensionLabelLooks) => DimensionLabelLooks): Cmd[] => {
+    const base = toCmdDimension(i.dim!);
+    const before = labelLooksOfCmd(base);
+    const after = patch(before);
+    return JSON.stringify(after) === JSON.stringify(before) ? [] : [{ op: "edit_dimension", id: i.dim!.id, dimension: withLabelLooks(base, after) }];
+  };
   add({
     owner: "EDA_TEXT",
     name: "Orientation",
@@ -1739,13 +1747,12 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       owner: "EDA_TEXT",
       name: "Font",
       kind: "string",
-      get: (i) => (i.text ? i.text.face : i.field ? i.field.face : null) || KICAD_FONT_NAME,
-      writeable: (i) => !!(i.text || i.field),
-      readOnlyReason: "A dimension's label has no font of its own in the model (UI-LEFT-2 PP11).",
+      get: (i) => (i.text ? i.text.face : i.field ? i.field.face : i.dim ? dimLooks(i).face : null) || KICAD_FONT_NAME,
       set: (i, v) => {
         const next = String(v).trim();
         const face = next === "" || next.startsWith(KICAD_FONT_NAME) ? "" : next;
         if (i.field) return (i.field.face ?? "") === face ? [] : [editFieldCmd(i.part!, i.field, { face: face || null })];
+        if (i.dim) return dimLookCmd(i, (l) => ({ ...l, face: face || null }));
         return !i.text || (i.text.face ?? "") === face ? [] : [styleCmd(i.text, { face })];
       },
     },
@@ -1801,11 +1808,12 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         owner: "EDA_TEXT",
         name,
         kind: "bool",
-        get: (i) => (i.field ? i.field[key] : i.text ? !!i.text[key] : false),
-        writeable: (i) => !i.dim,
-        readOnlyReason: NOT_A_DIM_ROW,
+        get: (i) => (i.field ? i.field[key] : i.text ? !!i.text[key] : i.dim ? dimLooks(i)[key] : false),
         set: (i, v) => {
           if (i.field) return i.field[key] === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field, { [key]: Boolean(v) })];
+          // `EDA_TEXT::SetBold`: in the stroke font the pen goes to the bold or the normal one (KiCad gives back a pen it kept aside, `m_StoredStrokeWidth`;
+          // the model keeps none: the normal pen); an outline face is its own weight
+          if (i.dim) return dimLookCmd(i, (l) => (key === "bold" && !l.face ? boldToggled(l, Boolean(v)) : { ...l, [key]: Boolean(v) }));
           return !!i.text![key] === Boolean(v) ? [] : [styleCmd(i.text!, { [key]: Boolean(v) })];
         },
       },
@@ -1819,11 +1827,10 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       owner: "EDA_TEXT",
       name: "Mirrored",
       kind: "bool",
-      get: (i) => (i.field ? i.field.mirror : i.text ? i.text.mirror : false),
-      writeable: (i) => !i.dim,
-      readOnlyReason: NOT_A_DIM_ROW,
+      get: (i) => (i.field ? i.field.mirror : i.text ? i.text.mirror : i.dim ? dimLooks(i).mirrored : false),
       set: (i, v) => {
         if (i.field) return i.field.mirror === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field, { mirror: Boolean(v) })];
+        if (i.dim) return dimLookCmd(i, (l) => ({ ...l, mirrored: Boolean(v) }));
         return i.text!.mirror === Boolean(v) ? [] : [textCmd(i.text!, { mirror: Boolean(v) })];
       },
     },
@@ -1842,10 +1849,10 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     TEXT
   );
   // "Width" and "Height" (`SetTextWidth`, `SetTextHeight`): a free text's height is its `size`, its width the `TextExtra` width when it has one (else the height).
-  // A dimension's label is square in this model: both rows set its size.
+  // A dimension's label's are its own (UI-LEFT-2 PP11): its height and its `text_effects` width.
   const textWidth = (t: BoardText): number => t.width ?? t.size;
   const size = (name: "Width" | "Height"): void => {
-    const own = (i: PcbItem): number => (i.text ? (name === "Width" ? textWidth(i.text) : i.text.size) : i.field ? (name === "Width" ? i.field.w : i.field.h) : i.dim!.text_size_nm);
+    const own = (i: PcbItem): number => (i.text ? (name === "Width" ? textWidth(i.text) : i.text.size) : i.field ? (name === "Width" ? i.field.w : i.field.h) : name === "Width" ? dimLooks(i).widthNm : dimLooks(i).heightNm);
     add(
       {
         owner: "EDA_TEXT",
@@ -1868,7 +1875,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
             // The height alone: a square text keeps its width.
             return [textCmd(t, { size_nm: s }), ...(t.width == null ? [styleCmd(t, { width_nm: t.size })] : [])];
           }
-          return [dimCmd(i.dim!, { text_size_nm: s })];
+          return dimLookCmd(i, (l) => (name === "Width" ? { ...l, widthNm: s } : { ...l, heightNm: s }));
         },
       },
       TEXT
@@ -1886,10 +1893,9 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         { label: "Center", value: "center" },
         { label: "Right", value: "right" },
       ],
-      get: (i) => (i.field ? (i.field.halign < 0 ? "left" : i.field.halign > 0 ? "right" : "center") : i.text ? i.text.justify : "center"),
-      writeable: (i) => !i.dim,
-      readOnlyReason: NOT_A_DIM_ROW,
+      get: (i) => (i.field ? (i.field.halign < 0 ? "left" : i.field.halign > 0 ? "right" : "center") : i.text ? i.text.justify : i.dim ? dimLooks(i).hJustify : "center"),
       set: (i, v) => {
+        if (i.dim) return dimLookCmd(i, (l) => ({ ...l, hJustify: String(v) as DimensionLabelLooks["hJustify"] }));
         if (i.field) {
           const halign = v === "left" ? -1 : v === "right" ? 1 : 0;
           return i.field.halign === halign ? [] : [editFieldCmd(i.part!, i.field, { halign })];
@@ -1948,11 +1954,10 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       base: "EDA_TEXT",
       name: "Keep Upright",
       kind: "bool",
-      get: (i) => (i.field ? i.field.upright : false),
-      // A dimension's label has the row too (`PCB_TEXT`'s override is its own class's): not modelled for it.
-      writeable: (i) => !!i.field,
-      readOnlyReason: NOT_A_DIM_ROW,
-      set: (i, v) => (i.field!.upright === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field!, { keep_upright: Boolean(v) })]),
+      get: (i) => (i.field ? i.field.upright : i.dim ? dimLooks(i).keepUpright : false),
+      // A dimension's label has the row too (`PCB_TEXT`'s override is its own class's, not inherited): `SetKeepUpright`, which KiCad keeps in memory only
+      // (never written for a dimension, never drawn: `GetDrawRotation` turns only a footprint's text) and the design keeps (UI-LEFT-2 PP11).
+      set: (i, v) => (i.dim ? dimLookCmd(i, (l) => ({ ...l, keepUpright: Boolean(v) })) : i.field!.upright === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field!, { keep_upright: Boolean(v) })]),
     },
     TEXT
   );

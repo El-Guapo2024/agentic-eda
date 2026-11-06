@@ -326,9 +326,39 @@ test("dimensions: the kinds share the text and layer rows and each adds its own"
   assert.deepEqual(rows("dim_ctr")["Dimension Properties"], ["Prefix", "Suffix", "Override Text", "Units", "Units Format", "Precision", "Suppress Trailing Zeroes"], "a centre mark has the measuring rows and none of the geometry");
   assert.deepEqual(rows("dim_a")["Basic Properties"], ["Position X", "Position Y", "Layer", "Locked"]);
   assert.deepEqual(rows("dim_a")["Text Properties"], ["Font", "Auto Thickness", "Thickness", "Italic", "Bold", "Mirrored", "Width", "Height", "Horizontal Justification", "Keep Upright", "Color", "Keep Aligned with Dimension", "Orientation"]);
-  // What a dimension's label has of an ordinary text's but this model does not: read-only, saying why.
-  assert.equal(rowOf(b, ["dim_a"], "Mirrored")!.writable, false);
-  assert.match(rowOf(b, ["dim_a"], "Mirrored")!.note ?? "", /dimension/);
+  // A dimension's label is its own text (UI-LEFT-2 PP11): its looks are writeable; only the automatic pen is not modelled for it.
+  for (const name of ["Font", "Italic", "Bold", "Mirrored", "Width", "Height", "Horizontal Justification", "Keep Upright"]) assert.equal(rowOf(b, ["dim_a"], name)!.writable, true, name);
+  assert.equal(rowOf(b, ["dim_a"], "Auto Thickness")!.writable, false);
+});
+
+test("a dimension's label rows set its looks in one edit_dimension each (UI-LEFT-2 PP11)", () => {
+  const b = board();
+  const one = (name: string, value: string | number | boolean) => {
+    const cmds = edit(b, ["dim_a"], name, value);
+    assert.equal(cmds.length, 1, name);
+    const c = cmds[0]!;
+    assert.equal(c.op, "edit_dimension");
+    return (c as Extract<Cmd, { op: "edit_dimension" }>).dimension;
+  };
+  assert.deepEqual(one("Italic", true).text_effects, { italic: true });
+  // `SetBold` in the stroke font: the bold pen of the smaller size, a fifth of it
+  const bold = one("Bold", true);
+  assert.deepEqual([bold.text_effects, bold.text_thickness_nm], [{ bold: true }, 200]);
+  assert.deepEqual(one("Mirrored", true).text_effects, { mirrored: true }, "Dwgs.User is on no side: a mirror is the label's own");
+  assert.deepEqual(one("Horizontal Justification", "left").text_effects, { h_justify: "left" });
+  assert.deepEqual(one("Keep Upright", true).text_effects, { keep_upright: true });
+  assert.deepEqual(one("Font", "DejaVu Sans").text_effects, { face: "DejaVu Sans" });
+  const wide = one("Width", 2000);
+  assert.deepEqual([wide.text_effects, wide.text_size_nm], [{ width_nm: 2000 }, 1000], "the width apart from the height");
+  const tall = one("Height", 2000);
+  assert.deepEqual([tall.text_effects, tall.text_size_nm], [{ width_nm: 1000 }, 2000], "the height alone: the width stays");
+  assert.deepEqual(edit(b, ["dim_a"], "Italic", false), [], "nothing changes: no command");
+  // a label already styled shows its looks
+  const styled: BoardState = { ...b, drawings: { ...b.drawings!, dimensions: [dim({ text_width_nm: 1500, face: "DejaVu Sans", bold: true, italic: true, mirrored: true, h_justify: "right", keep_upright: true })] } };
+  assert.deepEqual(
+    ["Font", "Width", "Bold", "Italic", "Mirrored", "Horizontal Justification", "Keep Upright"].map((n) => rowOf(styled, ["dim_a"], n)!.value),
+    ["DejaVu Sans", 1500, true, true, true, "right", true]
+  );
 });
 
 test("a group has a name and a lock, and no position or layer", () => {

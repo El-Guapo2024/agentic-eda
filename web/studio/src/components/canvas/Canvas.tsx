@@ -90,7 +90,7 @@ import { buildPcbMenu } from "./pcbMenuBuilder";
 import type { MenuNode } from "../../kicad/types";
 import { findNearestContourCorner, flatVertices, moveContourCorner, zoneContours, zoneOutlineCmd } from "../../kicad-port/zonePointEditor";
 import { zoneLayers } from "../../kicad-port/zoneLayers";
-import { fpDimensionClick, fpDimensionMotion } from "../../kicad-port/fpDrawTools";
+import { fpDimensionClick, fpDimensionHeightOffGrid, fpDimensionMotion, fpDimensionOnLayer } from "../../kicad-port/fpDrawTools";
 import { boardDimensionStyle, dimensionPointAt, moveDimensionPoint, type DimPointId } from "../../kicad-port/dimensionDraw";
 import { toCmdDimension } from "../../kicad-port/dimensionConvert";
 import { fetchDimensionPreview } from "../../api/dimensionPreview";
@@ -263,7 +263,25 @@ export function Canvas() {
       setDimPreview(null);
     }
   }, [state.drawState]);
+  // The dimension being drawn changed elsewhere -- the width keys, a change of layer, its dialog (UI-LEFT-2 PP11) -- : its preview follows (`m_view->Update( &preview )`).
+  const dimPreviewAsked = useRef("");
+  useEffect(() => {
+    const d = state.drawState?.kind === "dimension" ? state.drawState.dim?.dim : null;
+    if (d && JSON.stringify(d) !== dimPreviewAsked.current) requestDimPreview(d, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.drawState]);
+  // `DrawDimension`'s `layerChanged`: the dimension being drawn goes to the new active layer with that layer's text size, thickness, italic and line thickness, its
+  // mirror left as it is (kicad-port/fpDrawTools.ts `fpDimensionOnLayer`).
+  useEffect(() => {
+    const draw = state.drawState?.kind === "dimension" ? state.drawState : null;
+    if (!draw?.dim || state.activeTool !== "dimension") return;
+    const layer = activeLayerName(state.activeLayer, "Dwgs.User");
+    if (draw.dim.dim.layer === layer) return;
+    dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, dim: { ...draw.dim, dim: fpDimensionOnLayer(draw.dim.dim, layer, boardDimensionStyle(state.board)) } } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.activeLayer]);
   const requestDimPreview = (cmd: CmdDimension, id: string | null) => {
+    if (id === null) dimPreviewAsked.current = JSON.stringify(cmd);
     const seq = ++dimPreviewSeq.current;
     void fetchDimensionPreview(cmd).then((dim) => {
       if (seq === dimPreviewSeq.current) setDimPreview(dim ? { id, dim } : null);
@@ -607,6 +625,8 @@ export function Canvas() {
       case "dimension":
         opts.layers = "all";
         opts.category = "graphics";
+        // the height of a slanted aligned dimension is off the grid (`grid.SetUseGrid( false )`, UI-LEFT-2 PP11)
+        opts.noGrid = fpDimensionHeightOffGrid(draw?.kind === "dimension" ? draw.dim : null);
         break;
       case "picker":
       case "measure":

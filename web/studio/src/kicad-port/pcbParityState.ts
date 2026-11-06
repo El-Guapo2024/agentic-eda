@@ -90,6 +90,8 @@ export interface PcbParityState {
    * `initial` is what the dialog starts from. Absent (or null): no such dialog.
    */
   zoneCreate?: { at: [number, number] | null; initial: NewZoneSettings } | null;
+  /** E while a dimension is being drawn (`DrawDimension`'s `OnEditItemRequest( dimension )`): Dimension Properties is open on it; its closing ends the tool (UI-LEFT-2 PP11). */
+  dimensionDrawDialog?: boolean;
 }
 
 /**

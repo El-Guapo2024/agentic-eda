@@ -925,6 +925,18 @@ export type DimensionUnitsFormat = "no_suffix" | "bare_suffix" | "paren_suffix";
 export type DimensionTextPosition = "outside" | "inline" | "manual";
 /** `DIM_TEXT_BORDER`: a leader's frame round its text. */
 export type DimensionTextBorder = "none" | "rectangle" | "circle" | "round_rect";
+
+/** `crates/model/src/ir.rs` `DimensionTextEffects`: a dimension label's `EDA_TEXT` attributes past its height and pen (UI-LEFT-2 PP11); each absent field is the
+ *  default (the width the height, the stroke font, not bold or italic, mirrored as the layer's side says, centred, not kept upright). */
+export interface DimensionTextEffects {
+  width_nm?: Nm;
+  face?: string;
+  bold?: boolean;
+  italic?: boolean;
+  mirrored?: boolean;
+  h_justify?: TextJustify;
+  keep_upright?: boolean;
+}
 export type ArrowDirection = "inward" | "outward";
 
 /**
@@ -984,6 +996,16 @@ export interface Dimension {
   text_pos?: [Nm, Nm] | null;
   /** A leader's frame (`DIM_TEXT_BORDER`). */
   text_frame?: DimensionTextBorder;
+  /** The label's other looks (UI-LEFT-2 PP11; absent from an older backend): its width (`GetTextWidth`), face (null: the stroke font), bold, italic, mirror as
+   *  drawn (`IsMirrored`), horizontal justification and keep-upright; `text_effects` is the overlay itself, which an edit of the whole dimension sends back. */
+  text_width_nm?: Nm;
+  face?: string | null;
+  bold?: boolean;
+  italic?: boolean;
+  mirrored?: boolean;
+  h_justify?: TextJustify;
+  keep_upright?: boolean;
+  text_effects?: DimensionTextEffects;
   /** An aligned or orthogonal dimension's crossbar ends (`GetCrossbarStart`, `GetCrossbarEnd`), the point editor's handles; null for the other kinds. */
   crossbar?: [[Nm, Nm], [Nm, Nm]] | null;
   /** A radial dimension's knee (`PCB_DIM_RADIAL::GetKnee`); null for the other kinds. */
@@ -1038,6 +1060,8 @@ export interface CmdDimension {
   text_pos?: PointXY;
   /** A leader's `DIM_TEXT_BORDER` (`(text_frame N)`); absent = none. */
   text_frame?: DimensionTextBorder;
+  /** `Dimension::text_effects`: the label's own looks; absent = a square, centred stroke-font label mirrored as its layer's side says. */
+  text_effects?: DimensionTextEffects;
 }
 
 // ------------------------------------------------------- Footprint Editor
