@@ -1132,6 +1132,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - UI-LEFT P17 (2026-11-06, `task-u5-pcbitems`, item 24, `PARITY-pcb.md` section 84): a board footprint's text boxes, images, points and barcodes are now its items (`FootprintExtra::items`), drawn with it on the board; only its zones, dimensions and tables are still the text of their forms.
 - UI-LEFT F3 (2026-11-06, `task-u3-fpedit2`): Edit Footprint (Ctrl+E) on a board footprint edits a copy of that footprint (`BoardFootprintCopy`) and Save puts it back on that footprint only, its graphics and texts
   with their looks (the board's `fp_art` keeps a text's hidden flag; whether the board canvas hides it was not checked).
+- UI-LEFT P30 (2026-11-06, `task-u6-fpkeep`, `PARITY-pcb.md` section 89): Ctrl+E's copy holds the board footprint's text boxes, images, points and barcodes, and Update Footprint on Board puts the copy's back with the
+  footprint's record (uuid, sheet, classes, its board file's description, tags, fields and kept forms, pads with no copper, holes): nothing the footprint had is lost (KiCad's copy is a clone). Update and Change
+  Footprint make the four kinds the library footprint's, as `ExchangeFootprint` does (the user texts follow the text options, section 78). **Left:** a dimension, zone, table or group drawn in the copy is not
+  kept on the board; the copy does not show the board's description, keywords, Datasheet and Description (they come back from the record); the image pixels of a turned footprint's copy and of a library image
+  put on a turned footprint are not turned.
 - Port from: `pcbnew/footprint.cpp`, `pcbnew/pcb_shape.cpp`, `pcbnew/pcb_text.cpp`, `pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.cpp` (`format( FOOTPRINT )`), `pcb_io_kicad_sexpr_parser.cpp`
   (`parseFOOTPRINT_unchecked`), `pcbnew/pcb_painter.cpp` (`draw( FOOTPRINT )`).
 
@@ -1167,6 +1172,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   and the net-tie groups; Footprint Properties' Reference and Value are edited on the board and carried to the symbol on whichever sheet it is (a board-only footprint
   renamed and revalued on the board alone). Left: a library pad's layer set, die length and property carried onto a footprint placed or updated from the library;
   Update Schematic from PCB's pin and gate swaps (25ec2335 `applyPinSwaps`, `PlanBackannotateUnitSwaps`).
+- Done 2026-11-06 (`task-u6-fpkeep`, `PARITY-pcb.md` section 89, UI-LEFT P30): what the exchange keeps of the board's record of the footprint is KiCad's -- always the uuid, the sheet, the footprint filters and the
+  classes; the paste margins with "Update/reset clearance overrides" off; the Extruded 3D Body and the model files with "Update/reset 3D models" off; the board file's Datasheet and Description fields with
+  "Update/reset text content" off -- and the footprint's text boxes, images, points and barcodes are the library footprint's (the command carries them, `library_items`). A built-in package's Update Footprint from
+  Library reads the footprint the board names (`Resistor_SMD:R_0603_1608Metric`; it was refused, "library footprint '0603' not found"), and Update Footprint on Board leaves the part on that name. **Left:** the
+  fields kept whole (the layer, size and position options are not applied to them); the library's description, tags, jumper groups, private layers, 3D body, footprint-level margins, dimensions, zones and
+  tables are not written onto a footprint the exchange gave a library's (KiCad's new footprint has them); the footprint filters go with the board file's fields when the text content is reset.
 - Port from: `pcbnew/dialogs/dialog_exchange_footprints.cpp`, `pcbnew/pcb_edit_frame.cpp` (`ExchangeFootprint`), `pcbnew/netlist_reader/board_netlist_updater.cpp` (`replaceFootprint`,
   `updateFootprintParameters`, `updateComponentPadConnections`), `pcbnew/tools/global_edit_tool.cpp` (`ExchangeFootprints`), `pcbnew/tools/board_reannotate_tool.cpp`,
   `pcbnew/dialogs/dialog_board_reannotate.cpp`, `pcbnew/footprint.cpp` and `pcbnew/drc/drc_test_provider_library_parity.cpp` (`FootprintNeedsUpdate`), `pcbnew/tools/board_inspection_tool.cpp` (`DiffFootprint`),

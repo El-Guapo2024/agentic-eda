@@ -257,7 +257,8 @@ fn set_teardrop_params_gives_vias_and_pads_their_own_and_none_gives_them_back_to
 fn set_footprint_paste_margin_edits_a_board_files_footprint_tokens_and_a_footprint_placed_from_the_intent_its_edit() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
-    d.drawings.as_mut().unwrap().footprint_extras.push(eda_model::ir::FootprintExtra { id: "U1".into(), tokens: vec!["(descr \"x\")".into(), "(solder_paste_margin -0.1)".into()], ..Default::default() });
+    // (a record that holds the file's form: read from a footprint of that name)
+    d.drawings.as_mut().unwrap().footprint_extras.push(eda_model::ir::FootprintExtra { id: "U1".into(), tokens: vec!["(descr \"x\")".into(), "(solder_paste_margin -0.1)".into()], source_name: "Lib:U1".into(), ..Default::default() });
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::SetFootprintPasteMargin { part: "U1".into(), margin: Some(um(-50.0)), ratio: Some(-0.05) }).unwrap();
     let e = drawings(&b).footprint_extras.iter().find(|e| e.id == "U1").unwrap();

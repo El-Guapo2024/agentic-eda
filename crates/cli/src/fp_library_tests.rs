@@ -72,7 +72,7 @@ fn an_update_reads_the_library_copy_through_the_tables_and_lists_what_differs_be
     assert_eq!((e["found"].as_bool(), e["differs"].as_bool()), (Some(false), Some(false)), "{e}");
 
     // the update takes the library's copy; one undo step
-    let update = Cmd::ExchangeFootprints { references: vec!["U1".into()], footprint: None, options: ExchangeOptions::update(), library: Default::default() };
+    let update = Cmd::ExchangeFootprints { references: vec!["U1".into()], footprint: None, options: ExchangeOptions::update(), library: Default::default(), library_items: Default::default() };
     step(&dir, update, false, "test").unwrap();
     assert_eq!(pad_sizes(&dir, "U1"), [(mm(1.2), mm(1.2)), (mm(1.2), mm(1.2))]);
     let e = &plan(&dir, &["U1"], None)["entries"][0];

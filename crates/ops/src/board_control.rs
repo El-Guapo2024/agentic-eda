@@ -637,7 +637,7 @@ impl<'a> crate::Board<'a> {
                 continue;
             }
             let Some(mut copy) = self.design.footprint_library.as_mut().and_then(|l| l.board_copies.pop()).map(|c| c.footprint) else { continue };
-            let read_from_file = self.design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == part.reference));
+            let read_from_file = self.design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == part.reference && e.holds_file_form()));
             if let Some(link) = model.symbol_links.get(&part.reference).filter(|_| !read_from_file) {
                 for (field, text) in &link.fields {
                     if !copy.fields.iter().any(|f| f.name == *field) {

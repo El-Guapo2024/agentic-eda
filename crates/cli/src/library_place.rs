@@ -14,7 +14,8 @@
 //!   * `sch_edit change_symbol { lib_id }` (Change Symbols, `DIALOG_CHANGE_SYMBOLS::processSymbol` with the `LIB_SYMBOL` `GetLibSymbol( newId )` reads from the
 //!     library -- one the Symbol Chooser found in any library of the tables) keeps the new symbol's definition first, the same way.
 //!   * `PlaceFootprint { footprint }` carries the footprint's pads, graphics and courtyard as `definition`.
-//!   * `ExchangeFootprints` carries the library copy of each footprint it puts a part on (`library`), and a symbol's Footprint field that is edited
+//!   * `ExchangeFootprints` carries the library copy of each footprint it puts a part on (`library`, and its text boxes, images, points and barcodes in
+//!     `library_items`: the exchange gives the board footprint the library's, UI-LEFT P30), and a symbol's Footprint field that is edited
 //!     (`EditSymbolFields`, the Symbol Fields Table's `SetSymbolFields`) is followed by the board in the same step: the exchange of the part's footprint is
 //!     added to the command, `board_netlist_updater.cpp`'s `replaceFootprint`.
 //!   * `OpenFootprintForEdit { name }` of a `Lib:Name` the design has no copy of becomes the `PutLibraryFootprint` of the library's footprint
@@ -170,27 +171,30 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
             let (definition, _) = crate::library_search::installed_symbol(symbols, lib_id.trim())?;
             Some(Cmd::Batch { cmds: vec![Cmd::EmbedLibSymbol { symbol: definition }, cmd.clone()] })
         }
-        Cmd::ExchangeFootprints { references, footprint, options, library } => {
+        Cmd::ExchangeFootprints { references, footprint, options, library, library_items } => {
             // the library copy of each footprint it needs: the one the parts change to, or the one each is on
             let mut names: Vec<String> = match footprint {
                 Some(f) => vec![f.trim().to_string()],
-                // (the footprint each is on, by the name the board gives it: a built-in `0603` is `Resistor_SMD:R_0603_1608Metric`)
-                None => references.iter().filter_map(|r| model.part(r)).map(eda_model::footprint::footprint_lib_id).collect(),
+                // (the footprint each is on, by the name the libraries know it by: a built-in `0603` is `Resistor_SMD:R_0603_1608Metric`, `Lib:X#2` is `Lib:X`)
+                None => references.iter().filter_map(|r| model.part(r)).map(|p| eda_model::footprint::library_lookup_name(p, &model.footprints)).collect(),
             };
             names.sort();
             names.dedup();
-            let mut library = library.clone();
+            let (mut library, mut library_items) = (library.clone(), library_items.clone());
             let mut added = false;
             for name in names {
                 if library.contains_key(&name) {
                     continue;
                 }
                 if let Some(copy) = crate::library_search::installed_engine_footprint(footprints, &name) {
+                    if let Some(items) = installed_items(footprints, &name) {
+                        library_items.insert(name.clone(), items);
+                    }
                     library.insert(name, copy);
                     added = true;
                 }
             }
-            added.then(|| Cmd::ExchangeFootprints { references: references.clone(), footprint: footprint.clone(), options: *options, library })
+            added.then(|| Cmd::ExchangeFootprints { references: references.clone(), footprint: footprint.clone(), options: *options, library, library_items })
         }
         // The symbol's Footprint field is the board's footprint (`replaceFootprint`): the exchange follows the edit
         Cmd::EditSymbolFields { id, footprint: Some(f), .. } => follow_footprint_field(cmd, id, f, design, model, footprints),
@@ -213,6 +217,13 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
         }
         _ => None,
     }
+}
+
+/// The text boxes, images, points and barcodes of the installed footprint `name` (`eda_model::fp_items_place::placed_kinds` of the footprint the Footprint Editor reads),
+/// `None` where it has none: what an exchange gives the board footprint of them (`ExchangeFootprint` keeps `aNew`'s own).
+fn installed_items<F: LibSource + ?Sized>(footprints: &F, name: &str) -> Option<eda_model::fp_items::FootprintItems> {
+    let fp = crate::library_search::installed_footprint(footprints, name)?;
+    Some(eda_model::fp_items_place::placed_kinds(&fp.items)).filter(|i| !i.is_empty())
 }
 
 /// Does something have the footprint `wanted` for the part `id`: a library of the tables, the Footprint Editor, or the model itself (another part's, a built-in package)?
@@ -267,11 +278,14 @@ fn exchange_for_field<F: LibSource + ?Sized>(id: &str, wanted: &str, design: &De
     if design.drawings.as_ref().is_some_and(|d| d.locked_ids.iter().any(|l| l == id)) {
         return None;
     }
-    let mut library = BTreeMap::new();
+    let (mut library, mut library_items) = (BTreeMap::new(), BTreeMap::new());
     if let Some(copy) = find_footprint(wanted, id, design, model, footprints)? {
         library.insert(wanted.to_string(), copy);
+        if let Some(items) = installed_items(footprints, wanted) {
+            library_items.insert(wanted.to_string(), items);
+        }
     }
-    Some(Cmd::ExchangeFootprints { references: vec![id.to_string()], footprint: Some(wanted.to_string()), options: ExchangeOptions::replace(), library })
+    Some(Cmd::ExchangeFootprints { references: vec![id.to_string()], footprint: Some(wanted.to_string()), options: ExchangeOptions::replace(), library, library_items })
 }
 
 /// `cmd` (an edit of the symbol `id`'s Footprint field) and the exchange that makes the board follow it, in one command.

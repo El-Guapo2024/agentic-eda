@@ -159,7 +159,9 @@ fn update_footprint_on_board_changes_only_the_linked_instance() {
     let z = dr.zone_overrides.iter().find(|z| z.id == "R1").unwrap();
     assert_eq!(z.footprint, Some(FootprintZoneFacts { zone_connection: Some(PadConnection::Full), clearance: Some(mm(0.15)) }));
     assert_eq!(z.pads.iter().find(|p| p.number == "2").and_then(|p| p.clearance), Some(mm(0.3)));
-    assert!(dr.footprint_extras.iter().all(|e| e.id != "R1"), "the settings were replaced whole: no mask margin and no net ties now");
+    // the settings were replaced whole: no mask margin and no net ties now; the record's footprint clearance is the copy's, as the zone overrides have it
+    let e = dr.footprint_extras.iter().find(|e| e.id == "R1").expect("R1's record");
+    assert_eq!((e.solder_mask_margin, e.net_tie_pad_groups.len(), e.clearance), (None, 0, Some(mm(0.15))));
     // the library has no entry, the copy is still the editor's
     assert!(d.footprint_library.as_ref().unwrap().footprints.is_empty());
     assert!(d.footprint_library.as_ref().unwrap().board_copy(&key).is_some());

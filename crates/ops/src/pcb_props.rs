@@ -385,17 +385,14 @@ impl Board<'_> {
     /// read from a file keeps them among its tokens (`FootprintExtra::tokens`, `(solder_paste_margin ..)` and `(solder_paste_margin_ratio ..)`); one placed from the
     /// intent in its edit (`FootprintEdit::solder_paste_margin`, `..ratio`; UI-LEFT P14), which the writer writes.
     pub(crate) fn set_footprint_paste_margin(&mut self, part: &str, margin: Option<Nm>, ratio: Option<f64>) -> Result<(), Vec<CheckResult>> {
-        let fmt = |v: f64| {
-            let s = format!("{v:.6}");
-            s.trim_end_matches('0').trim_end_matches('.').to_string()
-        };
         if let Some(r) = ratio {
             // `MARGIN_OFFSET_BINDER`: the ratio is a percentage the dialog limits like a pad's (`padValuesOK`: -50% .. +100%)
             if !(-0.5..=1.0).contains(&r) {
                 return Err(fail("ops_bad_footprint", part, "The solder paste margin ratio must be between -50% and 100%."));
             }
         }
-        let from_file = self.design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == part));
+        // (a record of facts the board gave a footprint made here holds no file form: its margins are its edit's, as for one with no record)
+        let from_file = self.design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == part && e.holds_file_form()));
         if !from_file {
             self.require_placed(part)?;
             let before = self.design.footprint_edit(part).map(|e| (e.solder_paste_margin, e.solder_paste_ratio)).unwrap_or_default();
@@ -411,21 +408,31 @@ impl Board<'_> {
         let d = self.design.drawings.as_mut().ok_or_else(|| fail("ops_no_board_file_footprint", part, "this footprint was not read from a board file"))?;
         let e = d.footprint_extras.iter_mut().find(|e| e.id == part).ok_or_else(|| fail("ops_no_board_file_footprint", part, "this footprint was not read from a board file"))?;
         let before = e.tokens.clone();
-        let tag = |t: &str| t.strip_prefix('(').and_then(|r| r.split_whitespace().next()).map(str::to_string);
-        let mut set = |name: &str, aliases: &[&str], value: Option<String>| {
-            let at = e.tokens.iter().position(|t| tag(t).is_some_and(|n| n == name || aliases.contains(&n.as_str())));
-            e.tokens.retain(|t| !tag(t).is_some_and(|n| n == name || aliases.contains(&n.as_str())));
-            if let Some(v) = value {
-                e.tokens.insert(at.unwrap_or(e.tokens.len()).min(e.tokens.len()), format!("({name} {v})"));
-            }
-        };
-        set("solder_paste_margin", &[], margin.map(|m| fmt(m.as_f64() / 1_000_000.0)));
-        set("solder_paste_margin_ratio", &["solder_paste_ratio"], ratio.map(fmt));
+        set_paste_margin_tokens(&mut e.tokens, margin, ratio);
         if e.tokens == before {
             return Err(fail("ops_nothing_to_change", part, "the footprint already has these paste margins"));
         }
         Ok(())
     }
+}
+
+/// A footprint's paste margins in the kept forms of its board file (`FootprintExtra::tokens`): `(solder_paste_margin ..)` and `(solder_paste_margin_ratio ..)` (the older
+/// `(solder_paste_ratio ..)` replaced) set to `margin` and `ratio`, each where the file had it, or taken out for `None`.
+pub(crate) fn set_paste_margin_tokens(tokens: &mut Vec<String>, margin: Option<Nm>, ratio: Option<f64>) {
+    let fmt = |v: f64| {
+        let s = format!("{v:.6}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    let tag = |t: &str| t.strip_prefix('(').and_then(|r| r.split_whitespace().next()).map(str::to_string);
+    let mut set = |name: &str, aliases: &[&str], value: Option<String>| {
+        let at = tokens.iter().position(|t| tag(t).is_some_and(|n| n == name || aliases.contains(&n.as_str())));
+        tokens.retain(|t| !tag(t).is_some_and(|n| n == name || aliases.contains(&n.as_str())));
+        if let Some(v) = value {
+            tokens.insert(at.unwrap_or(tokens.len()).min(tokens.len()), format!("({name} {v})"));
+        }
+    };
+    set("solder_paste_margin", &[], margin.map(|m| fmt(m.as_f64() / 1_000_000.0)));
+    set("solder_paste_margin_ratio", &["solder_paste_ratio"], ratio.map(fmt));
 }
 
 /// A track's points and arc mid offset once its first and/or last point is where `start` / `end` say.

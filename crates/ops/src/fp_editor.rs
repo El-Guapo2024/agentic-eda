@@ -8,11 +8,14 @@
 //! true )`: pad positions matched, every reset on) and touches no other footprint and no library.
 //!
 //! Here the copy is a [`eda_model::ir::BoardFootprintCopy`] beside the footprint library (its key is not a footprint name: it is never listed, published or saved into a
-//! library), made from the footprint as the board has it -- the pads with their edits and overrides, the drawings, the Reference with the part's reference, the Value,
-//! the user fields, the attributes and the footprint's own clearance, margins and net ties -- in the footprint's own frame (the frame of the board's pads, so nothing
-//! moves; the layers of a bottom-side footprint's fields turned to the front, `FOOTPRINT::Flip`). The open is a step of the Footprint Editor (KiCad clears its undo list);
-//! the save is one step of the board ("Update Footprint"): the part's footprint becomes the copy's ([`crate::fp_exchange`]'s `exchange_one` with
-//! [`ExchangeOptions::replace`]) and what the copy has beyond the engine's footprint is laid on the instance's own edits.
+//! library), made from the footprint as the board has it -- the pads with their edits and overrides, the drawings, its text boxes, images, points and barcodes
+//! (`FootprintExtra::items`, UI-LEFT P30), the Reference with the part's reference, the Value, the user fields, the attributes and the footprint's own clearance, margins
+//! and net ties -- in the footprint's own frame (the frame of the board's pads, so nothing moves; the layers of a bottom-side footprint's fields turned to the front,
+//! `FOOTPRINT::Flip`). The open is a step of the Footprint Editor (KiCad clears its undo list); the save is one step of the board ("Update Footprint"): the part's
+//! footprint becomes the copy's ([`crate::fp_exchange`]'s `exchange_one` with [`ExchangeOptions::replace`]) and what the copy has beyond the engine's footprint is laid
+//! on the instance's own edits and record. KiCad's copy is a clone of the board footprint, so what the board file said of it and the copy has no place for (its uuid, sheet,
+//! description, tags, Datasheet and Description fields and other kept forms, its pads with no copper and its holes) comes back with it: the record stays, with the
+//! copy's items and settings laid on it, and what describes the old footprint's file form only while the copy left it as it was (its courtyard items, groups, pads' facts).
 
 use super::fp_exchange::{board_footprint, footprint_name_of, ExchangeOptions};
 use super::{Board, Domain};
@@ -263,6 +266,8 @@ impl Board<'_> {
                 pad.kicad.property = o.fabrication_property.clone();
             }
         }
+        // its text boxes, images, points and barcodes (the clone holds every child of the footprint), their ids kept: the board's are the copy's
+        fp.items = eda_model::fp_items_place::items_of(&self.design, self.model, &part).map(eda_model::fp_items_place::placed_kinds).unwrap_or_default();
         fp.assign_missing_ids();
         let lib = self.footprint_library_mut();
         // the editor holds one footprint: a copy of another board footprint is gone (`Clear_Pcb`)
@@ -282,11 +287,20 @@ impl Board<'_> {
         if copy.footprint.pad_edit.is_some() {
             return Err(fail("ops_pad_edit", key, "a pad is being edited as graphic shapes: finish the pad edit first"));
         }
+        // the name the copy came from; a built-in package's is the installed footprint the board names (`Resistor_SMD:R_0603_1608Metric` for a `0603`: the clone's
+        // `GetFPID()`), so that the part is not left on a footprint named `0603`, which no library has
+        let fpid = if part.footprint.is_none() && part.package.as_deref() == Some(copy.fpid.as_str()) { eda_model::footprint::footprint_lib_id(&part) } else { copy.fpid.clone() };
         let mut new = copy.footprint.to_engine_footprint();
-        new.name = copy.fpid.clone();
+        new.name = fpid.clone();
         let old = self.model.footprint_of(&part).unwrap_or_default();
-        // `ExchangeFootprint( sourceFootprint, newFootprint, commit, true )`: pad positions matched, every reset on; the part keeps its symbol's footprint field
-        self.exchange_one(&reference, &copy.fpid, &old, new, &ExchangeOptions::replace(), false);
+        // the board file's record of the footprint as it stands, and whether its file form is the footprint's (the writer writes its tokens)
+        let old_record = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference)).cloned();
+        let live = old_record.as_ref().is_some_and(|e| e.holds_file_form() && e.source_name == eda_model::fp_items_place::written_name(self.model, &part));
+        let items = eda_model::fp_items_place::placed_kinds(&copy.footprint.items);
+        // `ExchangeFootprint( sourceFootprint, newFootprint, commit, true )`: pad positions matched, every reset on, the pads matched as the exchange matches them
+        // (`matchItemsBySimilarity<PAD>`, not the netlist's by number); the part keeps its symbol's footprint field
+        let options = ExchangeOptions { pads_by_number: false, ..ExchangeOptions::replace() };
+        self.exchange_one(&reference, &fpid, &old, new.clone(), items.clone(), &options, false);
 
         // What the copy has beyond the engine's footprint, on the instance: its fields' layouts and user fields, its attributes, its overrides (the clone carries them all)
         let fp = &copy.footprint;
@@ -327,6 +341,11 @@ impl Board<'_> {
             edit.set_pad(pe);
         }
         let footprint_facts = FootprintZoneFacts { zone_connection: fp.zone_connection, clearance: fp.settings.clearance };
+        // the paste margins: the file's forms of a footprint whose record holds them, else its edit (UI-LEFT P14)
+        if !live {
+            edit.solder_paste_margin = fp.settings.solder_paste_margin;
+            edit.solder_paste_ratio = fp.settings.solder_paste_margin_ratio;
+        }
         let pads: Vec<PadZoneOverride> = fp
             .pads
             .iter()
@@ -352,13 +371,43 @@ impl Board<'_> {
             dr.zone_overrides.push(FootprintZoneOverrides { id: reference.clone(), footprint: (footprint_facts != FootprintZoneFacts::default()).then_some(footprint_facts), pads });
             dr.zone_overrides.sort_by(|a, b| a.id.cmp(&b.id));
         }
-        // the footprint's mask margin, solder mask bridges and net ties are the board file's footprint facts
-        let mut extra = dr.footprint_extras.iter().find(|e| e.id == reference).cloned().unwrap_or_else(|| FootprintExtra { id: reference.clone(), ..Default::default() });
+        // The record: the clone is the board footprint, so what its board file said of it comes back -- the record as it was (a footprint made here gets one in the
+        // library's frame, as the writer holds every footprint made here) -- with the copy's items and footprint settings laid on it, and what describes the old
+        // footprint's file form only where the copy left that as it was.
+        let mut extra = old_record.clone().unwrap_or_else(|| FootprintExtra { id: reference.clone(), library_frame: true, ..Default::default() });
+        extra.items = items;
+        // the courtyard as the file drew it, while the copy's courtyard is the board's
+        if new.courtyard != old.courtyard {
+            extra.courtyard_items.clear();
+            extra.courtyard_bottom = false;
+            extra.no_courtyard = false;
+        }
+        // each pad's file facts (`PadMaskInfo`, by place in the footprint) while the pads are the same in the same order, the groups (members named by place) while the
+        // graphics, texts and pads are
+        let numbers = |f: &eda_model::Footprint| f.pads.iter().map(|p| p.number.clone()).collect::<Vec<_>>();
+        let same_pads = numbers(&new) == numbers(&old);
+        if !same_pads {
+            extra.pads.clear();
+        }
+        // (the board's art as the copy holds it, so a copy nothing was drawn in compares equal)
+        let old_art = LibraryFootprint::from_engine_footprint(&old).to_engine_footprint().art;
+        if !same_pads || new.art != old_art {
+            extra.groups.clear();
+        }
+        // the footprint's mask margin, solder mask bridges, net ties, clearance and zone connection (a footprint with no pad writes its own) are the board file's facts
         extra.solder_mask_margin = fp.settings.solder_mask_margin;
         extra.allow_soldermask_bridges = fp.attributes.allow_soldermask_bridges;
         extra.net_tie_pad_groups = fp.settings.net_tie_pad_groups.clone();
+        if old_record.is_some() || new.pads.is_empty() {
+            extra.clearance = fp.settings.clearance;
+            extra.zone_connection = fp.zone_connection;
+        }
+        if live {
+            crate::pcb_props::set_paste_margin_tokens(&mut extra.tokens, fp.settings.solder_paste_margin, fp.settings.solder_paste_margin_ratio);
+        }
         dr.footprint_extras.retain(|e| e.id != reference);
-        if extra != (FootprintExtra { id: reference.clone(), ..Default::default() }) {
+        // (a record that says the footprint is in its file's frame is not empty: `FootprintExtra::library_frame`)
+        if extra != (FootprintExtra { id: reference.clone(), library_frame: true, ..Default::default() }) {
             dr.footprint_extras.push(extra);
             dr.footprint_extras.sort_by(|a, b| a.id.cmp(&b.id));
         }
