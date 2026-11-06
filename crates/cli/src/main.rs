@@ -53,6 +53,7 @@ mod library_place;
 mod library_save_api;
 mod library_search;
 mod library_tables;
+mod rescue_api;
 mod text_variables;
 mod table_json;
 mod text_vars_json;
