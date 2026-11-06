@@ -57,13 +57,47 @@ export async function fetchSavedFootprint(id: string): Promise<LibraryFootprint 
   return (await get<{ footprint: LibraryFootprint | null; error?: string }>(`/api/library/saved?kind=footprint&id=${encodeURIComponent(id)}`)).footprint;
 }
 
-export type SaveAnswer = { ok: true; path: string; written: string[]; message: string } | { ok?: undefined; error: string; detail?: string; read_only?: boolean };
+export type SaveAnswer =
+  | { ok: true; path: string; written: string[]; removed?: string[]; saved?: string[]; deleted?: string[]; message: string }
+  | { ok?: undefined; error: string; detail?: string; read_only?: boolean };
 
-/** Save: a symbol library's modified symbols, or one footprint, into the file the table names. */
-export async function saveToLibrary(req: { kind: "symbol"; lib: string } | { kind: "footprint"; id: string }): Promise<SaveAnswer> {
+/**
+ * Save: a symbol library's modified symbols, or one footprint, into the file the table names, and what Delete and Rename took out of the library taken out of
+ * the file (UI-LEFT-2 LL1); `{kind: "footprint", lib}` deletes the library's deleted footprints alone (`DeleteFootprintFromLibrary` writes at once).
+ */
+export async function saveToLibrary(req: { kind: "symbol"; lib: string } | { kind: "footprint"; id: string } | { kind: "footprint"; lib: string }): Promise<SaveAnswer> {
   const a = await post<SaveAnswer>("/api/library/save", req);
-  if (a.ok && a.written.length > 0) librariesChanged();
+  if (a.ok && (a.written.length > 0 || (a.removed?.length ?? 0) > 0)) librariesChanged();
   return a;
+}
+
+export type RevertAnswer = { ok: true; reverted: string[]; gone: string[]; message: string } | { ok?: undefined; nothing: true; message: string } | { ok?: undefined; nothing?: undefined; error: string };
+
+/**
+ * Revert (`RevertSymbol`, `RevertLibrary`, `RevertFootprint`) and the reload of a library changed on disk (`UpdateLibraryBuffer`, `ReloadFootprint`): the server puts
+ * the library's file back into the design as one undoable step and clears the modified flag (`POST /api/library/revert`).
+ */
+export async function revertInLibrary(req: { kind: "symbol"; id: string } | { kind: "symbol"; lib: string } | { kind: "footprint"; id: string }): Promise<RevertAnswer> {
+  return post<RevertAnswer>("/api/library/revert", req);
+}
+
+/** `GetDerivedSymbolNames` over the library's buffer: the bare names of the symbols Delete takes with `id` (the design's and the library file's). */
+export async function fetchDerivedNames(id: string): Promise<string[]> {
+  return (await get<{ names: string[]; error?: string }>(`/api/library/derived?id=${encodeURIComponent(id)}`)).names;
+}
+
+/** The watched library of an editor's item as it is now (`crates/cli/src/library_watch.rs`); `path` null: nothing to watch. */
+export interface WatchAnswer {
+  path: string | null;
+  stamp?: string | null;
+  own?: boolean;
+  steady?: boolean;
+  modified?: boolean;
+  dirty?: boolean;
+}
+
+export async function fetchWatch(kind: SaveKind, id: string): Promise<WatchAnswer> {
+  return get<WatchAnswer & { error?: string }>(`/api/library/watch?kind=${kind}&id=${encodeURIComponent(id)}`);
 }
 
 export interface SaveLibraryAsRequest {

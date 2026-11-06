@@ -5,6 +5,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { useStudioState } from "../../state/store";
+import { useLibraryWatch } from "../../state/libraryWatch";
+import { fetchWritableLibraries } from "../../api/librarySaveClient";
+import { isTableLibrary, readOnlyFootprintBanner, SAVE_AS_EDITABLE_COPY } from "../../kicad-port/librarySave";
+import { splitLibName } from "../../kicad-port/libraryNames";
+import { setSaveFootprintAs } from "../../state/commonDialogs";
 import { setFpPrefs } from "../../state/fpPrefs";
 import { ENUM_PREFIX_MAX_LENGTH, enumSpinValue, enumeratePopupText, enumerateStart } from "../../kicad-port/padEnumeration";
 import { inPadEditMode, PAD_EDIT_MODE_MESSAGE, padEditLayer } from "../../kicad-port/padEditMode";
@@ -94,8 +99,34 @@ export function FootprintEditorView() {
   const dispatch = useFpDispatch();
   const api = useFpApi();
   // the editor's preferences where the drawing tools read them (state/fpPrefs.ts)
-  const prefs = useStudioState().prefs;
+  const studio = useStudioState();
+  const prefs = studio.prefs;
   useEffect(() => setFpPrefs(prefs), [prefs]);
+
+  // `setFPWatcher( aFootprint )`: the loaded footprint's file is watched while the editor is shown, and offered for reloading when it changes (UI-LEFT-2 LL3)
+  useLibraryWatch(
+    "footprint",
+    state.footprint?.board_link ? null : state.name,
+    studio.tab === "footprint",
+    async () => api.refresh(),
+    (message, kind = "info") => dispatch({ type: "TOAST", message, kind })
+  );
+
+  // `AddFootprintToBoard`'s info bar for a footprint of a library that cannot be written: "Editing footprint from read-only library %s.", with "Save as editable
+  // copy" (`SaveFootprintAs`) and a close button (UI-LEFT-2 LL2)
+  const [readOnlyLib, setReadOnlyLib] = useState<string | null>(null);
+  useEffect(() => {
+    setReadOnlyLib(null);
+    const lib = state.name && !state.footprint?.board_link ? splitLibName(state.name).lib : "";
+    if (!isTableLibrary(lib)) return;
+    let stopped = false;
+    void fetchWritableLibraries("footprint")
+      .then((libs) => !stopped && setReadOnlyLib(libs.some((l) => l.name === lib && !l.writable) ? lib : null))
+      .catch(() => undefined);
+    return () => {
+      stopped = true;
+    };
+  }, [state.name, state.footprint?.board_link]);
 
   // The editor's own toast (every library action reports through it) goes away by itself, like the studio's (App.tsx's `Toast`).
   useEffect(() => {
@@ -126,6 +157,18 @@ export function FootprintEditorView() {
           <span>{boardLinkMessage(state.footprint.board_link.reference)}</span>
           <a href="#" data-testid="fp-board-link-open-library" onClick={(e) => (e.preventDefault(), void api.openFootprint(state.footprint!.board_link!.fpid))}>
             {openInLibraryLabel(state.footprint.board_link.fpid)}
+          </a>
+        </div>
+      )}
+      {readOnlyLib && state.name && (
+        <div role="status" data-testid="fp-read-only-banner" style={{ padding: "4px 12px", background: "var(--chrome-bg-raised)", borderBottom: "1px solid var(--chrome-border)", fontSize: 12, display: "flex", gap: 12 }}>
+          <span>{readOnlyFootprintBanner(readOnlyLib)}</span>
+          <a href="#" data-testid="fp-read-only-save-as" onClick={(e) => (e.preventDefault(), setReadOnlyLib(null), setSaveFootprintAs({ name: state.name!, loaded: true }))}>
+            {SAVE_AS_EDITABLE_COPY}
+          </a>
+          <span style={{ flex: 1 }} />
+          <a href="#" aria-label="Close" onClick={(e) => (e.preventDefault(), setReadOnlyLib(null))}>
+            ×
           </a>
         </div>
       )}

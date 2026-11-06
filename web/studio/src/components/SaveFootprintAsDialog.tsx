@@ -18,6 +18,7 @@ import { useLibraryTree } from "../state/libraryTree";
 import { footprintExists, isTableLibrary, libraryRowLabel, saveAsLibraryRows } from "../kicad-port/librarySave";
 import { typedFootprintName, existsMessage, saveAsDefaults, saveAsError, savedFootprintId, savedMessage } from "../kicad-port/saveFootprintAs";
 import { notifyLibraryChanged } from "./library/useLibraryNames";
+import { setLibraryStatusText } from "../state/libraryStatus";
 
 export function SaveFootprintAsDialog() {
   const req = useCommonDialogs().saveFootprintAs;
@@ -64,21 +65,21 @@ function SaveFootprintAsBody({ req }: { req: SaveFootprintAsRequest }) {
     setBusy(true);
     try {
       const id = savedFootprintId(lib, name);
-      const row = tables.find((t) => t.name === lib);
-      // `FootprintSave`: "Library '%s' is read only." (the folder's path) before anything changes
-      if (isTableLibrary(lib) && row && !row.writable) return setError(`Library '${row.path}' is read only.`);
       const { footprint } = await fetchAnyFootprint(req.name);
+      // the dialog has ended (`ret == wxID_OK`) and the footprint takes its new id (`SetFPID`): a library that cannot be written refuses the save after that
+      // (`SaveFootprintInLibrary` -> `FootprintSave`'s "Library '%s' is read only." in a message box), and the footprint keeps the new id (UI-LEFT-2 LL6)
       const ok = await api.cmd({ op: "put_library_footprint", footprint: { ...footprint, name: id, published: false }, overwrite: replacing });
       notifyLibraryChanged();
       if (!ok) return;
-      if (isTableLibrary(lib)) {
-        const written = await saveToLibrary({ kind: "footprint", id });
-        if (!written.ok) return setError(written.error);
-      }
+      close();
       if (req.loaded) await api.openFootprint(id);
       dispatch({ type: "SET_TREE_SELECTION", name: id });
-      dispatch({ type: "TOAST", message: savedMessage(lib, name, replacing), kind: "info" });
-      close();
+      if (isTableLibrary(lib)) {
+        const written = await saveToLibrary({ kind: "footprint", id });
+        if (!written.ok) return dispatch({ type: "TOAST", message: written.error, kind: "error" });
+      }
+      // "Footprint '%s' added to '%s'" / "replaced in", the status bar's (`SetStatusText`)
+      setLibraryStatusText(savedMessage(lib, name, replacing));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

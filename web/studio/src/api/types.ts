@@ -1183,6 +1183,8 @@ export interface FootprintLibraryNames {
   names: string[];
   /** The names that are entries of the project library itself (editable in place); the others come from the intent, a `.kicad_mod` or the builtin table. Absent from an older backend. */
   project?: string[];
+  /** The library footprints Delete and Rename took out (`Lib:Name`), which the tree no longer lists (UI-LEFT-2 LL1). */
+  deleted?: string[];
 }
 
 export interface Check {
@@ -2386,6 +2388,8 @@ export type Cmd =
   /** `eeschema.SymbolLibraryControl.newSymbol`: a new, empty symbol in the project library (refused when the lib_id is taken). */
   | { op: "new_symbol"; lib_id: string }
   | { op: "delete_library_footprint"; name: string }
+  /** Revert's and a reload's verb (UI-LEFT-2 LL3): the design's copies go and the library keeps them (the server's `/api/library/revert` sends it). */
+  | { op: "forget_library_footprints"; names: string[] }
   /** `FOOTPRINT_EDITOR_CONTROL` Duplicate / Paste / Import / Save As: store a whole footprint under `footprint.name` (refused when taken unless `overwrite`). */
   | { op: "put_library_footprint"; footprint: LibraryFootprint; overwrite?: boolean }
   /** `FOOTPRINT_EDITOR_CONTROL::RenameFootprint`. */
@@ -2425,6 +2429,8 @@ export type Cmd =
   // `postUndo`/`postRedo` `domain` param) -- its own undo/redo scope.
   | { op: "open_symbol_for_edit"; lib_id: string }
   | { op: "delete_library_symbol"; lib_id: string }
+  /** Revert's and a reload's verb (UI-LEFT-2 LL3): the design's copies go and the library keeps them (the server's `/api/library/revert` sends it). */
+  | { op: "forget_library_symbols"; lib_ids: string[] }
   /** `SYMBOL_EDIT_FRAME` Duplicate / Paste / Import / Save Copy As: store a whole symbol under `symbol.lib_id` (refused when taken unless `overwrite`). */
   | { op: "put_library_symbol"; symbol: LibrarySymbol; overwrite?: boolean }
   /** `SYMBOL_EDITOR_CONTROL::RenameSymbol`. */
@@ -3681,6 +3687,8 @@ export interface SymbolEditorNames {
   project?: string[];
   /** The derived symbols of the project library, by `lib_id`, each with the `lib_id` of its parent (`(extends ...)`). */
   derived?: Record<string, string>;
+  /** The library symbols Delete and Rename took out (`Lib:Name`), which the tree no longer lists until the library is saved (UI-LEFT-2 LL1). */
+  deleted?: string[];
 }
 
 /** `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items, folded into one Cmd with a field selector -- see `Cmd`'s own `push_pin_property` doc. */

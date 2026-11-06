@@ -145,3 +145,40 @@ test("Save Symbol As refuses, in KiCad's order: no library, no name, a read-only
   assert.deepEqual(symbolSaveAsCheck("Mine", " R 2 ", rows), { name: "R_2", libId: "Mine:R_2" }, "the name trimmed, its blanks made underscores");
   assert.deepEqual(symbolSaveAsCheck("New", "X", rows), { name: "X", libId: "New:X" }, "a library the list does not know yet (made a moment ago) is not refused");
 });
+
+import {
+  deleteBaseMessage,
+  deleteFootprintQuestion,
+  deleteModifiedQuestion,
+  footprintDeletedStatus,
+  footprintLibraryReadOnly,
+  newFootprintLibrary,
+  newFootprintReadOnlyWarning,
+  readOnlyFootprintBanner,
+  SAVE_AS_EDITABLE_COPY,
+  symbolLibraryNotFound,
+  uniqueNewFootprintName,
+} from "./librarySave";
+
+test("Delete, Rename and New Footprint say what KiCad says (UI-LEFT-2 LL1, LL2)", () => {
+  assert.equal(symbolLibraryNotFound("Mine"), "Symbol library 'Mine' not found.");
+  assert.equal(deleteModifiedQuestion("R"), "The symbol 'R' has been modified.\nDo you want to remove it from the library?");
+  assert.equal(deleteBaseMessage("Zeta", ["Alpha", "Beta"]), "Deleting a base symbol will delete all symbols derived from it.\n\nZeta (base)\nAlpha\nBeta\n");
+  assert.equal(deleteFootprintQuestion("R_0603", "Mine"), "Delete footprint 'R_0603' from library 'Mine'?");
+  assert.equal(footprintDeletedStatus("R_0603", "Mine"), "Footprint 'R_0603' deleted from library 'Mine'");
+  assert.equal(footprintLibraryReadOnly("Mine"), "Library 'Mine' is read only.");
+  assert.equal(newFootprintReadOnlyWarning("Mine"), "The footprint could not be added to the selected library ('Mine'). This library is read-only.");
+  assert.equal(readOnlyFootprintBanner("Mine"), "Editing footprint from read-only library Mine.");
+  assert.equal(SAVE_AS_EDITABLE_COPY, "Save as editable copy");
+});
+
+test("New Footprint goes into the target library under Untitled made unique there", () => {
+  // `GetTargetFPID()`: the tree's footprint, else its library row, else the loaded footprint
+  assert.equal(newFootprintLibrary("Fp:Chip", ["Other"], "Mine:X"), "Fp");
+  assert.equal(newFootprintLibrary(null, ["Other"], "Mine:X"), "Other");
+  assert.equal(newFootprintLibrary(null, [], "Mine:X"), "Mine");
+  assert.equal(newFootprintLibrary(null, [], null), "");
+  const taken = new Set(["Untitled", "Untitled_1"]);
+  assert.equal(uniqueNewFootprintName((n) => taken.has(n)), "Untitled_2");
+  assert.equal(uniqueNewFootprintName(() => false), "Untitled");
+});

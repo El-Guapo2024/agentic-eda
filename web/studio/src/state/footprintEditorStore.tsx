@@ -16,6 +16,9 @@ import { fpClipboardKind, fpPlainTextPaste } from "../kicad-port/fpClipboard";
 import { LONG_TEXT_QUESTION } from "../kicad-port/plainTextPaste";
 import { ensureFootprintInProject } from "../api/libraryClient";
 import { duplicatePads, uniqueFootprintName } from "../kicad-port/fpEditActions";
+import { isTableLibrary, newFootprintLibrary, newFootprintReadOnlyWarning, uniqueNewFootprintName } from "../kicad-port/librarySave";
+import { fetchLibraryItemsNow, fetchWritableLibraries, saveToLibrary } from "../api/librarySaveClient";
+import { getLibraryTree } from "./libraryTree";
 import { FIRST_LAST_PAD_NUMBER } from "../kicad-port/padNumbering";
 import { DEFAULT_PAD_MASTER, importPadSettings, settingsOf, type PadSettings } from "../kicad-port/padSettings";
 import { DEFAULT_ENUMERATE_PARAMS, enumerateCommit, type EnumerateParams, type EnumerateState } from "../kicad-port/padEnumeration";
@@ -674,19 +677,35 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       } catch {
         /* backend busy: Untitled is still very likely free; the verb refuses a duplicate name anyway */
       }
-      const name = uniqueFootprintName(existing);
+      // `FOOTPRINT_EDITOR_CONTROL::NewFootprint`: the footprint goes into the library of `GetTargetFPID()` (the tree's selection, else the loaded footprint's), named
+      // `Untitled` made unique there (`CreateNewFootprint( wxEmptyString, libraryName )`: `FootprintExists`, the design's copies and the library's folder), and is
+      // saved into it at once (`tryToSaveFootprintInLibrary`); a library that cannot be written leaves it in no library -- here the project library's -- with a
+      // warning (UI-LEFT-2 LL2). The server gives it the attributes of the library's last footprint (`crate::library_buffer`).
+      const st0 = stateRef.current;
+      let lib = newFootprintLibrary(st0.treeSelection, getLibraryTree("footprint").selectedLibs, st0.name);
+      let readOnly = false;
+      let inFile: string[] = [];
+      if (isTableLibrary(lib)) {
+        const row = (await fetchWritableLibraries("footprint").catch(() => [])).find((l) => l.name === lib);
+        if (row) {
+          readOnly = !row.writable;
+          inFile = await fetchLibraryItemsNow("footprint", lib);
+        } else lib = "";
+      } else lib = "";
+      const item = lib ? uniqueNewFootprintName((n) => inFile.includes(n) || existing.includes(`${lib}:${n}`) || (readOnly && existing.includes(n))) : uniqueFootprintName(existing);
+      const name = lib && !readOnly ? `${lib}:${item}` : item;
       // `CreateNewFootprint`'s texts come from Preferences > Footprint Editor > Footprint Defaults and Graphics Defaults (kicad-port/fpFieldDefaults.ts, UI-LEFT-2 FF7). The
       // backend makes KiCad's default ones; other settings are put on them in the same undo step (the carry: `new_footprint` begins it, the edits hold it, the end commits it).
       const items = getFpDefaultTextItems();
       const graphics = getFpGraphicsDefaults();
-      const own = !isFactoryNewFootprint(items, graphics, name);
+      const own = !isFactoryNewFootprint(items, graphics, item);
       const reply = await postCmd({ op: "new_footprint", name }, false, own ? "begin" : undefined);
       if (!reply.ok) {
         dispatch({ type: "TOAST", message: reply.message, kind: "error" });
         return;
       }
       if (own) {
-        const t = newFootprintTexts(items, graphics, name);
+        const t = newFootprintTexts(items, graphics, item);
         const made = await fetchFootprint(name).catch(() => null);
         const cmds: Cmd[] = [
           { op: "fp_item", verb: "edit_field", footprint: name, name: "Reference", text: t.reference.text, layout: t.reference.layout },
@@ -703,7 +722,15 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
         }
         await postCarry("commit");
       }
+      // `tryToSaveFootprintInLibrary`: into the library at once (`SaveFootprint`, `ClearModify`), or the read-only library's warning (`ShowInfoBarWarning`)
+      if (lib && !readOnly) {
+        const saved = await saveToLibrary({ kind: "footprint", id: name });
+        if (!saved.ok) dispatch({ type: "TOAST", message: saved.error, kind: "error" });
+      } else if (lib && readOnly) {
+        dispatch({ type: "TOAST", message: newFootprintReadOnlyWarning(lib), kind: "error" });
+      }
       dispatch({ type: "SET_NAME", name });
+      dispatch({ type: "SET_TREE_SELECTION", name });
       dispatch({ type: "FOOTPRINT_OK", footprint: await fetchFootprint(name) });
     },
     duplicateSelection: async (increment) => {
