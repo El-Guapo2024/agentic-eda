@@ -424,8 +424,11 @@ fn row_json(kind: TableKind, row: &lt::Row, loaded: Option<&LoadedRow>, vars: &V
     let path = vars.expand_uri(&row.uri, base);
     let error = match loaded {
         Some(l) if !l.ok => Some(l.error.clone()),
-        // a library of another format is read through kicad-cli: what it said when it could not convert the library
-        _ => lt::check_row(kind, row, &path).or_else(|| lt::convertible(kind, &row.lib_type).then(|| crate::library_convert::status(kind, &path)).flatten()),
+        // a library of another format is read through kicad-cli: what it said when it could not convert the library; a KiCad symbol library that loads with
+        // errors (KiCad 25ec2335 `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load`: a folder library's file that does not read) says so, as the row's `LIB_STATUS::error`
+        _ => lt::check_row(kind, row, &path)
+            .or_else(|| lt::convertible(kind, &row.lib_type).then(|| crate::library_convert::status(kind, &path)).flatten())
+            .or_else(|| (kind == TableKind::Symbol && row.lib_type == lt::KICAD_TYPE).then(|| eda_kicad::symbol_library_load_errors(&path)).flatten()),
     };
     let status = if error.is_some() { "error" } else if row.is_table() { "table" } else { "ok" };
     let mut v = json!({
@@ -1878,6 +1881,22 @@ pub(crate) mod tests {
         let mut none = env.clone();
         none.config_dir = None;
         assert!(set_table_with(&none, &m.board, &req(json!({ "kind": "symbol", "scope": "global", "rows": [kicad_row] })))["error"].as_str().unwrap().contains("no KiCad configuration folder"));
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    /// KiCad 25ec2335's `Load` of a folder library with a file that does not read: the row's status is the load error, in KiCad's words.
+    #[test]
+    fn a_folder_library_with_a_broken_file_is_an_error_row() {
+        let m = machine("broken", true);
+        let lib = m.board.join("Broken.kicad_symdir");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("Good.kicad_sym"), "(kicad_symbol_lib (version 20241209) (symbol \"Good\"))").unwrap();
+        std::fs::write(lib.join("Bad.kicad_sym"), "(kicad_symbol_lib (version 20241209) (symbol \"Bad\"").unwrap();
+        let r = set_table_with(&m.env(), &m.board, &req(json!({ "kind": "symbol", "rows": [row("Broken", "${KIPRJMOD}/Broken.kicad_symdir")] })));
+        let rows = &r["tables"]["symbol"]["project"]["rows"];
+        assert_eq!(rows[0]["status"], "error", "{rows}");
+        let e = rows[0]["error"].as_str().unwrap();
+        assert!(e.contains("Unable to read file") && e.contains("Bad.kicad_sym") && e.ends_with("The library cannot be saved until these errors are fixed manually."), "{e}");
         let _ = std::fs::remove_dir_all(&m.root);
     }
 
