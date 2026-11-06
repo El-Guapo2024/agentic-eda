@@ -4,7 +4,7 @@ import { applyPatch } from "./schMove";
 import { fixtureTable } from "./tableFixture";
 import type { Schematic, SchField } from "../api/types";
 import type { SchMovePatch } from "../api/schEditTypes";
-import { addUserFieldCmd, autoplaceCmd, boxFields, fieldBox, fieldEditCmd, fieldId, fieldItems, fieldSizeNm, fieldVisibilityCmds, findField, hitField, isFieldId, ownerKey, parseFieldId, selectedFields, shownText, fieldTextCmd, isStandardSymbolField, newUserFieldName, fieldDialogCaption, removeUserFieldCmd, userFieldNameError, userFieldsOf } from "./schFieldEdit";
+import { addUserFieldCmd, autoplaceCmd, editFieldTarget, boxFields, fieldBox, fieldEditCmd, fieldId, fieldItems, fieldSizeNm, fieldVisibilityCmds, findField, hitField, isFieldId, ownerKey, parseFieldId, selectedFields, shownText, fieldTextCmd, isStandardSymbolField, newUserFieldName, fieldDialogCaption, removeUserFieldCmd, userFieldNameError, userFieldsOf } from "./schFieldEdit";
 
 // the width of a text in these tests: 600 um a character at 1270 um, in proportion to the size
 const measure = (text: string, size: number) => text.length * 0.5 * size;
@@ -227,4 +227,26 @@ test("Field Properties is captioned as editFieldText does: a mandatory field by 
   assert.equal(fieldDialogCaption("Sheetname", true), "Edit Sheet Name Field");
   assert.equal(fieldDialogCaption("Sheetfile", true), "Edit Sheet File Field");
   assert.equal(fieldDialogCaption("MPN", false), "Edit 'MPN' Field");
+});
+
+test("U / V / F open Field Properties on the field they name (`SCH_EDIT_TOOL::EditField`): of a symbol, a pin's symbol, a power symbol, or the field itself", () => {
+  const fld = (owner: string, name: string) => ({ name, text: name, at: [0, 0] as [number, number], vertical: false, h: "center" as const, v: "center" as const, visible: true, id: `fld:${owner}:${name}`, owner });
+  const sch = {
+    symbols: [
+      { id: "U1", unit: 1, fields: [fld("U1", "Reference"), fld("U1", "Value"), fld("U1", "Footprint")] },
+      { id: "U1", unit: 2, fields: [fld("U1#2", "Reference"), fld("U1#2", "Value"), fld("U1#2", "Footprint")] },
+      { id: "R9", unit: 1, fields: [] },
+    ],
+    power_symbols: [{ id: "#PWR01", fields: [fld("#PWR01", "Reference"), fld("#PWR01", "Value")] }],
+    sheets: [{ id: "sheet_a", fields: [fld("sheet_a", "Sheetname")] }],
+  } as unknown as Parameters<typeof editFieldTarget>[0];
+  assert.deepEqual(editFieldTarget(sch, ["U1"], "Value"), { kind: "field", id: "fld:U1:Value" });
+  assert.deepEqual(editFieldTarget(sch, ["pin:U1#2:3"], "Reference"), { kind: "field", id: "fld:U1#2:Reference" }, "a pin's own unit");
+  assert.deepEqual(editFieldTarget(sch, ["fld:U1:Value"], "Value"), { kind: "field", id: "fld:U1:Value" });
+  assert.deepEqual(editFieldTarget(sch, ["fld:U1#2:Value"], "Footprint"), { kind: "field", id: "fld:U1#2:Footprint" }, "another field of the symbol stands for it");
+  assert.deepEqual(editFieldTarget(sch, ["#PWR01"], "Value"), { kind: "field", id: "fld:#PWR01:Value" });
+  assert.deepEqual(editFieldTarget(sch, ["#PWR01"], "Footprint"), { kind: "none" }, "`if( !symbol->IsPower() )`");
+  assert.deepEqual(editFieldTarget(sch, ["fld:sheet_a:Sheetname"], "Value"), { kind: "none" }, "a sheet's field is no symbol's");
+  assert.deepEqual(editFieldTarget(sch, ["R9"], "Value"), { kind: "symbol", id: "R9" }, "fields with no places: the full dialog");
+  assert.deepEqual(editFieldTarget(sch, ["U1", "R9"], "Value"), { kind: "none" }, "`if( sel.Size() != 1 ) return 0;`");
 });

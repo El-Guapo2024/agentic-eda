@@ -2662,6 +2662,8 @@ export interface LibPin {
   body_style: number;
   /** eeschema's `(hide yes)` -- true for almost every power-symbol pin (the pin itself is invisible; only its net-name text, drawn separately as the field KiCad calls the symbol's Value, is ever shown -- see PowerSymbol's doc comment). A hidden pin is not drawn at all, line or decoration. */
   hidden: boolean;
+  /** The pin's alternate functions (`SCH_PIN::GetAlternates`), sorted by name; absent when it has none. A placed symbol's pin may take one (`SchematicPin.alt`): it is then drawn, named and typed by it. */
+  alternates?: PinAlternate[];
 }
 
 /** eeschema's FILL_T. `color`/the hatch modes are rare in practice (most real symbols use none/outline/background) -- painter.ts treats any hatch mode as `outline` rather than leaving it blank, since real KiCad never leaves a filled-looking shape unfilled. */
@@ -2725,6 +2727,10 @@ export interface SchField {
   name_shown?: boolean;
   /** `SCH_FIELD::CanAutoplace`: false leaves the field where it is when its item's fields are autoplaced. */
   allow_autoplace?: boolean;
+  /** `EDA_TEXT::GetFont` (`SchExtras::field_looks`): absent is the default font; "KiCad Font" the stroke font; anything else an outline font's family. */
+  font?: string | null;
+  /** `EDA_TEXT::GetTextColor`: absent is the layer's colour. */
+  color?: { r: number; g: number; b: number; a: number } | null;
 }
 
 /** Whether Autoplace Fields put an item's fields where they are (`SCH_ITEM::GetFieldsAutoplaced`): null is not (or never did). */
@@ -2814,6 +2820,20 @@ export interface PowerSymbol {
   /** The Value (its net name) where KiCad draws it, and the hidden Reference. */
   fields?: SchField[];
   fields_autoplaced?: FieldsAutoplaced;
+  /** What its Symbol Properties set beyond the Reference and Value (`SchExtras::power_props`); absent: KiCad's defaults. */
+  props?: PowerProps | null;
+}
+
+/** `crates/model/src/sch_extras.rs` `PowerProps`: a power symbol's Footprint, Datasheet, the five flags of the Attributes box and its user fields. Absent is false / empty. */
+export interface PowerProps {
+  footprint?: string;
+  datasheet?: string;
+  exclude_from_sim?: boolean;
+  exclude_from_bom?: boolean;
+  exclude_from_board?: boolean;
+  dnp?: boolean;
+  exclude_from_pos_files?: boolean;
+  fields?: Array<{ name: string; text: string; visible?: boolean; italic?: boolean }>;
 }
 
 export interface NoConnect {

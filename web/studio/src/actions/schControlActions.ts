@@ -22,6 +22,7 @@ import { measureStrokeText } from "../components/text/strokeFont";
 import { copySheetImage, exportSymbolSvg, saveSheetCopy } from "./schControlExports";
 import { importFootprintAssignments } from "./schControlImports";
 import { openAssignNetclass } from "./assignNetclass";
+import { schematicActions } from "./schActionRegistry";
 
 export interface SchControlContext {
   tab: string;
@@ -56,6 +57,8 @@ export function schControlChecked(name: string, ctx: Pick<SchControlContext, "co
       return d.showErcExclusions;
     case "eeschema.EditorControl.markSimExclusions":
       return d.markSimExclusions;
+    case "eeschema.EditorControl.togglePinAltIcons":
+      return d.showPinAltIcons;
     case "eeschema.EditorControl.showNetNavigator":
       return ctx.control.netNavigatorOpen;
     default: {
@@ -135,6 +138,9 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
   m.set("eeschema.EditorControl.showERCWarnings", toggleDisplay("showErcWarnings"));
   m.set("eeschema.EditorControl.showERCExclusions", toggleDisplay("showErcExclusions"));
   m.set("eeschema.EditorControl.markSimExclusions", toggleDisplay("markSimExclusions"));
+  // Show Pin Alternate Icons -- `SCH_EDITOR_CONTROL::TogglePinAltIcons`: `cfg->m_Appearance.show_pin_alt_icons = !..`, then every item repainted. The Symbol Editor's
+  // `SYMBOL_EDITOR_CONTROL::TogglePinAltIcons` is the same action there, with its own setting: the schematic tab's handler leaves the other tabs to it.
+  schematicActions(m, ctx.tab).set("eeschema.EditorControl.togglePinAltIcons", () => controlDispatch({ type: "TOGGLE_DISPLAY", key: "showPinAltIcons" }));
   // Net Navigator -- `ShowNetNavigator` -> `ToggleNetNavigator`.
   m.set("eeschema.EditorControl.showNetNavigator", onSchematic(() => controlDispatch({ type: "SET_NET_NAVIGATOR", open: !control.netNavigatorOpen })));
   // Highlight Nets -- `HighlightNetCursor`: the picker tool; each click is `highlightNet( toolMgr, position )` (SchematicView.tsx owns the click), Esc leaves it.

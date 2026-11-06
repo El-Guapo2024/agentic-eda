@@ -123,7 +123,9 @@ export type SchToolDialog =
   /** Sheet Pin Properties (`DIALOG_SHEET_PIN_PROPERTIES`) of the pin `id` of a sheet on this sheet. */
   | { kind: "props_sheet_pin"; id: string }
   | { kind: "props_graphic"; id: string }
-  | { kind: "props_stroke"; ids: string[] };
+  | { kind: "props_stroke"; ids: string[] }
+  /** `SCH_EDIT_FRAME::SelectUnit` asking what to do with a unit that is already placed ("Unit Already Placed"): swap the two units, or (not possible here) duplicate. */
+  | { kind: "unit_placed"; id: string; unit: number; newUnit: number; message: string; swapLabel: string; duplicateLabel: string };
 
 export type SchEditCmd =
   /** Lock / Unlock / Toggle Lock (`SCH_EDIT_TOOL::modifyLockSelected`). */
@@ -200,6 +202,26 @@ export type SchEditCmd =
   | { verb: "set_line_ends"; id: string; start?: PointXY; end?: PointXY }
   /** "Exclude From Position Files" of symbols (every placed unit of each reference on the sheet in view). */
   | { verb: "set_exclude_from_pos_files"; ids: string[]; exclude: boolean }
+  /** A pin's alternate function (`SetAltPinFunction`, the Pin Functions table): pin number -> the alternate's name ("" or the pin's own name: none); `other_units`: every
+   *  placed unit of the reference on the sheet takes the same (`SyncOtherUnits`). `unit` names the placed unit, as the move verbs take it. */
+  | { verb: "set_pin_alternates"; id: string; unit?: number; alternates: Record<string, string>; other_units?: boolean }
+  /** The unit a placed symbol draws (`SCH_EDIT_FRAME::SelectUnit`); `swap` gives a placement of that unit on the sheet the unit this one had. */
+  | { verb: "set_symbol_unit"; id: string; unit?: number; new_unit: number; swap?: boolean }
+  /** A field's font face ("Default Font", "KiCad Font" or a family) and colour (every channel 0: the layer's) -- Symbol Properties' Font and Color columns. */
+  | { verb: "set_field_looks"; ids: string[]; font?: string; color?: SchColor }
+  /** Symbol Properties of a power symbol: its Footprint, Datasheet, the Attributes box and its user fields (the whole list); a key left out is unchanged. */
+  | {
+      verb: "set_power_props";
+      id: string;
+      footprint?: string;
+      datasheet?: string;
+      exclude_from_sim?: boolean;
+      exclude_from_bom?: boolean;
+      exclude_from_board?: boolean;
+      dnp?: boolean;
+      exclude_from_pos_files?: boolean;
+      fields?: Array<{ name: string; text: string; visible: boolean }>;
+    }
   /** Swap Pins: the pins (item ids `pin:<reference>:<number>`, in selection order) of one symbol trade places, one after the other. */
   | { verb: "swap_pins"; pins: string[] }
   /** Swap Pin Labels: the net labels on the pins trade texts in selection order. */

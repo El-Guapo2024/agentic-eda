@@ -57,6 +57,8 @@ import type { SchStroke } from "../../api/schEditTypes";
 import { allItems, itemBounds } from "./schItems";
 import { fieldAnchors, isVerticalTwoPin, type FieldBox } from "../../kicad-port/schFields";
 import { isPinItemId, pinById, type PinItem } from "../../kicad-port/schPins";
+import { altIconStrokes, pinAltIcon, type PinAltIcon } from "../../kicad-port/symPinAltIcon";
+import { shownPinName } from "./pinText";
 
 /**
  * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
@@ -393,7 +395,8 @@ function drawSchFields(ctx: CanvasRenderingContext2D, fields: SchField[], unitSu
       h: f.h,
       v: f.v,
       vertical: f.vertical,
-      color: picked ? layerColor("LAYER_SELECTION_SHADOWS") : !f.visible ? layerColor("LAYER_HIDDEN") : (color ?? fieldColor(f.name)),
+      // a field's own text colour (`EDA_TEXT::GetTextColor`, Symbol Properties' Color column) wins over its layer's (`SCH_PAINTER::getRenderColor`)
+      color: picked ? layerColor("LAYER_SELECTION_SHADOWS") : !f.visible ? layerColor("LAYER_HIDDEN") : f.color && f.color.a > 0 ? rgba(f.color) : (color ?? fieldColor(f.name)),
       // a bold text is written with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leans
       thicknessNm: f.bold ? Math.round(sizeNm / 5) : undefined,
       italic: f.italic,
@@ -630,7 +633,28 @@ export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin, colo
   }
 }
 
-function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: ResolvedPin[], showHiddenPins = false, texts: PinTexts = DEFAULT_PIN_TEXTS) {
+/** `drawAltPinModesIcon` (sch_painter.cpp): the strokes of the glyph, turned a quarter counter-clockwise about its centre beside a pin that runs up or down. The
+ *  Symbol Editor's canvas draws the same one (components/symbol/symbolPainter.ts `drawPinAltIcon`). */
+export function drawAltPinIcon(ctx: CanvasRenderingContext2D, icon: PinAltIcon, color: string) {
+  const g = altIconStrokes(icon.sizeNm);
+  ctx.save();
+  ctx.translate(icon.center[0], icon.center[1]);
+  if (icon.vertical) ctx.rotate(-Math.PI / 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = g.widthNm;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  for (const [x1, y1, x2, y2] of g.lines) {
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+  }
+  ctx.moveTo(g.arc.cx + g.arc.r * Math.cos(g.arc.from), g.arc.cy + g.arc.r * Math.sin(g.arc.from));
+  ctx.arc(g.arc.cx, g.arc.cy, g.arc.r, g.arc.from, g.arc.to, true);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: ResolvedPin[], showHiddenPins = false, texts: PinTexts = DEFAULT_PIN_TEXTS, showPinAltIcons = true) {
   const hair = 1 / view.scale;
   ctx.strokeStyle = layerColor("LAYER_PIN");
   ctx.lineWidth = Math.max(PIN_TEXT_PEN_NM, hair);
@@ -643,10 +667,17 @@ function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: Reso
     drawPinDecoration(ctx, rp);
     ctx.stroke();
     drawPinText(ctx, rp, hidden ? { name: layerColor("LAYER_HIDDEN"), number: layerColor("LAYER_HIDDEN") } : undefined, texts);
+    // `PIN_LAYOUT_CACHE::GetAltIconBBox` with View > Show Pin Alternate Icons (`m_ShowPinAltIcons`): beside the name, in its colour, when the pin has alternate
+    // functions and its name is drawn (`if( std::optional<TEXT_INFO> nameInfo = cache.GetPinNameInfo(..) )`); the name is the alternate a pin took
+    const name = shownPinName(rp.pin.name);
+    if (showPinAltIcons && rp.pin.alternates?.length && !texts.namesHidden && name !== "") {
+      const icon = pinAltIcon(rp.tip, rp.root, { widthNm: measureStrokeText(name, PIN_TEXT_SIZE_NM), sizeNm: PIN_TEXT_SIZE_NM }, texts.nameOffsetNm);
+      drawAltPinIcon(ctx, icon, hidden ? layerColor("LAYER_HIDDEN") : layerColor("LAYER_PINNAM"));
+    }
   }
 }
 
-function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, instance: SchematicSymbol, graphics: ResolvedGraphic[], pins: ResolvedPin[], bbox: { minX: number; minY: number; maxX: number; maxY: number }, selected: boolean, unitSuffix: string, showHiddenPins = false, texts: PinTexts = DEFAULT_PIN_TEXTS) {
+function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, instance: SchematicSymbol, graphics: ResolvedGraphic[], pins: ResolvedPin[], bbox: { minX: number; minY: number; maxX: number; maxY: number }, selected: boolean, unitSuffix: string, showHiddenPins = false, texts: PinTexts = DEFAULT_PIN_TEXTS, showPinAltIcons = true) {
   const hair = 1 / view.scale;
   const strokeColor = layerColor("LAYER_DEVICE");
   ctx.strokeStyle = strokeColor;
@@ -660,7 +691,7 @@ function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, inst
     ctx.restore();
   }
 
-  drawPins(ctx, view, pins, showHiddenPins, texts);
+  drawPins(ctx, view, pins, showHiddenPins, texts, showPinAltIcons);
   if (!instance.fields?.length) drawFieldsAbout(ctx, instance, bbox, isVerticalTwoPin(pins), unitSuffix);
 }
 
@@ -1112,7 +1143,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     const unitSuffix = referenceUnitSuffix(sch.lib_symbols[s.lib_id ?? ""], s.unit, subpartIds);
     const real = resolveLibSymbol(s, sch.lib_symbols);
     if (real) {
-      drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected, unitSuffix, display.showHiddenPins, real.texts);
+      drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected, unitSuffix, display.showHiddenPins, real.texts, display.showPinAltIcons);
     } else {
       const r = resolveSymbol(s);
       drawBoxSymbol(ctx, view, r, selected, unitSuffix);

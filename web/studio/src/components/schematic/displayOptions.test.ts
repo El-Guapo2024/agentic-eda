@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DEFAULT_SCH_DISPLAY, ercSeverityShown, sanitizeDisplay } from "./displayOptions";
 
 test("KiCad's defaults: exclusions, hidden pins and hidden fields off, everything else on", () => {
-  assert.deepEqual(DEFAULT_SCH_DISPLAY, { showHiddenPins: false, showHiddenFields: false, showDirectiveLabels: true, showErcErrors: true, showErcWarnings: true, showErcExclusions: false, markSimExclusions: true });
+  assert.deepEqual(DEFAULT_SCH_DISPLAY, { showHiddenPins: false, showHiddenFields: false, showDirectiveLabels: true, showErcErrors: true, showErcWarnings: true, showErcExclusions: false, markSimExclusions: true, showPinAltIcons: true });
 });
 
 test("saved values merge over the defaults and anything unknown is dropped", () => {

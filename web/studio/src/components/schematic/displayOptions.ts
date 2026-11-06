@@ -14,9 +14,11 @@ export interface SchDisplayOptions {
   showErcExclusions: boolean;
   /** `mark_sim_exclusions` -- `markSimExclusions`: a symbol excluded from simulation is drawn with a frame and a mark. */
   markSimExclusions: boolean;
+  /** `show_pin_alt_icons` -- `eeschema.EditorControl.togglePinAltIcons` (View > Show Pin Alternate Icons): the icon beside the name of a pin that has alternate functions. */
+  showPinAltIcons: boolean;
 }
 
-/** KiCad's defaults (`eeschema_settings.cpp`: hidden pins and fields off, directive labels on, ERC errors and warnings on, exclusions off, sim marks on). */
+/** KiCad's defaults (`eeschema_settings.cpp`: hidden pins and fields off, directive labels on, ERC errors and warnings on, exclusions off, sim marks and pin alternate icons on). */
 export const DEFAULT_SCH_DISPLAY: SchDisplayOptions = {
   showHiddenPins: false,
   showHiddenFields: false,
@@ -25,6 +27,8 @@ export const DEFAULT_SCH_DISPLAY: SchDisplayOptions = {
   showErcWarnings: true,
   showErcExclusions: false,
   markSimExclusions: true,
+  // `PARAM<bool>( "appearance.show_pin_alt_icons", &m_Appearance.show_pin_alt_icons, true )`
+  showPinAltIcons: true,
 };
 
 /** Merge saved values over the defaults, ignoring anything that is not a known boolean. */
