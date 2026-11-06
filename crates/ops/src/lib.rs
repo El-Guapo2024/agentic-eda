@@ -685,6 +685,9 @@ pub enum Cmd {
     SetTuningPatterns { settings: eda_model::setup_pages::TuningPatterns },
     /// Design Rules > Tuning Profiles (`panel_setup_tuning_profiles.cpp`): the profiles and the profile each net class names.
     SetTuningProfiles { settings: eda_model::setup_pages::TuningProfiles },
+    /// Design Rules > Component Classes (`panel_assign_component_classes.cpp`): "Assign component class per sheet" and the custom assignments (a class, Match
+    /// all / Match any and its conditions), the project's whole `component_class_settings`. Refused with KiCad's message when an assignment does not compile.
+    SetComponentClasses { settings: eda_model::component_classes::ComponentClassSettings },
     /// Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` in a text, a field or the title
     /// block shows the value, and the derived `.kicad_pro` carries them (`text_variables`) so kicad-cli's plots show the same.
     SetTextVariables { variables: BTreeMap<String, String> },
@@ -2567,6 +2570,7 @@ impl Cmd {
             Cmd::SetZoneHatchOffsets { .. } => vec!["zone_hatch_offsets"],
             Cmd::SetTuningPatterns { .. } => vec!["tuning_patterns"],
             Cmd::SetTuningProfiles { .. } => vec!["tuning_profiles"],
+            Cmd::SetComponentClasses { .. } => vec!["component_classes"],
             Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::ClearDrcExclusions => vec!["drc_exclusions"],
@@ -3101,6 +3105,7 @@ impl<'a> Board<'a> {
             Cmd::SetZoneHatchOffsets { offsets } => board_setup::set_zone_hatch_offsets(&mut self.design, self.model, offsets),
             Cmd::SetTuningPatterns { settings } => board_setup::set_tuning_patterns(&mut self.design, settings),
             Cmd::SetTuningProfiles { settings } => board_setup::set_tuning_profiles(&mut self.design, self.model, settings),
+            Cmd::SetComponentClasses { settings } => board_setup::set_component_classes(&mut self.design, self.model, settings),
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
             Cmd::SwapChain { parts } => self.swap_chain(parts),

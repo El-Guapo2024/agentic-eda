@@ -80,6 +80,9 @@ mod review_tests;
 #[path = "rule_editor_tests.rs"]
 mod rule_editor_tests;
 #[cfg(test)]
+#[path = "component_classes_tests.rs"]
+mod component_classes_tests;
+#[cfg(test)]
 #[path = "pcb_items_tests.rs"]
 mod pcb_items_tests;
 #[cfg(test)]
@@ -1846,6 +1849,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetZoneHatchOffsets { offsets } => format!("board-setup zone-hatch-offsets ({} layers)", offsets.len()),
         Cmd::SetTuningPatterns { .. } => "board-setup tuning-patterns".to_string(),
         Cmd::SetTuningProfiles { settings } => format!("board-setup tuning-profiles ({} profiles)", settings.profiles.len()),
+        Cmd::SetComponentClasses { settings } => format!("board-setup component-classes ({} assignments)", settings.assignments.len()),
         Cmd::AddDrcExclusions { exclusions } => format!("drc exclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::DeleteDrcExclusions { exclusions } => format!("drc unexclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::ClearDrcExclusions => "drc unexclude --all".to_string(),
@@ -2209,6 +2213,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetZoneHatchOffsets { .. } => "zone-hatch-offsets",
         Cmd::SetTuningPatterns { .. } => "tuning-patterns",
         Cmd::SetTuningProfiles { .. } => "tuning-profiles",
+        Cmd::SetComponentClasses { .. } => "component-classes",
         Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } | Cmd::ClearDrcExclusions => "drc-exclusion",
         Cmd::SetErcSeverities { .. } => "schematic-erc-severities",
         Cmd::SwapLayers { .. } => "swap-layers",

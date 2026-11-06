@@ -475,7 +475,7 @@ pub struct BoardRules {
     #[serde(default, skip_serializing_if = "setup_pages::TuningProfiles::is_empty")]
     pub tuning_profiles: setup_pages::TuningProfiles,
     /// Component Classes (`COMPONENT_CLASS_SETTINGS`): the project's rules that give footprints a class, and whether sheets do. The classes a board file gives its own
-    /// footprints are `FootprintExtra::component_classes`. Read from and written to the project; the Board Setup page that edits it is not built.
+    /// footprints are `FootprintExtra::component_classes`. Read from and written to the project; Board Setup > Component Classes edits it (`RulesOverlay::component_classes`).
     #[serde(default, skip_serializing_if = "component_classes::ComponentClassSettings::is_default")]
     pub component_classes: component_classes::ComponentClassSettings,
     /// The schematic's share of each net class, by class name (`Default` for the Default class): the wire and bus widths, the colour and the line style

@@ -35,6 +35,7 @@ mod fab_api;
 mod fill_api;
 mod via_stitch_api;
 mod rule_editor_api;
+mod board_setup_api;
 mod fp_art_json;
 mod fp_assign_api;
 mod fp_json;

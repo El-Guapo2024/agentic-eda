@@ -66,6 +66,11 @@ pub struct RulesOverlay {
     /// imported project came with and Configure Paths kept before there was a page) is only the seed it started from: see [`effective_text_variables`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_variables: Option<BTreeMap<String, String>>,
+    /// Design Rules > Component Classes (`pcbnew/dialogs/panel_assign_component_classes.cpp`): the project's `component_class_settings` -- "Assign component
+    /// class per sheet" and the custom assignments (`COMPONENT_CLASS_SETTINGS`), as the page's OK leaves them. The whole page; it replaces what the imported
+    /// project said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_classes: Option<crate::component_classes::ComponentClassSettings>,
 }
 
 /// Design Rules > Net Classes. The Default class's sizes and every other class with the net-name
@@ -635,6 +640,9 @@ impl RulesOverlay {
         if let Some(text) = &self.custom_rules {
             model.board.custom_rules_text = if text.trim().is_empty() { None } else { Some(text.clone()) };
             model.board.custom_rules.clear();
+        }
+        if let Some(c) = &self.component_classes {
+            model.board.component_classes = c.clone();
         }
     }
 

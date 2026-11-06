@@ -188,10 +188,8 @@ impl<'a> RuleBoard<'a> {
     /// m_assignmentRules = std::move( rules )`). The reference of each footprint a rule matched, with the classes it is given.
     fn dynamic_component_classes(&self, env: &Rc<Env>) -> Vec<(String, Vec<String>)> {
         let settings = &self.rules.component_classes;
-        // `CompileAssignmentRule` gives no rule for an empty class (`if( ruleSource.empty() ) return nullptr;`) and for a text the rules parser cannot read -- a `"`
-        // in the class or a condition ends the `"%s"` it is written into (`(assign_component_class "%s" (condition "%s"))`) -- and one rule that does not
-        // compile leaves the board with none (`success = false`, R6-D8)
-        if settings.assignments.iter().any(|a| a.class.is_empty() || a.class.contains('"') || assignment_condition(a).contains('"')) {
+        // one rule that does not compile leaves the board with none (`success = false`, R6-D8)
+        if settings.assignments.iter().any(|a| !assignment_text_compiles(&a.class, &assignment_condition(a))) {
             return Vec::new();
         }
         let mut rules: Vec<(String, String)> = settings.assignments.iter().map(|a| (a.class.clone(), assignment_condition(a))).collect();
@@ -932,6 +930,73 @@ impl<'a> RuleBoard<'a> {
     pub fn rules(&self) -> &BoardRules {
         self.rules
     }
+
+    // ------------------------------------------------------------------------------------------------------------------------- component classes
+
+    /// `COMPONENT_CLASS_MANAGER::CompileAssignmentRule` on one assignment of Design Rules > Component Classes: its condition compiled on this board, or `None`
+    /// where KiCad's gives no rule -- an empty class, a text the rules parser cannot read ([`assignment_text_compiles`]) or a condition the expression compiler
+    /// refuses. An assignment none of whose conditions says anything has no condition and always applies (`(version 1) (assign_component_class "%s")`).
+    fn compile_assignment(&self, env: &Rc<Env>, a: &eda_model::component_classes::ClassAssignment) -> Option<Condition> {
+        let text = assignment_condition(a);
+        if !assignment_text_compiles(&a.class, &text) {
+            return None;
+        }
+        let mut condition = Condition::new(&text);
+        if !text.is_empty() && !condition.compile(env) {
+            return None;
+        }
+        Some(condition)
+    }
+
+    /// `PANEL_ASSIGN_COMPONENT_CLASSES::Validate`'s test of one assignment: whether `CompileAssignmentRule` gives it a rule. The page says "Error with conditions
+    /// for component class assignment %s" of the first one that does not.
+    pub fn assignment_compiles(&self, a: &eda_model::component_classes::ClassAssignment) -> bool {
+        self.compile_assignment(&Rc::new(self.env()), a).is_some()
+    }
+
+    /// `PANEL_COMPONENT_CLASS_ASSIGNMENT::OnHighlightItemsClick`: the references of the footprints the assignment matches (`COMPONENT_CLASS_ASSIGNMENT_RULE::
+    /// Matches`, the condition evaluated on the footprint on its own side, as [`Self::dynamic_component_classes`] does), in reference order; `None` when it does
+    /// not compile (`if( !rule ) return;` -- nothing is brightened or dimmed).
+    pub fn assignment_matches(&self, a: &eda_model::component_classes::ClassAssignment) -> Option<Vec<String>> {
+        let env = Rc::new(self.env());
+        let condition = self.compile_assignment(&env, a)?;
+        let mut refs: Vec<&Rc<RuleItem>> = self.footprints.values().collect();
+        refs.sort_by(|a, b| a.id.cmp(&b.id));
+        Some(
+            refs.into_iter()
+                .filter(|fp| condition.expression().is_empty() || condition.evaluate_for(&env, Some(fp), None, 0, fp.layer.as_deref(), None))
+                .map(|fp| fp.id.clone())
+                .collect(),
+        )
+    }
+
+    /// What `PANEL_ASSIGN_COMPONENT_CLASSES`' constructor lists for the condition rows: the names of the footprints' fields (`fp->GetFields()`, every footprint's
+    /// mandatory Reference, Value, Datasheet and Description among them) for the Footprint Field condition's choice, and the footprints' sheet names
+    /// (`GetSheetname()`, the non-empty ones) for the Sheet condition's, each sorted (`wxString::Cmp`) without repeats. (KiCad strips the quotes from a copy of
+    /// the sheet name and then inserts the name as it was; so is it here.)
+    pub fn component_class_page_lists(&self) -> (Vec<String>, Vec<String>) {
+        let mut fields: BTreeSet<String> = BTreeSet::new();
+        let mut sheets: BTreeSet<String> = BTreeSet::new();
+        for fp in self.footprints.values() {
+            for mandatory in ["Reference", "Value", "Datasheet", "Description"] {
+                fields.insert(mandatory.to_string());
+            }
+            if let Some(f) = fp.footprint.as_ref() {
+                fields.extend(f.fields.iter().map(|(name, _)| name.clone()));
+                if !f.sheet.is_empty() {
+                    sheets.insert(f.sheet.clone());
+                }
+            }
+        }
+        (fields.into_iter().collect(), sheets.into_iter().collect())
+    }
+}
+
+/// Whether the rules parser reads `(version 1) (assign_component_class "<class>" (condition "<condition>" ) )` (`GetAssignmentInDRCLanguage`) as one rule, as far
+/// as the text goes: `CompileAssignmentRule` gives no rule for an empty class (`if( ruleSource.empty() ) return nullptr;`), and a `"` in the class or the condition
+/// ends the `"%s"` it is written into, which the parser cannot read (`PARSE_ERROR`).
+fn assignment_text_compiles(class: &str, condition: &str) -> bool {
+    !class.is_empty() && !class.contains('"') && !condition.contains('"')
 }
 
 /// `COMPONENT_CLASS_MANAGER::sortClassNames`: each name once, in order (`wxString::Cmp`).

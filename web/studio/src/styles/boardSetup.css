@@ -263,3 +263,83 @@
   margin-top: 8px;
   font-weight: 600;
 }
+/* Design Rules > Component Classes (PANEL_ASSIGN_COMPONENT_CLASSES): one box an assignment, one row a condition. */
+.bs-cc-line {
+  border: none;
+  border-top: 1px solid var(--chrome-border);
+  margin: 6px 0;
+}
+.bs-cc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+.bs-cc-box {
+  border: 1px solid var(--chrome-border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: var(--chrome-input-bg);
+}
+.bs-cc-box.bs-invalid {
+  border-color: var(--chrome-danger);
+}
+.bs-cc-cond {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+}
+.bs-cc-title {
+  min-width: 110px;
+  white-space: nowrap;
+}
+.bs-cc-grow {
+  flex: 1 1 auto;
+  min-width: 80px;
+}
+.bs-cc-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 4px;
+  min-width: 24px;
+}
+.bs-cc-sep {
+  border-left: 1px solid var(--chrome-border);
+  align-self: stretch;
+  margin: 0 4px;
+}
+.bs-cc-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+.bs-cc-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+.bs-cc-menu {
+  position: fixed;
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  background: var(--chrome-bg-raised);
+  border: 1px solid var(--chrome-border);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  padding: 2px 0;
+}
+.bs-cc-menu button {
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 4px 12px;
+}
+.bs-cc-menu button:hover:not(:disabled) {
+  background: var(--chrome-hover);
+}

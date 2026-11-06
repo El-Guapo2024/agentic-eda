@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use eda_model::component_classes::ComponentClassSettings;
 use eda_model::ir::Design;
 use eda_model::layers::LayerSetup;
 use eda_model::rules::{self, Constraints, MaskPaste, NetClassSettings, RulesOverlay, StackupSettings, TextGraphicsDefaults};
@@ -172,6 +173,21 @@ pub(crate) fn set_severities(design: &mut Design, severities: &BTreeMap<String, 
 pub(crate) fn set_text_variables(design: &mut Design, variables: &BTreeMap<String, String>) -> Done {
     rules::validate_text_variables(variables).map_err(|c| vec![c])?;
     overlay(design).text_variables = Some(variables.clone());
+    Ok(())
+}
+
+/// `Cmd::SetComponentClasses`: Design Rules > Component Classes (`PANEL_ASSIGN_COMPONENT_CLASSES::TransferDataFromWindow`), the project's
+/// `component_class_settings` as the page leaves them -- "Assign component class per sheet" and the custom assignments, in the page's order. `Validate` first:
+/// each assignment is compiled as the board would compile it (`COMPONENT_CLASS_MANAGER::CompileAssignmentRule`) and the first that gives no rule is refused
+/// with KiCad's message, "Error with conditions for component class assignment %s" (the class's name; an assignment with no class has none to show).
+/// The page sends each condition as `CONDITION_DATA::GetPrimaryField` / `GetSecondaryField` give it (trimmed, quotes taken out but for a custom expression).
+pub(crate) fn set_component_classes(design: &mut Design, model: &ConstraintModel, settings: &ComponentClassSettings) -> Done {
+    let board = eda_drc::board::build(design, model);
+    let rb = eda_drc::rule_board::RuleBoard::new(design, model, &board, eda_drc::constraints::Units::Mm, None);
+    if let Some(bad) = settings.assignments.iter().find(|a| !rb.assignment_compiles(a)) {
+        return Err(vec![CheckResult::fail("ops_bad_component_classes", bad.class.as_str(), format!("Error with conditions for component class assignment {}", bad.class))]);
+    }
+    overlay(design).component_classes = Some(settings.clone());
     Ok(())
 }
 

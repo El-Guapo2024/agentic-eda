@@ -1198,9 +1198,35 @@ export interface BoardState {
     tuning_patterns?: TuningPatterns;
     /** Design Rules > Tuning Profiles: the profiles and the profile each net class names. */
     tuning_profiles?: TuningProfiles;
-    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`, `text_variables`, `board_layers`, `formatting`, `zone_hatch_offsets`, `tuning_patterns`, `tuning_profiles`. */
+    /** Design Rules > Component Classes (`eda_model::component_classes`): "Assign component class per sheet" and the custom assignments, as the board is judged by them now. Absent from an older backend. */
+    component_classes?: ComponentClassSettings;
+    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`, `text_variables`, `board_layers`, `formatting`, `zone_hatch_offsets`, `tuning_patterns`, `tuning_profiles`, `component_classes`. */
     overlay?: string[];
   };
+}
+
+/** `COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE` (`eda_model::component_classes::ConditionKind`). */
+export type ClassConditionKind = "reference" | "footprint" | "side" | "rotation" | "footprint_field" | "custom" | "sheet_name";
+
+/** One condition of a component class assignment: `primary` is what it matches (a footprint field's name for a field condition), `secondary` a field condition's value. */
+export interface ClassCondition {
+  kind: ClassConditionKind;
+  primary?: string;
+  secondary?: string;
+}
+
+/** One custom assignment (`COMPONENT_CLASS_ASSIGNMENT_DATA`): the footprints that meet its conditions -- all of them (`all`, the default) or any -- get `class`. */
+export interface ClassAssignment {
+  class: string;
+  /** Absent is true ("Match all"). */
+  all?: boolean;
+  conditions?: ClassCondition[];
+}
+
+/** `COMPONENT_CLASS_SETTINGS`: the project's `component_class_settings`. Absent fields are their defaults (off, none). */
+export interface ComponentClassSettings {
+  sheet_classes?: boolean;
+  assignments?: ClassAssignment[];
 }
 
 export type RuleSeverity = "error" | "warning" | "ignore";
@@ -1792,6 +1818,7 @@ export type Cmd =
   | { op: "edit_drc_rule"; action: "save" | "delete" | "move_up" | "move_down"; entry: number | null; name: string; rule?: import("../kicad-port/ruleEditor").RuleEditPayload }
   /** Board Setup > Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` shows the value; the derived `.kicad_pro` carries them for kicad-cli. */
   | { op: "set_text_variables"; variables: Record<string, string> }
+  | { op: "set_component_classes"; settings: ComponentClassSettings }
   /** Board Setup > Board Editor Layers (`panel_setup_layers.cpp`): the whole page -- the layers the board has, their names and types. Refused with the layer's name when a name or type is out of the panel's rules or a layer is turned off while items are on it. */
   | { op: "set_board_layers"; settings: LayerSetup }
   /** Board Setup > Formatting (`panel_setup_formatting.cpp`): the whole page. Refused with the setting's name (`dash_length_ratio`) when a ratio is not above 0 and at most 1000. */
