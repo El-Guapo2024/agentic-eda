@@ -1,7 +1,9 @@
 // The Search panel's state (`SEARCH_PANE`, common/widgets/search_pane.cpp): its settings (`APP_SETTINGS_BASE::SEARCH_PANE` -- Zoom / Pan to Selection, Search
 // Hidden Fields, Search Metadata), which KiCad keeps in the editor's settings file and the studio in the person's browser (like state/commonOptions.ts), and what
 // it holds for the session: the last query (`m_lastQuery`, one for every tab), the tab that is up (`m_notebook`'s page) and each tab's sort column and order
-// (`SEARCH_PANE_LISTVIEW::m_sortCol`, `m_sortAscending`). `focusSearch` is `SEARCH_PANE::FocusSearch`: a counter the panel's search box watches.
+// (`SEARCH_PANE_LISTVIEW::m_sortCol`, `m_sortAscending`), and each tab's columns as the person dragged them -- their order and widths, which the list view
+// keeps while the frame is open and KiCad does not save (`APP_SETTINGS_BASE::SEARCH_PANE` has no column settings), so neither does the studio.
+// `focusSearch` is `SEARCH_PANE::FocusSearch`: a counter the panel's search box watches.
 import { useSyncExternalStore } from "react";
 import { DEFAULT_SEARCH_PANE_SETTINGS, parseSearchPaneSettings, type SearchPaneSettings, type SearchTabId } from "../kicad-port/searchHandlers";
 import { getDockLayout, toggleDockPane } from "./dockLayoutStore";
@@ -13,6 +15,9 @@ export interface SearchPaneState {
   query: string;
   tab: SearchTabId;
   sort: Partial<Record<SearchTabId, { col: number | null; ascending: boolean }>>;
+  /** Each tab's columns once a heading was dragged: `order` the model columns in the order shown, `widths` each model column's width in px (a column never sized
+   *  by hand takes `RefreshColumnNames`' share of the list's width). */
+  columns: Partial<Record<SearchTabId, { order?: number[]; widths?: number[] }>>;
   focus: number;
 }
 
@@ -33,7 +38,7 @@ function loadSettings(): SearchPaneSettings {
   }
 }
 
-let current: SearchPaneState = { settings: loadSettings(), query: "", tab: "footprints", sort: {}, focus: 0 };
+let current: SearchPaneState = { settings: loadSettings(), query: "", tab: "footprints", sort: {}, columns: {}, focus: 0 };
 const listeners = new Set<() => void>();
 
 function set(next: SearchPaneState): void {

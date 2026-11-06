@@ -11,13 +11,25 @@
 // and messages, each one undoable step (`rename_net`, `delete_nets`, `add_net`; KiCad's are not undoable). Every change of the settings is kept at once
 // (`SaveSettings`, state/netInspectorSettings.ts).
 //
-// Different from KiCad: the columns cannot be dragged into another order or resized (they size to their contents), so the header menu has no Auto-fit
-// Column / Auto-fit All Columns; Save Net Inspector Report... downloads `net_inspector_report.csv` (no file dialog).
+// The columns are KiCad's `wxDataViewCtrl` columns (UI-LEFT-2 PP13): each heading's edge is dragged to size it, every heading but the Name's is dragged to another
+// place (`wxDATAVIEW_COL_RESIZABLE`, `wxDATAVIEW_COL_REORDERABLE`), and a right click on the headings (`OnHeaderContextMenu`) offers Auto-fit Column, Auto-fit All
+// Columns and the Show / Hide Columns entries; the order and widths are kept with the other settings (`col_order`, `col_widths`), a column with no width kept taking
+// `adjustListColumnSizes`' (kicad-port/netInspector.ts).
+//
+// Different from KiCad: Save Net Inspector Report... downloads `net_inspector_report.csv` (no file dialog).
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { saveTextFile } from "../../api/libraryClient";
 import {
   addGroupRule,
   addNetStep,
+  autofitNetInspectorColumns,
+  moveNetInspectorColumn,
+  netInspectorColumnMovable,
+  netInspectorColumnWidths,
+  netInspectorHeaderMenu,
+  NET_INSPECTOR_DRAG_MIN_PX,
+  orderedNetInspectorColumns,
+  resizeNetInspectorColumn,
   deleteGroupQuestion,
   deleteNetQuestion,
   lineKey,
@@ -33,10 +45,10 @@ import {
   removeGroupRule,
   renameParts,
   renameStep,
-  showHideColumnsMenu,
   sortBy,
   toggleExpanded,
   toggleSetting,
+  type NetInspectorColumn,
   type NetInspectorLine,
   type NetInspectorMenuEntry,
   type NetInspectorMenuId,
@@ -44,7 +56,8 @@ import {
 } from "../../kicad-port/netInspector";
 import { highlightedNets } from "../../kicad-port/boardControl";
 import { boardNetNames } from "../../kicad-port/pcbFind";
-import { setNetInspectorSettings, useNetInspectorSettings } from "../../state/netInspectorSettings";
+import { getNetInspectorSettings, setNetInspectorSettings, useNetInspectorSettings } from "../../state/netInspectorSettings";
+import { clickEndsDrag, startColumnMove, startColumnResize, textWidthIn } from "./listColumns";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 
@@ -166,7 +179,21 @@ export function NetInspectorPanel() {
 
   const timeDomain = settings.showTimeDomainDetails;
   const columns = useMemo(() => netInspectorColumns(state.board?.layers ?? [], timeDomain), [state.board?.layers, timeDomain]);
-  const shownColumns = columns.filter((c) => !settings.hiddenColumns.includes(c.key));
+  // `buildColumns`: the columns in the kept order (`col_order`), then the hidden ones left out
+  const ordered = useMemo(() => orderedNetInspectorColumns(columns, settings.colOrder), [columns, settings.colOrder]);
+  const shownColumns = ordered.filter((c) => !settings.hiddenColumns.includes(c.key));
+  // `GetTextExtent` in the list's font: measured once the list is on the page
+  const listRef = useRef<HTMLDivElement>(null);
+  const [measure, setMeasure] = useState<((t: string) => number) | null>(null);
+  useEffect(() => setMeasure(() => textWidthIn(listRef.current)), []);
+  const widths = useMemo(() => netInspectorColumnWidths(columns, settings, measure ?? ((t: string) => t.length * 7)), [columns, settings, measure]);
+  /** A heading's edge being dragged: its width as it goes, kept when the pointer is let go. */
+  const [liveWidth, setLiveWidth] = useState<{ key: NetInspectorColumn; w: number } | null>(null);
+  /** A heading being dragged to another place: the display position it would go to. */
+  const [dropAt, setDropAt] = useState<number | null>(null);
+  /** The heading a right click was on (`m_contextMenuColumn`), for Auto-fit Column. */
+  const menuColumn = useRef<NetInspectorColumn | null>(null);
+  const widthOf = (key: NetInspectorColumn) => (liveWidth?.key === key ? liveWidth.w : (widths[key] ?? 80));
   const lines = useMemo(() => (rows ? netInspectorTree(rows, settings) : []), [rows, settings]);
   const lineByKey = useMemo(() => new Map(lines.map((l) => [lineKey(l), l])), [lines]);
   const highlighted = useMemo(() => highlightedNets(state.netHighlight, state.bcx.netHighlightMore), [state.netHighlight, state.bcx.netHighlightMore]);
@@ -316,6 +343,14 @@ export function NetInspectorPanel() {
         // `onClearHighlighting`: the board's highlight off, the rows left as they are
         panelHighlight.current = "";
         return dispatch({ type: "SET_NET_HIGHLIGHT_SET", nets: [] });
+      case "autofit_column":
+      case "autofit_all_columns": {
+        // `autosizeColumn` of the heading clicked, or of every column (a hidden one is left as it is)
+        const key = id === "autofit_column" ? (menuColumn.current ?? undefined) : undefined;
+        if (id === "autofit_column" && key === undefined) return;
+        const m = measure ?? textWidthIn(listRef.current);
+        return setNetInspectorSettings(autofitNetInspectorColumns(getNetInspectorSettings(), columns, rows ?? [], units, m, key));
+      }
     }
     const next = toggleSetting(settings, id);
     if (next) setNetInspectorSettings(next);
@@ -366,8 +401,9 @@ export function NetInspectorPanel() {
   };
 
   const align = (key: string) => (key === "name" || key === "netclass" ? "left" : "center");
-  // each column as wide as its widest cell (the list scrolls sideways when they do not fit), so a long net name never runs into the class
-  const gridColumns = shownColumns.map(() => "max-content").join(" ");
+  // each column as wide as it was left (or `adjustListColumnSizes`' width); the list scrolls sideways when they do not fit
+  const gridColumns = shownColumns.map((c) => `${widthOf(c.key)}px`).join(" ");
+  const headerEls = () => [...(listRef.current?.querySelectorAll('[role="columnheader"]') ?? [])];
 
   return (
     <div className="net-inspector" data-testid="net-inspector" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, fontSize: 12 }}>
@@ -402,19 +438,73 @@ export function NetInspectorPanel() {
         onContextMenu={(e) => openMenu(e, netInspectorContextMenu(facts, highlighted.length > 0))}
         style={{ flex: 1, minHeight: 0, overflow: "auto", outline: "none" }}
         data-testid="net-inspector-list"
+        ref={listRef}
       >
-        <div className="kv-grid" style={{ display: "grid", gridTemplateColumns: gridColumns, columnGap: 14, rowGap: 0, alignItems: "center", minWidth: "100%", width: "max-content" }}>
-          {shownColumns.map((c) => (
+        <div className="kv-grid" style={{ display: "grid", gridTemplateColumns: gridColumns, columnGap: 0, rowGap: 0, alignItems: "center", minWidth: "100%", width: "max-content" }}>
+          {shownColumns.map((c, i) => (
             <span
               key={c.key}
               role="columnheader"
               data-testid={`net-inspector-col-${c.key}`}
-              style={{ fontWeight: 600, cursor: "pointer", textAlign: align(c.key), whiteSpace: "nowrap", position: "sticky", top: 0, background: "var(--chrome-bg-raised)", padding: "2px 0" }}
-              onClick={() => setNetInspectorSettings(sortBy(settings, c.key))}
-              onContextMenu={(e) => openMenu(e, showHideColumnsMenu(columns, settings.hiddenColumns))}
+              data-col={c.key}
+              style={{
+                fontWeight: 600,
+                cursor: "pointer",
+                textAlign: align(c.key),
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                position: "sticky",
+                top: 0,
+                zIndex: 1,
+                background: "var(--chrome-bg-raised)",
+                padding: "2px 4px",
+                boxShadow: dropAt === i ? "inset 2px 0 0 var(--chrome-accent, #4a8cff)" : dropAt === shownColumns.length && i === shownColumns.length - 1 ? "inset -2px 0 0 var(--chrome-accent, #4a8cff)" : undefined,
+              }}
+              onPointerDown={(e) => {
+                // `wxDATAVIEW_COL_REORDERABLE`: every heading but the Name's
+                if (!netInspectorColumnMovable(c.key)) return;
+                startColumnMove(e, headerEls, setDropAt, (to) => {
+                  const shownKeys = shownColumns.map((x) => x.key);
+                  const s = getNetInspectorSettings();
+                  const order = orderedNetInspectorColumns(columns, s.colOrder).map((x) => x.key);
+                  // a display position among the shown headings, as a place among every column (a hidden one stays where it is)
+                  const at = to < shownKeys.length ? order.indexOf(shownKeys[to]!) : order.length;
+                  setNetInspectorSettings(moveNetInspectorColumn(s, columns, c.key, at));
+                });
+              }}
+              onClick={() => {
+                if (clickEndsDrag()) return;
+                setNetInspectorSettings(sortBy(settings, c.key));
+              }}
+              onContextMenu={(e) => {
+                // `OnHeaderContextMenu`
+                menuColumn.current = c.key;
+                openMenu(e, netInspectorHeaderMenu(columns, settings.hiddenColumns));
+              }}
             >
               {c.label}
               {(settings.sortingColumn ?? "name") === c.key ? ((settings.sortingColumn ? settings.sortAscending : true) ? " ▲" : " ▼") : ""}
+              <span
+                className="list-col-resize"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={`Resize ${c.label}`}
+                data-testid={`net-inspector-resize-${c.key}`}
+                onClick={(e) => e.stopPropagation()}
+                onPointerDown={(e) =>
+                  startColumnResize(
+                    e,
+                    widthOf(c.key),
+                    NET_INSPECTOR_DRAG_MIN_PX,
+                    (w) => setLiveWidth({ key: c.key, w }),
+                    (w) => {
+                      setLiveWidth(null);
+                      setNetInspectorSettings(resizeNetInspectorColumn(getNetInspectorSettings(), c.key, w));
+                    }
+                  )
+                }
+              />
             </span>
           ))}
           {lines.map((l) => {
@@ -446,8 +536,10 @@ export function NetInspectorPanel() {
                     style={{
                       textAlign: align(c.key),
                       whiteSpace: "nowrap",
-                      padding: "1px 0",
-                      paddingLeft: c.key === "name" && l.kind === "net" && l.depth === 1 ? 18 : undefined,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      padding: "1px 4px",
+                      paddingLeft: c.key === "name" && l.kind === "net" && l.depth === 1 ? 4 + 18 : undefined,
                       fontWeight: l.kind === "group" || hot ? 600 : 400,
                       background: isSel ? "var(--chrome-accent-bg, rgba(80, 140, 255, 0.25))" : undefined,
                       color: hot ? "var(--chrome-accent)" : c.key === "name" ? undefined : "var(--chrome-text-dim)",

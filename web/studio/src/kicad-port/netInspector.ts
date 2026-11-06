@@ -106,8 +106,9 @@ export const DEFAULT_NET_INSPECTOR_OPTIONS: NetInspectorOptions = { filter: "", 
 /**
  * `PANEL_NET_INSPECTOR_SETTINGS` (project_local_settings.cpp's `net_inspector_panel.*`, with its defaults): the filter, the grouping, the time domain, the sort,
  * the hidden columns (by column, where KiCad keeps a flag per column position), the expanded groups and the custom group rules. KiCad keeps them in the
- * project's `.kicad_prl`; the studio keeps them in the person's browser (state/netInspectorSettings.ts). Column order and widths are not kept: the columns stay
- * in KiCad's order and size to their contents.
+ * project's `.kicad_prl`; the studio keeps them in the person's browser (state/netInspectorSettings.ts). The column order and widths (`col_order`, `col_widths`)
+ * are kept by column, where KiCad keeps a model index and a width per display position (and drops them all when the number of columns changes): see
+ * `orderedNetInspectorColumns` and `netInspectorColumnWidths`.
  */
 export interface NetInspectorSettings extends NetInspectorOptions {
   groupByNetclass: boolean;
@@ -121,6 +122,10 @@ export interface NetInspectorSettings extends NetInspectorOptions {
   expandedRows: string[];
   /** `custom_group_rules`: the patterns of the custom groups, in the order they were added. */
   customGroupRules: string[];
+  /** `col_order`: the columns in the order they are shown (a column dragged to another place); empty is KiCad's order. */
+  colOrder: NetInspectorColumn[];
+  /** `col_widths`: each column's width in px, once dragged or auto-fitted; a column with none takes `adjustListColumnSizes`' width. */
+  colWidths: Partial<Record<NetInspectorColumn, number>>;
 }
 
 export const DEFAULT_NET_INSPECTOR_SETTINGS: NetInspectorSettings = {
@@ -132,6 +137,8 @@ export const DEFAULT_NET_INSPECTOR_SETTINGS: NetInspectorSettings = {
   hiddenColumns: [],
   expandedRows: [],
   customGroupRules: [],
+  colOrder: [],
+  colWidths: {},
 };
 
 const COLUMN_RE = /^(name|netclass|total_length|via_count|via_length|track_length|die_length|pad_count|layer:.+)$/;
@@ -162,7 +169,16 @@ export function parseNetInspectorSettings(raw: unknown): NetInspectorSettings {
     expandedRows: strings(o.expandedRows),
     // "Check that all rows are unique": a pattern stored twice is one group
     customGroupRules: [...new Set(strings(o.customGroupRules).filter((r) => r !== ""))],
+    // "Check that all rows are unique to protect against corrupted settings data": a column stored twice is shown once
+    colOrder: [...new Set(strings(o.colOrder).filter(isColumn))],
+    colWidths: widths(o.colWidths),
   };
+}
+
+function widths(v: unknown): Partial<Record<NetInspectorColumn, number>> {
+  const out: Partial<Record<NetInspectorColumn, number>> = {};
+  if (v && typeof v === "object") for (const [k, w] of Object.entries(v as Record<string, unknown>)) if (isColumn(k) && typeof w === "number" && Number.isFinite(w) && w >= 0) out[k] = Math.round(w);
+  return out;
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------------------- the values
@@ -373,6 +389,8 @@ export type NetInspectorMenuId =
   | "rename_net"
   | "delete_net"
   | "add_net"
+  | "autofit_column"
+  | "autofit_all_columns"
   | `hide_column:${NetInspectorColumn}`;
 
 export type NetInspectorMenuEntry = { kind: "separator" } | { kind: "item"; id: NetInspectorMenuId; label: string; enabled: boolean; checked?: boolean } | { kind: "submenu"; label: string; items: NetInspectorMenuEntry[] };
@@ -529,4 +547,148 @@ export function deleteNetQuestion(row: NetInspectorRow): string | null {
 /** The question before deleting a group's nets ("Delete all nets in group '%s'?"), or null for an empty group (nothing is deleted then). */
 export function deleteGroupQuestion(group: NetInspectorGroup): string | null {
   return group.children.length === 0 ? null : `Delete all nets in group '${group.name}'?`;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------- the columns' order and widths
+
+/**
+ * `buildColumns`' "Add display columns in settings order": the columns in the order the person left them (`col_order`), the columns the stored order does not
+ * name (a copper layer the board did not have then) after them in KiCad's order, a stored column the board no longer has left out. (KiCad keeps the order by
+ * model index and starts again from its own order when the number of columns changes.)
+ */
+export function orderedNetInspectorColumns(columns: readonly NetInspectorColumnDesc[], colOrder: readonly NetInspectorColumn[]): NetInspectorColumnDesc[] {
+  const byKey = new Map(columns.map((c) => [c.key, c]));
+  const out: NetInspectorColumnDesc[] = [];
+  for (const k of colOrder) {
+    const c = byKey.get(k);
+    if (c && !out.includes(c)) out.push(c);
+  }
+  for (const c of columns) if (!out.includes(c)) out.push(c);
+  return out;
+}
+
+/** `wxDATAVIEW_COL_REORDERABLE`: every column but the Name (`add_col`'s first entry is `wxDATAVIEW_COL_RESIZABLE|wxDATAVIEW_COL_SORTABLE` alone). */
+export function netInspectorColumnMovable(key: NetInspectorColumn): boolean {
+  return key !== "name";
+}
+
+/**
+ * A heading dragged to another place (`wxDataViewCtrl`'s column reordering; `SaveSettings` then keeps `col_order`): `key` taken out and put before the column now
+ * at display position `to` (the end for `to` past the last). The Name column is not reorderable and stays where it is.
+ */
+export function moveNetInspectorColumn(s: NetInspectorSettings, columns: readonly NetInspectorColumnDesc[], key: NetInspectorColumn, to: number): NetInspectorSettings {
+  if (!netInspectorColumnMovable(key)) return s;
+  const order = orderedNetInspectorColumns(columns, s.colOrder).map((c) => c.key);
+  const from = order.indexOf(key);
+  if (from < 0) return s;
+  const at = Math.max(0, Math.min(order.length, to));
+  if (at === from || at === from + 1) return s;
+  order.splice(from, 1);
+  order.splice(at > from ? at - 1 : at, 0, key);
+  return { ...s, colOrder: order };
+}
+
+/** `adjustListColumnSizes` and `autosizeColumn`'s margins: "left and right margins ... the sorting arrow"; the Name column's room for the expander. */
+const COL_MARGINS = 15;
+const COL_EXTRA_WIDTH = 30;
+
+/** The text width a column measures with: `GetTextExtent( .. ).x` in the panel's font. */
+export type TextWidth = (text: string) => number;
+
+/** `getMinColumnWidth`: the heading's width and its margins (the expander's room on the Name). */
+export function netInspectorMinColumnWidth(col: NetInspectorColumnDesc, measure: TextWidth): number {
+  return Math.ceil(measure(col.label) + (col.key === "name" ? COL_EXTRA_WIDTH : COL_MARGINS));
+}
+
+/**
+ * `adjustListColumnSizes` with no widths kept: the heading or the width a typical value takes, whichever is wider -- "MMMMMMMMMMMM" for the Name (with the
+ * expander's room) and the Netclass, "000" for the counts, "00000,000 mm" for every length (and delay) column.
+ */
+export function netInspectorDefaultColumnWidth(col: NetInspectorColumnDesc, measure: TextWidth): number {
+  const target =
+    col.key === "name"
+      ? measure("MMMMMMMMMMMM") + COL_EXTRA_WIDTH
+      : col.key === "netclass"
+        ? measure("MMMMMMMMMMMM") + COL_MARGINS
+        : col.key === "via_count" || col.key === "pad_count"
+          ? measure("000") + COL_MARGINS
+          : measure("00000,000 mm") + COL_MARGINS;
+  return Math.ceil(Math.max(netInspectorMinColumnWidth(col, measure), target));
+}
+
+/**
+ * Every column's width: the kept one, never under `getMinColumnWidth` (`SetWidth( std::max( newWidth, minWidth ) )`), or `adjustListColumnSizes`' for a column
+ * with none kept.
+ */
+export function netInspectorColumnWidths(columns: readonly NetInspectorColumnDesc[], s: Pick<NetInspectorSettings, "colWidths">, measure: TextWidth): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const c of columns) {
+    const kept = s.colWidths[c.key];
+    out[c.key] = kept !== undefined ? Math.max(kept, netInspectorMinColumnWidth(c, measure)) : netInspectorDefaultColumnWidth(c, measure);
+  }
+  return out;
+}
+
+/** The narrowest a heading's edge can be dragged to (the list's own limit); `adjustListColumnSizes` brings it back to the minimum next time. */
+export const NET_INSPECTOR_DRAG_MIN_PX = 16;
+
+/** A column's edge dragged: its width kept (`SaveSettings`' `col_widths`). */
+export function resizeNetInspectorColumn(s: NetInspectorSettings, key: NetInspectorColumn, width: number): NetInspectorSettings {
+  return { ...s, colWidths: { ...s.colWidths, [key]: Math.max(NET_INSPECTOR_DRAG_MIN_PX, Math.round(width)) } };
+}
+
+/** The indent of a group's nets under it (`m_netsList->GetIndent()`; the studio's list indents them by 18 px). */
+export const NET_INSPECTOR_INDENT_PX = 18;
+
+/**
+ * `autosizeColumn`: the column as wide as its widest value -- every item of the model, a group's nets too whether it is open or not (`ChildrenBegin()` ..
+ * `ChildrenEnd()`), each value's text and the margins (the expander's room and, for a group's net, the indent on the Name) -- and never under
+ * `getMinColumnWidth`. A hidden column is left as it is (null).
+ */
+export function autosizeNetInspectorColumn(
+  col: NetInspectorColumnDesc,
+  rows: readonly NetInspectorRow[],
+  s: NetInspectorSettings,
+  units: MessageUnits,
+  measure: TextWidth,
+  indent = NET_INSPECTOR_INDENT_PX
+): number | null {
+  if (s.hiddenColumns.includes(col.key)) return null;
+  const isName = col.key === "name";
+  const padding = isName ? COL_EXTRA_WIDTH : COL_MARGINS;
+  const td = s.showTimeDomainDetails;
+  let max = netInspectorMinColumnWidth(col, measure);
+  // the model's items whatever is open: the tree with every group open
+  const groups = netInspectorTree(rows, { ...s, expandedRows: [] }).filter((l): l is Extract<NetInspectorLine, { kind: "group" }> => l.kind === "group");
+  const all = netInspectorTree(rows, { ...s, expandedRows: groups.map((g) => g.group.name) });
+  for (const l of all) {
+    const text = l.kind === "group" ? netInspectorGroupCell(l.group, col.key, units, td) : netInspectorCell(l.row, col.key, units, false, td);
+    let w = measure(text) + padding;
+    if (isName && l.kind === "net" && l.depth === 1) w += indent;
+    max = Math.max(max, w);
+  }
+  return Math.ceil(max);
+}
+
+/** Auto-fit Column (`ID_AUTOFIT_COLUMN`) or, with no `key`, Auto-fit All Columns (`ID_AUTOFIT_ALL_COLUMNS`): the widths `autosizeColumn` gives, kept. */
+export function autofitNetInspectorColumns(
+  s: NetInspectorSettings,
+  columns: readonly NetInspectorColumnDesc[],
+  rows: readonly NetInspectorRow[],
+  units: MessageUnits,
+  measure: TextWidth,
+  key?: NetInspectorColumn
+): NetInspectorSettings {
+  const colWidths = { ...s.colWidths };
+  for (const c of columns) {
+    if (key !== undefined && c.key !== key) continue;
+    const w = autosizeNetInspectorColumn(c, rows, s, units, measure);
+    if (w !== null) colWidths[c.key] = w;
+  }
+  return { ...s, colWidths };
+}
+
+/** `OnHeaderContextMenu`: Auto-fit Column, Auto-fit All Columns, a separator, then the Show / Hide Columns entries (`generateShowHideColumnMenu`) in the menu itself. */
+export function netInspectorHeaderMenu(columns: readonly NetInspectorColumnDesc[], hidden: readonly NetInspectorColumn[]): NetInspectorMenuEntry[] {
+  return [item("autofit_column", "Auto-fit Column"), item("autofit_all_columns", "Auto-fit All Columns"), SEP, ...showHideColumnsMenu(columns, hidden)];
 }

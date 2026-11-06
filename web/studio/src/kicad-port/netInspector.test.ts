@@ -4,6 +4,16 @@ import {
   DEFAULT_NET_INSPECTOR_OPTIONS,
   DEFAULT_NET_INSPECTOR_SETTINGS,
   addGroupRule,
+  autofitNetInspectorColumns,
+  autosizeNetInspectorColumn,
+  moveNetInspectorColumn,
+  netInspectorColumnMovable,
+  netInspectorColumnWidths,
+  netInspectorDefaultColumnWidth,
+  netInspectorHeaderMenu,
+  netInspectorMinColumnWidth,
+  orderedNetInspectorColumns,
+  resizeNetInspectorColumn,
   addNetStep,
   deleteGroupQuestion,
   deleteNetQuestion,
@@ -221,4 +231,82 @@ test("the settings read back with KiCad's defaults; Show Unconnected Nets is not
   assert.equal(back.sortingColumn, "layer:F.Cu");
   assert.deepEqual(back.hiddenColumns, ["via_count"]);
   assert.deepEqual(back.customGroupRules, ["a"]);
+});
+
+// ------------------------------------------------------------------------------------------------------------------- the columns' order and widths (PP13)
+
+/** A monospace stand-in for `GetTextExtent`: 7 px a character. */
+const mono = (t: string) => t.length * 7;
+
+test("the columns in the kept order (col_order): the ones it does not name after them, a stored column the board lost left out", () => {
+  const cols = netInspectorColumns(["F.Cu", "B.Cu"]);
+  const keys = (o: readonly { key: string }[]) => o.map((c) => c.key).join(",");
+  assert.equal(keys(orderedNetInspectorColumns(cols, [])), "name,netclass,total_length,via_count,via_length,track_length,die_length,pad_count,layer:F.Cu,layer:B.Cu");
+  assert.equal(keys(orderedNetInspectorColumns(cols, ["pad_count", "name", "netclass", "layer:In1.Cu"])), "pad_count,name,netclass,total_length,via_count,via_length,track_length,die_length,layer:F.Cu,layer:B.Cu");
+  const four = netInspectorColumns(["F.Cu", "B.Cu", "In1.Cu"]);
+  const kept = ["name", "netclass", "total_length", "via_count", "via_length", "track_length", "die_length", "pad_count", "layer:B.Cu", "layer:F.Cu"] as const;
+  assert.equal(keys(orderedNetInspectorColumns(four, [...kept])), "name,netclass,total_length,via_count,via_length,track_length,die_length,pad_count,layer:B.Cu,layer:F.Cu,layer:In1.Cu", "a new layer's column at the end");
+  // corrupted settings: a column stored twice is shown once
+  assert.deepEqual(parseNetInspectorSettings({ colOrder: ["netclass", "netclass", "bogus", "name"], colWidths: { name: 120.4, bogus: 3, netclass: -1 } }).colOrder, ["netclass", "name"]);
+  assert.deepEqual(parseNetInspectorSettings({ colWidths: { name: 120.4, bogus: 3, netclass: -1 } }).colWidths, { name: 120 });
+});
+
+test("a heading dragged to another place (wxDATAVIEW_COL_REORDERABLE): every column but the Name moves", () => {
+  const cols = netInspectorColumns(["F.Cu", "B.Cu"]);
+  const s = DEFAULT_NET_INSPECTOR_SETTINGS;
+  assert.equal(netInspectorColumnMovable("name"), false);
+  assert.equal(moveNetInspectorColumn(s, cols, "name", 5), s, "the Name stays");
+  const a = moveNetInspectorColumn(s, cols, "pad_count", 1);
+  assert.deepEqual(a.colOrder.slice(0, 3), ["name", "pad_count", "netclass"], "before the column at position 1");
+  const b = moveNetInspectorColumn(a, cols, "netclass", 99);
+  assert.equal(b.colOrder.at(-1), "netclass", "past the last: at the end");
+  assert.equal(moveNetInspectorColumn(b, cols, "netclass", b.colOrder.length - 1), b, "dropped where it is: no change");
+  const c = moveNetInspectorColumn(b, cols, "layer:F.Cu", 0);
+  assert.equal(c.colOrder[0], "layer:F.Cu", "another column may go before the Name");
+});
+
+test("the widths: adjustListColumnSizes' with none kept, the kept one never under getMinColumnWidth, a dragged edge kept", () => {
+  const cols = netInspectorColumns(["F.Cu"]);
+  const by = (k: string) => cols.find((c) => c.key === k)!;
+  // the heading and its margins (the Name's expander room: 30, else 15)
+  assert.equal(netInspectorMinColumnWidth(by("name"), mono), 4 * 7 + 30);
+  assert.equal(netInspectorMinColumnWidth(by("via_count"), mono), 9 * 7 + 15);
+  // "MMMMMMMMMMMM" for the Name and the Netclass, "000" for the counts, "00000,000 mm" for the lengths, or the heading when wider
+  assert.equal(netInspectorDefaultColumnWidth(by("name"), mono), 12 * 7 + 30);
+  assert.equal(netInspectorDefaultColumnWidth(by("netclass"), mono), 12 * 7 + 15);
+  assert.equal(netInspectorDefaultColumnWidth(by("via_count"), mono), 9 * 7 + 15, "Via Count's heading is wider than 000");
+  assert.equal(netInspectorDefaultColumnWidth(by("total_length"), mono), 12 * 7 + 15);
+  assert.equal(netInspectorDefaultColumnWidth(by("layer:F.Cu"), mono), 12 * 7 + 15);
+  const s = resizeNetInspectorColumn(resizeNetInspectorColumn(DEFAULT_NET_INSPECTOR_SETTINGS, "netclass", 200.6), "pad_count", 2);
+  assert.deepEqual(s.colWidths, { netclass: 201, pad_count: 16 }, "never under the list's own limit while dragged");
+  const w = netInspectorColumnWidths(cols, s, mono);
+  assert.equal(w.netclass, 201);
+  assert.equal(w.pad_count, 9 * 7 + 15, "restored no narrower than getMinColumnWidth");
+  assert.equal(w.name, 12 * 7 + 30, "a column with no width kept: adjustListColumnSizes'");
+});
+
+test("Auto-fit Column and Auto-fit All Columns (autosizeColumn): the widest value of every item, a closed group's nets too, the indent on the Name", () => {
+  const rows = [row("/power/VERY_LONG_NET_NAME", { netclass: "Power", pad_count: 12345 }), row("A", { netclass: "Default" })];
+  const s: NetInspectorSettings = { ...DEFAULT_NET_INSPECTOR_SETTINGS, groupByNetclass: true };
+  const cols = netInspectorColumns([]);
+  const by = (k: string) => cols.find((c) => c.key === k)!;
+  // the groups are closed; their nets still count, with the indent: "/power/VERY_LONG_NET_NAME" (25 characters) + 30 + 18
+  assert.equal(autosizeNetInspectorColumn(by("name"), rows, s, "mm", mono), 25 * 7 + 30 + 18);
+  assert.equal(autosizeNetInspectorColumn(by("pad_count"), rows, s, "mm", mono), 9 * 7 + 15, "no value wider than the heading: the minimum");
+  assert.equal(autosizeNetInspectorColumn(by("pad_count"), rows, { ...s, hiddenColumns: ["pad_count"] }, "mm", mono), null, "a hidden column is left as it is");
+  const one = autofitNetInspectorColumns(s, cols, rows, "mm", mono, "netclass");
+  assert.deepEqual(Object.keys(one.colWidths), ["netclass"], "Auto-fit Column: that column only");
+  const every = autofitNetInspectorColumns(s, cols, rows, "mm", mono);
+  assert.equal(Object.keys(every.colWidths).length, cols.length);
+  assert.equal(every.colWidths.name, 25 * 7 + 30 + 18);
+});
+
+test("OnHeaderContextMenu: Auto-fit Column, Auto-fit All Columns, a separator, then Show / Hide Columns' entries in the menu itself", () => {
+  const cols = netInspectorColumns(["F.Cu"]);
+  const menu = netInspectorHeaderMenu(cols, ["via_count"]);
+  const labels = menu.map((e) => (e.kind === "item" ? e.label : e.kind));
+  assert.deepEqual(labels.slice(0, 4), ["Auto-fit Column", "Auto-fit All Columns", "separator", "Netclass"]);
+  assert.ok(!labels.includes("Name"), "the Name is never hidden");
+  const via = menu.find((e) => e.kind === "item" && e.label === "Via Count");
+  assert.ok(via && via.kind === "item" && via.checked === false);
 });

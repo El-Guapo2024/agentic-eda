@@ -301,6 +301,9 @@ export interface Part {
    * no resolvable footprint at all.
    */
   footprint: string | null;
+  /** The footprint's link as the board file writes it (`GetFPID().Format()`, the Library Link the Search panel shows): `Lib:Name`, the installed KiCad footprint a
+   *  built-in package stands for, a name with no library bare (`eda_model::footprint::footprint_lib_id`). Absent from an older backend. */
+  lib_link?: string;
   /** Floorplan block this part belongs to, if any. */
   block: string | null;
   placed: boolean;
@@ -1264,6 +1267,9 @@ export interface BoardState {
   title_block?: TitleBlock | null;
   /** The board's drawing sheet file (Page Settings' "Drawing sheet:", `pcbnew.page_layout_descr_file`); null/absent is KiCad's default sheet. */
   drawing_sheet?: DrawingSheetFile | null;
+  /** Every net of the board by name (`BOARD::GetNetInfo()`): the design's, one no item is on too (an added net, a design block's), and any a track, via or zone
+   *  names; sorted, the unconnected net left out. Absent from an older backend. */
+  nets?: string[];
   /** Most recent 60 activity.jsonl entries, newest first. */
   activity: Activity[];
   /** "idle" | "running" | a one-line result of the last route. */

@@ -1,7 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState } from "../api/types";
-import { DEFAULT_SEARCH_PANE_SETTINGS, clickSearchColumn, drillEntries, effectiveNetClassName, parseSearchPaneSettings, searchRowsText, searchTab, sortSearchRows, SEARCH_TABS, toggleSearchSetting, type SearchContext } from "./searchHandlers";
+import { pcbOriginTransforms } from "./originTransforms";
+import {
+  DEFAULT_SEARCH_PANE_SETTINGS,
+  autosizeSearchColumn,
+  clickSearchColumn,
+  drillEntries,
+  effectiveNetClassName,
+  moveSearchColumn,
+  parseSearchPaneSettings,
+  searchColumnOrder,
+  searchColumnWidths,
+  searchRowsText,
+  searchTab,
+  sortSearchRows,
+  SEARCH_TABS,
+  toggleSearchSetting,
+  type SearchContext,
+} from "./searchHandlers";
 
 const pad = (num: string, x: number, net: string | null, over: Record<string, unknown> = {}) => ({ num, net, x, y: 0, w: 1_000_000, h: 1_000_000, round: false, th: false, ...over });
 const field = (name: string, text: string, visible = true) => ({ id: `x:${name}`, name, text, x: 0, y: 0, angle: 0, w: 1, h: 1, thickness: 1, layer: "F.SilkS", visible, halign: 0, valign: 0, mirror: false, bold: false, italic: false, upright: false, knockout: false, lx: 0, ly: 0, langle: 0, custom: false });
@@ -68,6 +85,15 @@ test("Footprints: every placed footprint for an empty query; by a field (a hidde
   assert.equal(searchTab("footprints", b, "R2", ctx())[0]!.cells[2], "B.Cu");
 });
 
+test("the X and Y cells are MessageTextFromCoord( .., ABS_X_COORD / ABS_Y_COORD ): from Origins & Axes' origin, each axis either way", () => {
+  const b = board();
+  // the grid origin at (4, 1) mm, Y increasing up
+  const xf = pcbOriginTransforms("grid", false, true, null, { x: 4_000_000, y: 1_000_000 });
+  const r10 = searchTab("footprints", b, "R10", ctx({ xf }))[0]!;
+  assert.deepEqual(r10.cells.slice(3, 5), ["6.0000 mm", "-4.0000 mm"]);
+  assert.deepEqual(searchTab("groups", b, "", ctx({ xf }))[0]!.cells.slice(2, 4), ["-3.0000 mm", "-1.0000 mm"], "a group's centre (1, 2) mm");
+});
+
 test("the rows sort by the first column with StrNumCmp unless a column is chosen; the same heading again turns the order round", () => {
   const rows = searchTab("footprints", board(), "", ctx());
   assert.deepEqual(sortSearchRows(rows, "footprints", null, true).map((r) => r.id), ["J1", "R2", "R10"], "R2 before R10");
@@ -123,4 +149,40 @@ test("the pane's menu: Zoom and Pan to Selection are one setting; the settings r
   assert.equal(toggleSearchSetting(s, "hidden").searchHiddenFields, false);
   assert.deepEqual(parseSearchPaneSettings({ selectionZoom: "zoom", searchMetadata: true, searchHiddenFields: "no" }), { selectionZoom: "zoom", searchHiddenFields: true, searchMetadata: true });
   assert.equal(searchRowsText([{ id: "a", cells: ["R1", "10k"], select: [] }]), "R1\t10k\n");
+});
+
+// ------------------------------------------------------------------------------------------------------------------- UI-LEFT-2 PP13
+
+test("Nets goes through every net of the board (GetNetInfo()): one no item is on is listed too, once", () => {
+  const rows = searchTab("nets", board(), "", ctx(), ["SPARE", "GND"]);
+  assert.deepEqual(rows.map((r) => r.id), ["", "/sig/A", "GND", "N{slash}C", "SPARE"]);
+  assert.deepEqual(searchTab("nets", board(), "spa", ctx(), ["SPARE"]).map((r) => r.cells[0]), ["SPARE"]);
+  assert.deepEqual(searchTab("ratsnest", board(), "", ctx(), ["SPARE"]).map((r) => r.id), ["/sig/A"], "a net with no item has no unrouted connection");
+});
+
+test("the Library Link is the link the board file gives the footprint (GetFPID().Format()), which Search Metadata matches too", () => {
+  const b = board();
+  const r2 = b.parts.find((p) => p.ref === "R2")!;
+  r2.footprint = "0603";
+  r2.lib_link = "Resistor_SMD:R_0603_1608Metric";
+  const rows = searchTab("footprints", b, "", ctx());
+  assert.equal(rows.find((r) => r.id === "R2")!.cells[5], "Resistor_SMD:R_0603_1608Metric", "not the bare package name");
+  assert.equal(rows.find((r) => r.id === "J1")!.cells[5], "Conn:Pin", "an older backend: the footprint's name");
+  const meta = { ...DEFAULT_SEARCH_PANE_SETTINGS, searchMetadata: true };
+  assert.ok(searchTab("footprints", b, "R_0603_1608", ctx({ settings: meta })).some((r) => r.id === "R2"));
+});
+
+test("the columns: each its share of the list's width (a tenth per proportion), dragged into another order by model column, Copy in the model's order without a column of no width", () => {
+  assert.deepEqual(searchColumnWidths("nets", 605), [360, 360], "GetClientSize().GetWidth() / 10, times 6");
+  assert.deepEqual(searchColumnWidths("footprints", 1000).reduce((a, w) => a + w, 0), 3400, "proportions adding up to 34 tenths run past the list");
+  assert.deepEqual(searchColumnOrder(3), [0, 1, 2]);
+  assert.deepEqual(searchColumnOrder(3, [2, 0]), [0, 1, 2], "a stale order is the handler's");
+  assert.deepEqual(moveSearchColumn(4, undefined, 3, 0), [3, 0, 1, 2]);
+  assert.deepEqual(moveSearchColumn(4, [3, 0, 1, 2], 3, 4), [0, 1, 2, 3]);
+  assert.deepEqual(moveSearchColumn(4, [3, 0, 1, 2], 1, 2), [3, 0, 1, 2], "dropped where it is");
+  const rows = [{ id: "a", cells: ["R1", "10k", "F.Cu"], select: [] }];
+  assert.equal(searchRowsText(rows, [10, 0, 30]), "R1\tF.Cu\n", "GetColumnWidth( col ) <= 0: left out");
+  const mono = (t: string) => t.length * 7;
+  assert.equal(autosizeSearchColumn("footprints", 5, [{ id: "a", cells: ["", "", "", "", "", "Resistor_SMD:R_0603_1608Metric", ""], select: [] }], mono), 30 * 7 + 12);
+  assert.equal(autosizeSearchColumn("footprints", 0, [{ id: "a", cells: ["R1"], select: [] }], mono), 9 * 7 + 24, "never narrower than its heading");
 });

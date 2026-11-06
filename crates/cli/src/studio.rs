@@ -1318,6 +1318,11 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             // different builtin.
             "footprint": part.footprint.clone().or_else(|| part.package.clone()),
         });
+        // The link the board file gives the footprint (`GetFPID().Format()`, the Search panel's Library Link; UI-LEFT-2 PP13): the name the writer puts in
+        // `(footprint "..")` -- `footprint_lib_id`, the footprint's own name for none -- without the importer's slot.
+        if let Some(link) = Some(eda_model::footprint::footprint_lib_id(part)).filter(|n| !n.is_empty()).or_else(|| resolved.as_ref().map(|f| f.name.clone())) {
+            p["lib_link"] = json!(eda_model::footprint::without_import_slot(&link, &model.footprints));
+        }
         if let Some(fp) = fp {
             let footprint = model.footprint_of(part);
             let engine_pads = footprint.as_ref().map(crate::fp_json::pads_in_studio_order).unwrap_or_default();
@@ -1710,10 +1715,24 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     state["board_rules"]["component_classes"] = json!(model.board.component_classes);
     // the design variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, which the board's `(variants ..)` gets from the schematic), set apart too
     state["variants"] = json!(design_variants_json(&design));
+    // `BOARD::GetNetInfo()`, which the Search panel's Nets tab goes through (UI-LEFT-2 PP13): every net of the board by name, one no item is on too -- the model's
+    // nets (an added net, a design block's) and any a track, via or zone names -- sorted as the writer numbers them, the unconnected net left out
+    state["nets"] = json!(board_net_names(&design, &model));
     // Page Settings' drawing sheet file (`pcbnew.page_layout_descr_file`): the name kept, the file's text the board's sheet is drawn from and why it could not
     // be read; null is KiCad's default sheet
     state["drawing_sheet"] = crate::drawing_sheet_api::state_json(dir, design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref()));
     Ok(state)
+}
+
+/// The board's nets by name (`BOARD::GetNetInfo()` without the unconnected net), as `net_inspector_api::rows` counts them: the model's and any a track, via or
+/// zone (not a rule area) names.
+pub(crate) fn board_net_names(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Vec<String> {
+    let mut nets: std::collections::BTreeSet<String> = model.nets.iter().map(|n| n.name.clone()).collect();
+    if let Some(rt) = &design.routing {
+        nets.extend(rt.tracks.iter().map(|t| t.net.clone()).chain(rt.vias.iter().map(|v| v.net.clone())).chain(rt.zones.iter().filter(|z| !z.is_rule_area).map(|z| z.net.clone())));
+    }
+    nets.remove("");
+    nets.into_iter().collect()
 }
 
 /// One `Shape` as JSON: every variant carries `id`/`kind`/`layer`/

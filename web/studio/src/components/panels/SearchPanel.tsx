@@ -9,17 +9,39 @@
 // and opens their properties, or for a net Board Setup's Net Classes page. Ctrl+A selects every row, Ctrl+C and the rows' menu's Copy copy the selected rows
 // (tab-separated).
 //
-// Different from KiCad: the panel docks at the bottom only (KiCad's can be dragged to another side or floated); the X and Y columns are from the page origin.
+// The headings are the report-mode list's (UI-LEFT-2 PP13): each column starts at its share of the list's width (`RefreshColumnNames`: a tenth of the width per
+// proportion, so a tab whose proportions add up to more than ten scrolls sideways), its edge is dragged to size it (to nothing, which Copy then leaves out) and
+// double-clicked to fit its widest text, and a heading is dragged to another place; the order and widths last while the page is open (KiCad saves neither).
+// The Nets tab lists every net of the board (`BOARD::GetNetInfo()`), one no item is on too; the Library Link is the link the board file gives the footprint
+// (`GetFPID().Format()`).
+//
+// The X and Y columns are counted from the origin Preferences > PCB Editor > Origins & Axes chooses (UI-LEFT-2 PP9).
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { clickSearchColumn, effectiveNetClassName, searchRowsText, searchTab, sortSearchRows, SEARCH_TABS, toggleSearchSetting, type SearchContext, type SearchRow } from "../../kicad-port/searchHandlers";
+import {
+  autosizeSearchColumn,
+  clickSearchColumn,
+  effectiveNetClassName,
+  moveSearchColumn,
+  searchColumnOrder,
+  searchColumnWidths,
+  searchRowsText,
+  searchTab,
+  sortSearchRows,
+  SEARCH_TABS,
+  toggleSearchSetting,
+  type SearchContext,
+  type SearchRow,
+} from "../../kicad-port/searchHandlers";
+import { clickEndsDrag, startColumnMove, startColumnResize, textWidthIn } from "./listColumns";
 import { effectiveClassName } from "../../kicad-port/boardSetupRules";
 import { boxOfIds, pcbItemBoxes, unionBoxes, type Box } from "../../kicad-port/itemBoxes";
 import { boxCentre, centerViewOn, zoomFitBox } from "../../kicad-port/zoomFit";
 import { padIds } from "../../kicad-port/pcbItems";
-import { setSearchPane, useSearchPane } from "../../state/searchPane";
+import { getSearchPane, setSearchPane, useSearchPane } from "../../state/searchPane";
 import { useStudioDispatch, useStudioState } from "../../state/store";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
+import { useOriginTransforms } from "../../state/originTransforms";
 
 export function SearchPanel() {
   const state = useStudioState();
@@ -43,6 +65,8 @@ export function SearchPanel() {
   }, [pane.focus]);
 
   const boxes = useMemo(() => (board ? pcbItemBoxes(board) : new Map<string, Box>()), [board]);
+  // The X and Y cells' `MessageTextFromCoord` goes through the frame's origin transforms (Origins & Axes, UI-LEFT-2 PP9).
+  const xf = useOriginTransforms();
   const context = useMemo((): SearchContext => {
     const filledArea = new Map<string, number>();
     // `ZONE::GetFilledArea`: the area of the last fill, every layer of it
@@ -57,11 +81,39 @@ export function SearchPanel() {
       }
     }
     const classes = board?.board_rules?.net_classes ?? [];
-    return { units: state.units, settings: pane.settings, filledArea, ratsnestNets, groupCentre, netClassName: (net) => effectiveNetClassName(net, effectiveClassName(classes, net)) };
-  }, [state.zoneFill, state.ratsnest, board, boxes, state.units, pane.settings]);
+    return { units: state.units, settings: pane.settings, filledArea, ratsnestNets, groupCentre, netClassName: (net) => effectiveNetClassName(net, effectiveClassName(classes, net)), xf };
+  }, [state.zoneFill, state.ratsnest, board, boxes, state.units, pane.settings, xf]);
 
-  // `SEARCH_PANE_TAB::Search`: the handler's hits, then the list's sort.
-  const rows = useMemo(() => (board ? sortSearchRows(searchTab(tab.id, board, pane.query, context), tab.id, sort.col, sort.ascending) : []), [board, tab.id, pane.query, context, sort.col, sort.ascending]);
+  // `SEARCH_PANE_TAB::Search`: the handler's hits, then the list's sort. The Nets and Ratsnest tabs go through every net of the board (`GetNetInfo()`), one no item
+  // names too (`board.nets`).
+  const rows = useMemo(
+    () => (board ? sortSearchRows(searchTab(tab.id, board, pane.query, context, board.nets ?? []), tab.id, sort.col, sort.ascending) : []),
+    [board, tab.id, pane.query, context, sort.col, sort.ascending]
+  );
+
+  // The columns on screen: the list's width (each column's share of it until one is sized by hand), the order, the widths.
+  const listRef = useRef<HTMLDivElement>(null);
+  const [listWidth, setListWidth] = useState(600);
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const seen = new ResizeObserver(() => setListWidth(el.clientWidth));
+    seen.observe(el);
+    setListWidth(el.clientWidth);
+    return () => seen.disconnect();
+  }, [!!board]);
+  const tabColumns = pane.columns[tab.id];
+  const order = searchColumnOrder(tab.columns.length, tabColumns?.order);
+  const [liveWidth, setLiveWidth] = useState<{ col: number; w: number } | null>(null);
+  const [dropAt, setDropAt] = useState<number | null>(null);
+  const baseWidths = tabColumns?.widths?.length === tab.columns.length ? tabColumns.widths : searchColumnWidths(tab.id, listWidth);
+  const widths = baseWidths.map((w, i) => (liveWidth?.col === i ? liveWidth.w : w));
+  /** One column's width set: every column's width is fixed from then on (the rest at what they show now). */
+  const setColumnWidth = (col: number, w: number) => {
+    const current = getSearchPane().columns[tab.id];
+    const base = current?.widths?.length === tab.columns.length ? current.widths : searchColumnWidths(tab.id, listWidth);
+    setSearchPane({ columns: { ...getSearchPane().columns, [tab.id]: { ...current, widths: base.map((x, i) => (i === col ? w : x)) } } });
+  };
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
   // A new search keeps the rows still found selected (the list's selection is by row; KiCad's `Sort` carries it across a re-sort).
@@ -136,7 +188,10 @@ export function SearchPanel() {
   };
 
   const copy = () => {
-    const text = searchRowsText(rows.filter((r) => selected.includes(r.id)));
+    const text = searchRowsText(
+      rows.filter((r) => selected.includes(r.id)),
+      widths
+    );
     void navigator.clipboard?.writeText(text).catch(() => {});
   };
 
@@ -179,7 +234,8 @@ export function SearchPanel() {
   ];
 
   if (!board) return <div className="panel-empty">No board.</div>;
-  const total = tab.columns.reduce((a, c) => a + c.proportion, 0);
+  const headerEls = () => [...(listRef.current?.querySelectorAll('th[role="columnheader"]') ?? [])];
+  const tableWidth = widths.reduce((a, w) => a + w, 0);
   return (
     <div className="search-pane" data-testid="search-pane" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, fontSize: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "2px 4px" }}>
@@ -234,27 +290,76 @@ export function SearchPanel() {
         }}
         style={{ flex: 1, minHeight: 0, overflow: "auto", outline: "none" }}
         data-testid="search-pane-list"
+        ref={listRef}
       >
-        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+        <table style={{ width: tableWidth, borderCollapse: "collapse", tableLayout: "fixed" }}>
           <colgroup>
-            {tab.columns.map((c) => (
-              <col key={c.name} style={{ width: `${(100 * c.proportion) / total}%` }} />
+            {order.map((i) => (
+              <col key={tab.columns[i]!.name} style={{ width: widths[i] }} />
             ))}
           </colgroup>
           <thead>
             <tr>
-              {tab.columns.map((c, i) => (
-                <th
-                  key={c.name}
-                  role="columnheader"
-                  data-testid={`search-pane-col-${i}`}
-                  style={{ textAlign: c.align, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", position: "sticky", top: 0, background: "var(--chrome-bg-raised)", fontWeight: 600 }}
-                  onClick={() => setSearchPane({ sort: { ...pane.sort, [tab.id]: clickSearchColumn(sort, i) } })}
-                >
-                  {c.name}
-                  {sort.col === i ? (sort.ascending ? " ▲" : " ▼") : ""}
-                </th>
-              ))}
+              {order.map((i, at) => {
+                const c = tab.columns[i]!;
+                return (
+                  <th
+                    key={c.name}
+                    role="columnheader"
+                    data-testid={`search-pane-col-${i}`}
+                    data-col={i}
+                    style={{
+                      textAlign: c.align,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      position: "sticky",
+                      top: 0,
+                      zIndex: 1,
+                      background: "var(--chrome-bg-raised)",
+                      fontWeight: 600,
+                      boxShadow: dropAt === at ? "inset 2px 0 0 var(--chrome-accent, #4a8cff)" : dropAt === order.length && at === order.length - 1 ? "inset -2px 0 0 var(--chrome-accent, #4a8cff)" : undefined,
+                    }}
+                    onPointerDown={(e) =>
+                      startColumnMove(e, headerEls, setDropAt, (to) => {
+                        const cur = getSearchPane().columns[tab.id];
+                        setSearchPane({ columns: { ...getSearchPane().columns, [tab.id]: { ...cur, order: moveSearchColumn(tab.columns.length, cur?.order, i, to) } } });
+                      })
+                    }
+                    onClick={() => {
+                      if (clickEndsDrag()) return;
+                      setSearchPane({ sort: { ...pane.sort, [tab.id]: clickSearchColumn(sort, i) } });
+                    }}
+                  >
+                    {c.name}
+                    {sort.col === i ? (sort.ascending ? " ▲" : " ▼") : ""}
+                    <span
+                      className="list-col-resize"
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label={`Resize ${c.name}`}
+                      data-testid={`search-pane-resize-${i}`}
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setColumnWidth(i, autosizeSearchColumn(tab.id, i, rows, textWidthIn(listRef.current)));
+                      }}
+                      onPointerDown={(e) =>
+                        startColumnResize(
+                          e,
+                          widths[i] ?? 0,
+                          0,
+                          (w) => setLiveWidth({ col: i, w }),
+                          (w) => {
+                            setLiveWidth(null);
+                            setColumnWidth(i, w);
+                          }
+                        )
+                      }
+                    />
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -271,9 +376,9 @@ export function SearchPanel() {
                   onClick={(e) => clickRow(e, r.id)}
                   onDoubleClick={() => activate(r.id)}
                 >
-                  {r.cells.map((cell, i) => (
+                  {order.map((i) => (
                     <td key={i} style={{ textAlign: tab.columns[i]?.align, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {cell}
+                      {r.cells[i]}
                     </td>
                   ))}
                 </tr>
