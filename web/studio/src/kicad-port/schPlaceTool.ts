@@ -44,6 +44,7 @@ export const CARRY_TOOL_ACTIONS = {
   sch_directive: "eeschema.InteractiveDrawing.placeClassLabel",
   sch_text: "eeschema.InteractiveDrawing.placeSchematicText",
   sch_power: "eeschema.InteractiveDrawing.placePowerSymbol",
+  sch_place_symbol: "eeschema.InteractiveDrawing.placeSymbol",
 } as const;
 
 export type CarryTool = keyof typeof CARRY_TOOL_ACTIONS;
@@ -98,7 +99,34 @@ export interface CarriedPower {
   rotMillideg: number;
 }
 
-export type CarriedItem = CarriedLabel | CarriedDirective | CarriedText | CarriedPower;
+/** A quarter turn or a mirror of a carried symbol, applied after it is made as the placed symbol's own R / Shift+R / X / Y are (`SCH_EDIT_TOOL::Rotate` /
+ *  `Mirror`'s single-symbol branch: about its anchor, `SetOrientation`). */
+export type SymbolTurn = "rot_ccw" | "rot_cw" | "mirror_h" | "mirror_v";
+
+export interface CarriedSymbol {
+  kind: "symbol";
+  libId: string;
+  /** The reference the symbol rides with: `annotate()` numbered it when it was made, or the reference a further unit of a placed symbol goes in under. */
+  ref: string;
+  /** What the next symbol of "Place repeated copies" is numbered from. */
+  prefix: string;
+  value: string;
+  footprint: string;
+  unit: number;
+  /** `GetUnitCount()`: how many units the library symbol has. */
+  unitCount: number;
+  /** The orientation it was made with (a copy of a placed unit keeps that unit's, `new SCH_SYMBOL( *symbol )`): degrees counter-clockwise, and the mirror. */
+  rotDeg: number;
+  mirror: "x" | "y" | null;
+  /** The turns and mirrors made while it rides, in order. */
+  turns: SymbolTurn[];
+  /** The chooser's "Place all units" (`sel.PlaceAllUnits`): the next unit of the reference rides after each click. */
+  placeAllUnits: boolean;
+  /** `placeOneOnly`: the action was handed this symbol (Place Next Symbol Unit, Add Symbol to Schematic) -- placed once, and the tool ends. */
+  oneOnly: boolean;
+}
+
+export type CarriedItem = CarriedLabel | CarriedDirective | CarriedText | CarriedPower | CarriedSymbol;
 
 /** What a placing tool holds. */
 export interface Carry {
@@ -154,6 +182,9 @@ export function rotateCarried(item: CarriedItem, ccw: boolean): CarriedItem {
     }
     case "power":
       return { ...item, rotMillideg: (item.rotMillideg + (ccw ? 90_000 : 270_000)) % 360_000 };
+    case "symbol":
+      // `symbol->Rotate( rotPoint, !clockwise )` about its anchor: the turn the placed symbol's R makes, sent after it is made
+      return { ...item, turns: [...item.turns, ccw ? "rot_ccw" : "rot_cw"] };
   }
 }
 
@@ -173,6 +204,9 @@ export function mirrorCarried(item: CarriedItem, vertical: boolean): CarriedItem
     }
     case "power":
       return vertical ? { ...item, rotMillideg: (item.rotMillideg + 180_000) % 360_000 } : item;
+    case "symbol":
+      // `symbol->SetOrientation( vertical ? SYM_MIRROR_X : SYM_MIRROR_Y )`
+      return { ...item, turns: [...item.turns, vertical ? "mirror_v" : "mirror_h"] };
   }
 }
 
@@ -213,17 +247,66 @@ export function placeCmd(item: CarriedItem, at: readonly [number, number], o: Pl
       return { op: "sch_edit", verb: "place_text", content: item.content, at: xy(at), angle: item.vertical ? 90_000 : 0, size_nm: item.sizeNm, h: item.h, v: item.v };
     case "power":
       return { op: "add_power_symbol", lib_id: item.libId, at: xy(at), rot_millideg: item.rotMillideg, net: item.net, pin: "", ...(o.annotate ? { annotate: o.annotate } : {}) };
+    case "symbol":
+      return placeSymbolCmd(item, at, o);
   }
+}
+
+/**
+ * The click that places a carried symbol (`commit.Push( _( "Place Symbol" ) )`): `add_symbol` with its reference, value, footprint and unit, the
+ * orientation it was made with, then its turns and mirrors as the placed symbol's own verbs make them (`sch_move` on that one placed unit,
+ * `<reference>#<unit>`) -- one command, one undo step. A symbol of an installed library brings its definition (the server's `EmbedLibSymbol`).
+ */
+export function placeSymbolCmd(item: CarriedSymbol, at: readonly [number, number], o: PlaceOptions = {}): Cmd {
+  const add: Cmd = { op: "add_symbol", id: item.ref, lib_id: item.libId, at: xy(at), rot_millideg: Math.round(item.rotDeg * 1000), value: item.value, footprint: item.footprint, unit: item.unit, ...(o.annotate ? { annotate: o.annotate } : {}) };
+  const target = `${item.ref}#${item.unit}`;
+  const cmds: Cmd[] = [add];
+  // the IR's mirror flags: Mirror Horizontally (`mirrored`, negate x) is "y", Mirror Vertically (`mirror_y`) is "x"
+  if (item.mirror === "y") cmds.push({ op: "mirror_symbol", id: item.ref, unit: item.unit });
+  else if (item.mirror === "x") cmds.push({ op: "mirror_symbol_vertical", id: item.ref, unit: item.unit });
+  for (const t of item.turns) {
+    const base = { op: "sch_move" as const, ids: [target], vertices: {} };
+    cmds.push(t === "rot_ccw" || t === "rot_cw" ? { ...base, verb: "rotate", ccw: t === "rot_ccw" } : { ...base, verb: "mirror", vertical: t === "mirror_v" });
+  }
+  return cmds.length === 1 ? add : { op: "batch", cmds };
+}
+
+/** What the units of a reference are, for the next symbol of "Place all units" (`unitOccupied`): is the unit placed? */
+export interface NextSymbolContext {
+  occupied: (unit: number) => boolean;
+  /** `annotate()`: the reference a new symbol of "Place repeated copies" is numbered with. */
+  nextRef: () => string;
+}
+
+/**
+ * `PlaceSymbol` after a click placed `item` (`if( keepSymbol || placeAllUnits ) { ... }`): with "Place all units" the reference steps to its next unit
+ * not placed (`while( currentReference.GetUnit() <= symbol->GetUnitCount() && unitOccupied( .. ) ) SetUnit( + 1 )`, back to 1 past the last); a next
+ * symbol rides when "Place repeated copies" is on or a further unit is (`if( keepSymbol || currentReference.GetUnit() > 1 )`), a copy of the one placed
+ * (`Duplicate`: its orientation and fields) in that unit, numbered anew when it is unit 1 (`if( currentReference.GetUnit() == 1 ) annotate();`).
+ */
+export function nextSymbolAfter(item: CarriedSymbol, keep: boolean, ctx: NextSymbolContext): CarriedSymbol | null {
+  if (item.oneOnly || (!keep && !item.placeAllUnits)) return null;
+  let unit = item.unit;
+  if (item.placeAllUnits) {
+    while (unit <= item.unitCount && ctx.occupied(unit)) unit++;
+    if (unit > item.unitCount) unit = 1;
+  }
+  if (!keep && unit <= 1) return null;
+  return { ...item, unit, ref: unit === 1 ? ctx.nextRef() : item.ref };
 }
 
 /** The command the server draws the riding item from (`POST /api/sch/place_preview`). */
 export const previewCmd = (item: CarriedItem): Cmd => placeCmd(item, PREVIEW_AT, { preview: true });
 
 /** What the tool holds after the click that placed `carry`'s item: the next label of the entry, the same symbol again, or nothing (the next click makes one). */
-export function afterPlaced(carry: Carry): Carry | null {
+export function afterPlaced(carry: Carry, symbols?: NextSymbolContext): Carry | null {
   // TwoClickPlace: "item = nullptr; ... else if( !itemsToPlace.empty() ) { item = itemsToPlace.front(); ... prepItemForPlacement( item, cursorPos ); }"
   if (carry.queue.length > 0) return { ...carry, item: carry.queue[0]!, queue: carry.queue.slice(1) };
   // PlaceSymbol: "if( keepSymbol || placeAllUnits ) ... nextSymbol = symbol->Duplicate(); addSymbol( nextSymbol ); annotate();"
+  if (carry.item.kind === "symbol") {
+    const next = symbols ? nextSymbolAfter(carry.item, carry.keep, symbols) : null;
+    return next ? { ...carry, item: next } : null;
+  }
   if (carry.tool === "sch_power" && carry.keep) return carry;
   return null;
 }
@@ -267,7 +350,7 @@ const REFUSED = new Set(["common.Interactive.duplicate", "eeschema.InteractiveEd
 const CONVERSIONS = new Set(["eeschema.InteractiveEdit.toCLabel", "eeschema.InteractiveEdit.toGLabel", "eeschema.InteractiveEdit.toHLabel", "eeschema.InteractiveEdit.toLabel", "eeschema.InteractiveEdit.toText", "eeschema.InteractiveEdit.toTextBox"]);
 /** PlaceSymbol's `editWithLibEdit`, `changeSymbol`. */
 const SYMBOL_REFUSED = new Set(["eeschema.EditorControl.editWithSymbolEditor", "eeschema.InteractiveEdit.changeSymbol"]);
-/** PlaceSymbol hands these to the edit tool for the carried symbol; the studio has no dialog for a power symbol not placed yet, so they do nothing. */
+/** PlaceSymbol hands these to the edit tool for the carried symbol; the studio has no dialog for a symbol not placed yet, so they do nothing. */
 const SYMBOL_EDITS = new Set([
   "eeschema.InteractiveEdit.properties",
   "eeschema.InteractiveEdit.editReference",
@@ -286,7 +369,7 @@ const SYMBOL_EDITS = new Set([
  * (`evt->IsActivate()`: it starts a tool).
  */
 export function carryKey(tool: CarryTool, action: string, activates: boolean): CarryKey {
-  const symbol = tool === "sch_power";
+  const symbol = tool === "sch_power" || tool === "sch_place_symbol";
   // "evt->IsCancelInteractive() || evt->IsAction( &ACTIONS::undo )": cleanup(); `PlaceSymbol` checks Undo only with a symbol in hand, which is always here
   if (action === "common.Interactive.cancel" || action === "common.Interactive.undo") return { do: "drop" };
   if (activates) {
@@ -322,7 +405,7 @@ export function carryKey(tool: CarryTool, action: string, activates: boolean): C
  * break; }", the event not passed on, so nothing is undone -- where `PlaceSymbol` checks Undo only with a symbol in hand and lets it through.
  */
 export function armedKey(tool: CarryTool, action: string): "leave" | "pass" {
-  return tool !== "sch_power" && action === "common.Interactive.undo" ? "leave" : "pass";
+  return tool !== "sch_power" && tool !== "sch_place_symbol" && action === "common.Interactive.undo" ? "leave" : "pass";
 }
 
 // --------------------------------------------------------------------------------------------------------------------------- reading
@@ -338,6 +421,8 @@ export function describeCarried(item: CarriedItem): Record<string, unknown> {
       return { kind: "text", text: item.content, vertical: item.vertical, h: item.h, v: item.v };
     case "power":
       return { kind: "power", libId: item.libId, net: item.net, rot: item.rotMillideg };
+    case "symbol":
+      return { kind: "symbol", libId: item.libId, ref: item.ref, unit: item.unit, turns: [...item.turns], placeAllUnits: item.placeAllUnits, oneOnly: item.oneOnly };
   }
 }
 

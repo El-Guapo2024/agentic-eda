@@ -23,7 +23,12 @@ import {
   type CarriedLabel,
   type CarriedPower,
   type CarriedText,
+  type CarriedSymbol,
   type Carry,
+  nextSymbolAfter,
+  placeSymbolCmd,
+  describeCarried,
+  type CarriedItem,
 } from "./schPlaceTool";
 
 const label = (over: Partial<CarriedLabel> = {}): CarriedLabel => ({ kind: "label", scope: "global", text: "DATA0", shape: "output", spin: "right", sizeNm: null, bold: false, italic: false, autoRotate: true, ...over });
@@ -31,8 +36,9 @@ const text = (over: Partial<CarriedText> = {}): CarriedText => ({ kind: "text", 
 const directive = (over: Partial<CarriedDirective> = {}): CarriedDirective => ({ kind: "directive", netclass: "Power", componentClass: "", shape: "round", orientation: 0, pinLengthNm: 2_540_000, ...over });
 const power = (over: Partial<CarriedPower> = {}): CarriedPower => ({ kind: "power", libId: "power:GND", net: "GND", rotMillideg: 0, ...over });
 
-test("the placing tools are the six whose item rides the cursor, each armed by its own action", () => {
-  assert.deepEqual(Object.keys(CARRY_TOOL_ACTIONS).sort(), ["sch_directive", "sch_label_global", "sch_label_hier", "sch_label_local", "sch_power", "sch_text"]);
+test("the placing tools are the seven whose item rides the cursor, each armed by its own action", () => {
+  assert.deepEqual(Object.keys(CARRY_TOOL_ACTIONS).sort(), ["sch_directive", "sch_label_global", "sch_label_hier", "sch_label_local", "sch_place_symbol", "sch_power", "sch_text"]);
+  assert.equal(CARRY_TOOL_ACTIONS.sch_place_symbol, "eeschema.InteractiveDrawing.placeSymbol");
   assert.equal(CARRY_TOOL_ACTIONS.sch_directive, "eeschema.InteractiveDrawing.placeClassLabel");
   assert.ok(isCarryTool("sch_power") && !isCarryTool("sch_no_connect") && !isCarryTool("wire") && !isCarryTool("sch_textbox"));
   assert.deepEqual([scopeOfTool("sch_label_local"), scopeOfTool("sch_label_global"), scopeOfTool("sch_label_hier"), scopeOfTool("sch_text")], ["local", "global", "hierarchical", null]);
@@ -191,4 +197,93 @@ test("armed with nothing in the hand, Undo leaves TwoClickPlace's tools (undoing
   assert.equal(armedKey("sch_directive", "common.Interactive.undo"), "leave");
   assert.equal(armedKey("sch_power", "common.Interactive.undo"), "pass");
   assert.equal(armedKey("sch_label_global", "common.Interactive.redo"), "pass");
+});
+
+// ------------------------------------------------------------------------------------------------------------- Place Symbol (A), UI-LEFT S1b
+
+const symbol = (over: Partial<CarriedSymbol> = {}): CarriedSymbol => ({
+  kind: "symbol",
+  libId: "Amplifier_Operational:LM358",
+  ref: "U3",
+  prefix: "U",
+  value: "LM358",
+  footprint: "",
+  unit: 1,
+  unitCount: 3,
+  rotDeg: 0,
+  mirror: null,
+  turns: [],
+  placeAllUnits: false,
+  oneOnly: false,
+  ...over,
+});
+
+test("a carried symbol keeps its R / Shift+R / X / Y as the placed unit's own turns, and the click places it with them in one command", () => {
+  let s: CarriedItem = symbol();
+  s = rotateCarried(s, true);
+  s = mirrorCarried(s, true);
+  s = rotateCarried(s, false);
+  assert.deepEqual((s as CarriedSymbol).turns, ["rot_ccw", "mirror_v", "rot_cw"]);
+  const cmd = placeCmd(s, [1_270_000, 2_540_000], { annotate: { algo: "first_free", start_number: 0 } });
+  assert.equal(cmd.op, "batch");
+  const cmds = (cmd as { cmds: Array<Record<string, unknown>> }).cmds;
+  assert.deepEqual(cmds[0], { op: "add_symbol", id: "U3", lib_id: "Amplifier_Operational:LM358", at: { x: 1_270_000, y: 2_540_000 }, rot_millideg: 0, value: "LM358", footprint: "", unit: 1, annotate: { algo: "first_free", start_number: 0 } });
+  // the placed unit, `<reference>#<unit>`: a reference's other units on the sheet do not turn with it
+  assert.deepEqual(cmds.slice(1), [
+    { op: "sch_move", ids: ["U3#1"], vertices: {}, verb: "rotate", ccw: true },
+    { op: "sch_move", ids: ["U3#1"], vertices: {}, verb: "mirror", vertical: true },
+    { op: "sch_move", ids: ["U3#1"], vertices: {}, verb: "rotate", ccw: false },
+  ]);
+  // with no turn it is the one `add_symbol`; a copy of a placed unit starts in that unit's orientation (`new SCH_SYMBOL( *symbol )`)
+  assert.equal(placeSymbolCmd(symbol(), [0, 0]).op, "add_symbol");
+  const copy = placeSymbolCmd(symbol({ rotDeg: 90, mirror: "y", unit: 2 }), [0, 0]) as { cmds: Array<Record<string, unknown>> };
+  assert.deepEqual([copy.cmds[0]!.rot_millideg, copy.cmds[1]], [90_000, { op: "mirror_symbol", id: "U3", unit: 2 }]);
+  // the preview is the same command at the far point
+  assert.deepEqual((previewCmd(symbol()) as { at: unknown }).at, { x: PREVIEW_AT[0], y: PREVIEW_AT[1] });
+});
+
+test("after a click: Place all units steps to the next unit not placed, Place repeated copies numbers a copy anew, a handed symbol ends the tool", () => {
+  const placed = new Set<number>();
+  const ctx = { occupied: (u: number) => placed.has(u), nextRef: () => "U4" };
+  // "Place all units" alone: B and C follow A under its reference, and the tool holds nothing after the last
+  let s: CarriedSymbol | null = symbol({ placeAllUnits: true });
+  const seq: string[] = [];
+  while (s) {
+    seq.push(`${s.ref}${s.unit}`);
+    placed.add(s.unit);
+    s = nextSymbolAfter(s, false, ctx);
+  }
+  assert.deepEqual(seq, ["U31", "U32", "U33"]);
+  // with "Place repeated copies" too: after the last unit, unit 1 of a new reference (`annotate()`)
+  placed.clear();
+  placed.add(1).add(2).add(3);
+  assert.deepEqual(nextSymbolAfter(symbol({ placeAllUnits: true, unit: 3 }), true, ctx), symbol({ placeAllUnits: true, unit: 1, ref: "U4" }));
+  // "Place repeated copies" alone: the same unit again, unit 1 numbered anew, any other unit under the same reference (`if( currentReference.GetUnit() == 1 ) annotate();`)
+  assert.deepEqual(nextSymbolAfter(symbol(), true, ctx), symbol({ ref: "U4" }));
+  assert.deepEqual(nextSymbolAfter(symbol({ unit: 2 }), true, ctx), symbol({ unit: 2 }));
+  // neither: nothing rides (the next click opens the chooser); a symbol an action handed the tool: nothing (`placeOneOnly`)
+  assert.equal(nextSymbolAfter(symbol(), false, ctx), null);
+  assert.equal(nextSymbolAfter(symbol({ oneOnly: true, placeAllUnits: true }), true, ctx), null);
+  // through the tool's own rule
+  const carry: Carry = { tool: "sch_place_symbol", item: symbol({ placeAllUnits: true }), queue: [], keep: false };
+  placed.clear();
+  placed.add(1);
+  assert.equal((afterPlaced(carry, ctx)?.item as CarriedSymbol).unit, 2);
+  assert.equal(afterPlaced(carry), null, "no units to look at: nothing");
+});
+
+test("the keys while a symbol rides are PlaceSymbol's: A places it, R / X / Y turn it, Esc and Undo drop it, the symbol edits and other tools are refused", () => {
+  const k = (action: string, activates = false) => carryKey("sch_place_symbol", action, activates);
+  assert.deepEqual(k("eeschema.InteractiveDrawing.placeSymbol", true), { do: "place" });
+  assert.deepEqual(k("eeschema.InteractiveEdit.rotateCCW"), { do: "rotate", ccw: true });
+  assert.deepEqual(k("eeschema.InteractiveEdit.mirrorV"), { do: "mirror", vertical: true });
+  assert.deepEqual(k("common.Interactive.cancel"), { do: "drop" });
+  assert.deepEqual(k("common.Interactive.undo"), { do: "drop" });
+  assert.deepEqual(k("common.Interactive.delete"), { do: "drop" });
+  assert.deepEqual(k("eeschema.InteractiveDrawing.placeLabel", true), { do: "busy", message: "Press <ESC> to cancel symbol creation." });
+  for (const a of ["eeschema.InteractiveEdit.properties", "eeschema.InteractiveEdit.editValue", "eeschema.InteractiveEdit.changeSymbol", "common.Interactive.duplicate", "eeschema.Interactive.increment"]) assert.deepEqual(k(a), { do: "refuse" }, a);
+  assert.deepEqual(k("common.Control.zoomIn"), { do: "pass" });
+  // armed with nothing in the hand, Place Symbol lets Undo through (it checks Undo only with a symbol in hand)
+  assert.equal(armedKey("sch_place_symbol", "common.Interactive.undo"), "pass");
+  assert.deepEqual(describeCarried(symbol({ turns: ["rot_ccw"] })), { kind: "symbol", libId: "Amplifier_Operational:LM358", ref: "U3", unit: 1, turns: ["rot_ccw"], placeAllUnits: false, oneOnly: false });
 });
