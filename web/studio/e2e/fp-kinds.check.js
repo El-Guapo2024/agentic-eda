@@ -1,4 +1,4 @@
-// Item kinds inside footprints check (UI-LEFT P17, PARITY-pcb.md section 80): a board footprint's text box, reference image, point and barcode -- drawn with it, picked as it, moved, turned and
+// Item kinds inside footprints check (UI-LEFT P17, PARITY-pcb.md section 82): a board footprint's text box, reference image, point and barcode -- drawn with it, picked as it, moved, turned and
 // flipped with it, copied by Duplicate and Create Array -- an image's pixels turned and mirrored by Rotate and Flip on the board and on the sheet, and Duplicate and Create Array of the board's
 // own text boxes, images, points and barcodes. Driven through `window.__eda` (the actions a person runs: R, F, Ctrl+D, Ctrl+T, the canvas's pointer events) and checked against what the
 // server holds (`/api/state`, `/api/pcb_image`, `/api/sch_image`).
