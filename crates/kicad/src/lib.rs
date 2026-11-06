@@ -458,7 +458,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let resolved = if eda_model::is_synthetic_lib_id(&lib_id) { None } else { model.symbol_of(&lib_id) };
         let x = sch_mm(sym.at.x);
         let y = sch_mm(sym.at.y);
-        let uuid = duid_for(&format!("sym:{}", sym.id), &sym.id);
+        // each placed unit is a symbol of its own with a uuid of its own (`SCH_SYMBOL::m_Uuid`): `ResolveItem` finds unit B of a cross-reference by it
+        let uuid = duid_for(&format!("sym:{}", eda_model::ir::field_key(&sym.id, sym.unit)), &sym.id);
         // The body style the symbol is placed in: `(convert N)` (the token of a file before KiCad 10, which reads it as `body_style`, `SCH_SYMBOL::SetBodyStyle`),
         // written only for a symbol in the alternate ("De Morgan") style of a library symbol that has one, as the default is the normal style.
         let real_symbol = model.real_symbol_of(&lib_id, part);
@@ -1116,7 +1117,7 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
                     .collect(),
                 None => BTreeMap::new(),
             };
-            let uuid = duid_plain(&format!("{seed}sym:{}", sym.id));
+            let uuid = duid_plain(&format!("{seed}sym:{}", eda_model::ir::field_key(&sym.id, sym.unit)));
             out.insert(reference.clone(), eda_model::SymbolLink { path: format!("{uuids}/{uuid}"), sheetname: names.clone(), sheetfile: e.file.clone(), fields, pins, units });
         }
     }

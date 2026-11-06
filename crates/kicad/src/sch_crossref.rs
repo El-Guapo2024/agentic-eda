@@ -64,8 +64,81 @@ fn symbol_paths(files: &[(String, String)], suffix: &UnitSuffix<'_>) -> BTreeMap
 /// `ConvertRefsToKIIDs` over the text of one file: each `${REF:...}` outside an escaped `\${...}` (written `\\${` in the file) gets its
 /// designator replaced by the symbol's path; a token that already starts with a path is left as it is.
 fn rewrite(text: &str, paths: &BTreeMap<String, String>) -> String {
+    rewrite_tokens(text, &|token| convert(token, paths))
+}
+
+/// `SCHEMATIC::ConvertKIIDsToRefs` over the files of one schematic as KiCad saved them: each `${/<sheet path>/<symbol uuid>:...}` names the symbol by
+/// the reference `GetRef( &aPath, true )` gives it on that path (the unit in the project's notation `ids`, or the unit's display name, for a symbol of several
+/// units), the form the model keeps a cross-reference in as the user types it, which [`refs_to_kiids`] writes back with the derived file's uuids. A path no
+/// placed symbol has is looked up by its last uuid (`ResolveItem` finds the item anywhere); one that names nothing is left as it is.
+pub fn kiids_to_refs(files: &mut [(String, String)], ids: &eda_model::annotate::SubpartIds) {
+    if !files.iter().any(|(_, t)| t.contains("${/")) {
+        return;
+    }
+    let mut by_path: BTreeMap<String, String> = BTreeMap::new();
+    let mut by_uuid: BTreeMap<String, String> = BTreeMap::new();
+    for (_, text) in files.iter() {
+        let Ok(tree) = sexpr::parse(text) else { continue };
+        let Some(root) = tree.as_list() else { continue };
+        // the file's library symbols: how many units each has and their display names (`LIB_SYMBOL::GetUnitCount`, `GetUnitDisplayName`)
+        let mut units: BTreeMap<String, (u32, BTreeMap<u32, String>)> = BTreeMap::new();
+        if let Some(libs) = sexpr::find(root, "lib_symbols") {
+            for lib in sexpr::find_all(libs, "symbol") {
+                let Some(name) = sexpr::txt(lib, 1) else { continue };
+                let stem = name.rsplit(':').next().unwrap_or(name);
+                let mut count = 1;
+                let mut names = BTreeMap::new();
+                for sub in sexpr::find_all(lib, "symbol") {
+                    let Some(sub_name) = sexpr::txt(sub, 1) else { continue };
+                    let unit = sub_name.strip_prefix(stem).and_then(|r| r.strip_prefix('_')).and_then(|r| r.split('_').next()).and_then(|u| u.parse::<u32>().ok()).unwrap_or(0);
+                    count = count.max(unit);
+                    if let Some(display) = sexpr::find(sub, "unit_name").and_then(|u| sexpr::txt(u, 1)).filter(|d| !d.is_empty()) {
+                        names.insert(unit, display.to_string());
+                    }
+                }
+                units.insert(name.to_string(), (count, names));
+            }
+        }
+        for sym in sexpr::find_all(root, "symbol").filter(|s| sexpr::find(s, "lib_id").is_some()) {
+            let Some(uuid) = sexpr::find(sym, "uuid").and_then(|u| sexpr::txt(u, 1)) else { continue };
+            let lib = sexpr::find(sym, "lib_name").or_else(|| sexpr::find(sym, "lib_id")).and_then(|l| sexpr::txt(l, 1)).unwrap_or("");
+            let (count, names) = units.get(lib).cloned().unwrap_or((1, BTreeMap::new()));
+            let Some(instances) = sexpr::find(sym, "instances") else { continue };
+            for project in sexpr::find_all(instances, "project") {
+                for path in sexpr::find_all(project, "path") {
+                    let (Some(sheet_path), Some(reference)) = (sexpr::txt(path, 1), sexpr::find(path, "reference").and_then(|r| sexpr::txt(r, 1))) else { continue };
+                    let unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0) as u32;
+                    // `SubReference( unit )`: a display name after the separator, else the project's notation; only for a symbol of several units
+                    let sub = match names.get(&unit) {
+                        _ if count <= 1 => String::new(),
+                        Some(display) => ids.separator_text(true) + display,
+                        None => ids.sub_reference(unit, true),
+                    };
+                    let shown = format!("{reference}{sub}");
+                    by_path.entry(format!("{}/{uuid}", sheet_path.trim_end_matches('/'))).or_insert_with(|| shown.clone());
+                    by_uuid.entry(uuid.to_string()).or_insert(shown);
+                }
+            }
+        }
+    }
+    for (_, text) in files.iter_mut() {
+        if text.contains("${/") {
+            *text = rewrite_tokens(text, &|token| {
+                let (path, remainder) = token.split_once(':')?;
+                if !path.starts_with('/') {
+                    return None;
+                }
+                let found = by_path.get(path).or_else(|| path.rsplit('/').next().and_then(|u| by_uuid.get(u)))?;
+                Some(format!("${{{found}:{remainder}}}"))
+            });
+        }
+    }
+}
+
+/// Each `${...}` of `text` outside an escaped `\${...}` that `convert` has another form for, replaced by it.
+fn rewrite_tokens(text: &str, convert: &dyn Fn(&str) -> Option<String>) -> String {
     let b = text.as_bytes();
-    let mut out = String::with_capacity(text.len() + 64);
+    let mut out = String::with_capacity(text.len());
     let mut i = 0;
     let mut copied = 0;
     while i + 1 < b.len() {
@@ -73,8 +146,7 @@ fn rewrite(text: &str, paths: &BTreeMap<String, String>) -> String {
             let escaped = i >= 2 && b[i - 1] == b'\\' && b[i - 2] == b'\\';
             let Some(end) = token_end(b, i + 2) else { break };
             if !escaped {
-                let token = &text[i + 2..end];
-                if let Some(replacement) = convert(token, paths) {
+                if let Some(replacement) = convert(&text[i + 2..end]) {
                     out.push_str(&text[copied..i]);
                     out.push_str(&replacement);
                     copied = end + 1;
@@ -196,6 +268,33 @@ mod tests {
             text.contains(&format!("${{{root}/44444444-0000-4000-8000-000000000004:VALUE}} <Unresolved: U1B> ${{{root}/33333333-0000-4000-8000-000000000003:VALUE}} ${{{root}/55555555-0000-4000-8000-000000000005:VALUE}} <Unresolved: R3.1>")),
             "{text}"
         );
+    }
+
+    /// `ConvertKIIDsToRefs`: a path read from a file is the reference `GetRef( &aPath, true )` gives -- the unit in the project's notation for a symbol of
+    /// several units (the file's library symbol says how many), none for one unit; a path no symbol has keeps its form, and so does an escaped token.
+    #[test]
+    fn a_path_read_from_a_file_becomes_the_reference_it_names() {
+        let lib = r#"(lib_symbols (symbol "Amp:Dual" (symbol "Dual_1_1") (symbol "Dual_2_1")) (symbol "Device:R" (symbol "R_0_1") (symbol "R_1_1")))"#;
+        let root = "/aaaaaaaa-0000-4000-8000-000000000000";
+        let text = format!(
+            "(kicad_sch (version 20250114) (uuid \"aaaaaaaa-0000-4000-8000-000000000000\") {lib} {} {} {})",
+            symbol("33333333-0000-4000-8000-000000000003", "U1", 1, "LM358").replace("Device:R", "Amp:Dual"),
+            symbol("44444444-0000-4000-8000-000000000004", "U1", 2, "LM358").replace("Device:R", "Amp:Dual"),
+            symbol("55555555-0000-4000-8000-000000000005", "R3", 1, &format!("${{{root}/44444444-0000-4000-8000-000000000004:VALUE}} ${{{root}/55555555-0000-4000-8000-000000000005:VALUE}} ${{/x/99999999-0000-4000-8000-000000000009:VALUE}} \\\\${{{root}/55555555-0000-4000-8000-000000000005:VALUE}}"))
+        );
+        let read = |ids: eda_model::annotate::SubpartIds| {
+            let mut files = vec![("root.kicad_sch".to_string(), text.clone())];
+            kiids_to_refs(&mut files, &ids);
+            files.pop().unwrap().1
+        };
+        let letters = read(eda_model::annotate::SubpartIds::default());
+        assert!(letters.contains(&format!("\"${{U1B:VALUE}} ${{R3:VALUE}} ${{/x/99999999-0000-4000-8000-000000000009:VALUE}} \\\\${{{root}/55555555")), "{letters}");
+        let dotted = read(eda_model::annotate::SubpartIds { separator: '.' as u32, first_id: '1' as u32 });
+        assert!(dotted.contains("\"${U1.2:VALUE} ${R3:VALUE}"), "{dotted}");
+        // and written back, the reference finds the same symbol
+        let mut files = vec![("root.kicad_sch".to_string(), dotted)];
+        refs_to_kiids(&mut files, &|lib: &str, unit: u32| (lib == "Amp:Dual").then(|| format!(".{unit}")));
+        assert!(files[0].1.contains(&format!("${{{root}/44444444-0000-4000-8000-000000000004:VALUE}}")), "{}", files[0].1);
     }
 
     #[test]

@@ -115,3 +115,37 @@ fn kicad_resolves_the_dotted_cross_reference_we_write() {
     assert_eq!(field, "DUAL", "kicad-cli reads U1's unit 2 through the dotted form: {xml}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `SCHEMATIC::ConvertKIIDsToRefs` on the way in: a file KiCad saved keeps a cross-reference by the symbol's path; the import gives the model the reference in
+/// the project's notation (`${U1.2:Value}`), and the next write turns it into the derived file's path, which kicad-cli resolves (slow part).
+#[test]
+fn a_cross_reference_a_file_keeps_by_path_reads_back_as_the_reference() {
+    let dir = std::env::temp_dir().join(format!("eda_xref_read_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let m = model();
+    let text = export_kicad_sch(&design("${U1.2:Value}"), &m, &META).expect("the sheet exports");
+    assert!(text.contains("\"XREF\" \"${/"), "the file keeps it by path");
+    std::fs::write(dir.join("xref.kicad_sch"), &text).unwrap();
+    std::fs::write(dir.join("xref.kicad_pro"), r#"{ "meta": { "filename": "xref.kicad_pro", "version": 3 }, "schematic": { "subpart_id_separator": 46, "subpart_first_id": 49 } }"#).unwrap();
+    let (back, back_model, _) = eda_kicad::import_kicad_sch_tree(&dir.join("xref.kicad_sch")).expect("the file reads");
+    let sch = back.schematic.as_ref().unwrap();
+    assert_eq!(sch.user_fields.get("R3").and_then(|f| f.get("XREF")).map(String::as_str), Some("${U1.2:Value}"), "{:?}", sch.user_fields);
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else { return };
+    let mut again = back.clone();
+    if let Some(s) = again.schematic.as_mut() {
+        s.extras.subpart_id_separator = Some('.' as u32);
+        s.extras.subpart_first_id = Some('1' as u32);
+    }
+    let rewritten = export_kicad_sch(&again, &back_model, &META).expect("the sheet exports again");
+    std::fs::write(dir.join("xref.kicad_sch"), rewritten).unwrap();
+    let out = dir.join("again.xml");
+    let run = Command::new(&cli).args(["sch", "export", "netlist", "--format", "kicadxml", "-o"]).arg(&out).arg(dir.join("xref.kicad_sch")).output().expect("run kicad-cli");
+    assert!(run.status.success() && out.exists(), "{}", String::from_utf8_lossy(&run.stderr));
+    let xml = std::fs::read_to_string(&out).unwrap();
+    let field = xml.split("<field name=\"XREF\">").nth(1).and_then(|r| r.split("</field>").next()).unwrap_or_default().to_string();
+    assert_eq!(field, "DUAL", "{xml}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -1054,6 +1054,10 @@ pub fn import_kicad_sch_tree(path: &Path) -> Result<(Design, ConstraintModel, Sc
 /// [`import_kicad_sch_tree`] with the choices of [`ImportOptions`], applied to every file of the tree.
 pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
     let text = std::fs::read_to_string(path).map_err(|e| vec![CheckResult::fail("kicad_import.read", path.display().to_string(), format!("{e}"))])?;
+    // The symbol cross-references the files store by path (`${/<sheet path>/<uuid>:FIELD}`), as the references the model keeps them by
+    // (`SCHEMATIC::ConvertKIIDsToRefs`, `crate::sch_crossref::kiids_to_refs`): every file of the tree first, since a text may name a symbol of any sheet.
+    let tree_texts = tree_texts_with_refs(path, &text);
+    let text = tree_texts.get(path).cloned().unwrap_or(text);
     let (mut design, mut model, mut notes) = import_kicad_sch_with(&text, opts)?;
     let Some(dir) = path.parent() else { return Ok((design, model, notes)) };
     // the project's root sheet, whose uuid every instance path of this project starts with
@@ -1106,7 +1110,7 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
         }
         let child_path = dir.join(&file);
         let resolve_dir = child_path.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
-        let Ok(child_text) = std::fs::read_to_string(&child_path) else { continue };
+        let Some(child_text) = tree_texts.get(&child_path).cloned().or_else(|| std::fs::read_to_string(&child_path).ok()) else { continue };
         let Ok((child_design, child_model, child_notes)) = import_screen(&child_text, opts, Some(&root_uuid), &legacy_on_sheets) else { continue };
         symbol_places.insert(file.clone(), symbol_places_of(&child_text));
         notes.unresolved_symbols += child_notes.unresolved_symbols;
@@ -1181,6 +1185,40 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
 /// The key of the screen a sheet in a file of the folder `resolve_dir` names as `text`: the file's path from the root's folder `root_dir`, `/`-separated,
 /// with `.` and `..` worked out (`ampli_ht/filter.kicad_sch`). A file outside the root's folder keeps its path from it with the `..` in front, and an
 /// absolute name stays absolute. (The derived tree writes either inside its work folder: `crate::sheet_file_in_work`.)
+/// The text of every file of the tree rooted at `path` (whose text is `root_text`), by the path the tree walk reads it from (`dir.join( key )`, the key as
+/// [`sheet_file_key`] makes it), with their symbol cross-references turned from paths into references in the project's unit notation.
+fn tree_texts_with_refs(path: &Path, root_text: &str) -> BTreeMap<std::path::PathBuf, String> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut texts: BTreeMap<std::path::PathBuf, String> = BTreeMap::new();
+    texts.insert(path.to_path_buf(), root_text.to_string());
+    let mut queue: Vec<(std::path::PathBuf, String)> = vec![(path.to_path_buf(), root_text.to_string())];
+    while let Some((file, text)) = queue.pop() {
+        let resolve_dir = file.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
+        for child in crate::sheet_file::referenced_sheet_files(&text) {
+            let child_path = dir.join(sheet_file_key(dir, &resolve_dir, &child));
+            if texts.contains_key(&child_path) {
+                continue;
+            }
+            let Ok(child_text) = std::fs::read_to_string(&child_path) else { continue };
+            texts.insert(child_path.clone(), child_text.clone());
+            queue.push((child_path, child_text));
+        }
+    }
+    if texts.values().any(|t| t.contains("${/")) {
+        // the project's unit notation (`SCHEMATIC_SETTINGS::m_SubpartIdSeparator`, `m_SubpartFirstId`), which `GetRef( &aPath, true )` names a unit by
+        let pro: serde_json::Value = std::fs::read_to_string(path.with_extension("kicad_pro")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let (separator, first_id) = eda_model::annotate::SubpartIds::from_project(&pro["schematic"]);
+        let d = eda_model::annotate::SubpartIds::default();
+        let ids = eda_model::annotate::SubpartIds { separator: separator.unwrap_or(d.separator), first_id: first_id.unwrap_or(d.first_id) };
+        let mut files: Vec<(String, String)> = texts.iter().map(|(p, t)| (p.display().to_string(), t.clone())).collect();
+        crate::sch_crossref::kiids_to_refs(&mut files, &ids);
+        for ((_, text), (_, rewritten)) in texts.iter_mut().zip(files) {
+            *text = rewritten;
+        }
+    }
+    texts
+}
+
 pub fn sheet_file_key(root_dir: &Path, resolve_dir: &Path, text: &str) -> String {
     use std::path::Component;
     let normal = |p: &Path| -> Vec<String> {
