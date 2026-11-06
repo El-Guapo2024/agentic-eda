@@ -307,8 +307,7 @@ export function SymbolPropertiesDialog() {
     // Angle and Mirror (`SetOrientation`); the symbol in the hand is turned with R, X and Y
     const turn = open.carried ? null : orientationCmd(symbol.id, symbol.unit, orientationChoice(symbol.rot, symbol.mirror), orient);
     if (turn) cmds.push(turn);
-    // `SCH_EDIT_TOOL::Properties` after OK: an autoplaced symbol's fields placed again, in the way they were
-    if (cmds.length > fieldCmdsFrom || cmds.some((c) => c.op === "edit_symbol_fields")) cmds.push(autoplaceKeptCmd(owner));
+    const placeAgain = cmds.length > fieldCmdsFrom || cmds.some((c) => c.op === "edit_symbol_fields");
     if (sch && bodyStyle !== (symbol.body_style || 1)) {
       const change = setBodyStyleCmd(sch, [symbol.id], bodyStyle);
       if (change) cmds.push(change);
@@ -317,6 +316,9 @@ export function SymbolPropertiesDialog() {
     const alts = pinAlternatesCmd(symbol.id, symbol.unit, wasPins, pins);
     if (alts) cmds.push(alts);
     // `SetUnitSelection( .., unit_selection ); SetUnit( unit_selection )`, after everything named by the placement's key
+    // `SCH_EDIT_TOOL::Properties` after OK: an autoplaced symbol's fields placed again, in the way they were (after the body style, which moves the pins; before the
+    // unit and the reference, which the placement's key names)
+    if (placeAgain || cmds.length > fieldCmdsFrom) cmds.push(autoplaceKeptCmd(owner));
     if (unit !== drawnUnit(symbol)) cmds.push(setSymbolUnitCmd(symbol.id, symbol.unit, unit, false));
     if (renamed) cmds.push({ op: "rename_symbol", id: symbol.id, new_id: trimmedRef });
     // the symbol in the hand takes the changes (actions/schPlaceActions.ts `editCarried`)
