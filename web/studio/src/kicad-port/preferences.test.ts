@@ -154,3 +154,19 @@ test("the middle and right drags are pan by default, read from storage, and reac
   savePreferences(storage, p);
   assert.deepEqual([loadPreferences(storage).dragMiddle, loadPreferences(storage).dragRight], ["zoom", "none"]);
 });
+
+test("UI-LEFT C1: the left button's drag, the pan on movement with a key and the horizontal pan are kept and checked, and the two Reset buttons set the horizontal pan as KiCad's do", () => {
+  const p = sanitizePreferences({ dragLeft: "select", motionPanModifier: "alt", horizontalPan: true });
+  assert.equal(p.dragLeft, "select");
+  assert.equal(p.motionPanModifier, "alt");
+  assert.equal(p.horizontalPan, true);
+  const bad = sanitizePreferences({ dragLeft: "pan", motionPanModifier: "meta", horizontalPan: "yes" });
+  assert.equal(bad.dragLeft, DEFAULT_PREFERENCES.dragLeft);
+  assert.equal(bad.motionPanModifier, "none");
+  assert.equal(bad.horizontalPan, false);
+  // `onMouseDefaults`: m_checkEnablePanH off; `onTrackpadDefaults`: on
+  assert.equal(MOUSE_SCROLL_DEFAULTS.horizontalPan, false);
+  assert.equal(TRACKPAD_SCROLL_DEFAULTS.horizontalPan, true);
+  const s = toViewControlSettings({ ...DEFAULT_PREFERENCES, dragLeft: "drag_selected", motionPanModifier: "ctrl", dragMiddle: "zoom", dragRight: "none" });
+  assert.deepEqual([s.dragLeft, s.motionPanModifier, s.dragMiddle, s.dragRight], ["drag_selected", "ctrl", "zoom", "none"]);
+});

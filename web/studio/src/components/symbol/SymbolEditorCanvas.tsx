@@ -28,12 +28,18 @@ import { measureStrokeText } from "../text/strokeFont";
 import { SymbolSnap, type SymbolSnapMods } from "./symbolSnap";
 import { paintSnapOverlay } from "../canvas/snapOverlayPainter";
 import { layerColor } from "../canvas/layers";
-import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
+import { handleWheel, leftDragOutcome } from "../../kicad-port/viewControls";
+import { wheelInputOf } from "../../hooks/canvasWheel";
+import { useLibraryViewControls } from "../libraryViewControls";
+import { SelectionMarquee, type Marquee } from "../SelectionMarquee";
+import { rectSelectionHits } from "../../kicad-port/selectRect";
+import { symbolItemBoxes } from "../../kicad-port/itemBoxes";
+import { useStudioState } from "../../state/store";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { isMac } from "../../platform";
 import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
-import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
+import { computeClickModifiers, applySingleClickModifier, applyBoxSelectionModifiers, hasModifier, isCrossingSelection, type ClickModifiers } from "../../kicad-port/selection";
 import { distToSegment } from "../canvas/itemHitTest";
 import { symbolGraphicDistance } from "../../kicad-port/libEditorHit";
 import { polyBegin, polyContinue, polyFinish } from "../../kicad-port/symPolyDraw";
@@ -91,7 +97,9 @@ function pinHitDistance(pin: LibrarySymbolPin, wx: number, wy: number): number {
 }
 
 type DragState =
-  | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] }
+  /** `SCH_SELECTION_TOOL::selectMultiple`: the selection rectangle from where the press was; `click` is the item the press was on, selected as a click when the release comes
+   * without a drag ("Left button drag:" sent the drag to the rectangle). */
+  | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; modifiers: ClickModifiers; click: string | null }
   | { kind: "move"; refs: string[]; moveKind: "pin" | "graphic" | "field"; startWorld: [number, number]; snapOrigin: [number, number] }
   /** The point editor's drag of one edit point (`SCH_POINT_EDITOR::Main`): which shape and which point. */
   | { kind: "point"; id: string; index: number };
@@ -157,7 +165,6 @@ export function SymbolEditorCanvas() {
   /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag. Made at every press. */
   const gestureRef = useRef<ClickDragGesture | null>(null);
   /** A right-button press that became a pan-drag: the `contextmenu` event that follows its release must not open the menu (a drag is not a click). */
-  const justPannedRef = useRef(false);
   /** The view as of now, for work that finishes after a round trip (the anchor tool re-centres the view once the symbol has moved). */
   const viewRef = useRef(state.view);
   viewRef.current = state.view;
@@ -167,6 +174,23 @@ export function SymbolEditorCanvas() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const wheelPrefs = useWheelPrefs();
   const userMovedRef = useRef(false);
+  const [marquee, setMarquee] = useState<Marquee | null>(null);
+  const studioPrefs = useStudioState().prefs;
+  // The middle and right drags, the pan on movement with a key and the auto-pan (`WX_VIEW_CONTROLS`), as the board and the schematic have them.
+  const viewCtl = useLibraryViewControls({
+    containerRef,
+    view: state.view,
+    setView: (view) => dispatch({ type: "SET_VIEW", view }),
+    settings: wheelPrefs.settings,
+    zoomSpeed: studioPrefs.zoomSpeed,
+    autoPan: studioPrefs.autoPan,
+    autoPanAcceleration: studioPrefs.autoPanAcceleration,
+    busy: () => dragRef.current?.kind === "box" || dragRef.current?.kind === "point" || state.movePreview != null || state.drawState != null || state.carry != null,
+    shown: true,
+    onUserMoved: () => {
+      userMovedRef.current = true;
+    },
+  });
 
   const sym = state.symbol;
   /** The fields on show: the symbol's own list, those with a text, the hidden ones only while Show Hidden Fields is on (kicad-port/symFieldLayout.ts). */
@@ -390,14 +414,10 @@ export function SymbolEditorCanvas() {
     const gesture = new ClickDragGesture(dragRuleFor(isMac()));
     gesture.down(e.clientX, e.clientY, e.timeStamp);
     gestureRef.current = gesture;
-    justPannedRef.current = false;
     const [wx, wy] = worldAt(e);
     setContextMenu(null);
 
-    if (e.button === 1 || e.button === 2) {
-      dragRef.current = { kind: "pan", button: e.button as 1 | 2, startScreen: [e.clientX, e.clientY], startView: [state.view.x, state.view.y] };
-      return;
-    }
+    if (viewCtl.press(e)) return;
     if (e.button !== 0) return;
 
     if (state.carry) {
@@ -468,6 +488,13 @@ export function SymbolEditorCanvas() {
     const hit = hitTest(wx, wy);
     const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
     const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
+    // `SCH_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )` under "Left button drag:" (`leftDragOutcome`): a drag with a modifier, from empty space, or from an item the
+    // setting does not let the drag pick up draws the selection rectangle; the press then changes nothing yet -- a release without a drag is the click.
+    const outcome = leftDragOutcome(wheelPrefs.settings.dragLeft, { modifier: hasModifier(modifiers), selectionEmpty: state.selection.size === 0, onItem: hit != null, inSelection: hit != null && state.selection.has(hit.id) });
+    if (!hit || outcome === "area") {
+      dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY], modifiers, click: hit?.id ?? null };
+      return;
+    }
     if (hit) {
       const refs = applySingleClickModifier(state.selection, hit.id, modifiers);
       dispatch({ type: "SET_SELECTION", refs });
@@ -478,8 +505,6 @@ export function SymbolEditorCanvas() {
         dragRef.current = { kind: "move", refs: held, moveKind: hit.kind, startWorld: [wx, wy], snapOrigin: [ox, oy] };
         dispatch({ type: "SET_MOVE_ORIGIN", at: { x: ox, y: oy } });
       }
-    } else if (!hasModifier(modifiers)) {
-      dispatch({ type: "CLEAR_SELECTION" });
     }
   };
 
@@ -487,6 +512,7 @@ export function SymbolEditorCanvas() {
     const [wx, wy] = worldAt(e);
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
     const motion = gestureRef.current?.move(e.clientX, e.clientY, e.timeStamp);
+    if (viewCtl.move(e, !!motion?.dragging)) return;
     // The tools that place something: the grid helper sees every move, so the marker and the snap lines follow the cursor; what is carried follows it.
     if (state.carry) {
       const [cx, cy] = carryPoint(e, wx, wy);
@@ -501,10 +527,12 @@ export function SymbolEditorCanvas() {
       setPointDrag({ id: drag.id, index: drag.index, at: [p[0], p[1]] });
       return;
     }
-    if (drag.kind === "pan") {
-      userMovedRef.current = true;
-      if (motion?.dragging) justPannedRef.current = drag.button === 2;
-      dispatch({ type: "SET_VIEW", view: { ...state.view, x: drag.startView[0] + (e.clientX - drag.startScreen[0]), y: drag.startView[1] + (e.clientY - drag.startScreen[1]) } });
+    if (drag.kind === "box") {
+      if (!motion?.dragging) return; // a click with a little jitter, not a rectangle
+      const rect = containerRef.current!.getBoundingClientRect();
+      const x0 = drag.startScreen[0] - rect.left;
+      const x1 = e.clientX - rect.left;
+      setMarquee({ x0, y0: drag.startScreen[1] - rect.top, x1, y1: e.clientY - rect.top, crossing: isCrossingSelection(x0, x1) });
     } else if (drag.kind === "move") {
       // Nothing is picked up until the press has become a drag (tool_dispatcher.cpp: 8 px, or on macOS a motion after 300 ms held).
       if (!motion?.dragging) return;
@@ -516,11 +544,28 @@ export function SymbolEditorCanvas() {
     }
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (e: React.PointerEvent) => {
     gestureRef.current?.up();
+    viewCtl.release();
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag) return;
+    if (drag.kind === "box") {
+      const box = marquee;
+      setMarquee(null);
+      if (!box) {
+        // no drag: the click -- on an item it selects it (as the modifiers say), on nothing it clears the selection unless a modifier is held
+        if (drag.click) dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, drag.click, drag.modifiers) });
+        else if (!hasModifier(drag.modifiers)) dispatch({ type: "CLEAR_SELECTION" });
+        return;
+      }
+      // `selectMultiple`: what the rectangle takes of the unit and body style on show, as its direction says
+      const [wx, wy] = worldAt(e);
+      const hits = sym ? rectSelectionHits(symbolItemBoxes(sym, state.activeUnit, state.activeBodyStyle), drag.startWorld, [wx, wy]) : [];
+      if (hits.length > 0 || hasModifier(drag.modifiers)) dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits, drag.modifiers) });
+      else dispatch({ type: "CLEAR_SELECTION" });
+      return;
+    }
     if (drag.kind === "point") {
       // the drag ends: the shape with the point where it was dropped, one undo step (`SCH_COMMIT::Push`)
       const g = api.graphicById(drag.id);
@@ -568,8 +613,7 @@ export function SymbolEditorCanvas() {
     }
     userMovedRef.current = true;
     const rect = containerRef.current!.getBoundingClientRect();
-    const input: WheelInput = { deltaX: e.deltaX, deltaY: e.deltaY, shiftKey: e.shiftKey, ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey, mac: isMac(), altKey: e.altKey, x: e.clientX - rect.left, y: e.clientY - rect.top };
-    const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
+    const result = handleWheel(state.view, { width: rect.width, height: rect.height }, wheelInputOf(e, rect), wheelPrefs.settings, wheelPrefs.controller);
     if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.view });
   };
   useNonPassiveWheel(containerRef, onWheel); // React's onWheel is passive: preventDefault() would be ignored and logged
@@ -619,10 +663,7 @@ export function SymbolEditorCanvas() {
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     // A right-drag pans and opens nothing: the button went up as a drag (TA_MOUSE_UP), not a click, so no menu.
-    if (justPannedRef.current) {
-      justPannedRef.current = false;
-      return;
-    }
+    if (viewCtl.takeJustPanned()) return;
     const [wx, wy] = worldAt(e);
     const hit = hitTest(wx, wy);
     if (hit && !state.selection.has(hit.id)) dispatch({ type: "SET_SELECTION", refs: [hit.id] });
@@ -677,6 +718,7 @@ export function SymbolEditorCanvas() {
       onContextMenu={onContextMenu}
     >
       <canvas ref={canvasRef} />
+      <SelectionMarquee m={marquee} />
       {!sym && state.libId && <div className="pcb-canvas-empty">{state.error ?? "Loading symbol…"}</div>}
       {/* Nothing open: the empty canvas and its grid, like KiCad's, with one quiet line saying how to open something. */}
       {!sym && !state.libId && <div className="canvas-empty-hint">No symbol loaded -- double-click one in Libraries, or press Ctrl+N for a new one</div>}

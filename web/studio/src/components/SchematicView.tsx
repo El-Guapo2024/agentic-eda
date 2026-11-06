@@ -25,7 +25,8 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { fetchHierarchy } from "../api/schControlClient";
 import { placeUnfoldLabel, unfoldEntrySize } from "../kicad-port/schBusUnfold";
 import { boundsOfPoints, fitTransform } from "./canvas/view";
-import { computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, handleWheel, type WheelInput } from "../kicad-port/viewControls";
+import { computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, handleWheel, leftDragOutcome, motionPan } from "../kicad-port/viewControls";
+import { wheelInputOf } from "../hooks/canvasWheel";
 import { panByWorldDelta } from "../kicad-port/view";
 import { useWheelPrefs } from "../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../hooks/useNonPassiveWheel";
@@ -214,6 +215,10 @@ export function SchematicView() {
   const elbowRef = useRef<{ mid: readonly [number, number]; end: readonly [number, number] } | null>(null);
   /** The plain-click/drag symbol-drag distinguisher's deferred click (see DragState's own "move" kind doc) -- set only for a click that keeps a multi-selection's whole group for a potential drag, same as Canvas.tsx's own `pendingClickRef`. */
   const pendingClickRef = useRef<string | null>(null);
+  /** A press on an item whose drag draws the selection area ("Left button drag:", `leftDragOutcome`): what the press does as a click when it is released without a drag. */
+  const areaClickRef = useRef<(() => void) | null>(null);
+  /** `m_metaPanStart` of "Pan on mouse movement with key:" (null while the key is up). */
+  const motionPanRef = useRef<{ x: number; y: number } | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
   /** The right-click menu (`SCH_SELECTION_TOOL`'s context menu): where it is and what it offers for the selection. */
@@ -574,17 +579,7 @@ export function SchematicView() {
     // wx_view_controls.cpp onWheel via handleWheel, the same as the PCB and library canvases: the wheel gestures and zoom speed
     // are Preferences > Mouse and Touchpad's.
     const rect = containerRef.current!.getBoundingClientRect();
-    const input: WheelInput = {
-      deltaX: e.deltaX,
-      deltaY: e.deltaY,
-      shiftKey: e.shiftKey,
-      ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
-      mac: isMac(),
-      altKey: e.altKey,
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    };
-    const result = handleWheel(state.schematicView, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
+    const result = handleWheel(state.schematicView, { width: rect.width, height: rect.height }, wheelInputOf(e, rect), wheelPrefs.settings, wheelPrefs.controller);
     if (result.kind !== "unhandled") dispatch({ type: "SET_SCHEMATIC_VIEW", view: result.view });
   };
   // React's own onWheel is passive, so its `preventDefault()` was ignored (and logged on every tick) while the page scrolled under the zoom.
@@ -863,6 +858,19 @@ export function SchematicView() {
             dispatch({ type: "SET_SCH_WIRE_PICK", pick: null });
             return;
           }
+          // `SCH_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )` under "Left button drag:" (`leftDragOutcome`): with "Draw selection rectangle", from an item not selected under
+          // "Drag selected objects", or from outside a selection that is not empty under "Drag any object", the drag draws the selection area; the press then selects
+          // nothing yet, and a release without a drag is the click.
+          if (leftDragOutcome(wheelPrefs.settings.dragLeft, { modifier: false, selectionEmpty: state.selection.size === 0, onItem: true, inSelection: state.selection.has(picked) }) === "area") {
+            const wire = wireId ? sch.wires.find((w) => w.id === wireId) : undefined;
+            const vertices = wire ? (wirePick(wire, [wx, wy], tolerance) ?? undefined) : undefined;
+            areaClickRef.current = () => {
+              dispatch({ type: "SET_SELECTION", refs: [picked] });
+              dispatch({ type: "SET_SCH_WIRE_PICK", pick: wire && vertices ? { id: wire.id, vertices } : null });
+            };
+            dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY] };
+            return;
+          }
           // sch_selection_tool.cpp Main(): a plain click-and-drag starting on an item that's already part of a larger selection keeps the
           // WHOLE group for the drag, deferring the "collapse to just this one" effect to onPointerUp in case no real drag happens;
           // otherwise (re)select just this one item immediately. Either way, arm a potential drag -- source's own default for a plain drag
@@ -896,6 +904,13 @@ export function SchematicView() {
       onPointerMove={(e) => {
         const bounds = containerRef.current?.getBoundingClientRect();
         if (bounds) lastPointerRef.current = { x: e.clientX - bounds.left, y: e.clientY - bounds.top, clientX: e.clientX, clientY: e.clientY };
+        // `WX_VIEW_CONTROLS::onMotion`'s `m_motionPanModifier`: with the key of "Pan on mouse movement with key:" held the sheet follows the pointer; the tools still see the motion.
+        const metaPan = motionPan(state.schematicView, wheelPrefs.settings.motionPanModifier, { altKey: e.altKey, ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey, shiftKey: e.shiftKey }, motionPanRef.current, { x: e.clientX, y: e.clientY });
+        motionPanRef.current = metaPan.start;
+        if (metaPan.view && state.schematicView.scale > 0) {
+          userMovedRef.current = true;
+          dispatch({ type: "SET_SCHEMATIC_VIEW", view: metaPan.view });
+        }
         if (!sch) return;
         const [wx, wy] = toWorld(e.clientX, e.clientY);
         dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
@@ -1070,7 +1085,11 @@ export function SchematicView() {
           pendingClickRef.current = null;
           return;
         }
+        const areaClick = areaClickRef.current;
+        areaClickRef.current = null;
         if (drag.kind === "box" && sch) {
+          // a press on an item that would have drawn the area, released without a drag: the click it is
+          if (!marquee && areaClick) areaClick();
           if (marquee) {
             const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
             const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);

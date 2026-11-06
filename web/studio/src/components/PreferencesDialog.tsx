@@ -5,8 +5,8 @@
 // (common/dialogs/panel_mouse_settings.cpp), opened by `common.SuiteControl.openPreferences` (Ctrl+,), with the board editor's "Step for rotate commands" and
 // "Flip board items" and its "Magnetic Points" of PANEL_PCBNEW_EDIT_OPTIONS (pcbnew/dialogs/panel_edit_options.cpp: Snap to Pads, Snap to Tracks and Vias, Snap
 // to Graphics) below it.
-// Edits `state.prefs` (kicad-port/preferences.ts), which every canvas's wheel handler and the PCB canvas's
-// auto-pan loop read -- see that file's header for exactly which settings are offered and which are not.
+// Edits `state.prefs` (kicad-port/preferences.ts), which every canvas's wheel, drag and auto-pan handling reads -- see that file's header for exactly which
+// settings are offered and which are not.
 //
 // Same behaviours as the C++: the scroll-gesture grid keeps one action per column (`OnScrollRadioButton` moves a
 // displaced action to the first free column), a clash that remains (two "--") shows the warning and refuses OK
@@ -142,26 +142,46 @@ export function PreferencesDialog() {
                   Automatic
                 </label>
               </div>
-              <div className="filter-row" title="What dragging with the middle mouse button does (schematic editor)">
-                <span style={{ width: 170 }}>Middle button drag:</span>
+              <div className="filter-row" title="How fast to pan when moving an object off the edge of the screen">
+                <span style={{ width: 120 }}>Auto pan speed:</span>
+                <input type="range" min={1} max={10} step={1} aria-label="Auto pan speed" value={draft.autoPanAcceleration} onChange={(e) => set({ autoPanAcceleration: Number(e.target.value) })} />
+                <span style={{ width: 20, textAlign: "right" }}>{draft.autoPanAcceleration}</span>
+              </div>
+
+              {/* `PANEL_MOUSE_SETTINGS`' "Drag Gestures": every canvas reads them (kicad-port/viewControls.ts `leftDragOutcome`, `dragActionOf`, `motionPan`) */}
+              {heading("Drag Gestures")}
+              <div className="filter-row">
+                <span style={{ width: 210 }}>Left button drag:</span>
+                <select aria-label="Left button drag" data-testid="pref-drag-left" value={draft.dragLeft} onChange={(e) => set({ dragLeft: e.target.value as Preferences["dragLeft"] })}>
+                  <option value="select">Draw selection rectangle</option>
+                  <option value="drag_selected">Drag selected objects; otherwise draw selection rectangle</option>
+                  <option value="drag_any">Drag any object (selected or not)</option>
+                </select>
+              </div>
+              <div className="filter-row">
+                <span style={{ width: 210 }}>Middle button drag:</span>
                 <select aria-label="Middle button drag" data-testid="pref-drag-middle" value={draft.dragMiddle} onChange={(e) => set({ dragMiddle: e.target.value as Preferences["dragMiddle"] })}>
                   <option value="pan">Pan</option>
                   <option value="zoom">Zoom</option>
                   <option value="none">None</option>
                 </select>
               </div>
-              <div className="filter-row" title="What dragging with the right mouse button does (schematic editor); a click without a drag still opens the context menu">
-                <span style={{ width: 170 }}>Right button drag:</span>
+              <div className="filter-row">
+                <span style={{ width: 210 }}>Right button drag:</span>
                 <select aria-label="Right button drag" data-testid="pref-drag-right" value={draft.dragRight} onChange={(e) => set({ dragRight: e.target.value as Preferences["dragRight"] })}>
                   <option value="pan">Pan</option>
                   <option value="zoom">Zoom</option>
                   <option value="none">None</option>
                 </select>
               </div>
-              <div className="filter-row" title="How fast to pan when moving an object off the edge of the screen">
-                <span style={{ width: 120 }}>Auto pan speed:</span>
-                <input type="range" min={1} max={10} step={1} aria-label="Auto pan speed" value={draft.autoPanAcceleration} onChange={(e) => set({ autoPanAcceleration: Number(e.target.value) })} />
-                <span style={{ width: 20, textAlign: "right" }}>{draft.autoPanAcceleration}</span>
+              <div className="filter-row">
+                <span style={{ width: 210 }}>Pan on mouse movement with key:</span>
+                <select aria-label="Pan on mouse movement with key" data-testid="pref-motion-pan" value={draft.motionPanModifier} onChange={(e) => set({ motionPanModifier: e.target.value as Preferences["motionPanModifier"] })}>
+                  <option value="none">None</option>
+                  <option value="alt">{isMac() ? "Option" : "Alt"}</option>
+                  <option value="ctrl">{isMac() ? "Cmd" : "Ctrl"}</option>
+                  <option value="shift">Shift</option>
+                </select>
               </div>
 
               {heading("Editing Options (PCB Editor)")}
@@ -257,13 +277,17 @@ export function PreferencesDialog() {
                   {row("Pan left/right:", "panH", { checked: draft.reverseScrollPanH, onChange: (v) => set({ reverseScrollPanH: v }) })}
                 </tbody>
               </table>
+              <label className="filter-row" title="Pan the canvas left and right when scrolling left to right on the touchpad">
+                <input type="checkbox" data-testid="pref-horizontal-pan" checked={draft.horizontalPan} onChange={(e) => set({ horizontalPan: e.target.checked })} />
+                Pan left/right with horizontal movement
+              </label>
               <div style={{ minHeight: 18, marginTop: 4, fontSize: 12, color: "#ff6666" }}>{valid ? "" : "Only one action can be assigned to each column"}</div>
               <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
                 <button onClick={() => setDraft((d) => ({ ...d, ...MOUSE_SCROLL_DEFAULTS }))}>Reset to Mouse Defaults</button>
                 <button onClick={() => setDraft((d) => ({ ...d, ...TRACKPAD_SCROLL_DEFAULTS }))}>Reset to Trackpad Defaults</button>
               </div>
               <div style={{ fontSize: 11, opacity: 0.65, marginTop: 10 }}>
-                Not offered in the browser: center and warp cursor on zoom (a page cannot move the pointer), the drag gestures and the pan-on-movement key.
+                Not offered in the browser: center and warp cursor on zoom (a page cannot move the pointer). A touchpad pinch zooms about the pointer whatever the scroll settings say, as in KiCad.
               </div>
               </>
             )}
