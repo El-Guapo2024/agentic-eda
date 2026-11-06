@@ -233,6 +233,11 @@ export type FpGraphic =
 export type FpTextInfo = Pick<FieldInfo, "id" | "text" | "x" | "y" | "angle" | "w" | "h" | "thickness" | "layer" | "halign" | "valign" | "mirror" | "bold" | "italic" | "upright" | "knockout" | "face"> & {
   /** Set when the text is exactly `${REFERENCE}` or `${VALUE}`: the Appearance panel's References and Values rows switch it (`PCB_TEXT::ViewGetLOD`). */
   role?: "reference" | "value";
+  /** The layout in the footprint's frame (`lx`, `ly`, `langle`, as a field's) and the text as stored, variables unresolved (`raw`), for Text Properties (UI-LEFT P15). */
+  lx?: Nm;
+  ly?: Nm;
+  langle?: number;
+  raw?: string;
 };
 
 /** The options of `DIALOG_EXCHANGE_FOOTPRINTS` (crates/ops/src/fp_exchange.rs `ExchangeOptions`; kicad-port/pcbExchange.ts has the three presets). */
@@ -2170,6 +2175,8 @@ export type Cmd =
   | { op: "set_via_props"; id: string; props: ViaProps }
   /** Vias' and pads' own teardrop parameters (`GetTeardropParams() = ..`); `null` gives them back to Board Setup's block. */
   | { op: "set_teardrop_params"; ids: string[]; params: TeardropParams | null }
+  /** Text Properties of a footprint's own text on the board (`REF~t<k>`): its text and layout (the footprint's frame), or `delete` it. */
+  | { op: "edit_board_footprint_text"; id: string; text?: string; layout?: FieldLayoutCmd; delete?: boolean }
   /** A footprint's own paste margins (`set_footprint_paste_margin`); null is the board's. */
   | { op: "set_footprint_paste_margin"; part: string; margin: Nm | null; ratio: number | null }
   /**

@@ -86,6 +86,11 @@ pub(crate) fn add_art(p: &mut Value, part: &Part, fp: &FootprintInstance, footpr
                             "italic": t.italic,
                             "upright": t.keep_upright,
                             "knockout": t.knockout,
+                            // the layout as the footprint holds it (its frame; the layer the board side's above), and the text as stored, for Text Properties (UI-LEFT P15)
+                            "lx": art.texts[i].layout.at.x,
+                            "ly": art.texts[i].layout.at.y,
+                            "langle": art.texts[i].layout.angle,
+                            "raw": raw,
                         });
                         // The outline font the text is set in (`FpText::face`); absent for KiCad's stroke font.
                         if let Some(face) = &art.texts[i].face {

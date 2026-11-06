@@ -56,7 +56,8 @@ export function drawFootprintArt(ctx: CanvasRenderingContext2D, view: ViewTransf
 
   for (const t of [...texts].sort((a, b) => layerRank(a.layer) - layerRank(b.layer))) {
     if (!t.text || !artTextShown(opts.layerVisible, part, t)) continue;
-    const color = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
+    // the footprint selected, or the text on its own (UI-LEFT P15)
+    const color = selected || opts.selection.has(t.id) ? layerColor("selection") : layerColor(realLayerKey(t.layer));
     withAlpha(ctx, layerAlpha(opts, layerStateKey(t.layer)), () => drawArtText(ctx, view, t, color, !!opts.sketchText));
   }
 }

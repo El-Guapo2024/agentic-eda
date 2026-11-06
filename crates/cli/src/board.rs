@@ -1930,6 +1930,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetCornerRadius { ids, radius } => format!("shape corner-radius {} {}", mm(*radius), ids.join(" ")),
         Cmd::SetViaProps { id, .. } => format!("via props {id}"),
         Cmd::SetTeardropParams { ids, .. } => format!("teardrop params {}", ids.join(" ")),
+        Cmd::EditBoardFootprintText { id, delete, .. } => format!("footprint text {id}{}", if *delete { " delete" } else { "" }),
         Cmd::SetFootprintPasteMargin { part, .. } => format!("footprint paste-margin {part}"),
         Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => {
             let mut what: Vec<&str> = Vec::new();
@@ -2281,6 +2282,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetCornerRadius { .. } => "shape",
         Cmd::SetViaProps { .. } => "via",
         Cmd::SetTeardropParams { .. } => "teardrops",
+        Cmd::EditBoardFootprintText { .. } => "footprint-text",
         Cmd::SetFootprintPasteMargin { .. } => "footprint",
         Cmd::EditBoardFootprint { .. } => "footprint-edit",
         Cmd::EditBoardField { .. } => "field-edit",

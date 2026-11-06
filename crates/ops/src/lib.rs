@@ -73,6 +73,7 @@ pub mod fp_editor;
 mod sym_derive;
 mod fix_shapes;
 mod fp_edit;
+pub mod fp_texts;
 mod fp_models;
 mod import_foreign;
 pub use import_foreign::imported_intent_file;
@@ -1252,6 +1253,17 @@ pub enum Cmd {
     SetCornerRadius { ids: Vec<String>, radius: Nm },
     /// A via's tenting, covering, plugging, capping, filling, backdrill and post-machining (`TRACK_VIA_DESC`'s rows past "Via Type"), all at once.
     SetViaProps { id: String, props: eda_model::via_extra::ViaProps },
+    /// Text Properties of a footprint's own text on the board (`REF~t<k>`, UI-LEFT P15; [`fp_texts`]): its text and layout (`layout` in the footprint's frame,
+    /// its layer the board side's), or `delete` it; in the instance's own copy of its footprint.
+    EditBoardFootprintText {
+        id: String,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        layout: Option<eda_model::fp_edit::FieldLayout>,
+        #[serde(default)]
+        delete: bool,
+    },
     /// The own teardrop parameters of vias and pads (`BOARD_CONNECTED_ITEM::GetTeardropParams`): Track & Via Properties', Pad Properties' and the Properties
     /// panel's Teardrops rows; `None` gives the items back to Board Setup's block ([`eda_model::teardrop_params`]).
     SetTeardropParams {
@@ -2660,6 +2672,7 @@ impl Cmd {
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::MirrorItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } | Cmd::EditTextStyle { id, .. } | Cmd::SetViaProps { id, .. } => vec![id.as_str()],
             Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } | Cmd::SetTeardropParams { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::EditBoardFootprintText { id, .. } => vec![id.as_str()],
             Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
@@ -3408,6 +3421,7 @@ impl<'a> Board<'a> {
             Cmd::SetCornerRadius { ids, radius } => self.set_corner_radius(ids, *radius),
             Cmd::SetViaProps { id, props } => self.set_via_props(id, props),
             Cmd::SetTeardropParams { ids, params } => self.set_teardrop_params(ids, params.as_ref()),
+            Cmd::EditBoardFootprintText { id, text, layout, delete } => self.edit_board_footprint_text(id, text.as_deref(), layout.as_ref(), *delete),
             Cmd::SetFootprintPasteMargin { part, margin, ratio } => self.set_footprint_paste_margin(part, *margin, *ratio),
             Cmd::Batch { cmds } => {
                 let saved = self.design.clone();
