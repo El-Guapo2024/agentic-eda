@@ -3532,8 +3532,8 @@ impl<'a> Board<'a> {
             }
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit, .. } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit).and_then(|_| self.commit_clean_up()),
             Cmd::EmbedLibSymbol { symbol } => self.embed_lib_symbol(symbol),
-            Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
-            Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
+            Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.on_symbols_screen(id, |b| b.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref())),
+            Cmd::RenameSymbol { id, new_id } => self.on_symbols_screen(id, |b| b.rename_symbol(id, new_id)),
             Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
             Cmd::AddDesignVariant { name, description } => self.add_design_variant(name, description),
             Cmd::RemoveDesignVariant { name } => self.remove_design_variant(name),
@@ -5364,6 +5364,29 @@ impl<'a> Board<'a> {
         r
     }
 
+    /// `f` on the screen that has the symbol `id`, when the screen the verbs act on does not: the board names a part, not the sheet its symbol is on, so a board-side
+    /// edit of it (Footprint Properties' Reference and Value, the Properties panel's Reference; UI-LEFT P14) reaches the symbol wherever it is, as KiCad's Update
+    /// Schematic from PCB does (`BACK_ANNOTATE` walks every sheet's references).
+    fn on_symbols_screen(&mut self, id: &str, f: impl FnOnce(&mut Self) -> Result<(), Vec<CheckResult>>) -> Result<(), Vec<CheckResult>> {
+        let here = match &self.focus {
+            None => self.design.schematic.as_ref(),
+            Some(file) => self.design.sheet_contents.as_ref().and_then(|c| c.get(file)),
+        }
+        .is_some_and(|s| s.symbols.iter().any(|x| x.id == id));
+        let elsewhere = if here {
+            None
+        } else if self.design.schematic.as_ref().is_some_and(|s| s.symbols.iter().any(|x| x.id == id)) {
+            Some(None)
+        } else {
+            self.design.sheet_contents.iter().flatten().find(|(_, sc)| sc.symbols.iter().any(|x| x.id == id)).map(|(file, _)| Some(file.clone()))
+        };
+        let Some(screen) = elsewhere else { return f(self) };
+        let saved = std::mem::replace(&mut self.focus, screen);
+        let r = f(self);
+        self.focus = saved;
+        r
+    }
+
     /// Every placed symbol of every screen but the one the verbs act on: (reference, unit). A reference is one part for the whole design
     /// (the model, the PCB and the net list know it by that name), so what is placed on another sheet counts when a symbol is added,
     /// renamed or numbered here.
@@ -6015,7 +6038,8 @@ impl<'a> Board<'a> {
     /// footprint` ERC finding the way a hand-edited `.kicad_sch` can.
     fn edit_symbol_fields(&mut self, id: &str, value: Option<&str>, footprint: Option<&str>, datasheet: Option<&str>) -> Result<(), Vec<CheckResult>> {
         // A footprint no symbol is for: its own Value (Footprint Properties' Value row, `FOOTPRINT::SetValue`; UI-LEFT P14).
-        if let (Some(v), true) = (value, self.board_part_without_symbol(id)) {
+        let board_only = self.design.drawings.as_ref().is_some_and(|d| d.board_parts.iter().any(|b| b.reference == id)) && self.board_part_without_symbol(id);
+        if let (Some(v), true) = (value, board_only) {
             let Some(bp) = self.drawings_mut().board_parts.iter_mut().find(|b| b.reference == id) else {
                 return Err(vec![CheckResult::fail("ops_unknown_symbol", id, "no footprint of the board has its own value to edit")]);
             };
@@ -6285,7 +6309,7 @@ impl<'a> Board<'a> {
         }
         // A footprint no symbol is for (Footprint Properties' Reference of a board-only footprint, `FOOTPRINT::SetReference`): the board's part alone is renamed
         // (UI-LEFT P14).
-        if self.board_part_without_symbol(id) {
+        if self.design.drawings.as_ref().is_some_and(|d| d.board_parts.iter().any(|b| b.reference == id)) && self.board_part_without_symbol(id) {
             if new_id.trim().is_empty() {
                 return Err(vec![CheckResult::fail("ops_bad_symbol", id, "a footprint needs a reference designator")]);
             }

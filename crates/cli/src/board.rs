@@ -1581,7 +1581,17 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // The studio shows a board with no stored schematic as the one derived
     // from its intent; the first schematic edit stores that derived one, so
     // editing what is on screen works (an undo goes back to "none stored").
-    if cmd.domain() == Domain::Schematic && design.schematic.is_none() {
+    // (A batch that edits the board first and then a symbol -- Footprint Properties' new Value or Reference, UI-LEFT P14 -- edits the schematic too.)
+    let edits_schematic = |c: &Cmd| -> bool {
+        fn any(c: &Cmd) -> bool {
+            match c {
+                Cmd::Batch { cmds } => cmds.iter().any(any),
+                c => c.domain() == Domain::Schematic,
+            }
+        }
+        any(c)
+    };
+    if edits_schematic(cmd) && design.schematic.is_none() {
         // The schematic the studio shows -- module sheets for a design of more than one module -- so the edit lands on what is on
         // screen, in whichever sheet the command names.
         let derived = derived_schematic(&design, &model)?;

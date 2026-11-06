@@ -47,7 +47,8 @@ export function padIds(part: { ref: string; pads?: readonly { num: string }[] })
  * as it does, so a refresh of the board must not drop them from the selection (a field that is hidden is still there to be edited).
  */
 export function subItemIds(board: Pick<BoardState, "parts">): string[] {
-  return board.parts.filter((p) => p.placed).flatMap((p) => [...padIds(p), ...(p.fields ?? []).map((f) => f.id)]);
+  // (and a footprint's own texts, `REF~t<k>`: UI-LEFT P15)
+  return board.parts.filter((p) => p.placed).flatMap((p) => [...padIds(p), ...(p.fields ?? []).map((f) => f.id), ...(p.texts ?? []).map((t) => t.id)]);
 }
 
 /** The pad `id` names and the footprint it belongs to, or null (a `REF.NUMBER[#k]` of a placed footprint). */
