@@ -35,6 +35,7 @@ import type { BusEntry, ErcViolation, LabelShape, LabelScope, LibFill, NoConnect
 import { junctionDrawn, junctionRadiusNm } from "../../kicad-port/schSetup";
 import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
+import { overrideSchItemColors } from "../../state/colorThemeStore";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
 import { resolveLibSymbol, symbolBounds as libSymbolBounds, type ResolvedGraphic } from "./libSymbol";
 import { resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
@@ -397,7 +398,7 @@ function drawSchFields(ctx: CanvasRenderingContext2D, fields: SchField[], unitSu
       v: f.v,
       vertical: f.vertical,
       // a field's own text colour (`EDA_TEXT::GetTextColor`, Symbol Properties' Color column) wins over its layer's (`SCH_PAINTER::getRenderColor`)
-      color: picked ? layerColor("LAYER_SELECTION_SHADOWS") : !f.visible ? layerColor("LAYER_HIDDEN") : f.color && f.color.a > 0 ? rgba(f.color) : (color ?? fieldColor(f.name)),
+      color: picked ? layerColor("LAYER_SELECTION_SHADOWS") : !f.visible ? layerColor("LAYER_HIDDEN") : f.color && f.color.a > 0 && !overrideSchItemColors() ? rgba(f.color) : (color ?? fieldColor(f.name)),
       // a bold text is written with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leans
       thicknessNm: f.bold ? Math.round(sizeNm / 5) : undefined,
       italic: f.italic,
@@ -777,7 +778,7 @@ function drawSelectedPin(ctx: CanvasRenderingContext2D, view: ViewTransform, pin
 
 function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: SchematicLabel, wires: SchematicWire[], on: boolean) {
   // `SCH_PAINTER::getRenderColor`: a label's own text colour (Label Properties' Color) overrides its layer's, for the text and the flag
-  const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : l.color && l.color.a > 0 ? rgba(l.color) : labelLayerColor(l.scope);
+  const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : l.color && l.color.a > 0 && !overrideSchItemColors() ? rgba(l.color) : labelLayerColor(l.scope);
   const hair = 1 / view.scale;
   // the size, bold and italic Label Properties set (`EDA_TEXT`): a bold text is written with a fifth of its size for a pen, an italic one leans
   const sizeNm = l.size_nm && l.size_nm > 0 ? l.size_nm : LABEL_TEXT_SIZE_NM;
@@ -823,7 +824,7 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
  */
 function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText, on: boolean) {
   // `SCH_PAINTER::getRenderColor`: the text's own colour (Text Properties' Color) wins over `LAYER_NOTES`
-  const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : t.color && t.color.a > 0 ? rgba(t.color) : layerColor("LAYER_NOTES");
+  const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : t.color && t.color.a > 0 && !overrideSchItemColors() ? rgba(t.color) : layerColor("LAYER_NOTES");
   // its bold and italic (`EDA_TEXT::IsBold` / `IsItalic`): a bold text is written with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leans.
   // **Differs**: an outline font's text (`font` naming a family) is drawn with the stroke font, as every text of the canvas is.
   const look = { thicknessNm: t.bold ? Math.round(t.size_nm / 5) : undefined, italic: !!t.italic };
@@ -863,7 +864,8 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
     ctx.restore();
   }
   ctx.save();
-  const border = props?.border_color && props.border_color.a > 0 ? rgba(props.border_color) : layerColor("LAYER_SHEET");
+  // (with "Override individual item colors" the border is the layer's; the background keeps the sheet's own, as KiCad's override branch keeps it)
+  const border = props?.border_color && props.border_color.a > 0 && !overrideSchItemColors() ? rgba(props.border_color) : layerColor("LAYER_SHEET");
   ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : border;
   ctx.lineWidth = Math.max(props?.border_width_nm && props.border_width_nm > 0 ? props.border_width_nm : 152_400, hair);
   ctx.strokeRect(x, y, w, h);
@@ -972,7 +974,8 @@ function strokeLook(st: SchStroke | null | undefined, fallbackNm: number, cls?: 
   const style = st?.style && st.style !== "default" ? st.style : cls?.style !== undefined && cls?.style !== null ? CLASS_LINE_STYLES[cls.style] : st?.style;
   const own = st?.color && (st.color.r || st.color.g || st.color.b || st.color.a) ? rgba(st.color) : null;
   const ratios = paintedSetup ? { dash: paintedSetup.dash_ratio, gap: paintedSetup.gap_ratio } : undefined;
-  return { width, dash: dashPattern(style, width, ratios), color: own ?? cls?.color ?? null };
+  // "Override individual item colors": the layer's colour, not the line's or its net class's (`getRenderColor`'s `m_OverrideItemColors`)
+  return { width, dash: dashPattern(style, width, ratios), color: overrideSchItemColors() ? null : (own ?? cls?.color ?? null) };
 }
 
 /**
@@ -1105,7 +1108,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // wires. A selected one is drawn in the selection color.
   for (const j of sch.junctions ?? []) {
     // The diameter and colour Junction Properties set (`SCH_JUNCTION::GetDiameter` / `GetColor`).
-    const own = j.look?.color && (j.look.color.r || j.look.color.g || j.look.color.b || j.look.color.a) ? rgba(j.look.color) : null;
+    const own = j.look?.color && (j.look.color.r || j.look.color.g || j.look.color.b || j.look.color.a) && !overrideSchItemColors() ? rgba(j.look.color) : null;
     ctx.fillStyle = opts.selection.has(j.id) ? layerColor("LAYER_SELECTION_SHADOWS") : (own ?? layerColor("LAYER_JUNCTION"));
     ctx.beginPath();
     const r = junctionRadiusNm(j.look?.diameter_nm ? j.look.diameter_nm : dotDiameter, wireWidthAt(j.at[0], j.at[1]));
@@ -1156,7 +1159,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
       if (!f.shown || (!f.visible && !paintedShowHiddenFields)) continue;
       const picked = f.id !== undefined && opts.selection.has(f.id);
       const layer = !f.visible ? layerColor("LAYER_HIDDEN") : f.intersheet_refs ? layerColor("LAYER_GLOBLABEL") : f.name === "Netclass" ? layerColor("LAYER_NETCLASS_REFS") : layerColor("LAYER_FIELDS");
-      const color = picked ? layerColor("LAYER_SELECTION_SHADOWS") : f.visible && f.color && f.color.a > 0 ? rgba(f.color) : layer;
+      const color = picked ? layerColor("LAYER_SELECTION_SHADOWS") : f.visible && f.color && f.color.a > 0 && !overrideSchItemColors() ? rgba(f.color) : layer;
       drawKicadText(ctx, f.shown, f.at, { sizeNm: f.size_nm || FIELD_SIZE_NM, h: f.h, v: f.v ?? "center", vertical: f.vertical, color, italic: f.italic });
     }
   }

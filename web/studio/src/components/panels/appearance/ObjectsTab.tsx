@@ -7,7 +7,8 @@
 import { useAppearanceView } from "./useAppearanceView";
 import { Eye, Pane, Swatch } from "./shared";
 import { useThemeSwatchEdit } from "./themeSwatch";
-import { layerColor } from "../../canvas/layers";
+import { layerColor, layerColorIn } from "../../canvas/layers";
+import type { ThemeEditor } from "../../../kicad-port/colorTheme";
 import { OBJECT_ROWS, type ObjectId, type ObjectRow } from "../../../kicad-port/appearance";
 import { objectChecked } from "../../../kicad-port/appearanceOps";
 
@@ -29,13 +30,13 @@ const COLOR_KEY: Partial<Record<ObjectId, string>> = {
  * One object's row (`rebuildObjects`' `appendObject`): the chip, the eye ("Show or hide <name>", none for a row without a checkbox), the name, and -- for a row with
  * an opacity -- the slider ("Set opacity of <name>"), `opacity` 0..1.
  */
-export function ObjectRowView({ row, checked, opacity, onToggle, onOpacity, onEditColor }: { row: ObjectRow & { id: ObjectId }; checked: boolean; opacity?: number; onToggle: () => void; onOpacity?: (value: number) => void; onEditColor?: (colorKey: string) => void }) {
+export function ObjectRowView({ row, checked, opacity, onToggle, onOpacity, onEditColor, theme }: { row: ObjectRow & { id: ObjectId }; checked: boolean; opacity?: number; onToggle: () => void; onOpacity?: (value: number) => void; onEditColor?: (colorKey: string) => void; theme?: ThemeEditor }) {
   const id = row.id;
   const colorKey = COLOR_KEY[id];
   return (
     <div className="ap-row" data-object={id} title={row.tooltip}>
       <Swatch
-        css={colorKey ? layerColor(colorKey) : null}
+        css={colorKey ? (theme ? layerColorIn(theme, colorKey) : layerColor(colorKey)) : null}
         hidden={!colorKey}
         title={colorKey ? (onEditColor ? "Left double click or middle click for color change, right click for menu" : "Color of this object (set by the color theme)") : undefined}
         onEdit={colorKey && onEditColor ? () => onEditColor(colorKey) : undefined}

@@ -9,6 +9,7 @@ import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
 import { drawStrokeText } from "../text/strokeFont";
 import { dashPattern } from "./schGraphicsPainter";
+import { overrideSchItemColors } from "../../state/colorThemeStore";
 
 const rgbaOf = (c: readonly [number, number, number, number]): string => `rgba(${c[0]},${c[1]},${c[2]},${(c[3] / 255).toFixed(3)})`;
 
@@ -49,7 +50,7 @@ export function paintSchTables(ctx: CanvasRenderingContext2D, view: ViewTransfor
         ctx.fill();
         ctx.restore();
       }
-      const color = selected ? selectedColor : c.color ? rgbaOf(c.color) : base;
+      const color = selected ? selectedColor : c.color && !overrideSchItemColors() ? rgbaOf(c.color) : base;
       for (const line of c.lines) {
         if (!line.text) continue;
         const sizeNm = Math.max(c.size_h, hair * 8);
@@ -73,7 +74,7 @@ export function paintSchTables(ctx: CanvasRenderingContext2D, view: ViewTransfor
     ctx.lineJoin = "round";
     for (const b of t.borders) {
       if (b.width < 0) continue;
-      ctx.strokeStyle = tableSelected ? selectedColor : b.color ? rgbaOf(b.color) : base;
+      ctx.strokeStyle = tableSelected ? selectedColor : b.color && !overrideSchItemColors() ? rgbaOf(b.color) : base;
       ctx.lineWidth = Math.max(b.width, hair * (tableSelected ? 2 : 1));
       const dash = b.style === "solid" || b.style === "default" ? undefined : b.style;
       ctx.setLineDash(dash ? dashPattern(dash, b.width) : []);

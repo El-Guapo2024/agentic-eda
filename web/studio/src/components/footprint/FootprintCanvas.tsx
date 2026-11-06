@@ -61,6 +61,7 @@ import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
 import { leaderModeOf, zoneClick, zoneFinish, zoneLeader } from "../../kicad-port/pcbDrawZone";
 import { isGroup } from "../../kicad-port/groupTree";
 import { fpItemToolClick, fpItemToolFinish, fpItemToolMotion, fpItemToolSnap, paintFpItemToolPreview } from "./fpItemTools";
+import { paintingIn, useColorThemeStamp } from "../../state/colorThemeStore";
 import "../../styles/canvas.css";
 
 const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier">> = {
@@ -315,8 +316,9 @@ export function FootprintCanvas() {
   const checker = useFootprintChecker();
   const checkMarkers = checker.name === state.name && checker.markers.length > 0 ? checker.markers.map((m, i) => ({ at: m.at as [number, number], severity: m.severity, selected: checker.selected === i })) : undefined;
 
-  // Render loop.
-  useEffect(() => {
+  // Render loop, in the Footprint Editor's own colour theme (Preferences > Footprint Editor > Colors), redrawn when it changes.
+  const themeStamp = useColorThemeStamp();
+  useEffect(() => paintingIn("footprint", () => {
     const canvas = canvasRef.current;
     if (!canvas || containerSize.width === 0) return;
     const dpr = window.devicePixelRatio || 1;
@@ -383,7 +385,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview]);
+  }), [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview, themeStamp]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

@@ -19,7 +19,8 @@
 import colorsData from "../../kicad/colors.json";
 import type { ColorsFile } from "../../kicad/types";
 import { placeholderColor } from "../../kicad/placeholderColors";
-import { pcbThemeColor } from "../../state/colorThemeStore";
+import { editorThemeColor, paintingIn } from "../../state/colorThemeStore";
+import type { ThemeEditor } from "../../kicad-port/colorTheme";
 
 const colors = colorsData as ColorsFile;
 
@@ -104,14 +105,20 @@ export const STANDARD_LAYERS: Array<{ key: string; label: string }> = [
 
 export function layerColor(bucketOrRealKey: string): string {
   const realKey = realColorKey(bucketOrRealKey);
-  // The board editor's colour theme (state/colorThemeStore.ts, Preferences > PCB Editor > Colors) decides the layers of its board namespace.
-  const themed = pcbThemeColor(realKey);
+  // The colour theme of the editor being painted (state/colorThemeStore.ts, Preferences > <editor> > Colors) decides the layers of its namespace: the
+  // board's for the PCB and Footprint Editors, the schematic's for the schematic and Symbol Editors.
+  const themed = editorThemeColor(realKey);
   if (themed) return themed;
   if (colors.meta.generated) {
     const hit = colors.colors[realKey];
     if (hit) return hit;
   }
   return placeholderColor(bucketOrRealKey);
+}
+
+/** A layer's colour in `editor`'s theme, outside its canvas's painting (the Footprint Editor's Appearance panel shows its own theme's swatches). */
+export function layerColorIn(editor: ThemeEditor, bucketOrRealKey: string): string {
+  return paintingIn(editor, () => layerColor(bucketOrRealKey));
 }
 
 /**

@@ -119,6 +119,7 @@ import { isCarryTool, PREVIEW_AT } from "../kicad-port/schPlaceTool";
 import { beginItem, carrySymbol, placeCarried } from "../actions/schPlaceActions";
 import { imageSizeNm, SCALE_PPM } from "../kicad-port/refImage";
 import { useImageVersion } from "./canvas/imageCache";
+import { paintingIn, useColorThemeStamp } from "../state/colorThemeStore";
 import "../styles/canvas.css";
 
 /** `m_DefaultTextSize`: the glyph size of a sheet's text until Schematic Setup says another (50 mil), micrometres; Draw Table sizes its columns and rows by it. */
@@ -444,7 +445,9 @@ export function SchematicView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.activeTool, state.armedSymbol]);
 
-  useEffect(() => {
+  // the schematic editor's colour theme (Preferences > Schematic Editor > Colors): the sheet is painted in it, and again when it changes
+  const themeStamp = useColorThemeStamp();
+  useEffect(() => paintingIn("schematic", () => {
     const canvas = canvasRef.current;
     if (!canvas || !sch || !displaySch || containerSize.width === 0) return;
     const dpr = window.devicePixelRatio || 1;
@@ -576,7 +579,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, shapeEditor, pointDrag, gridDisplay, gridNm, gridSettingsList, state.gridVisible, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion]);
+  }), [sch, displaySch, shapeEditor, pointDrag, gridDisplay, gridNm, gridSettingsList, state.gridVisible, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion, themeStamp]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
