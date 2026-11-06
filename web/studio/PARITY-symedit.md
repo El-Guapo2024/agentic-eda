@@ -346,7 +346,7 @@ after `kicad-cli sym upgrade`); the browser check `e2e/symedit-edit.check.js` (9
 Properties, a pin row of the pane, Copy and Paste with KiCad's text, Save), whose saved library `kicad-cli sym export svg` plots (the curve as a cubic path). `e2e/lib-editors.check.js` and
 `e2e/lib-edit.check.js` place their pins with the second click now (27/27 and 15/15).
 
-Left: the point editor of the other shapes; Increment of the pin being placed; the clipboard's images; Import Graphics' curves (still cut into segments); the Properties pane's rows the library symbol has no place for (above).
+Left: ~~the point editor of the other shapes~~ (done: section "The point editor of every shape", UI-LEFT-2 YY1); Increment of the pin being placed; the clipboard's images; Import Graphics' curves (still cut into segments); the Properties pane's rows the library symbol has no place for (above).
 
 ## The Pin Table, Pin Properties, Find and Replace, the tree, Export SVG (UI-LEFT Y6-Y8, X11; 2026-11-06, `task-u5-dialogs`)
 
@@ -389,6 +389,25 @@ The dialog's Units & Body Styles and Pin Connections parts follow 25ec2335 where
 Tests: `crates/ops/src/sym_units_tests.rs` (4 new: the custom styles' populate and prune, the grids' rows, the JSON keys, a derived symbol refused), `crates/kicad/src/symbol_import.rs` (2 new: the text box's colours, font and Private and a private text; `(body_styles ..)`), `sch_export_api` (the custom style's SVG name); `kicad-port/symBodyStyles.test.ts` (7), `symText.test.ts` (+1); browser checks `symedit-props-u6` 5/5, `symedit-u5` 8/8, `symedit` 9/9, `lib-editors` (its text box scenario now expects the colour fill); the library round trip of KiCad's installed symbols and footprints (`EDA_SLOW_TESTS=1 cargo test -p eda-kicad --test library_roundtrip`) 2/2.
 
 Left: a shape's Private flag and its border and fill colours (Shape Properties; the reader keeps a colour fill as the body's background); the text box's border style in the dialog; the schematic's Symbol Properties and Cycle Body Style for a third custom style (the engine's placed symbol has one alternate); embedded files and 25ec2335's Pin Map tab (named pin-to-pad maps of file version 20260629).
+
+## The point editor of every shape (UI-LEFT-2 YY1; 2026-11-07, `task-v1-handles`)
+
+KiCad's Symbol Editor runs the schematic's `SCH_POINT_EDITOR` (eeschema/tools/sch_point_editor.cpp at 8303b2ad, `m_isSymbolEditor`) on its `SCH_SHAPE` and `SCH_TEXTBOX` items;
+the studio's port is the same module (`kicad-port/eePointEdit.ts`, PARITY-sch section 70), with the symbol's mm and +y up converted (`kicad-port/symPointEdit.ts`).
+
+| Item | Status | KiCad file:function |
+|---|---|---|
+| Handles on one selected rectangle (the corners, the centre, the sides' middles), circle (centre, end), arc (start, middle, end, centre), polyline (each vertex and side) and text box -- the bezier's as before; a drag is one `replace_symbol_graphic`, one undo step | **ported** (only the bezier had them) | `makePointsAndBehavior`, the behaviours' `MakePoints` / `UpdateItem` |
+| A rectangle's side takes the pins whose root is on it (not at its ends) along, of the rectangle's unit or every unit for a common one, each pin alone (no twin in Synchronized Pins Mode), with Preferences > Symbol Editor > "Keep pins attached when dragging edges" (on by default); a corner's drag takes none; the drag and the pins one batch, one undo step | **ported** | `RECTANGLE_POINT_EDIT_BEHAVIOR::dragPinsOnEdge`, `SYMBOL_EDITOR_SETTINGS::m_dragPinsAlongWithEdges`, `PANEL_SYM_EDITING_OPTIONS` |
+| The arc's drag in the Symbol Editor's own arc edit mode (`m_ArcEditMode`, `editing.arc_edit_mode` of its settings); Ctrl+Space and the three `pointEditorArcKeep*` actions set it on the Symbol tab, and the context menu of one arc has Cycle Arc Editing Mode | **ported** | `SCH_POINT_EDITOR::changeArcEditMode` (`symCfg`), `Init`'s `arcIsEdited` |
+| Create Corner / Remove Corner in the context menu of one polyline (the cursor on its outline; the point under the cursor on a vertex, more than two of them), one undo step; the polyline is an open chain, so its closing side is no candidate | **ported** | `addCornerCondition`, `addCorner`, `removeCornerCondition`, `removeCorner` |
+| A derived symbol (`IsSymbolAlias`) has no point editor | **identical** | `SCH_POINT_EDITOR::Main` |
+
+**Differs**: a symbol's rectangle has no corner radius here (`LibrarySymbolGraphic`'s rectangle holds none), so it has no radius point; a circle's end handle is on the radius to the right once a drag lands (the file keeps a radius).
+
+**Left**: the Symbol Editor's Draw Arc keeps 8303b2ad's way (KiCad 25ec2335's five modes are the schematic's only here); a pin's own point editor does not exist in KiCad either.
+
+Tests: `kicad-port/symPointEdit.test.ts` (the conversion both ways, `dragPinsOnEdge` with and without the setting, a corner's drag, the circle, polyline and arc, the Symbol Editor's own arc mode), `eePointEdit.test.ts`; browser: `e2e/handles-v1.check.js` (the rectangle's side taking the pin along and its corner not, a circle's radius, a polyline's vertex and Create Corner from the context menu, an arc's end, one undo step each).
 
 ## Differs from KiCad
 
