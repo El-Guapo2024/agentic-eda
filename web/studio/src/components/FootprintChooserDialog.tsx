@@ -205,7 +205,7 @@ export function FootprintChooserDialog({ title = "Footprint Chooser", preselect 
   };
 
   const s = chooser.status;
-  const hint = s.error ? `Error: ${s.error}` : s.searching ? (s.indexing ? `Searching… ${s.indexed} of ${s.total || "…"} libraries read` : `${s.matches} match${s.matches === 1 ? "" : "es"}${s.truncated ? " (showing the best)" : ""}`) : "";
+  const hint = s.error ? `Error: ${s.error}` : s.searching ? (s.indexing ? (s.total ? `Searching… ${s.indexed} of ${s.total} libraries read` : "Searching…") : `${s.matches} match${s.matches === 1 ? "" : "es"}${s.truncated ? " (showing the best)" : ""}`) : "";
   const info = shown?.info;
   const doc = info && urlIn(info.description);
 
@@ -223,7 +223,7 @@ export function FootprintChooserDialog({ title = "Footprint Chooser", preselect 
           <div className="chooser-left">
             <div className="chooser-search">
               <input id="library-tree-search" data-chooser-search autoFocus placeholder="Search footprints (name, description, keywords)" value={chooser.query} onChange={(e) => chooser.setQuery(e.target.value)} />
-              <div className="chooser-hint" data-chooser-status>
+              <div className="chooser-hint" data-chooser-status data-chooser-answered={s.answered ?? undefined}>
                 {hint}
               </div>
             </div>

@@ -54,11 +54,12 @@
     try { await closeChoosers(); } catch { /* ignore */ }
     results.push(entry);
   };
-  /** Type a search into the open chooser and wait until the server has read every library and answered. */
+  /** Type a search into the open chooser and wait until the list answers those very words: the chooser says which search its list answers in full
+   *  (`data-chooser-answered`, null while the server has not answered the one typed or is still reading libraries). Waiting for "N matches" alone read the
+   *  last search's list when the new answer came late (the flake of 2026-11-06: `resistance>10k` answered with `resistance<10k`'s LcRes_Low). */
   const search = async (root, q, ms = 90000) => {
     setValue(root.querySelector("#library-tree-search"), q);
-    await sleep(400);
-    return until(() => / match(es)?/.test(status(root)) && !/Searching/.test(status(root)), ms);
+    return until(() => root.querySelector("[data-chooser-status]")?.dataset.chooserAnswered === q && / match(es)?/.test(status(root)), ms);
   };
 
   const s = Date.now().toString(36);
