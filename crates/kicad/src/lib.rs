@@ -92,7 +92,7 @@ pub mod library_table;
 pub mod design_block;
 
 mod bus;
-pub use bus::expand_bus_members;
+pub use bus::{bus_member_tree, expand_bus_members};
 
 mod sch_clipboard;
 pub use sch_clipboard::{fragment_as_sheet_file, parse_clipboard, write_clipboard, CopyInput, CopyOutput};

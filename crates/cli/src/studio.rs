@@ -2078,6 +2078,10 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if w.bus {
                 let text = if w.net.starts_with('/') { w.net.rsplit('/').next().unwrap_or(&w.net) } else { w.net.as_str() };
                 v["members"] = json!(eda_kicad::expand_bus_members(text, &design.bus_aliases).unwrap_or_default());
+                // the menu's items with their submenus: a bus of a group (a vector, an alias) lists its own members (UI-LEFT S19)
+                if let Some(tree) = eda_kicad::bus_member_tree(text, &design.bus_aliases) {
+                    v["member_tree"] = json!(tree.into_iter().map(|(name, members)| json!({ "name": name, "members": members })).collect::<Vec<_>>());
+                }
             }
             v
         })

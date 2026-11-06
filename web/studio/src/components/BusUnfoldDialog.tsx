@@ -33,11 +33,25 @@ export function BusUnfoldDialog() {
         <div className="dialog-body">
           <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 6 }}>Choose the net to break out of the bus:</div>
           <div style={{ maxHeight: 240, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
-            {picker.members.map((m) => (
-              <button key={m} style={{ textAlign: "left" }} onClick={() => choose(m)}>
-                {m}
-              </button>
-            ))}
+            {/* `BUS_UNFOLD_MENU::update`: a member that is a bus itself (a vector or an alias in a group) is a submenu of its own members (UI-LEFT S19) */}
+            {(picker.tree ?? picker.members.map((name) => ({ name, members: [] as string[] }))).map((m) =>
+              m.members.length === 0 ? (
+                <button key={m.name} style={{ textAlign: "left" }} onClick={() => choose(m.name)}>
+                  {m.name}
+                </button>
+              ) : (
+                <details key={m.name} open>
+                  <summary style={{ cursor: "pointer" }}>{m.name}</summary>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2, marginLeft: 14 }}>
+                    {m.members.map((sub) => (
+                      <button key={sub} style={{ textAlign: "left" }} onClick={() => choose(sub)}>
+                        {sub}
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              )
+            )}
           </div>
         </div>
         <div className="dialog-footer">

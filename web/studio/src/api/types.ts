@@ -3028,6 +3028,8 @@ export interface SchematicWire {
   bus: boolean;
   /** A bus's member nets (`D[0..3]` -> D0..D3, aliases and groups expanded) -- only sent for a bus wire; what the Unfold from Bus menu lists. */
   members?: string[];
+  /** The Unfold from Bus menu's items (`BUS_UNFOLD_MENU::update`): each member, with its own members for a bus in a group (its submenu). Absent from an older backend. */
+  member_tree?: Array<{ name: string; members: string[] }>;
   /** The stroke Wire/Bus Properties set (width, style, colour); absent when the wire has the default one. */
   stroke?: SchStroke;
   /** What the wire's net class draws it with where its own stroke says nothing (`SCH_LINE::GetPenWidth` / `GetLineColor` / `GetEffectiveLineStyle`): the class's

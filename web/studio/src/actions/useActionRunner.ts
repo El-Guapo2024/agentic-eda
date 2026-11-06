@@ -2367,7 +2367,8 @@ export function useActionRunner() {
             dispatch({ type: "TOAST", message: "Bus has no members", kind: "info" });
             return;
           }
-          dispatch({ type: "SET_BUS_UNFOLD_PICKER", picker: { bus: bus.net, entryAt: bus.at, members: bus.members } });
+          const tree = sch.wires.find((w) => w.id === bus.id)?.member_tree;
+          dispatch({ type: "SET_BUS_UNFOLD_PICKER", picker: { bus: bus.net, entryAt: bus.at, members: bus.members, ...(tree ? { tree } : {}) } });
         })
       );
 

@@ -21,6 +21,7 @@
 import { isTerminalPoint } from "../kicad-port/schTerminalPoint";
 import { existingSingleClickItem } from "../kicad-port/schSingleClick";
 import { arcMotion } from "../kicad-port/arcGeom";
+import { drawStrokeText } from "./text/strokeFont";
 import { arcEditPoints, findArcPoint, moveArcPoint, schArcEditMode, type ArcRole } from "../kicad-port/schArcEdit";
 import { paintArcEditPoints } from "./schematic/schArcEditPaint";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -517,6 +518,13 @@ export function SchematicView() {
         ctx.moveTo(unfold.entryAt[0], unfold.entryAt[1]);
         ctx.lineTo(unfold.entryAt[0] + size[0], unfold.entryAt[1] + size[1]);
         ctx.stroke();
+        // the member's label rides the cursor until the first click puts it down (`m_busUnfold.label->SetPosition( cursorPos )`, its preview; UI-LEFT S19, r6):
+        // a local label's text on its baseline, reading right from the anchor (`SPIN_STYLE::RIGHT`)
+        if (!unfold.labelAt && state.cursorNm) {
+          const [lx, ly] = snapToGrid(state.cursorNm.x, state.cursorNm.y);
+          const sizeNm = 1_270_000;
+          drawStrokeText(ctx, unfold.net, lx + Math.round(sizeNm * 0.15), ly - Math.round(sizeNm * 0.15), { sizeNm, justify: "left", color: layerColor("LAYER_LOCLABEL"), thicknessNm: Math.round(sizeNm / 8) });
+        }
       }
     }
     // The shape or rule area being drawn (kicad-port/schShapeEdit.ts, polygonGeom.ts), rubber-banded to the cursor.
