@@ -372,3 +372,71 @@ fn kicad_cli_reads_the_rule_areas_as_its_own_rewrite_and_finds_the_repeated_chan
         assert_eq!(after_counts.get(kind).copied().unwrap_or(0), first_counts.get(kind).copied().unwrap_or(0), "{kind}: the repeat adds none: {after_counts:?}");
     }
 }
+
+/// The `(comp ..)` blocks of kicad-cli's netlist (`--format kicadsexpr`): reference -> (the sheet's path, `(sheetpath (names ..))`, and the `Sheetfile` property), which is
+/// what `BOARD_NETLIST_UPDATER::updateFootprintParameters` sets a footprint's sheet name and file from (`GetHumanReadablePath()`, `GetProperties().at( "Sheetfile" )`).
+fn netlist_sheets(net: &str) -> BTreeMap<String, (String, String)> {
+    let quoted = |block: &str, key: &str| -> Option<String> {
+        let at = block.find(key)? + key.len();
+        let rest = &block[at..];
+        let start = rest.find('"')? + 1;
+        let end = start + rest[start..].find('"')?;
+        Some(rest[start..end].to_string())
+    };
+    let mut out = BTreeMap::new();
+    for block in net.split("(comp").skip(1) {
+        let block = block.split("(libparts").next().unwrap_or(block);
+        let Some(reference) = quoted(block, "(ref") else { continue };
+        let names = quoted(block, "(names").unwrap_or_default();
+        let file = block.split("(property").find(|p| p.contains("\"Sheetfile\"")).and_then(|p| quoted(p, "(value")).unwrap_or_default();
+        out.insert(reference, (names, file));
+    }
+    out
+}
+
+/// UI-LEFT P20 (R7-D5): the board this studio writes of the three channels gives each footprint the sheet KiCad's Update PCB from Schematic would give it -- the sheet path and
+/// the file kicad-cli's netlist of the derived schematic has for its symbol -- so KiCad's own Repeat Layout finds the channels' sheets on the file; kicad-cli's rewrite of the file
+/// keeps them; and the sheets KiCad's Generate Placement Rule Areas lists (`GeneratePotentialRuleAreas`: the board's `(GetSheetname(), GetSheetfile())` pairs) are the studio's.
+#[test]
+fn the_board_file_has_the_sheets_kicads_update_from_schematic_gives_and_kicads_generate_lists_the_studios_rows() {
+    if !slow() {
+        return;
+    }
+    let Some(cli) = eda_kicad_engine::find_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let dir = scratch("u5_sheets");
+    channels(&dir);
+    // the derived project, the schematic with it (`--schematic-parity`)
+    let drc = crate::kicad_engine::drc_with(&dir, false, true).expect("kicad-cli's DRC with the schematic");
+    let parity = drc["schematic_parity"].as_array().cloned().unwrap_or_default();
+    assert!(parity.is_empty(), "kicad-cli's schematic parity finds differences: {parity:#?}");
+    let (pcb, sch) = (dir.join(".kicad").join("board.kicad_pcb"), dir.join(".kicad").join("board.kicad_sch"));
+    let net = dir.join("board.net");
+    let run = eda_kicad_engine::cli_command(&cli, None).args(["sch", "export", "netlist", "--format", "kicadsexpr", "-o"]).arg(&net).arg(&sch).output().expect("kicad-cli runs");
+    assert!(run.status.success(), "sch export netlist: {}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+    let want = netlist_sheets(&std::fs::read_to_string(&net).unwrap());
+    assert_eq!(want.len(), 12, "{want:?}");
+    let sheets_of = |file: &Path| -> BTreeMap<String, (String, String)> {
+        let (d, _, _) = eda_kicad::import_kicad_pcb(&std::fs::read_to_string(file).unwrap()).expect("the board reads back");
+        d.drawings.unwrap().footprint_extras.into_iter().map(|e| (e.id, (e.sheetname.unwrap_or_default(), e.sheetfile.unwrap_or_default()))).collect()
+    };
+    let ours = sheets_of(&pcb);
+    assert_eq!(ours, want, "every footprint has the sheet path and file of its symbol");
+    let distinct: std::collections::BTreeSet<&(String, String)> = ours.values().collect();
+    assert_eq!(distinct.len(), 3, "three channel sheets: {distinct:?}");
+    assert!(distinct.iter().all(|(name, file)| name.starts_with('/') && name.ends_with('/') && name.len() > 2 && file.ends_with(".kicad_sch")), "{distinct:?}");
+    // kicad-cli's rewrite (`pcb upgrade --force`: KiCad's parser and writer) keeps them
+    let copy = dir.join("upgraded.kicad_pcb");
+    std::fs::copy(&pcb, &copy).unwrap();
+    let done = eda_kicad_engine::cli_command(&cli, None).args(["pcb", "upgrade", "--force"]).arg(&copy).output().expect("kicad-cli runs");
+    assert!(done.status.success(), "pcb upgrade: {}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+    assert_eq!(sheets_of(&copy), ours, "kicad-cli's rewrite keeps every footprint's sheet");
+    // the studio's Generate dialog lists the sheets KiCad's lists on the file
+    let (meta, d, model) = load(&dir).unwrap();
+    let rows = Board::new(d, &model, meta.snap_nm, meta.spacing_nm).mc_potential_areas();
+    let studio: std::collections::BTreeSet<(String, String)> = rows.iter().filter(|r| r.kind == AreaKind::Sheet).map(|r| (r.key.clone(), r.file.clone())).collect();
+    let kicad: std::collections::BTreeSet<(String, String)> = distinct.into_iter().cloned().collect();
+    assert_eq!(studio, kicad);
+}

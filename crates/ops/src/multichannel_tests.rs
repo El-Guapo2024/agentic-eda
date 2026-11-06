@@ -914,6 +914,31 @@ fn a_board_with_no_stored_schematic_is_on_the_module_sheets_the_studio_derives()
     assert!(b.mc_compat(&ids[0]).unwrap().targets.iter().all(|t| t.ok));
 }
 
+/// R7-D5: a board the loader linked to its schematic (`ConstraintModel::symbol_links`, what the board file's `(sheetname ..)` and `(sheetfile ..)` are written from) is on those
+/// sheets, not on the module sheets the tool would infer; a footprint the file names a sheet for keeps it; one with no link (a footprint of the board alone) is on none.
+#[test]
+fn the_sheets_are_the_ones_the_board_file_is_written_with() {
+    let mut m = model(3);
+    for c in 0..2 {
+        let (u, r, cap) = names(c);
+        for reference in [u, r, cap] {
+            m.symbol_links.insert(reference, eda_model::SymbolLink { path: format!("/sheet{c}/sym_{}", c), sheetname: format!("/Amp {}/", c + 1), sheetfile: format!("amp_{}.kicad_sch", c + 1), ..Default::default() });
+        }
+    }
+    let mut d = design(3);
+    d.drawings.as_mut().unwrap().footprint_extras.retain(|e| e.id == "C2");
+    let b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let mc = b.mc_board();
+    let sheet = |r: &str| mc.fps.iter().find(|f| f.reference == r).map(|f| (f.sheetname.clone(), f.sheetfile.clone())).unwrap();
+    assert_eq!(sheet("U1"), ("/Amp 1/".to_string(), "amp_1.kicad_sch".to_string()));
+    assert_eq!(sheet("R2"), ("/Amp 2/".to_string(), "amp_2.kicad_sch".to_string()));
+    assert_eq!(sheet("C2"), ("/ch2/".to_string(), "channel.kicad_sch".to_string()), "the file's own sheet stands");
+    assert_eq!(sheet("U3"), (String::new(), String::new()), "no link, no sheet");
+    let rows = b.mc_potential_areas();
+    let keys: Vec<(&str, &str)> = rows.iter().filter(|r| r.kind == AreaKind::Sheet).map(|r| (r.key.as_str(), r.file.as_str())).collect();
+    assert_eq!(keys, vec![("", ""), ("/Amp 1/", "amp_1.kicad_sch"), ("/Amp 2/", "amp_2.kicad_sch"), ("/ch2/", "channel.kicad_sch")]);
+}
+
 /// A schematic whose root places the one sheet file twice, `ch1` and `ch2`, the symbols of the file being U1/R1 on the first and U2/R2 on the second (`instance_overrides`).
 fn schematic_with_a_sheet_placed_twice(d: &mut Design) {
     use eda_model::ir::{SchematicSection, SheetInstance, SymbolInstance, SymbolPathOverride};
