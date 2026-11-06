@@ -51,6 +51,7 @@ pub use pcb::{custom_erc_pin_map, effective_rule_severities, kicad_footprint_ori
 
 mod sexpr;
 mod page;
+pub use page::drawing_sheet_in;
 mod import;
 mod fp_transform;
 mod import_items;

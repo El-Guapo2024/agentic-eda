@@ -524,6 +524,8 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
     let mut args = plot_args(format, &layers, &plot, &PlotSession::of_request(&req));
     // "Design variant:" (`DIALOG_PLOT::getSelectedVariant`, `board->SetCurrentVariant( .. )` around the plot)
     args.extend(variant_args(&req));
+    // Page Settings' drawing sheet file (`pcbnew.page_layout_descr_file`), which the plot's sheet is drawn from (`PCBNEW_JOBS_HANDLER`'s `--drawing-sheet` override)
+    args.extend(crate::drawing_sheet_api::plot_args(dir, design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref())));
     let mut v = reply(kicad_engine::export_into(dir, format.kind(), &args, &out_dir));
     if v["ok"].as_bool().unwrap_or(false) {
         let mut files: Vec<String> = v["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();

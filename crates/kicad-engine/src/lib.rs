@@ -481,6 +481,23 @@ fn write_project_with(work: &Path, stem: &str, design: &Design, model: &Constrai
             }
         }
     }
+    // Page Settings' drawing sheet files: the design keeps them as KiCad does, relative to the board's folder, which this derived project is not in --
+    // so here they are the whole path (`eda_kicad::drawing_sheet_in`), and kicad-cli's plots of these files draw the chosen sheet.
+    if let Some(board_dir) = work.file_name().filter(|n| *n == ".kicad").and(work.parent()) {
+        let board_sheet = design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref());
+        let sch_sheet = design.schematic.as_ref().and_then(|s| s.extras.drawing_sheet.as_deref());
+        if board_sheet.is_some() || sch_sheet.is_some() {
+            if let Ok(mut pro) = serde_json::from_str::<Value>(&pro_text) {
+                if let Some(p) = board_sheet {
+                    pro["pcbnew"]["page_layout_descr_file"] = json!(eda_kicad::drawing_sheet_in(board_dir, p));
+                }
+                if let Some(p) = sch_sheet {
+                    pro["schematic"]["page_layout_descr_file"] = json!(eda_kicad::drawing_sheet_in(board_dir, p));
+                }
+                pro_text = format!("{}\n", serde_json::to_string_pretty(&pro).unwrap_or_default());
+            }
+        }
+    }
     write_file(&work.join(format!("{stem}.kicad_pro")), pro_text)?;
     let prl = work.join(format!("{stem}.kicad_prl"));
     match appearance.as_ref().and_then(|a| eda_kicad::appearance::local_settings(a, stem)) {

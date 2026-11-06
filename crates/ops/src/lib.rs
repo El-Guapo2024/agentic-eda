@@ -808,6 +808,14 @@ pub enum Cmd {
     /// `common.Control.pageSettings` on the schematic (`SCH_EDITOR_CONTROL::PageSetup`): the same for the schematic -- see
     /// [`page_settings::set_schematic_page`].
     SetSchematicPage { page: eda_model::page::PageSettings, title_block: eda_model::ir::TitleBlock },
+    /// Page Settings' "Drawing sheet:" (`DIALOG_PAGES_SETTINGS::OnWksFileSelection`): the `.kicad_wks` file the board (`schematic` false) or the schematic
+    /// draws its frame and title block from, `None` for KiCad's default sheet -- see [`drawing_sheet::set_drawing_sheet`]. Refused when nothing changes.
+    SetDrawingSheet {
+        #[serde(default)]
+        schematic: bool,
+        #[serde(default)]
+        path: Option<String>,
+    },
     /// `pcbnew.Control.repairBoard` (`BOARD_EDITOR_CONTROL::RepairBoard`): see [`board_control::repair_board`].
     /// Refused when there is nothing to repair, so no empty undo step is pushed.
     RepairBoard,
@@ -2352,6 +2360,7 @@ impl Cmd {
             Cmd::Batch { cmds } => cmds.first().map_or(Domain::Pcb, Cmd::domain),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.domain(),
             Cmd::ReorganizeSheets => Domain::Schematic,
+            Cmd::SetDrawingSheet { schematic: true, .. } => Domain::Schematic,
             Cmd::Embedded(c) => c.domain(),
             Cmd::MoveSymbol { .. }
             | Cmd::DragSymbol { .. }
@@ -2689,6 +2698,7 @@ impl Cmd {
             Cmd::SetIpc2581Bom { .. } => vec!["ipc2581_bom"],
             Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
             Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
+            Cmd::SetDrawingSheet { .. } => vec!["drawing_sheet"],
             Cmd::AddDesignVariant { name, .. } | Cmd::RemoveDesignVariant { name } | Cmd::EditDesignVariantDescription { name, .. } | Cmd::RenameDesignVariant { name, .. } | Cmd::CopyDesignVariant { name, .. } => vec![name],
             Cmd::RepairBoard => vec!["repair_board"],
             Cmd::ExportFootprintsToLibrary => vec!["export_footprints"],
@@ -3229,6 +3239,7 @@ impl<'a> Board<'a> {
             Cmd::SetIpc2581Bom { bom } => board_control::set_ipc2581_bom(&mut self.design, bom),
             Cmd::SetGridOrigin { at } => board_control::set_grid_origin(&mut self.design, *at),
             Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
+            Cmd::SetDrawingSheet { schematic, path } => drawing_sheet::set_drawing_sheet(&mut self.design, *schematic, path.as_deref()),
             Cmd::SetSchematicPage { page, title_block } => page_settings::set_schematic_page(&mut self.design, page, title_block),
             Cmd::ExportFootprintsToLibrary => board_control::export_footprints_to_library(&mut self.design, self.model).map(|_| ()),
             Cmd::RepairBoard => {
@@ -7202,6 +7213,7 @@ mod sch_tables_tests;
 
 pub mod board_control;
 pub mod page_settings;
+pub mod drawing_sheet;
 pub mod build;
 pub mod fields_table;
 pub mod convert;

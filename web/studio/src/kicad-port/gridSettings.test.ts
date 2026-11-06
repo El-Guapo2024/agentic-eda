@@ -19,6 +19,12 @@ import {
   stepGrid,
   type GridEdit,
   type GridSettings,
+  gridAt,
+  gridDefs,
+  gridListLabel,
+  gridMenuEntries,
+  gridMessageText,
+  gridYOf,
 } from "./gridSettings";
 
 const ok = (e: GridEdit) => {
@@ -185,4 +191,67 @@ test("Next Grid and Previous Grid walk the list and wrap round", () => {
   assert.equal(stepGrid(grids, 1_000_000, -1), 250_000, "before the first is the last");
   assert.equal(stepGrid(grids, 123_000, 1), 1_000_000, "a grid that is not in the list: next is the first");
   assert.equal(stepGrid(grids, 123_000, -1), 250_000, "and previous the last");
+});
+
+// ---------------------------------------------------------------- UI-LEFT C2: named grids with their own X and Y (`GRID`, `DIALOG_GRID_SETTINGS`)
+
+test("a grid has a name and its own X and Y; the list keeps the X sizes as before and the names and Y beside them", () => {
+  const base = defaultGridSettings("schematic");
+  const r = insertGrid(base, 1, { name: "Coarse", x: 2_540_000, y: 1_270_000 });
+  assert.ok(r.ok);
+  if (!r.ok) return;
+  assert.deepEqual(r.settings.grids, [2_540_000, 2_540_000, 1_270_000, 635_000, 254_000], "the X sizes");
+  assert.deepEqual(r.settings.ys, [2_540_000, 1_270_000, 1_270_000, 635_000, 254_000]);
+  assert.deepEqual(r.settings.names, ["", "Coarse", "", "", ""]);
+  assert.deepEqual(gridAt(r.settings, 1), { name: "Coarse", x: 2_540_000, y: 1_270_000 });
+  // the same X with another Y or another name is another grid (`GRID::operator==` compares name, x and y)
+  assert.ok(insertGrid(r.settings, 0, { name: "", x: 2_540_000, y: 635_000 }).ok);
+  assert.ok(insertGrid(r.settings, 0, { name: "Other", x: 2_540_000, y: 1_270_000 }).ok);
+  assert.deepEqual(insertGrid(r.settings, 0, { name: "Coarse", x: 2_540_000, y: 1_270_000 }), { ok: false, error: "duplicate" });
+  // "Grid size X out of range." / "Grid size Y out of range."
+  assert.deepEqual(insertGrid(base, 0, { name: "", x: 500, y: 1_000_000 }), { ok: false, error: "range" });
+  assert.deepEqual(insertGrid(base, 0, { name: "", x: 1_000_000, y: 2_000_000_000 }), { ok: false, error: "range_y" });
+  // a square, unnamed list carries neither
+  const square = insertGrid(base, 0, 5_000_000);
+  assert.ok(square.ok && square.settings.ys === undefined && square.settings.names === undefined);
+});
+
+test("editing, moving and removing keep a grid's name and Y, and the fast grids follow their grid by name and sizes", () => {
+  const s0 = { grids: [1_000_000, 500_000, 250_000], ys: [2_000_000, 500_000, 250_000], names: ["Tall", "", ""], fast1: 0, fast2: 2 };
+  const moved = moveGrid(s0, 0, 1);
+  assert.deepEqual(gridDefs(moved.settings), [
+    { name: "", x: 500_000, y: 500_000 },
+    { name: "Tall", x: 1_000_000, y: 2_000_000 },
+    { name: "", x: 250_000, y: 250_000 },
+  ]);
+  assert.equal(moved.settings.fast1, 1, "Grid 1 stays on Tall");
+  const edited = replaceGrid(s0, 0, { name: "Tall", x: 1_000_000, y: 3_000_000 });
+  assert.ok(edited.ok);
+  if (edited.ok) {
+    assert.deepEqual(gridAt(edited.settings, 0), { name: "Tall", x: 1_000_000, y: 3_000_000 });
+    assert.equal(edited.settings.fast1, 0, "Grid 1's grid is gone: the first entry");
+  }
+  assert.deepEqual(replaceGrid(s0, 0, { name: "Tall", x: 1_000_000, y: 2_000_000 }), { ok: true, settings: s0, row: 0 }, "OK with nothing changed changes nothing");
+  const removed = removeGrid(s0, 1);
+  assert.deepEqual(removed.settings.ys, [2_000_000, 250_000]);
+  assert.deepEqual(removed.settings.names, ["Tall", ""]);
+  // a saved list's Y and names are read back, and dropped with a damaged entry
+  assert.deepEqual(parseGridSettings(s0, "pcb"), s0);
+  assert.equal(parseGridSettings({ ...s0, ys: [1, 2] }, "pcb").ys, undefined);
+  assert.equal(parseGridSettings({ ...s0, grids: [1_000_000, "x", 250_000] }, "pcb").names, undefined);
+});
+
+test("RebuildGridSizes / GRID::MessageText: 'name: X x Y (other unit)', one size for a square grid; the current grid is the first with the X on screen", () => {
+  const mm = (nm: number) => `${nm / 1e6} mm`;
+  const mil = (nm: number) => `${Math.round(nm / 25_400)} mil`;
+  assert.equal(gridListLabel({ name: "", x: 2_540_000, y: 2_540_000 }, mil, mm), "100 mil (2.54 mm)");
+  assert.equal(gridListLabel({ name: "Coarse", x: 2_540_000, y: 1_270_000 }, mil, mm), "Coarse: 100 mil x 50 mil (2.54 mm x 1.27 mm)");
+  assert.equal(gridMessageText({ name: "", x: 1_000_000, y: 2_000_000 }, mm), "1 mm x 2 mm");
+  const s = { grids: [1_000_000, 1_000_000, 500_000], ys: [2_000_000, 1_000_000, 500_000], fast1: 0, fast2: 1 };
+  assert.equal(gridYOf(s, 1_000_000), 2_000_000, "the first grid with that X");
+  assert.equal(gridYOf(s, 500_000), 500_000);
+  assert.equal(gridYOf(s, 123), 123, "a size the list does not have is square");
+  const entries = gridMenuEntries(s, 500_000, mm, mil);
+  assert.deepEqual(entries.map((e) => e.checked), [false, false, true]);
+  assert.equal(entries[0]!.label, "1 mm x 2 mm (39 mil x 79 mil)");
 });

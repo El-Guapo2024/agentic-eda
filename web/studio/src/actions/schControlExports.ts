@@ -5,10 +5,10 @@ import { fetchHierarchy, fetchSchematicFiles, postSymbolSvg } from "../api/schCo
 import { fileStem } from "../kicad-port/saveAs";
 import { samePath } from "../kicad-port/sheetPages";
 import { sheetFileBaseName, sheetFileInWork } from "../kicad-port/sheetFileInWork";
-import { shownTitleBlock } from "../kicad-port/pageSettings";
 import { saveBlob, saveTextFile } from "../api/libraryClient";
 import { layerColor } from "../components/canvas/layers";
-import { drawPageAndFrame, drawTitleBlock, drawZoneReferences, pageOf } from "../components/schematic/drawingSheet";
+import { drawPaper, drawSchematicDrawingSheet, pageOf } from "../components/schematic/drawingSheet";
+import { schematicSheetPage } from "../components/drawingSheet/sheetInfo";
 import { paintSchematic } from "../components/schematic/painter";
 import { DEFAULT_SCH_DISPLAY } from "../components/schematic/displayOptions";
 
@@ -59,24 +59,8 @@ export function renderSheetImage(ctx: SchControlContext): HTMLCanvasElement | nu
   g.save();
   // like the editor's own canvas: the context carries the scale, and the painters get the same view to size their hairlines by
   g.scale(scale, scale);
-  drawPageAndFrame(g, view, page);
-  drawZoneReferences(g, view, page);
-  const tb = shownTitleBlock(sch.title_block);
-  const crumbs = sch.sheet_path ?? [];
-  drawTitleBlock(
-    g,
-    view,
-    {
-      title: tb?.title || ctx.state.board?.name || "untitled",
-      date: tb?.date ?? new Date().toISOString().slice(0, 10),
-      rev: tb?.rev ?? "",
-      company: tb?.company,
-      comments: tb?.comments,
-      fileName: sch.file || `${ctx.state.board?.name || "schematic"}.kicad_sch`,
-      sheetPath: crumbs.length === 0 ? "/" : `/${crumbs.map((c) => c.name).join("/")}/`,
-    },
-    page
-  );
+  drawPaper(g, page);
+  drawSchematicDrawingSheet(g, view, schematicSheetPage(sch, ctx.state.board?.name), sch.drawing_sheet?.text);
   paintSchematic(g, view, sch, { selection: new Set(), netHighlight: null, display: ctx.control.display ?? DEFAULT_SCH_DISPLAY });
   g.restore();
   return canvas;

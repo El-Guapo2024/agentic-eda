@@ -1,6 +1,12 @@
-// The sheet frame, zone-reference grid and title block -- KiCad calls
-// this whole thing the "drawing sheet" (common/drawing_sheet in
-// kicad-src). This session could not read that C++ source directly
+// The schematic's paper and drawing sheet (the frame, the zone references and the title block).
+//
+// Since 2026-11-06 (UI-LEFT C3) the sheet is the port of KiCad's drawing sheet code: `drawSchematicDrawingSheet` lays the `.kicad_wks` Page Settings chose
+// (else KiCad's default sheet) out on the sheet's paper with `kicad-port/dsDataModel.ts` (`DS_DRAW_ITEM_LIST::BuildDrawItemsList`) and paints it with
+// `components/drawingSheet/dsPainter.ts` (`DS_PAINTER`) in `LAYER_SCHEMATIC_DRAWINGSHEET`; `drawPaper` fills the paper under it. The hand-measured
+// functions below (`drawPageAndFrame`, `drawZoneReferences`, `drawTitleBlock`) are INACTIVE: kept, not called, per the port-vs-reuse rule.
+//
+// What follows is the INACTIVE code's own note, as it was written:
+// This session could not read that C++ source directly
 // (kicad-mirror's tree isn't checked out on disk here, and this
 // worktree-isolated sandbox refuses git access to it even via a
 // subprocess -- see tools/lib/kicadSource.js's own comment on exactly
@@ -17,8 +23,25 @@
 // common/settings/builtin_color_themes.h): LAYER_SCHEMATIC_DRAWINGSHEET
 // for all of the frame/title-block ink.
 import type { ViewTransform } from "../../state/store";
+import type { DsDrawItem, DsPageContext } from "../../kicad-port/dsDataModel";
 import { layerColor } from "../canvas/layers";
 import { drawStrokeText } from "../text/strokeFont";
+import { paintDrawingSheet, sheetModel } from "../drawingSheet/dsPainter";
+
+/** The paper itself, in the schematic's background colour, page-sized in world space (the canvas around it is filled too). Drawn first, under the grid. */
+export function drawPaper(ctx: CanvasRenderingContext2D, page: PageSize = A4_PAGE): void {
+  ctx.fillStyle = layerColor("LAYER_SCHEMATIC_BACKGROUND");
+  ctx.fillRect(0, 0, page.widthNm, page.heightNm);
+}
+
+/**
+ * The drawing sheet of the sheet in view (`SCH_VIEW::DisplaySheet`'s `DS_PROXY_VIEW_ITEM`): `text` is the `.kicad_wks` Page Settings chose (null: KiCad's
+ * default sheet), `page` what the page is (components/drawingSheet/sheetInfo.ts `schematicSheetPage`). Returns the items drawn.
+ */
+export function drawSchematicDrawingSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, page: DsPageContext, text: string | null | undefined): DsDrawItem[] {
+  const { model } = sheetModel(text);
+  return paintDrawingSheet(ctx, model, page, { tag: "sch", color: layerColor("LAYER_SCHEMATIC_DRAWINGSHEET"), pixelNm: 1 / (view.scale || 1) });
+}
 
 /** A4 landscape, KiCad's default schematic page size -- nm (mm * 1e6). */
 export const PAGE_WIDTH_NM = 297_000_000;
@@ -95,7 +118,7 @@ function divisions(totalNm: number, pitchNm: number): number[] {
   return bounds;
 }
 
-/** The A4 page background + the double-rule frame border. Drawn first, under everything else including the grid. */
+/** INACTIVE (replaced by `drawPaper` + `drawSchematicDrawingSheet`): the A4 page background + the double-rule frame border. Drawn first, under everything else including the grid. */
 export function drawPageAndFrame(ctx: CanvasRenderingContext2D, view: ViewTransform, page: PageSize = A4_PAGE): void {
   const hair = 1 / view.scale;
 
@@ -110,7 +133,7 @@ export function drawPageAndFrame(ctx: CanvasRenderingContext2D, view: ViewTransf
   ctx.strokeRect(INNER_MARGIN_NM, INNER_MARGIN_NM, page.widthNm - 2 * INNER_MARGIN_NM, page.heightNm - 2 * INNER_MARGIN_NM);
 }
 
-/** Zone-reference ticks + numbers/letters, on all four edges, between the frame's outer and inner lines. */
+/** INACTIVE (replaced by `drawSchematicDrawingSheet`): zone-reference ticks + numbers/letters, on all four edges, between the frame's outer and inner lines. */
 export function drawZoneReferences(ctx: CanvasRenderingContext2D, view: ViewTransform, page: PageSize = A4_PAGE): void {
   const hair = 1 / view.scale;
   const innerW = page.widthNm - 2 * OUTER_MARGIN_NM;
@@ -159,6 +182,7 @@ export function drawZoneReferences(ctx: CanvasRenderingContext2D, view: ViewTran
 }
 
 /**
+ * INACTIVE (replaced by `drawSchematicDrawingSheet`).
  * The title block: 108x32mm, flush with the inner frame's bottom-right
  * corner. Row/column split positions and every field's exact position
  * are read off the real export (see header comment) -- the 4 "Comment"
@@ -220,6 +244,7 @@ export function drawTitleBlock(ctx: CanvasRenderingContext2D, view: ViewTransfor
 }
 
 /**
+ * INACTIVE (replaced by `components/canvas/gridPaint.ts` `paintEditorGrid`, UI-LEFT C2; kept, not called).
  * Grid dots -- schematic/layout.ts's GRID (1.27mm / 50 mil, eeschema's
  * own default), in KiCad's schematic grid color. Dots, matching KiCad's
  * default schematic grid style (the PCB editor's own drawGrid in

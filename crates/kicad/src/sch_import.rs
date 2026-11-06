@@ -813,7 +813,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let junction_points: Vec<Point> = junctions.iter().map(|j| j.at).collect();
     let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects, &junction_points);
 
-    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: user_fields_read, imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root).and_then(|p| p.sheet_parts().1), embedded: crate::embedded::read_owner(root, &mut Vec::new()), ..Default::default() }, field_layout: field_layout_read };
+    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: user_fields_read, imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root, eda_model::page::MAX_PAGE_SIZE_EESCHEMA_NM).and_then(|p| p.sheet_parts().1), embedded: crate::embedded::read_owner(root, &mut Vec::new()), ..Default::default() }, field_layout: field_layout_read };
     let mut design = Design {
         schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },

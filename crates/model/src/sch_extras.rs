@@ -79,6 +79,11 @@ pub struct SchExtras {
     /// `None` is KiCad's default, A4 landscape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<crate::page::PageSettings>,
+    /// The schematic's drawing sheet file (Page Settings' "Drawing sheet:"): a `.kicad_wks` path as KiCad keeps it in the project's
+    /// `schematic.page_layout_descr_file` (`SCHEMATIC_SETTINGS::m_SchDrawingSheetFileName`), relative to the board's folder when the file is in it. Kept on
+    /// the root's extras; `None` is KiCad's default sheet. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing_sheet: Option<String>,
     /// A label's spin (`SCH_LABEL_BASE::GetSpinStyle`: which side of its anchor the text runs to), by label id. A label with no entry
     /// has its spin read off the wire that ends at it (`labelShape.ts::inferSpin`), as every label did before Rotate and Mirror could
     /// set one; an entry is written only when a turn or a mirror set it, so a design that never turned a label serializes as before.
@@ -864,6 +869,7 @@ impl SchExtras {
         self.graphics.is_empty()
             && self.locked.is_empty()
             && self.page.is_none()
+            && self.drawing_sheet.is_none()
             && self.label_spins.is_empty()
             && self.strokes.is_empty()
             && self.junction_looks.is_empty()

@@ -833,8 +833,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-10-14 (P17, `PARITY-fpedit.md` section 14, `PARITY-symedit.md` "Snapping to the pins of the symbol"): the Footprint Editor's tools call `PcbGridHelper` on the open footprint's pads, graphics and texts (`kicad-port/fpSnapScene.ts`: the editor's own magnetic defaults, the
   active layer for shapes and text, every layer for pads and the anchor; the footprint itself is no item) and the Symbol Editor's `SchGridHelper` on the pins of the unit being edited (`kicad-port/symSnapItems.ts`); real pointer events in `e2e/lib-editors.check.js`.
 - Left: Preferences > Magnetic Points is the board's (the footprint editor keeps KiCad's own defaults); with the default
-  Magnetic Points ("In Track Tool") a move or a shape does not snap to pads or tracks until they are set to Always (KiCad's default too); the junction tool keeps its own 12 px snap; the schematic context menu
-  has no Zoom and Grid submenus; the server still snaps a part's placement to 100 um (`meta.snap_um`) whatever grid is shown; the studio never moves the real pointer, so a Move computes the cursor
+  Magnetic Points ("In Track Tool") a move or a shape does not snap to pads or tracks until they are set to Always (KiCad's default too); the junction tool keeps its own 12 px snap; the server still snaps a part's placement to 100 um (`meta.snap_um`) whatever grid is shown; the studio never moves the real pointer, so a Move computes the cursor
   KiCad's warp would give (`kicad-port/heldCursor.ts`).
 - Port from: `pcbnew/tools/pcb_grid_helper.cpp`, `common/tool/grid_helper.cpp`, `eeschema/tools/ee_grid_helper.cpp`, `common/tool/tool_dispatcher.cpp`, `common/tool/construction_manager.cpp`.
 
@@ -847,6 +846,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Route From Other End only before the first fix and `V` does nothing outside a route (all three belong to the router, package P5); Select Connection needs a selection on the schematic; Mirror X then Y collapses to one flag.
   Fixed 2026-10-12 on the schematic (`task-sch-details`, `PARITY-sch.md` sections 21 to 27): the net highlight and Select Node start from a pin; a label's Auto-rotate; Copy as Text; Repeat Last Item repeats a label and a text with their properties;
   Global Edit's text size edits the text in place instead of replacing it (which dropped its id and justification); the schematic pans with the middle and right buttons as the preferences say and auto-pans while drawing and moving.
+- Done 2026-11-06 (`task-u4-common`, UI-LEFT C4, `PARITY-common.md` sections 2, 3 and 17): Enter during a PCB route is KiCad's `cursorClick` -- a click where the cursor is, which fixes the route there and goes on (End finishes it); each editor keeps its own
+  crosshair, Always Show Crosshairs and polar coordinates (`WINDOW_SETTINGS::cursor`, `editing.polar_coords`); the Measure tool's ruler is `RULER_ITEM` (ticks with their labels, the back ticks, x, y, r and θ next to its end -- the
+  Measure tool has no arrowhead in 8303b2ad; Interactive Offset's ruler has it). Left: about 310 handlers added since 2026-10-07 have still not been compared with KiCad's code; the rulers' drop shadows.
 
 ### 16. The PCB context menu
 **Mostly done (2026-10-08/09, `4c041a6`).** Hit: constantly. Blocks: no.
@@ -879,7 +881,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   sliders that the painter and the pickers honour; the Nets and Net Classes tabs have per-net eyes, colours and KiCad's menus; the Layers tab has "Inactive layers" Normal / Dim / Hide and the eight built-in
   layer presets plus saved ones; viewports. Kept per project in `appearance.json` and written into the derived `.kicad_prl` / `.kicad_pro`. `e2e/appearance-panel.check.js`.
 - Done 2026-11-06 (`task-u3-panels`, UI-LEFT P11, `PARITY-pcb.md` section 75): the colour theme is editable. Preferences > PCB Editor > Colors (`PANEL_PCBNEW_COLOR_SETTINGS`): the theme list (KiCad Default, the read-only built-ins KiCad Default and KiCad Classic, the person's), New Theme... (which is also the duplicate: it starts from the shown theme), a swatch per layer in KiCad's order with Copy / Paste / Revert to saved color, Reset Colors to Defaults; the Appearance panel's layer and object swatches edit the editor's theme (a read-only theme says KiCad's message); the board is drawn in the chosen theme (`layerColor` asks `state/colorThemeStore.ts`), the themes kept per person in the browser like the other preferences (KiCad: `colors/*.json` in the user's folder). "Use Color from Schematic" takes the class's Schematic Setup colour; a class renamed in Board Setup keeps its colour (proved; Undo of the rename does not bring it back). `e2e/color-theme.check.js`.
-- Missing: Images and Points rows (no such items); the quick switchers on Ctrl+Tab and Alt+Tab; the selection filter is not in the saved settings; the drawing sheet starts off (KiCad: on) and has no zone letters. Of the themes: no preview board (the page draws on the board itself), no theme files in or out, the Footprint Editor draws with the board editor's theme and the schematic editors have no Colors page. (The Values row now acts: the Value is a footprint field since 10-09.)
+- Missing: Images and Points rows (no such items); the quick switchers on Ctrl+Tab and Alt+Tab; the selection filter is not in the saved settings. (The drawing sheet is on from the start with its zone letters and numbers, and Page Settings chooses a `.kicad_wks` that both editors draw and kicad-cli plots: 2026-11-06, `task-u4-common`, UI-LEFT C3, PARITY-common section 9.) Of the themes: no preview board (the page draws on the board itself), no theme files in or out, the Footprint Editor draws with the board editor's theme and the schematic editors have no Colors page. (The Values row now acts: the Value is a footprint field since 10-09.)
 - Port from: `pcbnew/widgets/appearance_controls.cpp`, `common/dialogs/panel_color_settings.cpp`, `pcbnew/dialogs/panel_pcbnew_color_settings.cpp`.
 
 ### 19. Footprint and symbol editor leftovers
@@ -939,8 +941,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-10-12 (`PARITY-sch.md` section 27): the schematic canvas pans, zooms or does nothing with the middle and the right button as Preferences > Mouse and Touchpad say (`input.drag_middle`, `input.drag_right`; a right press that is no drag still
   opens the context menu), and with Automatically pan while moving object on it auto-pans at the edge while a wire, bus, line, shape or sheet is drawn, items are held by M, G or a drag, a paste is carried or a box is dragged
   (`kicad-port/viewControls.ts`, `SchematicView.tsx`).
-- Missing: the PCB canvas pans with the middle or right button and auto-pans at the edge (opt-in, as in KiCad; `Canvas.tsx`) but does not read the drag settings, and the footprint and symbol canvases pan with either button, ignore the settings and never auto-pan;
-  the left button's drag setting (`input.drag_left`) is not offered. The native pinch gesture is not ported on any canvas (`PARITY-pcb.md` section 1).
+- Done 2026-11-06 (`task-u4-common`, UI-LEFT C1, `PARITY-common.md` sections 3 and 17): every canvas (board, schematic, Footprint Editor, Symbol Editor) reads Preferences > Mouse and Touchpad's "Left button drag:" (KiCad's three choices,
+  `PCB_SELECTION_TOOL::Main` / `SCH_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )`), "Middle button drag:" and "Right button drag:" (Pan, Zoom, None) and "Pan on mouse movement with key:"; the library editors draw the selection rectangle
+  and auto-pan; a touchpad pinch zooms as `onMagnify` does (a wheel with `ctrlKey` and no Control key down; Safari's gesture events); "Pan left/right with horizontal movement" is kept and read by nothing, as in KiCad.
+- Differs: the studio's "Left button drag:" default is "Drag any object" (its canvases' behaviour so far, and what KiCad's migration of old settings gives); KiCad's own default is "Drag selected objects".
+- Left: "Center and warp cursor on zoom" and the infinite drag at the canvas edge (a page cannot move the pointer); a pinch made with Control held reads as Ctrl and the wheel; in the lasso mode an item press whose
+  drag draws the area draws the rectangle.
 - Port from: `common/view/wx_view_controls.cpp`.
 
 ### 21. Find on the PCB

@@ -7,6 +7,7 @@ import { useDockLayout } from "../state/dockLayoutStore";
 import { useFpState } from "../state/footprintEditorStore";
 import { useGridOverrides } from "../state/gridOverrides";
 import { useStudioState } from "../state/store";
+import { useCommonOptions, windowOptionsOf } from "../state/commonOptions";
 import { useSymState } from "../state/symbolEditorStore";
 
 export function useActionChecked(): (name: string) => boolean | undefined {
@@ -22,6 +23,8 @@ export function useActionChecked(): (name: string) => boolean | undefined {
   const commonTool = useCommonTool();
   const libraryTab = state.tab === "footprint" || state.tab === "symbol";
   const zoomArmed = libraryTab ? commonTool.zoomArea !== null : state.activeTool === "zoom_area";
+  // the editor's own `editing.polar_coords`
+  const polarCoords = windowOptionsOf(useCommonOptions(), state.tab).polarCoords;
   const measureArmed = state.tab === "footprint" ? commonTool.measure !== null : state.activeTool === "measure";
   const ctx: CheckedContext = {
     tab: state.tab,
@@ -35,11 +38,11 @@ export function useActionChecked(): (name: string) => boolean | undefined {
     rightDockTab: state.rightDockTab,
     highContrast,
     zoomArmed,
-    polar: state.polar,
+    polar: polarCoords,
     measureArmed,
     fpView: { lineMode: fp.lineMode, sketchPads: fp.sketchPads, sketchGraphics: fp.sketchGraphics, sketchText: fp.sketchText, appearanceShown: fp.appearanceShown },
   };
   // The context is rebuilt every render; the callback only changes when a fact it reads does.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useCallback((name: string) => actionChecked(name, ctx), [state.tab, state.units, gridVisible, gridOverrides, fp.activeTool, sym.activeTool, sym.showElectricalTypes, sym.showHiddenPins, sym.syncPins, sym.showHiddenFields, sym.showPinAltIcons, dock, state.rightDockTab, highContrast, zoomArmed, state.polar, measureArmed, fp.lineMode, fp.sketchPads, fp.sketchGraphics, fp.sketchText, fp.appearanceShown]);
+  return useCallback((name: string) => actionChecked(name, ctx), [state.tab, state.units, gridVisible, gridOverrides, fp.activeTool, sym.activeTool, sym.showElectricalTypes, sym.showHiddenPins, sym.syncPins, sym.showHiddenFields, sym.showPinAltIcons, dock, state.rightDockTab, highContrast, zoomArmed, polarCoords, measureArmed, fp.lineMode, fp.sketchPads, fp.sketchGraphics, fp.sketchText, fp.appearanceShown]);
 }

@@ -297,7 +297,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         }
     }
     // `(paper ...)` and `(title_block ...)`: the board's Page Settings. A4 landscape and an empty title block are the defaults and are not kept.
-    if let Some(page) = crate::page::import_page(root).filter(|p| !p.is_default()) {
+    if let Some(page) = crate::page::import_page(root, eda_model::page::MAX_PAGE_SIZE_PCBNEW_NM).filter(|p| !p.is_default()) {
         design.drawings.get_or_insert_with(Default::default).page = Some(page);
     }
     // (The schematic's title block carries its sheet's paper name too; the board's paper is `page`, so the name is dropped here.)

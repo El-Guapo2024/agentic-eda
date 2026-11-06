@@ -12,8 +12,11 @@ import { layerColor, copperColorKey, drawOrder } from "./layers";
 import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
 import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
 import { snapPoint } from "./gridHelper";
-import { drawStrokeText } from "../text/strokeFont";
-import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
+import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { rulerDrawing } from "../../kicad-port/rulerItem";
+import { paintRuler } from "./rulerPaint";
+import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_DISPLAY, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO, type GridDisplay } from "../../kicad-port/grid";
+import { paintEditorGrid } from "./gridPaint";
 import { originMarkerColor } from "../../kicad-port/gridOrigin";
 import { leaderModeOf, zoneLeader, zoneLoop } from "../../kicad-port/pcbDrawZone";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
@@ -23,7 +26,6 @@ import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { dimensionTextAngleRad, itemBounds, padIds } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
 import type { LengthUnit } from "../../state/units";
-import { measureLabel } from "../../kicad-port/measureRuler";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { endingInks, hasEndings, kicadArc, shortenArc, shortenBezier, shortenSegment } from "../../kicad-port/lineEnding";
 import { dimensionEditPoints } from "../../kicad-port/dimensionDraw";
@@ -142,6 +144,10 @@ export interface PaintOptions {
   auxOrigin?: [number, number] | null;
   /** The point the grid is anchored at (`common.Control.gridSetOrigin`): the grid dots follow it and its marker is drawn when it is not at (0, 0). */
   gridOrigin?: [number, number] | null;
+  /** The current grid's Y size when it is not square (Edit Grids' "Y:"). */
+  gridYNm?: number;
+  /** The board editor's Display Options > Grid Display: the style, thickness and minimum spacing the grid is drawn with. */
+  gridDisplay?: GridDisplay;
   /** pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), for the via tool's ghost -- null until the hotkey's first press, same board-default fallback `Canvas.tsx`'s own via-placement click uses. */
   currentViaPreset: { diameter: number; drill: number } | null;
   /** common.Interactive.measureTool's ruler label, same unit the status bar shows. */
@@ -1193,6 +1199,9 @@ function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges:
 }
 
 /**
+ * INACTIVE since UI-LEFT C2 (task-u4-common): the grid is `paintEditorGrid` (components/canvas/gridPaint.ts, kicad-port/grid.ts `gridMarks`), DrawGrid's three styles
+ * with the thickness and minimum spacing of Display Options and a grid whose X and Y differ. Kept, not called.
+ *
  * graphics_abstraction_layer.h GAL::GetVisibleGridSize() + opengl_gal.cpp
  * DrawGrid(), for the DOTS style (KiCad's own real default --
  * gal_display_options.cpp). Source draws this as two stencil-masked line
@@ -1210,7 +1219,7 @@ function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges:
  * (computeVisibleGridSize) is the behaviorally important part and IS
  * ported exactly; see PARITY-pcb.md.
  */
-function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridNm: number, origin: readonly [number, number] = [0, 0], covered: readonly GridGeometry[] = []) {
+export function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridNm: number, origin: readonly [number, number] = [0, 0], covered: readonly GridGeometry[] = []) {
   const visible = computeVisibleGridSize(gridNm, view.scale, DEFAULT_GRID_STYLE);
   const stepPx = visible * view.scale;
   if (!(stepPx > 0)) return; // gridNm <= 0 or a degenerate scale -- nothing sane to draw
@@ -1311,7 +1320,7 @@ function strokeViaGhost(ctx: CanvasRenderingContext2D, view: ViewTransform, x: n
   ctx.restore();
 }
 
-function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, viewport: readonly [number, number, number, number]) {
   const draw = opts.drawState;
   if (!draw) return;
 
@@ -1432,21 +1441,14 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   // (ZONE_CREATE_HELPER::OnComplete, round 5 A5-5); in the free mode a zone's preview closes straight.
   const loop = polygonDraw && rubberEnd && pts.length > 1 ? zoneLoop(pts, rubberEnd, leaderModeOf(opts.angleSnapMode, opts.drawCtrl ?? false)) : [];
   const shown: [number, number][] = leader ? [...pts, ...leader.slice(1), ...loop.slice(1, -1)] : rubberEnd ? [...pts, rubberEnd] : pts;
-  strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), (draw.kind === "zone" || loop.length > 0) && shown.length >= 2);
-
-  // pcb_viewer_tools.cpp's measure tool: the straight-line distance (and
-  // dx/dy) between the ruler's two ends, labeled at the midpoint, in the
-  // status bar's own unit. Live while still dragging the end (rubberEnd),
-  // fixed once the measurement is complete.
+  // pcb_viewer_tools.cpp's measure tool: `RULER_ITEM` from the first click to the cursor, fixed at the second (kicad-port/rulerItem.ts, components/canvas/rulerPaint.ts)
   if (draw.kind === "measure") {
     const end = frozen ? pts[1]! : rubberEnd;
-    if (end) {
-      const [x0, y0] = pts[0]!;
-      const [x1, y1] = end;
-      const label = measureLabel([x0, y0], [x1, y1], opts.units);
-      drawStrokeText(ctx, label, (x0 + x1) / 2, (y0 + y1) / 2 - hairlineNm(view, 8), { sizeNm: hairlineNm(view, 12), justify: "center", color, thicknessNm: hairlineNm(view, 1.4) });
-    }
+    // Interactive Offset's ruler (`arrow`): the anchor colour, no ticks, an arrowhead (`POSITION_RELATIVE_TOOL::InteractiveOffset`)
+    if (end) paintRuler(ctx, rulerDrawing(pts[0]!, end, { scale: view.scale, viewport }, { units: opts.units, showTicks: !draw.arrow, showEndArrowHead: draw.arrow === true }, measureStrokeText), layerColor(draw.arrow ? "anchor" : "LAYER_AUX_ITEMS"), "pcb");
+    return;
   }
+  strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), (draw.kind === "zone" || loop.length > 0) && shown.length >= 2);
 }
 
 /** A ghost circle at the snapped cursor for the standalone via tool -- via.ts's placement is a single click, so there's no multi-point drawState to show, just "a via would land here". */
@@ -1574,7 +1576,12 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     // The editor grid and KiCad 10's grid items (`drawGridSources`), the one leaving out what the others cover.
     grid: () => {
       const grids = shownGridItems(board, opts.layerVisible);
-      if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridNm, opts.gridOrigin ?? [0, 0], grids.map(gridGeometry));
+      if (opts.gridVisible) {
+        // A grid item's coverage hides the editor grid (`drawGridSource`'s wash): see gridItemPaint.ts.
+        const covered = grids.map(gridGeometry);
+        const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
+        paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: opts.gridOrigin ?? [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx }, layerColor("grid"), covered.length > 0 ? (x, y) => gridItemCovers(covered, x, y) : undefined, "pcb");
+      }
       const box: [number, number, number, number] = [-view.x / view.scale, -view.y / view.scale, (widthPx - view.x) / view.scale, (heightPx - view.y) / view.scale];
       drawGridItems(ctx, view, board, opts.layerVisible, opts.selection, DEFAULT_GRID_STYLE, box);
     },
@@ -1651,7 +1658,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   if (opts.auxOrigin) drawAuxOrigin(ctx, view, opts.auxOrigin);
   drawGridOrigin(ctx, view, opts.gridOrigin, layerColor("background"));
   // In-progress route/drag/via/zone/drawing tool preview, on top of everything committed.
-  drawInProgress(ctx, view, board, opts);
+  drawInProgress(ctx, view, board, opts, [-view.x / view.scale, -view.y / view.scale, (widthPx - view.x) / view.scale, (heightPx - view.y) / view.scale]);
   if (opts.activeTool === "tune" && !opts.drawState && opts.tuneHover) drawTuneHover(ctx, view, opts.tuneHover, opts.units);
   if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
   // pcb_point_editor.cpp: a single selected zone's outline corners are

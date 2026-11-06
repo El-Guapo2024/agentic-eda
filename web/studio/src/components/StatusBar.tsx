@@ -8,6 +8,7 @@
 // 2/3 read as cursor position/delta by elimination and by matching the
 // task brief's stated field order) -- not a full transcription, but
 // field 6 (tool message) is real and now backed by state.activeTool.
+import { setWindowOptions, useCommonOptions, windowOptionsOf } from "../state/commonOptions";
 import { TOOL_MESSAGES, useStudioDispatch, useStudioState } from "../state/store";
 import { useFpState } from "../state/footprintEditorStore";
 import { useSymState } from "../state/symbolEditorStore";
@@ -32,8 +33,9 @@ export function StatusBar() {
   // number that used to be true isn't.
   const onPcb = state.tab === "pcb";
   const cursor = onPcb ? state.cursorNm : lib ? lib.cursorNm : null;
-  // Polar coordinates are the board editor's and the Footprint Editor's (`PCB_BASE_FRAME::m_polarCoords`); eeschema has none.
-  const polar = state.polar && state.tab !== "symbol" && state.tab !== "schematic";
+  // Polar coordinates are the board editor's and the Footprint Editor's (`PCB_BASE_FRAME::m_polarCoords`), each its own (`editing.polar_coords`); eeschema has none.
+  const polarOn = windowOptionsOf(useCommonOptions(), state.tab).polarCoords;
+  const polar = polarOn && state.tab !== "symbol" && state.tab !== "schematic";
   // pcb_base_frame.cpp UpdateStatusBar: dx/dy/dist is always relative to
   // m_LocalOrigin (Space to reset it; default (0,0)), NOT the move tool's
   // own drag anchor (state.moveOriginNm) -- KiCad's move tool never
@@ -70,14 +72,14 @@ export function StatusBar() {
       <span className="field">{cursor ? (polar ? `r ${toPolar(cursor.x, cursor.y, state.units).r}  θ ${toPolar(cursor.x, cursor.y, state.units).theta}` : formatXY(cursor.x, cursor.y, state.units)) : "–"}</span>
       <span className="field">
         {dx !== null && dy !== null
-          ? state.polar
+          ? polar
             ? `Δr ${toPolar(dx, dy, state.units).r}  Δθ ${toPolar(dx, dy, state.units).theta}`
             : `dx ${formatLength(dx, state.units)}  dy ${formatLength(dy, state.units)}  dist ${formatLength(Math.hypot(dx, dy), state.units)}`
           : "dx –  dy –  dist –"}
       </span>
       {(onPcb || lib || state.tab === "schematic") && <span className="field">grid {formatLength(lib ? lib.gridNm : state.tab === "schematic" ? state.schGridNm : state.gridNm, state.units)}</span>}
       <label className="toggle" title="Polar coordinates">
-        <input type="checkbox" checked={state.polar} onChange={() => dispatch({ type: "TOGGLE_POLAR" })} />
+        <input type="checkbox" checked={polarOn} onChange={() => setWindowOptions(state.tab, { polarCoords: !polarOn })} />
         polar
       </label>
       {onPcb && (

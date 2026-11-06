@@ -2726,6 +2726,11 @@ pub struct DrawingsSection {
     /// derived `.kicad_pcb` as `(grid_origin x y)`. Additive: absent in an older `design.json` reads as "no origin set".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_origin: Option<Point>,
+    /// The board's drawing sheet file (Page Settings' "Drawing sheet:", `DIALOG_PAGES_SETTINGS::OnWksFileSelection`): a `.kicad_wks` path as KiCad keeps it in
+    /// the project's `pcbnew.page_layout_descr_file` -- relative to the board's folder when the file is in it, else with a path variable or whole. `None` is
+    /// KiCad's default sheet. Written to the derived `.kicad_pro` and passed to kicad-cli's plots (`--drawing-sheet`). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing_sheet: Option<String>,
     /// Footprints that exist only on the board: copies of a footprint, and footprints pasted in from another board or from KiCad's
     /// clipboard, which have no part in the intent and no symbol in the schematic (KiCad's footprint without a schematic link).
     /// `board::load` folds each into the model as a part of its own -- see [`BoardPart`]. Additive: absent in an older

@@ -1159,6 +1159,8 @@ export interface BoardState {
   /** The board's paper and title block (Page Settings, `common.Control.pageSettings`); null/absent are A4 landscape and an empty title block. */
   page?: PageInfo | null;
   title_block?: TitleBlock | null;
+  /** The board's drawing sheet file (Page Settings' "Drawing sheet:", `pcbnew.page_layout_descr_file`); null/absent is KiCad's default sheet. */
+  drawing_sheet?: DrawingSheetFile | null;
   /** Most recent 60 activity.jsonl entries, newest first. */
   activity: Activity[];
   /** "idle" | "running" | a one-line result of the last route. */
@@ -1966,6 +1968,8 @@ export type Cmd =
   | { op: "set_board_page"; page: CmdPage; title_block: TitleBlock }
   /** The same for the schematic (`SCH_EDITOR_CONTROL::PageSetup`). */
   | { op: "set_schematic_page"; page: CmdPage; title_block: TitleBlock }
+  // Page Settings' "Drawing sheet:" (`DIALOG_PAGES_SETTINGS::OnWksFileSelection`): the board's (`schematic` false) or the schematic's `.kicad_wks`, null for KiCad's default
+  | { op: "set_drawing_sheet"; schematic: boolean; path: string | null }
   /** `pcbnew.Control.repairBoard` -- refused ("No board problems found.") when there is nothing to repair; `POST /api/repair_board` wraps it with KiCad's report. */
   | { op: "repair_board" }
   /** `pcbnew.EditorControl.exportFootprints` (`ExportFootprintsToLibrary`): every board footprint, as the board has it, over the project library's entry of its name. */
@@ -3141,6 +3145,15 @@ export interface TitleBlock {
   shown?: { title: string; date: string; rev: string; company: string; comments: string[] };
 }
 
+/** A drawing sheet file a document names (`crates/cli/src/drawing_sheet_api.rs` `state_json`): the name as kept, the file it resolves to, its text (null when it could not be
+ *  read) and why not ("File not found.", as `DS_DATA_MODEL::LoadDrawingSheet` says). `kicad-port/dsDataModel.ts` reads the text. */
+export interface DrawingSheetFile {
+  path: string;
+  file: string;
+  text: string | null;
+  error: string | null;
+}
+
 /** A document's paper (`PAGE_INFO`) as the state JSON reports it: `size_nm` is the resolved width and height in its orientation. */
 export interface PageInfo {
   /** KiCad's name: A5, A4, A3, A2, A1, A0, A, B, C, D, E, USLetter, USLegal, USLedger or User. */
@@ -3250,6 +3263,10 @@ export interface Schematic {
   page_number?: number;
   /** The paper this sheet is drawn on; absent from a backend built before sheets chose their own. */
   paper?: SchematicPaper;
+  /** The schematic's drawing sheet file (`schematic.page_layout_descr_file`); null/absent is KiCad's default sheet. */
+  drawing_sheet?: DrawingSheetFile | null;
+  /** What the drawing sheet shows of this page (`SCH_VIEW::DisplaySheet`): `${#}` (the page as shown), `${##}` (the number of pages) and whether it is the first page. */
+  sheet_page?: { number: string; count: number; first: boolean };
   /** The file of the screen shown (empty for the root sheet): the title block names it. The design's whole tree is `fetchHierarchy` (`GET /api/sch/hierarchy`). */
   file?: string;
   /** The project's unit naming (`schematic.subpart_id_separator` / `subpart_first_id`, character codes; the root sheet's `SchExtras`): absent is KiCad's default,

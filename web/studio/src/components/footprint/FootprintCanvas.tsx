@@ -6,20 +6,27 @@
 // much smaller tool set than Canvas.tsx's (no routing/zones/vias, no
 // box-select disambiguation menu, no auto-pan) since a footprint has no
 // board-scale content to need them for.
+import { useGridDisplay } from "../../state/commonOptions";
+import { gridYOf } from "../../kicad-port/gridSettings";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CmdShape, LibraryPad, PadKind } from "../../api/types";
 import { FP_ITEM_TOOLS, useFpApi, useFpDispatch, useFpState, type FpToolId } from "../../state/footprintEditorStore";
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
 import { paintFootprint } from "./footprintPainter";
 import { useFootprintChecker } from "../../state/footprintChecker";
-import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
+import { handleWheel, leftDragOutcome } from "../../kicad-port/viewControls";
+import { wheelInputOf } from "../../hooks/canvasWheel";
+import { useLibraryViewControls } from "../libraryViewControls";
+import { SelectionMarquee, type Marquee } from "../SelectionMarquee";
+import { rectSelectionHits } from "../../kicad-port/selectRect";
+import { footprintItemBoxes } from "../../kicad-port/itemBoxes";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { picker } from "../../actions/pcbPicker";
 import { isMac } from "../../platform";
 import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
-import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
+import { computeClickModifiers, applySingleClickModifier, applyBoxSelectionModifiers, hasModifier, isCrossingSelection, type ClickModifiers } from "../../kicad-port/selection";
 import { nextPadNumber } from "../../kicad-port/padNumbering";
 import { padCanHaveNumber } from "../../kicad-port/fpEditActions";
 import { padEditMenu, padToolsBlocked } from "../../kicad-port/padEditMode";
@@ -117,8 +124,10 @@ function rubberEndFor(mode: "direct" | "45" | "90", draw: { shapeKind: string; p
 }
 
 type DragState =
-  | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] }
-  | { kind: "move"; refs: string[]; moveKind: string; startWorld: [number, number]; snapOrigin: [number, number] };
+  | { kind: "move"; refs: string[]; moveKind: string; startWorld: [number, number]; snapOrigin: [number, number] }
+  /** `PCB_SELECTION_TOOL::SelectRectArea`: the selection rectangle from where the press was; `click` is the item the press was on, selected as a click when the release comes
+   * without a drag ("Left button drag:" sent the drag to the rectangle). */
+  | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; modifiers: ClickModifiers; click: string | null };
 
 /** The shape a point-counted tool commits: the layer class's width and, for a polygon, KiCad's fill rule (kicad-port/fpDrawDefaults.ts). */
 function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier", pts: [number, number][], layer: string): CmdShape | null {
@@ -140,7 +149,11 @@ export function FootprintCanvas() {
   const api = useFpApi();
   const gridOrigin = useFootprintGridOrigin();
   // Grid overrides (`common.Control.toggleGridOverrides`): a pad on the connected-items grid, a shape on the graphics grid, text on the text grid -- `GetItemGrid`.
-  const gridList = useGridSettings("footprint").grids;
+  const gridSettingsList = useGridSettings("footprint");
+  const gridList = gridSettingsList.grids;
+  // the editor's own Display Options > Grid Display, and the Y of its grid (Edit Grids' "Y:")
+  const gridDisplay = useGridDisplay("footprint");
+  const gridYNm = gridYOf(gridSettingsList, state.gridNm);
   const gridOverrides = useGridOverrides("footprint");
   const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridNm, gridList, gridOverrides);
   /** `GetSelectionGrid`: the category of the coarsest grid of what is held. */
@@ -164,8 +177,6 @@ export function FootprintCanvas() {
   const dragRef = useRef<DragState | null>(null);
   /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag. Made at every press. */
   const gestureRef = useRef<ClickDragGesture | null>(null);
-  /** A right-button press that became a pan-drag: the `contextmenu` event that follows its release must not open the menu (a drag is not a click). */
-  const justPannedRef = useRef(false);
   const { run, isEnabled } = useActionRunner();
   /** `EnumeratePads`' `oldMousePos`: where the mouse was at the last event, so a fast move can be swept for pads in between. */
   const lastMouseRef = useRef<{ x: number; y: number } | null>(null);
@@ -176,9 +187,26 @@ export function FootprintCanvas() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const wheelPrefs = useWheelPrefs();
   const userMovedRef = useRef(false);
+  const [marquee, setMarquee] = useState<Marquee | null>(null);
+  const studioPrefs = useStudioState().prefs;
+  // The middle and right drags, the pan on movement with a key and the auto-pan (`WX_VIEW_CONTROLS`), as the board and the schematic have them.
+  const viewCtl = useLibraryViewControls({
+    containerRef,
+    view: state.view,
+    setView: (view) => dispatch({ type: "SET_VIEW", view }),
+    settings: wheelPrefs.settings,
+    zoomSpeed: studioPrefs.zoomSpeed,
+    autoPan: studioPrefs.autoPan,
+    autoPanAcceleration: studioPrefs.autoPanAcceleration,
+    busy: () => dragRef.current?.kind === "box" || state.movePreview != null || state.drawState != null || state.itemDraw != null || state.carriedText != null,
+    shown: true,
+    onUserMoved: () => {
+      userMovedRef.current = true;
+    },
+  });
 
   const fp = state.footprint;
-  snap.update({ footprint: fp, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, overrides: gridOverrides, origin: [gridOrigin.x, gridOrigin.y], highContrast: state.highContrast, activeLayer: state.activeLayer });
+  snap.update({ footprint: fp, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, gridYs: gridSettingsList.ys, overrides: gridOverrides, origin: [gridOrigin.x, gridOrigin.y], highContrast: state.highContrast, activeLayer: state.activeLayer });
   snap.onChange = () => bumpSnap((n) => n + 1);
   // A tool of its own starts a helper of its own: what the last one remembered (the anchor snapped to, the snap line, the construction geometry) goes with it.
   useEffect(() => {
@@ -313,6 +341,8 @@ export function FootprintCanvas() {
       gridNm: state.gridNm,
       gridVisible: state.gridVisible && state.layerVisible["obj:grid"] !== false,
       gridOrigin: [gridOrigin.x, gridOrigin.y],
+      gridYNm,
+      gridDisplay,
       drawState: draw && constrained?.leader ? { ...draw, leader: constrained.leader } : draw,
       cursorNm: constrained ? { x: constrained.end[0], y: constrained.end[1] } : rubber,
       movePreview: state.movePreview,
@@ -338,7 +368,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden]);
+  }, [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -419,14 +449,10 @@ export function FootprintCanvas() {
     const gesture = new ClickDragGesture(dragRuleFor(isMac()));
     gesture.down(e.clientX, e.clientY, e.timeStamp);
     gestureRef.current = gesture;
-    justPannedRef.current = false;
     const [wx, wy] = worldAt(e);
     setContextMenu(null);
 
-    if (e.button === 1 || e.button === 2) {
-      dragRef.current = { kind: "pan", button: e.button as 1 | 2, startScreen: [e.clientX, e.clientY], startView: [state.view.x, state.view.y] };
-      return;
-    }
+    if (viewCtl.press(e)) return;
     if (e.button !== 0) return;
 
     const [sx, sy] = placing ? toolPoint(e, wx, wy) : [wx, wy];
@@ -556,6 +582,13 @@ export function FootprintCanvas() {
     const hit = hitTest(wx, wy);
     const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
     const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
+    // `PCB_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )` under "Left button drag:" (`leftDragOutcome`): a drag with a modifier, from empty space, or from an item the
+    // setting does not let the drag pick up draws the selection rectangle; the press then changes nothing yet -- a release without a drag is the click.
+    const outcome = leftDragOutcome(wheelPrefs.settings.dragLeft, { modifier: hasModifier(modifiers), selectionEmpty: state.selection.size === 0, onItem: hit != null, inSelection: hit != null && state.selection.has(hit.id) });
+    if (!hit || outcome === "area") {
+      dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY], modifiers, click: hit?.id ?? null };
+      return;
+    }
     if (hit) {
       const refs = applySingleClickModifier(state.selection, hit.id, modifiers);
       dispatch({ type: "SET_SELECTION", refs });
@@ -566,8 +599,6 @@ export function FootprintCanvas() {
         dragRef.current = { kind: "move", refs: held, moveKind: hit.kind, startWorld: [wx, wy], snapOrigin: [ox, oy] };
         dispatch({ type: "SET_MOVE_ORIGIN", at: { x: ox, y: oy } });
       }
-    } else if (!hasModifier(modifiers)) {
-      dispatch({ type: "CLEAR_SELECTION" });
     }
   };
 
@@ -576,6 +607,7 @@ export function FootprintCanvas() {
     const [wx, wy] = worldAt(e);
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
     const motion = gestureRef.current?.move(e.clientX, e.clientY, e.timeStamp);
+    if (viewCtl.move(e, !!motion?.dragging)) return;
     // The Renumber Pads tool: a drag over pads numbers them (`evt->IsDrag( BUT_LEFT )`); every event moves `oldMousePos` on.
     if (state.activeTool === "enumerate" && state.enumerate) {
       if (e.buttons & 1) enumerateAt(wx, wy, false);
@@ -604,10 +636,12 @@ export function FootprintCanvas() {
     }
     const drag = dragRef.current;
     if (!drag) return;
-    if (drag.kind === "pan") {
-      userMovedRef.current = true;
-      if (motion?.dragging) justPannedRef.current = drag.button === 2;
-      dispatch({ type: "SET_VIEW", view: { ...state.view, x: drag.startView[0] + (e.clientX - drag.startScreen[0]), y: drag.startView[1] + (e.clientY - drag.startScreen[1]) } });
+    if (drag.kind === "box") {
+      if (!motion?.dragging) return; // a click with a little jitter, not a rectangle
+      const rect = containerRef.current!.getBoundingClientRect();
+      const x0 = drag.startScreen[0] - rect.left;
+      const x1 = e.clientX - rect.left;
+      setMarquee({ x0, y0: drag.startScreen[1] - rect.top, x1, y1: e.clientY - rect.top, crossing: isCrossingSelection(x0, x1) });
     } else if (drag.kind === "move") {
       // Nothing is picked up until the press has become a drag (tool_dispatcher.cpp: 8 px, or on macOS a motion after 300 ms held).
       if (!motion?.dragging) return;
@@ -619,11 +653,28 @@ export function FootprintCanvas() {
     }
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (e: React.PointerEvent) => {
     gestureRef.current?.up();
+    viewCtl.release();
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag) return;
+    if (drag.kind === "box") {
+      const box = marquee;
+      setMarquee(null);
+      if (!box) {
+        // no drag: the click -- on an item it selects it (as the modifiers say), on nothing it clears the selection unless a modifier is held
+        if (drag.click) dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, drag.click, drag.modifiers) });
+        else if (!hasModifier(drag.modifiers)) dispatch({ type: "CLEAR_SELECTION" });
+        return;
+      }
+      // `SelectRectArea` -> `SelectMultiple`: what the rectangle takes (as its direction says), each as the item a click on it would select (a group's member as the group)
+      const [wx, wy] = worldAt(e);
+      const hits = fp ? [...new Set(rectSelectionHits(footprintItemBoxes(fp), drag.startWorld, [wx, wy]).map((id) => fpSelectionTarget(fp, id)))] : [];
+      if (hits.length > 0 || hasModifier(drag.modifiers)) dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits, drag.modifiers) });
+      else dispatch({ type: "CLEAR_SELECTION" });
+      return;
+    }
     if (drag.kind === "move" && state.movePreview) {
       const { refs, dxNm, dyNm } = state.movePreview;
       if (dxNm === 0 && dyNm === 0) dispatch({ type: "SET_MOVE_PREVIEW", preview: null }); // dragged back to where it began: nothing to commit
@@ -635,8 +686,7 @@ export function FootprintCanvas() {
     e.preventDefault();
     userMovedRef.current = true;
     const rect = containerRef.current!.getBoundingClientRect();
-    const input: WheelInput = { deltaX: e.deltaX, deltaY: e.deltaY, shiftKey: e.shiftKey, ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey, mac: isMac(), altKey: e.altKey, x: e.clientX - rect.left, y: e.clientY - rect.top };
-    const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
+    const result = handleWheel(state.view, { width: rect.width, height: rect.height }, wheelInputOf(e, rect), wheelPrefs.settings, wheelPrefs.controller);
     if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.view });
   };
   useNonPassiveWheel(containerRef, onWheel); // React's onWheel is passive: preventDefault() would be ignored and logged
@@ -730,10 +780,7 @@ export function FootprintCanvas() {
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     // A right-drag pans and opens nothing: the button went up as a drag (TA_MOUSE_UP), not a click, so no menu.
-    if (justPannedRef.current) {
-      justPannedRef.current = false;
-      return;
-    }
+    if (viewCtl.takeJustPanned()) return;
     const [wx, wy] = worldAt(e);
     const hit = hitTest(wx, wy);
     if (hit && !state.selection.has(hit.id)) dispatch({ type: "SET_SELECTION", refs: [hit.id] });
@@ -782,6 +829,7 @@ export function FootprintCanvas() {
       onContextMenu={onContextMenu}
     >
       <canvas ref={canvasRef} />
+      <SelectionMarquee m={marquee} />
       {!fp && state.name && <div className="pcb-canvas-empty">{state.error ?? "Loading footprint…"}</div>}
       {/* Nothing open: the empty canvas and its grid, like KiCad's, with one quiet line saying how to open something. */}
       {!fp && !state.name && <div className="canvas-empty-hint">No footprint loaded -- double-click one in Libraries, or press Ctrl+N for a new one</div>}

@@ -12,7 +12,7 @@ import { PcbGridHelper, type GridEnv, type LayerSel, type SnapOverlay, type Visi
 import { sceneOf, type SnapScene } from "../../kicad-port/snapScene";
 import { objectOn } from "../../kicad-port/appearance";
 import { computeVisibleGridSize } from "../../kicad-port/grid";
-import { gridSizeFor, pcbItemGrid, selectionGrid, type GridCategory, type GridOverrides, type PcbItemKind } from "../../kicad-port/gridOverrides";
+import { gridEnvY, gridSizeFor, pcbItemGrid, selectionGrid, type GridCategory, type GridOverrides, type PcbItemKind } from "../../kicad-port/gridOverrides";
 import { itemKind } from "../../kicad-port/pcbItems";
 import { reportSnap } from "../../kicad-port/snapReport";
 import type { DragFilter, PcbMagnetic } from "../../kicad-port/snapAnchors";
@@ -29,6 +29,8 @@ export interface PcbSnapView {
   gridNm: number;
   /** The editor's grid list and the overrides over it. */
   grids: readonly number[];
+  /** The grids' Y sizes beside `grids` (`GridSettings::ys`), when a grid is not square. */
+  gridYs?: readonly number[];
   overrides: GridOverrides | null;
   magnetic: PcbMagnetic;
   /** `state.layerVisible`: a layer is hidden only when it is `false`. */
@@ -86,6 +88,7 @@ export class PcbSnap {
       visibleGridNm: computeVisibleGridSize(v.gridNm, v.scale > 0 ? v.scale : 1),
       origin: [getSnapOrigin().x, getSnapOrigin().y],
       gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides),
+      ...gridEnvY(v),
     };
   }
 

@@ -15,6 +15,8 @@
 //     `move_items` on drop (see state/store.tsx `commitMove`); M starts the
 //     same preview without holding the button, click commits, Esc cancels.
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
+import { useGridDisplay } from "../../state/commonOptions";
+import { gridYOf } from "../../kicad-port/gridSettings";
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";
 import { newViaStitch } from "../../kicad-port/viaStitchTool";
 import { chosenDiffPair, chosenTrackWidthOf } from "../../kicad-port/routerSizes";
@@ -66,7 +68,8 @@ import { finishEditPattern, fixTune, hoverTune, moveTune, startTune, TuneHandleD
 import { handleAt } from "../../kicad-port/tuneTool";
 import { dpStateFromPreview } from "../../kicad-port/dpTool";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
-import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, type WheelInput } from "../../kicad-port/viewControls";
+import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, leftDragOutcome, motionPan } from "../../kicad-port/viewControls";
+import { wheelInputOf } from "../../hooks/canvasWheel";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { isMac } from "../../platform";
@@ -123,7 +126,7 @@ function componentDragPreview(draw: DrawState | null): PaintOptions["movePreview
 
 const PLACING_TOOLS = new Set<string>(["route", "diffpair", "tune", "drag", "via", "zone", "draw_segment", "draw_arc", "draw_bezier", "draw_rect", "draw_circle", "draw_polygon", "text", "dimension", "table", "measure", "drill_origin", "local_ratsnest", "picker"]);
 
-/** wx_view_controls.cpp onButton: MiddleDown/RightDown both start DRAG_PANNING by default (m_dragMiddle/m_dragRight == MOUSE_DRAG_ACTION::PAN). A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
+/** wx_view_controls.cpp onButton: MiddleDown/RightDown start DRAG_PANNING or DRAG_ZOOMING as Preferences > Mouse and Touchpad say (m_dragMiddle/m_dragRight, both PAN by default), or nothing. A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
 const PAN_BUTTONS = new Set([1, 2]);
 // (A right-button press is a pan-drag rather than a click-to-open-the-context-menu, and a held press stops being a long press, by the dispatcher's rule:
 // kicad-port/dragThreshold.ts, tool_dispatcher.cpp -- more than 8 px of travel along an axis, or on macOS a motion after 300 ms held.)
@@ -177,6 +180,8 @@ const SHAPE_TOOL_KIND: Partial<Record<ToolId, ShapeToolKind>> = {
 
 type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number]; moved: boolean }
+  /** `onMotion`'s DRAG_ZOOMING: the view scales about the press point (`m_zoomStartPoint`) by the pointer's travel down the screen since the last motion. */
+  | { kind: "zoom"; button: 1 | 2; anchor: { x: number; y: number }; lastY: number; moved: boolean }
   | { kind: "move"; refs: string[]; pivotNm?: [number, number]; flipPivotNm?: [number, number]; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
   /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
@@ -273,6 +278,8 @@ export function Canvas() {
   const lastPointerScreenRef = useRef<{ x: number; y: number } | null>(null);
   /** Set by onPointerUp when a right-button pan-drag just ended with real movement, so the native `contextmenu` event that follows (a separate, later browser event) knows to suppress the menu instead of opening it -- see onContextMenu. */
   const justPannedRef = useRef(false);
+  /** `m_metaPanStart`: where the pointer was at the last motion with "Pan on mouse movement with key:" held (null when the key is up). */
+  const motionPanRef = useRef<{ x: number; y: number } | null>(null);
   /**
    * pcb_selection_tool.cpp Main(): a plain click on an item that's
    * already part of a multi-item selection does NOT collapse the
@@ -304,10 +311,14 @@ export function Canvas() {
   const snapRef = useRef<PcbSnap | null>(null);
   if (!snapRef.current) snapRef.current = new PcbSnap();
   const snap = snapRef.current;
-  const gridList = useGridSettings("pcb").grids;
+  const gridSettingsList = useGridSettings("pcb");
+  const gridList = gridSettingsList.grids;
+  // the editor's own Display Options > Grid Display, and the Y of its grid (Edit Grids' "Y:")
+  const gridDisplay = useGridDisplay("pcb");
+  const gridYNm = gridYOf(gridSettingsList, state.gridNm);
   const gridOverrides = useGridOverrides("pcb");
   const [, bumpSnap] = useState(0);
-  snap.update({ board, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, overrides: gridOverrides, magnetic: toPcbMagnetic(state.prefs, state.magneticAllLayers), layerVisible: state.layerVisible, highContrast: state.highContrast, activeLayer: state.activeLayer, selection: state.selection });
+  snap.update({ board, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, gridYs: gridSettingsList.ys, overrides: gridOverrides, magnetic: toPcbMagnetic(state.prefs, state.magneticAllLayers), layerVisible: state.layerVisible, highContrast: state.highContrast, activeLayer: state.activeLayer, selection: state.selection });
   snap.onChange = () => bumpSnap((n) => n + 1);
   // A tool of its own starts a helper of its own: what the last one remembered (the anchor snapped to, the snap line, the construction geometry) goes with it.
   useEffect(() => {
@@ -451,6 +462,8 @@ export function Canvas() {
       highContrast: state.highContrast,
       gridNm: state.gridNm,
       gridVisible: state.gridVisible,
+      gridYNm,
+      gridDisplay,
       // a component drag (`COMPONENT_DRAGGER`) draws its footprints where the drag has them, as a move would (`InlineDrag`'s preview of the footprint's
       // graphics, pads and fields, moved by `offset`; the dynamic ratsnest and the courtyard conflicts follow)
       movePreview: state.movePreview ?? componentDragPreview(state.drawState),
@@ -495,7 +508,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion]);
+  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -1189,13 +1202,15 @@ export function Canvas() {
       return;
     }
     if (PAN_BUTTONS.has(e.button)) {
-      // wx_view_controls.cpp onButton: MiddleDown/RightDown both start
-      // DRAG_PANNING by default. A right-button press might still turn
-      // out to be a plain click (-> the context menu, via the browser's
-      // own native `contextmenu` event on button-up) rather than a drag;
-      // onContextMenu below tells the two apart by whether real movement
-      // happened.
-      dragRef.current = { kind: "pan", button: e.button as 1 | 2, startScreen: [e.clientX, e.clientY], startView: [state.view.x, state.view.y], moved: false };
+      // wx_view_controls.cpp onButton: MiddleDown/RightDown start DRAG_PANNING or DRAG_ZOOMING as `drag_middle` / `drag_right` say, or nothing (None). A
+      // right-button press might still turn out to be a plain click (-> the context menu, via the browser's own native `contextmenu` event on button-up)
+      // rather than a drag; onContextMenu below tells the two apart by whether real movement happened.
+      const action = dragActionOf(e.button, wheelPrefs.settings);
+      if (action === "pan") dragRef.current = { kind: "pan", button: e.button as 1 | 2, startScreen: [e.clientX, e.clientY], startView: [state.view.x, state.view.y], moved: false };
+      else if (action === "zoom") {
+        const rect = containerRef.current!.getBoundingClientRect();
+        dragRef.current = { kind: "zoom", button: e.button as 1 | 2, anchor: { x: flipLocalX(state.bcx.boardFlipped, rect.width, e.clientX - rect.left), y: e.clientY - rect.top }, lastY: e.clientY, moved: false };
+      }
       return;
     }
     if (e.button !== 0) return;
@@ -1284,6 +1299,16 @@ export function Canvas() {
         return;
       }
 
+      // `PCB_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )` under Preferences > Mouse and Touchpad's "Left button drag:" (`leftDragOutcome`): a drag from here
+      // may draw the selection area instead of moving -- always with "Draw selection rectangle", from an item not selected with "Drag selected objects", and
+      // with "Drag any object" from an item outside a selection that is not empty. Then the press selects nothing yet: a release without a drag is the click.
+      const pressInSelection = withGroupSubstitution([hit.id], board?.drawings?.groups, state.enteredGroupId).some((id) => state.selection.has(id)) || (board != null && state.selection.has(padParent(board, hit.id) ?? hit.id));
+      if (leftDragOutcome(wheelPrefs.settings.dragLeft, { modifier: false, selectionEmpty: state.selection.size === 0, onItem: true, inSelection: pressInSelection }) === "area") {
+        pendingClickRef.current = { id: hit.id, modifiers };
+        dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY] };
+        return;
+      }
+
       // pcb_selection_tool.cpp Main(): "Check if dragging has started
       // within any of selected items bounding box" -- a plain click (no
       // modifier) on an item that's already part of a larger selection
@@ -1324,6 +1349,13 @@ export function Canvas() {
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
     const containerRectForAutoPan = containerRef.current?.getBoundingClientRect();
     if (containerRectForAutoPan) lastPointerScreenRef.current = { x: e.clientX - containerRectForAutoPan.left, y: e.clientY - containerRectForAutoPan.top };
+    // `WX_VIEW_CONTROLS::onMotion`'s `m_motionPanModifier`: with the key of "Pan on mouse movement with key:" held the view follows the pointer; the tools still see the motion.
+    const metaPan = motionPan(state.view, wheelPrefs.settings.motionPanModifier, { altKey: e.altKey, ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey, shiftKey: e.shiftKey }, motionPanRef.current, { x: e.clientX, y: e.clientY });
+    motionPanRef.current = metaPan.start;
+    if (metaPan.view) {
+      userMovedRef.current = true;
+      dispatch({ type: "SET_VIEW", view: flipPan(state.bcx.boardFlipped, state.view, metaPan.view) });
+    }
 
     // tool_dispatcher.cpp handleMouseButton: a held button becomes a drag after 8 px (or, on macOS, 300 ms) -- not at the first grid step of travel.
     const motion = gestureRef.current?.move(e.clientX, e.clientY, e.timeStamp);
@@ -1448,6 +1480,12 @@ export function Canvas() {
       userMovedRef.current = true;
       if (motion?.dragging) drag.moved = true;
       dispatch({ type: "SET_VIEW", view: { ...state.view, x: drag.startView[0] + panDeltaX(state.bcx.boardFlipped, e.clientX - drag.startScreen[0]), y: drag.startView[1] + (e.clientY - drag.startScreen[1]) } });
+    } else if (drag.kind === "zoom") {
+      // `onMotion`'s DRAG_ZOOMING: `exp( d.y * zoomSpeed * 0.001 )` about the press point, up the screen zooms in
+      userMovedRef.current = true;
+      if (motion?.dragging) drag.moved = true;
+      dispatch({ type: "SET_VIEW", view: dragZoomView(state.view, drag.anchor, e.clientY - drag.lastY, state.prefs.zoomSpeed) });
+      drag.lastY = e.clientY;
     } else if (drag.kind === "move") {
       // Until the press has become a drag it is a click that may still be released: nothing is picked up.
       if (!motion?.dragging) return;
@@ -1498,7 +1536,7 @@ export function Canvas() {
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag) return;
-    if (drag.kind === "pan") {
+    if (drag.kind === "pan" || drag.kind === "zoom") {
       justPannedRef.current = drag.button === 2 && drag.moved;
     } else if (drag.kind === "move") {
       const held = state.movePreview;
@@ -1576,16 +1614,8 @@ export function Canvas() {
     e.preventDefault();
     userMovedRef.current = true;
     const rect = containerRef.current!.getBoundingClientRect();
-    const input: WheelInput = {
-      deltaX: e.deltaX,
-      deltaY: e.deltaY,
-      shiftKey: e.shiftKey,
-      ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
-      mac: isMac(),
-      altKey: e.altKey,
-      x: flipLocalX(state.bcx.boardFlipped, rect.width, e.clientX - rect.left),
-      y: e.clientY - rect.top,
-    };
+    const raw = wheelInputOf(e, rect);
+    const input = { ...raw, x: flipLocalX(state.bcx.boardFlipped, rect.width, raw.x) };
     const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
     if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.kind === "zoom" ? result.view : flipPan(state.bcx.boardFlipped, state.view, result.view) });
   };
@@ -1642,16 +1672,11 @@ export function Canvas() {
   // handled globally now (actions/useGlobalHotkeys.ts), driven by
   // src/kicad/actions.json's real hotkeys through the same registry the
   // menu bar and toolbars use, reading/writing the store's activeTool
-  // and cursorNm. Enter-finishes-the-current-route/zone/shape is the one
-  // interaction left here: it's a plain UI convention this app is
-  // choosing for its own click-to-add-points tools, not a KiCad dotted
-  // action with a real extracted hotkey, so it doesn't belong in that
-  // global registry the way a real one does.
+  // and cursorNm. Enter is one of them too (UI-LEFT C4): `ACTIONS::cursorClick` (WXK_RETURN), a left click where the cursor is
+  // (`COMMON_TOOLS::CursorControl`'s CURSOR_CLICK), so during a route it fixes the segment as a click does (`ROUTER_TOOL::performRouting`'s
+  // `IsClick( BUT_LEFT )`) and in a zone or shape tool it adds a point; End (`finishInteractive`) or a double click finishes. It used to finish the
+  // route here, a convention of this studio's own.
   const onCanvasKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && state.drawState) {
-      e.preventDefault();
-      finishDraw();
-    }
     // The Track Corner Mode hotkeys (router_tool.cpp's `ACT_SwitchCornerMode*`, static TOOL_ACTIONs of the router tool): Ctrl+/ the next
     // mode, Ctrl+W 45, Ctrl+Shift+W arc 45, Ctrl+Alt+W 90, Alt+W arc 90 -- in the router tool only (`AS_CONTEXT`), the pair router's too; and
     // the router's other context actions: Ctrl+V microvia, Alt+Shift+V blind via, < / Alt+< pick a layer and place a through / blind via,

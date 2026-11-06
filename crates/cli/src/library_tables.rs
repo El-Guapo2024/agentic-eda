@@ -853,7 +853,7 @@ pub(crate) fn check_rows_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
 }
 
 /// The variables a path may be written with, as `NormalizePath` takes them: KiCad's, then the project's (their values with their own variables replaced).
-fn normalize_vars(env: &Env, vars: &Vars, project_dir: &Path) -> Vec<(String, String)> {
+pub(crate) fn normalize_vars(env: &Env, vars: &Vars, project_dir: &Path) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = env.global_vars().into_iter().map(|v| (v.name, v.value)).collect();
     for (k, v) in &vars.text {
         // a variable's folder as a path has it: its own variables replaced and `..` resolved
@@ -1217,7 +1217,7 @@ fn search_paths(env: &Env, dir: &Path) -> Vec<Value> {
 
 /// `GET /api/fs/list?path=&what=`: the stand-in for the native file dialog the browse buttons open in KiCad -- a page cannot see the machine's folders, the
 /// server can. The folders of `path` (variables allowed, relative to the board's folder; a file stands for its folder), and the files `what` asks for:
-/// `symbol` (.kicad_sym), `table` (a library table), nothing but folders for `footprint`, `design_block`, `symbol_folder` (a folder library of symbols) and
+/// `symbol` (.kicad_sym), `table` (a library table), `drawing_sheet` (.kicad_wks, Page Settings' drawing sheet), nothing but folders for `footprint`, `design_block`, `symbol_folder` (a folder library of symbols) and
 /// `folder`. A `.pretty`, `.kicad_blocks` or `.kicad_symdir` folder is flagged: it is the library.
 pub(crate) fn browse(dir: &Path, typed: &str, what: &str) -> Value {
     browse_with(&Env::discover(), dir, typed, what)
@@ -1250,6 +1250,8 @@ pub(crate) fn browse_with(env: &Env, dir: &Path, typed: &str, what: &str) -> Val
         } else {
             match what {
                 "symbol" => name.ends_with(".kicad_sym"),
+                // Page Settings' drawing sheet file (`FILEEXT::DrawingSheetFileWildcard`)
+                "drawing_sheet" => name.to_ascii_lowercase().ends_with(".kicad_wks"),
                 "table" => lt::TableKind::ALL.iter().any(|k| name == k.file_name()),
                 _ => false,
             }

@@ -24,6 +24,14 @@ import type { ZoomController } from "./zoomController";
 
 export type DragAction = "pan" | "zoom" | "none";
 export type ScrollModifier = "none" | "ctrl" | "shift" | "alt";
+/**
+ * `input.mouse_left` (`COMMON_SETTINGS::m_Input.drag_left`, `MOUSE_DRAG_ACTION`), Preferences > Mouse and Touchpad's "Left button drag:":
+ * `SELECT` "Draw selection rectangle", `DRAG_SELECTED` "Drag selected objects; otherwise draw selection rectangle" (KiCad's default) and
+ * `DRAG_ANY` "Drag any object (selected or not)". `TOOLS_HOLDER::CommonSettingsChanged` hands it to the selection tools (`GetDragAction()`).
+ */
+export type LeftDragAction = "select" | "drag_selected" | "drag_any";
+/** `input.motion_pan_modifier` ("Pan on mouse movement with key:" None / Alt / Ctrl / Shift): moving the mouse with that key held pans the view. */
+export type MotionPanModifier = "none" | "alt" | "ctrl" | "shift";
 
 /** common/view/view_controls.cpp VC_SETTINGS::Reset() + common/settings/common_settings.cpp's input.* PARAM defaults -- the subset this port actually uses. */
 export interface ViewControlSettings {
@@ -33,9 +41,13 @@ export interface ViewControlSettings {
   autoPanMargin: number;
   /** input.auto_pan_acceleration, default 5. */
   autoPanAcceleration: number;
-  /** input.drag_middle / drag_right, default PAN for both. (drag_left defaults to DRAG_SELECTED/box-select, not a view-control action, so it isn't modeled here.) */
+  /** input.drag_middle / drag_right, default PAN for both. */
   dragMiddle: DragAction;
   dragRight: DragAction;
+  /** input.mouse_left: what a left drag does in the selection tools (`leftDragOutcome`). The studio's default differs from KiCad's, see `DEFAULT_LEFT_DRAG`. */
+  dragLeft: LeftDragAction;
+  /** input.motion_pan_modifier, default none. */
+  motionPanModifier: MotionPanModifier;
   /** input.scroll_modifier_zoom, default "none" (plain wheel zooms). */
   scrollModifierZoom: ScrollModifier;
   /** input.scroll_modifier_pan_h, default "ctrl". */
@@ -52,6 +64,8 @@ export const DEFAULT_VIEW_CONTROL_SETTINGS: ViewControlSettings = {
   autoPanAcceleration: 5.0,
   dragMiddle: "pan",
   dragRight: "pan",
+  dragLeft: "drag_any",
+  motionPanModifier: "none",
   scrollModifierZoom: "none",
   scrollModifierPanH: "ctrl",
   reverseScrollZoom: false,
@@ -74,6 +88,8 @@ export interface WheelInput {
   y: number;
   /** The page runs on macOS (`isMac()`): there the system itself makes Shift+wheel a horizontal wheel, which wx reports as `wxMOUSE_WHEEL_HORIZONTAL`. */
   mac?: boolean;
+  /** A touchpad pinch (`isPinchWheel`): the browser's form of wx's `wxEVT_MAGNIFY`, handled as `onMagnify` whatever the wheel settings say. */
+  pinch?: boolean;
 }
 
 export type WheelResultKind = "zoom" | "pan" | "pan-horizontal" | "unhandled";
@@ -109,6 +125,8 @@ function toRotation(delta: number): number {
  * whatever pickDefaultZoomController() selected (or a caller-chosen one).
  */
 export function handleWheel(view: ViewTransform, screenSize: ScreenSize, given: WheelInput, settings: ViewControlSettings, zoomController: ZoomController): WheelResult {
+  // A pinch is no wheel: wx delivers it as `wxEVT_MAGNIFY` to `onMagnify`, which no scroll setting touches.
+  if (given.pinch) return { view: handleMagnify(view, given.x, given.y, pinchMagnification(given.deltaY)), kind: "zoom" };
   // r2 D-V3: off macOS the browser (Chromium on Windows and Linux, Firefox) delivers Shift+vertical wheel as a horizontal delta (`deltaY` 0), where wx
   // still reports the vertical axis with Shift down, so `onWheel` pans up and down (`scroll_modifier_pan_h` is Ctrl, not Shift). Undo the browser's
   // swap. (A physical tilt wheel moved with Shift held is read the same way; the DOM cannot tell the two apart.)
@@ -169,6 +187,83 @@ export function handleWheel(view: ViewTransform, screenSize: ScreenSize, given: 
     dy = -scrollVec.y;
   }
   return { view: panByWorldDelta(view, dx, dy), kind: "pan" };
+}
+
+// ---------------------------------------------------------------- pinch and gestures
+
+/**
+ * `WX_VIEW_CONTROLS::onMagnify` (`wxEVT_MAGNIFY`, the macOS touchpad's pinch): `SetScale( GetScale() * ( aEvent.GetMagnification() + 1.0f ), anchor )` with the anchor the
+ * world point under the pointer, which stays where it is on the screen.
+ */
+export function handleMagnify(view: ViewTransform, xPx: number, yPx: number, magnification: number): ViewTransform {
+  return zoomAbout(view, xPx, yPx, magnification + 1);
+}
+
+/**
+ * The magnification of one pinch step as the browser reports it. Browsers have no magnify event: Chromium and Firefox turn a touchpad pinch into a wheel event with `ctrlKey`
+ * set and `deltaY = -100 * ln( scale )` (Chromium's synthetic wheel of a `GesturePinchUpdate`), so the step's scale is `exp( -deltaY / 100 )` and wx's magnification
+ * (the scale less one) follows.
+ */
+export function pinchMagnification(deltaY: number): number {
+  return Math.exp(-deltaY / 100) - 1;
+}
+
+/**
+ * Whether a wheel event is a touchpad pinch rather than Ctrl and the wheel: the browser sets `ctrlKey` on a pinch without the Control key being down, so a wheel with
+ * `ctrlKey` while no Control key is held (`controlHeld`, from the page's own key events: `hooks/controlKeyHeld.ts`) is the pinch. A pinch made while Control is held
+ * cannot be told from Ctrl+wheel and is read as the wheel, as the DOM gives no other sign.
+ */
+export function isPinchWheel(ctrlKey: boolean, controlHeld: boolean): boolean {
+  return ctrlKey && !controlHeld;
+}
+
+// ---------------------------------------------------------------- pan on movement with a key
+
+/**
+ * `WX_VIEW_CONTROLS::onMotion`'s `m_motionPanModifier` branch: while the key "Pan on mouse movement with key:" names is held, each motion moves the view with the pointer
+ * (`d = m_metaPanStart - mousePos; SetCenter( GetCenter() + ToWorld( d ) )`); the first motion with the key down only takes the start (`m_metaPanning`). Returns the new view
+ * (or null when it does not pan) and the start to keep for the next motion (null once the key is up).
+ */
+export function motionPan(view: ViewTransform, modifier: MotionPanModifier, keys: { altKey: boolean; ctrlOrCmd: boolean; shiftKey: boolean }, start: { x: number; y: number } | null, pos: { x: number; y: number }): { view: ViewTransform | null; start: { x: number; y: number } | null } {
+  const held = modifier === "alt" ? keys.altKey : modifier === "ctrl" ? keys.ctrlOrCmd : modifier === "shift" ? keys.shiftKey : false;
+  if (!held) return { view: null, start: null };
+  if (!start) return { view: null, start: pos };
+  return { view: { ...view, x: view.x + (pos.x - start.x), y: view.y + (pos.y - start.y) }, start: pos };
+}
+
+// ---------------------------------------------------------------- the left button
+
+/**
+ * The studio's default for "Left button drag:". KiCad's is `DRAG_SELECTED` (`common_settings.cpp`: `PARAM_ENUM( "input.mouse_left", ..., DRAG_SELECTED, ... )`), where a
+ * drag that starts on an item not selected draws a selection rectangle. **Differs**: the studio keeps `DRAG_ANY`, the way its canvases have always behaved (an item is
+ * picked up by dragging it) and the value KiCad's own migration gives settings that did not ask to prefer selection (`COMMON_SETTINGS::migrateSchema1to2`); the
+ * preference offers all three.
+ */
+export const DEFAULT_LEFT_DRAG: LeftDragAction = "drag_any";
+
+/** What the selection tool knows when a left press becomes a drag (`evt->IsDrag( BUT_LEFT )`). */
+export interface LeftDragContext {
+  /** Shift, Ctrl or Alt is held (`hasModifier()`). */
+  modifier: boolean;
+  /** Nothing is selected (`m_selection.Empty()`). */
+  selectionEmpty: boolean;
+  /** An item the selection tool would pick is under the press (`selectPoint( evt->DragOrigin() )` finds one; the schematic's `RequestSelection` of the hovered item). */
+  onItem: boolean;
+  /** The press is on a selected item (`selectionContains( evt->DragOrigin() )`). */
+  inSelection: boolean;
+}
+
+/**
+ * `PCB_SELECTION_TOOL::Main` and `SCH_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )` branch: whether a left drag moves items or draws the selection area (the rectangle or the
+ * lasso). With a modifier or "Draw selection rectangle", always the area; with nothing selected and anything but "Drag any object", the area; else the items move when the drag
+ * began on a selected item, or -- nothing being selected, under "Drag any object" -- on an item, which is picked first; otherwise the area.
+ */
+export function leftDragOutcome(action: LeftDragAction, c: LeftDragContext): "move" | "area" {
+  if (c.modifier || action === "select") return "area";
+  if (c.selectionEmpty && action !== "drag_any") return "area";
+  if (c.selectionEmpty && c.onItem) return "move";
+  if (c.inSelection) return "move";
+  return "area";
 }
 
 // ---------------------------------------------------------------- drag actions

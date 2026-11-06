@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, type WheelInput } from "./viewControls";
+import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_LEFT_DRAG, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, handleMagnify, isPinchWheel, leftDragOutcome, motionPan, pinchMagnification, type LeftDragContext, type WheelInput } from "./viewControls";
 import { ConstantZoomController, CONSTANT_SCALE } from "./zoomController";
 import { screenToWorld, type ViewTransform } from "./view";
 
@@ -172,4 +172,65 @@ test("r2 D-V2: the auto-pan border and direction are whole pixels (int borderSta
   // 733 * 0.02 = 14.66 -> 14
   assert.deepEqual(computeAutoPanDirection({ x: 14.5, y: 300 }, { width: 1000, height: 733 }), { x: 0, y: 0 });
   assert.deepEqual(computeAutoPanDirection({ x: 10.9, y: 300 }, { width: 1000, height: 733 }), { x: -4, y: 0 });
+});
+
+// ---------------------------------------------------------------- UI-LEFT C1: the left button, pinch, pan on movement
+
+test("leftDragOutcome follows PCB_SELECTION_TOOL::Main / SCH_SELECTION_TOOL::Main's IsDrag( BUT_LEFT ) for the three Left button drag choices", () => {
+  const c = (o: Partial<LeftDragContext>): LeftDragContext => ({ modifier: false, selectionEmpty: true, onItem: true, inSelection: false, ...o });
+  // "Draw selection rectangle": always the area
+  assert.equal(leftDragOutcome("select", c({})), "area");
+  assert.equal(leftDragOutcome("select", c({ selectionEmpty: false, inSelection: true })), "area");
+  // "Drag selected objects; otherwise draw selection rectangle": only a selected item moves
+  assert.equal(leftDragOutcome("drag_selected", c({})), "area", "nothing selected: the area, even on an item");
+  assert.equal(leftDragOutcome("drag_selected", c({ selectionEmpty: false, inSelection: true })), "move");
+  assert.equal(leftDragOutcome("drag_selected", c({ selectionEmpty: false, inSelection: false })), "area");
+  // "Drag any object": an item moves when nothing is selected; with a selection, only from it
+  assert.equal(leftDragOutcome("drag_any", c({})), "move");
+  assert.equal(leftDragOutcome("drag_any", c({ onItem: false })), "area", "empty space");
+  assert.equal(leftDragOutcome("drag_any", c({ selectionEmpty: false, inSelection: true })), "move");
+  assert.equal(leftDragOutcome("drag_any", c({ selectionEmpty: false, inSelection: false })), "area", "a selection that does not hold the item: the area");
+  // a modifier always draws the area (`hasModifier()`)
+  for (const a of ["select", "drag_selected", "drag_any"] as const) assert.equal(leftDragOutcome(a, c({ modifier: true, selectionEmpty: false, inSelection: true })), "area");
+  assert.equal(DEFAULT_VIEW_CONTROL_SETTINGS.dragLeft, DEFAULT_LEFT_DRAG);
+  assert.equal(DEFAULT_LEFT_DRAG, "drag_any", "the studio's default (KiCad's is drag_selected; see DEFAULT_LEFT_DRAG)");
+});
+
+test("a pinch zooms as onMagnify does, about the pointer and whatever the scroll settings say", () => {
+  // Chromium's pinch wheel: deltaY = -100 ln( scale ); onMagnify scales by magnification + 1
+  assert.ok(Math.abs(pinchMagnification(-100 * Math.log(1.25)) - 0.25) < 1e-12);
+  assert.ok(Math.abs(pinchMagnification(-100 * Math.log(0.8)) + 0.2) < 1e-12);
+  const view: ViewTransform = { scale: 0.001, x: 10, y: -20 };
+  const before = screenToWorld(view, 300, 200);
+  const m = handleMagnify(view, 300, 200, 0.25);
+  assert.ok(Math.abs(m.scale - 0.00125) < 1e-15);
+  const after = screenToWorld(m, 300, 200);
+  assert.ok(Math.abs(after[0] - before[0]) < 1e-6 && Math.abs(after[1] - before[1]) < 1e-6, "the point under the pointer stays");
+  // through handleWheel: a pinch zooms even with the mouse defaults, where Ctrl+wheel would pan left/right
+  const zc = new ConstantZoomController(CONSTANT_SCALE.MSW);
+  const pinch = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaY: -100 * Math.log(1.25), ctrlOrCmd: true, pinch: true, x: 300, y: 200 }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
+  assert.equal(pinch.kind, "zoom");
+  assert.ok(Math.abs(pinch.view.scale - 0.00125) < 1e-15);
+  const ctrlWheel = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaY: -100, ctrlOrCmd: true }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
+  assert.equal(ctrlWheel.kind, "pan", "Ctrl and the wheel still pans");
+  // the browser marks a pinch with ctrlKey and no Control key down
+  assert.equal(isPinchWheel(true, false), true);
+  assert.equal(isPinchWheel(true, true), false);
+  assert.equal(isPinchWheel(false, false), false);
+});
+
+test("motionPan: with the key held the view follows the pointer from the second motion; without it nothing pans", () => {
+  const view: ViewTransform = { scale: 0.001, x: 0, y: 0 };
+  const keys = { altKey: false, ctrlOrCmd: false, shiftKey: true };
+  const first = motionPan(view, "shift", keys, null, { x: 100, y: 100 });
+  assert.equal(first.view, null, "m_metaPanning starts: only the start point");
+  assert.deepEqual(first.start, { x: 100, y: 100 });
+  const second = motionPan(view, "shift", keys, first.start, { x: 130, y: 90 });
+  assert.deepEqual(second.view, { scale: 0.001, x: 30, y: -10 }, "SetCenter( GetCenter() + ToWorld( start - pos ) ): the drawing moves with the pointer");
+  assert.deepEqual(second.start, { x: 130, y: 90 });
+  const up = motionPan(view, "shift", { ...keys, shiftKey: false }, second.start, { x: 140, y: 90 });
+  assert.equal(up.view, null);
+  assert.equal(up.start, null, "the key let go ends it");
+  assert.equal(motionPan(view, "none", { altKey: true, ctrlOrCmd: true, shiftKey: true }, { x: 0, y: 0 }, { x: 5, y: 5 }).view, null, "None: never");
+  assert.equal(DEFAULT_VIEW_CONTROL_SETTINGS.motionPanModifier, "none");
 });

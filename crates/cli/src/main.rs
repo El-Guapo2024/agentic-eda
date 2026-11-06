@@ -55,6 +55,7 @@ mod text_variables;
 mod table_json;
 mod text_vars_json;
 mod page_json;
+mod drawing_sheet_api;
 mod barcode_api;
 mod multichannel_api;
 mod image_api;
