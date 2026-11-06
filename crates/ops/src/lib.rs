@@ -1494,6 +1494,10 @@ pub enum Cmd {
         /// linked to the block (`SetDesignBlockLibId`) and the power symbols are numbered anew too. Empty for a plain file.
         #[serde(default)]
         block: String,
+        /// The block's default fields (`DESIGN_BLOCK::GetFields()`, its `.json`'s `fields`, name and value in the file's order), which a sheet drawn from the block starts
+        /// with (`SCH_DRAWING_TOOLS::DrawSheet`: each a `FIELD_T::USER` field, `SetVisible( false )`). Ignored for the contents (`placeSheetContents` has no sheet).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        block_fields: Vec<(String, String)>,
     },
     /// Alt+S (`eeschema.InteractiveEdit.swap`, `SCH_EDIT_TOOL::Swap`): exchange the positions of two schematic
     /// items -- symbols (placed or power), labels and free texts, found by id -- and, for two symbols of the
@@ -3434,8 +3438,8 @@ impl<'a> Board<'a> {
             Cmd::AddSchLine { pts, width_nm } => self.add_sch_line(pts.clone(), *width_nm),
             Cmd::DeleteSchLine { id } => self.delete_sch_line(id),
             Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
-            Cmd::ImportSheet { source, content, as_sheet, name, file, at, size, keep_annotations, order, options, as_group, group_name, block } => match content {
-                Some(content) => self.import_sheet(content, *as_sheet, name, file, *at, *size, *keep_annotations, *order, options, &design_blocks::Placement { source, as_group: *as_group, group_name, block }),
+            Cmd::ImportSheet { source, content, as_sheet, name, file, at, size, keep_annotations, order, options, as_group, group_name, block, block_fields } => match content {
+                Some(content) => self.import_sheet(content, *as_sheet, name, file, *at, *size, *keep_annotations, *order, options, &design_blocks::Placement { source, as_group: *as_group, group_name, block, block_fields }),
                 None => Err(vec![CheckResult::fail("ops_sheet_file_not_read", source, format!("the file '{source}' was not read, so there is nothing to import"))]),
             },
             Cmd::ReplaceSchematic { content, name } => self.replace_schematic(content, name),

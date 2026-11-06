@@ -30,6 +30,8 @@ export interface SheetImportPlan {
   asGroup?: boolean;
   /** The design block (`Lib:Name`) the file is the schematic of, when a block is being placed rather than a file. */
   block?: string;
+  /** The block's default fields (`DESIGN_BLOCK::GetFields`): a sheet drawn from the block starts with each as a hidden field (`DrawSheet`). */
+  blockFields?: { name: string; value: string }[];
   /** The number the next group's name ends with while "Place repeated copies" is on (KiCad's `suffix`, from 1). */
   suffix?: number;
 }
@@ -80,7 +82,7 @@ export function importNumbering(s: Pick<AnnotateSettings, "sort" | "algo" | "sta
  * named after the block (the name of a repeated copy of the contents ends with its number) and linked to it; a plain file's contents go in a group named after the file; a
  * sheet drawn from a plain file is not grouped.
  */
-export function groupFields(plan: Pick<SheetImportPlan, "path"> & Partial<Pick<SheetImportPlan, "asGroup" | "block" | "repeated" | "suffix">>, asSheet: boolean): { as_group?: boolean; group_name?: string; block?: string } {
+export function groupFields(plan: Pick<SheetImportPlan, "path"> & Partial<Pick<SheetImportPlan, "asGroup" | "block" | "repeated" | "suffix" | "blockFields">>, asSheet: boolean): { as_group?: boolean; group_name?: string; block?: string } {
   const out: { as_group?: boolean; group_name?: string; block?: string } = {};
   if (plan.block) out.block = plan.block;
   if (plan.asGroup && (!asSheet || plan.block)) {
@@ -94,7 +96,7 @@ export function groupFields(plan: Pick<SheetImportPlan, "path"> & Partial<Pick<S
 
 /** `import_sheet` as a sheet: a sheet symbol `name` of `size` at `at` showing a copy of the file under `file`. */
 export function importSheetCmd(
-  plan: Pick<SheetImportPlan, "path" | "keepAnnotations"> & Partial<Pick<SheetImportPlan, "asGroup" | "block" | "repeated" | "suffix">>,
+  plan: Pick<SheetImportPlan, "path" | "keepAnnotations"> & Partial<Pick<SheetImportPlan, "asGroup" | "block" | "repeated" | "suffix" | "blockFields">>,
   sheet: { name: string; file: string; at: [number, number]; size: [number, number] },
   numbering: ReturnType<typeof importNumbering>
 ): Cmd {
@@ -110,6 +112,8 @@ export function importSheetCmd(
     order: numbering.order,
     options: numbering.options,
     ...groupFields(plan, true),
+    // `DrawSheet`: "Copy default fields into the sheet" (a design block's only)
+    ...(plan.block && plan.blockFields && plan.blockFields.length > 0 ? { block_fields: plan.blockFields.map((f): [string, string] => [f.name, f.value]) } : {}),
   };
 }
 

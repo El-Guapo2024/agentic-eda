@@ -23,9 +23,10 @@
 //!
 //! # Where this differs from KiCad
 //!
-//! * `DesignBlockEnumerate` names a block by the part of its folder's name before the **first** dot (`dirname.Before( '.' )`), so a block called `a.b` is listed as
-//!   `a`, which is not a folder and cannot be loaded: such a block is invisible to KiCad. [`enumerate`] names it by the folder's name less `.kicad_block`, so a library
-//!   written by another tool is read whole, and [`name_problem`] refuses a dot in the name of a block that is saved here, so that KiCad can read what the studio wrote.
+//! * A block's name may hold a dot, as in KiCad 10: KiCad 25ec2335's `DesignBlockEnumerate` names a block by its folder's name before the **last** dot
+//!   (`dirname.BeforeLast( '.' )`, the `.kicad_block` extension), so `a.b.kicad_block` is the block `a.b` -- 8303b2ad's `dirname.Before( '.' )` listed it as `a`, a
+//!   block that could not be loaded. [`enumerate`] names a block the same way (the folder's name less `.kicad_block`). Differs: [`name_problem`] refuses a name that
+//!   *starts* with a dot (KiCad saves it, into a hidden folder no listing shows: `wxDir::GetFirst` without `wxDIR_HIDDEN`).
 //! * Nothing is written through a temporary file and a move of the *design* files as `wxCopyFile` does; the metadata is written the way `AtomicWriteFile` does
 //!   (a temporary file, then a rename).
 
@@ -98,7 +99,8 @@ fn shown_folder(library: &Path, name: &str) -> String {
 
 /// Why `name` cannot name a block, in KiCad's words, or `None`. `DIALOG_DESIGN_BLOCK_PROPERTIES::TransferDataFromWindow`: a character a library item may not have
 /// (`LIB_ID::FindIllegalLibraryNameChar`: a control character, a backslash or a colon) and `/`, "a path character which is illegal for design blocks and footprints". A
-/// name cannot be empty (`DESIGN_BLOCK_IO::DesignBlockSave`: "Design block does not have a valid library ID.") and, here, holds no dot (see the module doc).
+/// name cannot be empty (`DESIGN_BLOCK_IO::DesignBlockSave`: "Design block does not have a valid library ID."). A dot is a legal character (KiCad 25ec2335 lists
+/// `a.b.kicad_block` as `a.b`); a name that starts with one is refused here, as its folder would be hidden (see the module doc).
 pub fn name_problem(name: &str) -> Option<String> {
     if let Some(ch) = name.chars().find(|&c| (c as u32) < 0x20 || c == '\\' || c == ':' || c == '/') {
         return Some(format!("Illegal character '{ch}' in name '{name}'."));
@@ -106,8 +108,8 @@ pub fn name_problem(name: &str) -> Option<String> {
     if name.is_empty() {
         return Some("Design block does not have a valid library ID.".to_string());
     }
-    if name.contains('.') {
-        return Some(format!("Illegal character '.' in name '{name}': KiCad lists a design block by the part of its folder's name before the first dot, so a dot would hide it from KiCad."));
+    if name.starts_with('.') {
+        return Some(format!("Illegal character '.' at the start of name '{name}': the block's folder would be hidden, and no library lists a hidden folder."));
     }
     None
 }
@@ -537,17 +539,20 @@ mod tests {
         assert_eq!(save(&lib, &with("")).unwrap_err(), "Design block does not have a valid library ID.");
         assert_eq!(save(&lib, &with("a/b")).unwrap_err(), "Illegal character '/' in name 'a/b'.");
         assert_eq!(save(&lib, &with("a:b")).unwrap_err(), "Illegal character ':' in name 'a:b'.");
-        assert!(save(&lib, &with("a.b")).unwrap_err().starts_with("Illegal character '.' in name 'a.b'"));
-        assert!(save(&lib, &with("..")).is_err());
+        assert!(save(&lib, &with("..")).unwrap_err().starts_with("Illegal character '.' at the start of name '..'"));
+        assert!(save(&lib, &with(".hidden")).is_err());
         assert_eq!(save(&lib, &DesignBlock { name: "x".into(), ..Default::default() }).unwrap_err(), "Design block does not have a schematic or board file.");
         let ghost = DesignBlock { name: "x".into(), schematic_file: Some(root.join("ghost.kicad_sch")), ..Default::default() };
         assert!(save(&lib, &ghost).unwrap_err().starts_with("Schematic source file '"));
         let ghost = DesignBlock { name: "x".into(), board_file: Some(root.join("ghost.kicad_pcb")), ..Default::default() };
         assert!(save(&lib, &ghost).unwrap_err().starts_with("Board source file '"));
         assert_eq!(enumerate(&lib).unwrap(), Vec::<String>::new(), "nothing was written by a refused save");
-        // an accepted name may hold spaces, dashes and non-ASCII letters
+        // an accepted name may hold spaces, dashes, non-ASCII letters and dots (KiCad 25ec2335's `DesignBlockEnumerate`: `dirname.BeforeLast( '.' )`)
         save(&lib, &with("Caf\u{e9} 5-V")).unwrap();
-        assert_eq!(enumerate(&lib).unwrap(), vec!["Caf\u{e9} 5-V"]);
+        save(&lib, &with("LDO.3v3")).unwrap();
+        assert_eq!(enumerate(&lib).unwrap(), vec!["Caf\u{e9} 5-V", "LDO.3v3"]);
+        assert!(block_folder(&lib, "LDO.3v3").ends_with("LDO.3v3.kicad_block"));
+        assert_eq!(load(&lib, "LDO.3v3").unwrap().schematic_file, Some(block_file(&lib, "LDO.3v3", SCHEMATIC_EXT)));
         let _ = std::fs::remove_dir_all(&root);
     }
 

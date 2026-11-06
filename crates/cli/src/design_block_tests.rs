@@ -352,6 +352,7 @@ fn a_selection_of_the_sheet_saved_as_a_block_is_grouped_and_linked_and_placed_ag
         as_group: true,
         group_name: String::new(),
         block: "Power:Trio".into(),
+        block_fields: vec![],
     };
     step(&dir, cmd, false, "test").unwrap();
     let (_, after, model) = load(&dir).unwrap();
@@ -420,16 +421,25 @@ fn a_block_placed_as_a_sheet_is_a_sheet_of_its_own_in_a_linked_group() {
         as_group: true,
         group_name: String::new(),
         block: "Power:Trio".into(),
+        // the block's default fields (its `.json`): `DrawSheet` copies each into the sheet as a hidden user field
+        block_fields: vec![("Rail".into(), "3V3".into()), ("Owner".into(), "Power team".into())],
     };
     step(&dir, cmd, false, "test").unwrap();
-    let (_, after, _) = load(&dir).unwrap();
+    let (_, after, model) = load(&dir).unwrap();
     let root = after.schematic.as_ref().unwrap();
     let sheet = root.sheets.iter().find(|s| s.name == "Trio").expect("the sheet");
     assert_eq!(after.sheet_contents.as_ref().unwrap()[&sheet.file].symbols.len(), pick.len());
     assert_eq!((root.extras.groups.len(), root.extras.groups[0].design_block.as_str(), root.extras.groups[0].member_ids.clone()), (1, "Power:Trio", vec![sheet.id.clone()]), "{:?}", root.extras.groups);
+    let fields: Vec<(&str, &str, bool)> = root.extras.sheet_fields[&sheet.id].iter().map(|f| (f.name.as_str(), f.text.as_str(), f.visible)).collect();
+    assert_eq!(fields, vec![("Rail", "3V3", false), ("Owner", "Power team", false)], "the block's fields, in its order, hidden");
+    // the derived `.kicad_sch` writes them as the sheet's properties, hidden
+    let files = eda_kicad::export_kicad_sch_tree(&after, &model, &eda_kicad::ExportMeta { date: "2026-11-06", title: "t" }, "board.kicad_sch").unwrap();
+    let top = &files.iter().find(|(n, _)| n == "board.kicad_sch").unwrap().1;
+    assert!(top.contains("(property \"Rail\" \"3V3\"") && top.contains("(property \"Owner\" \"Power team\""), "the fields are written");
     undo(&dir, "test", Some(Domain::Schematic)).unwrap();
     let (_, back, _) = load(&dir).unwrap();
     assert!(back.schematic.as_ref().unwrap().sheets.is_empty() && back.schematic.as_ref().unwrap().extras.groups.is_empty());
+    assert!(back.schematic.as_ref().unwrap().extras.sheet_fields.is_empty(), "undo takes the fields back with the sheet");
     let _ = std::fs::remove_dir_all(&m.root);
     let _ = scratch;
 }
@@ -556,6 +566,7 @@ fn a_block_made_from_one_of_kicads_own_templates_places_with_its_parts_and_nets(
         as_group: true,
         group_name: String::new(),
         block: "Power:Nano".into(),
+        block_fields: vec![],
     };
     step(&dir, cmd, false, "test").unwrap();
     let (_, after, model) = load(&dir).unwrap();

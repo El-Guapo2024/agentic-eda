@@ -155,7 +155,11 @@ function StudioFrame() {
   useSnapOrigin(); // the point the grid snapping is anchored at (the grid origin of the PCB / Footprint editor on screen)
   useFootprintEditHotkey();
   useOpenDockWithNetNavigator();
-  const blocksShown = useDesignBlocksUi().shown;
+  const blocksUi = useDesignBlocksUi();
+  const blocksShown = blocksUi.shown;
+  // where the pane of the editor in view is (`PaneDock`): docked right (the default), docked left, or floating
+  const blocksEditor = state.tab === "schematic" || state.tab === "pcb" ? state.tab : null;
+  const blocksAt = blocksEditor && blocksShown[blocksEditor] ? blocksUi.dock[blocksEditor] : null;
   // Ctrl+Shift+E / Ctrl+E on the Schematic tab are now the registered actions
   // eeschema.EditorControl.editLibSymbolWithSymbolEditor / editWithSymbolEditor
   // (useActionRunner.ts); useSymbolEditHotkey.ts is superseded and no longer called.
@@ -212,7 +216,9 @@ function StudioFrame() {
       )}
       <div className="app-body">
         {!hideBoardChrome && (
-          <div className="properties-col">
+          <div className={`properties-col${blocksEditor && blocksAt === "left" ? " db-left-host" : ""}`}>
+            {/* a Design Blocks pane docked on the left (`TopDockable( false )`, `BottomDockable( false )`: the left and the right are its sides) */}
+            {blocksEditor && blocksAt === "left" && <DesignBlocksDock editor={blocksEditor} />}
             {/* eeschema docks every side pane in this one left column (sch_edit_frame.cpp: `.Left().Layer( 3 )`); it folds to a handle so the canvas keeps the width. */}
             <DockColumn side="left" label={state.tab === "schematic" ? "Hierarchy & Properties" : "Properties"}>
               <div className="dock">{state.tab === "schematic" ? <SchematicDock /> : <PropertiesPanel />}</div>
@@ -251,13 +257,13 @@ function StudioFrame() {
           <div className="right-dock-col">
             <DockColumn side="right" label="Appearance">
               {/* the board editor's Design Blocks pane is the outermost pane on the right (pcb_edit_frame.cpp: `.Right().Layer( 5 )`) */}
-              {blocksShown.pcb && <DesignBlocksDock editor="pcb" />}
+              {blocksShown.pcb && blocksUi.dock.pcb === "right" && <DesignBlocksDock editor="pcb" />}
               <RightDock />
             </DockColumn>
           </div>
         )}
         {/* The schematic's Design Blocks pane (`defaultDesignBlocksPaneInfo`: `Right().Layer( 3 )`, hidden to begin with) is the one pane on the right of the sheet. */}
-        {state.tab === "schematic" && blocksShown.schematic && (
+        {state.tab === "schematic" && blocksShown.schematic && blocksUi.dock.schematic === "right" && (
           <div className="right-dock-col">
             <DockColumn side="right" label="Design Blocks">
               <DesignBlocksDock editor="schematic" />
@@ -276,6 +282,8 @@ function StudioFrame() {
         )}
         {/* The schematic has no right dock: its Selection Filter (panel_sch_selection_filter.cpp) is a pane of the left column (SchematicDock). */}
       </div>
+      {/* a floating Design Blocks pane: a window over the editor (`FloatingPosition`, `FloatingSize`) */}
+      {blocksEditor && blocksAt === "float" && <DesignBlocksDock editor={blocksEditor} />}
       <div className="message-panel-row">
         <MessagePanel />
       </div>

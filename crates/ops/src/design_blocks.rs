@@ -29,6 +29,8 @@ pub(crate) struct Placement<'a> {
     pub group_name: &'a str,
     /// `Lib:Name`, or empty for a file that is not a design block.
     pub block: &'a str,
+    /// The block's default fields, which a sheet drawn from it starts with (`Cmd::ImportSheet::block_fields`).
+    pub block_fields: &'a [(String, String)],
 }
 
 impl Placement<'_> {

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Block, BlockLibrary } from "../api/designBlockClient";
-import { blockContextMenu, blockId, cleanFields, composeBlockGroups, findBlock, groupNameFor, linkProblem, nameProblem, parseBlockId, placeProblem, pushHistory } from "./designBlocks";
+import { blockContextMenu, blockId, cleanFields, composeBlockGroups, findBlock, groupNameFor, linkProblem, nameProblem, parseBlockId, placeProblem, pushHistory, schematicPlacement, DOCKABLE_SIDES, FLOATING_DEFAULT, clampFloatRect, toggledDock, paneCaptionChoices } from "./designBlocks";
 import { visibleRows } from "./libChooser";
 
 const block = (name: string, extra: Partial<Block> = {}): Block => ({ name, description: "", keywords: "", fields: [], schematic: true, board: false, schematic_path: `/lib/${name}.kicad_sch`, board_path: null, ...extra });
@@ -82,7 +82,8 @@ test("ids, history, names and links follow KiCad's rules", () => {
   assert.equal(nameProblem("a/b"), "Illegal character '/' in name 'a/b'.");
   assert.equal(nameProblem("a:b"), "Illegal character ':' in name 'a:b'.");
   assert.equal(nameProblem(""), "Design block does not have a valid library ID.");
-  assert.ok(nameProblem("v1.2")?.startsWith("Illegal character '.'"));
+  assert.equal(nameProblem("LDO.3v3"), null, "a dot is legal (KiCad 25ec2335: BeforeLast)");
+  assert.ok(nameProblem(".hidden")?.startsWith("Illegal character '.' at the start"));
   // fields
   assert.deepEqual(cleanFields([{ name: "  Part \n Number ", value: "x" }, { name: "A", value: "" }]), { fields: [{ name: "Part Number", value: "x" }, { name: "A", value: "" }] });
   assert.deepEqual(cleanFields([{ name: "A", value: "1" }, { name: " A ", value: "2" }]), { problem: "Duplicate fields are not allowed." });
@@ -120,4 +121,31 @@ test("the sheet and board entries are named for their editor", () => {
   assert.equal(find("pcb", "saveSheet"), "Save Board as Design Block...");
   assert.equal(find("schematic", "updateSheet"), "Update Design Block from Current Sheet");
   assert.equal(find("pcb", "updateSheet"), "Update Design Block from Board");
+});
+
+test("the schematic placement takes the block's default fields along (DrawSheet copies them into the sheet)", () => {
+  const options = { repeated: false, asGroup: true, asSheet: true, keepAnnotations: false };
+  const fields = [{ name: "Rail", value: "3V3" }];
+  const plan = schematicPlacement("/lib/LDO.3v3.kicad_block/LDO.3v3.kicad_sch", "Power:LDO.3v3", options, fields);
+  assert.deepEqual(plan.blockFields, fields);
+  assert.notEqual(plan.blockFields, fields, "a copy");
+  assert.deepEqual(schematicPlacement("/x.kicad_sch", "Power:X", options).blockFields, []);
+});
+
+test("the pane docks on the left or the right and floats at KiCad's floating size, kept on the page", () => {
+  assert.deepEqual(DOCKABLE_SIDES, ["left", "right"], "TopDockable( false ), BottomDockable( false )");
+  assert.deepEqual(FLOATING_DEFAULT, { x: 50, y: 200, w: 800, h: 600 });
+  assert.deepEqual(clampFloatRect(FLOATING_DEFAULT, 1600, 1000), FLOATING_DEFAULT);
+  // a window smaller than the floating size: the pane shrinks to the window, its caption on the page
+  assert.deepEqual(clampFloatRect(FLOATING_DEFAULT, 700, 500), { x: 0, y: 0, w: 700, h: 500 });
+  // dragged off to the right and below: moved back in
+  assert.deepEqual(clampFloatRect({ x: 1500, y: 900, w: 300, h: 200 }, 1600, 1000), { x: 1300, y: 800, w: 300, h: 200 });
+  // never below MinSize( 240, 60 )
+  assert.deepEqual(clampFloatRect({ x: 10, y: 10, w: 20, h: 5 }, 1600, 1000), { x: 10, y: 10, w: 240, h: 60 });
+  assert.equal(toggledDock("right", "right"), "float");
+  assert.equal(toggledDock("left", "left"), "float");
+  assert.equal(toggledDock("float", "left"), "left", "a floating pane docks back where it was");
+  assert.deepEqual(paneCaptionChoices("right").map((c) => c.to), ["left", "float", "close"]);
+  assert.deepEqual(paneCaptionChoices("float").map((c) => c.to), ["left", "right", "close"]);
+  assert.deepEqual(paneCaptionChoices("left").map((c) => c.to), ["right", "float", "close"]);
 });
