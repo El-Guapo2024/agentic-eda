@@ -28,6 +28,7 @@ import type { FlipDirection } from "./pcbTransform";
 import { AcceleratingZoomController, CONSTANT_SCALE, ConstantZoomController, pickDefaultZoomController, type ZoomController } from "./zoomController";
 import { isMac } from "../platform";
 import type { TextGraphicsDefaults } from "../api/types";
+import { DEFAULT_ARC_EDIT_MODE, type ArcEditMode } from "./pcbPointEdit";
 
 /** `COMMON_SETTINGS`' default `input.zoom_speed`: 5 on macOS, 1 elsewhere. */
 export function defaultZoomSpeed(isMacPlatform: boolean): number {
@@ -99,6 +100,10 @@ export interface Preferences {
   /** `FOOTPRINT_EDITOR_SETTINGS::m_DesignSettings` (Preferences > Footprint Editor > Graphics Defaults: the line width and the text of each layer class); `null` is KiCad's
    *  factory table (`FACTORY_TEXT_GRAPHICS`). */
   fpTextGraphics: TextGraphicsDefaults | null;
+  /** `PCBNEW_SETTINGS::m_ArcEditMode` ("Arc editing mode:", Preferences > PCB Editor > Editing Options; `cycleArcEditMode` sets it too): how the point editor drags an arc. */
+  pcbArcEditMode: ArcEditMode;
+  /** `EESCHEMA_SETTINGS::m_Drawing.arc_edit_mode` ("Arc editing mode:", Preferences > Schematic Editor > Editing Options). */
+  schArcEditMode: ArcEditMode;
 }
 
 /** `PANEL_SYM_EDITING_OPTIONS::TransferDataFromWindow`: "Force pin_step to a grid multiple" of 25 mils (`MIN_GRID`), `KiROUND( pin_step / MIN_GRID ) * MIN_GRID`. */
@@ -154,6 +159,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   fpInvertXAxis: false,
   fpInvertYAxis: false,
   fpTextGraphics: null,
+  pcbArcEditMode: DEFAULT_ARC_EDIT_MODE,
+  schArcEditMode: DEFAULT_ARC_EDIT_MODE,
 };
 
 type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH" | "horizontalPan">;
@@ -228,6 +235,8 @@ const leftDrag = (v: unknown, fallback: LeftDragAction): LeftDragAction => (v ==
 const motionPanKey = (v: unknown, fallback: MotionPanModifier): MotionPanModifier => (v === "none" || v === "alt" || v === "ctrl" || v === "shift" ? v : fallback);
 const clampInt = (v: unknown, lo: number, hi: number, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : fallback);
 const bool = (v: unknown, fallback: boolean) => (typeof v === "boolean" ? v : fallback);
+const arcEditMode = (v: unknown, fallback: ArcEditMode): ArcEditMode =>
+  v === "keep_center_adjust_angle_radius" || v === "keep_center_ends_adjust_angle" || v === "keep_endpoints_or_start_direction" ? v : fallback;
 const magnetic = (v: unknown, fallback: MagneticOption): MagneticOption => (v === "never" || v === "track-tool" || v === "always" ? v : fallback);
 
 /** The magnetic settings the board editor's snapping reads, with `allLayers` (the toggle of `common.Control.magneticSnapToggle`, Shift+S, kept in the studio state). */
@@ -271,6 +280,8 @@ export function sanitizePreferences(raw: unknown): Preferences {
     fpInvertXAxis: bool(o.fpInvertXAxis, d.fpInvertXAxis),
     fpInvertYAxis: bool(o.fpInvertYAxis, d.fpInvertYAxis),
     fpTextGraphics: o.fpTextGraphics && typeof o.fpTextGraphics === "object" ? (o.fpTextGraphics as TextGraphicsDefaults) : d.fpTextGraphics,
+    pcbArcEditMode: arcEditMode(o.pcbArcEditMode, d.pcbArcEditMode),
+    schArcEditMode: arcEditMode(o.schArcEditMode, d.schArcEditMode),
   };
   return scrollModSetValid(p) ? p : { ...p, ...MOUSE_SCROLL_DEFAULTS };
 }
