@@ -78,6 +78,7 @@ import { refDesPrefix } from "../kicad-port/packFootprints";
 import { openUpdateDialog } from "./updatePcbAction";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions } from "./libraryEditorActions";
+import { startPlaceFootprint } from "./placeFootprintTool";
 import { registerCommonActions, type ActionHandler } from "./commonActions";
 import { makeEditorAdapter } from "./editorAdapter";
 import { cancelAreaTool, getCommonTool } from "../state/commonTool";
@@ -2005,8 +2006,8 @@ export function useActionRunner() {
         })
       );
 
-      // ---- placeFootprint (A) -- board_editor_control.cpp BOARD_EDITOR_CONTROL::PlaceFootprint (components/PcbParityDialogs.tsx: pick an unplaced footprint, click to place)
-      m.set("pcbnew.EditorControl.placeFootprint", pcbOnly(() => dispatch({ type: "PCBX", patch: { pcbDialog: "place_footprint" } })));
+      // ---- placeFootprint (A) -- board_editor_control.cpp BOARD_EDITOR_CONTROL::PlaceFootprint: the chooser, the footprint carried to a click, the chooser again on the next click (actions/placeFootprintTool.ts)
+      m.set("pcbnew.EditorControl.placeFootprint", pcbOnly(() => startPlaceFootprint({ api, dispatch })));
 
       // ---- unrouteSegment (Backspace) -- pcb_selection_tool.cpp PCB_SELECTION_TOOL::unrouteSegment: delete the selected tracks/vias, then select what they were connected to
       // so the user can keep backing up. Idle only (while routing/drawing Backspace is UndoLastSegment/deleteLastPoint).
@@ -2426,7 +2427,7 @@ export function useActionRunner() {
     registerPcbEditDetailsActions(m, { state, dispatch, api, requestSelection });
 
     // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
-    registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });
+    registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, studioApi: api, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });
     // The shared actions that work in every editor (actions/commonActions.ts). The adapter is built when an action runs: the
     // library editors' stores change without this registry being rebuilt.
     registerCommonActions(m, {

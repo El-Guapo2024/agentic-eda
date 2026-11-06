@@ -1891,7 +1891,7 @@ export interface StudioApi {
    * was told). False when the command was refused or added nothing. `afterDrop` runs once the carried items are dropped (not when Escape takes them back): Place Design Block's
    * "Place repeated copies" starts the next copy from it.
    */
-  placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean, afterDrop?: () => void) => Promise<boolean>;
+  placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean, afterDrop?: () => void, opts?: PlaceNewItemsOptions) => Promise<boolean>;
   /**
    * The same for the sheet in view of the Schematic tab (Import Graphics): `build` makes the command for where the cursor is (its 1.27 mm grid point); with `carry` the step is held open the same way
    * (`carry.rs` keeps whole-design snapshots, so it holds a schematic step as well as a board one) and the drop of the held selection (`commitSchHeld`) joins it.
@@ -1930,6 +1930,19 @@ export interface StudioApi {
   refreshFill: () => Promise<void>;
 }
 
+/**
+ * `placeNewItems`' options: `at` is where the command makes the new items and the Move tool picks them up (the click of a tool that made them there, rather than
+ * the cursor's grid point); `afterCancel` runs once Escape took them back (`commit.Revert()`), `afterSettle` once the held step was settled by leaving the
+ * Move tool some other way -- a tool that goes on after a placement (Place Footprint's loop, the microwave tools' `IPO_REPEAT`) goes on from there.
+ */
+export interface PlaceNewItemsOptions {
+  at?: { x: number; y: number };
+  afterCancel?: () => void;
+  afterSettle?: () => void;
+  /** The command went through but added nothing to carry: what it did stands (as a step of its own). */
+  afterNothing?: () => void;
+}
+
 const StudioStateContext = createContext<StudioState | null>(null);
 const StudioDispatchContext = createContext<React.Dispatch<Action> | null>(null);
 const StudioApiContext = createContext<StudioApi | null>(null);
@@ -1952,12 +1965,19 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const carriedPlacementRef = useRef(false);
   /** What to do once the carried items are dropped (`placeNewItems`' `afterDrop`). */
   const afterDropRef = useRef<(() => void) | null>(null);
+  /** ... once Escape took them back (`PlaceNewItemsOptions.afterCancel`), and once the step was settled by leaving the Move tool some other way (`afterSettle`). */
+  const afterCancelRef = useRef<(() => void) | null>(null);
+  const afterSettleRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     // The Move tool was left some other way than by a drop or Escape: the held step stands as a step of its own (any other command would settle it too).
     if (state.activeTool !== "move" && state.activeTool !== "drag" && carriedPlacementRef.current) {
       carriedPlacementRef.current = false;
       afterDropRef.current = null;
+      afterCancelRef.current = null;
+      const settled = afterSettleRef.current;
+      afterSettleRef.current = null;
       void postCarry("commit");
+      settled?.();
     }
   }, [state.activeTool]);
 
@@ -2433,9 +2453,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           carriedPlacementRef.current = carrying || (plan !== null && plan.cmds.length > 0 && ok);
         } else await settle(plan !== null && plan.cmds.length > 0, ok);
         advanceMoveQueue();
-        // a placement that asked to go on after its drop (Place Design Block with repeated copies) goes on
+        // a placement that asked to go on after its drop (Place Design Block with repeated copies, Place Footprint's loop) goes on
         const next = afterDropRef.current;
         afterDropRef.current = null;
+        if (!individually) {
+          afterCancelRef.current = null;
+          afterSettleRef.current = null;
+        }
         if (carrying && next) next();
         return;
       }
@@ -2529,11 +2553,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!carriedPlacementRef.current) return false;
       carriedPlacementRef.current = false;
       afterDropRef.current = null;
+      afterSettleRef.current = null;
+      const cancelled = afterCancelRef.current;
+      afterCancelRef.current = null;
       // `commit.Revert()`: the carried items are gone and the history is as it was (crates/cli/src/carry.rs).
       const reply = await postCarry("cancel");
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
       if (stateRef.current.tab === "schematic") await refreshSchematic(); // a schematic import was carried: the sheet is as it was
+      cancelled?.();
       return reply.ok;
     },
     redo: async () => {
@@ -2713,10 +2741,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     // Import Graphics (interactive placement), Append Board and the drops: the same hand-off as `pasteClipboard` above for any command that adds items -- the step is held open
     // (`carry: "begin"`) while the new items are carried, so they and their drop are one undo step and Escape leaves nothing behind.
-    placeNewItems: async (build, carry, afterDrop) => {
+    placeNewItems: async (build, carry, afterDrop, opts) => {
       const board = stateRef.current.board;
       if (!board) return false;
-      const at = pasteAt();
+      const at = opts?.at ? { x: Math.round(opts.at.x), y: Math.round(opts.at.y) } : pasteAt();
       const before = allItemIds(board);
       const ok = await runCmd(build(at), carry ? "begin" : undefined);
       if (!ok) return false;
@@ -2724,12 +2752,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const newIds = after ? newItemIds(before, after) : [];
       if (newIds.length === 0) {
         if (carry) await postCarry("commit"); // nothing to carry: what the command did stands
+        opts?.afterNothing?.();
         return true;
       }
       dispatch({ type: "SET_SELECTION", refs: newIds });
       if (carry) {
         carriedPlacementRef.current = true;
         afterDropRef.current = afterDrop ?? null;
+        afterCancelRef.current = opts?.afterCancel ?? null;
+        afterSettleRef.current = opts?.afterSettle ?? null;
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at });
       }
