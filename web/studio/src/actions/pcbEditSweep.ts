@@ -53,10 +53,6 @@ const last = {
   filterOptions: { ...DEFAULT_FILTER_OPTIONS } as FilterOptions,
 };
 
-/** The Track Corner Mode actions' friendly names (`ACT_SwitchCornerMode45` ...: "Track Corner Mode 45", "... Arc 45", "... 90", "... Arc 90"). */
-const CORNER_MODE_LABEL: Record<CornerMode, string> = { mitered_45: "45", rounded_45: "Arc 45", mitered_90: "90", rounded_90: "Arc 90" };
-const ROUTER_MODE_LABEL: Record<RouteMode, string> = { mark_obstacles: "Highlight collisions", shove: "Shove", walkaround: "Walk around" };
-
 /** `ROUTER_TOOL::CycleRouterMode`: MarkObstacles -> Shove -> Walkaround -> MarkObstacles. */
 export function nextRouterMode(mode: RouteMode): RouteMode {
   return mode === "mark_obstacles" ? "shove" : mode === "shove" ? "walkaround" : "mark_obstacles";
@@ -86,11 +82,11 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
   const board = state.board;
 
   // --------------------------------------------------------------- router modes
-  // router_tool.cpp ChangeRouterMode / CycleRouterMode: `settings.SetMode( mode )`. The studio keeps the mode in
-  // `state.routerSettings` (read by the next route/drag session) and pushes it to a running session.
+  // router_tool.cpp ChangeRouterMode / CycleRouterMode: `settings.SetMode( mode ); UpdateMessagePanel();` -- the message panel's "Mode" row says it, nothing
+  // else does (no infobar, no popup: R7-R8). The studio keeps the mode in `state.routerSettings` (read by the next route/drag session) and pushes it
+  // to a running session.
   const setRouterMode = (mode: RouteMode) => {
     dispatch({ type: "SET_ROUTER_SETTINGS", settings: { ...state.routerSettings, mode } });
-    toast(`Router mode: ${ROUTER_MODE_LABEL[mode]}`);
     const draw = state.drawState;
     const cur = state.cursorNm;
     if (draw?.kind === "route" && cur) {
@@ -107,12 +103,12 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
   m.set("pcbnew.InteractiveRouter.CycleRouterMode", pcbOnly(() => setRouterMode(nextRouterMode(state.routerSettings.mode))));
 
   // ------------------------------------------------------------ track corner mode
-  // router_tool.cpp handlePnSCornerModeChange: `Settings().SetCornerMode( mode )`, then `UpdateMessagePanel()` and `m_router->Move( .. )` to refresh the
-  // head. The studio keeps the mode in `state.routerSettings` (sent with the next route) and pushes it to a running session.
+  // router_tool.cpp handlePnSCornerModeChange: `Settings().SetCornerMode( mode )`, then `UpdateMessagePanel()` (its "Corner Style" row; no toast, R7-R8)
+  // and `m_router->Move( .. )` to refresh the head. The studio keeps the mode in `state.routerSettings` (sent with the next route) and pushes it to a
+  // running session.
   const setCornerMode = (cornerMode: CornerMode) => {
     const settings = { ...state.routerSettings, cornerMode };
     dispatch({ type: "SET_ROUTER_SETTINGS", settings });
-    toast(`Track corner mode: ${CORNER_MODE_LABEL[cornerMode]}`);
     const draw = state.drawState;
     const cur = state.cursorNm;
     if (draw?.kind === "route" || draw?.kind === "drag") {
