@@ -181,6 +181,20 @@ test("a text's Bold, a shape's Fill Mode: the graphic as it is with the value (r
   assert.equal(row(["r"], "Line Style")!.writable, false);
 });
 
+test("a text's Font (UI-LEFT-2 CC1): the graphic's font (SetFontProp: Default Font is none); a field keeps none here", () => {
+  assert.equal(row(["t"], "Font")!.value, "Default Font");
+  assert.equal(row(["t"], "Font")!.writable, true);
+  const face = symEdit(ctx(), ["t"], "Font", "DejaVu Sans");
+  if (face.ok) assert.deepEqual(face.cmds, [{ op: "replace_symbol_graphic", lib_id: "Lib:U", id: "t", graphic: { ...symbol().graphics[1]!, font: "DejaVu Sans" } }]);
+  const faced = symbol();
+  (faced.graphics[1] as { font?: string }).font = "DejaVu Sans";
+  assert.equal(row(["t"], "Font", ctx(faced))!.value, "DejaVu Sans");
+  const back = symEdit(ctx(faced), ["t"], "Font", "Default Font");
+  if (back.ok) assert.deepEqual(back.cmds, [{ op: "replace_symbol_graphic", lib_id: "Lib:U", id: "t", graphic: symbol().graphics[1]! }]);
+  assert.deepEqual(symEdit(ctx(), ["t"], "Font", "Default Font"), { ok: true, cmds: [] }, "the same font: nothing");
+  assert.equal(row([libFieldId("Value")], "Font")!.writable, false);
+});
+
 test("fields: two selected fields edited at once are one edit_library_symbol_fields; Private is a user field's", () => {
   const ids = [libFieldId("Value"), libFieldId("Note")];
   const plan = symEdit(ctx(), ids, "Italic", true);

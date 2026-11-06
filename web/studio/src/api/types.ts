@@ -860,6 +860,8 @@ export interface BoardTableCell {
   line_spacing: number;
   color: [number, number, number, number] | null;
   lines: TablePlacedLine[];
+  /** `GetDrawPos()`: where the lines are placed from (absent from an older backend). */
+  draw_pos?: [Nm, Nm];
   /** A sheet's cell only: its background (`none`, `outline`, `background` or `color` with `fill_color`) and whether it is left out of simulation. */
   fill?: "none" | "outline" | "background" | "color";
   fill_color?: [number, number, number, number] | null;
@@ -2175,7 +2177,7 @@ export type Cmd =
   | { op: "set_zone_name"; id: string; name: string }
   | { op: "replace_shape"; id: string; shape: CmdShape }
   /** The Properties panel's text style rows of a board text (crates/ops/src/pcb_props.rs `edit_text_style`): a key left out is unchanged. */
-  | { op: "edit_text_style"; id: string; width_nm?: Nm; valign?: "top" | "center" | "bottom"; bold?: boolean; italic?: boolean; knockout?: boolean; auto_thickness?: boolean }
+  | { op: "edit_text_style"; id: string; width_nm?: Nm; valign?: "top" | "center" | "bottom"; bold?: boolean; italic?: boolean; knockout?: boolean; auto_thickness?: boolean; face?: string }
   /** "Soldermask" and "Soldermask Margin Override" of tracks and shapes on outer copper (`set_solder_mask`); `margin` null is the board's. */
   | { op: "set_solder_mask"; ids: string[]; solder_mask: boolean; margin: Nm | null }
   /** "Corner Radius" of rectangles (`set_corner_radius`). */
@@ -2955,7 +2957,29 @@ export type LibGraphic =
   | { kind: "polyline"; pts: [Mm, Mm][]; stroke_width: Mm; fill: LibFill; unit: number; body_style: number }
   | { kind: "circle"; center: [Mm, Mm]; radius: Mm; stroke_width: Mm; fill: LibFill; unit: number; body_style: number }
   | { kind: "arc"; start: [Mm, Mm]; mid: [Mm, Mm]; end: [Mm, Mm]; stroke_width: Mm; fill: LibFill; unit: number; body_style: number }
-  | { kind: "text"; content: string; at: [Mm, Mm]; angle_deg: Degrees; size_mm: Mm; unit: number; body_style: number };
+  | { kind: "text"; content: string; at: [Mm, Mm]; angle_deg: Degrees; size_mm: Mm; unit: number; body_style: number }
+  /**
+   * The text of a library text box (`SCH_TEXTBOX`, `(text_box ..)`): its border and fill are a `rectangle` of their own. `start`/`end` are two opposite corners, `angle_deg` 0 or 90 (the text runs up the
+   * box), `margin_mm` the margin on every side; `index` is its place in the symbol's list, which a placed symbol's `text_box_shown` names. Absent from a backend built before it.
+   */
+  | {
+      kind: "text_box";
+      index: number;
+      text: string;
+      start: [Mm, Mm];
+      end: [Mm, Mm];
+      angle_deg: Degrees;
+      size_mm: Mm;
+      bold?: boolean;
+      italic?: boolean;
+      h_align: "left" | "center" | "right";
+      v_align: "top" | "center" | "bottom";
+      margin_mm: Mm;
+      /** `EDA_TEXT::GetTextColor`, 0..255 each; absent is `LAYER_DEVICE`'s. */
+      text_color?: { r: number; g: number; b: number; a: number };
+      unit: number;
+      body_style: number;
+    };
 
 export interface LibSymbol {
   graphics: LibGraphic[];
@@ -3057,6 +3081,8 @@ export interface SchematicSymbol {
   fields_autoplaced?: FieldsAutoplaced;
   /** What `${NAME}` in `value` and `footprint` stands for, for the symbols the state lists no `fields` of (a sheet read from a KiCad file); only the ones that differ. */
   shown?: { value?: string; footprint?: string };
+  /** The shown text of each of its library symbol's text boxes whose variables change it (`expandLibItemTextVars`: `${REFERENCE}` ... of this symbol), by the box's `index` in `lib_symbols`. */
+  text_box_shown?: Record<string, string>;
   /** The symbol's records of the design variants (KiCad 25ec2335 `SCH_SYMBOL_INSTANCE::m_Variants`, `SCH_SYMBOL_VARIANT`), by variant name. A variant with no record
    * resolves to the symbol's own values (`SCH_SYMBOL::GetDNP( sheet, variant )` falls back to `m_DNP`). Absent from a backend built before variants. */
   variants?: Record<string, SymbolVariantInfo>;
@@ -3427,6 +3453,11 @@ export interface SchematicSetupLook {
   default_line_width_nm: Nm;
   default_text_size_nm: Nm;
   pin_symbol_size_nm: Nm;
+  /** Formatting's Label offset ratio (`m_TextOffsetRatio`: `SCH_TEXT::GetTextOffset` is this times the text size), Global label margin ratio
+   *  (`m_LabelSizeRatio`: `SCH_LABEL_BASE::GetLabelBoxExpansion`) and Overbar offset ratio (`m_FontMetrics.m_OverbarHeight`); an older backend sends none. */
+  text_offset_ratio?: number;
+  label_size_ratio?: number;
+  overbar_offset_ratio?: number;
   dash_ratio: number;
   gap_ratio: number;
   hop_over_size_choice: number;

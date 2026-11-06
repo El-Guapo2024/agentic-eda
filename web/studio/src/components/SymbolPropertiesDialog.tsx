@@ -26,6 +26,8 @@
 // **Differs**: the Angle and Mirror choices, Show pin numbers / Show pin names (one library symbol per lib_id: S10), the grid's Orientation, X and Y Position,
 // Allow Autoplacement and Private columns, Move Up / Move Down, and Embedded Files are not here; a field added here takes its looks after OK; a unit already placed
 // on the sheet is refused (KiCad makes a second placement of it).
+import { schematicWithCarry, useSchCarry } from "../state/schCarryStore";
+import { editCarried } from "../actions/schPlaceActions";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchFontFamilies, fetchSchSetup } from "../api/client";
 import { fetchAnySymbol } from "../api/libraryClient";
@@ -72,8 +74,11 @@ export function SymbolPropertiesDialog() {
   const symApi = useSymApi();
   const open = state.symbolProperties;
   const variant = state.schVariant;
+  // the symbol Place Symbol carries (E, U, V, F while it rides): the dialog reads it off the page's drawing of it, and OK changes the symbol in the hand
+  const carry = useSchCarry();
+  const viewSch = open?.carried && state.schematic && carry ? schematicWithCarry(state.schematic, carry) : state.schematic;
   // the placed unit it was opened on (KiCad's dialog is one `SCH_SYMBOL`'s), else the reference's first
-  const baseSymbol = open ? (state.schematic?.symbols.find((s) => s.id === open.id && (open.unit === undefined || s.unit === open.unit)) ?? api.symbolById(open.id)) : undefined;
+  const baseSymbol = open ? (viewSch?.symbols.find((s) => s.id === open.id && (open.unit === undefined || s.unit === open.unit)) ?? (open.carried ? undefined : api.symbolById(open.id))) : undefined;
   // the symbol as the current variant shows it (`GetFieldText( .., variant )`)
   const symbol = useMemo(() => (baseSymbol ? symbolInVariant(baseSymbol, variant) : undefined), [baseSymbol, variant]);
 
@@ -181,7 +186,7 @@ export function SymbolPropertiesDialog() {
   }, [open?.id, open?.field, open?.unit, variant]);
 
   if (!open || !symbol) return null;
-  const sch = state.schematic;
+  const sch = viewSch;
   const close = () => dispatch({ type: "SET_SYMBOL_PROPERTIES", value: null });
 
   /** `TransferDataFromWindow`: every change as one command batch, one undo step. Returns whether it was applied (or there was nothing to apply). */
@@ -194,7 +199,7 @@ export function SymbolPropertiesDialog() {
     // `if( currentVariant.IsEmpty() ) m_symbol->SetRef( .. )`: a variant keeps the reference
     // `SetRef( &GetCurrentSheet(), .. )`: the path in view's reference (the server renames that path's alone on a screen shown twice)
     const renamed = variant === "" && trimmedRef !== (symbol.reference ?? symbol.id);
-    if (renamed && (api.symbolById(trimmedRef) || (state.schematic?.symbols ?? []).some((s) => s.id !== symbol.id && (s.reference ?? s.id) === trimmedRef))) {
+    if (renamed && (api.symbolById(trimmedRef) || (sch?.symbols ?? []).some((s) => s.id !== symbol.id && (s.reference ?? s.id) === trimmedRef))) {
       setError(`"${trimmedRef}" is already used by another symbol.`);
       return false;
     }
@@ -274,6 +279,8 @@ export function SymbolPropertiesDialog() {
     // `SetUnitSelection( .., unit_selection ); SetUnit( unit_selection )`, after everything named by the placement's key
     if (unit !== drawnUnit(symbol)) cmds.push(setSymbolUnitCmd(symbol.id, symbol.unit, unit, false));
     if (renamed) cmds.push({ op: "rename_symbol", id: symbol.id, new_id: trimmedRef });
+    // the symbol in the hand takes the changes (actions/schPlaceActions.ts `editCarried`)
+    if (open.carried) return editCarried(cmds) || (setError("The symbol is no longer in the hand."), false);
     if (cmds.length > 0 && !(await api.cmdBatch(cmds))) {
       // the server says why (a reference another sheet has, a field of a sheet read from a KiCad file) in a toast
       setError(renamed ? `The changes were not applied ("${trimmedRef}" may be used by another symbol).` : "The changes were not applied.");
@@ -540,17 +547,19 @@ export function SymbolPropertiesDialog() {
                     ))}
                   </fieldset>
                 )}
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, alignSelf: "flex-start" }}>
-                  <button onClick={changeSymbols("update")} data-testid="symbol-update-from-library">
+                {/* the four buttons act on a placed symbol (Change Symbols, the Symbol Editor): disabled on the symbol in the hand, which `PlaceSymbol` refuses to
+                    hand to them too (`editWithLibEdit`, `changeSymbol`: `wxBell()`) */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, alignSelf: "flex-start" }} title={open.carried ? "The symbol is not placed yet." : undefined}>
+                  <button onClick={changeSymbols("update")} disabled={!!open.carried} data-testid="symbol-update-from-library">
                     Update Symbol from Library...
                   </button>
-                  <button onClick={changeSymbols("change")} data-testid="symbol-change">
+                  <button onClick={changeSymbols("change")} disabled={!!open.carried} data-testid="symbol-change">
                     Change Symbol...
                   </button>
-                  <button onClick={editSymbol} disabled={!canEditSymbol} data-testid="symbol-edit">
+                  <button onClick={editSymbol} disabled={!canEditSymbol || !!open.carried} data-testid="symbol-edit">
                     Edit Symbol...
                   </button>
-                  <button onClick={editSymbol} disabled={!canEditSymbol} data-testid="symbol-edit-library">
+                  <button onClick={editSymbol} disabled={!canEditSymbol || !!open.carried} data-testid="symbol-edit-library">
                     Edit Library Symbol...
                   </button>
                 </div>

@@ -14,3 +14,25 @@ test("a placed pin that took an alternate is drawn named, typed and shaped by it
   const r = resolveLibSymbol(s, lib)!;
   assert.deepEqual([r.pins[0]!.pin.name, r.pins[0]!.pin.shape, r.pins[0]!.pin.alternates?.length], ["USART1_TX", "clock", 1], "the drawn pin keeps its alternates for the icon");
 });
+
+test("a library text box's text is drawn on the placed symbol where its turned and mirrored copy has it, with the symbol's variables (`SCH_PAINTER::draw( SCH_SYMBOL )`)", () => {
+  const box = { kind: "text_box", index: 0, text: "${REFERENCE}\nIN", start: [-4.445, 4.445], end: [0.635, 1.905], angle_deg: 0, size_mm: 1.27, bold: true, h_align: "left", v_align: "top", margin_mm: 0.508, unit: 0, body_style: 0 };
+  const border = { kind: "rectangle", start: [-4.445, 4.445], end: [0.635, 1.905], stroke_width: 0.254, fill: "none", unit: 0, body_style: 0 };
+  const lib = { "Test:TB": { graphics: [border, box], pins: [] } } as unknown as LibSymbols;
+  const placed = (rot: number, mirror: "x" | "y" | null, shown?: Record<string, string>) => {
+    const s = { id: "U1", lib_id: "Test:TB", at: [10_000_000, 20_000_000], rot, mirror, unit: 1, body_style: 1, pins: [], ...(shown ? { text_box_shown: shown } : {}) } as unknown as SchematicSymbol;
+    const g = resolveLibSymbol(s, lib)!.graphics;
+    assert.deepEqual(g.map((x) => x.kind), ["rectangle", "text_box"], "the border is the rectangle, the text the text box");
+    const t = g[1]!;
+    if (t.kind !== "text_box") throw new Error("a text box");
+    return t.shape;
+  };
+  const upright = placed(0, null, { "0": "U1\nIN" });
+  assert.deepEqual([upright.start, upright.end, upright.text, upright.angle, upright.h_align, upright.v_align, upright.margin_nm, upright.size_nm, upright.bold], [{ x: 5_555_000, y: 15_555_000 }, { x: 10_635_000, y: 18_095_000 }, "U1\nIN", 0, "left", "top", 508_000, 1_270_000, true]);
+  assert.equal(placed(0, null).text, "${REFERENCE}\nIN", "no shown text: the stored one");
+  // mirrored left to right: the box on the other side, its text right justified; turned a quarter: the box turned, its text running up it
+  const mirrored = placed(0, "y");
+  assert.deepEqual([mirrored.start.x, mirrored.end.x, mirrored.angle, mirrored.h_align], [14_445_000, 9_365_000, 0, "right"]);
+  const turned = placed(90, null);
+  assert.deepEqual([turned.start, turned.angle, turned.h_align], [{ x: 5_555_000, y: 24_445_000 }, 90_000, "left"]);
+});

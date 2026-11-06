@@ -1,8 +1,8 @@
 // `DIALOG_TEXT_PROPERTIES` (pcbnew/dialogs/dialog_text_properties.cpp at KiCad 8303b2ad) on a footprint's own text on the board (UI-LEFT P15: `PCB_SELECTION_TOOL`
 // picks a footprint's `PCB_TEXT`, and `PCB_EDIT_FRAME::OnEditItemRequest` opens its Text Properties): the text as stored (variables unresolved, as `GetText()`),
 // the layer, the size and thickness, italic, bold, the position and orientation in the footprint's frame (as the Footprint Properties grid's offsets), keep
-// upright, mirrored, knockout and the justification. OK sends one `edit_board_footprint_text` (the instance's own copy of its footprint); "The text can't be
-// empty." keeps the dialog open.
+// upright, mirrored, knockout, the justification and the Font (`m_fontCtrl`: "KiCad Font" and the server's families, the layout's face; UI-LEFT-2 CC1). OK sends one
+// `edit_board_footprint_text` (the instance's own copy of its footprint); "The text can't be empty." keeps the dialog open.
 import { useEffect, useState } from "react";
 import type { FieldLayoutCmd } from "../api/types";
 import { fpTextById } from "../kicad-port/pcbItems";
@@ -11,6 +11,8 @@ import { closeFpTextDialog, useFpTextDialog } from "../state/fpTextDialog";
 import { useStudioApi, useStudioState } from "../state/store";
 import { nmFrom, nmTo } from "../state/units";
 import { NumberInput } from "./NumberInput";
+import { FontSelect, useFontFamilies } from "./TextLookControls";
+import { KICAD_FONT } from "../kicad-port/textLooks";
 
 export function FootprintTextDialog() {
   const id = useFpTextDialog();
@@ -21,6 +23,7 @@ export function FootprintTextDialog() {
   const [text, setText] = useState("");
   const [l, setL] = useState<FieldLayoutCmd | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const families = useFontFamilies();
   useEffect(() => {
     if (!hit) return;
     const t = hit.text;
@@ -75,6 +78,8 @@ export function FootprintTextDialog() {
             <span>
               <NumberInput label="Orientation" value={(l.angle ?? 0) / 1000} onChange={(v) => v != null && setL({ ...l, angle: Math.round(v * 1000) })} /> deg
             </span>
+            <span>Font:</span>
+            <FontSelect families={families} current={l.face} value={l.face || KICAD_FONT} onChange={(v) => setL({ ...l, face: v === KICAD_FONT ? null : v })} withDefault={false} />
             <span>Justification:</span>
             <select aria-label="Justification" value={l.halign ?? 0} onChange={(e) => setL({ ...l, halign: Number(e.target.value) as -1 | 0 | 1 })}>
               <option value={-1}>Left</option>

@@ -17,7 +17,7 @@ import type { LengthUnit } from "../state/units";
 import { buildGrid, planEdit, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
 import { fieldLayoutOf, fpFieldById, fpFields } from "./fpItems";
-import { shapeLookOf, textLookOf, isLockedItem, LINE_STYLE_CHOICES, FILL_CHOICES, fillChoiceOf, fillOfChoice } from "./fpKeep";
+import { shapeLookOf, textFaceOf, textLookOf, isLockedItem, LINE_STYLE_CHOICES, FILL_CHOICES, fillChoiceOf, fillOfChoice } from "./fpKeep";
 import { cmdShapeToShape } from "./itemBoxes";
 import { shapeWith } from "./pcbProperties";
 import { FAB_PROPERTY_CHOICES, padToDieOf, withPadFab } from "./padLayers";
@@ -106,7 +106,6 @@ const OVERRIDES = "Overrides";
 
 const READ_ONLY = {
   locked: "A footprint's items keep the lock their file gave them; the Footprint Editor does not set one.",
-  font: "A footprint text is drawn in KiCad's stroke font here; the font is not chosen.",
   autoThickness: "A footprint text keeps its file's automatic pen; it is not switched here.",
   color: "A footprint item keeps no colour.",
   textVisible: "A footprint text's Show is not offered for it (`DIALOG_TEXT_PROPERTIES` hides it); a field's is the field row's.",
@@ -510,7 +509,23 @@ function build(): PropertyManager<FpPropItem, FpPropCtx, Cmd> {
     },
     TEXT
   );
-  add({ owner: "EDA_TEXT", name: "Font", kind: "string", get: () => "KiCad Font", readOnlyReason: READ_ONLY.font }, TEXT);
+  // "Font" (`SetFontProp`): KiCad's stroke font or a face, drawn as the server's fontconfig finds it (UI-LEFT-2 CC1); a text's in its kept looks, a field's in its layout.
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Font",
+      kind: "string",
+      get: (i, c) => (i.text ? textFaceOf(c.fp, i.id) : i.field?.face) || "KiCad Font",
+      set: (i, v, c) => {
+        const next = String(v).trim();
+        const face = next === "" || next.startsWith("KiCad Font") ? "" : next;
+        if (i.text) return (textFaceOf(c.fp, i.id) ?? "") === face ? [] : textWith(i, c, {}, { face });
+        if (i.field) return (i.field.face ?? "") === face ? [] : [fieldCmd(c, i.field, { face: face || null })];
+        return [];
+      },
+    },
+    TEXT
+  );
   add({ owner: "EDA_TEXT", name: "Auto Thickness", kind: "bool", get: () => false, readOnlyReason: READ_ONLY.autoThickness }, TEXT);
   add(
     {

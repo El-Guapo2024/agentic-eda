@@ -38,6 +38,7 @@ export interface FpItemsPaintOptions {
 /** The slice of the board painter's options these painters read, from the footprint editor's own. */
 function boardOptions(o: FpItemsPaintOptions): PaintOptions {
   return {
+    textRecordTag: "fp",
     selection: o.selection,
     hot: new Set(),
     netHighlight: null,

@@ -43,6 +43,7 @@ import { useLibraryLoadErrors } from "../state/libraryLoadErrors";
 import { recentItems, rememberChosen } from "../state/chooserRecent";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { carryItem, carrySymbol } from "../actions/schPlaceActions";
+import { libSymbolOfLibrary } from "../kicad-port/schCarryPreview";
 import { pendingChooserAt } from "../state/schCarryStore";
 import { ChooserDetails, Linkified } from "./chooser/ChooserDetails";
 import { FootprintPreview, SymbolPreview } from "./chooser/ChooserPreview";
@@ -233,10 +234,13 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
       const details = shown && shown.id === c.item.id ? shown.info : installedNames.has(lib) ? await fetchSymbolDetails(c.item.id).catch(() => null) : null;
       const reference = details?.reference || c.item.reference || "";
       rememberChosen(power ? "power" : "symbol", { ...c.item, reference, value: details?.value ?? c.item.value, footprint: details?.footprint ?? c.item.footprint, units: details?.units ?? c.item.units, pins: details?.pins ?? c.item.pins, description: details?.description ?? c.item.description });
+      // the drawing the chooser loaded, which the symbol rides the cursor with at once (kicad-port/schCarryPreview.ts); a derived symbol's is its parent's, from the server
+      const drawing = (shown && shown.id === c.item.id ? shown.symbol : details?.symbol) ?? null;
+      const drawn = drawing && (drawing.graphics.length > 0 || drawing.pins.length > 0) ? libSymbolOfLibrary(drawing) : null;
       if (power) {
         // `new SCH_SYMBOL( *libSymbol, ... )`: the power symbol rides the cursor; the net it names is its Value (`SCH_PIN::GetDefaultNetName` of a power pin)
         close();
-        carryItem({ api }, "sch_power", { kind: "power", libId: c.item.id, net: details?.value || c.item.value || c.item.name, rotMillideg: 0 }, at ?? [0, 0], [], keep);
+        carryItem({ api }, "sch_power", { kind: "power", libId: c.item.id, net: details?.value || c.item.value || c.item.name, rotMillideg: 0 }, at ?? [0, 0], [], keep, drawn);
         return;
       }
       close();
@@ -252,6 +256,7 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
           value: details?.value || undefined,
           footprint: footprintOverride ?? details?.footprint ?? "",
           placeAllUnits: allUnits,
+          lib: drawn,
         },
         pendingChooserAt() ?? [0, 0],
         keep

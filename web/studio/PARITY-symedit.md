@@ -384,7 +384,7 @@ The dialog's Units & Body Styles and Pin Connections parts follow 25ec2335 where
 | Text Box Properties: Font, text Color, Border with its width and Color, "Background fill" (`FILLED_WITH_COLOR`, else `NO_FILL`: a box filled with the body's background is one of the default colour after OK, drawn the same) and "Fill color:", "Private to symbol editor"; the next box takes the last box's border and fill colours | **identical**. Not here: the border Style (kept by the box's id as the file says it), the hyperlink (the schematic's only) | `DIALOG_TEXT_PROPERTIES::TransferDataToWindow` / `FromWindow`, `doDrawShape` |
 | Text Properties of a symbol's text: Font, Color, "Private to symbol editor" | **identical** | same |
 | `(text private "..")`, `(text_box private "..")`, `(stroke .. (color r g b a))`, `(fill (type color) (color r g b a))` (`COLOR4D::UNSPECIFIED` as `0 0 0 0`), `(font (face "..") .. (color ..))` read and written; a text that says "private" is no flag (the reader looked at the word as the text before, and the engine's reader drew it) | **identical**. Differs: an alpha is kept to 1/255 (0.5 is written 0.502) | `saveText`, `saveTextBox`, `formatFill`, `STROKE_PARAMS::Format`, `EDA_TEXT::Format`, `parseSymbolText`, `parseSymbolTextBox` |
-| The canvas: a text box's fill colour (`LAYER_DEVICE_BACKGROUND`'s without one), border colour and text colour, a text's colour; a private text or text box is not drawn on a sheet (`LibrarySymbolGraphic::to_engine_graphics`, and the engine's reader of a library skips private shapes, texts and text boxes) | **identical**. Differs: an outline font's text is drawn with the stroke font, as everywhere on the canvases | `getRenderColor`, `draw( SCH_TEXTBOX )`, `IsPrivate() && !m_IsSymbolEditor` |
+| The canvas: a text box's fill colour (`LAYER_DEVICE_BACKGROUND`'s without one), border colour and text colour, a text's colour; a private text or text box is not drawn on a sheet (`LibrarySymbolGraphic::to_engine_graphics`, and the engine's reader of a library skips private shapes, texts and text boxes) | **identical**; an outline font's text is drawn in its face since 2026-11-06 (section "Texts in their faces" below; it was drawn with the stroke font) | `getRenderColor`, `draw( SCH_TEXTBOX )`, `IsPrivate() && !m_IsSymbolEditor` |
 
 Tests: `crates/ops/src/sym_units_tests.rs` (4 new: the custom styles' populate and prune, the grids' rows, the JSON keys, a derived symbol refused), `crates/kicad/src/symbol_import.rs` (2 new: the text box's colours, font and Private and a private text; `(body_styles ..)`), `sch_export_api` (the custom style's SVG name); `kicad-port/symBodyStyles.test.ts` (7), `symText.test.ts` (+1); browser checks `symedit-props-u6` 5/5, `symedit-u5` 8/8, `symedit` 9/9, `lib-editors` (its text box scenario now expects the colour fill); the library round trip of KiCad's installed symbols and footprints (`EDA_SLOW_TESTS=1 cargo test -p eda-kicad --test library_roundtrip`) 2/2.
 
@@ -408,6 +408,14 @@ the studio's port is the same module (`kicad-port/eePointEdit.ts`, PARITY-sch se
 **Left**: the Symbol Editor's Draw Arc keeps 8303b2ad's way (KiCad 25ec2335's five modes are the schematic's only here); a pin's own point editor does not exist in KiCad either.
 
 Tests: `kicad-port/symPointEdit.test.ts` (the conversion both ways, `dragPinsOnEdge` with and without the setting, a corner's drag, the circle, polyline and arc, the Symbol Editor's own arc mode), `eePointEdit.test.ts`; browser: `e2e/handles-v1.check.js` (the rectangle's side taking the pin along and its corner not, a circle's radius, a polyline's vertex and Create Corner from the context menu, an arc's end, one undo step each).
+
+## Texts in their faces, where KiCad draws them (UI-LEFT-2 PP1, CC1; 2026-11-06, `task-v1-text`)
+
+The Symbol Editor's texts, fields and text boxes are laid out by the board's and the sheet's one layout (`kicad-port/kicadText.ts`, `schTextSpecs.ts`: `deviceTextDrawSpec`, `schFieldDrawSpec`,
+`schTextBoxDrawSpec`; PARITY-pcb section 94, PARITY-sch section 72) and drawn in their face -- the stroke font, or the outline face the server's fontconfig gives (`SCH_PAINTER::draw( SCH_TEXT )`
+on `LAYER_DEVICE`: the text at the centre of its box, at its left or right edge for a left or right justification; `draw( SCH_FIELD )`: a field centred on its box; the pen
+`getTextThickness`'s). `window.__edaText.sym[id]` says what was drawn. The Properties pane's Font row is writeable for a text and a text box (`replace_symbol_graphic` with the font,
+"Default Font" taking it off); a field's stays read-only (`FieldRow` keeps no font).
 
 ## The colour theme (UI-LEFT-2 SS9; 2026-11-07, `task-v2-prefs`)
 

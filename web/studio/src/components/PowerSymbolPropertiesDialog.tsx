@@ -10,6 +10,8 @@
 //
 // **Differs**: the Unit, Body style, Angle and Mirror choices and the four symbol buttons are not offered for a power symbol (it has one unit and body style here,
 // and is turned with R / X / Y); its user fields are kept and written at its anchor but not drawn; an alternate assignment of its pin cannot be set.
+import { schematicWithCarry, useSchCarry } from "../state/schCarryStore";
+import { editCarried } from "../actions/schPlaceActions";
 import { useMemo, useState } from "react";
 import type { Cmd, PowerSymbol, SchematicSymbol } from "../api/types";
 import { powerEditCmd } from "../kicad-port/schProperties";
@@ -18,9 +20,13 @@ import { fieldLookCmds, fieldLookError, lookOf, pinCell, PIN_COLUMN_LABELS, pinR
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 
-export function PowerSymbolPropertiesDialog({ id }: { id: string }) {
-  const power = useStudioState().schematic?.power_symbols.find((p) => p.id === id);
-  return power ? <PowerForm key={id} power={power} /> : null;
+/** `carried`: the power symbol Place Power holds (E while it rides): read off the page's drawing of it, and OK changes the power symbol in the hand. */
+export function PowerSymbolPropertiesDialog({ id, carried }: { id: string; carried?: boolean }) {
+  const base = useStudioState().schematic;
+  const carry = useSchCarry();
+  const sch = carried && base && carry ? schematicWithCarry(base, carry) : base;
+  const power = sch?.power_symbols.find((p) => p.id === id);
+  return power ? <PowerForm key={id} power={power} carried={!!carried} /> : null;
 }
 
 const FLAGS: ReadonlyArray<["exclude_from_sim" | "exclude_from_board" | "dnp" | "exclude_from_bom" | "exclude_from_pos_files", string]> = [
@@ -38,7 +44,7 @@ interface UserRow {
   shown: boolean;
 }
 
-function PowerForm({ power }: { power: PowerSymbol }) {
+function PowerForm({ power, carried }: { power: PowerSymbol; carried: boolean }) {
   const api = useStudioApi();
   const dispatch = useStudioDispatch();
   const sch = useStudioState().schematic;
@@ -87,6 +93,11 @@ function PowerForm({ power }: { power: PowerSymbol }) {
     if (JSON.stringify(fields) !== JSON.stringify(wasFields)) edit.fields = fields;
     if (Object.keys(edit).length > 0) cmds.push({ op: "sch_edit", verb: "set_power_props", id: power.id, ...edit } as Cmd);
     if (cmds.length === 0) return close();
+    // the power symbol in the hand takes the changes (actions/schPlaceActions.ts `editCarried`)
+    if (carried) {
+      editCarried(cmds);
+      return close();
+    }
     void api.cmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds }).then((ok) => (ok ? close() : setError("The changes were not applied.")));
   };
   const showBox = (name: string, checked: boolean, set: (b: boolean) => void) =>

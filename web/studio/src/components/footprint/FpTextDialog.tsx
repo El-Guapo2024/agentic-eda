@@ -4,7 +4,9 @@
 // ahead and place it there") and selected (`ACTIONS::selectItem`), any other follows the cursor until the click that commits it. A size outside KiCad's limits gets
 // `UNIT_BINDER::Validate`'s message ("Width must be at least 0.001 mm."); a pen too thick for the size is clamped with KiCad's message.
 // The model's text has one size (square), no italic, bold, knockout or keep-upright, and no vertical justification: those controls are left out.
-import { textLookOf } from "../../kicad-port/fpKeep";
+import { textFaceOf, textLookOf } from "../../kicad-port/fpKeep";
+import { FontSelect, useFontFamilies } from "../TextLookControls";
+import { KICAD_FONT } from "../../kicad-port/textLooks";
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { fpTextSizeMessage, noPrintableChars } from "../../kicad-port/fpTextTool";
@@ -151,7 +153,7 @@ function sizeMessage(label: string, sizeNm: number): string | null {
  * `DIALOG_TEXT_PROPERTIES` on an item of the open footprint (`FOOTPRINT_EDIT_FRAME::OnEditItemRequest`: `case PCB_FIELD_T: case PCB_TEXT_T: ShowTextPropertiesDialog`), opened by a
  * double click or E: "Footprint Reference Properties" (label "Reference:"), "Footprint Value Properties" ("Value:"), "Footprint Field Properties" ("Text:") for a field, with its Show
  * box; "Footprint Text Properties" for a text, with no Show box. A field has KiCad's whole look -- width and height, thickness, Bold, Italic, the horizontal and vertical justification,
- * Mirrored, Knockout, Keep upright -- (`fp_item edit_field`); a text has what the model holds of one (one size, the thickness, the justification, Mirrored: `fp_item set_text`).
+ * Mirrored, Knockout, Keep upright, the Font (`m_fontCtrl`, UI-LEFT-2 CC1) -- (`fp_item edit_field`); a text has the same, its looks kept by its id (`fp_item set_text`).
  * An empty box leaves the text as it was (`if( !m_SingleLineText->GetValue().IsEmpty() ) SetText`), a size outside KiCad's limits is refused with `UNIT_BINDER::Validate`'s
  * words, a pen too thick is clamped with KiCad's message. OK is one undo step ("Edit Text Properties").
  */
@@ -179,10 +181,13 @@ export function FpTextEditDialog() {
   const [visible, setVisible] = useState(true);
   const [knockout, setKnockout] = useState(false);
   const [upright, setUpright] = useState(true);
+  const [face, setFace] = useState(KICAD_FONT);
+  const families = useFontFamilies();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (field) {
+      setFace(field.face || KICAD_FONT);
       setContent(field.text);
       setLayer(field.layer);
       setWidth(mm(field.w));
@@ -202,6 +207,7 @@ export function FpTextEditDialog() {
     } else if (text) {
       // what the text keeps beyond `CmdText` (UI-LEFT F5): its width, bold, italic, vertical justification, knockout and keep-upright
       const look = textLookOf(fp, text.id ?? "");
+      setFace(textFaceOf(fp, text.id) || KICAD_FONT);
       setContent(text.content);
       setLayer(text.layer);
       setWidth(mm(look.width_nm ?? text.size_nm));
@@ -243,12 +249,12 @@ export function FpTextEditDialog() {
     const angleMdeg = (((Math.round((Number(angle) || 0) * 1000) % 360_000) + 360_000) % 360_000);
     let done: boolean;
     if (field) {
-      const layout = { ...fieldLayoutOf(field), at, angle: angleMdeg, size: [w, h] as [number, number], thickness: pen, layer, visible, halign, valign, mirror, bold, italic, keep_upright: upright, knockout };
+      const layout = { ...fieldLayoutOf(field), at, angle: angleMdeg, size: [w, h] as [number, number], thickness: pen, layer, visible, halign, valign, mirror, bold, italic, keep_upright: upright, knockout, face: face === KICAD_FONT ? null : face };
       done = await api.editField(field.name, content, layout);
     } else {
       const justify: TextJustify = halign < 0 ? "left" : halign > 0 ? "right" : "center";
       // the height is the text's size (`CmdText.size_nm`); the width, the vertical justification, bold, italic, knockout and keep-upright are kept by its id
-      done = await api.setText(id, { ...text!, content, layer, size_nm: h, stroke_width: pen, angle: angleMdeg, justify, mirror, at }, { bold, italic, valign, width_nm: w === h ? null : w, knockout, keep_upright: upright });
+      done = await api.setText(id, { ...text!, content, layer, size_nm: h, stroke_width: pen, angle: angleMdeg, justify, mirror, at }, { bold, italic, valign, width_nm: w === h ? null : w, knockout, keep_upright: upright, face: face === KICAD_FONT ? "" : face });
     }
     if (done) close();
   };
@@ -309,6 +315,8 @@ export function FpTextEditDialog() {
                 <option value={1}>Bottom</option>
               </select>
             </span>
+            <span>Font:</span>
+            <FontSelect families={families} current={face === KICAD_FONT ? null : face} value={face} onChange={setFace} withDefault={false} />
           </div>
           <div style={{ marginTop: 8 }}>
             {/* `DIALOG_TEXT_PROPERTIES` for a footprint text hides only Show (`m_Visible->Show( false )`) and Locked (UI-LEFT F5) */}

@@ -3,7 +3,8 @@
 //!
 //! The slow tier (`EDA_SLOW_TESTS=1`) hands the derived files to kicad-cli: its ERC reads the project's bus aliases (wires labelled D0 and D1 entering a bus
 //! labelled `{DATA}` are not its members until the alias says DATA is D0 and D1 -- read from the project alone too) and its net classes (a label's class is
-//! undefined until Schematic Setup > Net Classes defines it), and its plot draws a wire in its class's colour.
+//! undefined until Schematic Setup > Net Classes defines it), and its plot draws a wire in its class's colour and the wires' hop-overs at Formatting's
+//! size (`--draw-hop-over`, at the points `web/studio/src/kicad-port/schHopOver.ts` draws them).
 
 use crate::board::{load, step, undo};
 use crate::sch_hierarchy_tests::{edit_label_fields, erc_kinds, kicad_cli_ready, mcu30_board, netclass};
@@ -275,4 +276,153 @@ fn plot_svg(dir: &Path) -> String {
         text.push_str(&std::fs::read_to_string(dir.join(f)).unwrap_or_default());
     }
     text
+}
+
+
+/// The hop-overs (UI-LEFT-2 SS4; KiCad 25ec2335 `SCH_LINE::BuildWireWithHopShape`, `SCH_SCREEN::Plot`): with Schematic Setup > Formatting's "Hop-over
+/// size:" set, the studio's Plot Schematic (`POST /api/sch/plot`) passes `--draw-hop-over` as KiCad's dialog sets `m_plotHopOver`
+/// (`GetHopOverScale() > 0.0`), and kicad-cli draws each hop where `web/studio/src/kicad-port/schHopOver.ts` computes it, at Smallest, Medium and
+/// Largest: the wire's straight pieces end at the hop's ends `schHopOver.kicadcli.json` pins (exactly: `SCH_LINE::Plot` writes the points as they
+/// are), and the arc between them has the radius it pins, its ends within a unit of those (`SVG_PLOTTER::Arc` writes them again from the arc's
+/// centre, radius and angles). `schHopOver.test.ts` holds the canvas's port to the same file. The arc is the default line width (7 mils here, read
+/// from the derived project's `drawing.default_line_thickness`) times the choice's multiplier, whatever the wire's width (a bus hops by the same
+/// arc). At None the route passes no flag and the wires are plotted whole; the schematic picture (`schematic_plot`, the studio's
+/// `GET /api/schematic.svg`) draws the hops too.
+#[test]
+fn slow_kicad_cli_plots_the_hops_schematic_setup_sizes() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../web/studio/src/kicad-port/schHopOver.kicadcli.json")).unwrap();
+    let dir = mcu30_board("slow_hop_over");
+    // the crossings go left of mcu30's parts (x 125 mm and on), where nothing of the sheet comes near them
+    let (_, design, _) = load(&dir).unwrap();
+    assert!(design.schematic.as_ref().unwrap().wires.iter().flat_map(|w| &w.pts).all(|p| p.x > mm(100.0)), "the corner the crossings go in is free");
+    for w in fixture["wires"].as_array().unwrap() {
+        let pts = w["pts"].as_array().unwrap().iter().map(|p| eda_model::ir::Point { x: mm(p[0].as_f64().unwrap()), y: mm(p[1].as_f64().unwrap()) }).collect();
+        step(&dir, Cmd::AddWire { pts, bus: w["bus"].as_bool().unwrap_or(false) }, false, "test").unwrap();
+    }
+    let line_width = Nm::new(fixture["default_line_width_nm"].as_i64().unwrap());
+    let set_choice = |choice: u32| {
+        step(&dir, Cmd::SetSchFormatting { settings: SchFormatting { hop_over_size_choice: choice, default_line_width_nm: line_width, ..SchFormatting::default() } }, false, "test").unwrap();
+    };
+    // the SVG's millimetres (four places) as the schematic's 100 nm units
+    let unit = |t: &str| -> Option<i64> { t.parse::<f64>().ok().map(|v| (v * 10_000.0).round() as i64) };
+    // the corner's paths (`<path d="M x y L x y" />`, `<path d="M x y A r r 0.0 large sweep x y" />`): each arc's two ends, in either order, and its radius
+    // as written; every end of a straight piece
+    let paths = |svg: &str| -> (Vec<([i64; 4], String)>, std::collections::BTreeSet<(i64, i64)>) {
+        let mut arcs = Vec::new();
+        let mut ends = std::collections::BTreeSet::new();
+        for d in svg.split("<path d=\"M").skip(1).filter_map(|p| p.split('"').next()) {
+            let n: Vec<&str> = d.split([' ', '\n', 'A', 'L']).filter(|t| !t.is_empty()).collect();
+            let Some((x0, y0)) = unit(n[0]).zip(unit(n[1])) else { continue };
+            if x0 >= 1_000_000 {
+                continue;
+            }
+            if d.contains('A') {
+                let (x1, y1) = (unit(n[7]).unwrap(), unit(n[8]).unwrap());
+                let mut pair = [(x0, y0), (x1, y1)];
+                pair.sort();
+                arcs.push(([pair[0].0, pair[0].1, pair[1].0, pair[1].1], n[2].to_string()));
+            } else if d.contains('L') {
+                ends.extend([(x0, y0), (unit(n[2]).unwrap(), unit(n[3]).unwrap())]);
+            }
+        }
+        arcs.sort();
+        (arcs, ends)
+    };
+    let check = |choice: &str, svg: &str, what: &str| {
+        let (arcs, ends) = paths(svg);
+        let expected = fixture["arcs"][choice].as_array().unwrap();
+        assert_eq!(arcs.len(), expected.len(), "{what}, choice {choice}: one hop per crossing: {arcs:?}");
+        for a in expected {
+            let at = |i: usize, k: usize| (a["ends"][i][k].as_f64().unwrap() * 10_000.0).round() as i64;
+            let mut pair = [(at(0, 0), at(0, 1)), (at(1, 0), at(1, 1))];
+            pair.sort();
+            assert!(ends.contains(&pair[0]) && ends.contains(&pair[1]), "{what}, choice {choice}: the straight pieces end at the hop's ends {pair:?}");
+            let radius = format!("{:.4}", a["radius_mm"].as_f64().unwrap());
+            let near = |(c, r): &([i64; 4], String)| *r == radius && [pair[0].0, pair[0].1, pair[1].0, pair[1].1].iter().zip(c).all(|(p, q)| (p - q).abs() <= 1);
+            assert!(arcs.iter().any(near), "{what}, choice {choice}: an arc of radius {radius} from {pair:?} in {arcs:?}");
+        }
+        eprintln!("{what}, choice {choice}: kicad-cli plotted the arcs {arcs:?}");
+    };
+    let studio_plot = |dir: &Path| -> String {
+        let done = crate::sch_output_api::plot(dir, br#"{"format":"svg"}"#);
+        assert_eq!(done["ok"], true, "the plot route plots: {done}");
+        done["files"].as_array().into_iter().flatten().filter_map(|f| f.as_str()).map(|f| std::fs::read_to_string(dir.join(f)).unwrap_or_default()).collect()
+    };
+
+    set_choice(0);
+    let (_, design, _) = load(&dir).unwrap();
+    assert!(eda_kicad_engine::pictures::hop_over_args(&design).is_empty(), "None: no --draw-hop-over (`m_plotHopOver` is false)");
+    let svg = studio_plot(&dir);
+    let (arcs, ends) = paths(&svg);
+    assert!(arcs.is_empty(), "None: no hops: {arcs:?}");
+    assert!(ends.contains(&(300_000, 500_000)) && ends.contains(&(800_000, 500_000)), "None: the crossing wire is plotted whole");
+    // with the flag kicad-cli would plot a zero-radius hop, a dot, at each crossing (`SVG_PLOTTER::Arc` with `aRadius <= 0`)
+    assert!(!svg.contains(r#"cx="55.0000" cy="50.0000""#), "None: the route passes no --draw-hop-over");
+
+    for choice in ["1", "3", "5"] {
+        set_choice(choice.parse().unwrap());
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(eda_kicad_engine::pictures::hop_over_args(&design), vec!["--draw-hop-over".to_string()]);
+        check(choice, &studio_plot(&dir), "Plot Schematic");
+    }
+
+    // the schematic picture (at Largest, the last choice set) plots the hops too
+    let (design, model) = crate::kicad_engine::load_with_schematic(&dir).unwrap();
+    let work = dir.join(".kicad");
+    let pages = eda_kicad_engine::schematic_plot(&design, &model, &work, &work.join("schematic-svg"), "hops", eda_kicad_engine::PictureFormat::Svg).unwrap();
+    check("5", &std::fs::read_to_string(&pages[0]).unwrap(), "the schematic picture");
+}
+
+/// Schematic Setup > Formatting's Label offset ratio and Global label margin ratio (UI-LEFT-2 SS4): kicad-cli plots a local label's text that far off its
+/// anchor (`SCH_TEXT::GetTextOffset` and the pen) and a global label's flag that much wider (`GetLabelBoxExpansion`) at the places the studio's canvas lays
+/// them out: `web/studio/src/kicad-port/schFormatting.kicadcli.json`, which `schFormattingLook.test.ts` checks the TS port against. At the default ratios
+/// the same labels plot elsewhere, so the plot reads the project's.
+#[test]
+fn slow_kicad_cli_lays_labels_out_by_the_formatting_ratios() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../web/studio/src/kicad-port/schFormatting.kicadcli.json")).unwrap();
+    let dir = mcu30_board("slow_label_ratios");
+    let pt = |v: &serde_json::Value| (v[0].as_f64().unwrap(), v[1].as_f64().unwrap());
+    let place = |net: &str, at: (f64, f64), kind: eda_model::ir::LabelKind| {
+        step(&dir, Cmd::SchEdit(eda_ops::sch_edit::SchCmd::PlaceLabel { net: net.into(), at: eda_model::ir::Point { x: mm(at.0), y: mm(at.1) }, kind, spin: Some(eda_model::sch_extras::LabelSpin::Right), size_nm: None, bold: None, italic: None, auto_rotate: None }), false, "test").unwrap();
+    };
+    let (local, global) = (&fixture["local"], &fixture["global"]);
+    place(local["text"].as_str().unwrap(), pt(&local["at"]), eda_model::ir::LabelKind::Local);
+    place(global["text"].as_str().unwrap(), pt(&global["at"]), eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Passive });
+    let plot = || -> String {
+        let done = crate::sch_output_api::plot(&dir, br#"{"format":"svg"}"#);
+        assert_eq!(done["ok"], true, "{done}");
+        done["files"].as_array().into_iter().flatten().filter_map(|f| f.as_str()).map(|f| std::fs::read_to_string(dir.join(f)).unwrap_or_default()).collect()
+    };
+    // the hidden `<text x=".." y="..">NAME</text>` an SVG plot writes for each stroked text (`SVG_PLOTTER::Text`), in mm
+    let text_at = |svg: &str, name: &str| -> (f64, f64) {
+        let end = svg.find(&format!(">{name}</text>")).unwrap_or_else(|| panic!("{name} is plotted"));
+        let head = &svg[svg[..end].rfind("<text ").unwrap()..end];
+        let attr = |a: &str| head.split(&format!("{a}=\"")).nth(1).and_then(|t| t.split('"').next()).and_then(|t| t.parse::<f64>().ok()).unwrap();
+        (attr("x"), attr("y"))
+    };
+    let near = |a: f64, b: f64| (a - b).abs() <= 0.00011;
+    let defaults = plot();
+    step(&dir, Cmd::SetSchFormatting { settings: SchFormatting { text_offset_ratio: fixture["text_offset_ratio"].as_f64().unwrap(), label_size_ratio: fixture["label_size_ratio"].as_f64().unwrap(), ..SchFormatting::default() } }, false, "test").unwrap();
+    let svg = plot();
+    let (want_x, want_y) = pt(&local["text_at"]);
+    let (x, y) = text_at(&svg, local["text"].as_str().unwrap());
+    assert!(near(x, want_x) && near(y, want_y), "the local label's text at ({x}, {y}), not ({want_x}, {want_y})");
+    assert!(!near(text_at(&defaults, local["text"].as_str().unwrap()).1, want_y), "at the default ratio it stands elsewhere");
+    let (gx, _) = text_at(&svg, global["text"].as_str().unwrap());
+    assert!(near(gx, global["text_x"].as_f64().unwrap()), "the global label's text at x {gx}");
+    // the flag: the path that starts at the label's anchor (`<path ... d="M 30.4800,76.2000 ...`)
+    let (ax, ay) = pt(&global["at"]);
+    let start = svg.find(&format!("d=\"M {ax:.4},{ay:.4}")).expect("the flag is plotted from its anchor");
+    let d = &svg[start + 3..start + svg[start..].find('Z').unwrap()];
+    let corners: Vec<(f64, f64)> = d.split(|c: char| c == 'M' || c.is_whitespace()).filter(|t| t.contains(',')).map(|t| t.split_once(',').map(|(a, b)| (a.parse().unwrap(), b.parse().unwrap())).unwrap()).collect();
+    let want: Vec<(f64, f64)> = global["outline"].as_array().unwrap().iter().map(pt).collect();
+    assert_eq!(corners.len(), want.len(), "{corners:?}");
+    assert!(corners.iter().zip(&want).all(|(a, b)| near(a.0, b.0) && near(a.1, b.1)), "the flag {corners:?}, not {want:?}");
+    eprintln!("kicad-cli: local text at ({x}, {y}), global text x {gx}, flag {corners:?}");
 }

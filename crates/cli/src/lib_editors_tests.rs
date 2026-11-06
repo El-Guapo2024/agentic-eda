@@ -807,3 +807,33 @@ fn kicad_cli_loads_text_boxes_keeps_them_through_sym_upgrade_and_draws_their_tex
 fn text_margin(size_mm: f64, margin_mm: f64) -> f64 {
     eda_model::ir::text_box_margin_mm(size_mm, margin_mm)
 }
+
+/// UI-LEFT-2 SS5: a placed symbol whose library symbol has text boxes has their texts in `GET /api/schematic` -- a `text_box` graphic of the library symbol for each,
+/// beside the rectangle of its border, and on the placed symbol the shown text of each box a variable changes, the symbol's (`SCH_PAINTER::draw( SCH_SYMBOL )`:
+/// `expandLibItemTextVars( text, aSymbol )`), by the box's `index`. The derived `.kicad_sch` has the boxes as `(text_box ..)` (kicad-cli's proof is
+/// `crates/kicad/tests/sch_lib_text_box.rs`).
+#[test]
+fn a_placed_symbols_library_text_boxes_reach_the_canvas_with_the_symbols_variables() {
+    use serde_json::{json, Value};
+    let dir = scratch("ss5_lib_text_box");
+    setup(&dir);
+    let mut s = base_symbol();
+    s.lib_id = "Lib:Boxed".into();
+    s.graphics.push(text_box_at("${REFERENCE} ${VALUE}", (-2.0, 2.0), (2.0, 0.0)));
+    s.graphics.push(text_box_at("plain", (-2.0, 0.0), (2.0, -2.0)));
+    s.assign_missing_ids();
+    step(&dir, Cmd::EmbedLibSymbol { symbol: s }, false, "test").unwrap();
+    step(&dir, Cmd::AddSymbol { id: "U9".into(), lib_id: "Lib:Boxed".into(), at: Point { x: mm(50.8), y: mm(50.8) }, rot_millideg: 90_000, value: "BOX".into(), footprint: String::new(), unit: 1, annotate: None }, false, "test").unwrap();
+    let sch = crate::studio::schematic_json(&dir, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+    let graphics = sch["lib_symbols"]["Lib:Boxed"]["graphics"].as_array().unwrap().clone();
+    let boxes: Vec<&Value> = graphics.iter().filter(|g| g["kind"] == "text_box").collect();
+    let seen: Vec<(u64, &str, f64, &str, &str)> = boxes.iter().map(|b| (b["index"].as_u64().unwrap(), b["text"].as_str().unwrap(), b["margin_mm"].as_f64().unwrap(), b["h_align"].as_str().unwrap(), b["v_align"].as_str().unwrap())).collect();
+    assert_eq!(seen, [(0, "${REFERENCE} ${VALUE}", 1.016, "left", "top"), (1, "plain", 1.016, "left", "top")], "each box with the default margin (`GetLegacyTextMargin`): {boxes:?}");
+    assert_eq!(graphics.iter().filter(|g| g["kind"] == "rectangle").count(), 3, "the body and the two borders");
+    let u9 = sch["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "U9").unwrap();
+    assert_eq!(u9["text_box_shown"], json!({ "0": "U9 BOX" }), "only the box a variable changes, as the symbol resolves it");
+    let (_, design, model) = load(&dir).unwrap();
+    let text = eda_kicad::export_kicad_sch(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-06", title: "boxes" }).unwrap();
+    assert_eq!(text.matches("(text_box \"${REFERENCE} ${VALUE}\"").count(), 1, "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

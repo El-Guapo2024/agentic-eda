@@ -378,6 +378,28 @@ impl SchShown {
         (!out.is_empty()).then(|| Value::Object(out))
     }
 
+    /// The shown texts of the library text boxes of the symbol with the field key `key`, drawn from `lib` -- `{"<index>": shown}` by each box's place in
+    /// `lib.connectivity.text_boxes`, only for a box whose shown text is not its stored one; none when no box's is. `SCH_PAINTER::draw( const SCH_SYMBOL* )` sets
+    /// the text of a box of the temp copy that has variables to `expandLibItemTextVars( text, aSymbol )` (`ExpandTextVars` with the symbol's `ResolveTextVar`, which
+    /// asks its sheet last), and the box draws it as `GetShownText` makes it; here that is the symbol's field resolution (`field_shown` with the symbol), as for
+    /// a field of the symbol.
+    pub(crate) fn text_box_shown_json(&self, key: &str, lib: &eda_model::LibSymbol) -> Option<Value> {
+        let sym = &self.sheet.symbols[*self.by_key.get(key)?];
+        let level = self.sheet.levels.len().saturating_sub(1);
+        let mut out = serde_json::Map::new();
+        for (i, t) in lib.connectivity.text_boxes.iter().enumerate() {
+            let eda_model::ir::LibrarySymbolGraphic::TextBox { text: raw, .. } = t else { continue };
+            if !eda_model::text_vars::has_text_vars(raw) && !raw.contains('{') {
+                continue;
+            }
+            let shown = self.sheet.field_shown(level, Some(sym), raw, 0);
+            if shown != *raw {
+                out.insert(i.to_string(), json!(shown));
+            }
+        }
+        (!out.is_empty()).then(|| Value::Object(out))
+    }
+
     /// `SCH_FIELD::GetShownText` of a power symbol's fields: a power symbol is a symbol to KiCad, so its fields resolve through `SCH_SYMBOL::ResolveTextVar` --
     /// its own fields by name, `${REFERENCE}`, `${VALUE}`, `${SYMBOL_NAME}` ... -- then the sheet's. `shown` on each field whose shown text is not its stored one
     /// (UI-LEFT B5). `fields` are `{name, text}`s, the power symbol's as the state lists them.

@@ -156,7 +156,7 @@ fn a_panel_edit_of_several_items_is_one_batch_that_either_all_lands_or_none_does
 fn edit_text_style_keeps_the_texts_italic_bold_valign_width_knockout_and_automatic_pen_in_its_text_extra() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    let style = |width_nm, valign, bold, italic, knockout, auto_thickness| Cmd::EditTextStyle { id: "txt_a".into(), width_nm, valign, bold, italic, knockout, auto_thickness };
+    let style = |width_nm, valign, bold, italic, knockout, auto_thickness| Cmd::EditTextStyle { id: "txt_a".into(), width_nm, valign, bold, italic, knockout, auto_thickness, face: None };
     b.apply(&style(Some(mm(1.5)), Some(TextVAlign::Bottom), None, Some(true), Some(true), None)).unwrap();
     let x = drawings(&b).text_extra("txt_a").unwrap().clone();
     assert_eq!((x.width_nm, x.valign, x.italic, x.knockout, x.bold), (Some(mm(1.5)), TextVAlign::Bottom, true, true, false));
@@ -169,8 +169,22 @@ fn edit_text_style_keeps_the_texts_italic_bold_valign_width_knockout_and_automat
     b.apply(&style(Some(mm(1.0)), Some(TextVAlign::Center), Some(false), Some(false), Some(false), Some(false))).unwrap();
     assert!(drawings(&b).text_extra("txt_a").is_none(), "{:?}", drawings(&b).text_extra("txt_a"));
     assert_eq!(b.apply(&style(None, None, None, None, None, None)).unwrap_err()[0].check, "ops_nothing_to_change");
-    assert_eq!(b.apply(&Cmd::EditTextStyle { id: "txt_nope".into(), width_nm: None, valign: None, bold: Some(true), italic: None, knockout: None, auto_thickness: None }).unwrap_err()[0].check, "ops_unknown_text");
+    assert_eq!(b.apply(&Cmd::EditTextStyle { id: "txt_nope".into(), width_nm: None, valign: None, bold: Some(true), italic: None, knockout: None, auto_thickness: None, face: None }).unwrap_err()[0].check, "ops_unknown_text");
     assert_eq!(b.apply(&style(Some(Nm::ZERO), None, None, None, None, None)).unwrap_err()[0].check, "ops_bad_text");
+}
+
+/// The Properties panel's Font row (`EDA_TEXT::SetFont`, UI-LEFT-2 CC1): a face is kept in the text's extra (the file's `(face ..)`); "KiCad Font" or nothing is the stroke
+/// font again, which keeps no face; the same face twice changes nothing.
+#[test]
+fn edit_text_style_sets_and_clears_the_texts_face() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let face = |f: &str| Cmd::EditTextStyle { id: "txt_a".into(), width_nm: None, valign: None, bold: None, italic: None, knockout: None, auto_thickness: None, face: Some(f.into()) };
+    b.apply(&face("DejaVu Sans")).unwrap();
+    assert_eq!(drawings(&b).text_extra("txt_a").and_then(|x| x.face.clone()).as_deref(), Some("DejaVu Sans"));
+    assert_eq!(b.apply(&face("DejaVu Sans")).unwrap_err()[0].check, "ops_nothing_to_change");
+    b.apply(&face("KiCad Font")).unwrap();
+    assert!(drawings(&b).text_extra("txt_a").is_none(), "the stroke font keeps no face and nothing else is left");
 }
 
 #[test]
