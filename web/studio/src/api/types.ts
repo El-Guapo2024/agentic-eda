@@ -860,6 +860,8 @@ export interface BoardTableCell {
   line_spacing: number;
   color: [number, number, number, number] | null;
   lines: TablePlacedLine[];
+  /** `GetDrawPos()`: where the lines are placed from (absent from an older backend). */
+  draw_pos?: [Nm, Nm];
   /** A sheet's cell only: its background (`none`, `outline`, `background` or `color` with `fill_color`) and whether it is left out of simulation. */
   fill?: "none" | "outline" | "background" | "color";
   fill_color?: [number, number, number, number] | null;
@@ -2175,7 +2177,7 @@ export type Cmd =
   | { op: "set_zone_name"; id: string; name: string }
   | { op: "replace_shape"; id: string; shape: CmdShape }
   /** The Properties panel's text style rows of a board text (crates/ops/src/pcb_props.rs `edit_text_style`): a key left out is unchanged. */
-  | { op: "edit_text_style"; id: string; width_nm?: Nm; valign?: "top" | "center" | "bottom"; bold?: boolean; italic?: boolean; knockout?: boolean; auto_thickness?: boolean }
+  | { op: "edit_text_style"; id: string; width_nm?: Nm; valign?: "top" | "center" | "bottom"; bold?: boolean; italic?: boolean; knockout?: boolean; auto_thickness?: boolean; face?: string }
   /** "Soldermask" and "Soldermask Margin Override" of tracks and shapes on outer copper (`set_solder_mask`); `margin` null is the board's. */
   | { op: "set_solder_mask"; ids: string[]; solder_mask: boolean; margin: Nm | null }
   /** "Corner Radius" of rectangles (`set_corner_radius`). */

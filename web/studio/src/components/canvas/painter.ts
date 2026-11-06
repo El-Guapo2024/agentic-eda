@@ -13,6 +13,8 @@ import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
 import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
 import { snapPoint } from "./gridHelper";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { beginTextRecord, paintKicadText } from "../text/kicadTextPaint";
+import { boardTextSpec, dimensionTextSpec, fieldSpec } from "../../kicad-port/textSpecs";
 import { keptReadableInFlippedView } from "../../kicad-port/flipView";
 import { rulerDrawing } from "../../kicad-port/rulerItem";
 import { paintRuler } from "./rulerPaint";
@@ -26,8 +28,8 @@ import { EDGE_CUTS_DIM_FACTOR, HI_CONTRAST_FACTOR, cssOf, hiContrastDim, highlig
 import { activeCopperOnTop, COPPER_BUCKETS, padContrast, padHoleContrast, viaContrast, type ContrastLook } from "../../kicad-port/hiContrast";
 import { installColourScopes, memoColours, withColourScope } from "./colourScope";
 import { carryMatrix, carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
-import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
-import { dimensionTextAngleRad, itemBounds, padIds } from "../../kicad-port/pcbItems";
+import { fieldShownByObjects } from "../../kicad-port/fpFields";
+import { itemBounds, padIds } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
 import type { LengthUnit } from "../../state/units";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
@@ -88,6 +90,8 @@ function copperPaint(base: string, net: string | null | undefined, opts: PaintOp
 export interface PaintOptions {
   /** Flip Board View is on (`m_FlipBoardView`): a text that is not side specific is drawn to read as it did (kicad-port/flipView.ts). */
   viewFlipped?: boolean;
+  /** Which canvas `window.__edaText` files the texts under (components/text/kicadTextPaint.ts): "pcb" unless said (the Footprint Editor's "fp"). */
+  textRecordTag?: string;
   /**
    * Import Graphics' placement preview (`PlaceImportedGraphics`' `m_view->Add( &preview )`, state/importPreview.ts): the shapes and texts the import would put on the board, as
    * `drawings` has them, moved by (dx, dy) to the snapped cursor. Null when no placement runs.
@@ -574,9 +578,9 @@ export function fieldsToDraw(parts: readonly Part[]): FieldToDraw[] {
 }
 
 /**
- * A footprint's fields (`PCB_FIELD`: Reference, Value, user fields) as the board has them -- position, size, thickness, layer, angle, justification, mirroring --
- * in KiCad's stroke font. A hidden field is not drawn (it is when the footprint is selected in KiCad, with "Force show fields when footprint selected" on; the
- * Properties panel and the dialog show it). `GetDrawRotation`'s keep-upright rule has already been applied in `fieldAsText`.
+ * A footprint's fields (`PCB_FIELD`: Reference, Value, user fields) as the board has them -- position, size, thickness, layer, angle, justification, mirroring,
+ * bold, italic, knockout -- in KiCad's stroke font or the field's outline face. A hidden field is not drawn (it is when the footprint is selected in KiCad, with "Force
+ * show fields when footprint selected" on; the Properties panel and the dialog show it). `GetDrawRotation`'s keep-upright rule is `fieldSpec`'s (`drawAngle`).
  *
  * The Appearance panel's Objects rows apply as `PCB_FIELD::ViewGetLOD` has them: the Reference needs References, the Value Values, every field Footprint Text, and the
  * footprint's side (Footprints Front or Back) must show -- unless the footprint is selected, which shows its fields whatever those rows say ("Force show fields when
@@ -589,17 +593,19 @@ export function drawFields(ctx: CanvasRenderingContext2D, view: ViewTransform, i
     const key = layerStateKey(f.layer);
     if (!f.text || !layerIsVisible(opts.layerVisible, f.layer)) continue;
     if (part && !fieldShownByObjects(opts.layerVisible, part, f, opts.selection.has(part.ref))) continue;
-    const t = fieldAsText(f);
     const color = selected ? layerColor("selection") : layerColor(realLayerKey(f.layer));
-    // millideg, KiCad's counter-clockwise; the canvas turns clockwise.
-    const angleRad = (-t.angle / 1000) * (Math.PI / 180);
-    // The anchor is where the text box is centred (or its top or bottom edge sits); the font draws from the baseline.
-    const sizeNm = Math.max(f.h, hairlineNm(view, 8));
-    const down = f.valign > 0 ? 0 : f.valign < 0 ? 0.72 * sizeNm : 0.36 * sizeNm;
-    const x = f.x - down * Math.sin(angleRad);
-    const y = f.y + down * Math.cos(angleRad);
+    // `FONT::Draw` from the field's position (kicad-port/textSpecs.ts `fieldSpec`: `GetDrawRotation`, the width and height, the effective pen, the face), as the hit
+    // test lays it out (UI-LEFT-2 PP1); a knockout field is its box filled, the text cut out of it (`GetKnockoutCache`).
+    const { spec, face } = fieldSpec(f);
     withLayer(ctx, opts, key, f.visible ? 1 : 0.5, () => {
-      drawStrokeText(ctx, t.content, x, y, { sizeNm, thicknessNm: opts.sketchText ? hairlineNm(view, 1) : Math.max(f.thickness, sizeNm / 20), justify: t.justify, angleRad, mirror: f.mirror, italic: f.italic, color, keepReadable: keptReadableInFlippedView(opts.viewFlipped, f.layer) });
+      paintKicadText(ctx, spec, face, {
+        color,
+        pen: opts.sketchText ? hairlineNm(view, 1) : undefined,
+        minPen: hairlineNm(view, 0.5),
+        knockout: f.knockout ? layerColor("background") : null,
+        flippedView: keptReadableInFlippedView(opts.viewFlipped, f.layer),
+        record: { tag: opts.textRecordTag ?? "pcb", id: f.id },
+      });
     });
   }
 }
@@ -1166,25 +1172,27 @@ export function normalizeSweep(a0: number, aMid: number, a1: number): boolean {
   return ccwMidSpan <= ccwSpan; // mid falls within the CCW sweep from a0 to a1
 }
 
-/** Free-standing board text (Place > Text), KiCad's real Newstroke font (strokeFont.ts). */
+/**
+ * Free-standing board text (Place > Text): `PCB_PAINTER::draw( const PCB_TEXT* )` -- `FONT::Draw` from the text's position with its attributes (kicad-port/textSpecs.ts
+ * `boardTextSpec`: the width apart from the height, the vertical justification, bold's pen, italic, the face), in the stroke font or the outline face (UI-LEFT-2 PP1, CC1);
+ * a knockout text is its box filled, the text cut out of it (`GetKnockoutCache`).
+ */
 function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
   const texts = board.drawings?.texts ?? [];
   for (const t of texts) {
     if (!layerIsVisible(opts.layerVisible, t.layer)) continue;
     const selected = opts.selection.has(t.id);
     const color = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
-    // millideg -> rad; canvas Y grows downward, so negate for KiCad's CCW-positive convention (matches painter's other rotations)
-    const angleRad = (-t.angle / 1000) * (Math.PI / 180);
+    const { spec, face } = boardTextSpec(t);
     withBoardLayer(ctx, opts, t.layer, () =>
-      drawStrokeText(ctx, t.shown ?? t.content, t.x, t.y, {
-        sizeNm: Math.max(t.size, hairlineNm(view, 8)),
-        // "Sketch Text Items" (`m_DisplayTextFill` off): the text in line mode, one pixel wide.
-        thicknessNm: opts.sketchText ? hairlineNm(view, 1) : t.stroke_width,
-        justify: t.justify,
-        angleRad,
-        mirror: t.mirror,
+      paintKicadText(ctx, spec, face, {
         color,
-        keepReadable: keptReadableInFlippedView(opts.viewFlipped, t.layer),
+        // "Sketch Text Items" (`m_DisplayTextFill` off): the text in line mode, one pixel wide.
+        pen: opts.sketchText ? hairlineNm(view, 1) : undefined,
+        minPen: hairlineNm(view, 0.5),
+        knockout: t.knockout ? layerColor("background") : null,
+        flippedView: keptReadableInFlippedView(opts.viewFlipped, t.layer),
+        record: { tag: "pcb", id: t.id },
       })
     );
   }
@@ -1233,16 +1241,16 @@ function drawOneDimension(ctx: CanvasRenderingContext2D, view: ViewTransform, d:
   ctx.restore();
 
   if (d.text) {
-    const angleRad = dimensionTextAngleRad(d);
-    drawStrokeText(ctx, d.text, d.text_at[0], d.text_at[1], {
-      sizeNm: Math.max(d.text_size_nm, hairlineNm(view, 8)),
-      thicknessNm: d.stroke_width,
-      justify: "center",
-      angleRad,
+    // `PCB_PAINTER::draw( const PCB_DIMENSION_BASE* )`: `strokeText( resolvedText, GetTextPos(), attrs )`, the label's own pen (kicad-port/textSpecs.ts `dimensionTextSpec`)
+    const { spec, face } = dimensionTextSpec(d);
+    paintKicadText(ctx, spec, face, {
       color,
+      pen: opts.sketchText ? hairlineNm(view, 1) : undefined,
+      minPen: hairlineNm(view, 0.5),
       // `if( m_gal->IsFlippedX() && !aDimension->IsSideSpecific() ) attrs.m_Mirrored = !attrs.m_Mirrored;`, the text where it is
-      keepReadable: keptReadableInFlippedView(opts.viewFlipped, d.layer),
-      readableAnchorKept: true,
+      flippedView: keptReadableInFlippedView(opts.viewFlipped, d.layer),
+      keepAnchor: true,
+      record: { tag: "pcb", id: d.id },
     });
   }
 }
@@ -1440,7 +1448,9 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     const at = opts.snappedCursor ?? (opts.cursorNm ? snapPoint(opts.cursorNm.x, opts.cursorNm.y, opts.gridNm) : null);
     if (at) {
       const t = draw.text;
-      drawStrokeText(ctx, t.content, at[0], at[1], { sizeNm: Math.max(t.size_nm, hairlineNm(view, 8)), thicknessNm: t.stroke_width, justify: t.justify, angleRad: (-t.angle / 1000) * (Math.PI / 180), mirror: t.mirror, color: layerColor(realLayerKey(t.layer)) });
+      // laid out as it will be once placed (kicad-port/textSpecs.ts `boardTextSpec`), with the looks the dialog gave it
+      const { spec } = boardTextSpec({ id: "", content: t.content, x: at[0], y: at[1], angle: t.angle, layer: t.layer, size: t.size_nm, stroke_width: t.stroke_width, justify: t.justify, mirror: t.mirror, width: draw.extra.width_nm ?? null, italic: draw.extra.italic, valign: draw.extra.valign === "center" ? null : draw.extra.valign });
+      paintKicadText(ctx, spec, null, { color: layerColor(realLayerKey(t.layer)), minPen: hairlineNm(view, 0.5) });
     }
     return;
   }
@@ -1657,6 +1667,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // High Contrast Mode's Dim and the net highlight work on the items' colours, as `PCB_RENDER_SETTINGS::GetColor` does: the colours set on the context go
   // through the scopes the draws open (colourScope.ts).
   installColourScopes(ctx);
+  // what the texts of this paint are, for `window.__edaText.pcb` (components/text/kicadTextPaint.ts)
+  beginTextRecord("pcb");
   const opts: PaintOptions = { ...given, dimByColour: true };
   // The net highlight darkens every item that is not of a highlighted net (`GetColor`'s single-net highlight branch: an item that is not a connected copper
   // item has net -1, so the silkscreen, the outline and the texts darken too); a selected item keeps its colour (`!selected`). The copper items are

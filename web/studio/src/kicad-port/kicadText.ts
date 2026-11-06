@@ -499,6 +499,27 @@ export function layoutKicadText(spec: KicadTextSpec, font: KicadFont = STROKE): 
   };
 }
 
+/**
+ * `FONT::drawSingleLineText` of one line whose baseline starts at `at` and that is mirrored and turned about `at`: a line the server placed (a table cell's,
+ * `eda_model::table_text::place_lines_at`, which turns and mirrors each line's start about the cell's `GetDrawPos` -- the same place for its glyphs).
+ */
+export function layoutLineAt(text: string, at: readonly [number, number], spec: Omit<KicadTextSpec, "text" | "pos" | "halign" | "valign">, font: KicadFont = STROKE): KicadTextLayout {
+  const sink: Sink = { strokes: [], runs: [] };
+  const origin: P = [at[0], at[1]];
+  drawMarkup(parseMarkup(text), font, spec.size, origin, origin, { sub: false, sup: false, italic: !!spec.italic }, spec.iu ?? 1, sink, { box: null });
+  return {
+    font,
+    lines: [{ text, x: at[0], y: at[1], extent: lineAdvance(text, font, spec.size, !!spec.italic, spec.iu ?? 1, origin) }],
+    strokes: sink.strokes,
+    runs: sink.runs,
+    pen: spec.pen,
+    pos: origin,
+    angleDeg: spec.angleDeg ?? 0,
+    mirror: !!spec.mirror,
+    fakeItalic: font.kind === "outline" && font.face.fakeItalic,
+  };
+}
+
 /** The frame of a laid-out text on the board: `(x, y)` in the frame, mirrored about the text's position and turned about it (`RotatePoint`, KiCad's sense). */
 export function frameToWorld(l: Pick<KicadTextLayout, "pos" | "angleDeg" | "mirror">, x: number, y: number): P {
   const [ox, oy] = l.pos;
@@ -539,20 +560,31 @@ export function layoutSegments(l: KicadTextLayout): Segment[] {
   return out;
 }
 
-/** An outline run's ink, in the text's frame: the face's ink box at the run's em (sheared for a fake italic); null for a run with none. */
+/**
+ * An outline run's ink, in the text's frame: the face's ink box at the run's em; for a fake italic each glyph's box slanted about its own origin on the baseline
+ * (`m_fakeItal`'s `FT_Matrix` turns every glyph's outline as it is loaded) -- the box of the slanted box, a little wider than the slanted glyph where the glyph is
+ * narrower at its top (kicad-cli's 'x' of DejaVu Sans: 0.015 of the size); null for a run with none.
+ */
 export function runInk(l: Pick<KicadTextLayout, "font" | "fakeItalic">, r: OutlineRun): Box | null {
   if (l.font.kind !== "outline") return null;
-  const ink = l.font.face.ink(r.text);
-  if (!ink) return null;
-  let [x0, y0, x1, y1] = [r.x + ink[0] * r.emX, r.y + ink[1] * r.emY, r.x + ink[2] * r.emX, r.y + ink[3] * r.emY];
-  if (l.fakeItalic) {
-    // x' = x cos + (baseline - y) sin: the top leans right
-    const [s, c] = [Math.sin(FAKE_ITALIC_ANGLE), Math.cos(FAKE_ITALIC_ANGLE)];
-    const xs = [r.x + (x0 - r.x) * c + (r.y - y0) * s, r.x + (x1 - r.x) * c + (r.y - y0) * s, r.x + (x0 - r.x) * c + (r.y - y1) * s, r.x + (x1 - r.x) * c + (r.y - y1) * s];
-    x0 = Math.min(...xs);
-    x1 = Math.max(...xs);
+  const face = l.font.face;
+  if (!l.fakeItalic) {
+    const ink = face.ink(r.text);
+    return ink ? { x0: r.x + ink[0] * r.emX, y0: r.y + ink[1] * r.emY, x1: r.x + ink[2] * r.emX, y1: r.y + ink[3] * r.emY } : null;
   }
-  return { x0, y0, x1, y1 };
+  // x' = x cos + (baseline - y) sin: the top leans right
+  const [s, c] = [Math.sin(FAKE_ITALIC_ANGLE), Math.cos(FAKE_ITALIC_ANGLE)];
+  const chars = Array.from(r.text);
+  let box: Box | null = null;
+  chars.forEach((ch, i) => {
+    const ink = face.ink(ch);
+    if (!ink) return;
+    const gx = r.x + face.advance(chars.slice(0, i).join("")) * r.emX;
+    const [x0, y0, x1, y1] = [ink[0] * r.emX, ink[1] * r.emY, ink[2] * r.emX, ink[3] * r.emY];
+    const xs = [x0 * c - y0 * s, x1 * c - y0 * s, x0 * c - y1 * s, x1 * c - y1 * s];
+    box = merge(box, { x0: gx + Math.min(...xs), y0: r.y + y0, x1: gx + Math.max(...xs), y1: r.y + y1 });
+  });
+  return box;
 }
 
 /**

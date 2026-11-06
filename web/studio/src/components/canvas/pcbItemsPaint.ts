@@ -1,6 +1,7 @@
 // The board items GAPS.md item 24 (package P16) added, as the canvas draws them: the text box today; reference images, points and hatch fills as their steps land. Called from
 // `paintBoard` (painter.ts) once for the board and once for the items in the hand, after the dimensions. Ports of `PCB_PAINTER::draw( const PCB_TEXTBOX* )` (pcbnew/pcb_painter.cpp at
-// KiCad 8303b2ad): the border in the layer's colour with its line style, the text in the stroke font wrapped to the box, and, for a knockout box, the box filled with the text cut out.
+// KiCad 8303b2ad): the border in the layer's colour with its line style, the text wrapped to the box (`LinebreakText` measuring in the box's font) and drawn as `FONT::Draw` lays it
+// out from `GetDrawPos` in the stroke font or its outline face (kicad-port/kicadText.ts, UI-LEFT-2 CC1), and, for a knockout box, the box filled with the text cut out.
 import type { BoardGridItem } from "../../api/pcbItemTypes";
 import { sizeGridToCursor } from "../../kicad-port/gridItem";
 import { drawGridItemPreview } from "./gridItemPaint";
@@ -13,10 +14,12 @@ import { requestBarcodeShape } from "./barcodeCache";
 import { parseCssColor } from "../../kicad-port/appearance";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { refImageBounds } from "../../kicad-port/pcbExtraItems";
-import { layoutBoxText, outlineOf, type BoxTextLayout } from "../../kicad-port/pcbTextBox";
+import { columnWidthNm, drawPos, linebreakText, outlineOf, shownTextOf } from "../../kicad-port/pcbTextBox";
+import { layoutKicadText, lineAdvance, resolveFont, type KicadFont, type KicadTextLayout } from "../../kicad-port/kicadText";
+import { textBoxSpec } from "../../kicad-port/textSpecs";
+import { paintLayout } from "../text/kicadTextPaint";
 import { pcbImageUrl } from "../../kicad-port/refImage";
 import { dashPattern } from "../schematic/schGraphicsPainter";
-import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 import { on, opacityOf } from "./appearancePaint";
 import { imageFor } from "./imageCache";
 import { layerColor } from "./layers";
@@ -26,15 +29,19 @@ import type { ViewTransform } from "../../state/store";
 
 const layerKeyOf = (layer: string): string => layer.replace(/\./g, "_");
 
-// The layout of a box is the same until the board's state is refreshed (which makes new box objects): laying out every repaint would measure every glyph of every box per mouse move.
-const layouts = new WeakMap<BoardTextBox, BoxTextLayout>();
-function layoutOf(b: BoardTextBox): BoxTextLayout {
-  let l = layouts.get(b);
-  if (!l) {
-    l = layoutBoxText(b, measureStrokeText);
-    layouts.set(b, l);
-  }
-  return l;
+// The layout of a box is the same until the board's state is refreshed (which makes new box objects) or its face has loaded: laying out every repaint would measure every glyph
+// of every box per mouse move.
+const layouts = new WeakMap<BoardTextBox, { font: KicadFont; layout: KicadTextLayout }>();
+/** `PCB_TEXTBOX::GetShownText`'s wrap (`LinebreakText( text, colWidth, GetTextSize(), GetTextThickness(), .. )`) in the box's font, then `FONT::Draw` from `GetDrawPos`. */
+function layoutOf(b: BoardTextBox): KicadTextLayout {
+  const font = resolveFont(b.face, b.bold, b.italic);
+  const hit = layouts.get(b);
+  if (hit && hit.font.kind === font.kind) return hit.layout;
+  const size: [number, number] = [b.width || b.size, b.size];
+  const lines = linebreakText(shownTextOf(b), columnWidthNm(b), b.size, b.thickness_auto ? 0 : b.thickness, (text) => lineAdvance(text, font, size, b.italic));
+  const layout = layoutKicadText(textBoxSpec(b, lines.join("\n"), drawPos(b)).spec, font);
+  layouts.set(b, { font, layout });
+  return layout;
 }
 
 /**
@@ -302,17 +309,10 @@ export function drawTextBox(ctx: CanvasRenderingContext2D, view: ViewTransform, 
     ctx.setLineDash([]);
   }
   if ((b.shown ?? b.text) !== "") {
-    const layout = layoutOf(b);
-    ctx.translate(layout.anchor[0], layout.anchor[1]);
-    // The text's angle is counter-clockwise on the screen, canvas y points down.
-    ctx.rotate(-layout.angleRad);
-    if (b.mirror) ctx.scale(-1, 1);
     const cut = !!look.cutOutText && b.knockout;
     if (cut) ctx.globalCompositeOperation = "destination-out";
     const textColor = cut ? "#000000" : b.knockout ? layerColor("background") : color;
-    for (const l of layout.lines) {
-      drawStrokeText(ctx, l.text, l.x, l.y, { sizeNm: b.size, thicknessNm: lineMode ? hairlineNm(view, 1) : b.thickness, justify: "left", italic: b.italic, color: textColor });
-    }
+    paintLayout(ctx, layoutOf(b), { color: textColor, pen: lineMode ? hairlineNm(view, 1) : undefined });
   }
   ctx.restore();
 }
