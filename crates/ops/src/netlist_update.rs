@@ -154,6 +154,8 @@ pub struct NetlistReport {
     pub lines: Vec<ReportLine>,
     /// The footprints the update added (`GetAddedFootprints`): the ones `OnNetlistChanged` spreads and hands to the Move tool.
     pub added: Vec<String>,
+    /// Each added footprint's path (`GetPath`), in the order of `added`: `SpreadFootprints( .., aGroupBySheet = true )` groups them by its sheet.
+    pub added_paths: Vec<String>,
     pub warnings: usize,
     pub errors: usize,
     /// The reader's refusal (`DisplayErrorMessage`: "Cannot open netlist file '%s'.", "Error loading netlist.\n%s"), when the file could not be read.
@@ -253,8 +255,9 @@ struct Updater<'c> {
     current: BTreeSet<String>,
     /// The record, as this run leaves it.
     record: ImportedNetlist,
-    /// The footprints added (`m_addedFootprints`).
+    /// The footprints added (`m_addedFootprints`), and their paths.
     added: Vec<String>,
+    added_paths: Vec<String>,
     /// Reference changes, old -> new (`SetReference`), made at the end.
     renames: BTreeMap<String, String>,
 }
@@ -278,6 +281,7 @@ impl<'c> Updater<'c> {
             current: BTreeSet::new(),
             record: ImportedNetlist::default(),
             added: Vec::new(),
+            added_paths: Vec::new(),
             renames: BTreeMap::new(),
         }
     }
@@ -312,7 +316,7 @@ impl<'c> Updater<'c> {
     fn finish_lines(&mut self) -> NetlistReport {
         let mut lines = std::mem::take(&mut self.head);
         lines.append(&mut self.lines);
-        NetlistReport { lines, added: self.added.clone(), warnings: self.warnings, errors: self.errors, error: None }
+        NetlistReport { lines, added: self.added.clone(), added_paths: self.added_paths.clone(), warnings: self.warnings, errors: self.errors, error: None }
     }
 
     // ---- what the board has ----
@@ -846,6 +850,7 @@ impl<'c> Updater<'c> {
         self.fpid_now.insert(reference.clone(), name.clone());
         self.pads_now.insert(reference.clone(), engine);
         self.added.push(reference.clone());
+        self.added_paths.push(c.footprint_path());
         self.say(Severity::Action, format!("Added {} (footprint '{}').", c.reference, esc(fpid)));
         self.new_footprints += 1;
         Some(reference)

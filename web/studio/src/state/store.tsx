@@ -1910,6 +1910,12 @@ export interface StudioApi {
    */
   placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean, afterDrop?: () => void, opts?: PlaceNewItemsOptions) => Promise<boolean>;
   /**
+   * The footprints `refs` a command already made inside a held step (`carry: "begin"` sent by the caller: Import Netlist's Update PCB) handed to the Move tool, as
+   * `placeNewItems` hands its new items over: picked up at `at`, each shifted by `offsets` (`SpreadFootprints`' arrangement) while they are carried; the drop joins
+   * the held step, Escape takes the step back.
+   */
+  carryPlaced: (refs: string[], at: { x: number; y: number }, offsets?: Record<string, [number, number]>) => void;
+  /**
    * The same for the sheet in view of the Schematic tab (Import Graphics): `build` makes the command for where the cursor is (its 1.27 mm grid point); with `carry` the step is held open the same way
    * (`carry.rs` keeps whole-design snapshots, so it holds a schematic step as well as a board one) and the drop of the held selection (`commitSchHeld`) joins it.
    */
@@ -2781,6 +2787,17 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     // Import Graphics (interactive placement), Append Board and the drops: the same hand-off as `pasteClipboard` above for any command that adds items -- the step is held open
     // (`carry: "begin"`) while the new items are carried, so they and their drop are one undo step and Escape leaves nothing behind.
+    carryPlaced: (refs, at, offsets) => {
+      if (refs.length === 0) return;
+      carriedPlacementRef.current = true;
+      afterDropRef.current = null;
+      afterCancelRef.current = null;
+      afterSettleRef.current = null;
+      dispatch({ type: "SET_SELECTION", refs });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+      dispatch({ type: "SET_MOVE_ORIGIN", at });
+      if (offsets) dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs, kind: "part", dxNm: 0, dyNm: 0, perRefOffsetNm: offsets } });
+    },
     placeNewItems: async (build, carry, afterDrop, opts) => {
       const board = stateRef.current.board;
       if (!board) return false;

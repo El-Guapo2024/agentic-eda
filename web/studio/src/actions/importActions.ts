@@ -38,6 +38,11 @@ import type { Dispatch } from "react";
 import type { ActionHandler } from "./commonActions";
 import { describeExport, describeImport as describeSessionImport, SESSION_ACCEPT, specctraImportCmd } from "../kicad-port/specctra";
 import { exportSpecctraDsn } from "../api/specctraClient";
+import { createElement } from "react";
+import { openSweepDialog } from "./pcbSweepDialogs";
+import { ImportNetlistDialog, type ImportNetlistHost } from "../components/ImportNetlistDialog";
+import { spreadBySheet, type SpreadItem } from "../kicad-port/importNetlist";
+import { footprintBBox } from "../kicad-port/packFootprints";
 
 /** The project import's parameter: a list of files, or `{ files: [..], layerMap, .. }` with the options for the first. */
 function asProjectParam(param: unknown): ForeignParam[] | null {
@@ -263,6 +268,32 @@ async function exportSpecctra(ctx: ImportActionContext): Promise<void> {
   }
 }
 
+/**
+ * File > Import > Netlist... (`PCB_EDIT_FRAME::InstallNetlistFrame`): the dialog (components/ImportNetlistDialog.tsx). The footprints Update PCB added are spread as
+ * `OnNetlistChanged` spreads them (`SpreadFootprints( &newFootprints, { 0, 0 }, true )`) and picked up by the Move tool when the dialog closes, inside the step the
+ * update held open: the drop ends it (judged by the Strict switch with the import), Escape takes the import back.
+ */
+function openImportNetlist(ctx: ImportActionContext, given: PickedFile | null): void {
+  const host: ImportNetlistHost = {
+    strict: () => ctx.api.getState().strict,
+    refresh: () => ctx.api.refresh(),
+    toast: (message, kind) => ctx.dispatch({ type: "TOAST", message, kind }),
+    carry: (refs, paths) => {
+      const parts = ctx.api.getState().board?.parts ?? [];
+      const items: SpreadItem[] = [];
+      refs.forEach((ref, i) => {
+        const part = parts.find((p) => p.ref === ref);
+        const bbox = part ? footprintBBox(part) : null;
+        if (part && bbox) items.push({ ref, bbox, path: paths[i] ?? "" });
+      });
+      const first = parts.find((p) => p.ref === items[0]?.ref);
+      if (!first?.at) return;
+      ctx.api.carryPlaced(items.map((i) => i.ref), { x: first.at[0], y: first.at[1] }, spreadBySheet(items));
+    },
+  };
+  openSweepDialog({ kind: "element", element: createElement(ImportNetlistDialog, { host, given }) });
+}
+
 export function registerImportActions(m: Map<string, ActionHandler>, ctx: ImportActionContext): void {
   if (ctx.tab === "pcb") {
     // PCB_ACTIONS::openNonKicadBoard ("Import Non-KiCad Board File..."): a file chooser; the parameter `{ name, data }` is a file the page already has.
@@ -271,6 +302,8 @@ export function registerImportActions(m: Map<string, ActionHandler>, ctx: Import
     // is a session file the page already has.
     m.set("pcbnew.EditorControl.importSpecctraSession", (param) => void importSpecctraSession(ctx, asPickedFile(param)));
     m.set("pcbnew.EditorControl.exportSpecctraDSN", () => void exportSpecctra(ctx));
+    // PCB_ACTIONS::importNetlist ("Import Netlist..."): DIALOG_IMPORT_NETLIST; the parameter `{ name, text }` is a netlist file the page already has.
+    m.set("pcbnew.EditorControl.importNetlist", (param) => openImportNetlist(ctx, asPickedFile(param)));
     // PCB_ACTIONS::appendBoard ("Append Board..."): a file chooser; PCB_ACTIONS::ddAppendBoard: the board that was dropped on the window.
     m.set("pcbnew.EditorControl.appendBoard", () => {
       void (async () => {
