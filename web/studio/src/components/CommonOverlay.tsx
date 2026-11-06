@@ -126,6 +126,17 @@ export function CommonOverlay() {
       }
     }
 
+    // The items the clarification menu's row under the pointer stands for (`doSelectionMenu`: `highlight( current, BRIGHTENED, &highlightGroup )`), on any editor.
+    if (tool.menuHighlight && tool.menuHighlight.length > 0) {
+      const boxes = adapter.itemBoxes();
+      ctx.strokeStyle = HOVER_BOX_COLOR;
+      ctx.lineWidth = 2;
+      for (const id of tool.menuHighlight) {
+        const box = boxes.get(id);
+        if (box) strokeBox(box);
+      }
+    }
+
     // The item a picker would take (`BrightenItem` of the delete tool's candidate).
     if (picker && tool.hover) {
       const box = adapter.itemBoxes().get(tool.hover);

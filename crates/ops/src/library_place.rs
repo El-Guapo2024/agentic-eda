@@ -119,7 +119,8 @@ impl Board<'_> {
         };
         let value = if value.trim().is_empty() { name.rsplit(':').next().unwrap_or(name).to_string() } else { value.trim().to_string() };
         let stored = if known { None } else { definition.cloned() };
-        let at = self.snap_point(at.x, at.y);
+        // `at` is where the editor put it, in whole nanometres (`fp->SetPosition( cursorPos )`): the pointer was snapped to the grid on screen, so it is
+        // not rounded again to the board's placement step (UI-LEFT P19).
 
         let dr = self.drawings_mut();
         dr.board_parts.push(BoardPart { reference: reference.clone(), value: Some(value), footprint: name.to_string(), definition: stored, pad_nets: Vec::new() });

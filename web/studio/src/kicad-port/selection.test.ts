@@ -156,3 +156,18 @@ test("guessSelectionCandidates: a silk layer in front prefers silk items, a cour
   assert.deepEqual(guessSelectionCandidates([pad, part], 10, "F.CrtYd", true), [part]);
   assert.deepEqual(guessSelectionCandidates([pad, part], 10, "F.CrtYd", false), [pad]);
 });
+
+test("guessSelectionCandidates: a footprint more than 70 % covered (FOOTPRINT::CoverageRatio) is not rejected for being big -- the menu offers it", () => {
+  const pad = { ...candidate(0, 1000), kind: "pad" };
+  const fp = { ...candidate(0, 1000 * SIZE_RATIO * 10), kind: "part" };
+  const covered = guessSelectionCandidates([pad, fp], 10, null, false, () => 0.71);
+  assert.deepEqual(covered, [pad, fp], "covered: kept for disambiguation");
+  const open = guessSelectionCandidates([pad, fp], 10, null, false, () => 0.7);
+  assert.deepEqual(open, [pad], "70 % exactly is not more than `maxCoverRatio`: the pad wins");
+  // only footprints are spared, and the ratio is asked of the candidates left after the sloppiness pass
+  let asked: number[] = [];
+  const text = { ...candidate(0, 1000 * SIZE_RATIO * 10), kind: "text" };
+  const far = { ...candidate(500, 10), kind: "via" };
+  guessSelectionCandidates([pad, fp, text, far], 10, null, false, (_c, pool) => ((asked = pool.map((p) => p.slopNm)), 1));
+  assert.deepEqual(asked, [0, 0, 0], "the sloppy via is out of the pool");
+});

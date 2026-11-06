@@ -15,7 +15,9 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { useFpApi, useFpDispatch, useFpState } from "../state/footprintEditorStore";
 import { useSymApi, useSymDispatch, useSymState } from "../state/symbolEditorStore";
 import { useCommonOptions, type CommonOptions } from "../state/commonOptions";
-import { closeSelectionMenu, getCommonTool, setLasso, setLastPointer, setMeasure, setPickerHover, setZoomArea, useCommonTool } from "../state/commonTool";
+import { closeSelectionMenu, getCommonTool, setLasso, setLastPointer, setMeasure, setMenuHighlight, setPickerHover, setZoomArea, useCommonTool } from "../state/commonTool";
+import { clarificationRows } from "../kicad-port/clarificationMenu";
+import { isMac } from "../platform";
 import { measureClick } from "../kicad-port/measureRuler";
 import { picker, usePickerSession } from "../actions/pcbPicker";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
@@ -280,9 +282,27 @@ export function CommonToolHost() {
   }, []);
 
   if (!menu) return null;
-  const entries: MenuEntry[] = [
-    ...menu.items.map((it, i) => ({ label: `${i < 9 ? `${i + 1}  ` : ""}${it.label}`, onSelect: () => closeSelectionMenu([it.id]) })),
-    { label: "Select All", onSelect: () => closeSelectionMenu(menu.items.map((it) => it.id)) },
-  ];
-  return <ContextMenu x={menu.at.x} y={menu.at.y} entries={entries} onClose={() => closeSelectionMenu(null)} />;
+  // `doSelectionMenu`'s rows (kicad-port/clarificationMenu.ts): the first nine numbered and chosen by their number key, "Select All" by A; the row under the
+  // pointer brightens its item (every item for "Select All").
+  const entries: MenuEntry[] = [];
+  for (const row of clarificationRows(menu.items.map((it) => it.label), { mac: isMac(), more: false })) {
+    if (row.kind === "item") {
+      const it = menu.items[row.index]!;
+      entries.push({ label: row.label, accel: row.accel, onSelect: () => closeSelectionMenu([it.id]), onHover: (over) => setMenuHighlight(over ? [it.id] : []) });
+    } else if (row.kind === "all") {
+      entries.push({ label: "", onSelect: () => {}, separator: true });
+      entries.push({ label: row.label, accel: row.accel, onSelect: () => closeSelectionMenu(menu.items.map((it) => it.id)), onHover: (over) => setMenuHighlight(over ? menu.items.map((it) => it.id) : []) });
+    }
+  }
+  return (
+    <ContextMenu
+      x={menu.at.x}
+      y={menu.at.y}
+      entries={entries}
+      onClose={() => {
+        setMenuHighlight([]);
+        closeSelectionMenu(null);
+      }}
+    />
+  );
 }

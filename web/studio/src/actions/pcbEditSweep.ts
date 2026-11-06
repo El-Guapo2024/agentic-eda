@@ -28,6 +28,7 @@ import { registerPcbPointEditSweep } from "./pcbPointEditSweep";
 import { registerPcbReferenceSweep } from "./pcbReferenceSweep";
 import { registerPcbItemActions } from "./pcbItemActions";
 import { registerMicrowaveActions } from "./microwaveActions";
+import { registerAutoplaceActions } from "./autoplaceActions";
 import { registerPcbMultichannelActions } from "./pcbMultichannelActions";
 import { registerPcbAssignNetclass } from "./assignNetclass";
 import { DEFAULT_FILTER_OPTIONS, filterSelection, netItems, netsOfItems, unrouteSelected, type FilterOptions } from "../kicad-port/pcbSelectionOps";
@@ -474,6 +475,8 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
   registerPcbRouterSweep(m, ctx);
   registerPcbItemActions(m, ctx);
   registerMicrowaveActions(m, ctx);
+  // Place > Auto-Place Footprints on the studio's placer (actions/autoplaceActions.ts, UI-LEFT P19).
+  registerAutoplaceActions(m, ctx);
   registerPcbMultichannelActions(m, ctx);
   registerPcbSelectionSync(m, ctx);
   registerPcbConvertSweep(m, ctx);

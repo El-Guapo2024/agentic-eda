@@ -7,6 +7,7 @@ import { useStudioDispatch, useStudioState } from "../../../state/store";
 import { fetchAppearance, postAppearance } from "../../../api/appearanceClient";
 import { netsContext, hiddenNetsOnLoad } from "../../../kicad-port/appearanceNets";
 import { toAppearanceFile } from "../../../kicad-port/appearanceFile";
+import { selectionFilterJson } from "../../../kicad-port/selectionFilterRows";
 import { layerStateKey, panelLayers } from "../../../kicad-port/layerPresets";
 import type { ViewSlice } from "../../../kicad-port/appearanceOps";
 
@@ -69,7 +70,13 @@ export function useAppearanceSync(): void {
     }),
     [state.appearance, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.showRatsnest, state.gridVisible, state.bcx.boardFlipped, state.bcx.ratsnestMode, state.bcx.hiddenRatsnestNets]
   );
-  const file = useMemo(() => (board && loaded.current ? toAppearanceFile(slice, nets) : null), [slice, nets, board, loaded.current]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The Selection Filter goes with them (`SaveProjectLocalSettings`: `localSettings.m_PcbSelectionFilter = selTool->GetFilter()`, UI-LEFT P22).
+  const filter = state.selectionFilter;
+  const file = useMemo(() => {
+    if (!board || !loaded.current) return null;
+    const f = toAppearanceFile(slice, nets);
+    return { ...f, local: { ...f.local, selection_filter: selectionFilterJson(filter) } };
+  }, [slice, nets, board, filter, loaded.current]); // eslint-disable-line react-hooks/exhaustive-deps
   const text = useMemo(() => (file ? JSON.stringify({ local: file.local, project: file.project }) : null), [file]);
 
   useEffect(() => {

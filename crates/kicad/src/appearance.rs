@@ -135,7 +135,35 @@ pub fn local_settings(appearance: &Value, stem: &str) -> Option<Value> {
     if local.get("hidden_netclasses").is_some_and(Value::is_array) {
         board.insert("hidden_netclasses".into(), json!(strings(local.get("hidden_netclasses"))));
     }
+    if let Some(filter) = local.get("selection_filter").and_then(Value::as_object) {
+        board.insert("selection_filter".into(), selection_filter_json(filter));
+    }
     Some(json!({ "board": board, "meta": { "filename": format!("{stem}.kicad_prl"), "version": 5 } }))
+}
+
+/// The Selection Filter's rows as `PROJECT_LOCAL_SETTINGS` writes them (`board.selection_filter`, common/project/project_local_settings.cpp at 8303b2ad:
+/// `PCBNEW` keeps the board editor's filter with the project, `m_PcbSelectionFilter`, read back in `PCB_EDIT_FRAME::LoadProjectSettings`): KiCad's keys, each
+/// the studio's value or KiCad's default when the studio has none (`lockedItems` off, every other row on). The studio also keeps `points`,
+/// which this KiCad does not write to the project (only the Footprint Editor's settings carry it).
+fn selection_filter_json(filter: &Map<String, Value>) -> Value {
+    const KEYS: [(&str, bool); 11] = [
+        ("lockedItems", false),
+        ("footprints", true),
+        ("text", true),
+        ("tracks", true),
+        ("vias", true),
+        ("pads", true),
+        ("graphics", true),
+        ("zones", true),
+        ("keepouts", true),
+        ("dimensions", true),
+        ("otherItems", true),
+    ];
+    let mut out = Map::new();
+    for (key, default) in KEYS {
+        out.insert(key.into(), json!(filter.get(key).and_then(Value::as_bool).unwrap_or(default)));
+    }
+    Value::Object(out)
 }
 
 /// One saved layer preset as `PARAM_LAYER_PRESET::presetsToJson` writes it: layer names turned into numbers, `-2` (`UNSELECTED_LAYER`) when it names no active layer.
@@ -516,6 +544,24 @@ mod tests {
         assert_eq!(b["hidden_nets"], json!(["GND"]));
         assert_eq!(b["hidden_netclasses"], json!(["usb"]));
         assert_eq!(prl["meta"], json!({ "filename": "board.kicad_prl", "version": 5 }));
+        assert!(b.get("selection_filter").is_none(), "no filter saved, none written");
+    }
+
+    /// UI-LEFT P22: the Selection Filter is the project's (`board.selection_filter` of the `.kicad_prl`), KiCad's keys, a key the studio did not
+    /// save at KiCad's default, `points` (the studio's own) not written.
+    #[test]
+    fn the_selection_filter_is_written_to_the_kicad_prl_as_kicad_keeps_it() {
+        let a = json!({ "local": { "selection_filter": { "lockedItems": true, "footprints": false, "tracks": true, "points": false, "zones": "no" } } });
+        let prl = local_settings(&a, "b").unwrap();
+        let f = &prl["board"]["selection_filter"];
+        // nlohmann::json's object is a `std::map`, so KiCad writes the keys sorted too, as serde_json's map does
+        let keys: Vec<&str> = f.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, ["dimensions", "footprints", "graphics", "keepouts", "lockedItems", "otherItems", "pads", "text", "tracks", "vias", "zones"]);
+        assert_eq!(f["lockedItems"], true);
+        assert_eq!(f["footprints"], false);
+        assert_eq!(f["text"], true, "not saved: KiCad's default");
+        assert_eq!(f["zones"], true, "not a boolean: the default, as `SetIfPresent` leaves it");
+        assert!(f.get("points").is_none());
     }
 
     #[test]

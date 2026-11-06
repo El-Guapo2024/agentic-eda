@@ -52,6 +52,8 @@ export interface AppearanceFile {
     ratsnest_mode?: "all" | "visible";
     /** `m_FlipBoardView`. */
     flip_board?: boolean;
+    /** `board.selection_filter` (`m_PcbSelectionFilter`): the Selection Filter's switches by KiCad's keys (kicad-port/selectionFilterRows.ts). Written by the sync hook, not here. */
+    selection_filter?: Record<string, boolean>;
   };
   project: {
     net_colors?: Record<string, string>;

@@ -17,7 +17,8 @@ import { ensureUniqueLibId, footprintNameError, joinLibName, pastedFootprintName
 import { askConfirm, askText } from "../components/library/libraryDialogs";
 import { notifyLibraryChanged } from "../components/library/useLibraryNames";
 import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
-import type { Action as StudioAction } from "../state/store";
+import type { Action as StudioAction, StudioApi } from "../state/store";
+import { PLACEMENT_IN_PROGRESS, placeFootprintFromEditor } from "./placeFootprintTool";
 
 export interface FpCtx {
   api: FootprintEditorApi;
@@ -214,13 +215,13 @@ export async function repairFootprint(c: FpCtx): Promise<void> {
  * this is the explicit "Update Footprint on Board" (every part naming it takes its pads from the library entry); where none does the footprint is inserted as a part of its own
  * (`insertFootprint`). `parts` are the board's parts as `{ ref, footprint }`.
  */
-export async function saveFootprintToBoard(c: FpCtx, parts: readonly { ref: string; footprint: string | null }[], studio?: Dispatch<StudioAction>): Promise<void> {
+export async function saveFootprintToBoard(c: FpCtx, parts: readonly { ref: string; footprint: string | null }[], studio?: Dispatch<StudioAction>, studioApi?: StudioApi): Promise<void> {
   const st = c.api.getState();
   if (!st.name) return info(c, "Open a footprint first.");
   // a footprint loaded from the board goes back on that footprint only (`sourceFootprint`, found by the link): the exchange
   if (st.footprint?.board_link) return void (await updateLinkedFootprint(c.api, (m, kind) => (kind === "error" ? fail(c, new Error(m)) : info(c, m))));
   const users = parts.filter((p) => p.footprint === st.name).map((p) => p.ref);
-  if (users.length === 0) return insertFootprint(c, st.name, studio);
+  if (users.length === 0) return studio && studioApi ? carryInsertedFootprint(c, st.name, studio, studioApi) : insertFootprint(c, st.name, studio);
   if (!(await c.api.cmd({ op: "update_footprint_on_board", name: st.name }))) return;
   info(c, `${st.name}: ${users.length === 1 ? users[0] : `${users.length} parts`} on the board now follow${users.length === 1 ? "s" : ""} this footprint`);
 }
@@ -245,9 +246,23 @@ export async function updateLinkedFootprint(api: FootprintEditorApi, say: (messa
 }
 
 /**
- * The insert branch of `SaveFootprintToBoard`: a part of its own for the footprint (`Cmd::PlaceFootprint`: the next free reference of the footprint's usual prefix, its name as the
- * value), carrying the editor's copy, at the centre of the board; the project's entry is published in the same step so the part resolves to the edited footprint by its name. One undo
- * step on the board. KiCad hangs the footprint on the board editor's cursor; the studio shows the board with the new part selected.
+ * The insert branch of `SaveFootprintToBoard`, as KiCad runs it: a part of its own for the footprint (`Cmd::PlaceFootprint`: the next free reference of the footprint's usual
+ * prefix, its name as the value) carrying the editor's copy, with the project's entry published in the same step so the part resolves to the edited footprint by its name --
+ * then `pcbframe->Raise(); pcb_ToolManager->RunAction( PCB_ACTIONS::placeFootprint, newFootprint )`: the board is shown and its Place Footprint tool carries the footprint
+ * from the board's cursor until a click puts it down (R and F before that click), and the tool goes on after it (actions/placeFootprintTool.ts). The insert and the drop are
+ * one undo step; Escape takes the footprint away again (KiCad's `cleanup()` pops the "Insert Footprint" step). An insert while a footprint is carried is refused in KiCad's words.
+ */
+async function carryInsertedFootprint(c: FpCtx, name: string, studio: Dispatch<StudioAction>, studioApi: StudioApi): Promise<void> {
+  const definition = c.api.getState().footprint;
+  if (!definition) return fail(c, new Error(`${name} has no footprint to insert.`));
+  studio({ type: "SET_TAB", tab: "pcb" });
+  const build = (at: { x: number; y: number }): Cmd => ({ op: "batch", cmds: [{ op: "place_footprint", footprint: name, at, definition }, { op: "update_footprint_on_board", name }] });
+  if (!placeFootprintFromEditor({ api: studioApi, dispatch: studio }, build)) fail(c, new Error(PLACEMENT_IN_PROGRESS));
+}
+
+/**
+ * INACTIVE (UI-LEFT P19, replaced by `carryInsertedFootprint`, which carries the footprint as KiCad does; reached only without the board editor's API): the insert put
+ * the part at the centre of the board and selected it.
  */
 async function insertFootprint(c: FpCtx, name: string, studio?: Dispatch<StudioAction>): Promise<void> {
   const definition = c.api.getState().footprint;

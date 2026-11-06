@@ -68,6 +68,12 @@ fn read_pending(dir: &Path) -> Option<Pending> {
     Some(Pending { design, tag, by })
 }
 
+/// The design the step held open began from (before the command that began it), if a step is held open: what the drop of a carried placement is judged
+/// against (`board::step_carrying`).
+pub(crate) fn pending_design(dir: &Path) -> Option<eda_model::ir::Design> {
+    read_pending(dir).map(|p| p.design)
+}
+
 fn drop_pending(dir: &Path) {
     let _ = std::fs::remove_dir_all(pending_dir(dir));
 }
