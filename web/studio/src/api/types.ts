@@ -2228,6 +2228,9 @@ export type Cmd =
   | ({ op: "fp_editor" } & import("./fpEditorTypes").FpEditorCmd)
   /** The microwave tools: a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own (crates/ops/src/microwave.rs) -- see api/microwaveTypes.ts. */
   | ({ op: "microwave" } & MicrowaveCmd)
+  /** Place > Auto-Place Footprints (`pcbnew.Autoplacer.autoplaceSelected` / `autoplaceOffboard`): the studio's placer for the footprints named, or the ones off the board
+   * (`offboard`), every other footprint fixed; positions on `grid_nm`. Judged by the placement gates even with Strict off. See crates/ops/src/autoplace.rs. */
+  | { op: "autoplace"; footprints?: string[]; offboard?: boolean; grid_nm?: Nm; override_locks?: boolean }
   | ({ op: "embedded" } & EmbeddedCmd)
   /** The board's tables (crates/ops/src/pcb_tables.rs): Draw Table, the Table Properties and Table Cell Properties dialogs, rows, columns, merged cells -- see api/tableTypes.ts. */
   | ({ op: "table" } & TableCmdWire)
