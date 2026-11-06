@@ -365,16 +365,20 @@
   });
 
   await scenario("the Footprint Editor's Footprint Properties has the tab: a library footprint's models, and the list it sends", async (t) => {
-    // a library footprint of KiCad's, opened in the editor from the library tree
-    await __eda.run("pcbnew.EditorControl.EditFpInFpEditor").catch(() => null);
+    // a library footprint of KiCad's, opened in the editor from the library tree. The board's R1 is opened first, selected (with nothing selected
+    // Ctrl+E opens the footprint under the cursor: `EditFpInFpEditor`'s `RequestSelection( EDIT_TOOL::FootprintFilter )`, where the pointer was left).
+    if (__eda.state().tab !== "pcb") await toPcb();
     await select([ref]);
     await __eda.run("pcbnew.EditorControl.EditFpInFpEditor");
     await until(() => __eda.state().tab === "footprint", 8000);
     const search = document.querySelector('input[placeholder="Search"]');
     t(!!search, "the Footprint Editor's library tree is there");
     await type(search, "R_0603_1608Metric", false);
-    await until(() => [...document.querySelectorAll("[role=treeitem]")].some((r) => r.textContent.trim() === "R_0603_1608Metric"), 20000);
-    const item = [...document.querySelectorAll("[role=treeitem]")].find((r) => r.textContent.trim() === "R_0603_1608Metric");
+    // the row by its library id (`data-name`): its text holds the Description column too once the library's descriptions are in (Select Columns, UI-LEFT A2)
+    const row = () => document.querySelector('[role=treeitem][data-name="Resistor_SMD:R_0603_1608Metric"]');
+    await until(() => !!row(), 20000);
+    const item = row();
+    t(!!item, "the tree lists it");
     item?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     await sleep(2500);
     await __eda.run("pcbnew.ModuleEditor.footprintProperties");

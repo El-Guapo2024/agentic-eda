@@ -12,12 +12,16 @@
 // footprint, and one on the reference's strokes picks the text -- the text being much the smaller (UI-LEFT P15).
 //
 // The collector itself takes a text by its box (`EDA_TEXT::TextHitTest`: the point turned into the text's frame, `GetTextBox().GetInflated( aAccuracy ).Contains`);
-// only the heuristics read the strokes. The box here is that of the strokes, in the text's own frame. The strokes are those the canvas draws (components/text/strokeFont.ts `strokeTextSegments`, placed as components/canvas/painter.ts `drawFields` and
-// fpArtPaint.ts `drawArtText` place them), so what is hit is what is seen.
+// only the heuristics read the strokes. The box here is that of the strokes, in the text's own frame. The strokes are the stroke font's glyphs
+// (components/text/strokeFont.ts `strokeTextSegments`) placed where KiCad places them (`FONT::getLinePositions`, `STROKE_FONT::GetTextAsGlyphs`), not where the
+// canvas draws them: the canvas centres a text on half its advance and puts its baseline 0.36 of its size below the anchor, KiCad on the advance less
+// `INTER_CHAR` and 0.415 of the size less 0.052 of the pen, so the canvas' strokes stand 0.1 of the size along the text and 0.05 of it up from KiCad's. A click
+// at a field's anchor is on KiCad's strokes of "U1" and 0.1 mm off the canvas' (UI-LEFT P15, footprint-edit.check.js); a click on a drawn stroke is still
+// well within the slop of KiCad's.
 //
 // Pure: no store, no DOM.
 import type { FieldInfo } from "../api/types";
-import { strokeTextSegments, type StrokeSegment } from "../components/text/strokeFont";
+import { measureStrokeText, strokeTextSegments, type StrokeSegment } from "../components/text/strokeFont";
 import { fieldAsText } from "./fpFields";
 
 /** `GuessSelectionCandidates`' `MAX_SLOP` (pixels): `maxSlop = KiROUND( MAX_SLOP * aCollector.GetGuide()->OnePixelInIU() )`. */
@@ -25,6 +29,9 @@ export const MAX_SLOP_PX = 5;
 
 /** `STROKE_FONT::GetInterline`: `FONT_METRICS`' 1.62 glyph heights, times the legacy factor 0.9583 (fpArtPaint.ts's INTERLINE). */
 const INTERLINE = 1.62 * 0.9583;
+
+/** `STROKE_FONT::GetTextAsGlyphs`' `INTER_CHAR`: the bounding box of a line ends this much of the size short of the cursor. */
+const INTER_CHAR = 0.2;
 
 /** A text's strokes and its pen, and its box: that of its strokes (the pen's width round them) in its own frame, about `anchor` turned by `angleRad`. */
 export interface TextStrokes {
@@ -45,10 +52,17 @@ function toFrame(s: Pick<TextStrokes, "anchor" | "angleRad">, x: number, y: numb
 }
 
 /**
- * The strokes of a footprint's field or text (a `FpTextInfo` through `artTextAsField`), at its real size: a line at a time down the text's own axis by the
- * interline, the block placed on the anchor by the vertical justification and the first baseline 0.36 of the size below a line's middle -- where the canvas
- * draws them. The pen is the text's thickness (at most a quarter of the size, `Clamp_Text_PenSize`), or the default one of its size (`GetPenSizeForNormal`,
- * `GetPenSizeForBold`).
+ * The strokes of a footprint's field or text (a `FpTextInfo` through `artTextAsField`), at its real size, placed as `FONT::getLinePositions` places a stroke
+ * text's lines in its own frame -- the turn and the mirror about the anchor (`GetTextAsGlyphs`' `aOrigin`) after:
+ *
+ *   offset.y = size - 0.052 * pen                                          ("Fudge factors to match 6.0 positioning"), less half of the block's height
+ *                                                                          (centred) or all of it (bottom); the block is 1.17 sizes for the first line and an
+ *                                                                          interline more for each other
+ *   lineOffset.x = pen / 1.52 (left), -lineSize.x / 2 (centred), -( lineSize.x + pen / 1.52 ) (right)
+ *                                                                          where `lineSize.x` is the line's advance less `INTER_CHAR` of the size
+ *
+ * The pen is the text's thickness (at most a quarter of the size, `Clamp_Text_PenSize`), or the default one of its size (`GetPenSizeForNormal`,
+ * `GetPenSizeForBold`). The size is the text's height both ways, as the canvas draws it.
  */
 export function fieldStrokes(f: FieldInfo): TextStrokes {
   const t = fieldAsText(f);
@@ -57,14 +71,20 @@ export function fieldStrokes(f: FieldInfo): TextStrokes {
   const lines = t.content.split("\n");
   // KiCad's counter-clockwise millidegrees; the canvas turns clockwise
   const angleRad = (-t.angle / 1000) * (Math.PI / 180);
+  const [cos, sin] = [Math.cos(angleRad), Math.sin(angleRad)];
   const interline = INTERLINE * size;
-  const block = (lines.length - 1) * interline;
-  const first = f.valign > 0 ? -block : f.valign < 0 ? 0.72 * size : 0.36 * size - block / 2;
+  const height = 1.17 * size + (lines.length - 1) * interline;
+  const top = size - 0.052 * pen - (f.valign === 0 ? height / 2 : f.valign > 0 ? height : 0);
+  const mirror = f.mirror ? -1 : 1;
   const segs: StrokeSegment[] = [];
   lines.forEach((line, i) => {
     if (!line) return;
-    const down = first + i * interline;
-    segs.push(...strokeTextSegments(line, f.x - down * Math.sin(angleRad), f.y + down * Math.cos(angleRad), { sizeNm: size, justify: t.justify, angleRad, mirror: f.mirror, italic: f.italic }));
+    const lineWidth = measureStrokeText(line, size) - INTER_CHAR * size;
+    const lx = t.justify === "left" ? pen / 1.52 : t.justify === "center" ? -lineWidth / 2 : -(lineWidth + pen / 1.52);
+    const ly = top + i * interline;
+    // the line's start in the text's frame, mirrored about the anchor, turned with the text
+    const [u, v] = [mirror * lx, ly];
+    segs.push(...strokeTextSegments(line, f.x + u * cos - v * sin, f.y + u * sin + v * cos, { sizeNm: size, justify: "left", angleRad, mirror: f.mirror, italic: f.italic }));
   });
   const frame = { anchor: [f.x, f.y] as const, angleRad };
   let box: [number, number, number, number] | null = null;

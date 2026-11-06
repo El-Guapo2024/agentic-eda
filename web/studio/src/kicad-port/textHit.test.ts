@@ -16,7 +16,7 @@ const part = {
 const board = { name: "t", dir: "", outline: null, layers: ["F.Cu", "B.Cu"], snap: 100, parts: [part], rules: [], routing: null, drawings: null, checks: [], activity: [], job: "idle" } as unknown as BoardState;
 const pick = (x: number, y: number, onePixelNm = 10_000) => pickSelectionCandidates(board, x, y, 150_000, onePixelNm, DEFAULT_SELECTION_FILTER, {}, "F.Cu", false, new Set(), false, false).map((c) => c.id);
 
-test("hitTestDistance of a footprint's text: its strokes, as the canvas draws them; an exact hit within half MAX_SLOP pixels, none past MAX_SLOP", () => {
+test("hitTestDistance of a footprint's text: its strokes, where KiCad lays them out; an exact hit within half MAX_SLOP pixels, none past MAX_SLOP", () => {
   const s = fieldStrokes(artTextAsField(ref));
   assert.ok(s.segs.length > 4 && s.pen === 150_000);
   // the first stroke of the U, its middle
@@ -36,12 +36,12 @@ test("UI-LEFT P15: a click on the fab reference's strokes picks the text; one in
   const s = fieldStrokes(artTextAsField(ref));
   const [x0, y0, x1, y1] = s.segs[0]!;
   assert.deepEqual(pick((x0 + x1) / 2, (y0 + y1) / 2), ["U1~t0"]);
-  // the middle of the U's bowl: in the text's box, 0.2 mm from any stroke
-  const inBowl: [number, number] = [-480_000, -250_000];
+  // the middle of the U's bowl: in the text's box, 0.2 mm from any stroke (KiCad's layout: the U from 0.238 to 0.81 of the size past -0.9 mm)
+  const inBowl: [number, number] = [-376_000, -200_000];
   assert.ok(strokeDistance(s, ...inBowl) > 150_000, String(strokeDistance(s, ...inBowl)));
   assert.deepEqual(pick(...inBowl), ["U1"]);
   // zoomed out, 5 pixels reach the strokes: the text again
-  assert.deepEqual(pick(...inBowl, 60_000), ["U1~t0"]);
+  assert.deepEqual(pick(...inBowl, 80_000), ["U1~t0"]);
 });
 
 test("the edit tools' client filter (FilterCollectorForFreePads, FilterCollectorForHierarchy( aCollector, true )): over the text or a pad, the footprint", () => {
@@ -52,4 +52,15 @@ test("the edit tools' client filter (FilterCollectorForFreePads, FilterCollector
   // a click there takes the pad; the tools take its footprint
   assert.deepEqual(pick(-3_500_000, 0), ["U1.1"]);
   assert.deepEqual(tool(-3_500_000, 0), [["part", "U1"]]);
+});
+
+test("the strokes are where FONT::getLinePositions puts them: a centred line on its advance less INTER_CHAR, the baseline 0.415 of the size less 0.052 of the pen below the anchor", () => {
+  const s = fieldStrokes(artTextAsField(ref));
+  // the U's first stroke: x = -( 2.0 - 0.2 ) / 2 + 0.238 mm; from 0.952 to 0.143 of the size above the baseline
+  const [x0, y0, , y1] = s.segs[0]!;
+  const baseline = 415_000 - 0.052 * 150_000;
+  assert.ok(Math.abs(x0 - (-900_000 + (5 / 21) * 1_000_000)) < 2, String(x0));
+  assert.ok(Math.abs(y0 - (baseline - (20 / 21) * 1_000_000)) < 2 && Math.abs(y1 - (baseline - (3 / 21) * 1_000_000)) < 2, `${y0} ${y1}`);
+  // at the anchor of "U1" the U's right stroke is 0.09 mm off, inside the pen and the slop: an exact hit (footprint-edit.check.js presses there)
+  assert.equal(textHitSlop(s, 0, 0, 32_000), 0);
 });
