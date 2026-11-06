@@ -68,3 +68,32 @@ fn turning_a_vias_teardrops_on_makes_its_teardrop() {
     b.apply(&Cmd::SetTeardropParams { ids: ids(&["v1"]), params: Some(TeardropParams::default()) }).unwrap();
     assert!(teardrops(&b).is_empty(), "turned off, the via's teardrop goes");
 }
+
+/// A pad reshaped in Pad Properties: the model is made again after the command, and the pad's teardrop is made again on the new shape in the same step
+/// (`Board::refresh_teardrops`).
+#[test]
+fn a_reshaped_pads_teardrop_is_made_again_on_its_new_shape() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let pad = b.design().placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U1").map(|fp| eda_model::footprint::to_board(fp, m.footprints[0].pads[0].at)).unwrap();
+    let rt = b.routing_mut();
+    rt.tracks.clear();
+    rt.vias.clear();
+    rt.tracks.push(track("t1", "F.Cu", &[(pad.x, pad.y), (pad.x - mm(5.0), pad.y)]));
+    b.apply(&Cmd::SetTeardropSettings { settings: TeardropSettings { enabled: true, ..Default::default() } }).unwrap();
+    b.apply(&Cmd::AddAllTeardrops).unwrap();
+    let before = teardrops(&b);
+    assert_eq!(before.len(), 1, "{before:?}");
+    // The model as the next load makes it: U1's pads larger.
+    let mut bigger = m.clone();
+    for p in bigger.footprints[0].pads.iter_mut() {
+        p.size = (mm(1.2), mm(1.2));
+    }
+    let mut b2 = Board::new(b.design().clone(), &bigger, mm(0.1), mm(0.3));
+    let cmd = Cmd::EditBoardPad { part: "U1".into(), edit: eda_model::fp_edit::PadEdit::none("1", 1) };
+    assert!(b2.refresh_teardrops(&cmd, &m));
+    let after = teardrops(&b2);
+    assert_eq!(after.len(), 1);
+    assert_ne!(after[0].outline, before[0].outline, "made again on the larger pad");
+    assert!(!b2.refresh_teardrops(&cmd, &bigger), "nothing more to do");
+}

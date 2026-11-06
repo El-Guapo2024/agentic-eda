@@ -1726,6 +1726,10 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness, baseline: Option<ed
     // KiCad 10's drill charts report the board, so a command that changed a hole has made them wrong: they are built again in the same step (`OnModify`'s
     // `RefreshGeneratedTables`), against the board as the command left it -- the model with the footprints a Paste, a pad edit or a new board brought (`refolded`).
     board.refresh_drill_charts();
+    // The teardrops of a pad the command reshaped, on the pad as the model now has it (`teardrop_upkeep.rs`; the command's own update saw the old model).
+    if refolded.is_some() {
+        board.refresh_teardrops(cmd, &model);
+    }
 
     let after = all_failures(&board, judged);
     eda_ops::episode::record(&was, &model, cmd, before, after, 0);

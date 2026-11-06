@@ -15,6 +15,7 @@
 
 use crate::{Board, Cmd, Domain};
 use eda_connectivity::teardrop::TeardropWorld;
+use eda_model::ConstraintModel;
 
 impl Cmd {
     /// Whether the command is pushed without the teardrop update: see the module doc.
@@ -44,6 +45,24 @@ impl Board<'_> {
             return Some(TeardropWorld::of(&self.design, self.model));
         }
         eda_connectivity::teardrop::snapshot(&self.design, self.model)
+    }
+
+    /// The teardrop update for a command whose model was made again after it (a pad's shape edited in Pad Properties: `eda` folds the board's pad edits into the
+    /// model's footprints once the command is applied): the pads whose shape the model `was` had differently are stale, and their teardrops are made again on the
+    /// pads as they are now, in the same step. Returns whether the teardrops changed.
+    pub fn refresh_teardrops(&mut self, cmd: &Cmd, was: &ConstraintModel) -> bool {
+        if cmd.skips_teardrop_update() || !eda_connectivity::teardrop::teardrops_possible(&self.design) {
+            return false;
+        }
+        let before = TeardropWorld::of(&self.design, was);
+        let changed = eda_connectivity::teardrop::update_after_edit(&mut self.design, self.model, &before);
+        if changed {
+            if let Some(rt) = self.design.routing.as_mut() {
+                rt.assign_missing_ids();
+            }
+            self.sort_routing();
+        }
+        changed
     }
 
     /// `BOARD_COMMIT::Push`'s teardrop update after a command, from the board as it was (`before`): the teardrops it made stale made again, new ones given ids.
