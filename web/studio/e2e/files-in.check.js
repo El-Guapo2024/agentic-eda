@@ -6,7 +6,7 @@
 //   Import Graphics, the board: the actions are wired and open the dialog; a file dropped on it (the drop action's parameter is `{ name, text }`: a browser gives the page a file's
 //     text, not its path) is read by the server and described ("8 items: 4 lines, 4 arcs", what it could not handle); the dialog's defaults are KiCad's; OK with "Place at" puts the
 //     items on the layer asked for, at the origin over the scale (KiCad's own arithmetic), with its default line width scaled, grouped, selected, as ONE undo step; interactive
-//     placement puts the picture's upper left corner at the cursor and arms the Move tool, Escape takes it back and leaves nothing behind (main's carry: the step is held open) and a click drops it, the import and the drop being ONE undo step; the DXF unit of the dialog is used when the file names none and the
+//     placement shows the items as a preview held by their top left item at the cursor (`PlaceImportedGraphics`), Escape drops it and leaves nothing behind, and a click places it there as ONE undo step, the group selected; the DXF unit of the dialog is used when the file names none and the
 //     file's own wins; "Fix discontinuities" joins corners that miss; an outline imported on Edge.Cuts replaces the polygon of the board's intent; a file with nothing to import, a
 //     scale of zero and a file type no plugin handles are refused with KiCad's words;
 //   Import Graphics, the schematic and the Symbol Editor (DIALOG_IMPORT_GFX_SCH): the actions and the File > Import entry are wired on both tabs; the dialog has "Interactive placement" / "At" X, Y, the
@@ -14,7 +14,7 @@
 //     sheet's default width, as ONE undo step of the schematic's own history; interactive placement puts the drawing's origin at the cursor's grid point and arms the Move tool, Escape takes it
 //     back; an SVG becomes polygons; in the Symbol Editor the items are polylines and arcs of the open symbol in mm with the Y axis up, on the unit being edited, as one undo step of that editor;
 //   Append Board (PCB_CONTROL::AppendBoard): the action, its drop and the File menu entry are wired; a dropped `.kicad_pcb` is read by the server (what is in it and the point it is held by:
-//     its top left item), its items are pasted with that item at the cursor's grid point, selected and carried by the Move tool as ONE undo step (Escape takes them back, a click drops them where
+//     its top left item), its items are loaded with that item at the cursor's grid point, in one group named after the file, selected and carried by the Move tool as ONE undo step (Escape takes them back, a click drops them where
 //     the pointer went), the footprint it brings is a part of this board and the copper keeps its place relative to the line; a file that is not a KiCad board is refused in KiCad's words;
 //   The file drops (EDA_BASE_FRAME::OnDropFiles, FileDropHost.tsx): a file dropped on the window (a DataTransfer with the File, the events a browser sends) is kept from the browser's own use of
 //     it (dragover and drop are default-prevented) and runs the action its editor's accepted extensions name -- board: .dxf opens Import Graphics with the file, .kicad_pcb is appended; Footprint
@@ -211,30 +211,30 @@
     applied--;
 
     // ============================================================================================================================ interactive placement
+    // `DRAWING_TOOL::PlaceImportedGraphics`: the items are a preview under the cursor -- held by the preview's top left item -- until a click places them; nothing is on the
+    // board meanwhile, and Escape drops them. The board DXF's top left item is its left side's line, whose start is at (0, -27 mm) at the importer's offset 0.
     await hover(...C);
     r = await importFile({ name: "board.dxf", text: boardDxf }, { Layer: "Dwgs.User", "Place at": false, "Group imported items": true });
-    applied++;
-    sh = added(r.st);
-    const [ix0, iy0] = extent(sh);
-    check("interactive placement: the picture's upper left corner is at the cursor's grid point", ix0 === C[0] && iy0 === C[1], [ix0, iy0]);
-    check("and the Move tool carries the group", E.state().tool === "move" && E.state().selection.length === 1 && E.state().selection[0].kind === "group", JSON.stringify(E.state()));
+    check("interactive placement: OK puts nothing on the board yet -- the items are a preview that follows the cursor (no Move tool, no undo step)", added(r.st).length === base.shapes && E.state().tool !== "move", `${added(r.st).length} shapes, tool ${E.state().tool}`);
+    await hover(...D);
     key("Escape");
-    await sleep(1000);
+    await sleep(800);
     const gone = await board();
-    check("Escape takes the placement back and leaves nothing behind", added(gone).length === base.shapes && E.state().tool === "select", `${added(gone).length} shapes, tool ${E.state().tool}`);
-    applied--;
-    // and a click drops it where the pointer went: the import and the drop are one undo step
+    check("Escape drops the preview and leaves nothing behind", added(gone).length === base.shapes && E.state().tool === "select", `${added(gone).length} shapes, tool ${E.state().tool}`);
+    // and a click places it where the pointer is: the top left item's position on the click's grid point, ONE command (one undo step), the group selected
     await hover(...C);
     r = await importFile({ name: "board.dxf", text: boardDxf }, { Layer: "Dwgs.User", "Place at": false, "Group imported items": true });
     applied++;
     await hover(...D);
     { const [px, py] = w2c(...D); fire("pointerdown", px, py, 1); fire("pointerup", px, py); }
-    await sleep(1200);
-    const [drx0, dry0] = extent(added(await board()));
-    check("a click drops the carried import where the pointer went: its upper left corner is at the second place", drx0 === D[0] && dry0 === D[1] && E.state().tool === "select", `${drx0}, ${dry0}, tool ${E.state().tool}`);
+    await sleep(1500);
+    const placedShapes = added(await board());
+    const leftLine = placedShapes.filter((s) => s.kind === "segment").sort((a, b) => a.start[0] - b.start[0] || a.start[1] - b.start[1])[0];
+    check("a click places the import where the pointer is: the top left item (the left side's line) starts at the click's grid point", placedShapes.length === 8 && !!leftLine && leftLine.start[0] === D[0] && leftLine.start[1] === D[1], JSON.stringify(leftLine && leftLine.start));
+    check("and what was placed is selected: the group", E.state().selection.length === 1 && E.state().selection[0].kind === "group" && E.state().tool === "select", JSON.stringify(E.state().selection));
     await undo();
     applied--;
-    check("and ONE undo takes the import and its drop away", added(await board()).length === base.shapes && ((await board()).drawings?.groups ?? []).length === base.groups, `${added(await board()).length} shapes`);
+    check("and ONE undo takes the import away", added(await board()).length === base.shapes && ((await board()).drawings?.groups ?? []).length === base.groups, `${added(await board()).length} shapes`);
 
     // ============================================================================================================================ the DXF's units
     r = await importFile({ name: "box.dxf", text: rect2x1(null) }, { "DXF default units": "inch", "Place at": true });
@@ -338,7 +338,8 @@
     check("the part keeps its place relative to the line: the file's (30, 20) against (15, 5) is 15, 15 mm on", !!zz && zz.at[0] === C[0] + 15_000_000 && zz.at[1] === C[1] + 15_000_000, JSON.stringify(zz?.at));
     const trk = (after.routing?.tracks ?? []).find((t) => t.pts?.[0]?.[0] === C[0] + 5_000_000 && t.pts?.[0]?.[1] === C[1] + 5_000_000);
     check("and the track starts 5, 5 mm from the cursor: the file's (20, 10) less (15, 5)", !!trk && trk.net === "GND", JSON.stringify(trk && { net: trk.net, pts: trk.pts }));
-    check("the Move tool carries what came in, and it is what is selected", E.state().tool === "move" && E.state().selection.length >= 4, JSON.stringify([E.state().tool, E.state().selection.map((x) => x.kind)]));
+    // `AppendBoard` with Place as group (the Design Blocks pane's, on by default): what came in is one group, which alone is selected (`selTool->select( group )`)
+    check("the Move tool carries what came in, as one group, which is what is selected", E.state().tool === "move" && E.state().selection.length === 1 && E.state().selection[0].kind === "group", JSON.stringify([E.state().tool, E.state().selection.map((x) => x.kind)]));
     check("the toast says what was appended", /Appended 1 footprint, 1 track, 1 graphic, 1 text\./.test(appended.toast ?? ""), JSON.stringify(appended.toast));
     key("Escape");
     await sleep(1000);

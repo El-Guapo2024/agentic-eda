@@ -1,7 +1,8 @@
 //! `POST /api/import_foreign`: File > Import > Non-KiCad Board File... and Non-KiCad Schematic File..., the half that needs kicad-cli.
 //!
 //! A browser hands the page a file's bytes and not its path (the studio never opens a path on the server for this), so the page posts the file: `{ "kind": "board" |
-//! "schematic", "name": "Adafruit AHT20.brd", "data": "<base64>", "format": "auto", "layer_map": { "tNames": "F.Fab" } }`. The server writes it to a folder of its own, has
+//! "schematic", "name": "Adafruit AHT20.brd", "data": "<base64>", "format": "auto", "layer_map": { "tNames": "F.Fab" }, "drop_layers": ["tDocu"] }` (`drop_layers`: the
+//! source layers left unmatched in the layer dialog, which the import leaves out with what is on them). The server writes it to a folder of its own, has
 //! kicad-cli convert it (`eda_kicad_engine::foreign`; the route runs through `studio::offload`, the one kicad-cli lane), reads what kicad-cli made with our readers to check
 //! that it is a design, and answers with what the page needs to ask for the import:
 //!
@@ -31,34 +32,82 @@ pub(crate) fn convert(_dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return refused(format!("not an import request: {e}")),
     };
+    // "project": an import of a project's files together (an Eagle `.brd` and its `.sch`, an EasyEDA Pro project): the board as "board", and the schematic the project command
+    // made with it, which the page replaces in the same step (KiCad's "Import Non-KiCad Project", `IMPORT_PROJ_HELPER::ImportFiles`).
+    let project = req.get("kind").and_then(Value::as_str) == Some("project");
     let kind = match req.get("kind").and_then(Value::as_str) {
-        Some("board") => Kind::Board,
+        Some("board") | Some("project") => Kind::Board,
         Some("schematic") => Kind::Schematic,
-        _ => return refused("the request names no kind of file: board or schematic"),
+        _ => return refused("the request names no kind of file: board, schematic or project"),
     };
-    let name = req.get("name").and_then(Value::as_str).unwrap_or("");
-    let Some(data) = req.get("data").and_then(Value::as_str) else { return refused("there is no file to import") };
-    let Some(bytes) = base64_decode(data) else { return refused("the file is not base64") };
-    if bytes.is_empty() {
+    // The files: `name` and `data`, or a project's `files: [{ name, data }, ..]`.
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    if let Some(list) = req.get("files").and_then(Value::as_array) {
+        for f in list {
+            let name = f.get("name").and_then(Value::as_str).unwrap_or("");
+            let Some(bytes) = f.get("data").and_then(Value::as_str).and_then(base64_decode) else { return refused(format!("'{name}' is not base64")) };
+            files.push((name.to_string(), bytes));
+        }
+    } else {
+        let name = req.get("name").and_then(Value::as_str).unwrap_or("");
+        let Some(data) = req.get("data").and_then(Value::as_str) else { return refused("there is no file to import") };
+        let Some(bytes) = base64_decode(data) else { return refused("the file is not base64") };
+        files.push((name.to_string(), bytes));
+    }
+    if files.is_empty() {
+        return refused("there is no file to import");
+    }
+    if let Some((name, _)) = files.iter().find(|(_, b)| b.is_empty()) {
         return refused(format!("'{name}' is empty"));
     }
+    let name = files[0].0.clone();
+    let name = name.as_str();
     // A board is imported with the project kicad-cli makes of it: its design rules and net classes are in that file and in no other.
     let mut options = ForeignOptions { format: req.get("format").and_then(Value::as_str).map(str::to_string), project: kind == Kind::Board, ..Default::default() };
+    // The board of a project file of several the person chose (`DIALOG_IMPORT_CHOOSE_PROJECT`): its place in the list `boards` gave.
+    options.board = req.get("board").and_then(Value::as_u64).map(|i| i as usize);
     if let Some(map) = req.get("layer_map").and_then(Value::as_object) {
         for (from, to) in map {
             let Some(to) = to.as_str() else { return refused(format!("the layer map names '{from}' by something that is not a KiCad layer name")) };
             options.layer_map.insert(from.clone(), to.to_string());
         }
     }
+    // The layers left in the Unmatched list of the layer dialog: `DIALOG_MAP_LAYERS` answers `UNDEFINED_LAYER` for them, and the importer leaves out what is on them.
+    if let Some(drop) = req.get("drop_layers").and_then(Value::as_array) {
+        options.drop_layers = drop.iter().filter_map(Value::as_str).map(str::to_string).collect();
+    }
     eda_kicad_engine::with_scratch(|work| {
-        let input = match foreign::stage_upload(work, name, &bytes) {
-            Ok(p) => p,
-            Err(e) => return refused(board::reasons(&e)),
-        };
-        let run = match kind {
-            Kind::Board => foreign::import_foreign_pcb(work, &input, &options),
-            Kind::Schematic => foreign::import_foreign_sch(work, &input, &options),
-        };
+        let mut staged: Vec<std::path::PathBuf> = Vec::new();
+        for (n, bytes) in &files {
+            match foreign::stage_upload(work, n, bytes) {
+                Ok(p) => staged.push(p),
+                Err(e) => return refused(board::reasons(&e)),
+            }
+        }
+        // A project: the board is the first file a board importer takes (by the names, those only a board has first), the others go with it to the project command.
+        let mut order: Vec<usize> = (0..staged.len()).collect();
+        if project {
+            order.sort_by_key(|&i| !crate::import_foreign::kinds_for(&files[i].0).first().is_some_and(|k| *k == Kind::Board));
+        }
+        let mut run = Err(Vec::new());
+        let mut input = staged[order[0]].clone();
+        for &i in &order {
+            input = staged[i].clone();
+            let mut opts = options.clone();
+            if project {
+                opts.partners = staged.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, p)| p.clone()).collect();
+            }
+            run = match kind {
+                Kind::Board => foreign::import_foreign_pcb(work, &input, &opts),
+                Kind::Schematic => foreign::import_foreign_sch(work, &input, &opts),
+            };
+            match &run {
+                Err(e) if project && foreign::is_unrecognized(e) => continue,
+                _ => break,
+            }
+        }
+        let name = input.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| name.to_string());
+        let name = name.as_str();
         // kicad-cli names the file by the path it was given, which is a folder of the server's: the person knows the file by its name.
         let (staged, scratch) = (input.display().to_string(), work.display().to_string());
         let said = |text: String| text.replace(&staged, name).replace(&scratch, "<scratch>");
@@ -66,7 +115,11 @@ pub(crate) fn convert(_dir: &Path, body: &[u8]) -> Value {
             Ok(i) => i,
             Err(e) => return json!({ "ok": false, "message": said(board::reasons(&e)), "unrecognized": foreign::is_unrecognized(&e) }),
         };
-        match reply(kind, name, &import) {
+        // A project file of several boards: `DIALOG_IMPORT_CHOOSE_PROJECT` asks which, and the page asks again with `board`.
+        if import.needs_board_choice() {
+            return json!({ "ok": true, "choose_board": true, "boards": import.boards, "name": name, "format": import.report.source_format, "kind": "board" });
+        }
+        match reply(kind, name, &import, project) {
             Ok(mut v) => {
                 // the findings are said the same way: a path of the server's is not the person's
                 if let Some(findings) = v.get_mut("findings").and_then(Value::as_array_mut) {
@@ -83,18 +136,38 @@ pub(crate) fn convert(_dir: &Path, body: &[u8]) -> Value {
     })
 }
 
-/// What the page is told of a finished conversion, after our reader has read the result.
-fn reply(kind: Kind, name: &str, import: &ForeignImport) -> Result<Value, String> {
+/// What the page is told of a finished conversion, after our reader has read the result. `project`: the schematic the project command made with the board comes too
+/// (`content`, `schematic_counts`), and the board is the project command's, which has the schematic's net names.
+fn reply(kind: Kind, name: &str, import: &ForeignImport, project: bool) -> Result<Value, String> {
     let mut out = import.to_json();
     out["ok"] = json!(true);
     out["name"] = json!(name);
     out["maps_layers"] = json!(kind == Kind::Board && foreign::maps_layers(&import.report.source_format) && !import.report.layers.is_empty());
+    if !import.boards.is_empty() {
+        out["boards"] = json!(import.boards);
+    }
     match kind {
         Kind::Board => {
-            let (design, model, _notes) = eda::import_kicad_pcb(&import.text).map_err(|e| format!("kicad-cli converted '{name}', but the board it made cannot be read: {}", board::reasons(&e)))?;
+            let text = import.project_board.as_deref().filter(|_| project || !import.boards.is_empty()).unwrap_or(&import.text);
+            let (design, model, notes) = eda::import_kicad_pcb(text).map_err(|e| format!("kicad-cli converted '{name}', but the board it made cannot be read: {}", board::reasons(&e)))?;
             let (tracks, vias, zones) = design.routing.as_ref().map_or((0, 0, 0), |r| (r.tracks.len(), r.vias.len(), r.zones.len()));
             out["counts"] = json!({ "footprints": design.placement.as_ref().map_or(0, |p| p.footprints.len()), "nets": model.nets.len(), "tracks": tracks, "vias": vias, "zones": zones });
-            out["text"] = json!(import.text);
+            out["text"] = json!(text);
+            // a footprint at a scale other than 1:1 (KiCad 10's `(transform .. (scale ..))`): the reader bakes the scale into it, and the board file written back holds no scale
+            if !notes.footprints_scaled.is_empty() {
+                out["notes"] = json!([eda_kicad::scaled_footprints_note(&notes.footprints_scaled)]);
+            }
+            if project {
+                let Some(sch) = import.project_schematic.as_deref() else {
+                    return Err(format!("kicad-cli converted the board of '{name}', but made no schematic of the project's files"));
+                };
+                let content = project_sheet_file(sch, import.project.as_deref()).map_err(|e| format!("kicad-cli converted '{name}', but the schematic it made cannot be read: {}", board::reasons(&e)))?;
+                let symbols: usize = content.all_screens().map(|(_, s)| s.symbols.len() + s.power_symbols.len()).sum();
+                out["schematic_counts"] = json!({ "symbols": symbols, "sheets": 1 + content.screens.len(), "labels": content.all_screens().map(|(_, s)| s.labels.len()).sum::<usize>(), "wires": content.all_screens().map(|(_, s)| s.wires.len()).sum::<usize>() });
+                out["schematic_notes"] = json!(content.notes);
+                out["content"] = serde_json::to_value(&content).map_err(|e| e.to_string())?;
+                out["kind"] = json!("project");
+            }
             // `Cmd::ReplaceBoard` carries it too, and the server sets the board's rules and net classes from it.
             out["project"] = json!(import.project);
             // And the custom rules its importer wrote (`.kicad_dru`), which the server sets as the board's.
@@ -109,6 +182,21 @@ fn reply(kind: Kind, name: &str, import: &ForeignImport) -> Result<Value, String
         }
     }
     Ok(out)
+}
+
+/// The schematic a project import made (`<stem>.kicad_sch`, its sheets beside it) as a [`eda_model::sheet_file::SheetFile`]: a KiCad 10 project of several top-level sheets
+/// (`schematic.top_level_sheets`, an Eagle file of several sheets) placed on a root as `eda import-kicad` places them (`combine_top_level_sheets`).
+fn project_sheet_file(sch: &Path, pro: Option<&str>) -> Result<eda_model::sheet_file::SheetFile, Vec<eda_model::CheckResult>> {
+    let listed = pro.map(eda_kicad::project_schematic::top_level_sheets).unwrap_or_default();
+    let dir = sch.parent().unwrap_or(Path::new("."));
+    if listed.len() > 1 {
+        let mut parts = Vec::new();
+        for (file, sheet_name) in listed {
+            parts.push((sheet_name, file.clone(), eda_kicad::load_sheet_file(&dir.join(&file))?));
+        }
+        return Ok(crate::import_foreign::combine_top_level_sheets(parts));
+    }
+    eda_kicad::load_sheet_file(sch)
 }
 
 /// Standard base64 (RFC 4648, with or without padding; white space is ignored). `None` for anything else.
@@ -229,6 +317,51 @@ mod tests {
         let path = root.join(rel);
         assert!(path.is_file(), "no QA file {}", path.display());
         Some(path)
+    }
+
+    /// KiCad's "Import Non-KiCad Project" (`IMPORT_PROJ_HELPER::ImportFiles`): an Eagle `.brd` and its `.sch` together, the board with the project the schematic made (its net
+    /// names), the schematic with it; and the layers left unmatched go, with what is on them.
+    #[test]
+    fn an_eagle_board_and_its_schematic_come_in_as_one_project() {
+        let Some(brd) = qa("pcbnew/plugins/eagle/Adafruit-AHT20-PCB/Adafruit AHT20 Temperature & Humidity.brd") else { return };
+        let sch = brd.with_extension("sch");
+        let file = |p: &Path| json!({ "name": p.file_name().unwrap().to_string_lossy(), "data": encoded(p) });
+        // the schematic first: the board is the file a board importer takes
+        let r = convert(Path::new("."), json!({ "kind": "project", "files": [file(&sch), file(&brd)], "drop_layers": ["tDocu"] }).to_string().as_bytes());
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!((r["kind"].as_str(), r["format"].as_str(), r["name"].as_str()), (Some("project"), Some("Eagle"), Some("Adafruit AHT20 Temperature & Humidity.brd")), "{}", r["kind"]);
+        assert_eq!(r["schematic_counts"]["symbols"], 36, "the schematic the project command made: {}", r["schematic_counts"]);
+        assert!(r["counts"]["footprints"].as_u64().unwrap() > 10 && r["project"].is_string(), "{}", r["counts"]);
+        assert!(r["layers"].as_array().unwrap().iter().any(|l| l["source"] == "tDocu" && l["kicad"].is_null()), "tDocu went nowhere: {}", r["layers"]);
+        let board: eda_ops::Cmd = serde_json::from_value(json!({ "op": "replace_board", "text": r["text"], "name": "x.brd", "project": r["project"] })).expect("a board command");
+        let schematic: eda_ops::Cmd = serde_json::from_value(json!({ "op": "replace_schematic", "content": r["content"], "name": "x.sch" })).expect("a schematic command");
+        assert!(board.replaces_board() && schematic.replaces_schematic());
+    }
+
+    /// `DIALOG_IMPORT_CHOOSE_PROJECT`: an EasyEDA Pro project of several boards stops `pcb import` (the chooser callback kicad-cli does not set); the route names the boards and
+    /// imports the one asked for.
+    #[test]
+    fn a_project_file_of_several_boards_names_them_and_imports_the_one_chosen() {
+        let Some(epro) = qa("pcbnew/plugins/easyedapro/ProProject_Yuzuki Chameleon_2023-09-02.epro") else { return };
+        let ask = |extra: Value| {
+            let mut req = json!({ "kind": "board", "name": "Yuzuki.epro", "data": encoded(&epro) });
+            if let (Some(o), Some(e)) = (req.as_object_mut(), extra.as_object()) {
+                o.extend(e.clone());
+            }
+            convert(Path::new("."), req.to_string().as_bytes())
+        };
+        let r = ask(json!({}));
+        assert_eq!((r["ok"].as_bool(), r["choose_board"].as_bool()), (Some(true), Some(true)), "{r}");
+        let boards: Vec<String> = r["boards"].as_array().unwrap().iter().map(|b| b.as_str().unwrap().to_string()).collect();
+        assert_eq!(boards, ["PCB", "树莓派A版形状", "点位图", "100ASK", "散热器外形"], "in the project's order, by the boards' ids");
+        let i = boards.iter().position(|b| b == "100ASK").unwrap();
+        let r = ask(json!({ "board": i }));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["format"].as_str(), Some("EasyEDA / JLCEDA Pro"));
+        assert_eq!(r["counts"]["footprints"].as_u64(), Some(205), "{}", r["counts"]);
+        assert!(r["text"].as_str().is_some_and(|t| t.starts_with("(kicad_pcb")));
+        let r = ask(json!({ "board": 9 }));
+        assert_eq!(r["ok"], false, "{r}");
     }
 
     /// An Altium board and an Eagle schematic through the route: what the page is told, and a command that takes the reply as it is.

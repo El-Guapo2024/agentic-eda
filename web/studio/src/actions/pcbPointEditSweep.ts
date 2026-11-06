@@ -205,8 +205,13 @@ export function registerPcbPointEditSweep(m: Map<string, () => void>, ctx: Sweep
     dispatch({ type: "PCBX", patch: { arcEditMode: next } });
     toast(`Arc editing: ${ARC_EDIT_MODE_LABEL[next]}`);
   };
-  m.set("pcbnew.PointEditor.arcKeepCenter", pcbOnly(setMode("keep_center_adjust_angle_radius")));
-  m.set("pcbnew.PointEditor.arcKeepEndpoint", pcbOnly(setMode("keep_endpoints_or_start_direction")));
-  m.set("pcbnew.PointEditor.arcKeepRadius", pcbOnly(setMode("keep_center_ends_adjust_angle")));
-  m.set("common.Interactive.cycleArcEditMode", pcbOnly(setMode("cycle")));
+  // (`SCH_POINT_EDITOR::changeArcEditMode` takes the same four actions for the schematic's own mode, registered before: another tab keeps its handler)
+  const chain = (name: string, fn: () => void) => {
+    const other = m.get(name);
+    m.set(name, () => (state.tab === "pcb" ? fn() : other?.()));
+  };
+  chain("pcbnew.PointEditor.arcKeepCenter", setMode("keep_center_adjust_angle_radius"));
+  chain("pcbnew.PointEditor.arcKeepEndpoint", setMode("keep_endpoints_or_start_direction"));
+  chain("pcbnew.PointEditor.arcKeepRadius", setMode("keep_center_ends_adjust_angle"));
+  chain("common.Interactive.cycleArcEditMode", setMode("cycle"));
 }

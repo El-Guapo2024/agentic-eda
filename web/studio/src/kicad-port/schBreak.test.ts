@@ -44,8 +44,8 @@ test("the verbs delete each cut line and add its pieces, a bus staying a bus", (
   const s = startBreak("break", [bus], [4000, 0])!;
   assert.deepEqual(breakCmds(s, [4000, 0]), [
     { op: "delete_wire", id: "b1" },
-    { op: "add_wire", pts: [{ x: 0, y: 0 }, { x: 4000, y: 0 }], bus: true },
-    { op: "add_wire", pts: [{ x: 4000, y: 0 }, { x: 8000, y: 0 }], bus: true },
+    { op: "sch_edit", verb: "add_wire_as", pts: [{ x: 0, y: 0 }, { x: 4000, y: 0 }], bus: true, by: "break" },
+    { op: "sch_edit", verb: "add_wire_as", pts: [{ x: 4000, y: 0 }, { x: 8000, y: 0 }], bus: true, by: "break" },
   ]);
 });
 

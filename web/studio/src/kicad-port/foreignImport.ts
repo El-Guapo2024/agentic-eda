@@ -10,12 +10,16 @@
 // The converting is kicad-cli's (`POST /api/import_foreign`, crates/cli/src/foreign_api.rs): the file is posted as bytes, the server answers with the KiCad file, what the importer
 // said, and for a board where each source layer went. kicad-cli answers the importers' layer callback itself, with the plugin's best guess, and takes a map of the layers that
 // should go elsewhere (`--layer-map`): a layer the map does not name keeps the guess. So the dialog starts as KiCad's does after Auto-Match Layers -- the guesses are the Matched
-// Layers -- and OK sends the layers the person moved or added, in a second run; a layer taken out of the matched list that has a guess keeps the guess (a map cannot say "leave
-// this layer out"), and the dialog says so.
+// Layers -- and OK sends the layers the person moved or added, in a second run, and the layers left in the Unmatched list, which KiCad's callback answers with `UNDEFINED_LAYER`
+// so that the importer leaves out what is on them: the server leaves them out (`drop_layers`; kicad-cli's map cannot say it, so they go to a user layer nothing else goes to,
+// which is taken out of the board kicad-cli wrote: crates/kicad/src/drop_layer.rs).
 
 import { standardLayerName } from "./boardLayers";
 
 export type ImportKind = "board" | "schematic";
+
+/** What the route is asked to convert: a board, a schematic, or a project's files together (a board and its schematic). */
+export type ConvertKind = ImportKind | "project";
 
 /** One thing kicad-cli's import said: an error, a warning, or (not shown) information; `count` is how often it was said. */
 export interface ImportFinding {
@@ -37,7 +41,7 @@ export interface ForeignReply {
   message?: string;
   /** No importer of kicad-cli takes the file (as against one that failed on it). */
   unrecognized?: boolean;
-  kind?: ImportKind;
+  kind?: ConvertKind;
   name?: string;
   engine?: string;
   /** The format kicad-cli recognised: `Eagle`, `Altium Designer`, ... */
@@ -56,9 +60,15 @@ export interface ForeignReply {
   project?: string | null;
   /** A board: the custom DRC rules (`.kicad_dru`) its importer wrote (Eagle's class clearances, PADS's diff-pair gaps, EasyEDA Pro's spacing rules). `null` for none. */
   rules?: string | null;
-  /** A schematic: the sheet file (`eda_model::sheet_file::SheetFile`). */
+  /** A schematic, or a project's schematic: the sheet file (`eda_model::sheet_file::SheetFile`). */
   content?: unknown;
   notes?: string[];
+  /** A project file of several boards was given with no board chosen: `boards` names them, in kicad-cli's order, and nothing was imported (`DIALOG_IMPORT_CHOOSE_PROJECT`). */
+  choose_board?: boolean;
+  boards?: string[];
+  /** A project: what the schematic the project command made holds, and what its reader noted. */
+  schematic_counts?: Record<string, number>;
+  schematic_notes?: string[];
 }
 
 /** A file the page has read as bytes: its name and its content as base64. */
@@ -76,20 +86,27 @@ export interface ForeignFile {
 export const BOARD_ACCEPT = ".brd,.PcbDoc,.pcbdoc,.cpa,.asc,.pcb,.PCB,.txt,.json,.zip,.epro,.SwPcbDoc,.CMPcbDoc,.CSPcbDoc,.efoo";
 export const SCHEMATIC_ACCEPT = ".sch,.SchDoc,.schdoc,.csa,.json,.zip,.epro,.asc,.dsn,.dch";
 
-export function acceptFor(kind: ImportKind): string {
-  return kind === "board" ? BOARD_ACCEPT : SCHEMATIC_ACCEPT;
+/** The project import's chooser: the boards' and the schematics' files of every format, chosen together (an Eagle `.brd` and its `.sch`). */
+export const PROJECT_ACCEPT = ".brd,.sch,.cpa,.csa,.json,.zip,.epro,.PcbDoc,.pcbdoc,.SchDoc,.schdoc,.asc,.txt,.pcb,.PCB,.dsn,.dch";
+
+export function acceptFor(kind: ConvertKind): string {
+  return kind === "board" ? BOARD_ACCEPT : kind === "project" ? PROJECT_ACCEPT : SCHEMATIC_ACCEPT;
 }
 
 /** The parameter of the import actions: the file the page read (`window.__eda.run(id, { name, data })`; the chooser's own file has the same shape), and what to do with the layers. */
 export interface ForeignParam extends ForeignFile {
   /** Source layer -> KiCad layer: answers the layer dialog without opening it. */
   layerMap?: Record<string, string>;
+  /** Source layers to leave out with what is on them (the dialog's Unmatched list at OK), with `layerMap`. */
+  dropLayers?: string[];
   /** Do not ask which layer each source layer goes to: kicad-cli's guess is used (`ADVANCED_CFG::m_ImportSkipLayerMapping`). */
   skipLayerMapping?: boolean;
   /** "Keep KiCad layer names". */
   keepKicadLayerNames?: boolean;
   /** Do not open the report of the import's errors and warnings ("Show import issues" off). */
   skipReport?: boolean;
+  /** The board of a project file of several (its place in the list kicad-cli gives): answers `DIALOG_IMPORT_CHOOSE_PROJECT` without opening it. */
+  board?: number;
 }
 
 export function asForeignParam(param: unknown): ForeignParam | null {
@@ -105,8 +122,18 @@ function listCounts(counts: Record<string, number> | undefined, kinds: Array<[st
   return parts.length > 0 ? parts.join(", ") : "nothing";
 }
 
-/** What an import brought, in a sentence: "Imported x.brd (Eagle): 19 footprints, 6 nets, 82 tracks, 11 vias, 2 zones." */
+/** What an import brought, in a sentence: "Imported x.brd (Eagle): 19 footprints, 6 nets, 82 tracks, 11 vias, 2 zones." -- and for a project, the schematic's too. */
 export function describeImport(reply: ForeignReply): string {
+  if (reply.kind === "project") {
+    const board = describeImport({ ...reply, kind: "board" }).replace(/\.$/, "");
+    const sch = listCounts(reply.schematic_counts, [
+      ["symbols", "symbol", "symbols"],
+      ["sheets", "sheet", "sheets"],
+      ["wires", "wire", "wires"],
+      ["labels", "label", "labels"],
+    ]);
+    return `${board}; schematic: ${sch}.`;
+  }
   const what =
     reply.kind === "schematic"
       ? listCounts(reply.counts, [
@@ -128,7 +155,7 @@ export function describeImport(reply: ForeignReply): string {
 
 /** What is said when the board came without its rules: kicad-cli could not make the project that holds the importer's design rules and net classes (a kicad-cli without the command, a file its project import does not take). */
 export function describeRules(reply: ForeignReply): string {
-  return reply.kind === "board" && reply.ok && !reply.project ? "The design rules and net classes of the file could not be read." : "";
+  return (reply.kind === "board" || reply.kind === "project") && reply.ok && !reply.project ? "The design rules and net classes of the file could not be read." : "";
 }
 
 /** "2 errors and 1 warning were reported." -- the counts of messages said, not of distinct ones; empty when kicad-cli said nothing. */
@@ -268,7 +295,10 @@ export function layerMapRequest(state: LayerMapState): Record<string, string> {
   return map;
 }
 
-/** The layers left unmatched that the importer has a guess for: kicad-cli maps them by the guess all the same (its map file can name a layer's place but not leave it out). */
+/**
+ * The layers left unmatched that the importer has a guess for: kicad-cli would map them by the guess (its map file can name a layer's place but not leave it out), so they are
+ * the layers OK asks the server to leave out (`drop_layers`); a layer with no guess is left out by kicad-cli itself.
+ */
 export function keptGuesses(state: LayerMapState): string[] {
   return state.unmatched.filter((s) => state.guess[s]);
 }
@@ -276,4 +306,98 @@ export function keptGuesses(state: LayerMapState): string[] {
 /** A layer in a list of the dialog: its name, with the `*` of a required layer (`WrapRequired`). */
 export function wrapRequired(name: string, required: boolean): string {
   return required ? `${name} *` : name;
+}
+
+// ----------------------------------------------------------------------------------------------------------------- the questions before an import
+
+/** `UnsavedChangesDialog` (common/confirm.cpp): the title, the extended message and the three buttons of `HandleUnsavedChanges`. */
+export const SAVE_CHANGES = {
+  title: "Save Changes?",
+  detail: "If you don't save, all your changes will be permanently lost.",
+  save: "Save",
+  discard: "Discard Changes",
+  cancel: "Cancel",
+} as const;
+
+/** `PCB_EDIT_FRAME::OpenProjectFiles`: asked when the board is modified (`IsContentModified()`) before another board -- a converted one too -- replaces it. Two spaces, as KiCad's. */
+export const PCB_MODIFIED_MESSAGE = "The current PCB has been modified.  Save changes?";
+
+/** `SCH_EDIT_FRAME::AskToSaveChanges` (`OpenProjectFiles`): the schematic's twin, which a project import asks of the schematic it replaces. */
+export const SCHEMATIC_MODIFIED_MESSAGE = "The current schematic has been modified.  Save changes?";
+
+/** `SCH_EDIT_FRAME::OnImportProject`: `IsOK` (title "Confirmation", Yes / No) when the root sheet has items, before the file is chosen. */
+export const REPLACE_SCHEMATIC_QUESTION = "This operation replaces the contents of the current schematic, which will be permanently lost.\n\nDo you want to proceed?";
+
+// ----------------------------------------------------------------------------------------------------------------- DIALOG_IMPORT_CHOOSE_PROJECT
+
+/** `IMPORT_PROJECT_DESC`: a row of the chooser -- a "combination" of a board and a schematic of an EasyEDA Pro project, or a board or a schematic of its own. */
+export interface ImportProjectDesc {
+  comboName: string;
+  comboId: string;
+  pcbName: string;
+  pcbId: string;
+  schematicName: string;
+  schematicId: string;
+}
+
+/** `DIALOG_IMPORT_CHOOSE_PROJECT`'s title and the text above its list (`dialog_import_choose_project_base.cpp`). */
+export const CHOOSE_PROJECT_TITLE = "Choose Project to Import";
+export const CHOOSE_PROJECT_TEXT = "This project file contains multiple PCB+Schematic combinations.\nChoose which one should be imported to KiCad.";
+/** Its columns: Project Name, PCB, Schematic. */
+export const CHOOSE_PROJECT_COLUMNS = ["Project Name", "PCB", "Schematic"] as const;
+
+const byKey = (o: unknown): Array<[string, unknown]> =>
+  o && typeof o === "object" && !Array.isArray(o) ? Object.entries(o as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)) : [];
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+
+/**
+ * `EASYEDAPRO::ProjectToSelectorDialog( aProject, aPcbOnly, aSchOnly )` (common/io/easyedapro/easyedapro_import_utils.cpp): the rows of the chooser from an EasyEDA Pro
+ * `project.json` -- each combination of `boards` (by its name, the map's order), then the boards no combination names (unless `schOnly`), then the schematics no combination
+ * names (unless `pcbOnly`); a name that is empty is the id. A board import asks with `pcbOnly` (`PCB_IO_EASYEDAPRO::LoadBoard`), a project import with neither.
+ */
+export function projectToSelectorRows(project: unknown, pcbOnly: boolean, schOnly: boolean): ImportProjectDesc[] {
+  const p = (project ?? {}) as Record<string, unknown>;
+  const schematics = new Map(byKey(p.schematics).map(([id, s]) => [id, str((s as Record<string, unknown> | null)?.name)]));
+  const pcbNames = new Map<string, string>();
+  for (const [id, entry] of byKey(p.pcbs)) {
+    if (typeof entry === "string") pcbNames.set(id, entry);
+    else if (entry && typeof entry === "object") pcbNames.set(id, str((entry as Record<string, unknown>).title));
+  }
+  const rows: ImportProjectDesc[] = [];
+  for (const [name, b] of byKey(p.boards)) {
+    const board = (b ?? {}) as Record<string, unknown>;
+    const desc: ImportProjectDesc = { comboName: name, comboId: name, pcbId: str(board.pcb), pcbName: "", schematicId: str(board.schematic), schematicName: "" };
+    if (pcbNames.has(desc.pcbId)) {
+      desc.pcbName = pcbNames.get(desc.pcbId) || desc.pcbId;
+      pcbNames.delete(desc.pcbId);
+    }
+    if (schematics.has(desc.schematicId)) {
+      desc.schematicName = schematics.get(desc.schematicId) || desc.schematicId;
+      schematics.delete(desc.schematicId);
+    }
+    rows.push(desc);
+  }
+  if (!schOnly) for (const [id, name] of pcbNames) rows.push({ comboName: "", comboId: "", pcbId: id, pcbName: name || id, schematicId: "", schematicName: "" });
+  if (!pcbOnly) for (const [id, name] of schematics) rows.push({ comboName: "", comboId: "", pcbId: "", pcbName: "", schematicId: id, schematicName: name || id });
+  return rows;
+}
+
+/** The three cells of a row (`DIALOG_IMPORT_CHOOSE_PROJECT`'s `convertName`: a name with no id is shown empty). */
+export function chooserCells(d: ImportProjectDesc): [string, string, string] {
+  const shown = (name: string, id: string) => (id ? name : "");
+  return [shown(d.comboName, d.comboId), shown(d.pcbName, d.pcbId), shown(d.schematicName, d.schematicId)];
+}
+
+/**
+ * Which of the boards kicad-cli converted a row's board is: kicad-cli's project command converts every board of the project in the order of its `pcbs` index
+ * (`EnumerateProjectBoards`, by id), which is the order of the `boards` the server names. -1 for a row with no board.
+ */
+export function boardIndexOf(project: unknown, pcbId: string): number {
+  if (!pcbId) return -1;
+  return byKey((project as Record<string, unknown> | null)?.pcbs).findIndex(([id]) => id === pcbId);
+}
+
+/** The rows when the project file cannot be read here: the boards kicad-cli named, each a row of its own with its board only. */
+export function rowsOfBoards(boards: string[]): ImportProjectDesc[] {
+  return boards.map((name, i) => ({ comboName: "", comboId: "", pcbName: name, pcbId: String(i), schematicName: "", schematicId: "" }));
 }

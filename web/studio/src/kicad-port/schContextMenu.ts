@@ -67,6 +67,8 @@ export interface SchSelectionSummary {
   canAddCorner: boolean;
   /** ... and a corner of it is under the cursor, leaving enough corners (`removeCornerCondition`). */
   canRemoveCorner: boolean;
+  /** The one selected item is an arc the point editor is on (`arcIsEdited`). */
+  arcEdited?: boolean;
 }
 
 export function emptySummary(): SchSelectionSummary {
@@ -228,6 +230,8 @@ export function schContextMenu(s: SchSelectionSummary, std?: StandardSubmenus): 
   add(connected && item("eeschema.InteractiveEdit.assignNetclass"), connected && item("eeschema.InteractiveEdit.findNetInInspector"));
   // `SCH_POINT_EDITOR::Init`: Count( 1 ) && addCornerCondition / removeCornerCondition.
   add(single && s.canAddCorner && item("eeschema.PointEditor.addCorner"), single && s.canRemoveCorner && item("eeschema.PointEditor.removeCorner"));
+  // `menu.AddItem( ACTIONS::cycleArcEditMode, S_C::Count( 1 ) && arcIsEdited )`
+  add(single && s.arcEdited === true && item("common.Interactive.cycleArcEditMode"));
 
   // `SCH_EDIT_TABLE_TOOL::Init` (`EDIT_TABLE_TOOL_BASE::addMenus`, order 100): the structure edits of a selection of table cells.
   if (cellSelection) {

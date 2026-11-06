@@ -128,3 +128,50 @@ mod tests {
         assert_eq!(r["items"], 0);
     }
 }
+
+/// `POST /api/import_graphics/preview`: the items an interactive Import Graphics would put on the board, before any is put there -- what `DRAWING_TOOL::PlaceImportedGraphics`
+/// shows in its preview (`m_view->Add( &preview )`) while they follow the cursor. Request: `{ "cmd": <the import_graphics command> }` at the offset the page will move from
+/// (0, 0). The command runs on a copy of the board, nothing is saved. Reply: `{ "ok": true, "shapes": [..], "texts": [..], "reference": { "x", "y" } }`, the shapes and the
+/// texts as the board state has them, and the point they are held by -- the position of the top left item of the preview (`preview.GetTopLeftItem()->GetPosition()`: the
+/// smallest x, then the smallest y, by each item's `GetPosition()`, the group's being the middle of its box) -- or `{ "ok": false, "message": .. }` in the command's words.
+pub fn preview(dir: &std::path::Path, body: &[u8]) -> Value {
+    let req: Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return json!({ "ok": false, "message": format!("not a preview request: {e}") }),
+    };
+    let cmd: eda_ops::Cmd = match serde_json::from_value(req.get("cmd").cloned().unwrap_or(Value::Null)) {
+        Ok(c @ eda_ops::Cmd::ImportGraphics(_)) => c,
+        Ok(_) => return json!({ "ok": false, "message": "the preview is of an import_graphics command" }),
+        Err(e) => return json!({ "ok": false, "message": format!("not an import command: {e}") }),
+    };
+    let (meta, design, model) = match crate::board::load(dir) {
+        Ok(l) => l,
+        Err(e) => return json!({ "ok": false, "message": crate::board::reasons(&e) }),
+    };
+    let (n_shapes, n_texts, n_groups) = design.drawings.as_ref().map_or((0, 0, 0), |d| (d.shapes.len(), d.texts.len(), d.groups.len()));
+    let mut b = eda_ops::Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
+    if let Err(e) = b.apply(&cmd) {
+        return json!({ "ok": false, "message": crate::board::reasons(&e) });
+    }
+    let Some(d) = b.design().drawings.as_ref() else { return json!({ "ok": false, "message": "No graphic items found in file." }) };
+    let shapes = &d.shapes[n_shapes.min(d.shapes.len())..];
+    let texts = &d.texts[n_texts.min(d.texts.len())..];
+    // `GetTopLeftItem`: every item of the preview, the group too
+    let mut positions: Vec<eda_model::ir::Point> = shapes.iter().map(crate::append_api::shape_position).chain(texts.iter().map(|t| t.at)).collect();
+    if d.groups.len() > n_groups && !positions.is_empty() {
+        let (x0, x1) = (positions.iter().map(|p| p.x).min().unwrap_or(Nm::ZERO), positions.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO));
+        let (y0, y1) = (positions.iter().map(|p| p.y).min().unwrap_or(Nm::ZERO), positions.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO));
+        positions.push(eda_model::ir::Point { x: Nm::new((x0.get() + x1.get()) / 2), y: Nm::new((y0.get() + y1.get()) / 2) });
+    }
+    let reference = positions.iter().min_by(|a, b| a.x.cmp(&b.x).then(a.y.cmp(&b.y))).copied().unwrap_or(eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO });
+    json!({
+        "ok": true,
+        "shapes": shapes.iter().map(crate::studio::shape_json).collect::<Vec<_>>(),
+        "texts": texts.iter().map(|t| json!({
+            "id": t.id, "content": t.content, "x": t.at.x, "y": t.at.y, "angle": t.angle, "layer": t.layer, "size": t.size_nm, "stroke_width": t.stroke_width,
+            "justify": match t.justify { eda_model::ir::TextJustify::Left => "left", eda_model::ir::TextJustify::Center => "center", eda_model::ir::TextJustify::Right => "right" },
+            "mirror": t.mirror,
+        })).collect::<Vec<_>>(),
+        "reference": { "x": reference.x, "y": reference.y },
+    })
+}

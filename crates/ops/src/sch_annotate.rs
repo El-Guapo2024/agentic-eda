@@ -501,6 +501,29 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// The reference a symbol of `lib_id` with `value` gets when it is placed on the sheet `sheet` (a `/`-joined placement path) as unit `unit` of `unit_count`
+    /// (`SCH_DRAWING_TOOLS::PlaceSymbol`'s `annotate()`: `ReannotateByOptions` against every reference of the hierarchy with the project's numbering): `prefix`
+    /// and the first free number from the numbering's minimum, a unit of a part of several units joining a part of the same symbol and value whose unit is free
+    /// (r2 D-A1, UI-LEFT S14). The board is not changed.
+    pub fn placement_reference(&self, sheet: &str, prefix: &str, lib_id: &str, value: &str, unit: u32, unit_count: u32, opts: &AnnotateOptions) -> Result<String, Vec<CheckResult>> {
+        let mut board = self.fork();
+        board.focus = board.screen_at(sheet)?;
+        let (_, _, mut list) = board.annotation_entries(&[]);
+        eda_model::annotate::split_all(&mut list);
+        let walk = sheet_list::walk(&board.design);
+        let path: Vec<String> = sheet.split('/').filter(|c| !c.is_empty()).map(String::from).collect();
+        let sheet_num = walk.iter().find(|e| e.path == path).map_or(1, SheetEntry::page_number_as_int);
+        let mut new = Entry::new(usize::MAX, &format!("{prefix}?"), unit.max(1), unit_count.max(1), lib_item_name(lib_id), value, sheet_num, (Nm::ZERO, Nm::ZERO), false);
+        new.split();
+        // `AnnotateByOptions`' `minRefId`: the start number + 1, or the sheet's number times 100 or 1000, + 1
+        let min = match opts.algo {
+            eda_model::annotate::Algo::FirstFree => opts.start_number.max(0) + 1,
+            eda_model::annotate::Algo::SheetX100 => sheet_num * 100 + 1,
+            eda_model::annotate::Algo::SheetX1000 => sheet_num * 1000 + 1,
+        };
+        Ok(format!("{prefix}{}", eda_model::annotate::placement_number(&list, &new, min)))
+    }
+
     /// What an annotation would do to the sheet `sheet` is in view of (a `/`-joined placement path, the root when empty), without doing it: the
     /// dialog's message window. The board is left as it was.
     pub fn annotate_report(&self, sheet: &str, reset: bool, order: AnnotateOrder, ids: Option<&[String]>, opts: &AnnotateOptions) -> Result<AnnotateReport, Vec<CheckResult>> {
@@ -598,6 +621,7 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
     let mut looks = Vec::new();
     let mut path_units = Vec::new();
     let mut pos_excluded = Vec::new();
+    let mut power_props = Vec::new();
     for r in renames {
         let (old_key, new_key) = (field_key(&r.old, r.unit), field_key(&r.new, r.unit));
         if let Some(v) = sch.field_layout.remove(&old_key) {
@@ -625,9 +649,16 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
             path_units.push((new_key.clone(), v));
         }
         if sch.extras.excluded_from_pos_files.remove(&old_key) {
-            pos_excluded.push(new_key);
+            pos_excluded.push(new_key.clone());
+        }
+        // a power symbol's own Footprint, Datasheet, flags and user fields (`SchExtras::power_props`, r4 D4-L2)
+        if matches!(r.item, Item::Power(_)) {
+            if let Some(v) = sch.extras.power_props.remove(&r.old) {
+                power_props.push((r.new.clone(), v));
+            }
         }
     }
+    sch.extras.power_props.extend(power_props);
     sch.field_layout.extend(layout);
     sch.extras.fields_autoplaced.extend(autoplaced);
     sch.extras.body_styles.extend(styles);

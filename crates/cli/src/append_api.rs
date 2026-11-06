@@ -7,17 +7,18 @@
 //! sets the selection's reference point to the position of its top left item (`PCB_SELECTION::GetTopLeftItem`: the smallest x, then the smallest y, by each item's
 //! `GetPosition()`), so the page pastes with `at = cursor - reference` and that item is where the cursor is.
 //!
-//! Request: `{ "text": "<the .kicad_pcb>", "name": "board.kicad_pcb" }` (`name` optional). Reply: `{ "ok": true, "reference": { "x", "y" } (micrometres),
-//! "counts": { "footprints", "tracks", ... }, "notes": ["..."] }` or `{ "ok": false, "message": "..." }`. Nothing on the board changes; the append itself is the paste.
+//! Request: `{ "text": "<the .kicad_pcb>", "name": "board.kicad_pcb" }` (`name` optional). Reply: `{ "ok": true, "reference": { "x", "y" } (nanometres),
+//! "counts": { "footprints", "tracks", ... }, "notes": ["..."] }` or `{ "ok": false, "message": "..." }`. Nothing on the board changes; the append itself is the command
+//! (`Cmd::PlaceDesignBlock` with no block: `crates/ops/src/design_blocks.rs`), which loads everything as `LoadBoard` does -- the copper layers when the file has more, the
+//! technical and user layers it enables, every net -- and groups it under the file's stem with "Place as group".
 //!
-//! # Where this differs from KiCad
+//! # What the notes say
 //!
-//! * The paste's rules apply to what comes in, where `LoadBoard` appends everything: copper on a layer this board does not have is dropped (KiCad adds the layer to the
-//!   board), and an item on a net this board does not have and no appended footprint brings is added with no net. A footprint whose reference is taken keeps the reference
-//!   it shows in the file, as KiCad's append leaves it ("Don't reannotate dupes on Append Board": `PASTE_MODE::KEEP_ANNOTATIONS`), but is filed under the next free reference,
-//!   a part existing once here (`pcb_paste_special.rs`). The notes say how many.
-//! * A group's position is the middle of the box of its members' positions (`PCB_GROUP::GetPosition` is the middle of the group's own box); the items of a group are not
-//!   candidates for the top left one, as the selection holds the group and not them.
+//! What the append will add to this board: copper layers (KiCad 25ec2335 says "Board changed from %d to %d copper layers, stackup updated." in its info bar), user and technical
+//! layers, nets the board has not got. A footprint whose reference is taken keeps the reference it shows in the file, as KiCad's append leaves it ("Don't reannotate dupes on
+//! Append Board": `PASTE_MODE::KEEP_ANNOTATIONS`), but is filed under the next free reference, a part existing once here (`pcb_paste_special.rs`); the notes say how many.
+//! A group's position is the middle of the box of its members' positions (`PCB_GROUP::GetPosition` is the middle of the group's own box); the items of a group are not
+//! candidates for the top left one, as the selection holds the group and not them.
 
 use eda_model::units::Nm;
 use crate::board;
@@ -48,39 +49,29 @@ pub fn read(dir: &Path, body: &[u8]) -> Value {
     }
     let reference = reference_point(&clip);
     let mut notes = Vec::new();
-    // What the paste will leave out or change, against the board as it is now.
-    if let Ok((_, _, model)) = board::load(dir) {
-        let layers: BTreeSet<&str> = model.board.layers.iter().map(String::as_str).collect();
-        let mut missing: BTreeSet<&str> = BTreeSet::new();
-        let copper = |l: &'_ str| l.ends_with(".Cu") && !layers.contains(l);
-        for t in &clip.tracks {
-            if copper(&t.layer) {
-                missing.insert(&t.layer);
-            }
+    // What the append will add or change, against the board as it is now.
+    if let Ok((_, design, model)) = board::load(dir) {
+        let table = eda_kicad::board_layer_setup(text);
+        let file_copper = eda_ops::layer_table(text).iter().filter(|l| l.ends_with(".Cu")).count();
+        let have = model.board.layers.len().max(2);
+        if file_copper > have && file_copper % 2 == 0 {
+            // KiCad 25ec2335 `PCB_CONTROL::AppendBoard`: `_( "Board changed from %d to %d copper layers, stackup updated." )`
+            notes.push(format!("Board changed from {have} to {file_copper} copper layers, stackup updated."));
         }
-        for v in &clip.vias {
-            for l in [&v.from_layer, &v.to_layer] {
-                if copper(l) {
-                    missing.insert(l);
-                }
-            }
-        }
-        for z in &clip.zones {
-            for l in z.layer_set() {
-                if copper(l) {
-                    missing.insert(l);
-                }
-            }
-        }
-        if !missing.is_empty() {
-            notes.push(format!("Copper on {} is left out: this board has no such layer.", missing.into_iter().collect::<Vec<_>>().join(", ")));
+        let enabled = design.drawings.as_ref().and_then(|d| d.rules.as_ref()).and_then(|r| r.board_layers.clone()).unwrap_or_else(|| model.board.layer_setup.clone()).enabled;
+        let new_layers: Vec<String> = table.map(|t| t.enabled.iter().filter(|l| !enabled.contains(l)).map(|l| t.display_name(l)).collect()).unwrap_or_default();
+        if !new_layers.is_empty() {
+            notes.push(format!("The board gains the layer{} {}.", if new_layers.len() == 1 { "" } else { "s" }, new_layers.join(", ")));
         }
         let brought: BTreeSet<&str> = clip.footprints.iter().flat_map(|f| f.pad_nets.iter().map(|(_, n)| n.as_str())).collect();
-        let known = |n: &str| n.is_empty() || brought.contains(n) || model.nets.iter().any(|b| b.name == n);
-        let netless = clip.tracks.iter().filter(|t| !known(&t.net)).count() + clip.vias.iter().filter(|v| !known(&v.net)).count() + clip.zones.iter().filter(|z| !z.is_rule_area && !known(&z.net)).count();
-        if netless > 0 {
-            let (items, be, nets) = if netless == 1 { ("item is", "is", "a net") } else { ("items are", "are", "nets") };
-            notes.push(format!("{netless} copper {items} on {nets} this board does not have and {be} added with no net."));
+        let mut fresh: BTreeSet<&str> = BTreeSet::new();
+        for n in clip.tracks.iter().map(|t| t.net.as_str()).chain(clip.vias.iter().map(|v| v.net.as_str())).chain(clip.zones.iter().filter(|z| !z.is_rule_area).map(|z| z.net.as_str())).chain(brought.iter().copied()) {
+            if !n.is_empty() && !model.nets.iter().any(|b| b.name == n) {
+                fresh.insert(n);
+            }
+        }
+        if !fresh.is_empty() {
+            notes.push(format!("{} net{} the board has not got {} added.", fresh.len(), if fresh.len() == 1 { "" } else { "s" }, if fresh.len() == 1 { "is" } else { "are" }));
         }
         let repeated = clip.footprints.iter().filter(|f| model.part(&f.reference).is_some()).count();
         if repeated > 0 {
@@ -218,7 +209,7 @@ fn track_position(t: &eda_model::ir::Track) -> Point {
 }
 
 /// `EDA_SHAPE::getPosition`: an arc's centre, a polygon's first vertex, the start of anything else (a circle's is its centre).
-fn shape_position(s: &Shape) -> Point {
+pub(crate) fn shape_position(s: &Shape) -> Point {
     match s {
         Shape::Segment { start, .. } | Shape::Rect { start, .. } | Shape::Bezier { start, .. } => *start,
         Shape::Circle { center, .. } => *center,
@@ -391,33 +382,35 @@ mod tests {
     }
 
     #[test]
-    fn the_notes_say_what_the_paste_will_leave_out_or_change_on_this_board() {
+    fn the_notes_say_what_the_append_will_add_to_or_change_on_this_board() {
         let dir = board_dir("notes");
-        // The file's R1 is a reference this board uses; its track on In1.Cu has no layer here; and a segment on a net nobody brings.
-        let text = board_file().replace("(layers (0 \"F.Cu\" signal)", "(layers (0 \"F.Cu\" signal) (4 \"In1.Cu\" signal)").replace(
+        // The file's R1 is a reference this board uses; its track on In1.Cu brings two more copper layers; a segment on a net this board has not got; a user layer.
+        let text = board_file().replace("(layers (0 \"F.Cu\" signal)", "(layers (0 \"F.Cu\" signal) (4 \"In1.Cu\" signal) (6 \"In2.Cu\" signal)").replace("(2 \"B.Cu\" signal)", "(2 \"B.Cu\" signal) (43 \"User.3\" user \"Notes\")").replace(
             "(gr_line",
             "(segment (start 11 11) (end 12 11) (width 0.25) (layer \"In1.Cu\") (net 1) (uuid \"66666666-6666-6666-6666-666666666661\"))\n  (segment (start 13 11) (end 14 11) (width 0.25) (layer \"F.Cu\") (net 2) (uuid \"66666666-6666-6666-6666-666666666662\"))\n  (gr_line",
         ).replace("(net 1 \"GND\")", "(net 1 \"GND\")\n  (net 2 \"SIG\")");
         let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb" }).to_string().as_bytes());
         assert_eq!(r["ok"], true, "{r}");
         let notes: Vec<String> = r["notes"].as_array().unwrap().iter().map(|n| n.as_str().unwrap().to_string()).collect();
-        assert!(notes.iter().any(|n| n == "Copper on In1.Cu is left out: this board has no such layer."), "{notes:?}");
-        assert!(notes.iter().any(|n| n == "1 copper item is on a net this board does not have and is added with no net."), "{notes:?}");
+        assert!(notes.iter().any(|n| n == "Board changed from 2 to 4 copper layers, stackup updated."), "{notes:?}");
+        assert!(notes.iter().any(|n| n == "The board gains the layer Notes."), "{notes:?}");
+        // this board's one-pin GND is `unconnected-(R1-Pad1)` by KiCad's names, so the file's GND is new to it as well as SIG
+        assert!(notes.iter().any(|n| n == "2 nets the board has not got are added."), "{notes:?}");
         assert!(notes.iter().any(|n| n == "1 footprint has a reference this board already uses: it shows the reference the file gives (as KiCad's Append Board leaves it) and is filed under the next free one here."), "{notes:?}");
         // The reference is still the leftmost item's position: the new segments at x = 11 sit right of the line at 10.
         assert_eq!(r["reference"], json!({ "x": 10_000_000, "y": 10_000_000 }));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Append Board is the paste of the file's own text with its reference point on the cursor: `at = cursor - reference`.
+    /// Append Board is the load of the file's own text (`place_design_block` with no block) with its reference point on the cursor: `at = cursor - reference`.
     #[test]
-    fn pasting_the_file_at_the_cursor_less_the_reference_puts_the_top_left_item_at_the_cursor_as_one_undo_step() {
+    fn appending_the_file_at_the_cursor_less_the_reference_puts_the_top_left_item_at_the_cursor_as_one_undo_step() {
         let dir = board_dir("paste");
         let text = board_file();
         let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb" }).to_string().as_bytes());
         let (rx, ry) = (Nm::new(r["reference"]["x"].as_i64().unwrap()), Nm::new(r["reference"]["y"].as_i64().unwrap()));
         let cursor = p(mm(60.0), mm(70.0));
-        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(cursor.x - rx, cursor.y - ry) }, false, "test").unwrap();
+        board::step(&dir, eda_ops::Cmd::PlaceDesignBlock { text, at: p(cursor.x - rx, cursor.y - ry), block: String::new(), as_group: true, group_name: "other".into() }, false, "test").unwrap();
         let (_, d, model) = board::load(&dir).unwrap();
         let dr = d.drawings.as_ref().unwrap();
         let line = dr.shapes.iter().find(|s| s.layer() == "Edge.Cuts").expect("the file's Edge.Cuts line came in");
@@ -426,6 +419,8 @@ mod tests {
         // The file's footprint R1 met this board's R1: it is a part of its own now, filed under the next free reference.
         assert_eq!(d.placement.as_ref().unwrap().footprints.len(), 2);
         assert_eq!(model.parts.len(), 2, "{:?}", model.parts.iter().map(|p| p.reference.clone()).collect::<Vec<_>>());
+        // Place as group: what came in is one group named after the file
+        assert!(dr.groups.iter().any(|g| g.name == "other" && g.design_block.is_empty() && g.member_ids.len() >= 2), "{:?}", dr.groups);
         board::undo(&dir, "test", Some(eda_ops::Domain::Pcb)).unwrap();
         let (_, back, model) = board::load(&dir).unwrap();
         assert!(back.drawings.as_ref().map_or(true, |d| d.shapes.is_empty()) && back.placement.as_ref().unwrap().footprints.len() == 1 && model.parts.len() == 1, "one undo takes the whole append back");

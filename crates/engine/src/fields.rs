@@ -262,7 +262,8 @@ pub fn symbol_specs(sym: &SymbolInstance, part: Option<&Part>, datasheet_of_lib:
     let footprint = if !sym.footprint.is_empty() { sym.footprint.clone() } else { part.map(eda_model::footprint::footprint_lib_id).unwrap_or_default() };
     let datasheet = if !sym.datasheet.is_empty() { sym.datasheet.clone() } else { datasheet_of_lib.to_string() };
     vec![
-        FieldSpec::new("Reference", sym.id.clone(), true),
+        // a placeholder (`R?1`) shows the unannotated `R?` it stands for (UI-LEFT S14)
+        FieldSpec::new("Reference", eda_model::annotate::shown_reference(&sym.id).to_string(), true),
         FieldSpec::new("Value", value, true),
         FieldSpec::new("Footprint", footprint, false),
         FieldSpec::new("Datasheet", datasheet, false),
@@ -748,7 +749,7 @@ pub fn stored_visible_fields(sch: &SchematicSection, sym: &SymbolInstance, part:
     if sym.lib_id.is_empty() {
         sym.lib_id = format!("eda:{}", sym.id);
     }
-    let geom = SymbolGeom::of(&sym, part, resolved);
+    let geom = SymbolGeom::of_in(sch, &sym, part, resolved);
     Some(symbol_fields(sch, &sym, Some(part), resolved, &geom).into_iter().filter(|f| f.visible && !f.text.is_empty()).collect())
 }
 
@@ -884,7 +885,7 @@ pub fn fill_layout(sch: &mut SchematicSection, model: &eda_model::ConstraintMode
         let resolved = model.real_symbol_in_style(&lib_id, part, sch.body_style_of(sym));
         let mut sym = sym.clone();
         sym.lib_id = lib_id;
-        let geom = SymbolGeom::of(&sym, part, resolved.as_ref());
+        let geom = SymbolGeom::of_in(sch, &sym, part, resolved.as_ref());
         if sch.field_layout.contains_key(&key) {
             for f in symbol_fields(sch, &sym, Some(part), resolved.as_ref(), &geom) {
                 if f.visible && !f.text.is_empty() {

@@ -120,9 +120,48 @@ fn parse_group(name: &str, aliases: &[BusAlias], depth: u32) -> Option<Vec<Strin
     Some(if prefix.is_empty() { members } else { members.into_iter().map(|m| format!("{prefix}.{m}")).collect() })
 }
 
+/// `BUS_UNFOLD_MENU::update`'s items for the bus `name` (UI-LEFT S19): each member of `SCH_CONNECTION::Members()` with, for a member that is a bus itself (a vector
+/// or an alias in a group, `CONNECTION_TYPE::BUS`), its own members -- the submenu KiCad lists them in. A vector's members are nets, no submenus; a group's
+/// prefix leads each name (`FullLocalName`: `USB.DP`). `None` where [`expand_bus_members`] is.
+pub fn bus_member_tree(name: &str, aliases: &[BusAlias]) -> Option<Vec<(String, Vec<String>)>> {
+    if let Some(members) = parse_vector(name) {
+        return Some(members.into_iter().map(|m| (m, Vec::new())).collect());
+    }
+    let open = name.find('{')?;
+    if !name.ends_with('}') || name.len() < open + 2 {
+        return None;
+    }
+    let prefix = &name[..open];
+    if prefix.contains(' ') || prefix.contains('[') {
+        return None;
+    }
+    let full = |m: &str| if prefix.is_empty() { m.to_string() } else { format!("{prefix}.{m}") };
+    let tokens: Vec<&str> = name[open + 1..name.len() - 1].split_whitespace().collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    Some(
+        tokens
+            .into_iter()
+            .map(|tok| match expand_inner(tok, aliases, 1, true) {
+                Some(sub) if sub.len() != 1 || sub[0] != tok => (full(tok), sub.iter().map(|m| full(m)).collect()),
+                _ => (full(tok), Vec::new()),
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_unfold_menu_has_a_submenu_for_a_bus_in_a_group() {
+        assert_eq!(bus_member_tree("D[0..1]", &[]), Some(vec![("D0".into(), vec![]), ("D1".into(), vec![])]));
+        assert_eq!(bus_member_tree("{SCL B[0..1]}", &[]), Some(vec![("SCL".into(), vec![]), ("B[0..1]".into(), vec!["B0".into(), "B1".into()])]));
+        assert_eq!(bus_member_tree("USB{DP DM}", &[]), Some(vec![("USB.DP".into(), vec![]), ("USB.DM".into(), vec![])]));
+        assert_eq!(bus_member_tree("SIG", &[]), None);
+    }
 
     #[test]
     fn vector_expands_ascending_regardless_of_text_order() {

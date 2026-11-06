@@ -3211,7 +3211,8 @@ pub struct FootprintGroup {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub locked: bool,
     /// Each member by its place: `art:<i>` / `arttext:<i>` (the footprint's i-th graphic / user text, `Footprint::art`), `pad:<number>#<k>` (the k-th pad
-    /// with that number), `field:<name>` (Reference, Value or a user field), `uuid:<u>` (an item the file's text is kept for as it was, a courtyard item).
+    /// with that number), `field:<name>` (Reference, Value or a user field), `uuid:<u>` (an item the file's text is kept for as it was, a courtyard item),
+    /// `group:<i>` (the footprint's i-th group in this list: a group can hold a group, B-9).
     pub members: Vec<String>,
 }
 

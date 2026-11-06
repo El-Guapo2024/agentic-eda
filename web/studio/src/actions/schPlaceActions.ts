@@ -21,6 +21,7 @@ import { inferSpin } from "../components/schematic/labelShape";
 import { labelNameFromWire } from "../kicad-port/schLabelName";
 import { lastPlaced } from "../kicad-port/schLastPlaced";
 import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnotate";
+import { fetchPlacementReference } from "../api/hierarchyClient";
 import { afterPlaced, armedKey, carryKey, incrementCarried, isCarryTool, mirrorCarried, placeCmd, previewCmd, rotateCarried, scopeOfTool, type CarriedItem, type CarriedSymbol, type CarryTool } from "../kicad-port/schPlaceTool";
 import { nextReference, placementMinRef } from "../kicad-port/nextReference";
 import { unitCountOf } from "../kicad-port/schUnits";
@@ -105,6 +106,23 @@ export function newSymbolRef(ctx: Pick<PlaceContext, "api">, prefix: string, tak
   return nextReference(st.schematic?.symbols ?? [], prefix || "U", [...(st.board?.parts.map((p) => p.ref) ?? []), ...taken], placementMinRef(a.algo, startNumber(a.start), st.schematic?.page_number ?? 1));
 }
 
+/**
+ * `PlaceSymbol`'s `annotate()` asked of the server (`ReannotateByOptions` over every reference of the hierarchy, which the page does not hold): the carried symbol `item`
+ * takes the reference the server gives, if it is still in the hand as it was. The page's own guess (`newSymbolRef`, this sheet's symbols and the board's parts) rides
+ * until then; the server's also joins a unit to a part of the same symbol and value that has the unit free (r2 D-A1, UI-LEFT S14).
+ */
+function refineCarriedReference(ctx: Pick<PlaceContext, "api">, item: CarriedSymbol): void {
+  const st = ctx.api.getState();
+  const a = rememberedAnnotateSettings();
+  void fetchPlacementReference({ sheet: st.currentSheetPath, prefix: item.prefix, lib_id: item.libId, value: item.value, unit: item.unit, unit_count: item.unitCount, options: { algo: a.algo, start_number: startNumber(a.start) } }).then((reference) => {
+    const now = getSchCarry();
+    if (!reference || !now || now.item.kind !== "symbol") return;
+    const held = now.item;
+    if (held.libId !== item.libId || held.ref !== item.ref || held.unit !== item.unit || reference === held.ref) return;
+    changeCarried({ ...held, ref: reference });
+  });
+}
+
 /** What the chooser picked or an action handed the tool (`PICKED_SYMBOL`, `PLACE_SYMBOL_PARAMS`): the symbol `addSymbol` puts in the hand. */
 export interface SymbolToCarry {
   libId: string;
@@ -143,6 +161,7 @@ export function carrySymbol(ctx: Pick<PlaceContext, "api">, pick: SymbolToCarry,
     oneOnly: pick.oneOnly ?? false,
   };
   carryItem(ctx, "sch_place_symbol", item, at, [], keep);
+  if (!pick.ref) refineCarriedReference(ctx, item);
 }
 
 /** The second click (or the tool's hotkey): the carried item goes on the sheet at `at`, and the tool holds what comes next. */
@@ -153,7 +172,7 @@ export function placeCarried(ctx: Pick<PlaceContext, "api"> & Partial<Pick<Place
   const plainSpin = carry.item.kind === "label" && !carry.item.spin ? inferSpin(sch.wires, at) : null;
   // `PlaceSymbol` numbers a power symbol by the project's Annotate method and start number (r3 D3-M5)
   const a = rememberedAnnotateSettings();
-  void ctx.api.cmd(placeCmd(carry.item, at, { plainSpin, annotate: { algo: a.algo, start_number: startNumber(a.start) } }));
+  const committed = ctx.api.cmd(placeCmd(carry.item, at, { plainSpin, annotate: { algo: a.algo, start_number: startNumber(a.start) } }));
   const placed = carry.item;
   // the units of the reference already on the sheet, the one just placed among them (`unitOccupied`), and the next free reference past it (`annotate()`)
   const next = afterPlaced(
@@ -162,8 +181,12 @@ export function placeCarried(ctx: Pick<PlaceContext, "api"> & Partial<Pick<Place
       ? { occupied: (u) => u === placed.unit || sch.symbols.some((x) => x.id === placed.ref && x.unit === u), nextRef: () => newSymbolRef(ctx, placed.prefix, [placed.ref]) }
       : undefined
   );
-  if (next) carryItem(ctx, next.tool, next.item, at, next.queue, next.keep);
-  else setSchCarry(null);
+  if (next) {
+    carryItem(ctx, next.tool, next.item, at, next.queue, next.keep);
+    // a new reference for the next symbol: the server's, once the one just placed is in (the next unit of the same reference keeps it)
+    const nextItem = next.item;
+    if (nextItem.kind === "symbol" && placed.kind === "symbol" && nextItem.ref !== placed.ref) void committed.then(() => refineCarriedReference(ctx, nextItem));
+  } else setSchCarry(null);
   // `if( placeOneOnly ) { m_frame->PopTool( aEvent ); break; }`
   if (placed.kind === "symbol" && placed.oneOnly) ctx.dispatch?.({ type: "SET_ACTIVE_TOOL", tool: "select" });
 }

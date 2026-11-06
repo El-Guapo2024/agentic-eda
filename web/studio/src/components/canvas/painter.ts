@@ -80,6 +80,11 @@ function copperPaint(base: string, net: string | null | undefined, opts: PaintOp
 }
 
 export interface PaintOptions {
+  /**
+   * Import Graphics' placement preview (`PlaceImportedGraphics`' `m_view->Add( &preview )`, state/importPreview.ts): the shapes and texts the import would put on the board, as
+   * `drawings` has them, moved by (dx, dy) to the snapped cursor. Null when no placement runs.
+   */
+  importPreview?: { shapes: unknown[]; texts: unknown[]; dx: number; dy: number } | null;
   selection: Set<string>;
   hot: Set<string>;
   /** The highlighted net, or every net of a multi-net highlight (`highlightNetSelection`); null = none. */
@@ -1661,6 +1666,16 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   drawInProgress(ctx, view, board, opts, [-view.x / view.scale, -view.y / view.scale, (widthPx - view.x) / view.scale, (heightPx - view.y) / view.scale]);
   if (opts.activeTool === "tune" && !opts.drawState && opts.tuneHover) drawTuneHover(ctx, view, opts.tuneHover, opts.units);
   if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
+  // Import Graphics' placement: the items that would be placed, where the cursor holds them (nothing of them is on the board yet).
+  if (opts.importPreview) {
+    const p = opts.importPreview;
+    const ghost = { ...board, drawings: { ...(board.drawings ?? {}), shapes: p.shapes, texts: p.texts } } as BoardState;
+    ctx.save();
+    ctx.translate(p.dx, p.dy);
+    drawShapes(ctx, view, ghost, { ...opts, selection: new Set(), shapePointPreview: null });
+    drawTexts(ctx, view, ghost, { ...opts, selection: new Set() });
+    ctx.restore();
+  }
   // pcb_point_editor.cpp: a single selected zone's outline corners are
   // draggable handles, shown only in the plain Select tool (same as
   // source only activating the point editor over the selection tool).

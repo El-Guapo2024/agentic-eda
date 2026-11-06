@@ -78,6 +78,24 @@ pub struct ForeignOptions {
     /// Also have kicad-cli make the project of a board (`kicad-cli import`: a second run of the importer, a second or two): the design rules and the net classes the importer set
     /// (Eagle's design rules and its net classes, Altium's rules ...) are in the `.kicad_pro` it writes, and in no other file -- `pcb import` writes the board alone.
     pub project: bool,
+    /// Source layers of a board to leave out, with what is on them: the layers the person left in the Unmatched list of `DIALOG_MAP_LAYERS`, which answers the importer
+    /// with `UNDEFINED_LAYER` for them. kicad-cli's map cannot say that, so they are mapped to a user layer nothing else goes to ([`scratch_layer`]) and that layer is taken
+    /// out of the board kicad-cli wrote (`eda_kicad::drop_board_layer`).
+    pub drop_layers: Vec<String>,
+    /// The other files of a project imported with the board (an Eagle `.sch` beside its `.brd`, a CADSTAR `.csa` beside its `.cpa`): the project run is given them too
+    /// (`kicad-cli import -o STEM BOARD SCHEMATIC`, as KiCad's "Import Non-KiCad Project" imports a project's files together), which converts the schematic and gives the
+    /// board the schematic's net names (`ApplyImportedNetNameMap`): see [`ForeignImport::project_board`] and [`ForeignImport::project_schematic`]. Implies `project`.
+    pub partners: Vec<PathBuf>,
+    /// Which board of a project file that holds several (an EasyEDA Pro project): an index into [`ForeignImport::boards`], the project's own order (by the boards' ids).
+    /// `pcb import` cannot choose (KiCad's importer asks the person through `DIALOG_IMPORT_CHOOSE_PROJECT`, a callback kicad-cli does not answer: `bad_function_call`), so a
+    /// file of several boards goes through the project command, which converts every board ([`ForeignImport::boards`] names them).
+    pub board: Option<usize>,
+}
+
+/// The user layer the layers to leave out are sent to: the highest `User.N` of KiCad 10's 45 that neither the map nor the importer's guesses (`taken`) send a layer to.
+pub fn scratch_layer<'a>(taken: impl IntoIterator<Item = &'a str>) -> String {
+    let taken: std::collections::BTreeSet<&str> = taken.into_iter().collect();
+    (1..=45).rev().map(|n| format!("User.{n}")).find(|l| !taken.contains(l.as_str())).unwrap_or_else(|| "User.45".to_string())
 }
 
 /// One source layer of a board and where it went (`layer_mapping` of the report).
@@ -231,6 +249,20 @@ pub struct ForeignImport {
     pub project: Option<String>,
     /// The custom DRC rules the importer wrote (`.kicad_dru`), see [`imported_rules`]; `None` when it wrote none.
     pub rules: Option<String>,
+    /// The board the project run made with [`ForeignOptions::partners`] (the schematic's net names on it), or the board of [`ForeignOptions::board`]; `None` otherwise.
+    pub project_board: Option<String>,
+    /// The schematic the project run made of the files it was given (`<stem>.kicad_sch`, its sheets beside it); `None` when it made none.
+    pub project_schematic: Option<PathBuf>,
+    /// The boards of a project file that holds several, in the project's order (each by the name kicad-cli gave its file, the board's title): when there is more than one and
+    /// no [`ForeignOptions::board`] was asked for, the import is not done ([`Self::text`] is empty) and the person is asked which (`DIALOG_IMPORT_CHOOSE_PROJECT`).
+    pub boards: Vec<String>,
+}
+
+impl ForeignImport {
+    /// A project file of several boards was given with no board chosen: the person is to be asked which ([`Self::boards`]).
+    pub fn needs_board_choice(&self) -> bool {
+        self.boards.len() > 1 && self.text.is_empty()
+    }
 }
 
 impl ForeignImport {
@@ -312,6 +344,10 @@ fn import_foreign(kind: Kind, work: &Path, input: &Path, opts: &ForeignOptions) 
         return Err(fail("kicad_cli_import_input", &input.display().to_string(), format!("kicad-cli {what}: there is no file '{}'", input.display())));
     }
     work_dir(work)?;
+    // A board of a project file of several, chosen: the project command converts them all (`pcb import` cannot choose).
+    if kind == Kind::Board && opts.board.is_some() {
+        return import_project_board(&cli, work, input, opts, Vec::new());
+    }
     // A folder of its own for every run: kicad-cli's library cache is written beside the output as `<name>-import-fps.pretty.tmp` and renamed, and a second run there fails.
     let out_dir = work.join(format!("{}-out", kind.scope()));
     let _ = std::fs::remove_dir_all(&out_dir);
@@ -330,9 +366,18 @@ fn import_foreign(kind: Kind, work: &Path, input: &Path, opts: &ForeignOptions) 
         }
         cmd.args(["--format", format]);
     }
-    if kind == Kind::Board && !opts.layer_map.is_empty() {
+    // The layers to leave out go to a user layer nothing else goes to, which is taken out of the board afterwards (`ForeignOptions::drop_layers`).
+    let dropping = kind == Kind::Board && !opts.drop_layers.is_empty();
+    let scratch = scratch_layer(opts.layer_map.values().map(String::as_str));
+    let mut layer_map = opts.layer_map.clone();
+    if dropping {
+        for l in &opts.drop_layers {
+            layer_map.insert(l.clone(), scratch.clone());
+        }
+    }
+    if kind == Kind::Board && !layer_map.is_empty() {
         let map_path = work.join("layer-map.json");
-        let map: serde_json::Map<String, Value> = opts.layer_map.iter().map(|(from, to)| (from.clone(), Value::String(to.clone()))).collect();
+        let map: serde_json::Map<String, Value> = layer_map.iter().map(|(from, to)| (from.clone(), Value::String(to.clone()))).collect();
         write_file(&map_path, serde_json::to_string_pretty(&Value::Object(map)).unwrap_or_default())?;
         cmd.arg("--layer-map").arg(&map_path);
     }
@@ -355,6 +400,11 @@ fn import_foreign(kind: Kind, work: &Path, input: &Path, opts: &ForeignOptions) 
     };
     if !out.status.success() || !output.is_file() {
         let said = printed.trim();
+        // `PCB_IO_EASYEDAPRO::LoadBoard` of a project of several boards calls the chooser callback (`m_choose_project_handler`), which kicad-cli does not set: the project
+        // command converts every board instead, and the person chooses.
+        if kind == Kind::Board && said.contains("bad_function_call") {
+            return import_project_board(&cli, work, input, opts, log);
+        }
         // A kicad-cli with no `import` command (before the 10.99 nightlies) answers with its usage text.
         if said.contains("Failed to parse 'import'") || said.contains("Unknown argument") || said.contains("did you mean") {
             return Err(fail("kicad_cli_import_missing", "kicad-cli", format!("this kicad-cli ({}) has no `{} import` command (it came with the 10.99 nightlies): {}", cli_version(&cli), kind.scope(), said.lines().next().unwrap_or(""))));
@@ -364,52 +414,151 @@ fn import_foreign(kind: Kind, work: &Path, input: &Path, opts: &ForeignOptions) 
         }
         return Err(fail("kicad_cli_import", &what, format!("kicad-cli {what} failed on {}: {}", input.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), why())));
     }
-    let text = std::fs::read_to_string(&output).map_err(|e| fail("kicad_cli_import", &output.display().to_string(), format!("kicad-cli {what} wrote a file that cannot be read: {e}")))?;
+    let mut text = std::fs::read_to_string(&output).map_err(|e| fail("kicad_cli_import", &output.display().to_string(), format!("kicad-cli {what} wrote a file that cannot be read: {e}")))?;
     // The report is written when the job succeeds; one that is missing or unreadable only leaves the counts and the layers out.
-    let report = std::fs::read_to_string(&report_path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|v| ImportReport::from_json(&v)).unwrap_or_default();
+    let mut report = std::fs::read_to_string(&report_path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|v| ImportReport::from_json(&v)).unwrap_or_default();
+    let mut log = log;
+    if dropping {
+        // A layer the importer guessed onto the scratch layer itself (one of its own user layers) would go too: say so, it is not what was asked.
+        for l in report.layers.iter().filter(|l| l.kicad.as_deref() == Some(scratch.as_str()) && !opts.drop_layers.contains(&l.source)) {
+            log.push(LogLine { severity: Severity::Warning, text: format!("Layer '{}' went to {scratch}, which the layers left out went to: what was on it is left out too", l.source) });
+        }
+        if let Some((stripped, _)) = eda_kicad::drop_board_layer(&text, &scratch) {
+            text = stripped;
+            write_file(&output, &text)?;
+        }
+        // the layers left out are `UNDEFINED` in the report, as the dialog's callback would have made them; one kicad-cli did not send to the scratch layer (not a target the
+        // importer permits it) kept its place, and kicad-cli's report already warns of it
+        for l in report.layers.iter_mut().filter(|l| opts.drop_layers.contains(&l.source) && l.kicad.as_deref() == Some(scratch.as_str())) {
+            l.kicad = None;
+            l.explicit = true;
+        }
+    }
     let mut files: Vec<String> = Vec::new();
     collect_files(&out_dir, &out_dir, &mut files);
     files.retain(|f| Path::new(f) != output.strip_prefix(&out_dir).unwrap_or(&output));
     files.sort();
-    let mut log = log;
-    let project = if kind == Kind::Board && opts.project { make_project(&cli, work, input, opts, &mut log) } else { None };
+    let run = if kind == Kind::Board && (opts.project || !opts.partners.is_empty()) { make_project(&cli, work, input, opts, &mut log) } else { None };
     let rules = if kind == Kind::Board { imported_rules(&output, &work.join("project").join("board.kicad_pro"), input) } else { None };
-    Ok(ForeignImport { engine: format!("kicad-cli {}", cli_version(&cli)), kind, output, text, report, log, files, project, rules })
+    let (project, mut project_board, project_schematic) = match run {
+        Some(r) => (r.project, (!opts.partners.is_empty()).then(|| r.boards.first().and_then(|b| std::fs::read_to_string(r.dir.join(b)).ok())).flatten(), r.schematic),
+        None => (None, None, None),
+    };
+    if dropping {
+        project_board = project_board.map(|t| eda_kicad::drop_board_layer(&t, &scratch).map_or(t, |(s, _)| s));
+    }
+    Ok(ForeignImport { engine: format!("kicad-cli {}", cli_version(&cli)), kind, output, text, report, log, files, project, rules, project_board, project_schematic, boards: Vec::new() })
+}
+
+/// What the project command (`kicad-cli import -o <dir>/board INPUT..`) made: the project, its boards (the project's `boards`, in its order) and its schematic.
+struct ProjectRun {
+    dir: PathBuf,
+    project: Option<String>,
+    boards: Vec<String>,
+    schematic: Option<PathBuf>,
+    printed: String,
+}
+
+/// The format kicad-cli named as it imported (`Importing '..' using EasyEDA / JLCEDA Pro format...`, `JOB_PCB_IMPORT`'s line), for a run with no JSON report.
+fn format_said(printed: &str) -> String {
+    printed.lines().find_map(|l| l.split_once(" using ").and_then(|(_, f)| f.trim().strip_suffix(" format...")).map(str::to_string)).unwrap_or_default()
+}
+
+/// A board of a project file that holds several (`ForeignOptions::board`; `boards` lists them): the project command converts every board of the file, and the one chosen is the
+/// import. With none chosen and more than one there, nothing is imported and the boards are named for the person to choose ([`ForeignImport::needs_board_choice`]).
+fn import_project_board(cli: &Path, work: &Path, input: &Path, opts: &ForeignOptions, mut log: Vec<LogLine>) -> Result<ForeignImport, Vec<CheckResult>> {
+    let what = "pcb import";
+    let run = match run_project(cli, work, &[input.to_path_buf()], opts) {
+        Ok(r) => r,
+        Err(said) => {
+            let errors: Vec<String> = log.iter().filter(|l| l.severity == Severity::Error).map(|l| l.text.clone()).chain(std::iter::once(said)).collect();
+            return Err(fail("kicad_cli_import", what, format!("kicad-cli {what} failed on {}: {}", input.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), errors.join(" "))));
+        }
+    };
+    log = parse_log(&run.printed);
+    let names: Vec<String> = run.boards.iter().map(|b| b.trim_end_matches(".kicad_pcb").to_string()).collect();
+    let report = ImportReport { source_file: input.display().to_string(), source_format: format_said(&run.printed), ..Default::default() };
+    let engine = format!("kicad-cli {}", cli_version(cli));
+    let chosen = match opts.board {
+        Some(i) => Some(i),
+        None if run.boards.len() == 1 => Some(0),
+        None => None,
+    };
+    let Some(i) = chosen else {
+        return Ok(ForeignImport { engine, kind: Kind::Board, output: run.dir.clone(), text: String::new(), report, log, files: run.boards.clone(), project: run.project, rules: None, project_board: None, project_schematic: run.schematic, boards: names });
+    };
+    let Some(file) = run.boards.get(i) else {
+        return Err(fail("kicad_cli_import_board", what, format!("the file holds {} board(s): there is no board {}", run.boards.len(), i + 1)));
+    };
+    let output = run.dir.join(file);
+    let text = std::fs::read_to_string(&output).map_err(|e| fail("kicad_cli_import", &output.display().to_string(), format!("kicad-cli import wrote a file that cannot be read: {e}")))?;
+    let rules = imported_rules(&output, &run.dir.join("board.kicad_pro"), input);
+    Ok(ForeignImport { engine, kind: Kind::Board, output, text: text.clone(), report, log, files: Vec::new(), project: run.project, rules, project_board: Some(text), project_schematic: run.schematic, boards: names })
+}
+
+/// The project command on `inputs` (`kicad-cli import -o <work>/project/board [--layer-map F] INPUT..`): "Import non-KiCad board and/or schematic files into a new KiCad
+/// project". Each input is a board or a schematic (kicad-cli tells), at most one of each; a board's net names are the schematic's (`ApplyImportedNetNameMap`); a project file
+/// of several boards gives every board, each named by its title. An error, with what kicad-cli said last, when it made nothing (a kicad-cli without the command, a file it
+/// refuses).
+fn run_project(cli: &Path, work: &Path, inputs: &[PathBuf], opts: &ForeignOptions) -> Result<ProjectRun, String> {
+    let dir = work.join("project");
+    let _ = std::fs::remove_dir_all(&dir);
+    work_dir(&dir).map_err(|e| e.first().and_then(|c| c.hint.clone()).unwrap_or_default())?;
+    // The stem has no dot in it: kicad-cli takes what follows the last one for an extension and puts its own in its place (a board called `HiFive1.B01` would make `HiFive1.kicad_pro`).
+    let stem = "board";
+    let mut cmd = cli_command(cli, None);
+    cmd.arg("import").arg("-o").arg(dir.join(stem));
+    let map_file = work.join("layer-map.json");
+    if (!opts.layer_map.is_empty() || !opts.drop_layers.is_empty()) && map_file.is_file() {
+        cmd.arg("--layer-map").arg(&map_file);
+    }
+    cmd.args(inputs);
+    let out = output_within(cmd, limit(EXPORT_TIMEOUT)).map_err(|e| e.first().and_then(|c| c.hint.clone()).unwrap_or_default())?;
+    let printed = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let project = std::fs::read_to_string(dir.join(format!("{stem}.kicad_pro"))).ok();
+    // `PROJECT_FILE::GetBoards()`: `[[uuid, "file.kicad_pcb"], ..]`
+    let mut boards: Vec<String> = project
+        .as_deref()
+        .and_then(|t| serde_json::from_str::<Value>(t).ok())
+        .and_then(|v| v.get("boards").and_then(Value::as_array).cloned())
+        .map(|a| a.iter().filter_map(|b| b.get(1).and_then(Value::as_str).map(str::to_string)).collect())
+        .unwrap_or_default();
+    if boards.is_empty() && dir.join(format!("{stem}.kicad_pcb")).is_file() {
+        boards.push(format!("{stem}.kicad_pcb"));
+    }
+    boards.retain(|b| dir.join(b).is_file());
+    let schematic = Some(dir.join(format!("{stem}.kicad_sch"))).filter(|p| p.is_file());
+    if project.is_none() && boards.is_empty() && schematic.is_none() {
+        return Err(printed.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("kicad-cli wrote none").to_string());
+    }
+    Ok(ProjectRun { dir, project, boards, schematic, printed })
 }
 
 /// The project kicad-cli makes of a board (`kicad-cli import -o <stem> [--layer-map F] INPUT`: "Import non-KiCad board and/or schematic files into a new KiCad project"): the importer runs
 /// again, and the `.kicad_pro` it writes beside the board has what the board file does not -- the design rules and the net classes the importer set in memory (`OpenProjectFiles` saves the
 /// project of a converted board for that reason). It does not pair files (given the `.brd` alone it imports the board alone), refuses a second schematic ("a board and a schematic
 /// have already been imported for this project") and writes no JSON report, which is why the board and its report come from `pcb import` and only this file from here. A run that
-/// fails (a kicad-cli without the command) leaves the board without its rules and says so in the log; it is not an error.
-fn make_project(cli: &Path, work: &Path, input: &Path, opts: &ForeignOptions, log: &mut Vec<LogLine>) -> Option<String> {
-    let dir = work.join("project");
-    let _ = std::fs::remove_dir_all(&dir);
-    work_dir(&dir).ok()?;
-    // The stem has no dot in it: kicad-cli takes what follows the last one for an extension and puts its own in its place (a board called `HiFive1.B01` would make `HiFive1.kicad_pro`).
-    let stem = "board";
-    let mut cmd = cli_command(cli, None);
-    cmd.arg("import").arg("-o").arg(dir.join(stem));
-    if !opts.layer_map.is_empty() {
-        cmd.arg("--layer-map").arg(work.join("layer-map.json"));
-    }
-    cmd.arg(input);
+/// fails (a kicad-cli without the command) leaves the board without its rules and says so in the log; it is not an error. With [`ForeignOptions::partners`] the run is given the
+/// project's other files too (the schematic of an Eagle board), and its board -- with the schematic's net names -- and its schematic are the import's.
+fn make_project(cli: &Path, work: &Path, input: &Path, opts: &ForeignOptions, log: &mut Vec<LogLine>) -> Option<ProjectRun> {
     let note = |log: &mut Vec<LogLine>, why: String| log.push(LogLine { severity: Severity::Info, text: format!("the project kicad-cli makes of the board (its design rules and net classes) is not there: {why}") });
-    let out = match output_within(cmd, limit(EXPORT_TIMEOUT)) {
-        Ok(o) => o,
-        Err(e) => {
-            note(log, e.first().and_then(|c| c.hint.clone()).unwrap_or_default());
+    let inputs: Vec<PathBuf> = std::iter::once(input.to_path_buf()).chain(opts.partners.iter().cloned()).collect();
+    let run = match run_project(cli, work, &inputs, opts) {
+        Ok(r) => r,
+        Err(said) => {
+            note(log, said);
             return None;
         }
     };
-    match std::fs::read_to_string(dir.join(format!("{stem}.kicad_pro"))) {
-        Ok(text) => Some(text),
-        Err(_) => {
-            let said = String::from_utf8_lossy(&out.stdout).lines().chain(String::from_utf8_lossy(&out.stderr).lines()).map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("kicad-cli wrote none").to_string();
-            note(log, said);
-            None
-        }
+    if run.project.is_none() {
+        let said = run.printed.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("kicad-cli wrote none").to_string();
+        note(log, said);
     }
+    // what the importers said of the partner files (the schematic's) is the import's too
+    if !opts.partners.is_empty() {
+        log.extend(parse_log(&run.printed).into_iter().filter(|l| l.severity != Severity::Info));
+    }
+    Some(run)
 }
 
 /// The custom DRC rules an importer wrote, which the board file does not carry: `pcbnew_jobs_handler.cpp::JobImport` writes `GetImportedDesignRules()` (EasyEDA

@@ -139,3 +139,45 @@ fn the_block_layer_table_gives_the_copper_count_and_the_enabled_layers() {
     assert_eq!(rules.stackup.map(|s| s.copper_layers), Some(6), "six copper layers in the table, though the block uses none of the inner ones");
     assert!(rules.board_layers.unwrap().enabled.iter().any(|l| l == "User.1"));
 }
+
+/// Append Board (`PCB_CONTROL::AppendBoard( *pi, fileName )`, no design block): the command with an empty `block`. The board takes the file's copper layers, a user layer
+/// it lacks with the name and type the file gives it (KiCad 25ec2335 `parseLayers` under `APPEND_PRESERVE_DESTINATION_STACKUP`), and the file's nets; with Place as group
+/// what came in is one group named after the file's stem and linked to nothing.
+#[test]
+fn append_board_brings_the_files_layers_and_nets_and_groups_it_under_the_files_stem() {
+    let text = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+	(layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user) (43 "User.3" front "Notes"))
+	(net 0 "") (net 1 "NEWNET") (net 2 "GND")
+	(segment (start 0 0) (end 5 0) (width 0.2) (layer "In1.Cu") (net 1) (uuid "aaaaaaaa-0000-0000-0000-000000000001"))
+	(segment (start 0 1) (end 5 1) (width 0.2) (layer "F.Cu") (net 2) (locked yes) (uuid "aaaaaaaa-0000-0000-0000-000000000002"))
+	(gr_line (start 0 2) (end 5 2) (stroke (width 0.1) (type solid)) (layer "User.3") (uuid "aaaaaaaa-0000-0000-0000-000000000003"))
+)"#;
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let groups = drawings(&b).groups.len();
+    b.apply(&Cmd::PlaceDesignBlock { text: text.into(), at: p(mm(10.0), mm(10.0)), block: String::new(), as_group: true, group_name: "other".into() }).unwrap();
+    let dr = drawings(&b).clone();
+    let rules = dr.rules.clone().unwrap();
+    assert_eq!(rules.stackup.map(|s| s.copper_layers), Some(4), "the file's four copper layers");
+    let layers = rules.board_layers.unwrap();
+    assert!(layers.enabled.iter().any(|l| l == "User.3"), "{layers:?}");
+    assert_eq!(layers.names.get("User.3").map(String::as_str), Some("Notes"), "a new layer takes the file's name");
+    assert_eq!(layers.types.get("User.3"), Some(&eda_model::layers::LayerType::Front), "and its type");
+    assert_eq!(dr.board_nets, vec!["NEWNET".to_string()], "a net the board has not got is the board's; GND it has");
+    let rt = super::pcb_transform_tests::routing(&b);
+    assert!(rt.tracks.iter().any(|t| t.layer == "In1.Cu" && t.net == "NEWNET"), "{:?}", rt.tracks);
+    assert!(rt.tracks.iter().filter(|t| t.id != "trk_a").any(|t| t.layer == "F.Cu" && t.net == "GND"));
+    assert_eq!(dr.groups.len(), groups + 1);
+    let g = dr.groups.last().unwrap();
+    assert_eq!((g.name.as_str(), g.design_block.as_str(), g.member_ids.len()), ("other", "", 3), "{g:?}");
+    // the file is read as a paste reads the clipboard, which unlocks what it reads: the file's `(locked yes)` is not kept (KiCad's `LoadBoard` keeps it), so neither the
+    // track nor its group is locked
+    assert!(!dr.locked_ids.contains(&g.id), "{:?}", dr.locked_ids);
+
+    // a layer the board already names keeps the board's name (25ec2335: `if( !m_preserveDestinationStackup || !m_board->IsLayerEnabled( .. ) )`)
+    let renamed = text.replace("\"Notes\"", "\"Other notes\"");
+    b.apply(&Cmd::PlaceDesignBlock { text: renamed, at: p(mm(40.0), mm(10.0)), block: String::new(), as_group: false, group_name: String::new() }).unwrap();
+    let layers = drawings(&b).rules.clone().unwrap().board_layers.unwrap();
+    assert_eq!(layers.names.get("User.3").map(String::as_str), Some("Notes"));
+    assert_eq!(drawings(&b).groups.len(), groups + 1, "Place as group off: no group");
+}

@@ -106,6 +106,8 @@ export interface BuiltImport {
   ok: true;
   /** The command, for where the picture goes: `at` is where the cursor is (the placement is interactive when "Place at" is off). */
   build: (at: PointXY | null) => ImportGraphicsCmd;
+  /** The command at an offset of the importer's (nanometres): the interactive placement's preview is made at (0, 0) and placed by moving it (`item->Move( delta )`). */
+  atOffset: (offsetNm: PointXY) => ImportGraphicsCmd;
   /** The command asks for a placement at the cursor (`Place at` off). */
   interactive: boolean;
 }
@@ -162,14 +164,16 @@ export function buildImportCmd(args: {
     fix_tolerance_nm: fixNm,
     replace_outline: replace,
   };
+  const atOffset = (o: PointXY): ImportGraphicsCmd => ({ ...base, offset_x_nm: Math.round(o.x), offset_y_nm: Math.round(o.y) });
   if (v.placeAt) {
     // The importer's offset, in nanometres: the typed origin over the scale.
     const cmd: ImportGraphicsCmd = { ...base, offset_x_nm: Math.round(originNm.x / scale), offset_y_nm: Math.round(originNm.y / scale) };
-    return { ok: true, interactive: false, build: () => cmd };
+    return { ok: true, interactive: false, build: () => cmd, atOffset };
   }
   return {
     ok: true,
     interactive: true,
+    atOffset,
     build: (at) => {
       // The picture's box at offset 0 is the server's `bbox_nm`; the offset that takes its upper left corner to the cursor.
       const box = args.info?.bbox_nm;

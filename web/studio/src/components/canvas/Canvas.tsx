@@ -38,6 +38,7 @@ import type { RuleAreaFields, Shape, Zone, ZoneSettingsFields } from "../../api/
 import { activeEditPoint, cmdShapeToShape, moveShapePoint, shapeEditPoints, shapeToCmd, type EditPoint } from "../../kicad-port/pcbPointEdit";
 import { reshapeCmds } from "../../kicad-port/shapeFill";
 import { applyCommands } from "../../actions/pcbSweepKit";
+import { useImportPreview, type ImportPreview } from "../../state/importPreview";
 import { picker } from "../../actions/pcbPicker";
 import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
 import { boardDashRatios, paintBoard, type PaintOptions } from "./painter";
@@ -214,8 +215,16 @@ function partHit(parts: Part[], xNm: number, yNm: number): Part | null {
   return partsAt(parts, xNm, yNm)[0] ?? null;
 }
 
+/** Import Graphics' preview moved so its reference point is at `at` (the snapped cursor); null when there is no preview or no cursor. */
+function importPreviewAt(p: ImportPreview | null, at: readonly [number, number] | { x: number; y: number } | null): { shapes: unknown[]; texts: unknown[]; dx: number; dy: number } | null {
+  if (!p || !at) return null;
+  const [x, y] = Array.isArray(at) ? at : [(at as { x: number }).x, (at as { y: number }).y];
+  return { shapes: p.shapes, texts: p.texts, dx: x - p.reference.x, dy: y - p.reference.y };
+}
+
 export function Canvas() {
   const state = useStudioState();
+  const importPreview = useImportPreview();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const { run } = useActionRunner();
@@ -478,6 +487,8 @@ export function Canvas() {
       drawState: state.drawState,
       cursorNm: state.cursorNm,
       snappedCursor: PLACING_TOOLS.has(state.activeTool) ? snap.lastPoint() : null,
+      // Import Graphics' placement (state/importPreview.ts): its items held by their reference point at the picker's snapped cursor
+      importPreview: importPreviewAt(importPreview, picker.session() ? (snap.lastPoint() ?? (state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null)) : null),
       activeTool: state.activeTool,
       angleSnapMode: state.pcbx.angleSnapMode,
       drawCtrl: drawCtrlRef.current,
@@ -508,7 +519,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion]);
+  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion, importPreview]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

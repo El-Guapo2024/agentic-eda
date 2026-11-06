@@ -1,5 +1,6 @@
-// Edit Text & Graphics Properties (`DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS`): properties to set on every text, text box, shape, rule area or graphic line of the
-// sheet, or on the selected ones only; a property left "unchanged" stays as it is. The rules are kicad-port/schGlobalEdit.ts.
+// Edit Text & Graphics Properties (`DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS`): properties to set on the symbols' fields, the wires, buses and their labels and
+// junctions, global and hierarchical labels, sheet pins and the texts and graphics of the sheet, or on the selected ones only; a property left "unchanged" stays as
+// it is. The rules are kicad-port/schGlobalEdit.ts. Lengths are in mm, as the studio's units show them.
 import { useState } from "react";
 import type { SchFill, SchHAlign, SchLineStyle, SchToolDialog, SchVAlign } from "../api/schEditTypes";
 import { emptyEdit, planGlobalEdit, type GlobalEditSpec } from "../kicad-port/schGlobalEdit";
@@ -9,7 +10,7 @@ import { SchDialogShell } from "./SchDialogShell";
 const KEEP = "";
 
 /** A number field that is empty when the property is to stay as it is. */
-const parseNum = (s: string): number | null => (s.trim() === "" || !Number.isFinite(Number(s)) ? null : Math.max(0, Math.round(Number(s))));
+const parseNum = (s: string): number | null => (s.trim() === "" || !Number.isFinite(Number(s)) ? null : Math.max(0, Math.round(Number(s) * 1e6)));
 const parseTri = (s: string): boolean | null => (s === "yes" ? true : s === "no" ? false : null);
 
 export function GlobalEditDialog({ dialog }: { dialog: Extract<SchToolDialog, { kind: "edit_text_graphics" }> }) {
@@ -26,6 +27,11 @@ export function GlobalEditDialog({ dialog }: { dialog: Extract<SchToolDialog, { 
   const [lineWidth, setLineWidth] = useState("");
   const [lineStyle, setLineStyle] = useState(KEEP);
   const [fill, setFill] = useState(KEEP);
+  const [fieldNameFilter, setFieldNameFilter] = useState("");
+  const [orientation, setOrientation] = useState(KEEP);
+  const [visible, setVisible] = useState(KEEP);
+  const [showFieldNames, setShowFieldNames] = useState(KEEP);
+  const [junctionSize, setJunctionSize] = useState("");
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
 
   const spec = (): GlobalEditSpec => ({
@@ -39,6 +45,11 @@ export function GlobalEditDialog({ dialog }: { dialog: Extract<SchToolDialog, { 
     lineWidth: parseNum(lineWidth),
     lineStyle: (lineStyle || null) as SchLineStyle | null,
     fill: (fill || null) as SchFill | null,
+    fieldNameFilter,
+    orientation: (orientation || null) as GlobalEditSpec["orientation"],
+    visible: parseTri(visible),
+    showFieldNames: parseTri(showFieldNames),
+    junctionSize: parseNum(junctionSize),
   });
   const apply = () => {
     if (!state.schematic) return;
@@ -57,7 +68,7 @@ export function GlobalEditDialog({ dialog }: { dialog: Extract<SchToolDialog, { 
   );
   const kindBox = (key: keyof typeof kinds, label: string) => (
     <label style={{ display: "block" }}>
-      <input type="checkbox" checked={kinds[key]} onChange={(e) => setKinds({ ...kinds, [key]: e.target.checked })} /> {label}
+      <input type="checkbox" checked={kinds[key] !== false} onChange={(e) => setKinds({ ...kinds, [key]: e.target.checked })} /> {label}
     </label>
   );
 
@@ -68,6 +79,15 @@ export function GlobalEditDialog({ dialog }: { dialog: Extract<SchToolDialog, { 
         <label style={{ display: "block", marginBottom: 4 }}>
           <input type="checkbox" checked={selectedOnly} disabled={dialog.selected.length === 0} onChange={(e) => setSelectedOnly(e.target.checked)} /> Edit selected items only
         </label>
+        {kindBox("references", "Symbol references")}
+        {kindBox("values", "Symbol values")}
+        {kindBox("otherFields", "Other symbol fields")}
+        <input style={{ marginLeft: 20, width: "60%" }} placeholder="Field name filter" value={fieldNameFilter} onChange={(e) => setFieldNameFilter(e.target.value)} />
+        {kindBox("wires", "Wires & wire labels")}
+        {kindBox("buses", "Buses & bus labels")}
+        {kindBox("globalLabels", "Global labels")}
+        {kindBox("hierLabels", "Hierarchical labels")}
+        {kindBox("sheetPins", "Sheet pins")}
         {kindBox("texts", "Text items")}
         {kindBox("textBoxes", "Text boxes")}
         {kindBox("shapes", "Graphic shapes")}
@@ -75,8 +95,8 @@ export function GlobalEditDialog({ dialog }: { dialog: Extract<SchToolDialog, { 
         {kindBox("lines", "Graphic lines")}
       </fieldset>
       <div className="kv-grid" style={{ gridTemplateColumns: "130px 1fr" }}>
-        <span>Text size (um)</span>
-        <input type="number" min={0} step={50} placeholder="(unchanged)" value={textSize} onChange={(e) => setTextSize(e.target.value)} />
+        <span>Text size (mm)</span>
+        <input type="number" min={0} step={0.05} placeholder="(unchanged)" value={textSize} onChange={(e) => setTextSize(e.target.value)} />
         <span>Bold</span>
         {tri(bold, setBold)}
         <span>Italic</span>
@@ -95,8 +115,22 @@ export function GlobalEditDialog({ dialog }: { dialog: Extract<SchToolDialog, { 
           <option value="center">Center</option>
           <option value="bottom">Bottom</option>
         </select>
-        <span>Line width (um)</span>
-        <input type="number" min={0} step={10} placeholder="(unchanged)" value={lineWidth} onChange={(e) => setLineWidth(e.target.value)} />
+        <span>Orientation</span>
+        <select value={orientation} onChange={(e) => setOrientation(e.target.value)}>
+          <option value={KEEP}>(unchanged)</option>
+          <option value="right">Right</option>
+          <option value="up">Up</option>
+          <option value="left">Left</option>
+          <option value="bottom">Down</option>
+        </select>
+        <span>Visible</span>
+        {tri(visible, setVisible)}
+        <span>Show field name</span>
+        {tri(showFieldNames, setShowFieldNames)}
+        <span>Junction size (mm)</span>
+        <input type="number" min={0} step={0.1} placeholder="(unchanged)" value={junctionSize} onChange={(e) => setJunctionSize(e.target.value)} />
+        <span>Line width (mm)</span>
+        <input type="number" min={0} step={0.01} placeholder="(unchanged)" value={lineWidth} onChange={(e) => setLineWidth(e.target.value)} />
         <span>Line style</span>
         <select value={lineStyle} onChange={(e) => setLineStyle(e.target.value)}>
           <option value={KEEP}>(unchanged)</option>

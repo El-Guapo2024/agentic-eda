@@ -122,10 +122,9 @@ export function HierarchyPanel() {
     const out: MenuEntry[] = [];
     if (row) {
       const isRoot = row.path.length === 0;
+      // every row has it, the root's too (`EDIT_PAGE_NUMBER`: the root's own page, UI-LEFT S21)
       out.push({
         label: "Edit Page Number",
-        disabled: isRoot,
-        hint: isRoot ? "The root sheet is page 1: its page number is not stored, only the sub-sheets' are." : undefined,
         onSelect: () => controlDispatch({ type: "OPEN_DIALOG", dialog: { kind: "page_number", path: row.path } }),
       });
       if (!isRoot) out.push({ label: "Rename", hint: "Change name of this sheet", onSelect: () => setRenaming({ path: row.path, text: row.name }) });

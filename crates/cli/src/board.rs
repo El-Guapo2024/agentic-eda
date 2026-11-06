@@ -1289,6 +1289,12 @@ const FILE_TAG: &str = "file";
 /// board's footprint). Undone from the PCB tab or the schematic tab alike, and takes back both halves ([`restore_both`]); the library editors keep their own history.
 const BOTH_TAG: &str = "both";
 
+/// The tag a command's step is kept under: `pcb`, `schematic`, `both`, `footprint_editor` or `symbol_editor` (the studio's `/api/cmd` reply says it, so the page knows
+/// which editor's content a command modified: `IsContentModified`).
+pub(crate) fn step_tag(cmd: &Cmd) -> &'static str {
+    snapshot_tag(cmd)
+}
+
 /// The tag a command's step is kept under.
 fn snapshot_tag(cmd: &Cmd) -> &'static str {
     if cmd.spans_both_editors() {
@@ -1853,6 +1859,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::RemoveFromGroup { ids } => format!("group remove-from {}", ids.join(" ")),
         Cmd::EditGroup { id, name, member_ids, design_block } => format!("group edit {id} --name {name:?} --members {}{}", member_ids.join(" "), design_block.as_ref().map_or(String::new(), |b| format!(" --design-block {b:?}"))),
         Cmd::LinkDesignBlock { ids, block } => format!("design-block link {block} {}", ids.join(" ")),
+        // no block: Append Board (`AppendBoard( .., nullptr )`)
+        Cmd::PlaceDesignBlock { block, at, as_group, group_name, text } if block.is_empty() => format!("append-board --at {},{}{}{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), if *as_group { " --group" } else { "" }, if group_name.is_empty() { String::new() } else { format!(" --group-name {group_name:?}") }, text.len()),
         Cmd::PlaceDesignBlock { block, at, as_group, group_name, text } => format!("design-block place {block} --at {},{}{}{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), if *as_group { " --group" } else { "" }, if group_name.is_empty() { String::new() } else { format!(" --group-name {group_name:?}") }, text.len()),
         Cmd::CreateArray { ids, arrange, .. } => format!("array{} {}", if *arrange { " --arrange" } else { "" }, ids.join(" ")),
         Cmd::AddDimension { .. } => "dimension add".to_string(),

@@ -2,6 +2,7 @@
 //!
 //! * `POST /api/sch/annotate`: what Annotate Schematic would do (`DIALOG_ANNOTATE`'s message window): the messages `AnnotateSymbols` reports and
 //!   the findings of `CheckAnnotate`, on a copy of the board. The annotation itself is the `annotate` verb of `/api/cmd`.
+//! * `POST /api/sch/next_reference`: the reference a symbol placed on a sheet gets (`PlaceSymbol`'s `annotate()`).
 
 use crate::board;
 use eda_model::CheckResult;
@@ -58,6 +59,30 @@ fn annotate_report(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> {
         "messages": report.messages,
         "problems": report.problems,
     }))
+}
+
+/// `POST /api/sch/next_reference`: `{ sheet?: "id/id", prefix, lib_id, value, unit?, unit_count?, options? }` -> `{ ok, reference }`: the reference `PlaceSymbol`'s
+/// `annotate()` gives a symbol placed on that sheet with the project's numbering (`options`: the Annotate dialog's method and start number), over every
+/// reference of the hierarchy -- a unit of a part of several units joins a part of the same symbol and value that has it free (r2 D-A1). Nothing is written.
+pub(crate) fn next_reference(dir: &Path, body: &[u8]) -> Value {
+    let run = || -> Result<Value, Vec<CheckResult>> {
+        let req: Value = serde_json::from_slice(body).map_err(|e| bad(format!("not JSON: {e}")))?;
+        let s = |k: &str| req.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        let n = |k: &str| req.get(k).and_then(Value::as_u64).unwrap_or(1) as u32;
+        let options: AnnotateOptions = match req.get("options") {
+            Some(v) if !v.is_null() => serde_json::from_value(v.clone()).map_err(|e| bad(format!("bad options: {e}")))?,
+            _ => AnnotateOptions::default(),
+        };
+        let prefix = s("prefix");
+        if prefix.is_empty() {
+            return Err(bad("a reference needs a prefix"));
+        }
+        let (meta, design, model) = loaded(dir)?;
+        let b = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
+        let reference = b.placement_reference(&s("sheet"), &prefix, &s("lib_id"), &s("value"), n("unit"), n("unit_count"), &options)?;
+        Ok(json!({ "ok": true, "reference": reference }))
+    };
+    run().unwrap_or_else(|e| json!({ "ok": false, "message": board::reasons(&e) }))
 }
 
 // ------------------------------------------------------------------------------------------------ Import Sheet

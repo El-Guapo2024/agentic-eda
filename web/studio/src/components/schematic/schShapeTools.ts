@@ -2,6 +2,14 @@
 // (`DrawRuleArea`): what a click does in each, the preview painted while one is in progress, and what finishing commits. A text box is DrawShape's: the
 // first click is a corner, the box follows the cursor, the second click is the other corner, and only then does Text Box Properties open
 // (`DIALOG_TEXT_PROPERTIES`); OK adds it, selected, and the tool stays armed. The geometry state machines are kicad-port/schShapeEdit.ts and polygonGeom.ts; the verbs are `sch_edit` `add_graphic`.
+//
+// Draw Arc is KiCad 25ec2335's (UI-LEFT S13): `EE_GRAPHIC_TOOL::DrawArc` drives an `ARC_DRAW_BEHAVIOR`, whose `ARC_GEOM_MANAGER` takes three clicks in its
+// default mode (`ARC_DRAW_MODE::CENTER_START_END`): the centre, the start (which fixes the radius), then a point on the end radius; the direction follows the
+// cursor until it is 90 degrees away (`setEnd`'s `m_directionLocked`), `/` (`arcPosture`, `ToggleClockwise`) reverses it, Backspace (`deleteLastPoint`) steps
+// back a point. The same manager as the board's (kicad-port/arcGeom.ts, unchanged between the two commits for this mode); the grid snaps the points (no angle
+// snap: the schematic's loop sets none). The arc is committed as the board commits one (`ApplyToShape`: the start and end in increasing angle), selected, and
+// the tool stays armed (`SHAPE_DRAW_RESULT::NEXT_SHAPE`). 8303b2ad's `DrawShape` had two clicks and a 90-degree arc (`calcEdit`'s state 1: schShapeEdit.ts).
+// Not ported: 25ec2335's other four arc modes (start-end-mid, start-end-centre, tangent, start-direction-end) and their toolbar palette.
 import type { Dispatch } from "react";
 import type { Schematic } from "../../api/types";
 import type { SchGraphic, SchGraphicInput, SchGraphicShape } from "../../api/schEditTypes";
@@ -10,6 +18,9 @@ import { addPoint, deleteLastCorner, finalOutline, newPointClosesOutline, newPol
 import { LINE_MODE_FREE, type LineMode } from "../../kicad-port/schLineMode";
 import { graphicId } from "../../kicad-port/schIds";
 import { beginEdit, calcEdit, continueEdit, toShape, type ShapeToolKind } from "../../kicad-port/schShapeEdit";
+import { ARC_SET_ANGLE, ARC_SET_ORIGIN, arcClick, arcRemoveLastPoint, arcToThreePoints, type ArcGeom } from "../../kicad-port/arcGeom";
+import { drawArcPreview } from "../canvas/arcPreview";
+import type { LengthUnit } from "../../state/units";
 import { layerColor } from "../canvas/layers";
 import { paintGraphics } from "./schGraphicsPainter";
 import { allItems } from "./schItems";
@@ -93,6 +104,10 @@ export function shapeToolClick(env: ShapeToolEnv, at: readonly [number, number],
   }
   const kind = SHAPE_TOOL_KIND[tool];
   if (!kind) return;
+  if (kind === "arc") {
+    arcToolClick(env, draw?.arc ?? null, at);
+    return;
+  }
   if (!draw?.shape) {
     dispatch({ type: "SET_SELECTION", refs: [] });
     dispatch({ type: "SET_DRAW_STATE", draw: { kind: "sch_shape", shape: beginEdit(kind, [at[0], at[1]]) } });
@@ -108,16 +123,51 @@ export function shapeToolClick(env: ShapeToolEnv, at: readonly [number, number],
   else finishShape(env, next.edit);
 }
 
+/** The arc a construction stands for, as the verbs take it: `ApplyToShape` (the start and end in increasing angle) and `GetArcMid`; null while it has no sweep. */
+export function arcShapeOf(g: ArcGeom): SchGraphicShape | null {
+  const a = arcToThreePoints(g);
+  if (!a) return null;
+  return { type: "arc", start: xy(a.start), mid: xy(a.mid), end: xy(a.end) };
+}
+
+/**
+ * One click of Draw Arc (`drawManagedShape`'s `IsClick( BUT_LEFT )`: `PlacePoint`, `aBehavior.AddPoint( cursorPos, true )`): the first starts the construction
+ * (`ACTIONS::selectionClear`), the third completes it -- the arc is committed, selected, and a new one may start. A point the manager refuses (the start on the
+ * centre, the end on the start radius) steps it back, as `MULTISTEP_GEOM_MANAGER::AddPoint` does.
+ */
+function arcToolClick(env: ShapeToolEnv, prev: ArcGeom | null, at: readonly [number, number]): void {
+  if (!prev) env.dispatch({ type: "SET_SELECTION", refs: [] });
+  const { geom, arc } = arcClick(prev, [at[0], at[1]], false);
+  if (arc) {
+    env.dispatch({ type: "SET_DRAW_STATE", draw: null });
+    commitGraphic(env, { shape: { type: "arc", start: xy(arc.start), mid: xy(arc.mid), end: xy(arc.end) } });
+    return;
+  }
+  env.dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "sch_shape", arc: geom } : null });
+}
+
 /** `ACTIONS::finishInteractive` / `closeOutline`: end whatever is being drawn as it stands. */
 export function finishShapeDraw(env: ShapeToolEnv, cursor: readonly [number, number]): void {
   const draw = env.draw?.kind === "sch_shape" ? env.draw : null;
   if (!draw) return;
   if (draw.poly) finishRuleArea(env, setCursorPosition(withMode(draw.poly, leaderModeOf(env.lineMode)), [cursor[0], cursor[1]]));
   else if (draw.shape) finishShape(env, calcEdit(draw.shape, [cursor[0], cursor[1]]));
+  else if (draw.arc) {
+    // an arc that has its end angle goes in as it stands (a click at the cursor completes it); one short of that is dropped
+    env.dispatch({ type: "SET_DRAW_STATE", draw: null });
+    const shape = draw.arc.step === ARC_SET_ANGLE ? arcShapeOf(draw.arc) : null;
+    if (shape) commitGraphic(env, { shape });
+  }
 }
 
 /** `deleteLastPoint` (Backspace, or Undo, while a rule area is in progress): drop the last corner, and the whole item when none is left. */
 export function deleteLastPoint(draw: SchShapeDraw, dispatch: Dispatch<Action>): void {
+  if (draw.arc) {
+    // `MULTISTEP_GEOM_MANAGER::RemoveLastPoint`: back a step; back at the centre, nothing is left of the arc
+    const g = arcRemoveLastPoint(draw.arc);
+    dispatch({ type: "SET_DRAW_STATE", draw: g.step === ARC_SET_ORIGIN ? null : { kind: "sch_shape", arc: g } });
+    return;
+  }
   if (!draw.poly) return;
   const { geom } = deleteLastCorner(draw.poly);
   dispatch({ type: "SET_DRAW_STATE", draw: geom.locked.length === 0 ? null : { kind: "sch_shape", poly: geom } });
@@ -125,6 +175,7 @@ export function deleteLastPoint(draw: SchShapeDraw, dispatch: Dispatch<Action>):
 
 /** The graphic a shape in progress would be, at the cursor -- what the preview paints (`m_view->AddToPreview( item->Clone() )`). */
 export function previewShape(draw: SchShapeDraw, cursor: readonly [number, number]): SchGraphicShape | null {
+  if (draw.arc) return arcShapeOf(draw.arc);
   if (!draw.shape) return null;
   const e = calcEdit(draw.shape, [cursor[0], cursor[1]]);
   if (e.kind === "text_box") return e.start[0] === e.end[0] && e.start[1] === e.end[1] ? null : { type: "rectangle", start: xy(e.start), end: xy(e.end) };
@@ -132,7 +183,15 @@ export function previewShape(draw: SchShapeDraw, cursor: readonly [number, numbe
 }
 
 /** Paint the shape or rule area being drawn: the rubber-banded item for a shape, the locked corners, leader and closing loop for a rule area. */
-export function paintShapePreview(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: SchShapeDraw, cursor: readonly [number, number], lineMode: LineMode): void {
+export function paintShapePreview(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: SchShapeDraw, cursor: readonly [number, number], lineMode: LineMode, units: LengthUnit = "mm"): void {
+  if (draw.arc) {
+    // `ARC_ASSISTANT` over the arc as it would be drawn: the radius lines, the centre, the readout
+    const shape = previewShape(draw, cursor);
+    if (shape) paintGraphics(ctx, view, [{ id: "__preview__", shape }], new Set());
+    const scale = view.scale || 1;
+    drawArcPreview(ctx, draw.arc, { color: layerColor("LAYER_NOTES"), hair: (px) => px / scale, units });
+    return;
+  }
   if (draw.poly) {
     const g = setCursorPosition(withMode(draw.poly, leaderModeOf(lineMode)), [cursor[0], cursor[1]]);
     const color = layerColor("LAYER_RULE_AREAS");

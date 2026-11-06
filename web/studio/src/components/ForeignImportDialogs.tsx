@@ -3,15 +3,19 @@
 //   "Edit Mapping of Imported Layers" -- DIALOG_MAP_LAYERS (pcbnew/dialogs/dialog_map_layers.cpp, dialog_imported_layers_base.cpp): the Unmatched Layers (the Imported Layers and
 //     the KiCad Layers to choose from), the `>` `<` `<<` buttons, the Matched Layers, "Auto-Match Layers" and "Keep KiCad layer names". It is the layer callback of the importers
 //     (`LAYER_MAPPABLE_PLUGIN`) put to the person. kicad-cli answers that callback with the importer's best guess and takes a map of the layers that should go elsewhere, so the
-//     dialog opens with the guesses matched (the state of KiCad's after "Auto-Match Layers") and OK sends the layers that were moved. Cancel abandons the import: KiCad's dialog
-//     has no way out but OK (it asks again while a required layer is unmatched).
+//     dialog opens with the guesses matched (the state of KiCad's after "Auto-Match Layers") and OK sends the layers that were moved, and the layers left unmatched, which are
+//     left out as KiCad's `UNDEFINED_LAYER` leaves them. Cancel abandons the import: KiCad's dialog has no way out but OK (it asks again while a required layer is unmatched).
 //
 //   "Import Issues" -- the report of what the importers said (the errors and warnings; the DIALOG_HTML_REPORTER KiCad opens when "Show import issues" is on).
 //
 // The state is in state/foreignImport.ts; the pure logic (the lists, the buttons, what is sent) in kicad-port/foreignImport.ts, unit-tested there.
 import { useMemo, useState } from "react";
-import { DialogShell } from "./pcbDialogKit";
+import { DialogShell, useEscape } from "./pcbDialogKit";
 import {
+  CHOOSE_PROJECT_COLUMNS,
+  CHOOSE_PROJECT_TEXT,
+  CHOOSE_PROJECT_TITLE,
+  chooserCells,
   REQUIRED_LAYERS_MESSAGE,
   addMappings,
   autoMatch,
@@ -27,23 +31,93 @@ import {
   type SourceLayer,
 } from "../kicad-port/foreignImport";
 import {
+  answerChooseProject,
+  answerImportQuestion,
   answerLayerMapping,
   closeImportReport,
   importShowIssues,
   setImportKeepKiCadLayerNames,
   setImportShowIssues,
   useForeignImportDialogs,
+  type ChooseProjectDialog,
+  type ImportQuestion,
   type ImportReport,
   type LayerMapDialog,
 } from "../state/foreignImport";
 
 export function ForeignImportDialogs() {
-  const { layers, report } = useForeignImportDialogs();
+  const { layers, report, question, choose } = useForeignImportDialogs();
   return (
     <>
+      {question && <Question question={question} />}
+      {choose && <ChooseProject dialog={choose} />}
       {layers && <LayerMapping dialog={layers} />}
       {report && <IssuesReport report={report} />}
     </>
+  );
+}
+
+/** `UnsavedChangesDialog` / `IsOK`: the message, its extended text, and the buttons in KiCad's order; the last one, Escape and a click outside are the way out. */
+function Question({ question }: { question: ImportQuestion }) {
+  const out = () => answerImportQuestion(null);
+  useEscape(out);
+  return (
+    <div className="dialog-backdrop" onClick={out}>
+      <div className="dialog" style={{ width: 460 }} onClick={(e) => e.stopPropagation()} data-testid="import-question">
+        <div className="dialog-header">
+          <span>{question.title}</span>
+        </div>
+        <div className="dialog-body" style={{ fontSize: 13 }}>
+          <div style={{ whiteSpace: "pre-wrap", fontWeight: 600, marginBottom: question.detail ? 6 : 0 }}>{question.message}</div>
+          {question.detail && <div style={{ whiteSpace: "pre-wrap", color: "var(--chrome-text-dim)" }}>{question.detail}</div>}
+        </div>
+        <div className="dialog-footer">
+          {question.buttons.map((b, i) => (
+            <button key={b} className={i === 0 ? "primary" : undefined} data-testid={`import-question:${b}`} autoFocus={i === 0} onClick={() => answerImportQuestion(i === question.buttons.length - 1 ? null : b)}>
+              {b}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** `DIALOG_IMPORT_CHOOSE_PROJECT`: Project Name, PCB, Schematic; the first row selected; a double click is OK (`onItemActivated`). */
+function ChooseProject({ dialog }: { dialog: ChooseProjectDialog }) {
+  const [picked, setPicked] = useState(0);
+  return (
+    <DialogShell title={CHOOSE_PROJECT_TITLE} width={620} onCancel={() => answerChooseProject(null)} onOk={() => answerChooseProject(picked)}>
+      <div data-testid="choose-project" style={{ fontSize: 12 }}>
+        <div style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}>{CHOOSE_PROJECT_TEXT}</div>
+        <div style={{ ...listBox, height: 220 }} role="listbox" aria-label="Projects">
+          <div style={{ display: "flex", fontWeight: 600, padding: "2px 6px", borderBottom: "1px solid var(--chrome-border)" }}>
+            {CHOOSE_PROJECT_COLUMNS.map((c) => (
+              <span key={c} style={{ flex: 1 }}>
+                {c}
+              </span>
+            ))}
+          </div>
+          {dialog.rows.map((row, i) => (
+            <div
+              key={i}
+              role="option"
+              aria-selected={picked === i}
+              data-testid={`choose-project:${i}`}
+              onClick={() => setPicked(i)}
+              onDoubleClick={() => answerChooseProject(i)}
+              style={{ display: "flex", padding: "2px 6px", cursor: "default", background: picked === i ? "var(--chrome-selected-bg)" : "transparent", color: picked === i ? "var(--chrome-selected-text)" : "inherit" }}
+            >
+              {chooserCells(row).map((cell, j) => (
+                <span key={j} style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {cell}
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </DialogShell>
   );
 }
 
@@ -98,7 +172,8 @@ function LayerMapping({ dialog }: { dialog: LayerMapDialog }) {
       return;
     }
     setImportKeepKiCadLayerNames(keepNames);
-    answerLayerMapping({ map: layerMapRequest(state), keepNames });
+    // the layers left unmatched are left out (`UNDEFINED_LAYER`), with what is on them
+    answerLayerMapping({ map: layerMapRequest(state), drop: keptGuesses(state), keepNames });
   };
   const cancel = () => answerLayerMapping(null);
 
@@ -186,9 +261,9 @@ function LayerMapping({ dialog }: { dialog: LayerMapDialog }) {
           </label>
         </div>
         {kept.length > 0 && (
-          <div style={{ marginTop: 6, color: "var(--chrome-warn)" }} data-testid="map-kept">
-            kicad-cli maps {kept.length === 1 ? "a layer" : `${kept.length} layers`} left unmatched ({kept.slice(0, 4).join(", ")}
-            {kept.length > 4 ? ", ..." : ""}) by its own guess: a layer map can say where a layer goes, not leave it out.
+          <div style={{ marginTop: 6, color: "var(--chrome-text-dim)" }} data-testid="map-kept">
+            {kept.length === 1 ? "A layer" : `${kept.length} layers`} left unmatched ({kept.slice(0, 4).join(", ")}
+            {kept.length > 4 ? ", ..." : ""}) {kept.length === 1 ? "is" : "are"} not imported, with what is on {kept.length === 1 ? "it" : "them"}.
           </div>
         )}
         {message && (

@@ -375,9 +375,9 @@ fn import_sheet_puts_a_copy_of_the_file_in_as_a_sheet_and_numbers_its_symbols_an
     assert!(!amp.imported_from_kicad && !d.sheet_contents.as_ref().unwrap()["sub.kicad_sch"].imported_from_kicad);
     let moved = amp.symbols.iter().filter(|s| s.lib_id.starts_with("Device:")).any(|s| s.at != pt(s.at.x, Nm::ZERO) || s.at.x % mm(0.01) != Nm::ZERO);
     assert!(moved, "the symbols were at their library origins (y = 0) and are at the corner of their boxes now: {:?}", amp.symbols.iter().map(|s| s.at).collect::<Vec<_>>());
-    // the same name again is refused, and so is a file that was never read
-    assert_eq!(b.apply(&import(Some(a_file()), true, false)).unwrap_err()[0].check, "ops_sheet_name_taken");
+    // a file that was never read is refused; the same name again is not (UI-LEFT S21: ERC reports `duplicate_sheet_names`)
     assert_eq!(b.apply(&import(None, true, false)).unwrap_err()[0].check, "ops_sheet_file_not_read");
+    b.apply(&import(Some(a_file()), true, false)).unwrap();
 }
 
 /// p12 S4: the file's bus aliases come with it, as a sheet or as contents, one of a name the design has already keeping the design's.

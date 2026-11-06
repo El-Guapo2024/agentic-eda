@@ -2,15 +2,22 @@
 // sheet, its pins set against the hierarchical labels of its own file -- what matches, what differs in shape, which pins have no label and which labels
 // have no pin -- with the fixes the pin side allows (add the missing pins, delete the unreferenced ones, take a label's shape).
 //
-// Not here: the dialog's other fixes act on the label side (place a hierarchical label in the sheet's file, rename or reshape one), which would edit the
-// content of the child sheet from its parent's page; those are made by going into the child sheet and editing it there.
+// The label side's Add Labels (UI-LEFT S21): `PANEL_SYNC_SHEET_PINS::OnBtnAddLabelsClicked` -> `SHEET_SYNCHRONIZATION_AGENT::PlaceHieraLable`, which hides the
+// dialog, goes into the sheet (`changeSheet`) and runs Place Hierarchical Label with the pins as templates (`PreparePlacementTemplate`): each label rides the
+// cursor with its pin's text and shape and the tool's last spin, bold, italic and Auto (`TwoClickPlace`'s `GetPlacementTemplate` branch), one click each.
+// Differs: KiCad shows the dialog again when the last one is placed; here it stays closed (Sync Sheet Pins opens it again).
+// Not here: renaming or reshaping a label from the dialog.
 import { useEffect, useState } from "react";
 import type { SchToolDialog } from "../api/schEditTypes";
-import type { Cmd, Sheet } from "../api/types";
+import type { Cmd, LabelShape, Sheet } from "../api/types";
 import { autoplacePins, syncRows, type HierLabel } from "../kicad-port/schSheetPins";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import { loadHierLabels, pinExtentOf } from "./schematic/schPinTool";
+import { carryItem } from "../actions/schPlaceActions";
+import { lastPlaced } from "../kicad-port/schLastPlaced";
+import type { CarriedItem } from "../kicad-port/schPlaceTool";
+import { samePath } from "../kicad-port/sheetPages";
 
 export function CleanupPinsDialog({ dialog }: { dialog: Extract<SchToolDialog, { kind: "cleanup_pins" }> }) {
   const dispatch = useStudioDispatch();
@@ -70,6 +77,20 @@ export function SyncPinsDialog({ dialog }: { dialog: Extract<SchToolDialog, { ki
     if (placed.length === 0) return;
     void api.cmdBatch(placed.map((p): Cmd => ({ op: "sch_edit", verb: "add_sheet_pin", sheet: sheet.id, name: p.label.name, shape: p.label.shape ?? "passive", at: { x: p.at[0], y: p.at[1] } })));
   };
+  /** Add Labels: into the sheet, a hierarchical label per pin in the hand (`PlaceHieraLable`). */
+  const addLabels = async (pins: ReadonlyArray<{ name: string; shape?: LabelShape | null }>) => {
+    if (pins.length === 0) return;
+    close();
+    const sub = [...path, sheet.id];
+    await api.navigateToSheet(sub);
+    for (let i = 0; i < 40 && !samePath(api.getState().currentSheetPath, sub); i++) await new Promise((r) => setTimeout(r, 25));
+    const last = lastPlaced();
+    const items: CarriedItem[] = pins.map((p) => ({ kind: "label", scope: "hierarchical", text: p.name, shape: p.shape ?? "passive", spin: last.spin || "right", sizeNm: null, bold: last.bold, italic: last.italic, autoRotate: last.autoRotate }));
+    dispatch({ type: "SET_DRAW_STATE", draw: null });
+    dispatch({ type: "SET_ACTIVE_TOOL", tool: "sch_label_hier" });
+    const c = api.getState().cursorNm;
+    carryItem({ api }, "sch_label_hier", items[0]!, c ? [c.x, c.y] : [sheet.at[0], sheet.at[1]], items.slice(1));
+  };
   const status: Record<string, string> = { ok: "In sync", shape: "Shape differs from the label", pin_only: "No hierarchical label of this name in the sheet's file", label_only: "No pin on the sheet" };
 
   return (
@@ -110,7 +131,11 @@ export function SyncPinsDialog({ dialog }: { dialog: Extract<SchToolDialog, { ki
                 <td>{status[r.kind]}</td>
                 <td>
                   {r.kind === "shape" && <button onClick={() => void api.cmd({ op: "sch_edit", verb: "edit_sheet_pin", id: r.pin.id, shape: r.label.shape ?? "passive" })}>Use label's shape</button>}
-                  {r.kind === "pin_only" && <button onClick={() => void api.cmd({ op: "sch_edit", verb: "delete_sheet_pin", id: r.pin.id })}>Delete pin</button>}
+                  {r.kind === "pin_only" && (
+                    <>
+                      <button onClick={() => void addLabels([r.pin])}>Add label</button> <button onClick={() => void api.cmd({ op: "sch_edit", verb: "delete_sheet_pin", id: r.pin.id })}>Delete pin</button>
+                    </>
+                  )}
                   {r.kind === "label_only" && <button onClick={() => addPins([r.name])}>Add pin</button>}
                 </td>
               </tr>
@@ -121,6 +146,7 @@ export function SyncPinsDialog({ dialog }: { dialog: Extract<SchToolDialog, { ki
       {labels && (missing.length > 0 || unreferenced.length > 0) && (
         <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
           {missing.length > 0 && <button onClick={() => addPins(missing.map((r) => r.name))}>Add all missing pins ({missing.length})</button>}
+          {unreferenced.length > 0 && <button onClick={() => void addLabels(unreferenced.map((r) => (r as Extract<typeof r, { kind: "pin_only" }>).pin))}>Add labels ({unreferenced.length})</button>}
           {unreferenced.length > 0 && (
             <button onClick={() => void api.cmdBatch(unreferenced.map((r): Cmd => ({ op: "sch_edit", verb: "delete_sheet_pin", id: (r as Extract<typeof r, { kind: "pin_only" }>).pin.id })))}>Delete unreferenced pins ({unreferenced.length})</button>
           )}

@@ -3,7 +3,7 @@
 
 use super::pcb_transform_tests::{board, model};
 use super::*;
-use eda_model::ir::{LibraryFill, LibrarySymbolGraphic, Millideg};
+use eda_model::ir::{LibraryFill, LibrarySymbolGraphic, Millideg, TextJustify, TextVAlign};
 use eda_model::kicad_font;
 use eda_model::sch_extras::{SchColor, SchFill, SchGraphic, SchGraphicKind, SchLineStyle};
 use eda_model::units::{mm, um};
@@ -148,8 +148,10 @@ fn a_filled_svg_polygon_is_filled_with_its_colour_and_has_no_outline_to_speak_of
     assert_eq!(g[0].width_nm, um(1.0));
 }
 
+/// `GRAPHICS_IMPORTER_SCH::AddText`: the text stands on the point the file gives with the file's justification (`SetHorizJustify`, `SetVertJustify`), its size times
+/// the scale, its angle kept upright as the file keeps it (`KeepUpright`).
 #[test]
-fn a_text_keeps_the_files_size_and_angle_and_stands_at_the_left_end_of_its_baseline() {
+fn a_text_keeps_the_files_size_angle_and_justification_on_the_files_point() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     // Plain text (left, bottom), then text centred on a point, then one standing up.
@@ -161,11 +163,18 @@ fn a_text_keeps_the_files_size_and_angle_and_stands_at_the_left_end_of_its_basel
     assert_eq!(t.len(), 3, "{t:?}");
     let (plain, centred, up) = (&t[0], &t[1], &t[2]);
     assert_eq!((plain.content.as_str(), plain.at, plain.angle, plain.size_nm), ("Hello", Point { x: mm(10.0), y: mm(-5.0) }, 0, mm(2.5)));
-    // Centred: the anchor is half the text's width to the left of the point the file gives.
-    let width_nm = kicad_font::text_advance_iu("Hello", kicad_font::mm_to_iu(2.5)) * 100;
-    assert!((centred.at.x - (mm(10.0) - Nm::new(width_nm / 2))).abs() <= Nm::new(100) && centred.at.y == mm(-20.0), "{centred:?} {width_nm}");
+    // Centred on the second point (72 = 1, 73 = 0): the anchor is that point, and the text says it is centred and on its baseline.
+    assert_eq!(centred.at, Point { x: mm(10.0), y: mm(-20.0) }, "{centred:?}");
+    let extras = &sch(&b).extras;
+    assert_eq!(extras.text_justify_of(&centred.id), eda_model::sch_extras::SchTextJustify { h: TextJustify::Center, v: TextVAlign::Bottom });
+    assert_eq!(extras.text_justify_of(&plain.id), eda_model::sch_extras::SchTextJustify::default(), "left and bottom need no entry");
     let angle: Millideg = 90_000;
     assert_eq!((up.content.as_str(), up.at, up.angle, up.size_nm), ("Up", Point { x: mm(30.0), y: mm(-5.0) }, angle, mm(1.5)));
+    // `KeepUpright`: 45 degrees is along a row, 135 up a column, 225 along a row again
+    let entities = "0\nTEXT\n10\n0\n20\n0\n40\n1\n1\nA\n50\n45\n0\nTEXT\n10\n0\n20\n0\n40\n1\n1\nB\n50\n135\n0\nTEXT\n10\n0\n20\n0\n40\n1\n1\nC\n50\n225\n";
+    let mut b = board(&m);
+    b.apply(&Cmd::ImportSchGraphics(sch_req(GraphicsFormat::Dxf, dxf(entities)))).unwrap();
+    assert_eq!(sch(&b).texts.iter().map(|t| t.angle).collect::<Vec<_>>(), [0, 90_000, 0]);
 }
 
 #[test]

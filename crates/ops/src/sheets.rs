@@ -153,6 +153,7 @@ impl<'a> Board<'a> {
                 sheet_units::carry_field_looks(&root, sec);
             }
             sheet_units::carry_label_looks(&root, &mut screens);
+            carry_groups(&root, &mut screens);
             // the design variants: each symbol's records go to the sheet it is on now (`SCH_SYMBOL_INSTANCE::m_Variants` are the symbol's)
             for sec in screens.iter_mut() {
                 let refs: BTreeSet<String> = sec.symbols.iter().map(|s| s.id.clone()).collect();
@@ -169,6 +170,45 @@ impl<'a> Board<'a> {
         self.design.sheet_contents = derived.sheet_contents;
         self.design.nets = Some(nets);
         Ok(())
+    }
+}
+
+/// The groups of the flat sheet on the module sheets (UI-LEFT S19): a group keeps its id, name and design block on the sheet its symbols are on now, with the members
+/// that are there -- its symbols (by reference) and the groups carried there before it (innermost first). The layout draws its own wires, labels and texts, so a
+/// group's members of those kinds do not come along; a group left with fewer than two members is not made, as a group of one dissolves on the sheet.
+fn carry_groups(old: &eda_model::ir::SchematicSection, new: &mut [&mut eda_model::ir::SchematicSection]) {
+    let groups = &old.extras.groups;
+    if groups.is_empty() {
+        return;
+    }
+    // innermost first: a group that holds another comes after it
+    let mut order: Vec<&eda_model::ir::Group> = Vec::new();
+    let mut left: Vec<&eda_model::ir::Group> = groups.iter().collect();
+    while !left.is_empty() {
+        let (ready, wait): (Vec<_>, Vec<_>) = left.into_iter().partition(|g| !g.member_ids.iter().any(|m| groups.iter().any(|o| &o.id == m && !order.iter().any(|d| d.id == o.id))));
+        if ready.is_empty() {
+            break; // a loop made by hand: the rest are not carried
+        }
+        order.extend(ready);
+        left = wait;
+    }
+    let mut placed: BTreeMap<String, usize> = BTreeMap::new(); // carried group id -> screen
+    for g in order {
+        let mut by_screen: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+        for m in &g.member_ids {
+            if let Some(&i) = placed.get(m) {
+                by_screen.entry(i).or_default().push(m.clone());
+            } else if let Some(i) = new.iter().position(|sec| sec.symbols.iter().any(|s| &s.id == m)) {
+                by_screen.entry(i).or_default().push(m.clone());
+            }
+        }
+        // the sheet that has most of it
+        let Some((&i, members)) = by_screen.iter().max_by_key(|(_, v)| v.len()) else { continue };
+        if members.len() < 2 {
+            continue;
+        }
+        new[i].extras.groups.push(eda_model::ir::Group { id: g.id.clone(), name: g.name.clone(), member_ids: members.clone(), design_block: g.design_block.clone() });
+        placed.insert(g.id.clone(), i);
     }
 }
 
@@ -360,6 +400,25 @@ mod tests {
     }
 
     /// A symbol drawn in the alternate body style of its library symbol is laid out in it, and stays in it.
+    /// UI-LEFT S19: a group of the flat sheet is on the module sheet its symbols land on, with its id and name; one whose symbols part ways keeps the sheet that has
+    /// most of them, and one left with a single member is not made.
+    #[test]
+    fn reorganize_keeps_the_groups_on_the_sheet_their_symbols_land_on() {
+        let model = mcu30();
+        let group = |id: &str, members: &[&str]| eda_model::ir::Group { id: id.into(), name: format!("g {id}"), member_ids: members.iter().map(|m| m.to_string()).collect(), design_block: String::new() };
+        let mut b = flat_board_with(&model, |root| {
+            root.extras.groups = vec![group("grp_leds", &["D1", "D2"]), group("grp_lone", &["U1"]), group("grp_outer", &["grp_leds", "D3"])];
+        });
+        b.apply(&Cmd::ReorganizeSheets).unwrap();
+        let d = b.design();
+        let sheet = screen_with(d, "D1");
+        let leds = sheet.extras.groups.iter().find(|g| g.id == "grp_leds").expect("the LED group is on the LED sheet");
+        assert_eq!((leds.name.as_str(), leds.member_ids.clone()), ("g grp_leds", vec!["D1".to_string(), "D2".to_string()]));
+        let outer = sheet.extras.groups.iter().find(|g| g.id == "grp_outer").expect("and the group that holds it");
+        assert_eq!(outer.member_ids, vec!["grp_leds".to_string(), "D3".to_string()]);
+        assert!(d.sheet_contents.as_ref().unwrap().values().all(|s| !s.extras.groups.iter().any(|g| g.id == "grp_lone")), "a group of one is not made");
+    }
+
     #[test]
     fn reorganize_keeps_the_body_style_and_lays_the_symbol_out_in_it() {
         let mut model = mcu30();

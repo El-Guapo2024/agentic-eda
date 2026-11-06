@@ -3,7 +3,7 @@
 //! In KiCad the dialog of a label, a text or a directive label (`SCH_DRAWING_TOOLS::TwoClickPlace` -> `createNewLabel` / `createNewText`), or the
 //! chooser of a power symbol (`PlaceSymbol` with the power filter), comes first; the new item then rides the cursor as a preview
 //! (`m_view->AddToPreview( item )`) until a click places it. The studio sends the very command that click would commit (`place_label`, `place_text`,
-//! a directive label's `add_graphic`, `add_power_symbol`), at a point of its choosing: `{ "sheet": "<id>/<id>", "cmd": {...} }`. The command is tried on
+//! a directive label's `add_graphic`, `add_power_symbol`, and Import Sheet's `import_sheet` of a file's contents), at a point of its choosing: `{ "sheet": "<id>/<id>", "cmd": {...} }`. The command is tried on
 //! a copy of the design -- with the library definition an installed power symbol brings (`crate::library_place`), as the commit has it -- and what it
 //! added comes back in the shapes `GET /api/schematic` has them (`{ "ok": true, "preview": { "labels": [...], "power_symbols": [...], "lib_symbols":
 //! {...}, ... } }`, the paste preview's shape, `crate::sch_clipboard_api::tried_preview`). The canvas lays that over the sheet shifted to the cursor,
@@ -28,6 +28,11 @@ pub(crate) fn place_preview(dir: &Path, body: &[u8]) -> Value {
     };
     // the definition of an installed symbol goes in with the command, as `board::step_quiet` puts it in before the commit
     let cmd = crate::library_place::with_installed_definitions(dir, &cmd, &design, &model).unwrap_or(cmd);
+    // Import Sheet's contents in the hand (`placeSheetContents` starts a move of what it read; UI-LEFT S17): the file is read into the command, as the commit reads it
+    let cmd = match crate::sheet_import::with_loaded_file(&cmd, dir) {
+        Ok(read) => read.unwrap_or(cmd),
+        Err(e) => return json!({ "ok": false, "message": e.first().and_then(|c| c.hint.clone()).unwrap_or_else(|| "the file could not be read".into()) }),
+    };
     match tried_preview(&meta, design, &mut model, &sheet, cmd) {
         Ok(preview) => json!({ "ok": true, "preview": preview }),
         Err(e) => e,
