@@ -92,7 +92,7 @@ mod pcb_groups;
 mod sch_groups;
 mod pcb_paste;
 mod specctra;
-pub use specctra::{set_session_importer, SessionImporter};
+pub use specctra::{set_session_importer, take_session_warning as take_port_session_warning, SessionImporter};
 mod pcb_paste_special;
 mod design_blocks;
 pub use design_blocks::layer_table;
