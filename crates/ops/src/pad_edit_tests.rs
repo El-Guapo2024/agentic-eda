@@ -264,3 +264,122 @@ fn a_rectangle_turned_by_a_pad_that_is_not_square_to_the_footprint_becomes_a_pol
     let c = fp(&b).pads[0].custom.clone().unwrap();
     assert!(matches!(&c.primitives[0].shape, Shape::Polygon { pts, .. } if pts.len() == 4));
 }
+
+/// A graphic with an id of its own, so a test can keep a look (a line style, a hatch) by it.
+fn named(mut shape: Shape, id: &str) -> Shape {
+    shape.set_id(id.into());
+    shape
+}
+
+fn with_footprint_kept<'a>(m: &'a ConstraintModel, pads: Vec<LibraryPad>, graphics: Vec<Shape>, keep: impl FnOnce(&mut eda_model::lib_keep::LibraryFootprintKeep)) -> Board<'a> {
+    let mut b = Board::new(design(), m, mm(0.1), mm(0.3));
+    let mut fp = LibraryFootprint::new_empty("Lib:Row");
+    fp.pads = pads;
+    fp.graphics = graphics;
+    keep(&mut fp.kicad);
+    fp.assign_missing_ids();
+    b.apply(&Cmd::PutLibraryFootprint { footprint: fp, overwrite: false }).unwrap();
+    b
+}
+
+/// The layers and first points of the footprint's graphics, in layer order (the store gives each graphic an id of its own, keeping what is kept by it).
+fn left(f: &LibraryFootprint) -> Vec<(String, i64)> {
+    let mut out: Vec<(String, i64)> = f.graphics.iter().map(|g| (g.layer().to_string(), g.points()[0].x.get())).collect();
+    out.sort();
+    out
+}
+
+/// `findMatching` tests the pad's whole layer set (`GetLayerSet().test( other->GetLayer() )`) and `EDA_SHAPE::Compare`, whose points and stroke width
+/// may differ by `EPSILON` (2 nm) and whose line style and fill may not: the copies of the merged line on the pad's mask and paste layers within 2 nm
+/// go with it; one 3 nm off, one on a layer the pad is not on, and one dashed stay.
+#[test]
+fn recombining_deletes_the_copies_of_a_merged_graphic_on_the_pads_layers_within_two_nanometres() {
+    let m = ConstraintModel::default();
+    let circle = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1_000_000, 1_000_000], "shape": "circle", "kind": "smd" }));
+    let n = Nm::new;
+    let graphics = vec![
+        named(line("F.Cu", (Nm::ZERO, Nm::ZERO), (mm(2.0), Nm::ZERO), mm(0.3)), "g1"),
+        named(line("F.Mask", (n(1), n(-2)), (mm(2.0) + n(2), Nm::ZERO), mm(0.3) + n(2)), "g2"), // within EPSILON: deleted
+        named(line("F.Paste", (n(-2), n(2)), (mm(2.0), n(-1)), mm(0.3) - n(1)), "g3"), // within EPSILON: deleted
+        named(line("F.Paste", (n(3), Nm::ZERO), (mm(2.0), Nm::ZERO), mm(0.3)), "g4"), // 3 nm off: kept
+        named(line("F.SilkS", (Nm::ZERO, Nm::ZERO), (mm(2.0), Nm::ZERO), mm(0.3)), "g5"), // the pad is not on F.SilkS: kept
+        named(line("F.Mask", (Nm::ZERO, Nm::ZERO), (mm(2.0), Nm::ZERO), mm(0.3)), "g6"), // dashed: kept
+    ];
+    let mut b = with_footprint_kept(&m, vec![circle], graphics, |k| {
+        k.stroke_types.insert("g6".into(), "dash".into());
+    });
+    explode(&mut b).unwrap();
+    recombine(&mut b).unwrap();
+    let f = fp(&b);
+    assert_eq!(f.pads[0].custom.as_ref().unwrap().primitives.len(), 1, "the copies are deleted, not added: {:?}", f.pads[0].custom);
+    assert_eq!(left(f), vec![("F.Mask".to_string(), 0), ("F.Paste".to_string(), 3), ("F.SilkS".to_string(), 0)], "g4, g5 and g6 are left");
+    assert_eq!(f.kicad.stroke_types.values().collect::<Vec<_>>(), vec!["dash"], "the dashed line keeps its style");
+}
+
+/// A copy of a merged graphic on the pad's own layer, within the 2 nm, is deleted by `findMatching` before `findNext` can take it in as a second
+/// basic shape (the old exact test merged it twice); one 3 nm off touches the pad and is merged as a shape of its own.
+#[test]
+fn a_copy_on_the_pads_layer_within_two_nanometres_is_not_merged_twice() {
+    let m = ConstraintModel::default();
+    let circle = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1_000_000, 1_000_000], "shape": "circle", "kind": "smd" }));
+    let n = Nm::new;
+    for (offset, merged) in [(2, 1), (3, 2)] {
+        let graphics = vec![
+            named(line("F.Cu", (Nm::ZERO, Nm::ZERO), (mm(2.0), Nm::ZERO), mm(0.3)), "g1"),
+            named(line("F.Cu", (n(offset), Nm::ZERO), (mm(2.0), n(-offset)), mm(0.3)), "g2"),
+        ];
+        let mut b = with_footprint_kept(&m, vec![circle.clone()], graphics, |_| {});
+        explode(&mut b).unwrap();
+        recombine(&mut b).unwrap();
+        let f = fp(&b);
+        assert!(f.graphics.is_empty(), "{:?}", f.graphics);
+        assert_eq!(f.pads[0].custom.as_ref().unwrap().primitives.len(), merged, "offset {offset} nm");
+    }
+}
+
+/// A hatched graphic counts as solid in `findNext`'s test (`PCB_SHAPE::TransformShapeToPolygon` passes `includeFill = false`) and comes in as a solid
+/// fill ("Convert any hatched fills to solid"); the same outline unfilled does not reach a pad inside it. The hatch kept by the graphic's id goes with it.
+#[test]
+fn a_hatched_graphic_round_the_pad_is_merged_as_a_solid_fill() {
+    let m = ConstraintModel::default();
+    let circle = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1_000_000, 1_000_000], "shape": "circle", "kind": "smd" }));
+    let rect = |id: &str| named(Shape::Rect { id: String::new(), layer: "F.Cu".into(), stroke_width: mm(0.1), filled: false, start: Point { x: mm(-3.0), y: mm(-3.0) }, end: Point { x: mm(3.0), y: mm(3.0) } }, id);
+    for hatched in [true, false] {
+        let mut b = with_footprint_kept(&m, vec![circle.clone()], vec![rect("g1")], |k| {
+            if hatched {
+                k.hatches.insert("g1".into(), eda_model::fp_art::Hatch::CrossHatch);
+            }
+        });
+        explode(&mut b).unwrap();
+        recombine(&mut b).unwrap();
+        let f = fp(&b);
+        if hatched {
+            assert!(f.graphics.is_empty());
+            let custom = f.pads[0].custom.as_ref().unwrap();
+            assert_eq!(custom.primitives.len(), 1);
+            assert!(custom.primitives[0].shape.is_filled(), "{:?}", custom.primitives[0].shape);
+            assert!(f.kicad.hatches.is_empty(), "the hatch is forgotten with the graphic");
+        } else {
+            assert_eq!(left(f), vec![("F.Cu".to_string(), mm(-3.0).get())], "an unfilled outline round the pad does not touch it");
+            assert_eq!(f.pads[0].shape, LibraryPadShape::Circle);
+        }
+    }
+}
+
+/// `PAD::GetLayerSet()` as the reader builds it from the pad's layer list (`m_layerMasks`).
+#[test]
+fn a_pads_layer_set_reads_kicads_wildcards() {
+    let tht = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1_000_000, 1_000_000], "shape": "circle", "kind": "through_hole", "layers": ["*.Cu", "*.Mask"] }));
+    for (layer, on) in [("F.Cu", true), ("In2.Cu", true), ("B.Cu", true), ("F.Mask", true), ("B.Mask", true), ("F.Paste", false), ("F.SilkS", false)] {
+        assert_eq!(pad_edit::pad_is_on_layer(&tht, layer), on, "{layer}");
+    }
+    let outer = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1_000_000, 1_000_000], "shape": "circle", "kind": "through_hole", "layers": ["F&B.Cu", "*.Paste"] }));
+    for (layer, on) in [("F.Cu", true), ("In1.Cu", false), ("B.Cu", true), ("B.Paste", true), ("F.Mask", false)] {
+        assert_eq!(pad_edit::pad_is_on_layer(&outer, layer), on, "{layer}");
+    }
+    let inner = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1_000_000, 1_000_000], "shape": "circle", "kind": "through_hole", "layers": ["*In.Cu"] }));
+    assert!(pad_edit::pad_is_on_layer(&inner, "In5.Cu") && !pad_edit::pad_is_on_layer(&inner, "F.Cu"));
+    // An SMD pad with no list has the one the writer gives it: F.Cu F.Paste F.Mask.
+    let smd = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1_000_000, 1_000_000], "shape": "circle", "kind": "smd" }));
+    assert!(pad_edit::pad_is_on_layer(&smd, "F.Paste") && pad_edit::pad_is_on_layer(&smd, "F.Mask") && !pad_edit::pad_is_on_layer(&smd, "B.Cu"));
+}
