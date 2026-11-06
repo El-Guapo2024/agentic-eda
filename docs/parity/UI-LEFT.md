@@ -168,13 +168,14 @@ Notes:
   - ~~Fix discontinuities in board outlines does nothing.~~ It is Cleanup Graphics' (ported, §60: the lines moved in place on OK, none in the preview, as KiCad); KiCad's Update PCB has no such option.
   - ~~A footprint's Edge.Cuts don't follow it when it moves.~~ They are its art and follow a move, turn and flip; `D` takes them (and Margin) along in the router too (pns Stage 24).
   - S. GAPS 27.
-- **P28 [CO] Cosmetic.**
-  - The ratsnest curve and highlight colour, and other nets not dimmed (C7-8/9).
-  - Inactive-layer Dim is a flat alpha.
-  - The rule-area hatch and the zone debug views.
-  - R, F and E on a carried text (A6-6).
-  - The Select Net menu's order.
-  - S. PARITY-pcb §1, §8, §24.
+- **P28 [CO] Cosmetic.** **done (task-u6-last)** (PARITY-pcb §90):
+  - ~~The ratsnest curve and highlight colour, and other nets not dimmed (C7-8/9).~~ Done: `DrawCurve( a, c, c, b )`, one width, a highlighted net brightened (0.8, +0.4 alpha), the others' alpha halved (`dimStatic`), a move's lines brightened; the net highlight darkens every item off the net (silkscreen, outline, texts), not only copper.
+  - ~~Inactive-layer Dim is a flat alpha.~~ Done: `color.Mix( background, 0.2 )`, opaque; pads, holes, vias by `GetColor`'s cases; texts, shapes, dimensions, text boxes, barcodes, technical-layer zones dimmed too; Edge.Cuts 0.3; the active copper layer and the vias drawn on top (`SetTopLayer`).
+  - ~~The rule-area hatch and the zone debug views.~~ Done: a rule area is drawn as any zone (layer colour, one-pixel outline, border hatch, no label); the debug views are KiCad's `ExtraZoneDisplayModes` only, left out of the menu and toolbar.
+  - ~~R, F and E on a carried text (A6-6).~~ Done.
+  - ~~The Select Net menu's order.~~ Done: by net code.
+  - Left: the painter's buckets are not KiCad's layer order (the inner layers are one bucket; the pads and technical layers stay over all copper whichever is active); a through-hole pad is drawn once in its side's colour; the highlight does not darken DRC markers or the shadows; the Footprint Editor's Dim is still a quarter alpha.
+  - S. PARITY-pcb §1, §8, §24, §90.
 - **P29 [BD] Found during the u1 batch (2026-11-05).** **done (task-u5-pcblows)** (PARITY-pcb §82), each checked against the C++ first:
   - ~~A new board rule area starts with every keepout off; KiCad keeps out tracks, vias and pads (found by task-u1-fpedit).~~ Done (`ZONE_SETTINGS::ZONE_SETTINGS()`).
   - ~~`layerPresets.ts` `layerGroupOp` leaves Edge.Cuts out of the copper group; KiCad's `presetAllCopper` counts it (task-u1-fpedit).~~ Done.
@@ -367,11 +368,11 @@ Notes:
   - ~~No Save Library As.~~ **done (task-u1-libsave)**: a library row's Save As makes a new `.pretty` with its row and copies every footprint into it (PARITY-fpedit §19).
   - M. GAPS 28; fpedit §14, §17; PARITY-common §6.
 - **F9 [BD] Footprint Checker.** **done (task-u3-fpedit2)**, PARITY-fpedit §21: the markers are where `runChecks` puts them (a short at `Collide`'s contact point, the hole checks at the first pad, the footprint's findings at its origin), and the scratch board carries the footprint's Reference and Value, so the findings name it. KiCad's checker tests no field itself (`CheckFootprintAttributes` and the DRC providers it runs read none), so there is no Reference or Value test to port. ~~Reference and Value aren't checked, and markers sit on the first item.~~ S. GAPS 29; fpedit §12, §21.
-- **F10 [CO] Arrays and numbering.**
-  - The Create Array preview.
-  - Recombine deduplicates by exact match only.
-  - Duplicate and Increment on several pads numbers them in sequence.
-  - S. fpedit §7, §13.
+- **F10 [CO] Arrays and numbering.** **done (task-u6-last)**, PARITY-fpedit §22: KiCad has no Create Array preview (`DIALOG_CREATE_ARRAY` holds no picture and `ARRAY_TOOL` draws nothing while it is open), so the studio's picture and its line of pad numbers are kept as additions; the circle's "Pad numbering start" follows the Grid tab's "Renumber pads" too and its alphabet and increment stay enabled (`setControlEnablement`); Finish Pad Edit deletes the copies of a merged graphic on any layer of the pad that `EDA_SHAPE::Compare` within 2 nm (line style and fill too), never adding one twice, and takes a hatched graphic in as solid (`PAD::Recombine`); Duplicate and Increment of several pads gives every copy the same number, as KiCad 8303b2ad and 25ec2335 do (E11 is no longer kept). Left: KiCad 25ec2335's "Confirm Array" question in place of the zero-spacing refusals; 25ec2335's per-layer padstack recombine.
+  - ~~The Create Array preview.~~
+  - ~~Recombine deduplicates by exact match only.~~
+  - ~~Duplicate and Increment on several pads numbers them in sequence.~~
+  - S. fpedit §7, §13, §22; PARITY-pcb §42.
 
 ## Symbol editor
 
@@ -381,10 +382,11 @@ Notes:
   - ~~No bezier tool, beziers aren't drawn, and Import Symbol drops them.~~
   - M. editor_toolbar_support.json; PARITY-symedit.
 - **Y3 [FM] Properties pane.** The Symbol and Footprint editors have none. M. GAPS 10; PARITY-common §12. **Symbol Editor done (task-u1-symedit)**: KiCad's rows of pins, shapes, texts, text boxes, fields and the symbol, edits on the editor's undo stack; left: the rows a library symbol has no place for (font, colours, line style, hyperlink) are read-only. **Footprint Editor done (task-u3-fpedit2)**, PARITY-fpedit §21: `PCB_PROPERTIES_PANEL` beside the Libraries tree on the selected pads, shapes, texts and fields (the footprint with nothing selected), KiCad's rows as a library editor lists them (a test against the PCB registration table), one undo step per edit, Show Properties toggles it; left: a pad's type, shape, hole shape, copper layers, post-machining, backdrill and teardrop rows, fonts, colours, line endings and the footprint's orientation are read-only with the reason as the tooltip.
-- **Y4 [FM] Symbol Properties and text.**
-  - No unit display-name grid, no Pin Connections tab and no named body styles.
+- **Y4 [FM] Symbol Properties and text.** **done (task-u6-last)** (PARITY-symedit "Symbol Properties' units, body styles and pin connections; ..."), KiCad 25ec2335's dialog where it differs from 8303b2ad:
+  - ~~No unit display-name grid, no Pin Connections tab and no named body styles.~~ Done: "Unit display names (optional):" (a row per unit, "The unit name '%s' is already in use."), "Custom body styles:" with its grid (Add, Move up / down, Delete; "Custom body styles must have at least 2 entries"; refused on a symbol with alternate pin functions), `SetBodyStyleCount` populating each new style and pruning the dropped ones; Pin Connections ("All pins with duplicate numbers are jumpers", the jumper groups grid, "Pin '%s' in jumper pin group %d does not exist in this symbol."); one undo step; `(body_styles ..)`, `(unit_name ..)` and the jumper forms read and written; the toolbar's unit and body style boxes, the Pin Table, the Properties pane, the "Common to all body styles" boxes, the Symbol Checker (E7-S16) and Export SVG follow them. The Pin Connections tab is the same in 25ec2335; its new Pin Map tab (pin-to-pad maps, file version 20260629) is not ported.
   - ~~Plain text has no Properties dialog.~~ **done (task-u1-symedit)**: Text Properties (double click, E, Properties), and a library text keeps bold, italic and its justification.
-  - No border colour, custom fill, Private flag or font.
+  - ~~No border colour, custom fill, Private flag or font.~~ Done: Text Box Properties' Font, text Color, border Color, "Background fill" (`FILLED_WITH_COLOR`) and "Fill color:", "Private to symbol editor"; a text's Font, Color and Private; drawn by the canvas, written and read (`saveTextBox`, `saveText`, `formatFill`), the library round trip unchanged; a private item is not drawn on a sheet.
+  - Left: a shape's Private flag and border / fill colours (Shape Properties); the text box's border Style in the dialog; a third custom body style on a placed symbol (the engine has one alternate); the file's version stays 20250324, so KiCad 8303b2ad (not 25ec2335) would read custom body styles as De Morgan.
   - M. GAPS 19; PARITY-symedit.
 - **Y5 [BD] Pins and the clipboard.** **done (task-u1-symedit)**; left: Increment of the pin being placed, and the clipboard's SVG/PNG images.
   - ~~The pin tool takes a click, then a dialog, with no ghost.~~ KiCad's `TwoClickPlace`: Pin Properties, then the pin follows the cursor until the click.
