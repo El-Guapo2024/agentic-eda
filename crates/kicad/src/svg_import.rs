@@ -532,6 +532,25 @@ mod tests {
         assert_eq!(style(&line("4 1 1 1")), LineStyle::DashDot);
     }
 
+    /// What KiCad keeps of a gradient and a pattern (I2): nanosvg reads a fill of `url(#id)` as a gradient when the id is a gradient (`nsvg__createGradient`), and as
+    /// no paint when it is anything else, a pattern included (`nsvg__assignGradients`: `if( shape->fill.type == NSVG_PAINT_UNDEF ) shape->fill.type = NSVG_PAINT_NONE`);
+    /// `SVG_IMPORT_PLUGIN::Import` then fills a gradient shape (its "alpha" is the pointer's, never 0 in practice) with no colour of its own, and leaves a
+    /// pattern-filled one as its outline, or out when it has no stroke either.
+    #[test]
+    fn a_gradient_fills_and_a_pattern_is_no_fill_as_kicads_nanosvg_reads_them() {
+        let i = read(
+            r#"<defs><linearGradient id="g"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
+               <pattern id="p" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="black"/></pattern></defs>
+               <rect x="0" y="0" width="10" height="10" fill="url(#g)"/>
+               <rect x="20" y="0" width="10" height="10" fill="url(#p)" stroke="green" stroke-width="1"/>
+               <rect x="40" y="0" width="10" height="10" fill="url(#p)"/>"#,
+        );
+        let polys: Vec<(bool, Option<Rgba>, f64)> = i.shapes.iter().filter_map(|s| match s { ImportedShape::Polygon { filled, fill_color, stroke, .. } => Some((*filled, *fill_color, stroke.width)), _ => None }).collect();
+        assert_eq!(polys.len(), 2, "the pattern rect with no stroke is nothing: {:?}", i.shapes);
+        assert_eq!(polys[0], (true, None, -1.0), "the gradient rect is filled, with no colour of its own and no stroke");
+        assert!(!polys[1].0 && polys[1].2 > 0.0, "the pattern rect is its outline: {:?}", polys[1]);
+    }
+
     #[test]
     fn text_and_images_are_reported_not_silently_lost() {
         let i = read(r#"<text x="1" y="2">hi</text><image href="a.png"/>"#);
