@@ -150,7 +150,8 @@ export interface BoardViaStitch {
   guarded_net?: string;
   excluded_cells?: [number, number][];
   excluded_positions?: PointXY[];
-  via?: { size_nm: number; drill_nm: number; from_layer: string; to_layer: string; text?: string };
+  /** The template every via is a copy of; `kind` and `annular` are what Configure set over its file text (crates/model/src/via_stitch.rs `ViaTemplate`). */
+  via?: { size_nm: number; drill_nm: number; from_layer: string; to_layer: string; text?: string; kind?: "through" | "blind" | "buried" | "micro"; annular?: "keep_all" | "remove_all" | "remove_except_start_and_end" | "start_end_only" };
   member_ids?: string[];
   custom_properties?: [string, string][];
 }

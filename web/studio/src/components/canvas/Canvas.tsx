@@ -726,7 +726,9 @@ export function Canvas() {
           void api.addZone(source.net, source.layer, outline, zoneSettingsOf(source), { layers: [...zoneLayers(source)] }).then(selectNew);
         } else if (plan.kind === "stitch") {
           // KiCad 10's `ZONE_MODE::STITCH` (zone_create_helper.cpp): a via stitching with the outline, its defaults filled in (`InitializeDefaults`), and its properties dialog before any via is made.
-          openViaStitchDialog(null, newViaStitch(outline, board?.board_rules?.via_diameter ?? 0, board?.board_rules?.via_drill ?? 0));
+          // `defaultViaSize` / `defaultViaDrill`: `GetCurrentViaSize()` / `GetCurrentViaDrill()`, the via size chosen in the toolbar (kicad-port/routerVia.ts `currentViaSize`).
+          const current = board ? currentViaSize(board, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia) : null;
+          openViaStitchDialog(null, newViaStitch(outline, current?.diameter ?? 0, current?.drill ?? 0));
         } else if (plan.kind === "add") {
           const z = plan.zone;
           void api.addZone(z.net, z.layers[0] ?? activeLayerName(state.activeLayer, "F.Cu"), outline, z.settings, { layers: z.layers, name: z.name, locked: z.locked }).then(selectNew);
