@@ -266,3 +266,24 @@ fn kicad_cli_judges_kicads_qa_boards_alike_by_the_rules_the_editor_wrote_back() 
     eprintln!("{} QA rule files; {saved} rules saved through their panels; Save refused, as KiCad does:\n  {}", names.len(), refused.join("\n  "));
     assert!(saved >= 25, "{saved}");
 }
+
+/// Board Setup > Custom Rules' "Check rule syntax" (`PANEL_SETUP_RULES::OnCompile`, R6-D5): the text's `${..}` are expanded by the board's resolver before it is
+/// parsed (the project's variables, `${U1:VALUE}`-style references by the footprint's reference), and `checkPlausibility`'s warnings follow the parser's messages.
+#[test]
+fn check_rule_syntax_expands_the_text_variables_and_warns_as_kicad_does() {
+    let dir = scratch("rule_editor_compile_vars");
+    setup(&dir);
+    let check = |text: &str| -> Vec<String> {
+        let reply = crate::rule_editor_api::check(&dir, serde_json::json!({ "compile": text }).to_string().as_bytes());
+        assert_eq!(reply["ok"], true, "{reply}");
+        reply["messages"].as_array().unwrap().iter().map(|m| m["text"].as_str().unwrap().to_string()).collect()
+    };
+    let rule = "(version 1)\n(rule a (constraint clearance (min ${GAP})))\n";
+    let before = check(rule);
+    assert!(before.iter().any(|m| m.starts_with("ERROR")), "an unexpanded variable is no length: {before:?}");
+    step(&dir, Cmd::SetTextVariables { variables: [("GAP".to_string(), "0.3mm".to_string())].into() }, false, "ui").unwrap();
+    assert_eq!(check(rule), ["No errors found."], "the variable is the board's");
+    // A rule that names a class the board does not have, and two rules on one condition.
+    let warned = check("(version 1)\n(rule a (condition \"A.NetClass == 'power'\") (constraint clearance (min 1mm)))\n(rule b (condition \"A.NetClass == 'power'\") (constraint clearance (min 2mm)))\n");
+    assert_eq!(warned, ["No errors found.", "Rule 'a' references undefined netclass 'power'.", "Rules 'b' and 'a' share the same condition.", "Rule 'b' references undefined netclass 'power'."], "{warned:?}");
+}

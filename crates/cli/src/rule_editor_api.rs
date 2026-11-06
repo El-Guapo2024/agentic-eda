@@ -7,8 +7,8 @@
 //!     Within Area selectors (`NET_SELECTOR`, `NETCLASS_SELECTOR`, `AREA_SELECTOR`: the board's nets, its net classes, its named rule areas, sorted).
 //!   - **`POST /api/rule_editor/check`**: `{"entry", "rule"}` is what Save would say of a panel (`onSaveButtonClicked`): `{"ok", "valid", "message",
 //!     "generated"}`, without changing anything; `{"syntax": {"name", "body"}}` is a Custom rule's Check Syntax (`DRC_RE_CUSTOM_RULE_PANEL::onCheckSyntax`):
-//!     `{"ok", "message"}`; `{"compile": text}` is Board Setup > Custom Rules' "Check rule syntax" (`PANEL_SETUP_RULES::OnCompile`): `{"ok", "messages":
-//!     [{"text", "severity"}]}`.
+//!     `{"ok", "message"}`; `{"compile": text}` is Board Setup > Custom Rules' "Check rule syntax" (`PANEL_SETUP_RULES::OnCompile`: the text's variables
+//!     expanded, the parser's messages and `checkPlausibility`'s warnings): `{"ok", "messages": [{"text", "severity"}]}`.
 
 use eda_drc::rule_editor::{self, Fields, PanelType, RuleEdit};
 use serde_json::{json, Map, Value};
@@ -68,14 +68,21 @@ pub(crate) fn check(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return fail(format!("not JSON: {e}")),
     };
-    let (_, _, model) = match crate::board::load(dir) {
+    let (meta, design, model) = match crate::board::load(dir) {
         Ok(l) => l,
         Err(e) => return fail(crate::board::reasons(&e)),
     };
     let board = eda_ops::rule_editor::editor_board(&model);
-    // Board Setup > Custom Rules' "Check rule syntax" (`PANEL_SETUP_RULES::OnCompile`, R6-D5): `{"compile": text}` -> `{"ok", "messages": [{"text", "severity"}]}`
+    // Board Setup > Custom Rules' "Check rule syntax" (`PANEL_SETUP_RULES::OnCompile`, R6-D5): `{"compile": text}` -> `{"ok", "messages": [{"text", "severity"}]}`.
+    // The text is expanded first (`rulesText = ExpandTextVars( rulesText, &resolver )`, the resolver `BOARD::ResolveTextVar( token, 0 )`: the project's variables
+    // and the board's own, `${REF:FIELD}` by the footprint's reference -- what `ConvertCrossReferencesToKIIDs` turns into a uuid for KiCad's resolver to find again),
+    // then parsed, then held to the board (`checkPlausibility`).
     if let Some(text) = req.get("compile").and_then(Value::as_str) {
-        let messages: Vec<Value> = rule_editor::compile_report(text, &board.env())
+        let shown = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, eda_model::text_vars::Clock::utc_now()));
+        let expanded = eda_model::text_vars::expand_text_vars(text, Some(&|token: &str| shown.board().resolve(token, 0)), 0, 0);
+        let net_classes: Vec<String> = model.board.net_classes.iter().map(|c| c.name.clone()).collect();
+        let plausibility = rule_editor::PlausibilityBoard { net_classes: &net_classes, board: &board };
+        let messages: Vec<Value> = rule_editor::compile_report_with(&expanded, &board.env(), Some(&plausibility))
             .into_iter()
             .map(|r| {
                 let severity = match r.severity {

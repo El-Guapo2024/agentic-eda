@@ -560,6 +560,41 @@ fn custom_rules_check_says_what_kicads_compile_says() {
     assert!(lexer.len() == 1 && lexer[0].starts_with("ERROR: <a href='2:") && lexer[0].ends_with("</a>"), "{lexer:?}");
 }
 
+/// `PANEL_SETUP_RULES::checkPlausibility`: two rules on one condition and layer source, a net class the project does not have (Default included, as
+/// `HasNetclass` looks in the other classes only), a layer the board does not have, by its name; `inner` and `outer` are not looked at.
+#[test]
+fn check_rule_syntax_warns_as_check_plausibility_does() {
+    let mut b = board();
+    b.names.insert("In2.Cu".into(), "PWR".into());
+    let classes = vec!["power".to_string(), "HS".to_string()];
+    let pb = PlausibilityBoard { net_classes: &classes, board: &b };
+    let texts = |text: &str| compile_report_with(text, &b.env(), Some(&pb)).into_iter().map(|r| (r.text, r.severity)).collect::<Vec<_>>();
+    let w = |t: &str| (t.to_string(), dru::ReportedSeverity::Warning);
+    let ok = ("No errors found.".to_string(), dru::ReportedSeverity::Info);
+    assert_eq!(texts("(version 1)\n(rule a (condition \"A.NetClass == 'power'\") (constraint clearance (min 1mm)))"), [ok.clone()]);
+    assert_eq!(
+        texts("(version 1)\n(rule a (condition \" A.NetClass == 'power' \") (constraint clearance (min 1mm)))\n(rule b (condition \"A.NetClass == 'power'\") (constraint track_width (min 1mm)))"),
+        [ok.clone(), w("Rules 'b' and 'a' share the same condition.")],
+        "the conditions are compared trimmed, the later rule named first"
+    );
+    assert_eq!(
+        texts("(version 1)\n(rule a (layer inner) (constraint clearance (min 1mm)))\n(rule b (layer outer) (constraint clearance (min 1mm)))\n(rule c (constraint clearance (min 1mm)))"),
+        [ok.clone()],
+        "a different layer source is a different key"
+    );
+    assert_eq!(
+        texts("(version 1)\n(rule a (condition \"A.NetClass == 'Default' || B.NetClass != 'hs' || A.NetClass=='HS'\") (constraint clearance (min 1mm)))"),
+        [ok.clone(), w("Rule 'a' references undefined netclass 'Default'."), w("Rule 'a' references undefined netclass 'hs'.")]
+    );
+    assert_eq!(texts("(version 1)\n(rule a (condition \"A.NetClass == 'my class'\") (constraint clearance (min 1mm)))"), [ok.clone()], "KiCad's pattern has no room for a space");
+    assert_eq!(texts("(version 1)\n(rule a (layer \"In5.Cu\") (constraint clearance (min 1mm)))"), [ok.clone(), w("Rule 'a' references undefined layer(s): In5.Cu.")]);
+    assert_eq!(texts("(version 1)\n(rule a (layer \"In*.Cu\") (constraint clearance (min 1mm)))").len(), 2, "a wildcard that takes in layers the board lacks");
+    assert_eq!(texts("(version 1)\n(rule a (layer \"PWR\") (constraint clearance (min 1mm)))"), [ok.clone()], "a layer by the board's name of it");
+    // No plausibility check after a thrown error.
+    assert_eq!(texts("(version 1)\n(rule a (condition \"A.Type == 'Pad'))").len(), 1);
+    assert_eq!(super::netclass_references("NetClass == '\"x'\"' NetClass!='a'b' NetClass = 'c'"), ["x", "a'b"]);
+}
+
 /// KiCad's own rule files (`qa/data/pcbnew/*.kicad_dru`): read by the editor and written back unedited, every rule is the same rule -- the same
 /// name, condition, layer, severity and constraints, its own text kept verbatim -- and writing the result again changes nothing.
 #[test]

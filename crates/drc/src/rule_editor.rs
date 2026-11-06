@@ -1914,15 +1914,125 @@ pub fn check_custom_syntax(name: &str, body: &str, env: &Rc<Env>) -> String {
 /// `PANEL_SETUP_RULES::OnCompile` (Board Setup > Custom Rules, "Check rule syntax", R6-D5): the board's rules text through
 /// `DRC_RULES_PARSER::Parse( dummyRules, m_errorsReport )` -- every error where it is, the deprecated keywords, the compiler's messages, and "No errors
 /// found." for a clean text ([`dru::parse_reporting`]) -- and a thrown `PARSE_ERROR` as `"%s <a href='%d:%d'>%s</a>%s"` with `_( "ERROR:" )`, the line,
-/// the byte index and `ParseProblem()`. **Differs**: the text goes in as written (`ConvertCrossReferencesToKIIDs` and `ExpandTextVars` are not run first),
-/// and `checkPlausibility`'s warnings are not ported (PARITY-pcb section 9).
+/// the byte index and `ParseProblem()`. The text goes in as given: the server expands its text variables first (`ExpandTextVars` with
+/// `BOARD::ResolveTextVar`, `crates/cli/src/rule_editor_api.rs`), and [`compile_report_with`] adds `checkPlausibility`'s warnings.
 pub fn compile_report(text: &str, env: &Rc<Env>) -> Vec<dru::Reported> {
+    compile_report_with(text, env, None)
+}
+
+/// What `PANEL_SETUP_RULES::checkPlausibility` asks of the board: the net classes it has (`NET_SETTINGS::HasNetclass`, which looks in `m_netClasses` -- the
+/// classes besides Default, so a rule that names `Default` is told it is undefined, as KiCad tells it), the layers it has (`BOARD::GetEnabledLayers`) and
+/// the names it shows them by (`BOARD::GetLayerName`).
+pub struct PlausibilityBoard<'a> {
+    pub net_classes: &'a [String],
+    pub board: &'a EditorBoard,
+}
+
+/// [`compile_report`] and, when the text parsed (`checkPlausibility` runs in the `try` after `Parse`; a thrown `PARSE_ERROR` skips it), the plausibility
+/// warnings of `board` after the parser's messages, as the report box lists them.
+pub fn compile_report_with(text: &str, env: &Rc<Env>, board: Option<&PlausibilityBoard>) -> Vec<dru::Reported> {
     let (mut reported, parsed) = dru::parse_reporting(text, env);
-    if let Err(pe) = parsed {
-        let problem = pe.message.strip_prefix("ERROR: ").unwrap_or(&pe.message).to_string();
-        reported.push(dru::Reported { text: format!("ERROR: <a href='{}:{}'>{problem}</a>", pe.line, pe.offset), severity: dru::ReportedSeverity::Error });
+    match parsed {
+        Err(pe) => {
+            let problem = pe.message.strip_prefix("ERROR: ").unwrap_or(&pe.message).to_string();
+            reported.push(dru::Reported { text: format!("ERROR: <a href='{}:{}'>{problem}</a>", pe.line, pe.offset), severity: dru::ReportedSeverity::Error });
+        }
+        Ok(p) => {
+            if let Some(b) = board {
+                reported.extend(check_plausibility(&p.rules, b));
+            }
+        }
     }
     reported
+}
+
+/// `PANEL_SETUP_RULES::checkPlausibility`: warnings on rules that parse but cannot be what was meant -- two rules whose condition (trimmed) and layer source are the
+/// same ("Rules '%s' and '%s' share the same condition.", the later rule first), a `NetClass == '..'` / `NetClass != '..'` that names a class the project does not
+/// have ("Rule '%s' references undefined netclass '%s'."; every match of KiCad's `std::regex( "NetClass\\s*[!=]=\\s*'\"?([^\"\\s]+)'\"?" )`), and a `(layer ..)` that
+/// names layers the board does not have ("Rule '%s' references undefined layer(s): %s.", in `PCB_LAYER_ID` order, by the board's names; `outer` and `inner` are not
+/// checked, nor a layer clause that named no layer at all).
+pub fn check_plausibility(rules: &[Rule], board: &PlausibilityBoard) -> Vec<dru::Reported> {
+    let warn = |text: String| dru::Reported { text, severity: dru::ReportedSeverity::Warning };
+    let mut out = Vec::new();
+    let mut seen: HashMap<(String, String), String> = HashMap::new();
+    let enabled: BTreeSet<&str> = board.board.enabled.iter().map(String::as_str).collect();
+    for rule in rules {
+        let condition = rule.condition.as_ref().map(|c| c.expression().trim().to_string()).unwrap_or_default();
+        let key = (condition.clone(), rule.layer_source.clone());
+        match seen.get(&key) {
+            Some(first) => out.push(warn(format!("Rules '{}' and '{}' share the same condition.", rule.name, first))),
+            None => {
+                seen.insert(key, rule.name.clone());
+            }
+        }
+        for nc in netclass_references(&condition) {
+            if !board.net_classes.iter().any(|c| *c == nc) {
+                out.push(warn(format!("Rule '{}' references undefined netclass '{nc}'.", rule.name)));
+            }
+        }
+        // `m_LayerSource` is `'outer'` / `'inner'` for the keywords (`GetTokenString`), the name for a layer; empty when no layer was named.
+        let keyword = matches!(rule.layer_source.as_str(), "outer" | "inner");
+        if !rule.layer_source.is_empty() && !keyword {
+            let mut invalid: Vec<&String> = rule.layers.iter().flatten().filter(|l| !enabled.contains(l.as_str())).collect();
+            invalid.sort_by_key(|l| pcb_layer_id(l).unwrap_or(u32::MAX));
+            if !invalid.is_empty() {
+                let names: Vec<String> = invalid.iter().map(|l| board.board.name(l)).collect();
+                out.push(warn(format!("Rule '{}' references undefined layer(s): {}.", rule.name, names.join(", "))));
+            }
+        }
+    }
+    out
+}
+
+/// The class names `NetClass\s*[!=]=\s*'"?([^"\s]+)'"?` (ECMAScript, `std::sregex_iterator`) captures in `condition`, match after match: the capture is the
+/// longest run of characters other than `"` and white space up to its last `'` (the greedy `[^"\s]+` backs off to the `'` the pattern needs after it).
+fn netclass_references(condition: &str) -> Vec<String> {
+    let c: Vec<char> = condition.chars().collect();
+    let key: Vec<char> = "NetClass".chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + key.len() <= c.len() {
+        if c[i..i + key.len()] != key[..] {
+            i += 1;
+            continue;
+        }
+        let mut j = i + key.len();
+        while j < c.len() && c[j].is_whitespace() {
+            j += 1;
+        }
+        let matched = (|| {
+            if j + 1 >= c.len() || !matches!(c[j], '!' | '=') || c[j + 1] != '=' {
+                return None;
+            }
+            let mut k = j + 2;
+            while k < c.len() && c[k].is_whitespace() {
+                k += 1;
+            }
+            if k >= c.len() || c[k] != '\'' {
+                return None;
+            }
+            k += 1;
+            if k < c.len() && c[k] == '"' {
+                k += 1;
+            }
+            let run_end = (k..c.len()).find(|&x| c[x] == '"' || c[x].is_whitespace()).unwrap_or(c.len());
+            // the capture ends at the last `'` of the run that leaves it at least one character
+            let quote = (k + 1..run_end).rev().find(|&x| c[x] == '\'')?;
+            let mut end = quote + 1;
+            if end < c.len() && c[end] == '"' {
+                end += 1;
+            }
+            Some((c[k..quote].iter().collect::<String>(), end))
+        })();
+        match matched {
+            Some((name, end)) => {
+                out.push(name);
+                i = end;
+            }
+            None => i += 1,
+        }
+    }
+    out
 }
 
 #[cfg(test)]
