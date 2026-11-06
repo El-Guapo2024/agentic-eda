@@ -163,8 +163,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `DeleteJunction` (B5-L1); a wire finishes on any label or sheet pin anchor (B5-M1, r3 C3-M3 and r4 C4-L3 corrected); Find and Replace (selection only,
   Replace's target, escaped label text, label fields, body texts, reference chains, emptying a label, the end and wrap, KiCad's boxes: C5-M1, M2, M4, L1-L7);
   the Symbol Fields Table per sheet path, `R01`, empty edits, the preview's variables (C5-M3, L8, L9 in part); DNP / Exclude across sheets (D5-M2, server side)
-  and Increment Annotations over all sheets (D5-M3). **Left**: the Fields Table's Description column and Save / Discard / Cancel close question (C5-L9), the
-  Find dialog's Regular Expression box, the studio's DNP state from the sheet in view (D5-M2).
+  and Increment Annotations over all sheets (D5-M3). **Left**: the Fields Table's Description column and ~~Save / Discard / Cancel close question~~ (done 2026-11-06) (C5-L9), ~~the
+  Find dialog's Regular Expression box~~ (done 2026-11-06, section 60), the studio's DNP state from the sheet in view (D5-M2).
 - Round 6 (2026-10-28, `task-r6-schematic`, `PARITY-sch.md` section 50): a unit's display name (`unit_name`) is kept in the schematic's cache and names the
   unit in net names, `${UNIT}` and the drawn reference (B6-H1, QA `issue21980`); the library symbol's user fields are in the cache (`${LOCATION}`, QA
   `issue22286`); Replace All in References moves a multi-unit symbol on two sheets (A6-M1); a pin's alternate counts in the duplicate-name test and holds on
@@ -187,8 +187,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   - A7-L4: the cache writes the library's user fields hidden at (0, 0), `Reference "U"`, and no Footprint or Datasheet. **Left (low)**
   - L1: the writer adds a junction at every T, which KiCad then keeps as an explicit junction. **Left (low)**
   - L2: a schematic with only graphics (QA `groups_load_save`) is refused on import. **Left (low)**
-  - Also left: a label field's bold, thickness and `show_name` (M5's last part); the colours and a free text's bold and italic are kept in the files but not
-    drawn; a project's drawing sheet file and `.include` model files are not carried; `${U1A:FIELD}` cross-references by the letter form only.
+  - Also left: a label field's bold, thickness and `show_name` (M5's last part); ~~the colours and a free text's bold and italic are kept in the files but not
+    drawn~~ (drawn since 2026-11-06, section 60); a project's drawing sheet file and `.include` model files are not carried; `${U1A:FIELD}` cross-references by the letter form only.
 - Placing in KiCad's order (2026-11-05, `task-u1-schplace`, `PARITY-sch.md` section 54; UI-LEFT S1): Place Label, Global Label, Hierarchical Label,
   Directive Label and Text open their dialog first (the hotkey where the cursor is, `PrimeTool`) and Place Power opens the Symbol Chooser filtered to power
   symbols (`FilterPowerSymbols( true )`); the item then rides the cursor, drawn from the server's preview of the very command the click sends (`POST
@@ -225,6 +225,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   pin table; Autoplace Fields does not read the swapped pin places; the Symbol Fields Table has no scope selector; symbols this project drew (not imported) and turned or mirrored place their pins by
   `eda_engine::placed` (older note, not re-checked since the overlap fix, `f24fa31`, which made generated symbols draw their pins as KiCad's do).
 - Done 2026-11-05 (`task-u1-variants`, UI-LEFT S2; `PARITY-sch.md` section 58; KiCad 25ec2335): design variants. Add, Remove, Edit Description, Rename and Copy Design Variant (Tools > Variants, the toolbar's selector with "Add New Design Variant...", the Symbol Fields Table's variant list); a symbol's DNP, exclusion flags and field texts per variant (`SchExtras::symbol_variants`, `eda_model::variants`), shown and edited for the current variant by the canvas, Symbol Properties, the Properties panel, the attribute toggles and the Fields Table (its variant cells highlighted); read and written as KiCad's `(variant ..)` records and `schematic.variants`, and the board's `(variants ..)` and footprint variants derived from them; the Plot, Placement, Plot Schematic, BOM and netlist exports pass `--variant`. kicad-cli's BOM of our re-export of KiCad's QA `cli/variants` is KiCad's expected CSV for each variant. Left: a variant's own symbol and pin map, a sheet's own variants, `${VARIANT}` in texts, the board editor's canvas and Properties per variant, a pasted symbol's records; a record is the reference's on every path of a shared screen.
+- Done 2026-11-06 (`task-u3-schtext`, UI-LEFT S11 and S12, `PARITY-sch.md` section 60): the Symbol Fields Table's scope (Entire Project, Current Sheet Only,
+  Current Sheet and Down, KiCad 25ec2335's Selection), the project's view presets (Save preset... / Delete preset..., `schematic.bom_presets`, the box showing
+  the preset the view is), the field name templates as hidden columns, the project's saved view on open, "Save changes?" on a close (C5-L9's close question
+  done); Find / Replace's Regular Expression (a matcher of `wxRegEx`'s extended syntax, `crates/ops/src/search/wx_regex.rs`), and the search over sheets' names,
+  files and fields, sheet pins, power symbols' values, text boxes and directive labels' fields, with Replace where KiCad replaces. **Left**: library metadata
+  (no box in KiCad's dialog either), groups and ERC markers in Find; a preset saved at once (KiCad at the close), the closing view not kept as `bom_settings`;
+  with no saved view the user fields are shown; the Fields Table's Description column, BOM Name editing, grid menus, Group By refusals.
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
 ### 2. The KiCad files we write drop design data
@@ -442,10 +449,17 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Left: a symbol's and a sheet's instance paths are written in walk order,
   not sorted by `KIID_PATH` as KiCad writes them (cosmetic); Annotate numbers the screen's own references only, not the other paths' (which count as taken,
   so it hands none out twice);
-  Find does not match a sheet's name, file or pins; Clear Annotation (a design names a part by its reference, so two cannot be `R?`); "Place as group" and a ghost of the contents while they are carried;
+  ~~Find does not match a sheet's name, file or pins~~ (done 2026-11-06, section 60); Clear Annotation (a design names a part by its reference, so two cannot be `R?`); "Place as group" and a ghost of the contents while they are carried;
   of the drop, one file is imported at a time (the others of the drop that the first does not place are said to be left out; KiCad runs Import Sheet for each in turn) and Choose Schematic opens on the file, where KiCad, given a file, has no chooser and has the sheet or its contents in the hand at once;
   the attribute, library-link and Update / Change Symbol tools act on the sheet in view; a footprint already placed keeps
   the reference it had when Annotate or Rename changes the schematic's.
+- Done 2026-11-06 (`task-u3-schtext`, UI-LEFT S8, `PARITY-sch.md` section 60): the Hierarchy Navigator's right-click menu (Edit Page Number, Rename in place,
+  New / Delete Top-Level Sheet with KiCad's prompts, Expand / Collapse All) and its net highlight (`UpdateNetHighlight`); a KiCad 10 project's top-level sheets
+  shown as roots of their own (`SchExtras::virtual_root`, set by `combine_top_level_sheets`); a sheet's border width and colour, fill colour and its four
+  attributes (`SchExtras::sheet_props`, read, written, drawn with the DNP cross, edited in Sheet Properties and the Properties panel) and its user fields
+  added in Sheet Properties (r2 B-L1's flags and look done). Find matches a sheet's name, file and pins (the "Left" below). **Left**: New Top-Level Sheet on a
+  design whose root is its one top-level sheet (the root would have to become a sheet of its own); the derived files keep the root that places a project's
+  top-level sheets; a sheet's attributes are not given to its symbols nor kept per variant; the navigator's rows read "name file · page N" (A7-L3).
 - Port from: `eeschema/sch_sheet_path.cpp`, `sch_screen.cpp`, `connection_graph.cpp`, `tools/sch_navigate_tool.cpp`,
   `tools/sch_editor_control.cpp`, `dialogs/dialog_annotate.cpp`.
 
@@ -704,7 +718,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   field's name): set in Symbol Properties' fields grid (`set_field_looks`), carried with the key (rename, unit change, paste, delete), drawn (the colour), written
   in `(effects (font (face ..) .. (color ..)))` and read back. **A power symbol's** Footprint, Datasheet, flags and user fields (`SchExtras::power_props`). The canvas
   draws an outline font's field with the stroke font.
-- Missing: a label's field moved by hand is placed by `AutoplaceFields` again; the net class of a label on a bus is not
+- Done 2026-11-06 (`task-u3-schtext`, UI-LEFT S6, `PARITY-sch.md` section 60): **a text's font face, colour and link** edited in Text, Label and Text Box
+  Properties (`TextAttrs::font`, `set_text_attrs` with the font, the link check and Exclude from simulation, text boxes too; `(face ..)` written and read); a
+  free text's bold, italic and colour, a label's and a text box's colour drawn; **a label's fields are items**: picked, dragged, turned, mirrored and edited
+  (Field Properties with Font and Color) on the canvas, and a field placed by hand takes the label out of the autoplaced ones (`field_layout` under the label's
+  id, no `(fields_autoplaced yes)`, read back from a KiCad file that has no such token), turning and mirroring with the label until Autoplace Fields.
+- Missing: ~~a label's field moved by hand is placed by `AutoplaceFields` again~~ (done 2026-11-06); a field added to a label placed by hand goes where
+  Autoplace Fields would put it; a label's field keeps no size, bold or shown name; an outline font is drawn with the stroke font; the net class of a label on a bus is not
   given to the bus's members; the
   fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on and Autoplace Fields ignores swapped pins; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
   label's spin; only the normal and the De Morgan body style are modelled.

@@ -214,20 +214,20 @@ Notes:
   - Only the Normal and De Morgan body styles exist.
   - Alternates are synced to the reference's units on the sheet in view only; the Symbol Unit submenu's Duplicate is not possible.
   - M. GAPS 12/19; PARITY-sch §48, §59; r5 D5-H3.
-- **S6 [BD] Text looks.**
-  - Font face, colour and hyperlink can't be edited.
-  - A free text's bold, italic and colour are kept but not drawn.
-  - A label's own fields can't be clicked or moved, and a hand-moved one is autoplaced again.
-  - M. GAPS 12; PARITY-sch §39, §52.
+- **S6 [BD] Text looks.** **done (task-u3-schtext)**: Text, Label and Text Box Properties edit the Font (KiCad's choices and the machine's families), the Color and, for a text and a text box, the Link (the hierarchy's pages, `ValidateHyperlink`'s message) and Exclude from simulation (`set_text_attrs`, `(face ..)` written and read); a free text's bold, italic and colour and a label's and a text box's colour are drawn; a label's fields (the Sheet References included) are items -- clicked, dragged, turned and edited on the canvas (Field Properties with Font and Color), and a field placed by hand stays (no `(fields_autoplaced ..)`, read back from KiCad) until Autoplace Fields; the Properties panel's Font row edits a text's and a label's face (PARITY-sch §60). Left:
+  - An outline font is drawn with the stroke font; a text placed with T or a text box being drawn takes its font, colour and link after it is placed.
+  - A label's field keeps no size, bold or shown name; a field added to a label placed by hand goes where Autoplace Fields puts it.
+  - (was: font, colour and link not editable; a free text's bold, italic and colour not drawn; a label's fields neither clicked nor kept where moved.)
+  - M. GAPS 12; PARITY-sch §39, §52, §60.
 - **S7 [BD] Properties panel.** **done (task-u1-props)**: every class lists KiCad's registered rows (a test replays the C++), and the symbol's and sheet's fields are rows as KiCad's panel adds them; a label's size, bold, italic, colour and justification, a text's bold, italic, colour and hyperlink, wire ends, Body Style, Exclude From Position Files and user fields are edited; Sheetfile shows the field's own text (B3-M1) (PARITY-sch §55). Left, read-only with the reason as the tooltip:
-  - Fonts; a symbol's pin display (one library symbol per lib_id). (Its Unit is `set_symbol_unit` since task-u2-symprops.)
-  - A sheet's border, fill and attributes (not kept: S8); a text box's margins, fill, colour and hyperlink; an image's transform offset.
+  - A text box's and a directive label's font; a symbol's pin display (one library symbol per lib_id). (Its Unit is `set_symbol_unit` since task-u2-symprops; a text's and a label's Font and a sheet's border, fill and attributes are editable since task-u3-schtext.)
+  - A text box's margins, fill, colour and hyperlink (its dialog edits the last three); an image's transform offset.
   - M. PARITY-sch §17, §30, §45, §55.
-- **S8 [FM] Hierarchy.**
-  - The Navigator has no Edit Page Number, Rename, New or Delete Top-Level Sheet, and no net highlight.
-  - A KiCad 10 project with several top-level sheets is folded under one root.
-  - A sheet's colours and DNP and BOM flags aren't kept or editable, and there is no Add Field on a sheet.
-  - M. PARITY-sch §30, §40, §50, §52; r2 B-L1, r6 C6-L2, r7 A7-L3.
+- **S8 [FM] Hierarchy.** **done (task-u3-schtext)**: the Navigator's right-click menu -- Edit Page Number, Rename in place, Delete Top-Level Sheet ("Delete top-level sheet '%s'?..." / "Cannot delete the last top-level sheet."), New Top-Level Sheet ("Enter name for new top-level sheet:"), Expand / Collapse All -- and its net highlight (the sheets holding the highlighted net in `LAYER_BRIGHTENED`); a KiCad 10 project's top-level sheets shown as roots of their own (`virtual_root`); a sheet's border width and colour, fill colour and Exclude from simulation / bill of materials / board and Do not populate kept, written, read, drawn (fill, DNP cross) and edited in Sheet Properties and the Properties panel; Add Field, Move and Delete of a sheet's user fields in Sheet Properties (PARITY-sch §60). Left:
+  - New Top-Level Sheet on a design whose root is its only top-level sheet (offered disabled); the derived files keep the root that places a project's top-level sheets.
+  - A sheet's attributes are its own on every path and variant and are not given to its symbols in the studio's own tables; a sheet with no style of its own is drawn unfilled (written with the old pale fill).
+  - The rows read "name file · page N" (A7-L3); a local net on a screen shown twice lights its first path's row only.
+  - M. PARITY-sch §30, §40, §50, §52, §60; r2 B-L1, r6 C6-L2, r7 A7-L3.
 - **S9 [BD] A shared screen (a sheet placed twice).**
   - Annotate numbers only that screen's references.
   - Every path shares one power reference.
@@ -238,12 +238,15 @@ Notes:
   - Ctrl+E edits the shared entry, so every placement changes.
   - A `lib_name` copy is traced as the lib_id's, which can give a wrong net.
   - L. PARITY-sch §48, §50.
-- **S11 [FM] Symbol Fields Table.**
-  - No scope selector, saved presets, field-name templates or "Add field from library".
-  - No Save/Discard question on close.
-  - The Description column may be done (§52 H3).
-  - M. PARITY-sch §7, §25; r5 C5-L9.
-- **S12 [FM] Find/Replace.** No regex, and it doesn't search sheet names, sheet files, pins or library metadata. S. GAPS 1/4; PARITY-sch §8.
+- **S11 [FM] Symbol Fields Table.** **done (task-u3-schtext)**: the scope (Entire Project, Current Sheet Only, Current Sheet and Down, and 25ec2335's Selection); the project's view presets (the box with the built-in and the project's in name order, "Save preset..." -- "BOM preset name:", built-in names refused, "Overwrite existing preset?" -- and "Delete preset...", in `schematic.bom_presets`; the box shows the preset the view is); the field name templates as hidden columns; the project's `bom_settings` view on open; "Save changes?" with Save / Discard Changes / Cancel on a close; Rename Field's and Remove's prompts; the variant columns kept (PARITY-sch §60). Left:
+  - "Add field from library" is not a KiCad feature (its only Add is "New field name:"); KiCad has no Rename of a preset either (save under the new name, delete the old).
+  - A preset is saved when saved (KiCad at the close) and the closing view is not kept as `bom_settings`; with no saved view the user fields are shown.
+  - The Description column, editable BOM Name labels, the grid's context menus, the Group By refusals, the format presets' Save / Delete, Set / Clear Variant Symbol.
+  - M. PARITY-sch §7, §25, §60; r5 C5-L9.
+- **S12 [FM] Find/Replace.** **done (task-u3-schtext)**: Regular Expression (in Find and Replace, Whole words only winning over it; `wxRegEx`'s extended syntax with `\N` and `&` in the replacement, a matcher of the port's own, no crate); the search reaches sheets' names, files and user fields, sheet pins, power symbols' values, text boxes and directive labels' fields beside the symbols' fields and pins; Replace renames a sheet, a sheet pin, a power symbol's net, a text box, a field, not a sheet's file nor a symbol's pin (as KiCad); "Search the current selection only" in both modes (PARITY-sch §60). Left:
+  - Library metadata: KiCad's dialog has no box for `searchMetadata` either; groups and ERC markers are not searched.
+  - The matcher tries alternatives left to right (POSIX: the longest) and does not upper-case the pattern as KiCad does; a power symbol's Reference is found, not replaced.
+  - S. GAPS 1/4; PARITY-sch §8, §60.
 - **S13 [FM] Arcs.** Two clicks make a fixed 90° arc, and there is no arc point editor. M. PARITY-sch §12.
 - **S14 [BD] Annotation.**
   - Placing a unit never fills a free unit of an existing part (D-A1).
