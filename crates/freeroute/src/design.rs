@@ -25,6 +25,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use eda_model::footprint::{placed_pads, placed_refdes_box, PlacedPad};
+use eda_model::outline::MAX_ERROR_NM;
 use eda_model::ir::{Design, Point as IrPoint, RoutingSection, Side, Track, Via as IrVia};
 use eda_model::{BoardRules, ConstraintModel};
 
@@ -216,6 +217,31 @@ struct PlanKeepout {
     rect: (Nm, Nm, Nm, Nm),
 }
 
+/// The board's cutouts: the holes of the outline `placement.outline`
+/// summarises, as `BOARD::GetBoardPolygonOutlines` (`pcbnew/board.cpp`)
+/// makes it of Edge.Cuts -- the board's own Edge.Cuts and the placed
+/// footprints' ([`eda_drc::outline::board_outline_with`]) -- each a closed
+/// ring, nm. The boundary itself stays `placement.outline`: the holes of
+/// any other, disjoint outline lie outside it.
+///
+/// KiCad's export gives FreeRouting the same: `SPECCTRA_DB::fillBOUNDARY`
+/// (`specctra_export.cpp`) writes the outline as the boundary and "emit[s]
+/// a signal layers keepout for every interior polygon left", `(keepout ""
+/// (polygon signal 0 ..))`, which FreeRouting's reader puts on every
+/// signal layer as an obstacle area. A board whose Edge.Cuts are its
+/// polygon alone has none.
+fn board_cutouts(design: &Design, model: &ConstraintModel) -> Vec<Vec<IrPoint>> {
+    let mut holes = eda_drc::outline::board_outline_with(design, Some(model), true).main_holes();
+    holes.retain(|h| h.len() >= 3);
+    for h in &mut holes {
+        // Closed, as `fillBOUNDARY` closes it ("Close polygon").
+        if h.first() != h.last() {
+            h.push(h[0]);
+        }
+    }
+    holes
+}
+
 /// The strips between the facing edges of adjacent SMD pads of one
 /// footprint, µm: under the part's body, a
 /// track threading between its pads is what the gates send back. Pairs
@@ -263,8 +289,11 @@ fn pad_gap_strips(pads: &[PlacedPad], max_gap: Nm) -> Vec<(Nm, Nm, Nm, Nm)> {
 /// cannot drift apart.
 struct Plan {
     layers: Vec<String>,
-    /// µm, closed.
+    /// nm, closed.
     outline: Vec<IrPoint>,
+    /// The board's cutouts, the holes of the outline (nm, each closed): a
+    /// keep-out on every signal layer, as KiCad's export writes them.
+    cutouts: Vec<Vec<IrPoint>>,
     /// In placement order.
     components: Vec<PlanComponent>,
     /// The pins' stacks by name, then the via's.
@@ -285,6 +314,8 @@ struct Plan {
     clearance: i64,
     edge_clearance: i64,
     keepout_clearance: i64,
+    /// From copper to a cutout's rim, board units, the rounding margin in.
+    cutout_clearance: i64,
 }
 
 impl Plan {
@@ -309,6 +340,7 @@ impl Plan {
         if outline.first() != outline.last() {
             outline.push(outline[0]);
         }
+        let cutouts = board_cutouts(design, model);
         let mut pin_nets: BTreeMap<&str, &str> = BTreeMap::new();
         for net in &model.nets {
             for pin in &net.pins {
@@ -450,9 +482,11 @@ impl Plan {
             })
             .collect();
         let margin = ROUNDING_MARGIN;
+        let edge_clearance_nm = rules.tuning.edge_clearance_nm.max(EDGE_CLEARANCE_NM);
         Ok(Plan {
             layers: rules.layers.clone(),
             outline,
+            cutouts,
             components,
             padstacks,
             nets,
@@ -463,9 +497,19 @@ impl Plan {
             clearance: units(rules.clearance) + margin,
             // The outline is copper `OUTLINE_HALF_WIDTH` wide either side
             // of the edge.
-            edge_clearance: units(rules.tuning.edge_clearance_nm.max(EDGE_CLEARANCE_NM)) - OUTLINE_HALF_WIDTH + margin,
+            edge_clearance: units(edge_clearance_nm) - OUTLINE_HALF_WIDTH + margin,
             keepout_clearance: margin,
+            // A cutout is a keep-out of no width, and its rim the chords of a
+            // curve flattened to `MAX_ERROR_NM` inside it: the edge clearance
+            // and that error both.
+            cutout_clearance: units(edge_clearance_nm + MAX_ERROR_NM) + margin,
         })
+    }
+
+    /// How many items the cutouts are: one keep-out per cutout per signal
+    /// layer.
+    fn cutout_items(&self) -> usize {
+        self.cutouts.len() * self.layers.len()
     }
 
     /// The board's bounding box, board units: the outline's, grown by
@@ -517,15 +561,27 @@ pub fn to_dsn(design: &Design, model: &ConstraintModel, rules: &BoardRules) -> R
     let via = plan.via_padstack();
     let _ = writeln!(out, "    (via {})", quoted(&via.name));
     // The clearance, then a class of its own for the outline and one for
-    // the keep-outs: `NAME_default` spaces it from everything else.
+    // the keep-outs: `NAME_default` spaces it from everything else. A board
+    // with cutouts has one for them too, after those two.
+    let cutout_rule = if plan.cutouts.is_empty() { String::new() } else { format!("\n      (clearance {} (type cutout_default))", um(plan.cutout_clearance)) };
     let _ = writeln!(
         out,
-        "    (rule\n      (width {})\n      (clearance {})\n      (clearance {} (type edge_default))\n      (clearance {} (type keepout_default))\n    )",
+        "    (rule\n      (width {})\n      (clearance {})\n      (clearance {} (type edge_default))\n      (clearance {} (type keepout_default)){cutout_rule}\n    )",
         um(2 * plan.track_half_width),
         um(plan.clearance),
         um(plan.edge_clearance),
         um(plan.keepout_clearance)
     );
+    // The cutouts first, as `fillBOUNDARY` emits them before any other
+    // keep-out: on the signal layers, the polygon closed. KiCad's names no
+    // clearance class; this one keeps copper the edge clearance off the rim.
+    for c in &plan.cutouts {
+        let _ = write!(out, "    (keepout \"\" (polygon signal 0");
+        for p in c {
+            let _ = write!(out, " {} {}", um(units(p.x)), um(units(p.y)));
+        }
+        let _ = writeln!(out, ") (clearance_class cutout))");
+    }
     for k in &plan.keepouts {
         let (x0, y0, x1, y1) = k.rect;
         let _ = writeln!(out, "    (keepout \"\" (rect {} {} {} {} {}) (clearance_class keepout))", layer(k.layer), um(units(x0)), um(units(y0)), um(units(x1)), um(units(y1)));
@@ -817,6 +873,7 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
     matrix.set_default(plan.clearance);
     let edge_class = matrix.add_default_pair(plan.edge_clearance) as i32;
     let keepout_class = matrix.add_default_pair(plan.keepout_clearance) as i32;
+    let cutout_class = if plan.cutouts.is_empty() { 0 } else { matrix.add_default_pair(plan.cutout_clearance) as i32 };
     // One matrix class per distinct clearance value among `plan.classes`
     // that differs from the board default -- see `add_own_clearance_class`.
     // Classes that do not override clearance are left sharing class 1 (the
@@ -892,8 +949,8 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
         pull_tight_accuracy: 500,
     };
 
-    // The outline first, the keep-outs, the planes, then the pins by
-    // component; the board lists them last in first.
+    // The outline first, the cutouts, the keep-outs, the planes, then the
+    // pins by component; the board lists them last in first.
     let outline = PolygonShape::new(&corners);
     let n = outline.corners.len();
     let lines = (0..n).map(|i| Line::new(outline.corners[i], outline.corners[(i + 1) % n])).collect();
@@ -907,6 +964,23 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
         component: 0,
         nets: Vec::new(),
     }];
+    // A cutout on the `signal` layers is a keep-out on each of them, in
+    // layer order.
+    for c in &plan.cutouts {
+        let ring: Vec<IntPoint> = c.iter().map(|p| IntPoint::new(units(p.x), units(p.y))).collect();
+        for l in 0..layer_count as i32 {
+            items.push(Item {
+                id: items.len() as u32 + 1,
+                kind: ItemKind::Area { kind: AreaKind::Keepout, layer: l, shape: AreaShape::Polygon(PolygonShape::new(&ring)) },
+                first_layer: l,
+                last_layer: l,
+                clearance_class: cutout_class,
+                fixed: FixedState::SystemFixed,
+                component: 0,
+                nets: Vec::new(),
+            });
+        }
+    }
     for k in &plan.keepouts {
         let (x0, y0, x1, y1) = k.rect;
         items.push(Item {
@@ -1002,8 +1076,8 @@ fn to_nm(p: FloatPoint) -> IrPoint {
 pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRules, rb: &RoutingBoard) -> Result<RoutingSection, String> {
     let plan = Plan::of(design, model, rules)?;
     // "REF.PIN" of every pin, by item number as `board_from_design` gives
-    // them: after the outline, the keep-outs and the planes.
-    let first_pin = (plan.keepouts.len() + plan.planes.len()) as u32 + 2;
+    // them: after the outline, the cutouts, the keep-outs and the planes.
+    let first_pin = (plan.cutout_items() + plan.keepouts.len() + plan.planes.len()) as u32 + 2;
     let mut pin_names: BTreeMap<u32, String> = BTreeMap::new();
     for c in &plan.components {
         for pin in &c.pins {
@@ -1533,5 +1607,171 @@ mod tests {
         assert_eq!(escape_nm(board.rules.clearance.get(escape_trace_class, escape_trace_class, layer)), 150_000, "the escape class's clearance to its own copper");
         assert_eq!(escape_nm(board.rules.clearance.get(escape_trace_class, default_trace_class, layer)), 150_000, "and to the default class's copper -- this is what lets it actually escape past a neighbour on the default class");
         assert_eq!(escape_nm(board.rules.clearance.get(default_trace_class, default_trace_class, layer)), 200_000, "the default class keeps the board's own clearance, untouched by the escape class existing");
+    }
+
+    /// A 10 x 10 mm board, net A from a pad at (2, 5) mm to one at (8, 5) mm, with `cutouts` drawn on Edge.Cuts.
+    fn two_pads_with_cutouts(cutouts: Vec<eda_model::ir::Shape>) -> (Design, ConstraintModel) {
+        use eda_model::ir::{DrawingsSection, FootprintInstance, PlacementSection, Provenance};
+        use eda_model::{Footprint, Net, Pad, PadKind, Part, Pin, PinKind};
+        let pad1 = Footprint {
+            name: "PAD1".into(),
+            pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.0), mm(1.0)), shape: ModelPadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }],
+            courtyard: None,
+            model: None,
+            courtyard_outlines: vec![],
+            models3d: vec![],
+            art: Default::default(),
+        };
+        let part = |r: &str| Part {
+            reference: r.into(),
+            mpn: None,
+            lcsc: None,
+            value: None,
+            package: Some("PAD1".into()),
+            footprint: Some("PAD1".into()),
+            symbol: None,
+            datasheet: None,
+            pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Signal }],
+            body_nm: None,
+            edge: None,
+        };
+        let model = ConstraintModel {
+            parts: vec![part("P1"), part("P2")],
+            nets: vec![Net { name: "A".into(), pins: vec!["P1.1".into(), "P2.1".into()] }],
+            footprints: vec![pad1],
+            board: BoardRules { clearance: mm(0.2), ..BoardRules::default() },
+            ..Default::default()
+        };
+        let at = |x: f64, y: f64| IrPoint { x: mm(x), y: mm(y) };
+        let placement = PlacementSection {
+            outline: vec![at(0.0, 0.0), at(10.0, 0.0), at(10.0, 10.0), at(0.0, 10.0)],
+            footprints: vec![
+                FootprintInstance { id: "P1".into(), at: at(2.0, 5.0), rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "P2".into(), at: at(8.0, 5.0), rot: 0, side: Side::Top, label: Default::default() },
+            ],
+            modules: Vec::new(),
+        };
+        let design = Design {
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+            schema: eda_model::ir::SCHEMA_VERSION,
+            provenance: Provenance { engine_version: "test".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            nets: None,
+            placement: Some(placement),
+            routing: None,
+            drawings: (!cutouts.is_empty()).then(|| DrawingsSection { shapes: cutouts, ..Default::default() }),
+        };
+        (design, model)
+    }
+
+    fn edge_rect(x0: f64, y0: f64, x1: f64, y1: f64) -> eda_model::ir::Shape {
+        eda_model::ir::Shape::Rect { id: "cut".into(), layer: "Edge.Cuts".into(), stroke_width: mm(0.05), filled: false, start: IrPoint { x: mm(x0), y: mm(y0) }, end: IrPoint { x: mm(x1), y: mm(y1) } }
+    }
+
+    fn edge_circle(cx: f64, cy: f64, r: f64) -> eda_model::ir::Shape {
+        eda_model::ir::Shape::Circle { id: "hole".into(), layer: "Edge.Cuts".into(), stroke_width: mm(0.05), filled: false, center: IrPoint { x: mm(cx), y: mm(cy) }, end: IrPoint { x: mm(cx + r), y: mm(cy) } }
+    }
+
+    type P = (f64, f64);
+
+    fn seg_point_distance(a: P, b: P, p: P) -> f64 {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len2 = dx * dx + dy * dy;
+        let t = if len2 == 0.0 { 0.0 } else { (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0) };
+        ((a.0 + t * dx - p.0).powi(2) + (a.1 + t * dy - p.1).powi(2)).sqrt()
+    }
+
+    fn segments_cross(a: P, b: P, c: P, d: P) -> bool {
+        let side = |p: P, q: P, r: P| (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0);
+        let (d1, d2, d3, d4) = (side(c, d, a), side(c, d, b), side(a, b, c), side(a, b, d));
+        (d1 > 0.0) != (d2 > 0.0) && (d3 > 0.0) != (d4 > 0.0)
+    }
+
+    fn point_in_ring(ring: &[P], p: P) -> bool {
+        let mut inside = false;
+        for i in 0..ring.len() {
+            let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+            if (a.1 > p.1) != (b.1 > p.1) && p.0 < a.0 + (p.1 - a.1) * (b.0 - a.0) / (b.1 - a.1) {
+                inside = !inside;
+            }
+        }
+        inside
+    }
+
+    /// The least distance, nm, from the copper edge of the routing's tracks and vias to the rim of `ring`, and whether any of them lies in it.
+    fn copper_to_ring(routing: &RoutingSection, ring: &[P]) -> (f64, bool) {
+        let mut least = f64::INFINITY;
+        let mut inside = false;
+        let pt = |p: &IrPoint| (p.x.get() as f64, p.y.get() as f64);
+        let dist = |a: P, b: P| -> f64 {
+            let mut d = f64::INFINITY;
+            for i in 0..ring.len() {
+                let (c, e) = (ring[i], ring[(i + 1) % ring.len()]);
+                if segments_cross(a, b, c, e) {
+                    return 0.0;
+                }
+                d = d.min(seg_point_distance(a, b, c)).min(seg_point_distance(c, e, a)).min(seg_point_distance(c, e, b));
+            }
+            d
+        };
+        for t in &routing.tracks {
+            for w in t.pts.windows(2) {
+                let (a, b) = (pt(&w[0]), pt(&w[1]));
+                inside |= point_in_ring(ring, a) || point_in_ring(ring, b);
+                least = least.min(dist(a, b) - t.width.get() as f64 / 2.0);
+            }
+        }
+        for v in &routing.vias {
+            let c = pt(&v.at);
+            inside |= point_in_ring(ring, c);
+            least = least.min(dist(c, c) - v.diameter.get() as f64 / 2.0);
+        }
+        (least, inside)
+    }
+
+    /// UI-LEFT R4, GAPS item 27: the board's cutouts are keep-outs on every signal layer, written to the DSN as KiCad's `fillBOUNDARY`
+    /// writes them and built into the board the router routes, so the route goes round a cutout with the edge clearance kept -- where,
+    /// without it, the straight route crosses the cutout's place.
+    #[test]
+    fn a_route_goes_round_a_cutout_with_the_edge_clearance() {
+        let cut = [(4.0, 3.0), (6.0, 3.0), (6.0, 7.0), (4.0, 7.0)].map(|(x, y)| (x * 1e6, y * 1e6));
+        let (design, model) = two_pads_with_cutouts(Vec::new());
+        let plain = route_design(&design, &model, &model.board, 20, 2).expect("routes");
+        assert!(plain.unrouted.is_empty());
+        assert!(copper_to_ring(&plain.routing, &cut).0 <= 0.0, "with no cutout the route runs through its place: {:?}", plain.routing.tracks);
+        assert!(!to_dsn(&design, &model, &model.board).unwrap().contains("cutout"), "a board without cutouts writes the DSN it wrote before");
+
+        let (design, model) = two_pads_with_cutouts(vec![edge_rect(4.0, 3.0, 6.0, 7.0)]);
+        let dsn = to_dsn(&design, &model, &model.board).unwrap();
+        assert!(dsn.contains("(clearance 507 (type cutout_default))"), "{dsn}");
+        assert!(dsn.contains("(keepout \"\" (polygon signal 0 ") && dsn.contains(") (clearance_class cutout))"), "{dsn}");
+        let board = board_from_design(&design, &model, &model.board).unwrap();
+        let cutouts: Vec<&Item> = board.items.iter().filter(|i| matches!(i.kind, ItemKind::Area { kind: AreaKind::Keepout, shape: AreaShape::Polygon(_), .. })).collect();
+        assert_eq!(cutouts.len(), board.layer_count(), "one keep-out per signal layer");
+        let class = cutouts[0].clearance_class;
+        for l in 0..board.layer_count() {
+            assert_eq!(board.rules.clearance.get(class, 1, l as i32), 5070, "the edge clearance, the curve error and the rounding margin");
+        }
+        let routed = route_design(&design, &model, &model.board, 20, 2).expect("routes");
+        assert!(routed.unrouted.is_empty(), "the route goes round: {:?}", routed.unrouted);
+        let (least, inside) = copper_to_ring(&routed.routing, &cut);
+        assert!(!inside && least >= 500_000.0 - 1_000.0, "copper {least} nm from the cutout's rim: {:?}", routed.routing.tracks);
+    }
+
+    /// A round cutout (an Edge.Cuts circle, flattened as `ConvertOutlineToPolygon` flattens it) holds the route off as a rectangle does.
+    #[test]
+    fn a_route_goes_round_a_round_cutout() {
+        let (design, model) = two_pads_with_cutouts(vec![edge_circle(5.0, 5.0, 1.5)]);
+        let routed = route_design(&design, &model, &model.board, 20, 2).expect("routes");
+        assert!(routed.unrouted.is_empty(), "{:?}", routed.unrouted);
+        let ring: Vec<P> = (0..360).map(|i| {
+            let a = (i as f64).to_radians();
+            (5e6 + 1.5e6 * a.cos(), 5e6 + 1.5e6 * a.sin())
+        }).collect();
+        let (least, inside) = copper_to_ring(&routed.routing, &ring);
+        assert!(!inside && least >= 500_000.0 - 1_000.0, "copper {least} nm from the hole's rim: {:?}", routed.routing.tracks);
     }
 }
