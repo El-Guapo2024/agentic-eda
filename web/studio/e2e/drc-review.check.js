@@ -235,7 +235,10 @@
       const setup = await until(() => [...document.querySelectorAll(".dialog")].find((d) => d.innerText.startsWith("Schematic Setup")), 3000);
       check("Edit violation severities opens Schematic Setup on Violation Severity", !!setup && /Violation Severity/.test(setup.querySelector(".bs-nav-item.active")?.innerText ?? ""), setup?.querySelector(".bs-nav-item.active")?.innerText);
       if (setup) {
-        const radios = setup.querySelectorAll('section[aria-label="Violation Severity"] input[type=radio]');
+        // the page reads the table first (`GET /api/sch/erc_severities`, "Reading the ERC severities…"): wait for its rows, which a busy server answers late
+        const radiosOf = () => setup.querySelectorAll('section[aria-label="Violation Severity"] input[type=radio]');
+        await until(() => radiosOf().length >= 46 * 3, 15000);
+        const radios = radiosOf();
         check("the page has a row of Error / Warning / Ignore for every ERC check", radios.length >= 46 * 3, `${radios.length} radios`);
         await closeDialog("Schematic Setup");
       }
