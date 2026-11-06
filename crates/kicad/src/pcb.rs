@@ -1823,6 +1823,8 @@ pub(crate) fn write_footprint(
                         "art" => Some(crate::duid_for(&format!("footprint:{}:art:{rest}", fp.id), &fp.id)),
                         "arttext" => Some(crate::duid_for(&format!("footprint:{}:arttext:{rest}", fp.id), &fp.id)),
                         "pad" => pad_uuids.get(m).cloned(),
+                        // a group of the footprint's groups (B-9): by the uuid that group is written with below
+                        "group" => rest.parse::<usize>().ok().filter(|i| *i < e.groups.len() && *i != gi).map(|i| crate::duid_for(&format!("footprint:{}:group:{i}", fp.id), &fp.id)),
                         "uuid" => own_courtyard.is_some().then(|| rest.to_string()),
                         "field" => match rest {
                             "Reference" => Some(crate::duid_for(&format!("footprint:{}:ref", fp.id), &fp.id)),

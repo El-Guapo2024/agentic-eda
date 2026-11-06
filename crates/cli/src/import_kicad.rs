@@ -364,6 +364,9 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
             let kinds: Vec<String> = notes.unread_items.iter().map(|(kind, n)| format!("{kind} x{n}")).collect();
             eprintln!("  not read (no reader for these kinds of board item yet; they are not in the design nor in what is exported from it): {}", kinds.join(", "));
         }
+        if !notes.footprints_scaled.is_empty() {
+            eprintln!("  {}", eda_kicad::scaled_footprints_note(&notes.footprints_scaled));
+        }
         if notes.zones_skipped > 0 {
             eprintln!("  {} zone(s)/pour(s) skipped -- not imported (see report for a proposed model shape)", notes.zones_skipped);
         }

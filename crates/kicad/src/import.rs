@@ -75,8 +75,8 @@ use crate::sexpr::{self, Sexpr};
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ImportNotes {
     pub zones_skipped: usize,
-    /// Footprints whose `(transform ... (scale sx sy))` is not 1:1 (KiCad 10, [`crate::fp_transform`]): the model has no footprint scale, so they are
-    /// read at 1:1.
+    /// Footprints whose `(transform ... (scale sx sy))` is not 1:1 (KiCad 10, [`crate::fp_transform`]): the model has no footprint scale, so the scale is baked
+    /// into their pads, graphics and texts as KiCad shows them, and they are written back at 1:1 ([`scaled_footprints_note`] says so).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprints_scaled: Vec<String>,
     /// Always 0 now: an Edge.Cuts arc is kept as an arc ([`Self::outline_shapes`]), not tessellated into the outline's straight segments.
@@ -2346,12 +2346,45 @@ fn import_footprints(
                 }
             }
         }
-        // The footprint's own groups (`resolveGroups` makes them like a board's), each member by its place; a member that is not one of those is left out.
-        for g in sexpr::find_all(fp, "group") {
-            let members: Vec<String> = sexpr::find(g, "members").map(|m| m.iter().skip(1).filter_map(Sexpr::text).filter_map(|u| slots.get(u).cloned()).collect()).unwrap_or_default();
-            if !members.is_empty() {
-                extra.groups.push(eda_model::ir::FootprintGroup { name: sexpr::txt(g, 1).unwrap_or_default().to_string(), locked: import_items::is_locked(g), members });
+        // The footprint's own groups (`resolveGroups` makes them like a board's), each member by its place; a member that is not one of those is left out. A group
+        // can hold a group (B-9): `resolveGroups` creates every group first and puts each footprint group in the footprint's item map ("Keep the footprint lookup
+        // map in sync") before it resolves the members, so a member is `group:<i>`, the i-th group kept here.
+        let file_groups: Vec<&[Sexpr]> = sexpr::find_all(fp, "group").collect();
+        for (gi, g) in file_groups.iter().enumerate() {
+            // `(uuid ..)`, or the `(id ..)` of a file before 20221130
+            if let Some(u) = sexpr::find(g, "uuid").or_else(|| sexpr::find(g, "id")).and_then(|u| sexpr::txt(u, 1)) {
+                slots.insert(u.to_string(), format!("group:{gi}"));
             }
+        }
+        let mut groups: Vec<Option<eda_model::ir::FootprintGroup>> = file_groups
+            .iter()
+            .map(|g| {
+                let members: Vec<String> = sexpr::find(g, "members").map(|m| m.iter().skip(1).filter_map(Sexpr::text).filter_map(|u| slots.get(u).cloned()).collect()).unwrap_or_default();
+                Some(eda_model::ir::FootprintGroup { name: sexpr::txt(g, 1).unwrap_or_default().to_string(), locked: import_items::is_locked(g), members })
+            })
+            .collect();
+        // A group left with no member is not kept, and nor is its place in a group that holds it (until nothing changes: a group of an emptied group empties too).
+        loop {
+            let gone: Vec<String> = groups.iter().enumerate().filter(|(_, g)| g.as_ref().is_some_and(|g| g.members.is_empty())).map(|(i, _)| format!("group:{i}")).collect();
+            if gone.is_empty() {
+                break;
+            }
+            for g in groups.iter_mut() {
+                if g.as_ref().is_some_and(|g| g.members.is_empty()) {
+                    *g = None;
+                } else if let Some(g) = g {
+                    g.members.retain(|m| !gone.contains(m));
+                }
+            }
+        }
+        // the places of the groups kept, renumbered
+        let kept: Vec<usize> = (0..groups.len()).filter(|i| groups[*i].is_some()).collect();
+        for g in groups.into_iter().flatten() {
+            let members = g.members.into_iter().map(|m| match m.strip_prefix("group:").and_then(|i| i.parse::<usize>().ok()) {
+                Some(i) => format!("group:{}", kept.iter().position(|k| *k == i).unwrap_or(usize::MAX)),
+                None => m,
+            });
+            extra.groups.push(eda_model::ir::FootprintGroup { name: g.name, locked: g.locked, members: members.collect() });
         }
         extras.push(extra);
         if !edit.is_empty() {
@@ -2707,10 +2740,8 @@ fn import_board_copper_texts(root: &[Sexpr]) -> Vec<FootprintText> {
     let vars = title_block_vars(root);
     let mut out = Vec::new();
     for item in sexpr::find_all(root, "gr_text") {
-        // A hidden text has no copper (`IsVisible()`).
-        if sexpr::find(item, "hide").is_some() || item.iter().any(|c| matches!(c, Sexpr::Atom(a) if a == "hide")) {
-            continue;
-        }
+        // A board text the file marks hidden is copper all the same (R4-6): KiCad reads it visible (`parsePCB_TEXT`: "Hidden PCB text is no longer supported",
+        // `text->SetVisible( true )`), as the reader of the board's texts does.
         let Some(raw) = sexpr::txt(item, 1) else { continue };
         out.extend(parse_text_on(item, &resolve_text_vars(raw, &vars), &ident, false, &|l| l.ends_with(".Cu")));
     }
@@ -4230,5 +4261,23 @@ mod tests {
         let by_uuid = |u: &str| zones.iter().find(|z| z.uuid == u).unwrap();
         assert_eq!(flags(by_uuid("z1")), (true, true, true, true, false, false));
         assert_eq!(flags(by_uuid("z2")), (true, true, true, false, false, false));
+    }
+
+    /// R4-6: a board text the file marks hidden is read visible (`parsePCB_TEXT`: "Hidden PCB text is no longer supported"), on copper as on silk: the router and via
+    /// stitching keep away from it, as KiCad's router keeps away from every `PCB_TEXT`.
+    #[test]
+    fn a_hidden_board_text_on_copper_is_copper() {
+        let text = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (5 "F.SilkS" user))
+  (net 0 "")
+  (gr_text "SHOWN" (at 10 10 0) (layer "F.Cu") (uuid "t1") (effects (font (size 1 1) (thickness 0.15))))
+  (gr_text "HIDDEN" (at 20 10 0) (layer "F.Cu") (hide yes) (uuid "t2") (effects (font (size 1 1) (thickness 0.15))))
+  (gr_text "OLD" (at 30 10 0) (layer "F.Cu") hide (uuid "t3") (effects (font (size 1 1) (thickness 0.15))))
+)"#;
+        let (design, _, _) = import_kicad_pcb(text).unwrap();
+        let d = design.drawings.unwrap();
+        assert_eq!(d.texts.len(), 3, "every text is the board's");
+        let copper: Vec<&str> = d.copper_texts.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(copper, ["SHOWN", "HIDDEN", "OLD"], "and every one is copper");
     }
 }
