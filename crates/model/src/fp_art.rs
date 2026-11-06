@@ -104,6 +104,17 @@ impl LineStyle {
         }
     }
 
+    /// Drawn as one solid stroke: `SOLID`, or the file's `default` (`PCB_PAINTER::draw( PCB_SHAPE )`: `if( lineStyle == LINE_STYLE::DEFAULT ) lineStyle = LINE_STYLE::SOLID`).
+    pub fn is_solid(self) -> bool {
+        matches!(self, LineStyle::Unset | LineStyle::Solid)
+    }
+
+    /// The style of a `(stroke ..)` list (`STROKE_PARAMS_PARSER::ParseStroke`'s `T_type`), solid when it names none (`parsePCB_SHAPE` starts from `STROKE_PARAMS( 0,
+    /// LINE_STYLE::SOLID )`) or a word KiCad does not have.
+    pub fn of_stroke(type_word: Option<&str>) -> LineStyle {
+        type_word.and_then(LineStyle::from_token).unwrap_or(LineStyle::Solid)
+    }
+
     /// Inverse of [`LineStyle::token`]; `None` for a word KiCad does not have.
     pub fn from_token(t: &str) -> Option<LineStyle> {
         Some(match t {

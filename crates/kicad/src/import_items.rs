@@ -33,6 +33,8 @@ pub(crate) struct ItemRef {
     /// A copper shape's solder-mask opening (`(layers "F.Cu" "F.Mask")`) and its own `(solder_mask_margin ..)`, which `Shape` has no field for (`crate::import::cu_item_layers`).
     pub solder_mask: bool,
     pub solder_mask_margin: Option<Nm>,
+    /// A shape's line style (`(stroke (width ..) (type ..))`, `STROKE_PARAMS_PARSER::ParseStroke`), which `Shape` has no field for (UI-LEFT P5).
+    pub line_style: eda_model::fp_art::LineStyle,
 }
 
 impl ItemRef {
@@ -50,12 +52,13 @@ impl ItemRef {
             corner_radius: if sexpr::tag(item) == Some("gr_rect") { sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(crate::import::mm_to_nm).unwrap_or(Nm::ZERO).max(Nm::ZERO) } else { Nm::ZERO },
             solder_mask: shape && mask,
             solder_mask_margin: if shape && mask { sexpr::find(item, "solder_mask_margin").and_then(|m| sexpr::num(m, 1)).map(crate::import::mm_to_nm) } else { None },
+            line_style: if shape { eda_model::fp_art::LineStyle::of_stroke(sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "type")).and_then(|t| sexpr::txt(t, 1))) } else { Default::default() },
         }
     }
 
     /// The shape's style as the file gave it, by the id `id` the shape now has; `None` when it says nothing.
     pub(crate) fn shape_style(&self, id: &str) -> Option<eda_model::pcb_items::ShapeStyle> {
-        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), corner_radius: self.corner_radius, solder_mask: self.solder_mask, solder_mask_margin: self.solder_mask_margin, ..eda_model::pcb_items::ShapeStyle::empty(id) };
+        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), corner_radius: self.corner_radius, solder_mask: self.solder_mask, solder_mask_margin: self.solder_mask_margin, line_style: self.line_style, ..eda_model::pcb_items::ShapeStyle::empty(id) };
         (!st.is_empty()).then_some(st)
     }
 }

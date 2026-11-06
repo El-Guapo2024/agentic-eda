@@ -43,7 +43,8 @@ fn the_three_hatches_are_read_and_a_solid_or_empty_fill_is_not_one() {
     let (design, _, _) = import_kicad_pcb(&board(ITEMS)).expect("imports");
     let dr = design.drawings.as_ref().expect("drawings");
     assert_eq!(dr.shapes.len(), 5);
-    assert_eq!(dr.board_items.shape_styles.len(), 3, "{:?}", dr.board_items.shape_styles);
+    // Three hatches; the file's `(type default)` strokes are kept in the styles too (UI-LEFT P5), so count the hatched ones.
+    assert_eq!(dr.board_items.shape_styles.iter().filter(|st| st.hatch.is_some()).count(), 3, "{:?}", dr.board_items.shape_styles);
     assert_eq!(hatch_of_shape_at(&design, Nm::ZERO, Nm::ZERO), Some(HatchKind::Hatch));
     assert_eq!(hatch_of_shape_at(&design, mm(30.0), mm(5.0)), Some(HatchKind::ReverseHatch));
     assert_eq!(hatch_of_shape_at(&design, mm(50.0), Nm::ZERO), Some(HatchKind::CrossHatch));
@@ -128,5 +129,5 @@ fn the_style_of_a_shape_that_is_gone_is_dropped_before_another_takes_its_id() {
     dr.shapes.push(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.2), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(10.0), y: mm(10.0) } });
     dr.assign_missing_ids();
     assert_eq!(dr.board_items.hatch_of(&gone), None);
-    assert_eq!(dr.board_items.shape_styles.len(), 2);
+    assert_eq!(dr.board_items.shape_styles.iter().filter(|st| st.hatch.is_some()).count(), 2);
 }

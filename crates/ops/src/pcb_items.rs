@@ -69,6 +69,9 @@ pub enum PcbItemCmd {
     /// And the line endings of lines, arcs and curves (`EDA_SHAPE::SetStartEnding` / `SetEndEnding`: the shape dialog's Start and End rows, and the Properties panel's Start Shape,
     /// Start Length, Start Width, Start Stroke Width and their End rows), KiCad 10's `(start_shape ..)` and `(end_shape ..)`: an ending left out changes nothing, one of style
     /// `none` takes it away. A closed shape has no endings (`isOpenShape`).
+    ///
+    /// And the stroke's line style of any shape (`EDA_SHAPE::SetLineStyle`: the shape dialog's "Line style:" and the Properties panel's "Line Style", UI-LEFT P5): solid,
+    /// dash, dot, dash_dot or dash_dot_dot (or the file's `default`); left out, it changes nothing.
     SetShapeStyle {
         ids: Vec<String>,
         #[serde(default)]
@@ -77,6 +80,8 @@ pub enum PcbItemCmd {
         start_ending: Option<LineEnding>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         end_ending: Option<LineEnding>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line_style: Option<eda_model::fp_art::LineStyle>,
     },
     /// `pcbnew.GridItem.place` (`DRAWING_TOOL::PlaceSubGrid`, "Place Sub-grid"): KiCad 10's grid item, centred on the first click and as big and as turned as the second makes it.
     /// `grid_item.id` is ignored. See [`crate::kicad10_items`].
@@ -188,12 +193,15 @@ impl PcbItemCmd {
             PcbItemCmd::PlaceDrillMap { layer } => format!("drill-map place --layer {layer}"),
             PcbItemCmd::EditDrillMap { id, map: m } => format!("drill-map edit {id} --layer {} --offset {},{} --size {}", m.layer, mm(m.offset.x), mm(m.offset.y), mm(m.size_nm)),
             PcbItemCmd::DeleteDrillMap { id } => format!("drill-map delete {id}"),
-            PcbItemCmd::SetShapeStyle { ids, fill, start_ending, end_ending } => {
+            PcbItemCmd::SetShapeStyle { ids, fill, start_ending, end_ending, line_style } => {
                 let mut out = format!("shape style {} --fill {}", ids.join(","), fill.map_or("unchanged".to_string(), |f| format!("{f:?}").to_lowercase()));
                 for (flag, e) in [("start", start_ending), ("end", end_ending)] {
                     if let Some(e) = e {
                         out.push_str(&format!(" --{flag}-shape {} --{flag}-size {}x{} --{flag}-stroke {}", e.style.token(), mm(e.length_nm), mm(e.width_nm), mm(e.stroke_width_nm)));
                     }
+                }
+                if let Some(ls) = line_style {
+                    out.push_str(&format!(" --line-style {}", ls.token()));
                 }
                 out
             }
@@ -230,7 +238,7 @@ impl<'a> Board<'a> {
             PcbItemCmd::AddPoint { point } => self.add_point(point.clone()),
             PcbItemCmd::EditPoint { id, layer, at, size_nm } => self.edit_point(id, layer, *at, *size_nm),
             PcbItemCmd::DeletePoint { id } => self.delete_point(id),
-            PcbItemCmd::SetShapeStyle { ids, fill, start_ending, end_ending } => self.set_shape_style(ids, *fill, *start_ending, *end_ending),
+            PcbItemCmd::SetShapeStyle { ids, fill, start_ending, end_ending, line_style } => self.set_shape_style(ids, *fill, *start_ending, *end_ending, *line_style),
             PcbItemCmd::AddBarcode { barcode } => self.add_barcode(barcode.clone()),
             PcbItemCmd::EditBarcode { id, barcode } => self.edit_barcode(id, barcode.clone()),
             PcbItemCmd::DeleteBarcode { id } => self.delete_barcode(id),
@@ -301,11 +309,11 @@ impl<'a> Board<'a> {
 
     /// `SetShapeStyle`: a rectangle, a circle or a polygon (the kinds `fillAvailable` lets have a fill) is solid (`Shape::filled`), hatched (the board's `shape_styles`) or neither. Every shape
     /// is checked before any is changed.
-    fn set_shape_style(&mut self, ids: &[String], fill: Option<ShapeFill>, start: Option<LineEnding>, end: Option<LineEnding>) -> Result<(), Vec<CheckResult>> {
+    fn set_shape_style(&mut self, ids: &[String], fill: Option<ShapeFill>, start: Option<LineEnding>, end: Option<LineEnding>, line_style: Option<eda_model::fp_art::LineStyle>) -> Result<(), Vec<CheckResult>> {
         if ids.is_empty() {
             return Err(fail("ops_bad_shape_style", "ids", "name at least one shape"));
         }
-        if fill.is_none() && start.is_none() && end.is_none() {
+        if fill.is_none() && start.is_none() && end.is_none() && line_style.is_none() {
             return Ok(());
         }
         let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_shape", &ids[0], "the board has no drawings yet"))?;
@@ -338,6 +346,10 @@ impl<'a> Board<'a> {
                     endings.end = keep_type(e.clamped(), endings.end);
                 }
                 dr.board_items.set_endings(id, endings);
+            }
+            // `EDA_SHAPE::SetLineStyle`: every kind of shape has one (`EDA_SHAPE_DESC`'s "Line Style" is not masked for any `PCB_SHAPE`).
+            if let Some(ls) = line_style {
+                dr.board_items.set_line_style(id, ls);
             }
         }
         Ok(())
