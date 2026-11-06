@@ -500,6 +500,10 @@ export function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphi
     case "circle":
       ctx.arc(g.center[0], g.center[1], g.radiusNm, 0, Math.PI * 2);
       break;
+    case "bezier":
+      ctx.moveTo(g.start[0], g.start[1]);
+      ctx.bezierCurveTo(g.c1[0], g.c1[1], g.c2[0], g.c2[1], g.end[0], g.end[1]);
+      break;
     case "arc": {
       const center = arcCenter(g.start, g.mid, g.end);
       if (!center) {
@@ -516,8 +520,8 @@ export function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphi
       break;
     }
   }
-  if (g.kind === "polyline") {
-    // A library polyline's fill is the implicitly-closed polygon; its
+  if (g.kind === "polyline" || g.kind === "bezier") {
+    // A library polyline's (or curve's) fill is the implicitly-closed polygon; its
     // stroke is the open path as given (sch_painter.cpp: fill closes,
     // stroke does not) -- fill before closing the path for the stroke.
     if (mode !== "none") ctx.fill();

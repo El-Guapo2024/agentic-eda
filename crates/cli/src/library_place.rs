@@ -15,6 +15,9 @@
 //!   * `ExchangeFootprints` carries the library copy of each footprint it puts a part on (`library`), and a symbol's Footprint field that is edited
 //!     (`EditSymbolFields`, the Symbol Fields Table's `SetSymbolFields`) is followed by the board in the same step: the exchange of the part's footprint is
 //!     added to the command, `board_netlist_updater.cpp`'s `replaceFootprint`.
+//!   * `OpenFootprintForEdit { name }` of a `Lib:Name` the design has no copy of becomes the `PutLibraryFootprint` of the library's footprint
+//!     ([`with_opened_footprint`]), so the Footprint Editor opens what the file holds and never a blank footprint under its name; `OpenSymbolForEdit` the
+//!     `PutLibrarySymbol` of the library's symbol ([`with_opened_symbol`]), the same for the Symbol Editor.
 //!
 //! A symbol the model already resolves (the intent's own, one it already uses, one the design keeps) is left alone: the design's copy wins.
 
@@ -44,6 +47,52 @@ pub(crate) fn with_installed_definitions(dir: &Path, cmd: &Cmd, design: &Design,
         return None;
     }
     rewrite(cmd, design, model, &*crate::library_tables::libs(dir, Kind::Symbol), &*crate::library_tables::libs(dir, Kind::Footprint))
+}
+
+/// `open_footprint_for_edit` of a footprint the design has no copy of, out of a library of the library tables (`Lib:Name`: `Name.kicad_mod` in the folder
+/// the row nicknamed `Lib` names): the library's footprint goes in with the command, as the `put_library_footprint` (`overwrite`, the model may resolve the
+/// same name) that the Footprint Editor sends before it opens one (`libraryClient.ts::ensureFootprintInProject`), but in the same step as the open.
+///
+/// The editor asks first (`GET /api/library/footprint`: is the design's copy there?) and opens after, in requests of their own, and a command can land in
+/// between: another client forgetting the design's copy (the libsave model keeps it as the library's buffer), an undo. The open verb reads no library,
+/// so it used to start a blank footprint under the library's name, and that blank stood in for the file from then on: every later open found it "in the
+/// project", the tree marked the library modified, and Save would have written it over the file. `FOOTPRINT_EDIT_FRAME::LoadFootprintFromLibrary`
+/// reads the library when it opens. A file that is there and cannot be read refuses the open (`PCB_BASE_FRAME::LoadFootprint` gives nothing on the
+/// `IO_ERROR`, and `LoadFootprintFromLibrary` returns with the editor as it was). A name no library has is left to the verb (a blank one, KiCad's New
+/// Footprint).
+pub(crate) fn with_opened_footprint(dir: &Path, cmd: &Cmd, design: &Design) -> Result<Option<Cmd>, Vec<eda_model::CheckResult>> {
+    let Cmd::OpenFootprintForEdit { name } = cmd else { return Ok(None) };
+    if !name.contains(':') || design.footprint_library.as_ref().is_some_and(|l| l.by_name(name).is_some()) {
+        return Ok(None);
+    }
+    match crate::library_search::read_installed_footprint(&*crate::library_tables::libs(dir, Kind::Footprint), name) {
+        Ok(Some(footprint)) => Ok(Some(Cmd::PutLibraryFootprint { footprint, overwrite: true })),
+        Ok(None) => Ok(None),
+        Err(why) => Err(vec![eda_model::CheckResult::fail("ops_bad_footprint", name, why)]),
+    }
+}
+
+/// `open_symbol_for_edit` of a symbol the design has no copy of, out of a library of the library tables (`Lib:Name` in the file, or the folder, the row
+/// nicknamed `Lib` names): the library's symbol goes in with the command, as the `put_library_symbol` (`overwrite`, the model may resolve the same id) that
+/// the Symbol Editor sends before it opens one (`libraryClient.ts::ensureSymbolInProject`), but in the same step as the open -- the symbol sibling of
+/// [`with_opened_footprint`].
+///
+/// The editor asks first (`GET /api/library/symbol`: is the design's copy there?), reads the project's names, and opens after, in requests of their own; a
+/// command can land in between (another client forgetting the design's copy, an undo), and the open verb, which reads no library file, used to start from
+/// the model's pins-and-graphics copy or a blank symbol under the library's id, which then stood in for the file: every later open found it "in the
+/// project", and Save would have written it over the file. `SYMBOL_EDIT_FRAME::LoadSymbol` reads the library when it opens. A library or a symbol's text
+/// that is there and cannot be read refuses the open ("Error loading symbol %s from library '%s'." and `return false`: the editor as it was). An id no
+/// library has is left to the verb (the model's symbol, the builtin table, else a blank one, KiCad's New Symbol).
+pub(crate) fn with_opened_symbol(dir: &Path, cmd: &Cmd, design: &Design) -> Result<Option<Cmd>, Vec<eda_model::CheckResult>> {
+    let Cmd::OpenSymbolForEdit { lib_id } = cmd else { return Ok(None) };
+    if !lib_id.contains(':') || design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id(lib_id).is_some()) {
+        return Ok(None);
+    }
+    match crate::library_search::read_installed_symbol(&*crate::library_tables::libs(dir, Kind::Symbol), lib_id) {
+        Ok(Some((symbol, _))) => Ok(Some(Cmd::PutLibrarySymbol { symbol, overwrite: true })),
+        Ok(None) => Ok(None),
+        Err(why) => Err(vec![eda_model::CheckResult::fail("ops_bad_symbol", lib_id, why)]),
+    }
 }
 
 /// A library symbol the design has no definition of: a `Lib:Name` the model's explicit symbols (the intent's, a library's it resolved, a published one) and the project

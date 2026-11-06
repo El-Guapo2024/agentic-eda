@@ -135,6 +135,16 @@ export const SCHEMATIC_AND_SYMBOL_EDITOR: ReadonlySet<string> = new Set([
   "eeschema.InteractiveEdit.rotateCW",
   // Repeat Last Item (Insert): `SCH_EDIT_TOOL::RepeatDrawItem` on the sheet, `SYMBOL_EDITOR_DRAWING_TOOLS::RepeatDrawItem` (`RepeatPin`) in the symbol editor.
   "eeschema.InteractiveEdit.repeatDrawItem",
+  // Mirror Horizontally / Vertically (X, Y): `SYMBOL_EDITOR_EDIT_TOOL::Mirror` (UI-LEFT Y2); Draw Bezier Curve: `SYMBOL_EDITOR_DRAWING_TOOLS::DrawShape( BEZIER )`.
+  "eeschema.InteractiveEdit.mirrorH",
+  "eeschema.InteractiveEdit.mirrorV",
+  "eeschema.InteractiveDrawing.drawBezier",
+  // Increment / Decrement Primary / Secondary: `SCH_TOOL_BASE::Increment`, which `SYMBOL_EDITOR_EDIT_TOOL` runs on pins and texts.
+  "eeschema.Interactive.increment",
+  "eeschema.Interactive.incrementPrimary",
+  "eeschema.Interactive.decrementPrimary",
+  "eeschema.Interactive.incrementSecondary",
+  "eeschema.Interactive.decrementSecondary",
   // View > Show Pin Alternate Icons: `SCH_EDITOR_CONTROL::TogglePinAltIcons` (`show_pin_alt_icons`) and `SYMBOL_EDITOR_CONTROL::TogglePinAltIcons`, each with its own setting
   // (UI-LEFT S5: a placed symbol's pins carry their alternates).
   "eeschema.EditorControl.togglePinAltIcons",

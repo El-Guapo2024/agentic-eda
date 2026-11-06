@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 import { fetchSymbolEditorNames } from "../../api/client";
 import { ensureSymbolInProject } from "../../api/libraryClient";
+import { symbolNotLoaded } from "../../kicad-port/libraryEnsure";
 import { joinLibName, libItemNameIllegalChar, splitLibName, symbolLibIdError } from "../../kicad-port/libraryNames";
 import { bareName, libraryOf } from "../../kicad-port/symFields";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
@@ -77,7 +78,9 @@ export function DeriveSymbolDialog() {
         if (!(await askConfirm({ title: "Confirmation", message: `Symbol '${trimmed}' already exists in library '${lib}'.`, okLabel: "Overwrite" }))) return;
         overwrite = true;
       }
-      await ensureSymbolInProject(parent); // a symbol of an installed library is copied into the project library first, like opening it
+      // a symbol of an installed library is copied into the project library first, like opening it; a parent that could not be read derives nothing
+      const problem = await ensureSymbolInProject(parent);
+      if (problem) return setError(symbolNotLoaded(parent, problem));
       const done = await api.cmd({ op: "derive_symbol", parent, lib_id: libId, keep_footprint: keepFootprint, keep_datasheet: keepDatasheet, transfer_user_fields: transfer, keep_content_user_fields: transfer && keepContent, overwrite });
       notifyLibraryChanged();
       if (!done) return; // the verb's refusal is the editor's toast

@@ -6691,11 +6691,15 @@ impl<'a> Board<'a> {
     }
 
     fn library_symbol_mut(&mut self, lib_id: &str) -> Result<&mut LibrarySymbol, Vec<CheckResult>> {
-        self.design
+        let sym = self
+            .design
             .symbol_library
             .as_mut()
             .and_then(|l| l.by_lib_id_mut(lib_id))
-            .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "this symbol has not been opened in the Symbol Editor yet")])
+            .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "this symbol has not been opened in the Symbol Editor yet")])?;
+        // a text's looks kept beside it by an older reader become the text's own before an edit, so the edit's are the ones written (`absorb_kept_text_styles`)
+        sym.absorb_kept_text_styles();
+        Ok(sym)
     }
 
     /// [`library_symbol_mut`](Self::library_symbol_mut) for an edit of the symbol's drawing -- a pin, a graphic, the anchor: refused for a derived symbol, whose graphics and pins
@@ -7002,7 +7006,7 @@ impl<'a> Board<'a> {
         Self::check_graphic_scope(sym, id, unit, body_style)?;
         let g = Self::find_symbol_graphic_mut(sym, id)?;
         match g {
-            LibrarySymbolGraphic::Rectangle { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Polyline { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Circle { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Arc { stroke_mm: s, fill: f, .. } => {
+            LibrarySymbolGraphic::Rectangle { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Polyline { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Circle { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Arc { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Bezier { stroke_mm: s, fill: f, .. } => {
                 *s = stroke_mm;
                 *f = fill;
             }

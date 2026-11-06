@@ -316,14 +316,19 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
   // `delta` in their `index`-th incrementable part; a selection of mixed kinds does nothing. `RequestSelection( incrementable )` is the selection, else the item under the cursor.
   const increment = (name: string) => {
     const { delta, index } = INCREMENT_PARAMS[name]!;
-    return onSchematic(() => {
-      if (!sch) return;
-      const targets = incrementTargets(ctx);
-      const plan = planIncrement(targets, delta, index, { skipIOSQXZ: false });
-      if (!plan || plan.length === 0) return;
-      const cmds: Cmd[] = plan.map((p) => ({ op: "set_sch_item_text", id: p.id, text: p.text }));
-      void api.cmdBatch(cmds);
-    });
+    return (param?: unknown) => {
+      // the Symbol Editor runs the same `SCH_TOOL_BASE::Increment` on its pins and texts (`SYMBOL_EDITOR_EDIT_TOOL`, kicad-port/symIncrement.ts)
+      if (ctx.tab === "symbol") return void ctx.symApi.incrementSelection(delta, index);
+      onSchematic(() => schIncrement(delta, index))(param);
+    };
+  };
+  const schIncrement = (delta: number, index: number) => {
+    if (!sch) return;
+    const targets = incrementTargets(ctx);
+    const plan = planIncrement(targets, delta, index, { skipIOSQXZ: false });
+    if (!plan || plan.length === 0) return;
+    const cmds: Cmd[] = plan.map((p) => ({ op: "set_sch_item_text", id: p.id, text: p.text }));
+    void api.cmdBatch(cmds);
   };
   m.set("eeschema.Interactive.increment", increment("eeschema.Interactive.increment"));
   m.set("eeschema.Interactive.incrementPrimary", increment("eeschema.Interactive.incrementPrimary"));

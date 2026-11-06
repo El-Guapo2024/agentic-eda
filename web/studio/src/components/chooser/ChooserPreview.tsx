@@ -54,7 +54,7 @@ export function SymbolPreview({ symbol, unit, bodyStyle, status, height = 230 }:
         showElectricalTypes: false,
         showHiddenPins: false,
         showPinNumbers: false,
-        pendingText: null,
+        carried: null,
       });
       ctx.restore();
     },

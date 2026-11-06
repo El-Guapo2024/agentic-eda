@@ -178,6 +178,10 @@ function getCubicPoly(c: Cubic, out: V[], maxError: number): void {
   }
 }
 
+/** `SCH_ITEM::GetMaxError` of an item of a library symbol (no schematic): `ARC_LOW_DEF_MM`, 0.02 mm, in nanometres -- the error a symbol's bezier is cut into segments at
+ *  (`crates/model/src/ir.rs` `SYMBOL_BEZIER_MAX_ERROR_MM`). */
+export const SYMBOL_BEZIER_MAX_ERROR_NM = 20_000;
+
 /**
  * `BEZIER_POLY( start, c1, c2, end ).GetPoly( out, maxError )`: the integer polyline
  * (start first, end last) within `maxError` (board units -- micrometres here) of the

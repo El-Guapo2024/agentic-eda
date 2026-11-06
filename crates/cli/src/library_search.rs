@@ -661,17 +661,47 @@ pub(crate) fn search(dir: &Path, kind: Kind, query: &str, filter: &Filter, limit
 /// A symbol of the installed libraries, cut out of its library file and parsed alone: the editable definition (units, body styles, keywords,
 /// footprint filters) named `Lib:Name`, and what the index knows of it (default footprint, datasheet, value).
 pub(crate) fn installed_symbol<S: LibSource + ?Sized>(src: &S, lib_id: &str) -> Option<(LibrarySymbol, SymbolSummary)> {
-    let (lib, name) = lib_id.split_once(':')?;
+    read_installed_symbol(src, lib_id).ok().flatten()
+}
+
+/// [`installed_symbol`], telling a symbol the libraries do not have (`Ok(None)`: not a `Lib:Name`, no such library, no such symbol in it) from one whose
+/// library is there and cannot be read, or whose text is there and cannot be parsed (`Err`, why). The Symbol Editor must not open the second as a blank
+/// symbol: `SYMBOL_EDIT_FRAME::LoadSymbol` says "Error loading symbol %s from library '%s'." and returns with the editor as it was. A symbol whose text the
+/// index could not take -- a folder library's `Name.kicad_sym` that does not parse (the folder reader skips it), a `(symbol "Name"` form of a file the scan
+/// lost -- is the second kind too.
+pub(crate) fn read_installed_symbol<S: LibSource + ?Sized>(src: &S, lib_id: &str) -> Result<Option<(LibrarySymbol, SymbolSummary)>, String> {
+    let Some((lib, name)) = lib_id.split_once(':') else { return Ok(None) };
     if !legal_library_name(name) {
-        return None;
+        return Ok(None);
     }
-    let idx = symbol_lib(src, lib).ok()?;
-    let summary = idx.find(name)?.clone();
-    let text = eda_kicad::read_symbol_library_text(&symbol_path(src, lib).ok()?).ok()?;
-    let mut sym = eda_kicad::parse_symbol(&text, &idx.summaries, name)?;
+    let Ok(path) = symbol_path(src, lib) else { return Ok(None) };
+    if Kind::Symbol.modified(&path).is_none() {
+        return Ok(None); // no library at the row's path
+    }
+    let idx = symbol_lib(src, lib)?;
+    let Some(summary) = idx.find(name).cloned() else {
+        // not in the index: a symbol the library does not have -- or one whose text is there and could not be read into it
+        if path.is_dir() {
+            let file = path.join(format!("{name}.kicad_sym"));
+            if file.is_file() {
+                let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+                return Err(match eda_kicad::parse_library_symbols(&text) {
+                    Err(e) => format!("{}: {e}", file.display()),
+                    Ok(_) => format!("{}: the symbol {name:?} is not in it", file.display()),
+                });
+            }
+        } else if let Ok(text) = std::fs::read_to_string(&path) {
+            if text.contains(&format!("(symbol \"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))) {
+                return Err(format!("{}: the symbol {name:?} cannot be read", path.display()));
+            }
+        }
+        return Ok(None);
+    };
+    let text = eda_kicad::read_symbol_library_text(&path)?;
+    let Some(mut sym) = eda_kicad::parse_symbol_checked(&text, &idx.summaries, name).map_err(|e| format!("{}: {e}", path.display()))? else { return Ok(None) };
     sym.lib_id = lib_id.to_string();
     sym.assign_missing_ids();
-    Some((sym, summary))
+    Ok(Some((sym, summary)))
 }
 
 /// `GET /api/library/details?kind=&id=Lib:Name`: what the chooser's preview and description pane show for the selected item -- its fields and
@@ -714,16 +744,28 @@ pub(crate) fn details(dir: &Path, kind: Kind, id: &str) -> Value {
 /// A footprint of the installed libraries (`Lib:Name` -> `<root>/Lib.pretty/Name.kicad_mod`) in the editable type, every graphic, text, attribute
 /// and pad layer included, named `Lib:Name`.
 pub(crate) fn installed_footprint<S: LibSource + ?Sized>(src: &S, name: &str) -> Option<LibraryFootprint> {
-    let (lib, item) = name.split_once(':')?;
+    read_installed_footprint(src, name).ok().flatten()
+}
+
+/// [`installed_footprint`], telling a footprint the libraries do not have (`Ok(None)`: not a `Lib:Name`, no such library, no `Name.kicad_mod` in its
+/// folder) from one whose file is there and cannot be read or parsed (`Err`, why). The Footprint Editor must not open the second as a blank footprint:
+/// `PCB_BASE_FRAME::LoadFootprint` gives nothing on the `IO_ERROR`, and `FOOTPRINT_EDIT_FRAME::LoadFootprintFromLibrary` then returns with the editor as it was.
+pub(crate) fn read_installed_footprint<S: LibSource + ?Sized>(src: &S, name: &str) -> Result<Option<LibraryFootprint>, String> {
+    let Some((lib, item)) = name.split_once(':') else { return Ok(None) };
     if !legal_library_name(item) || item.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let file = footprint_dir(src, lib).ok()?.join(format!("{item}.kicad_mod"));
-    let text = std::fs::read_to_string(file).ok()?;
-    let mut fp = eda_kicad::parse_library_footprint(&text).ok()?.footprint;
+    let Ok(dir) = footprint_dir(src, lib) else { return Ok(None) };
+    let file = dir.join(format!("{item}.kicad_mod"));
+    let text = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", file.display())),
+    };
+    let mut fp = eda_kicad::parse_library_footprint(&text).map_err(|e| format!("{}: {e}", file.display()))?.footprint;
     fp.name = name.to_string();
     fp.assign_missing_ids();
-    Some(fp)
+    Ok(Some(fp))
 }
 
 /// A footprint of the installed libraries as the board's model has footprints (`eda_model::Footprint`: pads, graphics, courtyard outlines and 3D models, as the

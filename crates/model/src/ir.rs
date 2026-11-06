@@ -4214,6 +4214,10 @@ pub enum LibrarySymbolGraphic {
         #[serde(default)]
         fill: LibraryFill,
     },
+    /// `SCH_TEXT` of a library symbol (`(text "text" (at x y angle) (effects (font (size ..) bold italic) (justify ..)))`): the text, its anchor, its angle (0 or 90) and
+    /// size, and the looks `DIALOG_TEXT_PROPERTIES` edits -- bold, italic and the justification (centred on both axes unless the file says otherwise, `EDA_TEXT`'s
+    /// default). The pen and the hidden flag stay in [`crate::lib_keep::KeptTextStyle`]. A text read before these four were members has them there too; see
+    /// [`LibrarySymbol::absorb_kept_text_styles`].
     Text {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         id: String,
@@ -4226,6 +4230,31 @@ pub enum LibrarySymbolGraphic {
         #[serde(default)]
         angle_deg: f64,
         size_mm: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        bold: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        italic: bool,
+        #[serde(default, skip_serializing_if = "is_center_h")]
+        h_align: crate::sym_fields::FieldHAlign,
+        #[serde(default, skip_serializing_if = "is_center_v")]
+        v_align: crate::sym_fields::FieldVAlign,
+    },
+    /// `SCH_SHAPE` of `SHAPE_T::BEZIER` in a library symbol, `(bezier (pts (xy start) (xy c1) (xy c2) (xy end)) (stroke ..) (fill ..))`
+    /// (`formatBezier`): a cubic curve from `start` to `end` pulled by the two control points, in the symbol's own mm with Y up.
+    Bezier {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        #[serde(default)]
+        unit: u32,
+        #[serde(default = "d_body_style_one", skip_serializing_if = "is_body_style_one")]
+        body_style: u32,
+        start: crate::symbol::SPoint,
+        c1: crate::symbol::SPoint,
+        c2: crate::symbol::SPoint,
+        end: crate::symbol::SPoint,
+        stroke_mm: f64,
+        #[serde(default)]
+        fill: LibraryFill,
     },
     /// `SCH_TEXTBOX` of a library symbol, `(text_box "text" (at x y angle) (size w h) (margins m m m m) (stroke ...) (fill ...) (effects ...))`: a box with text in it, wrapped to the
     /// box's width. `start` and `end` are two opposite corners of the box (`GetStart()` is where the box was begun), in the symbol's own mm with Y up; `angle_deg` is 0 or 90, the way
@@ -4262,6 +4291,27 @@ fn is_zero_f64(v: &f64) -> bool {
     *v == 0.0
 }
 
+fn is_center_h(a: &crate::sym_fields::FieldHAlign) -> bool {
+    *a == crate::sym_fields::FieldHAlign::Center
+}
+
+fn is_center_v(a: &crate::sym_fields::FieldVAlign) -> bool {
+    *a == crate::sym_fields::FieldVAlign::Center
+}
+
+/// `SCH_ITEM::GetMaxError` of an item of a library symbol (no schematic): `ARC_LOW_DEF_MM`, 0.02 mm, the error a bezier is cut into segments at.
+pub const SYMBOL_BEZIER_MAX_ERROR_MM: f64 = 0.02;
+
+/// A library bezier as the polyline `EDA_SHAPE::RebuildBezierToSegmentsPointsList( GetMaxError() )` makes of it (`BEZIER_POLY::GetPoly`), in the symbol's mm with Y up:
+/// start first, end last, within [`SYMBOL_BEZIER_MAX_ERROR_MM`] of the curve.
+pub fn bezier_symbol_points(start: crate::symbol::SPoint, c1: crate::symbol::SPoint, c2: crate::symbol::SPoint, end: crate::symbol::SPoint) -> Vec<crate::symbol::SPoint> {
+    let nm = |p: crate::symbol::SPoint| Point { x: Nm::from_mm(p.x), y: Nm::from_mm(p.y) };
+    crate::bezier::bezier_polyline(nm(start), nm(c1), nm(c2), nm(end), Nm::from_mm(SYMBOL_BEZIER_MAX_ERROR_MM))
+        .into_iter()
+        .map(|p| crate::symbol::SPoint { x: crate::units::to_mm(p.x), y: crate::units::to_mm(p.y) })
+        .collect()
+}
+
 /// The margin of a library text box, in mm: its own when it has one, else the default, `SCH_TEXTBOX::GetLegacyTextMargin` of a box on `LAYER_DEVICE` -- four fifths of the text height,
 /// rounded to the schematic's internal unit (0.1 um).
 pub fn text_box_margin_mm(size_mm: f64, margin_mm: f64) -> f64 {
@@ -4295,6 +4345,10 @@ struct LibrarySymbolGraphicWire {
     start: Option<crate::symbol::SPoint>,
     #[serde(default)]
     mid: Option<crate::symbol::SPoint>,
+    #[serde(default)]
+    c1: Option<crate::symbol::SPoint>,
+    #[serde(default)]
+    c2: Option<crate::symbol::SPoint>,
     #[serde(default)]
     end: Option<crate::symbol::SPoint>,
     #[serde(default)]
@@ -4332,15 +4386,18 @@ impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
             "polyline" => &["stroke_mm", "fill", "pts"],
             "circle" => &["stroke_mm", "fill", "center", "radius_mm"],
             "arc" => &["stroke_mm", "fill", "start", "mid", "end"],
-            "text" => &["text", "at", "angle_deg", "size_mm"],
+            "text" => &["text", "at", "angle_deg", "size_mm", "bold", "italic", "h_align", "v_align"],
+            "bezier" => &["stroke_mm", "fill", "start", "c1", "c2", "end"],
             "text_box" => &["text", "start", "end", "angle_deg", "size_mm", "bold", "italic", "h_align", "v_align", "margin_mm", "stroke_mm", "fill"],
-            other => return Err(D::Error::unknown_variant(other, &["rectangle", "polyline", "circle", "arc", "text", "text_box"])),
+            other => return Err(D::Error::unknown_variant(other, &["rectangle", "polyline", "circle", "arc", "text", "text_box", "bezier"])),
         };
         let present = [
             ("stroke_mm", w.stroke_mm.is_some()),
             ("fill", w.fill.is_some()),
             ("start", w.start.is_some()),
             ("mid", w.mid.is_some()),
+            ("c1", w.c1.is_some()),
+            ("c2", w.c2.is_some()),
             ("end", w.end.is_some()),
             ("center", w.center.is_some()),
             ("radius_mm", w.radius_mm.is_some()),
@@ -4360,7 +4417,7 @@ impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
                 return Err(D::Error::unknown_field(name, allowed));
             }
         }
-        let LibrarySymbolGraphicWire { kind, id, unit, body_style, fill, stroke_mm, start, mid, end, center, radius_mm, pts, text, at, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm } = w;
+        let LibrarySymbolGraphicWire { kind, id, unit, body_style, fill, stroke_mm, start, mid, c1, c2, end, center, radius_mm, pts, text, at, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm } = w;
         let need = |name: &'static str| D::Error::missing_field(name);
         let fill = fill.unwrap_or_default();
         Ok(match kind.as_str() {
@@ -4395,7 +4452,30 @@ impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
                 stroke_mm: stroke_mm.ok_or_else(|| need("stroke_mm"))?,
                 fill,
             },
-            _ => LibrarySymbolGraphic::Text { id, unit, body_style, text: text.ok_or_else(|| need("text"))?, at: at.ok_or_else(|| need("at"))?, angle_deg: angle_deg.unwrap_or_default(), size_mm: size_mm.ok_or_else(|| need("size_mm"))? },
+            "bezier" => LibrarySymbolGraphic::Bezier {
+                id,
+                unit,
+                body_style,
+                start: start.ok_or_else(|| need("start"))?,
+                c1: c1.ok_or_else(|| need("c1"))?,
+                c2: c2.ok_or_else(|| need("c2"))?,
+                end: end.ok_or_else(|| need("end"))?,
+                stroke_mm: stroke_mm.ok_or_else(|| need("stroke_mm"))?,
+                fill,
+            },
+            _ => LibrarySymbolGraphic::Text {
+                id,
+                unit,
+                body_style,
+                text: text.ok_or_else(|| need("text"))?,
+                at: at.ok_or_else(|| need("at"))?,
+                angle_deg: angle_deg.unwrap_or_default(),
+                size_mm: size_mm.ok_or_else(|| need("size_mm"))?,
+                bold: bold.unwrap_or_default(),
+                italic: italic.unwrap_or_default(),
+                h_align: h_align.unwrap_or_default(),
+                v_align: v_align.unwrap_or_default(),
+            },
         })
     }
 }
@@ -4404,37 +4484,37 @@ impl LibrarySymbolGraphic {
     pub fn id(&self) -> &str {
         use LibrarySymbolGraphic::*;
         match self {
-            Rectangle { id, .. } | Polyline { id, .. } | Circle { id, .. } | Arc { id, .. } | Text { id, .. } | TextBox { id, .. } => id,
+            Rectangle { id, .. } | Polyline { id, .. } | Circle { id, .. } | Arc { id, .. } | Text { id, .. } | TextBox { id, .. } | Bezier { id, .. } => id,
         }
     }
     pub fn set_id(&mut self, new_id: String) {
         use LibrarySymbolGraphic::*;
         match self {
-            Rectangle { id, .. } | Polyline { id, .. } | Circle { id, .. } | Arc { id, .. } | Text { id, .. } | TextBox { id, .. } => *id = new_id,
+            Rectangle { id, .. } | Polyline { id, .. } | Circle { id, .. } | Arc { id, .. } | Text { id, .. } | TextBox { id, .. } | Bezier { id, .. } => *id = new_id,
         }
     }
     pub fn unit(&self) -> u32 {
         use LibrarySymbolGraphic::*;
         match self {
-            Rectangle { unit, .. } | Polyline { unit, .. } | Circle { unit, .. } | Arc { unit, .. } | Text { unit, .. } | TextBox { unit, .. } => *unit,
+            Rectangle { unit, .. } | Polyline { unit, .. } | Circle { unit, .. } | Arc { unit, .. } | Text { unit, .. } | TextBox { unit, .. } | Bezier { unit, .. } => *unit,
         }
     }
     pub fn set_unit(&mut self, new_unit: u32) {
         use LibrarySymbolGraphic::*;
         match self {
-            Rectangle { unit, .. } | Polyline { unit, .. } | Circle { unit, .. } | Arc { unit, .. } | Text { unit, .. } | TextBox { unit, .. } => *unit = new_unit,
+            Rectangle { unit, .. } | Polyline { unit, .. } | Circle { unit, .. } | Arc { unit, .. } | Text { unit, .. } | TextBox { unit, .. } | Bezier { unit, .. } => *unit = new_unit,
         }
     }
     pub fn body_style(&self) -> u32 {
         use LibrarySymbolGraphic::*;
         match self {
-            Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } | TextBox { body_style, .. } => *body_style,
+            Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } | TextBox { body_style, .. } | Bezier { body_style, .. } => *body_style,
         }
     }
     pub fn set_body_style(&mut self, style: u32) {
         use LibrarySymbolGraphic::*;
         match self {
-            Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } | TextBox { body_style, .. } => *body_style = style,
+            Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } | TextBox { body_style, .. } | Bezier { body_style, .. } => *body_style = style,
         }
     }
     /// Every point this graphic touches, local mm -- for `assign_missing_ids`'s seed and a move/translate.
@@ -4447,6 +4527,7 @@ impl LibrarySymbolGraphic {
             Arc { start, mid, end, .. } => vec![*start, *mid, *end],
             Text { at, .. } => vec![*at],
             TextBox { start, end, .. } => vec![*start, *end],
+            Bezier { start, c1, c2, end, .. } => vec![*start, *c1, *c2, *end],
         }
     }
     pub fn translate(&mut self, dx_mm: f64, dy_mm: f64) {
@@ -4470,6 +4551,12 @@ impl LibrarySymbolGraphic {
             Text { at, .. } => t(at),
             TextBox { start, end, .. } => {
                 t(start);
+                t(end);
+            }
+            Bezier { start, c1, c2, end, .. } => {
+                t(start);
+                t(c1);
+                t(c2);
                 t(end);
             }
         }
@@ -4499,6 +4586,9 @@ impl LibrarySymbolGraphic {
                 }
                 EG::Rectangle { unit: *unit, start: *start, end: *end, stroke_mm: *stroke_mm, filled: filled(*fill) }
             }
+            // The engine's drawing has no curve: a placed symbol draws the bezier as the polyline `BEZIER_POLY::GetPoly` makes of it, at the schematic's
+            // `ARC_LOW_DEF` (as the engine's own reader of a library file cuts one, `crate::symbol`).
+            LibrarySymbolGraphic::Bezier { unit, start, c1, c2, end, stroke_mm, fill, .. } => EG::Polyline { unit: *unit, pts: bezier_symbol_points(*start, *c1, *c2, *end), stroke_mm: *stroke_mm, filled: filled(*fill) },
         }]
     }
     /// The reverse of `to_engine_graphics`, for materializing an editable
@@ -4518,7 +4608,19 @@ impl LibrarySymbolGraphic {
             EG::Polyline { unit, pts, stroke_mm, filled } => LibrarySymbolGraphic::Polyline { id: String::new(), unit: *unit, body_style: 1, pts: pts.clone(), stroke_mm: *stroke_mm, fill: fill(*filled) },
             EG::Circle { unit, center, radius_mm, stroke_mm, filled } => LibrarySymbolGraphic::Circle { id: String::new(), unit: *unit, body_style: 1, center: *center, radius_mm: *radius_mm, stroke_mm: *stroke_mm, fill: fill(*filled) },
             EG::Arc { unit, start, mid, end, stroke_mm, filled } => LibrarySymbolGraphic::Arc { id: String::new(), unit: *unit, body_style: 1, start: *start, mid: *mid, end: *end, stroke_mm: *stroke_mm, fill: fill(*filled) },
-            EG::Text { unit, text, at, angle_deg, size_mm } => LibrarySymbolGraphic::Text { id: String::new(), unit: *unit, body_style: 1, text: text.clone(), at: *at, angle_deg: *angle_deg, size_mm: *size_mm },
+            EG::Text { unit, text, at, angle_deg, size_mm } => LibrarySymbolGraphic::Text {
+                id: String::new(),
+                unit: *unit,
+                body_style: 1,
+                text: text.clone(),
+                at: *at,
+                angle_deg: *angle_deg,
+                size_mm: *size_mm,
+                bold: false,
+                italic: false,
+                h_align: Default::default(),
+                v_align: Default::default(),
+            },
         }
     }
 }
@@ -4716,6 +4818,44 @@ impl Default for LibrarySymbol {
 }
 
 impl LibrarySymbol {
+    /// A text's bold, italic and justification are members of [`LibrarySymbolGraphic::Text`] since 2026-11-05 (the Text Properties dialog edits them, Mirror flips the
+    /// justification); before, the reader kept them in [`crate::lib_keep::KeptTextStyle`] by the text's id. This moves what a kept style says into its text and leaves
+    /// the pen and the hidden flag (and any other `justify` word) where they were. A kept style is the file's own, so it wins over the text's defaults; once moved it is
+    /// gone from the kept style, so the text's own looks are the ones that count from then on. Run before an edit of the symbol, before it is written and before it is served.
+    /// Idempotent.
+    pub fn absorb_kept_text_styles(&mut self) {
+        use crate::sym_fields::{FieldHAlign, FieldVAlign};
+        if self.kicad.text_styles.is_empty() {
+            return;
+        }
+        for g in &mut self.graphics {
+            let LibrarySymbolGraphic::Text { id, bold, italic, h_align, v_align, .. } = g else { continue };
+            let Some(style) = self.kicad.text_styles.get_mut(id.as_str()) else { continue };
+            *bold |= std::mem::take(&mut style.bold);
+            *italic |= std::mem::take(&mut style.italic);
+            style.justify.retain(|w| match w.as_str() {
+                "left" => {
+                    *h_align = FieldHAlign::Left;
+                    false
+                }
+                "right" => {
+                    *h_align = FieldHAlign::Right;
+                    false
+                }
+                "top" => {
+                    *v_align = FieldVAlign::Top;
+                    false
+                }
+                "bottom" => {
+                    *v_align = FieldVAlign::Bottom;
+                    false
+                }
+                _ => true,
+            });
+        }
+        self.kicad.text_styles.retain(|_, t| !t.is_default());
+    }
+
     /// A brand-new, empty symbol named `lib_id` -- KiCad's "New Symbol"
     /// and "Edit Symbol" on an unresolvable name are the same verb here,
     /// same precedent `LibraryFootprint::new_empty`'s own doc explains.

@@ -375,7 +375,7 @@ pub fn symbol_items(imported: &Imported, mapper: &Mapper, unit: u32, body_style:
                 let angle = orientation_deg.rem_euclid(360.0);
                 // The file's alignment, in its own millimetres before the scale, to the middle of the baseline.
                 let at = justified_anchor_mm(*origin, text, *height, angle, *h, *v, true);
-                out.push(LibrarySymbolGraphic::Text { id: String::new(), unit, body_style, text: text.clone(), at: to_mm(m.coord(at)), angle_deg: angle, size_mm });
+                out.push(LibrarySymbolGraphic::Text { id: String::new(), unit, body_style, text: text.clone(), at: to_mm(m.coord(at)), angle_deg: angle, size_mm, bold: false, italic: false, h_align: Default::default(), v_align: Default::default() });
             }
             ImportedShape::Spline { start, c1, c2, end, stroke } => {
                 let (ps, p1, p2, pe) = (m.coord(*start), m.coord(*c1), m.coord(*c2), m.coord(*end));

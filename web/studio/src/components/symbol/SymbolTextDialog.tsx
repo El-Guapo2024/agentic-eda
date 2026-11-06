@@ -1,78 +1,150 @@
-// `DIALOG_TEXT_PROPERTIES` as the Symbol Editor's Text tool opens it (`TwoClickPlace`, SCH_TEXT_T): the text, its size and whether it reads
-// horizontally or vertically. (The dialog's bold / italic / justification / hyperlink are not part of a library symbol's text here: the
-// symbol library keeps a text's content, position, angle and size.) OK hands the text to the canvas, where it follows the cursor until the
-// click that places it; Cancel -- or a text with nothing printable in it -- drops it.
+// `DIALOG_TEXT_PROPERTIES` of a symbol's text (eeschema/dialogs/dialog_text_properties.cpp, a `SCH_TEXT` on `LAYER_DEVICE` in the symbol editor), opened two ways:
+//
+// - by the Text tool's first click (`SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace`, SCH_TEXT_T): a new text at the click, with the default size and the last angle; OK hands it to
+//   the canvas, where it follows the cursor until the click that places it; Cancel -- or a text with nothing printable in it -- drops it;
+// - on a text of the symbol (a double click, `E`, Properties in the context menu: `SYMBOL_EDITOR_EDIT_TOOL::editTextProperties`): OK is one undo step, "Edit Text Properties".
+//
+// The text, "Text size:", Bold and Italic, the horizontal and vertical justification, Horizontal or Vertical, and in the symbol editor "Common to all units" and "Common to all
+// body styles" (enabled for a symbol of several units / body styles). Not here: the font, the colour and "Private to symbol editor", which a library text does not keep
+// (kicad-port/symText.ts).
 import { useEffect, useRef, useState } from "react";
-import { useSymDispatch, useSymState } from "../../state/symbolEditorStore";
-import { DEFAULT_SYMBOL_TEXT_SIZE_MM, noPrintableChars, textAngleDeg, textSizeError } from "../../kicad-port/symText";
+import { drawTarget, useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
+import { DEFAULT_SYMBOL_TEXT_SIZE_MM, noPrintableChars, textFormOf, textFromForm, type LibText, type TextForm } from "../../kicad-port/symText";
+import { H_ALIGNS, V_ALIGNS } from "../../kicad-port/symTextBox";
+import { nmPointToMm } from "./symbolPainter";
+
+const H_TIPS: Record<string, string> = { left: "Align left", center: "Align horizontal center", right: "Align right" };
+const V_TIPS: Record<string, string> = { top: "Align top", center: "Align vertical center", bottom: "Align bottom" };
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function SymbolTextDialog() {
   const state = useSymState();
   const dispatch = useSymDispatch();
-  const [text, setText] = useState("");
-  const [size, setSize] = useState(DEFAULT_SYMBOL_TEXT_SIZE_MM);
-  const [vertical, setVertical] = useState(false);
+  const api = useSymApi();
+  const req = state.textDialog;
+  const symbol = state.symbol;
+  const [form, setForm] = useState<TextForm | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
-  const open = state.textDialog != null;
 
+  /** The text the dialog is on: the symbol's (by id), or the new one of the Text tool -- at the click, `DEFAULT_TEXT_SIZE`, `m_lastTextAngle`, on the unit and body style the
+   * drawing tools put new items on (`m_drawSpecificUnit`, `m_drawSpecificBodyStyle`). */
+  const target = (): LibText | null => {
+    if (!req || !symbol) return null;
+    if ("id" in req) {
+      const g = symbol.graphics.find((x) => x.id === req.id);
+      return g?.kind === "text" ? g : null;
+    }
+    const at = drawTarget(state);
+    return { kind: "text", unit: at.unit, body_style: at.bodyStyle, text: "", at: nmPointToMm(req.atNm[0], req.atNm[1]), angle_deg: state.lastTextAngle, size_mm: DEFAULT_SYMBOL_TEXT_SIZE_MM };
+  };
+
+  // the form starts from the text when the dialog opens, and keeps what is typed through the editor's polling
   useEffect(() => {
-    if (!open) return;
-    setText("");
-    setVertical(state.lastTextAngle === 90); // `text->SetTextAngle( m_lastTextAngle )`
+    const t = target();
+    setForm(t && symbol ? textFormOf(t, symbol) : null);
     setError(null);
     ref.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [req]);
 
-  if (!open) return null;
-  const close = () => dispatch({ type: "SET_TEXT_DIALOG", at: null });
-  const ok = () => {
-    const sizeError = textSizeError(size);
-    if (sizeError) return setError(sizeError);
-    if (noPrintableChars(text)) return close(); // `NoPrintableChars( text->GetText() )`: no item
-    dispatch({ type: "SET_PENDING_TEXT", pending: { text, sizeMm: size, angleDeg: textAngleDeg(vertical) } });
+  const text = target();
+  if (!req || !symbol || !form || !text) return null;
+  const isNew = !("id" in req);
+  const set = <K extends keyof TextForm>(key: K, value: TextForm[K]) => {
+    setForm((f) => (f ? { ...f, [key]: value } : f));
+    setError(null);
   };
+  const close = () => dispatch({ type: "SET_TEXT_DIALOG", dialog: null });
+  const ok = async () => {
+    const out = textFromForm(text, form, state.activeUnit, state.activeBodyStyle);
+    if (!out.ok) return setError(out.error);
+    if (isNew) {
+      // `dlg.ShowModal() != wxID_OK || NoPrintableChars( text->GetText() )`: no item
+      if (noPrintableChars(out.text.text)) return close();
+      api.carryText(out.text);
+      return;
+    }
+    if (await api.replaceGraphic(text.id!, out.text)) close();
+  };
+  const toggle = (key: "bold" | "italic", tip: string, glyph: string) => (
+    <button type="button" className={form[key] ? "primary" : undefined} aria-pressed={form[key]} title={tip} data-testid={`text-${key}`} onClick={() => set(key, !form[key])} style={{ minWidth: 28 }}>
+      {glyph}
+    </button>
+  );
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 380 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Text Properties">
+      <div className="dialog" style={{ width: 440 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Text Properties" data-testid="text-properties">
         <div className="dialog-header">
           <span>Text Properties</span>
         </div>
         <div className="dialog-body">
-          <label style={{ display: "block", marginBottom: 4 }}>Text</label>
+          <label style={{ display: "block", marginBottom: 4 }}>Text:</label>
           <textarea
             ref={ref}
-            value={text}
+            value={form.text}
             rows={3}
             style={{ width: "100%", boxSizing: "border-box" }}
-            onChange={(e) => {
-              setText(e.target.value);
-              setError(null);
-            }}
+            data-testid="text-text"
+            onChange={(e) => set("text", e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) ok();
+              // `SCINTILLA_TRICKS` of a multi-line text: Shift+Enter accepts (`m_singleLine || aEvent.ShiftDown()`), Enter is a new line
+              if (e.key === "Enter" && e.shiftKey) {
+                e.preventDefault();
+                void ok();
+              }
               if (e.key === "Escape") close();
             }}
           />
-          <div className="kv-grid" style={{ gridTemplateColumns: "100px 1fr", marginTop: 10 }}>
-            <span>Text size (mm)</span>
-            <input type="number" step="0.01" value={size} onChange={(e) => setSize(Number(e.target.value))} style={{ width: 90 }} />
-            <span>Orientation</span>
-            <span>
-              <label style={{ marginRight: 12 }}>
-                <input type="radio" name="sym-text-orient" checked={!vertical} onChange={() => setVertical(false)} /> Horizontal
+          <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+            {toggle("bold", "Bold", "B")}
+            {toggle("italic", "Italic", "I")}
+            <span style={{ width: 8 }} />
+            {H_ALIGNS.map((a) => (
+              <label key={a} title={H_TIPS[a]} style={{ marginRight: 6 }}>
+                <input type="radio" name="sym-text-h" checked={form.h === a} onChange={() => set("h", a)} data-testid={`text-h-${a}`} /> {cap(a)}
               </label>
-              <label>
-                <input type="radio" name="sym-text-orient" checked={vertical} onChange={() => setVertical(true)} /> Vertical
-              </label>
-            </span>
+            ))}
           </div>
-          {error && <p style={{ color: "var(--chrome-danger)", margin: "8px 0 0" }}>{error}</p>}
+          <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
+            {V_ALIGNS.map((a) => (
+              <label key={a} title={V_TIPS[a]} style={{ marginRight: 6 }}>
+                <input type="radio" name="sym-text-v" checked={form.v === a} onChange={() => set("v", a)} data-testid={`text-v-${a}`} /> {cap(a)}
+              </label>
+            ))}
+            <span style={{ width: 8 }} />
+            <label title="Horizontal text" style={{ marginRight: 6 }}>
+              <input type="radio" name="sym-text-orient" checked={!form.vertical} onChange={() => set("vertical", false)} data-testid="text-horizontal" /> Horizontal
+            </label>
+            <label title="Vertical text">
+              <input type="radio" name="sym-text-orient" checked={form.vertical} onChange={() => set("vertical", true)} data-testid="text-vertical" /> Vertical
+            </label>
+          </div>
+          <div className="kv-grid" style={{ gridTemplateColumns: "150px 1fr", marginTop: 10 }}>
+            <span>Text size:</span>
+            <span>
+              <input type="number" step="0.01" value={form.size} onChange={(e) => set("size", e.target.value)} style={{ width: 90 }} data-testid="text-size" /> mm
+            </span>
+            <span>Common to all units</span>
+            <label title={symbol.unit_count > 1 ? undefined : "This symbol only has one unit. This control has no effect."}>
+              <input type="checkbox" checked={form.commonUnits} disabled={symbol.unit_count <= 1} onChange={(e) => set("commonUnits", e.target.checked)} data-testid="text-common-units" />
+            </label>
+            <span>Common to all body styles</span>
+            <label title={symbol.has_alternate_body_style ? undefined : "This symbol only has one body style. This control has no effect."}>
+              <input type="checkbox" checked={form.commonStyles} disabled={!symbol.has_alternate_body_style} onChange={(e) => set("commonStyles", e.target.checked)} data-testid="text-common-styles" />
+            </label>
+          </div>
+          {error && (
+            <p style={{ color: "var(--chrome-danger)", margin: "8px 0 0" }} data-testid="text-error">
+              {error}
+            </p>
+          )}
         </div>
         <div className="dialog-footer">
-          <button onClick={close}>Cancel</button>
-          <button className="primary" onClick={ok}>
+          <button onClick={close} data-testid="text-cancel">
+            Cancel
+          </button>
+          <button className="primary" onClick={() => void ok()} data-testid="text-ok">
             OK
           </button>
         </div>

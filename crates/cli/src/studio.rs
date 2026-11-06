@@ -840,6 +840,8 @@ fn handle(
         ("GET", "/api/fs/list") => respond(stream, "200 OK", "application/json", crate::library_tables::browse(dir, &query_value(target, "path"), &query_value(target, "what")).to_string().as_bytes()),
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
         ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
+        // The Symbol Editor's Copy / Cut of pins and graphics: the selection as `.kicad_sym` text (`SYMBOL_EDITOR_EDIT_TOOL::Copy`); its Paste reads it back through `/api/symbol_library/parse`.
+        ("POST", "/api/symbol/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::library_api::symbol_items_copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
         // The Embedded Files panel (`crate::embedded_api`): a list without the data, one file extracted, and what Collect and Embed 3D Models would embed.
         ("GET", "/api/embedded") => {
@@ -2719,7 +2721,10 @@ fn symbol_edit_json(dir: &Path, lib_id: &str) -> Result<Value, Vec<CheckResult>>
         .as_ref()
         .and_then(|l| l.by_lib_id(lib_id))
         .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "this symbol has not been opened in the Symbol Editor yet")])?;
-    serde_json::to_value(sym).map_err(|e| vec![CheckResult::fail("board_bad_design", lib_id, e.to_string())])
+    // a text's looks an older reader kept beside it are served as the text's own (`absorb_kept_text_styles`), as the next edit stores them
+    let mut sym = sym.clone();
+    sym.absorb_kept_text_styles();
+    serde_json::to_value(&sym).map_err(|e| vec![CheckResult::fail("board_bad_design", lib_id, e.to_string())])
 }
 
 /// `GET /api/symbol_editor/names` -- every `lib_id` available to open: the
