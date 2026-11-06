@@ -271,8 +271,8 @@ impl Board<'_> {
         Ok(())
     }
 
-    /// `Cmd::SetViaProps`: the via `id`'s tenting, covering, plugging, capping, filling, backdrill and post-machining become `props` (the studio works out a row's
-    /// new value the way the `PCB_VIA` / `PADSTACK` setters do, `kicad-port/viaProps.ts`). The drills' layers must be copper layers of the board and their sizes
+    /// `Cmd::SetViaProps`: the via `id`'s tenting, covering, plugging, capping, filling, backdrill, post-machining and padstack become `props` (the studio works out a
+    /// row's new value the way the `PCB_VIA` / `PADSTACK` setters do, `kicad-port/viaProps.ts`; Track & Via Properties its own, `kicad-port/trackViaDialog.ts`). The drills' layers must be copper layers of the board and their sizes
     /// above zero. The Rust DRC's tenting table (`DrawingsSection::via_tenting`, by position and net) follows the tenting. Refused when nothing changes.
     pub(crate) fn set_via_props(&mut self, id: &str, props: &ViaProps) -> Result<(), Vec<CheckResult>> {
         let board_copper = self.model.board.layers.clone();
@@ -291,13 +291,25 @@ impl Board<'_> {
                 return Err(fail("ops_bad_via", id, "a post-machining size or depth cannot be negative, nor its angle outside 0 to 180 degrees"));
             }
         }
-        let (at, net) = {
+        if let Some(stack) = &props.padstack {
+            for (layer, size) in &stack.sizes {
+                if *size <= Nm::ZERO {
+                    return Err(fail("ops_bad_via", layer, "Via diameter must be greater than zero."));
+                }
+                if layer != "Inner" && !board_copper.iter().any(|l| l == layer) {
+                    return Err(fail("ops_bad_via", layer, "Via layer is outside the board stack."));
+                }
+            }
+        }
+        let (at, net, diameter) = {
             let v = self.design.routing.as_ref().and_then(|rt| rt.vias.iter().find(|v| v.id == id)).ok_or_else(|| fail("ops_unknown_via", id, "no via with this id"))?;
-            (v.at, v.net.clone())
+            (v.at, v.net.clone(), v.diameter)
         };
         let before = self.design.drawings.as_ref().and_then(|d| d.via_extra(id)).cloned().unwrap_or(ViaExtra { id: id.to_string(), ..Default::default() });
         let mut extra = before.clone();
         extra.set_props(props);
+        // the padstack (Track & Via Properties' "Padstack mode:"), written as `format( const PCB_TRACK* )` writes it for this board's copper
+        extra.set_padstack(props.padstack.as_ref(), diameter, &board_copper);
         if extra == before {
             return Err(fail("ops_nothing_to_change", id, "the via already has these properties"));
         }
@@ -317,16 +329,87 @@ impl Board<'_> {
         Ok(())
     }
 
-    /// `Cmd::SetFootprintPasteMargin`: `FOOTPRINT::SetLocalSolderPasteMargin` / `SetLocalSolderPasteMarginRatio` (`None` takes the board's). The board writes them
-    /// only from a footprint's tokens of a board read from a file (`FootprintExtra::tokens`, `(solder_paste_margin ..)` and `(solder_paste_margin_ratio ..)`), so a
-    /// footprint placed from the intent, which has none, is refused.
+    /// `Cmd::SetTeardropParams`: `GetTeardropParams() = params` on every via and pad named (`REF.NUM`, `REF.NUM#k`) -- Track & Via Properties' and Pad Properties'
+    /// Teardrops parts (`DIALOG_TRACK_VIA_PROPERTIES::TransferDataFromWindow`, `DIALOG_PAD_PROPERTIES::transferDataToPad`) and the Properties panel's Teardrops
+    /// rows. A via's land on its `(teardrops ..)` token, a pad's on its edit ([`eda_model::fp_edit::PadEdit::teardrops`]); `None` takes an item's own parameters
+    /// away, a board file's token too, and Board Setup's block serves it again ([`eda_model::teardrop_params`]). Refused for an id that is neither a via nor a
+    /// pad on the board, for a ratio or size below zero, and when nothing changes.
+    pub(crate) fn set_teardrop_params(&mut self, ids: &[String], params: Option<&eda_model::teardrop_params::TeardropParams>) -> Result<(), Vec<CheckResult>> {
+        use eda_model::fp_edit::{pad_index, parse_pad_id, PadEdit};
+        if let Some(p) = params {
+            if p.best_length_ratio < 0.0 || p.best_width_ratio < 0.0 || p.filter_ratio < 0.0 || p.max_length < Nm::ZERO || p.max_width < Nm::ZERO {
+                return Err(fail("ops_bad_teardrops", "set_teardrop_params", "teardrop ratios and sizes cannot be negative"));
+            }
+        }
+        let snapshot = |b: &Self| b.design.drawings.as_ref().map(|d| (d.via_extras.clone(), d.footprint_edits.clone(), d.footprint_extras.clone()));
+        let before = snapshot(self);
+        for id in ids {
+            let is_via = self.design.routing.as_ref().is_some_and(|rt| rt.vias.iter().any(|v| v.id == *id));
+            if is_via {
+                let dr = self.drawings_mut();
+                let mut extra = dr.via_extra(id).cloned().unwrap_or(ViaExtra { id: id.clone(), ..Default::default() });
+                extra.set_teardrops(params);
+                match (dr.via_extras.iter().position(|e| e.id == *id), extra.is_default()) {
+                    (Some(i), true) => {
+                        dr.via_extras.remove(i);
+                    }
+                    (Some(i), false) => dr.via_extras[i] = extra,
+                    (None, false) => dr.via_extras.push(extra),
+                    (None, true) => {}
+                }
+                continue;
+            }
+            let Some((reference, number, nth)) = parse_pad_id(id) else { return Err(fail("ops_unknown_item", id, "no via or pad with this id")) };
+            self.require_placed(&reference)?;
+            let footprint = self.model.part(&reference).and_then(|p| self.unedited_footprint(p)).ok_or_else(|| fail("ops_no_footprint", &reference, "this part has no footprint geometry to edit"))?;
+            let Some(index) = pad_index(&footprint, &number, nth) else { return Err(fail("ops_unknown_pad", id, format!("{reference} has no pad {number}"))) };
+            let mut edit = self.design.footprint_edit(&reference).and_then(|e| e.pad(&number, nth)).cloned().unwrap_or_else(|| PadEdit::none(&number, nth));
+            edit.teardrops = params.copied();
+            self.edit_slot(&reference).set_pad(edit);
+            self.tidy_edit(&reference);
+            if params.is_none() {
+                // the token a board file gave the pad goes too
+                let count = footprint.pads.len();
+                if let Some(e) = self.drawings_mut().footprint_extras.iter_mut().find(|e| e.id == reference).filter(|e| e.pads.len() == count) {
+                    eda_model::teardrop_params::set_in_tokens(&mut e.pads[index].tokens, None);
+                }
+            }
+        }
+        if snapshot(self).unwrap_or_default() == before.unwrap_or_default() {
+            return Err(fail("ops_nothing_to_change", "set_teardrop_params", "the items already have these teardrop parameters"));
+        }
+        Ok(())
+    }
+
+    /// `Cmd::SetFootprintPasteMargin`: `FOOTPRINT::SetLocalSolderPasteMargin` / `SetLocalSolderPasteMarginRatio` (`None` takes the board's). A footprint of a board
+    /// read from a file keeps them among its tokens (`FootprintExtra::tokens`, `(solder_paste_margin ..)` and `(solder_paste_margin_ratio ..)`); one placed from the
+    /// intent in its edit (`FootprintEdit::solder_paste_margin`, `..ratio`; UI-LEFT P14), which the writer writes.
     pub(crate) fn set_footprint_paste_margin(&mut self, part: &str, margin: Option<Nm>, ratio: Option<f64>) -> Result<(), Vec<CheckResult>> {
         let fmt = |v: f64| {
             let s = format!("{v:.6}");
             s.trim_end_matches('0').trim_end_matches('.').to_string()
         };
+        if let Some(r) = ratio {
+            // `MARGIN_OFFSET_BINDER`: the ratio is a percentage the dialog limits like a pad's (`padValuesOK`: -50% .. +100%)
+            if !(-0.5..=1.0).contains(&r) {
+                return Err(fail("ops_bad_footprint", part, "The solder paste margin ratio must be between -50% and 100%."));
+            }
+        }
+        let from_file = self.design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == part));
+        if !from_file {
+            self.require_placed(part)?;
+            let before = self.design.footprint_edit(part).map(|e| (e.solder_paste_margin, e.solder_paste_ratio)).unwrap_or_default();
+            if before == (margin, ratio) {
+                return Err(fail("ops_nothing_to_change", part, "the footprint already has these paste margins"));
+            }
+            let slot = self.edit_slot(part);
+            slot.solder_paste_margin = margin;
+            slot.solder_paste_ratio = ratio;
+            self.tidy_edit(part);
+            return Ok(());
+        }
         let d = self.design.drawings.as_mut().ok_or_else(|| fail("ops_no_board_file_footprint", part, "this footprint was not read from a board file"))?;
-        let e = d.footprint_extras.iter_mut().find(|e| e.id == part).ok_or_else(|| fail("ops_no_board_file_footprint", part, "a footprint placed from the intent has no footprint-level paste margin; set the pads' margins"))?;
+        let e = d.footprint_extras.iter_mut().find(|e| e.id == part).ok_or_else(|| fail("ops_no_board_file_footprint", part, "this footprint was not read from a board file"))?;
         let before = e.tokens.clone();
         let tag = |t: &str| t.strip_prefix('(').and_then(|r| r.split_whitespace().next()).map(str::to_string);
         let mut set = |name: &str, aliases: &[&str], value: Option<String>| {

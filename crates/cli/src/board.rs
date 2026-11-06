@@ -1587,7 +1587,17 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // The studio shows a board with no stored schematic as the one derived
     // from its intent; the first schematic edit stores that derived one, so
     // editing what is on screen works (an undo goes back to "none stored").
-    if cmd.domain() == Domain::Schematic && design.schematic.is_none() {
+    // (A batch that edits the board first and then a symbol -- Footprint Properties' new Value or Reference, UI-LEFT P14 -- edits the schematic too.)
+    let edits_schematic = |c: &Cmd| -> bool {
+        fn any(c: &Cmd) -> bool {
+            match c {
+                Cmd::Batch { cmds } => cmds.iter().any(any),
+                c => c.domain() == Domain::Schematic,
+            }
+        }
+        any(c)
+    };
+    if edits_schematic(cmd) && design.schematic.is_none() {
         // The schematic the studio shows -- module sheets for a design of more than one module -- so the edit lands on what is on
         // screen, in whichever sheet the command names.
         let derived = derived_schematic(&design, &model)?;
@@ -1937,6 +1947,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetSolderMask { ids, solder_mask, .. } => format!("solder-mask {} {}", if *solder_mask { "on" } else { "off" }, ids.join(" ")),
         Cmd::SetCornerRadius { ids, radius } => format!("shape corner-radius {} {}", mm(*radius), ids.join(" ")),
         Cmd::SetViaProps { id, .. } => format!("via props {id}"),
+        Cmd::SetTeardropParams { ids, .. } => format!("teardrop params {}", ids.join(" ")),
+        Cmd::EditBoardFootprintText { id, delete, .. } => format!("footprint text {id}{}", if *delete { " delete" } else { "" }),
         Cmd::SetFootprintPasteMargin { part, .. } => format!("footprint paste-margin {part}"),
         Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => {
             let mut what: Vec<&str> = Vec::new();
@@ -2287,6 +2299,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetSolderMask { .. } => "solder-mask",
         Cmd::SetCornerRadius { .. } => "shape",
         Cmd::SetViaProps { .. } => "via",
+        Cmd::SetTeardropParams { .. } => "teardrops",
+        Cmd::EditBoardFootprintText { .. } => "footprint-text",
         Cmd::SetFootprintPasteMargin { .. } => "footprint",
         Cmd::EditBoardFootprint { .. } => "footprint-edit",
         Cmd::EditBoardField { .. } => "field-edit",

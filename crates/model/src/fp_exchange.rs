@@ -140,6 +140,82 @@ pub fn pad_alignment(existing: &Footprint, new: &Footprint, side: Side) -> Optio
     Some(PadAlignment { translation, rotation_ccw: rotation * 1000 })
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------------- pads
+
+/// `PAD::Similarity` (pcbnew/pad.cpp at KiCad 8303b2ad) of an existing pad `a` at `a_pos` and a new pad `b` at `b_pos` (both on the board, `GetPosition()`, the new
+/// footprint already placed where the old one was), over what the model keeps of a pad: 0.9 for another position and for another type (`GetAttribute`), times
+/// `PADSTACK::Similarity`: 0.9 for another padstack mode, another unconnected-layer mode, another orientation and another drill, and for each of the pad's unique
+/// copper layers `COPPER_LAYER_PROPS::Similarity`'s 0.5 for another shape (`SHAPE_PROPS`: the shape, size, offset, corner ratio, chamfer and delta) and 0.5 for
+/// other custom shapes. Not compared, as the model has them elsewhere or not at all: the layer set (beyond the type), the mask props and the zone settings.
+pub fn pad_similarity(a: &crate::footprint::Pad, a_pos: Point, b: &crate::footprint::Pad, b_pos: Point) -> f64 {
+    let mut s = 1.0;
+    if a_pos != b_pos {
+        s *= 0.9;
+    }
+    if a.kind != b.kind {
+        s *= 0.9;
+    }
+    // `PADSTACK::Similarity`
+    if a.ext.stack.mode != b.ext.stack.mode {
+        s *= 0.9;
+    }
+    if a.ext.stack.unconnected != b.ext.stack.unconnected {
+        s *= 0.9;
+    }
+    if a.rot != b.rot {
+        s *= 0.9;
+    }
+    if (a.drill, a.drill_slot) != (b.drill, b.drill_slot) {
+        s *= 0.9;
+    }
+    // `ForEachUniqueLayer`: `CopperLayer( aLayer ).Similarity( aOther.CopperLayer( aLayer ) )`, the front's and each layer the stack names
+    let shape_of = |p: &crate::footprint::Pad| (p.shape, p.size, p.ext.offset, p.roundrect_ratio.map(f64::to_bits), p.ext.chamfer_ratio.map(f64::to_bits), p.ext.chamfer_corners, p.ext.trapezoid_delta);
+    let layers = |p: &crate::footprint::Pad| -> Vec<crate::footprint::Pad> { std::iter::once(p.clone()).chain(p.unique_shapes().iter().map(|sh| sh.lay_on(p))).collect() };
+    let (la, lb) = (layers(a), layers(b));
+    for (i, x) in la.iter().enumerate() {
+        let y = lb.get(i).unwrap_or(&lb[0]);
+        if shape_of(x) != shape_of(y) {
+            s *= 0.5;
+        }
+        if x.ext.custom != y.ext.custom {
+            s *= 0.5;
+        }
+    }
+    s
+}
+
+/// `matchItemsBySimilarity<PAD>` (pcbnew/pcb_edit_frame.cpp), the pad matching of `PCB_EDIT_FRAME::ExchangeFootprint`: every pair of an existing and a new pad
+/// scored by [`pad_similarity`], 2 more for the same number (`existing->GetNumber() == updated->GetNumber()`), sorted by score (ties by the existing pad, then the
+/// new one: the pointers, here their order), and taken greedily, each pad once. `(existing index, new index)` of each match; a new pad no existing one matched has
+/// no net (`SetNetCode( NETINFO_LIST::UNCONNECTED )`). Every pair scores above 0, so every pad of the smaller side is matched.
+pub fn match_pads(existing: &Footprint, existing_pose: &FootprintInstance, new: &Footprint, new_pose: &FootprintInstance) -> Vec<(usize, usize)> {
+    let at = |pose: &FootprintInstance, p: &crate::footprint::Pad| crate::footprint::to_board(pose, p.at);
+    let mut candidates: Vec<(f64, usize, usize)> = Vec::new();
+    for (i, a) in existing.pads.iter().enumerate() {
+        for (j, b) in new.pads.iter().enumerate() {
+            let mut score = pad_similarity(a, at(existing_pose, a), b, at(new_pose, b));
+            if a.number == b.number {
+                score += 2.0;
+            }
+            if score > 0.0 {
+                candidates.push((score, i, j));
+            }
+        }
+    }
+    candidates.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap_or(std::cmp::Ordering::Equal).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
+    let (mut used_a, mut used_b) = (vec![false; existing.pads.len()], vec![false; new.pads.len()]);
+    let mut out = Vec::new();
+    for (_, i, j) in candidates {
+        if used_a[i] || used_b[j] {
+            continue;
+        }
+        used_a[i] = true;
+        used_b[j] = true;
+        out.push((i, j));
+    }
+    out
+}
+
 // --------------------------------------------------------------------------------------------------------------------------------------- texts
 
 /// `EDA_TEXT::Levenshtein`: 1 minus the edit distance over the longer length; 0 when either string is empty.
@@ -262,6 +338,23 @@ pub fn keep_text(old: &FpText, old_pose: &FootprintInstance, new_pose: &Footprin
 
 #[cfg(test)]
 mod tests {
+    /// `matchItemsBySimilarity<PAD>`: pads are matched by number first (2 more), then by how alike they are -- a pad the new footprint numbers otherwise, in
+    /// the same place and of the same shape, is the old pad's match.
+    #[test]
+    fn pads_are_matched_by_number_then_by_what_they_are_and_where() {
+        use crate::footprint::Pad;
+        let pad = |n: &str, x: f64| Pad { number: n.into(), at: (Nm::new((x * 1e6) as i64), Nm::ZERO), size: (Nm::new(600_000), Nm::new(800_000)), shape: Default::default(), kind: Default::default(), drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        let old = Footprint { pads: vec![pad("1", -1.0), pad("2", 1.0), pad("3", 3.0)], ..Default::default() };
+        // the new footprint numbers its third pad "4"; and moves pad "2"
+        let new = Footprint { pads: vec![pad("1", -1.0), pad("2", 1.5), pad("4", 3.0)], ..Default::default() };
+        let pose = FootprintInstance { id: "U1".into(), at: Point { x: Nm::new(10_000_000), y: Nm::new(10_000_000) }, rot: 0, side: Side::Top, label: Default::default() };
+        assert_eq!(match_pads(&old, &pose, &new, &pose), vec![(0, 0), (1, 1), (2, 2)], "1 and 2 by number, 3 to 4 by place and shape");
+        assert!((pad_similarity(&old.pads[1], Point { x: Nm::ZERO, y: Nm::ZERO }, &new.pads[1], Point { x: Nm::new(1), y: Nm::ZERO }) - 0.9).abs() < 1e-12);
+        // a new footprint with more pads: the extra one is matched by nothing
+        let more = Footprint { pads: vec![pad("1", -1.0), pad("2", 1.0), pad("3", 3.0), pad("5", 5.0)], ..Default::default() };
+        assert_eq!(match_pads(&old, &pose, &more, &pose), vec![(0, 0), (1, 1), (2, 2)]);
+    }
+
     use super::*;
     use crate::footprint::{Pad, PadKind, PadShape};
     use crate::ir::LabelSide;

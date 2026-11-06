@@ -4,8 +4,28 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { BoardState, Nm } from "../api/types";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { pcbContext } from "../kicad-port/pcbProperties";
-import { ANNULAR_RING_CHOICES, trackViaCmds, trackViaForm, VIA_TYPE_CHOICES, viaLayerDepth, withNetAnswers, type TrackViaForm, type ViaType } from "../kicad-port/trackViaDialog";
-import type { UnconnectedLayers } from "../api/types";
+import {
+  ANNULAR_RING_CHOICES,
+  BACKDRILL_CHOICES,
+  editLayerChoices,
+  PADSTACK_MODE_CHOICES,
+  POST_MACHINE_CHOICES,
+  sizeOn,
+  trackViaCmds,
+  trackViaForm,
+  VIA_TYPE_CHOICES,
+  viaLayerDepth,
+  withNetAnswers,
+  type BackdrillChoice,
+  type PadstackMode,
+  type PostChoice,
+  type TrackViaForm,
+  type ViaType,
+} from "../kicad-port/trackViaDialog";
+import { IPC4761_PRESETS } from "../kicad-port/globalEditTracksVias";
+import type { Ipc4761Preset, UnconnectedLayers } from "../api/types";
+import { TeardropFields } from "./TeardropFields";
+import { NumberInput } from "./NumberInput";
 import { postTrackViaPreview } from "../api/client";
 import { askConfirm } from "./library/libraryDialogs";
 import { useStudioApi } from "../state/store";
@@ -78,7 +98,7 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
   const title = "Track & Via Properties";
   return (
     <div className="dialog-backdrop" onClick={onClose}>
-      <div className="dialog" style={{ width: 380 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Track & Via Properties">
+      <div className="dialog" style={{ width: 440, maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Track & Via Properties">
         <div className="dialog-header">
           <span>{title}</span>
         </div>
@@ -132,8 +152,53 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
               <>
                 {lengthRow("Via X", "viaX")}
                 {lengthRow("Via Y", "viaY")}
-                {lengthRow("Diameter", "diameter")}
-                {lengthRow("Hole", "drill")}
+                {/* "Padstack mode:" and "Edit layer:" (`afterPadstackModeChanged`): the diameter shown is the edited layer's (`onEditLayerChanged`) */}
+                <span>Padstack mode:</span>
+                <span>
+                  <select
+                    aria-label="Padstack mode"
+                    value={form.padstackMode}
+                    onChange={(e) => {
+                      const mode = e.target.value as PadstackMode;
+                      // `PADSTACK::SetMode`: the layers the new mode names start from the front's diameter; the edit layer stays where it can
+                      setForm((f) => ({ ...f, padstackMode: mode, editLayer: editLayerChoices(mode, copper).includes(f.editLayer) ? f.editLayer : "F.Cu" }));
+                    }}
+                  >
+                    {PADSTACK_MODE_CHOICES.map(([k, label]) => (
+                      <option key={k} value={k}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+                <span>Edit layer:</span>
+                <span>
+                  <select aria-label="Edit layer" disabled={form.padstackMode === "normal"} value={form.editLayer} onChange={(e) => setForm((f) => ({ ...f, editLayer: e.target.value }))}>
+                    {editLayerChoices(form.padstackMode, copper).map((l) => (
+                      <option key={l} value={l}>
+                        {form.padstackMode === "normal" ? "All layers" : l === "Inner" ? "Inner Layers" : layerDisplayName(layerSetup, l)}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+                {form.editLayer === "F.Cu" || form.padstackMode === "normal" ? (
+                  lengthRow("Via diameter", "diameter")
+                ) : (
+                  <>
+                    <span>Via diameter</span>
+                    <span>
+                      <NumberInput
+                        label="Via diameter"
+                        value={sizeOn(form, form.editLayer)}
+                        scale={(v) => nmTo(v, units)}
+                        unscale={(v) => Math.round(nmFrom(v, units))}
+                        onChange={(nm) => setForm((f) => ({ ...f, layerSizes: { ...f.layerSizes, ...(nm != null ? { [f.padstackMode === "front_inner_back" && f.editLayer !== "B.Cu" ? "Inner" : f.editLayer]: nm } : {}) } }))}
+                      />{" "}
+                      {units}
+                    </span>
+                  </>
+                )}
+                {lengthRow("Via hole", "drill")}
                 <span>Via type:</span>
                 <span>
                   <select
@@ -188,9 +253,106 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
                     </span>
                   </>
                 )}
+                {/* "Protection features:" (`m_protectionFeatures`): the IPC-4761 presets, a via whose settings are none of them "Custom", vias that differ "<...>" */}
+                <span>Protection features:</span>
+                <span>
+                  <select
+                    aria-label="Protection features"
+                    title="Select which protection feature according to IPC-4761 the via should have."
+                    value={form.protection ?? "\u0000"}
+                    onChange={(e) => setForm((f) => ({ ...f, protection: e.target.value === "\u0000" ? null : (e.target.value as Ipc4761Preset | "custom") }))}
+                  >
+                    {IPC4761_PRESETS.map(([k, label]) => (
+                      <option key={k} value={k}>
+                        {label}
+                      </option>
+                    ))}
+                    {form.protection === "custom" && <option value="custom">Custom</option>}
+                    {form.protection == null && <option value={"\u0000"}>{"<...>"}</option>}
+                  </select>
+                </span>
+                {/* "Backdrill:" (`m_backdrillChoice`) and its rows: the front backdrill is the secondary drill from F.Cu, the back one the tertiary from B.Cu */}
+                <span>Backdrill:</span>
+                <span>
+                  <select aria-label="Backdrill" value={form.backdrill ?? "\u0000"} onChange={(e) => setForm((f) => ({ ...f, backdrill: e.target.value === "\u0000" ? null : (e.target.value as BackdrillChoice) }))}>
+                    {form.backdrill == null && <option value={"\u0000"}>{"<...>"}</option>}
+                    {BACKDRILL_CHOICES.map(([k, label]) => (
+                      <option key={k} value={k}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+                {(["Front", "Back"] as const).map((side) => {
+                  const shown = side === "Front" ? form.backdrill === "top" || form.backdrill === "both" || form.backdrill == null : form.backdrill === "bottom" || form.backdrill === "both" || form.backdrill == null;
+                  if (!shown) return null;
+                  const sizeKey = side === "Front" ? "backdrillFrontSize" : "backdrillBackSize";
+                  const layerKey = side === "Front" ? "backdrillFrontLayer" : "backdrillBackLayer";
+                  return (
+                    <span key={side} style={{ display: "contents" }}>
+                      <span>{side} backdrill size:</span>
+                      <span>
+                        <NumberInput label={`${side} backdrill size`} value={form[sizeKey]} scale={(v) => nmTo(v, units)} unscale={(v) => Math.round(nmFrom(v, units))} onChange={(nm) => setForm((f) => ({ ...f, [sizeKey]: nm }))} /> {units}
+                      </span>
+                      <span>{side} backdrill must-cut:</span>
+                      <span>
+                        <select aria-label={`${side} backdrill must-cut`} title="The backdrill must pass through this layer" value={form[layerKey] ?? "\u0000"} onChange={(e) => setForm((f) => ({ ...f, [layerKey]: e.target.value === "\u0000" ? null : e.target.value }))}>
+                          {form[layerKey] == null && <option value={"\u0000"}>{"<...>"}</option>}
+                          <option value="">None</option>
+                          {copper.map((l) => (
+                            <option key={l} value={l}>
+                              {layerDisplayName(layerSetup, l)}
+                            </option>
+                          ))}
+                        </select>
+                      </span>
+                    </span>
+                  );
+                })}
+                {/* "Hole Post-machining": Front and Back, each None, Countersink (size, angle) or Counterbore (size, depth) */}
+                {(["Front", "Back"] as const).map((side) => {
+                  const [mk, sk, s2k] = side === "Front" ? (["topPost", "topPostSize", "topPostSize2"] as const) : (["bottomPost", "bottomPostSize", "bottomPostSize2"] as const);
+                  const mode = form[mk];
+                  return (
+                    <span key={`pm${side}`} style={{ display: "contents" }}>
+                      <span>Post-machining {side.toLowerCase()}:</span>
+                      <span>
+                        <select aria-label={`Post-machining ${side.toLowerCase()}`} value={mode ?? "\u0000"} onChange={(e) => setForm((f) => ({ ...f, [mk]: e.target.value === "\u0000" ? null : (e.target.value as PostChoice) }))}>
+                          {mode == null && <option value={"\u0000"}>{"<...>"}</option>}
+                          {POST_MACHINE_CHOICES.map(([k, label]) => (
+                            <option key={k} value={k}>
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+                      </span>
+                      {mode != null && mode !== "none" && (
+                        <>
+                          <span>Size:</span>
+                          <span>
+                            <NumberInput label={`${side} post-machining size`} value={form[sk]} scale={(v) => nmTo(v, units)} unscale={(v) => Math.round(nmFrom(v, units))} onChange={(nm) => setForm((f) => ({ ...f, [sk]: nm }))} /> {units}
+                          </span>
+                          <span>{mode === "countersink" ? "Angle:" : "Depth:"}</span>
+                          <span>
+                            {mode === "countersink" ? (
+                              <>
+                                <NumberInput label={`${side} post-machining angle`} value={form[s2k]} onChange={(v) => setForm((f) => ({ ...f, [s2k]: v }))} /> deg
+                              </>
+                            ) : (
+                              <>
+                                <NumberInput label={`${side} post-machining depth`} value={form[s2k]} scale={(v) => nmTo(v, units)} unscale={(v) => Math.round(nmFrom(v, units))} onChange={(nm) => setForm((f) => ({ ...f, [s2k]: nm }))} /> {units}
+                              </>
+                            )}
+                          </span>
+                        </>
+                      )}
+                    </span>
+                  );
+                })}
               </>
             )}
           </div>
+          {hasVias && <TeardropFields form={form.teardrops} units={units} what="via" onChange={(teardrops) => setForm((f) => ({ ...f, teardrops }))} />}
           {error && (
             <div role="alert" style={{ color: "var(--chrome-error, #c0392b)", fontSize: 12, marginTop: 6 }}>
               {error}

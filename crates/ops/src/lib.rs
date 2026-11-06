@@ -73,6 +73,7 @@ pub mod fp_editor;
 mod sym_derive;
 mod fix_shapes;
 mod fp_edit;
+pub mod fp_texts;
 mod fp_models;
 mod import_foreign;
 pub use import_foreign::imported_intent_file;
@@ -1254,6 +1255,24 @@ pub enum Cmd {
     SetCornerRadius { ids: Vec<String>, radius: Nm },
     /// A via's tenting, covering, plugging, capping, filling, backdrill and post-machining (`TRACK_VIA_DESC`'s rows past "Via Type"), all at once.
     SetViaProps { id: String, props: eda_model::via_extra::ViaProps },
+    /// Text Properties of a footprint's own text on the board (`REF~t<k>`, UI-LEFT P15; [`fp_texts`]): its text and layout (`layout` in the footprint's frame,
+    /// its layer the board side's), or `delete` it; in the instance's own copy of its footprint.
+    EditBoardFootprintText {
+        id: String,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        layout: Option<eda_model::fp_edit::FieldLayout>,
+        #[serde(default)]
+        delete: bool,
+    },
+    /// The own teardrop parameters of vias and pads (`BOARD_CONNECTED_ITEM::GetTeardropParams`): Track & Via Properties', Pad Properties' and the Properties
+    /// panel's Teardrops rows; `None` gives the items back to Board Setup's block ([`eda_model::teardrop_params`]).
+    SetTeardropParams {
+        ids: Vec<String>,
+        #[serde(default)]
+        params: Option<eda_model::teardrop_params::TeardropParams>,
+    },
     /// "Solderpaste Margin Override" and "Solderpaste Margin Ratio Override" of a footprint (`FOOTPRINT::SetLocalSolderPasteMargin`, `..Ratio`); `None` is the board's.
     SetFootprintPasteMargin {
         part: String,
@@ -2654,7 +2673,8 @@ impl Cmd {
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::MirrorItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } | Cmd::EditTextStyle { id, .. } | Cmd::SetViaProps { id, .. } => vec![id.as_str()],
-            Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } | Cmd::SetTeardropParams { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::EditBoardFootprintText { id, .. } => vec![id.as_str()],
             Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
@@ -3402,6 +3422,8 @@ impl<'a> Board<'a> {
             Cmd::SetSolderMask { ids, solder_mask, margin } => self.set_solder_mask(ids, *solder_mask, *margin),
             Cmd::SetCornerRadius { ids, radius } => self.set_corner_radius(ids, *radius),
             Cmd::SetViaProps { id, props } => self.set_via_props(id, props),
+            Cmd::SetTeardropParams { ids, params } => self.set_teardrop_params(ids, params.as_ref()),
+            Cmd::EditBoardFootprintText { id, text, layout, delete } => self.edit_board_footprint_text(id, text.as_deref(), layout.as_ref(), *delete),
             Cmd::SetFootprintPasteMargin { part, margin, ratio } => self.set_footprint_paste_margin(part, *margin, *ratio),
             Cmd::Batch { cmds } => {
                 let saved = self.design.clone();
@@ -3513,9 +3535,10 @@ impl<'a> Board<'a> {
             }
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit, .. } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit).and_then(|_| self.commit_clean_up()),
             Cmd::EmbedLibSymbol { symbol } => self.embed_lib_symbol(symbol),
-            // Symbol Properties' OK is a commit of a symbol, which is connectable: the commit cleans the sheet up (`LOCAL_CLEANUP`, r3 C3-M1)
-            Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()).and_then(|_| self.commit_clean_up()),
-            Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
+            // Symbol Properties' OK is a commit of a symbol, which is connectable: the commit cleans the sheet up (`LOCAL_CLEANUP`, r3 C3-M1); a board-side edit runs on
+            // the symbol's own screen (UI-LEFT P14)
+            Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.on_symbols_screen(id, |b| b.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()).and_then(|_| b.commit_clean_up())),
+            Cmd::RenameSymbol { id, new_id } => self.on_symbols_screen(id, |b| b.rename_symbol(id, new_id)),
             Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
             Cmd::AddDesignVariant { name, description } => self.add_design_variant(name, description),
             Cmd::RemoveDesignVariant { name } => self.remove_design_variant(name),
@@ -5346,6 +5369,29 @@ impl<'a> Board<'a> {
         r
     }
 
+    /// `f` on the screen that has the symbol `id`, when the screen the verbs act on does not: the board names a part, not the sheet its symbol is on, so a board-side
+    /// edit of it (Footprint Properties' Reference and Value, the Properties panel's Reference; UI-LEFT P14) reaches the symbol wherever it is, as KiCad's Update
+    /// Schematic from PCB does (`BACK_ANNOTATE` walks every sheet's references).
+    fn on_symbols_screen(&mut self, id: &str, f: impl FnOnce(&mut Self) -> Result<(), Vec<CheckResult>>) -> Result<(), Vec<CheckResult>> {
+        let here = match &self.focus {
+            None => self.design.schematic.as_ref(),
+            Some(file) => self.design.sheet_contents.as_ref().and_then(|c| c.get(file)),
+        }
+        .is_some_and(|s| s.symbols.iter().any(|x| x.id == id));
+        let elsewhere = if here {
+            None
+        } else if self.design.schematic.as_ref().is_some_and(|s| s.symbols.iter().any(|x| x.id == id)) {
+            Some(None)
+        } else {
+            self.design.sheet_contents.iter().flatten().find(|(_, sc)| sc.symbols.iter().any(|x| x.id == id)).map(|(file, _)| Some(file.clone()))
+        };
+        let Some(screen) = elsewhere else { return f(self) };
+        let saved = std::mem::replace(&mut self.focus, screen);
+        let r = f(self);
+        self.focus = saved;
+        r
+    }
+
     /// Every placed symbol of every screen but the one the verbs act on: (reference, unit). A reference is one part for the whole design
     /// (the model, the PCB and the net list know it by that name), so what is placed on another sheet counts when a symbol is added,
     /// renamed or numbered here.
@@ -6099,6 +6145,15 @@ impl<'a> Board<'a> {
     /// never itself introduce a `unit_value_mismatch`/`different_unit_
     /// footprint` ERC finding the way a hand-edited `.kicad_sch` can.
     fn edit_symbol_fields(&mut self, id: &str, value: Option<&str>, footprint: Option<&str>, datasheet: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        // A footprint no symbol is for: its own Value (Footprint Properties' Value row, `FOOTPRINT::SetValue`; UI-LEFT P14).
+        let board_only = self.design.drawings.as_ref().is_some_and(|d| d.board_parts.iter().any(|b| b.reference == id)) && self.board_part_without_symbol(id);
+        if let (Some(v), true) = (value, board_only) {
+            let Some(bp) = self.drawings_mut().board_parts.iter_mut().find(|b| b.reference == id) else {
+                return Err(vec![CheckResult::fail("ops_unknown_symbol", id, "no footprint of the board has its own value to edit")]);
+            };
+            bp.value = Some(v.to_string());
+            return Ok(());
+        }
         self.find_symbol(id)?;
         let sch = self.schematic_mut()?;
         for s in sch.symbols.iter_mut().filter(|s| s.id == id) {
@@ -6359,6 +6414,22 @@ impl<'a> Board<'a> {
         // be two parts under one key
         if new_id != id && self.board_part_without_symbol(new_id) {
             return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a footprint with this reference is already on the board")]);
+        }
+        // A footprint no symbol is for (Footprint Properties' Reference of a board-only footprint, `FOOTPRINT::SetReference`): the board's part alone is renamed
+        // (UI-LEFT P14).
+        if self.design.drawings.as_ref().is_some_and(|d| d.board_parts.iter().any(|b| b.reference == id)) && self.board_part_without_symbol(id) {
+            if new_id.trim().is_empty() {
+                return Err(vec![CheckResult::fail("ops_bad_symbol", id, "a footprint needs a reference designator")]);
+            }
+            let taken = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).any(|s| s.symbols.iter().any(|x| x.id == new_id));
+            if new_id != id && taken {
+                return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a symbol with this reference is already on the sheet")]);
+            }
+            if new_id == id {
+                return Err(vec![CheckResult::fail("ops_nothing_to_change", id, "the footprint already has this reference")]);
+            }
+            self.rename_part(&BTreeMap::from([(id.to_string(), new_id.to_string())]));
+            return Ok(());
         }
         if self.rename_symbol_in_schematic(id, new_id)? {
             self.rename_part(&BTreeMap::from([(id.to_string(), new_id.to_string())]));

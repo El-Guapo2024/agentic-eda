@@ -273,7 +273,7 @@ fn footprint_fields(design: &Design, part: &eda_model::Part, fp: &FootprintInsta
 }
 
 /// What the footprints of the board put in the knockouts: their courtyard on a courtyard layer, their visible fields and their graphics on the layer, each grown by `margin`.
-fn footprint_knockouts(out: &mut ShapePolySet, design: &Design, model: &ConstraintModel, layer: &str, my_box: [i64; 4], margin: Nm) {
+fn footprint_knockouts(out: &mut ShapePolySet, design: &Design, model: &ConstraintModel, layer: &str, my_box: [i64; 4], margin: Nm, me: Option<(&str, usize)>) {
     let Some(placement) = design.placement.as_ref() else { return };
     for fp in &placement.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
@@ -310,7 +310,11 @@ fn footprint_knockouts(out: &mut ShapePolySet, design: &Design, model: &Constrai
                 }
             }
         }
-        for art in &footprint.art.shapes {
+        for (k, art) in footprint.art.shapes.iter().enumerate() {
+            // (a footprint's own hatched graphic is no knockout of itself: `if( item == this ) continue`)
+            if me == Some((fp.id.as_str(), k)) {
+                continue;
+            }
             let placed = art.placed(fp);
             if placed.on_layer(layer) && boxes_meet(shape_box(&placed.shape), my_box) {
                 shape_knockout(out, &placed.shape, placed.is_any_fill(), margin);
@@ -321,7 +325,7 @@ fn footprint_knockouts(out: &mut ShapePolySet, design: &Design, model: &Constrai
 
 /// `PCB_SHAPE::getHatchingKnockouts`: the polygons of the other shapes, texts and text boxes on the layer of `me` whose box meets its own, and what the footprints put on the layer
 /// (when the model that holds them is at hand), grown by `margin`.
-fn knockouts(design: &Design, model: Option<&ConstraintModel>, me: &Shape, margin: Nm) -> ShapePolySet {
+fn knockouts(design: &Design, model: Option<&ConstraintModel>, me: &Shape, margin: Nm, me_art: Option<(&str, usize)>) -> ShapePolySet {
     let mut out = ShapePolySet::new();
     let layer = me.layer();
     let my_box = shape_box(me);
@@ -355,7 +359,7 @@ fn knockouts(design: &Design, model: Option<&ConstraintModel>, me: &Shape, margi
         }
     }
     if let Some(model) = model {
-        footprint_knockouts(&mut out, design, model, layer, my_box, margin);
+        footprint_knockouts(&mut out, design, model, layer, my_box, margin, me_art);
     }
     out
 }
@@ -368,7 +372,7 @@ struct Prepared {
     knockouts: ShapePolySet,
 }
 
-fn prepare(design: &Design, model: Option<&ConstraintModel>, shape: &Shape) -> Option<Prepared> {
+fn prepare(design: &Design, model: Option<&ConstraintModel>, shape: &Shape, me_art: Option<(&str, usize)>) -> Option<Prepared> {
     let width = shape.stroke_width().max(Nm::ZERO);
     let uncapped = width * 10;
     if uncapped == Nm::ZERO {
@@ -397,7 +401,7 @@ fn prepare(design: &Design, model: Option<&ConstraintModel>, shape: &Shape) -> O
     if spacing <= Nm::ZERO {
         return None;
     }
-    let knock = knockouts(design, model, shape, uncapped / 2);
+    let knock = knockouts(design, model, shape, uncapped / 2, me_art);
     if !knock.is_empty() {
         area.boolean_subtract(&knock);
         area.fracture(true);
@@ -407,7 +411,17 @@ fn prepare(design: &Design, model: Option<&ConstraintModel>, shape: &Shape) -> O
 
 /// The hatch lines of `shape` as `EDA_SHAPE::UpdateHatching` makes them, the board being `design` (and `model`, which holds the footprints' definitions, if given). A shape that has no inside, no line width or no room gives none.
 pub fn hatching(design: &Design, model: Option<&ConstraintModel>, shape: &Shape, kind: HatchKind) -> Hatching {
-    let Some(prep) = prepare(design, model, shape) else { return Hatching { width: shape.stroke_width().max(Nm::ZERO), lines: Vec::new() } };
+    hatching_of(design, model, shape, kind, None)
+}
+
+/// [`hatching`] of the `index`-th graphic of footprint `reference`'s art, `shape` as it is on the board (`FpShape::placed`): the footprint's other items knock
+/// out of it, it not of itself (UI-LEFT P15).
+pub fn footprint_art_hatching(design: &Design, model: &ConstraintModel, reference: &str, index: usize, shape: &Shape, kind: HatchKind) -> Hatching {
+    hatching_of(design, Some(model), shape, kind, Some((reference, index)))
+}
+
+fn hatching_of(design: &Design, model: Option<&ConstraintModel>, shape: &Shape, kind: HatchKind, me_art: Option<(&str, usize)>) -> Hatching {
+    let Some(prep) = prepare(design, model, shape, me_art) else { return Hatching { width: shape.stroke_width().max(Nm::ZERO), lines: Vec::new() } };
     let lines = prep.area.generate_hatch_lines(kind.slopes(), prep.spacing.get(), -1).into_iter().map(|(a, b)| (pt(a), pt(b))).collect();
     Hatching { width: prep.width, lines }
 }
@@ -415,7 +429,7 @@ pub fn hatching(design: &Design, model: Option<&ConstraintModel>, shape: &Shape,
 /// `GetHatching()`: the polygons the plot has for the hatching. A hatch and a reverse hatch are a stadium per line (`TransformOvalToPolygon( .., lineWidth, lineWidth, ERROR_INSIDE )`);
 /// a cross-hatch is the shape turned by -45 degrees with a grid of squares `spacing - width` wide cut out of it every `spacing`, turned back and with the knockouts taken out.
 pub fn hatch_polygons(design: &Design, model: Option<&ConstraintModel>, shape: &Shape, kind: HatchKind) -> Vec<LineChain> {
-    let Some(prep) = prepare(design, model, shape) else { return Vec::new() };
+    let Some(prep) = prepare(design, model, shape, None) else { return Vec::new() };
     if kind != HatchKind::CrossHatch {
         return prep
             .area

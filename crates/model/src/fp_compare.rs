@@ -59,6 +59,12 @@ pub struct PadOverrides {
 pub struct LibraryFacts {
     pub overrides: FootprintOverrides,
     pub pad_overrides: Vec<PadOverrides>,
+    /// The library footprint's own attribute flags (`aLibFP->GetAttributes()`: `(attr ..)`), `None` when not known (the board's are then compared with none set).
+    pub attrs: Option<FootprintAttrs>,
+    /// `AllowSolderMaskBridges()`.
+    pub allow_soldermask_bridges: bool,
+    /// `GetNetTiePadGroups().size()`.
+    pub net_tie_groups: usize,
 }
 
 impl LibraryFacts {
@@ -90,7 +96,17 @@ impl LibraryFacts {
                 layers: (!p.layers.is_empty()).then(|| p.layers.clone()),
             })
             .collect();
-        LibraryFacts { overrides, pad_overrides }
+        // the file's `(attr ..)` (UI-LEFT P21): a footprint's type, its fabrication flags, its courtyard exemption and its solder mask bridges
+        let a = &lib.attributes;
+        let kind = if a.through_hole {
+            FootprintKind::ThroughHole
+        } else if a.smd {
+            FootprintKind::Smd
+        } else {
+            FootprintKind::Unspecified
+        };
+        let attrs = FootprintAttrs { kind, board_only: a.board_only, exclude_from_pos_files: a.exclude_from_position_files, exclude_from_bom: a.exclude_from_bom, dnp: a.dnp, allow_missing_courtyard: a.allow_missing_courtyard };
+        LibraryFacts { overrides, pad_overrides, attrs: Some(attrs), allow_soldermask_bridges: a.allow_soldermask_bridges, net_tie_groups: lib.settings.net_tie_pad_groups.len() }
     }
 }
 
@@ -105,6 +121,10 @@ pub struct InstanceFacts<'a> {
     pub attrs: FootprintAttrs,
     pub overrides: FootprintOverrides,
     pub pad_overrides: Vec<PadOverrides>,
+    /// `AllowSolderMaskBridges()` of the board's footprint.
+    pub allow_soldermask_bridges: bool,
+    /// `GetNetTiePadGroups().size()` of the board's footprint.
+    pub net_tie_groups: usize,
 }
 
 /// `StrNumCmp`: strings compared with digit runs as numbers.
@@ -516,13 +536,24 @@ pub fn footprint_differences(instance: &InstanceFacts, library: &Footprint, libr
     let mut out: Vec<String> = Vec::new();
     let board = instance.footprint;
 
-    if instance.attrs.kind != likely_kind(library) {
+    // `TEST_ATTR( GetAttributes(), aLibFP->GetAttributes(), .., msg )`: each flag against the library file's own (`(attr ..)`; UI-LEFT P21), the type when the
+    // library says none from its pads (`GetLikelyAttribute`) as the model's own footprints do
+    let lib_attrs = library_facts.attrs.unwrap_or(FootprintAttrs { kind: likely_kind(library), ..Default::default() });
+    let lib_kind = if library_facts.attrs.is_some_and(|a| a.kind != FootprintKind::Unspecified) { lib_attrs.kind } else { likely_kind(library) };
+    if instance.attrs.kind != lib_kind {
         out.push("Footprint types differ.".to_string());
     }
-    // The attributes of a library footprint are none of these: a footprint the schematic marks, or the board edits, differs
+    if instance.allow_soldermask_bridges != library_facts.allow_soldermask_bridges {
+        out.push("'Allow bridged solder mask apertures between pads' settings differ.".to_string());
+    }
     let a = &instance.attrs;
-    for (set, what) in [(a.board_only, "Not in schematic"), (a.exclude_from_pos_files, "Exclude from position files"), (a.exclude_from_bom, "Exclude from bill of materials"), (a.dnp, "Do not populate")] {
-        if set {
+    for (mine, theirs, what) in [
+        (a.board_only, lib_attrs.board_only, "Not in schematic"),
+        (a.exclude_from_pos_files, lib_attrs.exclude_from_pos_files, "Exclude from position files"),
+        (a.exclude_from_bom, lib_attrs.exclude_from_bom, "Exclude from bill of materials"),
+        (a.dnp, lib_attrs.dnp, "Do not populate"),
+    ] {
+        if mine != theirs {
             out.push(format!("'{what}' settings differ."));
         }
     }
@@ -543,6 +574,10 @@ pub fn footprint_differences(instance: &InstanceFacts, library: &Footprint, libr
     }
     if mine.zone_connection.is_some() && mine.zone_connection != theirs.zone_connection {
         out.push("Zone connection overridden.".to_string());
+    }
+    // `TEST( GetNetTiePadGroups().size(), aLibFP->GetNetTiePadGroups().size(), _( "Net tie pad groups differ." ) )`
+    if instance.net_tie_groups != library_facts.net_tie_groups {
+        out.push("Net tie pad groups differ.".to_string());
     }
 
     // graphics (and the courtyard, which KiCad keeps among them: `GraphicalItems()` filtered to `PCB_SHAPE_T`)
@@ -620,7 +655,7 @@ mod tests {
     }
 
     fn facts(f: &Footprint) -> InstanceFacts<'_> {
-        InstanceFacts { footprint: f, reference: "R1", attrs: FootprintAttrs::derived(f, false, false), overrides: Default::default(), pad_overrides: vec![] }
+        InstanceFacts { footprint: f, reference: "R1", attrs: FootprintAttrs::derived(f, false, false), overrides: Default::default(), pad_overrides: vec![], allow_soldermask_bridges: false, net_tie_groups: 0 }
     }
 
     #[test]
@@ -836,6 +871,29 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(footprint_differences(&facts(&lib), &lib, &library), ["Pad 1 pad to die length differs.", "Pad 1 fabrication property differs."]);
+    }
+
+    /// UI-LEFT P21: the attribute flags are compared with the library file's own (`TEST_ATTR( GetAttributes(), aLibFP->GetAttributes(), .. )`), and so are the
+    /// solder mask bridges and the number of net tie groups.
+    #[test]
+    fn the_attribute_flags_and_net_ties_are_compared_with_the_library_files_own() {
+        let lib = fp(vec![pad("1", Nm::new(-1_000_000), Nm::ZERO), pad("2", Nm::new(1_000_000), Nm::ZERO)], vec![]);
+        let library = LibraryFacts {
+            attrs: Some(FootprintAttrs { kind: FootprintKind::Smd, exclude_from_bom: true, ..Default::default() }),
+            allow_soldermask_bridges: true,
+            net_tie_groups: 1,
+            ..Default::default()
+        };
+        let mut board = facts(&lib);
+        board.attrs.kind = FootprintKind::Smd;
+        assert_eq!(
+            footprint_differences(&board, &lib, &library),
+            ["'Allow bridged solder mask apertures between pads' settings differ.", "'Exclude from bill of materials' settings differ.", "Net tie pad groups differ."]
+        );
+        board.attrs.exclude_from_bom = true;
+        board.allow_soldermask_bridges = true;
+        board.net_tie_groups = 1;
+        assert!(footprint_differences(&board, &lib, &library).is_empty(), "the same flags: no difference");
     }
 
     /// `primitivesDiffer` is told once, for `firstDifferingLayer`, not once per layer of a padstack whose layers share the pad's primitives.

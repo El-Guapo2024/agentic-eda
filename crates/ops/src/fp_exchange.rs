@@ -7,9 +7,11 @@
 //!
 //! * the pose keeps the side, the label side, the lock and the group; with "Match pad positions" the position and the orientation move so that the pads whose number is
 //!   unique land where the old ones were ([`eda_model::fp_exchange::pad_alignment`], `ComputeFootprintShift`);
-//! * the pads are the new footprint's. Their nets are the schematic's, by pad number (`design.nets` names `REF.PIN`): a pad the new footprint has under the same number
-//!   is on the same net, a pad it has under no known number is on none. KiCad matches the remaining pads by similarity when no number is shared; here the net is a fact of
-//!   the pin, so there is nothing to match by position. A footprint that exists only on the board keeps its `pad_nets` for the numbers the new footprint has;
+//! * the pads are the new footprint's. In Change and Update Footprint each takes the net, pin name and pin type of the old pad it matches as KiCad matches them
+//!   (`matchItemsBySimilarity<PAD>`, [`eda_model::fp_exchange::match_pads`]: by number, then by place and shape; UI-LEFT P21) -- `design.nets` names `REF.PIN`, so a pad
+//!   the new footprint numbers otherwise moves the old pin's place in the net list to its own, and a new pad no old one matches is on no net, until Update PCB from
+//!   Schematic; that update's own exchange gives the nets by number (`ExchangeOptions::pads_by_number`, the netlist's `updateComponentPadConnections`). A footprint
+//!   that exists only on the board keeps its `pad_nets` likewise;
 //! * the pad edits (`footprint_edits[].pads`) are dropped: they were edits of the old pads;
 //! * the footprint's texts: the Reference and Value layouts, the library texts and the user fields follow "update/reset text layers and visibilities", "sizes and styles",
 //!   "position and rotation" and "content" ([`eda_model::fp_exchange::carry_text`]); a text of the old footprint the new one has no match for is kept where it was on the board
@@ -28,7 +30,7 @@ use eda_model::footprint::Footprint;
 use eda_model::fp_assign::FootprintAssignment;
 use eda_model::fp_compare::{FootprintOverrides, InstanceFacts, PadOverrides};
 use eda_model::fp_edit::{default_reference_layout, default_value_layout, FootprintAttrs, FootprintEdit};
-use eda_model::fp_exchange::{carry_layout, carry_text, keep_text, match_texts, pad_alignment, TextReset};
+use eda_model::fp_exchange::{carry_layout, carry_text, keep_text, match_pads, match_texts, pad_alignment, TextReset};
 use eda_model::ir::{FootprintExtra, FootprintInstance, LabelSide, LibraryFootprint, Point, Side};
 use eda_model::{CheckResult, ConstraintModel, Part};
 use serde::{Deserialize, Serialize};
@@ -69,6 +71,11 @@ pub struct ExchangeOptions {
     /// "Update/reset 3D models".
     #[serde(default = "yes")]
     pub reset_3d_models: bool,
+    /// The pads' nets by number, as `BOARD_NETLIST_UPDATER::replaceFootprint`'s exchange has them once `updateComponentPadConnections` has run (Update PCB from
+    /// Schematic: the netlist gives each pad its pin's net). Off, the dialogs' exchange: each new pad takes the net, pin name and pin type of the old pad it matches
+    /// (`matchItemsBySimilarity<PAD>`: by number, then by place and shape; UI-LEFT P21).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pads_by_number: bool,
 }
 
 fn yes() -> bool {
@@ -94,18 +101,19 @@ impl ExchangeOptions {
             reset_fabrication_attrs: true,
             reset_clearance_overrides: true,
             reset_3d_models: true,
+            pads_by_number: true,
         }
     }
 
     /// The Change Footprint dialog as it opens (`DIALOG_EXCHANGE_FOOTPRINTS` with `updateMode` off): the texts, the attributes, the overrides and the models are the new
     /// footprint's, extra text items are kept, pad positions are matched.
     pub fn change() -> Self {
-        ExchangeOptions { remove_extra_texts: false, ..Self::replace() }
+        ExchangeOptions { remove_extra_texts: false, pads_by_number: false, ..Self::replace() }
     }
 
     /// The Update Footprint dialog as it opens (`updateMode` on): what the board has of texts and attributes stays, the library's clearance overrides and models are taken.
     pub fn update() -> Self {
-        ExchangeOptions { remove_extra_texts: false, reset_text_layers: false, reset_text_effects: false, reset_text_positions: false, reset_text_content: false, reset_fabrication_attrs: false, ..Self::replace() }
+        ExchangeOptions { remove_extra_texts: false, reset_text_layers: false, reset_text_effects: false, reset_text_positions: false, reset_text_content: false, reset_fabrication_attrs: false, pads_by_number: false, ..Self::replace() }
     }
 
     fn text_reset(&self) -> TextReset {
@@ -170,11 +178,14 @@ pub struct BoardFootprint {
     pub attrs: FootprintAttrs,
     pub overrides: FootprintOverrides,
     pub pad_overrides: Vec<PadOverrides>,
+    /// `AllowSolderMaskBridges()` and `GetNetTiePadGroups().size()` as the board's file has them (`FootprintExtra`; a footprint placed here writes none).
+    pub allow_soldermask_bridges: bool,
+    pub net_tie_groups: usize,
 }
 
 impl BoardFootprint {
     pub fn facts(&self) -> InstanceFacts<'_> {
-        InstanceFacts { footprint: &self.footprint, reference: &self.reference, attrs: self.attrs, overrides: self.overrides.clone(), pad_overrides: self.pad_overrides.clone() }
+        InstanceFacts { footprint: &self.footprint, reference: &self.reference, attrs: self.attrs, overrides: self.overrides.clone(), pad_overrides: self.pad_overrides.clone(), allow_soldermask_bridges: self.allow_soldermask_bridges, net_tie_groups: self.net_tie_groups }
     }
 }
 
@@ -215,8 +226,9 @@ pub fn board_footprint(design: &eda_model::ir::Design, model: &ConstraintModel, 
             thermal_gap: facts.thermal_gap,
             thermal_spoke_width: facts.thermal_spoke_width,
             thermal_spoke_angle_mdeg: facts.thermal_spoke_angle_mdeg,
-            pad_to_die_length: file_pad.and_then(|p| eda_model::lib_keep::kept_mm(&p.tokens, "die_length")),
-            fabrication_property: file_pad.and_then(|p| eda_model::lib_keep::kept_atom(&p.tokens, "property")).filter(|p| p != "pad_prop_none"),
+            // the pad's edit (Pad Properties on the board, UI-LEFT P3), else its file's
+            pad_to_die_length: pad_edit.and_then(|e| e.die_length).filter(|l| *l != Nm::ZERO).or_else(|| file_pad.and_then(|p| eda_model::lib_keep::kept_mm(&p.tokens, "die_length")).filter(|_| pad_edit.and_then(|e| e.die_length).is_none())),
+            fabrication_property: pad_edit.and_then(|e| e.property.clone()).or_else(|| file_pad.and_then(|p| eda_model::lib_keep::kept_atom(&p.tokens, "property"))).filter(|p| p != "pad_prop_none"),
             // The set the board's file has for the pad (`padNeedsUpdate`'s "%s layers differ."), from the kept facts or the defaults of its kind.
             layers: Some(eda_model::fp_compare::written_pad_layers(pad, file_pad)),
         };
@@ -224,7 +236,15 @@ pub fn board_footprint(design: &eda_model::ir::Design, model: &ConstraintModel, 
             pad_overrides.push(o);
         }
     }
-    Some(BoardFootprint { reference: reference.to_string(), footprint, attrs, overrides, pad_overrides })
+    Some(BoardFootprint {
+        reference: reference.to_string(),
+        footprint,
+        attrs,
+        overrides,
+        pad_overrides,
+        allow_soldermask_bridges: extra.is_some_and(|e| e.allow_soldermask_bridges),
+        net_tie_groups: extra.map_or(0, |e| e.net_tie_pad_groups.len()),
+    })
 }
 
 impl Board<'_> {
@@ -332,11 +352,35 @@ impl Board<'_> {
             let kept = self.design.effective_attrs(reference, old);
             (kept != FootprintAttrs::derived(&new, dnp, no_bom)).then_some(kept)
         };
-        // the pads are the new footprint's
+        // the pads are the new footprint's (with the pin names and types a renumbered pad carries over)
         edit.pads.clear();
         // the 3D models are the new footprint's own; with "update/reset 3D models" off they are the footprint's as it stood (`new` carries them now), and a list the board had
         // set stays set -- an empty one too, which is a footprint with no model, not one that has the package's generic one
         edit.models3d = (!options.reset_3d_models && was.models3d.is_some()).then(|| new.models3d.clone());
+
+        // The pads' nets, pin names and pin types (`ExchangeFootprint`: `matchItemsBySimilarity<PAD>`, each new pad the old one it matched: `SetNetCode(
+        // oldPad->GetNetCode() )`, `SetPinFunction`, `SetPinType`), unless the netlist gives them by number (Update PCB from Schematic). A pad matched by its own
+        // number keeps what it had; one the new footprint numbers otherwise takes the old pad's, and a new pad no old one matches has none.
+        let pad_matches = if options.pads_by_number { Vec::new() } else { match_pads(old, &old_pose, &new, &new_pose) };
+        let renumbered: Vec<(String, String)> = pad_matches.iter().map(|&(i, j)| (old.pads[i].number.clone(), new.pads[j].number.clone())).collect();
+        let moves_pins = !options.pads_by_number && (renumbered.iter().any(|(a, b)| a != b) || new.pads.iter().any(|p| !renumbered.iter().any(|(_, b)| b == &p.number)));
+        if moves_pins {
+            self.carry_pad_nets(reference, &renumbered);
+        }
+        // the pin name and type of a renumbered pad: the old pad's, as the board had them (its file's, else the schematic pin's), on the new pad's edit
+        let link = self.model.symbol_links.get(reference).cloned();
+        let old_infos = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference)).map(|e| e.pads.clone()).filter(|p| p.len() == old.pads.len());
+        let mut pin_edits: Vec<eda_model::fp_edit::PadEdit> = Vec::new();
+        for &(i, j) in &pad_matches {
+            let (a, b) = (&old.pads[i].number, &new.pads[j].number);
+            if a == b {
+                continue;
+            }
+            let function = old_infos.as_ref().map(|p| p[i].pin_function.clone()).filter(|f| !f.is_empty()).or_else(|| link.as_ref().and_then(|l| l.pins.get(a)).map(|(f, _)| f.clone()));
+            let pin_type = old_infos.as_ref().map(|p| p[i].pin_type.clone()).filter(|t| !t.is_empty()).or_else(|| link.as_ref().and_then(|l| l.pins.get(a)).map(|(_, t)| t.clone()));
+            let nth = new.pads[..j].iter().filter(|p| &p.number == b).count() as u32 + 1;
+            pin_edits.push(eda_model::fp_edit::PadEdit { pin_function: Some(function.unwrap_or_default()), pin_type: Some(pin_type.unwrap_or_default()), ..eda_model::fp_edit::PadEdit::none(b, nth) });
+        }
 
         // The footprint-level overrides stay with "update/reset clearance overrides" off; the pads' are the old pads'
         let keep_overrides = !options.reset_clearance_overrides;
@@ -350,6 +394,9 @@ impl Board<'_> {
         let known = probe.as_ref().and_then(|p| self.model.library_footprint_of(p));
         let definition = (known.as_ref() != Some(&new)).then(|| new.clone());
 
+        for e in pin_edits {
+            edit.set_pad(e);
+        }
         let dr = self.drawings_mut();
         // the edit
         dr.footprint_edits.retain(|e| e.id != reference);
@@ -382,6 +429,13 @@ impl Board<'_> {
             def.name = carried_name;
             def.assign_missing_ids();
             bp.definition = Some(def);
+            if moves_pins {
+                // each new pad the net of the old pad it matched
+                let old_nets = bp.pad_nets.clone();
+                bp.pad_nets = renumbered.iter().filter_map(|(a, b)| old_nets.iter().find(|(p, _)| p == a).map(|(_, n)| (b.clone(), n.clone()))).collect();
+                bp.pad_nets.sort();
+                bp.pad_nets.dedup_by(|x, y| x.0 == y.0);
+            }
             bp.pad_nets.retain(|(pad, _)| board_part_pads.contains(pad));
         }
         // the footprint the part is on
@@ -404,6 +458,37 @@ impl Board<'_> {
                 }
             }
         }
+    }
+
+    /// The nets of `reference`'s pins once its old pads' nets are on the new pads they matched (`renumbered`: old number -> new number), in the net list in force
+    /// (`design.nets`, else the intent's, which becomes the design's): the board then differs from the schematic, as KiCad's does after Change Footprint, until
+    /// Update PCB from Schematic. A footprint only the board has keeps its nets in its own record (`BoardPart::pad_nets`, done by the caller).
+    fn carry_pad_nets(&mut self, reference: &str, renumbered: &[(String, String)]) {
+        if self.design.drawings.as_ref().is_some_and(|d| d.board_parts.iter().any(|b| b.reference == reference)) {
+            return;
+        }
+        let mut nets = self.design.nets.clone().unwrap_or_else(|| self.model.nets.clone());
+        let prefix = format!("{reference}.");
+        let net_of = |pin: &str| nets.iter().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.clone());
+        let mut carried: Vec<(String, String)> = Vec::new();
+        for (a, b) in renumbered {
+            if carried.iter().any(|(pin, _)| *pin == format!("{prefix}{b}")) {
+                continue;
+            }
+            if let Some(net) = net_of(&format!("{prefix}{a}")) {
+                carried.push((format!("{prefix}{b}"), net));
+            }
+        }
+        for n in nets.iter_mut() {
+            n.pins.retain(|p| !p.starts_with(&prefix));
+        }
+        for (pin, net) in carried {
+            if let Some(n) = nets.iter_mut().find(|n| n.name == net) {
+                n.pins.push(pin);
+                n.pins.sort();
+            }
+        }
+        self.design.nets = Some(nets);
     }
 
     /// The name of the footprint the part is on now (the model's, before this command).

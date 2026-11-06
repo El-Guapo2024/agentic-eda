@@ -118,8 +118,10 @@ fn change_footprint_puts_the_part_on_the_new_one_and_keeps_its_pose_nets_lock_an
     // the pose: same side and label; the pads +-1000 against +-1500 have no shift that matches more than half of them, and the mean is nothing
     let pose = pose_of(d, "R1");
     assert_eq!((pose.at, pose.rot, pose.side), (p(mm(10.0), mm(20.0)), 90_000, Side::Top));
-    // the schematic's nets are by pad number: R1 is on N1 and N2 as before, and its third pad (R1.3) has its net already
-    assert_eq!(d.nets.as_ref().unwrap()[1].pins, ["R1.2", "R2.2", "R1.3"]);
+    // UI-LEFT P21: the pads are matched as `ExchangeFootprint` matches them (`matchItemsBySimilarity<PAD>`): pads 1 and 2 keep their nets, and the third pad,
+    // which no old pad matches, has none (`SetNetCode( NETINFO_LIST::UNCONNECTED )`) until Update PCB from Schematic gives it its pin's
+    assert_eq!(d.nets.as_ref().unwrap()[0].pins, ["R1.1", "R2.1"]);
+    assert_eq!(d.nets.as_ref().unwrap()[1].pins, ["R1.2", "R2.2"]);
     assert_eq!(dr.locked_ids, ["R1"]);
     assert_eq!(dr.groups[0].member_ids, ["R1", "R2"]);
     // the edits of the old pads are gone, the zone overrides and imported facts too (the options say so)
@@ -140,7 +142,7 @@ fn change_footprint_puts_the_part_on_the_new_one_and_keeps_its_pose_nets_lock_an
 #[test]
 fn the_options_decide_what_the_board_keeps_of_the_old_footprint() {
     let (model, design) = fixture();
-    let keep_everything = ExchangeOptions { match_pad_positions: true, remove_extra_texts: false, reset_text_layers: false, reset_text_effects: false, reset_text_positions: false, reset_text_content: false, reset_fabrication_attrs: false, reset_clearance_overrides: false, reset_3d_models: false };
+    let keep_everything = ExchangeOptions { match_pad_positions: true, remove_extra_texts: false, reset_text_layers: false, reset_text_effects: false, reset_text_positions: false, reset_text_content: false, reset_fabrication_attrs: false, reset_clearance_overrides: false, reset_3d_models: false, pads_by_number: false };
     let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
     b.apply(&exchange(&["R1"], Some("Test:R_B"), keep_everything, &[r_b()])).unwrap();
     let d = b.design();
@@ -280,4 +282,27 @@ fn a_rename_after_an_exchange_takes_the_assignment_with_the_part() {
     let d = b.design();
     assert!(d.footprint_assignment("R1").is_none());
     assert_eq!(d.footprint_assignment("R7").unwrap().footprint, "Test:R_B");
+}
+
+/// UI-LEFT P21: Change Footprint matches the pads by KiCad's rules -- by number, then by place and shape (`matchItemsBySimilarity<PAD>`): a pad the new
+/// footprint numbers otherwise takes the net and the pin name of the old pad it matches; Update PCB from Schematic's exchange (`replace`) gives the nets by
+/// number, as its netlist does.
+#[test]
+fn change_footprint_carries_a_renumbered_pads_net_and_the_netlists_exchange_goes_by_number() {
+    let (model, design) = fixture();
+    // R_A's pads where they were, the second numbered "B"
+    let mut renumbered = r_a();
+    renumbered.name = "Test:R_AB".into();
+    renumbered.pads[1].number = "B".into();
+    let mut b = Board::new(design.clone(), &model, mm(0.1), mm(0.3));
+    b.apply(&exchange(&["R1"], Some("Test:R_AB"), ExchangeOptions::change(), &[renumbered.clone()])).unwrap();
+    let nets = b.design().nets.clone().unwrap();
+    assert_eq!(nets[1].pins, ["R1.B", "R2.2"], "pad B is on the old pad 2's net");
+    assert!(nets.iter().all(|n| !n.pins.contains(&"R1.2".to_string()) && !n.pins.contains(&"R1.3".to_string())));
+    let pad_b = b.design().footprint_edit("R1").and_then(|e| e.pad("B", 1)).cloned().expect("the renumbered pad's pin name and type");
+    assert_eq!(pad_b.pin_function.as_deref(), Some(""), "the old pad's (none here)");
+    // the netlist's exchange: by number
+    let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
+    b.apply(&exchange(&["R1"], Some("Test:R_AB"), ExchangeOptions::replace(), &[renumbered])).unwrap();
+    assert_eq!(b.design().nets.clone().unwrap()[1].pins, ["R1.2", "R2.2", "R1.3"], "untouched: the schematic's pins by number");
 }

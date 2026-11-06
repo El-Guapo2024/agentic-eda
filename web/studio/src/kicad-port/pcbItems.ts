@@ -7,16 +7,26 @@
 // (common/eda_shape.cpp), `PCB_TRACK::GetPosition` (start),
 // `ZONE::GetPosition` (first corner), `PCB_TEXT::GetPosition`.
 
-import type { BoardState, BoardText, Pad, Part, Shape } from "../api/types";
+import type { BoardState, BoardText, FpTextInfo, Pad, Part, Shape } from "../api/types";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 import { circumcircle } from "./trackArc";
 import { fieldAsText, fieldById } from "./fpFields";
+import { artTextAsField } from "./fpArt";
 import { footprintBox } from "./footprintBox";
 import { groupLeaves } from "./groupTree";
 import { extraItemById, type ExtraKind } from "./pcbExtraItems";
 import { cellById, tableById } from "./tables";
 
-export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field" | "table" | "tablecell" | ExtraKind;
+export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field" | "fptext" | "table" | "tablecell" | ExtraKind;
+
+/** A footprint's own text (`fp_text user`, `Part.texts`) by its id, `REF~t<k>` (UI-LEFT P15: `PCB_SELECTION_TOOL::Selectable` takes a footprint's `PCB_TEXT`). */
+export function fpTextById(board: BoardState, id: string): { part: Part; text: FpTextInfo } | null {
+  const at = id.lastIndexOf("~t");
+  if (at <= 0) return null;
+  const part = board.parts.find((p) => p.placed && p.ref === id.slice(0, at));
+  const text = part?.texts?.find((t) => t.id === id);
+  return part && text ? { part, text } : null;
+}
 
 /**
  * The id a pad is selected, highlighted and listed under: `REF.NUMBER`, with `#k` after it for the k-th pad (from 2) of the footprint that
@@ -37,7 +47,8 @@ export function padIds(part: { ref: string; pads?: readonly { num: string }[] })
  * as it does, so a refresh of the board must not drop them from the selection (a field that is hidden is still there to be edited).
  */
 export function subItemIds(board: Pick<BoardState, "parts">): string[] {
-  return board.parts.filter((p) => p.placed).flatMap((p) => [...padIds(p), ...(p.fields ?? []).map((f) => f.id)]);
+  // (and a footprint's own texts, `REF~t<k>`: UI-LEFT P15)
+  return board.parts.filter((p) => p.placed).flatMap((p) => [...padIds(p), ...(p.fields ?? []).map((f) => f.id), ...(p.texts ?? []).map((t) => t.id)]);
 }
 
 /** The pad `id` names and the footprint it belongs to, or null (a `REF.NUMBER[#k]` of a placed footprint). */
@@ -76,6 +87,8 @@ export function itemKind(board: BoardState, id: string): ItemKind | null {
   if (id.includes(".") && padById(board, id)) return "pad";
   // A footprint's Reference, Value or user field (`PCB_FIELD`): an item of its own, `REF:Name`.
   if (id.includes(":") && fieldById(board, id)) return "field";
+  // A footprint's own text (`PCB_TEXT` of a footprint), `REF~t<k>`.
+  if (id.includes("~t") && fpTextById(board, id)) return "fptext";
   return null;
 }
 
@@ -148,6 +161,10 @@ export function itemPosition(board: BoardState, id: string): [number, number] | 
       const hit = fieldById(board, id);
       return hit ? [hit.field.x, hit.field.y] : null;
     }
+    case "fptext": {
+      const hit = fpTextById(board, id);
+      return hit ? [hit.text.x, hit.text.y] : null;
+    }
     default:
       return extraItemById(board, id)?.position ?? null;
   }
@@ -217,6 +234,11 @@ export function itemBounds(board: BoardState, id: string, opts: { includeText?: 
     case "field": {
       const hit = fieldById(board, id);
       return hit && hit.field.text !== "" ? textBounds(fieldAsText(hit.field)) : hit ? [hit.field.x, hit.field.y, hit.field.x, hit.field.y] : null;
+    }
+    // a footprint's own text: its text's box, as a field's (`PCB_TEXT::GetBoundingBox`)
+    case "fptext": {
+      const hit = fpTextById(board, id);
+      return hit ? textBounds(fieldAsText(artTextAsField(hit.text))) : null;
     }
     default:
       return extraItemById(board, id)?.bounds ?? null;

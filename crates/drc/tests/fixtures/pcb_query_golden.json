@@ -1162,7 +1162,7 @@
      },
      {
       "name": "Pin Type",
-      "kind": "str",
+      "kind": "enum",
       "value": ""
      },
      {
@@ -1431,7 +1431,7 @@
      },
      {
       "name": "Pin Type",
-      "kind": "str",
+      "kind": "enum",
       "value": ""
      },
      {
@@ -1692,7 +1692,7 @@
      },
      {
       "name": "Pin Type",
-      "kind": "str",
+      "kind": "enum",
       "value": ""
      },
      {
@@ -1958,7 +1958,7 @@
      },
      {
       "name": "Pin Type",
-      "kind": "str",
+      "kind": "enum",
       "value": ""
      },
      {
@@ -2868,7 +2868,7 @@
      },
      {
       "name": "Pin Type",
-      "kind": "str",
+      "kind": "enum",
       "value": ""
      },
      {
@@ -3770,7 +3770,7 @@
      },
      {
       "name": "Pin Type",
-      "kind": "str",
+      "kind": "enum",
       "value": ""
      },
      {

@@ -176,6 +176,36 @@ pub(crate) fn pad_text(edit: Option<&PadEdit>) -> PadText {
     PadText { margins }
 }
 
+/// A pad's kept file tokens with what its edit sets in their place, as `PCB_IO_KICAD_SEXPR::format( const PAD* )` writes them: `(property ..)` (`PAD::GetProperty`,
+/// none for `pad_prop_none`), `(die_length ..)` and `(die_delay ..)` (`GetPadToDieLength`, `GetPadToDieDelay`, only when not 0; the delay in picoseconds,
+/// `formatInternalUnits( .., EDA_DATA_TYPE::TIME )`) and `(teardrops ..)` (`formatTeardropParameters`). A token the edit does not set stays where it was; one it
+/// sets takes the old one's place, or goes at the end.
+pub(crate) fn pad_kept_tokens(tokens: &[String], edit: Option<&PadEdit>) -> Vec<String> {
+    let mut out = tokens.to_vec();
+    let Some(e) = edit else { return out };
+    let tag = |t: &str| t.strip_prefix('(').and_then(|r| r.split(|c: char| c.is_whitespace() || c == '(' || c == ')').next()).map(str::to_string);
+    let put = |out: &mut Vec<String>, name: &str, value: Option<String>| {
+        let at = out.iter().position(|t| tag(t).as_deref() == Some(name));
+        out.retain(|t| tag(t).as_deref() != Some(name));
+        if let Some(v) = value {
+            out.insert(at.unwrap_or(out.len()).min(out.len()), v);
+        }
+    };
+    if let Some(p) = &e.property {
+        put(&mut out, "property", (p != "pad_prop_none" && !p.is_empty()).then(|| format!("(property {p})")));
+    }
+    if let Some(l) = e.die_length {
+        put(&mut out, "die_length", (l != Nm::ZERO).then(|| format!("(die_length {})", mm(l))));
+    }
+    if let Some(d) = e.die_delay {
+        put(&mut out, "die_delay", (d != 0).then(|| format!("(die_delay {})", eda_model::units::format_mm(Nm::new(d)))));
+    }
+    if let Some(t) = &e.teardrops {
+        eda_model::teardrop_params::set_in_tokens(&mut out, Some(t));
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------------------------------------------- reading
 
 fn bool_tok(item: &[Sexpr], name: &str) -> Option<bool> {

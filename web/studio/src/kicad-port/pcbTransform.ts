@@ -49,6 +49,9 @@ export function isLocked(board: BoardState, id: string): boolean {
   // A footprint's field is as locked as the footprint (`PCB_TEXT::IsLocked`: "|| GetParentFootprint()->IsLocked()").
   const field = parseFieldId(id);
   if (field && locked.has(field.ref)) return true;
+  // and so is a footprint's own text (`REF~t<k>`, UI-LEFT P15)
+  const t = id.lastIndexOf("~t");
+  if (t > 0 && locked.has(id.slice(0, t))) return true;
   const groups = board.drawings?.groups ?? [];
   if (groups.length === 0) return false;
   if (isGroup(groups, id) && [...groupAndDescendants(groups, id), ...groupLeaves(groups, id)].some((m) => locked.has(m))) return true;
@@ -84,7 +87,10 @@ export function editableSelection(board: BoardState, ids: readonly string[], opt
   // `FilterCollectorForHierarchy`: a field travels with its footprint, so it is not moved on its own when the footprint is in the selection too.
   const kept = out.filter((id) => {
     const field = parseFieldId(id);
-    return !(field && itemKind(board, id) === "field" && out.includes(field.ref));
+    if (field && itemKind(board, id) === "field" && out.includes(field.ref)) return false;
+    // (a footprint's own text likewise)
+    const t = id.lastIndexOf("~t");
+    return !(t > 0 && itemKind(board, id) === "fptext" && out.includes(id.slice(0, t)));
   });
   return { ids: kept, lockedOut };
 }

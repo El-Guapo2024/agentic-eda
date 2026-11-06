@@ -230,9 +230,11 @@ test("a pad: where it is, and what it is; its number and net are read-only, its 
   ]);
   const OVERRIDES = ["Clearance Override", "Soldermask Margin Override", "Solderpaste Margin Override", "Solderpaste Margin Ratio Override", "Zone Connection Style", "Thermal Relief Spoke Width", "Thermal Relief Spoke Angle", "Thermal Relief Gap"];
   const writable = pcbGrid(b, ["U1.1"], "mm").groups.flatMap((g) => g.rows).filter((r) => r.writable).map((r) => r.name);
-  assert.deepEqual(writable, ["Position X", "Position Y", "Orientation", "Pad Type", "Pad Shape", "Size X", "Size Y", "Copper Layers", ...OVERRIDES], "an SMD pad has no hole to edit; its net and number have no verb");
+  // UI-LEFT P3: the pin name and type, the fabrication property, the pad-to-die length and delay and the teardrop rows are edited too
+  const TEARDROP_ROWS = ["Enable Teardrops", "Best Length Ratio", "Max Length", "Best Width Ratio", "Max Width", "Curved Teardrops", "Prefer Zone Connections", "Allow Teardrops To Span Two Tracks", "Max Width Ratio"];
+  assert.deepEqual(writable, ["Position X", "Position Y", "Orientation", "Pad Type", "Pad Shape", "Pin Name", "Pin Type", "Size X", "Size Y", "Fabrication Property", "Copper Layers", "Pad To Die Length", "Pad To Die Delay", ...OVERRIDES, ...TEARDROP_ROWS], "an SMD pad has no hole to edit; its net and number have no verb");
   const th = pcbGrid(b, ["U1.2"], "mm").groups.flatMap((g) => g.rows).filter((r) => r.writable).map((r) => r.name);
-  assert.deepEqual(th, ["Position X", "Position Y", "Orientation", "Pad Type", "Pad Shape", "Size X", "Hole Shape", "Hole Size X", "Copper Layers", ...OVERRIDES], "a through-hole pad can edit its hole");
+  assert.deepEqual(th, ["Position X", "Position Y", "Orientation", "Pad Type", "Pad Shape", "Pin Name", "Pin Type", "Size X", "Hole Shape", "Hole Size X", "Fabrication Property", "Copper Layers", "Pad To Die Length", "Pad To Die Delay", ...OVERRIDES, ...TEARDROP_ROWS], "a through-hole pad can edit its hole");
   // A read-only row says why in its tooltip.
   assert.match(rowOf(b, ["U1.1"], "Net")!.note ?? "", /from the schematic/);
   assert.match(rowOf(b, ["U1.1"], "Backdrill Mode")!.note ?? "", /not modelled/);
@@ -540,13 +542,19 @@ test("a pad's overrides: its margins are its edit, its clearance and thermal rel
   // Orientation: the pad's own angle turned with its footprint (U1 is turned 90 clockwise: KiCad's -90).
   assert.equal(rowOf(b, ["U1.1"], "Orientation")!.value, -90);
   assert.deepEqual(edit(b, ["U1.1"], "Orientation", 0), [{ op: "edit_board_pad", part: "U1", edit: { number: "1", nth: 1, solder_mask_margin: 25_000, rot: 270 } }]);
-  // Teardrops: Board Setup's parameters, read-only; none once the board has teardrop zones (`(legacy_teardrops yes)`).
+  // Teardrops: an item without parameters of its own shows Board Setup's for its kind; an edit gives it its own (UI-LEFT P3), on a board with teardrops too.
   b.routing!.teardrop_settings = { enabled: true, target_vias: true, target_pth_pads: true, target_smd_pads: false, best_length_ratio: 0.5, best_width_ratio: 1, max_len_nm: 1_000_000, max_width_nm: 2_000_000, width_to_size_filter_ratio: 0.9 };
   assert.equal(rowOf(b, ["U1.2"], "Enable Teardrops")!.value, true);
   assert.equal(rowOf(b, ["U1.1"], "Enable Teardrops")!.value, false, "SMD pads are not targeted");
-  assert.equal(rowOf(b, ["via_a"], "Enable Teardrops")!.writable, false);
   b.routing!.zones.push({ ...b.routing!.zones[0]!, id: "td_1", teardrop: true });
-  assert.equal(rowOf(b, ["via_a"], "Enable Teardrops"), undefined);
+  assert.equal(rowOf(b, ["via_a"], "Enable Teardrops")!.writable, true);
+  assert.deepEqual(edit(b, ["via_a"], "Best Length Ratio", 0.8), [
+    { op: "set_teardrop_params", ids: ["via_a"], params: { enabled: true, allow_two_segments: false, prefer_zone_connections: true, best_length_ratio: 0.8, max_length: 1_000_000, best_width_ratio: 1, max_width: 2_000_000, curved_edges: false, filter_ratio: 0.9 } },
+  ]);
+  // the pin name, the fabrication property and the pad-to-die length are the pad's edit
+  assert.deepEqual(edit(b, ["U1.1"], "Fabrication Property", "testpoint"), [{ op: "edit_board_pad", part: "U1", edit: { number: "1", nth: 1, solder_mask_margin: 25_000, property: "pad_prop_testpoint" } }]);
+  assert.deepEqual(edit(b, ["U1.1"], "Pin Name", "SDA"), [{ op: "edit_board_pad", part: "U1", edit: { number: "1", nth: 1, solder_mask_margin: 25_000, pin_function: "SDA" } }]);
+  assert.deepEqual(edit(b, ["U1.1"], "Pad To Die Length", 250_000), [{ op: "edit_board_pad", part: "U1", edit: { number: "1", nth: 1, solder_mask_margin: 25_000, die_length: 250_000 } }]);
 });
 
 test("a zone: one edit_zone with every setting and the one that changed", () => {

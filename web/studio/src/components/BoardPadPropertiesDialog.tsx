@@ -16,8 +16,13 @@
 // The padstack (`kicad-port/padStack.ts`): for a plated through-hole pad "Padstack mode" (Normal, Front/Inner/Back, Custom) and "Edit layer" pick the copper layer the shape
 // rows and the shape offset show, "Copper layers" the layers that keep their copper when nothing is connected there; one OK sends the whole stack with the edit.
 //
-// Not ported: the fabrication property, the pad number and pin function, the pad-to-die length and the layer checkboxes (the type picks the layers), and backdrill and
-// post-machining. "Push Pad Properties to other pads" is the footprint editor's.
+// UI-LEFT P3 (task-u5-pcbfp): "Fabrication property:" (`m_choiceFabProperty`), "Specify pad to die length" and "Specify pad to die delay" (`m_padToDieOpt`,
+// `m_padToDieDelayOpt`, kicad-port/padFab.ts), and the Connections tab's Teardrops part (kicad-port/teardropParams.ts: the pad's own parameters, else what Board
+// Setup gives it; a change gives the pad its own), all in the same `edit_board_pad`. The pad's Pin Name and Pin Type are the Properties panel's, as in KiCad,
+// whose dialog has neither.
+//
+// Not ported: the pad number, the layer checkboxes (the type picks the layers), and backdrill and post-machining. "Push Pad Properties to other pads" is the
+// footprint editor's.
 import { useEffect, useState } from "react";
 import type { Cmd, PadConnection, PadEditCmd } from "../api/types";
 import { padCheck, padEditWith } from "../kicad-port/fpFields";
@@ -30,6 +35,10 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { formatLength, nmFrom, nmTo } from "../state/units";
 import { AngleOverrideInput, OverrideInput } from "./footprint/PadPropertiesDialog";
 import { CopperLayersRow, PadPrimitivePanel, PadShapeRows, PadStackRows } from "./PadShapeFields";
+import { FAB_PROPERTY_CHOICES, AS_PER_PS, padFabForm, padFabPatch, type PadFabForm } from "../kicad-port/padFab";
+import { applyTeardropForm, padTeardrops, teardropForm, teardropFormChanged, type TeardropForm } from "../kicad-port/teardropParams";
+import { TeardropFields } from "./TeardropFields";
+import { NumberInput } from "./NumberInput";
 
 type Kind = "smd" | "through_hole" | "non_plated_hole";
 
@@ -51,6 +60,11 @@ interface Form {
   pasteRatio: number | null;
   /** The padstack: the mode, the edit layer and the shapes of the layers but the front, whose shape is `s` and offset `ox`, `oy`. */
   stack: PadStackState;
+  /** The fabrication property and the pad-to-die length and delay. */
+  fab: PadFabForm;
+  /** The Teardrops part, and what it opened with. */
+  td: TeardropForm;
+  tdBefore: TeardropForm;
 }
 
 const KINDS: { value: Kind; label: string }[] = [
@@ -92,6 +106,9 @@ export function BoardPadPropertiesDialog() {
       mask: pad.mask_margin ?? null,
       paste: pad.paste_margin ?? null,
       pasteRatio: pad.paste_ratio ?? null,
+      fab: padFabForm(pad),
+      td: teardropForm([padTeardrops(state.board!, pad)]),
+      tdBefore: teardropForm([padTeardrops(state.board!, pad)]),
     });
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -179,6 +196,9 @@ export function BoardPadPropertiesDialog() {
     // The padstack, replaced whole when it is not what the pad has (`PAD::SetPadstack`).
     const stackNow = stackOf(form.stack);
     if (form.kind === "through_hole" && stackDiffers(stackNow, pad.stack)) patch.stack = stackNow;
+    // The fabrication property and the pad-to-die length and delay (`transferDataToPad`), the teardrops (`aPad->GetTeardropParams().m_Enabled = ..`)
+    Object.assign(patch, padFabPatch(padFabForm(pad), form.fab, form.kind !== "non_plated_hole"));
+    if (teardropFormChanged(form.tdBefore, form.td)) patch.teardrops = applyTeardropForm(padTeardrops(state.board!, pad), form.tdBefore, form.td);
 
     const cmds: Cmd[] = [];
     if (Object.keys(patch).length > 0) cmds.push({ op: "edit_board_pad", part: part.ref, edit: padEditWith(part, pad, patch) });
@@ -280,6 +300,39 @@ export function BoardPadPropertiesDialog() {
                 )}
               </>
             )}
+            {/* "Fabrication property:" and the pad-to-die length and delay (`m_padToDieOpt->Enable( hasConnection )`) */}
+            <span title={"Optional property to specify a special purpose or constraint in fabrication files:\nBGA attribute is for pads in BGA footprints\nFiducial local is a fiducial for the parent footprint\nFiducial global is a fiducial for the whole board\nTest Point specifies an electrical test point\nHeatsink specifies a thermal pad\nCastellated specifies a through-hole pad on a board edge"}>Fabrication property:</span>
+            <select aria-label="Fabrication property" value={form.fab.property} onChange={(e) => set("fab", { ...form.fab, property: e.target.value })} data-testid="pad-fab-property">
+              {FAB_PROPERTY_CHOICES.map(([k, label]) => (
+                <option key={k} value={k}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <span>
+              <label>
+                <input type="checkbox" aria-label="Specify pad to die length" disabled={form.kind === "non_plated_hole"} checked={form.fab.dieLength != null} onChange={(e) => set("fab", { ...form.fab, dieLength: e.target.checked ? (pad.die_length ?? 0) : null })} /> Specify pad to die length
+              </label>
+            </span>
+            <span>
+              {form.fab.dieLength != null && (
+                <>
+                  <NumberInput label="Pad to die length" value={form.fab.dieLength} scale={(v) => nmTo(v, units)} unscale={(v) => Math.round(nmFrom(v, units))} onChange={(v) => set("fab", { ...form.fab, dieLength: v ?? 0 })} /> {units}
+                </>
+              )}
+            </span>
+            <span>
+              <label>
+                <input type="checkbox" aria-label="Specify pad to die delay" disabled={form.kind === "non_plated_hole"} checked={form.fab.dieDelay != null} onChange={(e) => set("fab", { ...form.fab, dieDelay: e.target.checked ? (pad.die_delay ?? 0) : null })} /> Specify pad to die delay
+              </label>
+            </span>
+            <span>
+              {form.fab.dieDelay != null && (
+                <>
+                  <NumberInput label="Pad to die delay" value={form.fab.dieDelay} scale={(v) => v / AS_PER_PS} unscale={(v) => Math.round(v * AS_PER_PS)} onChange={(v) => set("fab", { ...form.fab, dieDelay: v ?? 0 })} /> ps
+                </>
+              )}
+            </span>
           </div>
           <PadPrimitivePanel form={active.s} onForm={(next) => setActive({ ...active, s: next })} units={units} />
           {stackShown && (
@@ -326,6 +379,7 @@ export function BoardPadPropertiesDialog() {
               {sharesNumber && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "4px 0 0" }}>The clearance and the zone fields are those of every pad of this footprint numbered {pad.num}.</p>}
             </>
           )}
+          {form.kind !== "non_plated_hole" && <TeardropFields form={form.td} units={units} what="pad" onChange={(td) => set("td", td)} />}
           {error && (
             <p style={{ color: "var(--chrome-danger, #e5534b)", margin: "10px 0 0", fontSize: 12 }} data-testid="board-pad-properties-error">
               {error}
