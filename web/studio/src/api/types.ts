@@ -2394,6 +2394,8 @@ export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelS
 export interface CmdReply {
   ok: boolean;
   message: string;
+  /** What KiCad tells the user once the command worked (`ShowInfoBarMsg`, a tool's `wxLogMessage` lines: `eda_ops::notice`), one message a line. */
+  info?: string;
   /** The history tag of the step the command made (`pcb`, `schematic`, `both`, ...): which editor's content it modified. */
   domain?: string;
 }

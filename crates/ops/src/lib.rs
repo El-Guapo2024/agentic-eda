@@ -52,6 +52,7 @@ use std::sync::Arc;
 pub use pcb_edit::BooleanOp;
 
 pub mod board_setup;
+pub mod notice;
 mod review;
 mod simulator;
 pub mod library_editors;

@@ -62,14 +62,16 @@ export function registerPcbGlobalEditSweep(m: Map<string, () => void>, ctx: Swee
     pcbOnly(() => {
       if (!board) return;
       const shapes = board.drawings?.shapes ?? [];
+      const textBoxes = board.drawings?.text_boxes ?? [];
       openSweepDialog({
         kind: "element",
         element: createElement(CleanupGraphicsDialog, {
           shapes,
+          textBoxes,
           options: last.cleanup,
           onOk: (o: CleanupGraphicsOptions) => {
             last.cleanup = o;
-            const plan = planCleanupGraphics(shapes, o, false);
+            const plan = planCleanupGraphics(shapes, o, false, textBoxes);
             const cmds: Cmd[] = cleanupGraphicsCmds(plan);
             dispatch({ type: "CLEAR_SELECTION" }); // "Clear current selection list to avoid selection of deleted items"
             // `doCleanup( false )` pushes the commit when it is not empty and says nothing (round 6 D6-6).

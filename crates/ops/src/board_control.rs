@@ -197,6 +197,10 @@ pub fn merge_zones(design: &mut Design, ids: &[String]) -> Result<String, Vec<Ch
         at += 1;
         keep_it
     });
+    // the zones left out were logged on the way (`wxLogMessage`), and KiCad shows those lines after the merge too
+    for line in logged {
+        crate::notice::note(line);
+    }
     Ok(keep)
 }
 
@@ -723,9 +727,15 @@ mod tests {
             square("b2", "F.Cu", "GND", Nm::new(9_000), Nm::ZERO, Nm::new(6_000), 0),
             square("c", "F.Cu", "GND", Nm::new(14_000), Nm::ZERO, Nm::new(6_000), 0),
         ]);
+        crate::notice::clear();
         merge_zones(&mut d, &["a".into(), "n".into(), "k".into(), "b".into(), "b2".into(), "c".into()]).unwrap();
         let left: Vec<&str> = zones(&d).iter().map(|z| z.id.as_str()).collect();
         assert_eq!(left, ["a", "n", "k", "b"], "a absorbed b2, then c (which only touches b2)");
+        // what `ZoneMerge` logged for the zones it left out, said after the merge too (`wxLogMessage`)
+        assert_eq!(
+            crate::notice::take(),
+            ["Some zone netcodes did not match and were not merged.", "Some zones were rule areas and were not merged.", "Some zone layer sets did not match and were not merged."].map(String::from).to_vec()
+        );
         assert_eq!(bbox(&zones(&d)[0].outline), (Nm::ZERO, Nm::ZERO, Nm::new(20_000), Nm::new(10_000)));
     }
 
