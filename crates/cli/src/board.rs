@@ -1811,8 +1811,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditText { id, content, layer, .. } => format!("text edit {id} --content {content:?} --layer {layer}"),
         Cmd::DeleteText { id } => format!("text delete {id}"),
         Cmd::MoveText { id, x, y } => format!("text move {id} --to {},{}", mm(*x), mm(*y)),
-        Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, .. } => {
-            format!("global-edit text-and-graphics --shapes {} --texts {} --dimensions {}{}", shape_ids.len(), text_ids.len(), dimension_ids.len(), if *layer_defaults { " --layer-defaults" } else { "" })
+        Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, footprint, .. } => {
+            let fp = footprint.field_ids.len() + footprint.text_ids.len() + footprint.shape_ids.len();
+            format!("global-edit text-and-graphics --shapes {} --texts {} --dimensions {}{}{}", shape_ids.len(), text_ids.len(), dimension_ids.len(), if fp > 0 { format!(" --footprint-items {fp}") } else { String::new() }, if *layer_defaults { " --layer-defaults" } else { "" })
         }
         Cmd::SetViaLayers { ids, edit } => format!("via-layers {}{}{}{}", ids.join(","), edit.kind.map(|k| format!(" --type {k:?}")).unwrap_or_default(), edit.from_layer.as_ref().map(|l| format!(" --from {l}")).unwrap_or_default(), edit.to_layer.as_ref().map(|l| format!(" --to {l}")).unwrap_or_default()),
         Cmd::RemoveUnusedPads { selected, vias, pads, remove, .. } => format!("remove-unused-pads {}{}{}{}", if *remove { "--remove" } else { "--restore" }, if *vias { " --vias" } else { "" }, if *pads { " --pads" } else { "" }, selected.as_ref().map(|s| format!(" --selected {}", s.len())).unwrap_or_default()),

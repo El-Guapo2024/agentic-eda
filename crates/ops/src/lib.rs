@@ -86,6 +86,7 @@ mod outline;
 mod part_rename;
 mod reannotate;
 mod pcb_global_edit;
+pub use pcb_global_edit::{fp_shape_id, fp_text_id, FootprintItems, Ipc4761Preset, TextRows};
 mod pcb_groups;
 mod sch_groups;
 mod pcb_paste;
@@ -441,6 +442,12 @@ pub enum Cmd {
         via_size: Option<ViaSizeSpec>,
         #[serde(default)]
         layer: Option<String>,
+        /// "Via annular rings:" -- `PADSTACK::SetUnconnectedLayerMode` on every via named (`pcb_global_edit::edit_via_padstacks`); `None` leaves them.
+        #[serde(default)]
+        unconnected: Option<eda_model::padstack::UnconnectedLayers>,
+        /// "Via protection features:" -- an IPC-4761 preset (`VIA_PROTECTION_UI_MIXIN::setViaConfiguration`); `None` leaves them.
+        #[serde(default)]
+        protection: Option<pcb_global_edit::Ipc4761Preset>,
     },
 
     /// Add a copper pour.
@@ -904,6 +911,13 @@ pub enum Cmd {
         /// Texts' `stroke_width` and a dimension's `text_thickness_nm`.
         #[serde(default)]
         text_thickness: Option<Nm>,
+        /// The footprints' items in scope: their fields, texts and graphics (`pcb_global_edit::FootprintItems`).
+        #[serde(default)]
+        footprint: pcb_global_edit::FootprintItems,
+        /// The other rows of "Set to specified values:" -- text width and height, auto thickness, font, bold, italic, keep upright, visible, center on
+        /// footprint (`pcb_global_edit::TextRows`).
+        #[serde(default)]
+        rows: pcb_global_edit::TextRows,
     },
     /// `pcbnew.GlobalEdit.removeUnusedPads` (Remove Unused Pads...), `DIALOG_UNUSED_PAD_LAYERS::updatePadsAndVias` -- see `unused_pads.rs`: the plated
     /// through-hole pads (`pads`) and the vias (`vias`) the dialog picked stop having copper on the layers nothing connects them on (`remove` with `keep_outside`:
@@ -2596,7 +2610,9 @@ impl Cmd {
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::SetDiffPairPresets { .. } => vec!["diff_pair_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
-            Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, .. } => shape_ids.iter().chain(text_ids.iter()).chain(dimension_ids.iter()).map(String::as_str).collect(),
+            Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, footprint, .. } => {
+                shape_ids.iter().chain(text_ids.iter()).chain(dimension_ids.iter()).chain(footprint.field_ids.iter()).chain(footprint.text_ids.iter()).chain(footprint.shape_ids.iter()).map(String::as_str).collect()
+            }
             Cmd::RemoveUnusedPads { selected, .. } => selected.iter().flatten().map(String::as_str).collect(),
             Cmd::SwapPadNets { ids, .. } | Cmd::SwapGateNets { ids, .. } | Cmd::TrackViaNets { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetTeardropSettings { .. } => vec!["teardrop_settings"],
@@ -3119,7 +3135,10 @@ impl<'a> Board<'a> {
             Cmd::SetTrackWidthPresets { widths } => self.set_track_width_presets(widths),
             Cmd::SetViaPresets { presets } => self.set_via_presets(presets),
             Cmd::SetDiffPairPresets { presets } => self.set_diff_pair_presets(presets),
-            Cmd::EditTracksAndVias { ids, track_width, via_size, layer } => self.edit_tracks_and_vias(ids, track_width.as_ref(), via_size.as_ref(), layer.as_deref()),
+            Cmd::EditTracksAndVias { ids, track_width, via_size, layer, unconnected, protection } => {
+                self.edit_tracks_and_vias(ids, track_width.as_ref(), via_size.as_ref(), layer.as_deref())?;
+                self.edit_via_padstacks(ids, *unconnected, *protection)
+            }
             Cmd::SetTeardropSettings { settings } => self.set_teardrop_settings(*settings),
             Cmd::AddAllTeardrops => self.add_all_teardrops(),
             Cmd::RemoveAllTeardrops => self.remove_all_teardrops(),
@@ -3273,8 +3292,8 @@ impl<'a> Board<'a> {
             Cmd::SwapPadNets { ids, connected_pads } => self.swap_pad_nets(ids, *connected_pads),
             Cmd::SwapGateNets { ids, target, connected_pads } => self.swap_gate_nets(ids, target.as_deref(), *connected_pads),
             Cmd::TrackViaNets { ids, net, apply_anyway, change_pads } => self.track_via_nets(ids, net.as_deref(), *apply_anyway, *change_pads),
-            Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, layer, line_width, text_size, text_thickness } => {
-                self.edit_text_and_graphics(&pcb_global_edit::GlobalTextEdit { shape_ids, text_ids, dimension_ids, layer_defaults: *layer_defaults, layer: layer.as_deref(), line_width: *line_width, text_size: *text_size, text_thickness: *text_thickness })
+            Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, layer, line_width, text_size, text_thickness, footprint, rows } => {
+                self.edit_text_and_graphics(&pcb_global_edit::GlobalTextEdit { shape_ids, text_ids, dimension_ids, layer_defaults: *layer_defaults, layer: layer.as_deref(), line_width: *line_width, text_size: *text_size, text_thickness: *text_thickness, footprint, rows })
             }
 
             Cmd::Duplicate { ids } => self.duplicate_all(ids),

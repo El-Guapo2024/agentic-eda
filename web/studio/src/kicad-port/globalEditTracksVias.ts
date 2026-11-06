@@ -7,18 +7,23 @@
 //                               (`GetLayer()`: a track's layer, a via's top layer) -> a via's diameter / a track's width, exactly
 //     buildFilterLists          the net starts on the highlighted net, the layer on the active layer; the net and the class are then remembered for the session
 //
-// A via's type here is what its layers say: through when it spans the outer copper layers, blind when one end is outer and the other inner, buried when
-// both are inner. This model has no microvia type, so that checkbox and `VIATYPE::MICROVIA` are left out.
+// A via's type is `PCB_VIA::GetViaType()`: the type the via carries (`Via.type`: the board file's `(via blind|buried|micro ..)`, Place Microvia ...); a via
+// that carries none (one made here before vias had a type) is what its layers say: through when it spans the outer copper layers, blind when one end is outer
+// and the other inner, buried when both are inner.
+//
+// The Action box's via rows (`processItem`): "Via annular rings:" (`m_annularRingsCtrl`, the four `UNCONNECTED_LAYER_MODE`s) and "Via protection features:"
+// (`m_protectionFeatures`, the IPC-4761 presets of `VIA_PROTECTION_UI_MIXIN` before `CUSTOM`), each with "-- leave unchanged --" last and chosen.
 //
 // Pure: no store, no DOM. Unit-tested in globalEditTracksVias.test.ts.
-import type { BoardState, Nm } from "../api/types";
+import type { BoardState, Ipc4761Preset, Nm, UnconnectedLayers } from "../api/types";
 import { netsContext } from "./appearanceNets";
 import { ancestors } from "./groupTree";
 
-export type ViaKind = "through" | "blind" | "buried";
+export type ViaKind = "through" | "micro" | "blind" | "buried";
 
-/** `VIATYPE` of a via, from the copper layers it spans. `copper` is the stackup, front to back. */
-export function viaKind(via: { from: string; to: string }, copper: readonly string[]): ViaKind {
+/** `VIATYPE` of a via: the one it carries, else the one the copper layers it spans say. `copper` is the stackup, front to back. */
+export function viaKind(via: { from: string; to: string; type?: "blind" | "buried" | "micro" | null }, copper: readonly string[]): ViaKind {
+  if (via.type) return via.type;
   const top = copper[0];
   const bottom = copper[copper.length - 1];
   const outer = (layer: string) => layer === top || layer === bottom;
@@ -26,6 +31,37 @@ export function viaKind(via: { from: string; to: string }, copper: readonly stri
   if (outer(via.from) || outer(via.to)) return "blind";
   return "buried";
 }
+
+/** `m_annularRingsCtrlChoices`, in the order `processItem`'s `switch` reads the selection (0 `KEEP_ALL`, 1 `REMOVE_EXCEPT_START_AND_END`, 2 `REMOVE_ALL`, 3 `START_END_ONLY`). */
+export const GLOBAL_ANNULAR_RING_CHOICES: readonly [UnconnectedLayers, string][] = [
+  ["keep_all", "All copper layers"],
+  ["remove_except_start_and_end", "Start, end, and connected layers"],
+  ["remove_all", "Connected layers only"],
+  ["start_end_only", "Start and end layers only"],
+];
+
+/** `m_IPC4761Names` for the presets the dialog lists (`magic_enum::enum_values<IPC4761_PRESET>()` up to `CUSTOM`), in that order. */
+export const IPC4761_PRESETS: readonly [Ipc4761Preset, string][] = [
+  ["from_board", "From rules"],
+  ["none", "None"],
+  ["ia", "Type I-a (tented top)"],
+  ["ib", "Type I-b (tented both sides)"],
+  ["ia_inverted", "Type I-a (tented bottom)"],
+  ["iia", "Type II-a (covered and tented top)"],
+  ["iib", "Type II-b (covered and tented both sides)"],
+  ["iia_inverted", "Type II-a (covered and tented bottom)"],
+  ["iiia", "Type III-a (plugged top)"],
+  ["iiib", "Type III-b (plugged both sides)"],
+  ["iiia_inverted", "Type III-a (plugged bottom)"],
+  ["iva", "Type IV-a (plugged and tented top)"],
+  ["ivb", "Type IV-b (plugged and tented both sides)"],
+  ["iva_inverted", "Type IV-a (plugged and tented bottom)"],
+  ["v", "Type V (filled )"],
+  ["via", "Type VI-a (filled and tented top)"],
+  ["vib", "Type VI-b (filled and tented both sides)"],
+  ["via_inverted", "Type VI-a (filled and tented bottom)"],
+  ["vii", "Type VII (filled and capped)"],
+];
 
 /** `PCB_VIA::GetLayer()`: the top layer of the span, whichever way round the span is written. */
 export function viaTopLayer(via: { from: string; to: string }, copper: readonly string[]): string {
@@ -40,6 +76,7 @@ export function viaTopLayer(via: { from: string; to: string }, copper: readonly 
 export interface TracksViasScope {
   tracks: boolean;
   through: boolean;
+  micro: boolean;
   blind: boolean;
   buried: boolean;
 }
@@ -59,15 +96,15 @@ export interface TracksViasFilter {
   viaSize: Nm;
 }
 
-/** The state of the tri-state "Vias" box (`updateViasCheckbox`): off when no type is ticked, on when all are, and in between otherwise. */
-export function viasBoxState(s: Pick<TracksViasScope, "through" | "blind" | "buried">): "off" | "on" | "mixed" {
-  const n = [s.through, s.blind, s.buried].filter(Boolean).length;
-  return n === 0 ? "off" : n === 3 ? "on" : "mixed";
+/** The state of the tri-state "Vias" box (`updateViasCheckbox`): off when no type is ticked, on when all four are, and in between otherwise. */
+export function viasBoxState(s: Pick<TracksViasScope, "through" | "micro" | "blind" | "buried">): "off" | "on" | "mixed" {
+  const n = [s.through, s.micro, s.blind, s.buried].filter(Boolean).length;
+  return n === 0 ? "off" : n === 4 ? "on" : "mixed";
 }
 
 /** `onVias`: clicking the "Vias" box sets every type to the box's new value. */
 export function withAllVias(scope: TracksViasScope, on: boolean): TracksViasScope {
-  return { ...scope, through: on, blind: on, buried: on };
+  return { ...scope, through: on, micro: on, blind: on, buried: on };
 }
 
 /** What each list of the Filter Items box offers: the nets, the Default class and then the others, and the copper layers. */
@@ -103,7 +140,7 @@ export function initialTracksViasFilter(board: BoardState | null, highlightedNet
   };
 }
 
-export const NOTHING_IN_SCOPE: TracksViasScope = { tracks: false, through: false, blind: false, buried: false };
+export const NOTHING_IN_SCOPE: TracksViasScope = { tracks: false, through: false, micro: false, blind: false, buried: false };
 
 /** The ids of the tracks (arcs included) and vias the dialog would change, tracks first, in board order. */
 export function matchingTracksAndVias(board: BoardState | null, scope: TracksViasScope, filter: TracksViasFilter, selection: ReadonlySet<string>): { trackIds: string[]; viaIds: string[] } {
@@ -127,7 +164,7 @@ export function matchingTracksAndVias(board: BoardState | null, scope: TracksVia
       out.trackIds.push(t.id);
     }
   }
-  if (scope.through || scope.blind || scope.buried) {
+  if (scope.through || scope.micro || scope.blind || scope.buried) {
     for (const v of board.routing.vias) {
       if (!scope[viaKind(v, board.layers)]) continue;
       if (!passes(v.id, v.net, viaTopLayer(v, board.layers))) continue;
