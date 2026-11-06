@@ -10,7 +10,8 @@
 //! **The copy is a cache, not a library of the person's.** It is kept under the studio's cache folder (`$XDG_CACHE_HOME` or `~/.cache`, `~/Library/Caches` on a
 //! Mac: `eda-studio/libraries/`, or `EDA_LIBRARY_CACHE`), named after the source's path and stamped with its size and time, so a source that changes is converted
 //! again and the copy of its earlier state is removed; it is made read only, so no save writes into it (KiCad's foreign plugins are read only too:
-//! `IsLibraryWritable` is false, "Library '%s' is read only."). A conversion that fails is remembered for that state of the source (the row's status says why), and
+//! `IsLibraryWritable` is false, "Library '%s' is read only."; a `.pretty` copy's folder is read only too, so removing the cache by hand takes a `chmod -R u+w`
+//! first). A conversion that fails is remembered for that state of the source (the row's status says why), and
 //! tried again when the source changes or the server starts again. Nothing is written beside the source.
 //!
 //! **Migrate Libraries** (`PANEL_SYM_LIB_TABLE::onConvertLegacyLibraries`, `PANEL_FP_LIB_TABLE::onMigrateLibraries`) is the same conversion with a destination the

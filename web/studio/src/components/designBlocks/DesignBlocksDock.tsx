@@ -49,7 +49,11 @@ export function DesignBlocksDock({ editor }: { editor: BlockEditor }) {
     e.preventDefault();
     const from = { x: e.clientX, y: e.clientY, rect };
     const target = e.currentTarget;
-    target.setPointerCapture?.(e.pointerId);
+    try {
+      target.setPointerCapture?.(e.pointerId);
+    } catch {
+      // a pointer the browser does not know (a synthetic event): the moves still reach the caption
+    }
     const at = (ev: PointerEvent) => onPage({ ...from.rect, x: from.rect.x + ev.clientX - from.x, y: from.rect.y + ev.clientY - from.y });
     const move = (ev: PointerEvent) => {
       const next = at(ev);
