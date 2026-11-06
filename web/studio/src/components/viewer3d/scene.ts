@@ -263,7 +263,50 @@ function maskMaterial(side: Side): THREE.MeshPhongMaterial {
 }
 
 function silkMaterial(side: Side): THREE.LineBasicMaterial {
-  return new THREE.LineBasicMaterial({ color: paletteColor(side === "top" ? "silkscreen_top" : "silkscreen_bottom").color });
+  return silkClip(new THREE.LineBasicMaterial({ color: paletteColor(side === "top" ? "silkscreen_top" : "silkscreen_bottom").color }), side);
+}
+
+/** Whether the silkscreen of the build in progress is clipped to the board: the Off-board Silkscreen row off (`render.opengl_show_off_board_silk`, false by default). */
+let clipSilk = false;
+
+/** The stencil bit of a side's board outline, drawn by [`buildSilkClip`]. */
+const SILK_STENCIL_BIT: Record<Side, number> = { top: 1, bottom: 2 };
+
+/**
+ * "Do not clip silk layers to board outline" off: KiCad draws each silkscreen layer culled by `m_antiBoard`, everything outside the board's polygon (`RENDER_3D_OPENGL::Redraw`:
+ * `if( isSilkLayer && cfg.show_off_board_silk ) anti_board = nullptr; else ... anti_board = m_antiBoard;`). Here the board's outline of each side marks its stencil bit
+ * ([`buildSilkClip`]) and a silkscreen material draws only where its side's bit is set.
+ */
+function silkClip<T extends THREE.Material>(m: T, side: Side): T {
+  if (!clipSilk) return m;
+  m.stencilWrite = true; // three.js turns the stencil test on with it; the write mask keeps the buffer as it is
+  m.stencilWriteMask = 0;
+  m.stencilRef = SILK_STENCIL_BIT[side];
+  m.stencilFuncMask = SILK_STENCIL_BIT[side];
+  m.stencilFunc = THREE.EqualStencilFunc;
+  return m;
+}
+
+/** The board's outline on `side`'s silkscreen plane, drawn into the stencil buffer only (no colour, no depth), before anything else: where that side's silkscreen may be drawn. */
+function buildSilkClip(shape: THREE.Shape, side: Side): THREE.Mesh {
+  const bit = SILK_STENCIL_BIT[side];
+  const material = new THREE.MeshBasicMaterial({
+    colorWrite: false,
+    depthWrite: false,
+    depthTest: false,
+    side: THREE.DoubleSide,
+    stencilWrite: true,
+    stencilRef: bit,
+    stencilWriteMask: bit,
+    stencilFunc: THREE.AlwaysStencilFunc,
+    stencilZPass: THREE.ReplaceStencilOp,
+  });
+  const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), material);
+  mesh.rotation.x = Math.PI / 2;
+  mesh.position.y = silkY(side);
+  mesh.renderOrder = -10;
+  mesh.name = `silk-clip-${side}`;
+  return mesh;
 }
 
 /** The board body: `m_materials.m_EpoxyBoard` with `renderBoardBody`'s diffuse and transparency (`1 - m_BoardBodyColor.a`, the theme's body is 90 % opaque). */
@@ -418,12 +461,26 @@ function outerCopperRange(side: Side): [number, number] {
   return side === "top" ? [s, s + c] : [s - c, s];
 }
 
+/** Whether the build in progress draws the copper and paste with their thickness (`opengl_copper_thickness`). */
+let withThickness = false;
+/** How thin a layer drawn without its thickness is (its two faces, no walls to speak of). */
+const FLAT_MM = 1e-4;
+
+/** `range` without its thickness when the build draws none: its outer face (the top of a top layer, the bottom of a bottom one, the middle of an inner one). */
+function flatten([low, high]: [number, number], face: "top" | "bottom" | "middle"): [number, number] {
+  if (withThickness) return [low, high];
+  if (face === "top") return [high - FLAT_MM, high];
+  if (face === "bottom") return [low, low + FLAT_MM];
+  const m = (low + high) / 2;
+  return [m - FLAT_MM / 2, m + FLAT_MM / 2];
+}
+
 /** The height range of copper layer `layer`: an outer layer's from [`outerCopperRange`]; an inner one copper-thick about its place in the stack-up. */
 function copperRange(layer: string, layerOrder: readonly string[]): [number, number] {
-  if (layer === "F.Cu") return outerCopperRange("top");
-  if (layer === "B.Cu") return outerCopperRange("bottom");
+  if (layer === "F.Cu") return flatten(outerCopperRange("top"), "top");
+  if (layer === "B.Cu") return flatten(outerCopperRange("bottom"), "bottom");
   const y = layerY(layer, layerOrder);
-  return [y - COPPER_MM / 2, y + COPPER_MM / 2];
+  return flatten([y - COPPER_MM / 2, y + COPPER_MM / 2], "middle");
 }
 
 const mmVec = ([x, y]: Pt): THREE.Vector2 => new THREE.Vector2(mm(x), mm(y));
@@ -694,7 +751,7 @@ function silkSide(layerName: string): Side {
 
 /** `m_materials.m_SilkSTop` / `m_SilkSBot` (`setupMaterials`, `setLayerMaterial`'s `F_SilkS` / `B_SilkS`), for a filled silkscreen shape. */
 function silkFillMaterial(side: Side): THREE.MeshPhongMaterial {
-  return kicadMaterial(silkMaterial3d(rgbOf(paletteRgba(side === "top" ? "silkscreen_top" : "silkscreen_bottom"))), { side: THREE.DoubleSide });
+  return silkClip(kicadMaterial(silkMaterial3d(rgbOf(paletteRgba(side === "top" ? "silkscreen_top" : "silkscreen_bottom"))), { side: THREE.DoubleSide }), side);
 }
 
 const ARC_SEGMENTS = 24;
@@ -883,6 +940,8 @@ function buildSilkTextMesh(spec: SilkTextSpec): THREE.Mesh {
 
   const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide, depthWrite: false });
   if (spec.tint) material.color.copy(spec.tint);
+  // A text on the silkscreen (no height of its own) is clipped to the board with it.
+  if (spec.y === undefined) silkClip(material, spec.side);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(spec.xMm, spec.y ?? silkY(spec.side), spec.zMm);
   mesh.rotation.y = -(spec.angleDeg * Math.PI) / 180;
@@ -992,6 +1051,8 @@ export interface BuildBoardOptions {
   stack?: Stack;
   /** `GET /api/board3d`: the body with its holes (`m_boardWithHoles`) and the plating. Absent (not fetched yet): the outline without holes. */
   board3d?: Board3d | null;
+  /** `render.opengl_copper_thickness` ("Show copper and tech layers thickness", off by default): copper and paste with their thickness, else flat at their outer face. */
+  copperThickness?: boolean;
   /** The inner copper layers: whether the PCB editor shows each (`Is3dLayerEnabled`'s default branch, `m_board->IsLayerVisible( aLayer )`) and its own colour (the PCB editor's, with "Use PCB editor copper colors"). */
   innerCopper?: { visible: (layer: string) => boolean; color: (layer: string) => Rgba | undefined };
 }
@@ -1000,6 +1061,15 @@ export interface BuildBoardOptions {
 export interface Board3d {
   body: Array<{ outer: [number, number][]; holes: [number, number][][] }>;
   plating: number;
+}
+
+/** A silkscreen object's materials clipped to the board (`silkClip`). */
+function clipped<T extends THREE.Object3D>(obj: T | null, side: Side): T | null {
+  obj?.traverse((o) => {
+    const m = (o as THREE.Mesh).material;
+    if (m) for (const mat of Array.isArray(m) ? m : [m]) silkClip(mat, side);
+  });
+  return obj;
 }
 
 /** Where a layer KiCad draws flat above the board sits, in the front or the back (`BOARD_ADAPTER::InitSettings`: a technical layer other than silkscreen, mask and paste is 2 * 1.1 * the layer thickness off the copper). */
@@ -1022,6 +1092,8 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
   stack = opts.stack ?? stackOfBoard(board.board_rules);
   innerCopperColor = opts.innerCopper?.color ?? (() => undefined);
   const shown = rowShown;
+  clipSilk = !shown("off_board_silk");
+  withThickness = opts.copperThickness ?? false;
   const layerOrder = board.layers.length > 0 ? board.layers : ["F.Cu", "B.Cu"];
   // `Is3dLayerEnabled`: F.Cu and B.Cu by their rows; an inner layer as the PCB editor shows it, and only when the body does not hide it ("Do not show inner layers when it
   // is displaying the board and board body is opaque enough", `RENDER_3D_OPENGL::Redraw`).
@@ -1041,6 +1113,10 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
     }
     if (shown("soldermask_top")) group.add(buildMask(shape, "top"));
     if (shown("soldermask_bottom")) group.add(buildMask(shape, "bottom"));
+    if (clipSilk) {
+      if (shown("silkscreen_top")) group.add(buildSilkClip(shape, "top"));
+      if (shown("silkscreen_bottom")) group.add(buildSilkClip(shape, "bottom"));
+    }
   }
 
   // One material per copper layer, reused by every track, pad, via and zone on it.
@@ -1172,7 +1248,7 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
       if (margin) {
         const contours = padContours(pad, padPlacement(pad, part), margin);
         const face = outerCopperRange(side);
-        const range: [number, number] = side === "top" ? [face[1], face[1] + SOLDERPASTE_MM] : [face[0] - SOLDERPASTE_MM, face[0]];
+        const range = flatten(side === "top" ? [face[1], face[1] + SOLDERPASTE_MM] : [face[0] - SOLDERPASTE_MM, face[0]], side === "top" ? "top" : "bottom");
         const mesh = contours.length > 0 ? extruded(shapesOf(contours), range, pasteMat, "solder-paste") : null;
         if (mesh) group.add(mesh);
       }
@@ -1217,7 +1293,7 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
       if (!on) continue;
       const mesh =
         on.kind === "silk"
-          ? shown(on.side === "top" ? "silkscreen_top" : "silkscreen_bottom") && buildTextBoxMesh(b, silkY(on.side))
+          ? shown(on.side === "top" ? "silkscreen_top" : "silkscreen_bottom") && clipped(buildTextBoxMesh(b, silkY(on.side)), on.side)
           : on.kind === "adhesive"
             ? shown("adhesive") && buildTextBoxMesh(b, techLayerY(on.side), inkOf(on.side === "top" ? "F_Adhes" : "B_Adhes").color, "adhesive")
             : shown(on.row) && buildTextBoxMesh(b, techLayerY("top"), inkOf(on.row).color, on.row);

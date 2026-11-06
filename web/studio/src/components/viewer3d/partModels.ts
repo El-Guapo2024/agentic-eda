@@ -62,6 +62,10 @@ export class PartModels {
   private readonly materials = placeholderMaterials();
   private readonly highlights = new Map<THREE.Material, THREE.Material>();
   private hovered: string | null = null;
+  /** The footprints selected in the PCB editor (`fp->IsSelected()`), drawn in the selection colour as well. */
+  private selected = new Set<string>();
+  /** `render.opengl_selection_color` (Preferences > 3D Viewer > Realtime Rendering), green by default. */
+  private selectionColor: number = SELECTION_COLOR;
   private last: { board: BoardState | null; opts: PartModelOptions; stack: Stack } | null = null;
   private readonly unsubscribe: () => void;
 
@@ -98,7 +102,7 @@ export class PartModels {
         entry = this.build(part, ready, signature, kind, opts, stack);
         this.parts.set(part.ref, entry);
         this.group.add(entry.group);
-        if (this.hovered === part.ref) this.paint(entry, true);
+        if (this.lit(part.ref)) this.paint(entry, true);
       }
       entry.group.visible = footprintShown({ kind, dnp: part.dnp, notInPos: part.not_in_pos }, { tht: opts.showTHT, smd: opts.showSMD, virtual: opts.showVirtual, notInPos: opts.showNotInPos, dnp: opts.showDNP });
       stats.total++;
@@ -186,11 +190,42 @@ export class PartModels {
   setHover(ref: string | null): boolean {
     if (ref === this.hovered) return false;
     const before = this.hovered ? this.parts.get(this.hovered) : undefined;
-    if (before) this.paint(before, false);
+    const was = this.hovered;
     this.hovered = ref && this.parts.has(ref) ? ref : null;
+    if (before && was) this.paint(before, this.lit(was));
     const after = this.hovered ? this.parts.get(this.hovered) : undefined;
     if (after) this.paint(after, true);
     return true;
+  }
+
+  /** Whether part `ref` is drawn in the selection colour: `highlight = fp->IsSelected() || ( highlight_on_rollover && fp == m_currentRollOverItem )` (render_3d_opengl.cpp). */
+  private lit(ref: string): boolean {
+    return this.selected.has(ref) || this.hovered === ref;
+  }
+
+  /** The PCB editor's selection: the footprints in it are drawn in the selection colour (`fp->IsSelected()`). Returns whether anything changed. */
+  setSelected(refs: Iterable<string>): boolean {
+    const next = new Set(refs);
+    const changed = [...new Set([...next, ...this.selected])].filter((r) => next.has(r) !== this.selected.has(r));
+    if (changed.length === 0) return false;
+    this.selected = next;
+    for (const ref of changed) {
+      const entry = this.parts.get(ref);
+      if (entry) this.paint(entry, this.lit(ref));
+    }
+    return true;
+  }
+
+  /** The selected footprints drawn highlighted, for the test hook. */
+  get selectedRefs(): string[] {
+    return [...this.selected].filter((r) => this.parts.has(r)).sort();
+  }
+
+  /** `render.opengl_selection_color`: the colour a selected or hovered part is drawn in. */
+  setSelectionColor(color: number): void {
+    if (color === this.selectionColor) return;
+    this.selectionColor = color;
+    for (const h of this.highlights.values()) if (h instanceof THREE.MeshPhongMaterial || h instanceof THREE.MeshStandardMaterial) h.color.set(color);
   }
 
   get hoveredRef(): string | null {
@@ -202,7 +237,7 @@ export class PartModels {
     let h = this.highlights.get(base);
     if (!h) {
       h = base.clone();
-      if (h instanceof THREE.MeshPhongMaterial || h instanceof THREE.MeshStandardMaterial) h.color.set(SELECTION_COLOR);
+      if (h instanceof THREE.MeshPhongMaterial || h instanceof THREE.MeshStandardMaterial) h.color.set(this.selectionColor);
       this.highlights.set(base, h);
     }
     return h;

@@ -1,4 +1,6 @@
-// Port of PANEL_MOUSE_SETTINGS, the "Mouse and Touchpad" page of KiCad's Preferences dialog
+// Port of KiCad's Preferences dialog: PANEL_MOUSE_SETTINGS, the "Mouse and Touchpad" page, and the 3D Viewer's General and Realtime Rendering pages
+// (3d-viewer/dialogs/panel_3D_display_options.cpp, panel_3D_opengl_options.cpp: the settings the studio's 3D view honours, kicad-port/viewer3dSettings.ts).
+// The Mouse and Touchpad page is PANEL_MOUSE_SETTINGS
 // (common/dialogs/panel_mouse_settings.cpp), opened by `common.SuiteControl.openPreferences` (Ctrl+,), with the board editor's "Step for rotate commands" and
 // "Flip board items" and its "Magnetic Points" of PANEL_PCBNEW_EDIT_OPTIONS (pcbnew/dialogs/panel_edit_options.cpp: Snap to Pads, Snap to Tracks and Vias, Snap
 // to Graphics) below it.
@@ -13,6 +15,17 @@ import { useEffect, useState } from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { assignScrollModifier, MOUSE_SCROLL_DEFAULTS, sanitizePinStepMils, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
 import { isMac } from "../platform";
+import { getViewer3DUserSettings, setViewer3DPrefs } from "../state/viewer3dUserSettings";
+import { DEFAULT_VIEWER3D_PREFS, sanitizeViewer3DPrefs, type AntialiasingMode, type Viewer3DPrefs } from "../kicad-port/viewer3dSettings";
+
+/** The pages of the dialog (the tree of KiCad's Preferences): the common Mouse and Touchpad page with the editors' settings below it, and 3D Viewer > General
+ * (`PANEL_3D_DISPLAY_OPTIONS`) and > Realtime Rendering (`PANEL_3D_OPENGL_OPTIONS`). */
+type Page = "mouse" | "3d_general" | "3d_opengl";
+const PAGES: ReadonlyArray<{ id: Page; label: string; title: string }> = [
+  { id: "mouse", label: "Mouse and Touchpad", title: "Mouse and Touchpad" },
+  { id: "3d_general", label: "3D Viewer: General", title: "3D Viewer - General" },
+  { id: "3d_opengl", label: "3D Viewer: Realtime Rendering", title: "3D Viewer - Realtime Rendering" },
+];
 
 const COLUMNS: { value: ScrollModifier; label: string }[] = [
   { value: "none", label: "--" },
@@ -30,11 +43,15 @@ export function PreferencesDialog() {
   const [draft, setDraft] = useState<Preferences>(state.prefs);
   // The step is typed as text and taken when the dialog is accepted: `m_rotationAngle.GetAngleValue()` in `TransferDataFromWindow`, which keeps the old step for a value that is nothing.
   const [rotationText, setRotationText] = useState(String(state.prefs.rotationStepDeg));
+  const [page, setPage] = useState<Page>("mouse");
+  /** The 3D viewer's settings being edited (state/viewer3dUserSettings.ts), taken on OK as the other pages are. */
+  const [draft3d, setDraft3d] = useState<Viewer3DPrefs>(getViewer3DUserSettings().prefs);
 
   useEffect(() => {
     if (open) {
       setDraft(state.prefs);
       setRotationText(String(state.prefs.rotationStepDeg));
+      setDraft3d(getViewer3DUserSettings().prefs);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -46,6 +63,7 @@ export function PreferencesDialog() {
   const submit = () => {
     if (!valid) return;
     dispatch({ type: "SET_PREFERENCES", prefs: sanitizePreferences({ ...draft, rotationStepDeg: sanitizeRotationStep(Number(rotationText), state.prefs.rotationStepDeg) }) });
+    setViewer3DPrefs(sanitizeViewer3DPrefs(draft3d));
     close();
   };
   const set = (patch: Partial<Preferences>) => setDraft((d) => ({ ...d, ...patch }));
@@ -73,11 +91,21 @@ export function PreferencesDialog() {
 
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 520 }} onClick={(e) => e.stopPropagation()}>
+      <div className="dialog" style={{ width: 720 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
-          <span>Preferences - Mouse and Touchpad</span>
+          <span>Preferences - {PAGES.find((p) => p.id === page)!.title}</span>
         </div>
-        <div className="dialog-body">
+        <div style={{ display: "flex" }}>
+        <div role="tablist" aria-orientation="vertical" style={{ width: 190, borderRight: "1px solid var(--chrome-border, #444)", padding: "8px 0" }}>
+          {PAGES.map((p) => (
+            <div key={p.id} role="tab" aria-selected={page === p.id} data-page={p.id} className="menu-node-item" style={{ padding: "4px 10px", fontWeight: page === p.id ? 600 : undefined, cursor: "pointer" }} onClick={() => setPage(p.id)}>
+              {p.label}
+            </div>
+          ))}
+        </div>
+        {page === "3d_general" && <Viewer3DGeneralPage draft={draft3d} set={(patch) => setDraft3d((d) => ({ ...d, ...patch }))} />}
+        {page === "3d_opengl" && <Viewer3DOpenGLPage draft={draft3d} set={(patch) => setDraft3d((d) => ({ ...d, ...patch }))} />}
+        <div className="dialog-body" style={{ flex: 1, display: page === "mouse" ? undefined : "none" }}>
           {heading("Pan and Zoom")}
           <label className="filter-row" title="When drawing a track or moving an item, pan when approaching the edge of the display.">
             <input type="checkbox" checked={draft.autoPan} onChange={(e) => set({ autoPan: e.target.checked })} />
@@ -220,6 +248,7 @@ export function PreferencesDialog() {
             Not offered in the browser: center and warp cursor on zoom (a page cannot move the pointer), the drag gestures and the pan-on-movement key.
           </div>
         </div>
+        </div>
         <div className="dialog-footer">
           <button onClick={close}>Cancel</button>
           <button className="primary" disabled={!valid} onClick={submit}>
@@ -227,6 +256,83 @@ export function PreferencesDialog() {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+const heading3d = (text: string) => <div style={{ fontWeight: 600, margin: "10px 0 4px" }}>{text}</div>;
+
+/**
+ * `PANEL_3D_DISPLAY_OPTIONS` (Preferences > 3D Viewer > General): its Camera Options -- "Rotation increment:" (`camera.rotation_increment`, 0 .. 359 deg), "Redraw while
+ * moving" (`camera.animation_enabled`) and "Redraw speed:" (`camera.moving_speed_multiplier`, 1 .. 5). Its Render Options are not offered: the silkscreen is not
+ * clipped at via annuli or at the mask's edges here, plated and bare copper are one colour, and the models keep their own materials; "Show filled areas in zones" is
+ * the Appearance manager's Zones row.
+ */
+function Viewer3DGeneralPage({ draft, set }: { draft: Viewer3DPrefs; set: (patch: Partial<Viewer3DPrefs>) => void }) {
+  return (
+    <div className="dialog-body" style={{ flex: 1 }} data-page-body="3d_general">
+      {heading3d("Camera Options")}
+      <div className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }} title="Set increment (in degrees) for the Rotate commands.">
+        <span>Rotation increment:</span>
+        <input type="number" aria-label="Rotation increment" min={0} max={359} step={1} value={draft.rotationIncrementDeg} style={{ width: 70 }} onChange={(e) => set({ rotationIncrementDeg: Number(e.target.value) })} />
+        <span>deg</span>
+      </div>
+      <label className="filter-row">
+        <input type="checkbox" aria-label="Redraw while moving" checked={draft.animationEnabled} onChange={(e) => set({ animationEnabled: e.target.checked })} />
+        Redraw while moving
+      </label>
+      <div className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6, opacity: draft.animationEnabled ? 1 : 0.5 }}>
+        <span>Redraw speed:</span>
+        <input type="range" aria-label="Redraw speed" min={1} max={5} step={1} value={draft.movingSpeedMultiplier} disabled={!draft.animationEnabled} onChange={(e) => set({ movingSpeedMultiplier: Number(e.target.value) })} />
+        <span>{draft.movingSpeedMultiplier}</span>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button onClick={() => set({ rotationIncrementDeg: DEFAULT_VIEWER3D_PREFS.rotationIncrementDeg, animationEnabled: DEFAULT_VIEWER3D_PREFS.animationEnabled, movingSpeedMultiplier: DEFAULT_VIEWER3D_PREFS.movingSpeedMultiplier })}>Reset to Defaults</button>
+      </div>
+      <div style={{ fontSize: 11, opacity: 0.65, marginTop: 10 }}>
+        Not offered: the Render Options (clip silkscreen at via annuli and at solder mask edges, bare copper colours, material properties). Show filled areas in zones is the
+        Appearance manager&apos;s Zones row.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * `PANEL_3D_OPENGL_OPTIONS` (Preferences > 3D Viewer > Realtime Rendering): "Show copper and tech layers thickness (slow)" (`render.opengl_copper_thickness`),
+ * "Highlight items on rollover" (`render.opengl_highlight_on_rollover`), "Anti-aliasing:" (`render.opengl_AA_mode`; the browser's multisampling is on or off, so
+ * 2x, 4x and 8x are all on) and "Selection color:" (`render.opengl_selection_color`). "Show model bounding boxes" is the Appearance manager's row of that name; the
+ * While Moving options are not offered (the view does not drop detail while it moves).
+ */
+function Viewer3DOpenGLPage({ draft, set }: { draft: Viewer3DPrefs; set: (patch: Partial<Viewer3DPrefs>) => void }) {
+  return (
+    <div className="dialog-body" style={{ flex: 1 }} data-page-body="3d_opengl">
+      {heading3d("Rendering Options")}
+      <label className="filter-row">
+        <input type="checkbox" aria-label="Show copper and tech layers thickness" checked={draft.copperThickness} onChange={(e) => set({ copperThickness: e.target.checked })} />
+        Show copper and tech layers thickness (slow)
+      </label>
+      <label className="filter-row">
+        <input type="checkbox" aria-label="Highlight items on rollover" checked={draft.highlightOnRollover} onChange={(e) => set({ highlightOnRollover: e.target.checked })} />
+        Highlight items on rollover
+      </label>
+      <div className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span>Anti-aliasing:</span>
+        <select aria-label="Anti-aliasing" value={draft.antialiasing} onChange={(e) => set({ antialiasing: e.target.value as AntialiasingMode })}>
+          <option value="none">Disabled</option>
+          <option value="2x">2x</option>
+          <option value="4x">4x</option>
+          <option value="8x">8x</option>
+        </select>
+      </div>
+      <div style={{ fontSize: 11, opacity: 0.75, marginLeft: 4 }}>3D-Viewer must be closed and re-opened to apply this setting</div>
+      <div className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span>Selection color:</span>
+        <input type="color" aria-label="Selection color" value={draft.selectionColor} onChange={(e) => set({ selectionColor: e.target.value })} />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button onClick={() => set({ copperThickness: DEFAULT_VIEWER3D_PREFS.copperThickness, highlightOnRollover: DEFAULT_VIEWER3D_PREFS.highlightOnRollover, antialiasing: DEFAULT_VIEWER3D_PREFS.antialiasing, selectionColor: DEFAULT_VIEWER3D_PREFS.selectionColor })}>Reset to Defaults</button>
+      </div>
+      <div style={{ fontSize: 11, opacity: 0.65, marginTop: 10 }}>Show model bounding boxes is the Appearance manager&apos;s row. Not offered: the While Moving options (the view keeps its detail while it moves).</div>
     </div>
   );
 }

@@ -33,6 +33,8 @@ export interface Viewer3dSnapshot {
   source: "live" | "export";
   /** Per model name: where it stands and what it cost, for the measurements. */
   detail: Array<{ name: string; status: string; fetchMs?: number; parseMs?: number; triangles?: number; error?: string }>;
+  /** The parts drawn in the selection colour because the PCB editor has them selected (`fp->IsSelected()`). */
+  selected: string[];
 }
 
 const empty = (): Viewer3dSnapshot => ({
@@ -42,6 +44,7 @@ const empty = (): Viewer3dSnapshot => ({
   allModelsMs: null,
   models: { requested: 0, loading: 0, ready: 0, missing: 0, failed: 0, triangles: 0 },
   parts: { total: 0, asModels: 0, asBoxes: 0, shown: 0 },
+  selected: [],
   hovered: null,
   cameraMoving: false,
   scene: {},
