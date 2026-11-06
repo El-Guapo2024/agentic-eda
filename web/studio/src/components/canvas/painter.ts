@@ -12,7 +12,9 @@ import { layerColor, copperColorKey, drawOrder } from "./layers";
 import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
 import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
 import { snapPoint } from "./gridHelper";
-import { drawStrokeText } from "../text/strokeFont";
+import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { rulerDrawing } from "../../kicad-port/rulerItem";
+import { paintRuler } from "./rulerPaint";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_DISPLAY, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO, type GridDisplay } from "../../kicad-port/grid";
 import { paintEditorGrid } from "./gridPaint";
 import { originMarkerColor } from "../../kicad-port/gridOrigin";
@@ -24,7 +26,6 @@ import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { dimensionTextAngleRad, itemBounds, padIds } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
 import type { LengthUnit } from "../../state/units";
-import { measureLabel } from "../../kicad-port/measureRuler";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { endingInks, hasEndings, kicadArc, shortenArc, shortenBezier, shortenSegment } from "../../kicad-port/lineEnding";
 import { dimensionEditPoints } from "../../kicad-port/dimensionDraw";
@@ -1319,7 +1320,7 @@ function strokeViaGhost(ctx: CanvasRenderingContext2D, view: ViewTransform, x: n
   ctx.restore();
 }
 
-function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, viewport: readonly [number, number, number, number]) {
   const draw = opts.drawState;
   if (!draw) return;
 
@@ -1440,21 +1441,14 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   // (ZONE_CREATE_HELPER::OnComplete, round 5 A5-5); in the free mode a zone's preview closes straight.
   const loop = polygonDraw && rubberEnd && pts.length > 1 ? zoneLoop(pts, rubberEnd, leaderModeOf(opts.angleSnapMode, opts.drawCtrl ?? false)) : [];
   const shown: [number, number][] = leader ? [...pts, ...leader.slice(1), ...loop.slice(1, -1)] : rubberEnd ? [...pts, rubberEnd] : pts;
-  strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), (draw.kind === "zone" || loop.length > 0) && shown.length >= 2);
-
-  // pcb_viewer_tools.cpp's measure tool: the straight-line distance (and
-  // dx/dy) between the ruler's two ends, labeled at the midpoint, in the
-  // status bar's own unit. Live while still dragging the end (rubberEnd),
-  // fixed once the measurement is complete.
+  // pcb_viewer_tools.cpp's measure tool: `RULER_ITEM` from the first click to the cursor, fixed at the second (kicad-port/rulerItem.ts, components/canvas/rulerPaint.ts)
   if (draw.kind === "measure") {
     const end = frozen ? pts[1]! : rubberEnd;
-    if (end) {
-      const [x0, y0] = pts[0]!;
-      const [x1, y1] = end;
-      const label = measureLabel([x0, y0], [x1, y1], opts.units);
-      drawStrokeText(ctx, label, (x0 + x1) / 2, (y0 + y1) / 2 - hairlineNm(view, 8), { sizeNm: hairlineNm(view, 12), justify: "center", color, thicknessNm: hairlineNm(view, 1.4) });
-    }
+    // Interactive Offset's ruler (`arrow`): the anchor colour, no ticks, an arrowhead (`POSITION_RELATIVE_TOOL::InteractiveOffset`)
+    if (end) paintRuler(ctx, rulerDrawing(pts[0]!, end, { scale: view.scale, viewport }, { units: opts.units, showTicks: !draw.arrow, showEndArrowHead: draw.arrow === true }, measureStrokeText), layerColor(draw.arrow ? "anchor" : "LAYER_AUX_ITEMS"));
+    return;
   }
+  strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), (draw.kind === "zone" || loop.length > 0) && shown.length >= 2);
 }
 
 /** A ghost circle at the snapped cursor for the standalone via tool -- via.ts's placement is a single click, so there's no multi-point drawState to show, just "a via would land here". */
@@ -1664,7 +1658,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   if (opts.auxOrigin) drawAuxOrigin(ctx, view, opts.auxOrigin);
   drawGridOrigin(ctx, view, opts.gridOrigin, layerColor("background"));
   // In-progress route/drag/via/zone/drawing tool preview, on top of everything committed.
-  drawInProgress(ctx, view, board, opts);
+  drawInProgress(ctx, view, board, opts, [-view.x / view.scale, -view.y / view.scale, (widthPx - view.x) / view.scale, (heightPx - view.y) / view.scale]);
   if (opts.activeTool === "tune" && !opts.drawState && opts.tuneHover) drawTuneHover(ctx, view, opts.tuneHover, opts.units);
   if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
   // pcb_point_editor.cpp: a single selected zone's outline corners are

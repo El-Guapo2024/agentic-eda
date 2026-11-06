@@ -1672,16 +1672,11 @@ export function Canvas() {
   // handled globally now (actions/useGlobalHotkeys.ts), driven by
   // src/kicad/actions.json's real hotkeys through the same registry the
   // menu bar and toolbars use, reading/writing the store's activeTool
-  // and cursorNm. Enter-finishes-the-current-route/zone/shape is the one
-  // interaction left here: it's a plain UI convention this app is
-  // choosing for its own click-to-add-points tools, not a KiCad dotted
-  // action with a real extracted hotkey, so it doesn't belong in that
-  // global registry the way a real one does.
+  // and cursorNm. Enter is one of them too (UI-LEFT C4): `ACTIONS::cursorClick` (WXK_RETURN), a left click where the cursor is
+  // (`COMMON_TOOLS::CursorControl`'s CURSOR_CLICK), so during a route it fixes the segment as a click does (`ROUTER_TOOL::performRouting`'s
+  // `IsClick( BUT_LEFT )`) and in a zone or shape tool it adds a point; End (`finishInteractive`) or a double click finishes. It used to finish the
+  // route here, a convention of this studio's own.
   const onCanvasKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && state.drawState) {
-      e.preventDefault();
-      finishDraw();
-    }
     // The Track Corner Mode hotkeys (router_tool.cpp's `ACT_SwitchCornerMode*`, static TOOL_ACTIONs of the router tool): Ctrl+/ the next
     // mode, Ctrl+W 45, Ctrl+Shift+W arc 45, Ctrl+Alt+W 90, Alt+W arc 90 -- in the router tool only (`AS_CONTEXT`), the pair router's too; and
     // the router's other context actions: Ctrl+V microvia, Alt+Shift+V blind via, < / Alt+< pick a layer and place a through / blind via,

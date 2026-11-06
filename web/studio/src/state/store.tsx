@@ -386,7 +386,8 @@ export type DrawState =
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
   | { kind: "wire"; pts: [Nm, Nm][] }
   /** `Ctrl+Shift+M` (common.Interactive.measureTool, pcb_viewer_tools.cpp): a client-side-only ruler, never committed to the backend. 1 point = still dragging the end (rubber-banded to the cursor); 2 = a finished measurement that stays on screen (not cleared) until Esc or a fresh click starts the next one. */
-  | { kind: "measure"; pts: [Nm, Nm][] };
+  /** `arrow`: Interactive Offset's ruler (`POSITION_RELATIVE_TOOL::InteractiveOffset`: the anchor colour, no ticks, an arrowhead at the end) rather than the Measure tool's. */
+  | { kind: "measure"; pts: [Nm, Nm][]; arrow?: boolean };
 
 export interface ViewTransform {
   /** Screen pixels per board µm. */

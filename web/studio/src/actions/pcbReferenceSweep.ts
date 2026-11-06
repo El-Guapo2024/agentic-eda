@@ -93,7 +93,8 @@ export function registerPcbReferenceSweep(m: Map<string, () => void>, ctx: Sweep
       const ruler = (pts: [number, number][] | null) => {
         const draw = api.getState().drawState;
         if (draw !== null && draw.kind !== "measure") return;
-        dispatch({ type: "SET_DRAW_STATE", draw: pts === null ? null : { kind: "measure", pts } });
+        // `ruler.SetColor( LAYER_ANCHOR ); SetShowTicks( false ); SetShowEndArrowHead( true )` -- "Some colour to make it obviously not just a ruler"
+        dispatch({ type: "SET_DRAW_STATE", draw: pts === null ? null : { kind: "measure", pts, arrow: true } });
       };
 
       const apply = async (first: Vec, second: Vec, edited: Vec) => {

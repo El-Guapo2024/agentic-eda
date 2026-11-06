@@ -1608,13 +1608,12 @@ export function useActionRunner() {
     m.set("common.Control.cursorRightFast", moveCursor("right", true));
 
     // CursorControl's CURSOR_CLICK / CURSOR_DBL_CLICK: a TC_MOUSE click/double-click
-    // event at the cursor position. While a PCB route/zone/shape is being drawn
-    // Enter already finishes it (Canvas.tsx's own convention), so the click is
-    // left to that handler there.
+    // event at the cursor position -- on every canvas and whatever tool runs: during a PCB route, Enter fixes the route up to the cursor as a
+    // click does (`ROUTER_TOOL::performRouting`), it does not finish it (UI-LEFT C4).
     m.set(
       "common.Control.cursorClick",
       canvasOnly(() => {
-        if (!state.cursorNm || (state.tab === "pcb" && state.drawState)) return;
+        if (!state.cursorNm) return;
         emitCanvasPointer("pointerdown", state.cursorNm);
         emitCanvasPointer("pointerup", state.cursorNm);
       })
