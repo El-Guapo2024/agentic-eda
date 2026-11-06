@@ -22,8 +22,11 @@ import { isTerminalPoint } from "../kicad-port/schTerminalPoint";
 import { existingSingleClickItem } from "../kicad-port/schSingleClick";
 import { arcMotion } from "../kicad-port/arcGeom";
 import { drawStrokeText } from "./text/strokeFont";
-import { arcEditPoints, findArcPoint, moveArcPoint, schArcEditMode, type ArcRole } from "../kicad-port/schArcEdit";
-import { paintArcEditPoints } from "./schematic/schArcEditPaint";
+import { schArcEditMode } from "../kicad-port/schArcEdit";
+import { eeFindHandle, handlePos, POINT_SIZE_PX, type EeHandle } from "../kicad-port/eePointEdit";
+import { schDrag, schPointEditor, schShapeFrom } from "../kicad-port/schPointEdit";
+import { paintEditPoints } from "./schematic/schArcEditPaint";
+import { measureStrokeText } from "./text/strokeFont";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Schematic } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -120,8 +123,6 @@ import "../styles/canvas.css";
 /** `m_DefaultTextSize`: the glyph size of a sheet's text until Schematic Setup says another (50 mil), micrometres; Draw Table sizes its columns and rows by it. */
 const DEFAULT_TEXT_SIZE_NM = 1_270_000;
 
-/** Half `EDIT_POINT::POINT_SIZE` (8 px): the edit points are squares this many pixels from their centre. */
-const ARC_POINT_HALF_PX = 4;
 
 type DragState =
   /** `WX_VIEW_CONTROLS` DRAG_PANNING by the middle (1) or right (2) button, as `input.drag_middle` / `drag_right` say; `moved`: the press has become a drag (a right press that never did opens the context menu). */
@@ -131,8 +132,8 @@ type DragState =
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
   /** `selectTableCells`: a drag from a cell of `table` selects the cells under it (`SelectCellsBetween`), from the selection it began with (`before`). */
   | { kind: "cells"; table: string; startWorld: [number, number]; before: string[]; modifiers: ReturnType<typeof computeClickModifiers>; moved: boolean }
-  /** `SCH_POINT_EDITOR::Main`'s drag of one edit point of the selected arc (kicad-port/schArcEdit.ts). */
-  | { kind: "arcpoint"; id: string; role: ArcRole }
+  /** `SCH_POINT_EDITOR::Main`'s drag of one edit point of the selected graphic (kicad-port/schPointEdit.ts). */
+  | { kind: "editpoint"; id: string; handle: EeHandle }
   /**
    * A plain click-and-drag on any item, started without `M`/`G` armed
    * first -- sch_selection_tool.cpp Main()'s own `IsDrag(BUT_LEFT)`
@@ -258,18 +259,21 @@ export function SchematicView() {
   const dragMode = state.activeTool === "drag";
   /** `M` and `G`: which `sch_move` verb a committed preview becomes (a plain click-drag is a `sch_drag`, sch_selection_tool.cpp's own default for a plain drag). */
   const armedKind: "sch_move" | "sch_drag" | null = moveMode ? "sch_move" : dragMode ? "sch_drag" : null;
-  /** The arc point editor's drag in progress: the arc, the point and where the snapped cursor has it (UI-LEFT S13). */
-  const [arcDrag, setArcDrag] = useState<{ id: string; role: ArcRole; to: [number, number] } | null>(null);
-  /** `SCH_POINT_EDITOR` on a selection of one arc (`EDA_ARC_POINT_EDIT_BEHAVIOR`) with the select tool and nothing held: its four points, the lines, the arc as dragged. */
-  const arcEditor = useMemo(() => {
+  /** The point editor's drag in progress: the graphic, the handle and where the snapped cursor has it (UI-LEFT S13, UI-LEFT-2 SS3). */
+  const [pointDrag, setPointDrag] = useState<{ id: string; handle: EeHandle; to: [number, number] } | null>(null);
+  /**
+   * `SCH_POINT_EDITOR` on a selection of one drawn graphic it has a behaviour for (a rectangle, circle, arc, bezier, polyline, text box or rule area;
+   * kicad-port/schPointEdit.ts) with the select tool and nothing held: its edit points and lines, and the graphic as the drag has it.
+   */
+  const shapeEditor = useMemo(() => {
     if (!sch || state.activeTool !== "select" || armedKind || state.selection.size !== 1) return null;
     const id = [...state.selection][0]!;
     if ((sch.locked ?? []).includes(id)) return null;
     const g = (sch.graphics ?? []).find((x) => x.id === id);
-    if (!g || g.shape.type !== "arc") return null;
-    const shape = arcDrag && arcDrag.id === id ? (moveArcPoint(g.shape, arcDrag.role, arcDrag.to, schArcEditMode()) ?? g.shape) : g.shape;
-    return { id, graphic: g, shape, edit: arcEditPoints(shape) };
-  }, [sch, state.activeTool, armedKind, state.selection, arcDrag]);
+    if (!g) return null;
+    const ed = schPointEditor(g, pointDrag && pointDrag.id === id ? pointDrag : null, schArcEditMode(), measureStrokeText);
+    return ed ? { id, graphic: g, shown: ed.graphic, edit: ed.edit } : null;
+  }, [sch, state.activeTool, armedKind, state.selection, pointDrag]);
 
   // The grid helper of the tool in force (kicad-port/schGridHelper.ts, schematic/schSnap.ts), fed with the sheet, the view, the grid list and its overrides.
   const snapRef = useRef<SchSnap | null>(null);
@@ -469,11 +473,11 @@ export function SchematicView() {
     const collisionOverlay = held && patch ? patch.net_collision : undefined;
     // `${OP}` in a symbol's field or a label: the last operating point's values (kicad-port/sim/opVars.ts), resolved in what is drawn.
     // the current design variant's flags and field texts (KiCad 25ec2335 `SCH_EDIT_FRAME::SetCurrentVariant` -> `HardRedraw`: the painter reads every symbol through it)
-    // the arc being edited is drawn as its points have it so far (the point editor changes the item as it goes)
-    const shownSch = arcEditor && arcDrag ? { ...displaySch, graphics: (displaySch.graphics ?? []).map((g) => (g.id === arcEditor.id ? { ...g, shape: arcEditor.shape } : g)) } : displaySch;
+    // the graphic being edited is drawn as its points have it so far (the point editor changes the item as it goes)
+    const shownSch = shapeEditor && pointDrag ? { ...displaySch, graphics: (displaySch.graphics ?? []).map((g) => (g.id === shapeEditor.id ? shapeEditor.shown : g)) } : displaySch;
     paintSchematic(ctx, state.schematicView, withOpVars(withVariant(shownSch, state.schVariant), simUi.frame.circuit, simUi.opPoints), { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display, enteredGroup: state.schEnteredGroupId });
     if (collisionOverlay) paintNetCollision(ctx, state.schematicView.scale || 1, collisionOverlay);
-    if (arcEditor) paintArcEditPoints(ctx, state.schematicView, arcEditor.edit);
+    if (shapeEditor) paintEditPoints(ctx, state.schematicView, shapeEditor.edit);
     // The simulator's operating point (View > Show OP Voltages / Currents, components/simulator/opPainter.ts).
     paintOperatingPoints(ctx, state.schematicView.scale || 1, displaySch, layerColor("LAYER_SCHEMATIC_BACKGROUND"));
     // The image in the hand, centred on the grid-snapped cursor (`GRID_GRAPHICS`), outlined as a selected image is.
@@ -571,7 +575,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, arcEditor, arcDrag, gridDisplay, gridNm, gridSettingsList, state.gridVisible, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion]);
+  }, [sch, displaySch, shapeEditor, pointDrag, gridDisplay, gridNm, gridSettingsList, state.gridVisible, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -701,9 +705,12 @@ export function SchematicView() {
     <div
       ref={containerRef}
       className="pcb-canvas-container"
-      // how many items Import Sheet's contents in the hand show, and the arc point editor's points (for a browser check; KiCad draws both on the canvas)
+      // how many items Import Sheet's contents in the hand show, and the point editor's points and side handles (for a browser check; KiCad draws both on the canvas);
+      // an arc's points by their roles, as S13's check reads them
       data-import-ghost={importShown ? previewIds(importShown).length : undefined}
-      data-arc-points={arcEditor ? arcEditor.edit.points.map((q) => `${q.role}:${q.pos[0]},${q.pos[1]}`).join(" ") : undefined}
+      data-arc-points={shapeEditor?.graphic.shape.type === "arc" ? shapeEditor.edit.points.map((q, i) => `${["start", "mid", "end", "center"][i]}:${q.pos[0]},${q.pos[1]}`).join(" ") : undefined}
+      data-edit-points={shapeEditor ? shapeEditor.edit.points.map((q) => `${q.pos[0]},${q.pos[1]}`).join(" ") : undefined}
+      data-edit-lines={shapeEditor ? shapeEditor.edit.lines.flatMap((l, i) => (l.center ? [handlePos(shapeEditor.edit, { kind: "line", index: i }).join(",")] : [])).join(" ") : undefined}
       style={{ cursor: dragRef.current?.kind === "pan" || dragRef.current?.kind === "zoom" ? "grabbing" : held && hasNetCollision(patch?.net_collision) ? "not-allowed" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
       onPointerDown={(e) => {
         if (!sch) return;
@@ -898,13 +905,14 @@ export function SchematicView() {
         const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
         const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
         const tolerance = 6 / (state.schematicView.scale || 1);
-        // `SCH_POINT_EDITOR::Main`: a press on an edit point of the selected arc (`EDIT_POINTS::FindPoint`, half `EDIT_POINT::POINT_SIZE` around it) drags that point
-        if (arcEditor && !hasModifier(modifiers)) {
-          const role = findArcPoint(arcEditor.edit, [wx, wy], (ARC_POINT_HALF_PX + 1) / (state.schematicView.scale || 1));
-          if (role) {
-            const at = arcEditor.edit.points.find((q) => q.role === role)!.pos;
-            dragRef.current = { kind: "arcpoint", id: arcEditor.id, role };
-            setArcDrag({ id: arcEditor.id, role, to: [at[0], at[1]] });
+        // `SCH_POINT_EDITOR::Main`: a press on an edit point or a side's middle of the selected graphic (`EDIT_POINTS::FindPoint`, `EDIT_POINT::POINT_SIZE` either way)
+        // drags that handle
+        if (shapeEditor && !hasModifier(modifiers)) {
+          const handle = eeFindHandle(shapeEditor.edit, [wx, wy], POINT_SIZE_PX / (state.schematicView.scale || 1));
+          if (handle) {
+            const at = handlePos(shapeEditor.edit, handle);
+            dragRef.current = { kind: "editpoint", id: shapeEditor.id, handle };
+            setPointDrag({ id: shapeEditor.id, handle, to: [at[0], at[1]] });
             return;
           }
         }
@@ -1056,10 +1064,10 @@ export function SchematicView() {
 
         const drag = dragRef.current;
         if (!drag) return;
-        if (drag.kind === "arcpoint") {
-          // `BestSnapAnchor( cursor, GRID_GRAPHICS, the edited item )`
+        if (drag.kind === "editpoint") {
+          // `grid->Align( controls->GetMousePosition(), GRID_GRAPHICS )` with the edited item's own anchors left out
           const p = snap.point("pointEditor", [wx, wy], modsRef.current, "graphics", new Set([drag.id]));
-          setArcDrag({ id: drag.id, role: drag.role, to: [p[0], p[1]] });
+          setPointDrag({ id: drag.id, handle: drag.handle, to: [p[0], p[1]] });
           return;
         }
         if (drag.kind === "pan") {
@@ -1195,11 +1203,12 @@ export function SchematicView() {
           justPannedRef.current = drag.button === 2 && drag.moved;
           return;
         }
-        if (drag.kind === "arcpoint") {
-          // the drag ends: the arc as its points have it, one undo step (`SCH_COMMIT::Push`); a drag that changed nothing sends nothing
+        if (drag.kind === "editpoint") {
+          // the drag ends: the graphic as its points have it, one undo step (`commit.Push( _( "Move Point" ) )`); a drag that changed nothing sends nothing
           const g = (sch?.graphics ?? []).find((x) => x.id === drag.id);
-          const shape = arcDrag ? (g && g.shape.type === "arc" ? moveArcPoint(g.shape, arcDrag.role, arcDrag.to, schArcEditMode()) : null) : null;
-          setArcDrag(null);
+          const moved = g && pointDrag ? schDrag(g, drag.handle, pointDrag.to, schArcEditMode(), measureStrokeText) : null;
+          setPointDrag(null);
+          const shape = g && moved ? schShapeFrom(moved.shape, g.shape) : null;
           if (g && shape && JSON.stringify(shape) !== JSON.stringify(g.shape)) {
             const { id: _id, ...rest } = g;
             void api.cmd({ op: "sch_edit", verb: "edit_graphic", id: drag.id, graphic: { ...rest, shape } });

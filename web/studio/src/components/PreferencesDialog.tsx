@@ -360,6 +360,11 @@ export function PreferencesDialog() {
                 <span style={{ width: 170 }}>Label increment:</span>
                 <input type="number" aria-label="Label increment" data-testid="pref-sym-label-increment" style={{ width: 70 }} min={-10} max={10} step={1} value={draft.symRepeatLabelDelta} onChange={(e) => set({ symRepeatLabelDelta: Number(e.target.value) })} />
               </div>
+              {/* `PANEL_SYM_EDITING_OPTIONS`' right column: `m_dragPinsWithEdges` */}
+              <label className="filter-row" title="Dragging a side of a rectangle with its point editor takes the pins on that side along.">
+                <input type="checkbox" data-testid="pref-sym-drag-pins-with-edges" checked={draft.symDragPinsWithEdges} onChange={(e) => set({ symDragPinsWithEdges: e.target.checked })} />
+                Keep pins attached when dragging edges
+              </label>
 
               {heading("Magnetic Points (PCB Editor)")}
               {(

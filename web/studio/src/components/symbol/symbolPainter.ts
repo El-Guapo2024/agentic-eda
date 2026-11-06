@@ -36,11 +36,13 @@ import { boxOfTextBox, layoutLibTextBox, type LibTextBox } from "../../kicad-por
 import { bezierFromClicks } from "../../kicad-port/symBezier";
 import type { SchColor } from "../../api/schEditTypes";
 import { rgba } from "../schematic/schGraphicsPainter";
+import { paintEditPoints } from "../schematic/schArcEditPaint";
+import type { EeEditPoints } from "../../kicad-port/eePointEdit";
 
 /** `eeschema.SymbolDrawing.*` shapes in progress: `lines` (Draw Lines) and `polygon` (Draw Polygons) are the same open-ended polyline tool. */
 export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "bezier" | "textbox";
 
-/** Half the side of an edit point's square, screen pixels (`EDIT_POINT::POINT_SIZE` is 10). */
+/** INACTIVE since UI-LEFT-2 YY1: the bezier editor's handle size; the point editor's is `EDIT_POINT::POINT_SIZE` (8 px, kicad-port/eePointEdit.ts `POINT_SIZE_PX`). */
 export const POINT_EDIT_HALF_PX = 5;
 
 /** Half the cap height, the shift that centres stroke text on its line (`MIDDLE_OFFSET_FACTOR` of `components/schematic/painter.ts`). */
@@ -243,7 +245,8 @@ export interface SymPaintOptions {
   carried?: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[] } | null;
   /** The point editor (`SCH_POINT_EDITOR`) on the one selected shape: its edit points and indicator lines (internal nm), and the shape as a drag of one point has it so far
    * (`replace`, drawn in place of the symbol's). */
-  pointEditor?: { points: [number, number][]; lines: [[number, number], [number, number]][]; replace?: LibrarySymbolGraphic } | null;
+  /** The point editor on one shape (kicad-port/symPointEdit.ts): its handles, and the shape as the drag has it. */
+  pointEditor?: { edit: EeEditPoints; replace?: LibrarySymbolGraphic } | null;
   /** The symbol's fields that are on show (kicad-port/symFieldLayout.ts `fieldsOnShow`: the ones with a text, the hidden ones only while Show Hidden Fields is on). */
   fields?: SchField[];
 }
@@ -378,27 +381,8 @@ export function paintSymbol(
 
   drawOrigin(ctx, view);
   drawInProgress(ctx, view, opts.drawState, opts.cursorNm);
-  // `EDIT_POINTS_PAINTER`: the indicator lines, then a square at each edit point
-  if (opts.pointEditor) {
-    ctx.save();
-    ctx.strokeStyle = layerColor("selection");
-    ctx.lineWidth = hairlineNm(view, 1);
-    ctx.setLineDash([hairlineNm(view, 3), hairlineNm(view, 3)]);
-    ctx.beginPath();
-    for (const [a, b] of opts.pointEditor.lines) {
-      ctx.moveTo(a[0], a[1]);
-      ctx.lineTo(b[0], b[1]);
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-    const half = hairlineNm(view, POINT_EDIT_HALF_PX);
-    ctx.fillStyle = "#1a1a1a";
-    for (const [x, y] of opts.pointEditor.points) {
-      ctx.fillRect(x - half, y - half, 2 * half, 2 * half);
-      ctx.strokeRect(x - half, y - half, 2 * half, 2 * half);
-    }
-    ctx.restore();
-  }
+  // `EDIT_POINTS::ViewDraw`: the indicator lines, then a square at each edit point and a round handle in the middle of each side (components/schematic/schArcEditPaint.ts)
+  if (opts.pointEditor) paintEditPoints(ctx, view, opts.pointEditor.edit, { fill: "#1a1a1a", stroke: layerColor("selection") });
 
   // what the cursor carries, where it is now, as the selection (`AddToPreview`)
   if (opts.carried) {

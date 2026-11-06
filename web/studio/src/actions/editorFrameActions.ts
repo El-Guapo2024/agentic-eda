@@ -28,6 +28,9 @@ import { showSymFind, symFindNext, symReplaceAll, symReplaceAndFindNext } from "
 /** common_tools.cpp doZoomInOut: "Step must be AT LEAST 1.3" -- the factor of one Zoom In / Zoom Out step. */
 const ZOOM_STEP = 1.3;
 
+import { ARC_EDIT_MODE_LABEL, type ArcEditMode } from "../kicad-port/pcbPointEdit";
+import { setSymArcEditMode } from "../kicad-port/symPointEdit";
+
 export interface EditorFrameContext {
   tab: string;
   fpApi: FootprintEditorApi;
@@ -253,6 +256,14 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
       }
       else toast(`Cannot open datasheet '${target.text}': only absolute http(s)/file URLs can be opened from a browser.`, "error");
     });
+
+    // `SCH_POINT_EDITOR::changeArcEditMode` in the Symbol Editor: Ctrl+Space (`cycleArcEditMode`) and the three `pointEditorArcKeep*` actions set the Symbol Editor's own
+    // `m_ArcEditMode`, the mode its arc point editor drags in (kicad-port/symPointEdit.ts; UI-LEFT-2 YY1)
+    const arcMode = (mode: ArcEditMode | "cycle") => () => toast(`Arc editing: ${ARC_EDIT_MODE_LABEL[setSymArcEditMode(mode)]}`);
+    m.set("common.Interactive.cycleArcEditMode", arcMode("cycle"));
+    m.set("pcbnew.PointEditor.arcKeepCenter", arcMode("keep_center_adjust_angle_radius"));
+    m.set("pcbnew.PointEditor.arcKeepEndpoint", arcMode("keep_endpoints_or_start_direction"));
+    m.set("pcbnew.PointEditor.arcKeepRadius", arcMode("keep_center_ends_adjust_angle"));
 
     // Find / Find and Replace (`SCH_FIND_REPLACE_TOOL`, which the Symbol Editor registers too): over the symbol being edited, with its own dialog and cursor
     // (actions/symFindOps.ts) -- the schematic's handlers of the same names are replaced on this tab.

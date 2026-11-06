@@ -4,6 +4,9 @@
 // holds ("editing.arc_edit_mode", KEEP_CENTER_ADJUST_ANGLE_RADIUS by default; `SCH_POINT_EDITOR::changeArcEditMode` sets it from the three
 // `pointEditorArcKeep*` actions and Ctrl+Space's `cycleArcEditMode`). The arc maths is the board's port of the same behaviour (kicad-port/pcbPointEdit.ts
 // `editArc`), which runs in nanometres, the schematic's unit here. UI-LEFT S13.
+//
+// INACTIVE since UI-LEFT-2 SS3: `arcEditPoints`, `findArcPoint` and `moveArcPoint` were the arc-only editor; the schematic's point editor of every shape
+// (kicad-port/eePointEdit.ts, schPointEdit.ts) does the arc too. The mode setting (`schArcEditMode`, `setSchArcEditMode`) is still the one it reads.
 import type { SchGraphicShape } from "../api/schEditTypes";
 import { arcCenter } from "./pcbGeom";
 import { DEFAULT_ARC_EDIT_MODE, editArc, incrementArcEditMode, type ArcEditMode } from "./pcbPointEdit";
