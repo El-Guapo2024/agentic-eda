@@ -17,7 +17,7 @@
 //! * "Place Selected Footprints": the footprints of the selection (`item->Type() == PCB_FOOTPRINT_T`; a selected pad or field is not its footprint);
 //! * "Place Off-Board Footprints": every footprint whose position is not on the board (`!boardShape.Contains( footprint->GetPosition() )`, the board's
 //!   outlines with their holes), and -- the studio's counterpart of the footprints KiCad's Update PCB from Schematic stacks beside the board -- every
-//!   part of the design that is not on the board yet;
+//!   part of the design that is not on the board yet (but one whose symbol is excluded from the board);
 //! * without Override locks a locked footprint is left out (`fp->IsLocked()`, a footprint in a locked group included).
 //!
 //! A board with no outline is refused in KiCad's words ("Board edges must be defined on the Edge.Cuts layer."); nothing to place is refused too
@@ -86,8 +86,14 @@ impl Board<'_> {
             // `board()->GetBoardPolygonOutlines( boardShape, true ); if( !boardShape.Contains( footprint->GetPosition() ) )`
             let region = self.board_region();
             let off: Vec<String> = self.placement().footprints.iter().filter(|f| !region.contains(f.at)).map(|f| f.id.clone()).collect();
-            // and the parts not on the board yet: what KiCad's Update PCB from Schematic would have stacked beside it
-            let unplaced = self.model.parts.iter().map(|p| p.reference.clone()).filter(|r| !placed.contains(r) && self.model.part(r).and_then(|p| self.model.footprint_of(p)).is_some());
+            // and the parts not on the board yet: what KiCad's Update PCB from Schematic would have stacked beside it -- not one whose symbol is excluded
+            // from the board, which Update PCB leaves off it
+            let excluded: BTreeSet<String> = eda_model::sheet_list::walk(&self.design)
+                .iter()
+                .filter_map(|e| eda_model::sheet_list::screen_of(&self.design, &e.path).map(|sec| (sec, e.path.clone())))
+                .flat_map(|(sec, path)| sec.symbols.iter().filter(|s| s.exclude_from_board).map(move |s| eda_model::sheet_list::reference_under(sec, s, &path)))
+                .collect();
+            let unplaced = self.model.parts.iter().map(|p| p.reference.clone()).filter(|r| !placed.contains(r) && !excluded.contains(r) && self.model.part(r).and_then(|p| self.model.footprint_of(p)).is_some());
             off.into_iter().chain(unplaced).collect()
         } else {
             // `for( EDA_ITEM* item : selection() ) if( item->Type() == PCB_FOOTPRINT_T )`
