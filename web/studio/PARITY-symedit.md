@@ -348,6 +348,25 @@ Properties, a pin row of the pane, Copy and Paste with KiCad's text, Save), whos
 
 Left: the point editor of the other shapes; Increment of the pin being placed; the clipboard's images; Import Graphics' curves (still cut into segments); the Properties pane's rows the library symbol has no place for (above).
 
+## The Pin Table, Pin Properties, Find and Replace, the tree, Export SVG (UI-LEFT Y6-Y8, X11; 2026-11-06, `task-u5-dialogs`)
+
+KiCad 8303b2ad `dialog_lib_edit_pin_table.cpp`, `dialog_pin_properties_base.cpp`, `dialog_lib_symbol_properties.cpp::onPowerCheckBox`, `symbol_editor.cpp::DuplicateSymbol`, `sch_find_replace_tool.cpp`, `dialog_sch_find.cpp`, `ShowFindReplaceDialog`, `symbol_tree_synchronizing_adapter.cpp::GetAttr`, `SVGPlotSymbol`; KiCad 25ec2335 `JobSymExportSvg`, `GetSymbolPlotBBox`.
+
+| Item | Status | KiCad file:function |
+|---|---|---|
+| Pin Table: the summary over every pin ("Pin numbers:", "Pin count:", "Duplicate pins:"); 14 columns, 8 shown to begin with (Count, Number, Name, Electrical Type, Graphic Style, Orientation, X Position, Y Position) and the header's menu for the rest; KiCad's type, style and orientation names; lengths in the frame's units; sort by Count then Number, a header click and its reverse; Group by name with a grouped row's renumbering ("1, 3" retyped adds, removes or renumbers pins); "-- mixed values --"; Refresh; the unit, body style and selection filters (KiCad's quirk kept: the unit filter's "ALL" keeps only pins common to all units); Export all or the shown pins to a `.csv` or the clipboard | **identical**. Differs: a typed length is a number with an optional unit (no `NUMERIC_EVALUATOR` arithmetic); no cell icons; a per-row Delete button | `PIN_INFO_FORMATTER::Format` / `UpdatePin`, `PIN_TABLE_DATA_MODEL::GetValue` / `SetValue` / `compare` / `RebuildRows` / `SortRows`, `OnColSort`, `OnAddRow`, `OnFilterCheckBox`, `updateSummary`, `PIN_TABLE_EXPORT::ExportData`, `CSV_WRITER`, `GRID_TRICKS::onGridLabelRightClick` |
+| Pin Properties: KiCad's rows and words with colons, no Delete Pin, values taken as typed (r7 E7-S4) | **identical** | `DIALOG_PIN_PROPERTIES_BASE`, `TransferDataFromWindow` |
+| A power symbol's Exclude boxes enabled on open; ticking "Define as power symbol" checks and disables them (E7-S9) | **identical** | `TransferDataToWindow`, `onPowerCheckBox` |
+| Duplicate and Paste open the last new symbol at the unit and body style being edited; the tree selects the first (E7-S21) | **identical** | `LoadOneLibrarySymbolAux( .., GetUnit(), GetBodyStyle() )` |
+| Find / Find and Replace (Ctrl+F, Ctrl+Alt+F, the toolbar, F3, Shift+F3) over every unit's fields, pins, texts and text boxes, sorted x then y; a hidden field matches only with Include hidden fields, the Reference never; a pin on its name or number; "Reached end of symbol. Find again to wrap around to the start." and a 4 s wrap; Replace changes a pin's name and number, one undo step, then Find Next; the matching is the schematic's on the server (`POST /api/find/text`: plain, whole word, wxRegEx) | **identical**. Differs: Replace All replaces (KiCad's `doReplace` stops at `wxCHECK_RET( aSheet )` in the Symbol Editor, which has no sheet path, in 8303b2ad and 25ec2335). Not ported: the find histories, brightening every match | `nextMatch`, `FindNext`, `ReplaceAndFindNext`, `getCurrentMatch` / `HasMatch`, `SCH_FIELD::Matches`, `SCH_PIN::Matches` / `Replace`, `EDA_TEXT::Replace`, `DIALOG_SCH_FIND` (constructor, `updateFlags`), `ShowFindReplaceDialog` |
+| The tree: a derived symbol drawn in italics at its library's level (KiCad does not nest it under its parent) | **identical** | `GetAttr` (`SetItalic( !m_IsRoot )`) |
+| The Symbol Checker's toolbar button | **live** | `CheckSymbol` |
+| Export SVG with `--theme _builtin_default` (the editor's theme: the studio has no schematic theme setting) and the hidden pins and fields (`--include-hidden-pins`, `--include-hidden-fields`) | **identical** theme and hidden items. Differs: kicad-cli's plot box includes hidden fields; kicad-cli's pen is 6 mils | `SVGPlotSymbol`, `JobSymExportSvg`, `GetSymbolPlotBBox` |
+
+Tests: `pinTableGrid.test.ts` (9), `symFind.test.ts` (5), `symImportPlan` (+1), `find_text_matches_and_replaces_with_the_schematics_matcher`, `the_symbol_svg_takes_a_builtin_theme_and_the_hidden_items`, slow `the_symbol_svg_route_plots_in_the_theme_it_is_given_with_the_hidden_pins`; browser checks `symedit-u5` 8/8, `lib-editors` 27/27, `lib-edit` 15/15, `symedit` 9/9.
+
+Left: the Pin Table's Group Selected Pins, Import and the cross-probe highlight; Duplicate and Paste into a read-only library are not refused (KiCad: "Symbol library '%s' is not writable."); no highlight of every match.
+
 ## Differs from KiCad
 
 - ~~**Where a pin is placed.**~~ Since 2026-11-05 the Pin tool is KiCad's `TwoClickPlace`: the click opens Pin Properties, the pin then
