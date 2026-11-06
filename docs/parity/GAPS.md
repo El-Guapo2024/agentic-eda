@@ -806,12 +806,17 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Missing: ~~a label's field moved by hand is placed by `AutoplaceFields` again~~ (done 2026-11-06); a field added to a label placed by hand goes where
   Autoplace Fields would put it; a label's field keeps no size, bold or shown name; ~~an outline font is drawn with the stroke font~~ (drawn in its face since 2026-11-06, item 40); the net class of a label on a bus is not
   given to the bus's members; the
-  fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on and Autoplace Fields ignores swapped pins; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
+  ~~fields of a symbol read from a KiCad file are not items~~ (they are since a KiCad file is taken into the design's frame, 2026-10-25; checked 2026-11-07, `task-v3-schdlg`, PARITY-sch §75); `m_AutoplaceFields.enable` is always on and Autoplace Fields ignores swapped pins; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
   label's spin; only the normal and the De Morgan body style are modelled.
 - Done 2026-11-06 (`task-u4-schleft`, UI-LEFT S16, S19, S20; `PARITY-sch.md` section 62): Autoplace Fields reads the swapped pin places (done); an imported
   power symbol keeps its hand-placed Reference and Value and its flags (r4 D4-L2, done); Change / Update Symbols reset a symbol's field visibility, sizes and
   styles and places; Reorganize keeps the groups (a label's spin after it stays the layout's: its wires are new). **Left**: Copy / Paste keep a user field's text
   only; a mirrored power symbol's fields are read unmirrored.
+- Done 2026-11-07 (`task-v3-schdlg`, UI-LEFT-2 SS6, SS7, `PARITY-sch.md` section 75): Symbol Properties' grid has `FIELDS_GRID_TABLE`'s Orientation, X / Y
+  Position and Allow Autoplacement columns (the place in the symbol's own frame, `edit_field`'s `local_at` / `local_vertical`), the column chooser, Move Up /
+  Move Down (the user fields' order is the order of the unit's stored placements, which they are listed, autoplaced and written in), Angle and Mirror
+  (`set_symbol_orientation`) and Embedded Files; OK places an autoplaced symbol's fields again (`autoplace_fields_kept`); **a power symbol's user fields are
+  items** (placed, drawn, picked, edited, written where they are, read back) and its dialog has the grid, Unit, Body style, Angle and Mirror.
 - Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`, `dialog_symbol_properties.cpp`.
 
 ### 13. Zones: the fill is KiCad's, and the zone settings
