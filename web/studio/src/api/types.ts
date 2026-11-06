@@ -3236,7 +3236,13 @@ export type LibrarySymbolGraphic =
   | { kind: "polyline"; id?: string; unit: number; body_style: number; pts: MmPoint[]; stroke_mm: Mm; fill: LibraryFill }
   | { kind: "circle"; id?: string; unit: number; body_style: number; center: MmPoint; radius_mm: Mm; stroke_mm: Mm; fill: LibraryFill }
   | { kind: "arc"; id?: string; unit: number; body_style: number; start: MmPoint; mid: MmPoint; end: MmPoint; stroke_mm: Mm; fill: LibraryFill }
-  | { kind: "text"; id?: string; unit: number; body_style: number; text: string; at: MmPoint; angle_deg: Degrees; size_mm: Mm }
+  /**
+   * `SCH_TEXT` of a library symbol: the text at `at` (its anchor), at 0 or 90 degrees, with the looks Text Properties edits -- `bold`, `italic` and the justification
+   * against the anchor (absent: plain, centred on both axes; the server leaves them out then).
+   */
+  | { kind: "text"; id?: string; unit: number; body_style: number; text: string; at: MmPoint; angle_deg: Degrees; size_mm: Mm; bold?: boolean; italic?: boolean; h_align?: FieldHAlign; v_align?: FieldVAlign }
+  /** `SCH_SHAPE` of `SHAPE_T::BEZIER` (`(bezier (pts start c1 c2 end) ..)`): a cubic curve from `start` to `end` pulled by the two control points (Y up, mm). */
+  | { kind: "bezier"; id?: string; unit: number; body_style: number; start: MmPoint; c1: MmPoint; c2: MmPoint; end: MmPoint; stroke_mm: Mm; fill: LibraryFill }
   /**
    * `SCH_TEXTBOX` of a library symbol (`(text_box ...)`): `start` and `end` are two opposite corners (Y up, mm), the text runs along the box (`angle_deg` 0) or up it (90) and is
    * wrapped to it. `margin_mm` 0 is the default margin (`kicad-port/symTextBox.ts`), a negative `stroke_mm` is no border, 0 the default line width. The server leaves out what is

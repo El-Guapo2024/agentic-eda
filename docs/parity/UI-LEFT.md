@@ -14,7 +14,7 @@ Notes:
 - These findings still have open parts:
   - E3-1 (high);
   - D-A1, B-M4/D3-M5/D4-M1, C3-M1, B3-M1, A-3, D-8, D-10, C-2 and R3-6 (medium, rounds 2-4).
-- `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor. **Footprint Editor: 2 left since task-u1-fpedit** (Create Footprint, the Properties pane).
+- `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor. **Footprint Editor: 2 left since task-u1-fpedit** (Create Footprint, the Properties pane). **Symbol Editor: 3 left since task-u1-symedit** (Find, Find and Replace, the Symbol Checker).
 
 **Top 12, all areas:**
 1. X1: the Plot dialog is Gerber only -- **done (task-u1-plot)**
@@ -23,7 +23,7 @@ Notes:
 4. R1: dragging a footprint with its tracks -- **done (task-u1-drag)**
 5. L1: saving into table libraries
 6. F1+F2: Footprint Editor fields and dimmed tools -- **done (task-u1-fpedit)**; the Properties pane (Y3) left
-7. Y1: Symbol Editor Rotate
+7. Y1: Symbol Editor Rotate -- **done (task-u1-symedit)**
 8. P2/S7: Properties panel rows -- **done (task-u1-props)**
 9. S3: Schematic Setup pages -- **done (task-u1-schsetup)**
 10. P8: zones -- **done (task-u1-zones)**
@@ -395,22 +395,22 @@ Notes:
 
 ## Symbol editor
 
-- **Y1 [BD] Rotate.** It turns only the pins; the selected shapes and text stay put. M. PARITY-symedit.
-- **Y2 [FM] Mirror and beziers.**
-  - Mirror H and V are not ported.
-  - No bezier tool, beziers aren't drawn, and Import Symbol drops them.
+- **Y1 [BD] Rotate.** It turns only the pins; the selected shapes and text stay put. M. PARITY-symedit. **done (task-u1-symedit)**: every kind -- pins, shapes, beziers, texts, text boxes and fields -- about KiCad's pivot, CW and CCW, one undo step.
+- **Y2 [FM] Mirror and beziers.** **done (task-u1-symedit)**: Mirror H and V of every kind; beziers read, written, drawn, drawn by the bezier tool and edited by a point editor; left: Import Graphics still cuts curves into segments, and the point editor is for curves only.
+  - ~~Mirror H and V are not ported.~~
+  - ~~No bezier tool, beziers aren't drawn, and Import Symbol drops them.~~
   - M. editor_toolbar_support.json; PARITY-symedit.
-- **Y3 [FM] Properties pane.** The Symbol and Footprint editors have none. M. GAPS 10; PARITY-common §12.
+- **Y3 [FM] Properties pane.** The Symbol and Footprint editors have none. M. GAPS 10; PARITY-common §12. **Symbol Editor done (task-u1-symedit)**: KiCad's rows of pins, shapes, texts, text boxes, fields and the symbol, edits on the editor's undo stack; left: the rows a library symbol has no place for (font, colours, line style, hyperlink) are read-only. The Footprint Editor's half is still open (task-u1-fpedit left it).
 - **Y4 [FM] Symbol Properties and text.**
   - No unit display-name grid, no Pin Connections tab and no named body styles.
-  - Plain text has no Properties dialog.
+  - ~~Plain text has no Properties dialog.~~ **done (task-u1-symedit)**: Text Properties (double click, E, Properties), and a library text keeps bold, italic and its justification.
   - No border colour, custom fill, Private flag or font.
   - M. GAPS 19; PARITY-symedit.
-- **Y5 [BD] Pins and the clipboard.**
-  - The pin tool takes a click, then a dialog, with no ghost.
-  - Duplicate and Paste drop in place.
-  - The editor uses its own clipboard, not `.kicad_sym` text.
-  - No increment of a pin's number or name.
+- **Y5 [BD] Pins and the clipboard.** **done (task-u1-symedit)**; left: Increment of the pin being placed, and the clipboard's SVG/PNG images.
+  - ~~The pin tool takes a click, then a dialog, with no ghost.~~ KiCad's `TwoClickPlace`: Pin Properties, then the pin follows the cursor until the click.
+  - ~~Duplicate and Paste drop in place.~~ The items follow the cursor until a click.
+  - ~~The editor uses its own clipboard, not `.kicad_sym` text.~~ Copy writes `.kicad_sym` text; Paste reads KiCad's.
+  - ~~No increment of a pin's number or name.~~ Increment (Primary / Secondary, Shift+Alt / Ctrl+Alt wheel) of a pin's number or name and of a text; Repeat Pin's pitch and label increment in Preferences.
   - S. PARITY-symedit; PARITY-sch §13.
 - **Y6 [BD] Pin Table.** No summary, no Count or text-size columns, and raw type tokens (E7-S15). S.
 - **Y7 [BD] Small differences.**

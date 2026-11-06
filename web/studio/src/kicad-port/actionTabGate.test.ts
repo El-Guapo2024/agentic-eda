@@ -156,6 +156,14 @@ test("Repeat Last Item (Insert) is live on the Schematic and the Symbol tabs (r2
   assert.equal(isActionEnabledForTab("eeschema.InteractiveEdit.repeatDrawItem", "pcb", true), false);
 });
 
+test("Mirror, Draw Bezier Curve and Increment are the Symbol tab's too (UI-LEFT Y2, Y5): SYMBOL_EDITOR_EDIT_TOOL and SYMBOL_EDITOR_DRAWING_TOOLS run them", () => {
+  for (const name of ["eeschema.InteractiveEdit.mirrorH", "eeschema.InteractiveEdit.mirrorV", "eeschema.InteractiveDrawing.drawBezier", "eeschema.Interactive.incrementPrimary", "eeschema.Interactive.decrementSecondary"]) {
+    assert.equal(isActionEnabledForTab(name, "symbol", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "schematic", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "pcb", true), false, name);
+  }
+});
+
 test("Mirror, the line modes, the display modes and the Appearance manager run on the Footprint tab too (UI-LEFT F2), not on the schematic", () => {
   for (const name of ["pcbnew.InteractiveEdit.mirrorHoriontally", "pcbnew.InteractiveEdit.mirrorVertically", "pcbnew.EditorControl.lineMode45", "pcbnew.Control.padDisplayMode", "pcbnew.Control.textOutlines", "pcbnew.Control.showLayersManager"]) {
     assert.equal(isActionEnabledForTab(name, "footprint", true), true, name);

@@ -636,7 +636,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Exclude From Position Files; the field rows; the Sheetfile as its own text (B3-M1). Five board verbs and three schematic ones were added (`pcb_props.rs`, `sch_props.rs`).
 - Left (read-only with the reason as the row's tooltip): fonts; every teardrop row (item 8); a pad's number, pin name and type, post-machining, backdrill,
   fabrication property and pad-to-die; a dimension's italic, bold, mirror and justification (a shape's Line Style and a leader's Text Frame are edited since 2026-11-06, UI-LEFT P5, P13); a symbol's pin display (one library symbol per lib_id), a sheet's border, background and attributes; a text box's margins, fill, colour and hyperlink; an image's transform offset; a footprint's paste margins when it was placed from the intent.
-  The grid is not in the Footprint and Symbol editors; a footprint's position lands on the placement grid like every pose.
+  The grid is not in the Footprint Editor; a footprint's position lands on the placement grid like every pose.
+- **The Symbol Editor's pane (2026-11-05, `task-u1-symedit`, UI-LEFT Y3; PARITY-symedit "Rotate, Mirror, beziers, the Properties pane and the carried items"):** below the Libraries tree, the rows
+  KiCad registers for a library pin, shape, text, text box and field, and with nothing selected the symbol's own (`LIB_SYMBOL_DESC`), as a library editor lists them (Unit, Body Style and Private
+  shown, Locked not: `GridFrame.libraryEditor`); `symPropertiesKicad.test.ts` replays the C++ registrations. Edits are the Symbol Editor's verbs in one batch. Left: a library text's font, colour and
+  hyperlink, a shape's line style, line colour, corner radius and fill colour, an arc's ends (read-only, with the reason).
 - Port from: `common/widgets/properties_panel.cpp`, `common/properties/property_mgr.cpp`, `pcbnew/widgets/pcb_properties_panel.cpp`, `eeschema/widgets/sch_properties_panel.cpp`.
 
 ### 11. The DRC and ERC dialogs
@@ -874,7 +878,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   - E7-S22: Save As with Rename All opens the renamed copy; KiCad loads the typed name (probably a KiCad bug): kept as a deliberate difference. **Left (low)**
   - E7-S23: "No symbol selected." keeps a full stop; Cut / Delete / Rename on a symbol that cannot be edited do not say KiCad's words (or return silently for Rename). **Left (low)**
 - Missing: Explode and Recombine of a custom pad (item 31); a placed symbol gets a library text box as its border and fill only, not its text (the engine's `SymbolGraphic` has no text box), keeps the alternate pin function a file picked (round 5, PARITY-sch section 48) but the studio cannot choose one or draw its name; the border's colour and
-  a custom fill colour (the style is kept since the review, not edited) and Private to Symbol Editor of a library shape and text box; a plain text of a symbol has no Properties dialog (the Footprint Editor's texts, fields and graphics have theirs since UI-LEFT F1, below); a footprint text has no vertical justification, italic or keep-upright; the fields table has no simulation fields; no named body styles;
+  a custom fill colour (the style is kept since the review, not edited) and Private to Symbol Editor of a library shape and text box; a symbol's plain text has had a Properties dialog since 2026-11-05 (UI-LEFT Y4, below), and the Footprint Editor's texts, fields and graphics have theirs since UI-LEFT F1 (below); a footprint text has no vertical justification, italic or keep-upright; the fields table has no simulation fields; no named body styles;
   Symbol Properties has no unit display names grid and no Pin Connections tab (both kept in the file, and the unit names in the schematic's cache since round 6); a pad's fabrication property and margins are kept, not edited, in the library Pad Properties; the board's Footprint Properties still has two mandatory rows. (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
 - Round 7 (2026-10-28, `task-r7-fp-editor`; `PARITY-fpedit.md` section 18): Pad Properties' pad type is KiCad's five (Edge Connector and SMD Aperture too) and a choice resets the layers, the hole and the number
   (`PadTypeSelected`); OK runs `padValuesOK` (warnings shown, a plated hole that reaches the pad edge applied) and makes the pad Add Pad's master with its number the last; the Pad Table's Type is `PAD::SetAttribute`;
@@ -887,6 +891,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Items / Text Items, the Appearance manager, the five dimension tools, Draw Rule Area, Draw Text Box, Place Point, Draw Table, Add Barcode, Place Reference Image; Rotate turns any item about `EDIT_TOOL`'s pivot; Set Anchor moves the new items; Save As keeps
   what is kept by item id. Every edit is one `fp_item` verb, one undo step. Left: the Properties pane (Y3); Duplicate, Create Array and the clipboard of fields and the new kinds; a footprint's barcode and image drawn as boxes; the items kept as text (a locked
   item, a filled zone) are not drawn; the Appearance manager's presets, viewports and selection filter.
+- **UI-LEFT Y1-Y5 (2026-11-05, `task-u1-symedit`; PARITY-symedit "Rotate, Mirror, beziers, the Properties pane and the carried items"):** Rotate and Mirror turn every selected item of a symbol
+  -- pins, shapes, beziers, texts, text boxes, fields -- about KiCad's pivot (`SYMBOL_EDITOR_EDIT_TOOL::Rotate` / `Mirror` and each class's transform); beziers are graphics
+  (`LibrarySymbolGraphic::Bezier`: read, written, drawn, the Draw Bezier Curve tool, a point editor for the curve); a plain text has Text Properties and keeps bold, italic and its justification (an
+  older design's kept text style is moved into the text: `absorb_kept_text_styles`); the Properties pane (item 10); the Pin tool is `TwoClickPlace` (the dialog, then the pin follows the cursor);
+  Duplicate and Paste carry their items until a click; Copy writes `.kicad_sym` text and Paste reads KiCad's; Increment of a pin's number or name and of a text, and Repeat Pin's pitch and label
+  increment in Preferences. Left: the point editor of the other shapes, Increment of the pin being placed, the clipboard's images, Import Graphics' curves (still segments).
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
 
 ### 20. Schematic view controls

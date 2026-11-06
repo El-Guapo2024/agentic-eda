@@ -4,6 +4,7 @@
 import type { LibraryFootprint, LibrarySymbol } from "./types";
 import { ApiError, postCmd } from "./client";
 import { withDefaults } from "../kicad-port/libraryDefaults";
+import { ensureInProject, UNKNOWN_SYMBOL } from "../kicad-port/libraryEnsure";
 
 export interface ParsedSymbols {
   symbols: LibrarySymbol[];
@@ -27,6 +28,12 @@ async function postText<T extends { error?: string }>(url: string, text: string)
 export async function parseSymbolText(text: string): Promise<ParsedSymbols> {
   const r = await postText<ParsedSymbols & { error?: string }>("/api/symbol_library/parse", text);
   return { symbols: (r.symbols ?? []).map(withDefaults), warnings: r.warnings ?? [] };
+}
+
+/** `SYMBOL_EDITOR_EDIT_TOOL::Copy`: the symbol `libId` with only the pins and graphics `ids`, as `.kicad_sym` text (`POST /api/symbol/clipboard/copy`). */
+export async function symbolItemsText(libId: string, ids: readonly string[]): Promise<string> {
+  const r = await postText<{ text?: string; error?: string }>("/api/symbol/clipboard/copy", JSON.stringify({ lib_id: libId, ids }));
+  return r.text ?? "";
 }
 
 /** `.kicad_mod` text -> the editable footprint (the IR omits empty lists, so they are filled in here like `fetchFootprint` does). */
@@ -175,16 +182,27 @@ export async function ensureFootprintInProject(name: string): Promise<string | n
   return problem;
 }
 
-/** The symbol sibling of [`ensureFootprintInProject`]: an installed `Lib:Name` is put into the project library before the editor opens it. */
-export async function ensureSymbolInProject(libId: string): Promise<void> {
-  if (!libId.includes(":")) return;
-  try {
-    const { symbol, inProject } = await fetchAnySymbol(libId);
-    if (inProject) return;
-    await postCmd({ op: "put_library_symbol", symbol, overwrite: true }, false);
-  } catch {
-    /* nothing installed or known under this id: the open verb starts a blank symbol */
-  }
+/**
+ * The symbol sibling of [`ensureFootprintInProject`]: an installed `Lib:Name` is put into the project library before the editor opens it. Null when it is there now
+ * or nothing knows the id (the open verb then starts a blank symbol); else why it could not be copied in -- the caller opens nothing and says it
+ * (kicad-port/libraryEnsure.ts: a read error used to be taken for "unknown" and the put's refusal ignored, so a library's symbol could open blank). A library
+ * symbol whose file cannot be read is such an error (`library_api::symbol_any`: `ops_bad_symbol`). The open verb copies a library's symbol in itself too
+ * when the design has none by the time it lands (`crates/cli/src/library_place.rs::with_opened_symbol`): this read, the names read and the open are
+ * requests of their own, and a command between them (another client deleting the design's copy) used to leave the open to start a BLANK symbol under the
+ * library's id.
+ */
+export async function ensureSymbolInProject(libId: string): Promise<string | null> {
+  return ensureInProject(
+    libId,
+    {
+      fetchAny: async (id) => {
+        const { symbol, inProject } = await fetchAnySymbol(id);
+        return { item: symbol, inProject };
+      },
+      put: (symbol) => postCmd({ op: "put_library_symbol", symbol, overwrite: true }, false),
+    },
+    UNKNOWN_SYMBOL
+  );
 }
 
 /** `GET /api/symbol/export?lib_id=` text (the derived `.kicad_sym`), for Copy and Export. */

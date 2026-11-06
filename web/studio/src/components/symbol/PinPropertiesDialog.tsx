@@ -7,19 +7,18 @@
 // preview pane (the main canvas already shows the pin as drawn, one
 // dialog-width away).
 //
-// It is also where the Pin tool's click lands: `SYMBOL_EDITOR_PIN_TOOL::CreatePin` makes the pin and opens this dialog before adding it,
-// so Cancel drops the pin and OK adds it (after `PlacePin`'s Synchronized Pins Mode confirmation). An existing pin has an id and is edited;
-// the pending one (`state.pendingPin`) is added by OK and has no Delete Pin.
+// It is also where the Pin tool's click lands: `SYMBOL_EDITOR_PIN_TOOL::CreatePin` makes the pin and opens this dialog first, so Cancel drops
+// the pin; OK hands it to the canvas, where it follows the cursor until the click that places it (`TwoClickPlace`, then `PlacePin` with its
+// Synchronized Pins Mode confirmation). An existing pin has an id and is edited; the pending one (`state.pendingPin`) has no Delete Pin.
 import { useEffect, useState } from "react";
 import type { LibrarySymbolPin, PinElectricalType, PinShape } from "../../api/types";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { useStudioState } from "../../state/store";
 import { nmFrom, nmTo } from "../../state/units";
 import { angleDegToOrientation, orientationToAngleDeg, PIN_ORIENTATIONS, type PinOrientation } from "../../kicad-port/pinOrientation";
-import { pinOccupiedMessage, pinPlacementOccupant } from "../../kicad-port/pinPlacement";
 import { alternatesError, PIN_SHAPE_OPTIONS as SHAPE_OPTIONS, PIN_TYPE_OPTIONS as ELECTRICAL_TYPE_OPTIONS } from "../../kicad-port/symPinAlternates";
 import { pinTemplateOf } from "../../kicad-port/symPinTemplate";
-import { changePinLength, synchronizePins } from "../../kicad-port/symPinSync";
+import { changePinLength } from "../../kicad-port/symPinSync";
 import { commonBodyStylesBox, commonUnitsBox, pinOffGridMessage, pinUnitsOnOk, syncPinsMessage } from "../../kicad-port/symPinDialog";
 import { askConfirm } from "../library/libraryDialogs";
 import { PinAlternatesGrid } from "./PinAlternatesGrid";
@@ -95,16 +94,10 @@ export function PinPropertiesDialog() {
       if (await api.editPin(id, edited)) close();
       return;
     }
-    // A pin the tool has just dropped: `PlacePin` asks first when it lands on another pin (Synchronized Pins Mode), and only then is it added.
-    const syncMode = !!sym && synchronizePins(state.syncPins, sym.unit_count, !!sym.units_locked);
-    const occupant = pinPlacementOccupant(edited, sym?.pins ?? [], syncMode);
-    if (occupant && !(await askConfirm({ title: "Confirmation", message: pinOccupiedMessage(occupant.unit), okLabel: "Place Pin Anyway" }))) {
-      dispatch({ type: "SET_PENDING_PIN", pin: null }); // PlacePin deletes the new pin and places nothing
-      return;
-    }
-    if (!(await api.addPin(edited))) return; // the verb's refusal is the editor's toast; the dialog stays open on the pin
-    dispatch({ type: "PIN_PLACED", pin: edited });
+    // A pin the tool has just made (`CreatePin`): `TwoClickPlace` then carries it under the cursor, and the next click places it (`PlacePin`, which asks first when it
+    // lands on another pin in Synchronized Pins Mode -- the store's `placeCarry`).
     close();
+    api.carryPin(edited);
   };
 
   return (

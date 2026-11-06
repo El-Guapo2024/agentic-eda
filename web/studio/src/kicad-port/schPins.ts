@@ -158,6 +158,13 @@ export function pinBoxAt(tip: [number, number], root: [number, number], name: st
   return box!;
 }
 
+/** `PIN_LAYOUT_CACHE::GetPinNameBBox` and `GetPinNumberBBox`: the boxes of the name and the number as [`pinBoxAt`] places them, null for a text that is not drawn. */
+export function pinTextBoxes(tip: [number, number], root: [number, number], name: string | null, number: string, pinTexts: PinItem["texts"], measure: Measure, nameSizeNm = PIN_TEXT_SIZE_NM, numberSizeNm = PIN_TEXT_SIZE_NM): { name: Box | null; number: Box | null } {
+  const n = pinTextPlacements({ name, number: "" }, tip, root, pinTexts, nameSizeNm).name;
+  const m = pinTextPlacements({ name, number }, tip, root, pinTexts, numberSizeNm).number;
+  return { name: n ? textBox(n, nameSizeNm, measure) : null, number: m ? textBox(m, numberSizeNm, measure) : null };
+}
+
 /** `Schematic()->Settings().m_PinSymbolSize / 4`: the least accuracy a pin hit test is given, micrometres (25 mils / 4). */
 export const PIN_HIT_FLOOR_NM = 158_750;
 

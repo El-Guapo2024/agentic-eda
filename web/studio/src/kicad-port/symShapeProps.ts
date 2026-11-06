@@ -22,6 +22,8 @@ export function shapeTitle(g: Pick<Shape, "kind">): string {
       return "Arc Properties";
     case "polyline":
       return "Polygon Properties";
+    case "bezier":
+      return "Curve Properties";
   }
 }
 
