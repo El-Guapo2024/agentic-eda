@@ -1,8 +1,9 @@
 // Board Setup > Design Rules > Custom Rules -- port of pcbnew/dialogs/panel_setup_rules.cpp: the text of the board's `.kicad_dru`, edited
 // as text. Apply stores it (`set_custom_rules`); the derived project hands it to kicad-cli, which judges the board by it, and this app's
-// own DRC reads the same text. "Check rule syntax" is `OnCompile`: the ported rules parser (`eda_drc::dru::parse_reporting`, POST
-// /api/rule_editor/check `{ compile }`, R6-D5) says what KiCad's says -- each error at its line and offset, a link that goes there
-// (`OnErrorLinkClicked`), or "No errors found.".
+// own DRC reads the same text. "Check rule syntax" is `OnCompile`: the text's variables expanded by the board's resolver (`ExpandTextVars`), the ported
+// rules parser (`eda_drc::dru::parse_reporting`, POST /api/rule_editor/check `{ compile }`, R6-D5) says what KiCad's says -- each error at its line and
+// offset, a link that goes there (`OnErrorLinkClicked`), or "No errors found." -- and `checkPlausibility`'s warnings follow (two rules sharing a condition,
+// a rule naming an undefined net class or layer).
 //
 // The editor is KiCad's (components/RuleTextEditor.tsx): line numbers, the brace highlight, Ctrl+/, Tab, the right-click menu
 // (`OnContextMenu`) and the completion of `onScintillaCharAdded` (kicad-port/ruleCompletion.ts `rulesCharAdded`) over the property names and
@@ -11,8 +12,7 @@
 // (`OnSyntaxHelp`) opens KiCad's help -- the markdown texts pcbnew compiles in (src/kicad/rules_help.json) as its converter renders them
 // (kicad-port/rulesSyntaxHelp.ts) -- in a modeless "Syntax Help" window that the link brings back.
 //
-// Not ported: the extra warnings KiCad's own compiler adds (`checkPlausibility`: two rules sharing a condition, a rule naming an undefined net
-// class or layer); Shift+Enter (`onAcceptFn`: the dialog's OK -- the studio's Board Setup has no OK, each page applies on its own).
+// Not ported: Shift+Enter (`onAcceptFn`: the dialog's OK -- the studio's Board Setup has no OK, each page applies on its own).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { postCompileRules } from "../../api/client";
 import { useStudioState } from "../../state/store";
