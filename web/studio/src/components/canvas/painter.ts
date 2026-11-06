@@ -13,6 +13,7 @@ import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
 import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
 import { snapPoint } from "./gridHelper";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { keptReadableInFlippedView } from "../../kicad-port/flipView";
 import { rulerDrawing } from "../../kicad-port/rulerItem";
 import { paintRuler } from "./rulerPaint";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_DISPLAY, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO, type GridDisplay } from "../../kicad-port/grid";
@@ -66,7 +67,8 @@ import { copperColor, drawAnchors, drawBoardArea, drawConflicts, drawLockedShado
  * too, so this already matches: only genuinely connected items dim).
  */
 function withNetHighlight(color: string, net: string | null | undefined, highlight: string | readonly string[] | null): string {
-  if (!highlight || !net) return color;
+  // every caller paints a connected item (`conItem`), and one with no net is on net 0 (`isHighlighted`'s `NO_NET`): dimmed unless that is highlighted (r7 C7-5)
+  if (!highlight) return color;
   return rgbToHex(netHighlightColor(hexToRgb(color), isHighlighted(net, highlight)));
 }
 
@@ -75,12 +77,14 @@ function withNetHighlight(color: string, net: string | null | undefined, highlig
  * then the net highlight on top (`PCB_RENDER_SETTINGS::GetColor`).
  */
 function copperPaint(base: string, net: string | null | undefined, opts: PaintOptions): string {
-  const highlighted = opts.netHighlight && net ? isHighlighted(net, opts.netHighlight) : null;
+  const highlighted = opts.netHighlight ? isHighlighted(net, opts.netHighlight) : null;
   const own = copperColor(base, net, opts.appearance, highlighted);
   return own !== base ? own : withNetHighlight(base, net, opts.netHighlight);
 }
 
 export interface PaintOptions {
+  /** Flip Board View is on (`m_FlipBoardView`): a text that is not side specific is drawn to read as it did (kicad-port/flipView.ts). */
+  viewFlipped?: boolean;
   /**
    * Import Graphics' placement preview (`PlaceImportedGraphics`' `m_view->Add( &preview )`, state/importPreview.ts): the shapes and texts the import would put on the board, as
    * `drawings` has them, moved by (dx, dy) to the snapped cursor. Null when no placement runs.
@@ -287,7 +291,7 @@ export function padTextLayout(pad: { w: number; h: number }, withNet: boolean): 
 }
 
 /** The pad's number, centred (above the middle when a net name shares the pad), bold, as `PCB_PAINTER::draw( const PAD* )` writes it. */
-function drawPadNumber(ctx: CanvasRenderingContext2D, pad: Pad, withNet: boolean, color: string) {
+function drawPadNumber(ctx: CanvasRenderingContext2D, pad: Pad, withNet: boolean, color: string, viewFlipped = false) {
   const layout = padTextLayout(pad, withNet);
   // "We use a size for at least 3 chars ... a smaller text size to handle interline, pen size"; the stroked font is 0.9 as wide.
   let tsize = Math.min((1.5 * layout.width) / Math.max([...pad.num].length, 3), layout.size);
@@ -296,7 +300,8 @@ function drawPadNumber(ctx: CanvasRenderingContext2D, pad: Pad, withNet: boolean
   ctx.translate(pad.x, pad.y);
   if (layout.rotated) ctx.rotate(-Math.PI / 2);
   // (x, y) is the baseline: the cap height is about 0.7 of the size, so half of it puts the digits' middle where KiCad centres them.
-  drawStrokeText(ctx, pad.num, 0, -layout.numberOffset + tsize * 0.35, { sizeNm: tsize, justify: "center", thicknessNm: (tsize * 0.9) / 6, color });
+  // `GAL::BitmapText`: "Prevent text flipping when view is flipped" (`attrs.m_Mirrored = m_globalFlipX`)
+  drawStrokeText(ctx, pad.num, 0, -layout.numberOffset + tsize * 0.35, { sizeNm: tsize, justify: "center", thicknessNm: (tsize * 0.9) / 6, color, keepReadable: viewFlipped, readableAnchorKept: true });
   ctx.restore();
 }
 
@@ -415,7 +420,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
       // With the number on too, the two share the pad: the net name drops below the middle (`Y_offset_netname`).
       ctx.fillText(pad.net, pad.x, numbered ? pad.y + padTextLayout(pad, true).netOffset : pad.y, pad.w * 0.9);
     }
-    if (numbered) drawPadNumber(ctx, pad, !!pad.net && pad.w * view.scale > 22 && pad.h * view.scale > 10, layerColor("pad_netname"));
+    if (numbered) drawPadNumber(ctx, pad, !!pad.net && pad.w * view.scale > 22 && pad.h * view.scale > 10, layerColor("pad_netname"), opts.viewFlipped);
     ctx.restore();
   }
 
@@ -506,7 +511,7 @@ export function drawFields(ctx: CanvasRenderingContext2D, view: ViewTransform, i
     const x = f.x - down * Math.sin(angleRad);
     const y = f.y + down * Math.cos(angleRad);
     withAlpha(ctx, layerAlpha(opts, key) * (f.visible ? 1 : 0.5), () => {
-      drawStrokeText(ctx, t.content, x, y, { sizeNm, thicknessNm: opts.sketchText ? hairlineNm(view, 1) : Math.max(f.thickness, sizeNm / 20), justify: t.justify, angleRad, mirror: f.mirror, italic: f.italic, color });
+      drawStrokeText(ctx, t.content, x, y, { sizeNm, thicknessNm: opts.sketchText ? hairlineNm(view, 1) : Math.max(f.thickness, sizeNm / 20), justify: t.justify, angleRad, mirror: f.mirror, italic: f.italic, color, keepReadable: keptReadableInFlippedView(opts.viewFlipped, f.layer) });
     });
   }
 }
@@ -1103,6 +1108,7 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
       angleRad,
       mirror: t.mirror,
       color,
+      keepReadable: keptReadableInFlippedView(opts.viewFlipped, t.layer),
     });
   }
 }
@@ -1151,6 +1157,9 @@ export function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransfor
         justify: "center",
         angleRad,
         color,
+        // `if( m_gal->IsFlippedX() && !aDimension->IsSideSpecific() ) attrs.m_Mirrored = !attrs.m_Mirrored;`, the text where it is
+        keepReadable: keptReadableInFlippedView(opts.viewFlipped, d.layer),
+        readableAnchorKept: true,
       });
     }
   }

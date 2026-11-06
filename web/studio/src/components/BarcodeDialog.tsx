@@ -151,7 +151,8 @@ export function BarcodeForm({ host }: { host: BarcodeHost }) {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<BarcodeReply | null>(null);
   const ref = useRef<HTMLInputElement>(null);
-  const latest = useRef<BarcodeReply | null>(null);
+  // the last plot and the form it was made of (`previewKey`): OK validates the text as it is now, never a plot of what it was before the last keystroke
+  const latest = useRef<{ key: string; reply: BarcodeReply | null }>({ key: "", reply: null });
 
   // the form starts from the barcode the dialog was opened on, and keeps what is typed through the state's refreshes
   useEffect(() => {
@@ -168,8 +169,8 @@ export function BarcodeForm({ host }: { host: BarcodeHost }) {
     if (!form) return;
     const b = barcodeOf(form, null);
     if (typeof b === "string" || form.text.length === 0) {
-      latest.current = form.text.length === 0 ? { status: "ready", paths: [] } : null;
-      setPreview(latest.current);
+      latest.current = { key: previewKey, reply: form.text.length === 0 ? { status: "ready", paths: [] } : null };
+      setPreview(latest.current.reply);
       return;
     }
     let live = true;
@@ -178,7 +179,7 @@ export function BarcodeForm({ host }: { host: BarcodeHost }) {
         const reply = await previewBarcode(b);
         if (!live) return;
         if (reply.status !== "pending") {
-          latest.current = reply;
+          latest.current = { key: previewKey, reply };
           setPreview(reply);
           return;
         }
@@ -205,7 +206,9 @@ export function BarcodeForm({ host }: { host: BarcodeHost }) {
     if (typeof built === "string") return setError(built);
     // `TransferDataFromWindow`: a text that made no symbol is refused with the reason ("Barcode Error"); an empty text has none to make.
     if (form.text.length > 0) {
-      let reply = latest.current;
+      // `TransferDataFromWindow` builds the barcode of the values on screen: a plot of the form before the last change (OK pressed within the preview's
+      // pause after typing) is not that, and the barcode is asked for again (UI-LEFT P29)
+      let reply = latest.current.key === previewKey ? latest.current.reply : null;
       for (let attempt = 0; attempt < 100 && (!reply || reply.status === "pending"); attempt++) {
         reply = await previewBarcode(built);
         if (reply.status === "pending") await new Promise((r) => setTimeout(r, 250));

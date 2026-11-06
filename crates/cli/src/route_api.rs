@@ -377,7 +377,7 @@ pub fn via(cell: &RouteCell, body: &[u8]) -> Value {
 pub(crate) fn commit_cmd(commit: eda_pns::router::RouteCommit, group: Option<String>) -> eda_ops::Cmd {
     let moved: Vec<String> = commit.moved_footprints.iter().chain(&commit.moved_tracks).cloned().collect();
     let (dx, dy) = commit.move_by;
-    let route = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds, track_sources: commit.track_sources, group };
+    let route = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds, track_sources: commit.track_sources, group, keep_track_ids: vec![] };
     if moved.is_empty() {
         return route;
     }

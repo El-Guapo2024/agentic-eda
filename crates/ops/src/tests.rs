@@ -490,10 +490,14 @@ fn track_width_and_via_presets_round_trip_and_reject_bad_entries() {
     b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: mm(0.6), drill: mm(0.3) }, ViaPreset { diameter: mm(0.8), drill: mm(0.4) }] }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().via_presets.len(), 2);
 
-    let e = b.apply(&Cmd::SetTrackWidthPresets { widths: vec![mm(0.2), Nm::ZERO] }).unwrap_err();
+    let e = b.apply(&Cmd::SetTrackWidthPresets { widths: vec![mm(0.2), Nm::new(-1)] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_track");
     // A refused replace must leave the previous list in place.
     assert_eq!(b.design().routing.as_ref().unwrap().track_width_presets, vec![mm(0.15), mm(0.25), mm(0.4)]);
+    // `PANEL_SETUP_TRACKS_AND_VIAS::Validate` checks no width: a 0 (the row Add makes) is a width of the list (r5 R5-10)
+    b.apply(&Cmd::SetTrackWidthPresets { widths: vec![Nm::ZERO, mm(0.2)] }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().track_width_presets, vec![Nm::ZERO, mm(0.2)]);
+    b.apply(&Cmd::SetTrackWidthPresets { widths: vec![mm(0.15), mm(0.25), mm(0.4)] }).unwrap();
 
     let e = b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: mm(0.3), drill: mm(0.3) }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_via");
@@ -908,15 +912,15 @@ fn set_zone_outline_replaces_the_outline_only() {
     b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.priority = 5)).unwrap();
 
     let new_outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO }, Point { x: mm(20.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }];
-    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: new_outline.clone(), holes: None }).unwrap();
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: new_outline.clone(), holes: None, keep_fill: false }).unwrap();
     let z = &b.design().routing.as_ref().unwrap().zones[0];
     assert_eq!(z.id, id, "id is stable across an outline edit");
     assert_eq!(z.outline, new_outline);
     assert_eq!(z.priority, 5, "SetZoneOutline must not touch any other setting");
 
-    let e = b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1), y: Nm::new(1) }], holes: None }).unwrap_err();
+    let e = b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1), y: Nm::new(1) }], holes: None, keep_fill: false }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
-    assert_eq!(b.apply(&Cmd::SetZoneOutline { id: "zone_nope".into(), outline: new_outline, holes: None }).unwrap_err()[0].check, "ops_unknown_zone");
+    assert_eq!(b.apply(&Cmd::SetZoneOutline { id: "zone_nope".into(), outline: new_outline, holes: None, keep_fill: false }).unwrap_err()[0].check, "ops_unknown_zone");
 }
 
 /// A mirror sends the zone's holes with its outline (`ZONE::Mirror`: the whole polygon set); a corner edit sends none and keeps them.
@@ -928,12 +932,12 @@ fn set_zone_outline_with_holes_replaces_them_and_without_keeps_them() {
     b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: sq(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)) }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
     let hole = sq(mm(2.0), mm(2.0), mm(4.0), mm(4.0));
-    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)), holes: Some(vec![hole.clone()]) }).unwrap();
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)), holes: Some(vec![hole.clone()]), keep_fill: false }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().zones[0].holes, vec![hole.clone()]);
-    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(Nm::ZERO, Nm::ZERO, mm(12.0), mm(10.0)), holes: None }).unwrap();
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(Nm::ZERO, Nm::ZERO, mm(12.0), mm(10.0)), holes: None, keep_fill: false }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().zones[0].holes, vec![hole], "a corner edit leaves the holes");
     let mirrored = sq(mm(-4.0), mm(2.0), mm(-2.0), mm(4.0));
-    b.apply(&Cmd::SetZoneOutline { id, outline: sq(mm(-12.0), Nm::ZERO, Nm::ZERO, mm(10.0)), holes: Some(vec![mirrored.clone()]) }).unwrap();
+    b.apply(&Cmd::SetZoneOutline { id, outline: sq(mm(-12.0), Nm::ZERO, Nm::ZERO, mm(10.0)), holes: Some(vec![mirrored.clone()]), keep_fill: false }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().zones[0].holes, vec![mirrored]);
 }
 
@@ -1679,6 +1683,7 @@ fn commit_route_carries_a_replaced_tracks_mask_and_group() {
         via_kinds: vec![],
         track_sources: vec![(0, a.clone()), (1, loose.clone())],
         group: Some(g_c.clone()),
+        keep_track_ids: vec![],
     })
     .unwrap();
     let d = b.design();
@@ -1716,6 +1721,7 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
         via_kinds: vec![],
         track_sources: vec![],
         group: None,
+        keep_track_ids: vec![],
     })
     .unwrap();
 
@@ -1731,7 +1737,7 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
 fn commit_route_tolerates_an_already_gone_id() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None }).unwrap();
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None, keep_track_ids: vec![] }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 1);
 }
 
@@ -1739,7 +1745,7 @@ fn commit_route_tolerates_an_already_gone_id() {
 fn commit_route_rejects_an_unknown_net() {
     let m = net_model();
     let mut b = board(&m);
-    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None }).unwrap_err();
+    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None, keep_track_ids: vec![] }).unwrap_err();
     assert!(!e.is_empty());
     assert!(b.design().routing.is_none(), "a refused commit must not partially apply");
 }
@@ -3377,7 +3383,7 @@ fn commit_route_gives_its_vias_their_type_and_drops_the_extras_of_removed_vias()
     assert_eq!(extras.len(), 1);
     assert_eq!((extras[0].id.as_str(), extras[0].kind), (micro.as_str(), eda_model::via_extra::ViaKind::Micro));
     assert!(b.design().drawings.as_ref().unwrap().via_extra(&through).is_none());
-    b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![micro], tracks: vec![], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None }).unwrap();
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![micro], tracks: vec![], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None, keep_track_ids: vec![] }).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().via_extras.is_empty(), "the removed via's type went with it");
 }
 

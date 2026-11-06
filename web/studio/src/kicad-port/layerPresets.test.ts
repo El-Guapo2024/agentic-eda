@@ -205,10 +205,12 @@ test("the four copper / non-copper entries; hiding the active layer's group move
   const v = view(COPPER4, { activeLayer: "F.Cu" });
   const noCopper = layerGroupOp(v, "hide_copper");
   assert.deepEqual([...noCopper.visibleLayers].filter((l) => l.endsWith(".Cu")), []);
+  // `presetAllCopper` is `AllCuMask().set( Edge_Cuts )`: the board outline goes with the copper (UI-LEFT P29)
+  assert.equal(noCopper.visibleLayers.has("Edge.Cuts"), false, "Edge.Cuts is hidden with the copper");
   assert.equal(noCopper.activeLayer, "F.Mask", "F.Mask is id 1, the lowest of what is left");
   assert.equal(layerGroupOp(noCopper, "show_copper").visibleLayers.size, panelLayers(COPPER4).length);
   const noTech = layerGroupOp(v, "hide_non_copper");
-  assert.deepEqual([...noTech.visibleLayers].sort(), [...COPPER4].sort());
+  assert.deepEqual([...noTech.visibleLayers].sort(), [...COPPER4, "Edge.Cuts"].sort(), "Edge.Cuts stays with the copper");
   assert.equal(noTech.activeLayer, "F.Cu", "the active layer is still on");
   assert.equal(layerGroupOp(noTech, "show_non_copper").visibleLayers.size, panelLayers(COPPER4).length);
   // Hiding every layer leaves the active layer as it is (nothing to move to).

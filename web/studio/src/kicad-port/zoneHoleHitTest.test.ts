@@ -66,5 +66,26 @@ test("the net under the cursor: not the zone's in its hole, the zone's on the ho
   const b = board([zone]);
   assert.equal(findNetAtCursor(b, 10_000_000, 10_000_000, 150_000), null);
   assert.equal(findNetAtCursor(b, 10_000_000, 5_100_000, 150_000), "GND");
-  assert.equal(findNetAtCursor(b, 1_000_000, 1_000_000, 150_000), "GND");
+  // inside the outline: only the fill is the zone's (`HitTestFilledArea` with `SetIgnoreZoneFills( false )`), an unfilled outline's inside is not (r7 C7-11)
+  assert.equal(findNetAtCursor(b, 1_000_000, 1_000_000, 150_000), null);
+  const fill = { id: "Z", net: "GND", layer: "F.Cu", filled: true, area_nm2: 0, fragments: [[[0, 0], [20_000_000, 0], [20_000_000, 4_000_000], [0, 4_000_000]] as [number, number][]] };
+  assert.equal(findNetAtCursor(b, 1_000_000, 1_000_000, 150_000, { fills: [fill] }), "GND");
+  assert.equal(findNetAtCursor(b, 1_000_000, 1_000_000, 150_000, { fills: [fill], layerVisible: { "F.Cu": false } }), null, "a hidden layer's fill is not hit");
+});
+
+test("the net under the cursor is the collector's: the shape of a pad, five pixels of slop, no-net items skipped, the active layer first", () => {
+  const pads = [{ num: "1", net: "A", x: 0, y: 0, w: 3_000_000, h: 3_000_000, round: false, th: false }];
+  const b = { ...board([]), parts: [{ ref: "U1", placed: true, side: "top", pads }] } as unknown as Parameters<typeof findNetAtCursor>[0];
+  // 1.4 mm from the centre of a 3 mm pad: on it (the old pick took the nearest pad centre within 10 px)
+  assert.equal(findNetAtCursor(b, 1_400_000, 1_400_000, 5_000), "A");
+  assert.equal(findNetAtCursor(b, 1_510_000, 0, 5_000), null, "past the slop");
+  const tracks = [
+    { id: "t1", net: "", layer: "F.Cu", width: 200_000, pts: [[-5_000_000, 5_000_000], [5_000_000, 5_000_000]] },
+    { id: "t2", net: "B", layer: "B.Cu", width: 200_000, pts: [[-5_000_000, 5_000_000], [5_000_000, 5_000_000]] },
+    { id: "t3", net: "C", layer: "F.Cu", width: 200_000, pts: [[-5_000_000, 5_000_000], [5_000_000, 5_000_000]] },
+  ];
+  const withTracks = { ...b, routing: { tracks, vias: [], zones: [] } } as unknown as Parameters<typeof findNetAtCursor>[0];
+  assert.equal(findNetAtCursor(withTracks, 0, 5_000_000, 5_000, { activeLayer: "B.Cu" }), "B", "the active layer's track first");
+  assert.equal(findNetAtCursor(withTracks, 0, 5_000_000, 5_000, { activeLayer: "F.Cu" }), "C", "the no-net track is skipped (IgnoreNoNets)");
+  assert.equal(findNetAtCursor(withTracks, 0, 5_000_000, 5_000, { activeLayer: "F.Cu", highContrast: true, layerVisible: {} }), "C");
 });

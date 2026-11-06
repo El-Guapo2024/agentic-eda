@@ -197,6 +197,10 @@ pub fn merge_zones(design: &mut Design, ids: &[String]) -> Result<String, Vec<Ch
         at += 1;
         keep_it
     });
+    // the zones left out were logged on the way (`wxLogMessage`), and KiCad shows those lines after the merge too
+    for line in logged {
+        crate::notice::note(line);
+    }
     Ok(keep)
 }
 
@@ -432,8 +436,13 @@ pub struct RepairReport {
 }
 
 /// `BOARD_EDITOR_CONTROL::RepairBoard`, applied to `design`: replaces duplicate item ids (`RepairDuplicateItemUuids`,
-/// the first of each id keeps it) and adds back, to the board's net list, every net an item uses that the list lacks.
+/// the first of each id keeps it) and adds back, to the board's net list, every net a pad, a track or a via uses that the list lacks.
 /// `nets` is the netlist the board is judged against (the intent's, or the schematic-derived one that replaced it).
+///
+/// Differs: `RepairDuplicateItemUuids` lets footprints claim an id first, then pads, then tracks; here every kind of item has ids of its own
+/// prefix (`trk_`, `via_`, ...; a footprint is its reference, a pad `REF.NUMBER`), so two items of different kinds never share one and the order
+/// does not matter. KiCad's repair is no commit (`OnModify()`), so no undo step; here it is one (`Cmd::RepairBoard`), as the history is of whole
+/// designs and an undo of an earlier step would otherwise take the repair away again.
 pub fn repair_board(design: &mut Design, nets: &[Net]) -> RepairReport {
     let mut report = RepairReport::default();
 
@@ -482,14 +491,16 @@ pub fn repair_board(design: &mut Design, nets: &[Net]) -> RepairReport {
         report.details.push(format!("{replaced} duplicate IDs replaced."));
     }
 
-    // Nets an item names but the netlist does not have.
+    // Nets an item names but the netlist does not have: `RepairBoard` asks the footprints' pads, then the tracks and vias (`board()->Tracks()`), and
+    // nothing else -- a zone's net is not re-parented (r7 C7-12). The pads with nets of their own are the board's own parts' (`board_parts`: pasted or
+    // imported footprints); the intent's parts take their nets from the netlist itself.
     let known: BTreeSet<&str> = nets.iter().map(|n| n.name.as_str()).collect();
     let mut orphans: BTreeSet<String> = BTreeSet::new();
-    if let Some(rt) = design.routing.as_ref() {
-        for net in rt.tracks.iter().map(|t| &t.net).chain(rt.vias.iter().map(|v| &v.net)).chain(rt.zones.iter().map(|z| &z.net)) {
-            if !net.is_empty() && !known.contains(net.as_str()) {
-                orphans.insert(net.clone());
-            }
+    let pad_nets = design.drawings.iter().flat_map(|d| d.board_parts.iter()).flat_map(|p| p.pad_nets.iter().map(|(_, n)| n));
+    let track_nets = design.routing.iter().flat_map(|rt| rt.tracks.iter().map(|t| &t.net).chain(rt.vias.iter().map(|v| &v.net)));
+    for net in pad_nets.chain(track_nets) {
+        if !net.is_empty() && !known.contains(net.as_str()) {
+            orphans.insert(net.clone());
         }
     }
     if !orphans.is_empty() {
@@ -815,9 +826,15 @@ mod tests {
             square("b2", "F.Cu", "GND", Nm::new(9_000), Nm::ZERO, Nm::new(6_000), 0),
             square("c", "F.Cu", "GND", Nm::new(14_000), Nm::ZERO, Nm::new(6_000), 0),
         ]);
+        crate::notice::clear();
         merge_zones(&mut d, &["a".into(), "n".into(), "k".into(), "b".into(), "b2".into(), "c".into()]).unwrap();
         let left: Vec<&str> = zones(&d).iter().map(|z| z.id.as_str()).collect();
         assert_eq!(left, ["a", "n", "k", "b"], "a absorbed b2, then c (which only touches b2)");
+        // what `ZoneMerge` logged for the zones it left out, said after the merge too (`wxLogMessage`)
+        assert_eq!(
+            crate::notice::take(),
+            ["Some zone netcodes did not match and were not merged.", "Some zones were rule areas and were not merged.", "Some zone layer sets did not match and were not merged."].map(String::from).to_vec()
+        );
         assert_eq!(bbox(&zones(&d)[0].outline), (Nm::ZERO, Nm::ZERO, Nm::new(20_000), Nm::new(10_000)));
     }
 
@@ -1068,6 +1085,8 @@ mod tests {
         let model = eda_model::ConstraintModel::default();
         let mut d = design(vec![square("a", "F.Cu", "", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 1), square("b", "F.Cu", "", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 4), square("ghost", "F.Cu", "NOPE", Nm::new(90_000), Nm::ZERO, Nm::new(1_000), 0)]);
         d.placement = Some(serde_json::from_value(serde_json::json!({ "outline": [{ "x": 0, "y": 0 }, { "x": 1, "y": 0 }, { "x": 1, "y": 1 }], "footprints": [] })).unwrap());
+        // a track on the zone's ghost net: `RepairBoard` re-parents a track's net, not a zone's (r7 C7-12)
+        d.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "trk_g".into(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::new(200_000), pts: vec![pt(Nm::new(90_000), Nm::ZERO), pt(Nm::new(95_000), Nm::ZERO)], arc_mid_offset: None });
         let mut board = Board::new(d, &model, mm(0.1), mm(0.3));
         let cmd = |j: serde_json::Value| serde_json::from_value::<Cmd>(j).unwrap();
         board.apply(&cmd(serde_json::json!({ "op": "set_zone_priority", "id": "a", "to": "raise" }))).unwrap();
@@ -1078,7 +1097,7 @@ mod tests {
         assert_eq!(board.design().drawings.as_ref().unwrap().aux_origin, Some(pt(Nm::new(3_000), Nm::new(4_000))));
         board.apply(&cmd(serde_json::json!({ "op": "set_aux_origin", "at": null }))).unwrap();
         assert_eq!(board.design().drawings.as_ref().unwrap().aux_origin, None);
-        // The ghost zone's net is not in the (empty) netlist: one problem, then none.
+        // The ghost track's net is not in the (empty) netlist: one problem, then none.
         board.apply(&cmd(serde_json::json!({ "op": "repair_board" }))).unwrap();
         assert_eq!(board.design().nets.as_ref().unwrap()[0].name, "NOPE");
         // The next load reads the board's own netlist back (`board::load` lets `design.nets` replace the intent's).
@@ -1088,10 +1107,14 @@ mod tests {
         assert_eq!(again[0].hint.as_deref(), Some("No board problems found."));
     }
 
+    /// `RepairBoard` re-parents the orphaned nets of pads and of tracks and vias, not of zones (r7 C7-12): a zone on a net the netlist lacks is
+    /// "No board problems found.", a track on it is one problem repaired.
     #[test]
     fn repair_adds_back_a_net_that_items_use_but_the_netlist_lacks() {
         let mut d = design(vec![square("z", "F.Cu", "GHOST", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), square("y", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), square("x", "F.Cu", "", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0)]);
         let nets = vec![Net { name: "GND".into(), pins: vec!["U1.1".into()] }];
+        assert_eq!(repair_board(&mut d.clone(), &nets), RepairReport::default(), "a zone's net is not re-parented");
+        d.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "trk_g".into(), net: "GHOST".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::new(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1_000_000), y: Nm::ZERO }], arc_mid_offset: None });
         let r = repair_board(&mut d, &nets);
         assert_eq!(r, RepairReport { repaired: 1, details: vec!["Orphaned net GHOST re-parented.".into()] });
         let list = d.nets.clone().unwrap();

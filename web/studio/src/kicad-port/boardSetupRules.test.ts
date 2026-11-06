@@ -390,6 +390,9 @@ test("validatePredefinedSizes: KiCad's via messages row by row, then the differe
   assert.equal(validatePredefinedSizes([], [{ width: 0, gap: 0, via_gap: 0 }]), null);
   assert.equal(validatePredefinedSizes([], [{ width: 200, gap: 0, via_gap: 150 }]), "No differential pair gap defined.");
   assert.equal(validatePredefinedSizes([via(0, 300_000)], [{ width: 200, gap: 0, via_gap: 0 }]), "Via diameter is too small.", "the via rows come first, as the panel checks them");
+  // a drill of 0 is the empty cell `AppendViaSize( 0, 0 )` leaves (`if( aDrill > 0 )`): no hole size, once a diameter is there (r5 R5-10)
+  assert.equal(validatePredefinedSizes([via(600_000, 0)], []), "No via hole size defined.");
+  assert.equal(validatePredefinedSizes([via(0, 0)], []), "Via diameter is too small.", "the row Add makes, not edited");
 });
 
 // r5 R5-10: `TransferDataFromWindow` sorts the three lists by increasing value.

@@ -171,7 +171,7 @@ export function textBoundingBoxRotated(f: FieldInfo): { x0: number; y0: number; 
 }
 
 /** How far (um) `(x, y)` is outside a pad -- 0 or less on it: a round pad is a circle or a stadium, any other a box. */
-export function padHitDistance(pad: Pad, x: number, y: number): number {
+export function padHitDistance(pad: Pick<Pad, "x" | "y" | "w" | "h" | "round" | "outline">, x: number, y: number): number {
   // A trapezoid, a chamfered rectangle or a custom pad is the contours of its copper (`PAD::HitTest` asks the effective shape, not the box).
   if (pad.outline?.length) return outlineDistance(pad.outline, x, y);
   const hw = pad.w / 2;

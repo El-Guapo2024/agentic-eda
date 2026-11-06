@@ -97,10 +97,20 @@ export function highlightedNets(primary: string | null, more: readonly string[])
   return primary ? [primary, ...more.filter((n) => n !== primary)] : [];
 }
 
-/** Whether `net` is among the highlighted ones (`netcodes.count( net )`); `highlight` is the first net alone or the whole list. */
+/**
+ * KiCad's net 0, the unconnected items' (`NETINFO_LIST::UNCONNECTED`), as a highlighted net: `highlightNet( .., aUseSelection = true )` inserts
+ * `GetNetCode()` whatever it is, so a selected pad with no net highlights the items with none (r7 C7-5). No net name can be this.
+ */
+export const NO_NET = "\u0000";
+
+/**
+ * Whether `net` is among the highlighted ones (`netcodes.count( net )`); `highlight` is the first net alone or the whole list. An item with no net is
+ * on [`NO_NET`] (`GetNetCode()` 0).
+ */
 export function isHighlighted(net: string | null | undefined, highlight: string | readonly string[] | null): boolean {
-  if (!net || !highlight) return false;
-  return typeof highlight === "string" ? net === highlight : highlight.includes(net);
+  if (!highlight) return false;
+  const code = net || NO_NET;
+  return typeof highlight === "string" ? code === highlight : highlight.includes(code);
 }
 
 export interface BoardNets {
@@ -110,13 +120,14 @@ export interface BoardNets {
 
 /**
  * `BOARD_INSPECTION_TOOL::highlightNet( ..., aUseSelection = true )`: the nets of the selected connected items (pads, tracks, vias,
- * zones; a selected footprint stands for its pads here, where the studio's selection is whole footprints), without the unnamed
- * net, in first-seen order. Empty = nothing connected is selected.
+ * zones; a selected footprint stands for its pads here, where the studio's selection is whole footprints), in first-seen order; an item with
+ * no net is on [`NO_NET`] (`netcodes.insert( ci->GetNetCode() )` whatever it is, r7 C7-5). Empty = nothing connected is selected.
  */
-export function netsOfSelection(selection: Iterable<string>, board: BoardNets): string[] {
+export function netsOfSelection(selection: Iterable<string>, board: BoardNets, withNoNet = true): string[] {
   const nets: string[] = [];
   const add = (n: string | null | undefined) => {
-    if (n && !nets.includes(n)) nets.push(n);
+    const code = n || (withNoNet ? NO_NET : "");
+    if (code && !nets.includes(code)) nets.push(code);
   };
   const part = new Map(board.parts.map((p) => [p.ref, p]));
   const tracks = new Map((board.routing?.tracks ?? []).map((t) => [t.id, t.net]));
@@ -129,7 +140,7 @@ export function netsOfSelection(selection: Iterable<string>, board: BoardNets): 
     const p = part.get(id);
     if (p) p.pads?.forEach((pad) => add(pad.net));
     else if (pads.has(id)) add(pads.get(id));
-    else add(tracks.get(id) ?? vias.get(id) ?? zones.get(id));
+    else if (tracks.has(id) || vias.has(id) || zones.has(id)) add(tracks.get(id) ?? vias.get(id) ?? zones.get(id));
   }
   return nets;
 }

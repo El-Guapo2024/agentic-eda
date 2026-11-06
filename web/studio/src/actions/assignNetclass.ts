@@ -31,6 +31,6 @@ export function registerPcbAssignNetclass(m: Map<string, () => void>, ctx: Sweep
     const board = state.board;
     // the previewer (`BOARD_EDITOR_CONTROL::AssignNetclass`): the selection cleared, then every item of each matching net selected (`SelectAllItemsOnNet`)
     const preview = (nets: readonly string[]) => dispatch({ type: "SET_SELECTION", refs: netItems(board, new Set(nets)) });
-    openAssignNetclass(netsOfSelection(ctx.requestSelection(), board), boardNetNames(board), (message, kind) => dispatch({ type: "TOAST", message, kind }), preview);
+    openAssignNetclass(netsOfSelection(ctx.requestSelection(), board, false), boardNetNames(board), (message, kind) => dispatch({ type: "TOAST", message, kind }), preview);
   });
 }

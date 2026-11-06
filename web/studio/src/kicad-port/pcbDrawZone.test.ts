@@ -81,6 +81,8 @@ test("createNewZone's settings: the drawing layer alone, a rule area for Add Rul
   assert.deepEqual([z.net, z.layers, z.name, z.locked, z.settings.priority, z.settings.is_rule_area], ["SIG", ["B.Cu"], "", false, 2, false]);
   const ra = newZoneInitial(board, { layer: "F.Cu", ruleArea: true, highlighted: [], selection: [], defaults });
   assert.equal(ra.settings.is_rule_area, true);
+  // `ZONE_SETTINGS::ZONE_SETTINGS()`: a new rule area keeps out tracks, vias and pads, not zone fills or footprints (UI-LEFT P29)
+  assert.deepEqual([ra.settings.keepout_tracks, ra.settings.keepout_vias, ra.settings.keepout_pads, ra.settings.keepout_copper_pour, ra.settings.keepout_footprints], [true, true, true, false, false]);
   assert.equal(newZoneInitial(board, { layer: "F.Cu", ruleArea: true, highlighted: ["GND"], selection: [], defaults }).net, "", "a rule area takes no net");
   assert.equal(ra.settings.priority, 2, "a rule area on copper gets one too (`setUniquePriority` runs on the layers)");
   assert.equal(newZoneInitial(board, { layer: "F.SilkS", ruleArea: false, highlighted: [], selection: [], defaults }).settings.priority, 0, "not on copper: the default");

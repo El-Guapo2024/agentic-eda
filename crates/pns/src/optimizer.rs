@@ -673,6 +673,32 @@ fn run_smart_pads(line: &mut Line, node: &Node, rules: &BoardRules, exclude: &[I
     line.simplify2(); // `aLine->Line().Simplify2()`
 }
 
+/// `OPTIMIZER::Optimize( &linetmp, OPTIMIZER::FANOUT_CLEANUP, m_currentNode )` as `LINE_PLACER::optimizeTailHeadTransition` asks it of the trace:
+/// [`fanout_cleanup`] in the router's corner mode (`fanoutCleanup`: `DIRECTION_45().BuildInitialTrace( p_start, p_end, i, cornerMode )`), a line
+/// that ends in the head's via (`aLine->EndsWithVia()`) counting as ending on one. A line with an arc is left alone (`if( !hasArcs && ..
+/// FANOUT_CLEANUP )`). `Some` with the new trace (its points and, in a rounded mode, its arc) when the line was replaced.
+pub fn fanout_cleanup_trace(line: &Line, ends_with_via: bool, node: &Node, rules: &BoardRules, exclude: &[ItemId], corner: CornerMode) -> Option<crate::direction45::Trace> {
+    if line.arc_count() > 0 || line.pts.len() < 3 {
+        return None;
+    }
+    let (p_start, p_end) = (line.pts[0], *line.pts.last()?);
+    // `startMatch = startPad->OfKind( ITEM::VIA_T | ITEM::SOLID_T )`, `endMatch` the end's pad or via, else `aLine->EndsWithVia()`
+    find_pad_or_via(node, line.layer, &line.net, p_start)?;
+    let end_match = find_pad_or_via(node, line.layer, &line.net, p_end).is_some() || ends_with_via;
+    // `int len = aLine->CLine().Length()`: the sum of the segments' rounded lengths, `len < thr` with `thr = aLine->Width() * 10`
+    let len: i64 = line.pts.windows(2).map(|w| crate::kigeom::norm_i(w[1].x - w[0].x, w[1].y - w[0].y).get()).sum();
+    if !(end_match && len < (line.width * 10).get()) {
+        return None;
+    }
+    for diag in [false, true] {
+        let l2 = Direction45::Undefined.build_initial_line(p_start, p_end, diag, corner);
+        if !collides(node, &l2.pts, line.layer, line.width, &line.net, rules, exclude) {
+            return Some(l2);
+        }
+    }
+    None
+}
+
 /// `OPTIMIZER::fanoutCleanup`: a short (< 10 x width) line from a pad/via
 /// to a pad/via (or ending on a via) is replaced by the direct 45-degree
 /// trace when that is clear.

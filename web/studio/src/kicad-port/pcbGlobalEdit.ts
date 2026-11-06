@@ -10,6 +10,7 @@
 // Units: nanometres (the board's coordinates).
 
 import type { BoardState, Cmd, CmdShape, Shape } from "../api/types";
+import type { BoardTextBox } from "../api/pcbItemTypes";
 import { arcCenter, toIU, type V } from "./pcbGeom";
 import { healShapes } from "./pcbModify";
 import { ancestors } from "./groupTree";
@@ -210,6 +211,8 @@ export interface CleanupGraphicsPlan {
   /** What the dialog lists under "Changes to be applied" (a dry run; outline fixes are not listed, as in the C++). */
   items: CleanupItem[];
   remove: string[];
+  /** The text boxes among `remove` (`delete_text_box`, not `delete_shape`). */
+  removeTextBoxes: string[];
   /** The board-outline lines `fixBoardOutlines` moved, edited in place (`m_commit.Modify( shape )`): their id, group and lock stay. */
   replace: { id: string; shape: CmdShape }[];
   add: CmdShape[];
@@ -272,20 +275,35 @@ interface Side {
 }
 
 /**
- * `GRAPHICS_CLEANER::CleanupBoard` over the board's drawings: duplicates and zero-size graphics out, board-outline gaps closed
- * (`ConnectBoardShapes`, which the dry run skips), and four lines that make a rectangle merged into one. Merging a footprint's
- * graphics into pads belongs to the footprint editor.
+ * A text box as `cleanupShapes` sees it: `PCB_TEXTBOX` is a `PCB_SHAPE` (`dynamic_cast<PCB_SHAPE*>( *it )` takes it), a `RECTANGLE` of its two
+ * corners or, turned off the quarter, a `POLY` of its four (`GetShape()`), its width the border's stroke (`GetWidth()`: `m_stroke.GetWidth()`,
+ * whether the border is drawn or not). So a box of no size is a zero-size graphic, and a box with the corners, layer and width of a rectangle
+ * before it, or of another box, is a duplicate of it.
  */
-export function planCleanupGraphics(shapes: readonly Shape[], o: CleanupGraphicsOptions, dryRun: boolean): CleanupGraphicsPlan {
+function textBoxAsShape(t: BoardTextBox): Shape {
+  if (t.pts.length > 0) return { id: t.id, kind: "polygon", layer: t.layer, stroke_width: t.stroke_width, filled: false, pts: t.pts };
+  return { id: t.id, kind: "rect", layer: t.layer, stroke_width: t.stroke_width, filled: false, start: t.start, end: t.end };
+}
+
+/**
+ * `GRAPHICS_CLEANER::CleanupBoard` over the board's drawings (`board->Drawings()`): duplicates and zero-size graphics out, board-outline gaps
+ * closed (`ConnectBoardShapes`, which the dry run skips), and four lines that make a rectangle merged into one. Merging a footprint's graphics
+ * into pads belongs to the footprint editor. The drawings are the shapes and, after them, the text boxes (`textBoxes`, by id), as the derived
+ * file lists them. Only "Delete redundant graphics" takes a text box: "Merge lines into rectangles" asks for segments, and the outline fix leaves
+ * a box's closed rectangle as it is (`ConnectBoardShapes` joins open ends).
+ */
+export function planCleanupGraphics(shapes: readonly Shape[], o: CleanupGraphicsOptions, dryRun: boolean, textBoxes: readonly BoardTextBox[] = []): CleanupGraphicsPlan {
   const items: CleanupItem[] = [];
   const remove: string[] = [];
   const add: CmdShape[] = [];
   const healed = new Map<string, CmdShape>(); // the outline lines `fixBoardOutlines` moved, by id
   const deleted = new Set<string>(); // IS_DELETED
+  const boxIds = new Set(textBoxes.map((t) => t.id));
+  const drawings: Shape[] = [...shapes, ...[...textBoxes].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map(textBoxAsShape)];
 
   if (o.deleteRedundant) {
-    for (let i = 0; i < shapes.length; i++) {
-      const shape = shapes[i]!;
+    for (let i = 0; i < drawings.length; i++) {
+      const shape = drawings[i]!;
       if (deleted.has(shape.id)) continue;
       if (isNullShape(shape)) {
         items.push({ kind: "null", label: CLEANUP_LABELS.null, ids: [shape.id] });
@@ -293,8 +311,8 @@ export function planCleanupGraphics(shapes: readonly Shape[], o: CleanupGraphics
         remove.push(shape.id);
         continue;
       }
-      for (let j = i + 1; j < shapes.length; j++) {
-        const other = shapes[j]!;
+      for (let j = i + 1; j < drawings.length; j++) {
+        const other = drawings[j]!;
         if (deleted.has(other.id)) continue;
         if (areEquivalent(shape, other)) {
           items.push({ kind: "duplicate", label: CLEANUP_LABELS.duplicate, ids: [other.id] });
@@ -376,12 +394,14 @@ export function planCleanupGraphics(shapes: readonly Shape[], o: CleanupGraphics
 
   // A healed line that a rectangle took is gone; the others are edited in place.
   const replace = [...healed].filter(([id]) => !deleted.has(id)).map(([id, shape]) => ({ id, shape }));
-  return { items, remove, replace, add };
+  return { items, remove, removeTextBoxes: remove.filter((id) => boxIds.has(id)), replace, add };
 }
 
 /** The plan as one undo step's commands ("Cleanup Graphics"): the removals, the in-place edits of the healed outline, the new shapes. */
 export function cleanupGraphicsCmds(plan: CleanupGraphicsPlan): Cmd[] {
-  return [...plan.remove.map((id): Cmd => ({ op: "delete_shape", id })), ...plan.replace.map(({ id, shape }): Cmd => ({ op: "replace_shape", id, shape })), ...plan.add.map((shape): Cmd => ({ op: "add_shape", shape }))];
+  const boxes = new Set(plan.removeTextBoxes);
+  const removal = (id: string): Cmd => (boxes.has(id) ? { op: "pcb_item", verb: "delete_text_box", id } : { op: "delete_shape", id });
+  return [...plan.remove.map(removal), ...plan.replace.map(({ id, shape }): Cmd => ({ op: "replace_shape", id, shape })), ...plan.add.map((shape): Cmd => ({ op: "add_shape", shape }))];
 }
 
 // ---------------------------------------------------------------------- wildcards

@@ -111,6 +111,22 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
       m.get("pcbnew.InteractiveRouter.DiffPairDialog")?.();
     })
   );
+  // "Use Custom Values..." of the track width menu (`TRACK_WIDTH_MENU::eventHandler`, `ID_POPUP_PCB_SELECT_CUSTOM_WIDTH`): "bds.UseCustomTrackViaSize( true );
+  // bds.m_TempOverrideTrackWidth = true; RunAction( ACT_CustomTrackWidth );" -- the custom sizes are in use from the click, whatever the dialog returns
+  // (Cancel keeps the ones it had), then `trackViaSizeChanged`: a route in progress takes them (UI-LEFT R8).
+  m.set(
+    "studio.Router.useCustomTrackVia",
+    pcbOnly(() => {
+      const custom = state.pcbx.customTrackVia;
+      dispatch({ type: "PCBX", patch: { useCustomTrackVia: true } });
+      if (custom) {
+        dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: custom.trackNm });
+        dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: { diameter: custom.viaDiameterNm, drill: custom.viaDrillNm } });
+        reroute(dispatch, custom.trackNm);
+      }
+      m.get("pcbnew.InteractiveRouter.CustomTrackViaSize")?.();
+    })
+  );
   // ACT_PlaceThroughVia ("V" while routing) is the studio's layerToggle: only registered while a route is being drawn.
   const placeVia = m.get("pcbnew.Control.layerToggle");
   if (placeVia) m.set("pcbnew.InteractiveRouter.PlaceVia", placeVia);

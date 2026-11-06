@@ -58,6 +58,11 @@ test("breakTrack: a polyline splits into two tracks at the point under the point
   assert.deepEqual(right!.pts, [{ x: 4000, y: 0 }, { x: 10000, y: 0 }, { x: 10000, y: 8000 }]);
   assert.equal(left!.net, "N");
   assert.equal(right!.width, 200);
+  // both halves stand for the broken track (`Clone( *s_old )`): its mask opening and group go to each
+  assert.deepEqual(r.cmd.track_sources, [
+    [0, "t"],
+    [1, "t"],
+  ]);
 });
 
 test("breakTrack is refused at an end point, a vertex or where another item is joined", () => {

@@ -78,7 +78,7 @@ test("undo_and_delete_while_routing_take_back_the_last_segment (R7-R1: UndoRedoB
   assert.equal(routerEditKey("pcb", { kind: "drag" }, "undo"), "cancel");
   assert.equal(routerEditKey("pcb", { kind: "drag" }, "redo"), "nothing");
   assert.equal(routerEditKey("pcb", { kind: "drag" }, "fill"), "nothing");
-  assert.equal(routerEditKey("pcb", { kind: "drag" }, "delete"), "nothing");
+  assert.equal(routerEditKey("pcb", { kind: "drag" }, "delete"), "cancelThenPass", "SetPassEvent to EDIT_TOOL::Remove, whose Activate() ends the drag");
   assert.equal(routerEditKey("pcb", null, "undo"), null, "no session: the editor's undo");
   assert.equal(routerEditKey("pcb", { kind: "shape" }, "undo"), null, "the drawing tools have their own");
   assert.equal(routerEditKey("schematic", { kind: "route" }, "undo"), null);

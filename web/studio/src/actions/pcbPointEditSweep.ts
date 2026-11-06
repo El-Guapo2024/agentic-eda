@@ -94,10 +94,10 @@ export function registerPcbPointEditSweep(m: Map<string, () => void>, ctx: Sweep
    * Replace the item's geometry in place: a zone's outline and holes (one `set_zone_outline`, the holes with it when the zone has or had some), a shape's
    * geometry (`replace_shape`: it keeps its id and its group).
    */
-  const applyGeometry = (item: PointItem, next: { contours: [number, number][][] } | { shape: ReturnType<typeof shapeToCmd> }): void => {
+  const applyGeometry = (item: PointItem, next: { contours: [number, number][][] } | { shape: ReturnType<typeof shapeToCmd> }, keepFill = false): void => {
     if ("contours" in next) {
       if (item.kind === "zone") {
-        void applyEdit([zoneOutlineCmd(item.id, next.contours, item.holes.length > 0)]);
+        void applyEdit([zoneOutlineCmd(item.id, next.contours, item.holes.length > 0, keepFill)]);
         return;
       }
       if (item.shape.kind !== "polygon" || !next.contours[0]) return;
@@ -163,7 +163,8 @@ export function registerPcbPointEditSweep(m: Map<string, () => void>, ctx: Sweep
         void applyEdit([deleteCmd(board, t.item.id)], [t.item.id], null, { keep: false });
         return;
       }
-      applyGeometry(t.item, { contours: next.contours });
+      // `removeCorner`: `zone->SetNeedRefill( true )`, the fill as it was (UI-LEFT P29)
+      applyGeometry(t.item, { contours: next.contours }, true);
     })
   );
 
@@ -180,7 +181,8 @@ export function registerPcbPointEditSweep(m: Map<string, () => void>, ctx: Sweep
         toast("That corner cannot be chamfered.");
         return;
       }
-      applyGeometry(t.item, { contours: next });
+      // `chamferCorner`: `zone->SetNeedRefill( true )`, the fill as it was
+      applyGeometry(t.item, { contours: next }, true);
     })
   );
 

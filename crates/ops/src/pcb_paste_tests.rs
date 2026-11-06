@@ -350,3 +350,20 @@ fn a_copied_pad_pastes_as_a_footprint_of_that_one_pad() {
     assert_eq!(bp.definition.as_ref().map(|d| d.pads.len()), Some(1), "one pad, not U1's three: {bp:?}");
     assert_eq!(bp.pad_nets, vec![("2".to_string(), "VCC".to_string())]);
 }
+
+/// r3 B-7: the pad's footprint is the fresh one `SaveSelection` makes (no library name), so with its part deleted from the board the paste still makes
+/// a footprint of that one pad -- it does not bring U1 back whole.
+#[test]
+fn a_copied_pad_pasted_after_its_footprint_was_deleted_is_still_one_pad() {
+    let text = copy(&["U1.2"], p(Nm::ZERO, Nm::ZERO));
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    b.apply(&Cmd::Rip { part: "U1".into() }).unwrap();
+    assert!(b.design().placement.as_ref().unwrap().footprints.iter().all(|f| f.id != "U1"), "U1 is off the board");
+    b.apply(&Cmd::PasteClipboard { text, at: p(mm(50.0), mm(50.0)) }).unwrap();
+    let fps = &b.design().placement.as_ref().unwrap().footprints;
+    assert!(fps.iter().all(|f| f.id != "U1"), "U1 is not brought back: {fps:?}");
+    let new = fps.iter().find(|f| f.id != "U2").expect("a new footprint");
+    let bp = b.design().drawings.as_ref().unwrap().board_parts.iter().find(|p| p.reference == new.id).expect("a board part");
+    assert_eq!(bp.definition.as_ref().map(|d| d.pads.len()), Some(1), "one pad: {bp:?}");
+}

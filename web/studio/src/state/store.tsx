@@ -2252,6 +2252,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const sent = st.tab === "pcb" ? inEnteredGroup(cmd, st.enteredGroupId, st.board?.drawings?.groups) : st.tab === "schematic" ? inEnteredGroup(cmd, st.schEnteredGroupId, st.schematic?.groups) : cmd;
       const reply = await postCmd(onCurrentSheet(sent, st.tab === "schematic" ? st.currentSheetPath : []), st.strict, carry);
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
+      // what KiCad says once the command worked (`ShowInfoBarMsg`, `wxLogMessage`): "Some of the polygons could not be merged.", ...
+      if (reply.ok && reply.info) dispatch({ type: "TOAST", message: reply.info, kind: "info" });
       // `SCH_EDIT_FRAME::SaveCopyForRepeatItem`: a placement on the schematic becomes what "Repeat Last Item" repeats.
       if (reply.ok && stateRef.current.tab === "schematic") {
         const source = repeatSource(cmd);

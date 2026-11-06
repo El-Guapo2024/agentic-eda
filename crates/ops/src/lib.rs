@@ -52,6 +52,7 @@ use std::sync::Arc;
 pub use pcb_edit::BooleanOp;
 
 pub mod board_setup;
+pub mod notice;
 mod review;
 mod simulator;
 pub mod library_editors;
@@ -105,7 +106,7 @@ mod multichannel_geom;
 mod multichannel_poly;
 pub use multichannel::{AreaKind, AreaPick, MultichannelCmd, PlacementSources, PotentialArea, RepeatOptions, RepeatPlan, TargetCompat};
 pub mod embedded;
-pub use embedded::{CollectedModel, EmbeddedCmd, EmbeddedOwner};
+pub use embedded::{AddedFile, CollectedModel, EmbeddedCmd, EmbeddedOwner};
 pub mod pcb_items;
 pub mod kicad10_items;
 pub mod drill_chart;
@@ -473,6 +474,11 @@ pub enum Cmd {
         outline: Vec<Point>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         holes: Option<Vec<Vec<Point>>>,
+        /// The edit keeps the zone's fill as it was, out of date until the next fill (`ZONE::SetNeedRefill( true )`): the point editor's Add, Remove and
+        /// Chamfer Corner and Simplify Shapes (`PCB_POINT_EDITOR::addCorner` / `removeCorner` / `chamferCorner`, `EDIT_TOOL::SimplifyPolygons`). Without it the
+        /// fill is emptied, as a corner dragged (`ZONE_POINT_EDIT_BEHAVIOR::UpdateItem`: `m_zone.UnFill()`) or moved to a typed place does. UI-LEFT P29.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep_fill: bool,
     },
     /// `dialog_copper_zones.cpp`'s "OK": replace a zone's net/layer and
     /// every `ZONE_SETTINGS` field at once -- KiCad has no concept of
@@ -1158,6 +1164,11 @@ pub enum Cmd {
         /// The group the editor has entered: the new tracks with no source and the new vias join it (`m_replacementMap[ENTERED_GROUP_MAGIC_NUMBER]`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group: Option<String>,
+        /// The tracks of `tracks` (indices) that come back under the id they carry, one of `remove_track_ids`: the board's track of that id
+        /// modified in place, so its mask opening, group and lock stay (`TRACKS_CLEANER::mergeCollinearSegments`: `m_commit.Modify( aSeg1 );
+        /// *aSeg1 = dummy_seg;`). Every other track is new.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        keep_track_ids: Vec<usize>,
     },
 
     /// What the length tuner (`crates/pns`'s `MeanderPlacer`, `GENERATOR_TOOL::GenEditAction`) makes, as one undo step: remove the tracks of
@@ -3183,7 +3194,11 @@ impl<'a> Board<'a> {
         let shared_before = self.shared_screens_before();
         let pages_before = (self.design.schematic.is_some() && (matches!(cmd.domain(), Domain::Schematic) || matches!(cmd, Cmd::Batch { .. }))).then(|| eda_model::sheet_list::walk(&self.design));
         // (a board brought in whole has zones of its own, not edits of these: their fills are the file's, filed as they are)
-        let zones_before = if matches!(cmd, Cmd::ReplaceBoard { .. }) { None } else { self.zones_before() };
+        let mut zones_before = if matches!(cmd, Cmd::ReplaceBoard { .. }) { None } else { self.zones_before() };
+        // an outline edit that keeps the fill (`SetNeedRefill( true )`, not `UnFill()`) is no emptying edit of that zone
+        if let (Some(before), Some(id)) = (zones_before.as_mut(), cmd.zone_kept_filled()) {
+            before.remove(id);
+        }
         self.apply_cmd(cmd)?;
         // an edit that emptied a zone's fill (or flipped it) is counted on the zone, so the unfill sticks (R7-Z1, `zone_unfill.rs`)
         self.tidy_zone_fills(zones_before);
@@ -3313,7 +3328,7 @@ impl<'a> Board<'a> {
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
-            Cmd::SetZoneOutline { id, outline, holes } => self.set_zone_outline(id, outline, holes.as_deref()),
+            Cmd::SetZoneOutline { id, outline, holes, .. } => self.set_zone_outline(id, outline, holes.as_deref()),
             Cmd::EditZone {
                 id,
                 net,
@@ -3413,7 +3428,7 @@ impl<'a> Board<'a> {
             Cmd::ExchangeFootprints { references, footprint, options, library } => self.exchange_footprints(references, footprint.as_deref(), options, library),
             Cmd::ReannotateBoard { options, selection } => self.reannotate_board(options, selection),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
-            Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias, lock_tracks, via_kinds, track_sources, group } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone(), lock_tracks, via_kinds, track_sources, group.as_deref()),
+            Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias, lock_tracks, via_kinds, track_sources, group, keep_track_ids } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone(), lock_tracks, via_kinds, track_sources, group.as_deref(), keep_track_ids),
             Cmd::CommitTuning { pattern, remove_pattern, remove_track_ids, tracks, member_indices } => self.commit_tuning(pattern.as_ref(), remove_pattern.as_deref(), remove_track_ids, tracks.clone(), member_indices),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
             Cmd::MoveItems { ids, dx, dy } => self.move_items(ids, *dx, *dy),
@@ -4321,8 +4336,10 @@ impl<'a> Board<'a> {
     /// Board Setup > Track Widths & Vias' "Track Widths" list -- a plain
     /// whole-list replace (see `Cmd::SetTrackWidthPresets`'s own doc).
     fn set_track_width_presets(&mut self, widths: &[Nm]) -> Result<(), Vec<CheckResult>> {
-        if widths.iter().any(|w| *w <= Nm::ZERO) {
-            return Err(vec![CheckResult::fail("ops_bad_track", "track_width_presets", "every preset width must be positive")]);
+        // `PANEL_SETUP_TRACKS_AND_VIAS::Validate` checks no track width ("Test ONLY for malformed data"): a 0 is a width of the list (the row Add
+        // makes, r5 R5-10); only a negative one, which no grid cell holds, is refused
+        if widths.iter().any(|w| *w < Nm::ZERO) {
+            return Err(vec![CheckResult::fail("ops_bad_track", "track_width_presets", "a preset width cannot be negative")]);
         }
         self.routing_mut().track_width_presets = widths.to_vec();
         Ok(())
@@ -5191,7 +5208,7 @@ impl<'a> Board<'a> {
     /// output is new geometry, not a copy, so the same guard applies.
     #[allow(clippy::too_many_arguments)] // the fields of `Cmd::CommitRoute`, one argument each, as the other verbs take theirs
     #[allow(clippy::too_many_arguments)]
-    fn commit_route(&mut self, remove_track_ids: &[String], remove_via_ids: &[String], mut tracks: Vec<Track>, mut vias: Vec<Via>, lock_tracks: &[usize], via_kinds: &[(usize, eda_model::via_extra::ViaKind)], track_sources: &[(usize, String)], group: Option<&str>) -> Result<(), Vec<CheckResult>> {
+    fn commit_route(&mut self, remove_track_ids: &[String], remove_via_ids: &[String], mut tracks: Vec<Track>, mut vias: Vec<Via>, lock_tracks: &[usize], via_kinds: &[(usize, eda_model::via_extra::ViaKind)], track_sources: &[(usize, String)], group: Option<&str>, keep_track_ids: &[usize]) -> Result<(), Vec<CheckResult>> {
         for t in &tracks {
             self.known_net(&t.net)?;
             self.known_layer(&t.layer)?;
@@ -5220,12 +5237,19 @@ impl<'a> Board<'a> {
             // a removed via's extras go with it, unless it comes back (below); a displaced via's type is in `via_kinds` too
             if let Some(dr) = self.design.drawings.as_mut() {
                 dr.via_extras.retain(|e| !remove_via_ids.iter().any(|id| id == &e.id) || vias.iter().any(|v| v.id == e.id));
-                // a removed track's mask opening goes with it (a track that replaces it takes it over, below)
-                dr.track_masks.retain(|m| !remove_track_ids.contains(&m.id));
+                // a removed track's mask opening goes with it (a track that replaces it takes it over, below), unless it comes back under its id
+                let kept: Vec<&str> = keep_track_ids.iter().filter_map(|&i| tracks.get(i)).map(|t| t.id.as_str()).filter(|id| remove_track_ids.iter().any(|r| r == id)).collect();
+                dr.track_masks.retain(|m| !remove_track_ids.contains(&m.id) || kept.contains(&m.id.as_str()));
             }
         }
-        for t in &mut tracks {
-            t.id.clear();
+        // the tracks that keep their id (`keep_track_ids`): the board's track of that id, modified in place
+        let mut kept_ids: Vec<String> = Vec::new();
+        for (i, t) in tracks.iter_mut().enumerate() {
+            if keep_track_ids.contains(&i) && !t.id.is_empty() && remove_track_ids.contains(&t.id) && !kept_ids.contains(&t.id) {
+                kept_ids.push(t.id.clone());
+            } else {
+                t.id.clear();
+            }
         }
         // a via the router moved (dragged or shoved) comes back under the id it is removed under, with its extras (`remove_unused_layers`,
         // tenting, ..): KiCad's router modifies the board's `PCB_VIA` it came from (r4 R4-2); any other id is a new via's
@@ -5252,6 +5276,9 @@ impl<'a> Board<'a> {
             let mut masks: Vec<eda_model::track_mask::TrackMask> = Vec::new();
             let mut joins: Vec<(String, String)> = Vec::new();
             for (i, id) in new_track_ids.iter().enumerate() {
+                if kept_ids.contains(id) {
+                    continue; // in its group already, with its mask
+                }
                 match inherited.iter().find(|(k, _, _)| *k == i) {
                     Some((_, mask, src_group)) => {
                         if let Some(m) = mask {

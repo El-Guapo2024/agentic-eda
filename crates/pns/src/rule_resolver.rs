@@ -36,6 +36,10 @@ pub enum Side<'a> {
     /// A track (`SEGMENT_T` / `ARC_T` / `LINE_T`) of `net` on `layer`: the head, a line of the shove, a track of the board. `seg` is the
     /// segment it is, for a rule that looks at shapes.
     Track { net: &'a Net, layer: i32, seg: Option<(Point, Point)> },
+    /// A line of the router (`LINE_T`: the head, a line of the shove) of `net` on `layer`, `width` wide, along `pts`. With no rule that looks at
+    /// shapes it is a track like [`Side::Track`] (its dummy from its first to its last point, `getBoardItem`'s `Anchor( 0 )` / `Anchor( 1 )`); with one,
+    /// a line of several segments is asked segment by segment and the smallest answer taken (`QueryConstraint`'s `evaluateLineSegments`).
+    Line { net: &'a Net, layer: i32, width: Nm, pts: &'a [Point] },
     /// A via's copper (`VIA_T`).
     Via { net: &'a Net, layers: LayerRange, pos: Point },
     /// A via's hole (`HOLE_T` whose `ParentPadVia` is a via): drilled, plated.
@@ -49,6 +53,11 @@ pub enum Side<'a> {
 impl<'a> Side<'a> {
     pub fn track(net: &'a Net, layer: i32) -> Side<'a> {
         Side::Track { net, layer, seg: None }
+    }
+
+    /// A line of the router as the rules see it (`LINE_T`, [`Side::Line`]).
+    pub fn of_line(l: &'a crate::line::Line) -> Side<'a> {
+        Side::Line { net: &l.net, layer: l.layer, width: l.width, pts: &l.pts }
     }
 
     pub fn via(v: &'a crate::item::Via) -> Side<'a> {
@@ -71,7 +80,7 @@ impl<'a> Side<'a> {
 
     pub fn net(&self) -> &'a Net {
         match *self {
-            Side::Track { net, .. } | Side::Via { net, .. } | Side::ViaHole { net, .. } => net,
+            Side::Track { net, .. } | Side::Line { net, .. } | Side::Via { net, .. } | Side::ViaHole { net, .. } => net,
             Side::Item(it) => it.net(),
             Side::PadHole(s) => &s.net,
         }
@@ -79,7 +88,7 @@ impl<'a> Side<'a> {
 
     pub fn layers(&self) -> LayerRange {
         match *self {
-            Side::Track { layer, .. } => LayerRange::single(layer),
+            Side::Track { layer, .. } | Side::Line { layer, .. } => LayerRange::single(layer),
             Side::Via { layers, .. } | Side::ViaHole { layers, .. } => layers,
             Side::Item(it) => it.layers(),
             Side::PadHole(s) => s.layers,
@@ -99,11 +108,16 @@ impl<'a> Side<'a> {
     /// `ITEM::Kind()` as `getBoardItem` and `checkKeepout` see it: is this a via (a via or its hole), a track, or a pad?
     pub fn kind(&self) -> SideKind {
         match self {
-            Side::Track { .. } | Side::Item(Item::Segment(_)) | Side::Item(Item::Arc(_)) => SideKind::Track,
+            Side::Track { .. } | Side::Line { .. } | Side::Item(Item::Segment(_)) | Side::Item(Item::Arc(_)) => SideKind::Track,
             Side::Via { .. } | Side::ViaHole { .. } | Side::Item(Item::Via(_)) => SideKind::Via,
             Side::Item(Item::Solid(_)) | Side::PadHole(_) => SideKind::Pad,
         }
     }
+}
+
+/// A line's dummy track runs from its first point to its last (`getBoardItem`: `SetStart( aItem->Anchor( 0 ) )`, `SetEnd( aItem->Anchor( 1 ) )`).
+fn line_anchors(pts: &[Point]) -> Option<(Point, Point)> {
+    Some((*pts.first()?, *pts.last()?))
 }
 
 /// What kind of board item a side stands for, for a keepout's per-kind flags (`checkKeepout`).
@@ -177,6 +191,8 @@ impl std::hash::Hash for NetKey {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 enum Key {
     Track(NetKey, i32, Option<(i64, i64, i64, i64)>),
+    /// A line of several segments when a rule looks at shapes: its points.
+    Line(NetKey, i32, i64, Vec<(i64, i64)>),
     Via(NetKey, LayerRange, Option<(i64, i64)>),
     ViaHole(NetKey, LayerRange, Option<(i64, i64)>),
     /// A solid by the number its rule item has ([`RuleResolver::solid_id`]).
@@ -616,6 +632,8 @@ impl RuleResolver {
         let g = self.geometry;
         match *side {
             Side::Track { net, layer, seg } => Key::Track(NetKey(net.clone()), layer, seg.filter(|_| g).map(|(a, b)| (a.x.get(), a.y.get(), b.x.get(), b.y.get()))),
+            Side::Line { net, layer, width, pts } if g && pts.len() > 2 => Key::Line(NetKey(net.clone()), layer, width.get(), pts.iter().map(|p| (p.x.get(), p.y.get())).collect()),
+            Side::Line { net, layer, pts, .. } => Key::Track(NetKey(net.clone()), layer, line_anchors(pts).filter(|_| g).map(|(a, b)| (a.x.get(), a.y.get(), b.x.get(), b.y.get()))),
             Side::Via { net, layers, pos } => Key::Via(NetKey(net.clone()), layers, g.then_some((pos.x.get(), pos.y.get()))),
             Side::ViaHole { net, layers, pos } => Key::ViaHole(NetKey(net.clone()), layers, g.then_some((pos.x.get(), pos.y.get()))),
             Side::Item(Item::Segment(s)) => Key::Track(NetKey(s.net.clone()), s.layer, g.then_some((s.a.x.get(), s.a.y.get(), s.b.x.get(), s.b.y.get()))),
@@ -707,12 +725,33 @@ impl RuleResolver {
         };
         match *side {
             Side::Track { net, seg, .. } => dummy_track(net, seg),
+            Side::Line { net, pts, .. } => dummy_track(net, line_anchors(pts)),
             Side::Via { net, pos, .. } | Side::ViaHole { net, pos, .. } => dummy_via(net, pos),
             Side::Item(Item::Segment(s)) => dummy_track(&s.net, Some((s.a, s.b))),
             Side::Item(Item::Arc(a)) => dummy_track(&a.net, Some((a.arc.start, a.arc.end))),
             Side::Item(Item::Via(v)) => dummy_via(&v.net, v.pos),
             Side::Item(Item::Solid(s)) | Side::PadHole(s) => self.solid_item(s),
         }
+    }
+
+    /// `evaluateLineSegments`' `m_dummyTracks[aIdx]`: `SetLayer( board_layer )`, `SetNet( aLineItem->Net() )`, `SetWidth( line->Width() )`, `SetStart` /
+    /// `SetEnd` of one segment of the line -- a track of the line's own width, unlike [`Self::board_item`]'s dummy of an item (0.2 mm).
+    fn line_segment_item(&self, net: &Net, (a, b): (Point, Point), width: Nm, layer: &str) -> Rc<RuleItem> {
+        let net_name = net.as_deref().filter(|s| *s != "\u{1}").unwrap_or("").to_string();
+        let mut it = RuleItem::new("router_track", Class::Track);
+        it.net = net_name;
+        it.layers = vec![layer.to_string()];
+        it.layer = Some(layer.to_string());
+        it.set("Net", Prop::Enum(it.net.clone()));
+        it.set("Layer", Prop::Layer(layer.to_string()));
+        it.set("Width", Prop::Int(width.get()));
+        it.position = a;
+        it.shapes = vec![Shape::Stadium { a, b, r: width / 2 }];
+        it.set("Start X", Prop::Int(a.x.get()));
+        it.set("Start Y", Prop::Int(a.y.get()));
+        it.set("End X", Prop::Int(b.x.get()));
+        it.set("End Y", Prop::Int(b.y.get()));
+        Rc::new(it)
     }
 
     fn solid_item(&self, s: &Solid) -> Rc<RuleItem> {
@@ -742,23 +781,93 @@ impl RuleResolver {
     }
 
     /// `IsNonPlatedSlot( aItem )`.
-    fn is_non_plated_slot(&self, side: &Side) -> bool {
+    pub(crate) fn is_non_plated_slot(&self, side: &Side) -> bool {
         matches!(side, Side::PadHole(s) if self.info_of(s).and_then(|i| i.hole.as_ref()).is_some_and(|h| h.2))
     }
 
     /// `QueryConstraint( aType, aItemA, aItemB, aLayer )`: the minimum the rules give, or `None` when there is no constraint or it is
     /// ignored (a rule of severity ignore, other than a tuning profile's, makes the minimum -1).
     fn query(&self, ctype: CType, a: &Rc<RuleItem>, b: &Rc<RuleItem>, layer: &str) -> Option<i64> {
+        let (min, ignored) = self.query_raw(ctype, a, b, layer)?;
+        Some(if ignored { -1 } else { min })
+    }
+
+    /// `EvalRules( aType, a, b, layer )`: the constraint's minimum, and whether its rule is ignored (`GetSeverity() == RPT_SEVERITY_IGNORE`, a tuning
+    /// profile's implicit rule excepted).
+    fn query_raw(&self, ctype: CType, a: &Rc<RuleItem>, b: &Rc<RuleItem>, layer: &str) -> Option<(i64, bool)> {
         let c = self.engine.eval_rules(ctype, Some(a), Some(b), Some(layer), None);
         if c.is_null() {
             return None;
         }
-        if let Some(rule) = c.parent.map(|i| &self.engine.rules[i]) {
-            if rule.severity == Severity::Ignore && !(rule.is_implicit() && rule.implicit == ImplicitSource::TuningProfile) {
-                return Some(-1);
+        let ignored = c.parent.map(|i| &self.engine.rules[i]).is_some_and(|rule| rule.severity == Severity::Ignore && !(rule.is_implicit() && rule.implicit == ImplicitSource::TuningProfile));
+        Some((c.value.min(), ignored))
+    }
+
+    /// `QueryConstraint( aType, aItemA, aItemB, aLayer )` of two sides on `layer` (`name`). With a rule that looks at shapes
+    /// (`drcEngine->HasGeometryDependentRules()`), a [`Side::Line`] of several segments is asked segment by segment, each a dummy track from one
+    /// point to the next, and the smallest minimum is taken (`evaluateLineSegments`, `pickSmallerConstraint`: stop at one of 0 or less); two such
+    /// lines are asked pair by pair, a pair only when the segments' boxes (the first's grown by twice the wider line's width) meet, and only when
+    /// the lines' boxes do (`linesBBoxOverlap`); otherwise each side is its board item or its dummy ([`Self::board_item`]).
+    fn query_sides<'s>(&self, ctype: CType, a: &Side<'s>, b: &Side<'s>, name: &str) -> Option<i64> {
+        fn segments<'s>(geometry: bool, s: &Side<'s>) -> Option<(&'s [Point], Nm, &'s Net)> {
+            match *s {
+                Side::Line { pts, width, net, .. } if geometry && pts.len() > 2 => Some((pts, width, net)),
+                _ => None,
             }
         }
-        Some(c.value.min())
+        let segments = |s: &Side<'s>| segments(self.geometry, s);
+        let dummy = |net: &Net, seg: (Point, Point), width: Nm| self.line_segment_item(net, seg, width, name);
+        // `pickSmallerConstraint`: the first, then any with a smaller minimum; true once the best is 0 or less
+        let pick = |best: &mut Option<(i64, bool)>, c: Option<(i64, bool)>| -> bool {
+            if let Some(c) = c {
+                if best.is_none_or(|b| c.0 < b.0) {
+                    *best = Some(c);
+                }
+            }
+            best.is_some_and(|b| b.0 <= 0)
+        };
+        let bbox = |pts: &[Point]| {
+            let (x0, x1) = (pts.iter().map(|p| p.x).min().unwrap_or(Nm::ZERO), pts.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO));
+            let (y0, y1) = (pts.iter().map(|p| p.y).min().unwrap_or(Nm::ZERO), pts.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO));
+            (x0, y0, x1, y1)
+        };
+        let meet = |a: (Nm, Nm, Nm, Nm), grow: Nm, b: (Nm, Nm, Nm, Nm)| a.0 - grow <= b.2 && b.0 <= a.2 + grow && a.1 - grow <= b.3 && b.1 <= a.3 + grow;
+        let mut best: Option<(i64, bool)> = None;
+        match (segments(a), segments(b)) {
+            (Some((pa, wa, na)), Some((pb, wb, nb))) if meet(bbox(pa), 2 * wa.max(wb), bbox(pb)) => {
+                let prox = 2 * wa.max(wb);
+                'outer: for sa in pa.windows(2) {
+                    let ba = bbox(sa);
+                    let ia = dummy(na, (sa[0], sa[1]), wa);
+                    for sb in pb.windows(2) {
+                        if !meet(ba, prox, bbox(sb)) {
+                            continue;
+                        }
+                        if pick(&mut best, self.query_raw(ctype, &ia, &dummy(nb, (sb[0], sb[1]), wb), name)) {
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            (Some((pa, wa, na)), None) => {
+                let ib = self.board_item(b, name);
+                for sa in pa.windows(2) {
+                    if pick(&mut best, self.query_raw(ctype, &dummy(na, (sa[0], sa[1]), wa), &ib, name)) {
+                        break;
+                    }
+                }
+            }
+            (None, Some((pb, wb, nb))) => {
+                let ia = self.board_item(a, name);
+                for sb in pb.windows(2) {
+                    if pick(&mut best, self.query_raw(ctype, &ia, &dummy(nb, (sb[0], sb[1]), wb), name)) {
+                        break;
+                    }
+                }
+            }
+            _ => return self.query(ctype, &self.board_item(a, name), &self.board_item(b, name), name),
+        }
+        best.map(|(min, ignored)| if ignored { -1 } else { min })
     }
 
     /// `PNS_PCBNEW_RULE_RESOLVER::QueryConstraint( aType, aItemA, aItemB, aPNSLayer )` for what is not a clearance (`ImportSizes`' `CT_WIDTH`,
@@ -879,7 +988,7 @@ impl RuleResolver {
     pub fn clearance(&self, a: &Side, b: &Side, use_epsilon: bool) -> Nm {
         if self.plain {
             // two tracks or vias (the most of what is asked): the net classes' clearance on a layer they share
-            let track_or_via = |s: &Side| matches!(s, Side::Track { .. } | Side::Via { .. } | Side::Item(Item::Segment(_) | Item::Arc(_) | Item::Via(_)));
+            let track_or_via = |s: &Side| matches!(s, Side::Track { .. } | Side::Line { .. } | Side::Via { .. } | Side::Item(Item::Segment(_) | Item::Arc(_) | Item::Via(_)));
             let rv = if track_or_via(a) && track_or_via(b) {
                 if a.layers().overlaps(&b.layers()) {
                     eda_drc::constraints::clearance(&self.net_rules, net_name(a.net()), net_name(b.net())).get()
@@ -920,7 +1029,7 @@ impl RuleResolver {
                 let Some(name) = self.layer_name(layer) else { continue };
                 let (ia, ib) = (self.board_item(a, name), self.board_item(b, name));
                 let mut take = |t: CType| {
-                    if let Some(v) = self.query(t, &ia, &ib, name) {
+                    if let Some(v) = self.query_sides(t, a, b, name) {
                         rv = rv.max(v);
                     }
                 };

@@ -155,7 +155,8 @@ export function addCornerCmds(target: CornerTarget, cursor: P): Cmd[] | null {
   switch (target.kind) {
     case "zone": {
       const contours = addCornerToContours([target.ring, ...target.holes], cursor);
-      return contours ? [zoneOutlineCmd(target.id, contours, target.holes.length > 0)] : null;
+      // `PCB_POINT_EDITOR::addCorner`: `zone->SetNeedRefill( true )`, the fill as it was (UI-LEFT P29)
+      return contours ? [zoneOutlineCmd(target.id, contours, target.holes.length > 0, true)] : null;
     }
     case "polygon": {
       const ring = addCornerToRing(target.shape.pts, cursor);

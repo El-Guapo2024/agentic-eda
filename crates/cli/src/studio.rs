@@ -885,6 +885,19 @@ fn handle(
             let r = crate::embedded_api::collect_plan(dir);
             respond(stream, r.status, r.kind, &r.body)
         }
+        // The fonts the board's texts use (the "Embed fonts" box), and a document a datasheet names by `kicad-embed://` (`GetAssociatedDocument`).
+        ("GET", "/api/embedded/fonts") => {
+            let r = crate::embedded_api::fonts(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
+        ("GET", "/api/embedded/fonts/file") => {
+            let r = crate::embedded_api::font_file(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
+        ("GET", "/api/embedded/doc") => {
+            let r = crate::embedded_api::document(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
         ("GET", "/api/symbol_library/export") => match symbol_library_kicad_sym(dir) {
             Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
@@ -966,15 +979,22 @@ fn handle(
                     let copied = crate::fill_api::copies_zones(&cmd).then(|| board::load(dir).ok().map(|(_, d, _)| (d, cmd.clone()))).flatten();
                     // which editor's content the step modified (the page's `IsContentModified`)
                     let domain = board::step_tag(&cmd);
+                    // what the verb tells the user once it worked (`ShowInfoBarMsg`, a tool's `wxLogMessage` lines: `eda_ops::notice`), as `info`
+                    eda_ops::notice::clear();
                     match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
                         Ok(summary) => {
                             if let Some((before, cmd)) = &copied {
                                 crate::fill_api::carry_copied_fills(dir, before, cmd);
                             }
-                            match session.then(crate::specctra_api::take_session_warning).flatten() {
+                            let mut reply = match session.then(crate::specctra_api::take_session_warning).flatten() {
                                 Some(w) => json!({ "ok": true, "message": summary, "warning": w, "domain": domain }),
                                 None => json!({ "ok": true, "message": summary, "domain": domain }),
+                            };
+                            let info = eda_ops::notice::take();
+                            if !info.is_empty() {
+                                reply["info"] = json!(info.join("\n"));
                             }
+                            reply
                         }
                         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
                     }

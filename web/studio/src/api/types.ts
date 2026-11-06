@@ -2047,7 +2047,7 @@ export type Cmd =
   | { op: "swap_pad_nets"; ids: string[]; connected_pads?: boolean | null }
   | { op: "swap_gate_nets"; ids: string[]; target?: string | null; connected_pads?: boolean | null }
   /** `Cmd::CommitRoute`: delete several tracks/vias (unknown ids tolerated) and add `tracks`/`vias` as ONE undo step -- what `unrouteSegment`/`deleteFull` (removal only) and the track edits (break, fillet, mirror) send. */
-  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[]; tracks?: CmdRouteTrack[]; vias?: CmdVia[]; /** indices into `tracks` of the new tracks that are locked */ lock_tracks?: number[] }
+  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[]; tracks?: CmdRouteTrack[]; vias?: CmdVia[]; /** indices into `tracks` of the new tracks that are locked */ lock_tracks?: number[]; /** (index into `tracks`, the removed track it stands for): it takes that track's mask opening and group */ track_sources?: [number, string][] }
   /** `EDIT_TOOL::BooleanPolygons`: merge/subtract/intersect rectangles, circles and polygons (`ids` in routine order, the base first). */
   | { op: "boolean_shapes"; operation: "merge" | "subtract" | "intersect"; ids: string[] }
   /** `BOARD_EDITOR_CONTROL::modifyLockSelected` -- lock/unlock every id (part ref or track/via/zone/shape/text id). */
@@ -2087,7 +2087,7 @@ export type Cmd =
    */
   | ({ op: "edit_zone"; id: string; net: string; layer: string; /** The layers the zone is on (`ZONE_SETTINGS::m_Layers`); absent leaves a set that holds `layer` as it is. */ layers?: string[] } & ZoneSettingsFields & RuleAreaFields)
   /** `pcb_point_editor.cpp`'s zone-outline editing (drag/add/remove a corner) -- the whole edited outline, replacing it wholesale (no live point-by-point Cmd). */
-  | { op: "set_zone_outline"; id: string; outline: PointXY[]; holes?: PointXY[][] }
+  | { op: "set_zone_outline"; id: string; outline: PointXY[]; holes?: PointXY[][]; /** `SetNeedRefill( true )`: the fill stays, out of date (Add / Remove / Chamfer Corner, Simplify). */ keep_fill?: boolean }
   | { op: "add_shape"; shape: CmdShape }
   | { op: "delete_shape"; id: string }
   | { op: "move_shape"; id: string; dx: Nm; dy: Nm }
@@ -2458,6 +2458,8 @@ export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelS
 export interface CmdReply {
   ok: boolean;
   message: string;
+  /** What KiCad tells the user once the command worked (`ShowInfoBarMsg`, a tool's `wxLogMessage` lines: `eda_ops::notice`), one message a line. */
+  info?: string;
   /** The history tag of the step the command made (`pcb`, `schematic`, `both`, ...): which editor's content it modified. */
   domain?: string;
 }

@@ -10,7 +10,7 @@ import type { Action, StudioApi, StudioState } from "../state/store";
 import { localRatsnestPadsAfter, type BoardControlState, type BoardExportKind } from "../kicad-port/boardControlState";
 import { postRepairBoard } from "../api/boardControl";
 import { cliExporterUnavailable } from "../state/cliExporters";
-import { findNetAtCursor } from "../components/canvas/netAtCursor";
+import { collectorAccuracyNm, findNetAtCursor } from "../components/canvas/netAtCursor";
 import type { ZonePriorityMove } from "../api/types";
 import { highlightedNets, netsOfSelection, ratsnestModeCycle, selectedCopperZones, setNetsHidden, swapHighlight } from "../kicad-port/boardControl";
 
@@ -93,7 +93,7 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
       if (!board) return;
       let nets = netsOfSelection(state.selection, board);
       if (nets.length === 0 && state.cursorNm) {
-        const net = findNetAtCursor(board, state.cursorNm.x, state.cursorNm.y, 10 / (state.view.scale || 1));
+        const net = findNetAtCursor(board, state.cursorNm.x, state.cursorNm.y, collectorAccuracyNm(state.view.scale), { activeLayer: state.activeLayer, layerVisible: state.layerVisible, highContrast: state.highContrast, fills: state.zoneFill?.zones });
         if (net) nets = [net];
       }
       dispatch({ type: "SET_NET_HIGHLIGHT_SET", nets });
@@ -114,7 +114,8 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
   // nets with `GetNetCode() > 0`; with none it does nothing and says nothing (the action is disabled by `haveNetCond`, r7 C7-6).
   const setNetsInRatsnest = (hide: boolean) =>
     pcbOnly(() => {
-      const nets = board ? netsOfSelection([...state.selection], board) : [];
+      // `GetNetCode() > 0`: the unconnected items have no ratsnest to hide
+      const nets = board ? netsOfSelection([...state.selection], board, false) : [];
       if (nets.length === 0) return;
       bcx({ hiddenRatsnestNets: setNetsHidden(state.bcx.hiddenRatsnestNets, nets, hide) });
     });

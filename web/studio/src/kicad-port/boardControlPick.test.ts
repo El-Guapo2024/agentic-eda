@@ -34,3 +34,12 @@ test("padAt: where two pads' boxes overlap the nearer centre wins", () => {
   assert.equal(padAt(overlap, 400, 0)?.id, "J1.1");
   assert.equal(padAt(overlap, 1000, 0)?.id, "J1.2");
 });
+
+test("padAt: a round pad is hit by its circle, so a click in its box's corner falls through to the footprint (r7 C7-10)", () => {
+  const round = [{ ref: "J1", placed: true, pads: [{ num: "1", x: 0, y: 0, w: 1000, h: 1000, round: true }] }];
+  assert.deepEqual(padAt(round, 300, 300), { ref: "J1", id: "J1.1", num: "1" }, "inside the circle (r = 500)");
+  assert.equal(padAt(round, 450, 450), null, "in the box's corner, outside the circle");
+  const oval = [{ ref: "J2", placed: true, pads: [{ num: "1", x: 0, y: 0, w: 2000, h: 1000, round: true }] }];
+  assert.deepEqual(padAt(oval, 900, 0)?.id, "J2.1", "the stadium's end");
+  assert.equal(padAt(oval, 950, 450), null, "outside the stadium's round end, inside its box");
+});
