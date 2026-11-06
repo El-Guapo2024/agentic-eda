@@ -22,7 +22,7 @@ import { originMarkerColor } from "../../kicad-port/gridOrigin";
 import { leaderModeOf, zoneLeader, zoneLoop } from "../../kicad-port/pcbDrawZone";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
 import { carryRatsnest, offsetRatsnestForPreview, ratsnestCross, type MovedEdge } from "../../kicad-port/localRatsnest";
-import { EDGE_CUTS_DIM_FACTOR, HI_CONTRAST_FACTOR, cssOf, hiContrastDim, highlightBrighten, highlightDarken, parseColor, ratsnestCurveControl, ratsnestLineColor } from "../../kicad-port/color4d";
+import { edgeCutsDimFactor, hiContrastFactor, cssOf, hiContrastDim, highlightBrighten, highlightDarken, parseColor, ratsnestCurveControl, ratsnestLineColor } from "../../kicad-port/color4d";
 import { activeCopperOnTop, COPPER_BUCKETS, padContrast, padHoleContrast, viaContrast, type ContrastLook } from "../../kicad-port/hiContrast";
 import { installColourScopes, memoColours, withColourScope, withFinalColourScope } from "./colourScope";
 import { brightenedBoard, brightenedCss } from "../../kicad-port/brightened";
@@ -102,6 +102,10 @@ export interface PaintOptions {
   netHighlight: string | readonly string[] | null;
   showRatsnest: boolean;
   ratsnestCurved: boolean;
+  /** `PCB_DISPLAY_OPTIONS::m_RatsnestThickness` (Preferences > PCB Editor > Editing Options, "Ratsnest line thickness:"), pixels; 0.5 when absent. */
+  ratsnestThicknessPx?: number;
+  /** `PCBNEW_SETTINGS::m_ShowCourtyardCollisions` ("Show courtyard collisions when moving/dragging"); on when absent. */
+  showCourtyardCollisions?: boolean;
   /** GET /api/ratsnest's edges (crates/connectivity, KiCad's own ratsnest algorithm) -- null while the first fetch hasn't landed yet, in which case nothing is drawn (no client-side fallback computation anymore). */
   ratsnestEdges: RatsnestEdge[] | null;
   layerVisible: Record<string, boolean>;
@@ -227,7 +231,7 @@ function contrastPrimary(opts: PaintOptions): string | null {
  * High Contrast Mode's Dim on the board's background (`color.Mix( backgroundColor, factor )`, kicad-port/color4d.ts): the colours of the draw it is applied to.
  * The selection colour is left alone -- a selected item is never dimmed (`!highlighted && !selected`).
  */
-function dimColours(factor = HI_CONTRAST_FACTOR): (css: string) => string {
+function dimColours(factor = hiContrastFactor()): (css: string) => string {
   const background = layerColor("background");
   const selection = layerColor("selection");
   return memoColours(`dim|${factor}|${background}|${selection}`, (css) => (css === selection ? css : hiContrastDim(css, background, factor)));
@@ -261,7 +265,7 @@ export function withLayer(ctx: CanvasRenderingContext2D, opts: PaintOptions, key
  */
 export function withBoardLayer(ctx: CanvasRenderingContext2D, opts: PaintOptions, layer: string, draw: () => void, exempt = false): void {
   if (!opts.dimByColour) return draw();
-  if (layer === "Edge.Cuts" && !exempt && layerDimmed(opts, layerStateKey(layer))) return withColourScope(ctx, dimColours(EDGE_CUTS_DIM_FACTOR), draw);
+  if (layer === "Edge.Cuts" && !exempt && layerDimmed(opts, layerStateKey(layer))) return withColourScope(ctx, dimColours(edgeCutsDimFactor()), draw);
   withLayer(ctx, opts, layerStateKey(layer), 1, draw, exempt);
 }
 
@@ -271,7 +275,7 @@ export function withBoardLayer(ctx: CanvasRenderingContext2D, opts: PaintOptions
  */
 export function refImageLayerAlpha(opts: PaintOptions, key: string): number {
   if (!opts.dimByColour || !layerDimmed(opts, key)) return layerAlpha(opts, key);
-  return opts.appearance?.contrastHidden ? 0 : (opts.layerOpacity[key] ?? 1) * HI_CONTRAST_FACTOR;
+  return opts.appearance?.contrastHidden ? 0 : (opts.layerOpacity[key] ?? 1) * hiContrastFactor();
 }
 
 /** The rule that fills `pathForPad`: a trapezoid, chamfered or custom pad is its outline's contours, a ring having a hole. */
@@ -1260,9 +1264,9 @@ function drawOneDimension(ctx: CanvasRenderingContext2D, view: ViewTransform, d:
  * guard -- each net's ratsnest disappears on its own the moment that net
  * is finished, exactly like real KiCad's.
  */
-function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges: MovedEdge<RatsnestEdge>[], curved: boolean, netHighlight: string | readonly string[] | null, colorOf?: (net: string) => string | null) {
+function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges: MovedEdge<RatsnestEdge>[], curved: boolean, netHighlight: string | readonly string[] | null, colorOf?: (net: string) => string | null, thicknessPx = 0.5) {
   // `SetLineWidth( m_RatsnestThickness / GetWorldScale() )`: 0.5 px by default, drawn at the GAL's one-pixel minimum (`u_minLinePixelWidth`), every line the same.
-  const hair = hairlineNm(view, 1);
+  const hair = hairlineNm(view, Math.max(1, thicknessPx));
   const background = layerColor("background");
   const ratsnest = layerColor("ratsnest");
   // `dimStatic = m_data->GetLocalRatsnest().size() > 0 || highlightedNets.size() > 0`: while something moves or a net is highlighted, the static lines fade.
@@ -1730,7 +1734,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     ratsnest: () => {
       if (!opts.showRatsnest || !opts.ratsnestEdges) return;
       const edges = carry && preview ? carryRatsnest(opts.ratsnestEdges, fullBoard, carry, (pt) => carryPoint(preview, pt)) : offsetRatsnestForPreview(opts.ratsnestEdges, fullBoard, opts.movePreview);
-      drawRatsnest(ctx, view, edges, opts.ratsnestCurved, opts.netHighlight, (net) => ratsnestColor(net, opts.appearance));
+      drawRatsnest(ctx, view, edges, opts.ratsnestCurved, opts.netHighlight, (net) => ratsnestColor(net, opts.appearance), opts.ratsnestThicknessPx);
     },
   };
   for (const key of order) byLayer[key]?.();
@@ -1754,7 +1758,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   }
   // The overlays of footprints: locked items' shadow, the courtyards a move puts in conflict, and the anchors.
   drawLockedShadows(ctx, board, opts);
-  drawConflicts(ctx, fullBoard, opts.movePreview, opts);
+  if (opts.showCourtyardCollisions !== false) drawConflicts(ctx, fullBoard, opts.movePreview, opts);
   drawAnchors(ctx, view, board, opts);
   // KiCad 10's via stitching outlines (`LAYER_VIA_STITCHING`, above the items with the anchors and points).
   drawViaStitches(ctx, view, board, opts.layerVisible, opts.selection);

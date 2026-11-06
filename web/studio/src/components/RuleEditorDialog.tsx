@@ -26,7 +26,7 @@ import { fetchRuleEditor, postRuleEditorCheck, postRuleEditorShowMatches } from 
 import { canvasRect } from "../actions/canvasEvents";
 import { boxOfIds, boxOfPoints, pcbItemBoxes } from "../kicad-port/itemBoxes";
 import { zoomFitBox } from "../kicad-port/zoomFit";
-import { useColorScheme } from "../hooks/useColorScheme";
+import { useIconScheme } from "../hooks/useColorScheme";
 import {
   CONDITION_LABELS,
   CUSTOM_RULE_PLACEHOLDER,
@@ -153,7 +153,7 @@ function payloadOf(p: PanelState, takenNames: string[]): RuleEditPayload {
 }
 
 function Icon({ name, size = 16 }: { name: string; size?: number }) {
-  const scheme = useColorScheme();
+  const scheme = useIconScheme();
   return <img src={`/icons/${scheme}/${name}.svg`} width={size} height={size} alt="" draggable={false} />;
 }
 
@@ -776,7 +776,7 @@ function RulePanel({
 
 /** `DRC_RE_BITMAP_OVERLAY_PANEL`: the constraint's picture with its fields where `GetFieldPositions` puts them. */
 function Overlay({ p, update, onEnter }: { p: PanelState; update: (patch: Partial<PanelState>) => void; onEnter: () => void }) {
-  const scheme = useColorScheme();
+  const scheme = useIconScheme();
   const spec = overlaySpec(p.panel);
   if (!spec) return null;
   const right = Math.max(...spec.fields.map((f) => f.x1 + (f.label ? 8 * f.label.length + 12 : 0)));

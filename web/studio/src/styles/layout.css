@@ -248,9 +248,10 @@
   align-items: center;
   justify-content: center;
   /* KiCad's default toolbar icon is 24px (common_settings.cpp
-     appearance.toolbar_icon_size); a few px of padding around it. */
-  width: 30px;
-  height: 30px;
+     appearance.toolbar_icon_size, Preferences > Common's Toolbar icon size: 16, 24 or 32,
+     set on the document as --toolbar-icon-size by state/commonOptions.ts); a few px of padding around it. */
+  width: calc(var(--toolbar-icon-size, 24px) + 6px);
+  height: calc(var(--toolbar-icon-size, 24px) + 6px);
   border: 1px solid transparent;
   border-radius: 5px;
   background: transparent;
@@ -270,9 +271,13 @@
 .toolbar-button:disabled {
   opacity: 0.4;
 }
+.toolbar-button > img {
+  width: var(--toolbar-icon-size, 24px);
+  height: var(--toolbar-icon-size, 24px);
+}
 .toolbar-button .icon-placeholder {
-  width: 24px;
-  height: 24px;
+  width: var(--toolbar-icon-size, 24px);
+  height: var(--toolbar-icon-size, 24px);
   border-radius: 3px;
   background: currentColor;
   opacity: 0.25;
