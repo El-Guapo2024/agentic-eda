@@ -298,12 +298,19 @@ fn power_symbols_are_numbered_with_the_schematic_and_a_leading_zero() {
     let mut d = design();
     let power = |id: &str| eda_model::ir::PowerSymbol { id: id.into(), lib_id: "power:GND".into(), at: p(Nm::ZERO, mm(0.09)), rot: 0, net: "GND".into(), pin: String::new() };
     d.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap().power_symbols.push(power("#PWR01"));
-    d.sheet_contents.as_mut().unwrap().get_mut("b.kicad_sch").unwrap().power_symbols.push(power("#PWR01"));
+    let bsheet = d.sheet_contents.as_mut().unwrap().get_mut("b.kicad_sch").unwrap();
+    bsheet.power_symbols.push(power("#PWR01"));
+    // b's own flags and its Value placed by hand (r4 D4-L2) go with the number it is given
+    bsheet.extras.power_props.insert("#PWR01".into(), eda_model::sch_extras::PowerProps { dnp: true, ..Default::default() });
+    bsheet.field_layout.insert("#PWR01".into(), vec![eda_model::ir::FieldPlacement { dy: mm(3.81), ..eda_model::ir::FieldPlacement::at_origin("Value") }]);
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&annotate(true, AnnotateOrder::YThenX, None, all(Algo::FirstFree, 0))).unwrap();
     let sch = b.design().sheet_contents.as_ref().unwrap();
     let ids: Vec<&str> = ["a.kicad_sch", "b.kicad_sch"].iter().map(|f| sch[*f].power_symbols[0].id.as_str()).collect();
     assert_eq!(ids, vec!["#PWR01", "#PWR02"], "no two share an id any more, and the sheet in page order numbers first");
+    let b_after = &sch["b.kicad_sch"];
+    assert!(b_after.extras.power_props.get("#PWR02").is_some_and(|p| p.dnp) && !b_after.extras.power_props.contains_key("#PWR01"), "{:?}", b_after.extras.power_props);
+    assert!(b_after.field_layout.contains_key("#PWR02") && !b_after.field_layout.contains_key("#PWR01"));
 }
 
 #[test]
