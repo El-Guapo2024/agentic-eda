@@ -7,8 +7,9 @@
 //
 // What it checks, by step of the package:
 //   1  Gaps, Stubs and Arc Stubs: a click and the "Create Microwave Footprint" prompts (the size starting at the current track width, the arc stub's second prompt "Angle in degrees:" starting at 0.0,
-//      a number that is none refused with "Incorrect number, abort", the angle clamped to a half turn), OK puts the footprint of the tool where the click was -- the pads where `createFootprint`
-//      puts them, a footprint of its own with the name KiCad gives it, selected -- as one undo step; Cancel puts nothing and the tool waits for the next click until Escape; the footprints
+//      a number that is none refused with "Incorrect number, abort", the angle clamped to a half turn), OK makes the footprint of the tool where the click was and carries it until the
+//      next click puts it down (UI-LEFT P19, `doInteractiveItemPlacement`; R and F while it is carried are e2e/placement-u5.check.js's) -- the pads where `createFootprint`
+//      puts them, a footprint of its own with the name KiCad gives it, nothing selected once it is down -- as one undo step; Cancel puts nothing and the tool waits for the next click until Escape; the footprints
 //      are copper on the front layer only, with no library link and no courtyard in the board file kicad-cli reads; they are not held to a courtyard of their pads with Strict on;
 //      and they are footprints like any other: rotated, turned over, duplicated and deleted, each one undo step, and opened in the Footprint Editor (Edit Footprint) without an error.
 //   2  Lines: two clicks (the second held by the angle snap), "Length of track:" starting at the distance between the points, KiCad's four messages for a length the coil cannot have (said before
@@ -189,16 +190,19 @@
       t(Number(p.text) === TW / 1e6, `the box starts at the current track width (${p.text} mm for ${TW} um)`);
       await answer("0.5");
       const made = await mine();
-      t(made.length === 1, `OK puts one footprint on the board (${made.map((m) => m.ref)})`);
+      t(made.length === 1, `OK makes one footprint (${made.map((m) => m.ref)})`);
       const g = made[0];
       if (!g) return;
+      t(E.state().selection.some((s) => s.id === g.ref) && E.state().tool === "move", `it is carried on the cursor: selected, the Move tool holding it (${E.state().tool})`);
+      // the second click puts it down where it is
+      await click(toScreen, x, y);
+      t(!E.state().selection.some((s) => s.id === g.ref), "once it is down nothing is selected (`doInteractiveItemPlacement` selects nothing)");
       t(g.footprint === "muwave_gap" && g.ref.startsWith("REF"), `a footprint of its own: ${g.footprint}, ${g.ref}`);
       t(near(g.at[0], x * 1e6, 600_000) && near(g.at[1], y * 1e6, 600_000), `where the click was (${g.at} for ${x * 1e6}, ${y * 1e6})`);
       const pads = [...g.pads].sort((a, b) => a.x - b.x);
       t(pads.length === 2 && pads[0].w === TW && pads[0].h === TW, `two square pads of the track width (${pads.map((q) => `${q.w}x${q.h}`)})`);
       t(near(pads[0].x, g.at[0] - (500_000 + TW) / 2, 1000) && near(pads[1].x, g.at[0] + (500_000 + TW) / 2, 1000), `at -(gap + w) / 2 and +(gap + w) / 2 from the origin (${pads.map((q) => q.x - g.at[0])})`);
       t(near(pads[1].x - pads[1].w / 2 - (pads[0].x + pads[0].w / 2), 500_000, 1000), "so the copper is 0.5 mm apart");
-      t(E.state().selection.some((s) => s.id === g.ref), "the footprint is selected");
       await undo();
       t((await mine()).length === 0, "one undo step takes it back");
       await redo();
@@ -227,7 +231,8 @@
       p = await awaitPrompt();
       t(!!p, "the tool waits for another click (`IPO_REPEAT`): it opens the prompt again");
       await answer("0.3");
-      t((await mine()).length === 1, "a second answer puts the footprint");
+      await click(toScreen, x, y);
+      t((await mine()).length === 1, "a second answer makes the footprint, and a click puts it down");
       await click(toScreen, ...at(16, 8));
       p = await awaitPrompt();
       t(!!p, "and after a footprint the tool asks for the next");
@@ -249,6 +254,7 @@
       t(!!p && p.label === "Stub Size:", `the prompt says Stub Size (${p?.label})`);
       if (!p) return;
       await answer("1.5");
+      await click(toScreen, x, y);
       const s = (await mine())[0];
       t(!!s && s.footprint === "muwave_stub", `a muwave_stub (${s?.footprint})`);
       if (!s) return;
@@ -283,6 +289,7 @@
       await awaitPrompt();
       await answer("2");
       await answer("270");
+      await click(toScreen, x, y);
       const a = (await mine())[0];
       t(!!a && a.footprint === "muwave_arcstub" && a.pads.length === 1, `one custom pad (${a?.footprint}, ${a?.pads?.length})`);
       if (!a) return;
@@ -299,6 +306,7 @@
       await awaitPrompt();
       await answer("1.5");
       await answer("90");
+      await click(toScreen, x, y);
       const b = (await mine())[0];
       const text = b ? blockOf(await pcbText(), b.ref) : "";
       t(pointsOf(text, "(gr_poly", "(width") === 21, "90 degrees is 21 points");
@@ -483,6 +491,7 @@
       await sleep(150);
       button("OK").click();
       await sleep(1200);
+      await click(toScreen, x, y);
       const made = await mine();
       t(made.length === 1 && made[0].footprint === "muwave_polygon", `the footprint is muwave_polygon (${made.map((m) => m.footprint)})`);
       const s = made[0];
@@ -505,6 +514,7 @@
       await sleep(150);
       button("OK").click();
       await sleep(1200);
+      await click(toScreen, x, y);
       const m = (await mine())[0];
       t(!!m, "a second shape");
       if (!m) return;
