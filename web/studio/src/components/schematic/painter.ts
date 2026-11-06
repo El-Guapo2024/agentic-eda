@@ -51,6 +51,7 @@ import { DEFAULT_SCH_DISPLAY, ercSeverityShown, type SchDisplayOptions } from ".
 import { bodyBoundsOf } from "./symbolMarkers";
 import { drawSymbolMarkers } from "./symbolMarkersDraw";
 import { dashPattern, drawSelectionBox, paintGraphics, paintImages, rgba } from "./schGraphicsPainter";
+import { dnpCross } from "./symbolMarkers";
 import { paintSchTables } from "./schTablePaint";
 import { drawGroups } from "./schGroupPainter";
 import type { SchStroke } from "../../api/schEditTypes";
@@ -846,11 +847,37 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
   const hair = 1 / view.scale;
   const [x, y] = s.at;
   const [w, h] = s.size;
+  // `SCH_PAINTER::draw( SCH_SHEET )`: the background in the sheet's own colour when it has one with some alpha (`LAYER_SHEET_BACKGROUND`, transparent in the
+  // default theme, otherwise), the border in its own colour and width (`GetBorderColor`, `GetPenWidth`: 0 is the default line width), Sheet Properties' Style
+  // (`Sheet::props`). **Differs**: a sheet with no style of its own is drawn as before, unfilled (the file gives it a pale yellow fill).
+  const props = s.props ?? null;
+  const fill = props?.fill_color;
+  if (fill && fill.a > 0) {
+    ctx.save();
+    ctx.fillStyle = rgba(fill);
+    ctx.fillRect(x, y, w, h);
+    ctx.restore();
+  }
   ctx.save();
-  ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_SHEET");
-  ctx.lineWidth = Math.max(152_400, hair);
+  const border = props?.border_color && props.border_color.a > 0 ? rgba(props.border_color) : layerColor("LAYER_SHEET");
+  ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : border;
+  ctx.lineWidth = Math.max(props?.border_width_nm && props.border_width_nm > 0 ? props.border_width_nm : 152_400, hair);
   ctx.strokeRect(x, y, w, h);
   ctx.restore();
+  // "Do not populate": two diagonals over the sheet's box (`LAYER_DNP_MARKER`, 3 x `DEFAULT_LINE_WIDTH_MILS`)
+  if (props?.dnp) {
+    ctx.save();
+    ctx.strokeStyle = layerColor("LAYER_DNP_MARKER");
+    ctx.lineCap = "round";
+    ctx.lineWidth = 3 * 152_400;
+    ctx.beginPath();
+    for (const [a, b] of dnpCross({ minX: x, minY: y, maxX: x + w, maxY: y + h }, { minX: x, minY: y, maxX: x + w, maxY: y + h })) {
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(b[0], b[1]);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
 
   const nameSizeNm = 1_270_000;
   if (s.fields?.length) {

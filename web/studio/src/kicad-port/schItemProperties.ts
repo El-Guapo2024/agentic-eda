@@ -893,13 +893,50 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     validate: (v) => (String(v).trim() === "" ? "A sheet needs a name." : null),
     set: (i, v) => (i.sheet!.name === String(v).trim() ? [] : [{ op: "sch_edit", verb: "edit_sheet", id: i.id, name: String(v).trim() }]),
   });
-  // A sheet's border, background and attributes are not kept by the model (a sheet file's `(stroke ..)`, `(fill ..)` and flags are not read): KiCad's defaults.
-  const SHEET_LOOK = "A sheet's border, background and attributes are not kept by the model: it is drawn and written with KiCad's defaults.";
-  add({ owner: "SCH_SHEET", name: "Border Width", kind: "int", display: "size", get: () => 0, readOnlyReason: SHEET_LOOK });
-  add({ owner: "SCH_SHEET", name: "Border Color", kind: "color", get: () => "", readOnlyReason: SHEET_LOOK });
-  add({ owner: "SCH_SHEET", name: "Background Color", kind: "color", get: () => "", readOnlyReason: SHEET_LOOK });
-  for (const name of ["Exclude From Board", "Exclude From Simulation", "Exclude From Bill of Materials", "Do not Populate"]) {
-    add({ owner: "SCH_SHEET", name, kind: "bool", get: () => false, readOnlyReason: SHEET_LOOK }, ATTRIBUTES);
+  // A sheet's border, background and attributes (`SCH_SHEET_DESC`: "Border Width", "Border Color", "Background Color", the four attributes) are its
+  // `SchExtras::sheet_props` (`set_sheet_props`, UI-LEFT S8); a sheet with none of its own has the look the studio always wrote, a 6 mil border and a pale fill.
+  const sheetProps = (i: SchItem) => i.sheet!.props ?? { border_width_nm: 152_400, border_color: null, fill_color: { r: 255, g: 255, b: 194, a: 255 } };
+  const sheetCmd = (i: SchItem, patch: Record<string, unknown>): Cmd => ({ op: "sch_edit", verb: "set_sheet_props", id: i.id, ...patch }) as unknown as Cmd;
+  add({
+    owner: "SCH_SHEET",
+    name: "Border Width",
+    kind: "int",
+    display: "size",
+    get: (i) => sheetProps(i).border_width_nm ?? 0,
+    validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
+    set: (i, v) => ((sheetProps(i).border_width_nm ?? 0) === Math.round(num(v)) ? [] : [sheetCmd(i, { border_width_nm: Math.round(num(v)) })]),
+  });
+  add({
+    owner: "SCH_SHEET",
+    name: "Border Color",
+    kind: "color",
+    get: (i) => colorValue(sheetProps(i).border_color),
+    set: (i, v) => (colorValue(sheetProps(i).border_color) === String(v) ? [] : [sheetCmd(i, { border_color: colorOf(String(v)) })]),
+  });
+  add({
+    owner: "SCH_SHEET",
+    name: "Background Color",
+    kind: "color",
+    get: (i) => colorValue(sheetProps(i).fill_color),
+    set: (i, v) => (colorValue(sheetProps(i).fill_color) === String(v) ? [] : [sheetCmd(i, { fill_color: colorOf(String(v)) })]),
+  });
+  const SHEET_FLAGS: Array<[string, "exclude_from_board" | "exclude_from_sim" | "exclude_from_bom" | "dnp"]> = [
+    ["Exclude From Board", "exclude_from_board"],
+    ["Exclude From Simulation", "exclude_from_sim"],
+    ["Exclude From Bill of Materials", "exclude_from_bom"],
+    ["Do not Populate", "dnp"],
+  ];
+  for (const [name, key] of SHEET_FLAGS) {
+    add(
+      {
+        owner: "SCH_SHEET",
+        name,
+        kind: "bool",
+        get: (i) => !!(i.sheet!.props as Record<string, unknown> | null | undefined)?.[key],
+        set: (i, v) => (!!(i.sheet!.props as Record<string, unknown> | null | undefined)?.[key] === Boolean(v) ? [] : [sheetCmd(i, { [key]: Boolean(v) })]),
+      },
+      ATTRIBUTES
+    );
   }
 
   // ----------------------------------------------------------------------------------------------- EDA_SHAPE, SCH_SHAPE and kin

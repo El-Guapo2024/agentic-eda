@@ -8,7 +8,7 @@
 // batched with the dialog's other command. A label's own fields (its net class, ...) are the grid of Label Properties; a global label's Sheet References row is
 // shown, Schematic Setup shows or hides it.
 import { useState, type ReactNode } from "react";
-import type { LabelShape, Schematic, SchematicLabel, SchematicText } from "../api/types";
+import type { Cmd, LabelShape, Schematic, SchematicLabel, SchematicText, Sheet } from "../api/types";
 import type { LabelFieldEdit, SchColor, SchFill, SchGraphic, SchLineStyle } from "../api/schEditTypes";
 import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, labelFieldDisplayName, newLabelField, ownLabelFields, mmToNm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, nmToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -315,28 +315,167 @@ export function SheetPropertiesDialog({ id }: { id: string }) {
   return sheet ? <SheetForm key={id} sheet={sheet} /> : null;
 }
 
-function SheetForm({ sheet }: { sheet: { id: string; name: string; file: string; page?: string } }) {
+/** The look the writer has always given a sheet with no style of its own (`SheetProps::legacy`): a 6 mil border, a pale yellow fill. */
+const LEGACY_SHEET = { border_width_nm: 152_400, border_color: null as SchColor | null, fill_color: { r: 255, g: 255, b: 194, a: 255 } as SchColor | null };
+
+type SheetUserField = { name: string; text: string; visible: boolean; italic: boolean };
+
+/**
+ * Sheet Properties (`DIALOG_SHEET_PROPERTIES`): the name, file and page, the user fields (`SCH_FIELD`s of `FIELD_T::SHEET_USER`: Add Field gives `Field<N>`,
+ * `GetUserFieldName( m_fields->size() )`, hidden; Move Up / Down; Delete), the Attributes (Exclude from simulation, bill of materials, board; Do not populate)
+ * and the Style (the border's width and colour, the fill colour). OK is one step: `edit_sheet` / `set_sheet_page`, `set_sheet_fields`, `set_sheet_props`.
+ */
+function SheetForm({ sheet }: { sheet: Sheet }) {
   const here = useStudioState().currentSheetPath;
   const close = useClose();
   const send = useSend(close);
   const [name, setName] = useState(sheet.name);
   const [file, setFile] = useState(sheet.file);
   const [page, setPage] = useState(sheet.page ?? "");
+  const own = sheet.props ?? null;
+  const [fields, setFields] = useState<SheetUserField[]>(() => (sheet.user_fields ?? []).map((f) => ({ name: f.name, text: f.text, visible: f.visible ?? true, italic: !!f.italic })));
+  const [excludeFromSim, setExcludeFromSim] = useState(!!own?.exclude_from_sim);
+  const [excludeFromBom, setExcludeFromBom] = useState(!!own?.exclude_from_bom);
+  const [excludeFromBoard, setExcludeFromBoard] = useState(!!own?.exclude_from_board);
+  const [dnp, setDnp] = useState(!!own?.dnp);
+  const [border, setBorder] = useState(nmToMm(own ? (own.border_width_nm ?? 0) : LEGACY_SHEET.border_width_nm));
+  const [borderColor, setBorderColor] = useState<SchColor | null>(own ? (own.border_color ?? null) : LEGACY_SHEET.border_color);
+  const [fillColor, setFillColor] = useState<SchColor | null>(own ? (own.fill_color ?? null) : LEGACY_SHEET.fill_color);
+  const [problem, setProblem] = useState<string | null>(null);
   // A sheet must have a name and a valid file name; a page number is letters and digits only (`wxFILTER_ALPHANUMERIC`).
   const fileOk = file.trim().length > 0 && !/[\\/]/.test(file);
   const pageOk = /^[\p{L}\p{N}]*$/u.test(page.trim());
-  const canOk = name.trim().length > 0 && fileOk && pageOk;
-  const submit = () => canOk && void send(sheetEditCmd(sheet, { name, file, page }, [...here, sheet.id]));
+  const borderNm = mmToNm(border);
+  const canOk = name.trim().length > 0 && fileOk && pageOk && borderNm !== null && borderNm >= 0;
+  const setField = (i: number, change: Partial<SheetUserField>) => setFields((fs) => fs.map((f, k) => (k === i ? { ...f, ...change } : f)));
+  const move = (i: number, by: -1 | 1) =>
+    setFields((fs) => {
+      const j = i + by;
+      if (j < 0 || j >= fs.length) return fs;
+      const next = [...fs];
+      [next[i], next[j]] = [next[j]!, next[i]!];
+      return next;
+    });
+  const submit = () => {
+    if (!canOk) return;
+    // `Validate`: "Fields must have a name." for a field with a text and no name
+    if (fields.some((f) => f.name.trim() === "" && f.text !== "")) return setProblem("Fields must have a name.");
+    const names = fields.filter((f) => f.name.trim() !== "").map((f) => f.name.trim());
+    const dup = names.find((n, i) => names.indexOf(n) !== i || ["sheetname", "sheetfile"].includes(n.toLowerCase()));
+    if (dup) return setProblem(`Field name '${dup}' already in use.`);
+    const was = (sheet.user_fields ?? []).map((f) => ({ name: f.name, text: f.text, visible: f.visible ?? true, italic: !!f.italic }));
+    const kept = fields.filter((f) => f.name.trim() !== "" || f.text !== "");
+    const fieldsCmd = JSON.stringify(kept) === JSON.stringify(was) ? null : ({ op: "sch_edit", verb: "set_sheet_fields", id: sheet.id, fields: kept } as unknown as Cmd);
+    const was2 = own ?? LEGACY_SHEET;
+    const props: Record<string, unknown> = {};
+    const sameColor = (a: SchColor | null | undefined, b: SchColor | null | undefined) => JSON.stringify(a && a.a > 0 ? a : null) === JSON.stringify(b && b.a > 0 ? b : null);
+    if (borderNm !== (was2.border_width_nm ?? 0)) props.border_width_nm = borderNm;
+    if (!sameColor(borderColor, was2.border_color)) props.border_color = borderColor ?? UNSPECIFIED_COLOR;
+    if (!sameColor(fillColor, was2.fill_color)) props.fill_color = fillColor ?? UNSPECIFIED_COLOR;
+    if (excludeFromSim !== !!own?.exclude_from_sim) props.exclude_from_sim = excludeFromSim;
+    if (excludeFromBom !== !!own?.exclude_from_bom) props.exclude_from_bom = excludeFromBom;
+    if (excludeFromBoard !== !!own?.exclude_from_board) props.exclude_from_board = excludeFromBoard;
+    if (dnp !== !!own?.dnp) props.dnp = dnp;
+    const propsCmd = Object.keys(props).length > 0 ? ({ op: "sch_edit", verb: "set_sheet_props", id: sheet.id, ...props } as unknown as Cmd) : null;
+    const edit = sheetEditCmd(sheet, { name, file, page }, [...here, sheet.id]);
+    const editCmds: Cmd[] = edit ? ((edit as { op: string; cmds?: Cmd[] }).op === "batch" ? ((edit as { cmds: Cmd[] }).cmds ?? []) : [edit]) : [];
+    void send(oneStep([propsCmd, fieldsCmd, ...editCmds]));
+  };
   return (
-    <SchDialogShell title="Sheet Properties" width={440} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
+    <SchDialogShell title="Sheet Properties" width={560} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
         <span>Sheet name</span>
         <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
         <span>Sheet file name</span>
         <input value={file} onChange={(e) => setFile(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} title="A file the project has is shown; a new name moves this sheet's content to it (or copies it when another sheet shows the old file)" />
-        <span>Page number</span>
-        <input value={page} onChange={(e) => setPage(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="by order" />
       </Grid>
+      <table className="label-fields" aria-label="Sheet fields" style={{ width: "100%", marginTop: 8, borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ textAlign: "left" }}>Name</th>
+            <th style={{ textAlign: "left" }}>Value</th>
+            <th>Show</th>
+            <th>Italic</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {fields.map((f, i) => (
+            <tr key={i}>
+              <td>
+                <input aria-label={`Sheet field ${i + 1} name`} value={f.name} onChange={(e) => setField(i, { name: e.target.value })} style={{ width: 110 }} />
+              </td>
+              <td>
+                <input aria-label={`Sheet field ${i + 1} value`} value={f.text} onChange={(e) => setField(i, { text: e.target.value })} />
+              </td>
+              <td style={{ textAlign: "center" }}>
+                <input type="checkbox" aria-label={`Sheet field ${i + 1} shown`} checked={f.visible} onChange={(e) => setField(i, { visible: e.target.checked })} />
+              </td>
+              <td style={{ textAlign: "center" }}>
+                <input type="checkbox" aria-label={`Sheet field ${i + 1} italic`} checked={f.italic} onChange={(e) => setField(i, { italic: e.target.checked })} />
+              </td>
+              <td style={{ whiteSpace: "nowrap" }}>
+                <button type="button" title="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
+                  ↑
+                </button>
+                <button type="button" title="Move down" disabled={i === fields.length - 1} onClick={() => move(i, 1)}>
+                  ↓
+                </button>
+                <button type="button" aria-label={`Delete sheet field ${i + 1}`} title="Delete field" onClick={() => setFields((fs) => fs.filter((_, k) => k !== i))}>
+                  ✕
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <button
+        type="button"
+        aria-label="Add field"
+        title="Add field"
+        style={{ marginTop: 4 }}
+        // `OnAddField`: `GetUserFieldName( m_fields->size() )` over the two mandatory rows and the user ones, hidden
+        onClick={() => setFields((fs) => [...fs, { name: `Field${fs.length + 2}`, text: "", visible: false, italic: false }])}
+      >
+        + Add Field
+      </button>
+      <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap" }}>
+        <fieldset style={{ flex: 1, minWidth: 220 }}>
+          <legend>Attributes</legend>
+          <Grid>
+            <span>Page number:</span>
+            <input value={page} onChange={(e) => setPage(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="by order" />
+          </Grid>
+          <label style={{ display: "block" }}>
+            <input type="checkbox" checked={excludeFromSim} onChange={(e) => setExcludeFromSim(e.target.checked)} /> Exclude from simulation
+          </label>
+          <label style={{ display: "block" }} title={"This is useful for adding symbols for board footprints such as fiducials\nand logos that you do not want to appear in the bill of materials export"}>
+            <input type="checkbox" checked={excludeFromBom} onChange={(e) => setExcludeFromBom(e.target.checked)} /> Exclude from bill of materials
+          </label>
+          <label style={{ display: "block" }} title={"This is useful for adding symbols that only get exported to the bill of materials but\nnot required to layout the board such as mechanical fasteners and enclosures"}>
+            <input type="checkbox" checked={excludeFromBoard} onChange={(e) => setExcludeFromBoard(e.target.checked)} /> Exclude from board
+          </label>
+          <label style={{ display: "block" }}>
+            <input type="checkbox" checked={dnp} onChange={(e) => setDnp(e.target.checked)} /> Do not populate
+          </label>
+        </fieldset>
+        <fieldset style={{ flex: 1, minWidth: 220 }}>
+          <legend>Style</legend>
+          <Grid>
+            <span>Border width (mm):</span>
+            <input aria-label="Border width" value={border} onChange={(e) => setBorder(e.target.value)} title="0 is the schematic's default line width" />
+            <span>Border color:</span>
+            <ColorSwatch label="Border color" color={borderColor} onChange={setBorderColor} />
+            <span>Fill color:</span>
+            <ColorSwatch label="Background color" color={fillColor} onChange={setFillColor} />
+          </Grid>
+        </fieldset>
+      </div>
+      {problem && (
+        <p style={{ color: "var(--chrome-danger)", fontSize: 11, marginTop: 8 }} data-testid="sheet-properties-error">
+          {problem}
+        </p>
+      )}
     </SchDialogShell>
   );
 }

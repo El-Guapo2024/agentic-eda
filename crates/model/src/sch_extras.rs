@@ -58,6 +58,12 @@ pub struct SchExtras {
     /// `writes_nothing`, not in `is_empty`, like the grid.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intersheet_refs: Option<IntersheetRefs>,
+    /// This root sheet is KiCad 10's virtual root (`SCHEMATIC::m_rootSheet`, the project, `IsVirtualRootSheet`): its sheets are the project's top-level sheets
+    /// (`m_topLevelSheets`, `schematic.top_level_sheets` of the `.kicad_pro`), as `eda import-kicad` of a project with several of them places them (r7 H2). The
+    /// Hierarchy Navigator shows each as a root of its own, and New / Delete Top-Level Sheet add and remove them. Kept on the root only. Additive. (Counts in
+    /// `writes_nothing`, not in `is_empty`: it says how the hierarchy reads, it draws nothing.)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub virtual_root: bool,
     /// A label's own fields beyond a global label's Sheet References (`SCH_LABEL_BASE::m_fields`, `(property ..)` in the file), by label id, in order: its net class
     /// (`Netclass`, which puts the label's net in that class: `CONNECTION_GRAPH` `checkNetclassDrivers`) and any field the user added. A label with no entry has none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -100,6 +106,12 @@ pub struct SchExtras {
     /// read per placement. Read from a file and written back (`saveSheet`: `for( SCH_FIELD& field : aSheet->GetFields() ) saveField( &field )`). Additive.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sheet_fields: BTreeMap<String, Vec<LabelField>>,
+    /// A hierarchical sheet's style and attributes (`SCH_SHEET::m_borderWidth`, `m_borderColor`, `m_backgroundColor`, `m_excludedFromSim`, `m_excludedFromBOM`,
+    /// `m_excludedFromBoard`, `m_DNP`: Sheet Properties' Style and Attributes, `dialog_sheet_properties.cpp`), by the sheet's id. A sheet with no entry is written
+    /// as the studio always wrote one ([`SheetProps::legacy`]: a 6 mil border, a pale yellow fill, no attribute); an entry equal to that is never kept. Read from
+    /// a KiCad file (`parseSheet`: `(stroke ..)`, `(fill ..)`, `exclude_from_sim`, `in_bom`, `on_board`, `dnp`) and written back (`saveSheet`). Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sheet_props: BTreeMap<String, SheetProps>,
     /// The page number of a sheet drawn on this screen, per sheet path, where the screen is shown on several paths and the paths' pages differ
     /// (`SCH_SHEET::m_instances`: one `SCH_SHEET_INSTANCE`, with its own `m_PageNumber`, per sheet path the sheet is on): by the sheet's
     /// `SheetInstance::id`, then by the path of the screen the sheet is drawn on (the placement ids from the root down, joined with `/`) -> the page.
@@ -451,6 +463,68 @@ pub struct TextAttrs {
     pub font: Option<String>,
 }
 
+/// See [`SchExtras::sheet_props`]: Sheet Properties' Style (`m_borderWidth`, `m_borderSwatch`, `m_backgroundSwatch`) and Attributes (the four checks).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SheetProps {
+    /// The border's width (`SCH_SHEET::GetBorderWidth`, nanometres); 0 is the schematic's default line width (`GetPenWidth`).
+    #[serde(default, deserialize_with = "crate::units::de")]
+    pub border_width_nm: Nm,
+    /// The border's colour; `None` is `COLOR4D::UNSPECIFIED`, the layer's (`LAYER_SHEET`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_color: Option<SchColor>,
+    /// The background's colour; `None` is `COLOR4D::UNSPECIFIED`, the layer's (`LAYER_SHEET_BACKGROUND`, transparent in KiCad's default theme).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_color: Option<SchColor>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude_from_sim: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude_from_bom: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude_from_board: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dnp: bool,
+}
+
+impl SheetProps {
+    /// What the writer has always given a sheet: `(stroke (width 0.1524) (type solid))` (`DEFAULT_LINE_WIDTH_MILS`, 6 mil) and `(fill (color 255 255 194 1))`,
+    /// no attribute set.
+    pub fn legacy() -> SheetProps {
+        SheetProps {
+            border_width_nm: Nm::new(152_400),
+            border_color: None,
+            fill_color: Some(SchColor { r: 255, g: 255, b: 194, a: 255 }),
+            exclude_from_sim: false,
+            exclude_from_bom: false,
+            exclude_from_board: false,
+            dnp: false,
+        }
+    }
+
+    /// Is any of the four attributes set?
+    pub fn has_attributes(&self) -> bool {
+        self.exclude_from_sim || self.exclude_from_bom || self.exclude_from_board || self.dnp
+    }
+}
+
+impl SchExtras {
+    /// The style and attributes of sheet `id`: its entry, else [`SheetProps::legacy`].
+    pub fn sheet_props_of(&self, id: &str) -> SheetProps {
+        self.sheet_props.get(id).cloned().unwrap_or_else(SheetProps::legacy)
+    }
+
+    /// Set sheet `id`'s style and attributes; the legacy look keeps no entry. Returns whether anything changed.
+    pub fn set_sheet_props(&mut self, id: &str, props: SheetProps) -> bool {
+        let before = self.sheet_props.get(id).cloned();
+        if props == SheetProps::legacy() {
+            self.sheet_props.remove(id);
+        } else {
+            self.sheet_props.insert(id.to_string(), props);
+        }
+        self.sheet_props.get(id).cloned() != before
+    }
+}
+
 /// See [`SchExtras::power_props`]. A user field's place is the power symbol's anchor (not kept, as a sheet's user fields are not: r2 B-L1).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -664,6 +738,7 @@ impl SchExtras {
             && self.annotation.is_none()
             && self.field_name_templates.is_empty()
             && self.variants.is_empty()
+            && !self.virtual_root
     }
 
     /// The net class a label's fields give its net (`SCH_LABEL_BASE`'s `Netclass` field; the first that is not empty), if any.
@@ -796,6 +871,7 @@ impl SchExtras {
             && self.label_fields.is_empty()
             && self.sheet_pin_looks.is_empty()
             && self.sheet_fields.is_empty()
+            && self.sheet_props.is_empty()
             && self.sheet_pages.is_empty()
             && self.path_units.is_empty()
             && self.local_power.is_empty()

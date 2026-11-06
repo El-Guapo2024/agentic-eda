@@ -720,8 +720,27 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     // the pages of a sheet on the paths after its first (`SchExtras::sheet_pages`)
     let mut sheet_pages: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> = std::collections::BTreeMap::new();
     let mut sheet_user_fields: Vec<(String, Vec<eda_model::sch_extras::LabelField>)> = Vec::new();
+    // each sheet's style and attributes (`SchExtras::sheet_props`), by its id
+    let mut sheet_props_read: Vec<(String, eda_model::sch_extras::SheetProps)> = Vec::new();
     for s in sexpr::find_all(root, "sheet") {
         let id = sexpr::find(s, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
+        // `parseSheet`: `(stroke ..)` sets the border's width and colour, `(fill ..)` the background colour, `in_bom` / `on_board` the inverted exclusions
+        if !id.is_empty() {
+            let mut props = eda_model::sch_extras::SheetProps { border_width_nm: Nm::new(152_400), border_color: None, fill_color: None, exclude_from_sim: false, exclude_from_bom: false, exclude_from_board: false, dnp: false };
+            if sexpr::find(s, "stroke").is_some() {
+                let (width, _, color) = crate::sch_extras_io::parse_stroke(s);
+                props.border_width_nm = width;
+                props.border_color = color;
+            }
+            props.fill_color = sexpr::find(s, "fill").and_then(|f| sexpr::find(f, "color")).and_then(crate::sch_extras_io::parse_color).filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0));
+            props.exclude_from_sim = crate::sch_extras_io::parse_bool(s, "exclude_from_sim").unwrap_or(false);
+            props.exclude_from_bom = !crate::sch_extras_io::parse_bool(s, "in_bom").unwrap_or(true);
+            props.exclude_from_board = !crate::sch_extras_io::parse_bool(s, "on_board").unwrap_or(true);
+            props.dnp = crate::sch_extras_io::parse_bool(s, "dnp").unwrap_or(false);
+            if props != eda_model::sch_extras::SheetProps::legacy() {
+                sheet_props_read.push((id.clone(), props));
+            }
+        }
         let name = sheet_property_text(s, "Sheetname").unwrap_or_default();
         let file = sheet_property_text(s, "Sheetfile").unwrap_or_default();
         // the sheet's user fields (r2 B-L1): every property but the two mandatory ones
@@ -855,6 +874,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             }
         }
         sch.extras.sheet_fields.extend(sheet_user_fields);
+        sch.extras.sheet_props.extend(sheet_props_read);
         // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
         for (id, (spin, look)) in sch.labels.iter().map(|l| l.id.clone()).zip(label_geometry) {
             if id.is_empty() {

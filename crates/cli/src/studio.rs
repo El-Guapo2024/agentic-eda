@@ -734,7 +734,7 @@ fn handle(
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),
         // The sheet tree (Next / Previous Sheet, Edit Sheet Page Number): `crate::sch_control_api`.
-        ("GET", "/api/sch/hierarchy") => respond(stream, "200 OK", "application/json", crate::sch_control_api::hierarchy(dir).to_string().as_bytes()),
+        ("GET", "/api/sch/hierarchy") => respond(stream, "200 OK", "application/json", crate::sch_control_api::hierarchy(dir, &query_value(target, "net")).to_string().as_bytes()),
         // Export Symbols...: the library symbols the schematic uses as one `.kicad_sym` (a read; the browser saves it).
         ("POST", "/api/sch/export_symbols") => respond(stream, "200 OK", "application/json", crate::sch_control_api::export_symbols(dir, &body).to_string().as_bytes()),
         ("GET", "/api/ratsnest") => {
@@ -2213,6 +2213,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "id": s.id, "name": s.name, "file": s.file, "page": shown_page(s),
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &s.id),
+                // Sheet Properties' Style and Attributes (`SchExtras::sheet_props`; absent: the look the writer has always given a sheet) and the user fields
+                "props": sch.extras.sheet_props.get(&s.id),
+                "user_fields": sch.extras.sheet_fields.get(&s.id),
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
                 // a pin's text is set as Sheet Pin Properties set it (`SchExtras::sheet_pin_looks`): the size, bold and italic are sent when they are not the default's
                 "pins": s.pins.iter().map(|p| {

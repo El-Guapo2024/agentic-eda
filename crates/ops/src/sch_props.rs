@@ -112,6 +112,18 @@ pub(crate) struct TextAttrsEdit {
     pub exclude_from_sim: Option<bool>,
 }
 
+/// What [`SchCmd::SetSheetProps`](crate::sch_edit::SchCmd::SetSheetProps) changes; a member left out is unchanged.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SheetPropsEdit {
+    pub border_width_nm: Option<Nm>,
+    pub border_color: Option<SchColor>,
+    pub fill_color: Option<SchColor>,
+    pub exclude_from_sim: Option<bool>,
+    pub exclude_from_bom: Option<bool>,
+    pub exclude_from_board: Option<bool>,
+    pub dnp: Option<bool>,
+}
+
 /// `DEFAULT_FONT_NAME` (`include/font/kicad_font_name.h`, "Default Font"): the font choice that is the text's default font, no font of its own.
 pub(crate) const DEFAULT_FONT_NAME: &str = "Default Font";
 
@@ -402,6 +414,118 @@ impl<'a> Board<'a> {
         }
         if sch.extras.text_attrs == before {
             return Err(fail("ops_nothing_to_change", "text", "the items already have these attributes"));
+        }
+        Ok(())
+    }
+
+    /// Sheet Properties' Style and Attributes: see [`SchCmd::SetSheetProps`](crate::sch_edit::SchCmd::SetSheetProps).
+    pub(crate) fn set_sheet_props(&mut self, id: &str, e: &SheetPropsEdit) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        if !sch.sheets.iter().any(|s| s.id == id) {
+            return Err(fail("ops_unknown_sheet", id, "no sheet with this id"));
+        }
+        if sch.extras.is_locked(id) {
+            return Err(fail("ops_locked", id, "the sheet is locked"));
+        }
+        if e.border_width_nm.is_some_and(|w| w < Nm::ZERO) {
+            return Err(fail("ops_bad_sheet", id, "a border cannot be thinner than nothing"));
+        }
+        let mut p = sch.extras.sheet_props_of(id);
+        if let Some(w) = e.border_width_nm {
+            p.border_width_nm = w;
+        }
+        if let Some(c) = e.border_color {
+            p.border_color = specified(c);
+        }
+        if let Some(c) = e.fill_color {
+            p.fill_color = specified(c);
+        }
+        if let Some(v) = e.exclude_from_sim {
+            p.exclude_from_sim = v;
+        }
+        if let Some(v) = e.exclude_from_bom {
+            p.exclude_from_bom = v;
+        }
+        if let Some(v) = e.exclude_from_board {
+            p.exclude_from_board = v;
+        }
+        if let Some(v) = e.dnp {
+            p.dnp = v;
+        }
+        if !sch.extras.set_sheet_props(id, p) {
+            return Err(fail("ops_nothing_to_change", id, "the sheet already has these properties"));
+        }
+        Ok(())
+    }
+
+    /// New Top-Level Sheet: see [`SchCmd::AddTopLevelSheet`](crate::sch_edit::SchCmd::AddTopLevelSheet).
+    pub(crate) fn add_top_level_sheet(&mut self, name: &str) -> Result<(), Vec<CheckResult>> {
+        let name = name.trim();
+        let sch = self.schematic()?;
+        if !sch.extras.virtual_root {
+            return Err(fail("ops_not_top_level", name, "this design's root sheet is its only top-level sheet: a sheet is added to it with Draw Sheet"));
+        }
+        // `if( dlg.ShowModal() == wxID_OK && !dlg.GetValue().IsEmpty() )`
+        if name.is_empty() {
+            return Err(fail("ops_bad_sheet", "sheet", "a sheet needs a name"));
+        }
+        // "Generate a unique filename": `name.Replace( " ", "_" ).Lower()` and `.kicad_sch`
+        let stem = name.replace(' ', "_").to_lowercase();
+        let stem = stem.strip_suffix(".kicad_sch").map(str::to_string).unwrap_or(stem);
+        let taken = |f: &str| self.design.sheet_contents.as_ref().is_some_and(|c| c.contains_key(f));
+        let mut file = format!("{stem}.kicad_sch");
+        let mut n = 1;
+        while taken(&file) {
+            file = format!("{stem}_{n}.kicad_sch");
+            n += 1;
+        }
+        // the lowest whole page number no sheet path shows (`PageNumberExists`)
+        let pages: BTreeSet<String> = eda_model::sheet_list::walk(&self.design).iter().map(|e| e.effective_page()).collect();
+        let page = (1..).find(|n: &u32| !pages.contains(&n.to_string())).unwrap_or(1).to_string();
+        // the root's grid of top-level sheets (`combine_top_level_sheets`): five to a row, one inch apart
+        let i = sch.sheets.len() as i64;
+        const GRID: Nm = Nm::new(25_400_000);
+        let at = Point { x: GRID * (1 + 2 * (i % 5)), y: GRID * (1 + 2 * (i / 5)) };
+        self.add_sheet(name, &file, at, (Nm::new(12_700_000), Nm::new(3_810_000)))?;
+        let sch = self.schematic_mut()?;
+        if let Some(s) = sch.sheets.last_mut() {
+            s.page = page;
+        }
+        Ok(())
+    }
+
+    /// Sheet Properties' user fields: see [`SchCmd::SetSheetFields`](crate::sch_edit::SchCmd::SetSheetFields).
+    pub(crate) fn set_sheet_fields(&mut self, id: &str, fields: &[eda_model::sch_extras::LabelField]) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        if !sch.sheets.iter().any(|s| s.id == id) {
+            return Err(fail("ops_unknown_sheet", id, "no sheet with this id"));
+        }
+        if sch.extras.is_locked(id) {
+            return Err(fail("ops_locked", id, "the sheet is locked"));
+        }
+        let mut kept: Vec<eda_model::sch_extras::LabelField> = Vec::new();
+        for f in fields {
+            let name = f.name.trim();
+            // "if( field.GetName( false ).IsEmpty() && field.GetText().IsEmpty() ) continue": an empty row is dropped
+            if name.is_empty() && f.text.is_empty() {
+                continue;
+            }
+            if name.is_empty() {
+                return Err(fail("ops_bad_field", id, "Fields must have a name."));
+            }
+            if name.eq_ignore_ascii_case("Sheetname") || name.eq_ignore_ascii_case("Sheetfile") || kept.iter().any(|k| k.name == name) {
+                return Err(fail("ops_field_exists", id, format!("Field name '{name}' already in use.")));
+            }
+            kept.push(eda_model::sch_extras::LabelField { name: name.to_string(), ..f.clone() });
+        }
+        let before = sch.extras.sheet_fields.get(id).cloned().unwrap_or_default();
+        if kept == before {
+            return Err(fail("ops_nothing_to_change", id, "the sheet already has these fields"));
+        }
+        if kept.is_empty() {
+            sch.extras.sheet_fields.remove(id);
+        } else {
+            sch.extras.sheet_fields.insert(id.to_string(), kept);
         }
         Ok(())
     }

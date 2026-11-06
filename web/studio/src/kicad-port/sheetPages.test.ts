@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { comparePageNum, hasChildSheets, hierarchyPathKey, hierarchyRowName, hierarchyTreeOrder, neighbourSheet, sortByPageNumbers, strNumCmp, toLong, visibleHierarchyRows, type HierarchySheet } from "./sheetPages";
+import { comparePageNum, hasChildSheets, hierarchyPathKey, hierarchyRowName, hierarchyTreeOrder, neighbourSheet, sortByPageNumbers, strNumCmp, toLong, topLevelSheetFile, topLevelTreeOrder, visibleHierarchyRows, type HierarchySheet } from "./sheetPages";
 
 const sheet = (path: string[], page = "", name = path.join("/") || "root"): HierarchySheet => ({ path, name, file: `${name}.kicad_sch`, page });
 
@@ -72,4 +72,17 @@ test("r6 C6-L2: a collapsed node hides the sheets under it, not itself", () => {
   assert.deepEqual(visibleHierarchyRows(rows, new Set([hierarchyPathKey(["a"])])).map((r) => r.path.join("/")), ["", "a", "d"]);
   assert.deepEqual(visibleHierarchyRows(rows, new Set([hierarchyPathKey([])])).map((r) => r.path.join("/")), [""]);
   assert.equal(visibleHierarchyRows(rows, new Set()).length, 5);
+});
+
+test("a virtual root's top-level sheets are roots of their own, in the project's order, their children in page order (UpdateHierarchyTree)", () => {
+  const rows = [
+    { path: [], name: "", file: "", page: "1" },
+    { path: ["b"], name: "Second", file: "b.kicad_sch", page: "3" },
+    { path: ["b", "x"], name: "X", file: "x.kicad_sch", page: "5" },
+    { path: ["b", "y"], name: "Y", file: "y.kicad_sch", page: "4" },
+    { path: ["a"], name: "First", file: "a.kicad_sch", page: "2" },
+  ];
+  assert.deepEqual(topLevelTreeOrder(rows).map((r) => r.name), ["Second", "Y", "X", "First"], "no root row; the top level unsorted, a level below by page");
+  assert.equal(topLevelSheetFile("My Power Sheet"), "my_power_sheet.kicad_sch");
+  assert.equal(topLevelSheetFile("Untitled.kicad_sch"), "untitled.kicad_sch");
 });

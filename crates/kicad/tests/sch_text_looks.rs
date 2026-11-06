@@ -125,3 +125,64 @@ fn kicad_keeps_the_text_looks_and_the_hand_placed_fields() {
     assert_eq!(read_back(&kicads), read_back(&text), "what KiCad kept of the looks and the places");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A sheet's style and attributes (`SchExtras::sheet_props`, UI-LEFT S8): `saveSheet`'s flags, `(stroke ..)` and `(fill ..)`, read back by `parseSheet`.
+fn with_sheet() -> (eda_model::ir::Design, ConstraintModel) {
+    let (mut design, model) = drawn();
+    let sch = design.schematic.as_mut().unwrap();
+    sch.sheets.push(eda_model::ir::SheetInstance { id: "a1b2c3d4-0000-4000-8000-000000000001".into(), name: "Power".into(), file: "power.kicad_sch".into(), at: Point { x: mm(250.0), y: mm(20.0) }, size: (mm(30.0), mm(20.0)), pins: vec![], page: "2".into() });
+    sch.extras.sheet_props.insert(
+        "a1b2c3d4-0000-4000-8000-000000000001".into(),
+        eda_model::sch_extras::SheetProps { border_width_nm: mm(0.3), border_color: Some(blue()), fill_color: Some(SchColor { r: 255, g: 0, b: 0, a: 128 }), exclude_from_sim: true, exclude_from_bom: true, exclude_from_board: false, dnp: true },
+    );
+    sch.extras.sheet_fields.insert("a1b2c3d4-0000-4000-8000-000000000001".into(), vec![LabelField { name: "Rev".into(), text: "B".into(), visible: false, italic: false }]);
+    design.sheet_contents = Some([("power.kicad_sch".to_string(), eda_model::ir::SchematicSection::default())].into_iter().collect());
+    (design, model)
+}
+
+fn sheet_back(text: &str) -> (eda_model::sch_extras::SheetProps, Vec<LabelField>) {
+    let (design, _, _) = import_kicad_sch(text).expect("the file reads");
+    let sch = design.schematic.unwrap();
+    let s = sch.sheets.iter().find(|s| s.name == "Power").expect("the sheet");
+    (sch.extras.sheet_props_of(&s.id), sch.extras.sheet_fields.get(&s.id).cloned().unwrap_or_default())
+}
+
+#[test]
+fn a_sheets_border_fill_and_attributes_come_back_from_our_file() {
+    let (design, model) = with_sheet();
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &META, "looks.kicad_sch").expect("the tree exports");
+    let root = &files.iter().find(|(n, _)| n == "looks.kicad_sch").unwrap().1;
+    assert!(root.contains("(exclude_from_sim yes) (in_bom no) (on_board yes) (dnp yes)") && root.contains("(stroke (width 0.3) (type solid) (color 0 0 255 1))") && root.contains("(fill (color 255 0 0 0.502))"), "{root}");
+    let want = design.schematic.as_ref().unwrap().extras.sheet_props.values().next().cloned().unwrap();
+    let (props, fields) = sheet_back(root);
+    assert_eq!(props, want);
+    assert_eq!(fields, vec![LabelField { name: "Rev".into(), text: "B".into(), visible: false, italic: false }]);
+}
+
+#[test]
+fn kicad_keeps_a_sheets_border_fill_and_attributes() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let cli = std::env::var_os("EDA_KICAD_CLI").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("kicad-cli"));
+    if Command::new(&cli).arg("version").output().is_err() {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    }
+    let (design, model) = with_sheet();
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &META, "looks.kicad_sch").expect("the tree exports");
+    let dir = std::env::temp_dir().join(format!("eda_sheet_looks_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, text) in &files {
+        std::fs::write(dir.join(name), text).unwrap();
+    }
+    let path = dir.join("looks.kicad_sch");
+    let ours = std::fs::read_to_string(&path).unwrap();
+    let up = Command::new(&cli).args(["sch", "upgrade", "--force"]).arg(&path).output().expect("run kicad-cli");
+    assert!(up.status.success(), "kicad-cli sch upgrade: {}{}", String::from_utf8_lossy(&up.stdout), String::from_utf8_lossy(&up.stderr));
+    let kicads = std::fs::read_to_string(&path).unwrap();
+    assert_ne!(kicads, ours, "KiCad wrote the file itself");
+    assert_eq!(sheet_back(&kicads), sheet_back(&ours), "what KiCad kept of the sheet's style, attributes and fields");
+    let _ = std::fs::remove_dir_all(&dir);
+}

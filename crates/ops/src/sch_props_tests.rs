@@ -580,3 +580,64 @@ fn a_label_turned_or_mirrored_turns_its_hand_placed_fields_about_its_anchor() {
     let g = placed_field(&b, "Netclass");
     assert_eq!((g.at.x - anchor.x, g.at.y - anchor.y), (-fx, fy));
 }
+
+// ------------------------------------------------------------------- Sheet Properties' Style, Attributes and fields; top-level sheets (UI-LEFT S8)
+
+fn sheet_props(id: &str) -> SchCmd {
+    SchCmd::SetSheetProps { id: id.into(), border_width_nm: None, border_color: None, fill_color: None, exclude_from_sim: None, exclude_from_bom: None, exclude_from_board: None, dnp: None }
+}
+
+#[test]
+fn sheet_properties_keep_the_border_the_fill_and_the_attributes_and_the_legacy_look_keeps_no_entry() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(hierarchy(), &m, mm(0.1), mm(0.3));
+    let SchCmd::SetSheetProps { id, .. } = sheet_props("sheet_a") else { unreachable!() };
+    ok(&mut b, SchCmd::SetSheetProps { id: id.clone(), border_width_nm: Some(mm(0.3)), border_color: Some(red()), fill_color: Some(SchColor { r: 0, g: 0, b: 0, a: 0 }), exclude_from_sim: None, exclude_from_bom: Some(true), exclude_from_board: None, dnp: Some(true) });
+    let p = &sch_of(&b).extras.sheet_props["sheet_a"];
+    assert_eq!((p.border_width_nm, p.border_color, p.fill_color, p.exclude_from_bom, p.dnp, p.exclude_from_sim), (mm(0.3), Some(red()), None, true, true, false), "all zeroes is UNSPECIFIED");
+    assert_eq!(err(&mut b, SchCmd::SetSheetProps { id: id.clone(), border_width_nm: None, border_color: None, fill_color: None, exclude_from_sim: None, exclude_from_bom: None, exclude_from_board: None, dnp: Some(true) }), "ops_nothing_to_change");
+    // back to the look the writer has always given a sheet: no entry
+    let legacy = eda_model::sch_extras::SheetProps::legacy();
+    ok(&mut b, SchCmd::SetSheetProps { id: id.clone(), border_width_nm: Some(legacy.border_width_nm), border_color: Some(SchColor { r: 0, g: 0, b: 0, a: 0 }), fill_color: legacy.fill_color, exclude_from_sim: None, exclude_from_bom: Some(false), exclude_from_board: None, dnp: Some(false) });
+    assert!(sch_of(&b).extras.sheet_props.is_empty());
+    assert_eq!(err(&mut b, sheet_props("nope")), "ops_unknown_sheet");
+}
+
+#[test]
+fn sheet_fields_are_named_once_and_an_empty_row_goes() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(hierarchy(), &m, mm(0.1), mm(0.3));
+    let f = |name: &str, text: &str| eda_model::sch_extras::LabelField { name: name.into(), text: text.into(), visible: false, italic: false };
+    ok(&mut b, SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![f("Field2", "x"), f("", ""), f(" Rev ", "B")] });
+    assert_eq!(sch_of(&b).extras.sheet_fields["sheet_a"], vec![f("Field2", "x"), f("Rev", "B")], "the empty row is dropped, a name trimmed");
+    assert_eq!(b.apply(&Cmd::SchEdit(SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![f("", "y")] })).unwrap_err()[0].hint.as_deref().unwrap_or_default(), "Fields must have a name.");
+    assert_eq!(b.apply(&Cmd::SchEdit(SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![f("Rev", "1"), f("Rev", "2")] })).unwrap_err()[0].hint.as_deref().unwrap_or_default(), "Field name 'Rev' already in use.");
+    assert_eq!(err(&mut b, SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![f("Sheetfile", "1")] }), "ops_field_exists", "the mandatory fields' names are taken");
+    ok(&mut b, SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![] });
+    assert!(sch_of(&b).extras.sheet_fields.is_empty());
+}
+
+#[test]
+fn a_virtual_roots_top_level_sheets_are_added_and_deleted_but_not_the_last_and_not_on_an_ordinary_root() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(hierarchy(), &m, mm(0.1), mm(0.3));
+    assert_eq!(err(&mut b, SchCmd::AddTopLevelSheet { name: "Power".into() }), "ops_not_top_level", "a root that is its own top-level sheet");
+    let mut d = hierarchy();
+    d.schematic.as_mut().unwrap().extras.virtual_root = true;
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    ok(&mut b, SchCmd::AddTopLevelSheet { name: "My Power".into() });
+    let new = sch_of(&b).sheets.last().unwrap().clone();
+    assert_eq!((new.name.as_str(), new.file.as_str()), ("My Power", "my_power.kicad_sch"), "the file is the name, underscores for spaces, in lower case");
+    assert_eq!(new.page, "4", "the lowest page no sheet shows: the root 1, A 2, B 3");
+    assert!(files(&b).contains(&"my_power.kicad_sch".to_string()));
+    // the same name again gets a file of its own
+    assert_eq!(err(&mut b, SchCmd::AddTopLevelSheet { name: "My Power".into() }), "ops_sheet_name_taken");
+    ok(&mut b, SchCmd::AddTopLevelSheet { name: "my power".into() });
+    assert_eq!(sch_of(&b).sheets.last().unwrap().file, "my_power_1.kicad_sch");
+    for id in ["sheet_a", "sheet_b", &new.id] {
+        ok(&mut b, SchCmd::DeleteTopLevelSheet { id: id.to_string() });
+    }
+    assert_eq!(sch_of(&b).sheets.len(), 1);
+    let last = sch_of(&b).sheets[0].id.clone();
+    assert_eq!(b.apply(&Cmd::SchEdit(SchCmd::DeleteTopLevelSheet { id: last })).unwrap_err()[0].hint.as_deref().unwrap_or_default(), "Cannot delete the last top-level sheet.");
+}

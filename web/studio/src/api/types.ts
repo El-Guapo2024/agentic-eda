@@ -3095,6 +3095,21 @@ export interface Sheet {
   /** The sheet's name and file where KiCad's Autoplace Fields puts them. */
   fields?: SchField[];
   fields_autoplaced?: FieldsAutoplaced;
+  /** Sheet Properties' Style and Attributes (`SchExtras::sheet_props`); absent: the look the studio has always written, a 6 mil border and a pale yellow fill, no attribute. */
+  props?: SheetProps | null;
+  /** The sheet's user fields (`SchExtras::sheet_fields`: `SCH_FIELD`s past Sheetname and Sheetfile), in order. */
+  user_fields?: Array<{ name: string; text: string; visible?: boolean; italic?: boolean }> | null;
+}
+
+/** See `Sheet::props`: the border's width (0: the default line width) and colour, the background colour (absent: KiCad's UNSPECIFIED), the four attributes. */
+export interface SheetProps {
+  border_width_nm?: Nm;
+  border_color?: import("./schEditTypes").SchColor | null;
+  fill_color?: import("./schEditTypes").SchColor | null;
+  exclude_from_sim?: boolean;
+  exclude_from_bom?: boolean;
+  exclude_from_board?: boolean;
+  dnp?: boolean;
 }
 
 /** One step of the breadcrumb from the root down to the sheet `GET /api/schematic?sheet=...` actually returned -- empty for the root itself. */

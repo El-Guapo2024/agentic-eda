@@ -91,13 +91,35 @@ export function sortByPageNumbers(sheets: readonly HierarchySheet[]): HierarchyS
  * sheet's children sorted by page (`m_tree->SortChildren( aParent )` with `HIERARCHY_TREE::OnCompareItems`, which is
  * `SCH_SHEET_PATH::ComparePageNum`: the page, then the virtual page number -- the walk order -- on a tie). `sheets` is in walk order.
  */
-export function hierarchyTreeOrder(sheets: readonly HierarchySheet[]): HierarchySheet[] {
+/**
+ * The rows of the navigator for a root that is KiCad 10's virtual root (`SchExtras::virtual_root`, a project of several top-level sheets): no row for the root,
+ * each top-level sheet a root of its own in the project's order (`UpdateHierarchyTree`: `for( SCH_SHEET* sheet : Schematic().GetTopLevelSheets() )` under the
+ * hidden project row, not sorted), each one's children in page order under it as `buildHierarchyTree` sorts them.
+ */
+export function topLevelTreeOrder<T extends HierarchySheet>(sheets: readonly T[]): T[] {
+  const all = hierarchyTreeOrder(sheets);
+  const tops = sheets.filter((s) => s.path.length === 1);
+  const out: T[] = [];
+  for (const top of tops) for (const s of all) if (s.path[0] === top.path[0]) out.push(s);
+  return out;
+}
+
+/**
+ * New Top-Level Sheet's file (`HIERARCHY_PANE::onRightClick`, `NEW_TOP_LEVEL_SHEET`): the name with spaces as underscores, in lower case, `.kicad_sch` after it
+ * unless it has it.
+ */
+export function topLevelSheetFile(name: string): string {
+  const f = name.replace(/ /g, "_").toLowerCase();
+  return f.endsWith(".kicad_sch") ? f : `${f}.kicad_sch`;
+}
+
+export function hierarchyTreeOrder<T extends HierarchySheet>(sheets: readonly T[]): T[] {
   const entries = sheets.map((sheet, i) => ({ sheet, i, page: effectivePage(sheet, i) }));
   const childrenOf = (parent: readonly string[]) =>
     entries
       .filter((e) => e.sheet.path.length === parent.length + 1 && parent.every((id, k) => e.sheet.path[k] === id))
       .sort((a, b) => comparePageNum(a.page, b.page) || a.i - b.i);
-  const out: HierarchySheet[] = [];
+  const out: T[] = [];
   const visit = (parent: readonly string[]) => {
     for (const child of childrenOf(parent)) {
       out.push(child.sheet);
@@ -147,7 +169,7 @@ export function hasChildSheets(rows: readonly HierarchySheet[], path: readonly s
 }
 
 /** The rows a tree with `collapsed` nodes shows: a row under a collapsed one is hidden (`m_tree->Collapse( id )`); `rows` in tree order. */
-export function visibleHierarchyRows(rows: readonly HierarchySheet[], collapsed: ReadonlySet<string>): HierarchySheet[] {
+export function visibleHierarchyRows<T extends HierarchySheet>(rows: readonly T[], collapsed: ReadonlySet<string>): T[] {
   return rows.filter((r) => {
     for (let n = 0; n < r.path.length; n++) if (collapsed.has(hierarchyPathKey(r.path.slice(0, n)))) return false;
     return true;

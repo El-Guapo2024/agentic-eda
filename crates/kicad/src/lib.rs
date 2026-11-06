@@ -842,9 +842,19 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
     note_item_uuid(&s.id, &uuid);
     writeln!(out, "\t(sheet").unwrap();
     writeln!(out, "\t\t(at {x} {y}) (size {w} {h})").unwrap();
+    // `saveSheet`: the attributes (`FormatBool`: exclude_from_sim, in_bom, on_board, dnp), the border (`STROKE_PARAMS( width, SOLID, color ).Format`: no
+    // `(color ..)` when it is UNSPECIFIED) and the background colour (`(fill (color ..))`, all zeroes when UNSPECIFIED), as Sheet Properties set them
+    // (`SchExtras::sheet_props`). A sheet with no attribute set writes none of the four, which KiCad reads as the same.
+    let props = sch.extras.sheet_props_of(&s.id);
+    if props.has_attributes() {
+        let yn = |b: bool| if b { "yes" } else { "no" };
+        writeln!(out, "\t\t(exclude_from_sim {}) (in_bom {}) (on_board {}) (dnp {})", yn(props.exclude_from_sim), yn(!props.exclude_from_bom), yn(!props.exclude_from_board), yn(props.dnp)).unwrap();
+    }
     write!(out, "{}", fields_autoplaced_token(sch, &s.id)).unwrap();
-    writeln!(out, "\t\t(stroke (width 0.1524) (type solid))").unwrap();
-    writeln!(out, "\t\t(fill (color 255 255 194 1.0000))").unwrap();
+    let border_color = props.border_color.map(|c| format!(" (color {} {} {} {})", c.r, c.g, c.b, sch_extras_io::alpha_str(c.a))).unwrap_or_default();
+    writeln!(out, "\t\t(stroke (width {}) (type solid){border_color})", sch_mm(props.border_width_nm)).unwrap();
+    let fill = props.fill_color.unwrap_or(eda_model::sch_extras::SchColor { r: 0, g: 0, b: 0, a: 0 });
+    writeln!(out, "\t\t(fill (color {} {} {} {}))", fill.r, fill.g, fill.b, sch_extras_io::alpha_str(fill.a)).unwrap();
     writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
     if sch.extras.is_locked(&s.id) {
         writeln!(out, "\t\t(locked yes)").unwrap();
