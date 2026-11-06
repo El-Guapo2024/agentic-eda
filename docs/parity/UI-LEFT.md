@@ -107,45 +107,42 @@ Notes:
   - Title-block variables in footprint text aren't resolved.
   - A hatched graphic is drawn as an outline.
   - M. GAPS 25; PARITY-pcb §28, §39.
-- **P16 [BD] Tables, on the board and the sheet.**
-  - No paste of tables or cells, and no drag-select of cells.
-  - Flip is a plain mirror.
-  - Cell Properties has no fill or text colour.
-  - `@{expr}` shows as typed, and `${REF:FIELD}` doesn't follow a rename.
-  - M. GAPS 24; PARITY-pcb §38; PARITY-sch §35.
-- **P17 [FM] Item kinds inside footprints.**
-  - Text boxes, images, points and barcodes can't sit inside a footprint.
-  - Rotate and Flip don't turn an image's pixels.
-  - Whether these kinds can be duplicated or arrayed is unsure.
-  - M. GAPS 24; PARITY-pcb §39, §58.
-- **P18 [FM] KiCad 10 items.**
-  - No Drill Chart Properties or Drill Groups dialogs.
-  - Grid items have no role in routing or placement.
-  - Via Stitching sets its via inline.
-  - M. GAPS 2; PARITY-pcb §50.
-- **P19 [BD] Placement.**
-  - Place Footprint (A) places once and ends.
-  - The Microwave tools and the Footprint Editor's Insert drop the part at the first click or the board centre, with no R or F while it is carried.
-  - A footprint's position snaps to 0.1 mm whatever the grid.
-  - Pack and Move uses a shelf packer.
-  - S. PARITY-pcb §2, §11a, §20, §41.
-- **P20 [BD] Multichannel and design blocks.**
-  - Repeat Layout skips tuning patterns, barcodes, images and tables, and ignores zone holes. Its options last only for the page session.
-  - Its sheets come from the inferred modules (R7-D5). The boards it writes have no sheet name, so KiCad's own Repeat Layout finds empty sheets.
-  - Save Selection as a block drops groups (P18-3).
-  - M. GAPS 24/32; PARITY-pcb §36, §40.
+- **P16 [BD] Tables, on the board and the sheet.** **done (task-u5-pcbitems)**: in both editors, Copy, Cut, Paste and Duplicate of a table and of cells (the sheet copies a table and a block of cells as `saveTable` cuts it, and its paste previews and adds tables); Paste with cells selected pastes into them ("Paste Cells", `pasteCellsIntoSelection` with `validatePasteIntoSelection`'s refusals word for word, Paste Special too); a drag from a cell selects the cells under it (`SelectCellsBetween`, with Shift, Ctrl and Ctrl+Shift). A board table flips as KiCad 25ec2335's `PCB_TABLE::Flip` does (the kicad-cli's KiCad; 8303b2ad also reversed the rows and moved the table, which 25ec2335 dropped as wrong). The sheet's Table Cell Properties has Text color, Background fill and the four margins (KiCad's board dialog has no colours). `@{..}` is evaluated by a port of KiCad's evaluator (strings, functions, SI prefixes, units) in every shown text. A `${REF:FIELD}` in a sheet cell, text or text box follows a rename, and a KiCad file's path-form cross-reference reads by its reference. Apply Design Block Layout takes a block's copper tables. PARITY-pcb §77; PARITY-sch §61. Left:
+  - The date, random, E-series and version-control functions of `@{..}` (left as written).
+  - Shift+click selecting the cells between two on the sheet; a field's or a label's cross-reference following a rename (the rename rewrites cells, texts and text boxes; KiCad stores the symbol's path instead).
+  - A cell's hyperlink and font face are edited nowhere; tables inside footprints (the Footprint Editor has no Draw Table); the stackup table's sublayers.
+  - S. GAPS 24; PARITY-pcb §38, §77; PARITY-sch §35, §61.
+- **P17 [FM] Item kinds inside footprints.** **done (task-u5-pcbitems)**: a board footprint's text boxes, reference images, points and barcodes are its own items (`FootprintExtra::items`, the library footprint's `FootprintItems`), read in KiCad's frames (KiCad 10's library-frame points too), written as `format( FOOTPRINT )` writes them, drawn with the footprint (KiCad's `PCB_VIEW::Add` draws a footprint's reference image on the board), picked as the footprint, its points snap anchors; Move, Rotate and Flip carry them and Duplicate, Create Array and Paste copy them; kicad-cli keeps them and plots the text box and barcode where the canvas draws them. Rotate and Flip turn and mirror an image's pixels on the board and the sheet (`BITMAP_BASE::Rotate` / `Mirror`): the browser redraws the file (PNG stays PNG, JPEG stays JPEG) and sends it in the turn's batch, one undo step. Settled: Duplicate, Paste and Create Array of the board's text boxes, images, points and barcodes have worked since r2-pcb-edit C2 (PARITY-pcb §55), as KiCad allows; GAPS 24's "Missing" line was stale. PARITY-pcb §78; PARITY-sch §62. Left:
+  - Selecting and editing a footprint's items one by one on the board (P15).
+  - Ctrl+E's copy of a board footprint does not show them, and Update Footprint on Board and Update / Change Footprint reset them with the footprint's record, as they reset the tokens before (KiCad keeps them); a library footprint's items are not brought onto the board (P21).
+  - A turn made without the browser (the CLI, agents, a circular array's Rotate items, Repeat Layout) leaves an image's pixels as they were.
+  - The 3D view of a footprint's text box or barcode; Edit Text & Graphics does not reach a footprint's text boxes; a footprint's dimensions and tables on the board are still text.
+  - S. GAPS 24, 25; PARITY-pcb §39, §55, §78.
+- **P18 [FM] KiCad 10 items.** **done (task-u5-pcbitems)**, from KiCad 25ec2335: Drill Chart Properties (General, Columns with the chart's filter, totals, grouping and templates, Appearance; one Edit Drill Chart step; KiCad's refusals; a double click on a data row selects its cells), Drill Groups (Tools > Drill Groups..., modeless: each group's mark, Freeze assignments, Flash on Canvas) and Board Setup's Drill Chart page; a footprint moved, or carried by Place Footprint, into a grid item that affects placement turns to its frame (`GridFrameAngleAt`; the Routing role has no consumer in 25ec2335, the router's points follow the Cursor role); Via Stitching's Via Properties is Configure (Track & Via Properties on the template via), its vias are copies of the whole template, a new stitching takes the toolbar's via size, and a footprint's fields on copper keep its vias off. PARITY-pcb §79. Left:
+  - The template dialog has no position, net, pre-defined sizes, protection, backdrill, post-machining, teardrop or lock rows (the file's are kept and copied).
+  - Drill Groups' commits are undo steps (KiCad's are not); Import / Export Template use the browser's chooser and a download.
+  - A chart in inches sizes a text-fitted column about 60 um wider than kicad-cli (the inch glyph's ink in `autosize`).
+  - S. GAPS 2; PARITY-pcb §50, §79.
+- **P19 [BD] Placement.** **done (task-u5-pcbitems)**: Place Footprint (A) is KiCad's `PlaceFootprint` loop: the chosen footprint is carried with R / F before the click, the click puts it down (one undo step, nothing selected) and the next click opens the chooser again until Escape; carried into a KiCad 10 placement grid it turns to the grid's frame. The microwave tools carry their footprint from the first click to the second with R / F (`IPO_REPEAT`); the Footprint Editor's Insert hands its footprint to Place Footprint ("Previous footprint placement still in progress." for a second). A footprint's position is the editor's grid point (the server no longer rounds it to 0.1 mm; the CLI's `move_to` / `nudge` keep their step). Pack and Move packs with a port of rectpack2D (`find_best_packing`, `spreadRectangles`; the shelf packer kept, INACTIVE). Place Selected Footprints and Place Off-Board Footprints (Place > Auto-Place Footprints) run the studio's placer (`crates/place`, `place_partial`) with the other footprints fixed, always behind the placement gates, one undo step (`Cmd::Autoplace`); AR_AUTOPLACER is not ported (PARITY-pcb §80 says how the two differ). A carried placement is judged at its drop. PARITY-pcb §80. Left:
+  - A carried footprint snaps as a move does (anchors), not to the grid point only; no Properties (E) while carried; a click with no motion puts a footprint made in a placement grid down unturned.
+  - No progress window or Abort for the autoplacer, and no Override locks setting.
+  - Pack and Move's sorts keep equal blocks in input order (`std::sort` may order them otherwise above 16 blocks).
+  - S. PARITY-pcb §2, §11a, §20, §41, §80.
+- **P20 [BD] Multichannel and design blocks.** **done (task-u5-pcbitems)**: Repeat Layout judges what an area encloses by KiCad's polygon test (`enclosedByAreaFunc`: the item's polygon less the area's, holes included) and copies tables, barcodes (on F.Cu only, as KiCad: the test's context layer is F.Cu and a barcode has no polygon on another layer), tuning patterns with all their tracks, and zones with their holes; reference images and points are not copied (KiCad finds no polygon for them); the target area takes the reference outline alone. Apply Design Block Layout also takes the block's text boxes, barcodes, images, points and copper tables. The two dialogs' options are kept as KiCad's tool keeps them, for the life of the editor (the tab's sessionStorage, across a reload; one Group box for both). The written board already had KiCad's `(sheetname)` / `(sheetfile)` (a kicad-cli proof now shows they are its netlist's), and the tool reads the same sheets (R7-D5). Save Selection as Design Block keeps the selected groups (P18-3) and holds only the selected items. PARITY-pcb §82. Left:
+  - A barcode is judged by its box (no zint); a rounded rectangle is judged square-cornered.
+  - The Generate dialog names no file for the root sheet; Update from Selection does not strip a lone tuning pattern to its tracks.
+  - S. GAPS 24/32; PARITY-pcb §36, §40, §82.
 - **P21 [BD] Footprint exchange and swaps.**
   - Change and Update Footprint match pads by number only.
   - Compare with Library misses attribute flags and net ties.
   - Library pad layers aren't carried.
   - Update Schematic from PCB doesn't carry a pin or gate swap back to the schematic.
   - M. GAPS 26; PARITY-pcb §30, §45, §61.
-- **P22 [BD] Selection.**
-  - The Selection Filter has no "Only…" menu and isn't saved.
-  - The clarification menu has no numbered hotkeys.
-  - There is no coverage pass for overlapping footprints.
-  - Select Connection doesn't follow a chain of graphic lines.
-  - S. PARITY-pcb §3, §22; GAPS 18.
+- **P22 [BD] Selection.** **done (task-u5-pcbitems)**: the Selection Filter's right-click "Only <row>" (Grid Items cleared too, as 25ec2335; Locked items left alone), and the filter kept per project as KiCad keeps it in the `.kicad_prl` (`appearance.json`'s `local.selection_filter`, the derived `.kicad_prl`'s `board.selection_filter`); the clarification menu's rows numbered and chosen by their keys, Select All (A), Show More Choices (M), the hovered row's item outlined, on the board and in the library editors; `GuessSelectionCandidates`' coverage pass for overlapping footprints with KiCad's per-kind areas (`GetCoverageArea`) on an exact polygon sweep (`kicad-port/coverage.ts`); Select Connection along a chain of graphic lines (`selectAllConnectedShapes`), with the selection filter in its walk. PARITY-pcb §81. Left:
+  - The flash of the filter row that rejected a click; the Footprint Editor's filter is not saved.
+  - A text's coverage is its box; rounded, chamfered, trapezoid and custom pads count as their rectangle.
+  - Copper graphic shapes in Select Connection's track walk (`shapeMap`).
+  - S. PARITY-pcb §3, §22, §81; GAPS 18.
 - **P23 [BD] Vias and sizes.** **done (task-u1-pcb)** for R7-5: Change Track Width / Via Size and the microwave tools take the sizes the board's lists give now (`GetCurrentTrackWidth`, `GetCurrentViaSize`), a microvia its class's (PARITY-pcb §66). Left:
   - The via ghost isn't drawn at its snap point (C6-7).
   - With Allow DRC violations on, a violating via is placed silently (C6-6).
@@ -601,11 +598,11 @@ Notes:
   - Save As and reports are downloads.
   - S.
 
-## KiCad actions not wired (ui-parity-missing.json: 47, of which 34 are user-facing and 13 internal)
+## KiCad actions not wired (ui-parity-missing.json: 47 at the inventory, of which 34 are user-facing and 13 internal; the two autoplacer rows are gone since task-u5-pcbitems)
 
 - **A1 [KO] Kept out by decision** (HANDOFF; GAPS Appendix B):
   - Import Netlist (the user, 2026-10-21).
-  - The autoplacer. The user (2026-11-05) asked whether it is needed next to our own placer (`crates/place`); the proposal is to wire Place Selected and Place Off-Board Footprints to that placer, not to port AR_AUTOPLACER.
+  - ~~The autoplacer.~~ **done (task-u5-pcbitems, P19)**: as proposed to the user (2026-11-05), Place Selected and Place Off-Board Footprints run our own placer (`crates/place`) behind its gates; AR_AUTOPLACER is not ported.
   - The Footprint Viewer and Symbol Viewer windows.
   - Python plugins and the footprint wizards.
   - Hyperlynx and `.rpt` export.
