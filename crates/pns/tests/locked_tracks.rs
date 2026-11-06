@@ -232,3 +232,45 @@ fn the_selected_track_is_dragged_whatever_the_point_would_find_and_a_locked_one_
     assert_eq!(router.drag_start_item(p(mm(8.0), mm(2.0)), "F.Cu", "t_b", false, true).expect("Drag Anyway"), p(mm(8.0), mm(2.0)));
     assert_eq!(router.drag_start_item(p(mm(8.0), mm(2.0)), "F.Cu", "nope", false, false).unwrap_err(), "nothing to drag");
 }
+
+/// UI-LEFT-2 RR10: a corner drag of a selected track at the joint it shares with a locked track does what KiCad's `DRAGGER` does (8303b2ad and 25ec2335
+/// alike), which is to move the locked track's end too. `NODE::FixupVirtualVias` puts a virtual via at a joint whose last segment is locked and at the
+/// other end of that segment, so the joint of t_a and the locked t_b has one in either order of the board's tracks; `DRAGGER::Start` takes hold of it
+/// (`checkVirtualVia`, the press within half the width of t_a's end) and drags it (`DM_VIA`), and the via's fanout (`findViaFanoutByHandle`: every
+/// line at the joint, `AssembleLine` with its defaults, the locked one too) follows it in every mode -- in Shove, `pushOrShoveVia` gives up on a line
+/// with a locked segment (`SH_TRY_WALK`) and `dragViaWalkaround` drags the fanout. The new tracks are not locked (`SEGMENT( const LINE& )` takes the
+/// line's `Marker()`, which `ClearLinks()` has emptied). Where the joint has no virtual via (neither joint of t_b has it as its last segment: the order
+/// t_b, t_a, t_c), the dragged line stops in front of the locked track (`JOINT::NextSegment` skips it) and only t_a's corner moves, away from t_b.
+#[test]
+fn a_corner_drag_at_a_joint_with_a_locked_track_moves_its_end_as_kicad_does_unless_the_joint_has_no_virtual_via() {
+    let a = || straight("t_a", "GND", &[p(mm(4.0), Nm::ZERO), p(mm(6.0), mm(-2.0)), p(mm(8.0), mm(-2.0))]);
+    let b = || straight("t_b", "GND", &[p(Nm::ZERO, Nm::ZERO), p(mm(4.0), Nm::ZERO)]);
+    let c = || straight("t_c", "GND", &[p(mm(-4.0), mm(-2.0)), p(mm(-2.0), mm(-2.0)), p(Nm::ZERO, Nm::ZERO)]);
+    let to = p(mm(4.5), mm(1.0));
+    for (tracks, follows) in [(vec![a(), b(), c()], true), (vec![c(), b(), a()], true), (vec![b(), a(), c()], false)] {
+        let order: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
+        let (design, model) = board(tracks, vec![], &["t_b"]);
+        for mode in [Mode::MarkObstacles, Mode::Walkaround, Mode::Shove] {
+            let mut router = Router::new(&design, &model);
+            router.settings.mode = mode;
+            assert_eq!(router.drag_start_item(p(mm(4.0), Nm::ZERO), "F.Cu", "t_a", false, false), Ok(p(mm(4.0), Nm::ZERO)), "{order:?} {mode:?}: t_a is not locked");
+            assert_eq!(router.drag_virtual_via(), follows, "{order:?} {mode:?}: the joint's virtual via is taken hold of");
+            let preview = router.drag_preview(to).expect("dragging");
+            assert!(!preview.colliding, "{order:?} {mode:?}");
+            let commit = router.drag_finish(to).expect("commits");
+            let mut removed = commit.remove_track_ids.clone();
+            removed.sort();
+            let new_b = commit.tracks.iter().find(|t| t.pts.first() == Some(&p(Nm::ZERO, Nm::ZERO)) || t.pts.last() == Some(&p(Nm::ZERO, Nm::ZERO)));
+            if follows {
+                assert_eq!(removed, ["t_a", "t_b"], "{order:?} {mode:?}: the locked track's end follows the joint");
+                let new_b = new_b.expect("t_b's new shape");
+                assert!(new_b.pts.contains(&to), "{order:?} {mode:?}: from (0, 0) to where the joint went: {new_b:?}");
+                assert!(commit.lock_tracks.is_empty(), "{order:?} {mode:?}: and it is not locked any more, as in KiCad");
+            } else {
+                assert_eq!(removed, ["t_a"], "{order:?} {mode:?}: the line stops in front of the locked track");
+                assert!(new_b.is_none(), "{order:?} {mode:?}: t_b stays where it is");
+                assert_eq!(commit.tracks[0].pts.first(), Some(&to), "{order:?} {mode:?}: t_a's corner alone moves: {:?}", commit.tracks);
+            }
+        }
+    }
+}

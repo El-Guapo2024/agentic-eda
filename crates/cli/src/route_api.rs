@@ -663,6 +663,8 @@ pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
                     obj.insert("start".into(), json!([start.x, start.y]));
                     obj.insert("footprints".into(), json!(router.drag_footprints()));
                     obj.insert("line_tracks".into(), json!(router.drag_line_tracks()));
+                    // `InlineDrag`: "if( closestItem->Net() ) highlightNets( true, { closestItem->Net() } )"
+                    obj.insert("highlight_net".into(), json!(router.drag_highlight_net()));
                 }
                 *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
                 reply
@@ -712,6 +714,39 @@ pub fn drag_move(cell: &RouteCell, body: &[u8]) -> Value {
     router.drag_preview(at).map(|p| drag_preview_json(router, &p)).unwrap_or_else(|| err("not dragging"))
 }
 
+/// The board tracks that hold the segments `leaders` (each its layer's name and ends; `Router::drag_leaders`): `lseg->Parent()` of each
+/// leader segment of a multi-track drag (`InlineDrag`'s `selectItems`), a studio track being a run of KiCad's `PCB_TRACK`s -- the track of
+/// that layer with a segment along the leader through its middle (within 1 um, parallel). In the order of `leaders`, each once.
+fn tracks_holding(dir: &Path, leaders: &[(String, eda_model::ir::Point, eda_model::ir::Point)]) -> Vec<String> {
+    let Ok((_, design, _)) = board::load(dir) else { return Vec::new() };
+    let Some(rt) = design.routing.as_ref() else { return Vec::new() };
+    let mut out: Vec<String> = Vec::new();
+    for (layer, a, b) in leaders {
+        let (mx, my) = ((a.x.get() + b.x.get()) as f64 / 2.0, (a.y.get() + b.y.get()) as f64 / 2.0);
+        let (lx, ly) = ((b.x - a.x).get() as f64, (b.y - a.y).get() as f64);
+        let holds = |t: &eda_model::ir::Track| {
+            t.layer == *layer
+                && t.arc().is_none()
+                && t.pts.windows(2).any(|w| {
+                    let (px, py, qx, qy) = (w[0].x.get() as f64, w[0].y.get() as f64, w[1].x.get() as f64, w[1].y.get() as f64);
+                    let (dx, dy) = (qx - px, qy - py);
+                    let len2 = dx * dx + dy * dy;
+                    if len2 == 0.0 || (dx * ly - dy * lx).abs() > 1e-9 * len2.sqrt() * lx.hypot(ly).max(1.0) {
+                        return false;
+                    }
+                    let t = (((mx - px) * dx + (my - py) * dy) / len2).clamp(0.0, 1.0);
+                    (px + t * dx - mx).hypot(py + t * dy - my) <= 1_000.0
+                })
+        };
+        for t in rt.tracks.iter().filter(|t| holds(t)) {
+            if !out.contains(&t.id) {
+                out.push(t.id.clone());
+            }
+        }
+    }
+    out
+}
+
 /// `POST /api/route/drag_finish`: `{x, y, force_commit?}`. `DRAGGER::FixRoute( aForceCommit )`: a position the drag cannot resolve
 /// commits the last one it could; a drag that is only marking obstacles (its first position failed) commits a violation with
 /// `force_commit` (Ctrl+click) and not otherwise.
@@ -727,11 +762,14 @@ pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     if router.drag_group_kind().is_some() {
         let commit = router.drag_finish_with(at, force_commit);
         let group = router.entered_group.clone();
+        let leaders = router.drag_leaders().to_vec();
         *guard = None;
         drop(guard);
-        let Some(commit) = commit else { return json!({ "ok": false, "dragging": false, "refused": true, "message": "" }) };
+        // `InlineDrag`: "leaderSegments = m_router->GetLastCommittedLeaderSegments()", then `selectItems` of their parents -- the tracks the
+        // commit made of them, or (a refused drag) the selected ones as they are
+        let Some(commit) = commit else { return json!({ "ok": false, "dragging": false, "refused": true, "message": "", "select": tracks_holding(dir, &leaders) }) };
         return match board::step(dir, commit_cmd(commit, group), true, "ui") {
-            Ok(summary) => json!({ "ok": true, "message": summary }),
+            Ok(summary) => json!({ "ok": true, "message": summary, "select": tracks_holding(dir, &leaders) }),
             Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
         };
     }
@@ -2017,10 +2055,21 @@ mod tests {
         let mut lines = started["line_tracks"].as_array().unwrap().clone();
         lines.sort_by_key(|v| v.to_string());
         assert_eq!(lines, vec![json!("a"), json!("b")]);
+        // `InlineDrag`: the net of the item nearest the cursor is highlighted while dragging (UI-LEFT-2 RR1)
+        assert_eq!(started["highlight_net"], json!("SIG"), "{started}");
         let moved = drag_move(&cell, &body(json!({ "x": 10_000_000, "y": 8_000_000 })));
         assert_eq!(moved["fanout"].as_array().map(Vec::len), Some(2), "{moved}");
         let done = drag_finish(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000 })));
         assert_eq!(done["ok"], json!(true), "{done}");
+        // the leader segments' tracks are selected after the commit (`GetLastCommittedLeaderSegments`, `selectItems`): the two new tracks
+        let (_, design, _) = board::load(&dir).unwrap();
+        let ids: Vec<String> = design.routing.as_ref().unwrap().tracks.iter().map(|t| t.id.clone()).collect();
+        let mut select: Vec<String> = done["select"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        select.sort();
+        let mut all = ids.clone();
+        all.sort();
+        assert_eq!(select, all, "{done}");
+        assert!(!select.contains(&"a".to_string()) && !select.contains(&"b".to_string()), "new ids, not the dragged ones: {done}");
         let after = tracks_of(&dir);
         assert!(after.iter().any(|(n, pts)| n == "SIG" && pts.iter().any(|q| q.y == mm(8.0))), "{after:?}");
         assert!(after.iter().any(|(n, pts)| n == "GND" && pts.iter().any(|q| q.y == mm(10.0))), "b follows 2 mm below a: {after:?}");
