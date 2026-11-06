@@ -2,7 +2,7 @@
 // window cannot hold a 240 px column and still have a canvas), and `DockPanel`, one pane with a KiCad-style caption bar (a chevron to roll the pane up,
 // a close button that hides it until its toolbar button shows it again -- `CloseButton( true )` in the AUI pane info). The layout rules and the
 // default arrangement are kicad-port/dockLayout.ts's; where it is kept is state/dockLayoutStore.ts's.
-import type { ReactNode } from "react";
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { paneVisible, type DockColumnId, type DockPaneId } from "../../kicad-port/dockLayout";
 import { setDockColumnCollapsed, toggleDockPane, toggleDockPaneFolded, useDockLayout } from "../../state/dockLayoutStore";
 
@@ -37,22 +37,35 @@ export function DockColumn({ side, column = side, label, children }: { side: "le
 }
 
 /**
+ * A pane that wxAUI lets the person move (the board editor's Net Inspector and Search, components/panels/BottomDock.tsx): its caption is dragged and
+ * double-clicked to dock or float it, so only the chevron folds it, and `buttons` (the places it may go) sit before the close button.
+ */
+export interface MovableCaption {
+  onPointerDown: (e: ReactPointerEvent<HTMLElement>) => void;
+  onDoubleClick: (e: ReactMouseEvent<HTMLElement>) => void;
+  hint: string;
+  buttons: ReactNode;
+}
+
+/**
  * `visible` / `onClose` are for a pane whose open state lives elsewhere (the Net Navigator's is the schematic control store's, read by its action and its
  * check mark): the pane is drawn while `visible`, and its close button calls `onClose` instead of hiding it in the layout.
  */
-export function DockPanel({ id, title, children, visible, onClose }: { id: DockPaneId; title: string; children: ReactNode; visible?: boolean; onClose?: () => void }) {
+export function DockPanel({ id, title, children, visible, onClose, movable }: { id: DockPaneId; title: string; children: ReactNode; visible?: boolean; onClose?: () => void; movable?: MovableCaption }) {
   const layout = useDockLayout();
   if (!(visible ?? paneVisible(layout, id))) return null;
   const folded = layout.folded[id];
   return (
     <section className={`dock-panel${folded ? " folded" : ""}`} data-pane={id}>
       <header
-        className="dock-panel-caption"
+        className={`dock-panel-caption${movable ? " movable" : ""}`}
         role="button"
         tabIndex={0}
         aria-expanded={!folded}
-        title={folded ? `Unfold ${title}` : `Fold ${title}`}
-        onClick={() => toggleDockPaneFolded(id)}
+        title={movable ? movable.hint : folded ? `Unfold ${title}` : `Fold ${title}`}
+        onClick={movable ? undefined : () => toggleDockPaneFolded(id)}
+        onPointerDown={movable?.onPointerDown}
+        onDoubleClick={movable?.onDoubleClick}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
@@ -60,10 +73,25 @@ export function DockPanel({ id, title, children, visible, onClose }: { id: DockP
           }
         }}
       >
-        <span className="dock-panel-chevron" aria-hidden>
+        <span
+          className="dock-panel-chevron"
+          aria-hidden={!movable}
+          role={movable ? "button" : undefined}
+          title={movable ? (folded ? `Unfold ${title}` : `Fold ${title}`) : undefined}
+          data-testid={movable ? `dock-fold-${id}` : undefined}
+          onClick={
+            movable
+              ? (e) => {
+                  e.stopPropagation();
+                  toggleDockPaneFolded(id);
+                }
+              : undefined
+          }
+        >
           {folded ? "▸" : "▾"}
         </span>
         <span className="dock-panel-title">{title}</span>
+        {movable?.buttons}
         {/* The Selection Filter has no switch of its own (it follows the other panes), so it has no close button either. */}
         {id !== "selectionFilter" && (
           <button

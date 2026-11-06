@@ -40,7 +40,7 @@ import { ForeignImportDialogs } from "./components/ForeignImportDialogs";
 import { FileDropHost } from "./components/FileDropHost";
 import { BoardPadPropertiesDialog } from "./components/BoardPadPropertiesDialog";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
-import { BottomDock } from "./components/panels/BottomDock";
+import { BottomDock, PcbFloatingPanes, PcbPaneDockArea } from "./components/panels/BottomDock";
 import { ZoneDialog } from "./components/ZoneDialog";
 import { TextDialog } from "./components/TextDialog";
 import { FootprintTextDialog } from "./components/FootprintTextDialog";
@@ -246,10 +246,25 @@ function StudioFrame() {
           {/* Migrate 3D Models when the board opens (`PCB_EDIT_FRAME::OnBoardLoaded`) and its load notice */}
           <AutoMigrate3dModels />
         </div>
-        {/* The board editor's Net Inspector and Search panes (`.Bottom()`), under the canvas */}
+        {/* The board editor's Net Inspector and Search panes (`.Bottom()`), under the canvas, or wherever the person docked them around it (UI-LEFT-2 PP13) */}
         {state.tab === "pcb" && (
           <div className="bottom-dock-row">
             <BottomDock />
+          </div>
+        )}
+        {state.tab === "pcb" && (
+          <div className="top-dock-row">
+            <PcbPaneDockArea side="top" />
+          </div>
+        )}
+        {state.tab === "pcb" && (
+          <div className="left-pane-dock-col">
+            <PcbPaneDockArea side="left" />
+          </div>
+        )}
+        {state.tab === "pcb" && (
+          <div className="right-pane-dock-col">
+            <PcbPaneDockArea side="right" />
           </div>
         )}
         {!hideBoardChrome && (
@@ -288,6 +303,8 @@ function StudioFrame() {
       </div>
       {/* a floating Design Blocks pane: a window over the editor (`FloatingPosition`, `FloatingSize`) */}
       {blocksEditor && blocksAt === "float" && <DesignBlocksDock editor={blocksEditor} />}
+      {/* the board editor's Net Inspector and Search panes when floating, and the dock guides while one is dragged */}
+      {state.tab === "pcb" && <PcbFloatingPanes />}
       <div className="message-panel-row">
         <MessagePanel />
       </div>
