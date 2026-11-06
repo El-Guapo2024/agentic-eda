@@ -229,9 +229,24 @@ pub(crate) fn svg_file_name(symbol: &str, unit: u32, demorgan: bool) -> String {
     format!("{name}_unit{unit}{}.svg", if demorgan { "_demorgan" } else { "" })
 }
 
-/// `POST /api/sym/svg`: `{lib_id, unit?, body_style?, black_and_white?, include_hidden_pins?, include_hidden_fields?}` -- the symbol (a project library entry, else
-/// the resolved one) written out as a one-symbol library and plotted by `kicad-cli sym export svg`. `{ok, files, svg: {name, text}}`: `svg` is the unit
-/// and body style asked for (`SYMBOL_EDITOR_CONTROL::ExportSymbolAsSVG` plots the unit and style being edited).
+/// `kicad-cli sym export svg`'s options for a request: `--theme` with one of the built-in themes kicad-cli knows (`sch_output_api::THEMES`; any other
+/// is not passed, and kicad-cli takes its own settings' theme), then `--black-and-white`, `--include-hidden-pins` and `--include-hidden-fields` as asked.
+pub(crate) fn symbol_svg_args(req: &Value) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    if let Some(theme) = req.get("theme").and_then(Value::as_str).filter(|t| crate::sch_output_api::THEMES.iter().any(|(k, _)| k == t)) {
+        args.extend(["--theme".to_string(), theme.to_string()]);
+    }
+    for (key, option) in [("black_and_white", "--black-and-white"), ("include_hidden_pins", "--include-hidden-pins"), ("include_hidden_fields", "--include-hidden-fields")] {
+        if flag(req, key, false) {
+            args.push(option.to_string());
+        }
+    }
+    args
+}
+
+/// `POST /api/sym/svg`: `{lib_id, unit?, body_style?, theme?, black_and_white?, include_hidden_pins?, include_hidden_fields?}` -- the symbol (a project library
+/// entry, else the resolved one) written out as a one-symbol library and plotted by `kicad-cli sym export svg` ([`symbol_svg_args`]). `{ok, files, svg: {name,
+/// text}}`: `svg` is the unit and body style asked for (`SYMBOL_EDITOR_CONTROL::ExportSymbolAsSVG` plots the unit and style being edited).
 pub fn symbol_svg(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let lib_id = req.get("lib_id").and_then(Value::as_str).unwrap_or("");
@@ -246,12 +261,7 @@ pub fn symbol_svg(dir: &Path, body: &[u8]) -> Value {
         Err(e) => return err(crate::board::reasons(&e)),
     };
     let bare = lib_id.rsplit(':').next().unwrap_or(lib_id);
-    let mut args: Vec<String> = Vec::new();
-    for (key, option) in [("black_and_white", "--black-and-white"), ("include_hidden_pins", "--include-hidden-pins"), ("include_hidden_fields", "--include-hidden-fields")] {
-        if flag(&req, key, false) {
-            args.push(option.to_string());
-        }
-    }
+    let args = symbol_svg_args(&req);
     let mut reply = reply(kicad_engine::export_symbol_svg(dir, bare, &text, &args));
     let wanted = svg_file_name(bare, unit, demorgan);
     let file = reply.get("files").and_then(Value::as_array).and_then(|f| f.iter().filter_map(Value::as_str).find(|f| f.ends_with(&wanted))).map(str::to_string);
@@ -274,6 +284,17 @@ pub fn symbol_svg(dir: &Path, body: &[u8]) -> Value {
 mod tests {
     use eda_model::units::Nm;
     use super::*;
+
+    /// Export Symbol as SVG passes the theme kicad-cli knows and the hidden items as asked; an unknown theme is not passed.
+    #[test]
+    fn the_symbol_svg_takes_a_builtin_theme_and_the_hidden_items() {
+        assert_eq!(
+            symbol_svg_args(&json!({ "theme": "_builtin_default", "include_hidden_pins": true, "include_hidden_fields": true })),
+            vec!["--theme", "_builtin_default", "--include-hidden-pins", "--include-hidden-fields"]
+        );
+        assert_eq!(symbol_svg_args(&json!({ "theme": "mine", "black_and_white": true })), vec!["--black-and-white"]);
+        assert!(symbol_svg_args(&json!({})).is_empty());
+    }
 
     fn spec() -> Value {
         json!({
