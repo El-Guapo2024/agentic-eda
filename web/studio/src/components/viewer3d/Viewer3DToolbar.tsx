@@ -112,6 +112,8 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
             key={i}
             className={`toolbar-button${pressed ? " active" : ""}${item.type === "group" ? " has-menu" : ""}`}
             aria-pressed={pressed}
+            data-action={name}
+            data-group={item.type === "group" ? item.label : undefined}
             disabled={!enabled}
             title={item.type === "group" ? `${tooltip} (${item.label}: right click for the others)` : tooltip}
             onClick={() => h?.run()}

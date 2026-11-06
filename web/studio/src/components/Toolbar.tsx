@@ -12,7 +12,7 @@ import type { ToolbarId, ActionsFile, IconsFile, ToolbarItem } from "../kicad/ty
 import { useActionRunner } from "../actions/useActionRunner";
 import { useChecked } from "../actions/useChecked";
 import { effectiveHotkey, displayHotkey } from "../actions/hotkeys";
-import { useColorScheme } from "../hooks/useColorScheme";
+import { useIconScheme } from "../hooks/useColorScheme";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { BOX_SEPARATOR, sizeBoxPick, trackWidthBoxLabels, viaSizeBoxLabels } from "../kicad-port/routerSizes";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
@@ -46,7 +46,8 @@ function editorOfTab(tab: string): ToolbarEditor {
 
 /** The KiCad icon of a BITMAPS name, drawn at KiCad's default toolbar size; a blank square only for a name with no icon (which the icon test forbids on any toolbar). */
 export function ActionIcon({ iconName, size = 24 }: { iconName: string | null; size?: number }) {
-  const scheme = useColorScheme();
+  // Preferences > Common's "Icon theme:" (light, dark or the system's: `COMMON_SETTINGS::m_Appearance.icon_theme`)
+  const scheme = useIconScheme();
   const file = iconName ? (iconsFile.icons[iconName] ?? KICAD10_ICONS[iconName]) : null;
   if (!file) return <span className="icon-placeholder" aria-hidden />;
   // KiCad's default toolbar icon size (common/settings/common_settings.cpp:
@@ -238,6 +239,8 @@ function GroupButton({ item, editor }: { item: Extract<ToolbarItem, { type: "gro
       <button
         className={`toolbar-button has-menu${pressed ? " active" : ""}`}
         aria-pressed={pressed}
+        data-group={item.label}
+        data-action={shown ?? undefined}
         disabled={!shown}
         title={shown ? `${label} (${item.label}: right click or the corner arrow for the others)` : `${item.label} (${deadReason(editor, item.items[0] ?? "")})`}
         onClick={(e) => {
@@ -297,6 +300,7 @@ function ToolbarItemView({ item, editor, vertical }: { item: RenderToolbarItem; 
       <button
         className={`toolbar-button${pressed ? " active" : ""}`}
         aria-pressed={pressed}
+        data-action={item.action}
         disabled={!enabled}
         title={tooltip}
         onClick={() => run(item.action)}
