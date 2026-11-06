@@ -173,10 +173,12 @@
       // carried once the Move tool holds it (the tool's stage says "carrying" from the pick, before the footprint is made and picked up)
       await until(() => S().placeFootprint === "carrying" && S().tool === "move", 15000);
       await hover(FREE[2][0], FREE[2][1]);
-      await until(() => S().moving, 4000);
+      // under load the carried footprint can take several seconds to be made and picked up: Escape before that hits a tool with nothing in hand, which
+      // ends it (`IsCancelInteractive()` with no footprint: `PopTool`), so wait for both the move and the footprint on the board first
+      await until(async () => !!S().moving && (await tps()).length === before.length + 1, 15000);
       t((await tps()).length === before.length + 1 && !!S().moving, "the footprint is carried");
       await escape();
-      t(!!(await until(async () => (await tps()).length === before.length, 6000)), "Escape takes it away (`commit.Revert()`)");
+      t(!!(await until(async () => (await tps()).length === before.length, 10000)), "Escape takes it away (`commit.Revert()`)");
       t(!!(await until(() => S().placeFootprint === "waiting", 4000)), `the tool goes on (${S().placeFootprint})`);
       await escape();
       t(S().placeFootprint === "idle", "a second Escape ends it");
