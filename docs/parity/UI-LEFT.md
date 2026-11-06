@@ -497,27 +497,22 @@ Notes:
   - Save Library As has no "Do not update library tables" or global-table entry; KiCad 25ec2335's Save As Packed / Unpacked are not ported.
   - The library file is not watched for changes made outside the studio.
   - L. GAPS 5; PARITY-common §14, §16.
-- **L2 [FM] Manage Libraries.**
-  - No Reset or Migrate Libraries, and no Edit Options.
-  - The project table only.
-  - Non-KiCad formats are listed but not read.
-  - No 3D model search paths.
+- **L2 [FM] Manage Libraries.** **done (task-u4-libs)**: every tab of Manage Libraries is edited as KiCad's: the Global tab writes the global table into KiCad's configuration folder, a chained table's tab its own file; Reset Libraries (one row naming the installed table) and Migrate Libraries (kicad-cli's `sym upgrade` / `fp upgrade`, `ConvertLibrary`) with KiCad's questions; Edit Options... (`DIALOG_PLUGIN_OPTIONS`); Eagle, Altium, CADSTAR, EasyEDA, PADS Logic, gEDA, Sprint Layout and legacy libraries of the tables read through kicad-cli's conversion into a read-only cache; KiCad's path variables edited in Configure Paths and written to `kicad_common.json`, with the 3D model search paths listed (KiCad 8303b2ad has no page that edits them: they are the path variables). PARITY-common §14.
+  - Left: pasting table text into the grid; a row's options are not passed to the conversion (kicad-cli has no flag: a CADSTAR library that needs `csa` converts without it); Database and HTTP libraries are listed, not read; a system-environment variable is read only in Configure Paths (KiCad lets one override it for the session); Add Library's "global table" choice and Save Library As' global entry are not offered.
   - M. GAPS 5; PARITY-common §14.
-- **L3 [FM] Choosers.**
-  - No `/regex/` or relational (`voltage>3.3`) search.
-  - No footprint-selector list, and no "3D viewer in own window".
-  - Change Symbols lists only the design's libraries.
+- **L3 [FM] Choosers.** **done (task-u4-libs)**: `/regex/` (and `^...$`) and relational (`voltage>3.3`, `resistance<10k`) search words in the server's search (on `eda_model::wx_regex`) and the browser's groups; the Symbol Chooser's footprint selector (`FOOTPRINT_SELECT_WIDGET`, the chosen one drawn and placed); the Footprint Chooser's "Show 3D viewer in own window"; Change Symbols' browse buttons open the Symbol Chooser over every library of the tables, and a new id's definition goes in with the change. PARITY-sch §3a.
+  - Left: the browser's regex runs on JS RegExp, not `wx_regex`; the selector counts distinct pin numbers (KiCad: graphical pins) and lists the default footprint once; the picker's Recently Used is Place Symbol's.
   - M. GAPS 5/30; PARITY-sch §3a.
-- **L4 [FM] Assign Footprints (CvPcb).** No footprint preview and no equivalence files. M. PARITY-sch §13.
-- **L5 [BD] Design Blocks.**
-  - The pane is docked, not floating.
-  - A name with "." is refused.
-  - A placed sheet doesn't get the block's default fields.
+- **L4 [FM] Assign Footprints (CvPcb).** **done (task-u4-libs)**: CvPcb's footprint viewer as a pane of the dialog (the picked footprint, else the selected symbol's: `InitDisplay`, `GetFootprint`'s messages); the footprint association files (`.equ`, KiCad 25ec2335's cvpcb/): Manage Footprint Association Files... (`DIALOG_CONFIG_EQUFILES`, the list in the board folder's `cvpcb.json` and the derived `.kicad_pro`) and Automatically Assign Footprints (`AutomaticFootprintMatching`, staged with the dialog's assignments, one undo step). PARITY-sch §13.
+  - Left: the viewer is a pane, not a window of its own; a relative `.equ` path is read against the board's folder (KiCad's search stack is not searched); Edit opens no text editor; the CvPcb hotkeys.
+  - M. PARITY-sch §13.
+- **L5 [BD] Design Blocks.** **done (task-u4-libs)**: the pane docks on the left or the right and floats at KiCad's 800 x 600 (`defaultDesignBlocksPaneInfo`: not top or bottom); a name with a '.' is accepted as KiCad 25ec2335 lists it (`DesignBlockEnumerate`: `BeforeLast( '.' )`); a sheet drawn from a block gets the block's default fields, hidden (`DrawSheet`), and a block saved from a sheet opens with the sheet's fields.
+  - Left: the floating pane is a window inside the page; its dock or float, like the pinned libraries and check boxes, is kept in the browser (localStorage); a name starting with '.' is refused.
   - S. GAPS 32; PARITY-sch §34.
-- **L6 [BD] Library edge cases.**
-  - Placing a lib_id the design already holds uses the design's copy (unsure).
-  - A folder library skips a broken file silently.
-  - S. GAPS 33; PARITY-common §14.
+- **L6 [BD] Library edge cases.** **done (task-u4-libs)**:
+  - Placing a lib_id the design already holds: decided and documented (PARITY-common §14). KiCad places the library's symbol as it is now and, when it differs from the schematic's cache, keeps it under a new cache entry (`Name_1`) so the placed ones keep theirs; the studio's IR has one definition per lib_id and places the design's copy, which is KiCad's answer until the library changes. Left: a placement's own cache entry when the library changed, and an unsaved Symbol Editor edit is placed as edited.
+  - A folder library's broken file is reported in KiCad 25ec2335's words ("Unable to read file '%s'" ... "The library cannot be saved until these errors are fixed manually."): the chooser, the editors' tree, the status bar, `GET /api/library/load_errors` and the row's status in Manage Symbol Libraries; the good files are read. Left: a symbol KiCad's parser refuses inside a well-formed file is not found (the reader checks the header and the forms' closing).
+  - S. GAPS 5; PARITY-common §14.
 
 ## 3D viewer
 
