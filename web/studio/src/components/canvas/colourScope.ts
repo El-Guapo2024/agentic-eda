@@ -9,14 +9,31 @@
 
 type Transform = (css: string) => string;
 
-/** A scope's transform, with the colours it already made (a frame sets the same few colours many times). */
-interface Scope {
-  /** Null: a scope that sets aside the ones outside it (a pad drawn inside a footprint takes the copper's colour, not the footprint's). */
-  fn: Transform | null;
-  made: Map<string, string>;
-}
+/** A scope's transform (`memoColours` keeps what one made: a frame sets the same few colours many times). Null: a scope that sets aside the ones outside it (a
+ * pad drawn inside a footprint takes the copper's colour, not the footprint's). */
+type Scope = Transform | null;
 
 const scopes = new WeakMap<object, Scope[]>();
+
+/** `fn` with the colours it made kept: the same transform object for every scope of a frame that asks with the same `key`. */
+const memos = new Map<string, Transform>();
+export function memoColours(key: string, fn: Transform): Transform {
+  let t = memos.get(key);
+  if (!t) {
+    const made = new Map<string, string>();
+    t = (css) => {
+      let out = made.get(css);
+      if (out === undefined) {
+        out = fn(css);
+        made.set(css, out);
+      }
+      return out;
+    };
+    if (memos.size > 64) memos.clear();
+    memos.set(key, t);
+  }
+  return t;
+}
 const installed = new WeakSet<object>();
 
 function nativeAccessor(ctx: object, prop: "fillStyle" | "strokeStyle"): PropertyDescriptor | undefined {
@@ -32,17 +49,9 @@ function transformed(ctx: object, css: string): string {
   const open = scopes.get(ctx);
   if (!open || open.length === 0) return css;
   let from = open.length - 1;
-  while (from >= 0 && open[from]!.fn !== null) from--;
+  while (from >= 0 && open[from] !== null) from--;
   let out = css;
-  for (let i = from + 1; i < open.length; i++) {
-    const s = open[i]!;
-    let made = s.made.get(out);
-    if (made === undefined) {
-      made = s.fn!(out);
-      s.made.set(out, made);
-    }
-    out = made;
-  }
+  for (let i = from + 1; i < open.length; i++) out = open[i]!(out);
   return out;
 }
 
@@ -85,7 +94,7 @@ export function withColourScope(ctx: CanvasRenderingContext2D, fn: Transform | n
     scopes.set(ctx, open);
   }
   if (!produced.has(ctx)) produced.set(ctx, new Set());
-  open.push({ fn, made: new Map() });
+  open.push(fn);
   try {
     draw();
   } finally {

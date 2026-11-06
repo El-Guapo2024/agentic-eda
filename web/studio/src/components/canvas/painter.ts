@@ -24,7 +24,7 @@ import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighl
 import { carryRatsnest, offsetRatsnestForPreview, ratsnestCross, type MovedEdge } from "../../kicad-port/localRatsnest";
 import { EDGE_CUTS_DIM_FACTOR, HI_CONTRAST_FACTOR, cssOf, hiContrastDim, highlightBrighten, highlightDarken, parseColor, ratsnestCurveControl, ratsnestLineColor } from "../../kicad-port/color4d";
 import { activeCopperOnTop, COPPER_BUCKETS, padContrast, padHoleContrast, viaContrast, type ContrastLook } from "../../kicad-port/hiContrast";
-import { installColourScopes, withColourScope } from "./colourScope";
+import { installColourScopes, memoColours, withColourScope } from "./colourScope";
 import { carryMatrix, carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { dimensionTextAngleRad, itemBounds, padIds } from "../../kicad-port/pcbItems";
@@ -227,7 +227,7 @@ function contrastPrimary(opts: PaintOptions): string | null {
 function dimColours(factor = HI_CONTRAST_FACTOR): (css: string) => string {
   const background = layerColor("background");
   const selection = layerColor("selection");
-  return (css) => (css === selection ? css : hiContrastDim(css, background, factor));
+  return memoColours(`dim|${factor}|${background}|${selection}`, (css) => (css === selection ? css : hiContrastDim(css, background, factor)));
 }
 
 /** Runs `draw` with the look High Contrast Mode gives an item (kicad-port/hiContrast.ts): as it is, dimmed, or not at all. */
@@ -905,7 +905,7 @@ function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: B
       drawShapeGeometry(ctx, s, !!opts.sketchGraphics, shapeDash(s, ctx.lineWidth, opts.dashRatios ?? boardDashRatios(board)));
       ctx.restore();
     };
-    withBoardLayer(ctx, opts, s.layer, lit ? () => withColourScope(ctx, null, () => withColourScope(ctx, highlightBrighten, draw)) : draw, lit);
+    withBoardLayer(ctx, opts, s.layer, lit ? () => withColourScope(ctx, null, () => withColourScope(ctx, memoColours("lit", highlightBrighten), draw)) : draw, lit);
   }
 }
 
@@ -1663,7 +1663,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // `copperPaint`'s; everything else is drawn in this scope.
   const highlighting = typeof opts.netHighlight === "string" ? opts.netHighlight !== "" : (opts.netHighlight?.length ?? 0) > 0;
   const selectionColour = layerColor("selection");
-  const unlit = highlighting ? (css: string) => (css === selectionColour ? css : highlightDarken(css)) : null;
+  const unlit = highlighting ? memoColours(`unlit|${selectionColour}`, (css: string) => (css === selectionColour ? css : highlightDarken(css))) : null;
   const withUnlit = (draw: () => void) => (unlit ? withColourScope(ctx, unlit, draw) : draw());
   // `PCB_DRAW_PANEL_GAL::SetTopLayer` (which `SetActiveLayer` calls whatever the contrast mode): the active copper layer is drawn over the others -- the inner
   // layers are one bucket here -- and the vias over every copper layer (`LAYER_VIA_*` are among the layers always on top).
