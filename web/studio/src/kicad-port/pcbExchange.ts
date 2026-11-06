@@ -19,10 +19,12 @@ export const REPLACE_OPTIONS: ExchangeOptions = {
   reset_fabrication_attrs: true,
   reset_clearance_overrides: true,
   reset_3d_models: true,
+  // the netlist gives each pad its pin's net afterwards (`updateComponentPadConnections`)
+  pads_by_number: true,
 };
 
-/** The Change Footprint dialog as it opens (`updateMode` off). */
-export const CHANGE_OPTIONS: ExchangeOptions = { ...REPLACE_OPTIONS, remove_extra_texts: false };
+/** The Change Footprint dialog as it opens (`updateMode` off): the pads matched as `ExchangeFootprint` matches them (`matchItemsBySimilarity<PAD>`). */
+export const CHANGE_OPTIONS: ExchangeOptions = { ...REPLACE_OPTIONS, remove_extra_texts: false, pads_by_number: false };
 
 /** The Update Footprint dialog as it opens (`updateMode` on): the texts and the attributes of the board stay; the library's overrides and models are taken. */
 export const UPDATE_OPTIONS: ExchangeOptions = {
@@ -33,6 +35,7 @@ export const UPDATE_OPTIONS: ExchangeOptions = {
   reset_text_positions: false,
   reset_text_content: false,
   reset_fabrication_attrs: false,
+  pads_by_number: false,
 };
 
 /** "Check All Update Options" / "Uncheck All Update Options": every option but the match mode. */

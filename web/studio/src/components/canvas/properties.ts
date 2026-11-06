@@ -9,7 +9,8 @@ import { openGroupDialog } from "../../state/commonDialogs";
 import { openBarcodeDialog, openRefImageDialog, openTextBoxDialog } from "../../state/pcbItemDialogs";
 import { openDrillChartDialog, openGridItemDialog, openViaStitchDialog } from "../../state/kicad10Dialogs";
 import { barcodeToCmd } from "../../kicad-port/barcodeShapes";
-import { padById } from "../../kicad-port/pcbItems";
+import { fpTextById, padById } from "../../kicad-port/pcbItems";
+import { openFpTextDialog } from "../../state/fpTextDialog";
 import { fieldById } from "../../kicad-port/fpFields";
 import { tablesOf } from "../../kicad-port/tables";
 import { openTablePropertiesFor } from "../../actions/tableActions";
@@ -54,6 +55,8 @@ export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch
   // ... and a footprint's field the text properties of that field (`ShowTextPropertiesDialog`), here the Footprint Properties dialog on its footprint,
   // whose grid has the field's every setting.
   else if (api.getState().board && fieldById(api.getState().board!, id)) dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
+  // ... and a footprint's own text its Text Properties (UI-LEFT P15).
+  else if (api.getState().board && fpTextById(api.getState().board!, id)) openFpTextDialog(id);
   // `PCB_GROUP` properties are the group tool's (`ACTIONS::groupProperties`, common.Groups.groupProperties): the name and the member list.
   else {
     const group = api.groupById(id);

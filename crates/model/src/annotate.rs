@@ -72,6 +72,16 @@ fn placeholder_mark(reference: &str) -> Option<usize> {
     (!tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit())).then_some(q)
 }
 
+/// The reference as KiCad shows and writes it: a placeholder the sheet importer gave a symbol it could not tell apart (`R?1`, `R?2`) is the unannotated `R?` it
+/// stands for (`SCH_REFERENCE::Split` / `IsAnnotated`: a reference ending in `?`), every other reference as it is. The design keeps the placeholder as the part's
+/// name (two parts cannot both be `R?`); the field drawn on the sheet and the derived `.kicad_sch` say `R?` until Annotate numbers it (UI-LEFT S14).
+pub fn shown_reference(reference: &str) -> &str {
+    match placeholder_mark(reference) {
+        Some(q) => &reference[..=q],
+        None => reference,
+    }
+}
+
 /// Is this reference not annotated: empty, ending in `?` (`R?`), or a placeholder (`R?1`)?
 pub fn is_unannotated(reference: &str) -> bool {
     reference.is_empty() || reference.ends_with('?') || placeholder_mark(reference).is_some()
@@ -367,6 +377,15 @@ fn first_unused(list: &[Entry], r: &Entry, min: i64, required: &[u32]) -> i64 {
         }
         candidate += 1;
     }
+}
+
+/// The number `PlaceSymbol`'s `annotate()` gives a symbol just placed (`ReannotateByOptions` over every reference of the hierarchy, `SYMBOL_FILTER_ALL`): the
+/// first from `min` up that `list` (split) does not hold -- for a unit of a part of several units, one whose holders are all the same library symbol and value
+/// and leave that unit free (`Annotate`'s `units = { ref_unit.GetUnit() }` for a new multi-unit reference, `areUnitsAvailable`), so a unit joins an existing
+/// part that has it free (r2 D-A1).
+pub fn placement_number(list: &[Entry], new: &Entry, min: i64) -> i64 {
+    let required: Vec<u32> = if new.unit_count > 1 { vec![new.unit] } else { Vec::new() };
+    first_unused(list, new, min, &required)
 }
 
 /// `buildFullReference`: reference, number and unit, the key of the "already allocated" set.
@@ -671,6 +690,16 @@ mod tests {
         assert_eq!(unit_letters(1), "A");
         assert_eq!(unit_letters(26), "Z");
         assert_eq!(unit_letters(27), "AA");
+    }
+
+    #[test]
+    fn a_placeholder_is_shown_as_the_unannotated_reference_it_stands_for() {
+        assert_eq!(shown_reference("R?1"), "R?");
+        assert_eq!(shown_reference("U?12"), "U?");
+        assert_eq!(shown_reference("R?"), "R?");
+        assert_eq!(shown_reference("R12"), "R12");
+        assert_eq!(shown_reference("#PWR?3"), "#PWR?");
+        assert_eq!(shown_reference(""), "");
     }
 
     #[test]

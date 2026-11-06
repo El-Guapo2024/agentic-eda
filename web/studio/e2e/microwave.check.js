@@ -17,7 +17,7 @@
 //   3  Polygonal Shapes: the Complex Shape dialog -- Normal, Symmetrical and Mirrored, "Read Shape Description File..." (the file's scales in the Size boxes), a click that reads no file
 //      ("Shape has a null size.", then "Shape has no points." once a file was read) -- and the polygon between two pads in the board file.
 //   4  A schematic file dropped on the sheet runs Import Sheet with it: the files of the drop are put beside each other on the server, the sheets they place are looked for among them and the ones
-//      that are missing are named, and the Choose Schematic dialog opens on the file with what Import Sheet's checks say.
+//      that are missing are named, and each file of the drop is placed in turn with the options last chosen, no chooser asked (UI-LEFT S17).
 //
 // It answers through `window.__microwaveCheck`:
 //   { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }
@@ -546,7 +546,8 @@
       await sleep(900);
       const made = await mine();
       t(made.length === 5, `five footprints of the tools (${made.map((p) => p.footprint)})`);
-      // what the editor asks the server for: the footprint's own name, answered
+      // what the editor asks the server for: since task-u3-fpedit2 (UI-LEFT F3, `FOOTPRINT_EDIT_FRAME::LoadFootprintFromBoard`) Ctrl+E edits that one board
+      // footprint, so the editor loads `<board>/<reference>`, answered
       const asked = [];
       const fetched = window.fetch;
       window.fetch = async (...a) => { const r = await fetched(...a); const u = String((a[0] && a[0].url) || a[0]); if (u.includes("/api/footprint?name=")) asked.push(`${decodeURIComponent(u.split("name=")[1])} ${r.status}`); return r; };
@@ -557,10 +558,10 @@
           const e0 = E.errors().length;
           asked.length = 0;
           const r = await E.run("pcbnew.EditorControl.EditFpInFpEditor");
-          await waitFor(() => E.state().tab === "footprint" && asked.some((q) => q.startsWith(`${p.footprint} `)), 6000);
+          await waitFor(() => E.state().tab === "footprint" && asked.some((q) => q.startsWith(`<board>/${p.ref} `)), 6000);
           await sleep(700);
           t(r.ok !== false && E.state().tab === "footprint", `${p.footprint}: Edit Footprint opens the Footprint Editor (${r.error ?? E.state().tab})`);
-          t(asked.some((q) => q === `${p.footprint} 200`), `${p.footprint}: the editor loads it by its name (${asked.join(", ")})`);
+          t(asked.some((q) => q === `<board>/${p.ref} 200`), `${p.footprint}: the editor loads the board's ${p.ref} (${asked.join(", ")})`);
           t(E.errors().length === e0 && !!document.querySelector(".status-bar"), `${p.footprint}: no error, the page is still there (${E.errors().slice(e0).map((q) => q.message).join("; ")})`);
         }
       } finally {
@@ -597,51 +598,40 @@
     const gotoTab = async (label) => { if (E.state().tab !== label.toLowerCase()) { [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === label)?.click(); await waitFor(() => E.state().tab === label.toLowerCase()); await sleep(1000); } };
     const sheetsOfSchematic = async () => (await json("/api/schematic")).sheets ?? [];
 
-    await scenario("a schematic dropped on the sheet runs Import Sheet with it: the sheets it places are found among the files of the drop, the missing ones are named", async (t) => {
+    await scenario("a schematic dropped on the sheet runs Import Sheet with it, no chooser asked: each file of the drop in turn, the missing sheets named", async (t) => {
       await gotoTab("Schematic");
       const sheets0 = (await sheetsOfSchematic()).length;
       t((await E.actions()).some((a) => a.id === "eeschema.EditorControl.ddAppendFile" && a.enabled !== false), "ddAppendFile is an action the schematic editor handles");
       const main = schText([["Power", "dropped_power.kicad_sch"], ["Gone", "dropped_gone.kicad_sch"]]);
       const d = await dropFiles([{ name: "dropped_power.kicad_sch", text: schText([]) }, { name: "dropped_main.kicad_sch", text: main }]);
       t(d.prevented, "the browser does not take the files for itself");
-      await waitFor(() => !!chooser(), 8000);
-      t(!!chooser(), "Import Sheet's chooser, Choose Schematic, opens");
-      const field = chooser()?.querySelector("input[placeholder*='kicad_sch']");
-      t(!!field && /dropped_main\.kicad_sch$/.test(field.value), `on the file nobody places, whatever the order of the drop (${field?.value?.split("/").pop()})`);
-      await waitFor(() => /was not found/.test(chooser()?.innerText ?? ""), 8000);
-      const text = chooser()?.innerText ?? "";
-      t(/The sheet file 'dropped_gone\.kicad_sch' that 'dropped_main\.kicad_sch' places was not found: its sheet comes in empty\./.test(text), "Import Sheet's check names the sheet file that is missing, with the file that places it");
-      t(!/'dropped_power\.kicad_sch' that/.test(text), "and not the one that was dropped");
-      t(/Not in the drop: dropped_gone\.kicad_sch \(placed by dropped_main\.kicad_sch\)\. Its sheet comes in empty\./.test(lastToast()), `the drop says so too (${lastToast()})`);
-      // Open arms the placement tool with the file; two clicks size the sheet and Hierarchical Sheet Properties names it (the file's name)
-      [...chooser().querySelectorAll("button")].find((b) => b.textContent.trim() === "Open")?.click();
-      await sleep(600);
-      t(E.state().tool === "sch_import_sheet", "Open arms Import Sheet's tool");
+      // UI-LEFT S17: `DdAppendFile` runs Import Sheet with the file, which asks for nothing (no Choose Schematic) and places it with the options last chosen (a sheet here)
+      await waitFor(() => E.state().tool === "sch_import_sheet", 8000);
+      t(E.state().tool === "sch_import_sheet" && !chooser(), "the first file of the drop is in the hand, no chooser");
+      t(/Not in the drop: dropped_gone\.kicad_sch \(placed by dropped_main\.kicad_sch\)\. Its sheet comes in empty\./.test(lastToast()) && /2 schematics dropped: each is placed in turn\./.test(lastToast()), `the drop says what is missing and that each file is placed in turn (${lastToast()})`);
       const view = E.state().view;
       const at = (x, y) => [view.x + x * view.scale, view.y + y * view.scale];
       const clickSch = async (x, y, ms = 1200) => { const [px, py] = at(x, y); fire("pointermove", px, py); await sleep(150); fire("pointermove", px + 3, py + 3); await sleep(150); fire("pointerdown", px + 3, py + 3, { buttons: 1 }); await sleep(70); fire("pointerup", px + 3, py + 3); await sleep(ms); };
-      await clickSch(60000, 220000, 400);
-      await clickSch(140000, 270000, 1200);
       const findNamed = () => [...document.querySelectorAll(".dialog")].find((q) => /Hierarchical Sheet Properties/.test(q.textContent ?? ""));
-      await waitFor(() => !!findNamed(), 8000);
-      const named = findNamed();
-      t(!!named, "the second click opens Hierarchical Sheet Properties");
-      if (named) {
-        t(named.querySelectorAll("input")[0].value === "dropped_main", `the sheet is named after the file (${named.querySelectorAll("input")[0].value})`);
-        [...named.querySelectorAll("button")].find((b) => b.textContent.trim() === "Import")?.click();
+      const placeSheet = async (x, name) => {
+        await clickSch(x, 220000, 400);
+        await clickSch(x + 80000, 270000, 1200);
+        await waitFor(() => !!findNamed(), 8000);
+        const named = findNamed();
+        t(!!named && named.querySelectorAll("input")[0].value === name, `two clicks open Hierarchical Sheet Properties, the sheet named after the file (${named?.querySelectorAll("input")[0].value})`);
+        if (named) [...named.querySelectorAll("button")].find((b) => b.textContent.trim() === "Import")?.click();
         await sleep(3000);
-      }
+      };
+      await placeSheet(60000, "dropped_power");
+      // the next file of the drop is in the hand once the first is placed
+      await waitFor(() => E.state().tool === "sch_import_sheet", 8000);
+      t(E.state().tool === "sch_import_sheet", "then the next file of the drop");
+      await placeSheet(200000, "dropped_main");
       const sheets1 = await sheetsOfSchematic();
-      t(sheets1.length === sheets0 + 1 && sheets1.some((q) => q.name === "dropped_main"), `the sheet is on the schematic (${sheets0} -> ${sheets1.length})`);
-      await post("/api/undo", { domain: "schematic" });
-      await sleep(900);
-      t((await sheetsOfSchematic()).length === sheets0, "one undo takes it away");
-      // a drop of one file alone and a drop of files that are not placed by the first
+      t(sheets1.length === sheets0 + 2 && ["dropped_power", "dropped_main"].every((n) => sheets1.some((q) => q.name === n)), `both sheets are on the schematic (${sheets0} -> ${sheets1.length})`);
+      for (let i = 0; i < 2; i++) { await post("/api/undo", { domain: "schematic" }); await sleep(900); }
+      t((await sheetsOfSchematic()).length === sheets0, "two undos take them away");
       await escape();
-      await dropFiles([{ name: "dropped_a.kicad_sch", text: schText([["B", "dropped_b.kicad_sch"]]) }, { name: "dropped_b.kicad_sch", text: schText([]) }, { name: "dropped_other.kicad_sch", text: schText([]) }]);
-      await waitFor(() => !!chooser(), 8000);
-      t(!!chooser() && /Only dropped_a\.kicad_sch is imported; dropped_other\.kicad_sch is not placed by it/.test(lastToast()), `files the first does not place are left out and said (${lastToast()})`);
-      chooser()?.querySelector("button")?.click();
       await closeDialogs();
     });
 

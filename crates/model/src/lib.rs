@@ -63,6 +63,7 @@ pub mod table_edit;
 pub mod table_paste;
 pub mod cross_refs;
 pub mod table_text;
+pub mod teardrop_params;
 pub mod text_vars;
 pub mod text_eval;
 pub mod topo_match;

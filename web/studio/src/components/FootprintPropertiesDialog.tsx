@@ -19,11 +19,17 @@
 // The Embedded Files tab is the shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the footprint's own list; each of its edits is a verb of its own, sent at
 // once (KiCad applies it with the dialog's OK).
 //
-// Not ported: the footprint's own mask/paste margins, the extruded 3D body, jumper pad groups. The Reference and Value texts come from the schematic and the
-// intent: they are shown, not edited.
+// UI-LEFT P14 (task-u5-pcbfp): the grid's four mandatory rows (`PCB_FIELD::IsMandatory`: Reference, Value, Datasheet, Description; "The first 4 fields are
+// mandatory."), the Reference and Value texts edited and carried to the schematic symbol as Update Schematic from PCB would (`BACK_ANNOTATE`'s references and
+// values: `edit_symbol_fields`, then `rename_symbol` last, so the batch's other commands name the footprint as it was; a footprint no symbol is for is renamed on
+// the board alone), the Datasheet and Description the footprint's own once edited; a repeated field name taken as KiCad's reader takes it
+// (`mergeDuplicateFields`); the footprint's Solder paste absolute and relative clearance (`set_footprint_paste_margin`, any footprint).
+//
+// Not ported: the footprint's own mask margin and "Allow bridged solder mask apertures" (the board-file footprint's are kept, not edited here), the extruded 3D
+// body, jumper pad groups. A Datasheet or Description edited here is the footprint's, not carried to the symbol.
 import { useEffect, useMemo, useState } from "react";
 import type { Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, PadConnection, Part } from "../api/types";
-import { checkFieldRow, fieldsOf, layoutOf, localAngleOf, newFieldLayout, newFieldName, parseFieldId, attrsOf, REFERENCE, VALUE } from "../kicad-port/fpFields";
+import { checkFieldRow, fieldsOf, layoutOf, localAngleOf, mergeDuplicateFields, newFieldLayout, newFieldName, parseFieldId, attrsOf, MANDATORY_ROW_COUNT, REFERENCE, VALUE } from "../kicad-port/fpFields";
 import { footprintZoneForm, padNumbers, padZoneForm, zoneCmds, type FootprintZoneForm, type PadZoneForm } from "../kicad-port/padZone";
 import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
 import { useActionRunner } from "../actions/useActionRunner";
@@ -76,6 +82,8 @@ export function FootprintPropertiesDialog() {
   // the next poll of the board. Each pad number's form is kept once it was opened, so a pad left for another keeps what was typed; `padZones` holds the
   // forms that were opened, and OK sends the ones that differ from what the part carries.
   const [fpZone, setFpZone] = useState<FootprintZoneForm>({ connection: null, clearance: null });
+  // "Solder paste absolute clearance" and "relative clearance" (`m_solderPaste`, `MARGIN_OFFSET_BINDER`): null is the board's
+  const [paste, setPaste] = useState<{ margin: number | null; ratio: number | null }>({ margin: null, ratio: null });
   const [padNum, setPadNum] = useState("");
   const [padZones, setPadZones] = useState<Record<string, PadZoneForm>>({});
   // The 3D Models tab: a copy of the footprint's list, which OK sends when it differs.
@@ -99,6 +107,7 @@ export function FootprintPropertiesDialog() {
     const asked = first ? parseFieldId(first) : null;
     setSelected(Math.max(0, asked ? fieldsOf(part).findIndex((f) => f.name === asked.name) : 0));
     setFpZone(footprintZoneForm(part));
+    setPaste({ margin: part.paste_margin ?? null, ratio: part.paste_margin_ratio ?? null });
     setPadNum(padNumbers(part)[0] ?? "");
     setPadZones({});
     // the numbers the file has (`kicad-port/fpModels.ts` `tabRows`)
@@ -138,29 +147,33 @@ export function FootprintPropertiesDialog() {
   // A bottom-side footprint's frame is the top-side one mirrored: the dialog shows the offset as the file stores it, x un-mirrored (`GetFPRelativePosition`).
   const sense = part.side === "bottom" ? -1 : 1;
 
-  const nameClash = (name: string, i: number): boolean => rows.some((r, j) => j !== i && r.name.trim() === name.trim());
-
   const submit = async () => {
     setError(null);
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i]!;
       const message = checkFieldRow(r.name, { size: r.layout.size, thickness: r.layout.thickness }, len);
       if (message) return setError(`${r.name || `Field ${i + 1}`}: ${message}`);
-      // Not KiCad's (its `Validate` checks only for an empty name): this model keys a footprint's fields by name, so a repeated or a mandatory name would lose a field.
-      if (i >= 2 && (r.name === REFERENCE || r.name === VALUE || r.name === "Datasheet" || r.name === "Description")) return setError(`"${r.name}" is the name of a mandatory field.`);
-      if (nameClash(r.name, i)) return setError(`There are two fields called "${r.name}".`);
     }
-    const [ref0, val0, ...users] = rows;
+    // A repeated name (a mandatory one too) as KiCad's reader takes it: the later row's text and look on the first row of the name.
+    const merged = mergeDuplicateFields(rows);
+    const [ref0, val0, ...users] = merged;
     const original = (name: string): FieldInfo | undefined => infos.get(name);
     const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
     const cmds: Cmd[] = [];
     const edit: Extract<Cmd, { op: "edit_board_footprint" }> = { op: "edit_board_footprint", part: part.ref };
     if (ref0 && !same(ref0.layout, layoutOf(original(REFERENCE)!))) edit.reference = ref0.layout;
-    if (val0 && !same(val0.layout, layoutOf(original(VALUE)!))) edit.value = val0.layout;
-    const userFields = users.map((r) => ({ name: r.name.trim(), text: r.text, layout: r.layout }));
+    // A new Value text is the footprint's own (`FOOTPRINT::SetValue`: the Value field's text), and the symbol's below
+    const valueChanged = !!val0 && val0.text !== (original(VALUE)?.text ?? "");
+    if (val0 && (valueChanged || !same(val0.layout, layoutOf(original(VALUE)!)))) edit.value = valueChanged ? { ...val0.layout, text: val0.text } : val0.layout;
+    // The user fields, and the Datasheet and Description when the footprint has its own or they were edited (else they stay the symbol's or the file's).
+    const mandatoryKept = (r: Row): boolean => {
+      const o = original(r.name);
+      return !(r.name === "Datasheet" || r.name === "Description") || !!o?.custom || !o || r.text !== o.text || !same(r.layout, layoutOf(o));
+    };
+    const userFields = users.filter(mandatoryKept).map((r) => ({ name: r.name.trim(), text: r.text, layout: r.layout }));
     const before = fieldsOf(part)
-      .filter((f) => f.name !== REFERENCE && f.name !== VALUE)
+      .filter((f) => f.name !== REFERENCE && f.name !== VALUE && (!(f.name === "Datasheet" || f.name === "Description") || f.custom))
       .map((f) => ({ name: f.name, text: f.text, layout: layoutOf(f) }));
     if (!same(userFields, before)) edit.fields = userFields;
     if (!same(attrs, attrsOf(part))) edit.attrs = attrs;
@@ -192,6 +205,12 @@ export function FootprintPropertiesDialog() {
 
     // The zone connection of the footprint, and of every pad whose fields were changed: the overlay the zone filler reads.
     cmds.push(...zoneCmds(part, fpZone, padZones));
+    // The footprint's own paste margins (`SetLocalSolderPasteMargin`, `SetLocalSolderPasteMarginRatio`).
+    if (paste.margin !== (part.paste_margin ?? null) || paste.ratio !== (part.paste_margin_ratio ?? null)) cmds.push({ op: "set_footprint_paste_margin", part: part.ref, margin: paste.margin, ratio: paste.ratio });
+    // The Reference and Value texts, carried to the schematic's symbol as Update Schematic from PCB would (`BACK_ANNOTATE::applyChangelist`: the value, then the
+    // reference); the rename last, as every command before it names the footprint by its old reference.
+    if (val0 && valueChanged) cmds.push({ op: "edit_symbol_fields", id: part.ref, value: val0.text });
+    if (ref0 && ref0.text.trim() !== part.ref) cmds.push({ op: "rename_symbol", id: part.ref, new_id: ref0.text.trim() });
     if (cmds.length === 0) return close();
     setBusy(true);
     try {
@@ -265,7 +284,7 @@ export function FootprintPropertiesDialog() {
               </thead>
               <tbody>
                 {rows.map((r, i) => {
-                  const mandatory = i < 2;
+                  const mandatory = i < MANDATORY_ROW_COUNT;
                   const abs = norm360(sense * ((r.layout.angle ?? 0) / 1000) - (part.rot ?? 0));
                   return (
                     <tr key={r.key} onClick={() => setSelected(i)} style={{ background: i === selected ? "var(--chrome-hover, rgba(128,128,128,.18))" : undefined }} data-testid={`field-row-${i}`}>
@@ -273,7 +292,7 @@ export function FootprintPropertiesDialog() {
                         <input value={r.name} disabled={mandatory} onChange={(e) => setRow(i, { name: e.target.value })} style={{ width: 110 }} />
                       </td>
                       <td style={cell}>
-                        <input value={r.text} disabled={mandatory} onChange={(e) => setRow(i, { text: e.target.value })} style={{ width: 130 }} />
+                        <input value={r.text} aria-label={`${r.name} text`} onChange={(e) => setRow(i, { text: e.target.value })} style={{ width: 130 }} />
                       </td>
                       <td style={cell}>
                         <input type="checkbox" checked={r.layout.visible !== false} onChange={(e) => setLayout(i, { visible: e.target.checked })} />
@@ -356,7 +375,7 @@ export function FootprintPropertiesDialog() {
             <button
               data-testid="add-field"
               onClick={() => {
-                setRows((rs) => [...rs, { key: Math.max(-1, ...rs.map((r) => r.key)) + 1, from: null, name: newFieldName(rs.map((r) => r.name), rs.length + 2) /* `GetUserFieldName( m_fields->size() )`: KiCad's grid has four mandatory rows (Datasheet and Description too), ours two */, text: "", layout: newFieldLayout(part, state.board?.board_rules?.text_graphics) }]);
+                setRows((rs) => [...rs, { key: Math.max(-1, ...rs.map((r) => r.key)) + 1, from: null, name: newFieldName([], rs.length) /* `GetUserFieldName( m_fields->size() )`: Field4 after the four mandatory rows, whatever names the rows have */, text: "", layout: newFieldLayout(part, state.board?.board_rules?.text_graphics) }]);
                 setSelected(rows.length);
               }}
             >
@@ -364,8 +383,8 @@ export function FootprintPropertiesDialog() {
             </button>
             <button
               data-testid="delete-field"
-              disabled={selected < 2 || selected >= rows.length}
-              title={selected < 2 ? "The first two fields are mandatory." : "Delete the selected field"}
+              disabled={selected < MANDATORY_ROW_COUNT || selected >= rows.length}
+              title={selected < MANDATORY_ROW_COUNT ? `The first ${MANDATORY_ROW_COUNT} fields are mandatory.` : "Delete the selected field"}
               onClick={() => {
                 setRows((rs) => rs.filter((_, j) => j !== selected));
                 setSelected((s) => Math.max(0, s - 1));
@@ -442,6 +461,22 @@ export function FootprintPropertiesDialog() {
                   </select>
                   <span>Clearance</span>
                   <OverrideInput testid="fp-zone-clearance" valueNm={fpZone.clearance} units={units} onChange={(v) => setFpZone((f) => ({ ...f, clearance: v }))} />
+                  {/* the Clearance Overrides' solder paste: "Solder paste absolute clearance:" and "Solder paste relative clearance:" (%), empty for the board's */}
+                  <span title="This is the local clearance between this footprint's pads and the solder paste. This value can be superseded by local pad values.">Solder paste absolute clearance</span>
+                  <OverrideInput testid="fp-paste-margin" valueNm={paste.margin} units={units} onChange={(v) => setPaste((p) => ({ ...p, margin: v }))} />
+                  <span title="This is the local clearance ratio in percent between this footprint's pads and the solder paste.">Solder paste relative clearance</span>
+                  <span>
+                    <input
+                      type="number"
+                      step="any"
+                      aria-label="Solder paste relative clearance"
+                      data-testid="fp-paste-ratio"
+                      value={paste.ratio == null ? "" : Number((paste.ratio * 100).toFixed(4))}
+                      onChange={(e) => setPaste((p) => ({ ...p, ratio: e.target.value === "" || !Number.isFinite(Number(e.target.value)) ? null : Number(e.target.value) / 100 }))}
+                      style={{ width: 70 }}
+                    />{" "}
+                    %
+                  </span>
                 </div>
               </div>
               {padNumbers(part).length > 0 && (

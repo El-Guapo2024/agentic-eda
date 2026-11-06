@@ -5,7 +5,8 @@
 //! outside layers (a via's own ends) and checks the others, `REMOVE_ALL` checks every layer. Checking is `CONNECTIVITY_DATA::IsConnectedOnLayer( item, layer,
 //! { trace, arc, via, pad } )`: some other item of the same net that touches the pad or via and has copper on the layer, that is not one of the pad's
 //! own footprint's pads and is not a second pad that removes unconnected layers too (two such pads do not make each other flash). Zones are not among the
-//! types, so a zone fill never keeps a layer (`ZLO_FORCE_FLASHED`, a layer a zone is told to flash the item on, is not modelled).
+//! types; a layer a zone fill told the item to flash on (`ZLO_FORCE_FLASHED`, which `PAD::FlashLayer` and `PCB_VIA::FlashLayer` test first) is kicad-cli's, read
+//! back from its fill ([`flashed_layers_with_forced`]; UI-LEFT P3).
 
 use std::collections::BTreeMap;
 
@@ -61,6 +62,38 @@ pub fn removes_any_layer(design: &Design, model: &ConstraintModel) -> bool {
     vias || design.placement.as_ref().is_some_and(|pl| {
         pl.footprints.iter().any(|fp| model.part(&fp.id).and_then(|p| model.footprint_of(p)).is_some_and(|f| f.pads.iter().any(|p| p.kind == PadKind::ThroughHole && p.ext.stack.unconnected.removes())))
     })
+}
+
+/// [`flashed_layers`] with the layers the last zone fill forced the items to flash on (`forced`: `eda_kicad::zone_fills::KicadFills::forced`, a via by its id, a pad
+/// by `REF.NUM`): `PAD::FlashLayer` / `PCB_VIA::FlashLayer` keep a layer whose zone override is `ZLO_FORCE_FLASHED` before they ask the connectivity. Kept, as
+/// KiCad keeps the overrides, until the next fill works them out again.
+pub fn flashed_layers_with_forced(design: &Design, model: &ConstraintModel, forced: &BTreeMap<String, Vec<String>>) -> Flashed {
+    let mut out = flashed_layers(design, model);
+    if forced.is_empty() {
+        return out;
+    }
+    let order = |l: &String| model.board.layers.iter().position(|x| x == l).unwrap_or(usize::MAX);
+    let add = |kept: &mut Vec<String>, more: &Vec<String>| {
+        for l in more {
+            if !kept.contains(l) {
+                kept.push(l.clone());
+            }
+        }
+        kept.sort_by_key(order);
+    };
+    for (id, kept) in out.vias.iter_mut() {
+        if let Some(more) = forced.get(id) {
+            add(kept, more);
+        }
+    }
+    for (id, kept) in out.pads.iter_mut() {
+        // `REF.NUM#k`: every pad of the number is the one the fill names
+        let key = id.rsplit_once('#').filter(|(_, k)| k.parse::<u32>().is_ok()).map_or(id.as_str(), |(base, _)| base);
+        if let Some(more) = forced.get(key) {
+            add(kept, more);
+        }
+    }
+    out
 }
 
 /// [`Flashed`] for the board.

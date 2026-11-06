@@ -704,6 +704,9 @@ mod tests {
             files: ["x-eagle-import.kicad_sym", "x_10.kicad_sch", "x_2.kicad_sch", "child.kicad_sch", "x_3.kicad_sch", "sym-lib-table", "sub/inner.kicad_sch", "x.kicad_sch"].map(String::from).to_vec(),
             project: None,
             rules: None,
+            project_board: None,
+            project_schematic: None,
+            boards: vec![],
         };
         let mut first = SheetFile::default();
         first.screens.insert("child.kicad_sch".into(), SchematicSection::default());

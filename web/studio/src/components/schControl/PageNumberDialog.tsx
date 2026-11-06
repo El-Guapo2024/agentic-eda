@@ -30,7 +30,8 @@ export function PageNumberDialog({ path, onClose }: { path: string[]; onClose: (
   }, [path]);
 
   const entry = sheets?.find((h) => samePath(h.path, path));
-  const label = entry ? `/${entry.name}` : "";
+  // `PathHumanReadable`: "/" for the root
+  const label = entry ? (path.length === 0 ? "/" : `/${entry.name}`) : "";
   const valid = /^[\p{L}\p{N}]*$/u.test(value);
 
   const submit = async () => {
@@ -38,8 +39,8 @@ export function PageNumberDialog({ path, onClose }: { path: string[]; onClose: (
     const index = sheets.findIndex((h) => samePath(h.path, path));
     // `dlg.GetValue() == instance.GetPageNumber()`: nothing to change
     if (value === effectivePage(entry, index)) return onClose();
-    const id = path[path.length - 1];
-    if (!id) return;
+    // the root path is the root's own page (`set_sheet_page` with the empty path; UI-LEFT S21)
+    const id = path[path.length - 1] ?? "";
     // the page of this sheet path (`SCH_SHEET_PATH::SetPageNumber`): another path of a screen shown twice keeps its own
     if (await api.cmd({ op: "set_sheet_page", sheet: id, page: value, path })) {
       dispatch({ type: "TOAST", message: `Sheet ${label} is page ${value || "(by order)"}.`, kind: "info" });

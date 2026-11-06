@@ -168,6 +168,8 @@ export function boardLists(board: BoardLike | null | undefined): ItemLists {
     pad: (board?.parts ?? []).flatMap((p) => padIds(p)),
     // A footprint's Reference, Value and user fields (`PCB_FIELD`) are items of their own: `REF:Name`.
     field: (board?.parts ?? []).flatMap((p) => (p.fields ?? []).map((f) => f.id)),
+    // and its own texts (`PCB_TEXT` of a footprint, `REF~t<k>`; UI-LEFT P15)
+    fptext: (board?.parts ?? []).flatMap((p) => ((p as { texts?: readonly { id: string }[] }).texts ?? []).map((t) => t.id)),
     track: ids(board?.routing?.tracks),
     via: ids(board?.routing?.vias),
     zone: ids(board?.routing?.zones),

@@ -124,6 +124,17 @@ impl<'a> Board<'a> {
             return Err(fail("ops_bad_page", sheet, "a page number is letters and digits only (no spaces)"));
         }
         if let Some(path) = path {
+            // the root path (`SCH_EDIT_TOOL::EditPageNumber` with the root in view and no sheet selected: "The root sheet and root screen are effectively the
+            // same thing"): the root's own page (`SchExtras::root_page`; UI-LEFT S21). The walk gives it 1 when it has none.
+            if path.is_empty() {
+                let root = self.design.schematic.as_mut().ok_or_else(|| fail("ops_no_schematic", "schematic", "this board has no schematic section yet"))?;
+                let page = if page == "1" { String::new() } else { page.to_string() };
+                if root.extras.root_page == page {
+                    return Err(fail("ops_page_unchanged", "root", "the root sheet already has this page number"));
+                }
+                root.extras.root_page = page;
+                return Ok(());
+            }
             if path.last().map(String::as_str) != Some(sheet) || !eda_model::sheet_list::set_page(&mut self.design, path, page) {
                 return Err(fail("ops_unknown_sheet", sheet, "no sheet with this id on this sheet path"));
             }

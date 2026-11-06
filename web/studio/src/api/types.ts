@@ -85,6 +85,13 @@ export interface Pad {
   /** `PAD::GetPinFunction`, `GetPinType`: the schematic pin's name and electrical type, as the board file is written with them (`(pinfunction ..)`, `(pintype ..)`); absent for none. */
   pin_function?: string | null;
   pin_type?: string | null;
+  /** Its own teardrop parameters (`PAD::GetTeardropParams`): the edit's, else the board file's; absent when Board Setup's block serves it. */
+  teardrops?: TeardropParams | null;
+  /** `PAD::GetProperty` as the file writes it (`pad_prop_heatsink` ..); absent for none. */
+  property?: string | null;
+  /** `PAD::GetPadToDieLength`, nm, and `GetPadToDieDelay`, attoseconds; absent for 0. */
+  die_length?: Nm | null;
+  die_delay?: number | null;
 }
 
 /** `eda_model::padstack::PadStackMode` (`PADSTACK::MODE`). */
@@ -203,6 +210,9 @@ interface FpGraphicCommon {
   filled?: boolean;
   dash?: FpDash;
   hatch?: FpHatch;
+  /** A hatched fill's lines (`EDA_SHAPE::UpdateHatching`, board nm) and the width they are drawn at, as a board graphic's (UI-LEFT P15). */
+  hatch_lines?: HatchLine[];
+  hatch_width?: Nm;
   /** Every layer of a shape that is on several (`layer` is the first). */
   layers?: string[];
 }
@@ -223,6 +233,11 @@ export type FpGraphic =
 export type FpTextInfo = Pick<FieldInfo, "id" | "text" | "x" | "y" | "angle" | "w" | "h" | "thickness" | "layer" | "halign" | "valign" | "mirror" | "bold" | "italic" | "upright" | "knockout" | "face"> & {
   /** Set when the text is exactly `${REFERENCE}` or `${VALUE}`: the Appearance panel's References and Values rows switch it (`PCB_TEXT::ViewGetLOD`). */
   role?: "reference" | "value";
+  /** The layout in the footprint's frame (`lx`, `ly`, `langle`, as a field's) and the text as stored, variables unresolved (`raw`), for Text Properties (UI-LEFT P15). */
+  lx?: Nm;
+  ly?: Nm;
+  langle?: number;
+  raw?: string;
 };
 
 /** The options of `DIALOG_EXCHANGE_FOOTPRINTS` (crates/ops/src/fp_exchange.rs `ExchangeOptions`; kicad-port/pcbExchange.ts has the three presets). */
@@ -245,6 +260,8 @@ export interface ExchangeOptions {
   reset_clearance_overrides: boolean;
   /** "Update/reset 3D models". */
   reset_3d_models: boolean;
+  /** Update PCB from Schematic's exchange: the pads' nets by number (the netlist's); absent or false, the dialogs' KiCad pad matching (UI-LEFT P21). */
+  pads_by_number?: boolean;
 }
 
 /** The dialog of Geographical Reannotate (`DIALOG_BOARD_REANNOTATE`; crates/model/src/reannotate.rs `ReannotateOptions`, kicad-port/reannotate.ts has the values it opens with). */
@@ -438,6 +455,27 @@ export interface ViaProps {
   tertiary_drill?: ViaDrillProps;
   front_post_machining?: PostMachiningProps;
   back_post_machining?: PostMachiningProps;
+  /** The padstack when it is not a normal one (`PADSTACK::SetMode`): the diameter of the inner and back layers, or of each copper layer past `F.Cu`; absent for one diameter. */
+  padstack?: ViaPadstack;
+}
+
+/** `eda_model::via_extra::ViaPadstack`: a via's `(padstack (mode ..) (layer .. (size ..)) ..)`; `sizes` by layer (`Inner` for a front/inner/back stack's inner layers). */
+export interface ViaPadstack {
+  mode: "front_inner_back" | "custom";
+  sizes: Record<string, Nm>;
+}
+
+/** `eda_model::teardrop_params::TeardropParams` (`TEARDROP_PARAMETERS`): a via's or pad's own teardrop parameters; `prefer_zone_connections` is `!m_TdOnPadsInZones`. */
+export interface TeardropParams {
+  enabled: boolean;
+  allow_two_segments: boolean;
+  prefer_zone_connections: boolean;
+  best_length_ratio: number;
+  max_length: Nm;
+  best_width_ratio: number;
+  max_width: Nm;
+  curved_edges: boolean;
+  filter_ratio: number;
 }
 
 export interface Via {
@@ -458,6 +496,8 @@ export interface Via {
   flashed?: string[] | null;
   /** What its tokens say of the tenting, covering, plugging, capping, filling, backdrill and post-machining; absent for none. */
   props?: ViaProps | null;
+  /** Its own teardrop parameters (`PCB_VIA::GetTeardropParams`); absent when Board Setup's block serves it. */
+  teardrops?: TeardropParams | null;
 }
 
 /** `crates/model/src/ir.rs` `PadConnection` ("ZONE_CONNECTION") -- exact Rust variant names on the wire (no `rename_all`, see api/types.ts's own convention note below). */
@@ -1794,6 +1834,18 @@ export interface PadEditCmd {
   custom?: PadCustom;
   /** The padstack, replaced whole (`PAD::SetPadstack`): the shapes of the other copper layers and the unconnected-layer mode. */
   stack?: PadStack;
+  /** The pad's own teardrop parameters (`PAD::GetTeardropParams`). */
+  teardrops?: TeardropParams;
+  /** `PAD::SetProperty`: the file's word (`pad_prop_bga`, ..., `pad_prop_none` for none). */
+  property?: string;
+  /** `PAD::SetPadToDieLength`, nm (0 for none). */
+  die_length?: Nm;
+  /** `PAD::SetPadToDieDelay`, attoseconds (0 for none). */
+  die_delay?: number;
+  /** `PAD::SetPinFunction` (the Properties panel's Pin Name); "" for none. */
+  pin_function?: string;
+  /** `PAD::SetPinType` (Pin Type); "" for none. */
+  pin_type?: string;
 }
 
 /**
@@ -2128,6 +2180,10 @@ export type Cmd =
   | { op: "set_corner_radius"; ids: string[]; radius: Nm }
   /** A via's tenting, covering, plugging, capping, filling, backdrill and post-machining, whole (`set_via_props`). */
   | { op: "set_via_props"; id: string; props: ViaProps }
+  /** Vias' and pads' own teardrop parameters (`GetTeardropParams() = ..`); `null` gives them back to Board Setup's block. */
+  | { op: "set_teardrop_params"; ids: string[]; params: TeardropParams | null }
+  /** Text Properties of a footprint's own text on the board (`REF~t<k>`): its text and layout (the footprint's frame), or `delete` it. */
+  | { op: "edit_board_footprint_text"; id: string; text?: string; layout?: FieldLayoutCmd; delete?: boolean }
   /** A footprint's own paste margins (`set_footprint_paste_margin`); null is the board's. */
   | { op: "set_footprint_paste_margin"; part: string; margin: Nm | null; ratio: number | null }
   /**
@@ -2402,6 +2458,8 @@ export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelS
 export interface CmdReply {
   ok: boolean;
   message: string;
+  /** The history tag of the step the command made (`pcb`, `schematic`, `both`, ...): which editor's content it modified. */
+  domain?: string;
 }
 
 /**
@@ -3086,6 +3144,8 @@ export interface SchematicWire {
   bus: boolean;
   /** A bus's member nets (`D[0..3]` -> D0..D3, aliases and groups expanded) -- only sent for a bus wire; what the Unfold from Bus menu lists. */
   members?: string[];
+  /** The Unfold from Bus menu's items (`BUS_UNFOLD_MENU::update`): each member, with its own members for a bus in a group (its submenu). Absent from an older backend. */
+  member_tree?: Array<{ name: string; members: string[] }>;
   /** The stroke Wire/Bus Properties set (width, style, colour); absent when the wire has the default one. */
   stroke?: SchStroke;
   /** What the wire's net class draws it with where its own stroke says nothing (`SCH_LINE::GetPenWidth` / `GetLineColor` / `GetEffectiveLineStyle`): the class's
@@ -3331,6 +3391,8 @@ export interface Schematic {
    *  no separator and 'A' (`SCHEMATIC_SETTINGS::SubReference`). */
   subpart_id_separator?: number | null;
   subpart_first_id?: number | null;
+  /** Schematic Setup > Annotation (`SCHEMATIC_SETTINGS::m_Annotate*`); absent or null is KiCad's defaults. */
+  annotation?: AnnotationSettings | null;
   /** The design's variants (KiCad 25ec2335 `SCHEMATIC::GetVariantNames`, with the project file's descriptions), in name order; the same list on every sheet. Absent: none. */
   variants?: DesignVariantInfo[];
   /** Schematic Setup > Formatting as the sheet is drawn by it (the sizes as KiCad reads them back); absent from an older backend. */

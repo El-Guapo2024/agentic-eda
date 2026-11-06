@@ -245,7 +245,7 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
       const ids = picked.length > 0 ? picked : hovered ? [hovered] : [];
       if (ids.length > 1) return; // `if( selection.GetSize() > 1 ) return 0`
       if (ids.length === 1) return open({ kind: "page_number", path: [...state.currentSheetPath, ids[0]!] });
-      if (state.currentSheetPath.length === 0) return toast("The root sheet is page 1: its page number is not stored, only the sub-sheets' are.");
+      // the sheet in view, the root included ("The root sheet and root screen are effectively the same thing"; UI-LEFT S21)
       open({ kind: "page_number", path: state.currentSheetPath });
     })
   );

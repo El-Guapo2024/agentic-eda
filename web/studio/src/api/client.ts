@@ -4,6 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
+import { noteContentModified } from "../state/contentModified";
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
 import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillPreviewReply, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RouterEventSizes, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm, SchSetupReply } from "./types";
@@ -244,7 +245,10 @@ export async function postCmd(cmd: Cmd, strict: boolean, carry?: CarryStep): Pro
     // `carry`: the command starts ("begin": Duplicate, Paste) or ends ("commit": the drop) a carried placement, which the undo history keeps as one step.
     body: JSON.stringify(carry ? { cmd, strict, carry } : { cmd, strict }),
   });
-  return (await r.json()) as CmdReply;
+  const reply = (await r.json()) as CmdReply;
+  // the editor whose content the step modified (`OnModify`): what "Save changes?" asks about
+  if (reply.ok) noteContentModified(reply.domain);
+  return reply;
 }
 
 /**
@@ -349,12 +353,16 @@ export async function postRoute(): Promise<RouteReply> {
  */
 export async function postUndo(domain: "pcb" | "schematic" | "footprint_editor" | "symbol_editor"): Promise<CmdReply> {
   const r = await fetch("/api/undo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
-  return (await r.json()) as CmdReply;
+  const reply = (await r.json()) as CmdReply;
+  if (reply.ok) noteContentModified(domain);
+  return reply;
 }
 
 export async function postRedo(domain: "pcb" | "schematic" | "footprint_editor" | "symbol_editor"): Promise<CmdReply> {
   const r = await fetch("/api/redo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
-  return (await r.json()) as CmdReply;
+  const reply = (await r.json()) as CmdReply;
+  if (reply.ok) noteContentModified(domain);
+  return reply;
 }
 
 // ------------------------------------------------------- fabrication outputs

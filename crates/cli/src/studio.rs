@@ -729,6 +729,7 @@ fn handle(
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         // Annotate Schematic's message window and the other dialogs that work across sheets (`crate::sch_hierarchy_api`).
         ("POST", "/api/sch/annotate") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::annotate(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/sch/next_reference") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::next_reference(dir, &body).to_string().as_bytes()),
         // Import Sheet / Draw Sheet from File: the project's schematics, and the checks on one (`LoadSheetFromFile`) before it is taken in.
         ("GET", "/api/sch/sheet_files") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_files(dir).to_string().as_bytes()),
         ("POST", "/api/sch/sheet_file") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_file(dir, &body).to_string().as_bytes()),
@@ -905,6 +906,8 @@ fn handle(
         ("POST", "/api/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::clipboard_api::copy(dir, &body).to_string().as_bytes()),
         // Import Graphics (DXF, SVG): what a file holds, for the dialog (a read; the import is `Cmd::ImportGraphics`).
         ("POST", "/api/import_graphics/read") => respond(stream, "200 OK", "application/json", crate::graphics_api::read(&body).to_string().as_bytes()),
+        // Import Graphics' interactive placement: the items it would put on the board, for the preview that follows the cursor (`PlaceImportedGraphics`).
+        ("POST", "/api/import_graphics/preview") => respond(stream, "200 OK", "application/json", crate::graphics_api::preview(dir, &body).to_string().as_bytes()),
         // File > Import > Non-KiCad Board / Schematic: the file the page posts converted by kicad-cli (so through `offload`) and read; the import itself is
         // `Cmd::ReplaceBoard` / `Cmd::ReplaceSchematic` with what this answers.
         ("POST", "/api/import_foreign") => offload(stream, lane, dir, job, path, &body, crate::foreign_api::convert),
@@ -958,14 +961,16 @@ fn handle(
                     let _ = session.then(crate::specctra_api::take_session_warning);
                     // a copy of a zone carries its fill (R6-Z1): the design before, to tell the copies from the zones that were there
                     let copied = crate::fill_api::copies_zones(&cmd).then(|| board::load(dir).ok().map(|(_, d, _)| (d, cmd.clone()))).flatten();
+                    // which editor's content the step modified (the page's `IsContentModified`)
+                    let domain = board::step_tag(&cmd);
                     match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
                         Ok(summary) => {
                             if let Some((before, cmd)) = &copied {
                                 crate::fill_api::carry_copied_fills(dir, before, cmd);
                             }
                             match session.then(crate::specctra_api::take_session_warning).flatten() {
-                                Some(w) => json!({ "ok": true, "message": summary, "warning": w }),
-                                None => json!({ "ok": true, "message": summary }),
+                                Some(w) => json!({ "ok": true, "message": summary, "warning": w, "domain": domain }),
+                                None => json!({ "ok": true, "message": summary, "domain": domain }),
                             }
                         }
                         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
@@ -1226,7 +1231,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     let b = eda_ops::Board::new(design.clone(), &model, meta.snap_nm, meta.spacing_nm);
     let view = eda_ops::view::view(&b, &model)?;
     // The copper layers the pads and vias that remove their unconnected layers (Remove Unused Pads) keep: empty, and not asked for, when none does.
-    let flashed = eda_connectivity::flashed_layers(&design, &model);
+    // With the layers the last fill forced them to flash on (`ZLO_FORCE_FLASHED`, kicad-cli's, kept in the fill cache).
+    let forced = eda_kicad::zone_fills::load(dir).map(|f| f.forced).unwrap_or_default();
+    let flashed = eda_connectivity::flashed_layers_with_forced(&design, &model, &forced);
     let block_of: std::collections::HashMap<String, String> = view["parts"]
         .as_array()
         .map(|ps| ps.iter().filter_map(|p| Some((p["ref"].as_str()?.to_string(), p["block"].as_str().unwrap_or("").to_string()))).collect())
@@ -1275,6 +1282,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                             // The pad's own layers, for the 3D viewer's paste (r6 V6-5).
                             if let (Some(f), Some(obj)) = (footprint.as_ref(), v.as_object_mut()) {
                                 obj.insert("layers".into(), json!(crate::fp_json::pad_file_layers(&design, fp, f, pad)));
+                                // Its own teardrop parameters, fabrication property, pad-to-die length and delay, pin name and type (UI-LEFT P3).
+                                crate::fp_json::add_pad_facts(obj, &design, fp, f, pad, *nth);
                             }
                             v
                         }
@@ -1284,7 +1293,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 .collect();
             if let Some(footprint) = &footprint {
                 // The footprint's fields as laid out on the board, and its attributes.
-                p["fields"] = json!(crate::fp_json::fields_json(&design, part, fp, footprint));
+                p["fields"] = json!(crate::fp_json::fields_json(&design, &model, part, fp, footprint));
                 tv.annotate_fields(&part.reference, &mut p["fields"]);
                 p["attrs"] = crate::fp_json::attrs_json(&design, fp, footprint);
                 // A multi-gate footprint's units (`FOOTPRINT::GetUnitInfo`), for Swap Gate Nets' menu: absent for fewer than two.
@@ -1296,6 +1305,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 crate::fp_art_json::add_art(&mut p, part, fp, footprint);
                 // Its text boxes, images, points and barcodes (`items`), board space (UI-LEFT P17).
                 crate::fp_board_items_json::add_items(&mut p, &design, &model, part, fp, &tv);
+                // the board's variables in its texts (the title block's ..), and the lines of its hatched graphics (UI-LEFT P15)
+                tv.annotate_art_texts(&part.reference, footprint, &mut p["texts"]);
+                crate::fp_art_json::add_hatch_lines(&mut p, &design, &model, fp, footprint);
             }
             p["at"] = json!([fp.at.x, fp.at.y]);
             p["rot"] = json!(fp.rot as f64 / 1000.0);
@@ -1370,6 +1382,14 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 if let Some(r) = facts.paste_margin_ratio {
                     p["paste_margin_ratio"] = json!(r);
                 }
+            } else if let Some(e) = design.footprint_edit(&part.reference) {
+                // a footprint placed from the intent: the paste margins Footprint Properties gave it (`FootprintEdit::solder_paste_margin`, `..ratio`; UI-LEFT P14)
+                if let Some(m) = e.solder_paste_margin {
+                    p["paste_margin"] = json!(m);
+                }
+                if let Some(r) = e.solder_paste_ratio {
+                    p["paste_margin_ratio"] = json!(r);
+                }
             }
         }
         parts.push(p);
@@ -1413,6 +1433,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     "flashed": flashed.vias.get(&v.id),
                     // The tenting, covering, plugging, capping, filling, backdrill and post-machining the via's tokens say (`eda_model::via_extra::ViaProps`); absent for none.
                     "props": extra.map(|e| e.props()).filter(|p| *p != eda_model::via_extra::ViaProps::default()),
+                    // Its own teardrop parameters (`PCB_VIA::GetTeardropParams`, `eda_model::teardrop_params`); absent when Board Setup's block serves it.
+                    "teardrops": extra.and_then(|e| e.teardrops()),
                 })
             }).collect::<Vec<_>>(),
             "zones": r.zones.iter().map(|z| json!({
@@ -2095,6 +2117,10 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if w.bus {
                 let text = if w.net.starts_with('/') { w.net.rsplit('/').next().unwrap_or(&w.net) } else { w.net.as_str() };
                 v["members"] = json!(eda_kicad::expand_bus_members(text, &design.bus_aliases).unwrap_or_default());
+                // the menu's items with their submenus: a bus of a group (a vector, an alias) lists its own members (UI-LEFT S19)
+                if let Some(tree) = eda_kicad::bus_member_tree(text, &design.bus_aliases) {
+                    v["member_tree"] = json!(tree.into_iter().map(|(name, members)| json!({ "name": name, "members": members })).collect::<Vec<_>>());
+                }
             }
             v
         })
@@ -2340,6 +2366,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         // the project's unit notation (the root's `SchExtras::subpart_*`, r7 H5), which the sheet draws a unit's reference by
         "subpart_id_separator": design.schematic.as_ref().and_then(|r| r.extras.subpart_id_separator),
         "subpart_first_id": design.schematic.as_ref().and_then(|r| r.extras.subpart_first_id),
+        // Schematic Setup > Annotation (`SCHEMATIC_SETTINGS::m_Annotate*`, the root's `SchExtras::annotation`; absent is KiCad's defaults): what placing, pasting and
+        // importing number symbols by and what the Annotate dialog starts from (UI-LEFT S14)
+        "annotation": design.schematic.as_ref().and_then(|r| r.extras.annotation.clone()),
         // the design variants (KiCad 25ec2335 `SCHEMATIC::GetVariantNames` with `GetVariantDescription`), the same on every sheet
         "variants": design_variants_json(design),
     })

@@ -84,7 +84,9 @@ pub fn walk(design: &Design) -> Vec<SheetEntry> {
             path.pop();
         }
     }
-    let mut out = vec![SheetEntry { path: Vec::new(), name: String::new(), file: String::new(), page: String::new(), virtual_page: 1 }];
+    // the root's own page, when Edit Sheet Page Number gave it one (`SchExtras::root_page`; UI-LEFT S21)
+    let root_page = design.schematic.as_ref().map(|s| s.extras.root_page.clone()).unwrap_or_default();
+    let mut out = vec![SheetEntry { path: Vec::new(), name: String::new(), file: String::new(), page: root_page, virtual_page: 1 }];
     if let Some(root) = &design.schematic {
         visit(design, root, &mut Vec::new(), &mut Vec::new(), "", &mut out);
     }

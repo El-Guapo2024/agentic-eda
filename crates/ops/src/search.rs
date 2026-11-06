@@ -26,7 +26,7 @@
 //! match modes are not ported (the eeschema dialog only exposes whole-word /
 //! regex checkboxes; regex needs a regex engine this workspace does not
 //! carry); our IR has no per-field visibility, so KiCad's template defaults
-//! apply (Reference/Value visible; Footprint, Datasheet and user fields
+//! apply (a field is shown as the sheet keeps it, `field_layout`, else Reference/Value visible; Footprint, Datasheet and user fields
 //! hidden); no per-field position, so every field of a symbol sits at the
 //! symbol's own position. A label's text and a field's text are matched
 //! unescaped (`UnescapeString( GetText() )`), and a label is replaced with the
@@ -303,6 +303,13 @@ fn field_visible(name: &str) -> bool {
     matches!(name, "Reference" | "Value")
 }
 
+/// Whether the field `name` of the symbol `id` is shown, as `SCH_FIELD::IsVisible` says (UI-LEFT S20): what the sheet keeps for its first placed unit
+/// (`SchematicSection::field_layout`: a user field the user showed, a Value the user hid), else the default (Reference and Value shown, the rest hidden).
+fn field_shown(sch: &SchematicSection, id: &str, name: &str) -> bool {
+    let unit = sch.symbols.iter().find(|s| s.id == id).map_or(1, |s| s.unit);
+    sch.field_layout.get(&eda_model::ir::field_key(id, unit)).and_then(|places| places.iter().find(|p| p.name == name)).map_or_else(|| field_visible(name), |p| p.visible)
+}
+
 /// `(name, text)` of every field of the symbol `id`, in KiCad's field
 /// order (Reference, Value, Footprint, Datasheet, then user fields).
 fn symbol_fields(sch: &SchematicSection, model: &ConstraintModel, id: &str) -> Vec<(String, String)> {
@@ -325,7 +332,7 @@ fn symbol_fields(sch: &SchematicSection, model: &ConstraintModel, id: &str) -> V
 /// `searchMetadata` (library name/description/keywords) is not exposed by
 /// the schematic dialog and not ported.
 fn symbol_matches(sch: &SchematicSection, model: &ConstraintModel, id: &str, data: &SearchData) -> bool {
-    if symbol_fields(sch, model, id).into_iter().filter(|(n, _)| n != "Reference").any(|(n, text)| (field_visible(&n) || data.search_hidden_fields) && matches_text(&unescape_string(&text), data)) {
+    if symbol_fields(sch, model, id).into_iter().filter(|(n, _)| n != "Reference").any(|(n, text)| (field_shown(sch, id, &n) || data.search_hidden_fields) && matches_text(&unescape_string(&text), data)) {
         return true;
     }
     let Some(sym) = sch.symbols.iter().find(|s| s.id == id) else { return false };
@@ -361,7 +368,7 @@ pub fn find_items(sch: &SchematicSection, model: &ConstraintModel, data: &Search
         seen_ids.push(&sym.id);
         let multi_unit = sch.symbols.iter().filter(|s| s.id == sym.id).count() > 1;
         for (name, text) in symbol_fields(sch, model, &sym.id) {
-            if !field_visible(&name) && !data.search_hidden_fields {
+            if !field_shown(sch, &sym.id, &name) && !data.search_hidden_fields {
                 continue;
             }
             let matched = if name == "Reference" {
@@ -618,6 +625,27 @@ mod tests {
         all.search_hidden_fields = true;
         assert_eq!(find_items(&sch, &m, &all).len(), 2);
         assert_eq!(hits[0].key(), "label_field:l1:Netclass");
+    }
+
+    /// UI-LEFT S20: a user field shown on the sheet is found without "Search hidden fields" (`SCH_FIELD::Matches` reads `IsVisible()`), one left hidden only with
+    /// it, and a Value the user hid is hidden too.
+    #[test]
+    fn a_user_field_shown_on_the_sheet_is_found_as_kicad_finds_a_visible_field() {
+        let m = ConstraintModel::default();
+        let sym = SymbolInstance { id: "R1".into(), at: Point { x: mm(1.0), y: mm(0.0) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let mut sch = SchematicSection { symbols: vec![sym], ..Default::default() };
+        sch.user_fields.entry("R1".into()).or_default().insert("MPN".into(), "RC0603".into());
+        let names = |sch: &SchematicSection, data: &SearchData| find_items(sch, &m, data).iter().map(|h| h.name.clone()).collect::<Vec<_>>();
+        assert!(names(&sch, &d("RC0603")).is_empty(), "hidden until shown");
+        let mut all = d("RC0603");
+        all.search_hidden_fields = true;
+        // (the Reference matches with it: `SCH_FIELD::Matches` takes a Reference whose symbol matches)
+        assert_eq!(names(&sch, &all), vec!["Reference".to_string(), "MPN".to_string()]);
+        let shown = eda_model::ir::FieldPlacement { visible: true, ..eda_model::ir::FieldPlacement::at_origin("MPN") };
+        let hidden_value = eda_model::ir::FieldPlacement { visible: false, ..eda_model::ir::FieldPlacement::at_origin("Value") };
+        sch.field_layout.insert("R1".into(), vec![shown, hidden_value]);
+        assert_eq!(names(&sch, &d("RC0603")), vec!["Reference".to_string(), "MPN".to_string()], "shown: found");
+        assert!(names(&sch, &d("10k")).is_empty(), "a Value the user hid is hidden");
     }
 
     #[test]

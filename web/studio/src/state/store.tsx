@@ -250,8 +250,9 @@ export type DrawState =
   | TuneDrawState
   /** `S` (`SCH_DRAWING_TOOLS::DrawSheet`): the first corner of the sheet being sized; the second click ends it (`sizeSheet`). */
   | { kind: "sheet"; start: [Nm, Nm] }
-  /** The schematic shape being drawn (`DrawShape` / `DrawRuleArea`): `shape` for a rectangle, circle, arc, Bezier curve or text box, `poly` for a rule area; `brk` is a Break / Slice waiting for its drop. */
-  | { kind: "sch_shape"; shape?: ShapeEdit; poly?: PolyGeom; brk?: BreakState; pin?: PinPlacement }
+  /** The schematic shape being drawn (`DrawShape` / `DrawRuleArea`): `shape` for a rectangle, circle, Bezier curve or text box, `arc` for an arc (KiCad 25ec2335's
+   *  `ARC_GEOM_MANAGER`: centre, start, end), `poly` for a rule area; `brk` is a Break / Slice waiting for its drop. */
+  | { kind: "sch_shape"; shape?: ShapeEdit; arc?: ArcGeom; poly?: PolyGeom; brk?: BreakState; pin?: PinPlacement }
   | {
       kind: "route";
       net: string;
@@ -718,7 +719,7 @@ export interface StudioState {
   /** `C` (`SCH_LINE_WIRE_BUS_TOOL::UnfoldBus`): the bus member chosen to break out of a bus -- the bus entry sits at `entryAt` and the wire being drawn from its far end takes a label of `net` when it finishes. */
   busUnfold: { net: string; entryAt: [Nm, Nm]; size: [Nm, Nm]; /** Set by the first click (`m_busUnfold.label_placed`): where the label goes; until then the entry leans toward the cursor (r6 C6-M2). */ labelAt?: [Nm, Nm] } | null;
   /** `C`: the member nets of the bus under the cursor, waiting for BusUnfoldDialog to pick one (`BUS_UNFOLD_MENU`); `entryAt` is where the bus entry will root on the bus. */
-  busUnfoldPicker: { bus: string; entryAt: [Nm, Nm]; members: string[] } | null;
+  busUnfoldPicker: { bus: string; entryAt: [Nm, Nm]; members: string[]; /** `BUS_UNFOLD_MENU`'s items with their submenus (a bus in a group), when the backend sends them. */ tree?: Array<{ name: string; members: string[] }> } | null;
   /** `F1`/Insert (`SCH_FRAME::m_items_to_repeat`): the Cmd(s) of the last thing placed, so "Repeat Last Item" can place a copy. */
   schRepeat: Cmd[];
   /** `P`: Place Power's chooser is open (SymbolChooserDialog's power mode) on the point the tool's first click (or hotkey) was at; OK puts the power symbol in the hand. */

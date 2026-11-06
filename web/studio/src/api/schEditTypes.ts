@@ -130,6 +130,10 @@ export type SchToolDialog =
 export type SchEditCmd =
   /** Lock / Unlock / Toggle Lock (`SCH_EDIT_TOOL::modifyLockSelected`). */
   | { verb: "set_locked"; ids: string[]; locked: boolean }
+  /** A wire or bus Break / Slice or Repeat puts down: `add_wire`'s finish without the two-pin parts' `TrimWire` (r3 C3-L1). */
+  | { verb: "add_wire_as"; pts: PointXY[]; bus?: boolean; by: "repeat" | "break" }
+  /** Change / Update Symbols' reset options: the fields of the references `ids` take the library symbol's visibility, sizes and styles, places (UI-LEFT S16). */
+  | { verb: "reset_symbol_fields"; ids: string[]; visibility?: boolean; effects?: boolean; positions?: boolean }
   /** Draw a shape, text box, rule area or directive label (`SCH_DRAWING_TOOLS::DrawShape` / `DrawRuleArea`); the backend assigns the id. */
   | { verb: "add_graphic"; graphic: SchGraphicInput }
   | { verb: "delete_graphic"; id: string }

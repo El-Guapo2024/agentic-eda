@@ -469,3 +469,44 @@ fn the_annular_ring_row_sets_the_unconnected_layer_mode_of_every_via_named() {
     b.apply(&via_cmd(Some(U::KeepAll), Some(Ipc4761Preset::FromBoard))).unwrap();
     assert!(drawings(&b).via_extra("via_a").is_none());
 }
+
+/// UI-LEFT P15: a footprint's own text is an item of the board (`PCB_SELECTION_TOOL::Selectable` lets a footprint's `PCB_TEXT` be picked): moved, turned and
+/// flipped on its own, edited in Text Properties and deleted, each in the instance's own copy of its footprint; the other footprint on the same library
+/// footprint is left as it was, and a move of the footprint carries the text with it as before.
+#[test]
+fn a_footprints_own_text_is_moved_turned_edited_and_deleted_on_its_own() {
+    let m = model_with_art();
+    let mut b = board(&m);
+    let pose = b.design().placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U1").unwrap().clone();
+    let before = m.footprints[0].art.texts[1].layout.board_position(&pose);
+    b.apply(&Cmd::MoveItems { ids: ids(&["U1~t1"]), dx: mm(1.0), dy: mm(-2.0) }).unwrap();
+    let own = own_footprint(&b, "U1").expect("U1 has its own copy now");
+    assert_eq!(own.art.texts[1].layout.board_position(&pose), p(before.x + mm(1.0), before.y - mm(2.0)));
+    assert!(own_footprint(&b, "U2").is_none(), "U2 is still on the library footprint");
+    // turned a quarter about its own position: the angle, not the place
+    let at = own.art.texts[1].layout.board_position(&pose);
+    b.apply(&Cmd::RotateItems { ids: ids(&["U1~t1"]), pivot: at, angle_millideg: 90_000 }).unwrap();
+    let t = own_footprint(&b, "U1").unwrap().art.texts[1].layout.clone();
+    assert_eq!((t.board_position(&pose), t.board_angle(&pose)), (at, 270_000));
+    // flipped: to the other side's layer, mirrored
+    b.apply(&Cmd::FlipItems { ids: ids(&["U1~t1"]), pivot: at, direction: FlipDirection::LeftRight }).unwrap();
+    let t = own_footprint(&b, "U1").unwrap().art.texts[1].layout.clone();
+    assert_eq!((t.layer.as_str(), t.mirror), ("B.SilkS", true));
+    // Text Properties: its text and its layout (the layer as the board shows it)
+    let mut l = t.clone();
+    l.layer = "F.Fab".into();
+    l.size = (mm(0.8), mm(0.8));
+    b.apply(&Cmd::EditBoardFootprintText { id: "U1~t1".into(), text: Some("pin 1".into()), layout: Some(l), delete: false }).unwrap();
+    let t = own_footprint(&b, "U1").unwrap().art.texts[1].clone();
+    assert_eq!((t.text.as_str(), t.layout.layer.as_str(), t.layout.size), ("pin 1", "F.Fab", (mm(0.8), mm(0.8))));
+    assert_eq!(b.apply(&Cmd::EditBoardFootprintText { id: "U1~t1".into(), text: Some(" ".into()), layout: None, delete: false }).unwrap_err()[0].hint.as_deref(), Some("The text can't be empty."));
+    assert_eq!(b.apply(&Cmd::EditBoardFootprintText { id: "U1~t1".into(), text: Some("pin 1".into()), layout: None, delete: false }).unwrap_err()[0].check, "ops_nothing_to_change");
+    // deleted
+    b.apply(&Cmd::EditBoardFootprintText { id: "U1~t1".into(), text: None, layout: None, delete: true }).unwrap();
+    assert_eq!(own_footprint(&b, "U1").unwrap().art.texts.len(), 1);
+    assert_eq!(b.apply(&Cmd::EditBoardFootprintText { id: "U1~t1".into(), text: Some("x".into()), layout: None, delete: false }).unwrap_err()[0].check, "ops_unknown_item");
+    // the footprint moved carries its texts (the text is not moved twice)
+    let t0 = own_footprint(&b, "U1").unwrap().art.texts[0].layout.clone();
+    b.apply(&Cmd::MoveItems { ids: ids(&["U1", "U1~t0"]), dx: mm(5.0), dy: Nm::ZERO }).unwrap();
+    assert_eq!(own_footprint(&b, "U1").unwrap().art.texts[0].layout, t0, "in the footprint's frame, the text is where it was");
+}

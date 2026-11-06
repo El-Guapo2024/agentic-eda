@@ -18,7 +18,7 @@ Notes:
 
 **Top 12, all areas:**
 1. X1: the Plot dialog is Gerber only -- **done (task-u1-plot)**
-2. P1: teardrops -- **done (task-u1-pcb)**; per-pad parameters left
+2. P1: teardrops -- **done (task-u1-pcb)**; per-pad parameters **done (task-u5-pcbfp)**
 3. S1: placing labels, power symbols and text -- **done (task-u1-schplace)**
 4. R1: dragging a footprint with its tracks -- **done (task-u1-drag)**
 5. L1: saving into table libraries
@@ -33,19 +33,18 @@ Notes:
 ## PCB editor
 
 - **P1 [BD] Teardrops.** **done (task-u1-pcb)**: SMD pads of every shape but a custom one, tracks ending off centre in a via or pad or crossing one (R7-1), each polyline segment its own track; 39 kicad-cli outlines point for point (PARITY-pcb §66). Left:
-  - Each via's and pad's own teardrop parameters are not read (the file's tokens are kept, unread); Board Setup's one block serves every anchor. Custom pads get none.
+  - ~~Each via's and pad's own teardrop parameters are not read~~ **done (task-u5-pcbfp)**: read, written, edited (Track & Via and Pad Properties, the Properties panel) and honoured by the generator, kicad-cli's outlines point for point (PARITY-pcb §78). Custom pads get none.
   - One segment, straight edges, no track-to-track; no fit to other nets' clearance, no mask teardrops.
   - Not kept current as you edit: you re-run Add All Teardrops.
   - L. GAPS 8/13/35; PARITY-pcb §15, §62 D6-1, §66; r7 R7-1.
 - **P2 [BD] Properties panel.** **done (task-u1-props)**: every class lists KiCad's registered rows in KiCad's groups and order (a test replays the C++); via tenting, covering, plugging, capping, filling, backdrill, post-machining, layers and type, track and shape solder mask, corner radius, text italic, bold, vertical justification, width apart from height, knockout and automatic pen, a pad's orientation, copper layers and overrides, a footprint's reference and (board-file) paste margins are edited; Component Type, which KiCad's panel lacks, is gone (PARITY-pcb §67). Left, read-only with the reason as the tooltip:
-  - Fonts, every teardrop row (P1's per-item parameters), a pad's number, pin name and type, post-machining, backdrill, fabrication property and pad-to-die, a dimension's label style (a shape's line style and a leader's text frame are edited since task-u2-lines, P5, P13).
-  - A footprint placed from the intent has no paste margin of its own; text colour is masked on board text, as in KiCad.
+  - Fonts, a pad's number, post-machining and backdrill, a dimension's label style (a shape's line style and a leader's text frame are edited since task-u2-lines, P5, P13; the teardrop rows, a pad's pin name and type, fabrication property and pad-to-die since task-u5-pcbfp, P3).
+  - Text colour is masked on board text, as in KiCad (a footprint placed from the intent has its own paste margins since task-u5-pcbfp, P14).
   - M. GAPS 10; PARITY-pcb §23, §67.
-- **P3 [FM] Track & Via and Pad Properties.**
-  - No via protection (IPC-4761 tenting, covering, plugging, filling), backdrill or post-machining.
-  - No pad fabrication property, pin function or pad-to-die length.
-  - A custom padstack's per-layer thermal and clearance can't be edited, and neither can via padstacks. A zone's force-flash is kept but not applied.
-  - M. PARITY-pcb §10, §26, §43, §44, §56; r2 A5.
+- **P3 [FM] Track & Via and Pad Properties.** **done (task-u5-pcbfp)**: Track & Via Properties' Padstack mode and Edit layer, Protection features (the IPC-4761 presets), Backdrill with its sizes and must-cut layers, Hole Post-machining and the via's own teardrops; Pad Properties' Fabrication property, pad-to-die length and delay and the pad's own teardrops; the panel's Pin Name and Pin Type; each via's and pad's own teardrop parameters honoured (kicad-cli proof); a zone's force-flash (`ZLO_FORCE_FLASHED`) read from kicad-cli's fill, applied to the flashed layers and written back (kicad-cli proof, with a Solid zone and a pad's FULL connection); a custom padstack's per-layer thermal and clearance kept and written, the dialog editing the front's as KiCad's does (PARITY-pcb §78). Left:
+  - A via's padstack diameters are drawn, routed and checked at the front's (kicad-cli reads them all).
+  - Curved and two-segment teardrops are kept, not built (P1).
+  - M. PARITY-pcb §78.
 - **P4 [BD] Board text.** **done (task-u1-pcb)** for Bold: the Text dialog has KiCad's Bold, and a new copper text box is bold as `InferBold` makes it (R7-3; PARITY-pcb §66). Left:
   - The Text dialog has no Italic.
   - A text is centred on its anchor whatever its vertical justification.
@@ -97,23 +96,19 @@ Notes:
   - A manual text's left or right justification is not flipped past the crossbar's middle (the IR's dimension text is always centred); no font, bold, italic or mirror.
   - A rounded-rectangle frame (`DIM_TEXT_BORDER::ROUNDRECT`, not offered by 8303b2ad's dialog) is kept but drawn as none, as 8303b2ad does.
   - M. PARITY-pcb §18, §69; GAPS 28/35.
-- **P14 [BD] Footprint Properties on the board.**
-  - Reference and Value can't be edited, because they come from the schematic.
-  - It shows 2 mandatory field rows, not 4 (unsure).
-  - Paste overrides are read-only, and duplicate field names are refused (r2 C8, kept).
-  - M. PARITY-pcb §10, §26, §56; fpedit §16.
-- **P15 [BD] Footprint graphics on the board.**
-  - They can't be selected or edited one by one.
-  - Title-block variables in footprint text aren't resolved.
-  - A hatched graphic is drawn as an outline.
-  - M. GAPS 25; PARITY-pcb §28, §39.
+- **P14 [BD] Footprint Properties on the board.** **done (task-u5-pcbfp)**: the four mandatory rows (Reference, Value, Datasheet, Description); Reference and Value edited and carried to the symbol on whichever sheet it is (a board-only footprint renamed and revalued on the board); a repeated field name taken as KiCad's reader takes it; the footprint's paste clearance for any footprint (PARITY-pcb §78). Left:
+  - A Datasheet or Description edited here is the footprint's own, not carried to the symbol; a user field named like a mandatory one is still refused.
+  - The footprint's own mask margin and "Allow bridged solder mask apertures" are not edited here.
+  - M. PARITY-pcb §78.
+- **P15 [BD] Footprint graphics on the board.** **done (task-u5-pcbfp)**: a footprint's own texts are items of the board (picked, moved, turned, flipped, edited in Text Properties and deleted, in the instance's own copy); the title block's and the board's variables resolved in them; a hatched graphic drawn with its hatch lines (PARITY-pcb §78). Left:
+  - A footprint's own graphics are picked as the footprint, as in KiCad's board editor ("Most footprint children can only be selected in the footprint editor"); the global edit and the Footprint Editor edit them.
+  - M. PARITY-pcb §78.
 - **P16 [BD] Tables, on the board and the sheet.** **done (task-u5-pcbitems)**: in both editors, Copy, Cut, Paste and Duplicate of a table and of cells (the sheet copies a table and a block of cells as `saveTable` cuts it, and its paste previews and adds tables); Paste with cells selected pastes into them ("Paste Cells", `pasteCellsIntoSelection` with `validatePasteIntoSelection`'s refusals word for word, Paste Special too); a drag from a cell selects the cells under it (`SelectCellsBetween`, with Shift, Ctrl and Ctrl+Shift). A board table flips as KiCad 25ec2335's `PCB_TABLE::Flip` does (the kicad-cli's KiCad; 8303b2ad also reversed the rows and moved the table, which 25ec2335 dropped as wrong). The sheet's Table Cell Properties has Text color, Background fill and the four margins (KiCad's board dialog has no colours). `@{..}` is evaluated by a port of KiCad's evaluator (strings, functions, SI prefixes, units) in every shown text. A `${REF:FIELD}` in a sheet cell, text or text box follows a rename, and a KiCad file's path-form cross-reference reads by its reference. Apply Design Block Layout takes a block's copper tables. PARITY-pcb §79; PARITY-sch §63. Left:
   - The date, random, E-series and version-control functions of `@{..}` (left as written).
   - Shift+click selecting the cells between two on the sheet; a field's or a label's cross-reference following a rename (the rename rewrites cells, texts and text boxes; KiCad stores the symbol's path instead).
   - A cell's hyperlink and font face are edited nowhere; tables inside footprints (the Footprint Editor has no Draw Table); the stackup table's sublayers.
   - S. GAPS 24; PARITY-pcb §38, §79; PARITY-sch §35, §63.
-- **P17 [FM] Item kinds inside footprints.** **done (task-u5-pcbitems)**: a board footprint's text boxes, reference images, points and barcodes are its own items (`FootprintExtra::items`, the library footprint's `FootprintItems`), read in KiCad's frames (KiCad 10's library-frame points too), written as `format( FOOTPRINT )` writes them, drawn with the footprint (KiCad's `PCB_VIEW::Add` draws a footprint's reference image on the board), picked as the footprint, its points snap anchors; Move, Rotate and Flip carry them and Duplicate, Create Array and Paste copy them; kicad-cli keeps them and plots the text box and barcode where the canvas draws them. Rotate and Flip turn and mirror an image's pixels on the board and the sheet (`BITMAP_BASE::Rotate` / `Mirror`): the browser redraws the file (PNG stays PNG, JPEG stays JPEG) and sends it in the turn's batch, one undo step. Settled: Duplicate, Paste and Create Array of the board's text boxes, images, points and barcodes have worked since r2-pcb-edit C2 (PARITY-pcb §55), as KiCad allows; GAPS 24's "Missing" line was stale. PARITY-pcb §80; PARITY-sch §64. Left:
-  - Selecting and editing a footprint's items one by one on the board (P15).
+- **P17 [FM] Item kinds inside footprints.** **done (task-u5-pcbitems)**: a board footprint's text boxes, reference images, points and barcodes are its own items (`FootprintExtra::items`, the library footprint's `FootprintItems`), read in KiCad's frames (KiCad 10's library-frame points too), written as `format( FOOTPRINT )` writes them, drawn with the footprint (KiCad's `PCB_VIEW::Add` draws a footprint's reference image on the board), picked as the footprint (as KiCad's `Selectable` picks every footprint child but a field, a pad and a text), its points snap anchors; Move, Rotate and Flip carry them and Duplicate, Create Array and Paste copy them; kicad-cli keeps them and plots the text box and barcode where the canvas draws them. Rotate and Flip turn and mirror an image's pixels on the board and the sheet (`BITMAP_BASE::Rotate` / `Mirror`): the browser redraws the file (PNG stays PNG, JPEG stays JPEG) and sends it in the turn's batch, one undo step. Settled: Duplicate, Paste and Create Array of the board's text boxes, images, points and barcodes have worked since r2-pcb-edit C2 (PARITY-pcb §55), as KiCad allows; GAPS 24's "Missing" line was stale. PARITY-pcb §80; PARITY-sch §64. Left:
   - Ctrl+E's copy of a board footprint does not show them, and Update Footprint on Board and Update / Change Footprint reset them with the footprint's record, as they reset the tokens before (KiCad keeps them); a library footprint's items are not brought onto the board (P21).
   - A turn made without the browser (the CLI, agents, a circular array's Rotate items, Repeat Layout) leaves an image's pixels as they were.
   - The 3D view of a footprint's text box or barcode; Edit Text & Graphics does not reach a footprint's text boxes; a footprint's dimensions and tables on the board are still text.
@@ -132,12 +127,10 @@ Notes:
   - A barcode is judged by its box (no zint); a rounded rectangle is judged square-cornered.
   - The Generate dialog names no file for the root sheet; Update from Selection does not strip a lone tuning pattern to its tracks.
   - S. GAPS 24/32; PARITY-pcb §36, §40, §84.
-- **P21 [BD] Footprint exchange and swaps.**
-  - Change and Update Footprint match pads by number only.
-  - Compare with Library misses attribute flags and net ties.
-  - Library pad layers aren't carried.
-  - Update Schematic from PCB doesn't carry a pin or gate swap back to the schematic.
-  - M. GAPS 26; PARITY-pcb §30, §45, §61.
+- **P21 [BD] Footprint exchange and swaps.** **done in part (task-u5-pcbfp)**: Change and Update Footprint match the pads as `ExchangeFootprint` does (by number, then by place and shape; a renumbered pad takes the old pad's net, pin name and type), Update PCB from Schematic's exchange keeping them by number; Compare with Library tests the attribute flags against the library's own, the solder mask bridges and the net ties (PARITY-pcb §78). Left:
+  - Library pad layers, die lengths and properties aren't carried onto a footprint placed or updated from the library.
+  - Update Schematic from PCB doesn't carry a pin or gate swap back to the schematic (25ec2335's `applyPinSwaps`, `PlanBackannotateUnitSwaps`).
+  - M. GAPS 26; PARITY-pcb §30, §45, §61, §77.
 - **P22 [BD] Selection.** **done (task-u5-pcbitems)**: the Selection Filter's right-click "Only <row>" (Grid Items cleared too, as 25ec2335; Locked items left alone), and the filter kept per project as KiCad keeps it in the `.kicad_prl` (`appearance.json`'s `local.selection_filter`, the derived `.kicad_prl`'s `board.selection_filter`); the clarification menu's rows numbered and chosen by their keys, Select All (A), Show More Choices (M), the hovered row's item outlined, on the board and in the library editors; `GuessSelectionCandidates`' coverage pass for overlapping footprints with KiCad's per-kind areas (`GetCoverageArea`) on an exact polygon sweep (`kicad-port/coverage.ts`); Select Connection along a chain of graphic lines (`selectAllConnectedShapes`), with the selection filter in its walk. PARITY-pcb §83. Left:
   - The flash of the filter row that rejected a click; the Footprint Editor's filter is not saved.
   - A text's coverage is its box; rounded, chamfered, trapezoid and custom pads count as their rectangle.
@@ -256,54 +249,16 @@ Notes:
   - Library metadata: KiCad's dialog has no box for `searchMetadata` either; groups and ERC markers are not searched.
   - The engine's match is leftmost-first (POSIX: leftmost-longest), which shows only in Replace's span with alternations; it does not upper-case the pattern as KiCad does; a power symbol's Reference is found, not replaced.
   - S. GAPS 1/4; PARITY-sch §8, §60.
-- **S13 [FM] Arcs.** Two clicks make a fixed 90° arc, and there is no arc point editor. M. PARITY-sch §12.
-- **S14 [BD] Annotation.**
-  - Placing a unit never fills a free unit of an existing part (D-A1).
-  - `R?` becomes `R?1`.
-  - The dialog's settings aren't saved.
-  - M. r2 D-A1; PARITY-sch §39, §42.
+- **S13 [FM] Arcs.** **done (task-u4-schleft)**: Draw Arc takes KiCad 25ec2335's three clicks (`EE_GRAPHIC_TOOL::DrawArc`, `ARC_GEOM_MANAGER`'s centre, start, end angle; `/` turns it, Backspace steps back, the arc assistant drawn); the arc point editor drags the start, middle, end and centre in the three arc editing modes (Ctrl+Space, the menu's Cycle Arc Editing Mode). Left: 25ec2335's other four arc draw modes and their toolbar palette; the point editor of the sheet's other shapes (rectangle, circle, curve, polygon). M. PARITY-sch §12, §62.
+- **S14 [BD] Annotation.** **done (task-u4-schleft)**: a placed unit joins a part of the same symbol and value whose unit is free, on any sheet (r2 D-A1: the server's `PlaceSymbol` `annotate()`, `POST /api/sch/next_reference`); a placeholder `R?1` is drawn and written as `R?`; the Annotate dialog's order, numbering and start number are the project's (read on load, stored on close), its scope and options the user's (the browser's). Left: Repeat's reference is the page's guess; the design still keeps `R?1`, `R?2` as names (two parts cannot both be `R?`). M. r2 D-A1; PARITY-sch §5, §62.
 - **S15 [KO] Annotation by design.** No Clear Annotation and no Annotate Automatically switch, and Paste Special's keep/clear differs: every part has a real reference. S. GAPS 4/6; PARITY-sch §5.
-- **S16 [BD] Edit Text & Graphics, Change and Update Symbols.**
-  - Edit Text & Graphics skips fields, labels, wires and junctions.
-  - Change and Update Symbols can't reset field sizes, positions or visibility.
-  - S. PARITY-sch §12.
-- **S17 [BD] Import Sheet and dropped schematics.**
-  - No "Place as group", and no ghost while carried.
-  - A chooser opens instead of putting the sheet in your hand.
-  - One file per drop.
-  - S. GAPS 4; PARITY-sch §19, §37.
-- **S18 [BD] Wires.**
-  - Break and Repeat across a two-pin part trims between the pins (C3-L1).
-  - Some sheet-pin drag cases differ.
-  - Swap and Properties skip the commit clean-up (C3-M1).
-  - The no-connect tool doesn't remove an existing flag.
-  - Enter doesn't finish a wire. **done (task-u1-schplace)**: Enter is KiCad's `cursorClick`, a click where the cursor is (it does not finish a wire in KiCad either), and End now keeps the segment to the cursor (PARITY-sch §2, §54).
-  - S. PARITY-sch §2, §46.
-- **S19 [BD] Bus unfold, swap and groups.**
-  - Unfold from Bus has no member submenus and no ghost.
-  - Alt+S doesn't swap sheets or bus entries.
-  - Some small group differences.
-  - Reorganize drops a label's spin and the groups.
-  - S. PARITY-sch §11, §29, §50; r7 A7-L2.
-- **S20 [BD] Fields.**
-  - Copy and paste lose a user field's shown state and position.
-  - Find treats user fields as hidden.
-  - Autoplace ignores swapped pins.
-  - An imported power symbol loses its flags and its hand-placed Value (D4-L2).
-  - S. PARITY-sch §21, §30.
-- **S21 [BD] Sheets.**
-  - A duplicate sheet name is refused; KiCad allows it and ERC reports it.
-  - No "Untitled Sheet" and no "Link to this file?".
-  - The root page is fixed at 1.
-  - Sync Sheet Pins can't make labels in the subsheet.
-  - No bus-to-bus entry.
-  - S. PARITY-sch §32, §39, §40, §47.
-- **S22 [BD] Net-name corner cases.**
-  - Which of two equal names gets `_1`.
-  - A pin number used twice.
-  - An `@{}` error keeps its raw text.
-  - `${U1A:FIELD}` works only in the letter form.
-  - S. PARITY-sch §44, §47; r2 A-N11.
+- **S16 [BD] Edit Text & Graphics, Change and Update Symbols.** **done (task-u4-schleft)**: Edit Text & Graphics reaches the symbols' fields (references, values, other fields with the name filter), wires and buses with their labels and junctions, global and hierarchical labels, sheet pins (Orientation, Visible, Show field name, junction size; lengths in mm); Change / Update Symbols' Reset field visibilities / sizes and styles / positions (`reset_symbol_fields`). Left: Edit Text & Graphics works on the sheet in view (KiCad: every sheet), no colours, fonts or field alignment, no reference / symbol / net / power filters, sheet titles and fields, label fields, sheet borders; a field's reset place is Autoplace's (KiCad: the library's place), its justification is kept; the reset is a second undo step after the change. S. PARITY-sch §12, §62.
+- **S17 [BD] Import Sheet and dropped schematics.** **done (task-u4-schleft)**: Place as group (there since the design blocks work); a file's contents ride the cursor before the click (the place preview reads the file); a dropped schematic is placed with the options last chosen, no chooser; every file of a drop in turn (`DoWithAcceptedFiles`). Left: the contents are placed by a click, not handed to the move tool (no R / X while they ride). S. PARITY-sch §19, §37, §62.
+- **S18 [BD] Wires.** **done (task-u4-schleft)**: Break and Repeat no longer cut a wire between a two-pin part's pins (`add_wire_as`, C3-L1); Swap and the Properties verbs of connectable items run the commit clean-up (C3-M1); a sheet pin keeps one special-case line and none past a junction (C3-L3); a click of the no-connect tool on a flag removes it. Enter: done before (task-u1-schplace). Left: C3-L3's effect is unconfirmed (no case that shows it). S. PARITY-sch §2, §46, §62.
+- **S19 [BD] Bus unfold, swap and groups.** **done (task-u4-schleft)**: Unfold from Bus lists a bus in a group as a submenu of its members and its label rides the cursor; Alt+S swaps sheets, shapes, text boxes, directive labels, images, junctions and no-connects, two labels trade their spin and two texts their justification (a bus entry is not swappable in KiCad either); Reorganize keeps the groups on the sheet their symbols land on. Left: the diff-pair grouping of the unfold menu (`+`/`-`/`P`/`N`); R / Shift+R on the riding label (r7 A7-L2); a label's spin is the layout's after Reorganize (its wires are new); the small group differences (a group of one dissolves, the Align tools are not group-aware, Group Properties' rows do not take the view to the item). S. PARITY-sch §11, §29, §50, §62; r7 A7-L2.
+- **S20 [BD] Fields.** **done (task-u4-schleft)** in part: Find finds a field by its own visibility (a user field shown, a Value hidden); Autoplace honours swapped pins; an imported power symbol keeps its flags and its hand-placed Value (D4-L2). Left: Copy and Paste still carry a user field's text only (the pasted fields are autoplaced); a mirrored power symbol's fields are read unmirrored. S. PARITY-sch §21, §30, §62.
+- **S21 [BD] Sheets.** **done (task-u4-schleft)**: a name another sheet has is allowed and kicad-cli's ERC reports `duplicate_sheet_names`; a new sheet is "Untitled Sheet" / `untitled.kicad_sch` and a file the hierarchy shows is linked after "'%s' already exists. Link '%s' to this file?"; the root's page number is edited (Edit Sheet Page Number, the Navigator's root row); Sync Sheet Pins' Add label(s) put hierarchical labels in the hand in the subsheet; the bus-to-bus entry needs nothing (only legacy `.sch` files have one and KiCad writes it as a bus line). Left: an unplaced screen kept in the project is linked without the question; Sync Sheet Pins does not reopen after the labels are placed; a legacy `.sch` cannot be imported (the box's kicad-cli refuses it). S. PARITY-sch §32, §39, §40, §47, §62.
+- **S22 [BD] Net-name corner cases.** **done (task-u4-schleft)** in part: `${U1.1:FIELD}` in the project's notation both ways (and each placed unit has a uuid of its own); `@{..}` takes the rest of KiCad's expression grammar (a failing one stays as written, as in KiCad). Left: which of two equal names gets `_1` (the derived uuids are seeded with the net name); a pin number used twice (one pin, one net in `design.nets`); the clock, random and version-control functions of `@{..}`. S. PARITY-sch §44, §47, §62; r2 A-N11.
 
 ## Router
 
@@ -534,25 +489,27 @@ Notes:
 
 ## Import
 
-- **I1 [BD] Non-KiCad import.**
-  - No "Save changes?" question.
-  - The layer map can't leave a layer out.
-  - Eagle `.brd` and `.sch` are two imports.
-  - No Altium variants.
-  - An EasyEDA Pro file with several boards fails.
-  - No IPC-2581 or ODB++ import.
-  - A graphics-only schematic is refused.
-  - M. GAPS 28; PARITY-pcb §34; PARITY-sch §33.
-- **I2 [BD] Import Graphics.**
-  - No placement preview.
-  - SVG patterns, gradients, text and images are dropped.
-  - DXF text is approximated.
-  - M. PARITY-pcb §29; PARITY-sch §20.
-- **I3 [BD] Append Board and Specctra.**
-  - Append Board doesn't add the file's extra layers or unknown nets, and doesn't group what it appends.
-  - Specctra session import refuses a missing part and gives `/FB` net names.
-  - S. PARITY-pcb §29, §46.
-- **I4 [BD] What imported boards lose.** Hidden board and dimension texts (R4-6), a manual dimension text position, nested footprint groups (B-9), and any footprint scale other than 1:1. S. r3-r7; GAPS 2.
+- **I1 [BD] Non-KiCad import.** **done (task-u4-import)**; PARITY-pcb §77, PARITY-sch §61.
+  - "The current PCB has been modified.  Save changes?" (Save, Discard Changes, Cancel) before an import replaces the board, and the schematic's "This operation replaces the contents of the current schematic ..." before it replaces the sheet.
+  - A layer left unmatched in the layer map is left out with what is on it.
+  - Import Non-KiCad Project... (both editors' File > Import): an Eagle `.brd` and `.sch` as one project, both replaced in one step.
+  - Altium variants on the schematic `eda import-kicad Project.PrjPcb` makes (by designator).
+  - An EasyEDA Pro file with several boards: "Choose Project to Import".
+  - IPC-2581 and ODB++: KiCad reads neither ("Reading currently disabled"), refused as it refuses them.
+  - A graphics-only schematic is taken.
+  - Left: the studio's route reads no `.PrjPcb` (so no variants there, none on the board's footprints); an EasyEDA Pro project's schematic choice; a field on a layer left out stays hidden; `PermittedLayers`.
+- **I2 [BD] Import Graphics.** **done (task-u4-import)** for the board; PARITY-pcb §77, PARITY-sch §61.
+  - The board's interactive placement is a preview under the cursor, placed by a click.
+  - SVG gradients, patterns, images and `use` are what KiCad's nanosvg makes of them.
+  - DXF text is placed as `DXF_IMPORT_PLUGIN` and both editors' importers place it.
+  - Left: the schematic's preview (still carried by the Move tool); SVG text (needs Fontconfig, FreeType and HarfBuzz); a schematic text's glyph width; the Footprint Editor's Import Graphics (another agent's area).
+- **I3 [BD] Append Board and Specctra.** **done (task-u4-import)**; PARITY-pcb §77.
+  - Append Board adds the file's copper, technical and user layers (a new one with the file's name and type) and its nets, and puts what came in in one group named after the file, which is selected.
+  - A Specctra session's missing part, unknown layer or padstack is skipped and counted with KiCad 25ec2335's warning.
+  - Left: Append Board's locks and 25ec2335's remap dialog; the session's `/FB` names are KiCad's (the net names decision), kept: the lead's call.
+- **I4 [BD] What imported boards lose.** **done (task-u4-import)**; GAPS 2, PARITY-pcb §77.
+  - Hidden board texts are copper again (R4-6); a dimension's manual text verified; nested footprint groups (B-9); a scaled footprint baked as KiCad shows it, with a note.
+  - Left: a non-uniformly scaled circle is not an ellipse; a custom pad's primitives are not scaled; the footprint is written back at 1:1.
 - **I5 [KO] A board with its schematic beside it.** Importing a `.kicad_pcb` ignores the `.kicad_sch` next to it; the schematic is derived instead (F12). S.
 
 ## Simulator

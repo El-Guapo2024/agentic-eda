@@ -66,7 +66,7 @@ pub fn of_section_but_wires(sch: &SchematicSection, model: &ConstraintModel) -> 
             sym.lib_id = format!("eda:{}", sym.id);
         }
         let resolved = model.real_symbol_of_instance(sch, &sym, part);
-        let geom = SymbolGeom::of(&sym, part, resolved.as_ref());
+        let geom = SymbolGeom::of_in(sch, &sym, part, resolved.as_ref());
         if let Some(b) = geom.body {
             out.push(Obstacle { owner: eda_model::ir::field_key(&sym.id, sym.unit), rect: outward(b) });
         }

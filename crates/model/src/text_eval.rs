@@ -1,3 +1,7 @@
+//! **INACTIVE** (2026-11-06, the merge of main into `task-u5-pcbitems`): main's `text_vars::evaluate_math` took the same port further in the meantime
+//! (`4980a4f9`, UI-LEFT S22: its own `text_vars::text_eval`, with the E-series functions too), and it is the evaluator every shown text runs now. This
+//! module is kept, as the rule for a replaced port keeps it, with its tests; nothing calls it.
+//!
 //! KiCad's text expressions, `@{..}`: what `EXPRESSION_EVALUATOR::Evaluate` makes of a text after its variables are expanded (`ResolveTextVars` runs it after every
 //! pass, [`crate::text_vars::resolve_text_vars`]), for every shown text -- a table cell's on the board and on the sheet, a text's, a field's.
 //!

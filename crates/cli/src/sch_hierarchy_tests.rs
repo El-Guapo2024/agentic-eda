@@ -149,6 +149,23 @@ fn import_sheet_contents_goes_on_the_root_and_keep_annotations_numbers_only_what
     assert!(units.len() >= 30 + 6);
 }
 
+/// UI-LEFT S17: Import Sheet's contents ride the cursor before the click (`placeSheetContents` starts a move of what it read): the place preview reads the file into the
+/// command as the commit does and answers the items the import would add, nothing written; a file that is not there is refused.
+#[test]
+fn the_place_preview_draws_a_files_contents_before_the_click() {
+    let dir = mcu30_board("import_contents_preview");
+    write_ldo_file(&dir, "ldo_stage.kicad_sch");
+    let before = std::fs::read_to_string(dir.join("design.json")).unwrap();
+    let cmd = serde_json::to_value(import_cmd("ldo_stage.kicad_sch", false, false)).unwrap();
+    let r = crate::sch_place_api::place_preview(&dir, json!({ "sheet": "", "cmd": cmd }).to_string().as_bytes());
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["preview"]["symbols"].as_array().map(Vec::len), Some(6), "the LDO's six symbols: {}", r["preview"]["symbols"]);
+    assert!(r["preview"]["wires"].as_array().is_some_and(|w| !w.is_empty()));
+    assert_eq!(std::fs::read_to_string(dir.join("design.json")).unwrap(), before, "nothing is written");
+    let gone = serde_json::to_value(import_cmd("nope.kicad_sch", false, false)).unwrap();
+    assert_eq!(crate::sch_place_api::place_preview(&dir, json!({ "sheet": "", "cmd": gone }).to_string().as_bytes())["ok"], false);
+}
+
 #[test]
 fn the_sheet_files_and_the_checks_are_answered_without_writing() {
     let dir = mcu30_board("sheet_files");
@@ -2226,5 +2243,48 @@ fn a_symbols_sim_library_file_is_carried() {
         assert!(dir.join(".kicad/diode.lib").is_file(), "and beside the derived files");
         let original = kicad_cli_erc_counts(&root).unwrap();
         assert_eq!(derived.get("simulation_model_issue"), original.get("simulation_model_issue"), "{derived:?} against {original:?}");
+    }
+}
+
+/// UI-LEFT S21: two sheets of one name on a page are allowed, as KiCad's sheet dialog allows them, and kicad-cli's ERC of what the studio derives reports them
+/// (`ERCE_DUPLICATE_SHEET_NAME`, `duplicate_sheet_names`); renamed apart, the finding goes. Slow: kicad-cli, `EDA_SLOW_TESTS=1`.
+#[test]
+fn slow_two_sheets_of_one_name_are_allowed_and_kicad_cli_s_erc_reports_them() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let dir = empty_board("dup_sheet_names");
+    let at = |x: f64| Point { x: mm(x), y: mm(50.8) };
+    step(&dir, Cmd::AddSheet { name: "Sub".into(), file: "a.kicad_sch".into(), at: at(25.4), size: (mm(25.4), mm(12.7)) }, false, "test").unwrap();
+    step(&dir, Cmd::AddSheet { name: "Sub".into(), file: "b.kicad_sch".into(), at: at(76.2), size: (mm(25.4), mm(12.7)) }, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    assert_eq!(design.schematic.as_ref().unwrap().sheets.iter().filter(|s| s.name == "Sub").count(), 2);
+    assert_eq!(erc_kinds(&dir).get("duplicate_sheet_names").copied(), Some(1), "{:?}", erc_kinds(&dir));
+    let id = design.schematic.as_ref().unwrap().sheets[1].id.clone();
+    step(&dir, Cmd::sch(eda_ops::sch_edit::SchCmd::EditSheet { id, name: Some("Sub2".into()), file: None }), false, "test").unwrap();
+    assert_eq!(erc_kinds(&dir).get("duplicate_sheet_names"), None);
+}
+
+/// UI-LEFT S22 (KiCad 25ec2335 `common/text_eval`: `KIEVAL_TEXT_TOKENIZER`, `EVAL_VISITOR::evaluateFunction`): a label whose text is a function, a string, an SI
+/// prefix and a unit names its net as kicad-cli names it -- `@{concat("SIG", 2)}` is `/SIG2`, `D@{4k7/1k}_@{10mil}` is `/D4.7_0.254`,
+/// `@{upper("clk")}_@{if(2 > 1, "A", "B")}` is `/CLK_A`, `N@{round(2.567, 1)}_@{"a" + 1}` is `/N2.6_a1` -- and kicad-cli reads the derived file so too.
+#[test]
+fn a_labels_expression_names_its_net_as_kicad_cli_does() {
+    let (dir, root, nets) = round_case("u4_netnames", "expr");
+    let ours: std::collections::BTreeMap<String, Vec<String>> = nets.into_iter().filter(|(_, pins)| !pins.is_empty()).collect();
+    for (name, pin) in [("/SIG2", "R1.1"), ("/D4.7_0.254", "R1.2"), ("/CLK_A", "R3.1"), ("/N2.6_a1", "R3.2")] {
+        assert_eq!(ours.get(name).map(|p| p.join(" ")), Some(pin.to_string()), "{name} in {ours:?}");
+    }
+    if kicad_cli_ready() {
+        let theirs = kicad_cli_named_nets(&root);
+        let names = |m: &std::collections::BTreeMap<String, Vec<String>>| m.keys().cloned().collect::<Vec<_>>();
+        assert_eq!(names(&theirs), names(&ours), "kicad-cli names the nets of the original as the studio does");
+        let (_, design, model) = load(&dir).unwrap();
+        let derived_dir = dir.parent().unwrap().join("derived");
+        std::fs::create_dir_all(&derived_dir).unwrap();
+        for (name, text) in eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-06", title: "t" }, "board.kicad_sch").unwrap() {
+            std::fs::write(derived_dir.join(name), text).unwrap();
+        }
+        assert_eq!(names(&kicad_cli_named_nets(&derived_dir.join("board.kicad_sch"))), names(&ours), "and of the derived file");
     }
 }

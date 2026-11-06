@@ -12,7 +12,7 @@ import schMenusData from "../kicad/sch_menus.json";
 import fpMenusData from "../kicad/fp_menus.json";
 import symMenusData from "../kicad/sym_menus.json";
 import actionsData from "../kicad/actions.json";
-import { SCHEMATIC_EDITOR_MENU_EXTRAS, SCHEMATIC_EDITOR_SUBMENU_EXTRAS, SYMBOL_EDITOR_MENU_EXTRAS, withMenuExtras, withSubmenuExtras } from "../kicad/menuExtras";
+import { PCB_EDITOR_SUBMENU_EXTRAS, SCHEMATIC_EDITOR_MENU_EXTRAS, SCHEMATIC_EDITOR_SUBMENU_EXTRAS, SYMBOL_EDITOR_MENU_EXTRAS, withMenuExtras, withSubmenuExtras } from "../kicad/menuExtras";
 import type { MenusFile, MenuNode, ActionsFile, KicadAction } from "../kicad/types";
 import { displayHotkey, effectiveHotkey } from "../actions/hotkeys";
 import { useActionRunner } from "../actions/useActionRunner";
@@ -22,7 +22,8 @@ import { HELP_MENU } from "../kicad-port/helpMenu";
 import { useCliExporters } from "../state/cliExporters";
 import { cliExporterReason } from "../kicad-port/cliExporters";
 
-const menusFile = menusData as MenusFile;
+/** The board editor's menus with this studio's own entries appended (kicad/menuExtras.ts). */
+const menusFile = withSubmenuExtras(menusData as MenusFile, PCB_EDITOR_SUBMENU_EXTRAS);
 /** The schematic editor's menus with this studio's own entries appended (kicad/menuExtras.ts). */
 const schMenusFile = withSubmenuExtras(withMenuExtras(schMenusData as MenusFile, SCHEMATIC_EDITOR_MENU_EXTRAS), SCHEMATIC_EDITOR_SUBMENU_EXTRAS);
 const fpMenusFile = fpMenusData as MenusFile;

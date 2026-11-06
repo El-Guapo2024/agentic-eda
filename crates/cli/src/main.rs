@@ -77,6 +77,7 @@ mod fab_cmd;
 #[cfg(test)]
 mod gate_vs_kicad;
 mod foreign_api;
+mod altium_variants;
 mod import_foreign;
 mod import_kicad;
 mod route_api;

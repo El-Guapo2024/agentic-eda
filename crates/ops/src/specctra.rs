@@ -47,6 +47,17 @@ fn read_session(session: &str, source: &str, design: &Design, model: &Constraint
     // INACTIVE (2026-10-28) but as this fallback: a kicad-cli without api-server, or one whose server has no ImportSpecctraSession.
     eda_kicad::specctra::session::from_session(session, source, design, model)
 }
+
+thread_local! {
+    /// The warning of the last session our own port read on this thread (`FromSESSION`'s "%d session item(s) were skipped ..."), for the caller to take with the reply,
+    /// as the importer set keeps KiCad's own. Per thread: the command and its reply are made on the request's thread.
+    static PORT_WARNING: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Take the warning of the last session import this thread applied with our own port (`None` when it skipped nothing, or KiCad's importer read it).
+pub fn take_session_warning() -> Option<String> {
+    PORT_WARNING.with(|w| w.borrow_mut().take())
+}
 use eda_model::via_extra::{ViaExtra, ViaKind};
 use eda_model::CheckResult;
 
@@ -55,6 +66,7 @@ impl<'a> Board<'a> {
     pub(crate) fn import_specctra_session(&mut self, session: &str, name: &str) -> Result<(), Vec<CheckResult>> {
         let source = if name.is_empty() { "session" } else { name };
         let import = read_session(session, source, &self.design, self.model).map_err(|e| vec![CheckResult::fail("ops_specctra_session", source, e)])?;
+        let mut skipped = import.skipped;
 
         let locked: std::collections::BTreeSet<String> = self.design.drawings.as_ref().map(|d| d.locked_ids.iter().cloned().collect()).unwrap_or_default();
         let copper = self.model.board.layers.len();
@@ -62,8 +74,10 @@ impl<'a> Board<'a> {
         // The footprints of the session's placement.
         for place in &import.placements {
             let Some(fp) = self.design.placement.as_mut().and_then(|p| p.footprints.iter_mut().find(|f| f.id == place.reference)) else {
-                // `FindFootprintByReference` found it on the board the session was read against; a part the design has not placed has no footprint to move.
-                return Err(vec![CheckResult::fail("ops_specctra_session", source, format!("Reference '{}' not found.", place.reference))]);
+                // `FindFootprintByReference` found it on the board the session was read against; a part the design has not placed has no footprint to move: skipped and
+                // counted, as KiCad 25ec2335 skips a reference it cannot find (`++m_skippedCount; continue;`)
+                skipped += 1;
+                continue;
             };
             fp.at = place.at;
             fp.rot = place.rot;
@@ -129,6 +143,8 @@ impl<'a> Board<'a> {
         }
         dr.locked_ids.sort();
         dr.locked_ids.dedup();
+        // `ReportWarning( .. "%d session item(s) were skipped due to unresolved reference, layer, or padstack." )` once, at the end
+        PORT_WARNING.with(|w| *w.borrow_mut() = eda_kicad::specctra::session::skipped_warning(skipped));
         Ok(())
     }
 }
@@ -237,15 +253,25 @@ mod tests {
         assert!(dr.via_extras.iter().all(|e| e.tokens.is_empty()), "the old via's tenting is not the new via's: {:?}", dr.via_extras);
     }
 
-    /// A session KiCad would refuse leaves the board as it was, with KiCad's words.
+    /// A session KiCad would refuse leaves the board as it was, with KiCad's words; an item it cannot resolve -- a wire on a layer the board has not got, the place of a part
+    /// the board has not got -- is skipped and counted, and the import says so once (KiCad 25ec2335 `FromSESSION`'s `skipOnError` and `m_skippedCount`).
     #[test]
-    fn a_refused_session_changes_nothing() {
+    fn a_refused_session_changes_nothing_and_an_unresolved_item_is_skipped_and_counted() {
         let m = model();
         let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
-        let bad = SESSION.replace("(path B.Cu", "(path In3.Cu");
-        let e = b.apply(&Cmd::Specctra { session: bad, name: "r.ses".into() }).unwrap_err();
-        assert_eq!(e[0].hint.as_deref(), Some("Session file uses invalid layer id 'In3.Cu'."), "{e:?}");
+        // outside `skipOnError`: no routes, no library
+        let e = b.apply(&Cmd::Specctra { session: "(session r.ses (base_design r.dsn))".into(), name: "r.ses".into() }).unwrap_err();
+        assert_eq!(e[0].hint.as_deref(), Some("Session file is missing the \"routes\" section"), "{e:?}");
         assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 2);
+        let _ = super::take_session_warning();
+        // the GND wire on a layer the board has not got, and a place of U9, which it has not got either: both skipped, the rest imported
+        let bad = SESSION.replace("(path B.Cu", "(path In3.Cu").replace("(place R1 250000 -200000 back 90)", "(place R1 250000 -200000 back 90) (place U9 1000 1000 front 0)");
+        b.apply(&Cmd::Specctra { session: bad, name: "r.ses".into() }).unwrap();
+        let rt = b.design().routing.as_ref().unwrap();
+        assert_eq!(rt.tracks.iter().filter(|t| t.net == "VCC").count(), 2, "the VCC path came in");
+        assert!(!rt.tracks.iter().any(|t| t.layer == "In3.Cu"));
+        assert_eq!(super::take_session_warning().as_deref(), Some("2 session item(s) were skipped due to unresolved reference, layer, or padstack."));
+        assert_eq!(super::take_session_warning(), None, "taken once");
         // The command is the wire's: `{"op": "specctra", "session": ..}`.
         let c: Cmd = serde_json::from_value(json!({ "op": "specctra", "session": "(session x)" })).unwrap();
         assert_eq!(c, Cmd::Specctra { session: "(session x)".into(), name: String::new() });

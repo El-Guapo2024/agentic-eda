@@ -163,12 +163,14 @@ impl<'m> Scene<'m> {
             // selected too, `AddItemToSel`): `performItemMove` then puts that end where `ConstrainOnEdge` left the pin, so a wire dragged sideways into
             // a pin, or a pin dragged past its sheet's corner, keeps the wire on the pin.
             for end_pt in [self.segs[i].a, self.segs[i].b] {
+                // r3 C3-L3: that case is reached only past `getConnectedItems`' early return -- "If you're connected to a junction, you're only connected to
+                // the junction" (or to the pin of a symbol a junction is on): a line end on a junction records no sheet pin
+                if self.items().into_iter().any(|t| matches!(t, Item::Junction(_)) && self.is_connected(t, end_pt)) {
+                    continue;
+                }
                 let pins: Vec<Item> = self.items().into_iter().filter(|&t| matches!(t, Item::SheetPin(..)) && (self.is_user_selected(t) || self.by_drag.contains(&t)) && self.is_connected(t, end_pt)).collect();
                 for pin in pins {
-                    let entry = (pin, i, self.segs[i].a == end_pt);
-                    if !st.special_pins.contains(&entry) {
-                        st.special_pins.push(entry);
-                    }
+                    note_special_pin(st, pin, i, self.segs[i].a == end_pt);
                 }
             }
         }
@@ -221,7 +223,7 @@ impl<'m> Scene<'m> {
                     if let Item::Seg(oi) = original {
                         if self.is_connected(test, p) {
                             if self.is_user_selected(test) {
-                                st.special_pins.push((test, oi, self.segs[oi].a == p));
+                                note_special_pin(st, test, oi, self.segs[oi].a == p);
                             }
                             list.push(test);
                         }
@@ -1016,4 +1018,11 @@ pub(crate) fn constrain_on_edge(sheet: &eda_model::ir::SheetInstance, pos: Point
 fn distance_to_segment(p: Point, a: Point, b: Point) -> f64 {
     let n = nearest_on_segment(a, b, p);
     (p.x - n.x).as_f64().hypot((p.y - n.y).as_f64())
+}
+
+/// `m_specialCaseSheetPins[ pin ] = { line, line->GetStartPoint() == aPoint }`: a map keyed by the pin, so a pin keeps one line end, the one recorded last
+/// (r3 C3-L3; this kept every line a pin was found on).
+fn note_special_pin(st: &mut Drag, pin: Item, line: usize, is_start: bool) {
+    st.special_pins.retain(|(p, _, _)| *p != pin);
+    st.special_pins.push((pin, line, is_start));
 }

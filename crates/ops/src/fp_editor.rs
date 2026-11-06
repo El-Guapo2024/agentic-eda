@@ -160,6 +160,12 @@ impl Board<'_> {
         if let Some(tol) = req.fix_tolerance_nm {
             crate::fix_shapes::connect_board_shapes(&mut items.shapes, tol.max(eda_model::ir::Nm::ZERO));
         }
+        // a library footprint's text keeps no vertical justification: stood where the justified one stands, centred (`crate::import_graphics::centre_vertically`)
+        for (i, extra) in &items.text_extras {
+            if let Some(t) = items.texts.get_mut(*i) {
+                crate::import_graphics::centre_vertically(t, extra.valign);
+            }
+        }
         let fp = self.library_footprint_mut(name)?;
         let before: std::collections::BTreeSet<String> = fp.graphics.iter().map(|g| g.id().to_string()).chain(fp.texts.iter().map(|t| t.id.clone())).collect();
         for mut s in items.shapes {

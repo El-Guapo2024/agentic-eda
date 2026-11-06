@@ -73,6 +73,7 @@ pub mod fp_editor;
 mod sym_derive;
 mod fix_shapes;
 mod fp_edit;
+pub mod fp_texts;
 mod fp_models;
 mod import_foreign;
 pub use import_foreign::imported_intent_file;
@@ -93,9 +94,10 @@ mod pcb_groups;
 mod sch_groups;
 mod pcb_paste;
 mod specctra;
-pub use specctra::{set_session_importer, SessionImporter};
+pub use specctra::{set_session_importer, take_session_warning as take_port_session_warning, SessionImporter};
 mod pcb_paste_special;
 mod design_blocks;
+pub use design_blocks::layer_table;
 mod multichannel;
 mod multichannel_copy;
 mod multichannel_facts;
@@ -601,7 +603,8 @@ pub enum Cmd {
     /// text, the same text Append Board reads -- put on the board with the file's origin (the point Append Board holds it by, the studio's server finds it) at `at`. The
     /// references the file has are kept (`AppendBoard` never renumbers: "Don't reannotate dupes on Append Board"). With `as_group` and at least two items at its top, what
     /// came in is put in one group named `group_name` (the block's name when that is empty) and linked to `block` (`Lib:Name`): `placeAsGroup`, `SetDesignBlockLibId`. One undo
-    /// step. See `design_blocks.rs`.
+    /// step. See `design_blocks.rs`. An empty `block` is Append Board (`PCB_CONTROL::AppendBoard( *pi, fileName )`, no design block): the same load of the file, a group
+    /// named `group_name` (the file's stem) linked to nothing.
     PlaceDesignBlock {
         text: String,
         at: Point,
@@ -1260,6 +1263,24 @@ pub enum Cmd {
     SetCornerRadius { ids: Vec<String>, radius: Nm },
     /// A via's tenting, covering, plugging, capping, filling, backdrill and post-machining (`TRACK_VIA_DESC`'s rows past "Via Type"), all at once.
     SetViaProps { id: String, props: eda_model::via_extra::ViaProps },
+    /// Text Properties of a footprint's own text on the board (`REF~t<k>`, UI-LEFT P15; [`fp_texts`]): its text and layout (`layout` in the footprint's frame,
+    /// its layer the board side's), or `delete` it; in the instance's own copy of its footprint.
+    EditBoardFootprintText {
+        id: String,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        layout: Option<eda_model::fp_edit::FieldLayout>,
+        #[serde(default)]
+        delete: bool,
+    },
+    /// The own teardrop parameters of vias and pads (`BOARD_CONNECTED_ITEM::GetTeardropParams`): Track & Via Properties', Pad Properties' and the Properties
+    /// panel's Teardrops rows; `None` gives the items back to Board Setup's block ([`eda_model::teardrop_params`]).
+    SetTeardropParams {
+        ids: Vec<String>,
+        #[serde(default)]
+        params: Option<eda_model::teardrop_params::TeardropParams>,
+    },
     /// "Solderpaste Margin Override" and "Solderpaste Margin Ratio Override" of a footprint (`FOOTPRINT::SetLocalSolderPasteMargin`, `..Ratio`); `None` is the board's.
     SetFootprintPasteMargin {
         part: String,
@@ -2660,7 +2681,8 @@ impl Cmd {
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::MirrorItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } | Cmd::EditTextStyle { id, .. } | Cmd::SetViaProps { id, .. } => vec![id.as_str()],
-            Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } | Cmd::SetTeardropParams { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::EditBoardFootprintText { id, .. } => vec![id.as_str()],
             Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
@@ -3422,6 +3444,8 @@ impl<'a> Board<'a> {
             Cmd::SetSolderMask { ids, solder_mask, margin } => self.set_solder_mask(ids, *solder_mask, *margin),
             Cmd::SetCornerRadius { ids, radius } => self.set_corner_radius(ids, *radius),
             Cmd::SetViaProps { id, props } => self.set_via_props(id, props),
+            Cmd::SetTeardropParams { ids, params } => self.set_teardrop_params(ids, params.as_ref()),
+            Cmd::EditBoardFootprintText { id, text, layout, delete } => self.edit_board_footprint_text(id, text.as_deref(), layout.as_ref(), *delete),
             Cmd::SetFootprintPasteMargin { part, margin, ratio } => self.set_footprint_paste_margin(part, *margin, *ratio),
             Cmd::Batch { cmds } => {
                 let saved = self.design.clone();
@@ -3495,7 +3519,8 @@ impl<'a> Board<'a> {
             },
             Cmd::ReplaceSchematic { content, name } => self.replace_schematic(content, name),
             Cmd::ReplaceBoard { text, name, keep_kicad_layer_names, project, rules } => self.replace_board(text, name, *keep_kicad_layer_names, project.as_deref(), rules.as_deref()),
-            Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
+            // a swap of connectable items is a commit that holds them: `SCH_COMMIT::pushSchEdit`'s `LOCAL_CLEANUP` (r3 C3-M1)
+            Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b).and_then(|_| self.commit_clean_up()),
             Cmd::PasteSch { fragment, dx, dy, mode, numbering } => self.paste_sch(fragment, *dx, *dy, *mode, *numbering).map(|_| ()),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
@@ -3533,8 +3558,10 @@ impl<'a> Board<'a> {
             }
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit, .. } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit).and_then(|_| self.commit_clean_up()),
             Cmd::EmbedLibSymbol { symbol } => self.embed_lib_symbol(symbol),
-            Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
-            Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
+            // Symbol Properties' OK is a commit of a symbol, which is connectable: the commit cleans the sheet up (`LOCAL_CLEANUP`, r3 C3-M1); a board-side edit runs on
+            // the symbol's own screen (UI-LEFT P14)
+            Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.on_symbols_screen(id, |b| b.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()).and_then(|_| b.commit_clean_up())),
+            Cmd::RenameSymbol { id, new_id } => self.on_symbols_screen(id, |b| b.rename_symbol(id, new_id)),
             Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
             Cmd::AddDesignVariant { name, description } => self.add_design_variant(name, description),
             Cmd::RemoveDesignVariant { name } => self.remove_design_variant(name),
@@ -5374,6 +5401,29 @@ impl<'a> Board<'a> {
         r
     }
 
+    /// `f` on the screen that has the symbol `id`, when the screen the verbs act on does not: the board names a part, not the sheet its symbol is on, so a board-side
+    /// edit of it (Footprint Properties' Reference and Value, the Properties panel's Reference; UI-LEFT P14) reaches the symbol wherever it is, as KiCad's Update
+    /// Schematic from PCB does (`BACK_ANNOTATE` walks every sheet's references).
+    fn on_symbols_screen(&mut self, id: &str, f: impl FnOnce(&mut Self) -> Result<(), Vec<CheckResult>>) -> Result<(), Vec<CheckResult>> {
+        let here = match &self.focus {
+            None => self.design.schematic.as_ref(),
+            Some(file) => self.design.sheet_contents.as_ref().and_then(|c| c.get(file)),
+        }
+        .is_some_and(|s| s.symbols.iter().any(|x| x.id == id));
+        let elsewhere = if here {
+            None
+        } else if self.design.schematic.as_ref().is_some_and(|s| s.symbols.iter().any(|x| x.id == id)) {
+            Some(None)
+        } else {
+            self.design.sheet_contents.iter().flatten().find(|(_, sc)| sc.symbols.iter().any(|x| x.id == id)).map(|(file, _)| Some(file.clone()))
+        };
+        let Some(screen) = elsewhere else { return f(self) };
+        let saved = std::mem::replace(&mut self.focus, screen);
+        let r = f(self);
+        self.focus = saved;
+        r
+    }
+
     /// Every placed symbol of every screen but the one the verbs act on: (reference, unit). A reference is one part for the whole design
     /// (the model, the PCB and the net list know it by that name), so what is placed on another sheet counts when a symbol is added,
     /// renamed or numbered here.
@@ -5527,6 +5577,14 @@ impl<'a> Board<'a> {
     /// (r3 C3-L1): Break / Slice and Repeat send this verb too, so they also run `finishSegments`' `TrimWire`, which KiCad's move finish and
     /// `RepeatDrawItem` do not.
     fn add_wire(&mut self, pts: Vec<Point>, bus: bool) -> Result<(), Vec<CheckResult>> {
+        self.add_wire_finished(pts, bus, true)
+    }
+
+    /// [`Board::add_wire`] with `trim` saying whether the two-pin parts cut the new wire between their pins (`finishSegments`' `TrimWire` pass). Break / Slice and
+    /// Repeat leave it out (r3 C3-L1, `sch_edit::SchCmd::AddWireAs`): a break is finished as a move (`finalizeMoveOperation`) and `RepeatDrawItem` runs
+    /// `TrimOverLappingWires`, `AddJunctionsIfNeeded` and the commit's `CleanUp`, neither of which cuts a wire at a part, so a repeated wire across a resistor's
+    /// pins shorts it in KiCad too. The pass runs for a bus as for a wire (`finishSegments` runs it for any draw; `TrimWire` only cuts wires, `trim_wire`'s guard).
+    pub(crate) fn add_wire_finished(&mut self, pts: Vec<Point>, bus: bool, trim: bool) -> Result<(), Vec<CheckResult>> {
         if pts.len() < 2 {
             return Err(vec![CheckResult::fail("ops_bad_wire", "wire", "a wire needs at least two points")]);
         }
@@ -5547,7 +5605,7 @@ impl<'a> Board<'a> {
             new_ends.extend(connections.iter().copied().filter(|&c| sch_scene::on_segment(a, b, c)));
         }
         scene.clean_up();
-        if !bus {
+        if trim {
             for i in 0..scene.sch.symbols.len() {
                 let pts = scene.connection_points(sch_scene::Item::Symbol(i));
                 if pts.len() > 2 {
@@ -5753,10 +5811,9 @@ impl<'a> Board<'a> {
         if size.0 <= Nm::ZERO || size.1 <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_sheet", name, "a sheet needs a positive size")]);
         }
+        // A name another sheet has is allowed, as `DIALOG_SHEET_PROPERTIES` allows it: ERC reports it (`ERCE_DUPLICATE_SHEET_NAME`, "Duplicate sheet names
+        // within a given sheet"; UI-LEFT S21). The studio refused it until then.
         let sch = self.schematic_mut_or_create();
-        if sch.sheets.iter().any(|s| s.name == name) {
-            return Err(vec![CheckResult::fail("ops_sheet_name_taken", name, format!("a sheet named '{name}' already exists on this sheet"))]);
-        }
         sch.sheets.push(SheetInstance { id: String::new(), name: name.to_string(), file: file.clone(), at, size, pins: vec![], page: String::new() });
         sch.assign_missing_ids();
         // a file nothing uses yet gets its own empty screen; one that is already there is shared
@@ -5765,8 +5822,14 @@ impl<'a> Board<'a> {
     }
 
     /// Alt+S: see `Cmd::SwapSchItems`.
+    ///
+    /// The kinds are `SCH_EDIT_TOOL::SwappableItems` (8303b2ad): shapes, rule areas, texts, text boxes, labels of every kind, sheet pins, symbols, sheets,
+    /// images, junctions and no-connects (the studio's graphics hold the shapes, rule areas, text boxes, directive labels and images). Each takes the other's
+    /// `GetPosition()` (a sheet its corner, carrying its pins; an arc its centre, a circle its centre, a rectangle, text box or curve its start, a polygon or
+    /// rule area its first corner). Two of one type trade more: two labels their spin (`SetSpinStyle`), two texts or two text boxes their justification, two
+    /// instances of one library symbol their orientation. A bus entry is not in KiCad's list and is refused (UI-LEFT S19).
     fn swap_sch_items(&mut self, a: &str, b: &str) -> Result<(), Vec<CheckResult>> {
-        #[derive(Clone, Copy)]
+        #[derive(Clone, Copy, PartialEq)]
         enum Slot {
             Symbol(usize),
             Power(usize),
@@ -5774,6 +5837,10 @@ impl<'a> Board<'a> {
             Text(usize),
             /// A pin of a placed sheet: (sheet, pin). `SCH_EDIT_TOOL::Swap`: pins swap only with pins of the same sheet.
             SheetPin(usize, usize),
+            Sheet(usize),
+            Graphic(usize),
+            Junction(usize),
+            NoConnect(usize),
         }
         if a == b {
             return Err(vec![CheckResult::fail("ops_bad_swap", a, "a swap needs two different items")]);
@@ -5796,11 +5863,23 @@ impl<'a> Board<'a> {
                 return Ok(Slot::Text(i));
             }
             for (si, s) in sch.sheets.iter().enumerate() {
+                if s.id == id {
+                    return Ok(Slot::Sheet(si));
+                }
                 if let Some(pi) = s.pins.iter().position(|p| p.id == id) {
                     return Ok(Slot::SheetPin(si, pi));
                 }
             }
-            Err(vec![CheckResult::fail("ops_unknown_item", id, "no symbol, power symbol, label, text or sheet pin with this id to swap")])
+            if let Some(i) = sch.extras.graphics.iter().position(|g| g.id == id) {
+                return Ok(Slot::Graphic(i));
+            }
+            if let Some(i) = sch.junctions.iter().position(|j| j.id == id) {
+                return Ok(Slot::Junction(i));
+            }
+            if let Some(i) = sch.no_connects.iter().position(|n| n.id == id) {
+                return Ok(Slot::NoConnect(i));
+            }
+            Err(vec![CheckResult::fail("ops_unknown_item", id, "no symbol, power symbol, label, text, shape, sheet, sheet pin, image, junction or no-connect with this id to swap")])
         };
         let (sa, sb) = (find(a)?, find(b)?);
         // "Sheet pins are special, we need to make sure if we have any sheet pins, that we only have sheet pins, and that they have the same parent"
@@ -5809,12 +5888,21 @@ impl<'a> Board<'a> {
             (Slot::SheetPin(..), other) | (other, Slot::SheetPin(..)) if !matches!(other, Slot::SheetPin(..)) => return Err(vec![CheckResult::fail("ops_bad_swap", a, "a sheet pin swaps only with another pin of its sheet")]),
             _ => {}
         }
+        // `GetPosition()` of each kind (`EDA_SHAPE::getPosition`: an arc's centre, a polygon's first corner, else its start; `SCH_SHEET::m_pos`)
+        let graphic_at = |g: &eda_model::sch_extras::SchGraphic| match &g.shape {
+            eda_model::sch_extras::SchGraphicKind::Arc { start, mid, end } => sch_scene::arc_center_of(*start, *mid, *end),
+            _ => sch_scene::graphic_position(g),
+        };
         let at_of = |s: Slot| match s {
             Slot::Symbol(i) => sch.symbols[i].at,
             Slot::Power(i) => sch.power_symbols[i].at,
             Slot::Label(i) => sch.labels[i].at,
             Slot::Text(i) => sch.texts[i].at,
             Slot::SheetPin(si, pi) => sch.sheets[si].pins[pi].at,
+            Slot::Sheet(i) => sch.sheets[i].at,
+            Slot::Graphic(i) => graphic_at(&sch.extras.graphics[i]),
+            Slot::Junction(i) => sch.junctions[i].at,
+            Slot::NoConnect(i) => sch.no_connects[i].at,
         };
         let (pa, pb) = (at_of(sa), at_of(sb));
         // (a pin's side is where it sits on the border, so trading places trades sides, as `SCH_EDIT_TOOL::Swap` does by hand)
@@ -5824,12 +5912,29 @@ impl<'a> Board<'a> {
             Slot::Label(i) => sch.labels[i].at = p,
             Slot::Text(i) => sch.texts[i].at = p,
             Slot::SheetPin(si, pi) => sch.sheets[si].pins[pi].at = p,
+            // `SCH_SHEET::SetPosition`: the sheet moves with its pins
+            Slot::Sheet(i) => {
+                let sheet = &mut sch.sheets[i];
+                let d = Point { x: p.x - sheet.at.x, y: p.y - sheet.at.y };
+                sheet.at = p;
+                for pin in sheet.pins.iter_mut() {
+                    pin.at = Point { x: pin.at.x + d.x, y: pin.at.y + d.y };
+                }
+            }
+            // `EDA_SHAPE::setPosition`: `move( aPos - getPosition() )`
+            Slot::Graphic(i) => {
+                let g = &mut sch.extras.graphics[i];
+                let from = graphic_at(g);
+                crate::sch_move::move_graphic(g, Point { x: p.x - from.x, y: p.y - from.y });
+            }
+            Slot::Junction(i) => sch.junctions[i].at = p,
+            Slot::NoConnect(i) => sch.no_connects[i].at = p,
         };
         set_at(sa, pb);
         set_at(sb, pa);
-        // "Only swap orientations when both symbols are the same library symbol" -- a resistor and an LED have different default orientations
-        if let (Slot::Symbol(i), Slot::Symbol(j)) = (sa, sb) {
-            if sch.symbols[i].lib_id == sch.symbols[j].lib_id {
+        match (sa, sb) {
+            // "Only swap orientations when both symbols are the same library symbol" -- a resistor and an LED have different default orientations
+            (Slot::Symbol(i), Slot::Symbol(j)) if sch.symbols[i].lib_id == sch.symbols[j].lib_id => {
                 let (rot, mir, mir_y) = (sch.symbols[i].rot, sch.symbols[i].mirrored, sch.symbols[i].mirror_y);
                 sch.symbols[i].rot = sch.symbols[j].rot;
                 sch.symbols[i].mirrored = sch.symbols[j].mirrored;
@@ -5838,6 +5943,54 @@ impl<'a> Board<'a> {
                 sch.symbols[j].mirrored = mir;
                 sch.symbols[j].mirror_y = mir_y;
             }
+            // two labels of one type trade their spin ("First, swap the label orientations"); a label with no spin of its own keeps reading it off its wire
+            (Slot::Label(i), Slot::Label(j)) if std::mem::discriminant(&sch.labels[i].kind) == std::mem::discriminant(&sch.labels[j].kind) => {
+                let (ia, ib) = (sch.labels[i].id.clone(), sch.labels[j].id.clone());
+                let (spa, spb) = (sch.extras.label_spins.remove(&ia), sch.extras.label_spins.remove(&ib));
+                if let Some(s) = spb {
+                    sch.extras.label_spins.insert(ia, s);
+                }
+                if let Some(s) = spa {
+                    sch.extras.label_spins.insert(ib, s);
+                }
+            }
+            // two texts trade their justification
+            (Slot::Text(i), Slot::Text(j)) => {
+                let (ia, ib) = (sch.texts[i].id.clone(), sch.texts[j].id.clone());
+                let (ja, jb) = (sch.extras.text_justify.remove(&ia), sch.extras.text_justify.remove(&ib));
+                if let Some(v) = jb {
+                    sch.extras.text_justify.insert(ia, v);
+                }
+                if let Some(v) = ja {
+                    sch.extras.text_justify.insert(ib, v);
+                }
+            }
+            (Slot::Graphic(i), Slot::Graphic(j)) => {
+                use eda_model::sch_extras::SchGraphicKind as K;
+                let (gi, gj) = (sch.extras.graphics[i].shape.clone(), sch.extras.graphics[j].shape.clone());
+                match (gi, gj) {
+                    // two text boxes trade their justification
+                    (K::TextBox { h_align: ha, v_align: va, .. }, K::TextBox { h_align: hb, v_align: vb, .. }) => {
+                        if let K::TextBox { h_align, v_align, .. } = &mut sch.extras.graphics[i].shape {
+                            (*h_align, *v_align) = (hb, vb);
+                        }
+                        if let K::TextBox { h_align, v_align, .. } = &mut sch.extras.graphics[j].shape {
+                            (*h_align, *v_align) = (ha, va);
+                        }
+                    }
+                    // two directive labels trade their spin (the pole's direction)
+                    (K::Directive { orientation: oa, .. }, K::Directive { orientation: ob, .. }) => {
+                        if let K::Directive { orientation, .. } = &mut sch.extras.graphics[i].shape {
+                            *orientation = ob;
+                        }
+                        if let K::Directive { orientation, .. } = &mut sch.extras.graphics[j].shape {
+                            *orientation = oa;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -6024,6 +6177,15 @@ impl<'a> Board<'a> {
     /// never itself introduce a `unit_value_mismatch`/`different_unit_
     /// footprint` ERC finding the way a hand-edited `.kicad_sch` can.
     fn edit_symbol_fields(&mut self, id: &str, value: Option<&str>, footprint: Option<&str>, datasheet: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        // A footprint no symbol is for: its own Value (Footprint Properties' Value row, `FOOTPRINT::SetValue`; UI-LEFT P14).
+        let board_only = self.design.drawings.as_ref().is_some_and(|d| d.board_parts.iter().any(|b| b.reference == id)) && self.board_part_without_symbol(id);
+        if let (Some(v), true) = (value, board_only) {
+            let Some(bp) = self.drawings_mut().board_parts.iter_mut().find(|b| b.reference == id) else {
+                return Err(vec![CheckResult::fail("ops_unknown_symbol", id, "no footprint of the board has its own value to edit")]);
+            };
+            bp.value = Some(v.to_string());
+            return Ok(());
+        }
         self.find_symbol(id)?;
         let sch = self.schematic_mut()?;
         for s in sch.symbols.iter_mut().filter(|s| s.id == id) {
@@ -6284,6 +6446,22 @@ impl<'a> Board<'a> {
         // be two parts under one key
         if new_id != id && self.board_part_without_symbol(new_id) {
             return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a footprint with this reference is already on the board")]);
+        }
+        // A footprint no symbol is for (Footprint Properties' Reference of a board-only footprint, `FOOTPRINT::SetReference`): the board's part alone is renamed
+        // (UI-LEFT P14).
+        if self.design.drawings.as_ref().is_some_and(|d| d.board_parts.iter().any(|b| b.reference == id)) && self.board_part_without_symbol(id) {
+            if new_id.trim().is_empty() {
+                return Err(vec![CheckResult::fail("ops_bad_symbol", id, "a footprint needs a reference designator")]);
+            }
+            let taken = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).any(|s| s.symbols.iter().any(|x| x.id == new_id));
+            if new_id != id && taken {
+                return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a symbol with this reference is already on the sheet")]);
+            }
+            if new_id == id {
+                return Err(vec![CheckResult::fail("ops_nothing_to_change", id, "the footprint already has this reference")]);
+            }
+            self.rename_part(&BTreeMap::from([(id.to_string(), new_id.to_string())]));
+            return Ok(());
         }
         if self.rename_symbol_in_schematic(id, new_id)? {
             self.rename_part(&BTreeMap::from([(id.to_string(), new_id.to_string())]));

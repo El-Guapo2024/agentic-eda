@@ -53,12 +53,15 @@ pub use clipboard::{export_pcb_clipboard, export_pcb_clipboard_with, parse_pcb_c
 pub use pcb::{custom_erc_pin_map, effective_rule_severities, kicad_footprint_orientation, unconnected_pad_nets, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pcb_mapped_with, export_kicad_pcb_with, export_kicad_pro, export_kicad_pro_for};
 
 mod sexpr;
+/// A layer of a board file taken out with what is on it: a source layer left unmatched in the import's layer dialog (`DIALOG_MAP_LAYERS`).
+mod drop_layer;
+pub use drop_layer::drop_board_layer;
 mod page;
 pub use page::drawing_sheet_in;
 mod import;
 mod fp_transform;
 mod import_items;
-pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_dimension_defaults, project_json_for_board, merge_project_net_classes, merge_project_net_classes_for_schematic, parse_project_net_classes_for_schematic, merge_project_predefined_sizes, merge_project_rule_severities, merge_project_setup_pages, merge_project_teardrops, mm_to_nm, parse_project_net_classes, sch_mm_to_nm, parse_rule_severities, ImportNotes};
+pub use import::{board_layer_setup, import_kicad_pcb, scaled_footprints_note, merge_project_design_rules, merge_project_dimension_defaults, project_json_for_board, merge_project_net_classes, merge_project_net_classes_for_schematic, parse_project_net_classes_for_schematic, merge_project_predefined_sizes, merge_project_rule_severities, merge_project_setup_pages, merge_project_teardrops, mm_to_nm, parse_project_net_classes, sch_mm_to_nm, parse_rule_severities, ImportNotes};
 
 mod custom_rules;
 pub use custom_rules::{merge_custom_rules, parse_custom_rules, rule_layer_matches};
@@ -95,7 +98,7 @@ pub mod library_table;
 pub mod design_block;
 
 mod bus;
-pub use bus::expand_bus_members;
+pub use bus::{bus_member_tree, expand_bus_members};
 
 mod sch_clipboard;
 pub use sch_clipboard::{fragment_as_sheet_file, parse_clipboard, write_clipboard, CopyInput, CopyOutput};
@@ -234,8 +237,25 @@ pub fn export_kicad_sch(
 ) -> Result<String, Vec<CheckResult>> {
     let mut files = vec![(String::new(), export_screen(design, model, meta, &ScreenCtx::root())?)];
     // Symbol cross-references the way KiCad stores them (`sch_crossref`).
-    sch_crossref::refs_to_kiids(&mut files);
+    sch_crossref::refs_to_kiids(&mut files, &unit_suffix_of(design, model));
     Ok(files.pop().map(|(_, text)| text).unwrap_or_default())
+}
+
+/// `SCH_SYMBOL::GetRef( &aPath, true )`'s unit part for [`sch_crossref::refs_to_kiids`]: `SubReference( unit )` in the project's unit notation (r7 H5:
+/// `U1.1` where the project says `.1`), a unit's display name where the library symbol has one, nothing for a symbol of one unit. A lib id the model
+/// does not know is taken as a symbol of several units.
+fn unit_suffix_of<'a>(design: &Design, model: &'a ConstraintModel) -> impl Fn(&str, u32) -> Option<String> + 'a {
+    let subpart = eda_model::annotate::SubpartIds::of_design(design);
+    let cache: std::cell::RefCell<BTreeMap<String, Option<eda_model::symbol::LibSymbol>>> = Default::default();
+    move |lib_id: &str, unit: u32| {
+        let mut cache = cache.borrow_mut();
+        let lib = cache.entry(lib_id.to_string()).or_insert_with(|| if eda_model::is_synthetic_lib_id(lib_id) { None } else { model.symbol_of(lib_id) });
+        match lib {
+            Some(l) if l.unit_count <= 1 => None,
+            Some(l) => Some(l.sub_reference_in(unit, &subpart, true)),
+            None => Some(subpart.sub_reference(unit, true)),
+        }
+    }
 }
 
 fn export_screen(design: &Design, model: &ConstraintModel, meta: &ExportMeta, ctx: &ScreenCtx) -> Result<String, Vec<CheckResult>> {
@@ -444,7 +464,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let resolved = if eda_model::is_synthetic_lib_id(&lib_id) { None } else { model.symbol_of(&lib_id) };
         let x = sch_mm(sym.at.x);
         let y = sch_mm(sym.at.y);
-        let uuid = duid_for(&format!("sym:{}", sym.id), &sym.id);
+        // each placed unit is a symbol of its own with a uuid of its own (`SCH_SYMBOL::m_Uuid`): `ResolveItem` finds unit B of a cross-reference by it
+        let uuid = duid_for(&format!("sym:{}", eda_model::ir::field_key(&sym.id, sym.unit)), &sym.id);
         // The body style the symbol is placed in: `(convert N)` (the token of a file before KiCad 10, which reads it as `body_style`, `SCH_SYMBOL::SetBodyStyle`),
         // written only for a symbol in the alternate ("De Morgan") style of a library symbol that has one, as the default is the normal style.
         let real_symbol = model.real_symbol_of(&lib_id, part);
@@ -474,7 +495,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let (value, footprint, datasheet) = (value.as_str(), footprint.as_str(), datasheet.as_str());
         // where each field is drawn: the placements the section keeps for this symbol, else Autoplace Fields' (`eda_engine::fields`)
         let lib_for_geometry = real_symbol.map(|r| if body_style > 1 { r.in_style(body_style).into_owned() } else { r });
-        let geom = eda_engine::symgeom::SymbolGeom::of(sym, part, lib_for_geometry.as_ref());
+        let geom = eda_engine::symgeom::SymbolGeom::of_in(sch, sym, part, lib_for_geometry.as_ref());
         let mut shown = eda_engine::fields::symbol_fields(sch, sym, Some(part), lib_for_geometry.as_ref(), &geom);
         // the texts this symbol is written with (the instance's own, else the part's), which the placement is for
         for f in shown.iter_mut() {
@@ -523,6 +544,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         for (k, path) in ctx.instance_paths.iter().enumerate() {
             let model_path = ctx.instance_sheet_paths.get(k).map(Vec::as_slice).unwrap_or(&[]);
             let reference = eda_model::sheet_list::reference_under(sch, sym, model_path);
+            // a placeholder (`R?1`) is the unannotated `R?` KiCad reads as such (UI-LEFT S14)
+            let reference = eda_model::annotate::shown_reference(&reference);
             writeln!(out, "\t\t\t\t(path \"{path}\"").unwrap();
             writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&reference)).unwrap();
             writeln!(out, "\t\t\t\t\t(unit {})", eda_model::sheet_list::unit_under(sch, sym, model_path)).unwrap();
@@ -810,7 +833,10 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
 
     // ---- sheet instances (required by KiCad 9 for a valid project-less sheet) ----
     writeln!(out, "\t(sheet_instances").unwrap();
-    writeln!(out, "\t\t(path \"/\" (page \"1\"))").unwrap();
+    // the root's page: the one Edit Sheet Page Number gave it, else 1 (`SchExtras::root_page`, UI-LEFT S21)
+    let is_root = ctx.instance_sheet_paths.iter().all(Vec::is_empty);
+    let root_page = if !is_root || sch.extras.root_page.is_empty() { "1" } else { sch.extras.root_page.as_str() };
+    writeln!(out, "\t\t(path \"/\" (page {}))", sexpr_str(root_page)).unwrap();
     writeln!(out, "\t)").unwrap();
     // The files embedded in the schematic belong to it, not to a sheet: they are in the root sheet's file only, which is the one whose extras hold them
     // (`SCH_IO_KICAD_SEXPR::Format`: the schematic's first top-level sheet).
@@ -991,7 +1017,7 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
         }
     }
     // Symbol cross-references the way KiCad stores them, across the files (`sch_crossref`).
-    sch_crossref::refs_to_kiids(&mut out);
+    sch_crossref::refs_to_kiids(&mut out, &unit_suffix_of(design, model));
     Ok(out)
 }
 
@@ -1056,7 +1082,7 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
             let (_, _, datasheet) = symbol_texts(sym, part, resolved.as_ref());
             // the fields as the writer writes them: every one the sheet shows but the Reference, Value and Footprint, then the simulation fields
             let real_symbol = model.real_symbol_of(&lib_id, part);
-            let geom = eda_engine::symgeom::SymbolGeom::of(sym, part, real_symbol.as_ref());
+            let geom = eda_engine::symgeom::SymbolGeom::of_in(sch, sym, part, real_symbol.as_ref());
             let shown = eda_engine::fields::symbol_fields(sch, sym, Some(part), real_symbol.as_ref(), &geom);
             let mut fields: Vec<(String, String)> = Vec::new();
             for f in &shown {
@@ -1099,7 +1125,7 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
                     .collect(),
                 None => BTreeMap::new(),
             };
-            let uuid = duid_plain(&format!("{seed}sym:{}", sym.id));
+            let uuid = duid_plain(&format!("{seed}sym:{}", eda_model::ir::field_key(&sym.id, sym.unit)));
             out.insert(reference.clone(), eda_model::SymbolLink { path: format!("{uuids}/{uuid}"), sheetname: names.clone(), sheetfile: e.file.clone(), fields, pins, units });
         }
     }

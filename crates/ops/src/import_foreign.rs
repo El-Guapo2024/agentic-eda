@@ -56,16 +56,10 @@ impl<'a> Board<'a> {
     }
 
     /// `Cmd::ReplaceSchematic`: see the module doc. `content` is the converted file read by `eda_kicad::load_sheet_file`.
-    pub(crate) fn replace_schematic(&mut self, content: &SheetFile, name: &str) -> Result<(), Vec<CheckResult>> {
-        let nothing = content.root.symbols.is_empty()
-            && content.root.power_symbols.is_empty()
-            && content.root.wires.is_empty()
-            && content.root.labels.is_empty()
-            && content.root.sheets.is_empty()
-            && content.screens.values().all(|s| s.symbols.is_empty() && s.wires.is_empty() && s.labels.is_empty() && s.sheets.is_empty());
-        if nothing {
-            return Err(fail("ops_empty_schematic", name, format!("'{name}' holds no schematic: no symbol, no wire, no label, no sheet")));
-        }
+    ///
+    /// Whatever the file holds is taken, a drawing of graphics only (lines, shapes, text) or nothing at all: `SCH_EDIT_FRAME::importFile` puts the loaded root in place
+    /// with no test of what it holds.
+    pub(crate) fn replace_schematic(&mut self, content: &SheetFile, _name: &str) -> Result<(), Vec<CheckResult>> {
         // The symbols the old drawing published go with it; a definition the Symbol Editor holds unpublished stays.
         if let Some(lib) = self.design.symbol_library.as_mut() {
             lib.symbols.retain(|s| !s.published);
@@ -272,10 +266,13 @@ mod tests {
         }
         assert_eq!(serde_json::to_string(&d.placement).unwrap(), placement_before, "the board is the other editor's");
 
-        // A file with nothing in it is refused and changes nothing.
-        let before = serde_json::to_string(b.design()).unwrap();
-        let e = b.apply(&Cmd::ReplaceSchematic { content: SheetFile::default(), name: "empty.sch".into() }).unwrap_err();
-        assert_eq!(e[0].check, "ops_empty_schematic");
-        assert_eq!(serde_json::to_string(b.design()).unwrap(), before);
+        // A file of graphics only -- a line and a text, no symbol, wire, label or sheet -- is a schematic too (`importFile` tests nothing of what it loaded).
+        let mut graphics = SheetFile::default();
+        graphics.root.lines.push(eda_model::ir::SchLine { id: String::new(), pts: vec![Point { x: mm(10.0), y: mm(10.0) }, Point { x: mm(50.0), y: mm(10.0) }], width_nm: Nm::ZERO });
+        graphics.root.texts.push(eda_model::ir::SchematicText { id: String::new(), content: "outline only".into(), at: Point { x: mm(10.0), y: mm(20.0) }, angle: 0, size_nm: mm(1.27) });
+        b.apply(&Cmd::ReplaceSchematic { content: graphics, name: "drawing.sch".into() }).unwrap();
+        let root = b.design().schematic.as_ref().unwrap();
+        assert!(root.symbols.is_empty() && root.lines.len() == 1 && root.texts.len() == 1 && root.texts[0].content == "outline only", "{root:?}");
+        assert!(b.design().sheet_contents.is_none(), "the old drawing's sheets went with it");
     }
 }

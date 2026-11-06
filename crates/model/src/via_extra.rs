@@ -126,7 +126,7 @@ pub struct PostMachining {
 }
 
 /// A file token split into its words and parentheses, a quoted word unquoted.
-fn words_of(token: &str) -> Vec<String> {
+pub(crate) fn words_of(token: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut chars = token.chars().peekable();
     while let Some(&c) = chars.peek() {
@@ -275,6 +275,51 @@ pub struct ViaProps {
     pub front_post_machining: Option<PostMachiningProps>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub back_post_machining: Option<PostMachiningProps>,
+    /// The via's padstack when it is not a normal one (Track & Via Properties' "Padstack mode:", `PADSTACK::SetMode`): a diameter of its own on the inner and the
+    /// back layers, or on each copper layer. `None` is one diameter everywhere, the via's own (`Via::diameter`, the front's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padstack: Option<ViaPadstack>,
+}
+
+/// A via's `PADSTACK` past `MODE::NORMAL`, as `PCB_IO_KICAD_SEXPR_PARSER::parseViastack` reads `(padstack (mode front_inner_back) (layer "Inner" (size ..))
+/// (layer "B.Cu" (size ..)))` and `format( const PCB_TRACK* )` writes it: the front's diameter is the via's own, every other layer's here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViaPadstack {
+    /// `front_inner_back` or `custom` (a normal stack has no token).
+    pub mode: crate::padstack::PadStackMode,
+    /// The diameter of each layer the file names: `Inner` and `B.Cu` for front/inner/back, copper layers past `F.Cu` for custom. A layer not named has the front's
+    /// diameter (`PADSTACK::CopperLayer` falls back to `ALL_LAYERS`); the writer names them in its own order.
+    #[serde(default, deserialize_with = "crate::units::de")]
+    pub sizes: std::collections::BTreeMap<String, crate::units::Nm>,
+}
+
+impl ViaPadstack {
+    /// `PADSTACK::Size( aLayer ).x` of a via whose front diameter is `front`: the layer's own, else the front's.
+    pub fn size_on(&self, layer: &str, front: crate::units::Nm) -> crate::units::Nm {
+        if layer == "F.Cu" {
+            return front;
+        }
+        let key = match self.mode {
+            crate::padstack::PadStackMode::FrontInnerBack if layer != "B.Cu" => "Inner",
+            _ => layer,
+        };
+        self.sizes.get(key).copied().unwrap_or(front)
+    }
+
+    /// `format( const PCB_TRACK* )`'s `(padstack ..)` of a via on a board whose copper layers are `copper` (front to back): front/inner/back writes `Inner` and
+    /// `B.Cu`, custom every copper layer but `F.Cu` (`LAYER_RANGE( F_Cu, B_Cu, GetCopperLayerCount() )`), each its size or the front's.
+    pub fn token(&self, front: crate::units::Nm, copper: &[String]) -> Option<String> {
+        let size = |l: &str| format!("(layer {} (size {}))", quoted(l), fmt_mm(self.size_on(l, front)));
+        match self.mode {
+            crate::padstack::PadStackMode::Normal => None,
+            crate::padstack::PadStackMode::FrontInnerBack => Some(format!("(padstack (mode front_inner_back) {} {})", size("Inner"), size("B.Cu"))),
+            crate::padstack::PadStackMode::Custom => {
+                let layers: Vec<String> = copper.iter().filter(|l| *l != "F.Cu").map(|l| size(l)).collect();
+                Some(format!("(padstack (mode custom) {})", layers.join(" ")))
+            }
+        }
+    }
 }
 
 /// The tags of the tokens [`ViaProps`] reads and writes.
@@ -366,7 +411,47 @@ impl ViaExtra {
             tertiary_drill: drill(self.tertiary_drill()),
             front_post_machining: self.post_machining_props(true),
             back_post_machining: self.post_machining_props(false),
+            padstack: self.padstack(),
         }
+    }
+
+    /// `parseViastack`: the via's `(padstack (mode ..) (layer "Inner"|"B.Cu"|"In1.Cu".. (size d)) ..)`, `None` for none (a normal stack).
+    pub fn padstack(&self) -> Option<ViaPadstack> {
+        let w = self.token_words("padstack")?;
+        let mode = match field(&w, "mode").and_then(|m| m.first()).map(String::as_str) {
+            Some("front_inner_back") => crate::padstack::PadStackMode::FrontInnerBack,
+            Some("custom") => crate::padstack::PadStackMode::Custom,
+            _ => return None,
+        };
+        let mut sizes = std::collections::BTreeMap::new();
+        let mut i = 0;
+        while i + 2 < w.len() {
+            if w[i] == "(" && w[i + 1] == "layer" {
+                let layer = w[i + 2].clone();
+                let rest = &w[i + 3..];
+                // the layer's own list ends at its `)` at depth 0
+                let mut depth = 0;
+                let end = rest.iter().position(|t| {
+                    if t == "(" {
+                        depth += 1;
+                    } else if t == ")" {
+                        if depth == 0 {
+                            return true;
+                        }
+                        depth -= 1;
+                    }
+                    false
+                });
+                let inner = &rest[..end.unwrap_or(rest.len())];
+                if let Some(size) = field(inner, "size").and_then(|f| board_units(f.first())) {
+                    sizes.insert(layer, size);
+                }
+                i += 3 + end.unwrap_or(rest.len());
+            } else {
+                i += 1;
+            }
+        }
+        Some(ViaPadstack { mode, sizes })
     }
 
     /// The via's tokens with `props` in place of what they said of those settings, in the words `format( const PCB_TRACK* )` writes: the drills and the post-machining
@@ -420,6 +505,31 @@ impl ViaExtra {
         let at = self.tokens.iter().position(|t| matches!(tag_of(t), Some("padstack") | Some("teardrops"))).unwrap_or(self.tokens.len());
         self.tokens.splice(at..at, tail);
         self.tokens.splice(0..0, head);
+    }
+
+    /// The via's padstack set to `stack` (its front diameter `front`, the board's copper `copper`): the `(padstack ..)` token in its place, before the teardrops,
+    /// as `format( const PCB_TRACK* )` writes it; none for a normal stack.
+    pub fn set_padstack(&mut self, stack: Option<&ViaPadstack>, front: crate::units::Nm, copper: &[String]) {
+        let at = self.tokens.iter().position(|t| tag_of(t) == Some("padstack"));
+        self.tokens.retain(|t| tag_of(t) != Some("padstack"));
+        if let Some(token) = stack.and_then(|s| s.token(front, copper)) {
+            let at = at.or_else(|| self.tokens.iter().position(|t| tag_of(t) == Some("teardrops"))).unwrap_or(self.tokens.len()).min(self.tokens.len());
+            self.tokens.insert(at, token);
+        }
+    }
+}
+
+impl ViaExtra {
+    /// The via's own teardrop parameters (`PCB_VIA::GetTeardropParams`, its `(teardrops ..)`), `None` when the file gave it none: Board Setup's block then serves it
+    /// ([`crate::teardrop_params`]).
+    pub fn teardrops(&self) -> Option<crate::teardrop_params::TeardropParams> {
+        crate::teardrop_params::TeardropParams::from_tokens(&self.tokens)
+    }
+
+    /// `via->GetTeardropParams() = params`: the `(teardrops ..)` token in its place (`format( const PCB_TRACK* )` writes it last, after the padstack), or taken out
+    /// for `None` (the via is then Board Setup's; see [`crate::teardrop_params::set_in_tokens`]).
+    pub fn set_teardrops(&mut self, params: Option<&crate::teardrop_params::TeardropParams>) {
+        crate::teardrop_params::set_in_tokens(&mut self.tokens, params);
     }
 }
 
@@ -514,6 +624,31 @@ mod tests {
         let mut z = extra(&["(tenting (front yes) (back yes))"]);
         z.set_props(&ViaProps::default());
         assert!(z.is_default());
+    }
+
+    #[test]
+    fn a_vias_padstack_is_read_as_parse_viastack_reads_it_and_written_as_format_writes_it() {
+        use crate::padstack::PadStackMode;
+        let mm = |v: f64| crate::units::Nm::new((v * 1e6) as i64);
+        let e = extra(&["(tenting (front yes) (back no))", "(padstack (mode front_inner_back) (layer \"Inner\" (size 0.35)) (layer \"B.Cu\" (size 0.4)))", "(teardrops (enabled yes))"]);
+        let p = e.padstack().unwrap();
+        assert_eq!(p, ViaPadstack { mode: PadStackMode::FrontInnerBack, sizes: [("Inner".to_string(), mm(0.35)), ("B.Cu".to_string(), mm(0.4))].into() });
+        assert_eq!((p.size_on("F.Cu", mm(0.3)), p.size_on("In1.Cu", mm(0.3)), p.size_on("B.Cu", mm(0.3))), (mm(0.3), mm(0.35), mm(0.4)));
+        let copper: Vec<String> = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"].iter().map(|s| s.to_string()).collect();
+        // custom: every copper layer but the front, each its own size or the front's
+        let mut w = e.clone();
+        let custom = ViaPadstack { mode: PadStackMode::Custom, sizes: [("In2.Cu".to_string(), mm(0.5))].into() };
+        w.set_padstack(Some(&custom), mm(0.3), &copper);
+        assert_eq!(w.tokens[1], "(padstack (mode custom) (layer \"In1.Cu\" (size 0.3)) (layer \"In2.Cu\" (size 0.5)) (layer \"B.Cu\" (size 0.3)))");
+        assert_eq!(w.padstack().map(|p| p.size_on("In2.Cu", mm(0.3))), Some(mm(0.5)));
+        // a normal stack has no token; the props keep it untouched
+        w.set_props(&w.props());
+        assert!(w.tokens.iter().any(|t| t.starts_with("(padstack")));
+        w.set_padstack(None, mm(0.3), &copper);
+        assert_eq!(w.tokens, ["(tenting (front yes) (back no))", "(teardrops (enabled yes))"]);
+        // a new one goes before the teardrops
+        w.set_padstack(Some(&p), mm(0.3), &copper);
+        assert_eq!(w.tokens[1], "(padstack (mode front_inner_back) (layer \"Inner\" (size 0.35)) (layer \"B.Cu\" (size 0.4)))");
     }
 
     #[test]

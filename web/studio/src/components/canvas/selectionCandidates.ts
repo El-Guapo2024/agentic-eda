@@ -16,7 +16,7 @@ import { stitchFilteredAsVia } from "../../kicad-port/viaStitch";
 import type { BoardState, Dimension, FieldInfo, Pad, Part } from "../../api/types";
 import { padIds, padParent } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
-import { artBounds, artHitDistance, unionBox } from "../../kicad-port/fpArt";
+import { artBounds, artHitDistance, artTextAsField, artTextShown, unionBox } from "../../kicad-port/fpArt";
 import { fpItemsHitDistance } from "../../kicad-port/fpBoardItems";
 import { outlineDistance } from "../../kicad-port/padOutline";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
@@ -33,7 +33,7 @@ import { cellArea, cellHitDistance, isSelectableCell } from "../../kicad-port/ta
 import { circleRing, coverageRatio, ringArea, type Ring } from "../../kicad-port/coverage";
 import { boxRing, footprintHull, padRing, shapeCoverageArea, shapeRings, trackRings } from "../../kicad-port/footprintCoverage";
 
-export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field" | "table" | "tablecell" | ExtraKind;
+export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field" | "fptext" | "table" | "tablecell" | ExtraKind;
 
 export interface SelectionCandidate extends GuessCandidate {
   kind: SelectableKind;
@@ -124,6 +124,7 @@ function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
       return filter.pads;
     // `PCB_SELECTION_TOOL::itemPassesFilter`: a footprint's field is text (`PCB_FIELD_T` shares `m_filter.text`), and so are a table and its cells.
     case "field":
+    case "fptext":
     case "table":
     case "tablecell":
       return filter.text;
@@ -298,6 +299,18 @@ export function collectSelectionCandidates(
       const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
       const d = inside ? 0 : Math.hypot(xNm - (x0 + x1) / 2, yNm - (y0 + y1) / 2) - Math.min(x1 - x0, y1 - y0) / 2;
       consider("field", f.id, d, Math.max((x1 - x0) * (y1 - y0), 1), f.layer, p.ref);
+    }
+  }
+  // A footprint's own texts (UI-LEFT P15): `PCB_SELECTION_TOOL::Selectable` lets a footprint's `PCB_TEXT` be picked on the board ("Most footprint children can only be
+  // selected in the footprint editor": its other graphics are picked as the footprint), shown as `artTextShown` says, locked with its footprint.
+  for (const p of board.parts as Part[]) {
+    if (!p.placed || !p.texts?.length) continue;
+    for (const t of p.texts) {
+      if (!t.text || !artTextShown(layerVisible, p, t)) continue;
+      const { x0, y0, x1, y1 } = textBoundingBoxRotated(artTextAsField(t));
+      const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
+      const d = inside ? 0 : Math.hypot(xNm - (x0 + x1) / 2, yNm - (y0 + y1) / 2) - Math.min(x1 - x0, y1 - y0) / 2;
+      consider("fptext", t.id, d, Math.max((x1 - x0) * (y1 - y0), 1), t.layer, p.ref);
     }
   }
   for (const t of board.routing?.tracks ?? []) {
@@ -496,8 +509,19 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
       if (boxMatches([x0, y0, x1, y1], selBox, crossing)) fieldHits.push({ kind: "field", id: f.id });
     }
   }
+  // and a footprint's own text likewise (`REF~t<k>`)
+  for (const p of board.parts as Part[]) {
+    if (!p.placed || !p.texts?.length) continue;
+    for (const t of p.texts) {
+      if (!t.text || !artTextShown(layerVisible, p, t)) continue;
+      if (!filterAllows(filter, "fptext") || (!filter.lockedItems && locked.has(p.ref))) continue;
+      if (!layerSelectable(t.layer, layerVisible, activeLayer, highContrast)) continue;
+      const { x0, y0, x1, y1 } = textBoundingBoxRotated(artTextAsField(t));
+      if (boxMatches([x0, y0, x1, y1], selBox, crossing)) fieldHits.push({ kind: "fptext", id: t.id });
+    }
+  }
   const takenParts = new Set(out.filter((h) => h.kind === "part").map((h) => h.id));
-  out.push(...fieldHits.filter((h) => !takenParts.has(h.id.slice(0, h.id.indexOf(":")))));
+  out.push(...fieldHits.filter((h) => !takenParts.has(h.kind === "fptext" ? h.id.slice(0, h.id.lastIndexOf("~t")) : h.id.slice(0, h.id.indexOf(":")))));
 
   // `PCB_SELECTION_TOOL::SelectMultiple`: "If we selected nothing but pads, allow them to be selected" -- a box that takes a footprint (or anything else)
   // never takes the pads inside it as well.

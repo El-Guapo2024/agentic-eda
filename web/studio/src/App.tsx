@@ -43,6 +43,7 @@ import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialo
 import { BottomDock } from "./components/panels/BottomDock";
 import { ZoneDialog } from "./components/ZoneDialog";
 import { TextDialog } from "./components/TextDialog";
+import { FootprintTextDialog } from "./components/FootprintTextDialog";
 import { PcbItemDialogs } from "./components/PcbItemDialogs";
 import { Kicad10ItemDialogs } from "./components/Kicad10ItemDialogs";
 import { MicrowaveDialogs } from "./components/MicrowaveDialogs";
@@ -234,7 +235,7 @@ function StudioFrame() {
         <div className="canvas-col">
           {state.tab === "pcb" && <Canvas />}
           {/* the questions a board tool asks (Drag Anyway to a locked item) go through the same yes/no bus the library editors use: it needs a host on this tab too */}
-          {state.tab === "pcb" && <LibraryDialogHost />}
+          {(state.tab === "pcb" || state.tab === "schematic") && <LibraryDialogHost />}
           {state.tab === "schematic" && <SchematicView />}
           {isFootprint && <FootprintEditorView />}
           {isSymbolEditor && <SymbolEditorView />}
@@ -304,6 +305,7 @@ function StudioFrame() {
       <ZoneDialog />
       <TextDialog />
       <PcbItemDialogs />
+      <FootprintTextDialog />
       <Kicad10ItemDialogs />
       <MicrowaveDialogs />
       <MultichannelDialogs />

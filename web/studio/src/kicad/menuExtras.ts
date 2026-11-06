@@ -21,10 +21,19 @@ export const SCHEMATIC_EDITOR_MENU_EXTRAS: MenuExtras = {
  * Copy Design Variant... after the three the generated menus (8303b2ad) list; their labels are 25ec2335's `SCH_ACTIONS::renameVariant` / `copyVariant` friendly names.
  */
 export const SCHEMATIC_EDITOR_SUBMENU_EXTRAS: MenuExtras = {
+  "File/Import": [{ type: "item", action: "studio.Import.nonKicadProject", label: "Import Non-KiCad Project..." }],
   "Tools/Variants": [
     { type: "item", action: "eeschema.EditorControl.renameVariant", label: "Rename Design Variant..." },
     { type: "item", action: "eeschema.EditorControl.copyVariant", label: "Copy Design Variant..." },
   ],
+};
+
+/**
+ * The project manager's File > Import Non-KiCad Project... (`kicad/menubar.cpp`: "Import Non-KiCad Project..."): the studio has no project manager window, so the board's and the
+ * schematic's File > Import end with it (a board and its schematic chosen together, `studio.Import.nonKicadProject`).
+ */
+export const PCB_EDITOR_SUBMENU_EXTRAS: MenuExtras = {
+  "File/Import": [{ type: "item", action: "studio.Import.nonKicadProject", label: "Import Non-KiCad Project..." }],
 };
 
 /** `items` with `extras` appended to the submenus their keys name, `path` being the menu labels down to `items`. */

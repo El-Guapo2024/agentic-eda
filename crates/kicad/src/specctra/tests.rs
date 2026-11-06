@@ -325,18 +325,25 @@ fn a_qarc_is_an_arc_through_its_middle() {
     assert!(((mid.x.as_f64()) - (r - r / 2f64.sqrt())).abs() <= 1.0 && ((mid.y.as_f64()) - r / 2f64.sqrt()).abs() <= 1.0, "{mid:?}");
 }
 
-/// The `IO_ERROR`s of `FromSESSION`, `makeTRACK` and `makeVIA`, in KiCad's words.
+/// The `IO_ERROR`s of `FromSESSION`, in KiCad's words; the ones `makeTRACK` and `makeVIA` throw for one item, and a place of a reference the board has not got, skip that
+/// item and count it (KiCad 25ec2335's `skipOnError` and `++m_skippedCount; continue;`), with one warning at the end.
 #[test]
 fn a_bad_session_is_refused_in_kicads_words() {
     let (design, model) = sample_board();
     let err = |ses: &str| from_session(ses, "s.ses", &design, &model).unwrap_err();
     assert_eq!(err("(session s (base_design x))"), "Session file is missing the \"routes\" section");
     assert_eq!(err("(session s (routes (resolution um 10)))"), "Session file is missing the \"library_out\" section");
-    assert_eq!(err(&session_with("(net VIN (wire (path In9.Cu 10 0 0 1 1)))")), "Session file uses invalid layer id 'In9.Cu'.");
-    assert_eq!(err(&session_with("(net VIN (via Nope 0 0))")), "A wire_via refers to missing padstack 'Nope'.");
-    // `GetTokenString( type )` puts the token in quotes.
-    assert_eq!(err(&session_with("(net VIN (via Sq 0 0))")), "Unsupported via shape: 'rect'.");
-    assert_eq!(err("(session s (placement (component X (place Q9 0 0 front 0))) (routes (library_out)))"), "Reference 'Q9' not found.");
+    let skipped = |ses: &str| from_session(ses, "s.ses", &design, &model).unwrap().skipped;
+    // "Session file uses invalid layer id 'In9.Cu'.", "A wire_via refers to missing padstack 'Nope'." and "Unsupported via shape: 'rect'." (`GetTokenString( type )`
+    // puts the token in quotes) are thrown inside `skipOnError`
+    assert_eq!(skipped(&session_with("(net VIN (wire (path In9.Cu 10 0 0 1 1)))")), 1);
+    assert_eq!(skipped(&session_with("(net VIN (via Nope 0 0))")), 1);
+    assert_eq!(skipped(&session_with("(net VIN (via Sq 0 0))")), 1);
+    // 8303b2ad threw "Reference 'Q9' not found."
+    assert_eq!(skipped("(session s (placement (component X (place Q9 0 0 front 0))) (routes (library_out)))"), 1);
+    assert_eq!(skipped(&session_with("(net VIN (wire (path In9.Cu 10 0 0 1 1)) (via Nope 0 0))")), 2);
+    assert_eq!(super::session::skipped_warning(2).as_deref(), Some("2 session item(s) were skipped due to unresolved reference, layer, or padstack."));
+    assert_eq!(super::session::skipped_warning(0), None);
     // What the parser refuses is said as `PARSE_ERROR` says it.
     // `Expecting( T_session )` puts `GetTokenString`'s quoted token in quotes again, as kicad-cli's own board reader says it ("Expecting ''('' in ..").
     assert!(err("(pcb x)").starts_with("Expecting ''session'' in 's.ses', line 1"), "{}", err("(pcb x)"));

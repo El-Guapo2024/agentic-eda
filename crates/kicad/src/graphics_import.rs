@@ -277,15 +277,14 @@ impl ImportedShape {
                 *center = at(*center);
             }
             ImportedShape::Polygon { pts, .. } => pts.iter_mut().for_each(|p| *p = at(*p)),
-            ImportedShape::Text { origin, height, width, orientation_deg, .. } => {
+            ImportedShape::Text { origin, height, width, .. } => {
+                // `IMPORTED_TEXT::Transform`: the origin, and the size taken through the same matrix as a vector (`aTransform * VECTOR2D( m_width, m_height )`); the
+                // orientation is left as it is. So a text in a block turned a quarter has its width and height swapped and one of them negative, which the importer's
+                // `EDA_TEXT::SetTextSize` clamps to its least: KiCad's own result, kept.
                 *origin = at(*origin);
-                let sx = m.apply(V2::new(1.0, 0.0)).norm();
-                let sy = m.apply(V2::new(0.0, 1.0)).norm();
-                *width *= sx;
-                *height *= sy;
-                // The block's turn, in the sense the text's own angle is measured (counter-clockwise on the drawing).
-                let turn = m.apply(V2::new(1.0, 0.0));
-                *orientation_deg -= turn.y.atan2(turn.x).to_degrees();
+                let size = m.apply(V2::new(*width, *height));
+                *width = size.x;
+                *height = size.y;
             }
             ImportedShape::Spline { start, c1, c2, end, .. } => {
                 for p in [start, c1, c2, end] {

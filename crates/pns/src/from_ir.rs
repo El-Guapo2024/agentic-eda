@@ -299,8 +299,8 @@ const TEXT_MAX_ERROR_NM: eda_model::ir::Nm = Nm::new(5_000);
 /// `TransformShapeToPolygon( .., 0, GetMaxError(), ERROR_OUTSIDE )`: the text's bounding hull (`buildBoundingHull`), the box of its glyphs
 /// as drawn (each stroke and its pen, and `aMaxError` more for `ERROR_OUTSIDE`) in the text's own frame, turned by its draw rotation about its
 /// position. A track keeps the ordinary copper clearance from it, as from a pad of no net. The texts: the board's imported copper texts
-/// (`DrawingsSection::copper_texts`, with their layout) and a plain [`eda_model::ir::Text`] put on a copper layer in the studio. A hidden text
-/// is not imported as copper (`IsVisible()`). Not here: a footprint's own copper texts (KiCad syncs its reference, value, fields and texts on
+/// (`DrawingsSection::copper_texts`, with their layout) and a plain [`eda_model::ir::Text`] put on a copper layer in the studio. A board text a file
+/// marks hidden is copper too: KiCad reads it visible (`parsePCB_TEXT`: "Hidden PCB text is no longer supported"). Not here: a footprint's own copper texts (KiCad syncs its reference, value, fields and texts on
 /// copper too), a table (`PCB_TABLE`), a knockout text's margin, and a text box (`gr_text_box` is not read by the importer).
 fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap, rules: &mut crate::rule_resolver::RuleResolver) {
     let Some(d) = design.drawings.as_ref() else { return };

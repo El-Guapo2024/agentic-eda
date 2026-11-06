@@ -2506,7 +2506,7 @@ fn a_new_sheet_gets_its_own_empty_screen_and_a_shared_file_is_reused() {
 }
 
 #[test]
-fn a_sheet_is_refused_without_a_name_with_a_folder_in_its_file_with_a_taken_name_or_with_no_size() {
+fn a_sheet_is_refused_without_a_name_with_a_folder_in_its_file_or_with_no_size_and_a_taken_name_is_allowed() {
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
     let add = |name: &str, file: &str, size: (Nm, Nm)| Cmd::AddSheet { name: name.into(), file: file.into(), at: p(Nm::ZERO, Nm::ZERO), size };
@@ -2515,7 +2515,9 @@ fn a_sheet_is_refused_without_a_name_with_a_folder_in_its_file_with_a_taken_name
     assert_eq!(b.apply(&add("S", "sub/a.kicad_sch", (Nm::new(1), Nm::new(1)))).unwrap_err()[0].check, "ops_bad_sheet");
     assert_eq!(b.apply(&add("S", "a", (Nm::ZERO, mm(5.0)))).unwrap_err()[0].check, "ops_bad_sheet");
     b.apply(&add("S", "a", (mm(5.0), mm(5.0)))).unwrap();
-    assert_eq!(b.apply(&add("S", "b", (mm(5.0), mm(5.0)))).unwrap_err()[0].check, "ops_sheet_name_taken");
+    // UI-LEFT S21: KiCad's sheet dialog allows a name another sheet has; ERC reports it (`duplicate_sheet_names`)
+    b.apply(&add("S", "b", (mm(5.0), mm(5.0)))).unwrap();
+    assert_eq!(b.design().schematic.as_ref().unwrap().sheets.iter().filter(|s| s.name == "S").count(), 2);
 }
 
 fn place_sym(b: &mut Board<'_>, id: &str, lib_id: &str, at: Point, rot: Millideg) {
