@@ -133,11 +133,20 @@ pub struct SchExtras {
     /// symbol's own [`crate::ir::SymbolInstance::unit`] (`SCH_SYMBOL_INSTANCE::m_Unit`, one per sheet path: a shared channel sheet can use U1A on one
     /// path and U1B on another, `SCH_SYMBOL::GetUnitSelection( aSheet )`): by the symbol's `field_key`, then by the sheet path (the placement ids from
     /// the root down, joined with `/`) -> the unit. Read from a file's `(instances (project (path .. (unit N))))` (r2 B-M4); read through
-    /// `crate::sheet_list::unit_under`, which the tracer (the pins of that unit), the net names and the writer's `(unit ..)` per path use. **Differs**:
-    /// an edit of a symbol's unit sets it for every path (KiCad's Symbol Properties sets the current sheet's only), and the studio draws the symbol's own
-    /// unit on every path. Additive: empty and not written for a design with no such symbol.
+    /// `crate::sheet_list::unit_under`, which the tracer (the pins of that unit), the net names, the writer's `(unit ..)` per path and the studio's drawing
+    /// of the sheet in view use; a unit edit on a screen shown twice sets the entry of the sheet path in view (`SCH_EDIT_FRAME::SelectUnit`:
+    /// `SetUnitSelection( &GetCurrentSheet(), aUnit )`, UI-LEFT S9). Additive: empty and not written for a design with no such symbol.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub path_units: BTreeMap<String, BTreeMap<String, u32>>,
+    /// The reference a power symbol of this screen has on a sheet path, where the screen is shown on several paths and that path's reference is not the
+    /// power symbol's own [`crate::ir::PowerSymbol::id`] (`SCH_SYMBOL_INSTANCE::m_Reference`: a power symbol is an `SCH_SYMBOL` like any other, with a
+    /// reference per sheet path, `#PWR01` on one placement of a channel sheet and `#PWR02` on the other; `SCH_DRAWING_TOOLS::PlaceSymbol`'s `annotate`
+    /// numbers each path of `FindAllSheetsForScreen`, and Annotate numbers each `SCH_REFERENCE` of `SCH_SHEET_LIST::GetSymbols`): by the power symbol's
+    /// id, then by the sheet path (the placement ids from the root down, joined with `/`) -> the reference. Read through
+    /// `crate::sheet_list::power_reference_under`; read from a file's `(instances (project (path .. (reference ..))))` and written back per path (UI-LEFT
+    /// S9). Additive: empty and not written for a design with no screen shown twice that holds power symbols.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub power_path_refs: BTreeMap<String, BTreeMap<String, String>>,
     /// The power symbols of this screen that are local power symbols (`(power local)` in the screen's library cache, `LIB_SYMBOL::IsLocalPower`), by library
     /// id: a local power symbol names a net on its own sheet only (`PRIORITY::LOCAL_POWER_PIN`, a `SCOPE::SHEET` name edge and no `SCOPE::GLOBAL` one,
     /// `conn_claims.cpp::BuildIslandRecord`), so a `+48V` on the root and one on a sheet are two nets (QA `issue22938`). Read from a file's `lib_symbols`
@@ -886,6 +895,7 @@ impl SchExtras {
             && self.sheet_props.is_empty()
             && self.sheet_pages.is_empty()
             && self.path_units.is_empty()
+            && self.power_path_refs.is_empty()
             && self.local_power.is_empty()
             && self.global_power.is_empty()
             && self.excluded_from_pos_files.is_empty()
