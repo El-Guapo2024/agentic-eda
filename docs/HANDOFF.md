@@ -7,7 +7,7 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 - **`docs/parity/UI-LEFT.md`: 113 of 124 entries are done**, in batches u1 to u6, about 35 branches, all merged and pushed.
   - Each entry says what is left inside it.
   - The 11 not done:
-    - The 10 KO entries, kept out by the user's decisions (A1: Import Netlist, the footprint wizards, Hyperlynx and .rpt export, the viewer windows, Calculator Tools, the app shell). The others are raytracing, the batch simulator, browser limits, the one-library-symbol-per-lib_id model, and Annotate Automatically.
+    - The 10 KO entries, kept out by the user's decisions (A1: the footprint wizards, Hyperlynx and .rpt export, the viewer windows, Calculator Tools, the app shell). The others are raytracing, the batch simulator, browser limits, the one-library-symbol-per-lib_id model, and Annotate Automatically.
     - P7, **pending the user's decision**: Strict mode, on by default, refuses a move, swap, delete, drop or append that breaks a complete net, and KiCad never refuses. A refused strict drop ends the carry with nothing left (task-u6-regress).
 - **The gates on main 2026-11-07:**
   - `tools/check.sh full`: Rust 4771 passed, 3 failed (the box's three, below), 25 ignored; web 3330; build ok.
@@ -244,7 +244,7 @@ The 2026-10-21 list is done: Specctra, embedded files and the pad-details fix, t
 
 TODO (the user, 2026-10-23: not now): check the kicad-cli fallbacks on a kicad-cli without `pcb export specctra`, `idf` or `gencad` (the Mac's 10.99.0-5334); delete the deprecated Specctra exporter once every machine has the command (scope in GAPS.md P19).
 
-Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Python plugins, the autoplacer and the viewer windows (see `STALE-REASONS.md`); Hyperlynx and footprint-report export (no kicad-cli exporter, not even in the box's nightly; ask the user before porting them as was done for Specctra). IDFv3 and GenCAD are kicad-cli's (user, 2026-10-23: `task-cli-exports`), offered where the kicad-cli in use has the command and disabled with the reason where it has not.
+Import Netlist was kept out by the user's decision of 2026-10-21 until the user approved it on 2026-11-07; it is ported (`task-u7-netlist`, UI-LEFT A1, PARITY-pcb §92). Kept out by decision: the browser shell, Python plugins, the autoplacer and the viewer windows (see `STALE-REASONS.md`); Hyperlynx and footprint-report export (no kicad-cli exporter, not even in the box's nightly; ask the user before porting them as was done for Specctra). IDFv3 and GenCAD are kicad-cli's (user, 2026-10-23: `task-cli-exports`), offered where the kicad-cli in use has the command and disabled with the reason where it has not.
 
 ## How the work was run
 
