@@ -453,15 +453,17 @@ test("an image is a SCH_BITMAP with the rows of SCH_BITMAP_DESC; its scale and s
 
 // ------------------------------------------------------------------------------------------------------------ the rows of UI-LEFT S7
 
-test("a symbol of several units and body styles: Unit (read-only here) and Body Style (set_body_style); the pin display is the library symbol's", () => {
+test("a symbol of several units and body styles: Unit (set_symbol_unit) and Body Style (set_body_style); the pin display is the library symbol's", () => {
   const s = sheet();
   s.lib_symbols["Amp:Dual"] = { graphics: [], pins: [], unit_count: 2, body_style_count: 2, unit_names: { "2": "B side" }, pin_names_hidden: true, description: "Dual op-amp", keywords: "opamp" } as never;
   const basic = names(s, ["U2"])[0]![1];
   assert.deepEqual(basic, ["Pin numbers", "Pin names", "Locked", "Position X", "Position Y", "Orientation", "Mirror X", "Mirror Y", "Unit", "Body Style"], "SYMBOL's rows first, as KiCad's walk puts them");
   const unit = rowOf(s, ["U2"], "Unit")!;
   assert.deepEqual(unit.choices, [{ label: "A", value: 1 }, { label: "B side", value: 2 }], "`GetUnitDisplayName`: the unit's name, else its letter");
-  assert.equal(unit.writable, false);
-  assert.match(unit.note ?? "", /Place Next Unit/);
+  assert.equal(unit.writable, true);
+  // `SetUnitProp`: `SetUnitSelection( .. ); SetUnit( aUnit )`
+  assert.deepEqual(edit(s, ["U2"], "Unit", 2), [{ op: "sch_edit", verb: "set_symbol_unit", id: "U2", unit: 1, new_unit: 2 }]);
+  assert.deepEqual(edit(s, ["U2"], "Unit", 1), []);
   assert.deepEqual(edit(s, ["U2"], "Body Style", "Alternate"), [{ op: "sch_edit", verb: "set_body_style", ids: ["U2"], style: 2 }]);
   assert.equal(rowOf(s, ["U2"], "Pin names")!.value, false);
   assert.equal(rowOf(s, ["U2"], "Pin numbers")!.writable, false);

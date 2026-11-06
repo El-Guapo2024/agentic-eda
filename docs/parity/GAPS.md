@@ -568,8 +568,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   and (from a board file) paste margins; a schematic text's bold, italic, colour, hyperlink and justification; a label's size, bold, italic, colour and horizontal justification; wire ends; body style;
   Exclude From Position Files; the field rows; the Sheetfile as its own text (B3-M1). Five board verbs and three schematic ones were added (`pcb_props.rs`, `sch_props.rs`).
 - Left (read-only with the reason as the row's tooltip): fonts; every teardrop row (item 8); a pad's number, pin name and type, post-machining, backdrill,
-  fabrication property and pad-to-die; a dimension's italic, bold, mirror and justification (a shape's Line Style and a leader's Text Frame are edited since 2026-11-06, UI-LEFT P5, P13); a symbol's pin display (one library symbol per lib_id), its Unit (no verb switches a placed
-  unit); a sheet's border, background and attributes; a text box's margins, fill, colour and hyperlink; an image's transform offset; a footprint's paste margins when it was placed from the intent.
+  fabrication property and pad-to-die; a dimension's italic, bold, mirror and justification (a shape's Line Style and a leader's Text Frame are edited since 2026-11-06, UI-LEFT P5, P13); a symbol's pin display (one library symbol per lib_id), a sheet's border, background and attributes; a text box's margins, fill, colour and hyperlink; an image's transform offset; a footprint's paste margins when it was placed from the intent.
   The grid is not in the Footprint and Symbol editors; a footprint's position lands on the placement grid like every pose.
 - Port from: `common/widgets/properties_panel.cpp`, `common/properties/property_mgr.cpp`, `pcbnew/widgets/pcb_properties_panel.cpp`, `eeschema/widgets/sch_properties_panel.cpp`.
 
