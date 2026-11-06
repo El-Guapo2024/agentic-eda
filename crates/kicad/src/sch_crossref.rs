@@ -14,9 +14,14 @@
 use crate::sexpr;
 use std::collections::BTreeMap;
 
-/// Rewrite the symbol cross-references of every file of one schematic (the root and its sheets) into KiCad's stored form.
-pub fn refs_to_kiids(files: &mut [(String, String)]) {
-    let paths = symbol_paths(files);
+/// What `GetRef( &aPath, true )` adds to a reference for a placed unit (`SCH_SYMBOL::SubReference( unit )`): the unit in the project's notation
+/// (`U1A`, `U1.1`, ...) or the unit's display name, given the symbol's lib id and unit; `None` for a symbol of one unit (`GetUnitCount() > 1` is false).
+pub type UnitSuffix<'a> = dyn Fn(&str, u32) -> Option<String> + 'a;
+
+/// Rewrite the symbol cross-references of every file of one schematic (the root and its sheets) into KiCad's stored form. `suffix` names a placed unit
+/// as the project does (r7: `${U1.1:FIELD}` in a project of `.1` notation, `${U1A:FIELD}` in one of `A`).
+pub fn refs_to_kiids(files: &mut [(String, String)], suffix: &UnitSuffix<'_>) {
+    let paths = symbol_paths(files, suffix);
     for (_, text) in files.iter_mut() {
         if text.contains("${") {
             *text = rewrite(text, &paths);
@@ -25,15 +30,17 @@ pub fn refs_to_kiids(files: &mut [(String, String)]) {
 }
 
 /// Every placed symbol's designator -> `/<sheet path>/<symbol uuid>`, read off the `instances` blocks the files carry: the designator
-/// with its unit letter (`U1A`, what `GetRef( .., true )` gives) and, for the first unit met, the designator alone (`U1`, the parent
-/// reference `resolveCrossReference` falls back to). Power symbols (`#PWR01`) are left out, as `SYMBOL_FILTER_NON_POWER` leaves them.
-fn symbol_paths(files: &[(String, String)]) -> BTreeMap<String, String> {
+/// with its unit as `GetRef( .., true )` gives it (`ConvertRefsToKIIDs` compares the typed reference with that: `U1A`, or `U1.1` in a project of that
+/// notation, [`UnitSuffix`]) and, for the first unit met, the designator alone (`U1`, what KiCad 25ec2335's `resolveCrossReference` falls back to by
+/// `GetRef( .., false )`). Power symbols (`#PWR01`) are left out, as `SYMBOL_FILTER_NON_POWER` leaves them.
+fn symbol_paths(files: &[(String, String)], suffix: &UnitSuffix<'_>) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     for (_, text) in files {
         let Ok(tree) = sexpr::parse(text) else { continue };
         let Some(root) = tree.as_list() else { continue };
         for sym in sexpr::find_all(root, "symbol").filter(|s| sexpr::find(s, "lib_id").is_some()) {
             let Some(uuid) = sexpr::find(sym, "uuid").and_then(|u| sexpr::txt(u, 1)) else { continue };
+            let lib_id = sexpr::find(sym, "lib_id").and_then(|l| sexpr::txt(l, 1)).unwrap_or("");
             let Some(instances) = sexpr::find(sym, "instances") else { continue };
             for project in sexpr::find_all(instances, "project") {
                 for path in sexpr::find_all(project, "path") {
@@ -43,25 +50,15 @@ fn symbol_paths(files: &[(String, String)]) -> BTreeMap<String, String> {
                     }
                     let unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0) as u32;
                     let kiid = format!("{}/{uuid}", sheet_path.trim_end_matches('/'));
-                    out.entry(format!("{reference}{}", unit_letter(unit))).or_insert_with(|| kiid.clone());
+                    if let Some(sub) = suffix(lib_id, unit) {
+                        out.entry(format!("{reference}{sub}")).or_insert_with(|| kiid.clone());
+                    }
                     out.entry(reference.to_string()).or_insert(kiid);
                 }
             }
         }
     }
     out
-}
-
-/// `LIB_SYMBOL::LetterSubReference( aUnit, 'A' )`: 1 is A, 26 is Z, 27 is AA.
-fn unit_letter(unit: u32) -> String {
-    let mut n = unit.max(1);
-    let mut s = Vec::new();
-    while n > 0 {
-        n -= 1;
-        s.push((b'A' + (n % 26) as u8) as char);
-        n /= 26;
-    }
-    s.iter().rev().collect()
 }
 
 /// `ConvertRefsToKIIDs` over the text of one file: each `${REF:...}` outside an escaped `\${...}` (written `\\${` in the file) gets its
@@ -130,6 +127,16 @@ fn convert(token: &str, paths: &BTreeMap<String, String>) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// `LIB_SYMBOL::LetterSubReference( aUnit, 'A' )`: 1 is A, 26 is Z, 27 is AA.
+    fn unit_letter(unit: u32) -> String {
+        eda_model::annotate::unit_letters(unit)
+    }
+
+    /// KiCad's default notation (letters from `A`, no separator) for every symbol, whatever its unit count.
+    fn letter_suffix(_lib_id: &str, unit: u32) -> Option<String> {
+        Some(unit_letter(unit))
+    }
+
     fn sheet(symbols: &str) -> String {
         format!("(kicad_sch (version 20250114) (uuid \"aaaaaaaa-0000-4000-8000-000000000000\") {symbols})")
     }
@@ -147,7 +154,7 @@ mod tests {
             "root.kicad_sch".to_string(),
             sheet(&format!("{} {}", symbol("11111111-0000-4000-8000-000000000001", "R1", 1, "10k"), symbol("22222222-0000-4000-8000-000000000002", "R2", 1, "${R1:VALUE} and ${R1:Footprint:V2}"))),
         )];
-        refs_to_kiids(&mut files);
+        refs_to_kiids(&mut files, &letter_suffix);
         let text = &files[0].1;
         assert!(text.contains(r#""${/aaaaaaaa-0000-4000-8000-000000000000/11111111-0000-4000-8000-000000000001:VALUE} and ${/aaaaaaaa-0000-4000-8000-000000000000/11111111-0000-4000-8000-000000000001:Footprint:V2}""#), "{text}");
     }
@@ -163,9 +170,32 @@ mod tests {
                 symbol("55555555-0000-4000-8000-000000000005", "R3", 1, "${U1B:VALUE} ${U1:VALUE}")
             )),
         )];
-        refs_to_kiids(&mut files);
+        refs_to_kiids(&mut files, &letter_suffix);
         let text = &files[0].1;
         assert!(text.contains("${/aaaaaaaa-0000-4000-8000-000000000000/44444444-0000-4000-8000-000000000004:VALUE} ${/aaaaaaaa-0000-4000-8000-000000000000/33333333-0000-4000-8000-000000000003:VALUE}"), "{text}");
+    }
+
+    /// r7 (GAPS item 1): in a project whose unit notation is `.1`, `GetRef( .., true )` is `U1.2`, so `${U1.2:VALUE}` is the form that finds unit 2 and
+    /// the letter form names no symbol; a symbol of one unit takes no suffix.
+    #[test]
+    fn a_unit_in_the_projects_notation_finds_the_symbol() {
+        let mut files = vec![(
+            "root.kicad_sch".to_string(),
+            sheet(&format!(
+                "{} {} {}",
+                symbol("33333333-0000-4000-8000-000000000003", "U1", 1, "LM358").replace("Device:R", "Amp:Dual"),
+                symbol("44444444-0000-4000-8000-000000000004", "U1", 2, "LM358").replace("Device:R", "Amp:Dual"),
+                symbol("55555555-0000-4000-8000-000000000005", "R3", 1, "${U1.2:VALUE} ${U1B:VALUE} ${U1:VALUE} ${R3:VALUE} ${R3.1:VALUE}")
+            )),
+        )];
+        let dotted = |lib_id: &str, unit: u32| (lib_id != "Device:R").then(|| format!(".{unit}"));
+        refs_to_kiids(&mut files, &dotted);
+        let text = &files[0].1;
+        let root = "/aaaaaaaa-0000-4000-8000-000000000000";
+        assert!(
+            text.contains(&format!("${{{root}/44444444-0000-4000-8000-000000000004:VALUE}} <Unresolved: U1B> ${{{root}/33333333-0000-4000-8000-000000000003:VALUE}} ${{{root}/55555555-0000-4000-8000-000000000005:VALUE}} <Unresolved: R3.1>")),
+            "{text}"
+        );
     }
 
     #[test]
@@ -177,7 +207,7 @@ mod tests {
                 symbol("11111111-0000-4000-8000-000000000001", "R1", 1, "10k")
             )),
         )];
-        refs_to_kiids(&mut files);
+        refs_to_kiids(&mut files, &letter_suffix);
         let text = &files[0].1;
         // unknown -> KiCad's text; a plain variable, an escaped token and a path stay; a power symbol is not looked up
         assert!(text.contains(r#""<Unresolved: R9> ${REV} \\${R1:VALUE} ${/x/y:VALUE} <Unresolved: #PWR01>""#), "{text}");
@@ -188,7 +218,7 @@ mod tests {
         let child = "(kicad_sch (version 20250114) (uuid \"bbbbbbbb-0000-4000-8000-000000000000\") (symbol (lib_id \"Device:C\") (at 0 0 0) (unit 1) (uuid \"66666666-0000-4000-8000-000000000006\") (property \"Reference\" \"C7\")
             (instances (project \"p\" (path \"/aaaaaaaa-0000-4000-8000-000000000000/cccccccc-0000-4000-8000-000000000000\" (reference \"C7\") (unit 1))))))";
         let mut files = vec![("root.kicad_sch".to_string(), sheet("(text \"C = ${C7:VALUE}\")")), ("child.kicad_sch".to_string(), child.to_string())];
-        refs_to_kiids(&mut files);
+        refs_to_kiids(&mut files, &letter_suffix);
         assert!(files[0].1.contains("${/aaaaaaaa-0000-4000-8000-000000000000/cccccccc-0000-4000-8000-000000000000/66666666-0000-4000-8000-000000000006:VALUE}"), "{}", files[0].1);
     }
 

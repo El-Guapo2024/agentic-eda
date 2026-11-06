@@ -231,8 +231,25 @@ pub fn export_kicad_sch(
 ) -> Result<String, Vec<CheckResult>> {
     let mut files = vec![(String::new(), export_screen(design, model, meta, &ScreenCtx::root())?)];
     // Symbol cross-references the way KiCad stores them (`sch_crossref`).
-    sch_crossref::refs_to_kiids(&mut files);
+    sch_crossref::refs_to_kiids(&mut files, &unit_suffix_of(design, model));
     Ok(files.pop().map(|(_, text)| text).unwrap_or_default())
+}
+
+/// `SCH_SYMBOL::GetRef( &aPath, true )`'s unit part for [`sch_crossref::refs_to_kiids`]: `SubReference( unit )` in the project's unit notation (r7 H5:
+/// `U1.1` where the project says `.1`), a unit's display name where the library symbol has one, nothing for a symbol of one unit. A lib id the model
+/// does not know is taken as a symbol of several units.
+fn unit_suffix_of<'a>(design: &Design, model: &'a ConstraintModel) -> impl Fn(&str, u32) -> Option<String> + 'a {
+    let subpart = eda_model::annotate::SubpartIds::of_design(design);
+    let cache: std::cell::RefCell<BTreeMap<String, Option<eda_model::symbol::LibSymbol>>> = Default::default();
+    move |lib_id: &str, unit: u32| {
+        let mut cache = cache.borrow_mut();
+        let lib = cache.entry(lib_id.to_string()).or_insert_with(|| if eda_model::is_synthetic_lib_id(lib_id) { None } else { model.symbol_of(lib_id) });
+        match lib {
+            Some(l) if l.unit_count <= 1 => None,
+            Some(l) => Some(l.sub_reference_in(unit, &subpart, true)),
+            None => Some(subpart.sub_reference(unit, true)),
+        }
+    }
 }
 
 fn export_screen(design: &Design, model: &ConstraintModel, meta: &ExportMeta, ctx: &ScreenCtx) -> Result<String, Vec<CheckResult>> {
@@ -988,7 +1005,7 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
         }
     }
     // Symbol cross-references the way KiCad stores them, across the files (`sch_crossref`).
-    sch_crossref::refs_to_kiids(&mut out);
+    sch_crossref::refs_to_kiids(&mut out, &unit_suffix_of(design, model));
     Ok(out)
 }
 
