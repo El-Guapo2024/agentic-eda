@@ -17,7 +17,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { SchDialogShell } from "./SchDialogShell";
 import type { SchField } from "../api/types";
 import type { FieldOwnerKind } from "../kicad-port/schFieldEdit";
-import { chosenFont, fontChoices, oneStep } from "../kicad-port/textLooks";
+import { chosenFont, DEFAULT_FONT, oneStep } from "../kicad-port/textLooks";
 import { ColorSwatch, FontSelect, useFontFamilies } from "./TextLookControls";
 
 const H_ALIGN: Array<{ value: SchField["h"]; label: string }> = [
@@ -54,7 +54,7 @@ function FieldForm({ owner, field }: { owner: FieldOwnerKind; field: SchField & 
   const [nameShown, setNameShown] = useState(!!field.name_shown);
   const [allowAutoplace, setAllowAutoplace] = useState(field.allow_autoplace ?? true);
   const families = useFontFamilies();
-  const [font, setFont] = useState(() => fontChoices([], field.font).selected);
+  const [font, setFont] = useState(field.font || DEFAULT_FONT);
   const [color, setColor] = useState(field.color && field.color.a > 0 ? field.color : null);
   const label = owner === "label";
   const isr = label && field.name === "Intersheetrefs";

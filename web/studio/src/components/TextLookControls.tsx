@@ -7,7 +7,7 @@ import { fetchFontFamilies } from "../api/client";
 import { fetchHierarchy } from "../api/schControlClient";
 import type { SchColor } from "../api/schEditTypes";
 import { colorToHex, hexToColor, isUnspecified, UNSPECIFIED_COLOR } from "../kicad-port/schProperties";
-import { fontChoices, linkChoices, type LinkChoice } from "../kicad-port/textLooks";
+import { fontChoices, linkChoices, NOT_FOUND, type LinkChoice } from "../kicad-port/textLooks";
 
 /** The machine's font families, once per dialog. */
 export function useFontFamilies(): string[] {
@@ -39,12 +39,17 @@ export function useLinkChoices(): LinkChoice[] {
   return choices;
 }
 
-/** The Font choice: `value` is the entry shown (see `fontChoices`), `onChange` gets the entry picked. */
+/**
+ * The Font choice: `value` is the font's name ("Default Font" for none), `onChange` gets the name picked. A font the machine's list lacks is shown "<not found>"
+ * (`SetFontSelection`), and picking it again keeps the font as it is (`HaveFontSelection` is false for it).
+ */
 export function FontSelect({ families, current, value, onChange, label = "Font" }: { families: readonly string[]; current: string | null | undefined; value: string; onChange: (v: string) => void; label?: string }) {
   const { choices } = fontChoices(families, current);
+  const shown = choices.includes(value) ? value : `${value}${NOT_FOUND}`;
+  const all = choices.includes(shown) ? choices : [...choices, shown];
   return (
-    <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}>
-      {choices.map((c) => (
+    <select aria-label={label} value={shown} onChange={(e) => onChange(e.target.value.endsWith(NOT_FOUND) ? e.target.value.slice(0, -NOT_FOUND.length) : e.target.value)}>
+      {all.map((c) => (
         <option key={c} value={c}>
           {c}
         </option>

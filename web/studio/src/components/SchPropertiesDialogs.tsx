@@ -17,7 +17,7 @@ import { inferSpin } from "./schematic/labelShape";
 import { labelOrientationForPoint, orientationSceneOf } from "../kicad-port/schAutoRotate";
 import { textLie } from "../kicad-port/schTextItem";
 import type { SchHAlign, SchVAlign } from "../api/schEditTypes";
-import { chosenFont, fontChoices, HYPERLINK_ERROR, oneStep, textAttrsCmd, validHyperlink } from "../kicad-port/textLooks";
+import { chosenFont, DEFAULT_FONT, HYPERLINK_ERROR, oneStep, textAttrsCmd, validHyperlink } from "../kicad-port/textLooks";
 import { ColorSwatch, FontSelect, LinkField, useFontFamilies, useLinkChoices } from "./TextLookControls";
 
 const LABEL_SHAPES: Array<{ value: LabelShape; label: string }> = [
@@ -89,7 +89,7 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const [italic, setItalic] = useState(!!label.italic);
   // the Font choice and the Color swatch (`m_fontCtrl`, `m_textColorSwatch`), `set_text_attrs`
   const families = useFontFamilies();
-  const [font, setFont] = useState(() => fontChoices([], label.font).selected);
+  const [font, setFont] = useState(label.font || DEFAULT_FONT);
   const [color, setColor] = useState(label.color ?? null);
   // the grid of the label's own fields (`m_grid` over `m_fields`), a global label's Sheet References above them
   const [fields, setFields] = useState<LabelFieldEdit[]>(() => ownLabelFields(label).map((f) => ({ ...f, name: labelFieldDisplayName(f.name) })));
@@ -233,7 +233,7 @@ function TextForm({ text }: { text: SchematicText }) {
   // the looks `DIALOG_TEXT_PROPERTIES` sets beyond these (UI-LEFT S6): Font, Bold, Italic, Color, Link, Exclude from simulation
   const families = useFontFamilies();
   const links = useLinkChoices();
-  const [font, setFont] = useState(() => fontChoices([], text.font).selected);
+  const [font, setFont] = useState(text.font || DEFAULT_FONT);
   const [bold, setBold] = useState(!!text.bold);
   const [italic, setItalic] = useState(!!text.italic);
   const [color, setColor] = useState(text.color ?? null);

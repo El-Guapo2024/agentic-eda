@@ -3,7 +3,7 @@
 // label rides the cursor).
 import { useState, type ReactNode } from "react";
 import type { DirectiveShape, SchColor, SchFill, SchGraphic, SchHAlign, SchLineStyle, SchToolDialog, SchVAlign } from "../api/schEditTypes";
-import { chosenFont, fontChoices, HYPERLINK_ERROR, oneStep, textAttrsCmd, validHyperlink } from "../kicad-port/textLooks";
+import { chosenFont, DEFAULT_FONT, HYPERLINK_ERROR, oneStep, textAttrsCmd, validHyperlink } from "../kicad-port/textLooks";
 import { ColorSwatch, FontSelect, LinkField, useFontFamilies, useLinkChoices } from "./TextLookControls";
 import { graphicsEqual } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -143,7 +143,7 @@ function TextBoxDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { kind
   const attrs = edit ? state.schematic?.graphic_text_attrs?.[edit.id] : undefined;
   const families = useFontFamilies();
   const links = useLinkChoices();
-  const [font, setFont] = useState(() => fontChoices([], attrs?.font).selected);
+  const [font, setFont] = useState(attrs?.font || DEFAULT_FONT);
   const [color, setColor] = useState<SchColor | null>(attrs?.color ?? null);
   const [href, setHref] = useState(attrs?.href ?? "");
   const [excludeFromSim, setExcludeFromSim] = useState(!!attrs?.exclude_from_sim);
