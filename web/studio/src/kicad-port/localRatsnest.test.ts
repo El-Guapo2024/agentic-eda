@@ -80,3 +80,16 @@ test("r7 C7-7: a ratsnest line whose ends coincide is KiCad's 0.2 mm cross; any 
   ]);
   assert.equal(ratsnestCross([0, 0], [1, 0]), null);
 });
+
+test("the lines a move draws from the moving items are the dynamic ratsnest; the others stay static (RATSNEST_VIEW_ITEM::ViewDraw's two loops)", () => {
+  const edges: RatsnestEdgeLike[] = [
+    { net: "N1", from: [1100, 1000], to: [5100, 5000] },
+    { net: "N2", from: [7000, 7000], to: [8000, 8000] },
+  ];
+  const moved = offsetRatsnestForPreview(edges, board, { refs: ["U1"], kind: "part", dxNm: 5, dyNm: 0 });
+  assert.equal(moved[0]!.dynamic, true);
+  assert.equal(moved[1]!.dynamic, undefined);
+  const carried = carryRatsnest(edges, board, { moving: { parts: [], routing: { vias: [{ x: 8000, y: 8000 }], tracks: [] } } }, (pt) => [pt[0] + 1, pt[1]]);
+  assert.equal(carried[0]!.dynamic, undefined);
+  assert.equal(carried[1]!.dynamic, true);
+});

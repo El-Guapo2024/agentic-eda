@@ -9,7 +9,7 @@ import { fpBarcodes, fpPoints, fpTextBoxes } from "../../kicad-port/fpBoardItems
 import { requestBarcodeShape } from "./barcodeCache";
 import { drawBarcode, drawPoint, drawTextBox } from "./pcbItemsPaint";
 import { footprintShown } from "./appearancePaint";
-import { layerAlpha, withAlpha, type PaintOptions } from "./painter";
+import { withLayer, type PaintOptions } from "./painter";
 import { layerStateKey } from "../../kicad-port/layerPresets";
 
 /** Draw the text boxes, barcodes and points of `part`; nothing when it has none or its side is not shown. */
@@ -18,12 +18,12 @@ export function drawFootprintItems(ctx: CanvasRenderingContext2D, view: ViewTran
   const selected = opts.selection.has(part.ref);
   for (const b of fpTextBoxes(part)) {
     if (!layerIsVisible(opts.layerVisible, b.layer)) continue;
-    withAlpha(ctx, layerAlpha(opts, layerStateKey(b.layer)), () => drawTextBox(ctx, view, b, selected, !!opts.sketchText));
+    withLayer(ctx, opts, layerStateKey(b.layer), 1, () => drawTextBox(ctx, view, b, selected, !!opts.sketchText));
   }
   for (const b of fpBarcodes(part)) {
     if (!layerIsVisible(opts.layerVisible, b.layer)) continue;
     requestBarcodeShape(b);
-    withAlpha(ctx, layerAlpha(opts, layerStateKey(b.layer)), () => drawBarcode(ctx, view, b, selected));
+    withLayer(ctx, opts, layerStateKey(b.layer), 1, () => drawBarcode(ctx, view, b, selected));
   }
   for (const p of fpPoints(part)) drawPoint(ctx, view, p, selected, opts);
 }

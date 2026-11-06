@@ -21,7 +21,10 @@ import { paintEditorGrid } from "./gridPaint";
 import { originMarkerColor } from "../../kicad-port/gridOrigin";
 import { leaderModeOf, zoneLeader, zoneLoop } from "../../kicad-port/pcbDrawZone";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
-import { carryRatsnest, offsetRatsnestForPreview, ratsnestCross } from "../../kicad-port/localRatsnest";
+import { carryRatsnest, offsetRatsnestForPreview, ratsnestCross, type MovedEdge } from "../../kicad-port/localRatsnest";
+import { EDGE_CUTS_DIM_FACTOR, HI_CONTRAST_FACTOR, cssOf, hiContrastDim, highlightBrighten, highlightDarken, parseColor, ratsnestCurveControl, ratsnestLineColor } from "../../kicad-port/color4d";
+import { activeCopperOnTop, COPPER_BUCKETS, padContrast, padHoleContrast, viaContrast, type ContrastLook } from "../../kicad-port/hiContrast";
+import { installColourScopes, withColourScope } from "./colourScope";
 import { carryMatrix, carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { dimensionTextAngleRad, itemBounds, padIds } from "../../kicad-port/pcbItems";
@@ -37,8 +40,8 @@ import { BEZIER_MAX_ERROR_NM } from "./itemHitTest";
 import { isHighlighted } from "../../kicad-port/boardControl";
 import { triangulate, type Triangle } from "../../kicad-port/polyTriangulate";
 import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
-import { layerIsVisible, layerStateKey, isCopper } from "../../kicad-port/layerPresets";
-import { zoneCopperLayers, zoneIsOnCopper, zoneLayers } from "../../kicad-port/zoneLayers";
+import { layerIsVisible, layerNameOfKey, layerStateKey, isCopper } from "../../kicad-port/layerPresets";
+import { zoneCopperLayers, zoneLayers } from "../../kicad-port/zoneLayers";
 import { flatVertices, zoneContours } from "../../kicad-port/zonePointEditor";
 import { cachedZoneHatchLines } from "../../kicad-port/zoneHatch";
 import { drcMarkerObject } from "../../kicad-port/appearance";
@@ -175,6 +178,11 @@ export interface PaintOptions {
   /** The group being worked in (`PCB_SELECTION_TOOL::m_enteredGroup`): drawn in a frame with its name, and everything outside it dimmed. */
   enteredGroup?: string | null;
   /**
+   * High Contrast Mode's Dim as the board editor draws it (set by `paintBoard`): an inactive item in its colour mixed into the background (`withLayer`). Without it
+   * (the Footprint Editor's painters, which use these helpers too) an inactive layer is drawn at `layerAlpha`'s quarter alpha.
+   */
+  dimByColour?: boolean;
+  /**
    * What the Appearance panel adds to plain layer visibility (appearancePaint.ts): the opacities, net colours, the hidden inactive-layer mode, the sheet.
    * The visibility of the objects themselves (tracks, pads, DRC errors ...) is in `layerVisible` under `obj:<id>` keys (kicad-port/appearance.ts).
    */
@@ -184,8 +192,11 @@ export interface PaintOptions {
 /** How much of its colour an item outside the entered group keeps. */
 export const OUTSIDE_ENTERED_GROUP_ALPHA = 0.3;
 
+/**
+ * The alpha of an item on layer `key`: its opacity, or High Contrast Mode's. HIGH_CONTRAST_MODE::DIMMED mixes the inactive layers 80 % into the background
+ * (the board editor does that by colour: `withLayer`); here, for the Footprint Editor's painters, a quarter of the alpha stands for it. HIDDEN draws them not at all.
+ */
 export function layerAlpha(opts: PaintOptions, key: string): number {
-  // HIGH_CONTRAST_MODE::DIMMED mixes the inactive layers 80 % into the background; HIDDEN draws them not at all.
   if (opts.activeLayer && opts.highContrast && opts.activeLayer !== key) return opts.appearance?.contrastHidden ? 0 : 0.25;
   return opts.layerOpacity[key] ?? 1;
 }
@@ -197,6 +208,67 @@ export function withAlpha(ctx: CanvasRenderingContext2D, alpha: number, draw: ()
   ctx.globalAlpha = prev * alpha;
   draw();
   ctx.globalAlpha = prev;
+}
+
+/** Is an item on layer `key` (a state key, `layerStateKey`) off the active layer while High Contrast Mode is on (`m_hiContrastEnabled`, not `isActive`)? */
+export function layerDimmed(opts: Pick<PaintOptions, "activeLayer" | "highContrast">, key: string): boolean {
+  return !!opts.activeLayer && opts.highContrast && opts.activeLayer !== key;
+}
+
+/** The layer High Contrast Mode is on (`GetPrimaryHighContrastLayer()`) as a KiCad layer name, when the board editor dims by colour; null otherwise. */
+function contrastPrimary(opts: PaintOptions): string | null {
+  return opts.dimByColour && opts.highContrast && opts.activeLayer ? layerNameOfKey(opts.activeLayer) : null;
+}
+
+/**
+ * High Contrast Mode's Dim on the board's background (`color.Mix( backgroundColor, factor )`, kicad-port/color4d.ts): the colours of the draw it is applied to.
+ * The selection colour is left alone -- a selected item is never dimmed (`!highlighted && !selected`).
+ */
+function dimColours(factor = HI_CONTRAST_FACTOR): (css: string) => string {
+  const background = layerColor("background");
+  const selection = layerColor("selection");
+  return (css) => (css === selection ? css : hiContrastDim(css, background, factor));
+}
+
+/** Runs `draw` with the look High Contrast Mode gives an item (kicad-port/hiContrast.ts): as it is, dimmed, or not at all. */
+function withLook(ctx: CanvasRenderingContext2D, look: ContrastLook, draw: () => void): void {
+  if (look === "hide") return;
+  if (look === "dim") return withColourScope(ctx, dimColours(), draw);
+  draw();
+}
+
+/**
+ * Runs `draw` for an item on layer `key` (a state key) at `alpha` times the layer's opacity, as High Contrast Mode leaves it. In the board editor
+ * (`dimByColour`) an inactive item is drawn in its colours mixed into the background, `PCB_RENDER_SETTINGS::GetColor`'s `color.Mix( backgroundColor,
+ * m_hiContrastFactor )`: opaque where it is, as KiCad's (a lowered alpha would show what lies under it); the Hide mode draws it not at all; `exempt` (an item of
+ * a highlighted net: `!highlighted && !selected`) is drawn as it is. Elsewhere it is `layerAlpha`'s quarter alpha.
+ */
+export function withLayer(ctx: CanvasRenderingContext2D, opts: PaintOptions, key: string, alpha: number, draw: () => void, exempt = false): void {
+  if (!opts.dimByColour) return withAlpha(ctx, layerAlpha(opts, key) * alpha, draw);
+  const a = (opts.layerOpacity[key] ?? 1) * alpha;
+  if (exempt || !layerDimmed(opts, key)) return withAlpha(ctx, a, draw);
+  if (opts.appearance?.contrastHidden) return;
+  withColourScope(ctx, dimColours(), () => withAlpha(ctx, a, draw));
+}
+
+/**
+ * `withLayer` for the items the board editor dims and the Footprint Editor's painters do not (texts, shapes, dimensions, text boxes and barcodes of the board):
+ * without `dimByColour` the draw is run as it is. Edge.Cuts is pushed back by `dim_factor_Edge_Cuts`, never hidden ("Graphics on Edge_Cuts layer are not fully
+ * dimmed or hidden because they are useful when working on another layer").
+ */
+export function withBoardLayer(ctx: CanvasRenderingContext2D, opts: PaintOptions, layer: string, draw: () => void, exempt = false): void {
+  if (!opts.dimByColour) return draw();
+  if (layer === "Edge.Cuts" && !exempt && layerDimmed(opts, layerStateKey(layer))) return withColourScope(ctx, dimColours(EDGE_CUTS_DIM_FACTOR), draw);
+  withLayer(ctx, opts, layerStateKey(layer), 1, draw, exempt);
+}
+
+/**
+ * The alpha of a reference image on `key`: "Reference images can't have their color mixed so just reduce the opacity a bit so they show through less"
+ * (`color.a *= m_hiContrastFactor`) in the board editor, `layerAlpha` elsewhere.
+ */
+export function refImageLayerAlpha(opts: PaintOptions, key: string): number {
+  if (!opts.dimByColour || !layerDimmed(opts, key)) return layerAlpha(opts, key);
+  return opts.appearance?.contrastHidden ? 0 : (opts.layerOpacity[key] ?? 1) * HI_CONTRAST_FACTOR;
 }
 
 /** The rule that fills `pathForPad`: a trapezoid, chamfered or custom pad is its outline's contours, a ring having a hole. */
@@ -337,7 +409,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
   // Courtyard.
   const courtyardKey = part.side === "bottom" ? "b_courtyard" : "f_courtyard";
   if (selected || isHot || opts.layerVisible[courtyardKey] !== false) {
-    withAlpha(ctx, layerAlpha(opts, courtyardKey), () => {
+    withLayer(ctx, opts, courtyardKey, 1, () => {
       ctx.beginPath();
       ctx.rect(x0, y0, x1 - x0, y1 - y0);
       ctx.strokeStyle = selected ? layerColor("selection") : isHot ? "#ef5b5b" : layerColor(courtyardKey);
@@ -360,68 +432,84 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
   // A surface-mount pad is copper on its footprint's side; a through-hole one is on every copper layer, so it shows while any of them does (`PAD::ViewGetLOD`).
   const sideCopper = part.side === "bottom" ? "B.Cu" : "F.Cu";
   const anyCopper = Object.keys(opts.layerVisible).every((k) => !/\.Cu$/.test(k)) || Object.entries(opts.layerVisible).some(([k, v]) => /\.Cu$/.test(k) && v !== false);
+  // High Contrast Mode's look of a pad's copper and of its hole (`GetColor`'s pad copper and `LAYER_PAD_PLATEDHOLES` / `HOLEWALLS` cases, kicad-port/hiContrast.ts); a
+  // pad of a highlighted net is left as it is. The pad takes the copper's colour, not the footprint's, so the scopes the footprint is drawn in are set aside.
+  const primary = contrastPrimary(opts);
+  const hiddenMode = !!opts.appearance?.contrastHidden;
   for (const pad of on(opts.layerVisible, "pads") ? (part.pads ?? []).filter((q) => (q.th ? anyCopper : opts.layerVisible[sideCopper] !== false)) : []) {
-    ctx.save();
-    ctx.globalAlpha *= padAlpha;
-    // A padstack whose copper differs from layer to layer (`pad.stack_layers`): each group of layers is drawn as its own shape in the color of its layer, the footprint's
-    // own side on top (`PCB_PAINTER::draw( const PAD* )` draws each copper layer's shape: `PADSTACK::ForEachUniqueLayer`).
-    // (An empty list is a through-hole pad that removes the layers nothing connects and has none left: only its hole shows -- `PAD::FlashLayer`.)
-    if (Array.isArray(pad.stack_layers)) {
-      for (const g of orderedStackLayers(pad.stack_layers, part.side ?? "top")) {
-        const shown = g.layers.find((l) => opts.layerVisible[l] !== false);
-        if (!shown) continue;
-        const shape: Pad = { ...pad, x: g.x, y: g.y, w: g.w, h: g.h, round: g.round, shape: g.shape, ratio: g.ratio ?? null, outline: g.outline ?? null };
-        const paint = copperPaint(layerColor(copperColorKey(shown)), pad.net, opts);
-        pathForPad(ctx, shape);
-        if (opts.sketchPads) {
-          ctx.strokeStyle = paint;
-          ctx.lineWidth = hairlineNm(view, 1.5);
-          ctx.stroke();
+    const lit = isHighlighted(pad.net, opts.netHighlight);
+    const flashesOnPrimary = !!primary && (Array.isArray(pad.stack_layers) ? pad.stack_layers.some((g) => g.layers.includes(primary)) : true);
+    const copperLook: ContrastLook = primary && !lit ? padContrast(primary, { th: !!pad.th, copperLayer: sideCopper, flashesOnPrimary }, hiddenMode) : "active";
+    const holeLook: ContrastLook = primary && !lit ? padHoleContrast(primary, hiddenMode) : "active";
+    withColourScope(ctx, null, () => {
+      ctx.save();
+      ctx.globalAlpha *= padAlpha;
+      withLook(ctx, copperLook, () => {
+        // A padstack whose copper differs from layer to layer (`pad.stack_layers`): each group of layers is drawn as its own shape in the color of its layer, the footprint's
+        // own side on top (`PCB_PAINTER::draw( const PAD* )` draws each copper layer's shape: `PADSTACK::ForEachUniqueLayer`).
+        // (An empty list is a through-hole pad that removes the layers nothing connects and has none left: only its hole shows -- `PAD::FlashLayer`.)
+        if (Array.isArray(pad.stack_layers)) {
+          for (const g of orderedStackLayers(pad.stack_layers, part.side ?? "top")) {
+            const shown = g.layers.find((l) => opts.layerVisible[l] !== false);
+            if (!shown) continue;
+            const shape: Pad = { ...pad, x: g.x, y: g.y, w: g.w, h: g.h, round: g.round, shape: g.shape, ratio: g.ratio ?? null, outline: g.outline ?? null };
+            const paint = copperPaint(layerColor(copperColorKey(shown)), pad.net, opts);
+            pathForPad(ctx, shape);
+            if (opts.sketchPads) {
+              ctx.strokeStyle = paint;
+              ctx.lineWidth = hairlineNm(view, 1.5);
+              ctx.stroke();
+            } else {
+              ctx.fillStyle = paint;
+              ctx.fill(padFillRule(shape));
+            }
+          }
         } else {
-          ctx.fillStyle = paint;
-          ctx.fill(padFillRule(shape));
+          const fill = copperPaint(layerColor(padCopperKey), pad.net, opts);
+          pathForPad(ctx, pad);
+          if (opts.sketchPads) {
+            ctx.strokeStyle = fill;
+            ctx.lineWidth = hairlineNm(view, 1.5);
+            ctx.stroke();
+          } else {
+            ctx.fillStyle = fill;
+            ctx.fill(padFillRule(pad));
+          }
         }
+      });
+      if (pad.th) {
+        withLook(ctx, holeLook, () => {
+          // The hole punched through the copper (the board's background shows in it), with the wall around it, when the backend says how big it is.
+          if (pathForHole(ctx, pad)) {
+            ctx.fillStyle = layerColor("background");
+            ctx.fill();
+            ctx.strokeStyle = layerColor("pad_th");
+            ctx.lineWidth = hairlineNm(view, 1);
+            ctx.stroke();
+          } else {
+            pathForPad(ctx, pad);
+            ctx.strokeStyle = layerColor("pad_th");
+            ctx.lineWidth = hairlineNm(view, 1);
+            ctx.stroke();
+          }
+        });
       }
-    } else {
-      const fill = copperPaint(layerColor(padCopperKey), pad.net, opts);
-      pathForPad(ctx, pad);
-      if (opts.sketchPads) {
-        ctx.strokeStyle = fill;
-        ctx.lineWidth = hairlineNm(view, 1.5);
-        ctx.stroke();
-      } else {
-        ctx.fillStyle = fill;
-        ctx.fill(padFillRule(pad));
+      // Net name, only once the pad is legible on screen; an inactive pad's are not drawn (`IsNetnameLayer( aLayer )`: `color = COLOR4D::CLEAR`).
+      if (copperLook === "active") {
+        const numbered = opts.showPadNumbers && pad.num !== "" && padNumberLegible(pad, view);
+        if (pad.net && pad.w * view.scale > 22 && pad.h * view.scale > 10) {
+          ctx.fillStyle = "rgba(0,0,0,0.75)";
+          const fontNm = Math.min(pad.w, pad.h) * 0.35;
+          ctx.font = `${fontNm}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          // With the number on too, the two share the pad: the net name drops below the middle (`Y_offset_netname`).
+          ctx.fillText(pad.net, pad.x, numbered ? pad.y + padTextLayout(pad, true).netOffset : pad.y, pad.w * 0.9);
+        }
+        if (numbered) drawPadNumber(ctx, pad, !!pad.net && pad.w * view.scale > 22 && pad.h * view.scale > 10, layerColor("pad_netname"), opts.viewFlipped);
       }
-    }
-    if (pad.th) {
-      // The hole punched through the copper (the board's background shows in it), with the wall around it, when the backend says how big it is.
-      if (pathForHole(ctx, pad)) {
-        ctx.fillStyle = layerColor("background");
-        ctx.fill();
-        ctx.strokeStyle = layerColor("pad_th");
-        ctx.lineWidth = hairlineNm(view, 1);
-        ctx.stroke();
-      } else {
-        pathForPad(ctx, pad);
-        ctx.strokeStyle = layerColor("pad_th");
-        ctx.lineWidth = hairlineNm(view, 1);
-        ctx.stroke();
-      }
-    }
-    // Net name, only once the pad is legible on screen.
-    const numbered = opts.showPadNumbers && pad.num !== "" && padNumberLegible(pad, view);
-    if (pad.net && pad.w * view.scale > 22 && pad.h * view.scale > 10) {
-      ctx.fillStyle = "rgba(0,0,0,0.75)";
-      const fontNm = Math.min(pad.w, pad.h) * 0.35;
-      ctx.font = `${fontNm}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      // With the number on too, the two share the pad: the net name drops below the middle (`Y_offset_netname`).
-      ctx.fillText(pad.net, pad.x, numbered ? pad.y + padTextLayout(pad, true).netOffset : pad.y, pad.w * 0.9);
-    }
-    if (numbered) drawPadNumber(ctx, pad, !!pad.net && pad.w * view.scale > 22 && pad.h * view.scale > 10, layerColor("pad_netname"), opts.viewFlipped);
-    ctx.restore();
+      ctx.restore();
+    });
   }
 
   // A selected pad (pads are selectable on their own): the selection colour around it.
@@ -464,7 +552,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     const silkKey = part.side === "bottom" ? "b_silks" : "f_silks";
     // The reference shows when its layer does and both Footprint Text and References are on (`PCB_TEXT::ViewGetLOD`).
     if (opts.layerVisible[silkKey] !== false && on(opts.layerVisible, "footprint_text") && on(opts.layerVisible, "footprint_references")) {
-      withAlpha(ctx, layerAlpha(opts, silkKey), () => {
+      withLayer(ctx, opts, silkKey, 1, () => {
         drawStrokeText(ctx, part.ref, tx, ty, { sizeNm: fs, justify: align, thicknessNm: opts.sketchText ? hairlineNm(view, 1) : fs / 6, color: layerColor(silkKey) });
       });
     }
@@ -510,13 +598,13 @@ export function drawFields(ctx: CanvasRenderingContext2D, view: ViewTransform, i
     const down = f.valign > 0 ? 0 : f.valign < 0 ? 0.72 * sizeNm : 0.36 * sizeNm;
     const x = f.x - down * Math.sin(angleRad);
     const y = f.y + down * Math.cos(angleRad);
-    withAlpha(ctx, layerAlpha(opts, key) * (f.visible ? 1 : 0.5), () => {
+    withLayer(ctx, opts, key, f.visible ? 1 : 0.5, () => {
       drawStrokeText(ctx, t.content, x, y, { sizeNm, thicknessNm: opts.sketchText ? hairlineNm(view, 1) : Math.max(f.thickness, sizeNm / 20), justify: t.justify, angleRad, mirror: f.mirror, italic: f.italic, color, keepReadable: keptReadableInFlippedView(opts.viewFlipped, f.layer) });
     });
   }
 }
 
-function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner") {
+function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner", withVias: boolean) {
   if (!board.routing) return;
   const tracksOn = on(opts.layerVisible, "tracks");
   const trackAlpha = opacityOf(opts.appearance, "tracks");
@@ -539,7 +627,8 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
     // how layerVisible/layerOpacity are populated (BOARD_OK in
     // state/store.tsx) -- `key` above is this app's lowercase paint
     // bucket ("f_cu"), a different namespace, only used for layerColor().
-    withAlpha(ctx, layerAlpha(opts, t.layer) * 0.92 * trackAlpha, () => {
+    // High Contrast Mode leaves an item of a highlighted net as it is (`!highlighted`).
+    withLayer(ctx, opts, t.layer, 0.92 * trackAlpha, () => {
       ctx.beginPath();
       t.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.strokeStyle = copperPaint(layerColor(key), t.net, opts);
@@ -547,25 +636,31 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.stroke();
-    });
+    }, isHighlighted(t.net, opts.netHighlight));
   }
-  if (wantLayer === "f_cu" && on(opts.layerVisible, "vias")) {
+  if (withVias && on(opts.layerVisible, "vias")) {
     const viaAlpha = opacityOf(opts.appearance, "vias");
+    // High Contrast Mode's look of a via (`GetColor`'s `LAYER_VIA_*` cases, kicad-port/hiContrast.ts), an item of a highlighted net as it is.
+    const primary = contrastPrimary(opts);
+    const copper = board.layers.filter(isCopper);
     for (const v of board.routing.vias) {
-      ctx.save();
-      ctx.globalAlpha *= viaAlpha;
-      ctx.beginPath();
-      ctx.arc(v.x, v.y, v.d / 2, 0, Math.PI * 2);
-      const viaColor = copperPaint(layerColor("via"), v.net, opts);
-      if (opts.sketchVias) {
-        ctx.strokeStyle = viaColor;
-        ctx.lineWidth = hairlineNm(view, 1.5);
-        ctx.stroke();
-      } else {
-        ctx.fillStyle = viaColor;
-        ctx.fill();
-      }
-      ctx.restore();
+      const look: ContrastLook = primary && !isHighlighted(v.net, opts.netHighlight) ? viaContrast(primary, v, copper, !!opts.appearance?.contrastHidden) : "active";
+      withLook(ctx, look, () => {
+        ctx.save();
+        ctx.globalAlpha *= viaAlpha;
+        ctx.beginPath();
+        ctx.arc(v.x, v.y, v.d / 2, 0, Math.PI * 2);
+        const viaColor = copperPaint(layerColor("via"), v.net, opts);
+        if (opts.sketchVias) {
+          ctx.strokeStyle = viaColor;
+          ctx.lineWidth = hairlineNm(view, 1.5);
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = viaColor;
+          ctx.fill();
+        }
+        ctx.restore();
+      });
     }
   }
 }
@@ -580,27 +675,6 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
  * it). The other two real `ZONE_DISPLAY_MODE` values (fracture-borders,
  * triangulation) are developer debug views, not ported.
  */
-/** `ZONE::GetIsRuleArea()` keepouts (task item 3) never have fill data and
- * are never copper -- KiCad draws one as its outline with the border hatch
- * of its "Outline display" (`ZONE::HatchBorder`, kicad-port/zoneHatch.ts),
- * regardless of the current zone display mode (solid/outline), since there
- * is no "fill" concept for one to toggle. This port keeps its own colour,
- * a dashed outline and an abbreviated restriction label at the centroid. */
-const RULE_AREA_COLOR = "#ff8c00";
-
-function ruleAreaLabel(z: Zone): string {
-  const parts: string[] = [];
-  if (z.keepout_tracks) parts.push("Tracks");
-  if (z.keepout_vias) parts.push("Vias");
-  if (z.keepout_pads) parts.push("Pads");
-  if (z.keepout_copper_pour) parts.push("Copper");
-  if (z.keepout_footprints) parts.push("Fp");
-  // A placement rule area names the channel it stands for (`ZONE::GetMsgPanelInfo`'s "Placement source"; the multichannel tool's, GAPS.md items 24 and 32).
-  const placement = z.placement?.enabled ? `Placement: ${z.placement.source === "" ? "(none)" : z.placement.source}` : "";
-  const keepout = parts.length > 0 ? `Keepout: ${parts.join("/")}` : "";
-  return [keepout, placement].filter((p) => p !== "").join("  ") || "Rule Area";
-}
-
 /** The zone's outline and its holes (`ZONE::Outline()`), each a closed subpath: fill or clip it with the even-odd rule. */
 function traceZone(ctx: CanvasRenderingContext2D, z: Zone) {
   for (const ring of [z.outline, ...(z.holes ?? [])]) {
@@ -609,26 +683,32 @@ function traceZone(ctx: CanvasRenderingContext2D, z: Zone) {
   }
 }
 
-export function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, selected: boolean) {
-  const color = selected ? layerColor("selection") : RULE_AREA_COLOR;
-
-  // The border hatch (`GetHatchLines()`), as for any zone.
-  const xs = z.outline.map((p) => p[0]);
-  const ys = z.outline.map((p) => p[1]);
-  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-  strokeHatchLines(ctx, view, z, color);
-
+/**
+ * A rule area (`ZONE::GetIsRuleArea()`, a keepout or a placement area) on one of its layers, as `PCB_PAINTER::draw( const ZONE* )` draws any zone there: every
+ * contour as a one-pixel polyline in `color` (the layer's) at full opacity and its border hatch (`GetHatchLines()`); it never has a fill. A selected one has
+ * the selection's outline on top. (The studio drew one picture for the whole set, in its own orange, dashed, with a label of its keepouts: KiCad draws none.)
+ */
+export function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, selected: boolean, color: string) {
+  const ink = parseOpaque(color);
   ctx.beginPath();
   traceZone(ctx, z);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = hairlineNm(view, selected ? 2.5 : 1.5);
-  ctx.setLineDash([hairlineNm(view, 6), hairlineNm(view, 4)]);
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = hairlineNm(view, 1);
   ctx.stroke();
-  ctx.setLineDash([]);
+  strokeHatchLines(ctx, view, z, ink);
+  if (selected) {
+    ctx.beginPath();
+    traceZone(ctx, z);
+    ctx.strokeStyle = layerColor("selection");
+    ctx.lineWidth = hairlineNm(view, 2.5);
+    ctx.stroke();
+  }
+}
 
-  const cx = (x0 + x1) / 2;
-  const cy = (y0 + y1) / 2;
-  drawStrokeText(ctx, ruleAreaLabel(z), cx, cy, { sizeNm: Math.max(hairlineNm(view, 11), 300_000), justify: "center", color });
+/** `color.a > 0.0 ? color.WithAlpha( 1.0 ) : color`: a zone's outline is drawn in its layer's colour at full opacity. */
+function parseOpaque(color: string): string {
+  const c = parseColor(color);
+  return c && c.a > 0 ? cssOf({ ...c, a: 1 }) : color;
 }
 
 /** `for( const SEG& hatchLine : aZone->GetHatchLines() ) m_gal->DrawLine( hatchLine.A, hatchLine.B )`, at the outline width (`m_outlineWidth`: one pixel). */
@@ -750,12 +830,8 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
     const selected = opts.selection.has(z.id);
     // A zone on several layers is drawn on each of its copper layers, in that layer's pass (`ZONE::ViewGetLayers`); the non-copper ones are `drawNonCopperZones`'.
     const copperLayers = zoneCopperLayers(z);
-    if (z.is_rule_area) {
-      // One picture for the whole set (hatched outline and label): in the pass of the first of its copper layers that is shown.
-      const first = copperLayers.find((l) => opts.layerVisible[l] !== false);
-      if (first !== undefined && copperBucket(first) === wantLayer) drawRuleArea(ctx, view, z, selected);
-      continue;
-    }
+    // High Contrast Mode leaves a zone of a highlighted net as it is (`!highlighted`).
+    const lit = isHighlighted(z.net, opts.netHighlight);
     for (const layerName of copperLayers) {
       const key = copperColorKey(layerName);
       if (copperBucket(layerName) !== wantLayer) continue;
@@ -766,7 +842,7 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
         // knockout/thermal-relief pipeline applies) -- draw it solid
         // unconditionally, regardless of `zoneDisplayMode`, same as its
         // anchor pad/via is never shown as an "outline only" shape either.
-        withAlpha(ctx, layerAlpha(opts, layerName) * teardropAlpha, () => {
+        withLayer(ctx, opts, layerName, teardropAlpha, () => {
           ctx.beginPath();
           traceZone(ctx, z);
           ctx.fillStyle = copperPaint(layerColor(key), z.net, opts);
@@ -776,10 +852,11 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
             ctx.lineWidth = hairlineNm(view, 2.5);
             ctx.stroke();
           }
-        });
+        }, lit);
         continue;
       }
-      paintZoneOnLayer(ctx, view, z, layerName, copperPaint(layerColor(key), z.net, opts), layerAlpha(opts, layerName) * zoneAlpha, selected, opts, layerAlpha(opts, layerName));
+      // A rule area is drawn as any zone is, on each of its layers in the layer's colour: its outline and border hatch (`PCB_PAINTER::draw( const ZONE* )`); it has no fill.
+      withLayer(ctx, opts, layerName, 1, () => paintZoneOnLayer(ctx, view, z, layerName, copperPaint(layerColor(key), z.net, opts), zoneAlpha, selected, opts), lit);
     }
   }
 }
@@ -796,15 +873,8 @@ function drawNonCopperZones(ctx: CanvasRenderingContext2D, view: ViewTransform, 
     const selected = opts.selection.has(z.id);
     const layers = zoneLayers(z).filter((l) => !isCopper(l) && layerIsVisible(opts.layerVisible, l));
     if (layers.length === 0) continue;
-    if (z.is_rule_area) {
-      // A rule area with a copper layer is drawn with the copper passes.
-      if (zoneIsOnCopper(z)) continue;
-      drawRuleArea(ctx, view, z, selected);
-      continue;
-    }
-    // Copper layers of a mixed set are the copper passes' business.
-    if (zoneIsOnCopper(z)) continue;
-    for (const layerName of layers) paintZoneOnLayer(ctx, view, z, layerName, layerColor(realLayerKey(layerName)), zoneAlpha, selected, opts);
+    // Its copper layers are the copper passes' business; a rule area is drawn on each layer as any zone is (its outline and hatch, no fill).
+    for (const layerName of layers) withBoardLayer(ctx, opts, layerName, () => paintZoneOnLayer(ctx, view, z, layerName, layerColor(realLayerKey(layerName)), zoneAlpha, selected, opts));
   }
 }
 
@@ -821,16 +891,21 @@ function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: B
     const bucketish = realLayerKey(s.layer);
     if (!layerIsVisible(opts.layerVisible, s.layer)) continue;
     const selected = opts.selection.has(s.id);
-    ctx.save();
-    // A filled shape takes the Filled Shapes opacity, any other graphic on copper the track opacity (`PCB_RENDER_SETTINGS::GetColor`).
-    ctx.globalAlpha *= s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && isAnyFill(s) ? opacityOf(opts.appearance, "shapes") : isCopper(s.layer) ? opacityOf(opts.appearance, "tracks") : 1;
-    ctx.strokeStyle = selected ? layerColor("selection") : layerColor(bucketish);
-    ctx.fillStyle = ctx.strokeStyle;
-    ctx.lineWidth = Math.max(s.stroke_width, hairlineNm(view, selected ? 2 : 1));
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    drawShapeGeometry(ctx, s, !!opts.sketchGraphics, shapeDash(s, ctx.lineWidth, opts.dashRatios ?? boardDashRatios(board)));
-    ctx.restore();
+    // A copper graphic of a net is a connected item: the net highlight brightens it when its net is highlighted (`m_layerColorsHi`), as it darkens the rest.
+    const lit = !!s.net && isCopper(s.layer) && isHighlighted(s.net, opts.netHighlight);
+    const draw = () => {
+      ctx.save();
+      // A filled shape takes the Filled Shapes opacity, any other graphic on copper the track opacity (`PCB_RENDER_SETTINGS::GetColor`).
+      ctx.globalAlpha *= s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && isAnyFill(s) ? opacityOf(opts.appearance, "shapes") : isCopper(s.layer) ? opacityOf(opts.appearance, "tracks") : 1;
+      ctx.strokeStyle = selected ? layerColor("selection") : layerColor(bucketish);
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.lineWidth = Math.max(s.stroke_width, hairlineNm(view, selected ? 2 : 1));
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      drawShapeGeometry(ctx, s, !!opts.sketchGraphics, shapeDash(s, ctx.lineWidth, opts.dashRatios ?? boardDashRatios(board)));
+      ctx.restore();
+    };
+    withBoardLayer(ctx, opts, s.layer, lit ? () => withColourScope(ctx, null, () => withColourScope(ctx, highlightBrighten, draw)) : draw, lit);
   }
 }
 
@@ -1100,16 +1175,18 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
     const color = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
     // millideg -> rad; canvas Y grows downward, so negate for KiCad's CCW-positive convention (matches painter's other rotations)
     const angleRad = (-t.angle / 1000) * (Math.PI / 180);
-    drawStrokeText(ctx, t.shown ?? t.content, t.x, t.y, {
-      sizeNm: Math.max(t.size, hairlineNm(view, 8)),
-      // "Sketch Text Items" (`m_DisplayTextFill` off): the text in line mode, one pixel wide.
-      thicknessNm: opts.sketchText ? hairlineNm(view, 1) : t.stroke_width,
-      justify: t.justify,
-      angleRad,
-      mirror: t.mirror,
-      color,
-      keepReadable: keptReadableInFlippedView(opts.viewFlipped, t.layer),
-    });
+    withBoardLayer(ctx, opts, t.layer, () =>
+      drawStrokeText(ctx, t.shown ?? t.content, t.x, t.y, {
+        sizeNm: Math.max(t.size, hairlineNm(view, 8)),
+        // "Sketch Text Items" (`m_DisplayTextFill` off): the text in line mode, one pixel wide.
+        thicknessNm: opts.sketchText ? hairlineNm(view, 1) : t.stroke_width,
+        justify: t.justify,
+        angleRad,
+        mirror: t.mirror,
+        color,
+        keepReadable: keptReadableInFlippedView(opts.viewFlipped, t.layer),
+      })
+    );
   }
 }
 
@@ -1131,37 +1208,42 @@ export function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransfor
     if (!layerIsVisible(opts.layerVisible, d.layer)) continue;
     const selected = opts.selection.has(d.id);
     const color = selected ? layerColor("selection") : layerColor(realLayerKey(d.layer));
-    ctx.save();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = Math.max(d.stroke_width, hairlineNm(view, selected ? 2 : 1));
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    for (const [[ax, ay], [bx, by]] of d.lines) {
-      ctx.moveTo(ax, ay);
-      ctx.lineTo(bx, by);
-    }
-    // A leader's circle frame (`DIM_TEXT_BORDER::CIRCLE`: a `SHAPE_CIRCLE` of the dimension, stroked at its line width).
-    for (const [[cx, cy], r] of d.circles ?? []) {
-      ctx.moveTo(cx + r, cy);
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    }
-    ctx.stroke();
-    ctx.restore();
+    withBoardLayer(ctx, opts, d.layer, () => drawOneDimension(ctx, view, d, selected, color, opts));
+  }
+}
 
-    if (d.text) {
-      const angleRad = dimensionTextAngleRad(d);
-      drawStrokeText(ctx, d.text, d.text_at[0], d.text_at[1], {
-        sizeNm: Math.max(d.text_size_nm, hairlineNm(view, 8)),
-        thicknessNm: d.stroke_width,
-        justify: "center",
-        angleRad,
-        color,
-        // `if( m_gal->IsFlippedX() && !aDimension->IsSideSpecific() ) attrs.m_Mirrored = !attrs.m_Mirrored;`, the text where it is
-        keepReadable: keptReadableInFlippedView(opts.viewFlipped, d.layer),
-        readableAnchorKept: true,
-      });
-    }
+/** One dimension: its lines and circles, then its text. */
+function drawOneDimension(ctx: CanvasRenderingContext2D, view: ViewTransform, d: Dimension, selected: boolean, color: string, opts: PaintOptions) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(d.stroke_width, hairlineNm(view, selected ? 2 : 1));
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  for (const [[ax, ay], [bx, by]] of d.lines) {
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+  }
+  // A leader's circle frame (`DIM_TEXT_BORDER::CIRCLE`: a `SHAPE_CIRCLE` of the dimension, stroked at its line width).
+  for (const [[cx, cy], r] of d.circles ?? []) {
+    ctx.moveTo(cx + r, cy);
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  if (d.text) {
+    const angleRad = dimensionTextAngleRad(d);
+    drawStrokeText(ctx, d.text, d.text_at[0], d.text_at[1], {
+      sizeNm: Math.max(d.text_size_nm, hairlineNm(view, 8)),
+      thicknessNm: d.stroke_width,
+      justify: "center",
+      angleRad,
+      color,
+      // `if( m_gal->IsFlippedX() && !aDimension->IsSideSpecific() ) attrs.m_Mirrored = !attrs.m_Mirrored;`, the text where it is
+      keepReadable: keptReadableInFlippedView(opts.viewFlipped, d.layer),
+      readableAnchorKept: true,
+    });
   }
 }
 
@@ -1175,13 +1257,28 @@ export function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransfor
  * guard -- each net's ratsnest disappears on its own the moment that net
  * is finished, exactly like real KiCad's.
  */
-function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges: RatsnestEdge[], curved: boolean, netHighlight: string | readonly string[] | null, colorOf?: (net: string) => string | null) {
+function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges: MovedEdge<RatsnestEdge>[], curved: boolean, netHighlight: string | readonly string[] | null, colorOf?: (net: string) => string | null) {
+  // `SetLineWidth( m_RatsnestThickness / GetWorldScale() )`: 0.5 px by default, drawn at the GAL's one-pixel minimum (`u_minLinePixelWidth`), every line the same.
   const hair = hairlineNm(view, 1);
+  const background = layerColor("background");
+  const ratsnest = layerColor("ratsnest");
+  // `dimStatic = m_data->GetLocalRatsnest().size() > 0 || highlightedNets.size() > 0`: while something moves or a net is highlighted, the static lines fade.
+  const highlighting = typeof netHighlight === "string" ? netHighlight !== "" : (netHighlight?.length ?? 0) > 0;
+  const dimStatic = highlighting || edges.some((e) => e.dynamic);
+  const colours = new Map<string, string>();
   for (const e of edges) {
-    const lit = isHighlighted(e.net, netHighlight);
-    // A net's own colour (or its net class's) replaces the ratsnest colour unless the net colour mode is "None" (`RATSNEST_VIEW_ITEM::ViewDraw`).
-    ctx.strokeStyle = lit ? layerColor("LAYER_SELECTION_SHADOWS") : (colorOf?.(e.net) ?? layerColor("ratsnest"));
-    ctx.lineWidth = lit ? hairlineNm(view, 2.5) : hair;
+    const dynamic = !!e.dynamic;
+    const lit = !dynamic && isHighlighted(e.net, netHighlight);
+    // A net's own colour (or its net class's) replaces the ratsnest colour unless the net colour mode is "None"; then the line's state (kicad-port/color4d.ts).
+    const base = colorOf?.(e.net) ?? ratsnest;
+    const memo = `${base}|${dynamic}|${lit}`;
+    let stroke = colours.get(memo);
+    if (stroke === undefined) {
+      stroke = ratsnestLineColor(base, background, { dynamic, highlighted: lit, dimStatic });
+      colours.set(memo, stroke);
+    }
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = hair;
     const [ax, ay] = e.from;
     const [bx, by] = e.to;
     ctx.beginPath();
@@ -1197,17 +1294,9 @@ function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges:
     }
     ctx.moveTo(ax, ay);
     if (curved) {
-      // pcbnew.Control.ratsnestLineMode ("Curved Ratsnest Lines"): a
-      // gentle bow instead of a straight line, bulging perpendicular
-      // to the line by a fraction of its length -- KiCad's own curve
-      // is a proper spline; this is a single quadratic arc, visually
-      // the same "it's a curve, not a wire" cue at this zoom level.
-      const mx = (ax + bx) / 2,
-        my = (ay + by) / 2;
-      const dx = bx - ax,
-        dy = by - ay;
-      const bulge = 0.06;
-      ctx.quadraticCurveTo(mx - dy * bulge, my + dx * bulge, bx, by);
+      // pcbnew.Control.ratsnestLineMode ("Curved Ratsnest Lines"): `DrawCurve( source, center, center, target )`, the dynamic lines' too (r7 C7-8).
+      const [cx, cy] = ratsnestCurveControl(e.from, e.to);
+      ctx.bezierCurveTo(cx, cy, cx, cy, bx, by);
     } else {
       ctx.lineTo(bx, by);
     }
@@ -1564,7 +1653,22 @@ function drawLintMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, fin
  * `drawOrder()` so moving to WebGL later only means replacing the
  * per-layer draw calls, not this ordering.
  */
-export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, fullBoard: BoardState, opts: PaintOptions) {
+export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, fullBoard: BoardState, given: PaintOptions) {
+  // High Contrast Mode's Dim and the net highlight work on the items' colours, as `PCB_RENDER_SETTINGS::GetColor` does: the colours set on the context go
+  // through the scopes the draws open (colourScope.ts).
+  installColourScopes(ctx);
+  const opts: PaintOptions = { ...given, dimByColour: true };
+  // The net highlight darkens every item that is not of a highlighted net (`GetColor`'s single-net highlight branch: an item that is not a connected copper
+  // item has net -1, so the silkscreen, the outline and the texts darken too); a selected item keeps its colour (`!selected`). The copper items are
+  // `copperPaint`'s; everything else is drawn in this scope.
+  const highlighting = typeof opts.netHighlight === "string" ? opts.netHighlight !== "" : (opts.netHighlight?.length ?? 0) > 0;
+  const selectionColour = layerColor("selection");
+  const unlit = highlighting ? (css: string) => (css === selectionColour ? css : highlightDarken(css)) : null;
+  const withUnlit = (draw: () => void) => (unlit ? withColourScope(ctx, unlit, draw) : draw());
+  // `PCB_DRAW_PANEL_GAL::SetTopLayer` (which `SetActiveLayer` calls whatever the contrast mode): the active copper layer is drawn over the others -- the inner
+  // layers are one bucket here -- and the vias over every copper layer (`LAYER_VIA_*` are among the layers always on top).
+  const order = activeCopperOnTop(drawOrder(), opts.activeLayer);
+  const viaBucket = [...order].reverse().find((k) => COPPER_BUCKETS.includes(k));
   // A PCB selection in the hand (kicad-port/pcbCarry.ts): the rest of the board is painted as it is, the carried items afterwards through the carry transform.
   const preview = opts.movePreview?.kind === "pcb" ? opts.movePreview : null;
   const carry = preview ? splitCarried(fullBoard, preview.refs) : null;
@@ -1576,16 +1680,16 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   const copper = (b: BoardState): Record<string, () => void> => ({
     b_cu: () => {
       drawZones(ctx, view, b, opts, "b_cu");
-      drawTracksAndVias(ctx, view, b, opts, "b_cu");
+      drawTracksAndVias(ctx, view, b, opts, "b_cu", viaBucket === "b_cu");
     },
     in2_cu: () => {
       drawZones(ctx, view, b, opts, "inner");
-      drawTracksAndVias(ctx, view, b, opts, "inner");
+      drawTracksAndVias(ctx, view, b, opts, "inner", viaBucket === "in2_cu");
     },
     in1_cu: () => {},
     f_cu: () => {
       drawZones(ctx, view, b, opts, "f_cu");
-      drawTracksAndVias(ctx, view, b, opts, "f_cu");
+      drawTracksAndVias(ctx, view, b, opts, "f_cu", viaBucket === "f_cu");
     },
   });
   const copperPasses = passes.map((pass) => ({ alpha: pass.alpha, layers: copper(pass.b) }));
@@ -1609,7 +1713,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       drawBoardArea(ctx, board, opts);
       // Edge.Cuts is a layer like the others (the Layers tab and the presets switch it); in high contrast it is neither dimmed away nor hidden, only pushed back
       // -- "Graphics on Edge_Cuts layer are not fully dimmed or hidden because they are useful when working on another layer" (`dim_factor_Edge_Cuts`, at least 0.3).
-      if (layerIsVisible(opts.layerVisible, "Edge.Cuts")) withAlpha(ctx, opts.highContrast && opts.activeLayer && opts.activeLayer !== "board_edge" ? 0.3 : 1, () => drawOutline(ctx, view, board.outline_is_shapes ? null : board.outline));
+      // (`withBoardLayer`: the colour mixed with `dim_factor_Edge_Cuts` of it kept, in the Hide mode too.)
+      if (layerIsVisible(opts.layerVisible, "Edge.Cuts")) withUnlit(() => withBoardLayer(ctx, opts, "Edge.Cuts", () => drawOutline(ctx, view, board.outline_is_shapes ? null : board.outline)));
       // The reference images (`LAYER_DRAW_BITMAPS`) lie under every other item.
       for (const pass of passes) withAlpha(ctx, pass.alpha, () => drawRefImages(ctx, view, pass.b, opts));
     },
@@ -1624,9 +1729,9 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       drawRatsnest(ctx, view, edges, opts.ratsnestCurved, opts.netHighlight, (net) => ratsnestColor(net, opts.appearance));
     },
   };
-  for (const key of drawOrder()) byLayer[key]?.();
+  for (const key of order) byLayer[key]?.();
   for (const pass of passes) {
-    withAlpha(ctx, pass.alpha, () => {
+    withAlpha(ctx, pass.alpha, () => withUnlit(() => {
       // Zones on technical and user layers (silkscreen, mask ..), under the footprints and graphics of those layers.
       drawNonCopperZones(ctx, view, pass.b, opts);
       // Footprints (courtyard/pads/silk together, so a part's own layers stay coherent) after copper, before selection/cursor.
@@ -1641,7 +1746,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       drawDrillItems(ctx, view, pass.b, opts.layerVisible, opts.selection);
       drawDimensions(ctx, view, pass.b, opts);
       drawPcbItems(ctx, view, pass.b, opts);
-    });
+    }));
   }
   // The overlays of footprints: locked items' shadow, the courtyards a move puts in conflict, and the anchors.
   drawLockedShadows(ctx, board, opts);
@@ -1658,15 +1763,17 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     const moving = copper(carry.moving);
     drawGridItems(ctx, view, carry.moving, own.layerVisible, own.selection, DEFAULT_GRID_STYLE, [-Infinity, -Infinity, Infinity, Infinity]);
     drawRefImages(ctx, view, carry.moving, own);
-    for (const key of drawOrder()) moving[key]?.();
-    for (const part of carry.moving.parts) drawFootprint(ctx, view, part, own);
-    drawFields(ctx, view, [...fieldsToDraw(carry.moving.parts), ...carry.fields.map((field) => ({ field }))], own);
-    drawShapes(ctx, view, carry.moving, own);
-    drawTexts(ctx, view, carry.moving, own);
-    drawTables(ctx, view, carry.moving, own);
-    drawDrillItems(ctx, view, carry.moving, own.layerVisible, own.selection);
-    drawDimensions(ctx, view, carry.moving, own);
-    drawPcbItems(ctx, view, carry.moving, own);
+    for (const key of order) moving[key]?.();
+    withUnlit(() => {
+      for (const part of carry.moving.parts) drawFootprint(ctx, view, part, own);
+      drawFields(ctx, view, [...fieldsToDraw(carry.moving.parts), ...carry.fields.map((field) => ({ field }))], own);
+      drawShapes(ctx, view, carry.moving, own);
+      drawTexts(ctx, view, carry.moving, own);
+      drawTables(ctx, view, carry.moving, own);
+      drawDrillItems(ctx, view, carry.moving, own.layerVisible, own.selection);
+      drawDimensions(ctx, view, carry.moving, own);
+      drawPcbItems(ctx, view, carry.moving, own);
+    });
     drawAnchors(ctx, view, carry.moving, own);
     drawViaStitches(ctx, view, carry.moving, own.layerVisible, own.selection);
     drawSelectedGroups(ctx, view, carry.moving, own);
