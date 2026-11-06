@@ -7,6 +7,7 @@ import { useNetActions } from "./netActions";
 import { ColorDialog, Eye, Swatch } from "./shared";
 import { NetDisplayOptions } from "./NetDisplayOptions";
 import { ContextMenu, type MenuEntry } from "../../canvas/ContextMenu";
+import { toggleDockPane } from "../../../state/dockLayoutStore";
 import { isHighlighted } from "../../../kicad-port/boardControl";
 import { highlightedNets } from "../../../kicad-port/boardControl";
 import { netEyeTip, netMenu, netRows } from "../../../kicad-port/appearanceNets";
@@ -57,7 +58,7 @@ export function NetsTab() {
       <NetDisplayOptions />
       <div className="ap-buttons">
         <input type="search" placeholder="Filter nets" aria-label="Filter nets" value={filter} onChange={(e) => setFilter(e.target.value)} />
-        <button type="button" className="ap-icon-btn" title="Net Inspector" aria-label="Net Inspector" onClick={() => dispatch({ type: "SET_NET_INSPECTOR_OPEN", open: true })}>
+        <button type="button" className="ap-icon-btn" title="Net Inspector" aria-label="Net Inspector" onClick={() => toggleDockPane("netInspector")}>
           ≡
         </button>
         <button

@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 
 fn field_json(id: String, name: &str, text: &str, l: &FieldLayout, fp: &FootprintInstance, custom: bool) -> Value {
     let at = l.board_position(fp);
-    json!({
+    let mut v = json!({
         "id": id,
         "name": name,
         "text": text,
@@ -38,7 +38,12 @@ fn field_json(id: String, name: &str, text: &str, l: &FieldLayout, fp: &Footprin
         "langle": l.angle,
         // True once the layout is stored in the design; false for the default placement.
         "custom": custom,
-    })
+    });
+    // `EDA_TEXT::GetFontName`: the outline font the field is set in; absent for KiCad's stroke font.
+    if let Some(face) = &l.face {
+        v["face"] = json!(face);
+    }
+    v
 }
 
 /// The Reference, the Value and the user fields of the footprint `fp`, in the order the dialog's grid lists them.

@@ -475,7 +475,10 @@
       t([...dlg.querySelectorAll('[data-testid="net-inspector-row"]')].every((r) => r.dataset.net.toUpperCase().includes(net.toUpperCase()) || true), "the filter keeps the matching nets");
       dlg.querySelector('[data-testid="net-inspector-col-pad_count"]').click(); await sleep(200);
       t(dlg.querySelector('[data-testid="net-inspector-col-pad_count"]').textContent.includes("▲"), "a heading sorts by its column");
-      buttonText(dlg, "Close").click(); await sleep(300);
+      // the docked pane (UI-LEFT P9): the filter is kept with the person's settings, so it is emptied again; the action hides the pane
+      setValue(dlg.querySelector('[data-testid="net-inspector-filter"]'), ""); await sleep(200);
+      await __eda.run("pcbnew.Control.showNetInspector"); await sleep(300);
+      t(!document.querySelector('[data-testid="net-inspector"]'), "the action hides the pane again");
       await undo();
       t((await snapshot()) === base, "undone, the board is as it was");
     });

@@ -49,6 +49,7 @@ import { PcbSnap, type PointOpts, type SnapMods } from "./pcbSnap";
 import { paintSnapOverlay } from "./snapOverlayPainter";
 import { useGridOverrides } from "../../state/gridOverrides";
 import { useGridSettings } from "../../state/gridSettings";
+import { useColorThemeStamp } from "../../state/colorThemeStore";
 import { toPcbMagnetic } from "../../kicad-port/preferences";
 import { withTrackSnapping } from "../../kicad-port/routerSettings";
 import { heldCursor } from "../../kicad-port/heldCursor";
@@ -295,7 +296,9 @@ export function Canvas() {
   const board = state.board;
   // The Appearance panel's settings as the painter reads them: opacities, the colour each net gets, the sheet (rebuilt only when they or the board change).
   const nets = useMemo(() => netsContext(board), [board]);
-  const paintAppearance = useMemo(() => buildPaintAppearance(state.appearance, nets, board), [state.appearance, nets, board]);
+  // the colour theme (Preferences > PCB Editor > Colors, the Appearance swatches): a change redraws the board in it
+  const themeStamp = useColorThemeStamp();
+  const paintAppearance = useMemo(() => buildPaintAppearance(state.appearance, nets, board), [state.appearance, nets, board, themeStamp]);
 
   // The grid helper of the tool in force (kicad-port/pcbGridHelper.ts, pcbSnap.ts), kept fed with the view, the grid list and its overrides and the magnetic settings.
   const snapRef = useRef<PcbSnap | null>(null);

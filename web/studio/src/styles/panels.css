@@ -549,3 +549,48 @@
   padding: 0 5px;
   line-height: 14px;
 }
+
+/* ------------------------------------------------------------ the bottom dock */
+/* components/panels/BottomDock.tsx: the board editor's Net Inspector and Search panes under the canvas, side by side, the top edge a sash. */
+.bottom-dock {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--chrome-bg-raised);
+  border-top: 1px solid var(--chrome-border);
+}
+.bottom-dock-sash {
+  flex: 0 0 4px;
+  cursor: ns-resize;
+  background: var(--chrome-border);
+}
+.bottom-dock-panes {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.bottom-dock-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--chrome-border);
+}
+.bottom-dock-pane:last-child {
+  border-right: 0;
+}
+.bottom-dock-pane .dock-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  border-bottom: 0;
+}
+.bottom-dock-pane .dock-panel.folded {
+  flex: 0 0 auto;
+}
+.bottom-dock-pane .dock-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}

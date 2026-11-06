@@ -1,0 +1,614 @@
+{
+  "meta": {
+    "generated": true,
+    "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+    "kicadCommitDate": null,
+    "extractedAt": "2026-11-06T02:00:03.289Z",
+    "sourceFiles": [
+      "common/settings/color_settings.cpp",
+      "common/settings/builtin_color_themes.h",
+      "common/gal/color4d.cpp",
+      "include/gal/color4d.h"
+    ]
+  },
+  "classicName": "KiCad Classic",
+  "boardParams": [
+    {
+      "key": "board.anchor",
+      "layer": "LAYER_ANCHOR"
+    },
+    {
+      "key": "board.locked_shadow",
+      "layer": "LAYER_LOCKED_ITEM_SHADOW"
+    },
+    {
+      "key": "board.conflicts_shadow",
+      "layer": "LAYER_CONFLICTS_SHADOW"
+    },
+    {
+      "key": "board.aux_items",
+      "layer": "LAYER_AUX_ITEMS"
+    },
+    {
+      "key": "board.background",
+      "layer": "LAYER_PCB_BACKGROUND"
+    },
+    {
+      "key": "board.cursor",
+      "layer": "LAYER_CURSOR"
+    },
+    {
+      "key": "board.drc_error",
+      "layer": "LAYER_DRC_ERROR"
+    },
+    {
+      "key": "board.drc_warning",
+      "layer": "LAYER_DRC_WARNING"
+    },
+    {
+      "key": "board.drc_exclusion",
+      "layer": "LAYER_DRC_EXCLUSION"
+    },
+    {
+      "key": "board.drc_highlighted",
+      "layer": "LAYER_DRC_HIGHLIGHTED"
+    },
+    {
+      "key": "board.grid",
+      "layer": "LAYER_GRID"
+    },
+    {
+      "key": "board.grid_axes",
+      "layer": "LAYER_GRID_AXES"
+    },
+    {
+      "key": "board.pad_plated_hole",
+      "layer": "LAYER_PAD_PLATEDHOLES"
+    },
+    {
+      "key": "board.plated_hole",
+      "layer": "LAYER_NON_PLATEDHOLES"
+    },
+    {
+      "key": "board.ratsnest",
+      "layer": "LAYER_RATSNEST"
+    },
+    {
+      "key": "board.via_hole",
+      "layer": "LAYER_VIA_HOLES"
+    },
+    {
+      "key": "board.via_hole_walls",
+      "layer": "LAYER_VIA_HOLEWALLS"
+    },
+    {
+      "key": "board.worksheet",
+      "layer": "LAYER_DRAWINGSHEET"
+    },
+    {
+      "key": "board.page_limits",
+      "layer": "LAYER_PAGE_LIMITS"
+    },
+    {
+      "key": "board.outline_area",
+      "layer": "LAYER_BOARD_OUTLINE_AREA"
+    },
+    {
+      "key": "board.track_net_names",
+      "layer": "NETNAMES_LAYER_ID_START"
+    },
+    {
+      "key": "board.pad_net_names",
+      "layer": "LAYER_PAD_NETNAMES"
+    },
+    {
+      "key": "board.via_net_names",
+      "layer": "LAYER_VIA_NETNAMES"
+    },
+    {
+      "key": "board.points",
+      "layer": "LAYER_POINTS"
+    },
+    {
+      "key": "board.copper.f",
+      "layer": "F_Cu"
+    },
+    {
+      "key": "board.copper.in1",
+      "layer": "In1_Cu"
+    },
+    {
+      "key": "board.copper.in2",
+      "layer": "In2_Cu"
+    },
+    {
+      "key": "board.copper.in3",
+      "layer": "In3_Cu"
+    },
+    {
+      "key": "board.copper.in4",
+      "layer": "In4_Cu"
+    },
+    {
+      "key": "board.copper.in5",
+      "layer": "In5_Cu"
+    },
+    {
+      "key": "board.copper.in6",
+      "layer": "In6_Cu"
+    },
+    {
+      "key": "board.copper.in7",
+      "layer": "In7_Cu"
+    },
+    {
+      "key": "board.copper.in8",
+      "layer": "In8_Cu"
+    },
+    {
+      "key": "board.copper.in9",
+      "layer": "In9_Cu"
+    },
+    {
+      "key": "board.copper.in10",
+      "layer": "In10_Cu"
+    },
+    {
+      "key": "board.copper.in11",
+      "layer": "In11_Cu"
+    },
+    {
+      "key": "board.copper.in12",
+      "layer": "In12_Cu"
+    },
+    {
+      "key": "board.copper.in13",
+      "layer": "In13_Cu"
+    },
+    {
+      "key": "board.copper.in14",
+      "layer": "In14_Cu"
+    },
+    {
+      "key": "board.copper.in15",
+      "layer": "In15_Cu"
+    },
+    {
+      "key": "board.copper.in16",
+      "layer": "In16_Cu"
+    },
+    {
+      "key": "board.copper.in17",
+      "layer": "In17_Cu"
+    },
+    {
+      "key": "board.copper.in18",
+      "layer": "In18_Cu"
+    },
+    {
+      "key": "board.copper.in19",
+      "layer": "In19_Cu"
+    },
+    {
+      "key": "board.copper.in20",
+      "layer": "In20_Cu"
+    },
+    {
+      "key": "board.copper.in21",
+      "layer": "In21_Cu"
+    },
+    {
+      "key": "board.copper.in22",
+      "layer": "In22_Cu"
+    },
+    {
+      "key": "board.copper.in23",
+      "layer": "In23_Cu"
+    },
+    {
+      "key": "board.copper.in24",
+      "layer": "In24_Cu"
+    },
+    {
+      "key": "board.copper.in25",
+      "layer": "In25_Cu"
+    },
+    {
+      "key": "board.copper.in26",
+      "layer": "In26_Cu"
+    },
+    {
+      "key": "board.copper.in27",
+      "layer": "In27_Cu"
+    },
+    {
+      "key": "board.copper.in28",
+      "layer": "In28_Cu"
+    },
+    {
+      "key": "board.copper.in29",
+      "layer": "In29_Cu"
+    },
+    {
+      "key": "board.copper.in30",
+      "layer": "In30_Cu"
+    },
+    {
+      "key": "board.copper.b",
+      "layer": "B_Cu"
+    },
+    {
+      "key": "board.b_adhes",
+      "layer": "B_Adhes"
+    },
+    {
+      "key": "board.f_adhes",
+      "layer": "F_Adhes"
+    },
+    {
+      "key": "board.b_paste",
+      "layer": "B_Paste"
+    },
+    {
+      "key": "board.f_paste",
+      "layer": "F_Paste"
+    },
+    {
+      "key": "board.b_silks",
+      "layer": "B_SilkS"
+    },
+    {
+      "key": "board.f_silks",
+      "layer": "F_SilkS"
+    },
+    {
+      "key": "board.b_mask",
+      "layer": "B_Mask"
+    },
+    {
+      "key": "board.f_mask",
+      "layer": "F_Mask"
+    },
+    {
+      "key": "board.dwgs_user",
+      "layer": "Dwgs_User"
+    },
+    {
+      "key": "board.cmts_user",
+      "layer": "Cmts_User"
+    },
+    {
+      "key": "board.eco1_user",
+      "layer": "Eco1_User"
+    },
+    {
+      "key": "board.eco2_user",
+      "layer": "Eco2_User"
+    },
+    {
+      "key": "board.edge_cuts",
+      "layer": "Edge_Cuts"
+    },
+    {
+      "key": "board.margin",
+      "layer": "Margin"
+    },
+    {
+      "key": "board.b_crtyd",
+      "layer": "B_CrtYd"
+    },
+    {
+      "key": "board.f_crtyd",
+      "layer": "F_CrtYd"
+    },
+    {
+      "key": "board.b_fab",
+      "layer": "B_Fab"
+    },
+    {
+      "key": "board.f_fab",
+      "layer": "F_Fab"
+    },
+    {
+      "key": "board.user_1",
+      "layer": "User_1"
+    },
+    {
+      "key": "board.user_2",
+      "layer": "User_2"
+    },
+    {
+      "key": "board.user_3",
+      "layer": "User_3"
+    },
+    {
+      "key": "board.user_4",
+      "layer": "User_4"
+    },
+    {
+      "key": "board.user_5",
+      "layer": "User_5"
+    },
+    {
+      "key": "board.user_6",
+      "layer": "User_6"
+    },
+    {
+      "key": "board.user_7",
+      "layer": "User_7"
+    },
+    {
+      "key": "board.user_8",
+      "layer": "User_8"
+    },
+    {
+      "key": "board.user_9",
+      "layer": "User_9"
+    },
+    {
+      "key": "board.user_10",
+      "layer": "User_10"
+    },
+    {
+      "key": "board.user_11",
+      "layer": "User_11"
+    },
+    {
+      "key": "board.user_12",
+      "layer": "User_12"
+    },
+    {
+      "key": "board.user_13",
+      "layer": "User_13"
+    },
+    {
+      "key": "board.user_14",
+      "layer": "User_14"
+    },
+    {
+      "key": "board.user_15",
+      "layer": "User_15"
+    },
+    {
+      "key": "board.user_16",
+      "layer": "User_16"
+    },
+    {
+      "key": "board.user_17",
+      "layer": "User_17"
+    },
+    {
+      "key": "board.user_18",
+      "layer": "User_18"
+    },
+    {
+      "key": "board.user_19",
+      "layer": "User_19"
+    },
+    {
+      "key": "board.user_20",
+      "layer": "User_20"
+    },
+    {
+      "key": "board.user_21",
+      "layer": "User_21"
+    },
+    {
+      "key": "board.user_22",
+      "layer": "User_22"
+    },
+    {
+      "key": "board.user_23",
+      "layer": "User_23"
+    },
+    {
+      "key": "board.user_24",
+      "layer": "User_24"
+    },
+    {
+      "key": "board.user_25",
+      "layer": "User_25"
+    },
+    {
+      "key": "board.user_26",
+      "layer": "User_26"
+    },
+    {
+      "key": "board.user_27",
+      "layer": "User_27"
+    },
+    {
+      "key": "board.user_28",
+      "layer": "User_28"
+    },
+    {
+      "key": "board.user_29",
+      "layer": "User_29"
+    },
+    {
+      "key": "board.user_30",
+      "layer": "User_30"
+    },
+    {
+      "key": "board.user_31",
+      "layer": "User_31"
+    },
+    {
+      "key": "board.user_32",
+      "layer": "User_32"
+    },
+    {
+      "key": "board.user_33",
+      "layer": "User_33"
+    },
+    {
+      "key": "board.user_34",
+      "layer": "User_34"
+    },
+    {
+      "key": "board.user_35",
+      "layer": "User_35"
+    },
+    {
+      "key": "board.user_36",
+      "layer": "User_36"
+    },
+    {
+      "key": "board.user_37",
+      "layer": "User_37"
+    },
+    {
+      "key": "board.user_38",
+      "layer": "User_38"
+    },
+    {
+      "key": "board.user_39",
+      "layer": "User_39"
+    },
+    {
+      "key": "board.user_40",
+      "layer": "User_40"
+    },
+    {
+      "key": "board.user_41",
+      "layer": "User_41"
+    },
+    {
+      "key": "board.user_42",
+      "layer": "User_42"
+    },
+    {
+      "key": "board.user_43",
+      "layer": "User_43"
+    },
+    {
+      "key": "board.user_44",
+      "layer": "User_44"
+    },
+    {
+      "key": "board.user_45",
+      "layer": "User_45"
+    }
+  ],
+  "classic": {
+    "LAYER_ANCHOR": "#000084ff",
+    "LAYER_LOCKED_ITEM_SHADOW": "#00008499",
+    "LAYER_CONFLICTS_SHADOW": "#84000080",
+    "LAYER_AUX_ITEMS": "#ffffffff",
+    "LAYER_PCB_BACKGROUND": "#000000ff",
+    "LAYER_CURSOR": "#ffffffff",
+    "LAYER_DRC_ERROR": "#ff0000cc",
+    "LAYER_DRC_WARNING": "#00ff00cc",
+    "LAYER_DRC_EXCLUSION": "#ffffffff",
+    "LAYER_DRC_HIGHLIGHTED": "#ff00ffff",
+    "LAYER_GRID": "#848484ff",
+    "LAYER_GRID_AXES": "#000084ff",
+    "LAYER_PAD_PLATEDHOLES": "#c2c200ff",
+    "LAYER_NON_PLATEDHOLES": "#c2c200ff",
+    "LAYER_RATSNEST": "#ffffffff",
+    "LAYER_VIA_HOLES": "#806600cc",
+    "LAYER_VIA_HOLEWALLS": "#ffffffff",
+    "LAYER_DRAWINGSHEET": "#480000ff",
+    "LAYER_PAGE_LIMITS": "#848484ff",
+    "LAYER_BOARD_OUTLINE_AREA": "#64646459",
+    "NETNAMES_LAYER_ID_START": "#ffffffb3",
+    "LAYER_PAD_NETNAMES": "#ffffffe6",
+    "LAYER_VIA_NETNAMES": "#323232e6",
+    "LAYER_POINTS": "#000084ff",
+    "F_Cu": "#840000ff",
+    "In1_Cu": "#c2c200ff",
+    "In2_Cu": "#c200c2ff",
+    "In3_Cu": "#c20000ff",
+    "In4_Cu": "#008484ff",
+    "In5_Cu": "#008400ff",
+    "In6_Cu": "#000084ff",
+    "In7_Cu": "#848484ff",
+    "In8_Cu": "#840084ff",
+    "In9_Cu": "#c2c2c2ff",
+    "In10_Cu": "#840084ff",
+    "In11_Cu": "#840000ff",
+    "In12_Cu": "#848400ff",
+    "In13_Cu": "#c2c2c2ff",
+    "In14_Cu": "#000084ff",
+    "In15_Cu": "#008400ff",
+    "In16_Cu": "#840000ff",
+    "In17_Cu": "#c2c200ff",
+    "In18_Cu": "#c200c2ff",
+    "In19_Cu": "#c20000ff",
+    "In20_Cu": "#008484ff",
+    "In21_Cu": "#008400ff",
+    "In22_Cu": "#000084ff",
+    "In23_Cu": "#848484ff",
+    "In24_Cu": "#840084ff",
+    "In25_Cu": "#c2c2c2ff",
+    "In26_Cu": "#840084ff",
+    "In27_Cu": "#840000ff",
+    "In28_Cu": "#848400ff",
+    "In29_Cu": "#c2c2c2ff",
+    "In30_Cu": "#000084ff",
+    "B_Cu": "#008400ff",
+    "B_Adhes": "#000084ff",
+    "F_Adhes": "#840084ff",
+    "B_Paste": "#00c2c2ff",
+    "F_Paste": "#840000ff",
+    "B_SilkS": "#840084ff",
+    "F_SilkS": "#008484ff",
+    "B_Mask": "#848400ff",
+    "F_Mask": "#840084ff",
+    "Dwgs_User": "#c2c2c2ff",
+    "Cmts_User": "#000084ff",
+    "Eco1_User": "#008400ff",
+    "Eco2_User": "#c2c200ff",
+    "Edge_Cuts": "#c2c200ff",
+    "Margin": "#c200c2ff",
+    "B_CrtYd": "#848484ff",
+    "F_CrtYd": "#c2c2c2ff",
+    "B_Fab": "#000084ff",
+    "F_Fab": "#848484ff",
+    "User_1": "#000084ff",
+    "User_2": "#000084ff",
+    "User_3": "#000084ff",
+    "User_4": "#000084ff",
+    "User_5": "#000084ff",
+    "User_6": "#000084ff",
+    "User_7": "#000084ff",
+    "User_8": "#000084ff",
+    "User_9": "#000084ff",
+    "User_10": "#000084ff",
+    "User_11": "#000084ff",
+    "User_12": "#000084ff",
+    "User_13": "#000084ff",
+    "User_14": "#000084ff",
+    "User_15": "#000084ff",
+    "User_16": "#000084ff",
+    "User_17": "#000084ff",
+    "User_18": "#000084ff",
+    "User_19": "#000084ff",
+    "User_20": "#000084ff",
+    "User_21": "#000084ff",
+    "User_22": "#000084ff",
+    "User_23": "#000084ff",
+    "User_24": "#000084ff",
+    "User_25": "#000084ff",
+    "User_26": "#000084ff",
+    "User_27": "#000084ff",
+    "User_28": "#000084ff",
+    "User_29": "#000084ff",
+    "User_30": "#000084ff",
+    "User_31": "#000084ff",
+    "User_32": "#000084ff",
+    "User_33": "#000084ff",
+    "User_34": "#000084ff",
+    "User_35": "#000084ff",
+    "User_36": "#000084ff",
+    "User_37": "#000084ff",
+    "User_38": "#000084ff",
+    "User_39": "#000084ff",
+    "User_40": "#000084ff",
+    "User_41": "#000084ff",
+    "User_42": "#000084ff",
+    "User_43": "#000084ff",
+    "User_44": "#000084ff",
+    "User_45": "#000084ff"
+  }
+}

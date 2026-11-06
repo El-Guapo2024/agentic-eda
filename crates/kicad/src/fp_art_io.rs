@@ -234,7 +234,8 @@ fn read_text(item: &[Sexpr], side: Side, fp_rot: Millideg) -> Option<FpText> {
         l.mirror = !l.mirror;
     }
     let font = sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "font"));
-    let face = font.and_then(|f| sexpr::find(f, "face")).and_then(|f| sexpr::txt(f, 1)).filter(|f| !f.is_empty()).map(str::to_string);
+    // the face is the text's own (`FpText::face`), not its layout's
+    let face = l.face.take();
     let line_spacing_permille = font.and_then(|f| sexpr::find(f, "line_spacing")).and_then(|s| sexpr::num(s, 1)).map(|v| (v * 1000.0).round() as i64).filter(|v| *v != 1000).unwrap_or(0);
     // `%V` and `%R` are the old spellings of `${VALUE}` and `${REFERENCE}` (the lexer has already made the `\n` of the file a newline).
     let text = raw.replace("%V", "${VALUE}").replace("%R", "${REFERENCE}");

@@ -791,8 +791,6 @@ export interface StudioState {
   itemPropertiesId: string | null;
   /** E / a double-click on a pad of the board: the id (`REF.NUM[#k]`) of the pad whose Pad Properties dialog is open (null = closed) -- components/BoardPadPropertiesDialog.tsx. */
   boardPadPropertiesId: string | null;
-  /** pcbnew.Control.showNetInspector ("Net Inspector") -- a basic net/pad-count list, not KiCad's full dockable inspector. */
-  netInspectorOpen: boolean;
   toast: { message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed" } | null;
 
   /** Cursor position in board µm, for the status bar's X/Y/dx/dy/dist. */
@@ -1044,7 +1042,6 @@ const initialState: StudioState = {
   footprintPropertiesOpen: false,
   itemPropertiesId: null,
   boardPadPropertiesId: null,
-  netInspectorOpen: false,
   toast: null,
   cursorNm: null,
   moveOriginNm: null,
@@ -1153,7 +1150,6 @@ export type Action =
   | { type: "SET_FOOTPRINT_PROPERTIES_OPEN"; open: boolean }
   | { type: "SET_ITEM_PROPERTIES_ID"; id: string | null }
   | { type: "SET_BOARD_PAD_PROPERTIES_ID"; id: string | null }
-  | { type: "SET_NET_INSPECTOR_OPEN"; open: boolean }
   /** `ms`: how long it stays (`WX_INFOBAR::ShowMessageFor`), else the kind's own; `dontShowAgain`: the info bar's "Don't show again" link, which sets that common option. */
   | { type: "TOAST"; message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed" }
   | { type: "TOAST_CLEAR" }
@@ -1568,8 +1564,6 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, itemPropertiesId: action.id };
     case "SET_BOARD_PAD_PROPERTIES_ID":
       return { ...state, boardPadPropertiesId: action.id };
-    case "SET_NET_INSPECTOR_OPEN":
-      return { ...state, netInspectorOpen: action.open };
     case "TOAST":
       return { ...state, toast: { message: action.message, kind: action.kind, ms: action.ms, dontShowAgain: action.dontShowAgain } };
     case "TOAST_CLEAR":

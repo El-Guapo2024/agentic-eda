@@ -109,6 +109,11 @@ pub struct FieldLayout {
     /// the text it shows is not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// `(font (face ..))`: the outline font the field is set in (`EDA_TEXT::GetFontName`); `None` is KiCad's stroke font ("KiCad Font"), the only one
+    /// the studio draws. Set by Edit Text & Graphics Properties' Font (`DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS::processItem`'s `SetFont`), read and written
+    /// with the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<String>,
 }
 
 impl FieldLayout {
@@ -129,6 +134,7 @@ impl FieldLayout {
             keep_upright: true,
             knockout: false,
             text: None,
+            face: None,
         }
     }
 

@@ -173,6 +173,8 @@ export interface FieldInfo {
   langle: number;
   /** True once the layout is stored in the design; false for the default placement. */
   custom: boolean;
+  /** `EDA_TEXT::GetFontName`: the outline font the field is set in; absent for KiCad's stroke font. */
+  face?: string;
 }
 
 /** `FootprintAttrs` as the studio state names them. */
@@ -218,7 +220,7 @@ export type FpGraphic =
   | (FpGraphicCommon & { kind: "bezier"; start: [Nm, Nm]; c1: [Nm, Nm]; c2: [Nm, Nm]; end: [Nm, Nm] });
 
 /** One text of a placed footprint (`fp_text user`, `Part.texts`): the keys of a field, at the absolute angle it has on the board, variables resolved. */
-export type FpTextInfo = Pick<FieldInfo, "id" | "text" | "x" | "y" | "angle" | "w" | "h" | "thickness" | "layer" | "halign" | "valign" | "mirror" | "bold" | "italic" | "upright" | "knockout"> & {
+export type FpTextInfo = Pick<FieldInfo, "id" | "text" | "x" | "y" | "angle" | "w" | "h" | "thickness" | "layer" | "halign" | "valign" | "mirror" | "bold" | "italic" | "upright" | "knockout" | "face"> & {
   /** Set when the text is exactly `${REFERENCE}` or `${VALUE}`: the Appearance panel's References and Values rows switch it (`PCB_TEXT::ViewGetLOD`). */
   role?: "reference" | "value";
 };
@@ -1642,12 +1644,57 @@ export interface FieldLayoutCmd {
   knockout?: boolean;
   /** The text shown when it is not the footprint's reference or the part's value. */
   text?: string | null;
+  /** `(font (face ..))`: an outline font; absent or null is KiCad's stroke font. */
+  face?: string | null;
 }
 export interface UserFieldCmd {
   name: string;
   text: string;
   layout: FieldLayoutCmd;
 }
+
+/** `eda_ops::FootprintItems`: the footprints' items Edit Text & Graphics Properties changes. */
+export interface GlobalEditFootprintItems {
+  field_ids?: string[];
+  text_ids?: string[];
+  shape_ids?: string[];
+}
+
+/** `eda_ops::TextRows`: "Set to specified values:"'s text rows; an absent key is "-- leave unchanged --". */
+export interface GlobalEditTextRows {
+  width?: Nm | null;
+  height?: Nm | null;
+  auto_thickness?: boolean;
+  bold?: boolean | null;
+  italic?: boolean | null;
+  /** "KiCad Font" or a family. */
+  font?: string | null;
+  keep_upright?: boolean | null;
+  visible?: boolean | null;
+  center_on_footprint?: boolean;
+}
+
+/** `eda_ops::Ipc4761Preset` (`VIA_PROTECTION_UI_MIXIN::IPC4761_PRESET` before `CUSTOM`). */
+export type Ipc4761Preset =
+  | "from_board"
+  | "none"
+  | "ia"
+  | "ib"
+  | "ia_inverted"
+  | "iia"
+  | "iib"
+  | "iia_inverted"
+  | "iiia"
+  | "iiib"
+  | "iiia_inverted"
+  | "iva"
+  | "ivb"
+  | "iva_inverted"
+  | "v"
+  | "via"
+  | "vib"
+  | "via_inverted"
+  | "vii";
 /** `eda_model::fp_edit::FootprintAttrs`. */
 export interface FootprintAttrsCmd {
   kind: "unspecified" | "smd" | "through_hole";
@@ -1790,10 +1837,19 @@ export type Cmd =
    * is already filtered (net/net-class/layer/width/"selected only" are
    * this dialog's own client-side job -- see `GlobalEditTracksAndViasDialog.tsx`).
    * `track_width`/`via_size` omitted (or `null`) leaves that property
-   * alone; this model has only one via "type" (no through/micro/blind/
-   * buried distinction, no padstack/annular-ring concept).
+   * alone. `unconnected` and `protection` are the via rows of "Set to specified values:".
    */
-  | { op: "edit_tracks_and_vias"; ids: string[]; track_width?: SizeSpec | null; via_size?: ViaSizeSpec | null; layer?: string | null }
+  | {
+      op: "edit_tracks_and_vias";
+      ids: string[];
+      track_width?: SizeSpec | null;
+      via_size?: ViaSizeSpec | null;
+      layer?: string | null;
+      /** "Via annular rings:" (`PADSTACK::SetUnconnectedLayerMode`). */
+      unconnected?: UnconnectedLayers | null;
+      /** "Via protection features:" (an IPC-4761 preset, kicad-port/globalEditTracksVias.ts `IPC4761_PRESETS`). */
+      protection?: Ipc4761Preset | null;
+    }
   /** Board Setup > Teardrops (task item 4): whole-struct replace. */
   | { op: "set_teardrop_settings"; settings: TeardropSettings }
   /** Regenerate the board's whole teardrop set from the current settings/tracks/vias/pads -- replaces, never appends to, this command's own previous output. */
@@ -1938,16 +1994,24 @@ export type Cmd =
   | { op: "delete_text"; id: string }
   | { op: "move_text"; id: string; x: Nm; y: Nm }
   /**
-   * `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close",
-   * scoped to the free-standing board items this model has: graphics,
-   * text and dimensions (no footprint reference/value fields, tables or
-   * barcodes exist as editable board items here -- see PARITY-pcb.md).
-   * Every field omitted (or `null`) leaves that property alone;
-   * `layer_defaults` is "Set to layer default values:" and ignores the
-   * fields. Filtering (scope, layer, "selected only") is
-   * `kicad-port/globalEditTextGraphics.ts`'s client-side job.
+   * `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close" (crates/ops/src/pcb_global_edit.rs): the board's graphics, texts (text boxes and
+   * table cells among them) and dimensions, and the footprints' fields (`REF:Name`), own texts (`REF~t<k>`) and graphics (`REF~g<k>`, the k-th of
+   * `Part.graphics`). Every field omitted (or `null`) leaves that property alone; `layer_defaults` is "Set to layer default values:" and ignores the
+   * fields. Filtering (scope, layer, parent reference and footprint, "selected only") is `kicad-port/globalEditTextGraphics.ts`'s client-side job.
    */
-  | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; dimension_ids?: string[]; layer_defaults?: boolean; layer?: string | null; line_width?: Nm | null; text_size?: Nm | null; text_thickness?: Nm | null }
+  | {
+      op: "edit_text_and_graphics";
+      shape_ids?: string[];
+      text_ids?: string[];
+      dimension_ids?: string[];
+      layer_defaults?: boolean;
+      layer?: string | null;
+      line_width?: Nm | null;
+      text_size?: Nm | null;
+      text_thickness?: Nm | null;
+      footprint?: GlobalEditFootprintItems;
+      rows?: GlobalEditTextRows;
+    }
   /** Cmd+D (`EDIT_TOOL::Duplicate`): exact copies of the named items in place, under fresh ids -- footprints (as new parts), tracks, vias, zones, shapes, texts, dimensions, groups (with copies of their members). See crates/ops/src/lib.rs `Cmd::Duplicate`. */
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
@@ -1995,6 +2059,10 @@ export type Cmd =
   | { op: "set_item_net"; ids: string[]; net: string }
   /** Track & Via Properties' net and its questions (crates/ops/src/pad_nets.rs `track_via_nets`): `net` null leaves every net; the answers left out make a question a refusal. */
   | { op: "track_via_nets"; ids: string[]; net: string | null; apply_anyway?: boolean; change_pads?: boolean }
+  /** The Net Inspector's Rename Selected Net, Delete Selected Net(s) and Add Net (`PCB_NET_INSPECTOR_PANEL`; crates/ops/src/net_edit.rs). Net names are the stored (escaped) ones. */
+  | { op: "rename_net"; from: string; to: string }
+  | { op: "delete_nets"; names: string[] }
+  | { op: "add_net"; name: string }
   | { op: "set_zone_name"; id: string; name: string }
   | { op: "replace_shape"; id: string; shape: CmdShape }
   /** The Properties panel's text style rows of a board text (crates/ops/src/pcb_props.rs `edit_text_style`): a key left out is unchanged. */

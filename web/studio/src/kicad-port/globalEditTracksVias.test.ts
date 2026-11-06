@@ -1,7 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, Pad, Part, Track, Via } from "../api/types";
-import { initialTracksViasFilter, matchingTracksAndVias, NOTHING_IN_SCOPE, viaKind, viasBoxState, viaTopLayer, withAllVias, type TracksViasFilter, type TracksViasScope } from "./globalEditTracksVias";
+import {
+  GLOBAL_ANNULAR_RING_CHOICES,
+  initialTracksViasFilter,
+  IPC4761_PRESETS,
+  matchingTracksAndVias,
+  NOTHING_IN_SCOPE,
+  viaKind,
+  viasBoxState,
+  viaTopLayer,
+  withAllVias,
+  type TracksViasFilter,
+  type TracksViasScope,
+} from "./globalEditTracksVias";
 
 const STACK = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
 const pad = (num: string, net: string): Pad => ({ num, net, x: 0, y: 0, w: 600, h: 600, round: false, th: false });
@@ -32,7 +44,7 @@ function board(groups: { id: string; member_ids: string[] }[] = []): BoardState 
   } as unknown as BoardState;
 }
 
-const ALL: TracksViasScope = { tracks: true, through: true, blind: true, buried: true };
+const ALL: TracksViasScope = { tracks: true, through: true, micro: true, blind: true, buried: true };
 const FILTER: TracksViasFilter = { selectedOnly: false, netOn: false, net: "GND", netclassOn: false, netclass: "Default", layerOn: false, layer: "F.Cu", trackWidthOn: false, trackWidth: 200, viaSizeOn: false, viaSize: 500 };
 const ids = (r: { trackIds: string[]; viaIds: string[] }) => [...r.trackIds, ...r.viaIds];
 
@@ -103,12 +115,36 @@ test("a board with no routing matches nothing", () => {
   assert.deepEqual(matchingTracksAndVias(null, ALL, FILTER, new Set()), { trackIds: [], viaIds: [] });
 });
 
-test("the tri-state Vias box follows the three types, and clicking it sets them all", () => {
-  assert.equal(viasBoxState({ through: false, blind: false, buried: false }), "off");
-  assert.equal(viasBoxState({ through: true, blind: true, buried: true }), "on");
-  assert.equal(viasBoxState({ through: true, blind: false, buried: true }), "mixed");
-  assert.deepEqual(withAllVias(NOTHING_IN_SCOPE, true), { tracks: false, through: true, blind: true, buried: true });
-  assert.deepEqual(withAllVias(ALL, false), { tracks: true, through: false, blind: false, buried: false });
+test("the tri-state Vias box follows the four types, and clicking it sets them all", () => {
+  assert.equal(viasBoxState({ through: false, micro: false, blind: false, buried: false }), "off");
+  assert.equal(viasBoxState({ through: true, micro: true, blind: true, buried: true }), "on");
+  assert.equal(viasBoxState({ through: true, micro: false, blind: true, buried: true }), "mixed", "three of four (`checked == 4` for on)");
+  assert.deepEqual(withAllVias(NOTHING_IN_SCOPE, true), { tracks: false, through: true, micro: true, blind: true, buried: true });
+  assert.deepEqual(withAllVias(ALL, false), { tracks: true, through: false, micro: false, blind: false, buried: false });
+});
+
+test("a via's own type wins over its span: a microvia is picked by the Microvias box only (`GetViaType() == VIATYPE::MICROVIA`)", () => {
+  assert.equal(viaKind({ from: "F.Cu", to: "In1.Cu", type: "micro" }, STACK), "micro");
+  assert.equal(viaKind({ from: "F.Cu", to: "B.Cu", type: "blind" }, STACK), "blind", "the type the file gave it");
+  assert.equal(viaKind({ from: "F.Cu", to: "In1.Cu", type: null }, STACK), "blind", "no type: its span");
+  const b = board();
+  (b.routing!.vias as Via[]).push({ ...via("v5", "SIG", "F.Cu", "In1.Cu", 300), type: "micro" });
+  const m = (scope: Partial<TracksViasScope>) => ids(matchingTracksAndVias(b, { ...NOTHING_IN_SCOPE, ...scope }, FILTER, new Set()));
+  assert.deepEqual(m({ micro: true }), ["v5"]);
+  assert.deepEqual(m({ blind: true }), ["v2"], "a blind via is not a microvia");
+  assert.deepEqual(m({ through: true, micro: true, blind: true, buried: true }), ["v1", "v2", "v3", "v4", "v5"]);
+});
+
+test("the via rows list KiCad's choices in its order", () => {
+  assert.deepEqual(
+    GLOBAL_ANNULAR_RING_CHOICES.map(([, l]) => l),
+    ["All copper layers", "Start, end, and connected layers", "Connected layers only", "Start and end layers only"],
+  );
+  assert.equal(IPC4761_PRESETS.length, 19, "FROM_BOARD .. VII, before CUSTOM");
+  assert.deepEqual(IPC4761_PRESETS[0], ["from_board", "From rules"]);
+  assert.deepEqual(IPC4761_PRESETS[14], ["v", "Type V (filled )"]);
+  assert.deepEqual(IPC4761_PRESETS[18], ["vii", "Type VII (filled and capped)"]);
+  assert.equal(new Set(IPC4761_PRESETS.map(([k]) => k)).size, 19);
 });
 
 test("the dialog opens on the remembered net and class, else the highlighted net and the Default class; every filter off", () => {
