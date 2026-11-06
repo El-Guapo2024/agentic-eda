@@ -17,7 +17,10 @@
 //! tuned, from the delay the tuning path has now ([`crate::delay`]: the tuning profile of the net's class); the placer judges and tunes the length, and
 //! reports the delay (`TuningDelayResult`).
 //!
-//! Differences from KiCad: the pad-to-die length and delay are not modelled (the model has no data for them); the line stops where the track width
+//! The pad-to-die length and delay of the pads the tuning path ends on count in the length and the delay (`m_padToDieLength`, `m_padToDieDelay`;
+//! [`crate::tuning_path::LengthEnv::pad_to_die`]).
+//!
+//! Differences from KiCad: the line stops where the track width
 //! changes (KiCad rewrites the whole of it at the first segment's width); the world is cloned once at `Start` instead of branched at every `Move`, as
 //! nothing in `Move` writes to it.
 
@@ -175,9 +178,10 @@ impl MeanderPlacer {
         let path = assemble_tuning_path(world, start).ok_or("Please select a track whose length you want to tune.")?;
         let mut w = world.clone();
         w.remove_line_segments(&origin_line);
-        let path_length = path.length(world, env);
+        // `origPathLength()` / `origPathDelay()`: `m_padToDieLength + lineLength( m_tunedPath, .. )`, the pads the path ends on counted
+        let path_length = path.full_length(world, env);
         let delay_params = origin_line.net.as_deref().and_then(|net| env.delay_params(net));
-        let path_delay = delay_params.as_ref().map_or(0, |p| path.delay(world, env, p));
+        let path_delay = path.full_delay(world, env, delay_params.as_ref());
         Ok(MeanderPlacer {
             world: w,
             env: env.clone(),
@@ -515,7 +519,7 @@ mod tests {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
         rules.clearance = mm(0.2);
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules }
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules, pad_to_die: Default::default() }
     }
 
     fn pad(net: &str, at: Point, layers: LayerRange) -> Item {
@@ -536,6 +540,30 @@ mod tests {
         s.set_target_length(target_nm);
         s.keep_endpoints = true;
         s
+    }
+
+    /// `MEANDER_PLACER::Start`: the pad-to-die length of the pads the path ends on is part of the length (`origPathLength()`: `m_padToDieLength +
+    /// lineLength( .. )`), so the meander makes up only what the pads do not; their pad-to-die delay is part of the delay (`origPathDelay()`).
+    #[test]
+    fn the_pad_to_die_length_and_delay_of_the_end_pads_count_in_the_length() {
+        let mut w = Node::new();
+        let named = |net: &str, at: Point, name: &str| Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: mm(0.4) }, source: name.into(), edge: false, rule: 0, anchor_points: Vec::new() });
+        w.add(named("SIG", p(0, 0), "U1.1"));
+        w.add(named("SIG", p(40_000_000, 0), "U2.7"));
+        let seg = w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(40_000_000, 0), width: mm(0.2), source_track: Some(("trk".into(), 0)), locked: false }));
+        let mut e = env();
+        e.pad_to_die = [("U1.1".to_string(), (mm(1.5), 9_000_000)), ("U2.7".to_string(), (mm(0.5), 3_000_000)), ("U9.1".to_string(), (mm(7.0), 0))].into();
+        let mut placer = MeanderPlacer::start(&w, &e, seg, p(5_000_000, 0), settings(44_000_000)).expect("a placer");
+        assert_eq!(placer.orig_path_length(), mm(42.0), "40 mm of track and 2 mm inside the two packages; a pad off the path does not count");
+        assert_eq!(placer.orig_path_delay(), 12_000_000, "no tuning profile: the pads' delays only");
+        assert!(placer.do_move(p(35_000_000, 0)));
+        let len = placer.tuning_length_result();
+        assert!((len - mm(44.0)).abs() < mm(0.1), "{len}");
+        // the track itself grew by about 2 mm, not 4
+        let t = placer.tuned();
+        let track = t.pre.length() + t.tuned.length() + t.post.length();
+        assert!((track - mm(42.0)).abs() < mm(0.1), "{track}");
+        assert_eq!(track + mm(2.0), len);
     }
 
     #[test]

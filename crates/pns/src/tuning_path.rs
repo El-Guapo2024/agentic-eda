@@ -5,7 +5,8 @@
 //! of the net it joins (`findLinesFromVia`), until a pad (the path ends there, `walkTuningPath`) or a dead end or a junction. Its
 //! length is the length of its lines -- the end of a line that finishes on a pad's centre clipped to the pad outline
 //! (`OptimiseTraceInPad`), the part of a line inside a via's pad to the via's centre (`OptimiseTraceInVia`) -- plus, with *Use height for
-//! length calculations*, the height of the stackup a via spans (`StackupHeight`). The pad-to-die length is not in the model.
+//! length calculations*, the height of the stackup a via spans (`StackupHeight`). The placers add the pad-to-die length (and delay) of the pads the
+//! path ends on (`m_padToDieLength += m_startPad_n->GetPadToDie()`): [`TuningPath::pad_to_die`], from [`LengthEnv::pad_to_die`].
 //!
 //! Lines are kept and measured in nanometres, as KiCad's `SHAPE_LINE_CHAIN::Length` is.
 
@@ -19,7 +20,7 @@ use crate::node::{AssembleOpts, Node};
 use eda_drc::kimath::Shape;
 use eda_model::ir::Point;
 use eda_model::{BoardRules, Stackup};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// What a tuning path is made of, in order from one end to the other.
 #[derive(Debug, Clone)]
@@ -46,6 +47,10 @@ pub struct TuningPath {
 pub struct LengthEnv {
     pub rules: BoardRules,
     pub stackup: Stackup,
+    /// `PAD::GetPadToDieLength` / `GetPadToDieDelay` of the board's pads by the id their solids carry (`Solid::source`, `"<ref>.<number>"` unique per pad):
+    /// nanometres and attoseconds (`PNS_KICAD_IFACE_BASE::syncPad`: `solid->SetPadToDie( aPad->GetPadToDieLength() )`, `SetPadToDieDelay`). A pad that is
+    /// not here has none. The caller fills it from the pads' `(die_length ..)` / `(die_delay ..)`.
+    pub pad_to_die: BTreeMap<String, (Nm, i64)>,
 }
 
 impl LengthEnv {
@@ -53,7 +58,13 @@ impl LengthEnv {
     pub fn of(model: &eda_model::ConstraintModel) -> LengthEnv {
         let rules = model.board.clone();
         let stackup = model.stackup.clone().unwrap_or_else(|| eda_model::rules::default_stackup(rules.layers.len(), mm(1.6)));
-        LengthEnv { rules, stackup }
+        LengthEnv { rules, stackup, pad_to_die: BTreeMap::new() }
+    }
+
+    /// The same with the pads' pad-to-die lengths and delays ([`Self::pad_to_die`]).
+    pub fn with_pad_to_die(mut self, pad_to_die: BTreeMap<String, (Nm, i64)>) -> LengthEnv {
+        self.pad_to_die = pad_to_die;
+        self
     }
 }
 
@@ -331,6 +342,26 @@ impl TuningPath {
         }
     }
 
+    /// The pad-to-die length and delay of the pads the path ends on (`MEANDER_PLACER::Start`: `m_padToDieLength += m_startPad_n->GetPadToDie();
+    /// m_padToDieDelay += m_startPad_n->GetPadToDieDelay();`, the same for `m_endPad_n`): nanometres and attoseconds, zero without pads.
+    pub fn pad_to_die(&self, world: &Node, env: &LengthEnv) -> (Nm, i64) {
+        let mut out = (Nm::ZERO, 0i64);
+        for pad in [self.start_pad, self.end_pad].into_iter().flatten() {
+            if let Some(Item::Solid(s)) = world.get(pad) {
+                if let Some(&(len, delay)) = env.pad_to_die.get(&s.source) {
+                    out.0 += len;
+                    out.1 += delay;
+                }
+            }
+        }
+        out
+    }
+
+    /// `origPathLength()` of a placer on this path: the pad-to-die length of its pads plus `lineLength` ([`Self::length`]). Nanometres.
+    pub fn full_length(&self, world: &Node, env: &LengthEnv) -> Nm {
+        self.pad_to_die(world, env).0 + self.length(world, env)
+    }
+
     /// `lineLength( path, startPad, endPad )` (`CalculateRoutedPathLength`): the lines of the path (pad-clipped), plus the height of the stackup a
     /// via of the path spans when the board uses height in its lengths, plus the via KiCad infers where the path leaves a pad on the other side
     /// of the board (`inferViaInPad`). Nanometres.
@@ -456,7 +487,7 @@ mod tests {
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules }
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules, pad_to_die: Default::default() }
     }
 
     #[test]
