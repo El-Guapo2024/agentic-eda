@@ -66,6 +66,11 @@ pub struct RulesOverlay {
     /// imported project came with and Configure Paths kept before there was a page) is only the seed it started from: see [`effective_text_variables`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_variables: Option<BTreeMap<String, String>>,
+    /// Design Rules > Component Classes (`pcbnew/dialogs/panel_assign_component_classes.cpp`): the project's `component_class_settings` -- "Assign component
+    /// class per sheet" and the custom assignments (`COMPONENT_CLASS_SETTINGS`), as the page's OK leaves them. The whole page; it replaces what the imported
+    /// project said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_classes: Option<crate::component_classes::ComponentClassSettings>,
 }
 
 /// Design Rules > Net Classes. The Default class's sizes and every other class with the net-name
@@ -500,6 +505,8 @@ pub fn default_stackup(copper_layers: usize, board_thickness_nm: Nm) -> Stackup 
         epsilon_r: epsilon,
         loss_tangent: tangent,
         color: None,
+        thickness_locked: false,
+        sublayers: vec![],
     };
     let mut layers = vec![
         layer("F.SilkS", "Top Silk Screen", None, None, None, None),
@@ -522,9 +529,9 @@ pub fn default_stackup(copper_layers: usize, board_thickness_nm: Nm) -> Stackup 
 }
 
 /// The board thickness a stackup adds up to (`BOARD_STACKUP::BuildBoardThicknessFromStackup`): every layer's
-/// thickness, in nm.
+/// thickness with its sublayers' ("dielectric layers can have more than one main layer: add thickness of all sublayers"), in nm.
 pub fn stackup_thickness_nm(s: &Stackup) -> Nm {
-    crate::units::mm(s.layers.iter().filter_map(|l| l.thickness_mm).sum::<f64>())
+    crate::units::mm(s.layers.iter().filter_map(|l| l.total_thickness_mm()).sum::<f64>())
 }
 
 impl StackupSettings {
@@ -562,8 +569,21 @@ impl StackupSettings {
         if copper != expect.iter().map(String::as_str).collect::<Vec<_>>() {
             return Err(format!("The stackup's copper layers {copper:?} are not the {n} layers {expect:?}."));
         }
-        if let Some(l) = self.stackup.layers.iter().find(|l| l.thickness_mm.is_some_and(|t| !t.is_finite() || t < 0.0)) {
+        if let Some(l) = self.stackup.layers.iter().find(|l| l.thickness_mm.is_some_and(|t| !t.is_finite() || t < 0.0) || l.sublayers.iter().any(|s| s.thickness_mm.is_some_and(|t| !t.is_finite() || t < 0.0))) {
             return Err(format!("Layer {:?} has a negative or invalid thickness.", l.name));
+        }
+        // `PANEL_SETUP_BOARD_STACKUP::transferDataFromUIToStackup`'s checks of the two values, for every sublayer of a layer that has them (`HasEpsilonRValue`,
+        // `HasLossTangentValue`), in its words.
+        let bad = |v: Option<f64>| v.is_some_and(|v| !v.is_finite() || v < 0.0);
+        for l in self.stackup.layers.iter().filter(|l| l.has_epsilon_r_value()) {
+            for s in (0..l.sublayer_count()).filter_map(|i| l.sublayer(i)) {
+                if bad(s.epsilon_r) {
+                    return Err("Incorrect value for Epsilon R (Epsilon R must be positive or null if not used)".into());
+                }
+                if bad(s.loss_tangent) {
+                    return Err("Incorrect value for Loss tg (Loss tg must be positive or null if not used)".into());
+                }
+            }
         }
         Ok(())
     }
@@ -635,6 +655,9 @@ impl RulesOverlay {
         if let Some(text) = &self.custom_rules {
             model.board.custom_rules_text = if text.trim().is_empty() { None } else { Some(text.clone()) };
             model.board.custom_rules.clear();
+        }
+        if let Some(c) = &self.component_classes {
+            model.board.component_classes = c.clone();
         }
     }
 

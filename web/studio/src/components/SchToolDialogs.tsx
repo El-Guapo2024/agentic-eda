@@ -19,6 +19,41 @@ import { lastPlaced, rememberPlaced } from "../kicad-port/schLastPlaced";
 import { poleOfSpin, spinOfPole, type CarriedDirective } from "../kicad-port/schPlaceTool";
 import { carryItem, changeCarried } from "../actions/schPlaceActions";
 import { getSchCarry, setSchCarry } from "../state/schCarryStore";
+import { setSymbolUnitCmd } from "../kicad-port/schSymbolMenus";
+
+/**
+ * `SCH_EDIT_FRAME::SelectUnit` when the unit chosen is already placed (picksymbol.cpp): "Unit Already Placed", "Symbol unit '%s' is already placed (on sheet
+ * '%s')", with "Swap '%s' and '%s'" (`wxID_YES`: that symbol takes the unit this one had, "Swap Units") and "Duplicate '%s'" (`wxID_NO`) and Cancel.
+ * **Differs**: Duplicate is offered disabled -- two placements of one unit of a reference on a sheet are one the model cannot hold (a placement's key is the
+ * reference and the unit) -- and there is no "Do not show again".
+ */
+function UnitPlacedDialog({ dialog }: { dialog: Extract<SchToolDialog, { kind: "unit_placed" }> }) {
+  const api = useStudioApi();
+  const dispatch = useStudioDispatch();
+  const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
+  return (
+    <SchDialogShell title="Unit Already Placed" width={420} onCancel={close}>
+      <p style={{ margin: 0 }} data-testid="unit-placed-message">
+        {dialog.message}
+      </p>
+      <div style={{ display: "flex", gap: 6, marginTop: 12, justifyContent: "flex-end" }}>
+        <button
+          className="primary"
+          data-testid="unit-placed-swap"
+          onClick={() => {
+            close();
+            void api.cmd(setSymbolUnitCmd(dialog.id, dialog.unit, dialog.newUnit, true));
+          }}
+        >
+          {dialog.swapLabel}
+        </button>
+        <button disabled title="A sheet holds one placement of each unit of a reference here, so the unit cannot be placed twice.">
+          {dialog.duplicateLabel}
+        </button>
+      </div>
+    </SchDialogShell>
+  );
+}
 
 const DEFAULT_TEXT_SIZE_NM = 1_270_000; // SCHEMATIC_SETTINGS::m_DefaultTextSize, 50 mil
 const DIRECTIVE_POLE_NM = 2_540_000; // SCH_DIRECTIVE_LABEL's default pin length, 100 mil
@@ -56,6 +91,8 @@ export function SchToolDialogs() {
       return <SheetPinPropertiesDialog key={`psp:${dialog.id}`} id={dialog.id} />;
     case "props_stroke":
       return <StrokePropertiesDialog key={`pk:${dialog.ids.join(",")}`} ids={dialog.ids} />;
+    case "unit_placed":
+      return <UnitPlacedDialog key={`up:${dialog.id}:${dialog.unit}:${dialog.newUnit}`} dialog={dialog} />;
     case "props_graphic": {
       const g = state.schematic.graphics?.find((x) => x.id === dialog.id);
       if (!g) return null;

@@ -595,6 +595,7 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
     let mut styles = Vec::new();
     let mut swaps = Vec::new();
     let mut alternates = Vec::new();
+    let mut looks = Vec::new();
     let mut path_units = Vec::new();
     let mut pos_excluded = Vec::new();
     for r in renames {
@@ -615,6 +616,10 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
         if let Some(v) = sch.extras.pin_alternates.remove(&old_key) {
             alternates.push((new_key.clone(), v));
         }
+        // its fields' font faces and colours (`SchExtras::field_looks`)
+        if let Some(v) = sch.extras.field_looks.remove(&old_key) {
+            looks.push((new_key.clone(), v));
+        }
         // the unit each path draws and "Exclude from position files" are the symbol's own (r4 A4-M3, B4-M2)
         if let Some(v) = sch.extras.path_units.remove(&old_key) {
             path_units.push((new_key.clone(), v));
@@ -628,6 +633,7 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
     sch.extras.body_styles.extend(styles);
     sch.extras.pin_swaps.extend(swaps);
     sch.extras.pin_alternates.extend(alternates);
+    sch.extras.field_looks.extend(looks);
     sch.extras.path_units.extend(path_units);
     sch.extras.excluded_from_pos_files.extend(pos_excluded);
     // the user fields and the lock belong to the part: they move with a reference renamed as a whole
@@ -638,6 +644,14 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
         }
     }
     sch.user_fields.extend(fields);
+    // its records of the design variants too (`SCH_SYMBOL_INSTANCE::m_Variants`)
+    let mut records = Vec::new();
+    for (old, new) in &whole {
+        if let Some(r) = sch.extras.symbol_variants.remove(old) {
+            records.push((new.clone(), r));
+        }
+    }
+    sch.extras.symbol_variants.extend(records);
     for l in sch.extras.locked.iter_mut() {
         if let Some(new) = whole.get(l.as_str()) {
             *l = new.clone();

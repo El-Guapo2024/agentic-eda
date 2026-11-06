@@ -3,9 +3,11 @@
 // and every library KiCad has installed (223 of them, 220 MB: opened one at a time, searched on the server) -- with a search over names, descriptions and
 // keywords; beside it the selected symbol's drawing (one unit at a time), its default footprint and its description.
 //
-// Confirming does not place anything itself: it arms `state.armedSymbol` and the `sch_place_symbol` tool, the same two-step ("choose, then click to place")
-// every other eeschema placement tool in this app uses, and SchematicView.tsx's onPointerDown is what sends `add_symbol` when the sheet is clicked. The server
-// keeps the definition of an installed symbol with the schematic in that same command (crates/cli/src/library_place.rs), so it draws, exports and passes ERC.
+// Place Symbol (A, `PlaceSymbol` with `m_symbolHistoryList`) opens it at its first click (actions/schPlaceActions.ts `beginItem`). OK puts the chosen symbol in
+// the hand (`new SCH_SYMBOL( *libSymbol, .., sel, cursorPos )`, `addSymbol`, `annotate()`): it rides the cursor, numbered, until the click that places it with
+// `add_symbol` (actions/schPlaceActions.ts `carrySymbol`). The server keeps the definition of an installed symbol with the schematic in that same command
+// (crates/cli/src/library_place.rs), so it draws, exports and passes ERC. "Place repeated copies" (`m_keepSymbol`, off) and "Place all units" (`m_useUnits`,
+// on) are KiCad's two boxes: the next copy or the next unit rides after each click. Cancel places nothing, and the tool stays armed.
 //
 // `P` (Place Power: `PlaceSymbol` with `filter.FilterPowerSymbols( true )` and `m_powerHistoryList`) opens the same chooser on power symbols only: titled
 // "Choose Power Symbol" (`DIALOG_SYMBOL_CHOOSER`), the tree filtered to `aNode.m_IsPower` (a library with none is not shown), its own Recently Used, the
@@ -13,8 +15,8 @@
 // power symbol in the hand (actions/schPlaceActions.ts): it rides the cursor until the click that places it with `add_power_symbol` (with its
 // library definition, crates/cli/src/library_place.rs), the net its Value. Cancel places nothing and Place Power stays armed.
 //
-// Not ported: the regular-expression and relational search words (a word is searched as text, with `*` and `?`), the Footprint selector's list of footprints
-// (the Choose button opens the Footprint Chooser instead), and "Place all units" (and, for Place Symbol, "Place repeated copies").
+// Not ported: the regular-expression and relational search words (a word is searched as text, with `*` and `?`), and the Footprint selector's list of footprints
+// (the Choose button opens the Footprint Chooser instead).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchProjectFootprintDrawing, fetchFootprintDetails, fetchProjectSymbolDrawing, fetchProjectSymbols, fetchSymbolDetails, type ProjectSymbol, type SymbolDetails } from "../api/libraryChooserClient";
 import { fetchInstalledLibraries } from "../api/libraryIndexClient";
@@ -23,7 +25,8 @@ import { chosenOf, type ChooserItem, type ChooserRow } from "../kicad-port/libCh
 import { unitLetter } from "../kicad-port/unitLetter";
 import { recentItems, rememberChosen } from "../state/chooserRecent";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { carryItem } from "../actions/schPlaceActions";
+import { carryItem, carrySymbol } from "../actions/schPlaceActions";
+import { pendingChooserAt } from "../state/schCarryStore";
 import { ChooserDetails, Linkified } from "./chooser/ChooserDetails";
 import { FootprintPreview, SymbolPreview } from "./chooser/ChooserPreview";
 import { LibChooserTree } from "./chooser/LibChooserTree";
@@ -56,6 +59,8 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
   const close = () => dispatch(power ? { type: "SET_SCH_POWER_PENDING", pending: null } : { type: "SET_SYMBOL_CHOOSER_OPEN", open: false });
   /** "Place repeated copies" (`m_keepSymbol`, unchecked as the dialog is made). */
   const [keep, setKeep] = useState(false);
+  /** "Place all units" (`m_useUnits->SetValue( true )`): "Sequentially place all units of the symbol." */
+  const [allUnits, setAllUnits] = useState(true);
 
   // The project's own symbols and the ones the design uses, and the names of the installed libraries (a symbol of those is read from the library file).
   const [project, setProject] = useState<ProjectSymbol[]>([]);
@@ -157,22 +162,26 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
         carryItem({ api }, "sch_power", { kind: "power", libId: c.item.id, net: details?.value || c.item.value || c.item.name, rotMillideg: 0 }, at ?? [0, 0], [], keep);
         return;
       }
-      dispatch({
-        type: "SET_ARMED_SYMBOL",
-        symbol: {
+      close();
+      // `new SCH_SYMBOL( *libSymbol, &m_frame->GetCurrentSheet(), sel, cursorPos, .. )`: the unit chosen (`sel.Unit`), the library's Value and default Footprint (a new
+      // `SCH_SYMBOL` copies the fields of its `LIB_SYMBOL`), numbered (`annotate()`), in the hand where the first click was
+      carrySymbol(
+        { api },
+        {
           libId: c.item.id,
           referencePrefix: reference,
           unit: Math.min(Math.max(c.unit > 0 ? c.unit : unitPick, 1), units),
-          // An installed symbol starts with its library's Value and default Footprint (a new `SCH_SYMBOL` copies the fields of its `LIB_SYMBOL`).
+          unitCount: units,
           value: details?.value || undefined,
           footprint: footprintOverride ?? details?.footprint ?? "",
+          placeAllUnits: allUnits,
         },
-      });
-      dispatch({ type: "SET_ACTIVE_TOOL", tool: "sch_place_symbol" });
-      close();
+        pendingChooserAt() ?? [0, 0],
+        keep
+      );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chooser, shown, installedNames, unitPick, units, footprintOverride, dispatch, power, keep, at]
+    [chooser, shown, installedNames, unitPick, units, footprintOverride, dispatch, power, keep, allUnits, at]
   );
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -270,11 +279,12 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
             </div>
           </div>
           <div className="dialog-footer">
-            {power && (
-              <label style={{ marginRight: "auto" }} title="Keep the symbol selected for subsequent clicks.">
-                <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} data-chooser-keep /> Place repeated copies
-              </label>
-            )}
+            <label title="Keep the symbol selected for subsequent clicks.">
+              <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} data-chooser-keep /> Place repeated copies
+            </label>
+            <label style={{ marginRight: "auto", marginLeft: 30 }} title="Sequentially place all units of the symbol.">
+              <input type="checkbox" checked={allUnits} onChange={(e) => setAllUnits(e.target.checked)} data-chooser-all-units /> Place all units
+            </label>
             <button onClick={close} data-chooser-cancel>
               Cancel
             </button>

@@ -219,3 +219,71 @@ fn footprints_save_into_their_pretty_folder_and_save_library_as_copies_the_folde
     assert_eq!(std::fs::read_to_string(dir.join("libs").join("Copy.pretty").join("R1.kicad_mod")).unwrap(), std::fs::read_to_string(pretty.join("R1.kicad_mod")).unwrap());
     assert!(std::fs::read_to_string(dir.join("fp-lib-table")).unwrap().contains("(name \"Copy\")"));
 }
+
+/// A footprint of `Mine` (the project table's `.pretty`) with what a blank footprint has none of: two pads, a silkscreen line and a description.
+const CHIP: &str = r#"(footprint "Chip" (version 20240108) (generator "eda") (layer "F.Cu") (descr "the file's")
+	(attr smd)
+	(fp_line (start -2 -1) (end 2 -1) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+	(pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+	(pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+)
+"#;
+
+/// A board whose project footprint table has `Mine` (`libs/Mine.pretty`) holding `Chip.kicad_mod`.
+fn board_with_footprint_library(name: &str) -> PathBuf {
+    let dir = scratch(name);
+    setup(&dir);
+    let added = library_tables::add_library(&dir, br#"{"kind":"footprint","path":"${KIPRJMOD}/libs/Mine","create":true}"#);
+    assert_eq!(added["ok"], true, "{added}");
+    std::fs::write(dir.join("libs").join("Mine.pretty").join("Chip.kicad_mod"), CHIP).unwrap();
+    dir
+}
+
+fn design_footprint(dir: &Path, name: &str) -> Option<LibraryFootprint> {
+    let (_, design, _) = board::load(dir).unwrap();
+    design.footprint_library.and_then(|l| l.by_name(name).cloned())
+}
+
+/// The Footprint Editor opens a library's footprint in two requests: `GET /api/library/footprint` (`library_api::footprint_any`: the design's copy, else
+/// the file's, which the editor then puts in) and `open_footprint_for_edit`. A command can land between them -- in the fpedit-fields run that failed, the
+/// Save As dialog's own open read the design's copy, the check deleted it, and the open came after -- and the open verb, which reads no library, started a
+/// blank footprint under the library's name that then stood in for the file. The interleaving, forced: the open reads the file itself now.
+#[test]
+fn a_footprint_whose_design_copy_goes_between_the_editors_read_and_its_open_opens_from_its_file() {
+    let dir = board_with_footprint_library("libsave_reopen_race");
+    let (fp, in_project) = crate::library_api::footprint_any(&dir, "Mine:Chip").unwrap();
+    assert!(!in_project);
+    crate::board::step(&dir, Cmd::PutLibraryFootprint { footprint: fp, overwrite: true }, false, "ui").unwrap();
+    assert!(items(&modified(&dir, "footprint")).is_empty(), "the copy the editor put in is the file's");
+    // the editor looks: the design's copy is there, so it puts nothing in ...
+    assert!(crate::library_api::footprint_any(&dir, "Mine:Chip").unwrap().1, "in the project");
+    // ... another client forgets the design's copy ...
+    crate::board::step(&dir, Cmd::DeleteLibraryFootprint { name: "Mine:Chip".into() }, false, "check").unwrap();
+    // ... and the editor's open lands
+    crate::board::step(&dir, Cmd::OpenFootprintForEdit { name: "Mine:Chip".into() }, false, "ui").unwrap();
+    let opened = design_footprint(&dir, "Mine:Chip").expect("opened");
+    assert_eq!((opened.pads.len(), opened.graphics.len(), opened.description.as_str()), (2, 1, "the file's"), "the file's footprint, not a blank one");
+    assert!(items(&modified(&dir, "footprint")).is_empty(), "and not modified: the design's copy is the file's");
+    // one undo step, as the editor's own put is: undone, the design has no copy again
+    crate::board::undo(&dir, "ui", None).unwrap();
+    assert!(design_footprint(&dir, "Mine:Chip").is_none(), "undone: the copy the open put in is gone");
+}
+
+/// A library's file that is there and cannot be parsed is not "no footprint with this name" (for which the editor starts a blank one): the read says why,
+/// and the open is refused -- `PCB_BASE_FRAME::LoadFootprint` gives nothing on the `IO_ERROR`, `LoadFootprintFromLibrary` leaves the editor as it was.
+#[test]
+fn a_library_footprint_whose_file_cannot_be_parsed_is_not_opened_blank() {
+    let dir = board_with_footprint_library("libsave_reopen_broken");
+    let broken = dir.join("libs").join("Mine.pretty").join("Broken.kicad_mod");
+    std::fs::write(&broken, "(footprint \"Broken\" (layer \"F.Cu\") (pad \"1\" smd rect").unwrap();
+    let why = crate::board::reasons(&crate::library_api::footprint_any(&dir, "Mine:Broken").unwrap_err());
+    assert!(why.contains(&broken.display().to_string()) && !why.contains("no footprint with this name"), "{why}");
+    let refused = crate::board::step(&dir, Cmd::OpenFootprintForEdit { name: "Mine:Broken".into() }, false, "ui").unwrap_err();
+    assert!(crate::board::reasons(&refused).contains(&broken.display().to_string()), "{}", crate::board::reasons(&refused));
+    assert!(design_footprint(&dir, "Mine:Broken").is_none(), "nothing opened");
+    // a name no library has is KiCad's New Footprint still: a blank one
+    let missing = crate::board::reasons(&crate::library_api::footprint_any(&dir, "Mine:Fresh").unwrap_err());
+    assert!(missing.contains("no footprint with this name"), "{missing}");
+    crate::board::step(&dir, Cmd::OpenFootprintForEdit { name: "Mine:Fresh".into() }, false, "ui").unwrap();
+    assert!(design_footprint(&dir, "Mine:Fresh").is_some_and(|f| f.pads.is_empty() && f.graphics.is_empty()));
+}

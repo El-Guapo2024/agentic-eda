@@ -20,11 +20,14 @@ export type NextUnit = { ok: true; unit: number } | { ok: false; message: string
  * `GetUnplacedUnitsForSymbol` and the checks around it: which unit comes next, or why none does (the info-bar messages).
  * `placedUnits` are the units of this reference already on the sheet.
  */
-export function nextUnitToPlace(unitCount: number, placedUnits: Iterable<number>): NextUnit {
+export function nextUnitToPlace(unitCount: number, placedUnits: Iterable<number>, requestedUnit = 0): NextUnit {
   if (unitCount <= 1) return { ok: false, message: "This symbol has only one unit." };
   const placed = new Set(placedUnits);
-  for (let u = 1; u <= unitCount; u++) if (!placed.has(u)) return { ok: true, unit: u };
-  return { ok: false, message: "All units of this symbol are already placed." };
+  const missing = Array.from({ length: unitCount }, (_, i) => i + 1).filter((u) => !placed.has(u));
+  if (missing.length === 0) return { ok: false, message: "All units of this symbol are already placed." };
+  // `if( requestedUnit > 0 ) { if( missingUnits.count( requestedUnit ) == 0 ) ShowInfoBarMsg( _( "Requested unit already placed." ) ) ... }` (the Symbol Unit submenu's "Place unit %s")
+  if (requestedUnit > 0) return missing.includes(requestedUnit) ? { ok: true, unit: requestedUnit } : { ok: false, message: "Requested unit already placed." };
+  return { ok: true, unit: missing[0]! };
 }
 
 /** The project's unit naming as a sheet response carries it (`Schematic.subpart_id_separator` / `subpart_first_id`). */

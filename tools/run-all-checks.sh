@@ -22,7 +22,7 @@
 # mcu30-routed (`eda place` then `eda route`), mcu30-zones (routed, with a GND pour on F.Cu and B.Cu), mcu30-sheet (mcu30 with KiCad's QA
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
 # examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), multichannel and
-# simulator and sim-model (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
+# simulator and sim-model (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
 # copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR).
 #
 # Needs: Playwright with Chromium ($PLAYWRIGHT_MODULE, default ~/tools/pw/node_modules/playwright/index.mjs), kicad-cli on the PATH
@@ -140,6 +140,8 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
             kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
             echo "replace_board: $reply" | cut -c1-300
             grep -q '"ok":true' <<< "$reply" ;;
+        ldo) # lines-dims.check.js: a 26 mm square board with nothing placed, room to draw in
+            "$eda" board new "$repo/examples/ldo.yaml" -o "$d" ;;
         board-io) # board-io.check.js: a hand-written KiCad board read by the importer
             "$eda" import-kicad "$e2e/board-io.kicad_pcb" -o "$d" ;;
         multichannel)

@@ -5,6 +5,7 @@
 // A pin is an item of the sheet (kicad-port/schPins.ts): the selection holds `pin:<reference>:<number>` ids, in the order they were picked, which is the order the swaps run in.
 import { schematicActions, type ActionMap } from "./schActionRegistry";
 import type { SchEditContext } from "./schEditActions";
+import { PIN_FUNCTION_ACTION, pinFunctionsOf, setPinFunctionCmd } from "../kicad-port/schSymbolMenus";
 
 export function registerSchPinActions(registry: ActionMap, ctx: SchEditContext): void {
   const { state, api, dispatch } = ctx;
@@ -26,6 +27,16 @@ export function registerSchPinActions(registry: ActionMap, ctx: SchEditContext):
     const pins = ctx.requestPins();
     if (pins.length < 2) return;
     void api.cmd({ op: "sch_edit", verb: "swap_pin_labels", pins });
+  });
+
+  // The Pin Function submenu (`ALT_PIN_FUNCTION_MENU`, `ID_POPUP_SCH_ALT_PIN_FUNCTION` -> `SCH_EDIT_FRAME::SetAltPinFunction( pin, alt )`): the entry's function on the one selected pin,
+  // one undo step ("Set Pin Function"). The menu's argument is the function's name.
+  m.set(PIN_FUNCTION_ACTION, (arg) => {
+    if (!sch || typeof arg !== "string") return;
+    const pins = ctx.requestPins();
+    const f = pins.length === 1 ? pinFunctionsOf(sch, pins[0]!) : null;
+    const cmd = f ? setPinFunctionCmd(f, arg) : null;
+    if (cmd) void api.cmd(cmd);
   });
 
   // Swap Unit Labels: `GetSameSymbolMultiUnitSelection` -- the selected symbols are units of one reference that has several units placed; each pin of those units needs

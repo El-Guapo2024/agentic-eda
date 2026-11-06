@@ -19,6 +19,7 @@ import { useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength } from "../state/units";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
 import { FootprintToolbarControl, GridSelect, SymbolToolbarControl } from "./toolbar/EditorToolbarControls";
+import { PcbVariantSelector, SchVariantSelector } from "./toolbar/VariantSelector";
 
 // No source-verified "100% = this many px/mm" reference for KiCad's own
 // zoom percentage readout either; this defines 100% as 1 screen px per
@@ -148,6 +149,8 @@ function BoardToolbarControl({ item }: { item: Extract<ToolbarItem, { type: "con
 function ToolbarControl({ item, editor }: { item: Extract<ToolbarItem, { type: "control" }>; editor: ToolbarEditor }) {
   if (editor === "footprint") return <FootprintToolbarControl control={item.control} />;
   if (editor === "symbol") return <SymbolToolbarControl control={item.control} />;
+  // the design variant choice (KiCad 25ec2335 `SCH_ACTION_TOOLBAR_CONTROLS::currentVariant`, `PCB_ACTION_TOOLBAR_CONTROLS::currentVariant`)
+  if (item.control === "currentVariant") return editor === "schematic" ? <SchVariantSelector /> : <PcbVariantSelector />;
   return <BoardToolbarControl item={item} />;
 }
 

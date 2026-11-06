@@ -4,15 +4,18 @@
 // Default, and the box lists the nets the pattern matches as it is typed. OK adds the assignment to the Net Classes page
 // (`set_net_classes`, one undo step on the board's side), exactly what Board Setup > Net Classes would store; an empty pattern assigns nothing.
 //
-// Not ported: the previewer that selects every item on the matching nets on the canvas while the pattern is typed.
-import { useState } from "react";
+// The previewer runs each time the pattern changes (`onPatternText` -> `m_previewer( matchingNetNames )`, the opening pattern included): on the board every item of
+// the matching nets is selected (`SelectAllItemsOnNet`), on the schematic every item on them brightened; closing the dialog leaves the board's selection as the
+// preview made it, as KiCad does, and unbrightens the schematic.
+import { useEffect, useRef, useState } from "react";
 import { closeSweepDialog } from "../actions/pcbSweepDialogs";
+import { setFindHighlights } from "../state/commonTool";
 import { netClassSettingsOf, netsMatching, proposePattern, withAssignment } from "../kicad-port/boardSetupRules";
 import { useStudioApi, useStudioState } from "../state/store";
 import { DialogShell } from "./pcbDialogKit";
 import "../styles/boardSetup.css";
 
-export function AssignNetclassDialog({ nets, candidates }: { nets: readonly string[]; candidates: readonly string[] }) {
+export function AssignNetclassDialog({ nets, candidates, preview }: { nets: readonly string[]; candidates: readonly string[]; preview?: (nets: readonly string[]) => void }) {
   const state = useStudioState();
   const api = useStudioApi();
   const rules = state.board?.board_rules;
@@ -23,6 +26,16 @@ export function AssignNetclassDialog({ nets, candidates }: { nets: readonly stri
   const [netclass, setNetclass] = useState(() => classNames[1] ?? classNames[0] ?? "Default");
   const [busy, setBusy] = useState(false);
   const matching = pattern.trim() === "" ? [] : netsMatching(pattern, candidates);
+  // `onPatternText`: the previewer is told when the pattern changes (`if( pattern != m_lastPattern )`)
+  const last = useRef<string | null>(null);
+  useEffect(() => {
+    if (last.current === pattern) return;
+    last.current = pattern;
+    preview?.(matching);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pattern]);
+  // the schematic's brightened items go with the dialog
+  useEffect(() => () => setFindHighlights([]), []);
 
   const onOk = async () => {
     if (!settings || pattern.trim() === "") return closeSweepDialog();

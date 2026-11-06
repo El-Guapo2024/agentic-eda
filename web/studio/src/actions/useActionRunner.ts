@@ -91,7 +91,7 @@ import { useSchControlDispatch, useSchControlState } from "../state/schControlSt
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitSymbolInstance, schematicBounds } from "../components/schematic/schHit";
 import { BROKEN_LINK_MESSAGE, symbolEditorTarget } from "../kicad-port/editWithSymbolEditor";
-import { hitField } from "../kicad-port/schFieldEdit";
+import { editFieldTarget, hitField } from "../kicad-port/schFieldEdit";
 import { measureStrokeText } from "../components/text/strokeFont";
 import { allItems, itemBounds } from "../components/schematic/schItems";
 import { pickItem } from "../components/schematic/schPick";
@@ -658,15 +658,13 @@ export function useActionRunner() {
         dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "zone" ? "select" : "zone" });
       })
     );
-    // Task item 7: `pcbnew/tools/drawing_tool.cpp`'s `DrawDimension`,
-    // scoped to a plain two-click (start, end) placement for every kind
-    // -- see DimensionPropertiesDialog.tsx and PARITY-pcb.md section 18
-    // for why height/leader-length/orientation are dialog-set afterward
-    // rather than a third interactive "set height" click the way source
-    // has for Aligned/Orthogonal.
+    // `pcbnew/tools/drawing_tool.cpp`'s `DrawDimension` (UI-LEFT P13): each kind's click sequence and live preview, in Canvas.tsx. The same kind again
+    // leaves the tool; another kind starts afresh with that one.
     const armDimension = (kind: CmdDimensionKind["kind"]) => {
+      const same = state.activeTool === "dimension" && state.nextDimensionKind === kind;
       dispatch({ type: "SET_NEXT_DIMENSION_KIND", kind });
-      dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "dimension" ? "select" : "dimension" });
+      if (state.drawState?.kind === "dimension") dispatch({ type: "SET_DRAW_STATE", draw: null });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: same ? "select" : "dimension" });
     };
     m.set("pcbnew.InteractiveDrawing.alignedDimension", pcbOnly(() => armDimension("aligned")));
     m.set("pcbnew.InteractiveDrawing.orthogonalDimension", pcbOnly(() => armDimension("orthogonal")));
@@ -1295,10 +1293,7 @@ export function useActionRunner() {
     m.set("eeschema.InteractiveEdit.mirrorH", schTurn("mirror_h"));
     m.set("eeschema.InteractiveEdit.mirrorV", schTurn("mirror_v"));
 
-    // `E`/`U`/`V`/`F` (sch_edit_tool.cpp::Properties/EditField): one
-    // shared dialog for all four -- see SymbolPropertiesDialog.tsx's own
-    // header comment on why U/V/F don't get source's own separate, far
-    // smaller single-field dialog.
+    // `E` (sch_edit_tool.cpp::Properties): Symbol Properties of the selected symbol.
     const schSymbols = () => promoteLonePin(state.selection.size > 0 ? [...state.selection] : requestSelection()).filter((id) => api.symbolById(id) && !schLocked().has(id));
     const openSymbolProperties = (field: "reference" | "value" | "footprint" | "datasheet" | null) =>
       schematicOnly(() => {
@@ -1311,13 +1306,22 @@ export function useActionRunner() {
       "eeschema.InteractiveEdit.properties",
       schematicOnly(() => {
         // a single selected pin stands for its symbol (`Properties`: "If a single pin is selected, promote to its parent symbol")
-        if (state.schematic) openSchProperties(state.schematic, promoteLonePin(state.selection.size > 0 ? [...state.selection] : requestSelection()), dispatch);
+        if (state.schematic) openSchProperties(state.schematic, promoteLonePin(state.selection.size > 0 ? [...state.selection] : requestSelection()), dispatch, state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null);
       })
     );
     m.set("eeschema.InteractiveEdit.symbolProperties", openSymbolProperties(null));
-    m.set("eeschema.InteractiveEdit.editReference", openSymbolProperties("reference"));
-    m.set("eeschema.InteractiveEdit.editValue", openSymbolProperties("value"));
-    m.set("eeschema.InteractiveEdit.editFootprint", openSymbolProperties("footprint"));
+    // `U` / `V` / `F` (`SCH_EDIT_TOOL::EditField` -> `editFieldText` -> `DIALOG_FIELD_PROPERTIES`): Field Properties on the one field, not Symbol Properties
+    // (kicad-port/schFieldEdit.ts `editFieldTarget`); a symbol whose fields have no places (a sheet read from a KiCad file) opens Symbol Properties at the field.
+    const editField = (name: "Reference" | "Value" | "Footprint") =>
+      schematicOnly(() => {
+        if (!state.schematic) return;
+        const target = editFieldTarget(state.schematic, state.selection.size > 0 ? [...state.selection] : requestSelection(), name);
+        if (target.kind === "field") dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_field", id: target.id } });
+        else if (target.kind === "symbol") dispatch({ type: "SET_SYMBOL_PROPERTIES", value: { id: target.id, field: name === "Reference" ? "reference" : name === "Value" ? "value" : "footprint" } });
+      });
+    m.set("eeschema.InteractiveEdit.editReference", editField("Reference"));
+    m.set("eeschema.InteractiveEdit.editValue", editField("Value"));
+    m.set("eeschema.InteractiveEdit.editFootprint", editField("Footprint"));
 
     m.set("eeschema.InspectionTool.runERC", () => dispatch({ type: "SET_ERC_DIALOG_OPEN", open: true }));
 

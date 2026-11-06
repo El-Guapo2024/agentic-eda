@@ -494,6 +494,28 @@ fn moving_deleting_and_naming() {
     assert_eq!(duplicate_base_name("HV"), "HV");
 }
 
+/// The tree's drag-and-drop (`onRuleTreeItemLeftUp`): among the rules of one node a drop on the first puts the dragged rule first, on the last puts it last,
+/// on another just before it -- a drop on the rule right after it moves nothing -- and a drop under another node, or on itself, does nothing.
+#[test]
+fn dragging_a_rule_onto_another_puts_it_where_kicads_tree_puts_it() {
+    let b = board();
+    let text = "(version 1)\n(rule a (constraint clearance (min 1mm)))\n(rule t (constraint track_width (min 1mm)))\n(rule b (constraint clearance (min 2mm)))\n(rule c (constraint clearance (min 3mm)))\n(rule d (constraint clearance (min 4mm)))\n";
+    let names = |e: &[Entry]| e.iter().map(|x| x.rule_name.clone()).collect::<Vec<_>>().join(" ");
+    let dropped = |from: &str, on: &str| {
+        let mut e = load(text, &b.env()).unwrap();
+        let (f, o) = (e.iter().position(|x| x.rule_name == from).unwrap(), e.iter().position(|x| x.rule_name == on).unwrap());
+        let moved = drop_entry(&mut e, f, o);
+        (moved, names(&e))
+    };
+    assert_eq!(dropped("c", "a"), (Some(0), "c a t b d".to_string()), "on the first: first");
+    assert_eq!(dropped("a", "d"), (Some(4), "t b c d a".to_string()), "on the last: after it");
+    assert_eq!(dropped("d", "b"), (Some(2), "a t d b c".to_string()), "on another: before it");
+    assert_eq!(dropped("a", "c"), (Some(2), "t b a c d".to_string()));
+    assert_eq!(dropped("b", "c"), (None, "a t b c d".to_string()), "on the next one: stays");
+    assert_eq!(dropped("a", "t"), (None, "a t b c d".to_string()), "another node: nothing");
+    assert_eq!(dropped("a", "a"), (None, "a t b c d".to_string()));
+}
+
 #[test]
 fn the_layer_selector_offers_what_kicad_offers() {
     let b = board();
@@ -558,6 +580,41 @@ fn custom_rules_check_says_what_kicads_compile_says() {
     assert_eq!(missing, ["ERROR: <a href='3:1'>Missing ')'.</a>"], "{missing:?}");
     let lexer = texts("(version 1)\n(rule a (condition \"A.Type == 'Pad'))");
     assert!(lexer.len() == 1 && lexer[0].starts_with("ERROR: <a href='2:") && lexer[0].ends_with("</a>"), "{lexer:?}");
+}
+
+/// `PANEL_SETUP_RULES::checkPlausibility`: two rules on one condition and layer source, a net class the project does not have (Default included, as
+/// `HasNetclass` looks in the other classes only), a layer the board does not have, by its name; `inner` and `outer` are not looked at.
+#[test]
+fn check_rule_syntax_warns_as_check_plausibility_does() {
+    let mut b = board();
+    b.names.insert("In2.Cu".into(), "PWR".into());
+    let classes = vec!["power".to_string(), "HS".to_string()];
+    let pb = PlausibilityBoard { net_classes: &classes, board: &b };
+    let texts = |text: &str| compile_report_with(text, &b.env(), Some(&pb)).into_iter().map(|r| (r.text, r.severity)).collect::<Vec<_>>();
+    let w = |t: &str| (t.to_string(), dru::ReportedSeverity::Warning);
+    let ok = ("No errors found.".to_string(), dru::ReportedSeverity::Info);
+    assert_eq!(texts("(version 1)\n(rule a (condition \"A.NetClass == 'power'\") (constraint clearance (min 1mm)))"), [ok.clone()]);
+    assert_eq!(
+        texts("(version 1)\n(rule a (condition \" A.NetClass == 'power' \") (constraint clearance (min 1mm)))\n(rule b (condition \"A.NetClass == 'power'\") (constraint track_width (min 1mm)))"),
+        [ok.clone(), w("Rules 'b' and 'a' share the same condition.")],
+        "the conditions are compared trimmed, the later rule named first"
+    );
+    assert_eq!(
+        texts("(version 1)\n(rule a (layer inner) (constraint clearance (min 1mm)))\n(rule b (layer outer) (constraint clearance (min 1mm)))\n(rule c (constraint clearance (min 1mm)))"),
+        [ok.clone()],
+        "a different layer source is a different key"
+    );
+    assert_eq!(
+        texts("(version 1)\n(rule a (condition \"A.NetClass == 'Default' || B.NetClass != 'hs' || A.NetClass=='HS'\") (constraint clearance (min 1mm)))"),
+        [ok.clone(), w("Rule 'a' references undefined netclass 'Default'."), w("Rule 'a' references undefined netclass 'hs'.")]
+    );
+    assert_eq!(texts("(version 1)\n(rule a (condition \"A.NetClass == 'my class'\") (constraint clearance (min 1mm)))"), [ok.clone()], "KiCad's pattern has no room for a space");
+    assert_eq!(texts("(version 1)\n(rule a (layer \"In5.Cu\") (constraint clearance (min 1mm)))"), [ok.clone(), w("Rule 'a' references undefined layer(s): In5.Cu.")]);
+    assert_eq!(texts("(version 1)\n(rule a (layer \"In*.Cu\") (constraint clearance (min 1mm)))").len(), 2, "a wildcard that takes in layers the board lacks");
+    assert_eq!(texts("(version 1)\n(rule a (layer \"PWR\") (constraint clearance (min 1mm)))"), [ok.clone()], "a layer by the board's name of it");
+    // No plausibility check after a thrown error.
+    assert_eq!(texts("(version 1)\n(rule a (condition \"A.Type == 'Pad'))").len(), 1);
+    assert_eq!(super::netclass_references("NetClass == '\"x'\"' NetClass!='a'b' NetClass = 'c'"), ["x", "a'b"]);
 }
 
 /// KiCad's own rule files (`qa/data/pcbnew/*.kicad_dru`): read by the editor and written back unedited, every rule is the same rule -- the same

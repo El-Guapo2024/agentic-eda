@@ -161,6 +161,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
         writeln!(out, "\t\t)").unwrap();
     }
     writeln!(out, "\t)").unwrap();
+    // The design variants (`formatHeader` > `formatVariants`, after the setup and the properties).
+    crate::variant_io::write_board_variants(&mut out, design);
 
     // ---- nets ----
     writeln!(out, "\t(net 0 \"\")").unwrap();
@@ -541,7 +543,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     }
 
     // The items nothing reads (a text box, a reference image, a target ..), as the file had them.
-    for item in design.drawings.iter().flat_map(|d| d.raw_items.iter()) {
+    for item in design.drawings.iter().flat_map(|d| d.raw_items.iter()).filter(|t| !crate::variant_io::superseded(design, t)) {
         writeln!(out, "\t{item}").unwrap();
     }
 
@@ -634,6 +636,11 @@ fn write_class_micro_and_pair(out: &mut String, class: Option<&eda_model::NetCla
 /// `BOARD_STACKUP::FormatBoardStackup`: `(stackup (layer "F.Cu" (type "copper") (thickness 0.035)) ..)` inside `(setup ..)`.
 /// Written only for a stackup whose every layer says what kind it is (one Board Setup or a board file made): the layers of
 /// a stackup an intent listed by name and thickness alone are not enough to describe the board to KiCad.
+///
+/// Each layer writes its sublayers in order, the ones after the first behind an `addsublayer` ("in sub layer list there is at least one item"), each with what its
+/// type has: `(color ..)` when `IsColorEditable` and the colour is specified, `(thickness ..)` when `IsThicknessEditable` (with ` locked` for a dielectric whose
+/// thickness is locked), `(material ..)` when `HasMaterialValue`, and `(epsilon_r ..)` / `(loss_tangent ..)` when the type has them and a material is specified.
+/// A first sublayer whose thickness the model does not know (`None`) writes none, where KiCad would write its type's default; a later one writes 0.
 fn write_stackup(out: &mut String, model: &ConstraintModel) {
     let Some(stackup) = &model.stackup else { return };
     if stackup.layers.is_empty() || stackup.layers.iter().any(|l| l.kind.is_none()) {
@@ -642,27 +649,32 @@ fn write_stackup(out: &mut String, model: &ConstraintModel) {
     writeln!(out, "\t\t(stackup").unwrap();
     for l in &stackup.layers {
         write!(out, "\t\t\t(layer {} (type {})", sexpr_str(&l.name), sexpr_str(l.kind.as_deref().unwrap_or(""))).unwrap();
-        // `(color ..)` is written for a mask, a silkscreen and a dielectric whose colour is specified (`IsColorEditable`, `IsPrmSpecified`), before the thickness.
-        if let Some(c) = l.color.as_deref().filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("not specified")) {
-            let kind = l.kind.as_deref().unwrap_or("").to_ascii_lowercase();
-            if kind.contains("silk screen") || kind.contains("solder mask") || kind == "core" || kind == "prepreg" || kind == "dielectric" {
-                write!(out, " (color {})", sexpr_str(c)).unwrap();
+        let dielectric = l.item_type() == eda_model::StackupItemType::Dielectric;
+        for idx in 0..l.sublayer_count() {
+            let Some(sub) = l.sublayer(idx) else { continue };
+            if idx > 0 {
+                write!(out, " addsublayer").unwrap();
             }
-        }
-        if let Some(t) = l.thickness_mm {
-            write!(out, " (thickness {})", crate::mm_f(t)).unwrap();
-        }
-        if let Some(m) = &l.material {
-            write!(out, " (material {})", sexpr_str(m)).unwrap();
-        }
-        if l.material.is_some() || l.epsilon_r.is_some() {
-            if let Some(e) = l.epsilon_r {
-                write!(out, " (epsilon_r {})", fmt_mm_f(e)).unwrap();
+            if l.is_material_editable() && eda_model::stackup_prm_specified(sub.color.as_deref()) {
+                write!(out, " (color {})", sexpr_str(sub.color.as_deref().unwrap_or(""))).unwrap();
             }
-        }
-        if l.material.is_some() || l.loss_tangent.is_some() {
-            if let Some(t) = l.loss_tangent {
-                write!(out, " (loss_tangent {})", fmt_mm_f(t)).unwrap();
+            if l.is_thickness_editable() {
+                if let Some(t) = sub.thickness_mm.or((idx > 0).then_some(0.0)) {
+                    write!(out, " (thickness {}{})", crate::mm_f(t), if dielectric && sub.thickness_locked { " locked" } else { "" }).unwrap();
+                }
+            }
+            // `HasMaterialValue( idx )`: `IsMaterialEditable() && IsPrmSpecified( GetMaterial( idx ) )`.
+            let has_material = l.is_material_editable() && eda_model::stackup_prm_specified(sub.material.as_deref());
+            if has_material {
+                write!(out, " (material {})", sexpr_str(sub.material.as_deref().unwrap_or(""))).unwrap();
+            }
+            if l.has_epsilon_r_value() && has_material {
+                if let Some(e) = sub.epsilon_r {
+                    write!(out, " (epsilon_r {})", fmt_mm_f(e)).unwrap();
+                }
+                if let Some(t) = sub.loss_tangent {
+                    write!(out, " (loss_tangent {})", fmt_mm_f(t)).unwrap();
+                }
             }
         }
         writeln!(out, ")").unwrap();
@@ -1029,6 +1041,12 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
             project["schematic"]["subpart_first_id"] = serde_json::json!(first);
         }
     }
+    // The design variants (KiCad 25ec2335 `SCHEMATIC_SETTINGS::m_VariantDescriptions`, `schematic.variants`), which kicad-cli's `--variant` looks a name up in
+    // (`SCHEMATIC::SetCurrentVariant` takes only a name it has); a variant no symbol differs in is in no schematic file, only here.
+    let variants = crate::project_schematic::variants_json(design);
+    if !variants.is_empty() {
+        project["schematic"]["variants"] = serde_json::Value::Array(variants);
+    }
     let mut erc = serde_json::json!({ "rule_severities": effective_erc_severities(design) });
     if let Some(m) = custom_erc_pin_map(design) {
         erc["pin_map"] = serde_json::json!(m);
@@ -1338,7 +1356,8 @@ pub(crate) fn write_footprint(
     if let Some(e) = own_extra {
         // Its description, tags, jumper pad groups, Datasheet and Description fields ..., as the file had them, while the part is on the footprint they describe.
         if e.source_name == lib_name_written {
-            for token in &e.tokens {
+            // a footprint variant the file had is the schematic's to say when the design has one (`crate::variant_io`)
+            for token in e.tokens.iter().filter(|t| !crate::variant_io::superseded(design, t)) {
                 writeln!(out, "\t\t{token}").unwrap();
             }
         }
@@ -1398,6 +1417,8 @@ pub(crate) fn write_footprint(
         writeln!(out, ")").unwrap();
     }
     write_attr(out, &extra.attrs, own_extra.is_some_and(|e| e.allow_soldermask_bridges));
+    // The footprint's records of the design variants (`format( FOOTPRINT )`'s `(variant ..)`), from the symbol's as Update PCB from Schematic puts them there.
+    crate::variant_io::write_footprint_variants(out, design, part.value.as_deref(), &fp.id, extra.attrs.dnp, extra.attrs.exclude_from_bom, extra.attrs.exclude_from_pos_files);
 
     // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).
     let mut pads: Vec<(usize, &Pad)> = footprint.pads.iter().enumerate().collect();
@@ -1926,11 +1947,13 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
         (false, None) => "no",
     };
     let lock = if locked { " (locked yes)" } else { "" };
+    // `aShape->GetStroke().Format( m_out, pcbIUScale )`: `(stroke (width ..) (type ..))`, the type `STROKE_PARAMS::GetLineStyleToken` of the shape's own (UI-LEFT P5).
+    let ty = style.map(|st| st.line_style).unwrap_or_default().token();
     match shape {
         Shape::Segment { stroke_width, start, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)){ends}{lock} {layer} (uuid \"{uuid}\"))",
+                "\t(gr_line (start {} {}) (end {} {}) (stroke (width {}) (type {ty})){ends}{lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
@@ -1938,7 +1961,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
         Shape::Arc { stroke_width, start, mid, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type solid)){ends}{lock} {layer} (uuid \"{uuid}\"))",
+                "\t(gr_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type {ty})){ends}{lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(mid.x), mm(mid.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
@@ -1948,7 +1971,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
             let radius = style.map(|st| st.corner_radius).filter(|&r| r > Nm::ZERO).map(|r| format!(" (radius {})", mm(r))).unwrap_or_default();
             writeln!(
                 out,
-                "\t(gr_rect (start {} {}) (end {} {}){radius} (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
+                "\t(gr_rect (start {} {}) (end {} {}){radius} (stroke (width {}) (type {ty})) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
             )
             .unwrap();
@@ -1956,7 +1979,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
         Shape::Circle { stroke_width, filled, center, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
+                "\t(gr_circle (center {} {}) (end {} {}) (stroke (width {}) (type {ty})) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
                 mm(center.x), mm(center.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
             )
             .unwrap();
@@ -1966,13 +1989,13 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
             for p in pts {
                 write!(out, " (xy {} {})", mm(p.x), mm(p.y)).unwrap();
             }
-            writeln!(out, ") (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))", sw(*stroke_width), fill(*filled)).unwrap();
+            writeln!(out, ") (stroke (width {}) (type {ty})) (fill {}){lock} {layer} (uuid \"{uuid}\"))", sw(*stroke_width), fill(*filled)).unwrap();
         }
         // `case SHAPE_T::BEZIER:` -- `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)) ...)`; like a line, never filled.
         Shape::Bezier { stroke_width, start, c1, c2, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type solid)){ends}{lock} {layer} (uuid \"{uuid}\"))",
+                "\t(gr_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type {ty})){ends}{lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(c1.x), mm(c1.y), mm(c2.x), mm(c2.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
@@ -3455,7 +3478,7 @@ mod tests {
     fn a_stackup_the_intent_listed_by_name_alone_is_not_written() {
         // `StackupLayer`s without a type (the older shape: name, material, thickness) do not describe the board to KiCad.
         let (design, mut model) = fixture();
-        model.stackup = Some(eda_model::Stackup { layers: vec![eda_model::StackupLayer { name: "F.Cu".into(), material: Some("copper".into()), thickness_mm: Some(0.035), kind: None, epsilon_r: None, loss_tangent: None, color: None }], copper_finish: None, dielectric_constraints: false, edge_connector: 0, edge_plating: false });
+        model.stackup = Some(eda_model::Stackup { layers: vec![eda_model::StackupLayer { name: "F.Cu".into(), material: Some("copper".into()), thickness_mm: Some(0.035), kind: None, epsilon_r: None, loss_tangent: None, color: None, thickness_locked: false, sublayers: vec![] }], copper_finish: None, dielectric_constraints: false, edge_connector: 0, edge_plating: false });
         assert!(!export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(stackup"));
     }
 

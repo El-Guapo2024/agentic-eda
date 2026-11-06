@@ -269,16 +269,19 @@
     });
 
     // ----- the Properties panel edits a footprint's attributes
-    await scenario("footprint: the Properties panel sets Do not Populate, Exclude From BOM and Component Type; the symbol follows", async (t) => {
+    // KiCad 8303b2ad's FOOTPRINT registers no "Component Type" property (footprint.cpp's Attributes group: Not in Schematic, Exclude From
+    // Position Files, Exclude From Bill of Materials, Do not Populate), so task-u1-props took the studio's extra row out; the type is
+    // Footprint Properties' (the next scenario), as in KiCad.
+    await scenario("footprint: the Properties panel sets Do not Populate, Exclude From BOM and Exclude From Position Files; the symbol follows", async (t) => {
       await select([refA]);
       let applied = 0;
-      for (const [name, v] of [["Do not Populate", true], ["Exclude From Bill of Materials", true], ["Exclude From Position Files", true], ["Component Type", "through_hole"]]) {
+      for (const [name, v] of [["Do not Populate", true], ["Exclude From Bill of Materials", true], ["Exclude From Position Files", true]]) {
         const r = await edit(name, v);
         t(r.startsWith("ok"), `${name} -> ${r}`);
         if (r.startsWith("ok")) applied++;
       }
       const attrs = (await partOf(refA)).attrs;
-      t(attrs.dnp && attrs.exclude_from_bom && attrs.exclude_from_pos_files && attrs.kind === "through_hole", `attributes are ${JSON.stringify(attrs)}`);
+      t(attrs.dnp && attrs.exclude_from_bom && attrs.exclude_from_pos_files, `attributes are ${JSON.stringify(attrs)}`);
       for (let i = 0; i < applied; i++) await undo();
       t((await snapshot()) === base, "undoing every edit puts the board back");
     });

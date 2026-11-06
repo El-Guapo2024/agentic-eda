@@ -7,6 +7,7 @@ pub mod barcode;
 pub mod bezier;
 pub mod board;
 pub mod board_text;
+pub mod bus_pattern;
 pub mod component_classes;
 pub mod embedded_files;
 mod drc_checks;
@@ -58,6 +59,7 @@ pub mod table_text;
 pub mod text_vars;
 pub mod topo_match;
 pub mod units;
+pub mod variants;
 pub mod track_mask;
 pub mod via_extra;
 pub mod via_stitch;
@@ -475,7 +477,7 @@ pub struct BoardRules {
     #[serde(default, skip_serializing_if = "setup_pages::TuningProfiles::is_empty")]
     pub tuning_profiles: setup_pages::TuningProfiles,
     /// Component Classes (`COMPONENT_CLASS_SETTINGS`): the project's rules that give footprints a class, and whether sheets do. The classes a board file gives its own
-    /// footprints are `FootprintExtra::component_classes`. Read from and written to the project; the Board Setup page that edits it is not built.
+    /// footprints are `FootprintExtra::component_classes`. Read from and written to the project; Board Setup > Component Classes edits it (`RulesOverlay::component_classes`).
     #[serde(default, skip_serializing_if = "component_classes::ComponentClassSettings::is_default")]
     pub component_classes: component_classes::ComponentClassSettings,
     /// The schematic's share of each net class, by class name (`Default` for the Default class): the wire and bus widths, the colour and the line style
@@ -1230,6 +1232,121 @@ pub struct StackupLayer {
     /// (`BOARD_ADAPTER::GetLayerColors`, "Use board stackup colors").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// `(thickness .. locked)` of the layer's first sublayer (`DIELECTRIC_PRMS::m_ThicknessLocked`): a dielectric whose thickness is fixed, for impedance control.
+    /// "Adjust Dielectric Thickness" leaves it as it is. Only a dielectric writes and reads it (`parseBoardStackup`: `if( type == BS_ITEM_TYPE_DIELECTRIC )`).
+    /// Additive: absent reads as unlocked.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub thickness_locked: bool,
+    /// The sublayers of a dielectric after its first (`BOARD_STACKUP_ITEM::m_DielectricPrmsList[1..]`, each written after an `addsublayer` in the file): the layer's
+    /// own `material`, `thickness_mm`, `thickness_locked`, `epsilon_r`, `loss_tangent` and `color` are sublayer 0, as `GetThickness()` is `GetThickness( 0 )`.
+    /// Board Setup's "Add Dielectric Layer..." and "Remove Dielectric Layer..." add and remove them. Additive: absent reads as a layer of one sublayer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sublayers: Vec<StackupSublayer>,
+}
+
+/// One sublayer of a dielectric after its first (`DIELECTRIC_PRMS`): what follows an `addsublayer` in the file (`BOARD_STACKUP::FormatBoardStackup`). `None` is "not
+/// written": the reader leaves it out where the file has none, and the writer writes only what the layer's type has (`IsColorEditable`, `HasMaterialValue`, ..).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackupSublayer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
+    /// mm. `None` reads as 0 (`DIELECTRIC_PRMS`: `m_Thickness( 0 )`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickness_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub thickness_locked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epsilon_r: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loss_tangent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+impl StackupSublayer {
+    /// `BOARD_STACKUP_ITEM::AddDielectricPrms`: a new `DIELECTRIC_PRMS` -- no material, colour or thickness (0), unlocked, epsilon R 1 and loss tangent 0
+    /// (`DIELECTRIC_PRMS()`: `m_Thickness(0), m_ThicknessLocked( false ), m_EpsilonR( 1.0 ), m_LossTangent( 0.0 )`).
+    pub fn added() -> StackupSublayer {
+        StackupSublayer { material: None, thickness_mm: Some(0.0), thickness_locked: false, epsilon_r: Some(1.0), loss_tangent: Some(0.0), color: None }
+    }
+}
+
+/// `BOARD_STACKUP_ITEM_TYPE`, as `PCB_IO_KICAD_SEXPR_PARSER::parseBoardStackup` gives it a stackup layer from the layer's name: a silkscreen, a mask or a paste layer
+/// by its board layer, a copper layer, and a dielectric for a name that is no board layer ("dielectric 1").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackupItemType {
+    Copper,
+    Dielectric,
+    SolderPaste,
+    SolderMask,
+    Silkscreen,
+}
+
+/// `IsPrmSpecified`: a value that is not empty and not "Not specified".
+pub fn stackup_prm_specified(value: Option<&str>) -> bool {
+    value.is_some_and(|v| !v.is_empty() && !v.eq_ignore_ascii_case("Not specified"))
+}
+
+impl StackupLayer {
+    /// See [`StackupItemType`]. The file names a silkscreen `F.SilkS` (older) or `F.Silkscreen` (`LSET::Name`).
+    pub fn item_type(&self) -> StackupItemType {
+        match self.name.as_str() {
+            "F.SilkS" | "B.SilkS" | "F.Silkscreen" | "B.Silkscreen" => StackupItemType::Silkscreen,
+            "F.Mask" | "B.Mask" => StackupItemType::SolderMask,
+            "F.Paste" | "B.Paste" => StackupItemType::SolderPaste,
+            n if crate::layers::is_copper_layer_name(n) => StackupItemType::Copper,
+            _ => StackupItemType::Dielectric,
+        }
+    }
+
+    /// `BOARD_STACKUP_ITEM::IsThicknessEditable`: copper, a dielectric and a solder mask.
+    pub fn is_thickness_editable(&self) -> bool {
+        matches!(self.item_type(), StackupItemType::Copper | StackupItemType::Dielectric | StackupItemType::SolderMask)
+    }
+
+    /// `IsMaterialEditable` (and `IsColorEditable`, the same three): a dielectric, a solder mask and a silkscreen.
+    pub fn is_material_editable(&self) -> bool {
+        matches!(self.item_type(), StackupItemType::Dielectric | StackupItemType::SolderMask | StackupItemType::Silkscreen)
+    }
+
+    /// `HasEpsilonRValue` (and `HasLossTangentValue`): a dielectric and a solder mask.
+    pub fn has_epsilon_r_value(&self) -> bool {
+        matches!(self.item_type(), StackupItemType::Dielectric | StackupItemType::SolderMask)
+    }
+
+    /// `GetSublayersCount()`: the layer's own and those of [`Self::sublayers`].
+    pub fn sublayer_count(&self) -> usize {
+        1 + self.sublayers.len()
+    }
+
+    /// Sublayer `i` (`DIELECTRIC_PRMS` of `m_DielectricPrmsList[i]`): 0 is the layer's own fields.
+    pub fn sublayer(&self, i: usize) -> Option<StackupSublayer> {
+        if i == 0 {
+            return Some(StackupSublayer {
+                material: self.material.clone(),
+                thickness_mm: self.thickness_mm,
+                thickness_locked: self.thickness_locked,
+                epsilon_r: self.epsilon_r,
+                loss_tangent: self.loss_tangent,
+                color: self.color.clone(),
+            });
+        }
+        self.sublayers.get(i - 1).cloned()
+    }
+
+    /// Every sublayer's thickness, mm, the first being the layer's own (`GetThickness( idx )` for `idx` in `0..GetSublayersCount()`); a sublayer that has none is 0.
+    pub fn sublayer_thicknesses_mm(&self) -> impl Iterator<Item = f64> + '_ {
+        std::iter::once(self.thickness_mm.unwrap_or(0.0)).chain(self.sublayers.iter().map(|s| s.thickness_mm.unwrap_or(0.0)))
+    }
+
+    /// The layer's thickness with its sublayers' (what `BuildBoardThicknessFromStackup` adds for it), mm; `None` for a layer that has none of its own and no sublayers.
+    pub fn total_thickness_mm(&self) -> Option<f64> {
+        if self.thickness_mm.is_none() && self.sublayers.is_empty() {
+            return None;
+        }
+        Some(self.sublayer_thicknesses_mm().sum())
+    }
 }
 
 /// A group of nets that route alike. Matched by glob over the net name.

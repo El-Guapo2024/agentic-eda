@@ -268,3 +268,50 @@ export function fieldDialogCaption(name: string, ofSheet: boolean): string {
   if (isStandardSymbolField(name) || name.toLowerCase() === "description") return `Edit ${name} Field`;
   return `Edit '${name}' Field`;
 }
+
+/** What U, V or F opens (`SCH_EDIT_TOOL::EditField`): Field Properties on a field (`editFieldText`), the full Symbol Properties where the symbol's fields have no places
+ *  yet (a sheet read from a KiCad file), or nothing. */
+export type EditFieldTarget = { kind: "field"; id: string } | { kind: "symbol"; id: string } | { kind: "none" };
+
+/**
+ * `SCH_EDIT_TOOL::EditField` on the one item `RequestSelection( { SCH_FIELD_T, SCH_SYMBOL_T, SCH_PIN_T } )` gives: a field of the name asked (Reference for
+ * U, Value for V, Footprint for F) is edited itself, any other field stands for its symbol ("If the field to edit is not a symbol field, we cannot edit the
+ * ref, value or footprint": a sheet's field gives nothing); a symbol or one of its pins gives the field of that name of the symbol; a power symbol has no
+ * Footprint to edit (`if( !symbol->IsPower() )`). A symbol is a reference whose placed units are one item: the first placed unit's field (`unit`, when
+ * given, names the one).
+ */
+export function editFieldTarget(sch: Pick<Schematic, "symbols" | "power_symbols" | "sheets">, selection: readonly string[], name: "Reference" | "Value" | "Footprint", unit?: number): EditFieldTarget {
+  if (selection.length !== 1) return { kind: "none" };
+  const id = selection[0]!;
+  const f = parseFieldId(id);
+  let owner: string | null = null;
+  if (f) {
+    if (f.name === name) return { kind: "field", id };
+    // `item = field->GetParentSymbol()`: a symbol's or a power symbol's field
+    const sym = sch.symbols.find((s) => ownerKey(s) === f.owner);
+    if (sym) {
+      owner = sym.id;
+      unit = sym.unit;
+    } else if (sch.power_symbols.some((p) => p.id === f.owner)) owner = f.owner;
+    else return { kind: "none" };
+  } else if (id.startsWith("pin:")) {
+    const rest = id.slice(4);
+    const key = rest.slice(0, rest.lastIndexOf(":"));
+    const sym = sch.symbols.find((s) => ownerKey(s) === key);
+    if (!sym) return { kind: "none" };
+    owner = sym.id;
+    unit = sym.unit;
+  } else owner = id;
+  const power = sch.power_symbols.find((p) => p.id === owner);
+  if (power) {
+    if (name === "Footprint") return { kind: "none" };
+    const pf = power.fields?.find((x) => x.name === name);
+    return pf?.id ? { kind: "field", id: pf.id } : { kind: "none" };
+  }
+  const placed = sch.symbols.filter((s) => s.id === owner);
+  const sym = (unit !== undefined ? placed.find((s) => s.unit === unit) : undefined) ?? placed[0];
+  if (!sym) return { kind: "none" };
+  const sf = sym.fields?.find((x) => x.name === name);
+  if (sf?.id) return { kind: "field", id: sf.id };
+  return (sym.fields?.length ?? 0) === 0 ? { kind: "symbol", id: sym.id } : { kind: "none" };
+}

@@ -149,13 +149,13 @@ const MIN_LAYER_NM = 1_000;
 
 /** The parts of the board's rules the build-up is read from (`BoardState["board_rules"]`). */
 export interface StackRules {
-  stackup?: { layers: ReadonlyArray<{ name: string; material?: string | null; thickness_mm: number | null; kind?: string }> } | null;
+  stackup?: { layers: ReadonlyArray<{ name: string; material?: string | null; thickness_mm: number | null; kind?: string; sublayers?: ReadonlyArray<{ thickness_mm?: number | null }> }> } | null;
   board_thickness_nm?: number;
   copper_layers?: number;
 }
 
 /**
- * `BOARD_ADAPTER::InitSettings`' stackup loop: the dielectrics (every sublayer; ours holds them summed) and the enabled inner copper make the body, the
+ * `BOARD_ADAPTER::InitSettings`' stackup loop: the dielectrics (every sublayer, `for( sublayer .. ) body_thickness += item->GetThickness( sublayer )`) and the enabled inner copper make the body, the
  * F.Cu / B.Cu items give the outer copper and the F.Mask / B.Mask items the masks (each at least 1 um). A layer with no thickness keeps its item's default
  * (`BOARD_STACKUP_ITEM`'s ctor: copper 35 um, mask 10 um, a dielectric none).
  *
@@ -181,6 +181,7 @@ export function stackOfBoard(rules: StackRules | null | undefined): Stack {
     const isCopper = kind === "copper" || (kind === "" && /\.Cu$/.test(item.name));
     if (kind === "core" || kind === "prepreg" || kind === "dielectric") {
       body += nm(item.thickness_mm, 0);
+      for (const sub of item.sublayers ?? []) body += nm(sub.thickness_mm, 0);
     } else if (isCopper) {
       const t = Math.max(nm(item.thickness_mm, STACKUP_COPPER_NM), MIN_LAYER_NM);
       if (item.name === "F.Cu") out.copperMm = t / 1e6;

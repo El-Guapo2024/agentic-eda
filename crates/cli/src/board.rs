@@ -80,6 +80,9 @@ mod review_tests;
 #[path = "rule_editor_tests.rs"]
 mod rule_editor_tests;
 #[cfg(test)]
+#[path = "component_classes_tests.rs"]
+mod component_classes_tests;
+#[cfg(test)]
 #[path = "pcb_items_tests.rs"]
 mod pcb_items_tests;
 #[cfg(test)]
@@ -1552,6 +1555,9 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // A symbol or footprint out of a library of the library tables goes in with its definition (`crate::library_place`).
     let with_definitions = crate::library_place::with_installed_definitions(dir, cmd, &design, &model);
     let cmd = with_definitions.as_ref().unwrap_or(cmd);
+    // The Footprint Editor opening a library's footprint the design has no copy of: the library's file goes in with the open (`crate::library_place`).
+    let with_opened = crate::library_place::with_opened_footprint(dir, cmd, &design)?;
+    let cmd = with_opened.as_ref().unwrap_or(cmd);
     let tag = snapshot_tag(cmd);
     // A schematic file imported as a sheet is read here, into the command (`crate::sheet_import`).
     let with_file = crate::sheet_import::with_loaded_file(cmd, dir)?;
@@ -1836,9 +1842,10 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetConstraints { .. } => "board-setup constraints".to_string(),
         Cmd::SetMaskPaste { .. } => "board-setup mask-paste".to_string(),
         Cmd::SetTextGraphicsDefaults { .. } => "board-setup text-graphics".to_string(),
-        Cmd::SetStackup { settings } => format!("board-setup stackup --layers {}", settings.copper_layers),
+        Cmd::SetStackup { settings, .. } => format!("board-setup stackup --layers {}", settings.copper_layers),
         Cmd::SetRuleSeverities { .. } => "board-setup severities".to_string(),
         Cmd::SetCustomRules { .. } => "board-setup custom-rules".to_string(),
+        Cmd::DropDrcRule { name, target_name, .. } => format!("drc-rule-editor drop {name:?} on {target_name:?}"),
         Cmd::EditDrcRule { action, name, rule, .. } => format!("drc-rule-editor {} {:?}", serde_json::to_value(action).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(), rule.as_ref().map_or(name.as_str(), |r| r.name.as_str())),
         Cmd::SetTextVariables { variables } => format!("board-setup text-variables ({} variables)", variables.len()),
         Cmd::SetBoardLayers { settings } => format!("board-setup layers ({} enabled)", settings.enabled.len()),
@@ -1846,6 +1853,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetZoneHatchOffsets { offsets } => format!("board-setup zone-hatch-offsets ({} layers)", offsets.len()),
         Cmd::SetTuningPatterns { .. } => "board-setup tuning-patterns".to_string(),
         Cmd::SetTuningProfiles { settings } => format!("board-setup tuning-profiles ({} profiles)", settings.profiles.len()),
+        Cmd::SetComponentClasses { settings } => format!("board-setup component-classes ({} assignments)", settings.assignments.len()),
         Cmd::AddDrcExclusions { exclusions } => format!("drc exclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::DeleteDrcExclusions { exclusions } => format!("drc unexclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::ClearDrcExclusions => "drc unexclude --all".to_string(),
@@ -2032,6 +2040,12 @@ fn cmd_line(c: &Cmd) -> String {
             let flag = |name: &str, v: &Option<bool>| v.map(|v| format!(" --{name} {}", if v { "on" } else { "off" })).unwrap_or_default();
             format!("schematic attrs {}{}{}{}{}", ids.join(","), flag("dnp", dnp), flag("exclude-from-bom", exclude_from_bom), flag("exclude-from-board", exclude_from_board), flag("exclude-from-sim", exclude_from_sim))
         }
+        Cmd::AddDesignVariant { name, description } => format!("schematic variant add {name:?} {description:?}"),
+        Cmd::RemoveDesignVariant { name } => format!("schematic variant remove {name:?}"),
+        Cmd::EditDesignVariantDescription { name, description } => format!("schematic variant describe {name:?} {description:?}"),
+        Cmd::RenameDesignVariant { name, new_name } => format!("schematic variant rename {name:?} {new_name:?}"),
+        Cmd::CopyDesignVariant { name, new_name } => format!("schematic variant copy {name:?} {new_name:?}"),
+        Cmd::SetSymbolVariant { variant, ids, .. } => format!("schematic variant set {variant:?} {}", ids.join(",")),
         Cmd::SetSheetPage { sheet, page, .. } => format!("schematic sheet-page {sheet} {page:?}"),
         Cmd::SetSchItemText { id, text } => format!("schematic item-text {id} {text:?}"),
         Cmd::SetSymbolLibIds { changes, .. } => format!("schematic lib-ids {}", changes.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(",")),
@@ -2202,13 +2216,14 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetStackup { .. } => "stackup",
         Cmd::SetRuleSeverities { .. } => "severities",
         Cmd::SetCustomRules { .. } => "custom-rules",
-        Cmd::EditDrcRule { .. } => "drc-rule",
+        Cmd::EditDrcRule { .. } | Cmd::DropDrcRule { .. } => "drc-rule",
         Cmd::SetTextVariables { .. } => "text-variables",
         Cmd::SetBoardLayers { .. } => "board-layers",
         Cmd::SetFormatting { .. } => "formatting",
         Cmd::SetZoneHatchOffsets { .. } => "zone-hatch-offsets",
         Cmd::SetTuningPatterns { .. } => "tuning-patterns",
         Cmd::SetTuningProfiles { .. } => "tuning-profiles",
+        Cmd::SetComponentClasses { .. } => "component-classes",
         Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } | Cmd::ClearDrcExclusions => "drc-exclusion",
         Cmd::SetErcSeverities { .. } => "schematic-erc-severities",
         Cmd::SwapLayers { .. } => "swap-layers",
@@ -2297,6 +2312,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetErcPinMapCell { .. } | Cmd::ResetErcPinMap => "schematic-erc-pin-map",
         Cmd::Annotate { .. } | Cmd::IncrementAnnotations { .. } => "schematic-annotate",
         Cmd::SetSymbolAttrs { .. } => "schematic-attrs",
+        Cmd::AddDesignVariant { .. } | Cmd::RemoveDesignVariant { .. } | Cmd::EditDesignVariantDescription { .. } | Cmd::RenameDesignVariant { .. } | Cmd::CopyDesignVariant { .. } | Cmd::SetSymbolVariant { .. } => "schematic-variant",
         Cmd::SetSheetPage { .. } => "schematic-sheet-page",
         Cmd::SetSchItemText { .. } => "schematic-text",
         Cmd::SetSymbolLibIds { .. } => "schematic-lib-ids",

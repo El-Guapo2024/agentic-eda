@@ -19,8 +19,8 @@
 //                    ${LAYER} follow the names; an item can be put on a user layer; a layer that holds an item cannot be turned off; one that does not is gone from the lists and takes no new item
 //   setup pages      the page tree has KiCad's order; Formatting (a ratio of 0 is marked and stops Apply; Apply stores the ratios and the footprint boxes), Zone Hatch Offsets (an offset per copper layer, a
 //                    metre too far is marked), Length-tuning Patterns (a minimum above the maximum is marked; Apply stores the three groups; the length tuner opens at the maximum amplitude and the
-//                    spacing of its kind) and Tuning Profiles (a profile with no name is marked; a new row takes the layers KiCad gives it; a layer named twice stops Apply; a class may name a profile that
-//                    is not defined and the page says so) each store one undo step
+//                    spacing of its kind) and Tuning Profiles (a profile with no name is marked; a new row takes the layers KiCad gives it; a layer named twice stops Apply; a class names its profile in the
+//                    Net Classes grid's Tuning Profile column, and keeps the name of a profile renamed away, which both pages say) each store one undo step
 //   net classes      a pattern is a wildcard pattern or a regular expression (the list of the nets it matches says which nets), a net several classes match is said to be in all of them with its
 //                    composite class's name, the patterns are stored as typed, and moving a class changes the order they are kept in (a class's place in the table is its priority)
 //   end              no console error came up while it ran, and the board is as it was (texts, variables, overlay, shapes, dimensions, title block, footprint fields)
@@ -513,20 +513,29 @@
       check("a layer named twice stops Apply", /Fix the profile marked in red/.test(duplicated) && /Duplicated signal layer/.test(p.querySelector(".bs-error")?.textContent ?? "") && JSON.stringify((await stored()).tuning_profiles) === profilesBefore, duplicated);
       p.querySelector('button[aria-label="Remove row 3"]').click();
       await sleep(150);
-      step("naming a profile for a class");
-      const cls = p.querySelector('input[aria-label="Tuning profile of Default"]');
-      await setText(cls, "Gone");
-      check("a class that names a profile the page does not have is marked and the page says kicad-cli reports it", cls.classList.contains("bs-invalid") && /kicad-cli reports it as missing/.test(p.querySelector('tr[data-class="Default"] td.bs-error')?.textContent ?? ""), p.querySelector('tr[data-class="Default"]')?.textContent);
       const savedProfiles = await apply(p);
       if (savedProfiles === "Saved.") steps.push("pcb");
       rules = await stored();
       const prof = rules.tuning_profiles.profiles[0];
-      check("Tuning Profiles: Apply stores the profile, its rows, its via override and the class's name for a profile", savedProfiles === "Saved." && prof?.name === "USB 90" && prof.profile_type === "differential" && prof.target_impedance === 90 && prof.enable_time_domain_tuning === true && prof.via_propagation_delay_as === 25000000 && prof.layer_entries.length === 2 && prof.layer_entries[0].width_nm === 130_000 && prof.layer_entries[0].diff_pair_gap_nm === 150_000 && prof.layer_entries[0].delay_as_per_mm === 6100000 && prof.via_overrides.length === 1 && rules.tuning_profiles.class_profiles.Default === "Gone" && rules.overlay.includes("tuning_profiles"), JSON.stringify(rules.tuning_profiles).slice(0, 400));
-      await setText(p.querySelector('input[aria-label="Tuning profile of Default"]'), "USB 90");
-      check("naming a profile the page has clears the mark", !p.querySelector('input[aria-label="Tuning profile of Default"]').classList.contains("bs-invalid"), "");
-      const savedAgain = await apply(p);
-      if (savedAgain === "Saved.") steps.push("pcb");
-      check("and it is stored too", savedAgain === "Saved." && (await stored()).tuning_profiles.class_profiles.Default === "USB 90", savedAgain);
+      check("Tuning Profiles: Apply stores the profile, its rows and its via override", savedProfiles === "Saved." && prof?.name === "USB 90" && prof.profile_type === "differential" && prof.target_impedance === 90 && prof.enable_time_domain_tuning === true && prof.via_propagation_delay_as === 25000000 && prof.layer_entries.length === 2 && prof.layer_entries[0].width_nm === 130_000 && prof.layer_entries[0].diff_pair_gap_nm === 150_000 && prof.layer_entries[0].delay_as_per_mm === 6100000 && prof.via_overrides.length === 1 && rules.overlay.includes("tuning_profiles"), JSON.stringify(rules.tuning_profiles).slice(0, 400));
+      // the profile a class names is the Net Classes grid's "Tuning Profile" column (GRID_DELAY_PROFILE), as in KiCad
+      step("naming a profile for a class in Net Classes");
+      const nc = await openPage("Net Classes");
+      const choice = nc.querySelector('select[aria-label="Default Tuning Profile"]');
+      check("Net Classes has the Tuning Profile column: a blank, then the project's profiles", !!choice && [...choice.options].map((o) => o.value).join("|") === "|USB 90", choice ? [...choice.options].map((o) => o.value).join("|") : "no column");
+      await setSelect(choice, "USB 90");
+      const savedClass = await apply(nc);
+      if (savedClass === "Saved.") steps.push("pcb");
+      check("and Apply stores the class's profile, in the same undo step as the classes", savedClass === "Saved." && (await stored()).tuning_profiles.class_profiles?.Default === "USB 90", savedClass);
+      step("renaming the profile");
+      p = await openPage("Tuning Profiles");
+      await setText(p.querySelector('input[aria-label="Profile name"]'), "USB 100");
+      const renamed = await apply(p);
+      if (renamed === "Saved.") steps.push("pcb");
+      rules = await stored();
+      check("a class that names a profile the project no longer has keeps the name, and the page says kicad-cli reports it", renamed === "Saved." && rules.tuning_profiles.class_profiles?.Default === "USB 90" && /Default names USB 90/.test(p.querySelector("[data-missing-profiles]")?.textContent ?? ""), JSON.stringify(rules.tuning_profiles.class_profiles));
+      const ncAgain = await openPage("Net Classes");
+      check("and Net Classes marks the cell", ncAgain.querySelector('select[aria-label="Default Tuning Profile"]')?.classList.contains("bs-invalid") === true, ncAgain.querySelector('select[aria-label="Default Tuning Profile"]')?.outerHTML?.slice(0, 200));
     });
 
     // ---------------------------------------------------------------------------------------------------------------------------------- net classes
@@ -689,7 +698,8 @@
       await pickLayer("f_silks");
       await arm("pcbnew.InteractiveDrawing.alignedDimension", "dimension");
       const dimsBefore = ((await state()).drawings?.dimensions ?? []).length;
-      await click(3, 28); await click(11, 28);
+      // `DRAWING_TOOL::DrawDimension`: an aligned dimension takes its start, its end, then the height click (task-u2-lines ported it).
+      await click(3, 28); await click(11, 28); await click(11, 30);
       await sleep(500);
       const dims = (await state()).drawings?.dimensions ?? [];
       if (dims.length > dimsBefore) steps.push("pcb");

@@ -710,8 +710,12 @@ fn handle(
         ("POST", "/api/sch/fields_table") => respond(stream, "200 OK", "application/json", sch_api::fields_table(dir, &body).to_string().as_bytes()),
         // Move, Drag, Rotate and Mirror previews: the commands applied in memory, the moved geometry back (`crate::sch_move_api`).
         ("POST", "/api/sch/move_preview") => respond(stream, "200 OK", "application/json", sch_move_api::move_preview(dir, &body).to_string().as_bytes()),
+        // A dimension being drawn or reshaped, its geometry and text worked out (`crate::dimension_api`, UI-LEFT P13).
+        ("POST", "/api/dimension/preview") => respond(stream, "200 OK", "application/json", crate::dimension_api::preview(&body).to_string().as_bytes()),
         // The item a placing tool carries before the click that places it (a label, a text, a directive label, a power symbol): its command tried on a copy (`crate::sch_place_api`).
         ("POST", "/api/sch/place_preview") => respond(stream, "200 OK", "application/json", crate::sch_place_api::place_preview(dir, &body).to_string().as_bytes()),
+        // The font families the machine has, for Symbol Properties' Font column (`crate::fonts_api`).
+        ("GET", "/api/fonts") => respond(stream, "200 OK", "application/json", crate::fonts_api::fonts().to_string().as_bytes()),
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         // Annotate Schematic's message window and the other dialogs that work across sheets (`crate::sch_hierarchy_api`).
@@ -901,6 +905,9 @@ fn handle(
         // What Swap Pad Nets / Swap Gate Nets would ask first: the unselected pads the copper connected to the swapped pads reaches (`PromptConnectedPadDecision`).
         ("GET", "/api/rule_editor") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::view(dir).to_string().as_bytes()),
         ("POST", "/api/rule_editor/check") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::check(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/rule_editor/show_matches") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::show_matches(dir, &body).to_string().as_bytes()),
+        // Board Setup > Component Classes (`crate::board_setup_api`): the field and sheet names of the board's footprints, whether each assignment compiles and what it matches.
+        ("POST", "/api/component_classes") => respond(stream, "200 OK", "application/json", crate::board_setup_api::component_classes(dir, &body).to_string().as_bytes()),
         ("POST", "/api/swap_nets/preview") => respond(stream, "200 OK", "application/json", crate::pad_nets_api::preview(dir, &body).to_string().as_bytes()),
         // What Track & Via Properties' OK would ask first: a short, then the pads a net change takes along (`confirmShortingNets`, `confirmPadChange`).
         ("POST", "/api/track_via_nets/preview") => respond(stream, "200 OK", "application/json", crate::pad_nets_api::track_via_preview(dir, &body).to_string().as_bytes()),
@@ -1536,7 +1543,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             // board folder's `path-variables.json` (`crate::text_variables`).
             "text_variables": crate::text_variables::project_variables(dir),
             "overlay": design.drawings.as_ref().and_then(|d| d.rules.as_ref()).map(|r| {
-                [("net_classes", r.net_classes.is_some()), ("constraints", r.constraints.is_some()), ("mask_paste", r.mask_paste.is_some()), ("text_graphics", r.text_graphics.is_some()), ("stackup", r.stackup.is_some()), ("severities", r.severities.is_some()), ("custom_rules", r.custom_rules.is_some()), ("text_variables", r.text_variables.is_some()), ("board_layers", r.board_layers.is_some()), ("formatting", r.formatting.is_some()), ("zone_hatch_offsets", r.zone_hatch_offsets.is_some()), ("tuning_patterns", r.tuning_patterns.is_some()), ("tuning_profiles", r.tuning_profiles.is_some())]
+                [("net_classes", r.net_classes.is_some()), ("constraints", r.constraints.is_some()), ("mask_paste", r.mask_paste.is_some()), ("text_graphics", r.text_graphics.is_some()), ("stackup", r.stackup.is_some()), ("severities", r.severities.is_some()), ("custom_rules", r.custom_rules.is_some()), ("text_variables", r.text_variables.is_some()), ("board_layers", r.board_layers.is_some()), ("formatting", r.formatting.is_some()), ("zone_hatch_offsets", r.zone_hatch_offsets.is_some()), ("tuning_patterns", r.tuning_patterns.is_some()), ("tuning_profiles", r.tuning_profiles.is_some()), ("component_classes", r.component_classes.is_some())]
                     .iter()
                     .filter(|(_, set)| *set)
                     .map(|(name, _)| *name)
@@ -1565,6 +1572,10 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     // Schematic Setup > Net Classes' columns of the board's classes (wire and bus widths, colour, line style), by class name -- set apart, the `json!` above being
     // at the macro's recursion limit
     state["board_rules"]["net_class_schematic"] = json!(model.board.net_class_schematic);
+    // Design Rules > Component Classes (`COMPONENT_CLASS_SETTINGS`): "Assign component class per sheet" and the custom assignments, as the board is judged by them now
+    state["board_rules"]["component_classes"] = json!(model.board.component_classes);
+    // the design variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, which the board's `(variants ..)` gets from the schematic), set apart too
+    state["variants"] = json!(design_variants_json(&design));
     Ok(state)
 }
 
@@ -1659,7 +1670,7 @@ fn outline_errors_json(design: &eda_model::ir::Design, model: Option<&eda_model:
 /// (`eda_connectivity::dimension::compute_dimension_geometry`) -- a
 /// renderer never re-derives it.
 pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
-    use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
+    use eda_model::ir::{ArrowDirection, DimensionKind, DimensionUnits, DimensionUnitsFormat};
 
     let (kind, height, horizontal, leader_length) = match d.kind {
         DimensionKind::Aligned { height } => ("aligned", Some(height), None, None),
@@ -1679,10 +1690,7 @@ pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         DimensionUnitsFormat::BareSuffix => "bare_suffix",
         DimensionUnitsFormat::ParenSuffix => "paren_suffix",
     };
-    let text_position = match d.text_position {
-        DimensionTextPosition::Outside => "outside",
-        DimensionTextPosition::Inline => "inline",
-    };
+    let text_position = d.text_position.word();
     let arrow_direction = match d.arrow_direction {
         ArrowDirection::Inward => "inward",
         ArrowDirection::Outward => "outward",
@@ -1718,6 +1726,20 @@ pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         "extension_height": d.extension_height,
         "arrow_direction": arrow_direction,
         "lines": geom.lines.iter().map(|(a, b)| json!([[a.x, a.y], [b.x, b.y]])).collect::<Vec<_>>(),
+        // A leader's circle frame (`DIM_TEXT_BORDER::CIRCLE`): `[[cx, cy], r]` each.
+        "circles": geom.circles.iter().map(|(c, r)| json!([[c.x, c.y], r])).collect::<Vec<_>>(),
+        // The text's own place (`Dimension::text_pos`: a radial's or a leader's text, or one placed by hand), null when the geometry places it; a leader's
+        // frame (`DIM_TEXT_BORDER`: none, rectangle, circle, round_rect); an aligned or orthogonal crossbar's ends and a radial's knee, the point editor's
+        // handles (UI-LEFT P13).
+        "text_pos": d.text_pos.map(|p| json!([p.x, p.y])),
+        "text_frame": match d.text_frame {
+            eda_model::ir::DimensionTextBorder::None => "none",
+            eda_model::ir::DimensionTextBorder::Rectangle => "rectangle",
+            eda_model::ir::DimensionTextBorder::Circle => "circle",
+            eda_model::ir::DimensionTextBorder::RoundRect => "round_rect",
+        },
+        "crossbar": geom.crossbar.map(|(a, b)| json!([[a.x, a.y], [b.x, b.y]])),
+        "knee": geom.knee.map(|k| json!([k.x, k.y])),
         "text_at": [geom.text_at.x, geom.text_at.y],
         "computed_text_angle": geom.text_angle,
         "measured_value_nm": geom.measured_value_nm,
@@ -1726,7 +1748,7 @@ pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
 }
 
 fn dimension_settings_json(s: &eda_model::ir::DimensionSettings) -> Value {
-    use eda_model::ir::{DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
+    use eda_model::ir::{DimensionUnits, DimensionUnitsFormat};
 
     let units = match s.units {
         DimensionUnits::Mm => "mm",
@@ -1739,10 +1761,7 @@ fn dimension_settings_json(s: &eda_model::ir::DimensionSettings) -> Value {
         DimensionUnitsFormat::BareSuffix => "bare_suffix",
         DimensionUnitsFormat::ParenSuffix => "paren_suffix",
     };
-    let text_position = match s.text_position {
-        DimensionTextPosition::Outside => "outside",
-        DimensionTextPosition::Inline => "inline",
-    };
+    let text_position = s.text_position.word();
 
     json!({
         "units": units,
@@ -1986,6 +2005,11 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if let Some(shown) = shown.as_ref().and_then(|sh| sh.symbol_shown_json(&owner)) {
                 symbol["shown"] = shown;
             }
+            // Its records of the design variants (KiCad 25ec2335 `SCH_SYMBOL_INSTANCE::m_Variants`, `SchExtras::symbol_variants`), which the studio lays over the
+            // symbol while one is the current variant: by name, each flag it sets and each field text.
+            if let Some(records) = sch.extras.symbol_variants.get(&s.id) {
+                symbol["variants"] = json!(records);
+            }
             symbol
         })
         .collect();
@@ -2105,7 +2129,14 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     let power_symbols: Vec<Value> = sch
         .power_symbols
         .iter()
-        .map(|p| json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": eda_engine::fields::power_fields(&sch, p).iter().map(|f| page_field_json(&p.id, f)).collect::<Vec<_>>(), "fields_autoplaced": fields_autoplaced_json(&sch, &p.id) }))
+        .map(|p| {
+            let mut v = json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": eda_engine::fields::power_fields(&sch, p).iter().map(|f| page_field_json_in(&sch, &p.id, f)).collect::<Vec<_>>(), "fields_autoplaced": fields_autoplaced_json(&sch, &p.id) });
+            // what its Symbol Properties set beyond the Reference and Value (`SchExtras::power_props`): its Footprint, Datasheet, flags and user fields
+            if let Some(props) = sch.extras.power_props.get(&p.id) {
+                v["props"] = json!(props);
+            }
+            v
+        })
         .collect();
     let no_connects: Vec<Value> = sch.no_connects.iter().map(|nc| json!({ "id": nc.id, "at": [nc.at.x, nc.at.y], "pin": nc.pin })).collect();
     let title_block = sch.title_block.as_ref().map(|tb| match &shown {
@@ -2165,7 +2196,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         .sheets
         .iter()
         .map(|s| {
-            let mut fields = eda_engine::fields::sheet_fields_on(&sch, s, &placing_key).iter().map(|f| page_field_json(&s.id, f)).collect::<Vec<_>>();
+            let mut fields = eda_engine::fields::sheet_fields_on(&sch, s, &placing_key).iter().map(|f| page_field_json_in(&sch, &s.id, f)).collect::<Vec<_>>();
             if let Some(sh) = &shown {
                 sh.annotate_sheet_fields(&mut fields);
             }
@@ -2231,7 +2262,16 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         // the project's unit notation (the root's `SchExtras::subpart_*`, r7 H5), which the sheet draws a unit's reference by
         "subpart_id_separator": design.schematic.as_ref().and_then(|r| r.extras.subpart_id_separator),
         "subpart_first_id": design.schematic.as_ref().and_then(|r| r.extras.subpart_first_id),
+        // the design variants (KiCad 25ec2335 `SCHEMATIC::GetVariantNames` with `GetVariantDescription`), the same on every sheet
+        "variants": design_variants_json(design),
     })
+}
+
+/// The design variants as the studio's state lists them (`[{ name, description }]`, by name): KiCad 25ec2335 `SCHEMATIC::GetVariantNames` with each one's
+/// `GetVariantDescription` (`eda_model::variants`).
+fn design_variants_json(design: &eda_model::ir::Design) -> Vec<Value> {
+    let descriptions = design.schematic.as_ref().map(|r| &r.extras.variants);
+    eda_model::variants::names(design).into_iter().map(|n| json!({ "description": descriptions.and_then(|d| d.get(&n)).cloned().unwrap_or_default(), "name": n })).collect()
 }
 
 /// The schematic JSON's `setup`: Schematic Setup > Formatting's sizes the sheet is drawn with -- see [`schematic_json_with`].
@@ -2457,6 +2497,21 @@ pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir
 /// One field as the studio draws and selects it: the text, its anchor on the sheet and which way it runs, how it is justified there, its size and look, and the
 /// id (`fld:<owner key>:<name>`) every move and edit verb takes it by. `owner` is the item's key in `field_layout` (a symbol's reference, `#<unit>` after it for a
 /// unit but the first, a power symbol's or a sheet's id).
+/// [`page_field_json`] with the font face and colour the item keeps for the field (`SchExtras::field_looks`: Symbol Properties' Font and Color columns), when it
+/// has them.
+pub(crate) fn page_field_json_in(sch: &eda_model::ir::SchematicSection, owner: &str, f: &eda_engine::fields::PageField) -> Value {
+    let mut v = page_field_json(owner, f);
+    if let Some(look) = sch.extras.field_look(owner, &f.name) {
+        if let Some(font) = &look.font {
+            v["font"] = json!(font);
+        }
+        if let Some(c) = look.color {
+            v["color"] = json!(c);
+        }
+    }
+    v
+}
+
 pub(crate) fn page_field_json(owner: &str, f: &eda_engine::fields::PageField) -> Value {
     use eda_model::kicad_font::{HJustify, VJustify};
     json!({
@@ -2481,7 +2536,7 @@ pub(crate) fn page_field_json(owner: &str, f: &eda_engine::fields::PageField) ->
 /// fields of (a part the model does not know, a schematic read from a KiCad file).
 pub(crate) fn owner_fields_json(sch: &eda_model::ir::SchematicSection, model: &eda_model::ConstraintModel, owner: &str) -> Vec<Value> {
     match eda_engine::fields_edit::OwnerCtx::new(sch, model, owner) {
-        Some(ctx) => ctx.page_fields(sch).iter().map(|f| page_field_json(owner, f)).collect(),
+        Some(ctx) => ctx.page_fields(sch).iter().map(|f| page_field_json_in(sch, owner, f)).collect(),
         None => Vec::new(),
     }
 }
@@ -2516,7 +2571,15 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
             Text { unit, text, at, angle_deg, size_mm } => json!({ "kind": "text", "unit": unit, "body_style": style, "text": text, "content": text, "at": pt(*at), "angle_deg": angle_deg, "size_mm": size_mm }),
         }
     };
-    let pin = |p: &eda_model::LibPin, style: u32| json!({ "number": p.number, "name": eda_model::kicad_geom::shown_name(&p.name), "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit, "body_style": style, "hidden": false });
+    let pin = |p: &eda_model::LibPin, style: u32| {
+        let mut j = json!({ "number": p.number, "name": eda_model::kicad_geom::shown_name(&p.name), "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit, "body_style": style, "hidden": false });
+        // the pin's alternate functions (`SCH_PIN::GetAlternates`), which a placed symbol's pin may take (`SCH_PIN::SetAlt`): the Pin Functions table, the
+        // Pin Function submenu, the name, type and shape it is drawn with, and Show Pin Alternate Icons (left out when it has none)
+        if let Some(alts) = s.connectivity.pin_alternates.get(&p.number).filter(|a| !a.is_empty()) {
+            j["alternates"] = json!(alts);
+        }
+        j
+    };
     let (normal, alt) = s.bodies();
     let mut graphics: Vec<Value> = normal.0.iter().map(|g| graphic(g, if alt.is_none_or(|a| a.0.contains(g)) { 0 } else { 1 })).collect();
     let mut pins: Vec<Value> = normal.1.iter().map(|p| pin(p, if alt.is_none_or(|a| a.1.contains(p)) { 0 } else { 1 })).collect();

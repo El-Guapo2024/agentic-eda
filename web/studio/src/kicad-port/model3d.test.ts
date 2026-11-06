@@ -110,14 +110,15 @@ test("the mounting height follows the stackup", () => {
         { name: "F.Cu", material: null, thickness_mm: 0.035, kind: "copper" },
         { name: "dielectric 1", material: null, thickness_mm: 0.2, kind: "prepreg" },
         { name: "In1.Cu", material: null, thickness_mm: null },
-        { name: "dielectric 2", material: null, thickness_mm: 0.5, kind: "core" },
+        { name: "dielectric 2", material: null, thickness_mm: 0.5, kind: "core", sublayers: [{ thickness_mm: 0.1 }, { thickness_mm: null }] },
         { name: "In2.Cu", material: null, thickness_mm: 0.0175, kind: "copper" },
         { name: "dielectric 3", material: null, thickness_mm: null, kind: "prepreg" },
         { name: "B.Cu", material: null, thickness_mm: 0.035, kind: "copper" },
       ],
     },
   });
-  assert.ok(Math.abs(four.boardThicknessMm - (0.2 + 0.035 + 0.5 + 0.0175)) < EPS, `body ${four.boardThicknessMm}`);
+  // every sublayer of a dielectric is in the body (`for( sublayer .. ) body_thickness += item->GetThickness( sublayer )`)
+  assert.ok(Math.abs(four.boardThicknessMm - (0.2 + 0.035 + 0.5 + 0.1 + 0.0175)) < EPS, `body ${four.boardThicknessMm}`);
 });
 
 test("a board with no stackup gets BuildDefaultStackupList's from its thickness and copper count", () => {

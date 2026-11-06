@@ -351,7 +351,7 @@ use eda_model::ir::Shape;
 use eda_model::pcb_items::{HatchKind, ShapeFill};
 
 fn style(b: &mut Board<'_>, shape_ids: &[&str], fill: ShapeFill) -> Result<(), Vec<CheckResult>> {
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(shape_ids), fill: Some(fill), start_ending: None, end_ending: None }))
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(shape_ids), fill: Some(fill), start_ending: None, end_ending: None, line_style: None }))
 }
 
 fn hatch_of(b: &Board<'_>, id: &str) -> Option<HatchKind> {
@@ -396,7 +396,7 @@ fn several_shapes_are_given_a_fill_together_or_not_at_all() {
     assert_eq!(style(&mut b, &[], ShapeFill::None).unwrap_err()[0].check, "ops_bad_shape_style");
     assert_eq!(serde_json::to_value(b.design()).unwrap(), before, "a refused command changes nothing");
     // No fill given is no change.
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(&["shp_rect"]), fill: None, start_ending: None, end_ending: None })).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(&["shp_rect"]), fill: None, start_ending: None, end_ending: None, line_style: None })).unwrap();
     assert_eq!(hatch_of(&b, "shp_rect"), Some(HatchKind::Hatch));
 }
 
@@ -634,7 +634,7 @@ fn the_barcode_commands_have_one_wire_form_and_describe_themselves() {
 use eda_model::line_ending::{LineEnding, LineEndingStyle, LineEndings};
 
 fn endings(b: &mut Board<'_>, shape_ids: &[&str], start: Option<LineEnding>, end: Option<LineEnding>) -> Result<(), Vec<CheckResult>> {
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(shape_ids), fill: None, start_ending: start, end_ending: end }))
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(shape_ids), fill: None, start_ending: start, end_ending: end, line_style: None }))
 }
 
 fn endings_of(b: &Board<'_>, id: &str) -> LineEndings {

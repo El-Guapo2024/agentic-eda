@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import { pcbEdit, pcbGrid } from "../../kicad-port/pcbProperties";
 import { schEdit, schGrid } from "../../kicad-port/schItemProperties";
+import { withVariant } from "../../kicad-port/designVariants";
 import type { PropValue } from "../../kicad-port/propertyManager";
 import type { Rule } from "../../api/types";
 import { DockPanel } from "./Dock";
@@ -64,10 +65,12 @@ function ruleLine(rule: Rule, ref: string): string | null {
 export function SchematicProperties() {
   const state = useStudioState();
   const api = useStudioApi();
-  const sch = state.schematic;
+  // The sheet as the current design variant shows it (KiCad 25ec2335 `GetDNPProp` and kin read `Schematic()->GetCurrentVariant()`), and its rows set that variant's values.
+  const variant = state.schVariant;
+  const sch = useMemo(() => (state.schematic ? withVariant(state.schematic, variant) : null), [state.schematic, variant]);
   const ids = useMemo(() => [...state.selection], [state.selection]);
   // The grid is rebuilt when the sheet, the selection or the units change, not on every move of the cursor (a big selection has a lot of rows to merge).
-  const model = useMemo(() => (sch ? schGrid(sch, ids, state.units) : null), [sch, ids, state.units]);
+  const model = useMemo(() => (sch ? schGrid(sch, ids, state.units, variant) : null), [sch, ids, state.units, variant]);
   if (!sch || !model || model.count === 0) {
     return (
       <div className="panel-section">
@@ -76,7 +79,7 @@ export function SchematicProperties() {
     );
   }
   const commit = async (name: string, value: PropValue): Promise<string | null> => {
-    const plan = schEdit(sch, ids, name, value, state.units);
+    const plan = schEdit(sch, ids, name, value, state.units, variant);
     if (!plan.ok) return plan.error;
     if (plan.cmds.length > 0) await api.cmdBatch(plan.cmds);
     return null;

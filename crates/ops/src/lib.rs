@@ -118,6 +118,7 @@ mod sch_annotate;
 mod sch_setup;
 mod sch_clipboard;
 pub mod sch_control;
+mod sch_variants;
 mod sch_sheets;
 mod sheet_units;
 mod sheets;
@@ -656,8 +657,13 @@ pub enum Cmd {
     SetMaskPaste { settings: MaskPaste },
     /// Text & Graphics > Defaults.
     SetTextGraphicsDefaults { settings: TextGraphicsDefaults },
-    /// Board Stackup > Physical Stackup: the copper layer count and the layers' thickness.
-    SetStackup { settings: StackupSettings },
+    /// Board Stackup > Physical Stackup: the copper layer count and the layers, with a dielectric's sublayers. Fewer copper layers while items are still on a layer that
+    /// goes is refused, unless `delete_items_on_removed_layers` says to delete them as KiCad does once asked (`board_setup::set_stackup`). Additive: absent is `false`.
+    SetStackup {
+        settings: StackupSettings,
+        #[serde(default)]
+        delete_items_on_removed_layers: bool,
+    },
     /// Design Rules > Violation Severity: DRC settings key -> `error` | `warning` | `ignore`.
     SetRuleSeverities { severities: BTreeMap<String, String> },
     /// Design Rules > Custom Rules: the text of the board's `.kicad_dru`.
@@ -673,6 +679,9 @@ pub enum Cmd {
         #[serde(default)]
         rule: Option<eda_drc::rule_editor::RuleEdit>,
     },
+    /// The DRC Rule Editor's tree drag-and-drop (`onRuleTreeItemLeftUp`): the rule at `entry` (named `name`) dropped on the rule at `target` (named
+    /// `target_name`) of the same kind takes its place among them (first, last, or just before the target), and the file is written in that order.
+    DropDrcRule { entry: usize, name: String, target: usize, target_name: String },
     /// Board Stackup > Board Editor Layers (`panel_setup_layers.cpp`): the non-copper layers the board has (the technical ones and User.1 to User.45), the
     /// names the user gave its layers and their types. The whole page; refused with the layer's name when a name or type is out of the panel's rules or
     /// a layer is turned off while items are on it.
@@ -685,6 +694,9 @@ pub enum Cmd {
     SetTuningPatterns { settings: eda_model::setup_pages::TuningPatterns },
     /// Design Rules > Tuning Profiles (`panel_setup_tuning_profiles.cpp`): the profiles and the profile each net class names.
     SetTuningProfiles { settings: eda_model::setup_pages::TuningProfiles },
+    /// Design Rules > Component Classes (`panel_assign_component_classes.cpp`): "Assign component class per sheet" and the custom assignments (a class, Match
+    /// all / Match any and its conditions), the project's whole `component_class_settings`. Refused with KiCad's message when an assignment does not compile.
+    SetComponentClasses { settings: eda_model::component_classes::ComponentClassSettings },
     /// Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` in a text, a field or the title
     /// block shows the value, and the derived `.kicad_pro` carries them (`text_variables`) so kicad-cli's plots show the same.
     SetTextVariables { variables: BTreeMap<String, String> },
@@ -1772,6 +1784,45 @@ pub enum Cmd {
         #[serde(default)]
         exclude_from_sim: Option<bool>,
     },
+    // ----------------------------------------- design variants (sch_variants.rs; KiCad 25ec2335)
+    /// `eeschema.EditorControl.addVariant` (`SCH_EDIT_FRAME::ShowAddVariantDialog`): a design variant of that name (trimmed, checked as
+    /// `ValidateNewVariantName` checks it, refused in KiCad's words) with that description.
+    AddDesignVariant {
+        name: String,
+        #[serde(default)]
+        description: String,
+    },
+    /// `eeschema.EditorControl.removeVariant` (`SCHEMATIC::DeleteVariant`): the variant and every symbol's record of it.
+    RemoveDesignVariant { name: String },
+    /// `eeschema.EditorControl.editVariantDescription` (`SCHEMATIC::SetVariantDescription`).
+    EditDesignVariantDescription {
+        name: String,
+        #[serde(default)]
+        description: String,
+    },
+    /// `eeschema.EditorControl.renameVariant` (`SCHEMATIC::RenameVariant`): the variant, its description and every record of it under `new_name`.
+    RenameDesignVariant { name: String, new_name: String },
+    /// `eeschema.EditorControl.copyVariant` (`SCHEMATIC::CopyVariant`): a variant `new_name` with the description and a copy of every record of `name`.
+    CopyDesignVariant { name: String, new_name: String },
+    /// The current variant's edit of the symbols `ids` (`SCH_SYMBOL::SetDNP( .., aVariantName )` and the other attribute setters, `SetFieldText( ..,
+    /// aVariantName )`): each flag given and each field text (a text equal to the symbol's own takes the override away), on every unit of every reference.
+    /// `variant` is a variant's name; the default variant is the symbol itself (`SetSymbolAttrs` and the field verbs).
+    SetSymbolVariant {
+        variant: String,
+        ids: Vec<String>,
+        #[serde(default)]
+        dnp: Option<bool>,
+        #[serde(default)]
+        exclude_from_bom: Option<bool>,
+        #[serde(default)]
+        exclude_from_board: Option<bool>,
+        #[serde(default)]
+        exclude_from_sim: Option<bool>,
+        #[serde(default)]
+        exclude_from_pos_files: Option<bool>,
+        #[serde(default)]
+        fields: Option<BTreeMap<String, String>>,
+    },
     /// `eeschema.EditorControl.editPageNumber` (`SCH_EDIT_TOOL::EditPageNumber`): the page number of the placement `sheet` (a
     /// `SheetInstance::id`). Letters and digits only; empty puts the sheet back to its place in the hierarchy. With `path` (the whole sheet
     /// path, the placement ids from the root down to `sheet`), the page of that sheet path only (`SCH_SHEET_PATH::SetPageNumber`), as KiCad
@@ -2316,6 +2367,12 @@ impl Cmd {
             | Cmd::SetSchematicPage { .. }
             | Cmd::Annotate { .. }
             | Cmd::SetSymbolAttrs { .. }
+            | Cmd::AddDesignVariant { .. }
+            | Cmd::RemoveDesignVariant { .. }
+            | Cmd::EditDesignVariantDescription { .. }
+            | Cmd::RenameDesignVariant { .. }
+            | Cmd::CopyDesignVariant { .. }
+            | Cmd::SetSymbolVariant { .. }
             | Cmd::SetSheetPage { .. }
             | Cmd::SetSchItemText { .. }
             | Cmd::SetSymbolLibIds { .. }
@@ -2561,12 +2618,14 @@ impl Cmd {
             Cmd::SetRuleSeverities { .. } => vec!["severities"],
             Cmd::SetCustomRules { .. } => vec!["custom_rules"],
             Cmd::EditDrcRule { .. } => vec!["custom_rules"],
+            Cmd::DropDrcRule { .. } => vec!["custom_rules"],
             Cmd::SetTextVariables { .. } => vec!["text_variables"],
             Cmd::SetBoardLayers { .. } => vec!["board_layers"],
             Cmd::SetFormatting { .. } => vec!["formatting"],
             Cmd::SetZoneHatchOffsets { .. } => vec!["zone_hatch_offsets"],
             Cmd::SetTuningPatterns { .. } => vec!["tuning_patterns"],
             Cmd::SetTuningProfiles { .. } => vec!["tuning_profiles"],
+            Cmd::SetComponentClasses { .. } => vec!["component_classes"],
             Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::ClearDrcExclusions => vec!["drc_exclusions"],
@@ -2584,6 +2643,7 @@ impl Cmd {
             Cmd::SetIpc2581Bom { .. } => vec!["ipc2581_bom"],
             Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
             Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
+            Cmd::AddDesignVariant { name, .. } | Cmd::RemoveDesignVariant { name } | Cmd::EditDesignVariantDescription { name, .. } | Cmd::RenameDesignVariant { name, .. } | Cmd::CopyDesignVariant { name, .. } => vec![name],
             Cmd::RepairBoard => vec!["repair_board"],
             Cmd::ExportFootprintsToLibrary => vec!["export_footprints"],
 
@@ -2638,6 +2698,7 @@ impl Cmd {
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
             Cmd::Annotate { .. } => vec!["annotate"],
             Cmd::SetSymbolAttrs { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SetSymbolVariant { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetSheetPage { sheet, .. } => vec![sheet.as_str()],
             Cmd::SetSchItemText { id, .. } => vec![id.as_str()],
             Cmd::SetSymbolLibIds { .. } => vec!["symbol_lib_ids"],
@@ -3079,7 +3140,7 @@ impl<'a> Board<'a> {
             Cmd::SetConstraints { constraints } => board_setup::set_constraints(&mut self.design, constraints),
             Cmd::SetMaskPaste { settings } => board_setup::set_mask_paste(&mut self.design, settings),
             Cmd::SetTextGraphicsDefaults { settings } => board_setup::set_text_graphics(&mut self.design, settings),
-            Cmd::SetStackup { settings } => board_setup::set_stackup(&mut self.design, self.model, settings),
+            Cmd::SetStackup { settings, delete_items_on_removed_layers } => board_setup::set_stackup(&mut self.design, self.model, settings, *delete_items_on_removed_layers),
             Cmd::SetRuleSeverities { severities } => board_setup::set_severities(&mut self.design, severities),
             Cmd::AddDrcExclusions { exclusions } => review::add_drc_exclusions(&mut self.design, exclusions),
             Cmd::DeleteDrcExclusions { exclusions } => review::delete_drc_exclusions(&mut self.design, exclusions),
@@ -3095,12 +3156,14 @@ impl<'a> Board<'a> {
             Cmd::SetSimulator { ngspice, workbook } => simulator::set_simulator(&mut self.design, ngspice.as_ref(), workbook.as_deref()),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::EditDrcRule { action, entry, name, rule } => rule_editor::edit_drc_rule(&mut self.design, self.model, *action, *entry, name, rule.as_ref()),
+            Cmd::DropDrcRule { entry, name, target, target_name } => rule_editor::drop_drc_rule(&mut self.design, self.model, *entry, name, *target, target_name),
             Cmd::SetTextVariables { variables } => board_setup::set_text_variables(&mut self.design, variables),
             Cmd::SetBoardLayers { settings } => board_setup::set_board_layers(&mut self.design, self.model, settings),
             Cmd::SetFormatting { settings } => board_setup::set_formatting(&mut self.design, settings),
             Cmd::SetZoneHatchOffsets { offsets } => board_setup::set_zone_hatch_offsets(&mut self.design, self.model, offsets),
             Cmd::SetTuningPatterns { settings } => board_setup::set_tuning_patterns(&mut self.design, settings),
             Cmd::SetTuningProfiles { settings } => board_setup::set_tuning_profiles(&mut self.design, self.model, settings),
+            Cmd::SetComponentClasses { settings } => board_setup::set_component_classes(&mut self.design, self.model, settings),
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
             Cmd::SwapChain { parts } => self.swap_chain(parts),
@@ -3366,6 +3429,15 @@ impl<'a> Board<'a> {
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
             Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
+            Cmd::AddDesignVariant { name, description } => self.add_design_variant(name, description),
+            Cmd::RemoveDesignVariant { name } => self.remove_design_variant(name),
+            Cmd::EditDesignVariantDescription { name, description } => self.edit_design_variant_description(name, description),
+            Cmd::RenameDesignVariant { name, new_name } => self.rename_design_variant(name, new_name),
+            Cmd::CopyDesignVariant { name, new_name } => self.copy_design_variant(name, new_name),
+            Cmd::SetSymbolVariant { variant, ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, exclude_from_pos_files, fields } => {
+                let flags = sch_variants::VariantFlags { dnp: *dnp, exclude_from_bom: *exclude_from_bom, exclude_from_board: *exclude_from_board, exclude_from_sim: *exclude_from_sim, exclude_from_pos_files: *exclude_from_pos_files };
+                self.set_symbol_variant(variant, ids, &flags, fields.as_ref().unwrap_or(&BTreeMap::new()))
+            }
             Cmd::SetSheetPage { sheet, page, path } => self.set_sheet_page(sheet, page, path.as_deref()),
             Cmd::SetSchItemText { id, text } => self.set_sch_item_text(id, text),
             Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),
@@ -5324,9 +5396,10 @@ impl<'a> Board<'a> {
         let sch = self.schematic_mut()?;
         let removed = sch.symbols.remove(i);
         sch_fields::drop_symbol_keys(sch, &removed.id, removed.unit);
-        // Last unit gone: its user fields (`SchematicSection::user_fields`) go with it.
+        // Last unit gone: its user fields (`SchematicSection::user_fields`) go with it, and its records of the design variants.
         if !sch.symbols.iter().any(|s| s.id == id) {
             sch.user_fields.remove(id);
+            sch.extras.symbol_variants.remove(id);
         }
         Ok(())
     }
@@ -5798,6 +5871,9 @@ impl<'a> Board<'a> {
         if sch.power_symbols.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_power_symbol", id, "no power symbol with this id")]);
         }
+        // what its Symbol Properties set goes with it (a new power symbol may take the id again)
+        sch.extras.power_props.remove(id);
+        sch.extras.field_looks.remove(id);
         Ok(())
     }
 
@@ -6988,6 +7064,8 @@ mod tests;
 #[cfg(test)]
 mod sch_control_tests;
 #[cfg(test)]
+mod sch_variants_tests;
+#[cfg(test)]
 mod board_setup_tests;
 #[cfg(test)]
 mod pcb_transform_tests;
@@ -7081,6 +7159,9 @@ mod sch_drag;
 mod sch_props;
 mod sch_scene;
 mod sch_fields;
+mod sch_symbol_props;
+#[cfg(test)]
+mod sch_symbol_props_tests;
 #[cfg(test)]
 mod sch_move_tests;
 #[cfg(test)]

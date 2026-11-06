@@ -1018,8 +1018,10 @@ pub(crate) fn project_dimension_defaults(d: &eda_model::ir::DimensionSettings) -
         DimensionUnitsFormat::BareSuffix => 1,
         DimensionUnitsFormat::ParenSuffix => 2,
     };
+    // `PARAM_ENUM<DIM_TEXT_POSITION>( "defaults.dimensions.text_position", .., OUTSIDE, INLINE )`: "excluding DIM_TEXT_POSITION::MANUAL from the valid
+    // range here", so a manual default is written as KiCad would read it back, outside.
     let text_position = match d.text_position {
-        DimensionTextPosition::Outside => 0,
+        DimensionTextPosition::Outside | DimensionTextPosition::Manual => 0,
         DimensionTextPosition::Inline => 1,
     };
     Some((
@@ -1131,30 +1133,47 @@ fn import_solder_mask_setup(root: &[Sexpr], board: &mut BoardRules) {
 }
 
 /// `PCB_IO_KICAD_SEXPR_PARSER::parseBoardStackup`: `(setup (stackup (layer "F.Cu" (type "copper") (thickness 0.035)) ..
-/// (copper_finish "ENIG") (dielectric_constraints yes) ..))`. A layer with several sublayers holds their sum, which is what
-/// `BOARD_ADAPTER::InitSettings` adds to the 3D board's body for a dielectric: the layer's own `(thickness ..)` is sublayer 0
-/// and each `(addsublayer (thickness ..))` the ones after it (0 when a sublayer writes none). `None` when the board has no
-/// stackup block.
+/// (copper_finish "ENIG") (dielectric_constraints yes) ..))`. A layer's tokens up to the first bare `addsublayer` are its first sublayer (the layer's own
+/// fields), and the tokens after each `addsublayer` one more sublayer ([`eda_model::StackupLayer::sublayers`]), as the parser's `while( has_next_sublayer )`
+/// loop reads them into `m_DielectricPrmsList`; a `(thickness .. locked)` locks the thickness of a dielectric's sublayer (`SetThicknessLocked( true,
+/// sublayer_idx )`, a dielectric only). A token a sublayer does not have stays unset (`None`), as `DIELECTRIC_PRMS` keeps its default. A list
+/// `(addsublayer ..)` is not KiCad's form and is skipped, as the parser's `default: skipCurrent()` skips it. `None` when the board has no stackup block.
 fn import_stackup(root: &[Sexpr]) -> Option<eda_model::Stackup> {
     let st = sexpr::find(root, "setup").and_then(|setup| sexpr::find(setup, "stackup"))?;
     let layers: Vec<eda_model::StackupLayer> = sexpr::find_all(st, "layer")
         .filter_map(|l| {
             let name = sexpr::txt(l, 1)?.to_string();
-            let kind = sexpr::find(l, "type").and_then(|t| sexpr::txt(t, 1)).map(String::from);
-            let thicknesses: Vec<f64> = sexpr::find(l, "thickness")
-                .and_then(|t| sexpr::num(t, 1))
-                .into_iter()
-                .chain(sexpr::find_all(l, "addsublayer").filter_map(|s| sexpr::find(s, "thickness")).filter_map(|t| sexpr::num(t, 1)))
-                .collect();
-            Some(eda_model::StackupLayer {
+            // The sublayers: the token lists before the first bare `addsublayer`, then those after each one (a quoted "addsublayer" is a string, not the keyword).
+            let mut groups: Vec<Vec<&[Sexpr]>> = vec![vec![]];
+            for item in l.iter().skip(2) {
+                match item {
+                    Sexpr::Atom(a) if a == "addsublayer" => groups.push(vec![]),
+                    Sexpr::List(v) => groups.last_mut().expect("one group at least").push(v),
+                    _ => {}
+                }
+            }
+            let mut layer = eda_model::StackupLayer {
                 name,
-                material: sexpr::find(l, "material").and_then(|m| sexpr::txt(m, 1)).map(String::from),
-                thickness_mm: (!thicknesses.is_empty()).then(|| thicknesses.iter().sum()),
-                kind,
-                epsilon_r: sexpr::find(l, "epsilon_r").and_then(|e| sexpr::num(e, 1)),
-                loss_tangent: sexpr::find(l, "loss_tangent").and_then(|e| sexpr::num(e, 1)),
-                color: sexpr::find(l, "color").and_then(|c| sexpr::txt(c, 1)).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("not specified")).map(String::from),
-            })
+                material: None,
+                thickness_mm: None,
+                kind: groups.iter().flatten().filter(|t| sexpr::tag(t) == Some("type")).filter_map(|t| sexpr::txt(t, 1)).last().map(String::from),
+                epsilon_r: None,
+                loss_tangent: None,
+                color: None,
+                thickness_locked: false,
+                sublayers: vec![],
+            };
+            let dielectric = layer.item_type() == eda_model::StackupItemType::Dielectric;
+            let mut subs = groups.iter().map(|g| stackup_sublayer(g, dielectric));
+            let first = subs.next().unwrap_or_default();
+            layer.material = first.material;
+            layer.thickness_mm = first.thickness_mm;
+            layer.thickness_locked = first.thickness_locked;
+            layer.epsilon_r = first.epsilon_r;
+            layer.loss_tangent = first.loss_tangent;
+            layer.color = first.color;
+            layer.sublayers = subs.collect();
+            Some(layer)
         })
         .collect();
     if layers.is_empty() {
@@ -1171,6 +1190,28 @@ fn import_stackup(root: &[Sexpr]) -> Option<eda_model::Stackup> {
         },
         edge_plating: sexpr::find(st, "edge_plating").and_then(|f| sexpr::txt(f, 1)) == Some("yes"),
     })
+}
+
+/// One sublayer of a `(layer ..)` of the stackup: the cases of `parseBoardStackup`'s token switch, in file order (a later token sets again what an earlier one set).
+fn stackup_sublayer(tokens: &[&[Sexpr]], dielectric: bool) -> eda_model::StackupSublayer {
+    let mut s = eda_model::StackupSublayer::default();
+    for t in tokens {
+        match sexpr::tag(t) {
+            Some("thickness") => {
+                s.thickness_mm = sexpr::num(t, 1);
+                // `if( token == T_locked ) { if( type == BS_ITEM_TYPE_DIELECTRIC ) item->SetThicknessLocked( true, sublayer_idx ); }`
+                if dielectric && matches!(t.get(2), Some(Sexpr::Atom(a)) if a == "locked") {
+                    s.thickness_locked = true;
+                }
+            }
+            Some("material") => s.material = sexpr::txt(t, 1).map(String::from),
+            Some("epsilon_r") => s.epsilon_r = sexpr::num(t, 1),
+            Some("loss_tangent") => s.loss_tangent = sexpr::num(t, 1),
+            Some("color") => s.color = sexpr::txt(t, 1).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("not specified")).map(String::from),
+            _ => {}
+        }
+    }
+    s
 }
 
 /// The tokens of `(setup ..)` that are a legacy board's design settings: every case of `PCB_IO_KICAD_SEXPR_PARSER::parseSetup` (8303b2ad) that sets
@@ -1456,10 +1497,15 @@ fn project_net_classes(project_json: &str, for_schematic: bool) -> Vec<NetClass>
         if name == "Default" {
             continue; // the board-default fields already cover this; see the doc comment above
         }
-        let nets: Vec<String> = patterns
+        // `netclass_patterns`' loader: "Expand bus patterns so individual bus member nets can be matched" (`ForEachBusMember` -> `addSinglePatternAssignment`,
+        // an exact repeat once): `D[0..7]` is the eight patterns `D0` .. `D7` of the class.
+        let listed: Vec<String> = patterns
             .iter()
             .filter(|p| p.get("netclass").and_then(|v| v.as_str()) == Some(name))
             .filter_map(|p| p.get("pattern").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+        let nets: Vec<String> = eda_model::bus_pattern::expand_patterns(&listed)
+            .into_iter()
             .chain(assigned.iter().filter(|(class, _)| class == name).map(|(_, pattern)| pattern.clone()))
             .collect();
         if nets.is_empty() && !for_schematic {
@@ -3367,32 +3413,42 @@ mod tests {
         assert!(plain.unread_items.is_empty());
     }
 
-    /// V5-3: a dielectric with sublayers is one item whose thicknesses `BOARD_ADAPTER::InitSettings` adds up for the 3D body
-    /// (`for( sublayer ... ) body_thickness += item->GetThickness( sublayer )`), so the import keeps their sum on the one layer it
-    /// reads. A layer whose sublayer writes no thickness adds 0 (`DIELECTRIC_PRMS`'s default); a layer with none keeps its own.
+    /// A dielectric with sublayers (`parseBoardStackup`'s `addsublayer`): the tokens before the first `addsublayer` are the layer's own, each `addsublayer` starts one
+    /// more sublayer with what it says and nothing else (`DIELECTRIC_PRMS`' defaults: no material, thickness 0 when it writes none), `locked` locks a dielectric's
+    /// sublayer only, and the board's thickness from the stackup (`BuildBoardThicknessFromStackup`) counts every sublayer. A list `(addsublayer ..)` is no sublayer
+    /// (the parser skips it).
     #[test]
-    fn a_dielectrics_sublayers_add_up_to_the_layers_thickness() {
-        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+    fn a_dielectric_keeps_each_sublayer_and_its_lock() {
+        let board = r##"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
   (general (thickness 1.6)) (paper "A4")
   (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
   (setup (stackup
-    (layer "F.Mask" (type "Top Solder Mask") (thickness 0.01))
+    (layer "F.Mask" (type "Top Solder Mask") (thickness 0.01 locked))
     (layer "F.Cu" (type "copper") (thickness 0.035))
-    (layer "dielectric 1" (type "core") (thickness 0.5) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02)
-      (addsublayer (thickness 0.06) (material "FR4") (epsilon_r 4.2) (loss_tangent 0.01))
-      (addsublayer (material "FR4")))
+    (layer "dielectric 1" (type "core") (thickness 0.5 locked) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02)
+      addsublayer (color "#11223344") (thickness 0.06) (material "PTFE") (epsilon_r 4.2) (loss_tangent 0.01)
+      addsublayer (material "FR4") (addsublayer (thickness 9)))
     (layer "B.Cu" (type "copper") (thickness 0.035))
     (layer "B.Mask" (type "Bottom Solder Mask") (thickness 0.01))
     (copper_finish "ENIG")))
   (net 0 "")
-)"#;
+)"##;
         let (_, model, _) = import_kicad_pcb(board).unwrap();
-        let layers = &model.stackup.expect("the stackup").layers;
-        let diel = layers.iter().find(|l| l.name == "dielectric 1").unwrap();
-        assert!((diel.thickness_mm.unwrap() - 0.56).abs() < 1e-9, "{diel:?}");
-        assert_eq!((diel.material.as_deref(), diel.epsilon_r, diel.loss_tangent), (Some("FR4"), Some(4.5), Some(0.02)), "the first sublayer's material, as KiCad shows the layer");
-        let copper = layers.iter().find(|l| l.name == "F.Cu").unwrap();
-        assert_eq!(copper.thickness_mm, Some(0.035), "no addsublayer: the layer's own thickness");
+        let stackup = model.stackup.expect("the stackup");
+        let diel = stackup.layers.iter().find(|l| l.name == "dielectric 1").unwrap();
+        assert_eq!((diel.thickness_mm, diel.thickness_locked, diel.material.as_deref(), diel.epsilon_r, diel.loss_tangent), (Some(0.5), true, Some("FR4"), Some(4.5), Some(0.02)), "the first sublayer is the layer's own");
+        assert_eq!(
+            diel.sublayers,
+            vec![
+                eda_model::StackupSublayer { material: Some("PTFE".into()), thickness_mm: Some(0.06), thickness_locked: false, epsilon_r: Some(4.2), loss_tangent: Some(0.01), color: Some("#11223344".into()) },
+                eda_model::StackupSublayer { material: Some("FR4".into()), ..Default::default() },
+            ]
+        );
+        assert!((diel.total_thickness_mm().unwrap() - 0.56).abs() < 1e-9);
+        assert!(!stackup.layers.iter().find(|l| l.name == "F.Mask").unwrap().thickness_locked, "only a dielectric's thickness is locked");
+        assert_eq!(eda_model::rules::stackup_thickness_nm(&stackup), mm(0.01 + 0.035 + 0.56 + 0.035 + 0.01));
+        let copper = stackup.layers.iter().find(|l| l.name == "F.Cu").unwrap();
+        assert_eq!((copper.thickness_mm, copper.sublayers.len()), (Some(0.035), 0), "no addsublayer: one sublayer");
     }
 
     /// In a pre-9.0 file a footprint margin of 0 means "inherit" (`parseFOOTPRINT_unchecked`): neither the mask margin nor a paste margin token of 0 comes through as a margin
@@ -3712,6 +3768,18 @@ mod tests {
         merge_project_net_classes(&mut model, project);
         assert_eq!(model.board.matching_classes("Net-(R1-Pad2)").iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["CLASS1", "ONLYALABEL"]);
         assert_eq!(model.board.clearance, mm(0.2));
+    }
+
+    /// `netclass_patterns`' loader expands a bus pattern into its members (`ForEachBusMember` -> `addSinglePatternAssignment`, an exact repeat once).
+    #[test]
+    fn a_bus_pattern_of_the_project_is_read_as_its_members() {
+        let project = r#"{"net_settings": {
+            "classes": [{"name": "Default", "clearance": 0.2}, {"name": "BUS", "priority": 0}],
+            "netclass_patterns": [{"netclass": "BUS", "pattern": "D[0..2]"}, {"netclass": "BUS", "pattern": "D1"}, {"netclass": "BUS", "pattern": "{SDA SCL}"}]
+        }}"#;
+        let classes = parse_project_net_classes(project);
+        assert_eq!(classes[0].nets, ["D0", "D1", "D2", "SDA", "SCL"]);
+        assert!(classes[0].matches("D2") && !classes[0].matches("D."), "D[0..2] is no character class");
     }
 
     #[test]

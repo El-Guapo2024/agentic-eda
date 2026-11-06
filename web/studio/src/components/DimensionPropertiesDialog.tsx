@@ -1,17 +1,20 @@
 // Port of pcbnew/dialogs/dialog_dimension_properties{,_base}.cpp -- opens
-// on "E"/double-click of an existing dimension, and automatically right
-// after the two-click placement tool creates one (task item 7; see
-// Canvas.tsx's own `nextDimensionKind` handling). One dialog for every
+// on "E"/double-click of an existing dimension, and on a leader right after
+// the Draw Dimension tool adds it ("Run the edit immediately to set the leader
+// text", `DRAWING_TOOL::DrawDimension`). One dialog for every
 // kind (source has several near-identical `DIALOG_DIMENSION_PROPERTIES`
 // panels gated by `GetType()`; this just shows/hides the one field group
 // that differs -- height/horizontal/leader-length) rather than five
-// separate dialogs.
+// separate dialogs. The text's Position mode has KiCad's Outside, Inline and
+// Manual, the text's X and Y taking effect in the last (`allowPositioning`); a
+// leader has no position mode but its Text frame (None, Rectangle, Circle),
+// UI-LEFT P13.
 //
 // Not ported: changing a dimension's kind after creation (source has no
-// such control either -- each kind is a different drawing tool); `DIM_TEXT_POSITION::MANUAL`
-// (no point-editor-style text dragging); the interactive centre-point/
+// such control either -- each kind is a different drawing tool); the interactive centre-point/
 // -item picker buttons (plain numeric X/Y fields instead, same convention
-// every other dialog in this app already uses).
+// every other dialog in this app already uses); the text's justification,
+// bold, italic, mirror and font (the IR has no field for them).
 //
 // The form is one for both editors (`DIALOG_DIMENSION_PROPERTIES` is opened by the board editor's and the footprint editor's `OnEditItemRequest`): the board's dialog is
 // `DimensionPropertiesDialog` below, the Footprint Editor's components/footprint/FpItemDialogs.tsx, each a host of `DimensionPropertiesForm`.
@@ -20,7 +23,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { DIM_PRECISION_CHOICES, toCmdDimension } from "../kicad-port/dimensionConvert";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
-import type { ArrowDirection, CmdDimension, CmdDimensionKind, Dimension, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat } from "../api/types";
+import type { ArrowDirection, CmdDimension, CmdDimensionKind, Dimension, DimensionTextBorder, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat } from "../api/types";
 
 /** What the form needs from the editor it is open in. */
 export interface DimensionHost {
@@ -80,6 +83,11 @@ export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
   const [precision, setPrecision] = useState(4);
   const [suppressZeros, setSuppressZeros] = useState(true);
   const [textPosition, setTextPosition] = useState<DimensionTextPosition>("outside");
+  // `m_textPosX` / `m_textPosY`: the text's place, editable in the Manual position mode only (`allowPositioning`).
+  const [textPosX, setTextPosX] = useState(0);
+  const [textPosY, setTextPosY] = useState(0);
+  // A leader's "Text frame:" (`m_cbTextFrame`: None, Rectangle, Circle; `DIM_TEXT_BORDER`).
+  const [textFrame, setTextFrame] = useState<DimensionTextBorder>("none");
   const [keepAligned, setKeepAligned] = useState(true);
   const [textAngle, setTextAngle] = useState(0);
   const [textSize, setTextSize] = useState(0);
@@ -112,6 +120,9 @@ export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
     setPrecision(dim.precision);
     setSuppressZeros(dim.suppress_trailing_zeros);
     setTextPosition(dim.text_position);
+    setTextPosX(nmTo(dim.text_at[0], unit));
+    setTextPosY(nmTo(dim.text_at[1], unit));
+    setTextFrame(dim.text_frame ?? "none");
     setKeepAligned(dim.keep_text_aligned);
     setTextAngle(dim.text_angle / 1000);
     setTextSize(nmTo(dim.text_size_nm, unit));
@@ -152,6 +163,13 @@ export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
       cmd.precision = precision;
       cmd.suppress_trailing_zeros = suppressZeros;
       cmd.text_position = textPosition;
+      // `if( tpm == DIM_TEXT_POSITION::MANUAL ) aTarget->SetTextPos( pos )`: the place is the dialog's only in the manual mode.
+      if (textPosition === "manual" && dim.kind !== "leader") cmd.text_pos = { x: Math.round(nmFrom(textPosX, unit)), y: Math.round(nmFrom(textPosY, unit)) };
+      // `leader->SetTextBorder( static_cast<DIM_TEXT_BORDER>( m_cbTextFrame->GetSelection() ) )`
+      if (dim.kind === "leader") {
+        if (textFrame === "none") delete cmd.text_frame;
+        else cmd.text_frame = textFrame;
+      }
       cmd.keep_text_aligned = keepAligned;
       cmd.text_angle = Math.round(textAngle * 1000);
       cmd.text_size_nm = Math.round(nmFrom(textSize, unit));
@@ -280,11 +298,32 @@ export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
                   </>
                 )}
 
-                <span>Text position</span>
-                <select value={textPosition} onChange={(e) => setTextPosition(e.target.value as DimensionTextPosition)}>
-                  <option value="outside">Outside</option>
-                  <option value="inline">Inline</option>
-                </select>
+                {dim.kind === "leader" && (
+                  <>
+                    <span title="Draw a shape around the leader text">Text frame:</span>
+                    <select value={textFrame === "round_rect" ? "none" : textFrame} title="Draw a shape around the leader text" data-testid="dim-text-frame" onChange={(e) => setTextFrame(e.target.value as DimensionTextBorder)}>
+                      <option value="none">None</option>
+                      <option value="rectangle">Rectangle</option>
+                      <option value="circle">Circle</option>
+                    </select>
+                  </>
+                )}
+                {/* A leader has no position mode (`m_lblTextPositionMode->Hide()`): its text is where it was put. */}
+                {dim.kind !== "leader" && (
+                  <>
+                    <span title="Choose how to position the text relative to the dimension line">Position mode:</span>
+                    <select value={textPosition} title="Choose how to position the text relative to the dimension line" data-testid="dim-text-position" onChange={(e) => setTextPosition(e.target.value as DimensionTextPosition)}>
+                      <option value="outside">Outside</option>
+                      <option value="inline">Inline</option>
+                      <option value="manual">Manual</option>
+                    </select>
+                    <span>Position ({unit}) X / Y</span>
+                    <span style={{ display: "flex", gap: 4 }}>
+                      <input type="number" step="any" value={textPosX} disabled={textPosition !== "manual"} data-testid="dim-text-x" onChange={(e) => setTextPosX(Number(e.target.value))} style={{ width: "50%" }} />
+                      <input type="number" step="any" value={textPosY} disabled={textPosition !== "manual"} data-testid="dim-text-y" onChange={(e) => setTextPosY(Number(e.target.value))} style={{ width: "50%" }} />
+                    </span>
+                  </>
+                )}
                 <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <input type="checkbox" checked={keepAligned} onChange={(e) => setKeepAligned(e.target.checked)} /> Keep text aligned with dimension
                 </label>

@@ -153,6 +153,17 @@ impl<'a> Board<'a> {
                 sheet_units::carry_field_looks(&root, sec);
             }
             sheet_units::carry_label_looks(&root, &mut screens);
+            // the design variants: each symbol's records go to the sheet it is on now (`SCH_SYMBOL_INSTANCE::m_Variants` are the symbol's)
+            for sec in screens.iter_mut() {
+                let refs: BTreeSet<String> = sec.symbols.iter().map(|s| s.id.clone()).collect();
+                sec.extras.symbol_variants.extend(root.extras.symbol_variants.iter().filter(|(r, _)| refs.contains(*r)).map(|(r, v)| (r.clone(), v.clone())));
+            }
+        }
+        // and the list of them is still the project's, on the root
+        if let Some(new_root) = derived.schematic.as_mut() {
+            new_root.extras.variants = root.extras.variants.clone();
+            let refs: BTreeSet<String> = new_root.symbols.iter().map(|s| s.id.clone()).collect();
+            new_root.extras.symbol_variants.extend(root.extras.symbol_variants.iter().filter(|(r, _)| refs.contains(*r)).map(|(r, v)| (r.clone(), v.clone())));
         }
         self.design.schematic = derived.schematic;
         self.design.sheet_contents = derived.sheet_contents;
@@ -469,6 +480,20 @@ mod tests {
         }
         // the nets after are the nets before, drawn back from the units
         assert_same_nets(&traced(&model, d), &drawn_nets(&model));
+    }
+
+    #[test]
+    fn reorganize_keeps_the_design_variants_and_each_symbols_records() {
+        let model = mcu30();
+        let mut b = flat_board(&model);
+        b.apply(&Cmd::AddDesignVariant { name: "Lite".into(), description: "small".into() }).unwrap();
+        let id = b.design().schematic.as_ref().unwrap().symbols[0].id.clone();
+        b.apply(&Cmd::SetSymbolVariant { variant: "Lite".into(), ids: vec![id.clone()], dnp: Some(true), exclude_from_bom: None, exclude_from_board: None, exclude_from_sim: None, exclude_from_pos_files: None, fields: None }).unwrap();
+        b.apply(&Cmd::ReorganizeSheets).unwrap();
+        let d = b.design();
+        assert_eq!(d.schematic.as_ref().unwrap().extras.variants.get("Lite").map(String::as_str), Some("small"), "the list stays the root's");
+        let screen = screen_with(d, &id);
+        assert_eq!(eda_model::variants::record(screen, &id, "Lite").and_then(|r| r.dnp), Some(true), "the record moved with its symbol");
     }
 
     #[test]

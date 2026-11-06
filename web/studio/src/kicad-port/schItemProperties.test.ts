@@ -453,15 +453,17 @@ test("an image is a SCH_BITMAP with the rows of SCH_BITMAP_DESC; its scale and s
 
 // ------------------------------------------------------------------------------------------------------------ the rows of UI-LEFT S7
 
-test("a symbol of several units and body styles: Unit (read-only here) and Body Style (set_body_style); the pin display is the library symbol's", () => {
+test("a symbol of several units and body styles: Unit (set_symbol_unit) and Body Style (set_body_style); the pin display is the library symbol's", () => {
   const s = sheet();
   s.lib_symbols["Amp:Dual"] = { graphics: [], pins: [], unit_count: 2, body_style_count: 2, unit_names: { "2": "B side" }, pin_names_hidden: true, description: "Dual op-amp", keywords: "opamp" } as never;
   const basic = names(s, ["U2"])[0]![1];
   assert.deepEqual(basic, ["Pin numbers", "Pin names", "Locked", "Position X", "Position Y", "Orientation", "Mirror X", "Mirror Y", "Unit", "Body Style"], "SYMBOL's rows first, as KiCad's walk puts them");
   const unit = rowOf(s, ["U2"], "Unit")!;
   assert.deepEqual(unit.choices, [{ label: "A", value: 1 }, { label: "B side", value: 2 }], "`GetUnitDisplayName`: the unit's name, else its letter");
-  assert.equal(unit.writable, false);
-  assert.match(unit.note ?? "", /Place Next Unit/);
+  assert.equal(unit.writable, true);
+  // `SetUnitProp`: `SetUnitSelection( .. ); SetUnit( aUnit )`
+  assert.deepEqual(edit(s, ["U2"], "Unit", 2), [{ op: "sch_edit", verb: "set_symbol_unit", id: "U2", unit: 1, new_unit: 2 }]);
+  assert.deepEqual(edit(s, ["U2"], "Unit", 1), []);
   assert.deepEqual(edit(s, ["U2"], "Body Style", "Alternate"), [{ op: "sch_edit", verb: "set_body_style", ids: ["U2"], style: 2 }]);
   assert.equal(rowOf(s, ["U2"], "Pin names")!.value, false);
   assert.equal(rowOf(s, ["U2"], "Pin numbers")!.writable, false);
@@ -509,4 +511,26 @@ test("a sheet's fields are rows: the Sheetfile is the field's text, not the root
   sh.file = "power.kicad_sch";
   assert.deepEqual(edit(s, ["sheet_a"], "Sheetfile", "supply.kicad_sch"), [{ op: "sch_edit", verb: "edit_sheet", id: "sheet_a", file: "supply.kicad_sch" }]);
   assert.deepEqual(edit(s, ["sheet_a"], "Sheetfile", "power"), [], "the same file without its extension");
+});
+
+test("in a design variant the attribute and field rows read and set the variant's values (KiCad 25ec2335 `GetDNPProp` / `SetDNPProp`, `SCH_SYMBOL_FIELD_PROPERTY`)", async () => {
+  const { withVariant } = await import("./designVariants");
+  const base = sheet();
+  base.symbols[0] = { ...base.symbols[0]!, variants: { Lite: { dnp: true, fields: { Value: "22k" } } } };
+  const s = withVariant(base, "Lite");
+  const row = (name: string) => schGrid(s, ["R1"], "mm", "Lite").groups.flatMap((g) => g.rows).find((r) => r.name === name);
+  assert.equal(row("Do not Populate")!.value, true, "the variant's DNP");
+  assert.equal(row("Value")!.value, "22k", "the variant's Value");
+  const plan = (name: string, value: string | boolean) => {
+    const p = schEdit(s, ["R1"], name, value, "mm", "Lite");
+    assert.equal(p.ok, true);
+    return p.ok ? p.cmds : [];
+  };
+  assert.deepEqual(plan("Do not Populate", false), [{ op: "set_symbol_variant", variant: "Lite", ids: ["R1"], dnp: false }]);
+  assert.deepEqual(plan("Exclude From Board", true), [{ op: "set_symbol_variant", variant: "Lite", ids: ["R1"], exclude_from_board: true }]);
+  assert.deepEqual(plan("Exclude From Position Files", true), [{ op: "set_symbol_variant", variant: "Lite", ids: ["R1"], exclude_from_pos_files: true }]);
+  assert.deepEqual(plan("Value", "47k"), [{ op: "set_symbol_variant", variant: "Lite", ids: ["R1"], fields: { Value: "47k" } }]);
+  assert.deepEqual(plan("Value", "22k"), [], "the variant has it already");
+  // the default variant keeps the base verbs
+  assert.deepEqual(edit(base, ["R1"], "Do not Populate", true), [{ op: "set_symbol_attrs", ids: ["R1"], dnp: true }]);
 });

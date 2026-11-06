@@ -95,6 +95,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Place Symbol (A) with the symbol in the hand (UI-LEFT S1b, `PlaceSymbol`'s `addSymbol`): the click's command -- `add_symbol` with the reference it rides
+    /// with, then the turns made while it rode as the placed unit's own `sch_move` (`R5#1`) -- is previewed as the commit draws it and stores nothing; placed, it
+    /// is one undo step.
+    #[test]
+    fn a_carried_symbol_is_previewed_turned_and_placed_in_one_undo_step() {
+        let dir = board("symbol_carry");
+        let before = std::fs::read(dir.join("design.json")).unwrap();
+        let place = |at: Value| {
+            json!({ "op": "batch", "cmds": [
+                { "op": "add_symbol", "id": "R5", "lib_id": "Device:R", "at": at, "rot_millideg": 0, "value": "4k7", "footprint": "", "unit": 1 },
+                { "op": "sch_move", "verb": "rotate", "ids": ["R5#1"], "ccw": true, "vertices": {} },
+                { "op": "sch_move", "verb": "mirror", "ids": ["R5#1"], "vertical": true, "vertices": {} },
+            ] })
+        };
+        let far = json!({ "x": mm(-254.0).get(), "y": mm(-254.0).get() });
+        let v = preview(&dir, place(far.clone()));
+        assert_eq!(v["ok"], true, "{v}");
+        let symbols = v["preview"]["symbols"].as_array().unwrap_or_else(|| panic!("{v}"));
+        assert_eq!(symbols.len(), 1, "only the new symbol: {v}");
+        assert_eq!((symbols[0]["id"].clone(), symbols[0]["value"].clone(), symbols[0]["at"].clone()), (json!("R5"), json!("4k7"), json!([mm(-254.0).get(), mm(-254.0).get()])), "it is turned about its anchor: {v}");
+        assert_ne!((symbols[0]["rot"].clone(), symbols[0]["mirror"].clone()), (json!(0.0), Value::Null), "the turn and the mirror made while it rode: {v}");
+        assert!(v["preview"]["lib_symbols"]["Device:R"].is_object(), "with its drawing: {v}");
+        assert_eq!(std::fs::read(dir.join("design.json")).unwrap(), before, "a preview stores nothing");
+
+        let at = json!({ "x": mm(1.27).get() * 80, "y": mm(1.27).get() * 80 });
+        crate::board::step(&dir, serde_json::from_value(place(at)).unwrap(), false, "test").unwrap();
+        let (_, design, _) = crate::board::load(&dir).unwrap();
+        let r5 = design.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R5").cloned().expect("placed");
+        assert_eq!((r5.at.x, r5.at.y), (mm(1.27) * 80, mm(1.27) * 80));
+        assert_eq!((symbols[0]["rot"].as_f64().unwrap_or(0.0) * 1000.0) as i64, r5.rot as i64, "placed as it was previewed");
+        crate::board::undo(&dir, "test", Some(eda_ops::Domain::Schematic)).unwrap();
+        let (_, design, _) = crate::board::load(&dir).unwrap();
+        assert!(design.schematic.as_ref().is_none_or(|s| !s.symbols.iter().any(|x| x.id == "R5")), "one undo takes the symbol and its turns back");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Place Power with KiCad's libraries installed: the preview and the click both bring `power:+3V3`'s definition (`library_place`), the placed power
     /// symbol draws and exports as the library draws it, one undo takes the symbol and its definition back. The slow tier asks kicad-cli's ERC: no library
     /// finding (`lib_symbol_issues`, `lib_symbol_mismatch`) comes with it.

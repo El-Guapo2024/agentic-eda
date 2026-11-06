@@ -90,8 +90,6 @@ export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set([
   // `SYMBOL_EDITOR_EDIT_TOOL`'s stacked-pin tools.
   "eeschema.InteractiveEdit.convertStackedPins",
   "eeschema.InteractiveEdit.explodeStackedPin",
-  // View > Show Pin Alternate Icons (`SYMBOL_EDITOR_CONTROL::TogglePinAltIcons`): a pin of a library symbol has alternates, a pin of a placed symbol is read from the engine's table, which has none.
-  "eeschema.EditorControl.togglePinAltIcons",
 ]);
 
 /**
@@ -147,6 +145,9 @@ export const SCHEMATIC_AND_SYMBOL_EDITOR: ReadonlySet<string> = new Set([
   "eeschema.Interactive.decrementPrimary",
   "eeschema.Interactive.incrementSecondary",
   "eeschema.Interactive.decrementSecondary",
+  // View > Show Pin Alternate Icons: `SCH_EDITOR_CONTROL::TogglePinAltIcons` (`show_pin_alt_icons`) and `SYMBOL_EDITOR_CONTROL::TogglePinAltIcons`, each with its own setting
+  // (UI-LEFT S5: a placed symbol's pins carry their alternates).
+  "eeschema.EditorControl.togglePinAltIcons",
 ]);
 
 export function isActionEnabledForTab(name: string, tab: string, registered: boolean): boolean {

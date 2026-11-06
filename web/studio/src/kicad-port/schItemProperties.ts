@@ -26,6 +26,7 @@ import { registerSchTableProperties, schTableItemOf } from "./schTableProperties
 import { defaultTextBoxMargin } from "./schTextBox";
 import { unitCountOf } from "./schUnits";
 import { letterSubReference } from "./unitLetter";
+import { setSymbolVariantCmd, type VariantFlagKey } from "./designVariants";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -79,10 +80,20 @@ export interface SchCtx {
   locked: ReadonlySet<string>;
   /** How many items are selected: a reference names one symbol, so it is edited only on its own. */
   count: number;
+  /** The current design variant (KiCad 25ec2335 `Schematic()->GetCurrentVariant()`), "" for the default: the attribute and field rows of a symbol read and set the
+   * variant's values then (`GetDNPProp` / `SetDNPProp` ...); `sch` is the sheet as the variant shows it (kicad-port/designVariants.ts `withVariant`). */
+  variant?: string;
 }
 
-export function schContext(sch: Schematic, units: LengthUnit, count = 1): SchCtx {
-  return { sch, units, locked: new Set(sch.locked ?? []), count };
+export function schContext(sch: Schematic, units: LengthUnit, count = 1, variant = ""): SchCtx {
+  return { sch, units, locked: new Set(sch.locked ?? []), count, variant };
+}
+
+/** A symbol's flag or field text set in the current variant (`SetDNP( aEnable, &CurrentSheet(), GetCurrentVariant() )`, `SetFieldText( .., variant )`), or null for the default. */
+function variantEdit(c: SchCtx, id: string, change: { flag?: [VariantFlagKey, boolean]; field?: [string, string] }): Cmd[] | null {
+  if (!c.variant) return null;
+  const cmd = setSymbolVariantCmd(c.variant, [id], { flags: change.flag ? { [change.flag[0]]: change.flag[1] } : {}, fields: change.field ? { [change.field[0]]: change.field[1] } : {} });
+  return cmd ? [cmd] : [];
 }
 
 /** The sheet's items by id, for a selection too big to search one id at a time. The first of two items of an id wins, as in `propertiesTarget`. */
@@ -454,14 +465,15 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       get: (i) => (i.symbol ? (i.symbol.value ?? "") : (i.power?.net ?? "")),
       writeable: isReal,
       readOnlyReason: "A power symbol's value is the net it stands for: edit its Value field.",
-      set: (i, v) => (!i.symbol || (i.symbol.value ?? "") === String(v) ? [] : [{ op: "edit_symbol_fields", id: i.symbol.id, value: String(v) }]),
+      set: (i, v, c) => (!i.symbol || (i.symbol.value ?? "") === String(v) ? [] : (variantEdit(c, i.symbol.id, { field: ["Value", String(v)] }) ?? [{ op: "edit_symbol_fields", id: i.symbol.id, value: String(v) }])),
     },
     FIELDS
   );
   add({ owner: "SCH_SYMBOL", name: "Library Link", kind: "string", get: (i) => i.symbol?.lib_id ?? i.power?.lib_id ?? "" }, FIELDS);
   add({ owner: "SCH_SYMBOL", name: "Library Description", kind: "string", get: (i, c) => libOf(i, c)?.description ?? "" }, FIELDS);
   add({ owner: "SCH_SYMBOL", name: "Keywords", kind: "string", get: (i, c) => libOf(i, c)?.keywords ?? "" }, FIELDS);
-  // "Unit" (`SetUnitProp`, `multiUnit`): the units by display name (`GetUnitDisplayName`: the unit's name, else its letter). No verb switches a placed unit.
+  // "Unit" (`SetUnitProp`, `multiUnit`): the units by display name (`GetUnitDisplayName`: the unit's name, else its letter). `SetUnitSelection( .. ); SetUnit( aUnit )`: the
+  // `set_symbol_unit` verb, which refuses a unit already placed on the sheet (KiCad makes a second placement of it; the Symbol Unit menu swaps the two).
   add({
     owner: "SCH_SYMBOL",
     name: "Unit",
@@ -472,7 +484,10 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     },
     get: (i) => i.symbol?.unit ?? 1,
     available: (i, c) => isReal(i) && unitCountOf(libOf(i, c)) > 1,
-    readOnlyReason: "No verb switches a placed unit to another here (the sheet keys a placement by its unit): place the other unit with Place Next Unit.",
+    set: (i, v) => {
+      const unit = Number(v);
+      return !i.symbol || !Number.isFinite(unit) || unit === (i.symbol.unit ?? 1) ? [] : [{ op: "sch_edit", verb: "set_symbol_unit", id: i.symbol.id, unit: i.symbol.unit ?? 1, new_unit: unit }];
+    },
   });
   // "Body Style" (`SetBodyStyleProp`, `multiBodyStyle`): "Standard" and "Alternate" for a De Morgan symbol (`GetBodyStyleDescription`), `set_body_style`.
   const BODY_STYLES = ["Standard", "Alternate"];
@@ -498,7 +513,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         get: (i) => !!i.symbol?.[key],
         writeable: isReal,
         readOnlyReason: "A power symbol has no attributes of its own here.",
-        set: (i, v) => (!!i.symbol![key] === Boolean(v) ? [] : [{ op: "set_symbol_attrs", ids: [i.symbol!.id], [key]: Boolean(v) } as Cmd]),
+        set: (i, v, c) => (!!i.symbol![key] === Boolean(v) ? [] : (variantEdit(c, i.symbol!.id, { flag: [key, Boolean(v)] }) ?? [{ op: "set_symbol_attrs", ids: [i.symbol!.id], [key]: Boolean(v) } as Cmd])),
       },
       ATTRIBUTES
     );
@@ -514,7 +529,8 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       get: (i) => !!i.symbol?.exclude_from_pos_files,
       writeable: isReal,
       readOnlyReason: "A power symbol has no attributes of its own here.",
-      set: (i, v) => (!!i.symbol!.exclude_from_pos_files === Boolean(v) ? [] : [{ op: "sch_edit", verb: "set_exclude_from_pos_files", ids: [i.symbol!.id], exclude: Boolean(v) }]),
+      set: (i, v, c) =>
+        !!i.symbol!.exclude_from_pos_files === Boolean(v) ? [] : (variantEdit(c, i.symbol!.id, { flag: ["exclude_from_pos_files", Boolean(v)] }) ?? [{ op: "sch_edit", verb: "set_exclude_from_pos_files", ids: [i.symbol!.id], exclude: Boolean(v) }]),
     },
     ATTRIBUTES
   );
@@ -1120,10 +1136,13 @@ function symbolFieldProperty(name: string): PD {
     available: () => currentSymbolFields.has(name),
     writeable: (i) => !!i.symbol,
     readOnlyReason: "A power symbol's fields are its Reference and Value.",
-    set: (i, v) => {
+    set: (i, v, c) => {
       const s = i.symbol!;
       const text = String(v);
       if (symbolFieldText(i, name) === text) return [];
+      // a field's text in the current variant (`SCH_SYMBOL_FIELD_PROPERTY::setter` -> `SetFieldText( .., GetCurrentVariant() )`); the Reference is no variant's
+      const inVariant = name === "Reference" ? null : variantEdit(c, s.id, { field: [name, text] });
+      if (inVariant) return inVariant;
       const f = s.fields?.find((x) => x.name === name);
       if (f?.id) return [{ op: "sch_edit", verb: "edit_field", id: f.id, text }];
       if (name === "Footprint" || name === "Datasheet") return [{ op: "edit_symbol_fields", id: s.id, [name.toLowerCase()]: text } as Cmd];
@@ -1172,17 +1191,17 @@ export function syncFieldRows(items: readonly SchItem[]): void {
 // ----------------------------------------------------------------------------------------------------------------------- the panel
 
 /** The grid the Properties panel shows for a selection of schematic items. */
-export function schGrid(sch: Schematic, ids: Iterable<string>, units: LengthUnit): GridModel {
+export function schGrid(sch: Schematic, ids: Iterable<string>, units: LengthUnit, variant = ""): GridModel {
   const items = schItemsOf(sch, ids);
   syncFieldRows(items);
-  return buildGrid(SCH_PROPERTIES, items, schContext(sch, units, items.length), schFriendlyName);
+  return buildGrid(SCH_PROPERTIES, items, schContext(sch, units, items.length, variant), schFriendlyName);
 }
 
-/** The commands an edit of one row sets on the selection, or why it is refused. */
-export function schEdit(sch: Schematic, ids: Iterable<string>, name: string, value: PropValue, units: LengthUnit): EditPlan<Cmd> {
+/** The commands an edit of one row sets on the selection, or why it is refused. `variant`: the current design variant, whose values the symbol rows set. */
+export function schEdit(sch: Schematic, ids: Iterable<string>, name: string, value: PropValue, units: LengthUnit, variant = ""): EditPlan<Cmd> {
   const items = schItemsOf(sch, ids);
   syncFieldRows(items);
-  return planEdit(SCH_PROPERTIES, items, name, value, schContext(sch, units, items.length));
+  return planEdit(SCH_PROPERTIES, items, name, value, schContext(sch, units, items.length, variant));
 }
 
 /** `extractValueAndWritability` for one named property of a selection. */

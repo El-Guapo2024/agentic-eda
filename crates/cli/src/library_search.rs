@@ -714,16 +714,28 @@ pub(crate) fn details(dir: &Path, kind: Kind, id: &str) -> Value {
 /// A footprint of the installed libraries (`Lib:Name` -> `<root>/Lib.pretty/Name.kicad_mod`) in the editable type, every graphic, text, attribute
 /// and pad layer included, named `Lib:Name`.
 pub(crate) fn installed_footprint<S: LibSource + ?Sized>(src: &S, name: &str) -> Option<LibraryFootprint> {
-    let (lib, item) = name.split_once(':')?;
+    read_installed_footprint(src, name).ok().flatten()
+}
+
+/// [`installed_footprint`], telling a footprint the libraries do not have (`Ok(None)`: not a `Lib:Name`, no such library, no `Name.kicad_mod` in its
+/// folder) from one whose file is there and cannot be read or parsed (`Err`, why). The Footprint Editor must not open the second as a blank footprint:
+/// `PCB_BASE_FRAME::LoadFootprint` gives nothing on the `IO_ERROR`, and `FOOTPRINT_EDIT_FRAME::LoadFootprintFromLibrary` then returns with the editor as it was.
+pub(crate) fn read_installed_footprint<S: LibSource + ?Sized>(src: &S, name: &str) -> Result<Option<LibraryFootprint>, String> {
+    let Some((lib, item)) = name.split_once(':') else { return Ok(None) };
     if !legal_library_name(item) || item.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let file = footprint_dir(src, lib).ok()?.join(format!("{item}.kicad_mod"));
-    let text = std::fs::read_to_string(file).ok()?;
-    let mut fp = eda_kicad::parse_library_footprint(&text).ok()?.footprint;
+    let Ok(dir) = footprint_dir(src, lib) else { return Ok(None) };
+    let file = dir.join(format!("{item}.kicad_mod"));
+    let text = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", file.display())),
+    };
+    let mut fp = eda_kicad::parse_library_footprint(&text).map_err(|e| format!("{}: {e}", file.display()))?.footprint;
     fp.name = name.to_string();
     fp.assign_missing_ids();
-    Some(fp)
+    Ok(Some(fp))
 }
 
 /// A footprint of the installed libraries as the board's model has footprints (`eda_model::Footprint`: pads, graphics, courtyard outlines and 3D models, as the

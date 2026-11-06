@@ -429,6 +429,16 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
             let g = eda_connectivity::dimension::compute_dimension_geometry(dim);
             let r = dim.stroke_width / 2 + TEXT_MAX_ERROR_NM;
             let mut pieces: Vec<Shape> = g.lines.iter().filter(|(a, b)| a != b).map(|&(a, b)| Shape::Stadium { a, b, r }).collect();
+            // A leader's circle frame (`PCB_DIMENSION_BASE::TransformShapeToPolygon`: `TransformRingToPolygon` of each `SHAPE_CIRCLE`, the line thickness wide), as
+            // chords of the ring.
+            for &(c, radius) in &g.circles {
+                const CHORDS: usize = 32;
+                let at = |i: usize| {
+                    let t = i as f64 * std::f64::consts::TAU / CHORDS as f64;
+                    Point { x: c.x + Nm::kiround(radius.as_f64() * t.cos()), y: c.y + Nm::kiround(radius.as_f64() * t.sin()) }
+                };
+                pieces.extend((0..CHORDS).map(|i| Shape::Stadium { a: at(i), b: at(i + 1), r }));
+            }
             if !g.text.is_empty() {
                 let size = (dim.text_size_nm, dim.text_size_nm);
                 let thickness = dim.text_thickness_nm.unwrap_or_else(|| Nm::kiround(dim.text_size_nm.as_f64() * 0.15));
@@ -759,6 +769,33 @@ mod tests {
         assert_eq!(shapes.len(), 1, "{:?}", node.iter().filter(|(_, it)| matches!(it, Item::Solid(_))).map(|(_, it)| it).collect::<Vec<_>>());
         assert!(node.rule_resolver().unwrap().is_in_net_tie(shapes[0]), "the bridge is the net tie's");
         assert_eq!(node.iter().filter(|(_, it)| matches!(it, Item::Solid(s) if s.is_text())).count(), 1, "the footprint's copper text");
+    }
+
+    /// `syncDimension`: a copper leader's circle frame (`DIM_TEXT_BORDER::CIRCLE`, UI-LEFT P13) is an obstacle as its ring (`TransformRingToPolygon`): a track
+    /// over the top of the circle collides, and the same leader without its frame leaves it free.
+    #[test]
+    fn a_copper_leaders_circle_frame_is_an_obstacle() {
+        use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextBorder, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, DrawingsSection};
+        let pt = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let leader = |frame| Dimension {
+            id: "dim_lead".into(), layer: "F.Cu".into(), kind: DimensionKind::Leader, start: pt(20.0, 20.0), end: pt(25.0, 15.0), prefix: String::new(), suffix: String::new(),
+            override_text: Some("NOTE".into()), units: DimensionUnits::Mm, units_format: DimensionUnitsFormat::NoSuffix, precision: 2, suppress_trailing_zeros: true,
+            text_position: DimensionTextPosition::Outside, keep_text_aligned: false, text_angle: 0, text_size_nm: mm(1.0), stroke_width: mm(0.1), arrow_length: mm(1.0),
+            extension_offset: mm(0.5), extension_height: mm(0.5), arrow_direction: ArrowDirection::Outward, text_thickness_nm: None, text_pos: Some(pt(35.0, 15.0)),
+            text_frame: frame,
+        };
+        let (c, r) = eda_connectivity::dimension::compute_dimension_geometry(&leader(DimensionTextBorder::Circle)).circles[0];
+        // a short track across the top of the circle, well above the text
+        let top = Point { x: c.x, y: c.y - r };
+        let probe = Shape::Stadium { a: Point { x: top.x - mm(0.2), y: top.y }, b: Point { x: top.x + mm(0.2), y: top.y }, r: Nm::new(5_000) };
+        let hits = |frame| {
+            let (mut design, model) = two_pad_board();
+            design.drawings = Some(DrawingsSection { dimensions: vec![leader(frame)], ..Default::default() });
+            let (node, _) = build_node(&design, &model);
+            node.first_colliding(&probe, &crate::item::net_of("SIG"), crate::layer::LayerRange::single(0), &model.board, &[]).is_some()
+        };
+        assert!(hits(DimensionTextBorder::Circle), "a track over the circle's top");
+        assert!(!hits(DimensionTextBorder::None), "no frame, nothing there");
     }
 
     /// R3-6 (`syncGraphicalItem`: `Edge_Cuts || Margin` -> every copper layer, not routable; `isEdge`: `IsOnLayer( Margin )`): a line on Margin is

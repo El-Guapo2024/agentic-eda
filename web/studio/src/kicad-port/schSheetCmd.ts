@@ -9,11 +9,16 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { Cmd } from "../api/types";
 
+/** The verbs of the design's variant list (KiCad 25ec2335 `SCHEMATIC::AddVariant`, `DeleteVariant`, `SetVariantDescription`, `RenameVariant`, `CopyVariant`): the list is the
+ * project's (`SCHEMATIC_SETTINGS::m_VariantDescriptions`), and a removal, rename or copy reaches the symbols of every sheet, so they are sent as they are. */
+const DESIGN_VARIANT_OPS: ReadonlySet<string> = new Set(["add_design_variant", "remove_design_variant", "edit_design_variant_description", "rename_design_variant", "copy_design_variant"]);
+
 /**
  * `cmd` addressed to the sheet being viewed: wrapped in `on_sheet` when that is not the root; as it is on the root, when it is
- * already addressed, for Reorganize (which always runs on the root) and for an edit of the embedded files (the schematic's list is `SCHEMATIC`'s, kept on the root).
+ * already addressed, for Reorganize (which always runs on the root), for an edit of the embedded files (the schematic's list is `SCHEMATIC`'s, kept on the root)
+ * and for the design variants' list.
  */
 export function onCurrentSheet(cmd: Cmd, sheetPath: readonly string[]): Cmd {
-  if (sheetPath.length === 0 || cmd.op === "on_sheet" || cmd.op === "reorganize_sheets" || cmd.op === "embedded") return cmd;
+  if (sheetPath.length === 0 || cmd.op === "on_sheet" || cmd.op === "reorganize_sheets" || cmd.op === "embedded" || DESIGN_VARIANT_OPS.has(cmd.op)) return cmd;
   return { op: "on_sheet", sheet: sheetPath.join("/"), cmd };
 }

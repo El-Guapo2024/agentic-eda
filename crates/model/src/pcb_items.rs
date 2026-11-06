@@ -355,21 +355,29 @@ pub struct ShapeStyle {
     /// Its own `(solder_mask_margin ..)` (`PCB_SHAPE::GetLocalSolderMaskMargin`), nm; `None` takes the board's. Additive.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::units::de")]
     pub solder_mask_margin: Option<crate::ir::Nm>,
+    /// The stroke's line style (`STROKE_PARAMS::GetLineStyle`, the file's `(stroke (width ..) (type ..))`): solid, dashed, dotted, dash-dot or dash-dot-dot, or the file's
+    /// `default` (`LINE_STYLE::DEFAULT`, which `PCB_PAINTER::draw( PCB_SHAPE )` and the plotter draw solid). `parsePCB_SHAPE` starts from `STROKE_PARAMS( 0, LINE_STYLE::SOLID )`,
+    /// so a shape without an entry is solid. The same enumeration a footprint's graphic has ([`crate::fp_art::FpShape::style`]). Additive (UI-LEFT P5).
+    #[serde(default, skip_serializing_if = "is_solid")]
+    pub line_style: crate::fp_art::LineStyle,
 }
 
 fn is_zero(v: &crate::ir::Nm) -> bool {
     *v == Nm::ZERO
 }
+fn is_solid(s: &crate::fp_art::LineStyle) -> bool {
+    *s == crate::fp_art::LineStyle::Solid
+}
 
 impl ShapeStyle {
     /// The style of `id` that says nothing.
     pub fn empty(id: &str) -> ShapeStyle {
-        ShapeStyle { id: id.to_string(), hatch: None, endings: Default::default(), net: None, corner_radius: Nm::ZERO, solder_mask: false, solder_mask_margin: None }
+        ShapeStyle { id: id.to_string(), hatch: None, endings: Default::default(), net: None, corner_radius: Nm::ZERO, solder_mask: false, solder_mask_margin: None, line_style: crate::fp_art::LineStyle::Solid }
     }
 
     /// Says nothing beyond the shape itself: not kept.
     pub fn is_empty(&self) -> bool {
-        self.hatch.is_none() && self.endings.is_none() && self.net.is_none() && self.corner_radius == Nm::ZERO && !self.solder_mask
+        self.hatch.is_none() && self.endings.is_none() && self.net.is_none() && self.corner_radius == Nm::ZERO && !self.solder_mask && self.line_style == crate::fp_art::LineStyle::Solid
     }
 }
 
@@ -494,6 +502,16 @@ impl BoardItems {
     /// Give the shape `shape_id` the endings `endings` (none takes them away).
     pub fn set_endings(&mut self, shape_id: &str, endings: crate::line_ending::LineEndings) {
         self.edit_style(shape_id, |st| st.endings = endings);
+    }
+
+    /// The line style of the shape `shape_id` (solid when it has no style).
+    pub fn line_style_of(&self, shape_id: &str) -> crate::fp_art::LineStyle {
+        self.style_of(shape_id).map(|st| st.line_style).unwrap_or_default()
+    }
+
+    /// Stroke the shape `shape_id` in `style` (`EDA_SHAPE::SetLineStyle`).
+    pub fn set_line_style(&mut self, shape_id: &str, style: crate::fp_art::LineStyle) {
+        self.edit_style(shape_id, |st| st.line_style = style);
     }
 
     /// Put the shape `shape_id` on the net `net` (`None`: on no net).

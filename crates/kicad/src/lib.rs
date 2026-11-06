@@ -102,6 +102,7 @@ pub mod sch_overlap;
 mod sch_import;
 mod sch_crossref;
 mod sheet_file;
+mod variant_io;
 pub use sheet_file::{load_sheet_file, referenced_sheet_files};
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, import_kicad_sch_tree_with, import_kicad_sch_with, pin_kind_from_electrical_type, project_bus_aliases, reconcile, transform_local_point, ImportOptions};
 
@@ -291,7 +292,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     let file_uuid = ctx.file_uuid.as_str();
     let paper = sch.title_block.as_ref().map(|t| t.paper.as_str()).filter(|p| !p.is_empty()).unwrap_or("A4");
     writeln!(out, "(kicad_sch").unwrap();
-    writeln!(out, "\t(version 20250114)").unwrap();
+    writeln!(out, "\t(version {SCH_FILE_VERSION})").unwrap();
     writeln!(out, "\t(generator \"eda-kicad\")").unwrap();
     writeln!(out, "\t(generator_version \"9.0\")").unwrap();
     writeln!(out, "\t(uuid \"{file_uuid}\")").unwrap();
@@ -480,8 +481,9 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
                 _ => {}
             }
         }
+        let owner_key = eda_model::ir::field_key(&sym.id, sym.unit);
         for f in &shown {
-            write_page_field(&mut out, f);
+            write_page_field_of(&mut out, sch, &owner_key, f);
         }
         // The library symbol's simulation fields the symbol has none of (`SCH_SYMBOL` gets every field of its library symbol when it is placed), hidden, so
         // kicad-cli's SPICE netlist models a `Simulation_SPICE` source or transistor the way KiCad does. A sheet read from a KiCad file has its symbols' own.
@@ -520,6 +522,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             writeln!(out, "\t\t\t\t(path \"{path}\"").unwrap();
             writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&reference)).unwrap();
             writeln!(out, "\t\t\t\t\t(unit {})", eda_model::sheet_list::unit_under(sch, sym, model_path)).unwrap();
+            write_symbol_variants(&mut out, sch, sym);
             writeln!(out, "\t\t\t\t)").unwrap();
         }
         writeln!(out, "\t\t\t)").unwrap();
@@ -536,8 +539,19 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let angle = (ps.rot / 1000) % 360;
         writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} {angle}) (unit 1)", sexpr_str(&ps.lib_id)).unwrap();
         // the library's flags, which KiCad copies to a placed symbol (`power:` symbols are in the BOM and on the board; their netlist and BOM leave them out as power
-        // symbols), r2 B-L4
-        writeln!(out, "\t\t(exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)").unwrap();
+        // symbols), r2 B-L4; as its Symbol Properties set them (`SchExtras::power_props`)
+        let props = sch.extras.power_props.get(&ps.id).cloned().unwrap_or_default();
+        let yn = |b: bool| if b { "yes" } else { "no" };
+        writeln!(
+            out,
+            "\t\t(exclude_from_sim {}) (in_bom {}) (on_board {}) (in_pos_files {}) (dnp {})",
+            yn(props.exclude_from_sim),
+            yn(!props.exclude_from_bom),
+            yn(!props.exclude_from_board),
+            yn(!props.exclude_from_pos_files),
+            yn(props.dnp)
+        )
+        .unwrap();
         if sch.extras.is_locked(&ps.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
         }
@@ -546,10 +560,15 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         // the file keeps a turned symbol's field where it is on the sheet, with the angle and justification it has before the turn
         for (p, text) in eda_engine::fields::power_placements(sch, ps) {
             let (ox, oy) = eda_engine::symgeom::bake(ps.rot, false, 0.0, p.dx.as_f64(), p.dy.as_f64());
-            write_field_text(&mut out, &p.name, &text, (ps.at.x.as_f64() + ox, ps.at.y.as_f64() + oy), p.angle == 90_000, eda_engine::fields::to_hj(p.h), eda_engine::fields::to_vj(p.v), !p.visible, &FieldLook::of(&p));
+            write_field_text(&mut out, &p.name, &text, (ps.at.x.as_f64() + ox, ps.at.y.as_f64() + oy), p.angle == 90_000, eda_engine::fields::to_hj(p.h), eda_engine::fields::to_vj(p.v), !p.visible, &FieldLook::of(&p).with_font_look(sch, &ps.id, &p.name));
         }
-        write_property(&mut out, "Footprint", "", 0.0, 0.0, true);
-        write_property(&mut out, "Datasheet", "", 0.0, 0.0, true);
+        // its Footprint, Datasheet and user fields (`SchExtras::power_props`), at its anchor
+        let (px, py) = (ps.at.x.mm(), ps.at.y.mm());
+        write_property(&mut out, "Footprint", &props.footprint, px, py, true);
+        write_property(&mut out, "Datasheet", &props.datasheet, px, py, true);
+        for f in &props.fields {
+            write_property(&mut out, &f.name, &f.text, px, py, !f.visible);
+        }
         let pin_uuid = duid_for(&format!("pwrpin:{}", ps.id), &ps.id);
         writeln!(out, "\t\t(pin \"1\" (uuid \"{pin_uuid}\"))").unwrap();
         writeln!(out, "\t\t(instances").unwrap();
@@ -830,7 +849,7 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
         writeln!(out, "\t\t(locked yes)").unwrap();
     }
     for f in eda_engine::fields::sheet_fields(sch, s) {
-        write_page_field(out, &f);
+        write_page_field_of(out, sch, &s.id, &f);
     }
     // the sheet's user fields (`saveSheet` saves every field), at the sheet's corner (r2 B-L1: where they were is not kept)
     for f in sch.extras.sheet_fields.get(&s.id).into_iter().flatten() {
@@ -1163,30 +1182,44 @@ fn justify_tokens(h: eda_model::kicad_font::HJustify, v: eda_model::kicad_font::
 
 /// How a field's text is set in the file beyond what it says and where it is: the size, bold, italic (`(font (size) (bold yes) (italic yes))`), whether the
 /// name is shown and whether Autoplace Fields may move it (`(show_name yes)`, `(do_not_autoplace yes)`).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct FieldLook {
     size_nm: f64,
     bold: bool,
     italic: bool,
     show_name: bool,
     do_not_autoplace: bool,
+    /// The font face and colour Symbol Properties' fields grid set (`SchExtras::field_looks`): `(face ..)` first in `(font ..)`, `(color ..)` last.
+    face: Option<String>,
+    color: Option<eda_model::sch_extras::SchColor>,
 }
 
 impl FieldLook {
-    const DEFAULT: FieldLook = FieldLook { size_nm: 1_270_000.0, bold: false, italic: false, show_name: false, do_not_autoplace: false };
+    const DEFAULT: FieldLook = FieldLook { size_nm: 1_270_000.0, bold: false, italic: false, show_name: false, do_not_autoplace: false, face: None, color: None };
 
     fn of(p: &FieldPlacement) -> FieldLook {
-        FieldLook { size_nm: p.text_size_nm().as_f64(), bold: p.bold, italic: p.italic, show_name: p.name_shown, do_not_autoplace: p.no_autoplace }
+        FieldLook { size_nm: p.text_size_nm().as_f64(), bold: p.bold, italic: p.italic, show_name: p.name_shown, do_not_autoplace: p.no_autoplace, ..FieldLook::DEFAULT }
     }
 
     fn of_page(f: &eda_engine::fields::PageField) -> FieldLook {
-        FieldLook { size_nm: f.size_nm, bold: f.bold, italic: f.italic, show_name: f.name_shown, do_not_autoplace: f.no_autoplace }
+        FieldLook { size_nm: f.size_nm, bold: f.bold, italic: f.italic, show_name: f.name_shown, do_not_autoplace: f.no_autoplace, ..FieldLook::DEFAULT }
     }
 
-    /// `(font (size S S) (bold yes) (italic yes))`.
+    /// With the font face and colour the item keyed `key` keeps for its field `name` (`SchExtras::field_looks`).
+    fn with_font_look(mut self, sch: &eda_model::ir::SchematicSection, key: &str, name: &str) -> FieldLook {
+        if let Some(l) = sch.extras.field_look(key, name) {
+            self.face = l.font.clone();
+            self.color = l.color;
+        }
+        self
+    }
+
+    /// `(font (face "F") (size S S) (bold yes) (italic yes) (color R G B A))`, in `EDA_TEXT::Format`'s order.
     fn font(&self) -> String {
         let size = fmt_mm_f(self.size_nm / 1e6);
-        format!("(font (size {size} {size}){}{})", if self.bold { " (bold yes)" } else { "" }, if self.italic { " (italic yes)" } else { "" })
+        let face = self.face.as_deref().map(|f| format!("(face {}) ", sexpr_str(f))).unwrap_or_default();
+        let color = self.color.map(|c| format!(" (color {} {} {} {})", c.r, c.g, c.b, sch_extras_io::alpha_str(c.a))).unwrap_or_default();
+        format!("(font {face}(size {size} {size}){}{}{color})", if self.bold { " (bold yes)" } else { "" }, if self.italic { " (italic yes)" } else { "" })
     }
 }
 
@@ -1212,8 +1245,54 @@ fn write_field_text(out: &mut String, key: &str, value: &str, at: (f64, f64), ve
     .unwrap();
 }
 
-fn write_page_field(out: &mut String, f: &eda_engine::fields::PageField) {
-    write_field_text(out, &f.name, &f.text, f.at, f.vertical, f.h, f.v, !f.visible, &FieldLook::of_page(f));
+/// The schematic file's version this writer gives (`(version 20250114)`): what kicad-cli reads a variant's `in_bom` by.
+const SCH_FILE_VERSION: i64 = 20250114;
+
+/// KiCad 25ec2335 `SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`'s `T_in_bom` of a `(variant ..)`: "The "in_bom" token used in the file format is the
+/// positive logic", but a file before 20260306 ("Variant in_bom semantics corrected") wrote the exclusion itself, and is read that way
+/// (`if( m_requiredVersion >= 20260306 ) variant.m_ExcludedFromBOM = !variant.m_ExcludedFromBOM`). The word that says `excluded` in a file of `version`.
+pub(crate) fn variant_in_bom_word(excluded: bool, version: i64) -> &'static str {
+    let in_bom = if version >= 20260306 { !excluded } else { excluded };
+    if in_bom { "yes" } else { "no" }
+}
+
+/// A placed symbol's design variants inside each `(path ..)` of its `(instances ..)` (KiCad 25ec2335 `SCH_IO_KICAD_SEXPR::saveSymbol`): one `(variant (name ..)
+/// ..)` per record with differentials (`SCH_SYMBOL_VARIANT::HasDifferentials`), each flag only where it is not the symbol's own (`dnp`, `exclude_from_sim`,
+/// `in_bom`, `on_board` and `in_pos_files` as the positive words), then its field texts (`(field (name ..) (value ..))`). The record is the reference's, so
+/// every path of a screen shown twice gets it (`eda_model::variants`). `in_bom` is written in the sense this file's version is read in
+/// ([`variant_in_bom_word`]): **differs** from 25ec2335's writer, whose files are at 20261015.
+fn write_symbol_variants(out: &mut String, sch: &eda_model::ir::SchematicSection, sym: &SymbolInstance) {
+    use eda_model::variants::{Flag, SymbolFlags};
+    let yes_no = |b: bool| if b { "yes" } else { "no" };
+    let base = SymbolFlags::of(sch, sym);
+    for (name, rec) in eda_model::variants::written_records(sch, sym) {
+        let flags = rec.flags(base);
+        write!(out, "\t\t\t\t\t(variant (name {})", sexpr_str(name)).unwrap();
+        for f in Flag::ALL {
+            if flags.get(f) == base.get(f) {
+                continue;
+            }
+            let v = flags.get(f);
+            match f {
+                Flag::Dnp => write!(out, " (dnp {})", yes_no(v)),
+                Flag::ExcludeFromSim => write!(out, " (exclude_from_sim {})", yes_no(v)),
+                Flag::ExcludeFromBom => write!(out, " (in_bom {})", variant_in_bom_word(v, SCH_FILE_VERSION)),
+                Flag::ExcludeFromBoard => write!(out, " (on_board {})", yes_no(!v)),
+                Flag::ExcludeFromPosFiles => write!(out, " (in_pos_files {})", yes_no(!v)),
+            }
+            .unwrap();
+        }
+        for (field, text) in &rec.fields {
+            write!(out, " (field (name {}) (value {}))", sexpr_str(field), sexpr_str(text)).unwrap();
+        }
+        writeln!(out, ")").unwrap();
+    }
+}
+
+/// One field of a symbol, power symbol or sheet, where it is on the sheet, with the font face and colour the item keyed `key` keeps for it
+/// (`SchExtras::field_looks`).
+fn write_page_field_of(out: &mut String, sch: &eda_model::ir::SchematicSection, key: &str, f: &eda_engine::fields::PageField) {
+    write_field_text(out, &f.name, &f.text, f.at, f.vertical, f.h, f.v, !f.visible, &FieldLook::of_page(f).with_font_look(sch, key, &f.name));
 }
 
 /// `(effects (font ...) (justify ...))` of a label: its size, bold and italic and the justification its spin gives (`SCH_LABEL_BASE::SetSpinStyle`: the

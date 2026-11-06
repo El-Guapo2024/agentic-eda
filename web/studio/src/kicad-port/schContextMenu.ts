@@ -55,6 +55,10 @@ export interface SchSelectionSummary {
   groups: number;
   /** `m_enteredGroup != nullptr`: a group is being worked in. */
   inGroup: boolean;
+  /** The Symbol Unit submenu of the one selected multi-unit symbol (`SYMBOL_UNIT_MENU` at `SingleMultiUnitSymbol`, kicad-port/schSymbolMenus.ts), or null. */
+  symbolUnitMenu: MenuNode | null;
+  /** The Pin Function submenu of the one selected pin that has alternates (`ALT_PIN_FUNCTION_MENU` at `SingleMultiFunctionPin`), or null. */
+  pinFunctionMenu: MenuNode | null;
   /** `GROUP_CONTEXT_MENU::update`: what the selection holds (see kicad-port/schGroups.ts `groupMenuFlags`). */
   group: { count: number; hasGroup: boolean; onlyOneGroup: boolean; hasUngroupedItems: boolean; hasMember: boolean };
   /** `groupWithDesignBlockLink` (sch_edit_frame.cpp): the one selected item is a group linked to a design block. */
@@ -104,6 +108,8 @@ export function emptySummary(): SchSelectionSummary {
     linkedGroup: false,
     canAddCorner: false,
     canRemoveCorner: false,
+    symbolUnitMenu: null,
+    pinFunctionMenu: null,
   };
 }
 
@@ -153,6 +159,8 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   // `SCH_SELECTION_TOOL::Init`: Select Column(s), Select Row(s) and Select Table for a selection of table cells only (`cellSelection`, order 2).
   const cellSelection = s.tableCells > 0 && s.tableCells === s.total;
   add(cellSelection && item("common.InteractiveSelection.SelectColumns"), cellSelection && item("common.InteractiveSelection.Rows"), cellSelection && item("common.InteractiveSelection.SelectTable"), cellSelection && sep);
+  // `selToolMenu.AddMenu( makeSymbolUnitMenu( .. ), S_C::SingleMultiUnitSymbol, 1 )` and `makePinFunctionMenu( .. ), S_C::SingleMultiFunctionPin, 1`, before Pin Helpers
+  add(single && s.symbols === 1 && !!s.symbolUnitMenu && s.symbolUnitMenu, single && s.pins === 1 && !!s.pinFunctionMenu && s.pinFunctionMenu);
   // `selToolMenu.AddMenu( makePinTricksMenu( m_selectionTool ), S_C::AllPinsOrSheetPins, 1 )`: Pin Helpers (`PIN_TRICKS_MENU`) for a selection of pins and sheet pins
   add(allPinsOrSheetPins(s) && { type: "submenu", label: "Pin Helpers", items: PIN_HELPERS.map((h) => ({ type: "item", action: h.action, label: h.label }) as MenuNode) });
   if (sheetSelection) add(item("eeschema.NavigateTool.enterSheet"), sep);

@@ -7,6 +7,7 @@ import { isPinItemId } from "../../kicad-port/schPins";
 import { singleMultiBodyStyleSymbol } from "../../kicad-port/schBodyStyle";
 import { groupMenuFlags, groupsOf } from "../../kicad-port/schGroups";
 import { canMerge, canUnmerge } from "../../kicad-port/tables";
+import { pinFunctionMenu, pinFunctionsOf, symbolUnitMenu } from "../../kicad-port/schSymbolMenus";
 
 /** The outline of a drawn polygon or rule area, or null for anything else. */
 export function polygonOutline(sch: Schematic, id: string): { kind: PolyKind; pts: P[] } | null {
@@ -17,7 +18,7 @@ export function polygonOutline(sch: Schematic, id: string): { kind: PolyKind; pt
 }
 
 /** `cursor` (um) and `tolNm` (the point editor's handle size at this zoom) decide the corner entries, which depend on where the pointer is. */
-export function summarizeSelection(sch: Schematic, ids: readonly string[], cursor?: readonly [number, number], tolNm = 0, opts: { allowPinSwaps?: boolean; inGroup?: boolean } = {}): SchSelectionSummary {
+export function summarizeSelection(sch: Schematic, ids: readonly string[], cursor?: readonly [number, number], tolNm = 0, opts: { allowPinSwaps?: boolean; inGroup?: boolean; /** The placed unit of the one selected symbol the menu is for (the one under the pointer). */ unit?: number } = {}): SchSelectionSummary {
   const s = emptySummary();
   s.allowPinSwaps = opts.allowPinSwaps ?? false;
   s.inGroup = opts.inGroup ?? false;
@@ -86,6 +87,12 @@ export function summarizeSelection(sch: Schematic, ids: readonly string[], curso
   // `GetSameSymbolMultiUnitSelection`: one reference selected, with several placed units.
   if (symbolIds.length === 1) s.sameReferenceUnits = symbolUnits.get(symbolIds[0]!) ?? 0;
   s.multiBodyStyle = ids.length === 1 && singleMultiBodyStyleSymbol(sch, ids);
+  // the Symbol Unit and Pin Function submenus (`SYMBOL_UNIT_MENU`, `ALT_PIN_FUNCTION_MENU`)
+  if (ids.length === 1 && symbolIds.length === 1) s.symbolUnitMenu = symbolUnitMenu(sch, symbolIds[0]!, opts.unit);
+  if (ids.length === 1 && s.pins === 1) {
+    const f = pinFunctionsOf(sch, ids[0]!);
+    s.pinFunctionMenu = f ? pinFunctionMenu(f) : null;
+  }
   // The point editor's corner entries: one selected polygon or rule area, the pointer on its outline (create) or on one of its corners (remove).
   const poly = ids.length === 1 && cursor ? polygonOutline(sch, ids[0]!) : null;
   if (poly && cursor) {

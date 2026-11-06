@@ -53,8 +53,8 @@ export interface SchEditContext {
 export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext): void {
   const { state, api, requestSelection } = ctx;
   const m = schematicActions(registry, state.tab);
-  const schematicOnly = (fn: () => void) => () => {
-    if (state.tab === "schematic") fn();
+  const schematicOnly = (fn: (arg?: unknown) => void) => (arg?: unknown) => {
+    if (state.tab === "schematic") fn(arg);
   };
   const sch = state.schematic;
 
@@ -151,9 +151,11 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
 
   // Place Next Symbol Unit -- SCH_DRAWING_TOOLS::PlaceNextSymbolUnit: one selected multi-unit symbol; the lowest unit of it not yet on the sheet is armed for placement under the
   // same reference, value and footprint (kicad-port/schUnits.ts); anything else says why not (the info-bar messages).
+  // The Symbol Unit submenu's "Place unit %s" runs it with the unit asked for (`PLACE_SYMBOL_UNIT_PARAMS{ symbol, unit }`). The unit rides as a copy of the placed
+  // one (`new SCH_SYMBOL( *symbol )`: its orientation too), under its reference, and the tool ends once it is placed.
   m.set(
     "eeschema.InteractiveDrawing.placeNextSymbolUnit",
-    schematicOnly(() => {
+    schematicOnly((arg?: unknown) => {
       if (!sch) return;
       const ids = requestSelection().filter((id) => sch.symbols.some((s) => s.id === id));
       const info = (message: string) => ctx.dispatch({ type: "TOAST", message, kind: "info" });
@@ -161,9 +163,10 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
       const placed = sch.symbols.filter((s) => s.id === ids[0]);
       const first = placed[0];
       if (!first?.lib_id) return;
-      const next = nextUnitToPlace(unitCountOf(sch.lib_symbols[first.lib_id]), placed.map((s) => s.unit));
+      const units = unitCountOf(sch.lib_symbols[first.lib_id]);
+      const next = nextUnitToPlace(units, placed.map((s) => s.unit), typeof arg === "number" ? arg : 0);
       if (!next.ok) return info(next.message);
-      ctx.dispatch({ type: "SET_ARMED_SYMBOL", symbol: { libId: first.lib_id, referencePrefix: "", unit: next.unit, ref: first.id, value: first.value ?? undefined, footprint: first.footprint ?? undefined } });
+      ctx.dispatch({ type: "SET_ARMED_SYMBOL", symbol: { libId: first.lib_id, referencePrefix: "", unit: next.unit, ref: first.id, value: first.value ?? undefined, footprint: first.footprint ?? undefined, rotDeg: first.rot, mirror: first.mirror ?? null, unitCount: units } });
       ctx.dispatch({ type: "SET_ACTIVE_TOOL", tool: "sch_place_symbol" });
     })
   );

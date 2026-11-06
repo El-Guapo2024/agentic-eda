@@ -102,7 +102,9 @@
   const near = (a, b, tol = 1) => Math.abs(a - b) <= tol;
   // the library tree and the table dialogs (as e2e/library-save.check.js drives them)
   const treeRow = (id) => document.querySelector(`[role=treeitem][data-name="${CSS.escape(id)}"]`);
-  const libRow = (lib) => [...document.querySelectorAll(".library-tree-group")].find((g) => g.textContent.replace(/[▾▸]/g, "").trim().replace(/\s*\*?\s*[\d…]*$/, "").replace(/^☆ /, "") === lib);
+  // the library's row by the name it carries: its text ends in the count (and " *" when modified), and a name that ends in a digit -- the base-36 time in these
+  // checks' names does, 10 times in 36 -- read as part of the count once the digits were stripped from the text
+  const libRow = (lib) => document.querySelector(`.library-tree-group[data-library="${CSS.escape(lib)}"]`);
   const isOpen = (lib) => libRow(lib)?.textContent.trim().startsWith("▾");
   const itemRow = async (id) => {
     const lib = id.split(":")[0];
@@ -329,6 +331,9 @@
     await sleep(100);
     button(d, "Save").click();
     const id = `${LIB}:FeFp1`;
+    // Save As is over when its dialog is: after the file it opens the copy (`SetFPID`) and closes. Forgetting the design's copy before that let the dialog's
+    // own open land after the delete, which (before the open verb read the library itself) started a blank footprint under the name.
+    t(await until(() => !dialog("Save Footprint As"), 8000), "Save As closes");
     const saved = await until(async () => savedFootprint(id), 6000);
     if (!t(saved, `Save As wrote ${id} into the library's folder`)) return;
     // forget the design's copy, open it from the tree: it comes from the .kicad_mod

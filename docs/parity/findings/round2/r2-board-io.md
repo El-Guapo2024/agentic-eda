@@ -340,6 +340,7 @@ Test to write: `plot_params_round_trip`. Read `(pcbplotparams (outputdirectory "
 
 **Partly fixed** on task-r2-board-io: 0187d49a (the target length clamp). The rest is open.
 **Fixed in part** on task-r2-misc-leftovers: 0d5779ef (a padless footprint's `zone_connect` and `clearance`; the board's technical layers are the file's plus the mandatory ones, as `BOARD_DESIGN_SETTINGS::SetEnabledLayers` has them: `issue18839` 10 -> 0 lines). Left: an empty footprint `(embedded_files)` (files listed with no data, which KiCad writes as an empty block and which carry nothing) and the stackup `addsublayer` (the stackup model has one row per layer, PARITY section 52).
+**Fixed** on task-u2-boardsetup (2026-11-06, from `task-u2-stackup` 33996f14): the stackup `addsublayer` -- each sublayer read and written with its values and `locked` (PARITY-pcb section 72). Left: the empty footprint `(embedded_files)`.
 
 ### F18. Note on the R6 change (installed footprints carried whole). **low (design note)**
 

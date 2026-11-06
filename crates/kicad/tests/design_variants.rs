@@ -1,0 +1,166 @@
+//! Design variants (UI-LEFT S2; KiCad 10, newer than 8303b2ad) through the schematic reader and writer, against KiCad 25ec2335's QA project
+//! `qa/data/cli/variants` -- the one its own `test_sch_export_bom_variants` (`qa/tests/cli/test_sch.py`) exports a BOM of per variant:
+//!
+//! - every symbol's `(variant ..)` records and the project's `schematic.variants` are read (`parseSchematicSymbol`'s `T_variant`, the `variants` `PARAM_LAMBDA`);
+//! - the writer puts them back so that reading our file gives the same records;
+//! - (slow) kicad-cli's BOM of our file, `--variant "Variant 1"` / `--variant Variant2` / none with KiCad's test's arguments, is KiCad's expected CSV
+//!   (`variants_v1.bom.csv`, `variants_v2.bom.csv`, `variants_default.bom.csv`) byte for byte: the DNP of `J1` and `R14` and the `Value` of `R1` follow the
+//!   variant;
+//! - (slow) a variant excluded from the BOM is read by kicad-cli as our writer means it at our file's version (`in_bom`'s sense changed at 20260306).
+//!
+//! The QA data is KiCad 25ec2335's (`KICAD10_QA_DATA`, by default `$HOME/src/kicad-src-25ec2335/qa/data`); without it the tests say so and pass. Run the slow
+//! ones with `EDA_SLOW_TESTS=1 cargo test -p eda-kicad --test design_variants -- --nocapture`.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use eda_kicad::{export_kicad_pro_for, export_kicad_sch_tree, import_kicad_sch_tree_with, ExportMeta, ImportOptions};
+use eda_model::ir::Design;
+
+fn qa_project() -> Option<PathBuf> {
+    let root = std::env::var_os("KICAD10_QA_DATA").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("src/kicad-src-25ec2335/qa/data")))?;
+    let p = root.join("cli/variants");
+    p.join("variants.kicad_sch").exists().then_some(p)
+}
+
+fn slow_tests_off() -> bool {
+    let off = std::env::var_os("EDA_SLOW_TESTS").is_none();
+    if off {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+    }
+    off
+}
+
+fn kicad_cli() -> Option<PathBuf> {
+    let out = Command::new("which").arg("kicad-cli").output().ok()?;
+    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!p.is_empty()).then(|| PathBuf::from(p))
+}
+
+fn work_dir(tag: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("eda_design_variants_{}", std::process::id())).join(tag);
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// The QA project read as `eda import-kicad` reads it: the schematic tree, then the project's Schematic Setup (`project_schematic::apply`).
+fn read(dir: &Path, stem: &str) -> (Design, eda_model::ConstraintModel) {
+    let (mut design, model, _) = import_kicad_sch_tree_with(&dir.join(format!("{stem}.kicad_sch")), &ImportOptions { unique_references: true }).expect("the schematic reads");
+    if let Ok(pro) = std::fs::read_to_string(dir.join(format!("{stem}.kicad_pro"))) {
+        eda_kicad::project_schematic::apply(&mut design.schematic.as_mut().unwrap().extras, &pro);
+    }
+    (design, model)
+}
+
+/// The design written as the derived project is: every sheet file and the project file.
+fn write(design: &Design, model: &eda_model::ConstraintModel, dir: &Path, stem: &str) {
+    for (name, text) in export_kicad_sch_tree(design, model, &ExportMeta { date: "", title: stem }, &format!("{stem}.kicad_sch")).expect("the schematic writes") {
+        std::fs::write(dir.join(name), text).unwrap();
+    }
+    std::fs::write(dir.join(format!("{stem}.kicad_pro")), export_kicad_pro_for(design, model)).unwrap();
+}
+
+fn records(design: &Design) -> Vec<(String, String, eda_model::variants::SymbolVariant)> {
+    let mut out = Vec::new();
+    for sch in design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())) {
+        for (reference, recs) in &sch.extras.symbol_variants {
+            for (name, rec) in recs {
+                out.push((reference.clone(), name.clone(), rec.clone()));
+            }
+        }
+    }
+    out.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    out
+}
+
+#[test]
+fn the_qa_projects_variants_are_read_and_written_back() {
+    let Some(qa) = qa_project() else {
+        eprintln!("skipped: needs KiCad 25ec2335's QA data (KICAD10_QA_DATA)");
+        return;
+    };
+    let (design, model) = read(&qa, "variants");
+    let root = design.schematic.as_ref().unwrap();
+    assert_eq!(root.extras.variants.get("Variant 1").map(String::as_str), Some("testing variant 1 description"), "the project's `schematic.variants`");
+    assert_eq!(root.extras.variants.get("Variant2").map(String::as_str), Some("Test of variant 2 desc"));
+    assert_eq!(eda_model::variants::names_for_ui(&design), ["< Default >", "Variant 1", "Variant2"]);
+    let read_back = records(&design);
+    let find = |r: &str, v: &str| read_back.iter().find(|(a, b, _)| a == r && b == v).map(|(_, _, rec)| rec.clone());
+    assert_eq!(find("J1", "Variant 1").and_then(|r| r.dnp), Some(true), "`(variant (name \"Variant 1\") (dnp yes))` of J1");
+    assert_eq!(find("R1", "Variant 1").unwrap().fields.get("Value").map(String::as_str), Some("10K_V1"));
+    assert_eq!(find("R1", "Variant2").unwrap().fields.get("Value").map(String::as_str), Some("10K_V2"));
+    assert_eq!(find("R14", "Variant2").and_then(|r| r.dnp), Some(true));
+    assert_eq!(find("R1", "Variant 1").and_then(|r| r.dnp), Some(false), "a record starts as the symbol's own flags (`InitializeAttributes`)");
+
+    // written, and read again: the same records, and the file says only what differs
+    let dir = work_dir("roundtrip");
+    write(&design, &model, &dir, "variants");
+    let text = std::fs::read_to_string(dir.join("variants.kicad_sch")).unwrap();
+    assert!(text.contains("(variant (name \"Variant 1\") (dnp yes))"), "J1's record, its one difference");
+    assert!(text.contains("(variant (name \"Variant 1\") (field (name \"Value\") (value \"10K_V1\")))"), "R1's record: no flag equal to the symbol's");
+    let pro: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("variants.kicad_pro")).unwrap()).unwrap();
+    assert_eq!(pro["schematic"]["variants"], serde_json::json!([{ "name": "Variant 1", "description": "testing variant 1 description" }, { "name": "Variant2", "description": "Test of variant 2 desc" }]));
+    let (again, _) = read(&dir, "variants");
+    assert_eq!(records(&again), read_back, "the records survive the writer and the reader");
+}
+
+/// KiCad's own test of the BOM per variant, on the file our writer made of the QA project.
+#[test]
+fn kicad_clis_bom_of_our_file_is_kicads_per_variant() {
+    if slow_tests_off() {
+        return;
+    }
+    let (Some(qa), Some(cli)) = (qa_project(), kicad_cli()) else {
+        eprintln!("skipped: needs kicad-cli and KiCad 25ec2335's QA data");
+        return;
+    };
+    let (design, model) = read(&qa, "variants");
+    let dir = work_dir("bom");
+    write(&design, &model, &dir, "variants");
+    for (variant, expected) in [(None, "variants_default.bom.csv"), (Some("Variant 1"), "variants_v1.bom.csv"), (Some("Variant2"), "variants_v2.bom.csv")] {
+        let out = dir.join(format!("{}.csv", variant.unwrap_or("default")));
+        let mut cmd = Command::new(&cli);
+        cmd.args(["sch", "export", "bom"]);
+        if let Some(v) = variant {
+            cmd.args(["--variant", v]);
+        }
+        let status = cmd.args(["--exclude-dnp", "--fields", "Reference,Value", "--labels", "Refs,Value", "-o"]).arg(&out).arg(dir.join("variants.kicad_sch")).output().unwrap();
+        assert!(status.status.success(), "kicad-cli: {}", String::from_utf8_lossy(&status.stderr));
+        let ours = std::fs::read_to_string(&out).unwrap();
+        let kicads = std::fs::read_to_string(qa.join(expected)).unwrap();
+        assert_eq!(ours, kicads, "the BOM of {variant:?}");
+    }
+}
+
+/// `in_bom` in a variant: our file is at 20250114, before "Variant in_bom semantics corrected" (20260306), where kicad-cli reads the word as the exclusion
+/// itself; the writer says it that way, so a variant that leaves a symbol out of the BOM leaves it out of kicad-cli's.
+#[test]
+fn a_variant_left_out_of_the_bom_is_left_out_of_kicad_clis() {
+    if slow_tests_off() {
+        return;
+    }
+    let (Some(qa), Some(cli)) = (qa_project(), kicad_cli()) else {
+        eprintln!("skipped: needs kicad-cli and KiCad 25ec2335's QA data");
+        return;
+    };
+    let (mut design, model) = read(&qa, "variants");
+    let sch = design.schematic.as_mut().unwrap();
+    assert!(eda_model::variants::set_flag(sch, "R2", "Variant2", eda_model::variants::Flag::ExcludeFromBom, true));
+    let dir = work_dir("in_bom");
+    write(&design, &model, &dir, "variants");
+    let bom = |variant: Option<&str>| {
+        let out = dir.join(format!("{}.csv", variant.unwrap_or("default")));
+        let mut cmd = Command::new(&cli);
+        cmd.args(["sch", "export", "bom"]);
+        if let Some(v) = variant {
+            cmd.args(["--variant", v]);
+        }
+        assert!(cmd.args(["--fields", "Reference,Value", "-o"]).arg(&out).arg(dir.join("variants.kicad_sch")).output().unwrap().status.success());
+        std::fs::read_to_string(&out).unwrap()
+    };
+    let has_r2 = |t: &str| t.lines().any(|l| l.split(',').next() == Some("\"R2\""));
+    assert!(has_r2(&bom(None)), "R2 is in the default variant's BOM");
+    assert!(has_r2(&bom(Some("Variant 1"))), "and in Variant 1's");
+    assert!(!has_r2(&bom(Some("Variant2"))), "Variant2 leaves it out");
+}

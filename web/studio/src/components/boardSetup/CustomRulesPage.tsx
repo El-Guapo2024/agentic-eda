@@ -1,14 +1,29 @@
 // Board Setup > Design Rules > Custom Rules -- port of pcbnew/dialogs/panel_setup_rules.cpp: the text of the board's `.kicad_dru`, edited
 // as text. Apply stores it (`set_custom_rules`); the derived project hands it to kicad-cli, which judges the board by it, and this app's
-// own DRC reads the same text. "Check rule syntax" is `OnCompile`: the ported rules parser (`eda_drc::dru::parse_reporting`, POST
-// /api/rule_editor/check `{ compile }`, R6-D5) says what KiCad's says -- each error at its line and offset, a link that goes there
-// (`OnErrorLinkClicked`), or "No errors found.".
+// own DRC reads the same text. "Check rule syntax" is `OnCompile`: the text's variables expanded by the board's resolver (`ExpandTextVars`), the ported
+// rules parser (`eda_drc::dru::parse_reporting`, POST /api/rule_editor/check `{ compile }`, R6-D5) says what KiCad's says -- each error at its line and
+// offset, a link that goes there (`OnErrorLinkClicked`), or "No errors found." -- and `checkPlausibility`'s warnings follow (two rules sharing a condition,
+// a rule naming an undefined net class or layer).
 //
-// Not ported: the syntax-highlighting editor with auto-completion, the Syntax Help window, and the extra warnings KiCad's own compiler adds
-// (`checkPlausibility`: two rules sharing a condition, a rule naming an undefined net class or layer).
-import { useEffect, useRef, useState } from "react";
+// The editor is KiCad's (components/RuleTextEditor.tsx): line numbers, the brace highlight, Ctrl+/, Tab, the right-click menu
+// (`OnContextMenu`) and the completion of `onScintillaCharAdded` (kicad-port/ruleCompletion.ts `rulesCharAdded`) over the property names and
+// functions KiCad's rules know (src/kicad/rule_completions.json) and the board's net classes and nets. Escape with the text changed asks
+// "Cancel Changes?" (`onCharHook`, `IsOK`: Yes / No, asked in the page) and Yes puts back the text the board has. The "Syntax help" link
+// (`OnSyntaxHelp`) opens KiCad's help -- the markdown texts pcbnew compiles in (src/kicad/rules_help.json) as its converter renders them
+// (kicad-port/rulesSyntaxHelp.ts) -- in a modeless "Syntax Help" window that the link brings back.
+//
+// Not ported: Shift+Enter (`onAcceptFn`: the dialog's OK -- the studio's Board Setup has no OK, each page applies on its own).
+import { useEffect, useMemo, useRef, useState } from "react";
 import { postCompileRules } from "../../api/client";
 import { useStudioState } from "../../state/store";
+import { isMac } from "../../platform";
+import { boardNetNames } from "../../kicad-port/boardSetupRules";
+import { rulesCharAdded } from "../../kicad-port/ruleCompletion";
+import { SYNTAX_HELP_SIZE_DU, SYNTAX_HELP_TITLE, syntaxHelpHtml } from "../../kicad-port/rulesSyntaxHelp";
+import ruleCompletions from "../../kicad/rule_completions.json";
+import rulesHelp from "../../kicad/rules_help.json";
+import { HtmlMessageBox } from "../HtmlMessageBox";
+import { RuleTextEditor, type RuleTextEditorHandle } from "../RuleTextEditor";
 import { PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
 
 const EXAMPLE = `(version 1)
@@ -39,29 +54,33 @@ function messageParts(text: string): ({ text: string } | { link: string; line: n
   return out;
 }
 
-/** The offsets, in `text`, of line `line` (from 1): where it starts and where it ends. */
-function lineSpan(text: string, line: number): [number, number] {
-  let start = 0;
-  for (let n = 1; n < line; n++) {
-    const next = text.indexOf("\n", start);
-    if (next < 0) return [text.length, text.length];
-    start = next + 1;
-  }
-  const end = text.indexOf("\n", start);
-  return [start, end < 0 ? text.length : end];
-}
+/** `OnSyntaxHelp`'s texts, in its order. */
+const HELP_TEXTS = (rulesHelp.setupRules as string[]).map((f) => (rulesHelp.texts as Record<string, string>)[f] ?? "");
 
 export function CustomRulesPage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
-  const text = state.board?.board_rules?.custom_rules_text;
-  const known = state.board?.board_rules !== undefined && state.board.board_rules.custom_rules_text !== undefined;
+  const board = state.board;
+  const text = board?.board_rules?.custom_rules_text;
+  const known = board?.board_rules !== undefined && board.board_rules.custom_rules_text !== undefined;
   const page = usePageDraft<string>(known ? (text ?? "") : undefined);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
-  const area = useRef<HTMLTextAreaElement>(null);
+  const editor = useRef<RuleTextEditorHandle>(null);
   const [checking, setChecking] = useState(false);
   const [report, setReport] = useState<{ reply: CompileReply; checked: string } | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [askCancel, setAskCancel] = useState(false);
+  const yes = useRef<HTMLButtonElement>(null);
   const draft = page.draft;
+  // `m_originalText`: what the board has.
+  const original = text ?? "";
+
+  // What `NetClass == '` and `NetName == '` offer: `GetNetclasses()` (the classes other than Default) and `GetNetClassAssignmentCandidates()`.
+  const names = useMemo(
+    () => ({ netClasses: (board?.board_rules?.net_classes ?? []).map((c) => c.name).sort(), netNames: board ? boardNetNames(board) : [] }),
+    [board]
+  );
+  const helpHtml = useMemo(() => syntaxHelpHtml(HELP_TEXTS, isMac()), []);
 
   const check = async () => {
     if (draft === undefined) return;
@@ -76,16 +95,36 @@ export function CustomRulesPage({ hidden, onDirty }: PageProps) {
     }
   };
 
-  // `OnErrorLinkClicked`: the caret to the line and offset the link names
-  const goTo = (line: number, offset: number) => {
-    const el = area.current;
-    if (!el || draft === undefined) return;
-    const [a, b] = lineSpan(draft, line);
-    const at = Math.min(b, a + Math.max(0, offset - 1));
-    el.focus();
-    el.setSelectionRange(at, at);
-    el.scrollTop = Math.max(0, (line - 3) * 17);
+  // `onCharHook`: Escape with the text not as it was asks first (and is then the page's, not the dialog's).
+  const onEscape = () => {
+    if (draft === undefined || draft === original) return false;
+    setAskCancel(true);
+    return true;
   };
+  const answer = (cancel: boolean) => {
+    setAskCancel(false);
+    if (cancel) {
+      // `m_textEditor->SetText( m_originalText ); m_textEditor->SelectAll();`
+      editor.current?.replaceAll(original);
+      page.revert();
+      apply.setMessage(null);
+      editor.current?.selectAll();
+    } else editor.current?.focus();
+  };
+  useEffect(() => {
+    if (!askCancel) return;
+    yes.current?.focus(); // `wxOK_DEFAULT`
+    // Escape answers No, and must not reach the dialog behind.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      answer(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askCancel]);
 
   const verdict = report?.reply;
   const messages = verdict?.messages ?? [];
@@ -120,15 +159,36 @@ export function CustomRulesPage({ hidden, onDirty }: PageProps) {
           <p className="bs-note">
             DRC rules in KiCad's rule language (<code>.kicad_dru</code>). Check the syntax before relying on them: kicad-cli's DRC stops on a rules file it cannot compile.
           </p>
-          <textarea
-            ref={area}
-            className={`bs-textarea${failed && !stale ? " bs-invalid" : ""}`}
-            aria-label="DRC Rules"
+          {/* `m_title` "DRC Rules" and the `m_syntaxHelp` hyperlink at the right */}
+          <div className="bs-rules-head">
+            <span>DRC Rules</span>
+            <button className="bs-hyperlink" title="Show syntax help window" data-testid="rules-syntax-help" onClick={() => setHelpOpen(true)}>
+              Syntax help
+            </button>
+          </div>
+          <RuleTextEditor
+            ref={editor}
+            className="bs-rules-editor"
+            ariaLabel="DRC Rules"
+            testId="custom-rules-editor"
             value={draft}
-            spellCheck={false}
+            invalid={failed && !stale}
+            lineNumbers
+            contextMenu
             placeholder={'(version 1)\n(rule "name"\n  (condition "...")\n  (constraint clearance (min 0.2mm)))'}
-            onChange={(e) => page.edit(() => e.target.value)}
+            onChange={(t) => page.edit(() => t)}
+            onCharAdded={(t, caret) => rulesCharAdded(t, caret, ruleCompletions, names)}
+            onEscape={onEscape}
           />
+          {askCancel && (
+            <div className="bs-ask" role="alertdialog" aria-label="Confirmation" data-testid="rules-cancel-changes">
+              <span>Cancel Changes?</span>
+              <button ref={yes} onClick={() => answer(true)}>
+                Yes
+              </button>
+              <button onClick={() => answer(false)}>No</button>
+            </div>
+          )}
           {(checking || verdict) && (
             <div className="bs-report" role="status" data-rules-report>
               {checking && <span>Checking...</span>}
@@ -139,7 +199,7 @@ export function CustomRulesPage({ hidden, onDirty }: PageProps) {
                     <div key={i} className={m.severity === "error" ? "bs-error" : m.severity === "warning" ? "bs-warning" : "bs-ok"}>
                       {messageParts(m.text).map((part, j) =>
                         "link" in part ? (
-                          <button key={j} className="bs-link" onClick={() => goTo(part.line, part.offset)}>
+                          <button key={j} className="bs-link" onClick={() => editor.current?.goTo(part.line, part.offset)}>
                             {part.link}
                           </button>
                         ) : (
@@ -153,6 +213,7 @@ export function CustomRulesPage({ hidden, onDirty }: PageProps) {
               )}
             </div>
           )}
+          <HtmlMessageBox title={SYNTAX_HELP_TITLE} html={helpHtml} open={helpOpen} onClose={() => setHelpOpen(false)} sizeDu={SYNTAX_HELP_SIZE_DU} testId="rules-syntax-help-window" />
         </>
       )}
     </PageFrame>

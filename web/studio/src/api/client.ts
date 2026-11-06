@@ -429,6 +429,8 @@ export interface FabPosOptions {
   board_edge?: boolean;
   /** "Output directory:" (`m_outputDirectoryName`), relative to the board's folder; empty is `export/kicad/pos/`. */
   output_directory?: string;
+  /** "Design variant:" (KiCad 25ec2335 `DIALOG_GEN_FOOTPRINT_POSITION::getSelectedVariant`, kicad-cli's `--variant`): absent for the default variant. */
+  variant?: string;
 }
 
 export function postFabPos(opts: FabPosOptions): Promise<FabReply> {
@@ -822,14 +824,25 @@ export interface StagedFieldChanges {
   remove_fields: string[];
 }
 
+/** The design variant a Symbol Fields Table request shows (KiCad 25ec2335 `SetCurrentVariant` of the data model; "" or absent is the default) and the cells staged for each variant. */
+export interface FieldsTableVariantView {
+  variant?: string;
+  variant_edits?: Array<{ variant: string; id: string; field: string; value: string }>;
+}
+
+/** The keys of `view` worth sending: nothing for the default variant with nothing staged in a variant. */
+function variantKeys(view?: FieldsTableVariantView): FieldsTableVariantView {
+  return { ...(view?.variant ? { variant: view.variant } : {}), ...(view?.variant_edits && view.variant_edits.length > 0 ? { variant_edits: view.variant_edits } : {}) };
+}
+
 /** POST /api/sch/fields_table: omit `spec` for the dialog's initial view; `preset` names one of KiCad's built-in views to apply to it first (`ApplyBomPreset`). */
-export function fetchFieldsTable(spec: FieldsTableSpec | null, changes: StagedFieldChanges | null, preset?: string): Promise<FieldsTableReply> {
-  return postJson("/api/sch/fields_table", { spec, changes, ...(preset ? { preset } : {}) });
+export function fetchFieldsTable(spec: FieldsTableSpec | null, changes: StagedFieldChanges | null, preset?: string, view?: FieldsTableVariantView): Promise<FieldsTableReply> {
+  return postJson("/api/sch/fields_table", { spec, changes, ...(preset ? { preset } : {}), ...variantKeys(view) });
 }
 
 /** POST /api/sch/bom_export: `path` (relative to the board directory) omitted = preview text only; `preview: true` with a path also skips writing. */
-export function exportBom(spec: FieldsTableSpec, fmt: BomFmt, changes: StagedFieldChanges | null, path?: string, preview?: boolean): Promise<BomExportReply> {
-  return postJson("/api/sch/bom_export", { spec, fmt, changes, path, preview });
+export function exportBom(spec: FieldsTableSpec, fmt: BomFmt, changes: StagedFieldChanges | null, path?: string, preview?: boolean, view?: FieldsTableVariantView): Promise<BomExportReply> {
+  return postJson("/api/sch/bom_export", { spec, fmt, changes, path, preview, ...variantKeys(view) });
 }
 
 /** POST /api/sch/find: ordered matches (ascending x, y -- `nextMatch` order) on the sheet in view (`sheet`, root to here: Replace edits that sheet), or with `allSheets` on every sheet in page order. `scope` = owner ids for "search only selected objects". */
@@ -849,6 +862,12 @@ export async function fetchErcSeverities(): Promise<ErcSeveritiesReply> {
 /** The settings of Schematic Setup > Formatting the design keeps (the connection grid). */
 export async function fetchSchFormatting(): Promise<SchFormattingReply> {
   return getJson<SchFormattingReply>("/api/sch/formatting");
+}
+
+/** The font families the server's machine has (`GET /api/fonts`, `fc-list`): Symbol Properties' Font column lists them after "Default Font" and "KiCad Font". */
+export async function fetchFontFamilies(): Promise<string[]> {
+  const r = await getJson<{ ok: boolean; families?: string[] }>("/api/fonts");
+  return r.families ?? [];
 }
 
 /** Schematic Setup's Annotation, Field Name Templates, BOM Presets and Bus Alias Definitions pages (`GET /api/sch/setup`). */
@@ -886,6 +905,23 @@ export async function fetchRuleEditor(): Promise<import("../kicad-port/ruleEdito
  *  words -- an error's place as `<a href='line:offset'>` -- or "No errors found.". POST /api/rule_editor/check `{ compile }`; nothing is saved. */
 export async function postCompileRules(text: string): Promise<{ ok: boolean; message?: string; messages?: { text: string; severity: "error" | "warning" | "info" }[] }> {
   return postJson("/api/rule_editor/check", { compile: text });
+}
+
+/**
+ * POST /api/component_classes (crates/cli/src/board_setup_api.rs): what Board Setup > Component Classes needs of the board for the assignments as they stand --
+ * the footprints' field and sheet names for the condition rows, whether each assignment compiles (`CompileAssignmentRule`) and the footprints it matches
+ * ("Highlight matching footprints"; null when it does not compile). Changes nothing.
+ */
+export async function postComponentClasses(assignments: readonly import("./types").ClassAssignment[]): Promise<{ ok: boolean; message?: string; fields?: string[]; sheets?: string[]; compiles?: boolean[]; matches?: (string[] | null)[] }> {
+  return postJson("/api/component_classes", { assignments });
+}
+
+/**
+ * POST /api/rule_editor/show_matches: "Show Matches" of a rule panel (`{ entry, rule }`, as Save takes it; `DIALOG_DRC_RULE_EDITOR::highlightMatchingItems`):
+ * the number of the board's items the panel's rule selects and the ids the studio selects them by, or `error` where KiCad says "Show Matches (error)".
+ */
+export async function postRuleEditorShowMatches(body: unknown): Promise<{ ok: boolean; message?: string; error?: boolean; count?: number; ids?: string[] }> {
+  return postJson("/api/rule_editor/show_matches", body);
 }
 
 /** POST /api/rule_editor/check: what Save would say of a rule panel (`{ entry, rule }`), or a Custom rule's Check Syntax (`{ syntax: { name, body } }`). Changes nothing. */

@@ -9,7 +9,8 @@
 //!   one per sheet the footprint is on.
 //!
 //! This module is the project half: [`ComponentClassSettings`] as `BoardRules::component_classes`, read from and written to the `.kicad_pro` by `eda_kicad`
-//! (`merge_project_setup_pages`, `export_kicad_pro`), so the derived project says to kicad-cli what the original did. The Board Setup page that edits it is not built.
+//! (`merge_project_setup_pages`, `export_kicad_pro`), so the derived project says to kicad-cli what the original did. Board Setup > Design Rules > Component Classes
+//! edits it (`Cmd::SetComponentClasses`, the page `RulesOverlay::component_classes`; `web/studio/src/components/boardSetup/ComponentClassesPage.tsx`).
 
 use serde::{Deserialize, Serialize};
 

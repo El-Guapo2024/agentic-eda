@@ -301,6 +301,19 @@ test("a shape shows the geometry its kind has", () => {
   assert.deepEqual(names(b, ["shp_seg"])[0], ["Basic Properties", ["Locked", "Layer"]]);
 });
 
+test("a leader's Text Frame is its text_frame (UI-LEFT P13): None takes the frame away, the same choice again changes nothing", () => {
+  const b = board();
+  assert.equal(rowOf(b, ["dim_lead"], "Text Frame")!.writable, true);
+  assert.equal(rowOf(b, ["dim_lead"], "Text Frame")!.value, "none");
+  const [c] = edit(b, ["dim_lead"], "Text Frame", "circle");
+  assert.ok(c && c.op === "edit_dimension" && c.dimension.text_frame === "circle", JSON.stringify(c));
+  assert.deepEqual(edit(b, ["dim_lead"], "Text Frame", "none"), []);
+  const lead = b.drawings!.dimensions!.find((d) => d.id === "dim_lead")!;
+  lead.text_frame = "rectangle";
+  const [none] = edit(b, ["dim_lead"], "Text Frame", "none");
+  assert.ok(none && none.op === "edit_dimension" && none.dimension.text_frame === undefined, JSON.stringify(none));
+});
+
 test("dimensions: the kinds share the text and layer rows and each adds its own", () => {
   const b = board();
   const rows = (id: string) => Object.fromEntries(names(b, [id]));
@@ -500,8 +513,14 @@ test("a track's and a shape's solder mask: set_solder_mask; the margin is kept o
   assert.deepEqual(edit(b, ["shp_rect"], "Corner Radius", 1000), [{ op: "set_corner_radius", ids: ["shp_rect"], radius: 1000 }]);
   const tooBig = pcbEdit(b, ["shp_rect"], "Corner Radius", 3000, "mm");
   assert.equal(tooBig.ok, false);
-  assert.equal(rowOf(b, ["shp_seg"], "Line Style")!.writable, false);
-  assert.match(rowOf(b, ["shp_seg"], "Line Style")!.note ?? "", /solid/);
+  // "Line Style" (UI-LEFT P5): the shape's own, `set_shape_style`'s `line_style`; a `default` or solid stroke shows as Solid and choosing it again changes nothing.
+  assert.equal(rowOf(b, ["shp_seg"], "Line Style")!.writable, true);
+  assert.equal(rowOf(b, ["shp_seg"], "Line Style")!.value, "solid");
+  assert.deepEqual(edit(b, ["shp_seg"], "Line Style", "dash_dot"), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_seg"], line_style: "dash_dot" }]);
+  assert.deepEqual(edit(b, ["shp_seg"], "Line Style", "solid"), []);
+  b.drawings!.shapes[0]!.dash = "dot";
+  assert.equal(rowOf(b, ["shp_seg"], "Line Style")!.value, "dot");
+  assert.deepEqual(edit(b, ["shp_seg"], "Line Style", "solid"), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_seg"], line_style: "solid" }]);
 });
 
 test("a pad's overrides: its margins are its edit, its clearance and thermal relief its zone overrides; the teardrop rows go once the board has teardrops", () => {

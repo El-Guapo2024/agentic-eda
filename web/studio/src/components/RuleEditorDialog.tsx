@@ -10,11 +10,22 @@
 // `edit_drc_rule` verb, as Delete, Move Up and Move Down do: each is one undo step, and kicad-cli judges the board by the file. A new or copied rule
 // lives here until it is saved (`IsNew`), as in KiCad; Close drops it. Lengths are in millimetres.
 //
-// Not ported: Show Matches (`DRC_ENGINE::GetItemsMatchingRule`), the Syntax help window, the condition text's auto-completion, drag and drop in the
-// tree, the units of the frame (fields are in mm), a new rule's Move Up/Down (KiCad moves its tree item; here only the file's rules move, and the file's
-// order follows, where KiCad's move leaves the file as it is).
+// Show Matches (`highlightMatchingItems`: the panel's rule through the rule engine, `POST /api/rule_editor/show_matches`) selects, frames and brightens the
+// items the rule selects and counts them on the button ("Show Matches (%d)", "Show Matches (error)"; reset when the conditions change). A saved rule dragged
+// onto another of its node takes its place (`onRuleTreeItemLeftUp`: first, last, or just before the target), one `drop_drc_rule` verb.
+//
+// The Custom rule's text and the condition rows' Custom Query are KiCad's text editor (RuleTextEditor.tsx: the brace highlight; the Custom rule's
+// completion is `DRC_RE_CUSTOM_RULE_PANEL::onScintillaCharAdded`, kicad-port/ruleCompletion.ts `customRuleCharAdded`; the rows' editor completes
+// nothing, as their SCINTILLA_TRICKS' char-added function does nothing). "Syntax help" beside Conditions is `PANEL_DRC_RULE_EDITOR::onSyntaxHelp`.
+//
+// Not ported: the units of the frame (fields are in mm), a new rule's Move Up/Down and drag (KiCad moves its tree item; here only the file's rules move,
+// and the file's order follows, where KiCad's move leaves the file as it is), dragging a category or constraint node (KiCad's moves the tree item and
+// nothing else).
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { fetchRuleEditor, postRuleEditorCheck } from "../api/client";
+import { fetchRuleEditor, postRuleEditorCheck, postRuleEditorShowMatches } from "../api/client";
+import { canvasRect } from "../actions/canvasEvents";
+import { boxOfIds, boxOfPoints, pcbItemBoxes } from "../kicad-port/itemBoxes";
+import { zoomFitBox } from "../kicad-port/zoomFit";
 import { useColorScheme } from "../hooks/useColorScheme";
 import {
   CONDITION_LABELS,
@@ -49,6 +60,12 @@ import {
 } from "../kicad-port/ruleEditor";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import "../styles/ruleEditor.css";
+import { isMac } from "../platform";
+import { customRuleCharAdded } from "../kicad-port/ruleCompletion";
+import { SYNTAX_HELP_SIZE_DU, SYNTAX_HELP_TITLE, syntaxHelpHtml } from "../kicad-port/rulesSyntaxHelp";
+import rulesHelp from "../kicad/rules_help.json";
+import { HtmlMessageBox } from "./HtmlMessageBox";
+import { RuleTextEditor } from "./RuleTextEditor";
 
 /** The rule panel as it is being edited (`PANEL_DRC_RULE_EDITOR` and its constraint panel). */
 interface PanelState {
@@ -158,6 +175,11 @@ export function RuleEditorDialog() {
   const [ask, setAsk] = useState<Ask | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
   const [syntaxTip, setSyntaxTip] = useState<string | null>(null);
+  /** `m_btnShowMatches`' label: "Show Matches", or what the last click found. */
+  const [matchesLabel, setMatchesLabel] = useState("Show Matches");
+  /** The tree's drag (`m_draggedItem`) and the item it is over (`m_dropTargetItem`, highlighted). */
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [dropId, setDropId] = useState<number | null>(null);
   /** After a reload, the rule to select again: its panel, name and which of that name. */
   const reselect = useRef<{ panel: PanelType; name: string } | null>(null);
 
@@ -232,7 +254,53 @@ export function RuleEditorDialog() {
       return next;
     });
     setSyntaxTip(null);
+    setMatchesLabel("Show Matches");
     setPanel(view ? panelFrom(n, view) : null);
+  };
+
+  // `highlightMatchingItems`: the panel's rule as it stands; the items it selects are selected (`selectionClear`, `selectItems`), framed
+  // (`zoomFitSelection`) and brightened (`FocusOnItems`), and the button says how many there are.
+  const showMatches = async () => {
+    if (!panel) return;
+    const r = await postRuleEditorShowMatches({ entry: panel.entry, rule: payloadOf(panel, draftNames(panel.nodeId)) });
+    if (!r.ok || r.error) {
+      setMatchesLabel("Show Matches (error)");
+      return;
+    }
+    const ids = r.ids ?? [];
+    dispatch({ type: "SET_SELECTION", refs: ids });
+    dispatch({ type: "SET_HOT", refs: ids });
+    const board = api.getState().board;
+    const box = board && ids.length > 0 ? boxOfIds(pcbItemBoxes(board), ids) : null;
+    const rect = canvasRect();
+    if (board && box && rect) {
+      const fit = zoomFitBox(box, (board.outline ? boxOfPoints(board.outline) : null) ?? box, rect.width, rect.height);
+      if (fit) dispatch({ type: "SET_VIEW", view: fit });
+    }
+    setMatchesLabel(`Show Matches (${r.count ?? ids.length})`);
+  };
+
+  // `onRuleTreeItemLeftUp`: a saved rule dropped on another saved rule of the same node takes its place there (first, last, or just before it).
+  const canDrag = (n: TreeNode) => n.type === "rule" && !n.draft && n.entry !== undefined;
+  const canDrop = (n: TreeNode) => {
+    const d = nodeById(dragId);
+    return !!d && d.id !== n.id && canDrag(n) && n.parent === d.parent;
+  };
+  const dropRule = async (target: TreeNode) => {
+    const d = nodeById(dragId);
+    setDragId(null);
+    setDropId(null);
+    if (!d || !canDrop(target) || d.entry === undefined || target.entry === undefined) return;
+    setBusy(true);
+    try {
+      const ok = await api.cmd({ op: "drop_drc_rule", entry: d.entry, name: d.name, target: target.entry, target_name: target.name });
+      if (ok) {
+        reselect.current = { panel: d.panel!, name: d.name };
+        await load();
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   const close = () => {
@@ -405,6 +473,8 @@ export function RuleEditorDialog() {
   const visible = filter ? filterTree(tree, filter, (n) => n.name) : null;
   const update = (patch: Partial<PanelState>) => {
     if (!panel) return;
+    // the condition group's change callback: `ResetShowMatchesButton`
+    if (patch.rows) setMatchesLabel("Show Matches");
     setPanel({ ...panel, ...patch });
     markModified(panel.nodeId);
   };
@@ -417,10 +487,27 @@ export function RuleEditorDialog() {
     return (
       <li key={n.id}>
         <div
-          className={`re-item${n.id === selected ? " selected" : ""}`}
+          className={`re-item${n.id === selected ? " selected" : ""}${n.id === dropId ? " re-drop-target" : ""}`}
           style={{ paddingLeft: 4 + depth * 14 }}
           data-testid={`re-node-${n.type}`}
           data-name={n.name}
+          draggable={canDrag(n) && !busy}
+          onDragStart={(e) => {
+            setDragId(n.id);
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", n.name);
+          }}
+          onDragOver={(e) => {
+            if (!canDrop(n)) return;
+            e.preventDefault();
+            if (dropId !== n.id) setDropId(n.id);
+          }}
+          onDragLeave={() => dropId === n.id && setDropId(null)}
+          onDragEnd={() => (setDragId(null), setDropId(null))}
+          onDrop={(e) => {
+            e.preventDefault();
+            void dropRule(n);
+          }}
           onClick={() => selectNode(n)}
           onDoubleClick={() => (isEnabled(n, "duplicate_rule") ? addRule(n, n) : isEnabled(n, "add_rule") ? addRule(n) : undefined)}
           onContextMenu={(e) => {
@@ -501,6 +588,8 @@ export function RuleEditorDialog() {
                 update={update}
                 onEnter={() => void save()}
                 syntaxTip={syntaxTip}
+                matchesLabel={matchesLabel}
+                onShowMatches={() => void showMatches()}
                 checkSyntax={async () => {
                   const r = await postRuleEditorCheck({ syntax: { name: panel.name, body: panel.customText } });
                   setSyntaxTip(r.message);
@@ -587,6 +676,13 @@ function GroupHeader({ rows }: { rows: { type: string; name: string; comment: st
   );
 }
 
+let conditionHelp: string | null = null;
+/** `PANEL_DRC_RULE_EDITOR::onSyntaxHelp`'s page: its eight texts (src/kicad/rules_help.json `ruleEditor`), made once. */
+function conditionHelpHtml(): string {
+  const texts = rulesHelp.texts as Record<string, string>;
+  return (conditionHelp ??= syntaxHelpHtml((rulesHelp.ruleEditor as string[]).map((f) => texts[f] ?? ""), isMac()));
+}
+
 /** `PANEL_DRC_RULE_EDITOR`: name and comment, the constraint panel, the conditions, the layer. */
 function RulePanel({
   p,
@@ -596,6 +692,8 @@ function RulePanel({
   onEnter,
   syntaxTip,
   checkSyntax,
+  matchesLabel,
+  onShowMatches,
 }: {
   p: PanelState;
   view: RuleEditorView;
@@ -605,9 +703,13 @@ function RulePanel({
   onEnter: () => void;
   syntaxTip: string | null;
   checkSyntax: () => Promise<void>;
+  matchesLabel: string;
+  /** `onShowMatchesButtonClicked` (the rule panels; a Custom rule's panel has no such button). */
+  onShowMatches: () => void;
 }) {
   const options = view.layer_options[p.panel] ?? [];
   const custom = p.panel === "custom_rule";
+  const [helpOpen, setHelpOpen] = useState(false); // `m_helpWindow`
   const twoObjects = needsTwoObjects(p.panel);
   return (
     <div className="re-panel" data-testid="re-panel" data-panel={p.panel}>
@@ -624,7 +726,7 @@ function RulePanel({
       <h4 className="re-section">{constraintName} Constraint</h4>
       {custom ? (
         <div className="re-custom">
-          <textarea data-testid="re-custom-text" spellCheck={false} value={p.customText} onChange={(e) => update({ customText: e.target.value })} />
+          <RuleTextEditor testId="re-custom-text" className="re-custom-editor" value={p.customText} onChange={(t) => update({ customText: t })} onCharAdded={customRuleCharAdded} />
           <div className="re-custom-check">
             {syntaxTip && (
               <span className="re-tip" data-testid="re-syntax-tip">
@@ -641,7 +743,13 @@ function RulePanel({
       )}
       {!custom && (
         <>
-          <h4 className="re-section">Conditions</h4>
+          <div className="re-cond-head">
+            <h4 className="re-section">Conditions</h4>
+            <button className="re-hyperlink" data-testid="re-syntax-help" onClick={() => setHelpOpen(true)}>
+              Syntax help
+            </button>
+          </div>
+          <HtmlMessageBox title={SYNTAX_HELP_TITLE} html={conditionHelpHtml()} open={helpOpen} onClose={() => setHelpOpen(false)} sizeDu={SYNTAX_HELP_SIZE_DU} testId="re-syntax-help-window" />
           <ConditionGroup rows={p.rows} twoObjects={twoObjects} view={view} onChange={(rows) => update({ rows })} />
           {options.length > 1 && (
             <>
@@ -655,6 +763,11 @@ function RulePanel({
               </select>
             </>
           )}
+          <div className="re-show-matches">
+            <button data-testid="re-show-matches" onClick={onShowMatches}>
+              {matchesLabel}
+            </button>
+          </div>
         </>
       )}
     </div>
@@ -783,7 +896,7 @@ function ConditionGroup({ rows, twoObjects, view, onChange }: { rows: ConditionR
               ))}
             </select>
           )}
-          {r.type === "custom" && <textarea data-testid="re-cond-custom" className="re-cond-custom" spellCheck={false} value={r.value} onChange={(e) => set(i, { value: e.target.value })} />}
+          {r.type === "custom" && <RuleTextEditor testId="re-cond-custom" className="re-cond-custom" value={r.value} onChange={(t) => set(i, { value: t })} />}
           {rows.length > 1 && (
             <button title="Remove this condition" data-testid="re-cond-remove" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
               <Icon name="trash" />
