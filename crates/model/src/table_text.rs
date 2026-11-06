@@ -346,7 +346,7 @@ fn parse_cell_address(addr: &str) -> Option<(usize, usize)> {
 
 /// `SCH_TABLECELL::GetShownText` of the cell at (`row`, `col`): `${ROW}` and `${COL}` (from 0), `${ADDR}`, `${CELL("A0")}` / `${CELL(row, col)}` (the shown text of another
 /// cell, `<Unresolved: ..>` when it has none, `<Circular reference>` past [`crate::text_vars::MAX_DEPTH`]), then the sheet's own variables (`sheet`), the lines broken to the
-/// width of the cell, and the markers of a literal `\${..}` turned back at the top level (`depth` 0) only. `@{..}` expressions are not evaluated (`text_vars.rs`).
+/// width of the cell, and the markers of a literal `\${..}` turned back at the top level (`depth` 0) only. `@{..}` expressions are evaluated after each pass (`ResolveTextVars`, `text_eval.rs`).
 pub fn sch_cell_shown(t: &Table, row: usize, col: usize, sheet: &Resolver, depth: usize) -> String {
     let Some(cell) = t.cell(row, col) else { return String::new() };
     let resolver = |token: &str| -> Option<String> {
@@ -596,6 +596,21 @@ mod tests {
         let sheet_vars = |tok: &str| (tok == "TITLE").then(|| "My sheet".to_string());
         t.cells[0].text = "${TITLE} ${NOPE}".into();
         assert_eq!(sch_cell_shown(&t, 0, 0, &sheet_vars, 0), "My sheet ${NOPE}");
+    }
+
+    #[test]
+    fn an_expression_in_a_cell_is_evaluated_on_the_board_and_on_the_sheet() {
+        // `ResolveTextVars` runs the evaluator after each pass of the variables (`PCB_TABLECELL::GetShownText`, `SCH_TABLECELL::GetShownText`)
+        let board = PcbBoard::default();
+        assert_eq!(pcb_cell_resolved("Row @{${ROW}*10}", "F.SilkS", 2, 0, &board), "Row 30");
+        assert_eq!(pcb_cell_resolved("@{if(${COL}==1, \"first\", \"other\")}", "F.SilkS", 0, 0, &board), "first");
+        assert_eq!(pcb_cell_resolved("\\@{1+1}", "F.SilkS", 0, 0, &board), "@{1+1}", "an escaped one is shown as typed");
+        let mut t = sheet(2, 2);
+        t.cells[1].text = "4.5".into();
+        t.cells[3].text = "@{${CELL(\"B0\")} * 2} @{upper(\"${ADDR}\")}".into();
+        assert_eq!(sch_cell_shown(&t, 1, 1, &no_vars, 0), "9 B1");
+        t.cells[2].text = "@{1/0}".into();
+        assert_eq!(sch_cell_shown(&t, 1, 0, &no_vars, 0), "@{1/0}", "one that cannot be evaluated stays as written");
     }
 
     #[test]

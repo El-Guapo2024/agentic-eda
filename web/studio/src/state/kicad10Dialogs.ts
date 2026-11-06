@@ -1,5 +1,5 @@
-// Which of KiCad 10's item dialogs is open: Grid Properties (`DIALOG_GRID_ITEM_PROPERTIES`), Via Stitching Properties (`DIALOG_VIA_STITCH_PROPERTIES`) and the drill map's and
-// chart's. Plain module state with subscribers (like `state/pcbItemDialogs.ts`), so an action of the action runner can open a dialog without a place in the big reducer.
+// Which of KiCad 10's item dialogs is open: Grid Properties (`DIALOG_GRID_ITEM_PROPERTIES`), Via Stitching Properties (`DIALOG_VIA_STITCH_PROPERTIES`), Drill Chart Properties
+// (`DIALOG_GENERATED_TABLE_PROPERTIES`) and Drill Groups (`DIALOG_DRILL_GROUPS`). Plain module state with subscribers (like `state/pcbItemDialogs.ts`), so an action of the action runner can open a dialog without a place in the big reducer.
 // `components/Kicad10ItemDialogs.tsx` renders them.
 import { useSyncExternalStore } from "react";
 import type { BoardViaStitch } from "../api/pcbItemTypes";
@@ -9,9 +9,13 @@ export interface Kicad10DialogsState {
   gridItem: { id: string } | null;
   /** The via stitching Via Stitching Properties edits: one on the board (`id`), or the one Draw Via Stitch Area has just drawn (`id` null), with the settings it starts from. */
   viaStitch: { id: string | null; stitch: BoardViaStitch } | null;
+  /** The drill chart Drill Chart Properties edits (`DIALOG_GENERATED_TABLE_PROPERTIES`; its table's id). */
+  drillChart?: { id: string } | null;
+  /** Drill Groups (`DIALOG_DRILL_GROUPS`), modeless: open or not. */
+  drillGroups?: boolean;
 }
 
-const CLOSED: Kicad10DialogsState = { gridItem: null, viaStitch: null };
+const CLOSED: Kicad10DialogsState = { gridItem: null, viaStitch: null, drillChart: null, drillGroups: false };
 
 let current: Kicad10DialogsState = CLOSED;
 const listeners = new Set<() => void>();
@@ -48,4 +52,21 @@ export function openViaStitchDialog(id: string | null, stitch: BoardViaStitch): 
 
 export function closeViaStitchDialog(): void {
   set({ ...current, viaStitch: null });
+}
+
+export function openDrillChartDialog(id: string): void {
+  set({ ...current, drillChart: { id } });
+}
+
+export function closeDrillChartDialog(): void {
+  set({ ...current, drillChart: null });
+}
+
+/** `PCB_CONTROL::ShowDrillGroups`: shown, or raised when it already is (here: left as it is). */
+export function openDrillGroupsDialog(): void {
+  if (!current.drillGroups) set({ ...current, drillGroups: true });
+}
+
+export function closeDrillGroupsDialog(): void {
+  set({ ...current, drillGroups: false });
 }

@@ -2,8 +2,8 @@
 //! `PCB_IO_KICAD_SEXPR::format( const PCB_TEXTBOX* )`, for [`eda_model::pcb_items::TextBox`].
 //!
 //! The box's looks are an `(effects ..)` like any text's, read and written by the code of [`crate::board_text_io`] (a text box is a `Text` and a `TextExtra` to it).
-//! A board footprint's own `(fp_text_box ..)` is not read here: it is part of the footprint (`FootprintExtra::tokens`). A library footprint's is read and written
-//! with these (`FootprintItems::text_boxes`, [`crate::footprint_import`]).
+//! A board footprint's own `(fp_text_box ..)` is read and written with these too, in the footprint's frame (`FootprintExtra::items`, [`crate::fp_board_items_io`], UI-LEFT P17), and so is
+//! a library footprint's (`FootprintItems::text_boxes`, [`crate::footprint_import`]).
 
 use eda_model::units::Nm;
 use std::fmt::Write as _;

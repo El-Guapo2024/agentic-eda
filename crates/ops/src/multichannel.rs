@@ -154,6 +154,8 @@ pub(crate) struct RuleArea {
     pub zone_id: String,
     pub name: String,
     pub outline: Vec<Point>,
+    /// The holes of the zone's outline: `A.enclosedByArea` subtracts the whole polygon (`*aArea->Outline()`), so nothing over a hole is in the area.
+    pub holes: Vec<Vec<Point>>,
     pub layers: Vec<String>,
     pub center: Point,
     /// The footprints it holds: indexes into the board's footprints.
@@ -304,6 +306,7 @@ impl Board<'_> {
                 zone_id: z.id.clone(),
                 name: z.name.clone(),
                 outline: z.outline.clone(),
+                holes: z.holes.clone(),
                 layers: z.layer_set().into_iter().map(String::from).collect(),
                 center: outline_centre(&z.outline).unwrap_or_default(),
                 members: Self::mc_components_of(mc, &z.placement),

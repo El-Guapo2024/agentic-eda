@@ -868,6 +868,35 @@ fn the_layout_of_a_design_block_is_applied_to_the_footprints_of_a_group_matched_
     assert!(rule_areas(&b).is_empty());
 }
 
+/// `findOtherItemsInRuleArea` of a `DESIGN_BLOCK` area takes every item of the block that is not a footprint, a group or connected: a table of the block on copper comes across
+/// with the layout and joins the group; one on the silkscreen does not, since both of `PCB_CONTROL::ApplyDesignBlockLayout`'s areas are `LSET::AllCuMask()` and
+/// `copyRuleAreaContents` copies only what is on a layer of both.
+#[test]
+fn a_design_blocks_table_comes_with_its_layout_into_the_group() {
+    let m = model(2);
+    let mut d = design(2);
+    {
+        let dr = d.drawings.as_mut().unwrap();
+        dr.tables.push(eda_model::table::Table::new_grid("F.Cu", p(mm(22.5), mm(19.0)), 1, 1, mm(1.5), mm(1.0), mm(0.1)));
+        dr.tables.push(eda_model::table::Table::new_grid("F.SilkS", p(mm(22.5), mm(23.0)), 1, 1, mm(1.5), mm(1.0), mm(0.1)));
+        dr.assign_table_ids();
+    }
+    let tables: Vec<String> = d.drawings.as_ref().unwrap().tables.iter().map(|t| t.id.clone()).collect();
+    let mut ids: Vec<String> = ["U1", "R1", "C1", "trk_mid0"].iter().map(|s| s.to_string()).collect();
+    ids.extend(tables);
+    let text = eda_kicad::export_pcb_clipboard(&d, &m, &ids, p(Nm::ZERO, Nm::ZERO)).unwrap();
+    assert_eq!(eda_kicad::parse_pcb_clipboard(&text).unwrap().tables.len(), 2, "the block file has its tables");
+    let (mut b, gid) = board_with_group(&m);
+    let before = drawings(&b).tables.len();
+    b.apply(&apply_block(&gid, text)).unwrap();
+    let dr = drawings(&b);
+    assert_eq!(dr.tables.len(), before + 1, "the block's copper table is copied, its silkscreen one is not");
+    let copy = dr.tables.last().unwrap();
+    assert_eq!(copy.layer, "F.Cu");
+    let g = dr.groups.iter().find(|g| g.id == gid).unwrap();
+    assert!(g.member_ids.contains(&copy.id), "the copy joins the group: {g:?}");
+}
+
 #[test]
 fn a_group_that_does_not_match_the_block_or_is_locked_is_refused_in_kicads_words() {
     let m = model(2);
@@ -912,6 +941,31 @@ fn a_board_with_no_stored_schematic_is_on_the_module_sheets_the_studio_derives()
     b.apply(&generate(&[(AreaKind::Sheet, "/U1/"), (AreaKind::Sheet, "/U2/"), (AreaKind::Sheet, "/U3/")], false, false)).unwrap();
     let ids: Vec<String> = ["/U1/", "/U2/", "/U3/"].iter().map(|k| zone_named(&b, &format!("auto-placement-area-{k}")).id.clone()).collect();
     assert!(b.mc_compat(&ids[0]).unwrap().targets.iter().all(|t| t.ok));
+}
+
+/// R7-D5: a board the loader linked to its schematic (`ConstraintModel::symbol_links`, what the board file's `(sheetname ..)` and `(sheetfile ..)` are written from) is on those
+/// sheets, not on the module sheets the tool would infer; a footprint the file names a sheet for keeps it; one with no link (a footprint of the board alone) is on none.
+#[test]
+fn the_sheets_are_the_ones_the_board_file_is_written_with() {
+    let mut m = model(3);
+    for c in 0..2 {
+        let (u, r, cap) = names(c);
+        for reference in [u, r, cap] {
+            m.symbol_links.insert(reference, eda_model::SymbolLink { path: format!("/sheet{c}/sym_{}", c), sheetname: format!("/Amp {}/", c + 1), sheetfile: format!("amp_{}.kicad_sch", c + 1), ..Default::default() });
+        }
+    }
+    let mut d = design(3);
+    d.drawings.as_mut().unwrap().footprint_extras.retain(|e| e.id == "C2");
+    let b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let mc = b.mc_board();
+    let sheet = |r: &str| mc.fps.iter().find(|f| f.reference == r).map(|f| (f.sheetname.clone(), f.sheetfile.clone())).unwrap();
+    assert_eq!(sheet("U1"), ("/Amp 1/".to_string(), "amp_1.kicad_sch".to_string()));
+    assert_eq!(sheet("R2"), ("/Amp 2/".to_string(), "amp_2.kicad_sch".to_string()));
+    assert_eq!(sheet("C2"), ("/ch2/".to_string(), "channel.kicad_sch".to_string()), "the file's own sheet stands");
+    assert_eq!(sheet("U3"), (String::new(), String::new()), "no link, no sheet");
+    let rows = b.mc_potential_areas();
+    let keys: Vec<(&str, &str)> = rows.iter().filter(|r| r.kind == AreaKind::Sheet).map(|r| (r.key.as_str(), r.file.as_str())).collect();
+    assert_eq!(keys, vec![("", ""), ("/Amp 1/", "amp_1.kicad_sch"), ("/Amp 2/", "amp_2.kicad_sch"), ("/ch2/", "channel.kicad_sch")]);
 }
 
 /// A schematic whose root places the one sheet file twice, `ch1` and `ch2`, the symbols of the file being U1/R1 on the first and U2/R2 on the second (`instance_overrides`).
@@ -1023,4 +1077,209 @@ fn the_sheet_tests_are_the_rule_languages() {
     assert!(member_of_group(&["inner".into(), "outer".into()], "outer"));
     assert!(member_of_group(&["inner".into()], "in*"));
     assert!(!member_of_group(&[], "x"));
+}
+
+
+// ------------------------------------------------------------------------------------------------------- the other kinds, the holes, the patterns (UI-LEFT P20)
+
+/// Board `d` with the rule areas Generate makes for its `n` channels, each area also on `extra` layers (Rule Area Properties' layers).
+fn board_with_areas<'m>(m: &'m ConstraintModel, d: Design, n: usize, extra: &[&str]) -> Board<'m> {
+    let mut b = Board::new(d, m, mm(0.1), mm(0.3));
+    generate_sheets(&mut b, n);
+    let mut d = b.design().clone();
+    for z in d.routing.as_mut().unwrap().zones.iter_mut().filter(|z| z.is_rule_area) {
+        for l in extra {
+            if !z.layers.iter().any(|x| x == l) {
+                z.layers.push(l.to_string());
+            }
+        }
+    }
+    Board::new(d, m, mm(0.1), mm(0.3))
+}
+
+fn barcode(id: &str, layer: &str, at: Point) -> eda_model::barcode::Barcode {
+    eda_model::barcode::Barcode {
+        id: id.into(),
+        at,
+        angle: 0,
+        layer: layer.into(),
+        width_nm: mm(0.8),
+        height_nm: mm(0.8),
+        text: "CH".into(),
+        text_height_nm: mm(0.5),
+        kind: Default::default(),
+        ecc: Default::default(),
+        show_text: false,
+        knockout: false,
+        margin_x_nm: Nm::ZERO,
+        margin_y_nm: Nm::ZERO,
+    }
+}
+
+fn displacement(b: &Board<'_>) -> Point {
+    let (z0, z1) = (zone_named(b, "auto-placement-area-/ch1/").clone(), zone_named(b, "auto-placement-area-/ch2/").clone());
+    Point { x: centre(&z1).x - centre(&z0).x, y: centre(&z1).y - centre(&z0).y }
+}
+
+/// `findOtherItemsInRuleArea` tests every drawing of the board with `A.enclosedByArea`: a table and a barcode on F.Cu are enclosed and copied; a reference image and a point
+/// have no polygon (and a point is not among the drawings), a barcode off F.Cu none on the context's layer (F.Cu), so they stay where they are.
+#[test]
+fn repeat_copies_tables_and_barcodes_and_leaves_images_points_and_barcodes_off_copper() {
+    let m = model(2);
+    let mut d = design(2);
+    {
+        let dr = d.drawings.as_mut().unwrap();
+        dr.tables.push(eda_model::table::Table::new_grid("F.SilkS", p(mm(22.5), mm(19.0)), 1, 1, mm(1.5), mm(1.0), mm(0.1)));
+        dr.assign_table_ids();
+        dr.barcodes.push(barcode("bar_cu0", "F.Cu", p(mm(25.0), mm(20.8))));
+        dr.barcodes.push(barcode("bar_silk0", "F.SilkS", p(mm(26.5), mm(20.8))));
+        dr.board_items.images.push(eda_model::pcb_items::RefImage::new("F.SilkS", p(mm(29.0), mm(21.0)), "iVBORw0KGgo="));
+        dr.board_items.points.push(eda_model::pcb_items::PcbPoint::new("F.SilkS", p(mm(29.5), mm(21.2))));
+        let mut ids: std::collections::BTreeSet<String> = Default::default();
+        dr.board_items.assign_missing_ids(&mut ids);
+    }
+    let mut b = board_with_areas(&m, d, 2, &["F.SilkS"]);
+    let ids = areas_of(&b, 2);
+    let disp = displacement(&b);
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions::default())).unwrap();
+    let dr = drawings(&b);
+    assert_eq!(dr.tables.len(), 2, "the table and its copy");
+    let copy = dr.tables.iter().find(|t| t.at != p(mm(22.5), mm(19.0))).unwrap();
+    assert_eq!(copy.at, p(mm(22.5) + disp.x, mm(19.0) + disp.y));
+    assert!(copy.uuid.is_empty() && !copy.id.is_empty(), "a new table: {copy:?}");
+    let cu: Vec<&eda_model::barcode::Barcode> = dr.barcodes.iter().filter(|b| b.layer == "F.Cu").collect();
+    assert_eq!(cu.len(), 2, "the F.Cu barcode and its copy");
+    assert!(cu.iter().any(|x| x.id != "bar_cu0" && x.at == p(mm(25.0) + disp.x, mm(20.8) + disp.y)));
+    assert_eq!(dr.barcodes.iter().filter(|b| b.layer == "F.SilkS").count(), 1, "a barcode off F.Cu has no polygon on the context's layer");
+    assert_eq!(dr.board_items.images.len(), 1, "a reference image has no polygon");
+    assert_eq!(dr.board_items.points.len(), 1, "a point has no polygon and is not a drawing");
+
+    // a second repeat replaces the copies in the target (the same kinds are taken away first)
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions::default())).unwrap();
+    let dr = drawings(&b);
+    assert_eq!((dr.tables.len(), dr.barcodes.len()), (2, 3));
+    // without "Copy other items" none of them comes
+    let m = model(2);
+    let mut d = design(2);
+    d.drawings.as_mut().unwrap().tables.push(eda_model::table::Table::new_grid("F.SilkS", p(mm(22.5), mm(19.0)), 1, 1, mm(1.5), mm(1.0), mm(0.1)));
+    let mut b = board_with_areas(&m, d, 2, &["F.SilkS"]);
+    let ids = areas_of(&b, 2);
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions { copy_other_items: false, ..RepeatOptions::default() })).unwrap();
+    assert_eq!(drawings(&b).tables.len(), 1);
+}
+
+/// `A.enclosedByArea` subtracts the area's whole polygon, its holes too: the track that runs over a hole of the reference area is not in it, and stays; a zone with holes is
+/// judged with them and copied with them (`Duplicate`); the target area takes the reference's outline alone (`RemoveAllContours(); AddPolygon( newTargetOutline )`).
+#[test]
+fn repeat_judges_items_against_the_areas_holes_and_copies_zones_with_their_holes() {
+    let m = model(2);
+    let mut d = design(2);
+    let pour = Zone {
+        id: "zone_gnd0".into(),
+        net: "GND".into(),
+        layer: "F.Cu".into(),
+        outline: vec![p(mm(22.0), mm(18.6)), p(mm(26.0), mm(18.6)), p(mm(26.0), mm(21.0)), p(mm(22.0), mm(21.0))],
+        holes: vec![vec![p(mm(23.0), mm(19.0)), p(mm(24.0), mm(19.0)), p(mm(24.0), mm(20.0)), p(mm(23.0), mm(20.0))]],
+        ..Default::default()
+    };
+    d.routing.as_mut().unwrap().zones.push(pour.clone());
+    let b = board_with_areas(&m, d, 2, &[]);
+    let ids = areas_of(&b, 2);
+    let disp = displacement(&b);
+    // a hole in the reference area round the output track, one in the target area
+    let mut d = b.design().clone();
+    for z in d.routing.as_mut().unwrap().zones.iter_mut() {
+        if z.id == ids[0] {
+            z.holes = vec![vec![p(mm(32.8), mm(20.2)), p(mm(37.5), mm(20.2)), p(mm(37.5), mm(20.8)), p(mm(32.8), mm(20.8))]];
+        } else if z.id == ids[1] {
+            z.holes = vec![vec![p(mm(25.0), mm(50.0)), p(mm(26.0), mm(50.0)), p(mm(26.0), mm(51.0)), p(mm(25.0), mm(51.0))]];
+        }
+    }
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions::default())).unwrap();
+    let rt = routing(&b);
+    assert!(rt.tracks.iter().any(|t| t.net == "MID1"), "the middle net's track is copied");
+    assert!(!rt.tracks.iter().any(|t| t.net == "OUT1"), "the output track lies in a hole of the area: {:?}", rt.tracks);
+    let copied: Vec<&Zone> = rt.zones.iter().filter(|z| !z.is_rule_area && z.id != "zone_gnd0").collect();
+    assert_eq!(copied.len(), 1, "the pour is copied: {:?}", rt.zones);
+    let shift = |v: &[Point]| v.iter().map(|q| p(q.x + disp.x, q.y + disp.y)).collect::<Vec<_>>();
+    assert_eq!(copied[0].outline, shift(&pour.outline));
+    assert_eq!(copied[0].holes, vec![shift(&pour.holes[0])], "the hole comes with it");
+    let target = rt.zones.iter().find(|z| z.id == ids[1]).unwrap();
+    assert!(target.holes.is_empty(), "the target takes the reference's outline alone");
+
+    // without the hole the output track is in the area and comes across
+    let mut b = board_with_areas(&m, design(2), 2, &[]);
+    let ids = areas_of(&b, 2);
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions::default())).unwrap();
+    assert!(routing(&b).tracks.iter().any(|t| t.net == "OUT1"));
+}
+
+fn tuning_pattern(members: &[&str]) -> eda_model::tuning::TuningPattern {
+    let mut p: eda_model::tuning::TuningPattern = serde_json::from_str(r#"{"mode":"single","layer":"F.Cu","origin":{"x":33000000,"y":20500000},"end":{"x":37000000,"y":20500000},"min_amplitude":200000,"max_amplitude":1000000,"spacing":600000,"base_line":[{"x":33000000,"y":20500000},{"x":37000000,"y":20500000}]}"#).unwrap();
+    p.member_ids = members.iter().map(|m| m.to_string()).collect();
+    p
+}
+
+/// `findRoutingInRuleArea`: a tuning pattern one of whose tracks meets the area's outline brings every track of it, one that lies outside the area too; the copies are the
+/// tracks of a copy of the pattern (`fixupParentGroup` duplicates the generator and turns and moves it). With "Group items" a copy leaves its pattern for the target's group
+/// (`EDA_GROUP::AddItem`), and the pattern left with no track is a ghost KiCad does not save.
+#[test]
+fn repeat_copies_a_tuning_pattern_with_all_its_tracks() {
+    let m = model(2);
+    let mut d = design(2);
+    // a second track of the output net's pattern that runs out of the area (x 37 to 45: the area ends at 39.6)
+    d.routing.as_mut().unwrap().tracks.push(track("trk_out0x", "OUT0", "F.Cu", &[(mm(37.0), mm(20.5)), (mm(45.0), mm(20.5))]));
+    {
+        let dr = d.drawings.as_mut().unwrap();
+        dr.tuning_patterns.push(tuning_pattern(&["trk_out0", "trk_out0x"]));
+        dr.assign_missing_ids();
+    }
+    let mut b = board_with_areas(&m, d, 2, &[]);
+    let ids = areas_of(&b, 2);
+    let disp = displacement(&b);
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions::default())).unwrap();
+    let (rt, dr) = (routing(&b), drawings(&b));
+    let out1: Vec<&Track> = rt.tracks.iter().filter(|t| t.net == "OUT1").collect();
+    assert_eq!(out1.len(), 2, "both tracks of the pattern: {:?}", rt.tracks);
+    assert!(out1.iter().any(|t| t.pts == vec![p(mm(37.0) + disp.x, mm(20.5) + disp.y), p(mm(45.0) + disp.x, mm(20.5) + disp.y)]));
+    assert_eq!(dr.tuning_patterns.len(), 2, "{:?}", dr.tuning_patterns);
+    let copy = dr.tuning_patterns.iter().find(|q| q.member_ids != vec!["trk_out0".to_string(), "trk_out0x".to_string()]).unwrap();
+    let mut members = copy.member_ids.clone();
+    members.sort();
+    let mut want: Vec<String> = out1.iter().map(|t| t.id.clone()).collect();
+    want.sort();
+    assert_eq!(members, want);
+    assert_eq!((copy.origin, copy.end), (p(mm(33.0) + disp.x, mm(20.5) + disp.y), p(mm(37.0) + disp.x, mm(20.5) + disp.y)));
+    assert_eq!(copy.base_line, vec![copy.origin, copy.end]);
+
+    // again: the target's pattern tracks are taken away with the pattern, and a new copy comes
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions::default())).unwrap();
+    assert_eq!(drawings(&b).tuning_patterns.len(), 2);
+    assert_eq!(routing(&b).tracks.iter().filter(|t| t.net == "OUT1").count(), 2);
+
+    // a pattern none of whose tracks meets the area stays out of it
+    let mut d = design(2);
+    d.routing.as_mut().unwrap().tracks.push(track("trk_far", "OUT0", "F.Cu", &[(mm(60.0), mm(20.5)), (mm(65.0), mm(20.5))]));
+    {
+        let dr = d.drawings.as_mut().unwrap();
+        dr.tuning_patterns.push(tuning_pattern(&["trk_far"]));
+        dr.assign_missing_ids();
+    }
+    let mut b = board_with_areas(&m, d, 2, &[]);
+    let ids = areas_of(&b, 2);
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions::default())).unwrap();
+    assert_eq!(drawings(&b).tuning_patterns.len(), 1);
+
+    // grouped: the copies are the group's, their pattern is gone
+    let mut d = design(2);
+    d.drawings.as_mut().unwrap().tuning_patterns.push(tuning_pattern(&["trk_out0"]));
+    d.drawings.as_mut().unwrap().assign_missing_ids();
+    let mut b = board_with_areas(&m, d, 2, &[]);
+    let ids = areas_of(&b, 2);
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions { group_items: true, ..RepeatOptions::default() })).unwrap();
+    let dr = drawings(&b);
+    assert_eq!(dr.tuning_patterns.len(), 1, "{:?}", dr.tuning_patterns);
+    let copy = routing(&b).tracks.iter().find(|t| t.net == "OUT1").unwrap().id.clone();
+    assert!(dr.groups.iter().any(|g| g.member_ids.contains(&copy)));
 }

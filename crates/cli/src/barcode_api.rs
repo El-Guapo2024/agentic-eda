@@ -206,11 +206,15 @@ pub fn filled_paths(svg: &str) -> Vec<Vec<Vec<[eda_model::units::Nm; 2]>>> {
     out
 }
 
-/// The text a barcode encodes: its text with `${NAME}` expanded as `PCB_BARCODE::GetShownText` expands it (the board's variables, the project's, the title block's).
-fn shown_text(dir: &Path, b: &Barcode, target: &str) -> Result<String, String> {
+/// The text a barcode encodes: its text with `${NAME}` expanded as `PCB_BARCODE::GetShownText` expands it (the board's variables, the project's, the title block's; a footprint's
+/// barcode -- `owner` -- its footprint's first, UI-LEFT P17).
+fn shown_text(dir: &Path, b: &Barcode, target: &str, owner: Option<&str>) -> Result<String, String> {
     let (meta, design, model) = crate::board::load(dir).map_err(|e| crate::board::reasons(&e))?;
     let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, crate::text_vars_json::clock_of(target)));
-    Ok(tv.text_shown(&b.text, &b.layer))
+    Ok(match owner {
+        Some(reference) => tv.footprint_text_shown(reference, &b.text, &b.layer),
+        None => tv.text_shown(&b.text, &b.layer),
+    })
 }
 
 /// What a route answers: the HTTP status and the JSON body.
@@ -230,9 +234,11 @@ fn failed(status: &'static str, error: &str) -> Answer {
 /// `GET /api/barcode_shape?id=..`: the shape of the barcode of the board `id` names, `pending` (202) while kicad-cli plots it.
 pub(crate) fn shape_route(dir: &Path, target: &str) -> Answer {
     let id = crate::image_api::query_value(target, "id");
-    let Ok((_, design, _)) = crate::board::load(dir) else { return failed("404 Not Found", "the board could not be read") };
-    let Some(b) = design.drawings.as_ref().and_then(|d| d.barcodes.iter().find(|b| b.id == id)).cloned() else { return failed("404 Not Found", "no barcode with this id") };
-    match shown_text(dir, &b, target) {
+    let Ok((_, design, model)) = crate::board::load(dir) else { return failed("404 Not Found", "the board could not be read") };
+    // a board's barcode, or a footprint's (`U1~bar_..`, UI-LEFT P17: on the board, the footprint's variables resolved)
+    let found = design.drawings.as_ref().and_then(|d| d.barcodes.iter().find(|b| b.id == id)).cloned().map(|b| (b, None)).or_else(|| crate::fp_board_items_json::placed_barcode(&design, &model, &id).map(|(b, r)| (b, Some(r))));
+    let Some((b, owner)) = found else { return failed("404 Not Found", "no barcode with this id") };
+    match shown_text(dir, &b, target, owner.as_deref()) {
         Ok(text) if text.is_empty() => Answer { status: "200 OK", body: json!({ "status": "ready", "paths": [] }).to_string() },
         Ok(text) => answer(&lookup(&b, &text)),
         Err(e) => failed("404 Not Found", &e),
@@ -247,7 +253,7 @@ pub(crate) fn preview_route(dir: &Path, body: &[u8]) -> Answer {
         Ok(b) => b,
         Err(e) => return failed("400 Bad Request", &format!("not a barcode: {e}")),
     };
-    match shown_text(dir, &b, "/api/barcode_preview") {
+    match shown_text(dir, &b, "/api/barcode_preview", None) {
         Ok(text) if text.is_empty() => Answer { status: "200 OK", body: json!({ "status": "ready", "paths": [] }).to_string() },
         Ok(text) => answer(&lookup(&b, &text)),
         Err(e) => failed("404 Not Found", &e),

@@ -101,6 +101,7 @@ impl SchFragment {
             && s.lines.is_empty()
             && s.extras.graphics.is_empty()
             && s.sheets.is_empty()
+            && s.extras.tables.is_empty()
     }
 
     /// The library symbol of the fragment for `lib_id`.
@@ -456,6 +457,8 @@ fn positions(section: &SchematicSection) -> Vec<(Point, bool)> {
         };
         out.push((p, connectable));
     }
+    // a table is not connectable; its position is its first cell's (`SCH_TABLE::GetPosition`)
+    out.extend(section.extras.tables.iter().map(|t| (t.at, false)));
     out
 }
 
@@ -506,6 +509,7 @@ pub fn closest_anchor(section: &SchematicSection, connection_points: &[Point], c
             SchGraphicKind::Directive { at, .. } | SchGraphicKind::Image { at, .. } => others.push(*at),
         }
     }
+    others.extend(section.extras.tables.iter().map(|t| t.at));
     best(others)
 }
 

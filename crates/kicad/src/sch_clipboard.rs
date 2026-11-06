@@ -123,11 +123,6 @@ pub fn parse_clipboard(text: &str) -> Result<SchFragment, String> {
     if imported.unresolved_symbols > 0 {
         notes.push(format!("{} symbol(s) had no library symbol in the clipboard and were left out", imported.unresolved_symbols));
     }
-    for (tag, what) in [("table", "tables")] {
-        if sexpr::find_all(root, tag).next().is_some() {
-            notes.push(format!("{what} are not pasted"));
-        }
-    }
     // A clipboard fragment has no hierarchy of its own.
     section.instance_overrides.clear();
     section.extras.locked.clear();
@@ -520,12 +515,30 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
     let lines: Vec<&eda_model::ir::SchLine> = sch.lines.iter().filter(|l| wanted(&l.id) && l.pts.len() >= 2).collect();
     let graphics: Vec<&eda_model::sch_extras::SchGraphic> = sch.extras.graphics.iter().filter(|g| wanted(&g.id)).collect();
     let sheets: Vec<&eda_model::ir::SheetInstance> = sch.sheets.iter().filter(|s| wanted(&s.id)).collect();
+    // Tables, and cells (`<table>:<row>:<col>`) copied without their table: `Format( SCH_SELECTION* )` writes a cell's table once, flagged `SKIP_STRUCT`, which
+    // `saveTable` cuts down to the selected cells.
+    let tables: Vec<&eda_model::table::Table> = sch.extras.tables.iter().filter(|t| wanted(&t.id)).collect();
+    let mut cell_blocks: Vec<(&eda_model::table::Table, std::collections::BTreeSet<(usize, usize)>)> = Vec::new();
+    for id in ids.iter() {
+        let Some((tid, row, col)) = eda_model::table::parse_cell_item_id(id) else { continue };
+        let Some(t) = sch.extras.tables.iter().find(|t| t.id == tid).filter(|t| t.cell(row, col).is_some()) else { continue };
+        // a cell of a table copied whole is in that table already
+        if tables.iter().any(|w| w.id == t.id) {
+            continue;
+        }
+        match cell_blocks.iter_mut().find(|(k, _)| k.id == t.id) {
+            Some((_, sel)) => {
+                sel.insert((row, col));
+            }
+            None => cell_blocks.push((t, std::collections::BTreeSet::from([(row, col)]))),
+        }
+    }
     let dropped_symbols = sch.symbols.iter().filter(|s| wanted(&s.id)).count() - symbols.len();
     if dropped_symbols > 0 {
         skipped.push(format!("{dropped_symbols} symbol(s) without a part to copy"));
     }
 
-    let items = symbols.len() + powers.len() + wires.len() + labels.len() + texts.len() + no_connects.len() + bus_entries.len() + junctions.len() + lines.len() + graphics.len() + sheets.len();
+    let items = symbols.len() + powers.len() + wires.len() + labels.len() + texts.len() + no_connects.len() + bus_entries.len() + junctions.len() + lines.len() + graphics.len() + sheets.len() + tables.len() + cell_blocks.len();
     if items == 0 {
         return Err(vec![CheckResult::fail("clipboard_empty", "selection", "nothing in the selection can be copied")]);
     }
@@ -671,6 +684,17 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         let attrs = sch.extras.text_attrs.get(&t.id).cloned().unwrap_or_default();
         let effects = crate::sch_extras_io::text_effects_with(t.size_nm, sch.extras.text_justify_of(&t.id), &attrs);
         let _ = writeln!(out, "\t(text {}\n\t\t(exclude_from_sim {})\n\t\t(at {x} {y} {})\n\t\t{effects}\n\t\t(uuid \"{uuid}\")\n\t)", sexpr_str(&t.content), if attrs.exclude_from_sim { "yes" } else { "no" }, fmt_mm_f(angle));
+    }
+
+    // Tables (`saveTable`), a copied block of cells as the table `saveTable` cuts it to; written unlocked, as Paste unlocks every item it adds.
+    for t in &tables {
+        let uuid = crate::sch_table_io::write(&mut out, t, false);
+        note_item_uuid(&t.id, &uuid);
+    }
+    for (t, sel) in &cell_blocks {
+        let block = t.selected_block(sel);
+        let uuid = crate::sch_table_io::write(&mut out, &block, false);
+        note_item_uuid(&t.id, &uuid);
     }
 
     // Hierarchical sheets: the sheet symbols, with their pins; their screens are not in the text.

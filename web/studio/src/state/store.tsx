@@ -27,7 +27,8 @@ import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, isKicadPcbText, newItemIds, type ClipboardContents } from "../components/canvas/clipboard";
 import { itemKind, subItemIds } from "../kicad-port/pcbItems";
-import { tableCellIds } from "../kicad-port/tables";
+import { tableCellIds, tablesOf } from "../kicad-port/tables";
+import { clipboardHasTable, hasTableCells } from "../kicad-port/tableCells";
 import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
 import type { CarryOp } from "../kicad-port/pcbCarry";
 import { carryAngleDeg, editableSelection, planCarry, planFlip, planRotate, type FlipDirection, type TransformPlan } from "../kicad-port/pcbTransform";
@@ -47,6 +48,7 @@ import { inEnteredGroup } from "../kicad-port/groupEdit";
 import { DEFAULT_BOARD_CONTROL, localRatsnestPadsAfter, toggledHighlight, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { DEFAULT_APPEARANCE, withObjectKeys, type AppearanceState } from "../kicad-port/appearance";
 import { reduceView, type AppearanceOp, type ViewSlice } from "../kicad-port/appearanceOps";
+import { selectionFilterFromJson } from "../kicad-port/selectionFilterRows";
 import { applyAppearanceFile } from "../kicad-port/appearanceFile";
 import { netsContext } from "../kicad-port/appearanceNets";
 import { highlightedNets } from "../kicad-port/boardControl";
@@ -71,6 +73,7 @@ import type { BreakState } from "../kicad-port/schBreak";
 import type { SheetImportPlan } from "../kicad-port/schImportSheet";
 import type { PinPlacement } from "../components/schematic/schPinTool";
 import type { AlignEdge } from "../kicad-port/alignDistribute";
+import { withBoardImagePixels, withSheetImagePixels } from "../actions/imagePixels";
 
 /** A router session this studio is drawing: a route, a pair or a drag (R7-R1). */
 const isRouterDraw = (d: { kind: string } | null | undefined): boolean => d?.kind === "route" || d?.kind === "diffpair" || d?.kind === "drag";
@@ -424,6 +427,8 @@ export interface MovePreview {
   grabNm?: [number, number];
   /** `"pcb"`: R, Shift+R and F pressed while carrying, in order, each about its own point (kicad-port/pcbCarry.ts `CarryOp`); committed in that order with the move. */
   ops?: CarryOp[];
+  /** `"pcb"`: the orientation of the placement grid item the carried footprint was last in (`prevFrameAngle`, kicad-port/gridFrame.ts `carryFrameTurn`), degrees. */
+  frameDeg?: number;
   /**
    * edit_tool.cpp Rotate/Flip during an active Move: both act on the
    * live preview instead of committing immediately (updateModificationPoint's
@@ -808,6 +813,11 @@ export interface StudioState {
   cursorNm: { x: number; y: number } | null;
   moveOriginNm: { x: number; y: number } | null;
   /**
+   * The placement-grid frame a carried footprint starts with (`PlaceFootprint`'s `prevFrameAngle`: 0 for one fresh from the library), so the carry turns it to the frame
+   * it is in from the first motion (kicad-port/gridFrame.ts `carryFrameTurn`). Null for a pick-up (Move, Duplicate, Paste): the frame at the pick-up point counts as applied.
+   */
+  moveFrameStartDeg?: number | null;
+  /**
    * Which points of a wire a click picked (`SCH_SELECTION_TOOL::selectPoint`: a click near a wire's end picks that end only, so `G` or a drag
    * stretches it; anywhere else the segment's two ends). Only meaningful while the selection is exactly that wire (`pickedVertices`).
    */
@@ -1163,7 +1173,7 @@ export type Action =
   | { type: "TOAST"; message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed" }
   | { type: "TOAST_CLEAR" }
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
-  | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
+  | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null; frameDeg?: number }
   | { type: "SET_SCH_WIRE_PICK"; pick: { id: string; vertices: number[] } | null }
   | { type: "SET_SCH_PICKED_ENDS"; ends: Record<string, number[]> | null }
   | { type: "SET_LOCAL_ORIGIN"; at: { x: number; y: number } }
@@ -1582,7 +1592,7 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_CURSOR":
       return { ...state, cursorNm: action.at };
     case "SET_MOVE_ORIGIN":
-      return { ...state, moveOriginNm: action.at };
+      return { ...state, moveOriginNm: action.at, moveFrameStartDeg: action.frameDeg ?? null };
     case "SET_SCH_WIRE_PICK":
       return { ...state, schWirePick: action.pick };
     case "SET_SCH_PICKED_ENDS":
@@ -1771,8 +1781,12 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, bcx: { ...state.bcx, ...action.patch } };
     case "APPEARANCE":
       return withViewSlice(state, reduceView(viewSliceOf(state), action.op, netsContext(state.board)));
-    case "APPEARANCE_LOAD":
-      return withViewSlice(state, applyAppearanceFile(viewSliceOf(state), action.file, { copper: state.board?.layers ?? [] }));
+    case "APPEARANCE_LOAD": {
+      // ... and the Selection Filter, which KiCad keeps with the same local settings (`m_PcbSelectionFilter`, kicad-port/selectionFilterRows.ts)
+      const local = typeof action.file === "object" && action.file !== null ? (action.file as { local?: { selection_filter?: unknown } }).local : undefined;
+      const loaded = withViewSlice(state, applyAppearanceFile(viewSliceOf(state), action.file, { copper: state.board?.layers ?? [] }));
+      return { ...loaded, selectionFilter: selectionFilterFromJson(loaded.selectionFilter, local?.selection_filter) };
+    }
     case "SET_NEXT_ZONE_IS_RULE_AREA":
       // Arming a plain zone/rule-area draw also drops any pending cutout/similar mode (pcbx.zoneDrawMode).
       return { ...state, nextZoneIsRuleArea: action.value, pcbx: { ...state.pcbx, zoneDrawMode: null } };
@@ -1893,7 +1907,7 @@ export interface StudioApi {
    * was told). False when the command was refused or added nothing. `afterDrop` runs once the carried items are dropped (not when Escape takes them back): Place Design Block's
    * "Place repeated copies" starts the next copy from it.
    */
-  placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean, afterDrop?: () => void) => Promise<boolean>;
+  placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean, afterDrop?: () => void, opts?: PlaceNewItemsOptions) => Promise<boolean>;
   /**
    * The same for the sheet in view of the Schematic tab (Import Graphics): `build` makes the command for where the cursor is (its 1.27 mm grid point); with `carry` the step is held open the same way
    * (`carry.rs` keeps whole-design snapshots, so it holds a schematic step as well as a board one) and the drop of the held selection (`commitSchHeld`) joins it.
@@ -1932,6 +1946,21 @@ export interface StudioApi {
   refreshFill: () => Promise<void>;
 }
 
+/**
+ * `placeNewItems`' options: `at` is where the command makes the new items and the Move tool picks them up (the click of a tool that made them there, rather than
+ * the cursor's grid point); `afterCancel` runs once Escape took them back (`commit.Revert()`), `afterSettle` once the held step was settled by leaving the
+ * Move tool some other way -- a tool that goes on after a placement (Place Footprint's loop, the microwave tools' `IPO_REPEAT`) goes on from there.
+ */
+export interface PlaceNewItemsOptions {
+  at?: { x: number; y: number };
+  afterCancel?: () => void;
+  afterSettle?: () => void;
+  /** The command went through but added nothing to carry: what it did stands (as a step of its own). */
+  afterNothing?: () => void;
+  /** The placement-grid frame the new footprint already has (`PlaceFootprint`'s `prevFrameAngle`); left out, the frame where it is picked up counts as applied (a move's pick-up). */
+  frameDeg?: number;
+}
+
 const StudioStateContext = createContext<StudioState | null>(null);
 const StudioDispatchContext = createContext<React.Dispatch<Action> | null>(null);
 const StudioApiContext = createContext<StudioApi | null>(null);
@@ -1954,12 +1983,19 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const carriedPlacementRef = useRef(false);
   /** What to do once the carried items are dropped (`placeNewItems`' `afterDrop`). */
   const afterDropRef = useRef<(() => void) | null>(null);
+  /** ... once Escape took them back (`PlaceNewItemsOptions.afterCancel`), and once the step was settled by leaving the Move tool some other way (`afterSettle`). */
+  const afterCancelRef = useRef<(() => void) | null>(null);
+  const afterSettleRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     // The Move tool was left some other way than by a drop or Escape: the held step stands as a step of its own (any other command would settle it too).
     if (state.activeTool !== "move" && state.activeTool !== "drag" && carriedPlacementRef.current) {
       carriedPlacementRef.current = false;
       afterDropRef.current = null;
+      afterCancelRef.current = null;
+      const settled = afterSettleRef.current;
+      afterSettleRef.current = null;
       void postCarry("commit");
+      settled?.();
     }
   }, [state.activeTool]);
 
@@ -2235,6 +2271,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   /** One undo step for N Cmds (`Cmd::Batch`); a lone Cmd is sent as itself. */
   const runBatch = async (cmds: Cmd[], carry?: CarryStep): Promise<boolean> => {
     if (cmds.length === 0) return true;
+    // A turn or a flip of reference images turns their pixels too (`BITMAP_BASE::Rotate` / `Mirror`; the browser redraws them, actions/imagePixels.ts): in the same batch, one undo step.
+    if (stateRef.current.tab === "pcb") cmds = await withBoardImagePixels(stateRef.current.board, cmds);
     return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds }, carry);
   };
 
@@ -2341,7 +2379,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     transformSchItems: async (ids, turn, vertices) => {
       if (ids.length === 0) return;
-      await runCmd(turnCmd(ids, turn, vertices));
+      // an image's pixels turn with it (`SCH_BITMAP::Rotate`, `Mirror*`; actions/imagePixels.ts)
+      await runCmd(await withSheetImagePixels(stateRef.current.schematic, turnCmd(ids, turn, vertices), stateRef.current.currentSheetPath));
     },
     commitSchHeld: async (preview) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
@@ -2359,7 +2398,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // backend refuses, leaves the import standing as a step of its own.
       const carrying = carriedPlacementRef.current;
       carriedPlacementRef.current = false;
-      const ok = cmd ? await runCmd(cmd, carrying ? "commit" : undefined) : false;
+      const ok = cmd ? await runCmd(await withSheetImagePixels(stateRef.current.schematic, cmd, stateRef.current.currentSheetPath), carrying ? "commit" : undefined) : false;
       if (carrying && !ok) await postCarry("commit");
     },
     cmd: (c) => runCmd(c),
@@ -2438,9 +2477,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           carriedPlacementRef.current = carrying || (plan !== null && plan.cmds.length > 0 && ok);
         } else await settle(plan !== null && plan.cmds.length > 0, ok);
         advanceMoveQueue();
-        // a placement that asked to go on after its drop (Place Design Block with repeated copies) goes on
+        // a placement that asked to go on after its drop (Place Design Block with repeated copies, Place Footprint's loop) goes on
         const next = afterDropRef.current;
         afterDropRef.current = null;
+        if (!individually) {
+          afterCancelRef.current = null;
+          afterSettleRef.current = null;
+        }
         if (carrying && next) next();
         return;
       }
@@ -2534,11 +2577,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!carriedPlacementRef.current) return false;
       carriedPlacementRef.current = false;
       afterDropRef.current = null;
+      afterSettleRef.current = null;
+      const cancelled = afterCancelRef.current;
+      afterCancelRef.current = null;
       // `commit.Revert()`: the carried items are gone and the history is as it was (crates/cli/src/carry.rs).
       const reply = await postCarry("cancel");
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
       if (stateRef.current.tab === "schematic") await refreshSchematic(); // a schematic import was carried: the sheet is as it was
+      cancelled?.();
       return reply.ok;
     },
     redo: async () => {
@@ -2687,6 +2734,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const at = pasteAt();
       // A plain Paste is `PASTE_MODE::KEEP_ANNOTATIONS` with the nets kept; Paste Special brings the dialog's two answers.
       const paste = (text: string): Cmd => (options ? { op: "paste_special", text, at, mode: options.mode ?? "keep", clear_nets: options.clearNets ?? false } : { op: "paste_clipboard", text, at });
+      // `hasTableCells`: with a table cell selected and a table on the clipboard, its cells go into the selected ones ("Paste Cells", one undo step; kicad-port/tableCells.ts)
+      const kicadText = system != null && isKicadPcbText(system) ? system : system == null || system === "" ? (st.clipboard?.text ?? null) : null;
+      if (kicadText && hasTableCells(st.selection, tablesOf(board)) && clipboardHasTable(kicadText, 1)) {
+        await runCmd({ op: "table", verb: "paste_cells", ids: [...st.selection], text: kicadText });
+        return;
+      }
       let cmd: Cmd;
       if (system != null && isKicadPcbText(system)) {
         cmd = paste(system);
@@ -2718,10 +2771,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     // Import Graphics (interactive placement), Append Board and the drops: the same hand-off as `pasteClipboard` above for any command that adds items -- the step is held open
     // (`carry: "begin"`) while the new items are carried, so they and their drop are one undo step and Escape leaves nothing behind.
-    placeNewItems: async (build, carry, afterDrop) => {
+    placeNewItems: async (build, carry, afterDrop, opts) => {
       const board = stateRef.current.board;
       if (!board) return false;
-      const at = pasteAt();
+      const at = opts?.at ? { x: Math.round(opts.at.x), y: Math.round(opts.at.y) } : pasteAt();
       const before = allItemIds(board);
       const ok = await runCmd(build(at), carry ? "begin" : undefined);
       if (!ok) return false;
@@ -2729,14 +2782,17 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const newIds = after ? newItemIds(before, after) : [];
       if (newIds.length === 0) {
         if (carry) await postCarry("commit"); // nothing to carry: what the command did stands
+        opts?.afterNothing?.();
         return true;
       }
       dispatch({ type: "SET_SELECTION", refs: newIds });
       if (carry) {
         carriedPlacementRef.current = true;
         afterDropRef.current = afterDrop ?? null;
+        afterCancelRef.current = opts?.afterCancel ?? null;
+        afterSettleRef.current = opts?.afterSettle ?? null;
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-        dispatch({ type: "SET_MOVE_ORIGIN", at });
+        dispatch({ type: "SET_MOVE_ORIGIN", at, frameDeg: opts?.frameDeg });
       }
       return true;
     },

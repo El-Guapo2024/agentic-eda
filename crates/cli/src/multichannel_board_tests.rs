@@ -372,3 +372,181 @@ fn kicad_cli_reads_the_rule_areas_as_its_own_rewrite_and_finds_the_repeated_chan
         assert_eq!(after_counts.get(kind).copied().unwrap_or(0), first_counts.get(kind).copied().unwrap_or(0), "{kind}: the repeat adds none: {after_counts:?}");
     }
 }
+
+/// The `(comp ..)` blocks of kicad-cli's netlist (`--format kicadsexpr`): reference -> (the sheet's path, `(sheetpath (names ..))`, and the `Sheetfile` property), which is
+/// what `BOARD_NETLIST_UPDATER::updateFootprintParameters` sets a footprint's sheet name and file from (`GetHumanReadablePath()`, `GetProperties().at( "Sheetfile" )`).
+fn netlist_sheets(net: &str) -> BTreeMap<String, (String, String)> {
+    let quoted = |block: &str, key: &str| -> Option<String> {
+        let at = block.find(key)? + key.len();
+        let rest = &block[at..];
+        let start = rest.find('"')? + 1;
+        let end = start + rest[start..].find('"')?;
+        Some(rest[start..end].to_string())
+    };
+    let mut out = BTreeMap::new();
+    for block in net.split("(comp").skip(1) {
+        let block = block.split("(libparts").next().unwrap_or(block);
+        let Some(reference) = quoted(block, "(ref") else { continue };
+        let names = quoted(block, "(names").unwrap_or_default();
+        let file = block.split("(property").find(|p| p.contains("\"Sheetfile\"")).and_then(|p| quoted(p, "(value")).unwrap_or_default();
+        out.insert(reference, (names, file));
+    }
+    out
+}
+
+/// UI-LEFT P20 (R7-D5): the board this studio writes of the three channels gives each footprint the sheet KiCad's Update PCB from Schematic would give it -- the sheet path and
+/// the file kicad-cli's netlist of the derived schematic has for its symbol -- so KiCad's own Repeat Layout finds the channels' sheets on the file; kicad-cli's rewrite of the file
+/// keeps them; and the sheets KiCad's Generate Placement Rule Areas lists (`GeneratePotentialRuleAreas`: the board's `(GetSheetname(), GetSheetfile())` pairs) are the studio's.
+#[test]
+fn the_board_file_has_the_sheets_kicads_update_from_schematic_gives_and_kicads_generate_lists_the_studios_rows() {
+    if !slow() {
+        return;
+    }
+    let Some(cli) = eda_kicad_engine::find_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let dir = scratch("u5_sheets");
+    channels(&dir);
+    // the derived project, the schematic with it (`--schematic-parity`)
+    let drc = crate::kicad_engine::drc_with(&dir, false, true).expect("kicad-cli's DRC with the schematic");
+    let parity = drc["schematic_parity"].as_array().cloned().unwrap_or_default();
+    assert!(parity.is_empty(), "kicad-cli's schematic parity finds differences: {parity:#?}");
+    let (pcb, sch) = (dir.join(".kicad").join("board.kicad_pcb"), dir.join(".kicad").join("board.kicad_sch"));
+    let net = dir.join("board.net");
+    let run = eda_kicad_engine::cli_command(&cli, None).args(["sch", "export", "netlist", "--format", "kicadsexpr", "-o"]).arg(&net).arg(&sch).output().expect("kicad-cli runs");
+    assert!(run.status.success(), "sch export netlist: {}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+    let want = netlist_sheets(&std::fs::read_to_string(&net).unwrap());
+    assert_eq!(want.len(), 12, "{want:?}");
+    let sheets_of = |file: &Path| -> BTreeMap<String, (String, String)> {
+        let (d, _, _) = eda_kicad::import_kicad_pcb(&std::fs::read_to_string(file).unwrap()).expect("the board reads back");
+        d.drawings.unwrap().footprint_extras.into_iter().map(|e| (e.id, (e.sheetname.unwrap_or_default(), e.sheetfile.unwrap_or_default()))).collect()
+    };
+    let ours = sheets_of(&pcb);
+    assert_eq!(ours, want, "every footprint has the sheet path and file of its symbol");
+    let distinct: std::collections::BTreeSet<&(String, String)> = ours.values().collect();
+    assert_eq!(distinct.len(), 3, "three channel sheets: {distinct:?}");
+    assert!(distinct.iter().all(|(name, file)| name.starts_with('/') && name.ends_with('/') && name.len() > 2 && file.ends_with(".kicad_sch")), "{distinct:?}");
+    // kicad-cli's rewrite (`pcb upgrade --force`: KiCad's parser and writer) keeps them
+    let copy = dir.join("upgraded.kicad_pcb");
+    std::fs::copy(&pcb, &copy).unwrap();
+    let done = eda_kicad_engine::cli_command(&cli, None).args(["pcb", "upgrade", "--force"]).arg(&copy).output().expect("kicad-cli runs");
+    assert!(done.status.success(), "pcb upgrade: {}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+    assert_eq!(sheets_of(&copy), ours, "kicad-cli's rewrite keeps every footprint's sheet");
+    // the studio's Generate dialog lists the sheets KiCad's lists on the file
+    let (meta, d, model) = load(&dir).unwrap();
+    let rows = Board::new(d, &model, meta.snap_nm, meta.spacing_nm).mc_potential_areas();
+    let studio: std::collections::BTreeSet<(String, String)> = rows.iter().filter(|r| r.kind == AreaKind::Sheet).map(|r| (r.key.clone(), r.file.clone())).collect();
+    let kicad: std::collections::BTreeSet<(String, String)> = distinct.into_iter().cloned().collect();
+    assert_eq!(studio, kicad);
+}
+
+/// The `(tag ..)` blocks of a board file that `keep` says yes to, counted.
+fn count_blocks(board: &str, tag: &str, keep: impl Fn(&str) -> bool) -> usize {
+    let mut n = 0;
+    let mut at = 0;
+    let open = format!("({tag}");
+    while let Some(i) = board[at..].find(&open) {
+        let start = at + i;
+        let after = board[start + open.len()..].chars().next();
+        if !matches!(after, Some(' ' | '\n' | '\t' | '\r')) {
+            at = start + open.len();
+            continue;
+        }
+        let mut depth = 0;
+        let mut end = start;
+        for (j, ch) in board[start..].char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = start + j + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if keep(&board[start..end]) {
+            n += 1;
+        }
+        at = end.max(start + 1);
+    }
+    n
+}
+
+/// UI-LEFT P20: Repeat Layout copies a table, a barcode on F.Cu, a tuning pattern (with its track) and a copper zone with a hole from channel 1 onto the other two, and the board
+/// file kicad-cli is given has the three of each -- the zones with their holes, the patterns with their tracks -- which kicad-cli loads and its rewrite keeps.
+#[test]
+fn kicad_cli_keeps_the_tables_barcodes_patterns_and_holed_zones_a_repeat_copies() {
+    if !slow() {
+        return;
+    }
+    let Some(cli) = eda_kicad_engine::find_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let dir = scratch("u5_kinds");
+    channels(&dir);
+    generate(&dir);
+    enclose_the_routing(&dir);
+    let areas = rule_areas(&dir);
+    let (x0, y0) = (areas[0].2.iter().map(|p| p.x).min().unwrap(), areas[0].2.iter().map(|p| p.y).min().unwrap());
+    let at = |dx: f64, dy: f64| Point { x: x0 + mm(dx), y: y0 + mm(dy) };
+    let (_, mut d, _) = load(&dir).unwrap();
+    {
+        let track = d.routing.as_ref().unwrap().tracks[0].clone();
+        let rt = d.routing.as_mut().unwrap();
+        let sq = |a: f64, b: f64, c: f64, e: f64| vec![at(a, b), at(c, b), at(c, e), at(a, e)];
+        rt.zones.push(eda_model::ir::Zone { id: "zone_u5".into(), net: "GND".into(), layer: "F.Cu".into(), outline: sq(0.2, 3.0, 2.2, 5.0), holes: vec![sq(0.8, 3.6, 1.6, 4.4)], ..Default::default() });
+        let dr = d.drawings.get_or_insert_with(Default::default);
+        dr.tables.push(eda_model::table::Table::new_grid("F.Cu", at(0.3, 6.0), 1, 1, mm(1.0), mm(0.8), mm(0.1)));
+        dr.assign_table_ids();
+        dr.barcodes.push(eda_model::barcode::Barcode {
+            id: "bar_u5".into(),
+            at: at(1.2, 8.0),
+            angle: 0,
+            layer: "F.Cu".into(),
+            width_nm: mm(1.0),
+            height_nm: mm(1.0),
+            text: "CH".into(),
+            text_height_nm: mm(0.5),
+            kind: Default::default(),
+            ecc: Default::default(),
+            show_text: false,
+            knockout: false,
+            margin_x_nm: Nm::ZERO,
+            margin_y_nm: Nm::ZERO,
+        });
+        let mut p: eda_model::tuning::TuningPattern = serde_json::from_value(serde_json::json!({ "mode": "single", "layer": track.layer, "origin": track.pts[0], "end": track.pts[track.pts.len() - 1], "min_amplitude": 200000, "max_amplitude": 1000000, "spacing": 600000 })).unwrap();
+        p.base_line = vec![track.pts[0], track.pts[track.pts.len() - 1]];
+        p.last_netname = track.net.clone();
+        p.member_ids = vec![track.id.clone()];
+        dr.tuning_patterns.push(p);
+        dr.assign_missing_ids();
+    }
+    save(&dir, &d).unwrap();
+    repeat(&dir);
+    let (_, d, _) = load(&dir).unwrap();
+    let (rt, dr) = (d.routing.as_ref().unwrap(), d.drawings.as_ref().unwrap());
+    assert_eq!(rt.zones.iter().filter(|z| !z.is_rule_area && z.holes.len() == 1).count(), 3, "the pour and its two copies, each with its hole");
+    assert_eq!((dr.tables.len(), dr.barcodes.len(), dr.tuning_patterns.len()), (3, 3, 3));
+    assert!(dr.tuning_patterns.iter().all(|p| p.member_ids.len() == 1 && rt.tracks.iter().any(|t| t.id == p.member_ids[0])));
+
+    // the derived board file and kicad-cli's rewrite of it
+    crate::kicad_engine::drc(&dir, false).expect("kicad-cli loads the repeated board");
+    let derived = dir.join(".kicad").join("board.kicad_pcb");
+    let copy = dir.join("upgraded.kicad_pcb");
+    std::fs::copy(&derived, &copy).unwrap();
+    let done = eda_kicad_engine::cli_command(&cli, None).args(["pcb", "upgrade", "--force"]).arg(&copy).output().expect("kicad-cli runs");
+    assert!(done.status.success(), "pcb upgrade: {}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+    for (name, text) in [("ours", std::fs::read_to_string(&derived).unwrap()), ("kicad-cli's rewrite", std::fs::read_to_string(&copy).unwrap())] {
+        assert_eq!(count_blocks(&text, "table", |b| b.contains("F.Cu")), 3, "{name}: the tables");
+        assert_eq!(count_blocks(&text, "barcode", |b| b.contains("F.Cu")), 3, "{name}: the barcodes");
+        assert_eq!(count_blocks(&text, "generated", |b| b.contains("tuning_pattern") && b.contains("(members")), 3, "{name}: the tuning patterns");
+        // a zone with a hole is written as two polygons, the outline then the hole (`for( const SHAPE_LINE_CHAIN& chain : poly )`)
+        let holed = count_blocks(&text, "zone", |b| b.contains("GND") && b.matches("(polygon").count() == 2);
+        assert_eq!(holed, 3, "{name}: the pour and its copies keep their holes");
+    }
+}

@@ -16,7 +16,9 @@
 //   - Otherwise the pad there pushes its own position (with its layers), each track there is selected and pushes its other end, and the via there is selected and
 //     pushes every track point inside its pad on a layer of its, with the via's layers.
 //   - `SKIP_STRUCT` marks what has pushed already, for the whole call (all start items), so the walk ends.
-// Not ported: the selection filter (`itemPassesFilter`), and graphic shapes on copper (`shapeMap`).
+//   - The selection filter (`itemPassesFilter( item, true )`, the caller's `passes`): a start track or via that fails it is not selected; a point with a pad or a via
+//     that fails it goes no further; a track that fails it is neither selected nor walked (UI-LEFT P22).
+// Not ported: graphic shapes on copper (`shapeMap`). Graphic lines off copper are kicad-port/pcbConnection.ts's `selectAllConnectedShapes`.
 //
 // Pure: no store, no DOM. Unit-tested in expandConnection.test.ts.
 
@@ -73,7 +75,7 @@ const overlap = (a: readonly string[], b: readonly string[]) => a.some((l) => b.
  * `selectAllConnectedTracks( aStartItems, aStopCondition )`: adds to `selected` what the walk from `starts` reaches. `selected` is the live selection, which the
  * stages of `expandConnection` keep adding to.
  */
-export function selectAllConnectedTracks(world: ConnWorld, starts: readonly ConnStart[], stop: StopCondition, selected: ConnSelected): void {
+export function selectAllConnectedTracks(world: ConnWorld, starts: readonly ConnStart[], stop: StopCondition, selected: ConnSelected, passes: (kind: ConnStart["kind"], id: string) => boolean = () => true): void {
   const trackMap = new Map<string, ConnSeg[]>();
   const trackPoints = new Map<string, Pt>();
   for (const s of world.segs) {
@@ -95,8 +97,8 @@ export function selectAllConnectedTracks(world: ConnWorld, starts: readonly Conn
   const segsOf = (track: string) => world.segs.filter((s) => s.track === track);
   // "Select any starting track items"
   for (const s of starts) {
-    if (s.kind === "track" && segsOf(s.id).length > 0) selected.trackIds.add(s.id);
-    if (s.kind === "via" && world.vias.some((v) => v.id === s.id)) selected.viaIds.add(s.id);
+    if (s.kind === "track" && segsOf(s.id).length > 0 && passes("track", s.id)) selected.trackIds.add(s.id);
+    if (s.kind === "via" && world.vias.some((v) => v.id === s.id) && passes("via", s.id)) selected.viaIds.add(s.id);
   }
 
   // `SKIP_STRUCT`, for the whole call
@@ -133,6 +135,9 @@ export function selectAllConnectedTracks(world: ConnWorld, starts: readonly Conn
       const gotPad = padHere != null && overlap(padHere.layers, layerSetCu);
       const gotNonStartPad = gotPad && !startPads.has(padHere!.id);
       const here = trackMap.get(key(pt)) ?? [];
+      // `if( gotPad && !itemPassesFilter( padIt->second, true ) )` / `if( gotVia && !itemPassesFilter( hitVia, true ) )`: the point goes no further
+      if (gotPad && !passes("pad", padHere!.id)) continue;
+      if (hitVia && !passes("via", hitVia.id)) continue;
 
       if (stop === "junction") {
         const ptCount = here.filter((s) => (s.start[0] !== s.end[0] || s.start[1] !== s.end[1]) && layerSetCu.includes(s.layer)).length;
@@ -147,6 +152,7 @@ export function selectAllConnectedTracks(world: ConnWorld, starts: readonly Conn
       }
       for (const s of here) {
         if (!layerSetCu.includes(s.layer)) continue;
+        if (!passes("track", s.track)) continue;
         selected.trackIds.add(s.track);
         if (!doneSegs.has(s)) {
           doneSegs.add(s);

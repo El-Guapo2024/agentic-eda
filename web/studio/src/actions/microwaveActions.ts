@@ -7,8 +7,12 @@
 //   pcbnew.MicrowaveTool.createFunctionShape   .. ( FUNCTION_SHAPE ): the Complex Shape dialog and the polygon of a shape description file between two pads
 //   pcbnew.MicrowaveTool.createLine            MICROWAVE_TOOL::drawMicrowaveInductor: two clicks, "Length of track:", "Component value:", and the S-shaped coil between the points
 //
-// `doInteractiveItemPlacement( .., IPO_REPEAT | IPO_ROTATE | IPO_FLIP )` makes the footprint and carries it on the cursor until a second click; here it is put down where the first
-// click was (`Cmd::Microwave`, one undo step) and left selected, and the tool waits for the next click until Escape. KiCad's `ShowInfoBarError` is a toast.
+// `doInteractiveItemPlacement( .., IPO_REPEAT | IPO_ROTATE | IPO_FLIP )` (pcbnew/tools/pcb_tool_base.cpp) makes the footprint at the first click and carries it on the cursor:
+// R turns it about its position, F flips it (`newItem->Rotate( newItem->GetPosition(), .. )`, `newItem->Flip( newItem->GetPosition(), m_FlipDirection )`), the second click
+// puts it down ("Place microwave feature", one undo step), Escape takes it away and the tool waits for another; after a footprint the tool waits for the next click
+// (`IPO_REPEAT`), until Escape with nothing carried (UI-LEFT P19). Here the footprint is made at the first click with the step held open and carried by the Move tool
+// (`StudioApi.placeNewItems`, the carry of Duplicate and Paste), so R and F are the Move tool's: about the grab point, which is the footprint's position. Nothing is
+// selected once it is down, as `doInteractiveItemPlacement` selects nothing. KiCad's `ShowInfoBarError` is a toast.
 import { fetchState } from "../api/client";
 import { checkInductor } from "../api/microwaveClient";
 import type { Cmd, PointXY } from "../api/types";
@@ -75,8 +79,8 @@ export function registerMicrowaveActions(m: Map<string, (param?: unknown) => voi
 }
 
 /**
- * Send `verb` as one undo step and select the footprint it made (`m_toolMgr->RunAction( ACTIONS::selectItem, inductorFP.get() )` for the inductor; the placement tools leave what
- * they placed selected too). Resolves to whether the board accepted it; a refusal is toasted by the store, with the server's words.
+ * Send `verb` as one undo step and select the footprint it made (`m_toolMgr->RunAction( ACTIONS::selectItem, inductorFP.get() )`: the inductor, which is made where its two
+ * clicks say, not carried). Resolves to whether the board accepted it; a refusal is toasted by the store, with the server's words.
  */
 async function put(ctx: SweepCtx, verb: MicrowaveCmd): Promise<boolean> {
   const { api, dispatch } = ctx;
@@ -125,8 +129,9 @@ async function askFootprint(ctx: SweepCtx, tool: FootprintTool, at: PointXY): Pr
 }
 
 /**
- * `MICROWAVE_TOOL::addMicrowaveFootprint` through `doInteractiveItemPlacement`: the first click asks the tool's questions and makes the footprint, a cancelled question makes none and
- * the tool waits for another click; after a footprint the tool waits for the next (`IPO_REPEAT`), until Escape.
+ * `MICROWAVE_TOOL::addMicrowaveFootprint` through `doInteractiveItemPlacement`: the first click asks the tool's questions and makes the footprint there, carried until the second
+ * click puts it down (`carryFootprint`); a cancelled question makes none and the tool waits for another click; after a footprint the tool waits for the next (`IPO_REPEAT`),
+ * until Escape.
  */
 function startFootprintTool(ctx: SweepCtx, tool: FootprintTool): void {
   const { dispatch } = ctx;
@@ -137,14 +142,36 @@ function startFootprintTool(ctx: SweepCtx, tool: FootprintTool): void {
       prompt: `${PROMPT[tool]}: click to place it (Escape ends the tool)`,
       onPoint: (at) => {
         void (async () => {
-          const verb = await askFootprint(ctx, tool, { x: at.x, y: at.y });
-          if (verb) await put(ctx, verb);
-          next();
+          const click = { x: Math.round(at.x), y: Math.round(at.y) };
+          const verb = await askFootprint(ctx, tool, click);
+          if (!verb || !(await carryFootprint(ctx, verb, click, next))) next();
         })();
         return false;
       },
     });
   next();
+}
+
+/**
+ * `makeNewItem( cursorPos )` then the carry: the footprint is made at `at` with the step held open, selected and handed to the Move tool picked up by its position (R and F
+ * act about it); the drop joins the step and clears the selection, Escape takes the footprint away (`cleanup()`), and either way the tool goes on (`next`). A drop that
+ * never moved it (the second click where the first was) puts it down where it is; another tool taking over ends the run. False when the board refused the footprint.
+ */
+async function carryFootprint(ctx: SweepCtx, verb: MicrowaveCmd, at: PointXY, next: () => void): Promise<boolean> {
+  const { api, dispatch } = ctx;
+  const dropped = () => {
+    dispatch({ type: "SET_SELECTION", refs: [] });
+    next();
+  };
+  return api.placeNewItems(() => ({ op: "microwave", ...verb } as Cmd), true, dropped, {
+    at,
+    afterCancel: next,
+    afterSettle: () => {
+      if (api.getState().activeTool === "select") dropped();
+    },
+    // nothing new to carry: what it made stands, and the tool goes on
+    afterNothing: dropped,
+  });
 }
 
 /**

@@ -11,7 +11,7 @@
       "pcbnew/router/router_tool.cpp",
       "common/hotkey_store.cpp"
     ],
-    "kicad10Additions": "Place > Add Drill Chart, Add Drill Map (after Add Stackup Table) and Place Sub-grid: from pcbnew/menubar_pcb_editor.cpp of KiCad 25ec2335"
+    "kicad10Additions": "Place > Add Drill Chart, Add Drill Map (after Add Stackup Table) and Place Sub-grid; Tools > Drill Groups... (after Rule Editor): from pcbnew/menubar_pcb_editor.cpp of KiCad 25ec2335"
   },
   "menus": [
     {
@@ -759,6 +759,10 @@
         {
           "type": "item",
           "action": "pcbnew.DRETool.drcRuleEditor"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.showDrillGroups"
         },
         {
           "type": "separator"

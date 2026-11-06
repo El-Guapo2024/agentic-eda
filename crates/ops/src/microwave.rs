@@ -934,23 +934,19 @@ impl Board<'_> {
         match cmd {
             MicrowaveCmd::Gap { at, size_nm, track_width_nm, hand } => {
                 let built = build_gap(&defaults, *size_nm, *track_width_nm)?;
-                let at = self.snap_point(at.x, at.y);
-                self.put_microwave(built, at, *hand)
+                self.put_microwave(built, *at, *hand)
             }
             MicrowaveCmd::Stub { at, size_nm, track_width_nm, hand } => {
                 let built = build_stub(&defaults, *size_nm, *track_width_nm)?;
-                let at = self.snap_point(at.x, at.y);
-                self.put_microwave(built, at, *hand)
+                self.put_microwave(built, *at, *hand)
             }
             MicrowaveCmd::ArcStub { at, radius_nm, angle_millideg, track_width_nm, hand } => {
                 let built = build_arc_stub(&defaults, *radius_nm, *angle_millideg, *track_width_nm)?;
-                let at = self.snap_point(at.x, at.y);
-                self.put_microwave(built, at, *hand)
+                self.put_microwave(built, *at, *hand)
             }
             MicrowaveCmd::FunctionShape { at, file, kind, size_x_nm, size_y_nm, track_width_nm, hand } => {
                 let built = build_function_shape(&defaults, file, *kind, *size_x_nm, *size_y_nm, *track_width_nm)?;
-                let at = self.snap_point(at.x, at.y);
-                self.put_microwave(built, at, *hand)
+                self.put_microwave(built, *at, *hand)
             }
             MicrowaveCmd::Inductor { start, end, length_nm, name, track_width_nm } => {
                 let built = build_inductor(&defaults, *start, *end, *length_nm, name, *track_width_nm)?;

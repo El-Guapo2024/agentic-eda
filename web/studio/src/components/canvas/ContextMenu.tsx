@@ -9,6 +9,7 @@
 // "(not ported yet)" a disabled menu item gets elsewhere.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { popupMenuKey } from "../../kicad-port/popupMenuKeys";
+import { accelIndex } from "../../kicad-port/clarificationMenu";
 
 export interface MenuEntry {
   label: string;
@@ -24,6 +25,13 @@ export interface MenuEntry {
   checked?: boolean;
   /** A submenu (`ACTION_MENU::Add( submenu )`): the entry opens it to its right when the pointer is over it; `onSelect` is not called. */
   submenu?: MenuEntry[];
+  /**
+   * The key shown at the entry's right (the text after a wx menu item's `\t`) and the key that chooses it while the menu is open (its `&` mnemonic: the
+   * clarification menu's numbered rows, "Select All" on A; kicad-port/clarificationMenu.ts).
+   */
+  accel?: string;
+  /** The pointer came onto the entry (true) or left it (false): the clarification menu brightens the entry's item (`TA_CHOICE_MENU_UPDATE`). */
+  onHover?: (over: boolean) => void;
 }
 
 export function ContextMenu({ x, y, entries, onClose, nested = false }: { x: number; y: number; entries: MenuEntry[]; onClose: () => void; /** A submenu: its parent closes it (no listeners of its own). */ nested?: boolean }) {
@@ -51,6 +59,15 @@ export function ContextMenu({ x, y, entries, onClose, nested = false }: { x: num
     // Escape dismisses the menu only (kicad-port/popupMenuKeys.ts): stopped here, in the capture phase, it never reaches the window's Escape, which would close
     // the dialog the menu was opened in or cancel the tool.
     const onKey = (e: KeyboardEvent) => {
+      // A key an entry answers to chooses it (a wx popup's mnemonic), and goes no further.
+      const hit = e.ctrlKey || e.metaKey || e.altKey ? -1 : accelIndex(entries, e.key);
+      if (hit >= 0 && !entries[hit]!.submenu) {
+        e.preventDefault();
+        e.stopPropagation();
+        entries[hit]!.onSelect();
+        onClose();
+        return;
+      }
       const k = popupMenuKey(e.key);
       if (k.consume) {
         e.preventDefault();
@@ -64,7 +81,7 @@ export function ContextMenu({ x, y, entries, onClose, nested = false }: { x: num
       document.removeEventListener("pointerdown", onDocDown, true);
       document.removeEventListener("keydown", onKey, true);
     };
-  }, [onClose, nested]);
+  }, [onClose, nested, entries]);
 
   // The menu is a React child of the canvas, whose `onPointerDown` closes the menu (and clears or re-targets the selection) -- so a press on an entry used to
   // unmount the menu before its `click` could fire, and the entry never ran. Presses and releases inside the menu stay inside it.
@@ -82,11 +99,13 @@ export function ContextMenu({ x, y, entries, onClose, nested = false }: { x: num
           title={entry.hint}
           aria-disabled={entry.disabled}
           onMouseEnter={(e) => {
+            entry.onHover?.(true);
             if (entry.submenu && !entry.disabled) {
               const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
               setSub({ index: i, x: r.right, y: r.top });
             } else setSub(null);
           }}
+          onMouseLeave={() => entry.onHover?.(false)}
           onClick={(e) => {
             if (entry.disabled) return;
             if (entry.submenu) {
@@ -107,6 +126,11 @@ export function ContextMenu({ x, y, entries, onClose, nested = false }: { x: num
             <span>{entry.label}</span>
           )}
           {entry.submenu && <span style={{ float: "right", marginLeft: 12 }}>{"\u25B8"}</span>}
+          {entry.accel && (
+            <span className="menu-accel" style={{ float: "right", marginLeft: 16, opacity: 0.7 }}>
+              {entry.accel}
+            </span>
+          )}
         </div>
         )
       )}

@@ -21,7 +21,7 @@ use std::fmt::Write as _;
 
 use eda_model::barcode::Barcode;
 use eda_model::board_text::TextExtra;
-use eda_model::ir::{Design, Dimension, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, Millideg, Nm, Point, Shape, Side, Text, Track, Via, Zone};
+use eda_model::ir::{Design, Dimension, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
 use eda_model::pcb_items::{PcbPoint, RefImage, TextBox};
 use eda_model::table::Table;
 use eda_model::{CheckResult, ConstraintModel, Footprint};
@@ -49,6 +49,8 @@ pub struct Clipboard {
     pub text_boxes: Vec<TextBox>,
     pub images: Vec<RefImage>,
     pub points: Vec<PcbPoint>,
+    /// The tables (`PCB_TABLE`), with their cells, as the text had them: a copied table, or the table `SaveSelection` makes of copied cells.
+    pub tables: Vec<Table>,
     pub groups: Vec<ClipGroup>,
     /// True when the text was a single bare footprint (`PCB_FOOTPRINT_T` in `PCB_CONTROL::Paste`) rather than a board.
     pub bare_footprint: bool,
@@ -67,6 +69,7 @@ impl Clipboard {
             && self.text_boxes.is_empty()
             && self.images.is_empty()
             && self.points.is_empty()
+            && self.tables.is_empty()
     }
 }
 
@@ -120,6 +123,7 @@ pub enum ClipRef {
     Barcode(usize),
     TextBox(usize),
     Image(usize),
+    Table(usize),
     /// A group inside the group (`PCB_GROUP` is an item like any other): the position in [`Clipboard::groups`]. Inner groups are
     /// listed before the groups that hold them.
     Group(usize),
@@ -538,7 +542,7 @@ pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: 
         if picked.tables.iter().any(|w| w.id == t.id) {
             continue;
         }
-        let mut moved = selected_block(t, sel);
+        let mut moved = t.selected_block(sel);
         moved.translate(dx, dy);
         let uuid = crate::pcb_table::write(&mut out, &moved, false);
         written.entry(t.id.clone()).or_default().push(uuid);
@@ -546,36 +550,6 @@ pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: 
     write_groups(&mut out, &picked.groups, &written, &|g| duid(&format!("clip:group:{}", g.id)), &|_| false);
     writeln!(out, ")").unwrap();
     Ok(out)
-}
-
-/// `SaveSelection`'s `deleteUnselectedCells` on the clone of `t`: the cells not in `sel` are deleted (`DeleteMarkedCells`), the rows and columns from the
-/// first to the last selected one keep their heights and widths, and the cells left are laid out `maxCol - minCol + 1` to a row (`SetColCount`) from the
-/// first one's corner (`PCB_TABLE::GetPosition` is the first cell's, which `Normalize` lays the rest out from). A block of cells is copied as that block;
-/// a selection that is not one is packed into rows the way KiCad packs it, a short last row dropped (`GetRowCount` is the cell count divided by the
-/// column count). A merged cell's span is cut to the new table.
-fn selected_block(t: &Table, sel: &BTreeSet<(usize, usize)>) -> Table {
-    let (min_row, max_row) = (sel.iter().map(|c| c.0).min().unwrap_or(0), sel.iter().map(|c| c.0).max().unwrap_or(0));
-    let (min_col, max_col) = (sel.iter().map(|c| c.1).min().unwrap_or(0), sel.iter().map(|c| c.1).max().unwrap_or(0));
-    let cols = max_col - min_col + 1;
-    let kept: Vec<(usize, usize)> = (0..t.cells.len()).map(|i| t.row_col(i)).filter(|rc| sel.contains(rc)).collect();
-    let rows = (kept.len() / cols).max(1);
-    let first = kept.first().copied().unwrap_or((min_row, min_col));
-    let (x, y, _, _) = t.cell_local_rect(first.0, first.1);
-    let mut out = t.clone();
-    out.at = t.to_world((x, y));
-    out.col_widths = (0..cols).map(|c| t.col_widths.get(min_col + c).copied().unwrap_or(Nm::ZERO)).collect();
-    out.row_heights = (0..rows).map(|r| if min_row + r <= max_row { t.row_heights.get(min_row + r).copied().unwrap_or(Nm::ZERO) } else { Nm::ZERO }).collect();
-    out.cells = kept.iter().take(rows * cols).enumerate().map(|(i, &(r, c))| {
-        let mut cell = t.cell(r, c).cloned().unwrap_or_else(|| eda_model::table::TableCell::pcb_new(false));
-        let (nr, nc) = (i / cols, i % cols);
-        cell.col_span = cell.col_span.min((cols - nc) as u32);
-        cell.row_span = cell.row_span.min((rows - nr) as u32);
-        cell
-    }).collect();
-    while out.cells.len() < rows * cols {
-        out.cells.push(eda_model::table::TableCell::pcb_new(false));
-    }
-    out
 }
 
 // -------------------------------------------------------------------- parse
@@ -618,6 +592,7 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
         clip.text_boxes = dr.board_items.text_boxes.clone();
         clip.images = dr.board_items.images.clone();
         clip.points = dr.board_items.points.clone();
+        clip.tables = dr.tables.clone();
     }
     let mut fp_index: BTreeMap<String, usize> = BTreeMap::new();
     for fp in design.placement.iter().flat_map(|p| p.footprints.iter()) {
@@ -672,6 +647,7 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
                         .or_else(|| clip.barcodes.iter().position(|b| &b.id == m).map(ClipRef::Barcode))
                         .or_else(|| clip.text_boxes.iter().position(|t| &t.id == m).map(ClipRef::TextBox))
                         .or_else(|| clip.images.iter().position(|i| &i.id == m).map(ClipRef::Image))
+                        .or_else(|| clip.tables.iter().position(|t| &t.id == m).map(ClipRef::Table))
                         .or_else(|| fp_index.get(m).copied().map(ClipRef::Footprint)))
                 })
                 .collect();
@@ -680,7 +656,7 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
         }
     }
     if clip.is_empty() {
-        return Err(fail("clipboard.empty", "paste", "the KiCad text on the clipboard holds no footprint, track, via, zone, graphic, text or dimension"));
+        return Err(fail("clipboard.empty", "paste", "the KiCad text on the clipboard holds no footprint, track, via, zone, graphic, text, dimension or table"));
     }
     Ok(clip)
 }

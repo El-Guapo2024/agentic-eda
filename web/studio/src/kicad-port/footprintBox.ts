@@ -15,12 +15,13 @@
 // Pure: no store, no DOM. Unit-tested in footprintBox.test.ts.
 import type { FieldInfo, Part } from "../api/types";
 import { artBounds, artTextAsField } from "./fpArt";
+import { fpItemsBounds } from "./fpBoardItems";
 
 /** `[minX, minY, maxX, maxY]`, board µm. */
 export type FootprintBox = readonly [number, number, number, number];
 
 /** What of a footprint the box reads (the snap scene's parts carry no more). */
-export type FootprintBoxPart = Pick<Part, "placed"> & Partial<Pick<Part, "at" | "pads" | "courtyard" | "body" | "fields" | "graphics" | "texts">>;
+export type FootprintBoxPart = Pick<Part, "placed"> & Partial<Pick<Part, "at" | "pads" | "courtyard" | "body" | "fields" | "graphics" | "texts" | "items">>;
 
 /** `bbox.Inflate( pcbIUScale.mmToIU( 0.25 ) )`: "Give a min size to the bbox". */
 export const MIN_HALF_SIZE_NM = 250_000;
@@ -46,6 +47,10 @@ export function footprintBox(part: FootprintBoxPart, includeText: boolean, textB
     !includeText && part.graphics?.some((g) => ANNOTATION_LAYERS.has(g.layer)) ? part.graphics.filter((g) => !ANNOTATION_LAYERS.has(g.layer)) : part.graphics;
   const art = artBounds({ graphics });
   if (art) box = merge(box, art);
+  // the text boxes and barcodes (`m_drawings`; a reference image only in the footprint editor), the annotations left out as the graphics are (UI-LEFT P17)
+  const items = part.items && !includeText ? { ...part.items, text_boxes: part.items.text_boxes?.filter((t) => !ANNOTATION_LAYERS.has(t.layer)), barcodes: part.items.barcodes?.filter((b) => !ANNOTATION_LAYERS.has(b.layer)) } : part.items;
+  const own = items ? fpItemsBounds({ items }) : null;
+  if (own) box = merge(box, own);
   for (const pad of part.pads ?? []) box = merge(box, [pad.x - pad.w / 2, pad.y - pad.h / 2, pad.x + pad.w / 2, pad.y + pad.h / 2]);
   if (includeText && textBox) {
     for (const field of part.fields ?? []) {

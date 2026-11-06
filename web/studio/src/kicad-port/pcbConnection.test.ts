@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { BoardState, Pad, Part } from "../api/types";
-import { connectedItemAt, connectedStartCount, expandedSelection, planSelectConnection } from "./pcbConnection";
+import type { BoardState, Pad, Part, Shape } from "../api/types";
+import { connectedItemAt, connectedStartCount, expandedSelection, isExpandableGraphicShape, planSelectConnection, selectAllConnectedShapes } from "./pcbConnection";
 
 const pad = (num: string, x: number, y: number, net: string | null): Pad => ({ num, net, x, y, w: 600, h: 600, round: false, th: false });
 const part = (ref: string, at: [number, number], pads: Pad[]): Part =>
@@ -65,8 +65,59 @@ test("a selection with nothing connected in it is cleared for the item under the
   assert.deepEqual(planSelectConnection(b, new Set(["x1"]), []), { refs: [] }, "and nothing under the cursor leaves the selection empty");
 });
 
-test("a selected graphic line is left alone: its connection is not ported", () => {
+test("a selected graphic line with no collector to search with is left alone", () => {
   assert.equal(planSelectConnection(board(), new Set(["s1"]), [{ kind: "track", id: "t2" }]), null);
+});
+
+/** `EDA_SHAPE::hitTest` of a line: the distance to it less half its width. */
+const lineHit = (sh: Shape, x: number, y: number): number => {
+  if (sh.kind !== "segment") return Infinity;
+  const [ax, ay] = sh.start;
+  const [bx, by] = sh.end;
+  const t = Math.max(0, Math.min(1, ((x - ax) * (bx - ax) + (y - ay) * (by - ay)) / ((bx - ax) ** 2 + (by - ay) ** 2 || 1)));
+  return Math.hypot(x - (ax + t * (bx - ax)), y - (ay + t * (by - ay))) - sh.stroke_width / 2;
+};
+const seg = (id: string, layer: string, a: [number, number], b: [number, number]): Shape => ({ id, layer, stroke_width: 150, filled: false, kind: "segment", start: a, end: b }) as Shape;
+
+/** A chain s1 - s2 - s3 on F.SilkS (s3 starting on the middle of s2, a T), s4 on F.Fab touching s3's end, s5 on F.SilkS far away, c1 on F.Cu. */
+function linesBoard(): BoardState {
+  const b = board();
+  b.drawings!.shapes = [
+    seg("s1", "F.SilkS", [0, 9000], [1000, 9000]),
+    seg("s2", "F.SilkS", [1000, 9000], [3000, 9000]),
+    seg("s3", "F.SilkS", [2000, 9000], [2000, 12000]),
+    seg("s4", "F.Fab", [2000, 12000], [4000, 12000]),
+    seg("s5", "F.SilkS", [9000, 9000], [9500, 9000]),
+    seg("c1", "F.Cu", [0, 9000], [0, 7000]),
+  ];
+  return b;
+}
+
+test("selectAllConnectedShapes: the lines that meet end to end on one layer, a line hit along its length too, not another layer's or copper", () => {
+  const b = linesBoard();
+  assert.equal(isExpandableGraphicShape(b, "c1"), false, "a line on copper is not followed this way");
+  // the search is at each line's two ends: from s1, s2's ends find s1 again and nothing else (s3 starts on s2's middle, which nobody searches at)
+  assert.deepEqual(selectAllConnectedShapes(b, ["s1"], { accuracyNm: 50, hit: lineHit }).sort(), ["s1", "s2"]);
+  // from s3 its start, on s2's middle, hits s2 along its length (the collector hits a line anywhere), and s2's end s1; s4 is on F.Fab, s5 meets nothing
+  const got = selectAllConnectedShapes(b, ["s3", "s3"], { accuracyNm: 50, hit: lineHit });
+  assert.deepEqual(got, ["s3", "s2", "s1"], "depth first from a stack, each line once");
+});
+
+test("Select Connection on lines: the chain is added to the selection; a line the filter refuses is neither selected nor followed", () => {
+  const b = linesBoard();
+  const shapes = { accuracyNm: 50, hit: lineHit };
+  assert.deepEqual(planSelectConnection(b, new Set(["s3"]), [], { shapes })!.refs.sort(), ["s1", "s2", "s3"]);
+  const plan = planSelectConnection(b, new Set(["s3"]), [], { shapes, passes: (kind, id) => !(kind === "shape" && id === "s2") });
+  assert.deepEqual(plan!.refs.sort(), ["s3"], "s2 refused: s1 beyond it is not reached");
+});
+
+test("the track walk takes the selection filter: a track it refuses is not selected or walked, a pad or via it refuses ends the walk there", () => {
+  const b = board();
+  const plan = planSelectConnection(b, new Set(["t1"]), [], { passes: (kind, id) => !(kind === "track" && id === "t2") });
+  assert.deepEqual(plan!.refs.sort(), ["t1"], "t2 refused: t3 beyond it is not reached");
+  // a start pad refused: nothing is walked from it
+  const fromPad = expandedSelection(b, new Set(["U1.1"]), undefined, (kind) => kind !== "pad");
+  assert.deepEqual(fromPad, ["U1.1"]);
 });
 
 test("with a connected item selected the cursor is not looked at", () => {

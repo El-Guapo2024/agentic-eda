@@ -257,6 +257,12 @@ export function computeItemAnchors(out: AnchorList, item: SnapItem, ref: Pt, fro
         if (ref[0] < pad.bbox.x0 || ref[0] > pad.bbox.x1 || ref[1] < pad.bbox.y0 || ref[1] > pad.bbox.y1) continue;
         padAnchors(out, pad, from);
       }
+      // "Points are also pick-up points": `if( aSelectionFilter && !aSelectionFilter->points ) continue; if( !checkVisibility( pt ) ) continue; addAnchor( pt->GetPosition(), ORIGIN | SNAPPABLE, footprint, PT_CENTER )`
+      for (const pt of fp.points ?? []) {
+        if (!allowed(filter, "points")) continue;
+        if (!ctx.visible(pt)) continue;
+        out.add(pt.at, ANCHOR.ORIGIN | SNAP, [fp], PT.CENTER);
+      }
       // "When computing drag origins, always proceed to add the footprint position anchor regardless of the visibility state."
       if (!fpVisible && !from) break;
       if (from && !allowed(filter, "footprints")) break;

@@ -103,6 +103,7 @@ mod multichannel;
 mod multichannel_copy;
 mod multichannel_facts;
 mod multichannel_geom;
+mod multichannel_poly;
 pub use multichannel::{AreaKind, AreaPick, MultichannelCmd, PlacementSources, PotentialArea, RepeatOptions, RepeatPlan, TargetCompat};
 pub mod embedded;
 pub use embedded::{AddedFile, CollectedModel, EmbeddedCmd, EmbeddedOwner};
@@ -112,11 +113,14 @@ pub mod drill_chart;
 mod pcb_props;
 mod pcb_table_builders;
 mod pcb_tables;
+mod table_paste_cells;
+mod sch_cross_refs;
 pub use pcb_tables::TableCmd;
 mod pcb_transform;
 mod tuning;
 mod zone_overrides;
 pub mod zone_priority;
+pub mod autoplace;
 mod zone_unfill;
 pub mod rule_editor;
 pub use rule_editor::DrcRuleAction;
@@ -849,6 +853,10 @@ pub enum Cmd {
     /// The microwave tools (`pcbnew.MicrowaveTool.*`, GAPS.md item 9, package P19): a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own, one verb family, see
     /// [`microwave::MicrowaveCmd`]. On the wire: `{"op": "microwave", "verb": "gap", "at": {..}, "size_nm": 500000, "track_width_nm": 250000}`.
     Microwave(microwave::MicrowaveCmd),
+    /// Place > Auto-Place Footprints > "Place Selected Footprints" / "Place Off-Board Footprints" (`pcbnew.Autoplacer.autoplaceSelected`, `autoplaceOffboard`,
+    /// UI-LEFT P19), run by the studio's placer (`eda_place::place_partial`) instead of KiCad's `AR_AUTOPLACER`; see [`autoplace::AutoplaceCmd`]. Always
+    /// judged by the placement gates ([`Cmd::always_judged`]). On the wire: `{"op": "autoplace", "footprints": ["R1", "R2"]}` or `{"op": "autoplace", "offboard": true}`.
+    Autoplace(autoplace::AutoplaceCmd),
     /// The multichannel tool (GAPS.md items 24 and 32, package P24): Generate Placement Rule Areas, Repeat Layout and Apply Design Block Layout -- one verb family, see
     /// [`multichannel::MultichannelCmd`]. On the wire: `{"op": "multichannel", "verb": "repeat_layout", "reference": "zone_..", "targets": [..]}`.
     Multichannel(multichannel::MultichannelCmd),
@@ -2785,6 +2793,7 @@ impl Cmd {
             Cmd::PcbItem(c) => c.ids(),
             Cmd::Embedded(c) => c.ids(),
             Cmd::Microwave(c) => c.ids(),
+            Cmd::Autoplace(c) => c.ids(),
             Cmd::Specctra { name, .. } => vec![name.as_str()],
             Cmd::Multichannel(c) => c.ids(),
             Cmd::Table(c) | Cmd::SchTable(c) => c.ids(),
@@ -2924,8 +2933,21 @@ impl Cmd {
             Cmd::InGroup { cmd, .. } => cmd.clears_routing_in(board),
             Cmd::MoveItems { .. } | Cmd::RotateItems { .. } | Cmd::FlipItems { .. } | Cmd::MirrorTracks { .. } | Cmd::MirrorItems { .. } | Cmd::Rip { .. } | Cmd::CreateArray { .. } => false,
             Cmd::SwapChain { .. } | Cmd::MoveExact { .. } => false,
+            // the autoplacer moves footprints as the edit tools do: what was routed to them stays where it is
+            Cmd::Autoplace(_) => false,
             Cmd::PlaceAt { part, .. } => board.pose_of(part).is_some(),
             other => other.clears_routing(),
+        }
+    }
+
+    /// A command the placement gates judge even with Strict off: the autoplacer's ("keep the placer's gates on", UI-LEFT P19). `eda board place` refuses a
+    /// placement its gates fail (`stage_place`); the studio's step refuses an autoplace that adds a gate failure, naming the failures.
+    pub fn always_judged(&self) -> bool {
+        match self {
+            Cmd::Autoplace(_) => true,
+            Cmd::Batch { cmds } => cmds.iter().any(Cmd::always_judged),
+            Cmd::InGroup { cmd, .. } => cmd.always_judged(),
+            _ => false,
         }
     }
 }
@@ -3522,6 +3544,7 @@ impl<'a> Board<'a> {
             Cmd::FpEditor(c) => self.apply_fp_editor(c),
             Cmd::Embedded(c) => self.apply_embedded(c),
             Cmd::Microwave(c) => self.apply_microwave(c),
+            Cmd::Autoplace(c) => self.apply_autoplace(c),
             Cmd::Specctra { session, name } => self.import_specctra_session(session, name),
             Cmd::Multichannel(c) => self.apply_multichannel(c),
             Cmd::Table(c) => self.apply_table(c),
@@ -4038,10 +4061,15 @@ impl<'a> Board<'a> {
     /// leaves the outline is refused rather than quietly slid somewhere
     /// nearby. A command that silently does something other than what it
     /// says cannot be learned from.
+    ///
+    /// The point is the footprint's position as given, in whole nanometres: the editor snapped the pointer to the grid it shows (the
+    /// connected-items grid, `PCB_GRID_HELPER::Align( .., GRID_CONNECTABLE )`), and KiCad's commit stores `FOOTPRINT::SetPosition( cursorPos )`
+    /// without a grid of its own. It used to be rounded again to the board's placement step (`meta.snap_nm`, 0.1 mm), which put a part placed on a
+    /// 0.05 mm or a 25 mil grid off the grid on screen (UI-LEFT P19).
     fn place_at(&mut self, part: &str, x: Nm, y: Nm) -> Result<(), Vec<CheckResult>> {
         self.require_unplaced(part)?;
         let bb = self.board_bbox();
-        let at = self.snap_point(x, y);
+        let at = Point { x, y };
         let fp = FootprintInstance { id: part.into(), at, rot: 0, side: Side::Top, label: LabelSide::Above };
         let cr = self.courtyard_at(part, &fp)?;
         if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
@@ -4077,7 +4105,8 @@ impl<'a> Board<'a> {
     fn rotate(&mut self, part: &str, quarter_turns: u8) -> Result<(), Vec<CheckResult>> {
         let fp = self.require_placed(part)?;
         let rot = (fp.rot + quarter_turns as u32 * 90_000) % 360_000;
-        self.set_pose(part, fp.at, rot)
+        // A turn in place: the position stays as it is, on the placement step or not.
+        self.set_pose_exact(part, fp.at, rot)
     }
 
     fn swap(&mut self, a: &str, b: &str) -> Result<(), Vec<CheckResult>> {
@@ -4086,8 +4115,9 @@ impl<'a> Board<'a> {
         }
         let fa = self.require_placed(a)?;
         let fb = self.require_placed(b)?;
-        self.set_pose(a, fb.at, fa.rot)?;
-        self.set_pose(b, fa.at, fb.rot)
+        // Each takes the other's position as it is (`EDIT_TOOL::Swap`: `a->SetPosition( bPos )`): two parts placed off the placement step stay where they were put.
+        self.set_pose_exact(a, fb.at, fa.rot)?;
+        self.set_pose_exact(b, fa.at, fb.rot)
     }
 
     fn rip(&mut self, part: &str) -> Result<(), Vec<CheckResult>> {
@@ -4746,7 +4776,8 @@ impl<'a> Board<'a> {
         let n = parts.len();
         for (i, part) in parts.iter().enumerate() {
             let src = &poses[(i + 1) % n];
-            self.set_pose(part, src.at, src.rot)?;
+            // The pose the other part had, exactly (`EDIT_TOOL::Swap`): not rounded to the placement step.
+            self.set_pose_exact(part, src.at, src.rot)?;
             let fps = &mut self.design.placement.as_mut().unwrap().footprints;
             let k = fps.iter().position(|f| f.id == *part).expect("caller checked the part is placed");
             fps[k].side = src.side;
@@ -5322,7 +5353,8 @@ impl<'a> Board<'a> {
                 Some(p) => rotate_point_about(moved, p, rotate_millideg),
             };
             let final_rot = (fp.rot as i64 + rotate_millideg).rem_euclid(360_000) as u32;
-            self.set_pose(part, final_pos, final_rot)?;
+            // What was typed, exactly (`DIALOG_MOVE_EXACT`): not rounded to the placement step.
+            self.set_pose_exact(part, final_pos, final_rot)?;
         }
         Ok(())
     }
@@ -7415,6 +7447,8 @@ mod embedded_tests;
 #[cfg(test)]
 mod microwave_tests;
 #[cfg(test)]
+mod autoplace_tests;
+#[cfg(test)]
 mod tuning_tests;
 #[cfg(test)]
 pub(crate) mod sch_annotate_tests;
@@ -7438,6 +7472,8 @@ mod sch_clipboard_tests;
 mod pcb_tables_tests;
 #[cfg(test)]
 mod sch_tables_tests;
+#[cfg(test)]
+mod table_clipboard_tests;
 
 pub mod board_control;
 pub mod page_settings;

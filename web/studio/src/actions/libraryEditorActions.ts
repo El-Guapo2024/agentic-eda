@@ -9,7 +9,7 @@
 // Viewer). The Footprint Checker (`checkFootprint`) is kicad-cli's DRC on a scratch
 // board (actions/footprintCheckerActions.ts).
 import type { Dispatch } from "react";
-import type { Action as StudioAction } from "../state/store";
+import type { Action as StudioAction, StudioApi } from "../state/store";
 import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintEditorStore";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import * as fpLib from "./footprintLibraryOps";
@@ -22,6 +22,8 @@ import * as symLib from "./symbolLibraryOps";
 export interface LibraryActionContext {
   tab: string;
   studioDispatch: Dispatch<StudioAction>;
+  /** The board editor's API: Insert footprint into PCB hands the footprint to its Place Footprint tool (actions/placeFootprintTool.ts). */
+  studioApi?: StudioApi;
   /** The board's parts, for Load footprint from current PCB and Insert footprint into PCB. */
   boardParts: readonly { ref: string; footprint: string | null }[];
   fpApi: FootprintEditorApi;
@@ -121,7 +123,7 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
     if (link) void ctx.fpApi.openFootprint(link.fpid);
   });
   // Insert footprint into PCB -- FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard: updates the parts that name the footprint, or inserts it as a part of its own.
-  m.set("pcbnew.ModuleEditor.saveFootprintToBoard", fpTab(() => fpLib.saveFootprintToBoard(fpc, ctx.boardParts, ctx.studioDispatch)));
+  m.set("pcbnew.ModuleEditor.saveFootprintToBoard", fpTab(() => fpLib.saveFootprintToBoard(fpc, ctx.boardParts, ctx.studioDispatch, ctx.studioApi)));
 
   // Add Pad -- PAD_TOOL::PlacePad (`doInteractiveItemPlacement`, `IPO_REPEAT | IPO_SINGLE_CLICK`): arms the pad tool; every click places a pad made from the default pad.
   m.set(
