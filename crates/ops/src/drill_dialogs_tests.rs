@@ -160,3 +160,59 @@ fn a_groups_new_mark_is_the_boards_and_every_chart_shows_it() {
     assert_eq!((pr.mark_policy, pr.size_nm, pr.width_nm), (DrillMarkPolicy::SizeText, mm(2.0), mm(0.2)));
     assert_eq!(texts(&b, &id)[7], "0.300", "the hole size as the mark");
 }
+
+// ------------------------------------------------------------------------------------------------------------------ via stitching's template
+
+/// `PCB_VIA_STITCH::Update` makes each via a copy of the whole template (`m_viaTemplate->Clone()`), and `matchesRef` keeps a via only while its type and padstack are the
+/// template's: what Via Stitching Properties' Configure set (`DIALOG_TRACK_VIA_PROPERTIES` on the template) reaches every via.
+#[test]
+fn a_stitchings_vias_are_copies_of_its_whole_template() {
+    use crate::pcb_items::PlannedVia;
+    use eda_model::padstack::UnconnectedLayers;
+    use eda_model::via_extra::ViaKind;
+    use eda_model::via_stitch::{ViaStitch, ViaTemplate};
+    let m = model(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let mut v = ViaStitch::new(vec![p(Nm::ZERO, Nm::ZERO), p(mm(10.0), Nm::ZERO), p(mm(10.0), mm(10.0)), p(Nm::ZERO, mm(10.0))]);
+    v.net = "GND".into();
+    v.pitch_nm = mm(2.0);
+    // A template as a file has it: a blind via, tented on both sides.
+    v.via = ViaTemplate {
+        size_nm: mm(0.6),
+        drill_nm: mm(0.3),
+        from_layer: "F.Cu".into(),
+        to_layer: "In2.Cu".into(),
+        text: r#"(via blind (at 0 0) (size 0.6) (drill 0.3) (layers "F.Cu" "In2.Cu") (tenting (front yes) (back yes)) (free yes) (net "") (uuid "t"))"#.into(),
+        ..Default::default()
+    };
+    let cells = |cs: &[(i64, i64)]| -> Vec<PlannedVia> { cs.iter().map(|&(c, r)| PlannedVia { cell: (c, r), at: p(c * mm(2.0), r * mm(2.0)) }).collect() };
+    let set = |b: &mut Board<'_>, id: Option<String>, v: ViaStitch| b.apply(&Cmd::PcbItem(PcbItemCmd::SetViaStitch { id, stitch: v, vias: Some(cells(&[(1, 1), (2, 1)])) }));
+    set(&mut b, None, v).unwrap();
+    let st = drawings(&b).board_items.via_stitches[0].clone();
+    let extra = |b: &Board<'_>, id: &str| drawings(b).via_extras.iter().find(|x| x.id == id).cloned().unwrap();
+    let first = st.member_ids.clone();
+    let e = extra(&b, &first[0]);
+    assert_eq!((e.kind, e.tokens.clone()), (ViaKind::Blind, vec!["(tenting (front yes) (back yes))".to_string(), "(free yes)".to_string()]), "a copy of the template");
+    // The same template again: the vias stay, ids and all.
+    set(&mut b, Some(st.id.clone()), st.clone()).unwrap();
+    assert_eq!(drawings(&b).board_items.via_stitches[0].member_ids, first);
+    // Configure: connected layers only. No via matches the template any more, so each is made again from it (at the same place: the same derived id).
+    let mut configured = st.clone();
+    configured.via.annular = Some(UnconnectedLayers::RemoveAll);
+    set(&mut b, Some(st.id.clone()), configured).unwrap();
+    let again = drawings(&b).board_items.via_stitches[0].member_ids.clone();
+    assert_eq!(again.len(), 2);
+    let e = extra(&b, &again[0]);
+    assert_eq!(e.kind, ViaKind::Blind);
+    assert_eq!(e.unconnected_layers(), UnconnectedLayers::RemoveAll);
+    assert!(e.tokens.iter().any(|t| t == "(tenting (front yes) (back yes))"));
+    // and a micro via.
+    let mut micro = drawings(&b).board_items.via_stitches[0].clone();
+    micro.via.kind = Some(ViaKind::Micro);
+    micro.via.to_layer = "In1.Cu".into();
+    set(&mut b, Some(st.id.clone()), micro).unwrap();
+    let id = drawings(&b).board_items.via_stitches[0].member_ids[0].clone();
+    assert_eq!(extra(&b, &id).kind, ViaKind::Micro);
+    let via = b.design().routing.as_ref().unwrap().vias.iter().find(|x| x.id == id).unwrap().clone();
+    assert_eq!((via.from_layer.as_str(), via.to_layer.as_str()), ("F.Cu", "In1.Cu"));
+}

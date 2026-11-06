@@ -478,6 +478,44 @@ fn a_text_on_copper_keeps_the_stitching_off() {
     assert!(after.vias.len() < before.vias.len());
 }
 
+/// A footprint's field on copper is an obstacle as a text is (`forEachGeometryItem` puts every `PCB_FIELD` on a copper layer in the copper R-tree, and
+/// `buildPlacementCells` keeps vias off its hull): the stitching of `stitch_fp_rulearea` with a footprint's Reference moved onto F.Cu over one of its vias.
+#[test]
+fn a_footprint_field_on_copper_keeps_the_stitching_off() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(qa) = qa_data() else {
+        eprintln!("skipped: needs KiCad 25ec2335's QA boards (KICAD10_QA_DATA)");
+        return;
+    };
+    let text = std::fs::read_to_string(qa.join("pcbnew/stitch_fp_rulearea.kicad_pcb")).unwrap();
+    let (mut design, model, notes) = import_kicad_pcb(&text).unwrap();
+    let entries = eda_kicad::zone_fills::entries_of_imported_file(&design, notes.zone_fills.clone());
+    let fills = eda_kicad::zone_fills::KicadFills::new("file".into(), String::new(), 0, entries).fills_nm(&design);
+    let stitch = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
+    let plan = |d: &eda_model::ir::Design| eda_drc::via_stitch::plan(&eda_drc::via_stitch::PlanInputs { design: d, model: &model, fills: &fills, current_via_size_nm: mm(0.6), current_via_drill_nm: mm(0.3) }, &stitch);
+    let before = plan(&design);
+    let at = before.vias[before.vias.len() / 2].1;
+    let fp = design.placement.as_ref().unwrap().footprints.iter().find(|f| model.part(&f.id).and_then(|p| model.footprint_of(p)).is_some()).expect("a footprint with its definition").clone();
+    let footprint = model.footprint_of(model.part(&fp.id).unwrap()).unwrap();
+    let mut reference = eda_model::fp_edit::effective_reference(&design, &fp, &footprint);
+    reference.layer = "F.Cu".into();
+    reference.visible = true;
+    reference.size = (mm(1.0), mm(1.0));
+    reference.thickness = mm(0.15);
+    reference.set_from_board(&fp, at, 0);
+    let dr = design.drawings.get_or_insert_with(Default::default);
+    match dr.footprint_edits.iter_mut().find(|e| e.id == fp.id) {
+        Some(e) => e.reference = Some(reference),
+        None => dr.footprint_edits.push(eda_model::fp_edit::FootprintEdit { id: fp.id.clone(), reference: Some(reference), ..Default::default() }),
+    }
+    let after = plan(&design);
+    eprintln!("stitch_fp_rulearea with {}'s Reference on F.Cu at {at:?}: {} vias, {} before", fp.id, after.vias.len(), before.vias.len());
+    assert!(!after.vias.iter().any(|(_, p)| *p == at), "no via under the field");
+    assert!(after.vias.len() < before.vias.len());
+}
+
 /// The board `rel` with its zones filled by kicad-cli (`KI_TEST::FillZones`): `pcb drc --refill-zones --save-board` on a copy.
 fn refilled(cli: &Path, qa: &Path, rel: &str) -> String {
     let src = qa.join("pcbnew").join(rel);

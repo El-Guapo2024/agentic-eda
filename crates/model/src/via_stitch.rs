@@ -80,6 +80,10 @@ fn is_zero_u32(v: &u32) -> bool {
 /// The via a stitching makes copies of (`m_viaTemplate`, the generator's `(template (name "via") (via ..))`): its size and drill and the copper layers it spans, and the file's
 /// text of it, which is written back as it was (`tokens`; its size and drill replaced when they were edited). A new stitching's template is the one `PCB_VIA_STITCH`'s
 /// constructor makes, written as `format( PCB_TRACK )` writes a free via.
+///
+/// What Via Stitching Properties' Configure (`DIALOG_TRACK_VIA_PROPERTIES` on the template, `OnViaConfigureClicked`) set beyond the size, drill and layers -- the via type and
+/// what becomes of the copper on the layers it does not connect -- is `kind` and `annular`; left `None`, the template's text says (and a template read from a file has them
+/// `None`). Every via the stitching makes is a copy of the whole template (`m_viaTemplate->Clone()`): its type and every other token of its text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ViaTemplate {
@@ -92,11 +96,17 @@ pub struct ViaTemplate {
     /// The `(via ..)` form as the file wrote it, on one line; empty for one made here.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
+    /// `PCB_VIA::SetViaType` of the template (the dialog's Via type), when it was set here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<crate::via_extra::ViaKind>,
+    /// `PADSTACK::SetUnconnectedLayerMode` of the template (the dialog's Annular rings), when it was set here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annular: Option<crate::padstack::UnconnectedLayers>,
 }
 
 impl Default for ViaTemplate {
     fn default() -> Self {
-        ViaTemplate { size_nm: Nm::ZERO, drill_nm: Nm::ZERO, from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new() }
+        ViaTemplate { size_nm: Nm::ZERO, drill_nm: Nm::ZERO, from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new(), kind: None, annular: None }
     }
 }
 
