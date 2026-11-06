@@ -828,11 +828,20 @@ export interface StagedFieldChanges {
 export interface FieldsTableVariantView {
   variant?: string;
   variant_edits?: Array<{ variant: string; id: string; field: string; value: string }>;
+  /** The table's scope (`m_scope`): "all" (Entire Project), "sheet" (Current Sheet Only), "sheet_and_down" (Current Sheet and Down), "selection"; the sheet in view and
+   *  what is selected on it. */
+  scope?: "all" | "sheet" | "sheet_and_down" | "selection";
+  sheet_path?: readonly string[];
+  selection?: readonly string[];
 }
 
-/** The keys of `view` worth sending: nothing for the default variant with nothing staged in a variant. */
+/** The keys of `view` worth sending: nothing for the default variant with nothing staged in a variant, nothing for the whole project. */
 function variantKeys(view?: FieldsTableVariantView): FieldsTableVariantView {
-  return { ...(view?.variant ? { variant: view.variant } : {}), ...(view?.variant_edits && view.variant_edits.length > 0 ? { variant_edits: view.variant_edits } : {}) };
+  return {
+    ...(view?.variant ? { variant: view.variant } : {}),
+    ...(view?.variant_edits && view.variant_edits.length > 0 ? { variant_edits: view.variant_edits } : {}),
+    ...(view?.scope && view.scope !== "all" ? { scope: view.scope, sheet_path: view.sheet_path ?? [], selection: view.selection ?? [] } : {}),
+  };
 }
 
 /** POST /api/sch/fields_table: omit `spec` for the dialog's initial view; `preset` names one of KiCad's built-in views to apply to it first (`ApplyBomPreset`). */

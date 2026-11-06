@@ -2166,6 +2166,7 @@ export type Cmd =
   | { op: "set_annotation_settings"; settings: AnnotationSettings; subpart_first_id: number; subpart_id_separator: number }
   | { op: "set_field_name_templates"; fields: TemplateFieldName[] }
   | { op: "set_bom_presets"; bom_presets: string[]; bom_fmt_presets: string[] }
+  | { op: "set_bom_view"; save?: Record<string, unknown>; delete?: string; view?: Record<string, unknown> }
   | { op: "set_bus_aliases"; aliases: BusAliasDef[] }
   // The SPICE simulator's settings (`NGSPICE_SETTINGS`, the project's `schematic.ngspice`) and the workbook's text (crates/ops/src/simulator.rs).
   | { op: "set_simulator"; ngspice: { workbook_filename: string; fix_include_paths: boolean; model_mode: number } | null; workbook: string | null }
@@ -3743,6 +3744,9 @@ export interface FieldsTableReply {
   spec: FieldsTableSpec;
   /** The names of KiCad's built-in views (`BOM_PRESET::BuiltInPresets`), which a request can apply with `preset`. */
   presets?: string[];
+  /** The built-in views with their columns, and the project's own (`schematic.bom_presets`), so the box can show which one the view is (`syncBomPresetSelection`). */
+  built_in_presets?: Array<{ name: string; spec: FieldsTableSpec }>;
+  user_presets?: Array<{ name: string; spec: FieldsTableSpec }>;
   user_fields: string[];
   rows: FieldsTableRow[];
 }

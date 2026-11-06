@@ -1585,6 +1585,18 @@ pub enum Cmd {
         #[serde(default)]
         bom_fmt_presets: Vec<String>,
     },
+    /// The Symbol Fields Table's view presets (`DIALOG_SYMBOL_FIELDS_TABLE`, UI-LEFT S11): `save` a `BOM_PRESET` under its name ("Save preset...": a new one or one
+    /// of the project's replaced, "Overwrite existing preset?"), `delete` one of the project's ("Delete preset..."), and `view` the table's view as the project
+    /// keeps it (`savePresetsToSchematic`: `m_BomSettings`), in the `.kicad_pro`'s `schematic.bom_presets` / `bom_settings`. A built-in name is refused
+    /// ("Default presets cannot be modified.\nPlease use a different name."). One undo step; refused when nothing changes. See `sch_setup::set_bom_view`.
+    SetBomView {
+        #[serde(default)]
+        save: Option<serde_json::Value>,
+        #[serde(default)]
+        delete: Option<String>,
+        #[serde(default)]
+        view: Option<serde_json::Value>,
+    },
     /// Schematic Setup > Project > Bus Alias Definitions (`panel_setup_buses.cpp`): every alias of the project with its members. One undo step.
     SetBusAliases { aliases: Vec<eda_model::ir::BusAlias> },
     /// The SPICE simulator's settings and workbook (`crate::simulator`): `ngspice` is the `.kicad_pro`'s `schematic.ngspice`
@@ -2347,6 +2359,7 @@ impl Cmd {
             | Cmd::SetAnnotationSettings { .. }
             | Cmd::SetFieldNameTemplates { .. }
             | Cmd::SetBomPresets { .. }
+            | Cmd::SetBomView { .. }
             | Cmd::SetBusAliases { .. }
             | Cmd::SetSimulator { .. }
             | Cmd::AddLabel { .. }
@@ -2450,7 +2463,7 @@ impl Cmd {
             Cmd::SetErcSeverities { .. } | Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions | Cmd::SetConnectionGrid { .. } | Cmd::SetIntersheetRefs { .. } | Cmd::SetSimulator { .. } => false,
             // Schematic Setup's sizes, field templates and BOM presets are how the sheet is drawn and listed, not what it connects (a bus alias does connect,
             // and the unit notation names the nets of a symbol's units: those two are traced again).
-            Cmd::SetSchFormatting { .. } | Cmd::SetFieldNameTemplates { .. } | Cmd::SetBomPresets { .. } => false,
+            Cmd::SetSchFormatting { .. } | Cmd::SetFieldNameTemplates { .. } | Cmd::SetBomPresets { .. } | Cmd::SetBomView { .. } => false,
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
@@ -2691,6 +2704,7 @@ impl Cmd {
             Cmd::SetAnnotationSettings { .. } => vec!["annotation"],
             Cmd::SetFieldNameTemplates { .. } => vec!["field_name_templates"],
             Cmd::SetBomPresets { .. } => vec!["bom_presets"],
+            Cmd::SetBomView { .. } => vec!["bom_settings"],
             Cmd::SetBusAliases { .. } => vec!["bus_aliases"],
             Cmd::SetSimulator { .. } => vec!["simulator"],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
@@ -3152,6 +3166,7 @@ impl<'a> Board<'a> {
             Cmd::SetAnnotationSettings { settings, subpart_first_id, subpart_id_separator } => sch_setup::set_annotation(&mut self.design, settings, *subpart_first_id, *subpart_id_separator),
             Cmd::SetFieldNameTemplates { fields } => sch_setup::set_field_name_templates(&mut self.design, fields),
             Cmd::SetBomPresets { bom_presets, bom_fmt_presets } => sch_setup::set_bom_presets(&mut self.design, bom_presets, bom_fmt_presets),
+            Cmd::SetBomView { save, delete, view } => sch_setup::set_bom_view(&mut self.design, save.as_ref(), delete.as_deref(), view.as_ref()),
             Cmd::SetBusAliases { aliases } => sch_setup::set_bus_aliases(&mut self.design, aliases),
             Cmd::SetSimulator { ngspice, workbook } => simulator::set_simulator(&mut self.design, ngspice.as_ref(), workbook.as_deref()),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
