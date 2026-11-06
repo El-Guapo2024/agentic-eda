@@ -748,7 +748,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     three.scene.add(nextGroup);
     three.boardGroup = nextGroup;
     syncActiveGroupRef.current();
-    viewer3dProbe.update({ scene: countByName(nextGroup), padShapes: padShapeCounts(nextGroup), bodyHoles: bodyHoleCount(nextGroup), bodyFromServer: !!board3d });
+    viewer3dProbe.update({ scene: countByName(nextGroup), padShapes: padShapeCounts(nextGroup), bodyHoles: bodyHoleCount(nextGroup), bodyFromServer: !!board3d, copperColors: { ...(nextGroup.userData.copperColors ?? {}) } });
 
     const bounds = board ? boardOutlineBounds(board) : null;
     const spanMm = bounds ? Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 1e-3) : EMPTY_BOARD_SPAN_MM;

@@ -245,11 +245,12 @@ const rgbOf = (c: Rgba): Rgb => ({ r: c.r, g: c.g, b: c.b });
  */
 function copperMaterialOf(layer: string): THREE.MeshPhongMaterial {
   const base = rgbOf(paletteRgba("copper_top"));
-  const own = layer === "F.Cu" ? paletteRgba("copper_top") : layer === "B.Cu" ? paletteRgba("copper_bottom") : (innerCopperColor(layer) ?? paletteRgba("copper_top"));
+  // `if( m_boardAdapter.GetUseBoardEditorCopperLayerColors() && IsCopperLayer( aLayerID ) )`: the PCB editor's colour of the layer, whatever the swatches say.
+  const own = innerCopperColor(layer) ?? (layer === "B.Cu" ? paletteRgba("copper_bottom") : paletteRgba("copper_top"));
   return kicadMaterial(copperLayerMaterial3d(base, rgbOf(own)));
 }
 
-/** The inner copper layers' own colours for the build in progress: the PCB editor's with "Use PCB editor copper colors", else none (the copper colour). */
+/** Each copper layer's own colour for the build in progress: the PCB editor's with "Use PCB editor copper colors", else none (the copper rows' colour). */
 let innerCopperColor: (layer: string) => Rgba | undefined = () => undefined;
 
 /** `m_materials.m_Paste` of the paste colour (`setLayerMaterial`'s `F_Paste` / `B_Paste`). */
@@ -1053,7 +1054,7 @@ export interface BuildBoardOptions {
   board3d?: Board3d | null;
   /** `render.opengl_copper_thickness` ("Show copper and tech layers thickness", off by default): copper and paste with their thickness, else flat at their outer face. */
   copperThickness?: boolean;
-  /** The inner copper layers: whether the PCB editor shows each (`Is3dLayerEnabled`'s default branch, `m_board->IsLayerVisible( aLayer )`) and its own colour (the PCB editor's, with "Use PCB editor copper colors"). */
+  /** The copper layers: whether the PCB editor shows an inner one (`Is3dLayerEnabled`'s default branch, `m_board->IsLayerVisible( aLayer )`) and each one's own colour (the PCB editor's, with "Use PCB editor copper colors"). */
   innerCopper?: { visible: (layer: string) => boolean; color: (layer: string) => Rgba | undefined };
 }
 
@@ -1308,6 +1309,8 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
     }
   }
 
+  // For the test hook: the colour each copper layer drawn has (its material's diffuse).
+  group.userData.copperColors = Object.fromEntries([...copperMats].map(([layer, m]) => [layer, `#${(m as THREE.MeshPhongMaterial).color.getHexString()}`]));
   return group;
 }
 

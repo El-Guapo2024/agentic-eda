@@ -42,6 +42,8 @@ export interface Viewer3dSnapshot {
   padShapes: Record<string, { meshes: number; corners: number }>;
   /** The 3D Navigator is drawn. */
   navigator: boolean;
+  /** The copper layers drawn and each one's colour (`#rrggbb`, its material's diffuse): an inner layer only while the body does not hide it. */
+  copperColors: Record<string, string>;
 }
 
 const empty = (): Viewer3dSnapshot => ({
@@ -56,6 +58,7 @@ const empty = (): Viewer3dSnapshot => ({
   bodyFromServer: false,
   padShapes: {},
   navigator: false,
+  copperColors: {},
   hovered: null,
   cameraMoving: false,
   scene: {},

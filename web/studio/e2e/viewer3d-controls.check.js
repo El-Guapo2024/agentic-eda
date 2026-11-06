@@ -12,6 +12,7 @@
 //   6  viewports: Save viewport... keeps the camera in appearance.json, choosing it brings the camera back, Delete viewport...
 //   7  the selection: a click on a footprint in 3D selects it (the PCB editor's selection) and it is drawn in the selection colour
 //   8  Preferences > 3D Viewer > General: the rotation increment a Rotate command turns by
+//   9  inner copper: on a four-layer stackup the inner layers are drawn only with the body hidden, each in its PCB editor colour with Use PCB editor copper colors
 //
 // Run it in the page of a served board -- `page.evaluate( src )` in Playwright (web/studio/e2e/run-check.mjs) -- on a COPY: it saves and deletes a preset and a viewport.
 // It answers through `window.__viewer3dControlsCheck`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
@@ -210,6 +211,37 @@
     document.querySelector('[aria-label="Rotation increment"]').dispatchEvent(new Event("input", { bubbles: true }));
     dialogButton("OK").click();
     await settle();
+    // 9 ---------------------------------------------------------------------------------------------------------------------------- inner copper
+    const layer = (name, kind, t, extra = {}) => ({ name, kind, material: kind === "copper" ? null : "FR4", thickness_mm: t, ...extra });
+    const four = { copper_layers: 4, stackup: { layers: [
+      { name: "F.SilkS", kind: "Top Silk Screen", material: null, thickness_mm: null }, { name: "F.Paste", kind: "Top Solder Paste", material: null, thickness_mm: null },
+      { name: "F.Mask", kind: "Top Solder Mask", material: null, thickness_mm: 0.01 }, layer("F.Cu", "copper", 0.035), layer("dielectric 1", "prepreg", 0.2, { epsilon_r: 4.5, loss_tangent: 0.02 }),
+      layer("In1.Cu", "copper", 0.035), layer("dielectric 2", "core", 1.065, { epsilon_r: 4.5, loss_tangent: 0.02 }), layer("In2.Cu", "copper", 0.035),
+      layer("dielectric 3", "prepreg", 0.2, { epsilon_r: 4.5, loss_tangent: 0.02 }), layer("B.Cu", "copper", 0.035),
+      { name: "B.Mask", kind: "Bottom Solder Mask", material: null, thickness_mm: 0.01 }, { name: "B.Paste", kind: "Bottom Solder Paste", material: null, thickness_mm: null },
+      { name: "B.SilkS", kind: "Bottom Silk Screen", material: null, thickness_mm: null },
+    ], copper_finish: "None", dielectric_constraints: false, edge_connector: 0, edge_plating: false } };
+    const reply = await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd: { op: "set_stackup", settings: four }, strict: false }) }).then((r) => r.json());
+    // The board's new layers come with the next state poll.
+    await waitFor(() => fetch("/api/state").then((r) => r.json()).then((st) => st.layers.length === 4) && true, 100);
+    await sleep(2000);
+    await settle();
+    const withBody = Object.keys(view().copperColors);
+    ok("four copper layers: with the opaque body shown, the inner ones are not drawn", reply.ok && withBody.includes("F.Cu") && !withBody.includes("In1.Cu"), [reply.message ?? "", withBody.join(",")]);
+    row("board").click();
+    await settle();
+    const without = Object.keys(view().copperColors);
+    ok("with the body hidden the inner copper is drawn (Redraw's opacity_min)", without.includes("In1.Cu") && without.includes("In2.Cu"), [without.join(",")]);
+    const editorBox = [...document.querySelectorAll("label.filter-row")].find((l) => /Use PCB editor copper colors/.test(l.textContent))?.querySelector("input");
+    editorBox.click();
+    await settle();
+    const cc = view().copperColors;
+    ok("with Use PCB editor copper colors each copper layer has its own colour", cc["In1.Cu"] === "#7fc87f" && cc["F.Cu"] === "#c83434" && cc["In1.Cu"] !== cc["In2.Cu"], [JSON.stringify(cc)]);
+    editorBox.click();
+    row("board").click();
+    await window.__eda.run("common.Interactive.undo");
+    await settle();
+
     const errors = window.__eda.errors().filter((e) => !/404|Failed to load resource/.test(e.message));
     ok("no errors in the page", errors.length === 0, errors.map((e) => e.message.slice(0, 200)));
   } catch (e) {
