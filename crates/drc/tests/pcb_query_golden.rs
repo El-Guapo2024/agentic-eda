@@ -6,8 +6,9 @@
 use serde_json::Value;
 
 /// Where the answers differ on purpose: `memberOfSheet` is ported in Rust (a footprint with no sheet path is on the root sheet, `/`), and the TypeScript
-/// copy said false for every sheet.
-const KNOWN: &[&str] = &["A.memberOfSheet('/')"];
+/// copy said false for every sheet; `A.Net` is the net's code in Rust, as KiCad's (`PROPERTY_ENUM<BOARD_CONNECTED_ITEM, int>`), so a name matches nothing,
+/// and the TypeScript copy compared the name (UI-LEFT B6).
+const KNOWN: &[&str] = &["A.memberOfSheet('/')", "A.Net == 'GND'", "A.Layer != 'F.Cu' && A.Locked == false && A.Net == 'GND' && A.Type == 'Track' && A.Width == 0.2mm"];
 
 #[test]
 fn the_backend_answers_every_golden_query_as_the_typescript_copy_did() {

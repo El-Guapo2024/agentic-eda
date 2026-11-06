@@ -143,3 +143,102 @@ fn slow_kicad_cli_plots_a_text_boxs_and_a_power_symbols_variables_as_the_studio_
     assert!(a.len() > 2_000, "a real plot: {} bytes", a.len());
     assert_eq!(svg_body(&a), svg_body(&b), "the plot of the sheet with variables is the plot of the sheet with what the studio shows written out");
 }
+
+/// UI-LEFT B6: Find by Properties' Query evaluates the geometry functions and `fromTo` on the board (`pcbexpr_functions.cpp`: `intersectsCourtyardFunc`,
+/// `intersectsAreaFunc`, `enclosedByAreaFunc`, `fromToFunc` over `FROM_TO_CACHE`), `A.Net` is the net's code, and a microvia is one. U1 and U2 (two pads each, GND
+/// on their pads 1) joined by a GND track that goes round below them, a zone over U2, a via.
+#[test]
+fn find_by_properties_queries_the_boards_shapes_paths_and_net_codes() {
+    let dir = scratch("u5_b6_query");
+    crate::board::tests::setup(&dir);
+    let p = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(4.0, 5.0), p(4.0, 8.0), p(14.0, 8.0), p(14.0, 5.0)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(6.0, 5.0), p(6.0, 2.0)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![p(12.0, 3.0), p(18.0, 3.0), p(18.0, 7.0), p(12.0, 7.0)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddVia { net: "VCC".into(), x: mm(6.0), y: mm(2.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let rt = design.routing.as_ref().unwrap();
+    let (gnd, vcc) = (rt.tracks.iter().find(|t| t.net == "GND").unwrap().id.clone(), rt.tracks.iter().find(|t| t.net == "VCC").unwrap().id.clone());
+    let zone = rt.zones[0].id.clone();
+    let via = rt.vias[0].id.clone();
+    let item = |id: &str, class: &str, type_name: &str, net: &str, fp: Option<&str>| {
+        let mut v = json!({ "id": id, "class": class, "type_name": type_name, "layers": ["F.Cu"], "net": net });
+        if let Some(r) = fp {
+            v["footprint"] = json!({ "reference": r, "fpid": "2PAD" });
+        }
+        v
+    };
+    let mut via_item = item(&via, "PCB_VIA", "Via", "VCC", None);
+    via_item["layers"] = json!(["F.Cu", "B.Cu"]);
+    via_item["via_type"] = json!("Through");
+    let items = json!([
+        item("U1", "FOOTPRINT", "Footprint", "", Some("U1")),
+        item("U2", "FOOTPRINT", "Footprint", "", Some("U2")),
+        item("U1.1", "PAD", "Pad", "GND", Some("U1")),
+        item("U1.2", "PAD", "Pad", "VCC", Some("U1")),
+        item("U2.1", "PAD", "Pad", "GND", Some("U2")),
+        item(&gnd, "PCB_TRACK", "Track", "GND", None),
+        item(&vcc, "PCB_TRACK", "Track", "VCC", None),
+        via_item,
+    ]);
+    let ids = |expression: &str| {
+        let body = json!({ "expression": expression, "items": items, "env": { "layer_entries": [["F.Cu", "F.Cu"], ["B.Cu", "B.Cu"]], "nets": ["GND", "VCC"] } });
+        let r = crate::inspect_api::pcb_query(&dir, body.to_string().as_bytes());
+        assert_eq!(r["ok"], true, "{expression}: {r}");
+        r["ids"].as_array().unwrap().iter().filter_map(Value::as_str).map(String::from).collect::<Vec<_>>()
+    };
+    // U1's courtyard (2 x 1 mm half extents round (5, 5)): its own pads and the start of both tracks; not U2's pad
+    let in_u1 = ids("A.intersectsCourtyard('U1')");
+    assert!(in_u1.contains(&"U1.1".to_string()) && in_u1.contains(&"U1.2".to_string()) && in_u1.contains(&gnd) && !in_u1.contains(&"U2.1".to_string()), "{in_u1:?}");
+    // the zone over U2: U2's pad 1 and the end of the GND track; U2 by its courtyard
+    let in_zone = ids(&format!("A.intersectsArea('{zone}')"));
+    assert!(in_zone.contains(&"U2.1".to_string()) && in_zone.contains(&gnd) && !in_zone.contains(&"U1.1".to_string()), "{in_zone:?}");
+    assert!(ids(&format!("A.enclosedByArea('{zone}')")).contains(&"U2.1".to_string()));
+    assert!(!ids(&format!("A.enclosedByArea('{zone}')")).contains(&gnd), "the track leaves the zone");
+    // the copper path from U1's pad 1 to U2's pad 1: both pads and the track, not the VCC items
+    let path = ids("A.fromTo('U1-1', 'U2-1')");
+    assert_eq!(path, vec!["U1.1".to_string(), "U2.1".to_string(), gnd.clone()], "{path:?}");
+    assert!(ids("A.fromTo('U1-2', 'U2-2')").is_empty(), "VCC is not routed to U2");
+    // `A.Net` is the code: GND 1, VCC 2 (the writer's numbering, by name); a name matches nothing, as in KiCad
+    assert_eq!(ids("A.Net == 1"), vec!["U1.1".to_string(), "U2.1".to_string(), gnd.clone()]);
+    assert!(ids("A.Net == 'GND'").is_empty());
+    assert_eq!(ids("A.NetName == 'VCC' && A.Type == 'Via'"), vec![via.clone()]);
+    // a microvia is one to the language, whatever the request said its span made it
+    assert!(ids("A.isMicroVia()").is_empty());
+    let micro: Cmd = serde_json::from_value(json!({ "op": "set_via_layers", "ids": [via], "kind": "micro" })).unwrap();
+    step(&dir, micro, false, "test").expect("the via becomes a microvia");
+    assert_eq!(ids("A.isMicroVia()"), vec![via.clone()], "the board's via kind");
+}
+
+/// UI-LEFT B6: Clearance and Constraints Resolution see the tuning profiles' implicit rules (KiCad 25ec2335 `loadImplicitRules`' `addTuningSingleRule`), read the
+/// rules text with its text variables expanded (`DRC_ENGINE::loadRules`) and evaluate `fromTo` on the board's paths.
+#[test]
+fn constraints_resolution_sees_tuning_profiles_variables_and_from_to() {
+    use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile, TuningProfiles};
+    let dir = scratch("u5_b6_inspect");
+    crate::board::tests::setup(&dir);
+    let p = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(4.0, 5.0), p(4.0, 8.0), p(14.0, 8.0), p(14.0, 5.0)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(6.0, 5.0), p(6.0, 2.0)] }, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let rt = design.routing.as_ref().unwrap();
+    let (gnd, vcc) = (rt.tracks.iter().find(|t| t.net == "GND").unwrap().id.clone(), rt.tracks.iter().find(|t| t.net == "VCC").unwrap().id.clone());
+    let entry = ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: mm(0.35), diff_pair_gap_nm: eda_model::units::Nm::ZERO, delay_as_per_mm: 0 };
+    let profile = TuningProfile { name: "50R".into(), profile_type: ProfileType::Single, target_impedance: 50.0, enable_time_domain_tuning: false, layer_entries: vec![entry], via_propagation_delay_as: 0, via_overrides: vec![] };
+    let settings = TuningProfiles { profiles: vec![profile], class_profiles: [("Default".to_string(), "50R".to_string())].into_iter().collect() };
+    step(&dir, Cmd::SetTuningProfiles { settings }, false, "test").unwrap();
+    let constraints = |id: &str| crate::inspect_api::constraints(&dir, json!({ "item": id }).to_string().as_bytes()).to_string();
+    let report = constraints(&gnd);
+    assert!(report.contains("tuning profile '50R'"), "the profile's width rule: {report}");
+    // a custom rule with a project variable and one with `fromTo`
+    step(&dir, Cmd::SetTextVariables { variables: [("HV_GAP".to_string(), "0.8mm".to_string())].into_iter().collect() }, false, "test").unwrap();
+    let rules = "(version 1)\n(rule gap_by_variable\n  (constraint clearance (min ${HV_GAP}))\n  (condition \"A.NetName == 'VCC'\"))\n(rule path_width\n  (constraint track_width (min 0.11mm) (opt 0.12mm) (max 0.13mm))\n  (condition \"A.fromTo('U1-1', 'U2-1')\"))\n";
+    step(&dir, Cmd::SetCustomRules { text: rules.into() }, false, "test").unwrap();
+    let clearance = crate::inspect_api::clearance(&dir, json!({ "a": vcc, "b": gnd }).to_string().as_bytes()).to_string();
+    assert!(clearance.contains("gap_by_variable") && clearance.contains("0.8000 mm") || clearance.contains("0.8 mm"), "the variable's value is the rule's: {clearance}");
+    assert!(!clearance.contains("Unresolved text variable"), "{clearance}");
+    let on_path = constraints(&gnd);
+    assert!(on_path.contains("path_width"), "the GND track is on the path from U1-1 to U2-1: {on_path}");
+    let off_path = constraints(&vcc);
+    assert!(!off_path.contains("Checking rule 'path_width'") || off_path.contains("Rule ignored") || !off_path.contains("0.1200 mm"), "{off_path}");
+}

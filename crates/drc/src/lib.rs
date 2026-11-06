@@ -19,6 +19,7 @@ pub mod dru;
 pub mod hatch;
 pub mod inspect;
 pub mod fp_art;
+pub mod from_to;
 pub mod kimath;
 pub mod outline;
 pub mod pad_shape;
