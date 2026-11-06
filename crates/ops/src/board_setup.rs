@@ -14,6 +14,7 @@ use eda_model::ir::Design;
 use eda_model::layers::LayerSetup;
 use eda_model::rules::{self, Constraints, MaskPaste, NetClassSettings, RulesOverlay, StackupSettings, TextGraphicsDefaults};
 use eda_model::setup_pages::{self, FormattingSettings, HatchOffsets, TuningPatterns, TuningProfiles};
+use eda_model::via_extra::ViaKind;
 use eda_model::{CheckResult, ConstraintModel};
 
 type Done = Result<(), Vec<CheckResult>>;
@@ -116,40 +117,115 @@ pub(crate) fn set_tuning_profiles(design: &mut Design, model: &ConstraintModel, 
     Ok(())
 }
 
-/// `Cmd::SetStackup`: the copper layer count and the layers' thickness.
+/// `Cmd::SetStackup`: the copper layer count and the layers, with their sublayers (Board Stackup > Physical Stackup, `PANEL_SETUP_BOARD_STACKUP::TransferDataFromWindow`).
 ///
-/// Fewer copper layers than the board has is refused while anything is still on a layer that would go
-/// (KiCad asks, then deletes those items; an edit that deletes copper is not one Undo can be trusted to
-/// bring back cleanly from a settings dialog, so it is the user's decision to move them first).
-pub(crate) fn set_stackup(design: &mut Design, model: &ConstraintModel, settings: &StackupSettings) -> Done {
+/// Fewer copper layers than the board has, while something is still on a layer that would go ([`copper_layer_items`], `BOARD::HasItemsOnLayer`), is refused with the
+/// layer's name and how many -- unless `delete_items` says to delete them, which is what KiCad does once its question ("Items have been found on removed layers. This
+/// operation will delete all items from removed layers and cannot be undone.", `PANEL_SETUP_LAYERS::TransferDataFromWindow`) is answered OK: every layer that goes is
+/// emptied as `BOARD::RemoveAllItemsOnLayer` empties it ([`remove_all_items_on_layer`]), in the same step as the new stackup. The page asks KiCad's question first and
+/// sends the flag; an agent's call without it cannot delete by accident. Unlike KiCad, which clears its undo list after deleting them (`ClearUndoRedoList`), the step
+/// is one Undo like any other, which brings the items back.
+pub(crate) fn set_stackup(design: &mut Design, model: &ConstraintModel, settings: &StackupSettings, delete_items: bool) -> Done {
     settings.validate().map_err(|why| vec![CheckResult::fail("ops_bad_stackup", "stackup", why)])?;
     let keep = rules::copper_layer_names(settings.copper_layers as usize);
-    let gone: Vec<&String> = model.board.layers.iter().filter(|l| !keep.contains(l)).collect();
-    if !gone.is_empty() {
-        let mut used: BTreeMap<&str, usize> = BTreeMap::new();
-        if let Some(rt) = &design.routing {
-            for t in &rt.tracks {
-                *used.entry(t.layer.as_str()).or_default() += 1;
-            }
-            for z in &rt.zones {
-                for layer in z.layer_set() {
-                    *used.entry(layer).or_default() += 1;
-                }
-            }
-            for v in &rt.vias {
-                for l in [&v.from_layer, &v.to_layer] {
-                    *used.entry(l.as_str()).or_default() += 1;
-                }
-            }
+    // `getRemovedLayersWithItems`: the layers of the board the new count has not got that still have something on them, in the board's order
+    let removed: Vec<(String, usize)> = model.board.layers.iter().filter(|l| !keep.contains(l)).map(|l| (l.clone(), copper_layer_items(design, l))).filter(|(_, n)| *n > 0).collect();
+    if let Some((layer, n)) = removed.first() {
+        if !delete_items {
+            return Err(vec![CheckResult::fail(
+                "ops_bad_stackup",
+                layer.as_str(),
+                format!("{n} item(s) are on {layer}, which a {}-layer board does not have; move or delete them first (or set delete_items_on_removed_layers to delete them, as KiCad does once asked)", settings.copper_layers),
+            )]);
         }
-        for l in &gone {
-            if let Some(n) = used.get(l.as_str()) {
-                return Err(vec![CheckResult::fail("ops_bad_stackup", l.as_str(), format!("{n} routed item(s) are on {l}, which a {}-layer board does not have; move or delete them first", settings.copper_layers))]);
-            }
+    }
+    if delete_items {
+        for (layer, _) in &removed {
+            remove_all_items_on_layer(design, layer);
         }
     }
     overlay(design).stackup = Some(settings.clone());
     Ok(())
+}
+
+/// The type of the board's via `id` (`PCB_VIA::GetViaType`): a through via unless the board says otherwise ([`eda_model::via_extra::ViaExtra::kind`]).
+fn via_kind(design: &Design, id: &str) -> ViaKind {
+    design.drawings.as_ref().and_then(|d| d.via_extras.iter().find(|e| e.id == id)).map_or(ViaKind::Through, |e| e.kind)
+}
+
+/// `BOARD::HasItemsOnLayer` for a copper layer, as a count: the board-level items on `layer` (`PCB_LAYER_COLLECTOR` over `GENERAL_COLLECTOR::BoardLevelItems`,
+/// footprints and what they own left out) -- the tracks, the zones and rule areas whose layers include it, the blind, buried and micro vias that start or end on it ("Vias
+/// are on multiple adjacent layers, but only the top and the bottom layers are stored": a through via never counts), and the shapes, texts, dimensions, text boxes,
+/// reference images, points, barcodes, tables and tuning patterns on it.
+pub(crate) fn copper_layer_items(design: &Design, layer: &str) -> usize {
+    let mut n = 0;
+    if let Some(rt) = &design.routing {
+        n += rt.tracks.iter().filter(|t| t.layer == layer).count();
+        n += rt.zones.iter().filter(|z| z.is_on_layer(layer)).count();
+        n += rt.vias.iter().filter(|v| via_kind(design, &v.id) != ViaKind::Through && (v.from_layer == layer || v.to_layer == layer)).count();
+    }
+    if let Some(d) = &design.drawings {
+        n += d.shapes.iter().filter(|s| s.layer() == layer).count();
+        n += d.texts.iter().filter(|t| t.layer == layer).count();
+        n += d.dimensions.iter().filter(|x| x.layer == layer).count();
+        n += d.board_items.text_boxes.iter().filter(|x| x.layer == layer).count();
+        n += d.board_items.images.iter().filter(|x| x.layer == layer).count();
+        n += d.board_items.points.iter().filter(|x| x.layer == layer).count();
+        n += d.barcodes.iter().filter(|x| x.layer == layer).count();
+        n += d.tables.iter().filter(|x| x.layer == layer).count();
+        n += d.tuning_patterns.iter().filter(|x| x.layer == layer).count();
+    }
+    n
+}
+
+/// `BOARD::RemoveAllItemsOnLayer` for a copper layer: every item [`copper_layer_items`] counts goes, except that a zone or rule area on other layers too only loses
+/// this one (`layers.reset( aLayer ); if( layers.any() ) item->SetLayerSet( layers ) else { Remove( item ); delete item; }`), and a through via stays ("blind/buried
+/// vias with a top or bottom layer on a removed layer are removed"). A through via the model has with an end on the layer (one `AddVia` made between an outer and an
+/// inner layer, which a file writes as a through via) is kept with its ends on the outer layers, which is what `PCB_VIA::LayerPair` says a through via spans. The
+/// overlays of what goes (a text's extras, a shape's style, a drill chart's table) go with it; a group or a tuning pattern left without members is tidied by
+/// [`crate::Board::apply`].
+pub(crate) fn remove_all_items_on_layer(design: &mut Design, layer: &str) {
+    let gone_vias: Vec<String> = design.routing.iter().flat_map(|rt| rt.vias.iter()).filter(|v| via_kind(design, &v.id) != ViaKind::Through && (v.from_layer == layer || v.to_layer == layer)).map(|v| v.id.clone()).collect();
+    if let Some(rt) = design.routing.as_mut() {
+        rt.tracks.retain(|t| t.layer != layer);
+        rt.vias.retain(|v| !gone_vias.contains(&v.id));
+        for v in rt.vias.iter_mut().filter(|v| v.from_layer == layer || v.to_layer == layer) {
+            v.from_layer = "F.Cu".into();
+            v.to_layer = "B.Cu".into();
+        }
+        rt.zones.retain_mut(|z| {
+            if !z.is_on_layer(layer) {
+                return true;
+            }
+            let rest: Vec<String> = z.layer_set().into_iter().filter(|l| *l != layer).map(String::from).collect();
+            if rest.is_empty() {
+                return false;
+            }
+            z.set_layer_set(&rest);
+            true
+        });
+    }
+    if let Some(d) = design.drawings.as_mut() {
+        let shapes: Vec<String> = d.shapes.iter().filter(|s| s.layer() == layer).map(|s| s.id().to_string()).collect();
+        d.shapes.retain(|s| s.layer() != layer);
+        for id in &shapes {
+            d.board_items.forget_shape(id);
+        }
+        let texts: Vec<String> = d.texts.iter().filter(|t| t.layer == layer).map(|t| t.id.clone()).collect();
+        d.texts.retain(|t| t.layer != layer);
+        d.text_extras.retain(|x| !texts.contains(&x.id));
+        d.copper_texts.retain(|t| t.layer != layer);
+        d.dimensions.retain(|x| x.layer != layer);
+        d.board_items.text_boxes.retain(|x| x.layer != layer);
+        d.board_items.images.retain(|x| x.layer != layer);
+        d.board_items.points.retain(|x| x.layer != layer);
+        d.barcodes.retain(|x| x.layer != layer);
+        let tables: Vec<String> = d.tables.iter().filter(|t| t.layer == layer).map(|t| t.id.clone()).collect();
+        d.tables.retain(|x| x.layer != layer);
+        d.board_items.drill_charts.retain(|c| !tables.contains(&c.table_id));
+        d.tuning_patterns.retain(|x| x.layer != layer);
+        d.via_extras.retain(|e| !gone_vias.contains(&e.id));
+    }
 }
 
 /// `Cmd::SetRuleSeverities`: DRC settings key -> `error` | `warning` | `ignore`, for any of the checks Violation

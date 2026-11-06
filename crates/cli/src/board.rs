@@ -1836,7 +1836,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetConstraints { .. } => "board-setup constraints".to_string(),
         Cmd::SetMaskPaste { .. } => "board-setup mask-paste".to_string(),
         Cmd::SetTextGraphicsDefaults { .. } => "board-setup text-graphics".to_string(),
-        Cmd::SetStackup { settings } => format!("board-setup stackup --layers {}", settings.copper_layers),
+        Cmd::SetStackup { settings, .. } => format!("board-setup stackup --layers {}", settings.copper_layers),
         Cmd::SetRuleSeverities { .. } => "board-setup severities".to_string(),
         Cmd::SetCustomRules { .. } => "board-setup custom-rules".to_string(),
         Cmd::EditDrcRule { action, name, rule, .. } => format!("drc-rule-editor {} {:?}", serde_json::to_value(action).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(), rule.as_ref().map_or(name.as_str(), |r| r.name.as_str())),

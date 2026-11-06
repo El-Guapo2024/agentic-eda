@@ -656,8 +656,13 @@ pub enum Cmd {
     SetMaskPaste { settings: MaskPaste },
     /// Text & Graphics > Defaults.
     SetTextGraphicsDefaults { settings: TextGraphicsDefaults },
-    /// Board Stackup > Physical Stackup: the copper layer count and the layers' thickness.
-    SetStackup { settings: StackupSettings },
+    /// Board Stackup > Physical Stackup: the copper layer count and the layers, with a dielectric's sublayers. Fewer copper layers while items are still on a layer that
+    /// goes is refused, unless `delete_items_on_removed_layers` says to delete them as KiCad does once asked (`board_setup::set_stackup`). Additive: absent is `false`.
+    SetStackup {
+        settings: StackupSettings,
+        #[serde(default)]
+        delete_items_on_removed_layers: bool,
+    },
     /// Design Rules > Violation Severity: DRC settings key -> `error` | `warning` | `ignore`.
     SetRuleSeverities { severities: BTreeMap<String, String> },
     /// Design Rules > Custom Rules: the text of the board's `.kicad_dru`.
@@ -3079,7 +3084,7 @@ impl<'a> Board<'a> {
             Cmd::SetConstraints { constraints } => board_setup::set_constraints(&mut self.design, constraints),
             Cmd::SetMaskPaste { settings } => board_setup::set_mask_paste(&mut self.design, settings),
             Cmd::SetTextGraphicsDefaults { settings } => board_setup::set_text_graphics(&mut self.design, settings),
-            Cmd::SetStackup { settings } => board_setup::set_stackup(&mut self.design, self.model, settings),
+            Cmd::SetStackup { settings, delete_items_on_removed_layers } => board_setup::set_stackup(&mut self.design, self.model, settings, *delete_items_on_removed_layers),
             Cmd::SetRuleSeverities { severities } => board_setup::set_severities(&mut self.design, severities),
             Cmd::AddDrcExclusions { exclusions } => review::add_drc_exclusions(&mut self.design, exclusions),
             Cmd::DeleteDrcExclusions { exclusions } => review::delete_drc_exclusions(&mut self.design, exclusions),

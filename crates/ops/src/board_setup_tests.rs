@@ -144,6 +144,22 @@ fn custom_rules_text_is_kept_as_written() {
     assert!(b.apply(&Cmd::SetCustomRules { text: "x".repeat(board_setup::MAX_CUSTOM_RULES_BYTES + 1) }).is_err());
 }
 
+fn set_stackup(settings: &StackupSettings, delete: bool) -> Cmd {
+    Cmd::SetStackup { settings: settings.clone(), delete_items_on_removed_layers: delete }
+}
+
+fn track(id: &str, layer: &str) -> Track {
+    Track { id: id.into(), net: "GND".into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }
+}
+
+fn via(id: &str, from: &str, to: &str) -> Via {
+    Via { id: id.into(), net: "GND".into(), at: Point { x: mm(2.0), y: mm(2.0) }, drill: mm(0.3), diameter: mm(0.6), from_layer: from.into(), to_layer: to.into() }
+}
+
+fn routing(tracks: Vec<Track>, vias: Vec<Via>, zones: Vec<Zone>) -> RoutingSection {
+    RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }
+}
+
 #[test]
 fn a_stackup_edit_changes_the_layers_and_the_thickness_but_not_while_copper_would_be_cut_off() {
     let base = model();
@@ -151,7 +167,7 @@ fn a_stackup_edit_changes_the_layers_and_the_thickness_but_not_while_copper_woul
     let mut four = StackupSettings::new(4, mm(1.6));
     four.stackup.layers.iter_mut().find(|l| l.name == "dielectric 1").unwrap().thickness_mm = Some(0.2);
     let mut b = Board::new(d.clone(), &base, mm(0.1), mm(0.3));
-    b.apply(&Cmd::SetStackup { settings: four.clone() }).unwrap();
+    b.apply(&set_stackup(&four, false)).unwrap();
     let m = effective(&b, &base);
     assert_eq!(m.board.layers, copper_layer_names(4));
     assert_eq!(m.board.board_thickness_nm, rules::stackup_thickness_nm(&four.stackup));
@@ -160,22 +176,103 @@ fn a_stackup_edit_changes_the_layers_and_the_thickness_but_not_while_copper_woul
     // Back to two layers is fine on an empty board but refused with a track on In1.Cu.
     let on_four = ConstraintModel { board: m.board.clone(), ..base.clone() };
     let two = StackupSettings::new(2, mm(1.6));
-    d.routing = Some(RoutingSection {
-        tracks: vec![Track { id: "t1".into(), net: "GND".into(), pins: vec![], layer: "In1.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }],
-        vias: vec![],
-        zones: vec![],
-        track_width_presets: vec![],
-        via_presets: vec![],
-        diff_pair_presets: vec![],
-        teardrop_settings: Default::default(),
-    });
+    d.routing = Some(routing(vec![track("t1", "In1.Cu")], vec![], vec![]));
     let mut routed = Board::new(d, &on_four, mm(0.1), mm(0.3));
-    let e = routed.apply(&Cmd::SetStackup { settings: two.clone() }).unwrap_err();
+    let e = routed.apply(&set_stackup(&two, false)).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_stackup");
     assert_eq!(e[0].location.as_deref(), Some("In1.Cu"));
-    assert!(Board::new(design(), &on_four, mm(0.1), mm(0.3)).apply(&Cmd::SetStackup { settings: two }).is_ok(), "nothing on the inner layers: they can go");
+    assert!(e[0].hint.as_deref().unwrap().contains("1 item(s) are on In1.Cu"), "{:?}", e[0].hint);
+    assert_eq!(routed.design().routing.as_ref().unwrap().tracks.len(), 1, "refused: nothing is deleted");
+    assert!(Board::new(design(), &on_four, mm(0.1), mm(0.3)).apply(&set_stackup(&two, false)).is_ok(), "nothing on the inner layers: they can go");
 
-    assert!(b.apply(&Cmd::SetStackup { settings: StackupSettings { copper_layers: 3, ..four } }).is_err(), "a board has an even number of copper layers");
+    assert!(b.apply(&set_stackup(&StackupSettings { copper_layers: 3, ..four }, false)).is_err(), "a board has an even number of copper layers");
+}
+
+/// Add Dielectric Layer and Remove Dielectric Layer are edits of the page sent whole: a sublayer added to a dielectric is stored, counted in the board's thickness
+/// (`BuildBoardThicknessFromStackup`) and taken away again; a sublayer with a negative thickness, epsilon R or loss tangent is refused with KiCad's words.
+#[test]
+fn a_dielectric_sublayer_is_added_and_removed_through_the_stackup_verb() {
+    let base = model();
+    let mut b = Board::new(design(), &base, mm(0.1), mm(0.3));
+    let mut four = StackupSettings::new(4, mm(1.6));
+    let plain = rules::stackup_thickness_nm(&four.stackup);
+    {
+        let d2 = four.stackup.layers.iter_mut().find(|l| l.name == "dielectric 2").unwrap();
+        d2.thickness_locked = true;
+        d2.sublayers.push(eda_model::StackupSublayer { thickness_mm: Some(0.1), material: Some("PTFE".into()), ..eda_model::StackupSublayer::added() });
+    }
+    b.apply(&set_stackup(&four, false)).unwrap();
+    let stored = overlay_of(&b).stackup.expect("stored");
+    let d2 = stored.stackup.layers.iter().find(|l| l.name == "dielectric 2").unwrap();
+    assert_eq!((d2.sublayer_count(), d2.thickness_locked, d2.sublayers[0].material.as_deref()), (2, true, Some("PTFE")));
+    assert_eq!(effective(&b, &base).board.board_thickness_nm, plain + mm(0.1), "the sublayer is in the board's thickness");
+
+    four.stackup.layers.iter_mut().find(|l| l.name == "dielectric 2").unwrap().sublayers.clear();
+    b.apply(&set_stackup(&four, false)).unwrap();
+    assert_eq!(overlay_of(&b).stackup.unwrap().stackup.layers.iter().find(|l| l.name == "dielectric 2").unwrap().sublayer_count(), 1);
+    assert_eq!(effective(&b, &base).board.board_thickness_nm, plain);
+
+    for (sub, why) in [
+        (eda_model::StackupSublayer { thickness_mm: Some(-0.1), ..Default::default() }, "Layer \"dielectric 1\" has a negative or invalid thickness."),
+        (eda_model::StackupSublayer { epsilon_r: Some(-1.0), ..Default::default() }, "Incorrect value for Epsilon R (Epsilon R must be positive or null if not used)"),
+        (eda_model::StackupSublayer { loss_tangent: Some(-0.01), ..Default::default() }, "Incorrect value for Loss tg (Loss tg must be positive or null if not used)"),
+    ] {
+        let mut bad = four.clone();
+        bad.stackup.layers.iter_mut().find(|l| l.name == "dielectric 1").unwrap().sublayers.push(sub);
+        let e = b.apply(&set_stackup(&bad, false)).unwrap_err();
+        assert_eq!(e[0].hint.as_deref(), Some(why));
+    }
+}
+
+/// Fewer copper layers with `delete_items_on_removed_layers`: what is on the layers that go is deleted as `BOARD::RemoveAllItemsOnLayer` deletes it -- the tracks, the
+/// blind and buried vias with an end on them, a zone on them alone, the shapes and texts on them -- while a zone on another layer too only loses them, a through via
+/// stays, and nothing on the layers that remain is touched.
+#[test]
+fn fewer_copper_layers_delete_what_is_on_the_layers_that_go_when_asked_to() {
+    let base = model();
+    let mut four = Board::new(design(), &base, mm(0.1), mm(0.3));
+    four.apply(&set_stackup(&StackupSettings::new(4, mm(1.6)), false)).unwrap();
+    let on_four = ConstraintModel { board: effective(&four, &base).board, ..base.clone() };
+
+    let mut d = design();
+    let zone = |id: &str, layers: &[&str]| {
+        let mut z = Zone { id: id.into(), net: "GND".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }, Point { x: mm(5.0), y: mm(5.0) }], ..Default::default() };
+        z.set_layer_set(layers);
+        z
+    };
+    d.routing = Some(routing(
+        vec![track("t_in1", "In1.Cu"), track("t_in2", "In2.Cu"), track("t_top", "F.Cu")],
+        vec![via("v_through", "F.Cu", "B.Cu"), via("v_blind", "F.Cu", "In1.Cu"), via("v_buried", "In1.Cu", "In2.Cu"), via("v_odd", "In2.Cu", "F.Cu")],
+        vec![zone("z_both", &["F.Cu", "In1.Cu"]), zone("z_in2", &["In2.Cu"])],
+    ));
+    let shape = Shape::Segment { id: "s_in1".into(), layer: "In1.Cu".into(), stroke_width: mm(0.15), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(1.0), y: Nm::ZERO } };
+    let text = |id: &str, layer: &str| Text { id: id.into(), content: "t".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: layer.into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: Default::default(), mirror: false };
+    d.drawings = Some(eda_model::ir::DrawingsSection {
+        shapes: vec![shape],
+        texts: vec![text("x_in2", "In2.Cu"), text("x_top", "F.Cu")],
+        via_extras: vec![
+            eda_model::via_extra::ViaExtra { id: "v_blind".into(), kind: eda_model::via_extra::ViaKind::Blind, tokens: vec![] },
+            eda_model::via_extra::ViaExtra { id: "v_buried".into(), kind: eda_model::via_extra::ViaKind::Buried, tokens: vec![] },
+        ],
+        ..Default::default()
+    });
+    assert_eq!((board_setup::copper_layer_items(&d, "In1.Cu"), board_setup::copper_layer_items(&d, "In2.Cu")), (5, 4), "HasItemsOnLayer: a through via is on no layer of its own");
+
+    let two = StackupSettings::new(2, mm(1.6));
+    let mut b = Board::new(d.clone(), &on_four, mm(0.1), mm(0.3));
+    assert!(b.apply(&set_stackup(&two, false)).is_err(), "without the flag nothing is deleted");
+    assert_eq!(serde_json::to_value(b.design()).unwrap(), serde_json::to_value(&d).unwrap());
+    b.apply(&set_stackup(&two, true)).unwrap();
+    let rt = b.design().routing.as_ref().unwrap();
+    assert_eq!(rt.tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["t_top"]);
+    assert_eq!(rt.vias.iter().map(|v| (v.id.as_str(), v.from_layer.as_str(), v.to_layer.as_str())).collect::<Vec<_>>(), [("v_through", "F.Cu", "B.Cu"), ("v_odd", "F.Cu", "B.Cu")], "the through vias stay, spanning the board");
+    assert_eq!(rt.zones.len(), 1);
+    assert_eq!((rt.zones[0].id.as_str(), rt.zones[0].layer_set()), ("z_both", vec!["F.Cu"]), "a zone on another layer too only loses the layer");
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert!(dr.shapes.is_empty());
+    assert_eq!(dr.texts.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["x_top"]);
+    assert!(dr.via_extras.is_empty(), "the deleted vias' extras go with them");
+    assert_eq!(effective(&b, &on_four).board.layers, copper_layer_names(2));
 }
 
 fn vars(rows: &[(&str, &str)]) -> BTreeMap<String, String> {

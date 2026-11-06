@@ -217,7 +217,7 @@ fn place_stackup_table_builds_the_boards_stackup_at_the_point_in_the_users_units
     let mut settings = eda_model::rules::StackupSettings::new(4, mm(1.6));
     settings.stackup.layers.iter_mut().find(|l| l.name == "F.Cu").unwrap().thickness_mm = Some(0.07);
     settings.stackup.copper_finish = Some("ENIG".into());
-    b.apply(&Cmd::SetStackup { settings }).unwrap();
+    b.apply(&Cmd::SetStackup { settings, delete_items_on_removed_layers: false }).unwrap();
     b.apply(&Cmd::Table(TableCmd::PlaceStackup { layer: "Dwgs.User".into(), at: p(Nm::ZERO, Nm::ZERO), units: None })).unwrap();
     let second = b.design().drawings.as_ref().unwrap().tables[1].clone();
     assert_eq!(second.cell(4, 3).unwrap().text, "0.07 mm");
@@ -233,7 +233,7 @@ fn place_board_characteristics_builds_the_table_from_the_stackup_and_the_numbers
     let mut settings = eda_model::rules::StackupSettings::new(2, mm(1.6));
     settings.stackup.copper_finish = Some("HASL".into());
     settings.stackup.edge_plating = true;
-    b.apply(&Cmd::SetStackup { settings }).unwrap();
+    b.apply(&Cmd::SetStackup { settings, delete_items_on_removed_layers: false }).unwrap();
     b.apply(&Cmd::Table(TableCmd::PlaceCharacteristics { layer: "Dwgs.User".into(), at: p(mm(-5.0), mm(7.0)), units: None, numbers: numbers() })).unwrap();
     let t = b.design().drawings.as_ref().unwrap().tables[0].clone();
     assert_eq!((t.col_count(), t.row_count(), t.at, t.layer.as_str()), (4, 7, p(mm(-5.0), mm(7.0)), "Dwgs.User"));
