@@ -1,7 +1,7 @@
 // What a schematic selection is made of, in the terms `SCH_SELECTION_TOOL`'s menu conditions use (kicad-port/schContextMenu.ts).
 import type { Schematic } from "../../api/types";
 import { emptySummary, type SchSelectionSummary } from "../../kicad-port/schContextMenu";
-import { canAddCorner, canRemoveCorner, type P, type PolyKind } from "../../kicad-port/schPolyCorners";
+import { schCornerEntries } from "../../kicad-port/schPointEdit";
 import { isFieldId } from "../../kicad-port/schFieldEdit";
 import { isPinItemId } from "../../kicad-port/schPins";
 import { singleMultiBodyStyleSymbol } from "../../kicad-port/schBodyStyle";
@@ -9,15 +9,7 @@ import { groupMenuFlags, groupsOf } from "../../kicad-port/schGroups";
 import { canMerge, canUnmerge } from "../../kicad-port/tables";
 import { pinFunctionMenu, pinFunctionsOf, symbolUnitMenu } from "../../kicad-port/schSymbolMenus";
 
-/** The outline of a drawn polygon or rule area, or null for anything else. */
-export function polygonOutline(sch: Schematic, id: string): { kind: PolyKind; pts: P[] } | null {
-  const g = (sch.graphics ?? []).find((x) => x.id === id);
-  if (g?.shape.type === "polygon") return { kind: "polygon", pts: g.shape.pts.map((p): P => [p.x, p.y]) };
-  if (g?.shape.type === "rule_area") return { kind: "rule_area", pts: g.shape.pts.map((p): P => [p.x, p.y]) };
-  return null;
-}
-
-/** `cursor` (um) and `tolNm` (the point editor's handle size at this zoom) decide the corner entries, which depend on where the pointer is. */
+/** `cursor` (nm) and `tolNm` (the point editor's handle size at this zoom, `EDIT_POINT::POINT_SIZE`) decide the corner entries, which depend on where the pointer is. */
 export function summarizeSelection(sch: Schematic, ids: readonly string[], cursor?: readonly [number, number], tolNm = 0, opts: { allowPinSwaps?: boolean; inGroup?: boolean; /** The placed unit of the one selected symbol the menu is for (the one under the pointer). */ unit?: number } = {}): SchSelectionSummary {
   const s = emptySummary();
   s.allowPinSwaps = opts.allowPinSwaps ?? false;
@@ -93,11 +85,13 @@ export function summarizeSelection(sch: Schematic, ids: readonly string[], curso
     const f = pinFunctionsOf(sch, ids[0]!);
     s.pinFunctionMenu = f ? pinFunctionMenu(f) : null;
   }
-  // The point editor's corner entries: one selected polygon or rule area, the pointer on its outline (create) or on one of its corners (remove).
-  const poly = ids.length === 1 && cursor ? polygonOutline(sch, ids[0]!) : null;
-  if (poly && cursor) {
-    s.canAddCorner = canAddCorner(poly.pts, cursor, tolNm);
-    s.canRemoveCorner = canRemoveCorner(poly.kind, poly.pts, cursor, tolNm);
+  // The point editor's corner entries (`SCH_POINT_EDITOR::Init`'s `S_C::Count( 1 ) && addCornerCondition` / `removeCornerCondition`): one selected polyline or rule area,
+  // the pointer on its outline (create; an open polyline's closing side is none) or on one of its vertices (remove), as the Symbol Editor's (kicad-port/schPointEdit.ts).
+  const one = ids.length === 1 && cursor ? graphic.get(ids[0]!) : undefined;
+  if (one && cursor) {
+    const corners = schCornerEntries(one, cursor, tolNm);
+    s.canAddCorner = corners.canAdd;
+    s.canRemoveCorner = corners.removeIndex >= 0;
   }
   // `SCH_POINT_EDITOR::Init`'s `arcIsEdited`: the one selected item is an arc (the point editor is on it), for Cycle Arc Editing Mode (UI-LEFT S13)
   s.arcEdited = ids.length === 1 && (sch.graphics ?? []).some((g) => g.id === ids[0] && g.shape.type === "arc");

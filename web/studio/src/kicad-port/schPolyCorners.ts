@@ -1,3 +1,7 @@
+// INACTIVE (UI-LEFT-2 SS21, task-v2-teardrops): replaced by the Symbol Editor's exact port (kicad-port/eePointEdit.ts `addCorner`, `removeCorner`, through
+// kicad-port/schPointEdit.ts `schCornerEntries`), which keeps an open polyline's closing side out of `addCorner` and removes the edited point. Kept, unused, as the
+// rule asks of a replaced port; nothing imports it.
+//
 // Create Corner / Remove Corner on a selected polygon or rule area -- `SCH_POINT_EDITOR::addCorner` / `removeCorner` and their menu conditions
 // (`addCornerCondition`, `removeCornerCondition`; eeschema/tools/sch_point_editor.cpp at 8303b2ad).
 export type P = readonly [number, number];

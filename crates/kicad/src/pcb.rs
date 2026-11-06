@@ -1130,32 +1130,33 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
         project["board"]["design_settings"]["diff_pair_dimensions"] = serde_json::Value::Array(dims);
     }
     // Board Setup > Teardrops (`BOARD_DESIGN_SETTINGS`' `teardrop_options` and `teardrop_parameters` `PARAM_LAMBDA`s, 8303b2ad `board_design_settings.cpp:526-660`),
-    // when the page was used. This port's one round-shapes block (PARITY-pcb §15) is repeated for KiCad's round and rectangular targets, and the track-end target
-    // keeps `TEARDROP_PARAMETERS()`'s constructor defaults: lengths 1.0 / 2.0 mm, ratios 0.5 / 1.0, filter 0.9, no curved edges, two tracks allowed.
+    // when the page was used. This port's one block for vias and pads (PARITY-pcb §15) is repeated for KiCad's round and rectangular targets, the track-end target
+    // is the track-to-track block (`TeardropSettings::track_end`), each with its curved edges (`td_curve_segcount` 1 or 0), two segments and zone preference.
     if let Some(td) = design.routing.as_ref().map(|r| &r.teardrop_settings) {
         if *td != eda_model::ir::TeardropSettings::default() {
             let mm_f = eda_model::units::to_mm;
-            let entry = |name: &str, maxlen: f64, maxheight: f64, length: f64, height: f64, filter: f64| {
+            let entry = |name: &str, p: &eda_model::teardrop_params::TeardropParams| {
                 serde_json::json!({
                     "td_target_name": name,
-                    "td_maxlen": maxlen,
-                    "td_maxheight": maxheight,
-                    "td_length_ratio": length,
-                    "td_height_ratio": height,
-                    "td_curve_segcount": 0,
-                    "td_width_to_size_filter_ratio": filter,
-                    "td_allow_use_two_tracks": true,
-                    "td_on_pad_in_zone": false,
+                    "td_enabled": p.enabled,
+                    "td_maxlen": mm_f(p.max_length),
+                    "td_maxheight": mm_f(p.max_width),
+                    "td_length_ratio": p.best_length_ratio,
+                    "td_height_ratio": p.best_width_ratio,
+                    "td_curve_segcount": if p.curved_edges { 1 } else { 0 },
+                    "td_width_to_size_filter_ratio": p.filter_ratio,
+                    "td_allow_use_two_tracks": p.allow_two_segments,
+                    "td_on_pad_in_zone": !p.prefer_zone_connections,
                 })
             };
-            let round = entry("td_round_shape", mm_f(td.max_len_nm), mm_f(td.max_width_nm), td.best_length_ratio, td.best_width_ratio, td.width_to_size_filter_ratio);
-            let params = vec![round, entry("td_rect_shape", mm_f(td.max_len_nm), mm_f(td.max_width_nm), td.best_length_ratio, td.best_width_ratio, td.width_to_size_filter_ratio), entry("td_track_end", 1.0, 2.0, 0.5, 1.0, 0.9)];
+            let block = eda_model::teardrop_params::TeardropParams::of_settings(td);
+            let params = vec![entry("td_round_shape", &block), entry("td_rect_shape", &block), entry("td_track_end", &td.track_end)];
             project["board"]["design_settings"]["teardrop_parameters"] = serde_json::Value::Array(params);
             project["board"]["design_settings"]["teardrop_options"] = serde_json::json!([{
                 "td_onvia": td.target_vias,
                 "td_onpthpad": td.target_pth_pads,
                 "td_onsmdpad": td.target_smd_pads,
-                "td_ontrackend": false,
+                "td_ontrackend": td.track_end.enabled,
                 "td_onroundshapesonly": false,
             }]);
         }

@@ -150,6 +150,14 @@ impl Direction45 {
         }
     }
 
+    /// `DIRECTION_45::Opposite()`: four octants round (`OppositeMap`); `Undefined` stays.
+    pub fn opposite(&self) -> Self {
+        match self.index() {
+            None => *self,
+            Some(i) => OCTANTS[((i + 4) % 8) as usize],
+        }
+    }
+
     /// Unit step for this direction, `x`/`y` each in `{-1,0,1}`.
     pub fn unit(&self) -> (i64, i64) {
         match self {

@@ -1562,6 +1562,11 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "max_len_nm": r.teardrop_settings.max_len_nm,
                 "max_width_nm": r.teardrop_settings.max_width_nm,
                 "width_to_size_filter_ratio": r.teardrop_settings.width_to_size_filter_ratio,
+                // UI-LEFT-2 PP7: the block's curved edges, two segments and zone preference, and the track-to-track block.
+                "curved_edges": r.teardrop_settings.curved_edges,
+                "allow_two_segments": r.teardrop_settings.allow_two_segments,
+                "prefer_zone_connections": r.teardrop_settings.prefer_zone_connections,
+                "track_end": r.teardrop_settings.track_end,
             }),
         })
     });

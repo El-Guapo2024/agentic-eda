@@ -709,6 +709,14 @@ export interface TeardropSettings {
   max_len_nm: Nm;
   max_width_nm: Nm;
   width_to_size_filter_ratio: number;
+  /** `m_CurvedEdges` ("Curved edges"); absent is off. UI-LEFT-2 PP7. */
+  curved_edges?: boolean;
+  /** `m_AllowUseTwoTracks` ("Allow teardrop to span two track segments"); absent is on. */
+  allow_two_segments?: boolean;
+  /** `!m_TdOnPadsInZones` ("Prefer zone connection"); absent is on. */
+  prefer_zone_connections?: boolean;
+  /** `TARGET_TRACK`'s block ("Properties for Track-to-Track Teardrops", the Edit Teardrops dialog's "Track to track"); absent is `TEARDROP_PARAMETERS()`, off. */
+  track_end?: TeardropParams;
 }
 
 // ---------------------------------------------------------------- drawings
@@ -2638,6 +2646,8 @@ export interface DragPreview {
   /** `drag_start` of a `"component"` or `"multi"` drag: where it starts (`m_p0`: the footprint's anchor, or the dragged item nearest the cursor), and the footprints. */
   start?: [Nm, Nm];
   footprints?: string[];
+  /** `drag_start` of a `"component"` or `"multi"` drag: the net of the dragged item nearest the cursor (`InlineDrag`'s `closestItem->Net()`), highlighted while the drag goes on. */
+  highlight_net?: string | null;
 }
 
 /** A via of a pair (`PNS::VIA`, as `DIFF_PAIR_PLACER` places them): one per net, a `viaGap()` apart. */

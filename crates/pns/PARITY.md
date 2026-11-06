@@ -1425,11 +1425,9 @@ The router side of `work/findings/round7/r7-route-rules.md` section R, each re-r
   `InlineDrag`'s preview items), the following lines and the multi-track drag's lines as the dragger's dashed lines, red when they collide.
 - **Differs:** see the module docs. A pad of several solids (a padstack) moves all of them, where `FindItemByParent( pad )` hands KiCad's dragger the
   first; a footprint's own Edge.Cuts and Margin graphics are board shapes here and stay; a moved pad's own hole is not asked as `CheckColliding`'s probe;
-  geometry-dependent rules see a moved pad where the board has it; the multi-track Shove has no springback (a shove per position from the world without
-  the lines) and does not lock the heads' ends; a position the multi-track drag cannot resolve shows its lines flagged colliding (KiCad shows the world
-  without them); the leader segments are not reselected after the commit and the selection is not cleared at the start (nor restored on Esc); the
-  closest item's net is not highlighted while dragging; the commit is of the click's position, dragged first (KiCad commits the last motion's); the
-  router reads the mode the drag started in (`MULTI_DRAGGER::Drag` reads `Settings().Mode()` live, though its shove exists only if it started in Shove).
+  geometry-dependent rules see a moved pad where the board has it; a position the multi-track drag cannot resolve shows its lines flagged colliding
+  (KiCad shows the world without them); the commit is of the click's position, dragged first (KiCad commits the last motion's); the router reads the
+  mode the drag started in (`MULTI_DRAGGER::Drag` reads `Settings().Mode()` live, though its shove exists only if it started in Shove).
 - Tests: `component_dragger.rs` (5: KiCad's corners worked by hand, the fixed tracks, the refusal and Ctrl, the off-centre and other-layer tracks),
   `multi_dragger.rs` (6: segment and corner drags to the nanometre, the fallback to `DM_SEGMENT`, a crossing line left out, shove and walk round, Highlight
   collisions committing, `clipToOtherLine`), `tests/component_drag.rs` (4: the tracks stay on the moved pads in every mode, a refused drag ends, a
@@ -1598,8 +1596,63 @@ UI-LEFT-2 RR2, read against KiCad 8303b2ad `router_tool.cpp::InlineDrag` and `Ca
   the item under the cursor -- the knee rules, and the clarification menu when several are left.
 - Tests: `route_api::tests` `d_drags_the_selected_track_not_the_via_found_again_at_the_point`, `d_on_a_selected_track_starts_on_the_nearest_point_of_its_nearest_segment`,
   `d_on_a_selected_locked_track_is_refused_until_drag_anyway` (route_api 36 passed); `tests/locked_tracks.rs::the_selected_track_is_dragged_whatever_the_point_would_find_and_a_locked_one_asks_first`
-  (8/8); `cargo test -p eda-pns` 351 unit tests passed. **Note:** a corner drag of a selected track at a joint with a locked track moves the locked one too
-  (the dragger's corner behaviour, unchanged here).
+  (8/8); `cargo test -p eda-pns` 351 unit tests passed. **Note:** a corner drag of a selected track at a joint with a locked track moves the locked one too,
+  as KiCad's does (Stage 26).
+
+## Stage 26 -- the multi-track Shove's springback, the drag's selection and net highlight, a locked track at a dragged joint (branch `task-v2-teardrops`, 2026-11-07)
+
+UI-LEFT-2 RR1 and RR10, read against KiCad 8303b2ad `pns_multi_dragger.cpp` (`Start`, `Drag`, `multidragShove`, `restoreLeaderSegments`,
+`findNewLeaderSegment`, `FixRoute`), `pns_shove.cpp` (`SHOVE::Run`, `reduceSpringback`, `pushOrShoveVia`), `pns_dragger.cpp` (`Start`, `checkVirtualVia`,
+`findViaFanoutByHandle`, `dragViaMarkObstacles`, `dragViaWalkaround`, `dragShove`), `pns_node.cpp` (`FixupVirtualVias`, `AssembleLine`, `followLine`),
+`pns_joint.h::NextSegment`, `pns_segment.h::SEGMENT( const LINE&, const SEG& )`, `pns_line.cpp::LINE::Marker`, `router_tool.cpp` (`InlineDrag`,
+`restoreSelection`, `performDragging`), `pns_tool_base.cpp::highlightNets`, `pns_router.cpp` (`StartDragging`, `moveDragging`); 25ec2335's are the same
+in every part read here.
+
+- **The multi-track Shove keeps one `SHOVE` for the gesture** (`multi_dragger.rs`, `MultiShove`): made at the first position over the world without every
+  dragged line (`m_preShoveNode`), with its springback stack (`crate::springback::Springback`). Each position pops the frames none of the heads collides with
+  any more (`reduceSpringback( headSet )`, the heads asked about together, never the bottom frame), shoves from the frame left, and pushes the world it leaves
+  (`pushSpringback`); a failed shove pushes nothing (`m_currentNode = parent`). The preview's and the commit's displaced tracks are the frame's, against the
+  board. So a track the bus pushed stays pushed while the bus presses on it, is pushed on from where it was left, and springs back once the bus draws back.
+- **The heads' ends are locked** (`shove::shove_heads_locked_after`, `Shove::lock_head_ends`): `AddHeads( l.draggedLine, SHP_SHOVE | SHP_DONT_OPTIMIZE )` has no
+  `SHP_DONT_LOCK_ENDPOINTS`, so `SHOVE::Run` locks the joint at each head's first point and, unless it ends in a via, its last, once the head is in the node:
+  a via a dragged line starts on is not pushed (`pushOrShoveVia`: `jt->IsLocked()`), and a shoved line of the head's net stops there.
+- **`FixRoute` commits what the last `Drag` left** (`m_lastNode`, `m_dragStatus`): `MultiDragger::fix_route` no longer drags again from nothing (which with a
+  springback stack would have been another world); nothing before the first `Drag`.
+- **The leader segments** (`restoreLeaderSegments` after each mode that resolved its position: each line's last segment in `DM_CORNER`, in `DM_SEGMENT` the
+  segment `findNewLeaderSegment` finds -- the one the guide `m_guide = SEG( aP, aP + perp )` crosses, `IntersectLines` then `Contains`, running the way the
+  leader ran or the opposite, `DIRECTION_45::Opposite` added; else the selected segments, `m_leaderSegments = m_origDraggedItems` in `tryPosture`):
+  `MultiDragger::leader_segments`, kept by the router when the drag ends (`Router::drag_leaders`, `ROUTER::m_leaderSegments` of the last `moveDragging`).
+  The studio's `/api/route/drag_finish` answers `select`, the board tracks that hold them (a studio track is a run of KiCad's `PCB_TRACK`s), for a commit and
+  for a refused click alike, as `InlineDrag` selects `lseg->Parent()` of each.
+- **`InlineDrag`'s selection and highlight** (the studio, `kicad-port/dragTool.ts` `inlineDragBegin`, `inlineDragEnd`, `dragHighlight`;
+  `components/canvas/dragging.ts`; `useActionRunner.ts`'s `D` and Esc): `D` from the selection tool (`EDIT_TOOL::Drag` -> `InlineDrag`) copies the selection
+  `RequestSelection` left (the hover one too) and clears it (`ACTIONS::selectionClear`); Esc puts it back (`restoreSelection( selection )` when
+  `hasMultidragCancelled`); Ctrl+Z ends the drag as Esc does but leaves the selection clear ("treat an undo as an escape" breaks out without
+  `hasMultidragCancelled`); after a click the leaders' tracks are selected (`selectItems`), which only a multi-track drag has. Every drag highlights the net of
+  the item nearest the cursor (`highlightNets( true, { closestItem->Net() } )`: the dragged track or via, for a group drag `Router::closest_net`, answered as
+  `highlight_net`), and at its end the highlight goes back to what it was if it held that net, else off (`highlightNets( false )`: `m_startHighlightNetcodes`).
+  The router tool's own drag (`performDragging`) highlights the same way and leaves the selection alone.
+- **A locked track at a dragged joint (RR10): as KiCad, no change.** UI-LEFT-2 RR10 expected KiCad's dragger to leave a locked segment fixed; its code does not.
+  `FixupVirtualVias` puts a virtual via at a joint whose last segment is locked and at the other end of that segment, so the joint of a track with a locked
+  one has one in the usual case; `DRAGGER::Start` takes hold of it when the press is within half the width of the track's end (`checkVirtualVia` ->
+  `startDragVia`), and its fanout (`findViaFanoutByHandle`: `AssembleLine( seg, &segIndex )` with the defaults for every segment at the joint, the locked one
+  included) is dragged in every mode -- in Shove `pushOrShoveVia` gives up on a line with locked segments (`SH_TRY_WALK`) and `dragShove` falls back to
+  `dragViaWalkaround`, which drags the fanout too. The new segments are not locked (`SEGMENT( const LINE& )` takes `aParentLine.Marker()`, which is the line's
+  own marker once `ClearLinks()` has emptied its links). Only where neither joint of the locked segment has it as its last segment (the board's order, e.g.
+  B, A, C for the chain C-B-A with B locked) is there no virtual via: the dragged line stops in front of the locked segment (`NextSegment` skips it) and only
+  the unlocked side's corner moves, away from it. The studio already did all of this (the port of `FixupVirtualVias`, `checkVirtualVia` and the via fanout);
+  `tests/locked_tracks.rs` now holds it, every mode and both cases.
+- **Differs:** the frames are `World`s, so a run's locked joints are not inherited by the next run (it locks its own heads' ends again); an unresolved
+  multi-track position commits the dragged lines with "Allow DRC violations" where KiCad's world has dropped them; a group drag of an item of no net leaves
+  the highlight as it was (KiCad's `highlightNets( false )` then puts back whatever an earlier operation left in `m_startHighlightNetcodes`); the selection is
+  restored by Esc (`common.Interactive.cancel`, which the studio's other drag cancels run too), not on every `IsActivate` KiCad has.
+- Tests: `multi_dragger.rs` (2 new: the springback frame by frame and the commit of the last position with its leaders; nothing before a drag and the
+  selected segments as leaders), `shove.rs` (`a_multi_head_shove_locks_the_joints_at_the_heads_ends`), `tests/locked_tracks.rs`
+  (`a_corner_drag_at_a_joint_with_a_locked_track_moves_its_end_as_kicad_does_unless_the_joint_has_no_virtual_via`: three board orders, three modes);
+  `crates/cli/src/route_api.rs` (`two_selected_tracks_are_dragged_together`: `highlight_net`, `select` the new tracks); web `dragTool.test.ts` (2 new);
+  browser `web/studio/e2e/drag-v2.check.js` (multi-esc, multi-commit, single, locked). Results: `cargo test -p eda-pns` 354 unit tests passed (351 before),
+  `locked_tracks` 9/9; eda-cli `route_api` 36 passed; web `dragTool.test.ts` 8/8, typecheck clean; browser `drag-v2` 5/5, `component-drag` 5/5,
+  `router-leftovers` 17/17.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 

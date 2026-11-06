@@ -1228,8 +1228,26 @@ pub struct TeardropSettings {
     /// `anchor_diameter * this` gets a teardrop; 1.0 = always, 0.0 = never.
     #[serde(default = "default_td_width_to_size_ratio")]
     pub width_to_size_filter_ratio: f64,
+    /// `m_CurvedEdges` (Board Setup's "Curved edges"): the teardrop's sides two Bezier curves (UI-LEFT-2 PP7). Additive: absent reads as KiCad's default, off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub curved_edges: bool,
+    /// `m_AllowUseTwoTracks` ("Allow teardrops to span 2 track segments"): a track too short for the teardrop lends it the length of the track it joins
+    /// (UI-LEFT-2 PP7). Additive: absent reads as KiCad's default, on (`TEARDROP_PARAMETERS()`).
+    #[serde(default = "default_td_target", skip_serializing_if = "is_true")]
+    pub allow_two_segments: bool,
+    /// `!m_TdOnPadsInZones` ("Prefer zone connections"). Kept and written; the generator does not ask it (`areItemsInSameZone` needs the fills, see
+    /// `eda_connectivity::teardrop`). Additive: absent reads as KiCad's default, on.
+    #[serde(default = "default_td_target", skip_serializing_if = "is_true")]
+    pub prefer_zone_connections: bool,
+    /// `TARGET_TRACK`'s block (Board Setup's "Teardrops for tracks of different widths" and the Edit Teardrops dialog's "Track to track"): its `enabled` is that
+    /// block's `m_Enabled` and `m_TargetTrack2Track` both (UI-LEFT-2 PP7). Additive: absent reads as `TEARDROP_PARAMETERS()`, off.
+    #[serde(default, skip_serializing_if = "crate::teardrop_params::TeardropParams::is_default")]
+    pub track_end: crate::teardrop_params::TeardropParams,
 }
 
+fn is_true(v: &bool) -> bool {
+    *v
+}
 fn default_td_target() -> bool {
     true // TEARDROP_PARAMETERS_LIST() ctor: every target kind on by default
 }
@@ -1265,6 +1283,10 @@ impl Default for TeardropSettings {
             max_len_nm: default_td_max_len(),
             max_width_nm: default_td_max_width(),
             width_to_size_filter_ratio: default_td_width_to_size_ratio(),
+            curved_edges: false,
+            allow_two_segments: true,
+            prefer_zone_connections: true,
+            track_end: crate::teardrop_params::TeardropParams::default(),
         }
     }
 }
@@ -1735,6 +1757,10 @@ pub struct Zone {
     /// pipeline the way a drawn zone's settings fields describe.
     #[serde(default)]
     pub teardrop: bool,
+    /// A teardrop at the end of a track on a wider one (`TEARDROP_TYPE::TD_TRACKEND`, the file's `(attr (teardrop (type track_end)))`), not on a via or pad
+    /// (`TD_VIAPAD`, `padvia`). UI-LEFT-2 PP7. Additive.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub teardrop_track_end: bool,
 
     /// The footprint this zone belongs to (`ZONE::GetParentFootprint()`),
     /// for a zone imported from inside a `(footprint ...)`; `None` for a
@@ -1886,6 +1912,7 @@ impl Default for Zone {
             keepout_copper_pour: false,
             keepout_footprints: false,
             teardrop: false,
+            teardrop_track_end: false,
             parent_footprint: None,
             name: String::new(),
             border_style: ZoneBorderStyle::default(),

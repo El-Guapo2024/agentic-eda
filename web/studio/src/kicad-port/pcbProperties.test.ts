@@ -549,7 +549,7 @@ test("a pad's overrides: its margins are its edit, its clearance and thermal rel
   b.routing!.zones.push({ ...b.routing!.zones[0]!, id: "td_1", teardrop: true });
   assert.equal(rowOf(b, ["via_a"], "Enable Teardrops")!.writable, true);
   assert.deepEqual(edit(b, ["via_a"], "Best Length Ratio", 0.8), [
-    { op: "set_teardrop_params", ids: ["via_a"], params: { enabled: true, allow_two_segments: false, prefer_zone_connections: true, best_length_ratio: 0.8, max_length: 1_000_000, best_width_ratio: 1, max_width: 2_000_000, curved_edges: false, filter_ratio: 0.9 } },
+    { op: "set_teardrop_params", ids: ["via_a"], params: { enabled: true, allow_two_segments: true, prefer_zone_connections: true, best_length_ratio: 0.8, max_length: 1_000_000, best_width_ratio: 1, max_width: 2_000_000, curved_edges: false, filter_ratio: 0.9 } },
   ]);
   // the pin name, the fabrication property and the pad-to-die length are the pad's edit
   assert.deepEqual(edit(b, ["U1.1"], "Fabrication Property", "testpoint"), [{ op: "edit_board_pad", part: "U1", edit: { number: "1", nth: 1, solder_mask_margin: 25_000, property: "pad_prop_testpoint" } }]);

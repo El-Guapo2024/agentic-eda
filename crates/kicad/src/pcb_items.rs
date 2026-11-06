@@ -131,11 +131,14 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
         writeln!(out, "\t\t(priority {})", z.priority).unwrap();
     }
     if z.teardrop {
-        writeln!(out, "\t\t(attr (teardrop (type padvia)))").unwrap();
+        // `TEARDROP_TYPE::TD_VIAPAD` is `padvia`, `TD_TRACKEND` `track_end` (`PCB_IO_KICAD_SEXPR::format( const ZONE* )`).
+        writeln!(out, "\t\t(attr (teardrop (type {})))", if z.teardrop_track_end { "track_end" } else { "padvia" }).unwrap();
     }
 
     let (clearance, min_thickness, connection, island_mode) = if z.teardrop {
-        ("0".to_string(), TEARDROP_MIN_THICKNESS.to_string(), PadConnection::Full, IslandRemovalMode::Never)
+        // A mask teardrop (`createTeardropMask`) is as thick as the track's mask expansion at least (`SetMinThickness( std::max( GetMinThickness(), expansion ) )`).
+        let min_thickness = if copper_zone || z.min_thickness <= eda_model::ir::Nm::new(25_400) { TEARDROP_MIN_THICKNESS.to_string() } else { mm(z.min_thickness) };
+        ("0".to_string(), min_thickness, PadConnection::Full, IslandRemovalMode::Never)
     } else {
         (mm(z.clearance), mm(z.min_thickness), z.pad_connection, z.island_removal_mode)
     };

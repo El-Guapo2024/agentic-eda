@@ -193,6 +193,12 @@ pub struct Router {
     /// The mode the drag in progress started in (`DRAGGER::Start`: `m_currentMode = Settings().Mode()`, and a shove made only for Shove): a
     /// mode changed in the middle of a drag waits for the next one (findings p5 F3-12). The other settings are read live, as KiCad's are.
     drag_mode: Option<crate::settings::Mode>,
+    /// `ROUTER::m_leaderSegments` of the last multi-track drag that ended (`GetLastCommittedLeaderSegments`), each with its layer's name: the
+    /// segments `ROUTER_TOOL::InlineDrag` selects once the drag is over (`selectItems` of their parents). Empty after every other drag.
+    drag_leaders: Vec<(String, Point, Point)>,
+    /// The net of the dragged item nearest the cursor at the start of a component or multi-track drag (`InlineDrag`'s `closestItem->Net()`),
+    /// which the studio highlights while the drag goes on.
+    drag_net: Option<String>,
     /// `BOARD_DESIGN_SETTINGS::m_UseConnectedTrackWidth` (the project's `board.auto_track_width`, `PROJECT_LOCAL_SETTINGS::m_AutoTrackWidth`, on by
     /// default; the studio's "Use Starting Track Width"): a route or pair started on a track, or on a pad or via a track is joined to, takes that
     /// track's width ([`crate::settings::inherit_track_width`], r4 R4-1). `m_TempOverrideTrackWidth` is cleared before each start
@@ -230,7 +236,7 @@ impl Router {
         let via_kinds = design.drawings.iter().flat_map(|d| d.via_extras.iter()).filter(|e| e.kind != ViaKind::Through).map(|e| (e.id.clone(), e.kind)).collect();
         let track_pins = design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| !t.pins.is_empty()).map(|t| (t.id.clone(), t.pins.clone())).collect();
         let footprint_at = design.placement.iter().flat_map(|p| p.footprints.iter()).map(|f| (f.id.clone(), f.at)).collect();
-        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, group_drag: None, footprint_at, append_undo: false, entered_group: None, user_diff_pair: None, via_kinds, track_pins, drag_mode: None, use_connected_track_width: true, use_net_class_track: true, width_explicit: false }
+        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, group_drag: None, footprint_at, append_undo: false, entered_group: None, user_diff_pair: None, via_kinds, track_pins, drag_mode: None, drag_leaders: Vec::new(), drag_net: None, use_connected_track_width: true, use_net_class_track: true, width_explicit: false }
     }
 
     /// The type of the board's via `id` (a through via unless the board says otherwise).
@@ -1494,6 +1500,7 @@ impl Router {
     /// open, so the caller can keep adjusting or explicitly cancel.
     pub fn drag_finish_with(&mut self, at: Point, force_commit: bool) -> Option<RouteCommit> {
         let settings = self.drag_settings();
+        self.drag_leaders.clear();
         if self.group_drag.is_some() {
             return self.group_drag_finish(at, force_commit, &settings);
         }
@@ -1555,14 +1562,24 @@ impl Router {
         out
     }
 
+    /// `InlineDrag`'s `closestItem`: the item of `items` whose shape is nearest `at` (`shape->SquaredDistance( p0, 0 )`, the first of equals by id).
+    fn nearest_of(&self, at: Point, items: &[ItemId]) -> Option<ItemId> {
+        let probe = eda_drc::kimath::Shape::Circle { c: at, r: Nm::ZERO };
+        items.iter().filter_map(|&id| self.world.get(id).map(|it| (it.shape(it.layers().start()).clearance_to(&probe).0, id))).min_by_key(|&(d, id)| (d, id)).map(|(_, id)| id)
+    }
+
+    /// `InlineDrag`: "if( closestItem->Net() ) highlightNets( true, { closestItem->Net() } )" -- the net of the item of `items` nearest `at`, if it
+    /// has one. Kept for the drag ([`Self::drag_highlight_net`]).
+    fn closest_net(&self, at: Point, items: &[ItemId]) -> Option<String> {
+        self.nearest_of(at, items).and_then(|id| self.world.get(id)).and_then(|it| it.net().as_deref().map(str::to_string)).filter(|n| !n.is_empty())
+    }
+
     /// `TOOL_BASE::snapToItem( aItem, aP )` of the item of `items` nearest `at` (`InlineDrag`'s "Snap to closest item": the least
     /// `shape->SquaredDistance( p0, 0 )`): a pad snaps to its centre (or the nearest of its connection points), a track to the nearer end when
     /// `at` is within half its width of one, else to the nearest point of it. **Differs:** that point is not then put on the grid along the
     /// segment (`AlignToSegment`); the studio has put the cursor on the grid.
     fn snap_to_nearest(&self, at: Point, items: &[ItemId]) -> Point {
-        let probe = eda_drc::kimath::Shape::Circle { c: at, r: Nm::ZERO };
-        let nearest = items.iter().filter_map(|&id| self.world.get(id).map(|it| (it.shape(it.layers().start()).clearance_to(&probe).0, id))).min_by_key(|&(d, id)| (d, id));
-        let Some((_, id)) = nearest else { return at };
+        let Some(id) = self.nearest_of(at, items) else { return at };
         let sq = |a: Point, b: Point| (a.x - b.x).area(a.x - b.x) + (a.y - b.y).area(a.y - b.y);
         match self.world.get(id) {
             Some(Item::Solid(s)) if !s.anchor_points.is_empty() => *s.anchor_points.iter().min_by_key(|&&p| sq(p, at)).unwrap_or(&s.pos),
@@ -1594,6 +1611,7 @@ impl Router {
             return Err("nothing to drag".into());
         }
         let mut p = self.snap_to_nearest(at, &items);
+        self.drag_net = self.closest_net(at, &items);
         if refs.len() == 1 && warp {
             if let Some(&fp) = self.footprint_at.get(&refs[0]) {
                 p = fp;
@@ -1624,13 +1642,26 @@ impl Router {
             (track, index, id)
         });
         let p = self.snap_to_nearest(at, &items);
+        let net = self.closest_net(at, &items);
         let dragger = crate::multi_dragger::MultiDragger::start(&self.world, p, &items).ok_or("nothing to drag")?;
+        self.drag_net = net;
         self.session = None;
         self.diff = None;
         self.drag = None;
         self.group_drag = Some(GroupDrag::Multi(dragger));
         self.drag_mode = Some(self.settings.mode);
         Ok(p)
+    }
+
+    /// `InlineDrag`'s `leaderSegments` (`ROUTER::GetLastCommittedLeaderSegments()`) of the multi-track drag that ended last: each segment (its layer's
+    /// name and ends), whose track the studio selects -- the new tracks of a committed drag, the selected ones of a refused one. Empty after any other drag.
+    pub fn drag_leaders(&self) -> &[(String, Point, Point)] {
+        &self.drag_leaders
+    }
+
+    /// The net to highlight while the component or multi-track drag goes on ([`Self::closest_net`]), if the item nearest the cursor has one.
+    pub fn drag_highlight_net(&self) -> Option<&str> {
+        self.drag_net.as_deref()
     }
 
     /// The drag in progress is of a set of items: `"component"` (`COMPONENT_DRAGGER`) or `"multi"` (`MULTI_DRAGGER`). A click such a drag refuses
@@ -1701,7 +1732,9 @@ impl Router {
             }
             GroupDrag::Multi(m) => {
                 m.drag(world, rules, settings, at);
-                let mc = m.fix_route(world, rules, settings)?;
+                // `GetLastCommittedLeaderSegments()`: what `InlineDrag` selects once the drag is over, whatever `FixRoute` says
+                self.drag_leaders = m.leader_segments(world).into_iter().map(|(layer, (a, b))| (self.layer_name(layer).to_string(), a, b)).collect();
+                let mc = m.fix_route(world, settings)?;
                 commit.remove_track_ids = mc.remove_track_ids;
                 commit.remove_via_ids = mc.remove_via_ids;
                 for (k, line) in mc.tracks.iter().enumerate() {

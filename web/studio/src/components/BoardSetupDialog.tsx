@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo } from "../state/units";
 import { predefinedSizesCmds, validatePredefinedSizes } from "../kicad-port/boardSetupRules";
+import { DEFAULT_TEARDROP_PARAMS } from "../kicad-port/teardropParams";
 import type { DiffPairPreset, DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Nm } from "../api/types";
 import { BoardLayersPage } from "./boardSetup/BoardLayersPage";
 import { ConstraintsPage } from "./boardSetup/ConstraintsPage";
@@ -124,6 +125,10 @@ const DEFAULT_TEARDROP_SETTINGS: TeardropSettings = {
   max_len_nm: 1_000_000,
   max_width_nm: 2_000_000,
   width_to_size_filter_ratio: 0.9,
+  curved_edges: false,
+  allow_two_segments: true,
+  prefer_zone_connections: true,
+  track_end: { ...DEFAULT_TEARDROP_PARAMS },
 };
 
 export function BoardSetupDialog() {
@@ -427,8 +432,8 @@ export function BoardSetupDialog() {
           <section className="bs-page" hidden={page !== "teardrops"} aria-label="Teardrops">
             <h3 className="bs-title">Teardrops</h3>
               <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>
-                `pcbnew/teardrop/*` (task item 4). Vias and pads of every shape but a custom one, as KiCad's "Round pads only" is off by default (see `eda_connectivity::teardrop`'s own
-                doc for the full scope: straight edges only, single track segment only, no track-to-track teardrops, one set of settings for every via and pad).
+                `pcbnew/teardrop/*` (task item 4; UI-LEFT-2 PP6, PP7). Vias and pads of every shape, as KiCad's "Round pads only" is off by default; one set of settings for every via
+                and pad, and the track-to-track block. Teardrops are kept current as the board is edited and fitted to other nets' clearance (see `eda_connectivity::teardrop`'s own doc).
               </p>
               <label className="filter-row" style={{ display: "block" }}>
                 <input type="checkbox" checked={td.enabled} onChange={(e) => setTdField("enabled", e.target.checked)} /> Enable teardrops
@@ -490,6 +495,61 @@ export function BoardSetupDialog() {
                   style={{ width: 90 }}
                 />
               </div>
+              <label className="filter-row" style={{ display: "block" }}>
+                <input type="checkbox" checked={td.curved_edges ?? false} onChange={(e) => setTdField("curved_edges", e.target.checked)} /> Curved edges
+              </label>
+              <label className="filter-row" style={{ display: "block" }} title="Allows a teardrop to extend over the first 2 connected track segments if the first track segment is too short to accommodate the best length.">
+                <input type="checkbox" checked={td.allow_two_segments ?? true} onChange={(e) => setTdField("allow_two_segments", e.target.checked)} /> Allow teardrop to span two track segments
+              </label>
+              <label className="filter-row" style={{ display: "block" }} title="Do not create teardrops on tracks connected to pads that are also connected to a copper zone.">
+                <input type="checkbox" checked={td.prefer_zone_connections ?? true} onChange={(e) => setTdField("prefer_zone_connections", e.target.checked)} /> Prefer zone connection
+              </label>
+
+              <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Properties for Track-to-Track Teardrops</p>
+              {(() => {
+                const t = td.track_end ?? DEFAULT_TEARDROP_PARAMS;
+                const setT = (patch: Partial<typeof t>) => setTdField("track_end", { ...t, ...patch });
+                const mmField = (value: number, set: (nm: number) => void) => (
+                  <span>
+                    <input
+                      type="number"
+                      step="any"
+                      value={nmTo(value, units)}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (Number.isFinite(n)) set(Math.round(nmFrom(n, units)));
+                      }}
+                      style={{ width: 90 }}
+                    />{" "}
+                    {units}
+                  </span>
+                );
+                return (
+                  <>
+                    <label className="filter-row" style={{ display: "block" }}>
+                      <input type="checkbox" aria-label="Track to track" checked={t.enabled} onChange={(e) => setT({ enabled: e.target.checked })} /> Track to track
+                    </label>
+                    <div className="kv-grid" style={{ gridTemplateColumns: "220px 1fr" }}>
+                      <span>Best length (L) ratio</span>
+                      <input type="number" step="0.05" min={0} max={1} value={t.best_length_ratio} onChange={(e) => setT({ best_length_ratio: Number(e.target.value) })} style={{ width: 90 }} />
+                      <span>Maximum length (L)</span>
+                      {mmField(t.max_length, (nm) => setT({ max_length: nm }))}
+                      <span>Best width (W) ratio</span>
+                      <input type="number" step="0.05" min={0} max={1} value={t.best_width_ratio} onChange={(e) => setT({ best_width_ratio: Number(e.target.value) })} style={{ width: 90 }} />
+                      <span>Maximum width (W)</span>
+                      {mmField(t.max_width, (nm) => setT({ max_width: nm }))}
+                      <span title="Tracks which are similar in size do not need teardrops.">Track width limit</span>
+                      <input type="number" step="0.05" min={0} max={1} value={t.filter_ratio} onChange={(e) => setT({ filter_ratio: Number(e.target.value) })} style={{ width: 90 }} />
+                    </div>
+                    <label className="filter-row" style={{ display: "block" }}>
+                      <input type="checkbox" checked={t.curved_edges} onChange={(e) => setT({ curved_edges: e.target.checked })} /> Curved edges
+                    </label>
+                    <label className="filter-row" style={{ display: "block" }}>
+                      <input type="checkbox" checked={t.allow_two_segments} onChange={(e) => setT({ allow_two_segments: e.target.checked })} /> Allow teardrop to span two track segments
+                    </label>
+                  </>
+                );
+              })()}
 
               <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center" }}>
                 <button className="primary" disabled={tdBusy} onClick={applyTeardropSettings}>

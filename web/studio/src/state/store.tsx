@@ -334,6 +334,10 @@ export type DrawState =
       moved?: boolean;
       /** Multi-track drag only: the dragged lines' nets, the only ones the cursor snaps onto. */
       nets?: string[];
+      /** `InlineDrag`: the selection it cleared at its start, put back by Esc (see kicad-port/dragTool.ts). */
+      restoreSelection?: string[];
+      /** The nets highlighted again when the drag ends (see kicad-port/dragTool.ts `dragHighlight`). */
+      restoreHighlight?: string[];
     }
   /** `6` (gap #7 task item 6, pcbnew.InteractiveRouter.DiffPair ->
    * `eda_pns::diff_pair::DiffPairPlacer`): an in-progress differential-

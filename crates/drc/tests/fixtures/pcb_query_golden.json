@@ -590,7 +590,7 @@
      {
       "name": "Allow Teardrops To Span Two Tracks",
       "kind": "bool",
-      "value": false
+      "value": true
      },
      {
       "name": "Max Width Ratio",
@@ -751,7 +751,7 @@
      {
       "name": "Allow Teardrops To Span Two Tracks",
       "kind": "bool",
-      "value": false
+      "value": true
      },
      {
       "name": "Max Width Ratio",
@@ -912,7 +912,7 @@
      {
       "name": "Allow Teardrops To Span Two Tracks",
       "kind": "bool",
-      "value": false
+      "value": true
      },
      {
       "name": "Max Width Ratio",
@@ -1288,7 +1288,7 @@
      {
       "name": "Allow Teardrops To Span Two Tracks",
       "kind": "bool",
-      "value": false
+      "value": true
      },
      {
       "name": "Max Width Ratio",
@@ -1552,7 +1552,7 @@
      {
       "name": "Allow Teardrops To Span Two Tracks",
       "kind": "bool",
-      "value": false
+      "value": true
      },
      {
       "name": "Max Width Ratio",
@@ -1818,7 +1818,7 @@
      {
       "name": "Allow Teardrops To Span Two Tracks",
       "kind": "bool",
-      "value": false
+      "value": true
      },
      {
       "name": "Max Width Ratio",
@@ -2084,7 +2084,7 @@
      {
       "name": "Allow Teardrops To Span Two Tracks",
       "kind": "bool",
-      "value": false
+      "value": true
      },
      {
       "name": "Max Width Ratio",
@@ -2994,7 +2994,7 @@
      {
       "name": "Allow Teardrops To Span Two Tracks",
       "kind": "bool",
-      "value": false
+      "value": true
      },
      {
       "name": "Max Width Ratio",
@@ -3896,7 +3896,7 @@
      {
       "name": "Allow Teardrops To Span Two Tracks",
       "kind": "bool",
-      "value": false
+      "value": true
      },
      {
       "name": "Max Width Ratio",

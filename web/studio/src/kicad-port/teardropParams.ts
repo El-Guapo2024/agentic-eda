@@ -20,13 +20,15 @@ export const DEFAULT_TEARDROP_PARAMS: TeardropParams = {
 };
 
 /**
- * `TeardropParams::of_settings`: what Board Setup's block gives an item without parameters of its own (`DIALOG_GLOBAL_EDIT_TEARDROPS::processItem`), for its kind --
- * one segment, straight edges, as the studio's teardrops are made (`eda_connectivity::teardrop`: neither is ported).
+ * `TeardropParams::of_settings`: what Board Setup's block gives an item without parameters of its own (`DIALOG_GLOBAL_EDIT_TEARDROPS::processItem`), for its kind:
+ * the block's enable, sizes, filter, curved edges, two segments and zone preference (an absent field is `TEARDROP_PARAMETERS()`'s).
  */
 export function paramsOfSettings(s: Partial<TeardropSettings> | undefined, targeted: boolean): TeardropParams {
   return {
     ...DEFAULT_TEARDROP_PARAMS,
-    allow_two_segments: false,
+    allow_two_segments: s?.allow_two_segments ?? DEFAULT_TEARDROP_PARAMS.allow_two_segments,
+    prefer_zone_connections: s?.prefer_zone_connections ?? DEFAULT_TEARDROP_PARAMS.prefer_zone_connections,
+    curved_edges: s?.curved_edges ?? DEFAULT_TEARDROP_PARAMS.curved_edges,
     enabled: !!s?.enabled && targeted,
     best_length_ratio: s?.best_length_ratio ?? DEFAULT_TEARDROP_PARAMS.best_length_ratio,
     best_width_ratio: s?.best_width_ratio ?? DEFAULT_TEARDROP_PARAMS.best_width_ratio,
