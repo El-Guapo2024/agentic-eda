@@ -26,7 +26,8 @@ import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, isKicadPcbText, newItemIds, type ClipboardContents } from "../components/canvas/clipboard";
 import { itemKind, subItemIds } from "../kicad-port/pcbItems";
-import { tableCellIds } from "../kicad-port/tables";
+import { tableCellIds, tablesOf } from "../kicad-port/tables";
+import { clipboardHasTable, hasTableCells } from "../kicad-port/tableCells";
 import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
 import type { CarryOp } from "../kicad-port/pcbCarry";
 import { carryAngleDeg, editableSelection, planCarry, planFlip, planRotate, type FlipDirection, type TransformPlan } from "../kicad-port/pcbTransform";
@@ -2682,6 +2683,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const at = pasteAt();
       // A plain Paste is `PASTE_MODE::KEEP_ANNOTATIONS` with the nets kept; Paste Special brings the dialog's two answers.
       const paste = (text: string): Cmd => (options ? { op: "paste_special", text, at, mode: options.mode ?? "keep", clear_nets: options.clearNets ?? false } : { op: "paste_clipboard", text, at });
+      // `hasTableCells`: with a table cell selected and a table on the clipboard, its cells go into the selected ones ("Paste Cells", one undo step; kicad-port/tableCells.ts)
+      const kicadText = system != null && isKicadPcbText(system) ? system : system == null || system === "" ? (st.clipboard?.text ?? null) : null;
+      if (kicadText && hasTableCells(st.selection, tablesOf(board)) && clipboardHasTable(kicadText, 1)) {
+        await runCmd({ op: "table", verb: "paste_cells", ids: [...st.selection], text: kicadText });
+        return;
+      }
       let cmd: Cmd;
       if (system != null && isKicadPcbText(system)) {
         cmd = paste(system);

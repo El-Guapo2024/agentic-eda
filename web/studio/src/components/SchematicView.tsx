@@ -77,6 +77,7 @@ import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { finishShapeDraw, isSchShapeTool, paintShapePreview, shapeToolClick } from "./schematic/schShapeTools";
 import { drawSchTablePreview } from "./schematic/schTablePaint";
 import { schDrawTableGrid } from "../kicad-port/tables";
+import { cellsBetween, cellUnder } from "../kicad-port/tableCells";
 import { openDrawnTableDialog } from "../state/tableDialogs";
 import { breakPreviewSheet, commitBreak } from "./schematic/schBreakTool";
 import { paintPinPreview, placePinClick } from "./schematic/schPinTool";
@@ -115,6 +116,8 @@ type DragState =
   /** DRAG_ZOOMING: the view is scaled about the press point (`anchor`, canvas pixels) as the pointer goes up and down (`lastY` is where it was at the last motion). */
   | { kind: "zoom"; button: 1 | 2; anchor: { x: number; y: number }; lastY: number; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
+  /** `selectTableCells`: a drag from a cell of `table` selects the cells under it (`SelectCellsBetween`), from the selection it began with (`before`). */
+  | { kind: "cells"; table: string; startWorld: [number, number]; before: string[]; modifiers: ReturnType<typeof computeClickModifiers>; moved: boolean }
   /**
    * A plain click-and-drag on any item, started without `M`/`G` armed
    * first -- sch_selection_tool.cpp Main()'s own `IsDrag(BUT_LEFT)`
@@ -585,7 +588,7 @@ export function SchematicView() {
       const { state: s, paste: carried, size, marquee: box } = live.current;
       if (!s.prefs.autoPan || s.tab !== "schematic") return;
       const drag = dragRef.current;
-      const interactive = drag?.kind === "box" || (drag?.kind === "move" && drag.moved) || s.drawState != null || s.movePreview != null || carried != null;
+      const interactive = drag?.kind === "box" || drag?.kind === "cells" || (drag?.kind === "move" && drag.moved) || s.drawState != null || s.movePreview != null || carried != null;
       const pointer = lastPointerRef.current;
       if (!interactive || !pointer || !(s.schematicView.scale > 0)) return;
       const dir = computeAutoPanDirection(pointer, size, DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin);
@@ -833,6 +836,29 @@ export function SchematicView() {
         if (pickedSub?.exits || outsideEntered) dispatch({ type: "SET_SCH_ENTERED_GROUP", id: null });
         const picked = pickedSub ? (pickedSub.ids[0] ?? null) : null;
         const wireId = picked && sch.wires.some((w) => w.id === picked) ? picked : null;
+        // `SCH_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )`: unless the one item selected is a table the drag starts in (which moves it), a drag from a table cell -- of a
+        // table in no group, or in the group worked in -- selects the cells under it (`selectTableCells`, `SelectCellsBetween`). The press picks nothing: a release with
+        // no drag is the click it would have been (kicad-port/tableCells.ts).
+        if (state.activeTool === "select" && !e.altKey && (sch.tables ?? []).length > 0) {
+          const tables = sch.tables ?? [];
+          const under = cellUnder(tables, wx, wy, tolerance);
+          const holder = under ? (sch.groups ?? []).find((g) => g.member_ids.includes(under.table.id)) : undefined;
+          const one = state.selection.size === 1 ? tables.find((t) => state.selection.has(t.id)) : undefined;
+          const inOne = one != null && wx >= one.bbox[0] && wx <= one.bbox[2] && wy >= one.bbox[1] && wy <= one.bbox[3];
+          if (under && !inOne && (!holder || holder.id === state.schEnteredGroupId)) {
+            areaClickRef.current = () => {
+              if (picked) {
+                dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
+                dispatch({ type: "SET_SELECTION", refs: hasModifier(modifiers) ? applySingleClickModifier(state.selection, picked, modifiers) : [picked] });
+                dispatch({ type: "SET_SCH_WIRE_PICK", pick: null });
+              } else if (!hasModifier(modifiers)) {
+                dispatch({ type: "CLEAR_SELECTION" });
+              }
+            };
+            dragRef.current = { kind: "cells", table: under.table.id, startWorld: [wx, wy], before: [...state.selection], modifiers, moved: false };
+            return;
+          }
+        }
         if (picked) {
           dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
           if (hasModifier(modifiers)) {
@@ -944,6 +970,11 @@ export function SchematicView() {
           if (motion?.dragging) drag.moved = true;
           dispatch({ type: "SET_SCHEMATIC_VIEW", view: dragZoomView(state.schematicView, drag.anchor, e.clientY - drag.lastY, state.prefs.zoomSpeed) });
           drag.lastY = e.clientY;
+        } else if (drag.kind === "cells") {
+          if (!motion?.dragging) return;
+          drag.moved = true;
+          const table = (sch?.tables ?? []).find((t) => t.id === drag.table);
+          if (table) dispatch({ type: "SET_SELECTION", refs: cellsBetween(table, drag.startWorld, [wx, wy], drag.before, drag.modifiers), raw: true });
         } else if (drag.kind === "box") {
           if (!motion?.dragging) return; // a click with a little jitter, not a rectangle
           const rect = containerRef.current!.getBoundingClientRect();
@@ -1080,6 +1111,10 @@ export function SchematicView() {
         }
         const areaClick = areaClickRef.current;
         areaClickRef.current = null;
+        if (drag.kind === "cells") {
+          if (!drag.moved && areaClick) areaClick();
+          return;
+        }
         if (drag.kind === "box" && sch) {
           // a press on an item that would have drawn the area, released without a drag: the click it is
           if (!marquee && areaClick) areaClick();

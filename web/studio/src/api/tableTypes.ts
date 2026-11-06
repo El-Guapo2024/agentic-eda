@@ -70,6 +70,8 @@ export interface TableCellEdit {
   fill?: "none" | "outline" | "background" | "color";
   /** "Background Fill Color". */
   fill_color?: { r: number; g: number; b: number; a: number };
+  /** A sheet cell's text colour (Table Cell Properties' "Text color:", `EDA_TEXT::SetTextColor`); one with no alpha is `COLOR4D::UNSPECIFIED` and takes it away. */
+  text_color?: { r: number; g: number; b: number; a: number };
 }
 
 /** A cell address: `[row, col]`, both from 0. */
@@ -99,4 +101,6 @@ export type TableCmdWire =
   | { verb: "delete_rows"; id: string; rows: number[] }
   | { verb: "delete_columns"; id: string; cols: number[] }
   | { verb: "merge_cells"; id: string; cells: TableCellAddr[] }
-  | { verb: "unmerge_cells"; id: string; cells: TableCellAddr[] };
+  | { verb: "unmerge_cells"; id: string; cells: TableCellAddr[] }
+  /** Paste with table cells selected and a table on the clipboard (`pasteCellsIntoSelection`, "Paste Cells"): `ids` is the whole selection, `text` the clipboard's KiCad text. */
+  | { verb: "paste_cells"; ids: string[]; text: string };

@@ -13,7 +13,8 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { closeTableCellDialog, closeTableDialog, openTableDialog, useTableDialogs } from "../state/tableDialogs";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { lineThicknessNm } from "../kicad-port/layerDefaults";
-import { autoPenFor, cellById, cellDialogValues, cellEditOf, gridColumn, isSelectableCell, schCellAddress, TABLE_LINE_STYLES, tableById, tableDialogValues, tablePatchOf, tablesOf, widthAfterToggle, type CellDialogValues, type TableDialogValues } from "../kicad-port/tables";
+import { ColorSwatch } from "./TextLookControls";
+import { autoPenFor, cellById, cellColorEditOf, cellDialogValues, cellEditOf, gridColumn, isSelectableCell, schCellAddress, TABLE_LINE_STYLES, tableById, tableDialogValues, tablePatchOf, tablesOf, widthAfterToggle, type CellColor, type CellDialogValues, type TableDialogValues } from "../kicad-port/tables";
 import type { TableCellAddr, TableCmdWire, TableLineStyleName } from "../api/tableTypes";
 import type { BoardTable } from "../api/types";
 import type { DrawnTable } from "../state/tableDialogs";
@@ -352,7 +353,8 @@ export function TableCellPropertiesDialog() {
   const apply = async (): Promise<boolean> => {
     setBusy(true);
     try {
-      const verb: TableCmdWire = { verb: "edit_cells", id: table.id, cells: open.cells, edit: cellEditOf(v) };
+      // a sheet's dialog has the text colour and the background fill too (eeschema `DIALOG_TABLECELL_PROPERTIES`); the board's has neither
+      const verb: TableCmdWire = { verb: "edit_cells", id: table.id, cells: open.cells, edit: sch ? { ...cellEditOf(v), ...cellColorEditOf(v) } : cellEditOf(v) };
       return await api.cmd(sch ? { op: "sch_table", ...verb } : { op: "table", ...verb });
     } finally {
       setBusy(false);
@@ -433,10 +435,17 @@ export function TableCellPropertiesDialog() {
                 </label>
               ))}
             </span>
-            {!sch &&
-              (["Left", "Top", "Right", "Bottom"] as const).map((side, i) => (
-                <MarginRow key={side} label={`${side} margin (${unit})`} value={v.margins[i]!} unit={unit} testId={`cell-margin-${side.toLowerCase()}`} onChange={(um) => set({ margins: v.margins.map((m, j) => (j === i ? um : m)) as CellDialogValues["margins"] })} />
-              ))}
+            {sch && (
+              <>
+                <span>Text color:</span>
+                <CellColorField value={v.textColor} label="Text color" testId="cell-text-color" onChange={(c) => set({ textColor: c })} />
+                <span>Background fill:</span>
+                <CellColorField value={v.fillColor} label="Background fill" testId="cell-fill-color" onChange={(c) => set({ fillColor: c })} />
+              </>
+            )}
+            {(["Left", "Top", "Right", "Bottom"] as const).map((side, i) => (
+              <MarginRow key={side} label={`${side} margin (${unit})`} value={v.margins[i]!} unit={unit} testId={`cell-margin-${side.toLowerCase()}`} onChange={(um) => set({ margins: v.margins.map((m, j) => (j === i ? um : m)) as CellDialogValues["margins"] })} />
+            ))}
           </div>
         </div>
         <div className="dialog-footer">
@@ -452,6 +461,26 @@ export function TableCellPropertiesDialog() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The colour of a sheet's cell dialog (`m_textColorBook` / `m_fillColorBook`): the swatch, its "Default" tick being `COLOR4D::UNSPECIFIED`; while the selected cells
+ * disagree, the `-- mixed values --` / `Set Color...` popup, whose second choice shows the swatch (`onTextColorPopup`: `m_textColorBook->SetSelection( 1 )`).
+ */
+function CellColorField(props: { value: CellColor | null | "mixed"; label: string; testId: string; onChange: (c: CellColor | null) => void }) {
+  if (props.value === "mixed") {
+    return (
+      <select data-testid={`${props.testId}-popup`} aria-label={props.label} value="mixed" onChange={(e) => e.target.value === "set" && props.onChange({ r: 0, g: 0, b: 0, a: 255 })}>
+        <option value="mixed">-- mixed values --</option>
+        <option value="set">Set Color...</option>
+      </select>
+    );
+  }
+  return (
+    <span data-testid={props.testId}>
+      <ColorSwatch label={props.label} color={props.value} onChange={(c) => props.onChange(c && c.a > 0 ? c : null)} />
+    </span>
   );
 }
 

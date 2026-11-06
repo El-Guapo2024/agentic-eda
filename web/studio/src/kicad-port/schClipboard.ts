@@ -7,7 +7,8 @@
 // whole paste away. Here the studio asks the server for what a paste would add (`POST /api/sch/clipboard/parse`: the new items, already
 // numbered, drawn the way the sheet draws them), shows them shifted by the cursor, and a click sends `paste_sch` with that shift.
 // This module is the part with no React in it: the shift, the ghost of the paste on a sheet, and which items a paste made.
-import type { Group, LibSymbols, Schematic, SchField } from "../api/types";
+import type { BoardTable, Group, LibSymbols, Schematic, SchField } from "../api/types";
+import { shiftTable } from "./tableCells";
 import { substituteSchSelection } from "./schGroups";
 import type { SchGraphic, SchGraphicShape } from "../api/schEditTypes";
 
@@ -37,6 +38,8 @@ export interface SchPastePreview {
   graphics: SchGraphic[];
   /** The groups the paste brings (`SCH_GROUP`s among the pasted items), their members the ids above. Absent from an older server. */
   groups?: Group[];
+  /** The tables (`SCH_TABLE`), with the geometry the server works out. Absent from an older server. */
+  tables?: BoardTable[];
   lib_symbols: LibSymbols;
 }
 
@@ -92,12 +95,13 @@ export function shiftPreview(p: SchPastePreview, dx: number, dy: number): SchPas
     junctions: p.junctions.map((j) => ({ ...j, at: shiftPt(j.at, dx, dy) })),
     lines: p.lines.map((l) => ({ ...l, pts: l.pts.map((q) => shiftPt(q, dx, dy)) })),
     graphics: p.graphics.map((g) => ({ ...g, shape: shiftShape(g.shape, dx, dy) })),
+    ...(p.tables ? { tables: p.tables.map((t) => shiftTable(t, dx, dy)) } : {}),
   };
 }
 
 /** The ids of everything the preview holds (what the canvas draws as selected while the paste is carried). */
 export function previewIds(p: SchPastePreview): string[] {
-  return [...p.symbols, ...p.power_symbols, ...p.wires, ...p.labels, ...p.texts, ...(p.sheets ?? []), ...p.no_connects, ...p.bus_entries, ...p.junctions, ...p.lines, ...p.graphics, ...(p.groups ?? [])].map((x) => x.id).filter((id) => id !== "");
+  return [...p.symbols, ...p.power_symbols, ...p.wires, ...p.labels, ...p.texts, ...(p.sheets ?? []), ...p.no_connects, ...p.bus_entries, ...p.junctions, ...p.lines, ...p.graphics, ...(p.tables ?? []), ...(p.groups ?? [])].map((x) => x.id).filter((id) => id !== "");
 }
 
 /** `sch` with the paste drawn on it, shifted by `(dx, dy)`. A library symbol the sheet already draws is left as the sheet has it. */
@@ -117,6 +121,7 @@ export function withPaste(sch: Schematic, preview: SchPastePreview, dx: number, 
     lines: [...(sch.lines ?? []), ...p.lines],
     graphics: [...(sch.graphics ?? []), ...p.graphics],
     groups: [...(sch.groups ?? []), ...(p.groups ?? [])],
+    tables: [...(sch.tables ?? []), ...(p.tables ?? [])],
     lib_symbols: { ...p.lib_symbols, ...sch.lib_symbols },
   };
 }
@@ -140,13 +145,13 @@ export function selectionAfterPaste(paste: { hover?: boolean }, pasted: string[]
 export function newIdsAfter(before: Schematic, after: Schematic): string[] {
   const known = new Set<string>();
   const add = (list: ReadonlyArray<{ id: string }> | undefined) => (list ?? []).forEach((x) => known.add(x.id));
-  [before.wires, before.labels, before.texts, before.sheets, before.power_symbols, before.no_connects, before.bus_entries, before.junctions, before.lines, before.graphics].forEach(add);
+  [before.wires, before.labels, before.texts, before.sheets, before.power_symbols, before.no_connects, before.bus_entries, before.junctions, before.lines, before.graphics, before.tables].forEach(add);
   const units = new Set(before.symbols.map((s) => `${s.id}#${s.unit}`));
   const ids: string[] = [];
   const take = (id: string) => {
     if (id && !ids.includes(id)) ids.push(id);
   };
-  for (const list of [after.wires, after.labels, after.texts, after.sheets, after.power_symbols, after.no_connects, after.bus_entries, after.junctions ?? [], after.lines ?? [], after.graphics ?? []] as ReadonlyArray<{ id: string }>[]) {
+  for (const list of [after.wires, after.labels, after.texts, after.sheets, after.power_symbols, after.no_connects, after.bus_entries, after.junctions ?? [], after.lines ?? [], after.graphics ?? [], after.tables ?? []] as ReadonlyArray<{ id: string }>[]) {
     for (const x of list) if (!known.has(x.id)) take(x.id);
   }
   for (const s of after.symbols) if (!units.has(`${s.id}#${s.unit}`)) take(s.id);

@@ -7,6 +7,8 @@ import { readClipboardText } from "../api/libraryClient";
 import { snapPoint } from "../components/canvas/gridHelper";
 import { addCornerCmds, cornerTarget } from "../kicad-port/pcbAddCorner";
 import { clearNetsOffered, pasteOptions, pasteSource } from "../kicad-port/pcbPasteSpecial";
+import { clipboardHasTable, hasTableCells } from "../kicad-port/tableCells";
+import { tablesOf } from "../kicad-port/tables";
 import { PcbPasteSpecialDialog } from "../components/PcbPasteSpecialDialog";
 import { openSweepDialog } from "./pcbSweepDialogs";
 import type { SweepCtx } from "./pcbSweepKit";
@@ -28,7 +30,8 @@ export function registerPcbEditDetailsActions(m: Map<string, Handler>, ctx: Swee
     void (async () => {
       const source = pasteSource(await readClipboardText(), api.getState().clipboard?.text);
       if (!source) return;
-      if (source.kind === "text") {
+      // a text, and cells pasted into the selected cells (`hasTableCells`, before the dialog would ask), are pasted as Paste does
+      if (source.kind === "text" || (hasTableCells(api.getState().selection, tablesOf(api.getState().board)) && clipboardHasTable(source.text, 1))) {
         await api.pasteClipboard();
         return;
       }

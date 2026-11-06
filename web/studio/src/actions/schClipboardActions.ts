@@ -15,6 +15,7 @@ import type { Dispatch } from "react";
 import { fetchSchematic } from "../api/client";
 import { postSchCopy, postSchParse } from "../api/schClipboardClient";
 import { clipboardTextOrNull, newIdsAfter, pasteOffset, selectionAfterPaste, type SchPasteMode } from "../kicad-port/schClipboard";
+import { clipboardHasTable, hasTableCells } from "../kicad-port/tableCells";
 import { deleteCmds } from "../kicad-port/schDelete";
 import { pasteNumbering, rememberedAnnotateSettings } from "../kicad-port/schAnnotate";
 import { getSchPaste, openPasteSpecial, setSchPaste } from "../state/schPasteStore";
@@ -52,6 +53,8 @@ const toast = (dispatch: Dispatch<Action>, message: string, kind: "error" | "inf
 export interface SchPasteContext {
   state: StudioState;
   dispatch: Dispatch<Action>;
+  /** Sends Paste Cells; without it a paste with cells selected pastes the clipboard as it is. */
+  api?: Pick<StudioApi, "cmd">;
 }
 
 /**
@@ -63,6 +66,12 @@ export async function startPaste(ctx: SchPasteContext, opts: { mode: SchPasteMod
   const text = clipboardTextOrNull(opts.text) ?? (opts.duplicate ? clipboardTextOrNull(duplicateBuffer) : await readSystemClipboard());
   if (!text) {
     toast(dispatch, "The clipboard is empty.");
+    return;
+  }
+  // `hasTableCells`: with a table cell selected and a table on the clipboard, its cells go into the selected ones (`pasteCellsIntoSelection`, "Paste Cells"; Duplicate too,
+  // which pastes what it copied)
+  if (ctx.api && hasTableCells(state.selection, state.schematic?.tables ?? []) && clipboardHasTable(text, 0)) {
+    await ctx.api.cmd({ op: "sch_table", verb: "paste_cells", ids: [...state.selection], text });
     return;
   }
   let reply;
