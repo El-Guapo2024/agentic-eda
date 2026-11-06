@@ -536,7 +536,8 @@
       await sleep(900);
       const made = await mine();
       t(made.length === 5, `five footprints of the tools (${made.map((p) => p.footprint)})`);
-      // what the editor asks the server for: the footprint's own name, answered
+      // what the editor asks the server for: since task-u3-fpedit2 (UI-LEFT F3, `FOOTPRINT_EDIT_FRAME::LoadFootprintFromBoard`) Ctrl+E edits that one board
+      // footprint, so the editor loads `<board>/<reference>`, answered
       const asked = [];
       const fetched = window.fetch;
       window.fetch = async (...a) => { const r = await fetched(...a); const u = String((a[0] && a[0].url) || a[0]); if (u.includes("/api/footprint?name=")) asked.push(`${decodeURIComponent(u.split("name=")[1])} ${r.status}`); return r; };
@@ -547,10 +548,10 @@
           const e0 = E.errors().length;
           asked.length = 0;
           const r = await E.run("pcbnew.EditorControl.EditFpInFpEditor");
-          await waitFor(() => E.state().tab === "footprint" && asked.some((q) => q.startsWith(`${p.footprint} `)), 6000);
+          await waitFor(() => E.state().tab === "footprint" && asked.some((q) => q.startsWith(`<board>/${p.ref} `)), 6000);
           await sleep(700);
           t(r.ok !== false && E.state().tab === "footprint", `${p.footprint}: Edit Footprint opens the Footprint Editor (${r.error ?? E.state().tab})`);
-          t(asked.some((q) => q === `${p.footprint} 200`), `${p.footprint}: the editor loads it by its name (${asked.join(", ")})`);
+          t(asked.some((q) => q === `<board>/${p.ref} 200`), `${p.footprint}: the editor loads the board's ${p.ref} (${asked.join(", ")})`);
           t(E.errors().length === e0 && !!document.querySelector(".status-bar"), `${p.footprint}: no error, the page is still there (${E.errors().slice(e0).map((q) => q.message).join("; ")})`);
         }
       } finally {
