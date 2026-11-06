@@ -12,7 +12,8 @@ import type { CarriedText } from "../kicad-port/schPlaceTool";
 import { carryItem, changeCarried } from "../actions/schPlaceActions";
 import { getSchCarry, setSchCarry, useSchCarry } from "../state/schCarryStore";
 
-const DEFAULT_SIZE_NM = 1_270_000; // 1.27mm -- eeschema's own SCHEMATIC_SETTINGS::m_DefaultTextSize default (50 mil)
+/** `SCHEMATIC_SETTINGS::m_DefaultTextSize`'s default (50 mil); a new text starts at the schematic's own (`createNewText`: `SetTextSize( .. m_DefaultTextSize .. )`). */
+const DEFAULT_SIZE_NM = 1_270_000;
 
 export function SchTextDialog() {
   const state = useStudioState();
@@ -34,7 +35,7 @@ export function SchTextDialog() {
     const from = c?.editing && c.item.kind === "text" ? (c.item as CarriedText) : null;
     const last = lastPlaced();
     setContent(from?.content ?? "");
-    setSize(from?.sizeNm ?? DEFAULT_SIZE_NM);
+    setSize(from?.sizeNm ?? state.schematic?.setup?.default_text_size_nm ?? DEFAULT_SIZE_NM);
     setVertical(from?.vertical ?? last.textVertical);
     setH(from?.h ?? last.textH);
     setV(from?.v ?? last.textV);

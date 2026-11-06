@@ -28,7 +28,7 @@ import { gridEditorOfTab } from "../kicad-port/gridSettings";
 import { highlightedNets } from "../kicad-port/boardControl";
 import { lastSnapReport, type SnapReport } from "../kicad-port/snapReport";
 import { cliExporterUnavailable } from "../state/cliExporters";
-import { getSchCarry } from "../state/schCarryStore";
+import { carryTiming, getSchCarry } from "../state/schCarryStore";
 import { describeCarried } from "../kicad-port/schPlaceTool";
 import { placeFootprintStage } from "./placeFootprintTool";
 import {
@@ -279,7 +279,10 @@ function build(latest: { current: Latest }): EdaTestHook {
         viewer3d: studio.tab === "3d" ? viewer3dProbe.snapshot() : null,
         carry: (() => {
           const c = getSchCarry();
-          return c ? { tool: c.tool, ...describeCarried(c.item), queue: c.queue.length, keep: c.keep, drawn: c.preview != null } : null;
+          // `drawn`: the canvas has drawn this state of the item (the page draws it: no round trip); `paintMs` how long after the change it was drawn; `requests`
+          // the server drawings asked for so far; `server` whether the server's drawing of this very state is laid over it
+          const t = carryTiming();
+          return c ? { tool: c.tool, ...describeCarried(c.item), queue: c.queue.length, keep: c.keep, drawn: t.paintedSeq === c.seq, paintMs: t.paintMs, requests: t.requests, server: c.server != null && JSON.stringify(c.server.item) === JSON.stringify(c.item) } : null;
         })(),
         placeFootprint: placeFootprintStage(),
         moving: studio.movePreview ? { refs: [...studio.movePreview.refs], dx: studio.movePreview.dxNm, dy: studio.movePreview.dyNm, turns: studio.movePreview.rotateQuarterTurns ?? 0, flipped: !!studio.movePreview.flipped, frameDeg: studio.movePreview.frameDeg ?? null, ops: studio.movePreview.ops?.length ?? 0 } : null,

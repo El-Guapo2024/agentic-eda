@@ -33,6 +33,7 @@ import type { Cmd, LabelScope, LabelShape } from "../api/types";
 import type { AnnotateOptions } from "../api/hierarchyTypes";
 import type { DirectiveShape, SchHAlign, SchVAlign } from "../api/schEditTypes";
 import { placeLabelCmd } from "./schLabelName";
+import { ATTRIBUTE_ACTIONS, type SymbolAttrKey } from "./schControl";
 import type { LabelSpinName } from "./schLastPlaced";
 import { incrementString } from "./stringIncrement";
 
@@ -97,6 +98,9 @@ export interface CarriedPower {
   /** The net it puts its pin on: the symbol's Value. */
   net: string;
   rotMillideg: number;
+  /** What its Properties (E) and Field Properties (U, V) did to it while it rode: their commands, by the id the server numbers it with (`edits` of a carried
+   *  symbol, below), run after it is made in the same step. */
+  edits?: Cmd[];
 }
 
 /** A quarter turn or a mirror of a carried symbol, applied after it is made as the placed symbol's own R / Shift+R / X / Y are (`SCH_EDIT_TOOL::Rotate` /
@@ -124,6 +128,15 @@ export interface CarriedSymbol {
   placeAllUnits: boolean;
   /** `placeOneOnly`: the action was handed this symbol (Place Next Symbol Unit, Add Symbol to Schematic) -- placed once, and the tool ends. */
   oneOnly: boolean;
+  /** The body style it is drawn in (Cycle Body Style or Symbol Properties' Body style while it rides): 1 or absent the normal one. */
+  bodyStyle?: number;
+  /** The attribute toggles made while it rides (`SCH_EDIT_TOOL::SetAttribute` on the selection, which is the symbol): DNP and the three exclusions. */
+  attrs?: Partial<Record<SymbolAttrKey, boolean>>;
+  /**
+   * What Symbol Properties (E) and Field Properties (U, V, F) did to it while it rode (`PlaceSymbol` hands those actions to the edit tool, whose dialogs act on
+   * the selection -- the symbol in the hand): the dialogs' own commands, naming it by the reference it rides with, run right after it is made, in the same step.
+   */
+  edits?: Cmd[];
 }
 
 export type CarriedItem = CarriedLabel | CarriedDirective | CarriedText | CarriedPower | CarriedSymbol;
@@ -232,6 +245,8 @@ export interface PlaceOptions {
   annotate?: AnnotateOptions;
   /** The preview: the click's `AutoRotateItem` is not run while the item rides. */
   preview?: boolean;
+  /** The id the server numbers a carried power symbol with (its preview's): what the power symbol's `edits` name it by. */
+  powerId?: string;
 }
 
 const xy = (p: readonly [number, number]) => ({ x: p[0], y: p[1] });
@@ -245,11 +260,196 @@ export function placeCmd(item: CarriedItem, at: readonly [number, number], o: Pl
       return { op: "sch_edit", verb: "add_graphic", graphic: { shape: { type: "directive", at: xy(at), orientation: item.orientation, shape: item.shape, pin_length_nm: item.pinLengthNm, netclass: item.netclass, component_class: item.componentClass } } };
     case "text":
       return { op: "sch_edit", verb: "place_text", content: item.content, at: xy(at), angle: item.vertical ? 90_000 : 0, size_nm: item.sizeNm, h: item.h, v: item.v };
-    case "power":
-      return { op: "add_power_symbol", lib_id: item.libId, at: xy(at), rot_millideg: item.rotMillideg, net: item.net, pin: "", ...(o.annotate ? { annotate: o.annotate } : {}) };
+    case "power": {
+      const add: Cmd = { op: "add_power_symbol", lib_id: item.libId, at: xy(at), rot_millideg: item.rotMillideg, net: item.net, pin: "", ...(o.annotate ? { annotate: o.annotate } : {}) };
+      // what its dialogs did while it rode, by the id it is numbered with (the server numbers it the same at the preview's point and at the click's)
+      const edits = item.edits ?? [];
+      const id = o.powerId;
+      if (edits.length === 0 || !id) return add;
+      const from = powerIdOfEdits(edits);
+      return { op: "batch", cmds: [add, ...edits.map((c) => (from ? renameInCmd(c, from, id) : c))] };
+    }
     case "symbol":
       return placeSymbolCmd(item, at, o);
   }
+}
+
+/** The power symbol id the first of `edits` names (`set_power_props`' `id`, a field id's owner). */
+function powerIdOfEdits(edits: readonly Cmd[]): string | null {
+  for (const c of edits) {
+    const id = (c as { id?: unknown }).id;
+    if (typeof id === "string" && id !== "") return id.startsWith("fld:") ? id.slice(4, id.lastIndexOf(":")) : id;
+  }
+  return null;
+}
+
+/**
+ * `c` with every name of the item `from` made a name of `to`: the item's own id, a placed unit's key (`<from>#<unit>`), a field's id (`fld:<from>:<name>`,
+ * `fld:<from>#<unit>:<name>`) and a pin's (`pin:<from>:<number>`). What the commands a dialog made on a carried symbol become when its reference changes
+ * while it rides (`annotate()`'s answer, a rename in Symbol Properties).
+ */
+export function renameInCmd(c: Cmd, from: string, to: string): Cmd {
+  if (from === to) return c;
+  const name = (v: string): string => {
+    if (v === from) return to;
+    if (v.startsWith(`${from}#`)) return to + v.slice(from.length);
+    for (const head of ["fld:", "pin:"]) if (v.startsWith(head + from) && (v[head.length + from.length] === ":" || v[head.length + from.length] === "#")) return head + to + v.slice(head.length + from.length);
+    return v;
+  };
+  const walk = (v: unknown): unknown => (typeof v === "string" ? name(v) : Array.isArray(v) ? v.map(walk) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v);
+  return walk(c) as Cmd;
+}
+
+/**
+ * What OK in a dialog opened on the carried symbol or power symbol does (Symbol Properties, a power symbol's Properties, Field Properties of one of its fields --
+ * `PlaceSymbol` hands Properties and U / V / F to the edit tool, whose dialogs edit the selection, the symbol in the hand): `cmds` are the dialog's own
+ * commands, by the name the item rides with. What the placing command makes the symbol with goes into the item -- the Value, the Footprint, the unit, the body
+ * style, the attributes, a new reference (a rename; the commands kept are renamed with it), a power symbol's net -- and the rest is kept, to run right after it
+ * is made, in the same step. A field edit's text that went into the item is taken out of it, as the field already has it then (the verb refuses an edit that
+ * changes nothing).
+ */
+export function applyCarriedCmds(item: CarriedSymbol | CarriedPower, cmds: readonly Cmd[]): CarriedSymbol | CarriedPower {
+  const flat = cmds.flatMap((c) => (c.op === "batch" ? c.cmds : [c]));
+  const kept: Cmd[] = [];
+  const fieldName = (id: unknown): string | null => (typeof id === "string" && id.startsWith("fld:") ? id.slice(id.lastIndexOf(":") + 1) : null);
+  /** A field edit without its text, or nothing when the text was all it did. */
+  const withoutText = (x: Record<string, unknown>): Cmd | null => {
+    const rest = Object.fromEntries(Object.entries(x).filter(([k]) => k !== "text"));
+    return Object.keys(rest).some((k) => k !== "op" && k !== "verb" && k !== "id") ? (rest as unknown as Cmd) : null;
+  };
+  if (item.kind === "power") {
+    let net = item.net;
+    for (const c of flat) {
+      const x = c as unknown as Record<string, unknown>;
+      if (c.op === "sch_edit" && x.verb === "edit_field" && typeof x.text === "string" && fieldName(x.id) === "Value") {
+        // the Value is the net it asserts (`add_power_symbol`'s `net`)
+        net = x.text.trim();
+        const rest = withoutText(x);
+        if (rest) kept.push(rest);
+        continue;
+      }
+      kept.push(c);
+    }
+    return { ...item, net, edits: [...(item.edits ?? []), ...kept] };
+  }
+  const next: CarriedSymbol = { ...item };
+  let renameTo: string | null = null;
+  for (const c of flat) {
+    const x = c as unknown as Record<string, unknown>;
+    if (c.op === "rename_symbol") {
+      renameTo = String(x.new_id);
+      continue;
+    }
+    if (c.op === "edit_symbol_fields") {
+      if (typeof x.value === "string") next.value = x.value;
+      if (typeof x.footprint === "string") next.footprint = x.footprint;
+      kept.push(c);
+      continue;
+    }
+    if (c.op === "set_symbol_attrs") {
+      const flags = Object.fromEntries(Object.entries(x).filter(([k, v]) => k !== "op" && k !== "ids" && typeof v === "boolean")) as Partial<Record<SymbolAttrKey, boolean>>;
+      next.attrs = { ...next.attrs, ...flags };
+      continue;
+    }
+    if (c.op === "sch_edit" && x.verb === "set_symbol_unit" && typeof x.new_unit === "number") {
+      next.unit = x.new_unit;
+      continue;
+    }
+    if (c.op === "sch_edit" && x.verb === "set_body_style" && typeof x.style === "number") {
+      next.bodyStyle = x.style;
+      continue;
+    }
+    if (c.op === "sch_edit" && x.verb === "edit_field" && typeof x.text === "string") {
+      const name = fieldName(x.id);
+      if (name === "Value" || name === "Footprint" || name === "Reference") {
+        if (name === "Value") next.value = x.text;
+        else if (name === "Footprint") next.footprint = x.text;
+        else renameTo = x.text.trim();
+        const rest = withoutText(x);
+        if (rest) kept.push(rest);
+        continue;
+      }
+    }
+    kept.push(c);
+  }
+  let edits = [...(item.edits ?? []), ...kept];
+  if (renameTo && renameTo !== item.ref) {
+    const to = renameTo;
+    edits = edits.map((c) => renameInCmd(c, item.ref, to));
+    next.ref = to;
+  }
+  return { ...next, edits };
+}
+
+// ------------------------------------------------------------------------------------------------------------------- orientation
+
+/** `crates/ops/src/sch_scene.rs` `Matrix` (KiCad's `TRANSFORM` of a placed symbol): `x' = x1*x + y1*y`, `y' = x2*x + y2*y`. */
+interface OrientMatrix {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+const M_IDENTITY: OrientMatrix = { x1: 1, y1: 0, x2: 0, y2: 1 };
+/** `SetOrientation( SYM_ROTATE_COUNTERCLOCKWISE )` / `SYM_ROTATE_CLOCKWISE`. */
+const M_ROT_CCW: OrientMatrix = { x1: 0, y1: 1, x2: -1, y2: 0 };
+const M_ROT_CW: OrientMatrix = { x1: 0, y1: -1, x2: 1, y2: 0 };
+/** `SYM_MIRROR_Y` negates x ("Mirror Horizontally", the IR's `mirrored`, this file's mirror `"y"`); `SYM_MIRROR_X` negates y (`mirror_y`, `"x"`). */
+const M_MIRROR_Y: OrientMatrix = { x1: -1, y1: 0, x2: 0, y2: 1 };
+const M_MIRROR_X: OrientMatrix = { x1: 1, y1: 0, x2: 0, y2: -1 };
+
+/** `SCH_SYMBOL::SetOrientation( incremental )`: the new matrix is `temp * old` (`Matrix::then`). */
+function thenM(m: OrientMatrix, t: OrientMatrix): OrientMatrix {
+  return { x1: m.x1 * t.x1 + m.x2 * t.y1, y1: m.y1 * t.x1 + m.y2 * t.y1, x2: m.x1 * t.x2 + m.x2 * t.y2, y2: m.y1 * t.x2 + m.y2 * t.y2 };
+}
+
+/** `Matrix::of`: the rotation first, then the mirror (`parseSymbol`). */
+function matrixOf(rotMillideg: number, mirrored: boolean, mirrorY: boolean): OrientMatrix {
+  const q = Math.trunc((Math.trunc(Math.trunc(rotMillideg / 1000) % 360) + 45) / 90) % 4;
+  let m = q === 0 ? M_IDENTITY : q === 1 ? thenM(M_IDENTITY, M_ROT_CCW) : q === 2 ? thenM(thenM(M_IDENTITY, M_ROT_CCW), M_ROT_CCW) : thenM(M_IDENTITY, M_ROT_CW);
+  if (mirrorY) m = thenM(m, M_MIRROR_X);
+  if (mirrored) m = thenM(m, M_MIRROR_Y);
+  return m;
+}
+
+/** `SCH_SYMBOL::GetOrientation` as `Matrix::orientation` reads it back: the first of KiCad's twelve orientations that gives the matrix. */
+function orientationOf(m: OrientMatrix): { rotMillideg: number; mirrored: boolean; mirrorY: boolean } {
+  const list: Array<[number, boolean, boolean]> = [
+    [0, false, false],
+    [90_000, false, false],
+    [180_000, false, false],
+    [270_000, false, false],
+    [0, false, true],
+    [90_000, false, true],
+    [270_000, false, true],
+    [0, true, false],
+    [90_000, true, false],
+    [180_000, true, false],
+    [270_000, true, false],
+  ];
+  for (const [rot, mirrored, mirrorY] of list) {
+    const o = matrixOf(rot, mirrored, mirrorY);
+    if (o.x1 === m.x1 && o.y1 === m.y1 && o.x2 === m.x2 && o.y2 === m.y2) return { rotMillideg: rot, mirrored, mirrorY };
+  }
+  return { rotMillideg: 0, mirrored: false, mirrorY: false };
+}
+
+/**
+ * Where the carried symbol's turns leave it: the orientation it was made with, then each quarter turn and mirror as the placed unit's own `sch_move` makes it
+ * (`Matrix::of( .. ).then( ROT_CCW / ROT_CW / MIRROR_X / MIRROR_Y )`), read back as `SCH_SYMBOL::GetOrientation` reads it.
+ */
+export function symbolOrientation(item: Pick<CarriedSymbol, "rotDeg" | "mirror" | "turns">): { rotMillideg: number; mirror: "x" | "y" | null } {
+  let m = matrixOf(Math.round(item.rotDeg * 1000), item.mirror === "y", item.mirror === "x");
+  for (const t of item.turns) m = thenM(m, t === "rot_ccw" ? M_ROT_CCW : t === "rot_cw" ? M_ROT_CW : t === "mirror_v" ? M_MIRROR_X : M_MIRROR_Y);
+  const o = orientationOf(m);
+  return { rotMillideg: o.rotMillideg, mirror: o.mirrored ? "y" : o.mirrorY ? "x" : null };
+}
+
+/** The carried symbol with its turns folded into the orientation it is made with: what Autoplace Fields leaves of it while it rides (its fields placed anew). */
+export function settledSymbol(item: CarriedSymbol): CarriedSymbol {
+  const o = symbolOrientation(item);
+  return { ...item, rotDeg: o.rotMillideg / 1000, mirror: o.mirror, turns: [] };
 }
 
 /**
@@ -258,16 +458,26 @@ export function placeCmd(item: CarriedItem, at: readonly [number, number], o: Pl
  * `<reference>#<unit>`) -- one command, one undo step. A symbol of an installed library brings its definition (the server's `EmbedLibSymbol`).
  */
 export function placeSymbolCmd(item: CarriedSymbol, at: readonly [number, number], o: PlaceOptions = {}): Cmd {
-  const add: Cmd = { op: "add_symbol", id: item.ref, lib_id: item.libId, at: xy(at), rot_millideg: Math.round(item.rotDeg * 1000), value: item.value, footprint: item.footprint, unit: item.unit, ...(o.annotate ? { annotate: o.annotate } : {}) };
+  // The click (`if( m_frame->eeconfig()->m_AutoplaceFields.enable ) symbol->AutoplaceFields( screen, AUTOPLACE_AUTO )` before `commit.Push`): the symbol is made
+  // in the orientation its turns left it in, so its fields are placed by Autoplace Fields there -- a mirror while it rode leaves them where the mirror put them
+  // (`SetFieldsAutoplaced( AUTOPLACE_NONE )`) only until it is placed. The preview draws it as the turns leave it, fields and all (`PlaceSymbol`'s preview).
+  // (with no turn it is made as it was given: a copy of a placed unit in that unit's own orientation, `new SCH_SYMBOL( *symbol )`)
+  const settled = o.preview || item.turns.length === 0 ? item : settledSymbol(item);
+  const add: Cmd = { op: "add_symbol", id: item.ref, lib_id: item.libId, at: xy(at), rot_millideg: Math.round(settled.rotDeg * 1000), value: item.value, footprint: item.footprint, unit: item.unit, ...(o.annotate ? { annotate: o.annotate } : {}) };
   const target = `${item.ref}#${item.unit}`;
   const cmds: Cmd[] = [add];
   // the IR's mirror flags: Mirror Horizontally (`mirrored`, negate x) is "y", Mirror Vertically (`mirror_y`) is "x"
-  if (item.mirror === "y") cmds.push({ op: "mirror_symbol", id: item.ref, unit: item.unit });
-  else if (item.mirror === "x") cmds.push({ op: "mirror_symbol_vertical", id: item.ref, unit: item.unit });
-  for (const t of item.turns) {
+  if (settled.mirror === "y") cmds.push({ op: "mirror_symbol", id: item.ref, unit: item.unit });
+  else if (settled.mirror === "x") cmds.push({ op: "mirror_symbol_vertical", id: item.ref, unit: item.unit });
+  for (const t of settled.turns) {
     const base = { op: "sch_move" as const, ids: [target], vertices: {} };
     cmds.push(t === "rot_ccw" || t === "rot_cw" ? { ...base, verb: "rotate", ccw: t === "rot_ccw" } : { ...base, verb: "mirror", vertical: t === "mirror_v" });
   }
+  // what was done to it while it rode: the body style, the attributes, and the dialogs' commands
+  if ((item.bodyStyle ?? 1) > 1) cmds.push({ op: "sch_edit", verb: "set_body_style", ids: [item.ref], style: item.bodyStyle } as unknown as Cmd);
+  const attrs = Object.entries(item.attrs ?? {}).filter(([, v]) => v !== undefined);
+  if (attrs.length > 0) cmds.push({ op: "set_symbol_attrs", ids: [item.ref], ...Object.fromEntries(attrs) } as Cmd);
+  cmds.push(...(item.edits ?? []));
   return cmds.length === 1 ? add : { op: "batch", cmds };
 }
 
@@ -296,7 +506,7 @@ export function nextSymbolAfter(item: CarriedSymbol, keep: boolean, ctx: NextSym
 }
 
 /** The command the server draws the riding item from (`POST /api/sch/place_preview`). */
-export const previewCmd = (item: CarriedItem): Cmd => placeCmd(item, PREVIEW_AT, { preview: true });
+export const previewCmd = (item: CarriedItem, powerId?: string): Cmd => placeCmd(item, PREVIEW_AT, { preview: true, powerId });
 
 /** What the tool holds after the click that placed `carry`'s item: the next label of the entry, the same symbol again, or nothing (the next click makes one). */
 export function afterPlaced(carry: Carry, symbols?: NextSymbolContext): Carry | null {
@@ -324,8 +534,18 @@ export type CarryKey =
   | { do: "place" }
   | { do: "rotate"; ccw: boolean }
   | { do: "mirror"; vertical: boolean }
-  /** Properties of the carried item: its dialog again. */
+  /** Properties of the carried item: its dialog again (Symbol Properties for a symbol, a power symbol's Properties). */
   | { do: "properties" }
+  /** U, V, F on a carried symbol or power symbol: Field Properties on that field of it (`SCH_EDIT_TOOL::EditField` on the selection). */
+  | { do: "edit_field"; name: "Reference" | "Value" | "Footprint" }
+  /** Autoplace Fields on a carried symbol: its fields go where Autoplace Fields puts them (`AutoplaceFields( screen, AUTOPLACE_MANUAL )` on the selection). */
+  | { do: "autoplace" }
+  /** Cycle Body Style on a carried symbol (`SCH_EDIT_TOOL::CycleBodyStyle` on the selection). */
+  | { do: "body_style" }
+  /** An attribute toggle on a carried symbol or power symbol (`SCH_EDIT_TOOL::SetAttribute` on the selection). */
+  | { do: "attribute"; key: SymbolAttrKey }
+  /** The right-button menu's Symbol Unit choice for the carried symbol (`ID_POPUP_SCH_SELECT_UNIT`: `m_frame->SelectUnit( symbol, unit )`). */
+  | { do: "unit" }
   /** Esc, Undo, Delete: the item goes, the tool stays. */
   | { do: "drop" }
   | { do: "increment"; delta: number; index: number }
@@ -350,19 +570,14 @@ const REFUSED = new Set(["common.Interactive.duplicate", "eeschema.InteractiveEd
 const CONVERSIONS = new Set(["eeschema.InteractiveEdit.toCLabel", "eeschema.InteractiveEdit.toGLabel", "eeschema.InteractiveEdit.toHLabel", "eeschema.InteractiveEdit.toLabel", "eeschema.InteractiveEdit.toText", "eeschema.InteractiveEdit.toTextBox"]);
 /** PlaceSymbol's `editWithLibEdit`, `changeSymbol`. */
 const SYMBOL_REFUSED = new Set(["eeschema.EditorControl.editWithSymbolEditor", "eeschema.InteractiveEdit.changeSymbol"]);
-/** PlaceSymbol hands these to the edit tool for the carried symbol; the studio has no dialog for a symbol not placed yet, so they do nothing. */
-const SYMBOL_EDITS = new Set([
-  "eeschema.InteractiveEdit.properties",
-  "eeschema.InteractiveEdit.editReference",
-  "eeschema.InteractiveEdit.editValue",
-  "eeschema.InteractiveEdit.editFootprint",
-  "eeschema.InteractiveEdit.autoplaceFields",
-  "eeschema.InteractiveEdit.toggleDeMorgan",
-  "eeschema.EditorControl.setExcludeFromBOM",
-  "eeschema.EditorControl.setExcludeFromBoard",
-  "eeschema.EditorControl.setExcludeFromSimulation",
-  "eeschema.EditorControl.setDNP",
-]);
+/** U, V, F: `SCH_ACTIONS::editReference`, `editValue`, `editFootprint`. */
+const FIELD_EDITS: Readonly<Record<string, "Reference" | "Value" | "Footprint">> = {
+  "eeschema.InteractiveEdit.editReference": "Reference",
+  "eeschema.InteractiveEdit.editValue": "Value",
+  "eeschema.InteractiveEdit.editFootprint": "Footprint",
+};
+/** The right-button menu's Symbol Unit entries (kicad-port/schSymbolMenus.ts `SELECT_UNIT_ACTION`). */
+const SELECT_UNIT = "studio.SymbolUnit.select";
 
 /**
  * What an action does while `tool` carries an item (the loops of `TwoClickPlace` and `PlaceSymbol`). `activates` is the action's `AF_ACTIVATE` flag
@@ -386,7 +601,19 @@ export function carryKey(tool: CarryTool, action: string, activates: boolean): C
   if (action === "eeschema.InteractiveEdit.mirrorV") return { do: "mirror", vertical: true };
   if (action === "eeschema.InteractiveEdit.mirrorH") return { do: "mirror", vertical: false };
   if (symbol) {
-    if (SYMBOL_REFUSED.has(action) || SYMBOL_EDITS.has(action)) return { do: "refuse" };
+    if (SYMBOL_REFUSED.has(action)) return { do: "refuse" };
+    // `PlaceSymbol` hands Properties, Edit Reference / Value / Footprint, Autoplace Fields, Cycle Body Style and the attribute toggles to the edit tool
+    // (`m_toolMgr->PostAction( ACTIONS::refreshPreview ); evt->SetPassEvent();`), which acts on the selection: the symbol in the hand
+    if (action === "eeschema.InteractiveEdit.properties") return { do: "properties" };
+    const field = FIELD_EDITS[action];
+    // a power symbol has no Footprint field to edit (`editFieldText` of a power symbol's Footprint: none)
+    if (field) return tool === "sch_power" && field === "Footprint" ? { do: "refuse" } : { do: "edit_field", name: field };
+    // a power symbol's fields are placed again by the preview; it has one body style
+    if (action === "eeschema.InteractiveEdit.autoplaceFields") return tool === "sch_power" ? { do: "refuse" } : { do: "autoplace" };
+    if (action === "eeschema.InteractiveEdit.toggleDeMorgan") return tool === "sch_power" ? { do: "refuse" } : { do: "body_style" };
+    const attr = ATTRIBUTE_ACTIONS[action];
+    if (attr) return { do: "attribute", key: attr };
+    if (action === SELECT_UNIT && tool === "sch_place_symbol") return { do: "unit" };
     // a symbol is not incrementable: the edit tool's Increment finds nothing in the selection
     if (action in INCREMENTS) return { do: "refuse" };
     return { do: "pass" };

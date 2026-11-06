@@ -82,9 +82,9 @@ export function SchToolDialogs() {
     case "props_label":
       return <LabelPropertiesDialog key={`pl:${dialog.id}`} id={dialog.id} />;
     case "props_field":
-      return <FieldPropertiesDialog key={`pf:${dialog.id}`} id={dialog.id} />;
+      return <FieldPropertiesDialog key={`pf:${dialog.id}`} id={dialog.id} carried={dialog.carried} />;
     case "props_power":
-      return <PowerSymbolPropertiesDialog key={`pw:${dialog.id}`} id={dialog.id} />;
+      return <PowerSymbolPropertiesDialog key={`pw:${dialog.id}`} id={dialog.id} carried={dialog.carried} />;
     case "props_text":
       return <TextPropertiesDialog key={`pt:${dialog.id}`} id={dialog.id} />;
     case "props_sheet":
@@ -127,7 +127,8 @@ function TextBoxDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { kind
   const api = useStudioApi();
   const box = edit?.shape.type === "text_box" ? edit.shape : null;
   const [text, setText] = useState(box?.text ?? "");
-  const [size, setSize] = useState(box?.size_nm ?? DEFAULT_TEXT_SIZE_NM);
+  // a new text box starts at Schematic Setup's default text size (`DrawShape`: `textbox->SetTextSize( VECTOR2I( sch_settings.m_DefaultTextSize, .. ) )`)
+  const [size, setSize] = useState(box?.size_nm ?? state.schematic?.setup?.default_text_size_nm ?? DEFAULT_TEXT_SIZE_NM);
   const [bold, setBold] = useState(box?.bold ?? false);
   const [italic, setItalic] = useState(box?.italic ?? false);
   const [h, setH] = useState<SchHAlign>(box?.h_align ?? "left");

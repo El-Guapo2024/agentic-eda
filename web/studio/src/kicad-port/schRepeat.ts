@@ -5,8 +5,10 @@
 // drawing tools after a symbol, label, text, no-connect, bus entry, wire ... lands) and F1 places another
 // copy of each:
 //   * a label's text is incremented first (`IncrementLabel( repeat_label_increment = 1 )`: D0 -> D1);
-//   * a symbol is cloned *at the cursor* (`newItem->Move( cursorPos - newItem->GetPosition() )`) and, with
-//     automatic annotation on (the default), takes the next free reference;
+//   * a symbol -- a power symbol is one (`SCH_SYMBOL_T`) -- is cloned *at the cursor* (`newItem->Move( cursorPos - newItem->GetPosition() )`),
+//     handed to the Move tool (`RunSynchronousAction( SCH_ACTIONS::move, &commit )`: it rides the cursor until a click drops it, one undo step with
+//     the copy) and, with automatic annotation on (the default), takes the next free reference (`SYMBOL_FILTER_NON_POWER`: a power symbol is
+//     numbered as any new one is);
 //   * everything else is moved by `default_repeat_offset_x/y` (0, 100 mil -- one grid step down);
 //   * the copies become the new repeat source, so the next press steps on again (D1 -> D2).
 // A junction is not repeatable (`allowRepeat` is false for it); neither is a deletion or an edit.
@@ -60,8 +62,11 @@ export function repeatCmds(source: readonly Cmd[], ctx: RepeatContext): Cmd[] {
       case "add_label":
         out.push({ ...c, net: incrementLabelText(c.net, 1), at: shift(c.at) });
         break;
-      case "add_sch_text":
       case "add_power_symbol":
+        // a power symbol is a symbol: at the cursor (`if( newItem->Type() == SCH_SYMBOL_T )`), not one step down
+        out.push({ ...c, at: ctx.cursor ? { x: ctx.cursor[0], y: ctx.cursor[1] } : shift(c.at) });
+        break;
+      case "add_sch_text":
       case "add_no_connect":
       case "add_bus_entry":
         out.push({ ...c, at: shift(c.at) });
@@ -80,4 +85,9 @@ export function repeatCmds(source: readonly Cmd[], ctx: RepeatContext): Cmd[] {
     }
   }
   return out;
+}
+
+/** Does the repeat bring a symbol (a power symbol is one)? `RepeatDrawItem` then hands the copy to the Move tool (`SCH_ACTIONS::move`). */
+export function repeatMoves(source: readonly Cmd[]): boolean {
+  return source.some((c) => c.op === "add_symbol" || c.op === "add_power_symbol");
 }

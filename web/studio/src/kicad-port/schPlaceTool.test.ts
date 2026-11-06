@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import type { Cmd } from "../api/types";
 import {
   afterPlaced,
   armedKey,
@@ -27,6 +28,10 @@ import {
   type Carry,
   nextSymbolAfter,
   placeSymbolCmd,
+  applyCarriedCmds,
+  renameInCmd,
+  settledSymbol,
+  symbolOrientation,
   describeCarried,
   type CarriedItem,
 } from "./schPlaceTool";
@@ -179,8 +184,11 @@ test("while an item rides, the tool's loop answers the keys before anyone else",
   assert.deepEqual(k("eeschema.Interactive.decrementSecondary"), { do: "increment", delta: -1, index: 1 });
   // Duplicate, Repeat, Paste, Redo and the Change To conversions ring the bell
   for (const a of ["common.Interactive.duplicate", "eeschema.InteractiveEdit.repeatDrawItem", "common.Interactive.paste", "common.Interactive.redo", "eeschema.InteractiveEdit.toGLabel", "eeschema.InteractiveEdit.toCLabel"]) assert.deepEqual(k(a), { do: "refuse" }, a);
-  // a symbol in the hand: no dialog of its own, no increment, no Change Symbol
-  for (const a of ["eeschema.InteractiveEdit.properties", "eeschema.InteractiveEdit.editValue", "eeschema.Interactive.incrementPrimary", "eeschema.InteractiveEdit.changeSymbol", "eeschema.EditorControl.editWithSymbolEditor"]) assert.deepEqual(k(a, false, "sch_power"), { do: "refuse" }, a);
+  // a power symbol in the hand: its Properties and Field Properties act on it (`PlaceSymbol` hands them to the edit tool); no Footprint field, no increment, no Change Symbol
+  assert.deepEqual(k("eeschema.InteractiveEdit.properties", false, "sch_power"), { do: "properties" });
+  assert.deepEqual(k("eeschema.InteractiveEdit.editValue", false, "sch_power"), { do: "edit_field", name: "Value" });
+  assert.deepEqual(k("eeschema.EditorControl.setDNP", false, "sch_power"), { do: "attribute", key: "dnp" });
+  for (const a of ["eeschema.InteractiveEdit.editFootprint", "eeschema.InteractiveEdit.toggleDeMorgan", "eeschema.Interactive.incrementPrimary", "eeschema.InteractiveEdit.changeSymbol", "eeschema.EditorControl.editWithSymbolEditor"]) assert.deepEqual(k(a, false, "sch_power"), { do: "refuse" }, a);
   // zoom, pan, the grid: as always
   assert.deepEqual(k("common.Control.zoomIn"), { do: "pass" });
   assert.deepEqual(k("common.Control.gridNext", false, "sch_power"), { do: "pass" });
@@ -228,8 +236,12 @@ test("a carried symbol keeps its R / Shift+R / X / Y as the placed unit's own tu
   assert.equal(cmd.op, "batch");
   const cmds = (cmd as { cmds: Array<Record<string, unknown>> }).cmds;
   assert.deepEqual(cmds[0], { op: "add_symbol", id: "U3", lib_id: "Amplifier_Operational:LM358", at: { x: 1_270_000, y: 2_540_000 }, rot_millideg: 0, value: "LM358", footprint: "", unit: 1, annotate: { algo: "first_free", start_number: 0 } });
-  // the placed unit, `<reference>#<unit>`: a reference's other units on the sheet do not turn with it
-  assert.deepEqual(cmds.slice(1), [
+  // the click makes it in the orientation the turns left it in, so Autoplace Fields places its fields there (`AutoplaceFields( screen, AUTOPLACE_AUTO )`):
+  // a quarter turn counter-clockwise, mirrored top to bottom, a quarter back is `Matrix::orientation`'s (0, mirrored)
+  assert.deepEqual(cmds.slice(1), [{ op: "mirror_symbol", id: "U3", unit: 1 }]);
+  // the preview has the turns as the placed unit's own `sch_move`s, `<reference>#<unit>` (a reference's other units on the sheet do not turn with it): the fields
+  // where the turns leave them while it rides
+  assert.deepEqual((previewCmd(s) as { cmds: unknown[] }).cmds.slice(1), [
     { op: "sch_move", ids: ["U3#1"], vertices: {}, verb: "rotate", ccw: true },
     { op: "sch_move", ids: ["U3#1"], vertices: {}, verb: "mirror", vertical: true },
     { op: "sch_move", ids: ["U3#1"], vertices: {}, verb: "rotate", ccw: false },
@@ -281,9 +293,95 @@ test("the keys while a symbol rides are PlaceSymbol's: A places it, R / X / Y tu
   assert.deepEqual(k("common.Interactive.undo"), { do: "drop" });
   assert.deepEqual(k("common.Interactive.delete"), { do: "drop" });
   assert.deepEqual(k("eeschema.InteractiveDrawing.placeLabel", true), { do: "busy", message: "Press <ESC> to cancel symbol creation." });
-  for (const a of ["eeschema.InteractiveEdit.properties", "eeschema.InteractiveEdit.editValue", "eeschema.InteractiveEdit.changeSymbol", "common.Interactive.duplicate", "eeschema.Interactive.increment"]) assert.deepEqual(k(a), { do: "refuse" }, a);
+  for (const a of ["eeschema.InteractiveEdit.changeSymbol", "eeschema.EditorControl.editWithSymbolEditor", "common.Interactive.duplicate", "eeschema.Interactive.increment"]) assert.deepEqual(k(a), { do: "refuse" }, a);
+  // `PlaceSymbol` hands Properties, U / V / F, Autoplace Fields, Cycle Body Style and the attribute toggles to the edit tool, which acts on the symbol in the hand
+  assert.deepEqual(k("eeschema.InteractiveEdit.properties"), { do: "properties" });
+  assert.deepEqual(["editReference", "editValue", "editFootprint"].map((a) => k(`eeschema.InteractiveEdit.${a}`)), [
+    { do: "edit_field", name: "Reference" },
+    { do: "edit_field", name: "Value" },
+    { do: "edit_field", name: "Footprint" },
+  ]);
+  assert.deepEqual(k("eeschema.InteractiveEdit.autoplaceFields"), { do: "autoplace" });
+  assert.deepEqual(k("eeschema.InteractiveEdit.toggleDeMorgan"), { do: "body_style" });
+  assert.deepEqual(["setDNP", "setExcludeFromBOM", "setExcludeFromBoard", "setExcludeFromSimulation"].map((a) => k(`eeschema.EditorControl.${a}`)), [
+    { do: "attribute", key: "dnp" },
+    { do: "attribute", key: "exclude_from_bom" },
+    { do: "attribute", key: "exclude_from_board" },
+    { do: "attribute", key: "exclude_from_sim" },
+  ]);
+  // the right-button menu's Symbol Unit choice (`ID_POPUP_SCH_SELECT_UNIT`)
+  assert.deepEqual(k("studio.SymbolUnit.select"), { do: "unit" });
   assert.deepEqual(k("common.Control.zoomIn"), { do: "pass" });
   // armed with nothing in the hand, Place Symbol lets Undo through (it checks Undo only with a symbol in hand)
   assert.equal(armedKey("sch_place_symbol", "common.Interactive.undo"), "pass");
   assert.deepEqual(describeCarried(symbol({ turns: ["rot_ccw"] })), { kind: "symbol", libId: "Amplifier_Operational:LM358", ref: "U3", unit: 1, turns: ["rot_ccw"], placeAllUnits: false, oneOnly: false });
+});
+
+test("the turns of a carried symbol fold into KiCad's orientation as `Matrix::then` composes them and `GetOrientation` reads them back", () => {
+  const o = (rotDeg: number, mirror: "x" | "y" | null, turns: CarriedSymbol["turns"]) => symbolOrientation({ rotDeg, mirror, turns });
+  assert.deepEqual(o(0, null, []), { rotMillideg: 0, mirror: null });
+  assert.deepEqual(o(0, null, ["rot_ccw"]), { rotMillideg: 90_000, mirror: null });
+  assert.deepEqual(o(0, null, ["rot_ccw", "rot_ccw", "rot_ccw"]), { rotMillideg: 270_000, mirror: null });
+  assert.deepEqual(o(0, null, ["rot_cw"]), { rotMillideg: 270_000, mirror: null });
+  assert.deepEqual(o(0, null, ["rot_ccw", "rot_cw"]), { rotMillideg: 0, mirror: null });
+  // X (Mirror Vertically, `SYM_MIRROR_X`) is the IR's `mirror_y`, "x" here; Y the IR's `mirrored`, "y"
+  assert.deepEqual(o(0, null, ["mirror_v"]), { rotMillideg: 0, mirror: "x" });
+  assert.deepEqual(o(0, null, ["mirror_h"]), { rotMillideg: 0, mirror: "y" });
+  // two mirrors across one axis undo each other; across both they are half a turn
+  assert.deepEqual(o(0, null, ["mirror_h", "mirror_h"]), { rotMillideg: 0, mirror: null });
+  assert.deepEqual(o(0, null, ["mirror_h", "mirror_v"]), { rotMillideg: 180_000, mirror: null });
+  // a copy made turned keeps its orientation: 90 + mirrored, turned back a quarter
+  assert.deepEqual(o(90, "y", ["rot_cw"]), symbolOrientation({ rotDeg: 0, mirror: null, turns: ["rot_ccw", "mirror_h", "rot_cw"] }));
+  // 90 + mirrored is the matrix of 270 + mirror_y, which `GetOrientation` lists first
+  assert.deepEqual(o(90, "y", []), { rotMillideg: 270_000, mirror: "x" });
+  // Autoplace Fields while it rides folds the turns in
+  const settled = settledSymbol(symbol({ turns: ["rot_ccw", "mirror_v"] }));
+  assert.deepEqual([settled.rotDeg, settled.mirror, settled.turns], [90, "x", []]);
+});
+
+test("what a carried symbol was given while it rode -- body style, attributes, the dialogs' commands -- goes into the click's one command after it is made", () => {
+  const s = symbol({ bodyStyle: 2, attrs: { dnp: true }, edits: [{ op: "sch_edit", verb: "edit_field", id: "fld:U3:Value", bold: true } as unknown as Cmd] });
+  const cmds = (placeCmd(s, [0, 0]) as { cmds: Array<Record<string, unknown>> }).cmds;
+  assert.deepEqual(cmds.slice(1), [
+    { op: "sch_edit", verb: "set_body_style", ids: ["U3"], style: 2 },
+    { op: "set_symbol_attrs", ids: ["U3"], dnp: true },
+    { op: "sch_edit", verb: "edit_field", id: "fld:U3:Value", bold: true },
+  ]);
+  // the preview runs them too: the server draws the symbol as the click will make it
+  assert.equal((previewCmd(s) as { cmds: unknown[] }).cmds.length, 4);
+});
+
+test("a dialog's OK on the carried symbol changes what it is made with and keeps the rest, renamed with it", () => {
+  const s = symbol({ edits: [{ op: "sch_edit", verb: "set_field_looks", ids: ["fld:U3:Value"], font: "KiCad Font" } as unknown as Cmd] });
+  const next = applyCarriedCmds(s, [
+    { op: "edit_symbol_fields", id: "U3", value: "TL072", footprint: "Package_SO:SOIC-8", datasheet: "" } as unknown as Cmd,
+    { op: "set_symbol_attrs", ids: ["U3"], exclude_from_bom: true } as Cmd,
+    { op: "sch_edit", verb: "set_body_style", ids: ["U3"], style: 2 } as unknown as Cmd,
+    { op: "sch_edit", verb: "set_symbol_unit", id: "U3", unit: 1, new_unit: 2 } as unknown as Cmd,
+    { op: "sch_edit", verb: "edit_field", id: "fld:U3:Reference", visible: false } as unknown as Cmd,
+    { op: "rename_symbol", id: "U3", new_id: "U9" } as Cmd,
+  ]) as CarriedSymbol;
+  assert.deepEqual([next.ref, next.value, next.footprint, next.unit, next.bodyStyle, next.attrs], ["U9", "TL072", "Package_SO:SOIC-8", 2, 2, { exclude_from_bom: true }]);
+  // the commands kept name the new reference: the field ids, the symbol's own id
+  assert.deepEqual(next.edits, [
+    { op: "sch_edit", verb: "set_field_looks", ids: ["fld:U9:Value"], font: "KiCad Font" },
+    { op: "edit_symbol_fields", id: "U9", value: "TL072", footprint: "Package_SO:SOIC-8", datasheet: "" },
+    { op: "sch_edit", verb: "edit_field", id: "fld:U9:Reference", visible: false },
+  ]);
+  // Field Properties' text of the Value: the symbol is made with it; the edit keeps only what else it changes, and goes when that is nothing
+  const v = applyCarriedCmds(s, [{ op: "sch_edit", verb: "edit_field", id: "fld:U3:Value", text: "OPA2134" } as unknown as Cmd]) as CarriedSymbol;
+  assert.deepEqual([v.value, v.edits?.length], ["OPA2134", 1]);
+  const vb = applyCarriedCmds(s, [{ op: "sch_edit", verb: "edit_field", id: "fld:U3:Value", text: "OPA2134", italic: true } as unknown as Cmd]) as CarriedSymbol;
+  assert.deepEqual(vb.edits?.[1], { op: "sch_edit", verb: "edit_field", id: "fld:U3:Value", italic: true });
+  // a power symbol's Value is its net; the rest of its Properties run by the id the server numbers it with
+  const power = { kind: "power" as const, libId: "power:GND", net: "GND", rotMillideg: 0 };
+  const p = applyCarriedCmds(power, [{ op: "sch_edit", verb: "edit_field", id: "fld:#PWR03:Value", text: "AGND" } as unknown as Cmd, { op: "sch_edit", verb: "set_power_props", id: "#PWR03", dnp: true } as unknown as Cmd]);
+  assert.deepEqual([(p as typeof power).net, p.edits?.length], ["AGND", 1]);
+  const placed = placeCmd(p, [0, 0], { powerId: "#PWR05" }) as { cmds: Array<Record<string, unknown>> };
+  assert.deepEqual(placed.cmds[1], { op: "sch_edit", verb: "set_power_props", id: "#PWR05", dnp: true });
+});
+
+test("renameInCmd follows a reference through ids, unit keys, field and pin ids, and leaves other names alone", () => {
+  const c = { op: "batch", cmds: [{ op: "x", id: "U3", ids: ["U3#2", "fld:U3:Value", "fld:U3#2:Value", "pin:U3:4", "U30", "fld:U30:Value"] }] } as unknown as Cmd;
+  assert.deepEqual(renameInCmd(c, "U3", "U7"), { op: "batch", cmds: [{ op: "x", id: "U7", ids: ["U7#2", "fld:U7:Value", "fld:U7#2:Value", "pin:U7:4", "U30", "fld:U30:Value"] }] });
 });
