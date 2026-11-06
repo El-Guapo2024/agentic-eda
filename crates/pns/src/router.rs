@@ -1495,7 +1495,9 @@ impl Router {
                 let keepout_fp = resolver.and_then(|r| r.keepout(s)).and_then(|k| k.parent_footprint.clone());
                 let text_fp = s.source.strip_prefix(crate::item::Solid::TEXT_SOURCE).and_then(|t| t.rsplit_once(':')).map(|(fp, _)| fp.to_string());
                 let pad_fp = s.source.split_once('.').map(|(fp, _)| fp.to_string()).filter(|_| !s.edge && !s.is_graphic() && !s.is_text() && !s.is_keepout() && !s.is_obstacle());
-                let of = fp.or(keepout_fp).or(text_fp).or(pad_fp)?;
+                // the footprint's own Edge.Cuts and Margin graphics (`InlineDrag`'s `GraphicalItems()` on Edge_Cuts or Margin)
+                let edge_fp = s.edge.then(|| crate::from_ir::edge_footprint(&s.source)).flatten().map(str::to_string);
+                let of = fp.or(keepout_fp).or(text_fp).or(pad_fp).or(edge_fp)?;
                 refs.contains(&of).then_some(id)
             })
             .collect();

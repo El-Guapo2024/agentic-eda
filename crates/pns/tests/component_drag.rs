@@ -311,3 +311,21 @@ fn component_drags_on_kicads_boards_never_leave_a_new_violation_or_a_loose_track
     eprintln!("{judged} component drags judged");
     assert!(judged >= 6, "{judged} component drags committed");
 }
+
+/// UI-LEFT P27 / R1's left: a footprint's own Edge.Cuts graphic (a slot of its art) goes with it under D, as `InlineDrag` adds the footprint's
+/// `GraphicalItems()` on Edge_Cuts or Margin to the items dragged; the pads keep their distance to it. Left behind, the slot would be where a pad
+/// lands, and the drag would collide with the board edge.
+#[test]
+fn a_component_drag_takes_the_footprints_own_edge_cuts_along() {
+    use eda_model::fp_art::FpShape;
+    let (design, mut model) = board(&[("R1", "TWO", p(15.0, 15.0))], &[]);
+    let slot = eda_model::ir::Shape::Circle { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.05), filled: false, center: Point { x: mm(1.0), y: mm(3.0) }, end: Point { x: mm(1.5), y: mm(3.0) } };
+    model.footprints.iter_mut().find(|f| f.name == "TWO").unwrap().art.shapes.push(FpShape::new(slot));
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.drag_start_component(p(15.0, 15.0), &["R1".to_string()], true).expect("starts");
+    // three millimetres down: pad 1 lands where the slot was, beside its centre
+    let pv = router.drag_preview(p(15.0, 18.0)).expect("a drag");
+    assert_eq!(pv.offset, Some((Nm::ZERO, mm(3.0))));
+    assert!(!pv.colliding, "the slot moved with the footprint: {pv:?}");
+}

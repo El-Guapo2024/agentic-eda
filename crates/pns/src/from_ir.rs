@@ -172,6 +172,26 @@ fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: 
     add_edge_solids(node, board.edge_cuts.iter(), layers, "edge:", false);
 }
 
+/// The source of the `index`th edge solid: `<prefix><index>`, with `@<REF>` for a solid of a footprint's own Edge.Cuts or Margin graphic (the shape's id is
+/// the footprint's reference, `eda_drc::outline::footprint_edge_cuts_shapes`), so `D` on the footprint takes it along as KiCad's `InlineDrag` does
+/// (`for( BOARD_ITEM* shape : footprint->GraphicalItems() ) if( shape->GetLayer() == Edge_Cuts || shape->GetLayer() == Margin || .. )
+/// itemsToDrag.Add( solid )`).
+fn edge_source(prefix: &str, index: usize, shape_id: &str) -> String {
+    // a board shape's id is `shp_..` (the outline polygon's sides `outline`); a footprint's graphic is named by its reference
+    let fp = !shape_id.is_empty() && !shape_id.starts_with("shp_") && shape_id != eda_model::outline::POLYGON_OUTLINE_ID;
+    if fp {
+        format!("{prefix}{index}@{shape_id}")
+    } else {
+        format!("{prefix}{index}")
+    }
+}
+
+/// The footprint an edge solid of [`edge_source`] belongs to, if any.
+pub(crate) fn edge_footprint(source: &str) -> Option<&str> {
+    let rest = source.strip_prefix("edge:").or_else(|| source.strip_prefix("margin:"))?;
+    rest.split_once('@').map(|(_, fp)| fp)
+}
+
 /// The solids of edge graphics (Edge.Cuts, Margin) as [`add_board_outline`] describes them, their sources `<prefix><n>`.
 /// `with_width`: the shape keeps half its width round its line (Margin); an Edge.Cuts one is given none (`SetWidth( 0 )`).
 fn add_edge_solids<'a>(node: &mut Node, shapes: impl Iterator<Item = &'a eda_model::ir::Shape>, layers: &LayerMap, prefix: &str, with_width: bool) {
@@ -193,7 +213,7 @@ fn add_edge_solids<'a>(node: &mut Node, shapes: impl Iterator<Item = &'a eda_mod
                     continue;
                 }
                 let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: format!("{prefix}{index}"), edge: true, rule: 0, anchor_points: Vec::new() }));
+                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: edge_source(prefix, index, shape.id()), edge: true, rule: 0, anchor_points: Vec::new() }));
             }
         }
     }
@@ -215,6 +235,8 @@ fn add_margin(node: &mut Node, design: &Design, model: &ConstraintModel, layers:
         footprints.extend(footprint.art.shapes.iter().filter(|s| s.on_layer("Margin")).map(|s| {
             let mut shape = s.placed(fp).shape;
             shape.set_layer("Margin".to_string());
+            // named by the footprint (`edge_source`), as its Edge.Cuts are
+            shape.set_id(fp.id.clone());
             shape
         }));
     }
