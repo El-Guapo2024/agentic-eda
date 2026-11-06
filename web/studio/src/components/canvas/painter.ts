@@ -55,6 +55,7 @@ import { orderedStackLayers } from "../../kicad-port/padStack";
 import { drawPcbItems, drawRefImages } from "./pcbItemsPaint";
 import { drawGridItems, gridItemCovers, shownGridItems } from "./gridItemPaint";
 import { drawViaStitches } from "./viaStitchPaint";
+import { hasLayerDiameters, viaLayerStack, viaMaxDiameter } from "../../kicad-port/viaPadstack";
 import { drawDrillItems } from "./drillPaint";
 import { gridGeometry, type GridGeometry } from "../../kicad-port/gridItem";
 import { drawTablePreview, drawTables } from "./tablePaint";
@@ -174,6 +175,9 @@ export interface PaintOptions {
   gridDisplay?: GridDisplay;
   /** pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), for the via tool's ghost -- null until the hotkey's first press, same board-default fallback `Canvas.tsx`'s own via-placement click uses. */
   currentViaPreset: { diameter: number; drill: number } | null;
+  /** Draw Via's preview (`doInteractiveItemPlacement`: the item at the grid point, then `VIA_PLACER::SnapItem`, round 6 C6-7): where the via would land --
+   * on the track, the pad or the graphic under the cursor -- as the click will place it (Canvas.tsx, kicad-port/viaPlacer.ts `snapViaPosition`). */
+  viaGhostAt?: readonly [number, number] | null;
   /** common.Interactive.measureTool's ruler label, same unit the status bar shows. */
   units: LengthUnit;
   /** pcb_point_editor.cpp's zone corner-drag preview (Canvas.tsx's own local state, only set while a drag is live) -- lets drawZoneHandles show the corner actually moving, not the last-committed outline, while the drag is in progress. */
@@ -664,17 +668,24 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
       withLook(ctx, look, () => {
         ctx.save();
         ctx.globalAlpha *= viaAlpha;
-        ctx.beginPath();
-        ctx.arc(v.x, v.y, v.d / 2, 0, Math.PI * 2);
         const viaColor = copperPaint(layerColor("via"), v.net, opts);
-        if (opts.sketchVias) {
-          ctx.strokeStyle = viaColor;
-          ctx.lineWidth = hairlineNm(view, 1.5);
-          ctx.stroke();
-        } else {
-          ctx.fillStyle = viaColor;
-          ctx.fill();
-        }
+        // A padstack that gives a layer a diameter of its own (UI-LEFT-2 PP12, kicad-port/viaPadstack.ts): each copper layer's ring at its own diameter,
+        // stacked as the layers are (`PCB_PAINTER::draw( const PCB_VIA*, aLayer )` on `LAYER_VIA_COPPER_START + layer`), the layers under the top one in
+        // their own colour, the top one (the active copper layer when the via is on it) in the via's; one diameter is the one disc it was.
+        const rings = hasLayerDiameters(v) ? viaLayerStack(v, copper, opts.activeLayer, (l) => opts.layerVisible[l] !== false) : [{ layer: null as string | null, d: v.d }];
+        rings.forEach((ring, i) => {
+          const colour = i === rings.length - 1 || !ring.layer ? viaColor : copperPaint(layerColor(copperColorKey(ring.layer)), v.net, opts);
+          ctx.beginPath();
+          ctx.arc(v.x, v.y, ring.d / 2, 0, Math.PI * 2);
+          if (opts.sketchVias) {
+            ctx.strokeStyle = colour;
+            ctx.lineWidth = hairlineNm(view, 1.5);
+            ctx.stroke();
+          } else {
+            ctx.fillStyle = colour;
+            ctx.fill();
+          }
+        });
         ctx.restore();
       });
     }
@@ -1471,7 +1482,9 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     strokeDashedPolyline(ctx, view, draw.pts, draw.colliding ? violationColor : layerColor(copperColorKey(draw.layer)), draw.width, false);
     for (const d of draw.displaced ?? []) strokeDashedPolyline(ctx, view, d.pts, "#ffaa33", draw.width, false);
     for (const v of draw.displacedVias ?? []) {
-      const d = board.routing?.vias.find((via) => via.id === v.source_via)?.d ?? draw.width;
+      const src = board.routing?.vias.find((via) => via.id === v.source_via);
+      // a board via's preview at its widest diameter (`ROUTER_PREVIEW_ITEM`: the layer of the `largestDiameter`)
+      const d = src ? viaMaxDiameter(src) : draw.width;
       strokeViaGhost(ctx, view, v.x, v.y, d, "#ffaa33");
     }
     if (draw.via) strokeViaGhost(ctx, view, draw.via.x, draw.via.y, draw.via.diameter, draw.colliding ? violationColor : layerColor("via"));
@@ -1494,7 +1507,8 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     }
     for (const d of draw.displaced ?? []) strokeDashedPolyline(ctx, view, d.pts, "#ffaa33", draw.width || 150, false);
     for (const v of draw.displacedVias ?? []) {
-      const d = board.routing?.vias.find((via) => via.id === v.source_via)?.d ?? 600_000;
+      const src = board.routing?.vias.find((via) => via.id === v.source_via);
+      const d = src ? viaMaxDiameter(src) : 600_000;
       strokeViaGhost(ctx, view, v.x, v.y, d, "#ffaa33");
     }
     return;
@@ -1511,7 +1525,8 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     strokeDashedPolyline(ctx, view, draw.ptsB, color, draw.width, false);
     for (const d of draw.displaced ?? []) strokeDashedPolyline(ctx, view, d.pts, "#ffaa33", draw.width || 150, false);
     for (const v of draw.displacedVias ?? []) {
-      const d = board.routing?.vias.find((via) => via.id === v.source_via)?.d ?? 600_000;
+      const src = board.routing?.vias.find((via) => via.id === v.source_via);
+      const d = src ? viaMaxDiameter(src) : 600_000;
       strokeViaGhost(ctx, view, v.x, v.y, d, "#ffaa33");
     }
     for (const v of draw.fixedVias ?? []) strokeViaGhost(ctx, view, v.x, v.y, v.diameter, layerColor("via"));
@@ -1580,7 +1595,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
 /** A ghost circle at the snapped cursor for the standalone via tool -- via.ts's placement is a single click, so there's no multi-point drawState to show, just "a via would land here". */
 function drawViaGhost(ctx: CanvasRenderingContext2D, board: BoardState, opts: PaintOptions) {
   if (!opts.cursorNm) return;
-  const [x, y] = opts.snappedCursor ?? snapPoint(opts.cursorNm.x, opts.cursorNm.y, opts.gridNm);
+  const [x, y] = opts.viaGhostAt ?? opts.snappedCursor ?? snapPoint(opts.cursorNm.x, opts.cursorNm.y, opts.gridNm);
   const d = opts.currentViaPreset?.diameter ?? board.board_rules?.via_diameter ?? 600_000;
   ctx.save();
   ctx.globalAlpha = 0.6;

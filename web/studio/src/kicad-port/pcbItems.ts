@@ -16,6 +16,7 @@ import { footprintBox } from "./footprintBox";
 import { groupLeaves } from "./groupTree";
 import { extraItemById, type ExtraKind } from "./pcbExtraItems";
 import { cellById, tableById } from "./tables";
+import { viaMaxDiameter } from "./viaPadstack";
 
 export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field" | "fptext" | "table" | "tablecell" | ExtraKind;
 
@@ -190,7 +191,8 @@ export function itemBounds(board: BoardState, id: string, opts: { includeText?: 
     }
     case "via": {
       const v = board.routing?.vias.find((q) => q.id === id);
-      return v ? [v.x - v.d / 2, v.y - v.d / 2, v.x + v.d / 2, v.y + v.d / 2] : null;
+      const r = v ? viaMaxDiameter(v) / 2 : 0;
+      return v ? [v.x - r, v.y - r, v.x + r, v.y + r] : null;
     }
     case "zone": {
       const z = board.routing?.zones.find((q) => q.id === id);

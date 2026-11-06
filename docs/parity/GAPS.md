@@ -672,7 +672,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (`ZONE::SetPosition` is a no-op); a copper text box is bold at the defaults (`InferBold`); the Text dialog has Bold; Change Track Width / Via Size and the microwave tools take the sizes the
   board's lists give now (`GetCurrentTrackWidth`, `GetCurrentViaSize`), a microvia its class's.
 - Missing (round 7): ~~each via's and pad's own teardrop parameters~~ (done 2026-11-06, below), ~~teardrops on custom pads and on a padstack's other
-  layers~~ (done 2026-11-07, below); the Text dialog's Italic; Swap of the other kinds above; R7-4 (a knockout text's box in the via check).
+  layers~~ (done 2026-11-07, below); the Text dialog's Italic; Swap of the other kinds above; ~~R7-4 (a knockout text's box in the via check)~~ (done, below).
+- Done 2026-11-07 (`task-v3-pcbmisc`, PARITY-pcb section 101, UI-LEFT-2 PP12): a via's per-layer padstack diameters drawn, routed and checked; Draw Via's
+  preview at `SnapItem`'s point (C6-7); an allowed violating via placed with "Via location violates DRC." said (C6-6); an unflashed plated pad's hole at the
+  copper clearance (C6-4); copper tables, dimensions and barcodes in the via check (C6-5; a text box is skipped, as KiCad skips it); R7-4. Left: the
+  connectivity's and the 3D view's via are the front's diameter; a backdrilled layer's hole in the via check.
 - Done 2026-11-06 (`task-u5-pcbfp`, `PARITY-pcb.md` section 78, UI-LEFT P3, P15): **each via's and pad's own teardrop parameters** read (`parseTEARDROP_PARAMETERS`), written,
   edited (Track & Via and Pad Properties' Teardrops parts, the Properties panel's rows, `set_teardrop_params`) and honoured by the generator (an anchor with its own
   parameters is governed by them, as 25ec2335's `UpdateTeardrops`; one without is Board Setup's), kicad-cli's own outlines point for point on anchors whose parameters

@@ -2523,6 +2523,9 @@ export interface CmdReply {
   message: string;
   /** What KiCad tells the user once the command worked (`ShowInfoBarMsg`, a tool's `wxLogMessage` lines: `eda_ops::notice`), one message a line. */
   info?: string;
+  /** The error KiCad shows as a DRC-violation info bar while the command still worked (`ShowInfoBarError( .., DRC_VIOLATION )`: Draw Via's "Via location
+   * violates DRC." with Allow DRC violations on, `eda_ops::notice::note_drc_violation`). */
+  drc_violation?: string;
   /** The history tag of the step the command made (`pcb`, `schematic`, `both`, ...): which editor's content it modified. */
   domain?: string;
 }

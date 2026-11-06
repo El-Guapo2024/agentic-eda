@@ -17,6 +17,7 @@ import { padIds } from "./pcbItems";
 import { groupLeaves } from "./groupTree";
 import { customPadBox } from "./padShape";
 import { bezierPolyline, SYMBOL_BEZIER_MAX_ERROR_NM } from "./bezierPoly";
+import { viaMaxDiameter } from "./viaPadstack";
 
 /** `[minX, minY, maxX, maxY]`. */
 export type Box = readonly [number, number, number, number];
@@ -83,7 +84,10 @@ export function pcbItemBoxes(board: BoardState): ItemBoxes {
     const b = boxOfPoints(t.pts);
     if (b) out.set(t.id, inflateBox(b, t.width / 2));
   }
-  for (const v of board.routing?.vias ?? []) out.set(v.id, [v.x - v.d / 2, v.y - v.d / 2, v.x + v.d / 2, v.y + v.d / 2]);
+  for (const v of board.routing?.vias ?? []) {
+    const r = viaMaxDiameter(v) / 2;
+    out.set(v.id, [v.x - r, v.y - r, v.x + r, v.y + r]);
+  }
   for (const z of board.routing?.zones ?? []) {
     const b = boxOfPoints(z.outline);
     if (b) out.set(z.id, b);

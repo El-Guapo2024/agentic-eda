@@ -35,6 +35,7 @@ import { fieldStrokes, textBoxDistance, textHitSlop } from "../../kicad-port/tex
 import { ARC_LOW_DEF_NM } from "../../kicad-port/coverage";
 import { boardTextAsField, strokeRings, strokesBoxRing, textCoverageArea } from "../../kicad-port/textCoverage";
 import { padCopperRings, padCoverageArea, padHitDistance as padShapeDistance, type PadLike } from "../../kicad-port/padHit";
+import { viaMaxDiameter } from "../../kicad-port/viaPadstack";
 
 export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field" | "fptext" | "table" | "tablecell" | ExtraKind;
 
@@ -396,7 +397,8 @@ export function collectSelectionCandidates(
     consider("track", t.id, d, Math.max(t.width * t.width, 1), t.layer);
   }
   for (const v of board.routing?.vias ?? []) {
-    const d = Math.hypot(xNm - v.x, yNm - v.y) - v.d / 2;
+    // `PCB_VIA::HitTest`: within any of its layers' diameters (`ForEachUniqueLayer`), the widest
+    const d = Math.hypot(xNm - v.x, yNm - v.y) - viaMaxDiameter(v) / 2;
     // pcb_selection_tool.cpp: vias are artificially shrunk to their
     // drill radius squared (not pi*r^2) so they never out-rank a short
     // track segment passing under them.
@@ -608,7 +610,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
     consider("track", t.id, [x0 - half, y0 - half, x1 + half, y1 + half], t.layer);
   }
   for (const v of board.routing?.vias ?? []) {
-    const r = v.d / 2;
+    const r = viaMaxDiameter(v) / 2;
     consider("via", v.id, [v.x - r, v.y - r, v.x + r, v.y + r], null);
   }
   for (const z of board.routing?.zones ?? []) {
@@ -754,7 +756,7 @@ export function footprintCoverageRatio(board: BoardState, ref: string, pool: rea
       }
       case "via": {
         const v = board.routing?.vias.find((x) => x.id === c.id);
-        if (v) covered.push(circleRing(v.x, v.y, v.d / 2));
+        if (v) covered.push(circleRing(v.x, v.y, viaMaxDiameter(v) / 2));
         break;
       }
       case "textbox":

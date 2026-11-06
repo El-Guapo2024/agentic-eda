@@ -245,6 +245,8 @@ export function Canvas() {
   const dragRef = useRef<DragState | null>(null);
   /** Ctrl (Cmd on a Mac) at the last pointer move: `drawShape`'s modifier for the rubber band (kicad-port/pcbShapeSnap.ts). */
   const drawCtrlRef = useRef(false);
+  // Draw Via's preview: where the via the next click places would land (`SnapItem` after the grid, round 6 C6-7), set by the mouse's motion
+  const viaGhostRef = useRef<readonly [number, number] | null>(null);
   /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag (kicad-port/dragThreshold.ts). Made at every press, read by the move, the up and the long press. */
   const gestureRef = useRef<ClickDragGesture | null>(null);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
@@ -522,6 +524,7 @@ export function Canvas() {
       drawState: state.drawState,
       cursorNm: state.cursorNm,
       snappedCursor: PLACING_TOOLS.has(state.activeTool) ? snap.lastPoint() : null,
+      viaGhostAt: state.activeTool === "via" ? viaGhostRef.current : null,
       // Import Graphics' placement (state/importPreview.ts): its items held by their reference point at the picker's snapped cursor
       importPreview: importPreviewAt(importPreview, picker.session() ? (snap.lastPoint() ?? (state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null)) : null),
       activeTool: state.activeTool,
@@ -641,6 +644,33 @@ export function Canvas() {
     opts.skipPoint = draw?.kind === "shape" && draw.pts.length > 0 ? draw.pts[0]! : null;
     const p = snap.point(tool, [wx, wy], mods, opts);
     return [p[0], p[1]];
+  };
+
+  /**
+   * `VIA_PLACER`'s view of the board (kicad-port/viaPlacer.ts) for the via the next click places: pcbnew.EditorControl.viaSizeInc/Dec's current pick
+   * (useActionRunner.ts), same board-default fallback the hotkey itself uses until it's ever pressed -- `GetCurrentViaSize()` / `GetCurrentViaDrill()` asked on
+   * every via, from the board's list by index (round 6 C6-2) -- the magnetic settings, Shift, the zone fills, the visible layers. The click and the preview
+   * (`doInteractiveItemPlacement`'s motion: `SnapItem` on the item at the grid point) read the same.
+   */
+  const viaPlacerFor = (b: NonNullable<typeof board>, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
+    const viaPreset = currentViaSize(b, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia);
+    const copper = (b.layers ?? ["F.Cu", "B.Cu"]).filter((l) => l.endsWith(".Cu"));
+    const mods = snapMods(e);
+    const magnetic = toPcbMagnetic(state.prefs, state.magneticAllLayers);
+    const placer: ViaPlacerInput = {
+      board: b,
+      diameter: viaPreset.diameter,
+      // `bds.m_CurrentViaType` is always THROUGH: the via spans the board.
+      layers: copper,
+      magnetic: { tracks: magnetic.tracks, pads: magnetic.pads, graphics: magnetic.graphics },
+      snap: !mods.shift,
+      alignToSegment: (p, a, q) => snap.alignToSegment("via", p, a, q, mods),
+      fills: (state.zoneFill?.zones ?? []).filter((z) => z.filled).map((z) => ({ net: z.net, layer: z.layer, fragments: z.fragments })),
+      activeLayer: state.activeLayer ?? "F.Cu",
+      highContrast: state.highContrast,
+      isLayerVisible: (l) => layerIsVisible(state.layerVisible, l),
+    };
+    return { placer, viaPreset, copper };
   };
 
   /** Place Footprint's carry (`StudioState.moveGridCarry`, kicad-port/placeCarry.ts): the anchor of the one footprint carried, which the grid point under the cursor moves; null for any other move. */
@@ -876,25 +906,7 @@ export function Canvas() {
       // `DRAWING_TOOL::DrawVia` (kicad-port/viaPlacer.ts): the via snaps onto the track, pad or graphic under the cursor, takes its net (or the zone fill's,
       // asking when there are several, or none: a free via), and the backend refuses it where it breaks a clearance and splits the track it is on (round 5 B5-1).
       if (state.activeTool === "via") {
-        // pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), same board-default fallback the hotkey itself uses until it's ever pressed.
-        // `GetCurrentViaSize()` / `GetCurrentViaDrill()` asked on every via, from the board's list by index (round 6 C6-2).
-        const viaPreset = currentViaSize(board, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia);
-        const copper = (board.layers ?? ["F.Cu", "B.Cu"]).filter((l) => l.endsWith(".Cu"));
-        const mods = snapMods(e);
-        const magnetic = toPcbMagnetic(state.prefs, state.magneticAllLayers);
-        const placer: ViaPlacerInput = {
-          board,
-          diameter: viaPreset.diameter,
-          // `bds.m_CurrentViaType` is always THROUGH: the via spans the board.
-          layers: copper,
-          magnetic: { tracks: magnetic.tracks, pads: magnetic.pads, graphics: magnetic.graphics },
-          snap: !mods.shift,
-          alignToSegment: (p, a, b) => snap.alignToSegment("via", p, a, b, mods),
-          fills: (state.zoneFill?.zones ?? []).filter((z) => z.filled).map((z) => ({ net: z.net, layer: z.layer, fragments: z.fragments })),
-          activeLayer: state.activeLayer ?? "F.Cu",
-          highContrast: state.highContrast,
-          isLayerVisible: (l) => layerIsVisible(state.layerVisible, l),
-        };
+        const { placer, viaPreset, copper } = viaPlacerFor(board, e);
         const at = snapViaPosition(placer, [wx, wy], [sx, sy]);
         const place = (net: string, track: string | null) =>
           void api.cmd({
@@ -1427,6 +1439,8 @@ export function Canvas() {
     // geometry are the helper's state after this call (and the click that follows takes the same point).
     const tracking = picker.session() != null ? "picker" : state.activeTool;
     const snapped: [number, number] | null = board && !dragRef.current && !moveMode && PLACING_TOOLS.has(tracking) ? toolPoint(tracking, wx, wy, e) : null;
+    // Draw Via's preview follows the cursor as `doInteractiveItemPlacement` moves it: the grid point, then `m_placer->SnapItem( newItem )` (round 6 C6-7)
+    viaGhostRef.current = board && tracking === "via" && snapped ? snapViaPosition(viaPlacerFor(board, e).placer, [wx, wy], snapped) : null;
 
     // `DrawDimension`'s motion: the end, then an aligned or orthogonal dimension's height, follows the snapped cursor; the preview is the dimension as drawn.
     if (board && state.activeTool === "dimension" && state.drawState?.kind === "dimension" && state.drawState.dim && snapped) {

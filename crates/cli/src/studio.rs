@@ -1013,6 +1013,10 @@ fn handle(
                             if !info.is_empty() {
                                 reply["info"] = json!(info.join("\n"));
                             }
+                            // `ShowInfoBarError( .., DRC_VIOLATION )` of a command that still worked (Draw Via with Allow DRC violations), as `drc_violation`
+                            if let Some(v) = eda_ops::notice::take_drc_violation() {
+                                reply["drc_violation"] = json!(v);
+                            }
                             if let Some(report) = imports_netlist.then(eda_ops::netlist_update::take_report).flatten() {
                                 reply["report"] = crate::netlist_api::report_json(&report);
                             }

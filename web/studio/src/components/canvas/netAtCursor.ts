@@ -20,6 +20,7 @@ import type { BoardState, FillZone } from "../../api/types";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { distToPolyline, pointInPolygon, shapeHitDistance } from "./itemHitTest";
 import { padHitDistance, type SelectionFilter } from "./selectionCandidates";
+import { viaMaxDiameter } from "../../kicad-port/viaPadstack";
 
 /** What the guide knows of the view: the active (preferred) layer as a state key, the visible layers, high contrast, the zone fills shown, and the selection filter. */
 export interface NetPickView {
@@ -81,7 +82,7 @@ export function findNetAtCursor(board: BoardState, xNm: number, yNm: number, acc
     const from = copper.indexOf(v.from);
     const to = copper.indexOf(v.to);
     const span = from >= 0 && to >= 0 ? copper.slice(Math.min(from, to), Math.max(from, to) + 1) : copper;
-    take("via", v.net, span, Math.hypot(xNm - v.x, yNm - v.y) - v.d / 2 <= accuracyNm);
+    take("via", v.net, span, Math.hypot(xNm - v.x, yNm - v.y) - viaMaxDiameter(v) / 2 <= accuracyNm);
   }
   for (const t of board.routing?.tracks ?? []) take("track", t.net, [t.layer], distToPolyline(xNm, yNm, t.pts) - t.width / 2 <= accuracyNm);
   for (const s of board.drawings?.shapes ?? []) {

@@ -812,7 +812,8 @@ export interface StudioState {
   itemPropertiesId: string | null;
   /** E / a double-click on a pad of the board: the id (`REF.NUM[#k]`) of the pad whose Pad Properties dialog is open (null = closed) -- components/BoardPadPropertiesDialog.tsx. */
   boardPadPropertiesId: string | null;
-  toast: { message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed" } | null;
+  /** `drc`: a DRC-violation info bar (`WX_INFOBAR::MESSAGE_TYPE::DRC_VIOLATION`), which a clean via placement dismisses. */
+  toast: { message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed"; drc?: boolean } | null;
 
   /** Cursor position in board µm, for the status bar's X/Y/dx/dy/dist. */
   cursorNm: { x: number; y: number } | null;
@@ -1180,7 +1181,7 @@ export type Action =
   | { type: "SET_ITEM_PROPERTIES_ID"; id: string | null }
   | { type: "SET_BOARD_PAD_PROPERTIES_ID"; id: string | null }
   /** `ms`: how long it stays (`WX_INFOBAR::ShowMessageFor`), else the kind's own; `dontShowAgain`: the info bar's "Don't show again" link, which sets that common option. */
-  | { type: "TOAST"; message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed" }
+  | { type: "TOAST"; message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed"; drc?: boolean }
   | { type: "TOAST_CLEAR" }
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null; frameDeg?: number; gridCarry?: boolean }
@@ -1600,7 +1601,7 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_BOARD_PAD_PROPERTIES_ID":
       return { ...state, boardPadPropertiesId: action.id };
     case "TOAST":
-      return { ...state, toast: { message: action.message, kind: action.kind, ms: action.ms, dontShowAgain: action.dontShowAgain } };
+      return { ...state, toast: { message: action.message, kind: action.kind, ms: action.ms, dontShowAgain: action.dontShowAgain, drc: action.drc } };
     case "TOAST_CLEAR":
       return { ...state, toast: null };
     case "SET_CURSOR":
@@ -2278,6 +2279,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
       // what KiCad says once the command worked (`ShowInfoBarMsg`, `wxLogMessage`): "Some of the polygons could not be merged.", ...
       if (reply.ok && reply.info) dispatch({ type: "TOAST", message: reply.info, kind: "info" });
+      // `VIA_PLACER::PlaceItem`: "Via location violates DRC." shown even as Allow DRC violations places the via (`ShowInfoBarError( .., DRC_VIOLATION )`), and a
+      // clean placement dismisses such a bar (`if( infobar->GetMessageType() == DRC_VIOLATION ) infobar->Dismiss()`)
+      if (reply.ok && reply.drc_violation) dispatch({ type: "TOAST", message: reply.drc_violation, kind: "error", drc: true });
+      else if (reply.ok && cmd.op === "place_via" && stateRef.current.toast?.drc) dispatch({ type: "TOAST_CLEAR" });
       // `SCH_EDIT_FRAME::SaveCopyForRepeatItem`: a placement on the schematic becomes what "Repeat Last Item" repeats.
       if (reply.ok && stateRef.current.tab === "schematic") {
         const source = repeatSource(cmd);
