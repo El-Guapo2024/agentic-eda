@@ -495,6 +495,14 @@ impl<'a> Board<'a> {
                 let inc = Incoming { placement: sh.clone(), screens: &fragment.sheet_screens, lib_symbols: &fragment.lib_symbols, fields };
                 self.add_sheet_tree(inc, (dx, dy), &name, None, &Numbering::Paste(mode))?;
             }
+            // the sheet's border, fill and attributes come with it (`SCH_SHEET`'s own, `SchExtras::sheet_props`)
+            if let Some(props) = fragment.section.extras.sheet_props.get(&sh.id).cloned() {
+                let sch = self.schematic_mut()?;
+                sch.assign_missing_ids();
+                if let Some(id) = sch.sheets.iter().rev().find(|s| s.name == name).map(|s| s.id.clone()) {
+                    sch.extras.sheet_props.insert(id, props);
+                }
+            }
             // the pins come with the sheet whole (`SCH_SHEET_PIN` is an `EDA_TEXT`): their text's size, bold and italic too
             let looks: Vec<Option<eda_model::sch_extras::LabelLook>> = sh.pins.iter().map(|p| fragment.section.extras.sheet_pin_looks.get(&p.id).copied()).collect();
             if looks.iter().any(Option::is_some) {

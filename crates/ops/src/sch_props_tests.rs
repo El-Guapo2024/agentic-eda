@@ -641,3 +641,25 @@ fn a_virtual_roots_top_level_sheets_are_added_and_deleted_but_not_the_last_and_n
     let last = sch_of(&b).sheets[0].id.clone();
     assert_eq!(b.apply(&Cmd::SchEdit(SchCmd::DeleteTopLevelSheet { id: last })).unwrap_err()[0].hint.as_deref().unwrap_or_default(), "Cannot delete the last top-level sheet.");
 }
+
+#[test]
+fn a_pasted_label_keeps_its_hand_placed_fields_and_looks_and_a_pasted_text_its_looks() {
+    use eda_model::sch_clipboard::{PasteMode, SchFragment};
+    let mut section = with_label_field();
+    section.imported_from_kicad = true;
+    section.field_layout.insert("lbl_g".into(), vec![eda_model::ir::FieldPlacement { dx: mm(5.08), dy: mm(2.54), ..eda_model::ir::FieldPlacement::at_origin("Netclass") }]);
+    section.extras.text_attrs.insert("lbl_g".into(), eda_model::sch_extras::TextAttrs { color: Some(red()), font: Some("KiCad Font".into()), ..Default::default() });
+    section.texts.push(SchematicText { id: "txt_c".into(), content: "copied".into(), at: p(Nm::ZERO, Nm::ZERO), angle: 0, size_nm: mm(1.27) });
+    section.extras.text_attrs.insert("txt_c".into(), eda_model::sch_extras::TextAttrs { bold: true, href: Some("#1".into()), ..Default::default() });
+    let fragment = SchFragment { section, ..Default::default() };
+    let (m, d) = board(SchematicSection::default());
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::PasteSch { fragment, dx: mm(25.4), dy: Nm::ZERO, mode: PasteMode::Unique, numbering: Default::default() }).unwrap();
+    let sch = sch_of(&b);
+    let l = sch.labels.iter().find(|l| l.net == "SIG").expect("the pasted label");
+    assert!(eda_engine::label_fields::hand_placed(sch, &l.id), "its fields stay where they were put");
+    assert_eq!(sch.field_layout[&l.id][0].dx, mm(5.08));
+    assert_eq!(sch.extras.text_attrs[&l.id].font.as_deref(), Some("KiCad Font"));
+    let t = sch.texts.iter().find(|t| t.content == "copied").expect("the pasted text");
+    assert!(sch.extras.text_attrs[&t.id].bold && sch.extras.text_attrs[&t.id].href.as_deref() == Some("#1"));
+}
