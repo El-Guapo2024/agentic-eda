@@ -41,6 +41,7 @@ mod fp_assign_api;
 mod fp_json;
 mod pad_nets_api;
 mod append_api;
+mod cvpcb_api;
 mod design_block_api;
 mod graphics_api;
 mod library_api;

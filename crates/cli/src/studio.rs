@@ -902,6 +902,13 @@ fn handle(
         // The microwave tools' Complex Shape dialog: the scales and the point count of a shape description file (the shape itself is `Cmd::Microwave` with the file's text).
         ("POST", "/api/microwave/shape") => respond(stream, "200 OK", "application/json", crate::microwave_api::read_shape(&body).to_string().as_bytes()),
         ("POST", "/api/microwave/inductor") => respond(stream, "200 OK", "application/json", crate::microwave_api::check_inductor(&body).to_string().as_bytes()),
+        // Assign Footprints (CvPcb, `crate::cvpcb_api`): the footprint the preview pane draws, the project's footprint association files (Manage Footprint Association
+        // Files...) and Automatically Assign Footprints, which answers what to assign (the dialog applies it with its other assignments, one undo step).
+        ("GET", "/api/cvpcb/footprint") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::footprint(dir, &query_value(target, "id")).to_string().as_bytes()),
+        ("GET", "/api/cvpcb/equ_browse") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::equ_browse(dir, &query_value(target, "path")).to_string().as_bytes()),
+        ("GET", "/api/cvpcb/equ_files") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::equ_files(dir).to_string().as_bytes()),
+        ("POST", "/api/cvpcb/equ_files") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::set_equ_files(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/cvpcb/auto_associate") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::auto_associate(dir, &body).to_string().as_bytes()),
         // The Design Blocks panels (`crate::design_block_api`): the libraries and their blocks, a block's board file, its preview (kicad-cli, off the loop), and the dialogs'
         // reads and writes. Placing a block is `Cmd::ImportSheet` / `Cmd::PlaceDesignBlock`; the save also applies the link of a selection to the block (`LinkDesignBlock`).
         ("GET", "/api/design_blocks") => respond(stream, "200 OK", "application/json", crate::design_block_api::list(dir).to_string().as_bytes()),
