@@ -716,6 +716,10 @@ fn handle(
         ("POST", "/api/sch/place_preview") => respond(stream, "200 OK", "application/json", crate::sch_place_api::place_preview(dir, &body).to_string().as_bytes()),
         // The font families the machine has, for Symbol Properties' Font column (`crate::fonts_api`).
         ("GET", "/api/fonts") => respond(stream, "200 OK", "application/json", crate::fonts_api::fonts().to_string().as_bytes()),
+        // Page Settings' drawing sheet file: a picked `.kicad_wks` read for the dialog, where to browse, and a file from the person's computer put in the board's folder
+        ("GET", "/api/drawing_sheet") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::pick(dir, &query_value(target, "path")).to_string().as_bytes()),
+        ("GET", "/api/drawing_sheet/folders") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::folders(dir).to_string().as_bytes()),
+        ("POST", "/api/drawing_sheet/upload") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::upload(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         // Annotate Schematic's message window and the other dialogs that work across sheets (`crate::sch_hierarchy_api`).
@@ -1578,6 +1582,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     state["board_rules"]["component_classes"] = json!(model.board.component_classes);
     // the design variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, which the board's `(variants ..)` gets from the schematic), set apart too
     state["variants"] = json!(design_variants_json(&design));
+    // Page Settings' drawing sheet file (`pcbnew.page_layout_descr_file`): the name kept, the file's text the board's sheet is drawn from and why it could not
+    // be read; null is KiCad's default sheet
+    state["drawing_sheet"] = crate::drawing_sheet_api::state_json(dir, design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref()));
     Ok(state)
 }
 
@@ -1875,7 +1882,10 @@ pub(crate) fn schematic_json(dir: &Path, sheet_path: &str, clock: eda_model::tex
         design.sheet_contents = derived.sheet_contents;
     }
     let project = crate::text_vars_json::project(dir, &meta.intent, clock);
-    Ok(schematic_json_with(&design, &model, sheet_path, Some((dir, project))))
+    let mut v = schematic_json_with(&design, &model, sheet_path, Some((dir, project)));
+    // Page Settings' drawing sheet file (`schematic.page_layout_descr_file`), as the board's is in `GET /api/state`
+    v["drawing_sheet"] = crate::drawing_sheet_api::state_json(dir, design.schematic.as_ref().and_then(|s| s.extras.drawing_sheet.as_deref()));
+    Ok(v)
 }
 
 /// [`schematic_json`] of a design that is already loaded (the schematic clipboard asks it of a design a paste has just been tried on).
@@ -2247,7 +2257,16 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     let (paper_w, paper_h) = page.size_nm().unwrap_or((mm(297.0), mm(210.0)));
     let file = viewed_file(design, &breadcrumb);
     // the page of the sheet in view as a number (`GetPageNumberAsInt`), which a placed symbol's "sheet number x 100" numbering counts from (r3 D3-M3)
-    let page_number = eda_model::sheet_list::walk(design).iter().find(|e| e.path == sheet_ids).map_or(1, eda_model::sheet_list::SheetEntry::page_number_as_int);
+    let walk_all = eda_model::sheet_list::walk(design);
+    let page_number = walk_all.iter().find(|e| e.path == sheet_ids).map_or(1, eda_model::sheet_list::SheetEntry::page_number_as_int);
+    // what the drawing sheet shows of the page (`SCH_VIEW::DisplaySheet`): `${#}` the page as the sheet shows it (`SCH_SCREEN::GetPageNumber`), `${##}` the
+    // number of pages (`GetPageCount`), and whether this is the first page (`GetVirtualPageNumber() == 1`), which `page1only` / `notonpage1` items go by
+    let shown_entry = walk_all.iter().find(|e| e.path == sheet_ids);
+    let sheet_page = json!({
+        "number": shown_entry.map_or_else(|| "1".to_string(), eda_model::sheet_list::SheetEntry::effective_page),
+        "count": walk_all.len(),
+        "first": shown_entry.map_or(true, |e| e.virtual_page == 1),
+    });
 
     json!({
         "paper": { "name": page.paper, "width_nm": paper_w, "height_nm": paper_h },
@@ -2272,6 +2291,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "sheets": sheets,
         "sheet_path": sheet_path,
         "page_number": page_number,
+        "sheet_page": sheet_page,
         // Schematic Setup > Formatting as the sheet is drawn by it (`eda_model::sch_setup::SchFormatting::effective`, the sizes KiCad reads back): the junction
         // dot's diameter (`SCHEMATIC_SETTINGS::GetJunctionSize`, from the Default class's wire width), the default line width, text and pin symbol sizes and the
         // dashed lines' ratios

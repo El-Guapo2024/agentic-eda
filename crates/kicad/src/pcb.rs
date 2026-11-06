@@ -1067,6 +1067,15 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
     if let Some(sch) = design.schematic.as_ref() {
         write_schematic_setup(&mut project["schematic"], &sch.extras);
     }
+    // Page Settings' drawing sheet files (`PROJECT_FILE`'s `pcbnew.page_layout_descr_file`, `SCHEMATIC_SETTINGS`' `schematic.page_layout_descr_file`), as the
+    // design keeps them: relative to the board's folder, or with a path variable. The derived project in `<board>/.kicad` has them made absolute
+    // (`eda_kicad_engine::write_project_with`), its folder not being the board's.
+    if let Some(path) = design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref()) {
+        project["pcbnew"]["page_layout_descr_file"] = serde_json::json!(path);
+    }
+    if let Some(path) = design.schematic.as_ref().and_then(|s| s.extras.drawing_sheet.as_deref()) {
+        project["schematic"]["page_layout_descr_file"] = serde_json::json!(path);
+    }
     // Project > Bus Alias Definitions (`PROJECT_FILE`'s `schematic.bus_aliases`, where KiCad 10 keeps them: `{ "<name>": ["<member>", ..] }`). The derived
     // schematic still carries them as legacy `(bus_alias ..)` blocks too, which KiCad reads into the same list (`SCH_SCREEN::AddBusAlias`, a definition
     // it already has being kept once).
