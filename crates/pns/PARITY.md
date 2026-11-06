@@ -1580,6 +1580,27 @@ UI-LEFT R6 and R9, each re-read against KiCad 8303b2ad (`pns_line_placer.cpp`: `
   walk_drag_seg_against_board_edge 3/3 exact), `dp_boards` 5 passed, `cargo test -p eda-pns` all passed (351 unit tests); after the component-drag
   change the same, `component_drag` 6 passed.
 
+## Stage 25 -- D drags the selected item (branch `task-v1-select`, 2026-11-07)
+
+UI-LEFT-2 RR2, read against KiCad 8303b2ad `router_tool.cpp::InlineDrag` and `CanInlineDrag`, `pns_tool_base.cpp::snapToItem`, `pns_router.cpp::StartDragging`,
+`pns_dragger.cpp::Start`, and `edit_tool.cpp::Drag`.
+
+- *The item dragged* (`Router::drag_start_item`, `route_api::drag_start`'s `item`): `InlineDrag` drags the selection -- `itemsToDrag` is
+  `FindItemByParent( boardItem )` of each selected item, never an item found again at the point -- and takes the one nearest the cursor on the frame's
+  active layer (`pitem->Shape( layer )->SquaredDistance( p0, 0 )`), the start snapped onto it (`p = snapToItem( closestItem, p0 )`: a via's centre, a
+  track's end within half its width, else the nearest point of the segment; the grid alignment along it, `AlignToSegment`, is the studio's cursor), then
+  `StartDragging( p, itemsToDrag, mode )` -> `DRAGGER::Start` with `aPrimitives[0]` (`checkVirtualVia( aP, seg )` on the snapped point). A studio track is a
+  polyline, a run of KiCad's `PCB_TRACK`s: its segment nearest the press stands for the one a KiCad user selected there, a single drag (`DRAGGER`). Before, the
+  router picked the item at the point (`drag_start_locked`: a via before a track), so D on a selected track whose end lies on a via dragged the via. The reply
+  holds the snapped `start`. Without `item` (D with the router tool armed: `performDragging` of its start item, `updateStartItem`) the item at the point is taken
+  as before. A locked item is refused (`locked: true`) until "Drag Anyway" (`drag_locked`), as `drag_start_locked`.
+- *The selection the studio sends*: `EDIT_TOOL::Drag`'s `RequestSelection` with its client filter (the studio, PARITY-pcb.md section 93): with nothing selected
+  the item under the cursor -- the knee rules, and the clarification menu when several are left.
+- Tests: `route_api::tests` `d_drags_the_selected_track_not_the_via_found_again_at_the_point`, `d_on_a_selected_track_starts_on_the_nearest_point_of_its_nearest_segment`,
+  `d_on_a_selected_locked_track_is_refused_until_drag_anyway` (route_api 36 passed); `tests/locked_tracks.rs::the_selected_track_is_dragged_whatever_the_point_would_find_and_a_locked_one_asks_first`
+  (8/8); `cargo test -p eda-pns` 351 unit tests passed. **Note:** a corner drag of a selected track at a joint with a locked track moves the locked one too
+  (the dragger's corner behaviour, unchanged here).
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now

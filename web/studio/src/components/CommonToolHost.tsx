@@ -15,7 +15,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { useFpApi, useFpDispatch, useFpState } from "../state/footprintEditorStore";
 import { useSymApi, useSymDispatch, useSymState } from "../state/symbolEditorStore";
 import { useCommonOptions, type CommonOptions } from "../state/commonOptions";
-import { closeSelectionMenu, getCommonTool, setLasso, setLastPointer, setMeasure, setMenuHighlight, setPickerHover, setZoomArea, useCommonTool } from "../state/commonTool";
+import { closeSelectionMenu, getCommonTool, requestMoreSelectionChoices, setLasso, setLastPointer, setMeasure, setMenuHighlight, setPickerHover, setZoomArea, useCommonTool } from "../state/commonTool";
 import { clarificationRows } from "../kicad-port/clarificationMenu";
 import { isMac } from "../platform";
 import { measureClick } from "../kicad-port/measureRuler";
@@ -290,13 +290,16 @@ export function CommonToolHost() {
   // `doSelectionMenu`'s rows (kicad-port/clarificationMenu.ts): the first nine numbered and chosen by their number key, "Select All" by A; the row under the
   // pointer brightens its item (every item for "Select All").
   const entries: MenuEntry[] = [];
-  for (const row of clarificationRows(menu.items.map((it) => it.label), { mac: isMac(), more: false })) {
+  for (const row of clarificationRows(menu.items.map((it) => it.label), { mac: isMac(), more: menu.more !== undefined })) {
     if (row.kind === "item") {
       const it = menu.items[row.index]!;
       entries.push({ label: row.label, accel: row.accel, onSelect: () => closeSelectionMenu([it.id]), onHover: (over) => setMenuHighlight(over ? [it.id] : []) });
     } else if (row.kind === "all") {
       entries.push({ label: "", onSelect: () => {}, separator: true });
       entries.push({ label: row.label, accel: row.accel, onSelect: () => closeSelectionMenu(menu.items.map((it) => it.id)), onHover: (over) => setMenuHighlight(over ? menu.items.map((it) => it.id) : []) });
+    } else {
+      // "Show More Choices..." (M): the menu again with every item, the choice still to make; the menu closing first must not count as a dismissal
+      entries.push({ label: row.label, accel: row.accel, onSelect: requestMoreSelectionChoices });
     }
   }
   return (

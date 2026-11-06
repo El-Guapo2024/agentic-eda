@@ -16,7 +16,7 @@
 //
 // The browser stands in for FreeType and HarfBuzz: an outline face's advances and ink are measured by the canvas (`ctx.measureText`, which shapes with HarfBuzz too, kerning
 // and ligatures included) through `OutlineFace`, and its vertical metrics are read from the font file the server's fontconfig picked (`components/text/outlineFonts.ts`).
-// Differences (documented in PARITY-pcb section 93): HarfBuzz's per-glyph advances are truncated to whole face units by KiCad (`VECTOR2I cursor`), here the line is measured
+// Differences (documented in PARITY-pcb section 94): HarfBuzz's per-glyph advances are truncated to whole face units by KiCad (`VECTOR2I cursor`), here the line is measured
 // whole (under 0.001 of the size a glyph); FreeType's hinting at 358 pixels to the em is not applied; a fake bold (`FT_Outline_Embolden`, 1/358 of the em) is not drawn;
 // a text's URLs are not split from it (`MARKUP::url`; they are drawn the same); an outline glyph is hit by its ink box, not its triangles.
 //

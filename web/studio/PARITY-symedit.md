@@ -393,7 +393,7 @@ Left: a shape's Private flag and its border and fill colours (Shape Properties; 
 ## Texts in their faces, where KiCad draws them (UI-LEFT-2 PP1, CC1; 2026-11-06, `task-v1-text`)
 
 The Symbol Editor's texts, fields and text boxes are laid out by the board's and the sheet's one layout (`kicad-port/kicadText.ts`, `schTextSpecs.ts`: `deviceTextDrawSpec`, `schFieldDrawSpec`,
-`schTextBoxDrawSpec`; PARITY-pcb section 93, PARITY-sch section 70) and drawn in their face -- the stroke font, or the outline face the server's fontconfig gives (`SCH_PAINTER::draw( SCH_TEXT )`
+`schTextBoxDrawSpec`; PARITY-pcb section 94, PARITY-sch section 70) and drawn in their face -- the stroke font, or the outline face the server's fontconfig gives (`SCH_PAINTER::draw( SCH_TEXT )`
 on `LAYER_DEVICE`: the text at the centre of its box, at its left or right edge for a left or right justification; `draw( SCH_FIELD )`: a field centred on its box; the pen
 `getTextThickness`'s). `window.__edaText.sym[id]` says what was drawn. The Properties pane's Font row is writeable for a text and a text box (`replace_symbol_graphic` with the font,
 "Default Font" taking it off); a field's stays read-only (`FieldRow` keeps no font).

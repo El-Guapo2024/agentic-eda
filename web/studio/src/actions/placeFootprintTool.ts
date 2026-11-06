@@ -18,9 +18,12 @@
 //
 // The studio's carry is the one Duplicate and Paste use (`StudioApi.placeNewItems`: the step held open on the server, crates/cli/src/carry.rs; the Move tool
 // carries the selected footprint, and its drop joins the step), so the footprint is on the board while it is carried, where KiCad's is a footprint added to
-// a commit not yet pushed. The Move tool snaps the carried footprint as a move does (`BestSnapAnchor` on the footprints' grid), where KiCad's loop puts it on
-// the grid point under the cursor (`GetCursorPosition( true )`). The chooser's "-- Unplaced --" group (the schematic's parts not on the board, the studio's own)
-// arms the part for a click as before, and the tool goes on after that click.
+// a commit not yet pushed. As in KiCad's loop the carried footprint's anchor is on the grid point under the cursor (`fp->SetPosition( cursorPos )`,
+// `cursorPos = GetCursorPosition( !evt->DisableGridSnapping() )`: Ctrl takes the grid off), not where a move's `BestSnapAnchor` would put it (`gridCarry`,
+// UI-LEFT-2 PP4); a click that never moved it still puts it there, turned to a placement grid's frame (the loop's `refreshPreview` after the pick:
+// `applyPlacementFrameOrientation`); and Properties (E) does nothing while it is carried: the loop takes the action and passes it on to no tool
+// (`fp && evt->IsAction( &PCB_ACTIONS::properties )` sets `reselect` and no `SetPassEvent`). The chooser's "-- Unplaced --" group (the schematic's parts not
+// on the board, the studio's own) arms the part for a click as before, and the tool goes on after that click.
 import type { Dispatch } from "react";
 import type { Cmd, PointXY } from "../api/types";
 import type { Action, StudioApi } from "../state/store";
@@ -143,7 +146,8 @@ function carry(build: (at: PointXY) => Cmd, at: PointXY | null, frameDeg: number
   stage = "carrying";
   void c.api
     // made but nothing new to carry: what it made stands, and the tool goes on
-    .placeNewItems(build, true, placed, { at: at ?? undefined, frameDeg, afterCancel: reverted, afterSettle: settled, afterNothing: placed })
+    // `gridCarry`: the loop's `fp->SetPosition( cursorPos )`, the grid point under the cursor (UI-LEFT-2 PP4)
+    .placeNewItems(build, true, placed, { at: at ?? undefined, frameDeg, gridCarry: true, afterCancel: reverted, afterSettle: settled, afterNothing: placed })
     .then((ok) => {
       // refused: no footprint to carry, the tool waits for the next click
       if (!ok && stage === "carrying") waitForClick();

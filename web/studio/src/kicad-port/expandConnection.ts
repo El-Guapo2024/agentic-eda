@@ -18,7 +18,11 @@
 //   - `SKIP_STRUCT` marks what has pushed already, for the whole call (all start items), so the walk ends.
 //   - The selection filter (`itemPassesFilter( item, true )`, the caller's `passes`): a start track or via that fails it is not selected; a point with a pad or a via
 //     that fails it goes no further; a track that fails it is neither selected nor walked (UI-LEFT P22).
-// Not ported: graphic shapes on copper (`shapeMap`). Graphic lines off copper are kicad-port/pcbConnection.ts's `selectAllConnectedShapes`.
+//   - Graphic shapes on copper (`shapeMap`, UI-LEFT-2 PP19): each is held under its connection points (`PCB_SHAPE::GetConnectionPoints`: a line's or a curve's
+//     ends, an arc's middle and ends, a rectangle's corners, a polygon's points, a circle's four quadrant points, a filled shape's centre); at a point, each one
+//     on its copper layers that the filter lets through is selected and, the first time, pushes its other connection points (with its layer). A start shape
+//     pushes all of its points. A shape does not count towards a junction (`pt_count` counts tracks).
+// Graphic lines off copper are kicad-port/pcbConnection.ts's `selectAllConnectedShapes`.
 //
 // Pure: no store, no DOM. Unit-tested in expandConnection.test.ts.
 
@@ -50,21 +54,31 @@ export interface ConnPad {
   layers: readonly string[];
 }
 
+/** A board graphic shape on copper (`PCB_SHAPE`, a `BOARD_CONNECTED_ITEM`): its layer and its connection points (`GetConnectionPoints`). */
+export interface ConnShape {
+  id: string;
+  layer: string;
+  points: readonly Pt[];
+}
+
 export interface ConnWorld {
   segs: readonly ConnSeg[];
   vias: readonly ConnVia[];
   pads: readonly ConnPad[];
+  /** The copper graphic shapes (`shapeMap`); absent: none. */
+  shapes?: readonly ConnShape[];
 }
 
-/** A start item (`BOARD_CONNECTED_ITEM`): a track (each of its segments), a via or a pad. */
-export type ConnStart = { kind: "track"; id: string } | { kind: "via"; id: string } | { kind: "pad"; id: string };
+/** A start item (`BOARD_CONNECTED_ITEM`): a track (each of its segments), a via, a pad or a copper graphic shape. */
+export type ConnStart = { kind: "track"; id: string } | { kind: "via"; id: string } | { kind: "pad"; id: string } | { kind: "shape"; id: string };
 
 export type StopCondition = "junction" | "pad" | "never";
 
-/** What a walk selects: tracks (by id) and vias. */
+/** What a walk selects: tracks (by id), vias and copper graphic shapes. */
 export interface ConnSelected {
   trackIds: Set<string>;
   viaIds: Set<string>;
+  shapeIds?: Set<string>;
 }
 
 const key = (p: Pt) => `${p[0]},${p[1]}`;
@@ -92,6 +106,15 @@ export function selectAllConnectedTracks(world: ConnWorld, starts: readonly Conn
   const viasInOrder = [...viaMap.values()].sort((a, b) => a.at[0] - b.at[0] || a.at[1] - b.at[1]);
   const padMap = new Map<string, ConnPad>();
   for (const p of world.pads) padMap.set(key(p.at), p);
+  // `shapeMap[point].push_back( shape )` for each of its connection points
+  const shapeMap = new Map<string, ConnShape[]>();
+  for (const sh of world.shapes ?? []) {
+    for (const p of sh.points) {
+      const list = shapeMap.get(key(p));
+      if (list) list.push(sh);
+      else shapeMap.set(key(p), [sh]);
+    }
+  }
 
   const startPads = new Set(starts.filter((s) => s.kind === "pad").map((s) => s.id));
   const segsOf = (track: string) => world.segs.filter((s) => s.track === track);
@@ -105,6 +128,7 @@ export function selectAllConnectedTracks(world: ConnWorld, starts: readonly Conn
   const doneSegs = new Set<ConnSeg>();
   const donePads = new Set<string>();
   const doneVias = new Set<string>();
+  const doneShapes = new Set<string>();
 
   // each start item on its own (`for( startItem : aStartItems )`), a track standing for each of its segments
   const startItems: Array<{ pts: Array<[Pt, readonly string[]]>; done: () => boolean }> = [];
@@ -114,6 +138,10 @@ export function selectAllConnectedTracks(world: ConnWorld, starts: readonly Conn
     } else if (s.kind === "via") {
       const v = world.vias.find((q) => q.id === s.id);
       if (v) startItems.push({ pts: [[v.at, v.layers]], done: () => doneVias.has(v.id) });
+    } else if (s.kind === "shape") {
+      // `for( point : shape->GetConnectionPoints() ) activePts.push_back( { point, startItem->GetLayerSet() } )`
+      const sh = (world.shapes ?? []).find((q) => q.id === s.id);
+      if (sh) startItems.push({ pts: sh.points.map((p) => [p, [sh.layer]] as [Pt, readonly string[]]), done: () => doneShapes.has(sh.id) });
     } else {
       const p = world.pads.find((q) => q.id === s.id);
       if (p) startItems.push({ pts: [[p.at, p.layers]], done: () => donePads.has(p.id) });
@@ -157,6 +185,16 @@ export function selectAllConnectedTracks(world: ConnWorld, starts: readonly Conn
         if (!doneSegs.has(s)) {
           doneSegs.add(s);
           active.push([key(s.start) === key(pt) ? s.end : s.start, [s.layer]]);
+        }
+      }
+      for (const sh of shapeMap.get(key(pt)) ?? []) {
+        if (!layerSetCu.includes(sh.layer)) continue;
+        if (!passes("shape", sh.id)) continue;
+        (selected.shapeIds ??= new Set()).add(sh.id);
+        if (!doneShapes.has(sh.id)) {
+          doneShapes.add(sh.id);
+          // `if( newPoint == pt ) continue;`
+          for (const np of sh.points) if (key(np) !== key(pt)) active.push([np, [sh.layer]]);
         }
       }
       if (hitVia) {

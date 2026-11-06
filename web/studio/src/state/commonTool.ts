@@ -36,6 +36,11 @@ export interface SelectionMenu {
   items: { id: string; label: string }[];
   /** What the choice does: `ids` is the one item picked, or all of them for "Select All" (null: the menu was dismissed). */
   onChoose: (ids: string[] | null) => void;
+  /**
+   * Every item the heuristics left out too (`aCollector->HasAdditionalItems()`): the menu has "Show More Choices..." (M), which opens it again with all of them
+   * (`aCollector->Combine()`) and no such row. Absent: none was left out.
+   */
+  more?: () => { id: string; label: string }[];
 }
 
 export interface CommonToolState {
@@ -74,6 +79,17 @@ function subscribe(listener: () => void): () => void {
 
 export function useCommonTool(): CommonToolState {
   return useSyncExternalStore(subscribe, getCommonTool, getCommonTool);
+}
+
+const NO_ITEMS: readonly string[] = [];
+
+/** The clarification menu's brightened items alone (the board's canvas draws them): a change of anything else does not wake the caller. */
+export function useMenuHighlight(): readonly string[] {
+  return useSyncExternalStore(subscribe, menuHighlightNow, menuHighlightNow);
+}
+
+function menuHighlightNow(): readonly string[] {
+  return current.menuHighlight ?? NO_ITEMS;
 }
 
 /** `BrightenItem` / `UnbrightenItem` for the picker's candidate. */
@@ -122,10 +138,24 @@ export function showSelectionMenu(menu: SelectionMenu): void {
   set({ ...current, menu });
 }
 
-/** The menu is gone (a choice was made, or it was dismissed): runs `onChoose` with the choice, or null. */
+/** "Show More Choices..." was chosen: the menu's closing that follows opens it again instead (`closeSelectionMenu`). */
+let moreRequested = false;
+
+/** "Show More Choices...": once the menu closes it is open again with every item (`showMoreChoices = true`), the same choice to make -- nothing is chosen yet. */
+export function requestMoreSelectionChoices(): void {
+  if (current.menu?.more) moreRequested = true;
+}
+
+/** The menu is gone (a choice was made, or it was dismissed): runs `onChoose` with the choice, or null; after "Show More Choices..." it opens again with every item. */
 export function closeSelectionMenu(choice: string[] | null = null): void {
   const menu = current.menu;
   if (!menu) return;
+  if (choice === null && moreRequested && menu.more) {
+    moreRequested = false;
+    set({ ...current, menu: { ...menu, items: menu.more(), more: undefined }, menuHighlight: [] });
+    return;
+  }
+  moreRequested = false;
   set({ ...current, menu: null, hover: null });
   menu.onChoose(choice);
 }

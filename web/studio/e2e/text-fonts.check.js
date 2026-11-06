@@ -1,4 +1,4 @@
-// Texts drawn where KiCad draws them, in the stroke font and in outline fonts (UI-LEFT-2 PP1, CC1; PARITY-pcb section 93):
+// Texts drawn where KiCad draws them, in the stroke font and in outline fonts (UI-LEFT-2 PP1, CC1; PARITY-pcb section 94):
 //   * PP1: a board text's lines start where `FONT::getLinePositions` puts them (left/top: `pen / 1.52` in and a size less `0.052` pens down; centred: half the
 //     whole advance back, the block's 1.17 sizes halved), as the canvas drew them (`window.__edaText.pcb[id]`, components/text/kicadTextPaint.ts);
 //   * CC1: a text set in DejaVu Sans (`edit_text_style`'s face) is drawn in the face the server's fontconfig matched (`GET /api/fonts/match`, the file served by

@@ -1,7 +1,8 @@
 // The board's items as the polygons `GuessSelectionCandidates`' coverage passes measure (UI-LEFT P22; kicad-port/coverage.ts does the arithmetic):
 //
-//   a pad              its copper (`PAD::TransformShapeToPolygon`): a circle, an oval (a stadium), else the turned rectangle of its size (a rounded or chamfered
-//                      corner, a trapezoid's slope and a custom pad's primitives are not drawn here: the rectangle of its size stands for them)
+//   a pad              its copper (`PAD::TransformShapeToPolygon` of each unique layer, kicad-port/padHit.ts `padCopperRings`): a circle, an oval (a stadium),
+//                      a turned rectangle, a rounded rectangle with its corner arcs, and a trapezoid, a chamfered rectangle or a custom pad by the contours of its
+//                      copper (UI-LEFT-2 PP2; `padRing`, the rectangle of its size for all but circles and ovals, is kept as INACTIVE)
 //   a hole             `PAD::TransformHoleToPolygon`: the drill's circle, or a slot's stadium
 //   a shape            `PCB_SHAPE::TransformShapeToPolygon`: a filled rectangle, circle or polygon its area; a line, an arc, a curve and the outline of an unfilled
 //                      one its stroke, the stroke's width round each piece
@@ -16,8 +17,10 @@ import type { FpGraphic, Pad, Part, Shape } from "../api/types";
 import { ARC_LOW_DEF_NM, boundingHull, circleRing, polylineRings, rectRing, ringArea, stadiumRing, type Pt, type Ring } from "./coverage";
 import { arcThrough } from "./snapGeom";
 import { bezierPolyline } from "./bezierPoly";
+import { padCopperRings } from "./padHit";
 
-/** A pad's copper as a polygon. */
+/** INACTIVE (UI-LEFT-2 PP2): a pad's copper as one polygon, a rounded or chamfered rectangle, a trapezoid and a custom pad standing as the rectangle of their size;
+ * the hull and the coverage take `padCopperRings` (kicad-port/padHit.ts), the real outline of each layer's copper. */
 export function padRing(pad: Pad): Ring {
   const [w, h] = pad.size ?? [pad.w, pad.h];
   const rot = pad.rot ?? 0;
@@ -129,7 +132,7 @@ export function footprintHull(part: Part, textBoxes: readonly Ring[]): Ring {
   for (const g of part.graphics ?? []) rings.push(...shapeRings(g, (g as { filled?: boolean }).filled === true));
   rings.push(...textBoxes);
   for (const pad of part.pads ?? []) {
-    rings.push(padRing(pad));
+    rings.push(...padCopperRings(pad));
     const hole = holeRing(pad);
     if (hole) rings.push(hole);
   }

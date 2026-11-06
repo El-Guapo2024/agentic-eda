@@ -15,6 +15,9 @@ type Scope = Transform | null;
 
 const scopes = new WeakMap<object, Scope[]>();
 
+/** The transforms laid over everything a draw sets, after its scopes and through the ones that set the outer scopes aside (`withFinalColourScope`). */
+const finals = new WeakMap<object, Transform[]>();
+
 /** `fn` with the colours it made kept: the same transform object for every scope of a frame that asks with the same `key`. */
 const memos = new Map<string, Transform>();
 export function memoColours(key: string, fn: Transform): Transform {
@@ -47,11 +50,13 @@ function nativeAccessor(ctx: object, prop: "fillStyle" | "strokeStyle"): Propert
 /** The colour the scopes open on `ctx` make of `css` (outermost first, from the last scope that sets aside the ones outside it). */
 function transformed(ctx: object, css: string): string {
   const open = scopes.get(ctx);
-  if (!open || open.length === 0) return css;
-  let from = open.length - 1;
-  while (from >= 0 && open[from] !== null) from--;
   let out = css;
-  for (let i = from + 1; i < open.length; i++) out = open[i]!(out);
+  if (open && open.length > 0) {
+    let from = open.length - 1;
+    while (from >= 0 && open[from] !== null) from--;
+    for (let i = from + 1; i < open.length; i++) out = open[i]!(out);
+  }
+  for (const f of finals.get(ctx) ?? []) out = f(out);
   return out;
 }
 
@@ -76,7 +81,7 @@ export function installColourScopes(ctx: CanvasRenderingContext2D): void {
       set: (v: unknown) => {
         const open = scopes.get(ctx);
         const made = produced.get(ctx);
-        if (typeof v !== "string" || !open || open.length === 0 || made?.has(v)) return own.set!.call(ctx, v);
+        if (typeof v !== "string" || ((!open || open.length === 0) && !finals.get(ctx)?.length) || made?.has(v)) return own.set!.call(ctx, v);
         const out = transformed(ctx, v);
         own.set!.call(ctx, out);
         if (out !== v) made?.add(own.get!.call(ctx) as string);
@@ -84,6 +89,26 @@ export function installColourScopes(ctx: CanvasRenderingContext2D): void {
     });
   define("fillStyle", fill);
   define("strokeStyle", stroke);
+}
+
+/**
+ * Runs `draw` with every colour it sets on `ctx` passed through `fn` last -- after the scopes the draw opens, even those that set the outer ones aside (a pad's
+ * copper colour inside its footprint): the brightening of the items the clarification menu points at (`RENDER_SETTINGS`' `IsBrightened()` branch).
+ */
+export function withFinalColourScope(ctx: CanvasRenderingContext2D, fn: Transform, draw: () => void): void {
+  let list = finals.get(ctx);
+  if (!list) {
+    list = [];
+    finals.set(ctx, list);
+  }
+  if (!produced.has(ctx)) produced.set(ctx, new Set());
+  list.push(fn);
+  try {
+    draw();
+  } finally {
+    list.pop();
+    if (list.length === 0 && !(scopes.get(ctx)?.length)) produced.get(ctx)?.clear();
+  }
 }
 
 /** Runs `draw` with every colour it sets on `ctx` passed through `fn` (after the scopes already open); `fn` null sets those aside for the draw. */
@@ -99,6 +124,6 @@ export function withColourScope(ctx: CanvasRenderingContext2D, fn: Transform | n
     draw();
   } finally {
     open.pop();
-    if (open.length === 0) produced.get(ctx)?.clear();
+    if (open.length === 0 && !finals.get(ctx)?.length) produced.get(ctx)?.clear();
   }
 }
