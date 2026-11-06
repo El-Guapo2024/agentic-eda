@@ -2,6 +2,43 @@
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
+## Start here (2026-11-06): equalizing the UI with KiCad
+
+- **The user's direction (2026-11-05):** "make sure we match everything KiCad can do, keep equalizing", meaning the studio UI.
+  - The work list is `docs/parity/UI-LEFT.md`, an inventory of 121 entries ranked by area. Each batch marks its entries **done (task-…)** with what is left.
+  - The board work on safety-power is paused.
+  - The features kept out by decision (UI-LEFT A1) stay out until the user says otherwise. For the autoplacer, the proposal is to wire KiCad's two Place actions to our own placer (`crates/place`), not to port AR_AUTOPLACER.
+- **Batch u1, merged 2026-11-05/06, 11 branches:**
+  - `task-u1-pcb`: P1, P4, P6, P23.
+  - `task-u1-plot`: X1-X4.
+  - `task-u1-drag`: R1.
+  - `task-u1-schplace`: S1, S18.
+  - `task-u1-libsave`: L1.
+  - `task-u1-zones`: P8.
+  - `task-u1-props`: P2, S7.
+  - `task-u1-schsetup`: S3.
+  - `task-u1-simmodel`: M1.
+  - `task-u1-fpedit`: F1, F2.
+  - `task-u1-variants`: S2.
+  
+  Each branch's open-branches row below says what it did. Each UI-LEFT entry says what is left.
+- **In flight:**
+  - `task-u1-symedit`: Y1, Y2, Y3 (symbol half), Y4 (the text dialog), Y5, and `ensureSymbolInProject`'s silent blank.
+  - `task-u2-lines`: P5, P13.
+  - `task-u2-boardsetup`: B1-B4.
+- **How a batch runs:**
+  - At most 4 port agents at once, each in its own worktree `~/work/agentic-eda-<task>` with a `node_modules` symlink to main's.
+  - Each agent is briefed from `docs/agent-briefs/common.md` (now with this box's paths).
+  - The lead reviews each claim that differs from the brief against the C++, then merges with `--no-ff`. Where the code conflicts, the agent merges main into its own branch instead.
+  - The lead regenerates `UI-ACTIONS.md`, pushes, and runs the full suite once the batch is in.
+- **PARITY section numbers clash** when parallel branches append. Renumber on merge, and fix that section's references in GAPS, UI-LEFT, HANDOFF and the e2e headers.
+- **Full suite on main fdc90313 (2026-11-06):** Rust 4339 passed, 3 failed (the box's three, below), 25 ignored; web typecheck ok, 2894 unit tests, build ok; 19m43s.
+- **The studio was restarted** on that build, in tmux session `serve`, which now runs a shell.
+  - Rebuild the release binary and `web/studio/dist` together. A dist newer than the running server calls routes the server lacks.
+  - An agent's `npm run build` in main's checkout once did exactly that.
+- **Known test failure:** `sch-details`' "Pins are items" fails on this box in two agents' runs, and on the base commit too. It uses a hard-coded R1 pin end; not looked into yet.
+- **Playwright** is reinstalled in `~/tools/pw` (1.48.2). There is still no ngspice, so the simulator's ngspice scenarios fail here.
+
 ## Start here (2026-11-05)
 
 - **Main merged three porting fixes (2026-11-05):**
@@ -211,6 +248,8 @@ Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Pyth
 - **The user's boards in `work/`** are the user's own and not needed for development. The real ones are on the Mac; the box's `work/mcu30` is a near-empty scratch, backed up in `~/backups/` before the nanometre work. Don't undo or reorganize them without asking. After `task-nanometres` merges, they are migrated on first load, one way.
 
 ## Gates of the last main
+
+- **`fdc90313`** (the AWS box, 2026-11-06, batch u1 merged): `tools/check.sh full` gave Rust 4339 passed, 3 failed (this box's), 25 ignored; web 2894; build ok. Each branch ran its own browser checks; the full `run-all-checks` was not run.
 
 - **`219520e9`** (the AWS box, 2026-11-05, three fixes merged): `tools/check.sh full` gave Rust 4201 passed, 3 failed (this box's, listed in "Start here (2026-11-05)"), 25 ignored; web 2703; build ok. `cargo check --workspace --tests` had no warnings. Browser checks were not run, since the box has no Playwright.
 
