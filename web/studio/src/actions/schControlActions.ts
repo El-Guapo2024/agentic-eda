@@ -4,7 +4,7 @@
 // function it ports at 8303b2ad; the heavy parts live in `kicad-port/` (tested) and `components/schControl/` (the dialogs and panels).
 //
 // Not registered, with the reason recorded in `tools/ui-parity-missing.json`: the simulator rows (deferred), Import Graphics and the three
-// drag-and-drop handlers, Import Non-KiCad Schematic, the legacy-library rescue and remap, the remote symbol panel, Show Hidden
+// drag-and-drop handlers, Import Non-KiCad Schematic, the remote symbol panel, Show Hidden
 // Fields, Show Pin Alternate Icons, Annotate Automatically, the internal restartMove and updateNetHighlighting events. The design variants
 // (KiCad 25ec2335 `SCH_EDITOR_CONTROL::AddVariant` ...) open components/DesignVariantDialogs.tsx; the attribute toggles act on the current variant.
 import type { Dispatch } from "react";
@@ -212,9 +212,12 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
       if (ids.length === 0) return;
       const variant = state.schVariant;
       const items = sch.symbols.filter((s) => ids.includes(s.id)).map((s) => variantFlags(s, variant));
+      // the default variant: the server collects the units of the reference this sheet path gives each symbol on every sheet and works out `new_state`
+      // over all of them (`CollectOtherUnits` over `Hierarchy()`, r5 D5-M2, UI-LEFT S9); a variant's records are the sheet in view's
+      if (variant === "") return void api.cmd({ op: "sch_edit", verb: "toggle_symbol_attribute", ids, attribute: key });
       const next = nextAttributeState(items, key);
-      const cmd = variant === "" ? null : setSymbolVariantCmd(variant, ids, { flags: { [key]: next } });
-      void api.cmd(cmd ?? { op: "set_symbol_attrs", ids, [key]: next });
+      const cmd = setSymbolVariantCmd(variant, ids, { flags: { [key]: next } });
+      if (cmd) void api.cmd(cmd);
     });
   };
   m.set("eeschema.EditorControl.setDNP", setAttribute("eeschema.EditorControl.setDNP"));
@@ -251,6 +254,10 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
   );
   // Bulk Edit Symbol Library Links... -- `EditSymbolLibraryLinks` -> `InvokeDialogEditSymbolsLibId`.
   m.set("eeschema.EditorControl.editSymbolLibraryLinks", onSchematic(() => open({ kind: "library_links" })));
+  // Rescue Symbols... -- `RescueSymbols` -> `RescueSymbolLibTableProject( true )` (components/schControl/RescueSymbolsDialog.tsx, crates/cli/src/rescue_api.rs).
+  m.set("eeschema.EditorControl.rescueSymbols", onSchematic(() => open({ kind: "rescue_symbols" })));
+  // Remap Legacy Library Symbols... -- `RemapSymbols` -> `DIALOG_SYMBOL_REMAP` (components/schControl/RemapSymbolsDialog.tsx).
+  m.set("eeschema.EditorControl.remapSymbols", onSchematic(() => open({ kind: "remap_symbols" })));
   // Assign Footprints... -- `ShowCvpcb` -> `OnOpenCvpcb`: the footprint assignment tool (CvPcb); here a dialog of the same three lists.
   m.set("eeschema.EditorControl.assignFootprints", onSchematic(() => open({ kind: "assign_footprints" })));
   // Import Footprint Assignments... -- `ImportFPAssignments` -> `processCmpToFootprintLinkFile`: a `.cmp` file's footprints go to the symbols it names.

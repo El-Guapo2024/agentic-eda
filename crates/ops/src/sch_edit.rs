@@ -440,6 +440,11 @@ pub enum SchCmd {
         #[serde(default)]
         positions: bool,
     },
+    /// Do not Populate / Exclude from Bill of Materials / Board / Simulation as a toggle (`SCH_EDIT_TOOL::SetAttribute` with the default variant): the
+    /// symbols `ids` of the sheet in view and, for an annotated one, every unit of the reference the sheet path in view gives it, on every sheet path
+    /// (`CollectOtherUnits( GetRef( &currentSheet ), .. )` over `Hierarchy()`), go to one state, set when any of them lacks it, else cleared (`new_state`,
+    /// computed over everything collected). `attribute`: `dnp`, `exclude_from_bom`, `exclude_from_board` or `exclude_from_sim` (r5 D5-M2, UI-LEFT S9).
+    ToggleSymbolAttribute { ids: Vec<String>, attribute: String },
 }
 
 /// What made a wire [`SchCmd::AddWireAs`] puts down.
@@ -481,7 +486,7 @@ impl SchCmd {
             SchCmd::EditGroup { id, member_ids, .. } => std::iter::once(id.as_str()).chain(member_ids.iter().map(String::as_str)).collect(),
             SchCmd::LinkDesignBlock { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddWireAs { .. } => vec!["wire"],
-            SchCmd::ResetSymbolFields { ids, .. } => ids.iter().map(String::as_str).collect(),
+            SchCmd::ResetSymbolFields { ids, .. } | SchCmd::ToggleSymbolAttribute { ids, .. } => ids.iter().map(String::as_str).collect(),
         }
     }
 
@@ -544,6 +549,7 @@ impl SchCmd {
                 }
             ),
             SchCmd::ResetSymbolFields { ids, .. } => format!("schematic reset-fields {}", ids.join(" ")),
+            SchCmd::ToggleSymbolAttribute { ids, attribute } => format!("schematic attrs {} --toggle {attribute}", ids.join(",")),
         }
     }
 
@@ -570,6 +576,7 @@ impl SchCmd {
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => "schematic-group",
             SchCmd::AddWireAs { .. } => "schematic-wire",
             SchCmd::ResetSymbolFields { .. } => "schematic-fields",
+            SchCmd::ToggleSymbolAttribute { .. } => "schematic-attrs",
         }
     }
 
@@ -715,6 +722,7 @@ impl<'a> Board<'a> {
             SchCmd::LinkDesignBlock { ids, block } => self.sch_link_design_block(ids, block),
             SchCmd::AddWireAs { pts, bus, .. } => self.add_wire_finished(pts.clone(), *bus, false),
             SchCmd::ResetSymbolFields { ids, visibility, effects, positions } => self.reset_symbol_fields(ids, *visibility, *effects, *positions),
+            SchCmd::ToggleSymbolAttribute { ids, attribute } => self.toggle_symbol_attribute(ids, attribute),
         }
     }
 

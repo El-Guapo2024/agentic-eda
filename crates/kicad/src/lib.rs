@@ -600,9 +600,11 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         writeln!(out, "\t\t(pin \"1\" (uuid \"{pin_uuid}\"))").unwrap();
         writeln!(out, "\t\t(instances").unwrap();
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
-        for path in &ctx.instance_paths {
+        // a power symbol has a reference per sheet path too (`SCH_SYMBOL_INSTANCE`; `SchExtras::power_path_refs`, UI-LEFT S9)
+        for (k, path) in ctx.instance_paths.iter().enumerate() {
+            let model_path = ctx.instance_sheet_paths.get(k).map(Vec::as_slice).unwrap_or(&[]);
             writeln!(out, "\t\t\t\t(path \"{path}\"").unwrap();
-            writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&ps.id)).unwrap();
+            writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&eda_model::sheet_list::power_reference_under(sch, ps, model_path))).unwrap();
             writeln!(out, "\t\t\t\t\t(unit 1)").unwrap();
             writeln!(out, "\t\t\t\t)").unwrap();
         }

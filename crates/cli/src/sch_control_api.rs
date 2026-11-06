@@ -44,6 +44,37 @@ pub fn hierarchy(dir: &Path, net: &str) -> Value {
     }
 }
 
+/// `GET /api/sch/symbols`: every placed symbol as each sheet path shows it (`SCH_SHEET_LIST::GetSymbols`: one `SCH_REFERENCE` per symbol and path), in walk
+/// order: `{ "ok": true, "symbols": [{ "sheet": "<path>", "file", "id", "unit", "reference", "path_unit", "lib_id", "value" }] }`. `id` and `unit` tell the
+/// symbol apart on its screen (`file`, the same on every path that shows it); `reference` and `path_unit` are the path's own (`GetRef( &path )`,
+/// `GetUnitSelection( &path )`). Change Symbols and Update Symbols from Library match over these (`DIALOG_CHANGE_SYMBOLS::processMatchingSymbols` walks
+/// `Hierarchy()` and `isMatch` reads `GetRef( aInstance )`; UI-LEFT S9).
+pub fn symbol_rows(dir: &Path) -> Value {
+    match kicad_engine::load_with_schematic(dir) {
+        Ok((design, model)) => {
+            let mut rows: Vec<Value> = Vec::new();
+            for e in eda_model::sheet_list::walk(&design) {
+                let Some(sch) = eda_model::sheet_list::screen_of(&design, &e.path) else { continue };
+                for s in &sch.symbols {
+                    let value = if s.value.is_empty() { model.part(&s.id).and_then(|p| p.value.clone()).unwrap_or_default() } else { s.value.clone() };
+                    rows.push(json!({
+                        "sheet": e.path.join("/"),
+                        "file": e.file,
+                        "id": s.id,
+                        "unit": s.unit,
+                        "reference": eda_model::sheet_list::reference_under(sch, s, &e.path),
+                        "path_unit": eda_model::sheet_list::unit_under(sch, s, &e.path),
+                        "lib_id": s.lib_id,
+                        "value": value,
+                    }));
+                }
+            }
+            json!({ "ok": true, "symbols": rows })
+        }
+        Err(e) => err(crate::board::reasons(&e)),
+    }
+}
+
 /// The library symbols the schematic uses, each `lib_id` once and in `lib_id` order (`libSymbols` of `ExportSymbolsToLibrary` is a `std::map<LIB_ID, ...>`):
 /// the symbols of every sheet screen, and the power symbols when `include_power` is on (`SYMBOL_FILTER_ALL` against `SYMBOL_FILTER_NON_POWER`). A symbol with no
 /// `lib_id` of its own is drawn as a plain box and has no library symbol to export: its reference comes back in the second list.

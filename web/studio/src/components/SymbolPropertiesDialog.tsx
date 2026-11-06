@@ -36,6 +36,7 @@ import { addUserFieldCmd, fieldTextCmd, fieldVisibilityCmds, newUserFieldName, o
 import { setSymbolVariantCmd, symbolInVariant, symbolPropertiesTitle, variantFlags, type VariantFlagKey, type VariantFlags } from "../kicad-port/designVariants";
 import { expandStackedPinNotation } from "../kicad-port/stackedPins";
 import { assignAlt, fieldLookCmds, fieldLookError, fontChoices, lookOf, pinAlternatesCmd, pinCell, PIN_COLUMN_LABELS, PIN_TABLE_DISABLED_TIP, pinRows, sortPinRows, unitChangeError, unitChoices, type FieldLook, type PinColumn, type PinRow } from "../kicad-port/symbolPropsDialog";
+import { drawnUnit } from "../kicad-port/schUnits";
 import { setSymbolUnitCmd } from "../kicad-port/schSymbolMenus";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { useSymApi } from "../state/symbolEditorStore";
@@ -137,13 +138,14 @@ export function SymbolPropertiesDialog() {
 
   useEffect(() => {
     if (!symbol) return;
-    setReference(symbol.id);
+    // the reference the sheet path in view gives it (`GetRef( &GetParent()->GetCurrentSheet() )`; a screen shown by several sheets, UI-LEFT S9)
+    setReference(symbol.reference ?? symbol.id);
     setValue(symbol.value ?? "");
     setFootprint(symbol.footprint ?? "");
     setDatasheet(symbol.datasheet ?? "");
     setShown(Object.fromEntries((symbol.fields ?? []).filter((f) => (MAIN_FIELDS as readonly string[]).includes(f.name)).map((f) => [f.name, f.visible])));
     setBodyStyle(symbol.body_style || 1);
-    setUnit(symbol.unit || 1);
+    setUnit(drawnUnit(symbol));
     const own = userFieldsOf(symbol.fields).map((f) => ({ key: nextKey.current++, name: f.name, text: f.text, shown: f.visible, isNew: false, removed: false, was: { text: f.text, visible: f.visible } }));
     setUserRows(own);
     setFlags(baseSymbol ? variantFlags(baseSymbol, variant) : null);
@@ -190,8 +192,9 @@ export function SymbolPropertiesDialog() {
       return false;
     }
     // `if( currentVariant.IsEmpty() ) m_symbol->SetRef( .. )`: a variant keeps the reference
-    const renamed = variant === "" && trimmedRef !== symbol.id;
-    if (renamed && api.symbolById(trimmedRef)) {
+    // `SetRef( &GetCurrentSheet(), .. )`: the path in view's reference (the server renames that path's alone on a screen shown twice)
+    const renamed = variant === "" && trimmedRef !== (symbol.reference ?? symbol.id);
+    if (renamed && (api.symbolById(trimmedRef) || (state.schematic?.symbols ?? []).some((s) => s.id !== symbol.id && (s.reference ?? s.id) === trimmedRef))) {
       setError(`"${trimmedRef}" is already used by another symbol.`);
       return false;
     }
@@ -269,7 +272,7 @@ export function SymbolPropertiesDialog() {
     const alts = pinAlternatesCmd(symbol.id, symbol.unit, wasPins, pins);
     if (alts) cmds.push(alts);
     // `SetUnitSelection( .., unit_selection ); SetUnit( unit_selection )`, after everything named by the placement's key
-    if (unit !== symbol.unit) cmds.push(setSymbolUnitCmd(symbol.id, symbol.unit, unit, false));
+    if (unit !== drawnUnit(symbol)) cmds.push(setSymbolUnitCmd(symbol.id, symbol.unit, unit, false));
     if (renamed) cmds.push({ op: "rename_symbol", id: symbol.id, new_id: trimmedRef });
     if (cmds.length > 0 && !(await api.cmdBatch(cmds))) {
       // the server says why (a reference another sheet has, a field of a sheet read from a KiCad file) in a toast

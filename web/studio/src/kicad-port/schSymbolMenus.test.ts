@@ -75,3 +75,24 @@ test("Pin Function: the pin's own name and its alternates, the one it took check
   assert.equal(pinFunctionsOf(sch, "pin:U1:2"), null);
   assert.equal(pinFunctionsOf(sheet([placed(2)]), "pin:U1#2:3"), null);
 });
+
+test("A screen shown by two sheets: the Symbol Unit menu and SelectUnit read the unit the sheet in view draws (`GetUnitSelection( &sheetPath )`, UI-LEFT S9)", () => {
+  // the second placement draws U1's unit-1 symbol as unit 3 (`path_unit`), and names it U7
+  const shared = { ...placed(1), reference: "U7", path_unit: 3 } as SchematicSymbol;
+  const sch = sheet([shared, { ...placed(2), reference: "U7" } as SchematicSymbol]);
+  const menu = symbolUnitMenu(sch, "U1", 1);
+  assert.ok(menu?.type === "submenu");
+  if (menu?.type !== "submenu") return;
+  assert.deepEqual(
+    menu.items.filter((n) => n.type === "item" && n.action === SELECT_UNIT_ACTION).map((n) => (n.type === "item" ? [n.label, n.checked] : null)),
+    [
+      ["A", false],
+      ["B (already placed)", false],
+      ["Power (already placed)", true],
+    ]
+  );
+  // unit 3 is the one it draws here: nothing to do; unit 2 is drawn by the other symbol of U7 here: Swap or Duplicate; unit 1 is free here
+  assert.deepEqual(selectUnit(sch, "U1", 1, 3, ""), { do: "nothing" });
+  assert.equal(selectUnit(sch, "U1", 1, 2, "/B").do, "ask");
+  assert.deepEqual(selectUnit(sch, "U1", 1, 1, ""), { do: "cmd", cmd: { op: "sch_edit", verb: "set_symbol_unit", id: "U1", unit: 1, new_unit: 1 } });
+});

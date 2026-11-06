@@ -9,6 +9,7 @@ import { datasheetTarget } from "../kicad-port/itemText";
 import { footprintDocumentationUrl } from "../kicad-port/footprintDatasheet";
 import { collapseAllLibraries, expandAllLibraries, pinSelectedLibraries, type TreeKind } from "../state/libraryTree";
 import { getDockLayout, setDockColumnCollapsed } from "../state/dockLayoutStore";
+import { openSelectColumns } from "../state/libTreeColumns";
 
 /** `FocusLibraryTreeInput()`: `m_treePane->FocusSearchFieldIfExists()`. The tree draws its search box after the column opens, so this waits a frame. */
 function focusTreeSearch(kind: TreeKind): void {
@@ -36,6 +37,10 @@ export function registerLibraryActions(m: Map<string, ActionHandler>, ctx: Commo
     // ACTIONS::expandAll / collapseAll -- `LIB_TREE`'s `m_tree_ctrl->ExpandAll()` / `CollapseAll()`.
     m.set("common.Control.expandAll", () => expandAllLibraries(kind));
     m.set("common.Control.collapseAll", () => collapseAllLibraries(kind));
+
+    // ACTIONS::selectLibTreeColumns -- the one entry of `LIB_TREE::onHeaderContextMenu` (a right click on the tree's column header, which offers it too):
+    // the Select Columns dialog of this editor's tree (components/library/SelectColumnsDialog.tsx).
+    m.set("common.Control.selectColumns", () => openSelectColumns(kind === "symbol" ? "symbol_editor" : "footprint_editor"));
 
     // ACTIONS::libraryTreeSearch -- LIBRARY_EDITOR_CONTROL::LibraryTreeSearch (Ctrl+L): show the tree when it is hidden, then focus its
     // search field.

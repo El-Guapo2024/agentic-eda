@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { nextUnitToPlace, referenceUnitSuffix, subpartIdsOf, unitCountOf } from "./schUnits";
+import { drawnUnit, nextUnitToPlace, referenceUnitSuffix, subpartIdsOf, unitCountOf } from "./schUnits";
 import type { LibSymbol } from "../api/types";
 
 const pin = (unit: number) => ({ number: "1", name: null, electrical_type: "passive", shape: "line", at: [0, 0], angle_deg: 0, length_mm: 2.54, unit, body_style: 1, hidden: false }) as unknown as LibSymbol["pins"][number];
@@ -38,4 +38,10 @@ test("a placed unit's reference has its suffix whenever the symbol has more than
   // a display name follows the separator too (SCH_SYMBOL::SubReference)
   assert.equal(referenceUnitSuffix({ ...two, unit_names: { "2": "Pwr" } }, 2, dotted), ".Pwr");
   assert.equal(referenceUnitSuffix(two, 2, subpartIdsOf({ subpart_first_id: 97 })), "b", "letters from 'a'");
+});
+
+test("drawnUnit: the placement's own unit on a screen shown by several sheets, else the symbol's (UI-LEFT S9)", () => {
+  assert.equal(drawnUnit({ unit: 1 }), 1);
+  assert.equal(drawnUnit({ unit: 1, path_unit: 2 }), 2);
+  assert.equal(drawnUnit({ unit: 0 }), 1);
 });

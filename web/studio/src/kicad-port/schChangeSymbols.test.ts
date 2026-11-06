@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { matchReferences, planChange, refNumber, refPrefix, reprefix, wildMatch, type LibInfo, type SymbolRow } from "./schChangeSymbols";
+import { matchOverHierarchy, matchReferences, planChange, referencesOf, refNumber, refPrefix, reprefix, wildMatch, type LibInfo, type SymbolRow } from "./schChangeSymbols";
 
 const sym = (id: string, lib_id: string, unit = 1, value: string | null = null): SymbolRow => ({ id, lib_id, unit, value });
 const symbols = [sym("R1", "Device:R", 1, "10k"), sym("R2", "Device:R", 1, "4k7"), sym("U1", "Device:Q_Dual", 1), sym("U1", "Device:Q_Dual", 2), sym("C1", "Device:C", 1, "100n")];
@@ -73,4 +73,28 @@ test("a symbol already on the new library symbol with nothing to update is left 
   const plan = planChange(["C1"], symbols, lib(), { newLibId: "Device:C", updateReference: false, updateValue: false, resetEmpty: false });
   assert.deepEqual(plan.cmds, []);
   assert.equal(plan.changed, 0);
+});
+
+test("Change Symbols over the hierarchy: a match on any sheet path (`GetRef( aInstance )`), each screen's symbols once, the report naming every path's reference (UI-LEFT S9)", () => {
+  // a channel screen shown at "a" and "b": R1 there is R1 on a and R5 on b; the root has R2
+  const rows = [
+    { id: "R2", lib_id: "Device:R", unit: 1, value: "1k", reference: "R2", sheet: "", file: "" },
+    { id: "R1", lib_id: "Device:R", unit: 1, value: "10k", reference: "R1", sheet: "a", file: "ch.kicad_sch" },
+    { id: "R1", lib_id: "Device:R", unit: 1, value: "10k", reference: "R5", sheet: "b", file: "ch.kicad_sch" },
+  ];
+  // matched on the second placement's reference: the one symbol of the shared screen, addressed through the path it matched on
+  assert.deepEqual(matchOverHierarchy(rows, { by: "reference", reference: "R5", value: "", id: "" }, new Set(), ""), [{ sheet: "b", file: "ch.kicad_sch", refs: ["R1"] }]);
+  // everything: the root's and the screen's, the screen once
+  assert.deepEqual(matchOverHierarchy(rows, { by: "all", reference: "", value: "", id: "" }, new Set(), ""), [
+    { sheet: "", file: "", refs: ["R2"] },
+    { sheet: "a", file: "ch.kicad_sch", refs: ["R1"] },
+  ]);
+  // the selection is the sheet in view's
+  assert.deepEqual(matchOverHierarchy(rows, { by: "selection", reference: "", value: "", id: "" }, new Set(["R1"]), "b"), [{ sheet: "b", file: "ch.kicad_sch", refs: ["R1"] }]);
+  assert.equal(referencesOf(rows, "ch.kicad_sch", "R1"), "R1 R5");
+  const plan = planChange(["R1"], rows.slice(1, 2), { found: true, unitCount: 1, prefix: "R", value: "R" }, { newLibId: "Device:R_Small", updateReference: false, updateValue: false, resetEmpty: false, shown: (r) => referencesOf(rows, "ch.kicad_sch", r) });
+  assert.deepEqual(plan.report, ["R1: Device:R -> Device:R_Small"]);
+  assert.deepEqual(plan.cmds, [{ op: "sch_edit", verb: "change_symbol", id: "R1", lib_id: "Device:R_Small" }]);
+  const missing = planChange(["R1"], rows.slice(1, 2), { found: false, unitCount: 1, prefix: "", value: "" }, { newLibId: "X:Y", updateReference: false, updateValue: false, resetEmpty: false, shown: (r) => referencesOf(rows, "ch.kicad_sch", r) });
+  assert.deepEqual(missing.report, ["R1 R5: X:Y *** symbol not found ***"]);
 });

@@ -307,6 +307,8 @@ export interface ChooserItem {
   power?: boolean;
   /** The score of the last search (1 plus the words' scores); absent when there was none. */
   score?: number;
+  /** A symbol's chooser fields by name (`LIB_TREE_NODE::m_Fields`, `LIB_SYMBOL::GetChooserFields`): what the tree's extra columns show (kicad-port/libTreeColumns.ts). */
+  fields?: Readonly<Record<string, string>>;
 }
 
 export type ChooserKind = "symbol" | "footprint";
@@ -318,7 +320,7 @@ export function splitId(id: string): { lib: string; name: string } {
 }
 
 /** `LIB_SYMBOL::cacheSearchTerms` and the shown columns (Description and Value, 4 each); `FOOTPRINT_INFO::GetSearchTerms` for a footprint. */
-export function itemTerms(kind: ChooserKind, item: ChooserItem): SearchTerm[] {
+export function itemTerms(kind: ChooserKind, item: ChooserItem, shownColumns: readonly string[] = []): SearchTerm[] {
   const keywords = item.keywords ?? "";
   const terms = [searchTerm(item.lib, 4), searchTerm(item.name, 8), searchTerm(`${item.lib}:${item.name}`, 16)];
   for (const k of keywords.split(/\s+/)) if (k !== "") terms.push(searchTerm(k, 4));
@@ -327,15 +329,17 @@ export function itemTerms(kind: ChooserKind, item: ChooserItem): SearchTerm[] {
     if (item.footprint) terms.push(searchTerm(item.footprint, 1));
     terms.push(searchTerm(item.description, 4), searchTerm(item.value ?? "", 4));
   }
+  // `LIB_TREE_NODE::RebuildSearchTerms`: the value of each shown extra column (Select Columns..., kicad-port/libTreeColumns.ts), weighted 4
+  for (const [name, text] of Object.entries(item.fields ?? {})) if (shownColumns.includes(name)) terms.push(searchTerm(text, 4));
   return terms;
 }
 
 /** The items a search keeps, each with its score, in the tree's order within a score (name, naturally); the whole list when the query is empty. */
-export function scoreItems(kind: ChooserKind, items: readonly ChooserItem[], query: string): ChooserItem[] {
+export function scoreItems(kind: ChooserKind, items: readonly ChooserItem[], query: string, shownColumns: readonly string[] = []): ChooserItem[] {
   const matchers = parseQuery(query);
   const out: ChooserItem[] = [];
   for (const item of items) {
-    const score = scoreItemTerms(matchers, itemTerms(kind, item));
+    const score = scoreItemTerms(matchers, itemTerms(kind, item, shownColumns));
     if (score > 0) out.push({ ...item, score });
   }
   return out;
@@ -402,6 +406,8 @@ export interface ComposeInput {
   /** The server's answer to the search: the libraries with a match and their best items. Null while there is no search. */
   results: readonly { name: string; description?: string; score: number; items: readonly ChooserItem[] }[] | null;
   pinned: ReadonlySet<string>;
+  /** The tree's shown columns (Select Columns...): their values are search words of the items the browser scores. */
+  shownColumns?: readonly string[];
 }
 
 /**
@@ -414,7 +420,7 @@ export function composeGroups(input: ComposeInput): ChooserGroup[] {
   const searching = parseQuery(query).length > 0;
   const groups: ChooserGroup[] = [];
   const pseudo = (label: string, tag: "recent" | "placed" | "extra", items: readonly ChooserItem[]) => {
-    let kept = searching ? scoreItems(kind, items, query) : [...items];
+    let kept = searching ? scoreItems(kind, items, query, input.shownColumns) : [...items];
     if (items.length === 0 || (searching && kept.length === 0)) return;
     // The recently used are listed by recency and the extra group in the order it was given; the placed ones by name (`std::sort` by `GetLibItemName`).
     if (tag === "placed") kept = [...kept].sort((a, b) => naturalCompare(a.name, b.name));
@@ -429,7 +435,7 @@ export function composeGroups(input: ComposeInput): ChooserGroup[] {
   const byLib = new Map<string, ChooserItem[]>();
   for (const it of input.project ?? []) byLib.set(it.lib, [...(byLib.get(it.lib) ?? []), it]);
   for (const [lib, list] of byLib) {
-    const kept = searching ? scoreItems(kind, list, query) : [...list];
+    const kept = searching ? scoreItems(kind, list, query, input.shownColumns) : [...list];
     if (searching && kept.length === 0) continue;
     kept.sort((a, b) => (searching && a.score !== b.score ? (b.score ?? 0) - (a.score ?? 0) : naturalCompare(a.name, b.name)));
     groups.push({ lib, project: true, pinned: input.pinned.has(lib), items: kept, lazy: false, score: Math.max(0, ...kept.map((i) => i.score ?? 0)) });
