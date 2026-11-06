@@ -485,8 +485,11 @@ impl Board<'_> {
         // (`matchItemsBySimilarity<PAD>`, not the netlist's by number); the part keeps its symbol's footprint field
         let options = ExchangeOptions { pads_by_number: false, ..ExchangeOptions::replace() };
         self.exchange_one(&reference, &fpid, &old, new.clone(), None, &options, false);
-        self.routing_mut().zones.retain(|z| z.parent_footprint.as_deref() != Some(reference.as_str()));
-        self.routing_mut().zones.extend(old_zones);
+        // (a board with no routing section is not given one: `fp_on_board::set_footprint_zones`)
+        if let Some(rt) = self.design.routing.as_mut() {
+            rt.zones.retain(|z| z.parent_footprint.as_deref() != Some(reference.as_str()));
+            rt.zones.extend(old_zones);
+        }
 
         // What the copy has beyond the engine's footprint, on the instance: its fields' layouts and user fields, its attributes, its overrides (the clone carries them all)
         let fp = &copy.footprint;
