@@ -12,7 +12,8 @@
 // site for no real sharing of logic, only of a few primitives. Those few
 // (the grid, hairline width compensation, circumcircle-through-3-points
 // for an arc, KiCad's own stroke font) *are* reused, imported directly.
-import type { ChamferCorners, CmdShape, CmdText, LibraryPad, Nm } from "../../api/types";
+import type { ChamferCorners, CmdShape, CmdText, LibraryKeep, LibraryPad, Nm, Shape } from "../../api/types";
+import { dashPieces, isDashStyle } from "../../kicad-port/strokeDash";
 import type { ViewTransform } from "../../kicad-port/view";
 import { hairlineNm } from "../../kicad-port/view";
 import { layerColor } from "../canvas/layers";
@@ -305,7 +306,7 @@ function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: CmdShape, sketch = 
   ctx.stroke();
 }
 
-function drawGraphic(ctx: CanvasRenderingContext2D, view: ViewTransform, s: CmdShape, selected: boolean, sketch = false) {
+function drawGraphic(ctx: CanvasRenderingContext2D, view: ViewTransform, s: CmdShape, selected: boolean, sketch = false, strokeType?: string) {
   ctx.save();
   const color = selected ? layerColor("selection") : layerColor(realLayerKey(s.layer));
   ctx.strokeStyle = color;
@@ -314,8 +315,47 @@ function drawGraphic(ctx: CanvasRenderingContext2D, view: ViewTransform, s: CmdS
   ctx.lineWidth = sketch ? hairlineNm(view, selected ? 2 : 1) : Math.max(s.stroke_width, hairlineNm(view, selected ? 2 : 1));
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  drawShapeGeometry(ctx, s, sketch);
+  if (isDashStyle(strokeType)) {
+    // The footprint editor's `PCB_PAINTER` strokes a dashed graphic as the board does (`STROKE_PARAMS::Stroke`, kicad-port/strokeDash.ts) with the plotter's 12 and 3:
+    // the editor's board has no Formatting page (UI-LEFT P5). A solid fill is filled without its outline.
+    const shape = cmdShapeAsShape(s);
+    if (s.filled && !sketch && (s.kind === "rect" || s.kind === "circle" || s.kind === "polygon")) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(0,0,0,0)"; // the fill alone: `SetIsStroke( lineStyle == LINE_STYLE::SOLID .. )`
+      drawShapeGeometry(ctx, s, false);
+      ctx.restore();
+    }
+    const pieces = dashPieces(shape, { style: strokeType, width: s.stroke_width > 0 ? s.stroke_width : ctx.lineWidth }, BEZIER_MAX_ERROR_NM);
+    ctx.beginPath();
+    for (const [[ax, ay], [bx, by]] of pieces) {
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+    }
+    ctx.stroke();
+  } else {
+    drawShapeGeometry(ctx, s, sketch);
+  }
   ctx.restore();
+}
+
+/** A library graphic (`CmdShape`, points as `{x, y}`) as the board's display `Shape` the dash cutter reads. */
+function cmdShapeAsShape(s: CmdShape): Shape {
+  const p = (q: { x: number; y: number }): [number, number] => [q.x, q.y];
+  const base = { id: "", layer: s.layer, stroke_width: s.stroke_width, filled: s.filled };
+  switch (s.kind) {
+    case "segment":
+      return { ...base, kind: "segment", start: p(s.start), end: p(s.end) };
+    case "arc":
+      return { ...base, kind: "arc", start: p(s.start), mid: p(s.mid), end: p(s.end) };
+    case "rect":
+      return { ...base, kind: "rect", start: p(s.start), end: p(s.end) };
+    case "circle":
+      return { ...base, kind: "circle", center: p(s.center), end: p(s.end) };
+    case "polygon":
+      return { ...base, kind: "polygon", pts: s.pts.map(p) };
+    case "bezier":
+      return { ...base, kind: "bezier", start: p(s.start), c1: p(s.c1), c2: p(s.c2), end: p(s.end) };
+  }
 }
 
 function drawText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: CmdText, selected: boolean, sketch = false) {
@@ -417,7 +457,7 @@ export function paintFootprint(
   view: ViewTransform,
   widthPx: number,
   heightPx: number,
-  footprint: { pads: LibraryPad[]; graphics: CmdShape[]; texts: CmdText[]; fieldsToDraw?: FieldInfo[]; display?: FootprintItemsDisplay } | null,
+  footprint: { pads: LibraryPad[]; graphics: CmdShape[]; texts: CmdText[]; fieldsToDraw?: FieldInfo[]; display?: FootprintItemsDisplay; kicad?: LibraryKeep } | null,
   opts: FpPaintOptions
 ) {
   if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridNm, opts.gridOrigin ?? [0, 0]);
@@ -454,7 +494,9 @@ export function paintFootprint(
     // `GetColor`'s per-type opacity: a filled shape takes Filled Shapes', a copper one Tracks' (kicad-port/fpAppearance.ts `fpShapeOpacity`)
     ctx.globalAlpha *= contrastAlpha(opts, g.layer) * opacity(g.layer) * fpShapeOpacity(g, opts.layerOpacity);
     if (mv) ctx.translate(mv.dxNm, mv.dyNm);
-    drawGraphic(ctx, view, g, opts.selection.has(g.id ?? ""), !!opts.sketchGraphics);
+    // A graphic's `(stroke (type ..))` when it is not solid, kept by its id (`LibraryFootprintKeep::stroke_types`).
+    const strokeTypes = footprint.kicad?.stroke_types as Record<string, string> | undefined;
+    drawGraphic(ctx, view, g, opts.selection.has(g.id ?? ""), !!opts.sketchGraphics, g.id ? strokeTypes?.[g.id] : undefined);
     ctx.restore();
   }
   if (objectOn(visible, "footprint_text")) {

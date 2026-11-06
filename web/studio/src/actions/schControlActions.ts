@@ -4,8 +4,9 @@
 // function it ports at 8303b2ad; the heavy parts live in `kicad-port/` (tested) and `components/schControl/` (the dialogs and panels).
 //
 // Not registered, with the reason recorded in `tools/ui-parity-missing.json`: the simulator rows (deferred), Import Graphics and the three
-// drag-and-drop handlers, Import Non-KiCad Schematic, the legacy-library rescue and remap, the remote symbol panel, the design variants, Show Hidden
-// Fields, Show Pin Alternate Icons, Annotate Automatically, the internal restartMove and updateNetHighlighting events.
+// drag-and-drop handlers, Import Non-KiCad Schematic, the legacy-library rescue and remap, the remote symbol panel, Show Hidden
+// Fields, Show Pin Alternate Icons, Annotate Automatically, the internal restartMove and updateNetHighlighting events. The design variants
+// (KiCad 25ec2335 `SCH_EDITOR_CONTROL::AddVariant` ...) open components/DesignVariantDialogs.tsx; the attribute toggles act on the current variant.
 import type { Dispatch } from "react";
 import type { Action as StudioAction, StudioApi, StudioState } from "../state/store";
 import type { SchControlAction, SchControlState } from "../state/schControlStore";
@@ -14,6 +15,7 @@ import type { Cmd } from "../api/types";
 import { fetchHierarchy } from "../api/schControlClient";
 import { neighbourSheet, samePath } from "../kicad-port/sheetPages";
 import { ATTRIBUTE_ACTIONS, attributeChecked, hitSheet, INCREMENT_PARAMS, nearestTextItem, nextAttributeState, planIncrement, type IncrementTarget, type SymbolAttrKey } from "../kicad-port/schControl";
+import { setSymbolVariantCmd, variantFlags } from "../kicad-port/designVariants";
 import { labelNet, netAtPoint } from "../kicad-port/schNetAtPoint";
 import { pinDistance, pinItems } from "../kicad-port/schPins";
 import { measureStrokeText } from "../components/text/strokeFont";
@@ -63,7 +65,8 @@ export function schControlChecked(name: string, ctx: Pick<SchControlContext, "co
       const sch = ctx.state.schematic;
       if (!sch) return false;
       const ids = new Set(ctx.requestSelection());
-      return attributeChecked(sch.symbols.filter((s) => ids.has(s.id)), key);
+      // KiCad 25ec2335 `attribDNPCond` and kin: `GetDNP( sheet, variant )` of the current variant
+      return attributeChecked(sch.symbols.filter((s) => ids.has(s.id)).map((s) => variantFlags(s, ctx.state.schVariant)), key);
     }
   }
 }
@@ -193,21 +196,37 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
   );
 
   // Do not Populate / Exclude from Bill of Materials / Exclude from Board / Exclude from Simulation -- `SCH_EDIT_TOOL::SetAttribute`: the whole selection (every unit of a
-  // multi-unit symbol) goes to one state -- set when any of it lacks the attribute, cleared when all of it has it.
+  // multi-unit symbol) goes to one state -- set when any of it lacks the attribute, cleared when all of it has it. KiCad 25ec2335: in the current variant
+  // (`GetDNP( sheet, variant )`, `SetDNP( new_state, sheet, variant )`), the symbols' own flags when it is the default.
   const setAttribute = (name: string) => {
     const key: SymbolAttrKey = ATTRIBUTE_ACTIONS[name]!;
     return onSchematic(() => {
       if (!sch) return;
       const ids = [...new Set(ctx.requestSelection().filter((id) => api.symbolById(id)))];
       if (ids.length === 0) return;
-      const items = sch.symbols.filter((s) => ids.includes(s.id));
-      void api.cmd({ op: "set_symbol_attrs", ids, [key]: nextAttributeState(items, key) });
+      const variant = state.schVariant;
+      const items = sch.symbols.filter((s) => ids.includes(s.id)).map((s) => variantFlags(s, variant));
+      const next = nextAttributeState(items, key);
+      const cmd = variant === "" ? null : setSymbolVariantCmd(variant, ids, { flags: { [key]: next } });
+      void api.cmd(cmd ?? { op: "set_symbol_attrs", ids, [key]: next });
     });
   };
   m.set("eeschema.EditorControl.setDNP", setAttribute("eeschema.EditorControl.setDNP"));
   m.set("eeschema.EditorControl.setExcludeFromBOM", setAttribute("eeschema.EditorControl.setExcludeFromBOM"));
   m.set("eeschema.EditorControl.setExcludeFromBoard", setAttribute("eeschema.EditorControl.setExcludeFromBoard"));
   m.set("eeschema.EditorControl.setExcludeFromSimulation", setAttribute("eeschema.EditorControl.setExcludeFromSimulation"));
+
+  // ============================================================================================ design variants (KiCad 25ec2335)
+
+  // Add Design Variant... -- `SCH_EDITOR_CONTROL::AddVariant` -> `SCH_EDIT_FRAME::AddVariant`: the variant choice's last entry, "Add New Design Variant...", which opens
+  // `ShowAddVariantDialog`. Remove / Edit Description / Rename / Copy -- `RemoveVariant`, `EditVariantDescription`, `RenameVariant`, `CopyVariant`: a choice of the
+  // variant, then the change (components/DesignVariantDialogs.tsx).
+  const variantDialog = (action: "add" | "remove" | "describe" | "rename" | "copy") => onSchematic(() => controlDispatch({ type: "OPEN_DIALOG", dialog: { kind: "variant", action } }));
+  m.set("eeschema.EditorControl.addVariant", variantDialog("add"));
+  m.set("eeschema.EditorControl.removeVariant", variantDialog("remove"));
+  m.set("eeschema.EditorControl.editVariantDescription", variantDialog("describe"));
+  m.set("eeschema.EditorControl.renameVariant", variantDialog("rename"));
+  m.set("eeschema.EditorControl.copyVariant", variantDialog("copy"));
 
   // Increment Annotations From... -- `IncrementAnnotations`: asks for the first reference and the step, then moves every reference with those letters from that number up.
   m.set("eeschema.EditorControl.incrementAnnotations", onSchematic(() => open({ kind: "increment_annotations" })));

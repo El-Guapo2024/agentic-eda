@@ -1018,8 +1018,10 @@ pub(crate) fn project_dimension_defaults(d: &eda_model::ir::DimensionSettings) -
         DimensionUnitsFormat::BareSuffix => 1,
         DimensionUnitsFormat::ParenSuffix => 2,
     };
+    // `PARAM_ENUM<DIM_TEXT_POSITION>( "defaults.dimensions.text_position", .., OUTSIDE, INLINE )`: "excluding DIM_TEXT_POSITION::MANUAL from the valid
+    // range here", so a manual default is written as KiCad would read it back, outside.
     let text_position = match d.text_position {
-        DimensionTextPosition::Outside => 0,
+        DimensionTextPosition::Outside | DimensionTextPosition::Manual => 0,
         DimensionTextPosition::Inline => 1,
     };
     Some((

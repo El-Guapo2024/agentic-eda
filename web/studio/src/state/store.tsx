@@ -10,6 +10,7 @@ import React, { createContext, useCallback, useContext, useEffect, useReducer, u
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
 import type { NewZoneSettings } from "../kicad-port/pcbDrawZone";
+import type { FpDimDraw } from "../kicad-port/fpDrawTools";
 import type { RouteSizesInfo } from "../kicad-port/routerSizes";
 import type { BoardState, BoardText, Cmd, CmdDimension, CmdText, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Nm, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
@@ -57,6 +58,7 @@ import { loadPreferences, savePreferences, type Preferences } from "../kicad-por
 import { type RouterSettings } from "../kicad-port/routerSettings";
 import { loadRouterSettings, saveRouterSettings } from "./routerSettingsStorage";
 import { keepOnSheet } from "../kicad-port/schSelectionPrune";
+import { resolveCurrentVariant } from "../kicad-port/designVariants";
 import { DEFAULT_SCH_SELECTION_FILTER, type SchSelectionFilter } from "../kicad-port/schSelectionFilter";
 import type { SchToolDialog, SchTurn } from "../api/schEditTypes";
 import { heldCmd, holdPoint, turnCmd } from "../kicad-port/schMove";
@@ -370,11 +372,9 @@ export type DrawState =
       /** `shapeKind === "segment"` only: `DrawLine`'s `committedLines`, the segments of the chain already on the board (start, end), the last one last. */
       committed?: [[Nm, Nm], [Nm, Nm]][];
     }
-  /** Task item 7: two clicks (start, end) for any of the five dimension
-   * kinds -- which one is read from `state.nextDimensionKind` when the
-   * second click commits it (same one-shot-flag convention as zones' own
-   * `nextZoneIsRuleArea`), not stored per-draw here. */
-  | { kind: "dimension"; pts: [Nm, Nm][] }
+  /** `DRAWING_TOOL::DrawDimension` (UI-LEFT P13): the dimension being drawn (`dim`, kicad-port/fpDrawTools.ts `FpDimDraw`: its kind, the step -- the end, then an
+   * aligned or orthogonal one's height -- and the dimension as the preview has it); `pts` its origin, for the rubber band of an older caller. */
+  | { kind: "dimension"; pts: [Nm, Nm][]; dim?: FpDimDraw }
   /** Draw Table (`DRAWING_TOOL::DrawTable`): the first corner, once it is clicked; the grid follows the cursor (kicad-port/tables.ts `drawTableGrid`). */
   | { kind: "table"; origin: [Nm, Nm] }
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
@@ -720,6 +720,11 @@ export interface StudioState {
   annotateDialogOpen: boolean;
   /** Which of the Symbol Fields Table / Find / Find and Replace / Schematic Setup dialogs is open (eeschema's editSymbolFields / find / findAndReplace / schematicSetup actions) -- one slot because they are never open together. */
   schDialog: SchDialog;
+  /** The schematic editor's current design variant (KiCad 25ec2335 `SCHEMATIC::m_currentVariant`): "" is the default. What the sheet, the Properties panel and the dialogs show
+   * and edit; it falls back to the default when the design no longer has the variant (`SetCurrentVariant`). Session state, not saved (KiCad saves it nowhere either). */
+  schVariant: string;
+  /** The board editor's own current variant (`BOARD::m_currentVariant`, kept apart from the schematic's as KiCad's two frames keep it): what its Plot and placement dialogs start from. */
+  pcbVariant: string;
   /** Find / Replace's last search (`SCH_EDIT_FRAME::GetFindReplaceData`) plus its `m_afterItem` cursor (the key of the last visited match) -- shared by the dialog and F3 / Shift+F3 so Find Next works with the dialog closed. */
   schFind: { search: SchSearchData; cursor: string | null; status: string; /** `searchSelectedOnly`: restrict Find / Replace to the selection. */ selectedOnly: boolean; /** `searchCurrentSheetOnly`: "Search the current sheet only" (off: every sheet of the hierarchy). */ currentSheetOnly: boolean; /** The Find dialog's "Backward" direction, which Replace and Find Next continues in. */ backward: boolean };
   /** Schematic tab's File > Plot... (`common.Control.plot`, DIALOG_PLOT_SCHEMATIC), see PlotSchematicDialog.tsx. */
@@ -1001,6 +1006,8 @@ const initialState: StudioState = {
   symbolProperties: null,
   annotateDialogOpen: false,
   schDialog: null,
+  schVariant: "",
+  pcbVariant: "",
   schFind: { search: defaultSearch(), cursor: null, status: "", selectedOnly: false, currentSheetOnly: false, backward: false },
   schPlotDialogOpen: false,
   exportNetlistDialogOpen: false,
@@ -1159,6 +1166,9 @@ export type Action =
   | { type: "SET_PREFERENCES"; prefs: Preferences }
   | { type: "SET_PREFERENCES_DIALOG_OPEN"; open: boolean }
   | { type: "SCHEMATIC_OK"; schematic: Schematic }
+  /** `SCH_EDIT_FRAME::SetCurrentVariant` / `PCB_EDIT_FRAME::SetCurrentVariant`: "" (or a name the design does not have) is the default. */
+  | { type: "SET_SCH_VARIANT"; variant: string }
+  | { type: "SET_PCB_VARIANT"; variant: string }
   | { type: "SCHEMATIC_ERR"; message: string }
   | { type: "RATSNEST_OK"; ratsnest: Ratsnest }
   | { type: "DRC_RUNNING" }
@@ -1323,7 +1333,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       const hot = new Set([...state.hot].filter((r) => refs.has(r)));
       // A group that was dissolved or emptied is no longer the one worked in (`EDIT_TOOL::DeleteItems`: "If the entered group has been emptied then leave it").
       const enteredGroupId = state.enteredGroupId != null && (action.board.drawings?.groups ?? []).some((g) => g.id === state.enteredGroupId) ? state.enteredGroupId : null;
-      return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot, enteredGroupId };
+      const pcbVariant = action.board.variants ? resolveCurrentVariant(action.board.variants, state.pcbVariant) : state.pcbVariant;
+      return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot, enteredGroupId, pcbVariant };
     }
     case "BOARD_ERR":
       return { ...state, boardError: action.message };
@@ -1582,8 +1593,16 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SCHEMATIC_OK": {
       // A group that was dissolved or emptied is no longer the one worked in (`EDIT_TOOL::DeleteItems`: "If the entered group has been emptied then leave it").
       const schEntered = state.schEnteredGroupId != null && (action.schematic.groups ?? []).some((g) => g.id === state.schEnteredGroupId) ? state.schEnteredGroupId : null;
-      return { ...state, schematic: action.schematic, schematicError: null, schEnteredGroupId: schEntered, selection: state.tab === "schematic" ? keepOnSheet(state.selection, action.schematic) : state.selection };
+      // A current variant the design no longer has (removed, renamed, undone) is the default again (`SCHEMATIC::SetCurrentVariant`).
+      const variants = action.schematic.variants ?? [];
+      const schVariant = resolveCurrentVariant(variants, state.schVariant);
+      const pcbVariant = state.board?.variants ? state.pcbVariant : resolveCurrentVariant(variants, state.pcbVariant);
+      return { ...state, schematic: action.schematic, schematicError: null, schEnteredGroupId: schEntered, selection: state.tab === "schematic" ? keepOnSheet(state.selection, action.schematic) : state.selection, schVariant, pcbVariant };
     }
+    case "SET_SCH_VARIANT":
+      return { ...state, schVariant: resolveCurrentVariant(state.schematic?.variants, action.variant) };
+    case "SET_PCB_VARIANT":
+      return { ...state, pcbVariant: resolveCurrentVariant(state.board?.variants ?? state.schematic?.variants, action.variant) };
     case "SCHEMATIC_ERR":
       return { ...state, schematicError: action.message };
     case "RATSNEST_OK":

@@ -12,7 +12,7 @@ import schMenusData from "../kicad/sch_menus.json";
 import fpMenusData from "../kicad/fp_menus.json";
 import symMenusData from "../kicad/sym_menus.json";
 import actionsData from "../kicad/actions.json";
-import { SCHEMATIC_EDITOR_MENU_EXTRAS, SYMBOL_EDITOR_MENU_EXTRAS, withMenuExtras } from "../kicad/menuExtras";
+import { SCHEMATIC_EDITOR_MENU_EXTRAS, SCHEMATIC_EDITOR_SUBMENU_EXTRAS, SYMBOL_EDITOR_MENU_EXTRAS, withMenuExtras, withSubmenuExtras } from "../kicad/menuExtras";
 import type { MenusFile, MenuNode, ActionsFile, KicadAction } from "../kicad/types";
 import { displayHotkey, effectiveHotkey } from "../actions/hotkeys";
 import { useActionRunner } from "../actions/useActionRunner";
@@ -24,7 +24,7 @@ import { cliExporterReason } from "../kicad-port/cliExporters";
 
 const menusFile = menusData as MenusFile;
 /** The schematic editor's menus with this studio's own entries appended (kicad/menuExtras.ts). */
-const schMenusFile = withMenuExtras(schMenusData as MenusFile, SCHEMATIC_EDITOR_MENU_EXTRAS);
+const schMenusFile = withSubmenuExtras(withMenuExtras(schMenusData as MenusFile, SCHEMATIC_EDITOR_MENU_EXTRAS), SCHEMATIC_EDITOR_SUBMENU_EXTRAS);
 const fpMenusFile = fpMenusData as MenusFile;
 /** The Symbol Editor's menus with this studio's own entries appended (kicad/menuExtras.ts) -- the generated JSON stays KiCad's. */
 const symMenusFile: MenusFile = {

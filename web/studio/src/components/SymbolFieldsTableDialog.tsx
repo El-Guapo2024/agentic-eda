@@ -30,11 +30,21 @@
 // rows by the flags the sheet has, and KiCad's built-in views (`BOM_PRESET::
 // BuiltInPresets`) can be applied from the Preset box.
 //
-// Not ported (PARITY-sch.md): variants, the scope selector (this table covers the
-// current design's symbols), saved view presets of one's own, and the sidebar
-// field-name templates.
+// Design variants (KiCad 25ec2335 `DIALOG_SYMBOL_FIELDS_TABLE`, `common/dialogs/dialog_fields_table_base.cpp`): the "Schematic variants:" list below
+// the fields, with Add, Rename, Copy, Edit Description and Delete (the last four for a variant, not the default: `updateVariantButtonStates`). The list
+// selects the variant the grid shows and makes it the schematic's current variant (`onVariantSelectionChange`); a cell whose value in that variant is the
+// variant's own is highlighted (`GetAttr`: light yellow, dark olive in a dark theme). An edit while a variant is shown is staged for that variant
+// (`fieldVariant`), but the Reference and `${EXCLUDE_FROM_BOARD}` are the symbol's (`fieldSupportsVariants`); adding, renaming and removing a field is
+// the symbol's, in every variant. Apply sends the symbol's edits and each variant's as one step (`ApplyData`'s loop over `storedVariants`); the export
+// is the shown variant's.
+//
+// Not ported (PARITY-sch.md): the scope selector (this table covers the current design's symbols), saved view presets of one's own, the sidebar
+// field-name templates, and the variant symbol overrides (Set / Clear Variant Symbol).
 import { useEffect, useRef, useState } from "react";
 import { exportBom, fetchFieldsTable } from "../api/client";
+import { useColorScheme } from "../hooks/useColorScheme";
+import { DEFAULT_VARIANT_NAME, trimName, validateCopyNameInTable, validateNewVariantName, variantDescription, variantNamesForUI } from "../kicad-port/designVariants";
+import { AddVariantDialog, DescriptionEntryDialog, TextEntryDialog } from "./DesignVariantDialogs";
 import { postBomFile } from "../api/schControlClient";
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import type { BomFmt, FieldsTableReply, FieldsTableRow, FieldsTableSpec } from "../api/types";
@@ -55,7 +65,16 @@ import {
   stageRenameField,
   toggledAttribute,
   validNewFieldName,
+  deleteStoredVariant,
+  fieldSupportsVariants,
+  renameStoredVariant,
+  stageVariantEdit,
+  variantApplyCmds,
+  variantEditsRemoved,
+  variantEditsRenamed,
+  VARIANT_OVERRIDE_COLOR,
   type StagedChanges,
+  type StagedVariantEdit,
 } from "../kicad-port/fieldsTableStage";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 
@@ -90,6 +109,16 @@ export function SymbolFieldsTableDialog() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [newField, setNewField] = useState("");
+  /** The cells staged for each variant (the data model's `FIELD_VALUE_STATE`s of the variants visited). */
+  const [variantEdits, setVariantEdits] = useState<StagedVariantEdit[]>([]);
+  /** A variant dialog the list's buttons opened over the table. */
+  const [variantDialog, setVariantDialog] = useState<{ kind: "add" | "rename" | "copy" | "describe"; name: string } | null>(null);
+  const scheme = useColorScheme();
+  // The variant the grid shows: the schematic's current one, which the list selects (`resolveVariant`; picking another in the list makes it current).
+  const variant = state.schVariant;
+  const variants = state.schematic?.variants ?? [];
+  const listed = variantNamesForUI(variants);
+  const say = (message: string, kind: "error" | "info" = "error") => dispatch({ type: "TOAST", message, kind, ms: 10000 });
 
   const [fmt, setFmt] = useState<BomFmt>(bomFmtPresets()[0] as BomFmt);
   const [outPath, setOutPath] = useState("");
@@ -112,13 +141,15 @@ export function SymbolFieldsTableDialog() {
     setExpanded(new Set());
     setNewField("");
     setExportMsg(null);
+    setVariantEdits([]);
+    setVariantDialog(null);
   }, [open]);
 
   // Re-run the grid whenever the view, the staged changes or the schematic itself changed.
   useEffect(() => {
     if (!open) return;
     const id = ++requestId.current;
-    void fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes).then((reply) => {
+    void fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes, undefined, { variant, variant_edits: variantEdits }).then((reply) => {
       if (id !== requestId.current) return;
       if (!reply.ok) {
         setError(reply.message ?? "Could not build the table.");
@@ -128,13 +159,13 @@ export function SymbolFieldsTableDialog() {
       setTable(reply);
       if (spec === null) setSpec(reply.spec);
     });
-  }, [open, spec, changes, state.schematic]);
+  }, [open, spec, changes, state.schematic, variant, variantEdits]);
 
   // Export preview (`PreviewRefresh`) follows the same inputs while that tab is showing.
   useEffect(() => {
     if (!open || tab !== "export" || !spec) return;
     let cancelled = false;
-    void exportBom(spec, fmt, isEmptyChanges(changes) ? null : changes).then((reply) => {
+    void exportBom(spec, fmt, isEmptyChanges(changes) ? null : changes, undefined, undefined, { variant, variant_edits: variantEdits }).then((reply) => {
       if (cancelled) return;
       if (reply.ok) {
         setPreview(reply.text ?? "");
@@ -146,11 +177,11 @@ export function SymbolFieldsTableDialog() {
     return () => {
       cancelled = true;
     };
-  }, [open, tab, spec, fmt, changes, state.schematic]);
+  }, [open, tab, spec, fmt, changes, state.schematic, variant, variantEdits]);
 
   if (!open) return null;
 
-  const dirty = !isEmptyChanges(changes);
+  const dirty = !isEmptyChanges(changes) || variantEdits.length > 0;
   const closeNow = () => dispatch({ type: "SET_SCH_DIALOG", dialog: null });
   const close = () => {
     // `OnClose`'s HandleUnsavedChanges: "Save changes?"
@@ -164,7 +195,7 @@ export function SymbolFieldsTableDialog() {
   // `ApplyBomPreset`: one of KiCad's built-in views, its columns, grouping and the two filters replacing the current ones (a user field stays, hidden)
   const applyPreset = async (name: string) => {
     if (!spec || name === "") return;
-    const reply = await fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes, name);
+    const reply = await fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes, name, { variant, variant_edits: variantEdits });
     if (!reply.ok) {
       setError(reply.message ?? "Could not apply the preset.");
       return;
@@ -174,18 +205,57 @@ export function SymbolFieldsTableDialog() {
 
   const apply = async (): Promise<boolean> => {
     if (!dirty) return true;
-    const ok = await api.cmd({ op: "set_symbol_fields", edits: changes.edits, add_fields: changes.add_fields, rename_fields: changes.rename_fields, remove_fields: changes.remove_fields });
+    // the symbols' own edits, then every variant's (`ApplyData`), as one undo step
+    const cmds = [
+      ...(isEmptyChanges(changes) ? [] : [{ op: "set_symbol_fields" as const, edits: changes.edits, add_fields: changes.add_fields, rename_fields: changes.rename_fields, remove_fields: changes.remove_fields }]),
+      ...variantApplyCmds(variantEdits),
+    ];
+    const ok = await api.cmdBatch(cmds);
     if (ok) {
       setChanges(emptyChanges());
+      setVariantEdits([]);
       dispatch({ type: "TOAST", message: "Symbol fields updated.", kind: "info" });
     }
     return ok;
   };
 
   const commitCell = (row: FieldsTableRow, field: string, value: string) => {
+    // a cell of the shown variant is staged for it (`fieldVariant`), the Reference and `${EXCLUDE_FROM_BOARD}` for the symbol itself
+    if (variant !== "" && fieldSupportsVariants(field)) {
+      let next = variantEdits;
+      for (const ref of row.refs) next = stageVariantEdit(next, variant, ref, field, value);
+      setVariantEdits(next);
+      return;
+    }
     let next = changes;
     for (const ref of row.refs) next = stageEdit(next, ref, field, value);
     setChanges(next);
+  };
+
+  // ---- the "Schematic variants:" list (`onVariantSelectionChange`, `onAddVariant`, `onDeleteVariant`, `onRenameVariant`, `onCopyVariant`, `onEditVariantDescription`)
+  const selectVariant = (name: string) => dispatch({ type: "SET_SCH_VARIANT", variant: name === DEFAULT_VARIANT_NAME ? "" : name });
+  const canModify = variant !== "";
+  const deleteVariant = async () => {
+    if (!canModify) return say("Cannot delete the default variant.");
+    const at = listed.indexOf(variant);
+    const next = listed[Math.max(0, at - 1)] ?? DEFAULT_VARIANT_NAME;
+    setVariantEdits(deleteStoredVariant(variantEdits, variant));
+    if (await api.cmd({ op: "remove_design_variant", name: variant })) selectVariant(next);
+  };
+  const renameVariant = async (from: string, text: string) => {
+    const to = trimName(text);
+    if (to === from) return;
+    const why = validateNewVariantName(variants, to, from);
+    if (why) return say(why);
+    const wasCurrent = variant === from;
+    setVariantEdits(renameStoredVariant(variantEdits, from, to));
+    if ((await api.cmd({ op: "rename_design_variant", name: from, new_name: to })) && wasCurrent) selectVariant(to);
+  };
+  const copyVariant = async (from: string, text: string) => {
+    const to = trimName(text);
+    const why = validateCopyNameInTable(listed, to);
+    if (why) return say(why);
+    if (await api.cmd({ op: "copy_design_variant", name: from, new_name: to })) selectVariant(to);
   };
 
   const addField = () => {
@@ -211,12 +281,14 @@ export function SymbolFieldsTableDialog() {
       return;
     }
     setChanges(stageRenameField(changes, name, to.trim()));
+    setVariantEdits(variantEditsRenamed(variantEdits, name, to.trim()));
     setSpec(specRenameColumn(spec, name, to.trim()));
   };
 
   const removeField = (name: string) => {
     if (!spec) return;
     setChanges(stageRemoveField(changes, name));
+    setVariantEdits(variantEditsRemoved(variantEdits, name));
     setSpec(specRemoveColumn(spec, name));
   };
 
@@ -249,9 +321,11 @@ export function SymbolFieldsTableDialog() {
       {shown.map(({ c, i }) => {
         const text = row.cells[i] ?? "";
         const mixed = row.mixed[i] ?? false;
+        // `GetAttr`'s highlight of a variant's own value (`VARIANT_FIELD_OVERRIDE_LIGHT_YELLOW` / `_DARK_YELLOW`)
+        const highlight = variant !== "" && row.overrides?.[i] ? VARIANT_OVERRIDE_COLOR[scheme] : undefined;
         if (isAttributeColumn(c.name)) {
           return (
-            <td key={c.name} style={{ padding: "1px 4px", textAlign: "center" }}>
+            <td key={c.name} style={{ padding: "1px 4px", textAlign: "center", background: highlight }} data-override={highlight ? "1" : undefined}>
               <AttributeCell text={text} mixed={mixed} label={`${c.label || c.name} of ${row.refs.join(", ")}`} onToggle={() => commitCell(row, c.name, toggledAttribute(text, mixed))} />
             </td>
           );
@@ -264,13 +338,14 @@ export function SymbolFieldsTableDialog() {
           );
         }
         return (
-          <td key={c.name} style={{ padding: "1px 4px" }}>
+          <td key={c.name} style={{ padding: "1px 4px", background: highlight }} data-override={highlight ? "1" : undefined}>
             <input
               // A fresh uncontrolled input whenever the row/cell value changes (regroup, apply), so the committed text always shows.
               key={`${row.refs.join(",")}|${c.name}|${mixed ? MIXED : text}`}
               defaultValue={mixed ? "" : text}
               placeholder={mixed ? MIXED : ""}
-              style={{ width: "100%", boxSizing: "border-box", fontSize: 11 }}
+              style={{ width: "100%", boxSizing: "border-box", fontSize: 11, background: highlight }}
+              aria-label={`${c.label || c.name} of ${row.refs.join(", ")}`}
               onBlur={(e) => {
                 const v = e.currentTarget.value;
                 if (mixed ? v !== "" : v !== text) commitCell(row, c.name, v);
@@ -360,6 +435,34 @@ export function SymbolFieldsTableDialog() {
                     }}
                   />
                   <button onClick={addField}>Add Field</button>
+                </div>
+                {/* `m_variantsPanel`: "Schematic variants:", the list and its buttons */}
+                <div style={{ marginTop: 14 }} data-testid="fields-table-variants">
+                  <div style={{ marginBottom: 4 }}>Schematic variants:</div>
+                  <select size={Math.max(3, Math.min(8, listed.length))} style={{ width: "100%", fontSize: 11 }} aria-label="Schematic variants" value={variant === "" ? DEFAULT_VARIANT_NAME : variant} onChange={(e) => selectVariant(e.target.value)} data-testid="fields-table-variant-list">
+                    {listed.map((n) => (
+                      <option key={n} value={n} title={variantDescription(variants, n) || undefined}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                  <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                    <button style={{ fontSize: 10, padding: "0 6px" }} title="Add Design Variant..." onClick={() => setVariantDialog({ kind: "add", name: "" })} data-testid="fields-table-add-variant">
+                      +
+                    </button>
+                    <button style={{ fontSize: 10, padding: "0 6px" }} title="Rename Design Variant..." disabled={!canModify} onClick={() => setVariantDialog({ kind: "rename", name: variant })}>
+                      Rename
+                    </button>
+                    <button style={{ fontSize: 10, padding: "0 6px" }} title="Copy Design Variant..." disabled={!canModify} onClick={() => setVariantDialog({ kind: "copy", name: variant })}>
+                      Copy
+                    </button>
+                    <button style={{ fontSize: 10, padding: "0 6px" }} title="Edit Variant Description..." disabled={!canModify} onClick={() => setVariantDialog({ kind: "describe", name: variant })}>
+                      Description
+                    </button>
+                    <button style={{ fontSize: 10, padding: "0 6px", marginLeft: "auto" }} title="Remove Design Variant" disabled={!canModify} onClick={() => void deleteVariant()} data-testid="fields-table-delete-variant">
+                      Delete
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -491,7 +594,7 @@ export function SymbolFieldsTableDialog() {
                 }
                 setExportMsg("Exporting with kicad-cli...");
                 try {
-                  const reply = await postBomFile({ spec, fmt, path: outPath.trim() });
+                  const reply = await postBomFile({ spec, fmt, path: outPath.trim(), ...(variant ? { variant } : {}) });
                   setExportMsg(reply.ok ? `Wrote BOM output to '${reply.files?.[0] ?? outPath}'${reply.engine ? ` (${reply.engine})` : ""}` : (reply.message ?? "Export failed."));
                 } catch (e) {
                   setExportMsg(`Export failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -502,7 +605,14 @@ export function SymbolFieldsTableDialog() {
             </button>
           ) : (
             <>
-              <button disabled={!dirty} onClick={() => setChanges(emptyChanges())} title="Discard the staged edits">
+              <button
+                disabled={!dirty}
+                onClick={() => {
+                  setChanges(emptyChanges());
+                  setVariantEdits([]);
+                }}
+                title="Discard the staged edits"
+              >
                 Revert
               </button>
               <button className="primary" disabled={!dirty} onClick={() => void apply()}>
@@ -513,6 +623,50 @@ export function SymbolFieldsTableDialog() {
           <button onClick={close}>Close</button>
         </div>
       </div>
+      {/* the variant dialogs over the table: their clicks and keys are theirs, not the table's */}
+      {variantDialog && (
+        <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+          {variantDialog.kind === "add" && <AddVariantDialog onClose={() => setVariantDialog(null)} say={say} />}
+          {variantDialog.kind === "rename" && (
+            <TextEntryDialog
+              title="Rename Design Variant"
+              prompt="Enter new variant name:"
+              initial={variantDialog.name}
+              onCancel={() => setVariantDialog(null)}
+              onOk={(t) => {
+                const from = variantDialog.name;
+                setVariantDialog(null);
+                void renameVariant(from, t);
+              }}
+            />
+          )}
+          {variantDialog.kind === "copy" && (
+            <TextEntryDialog
+              title="Copy Design Variant"
+              prompt="Enter name for the copied variant:"
+              initial={`${variantDialog.name}_copy`}
+              onCancel={() => setVariantDialog(null)}
+              onOk={(t) => {
+                const from = variantDialog.name;
+                setVariantDialog(null);
+                void copyVariant(from, t);
+              }}
+            />
+          )}
+          {variantDialog.kind === "describe" && (
+            <DescriptionEntryDialog
+              name={variantDialog.name}
+              initial={variantDescription(variants, variantDialog.name)}
+              onCancel={() => setVariantDialog(null)}
+              onOk={(t) => {
+                const name = variantDialog.name;
+                setVariantDialog(null);
+                void api.cmd({ op: "edit_design_variant_description", name, description: trimName(t) });
+              }}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }

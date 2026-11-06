@@ -161,6 +161,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
         writeln!(out, "\t\t)").unwrap();
     }
     writeln!(out, "\t)").unwrap();
+    // The design variants (`formatHeader` > `formatVariants`, after the setup and the properties).
+    crate::variant_io::write_board_variants(&mut out, design);
 
     // ---- nets ----
     writeln!(out, "\t(net 0 \"\")").unwrap();
@@ -541,7 +543,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     }
 
     // The items nothing reads (a text box, a reference image, a target ..), as the file had them.
-    for item in design.drawings.iter().flat_map(|d| d.raw_items.iter()) {
+    for item in design.drawings.iter().flat_map(|d| d.raw_items.iter()).filter(|t| !crate::variant_io::superseded(design, t)) {
         writeln!(out, "\t{item}").unwrap();
     }
 
@@ -1039,6 +1041,12 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
             project["schematic"]["subpart_first_id"] = serde_json::json!(first);
         }
     }
+    // The design variants (KiCad 25ec2335 `SCHEMATIC_SETTINGS::m_VariantDescriptions`, `schematic.variants`), which kicad-cli's `--variant` looks a name up in
+    // (`SCHEMATIC::SetCurrentVariant` takes only a name it has); a variant no symbol differs in is in no schematic file, only here.
+    let variants = crate::project_schematic::variants_json(design);
+    if !variants.is_empty() {
+        project["schematic"]["variants"] = serde_json::Value::Array(variants);
+    }
     let mut erc = serde_json::json!({ "rule_severities": effective_erc_severities(design) });
     if let Some(m) = custom_erc_pin_map(design) {
         erc["pin_map"] = serde_json::json!(m);
@@ -1348,7 +1356,8 @@ pub(crate) fn write_footprint(
     if let Some(e) = own_extra {
         // Its description, tags, jumper pad groups, Datasheet and Description fields ..., as the file had them, while the part is on the footprint they describe.
         if e.source_name == lib_name_written {
-            for token in &e.tokens {
+            // a footprint variant the file had is the schematic's to say when the design has one (`crate::variant_io`)
+            for token in e.tokens.iter().filter(|t| !crate::variant_io::superseded(design, t)) {
                 writeln!(out, "\t\t{token}").unwrap();
             }
         }
@@ -1408,6 +1417,8 @@ pub(crate) fn write_footprint(
         writeln!(out, ")").unwrap();
     }
     write_attr(out, &extra.attrs, own_extra.is_some_and(|e| e.allow_soldermask_bridges));
+    // The footprint's records of the design variants (`format( FOOTPRINT )`'s `(variant ..)`), from the symbol's as Update PCB from Schematic puts them there.
+    crate::variant_io::write_footprint_variants(out, design, part.value.as_deref(), &fp.id, extra.attrs.dnp, extra.attrs.exclude_from_bom, extra.attrs.exclude_from_pos_files);
 
     // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).
     let mut pads: Vec<(usize, &Pad)> = footprint.pads.iter().enumerate().collect();
@@ -1936,11 +1947,13 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
         (false, None) => "no",
     };
     let lock = if locked { " (locked yes)" } else { "" };
+    // `aShape->GetStroke().Format( m_out, pcbIUScale )`: `(stroke (width ..) (type ..))`, the type `STROKE_PARAMS::GetLineStyleToken` of the shape's own (UI-LEFT P5).
+    let ty = style.map(|st| st.line_style).unwrap_or_default().token();
     match shape {
         Shape::Segment { stroke_width, start, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)){ends}{lock} {layer} (uuid \"{uuid}\"))",
+                "\t(gr_line (start {} {}) (end {} {}) (stroke (width {}) (type {ty})){ends}{lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
@@ -1948,7 +1961,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
         Shape::Arc { stroke_width, start, mid, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type solid)){ends}{lock} {layer} (uuid \"{uuid}\"))",
+                "\t(gr_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type {ty})){ends}{lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(mid.x), mm(mid.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
@@ -1958,7 +1971,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
             let radius = style.map(|st| st.corner_radius).filter(|&r| r > Nm::ZERO).map(|r| format!(" (radius {})", mm(r))).unwrap_or_default();
             writeln!(
                 out,
-                "\t(gr_rect (start {} {}) (end {} {}){radius} (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
+                "\t(gr_rect (start {} {}) (end {} {}){radius} (stroke (width {}) (type {ty})) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
             )
             .unwrap();
@@ -1966,7 +1979,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
         Shape::Circle { stroke_width, filled, center, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
+                "\t(gr_circle (center {} {}) (end {} {}) (stroke (width {}) (type {ty})) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
                 mm(center.x), mm(center.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
             )
             .unwrap();
@@ -1976,13 +1989,13 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
             for p in pts {
                 write!(out, " (xy {} {})", mm(p.x), mm(p.y)).unwrap();
             }
-            writeln!(out, ") (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))", sw(*stroke_width), fill(*filled)).unwrap();
+            writeln!(out, ") (stroke (width {}) (type {ty})) (fill {}){lock} {layer} (uuid \"{uuid}\"))", sw(*stroke_width), fill(*filled)).unwrap();
         }
         // `case SHAPE_T::BEZIER:` -- `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)) ...)`; like a line, never filled.
         Shape::Bezier { stroke_width, start, c1, c2, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type solid)){ends}{lock} {layer} (uuid \"{uuid}\"))",
+                "\t(gr_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type {ty})){ends}{lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(c1.x), mm(c1.y), mm(c2.x), mm(c2.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();

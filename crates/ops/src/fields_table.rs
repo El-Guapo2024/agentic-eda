@@ -389,6 +389,10 @@ pub struct TableRow {
     pub mixed: Vec<bool>,
     /// Per-symbol rows of a group (what "expand" reveals).
     pub children: Vec<TableRow>,
+    /// While the table shows a design variant, one flag per column: true where a symbol of the row has another value in the variant than its own
+    /// ([`mark_variant_overrides`]). Empty (and not sent) for the default variant.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub overrides: Vec<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -441,6 +445,10 @@ pub fn project_view(design: &eda_model::ir::Design) -> Option<SchematicSection> 
         for (reference, fields) in &screen.user_fields {
             sch.user_fields.entry(reference.clone()).or_default().extend(fields.clone());
         }
+        // and their records of the design variants, so the table can show a variant
+        for (reference, records) in &screen.extras.symbol_variants {
+            sch.extras.symbol_variants.entry(reference.clone()).or_default().extend(records.clone());
+        }
     }
     for (alias, screen, sym, unit) in path_rows(design) {
         if sch.symbols.iter().any(|s| s.id == alias && s.unit == unit) {
@@ -451,7 +459,10 @@ pub fn project_view(design: &eda_model::ir::Design) -> Option<SchematicSection> 
         copy.unit = unit;
         sch.symbols.push(copy);
         if let Some(fields) = screen.user_fields.get(&sym.id) {
-            sch.user_fields.entry(alias).or_default().extend(fields.clone());
+            sch.user_fields.entry(alias.clone()).or_default().extend(fields.clone());
+        }
+        if let Some(records) = screen.extras.symbol_variants.get(&sym.id) {
+            sch.extras.symbol_variants.entry(alias).or_default().extend(records.clone());
         }
     }
     Some(sch)
@@ -791,13 +802,13 @@ pub fn build_table_over(sch: &SchematicSection, base: &SchematicSection, model: 
                     .map(|s| {
                         let one: Vec<SymRef> = row.refs.iter().filter(|x| x.id == s.id).cloned().collect();
                         let (cells, mixed) = cells_of(&one, item, true);
-                        TableRow { refs: vec![s.id.clone()], flag: RowFlag::Child, item_number: item, cells, mixed, children: vec![] }
+                        TableRow { refs: vec![s.id.clone()], flag: RowFlag::Child, item_number: item, cells, mixed, children: vec![], overrides: vec![] }
                     })
                     .collect()
             } else {
                 vec![]
             };
-            TableRow { refs: distinct(&row.refs), flag: if row.group { RowFlag::Group } else { RowFlag::Singleton }, item_number: item, cells, mixed, children }
+            TableRow { refs: distinct(&row.refs), flag: if row.group { RowFlag::Group } else { RowFlag::Singleton }, item_number: item, cells, mixed, children, overrides: vec![] }
         })
         .collect();
     Table { rows }
@@ -967,6 +978,82 @@ fn resolved_store(sch: &SchematicSection, model: &ConstraintModel, mut store: St
 }
 
 // ---------------------------------------------------------------------
+// Design variants (KiCad 25ec2335)
+// ---------------------------------------------------------------------
+
+/// One staged cell edit of the table while it shows design variant `variant` (`FIELDS_EDITOR_GRID_DATA_MODEL::SetValue` into the variant's
+/// `FIELD_VALUE_STATE`): the text of a field, or "1" / "0" in an attribute column.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VariantFieldEdit {
+    pub variant: String,
+    pub id: String,
+    pub field: String,
+    pub value: String,
+}
+
+/// `SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::fieldSupportsVariants`: every column but `Reference` and `${EXCLUDE_FROM_BOARD}` has a value of its own in a
+/// variant; an edit of those two while a variant is shown is the symbol's.
+pub fn field_supports_variants(name: &str) -> bool {
+    name != REFERENCE && name != EXCLUDE_FROM_BOARD
+}
+
+/// The design variant's flag an attribute column edits (`setAttributeValue( .., aVariantName )`).
+fn variant_flag(name: &str) -> Option<eda_model::variants::Flag> {
+    use eda_model::variants::Flag;
+    match name {
+        DNP => Some(Flag::Dnp),
+        EXCLUDE_FROM_BOM => Some(Flag::ExcludeFromBom),
+        EXCLUDE_FROM_SIM => Some(Flag::ExcludeFromSim),
+        _ => None,
+    }
+}
+
+/// The staged variant edits laid over `sch` (`ApplyData` writes every visited variant: `setAttributeValue( .., variantName )` for an attribute, `SetText( ..,
+/// sheet, variantName )` for a field), each as `eda_model::variants::set_flag` / `set_field` keep a record: a text equal to the symbol's own takes the override
+/// away. Refused for a column with no value of its own in a variant ([`field_supports_variants`]), a generated one and a reference that is not on `sch`.
+pub fn apply_variant_edits(sch: &mut SchematicSection, model: &ConstraintModel, edits: &[VariantFieldEdit]) -> Result<(), String> {
+    for e in edits {
+        if e.variant.is_empty() {
+            return Err("a variant edit needs a variant".into());
+        }
+        if !field_supports_variants(&e.field) || (is_generated_field(&e.field) && !is_attribute(&e.field)) {
+            return Err(format!("{} has no value of its own in a design variant", e.field));
+        }
+        if !sch.symbols.iter().any(|s| s.id == e.id) {
+            return Err(format!("no symbol with reference '{}'", e.id));
+        }
+    }
+    for e in edits {
+        if let Some(flag) = variant_flag(&e.field) {
+            eda_model::variants::set_flag(sch, &e.id, &e.variant, flag, e.value == "1");
+            continue;
+        }
+        let Some(sym) = sch.symbols.iter().find(|s| s.id == e.id).cloned() else { continue };
+        let own = field_value(sch, model, &sym, &e.field);
+        eda_model::variants::set_field(sch, &e.id, &e.variant, &e.field, &e.value, &own);
+    }
+    Ok(())
+}
+
+/// `SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::GetAttr`'s highlight while the table shows a variant: a cell of a row is marked when one of its symbols has another
+/// value there in `shown` (the variant's view, [`eda_model::variants::resolve_section`]) than in `own` (the symbols as they are); never the Reference, the
+/// quantity or the item number. Fills [`TableRow::overrides`] of every row and child row.
+pub fn mark_variant_overrides(rows: &mut [TableRow], shown: &SchematicSection, own: &SchematicSection, model: &ConstraintModel, spec: &TableSpec) {
+    let (a, b) = (build_store(shown, model, spec), build_store(own, model, spec));
+    fn mark(rows: &mut [TableRow], spec: &TableSpec, a: &Store, b: &Store) {
+        for row in rows.iter_mut() {
+            row.overrides = spec
+                .columns
+                .iter()
+                .map(|c| c.name != REFERENCE && c.name != QUANTITY && c.name != ITEM_NUMBER && row.refs.iter().any(|r| a.get(r).and_then(|m| m.get(&c.name)) != b.get(r).and_then(|m| m.get(&c.name))))
+                .collect();
+            mark(&mut row.children, spec, a, b);
+        }
+    }
+    mark(rows, spec, &a, &b);
+}
+
+// ---------------------------------------------------------------------
 // Applying edits (ApplyData)
 // ---------------------------------------------------------------------
 
@@ -1068,8 +1155,9 @@ pub fn apply_field_changes(sch: &mut SchematicSection, changes: &FieldChanges) -
         for m in sch.user_fields.values_mut() {
             m.remove(r);
         }
-        // the places the field had on the sheet go with it
+        // the places the field had on the sheet go with it, and so do the variants' texts of it (`SCH_SYMBOL::RemoveField`: "This will remove it from all variants")
         crate::sch_fields::drop_field_placements(sch, &ids, r);
+        eda_model::variants::rename_field(sch, None, r, None);
     }
     for r in &changes.rename_fields {
         for m in sch.user_fields.values_mut() {
@@ -1077,8 +1165,9 @@ pub fn apply_field_changes(sch: &mut SchematicSection, changes: &FieldChanges) -
                 m.insert(r.to.clone(), v);
             }
         }
-        // and a renamed field keeps its places
+        // and a renamed field keeps its places and the variants' texts of it
         crate::sch_fields::rename_field_placements(sch, &ids, &r.from, &r.to);
+        eda_model::variants::rename_field(sch, None, &r.from, Some(&r.to));
     }
     for a in &changes.add_fields {
         for id in &ids {

@@ -27,7 +27,7 @@ Notes:
 8. P2/S7: Properties panel rows -- **done (task-u1-props)**
 9. S3: Schematic Setup pages -- **done (task-u1-schsetup)**
 10. P8: zones -- **done (task-u1-zones)**
-11. S2: design variants
+11. S2: design variants -- **done (task-u1-variants)**
 12. M1: the Simulation Model dialog -- **done (task-u1-simmodel)**
 
 ## PCB editor
@@ -38,7 +38,7 @@ Notes:
   - Not kept current as you edit: you re-run Add All Teardrops.
   - L. GAPS 8/13/35; PARITY-pcb §15, §62 D6-1, §66; r7 R7-1.
 - **P2 [BD] Properties panel.** **done (task-u1-props)**: every class lists KiCad's registered rows in KiCad's groups and order (a test replays the C++); via tenting, covering, plugging, capping, filling, backdrill, post-machining, layers and type, track and shape solder mask, corner radius, text italic, bold, vertical justification, width apart from height, knockout and automatic pen, a pad's orientation, copper layers and overrides, a footprint's reference and (board-file) paste margins are edited; Component Type, which KiCad's panel lacks, is gone (PARITY-pcb §67). Left, read-only with the reason as the tooltip:
-  - Fonts, a shape's line style (P5), every teardrop row (P1's per-item parameters), a pad's number, pin name and type, post-machining, backdrill, fabrication property and pad-to-die, a dimension's label style.
+  - Fonts, every teardrop row (P1's per-item parameters), a pad's number, pin name and type, post-machining, backdrill, fabrication property and pad-to-die, a dimension's label style (a shape's line style and a leader's text frame are edited since task-u2-lines, P5, P13).
   - A footprint placed from the intent has no paste margin of its own; text colour is masked on board text, as in KiCad.
   - M. GAPS 10; PARITY-pcb §23, §67.
 - **P3 [FM] Track & Via and Pad Properties.**
@@ -51,7 +51,11 @@ Notes:
   - A text is centred on its anchor whatever its vertical justification.
   - Outline and TrueType fonts are drawn in the stroke font.
   - M. PARITY-pcb §39, §60 B5-2, §62 A6-3.
-- **P5 [BD] Line styles.** Dashed and dotted lines, arcs and rectangles are drawn and saved solid; the model has no line style. M. GAPS 2; PARITY-pcb §37; r5 B5-5.
+- **P5 [BD] Line styles.** **done (task-u2-lines)**: a board shape's line style (dash, dot, dash-dot, dash-dot-dot, the file's default) is read, written, drawn as `STROKE_PARAMS::Stroke` cuts it with the width-scaled lengths and the board's dash ratios (board shapes, footprint graphics on the board and in the Footprint Editor), edited in Shape Properties' "Line style:" and the Properties panel's Line Style; kicad-cli plots a dashed F.SilkS line as dashes (slow proof); the QA round trip 22497 -> 20873 lines (PARITY-pcb §69). Left:
+  - A shape drawn in the studio is written `(type solid)`, pcbnew's new shapes `(type default)` (both drawn solid).
+  - The Footprint Editor's shape dialog has no Line style row (the library's stroke type is drawn and written, not edited).
+  - The 3D view's silkscreen stand-in draws a dashed line solid (KiCad's 3D viewer dashes it, `create_3Dgraphic_brd_items.cpp`).
+  - M. GAPS 2; PARITY-pcb §37, §69; r5 B5-5.
 - **P6 [BD] Swap (Alt+S).** **done (task-u1-pcb)** for zones: a zone stays put and two zones swap layers, as `ZONE::SetPosition` is a no-op (R7-2; PARITY-pcb §66). Left:
   - Arcs, dimensions, groups, tables, text boxes, barcodes and points are not swapped, and neither is a pad with a pad.
   - M. r7 R7-2; r6 E6-2.
@@ -76,11 +80,11 @@ Notes:
   - Edit Text & Graphics has no footprint reference, value, field or graphic scopes, no By-parent filters, and no font, bold, keep-upright or visible rows.
   - Edit Track & Via has no microvia, annular-ring or IPC-4761 presets.
   - M. GAPS 35; PARITY-pcb §13.
-- **P13 [BD] Dimensions.**
-  - Every kind is placed with two clicks: no height click and no live preview. Radial, Leader and Center lack their own click sequences.
-  - A leader has no text border.
-  - A text can't be placed by hand, and an imported manual text position is reset.
-  - M. PARITY-pcb §18; GAPS 28/35.
+- **P13 [BD] Dimensions.** **done (task-u2-lines)**: each kind has `DrawDimension`'s click sequence (an aligned and an orthogonal one's height click, a centre mark, a radial one and a leader done at the second, a leader's dialog at once, the tool armed after) and a live preview of the whole dimension (`POST /api/dimension/preview`); a leader's text frame (none, rectangle, circle) is drawn, edited in the dialog and the Properties panel, and stops its lines; the point editor drags the feature points, the crossbar ends, a radial's knee and the text, a dragged text is placed by hand (`text_position_mode 2`, now read, kept and written; it was read as 0) and follows its crossbar; the dialog has KiCad's Position mode with Manual (PARITY-pcb §69). Left:
+  - The height step of a slanted aligned dimension stays on the grid (KiCad turns the grid off); no width keys, layer change or Properties during the draw.
+  - A manual text's left or right justification is not flipped past the crossbar's middle (the IR's dimension text is always centred); no font, bold, italic or mirror.
+  - A rounded-rectangle frame (`DIM_TEXT_BORDER::ROUNDRECT`, not offered by 8303b2ad's dialog) is kept but drawn as none, as 8303b2ad does.
+  - M. PARITY-pcb §18, §69; GAPS 28/35.
 - **P14 [BD] Footprint Properties on the board.**
   - Reference and Value can't be edited, because they come from the schematic.
   - It shows 2 mandatory field rows, not 4 (unsure).
@@ -184,7 +188,11 @@ Notes:
   - (was: you click first and the dialog comes after, and nothing follows the cursor before the click; Place Power is a text field with presets, its rotation set in the dialog.)
   - M. PARITY-sch §3, §3a, §54.
 - **S1b [BD] Place Symbol (A) has no symbol following the cursor** (found by task-u1-schplace). After the chooser, it waits for a click with nothing drawn at the cursor; KiCad carries the symbol, with R/X/Y while carried. The `POST /api/sch/place_preview` endpoint from task-u1-schplace can draw it. S. PARITY-sch §54.
-- **S2 [FM] Design variants.** No Add, Remove or Edit Variant, no per-variant DNP or fields, and no variant columns in the Fields Table or the placement files. XL. ui-parity-missing (3 rows); PARITY-sch §13, §25.
+- **S2 [FM] Design variants.** **done (task-u1-variants)**: Add, Remove, Edit Description, Rename and Copy Design Variant (Tools > Variants, the schematic toolbar's selector with "Add New Design Variant...", the Fields Table's "Schematic variants:" list), each in KiCad 25ec2335's words; a symbol's DNP, exclusion flags and field texts per variant, shown and edited for the current variant on the canvas, in Symbol Properties (the title names the variant), the Properties panel, the attribute toggles and the Fields Table (the variant's cells highlighted); KiCad's `(variant ..)` records and `schematic.variants` read and written, the board's `(variants ..)` and footprint variants derived; the PCB editor's own selector; "Design variant:" enabled in Plot, Generate Placement Files and Plot Schematic, and the Fields Table's BOM export is its variant's: kicad-cli's `--variant` (PARITY-sch §58). Left:
+  - A variant's own symbol (Set / Clear Variant Symbol) and pin map; a sheet's own variants; `${VARIANT}` / `${VARIANT_DESC}` in texts; a variant field's `${..}` on the canvas.
+  - The PCB canvas and Properties panel per board variant (the board's selector feeds the dialogs only); a variant footprint; a pasted symbol's records.
+  - A record is the reference's, on every path of a screen shown twice.
+  - XL. PARITY-sch §13, §25, §58.
 - **S3 [FM] Schematic Setup.** **done (task-u1-schsetup)**: every page of KiCad's tree -- Formatting's every row, Annotation, Field Name Templates, BOM Presets, Net Classes (Board Setup's page with the Eeschema columns, one table for both), Bus Alias Definitions, Text Variables -- each Apply one undoable verb, the settings in the derived `.kicad_pro` kicad-cli reads; ERC's "Edit Netclasses…" opens Net Classes (PARITY-sch §56). Left:
   - Import Settings from Another Project… (Board Setup has none either).
   - Hop-overs are not drawn; the text sizes, label ratios, pin symbol size and overbar ratio reach kicad-cli but not the studio's own drawing.
@@ -407,12 +415,12 @@ Notes:
 
 ## Fab outputs and exports
 
-- **X1 [FM] PCB Plot is Gerber only.** **done (task-u1-plot)**: Gerber, PostScript, SVG, DXF, PDF, PNG with every option of `DIALOG_PLOT`, Plot on All Layers, the output folder, Run DRC, the mask alert. HPGL is not offered (KiCad's dialog dropped it; kicad-cli: "No longer supported"); 8303b2ad's dialog has no values/references boxes. The job file box works (unticked, the job file kicad-cli always writes is deleted). Left, disabled with the reason: the origin outside Gerber/DXF, SVG precision, PDF metadata, the PDF popups apart, DXF's font, the design variant.
+- **X1 [FM] PCB Plot is Gerber only.** **done (task-u1-plot)**: Gerber, PostScript, SVG, DXF, PDF, PNG with every option of `DIALOG_PLOT`, Plot on All Layers, the output folder, Run DRC, the mask alert. HPGL is not offered (KiCad's dialog dropped it; kicad-cli: "No longer supported"); 8303b2ad's dialog has no values/references boxes. The job file box works (unticked, the job file kicad-cli always writes is deleted). Left, disabled with the reason: the origin outside Gerber/DXF, SVG precision, PDF metadata, the PDF popups apart, DXF's font. (The design variant is done: S2.)
   - L. GAPS 37; PARITY-boardctl §5, §8.
 - **X2 [FM] Drill files.** **done (task-u1-plot)**: Excellon and Gerber X2, map files and their format, units, zeros, precision, mirror, minimal header, tenting layers, the output folder, Generate Report File. Left: the report is the selected format's writer's (KiCad's dialog inverts the test). M. GAPS 37; PARITY-boardctl §8.
-- **X3 [FM] Schematic exports.** **done (task-u1-plot)**: Plot Schematic has PostScript, PDF, SVG, DXF, PNG, the colour theme, the PDF and PNG options, the output folder, Plot All / Current Page; Export Netlist has KiCad, OrcadPCB2, Allegro, CadStar, PADS, SPICE, SPICE Model (and XML). Left, disabled with the reason (no kicad-cli flag): page size, minimum line width, DXF units, the SPICE page's options, Open file after plot, custom exporters, the variant.
+- **X3 [FM] Schematic exports.** **done (task-u1-plot)**: Plot Schematic has PostScript, PDF, SVG, DXF, PNG, the colour theme, the PDF and PNG options, the output folder, Plot All / Current Page; Export Netlist has KiCad, OrcadPCB2, Allegro, CadStar, PADS, SPICE, SPICE Model (and XML). Left, disabled with the reason (no kicad-cli flag): page size, minimum line width, DXF units, the SPICE page's options, Open file after plot, custom exporters. (The variant is done: S2.)
   - S. PARITY-sch §10, §53.
-- **X4 [FM] Placement files.** **done (task-u1-plot)** as far as kicad-cli goes: kicad-cli 10.99 (4fe1ca2060) still has no Exclude from BOM flag for `pcb export pos` (disabled with the reason; the api-server's position job has `exclude_from_bom`, unused), and the variant choice is disabled (kicad-cli has `--variant`, the studio has no variants, S2); the dialog's output folder is wired. S. GAPS 37; r2 X8.
+- **X4 [FM] Placement files.** **done (task-u1-plot)** as far as kicad-cli goes: kicad-cli 10.99 (4fe1ca2060) still has no Exclude from BOM flag for `pcb export pos` (disabled with the reason; the api-server's position job has `exclude_from_bom`, unused); the variant choice is `--variant` since S2 (task-u1-variants); the dialog's output folder is wired. S. GAPS 37; r2 X8.
 - **X5 [BD] Small differences.**
   - Sketched fab pads at 0.1 mm (X3-9).
   - An export with warnings shows none (X5-1).
@@ -427,20 +435,20 @@ Notes:
 
 ## Board Setup, rules, DRC, ERC
 
-- **B1 [FM] Component Classes.** **done (task-u2-boardsetup)**: Design Rules > Component Classes is KiCad's page -- Assign component class per sheet, the custom assignments with the seven condition kinds of the "+" menu, Import references from selection, Show library, Highlight matching footprints, Match all / any, Validate's "Error with conditions for component class assignment %s" -- one undoable verb (`set_component_classes`) kept in the derived project's `component_class_settings`; kicad-cli's DRC reads a class the page defined through `A.hasComponentClass(..)` (proved; PARITY-pcb §69). Left: nothing known.
-- **B2 [FM] DRC Rule Editor.** **done (task-u2-boardsetup)**: Show Matches (`GetItemsMatchingRule` on the rule board: select, frame, brighten, "Show Matches (%d)" / "(error)"); the rule tree's drag-and-drop (one verb, the file's order follows); Check rule syntax expands the text variables (R6-D5) and adds `checkPlausibility`'s warnings; the Custom Rules editor with brace matching, auto-complete and KiCad's Syntax help (PARITY-pcb §70). Left:
+- **B1 [FM] Component Classes.** **done (task-u2-boardsetup)**: Design Rules > Component Classes is KiCad's page -- Assign component class per sheet, the custom assignments with the seven condition kinds of the "+" menu, Import references from selection, Show library, Highlight matching footprints, Match all / any, Validate's "Error with conditions for component class assignment %s" -- one undoable verb (`set_component_classes`) kept in the derived project's `component_class_settings`; kicad-cli's DRC reads a class the page defined through `A.hasComponentClass(..)` (proved; PARITY-pcb §70). Left: nothing known.
+- **B2 [FM] DRC Rule Editor.** **done (task-u2-boardsetup)**: Show Matches (`GetItemsMatchingRule` on the rule board: select, frame, brighten, "Show Matches (%d)" / "(error)"); the rule tree's drag-and-drop (one verb, the file's order follows); Check rule syntax expands the text variables (R6-D5) and adds `checkPlausibility`'s warnings; the Custom Rules editor with brace matching, auto-complete and KiCad's Syntax help (PARITY-pcb §71). Left:
   - Show Matches does not see a footprint's own fields, graphics and texts, dimensions or tables (the rule board has no item for them).
   - Dragging a category, a constraint node or an unsaved rule does nothing (KiCad moves the tree item).
-  - M. GAPS 3; PARITY-pcb §48, §63, §70.
-- **B3 [FM] Physical Stackup.** **done (task-u2-boardsetup, from task-u2-stackup)**: one row per dielectric sublayer (`addsublayer` read and written with every value and `locked`, r2 F17), Add/Remove Dielectric Layer, Impedance controlled, the thickness lock and Adjust Dielectric Thickness, the "Errors" checks; fewer copper layers ask KiCad's question and delete the items in one undoable step (PARITY-pcb §71). Left:
+  - M. GAPS 3; PARITY-pcb §48, §63, §71.
+- **B3 [FM] Physical Stackup.** **done (task-u2-boardsetup, from task-u2-stackup)**: one row per dielectric sublayer (`addsublayer` read and written with every value and `locked`, r2 F17), Add/Remove Dielectric Layer, Impedance controlled, the thickness lock and Adjust Dielectric Thickness, the "Errors" checks; fewer copper layers ask KiCad's question and delete the items in one undoable step (PARITY-pcb §72). Left:
   - The material list ("..."), Export to Clipboard, selecting an item from Show Details, pads with inner-layer shapes in the list.
-  - S. PARITY-pcb §71.
-- **B4 [FM] Net Classes.** **done (task-u2-boardsetup)**: a bus pattern (`D[0..7]`, `{SDA SCL}`) is stored as its members, in the page, Assign Netclass and the project reader (`ForEachBusMember`); the Tuning Profile column (one undo step with the classes; the Tuning Profiles page's class table is gone, as KiCad has none) and the PCB Color column with Import colors from schematic; Assign Netclass previews the matching nets on the board and the schematic; Schematic Setup's page keeps both (PARITY-pcb §69). Left:
+  - S. PARITY-pcb §72.
+- **B4 [FM] Net Classes.** **done (task-u2-boardsetup)**: a bus pattern (`D[0..7]`, `{SDA SCL}`) is stored as its members, in the page, Assign Netclass and the project reader (`ForEachBusMember`); the Tuning Profile column (one undo step with the classes; the Tuning Profiles page's class table is gone, as KiCad has none) and the PCB Color column with Import colors from schematic; Assign Netclass previews the matching nets on the board and the schematic; Schematic Setup's page keeps both (PARITY-pcb §70). Left:
   - The schematic's net class labels are not read as assignments.
   - The PCB colour is the Appearance panel's (`appearance.json`), outside Undo.
   - The Default class is first in the table (KiCad lists it last).
   - The transmission-line calculator is not ported (the Tuning Profiles grid's cells take typed values).
-  - S. PARITY-pcb §9, §69.
+  - S. PARITY-pcb §9, §70.
 - **B5 [BD] Text variables.**
   - No `@{}` math functions, VCSHASH or PIN_NAME(n).
   - Not expanded in schematic text boxes or power-symbol fields.

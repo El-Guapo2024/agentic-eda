@@ -456,7 +456,7 @@ fn add_shape(dir: &Path, shape: Shape) -> String {
 }
 
 fn set_fill(dir: &Path, id: &str, fill: ShapeFill) {
-    step(dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.to_string()], fill: Some(fill), start_ending: None, end_ending: None }), false, "test").unwrap();
+    step(dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.to_string()], fill: Some(fill), start_ending: None, end_ending: None, line_style: None }), false, "test").unwrap();
 }
 
 fn rect_shape(layer: &str, (x0, y0): (Nm, Nm), (x1, y1): (Nm, Nm)) -> Shape {
@@ -838,7 +838,7 @@ fn a_lines_endings_are_one_undo_step_described_by_the_state_and_written_to_the_b
     setup(&dir);
     let id = add_shape(&dir, bar("F.SilkS", mm(5.0), mm(10.0), mm(20.0)));
     let arrow = LineEnding { style: LineEndingStyle::Arrow, length_nm: mm(2.0), ..Default::default() };
-    step(&dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.clone()], fill: None, start_ending: Some(arrow), end_ending: Some(LineEnding::new(LineEndingStyle::ArrowOpen)) }), false, "test").unwrap();
+    step(&dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.clone()], fill: None, start_ending: Some(arrow), end_ending: Some(LineEnding::new(LineEndingStyle::ArrowOpen)), line_style: None }), false, "test").unwrap();
     let s = shape_json(&dir, &id);
     assert_eq!(s["start_ending"], serde_json::json!({ "style": "arrow", "length": 2_000_000, "width": 0, "stroke_width": 0 }));
     assert_eq!(s["end_ending"]["style"], "arrow_open");

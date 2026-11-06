@@ -58,6 +58,7 @@ mod multichannel_api;
 mod image_api;
 mod pcb_items_json;
 mod fp_items_json;
+mod dimension_api;
 mod sch_api;
 mod sch_clipboard_api;
 mod sch_control_api;

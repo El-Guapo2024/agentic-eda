@@ -127,8 +127,8 @@
     if (rect) {
       await scenario("copper rectangle", [rect.id], "Corner Radius", "0.5", async () => (await shapeOf(rect.id)).corner_radius ?? 0, 500_000);
       await scenario("copper rectangle", [rect.id], "Soldermask", true, async () => !!(await shapeOf(rect.id)).solder_mask, true);
-      await select([rect.id]);
-      t("rectangle: Line Style is read-only and says why", row("Line Style")?.classList.contains("readonly") && /solid/.test(row("Line Style")?.dataset.note ?? ""), row("Line Style")?.dataset.note ?? "no row");
+      // "Line Style" is the shape's own since UI-LEFT P5 (`set_shape_style`'s `line_style`): it was read-only
+      await scenario("copper rectangle", [rect.id], "Line Style", "dash", async () => (await shapeOf(rect.id)).dash ?? "solid", "dash");
     } else t("copper rectangle", false, "no rectangle was added");
     if (pad) {
       await scenario("pad", [`${part.ref}.${pad.num}`], "Soldermask Margin Override", "0.05", async () => (await padOf(part.ref, pad.num)).mask_margin ?? null, 50_000);

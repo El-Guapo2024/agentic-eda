@@ -32,7 +32,10 @@ export function cmdDimensionKindOf(dim: Pick<Dimension, "kind" | "height" | "hor
   }
 }
 
-/** `pcbnew.InteractiveDrawing.*Dimension`/`leader`'s own two-click (start,
+/** INACTIVE since UI-LEFT P13: the board's Draw Dimension tool runs `DRAWING_TOOL::DrawDimension`'s click sequences (kicad-port/fpDrawTools.ts
+ * `fpDimensionClick` with kicad-port/dimensionDraw.ts `boardDimensionStyle`); kept for its tests and as the record of the stand-in it was.
+ *
+ * `pcbnew.InteractiveDrawing.*Dimension`/`leader`'s own two-click (start,
  * end) placement, filled in from Board Setup's `DimensionSettings` (task
  * item 7) -- a non-degenerate starting `height`/`leader_length` the
  * properties dialog that opens right after creation lets the user tune,
@@ -105,5 +108,8 @@ export function toCmdDimension(dim: Dimension): CmdDimension {
     extension_offset: dim.extension_offset,
     extension_height: dim.extension_height,
     arrow_direction: dim.arrow_direction,
+    // A radial's or a leader's text place, or one placed by hand, and a leader's frame survive an edit that does not mention them (they were dropped).
+    ...(dim.text_pos ? { text_pos: { x: dim.text_pos[0], y: dim.text_pos[1] } } : {}),
+    ...(dim.text_frame && dim.text_frame !== "none" ? { text_frame: dim.text_frame } : {}),
   };
 }

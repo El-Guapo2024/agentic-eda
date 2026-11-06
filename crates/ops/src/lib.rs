@@ -118,6 +118,7 @@ mod sch_annotate;
 mod sch_setup;
 mod sch_clipboard;
 pub mod sch_control;
+mod sch_variants;
 mod sch_sheets;
 mod sheet_units;
 mod sheets;
@@ -1783,6 +1784,45 @@ pub enum Cmd {
         #[serde(default)]
         exclude_from_sim: Option<bool>,
     },
+    // ----------------------------------------- design variants (sch_variants.rs; KiCad 25ec2335)
+    /// `eeschema.EditorControl.addVariant` (`SCH_EDIT_FRAME::ShowAddVariantDialog`): a design variant of that name (trimmed, checked as
+    /// `ValidateNewVariantName` checks it, refused in KiCad's words) with that description.
+    AddDesignVariant {
+        name: String,
+        #[serde(default)]
+        description: String,
+    },
+    /// `eeschema.EditorControl.removeVariant` (`SCHEMATIC::DeleteVariant`): the variant and every symbol's record of it.
+    RemoveDesignVariant { name: String },
+    /// `eeschema.EditorControl.editVariantDescription` (`SCHEMATIC::SetVariantDescription`).
+    EditDesignVariantDescription {
+        name: String,
+        #[serde(default)]
+        description: String,
+    },
+    /// `eeschema.EditorControl.renameVariant` (`SCHEMATIC::RenameVariant`): the variant, its description and every record of it under `new_name`.
+    RenameDesignVariant { name: String, new_name: String },
+    /// `eeschema.EditorControl.copyVariant` (`SCHEMATIC::CopyVariant`): a variant `new_name` with the description and a copy of every record of `name`.
+    CopyDesignVariant { name: String, new_name: String },
+    /// The current variant's edit of the symbols `ids` (`SCH_SYMBOL::SetDNP( .., aVariantName )` and the other attribute setters, `SetFieldText( ..,
+    /// aVariantName )`): each flag given and each field text (a text equal to the symbol's own takes the override away), on every unit of every reference.
+    /// `variant` is a variant's name; the default variant is the symbol itself (`SetSymbolAttrs` and the field verbs).
+    SetSymbolVariant {
+        variant: String,
+        ids: Vec<String>,
+        #[serde(default)]
+        dnp: Option<bool>,
+        #[serde(default)]
+        exclude_from_bom: Option<bool>,
+        #[serde(default)]
+        exclude_from_board: Option<bool>,
+        #[serde(default)]
+        exclude_from_sim: Option<bool>,
+        #[serde(default)]
+        exclude_from_pos_files: Option<bool>,
+        #[serde(default)]
+        fields: Option<BTreeMap<String, String>>,
+    },
     /// `eeschema.EditorControl.editPageNumber` (`SCH_EDIT_TOOL::EditPageNumber`): the page number of the placement `sheet` (a
     /// `SheetInstance::id`). Letters and digits only; empty puts the sheet back to its place in the hierarchy. With `path` (the whole sheet
     /// path, the placement ids from the root down to `sheet`), the page of that sheet path only (`SCH_SHEET_PATH::SetPageNumber`), as KiCad
@@ -2327,6 +2367,12 @@ impl Cmd {
             | Cmd::SetSchematicPage { .. }
             | Cmd::Annotate { .. }
             | Cmd::SetSymbolAttrs { .. }
+            | Cmd::AddDesignVariant { .. }
+            | Cmd::RemoveDesignVariant { .. }
+            | Cmd::EditDesignVariantDescription { .. }
+            | Cmd::RenameDesignVariant { .. }
+            | Cmd::CopyDesignVariant { .. }
+            | Cmd::SetSymbolVariant { .. }
             | Cmd::SetSheetPage { .. }
             | Cmd::SetSchItemText { .. }
             | Cmd::SetSymbolLibIds { .. }
@@ -2597,6 +2643,7 @@ impl Cmd {
             Cmd::SetIpc2581Bom { .. } => vec!["ipc2581_bom"],
             Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
             Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
+            Cmd::AddDesignVariant { name, .. } | Cmd::RemoveDesignVariant { name } | Cmd::EditDesignVariantDescription { name, .. } | Cmd::RenameDesignVariant { name, .. } | Cmd::CopyDesignVariant { name, .. } => vec![name],
             Cmd::RepairBoard => vec!["repair_board"],
             Cmd::ExportFootprintsToLibrary => vec!["export_footprints"],
 
@@ -2651,6 +2698,7 @@ impl Cmd {
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
             Cmd::Annotate { .. } => vec!["annotate"],
             Cmd::SetSymbolAttrs { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SetSymbolVariant { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetSheetPage { sheet, .. } => vec![sheet.as_str()],
             Cmd::SetSchItemText { id, .. } => vec![id.as_str()],
             Cmd::SetSymbolLibIds { .. } => vec!["symbol_lib_ids"],
@@ -3381,6 +3429,15 @@ impl<'a> Board<'a> {
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
             Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
+            Cmd::AddDesignVariant { name, description } => self.add_design_variant(name, description),
+            Cmd::RemoveDesignVariant { name } => self.remove_design_variant(name),
+            Cmd::EditDesignVariantDescription { name, description } => self.edit_design_variant_description(name, description),
+            Cmd::RenameDesignVariant { name, new_name } => self.rename_design_variant(name, new_name),
+            Cmd::CopyDesignVariant { name, new_name } => self.copy_design_variant(name, new_name),
+            Cmd::SetSymbolVariant { variant, ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, exclude_from_pos_files, fields } => {
+                let flags = sch_variants::VariantFlags { dnp: *dnp, exclude_from_bom: *exclude_from_bom, exclude_from_board: *exclude_from_board, exclude_from_sim: *exclude_from_sim, exclude_from_pos_files: *exclude_from_pos_files };
+                self.set_symbol_variant(variant, ids, &flags, fields.as_ref().unwrap_or(&BTreeMap::new()))
+            }
             Cmd::SetSheetPage { sheet, page, path } => self.set_sheet_page(sheet, page, path.as_deref()),
             Cmd::SetSchItemText { id, text } => self.set_sch_item_text(id, text),
             Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),
@@ -5339,9 +5396,10 @@ impl<'a> Board<'a> {
         let sch = self.schematic_mut()?;
         let removed = sch.symbols.remove(i);
         sch_fields::drop_symbol_keys(sch, &removed.id, removed.unit);
-        // Last unit gone: its user fields (`SchematicSection::user_fields`) go with it.
+        // Last unit gone: its user fields (`SchematicSection::user_fields`) go with it, and its records of the design variants.
         if !sch.symbols.iter().any(|s| s.id == id) {
             sch.user_fields.remove(id);
+            sch.extras.symbol_variants.remove(id);
         }
         Ok(())
     }
@@ -6998,6 +7056,8 @@ mod review_tests;
 mod tests;
 #[cfg(test)]
 mod sch_control_tests;
+#[cfg(test)]
+mod sch_variants_tests;
 #[cfg(test)]
 mod board_setup_tests;
 #[cfg(test)]

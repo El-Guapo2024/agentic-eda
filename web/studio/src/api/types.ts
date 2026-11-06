@@ -654,6 +654,9 @@ interface ShapeCommon {
   /** A solder-mask opening of a shape on outer copper (`PCB_SHAPE::HasSolderMask`), and its own margin (absent: the board's). */
   solder_mask?: boolean;
   solder_mask_margin?: Nm;
+  /** The stroke's line style when it is not solid (`STROKE_PARAMS::GetLineStyle`: the board's `shape_styles`, a footprint graphic's own); absent for a solid or
+   *  `default` one. Drawn as kicad-port/strokeDash.ts cuts it (UI-LEFT P5). */
+  dash?: FpDash;
 }
 
 export type Shape =
@@ -810,7 +813,10 @@ export interface Group {
 /** `crates/model/src/ir.rs` `DimensionUnits`/`DimensionUnitsFormat`/`DimensionTextPosition`/`ArrowDirection` (task item 7). */
 export type DimensionUnits = "mm" | "mil" | "inch" | "automatic";
 export type DimensionUnitsFormat = "no_suffix" | "bare_suffix" | "paren_suffix";
-export type DimensionTextPosition = "outside" | "inline";
+/** `DIM_TEXT_POSITION`: `manual` keeps the text where it was put (`Dimension.text_pos`: the point editor's text handle, the dialog's Position mode). */
+export type DimensionTextPosition = "outside" | "inline" | "manual";
+/** `DIM_TEXT_BORDER`: a leader's frame round its text. */
+export type DimensionTextBorder = "none" | "rectangle" | "circle" | "round_rect";
 export type ArrowDirection = "inward" | "outward";
 
 /**
@@ -864,6 +870,16 @@ export interface Dimension {
   /** Fully formatted (prefix + value + units suffix + suffix, or the
    * override text if set). Draw this verbatim -- do not reformat `measured_value_nm` again. */
   text: string;
+  /** A leader's circle frame (`DIM_TEXT_BORDER::CIRCLE`), `[[cx, cy], r]` each; absent from an older backend. */
+  circles?: [[Nm, Nm], Nm][];
+  /** The text's own place (`Dimension::text_pos`: a radial's or a leader's text, or one placed by hand); null when the geometry places it. */
+  text_pos?: [Nm, Nm] | null;
+  /** A leader's frame (`DIM_TEXT_BORDER`). */
+  text_frame?: DimensionTextBorder;
+  /** An aligned or orthogonal dimension's crossbar ends (`GetCrossbarStart`, `GetCrossbarEnd`), the point editor's handles; null for the other kinds. */
+  crossbar?: [[Nm, Nm], [Nm, Nm]] | null;
+  /** A radial dimension's knee (`PCB_DIM_RADIAL::GetKnee`); null for the other kinds. */
+  knee?: [Nm, Nm] | null;
 }
 
 /** `crates/model/src/ir.rs` `DimensionSettings` (task item 7) -- Board Setup > Dimension Properties' defaults, applied once at creation (see that struct's own doc on why never retroactively). */
@@ -909,8 +925,11 @@ export interface CmdDimension {
   extension_offset: Nm;
   extension_height: Nm;
   arrow_direction: ArrowDirection;
-  /** `Dimension::text_pos`: a radial dimension's or a leader's text anchor (`SetTextPos`), as the Draw Dimension tool leaves it; absent = placed by the geometry pass. */
+  /** `Dimension::text_pos`: a radial dimension's or a leader's text anchor (`SetTextPos`), as the Draw Dimension tool leaves it, or a text placed by hand
+   *  (`text_position: "manual"`); absent = placed by the geometry pass. */
   text_pos?: PointXY;
+  /** A leader's `DIM_TEXT_BORDER` (`(text_frame N)`); absent = none. */
+  text_frame?: DimensionTextBorder;
 }
 
 // ------------------------------------------------------- Footprint Editor
@@ -1098,6 +1117,9 @@ export type Rule =
 export interface BoardState {
   name: string;
   dir: string;
+  /** The board's variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, the `(variants ..)` the derived board carries): the design's, which the
+   * schematic keeps. Absent from a backend that sends them only with the schematic (`Schematic.variants`). */
+  variants?: DesignVariantInfo[];
   outline: [Nm, Nm][] | null;
   /** The outline the way KiCad builds it from Edge.Cuts (`BOARD::GetBoardPolygonOutlines`): every outline with its cutouts, where `outline` is one polygon. Absent from an older backend. See `kicad-port/pcbOutline.ts` `boardOutlinePolygons`. */
   outline_polys?: { outer: [Nm, Nm][]; holes: [Nm, Nm][][] }[];
@@ -2104,6 +2126,26 @@ export type Cmd =
   | { op: "annotate"; reset_existing: boolean; order?: "y_then_x" | "x_then_y"; ids?: string[]; options?: AnnotateOptions }
   /** `eeschema.EditorControl.setDNP` / `setExcludeFromBOM` / `setExcludeFromBoard` / `setExcludeFromSimulation` (`SCH_EDIT_TOOL::SetAttribute`): the attributes given are set on every unit of every reference in `ids`; one left out stays. */
   | { op: "set_symbol_attrs"; ids: string[]; dnp?: boolean | null; exclude_from_bom?: boolean | null; exclude_from_board?: boolean | null; exclude_from_sim?: boolean | null }
+  /** Design variants (KiCad 25ec2335): `SCH_EDIT_FRAME::ShowAddVariantDialog` / `SCHEMATIC::AddVariant` (the name trimmed and checked as `ValidateNewVariantName` does), `DeleteVariant`
+   * (every symbol's record of it goes too), `SetVariantDescription`, `RenameVariant`, `CopyVariant`. */
+  | { op: "add_design_variant"; name: string; description: string }
+  | { op: "remove_design_variant"; name: string }
+  | { op: "edit_design_variant_description"; name: string; description: string }
+  | { op: "rename_design_variant"; name: string; new_name: string }
+  | { op: "copy_design_variant"; name: string; new_name: string }
+  /** A variant's overrides on every unit of every reference in `ids` (`SCH_SYMBOL::setVariantAttribute`, `SetFieldText( .., aVariantName )`): a key left out (or null) stays; a field text
+   * equal to the symbol's own removes its override. `variant` is never the default (the base verbs set the symbol's own values). */
+  | {
+      op: "set_symbol_variant";
+      variant: string;
+      ids: string[];
+      dnp?: boolean | null;
+      exclude_from_bom?: boolean | null;
+      exclude_from_board?: boolean | null;
+      exclude_from_sim?: boolean | null;
+      exclude_from_pos_files?: boolean | null;
+      fields?: Record<string, string> | null;
+    }
   /** `eeschema.EditorControl.editPageNumber`: the page number of the sheet placement `sheet` (its id); letters and digits, empty for "by place in the hierarchy".
    *  `path` (the sheet path, root down, ending in `sheet`): that path's page only, as KiCad keeps one per path of a sheet on a screen shown twice. */
   | { op: "set_sheet_page"; sheet: string; page: string; path?: string[] }
@@ -2786,6 +2828,26 @@ export interface SchematicSymbol {
   fields_autoplaced?: FieldsAutoplaced;
   /** What `${NAME}` in `value` and `footprint` stands for, for the symbols the state lists no `fields` of (a sheet read from a KiCad file); only the ones that differ. */
   shown?: { value?: string; footprint?: string };
+  /** The symbol's records of the design variants (KiCad 25ec2335 `SCH_SYMBOL_INSTANCE::m_Variants`, `SCH_SYMBOL_VARIANT`), by variant name. A variant with no record
+   * resolves to the symbol's own values (`SCH_SYMBOL::GetDNP( sheet, variant )` falls back to `m_DNP`). Absent from a backend built before variants. */
+  variants?: Record<string, SymbolVariantInfo>;
+}
+
+/** One `SCH_SYMBOL_VARIANT` of a placed symbol (KiCad 25ec2335 `sch_sheet_path.h`): the flags and field texts that differ from the symbol's own. A flag left out is the
+ * symbol's own; `fields` are field-text overrides by field name (`m_Fields`: Value, Footprint, Datasheet, user fields; never Reference). */
+export interface SymbolVariantInfo {
+  dnp?: boolean;
+  exclude_from_bom?: boolean;
+  exclude_from_board?: boolean;
+  exclude_from_sim?: boolean;
+  exclude_from_pos_files?: boolean;
+  fields?: Record<string, string>;
+}
+
+/** A design variant of the schematic (KiCad 25ec2335 `SCHEMATIC_SETTINGS::m_VariantDescriptions`, the project file's `schematic.variants`). */
+export interface DesignVariantInfo {
+  name: string;
+  description: string;
 }
 
 /**
@@ -3054,6 +3116,8 @@ export interface Schematic {
    *  no separator and 'A' (`SCHEMATIC_SETTINGS::SubReference`). */
   subpart_id_separator?: number | null;
   subpart_first_id?: number | null;
+  /** The design's variants (KiCad 25ec2335 `SCHEMATIC::GetVariantNames`, with the project file's descriptions), in name order; the same list on every sheet. Absent: none. */
+  variants?: DesignVariantInfo[];
   /** Schematic Setup > Formatting as the sheet is drawn by it (the sizes as KiCad reads them back); absent from an older backend. */
   setup?: SchematicSetupLook;
 }
@@ -3614,6 +3678,9 @@ export interface FieldsTableRow {
   cells: string[];
   /** True where the cell is the "-- mixed values --" placeholder. */
   mixed: boolean[];
+  /** With a design variant shown (KiCad 25ec2335 `SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::GetAttr`): true where some symbol of the row has a value in that variant other than
+   * its default one, which the grid highlights. Absent for the default variant (and from an older backend). */
+  overrides?: boolean[];
   /** A group row's per-symbol rows (what expanding it reveals). */
   children: FieldsTableRow[];
 }

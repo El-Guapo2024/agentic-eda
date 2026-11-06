@@ -97,7 +97,8 @@ export interface BomFileReply {
   text?: string;
 }
 
-export function postBomFile(body: { spec: unknown; fmt: unknown; path?: string }): Promise<BomFileReply> {
+/** `variant`: the design variant the BOM is for (KiCad 25ec2335 the table's current variant, kicad-cli's `sch export bom --variant`); absent for the default. */
+export function postBomFile(body: { spec: unknown; fmt: unknown; path?: string; variant?: string }): Promise<BomFileReply> {
   return postJson("/api/sch/bom", body);
 }
 

@@ -510,3 +510,25 @@ test("a sheet's fields are rows: the Sheetfile is the field's text, not the root
   assert.deepEqual(edit(s, ["sheet_a"], "Sheetfile", "supply.kicad_sch"), [{ op: "sch_edit", verb: "edit_sheet", id: "sheet_a", file: "supply.kicad_sch" }]);
   assert.deepEqual(edit(s, ["sheet_a"], "Sheetfile", "power"), [], "the same file without its extension");
 });
+
+test("in a design variant the attribute and field rows read and set the variant's values (KiCad 25ec2335 `GetDNPProp` / `SetDNPProp`, `SCH_SYMBOL_FIELD_PROPERTY`)", async () => {
+  const { withVariant } = await import("./designVariants");
+  const base = sheet();
+  base.symbols[0] = { ...base.symbols[0]!, variants: { Lite: { dnp: true, fields: { Value: "22k" } } } };
+  const s = withVariant(base, "Lite");
+  const row = (name: string) => schGrid(s, ["R1"], "mm", "Lite").groups.flatMap((g) => g.rows).find((r) => r.name === name);
+  assert.equal(row("Do not Populate")!.value, true, "the variant's DNP");
+  assert.equal(row("Value")!.value, "22k", "the variant's Value");
+  const plan = (name: string, value: string | boolean) => {
+    const p = schEdit(s, ["R1"], name, value, "mm", "Lite");
+    assert.equal(p.ok, true);
+    return p.ok ? p.cmds : [];
+  };
+  assert.deepEqual(plan("Do not Populate", false), [{ op: "set_symbol_variant", variant: "Lite", ids: ["R1"], dnp: false }]);
+  assert.deepEqual(plan("Exclude From Board", true), [{ op: "set_symbol_variant", variant: "Lite", ids: ["R1"], exclude_from_board: true }]);
+  assert.deepEqual(plan("Exclude From Position Files", true), [{ op: "set_symbol_variant", variant: "Lite", ids: ["R1"], exclude_from_pos_files: true }]);
+  assert.deepEqual(plan("Value", "47k"), [{ op: "set_symbol_variant", variant: "Lite", ids: ["R1"], fields: { Value: "47k" } }]);
+  assert.deepEqual(plan("Value", "22k"), [], "the variant has it already");
+  // the default variant keeps the base verbs
+  assert.deepEqual(edit(base, ["R1"], "Do not Populate", true), [{ op: "set_symbol_attrs", ids: ["R1"], dnp: true }]);
+});

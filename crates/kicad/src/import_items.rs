@@ -33,6 +33,8 @@ pub(crate) struct ItemRef {
     /// A copper shape's solder-mask opening (`(layers "F.Cu" "F.Mask")`) and its own `(solder_mask_margin ..)`, which `Shape` has no field for (`crate::import::cu_item_layers`).
     pub solder_mask: bool,
     pub solder_mask_margin: Option<Nm>,
+    /// A shape's line style (`(stroke (width ..) (type ..))`, `STROKE_PARAMS_PARSER::ParseStroke`), which `Shape` has no field for (UI-LEFT P5).
+    pub line_style: eda_model::fp_art::LineStyle,
 }
 
 impl ItemRef {
@@ -50,12 +52,13 @@ impl ItemRef {
             corner_radius: if sexpr::tag(item) == Some("gr_rect") { sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(crate::import::mm_to_nm).unwrap_or(Nm::ZERO).max(Nm::ZERO) } else { Nm::ZERO },
             solder_mask: shape && mask,
             solder_mask_margin: if shape && mask { sexpr::find(item, "solder_mask_margin").and_then(|m| sexpr::num(m, 1)).map(crate::import::mm_to_nm) } else { None },
+            line_style: if shape { eda_model::fp_art::LineStyle::of_stroke(sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "type")).and_then(|t| sexpr::txt(t, 1))) } else { Default::default() },
         }
     }
 
     /// The shape's style as the file gave it, by the id `id` the shape now has; `None` when it says nothing.
     pub(crate) fn shape_style(&self, id: &str) -> Option<eda_model::pcb_items::ShapeStyle> {
-        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), corner_radius: self.corner_radius, solder_mask: self.solder_mask, solder_mask_margin: self.solder_mask_margin, ..eda_model::pcb_items::ShapeStyle::empty(id) };
+        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), corner_radius: self.corner_radius, solder_mask: self.solder_mask, solder_mask_margin: self.solder_mask_margin, line_style: self.line_style, ..eda_model::pcb_items::ShapeStyle::empty(id) };
         (!st.is_empty()).then_some(st)
     }
 }
@@ -376,10 +379,8 @@ pub(crate) fn read_dimension(d: &[Sexpr]) -> Option<Dimension> {
     // (style (thickness ..) (arrow_length ..) (text_position_mode N) (arrow_direction ..) (extension_height ..) (extension_offset ..) [(keep_text_aligned yes)])
     let style = sexpr::find(d, "style");
     let st = |key: &str| style.and_then(|s| um_of(s, key));
-    let text_position = match style.and_then(|s| sexpr::find(s, "text_position_mode")).and_then(|v| sexpr::num(v, 1)) {
-        Some(m) if m as i64 == 1 => DimensionTextPosition::Inline,
-        _ => DimensionTextPosition::Outside,
-    };
+    // `T_text_position_mode`: `static_cast<DIM_TEXT_POSITION>( parseInt( "text position mode" ) )`, MANUAL (2) included (GAPS.md item 28: it was read as 0).
+    let text_position = style.and_then(|s| sexpr::find(s, "text_position_mode")).and_then(|v| sexpr::num(v, 1)).map_or(DimensionTextPosition::Outside, |m| DimensionTextPosition::from_code(m as i64));
     // The pre-6.0 default; the style block overrides it either way.
     let arrow_direction = match style.and_then(|s| sexpr::find(s, "arrow_direction")).and_then(|v| sexpr::txt(v, 1)) {
         Some("inward") => ArrowDirection::Inward,
@@ -411,8 +412,9 @@ pub(crate) fn read_dimension(d: &[Sexpr]) -> Option<Dimension> {
         .map(|deg| ((deg * 1000.0).round() as i64).rem_euclid(360_000) as u32)
         .unwrap_or(0);
     // A radial's and a leader's text is the user's: their `updateGeometry` draw to it and never set it (`text_position_mode` only
-    // recomputes an aligned/orthogonal text). Keep the file's `(at x y)` for the geometry pass and the writer.
-    let text_pos = if matches!(kind, DimensionKind::Radial { .. } | DimensionKind::Leader) {
+    // recomputes an aligned/orthogonal text), and so is a text placed by hand (`DIM_TEXT_POSITION::MANUAL`: `updateText` leaves it).
+    // Keep the file's `(at x y)` for the geometry pass and the writer.
+    let text_pos = if matches!(kind, DimensionKind::Radial { .. } | DimensionKind::Leader) || text_position == DimensionTextPosition::Manual {
         text.and_then(|t| sexpr::find(t, "at")).and_then(|a| {
             let x = sexpr::num(a, 1)?;
             let y = sexpr::num(a, 2)?;
