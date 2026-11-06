@@ -19,6 +19,7 @@
 //
 // Scope: see PARITY-sch.md for the full per-action table.
 import { isTerminalPoint } from "../kicad-port/schTerminalPoint";
+import { existingSingleClickItem } from "../kicad-port/schSingleClick";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Schematic } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -789,14 +790,19 @@ export function SchematicView() {
         }
 
         // `Q` (sch_drawing_tools.cpp SingleClickPlace) and the bus entry tool: a click places one where `BestSnapAnchor` puts the cursor (the
-        // connectable grid), and the tool stays armed for the next one, as real eeschema's does (Escape, or the hotkey again, leaves it).
+        // connectable grid), and the tool stays armed for the next one, as real eeschema's does (Escape, or the hotkey again, leaves it). A click on an item
+        // of the tool's kind already there (`screen->GetItem( cursorPos, 0, type )`) places nothing: a no-connect flag is removed instead ("No connects can be
+        // "toggled"/removed by clicking on them again", `commit.Push( _( "Remove No Connect Flag" ) )`), a bus entry is left as it is.
         if (state.activeTool === "sch_no_connect") {
           const [sx, sy] = snapToGrid(wx, wy);
-          api.cmd({ op: "add_no_connect", at: { x: sx, y: sy } });
+          const existing = existingSingleClickItem(sch, "no_connect", [sx, sy]);
+          if (existing) void api.cmd({ op: "delete_no_connect", id: existing });
+          else api.cmd({ op: "add_no_connect", at: { x: sx, y: sy } });
           return;
         }
         if (state.activeTool === "sch_bus_entry") {
           const [sx, sy] = snapToGrid(wx, wy);
+          if (existingSingleClickItem(sch, "bus_entry", [sx, sy])) return;
           api.cmd({ op: "add_bus_entry", at: { x: sx, y: sy }, size: { x: 2_540_000, y: 2_540_000 } });
           return;
         }

@@ -3455,7 +3455,8 @@ impl<'a> Board<'a> {
             },
             Cmd::ReplaceSchematic { content, name } => self.replace_schematic(content, name),
             Cmd::ReplaceBoard { text, name, keep_kicad_layer_names, project, rules } => self.replace_board(text, name, *keep_kicad_layer_names, project.as_deref(), rules.as_deref()),
-            Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
+            // a swap of connectable items is a commit that holds them: `SCH_COMMIT::pushSchEdit`'s `LOCAL_CLEANUP` (r3 C3-M1)
+            Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b).and_then(|_| self.commit_clean_up()),
             Cmd::PasteSch { fragment, dx, dy, mode, numbering } => self.paste_sch(fragment, *dx, *dy, *mode, *numbering).map(|_| ()),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
@@ -3491,7 +3492,8 @@ impl<'a> Board<'a> {
             }
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit, .. } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit).and_then(|_| self.commit_clean_up()),
             Cmd::EmbedLibSymbol { symbol } => self.embed_lib_symbol(symbol),
-            Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
+            // Symbol Properties' OK is a commit of a symbol, which is connectable: the commit cleans the sheet up (`LOCAL_CLEANUP`, r3 C3-M1)
+            Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()).and_then(|_| self.commit_clean_up()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
             Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
             Cmd::AddDesignVariant { name, description } => self.add_design_variant(name, description),
@@ -5476,6 +5478,14 @@ impl<'a> Board<'a> {
     /// (r3 C3-L1): Break / Slice and Repeat send this verb too, so they also run `finishSegments`' `TrimWire`, which KiCad's move finish and
     /// `RepeatDrawItem` do not.
     fn add_wire(&mut self, pts: Vec<Point>, bus: bool) -> Result<(), Vec<CheckResult>> {
+        self.add_wire_finished(pts, bus, true)
+    }
+
+    /// [`Board::add_wire`] with `trim` saying whether the two-pin parts cut the new wire between their pins (`finishSegments`' `TrimWire` pass). Break / Slice and
+    /// Repeat leave it out (r3 C3-L1, `sch_edit::SchCmd::AddWireAs`): a break is finished as a move (`finalizeMoveOperation`) and `RepeatDrawItem` runs
+    /// `TrimOverLappingWires`, `AddJunctionsIfNeeded` and the commit's `CleanUp`, neither of which cuts a wire at a part, so a repeated wire across a resistor's
+    /// pins shorts it in KiCad too. The pass runs for a bus as for a wire (`finishSegments` runs it for any draw; `TrimWire` only cuts wires, `trim_wire`'s guard).
+    pub(crate) fn add_wire_finished(&mut self, pts: Vec<Point>, bus: bool, trim: bool) -> Result<(), Vec<CheckResult>> {
         if pts.len() < 2 {
             return Err(vec![CheckResult::fail("ops_bad_wire", "wire", "a wire needs at least two points")]);
         }
@@ -5496,7 +5506,7 @@ impl<'a> Board<'a> {
             new_ends.extend(connections.iter().copied().filter(|&c| sch_scene::on_segment(a, b, c)));
         }
         scene.clean_up();
-        if !bus {
+        if trim {
             for i in 0..scene.sch.symbols.len() {
                 let pts = scene.connection_points(sch_scene::Item::Symbol(i));
                 if pts.len() > 2 {
@@ -5714,8 +5724,14 @@ impl<'a> Board<'a> {
     }
 
     /// Alt+S: see `Cmd::SwapSchItems`.
+    ///
+    /// The kinds are `SCH_EDIT_TOOL::SwappableItems` (8303b2ad): shapes, rule areas, texts, text boxes, labels of every kind, sheet pins, symbols, sheets,
+    /// images, junctions and no-connects (the studio's graphics hold the shapes, rule areas, text boxes, directive labels and images). Each takes the other's
+    /// `GetPosition()` (a sheet its corner, carrying its pins; an arc its centre, a circle its centre, a rectangle, text box or curve its start, a polygon or
+    /// rule area its first corner). Two of one type trade more: two labels their spin (`SetSpinStyle`), two texts or two text boxes their justification, two
+    /// instances of one library symbol their orientation. A bus entry is not in KiCad's list and is refused (UI-LEFT S19).
     fn swap_sch_items(&mut self, a: &str, b: &str) -> Result<(), Vec<CheckResult>> {
-        #[derive(Clone, Copy)]
+        #[derive(Clone, Copy, PartialEq)]
         enum Slot {
             Symbol(usize),
             Power(usize),
@@ -5723,6 +5739,10 @@ impl<'a> Board<'a> {
             Text(usize),
             /// A pin of a placed sheet: (sheet, pin). `SCH_EDIT_TOOL::Swap`: pins swap only with pins of the same sheet.
             SheetPin(usize, usize),
+            Sheet(usize),
+            Graphic(usize),
+            Junction(usize),
+            NoConnect(usize),
         }
         if a == b {
             return Err(vec![CheckResult::fail("ops_bad_swap", a, "a swap needs two different items")]);
@@ -5745,11 +5765,23 @@ impl<'a> Board<'a> {
                 return Ok(Slot::Text(i));
             }
             for (si, s) in sch.sheets.iter().enumerate() {
+                if s.id == id {
+                    return Ok(Slot::Sheet(si));
+                }
                 if let Some(pi) = s.pins.iter().position(|p| p.id == id) {
                     return Ok(Slot::SheetPin(si, pi));
                 }
             }
-            Err(vec![CheckResult::fail("ops_unknown_item", id, "no symbol, power symbol, label, text or sheet pin with this id to swap")])
+            if let Some(i) = sch.extras.graphics.iter().position(|g| g.id == id) {
+                return Ok(Slot::Graphic(i));
+            }
+            if let Some(i) = sch.junctions.iter().position(|j| j.id == id) {
+                return Ok(Slot::Junction(i));
+            }
+            if let Some(i) = sch.no_connects.iter().position(|n| n.id == id) {
+                return Ok(Slot::NoConnect(i));
+            }
+            Err(vec![CheckResult::fail("ops_unknown_item", id, "no symbol, power symbol, label, text, shape, sheet, sheet pin, image, junction or no-connect with this id to swap")])
         };
         let (sa, sb) = (find(a)?, find(b)?);
         // "Sheet pins are special, we need to make sure if we have any sheet pins, that we only have sheet pins, and that they have the same parent"
@@ -5758,12 +5790,21 @@ impl<'a> Board<'a> {
             (Slot::SheetPin(..), other) | (other, Slot::SheetPin(..)) if !matches!(other, Slot::SheetPin(..)) => return Err(vec![CheckResult::fail("ops_bad_swap", a, "a sheet pin swaps only with another pin of its sheet")]),
             _ => {}
         }
+        // `GetPosition()` of each kind (`EDA_SHAPE::getPosition`: an arc's centre, a polygon's first corner, else its start; `SCH_SHEET::m_pos`)
+        let graphic_at = |g: &eda_model::sch_extras::SchGraphic| match &g.shape {
+            eda_model::sch_extras::SchGraphicKind::Arc { start, mid, end } => sch_scene::arc_center_of(*start, *mid, *end),
+            _ => sch_scene::graphic_position(g),
+        };
         let at_of = |s: Slot| match s {
             Slot::Symbol(i) => sch.symbols[i].at,
             Slot::Power(i) => sch.power_symbols[i].at,
             Slot::Label(i) => sch.labels[i].at,
             Slot::Text(i) => sch.texts[i].at,
             Slot::SheetPin(si, pi) => sch.sheets[si].pins[pi].at,
+            Slot::Sheet(i) => sch.sheets[i].at,
+            Slot::Graphic(i) => graphic_at(&sch.extras.graphics[i]),
+            Slot::Junction(i) => sch.junctions[i].at,
+            Slot::NoConnect(i) => sch.no_connects[i].at,
         };
         let (pa, pb) = (at_of(sa), at_of(sb));
         // (a pin's side is where it sits on the border, so trading places trades sides, as `SCH_EDIT_TOOL::Swap` does by hand)
@@ -5773,12 +5814,29 @@ impl<'a> Board<'a> {
             Slot::Label(i) => sch.labels[i].at = p,
             Slot::Text(i) => sch.texts[i].at = p,
             Slot::SheetPin(si, pi) => sch.sheets[si].pins[pi].at = p,
+            // `SCH_SHEET::SetPosition`: the sheet moves with its pins
+            Slot::Sheet(i) => {
+                let sheet = &mut sch.sheets[i];
+                let d = Point { x: p.x - sheet.at.x, y: p.y - sheet.at.y };
+                sheet.at = p;
+                for pin in sheet.pins.iter_mut() {
+                    pin.at = Point { x: pin.at.x + d.x, y: pin.at.y + d.y };
+                }
+            }
+            // `EDA_SHAPE::setPosition`: `move( aPos - getPosition() )`
+            Slot::Graphic(i) => {
+                let g = &mut sch.extras.graphics[i];
+                let from = graphic_at(g);
+                crate::sch_move::move_graphic(g, Point { x: p.x - from.x, y: p.y - from.y });
+            }
+            Slot::Junction(i) => sch.junctions[i].at = p,
+            Slot::NoConnect(i) => sch.no_connects[i].at = p,
         };
         set_at(sa, pb);
         set_at(sb, pa);
-        // "Only swap orientations when both symbols are the same library symbol" -- a resistor and an LED have different default orientations
-        if let (Slot::Symbol(i), Slot::Symbol(j)) = (sa, sb) {
-            if sch.symbols[i].lib_id == sch.symbols[j].lib_id {
+        match (sa, sb) {
+            // "Only swap orientations when both symbols are the same library symbol" -- a resistor and an LED have different default orientations
+            (Slot::Symbol(i), Slot::Symbol(j)) if sch.symbols[i].lib_id == sch.symbols[j].lib_id => {
                 let (rot, mir, mir_y) = (sch.symbols[i].rot, sch.symbols[i].mirrored, sch.symbols[i].mirror_y);
                 sch.symbols[i].rot = sch.symbols[j].rot;
                 sch.symbols[i].mirrored = sch.symbols[j].mirrored;
@@ -5787,6 +5845,54 @@ impl<'a> Board<'a> {
                 sch.symbols[j].mirrored = mir;
                 sch.symbols[j].mirror_y = mir_y;
             }
+            // two labels of one type trade their spin ("First, swap the label orientations"); a label with no spin of its own keeps reading it off its wire
+            (Slot::Label(i), Slot::Label(j)) if std::mem::discriminant(&sch.labels[i].kind) == std::mem::discriminant(&sch.labels[j].kind) => {
+                let (ia, ib) = (sch.labels[i].id.clone(), sch.labels[j].id.clone());
+                let (spa, spb) = (sch.extras.label_spins.remove(&ia), sch.extras.label_spins.remove(&ib));
+                if let Some(s) = spb {
+                    sch.extras.label_spins.insert(ia, s);
+                }
+                if let Some(s) = spa {
+                    sch.extras.label_spins.insert(ib, s);
+                }
+            }
+            // two texts trade their justification
+            (Slot::Text(i), Slot::Text(j)) => {
+                let (ia, ib) = (sch.texts[i].id.clone(), sch.texts[j].id.clone());
+                let (ja, jb) = (sch.extras.text_justify.remove(&ia), sch.extras.text_justify.remove(&ib));
+                if let Some(v) = jb {
+                    sch.extras.text_justify.insert(ia, v);
+                }
+                if let Some(v) = ja {
+                    sch.extras.text_justify.insert(ib, v);
+                }
+            }
+            (Slot::Graphic(i), Slot::Graphic(j)) => {
+                use eda_model::sch_extras::SchGraphicKind as K;
+                let (gi, gj) = (sch.extras.graphics[i].shape.clone(), sch.extras.graphics[j].shape.clone());
+                match (gi, gj) {
+                    // two text boxes trade their justification
+                    (K::TextBox { h_align: ha, v_align: va, .. }, K::TextBox { h_align: hb, v_align: vb, .. }) => {
+                        if let K::TextBox { h_align, v_align, .. } = &mut sch.extras.graphics[i].shape {
+                            (*h_align, *v_align) = (hb, vb);
+                        }
+                        if let K::TextBox { h_align, v_align, .. } = &mut sch.extras.graphics[j].shape {
+                            (*h_align, *v_align) = (ha, va);
+                        }
+                    }
+                    // two directive labels trade their spin (the pole's direction)
+                    (K::Directive { orientation: oa, .. }, K::Directive { orientation: ob, .. }) => {
+                        if let K::Directive { orientation, .. } = &mut sch.extras.graphics[i].shape {
+                            *orientation = ob;
+                        }
+                        if let K::Directive { orientation, .. } = &mut sch.extras.graphics[j].shape {
+                            *orientation = oa;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
         }
         Ok(())
     }

@@ -252,6 +252,8 @@ fn stroke_sheet() -> SchematicSection {
     s.bus_entries.push(BusEntry { id: "bent_a".into(), at: p(mm(2.54), mm(5.08)), size: p(mm(2.54), mm(2.54)) });
     s.lines.push(SchLine { id: "sln_a".into(), pts: vec![p(Nm::ZERO, mm(12.7)), p(mm(10.16), mm(12.7))], width_nm: Nm::ZERO });
     s.junctions.push(Junction { id: "jct_a".into(), at: p(mm(5.08), Nm::ZERO) });
+    // a stem makes `jct_a` a T, a junction KiCad keeps: a stroke edit is a commit of connectable items, whose clean-up drops a junction that joins nothing (r3 C3-M1)
+    s.wires.push(Wire { id: "wire_stem".into(), net: "N".into(), pins: vec![], pts: vec![p(mm(5.08), Nm::ZERO), p(mm(5.08), mm(-2.54))], bus: false });
     s.labels.push(NetLabel { id: "lbl_a".into(), net: "N".into(), at: p(Nm::ZERO, Nm::ZERO), kind: LabelKind::Local });
     s
 }

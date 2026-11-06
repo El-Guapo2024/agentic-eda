@@ -2367,12 +2367,23 @@ export function useActionRunner() {
       );
 
       // Alt+S (swap) -- SCH_EDIT_TOOL::Swap: positions (and, for two instances of one library symbol, orientations) of the selected items are exchanged
-      // pairwise in selection order -- a Batch of `swap_sch_items`, one undo step.
+      // pairwise in selection order -- a Batch of `swap_sch_items`, one undo step. The kinds are `SwappableItems`: symbols, labels, texts, sheet pins, sheets,
+      // shapes, rule areas, text boxes, directive labels and images (the graphics), junctions and no-connects; a bus entry is not one of them.
       m.set(
         "eeschema.InteractiveEdit.swap",
         schematicOnly(() => {
           if (!sch) return;
-          const swappable = (id: string) => Boolean(api.symbolById(id) || sch.labels.some((l) => l.id === id) || sch.texts.some((t) => t.id === id) || sch.power_symbols.some((p) => p.id === id) || sch.sheets.some((s) => s.pins.some((p) => p.id === id)));
+          const swappable = (id: string) =>
+            Boolean(
+              api.symbolById(id) ||
+                sch.labels.some((l) => l.id === id) ||
+                sch.texts.some((t) => t.id === id) ||
+                sch.power_symbols.some((p) => p.id === id) ||
+                sch.sheets.some((s) => s.id === id || s.pins.some((p) => p.id === id)) ||
+                (sch.graphics ?? []).some((g) => g.id === id) ||
+                (sch.junctions ?? []).some((j) => j.id === id) ||
+                sch.no_connects.some((n) => n.id === id)
+            );
           const ids = [...state.selection].filter(swappable);
           if (ids.length < 2) return;
           void api.cmdBatch(ids.slice(0, -1).map((a, i) => ({ op: "swap_sch_items" as const, a, b: ids[i + 1]! })));

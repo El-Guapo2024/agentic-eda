@@ -411,6 +411,27 @@ pub enum SchCmd {
     /// `UpdateDesignBlockFromSelection`): `ids` -- the selection, a group included -- are linked to `block` (`Lib:Name`). A lone group with no link takes it ("Set Group Design
     /// Block Link"); anything else goes in a new group named after the block and linked to it ("Group Items"; it may hold one item). See `sch_groups.rs`.
     LinkDesignBlock { ids: Vec<String>, block: String },
+    /// A wire (or bus) that Break / Slice or Repeat puts on the sheet (r3 C3-L1): `add_wire`'s finish (`CleanUp`, a junction where one is needed) without
+    /// `finishSegments`' `TrimWire` pass, which only drawing a wire runs (`SCH_LINE_WIRE_BUS_TOOL::finishSegments`). KiCad finishes a break as a move
+    /// (`SCH_MOVE_TOOL::finalizeMoveOperation`: `TrimOverLappingWires`, `AddJunctionsIfNeeded`) and `SCH_EDIT_TOOL::RepeatDrawItem` runs
+    /// `TrimOverLappingWires`, `AddJunctionsIfNeeded` and `CleanUp`: neither cuts a wire between a two-pin part's pins, so a wire repeated across a
+    /// resistor shorts it, as in KiCad.
+    AddWireAs {
+        pts: Vec<Point>,
+        #[serde(default)]
+        bus: bool,
+        by: WireOrigin,
+    },
+}
+
+/// What made a wire [`SchCmd::AddWireAs`] puts down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireOrigin {
+    /// `SCH_EDIT_TOOL::RepeatDrawItem`.
+    Repeat,
+    /// `SCH_LINE_WIRE_BUS_TOOL::BreakSegment` (Break, Slice), finished by the move tool.
+    Break,
 }
 
 impl SchCmd {
@@ -441,6 +462,7 @@ impl SchCmd {
             SchCmd::AddToGroup { group_id, ids } => std::iter::once(group_id.as_str()).chain(ids.iter().map(String::as_str)).collect(),
             SchCmd::EditGroup { id, member_ids, .. } => std::iter::once(id.as_str()).chain(member_ids.iter().map(String::as_str)).collect(),
             SchCmd::LinkDesignBlock { ids, .. } => ids.iter().map(String::as_str).collect(),
+            SchCmd::AddWireAs { .. } => vec!["wire"],
         }
     }
 
@@ -492,6 +514,15 @@ impl SchCmd {
             SchCmd::RemoveFromGroup { ids } => format!("schematic group-remove {}", ids.join(" ")),
             SchCmd::EditGroup { id, name, .. } => format!("schematic group-properties {id} {name:?}"),
             SchCmd::LinkDesignBlock { ids, block } => format!("schematic link-design-block {block} {}", ids.join(" ")),
+            SchCmd::AddWireAs { pts, bus, by } => format!(
+                "schematic {} --pts \"{}\" --by {}",
+                if *bus { "bus" } else { "wire" },
+                pts.iter().map(|p| format!("{:.2},{:.2}", eda_model::units::to_mm(p.x), eda_model::units::to_mm(p.y))).collect::<Vec<_>>().join(" "),
+                match by {
+                    WireOrigin::Repeat => "repeat",
+                    WireOrigin::Break => "break",
+                }
+            ),
         }
     }
 
@@ -516,6 +547,7 @@ impl SchCmd {
             SchCmd::SetLineEnds { .. } => "schematic-wire",
             SchCmd::SwapPins { .. } | SchCmd::SwapPinLabels { .. } | SchCmd::SwapUnitLabels { .. } | SchCmd::PinHelper { .. } => "schematic-pins",
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => "schematic-group",
+            SchCmd::AddWireAs { .. } => "schematic-wire",
         }
     }
 
@@ -569,12 +601,16 @@ impl<'a> Board<'a> {
                 }
                 self.commit_clean_up()
             }
-            SchCmd::EditSheetPin { id, name, shape, at, size_nm, bold, italic } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at, SheetPinLookEdit { size_nm: *size_nm, bold: *bold, italic: *italic }),
-            SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id),
+            // the Properties dialogs and the swaps below edit connectable items (a sheet pin, a symbol, a label, a wire or a junction): their commit runs the
+            // clean-up, as every commit that holds one does (`SCH_COMMIT::pushSchEdit`: "Do a local clean up if there are any connectable objects in the
+            // commit", `LOCAL_CLEANUP`; r3 C3-M1)
+            SchCmd::EditSheetPin { id, name, shape, at, size_nm, bold, italic } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at, SheetPinLookEdit { size_nm: *size_nm, bold: *bold, italic: *italic }).and_then(|_| self.commit_clean_up()),
+            SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id).and_then(|_| self.commit_clean_up()),
             SchCmd::UpdateLibrarySymbols { lib_ids } => self.update_library_symbols(lib_ids),
-            SchCmd::SetBodyStyle { ids, style } => self.set_body_style(ids, *style),
+            SchCmd::SetBodyStyle { ids, style } => self.set_body_style(ids, *style).and_then(|_| self.commit_clean_up()),
             SchCmd::EditLabel { id, text, shape, spin, size_nm, bold, italic, auto_rotate, fields } => {
                 self.edit_sch_label(id, text.as_deref(), *shape, *spin, crate::sch_props::LabelLookEdit { size_nm: *size_nm, bold: *bold, italic: *italic, auto_rotate: *auto_rotate, fields: fields.clone() })
+                    .and_then(|_| self.commit_clean_up())
             }
             SchCmd::PlaceLabel { net, at, kind, spin, size_nm, bold, italic, auto_rotate } => {
                 // a label is connectable: its commit runs the clean-up (`SCH_COMMIT::pushSchEdit`, `LOCAL_CLEANUP`; r4 C4-L1)
@@ -602,8 +638,8 @@ impl<'a> Board<'a> {
             SchCmd::AddUserField { id, name, text } => self.add_user_field(id, name, text),
             SchCmd::RemoveUserField { id, name } => self.remove_user_field(id, name),
             SchCmd::EditText { id, text, size_nm, angle, h, v } => self.edit_sch_text(id, text.as_deref(), *size_nm, *angle, *h, *v),
-            SchCmd::EditSheet { id, name, file } => self.edit_sch_sheet(id, name.as_deref(), file.as_deref()),
-            SchCmd::SetStroke { ids, width_nm, style, color, diameter_nm } => self.set_sch_stroke(ids, *width_nm, *style, *color, *diameter_nm),
+            SchCmd::EditSheet { id, name, file } => self.edit_sch_sheet(id, name.as_deref(), file.as_deref()).and_then(|_| self.commit_clean_up()),
+            SchCmd::SetStroke { ids, width_nm, style, color, diameter_nm } => self.set_sch_stroke(ids, *width_nm, *style, *color, *diameter_nm).and_then(|_| self.commit_clean_up()),
             SchCmd::SetSheetProps { id, border_width_nm, border_color, fill_color, exclude_from_sim, exclude_from_bom, exclude_from_board, dnp } => self.set_sheet_props(
                 id,
                 &crate::sch_props::SheetPropsEdit { border_width_nm: *border_width_nm, border_color: *border_color, fill_color: *fill_color, exclude_from_sim: *exclude_from_sim, exclude_from_bom: *exclude_from_bom, exclude_from_board: *exclude_from_board, dnp: *dnp },
@@ -627,8 +663,8 @@ impl<'a> Board<'a> {
             SchCmd::SetTextAttrs { ids, bold, italic, color, href, font, exclude_from_sim } => self.set_sch_text_attrs(ids, &crate::sch_props::TextAttrsEdit { bold: *bold, italic: *italic, color: *color, href: href.clone(), font: font.clone(), exclude_from_sim: *exclude_from_sim }),
             SchCmd::SetLineEnds { id, start, end } => self.set_sch_line_ends(id, *start, *end),
             SchCmd::SetExcludeFromPosFiles { ids, exclude } => self.set_exclude_from_pos_files(ids, *exclude),
-            SchCmd::SetPinAlternates { id, unit, alternates, other_units } => self.set_pin_alternates(id, *unit, alternates, *other_units),
-            SchCmd::SetSymbolUnit { id, unit, new_unit, swap } => self.set_symbol_unit(id, *unit, *new_unit, *swap),
+            SchCmd::SetPinAlternates { id, unit, alternates, other_units } => self.set_pin_alternates(id, *unit, alternates, *other_units).and_then(|_| self.commit_clean_up()),
+            SchCmd::SetSymbolUnit { id, unit, new_unit, swap } => self.set_symbol_unit(id, *unit, *new_unit, *swap).and_then(|_| self.commit_clean_up()),
             SchCmd::SetFieldLooks { ids, font, color } => self.set_field_looks(ids, font.as_deref(), *color),
             SchCmd::SetPowerProps { id, footprint, datasheet, exclude_from_sim, exclude_from_bom, exclude_from_board, dnp, exclude_from_pos_files, fields } => self.set_power_props(
                 id,
@@ -643,15 +679,16 @@ impl<'a> Board<'a> {
                     fields: fields.clone(),
                 },
             ),
-            SchCmd::SwapPins { pins } => self.swap_pins(pins),
-            SchCmd::SwapPinLabels { pins } => self.swap_pin_labels(pins),
-            SchCmd::SwapUnitLabels { ids } => self.swap_unit_labels(ids),
+            SchCmd::SwapPins { pins } => self.swap_pins(pins).and_then(|_| self.commit_clean_up()),
+            SchCmd::SwapPinLabels { pins } => self.swap_pin_labels(pins).and_then(|_| self.commit_clean_up()),
+            SchCmd::SwapUnitLabels { ids } => self.swap_unit_labels(ids).and_then(|_| self.commit_clean_up()),
             SchCmd::Group { ids } => self.sch_group_items(ids),
             SchCmd::Ungroup { ids } => self.sch_ungroup_items(ids),
             SchCmd::AddToGroup { group_id, ids } => self.sch_add_to_group(group_id, ids),
             SchCmd::RemoveFromGroup { ids } => self.sch_remove_from_group(ids),
             SchCmd::EditGroup { id, name, member_ids, design_block } => self.sch_edit_group(id, name, member_ids, design_block.as_deref()),
             SchCmd::LinkDesignBlock { ids, block } => self.sch_link_design_block(ids, block),
+            SchCmd::AddWireAs { pts, bus, .. } => self.add_wire_finished(pts.clone(), *bus, false),
         }
     }
 
