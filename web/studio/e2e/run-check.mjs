@@ -7,7 +7,8 @@
 //   - the older ones that are one expression resolving to their results (a list of { name, ok, detail }, an object { ok, results }, or that as a
 //     JSON string): the expression's promise is awaited, and a global with `.results` (if the script has one) shows the progress.
 // The before-run screenshot goes to $RUN_CHECK_SHOT (default /tmp/run-check-start.png).
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve, dirname } from "node:path";
 
 const [url, file, minutes = "10"] = process.argv.slice(2);
@@ -19,6 +20,15 @@ const src = readFileSync(file, "utf8");
 const global = (src.match(/window\.(__\w+Check)\s*=/) || [])[1] ?? null;
 const { open } = await import(resolve(dirname(file), "browser.mjs"));
 const { b, p, errors, shot } = await open();
+// A check that needs a library file changed on disk by something else than the studio (UI-LEFT-2 LL3: a library edited outside is offered for reloading) asks
+// the runner: `window.__runCheckWriteFile(path, text)` writes a `.kicad_sym` or `.kicad_mod` file under the system's temporary folder (where the checks' boards
+// are served from), and nothing else.
+await p.exposeFunction("__runCheckWriteFile", (path, text) => {
+  const full = resolve(String(path));
+  if (!/\.(kicad_sym|kicad_mod)$/.test(full) || !(full.startsWith(resolve(tmpdir()) + "/") || full.startsWith("/tmp/"))) return `refused: ${full}`;
+  writeFileSync(full, String(text));
+  return "ok";
+});
 await p.goto(url, { waitUntil: "networkidle" });
 await p.waitForFunction(() => !!window.__eda, null, { timeout: 60000 });
 await shot(process.env.RUN_CHECK_SHOT || "/tmp/run-check-start.png"); // a hidden canvas learns its size only after a screenshot
