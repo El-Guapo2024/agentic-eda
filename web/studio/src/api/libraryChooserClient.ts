@@ -5,6 +5,7 @@
 import type { ChooserItem, ChooserKind } from "../kicad-port/libChooser";
 import { splitId } from "../kicad-port/libChooser";
 import { withDefaults } from "../kicad-port/libraryDefaults";
+import { clearLoadError, refreshLoadErrors, reportLoadErrors } from "../state/libraryLoadErrors";
 import { ApiError } from "./client";
 import type { LibraryFootprint, LibrarySymbol } from "./types";
 
@@ -58,7 +59,14 @@ export function fetchEntries(kind: ChooserKind, lib: string, filter?: ChooserFil
   const key = `${kind}\u0001${lib}\u0001${filterQuery(filter)}`;
   const hit = entriesCache.get(key);
   if (hit) return hit;
-  const p = get<{ entries: WireItem[]; error?: string }>(`/api/library/entries?kind=${kind}&lib=${encodeURIComponent(lib)}${filterQuery(filter)}`).then((r) => r.entries.map((w) => toItem(lib, w)));
+  const p = get<{ entries: WireItem[]; load_error?: string; error?: string }>(`/api/library/entries?kind=${kind}&lib=${encodeURIComponent(lib)}${filterQuery(filter)}`).then((r) => {
+    // a library read with errors lists the symbols that read; the warning says the rest (`GetLibraryLoadErrors`)
+    if (kind === "symbol") {
+      if (r.load_error) reportLoadErrors([{ lib, error: r.load_error }]);
+      else clearLoadError(lib);
+    }
+    return r.entries.map((w) => toItem(lib, w));
+  });
   entriesCache.set(key, p);
   p.catch(() => {
     if (entriesCache.get(key) === p) entriesCache.delete(key);
@@ -87,10 +95,18 @@ export interface SearchAnswer {
 
 /** The search over every installed library (`GET /api/library/search`): the best matches, grouped by library, best first. */
 export async function searchInstalled(kind: ChooserKind, query: string, filter?: ChooserFilter, signal?: AbortSignal): Promise<SearchAnswer> {
-  const r = await get<{ status: "ready" | "indexing"; indexed: number; total: number; matches: number; truncated: boolean; libraries: { name: string; description?: string; score: number; items: WireItem[] }[]; power_libraries?: string[]; error?: string }>(
-    `/api/library/search?kind=${kind}&q=${encodeURIComponent(query)}${filterQuery(filter)}`,
-    signal
-  );
+  const r = await get<{
+    status: "ready" | "indexing";
+    indexed: number;
+    total: number;
+    matches: number;
+    truncated: boolean;
+    libraries: { name: string; description?: string; score: number; items: WireItem[] }[];
+    power_libraries?: string[];
+    load_errors?: { lib: string; error: string }[];
+    error?: string;
+  }>(`/api/library/search?kind=${kind}&q=${encodeURIComponent(query)}${filterQuery(filter)}`, signal);
+  if (r.load_errors) reportLoadErrors(r.load_errors);
   return {
     status: r.status,
     indexed: r.indexed,
@@ -160,6 +176,35 @@ export function resetChooserCaches(): void {
   entriesCache.clear();
   symbolDetails.clear();
   footprintDetails.clear();
+  footprintSelections.clear();
+  // the libraries are others now: which of them load with errors is asked again
+  void refreshLoadErrors();
+}
+
+const footprintSelections = new Map<string, string[]>();
+
+/** What the footprint selector lists: `[]` while the server reads the libraries (it answers `indexing`), else the footprints. */
+export interface FootprintSelection {
+  status: "ready" | "indexing";
+  footprints: string[];
+}
+
+/**
+ * The footprints the Symbol Chooser's footprint selector offers for a symbol (`GET /api/library/fp_select`, pcbnew's `filterFootprints`): of the symbol's pin
+ * count and footprint filters, at most 400. `zero`: the symbol has no footprint filters (`m_zero_filter`), so with no pin count either there is nothing to list.
+ * A finished answer is kept for the page's life (until the tables change).
+ */
+export async function fetchFootprintSelection(pins: number, fpFilters: readonly string[], signal?: AbortSignal): Promise<FootprintSelection> {
+  const zero = fpFilters.length === 0;
+  const key = `${pins}\u0001${fpFilters.join(" ")}`;
+  const hit = footprintSelections.get(key);
+  if (hit) return { status: "ready", footprints: hit };
+  let q = `zero=${zero ? 1 : 0}`;
+  if (pins > 0) q += `&pins=${pins}`;
+  if (!zero) q += `&fp_filters=${encodeURIComponent(fpFilters.join(" "))}`;
+  const r = await get<{ status: "ready" | "indexing"; footprints: string[]; error?: string }>(`/api/library/fp_select?${q}`, signal);
+  if (r.status === "ready") footprintSelections.set(key, r.footprints);
+  return { status: r.status, footprints: r.footprints };
 }
 
 /** The selected installed symbol (`GET /api/library/details`): cut out of its library file on the server, only this one. */

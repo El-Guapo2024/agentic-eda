@@ -15,14 +15,31 @@
 // power symbol in the hand (actions/schPlaceActions.ts): it rides the cursor until the click that places it with `add_power_symbol` (with its
 // library definition, crates/cli/src/library_place.rs), the net its Value. Cancel places nothing and Place Power stays armed.
 //
-// Not ported: the regular-expression and relational search words (a word is searched as text, with `*` and `?`), and the Footprint selector's list of footprints
-// (the Choose button opens the Footprint Chooser instead).
+// The search takes KiCad's four kinds of word (`EDA_COMBINED_MATCHER`, CTX_LIBITEM): text, `*` / `?` wildcards, a `/regular expression/` (or `^...$`) and a
+// relational word (`resistance<10k` against a `resistance=4.7k` of the symbol's keywords or description) -- kicad-port/libChooser.ts and the server's
+// crates/cli/src/library_search.rs. Under the symbol's drawing is the footprint selector (`FOOTPRINT_SELECT_WIDGET`, `populateFootprintSelector`): "[Default]"
+// and the symbol's default footprint (or "No default footprint"), then the footprints of every library with the symbol's pin count and a name its footprint
+// filters match (pcbnew's `filterFootprints`, at most 400; none when the symbol has no filters and no pins); the one chosen is drawn below
+// (`onFootprintSelected` -> `showFootprint`) and is the footprint placed (`m_fp_override`). The "Choose..." button beside it, which opens the Footprint
+// Chooser, is the studio's. A library that loaded with errors (a broken file of a `.kicad_symdir` folder) is named under the search box, as KiCad's status
+// bar names it (`GetLibraryLoadErrors`).
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchProjectFootprintDrawing, fetchFootprintDetails, fetchProjectSymbolDrawing, fetchProjectSymbols, fetchSymbolDetails, type ProjectSymbol, type SymbolDetails } from "../api/libraryChooserClient";
+import {
+  fetchFootprintSelection,
+  fetchProjectFootprintDrawing,
+  fetchFootprintDetails,
+  fetchProjectSymbolDrawing,
+  fetchProjectSymbols,
+  fetchSymbolDetails,
+  type ProjectSymbol,
+  type SymbolDetails,
+} from "../api/libraryChooserClient";
 import { fetchInstalledLibraries } from "../api/libraryIndexClient";
 import type { LibraryFootprint, LibrarySymbol } from "../api/types";
 import { chosenOf, type ChooserItem, type ChooserRow } from "../kicad-port/libChooser";
 import { unitLetter } from "../kicad-port/unitLetter";
+import { loadErrorDetails, loadErrorSummary } from "../kicad-port/libraryLoadErrors";
+import { useLibraryLoadErrors } from "../state/libraryLoadErrors";
 import { recentItems, rememberChosen } from "../state/chooserRecent";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { carryItem, carrySymbol } from "../actions/schPlaceActions";
@@ -124,7 +141,8 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
   const unit = Math.min(Math.max(chosen && chosen.unit > 0 ? chosen.unit : unitPick, 1), units);
 
   // The default footprint, and its drawing (`PANEL_SYMBOL_CHOOSER::showFootprintFor`).
-  const footprintName = footprintOverride ?? info?.footprint ?? chosen?.item.footprint ?? "";
+  const defaultFootprint = info?.footprint ?? chosen?.item.footprint ?? "";
+  const footprintName = footprintOverride ?? defaultFootprint;
   const [footprint, setFootprint] = useState<{ name: string; drawing: LibraryFootprint | null; error: string | null } | null>(null);
   useEffect(() => {
     if (!footprintName) {
@@ -144,6 +162,40 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
     };
   }, [footprintName]);
   const fpShown = footprint && footprint.name === footprintName ? footprint : null;
+
+  // The footprint selector (`populateFootprintSelector`): the symbol's pin count (`GetGraphicalPins( 0, 1 )`; here its distinct pin numbers, the same unless two
+  // pins share one) and its footprint filters; disabled while the symbol is not loaded (`m_fp_sel_ctrl->Disable()`).
+  const selPins = info?.pins ?? (shown?.symbol ? chosen?.item.pins ?? 0 : 0);
+  const selFilters = useMemo(() => (info ? (info.fp_filters ? info.fp_filters.split(/\s+/).filter((f) => f !== "") : []) : (shown?.symbol?.footprint_filters ?? [])), [info, shown?.symbol]);
+  const selReady = !!shown && !shown.error && !power;
+  const selKey = selReady ? `${id}\u0001${selPins}\u0001${selFilters.join(" ")}` : "";
+  const [selection, setSelection] = useState<{ key: string; footprints: string[]; indexing: boolean } | null>(null);
+  useEffect(() => {
+    if (!selKey) {
+      setSelection(null);
+      return;
+    }
+    const ctl = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const ask = () =>
+      fetchFootprintSelection(selPins, selFilters, ctl.signal)
+        .then((r) => {
+          if (ctl.signal.aborted) return;
+          setSelection({ key: selKey, footprints: r.footprints, indexing: r.status === "indexing" });
+          // `filterFootprints` waits for the libraries to load: the server says it is still reading them, so ask again
+          if (r.status === "indexing") timer = setTimeout(ask, 500);
+        })
+        .catch(() => !ctl.signal.aborted && setSelection({ key: selKey, footprints: [], indexing: false }));
+    void ask();
+    return () => {
+      ctl.abort();
+      if (timer) clearTimeout(timer);
+    };
+    // selPins and selFilters are in selKey
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selKey]);
+  const selList = selection && selection.key === selKey ? selection : null;
+  const loadErrors = useLibraryLoadErrors();
 
   const place = useCallback(
     async (row: ChooserRow | undefined) => {
@@ -222,6 +274,12 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
                 <div className="chooser-hint" data-chooser-status>
                   {hint}
                 </div>
+                {loadErrors.length > 0 && (
+                  <div className="chooser-hint" style={{ color: "var(--chrome-warn)" }} title={loadErrorDetails(loadErrors)} data-chooser-load-errors>
+                    {"⚠ "}
+                    {loadErrorSummary(loadErrors)}
+                  </div>
+                )}
               </div>
               <LibChooserTree
                 kind="symbol"
@@ -258,6 +316,25 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
                       Choose…
                     </button>
                   </div>
+                  <select
+                    data-footprint-selector
+                    aria-label="Footprint"
+                    style={{ width: "100%", fontSize: 12 }}
+                    disabled={!selReady}
+                    value={footprintOverride ?? defaultFootprint}
+                    title={selList?.indexing ? "Reading the footprint libraries…" : undefined}
+                    onChange={(e) => setFootprintOverride(e.target.value === defaultFootprint ? null : e.target.value)}
+                  >
+                    <option value={defaultFootprint}>{defaultFootprint === "" ? "No default footprint" : `[Default] ${defaultFootprint}`}</option>
+                    {footprintOverride !== null && footprintOverride !== defaultFootprint && !(selList?.footprints ?? []).includes(footprintOverride) && <option value={footprintOverride}>{footprintOverride}</option>}
+                    {(selList?.footprints ?? [])
+                      .filter((f) => f !== defaultFootprint)
+                      .map((f) => (
+                        <option key={f} value={f}>
+                          {f}
+                        </option>
+                      ))}
+                  </select>
                   <FootprintPreview footprint={fpShown?.drawing ?? null} height={150} status={!footprintName ? "No footprint specified" : fpShown?.error ? fpShown.error : fpShown ? "" : "Loading…"} />
                 </>
               )}

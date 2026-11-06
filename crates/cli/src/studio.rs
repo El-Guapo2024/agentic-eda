@@ -820,6 +820,19 @@ fn handle(
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
+        // The Symbol Chooser's footprint selector (`FOOTPRINT_SELECT_WIDGET`, pcbnew's `filterFootprints`): the footprints of the symbol's pin count and filters.
+        ("GET", "/api/library/fp_select") => {
+            let filter = crate::library_search::Filter::parse(&query_value(target, "pins"), &query_value(target, "fp_filters"), "");
+            respond(stream, "200 OK", "application/json", crate::library_search::footprint_select(dir, &filter, query_value(target, "zero") == "1").to_string().as_bytes())
+        }
+        // The symbol libraries that load with errors (`GetLibraryLoadErrors`, KiCad's status bar warnings).
+        ("GET", "/api/library/load_errors") => {
+            let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
+                None => json!({ "error": "kind is footprint or symbol" }),
+                Some(kind) => crate::library_search::load_errors(dir, kind),
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
         ("GET", "/api/library/project") => respond(stream, "200 OK", "application/json", crate::library_api::project_symbols(dir).to_string().as_bytes()),
         // Save, Save Library As and Revert of the library editors into the libraries of the tables (`crate::library_save_api`): which libraries can be written,
         // which symbols differ from their file, what the file holds, and the two writes.

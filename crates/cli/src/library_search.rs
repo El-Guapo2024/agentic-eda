@@ -409,6 +409,8 @@ impl Filter {
 /// One symbol library, indexed: its symbols (sorted by name, naturally), and the terms each is searched by.
 pub(crate) struct SymbolLib {
     stamp: Option<SystemTime>,
+    /// The library loaded with errors (a file of a folder library that does not read): KiCad's message, `eda_kicad::symbol_library_load_errors`.
+    pub(crate) load_error: Option<String>,
     pub(crate) summaries: Vec<SymbolSummary>,
     terms: Vec<Vec<Term>>,
     by_name: HashMap<String, usize>,
@@ -488,14 +490,14 @@ pub(crate) fn symbol_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<Ar
             return Ok(hit.clone());
         }
     }
-    let text = eda_kicad::read_symbol_library_text(&path)?;
+    let (text, load_error) = eda_kicad::read_symbol_library(&path)?;
     let mut summaries = eda_kicad::scan_symbols(&text);
     eda_kicad::inherit_symbol_summaries(&mut summaries);
     summaries.sort_by(|a, b| natural_cmp(&a.name, &b.name).then_with(|| a.name.cmp(&b.name)));
     summaries.dedup_by(|b, a| a.name == b.name);
     let terms = summaries.iter().map(|s| symbol_terms(lib, s)).collect();
     let by_name = summaries.iter().enumerate().map(|(i, s)| (s.name.clone(), i)).collect();
-    let built = Arc::new(SymbolLib { stamp, summaries, terms, by_name });
+    let built = Arc::new(SymbolLib { stamp, load_error, summaries, terms, by_name });
     lock(symbol_cache()).insert(path, built.clone());
     Ok(built)
 }
@@ -650,7 +652,14 @@ fn footprint_item(name: &str, f: &FootprintSummary, score: Option<u32>) -> Value
 pub(crate) fn entries_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, filter: &Filter) -> Value {
     let mut v = match kind {
         Kind::Symbol => match symbol_lib(src, lib) {
-            Ok(idx) => json!({ "lib": lib, "entries": idx.summaries.iter().filter(|s| filter.symbol_passes(s.power)).map(|s| symbol_item(s, None)).collect::<Vec<_>>() }),
+            Ok(idx) => {
+                let mut v = json!({ "lib": lib, "entries": idx.summaries.iter().filter(|s| filter.symbol_passes(s.power)).map(|s| symbol_item(s, None)).collect::<Vec<_>>() });
+                // read with errors: the symbols that read are listed, and KiCad's message goes with them (`LIB_STATUS::error`)
+                if let Some(e) = &idx.load_error {
+                    v["load_error"] = json!(e);
+                }
+                v
+            }
             Err(e) => return json!({ "error": e }),
         },
         Kind::Footprint => match footprint_lib(src, lib) {
@@ -807,7 +816,84 @@ pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str,
     if filter.only_power {
         answer["power_libraries"] = json!(power_libraries);
     }
+    // The libraries read so far that loaded with errors (`LIBRARY_MANAGER_ADAPTER::GetLibraryLoadErrors`): the chooser says so, as KiCad's status bar does.
+    let load_errors: Vec<Value> = libs
+        .iter()
+        .zip(&sym_libs)
+        .filter_map(|(info, idx)| idx.as_ref()?.load_error.as_ref().map(|e| json!({ "lib": info.name, "error": e })))
+        .collect();
+    if !load_errors.is_empty() {
+        answer["load_errors"] = json!(load_errors);
+    }
     answer
+}
+
+/// `GET /api/library/load_errors?kind=symbol`: every symbol library of the tables that loads with errors, with KiCad's message (`GetLibraryLoadErrors`, which the
+/// frames put in the status bar's warnings after the libraries load: `statusBar->AddWarningMessages( "load", .. )`). A library is read for this once until it
+/// changes (`eda_kicad::symbol_library_load_errors`), and the index's reads answer it too. Footprint libraries: none (a `.pretty` file that does not read is
+/// listed by its name, as KiCad lists it).
+pub(crate) fn load_errors_in<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Value {
+    if kind != Kind::Symbol {
+        return json!({ "kind": "footprint", "errors": [] });
+    }
+    let errors: Vec<Value> = libraries_in(kind, src)
+        .iter()
+        .filter_map(|info| {
+            let path = symbol_path(src, &info.name).ok()?;
+            eda_kicad::symbol_library_load_errors(&path).map(|e| json!({ "lib": info.name, "path": path.display().to_string(), "error": e }))
+        })
+        .collect();
+    json!({ "kind": "symbol", "errors": errors })
+}
+
+pub(crate) fn load_errors(dir: &Path, kind: Kind) -> Value {
+    load_errors_in(kind, &*crate::library_tables::libs(dir, kind))
+}
+
+/// The most entries the Symbol Chooser's footprint selector lists (`FOOTPRINT_SELECT_WIDGET( .., int aMaxItems = 400 )`).
+pub(crate) const SELECT_LIMIT: usize = 400;
+
+/// `GET /api/library/fp_select?pins=&fp_filters=&zero=`: the footprints the Symbol Chooser's footprint selector lists for the selected symbol
+/// (`PANEL_SYMBOL_CHOOSER::populateFootprintSelector` -> `FOOTPRINT_SELECT_WIDGET::UpdateList` -> pcbnew's `filterFootprints`, `KIFACE_FILTER_FOOTPRINTS`): every
+/// footprint of every library with exactly the symbol's pin count of numbered pads (`GetUniquePadCount( DO_NOT_INCLUDE_NPTH )`) and a name one of its
+/// footprint filters matches whole (`EDA_PATTERN_MATCH_WILDCARD_ANCHORED`, `Lib:Name` for a filter with a colon), as `Lib:Name`, at most `limit`. With
+/// `zero` (`m_zero_filter`: the symbol has no footprint filters) and nothing to filter by (no pins either) the list is empty -- the selector then offers the
+/// default footprint alone. The libraries in the trees' order, each one's footprints by name. `filterFootprints` waits for every library to load
+/// (`BlockUntilLoaded`); here the answer says `"status": "indexing"` until the index thread has read them, with the footprints of those read, and the page
+/// asks again.
+pub(crate) fn footprint_select_in<S: LibSource + ?Sized>(src: &S, filter: &Filter, zero_filters: bool, limit: usize) -> Value {
+    let has_filters = filter.pins.is_some() || !filter.fp_filters.is_empty();
+    if zero_filters && !has_filters {
+        return json!({ "status": "ready", "footprints": [] });
+    }
+    let finished = ensure_background_index(Kind::Footprint, src);
+    let libs = libraries_in(Kind::Footprint, src);
+    let done = finished.load(AtomicOrdering::Acquire) || libs.is_empty();
+    let mut out: Vec<String> = Vec::new();
+    let (mut indexed, mut skipped) = (0usize, false);
+    'libs: for info in libs.iter() {
+        let Some(idx) = cached_footprint_lib(src, &info.name).or_else(|| done.then(|| footprint_lib(src, &info.name).ok()).flatten()) else {
+            // not read yet (once the thread is done, a library that cannot be read is no library)
+            skipped |= !done;
+            continue;
+        };
+        indexed += 1;
+        for (n, f) in idx.names.iter().zip(&idx.infos) {
+            if filter.footprint_passes(&info.name, n, f.numbered_pads) {
+                out.push(format!("{}:{n}", info.name));
+                if out.len() >= limit {
+                    break 'libs;
+                }
+            }
+        }
+    }
+    // every library up to the last one listed read (by the thread, or by an earlier request): the list is the one the finished index makes
+    let ready = done || !skipped;
+    json!({ "status": if ready { "ready" } else { "indexing" }, "indexed": indexed, "total": libs.len(), "footprints": out })
+}
+
+pub(crate) fn footprint_select(dir: &Path, filter: &Filter, zero_filters: bool) -> Value {
+    footprint_select_in(&*crate::library_tables::libs(dir, Kind::Footprint), filter, zero_filters, SELECT_LIMIT)
 }
 
 pub(crate) fn search(dir: &Path, kind: Kind, query: &str, filter: &Filter, limit: usize) -> Value {
@@ -1318,6 +1404,60 @@ mod tests {
         let e = entries_in(Kind::Footprint, &root, "Package_SO", &Filter::default());
         assert_eq!((e["entries"][0]["name"].clone(), e["entries"][0]["pads"].clone()), (json!("SOIC-8_3.9x4.9mm_P1.27mm"), json!(8)));
         assert_eq!(e["entries"][1]["pads"], 16);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `FOOTPRINT_SELECT_WIDGET::UpdateList` -> pcbnew's `filterFootprints`: the symbol's pin count and footprint filters, every library, `Lib:Name`, capped;
+    /// nothing at all for a symbol with no filters and no pins (`zero_filters`).
+    #[test]
+    fn the_footprint_selector_lists_the_footprints_of_the_symbols_pins_and_filters() {
+        let root = footprint_root("fpselect");
+        index_all(Kind::Footprint, &root);
+        let list = |pins: &str, filters: &str, zero: bool, limit: usize| -> Vec<String> {
+            let v = footprint_select_in(&root, &Filter::parse(pins, filters, ""), zero, limit);
+            assert_eq!(v["status"], "ready", "{v}");
+            v["footprints"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect()
+        };
+        assert_eq!(list("8", "SOIC*3.9x4.9mm* DIP*W7.62mm*", false, 400), ["Package_DIP:DIP-8_W7.62mm", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"], "the libraries in the trees' order");
+        assert_eq!(list("8", "", true, 400), ["Package_DIP:DIP-8_W7.62mm", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"], "no filters: the pin count alone");
+        assert_eq!(list("16", "", true, 400), ["Package_SO:SOIC-16_3.9x9.9mm_P1.27mm"]);
+        assert!(list("", "", true, 400).is_empty(), "no filters and no pins: nothing (`m_zero_filter`)");
+        assert_eq!(list("", "", false, 400).len(), 4, "zero_filters off: everything");
+        assert_eq!(list("", "soic*", false, 400), ["Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm"], "a filter alone; anchored, case folded; names in natural order");
+        assert_eq!(list("", "package_dip:*", false, 400), ["Package_DIP:DIP-8_W7.62mm"], "a filter with a colon is matched against Lib:Name");
+        assert_eq!(list("8", "", true, 1).len(), 1, "at most the limit");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// KiCad 25ec2335's `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load`: a folder library with a file that does not read is listed with what reads, and its load error goes
+    /// with the entries, the search's answer and the load-errors list (`GetLibraryLoadErrors`).
+    #[test]
+    fn a_folder_library_with_a_broken_file_lists_what_reads_and_says_it_loaded_with_errors() {
+        let root = temp_root("symdir-broken");
+        let dir = root.join("Amplifier_Operational.kicad_symdir");
+        std::fs::create_dir_all(&dir).unwrap();
+        for sym in eda_kicad::scan_symbols(AMPS) {
+            std::fs::write(dir.join(format!("{}.kicad_sym", sym.name)), format!("(kicad_symbol_lib (version 20251024)\n{}\n)\n", eda_kicad::symbol_text(AMPS, &sym))).unwrap();
+        }
+        std::fs::write(dir.join("Zbroken.kicad_sym"), "(kicad_symbol_lib (version 20251024)\n\t(symbol \"Z\" (pin").unwrap();
+        std::fs::write(root.join("Device.kicad_sym"), DEVICE).unwrap();
+        let e = entries_in(Kind::Symbol, &root, "Amplifier_Operational", &Filter::default());
+        assert_eq!(e["entries"].as_array().unwrap().len(), 3, "the good files are read: {e}");
+        let message = e["load_error"].as_str().expect("the entries say the library loaded with errors");
+        assert!(message.starts_with(&format!("Unable to read file '{}'\nExpecting ')'", dir.join("Zbroken.kicad_sym").display())), "{message}");
+        assert!(message.ends_with("The library cannot be saved until these errors are fixed manually."));
+        assert!(entries_in(Kind::Symbol, &root, "Device", &Filter::default()).get("load_error").is_none(), "a library that reads has none");
+        index_all(Kind::Symbol, &root);
+        let found = search_in(Kind::Symbol, &root, "lm358", &Filter::default(), 50);
+        assert_eq!(found["load_errors"], json!([{ "lib": "Amplifier_Operational", "error": message }]), "{found}");
+        let all = load_errors_in(Kind::Symbol, &root);
+        assert_eq!(all["errors"].as_array().unwrap().len(), 1);
+        assert_eq!(all["errors"][0]["lib"], "Amplifier_Operational");
+        // the file fixed: the next read has no error
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::remove_file(dir.join("Zbroken.kicad_sym")).unwrap();
+        assert!(entries_in(Kind::Symbol, &root, "Amplifier_Operational", &Filter::default()).get("load_error").is_none());
+        assert!(load_errors_in(Kind::Symbol, &root)["errors"].as_array().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
