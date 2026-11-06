@@ -4064,6 +4064,9 @@ export interface FieldsTableReply {
   user_presets?: Array<{ name: string; spec: FieldsTableSpec }>;
   user_fields: string[];
   rows: FieldsTableRow[];
+  /** The project's export format presets (`schematic.bom_fmt_presets`) and the format the dialog opens on (`bom_fmt_settings`), UI-LEFT-2 SS13. */
+  fmt_presets?: BomFmt[];
+  fmt_settings?: BomFmt | null;
 }
 
 /** `BOM_FMT_PRESET`. */

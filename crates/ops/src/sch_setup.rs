@@ -86,13 +86,24 @@ pub(crate) fn set_bom_presets(design: &mut Design, bom_presets: &[String], bom_f
     Ok(())
 }
 
+/// What the Symbol Fields Table keeps when it closes (`savePresetsToSchematic`, UI-LEFT-2 SS13): the project's view presets and format presets as the dialog holds
+/// them (each replacing the project's list), and the format it closes on (`m_BomFmtSettings`).
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct BomClose<'a> {
+    pub presets: Option<&'a [serde_json::Value]>,
+    pub fmt_presets: Option<&'a [serde_json::Value]>,
+    pub fmt_view: Option<&'a serde_json::Value>,
+}
+
 /// `Cmd::SetBomView`: the Symbol Fields Table's "Save preset..." (`onBomPresetChanged`: `wxTextEntryDialog( .., _( "BOM preset name:" ), _( "Save BOM Preset" ) )`, a
 /// built-in name refused, an existing one of the project's overwritten after "Overwrite existing preset?"), "Delete preset..." and the view the table closes on
 /// (`savePresetsToSchematic`: `m_BomSettings`), in the project's `schematic.bom_presets` and `schematic.bom_settings` (`SCHEMATIC_SETTINGS`). A preset is
 /// `bom_settings.cpp`'s JSON as the studio sends it.
-pub(crate) fn set_bom_view(design: &mut Design, save: Option<&serde_json::Value>, delete: Option<&str>, view: Option<&serde_json::Value>) -> Done {
+pub(crate) fn set_bom_view(design: &mut Design, save: Option<&serde_json::Value>, delete: Option<&str>, view: Option<&serde_json::Value>, close: &BomClose<'_>) -> Done {
     /// `BOM_PRESET::BuiltInPresets`' names (read-only, `m_readOnly`).
     const BUILT_IN: [&str; 4] = ["Default Editing", "Grouped By Value", "Grouped By Value and Footprint", "Attributes"];
+    /// `BOM_FMT_PRESET::BuiltInPresets`' names.
+    const BUILT_IN_FMT: [&str; 3] = ["CSV", "TSV", "Semicolons"];
     let sch = design.schematic.get_or_insert_with(crate::empty_schematic_section);
     let mut project = sch.extras.project_schematic.clone().unwrap_or_default();
     let before = project.clone();
@@ -126,6 +137,26 @@ pub(crate) fn set_bom_view(design: &mut Design, save: Option<&serde_json::Value>
     }
     if let Some(v) = view {
         project.insert("bom_settings".into(), v.clone());
+    }
+    // `savePresetsToSchematic`: the presets that are not read-only, in the dialog's (name) order, each list only when it changed
+    let read_only = |p: &serde_json::Value, names: &[&str]| names.contains(&name_of(p).as_str());
+    if let Some(all) = close.presets {
+        if let Some(bad) = all.iter().find(|p| read_only(p, &BUILT_IN) || p.get("fields_ordered").and_then(|f| f.as_array()).is_none()) {
+            return Err(vec![CheckResult::fail("ops_bad_bom_presets", name_of(bad).as_str(), "a project preset needs a name that is not a built-in one and its columns (fields_ordered)")]);
+        }
+        project.insert("bom_presets".into(), serde_json::Value::Array(all.to_vec()));
+    }
+    if let Some(all) = close.fmt_presets {
+        if let Some(bad) = all.iter().find(|p| read_only(p, &BUILT_IN_FMT) || serde_json::from_value::<crate::fields_table::BomFmt>((*p).clone()).is_err()) {
+            return Err(vec![CheckResult::fail("ops_bad_bom_presets", name_of(bad).as_str(), "a project format preset needs a name that is not a built-in one and its delimiters")]);
+        }
+        project.insert("bom_fmt_presets".into(), serde_json::Value::Array(all.to_vec()));
+    }
+    if let Some(v) = close.fmt_view {
+        if serde_json::from_value::<crate::fields_table::BomFmt>(v.clone()).is_err() {
+            return Err(vec![CheckResult::fail("ops_bad_bom_presets", "bom_fmt_settings", "a format needs its delimiters")]);
+        }
+        project.insert("bom_fmt_settings".into(), v.clone());
     }
     if project == before {
         return no_change("bom_settings", "the table's presets and view are already so");
@@ -237,18 +268,43 @@ mod tests {
     fn the_fields_tables_presets_are_saved_overwritten_and_deleted_in_the_project_and_a_built_in_one_is_not() {
         let mut d = design();
         let preset = |name: &str, filter: &str| serde_json::json!({ "name": name, "fields_ordered": [{ "name": "Reference", "label": "Reference", "show": true, "group_by": false }], "sort_field": "Reference", "sort_asc": true, "filter_string": filter, "group_symbols": true, "exclude_dnp": false, "include_excluded_from_bom": false });
-        set_bom_view(&mut d, Some(&preset("Mine", "")), None, None).unwrap();
-        set_bom_view(&mut d, Some(&preset("Mine", "R*")), None, None).unwrap();
+        set_bom_view(&mut d, Some(&preset("Mine", "")), None, None, &BomClose::default()).unwrap();
+        set_bom_view(&mut d, Some(&preset("Mine", "R*")), None, None, &BomClose::default()).unwrap();
         let project = d.schematic.as_ref().unwrap().extras.project_schematic.clone().unwrap();
         let list = project["bom_presets"].as_array().unwrap();
         assert_eq!(list.len(), 1, "saved under a name it has is an overwrite");
         assert_eq!(list[0]["filter_string"], "R*");
-        let e = set_bom_view(&mut d, Some(&preset("Attributes", "")), None, None).unwrap_err();
+        let e = set_bom_view(&mut d, Some(&preset("Attributes", "")), None, None, &BomClose::default()).unwrap_err();
         assert_eq!(e[0].hint.as_deref().unwrap_or_default(), "Default presets cannot be modified.\nPlease use a different name.");
-        set_bom_view(&mut d, None, None, Some(&preset("", "C*"))).unwrap();
+        set_bom_view(&mut d, None, None, Some(&preset("", "C*")), &BomClose::default()).unwrap();
         assert_eq!(d.schematic.as_ref().unwrap().extras.project_schematic.as_ref().unwrap()["bom_settings"]["filter_string"], "C*");
-        set_bom_view(&mut d, None, Some("Mine"), None).unwrap();
+        set_bom_view(&mut d, None, Some("Mine"), None, &BomClose::default()).unwrap();
         assert!(d.schematic.as_ref().unwrap().extras.project_schematic.as_ref().unwrap()["bom_presets"].as_array().unwrap().is_empty());
-        assert_eq!(set_bom_view(&mut d, None, Some("Mine"), None).unwrap_err()[0].check, "ops_bad_bom_presets");
+        assert_eq!(set_bom_view(&mut d, None, Some("Mine"), None, &BomClose::default()).unwrap_err()[0].check, "ops_bad_bom_presets");
+    }
+
+    /// UI-LEFT-2 SS13: what the table keeps when it closes (`savePresetsToSchematic`): the view presets and the format presets as the dialog held them, the view
+    /// and the format it closes on, in one step; a built-in name is no project preset; nothing new is refused.
+    #[test]
+    fn the_fields_table_keeps_its_presets_its_view_and_its_format_when_it_closes() {
+        let mut d = design();
+        let preset = |name: &str| serde_json::json!({ "name": name, "fields_ordered": [{ "name": "Reference", "label": "Ref", "show": true, "group_by": false }], "sort_field": "Reference", "sort_asc": true, "filter_string": "", "group_symbols": true, "exclude_dnp": false, "include_excluded_from_bom": false });
+        let fmt = |name: &str| serde_json::json!({ "name": name, "field_delimiter": "|", "string_delimiter": "", "ref_delimiter": ",", "ref_range_delimiter": "-", "keep_tabs": false, "keep_line_breaks": false });
+        let (presets, fmts) = (vec![preset("A"), preset("B")], vec![fmt("Pipes")]);
+        let view = preset("");
+        let fmt_view = fmt("");
+        set_bom_view(&mut d, None, None, Some(&view), &BomClose { presets: Some(&presets), fmt_presets: Some(&fmts), fmt_view: Some(&fmt_view) }).unwrap();
+        let project = d.schematic.as_ref().unwrap().extras.project_schematic.clone().unwrap();
+        assert_eq!(project["bom_presets"].as_array().unwrap().len(), 2);
+        assert_eq!(project["bom_fmt_presets"][0]["field_delimiter"], "|");
+        assert_eq!(project["bom_fmt_settings"]["ref_range_delimiter"], "-");
+        assert_eq!(project["bom_settings"]["fields_ordered"][0]["label"], "Ref");
+        // the same again changes nothing
+        assert_eq!(set_bom_view(&mut d, None, None, Some(&view), &BomClose { presets: Some(&presets), fmt_presets: Some(&fmts), fmt_view: Some(&fmt_view) }).unwrap_err()[0].check, "ops_no_change");
+        let bad = vec![fmt("CSV")];
+        assert_eq!(set_bom_view(&mut d, None, None, None, &BomClose { fmt_presets: Some(&bad), ..BomClose::default() }).unwrap_err()[0].check, "ops_bad_bom_presets");
+        // the command as the dialog sends it
+        let cmd: crate::Cmd = serde_json::from_value(serde_json::json!({ "op": "set_bom_view", "view": view, "presets": [preset("A")], "fmt_presets": [], "fmt_view": fmt_view })).unwrap();
+        assert!(matches!(cmd, crate::Cmd::SetBomView { presets: Some(ref p), fmt_presets: Some(ref f), .. } if p.len() == 1 && f.is_empty()));
     }
 }

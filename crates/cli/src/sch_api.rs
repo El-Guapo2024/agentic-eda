@@ -33,9 +33,20 @@ fn err(message: impl Into<String>) -> Value {
 /// name template no symbol has (`DIALOG_SYMBOL_FIELDS_TABLE::LoadFieldNames`: `for( const TEMPLATE_FIELDNAME& tfn : m_TemplateFieldNames.GetTemplateFieldNames() )
 /// AddField( tfn.m_Name, .., false, false )`), and then the view the project saved (`TransferDataToWindow`: `ApplyBomPreset( m_BomSettings )`, the `.kicad_pro`'s
 /// `schematic.bom_settings`). **Differs**: with no saved view the user fields are shown (KiCad's DefaultEditing hides every column it does not name).
+///
+/// The mandatory Description (`addMandatoryField( FIELD_T::DESCRIPTION, false, false )`) and the generated `${ITEM_NUMBER}` ("#") are columns, not shown, as
+/// `ApplyBomPreset( DefaultEditing )` leaves them (UI-LEFT-2 SS13); a symbol's field named Description is that column, not a user field's.
 fn default_spec(sch: &eda_model::ir::SchematicSection, design: &eda_model::ir::Design) -> TableSpec {
     let mut spec = TableSpec::default_editing();
+    for (name, label) in [(fields_table::DESCRIPTION, "Description"), (fields_table::ITEM_NUMBER, "#")] {
+        if !spec.columns.iter().any(|c| c.name == name) {
+            spec.columns.push(Column { name: name.to_string(), label: label.to_string(), show: false, group_by: false });
+        }
+    }
     for name in fields_table::user_field_names(sch) {
+        if fields_table::is_mandatory_field(&name) || spec.columns.iter().any(|c| c.name.eq_ignore_ascii_case(&name)) {
+            continue;
+        }
         spec.columns.push(Column { name: name.clone(), label: name, show: true, group_by: false });
     }
     let root = design.schematic.as_ref();
@@ -171,7 +182,13 @@ pub fn fields_table(dir: &Path, body: &[u8]) -> Value {
     // the project's own presets, each with its view, so the dialog can tell which one the view is (`syncBomPresetSelection`)
     let user: Vec<Value> = users.iter().filter_map(|(n, p)| Some(json!({ "name": n, "spec": TableSpec::from_bom_preset(p)? }))).collect();
     let built_in: Vec<Value> = TableSpec::built_in().into_iter().map(|(n, s)| json!({ "name": n, "spec": s })).collect();
-    json!({ "ok": true, "spec": spec, "presets": presets, "built_in_presets": built_in, "user_presets": user, "user_fields": fields_table::user_field_names(&sch), "rows": table.rows })
+    // the export's format presets (`m_BomFmtPresets`, `schematic.bom_fmt_presets`) and the format the dialog opens on (`m_BomFmtSettings`, `bom_fmt_settings`),
+    // and the view the project saved (`m_BomSettings`), which the dialog compares its closing view with (`savePresetsToSchematic`)
+    let fmt_presets: Vec<Value> = project_value(&design, "bom_fmt_presets").and_then(|v| v.as_array().cloned()).unwrap_or_default().into_iter().filter(|p| serde_json::from_value::<BomFmt>(p.clone()).is_ok()).collect();
+    let fmt_settings = project_value(&design, "bom_fmt_settings").filter(|v| serde_json::from_value::<BomFmt>(v.clone()).is_ok());
+    let bom_settings = project_value(&design, "bom_settings").filter(|v| TableSpec::from_bom_preset(v).is_some());
+    json!({ "ok": true, "spec": spec, "presets": presets, "built_in_presets": built_in, "user_presets": user, "user_fields": fields_table::user_field_names(&sch), "rows": table.rows,
+            "fmt_presets": fmt_presets, "fmt_settings": fmt_settings, "bom_settings": bom_settings, "user_preset_json": users.iter().map(|(_, p)| p.clone()).collect::<Vec<_>>() })
 }
 
 fn fmt_of(req: &Value) -> Result<BomFmt, String> {
@@ -404,6 +421,34 @@ mod tests {
         let r = ask(json!({ "find": "vcc", "replace": "VDD" }), &["AVCC", "GND"], true);
         assert_eq!(r["replaced"], json!(["AVDD", null]));
         assert_eq!(find_text(b"{}")["ok"], json!(true), "no search is an empty one");
+    }
+
+    /// UI-LEFT-2 SS13: the table opens with the mandatory Description and the generated "#" as columns not shown (`LoadFieldNames`, then
+    /// `ApplyBomPreset( DefaultEditing )`), a symbol's field named Description being that column, not a user field's of its own.
+    #[test]
+    fn the_table_opens_with_the_description_and_item_number_columns_hidden() {
+        let mut sch = eda_model::ir::SchematicSection::default();
+        sch.user_fields.entry("R1".into()).or_default().insert("Description".into(), "Resistor".into());
+        sch.user_fields.entry("R1".into()).or_default().insert("MPN".into(), "X".into());
+        let design = eda_model::ir::Design {
+            schema: eda_model::ir::SCHEMA_VERSION,
+            provenance: eda_model::ir::Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: Some(sch.clone()),
+            nets: None,
+            placement: None,
+            routing: None,
+            drawings: None,
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+        };
+        let spec = default_spec(&sch, &design);
+        let col = |n: &str| spec.columns.iter().filter(|c| c.name == n).cloned().collect::<Vec<_>>();
+        assert_eq!(col("Description").len(), 1, "one Description column");
+        assert!(!col("Description")[0].show && !col(fields_table::ITEM_NUMBER)[0].show);
+        assert_eq!(col(fields_table::ITEM_NUMBER)[0].label, "#");
+        assert!(col("MPN")[0].show, "a user field is shown (the studio's own default)");
     }
 
     #[test]

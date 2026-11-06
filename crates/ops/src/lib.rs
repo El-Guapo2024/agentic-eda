@@ -1695,7 +1695,10 @@ pub enum Cmd {
     /// The Symbol Fields Table's view presets (`DIALOG_SYMBOL_FIELDS_TABLE`, UI-LEFT S11): `save` a `BOM_PRESET` under its name ("Save preset...": a new one or one
     /// of the project's replaced, "Overwrite existing preset?"), `delete` one of the project's ("Delete preset..."), and `view` the table's view as the project
     /// keeps it (`savePresetsToSchematic`: `m_BomSettings`), in the `.kicad_pro`'s `schematic.bom_presets` / `bom_settings`. A built-in name is refused
-    /// ("Default presets cannot be modified.\nPlease use a different name."). One undo step; refused when nothing changes. See `sch_setup::set_bom_view`.
+    /// ("Default presets cannot be modified.\nPlease use a different name."). What the dialog sends when it closes (`~DIALOG_SYMBOL_FIELDS_TABLE` ->
+    /// `savePresetsToSchematic`, UI-LEFT-2 SS13): `presets`, the project's whole list of view presets as the dialog kept them, `fmt_presets` the export format
+    /// presets' (`m_BomFmtPresets`, `schematic.bom_fmt_presets`) and `fmt_view` the format it closes on (`m_BomFmtSettings`, `bom_fmt_settings`), with `view`.
+    /// One undo step; refused when nothing changes. See `sch_setup::set_bom_view`.
     SetBomView {
         #[serde(default)]
         save: Option<serde_json::Value>,
@@ -1703,6 +1706,12 @@ pub enum Cmd {
         delete: Option<String>,
         #[serde(default)]
         view: Option<serde_json::Value>,
+        #[serde(default)]
+        presets: Option<Vec<serde_json::Value>>,
+        #[serde(default)]
+        fmt_presets: Option<Vec<serde_json::Value>>,
+        #[serde(default)]
+        fmt_view: Option<serde_json::Value>,
     },
     /// Schematic Setup > Project > Bus Alias Definitions (`panel_setup_buses.cpp`): every alias of the project with its members. One undo step.
     SetBusAliases { aliases: Vec<eda_model::ir::BusAlias> },
@@ -3353,7 +3362,9 @@ impl<'a> Board<'a> {
             Cmd::SetAnnotationSettings { settings, subpart_first_id, subpart_id_separator } => sch_setup::set_annotation(&mut self.design, settings, *subpart_first_id, *subpart_id_separator),
             Cmd::SetFieldNameTemplates { fields } => sch_setup::set_field_name_templates(&mut self.design, fields),
             Cmd::SetBomPresets { bom_presets, bom_fmt_presets } => sch_setup::set_bom_presets(&mut self.design, bom_presets, bom_fmt_presets),
-            Cmd::SetBomView { save, delete, view } => sch_setup::set_bom_view(&mut self.design, save.as_ref(), delete.as_deref(), view.as_ref()),
+            Cmd::SetBomView { save, delete, view, presets, fmt_presets, fmt_view } => {
+                sch_setup::set_bom_view(&mut self.design, save.as_ref(), delete.as_deref(), view.as_ref(), &sch_setup::BomClose { presets: presets.as_deref(), fmt_presets: fmt_presets.as_deref(), fmt_view: fmt_view.as_ref() })
+            }
             Cmd::SetBusAliases { aliases } => sch_setup::set_bus_aliases(&mut self.design, aliases),
             Cmd::SetSimulator { ngspice, workbook } => simulator::set_simulator(&mut self.design, ngspice.as_ref(), workbook.as_deref()),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),

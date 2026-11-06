@@ -46,6 +46,11 @@ pub const REFERENCE: &str = "Reference";
 pub const VALUE: &str = "Value";
 pub const FOOTPRINT: &str = "Footprint";
 pub const DATASHEET: &str = "Datasheet";
+/// `FIELD_T::DESCRIPTION`, KiCad 8's fifth mandatory field (`LoadFieldNames`: `addMandatoryField( FIELD_T::DESCRIPTION, false, false )`: a column, not shown, not
+/// grouped). A placed symbol's Description is the text `SCH_SYMBOL::UpdateFields` copies from its library symbol when it is placed: here the symbol's own
+/// `Description` field where it has one (a symbol read from a KiCad file keeps it as one, `sch_import::user_fields_of`, and the table writes it so), else the
+/// library symbol's description.
+pub const DESCRIPTION: &str = "Description";
 /// `FIELDS_EDITOR_GRID_DATA_MODEL::QUANTITY_VARIABLE`.
 pub const QUANTITY: &str = "${QUANTITY}";
 /// `FIELDS_EDITOR_GRID_DATA_MODEL::ITEM_NUMBER_VARIABLE`.
@@ -97,7 +102,13 @@ pub fn is_generated_field(name: &str) -> bool {
 }
 
 fn is_mandatory(name: &str) -> bool {
-    matches!(name, REFERENCE | VALUE | FOOTPRINT | DATASHEET)
+    matches!(name, REFERENCE | VALUE | FOOTPRINT | DATASHEET | DESCRIPTION)
+}
+
+/// One of the five mandatory fields (`FIELD_T::REFERENCE` .. `FIELD_T::DESCRIPTION`), which the field list cannot rename or remove ("The first %d fields are
+/// mandatory.").
+pub fn is_mandatory_field(name: &str) -> bool {
+    is_mandatory(name)
 }
 
 // ---------------------------------------------------------------------
@@ -507,6 +518,10 @@ fn field_value(sch: &SchematicSection, model: &ConstraintModel, sym: &SymbolInst
         FOOTPRINT => sym.footprint.clone(),
         DATASHEET => sym.datasheet.clone(),
         attr if is_attribute(attr) => attribute_value(sym, attr).to_string(),
+        // the symbol's own Description, else what placing it copied from its library symbol (`UpdateFields`)
+        DESCRIPTION => sch.user_fields.get(&sym.id).and_then(|m| m.get(DESCRIPTION)).cloned().unwrap_or_else(|| {
+            model.part(&sym.id).and_then(|p| model.real_symbol_of(&sym.lib_id, p)).map(|l| l.description).unwrap_or_default()
+        }),
         other => sch.user_fields.get(&sym.id).and_then(|m| m.get(other)).cloned().unwrap_or_default(),
     }
 }
@@ -1397,6 +1412,29 @@ mod tests {
             sym("R4", "1k", "R_0603", 1),
             sym("C1", "100n", "C_0603", 1),
         ])
+    }
+
+    /// UI-LEFT-2 SS13: the Description column (`FIELD_T::DESCRIPTION`): the symbol's own Description field, else its library symbol's description (what
+    /// `UpdateFields` copied when it was placed); a mandatory field, not removed or renamed.
+    #[test]
+    fn the_description_column_reads_the_symbols_field_else_the_library_symbols_and_is_mandatory() {
+        let mut part = eda_model::Part { reference: "R1".into(), mpn: None, lcsc: None, value: Some("10k".into()), package: None, footprint: None, symbol: None, datasheet: None, pins: (1..=2).map(|i| eda_model::Pin { number: i.to_string(), name: None, kind: eda_model::PinKind::Passive }).collect(), body_nm: None, edge: None };
+        let model = ConstraintModel { parts: vec![part.clone(), { part.reference = "R2".into(); part }], ..Default::default() };
+        let mut r1 = sym("R1", "10k", "", 1);
+        r1.lib_id = "Device:R".into();
+        let mut r2 = sym("R2", "10k", "", 1);
+        r2.lib_id = "Device:R".into();
+        let mut s = sch(vec![r1, r2]);
+        s.user_fields.entry("R2".into()).or_default().insert(DESCRIPTION.into(), "Mine".into());
+        let spec = TableSpec { columns: vec![Column { name: REFERENCE.into(), label: "Reference".into(), show: true, group_by: false }, Column { name: DESCRIPTION.into(), label: "Description".into(), show: true, group_by: false }], group_symbols: false, ..TableSpec::default_editing() };
+        let t = build_table(&s, &model, &spec);
+        let cell = |r: &str| t.rows.iter().find(|row| row.refs == [r]).unwrap().cells[1].clone();
+        assert_eq!(cell("R1"), "Resistor", "Device:R's description");
+        assert_eq!(cell("R2"), "Mine");
+        assert!(apply_field_changes(&mut s.clone(), &FieldChanges { remove_fields: vec![DESCRIPTION.into()], ..Default::default() }).is_err(), "mandatory");
+        // an edit writes the symbol's own Description
+        apply_field_changes(&mut s, &FieldChanges { edits: vec![FieldEdit { id: "R1".into(), field: DESCRIPTION.into(), value: "Pull-up".into() }], ..Default::default() }).unwrap();
+        assert_eq!(s.user_fields["R1"][DESCRIPTION], "Pull-up");
     }
 
     #[test]
