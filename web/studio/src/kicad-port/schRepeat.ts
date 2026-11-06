@@ -42,12 +42,18 @@ export interface RepeatContext {
   cursor: readonly [number, number] | null;
   /** The reference the clone takes (`AnnotateSymbols`): given the source symbol's reference, the next free one with the same prefix. */
   nextReference: (sourceId: string) => string;
+  /** Preferences > Schematic Editor > Editing Options' Repeated Items, "Horizontal pitch:" and "Vertical pitch:" (`default_repeat_offset_x` / `_y`), nm;
+   *  `REPEAT_OFFSET_NM` when absent. */
+  offsetNm?: readonly [number, number];
+  /** Its "Label increment:" (`repeat_label_increment`); 1 when absent. */
+  labelIncrement?: number;
 }
-
-const shift = (p: { x: number; y: number }) => ({ x: p.x + REPEAT_OFFSET_NM[0], y: p.y + REPEAT_OFFSET_NM[1] });
 
 /** The commands that place the next copy of `source`. */
 export function repeatCmds(source: readonly Cmd[], ctx: RepeatContext): Cmd[] {
+  const [ox, oy] = ctx.offsetNm ?? REPEAT_OFFSET_NM;
+  const inc = ctx.labelIncrement ?? 1;
+  const shift = (p: { x: number; y: number }) => ({ x: p.x + ox, y: p.y + oy });
   const out: Cmd[] = [];
   for (const c of source) {
     if (!isRepeatable(c)) continue;
@@ -55,10 +61,10 @@ export function repeatCmds(source: readonly Cmd[], ctx: RepeatContext): Cmd[] {
       case "sch_edit":
         // the dialog's properties come along; a label's text steps on
         if (c.verb === "add_wire_as") out.push({ ...c, pts: c.pts.map(shift) });
-        else out.push(c.verb === "place_label" ? { ...c, net: incrementLabelText(c.net, 1), at: shift(c.at) } : { ...c, at: shift(c.at) });
+        else out.push(c.verb === "place_label" ? { ...c, net: incrementLabelText(c.net, inc), at: shift(c.at) } : { ...c, at: shift(c.at) });
         break;
       case "add_label":
-        out.push({ ...c, net: incrementLabelText(c.net, 1), at: shift(c.at) });
+        out.push({ ...c, net: incrementLabelText(c.net, inc), at: shift(c.at) });
         break;
       case "add_sch_text":
       case "add_power_symbol":

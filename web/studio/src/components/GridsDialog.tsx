@@ -67,57 +67,127 @@ export function GridsDialog() {
   return <GridsDialogBody initial={editor} />;
 }
 
-function GridsDialogBody({ initial }: { initial: GridEditor }) {
+/** Each editor's current grid size (the row its page starts on). */
+function useCurrentGrids(): Record<GridEditor, number> {
   const state = useStudioState();
-  const dispatch = useStudioDispatch();
   const fp = useFpState();
-  const fpDispatch = useFpDispatch();
   const sym = useSymState();
+  return { pcb: state.gridNm, footprint: fp.gridNm, symbol: sym.gridNm, schematic: state.schGridNm };
+}
+
+/** A page as the dialog opens it: the editor's kept list, its current grid's row, its overrides. */
+function initialPage(e: GridEditor, currentGrid: Record<GridEditor, number>): Page {
+  const settings = getGridSettings(e);
+  return { settings, row: Math.max(0, settings.grids.findIndex((g) => Math.abs(g - currentGrid[e]) < 1e-9)), overrides: getGridOverrides(e) };
+}
+
+/**
+ * The Grids pages' working copies (`PANEL_GRID_SETTINGS`, one per editor), for Edit Grids' dialog and the Preferences dialog: `commit` is OK (`TransferDataFromWindow`
+ * of each page that was shown: its list, its overrides, and the row selected made the editor's current grid), `reset` the page's `ResetPanel`.
+ */
+export function useGridsPages(initial: GridEditor | null): {
+  pages: Record<GridEditor, Page>;
+  setPage: (e: GridEditor, next: Page) => void;
+  show: (e: GridEditor) => void;
+  commit: () => void;
+  reset: (e: GridEditor) => void;
+  restart: (initial: GridEditor | null) => void;
+} {
+  const dispatch = useStudioDispatch();
+  const fpDispatch = useFpDispatch();
   const symDispatch = useSymDispatch();
-  const units = state.units;
-
-  const currentGrid: Record<GridEditor, number> = { pcb: state.gridNm, footprint: fp.gridNm, symbol: sym.gridNm, schematic: state.schGridNm };
-  const [pages, setPages] = useState<Record<GridEditor, Page>>(() => {
-    const page = (e: GridEditor): Page => {
-      const settings = getGridSettings(e);
-      return { settings, row: Math.max(0, settings.grids.findIndex((g) => Math.abs(g - currentGrid[e]) < 1e-9)), overrides: getGridOverrides(e) };
-    };
-    return { pcb: page("pcb"), footprint: page("footprint"), symbol: page("symbol"), schematic: page("schematic") };
-  });
-  const [editor, setEditor] = useState<GridEditor>(initial);
+  const currentGrid = useCurrentGrids();
+  const all = (): Record<GridEditor, Page> => ({ pcb: initialPage("pcb", currentGrid), footprint: initialPage("footprint", currentGrid), symbol: initialPage("symbol", currentGrid), schematic: initialPage("schematic", currentGrid) });
+  const [pages, setPages] = useState<Record<GridEditor, Page>>(all);
   /** The pages that were shown: OK makes the row selected on each of them the current grid of its editor (a page never opened is left as it was). */
-  const [seen, setSeen] = useState<ReadonlySet<GridEditor>>(new Set([initial]));
-  const [entry, setEntry] = useState<Entry | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [seen, setSeen] = useState<ReadonlySet<GridEditor>>(new Set(initial ? [initial] : []));
+  return {
+    pages,
+    setPage: (e, next) => setPages((p) => ({ ...p, [e]: next })),
+    show: (e) => setSeen((s) => (s.has(e) ? s : new Set(s).add(e))),
+    restart: (first) => {
+      setPages(all());
+      setSeen(new Set(first ? [first] : []));
+    },
+    commit: () => {
+      for (const e of GRID_EDITORS) {
+        if (!seen.has(e)) continue;
+        const { settings: s, row: r, overrides: o } = pages[e];
+        setGridSettings(e, s);
+        setGridOverrides(e, o);
+        const um = s.grids[r];
+        if (um === undefined || Math.abs(um - currentGrid[e]) < 1e-9) continue;
+        if (e === "pcb") dispatch({ type: "SET_GRID_NM", um });
+        else if (e === "schematic") dispatch({ type: "SET_SCH_GRID_NM", um });
+        else if (e === "footprint") fpDispatch({ type: "SET_GRID_NM", um });
+        else symDispatch({ type: "SET_GRID_NM", um });
+      }
+    },
+    reset: (e) =>
+      setPages((p) => {
+        const page = p[e];
+        const next = resetGrids(page.settings, e);
+        const keptAt = gridDefs(next).findIndex((g) => sameGrid(g, gridAt(page.settings, page.row)));
+        // `ResetPanel` puts the list back (only the list); the overrides keep their grids, as after any edit of the list.
+        return { ...p, [e]: { settings: next, row: Math.max(0, keptAt), overrides: rebuildOverrides(page.overrides, gridDefs(page.settings), gridDefs(next), sameGrid) } };
+      }),
+  };
+}
 
-  const page = pages[editor];
-  const { settings, row } = page;
-  const setPage = (next: Page) => setPages((p) => ({ ...p, [editor]: next }));
+function GridsDialogBody({ initial }: { initial: GridEditor }) {
+  const grids = useGridsPages(initial);
+  const [editor, setEditor] = useState<GridEditor>(initial);
   const close = () => setGridsDialogOpen(null);
 
   const showEditor = (e: GridEditor) => {
     setEditor(e);
-    setSeen((s) => new Set(s).add(e));
-    setEntry(null);
-    setError(null);
+    grids.show(e);
   };
 
   const ok = () => {
-    for (const e of GRID_EDITORS) {
-      if (!seen.has(e)) continue;
-      const { settings: s, row: r, overrides: o } = pages[e];
-      setGridSettings(e, s);
-      setGridOverrides(e, o);
-      const um = s.grids[r];
-      if (um === undefined || Math.abs(um - currentGrid[e]) < 1e-9) continue;
-      if (e === "pcb") dispatch({ type: "SET_GRID_NM", um });
-      else if (e === "schematic") dispatch({ type: "SET_SCH_GRID_NM", um });
-      else if (e === "footprint") fpDispatch({ type: "SET_GRID_NM", um });
-      else symDispatch({ type: "SET_GRID_NM", um });
-    }
+    grids.commit();
     close();
   };
 
+  return (
+    <div className="dialog-backdrop" onClick={close}>
+      <div className="dialog" style={{ width: 460 }} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === "Escape" && close()} role="dialog" aria-label="Preferences - Grids">
+        <div className="dialog-header">
+          <span>Preferences - Grids</span>
+        </div>
+        <div className="dialog-body">
+          <div className="kv-grid" style={{ gridTemplateColumns: "70px 1fr" }}>
+            <span>Editor:</span>
+            <select aria-label="Editor" value={editor} onChange={(e) => showEditor(e.target.value as GridEditor)}>
+              {GRID_EDITORS.map((e) => (
+                <option key={e} value={e}>
+                  {GRID_EDITOR_LABEL[e]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <GridsPageBody key={editor} editor={editor} page={grids.pages[editor]} setPage={(next) => grids.setPage(editor, next)} />
+        </div>
+        <div className="dialog-footer" style={{ justifyContent: "space-between" }}>
+          <button onClick={() => grids.reset(editor)}>Reset to Defaults</button>
+          <span style={{ display: "flex", gap: 8 }}>
+            <button onClick={close}>Cancel</button>
+            <button className="primary" onClick={ok}>
+              OK
+            </button>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** One editor's Grids page (`PANEL_GRID_SETTINGS`): the list and its buttons, Grid Settings, Grid Overrides, Fast Grid Switching. */
+export function GridsPageBody({ editor, page, setPage }: { editor: GridEditor; page: Page; setPage: (next: Page) => void }) {
+  const units = useStudioState().units;
+  const [entry, setEntry] = useState<Entry | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const { settings, row } = page;
   /** `OnAddGrid` / `onEditGrid`: the new grid starts empty with Linked on; an edited one shows its name and X, and its Y unless it is square (`TransferDataToWindow`). */
   const openEntry = (mode: "add" | "edit") => {
     const g = mode === "edit" ? gridAt(settings, row) : undefined;
@@ -147,15 +217,6 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
     setError(null);
   };
 
-  const reset = () => {
-    const next = resetGrids(settings, editor);
-    const keptAt = gridDefs(next).findIndex((g) => sameGrid(g, gridAt(settings, row)));
-    // `ResetPanel` puts the list back (only the list); the overrides keep their grids, as after any edit of the list.
-    setPage({ settings: next, row: Math.max(0, keptAt), overrides: rebuildOverrides(page.overrides, gridDefs(settings), gridDefs(next), sameGrid) });
-    setEntry(null);
-    setError(null);
-  };
-
   const setOverride = (category: Exclude<keyof GridOverrides, "enabled">, patch: Partial<{ on: boolean; index: number }>) =>
     setPage({ ...page, overrides: { ...page.overrides, [category]: { ...page.overrides[category], ...patch } } });
 
@@ -170,123 +231,97 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
     </button>
   );
 
+
   return (
-    <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 460 }} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === "Escape" && close()} role="dialog" aria-label="Preferences - Grids">
-        <div className="dialog-header">
-          <span>Preferences - Grids</span>
+    <div data-grids-page={editor}>
+      <div style={{ marginTop: 10, fontWeight: 600 }}>Grids</div>
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <select aria-label="Grids" size={9} value={row} onChange={(e) => setPage({ ...page, row: Number(e.target.value) })} style={{ flex: 1 }}>
+          {gridOptions}
+        </select>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {iconButton("Add Grid", "+", () => openEntry("add"))}
+          {iconButton("Edit Grid", "✎", () => openEntry("edit"))}
+          {iconButton("Remove Grid", "−", () => apply(removeGrid(settings, row)), settings.grids.length <= 1)}
+          {iconButton("Move Grid Up", "▲", () => apply(moveGrid(settings, row, -1)), settings.grids.length <= 1 || row <= 0)}
+          {iconButton("Move Grid Down", "▼", () => apply(moveGrid(settings, row, 1)), settings.grids.length <= 1 || row >= settings.grids.length - 1)}
         </div>
-        <div className="dialog-body">
-          <div className="kv-grid" style={{ gridTemplateColumns: "70px 1fr" }}>
-            <span>Editor:</span>
-            <select aria-label="Editor" value={editor} onChange={(e) => showEditor(e.target.value as GridEditor)}>
-              {GRID_EDITORS.map((e) => (
-                <option key={e} value={e}>
-                  {GRID_EDITOR_LABEL[e]}
-                </option>
-              ))}
-            </select>
-          </div>
+      </div>
 
-          <div style={{ marginTop: 10, fontWeight: 600 }}>Grids</div>
-          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-            <select aria-label="Grids" size={9} value={row} onChange={(e) => setPage({ ...page, row: Number(e.target.value) })} style={{ flex: 1 }}>
-              {gridOptions}
-            </select>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {iconButton("Add Grid", "+", () => openEntry("add"))}
-              {iconButton("Edit Grid", "✎", () => openEntry("edit"))}
-              {iconButton("Remove Grid", "−", () => apply(removeGrid(settings, row)), settings.grids.length <= 1)}
-              {iconButton("Move Grid Up", "▲", () => apply(moveGrid(settings, row, -1)), settings.grids.length <= 1 || row <= 0)}
-              {iconButton("Move Grid Down", "▼", () => apply(moveGrid(settings, row, 1)), settings.grids.length <= 1 || row >= settings.grids.length - 1)}
-            </div>
+      {entry && (
+        <div role="group" aria-label="Grid Settings" style={{ marginTop: 8, padding: 8, border: "1px solid var(--chrome-border)" }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Grid Settings</div>
+          <div
+            className="kv-grid"
+            style={{ gridTemplateColumns: "50px 1fr 50px", rowGap: 4 }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitEntry();
+              } else if (e.key === "Escape") {
+                e.stopPropagation();
+                setEntry(null);
+                setError(null);
+              }
+            }}
+          >
+            <span>Name:</span>
+            <input aria-label="Grid name" autoFocus value={entry.name} onChange={(e) => setEntry({ ...entry, name: e.target.value })} />
+            <span style={{ opacity: 0.7 }}>(optional)</span>
+            <span>X:</span>
+            <input aria-label="Grid size X" value={entry.x} onChange={(e) => setEntry({ ...entry, x: e.target.value })} />
+            <span>{units}</span>
+            <span />
+            <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" aria-label="Linked" checked={entry.linked} onChange={(e) => setEntry({ ...entry, linked: e.target.checked })} />
+              Linked
+            </label>
+            <span />
+            <span>Y:</span>
+            <input aria-label="Grid size Y" disabled={entry.linked} value={entry.linked ? "" : entry.y} onChange={(e) => setEntry({ ...entry, y: e.target.value })} />
+            <span>{units}</span>
           </div>
-
-          {entry && (
-            <div role="group" aria-label="Grid Settings" style={{ marginTop: 8, padding: 8, border: "1px solid var(--chrome-border)" }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>Grid Settings</div>
-              <div
-                className="kv-grid"
-                style={{ gridTemplateColumns: "50px 1fr 50px", rowGap: 4 }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    commitEntry();
-                  } else if (e.key === "Escape") {
-                    e.stopPropagation();
-                    setEntry(null);
-                    setError(null);
-                  }
-                }}
-              >
-                <span>Name:</span>
-                <input aria-label="Grid name" autoFocus value={entry.name} onChange={(e) => setEntry({ ...entry, name: e.target.value })} />
-                <span style={{ opacity: 0.7 }}>(optional)</span>
-                <span>X:</span>
-                <input aria-label="Grid size X" value={entry.x} onChange={(e) => setEntry({ ...entry, x: e.target.value })} />
-                <span>{units}</span>
-                <span />
-                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <input type="checkbox" aria-label="Linked" checked={entry.linked} onChange={(e) => setEntry({ ...entry, linked: e.target.checked })} />
-                  Linked
-                </label>
-                <span />
-                <span>Y:</span>
-                <input aria-label="Grid size Y" disabled={entry.linked} value={entry.linked ? "" : entry.y} onChange={(e) => setEntry({ ...entry, y: e.target.value })} />
-                <span>{units}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
-                <button onClick={() => (setEntry(null), setError(null))}>Cancel</button>
-                <button className="primary" onClick={commitEntry}>
-                  OK
-                </button>
-              </div>
-            </div>
-          )}
-          {error && (
-            <div role="alert" style={{ marginTop: 6, color: "var(--error, #c0392b)", fontSize: 12 }}>
-              {error}
-            </div>
-          )}
-
-          <div style={{ marginTop: 12, fontWeight: 600 }}>Grid Overrides</div>
-          <div className="kv-grid" style={{ gridTemplateColumns: "130px 1fr", marginTop: 4, rowGap: 4 }}>
-            {overrideRows(editor).map(({ category, label }) => (
-              <span key={category} style={{ display: "contents" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <input type="checkbox" aria-label={`${label} grid override`} checked={page.overrides[category].on} onChange={(e) => setOverride(category, { on: e.target.checked })} />
-                  {label}:
-                </label>
-                <select aria-label={`${label} override grid`} value={safeOverrideIndex(page.overrides[category].index, settings.grids.length)} disabled={!page.overrides[category].on} onChange={(e) => setOverride(category, { index: Number(e.target.value) })}>
-                  {gridOptions}
-                </select>
-              </span>
-            ))}
-          </div>
-
-          <div style={{ marginTop: 12, fontWeight: 600 }}>Fast Grid Switching</div>
-          <div className="kv-grid" style={{ gridTemplateColumns: "70px 1fr 70px", marginTop: 4 }}>
-            <span>Grid 1:</span>
-            <select aria-label="Grid 1" value={settings.fast1} onChange={(e) => setPage({ ...page, settings: { ...settings, fast1: Number(e.target.value) } })}>
-              {gridOptions}
-            </select>
-            <span style={{ opacity: 0.7 }}>{hotkeyLabel("common.Control.gridFast1")}</span>
-            <span>Grid 2:</span>
-            <select aria-label="Grid 2" value={settings.fast2} onChange={(e) => setPage({ ...page, settings: { ...settings, fast2: Number(e.target.value) } })}>
-              {gridOptions}
-            </select>
-            <span style={{ opacity: 0.7 }}>{hotkeyLabel("common.Control.gridFast2")}</span>
-          </div>
-        </div>
-        <div className="dialog-footer" style={{ justifyContent: "space-between" }}>
-          <button onClick={reset}>Reset to Defaults</button>
-          <span style={{ display: "flex", gap: 8 }}>
-            <button onClick={close}>Cancel</button>
-            <button className="primary" onClick={ok}>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button onClick={() => (setEntry(null), setError(null))}>Cancel</button>
+            <button className="primary" onClick={commitEntry}>
               OK
             </button>
-          </span>
+          </div>
         </div>
+      )}
+      {error && (
+        <div role="alert" style={{ marginTop: 6, color: "var(--error, #c0392b)", fontSize: 12 }}>
+          {error}
+        </div>
+      )}
+
+      <div style={{ marginTop: 12, fontWeight: 600 }}>Grid Overrides</div>
+      <div className="kv-grid" style={{ gridTemplateColumns: "130px 1fr", marginTop: 4, rowGap: 4 }}>
+        {overrideRows(editor).map(({ category, label }) => (
+          <span key={category} style={{ display: "contents" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" aria-label={`${label} grid override`} checked={page.overrides[category].on} onChange={(e) => setOverride(category, { on: e.target.checked })} />
+              {label}:
+            </label>
+            <select aria-label={`${label} override grid`} value={safeOverrideIndex(page.overrides[category].index, settings.grids.length)} disabled={!page.overrides[category].on} onChange={(e) => setOverride(category, { index: Number(e.target.value) })}>
+              {gridOptions}
+            </select>
+          </span>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 12, fontWeight: 600 }}>Fast Grid Switching</div>
+      <div className="kv-grid" style={{ gridTemplateColumns: "70px 1fr 70px", marginTop: 4 }}>
+        <span>Grid 1:</span>
+        <select aria-label="Grid 1" value={settings.fast1} onChange={(e) => setPage({ ...page, settings: { ...settings, fast1: Number(e.target.value) } })}>
+          {gridOptions}
+        </select>
+        <span style={{ opacity: 0.7 }}>{hotkeyLabel("common.Control.gridFast1")}</span>
+        <span>Grid 2:</span>
+        <select aria-label="Grid 2" value={settings.fast2} onChange={(e) => setPage({ ...page, settings: { ...settings, fast2: Number(e.target.value) } })}>
+          {gridOptions}
+        </select>
+        <span style={{ opacity: 0.7 }}>{hotkeyLabel("common.Control.gridFast2")}</span>
       </div>
     </div>
   );

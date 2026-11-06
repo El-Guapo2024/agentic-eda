@@ -89,6 +89,7 @@ export function SymbolPickerDialog(props: SymbolPick) {
 }
 
 function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, number]; pick?: SymbolPick }) {
+  const showFootprints = useStudioState().prefs.schFootprintPreview;
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const close = () => (pick ? pick.onCancel() : dispatch(power ? { type: "SET_SCH_POWER_PENDING", pending: null } : { type: "SET_SYMBOL_CHOOSER_OPEN", open: false }));
@@ -329,7 +330,9 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
                   ))}
                 </div>
               )}
-              {id && !power && !pick && (
+              {/* `PANEL_SYMBOL_CHOOSER`'s `m_show_footprints`: "Show footprint previews in Symbol Chooser" (`EESCHEMA_SETTINGS::m_Appearance.footprint_preview`,
+                  Preferences > Schematic Editor > Editing Options); off, the footprint selector and preview are not there and the details take the pane */}
+              {id && !power && !pick && showFootprints && (
                 <>
                   <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
                     <span style={{ fontWeight: 600 }}>Footprint</span>

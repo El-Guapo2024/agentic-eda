@@ -1499,7 +1499,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       if (state.enteredGroupId != null) {
         return { ...state, enteredGroupId: null };
       }
-      // Idle, nothing selected, no entered group: pcbnew_settings.cpp m_ESCClearsNetHighlight defaults true.
+      // Idle, nothing selected, no entered group: the net highlight goes when "<ESC> clears net highlighting" is on (Preferences > PCB Editor / Schematic Editor >
+      // Editing Options: `PCBNEW_SETTINGS::m_ESCClearsNetHighlight`, `EESCHEMA_SETTINGS::m_Input.esc_clears_net_highlight`, both on by default).
+      if (!(state.tab === "schematic" ? state.prefs.schEscClearsNetHighlight : state.prefs.escClearsNetHighlight)) return state;
       return { ...state, netHighlight: null, bcx: withHighlight(state.bcx, state.netHighlight, []) };
     }
     case "SET_HOT":

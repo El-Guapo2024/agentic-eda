@@ -80,3 +80,10 @@ test("a label or text placed with its dialog's properties repeats with them: the
   assert.notEqual(repeatSource({ op: "sch_edit", verb: "place_text", content: "t", at: { x: 0, y: 0 }, size_nm: 1_270_000 }), null);
   assert.equal(repeatSource({ op: "sch_edit", verb: "edit_label", id: "lbl_a", text: "X" }), null);
 });
+
+test("repeatCmds: Preferences' Repeated Items -- the horizontal and vertical pitch move the copy, the label increment counts the label on", () => {
+  const out = repeatCmds([{ op: "add_label", net: "D2", at: { x: 1_000_000, y: 2_000_000 }, kind: { scope: "local" } }], { ...ctx, offsetNm: [50 * 25_400, -100 * 25_400], labelIncrement: 3 });
+  assert.deepEqual(out, [{ op: "add_label", net: "D5", at: { x: 1_000_000 + 1_270_000, y: 2_000_000 - 2_540_000 }, kind: { scope: "local" } }]);
+  const down = repeatCmds([{ op: "add_label", net: "D9", at: { x: 0, y: 0 }, kind: { scope: "local" } }], { ...ctx, labelIncrement: -2 });
+  assert.equal((down[0] as { net: string }).net, "D7");
+});
