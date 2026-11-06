@@ -14,6 +14,8 @@ eda-kicad = { path = "../kicad" }
 eda-engine = { path = "../engine" }
 eda-clipper2 = { path = "../clipper2" }
 eda-shape-poly-set = { path = "../shape-poly-set" }
+# The placer `eda board place` runs, for Place > Auto-Place Footprints (`Cmd::Autoplace`, `eda_place::place_partial`).
+eda-place = { path = "../place" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ureq = { version = "2", features = ["json"] }

@@ -33,7 +33,7 @@ use eda_model::footprint::{placed_pads, rotated_extent};
 use eda_model::ir::{LabelSide, Design, FootprintInstance, PlacementSection, Point, Side, Nm};
 use eda_model::{CheckResult, ConstraintModel, PlacementRule};
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 #[derive(Debug, Clone)]
 pub struct PlaceOptions {
@@ -143,6 +143,13 @@ struct Item {
     /// courtyard (`Problem::keepout`). Middle pins of a SOT-23-6 row, the
     /// inner pins of a SOIC.
     boxed: Vec<usize>,
+    /// A footprint that stays where it is ([`place_partial`]): an obstacle the others are placed around, never moved. Its geometry is taken at its
+    /// own pose -- `half` is the box of its courtyard as the board has it turned, `pads` the pad centres about its position -- so it lies at a pose of
+    /// rotation 0 whatever its angle or side.
+    frozen: bool,
+    /// A footprint on the back placed by [`place_partial`]: `pads` are mirrored (x to -x, as `to_board` mirrors a bottom-side part), so the geometry at a
+    /// top-side pose is the part's on the back, and the instance written keeps `Side::Bottom`. Always false for [`place`].
+    bottom: bool,
 }
 
 /// Indices of pads with an in-line neighbour within `pitch_max` on both
@@ -194,7 +201,7 @@ impl Rng {
 /// The real placed instance, carrying the part's identifier. Used to
 /// build the output; the `id` clone is paid once per part, not per move.
 fn instance(item: &Item, pose: Pose) -> FootprintInstance {
-    FootprintInstance { id: item.id.clone(), at: Point { x: pose.x, y: pose.y }, rot: pose.rot as u32 * 90_000, side: Side::Top, label: pose.label }
+    FootprintInstance { id: item.id.clone(), at: Point { x: pose.x, y: pose.y }, rot: pose.rot as u32 * 90_000, side: if item.bottom { Side::Bottom } else { Side::Top }, label: pose.label }
 }
 
 /// The same pose, for geometry only, with no identifier.
@@ -322,6 +329,9 @@ struct Problem<'a> {
     /// caller ran the floorplan stage. `None` for a part the floorplan
     /// left free, and for every part when there is no floorplan.
     region: Vec<Option<(Nm, Nm, Nm, Nm)>>,
+    /// The items the placer may move, in index order: every item for [`place`], the parts asked for in [`place_partial`] (the others are
+    /// `Item::frozen`). The annealer, the polish and the rule repair pick from this list only.
+    movable: Vec<usize>,
 }
 
 impl Problem<'_> {
@@ -847,22 +857,64 @@ fn snap(v: Nm, s: Nm) -> Nm {
     }
 }
 
+/// What [`place_partial`] keeps: the parts it may move, the footprints that stay where they are, and which of the movable ones are on the back.
+struct Keep<'k> {
+    movable: &'k BTreeSet<String>,
+    fixed: HashMap<String, FootprintInstance>,
+    bottom: BTreeSet<String>,
+}
+
+/// A footprint that stays where it is, as an item at a pose of rotation 0 on its position: the box of its courtyard turned as the board has it, its pads
+/// where they are about its position (mirrored and turned by `to_board`). Never moved, so its geometry need only be right at that one pose.
+fn frozen_item(part: &eda_model::Part, fp: &eda_model::footprint::Footprint, at: &FootprintInstance, spacing: Nm) -> Item {
+    let (hw, hh) = fp.courtyard_half();
+    let (w, h) = rotated_extent(at, (hw * 2, hh * 2));
+    let mut pads: Vec<(String, (Nm, Nm))> = fp
+        .pads
+        .iter()
+        .map(|p| {
+            let b = eda_model::footprint::to_board(at, p.at);
+            (p.number.clone(), (b.x - at.at.x, b.y - at.at.y))
+        })
+        .collect();
+    pads.sort_by(|a, b| a.0.cmp(&b.0));
+    let boxed = boxed_pads(&pads, mm(1.3));
+    Item { id: part.reference.clone(), connector: false, half: (w / 2 + spacing, h / 2 + spacing), pads, pad_inset: Nm::ZERO, boxed, frozen: true, bottom: false }
+}
+
 fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<Problem<'a>, Vec<CheckResult>> {
+    build_problem_with(model, opts, None)
+}
+
+fn build_problem_with<'a>(model: &'a ConstraintModel, opts: &PlaceOptions, keep: Option<&Keep>) -> Result<Problem<'a>, Vec<CheckResult>> {
     let mut fails = Vec::new();
     let mut items = Vec::new();
     let mut parts: Vec<&eda_model::Part> = model.parts.iter().collect();
     parts.sort_by(|a, b| a.reference.cmp(&b.reference));
     for part in parts {
+        // A partial placement takes the parts asked for and the footprints on the board; a part that is neither is not on the board and stays off it.
+        let fixed = keep.and_then(|k| k.fixed.get(&part.reference));
+        if keep.is_some_and(|k| fixed.is_none() && !k.movable.contains(&part.reference)) {
+            continue;
+        }
         match model.footprint_of(part) {
             Some(fp) => {
-                let mut pads: Vec<(String, (Nm, Nm))> = fp.pads.iter().map(|p| (p.number.clone(), p.at)).collect();
+                if let Some(at) = fixed {
+                    items.push(frozen_item(part, &fp, at, opts.spacing));
+                    continue;
+                }
+                let bottom = keep.is_some_and(|k| k.bottom.contains(&part.reference));
+                let mirror = if bottom { -1 } else { 1 };
+                let mut pads: Vec<(String, (Nm, Nm))> = fp.pads.iter().map(|p| (p.number.clone(), (p.at.0 * mirror, p.at.1))).collect();
                 pads.sort_by(|a, b| a.0.cmp(&b.0));
                 let (hw, hh) = fp.courtyard_half();
                 let half = (hw + opts.spacing, hh + opts.spacing);
                 let pad_inset = fp.pads.iter().map(|p| (half.0 - p.at.0.abs() - p.size.0 / 2).min(half.1 - p.at.1.abs() - p.size.1 / 2)).min().unwrap_or(Nm::ZERO);
                 let boxed = boxed_pads(&pads, mm(1.3));
-                items.push(Item { id: part.reference.clone(), connector: is_edge_connector(part), half, pads, pad_inset, boxed });
+                items.push(Item { id: part.reference.clone(), connector: is_edge_connector(part), half, pads, pad_inset, boxed, frozen: false, bottom });
             }
+            // A footprint that stays and that the model has no geometry for is no obstacle it can know of.
+            None if fixed.is_some() => {}
             None => fails.push(CheckResult::fail(
                 "place_precondition",
                 &part.reference,
@@ -1021,7 +1073,8 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
         }
     }
     let region: Vec<Option<(Nm, Nm, Nm, Nm)>> = items.iter().map(|it| opts.floorplan.as_ref().and_then(|f| f.region_of(&it.id))).collect();
-    Ok(Problem { region, keep_cache, sep_rules, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, copper_edge: model.board.tuning.copper_edge_clearance(), outline, auto_outline, spacing: opts.spacing, font, model, bin_nm, congest_capacity, congest_nets })
+    let movable = (0..items.len()).filter(|&i| !items[i].frozen).collect();
+    Ok(Problem { region, keep_cache, sep_rules, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, copper_edge: model.board.tuning.copper_edge_clearance(), outline, auto_outline, spacing: opts.spacing, font, model, bin_nm, congest_capacity, congest_nets, movable })
 }
 
 /// Connectivity-aware placement order: the highest-degree part seeds a
@@ -1136,7 +1189,11 @@ fn initial(pb: &Problem, snap_nm: Nm) -> Vec<Pose> {
 
 fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
     let n = pb.items.len();
-    if n == 0 {
+    // The items a move may touch: all of them, or a partial placement's movable ones (`Problem::movable`). With every item movable the picks
+    // below are the indices themselves, so a full placement draws the same moves as before the list existed.
+    let mv = &pb.movable;
+    let m = mv.len();
+    if n == 0 || m == 0 {
         return;
     }
     let mut rng = Rng(opts.seed ^ 0xA5A5_5A5A_1234_5678);
@@ -1144,7 +1201,7 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
     // Floor: a six-part board gets the schedule of a 25-part one — the
     // moves are cheap and the extra length is what lets a star net fold
     // into a ring instead of freezing in the first tidy local minimum.
-    let total_moves = opts.moves_per_part * n.max(25);
+    let total_moves = opts.moves_per_part * m.max(25);
     let mut cur = pb.total_cost(poses);
     let t0 = (cur / n as f64).max(1_000_000.0);
     let t_end = 10_000.0;
@@ -1177,15 +1234,14 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
         let reach = (span * (1.0 - frac) * 0.5).max(opts.snap.as_f64() * 2.0);
 
         let kind = rng.below(10);
-        let i = rng.below(n);
+        let pick = rng.below(m);
+        let i = mv[pick];
         let old_i = poses[i];
         let mut j = usize::MAX;
         let mut old_j = old_i;
-        if kind >= 6 && kind < 8 && n > 1 {
-            j = rng.below(n);
-            if j == i {
-                j = (i + 1) % n;
-            }
+        if kind >= 6 && kind < 8 && m > 1 {
+            let pick_j = rng.below(m);
+            j = if pick_j == pick { mv[(pick + 1) % m] } else { mv[pick_j] };
             old_j = poses[j];
         }
 
@@ -1259,7 +1315,7 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
             };
             }
             c
-        } else if kind < 8 && n > 1 {
+        } else if kind < 8 && m > 1 {
             let c = pb.local_cost(i, poses) + pb.local_cost(j, poses);
             poses[i] = pb.flush_to_edge(i, Pose { x: old_j.x, y: old_j.y, rot: old_i.rot, label: LabelSide::Above }, opts.snap);
             poses[j] = pb.flush_to_edge(j, Pose { x: old_i.x, y: old_i.y, rot: old_j.rot, label: LabelSide::Above }, opts.snap);
@@ -1339,7 +1395,7 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) {
     let cost_of = |pb: &Problem, poses: &[Pose], i: usize| pb.local_cost(i, poses) + pb.use_cost(poses) + pb.full_congestion_penalty(poses);
     for _sweep in 0..4 {
         let mut improved = false;
-        for i in 0..n {
+        for &i in &pb.movable {
             let start = poses[i];
             let base = cost_of(pb, poses, i);
             let mut best = (base, start);
@@ -1558,6 +1614,9 @@ fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_nm: Nm, debug: bool) {
                 _ => if area(a) <= area(b) { a } else { b },
             };
             for mover in [first, if first == a { b } else { a }] {
+            if pb.items[mover].frozen {
+                continue;
+            }
             let axis_only = pb.items[mover].connector;
             // Windowed search: the best clean pose for the mover within
             // ±8 snaps, then repeat from there. A single axis step is
@@ -1635,13 +1694,18 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) -> bool {
             false
         }
     };
+    let frozen = |i: usize| pb.items[i].frozen;
     for _ in 0..500 {
         let mut moved = false;
-        for i in 0..n {
+        for &i in &pb.movable {
             moved |= clamp_inside(pb, poses, i);
         }
         for i in 0..n {
             for j in i + 1..n {
+                // Two footprints that stay are none of a partial placement's business, whatever they overlap.
+                if frozen(i) && frozen(j) {
+                    continue;
+                }
                 let ci = pb.keepout(i, poses[i]);
                 let cj = pb.keepout(j, poses[j]);
                 if overlap(ci, cj) == 0 {
@@ -1655,23 +1719,35 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) -> bool {
                 // the whole push, and a connector that does move is
                 // re-flushed so it never drifts off its edge.
                 let (ci_conn, cj_conn) = (pb.items[i].connector, pb.items[j].connector);
-                let (wi, wj) = match (ci_conn, cj_conn) {
-                    (true, false) => (0, 2),
-                    (false, true) => (2, 0),
+                // A footprint that stays is an anchor too, firmer than a connector: the part being placed takes the whole push.
+                let (wi, wj) = match (frozen(i), frozen(j), ci_conn, cj_conn) {
+                    (true, _, _, _) => (0, 2),
+                    (_, true, _, _) => (2, 0),
+                    (_, _, true, false) => (0, 2),
+                    (_, _, false, true) => (2, 0),
                     _ => (1, 1),
                 };
                 // Two connectors on one edge separate along that edge
                 // (their centres differ most along it); pushing them
                 // apart across it would only bounce off the board edge.
                 let along_x = if ci_conn && cj_conn { (poses[i].x - poses[j].x).abs() >= (poses[i].y - poses[j].y).abs() } else { px <= py };
+                // (A footprint that stays is not even snapped: it is where the board has it.)
                 if along_x {
                     let step = px / 2 + snap_nm;
-                    poses[j].x = snap(poses[j].x + dir_x * step * wj, snap_nm);
-                    poses[i].x = snap(poses[i].x - dir_x * step * wi, snap_nm);
+                    if !frozen(j) {
+                        poses[j].x = snap(poses[j].x + dir_x * step * wj, snap_nm);
+                    }
+                    if !frozen(i) {
+                        poses[i].x = snap(poses[i].x - dir_x * step * wi, snap_nm);
+                    }
                 } else {
                     let step = py / 2 + snap_nm;
-                    poses[j].y = snap(poses[j].y + dir_y * step * wj, snap_nm);
-                    poses[i].y = snap(poses[i].y - dir_y * step * wi, snap_nm);
+                    if !frozen(j) {
+                        poses[j].y = snap(poses[j].y + dir_y * step * wj, snap_nm);
+                    }
+                    if !frozen(i) {
+                        poses[i].y = snap(poses[i].y - dir_y * step * wi, snap_nm);
+                    }
                 }
                 poses[i] = pb.flush_to_edge(i, poses[i], snap_nm);
                 poses[j] = pb.flush_to_edge(j, poses[j], snap_nm);
@@ -1687,14 +1763,14 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) -> bool {
     // rather than handing the gate a placement it is bound to fail.
     for i in 0..n {
         let ci = pb.keepout(i, poses[i]);
-        if outside_area(ci, pb.bounds(i)) > 0 {
+        if !frozen(i) && outside_area(ci, pb.bounds(i)) > 0 {
             return false;
         }
         if pb.region[i].map_or(false, |r| region_escape(courtyard(&pb.items[i], poses[i]), r) > 0.0) {
             return false;
         }
         for j in i + 1..n {
-            if overlap(ci, pb.keepout(j, poses[j])) > 0 {
+            if !(frozen(i) && frozen(j)) && overlap(ci, pb.keepout(j, poses[j])) > 0 {
                 return false;
             }
         }
@@ -1973,6 +2049,111 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
     // Silence unused-field lints for fields kept for diagnostics.
     let _ = (&pb.index, &pb.model, placed_pads as fn(&ConstraintModel, &eda_model::Part, &FootprintInstance) -> Option<Vec<eda_model::footprint::PlacedPad>>);
     Ok(out)
+}
+
+/// Place some of the board's footprints among the others, which stay where they are.
+///
+/// KiCad's Place > Auto-Place Footprints > "Place Selected Footprints" and "Place Off-Board Footprints" (`AUTOPLACE_TOOL::autoplaceSelected` and
+/// `autoplaceOffboard`, pcbnew/autorouter/autoplace_tool.cpp at 8303b2ad) hand the footprints to `AR_AUTOPLACER`, a cost search over a routing matrix of
+/// the board's cells (`ar_autoplacer.cpp`, `ar_matrix.cpp`). The studio runs this placer in its place (UI-LEFT P19, the user's choice of 2026-11-05):
+/// the annealer, legaliser, polish and rule repair of [`place`], on the board's own outline -- never fitted, floorplanned, shrunk or trimmed --
+/// with every footprint of `design.placement` that is not in `movable` an obstacle that never moves (`Item::frozen`). A movable part on the back is
+/// placed on the back; its rotation is the quarter turn the placer chooses, as for [`place`].
+///
+/// Returns the new pose of every movable part (a part the model has no footprint geometry for is refused, `place_precondition`); the caller applies
+/// them. A placement the legaliser cannot make overlap-free and inside the outline is refused with its offenders (`place_legalize`, `place_outside`,
+/// `place_overlap`), as [`place`] refuses one -- two footprints that stay are not offenders, whatever they overlap.
+pub fn place_partial(design: &Design, model: &ConstraintModel, opts: &PlaceOptions, movable: &BTreeSet<String>) -> Result<Vec<FootprintInstance>, Vec<CheckResult>> {
+    let placement = design.placement.as_ref();
+    let outline = opts
+        .outline
+        .clone()
+        .or_else(|| placement.map(|p| p.outline.clone()))
+        .filter(|o| o.len() >= 3)
+        .ok_or_else(|| vec![CheckResult::fail("place_precondition", "outline", "the board has no outline to place the footprints in")])?;
+    let unknown: Vec<&str> = movable.iter().filter(|r| model.part(r).is_none()).map(String::as_str).collect();
+    if !unknown.is_empty() {
+        return Err(vec![CheckResult::fail("place_precondition", unknown.join(" "), "no such part on the board")]);
+    }
+    let on_board = |keep: bool| -> Vec<&FootprintInstance> { placement.map(|p| p.footprints.iter().filter(|f| movable.contains(&f.id) == keep).collect()).unwrap_or_default() };
+    let keep = Keep {
+        movable,
+        fixed: on_board(false).into_iter().map(|f| (f.id.clone(), f.clone())).collect(),
+        bottom: on_board(true).into_iter().filter(|f| f.side == Side::Bottom).map(|f| f.id.clone()).collect(),
+    };
+    let opts = PlaceOptions { outline: Some(outline), floorplan: None, ..opts.clone() };
+    let mut pb = build_problem_with(model, &opts, Some(&keep))?;
+    if pb.movable.is_empty() {
+        return Ok(Vec::new());
+    }
+    // The footprints that stay, at their own positions (their geometry is already turned: `frozen_item`).
+    let frozen: Vec<(usize, Pose)> = pb
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, it)| it.frozen)
+        .map(|(i, it)| {
+            let f = &keep.fixed[&it.id];
+            (i, Pose { x: f.at.x, y: f.at.y, rot: 0, label: f.label })
+        })
+        .collect();
+    let start = |pb: &Problem| -> Vec<Pose> {
+        let mut poses = initial(pb, opts.snap);
+        for &(i, p) in &frozen {
+            poses[i] = p;
+        }
+        poses
+    };
+    let reseeded = |retry: u64| PlaceOptions { seed: opts.seed.wrapping_add(retry.wrapping_mul(0x9E37_79B9)), ..opts.clone() };
+    let mut poses = start(&pb);
+    anneal(&pb, &mut poses, &opts);
+    let mut clean = legalize(&pb, &mut poses, opts.snap);
+    for retry in 1..=3u64 {
+        if clean {
+            break;
+        }
+        poses = start(&pb);
+        anneal(&pb, &mut poses, &reseeded(retry));
+        clean = legalize(&pb, &mut poses, opts.snap);
+    }
+    if !clean && pb.inner != pb.bbox {
+        pb.inner = pb.bbox;
+        clean = legalize(&pb, &mut poses, opts.snap);
+        for retry in 4..=6u64 {
+            if clean {
+                break;
+            }
+            poses = start(&pb);
+            anneal(&pb, &mut poses, &reseeded(retry));
+            clean = legalize(&pb, &mut poses, opts.snap);
+        }
+    }
+    if clean {
+        polish(&pb, &mut poses, opts.snap);
+        clean = legalize(&pb, &mut poses, opts.snap);
+        if clean {
+            repair_rules(&pb, &mut poses, opts.snap, false);
+            clean = legalize(&pb, &mut poses, opts.snap);
+        }
+    }
+    if !clean {
+        let mut fails = vec![CheckResult::fail("place_legalize", "design", "could not place the footprints without overlapping the others or leaving the board; make room or place fewer")];
+        for &i in &pb.movable {
+            let ci = pb.keepout(i, poses[i]);
+            let outside = outside_area(ci, pb.bounds(i));
+            if outside > 0 {
+                fails.push(CheckResult::fail("place_outside", &pb.items[i].id, format!("{outside} nm² outside its bound")));
+            }
+            for j in 0..pb.items.len() {
+                let ov = if j == i || (!pb.items[j].frozen && j < i) { 0 } else { overlap(ci, pb.keepout(j, poses[j])) };
+                if ov > 0 {
+                    fails.push(CheckResult::fail("place_overlap", format!("{}/{}", pb.items[i].id, pb.items[j].id), format!("{ov} nm²")));
+                }
+            }
+        }
+        return Err(fails);
+    }
+    Ok(pb.movable.iter().map(|&i| instance(&pb.items[i], Pose { label: pb.label_side(i, poses[i]), ..poses[i] })).collect())
 }
 
 /// Total half-perimeter wirelength of a placed design, nm. A cheap,

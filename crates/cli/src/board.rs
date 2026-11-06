@@ -92,6 +92,9 @@ mod pcb_items_tests;
 #[path = "microwave_tests.rs"]
 mod microwave_tests;
 #[cfg(test)]
+#[path = "autoplace_tests.rs"]
+mod autoplace_tests;
+#[cfg(test)]
 #[path = "multichannel_board_tests.rs"]
 mod multichannel_board_tests;
 #[cfg(test)]
@@ -1212,6 +1215,8 @@ pub(crate) fn step_carrying(dir: &Path, cmd: Cmd, strictness: Strictness, by: &s
     sync_external_edits_locked(dir);
     let line = cmd_line(&cmd);
     let before = std::fs::read_to_string(design_path(dir)).ok().and_then(|s| serde_json::from_str::<eda_model::ir::Design>(&s).ok());
+    // The autoplacer's placement is judged by the placement gates whatever the Strict switch says (`Cmd::always_judged`, UI-LEFT P19).
+    let strictness = if cmd.always_judged() && strictness == Strictness::Off { Strictness::Gates } else { strictness };
     let r = step_quiet(dir, &cmd, strictness);
     match &r {
         Ok((summary, tag)) => {
@@ -2000,6 +2005,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::FpEditor(c) => c.describe(),
         Cmd::Embedded(c) => c.describe(),
         Cmd::Microwave(c) => c.describe(),
+        Cmd::Autoplace(c) => c.describe(),
         Cmd::Multichannel(c) => c.describe(),
         Cmd::Table(c) => c.describe(),
         Cmd::SchTable(c) => format!("schematic {}", c.describe()),
@@ -2310,6 +2316,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::FpEditor(eda_ops::fp_editor::FpEditorCmd::SaveToBoard { .. }) => "update-footprint",
         Cmd::Embedded(c) => c.kind(),
         Cmd::Microwave(c) => c.kind(),
+        Cmd::Autoplace(_) => "autoplace",
         Cmd::Multichannel(c) => c.kind(),
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
         Cmd::SetConnectionGrid { .. } => "schematic-connection-grid",

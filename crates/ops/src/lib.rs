@@ -114,6 +114,7 @@ mod pcb_transform;
 mod tuning;
 mod zone_overrides;
 pub mod zone_priority;
+pub mod autoplace;
 mod zone_unfill;
 pub mod rule_editor;
 pub use rule_editor::DrcRuleAction;
@@ -840,6 +841,10 @@ pub enum Cmd {
     /// The microwave tools (`pcbnew.MicrowaveTool.*`, GAPS.md item 9, package P19): a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own, one verb family, see
     /// [`microwave::MicrowaveCmd`]. On the wire: `{"op": "microwave", "verb": "gap", "at": {..}, "size_nm": 500000, "track_width_nm": 250000}`.
     Microwave(microwave::MicrowaveCmd),
+    /// Place > Auto-Place Footprints > "Place Selected Footprints" / "Place Off-Board Footprints" (`pcbnew.Autoplacer.autoplaceSelected`, `autoplaceOffboard`,
+    /// UI-LEFT P19), run by the studio's placer (`eda_place::place_partial`) instead of KiCad's `AR_AUTOPLACER`; see [`autoplace::AutoplaceCmd`]. Always
+    /// judged by the placement gates ([`Cmd::always_judged`]). On the wire: `{"op": "autoplace", "footprints": ["R1", "R2"]}` or `{"op": "autoplace", "offboard": true}`.
+    Autoplace(autoplace::AutoplaceCmd),
     /// The multichannel tool (GAPS.md items 24 and 32, package P24): Generate Placement Rule Areas, Repeat Layout and Apply Design Block Layout -- one verb family, see
     /// [`multichannel::MultichannelCmd`]. On the wire: `{"op": "multichannel", "verb": "repeat_layout", "reference": "zone_..", "targets": [..]}`.
     Multichannel(multichannel::MultichannelCmd),
@@ -2752,6 +2757,7 @@ impl Cmd {
             Cmd::PcbItem(c) => c.ids(),
             Cmd::Embedded(c) => c.ids(),
             Cmd::Microwave(c) => c.ids(),
+            Cmd::Autoplace(c) => c.ids(),
             Cmd::Specctra { name, .. } => vec![name.as_str()],
             Cmd::Multichannel(c) => c.ids(),
             Cmd::Table(c) | Cmd::SchTable(c) => c.ids(),
@@ -2891,8 +2897,21 @@ impl Cmd {
             Cmd::InGroup { cmd, .. } => cmd.clears_routing_in(board),
             Cmd::MoveItems { .. } | Cmd::RotateItems { .. } | Cmd::FlipItems { .. } | Cmd::MirrorTracks { .. } | Cmd::MirrorItems { .. } | Cmd::Rip { .. } | Cmd::CreateArray { .. } => false,
             Cmd::SwapChain { .. } | Cmd::MoveExact { .. } => false,
+            // the autoplacer moves footprints as the edit tools do: what was routed to them stays where it is
+            Cmd::Autoplace(_) => false,
             Cmd::PlaceAt { part, .. } => board.pose_of(part).is_some(),
             other => other.clears_routing(),
+        }
+    }
+
+    /// A command the placement gates judge even with Strict off: the autoplacer's ("keep the placer's gates on", UI-LEFT P19). `eda board place` refuses a
+    /// placement its gates fail (`stage_place`); the studio's step refuses an autoplace that adds a gate failure, naming the failures.
+    pub fn always_judged(&self) -> bool {
+        match self {
+            Cmd::Autoplace(_) => true,
+            Cmd::Batch { cmds } => cmds.iter().any(Cmd::always_judged),
+            Cmd::InGroup { cmd, .. } => cmd.always_judged(),
+            _ => false,
         }
     }
 }
@@ -3482,6 +3501,7 @@ impl<'a> Board<'a> {
             Cmd::FpEditor(c) => self.apply_fp_editor(c),
             Cmd::Embedded(c) => self.apply_embedded(c),
             Cmd::Microwave(c) => self.apply_microwave(c),
+            Cmd::Autoplace(c) => self.apply_autoplace(c),
             Cmd::Specctra { session, name } => self.import_specctra_session(session, name),
             Cmd::Multichannel(c) => self.apply_multichannel(c),
             Cmd::Table(c) => self.apply_table(c),
@@ -7218,6 +7238,8 @@ mod pcb_items_tests;
 mod embedded_tests;
 #[cfg(test)]
 mod microwave_tests;
+#[cfg(test)]
+mod autoplace_tests;
 #[cfg(test)]
 mod tuning_tests;
 #[cfg(test)]
