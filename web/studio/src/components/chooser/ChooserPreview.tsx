@@ -7,6 +7,10 @@ import { footprintPreviewBounds, symbolPreviewBounds } from "../../kicad-port/li
 import { layerColor } from "../canvas/layers";
 import { paintFootprint } from "../footprint/footprintPainter";
 import { paintSymbol } from "../symbol/symbolPainter";
+import { DEFAULT_GRID_DISPLAY } from "../../kicad-port/grid";
+
+/** The previews draw no grid axes (`SYMBOL_PREVIEW_WIDGET`, the footprint preview: `GetGAL()->SetAxesEnabled( false )`), where the editors always do. */
+const PREVIEW_GRID = { ...DEFAULT_GRID_DISPLAY, axes: false };
 
 const W = 360;
 
@@ -43,6 +47,7 @@ export function SymbolPreview({ symbol, unit, bodyStyle, status, height = 230 }:
       ctx.translate(view.x, view.y);
       ctx.scale(view.scale, view.scale);
       paintSymbol(ctx, view, w, h, symbol, {
+        gridDisplay: PREVIEW_GRID,
         selection: new Set(),
         gridNm: 1_270_000,
         gridVisible: false,
@@ -88,7 +93,7 @@ export function FootprintPreview({ footprint: raw, status, height = 200 }: { foo
       ctx.save();
       ctx.translate(view.x, view.y);
       ctx.scale(view.scale, view.scale);
-      paintFootprint(ctx, view, w, h, footprint, { selection: new Set(), gridNm: 0, gridVisible: false, drawState: null, cursorNm: null, movePreview: null });
+      paintFootprint(ctx, view, w, h, footprint, { gridDisplay: PREVIEW_GRID, selection: new Set(), gridNm: 0, gridVisible: false, drawState: null, cursorNm: null, movePreview: null });
       ctx.restore();
     },
     [footprint, height]
