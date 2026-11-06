@@ -7644,6 +7644,9 @@ mod sch_props;
 mod sch_scene;
 mod sch_fields;
 mod sch_symbol_props;
+pub mod sch_global_edit;
+#[cfg(test)]
+mod sch_global_edit_tests;
 #[cfg(test)]
 mod sch_symbol_props_tests;
 #[cfg(test)]

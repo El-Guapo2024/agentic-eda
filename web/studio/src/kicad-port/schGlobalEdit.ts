@@ -1,18 +1,17 @@
-// Edit Text & Graphics Properties -- `DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS::visitItem` / `processItem` (eeschema/dialogs/dialog_global_edit_text_and_graphics.cpp at
-// 8303b2ad): set the chosen properties on every item of the kinds ticked (or just the selected ones, an item whose parent is selected counting); a property left
-// "unchanged" is not touched.
+// Edit Text & Graphics Properties -- `DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS` (eeschema/dialogs/dialog_global_edit_text_and_graphics.cpp and
+// dialog_global_edit_text_and_graphics_base.cpp at 8303b2ad).
 //
-//   Symbol references / values / other symbol fields   a field's text size, bold, italic, Visible and Show field name (`SCH_FIELD`), a field name filter for the others
-//   Wires & wire labels, Buses & bus labels            the line's width and style (`HasLineStroke`), the labels on it (text, spin), a junction on it (its size)
-//   Global labels, Hierarchical labels                 text size, bold, italic, the spin (Orientation, `SetSpinStyle`)
-//   Sheet pins                                          text size, bold, italic
-//   Schematic text & graphics                           free texts, text boxes, shapes, rule areas and graphic lines: text size, bold, italic, alignment, line, fill
+// Since UI-LEFT-2 SS14 the dialog sends one verb, `global_edit_text_graphics` (crates/ops/src/sch_global_edit.rs), which walks every sheet of the hierarchy
+// (`TransferDataFromWindow`'s `for( const SCH_SHEET_PATH& sheetPath : Schematic().Hierarchy() )`) with KiCad's `visitItem` / `processItem`: the Scope, Filter
+// Items and Set To boxes as the dialog holds them become the verb's spec here ([`globalEditSpec`]); the rules of the boxes (the orientation's cast, the three
+// state boxes, the text size check, the filters kept for the session) are below.
 //
-// UI-LEFT S16 added the fields, labels, wires, buses, junctions and sheet pins (the verbs were there: `edit_field`, `edit_label`, `set_stroke`, `edit_sheet_pin`).
-// Left: the sheet in view only (KiCad goes through every sheet of the hierarchy); colours, fonts and a field's alignment; the reference, symbol, net and power
-// filters; sheet titles, other sheet fields, label fields and sheet borders.
+// INACTIVE (kept, not called since UI-LEFT-2 SS14): `planGlobalEdit`, `editedGraphic`, `emptyEdit` and their types, the first port, which planned the edits of
+// the sheet in view only as a batch of the per-item verbs (UI-LEFT S16). The backend verb replaced it: it reaches every sheet, filters by reference, library
+// id, type and net, and sets fonts, colours and a field's alignment.
 import type { Cmd, Schematic } from "../api/types";
 import type { SchFill, SchGraphic, SchGraphicShape, SchHAlign, SchLineStyle, SchVAlign } from "../api/schEditTypes";
+import { stringFromValue } from "./fpFields";
 
 export type LabelSpinName = "right" | "up" | "left" | "bottom";
 
@@ -197,4 +196,238 @@ export function planGlobalEdit(sch: Schematic, selected: ReadonlySet<string>, sp
 function onSegment(p: readonly [number, number], a: readonly [number, number], b: readonly [number, number]): boolean {
   if ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) !== 0) return false;
   return Math.min(a[0], b[0]) <= p[0] && p[0] <= Math.max(a[0], b[0]) && Math.min(a[1], b[1]) <= p[1] && p[1] <= Math.max(a[1], b[1]);
+}
+
+// ============================================================================================================== the dialog of UI-LEFT-2 SS14
+
+/** `dialog_global_edit_text_and_graphics_base.cpp`'s Scope box, in its order, with the verb's names. Every box starts unticked (the base sets none). */
+export const SCOPE_BOXES = [
+  ["references", "Reference designators"],
+  ["values", "Values"],
+  ["other_fields", "Other symbol fields"],
+  ["wires", "Wires & wire labels"],
+  ["buses", "Buses & bus labels"],
+  ["global_labels", "Global labels"],
+  ["hier_labels", "Hierarchical labels"],
+  ["label_fields", "Label fields"],
+  ["sheet_titles", "Sheet titles"],
+  ["sheet_fields", "Other sheet fields"],
+  ["sheet_pins", "Sheet pins"],
+  ["sheet_borders", "Sheet borders & backgrounds"],
+  ["sch_text_graphics", "Schematic text & graphics"],
+] as const;
+
+export type ScopeKey = (typeof SCOPE_BOXES)[number][0];
+
+/** A three-state box (`wxCHK_3STATE | wxCHK_ALLOW_3RD_STATE_FOR_USER`): null is undetermined, "leave unchanged". */
+export type Tri = boolean | null;
+
+/** A click on a three-state box: wx cycles unchecked, checked, undetermined. */
+export const nextTri = (t: Tri): Tri => (t === false ? true : t === true ? null : false);
+
+/** `INDETERMINATE_ACTION`, the "-- leave unchanged --" entry of every choice. */
+export const LEAVE_UNCHANGED = "-- leave unchanged --";
+
+/** `m_orientationChoices`: "Right", "Up", "Left", "Down". */
+export const ORIENTATION_CHOICES = ["Right", "Up", "Left", "Down"] as const;
+
+/**
+ * `sch_label->SetSpinStyle( (SPIN_STYLE::SPIN) m_orientation->GetSelection() )`: the choice's index is cast to `SPIN_STYLE::SPIN`, whose order is LEFT, UP,
+ * RIGHT, BOTTOM (sch_label.h) -- so "Right" gives `SPIN_STYLE::LEFT` (horizontal, right-justified: the text ends at the anchor) and "Left" gives
+ * `SPIN_STYLE::RIGHT`, as KiCad 8303b2ad and 25ec2335 do. The studio's spins are named as `SPIN_STYLE`'s.
+ */
+export const ORIENTATION_SPIN: readonly LabelSpinName[] = ["left", "up", "right", "bottom"];
+
+/** `m_hAlignChoices` / `m_vAlignChoices`: `MapHorizJustify( GetSelection() - 1 )`. */
+export const H_ALIGN_CHOICES: ReadonlyArray<[SchHAlign, string]> = [
+  ["left", "Left"],
+  ["center", "Center"],
+  ["right", "Right"],
+];
+export const V_ALIGN_CHOICES: ReadonlyArray<[SchVAlign, string]> = [
+  ["top", "Top"],
+  ["center", "Center"],
+  ["bottom", "Bottom"],
+];
+
+/** `m_lineStyleChoices`, `(LINE_STYLE) m_lineStyle->GetSelection()`: SOLID is 0. */
+export const LINE_STYLE_CHOICES: ReadonlyArray<[SchLineStyle, string]> = [
+  ["solid", "Solid"],
+  ["dash", "Dashed"],
+  ["dot", "Dotted"],
+  ["dash_dot", "Dash-Dot"],
+  ["dash_dot_dot", "Dash-Dot-Dot"],
+];
+
+/** `m_typeFilterChoices`. */
+export const TYPE_FILTER_CHOICES: ReadonlyArray<["non_power" | "power", string]> = [
+  ["non_power", "Non-power symbols"],
+  ["power", "Power symbols"],
+];
+
+/** The four filter texts KiCad keeps for the session (`g_fieldnameFilter`, `g_referenceFilter`, `g_symbolFilter`, `g_netFilter`: set by the destructor, read back by
+ *  `TransferDataToWindow`). */
+export const rememberedFilters = { fieldName: "", reference: "", symbol: "", net: "" };
+
+/** `TransferDataToWindow`'s net filter: the one kept (`ChangeValue`, no event: its box stays as it is), else the highlighted net (`if( g_netFilter.IsEmpty() &&
+ *  !GetHighlightedConnection().IsEmpty() ) m_netFilter->SetValue( .. )`, whose text event ticks the box: `OnNetFilterText`). */
+export function initialNetFilter(kept: string, highlighted: string | null | undefined): { text: string; ticked: boolean } {
+  if (kept === "" && highlighted) return { text: highlighted, ticked: true };
+  return { text: kept, ticked: false };
+}
+
+/** The dialog as it stands: the boxes, the filters (each with its tick) and the Set To values (null, "" or -1 for "-- leave unchanged --"; lengths as typed, mm). */
+export interface GlobalEditForm {
+  scope: Record<ScopeKey, boolean>;
+  fieldNameOpt: boolean;
+  fieldName: string;
+  referenceOpt: boolean;
+  reference: string;
+  symbolOpt: boolean;
+  symbol: string;
+  typeOpt: boolean;
+  type: "non_power" | "power";
+  netOpt: boolean;
+  net: string;
+  selectedOnly: boolean;
+  /** The font choice: "" leaves it, else "Default Font", "KiCad Font" or a family. */
+  font: string;
+  setTextColor: boolean;
+  /** A colour as `#rrggbb`; "" is `COLOR4D::UNSPECIFIED`. */
+  textColor: string;
+  textSize: string;
+  bold: Tri;
+  italic: Tri;
+  /** An index of [`ORIENTATION_CHOICES`]; -1 leaves it. */
+  orientation: number;
+  hAlign: SchHAlign | "";
+  vAlign: SchVAlign | "";
+  visible: Tri;
+  showFieldNames: Tri;
+  lineWidth: string;
+  setLineColor: boolean;
+  lineColor: string;
+  lineStyle: SchLineStyle | "";
+  setFillColor: boolean;
+  fillColor: string;
+  junctionSize: string;
+  setJunctionColor: boolean;
+  junctionColor: string;
+}
+
+/** `TransferDataToWindow`: nothing ticked, every Set To value "-- leave unchanged --", the filters as the session kept them. */
+export function initialForm(highlightedNet?: string | null): GlobalEditForm {
+  const net = initialNetFilter(rememberedFilters.net, highlightedNet);
+  return {
+    scope: Object.fromEntries(SCOPE_BOXES.map(([k]) => [k, false])) as Record<ScopeKey, boolean>,
+    fieldNameOpt: false,
+    fieldName: rememberedFilters.fieldName,
+    referenceOpt: false,
+    reference: rememberedFilters.reference,
+    symbolOpt: false,
+    symbol: rememberedFilters.symbol,
+    typeOpt: false,
+    type: "non_power",
+    netOpt: net.ticked,
+    net: net.text,
+    selectedOnly: false,
+    font: "",
+    setTextColor: false,
+    textColor: "",
+    textSize: "",
+    bold: null,
+    italic: null,
+    orientation: -1,
+    hAlign: "",
+    vAlign: "",
+    visible: null,
+    showFieldNames: null,
+    lineWidth: "",
+    setLineColor: false,
+    lineColor: "",
+    lineStyle: "",
+    setFillColor: false,
+    fillColor: "",
+    junctionSize: "",
+    setJunctionColor: false,
+    junctionColor: "",
+  };
+}
+
+/** A length typed in mm, nm; null for "-- leave unchanged --" (empty) and for text that is no number. */
+export function lengthNm(text: string): number | null {
+  const t = text.trim();
+  if (t === "" || t === LEAVE_UNCHANGED) return null;
+  const v = Number(t.replace(",", "."));
+  return Number.isFinite(v) ? Math.round(v * 1e6) : null;
+}
+
+/** `m_textSize.Validate( 1.0, 10000.0, EDA_UNITS::MILS )` ("1 mil .. 10 inches"): "Text size must be at least 0.0254 mm." / "... less than 254 mm." (`UNIT_BINDER::Validate`, the
+ *  label without its colon, the bound in the dialog's units). Null when it is fine or left unchanged. */
+export function textSizeError(text: string): string | null {
+  const nm = lengthNm(text);
+  if (nm === null) return null;
+  if (nm < 25_400) return `Text size must be at least ${stringFromValue(25_400, "mm")}.`;
+  if (nm > 254_000_000) return `Text size must be less than ${stringFromValue(254_000_000, "mm")}.`;
+  return null;
+}
+
+const hexColor = (hex: string): { r: number; g: number; b: number; a: number } | null => {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
+  return m ? { r: parseInt(m[1]!, 16), g: parseInt(m[2]!, 16), b: parseInt(m[3]!, 16), a: 255 } : null;
+};
+
+/** The verb's spec (`GlobalEditSpec`, crates/ops/src/sch_global_edit.rs) for the dialog as it stands and the ids selected on the sheet in view. A filter whose box
+ *  is not ticked, or whose text is empty, is no filter. */
+export function globalEditSpec(f: GlobalEditForm, selection: readonly string[]): Record<string, unknown> {
+  const filter = (on: boolean, text: string) => (on && text.trim() !== "" ? text : undefined);
+  const spec: Record<string, unknown> = { ...f.scope };
+  const put = (k: string, v: unknown) => {
+    if (v !== undefined && v !== null && v !== "") spec[k] = v;
+  };
+  put("field_name_filter", filter(f.fieldNameOpt, f.fieldName));
+  put("reference_filter", filter(f.referenceOpt, f.reference));
+  put("symbol_filter", filter(f.symbolOpt, f.symbol));
+  if (f.typeOpt) spec.type_filter = f.type;
+  put("net_filter", filter(f.netOpt, f.net));
+  if (f.selectedOnly) {
+    spec.selected_only = true;
+    spec.selection = [...selection];
+  }
+  put("font", f.font);
+  if (f.setTextColor) {
+    spec.set_text_color = true;
+    put("text_color", hexColor(f.textColor));
+  }
+  put("text_size_nm", lengthNm(f.textSize));
+  put("bold", f.bold);
+  put("italic", f.italic);
+  if (f.orientation >= 0) spec.orientation = ORIENTATION_SPIN[f.orientation];
+  put("h_align", f.hAlign);
+  put("v_align", f.vAlign);
+  put("visible", f.visible);
+  put("show_field_names", f.showFieldNames);
+  put("line_width_nm", lengthNm(f.lineWidth));
+  if (f.setLineColor) {
+    spec.set_line_color = true;
+    put("line_color", hexColor(f.lineColor));
+  }
+  put("line_style", f.lineStyle);
+  if (f.setFillColor) {
+    spec.set_fill_color = true;
+    put("fill_color", hexColor(f.fillColor));
+  }
+  put("junction_size_nm", lengthNm(f.junctionSize));
+  if (f.setJunctionColor) {
+    spec.set_junction_color = true;
+    put("junction_color", hexColor(f.junctionColor));
+  }
+  return spec;
+}
+
+/** The command OK sends (`TransferDataFromWindow`), or the text size's complaint. */
+export function globalEditCmd(f: GlobalEditForm, selection: readonly string[]): { cmd: Cmd } | { error: string } {
+  const why = textSizeError(f.textSize);
+  if (why) return { error: why };
+  return { cmd: { op: "sch_edit", verb: "global_edit_text_graphics", spec: globalEditSpec(f, selection) } as unknown as Cmd };
 }

@@ -85,3 +85,58 @@ test("UI-LEFT S16: fields, labels, wires, buses, junctions and sheet pins are re
   assert.deepEqual((noBus.filter((c) => c.op === "sch_edit" && c.verb === "edit_label") as Array<{ id: string }>).map((c) => c.id), ["lbl_1", "lbl_3"]);
   assert.deepEqual((noBus.find((c) => c.op === "sch_edit" && c.verb === "set_stroke") as { ids: string[] }).ids, ["wire_1"]);
 });
+
+// ---------------------------------------------------------------------------------------------- UI-LEFT-2 SS14: the dialog's spec for the backend verb
+
+import { globalEditCmd, globalEditSpec, initialForm, initialNetFilter, nextTri, ORIENTATION_SPIN, rememberedFilters, textSizeError } from "./schGlobalEdit";
+
+test("the dialog opens with nothing ticked and every value left unchanged; the spec then says nothing", () => {
+  const f = initialForm();
+  assert.ok(Object.values(f.scope).every((v) => v === false));
+  const spec = globalEditSpec(f, []);
+  assert.deepEqual(Object.keys(spec).filter((k) => spec[k] !== false), []);
+});
+
+test("a filter counts when its box is ticked and its text is not empty; Selected items only carries the selection", () => {
+  const f = { ...initialForm(), referenceOpt: true, reference: "R*", symbolOpt: false, symbol: "Device:*", netOpt: true, net: "", typeOpt: true, type: "power" as const, selectedOnly: true };
+  const spec = globalEditSpec(f, ["R1"]);
+  assert.equal(spec.reference_filter, "R*");
+  assert.equal(spec.symbol_filter, undefined, "box not ticked");
+  assert.equal(spec.net_filter, undefined, "empty text (`!m_netFilter->GetValue().IsEmpty()`)");
+  assert.equal(spec.type_filter, "power");
+  assert.deepEqual([spec.selected_only, spec.selection], [true, ["R1"]]);
+});
+
+test("Orientation casts its index to SPIN_STYLE (LEFT, UP, RIGHT, BOTTOM): Right is SPIN_STYLE::LEFT", () => {
+  assert.deepEqual(ORIENTATION_SPIN, ["left", "up", "right", "bottom"]);
+  assert.equal(globalEditSpec({ ...initialForm(), orientation: 0 }, []).orientation, "left");
+  assert.equal(globalEditSpec({ ...initialForm(), orientation: 3 }, []).orientation, "bottom");
+});
+
+test("lengths in mm, colours with their box, an unspecified colour sent as none", () => {
+  const f = { ...initialForm(), textSize: "2", lineWidth: "0,25", setLineColor: true, lineColor: "#ff0000", setFillColor: true, fillColor: "", bold: true, italic: false };
+  const spec = globalEditSpec(f, []);
+  assert.equal(spec.text_size_nm, 2_000_000);
+  assert.equal(spec.line_width_nm, 250_000);
+  assert.deepEqual([spec.set_line_color, spec.line_color], [true, { r: 255, g: 0, b: 0, a: 255 }]);
+  assert.deepEqual([spec.set_fill_color, spec.fill_color], [true, undefined], "COLOR4D::UNSPECIFIED");
+  assert.deepEqual([spec.bold, spec.italic], [true, false]);
+});
+
+test("the text size is checked as UNIT_BINDER::Validate( 1.0, 10000.0, MILS ) says", () => {
+  assert.equal(textSizeError("0.01"), "Text size must be at least 0.0254 mm.");
+  assert.equal(textSizeError("300"), "Text size must be less than 254 mm.");
+  assert.equal(textSizeError(""), null);
+  assert.deepEqual(globalEditCmd({ ...initialForm(), textSize: "0.001" }, []), { error: "Text size must be at least 0.0254 mm." });
+  const ok = globalEditCmd({ ...initialForm(), textSize: "1.27" }, []);
+  assert.ok("cmd" in ok && (ok.cmd as unknown as { verb: string }).verb === "global_edit_text_graphics");
+});
+
+test("three-state boxes cycle unchecked, checked, undetermined; the net filter starts on the highlighted net", () => {
+  assert.deepEqual([nextTri(false), nextTri(true), nextTri(null)], [true, null, false]);
+  assert.deepEqual(initialNetFilter("", "/VCC"), { text: "/VCC", ticked: true });
+  assert.deepEqual(initialNetFilter("GND", "/VCC"), { text: "GND", ticked: false });
+  rememberedFilters.reference = "U*";
+  assert.equal(initialForm().reference, "U*", "the session's filter comes back");
+  rememberedFilters.reference = "";
+});
