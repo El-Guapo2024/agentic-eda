@@ -177,6 +177,11 @@ fn parse_quoted(input: &str, bytes: &[u8], pos: &mut usize) -> Result<String, St
     }
 }
 
+/// Whether an atom was a quoted string in the file (`DSN_STRING`, which a list taking only a string -- a netlist field's value -- reads, and a bare word is not).
+pub(crate) fn is_quoted(n: &Sexpr) -> bool {
+    matches!(n, Sexpr::Atom(a) if a.starts_with(QUOTED))
+}
+
 /// Whether the item at `idx` is a number the file wrote bare: KiCad's lexer's `DSN_NUMBER` (`IsNumber( token )`), not a quoted string of digits.
 pub(crate) fn is_bare_number(list: &[Sexpr], idx: usize) -> bool {
     matches!(list.get(idx), Some(Sexpr::Atom(a)) if !a.starts_with(QUOTED) && a.parse::<f64>().is_ok())

@@ -2749,6 +2749,11 @@ pub struct DrawingsSection {
     /// `to` the name it has; an empty `to` is a deleted net (its pads on no net). Additive: absent reads as none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub net_renames: Vec<NetRename>,
+    /// File > Import > Netlist...'s record (`DIALOG_IMPORT_NETLIST`, `eda_ops::netlist_update`): the net names, symbol links and values the imported netlist gave the
+    /// board's footprints, laid over the model last each time the board is loaded (`crates/cli/src/board.rs::build_model`), so the board keeps them where it would
+    /// otherwise take its schematic's -- KiCad's Import Netlist changes the board alone. See [`crate::netlist_import`]. Additive: absent reads as none imported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_netlist: Option<crate::netlist_import::ImportedNetlist>,
     /// Board Setup's edits to the board's rules (net classes, constraints, solder mask and paste, text defaults,
     /// the stackup, violation severities, custom rules): laid over the intent's rules each time the board is
     /// loaded (`crate::rules::RulesOverlay::apply`, `crates/cli/src/board.rs::load`), the way `Design::nets` is.

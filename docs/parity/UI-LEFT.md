@@ -574,7 +574,7 @@ Notes:
 ## KiCad actions not wired (ui-parity-missing.json: 47 at the inventory, of which 34 are user-facing and 13 internal; the two autoplacer rows are gone since task-u5-pcbitems)
 
 - **A1 [KO] Kept out by decision** (HANDOFF; GAPS Appendix B):
-  - Import Netlist (the user, 2026-10-21).
+  - ~~Import Netlist (the user, 2026-10-21).~~ **done (task-u7-netlist)**: approved by the user on 2026-11-07. File > Import > Netlist... is KiCad's dialog over a port of the netlist readers and `BOARD_NETLIST_UPDATER` (`Cmd::ImportNetlist`, one undo step; Load and Test Netlist, the dry run); the board keeps what the netlist says through every reload (`DrawingsSection::imported_netlist`), the schematic is left as it was (PARITY-pcb §92). Left: component classes, unit metadata, design variants and jumper settings not updated; one footprint per reference; Update PCB from Schematic does not put the schematic's nets back (Undo does).
   - ~~The autoplacer.~~ **done (task-u5-pcbitems, P19)**: as proposed to the user (2026-11-05), Place Selected and Place Off-Board Footprints run our own placer (`crates/place`) behind its gates; AR_AUTOPLACER is not ported.
   - The Footprint Viewer and Symbol Viewer windows.
   - Python plugins and the footprint wizards.

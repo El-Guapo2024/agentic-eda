@@ -106,6 +106,9 @@ mod multichannel_board_tests;
 #[cfg(test)]
 #[path = "table_tests.rs"]
 mod table_tests;
+#[cfg(test)]
+#[path = "netlist_import_tests.rs"]
+mod netlist_import_tests;
 
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize)]
@@ -270,12 +273,20 @@ pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Desig
     // The nets under the names KiCad gives the board's schematic (`/MCU/RESET`, `Net-(D1-Pad1)`), last: everything above keys by the intent's names.
     // And what each footprint takes from its symbol there (`SymbolLink`: the path, the sheet, the fields, the pins' names), which the board is written with.
     let drawn = crate::net_names::drawn(design, &model);
-    let renames = crate::net_names::kicad_names(design, &model, &drawn);
+    let mut renames = crate::net_names::kicad_names(design, &model, &drawn);
+    // The nets an imported netlist named keep the netlist's names, and no other net takes one of them (`eda_model::netlist_import`).
+    if let Some(rec) = design.drawings.as_ref().and_then(|d| d.imported_netlist.as_ref()) {
+        renames.retain(|from, to| !rec.names(from) && !(rec.names(to) && model.nets.iter().any(|n| &n.name == to)));
+    }
     crate::net_names::apply(&mut model, &renames);
     crate::net_names::remember_intent_names(&mut model, &intent_nets);
     // The Net Inspector's renames and deletes of the board's nets, on top of the names the schematic gives them (`board_net_edits`).
     crate::board_net_edits::apply(design, &mut model);
     model.symbol_links = drawn.links;
+    // What an imported netlist said of each footprint (its path, sheet, fields and pin names, its value) over what its symbol says (`eda_model::netlist_import`).
+    if let Some(rec) = design.drawings.as_ref().and_then(|d| d.imported_netlist.as_ref()) {
+        rec.apply(&mut model);
+    }
     Ok(model)
 }
 
@@ -1696,7 +1707,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness, baseline: Option<ed
     let pad_edits = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.footprint_edits.iter().map(|e| (e.id.clone(), e.pads.clone(), e.models3d.clone())).collect::<Vec<_>>()).unwrap_or_default();
     // A rename moves the intent's part under a new reference and an exchange puts a part on another footprint: the model is built again for the design that
     // results, as the next load will build it.
-    let renames = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| (dr.renamed_parts.clone(), dr.footprint_assignments.clone(), dr.net_renames.clone())).unwrap_or_default();
+    let renames = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| (dr.renamed_parts.clone(), dr.footprint_assignments.clone(), dr.net_renames.clone(), dr.imported_netlist.clone())).unwrap_or_default();
     let intent_file = |d: &eda_model::ir::Design| d.drawings.as_ref().and_then(|dr| dr.intent_file.clone());
     // A new stackup (Board Setup's, or the copper layers a placed design block grows, `AppendBoard`'s `SetCopperLayerCount`): the copper is judged on the layers that result.
     let stackup = |d: &eda_model::ir::Design| d.drawings.as_ref().and_then(|dr| dr.rules.as_ref()).and_then(|r| r.stackup.clone());
@@ -1976,6 +1987,7 @@ fn cmd_line(c: &Cmd) -> String {
             format!("paste --tracks {} --vias {} --zones {} --shapes {} --texts {}", tracks.len(), vias.len(), zones.len(), shapes.len(), texts.len())
         }
         Cmd::PasteClipboard { text, at } => format!("paste-clipboard --at {},{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), text.len()),
+        Cmd::ImportNetlist(r) => format!("import-netlist {} ({} bytes of file)", r.name, r.text.len()),
         Cmd::ImportGraphics(r) => format!("import-graphics --format {:?} --layer {} --scale {} --offset {},{} ({} bytes of file)", r.format, r.layer, r.scale, r.offset_x_nm.mm(), r.offset_y_nm.mm(), r.text.len()),
         Cmd::ImportSchGraphics(r) => format!("import-sch-graphics --format {:?} --scale {} --offset {},{} ({} bytes of file)", r.format, r.scale, r.offset_x_nm.mm(), r.offset_y_nm.mm(), r.text.len()),
         Cmd::ImportSymbolGraphics(r) => format!("import-symbol-graphics {} --unit {} --format {:?} --scale {} --offset {},{} ({} bytes of file)", r.lib_id, r.unit, r.format, r.scale, r.offset_x_nm.mm(), r.offset_y_nm.mm(), r.text.len()),
@@ -2341,6 +2353,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::ExportFootprintsToLibrary => "footprint",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } | Cmd::PasteSpecial { .. } => "duplicate",
         Cmd::ImportGraphics(_) => "import-graphics",
+        Cmd::ImportNetlist(_) => "import-netlist",
         Cmd::ImportSchGraphics(_) | Cmd::ImportSymbolGraphics(_) => "import-graphics",
         Cmd::CommitRoute { .. } => "route",
         Cmd::CommitTuning { .. } => "tune",

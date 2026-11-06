@@ -77,6 +77,8 @@ mod fp_edit;
 pub mod fp_texts;
 mod fp_models;
 mod import_foreign;
+/// File > Import > Netlist... (`BOARD_NETLIST_UPDATER`, `Cmd::ImportNetlist`).
+pub mod netlist_update;
 pub use import_foreign::imported_intent_file;
 mod import_graphics;
 pub use import_graphics::{board_items as graphics_board_items, GraphicsFormat, ImportGraphics};
@@ -1084,6 +1086,11 @@ pub enum Cmd {
     ImportSchGraphics(ImportSchGraphics),
     /// `SYMBOL_EDITOR_DRAWING_TOOLS::ImportGraphics`: the same into the symbol `lib_id` of the Symbol Editor.
     ImportSymbolGraphics(ImportSymbolGraphics),
+    /// File > Import > Netlist... (`pcbnew.EditorControl.importNetlist`, `DIALOG_IMPORT_NETLIST`'s Update PCB): `BOARD_NETLIST_UPDATER::UpdateNetlist` of the netlist
+    /// file the command carries, with the dialog's options -- footprints matched, replaced, added and removed, values, paths, fields and attributes, every
+    /// pad's net -- in one undo step on both editors (the schematic only ever gains its stored form, see [`netlist_update`]). The report is
+    /// [`netlist_update::take_report`]'s.
+    ImportNetlist(netlist_update::ImportNetlist),
     /// Change Footprint(s) (`pcbnew.GlobalEdit.changeFootprint(s)`), Update Footprint(s) from Library (`updateFootprint(s)`) and the footprint a symbol's Footprint field names
     /// (`BOARD_NETLIST_UPDATER::replaceFootprint`): put the parts `references` on `footprint`, or -- `footprint` absent -- each on the library copy of the footprint it is
     /// on. The pose, lock and group stay; the pads, their nets by number, the texts, the attributes, the overrides and the models follow the dialog's `options`
@@ -2649,6 +2656,8 @@ impl Cmd {
             Cmd::ReannotateBoard { .. } => true,
             // a board that comes in has its own nets: the netlist the schematic's drawing had set goes (`design.nets`)
             Cmd::ReplaceBoard { .. } => true,
+            // the netlist writes the net list the schematic's half of the design owns (`design.nets`), and stores the schematic shown (`netlist_update`)
+            Cmd::ImportNetlist(_) => true,
             // a swap of nets moves pins between the nets of `design.nets` -- the netlist the schematic's half of the design owns -- and the nets of the board's copper with them
             Cmd::SwapPadNets { .. } | Cmd::SwapGateNets { .. } => true,
             // a pad's net is its pin's place in `design.nets`
@@ -2713,6 +2722,7 @@ impl Cmd {
             Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } | Cmd::PasteSpecial { .. } => vec!["paste"],
             Cmd::PlaceFootprint { footprint, .. } => vec![footprint.as_str()],
             Cmd::ImportGraphics(req) => vec![req.layer.as_str()],
+            Cmd::ImportNetlist(req) => vec![req.name.as_str()],
             Cmd::ImportSchGraphics(_) => vec!["sch_graphics"],
             Cmd::ImportSymbolGraphics(req) => vec![req.lib_id.as_str()],
             Cmd::ExchangeFootprints { references, .. } => references.iter().map(String::as_str).collect(),
@@ -3461,6 +3471,7 @@ impl<'a> Board<'a> {
             Cmd::Duplicate { ids } => self.duplicate_all(ids),
             Cmd::PasteClipboard { text, at } => self.paste_clipboard(text, *at),
             Cmd::ImportGraphics(req) => self.import_graphics(req),
+            Cmd::ImportNetlist(req) => self.import_netlist(req),
             Cmd::ImportSchGraphics(req) => self.import_sch_graphics(req),
             Cmd::ImportSymbolGraphics(req) => self.import_symbol_graphics(req),
             Cmd::PasteSpecial { text, at, mode, clear_nets } => self.paste_special(text, *at, *mode, *clear_nets),

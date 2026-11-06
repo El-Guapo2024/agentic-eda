@@ -38,6 +38,8 @@ fn places_from_libraries(cmd: &Cmd) -> bool {
         Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => places_from_libraries(cmd),
         Cmd::AddSymbol { .. } | Cmd::AddPowerSymbol { .. } | Cmd::SetSymbolLibIds { .. } | Cmd::PlaceFootprint { .. } | Cmd::ExchangeFootprints { .. } => true,
         Cmd::SchEdit(eda_ops::sch_edit::SchCmd::ChangeSymbol { .. }) => true,
+        // Import Netlist: the footprints it adds or puts parts on (`crate::netlist_api::filled`)
+        Cmd::ImportNetlist(_) => true,
         Cmd::EditSymbolFields { footprint: Some(f), .. } => !f.trim().is_empty(),
         Cmd::SetSymbolFields { edits, .. } => edits.iter().any(|e| e.field == "Footprint"),
         _ => false,
@@ -205,6 +207,10 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
                 cmds.extend(follows);
                 Cmd::Batch { cmds }
             })
+        }
+        Cmd::ImportNetlist(req) => {
+            let filled = crate::netlist_api::filled(req, model, footprints);
+            (filled != *req).then_some(Cmd::ImportNetlist(filled))
         }
         Cmd::PlaceFootprint { footprint, at, reference, value, definition: None } => {
             // The model knows it already (the intent's, a library's it resolved, the built-in table): nothing to bring.

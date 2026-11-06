@@ -44,6 +44,8 @@ mod fp_assign_api;
 mod fp_json;
 mod pad_nets_api;
 mod append_api;
+/// File > Import > Netlist...: Load and Test Netlist, and the library footprints an import carries.
+mod netlist_api;
 mod cvpcb_api;
 mod design_block_api;
 mod graphics_api;

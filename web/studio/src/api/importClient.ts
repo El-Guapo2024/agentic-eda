@@ -24,3 +24,8 @@ export function readAppendBoard(file: { name: string; text: string }): Promise<A
 export function previewGraphics(cmd: unknown): Promise<{ ok: boolean; message?: string; shapes?: unknown[]; texts?: unknown[]; reference?: { x: number; y: number } }> {
   return postJson("/api/import_graphics/preview", { cmd });
 }
+
+/** Load and Test Netlist (`POST /api/import_netlist`, crates/cli/src/netlist_api.rs): what Update PCB would do to the board with this netlist and these choices -- nothing changes. */
+export function testNetlist(req: { text: string; name: string; options: import("../kicad-port/importNetlist").NetlistOptions }): Promise<import("../kicad-port/importNetlist").NetlistReport> {
+  return postJson("/api/import_netlist", req);
+}

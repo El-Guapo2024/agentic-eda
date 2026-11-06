@@ -934,6 +934,8 @@ fn handle(
         // `Cmd::ReplaceBoard` / `Cmd::ReplaceSchematic` with what this answers.
         ("POST", "/api/import_foreign") => offload(stream, lane, dir, job, path, &body, crate::foreign_api::convert),
         // Append Board: what a `.kicad_pcb` brings and the point it is held by (a read; the append is `Cmd::PasteClipboard` with the file's text).
+        // File > Import > Netlist...'s Load and Test Netlist (`crate::netlist_api`); Update PCB is `/api/cmd`'s `import_netlist`
+        ("POST", "/api/import_netlist") => respond(stream, "200 OK", "application/json", crate::netlist_api::test(dir, &body).to_string().as_bytes()),
         ("POST", "/api/append_board/read") => respond(stream, "200 OK", "application/json", crate::append_api::read(dir, &body).to_string().as_bytes()),
         // The microwave tools' Complex Shape dialog: the scales and the point count of a shape description file (the shape itself is `Cmd::Microwave` with the file's text).
         ("POST", "/api/microwave/shape") => respond(stream, "200 OK", "application/json", crate::microwave_api::read_shape(&body).to_string().as_bytes()),
@@ -987,6 +989,9 @@ fn handle(
                     let domain = board::step_tag(&cmd);
                     // what the verb tells the user once it worked (`ShowInfoBarMsg`, a tool's `wxLogMessage` lines: `eda_ops::notice`), as `info`
                     eda_ops::notice::clear();
+                    // Import Netlist's report (`eda_ops::netlist_update::take_report`), as `report`
+                    let imports_netlist = matches!(cmd, eda_ops::Cmd::ImportNetlist(_));
+                    let _ = eda_ops::netlist_update::take_report();
                     match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
                         Ok(summary) => {
                             if let Some((before, cmd)) = &copied {
@@ -1000,9 +1005,18 @@ fn handle(
                             if !info.is_empty() {
                                 reply["info"] = json!(info.join("\n"));
                             }
+                            if let Some(report) = imports_netlist.then(eda_ops::netlist_update::take_report).flatten() {
+                                reply["report"] = crate::netlist_api::report_json(&report);
+                            }
                             reply
                         }
-                        Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+                        Err(e) => {
+                            let mut reply = json!({ "ok": false, "message": board::reasons(&e) });
+                            if let Some(report) = imports_netlist.then(eda_ops::netlist_update::take_report).flatten() {
+                                reply["report"] = crate::netlist_api::report_json(&report);
+                            }
+                            reply
+                        }
                     }
                 }
             };
