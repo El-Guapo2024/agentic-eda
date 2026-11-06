@@ -2037,6 +2037,10 @@ pub enum Cmd {
         #[serde(default)]
         overwrite: bool,
     },
+    /// Revert and the reload of a library changed on disk: the design's copies of `names` go, with any mark that their library's Save delete them
+    /// (`FootprintLibrarySection::deleted`); the library's files are left as they are. The caller puts the file's footprints back in the same batch.
+    /// `FOOTPRINT_EDIT_FRAME::RevertFootprint`, `PCB_BASE_FRAME::OnFpChangeDebounceTimer`'s reload (UI-LEFT-2 LL3).
+    ForgetLibraryFootprints { names: Vec<String> },
     /// `FOOTPRINT_EDITOR_CONTROL::RepairFootprint`: give every pad/graphic/text that repeats another
     /// item's id a fresh one. (A missing id is also filled in.)
     RepairFootprint { name: String },
@@ -2220,6 +2224,10 @@ pub enum Cmd {
         #[serde(default)]
         overwrite: bool,
     },
+    /// Revert and the reload of a library changed on disk: the design's copies of `lib_ids` go, with any mark that their library's Save delete them
+    /// (`SymbolLibrarySection::deleted`); the library's file is left as it is. The caller puts the file's symbols back in the same batch.
+    /// `SYMBOL_LIBRARY_MANAGER::RevertLibrary` and `UpdateLibraryBuffer` (`m_libs.erase( aLibrary )`: the buffer and its deleted list go), UI-LEFT-2 LL3.
+    ForgetLibrarySymbols { lib_ids: Vec<String> },
     /// `SYMBOL_EDITOR_DRAWING_TOOLS::PlaceAnchor` ("Move Symbol Anchor"): `at` (mm, the symbol's own
     /// frame) becomes the new origin -- `symbol->Move( -cursorPos )`, every pin and graphic of every unit
     /// and body style shifts by `-at`.
@@ -2528,6 +2536,7 @@ impl Cmd {
             | Cmd::DeleteLibraryFootprint { .. }
             | Cmd::PutLibraryFootprint { .. }
             | Cmd::RenameLibraryFootprint { .. }
+            | Cmd::ForgetLibraryFootprints { .. }
             | Cmd::RepairFootprint { .. }
             | Cmd::EditFootprintProperties { .. }
             | Cmd::SetFootprintAnchor { .. }
@@ -2558,6 +2567,7 @@ impl Cmd {
             | Cmd::DeleteLibrarySymbol { .. }
             | Cmd::PutLibrarySymbol { .. }
             | Cmd::RenameLibrarySymbol { .. }
+            | Cmd::ForgetLibrarySymbols { .. }
             | Cmd::SetSymbolAnchor { .. }
             | Cmd::EditSymbolProperties { .. }
             | Cmd::EditSymbolUnitsAndConnections { .. }
@@ -2872,6 +2882,7 @@ impl Cmd {
 
             Cmd::PutLibraryFootprint { footprint, .. } => vec![footprint.name.as_str()],
             Cmd::RenameLibraryFootprint { name, .. } | Cmd::RepairFootprint { name } => vec![name.as_str()],
+            Cmd::ForgetLibraryFootprints { names } => names.iter().map(String::as_str).collect(),
             Cmd::OpenFootprintForEdit { name }
             | Cmd::NewFootprint { name }
             | Cmd::DeleteLibraryFootprint { name }
@@ -2904,6 +2915,7 @@ impl Cmd {
 
             Cmd::PutLibrarySymbol { symbol, .. } => vec![symbol.lib_id.as_str()],
             Cmd::RenameLibrarySymbol { lib_id, .. } | Cmd::SetSymbolAnchor { lib_id, .. } => vec![lib_id.as_str()],
+            Cmd::ForgetLibrarySymbols { lib_ids } => lib_ids.iter().map(String::as_str).collect(),
             Cmd::OpenSymbolForEdit { lib_id } | Cmd::NewSymbol { lib_id } | Cmd::DeleteLibrarySymbol { lib_id } | Cmd::EditSymbolProperties { lib_id, .. } | Cmd::EditSymbolUnitsAndConnections { lib_id, .. } | Cmd::UpdateSymbolOnBoard { lib_id } => vec![lib_id.as_str()],
             Cmd::AddSymbolPin { lib_id, .. }
             | Cmd::MoveSymbolPin { lib_id, .. }
@@ -3254,6 +3266,8 @@ impl<'a> Board<'a> {
             before.remove(id);
         }
         self.apply_cmd(cmd)?;
+        // a library item the design holds again is no longer one Save takes out of its library (UI-LEFT-2 LL1)
+        self.tidy_library_marks();
         // an edit that emptied a zone's fill (or flipped it) is counted on the zone, so the unfill sticks (R7-Z1, `zone_unfill.rs`)
         self.tidy_zone_fills(zones_before);
         self.tidy_shared_screens(shared_before, cmd.numbering());
@@ -3659,6 +3673,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteLibraryFootprint { name } => self.delete_library_footprint(name),
             Cmd::PutLibraryFootprint { footprint, overwrite } => self.put_library_footprint(footprint, *overwrite),
             Cmd::RenameLibraryFootprint { name, new_name, overwrite } => self.rename_library_footprint(name, new_name, *overwrite),
+            Cmd::ForgetLibraryFootprints { names } => self.forget_library_footprints(names),
             Cmd::RepairFootprint { name } => self.repair_footprint(name),
             Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, models3d, zone_connection, reference, value, fields, datasheet, description_field } => {
                 // the grid is judged first: a row that is wrong refuses the panel before anything of it is taken
@@ -3718,6 +3733,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteLibrarySymbol { lib_id } => self.delete_library_symbol(lib_id),
             Cmd::PutLibrarySymbol { symbol, overwrite } => self.put_library_symbol(symbol, *overwrite),
             Cmd::RenameLibrarySymbol { lib_id, new_lib_id, overwrite } => self.rename_library_symbol(lib_id, new_lib_id, *overwrite),
+            Cmd::ForgetLibrarySymbols { lib_ids } => self.forget_library_symbols(lib_ids),
             Cmd::SetSymbolAnchor { lib_id, at } => self.set_symbol_anchor(lib_id, *at),
             Cmd::EditSymbolProperties { lib_id, reference_prefix, description, keywords, datasheet, power, in_bom, on_board, pin_numbers_hidden, pin_names_hidden, pin_name_offset_mm, unit_count, has_alternate_body_style, footprint_filters, units_locked, power_local, exclude_from_sim, exclude_from_pos_files } => self.edit_symbol_properties(
                 lib_id,
@@ -6766,18 +6782,25 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// A footprint of a library of the tables is also marked for its library's next Save to delete its file (`DeleteFootprintFromLibrary`, UI-LEFT-2 LL1), with or
+    /// without a copy in the design: the server's rewrite (`crate::library_buffer` in the CLI) has checked the library holds it.
     fn delete_library_footprint(&mut self, name: &str) -> Result<(), Vec<CheckResult>> {
-        let lib = self
-            .design
-            .footprint_library
-            .as_mut()
-            .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "the project footprint library is empty")])?;
+        // a library's footprint already deleted is gone: deleting it again is refused, not a silent no-op
+        let table = library_editors::is_table_library_item(name) && !self.design.footprint_library.as_ref().is_some_and(|l| l.deleted.iter().any(|d| d == name));
+        let Some(lib) = self.design.footprint_library.as_mut() else {
+            if table {
+                self.mark_library_footprints_deleted([name]);
+                return Ok(());
+            }
+            return Err(vec![CheckResult::fail("ops_unknown_footprint", name, "the project footprint library is empty")]);
+        };
         let before = lib.footprints.len();
         lib.footprints.retain(|f| f.name != name);
-        if lib.footprints.len() == before {
+        if lib.footprints.len() == before && !table {
             return Err(vec![CheckResult::fail("ops_unknown_footprint", name, "no footprint with this name in the library")]);
         }
         lib.embedded.remove(name);
+        self.mark_library_footprints_deleted([name]);
         Ok(())
     }
 
@@ -7181,18 +7204,24 @@ impl<'a> Board<'a> {
     }
 
     /// The symbol and, with it, every symbol derived from it (`LIB_BUFFER::DeleteBuffer`: "Remove all derived symbols to prevent broken inheritance").
+    /// A symbol of a library of the tables, and each one that goes with it, is also marked for its library's next Save to take out of the file
+    /// (`SYMBOL_LIBRARY_MANAGER::RemoveSymbol` -> `LIB_BUFFER::DeleteBuffer`'s `m_deleted`, UI-LEFT-2 LL1), with or without a copy in the design: the server's
+    /// rewrite (`crate::library_buffer` in the CLI) has checked the library holds it and added the library's own symbols derived from it.
     fn delete_library_symbol(&mut self, lib_id: &str) -> Result<(), Vec<CheckResult>> {
-        if self.design.symbol_library.is_none() {
+        // a library's symbol already deleted is gone: deleting it again is refused, not a silent no-op
+        let table = library_editors::is_table_library_item(lib_id) && !self.design.symbol_library.as_ref().is_some_and(|l| l.deleted.iter().any(|d| d == lib_id));
+        if self.design.symbol_library.is_none() && !table {
             return Err(vec![CheckResult::fail("ops_unknown_symbol", lib_id, "the project symbol library is empty")]);
         }
         let gone = self.symbols_to_delete(lib_id);
-        let lib = self.design.symbol_library.as_mut().expect("checked above");
+        let lib = self.symbol_library_mut();
         let before = lib.symbols.len();
         lib.symbols.retain(|s| !gone.contains(&s.lib_id));
-        if lib.symbols.len() == before {
+        if lib.symbols.len() == before && !table {
             return Err(vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the library")]);
         }
         lib.embedded.retain(|k, _| !gone.contains(k));
+        self.mark_library_symbols_deleted(gone.iter().map(String::as_str));
         Ok(())
     }
 

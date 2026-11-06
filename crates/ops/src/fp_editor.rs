@@ -51,13 +51,17 @@ pub enum FpEditorCmd {
     /// SVG file as the footprint's lines, arcs, circles, polygons, curves and texts on `import.layer` -- `GRAPHICS_IMPORTER_PCBNEW` with the footprint as the items' parent,
     /// the board's own importer ([`crate::import_graphics`]) -- with "Fix discontinuities" and "Group imported items" (a group of the footprint's). One undo step.
     ImportGraphics { footprint: String, import: crate::ImportGraphics },
+    /// `PCB_BASE_FRAME::CreateNewFootprint`'s `SetAttributes( footprintAttrs )` for a footprint New Footprint makes in a library of the library tables: the
+    /// attributes of the library's last footprint ("Try to infer the footprint attributes from an existing footprint in the library", `fpnames.back()`), which
+    /// the studio's server reads from the library's folder and adds to the `new_footprint` it rewrites (UI-LEFT-2 LL2). One undo step with it.
+    SetAttributes { footprint: String, attributes: FootprintAttributes },
 }
 
 impl FpEditorCmd {
     /// The open and the settings are the Footprint Editor's, the save the board's.
     pub fn domain(&self) -> Domain {
         match self {
-            FpEditorCmd::OpenFromBoard { .. } | FpEditorCmd::SetSettings { .. } | FpEditorCmd::ImportGraphics { .. } => Domain::FootprintEditor,
+            FpEditorCmd::OpenFromBoard { .. } | FpEditorCmd::SetSettings { .. } | FpEditorCmd::ImportGraphics { .. } | FpEditorCmd::SetAttributes { .. } => Domain::FootprintEditor,
             FpEditorCmd::SaveToBoard { .. } => Domain::Pcb,
         }
     }
@@ -66,7 +70,7 @@ impl FpEditorCmd {
     pub fn subject(&self) -> &str {
         match self {
             FpEditorCmd::OpenFromBoard { reference } => reference,
-            FpEditorCmd::SaveToBoard { footprint } | FpEditorCmd::SetSettings { footprint, .. } | FpEditorCmd::ImportGraphics { footprint, .. } => footprint,
+            FpEditorCmd::SaveToBoard { footprint } | FpEditorCmd::SetSettings { footprint, .. } | FpEditorCmd::ImportGraphics { footprint, .. } | FpEditorCmd::SetAttributes { footprint, .. } => footprint,
         }
     }
 
@@ -76,6 +80,7 @@ impl FpEditorCmd {
             FpEditorCmd::SaveToBoard { footprint } => format!("update footprint {} on the board", BoardFootprintCopy::reference_of_key(footprint).unwrap_or(footprint)),
             FpEditorCmd::SetSettings { footprint, .. } => format!("footprint {footprint:?}: clearance overrides, private layers, net ties"),
             FpEditorCmd::ImportGraphics { footprint, import } => format!("footprint {footprint:?}: import graphics on {}", import.layer),
+            FpEditorCmd::SetAttributes { footprint, .. } => format!("footprint {footprint:?}: the attributes of its library's footprints"),
         }
     }
 }
@@ -137,6 +142,11 @@ impl Board<'_> {
             FpEditorCmd::SaveToBoard { footprint } => self.save_footprint_to_board(footprint),
             FpEditorCmd::SetSettings { footprint, settings } => self.set_footprint_settings(footprint, settings),
             FpEditorCmd::ImportGraphics { footprint, import } => self.import_footprint_graphics(footprint, import),
+            FpEditorCmd::SetAttributes { footprint, attributes } => {
+                let fp = self.design.footprint_library.as_mut().and_then(|l| l.by_name_mut(footprint)).ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", footprint, "this footprint has not been opened in the Footprint Editor yet")])?;
+                fp.attributes = attributes.clone();
+                Ok(())
+            }
         }
     }
 
