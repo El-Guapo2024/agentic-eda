@@ -1,0 +1,128 @@
+/* components/RuleTextEditor.tsx: a transparent-text textarea over a drawn copy of its text, in one box that scrolls both. Every element that
+   lays the text out (.rte-metrics) must measure it the same way, or the caret drifts from the letters. */
+.rte {
+  position: relative;
+  overflow: auto;
+  min-height: 60px;
+  box-sizing: border-box;
+  background: var(--chrome-input-bg);
+  color: var(--chrome-text);
+  border: 1px solid var(--chrome-border);
+  border-radius: 4px;
+  resize: vertical;
+}
+.rte:focus-within {
+  outline: 1px solid var(--chrome-accent);
+  outline-offset: -1px;
+}
+.rte.rte-invalid {
+  border-color: var(--chrome-danger);
+  outline: 1px solid var(--chrome-danger);
+}
+.rte-grid {
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr);
+  min-height: 100%;
+}
+.rte-grid.rte-with-gutter {
+  grid-template-columns: auto minmax(max-content, 1fr);
+}
+.rte-metrics {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: inherit;
+  font-weight: normal;
+  line-height: 1.4;
+  letter-spacing: normal;
+  word-spacing: normal;
+  tab-size: 4;
+  -moz-tab-size: 4;
+  white-space: pre;
+  overflow-wrap: normal;
+  text-transform: none;
+  box-sizing: border-box;
+  margin: 0;
+  border: 0;
+  padding: 4px 24px 4px 6px;
+}
+/* The line number margin: `SetMarginType( 0, wxSTC_MARGIN_NUMBER )`, as wide as "_99999", stuck to the left as the text scrolls. */
+.rte-gutter {
+  grid-row: 1;
+  grid-column: 1;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 6ch;
+  padding-left: 4px;
+  padding-right: 6px;
+  text-align: right;
+  color: var(--chrome-text-dim);
+  background: var(--chrome-input-bg);
+  user-select: none;
+}
+.rte-overlay,
+.rte-input {
+  grid-row: 1;
+  grid-column: 1;
+}
+.rte-with-gutter .rte-overlay,
+.rte-with-gutter .rte-input {
+  grid-column: 2;
+}
+.rte-overlay {
+  pointer-events: none;
+  color: var(--chrome-text);
+  min-width: 0;
+}
+.rte-input {
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 1.4em;
+  min-width: 0;
+  resize: none;
+  overflow: hidden;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--chrome-text);
+  -webkit-text-fill-color: transparent;
+}
+.rte-input::placeholder {
+  color: var(--chrome-text-dim);
+  -webkit-text-fill-color: var(--chrome-text-dim);
+}
+/* The selection lies over the drawn text: see-through, so the letters under it show. */
+.rte-input::selection {
+  background: color-mix(in srgb, var(--chrome-selected-bg) 40%, transparent);
+  color: transparent;
+}
+/* `STYLE_BRACELIGHT`: the selection's text colour on the text colour mixed 20% into the background. */
+.rte-brace {
+  color: var(--chrome-selected-text);
+  background: color-mix(in srgb, var(--chrome-text) 20%, var(--chrome-input-bg));
+}
+/* `STYLE_BRACEBAD`: `*wxRED`. */
+.rte-brace-bad {
+  color: #ff0000;
+}
+/* Scintilla's completion list. */
+.rte-list {
+  position: fixed;
+  z-index: 4100;
+  overflow-y: auto;
+  min-width: 120px;
+  padding: 1px 0;
+  background: var(--chrome-input-bg);
+  color: var(--chrome-text);
+  border: 1px solid var(--chrome-border);
+  box-shadow: 0 4px 12px var(--chrome-shadow);
+}
+.rte-item {
+  padding: 0 8px;
+  cursor: default;
+}
+.rte-item.selected {
+  background: var(--chrome-selected-bg);
+  color: var(--chrome-selected-text);
+}
