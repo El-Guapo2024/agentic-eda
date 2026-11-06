@@ -6,18 +6,26 @@
 // A pattern is read the way KiCad reads it (`EDA_COMBINED_MATCHER( pattern, CTX_NETCLASS )`, kicad-port/netPattern.ts): as a wildcard pattern (`*` any run of characters, `?` one character)
 // or as a regular expression (`USB_D[PM]`, `(CLK|DAT)[0-3]`), and the whole net name has to match. A net is in every class with a pattern that matches it, and has the settings of all of
 // them (`GetEffectiveNetClass`): where several set one, the class higher in the table wins -- a class's place in the table is its priority; the Up and Down buttons move a class -- and the
-// Default class gives the rest. Not ported: the PCB colour (the Appearance panel's Net Classes tab holds it); the tuning profile of a class is on the Tuning Profiles page.
+// Default class gives the rest. A pattern in bus notation (`D[0..7]`, `{SDA SCL}`) is stored as its members, one row each (`SetNetclassPatternAssignment`,
+// kicad-port/busPattern.ts), as KiCad shows it the next time the page opens.
+//
+// The board's columns end with "Tuning Profile" (`GRID_DELAY_PROFILE`: the class's tuning profile, a choice of the project's profiles with a blank first,
+// `UpdateDelayProfileNames`) and "PCB Color" (`GRID_PCB_COLOR`: the class's colour on the board; transparent is none, "Set color to transparent to use layer
+// default color."; "Import colors from schematic" copies each class's schematic colour, `OnImportColorsClick`); the Default row has no colour. The profile is
+// the project's (`tuning_profiles.class_profiles`) and goes with the page's Apply in the same undo step (`batch` of `set_net_classes` and
+// `set_tuning_profiles`); the colour is the one the Appearance panel's Net Classes tab edits (`NETCLASS::GetPcbColor`, kept in `appearance.json` with the
+// person's view settings, outside the undo history), written when Apply succeeds.
 //
 // Schematic Setup > Project > Net Classes is the same panel (`PANEL_SETUP_NETCLASSES( .., aIsEEschema = true )`) over the same table: `editor="sch"` shows the
 // Eeschema columns instead of the board's (`ShowHideColumns( "0 11 12 13 14" )`: Wire Thickness, Bus Thickness, Color, Line Style), the Default row's colour and
 // line style read-only (`loadNetclasses`) and its widths required (`GRID_CELL_MARK_AS_NULLABLE( false )`). Either page sends the whole table, the columns it does
 // not show as it found them, so the two dialogs edit one set as KiCad's edit the project's one `NET_SETTINGS`; Undo from either tab takes it back.
 import { useEffect, useMemo, useState } from "react";
-import { useStudioState } from "../../state/store";
+import { useStudioDispatch, useStudioState } from "../../state/store";
 import { LINE_STYLE_NAMES, SCH_COLOR_HELP, cssFromHex, defaultClassSchematic, hexFromCss, lineStyleOfRow, lineStyleRow, schematicColumnsIssue, schematicOf, schematicToSend } from "../../kicad-port/schSetup";
 import { applyAssignments, assignmentRows, boardNetNames, classOfNet, classesOfNet, effectiveClassName, netClassSettingsOf, netsMatching, validateNetClasses, type AssignmentRow, type NetClassIssue } from "../../kicad-port/boardSetupRules";
 import { hasRegexSyntax, isRegex } from "../../kicad-port/netPattern";
-import type { NetClass, NetClassSchematic } from "../../api/types";
+import type { Cmd, NetClass, NetClassSchematic } from "../../api/types";
 import { LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
 
 interface Draft {
@@ -26,6 +34,10 @@ interface Draft {
   rows: AssignmentRow[];
   /** The schematic's columns by class name (Schematic Setup's; Board Setup carries them as found). */
   schematic: Record<string, NetClassSchematic>;
+  /** "Tuning Profile" by class name (`NETCLASS::GetTuningProfile`; "" or absent: none). Schematic Setup carries it as found. */
+  profiles: Record<string, string>;
+  /** "PCB Color" by class name (`NETCLASS::GetPcbColor`, a CSS colour; absent: transparent). Schematic Setup carries it as found. */
+  colors: Record<string, string>;
 }
 
 type SizeField = "clearance" | "track_width" | "via_diameter" | "via_drill" | "microvia_diameter" | "microvia_drill" | "diff_pair_width" | "diff_pair_gap";
@@ -51,16 +63,20 @@ function newClassName(taken: readonly string[]): string {
 export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & { editor?: "pcb" | "sch" }) {
   const sch = editor === "sch";
   const state = useStudioState();
+  const dispatch = useStudioDispatch();
   const board = state.board;
   const rules = board?.board_rules;
   const units = state.units;
   const nets = useMemo(() => (board ? boardNetNames(board) : []), [board]);
+  const storedColors = state.appearance.netclassColors;
 
   const source = useMemo<Draft | undefined>(() => {
     if (!rules) return undefined;
     const { default: def, classes, schematic } = netClassSettingsOf(rules);
-    return { def, classes, rows: assignmentRows(classes), schematic: { ...(schematic ?? {}) } };
-  }, [rules]);
+    return { def, classes, rows: assignmentRows(classes), schematic: { ...(schematic ?? {}) }, profiles: { ...(rules.tuning_profiles?.class_profiles ?? {}) }, colors: { ...storedColors } };
+  }, [rules, storedColors]);
+  // `UpdateDelayProfileNames`: a blank, then the project's profiles.
+  const profileNames = useMemo(() => (rules?.tuning_profiles?.profiles ?? []).map((p) => p.name).filter((n) => n !== ""), [rules]);
   const page = usePageDraft<Draft>(source);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
@@ -103,11 +119,17 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
       const old = d.classes[row - 1]!.name;
       // the class's schematic columns go with its name
       const schematic = { ...d.schematic };
-      if (schematic[old] && !d.classes.some((c, j) => j !== row - 1 && c.name === old)) {
-        schematic[name] = schematic[old]!;
-        delete schematic[old];
+      const profiles = { ...d.profiles };
+      const colors = { ...d.colors };
+      if (!d.classes.some((c, j) => j !== row - 1 && c.name === old)) {
+        for (const byName of [schematic, profiles, colors] as Record<string, unknown>[]) {
+          if (byName[old] !== undefined) {
+            byName[name] = byName[old];
+            delete byName[old];
+          }
+        }
       }
-      return { ...d, classes: d.classes.map((c, j) => (j === row - 1 ? { ...c, name } : c)), rows: d.rows.map((r) => (r.netclass === old ? { ...r, netclass: name } : r)), schematic };
+      return { ...d, classes: d.classes.map((c, j) => (j === row - 1 ? { ...c, name } : c)), rows: d.rows.map((r) => (r.netclass === old ? { ...r, netclass: name } : r)), schematic, profiles, colors };
     });
   const setLook = (row: number, patch: Partial<NetClassSchematic>) =>
     page.edit((d) => {
@@ -125,7 +147,11 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
     page.edit((d) => {
       const schematic = { ...d.schematic };
       delete schematic[gone];
-      return { ...d, classes: d.classes.filter((_, j) => j !== selClass - 1), rows: d.rows.filter((r) => r.netclass !== gone), schematic };
+      const profiles = { ...d.profiles };
+      delete profiles[gone];
+      const colors = { ...d.colors };
+      delete colors[gone];
+      return { ...d, classes: d.classes.filter((_, j) => j !== selClass - 1), rows: d.rows.filter((r) => r.netclass !== gone), schematic, profiles, colors };
     });
     setSelClass(Math.min(selClass, draft.classes.length - 1));
     setSelRow(null);
@@ -170,8 +196,46 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
     const looks: Record<string, NetClassSchematic> = {};
     for (const [k, v] of Object.entries(draft.schematic)) looks[k.trim()] = v;
     const schematic = schematicToSend(looks, ["Default", ...classes.map((c) => c.name)]);
-    void apply.run({ op: "set_net_classes", settings: { default: { ...draft.def, name: "Default", nets: [] }, classes, schematic } }, page.markClean);
+    const names = ["Default", ...classes.map((c) => c.name)];
+    const byTrimmed = <T,>(m: Record<string, T>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k.trim(), v] as const));
+    // the class's tuning profile (`nc->SetTuningProfile( GetCellValue( aRow, GRID_DELAY_PROFILE ) )`): the classes of the page, a blank one names none
+    const profiles = byTrimmed(draft.profiles);
+    const classProfiles = Object.fromEntries(names.filter((n) => (profiles[n] ?? "") !== "").map((n) => [n, profiles[n]!]));
+    const stored = rules?.tuning_profiles;
+    const sameProfiles = JSON.stringify(Object.entries(classProfiles).sort()) === JSON.stringify(Object.entries(stored?.class_profiles ?? {}).sort());
+    const setClasses: Cmd = { op: "set_net_classes", settings: { default: { ...draft.def, name: "Default", nets: [] }, classes, schematic } };
+    const cmd: Cmd = sameProfiles ? setClasses : { op: "batch", cmds: [setClasses, { op: "set_tuning_profiles", settings: { profiles: stored?.profiles ?? [], ...(Object.keys(classProfiles).length > 0 ? { class_profiles: classProfiles } : {}) } }] };
+    // the PCB colour (`if( !nc->IsDefault() ) .. if( newPcbColor != COLOR4D::UNSPECIFIED ) nc->SetPcbColor( newPcbColor )`): the Appearance panel's, written once Apply succeeds
+    const colors = byTrimmed(draft.colors);
+    void apply.run(cmd, () => {
+      page.markClean();
+      for (const n of new Set([...Object.keys(storedColors), ...names.slice(1)])) {
+        const want = names.slice(1).includes(n) ? (colors[n] ?? null) : null;
+        if ((storedColors[n] ?? null) !== want) dispatch({ type: "APPEARANCE", op: { op: "netclass_color", name: n, color: want } });
+      }
+    });
   };
+
+  // `OnImportColorsClick`: each class the project has takes its schematic colour as its PCB colour (an unspecified one is transparent).
+  const importColors = () =>
+    page.edit((d) => {
+      const colors = { ...d.colors };
+      for (const c of d.classes) {
+        if (!(rules?.net_classes ?? []).some((k) => k.name === c.name)) continue;
+        const sch = rules?.net_class_schematic?.[c.name]?.color ?? null;
+        if (sch) colors[c.name] = sch;
+        else delete colors[c.name];
+      }
+      return { ...d, colors };
+    });
+  const setProfile = (name: string, profile: string) => page.edit((d) => ({ ...d, profiles: { ...d.profiles, [name]: profile } }));
+  const setColor = (name: string, color: string | null) =>
+    page.edit((d) => {
+      const colors = { ...d.colors };
+      if (color === null) delete colors[name];
+      else colors[name] = color;
+      return { ...d, colors };
+    });
 
   const selected = selRow !== null && draft ? draft.rows[selRow] : undefined;
   const matching = selected ? netsMatching(selected.pattern, nets) : [];
@@ -198,6 +262,8 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
                         {c.label}
                       </th>
                     ))}
+                  {!sch && <th>Tuning Profile</th>}
+                  {!sch && <th title="PCB netclass color">PCB Color</th>}
                   {sch && (
                     <>
                       <th title="Schematic wire thickness">Wire Thickness</th>
@@ -235,6 +301,16 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
                           />
                         </td>
                       ))}
+                    {!sch && (
+                      <td>
+                        <ProfileCell name={row === 0 ? "Default" : c.name} value={draft.profiles[row === 0 ? "Default" : c.name] ?? ""} names={profileNames} onChange={(v) => setProfile(row === 0 ? "Default" : c.name, v)} />
+                      </td>
+                    )}
+                    {!sch && (
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        {row === 0 ? <span className="bs-unit" title="The Default class has no colour of its own.">(layer colour)</span> : <PcbColorCell name={c.name} value={draft.colors[c.name] ?? null} onChange={(v) => setColor(c.name, v)} />}
+                      </td>
+                    )}
                     {sch && <SchematicCells row={row} name={row === 0 ? "Default" : c.name} look={row === 0 ? defaultClassSchematic(draft.schematic.Default) : schematicOf(draft.schematic, c.name)} units={units} issue={schIssues.find((i) => i.row === row)?.message} onChange={(patch) => setLook(row, patch)} />}
                     {!sch && (
                       <td>
@@ -248,6 +324,14 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
             </table>
           </div>
           <p className="bs-note">Sizes are in {units}.</p>
+          {!sch && (
+            <div className="bs-toolbar" style={{ alignItems: "center" }}>
+              <span className="bs-note" style={{ fontStyle: "italic", margin: 0 }}>
+                Set color to transparent to use layer default color.
+              </span>
+              <button onClick={importColors}>Import colors from schematic</button>
+            </div>
+          )}
           {sch && (
             <p className="bs-note" style={{ fontStyle: "italic" }}>
               {SCH_COLOR_HELP}
@@ -410,6 +494,35 @@ function SchematicCells({ row, name, look, units, issue, onChange }: { row: numb
           ))}
         </select>
       </td>
+    </>
+  );
+}
+
+/** The Tuning Profile cell (`GRID_DELAY_PROFILE`, `wxGridCellChoiceEditor( profileNames, false )`): a blank, then the project's profiles; a name the project does not have is kept. */
+function ProfileCell({ name, value, names, onChange }: { name: string; value: string; names: readonly string[]; onChange: (v: string) => void }) {
+  const missing = value !== "" && !names.includes(value);
+  return (
+    <select aria-label={`${name} Tuning Profile`} className={missing ? "bs-invalid" : undefined} title={missing ? "No such tuning profile: kicad-cli reports it as missing." : undefined} value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="" />
+      {missing && <option value={value}>{value}</option>}
+      {names.map((n) => (
+        <option key={n} value={n}>
+          {n}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/** The PCB Color cell (`GRID_PCB_COLOR`, `GRID_CELL_COLOR_SELECTOR`): a swatch, and "none" for transparent (`COLOR4D::UNSPECIFIED`: the layer's colour). */
+function PcbColorCell({ name, value, onChange }: { name: string; value: string | null; onChange: (v: string | null) => void }) {
+  const hex = hexFromCss(value);
+  return (
+    <>
+      <input type="color" aria-label={`${name} PCB Color`} title="PCB netclass color" value={hex ?? "#000000"} style={{ width: 32, opacity: hex ? 1 : 0.35 }} onChange={(e) => onChange(cssFromHex(e.target.value))} />
+      <button aria-label={`${name} PCB Color none`} title="No colour of its own: the layer's" disabled={!hex} onClick={() => onChange(null)}>
+        ×
+      </button>
     </>
   );
 }

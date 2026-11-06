@@ -20,6 +20,7 @@ import { measureStrokeText } from "../components/text/strokeFont";
 import { copySheetImage, exportSymbolSvg, saveSheetCopy } from "./schControlExports";
 import { importFootprintAssignments } from "./schControlImports";
 import { openAssignNetclass } from "./assignNetclass";
+import { setFindHighlights } from "../state/commonTool";
 
 export interface SchControlContext {
   tab: string;
@@ -170,7 +171,12 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
       const picked = ctx.requestSelection().map((id) => netOfItem.get(id));
       const nets = [...new Set(picked.filter((n): n is string => !!n))];
       const candidates = [...new Set(connected.map((i) => i.net).filter((n) => n !== ""))].sort((a, b) => a.localeCompare(b));
-      openAssignNetclass(nets, candidates, toast);
+      // the previewer (`SCH_EDITOR_CONTROL::AssignNetclass`): every item of the sheet on a matching net brightened, the others not
+      const preview = (matching: readonly string[]) => {
+        const want = new Set(matching);
+        setFindHighlights(connected.filter((i) => i.net !== "" && want.has(i.net)).map((i) => i.id));
+      };
+      openAssignNetclass(nets, candidates, toast, preview);
     })
   );
   // Select on PCB -- `ExplicitCrossProbeToPcb` -> `SendSelectItemsToPcb( items, true )`: the selected symbols' footprints are selected in the board editor.

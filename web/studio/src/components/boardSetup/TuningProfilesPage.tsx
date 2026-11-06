@@ -3,8 +3,9 @@
 // along a track of a width on each copper layer (with the layers above and below as its references) and a grid of via overrides. The checks are the panel's (a profile has a name, a
 // layer is configured once); Apply sends the whole page as one undoable command (`set_tuning_profiles`).
 //
-// Each net class names the profile it uses (the Net Classes grid's "Tuning Profile" column in KiCad); here the page has the assignments in a table of its own, because a class
-// may name a profile the project does not have -- the panel keeps the name of a deleted profile -- and that is what kicad-cli's DRC reports as `missing_tuning_profile`.
+// Each net class names the profile it uses in the Net Classes grid's "Tuning Profile" column (`GRID_DELAY_PROFILE`), as in KiCad; this page sends those names as it
+// found them. A class may name a profile the project does not have -- the panel keeps the name of a deleted profile -- and that is what kicad-cli's DRC reports as
+// `missing_tuning_profile`; the page lists such classes.
 // Not ported: the transmission-line calculator behind the width and delay cells (`calculateTrackParametersForCell`).
 import { useEffect, useState } from "react";
 import { useStudioState } from "../../state/store";
@@ -28,7 +29,8 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
   const check = draft ? checkProfiles(draft, copper) : null;
   const index = draft ? Math.min(sel, draft.profiles.length - 1) : -1;
   const p = draft && index >= 0 ? draft.profiles[index] : undefined;
-  const missing = draft ? missingProfiles(draft) : [];
+  // the classes, as the board has them now, that name a profile this page does not define
+  const missing = draft ? missingProfiles({ ...draft, classProfiles: stored?.class_profiles ?? {} }) : [];
 
   const editProfile = (fn: (p: TuningProfile) => TuningProfile) => page.edit((d) => ({ ...d, profiles: d.profiles.map((q, k) => (k === index ? fn(q) : q)) }));
   const setEntry = (row: number, patch: Partial<ProfileLayerEntry>) => editProfile((q) => ({ ...q, layer_entries: q.layer_entries.map((e, k) => (k === row ? { ...e, ...patch } : e)) }));
@@ -42,7 +44,8 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
       apply.setMessage({ text: check.page ?? "Fix the profile marked in red first.", bad: true });
       return;
     }
-    const send = profilesToSend(draft);
+    // the profile each class names is the Net Classes page's: sent as the board has it
+    const send = profilesToSend({ ...draft, classProfiles: { ...(stored?.class_profiles ?? {}) } });
     if (sameProfiles(send, stored)) {
       apply.setMessage({ text: "Nothing to apply.", bad: false });
       page.markClean();
@@ -63,7 +66,6 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
     </select>
   );
 
-  const classes = draft ? ["Default", ...(board?.board_rules?.net_classes ?? []).map((c) => c.name), ...Object.keys(draft.classProfiles).filter((c) => c !== "Default" && !(board?.board_rules?.net_classes ?? []).some((n) => n.name === c))] : [];
 
   return (
     <PageFrame title="Tuning Profiles" hidden={hidden} dirty={page.dirty} busy={apply.busy} message={apply.message?.text ?? null} bad={apply.message?.bad} onApply={onApply} onRevert={() => (page.revert(), apply.setMessage(null))}>
@@ -257,46 +259,11 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
             </div>
           )}
 
-          <div className="bs-section">Net Classes</div>
-          <p className="bs-note">The profile each net class uses. A class that names a profile this page does not have is reported by kicad-cli's DRC as a missing tuning profile.</p>
-          <table className="bs-grid" aria-label="Tuning profile of each net class">
-            <thead>
-              <tr>
-                <th>Net class</th>
-                <th>Tuning profile</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {classes.map((cls) => {
-                const value = draft.classProfiles[cls] ?? "";
-                const isMissing = missing.some(([c]) => c === cls);
-                return (
-                  <tr key={cls} data-class={cls}>
-                    <td>{cls}</td>
-                    <td>
-                      <input
-                        type="text"
-                        list="bs-profile-names"
-                        aria-label={`Tuning profile of ${cls}`}
-                        className={isMissing ? "bs-invalid" : ""}
-                        value={value}
-                        spellCheck={false}
-                        style={{ width: 180 }}
-                        onChange={(e) => page.edit((d) => ({ ...d, classProfiles: { ...d.classProfiles, [cls]: e.target.value } }))}
-                      />
-                    </td>
-                    <td className="bs-error">{isMissing ? "No such tuning profile: kicad-cli reports it as missing." : ""}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <datalist id="bs-profile-names">
-            {draft.profiles.filter((q) => q.name !== "").map((q) => (
-              <option key={q.name} value={q.name} />
-            ))}
-          </datalist>
+          {missing.length > 0 && (
+            <p className="bs-error" data-missing-profiles>
+              {missing.map(([c, p]) => `${c} names ${p}`).join("; ")}: no such tuning profile, which kicad-cli's DRC reports as missing. The class's profile is chosen in Net Classes.
+            </p>
+          )}
           {check.page && <p className="bs-error">{check.page}</p>}
         </>
       )}
