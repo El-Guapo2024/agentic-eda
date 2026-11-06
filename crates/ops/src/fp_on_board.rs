@@ -165,6 +165,12 @@ impl Board<'_> {
     /// here a match is a zone on the same layers with the same outline).
     pub(crate) fn set_footprint_zones(&mut self, reference: &str, zones: Vec<Zone>) {
         let Some(pose) = self.pose_of(reference).cloned() else { return };
+        // nothing to put and nothing to take: the board is left as it is (a board with no routing section is not given one -- the routing checks run on a board that has
+        // one, and a footprint placed on an unrouted board would make every net of it fail them)
+        let owns = self.design.routing.as_ref().is_some_and(|rt| rt.zones.iter().any(|z| z.parent_footprint.as_deref() == Some(reference)));
+        if zones.is_empty() && !owns {
+            return;
+        }
         let copper = self.model.board.layers.len();
         let steps = placement_steps(&pose);
         let rt = self.routing_mut();

@@ -301,6 +301,11 @@ mod tests {
         let poses: Vec<(&str, Nm)> = b.design().placement.as_ref().unwrap().footprints.iter().map(|f| (f.id.as_str(), f.at.x)).collect();
         assert_eq!(poses, [("H1", mm(10.0)), ("H2", mm(20.0))]);
         assert!(b.design().placement.as_ref().unwrap().footprints.iter().all(|f| f.rot == 0 && f.side == Side::Top));
+        // a footprint with no zone leaves a board with no routing section without one (the routing checks run on a board that has one: under Strict a footprint
+        // placed on an unrouted board was refused for every net it left unrouted)
+        assert!(b.design().routing.is_none(), "no routing section was made");
+        b.apply(&Cmd::MoveItems { ids: vec!["H1".into()], dx: mm(1.0), dy: Nm::ZERO }).unwrap();
+        assert!(b.design().routing.is_none());
     }
 
     /// Text & Graphics > Formatting's "apply board defaults to footprint .." boxes: a footprint put on the board takes the Text & Graphics defaults of its fields', its text's and its
