@@ -79,10 +79,18 @@ pub fn drc_with_options(dir: &Path, opts: eda_kicad_engine::DrcOptions) -> Resul
 /// accepts reports as `excluded`, with its comment; the ones whose marker text
 /// is known are in the derived project (`erc.erc_exclusions`), so kicad-cli
 /// matches them itself (`ErcViolation::kicad_matched`).
+///
+/// With the pin-to-pin errors ignored from the dialog's menu (`SchExtras::pin_to_pin_errors_ignored`, r3 D3-M2) no pin-to-pin finding is listed,
+/// as KiCad's ERC skips both slots then (KiCad 25ec2335 `testCapturedPinToPin`: `aSettings.IsTestEnabled( ercErrorCode( pinError ) )`): kicad-cli, which reads
+/// the warning's slot alone from the project, still reports the errors, and they are left out here.
 pub fn erc(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (design, model) = load_with_schematic(dir)?;
     let exclusions = design.schematic.as_ref().map(|s| s.erc_exclusions.clone()).unwrap_or_default();
-    Ok(eda_kicad_engine::erc(&design, &model, &work(dir))?.to_json(&exclusions))
+    let mut report = eda_kicad_engine::erc(&design, &model, &work(dir))?;
+    if design.schematic.as_ref().is_some_and(|s| s.extras.pin_to_pin_errors_ignored) {
+        report.violations.retain(|v| v.kind != "pin_to_pin");
+    }
+    Ok(report.to_json(&exclusions))
 }
 
 /// What `POST /api/erc/report` and `/api/drc/report` ask for: `{ format: "report" | "json", errors, warnings, exclusions, units: "mm" | "mil" | "in" }` -- the

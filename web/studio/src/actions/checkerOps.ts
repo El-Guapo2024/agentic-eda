@@ -597,17 +597,27 @@ export async function setDrcSeverity(ctx: CheckerCtx, check: string, severity: R
   return true;
 }
 
-/** The same for the schematic: `set_erc_severities` over the table as the server has it. */
-export async function setErcSeverity(ctx: CheckerCtx, check: string, severity: RuleSeverity): Promise<boolean> {
+/**
+ * The same for the schematic: `set_erc_severities` over the table as the server has it. `pinBase`: the severity of the pin-to-pin finding the menu was
+ * opened on -- Ignore on an error ignores the errors too (`DIALOG_ERC::OnERCItemRClick`: `ERCE_PIN_TO_PIN_ERROR` and the warning), which no project
+ * keeps and the studio does (the table's `pin_to_pin_error` slot, r3 D3-M2); on a warning the errors stay.
+ */
+export async function setErcSeverity(ctx: CheckerCtx, check: string, severity: RuleSeverity, pinBase?: "error" | "warning"): Promise<boolean> {
   const { api, dispatch } = ctx;
   const before = api.getState();
   const current = await fetchErcSeverities().then((r) => r.severities).catch(() => null);
   if (!current) return false;
-  if (!(await api.cmd({ op: "set_erc_severities", severities: severitiesAfter(ERC_CHECK_ITEMS, current, check, severity) }))) return false;
+  const table = severitiesAfter(ERC_CHECK_ITEMS, current, check, severity);
+  const pinErrors = check === "pin_to_pin" && severity === "ignore" && pinBase === "error";
+  if (pinErrors) table[PIN_TO_PIN_ERROR_SLOT] = "ignore";
+  if (!(await api.cmd({ op: "set_erc_severities", severities: table }))) return false;
   setErcView({ severities: null });
-  dispatch({ type: "ERC_PATCH_SEVERITY", check, severity, description: ercTitle(check), version: await revisionAfter(before.ercVersion, before) });
+  dispatch({ type: "ERC_PATCH_SEVERITY", check, severity, description: ercTitle(check), version: await revisionAfter(before.ercVersion, before), keepPinErrors: check === "pin_to_pin" && !pinErrors });
   return true;
 }
+
+/** `erc_checks::PIN_TO_PIN_ERROR_SLOT`: the pin-to-pin error's severity slot, which a project has no key for. */
+export const PIN_TO_PIN_ERROR_SLOT = "pin_to_pin_error";
 
 /** Read the schematic's severity table once, so a waived finding's menu can say what its check's severity is. */
 export async function loadErcSeverities(): Promise<void> {
@@ -754,7 +764,7 @@ export async function runMarkerMenu(ctx: CheckerCtx, target: MarkerTarget, id: R
       return;
     default: {
       const severity = menuSeverity(id);
-      if (severity) await setErcSeverity(ctx, v.check, severity);
+      if (severity) await setErcSeverity(ctx, v.check, severity, v.base_severity ?? (v.severity === "warning" ? "warning" : "error"));
     }
   }
 }

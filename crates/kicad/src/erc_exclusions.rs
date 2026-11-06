@@ -186,11 +186,14 @@ fn rule(check: &str) -> Option<Rule> {
         "pin_to_pin" | "different_unit_net" => r(Main, SpecificMainAux),
         // connection_graph.cpp 3693-3699: `SetItems( m_driver, driver )`, at the driver.
         "multiple_net_names" => r(Aux, SpecificMainAux),
+        // KiCad 25ec2335 erc.cpp `reportNameConflict` (`TestSimilarLabels`, `TestSameLocalGlobalLabel`): `SetItems( aMain.item, aAux.item )`,
+        // `Place( item, aMain.sheet, aMain.position, aMain.sheet, aAux.sheet )` -- at the main label or power pin, sheet-specific on its sheet, each item on
+        // its own (UI-LEFT B7) [probed on kicad-cli 4fe1ca2060: `similar_labels`, `same_local_global_label`; the other three are the same call].
+        "similar_labels" | "similar_power" | "similar_label_and_power" | "same_local_global_label" | "same_local_global_power" => r(Main, SpecificMainAux),
         // Not here: `endpoint_off_grid` and `unconnected_wire_endpoint` (a marker at each end of one wire, and the report names the wire once), `generic-*`
         // and `unresolved_variable` (a text's own record), `field_name_whitespace` (a field has no uuid of its own: the marker names it with a
         // `kiapi.schematic.ErcSymbolChildReference`, and none of the forms above matched on kicad-cli), `label_multiple_wires` and `four_way_junction` (a point
-        // of their own), `no_connect_connected` (two creators with two sets of paths), `hier_label_mismatch`, `similar_*`, `same_local_global_*`,
-        // `bus_definition_conflict`, `duplicate_pins`.
+        // of their own), `no_connect_connected` (two creators with two sets of paths), `hier_label_mismatch`, `bus_definition_conflict`, `duplicate_pins`.
         _ => None,
     }
 }
@@ -535,8 +538,21 @@ mod tests {
     }
 
     #[test]
+    fn two_labels_of_one_name_are_a_marker_at_the_main_one_with_each_items_sheet() {
+        // `reportNameConflict`: at the main item, the sheet-specific path and both items' paths; known when the design has one sheet.
+        let (a, b) = (item("lab-a", 60, 50, "Label 'abc'"), item("lab-b", 60, 76, "Label 'ABC'"));
+        for check in ["similar_labels", "similar_power", "similar_label_and_power", "same_local_global_label", "same_local_global_power"] {
+            let m = marker(check, "warning", &[a.clone(), b.clone()], ROOT, 1).unwrap_or_else(|| panic!("{check}"));
+            assert_eq!((m.at_nm, m.items.clone()), ([a.x_nm, a.y_nm], vec!["lab-a".to_string(), "lab-b".to_string()]), "{check}");
+            assert!(!m.sheet.is_empty() && m.main_sheet == m.sheet && m.aux_sheet == m.sheet, "{check}: {m:?}");
+            assert!(marker(check, "warning", &[a.clone(), b.clone()], "/r/s", 2).is_none(), "{check}: the aux label's sheet is not in a report of two sheets");
+        }
+        assert_eq!(marker("similar_labels", "warning", &[a.clone(), b.clone()], ROOT, 1).unwrap().error_type, "ERCET_SIMILAR_LABELS");
+    }
+
+    #[test]
     fn a_check_whose_marker_this_has_not_read_the_source_of_has_no_marker() {
-        for check in ["endpoint_off_grid", "unconnected_wire_endpoint", "unresolved_variable", "generic-warning", "four_way_junction", "no_connect_connected", "similar_labels", "field_name_whitespace"] {
+        for check in ["endpoint_off_grid", "unconnected_wire_endpoint", "unresolved_variable", "generic-warning", "four_way_junction", "no_connect_connected", "field_name_whitespace"] {
             assert!(marker(check, "error", &[item("a", 1, 2, "Wire")], ROOT, 1).is_none(), "{check}");
         }
         assert!(marker("footprint_link_issues", "warning", &[], ROOT, 1).is_none(), "a violation naming no item cannot be keyed");
@@ -545,7 +561,7 @@ mod tests {
 
     #[test]
     fn every_check_with_a_marker_rule_has_a_kind_of_finding_and_the_names_are_kicads() {
-        for check in ["footprint_link_issues", "simulation_model_issue", "lib_symbol_issues", "lib_symbol_mismatch", "duplicate_sheet_names", "undefined_netclass", "different_unit_footprint", "pin_not_connected", "pin_not_driven", "power_pin_not_driven", "ground_pin_not_ground", "stacked_pin_name", "missing_unit", "missing_input_pin", "missing_bidi_pin", "missing_power_pin", "no_connect_dangling", "single_global_label", "wire_dangling", "label_dangling", "isolated_pin_label", "bus_to_net_conflict", "bus_to_bus_conflict", "net_not_bus_member", "pin_to_pin", "different_unit_net", "multiple_net_names"] {
+        for check in ["footprint_link_issues", "simulation_model_issue", "lib_symbol_issues", "lib_symbol_mismatch", "duplicate_sheet_names", "undefined_netclass", "different_unit_footprint", "pin_not_connected", "pin_not_driven", "power_pin_not_driven", "ground_pin_not_ground", "stacked_pin_name", "missing_unit", "missing_input_pin", "missing_bidi_pin", "missing_power_pin", "no_connect_dangling", "single_global_label", "wire_dangling", "label_dangling", "isolated_pin_label", "bus_to_net_conflict", "bus_to_bus_conflict", "net_not_bus_member", "pin_to_pin", "different_unit_net", "multiple_net_names", "similar_labels", "similar_power", "similar_label_and_power", "same_local_global_label", "same_local_global_power"] {
             assert!(rule(check).is_some() && error_type(check, "error").is_some(), "{check}");
         }
         // `ERCE_` of erc_item.cpp with the library's `ERCET_`; two spellings that differ.

@@ -174,6 +174,10 @@
     const loaded = await until(() => rows().length >= 3 && !busy(), 60000);
     check("the Violations page lists the findings", !!loaded, `${rows().length} rows`);
     if (!loaded) return;
+    // The Show boxes start with Exclusions off (UI-LEFT B8, R6-D9); All shows everything for what follows.
+    const allBox = document.querySelector(".dialog .rc-show input");
+    if (allBox && !allBox.checked) allBox.click();
+    await sleep(200);
     const TITLE = "Design Rules Checker";
     const report = async () => json("/api/drc");
     const first = await report();

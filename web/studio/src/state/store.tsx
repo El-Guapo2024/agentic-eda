@@ -1190,7 +1190,7 @@ export type Action =
   /** A check's severity changed (`set_rule_severities`): the report on screen takes it (`patchDrcSeverity`) -- an ignored check leaves the list and joins the ignored ones. */
   | { type: "DRC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
   /** The same for the schematic (`set_erc_severities`). */
-  | { type: "ERC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
+  | { type: "ERC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null; /** Ignore on a pin-to-pin warning: the errors stay (`patchErcSeverity`). */ keepPinErrors?: boolean }
   /** Delete Marker / Delete All Markers (`DIALOG_DRC::OnDeleteOneClick`, `OnDeleteAllClick`) on the report on screen: the rows leave the lists and the canvas. `version` is given when the deletion also changed the design (an excluded marker's exclusion goes with it): see `ERC_DELETE_MARKER`. */
   | { type: "DRC_DELETE_MARKER"; page: DrcPage; index: number; /** The row selected after it (an index of the list as it is then), or null. */ select: number | null; version?: string | null }
   | { type: "DRC_DELETE_ALL"; includeExclusions: boolean; version?: string | null }
@@ -1636,7 +1636,7 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, drc: patchDrcSeverity(state.drc, action.check, action.severity, action.description), drcVersion: action.version, drcSelected: null };
     case "ERC_PATCH_SEVERITY":
       if (!state.erc) return state;
-      return { ...state, erc: patchErcSeverity(state.erc, action.check, action.severity, action.description), ercVersion: action.version, ercSelected: null };
+      return { ...state, erc: patchErcSeverity(state.erc, action.check, action.severity, action.description, action.keepPinErrors), ercVersion: action.version, ercSelected: null };
     case "DRC_DELETE_MARKER":
       if (!state.drc) return state;
       return { ...state, drc: patchDrcDeleteMarker(state.drc, action.page, action.index), drcSelected: action.page === "violations" ? action.select : state.drcSelected, ...(action.version !== undefined ? { drcVersion: action.version } : {}) };

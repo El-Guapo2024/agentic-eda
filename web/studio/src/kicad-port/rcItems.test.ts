@@ -258,6 +258,17 @@ test("the schematic report takes a severity change the same way and keeps its ex
   assert.deepEqual(off.ignored_checks, [{ key: "pin_not_connected", description: "Pin not connected" }]);
 });
 
+test("Ignore on a pin-to-pin warning leaves the pin-to-pin errors; on an error it takes both (DIALOG_ERC::OnERCItemRClick, r3 D3-M2)", () => {
+  const e = (severity: "error" | "warning", location: string): ErcViolation => ({ check: "pin_to_pin", severity, location, hint: null, base_severity: severity });
+  const report: ErcReport = { violations: [e("error", "U1.1"), e("warning", "U2.1"), { ...e("error", "U3.1"), severity: "excluded" }], counts: { pin_to_pin: 2 }, ignored_checks: [] };
+  const warningOnly = patchErcSeverity(report, "pin_to_pin", "ignore", "Conflict problem between pins", true);
+  assert.deepEqual(warningOnly.violations.map((x) => x.location), ["U1.1", "U3.1"], "the warning's markers go, the errors' stay");
+  assert.deepEqual(warningOnly.counts, { pin_to_pin: 1 });
+  const both = patchErcSeverity(report, "pin_to_pin", "ignore", "Conflict problem between pins");
+  assert.deepEqual(both.violations, []);
+  assert.deepEqual(both.ignored_checks, [{ key: "pin_to_pin", description: "Conflict problem between pins" }]);
+});
+
 test("the two placements of a shared screen have one location and their own sheets: waiving one leaves the other (p13-p16 F5)", () => {
   const on = (sheet: string): ErcViolation => ({ check: "pin_not_connected", severity: "error", location: "R1.2", hint: null, base_severity: "error", marker: { error_type: "ERCET_PIN_NOT_CONNECTED", at_nm: [1, 2], items: ["u"], sheet: ["root", sheet], main_sheet: ["root", sheet] } });
   const report: ErcReport = { violations: [on("s1"), on("s2")], counts: { pin_not_connected: 2 }, ignored_checks: [] };

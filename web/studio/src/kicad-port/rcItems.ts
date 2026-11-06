@@ -605,9 +605,15 @@ export function patchErcDeleteAll(report: ErcReport, includeExclusions: boolean)
 }
 
 /** [`patchDrcSeverity`] for the schematic: an excluded finding stays excluded, whatever the check becomes. */
-export function patchErcSeverity(report: ErcReport, check: string, severity: RuleSeverity, description: string): ErcReport {
+/**
+ * `ID_SET_SEVERITY_TO_IGNORE` on a pin-to-pin finding (`DIALOG_ERC::OnERCItemRClick`): on a warning only the warning's slot is ignored and only its markers
+ * go (`DeleteMarkers( MARKER_ERC, rcItem->GetErrorCode() )`, `ERCE_PIN_TO_PIN_WARNING`) -- the errors stay; on an error both slots are
+ * (`SetSeverity( ERCE_PIN_TO_PIN_WARNING, RPT_SEVERITY_IGNORE )` too). `keepPinErrors` is the first case.
+ */
+export function patchErcSeverity(report: ErcReport, check: string, severity: RuleSeverity, description: string, keepPinErrors = false): ErcReport {
   const ignoring = severity === "ignore";
-  const violations = report.violations.filter((v) => !(ignoring && v.check === check)).map((v) => (v.check === check && !ignoring && v.severity !== "excluded" ? { ...v, severity } : v));
+  const goes = (v: ErcViolation) => ignoring && v.check === check && !(keepPinErrors && v.check === "pin_to_pin" && (v.base_severity ?? (v.severity === "warning" ? "warning" : "error")) === "error");
+  const violations = report.violations.filter((v) => !goes(v)).map((v) => (v.check === check && !ignoring && v.severity !== "excluded" ? { ...v, severity } : v));
   const counts: Record<string, number> = {};
   for (const v of violations) if (v.severity !== "excluded") counts[v.check] = (counts[v.check] ?? 0) + 1;
   const rest = (report.ignored_checks ?? []).filter((c) => c.key !== check);

@@ -179,14 +179,16 @@ export function DrcDialog() {
   /** `DIALOG_DRC::OnMenu`, the gear button (`m_bMenu`): three check items kept in the user's settings (`PCBNEW_SETTINGS::m_DRCDialog`). */
   const optionsMenu = (at: DOMRect) => {
     const o = view.options;
+    // a check item's mark (`wxITEM_CHECK`), in the menu's icon column
+    const mark = (on: boolean) => <span aria-hidden="true">{on ? "\u2713" : ""}</span>;
     setMenu({
       x: at.left,
       y: at.bottom,
       entries: [
-        { label: "Report All Errors for Each Track", hint: "If unchecked, only the first error will be reported for each track", checked: o.reportAllTrackErrors, onSelect: () => setDrcOptions({ reportAllTrackErrors: !o.reportAllTrackErrors }) },
+        { label: "Report All Errors for Each Track", hint: "If unchecked, only the first error will be reported for each track", checked: o.reportAllTrackErrors, icon: mark(o.reportAllTrackErrors), onSelect: () => setDrcOptions({ reportAllTrackErrors: !o.reportAllTrackErrors }) },
         { label: "", separator: true, onSelect: () => undefined },
-        { label: "Cross-probe Selected Items", hint: "Highlight corresponding items on canvas when selected in the DRC list", checked: o.crossprobe, onSelect: () => setDrcOptions({ crossprobe: !o.crossprobe }) },
-        { label: "Center on Cross-probe", hint: "When cross-probing, scroll the canvas so that the item is visible", checked: o.scrollOnCrossprobe, onSelect: () => setDrcOptions({ scrollOnCrossprobe: !o.scrollOnCrossprobe }) },
+        { label: "Cross-probe Selected Items", hint: "Highlight corresponding items on canvas when selected in the DRC list", checked: o.crossprobe, icon: mark(o.crossprobe), onSelect: () => setDrcOptions({ crossprobe: !o.crossprobe }) },
+        { label: "Center on Cross-probe", hint: "When cross-probing, scroll the canvas so that the item is visible", checked: o.scrollOnCrossprobe, icon: mark(o.scrollOnCrossprobe), onSelect: () => setDrcOptions({ scrollOnCrossprobe: !o.scrollOnCrossprobe }) },
       ],
     });
   };
