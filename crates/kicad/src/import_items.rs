@@ -355,10 +355,8 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
         // (style (thickness ..) (arrow_length ..) (text_position_mode N) (arrow_direction ..) (extension_height ..) (extension_offset ..) [(keep_text_aligned yes)])
         let style = sexpr::find(d, "style");
         let st = |key: &str| style.and_then(|s| um_of(s, key));
-        let text_position = match style.and_then(|s| sexpr::find(s, "text_position_mode")).and_then(|v| sexpr::num(v, 1)) {
-            Some(m) if m as i64 == 1 => DimensionTextPosition::Inline,
-            _ => DimensionTextPosition::Outside,
-        };
+        // `T_text_position_mode`: `static_cast<DIM_TEXT_POSITION>( parseInt( "text position mode" ) )`, MANUAL (2) included (GAPS.md item 28: it was read as 0).
+        let text_position = style.and_then(|s| sexpr::find(s, "text_position_mode")).and_then(|v| sexpr::num(v, 1)).map_or(DimensionTextPosition::Outside, |m| DimensionTextPosition::from_code(m as i64));
         // The pre-6.0 default; the style block overrides it either way.
         let arrow_direction = match style.and_then(|s| sexpr::find(s, "arrow_direction")).and_then(|v| sexpr::txt(v, 1)) {
             Some("inward") => ArrowDirection::Inward,
@@ -390,8 +388,9 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
             .map(|deg| ((deg * 1000.0).round() as i64).rem_euclid(360_000) as u32)
             .unwrap_or(0);
         // A radial's and a leader's text is the user's: their `updateGeometry` draw to it and never set it (`text_position_mode` only
-        // recomputes an aligned/orthogonal text). Keep the file's `(at x y)` for the geometry pass and the writer.
-        let text_pos = if matches!(kind, DimensionKind::Radial { .. } | DimensionKind::Leader) {
+        // recomputes an aligned/orthogonal text), and so is a text placed by hand (`DIM_TEXT_POSITION::MANUAL`: `updateText` leaves it).
+        // Keep the file's `(at x y)` for the geometry pass and the writer.
+        let text_pos = if matches!(kind, DimensionKind::Radial { .. } | DimensionKind::Leader) || text_position == DimensionTextPosition::Manual {
             text.and_then(|t| sexpr::find(t, "at")).and_then(|a| {
                 let x = sexpr::num(a, 1)?;
                 let y = sexpr::num(a, 2)?;

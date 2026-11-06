@@ -1657,7 +1657,7 @@ fn outline_errors_json(design: &eda_model::ir::Design, model: Option<&eda_model:
 /// (`eda_connectivity::dimension::compute_dimension_geometry`) -- a
 /// renderer never re-derives it.
 fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
-    use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
+    use eda_model::ir::{ArrowDirection, DimensionKind, DimensionUnits, DimensionUnitsFormat};
 
     let (kind, height, horizontal, leader_length) = match d.kind {
         DimensionKind::Aligned { height } => ("aligned", Some(height), None, None),
@@ -1677,10 +1677,7 @@ fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         DimensionUnitsFormat::BareSuffix => "bare_suffix",
         DimensionUnitsFormat::ParenSuffix => "paren_suffix",
     };
-    let text_position = match d.text_position {
-        DimensionTextPosition::Outside => "outside",
-        DimensionTextPosition::Inline => "inline",
-    };
+    let text_position = d.text_position.word();
     let arrow_direction = match d.arrow_direction {
         ArrowDirection::Inward => "inward",
         ArrowDirection::Outward => "outward",
@@ -1716,6 +1713,20 @@ fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         "extension_height": d.extension_height,
         "arrow_direction": arrow_direction,
         "lines": geom.lines.iter().map(|(a, b)| json!([[a.x, a.y], [b.x, b.y]])).collect::<Vec<_>>(),
+        // A leader's circle frame (`DIM_TEXT_BORDER::CIRCLE`): `[[cx, cy], r]` each.
+        "circles": geom.circles.iter().map(|(c, r)| json!([[c.x, c.y], r])).collect::<Vec<_>>(),
+        // The text's own place (`Dimension::text_pos`: a radial's or a leader's text, or one placed by hand), null when the geometry places it; a leader's
+        // frame (`DIM_TEXT_BORDER`: none, rectangle, circle, round_rect); an aligned or orthogonal crossbar's ends and a radial's knee, the point editor's
+        // handles (UI-LEFT P13).
+        "text_pos": d.text_pos.map(|p| json!([p.x, p.y])),
+        "text_frame": match d.text_frame {
+            eda_model::ir::DimensionTextBorder::None => "none",
+            eda_model::ir::DimensionTextBorder::Rectangle => "rectangle",
+            eda_model::ir::DimensionTextBorder::Circle => "circle",
+            eda_model::ir::DimensionTextBorder::RoundRect => "round_rect",
+        },
+        "crossbar": geom.crossbar.map(|(a, b)| json!([[a.x, a.y], [b.x, b.y]])),
+        "knee": geom.knee.map(|k| json!([k.x, k.y])),
         "text_at": [geom.text_at.x, geom.text_at.y],
         "computed_text_angle": geom.text_angle,
         "measured_value_nm": geom.measured_value_nm,
@@ -1724,7 +1735,7 @@ fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
 }
 
 fn dimension_settings_json(s: &eda_model::ir::DimensionSettings) -> Value {
-    use eda_model::ir::{DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
+    use eda_model::ir::{DimensionUnits, DimensionUnitsFormat};
 
     let units = match s.units {
         DimensionUnits::Mm => "mm",
@@ -1737,10 +1748,7 @@ fn dimension_settings_json(s: &eda_model::ir::DimensionSettings) -> Value {
         DimensionUnitsFormat::BareSuffix => "bare_suffix",
         DimensionUnitsFormat::ParenSuffix => "paren_suffix",
     };
-    let text_position = match s.text_position {
-        DimensionTextPosition::Outside => "outside",
-        DimensionTextPosition::Inline => "inline",
-    };
+    let text_position = s.text_position.word();
 
     json!({
         "units": units,

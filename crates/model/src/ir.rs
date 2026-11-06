@@ -2438,10 +2438,11 @@ pub struct Dimension {
     #[serde(alias = "text_thickness_um", deserialize_with = "crate::units::de")]
     pub text_thickness_nm: Option<Nm>,
     /// The text anchor as the file has it (`gr_text`'s own `(at x y)`), kept for a `Radial`
-    /// and a `Leader` only: KiCad's `PCB_DIM_RADIAL::updateGeometry` and
+    /// and a `Leader`: KiCad's `PCB_DIM_RADIAL::updateGeometry` and
     /// `PCB_DIM_LEADER::updateGeometry` draw the leader line *to* `GetTextPos()` and never move
     /// the text, and `PCB_DIM_RADIAL::updateText` only turns it toward that position. An
-    /// aligned or orthogonal dimension's text is recomputed (`text_position`), so it keeps
+    /// aligned or orthogonal dimension's text is recomputed (`text_position`) unless the text was
+    /// placed by hand (`DimensionTextPosition::Manual`), which keeps it here; otherwise it is
     /// `None`. Additive: absent in an older `design.json`, where the geometry pass places it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_pos: Option<Point>,
@@ -2487,8 +2488,7 @@ pub enum DimensionKind {
         leader_length: Nm,
     },
     /// `PCB_DIM_LEADER`: a line from `start` (arrow tip) to `end` (knee),
-    /// then on to the text. No text-border styling (rect/circle around
-    /// the text) -- see PARITY-pcb.md section 18.
+    /// then on to the text, which [`Dimension::text_frame`] may frame.
     Leader,
     /// `PCB_DIM_CENTER`: a `+` mark at `start`, sized and oriented by
     /// `end - start` (one arm along that vector, the other rotated 90°).
@@ -2518,14 +2518,46 @@ pub enum DimensionUnitsFormat {
     ParenSuffix,
 }
 
-/// `DIM_TEXT_POSITION`. `MANUAL` is not ported -- no point-editor-style
-/// manual text drag for a sub-element, same restriction this model's
-/// zones/shapes already have on their own control points.
+/// `DIM_TEXT_POSITION`: the file's `(text_position_mode 0|1|2)`. `Manual` keeps the text where the user put it ([`Dimension::text_pos`]: the point
+/// editor's text handle, `ALIGNED_DIMENSION_POINT_EDIT_BEHAVIOR::updateAlignedDimension`'s `SetTextPositionMode( DIM_TEXT_POSITION::MANUAL )`, or the
+/// dialog's Position mode with its X and Y): `PCB_DIM_ALIGNED::updateText` and `PCB_DIM_ORTHOGONAL::updateText` move the text only for `OUTSIDE` and
+/// `INLINE`. Added after the other two (UI-LEFT P13), so nothing on disk before it carries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DimensionTextPosition {
     Outside,
     Inline,
+    Manual,
+}
+
+impl DimensionTextPosition {
+    /// The number `(text_position_mode N)` writes: `DIM_TEXT_POSITION`'s OUTSIDE 0, INLINE 1, MANUAL 2.
+    pub fn code(self) -> u8 {
+        match self {
+            DimensionTextPosition::Outside => 0,
+            DimensionTextPosition::Inline => 1,
+            DimensionTextPosition::Manual => 2,
+        }
+    }
+
+    /// Inverse of [`DimensionTextPosition::code`] (`static_cast<DIM_TEXT_POSITION>( parseInt( "text position mode" ) )`); a number that is none of the three is
+    /// outside.
+    pub fn from_code(n: i64) -> DimensionTextPosition {
+        match n {
+            1 => DimensionTextPosition::Inline,
+            2 => DimensionTextPosition::Manual,
+            _ => DimensionTextPosition::Outside,
+        }
+    }
+
+    /// The word the studio's JSON uses (`outside`, `inline`, `manual`).
+    pub fn word(self) -> &'static str {
+        match self {
+            DimensionTextPosition::Outside => "outside",
+            DimensionTextPosition::Inline => "inline",
+            DimensionTextPosition::Manual => "manual",
+        }
+    }
 }
 
 /// `DIM_ARROW_DIRECTION`.
