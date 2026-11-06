@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { browseFolder, type FolderEntry, type FolderListing } from "../../api/libraryTablesClient";
 
-export type BrowseWhat = "symbol" | "symbol_folder" | "footprint" | "design_block" | "table" | "folder";
+export type BrowseWhat = "symbol" | "symbol_folder" | "footprint" | "design_block" | "table" | "folder" | "drawing_sheet";
 
 export interface FolderBrowserProps {
   title: string;
@@ -14,6 +14,8 @@ export interface FolderBrowserProps {
   start: string;
   onPick: (path: string) => void;
   onCancel: () => void;
+  /** More places one click away besides Home and the board's folder (Page Settings: KiCad's template folder). */
+  places?: { label: string; path: string }[];
 }
 
 function join(folder: string, name: string): string {
@@ -27,6 +29,7 @@ const HINT: Record<BrowseWhat, string> = {
   design_block: "Choose a design block library: a .kicad_blocks folder (any folder works; its whole name becomes the nickname).",
   table: "Choose a library table file (sym-lib-table, fp-lib-table or design-block-lib-table).",
   folder: "Choose the folder.",
+  drawing_sheet: "Choose a drawing sheet file (*.kicad_wks).",
 };
 
 /** The kinds of library that are a folder: picking one picks a folder, and a folder flagged as such a library is picked, not opened, on a double click. */
@@ -41,7 +44,7 @@ function pickable(what: BrowseWhat, e: FolderEntry): boolean {
   return !e.dir;
 }
 
-export function FolderBrowser({ title, what, start, onPick, onCancel }: FolderBrowserProps) {
+export function FolderBrowser({ title, what, start, onPick, onCancel, places }: FolderBrowserProps) {
   const [at, setAt] = useState(start);
   const [typed, setTyped] = useState(start);
   const [listing, setListing] = useState<FolderListing | null>(null);
@@ -113,6 +116,11 @@ export function FolderBrowser({ title, what, start, onPick, onCancel }: FolderBr
                 Board folder
               </button>
             )}
+            {places?.map((p) => (
+              <button key={p.path} className="lt-link" onClick={() => setAt(p.path)}>
+                {p.label}
+              </button>
+            ))}
           </div>
           <div className="lt-browser-list" role="listbox" aria-label="Folders and files">
             {error && <div className="lt-error">{error}</div>}

@@ -9,7 +9,7 @@
 //! (`web/studio/src/kicad-port/appearanceFile.ts`); this module stores two objects and refuses anything else, so a bad write cannot leave the file
 //! unreadable.
 //!
-//! `GET /api/appearance` returns the file (an empty one when nothing was saved); `POST /api/appearance` takes `{ local?, project? }` and replaces each
+//! `GET /api/appearance` returns the file (an empty one when nothing was saved); `POST /api/appearance` takes `{ local?, project?, viewer3d? }` and replaces each
 //! section that is present. Last write wins -- two pages open on one project is the same single person looking at it twice.
 
 use serde_json::{json, Map, Value};
@@ -54,7 +54,12 @@ pub fn read(dir: &Path) -> Option<Value> {
             }
         }
     }
-    Some(json!({ "version": VERSION, "local": section("local"), "project": project }))
+    let mut out = json!({ "version": VERSION, "local": section("local"), "project": project });
+    // The 3D viewer's saved viewports (`board.3dviewports` of the `.kicad_pro`, `PROJECT_FILE::m_Viewports3D`), kept when there are any.
+    if let Some(v3) = obj.get("viewer3d").filter(|s| s.is_object()) {
+        out["viewer3d"] = v3.clone();
+    }
+    Some(out)
 }
 
 /// `POST /api/appearance`: replace the sections `body` carries, keep the others, write the file, return it.
@@ -69,7 +74,7 @@ pub fn post(dir: &Path, body: &str) -> Value {
     let Some(patch) = patch.as_object() else { return json!({ "error": "appearance settings must be a JSON object" }) };
     let mut current = get(dir);
     let cur: &mut Map<String, Value> = current.as_object_mut().expect("the file is an object");
-    for key in ["local", "project"] {
+    for key in ["local", "project", "viewer3d"] {
         match patch.get(key) {
             None => {}
             Some(v) if v.is_object() => {
@@ -130,6 +135,20 @@ mod tests {
         let v = post(&dir, r#"{"project":{}}"#);
         assert_eq!(v["project"], json!({}), "an empty section replaces");
         assert_eq!(v["local"], json!({ "a": 3 }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The 3D viewer's viewports (`board.3dviewports`) are a section of their own: written and read back, kept by a write of the other sections, refused when not an object.
+    #[test]
+    fn the_3d_viewports_are_a_section_of_their_own() {
+        let dir = scratch("viewer3d");
+        let vp = json!({ "viewports": [{ "name": "Iso", "camera": { "zoom": 0.8 } }] });
+        let saved = post(&dir, &json!({ "viewer3d": vp }).to_string());
+        assert_eq!(saved["viewer3d"], vp);
+        let v = post(&dir, r#"{"local":{"a":1}}"#);
+        assert_eq!(v["viewer3d"], vp, "a write of another section keeps it");
+        assert_eq!(get(&dir)["viewer3d"], vp);
+        assert!(post(&dir, r#"{"viewer3d":[1]}"#).get("error").is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

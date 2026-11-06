@@ -21,14 +21,18 @@ export const samePos = (a: Pt, b: Pt): boolean => Math.abs(a[0] - b[0]) <= SAME_
 export interface GridEnv {
   /** Screen pixels per um (`ToWorld( px )` is `px / scale`). */
   scale: number;
-  /** `GAL::GetGridSize()`: the current grid, um. */
+  /** `GAL::GetGridSize()`: the current grid, nm (its X size). */
   gridNm: number;
+  /** The current grid's Y size, nm, when it is not square (`GRID::y`). */
+  gridYNm?: number;
   /** `GAL::GetVisibleGridSize()`: the grid as it is drawn (a fine grid is drawn coarser when zoomed out), um. */
   visibleGridNm: number;
   /** `GAL::GetGridOrigin()`. */
   origin: Pt;
   /** `GetGridSize( category )`: the category's own grid when overrides are on (kicad-port/gridOverrides.ts `gridSizeFor`), else the current. */
   gridSizeOf(category: GridCategory): number;
+  /** The Y size of that grid, when the grids are not square (kicad-port/gridOverrides.ts `gridSizeYFor`). */
+  gridSizeYOf?(category: GridCategory): number;
 }
 
 export interface Visibility {
@@ -146,7 +150,7 @@ export class GridHelper {
 
   /** `GetGrid`. */
   getGrid(): Pt {
-    return [this.env.gridNm, this.env.gridNm];
+    return [this.env.gridNm, this.env.gridYNm ?? this.env.gridNm];
   }
   getVisibleGrid(): number {
     return this.env.visibleGridNm;
@@ -154,10 +158,10 @@ export class GridHelper {
   getOrigin(): Pt {
     return this.env.origin;
   }
-  /** `GetGridSize( category )`: a square grid, so one number twice. */
+  /** `GetGridSize( category )`: the category's grid, X and Y (a square grid when the editor gives no Y). */
   gridSize(category: GridCategory): Pt {
     const g = this.env.gridSizeOf(category);
-    return [g, g];
+    return [g, this.env.gridSizeYOf?.(category) ?? g];
   }
 
   /** `computeNearest`: the nearest point of the grid anchored at `offset`. */

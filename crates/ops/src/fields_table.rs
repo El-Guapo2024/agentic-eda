@@ -356,14 +356,94 @@ impl TableSpec {
     /// sort, filter and the two filters replace this view's.
     pub fn with_preset(&self, name: &str) -> Option<TableSpec> {
         let (_, preset) = TableSpec::built_in().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(name))?;
+        Some(self.with_spec(preset))
+    }
+
+    /// `ApplyBomPreset` of any preset (a built-in one, one of the project's `bom_presets`, its `bom_settings`): see [`TableSpec::with_preset`].
+    pub fn with_spec(&self, preset: TableSpec) -> TableSpec {
         let mut out = preset;
         for c in &self.columns {
             if !out.columns.iter().any(|o| o.name == c.name) {
                 out.columns.push(Column { show: false, group_by: false, ..c.clone() });
             }
         }
-        Some(out)
+        out
     }
+
+    /// The view as a `BOM_PRESET` named `name`, as the project stores one (`bom_settings.cpp`'s `to_json`: `name`, `fields_ordered` of `{name, label, show,
+    /// group_by}`, `sort_field`, `sort_asc`, `filter_string`, `group_symbols`, `exclude_dnp`, `include_excluded_from_bom`).
+    pub fn to_bom_preset(&self, name: &str) -> serde_json::Value {
+        let fields: Vec<serde_json::Value> = self.columns.iter().map(|c| serde_json::json!({ "name": c.name, "label": if c.label.is_empty() { c.name.as_str() } else { c.label.as_str() }, "show": c.show, "group_by": c.group_by })).collect();
+        serde_json::json!({
+            "name": name,
+            "fields_ordered": fields,
+            "sort_field": self.sort_field,
+            "sort_asc": self.sort_asc,
+            "filter_string": self.filter,
+            "group_symbols": self.group_symbols,
+            "exclude_dnp": self.exclude_dnp,
+            "include_excluded_from_bom": self.include_excluded_from_bom,
+        })
+    }
+
+    /// A project's `BOM_PRESET` (`bom_settings.cpp`'s `from_json`: `fields_ordered` required, `include_excluded_from_bom` false when absent) as a view; `None`
+    /// for one that is not a preset.
+    pub fn from_bom_preset(v: &serde_json::Value) -> Option<TableSpec> {
+        let fields = v.get("fields_ordered")?.as_array()?;
+        let text = |o: &serde_json::Value, k: &str| o.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let flag = |o: &serde_json::Value, k: &str, d: bool| o.get(k).and_then(|x| x.as_bool()).unwrap_or(d);
+        let columns = fields
+            .iter()
+            .filter_map(|f| {
+                let name = text(f, "name");
+                (!name.is_empty()).then(|| Column { label: text(f, "label"), show: flag(f, "show", true), group_by: flag(f, "group_by", false), name })
+            })
+            .collect();
+        Some(TableSpec {
+            columns,
+            group_symbols: flag(v, "group_symbols", true),
+            sort_field: text(v, "sort_field"),
+            sort_asc: flag(v, "sort_asc", true),
+            filter: text(v, "filter_string"),
+            exclude_dnp: flag(v, "exclude_dnp", false),
+            include_excluded_from_bom: flag(v, "include_excluded_from_bom", false),
+        })
+    }
+}
+
+/// The table's scope (`DIALOG_SYMBOL_FIELDS_TABLE::m_scope`, `FIELDS_EDITOR_GRID_DATA_MODEL::SCOPE`): "Entire Project" (`all`, `SCOPE_ALL`), "Current Sheet Only"
+/// (`sheet`, `SCOPE_SHEET`: `ref.GetSheetPath() == m_path`), "Current Sheet and Down" (`sheet_and_down`, `SCOPE_SHEET_RECURSIVE`: `IsContainedWithin( m_path )`)
+/// and KiCad 25ec2335's "Selection" (`selection`, `SCOPE_SELECTION`: the selected symbols, and every symbol inside a selected sheet,
+/// `updateSelectionItems`). `path` is the sheet in view (`m_parent->GetCurrentSheet()`), `selection` the ids selected on it. The references in scope, as
+/// [`project_view`] names them (each sheet path's own: `reference_under`); `None` for the whole project.
+pub fn scope_refs(design: &eda_model::ir::Design, scope: &str, path: &[String], selection: &[String]) -> Option<std::collections::BTreeSet<String>> {
+    use eda_model::sheet_list;
+    let refs_of = |p: &[String], out: &mut std::collections::BTreeSet<String>, only: Option<&[String]>| {
+        if let Some(screen) = sheet_list::screen_of(design, p) {
+            for sym in &screen.symbols {
+                if only.is_none_or(|ids| ids.contains(&sym.id)) {
+                    out.insert(sheet_list::reference_under(screen, sym, p));
+                }
+            }
+        }
+    };
+    let mut out = std::collections::BTreeSet::new();
+    match scope {
+        "sheet" => refs_of(path, &mut out, None),
+        "sheet_and_down" => {
+            for e in sheet_list::walk(design).iter().filter(|e| e.path.starts_with(path)) {
+                refs_of(&e.path, &mut out, None);
+            }
+        }
+        "selection" => {
+            refs_of(path, &mut out, Some(selection));
+            for e in sheet_list::walk(design).iter().filter(|e| e.path.len() > path.len() && e.path.starts_with(path) && selection.contains(&e.path[path.len()])) {
+                refs_of(&e.path, &mut out, None);
+            }
+        }
+        _ => return None,
+    }
+    Some(out)
 }
 
 /// `DATA_MODEL_ROW::m_Flag` (`GROUP_SINGLETON` / `GROUP_COLLAPSED`; the
@@ -1667,5 +1747,41 @@ mod tests {
         spec.columns.push(Column { name: "Note".into(), label: "Note".into(), show: true, group_by: false });
         let text = export_bom(&s, &ConstraintModel::default(), &spec, &BomFmt::csv());
         assert!(text.contains("\"10k-X\""), "{text}");
+    }
+
+    #[test]
+    fn a_view_is_a_bom_preset_and_back_and_a_preset_adds_but_does_not_remove_columns() {
+        let spec = TableSpec::default_editing();
+        let back = TableSpec::from_bom_preset(&spec.to_bom_preset("Mine")).unwrap();
+        assert_eq!(back, spec);
+        let mut wide = spec.clone();
+        wide.columns.push(Column { name: "MPN".into(), label: "MPN".into(), show: true, group_by: false });
+        let applied = wide.with_spec(TableSpec::grouped_by_value());
+        assert_eq!(applied.columns.first().map(|c| c.name.as_str()), Some(REFERENCE));
+        let mpn = applied.columns.iter().find(|c| c.name == "MPN").unwrap();
+        assert!(!mpn.show && !mpn.group_by, "a column the preset does not name stays, hidden");
+        assert!(TableSpec::from_bom_preset(&serde_json::json!({ "name": "x" })).is_none(), "a preset needs fields_ordered");
+    }
+
+    #[test]
+    fn the_scope_is_the_sheet_in_view_its_sheets_or_the_selection() {
+        use eda_model::ir::{Design, SchematicSection, SheetInstance};
+        let sym = |id: &str| SymbolInstance { id: id.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let mut root = SchematicSection { symbols: vec![sym("R1")], ..Default::default() };
+        root.sheets.push(SheetInstance { id: "s1".into(), name: "A".into(), file: "a.kicad_sch".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::new(1000), Nm::new(1000)), pins: vec![], page: String::new() });
+        let mut a = SchematicSection { symbols: vec![sym("R2")], ..Default::default() };
+        a.sheets.push(SheetInstance { id: "s2".into(), name: "B".into(), file: "b.kicad_sch".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::new(1000), Nm::new(1000)), pins: vec![], page: String::new() });
+        let b = SchematicSection { symbols: vec![sym("R3")], ..Default::default() };
+        let mut d: Design = serde_json::from_value(serde_json::json!({ "schema": eda_model::ir::SCHEMA_VERSION, "provenance": { "engine_version": "0", "intent_hash": "x", "seed": 0, "stage_hashes": [] } })).unwrap();
+        d.schematic = Some(root);
+        d.sheet_contents = Some([("a.kicad_sch".to_string(), a), ("b.kicad_sch".to_string(), b)].into_iter().collect());
+        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<std::collections::BTreeSet<String>>();
+        let s1 = vec!["s1".to_string()];
+        assert_eq!(scope_refs(&d, "all", &[], &[]), None);
+        assert_eq!(scope_refs(&d, "sheet", &s1, &[]), Some(set(&["R2"])), "Current Sheet Only");
+        assert_eq!(scope_refs(&d, "sheet_and_down", &s1, &[]), Some(set(&["R2", "R3"])), "Current Sheet and Down");
+        assert_eq!(scope_refs(&d, "sheet_and_down", &[], &[]), Some(set(&["R1", "R2", "R3"])), "from the root, every sheet");
+        assert_eq!(scope_refs(&d, "selection", &[], &["R1".to_string(), "s1".to_string()]), Some(set(&["R1", "R2", "R3"])), "a selected sheet brings its symbols");
+        assert_eq!(scope_refs(&d, "selection", &[], &["R1".to_string()]), Some(set(&["R1"])));
     }
 }

@@ -1,42 +1,37 @@
 // Preferences > Footprint Editor (UI-LEFT F8): the pages KiCad's Preferences dialog has for the Footprint Editor (`EDA_BASE_FRAME::ShowPreferences`: "Footprint Editor" with
-// Display Options, Origins & Axes, Editing Options and Graphics Defaults among its sub-pages), each one ported from its panel at KiCad 8303b2ad:
-//   - Display Options: `PANEL_DISPLAY_OPTIONS` with the footprint editor's settings -- its `PANEL_GAL_OPTIONS`' Cursor rows (Small / Full window / 45 degree crosshairs,
-//     "Always show crosshairs"), which are the studio's one cursor setting of every canvas (state/commonOptions.ts);
+// Display Options, Grids, Origins & Axes, Editing Options, Colors, Footprint Defaults, Graphics Defaults ... among its sub-pages), each one ported from its panel at KiCad 8303b2ad:
+//   - Display Options: `PANEL_DISPLAY_OPTIONS` of the frame -- the cursor and the grid display, every editor's own page (components/PreferencesDialog.tsx's `display_footprint`);
 //   - Origins & Axes: `PANEL_PCBNEW_DISPLAY_ORIGIN( .., FRAME_FOOTPRINT_EDITOR )` -- no Display Origin (`m_displayOrigin->Show( m_frameType == FRAME_PCB_EDITOR )`), the
 //     X axis increasing right or left and the Y axis down or up (`m_DisplayInvertXAxis`, `m_DisplayInvertYAxis`), which the status line's coordinates follow;
 //   - Editing Options: `PANEL_EDIT_OPTIONS( .., true )` -- "Constrain actions to H, V, 45 degrees" (`m_AngleSnapMode`, the editor's line mode), "Step for rotate commands:"
 //     (`m_RotationAngle`, which R and Shift+R turn by), "Arc editing mode:", the Magnetic Points' Snap to pads and Snap to graphics (`loadFPSettings` / `TransferDataFromWindow`);
 //   - Graphics Defaults: `PANEL_FP_EDITOR_GRAPHICS_DEFAULTS`' grid of the layer classes (line thickness, text width, height and thickness, italic, keep upright), which the
 //     drawing tools and the Text tool start from (kicad-port/fpDrawDefaults.ts, fpTextTool.ts); "Reset" puts KiCad's factory table back.
-// Not ported: the Grids, Colors, Toolbars, Footprint Defaults and User Layer Names pages, and Display Options' grid style rows.
+// Not ported: the Grids, Colors, Toolbars, Footprint Defaults and User Layer Names pages; the arc editing mode is kept, not yet read by the point editor.
 import { TEXT_GRAPHICS_ROWS, textRowOf, validateTextGraphics, withLineWidth, withTextFields } from "../kicad-port/boardSetupRules";
 import { FACTORY_TEXT_GRAPHICS } from "../kicad-port/layerDefaults";
 import type { Preferences } from "../kicad-port/preferences";
 import type { LayerClassDefaults, TextGraphicsDefaults } from "../api/types";
-import type { CommonOptions } from "../state/commonOptions";
 import type { AngleSnapMode } from "../kicad-port/pcbParityState";
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 
-export type FpPrefsPage = "fp_display" | "fp_axes" | "fp_edit" | "fp_graphics";
+export type FpPrefsPage = "fp_axes" | "fp_edit" | "fp_graphics";
 
-/** The tree's rows of the Footprint Editor (`book->AddPage( new wxPanel( book ), _( "Footprint Editor" ) )` and its sub-pages), in KiCad's order. */
-export const FP_PREFS_TREE: ReadonlyArray<readonly [FpPrefsPage | null, string, number]> = [
-  [null, "Footprint Editor", 0],
-  ["fp_display", "Display Options", 1],
+/** The tree's rows of the Footprint Editor after its Display Options (`book->AddPage( new wxPanel( book ), _( "Footprint Editor" ) )`'s sub-pages), in KiCad's order. */
+export const FP_PREFS_SUBTREE: Array<[FpPrefsPage, string, number]> = [
   ["fp_axes", "Origins & Axes", 1],
   ["fp_edit", "Editing Options", 1],
   ["fp_graphics", "Graphics Defaults", 1],
 ];
 
 /** The page titles the dialog's header shows. */
-export const FP_PREFS_TITLES: Record<FpPrefsPage, string> = { fp_display: "Display Options", fp_axes: "Origins & Axes", fp_edit: "Editing Options", fp_graphics: "Graphics Defaults" };
+export const FP_PREFS_TITLES: Record<FpPrefsPage, string> = { fp_axes: "Origins & Axes", fp_edit: "Editing Options", fp_graphics: "Graphics Defaults" };
 
 /** `m_arcEditModeChoices`. */
 const ARC_EDIT_MODES = ["Keep center, adjust radius", "Keep endpoints or direction of starting point", "Keep center and radius, adjust endpoints"];
 
-/** What the pages edit besides the preferences: the cursor (common options) and the editor's line mode. */
+/** What the pages edit besides the preferences: the editor's line mode. */
 export interface FpPrefsExtra {
-  cursor: Pick<CommonOptions, "crossHairMode" | "alwaysShowCursor">;
   lineMode: AngleSnapMode;
 }
 
@@ -71,17 +66,6 @@ export function FpPreferencesPage(props: {
     </label>
   );
 
-  if (page === "fp_display") {
-    return (
-      <div data-testid="fp-prefs-display">
-        {heading("Cursor")}
-        {radio("Small crosshairs", extra.cursor.crossHairMode === "small", () => setExtra({ cursor: { ...extra.cursor, crossHairMode: "small" } }), "fp-prefs-cursor-small")}
-        {radio("Full window crosshairs", extra.cursor.crossHairMode === "full", () => setExtra({ cursor: { ...extra.cursor, crossHairMode: "full" } }), "fp-prefs-cursor-full")}
-        {radio("45 degree crosshairs", extra.cursor.crossHairMode === "diag45", () => setExtra({ cursor: { ...extra.cursor, crossHairMode: "diag45" } }), "fp-prefs-cursor-45")}
-        {check("Always show crosshairs", extra.cursor.alwaysShowCursor, (v) => setExtra({ cursor: { ...extra.cursor, alwaysShowCursor: v } }), "fp-prefs-always-cursor")}
-      </div>
-    );
-  }
   if (page === "fp_axes") {
     return (
       <div data-testid="fp-prefs-axes">

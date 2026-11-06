@@ -1,6 +1,7 @@
-// What the library table dialogs ask the server (`crates/cli/src/library_tables.rs`): the tables of both kinds and the variables, the Project tab's OK, the checks of
-// the rows as they stand in the grid, Add Existing Library and New Library, the board's own path variables (Configure Paths), and the folder listing the browse buttons use
-// in place of a native file dialog. The global tables are KiCad's and are only read -- there is no call here that could write one.
+// What the library table dialogs ask the server (`crates/cli/src/library_tables.rs`): the tables of both kinds and the variables, OK of each tab (the board's table, KiCad's
+// global one in its configuration folder, a table they chain), Reset Libraries and Migrate Libraries, the checks of the rows as they stand in the grid, Add Existing Library
+// and New Library, the path variables (Configure Paths: KiCad's in `kicad_common.json`, the board's own), and the folder listing the browse buttons use in place of a native
+// file dialog.
 import type { TableKind, TableRow, TableScope, VariableValue } from "../kicad-port/libraryTable";
 import { ApiError } from "./client";
 import { resetChooserCaches } from "./libraryChooserClient";
@@ -17,6 +18,10 @@ export interface TableScopeView {
   origin?: "config" | "stock" | "folder" | "missing";
   /** The global table only: what the person should know about it. */
   note?: string;
+  /** The global table only: the file OK writes (KiCad's configuration folder's), or null when this machine has none. */
+  target?: string | null;
+  /** The global table only: the table KiCad installs, which Reset Libraries chains. */
+  stock?: string;
   /** Why the file could not be read. */
   error: string | null;
   rows: TableRow[];
@@ -60,6 +65,10 @@ export interface LibraryTablesView {
     undefined: { name: string; value: string; external: boolean }[];
     reserved: string[];
     file: string;
+    /** KiCad's `kicad_common.json`, where KiCad's variables are written; null when this machine has no KiCad configuration folder. */
+    global_file?: string | null;
+    /** The 3D model search paths (`FILENAME_RESOLVER::createPathList`): `${KIPRJMOD}`, then KiCad's path variables but the footprint folders. */
+    search_paths?: { alias: string; path: string }[];
   };
 }
 
@@ -97,9 +106,41 @@ function settle(a: Answer): Answer {
   return a;
 }
 
-/** The Project tab's OK: the rows go through KiCad's checks and, if they pass, into the board's `sym-lib-table` / `fp-lib-table`. */
-export async function saveLibraryTable(kind: TableKind, rows: readonly TableRow[]): Promise<Answer> {
-  return settle(await send<Answer>("/api/library_tables", { kind, rows: rows.map(wireRow) }));
+/**
+ * OK of one tab: the rows go through KiCad's checks and, if they pass, into the table -- the board's `sym-lib-table` / `fp-lib-table` (`project`), KiCad's global one in its
+ * configuration folder (`global`), or the chained table at `path` (`nested`).
+ */
+export async function saveLibraryTable(kind: TableKind, rows: readonly TableRow[], scope: TableScope = "project", path?: string): Promise<Answer> {
+  return settle(await send<Answer>("/api/library_tables", { kind, scope, path, rows: rows.map(wireRow) }));
+}
+
+/** Reset Libraries: KiCad's global table written anew, one row naming the table KiCad installs (`LIBRARY_MANAGER::CreateGlobalTable`). Done at once, OK or Cancel. */
+export async function resetGlobalTable(kind: TableKind): Promise<Answer> {
+  return settle(await send<Answer>("/api/library_tables/reset", { kind }));
+}
+
+/** One row's answer of Migrate Libraries (`row` is its index among the rows sent). */
+export interface MigrateResult {
+  row: number;
+  error?: string;
+  /** Where the KiCad library goes (or went). */
+  dest?: string;
+  exists?: boolean;
+  /** Not migrated: its destination is there and was not to be overwritten. */
+  skipped?: boolean;
+  /** The migrated row's new path (as a table writes it), format and options. */
+  uri?: string;
+  type?: string;
+  options?: string;
+}
+
+/** Migrate Libraries for `rows` (the selected rows, as the grid holds them; `table` is the file of the tab, which a relative path is relative to). `plan`: only where each would
+ *  go and whether that exists; `overwrite`: the indices whose existing destination may be replaced. */
+export async function migrateLibraries(kind: TableKind, rows: readonly TableRow[], opts: { plan?: boolean; overwrite?: number[]; table?: string }): Promise<MigrateResult[]> {
+  const r = await send<{ results?: MigrateResult[]; error?: string }>("/api/library_tables/migrate", { kind, rows: rows.map(wireRow), ...opts });
+  if (r.error || !r.results) throw new ApiError(r.error ?? "no answer");
+  if (!opts.plan && r.results.some((x) => x.uri)) librariesChanged();
+  return r.results;
 }
 
 function wireRow(r: TableRow) {
@@ -149,9 +190,9 @@ export async function addLibrary(req: AddRequest): Promise<AddAnswer> {
   return a;
 }
 
-/** Configure Paths' OK: the board's own variables (KiCad's cannot be changed here). */
-export async function savePathVariables(variables: readonly VariableValue[]): Promise<Answer> {
-  return settle(await send<Answer>("/api/path_variables", { variables }));
+/** Configure Paths' OK: the board's own variables, and KiCad's (written to `kicad_common.json`) when `global` is given. A refusal names its grid (`scope`). */
+export async function savePathVariables(variables: readonly VariableValue[] | null, global?: readonly VariableValue[]): Promise<Answer & { scope?: "project" | "global" }> {
+  return settle(await send<Answer>("/api/path_variables", { ...(variables ? { variables } : {}), ...(global ? { global } : {}) }));
 }
 
 export interface FolderEntry {
@@ -172,7 +213,7 @@ export interface FolderListing {
 
 /** What the browse buttons list: the folders of `path` and the files `what` asks for (`symbol`: .kicad_sym, `table`: a library table; folders only for `symbol_folder`, `footprint`,
  *  `design_block` and `folder`). */
-export async function browseFolder(path: string, what: "symbol" | "symbol_folder" | "footprint" | "design_block" | "table" | "folder"): Promise<FolderListing> {
+export async function browseFolder(path: string, what: "symbol" | "symbol_folder" | "footprint" | "design_block" | "table" | "folder" | "drawing_sheet"): Promise<FolderListing> {
   const r = await send<FolderListing & { error?: string }>(`/api/fs/list?path=${encodeURIComponent(path)}&what=${what}`);
   if (r.error) throw new ApiError(r.error);
   return r;

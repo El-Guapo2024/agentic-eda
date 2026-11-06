@@ -151,6 +151,8 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
     // "Design variant:" (`SCH_PLOT_OPTS::m_variant`, `SCH_PLOTTER` sets the schematic's current variant around the plot)
     let mut args = plot_args_for(kind, &req, page);
     args.extend(crate::fab_api::variant_args(&req));
+    // Page Settings' drawing sheet file (`schematic.page_layout_descr_file`): the plot draws the sheet the editor draws
+    args.extend(crate::drawing_sheet_api::plot_args(dir, crate::drawing_sheet_api::schematic_sheet(dir).as_deref()));
     let mut v = reply(kicad_engine::export_sch_into(dir, kind, &args, &out_dir));
     if v["ok"].as_bool().unwrap_or(false) {
         v["format"] = Value::String(kind.into());

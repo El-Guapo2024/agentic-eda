@@ -96,9 +96,15 @@ export function blockInfo(block: Block): { name: string; description: string; ke
   return { name: block.name, description: block.description, keywords: block.keywords, fields: block.fields };
 }
 
-/** What the four check boxes mean for a placement on the schematic (`SCH_DESIGN_BLOCK_PANE`), as the plan Import Sheet's tool holds. */
-export function schematicPlacement(path: string, block: string, options: PlaceOptions): { path: string; block: string; asSheet: boolean; keepAnnotations: boolean; repeated: boolean; asGroup: boolean } {
-  return { path, block, asSheet: options.asSheet, keepAnnotations: options.keepAnnotations, repeated: options.repeated, asGroup: options.asGroup };
+/** What the four check boxes mean for a placement on the schematic (`SCH_DESIGN_BLOCK_PANE`), as the plan Import Sheet's tool holds; the block's default fields go with it,
+ *  for a sheet drawn from the block starts with them (`SCH_DRAWING_TOOLS::DrawSheet`: "Copy default fields into the sheet", each hidden). */
+export function schematicPlacement(
+  path: string,
+  block: string,
+  options: PlaceOptions,
+  fields: readonly { name: string; value: string }[] = []
+): { path: string; block: string; asSheet: boolean; keepAnnotations: boolean; repeated: boolean; asGroup: boolean; blockFields: { name: string; value: string }[] } {
+  return { path, block, asSheet: options.asSheet, keepAnnotations: options.keepAnnotations, repeated: options.repeated, asGroup: options.asGroup, blockFields: fields.map((f) => ({ ...f })) };
 }
 
 /** The first block with this id in the libraries, or undefined. */
@@ -108,13 +114,14 @@ export function findBlock(libraries: readonly BlockLibrary[], id: string | null)
   return libraries.find((l) => l.name === lib)?.blocks.find((b) => b.name === name);
 }
 
-/** `DIALOG_DESIGN_BLOCK_PROPERTIES::TransferDataFromWindow`: the characters a name may not have (`LIB_ID::FindIllegalLibraryNameChar` and `/`), and a dot (see design_block.rs). */
+/** `DIALOG_DESIGN_BLOCK_PROPERTIES::TransferDataFromWindow`: the characters a name may not have (`LIB_ID::FindIllegalLibraryNameChar` and `/`). A dot is legal (KiCad 25ec2335's
+ *  `DesignBlockEnumerate` lists `a.b.kicad_block` as `a.b`, `BeforeLast( '.' )`); only a leading one is refused, as the block's folder would be hidden (design_block.rs). */
 export function nameProblem(name: string): string | null {
   for (const c of name) {
     if (c.charCodeAt(0) < 0x20 || c === "\\" || c === ":" || c === "/") return `Illegal character '${c}' in name '${name}'.`;
   }
   if (name === "") return "Design block does not have a valid library ID.";
-  if (name.includes(".")) return `Illegal character '.' in name '${name}': KiCad lists a design block by the part of its folder's name before the first dot, so a dot would hide it from KiCad.`;
+  if (name.startsWith(".")) return `Illegal character '.' at the start of name '${name}': the block's folder would be hidden, and no library lists a hidden folder.`;
   return null;
 }
 
@@ -191,5 +198,61 @@ export function blockContextMenu(editor: "schematic" | "pcb", row: { kind: Block
     sinceSeparator++;
   }
   while (out.length > 0 && out[out.length - 1]!.separator) out.pop();
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------- the pane, docked or floating
+
+/**
+ * Where a Design Blocks pane is. The pane is an AUI pane (`defaultDesignBlocksPaneInfo`, eeschema/eeschema_settings.cpp; pcb_edit_frame.cpp's `AddPane( m_designBlocksPane, ...)`):
+ * docked on the right (`Right().Layer( 3 )` on the schematic, `Right().Layer( 5 )` on the board) to begin with, dockable on the left too, never at the top or the bottom
+ * (`TopDockable( false )`, `BottomDockable( false )`), and floatable (AUI's default): a window of its own, first at `FloatingPosition( 50, 200 )` and `FloatingSize( 800, 600 )`.
+ */
+export type PaneDock = "right" | "left" | "float";
+
+/** A floating pane's window, in CSS px of the page. */
+export interface FloatRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** `FloatingPosition( FromDIP( wxPoint( 50, 200 ) ) )`, `FloatingSize( FromDIP( wxSize( 800, 600 ) ) )`. */
+export const FLOATING_DEFAULT: FloatRect = { x: 50, y: 200, w: 800, h: 600 };
+
+/** `MinSize( FromDIP( wxSize( 240, 60 ) ) )`. */
+export const PANE_MIN_SIZE = { w: 240, h: 60 };
+
+/** The sides a pane may dock on: `TopDockable( false )`, `BottomDockable( false )` leave the two sides. */
+export const DOCKABLE_SIDES: readonly ("left" | "right")[] = ["left", "right"];
+
+/**
+ * A floating window kept on the page: no smaller than the pane's `MinSize`, no larger than the window, and with its caption reachable (a window the page cannot show
+ * whole is moved in, the way a desktop keeps a floating frame's title bar on screen). A browser window smaller than `FloatingSize` gets a smaller floating pane.
+ */
+export function clampFloatRect(r: FloatRect, windowW: number, windowH: number): FloatRect {
+  const w = Math.max(PANE_MIN_SIZE.w, Math.min(r.w, windowW));
+  const h = Math.max(PANE_MIN_SIZE.h, Math.min(r.h, windowH));
+  const x = Math.max(0, Math.min(r.x, windowW - w));
+  const y = Math.max(0, Math.min(r.y, windowH - h));
+  return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+}
+
+/**
+ * What a double click on the pane's caption does (`wxAuiManager::OnLeftDClick` with `wxAUI_MGR_ALLOW_FLOATING`): a docked pane floats, a floating one goes back to the side it was
+ * docked on last (`wxAuiPaneInfo::Dock()` keeps the dock direction it floated from).
+ */
+export function toggledDock(dock: PaneDock, lastDocked: "left" | "right"): PaneDock {
+  return dock === "float" ? lastDocked : "float";
+}
+
+/** The caption's buttons for a pane at `dock`, in the order they show: the other places it may go, then Close (`CloseButton( true )`). */
+export function paneCaptionChoices(dock: PaneDock): { to: PaneDock | "close"; label: string }[] {
+  const out: { to: PaneDock | "close"; label: string }[] = [];
+  if (dock !== "left") out.push({ to: "left", label: "Dock on the left" });
+  if (dock !== "right") out.push({ to: "right", label: "Dock on the right" });
+  if (dock !== "float") out.push({ to: "float", label: "Float" });
+  out.push({ to: "close", label: "Hide Design Blocks" });
   return out;
 }

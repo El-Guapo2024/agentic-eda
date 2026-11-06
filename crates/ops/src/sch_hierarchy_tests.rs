@@ -350,6 +350,7 @@ fn import(content: Option<SheetFile>, as_sheet: bool, keep: bool) -> Cmd {
         as_group: false,
         group_name: String::new(),
         block: String::new(),
+        block_fields: vec![],
     }
 }
 

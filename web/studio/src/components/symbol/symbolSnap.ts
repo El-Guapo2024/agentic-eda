@@ -5,7 +5,7 @@ import type { LibrarySymbol, SchField } from "../../api/types";
 import { SchGridHelper, type SchSnapItem } from "../../kicad-port/schGridHelper";
 import { symbolSnapItems } from "../../kicad-port/symSnapItems";
 import { computeVisibleGridSize } from "../../kicad-port/grid";
-import { gridSizeFor, type GridCategory, type GridOverrides } from "../../kicad-port/gridOverrides";
+import { gridEnvY, gridSizeFor, type GridCategory, type GridOverrides } from "../../kicad-port/gridOverrides";
 import type { GridEnv, SnapOverlay } from "../../kicad-port/gridHelperBase";
 import type { Pt } from "../../kicad-port/snapGeom";
 import { reportSnap } from "../../kicad-port/snapReport";
@@ -22,6 +22,8 @@ export interface SymbolSnapView {
   scale: number;
   gridNm: number;
   grids: readonly number[];
+  /** The grids' Y sizes beside `grids` (`GridSettings::ys`), when a grid is not square. */
+  gridYs?: readonly number[];
   overrides: GridOverrides | null;
 }
 
@@ -67,7 +69,7 @@ export class SymbolSnap {
   private env(): GridEnv {
     const v = this.view!;
     const scale = v.scale > 0 ? v.scale : 1;
-    return { scale, gridNm: v.gridNm, visibleGridNm: computeVisibleGridSize(v.gridNm, scale), origin: [0, 0], gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides) };
+    return { scale, gridNm: v.gridNm, visibleGridNm: computeVisibleGridSize(v.gridNm, scale), origin: [0, 0], gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides), ...gridEnvY(v) };
   }
 
   private helperFor(tool: string): SchGridHelper {

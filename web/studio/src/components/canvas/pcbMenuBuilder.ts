@@ -8,7 +8,8 @@ import type { StudioState } from "../../state/store";
 import { picker } from "../../actions/pcbPicker";
 import { getGridSettings } from "../../state/gridSettings";
 import { formatLength, type LengthUnit } from "../../state/units";
-import { scaleToZoomFactor, zoomListFor } from "../../kicad-port/zoomFit";
+import { zoomListFor, zoomMenuEntries } from "../../kicad-port/zoomFit";
+import { gridMenuEntries } from "../../kicad-port/gridSettings";
 import { activeEditPoint } from "../../kicad-port/pcbPointEdit";
 import { canRemoveItemCorner, handleToleranceNm, pointItemOf, pointsOfItem } from "../../actions/pcbPointEditSweep";
 import { boardHasItems, summarizePcbSelection } from "../../kicad-port/pcbSelectionSummary";
@@ -45,13 +46,12 @@ const otherUnit = (unit: LengthUnit): LengthUnit => (unit === "mm" ? "mil" : "mm
 
 /** `ZOOM_MENU::update`: every zoom of the editor's list as "Zoom: 1.00", the one nearest the current zoom checked. */
 function zoomEntries(state: StudioState): PcbMenuContext["zoom"] {
-  const zoom = scaleToZoomFactor(state.view.scale || 1);
-  return zoomListFor("pcb").map((factor) => ({ label: `Zoom: ${factor.toFixed(2)}`, checked: Math.abs(factor - zoom) / zoom < 0.1 }));
+  return zoomMenuEntries(zoomListFor("pcb"), state.view.scale);
 }
 
-/** `GRID_MENU::update` and `BuildChoiceList`: each grid in the display unit and, in brackets, the other system's; the current one checked. */
+/** `GRID_MENU::update` and `BuildChoiceList`: each grid ("name: " and X, or X x Y) in the display unit and, in brackets, the other system's; the current one checked. */
 function gridEntries(state: StudioState): PcbMenuContext["grid"] {
-  return getGridSettings("pcb").grids.map((um) => ({ label: `${formatLength(um, state.units)} (${formatLength(um, otherUnit(state.units))})`, checked: um === state.gridNm }));
+  return gridMenuEntries(getGridSettings("pcb"), state.gridNm, (nm) => formatLength(nm, state.units), (nm) => formatLength(nm, otherUnit(state.units)));
 }
 
 /** The point editor's handle under the pointer (`PCB_POINT_EDITOR::HasCorner / HasMidpoint / CanRemoveCorner`). */

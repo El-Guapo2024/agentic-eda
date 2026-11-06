@@ -9,7 +9,7 @@
 // What it checks:
 //   the actions: every Design Blocks action is wired on its editor's tab and not on the other's; View > Design Blocks shows and hides the pane;
 //   New Library: the dialog makes the library, its row is the one selected, the server lists it writable;
-//   Save Current Sheet as Design Block: the dialog's defaults (the sheet's name), its checks (a name with a '/', a '.', a duplicate field), what reaches the files (description, keywords,
+//   Save Current Sheet as Design Block: the dialog's defaults (the sheet's name), its checks (a name with a '/', one starting with a '.', a duplicate field), what reaches the files (description, keywords,
 //     default fields, the sheet's schematic), the tree, the details and kicad-cli's preview; a sheet with sheets in it is refused in KiCad's words;
 //   Save Selection as Design Block: the items go in a group named after the block and linked to it, the group is selected, one undo step; Update from Selection asks before it overwrites;
 //   Place Design Block: contents grouped and linked, renumbered, one undo step; Place repeated copies numbers the groups; as a sheet: a sheet in a linked group; Place Linked and Save to
@@ -236,9 +236,9 @@
       setValue(d.querySelector("#db-name"), "bad/name");
       await press("Save", 300);
       t(titles().includes("Design Block Properties") && /Illegal character '\/'/.test(dialog().innerText), "a name with a '/' is refused and the dialog stays");
-      setValue(dialog().querySelector("#db-name"), "bad.name");
+      setValue(dialog().querySelector("#db-name"), ".hidden");
       await press("Save", 300);
-      t(titles().includes("Design Block Properties") && /Illegal character '\.'/.test(dialog().innerText), "a name with a '.' is refused (KiCad would hide the block)");
+      t(titles().includes("Design Block Properties") && /Illegal character '\.' at the start/.test(dialog().innerText), "a name starting with a '.' is refused (its folder would be hidden; a dot elsewhere is legal, KiCad 25ec2335)");
       setValue(dialog().querySelector("#db-name"), "MCU_core");
       setValue(dialog().querySelector("#db-keywords"), "mcu core decoupling");
       setValue(dialog().querySelector("#db-description"), "The MCU with its decoupling");

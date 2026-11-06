@@ -91,7 +91,7 @@ The other six have no concave corner it changes. The amounts are small (the fill
 
 **Known?** No. PARITY-pcb §15 lists the collapsed block and the unported options, not the project file.
 
-### F4. A `User` paper size is neither clamped nor turned for `portrait`. **low**
+### F4. A `User` paper size is neither clamped nor turned for `portrait`. **low** **Fixed** on task-u4-common (`eda_kicad::page::import_page` clamps to the editor's limits and turns a `portrait` User page; tests `a_user_page_is_clamped_as_kicad_reads_it`, `a_portrait_user_page_is_turned`)
 
 `crates/kicad/src/page.rs:16` -> `crates/model/src/page.rs:135` (`PageSettings::from_args`) takes `(paper "User" w h)` as written and forces `portrait: false`. 8303b2ad `pcb_io_kicad_sexpr_parser.cpp::parsePAGE_INFO`: "Perform some controls to avoid crashes if the size is edited by hands", `width < MIN_PAGE_SIZE_MM` -> `MIN_PAGE_SIZE_MM` (25.4), `> MAX_PAGE_SIZE_PCBNEW_MM` (`48000*.0254` = 1219.2), the same for the height, then `if( token == T_portrait ) pageInfo.SetPortrait( true );`, which swaps the sizes. KiCad never writes `portrait` for a `User` page (`PAGE_INFO::Format`: `if( !IsCustom() && IsPortrait() )`), so only hand-edited files reach it. Test: `a_user_page_is_clamped_as_kicad_reads_it`: `(paper "User" 10 2000)` reads as 25.4 x 1219.2 mm.
 
@@ -133,7 +133,7 @@ Without F1-F3, the board file itself has converged: the round trip has stayed at
 | F1 | Net-class patterns: a top-level `A\|B\|C` is matched as a whole name; KiCad anchors `^A\|B\|C$`, so `A` and `B` are prefix matches (`StartsWith`). 5 QA nets in the wrong class; proved: 54 `clearance` on the original, 0 on ours | high | no |
 | F2 | `zones_allow_external_fillets` read and edited but never written to the derived project: kicad-cli's fills lose the fillets (4 QA boards, 0.07-0.5 mm² each, proved by refill) | high | no |
 | F3 | Board Setup > Teardrops not read from (`teardrop_parameters`, `teardrop_options`) nor written to the project (4 QA projects non-default) | medium | no |
-| F4 | `(paper "User" w h)` not clamped to 25.4-1219.2 mm; `portrait` ignored for `User` | low | no |
+| F4 | `(paper "User" w h)` not clamped to 25.4-1219.2 mm; `portrait` ignored for `User` | low Fixed | no |
 
 Counts: **high 2** (F1, F2), **medium 1** (F3), **low 1** (F4).
 

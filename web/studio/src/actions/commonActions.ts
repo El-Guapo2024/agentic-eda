@@ -16,7 +16,7 @@ import type { Action as StudioAction, EditorTab, StudioApi, StudioState } from "
 import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import { isCanvasTab, type EditorAdapter } from "./editorAdapter";
-import { getCommonOptions, setCommonOptions } from "../state/commonOptions";
+import { getCommonOptions, setCommonOptions, setWindowOptions, windowOptionsOf } from "../state/commonOptions";
 import { crossHairModeForAction } from "../kicad-port/crosshair";
 import { nextContrastMode } from "../kicad-port/appearance";
 import { fpContrastMode } from "../kicad-port/fpAppearance";
@@ -131,11 +131,10 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   // ---------------------------------------------------------------------------------------- cursor and display options
 
   // ACTIONS::cursorSmallCrosshairs / cursorFullCrosshairs / cursor45Crosshairs -- COMMON_TOOLS::CursorSmallCrosshairs etc.:
-  // `galOpts.SetCursorMode( ... )`, kept per window and saved. Here one setting for the four canvases
-  // (state/commonOptions.ts); `CommonOverlay` draws the mode.
+  // `galOpts.SetCursorMode( ... )`, kept per window and saved: each editor's own (state/commonOptions.ts `window`); `CommonOverlay` draws the mode.
   const setCrossHair = (action: "cursorSmallCrosshairs" | "cursorFullCrosshairs" | "cursor45Crosshairs"): ActionHandler => () => {
     const crossHairMode = crossHairModeForAction(action);
-    setCommonOptions({ crossHairMode });
+    setWindowOptions(tab ?? "pcb", { crossHairMode });
     dispatch({ type: "SET_FULLSCREEN_CROSSHAIR", value: crossHairMode === "full" });
   };
   m.set("common.Control.cursorSmallCrosshairs", setCrossHair("cursorSmallCrosshairs"));
@@ -143,8 +142,8 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   m.set("common.Control.cursor45Crosshairs", setCrossHair("cursor45Crosshairs"));
 
   // ACTIONS::toggleCursor -- COMMON_TOOLS::ToggleCursor: `galOpts.m_forceDisplayCursor = !galOpts.m_forceDisplayCursor`
-  // ("Always Show Crosshairs"). Off, the crosshair is drawn only while a tool is running.
-  m.set("common.Control.toggleCursor", () => setCommonOptions({ alwaysShowCursor: !getCommonOptions().alwaysShowCursor }));
+  // ("Always Show Crosshairs"), the editor's own. Off, the crosshair is drawn only while a tool is running.
+  m.set("common.Control.toggleCursor", () => setWindowOptions(tab ?? "pcb", { alwaysShowCursor: !windowOptionsOf(getCommonOptions(), tab ?? "pcb").alwaysShowCursor }));
 
   // ACTIONS::toggleBoundingBoxes -- COMMON_TOOLS::ToggleBoundingBoxes: `rs->SetDrawBoundingBoxes( !rs->GetDrawBoundingBoxes() )`.
   m.set("common.Control.toggleBoundingBoxes", () => setCommonOptions({ drawBoundingBoxes: !getCommonOptions().drawBoundingBoxes }));

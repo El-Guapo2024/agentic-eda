@@ -2726,6 +2726,11 @@ pub struct DrawingsSection {
     /// derived `.kicad_pcb` as `(grid_origin x y)`. Additive: absent in an older `design.json` reads as "no origin set".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_origin: Option<Point>,
+    /// The board's drawing sheet file (Page Settings' "Drawing sheet:", `DIALOG_PAGES_SETTINGS::OnWksFileSelection`): a `.kicad_wks` path as KiCad keeps it in
+    /// the project's `pcbnew.page_layout_descr_file` -- relative to the board's folder when the file is in it, else with a path variable or whole. `None` is
+    /// KiCad's default sheet. Written to the derived `.kicad_pro` and passed to kicad-cli's plots (`--drawing-sheet`). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing_sheet: Option<String>,
     /// Footprints that exist only on the board: copies of a footprint, and footprints pasted in from another board or from KiCad's
     /// clipboard, which have no part in the intent and no symbol in the schematic (KiCad's footprint without a schematic link).
     /// `board::load` folds each into the model as a part of its own -- see [`BoardPart`]. Additive: absent in an older
@@ -3258,6 +3263,10 @@ pub struct FootprintExtra {
     /// library's, its orientation the file's, and it is written as it was read. Additive.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub library_frame: bool,
+    /// The footprint's Extruded 3D Body as its board file has it (`FOOTPRINT::GetExtrudedBody`, the typed `(model (type extruded) ..)`: [`crate::extruded_body`]), its layer
+    /// that of the footprint on the top side. `None` for none (`HasExtrudedBody()` false). The 3D Models tab's own setting is [`crate::fp_edit::FootprintEdit::extruded_body`]. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extruded_body: Option<crate::extruded_body::ExtrudedBody>,
     /// The name the footprint had in the file when it had no library link (`(footprint "D5" ..)`: `LIB_ID::GetLibNickname()` empty, which `LIB_ID::Format` writes as the bare
     /// item name). The writer gives a footprint the `eda` library unless the footprint it writes is this one: a board that came from a KiCad file keeps its footprints as
     /// unlinked as it had them, and kicad-cli's library check (`lib_footprint_issues`) has no `eda` library to report as missing. `None` for a footprint that was linked.
@@ -3950,6 +3959,10 @@ pub struct LibraryFootprint {
     /// `design.json` kept them as `kicad.tokens`, which [`crate::fp_settings::FootprintSettings::absorb_kept`] takes in).
     #[serde(default, skip_serializing_if = "crate::fp_settings::FootprintSettings::is_empty")]
     pub settings: crate::fp_settings::FootprintSettings,
+    /// The footprint's Extruded 3D Body (`FOOTPRINT::GetExtrudedBody`, the typed `(model (type extruded) ..)` of its `.kicad_mod`: [`crate::extruded_body`]); `None` for none.
+    /// Additive: an older `design.json` kept the typed model among `kicad.tokens`, which the writer still writes back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extruded_body: Option<crate::extruded_body::ExtrudedBody>,
 }
 
 impl Default for LibraryFootprint {
@@ -3979,6 +3992,7 @@ impl Default for LibraryFootprint {
             kicad: Default::default(),
             items: Default::default(),
             settings: Default::default(),
+            extruded_body: None,
         }
     }
 }

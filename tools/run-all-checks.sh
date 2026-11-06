@@ -21,9 +21,16 @@
 # and the kinds are made here (see make_board): mcu30 (examples/mcu_board_30plus.yaml, unplaced), mcu30-few (U1, R1 and R2 placed), mcu30-placed (`eda place`),
 # mcu30-routed (`eda place` then `eda route`), mcu30-zones (routed, with a GND pour on F.Cu and B.Cu), mcu30-sheet (mcu30 with KiCad's QA
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
-# examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), multichannel and
+# examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), padstacks-3d (KiCad's padstacks_normal.kicad_pcb with an
+# outline, through replace_board; $KICAD_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), tuner-arcs (tuner-arcs.check.js's), cutout-board (autoroute-cutout.check.js's), multichannel and
 # simulator and sim-model (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
-# copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR).
+# copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR). `kicad_config=fresh` serves the check with a KiCad
+# configuration folder of its own, empty (`EDA_KICAD_CONFIG_DIR`): a check that writes the global library tables or KiCad's path variables never touches the
+# machine's. `fixtures=library-formats` puts two of KiCad's QA libraries in other formats in the board's folder, `legacy.lib` (a legacy symbol library) and
+# `gps.lbr` (an Eagle library), for Migrate Libraries and the libraries kicad-cli converts (needs $KICAD_SRC_DIR); `fixtures=broken-symdir` a folder symbol library
+# `Broken.kicad_symdir` with a good file and a cut-off one (a library KiCad 10 loads with errors); `fixtures=cvpcb` e2e/cvpcb.equ as `cvpcb-check.equ` (a footprint
+# association file for cvpcb.check.js). Several are joined by commas. `fixtures=cvpcb` puts
+# web/studio/e2e/cvpcb.equ (a footprint association file) in the board's folder as `cvpcb-check.equ`, for cvpcb.check.js.
 #
 # Needs: Playwright with Chromium ($PLAYWRIGHT_MODULE, default ~/tools/pw/node_modules/playwright/index.mjs), kicad-cli on the PATH
 # (or $EDA_KICAD_CLI), ngspice for the simulator check.
@@ -118,6 +125,14 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
                 && "$eda" board place J3 --at 11.5,3 -C "$d" && "$eda" board place J2 --at 6,20 -C "$d" && "$eda" board place J1 --at 7.5,11 -C "$d" \
                 && "$eda" board place R1 --at 3,16 -C "$d" && "$eda" board place R2 --at 17,18 -C "$d" \
                 && "$eda" board track add --net GND --layer F.Cu --width 0.2 --pts "4.4,7 4.4,12" -C "$d" ;;
+        cutout-board) # autoroute-cutout.check.js: through_hole_headers placed so SDA and SCL run across a window cut out of the board
+            "$eda" board new "$repo/examples/through_hole_headers.yaml" -o "$d" \
+                && "$eda" board place J3 --at 11.5,3 -C "$d" && "$eda" board place J2 --at 7,20 -C "$d" && "$eda" board place J1 --at 17,20 -C "$d" \
+                && "$eda" board place R1 --at 20,8 -C "$d" && "$eda" board place R2 --at 20,14 -C "$d" \
+                && "$eda" board shape add --kind rect --layer Edge.Cuts --pts "4,8 11,15" --width 0.05 -C "$d" ;;
+        tuner-arcs) # tuner-arcs.check.js: tune-board's nets on an empty board, with the pair of concentric arcs tuner-arcs.board.mjs adds
+            perl -pe 's/\bPA2\b/USB_DP/g; s/\bPA3\b/USB_DN/g' "$yaml_mcu" > "$t/tuner_arcs.yaml" \
+                && "$eda" board new "$t/tuner_arcs.yaml" -o "$d" && node "$e2e/tuner-arcs.board.mjs" "$d" ;;
         tune-board) # length-tuning.check.js (the nets under KiCad's names: the hierarchical labels of the LED sheet)
             perl -pe 's/\bPA2\b/USB_DP/g; s/\bPA3\b/USB_DN/g' "$yaml_mcu" > "$t/tune_board.yaml" \
                 && "$eda" board new "$t/tune_board.yaml" -o "$d" \
@@ -135,6 +150,24 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
             local url=""
             for _ in $(seq 1 100); do url="$(grep -oE 'http://[0-9.]+:[0-9]+/' "$t/serve.log" | head -1)"; [ -n "$url" ] && break; sleep 0.2; done
             python3 -c 'import json,sys; print(json.dumps({"cmd": {"op": "replace_board", "text": open(sys.argv[1]).read()}, "strict": False}))' "$f" > "$t/replace.json"
+            local reply
+            reply="$(curl -s -H 'Content-Type: application/json' --data-binary @"$t/replace.json" "${url}api/cmd")"
+            kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+            echo "replace_board: $reply" | cut -c1-300
+            grep -q '"ok":true' <<< "$reply" ;;
+        padstacks-3d) # viewer3d-controls.check.js: KiCad 8303b2ad's qa/data/pcbnew/padstacks_normal.kicad_pcb (trapezoid, chamfered and rounded pads, non-plated holes) with an
+            # Edge.Cuts rectangle round its two footprints, brought in with `replace_board`
+            local f="${KICAD_SRC_DIR:-$HOME/src/kicad-src-8303b2ad}/qa/data/pcbnew/padstacks_normal.kicad_pcb" sp
+            [ -f "$f" ] || { echo "no $f (set KICAD_SRC_DIR to a KiCad source)"; return 1; }
+            "$eda" board new "$yaml_mcu" -o "$d" || return 1
+            "$eda" board serve -C "$d" --port "$port" --ui "$repo/web/studio/dist" > "$t/serve.log" 2>&1 &
+            sp=$!
+            local url=""
+            for _ in $(seq 1 100); do url="$(grep -oE 'http://[0-9.]+:[0-9]+/' "$t/serve.log" | head -1)"; [ -n "$url" ] && break; sleep 0.2; done
+            python3 -c 'import json,sys
+t=open(sys.argv[1]).read().rstrip()
+edge="\t(gr_rect\n\t\t(start 128 68)\n\t\t(end 178 108)\n\t\t(stroke\n\t\t\t(width 0.05)\n\t\t\t(type default)\n\t\t)\n\t\t(fill no)\n\t\t(layer \"Edge.Cuts\")\n\t\t(uuid \"aaaaaaaa-1111-2222-3333-444444444444\")\n\t)\n"
+print(json.dumps({"cmd": {"op": "replace_board", "text": t[:-1] + edge + ")\n"}, "strict": False}))' "$f" > "$t/replace.json"
             local reply
             reply="$(curl -s -H 'Content-Type: application/json' --data-binary @"$t/replace.json" "${url}api/cmd")"
             kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
@@ -196,7 +229,30 @@ run_one() { # run_one <check> <port>: prints the check's line; its logs are in $
     if ! ensure_board "$kind"; then printf 'FAIL %-22s board %s could not be made: %s\n' "$c" "$kind" "$scratch/boards/$kind.log"; return 1; fi
     if ! uidir="$(ensure_ui "$ui")"; then printf 'FAIL %-22s ui %s could not be made\n' "$c" "$ui"; return 1; fi
     cp -r "$scratch/boards/$kind" "$r/board"
-    "$eda" board serve -C "$r/board" --port "$port" --ui "$uidir" > "$r/serve.log" 2>&1 &
+    local served=()
+    if [ "$(meta "$c" kicad_config default)" = fresh ]; then mkdir -p "$r/kicad-config"; served+=("EDA_KICAD_CONFIG_DIR=$r/kicad-config" "EDA_LIBRARY_CACHE=$r/library-cache"); fi
+    local fx
+    for fx in $(meta "$c" fixtures none | tr ',' ' '); do
+        case "$fx" in
+            library-formats)
+                local q="${KICAD_SRC_DIR:-$HOME/src/kicad-src-8303b2ad}/qa/data"
+                cp "$q/eeschema/netlists/legacy_power4/symbols.lib" "$r/board/legacy.lib" && cp "$q/pcbnew/plugins/eagle/lbr/SparkFun-GPS.lbr" "$r/board/gps.lbr" \
+                    || { printf 'FAIL %-22s the library fixtures are not in %s (set KICAD_SRC_DIR)\n' "$c" "$q"; return 1; } ;;
+            broken-symdir)
+                # a folder symbol library with one good file and one cut off: KiCad 10 loads it "with errors"
+                mkdir -p "$r/board/Broken.kicad_symdir"
+                printf '(kicad_symbol_lib (version 20241209) (generator "eda")\n  (symbol "GoodPart" (property "Reference" "U" (at 0 0 0)) (property "Value" "GoodPart" (at 0 0 0)))\n)\n' > "$r/board/Broken.kicad_symdir/GoodPart.kicad_sym"
+                printf '(kicad_symbol_lib (version 20241209) (generator "eda")\n  (symbol "BadPart" (property "Reference" "U" (at 0 0 0)\n' > "$r/board/Broken.kicad_symdir/BadPart.kicad_sym" ;;
+            cvpcb)
+                # a footprint association file for cvpcb.check.js
+                cp "$e2e/cvpcb.equ" "$r/board/cvpcb-check.equ" || { printf 'FAIL %-22s %s is missing\n' "$c" "$e2e/cvpcb.equ"; return 1; } ;;
+            none) ;;
+        esac
+    done
+    if [ "$(meta "$c" fixtures none)" = cvpcb ]; then
+        cp "$e2e/cvpcb.equ" "$r/board/cvpcb-check.equ" || { printf 'FAIL %-22s %s is missing\n' "$c" "$e2e/cvpcb.equ"; return 1; }
+    fi
+    env "${served[@]}" "$eda" board serve -C "$r/board" --port "$port" --ui "$uidir" > "$r/serve.log" 2>&1 &
     pid=$!
     url=""
     for _ in $(seq 1 100); do
@@ -253,5 +309,6 @@ failedn=$(( total - passed ))
 echo
 echo "run-all-checks: $passed passed, $failedn failed of $total in $(( SECONDS - start ))s (logs: $scratch/runs)"
 grep '^FAIL' "$scratch/results" 2>/dev/null | sed 's/^/  /'
-if [ "$failedn" -eq 0 ] && [ "$keep" = 0 ]; then rm -rf "$scratch"; fi
+# the libraries kicad-cli converted are kept read only (`library_convert`): writable again first, or rm cannot empty their folders
+if [ "$failedn" -eq 0 ] && [ "$keep" = 0 ]; then chmod -R u+w "$scratch" 2>/dev/null; rm -rf "$scratch"; fi
 [ "$failedn" -eq 0 ]

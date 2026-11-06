@@ -14,6 +14,9 @@
 //!
 //! Ported from common/eda_pattern_match.cpp (`EDA_COMBINED_MATCHER::EDA_COMBINED_MATCHER`, `EDA_PATTERN_MATCH_REGEX_ANCHORED::SetPattern`,
 //! `EDA_PATTERN_MATCH_WILDCARD_ANCHORED::SetPattern`, `EDA_COMBINED_MATCHER::StartsWith`).
+//!
+//! The regular expressions are [`crate::wx_regex`]'s since 2026-11-06 (the one engine for every use of `wxRegEx`, Find / Replace's too), with
+//! [`crate::wx_regex::Flavor::NetClass`]: the same syntax and the same machine as this module's own below, which is kept INACTIVE and tested against it.
 
 use crate::glob_match;
 
@@ -44,12 +47,12 @@ fn anchored_pattern(pattern: &str) -> String {
 /// Whether a match of `pattern` read as KiCad's anchored regular expression starts at the first character of `net` (`EDA_PATTERN_MATCH_REGEX::Find`'s start position,
 /// `EDA_COMBINED_MATCHER::StartsWith`). False when the pattern is no regular expression this reads.
 pub fn regex_matches(pattern: &str, net: &str) -> bool {
-    Regex::new(&anchored_pattern(pattern)).is_some_and(|r| r.matches_from_start(net))
+    crate::wx_regex::Regex::compile(&anchored_pattern(pattern), false, crate::wx_regex::Flavor::NetClass).is_some_and(|r| r.matches_from_start(net))
 }
 
 /// Whether `pattern` compiles as a regular expression (what a page can say about a pattern that does not: it only works as a wildcard pattern).
 pub fn is_regex(pattern: &str) -> bool {
-    Regex::new(&anchored_pattern(pattern)).is_some()
+    crate::wx_regex::Regex::compile(&anchored_pattern(pattern), false, crate::wx_regex::Flavor::NetClass).is_some()
 }
 
 /// Whether `pattern` has a character a regular expression gives a meaning to besides `*` and `?` (which are wildcards too): a pattern without one reads the same either way.
@@ -58,8 +61,13 @@ pub fn has_regex_syntax(pattern: &str) -> bool {
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------ the pattern
+//
+// INACTIVE (2026-11-06): replaced by `crate::wx_regex` (the one engine of Find / Replace and the net class patterns; its `Flavor::NetClass` is this parser and
+// this machine, with the groups numbered and the lazy quantifiers in priority, which cannot change whether a match starts at the name's first character). Kept, not
+// deleted, as the repo keeps a replaced port; reached only by the test that holds the two to the same answers.
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 enum Node {
     Char(char),
     Any,
@@ -72,6 +80,7 @@ enum Node {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 enum ClassItem {
     Range(char, char),
     Digit(bool),
@@ -81,6 +90,7 @@ enum ClassItem {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 enum PosixClass {
     Alpha,
     Digit,
@@ -92,6 +102,7 @@ enum PosixClass {
     Xdigit,
 }
 
+#[allow(dead_code)]
 fn class_matches(items: &[ClassItem], negate: bool, c: char) -> bool {
     let hit = items.iter().any(|i| match *i {
         ClassItem::Range(a, b) => a <= c && c <= b,
@@ -112,12 +123,14 @@ fn class_matches(items: &[ClassItem], negate: bool, c: char) -> bool {
     hit != negate
 }
 
+#[allow(dead_code)]
 struct Parser {
     chars: Vec<char>,
     pos: usize,
     depth: usize,
 }
 
+#[allow(dead_code)]
 impl Parser {
     fn peek(&self) -> Option<char> {
         self.chars.get(self.pos).copied()
@@ -292,6 +305,7 @@ impl Parser {
     }
 }
 
+#[allow(dead_code)]
 fn shorthand(c: char) -> ClassItem {
     match c {
         'd' => ClassItem::Digit(true),
@@ -306,6 +320,7 @@ fn shorthand(c: char) -> ClassItem {
 // ------------------------------------------------------------------------------------------------------------------------------------ the machine
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum Inst {
     Char(char),
     Any,
@@ -318,11 +333,13 @@ enum Inst {
 }
 
 /// A compiled pattern: matches a name from its first character (the anchored reading's `Find` at position 0).
+#[allow(dead_code)]
 pub struct Regex {
     program: Vec<Inst>,
     classes: Vec<(Vec<ClassItem>, bool)>,
 }
 
+#[allow(dead_code)]
 impl Regex {
     /// Compile `pattern` as KiCad's anchored regular expression; `None` when it is not one this reads.
     pub fn new(pattern: &str) -> Option<Regex> {
@@ -604,5 +621,31 @@ mod tests {
         no("^A|B$", "XB");
         // A group is anchored as a whole: `(x|y)` has no top-level `|`.
         no("(x|y)", "xy");
+    }
+
+    /// The engine that replaced this module's own (`crate::wx_regex`, `Flavor::NetClass`) gives every pattern and net the answer the INACTIVE one gives: the same
+    /// patterns compile, and the same nets match from their first character.
+    #[test]
+    fn the_shared_engine_answers_as_this_modules_own_did() {
+        let patterns = [
+            "GND", "USB_*", "USB_D?", "USB_D[PM]", "USB_D.*", "^VBUS$", "(DP|DM)", "D[0-9]+", "D\\d{1,2}", "A(?:B|C)D?", "[[:alpha:]]+_[[:digit:]]", "[^A-Z]+", "V3.3",
+            "(CLK|DAT)[0-3]", "A{3}", "A{2,3}B", "(AB){2}", "x|y|z", "\\.", "[a\\]b]+", "[-a]+", "[a-]+", "/XIN|/XOUT|", "a|b", "I2C-.*|.*SDA|.*SCL", "^A|B$",
+            "(x|y)", "USB_(", "USB_D[", "a**", "a\\1", "(?=a)", "a{3,1}", "x\\bX", "(a|b)+c?", "", "a{2}", "a{2,}", "a+?", "(a+)+$", "(a|aa)+b", "(a*)*b",
+            "(a*)*", "\\w+\\s?\\W*", "[[:upper:][:digit:]]{2,}", "N\\$1", "x{", "(?:", "[[:blank:]]", ".*?_P", "(L|R)_?(IN|OUT)", "a\\tb", "\\n",
+        ];
+        let nets = ["", "A", "GND", "GND2", "AGND", "USB", "USB_", "USB___", "USB_DP", "USB_DM", "USB_DX", "USB_DPM", "USB_DP2", "VBUS", "VBUS2", "DP", "DPM", "D", "D7",
+            "D15", "D150", "AC", "ABD", "MOSI_1", "abc_1", "abC", "V3.3", "V3x3", "CLK2", "DAT0", "CLK4", "AAA", "AA", "AAAB", "AAAAB", "ABAB", "y", "xy", "ab", "ba",
+            ".", "x", "a]b", "a-", "-a", "/XIN32", "SDA_EXT", "XB", "USB_(", "aaaa", "aac", "AB12", "L_IN", "ROUT", "a\tb", "N$1"];
+        for p in patterns {
+            let anchored = anchored_pattern(p);
+            let old = Regex::new(&anchored);
+            let new = crate::wx_regex::Regex::compile(&anchored, false, crate::wx_regex::Flavor::NetClass);
+            assert_eq!(old.is_some(), new.is_some(), "{p:?} compiles the same");
+            if let (Some(old), Some(new)) = (old, new) {
+                for n in nets {
+                    assert_eq!(old.matches_from_start(n), new.matches_from_start(n), "{p:?} on {n:?}");
+                }
+            }
+        }
     }
 }

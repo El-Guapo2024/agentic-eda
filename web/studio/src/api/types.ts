@@ -339,6 +339,48 @@ export interface Part {
   paste_margin_ratio?: number;
   /** The footprint was read from a board file, whose tokens of it are kept (the footprint's paste margins are set there). */
   from_board_file?: boolean;
+  /** The footprint's Extruded 3D Body (`EXTRUDED_3D_BODY`, crates/cli/src/extruded_body_api.rs `body_json`); absent when it has none. */
+  extruded_body?: ExtrudedBodyInfo;
+  /** A back footprint whose `models` are held half a turn from its board file's numbers (read by a reader of before 2026-10-25): the 3D Models tab shows them turned back
+   *  (kicad-port/fpModels.ts `tabRows`). Absent = false. */
+  models_turned?: boolean;
+}
+
+/** A body as `set_extruded_body` sends it (eda_model::extruded_body::ExtrudedBody; what is left out is KiCad's default). */
+export interface ExtrudedBodyCmd {
+  height: Nm;
+  standoff?: Nm;
+  layer?: string;
+  material?: ExtrudedBodyInfo["material"];
+  /** Its own colour, 0..1; null or absent: the material's (`COLOR4D::UNSPECIFIED`). */
+  color?: [number, number, number, number] | null;
+  offset?: [number, number, number];
+  scale?: [number, number, number];
+  rotate?: [number, number, number];
+  show?: boolean;
+}
+
+/** `Part.extruded_body`: the body as the footprint has it, and the outline KiCad's 3D view extrudes (`GetExtrusionOutline`) with the pins (`GetExtrusionPinOutline`), board nm. */
+export interface ExtrudedBodyInfo {
+  /** `m_height`, `m_standoff`: nm. */
+  height: Nm;
+  standoff: Nm;
+  /** `auto`, `pad_bbox` or a layer's name, the footprint's own side's (`F.CrtYd`, `F.Fab`, `F.SilkS`). */
+  layer: string;
+  material: "plastic" | "matte" | "metal" | "copper";
+  /** The colour it is drawn in, 0..1 (its own, else its material's: `GetDefaultColor`); `color_set` says it is its own. */
+  color: [number, number, number, number];
+  color_set: boolean;
+  /** Millimetres; scale; degrees. */
+  offset: [number, number, number];
+  scale: [number, number, number];
+  rotate: [number, number, number];
+  show: boolean;
+  /** The footprint's position, nm: what the body's rotation and scale are about. */
+  at: [Nm, Nm];
+  /** Polygons, each its outline then its holes, each a list of `[x, y]` nm, before the body's own transform (`ApplyExtrusionTransform`). */
+  outline: Array<Array<Array<[Nm, Nm]>>>;
+  pins: Array<Array<Array<[Nm, Nm]>>>;
 }
 
 /** `Part.zone`: what Footprint Properties and Pad Properties show in their zone fields. `null` is "inherited". */
@@ -1163,6 +1205,8 @@ export interface BoardState {
   /** The board's paper and title block (Page Settings, `common.Control.pageSettings`); null/absent are A4 landscape and an empty title block. */
   page?: PageInfo | null;
   title_block?: TitleBlock | null;
+  /** The board's drawing sheet file (Page Settings' "Drawing sheet:", `pcbnew.page_layout_descr_file`); null/absent is KiCad's default sheet. */
+  drawing_sheet?: DrawingSheetFile | null;
   /** Most recent 60 activity.jsonl entries, newest first. */
   activity: Activity[];
   /** "idle" | "running" | a one-line result of the last route. */
@@ -1970,6 +2014,8 @@ export type Cmd =
   | { op: "set_board_page"; page: CmdPage; title_block: TitleBlock }
   /** The same for the schematic (`SCH_EDITOR_CONTROL::PageSetup`). */
   | { op: "set_schematic_page"; page: CmdPage; title_block: TitleBlock }
+  // Page Settings' "Drawing sheet:" (`DIALOG_PAGES_SETTINGS::OnWksFileSelection`): the board's (`schematic` false) or the schematic's `.kicad_wks`, null for KiCad's default
+  | { op: "set_drawing_sheet"; schematic: boolean; path: string | null }
   /** `pcbnew.Control.repairBoard` -- refused ("No board problems found.") when there is nothing to repair; `POST /api/repair_board` wraps it with KiCad's report. */
   | { op: "repair_board" }
   /** `pcbnew.EditorControl.exportFootprints` (`ExportFootprintsToLibrary`): every board footprint, as the board has it, over the project library's entry of its name. */
@@ -2095,6 +2141,9 @@ export type Cmd =
    * refused too. One undo step each.
    */
   | { op: "set_board_models"; part: string; models: Model3dCmd[] }
+  /** The 3D Models tab's Extruded 3D Body box (`PANEL_FP_PROPERTIES_3D_MODEL::TransferDataFromWindow`, crates/ops/src/fp_models.rs `set_extruded_body`): the footprint's body, or none (`null`: the box off); one
+   *  undo step. Lengths nm, the layer the top side's. */
+  | { op: "set_extruded_body"; part: string; body: ExtrudedBodyCmd | null }
   | { op: "add_board_model"; part: string; model: Model3dCmd; at?: number }
   | { op: "remove_board_model"; part: string; index: number }
   | { op: "move_board_model"; part: string; from: number; to: number }
@@ -2161,6 +2210,8 @@ export type Cmd =
       group_name?: string;
       /** The design block (`Lib:Name`) the file is the schematic of (Place Design Block). */
       block?: string;
+      /** The block's default fields, `[name, value]` in its order: a sheet drawn from the block starts with them, hidden (`DrawSheet`). */
+      block_fields?: [string, string][];
     }
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }
@@ -2239,6 +2290,7 @@ export type Cmd =
   | { op: "set_annotation_settings"; settings: AnnotationSettings; subpart_first_id: number; subpart_id_separator: number }
   | { op: "set_field_name_templates"; fields: TemplateFieldName[] }
   | { op: "set_bom_presets"; bom_presets: string[]; bom_fmt_presets: string[] }
+  | { op: "set_bom_view"; save?: Record<string, unknown>; delete?: string; view?: Record<string, unknown> }
   | { op: "set_bus_aliases"; aliases: BusAliasDef[] }
   // The SPICE simulator's settings (`NGSPICE_SETTINGS`, the project's `schematic.ngspice`) and the workbook's text (crates/ops/src/simulator.rs).
   | { op: "set_simulator"; ngspice: { workbook_filename: string; fix_include_paths: boolean; model_mode: number } | null; workbook: string | null }
@@ -2458,6 +2510,8 @@ export interface RouteFixReply {
    * session's own runs at this point). */
   real_end?: boolean;
   preview?: RoutePreview;
+  /** `updateSizesAfterRouterEvent` after the fix (on the via's other layer after a via), UI-LEFT R5. */
+  sizes?: RouterEventSizes | null;
 }
 
 /** `POST /api/route/drag_{start,move,finish}` (gap #7 stage 5, `D`):
@@ -2572,6 +2626,21 @@ export interface DpFixReply {
   blocked: boolean;
   real_end?: boolean;
   preview?: DiffPairPreview;
+  /** `updateSizesAfterRouterEvent` on the layer the pair goes on on (UI-LEFT R5). */
+  sizes?: RouterEventSizes | null;
+}
+
+/** What `ROUTER_TOOL::updateSizesAfterRouterEvent` leaves in the router's sizes after a fix, a via or a layer switch (UI-LEFT R5, crates/cli
+ *  route_api.rs `event_sizes_json`): the clearance asked again on the layer, and the width (a pair's: its width and gap) when asked again, with
+ *  their sources; `width_applied` when the head took the width. */
+export interface RouterEventSizes {
+  clearance: Nm;
+  clearance_source: string;
+  width?: Nm | null;
+  width_source?: string | null;
+  width_applied?: boolean;
+  gap?: Nm | null;
+  gap_source?: string | null;
 }
 
 /** `7` / `8` / `9`: which `pcbnew.LengthTuner.*` the tool is running. */
@@ -3050,6 +3119,10 @@ export interface SchematicLabel {
   fields?: SchLabelField[];
   /** The font colour (`SchExtras::text_attrs`); absent is the layer's. */
   color?: import("./schEditTypes").SchColor | null;
+  /** The font Label Properties chose (`SchExtras::text_attrs`): absent is the default; "KiCad Font" the stroke font; anything else an outline font's family. */
+  font?: string | null;
+  /** The label's fields were placed by hand (`GetFieldsAutoplaced() == AUTOPLACE_NONE`): they stay where they are until Autoplace Fields. */
+  fields_hand_placed?: boolean;
 }
 
 /** One field of a label (`SCH_FIELD` of an `SCH_LABEL_BASE`), placed: `shown` is its text as drawn (a global label's Sheet References read as the pages its name is on). */
@@ -3064,7 +3137,15 @@ export interface SchLabelField {
   at: [Nm, Nm];
   vertical: boolean;
   h: "left" | "center" | "right";
+  /** Its vertical justification (centre while autoplaced; a field placed by hand keeps its own). */
+  v?: "top" | "center" | "bottom";
   size_nm: Nm;
+  /** The id the field is picked, moved and edited by (`fld:<label id>:<name>`), and the label's id. */
+  id?: string;
+  owner?: string;
+  /** Its font face and colour (`SchExtras::field_looks` under the label's id); absent is the default font and the layer's colour. */
+  font?: string | null;
+  color?: { r: number; g: number; b: number; a: number } | null;
 }
 
 /** Schematic Setup > Formatting > Inter-sheet References (`SCHEMATIC_SETTINGS::m_IntersheetRefs*`). */
@@ -3098,6 +3179,9 @@ export interface SchematicText {
   italic?: boolean;
   color?: import("./schEditTypes").SchColor | null;
   href?: string | null;
+  /** The font Text Properties chose (absent: the default font) and its "Exclude from simulation". */
+  font?: string | null;
+  exclude_from_sim?: boolean;
 }
 
 /** A title block as `GET /api/state` / `GET /api/schematic` report it (`TITLE_BLOCK`): `comments[0]` is KiCad's comment 1, up to nine, trailing empty ones dropped. */
@@ -3109,6 +3193,15 @@ export interface TitleBlock {
   comments: string[];
   /** The values with the project's text variables in them expanded (`TITLE_BLOCK::TextVarResolver`), when that changes any of them: the drawing sheet shows these, the Page Settings dialog edits the stored ones above. */
   shown?: { title: string; date: string; rev: string; company: string; comments: string[] };
+}
+
+/** A drawing sheet file a document names (`crates/cli/src/drawing_sheet_api.rs` `state_json`): the name as kept, the file it resolves to, its text (null when it could not be
+ *  read) and why not ("File not found.", as `DS_DATA_MODEL::LoadDrawingSheet` says). `kicad-port/dsDataModel.ts` reads the text. */
+export interface DrawingSheetFile {
+  path: string;
+  file: string;
+  text: string | null;
+  error: string | null;
 }
 
 /** A document's paper (`PAGE_INFO`) as the state JSON reports it: `size_nm` is the resolved width and height in its orientation. */
@@ -3153,6 +3246,21 @@ export interface Sheet {
   /** The sheet's name and file where KiCad's Autoplace Fields puts them. */
   fields?: SchField[];
   fields_autoplaced?: FieldsAutoplaced;
+  /** Sheet Properties' Style and Attributes (`SchExtras::sheet_props`); absent: the look the studio has always written, a 6 mil border and a pale yellow fill, no attribute. */
+  props?: SheetProps | null;
+  /** The sheet's user fields (`SchExtras::sheet_fields`: `SCH_FIELD`s past Sheetname and Sheetfile), in order. */
+  user_fields?: Array<{ name: string; text: string; visible?: boolean; italic?: boolean }> | null;
+}
+
+/** See `Sheet::props`: the border's width (0: the default line width) and colour, the background colour (absent: KiCad's UNSPECIFIED), the four attributes. */
+export interface SheetProps {
+  border_width_nm?: Nm;
+  border_color?: import("./schEditTypes").SchColor | null;
+  fill_color?: import("./schEditTypes").SchColor | null;
+  exclude_from_sim?: boolean;
+  exclude_from_bom?: boolean;
+  exclude_from_board?: boolean;
+  dnp?: boolean;
 }
 
 /** One step of the breadcrumb from the root down to the sheet `GET /api/schematic?sheet=...` actually returned -- empty for the root itself. */
@@ -3188,6 +3296,8 @@ export interface Schematic {
   lines?: SchLine[];
   /** Drawn shapes, text boxes, rule areas and directive labels -- see `SchGraphic` (api/schEditTypes.ts). Absent from a backend built before they existed. */
   graphics?: SchGraphic[];
+  /** A text box's and a directive label's font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id; absent: KiCad's defaults. */
+  graphic_text_attrs?: Record<string, { font?: string; color?: import("./schEditTypes").SchColor; href?: string; exclude_from_sim?: boolean }>;
   /** The tables of this sheet (`SCH_TABLE`, `crates/cli/src/table_json.rs` `sch_table_json`): the board's `BoardTable` shape with an empty layer. Absent from a backend built before sheet tables. */
   tables?: BoardTable[];
   /** Ids of locked items (Lock / Unlock). Absent from a backend built before locks existed. */
@@ -3203,6 +3313,10 @@ export interface Schematic {
   page_number?: number;
   /** The paper this sheet is drawn on; absent from a backend built before sheets chose their own. */
   paper?: SchematicPaper;
+  /** The schematic's drawing sheet file (`schematic.page_layout_descr_file`); null/absent is KiCad's default sheet. */
+  drawing_sheet?: DrawingSheetFile | null;
+  /** What the drawing sheet shows of this page (`SCH_VIEW::DisplaySheet`): `${#}` (the page as shown), `${##}` (the number of pages) and whether it is the first page. */
+  sheet_page?: { number: string; count: number; first: boolean };
   /** The file of the screen shown (empty for the root sheet): the title block names it. The design's whole tree is `fetchHierarchy` (`GET /api/sch/hierarchy`). */
   file?: string;
   /** The project's unit naming (`schematic.subpart_id_separator` / `subpart_first_id`, character codes; the root sheet's `SchExtras`): absent is KiCad's default,
@@ -3790,6 +3904,9 @@ export interface FieldsTableReply {
   spec: FieldsTableSpec;
   /** The names of KiCad's built-in views (`BOM_PRESET::BuiltInPresets`), which a request can apply with `preset`. */
   presets?: string[];
+  /** The built-in views with their columns, and the project's own (`schematic.bom_presets`), so the box can show which one the view is (`syncBomPresetSelection`). */
+  built_in_presets?: Array<{ name: string; spec: FieldsTableSpec }>;
+  user_presets?: Array<{ name: string; spec: FieldsTableSpec }>;
   user_fields: string[];
   rows: FieldsTableRow[];
 }
@@ -3819,7 +3936,9 @@ export interface SchSearchData {
   find: string;
   replace: string;
   match_case: boolean;
-  mode: "plain" | "whole_word" | "wildcard";
+  mode: "plain" | "whole_word" | "wildcard" | "regex";
+  /** The dialog's Regular Expression box, kept ticked under Whole words only (which wins: `updateFlags`); the server reads `mode`. */
+  regex_box?: boolean;
   search_hidden_fields: boolean;
   search_pins: boolean;
   search_net_names: boolean;
@@ -3839,7 +3958,7 @@ export interface FindMatch {
   page?: string;
   /** The sheet's place in the page order: matches come sorted by it. */
   sheet_rank?: number;
-  kind: "field" | "label" | "text" | "pin" | "label_field";
+  kind: "field" | "label" | "text" | "pin" | "label_field" | "power_field" | "sheet_field" | "sheet_pin" | "text_box" | "directive_field";
   /** Symbol reference / label id / text id that owns the match. */
   id: string;
   /** Field name or pin number (empty for labels/text). */

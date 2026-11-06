@@ -25,7 +25,8 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { fetchHierarchy } from "../api/schControlClient";
 import { placeUnfoldLabel, unfoldEntrySize } from "../kicad-port/schBusUnfold";
 import { boundsOfPoints, fitTransform } from "./canvas/view";
-import { computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, handleWheel, type WheelInput } from "../kicad-port/viewControls";
+import { computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, handleWheel, leftDragOutcome, motionPan } from "../kicad-port/viewControls";
+import { wheelInputOf } from "../hooks/canvasWheel";
 import { panByWorldDelta } from "../kicad-port/view";
 import { useWheelPrefs } from "../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../hooks/useNonPassiveWheel";
@@ -35,12 +36,16 @@ import { resolveLibSymbol, symbolBounds as libSymbolBounds } from "./schematic/l
 import { SchSnap, SCH_PLACING_TOOLS, toolCategory, type SchSnapMods } from "./schematic/schSnap";
 import { useGridOverrides } from "../state/gridOverrides";
 import { useGridSettings } from "../state/gridSettings";
-import { computeVisibleGridSize } from "../kicad-port/grid";
 import { heldCursor } from "../kicad-port/heldCursor";
-import { shownTitleBlock } from "../kicad-port/pageSettings";
 import { paintSnapOverlay } from "./canvas/snapOverlayPainter";
 import { layerColor } from "./canvas/layers";
-import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots, pageOf } from "./schematic/drawingSheet";
+import { drawPaper, drawSchematicDrawingSheet, pageOf } from "./schematic/drawingSheet";
+import { schematicSheetPage } from "./drawingSheet/sheetInfo";
+import { paintEditorGrid } from "./canvas/gridPaint";
+import { useGridDisplay } from "../state/commonOptions";
+import { gridMenuEntries, gridYOf } from "../kicad-port/gridSettings";
+import { zoomListFor, zoomMenuEntries } from "../kicad-port/zoomFit";
+import { formatLength } from "../state/units";
 import { computeClickModifiers, applySingleClickModifier, isCrossingSelection, applyBoxSelectionModifiers, hasModifier } from "../kicad-port/selection";
 import { isMac } from "../platform";
 import { ClickDragGesture, dragRuleFor } from "../kicad-port/dragThreshold";
@@ -214,6 +219,10 @@ export function SchematicView() {
   const elbowRef = useRef<{ mid: readonly [number, number]; end: readonly [number, number] } | null>(null);
   /** The plain-click/drag symbol-drag distinguisher's deferred click (see DragState's own "move" kind doc) -- set only for a click that keeps a multi-selection's whole group for a potential drag, same as Canvas.tsx's own `pendingClickRef`. */
   const pendingClickRef = useRef<string | null>(null);
+  /** A press on an item whose drag draws the selection area ("Left button drag:", `leftDragOutcome`): what the press does as a click when it is released without a drag. */
+  const areaClickRef = useRef<(() => void) | null>(null);
+  /** `m_metaPanStart` of "Pan on mouse movement with key:" (null while the key is up). */
+  const motionPanRef = useRef<{ x: number; y: number } | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
   /** The right-click menu (`SCH_SELECTION_TOOL`'s context menu): where it is and what it offers for the selection. */
@@ -236,17 +245,17 @@ export function SchematicView() {
   const snapRef = useRef<SchSnap | null>(null);
   if (!snapRef.current) snapRef.current = new SchSnap();
   const snap = snapRef.current;
-  const gridList = useGridSettings("schematic").grids;
+  const gridSettingsList = useGridSettings("schematic");
+  const gridList = gridSettingsList.grids;
   const gridOverrides = useGridOverrides("schematic");
   const gridNm = state.schGridNm;
-  snap.update({ sch, scale: state.schematicView.scale, gridNm, grids: gridList, overrides: gridOverrides });
+  const gridDisplay = useGridDisplay("schematic");
+  snap.update({ sch, scale: state.schematicView.scale, gridNm, grids: gridList, gridYs: gridSettingsList.ys, overrides: gridOverrides });
   // A tool of its own starts a helper of its own: the anchor snapped to and the snap line go with the last one.
   useEffect(() => snap.reset(), [snap, state.activeTool]);
   /** The modifiers of the last pointer event (Ctrl, Cmd on a Mac, turns the grid off; Shift the anchors): the click handlers below snap through `snapToGrid` without an event. */
   const modsRef = useRef<SchSnapMods>({ ctrl: false, shift: false });
   const NO_MODS: SchSnapMods = { ctrl: false, shift: false };
-  /** The grid the view draws: the current grid, coarsened while it is too fine to see (`GAL::GetVisibleGridSize`). */
-  const visibleGridNm = computeVisibleGridSize(gridNm, state.schematicView.scale);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -383,25 +392,11 @@ export function SchematicView() {
     ctx.scale(state.schematicView.scale || 1, state.schematicView.scale || 1);
     // The paper this sheet is laid out for (A4 unless the sheet says otherwise), and where in the hierarchy it is.
     const page = pageOf(sch.paper);
-    drawPageAndFrame(ctx, state.schematicView, page);
-    if (state.gridVisible) drawGridDots(ctx, state.schematicView, width, height, visibleGridNm, page);
-    drawZoneReferences(ctx, state.schematicView, page);
-    const tb = shownTitleBlock(sch.title_block);
-    const crumbs = sch.sheet_path ?? [];
-    drawTitleBlock(
-      ctx,
-      state.schematicView,
-      {
-        title: tb?.title || state.board?.name || "untitled",
-        date: tb?.date ?? new Date().toISOString().slice(0, 10),
-        rev: tb?.rev ?? "",
-        company: tb?.company,
-        comments: tb?.comments,
-        fileName: sch.file || `${state.board?.name || "schematic"}.kicad_sch`,
-        sheetPath: crumbs.length === 0 ? "/" : `/${crumbs.map((c) => c.name).join("/")}/`,
-      },
-      page
-    );
+    drawPaper(ctx, page);
+    // `GAL::DrawGrid` over the whole canvas (eeschema clips it to nothing), in the Schematic Editor's Display Options > Grid Display style
+    if (state.gridVisible) paintEditorGrid(ctx, state.schematicView, width, height, { size: { x: gridNm, y: gridYOf(gridSettingsList, gridNm) }, origin: [0, 0], style: gridDisplay.style, lineWidthPx: gridDisplay.lineWidthPx, minSpacingPx: gridDisplay.minSpacingPx }, layerColor("LAYER_SCHEMATIC_GRID"), undefined, "schematic");
+    // The drawing sheet (`SCH_VIEW::DisplaySheet`): the `.kicad_wks` Page Settings chose, else KiCad's default, on this sheet's page
+    drawSchematicDrawingSheet(ctx, state.schematicView, schematicSheetPage(sch, state.board?.name), sch.drawing_sheet?.text);
     // `SCH_DRAG_NET_COLLISION_MONITOR`: where the held selection would short two nets or pull a connection apart (the server sends it with the preview)
     const collisionOverlay = held && patch ? patch.net_collision : undefined;
     // `${OP}` in a symbol's field or a label: the last operating point's values (kicad-port/sim/opVars.ts), resolved in what is drawn.
@@ -498,7 +493,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion]);
+  }, [sch, displaySch, gridDisplay, gridNm, gridSettingsList, state.gridVisible, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -574,17 +569,7 @@ export function SchematicView() {
     // wx_view_controls.cpp onWheel via handleWheel, the same as the PCB and library canvases: the wheel gestures and zoom speed
     // are Preferences > Mouse and Touchpad's.
     const rect = containerRef.current!.getBoundingClientRect();
-    const input: WheelInput = {
-      deltaX: e.deltaX,
-      deltaY: e.deltaY,
-      shiftKey: e.shiftKey,
-      ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
-      mac: isMac(),
-      altKey: e.altKey,
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    };
-    const result = handleWheel(state.schematicView, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
+    const result = handleWheel(state.schematicView, { width: rect.width, height: rect.height }, wheelInputOf(e, rect), wheelPrefs.settings, wheelPrefs.controller);
     if (result.kind !== "unhandled") dispatch({ type: "SET_SCHEMATIC_VIEW", view: result.view });
   };
   // React's own onWheel is passive, so its `preventDefault()` was ignored (and logged on every tick) while the page scrolled under the zoom.
@@ -863,6 +848,19 @@ export function SchematicView() {
             dispatch({ type: "SET_SCH_WIRE_PICK", pick: null });
             return;
           }
+          // `SCH_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )` under "Left button drag:" (`leftDragOutcome`): with "Draw selection rectangle", from an item not selected under
+          // "Drag selected objects", or from outside a selection that is not empty under "Drag any object", the drag draws the selection area; the press then selects
+          // nothing yet, and a release without a drag is the click.
+          if (leftDragOutcome(wheelPrefs.settings.dragLeft, { modifier: false, selectionEmpty: state.selection.size === 0, onItem: true, inSelection: state.selection.has(picked) }) === "area") {
+            const wire = wireId ? sch.wires.find((w) => w.id === wireId) : undefined;
+            const vertices = wire ? (wirePick(wire, [wx, wy], tolerance) ?? undefined) : undefined;
+            areaClickRef.current = () => {
+              dispatch({ type: "SET_SELECTION", refs: [picked] });
+              dispatch({ type: "SET_SCH_WIRE_PICK", pick: wire && vertices ? { id: wire.id, vertices } : null });
+            };
+            dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY] };
+            return;
+          }
           // sch_selection_tool.cpp Main(): a plain click-and-drag starting on an item that's already part of a larger selection keeps the
           // WHOLE group for the drag, deferring the "collapse to just this one" effect to onPointerUp in case no real drag happens;
           // otherwise (re)select just this one item immediately. Either way, arm a potential drag -- source's own default for a plain drag
@@ -896,6 +894,13 @@ export function SchematicView() {
       onPointerMove={(e) => {
         const bounds = containerRef.current?.getBoundingClientRect();
         if (bounds) lastPointerRef.current = { x: e.clientX - bounds.left, y: e.clientY - bounds.top, clientX: e.clientX, clientY: e.clientY };
+        // `WX_VIEW_CONTROLS::onMotion`'s `m_motionPanModifier`: with the key of "Pan on mouse movement with key:" held the sheet follows the pointer; the tools still see the motion.
+        const metaPan = motionPan(state.schematicView, wheelPrefs.settings.motionPanModifier, { altKey: e.altKey, ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey, shiftKey: e.shiftKey }, motionPanRef.current, { x: e.clientX, y: e.clientY });
+        motionPanRef.current = metaPan.start;
+        if (metaPan.view && state.schematicView.scale > 0) {
+          userMovedRef.current = true;
+          dispatch({ type: "SET_SCHEMATIC_VIEW", view: metaPan.view });
+        }
         if (!sch) return;
         const [wx, wy] = toWorld(e.clientX, e.clientY);
         dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
@@ -995,7 +1000,10 @@ export function SchematicView() {
         if (ids.length !== state.selection.size || ids.some((id) => !state.selection.has(id))) dispatch({ type: "SET_SELECTION", refs: ids });
         // a reference's placed units are one item: the Symbol Unit submenu is for the one under the pointer (else the first)
         const underPointer = ids.length === 1 ? sch.symbols.filter((x) => x.id === ids[0]).find((x) => { const b = libSymbolBounds(x, sch.lib_symbols); return wx >= b.minX && wx <= b.maxX && wy >= b.minY && wy <= b.maxY; })?.unit : undefined;
-        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps, inGroup: state.schEnteredGroupId != null, unit: underPointer })) });
+        // `AddStandardSubMenus`: the Zoom submenu over the eeschema zoom list, the Grid submenu over the Schematic Editor's grids
+        const other = state.units === "mm" ? "mil" : "mm";
+        const std = { zoom: zoomMenuEntries(zoomListFor("schematic"), state.schematicView.scale), grid: gridMenuEntries(gridSettingsList, gridNm, (nm) => formatLength(nm, state.units), (nm) => formatLength(nm, other)) };
+        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps, inGroup: state.schEnteredGroupId != null, unit: underPointer }), std) });
       }}
       onDoubleClick={(e) => {
         // A double-click on a hierarchical sheet enters it (`SCH_SELECTION_TOOL` -> `SCH_ACTIONS::enterSheet`); on any other item it opens its Properties
@@ -1070,7 +1078,11 @@ export function SchematicView() {
           pendingClickRef.current = null;
           return;
         }
+        const areaClick = areaClickRef.current;
+        areaClickRef.current = null;
         if (drag.kind === "box" && sch) {
+          // a press on an item that would have drawn the area, released without a drag: the click it is
+          if (!marquee && areaClick) areaClick();
           if (marquee) {
             const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
             const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);

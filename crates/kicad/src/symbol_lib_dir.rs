@@ -18,8 +18,13 @@
 //!     them in the folder's own order (`wxDir::GetFirst`/`GetNext`, the file system's `readdir`);
 //!   * a hidden file (`._R.kicad_sym`, the AppleDouble file a Mac copy leaves) is not read, as `SCH_IO_KICAD_SEXPR::CanReadLibrary` (`wxDIR_FILES`) and
 //!     `KIPLATFORM::IO::TimestampDir` (`FNM_PERIOD`) skip it; `Load`'s `wxDir::GetFirst( .., wxDIR_DEFAULT )` includes it, and fails on it;
-//!   * a file that cannot be read, or is not a `(kicad_symbol_lib ...)`, is left out and the rest is read, as `Load` goes on to the next file; `Load`
-//!     then reports the library as loaded with errors ("Unable to read file '%s'") and refuses to save it, which nothing here does;
+//!   * a file that cannot be read, or is not a `(kicad_symbol_lib ...)`, is left out and the rest is read, as `Load` goes on to the next file; and as
+//!     KiCad 25ec2335's `Load` does, the library is then one "loaded with errors" ([`symbol_library_load_errors`]: "Unable to read file '%s'" and the
+//!     reason, each file's, then "The library cannot be saved until these errors are fixed manually."), which the library tables' status, the choosers
+//!     and the status bar show and `crate::library_save` refuses to save. The reason is this reader's: a file that is not `(kicad_symbol_lib ...)` or
+//!     whose forms do not close (`Expecting '..' in '%s', line %d, offset %d.`, the words of KiCad's lexer, at the place this reader finds); a symbol
+//!     KiCad's parser would refuse inside a well-formed file (`m_parseWarnings`) is not found, nor a folder whose name ends `.kicad_sym` (`wxDir`
+//!     lists it and `FILE_LINE_READER` cannot open it);
 //!   * the text has one `(version N)`, the last file's (`SetFileFormatVersionAtLoad` keeps the last file's too), where `Load` parses each file with its
 //!     own: the readers that look at the version (a `~` that is an empty text before 20250318) read every file of the folder as the last one is;
 //!   * the folder's modification time ([`symbol_library_modified`]) is the latest of the folder's and its files', where `TimestampDir` sums every
@@ -77,15 +82,42 @@ pub fn symbol_library_name(path: &Path) -> Option<String> {
 /// The text of the symbol library at `path`: a `.kicad_sym` file's own text, or for a folder library the one `(kicad_symbol_lib ...)` text of every
 /// symbol its files define, a name defined twice kept as the file read last defines it (see the module doc). An error when `path` is neither.
 pub fn read_symbol_library_text(path: &Path) -> Result<String, String> {
+    read_symbol_library(path).map(|(text, _)| text)
+}
+
+/// [`read_symbol_library_text`] and what [`symbol_library_load_errors`] says of the library, from the same read (which is also kept for that lookup).
+pub fn read_symbol_library(path: &Path) -> Result<(String, Option<String>), String> {
+    let stamp = symbol_library_modified(path);
     if !path.is_dir() {
-        return std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()));
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let problem = library_text_problem(&text, &path.display().to_string());
+        remember_load_errors(path, stamp, problem.clone());
+        return Ok((text, problem));
     }
     let mut texts: Vec<String> = Vec::new();
     // (which text, the symbol's name, its form's span in that text), in the order read
     let mut forms: Vec<(usize, String, std::ops::Range<usize>)> = Vec::new();
     let mut version: Option<String> = None;
+    let mut errors = LoadErrors::default();
     for file in symbol_library_files(path) {
-        let Ok(text) = std::fs::read_to_string(&file) else { continue };
+        let text = match std::fs::read(&file) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(t) => t,
+                Err(_) => {
+                    errors.add(&file, format!("'{}' is not UTF-8 text.", file.display()));
+                    continue;
+                }
+            },
+            Err(_) => {
+                // `FILE_LINE_READER`'s constructor
+                errors.add(&file, format!("Unable to open {} for reading.", file.display()));
+                continue;
+            }
+        };
+        if let Some(problem) = library_text_problem(&text, &file.display().to_string()) {
+            errors.add(&file, problem);
+        }
+        // the symbols a file closed before its problem are read, as `ParseLib` puts each symbol in the map as it is parsed
         let Some(lib) = crate::symbol_scan::library_forms(&text) else { continue };
         if lib.version.is_some() {
             version = lib.version;
@@ -110,7 +142,113 @@ pub fn read_symbol_library_text(path: &Path) -> Result<String, String> {
         }
     }
     out.push_str(")\n");
-    Ok(out)
+    let errors = errors.finish();
+    remember_load_errors(path, stamp, errors.clone());
+    Ok((out, errors))
+}
+
+/// The errors of one folder library's load, put together as KiCad 25ec2335's `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load` puts them (`errorCache`).
+#[derive(Default)]
+struct LoadErrors(String);
+
+impl LoadErrors {
+    /// `errorCache += wxString::Format( _( "Unable to read file '%s'" ) + '\n', sourceFilePath ); errorCache += ioe.What();`, after a blank line.
+    fn add(&mut self, file: &Path, reason: String) {
+        if !self.0.is_empty() {
+            self.0.push_str("\n\n");
+        }
+        self.0.push_str(&format!("Unable to read file '{}'\n{reason}", file.display()));
+    }
+
+    /// `errorCache += _( "\n\nThe library cannot be saved until these errors are fixed manually." )`, when there was any.
+    fn finish(mut self) -> Option<String> {
+        if self.0.is_empty() {
+            return None;
+        }
+        self.0.push_str("\n\nThe library cannot be saved until these errors are fixed manually.");
+        Some(self.0)
+    }
+}
+
+/// `PARSE_ERROR`'s problem text (`"%s in '%s', line %d, offset %d."`) for the place `at` of `text` (KiCad's lines and offsets count from 1).
+fn parse_problem(what: &str, source: &str, text: &str, at: usize) -> String {
+    let at = at.min(text.len());
+    let before = &text.as_bytes()[..at];
+    let line = before.iter().filter(|&&c| c == b'\n').count() + 1;
+    let offset = at - before.iter().rposition(|&c| c == b'\n').map_or(0, |i| i + 1) + 1;
+    format!("{what} in '{source}', line {line}, offset {offset}.")
+}
+
+/// Why the text of one `.kicad_sym` file is no symbol library `ParseLib` reads, in the words of KiCad's lexer (`DSNLEXER::Expecting`), or `None`: the first
+/// form must be `(kicad_symbol_lib`, and every form must close. A problem inside a well-formed symbol is not looked for (see the module doc).
+pub fn library_text_problem(text: &str, source: &str) -> Option<String> {
+    let b = text.as_bytes();
+    let ws = |c: u8| matches!(c, b' ' | b'\t' | b'\r' | b'\n');
+    let mut i = 0;
+    while i < b.len() && ws(b[i]) {
+        i += 1;
+    }
+    if b.get(i) != Some(&b'(') {
+        return Some(parse_problem("Expecting '('", source, text, i));
+    }
+    let mut tag = i + 1;
+    while tag < b.len() && ws(b[tag]) {
+        tag += 1;
+    }
+    let mut end = tag;
+    while end < b.len() && !ws(b[end]) && b[end] != b'(' && b[end] != b')' && b[end] != b'"' {
+        end += 1;
+    }
+    if &b[tag..end] != b"kicad_symbol_lib" {
+        return Some(parse_problem("Expecting 'kicad_symbol_lib'", source, text, tag));
+    }
+    let mut depth = 1usize;
+    let mut k = end;
+    while k < b.len() && depth > 0 {
+        match b[k] {
+            b'"' => {
+                k += 1;
+                while k < b.len() && b[k] != b'"' {
+                    k += if b[k] == b'\\' { 2 } else { 1 };
+                }
+                if k >= b.len() {
+                    return Some(parse_problem("Expecting '\"'", source, text, b.len()));
+                }
+            }
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        k += 1;
+    }
+    (depth > 0).then(|| parse_problem("Expecting ')'", source, text, b.len()))
+}
+
+type LoadErrorCache = std::sync::Mutex<HashMap<PathBuf, (Option<SystemTime>, Option<String>)>>;
+
+fn load_error_cache() -> &'static LoadErrorCache {
+    static C: std::sync::OnceLock<LoadErrorCache> = std::sync::OnceLock::new();
+    C.get_or_init(Default::default)
+}
+
+fn remember_load_errors(path: &Path, stamp: Option<SystemTime>, errors: Option<String>) {
+    load_error_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(path.to_path_buf(), (stamp, errors));
+}
+
+/// Whether the symbol library at `path` loads with errors, and KiCad's message when it does: for a folder library KiCad 25ec2335's
+/// `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load` ("Unable to read file '%s'" and the reason, for every file that does not read, then "The library cannot be saved until
+/// these errors are fixed manually."; the good files are read all the same); for a file library the reason the file does not read. What the library's row
+/// in the tables (`LIB_STATUS::error`, `LOAD_STATUS::LOAD_ERROR`), the choosers and the status bar (`GetLibraryLoadErrors`) show. Kept against the
+/// library's time ([`symbol_library_modified`]), so a library is read for this once until it changes; any read of its text answers it too.
+/// `None` for a library that reads, or nothing at `path`.
+pub fn symbol_library_load_errors(path: &Path) -> Option<String> {
+    let stamp = symbol_library_modified(path)?;
+    if let Some((s, hit)) = load_error_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(path) {
+        if *s == Some(stamp) {
+            return hit.clone();
+        }
+    }
+    read_symbol_library(path).ok().and_then(|(_, errors)| errors)
 }
 
 /// When the symbol library at `path` last changed, for the caches of what was read of it: a file's modification time; for a folder library the
@@ -280,6 +418,48 @@ mod tests {
         std::fs::remove_file(dir.join("C.kicad_sym")).unwrap();
         assert!(symbol_library_modified(&dir).unwrap() > after, "a removed file is a changed library");
         assert_eq!(symbol_library_modified(&root.join("Nothing.kicad_symdir")), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// KiCad 25ec2335's `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load`: a folder library with a file that does not read is "loaded with errors" -- the message names
+    /// each such file and why, the good files are read all the same, and it is kept until a file changes.
+    #[test]
+    fn a_folder_library_with_a_broken_file_loads_with_errors_and_says_which() {
+        let root = temp_dir("errors");
+        let dir = fixture(&root);
+        let broken = dir.join("broken.kicad_sym");
+        let message = symbol_library_load_errors(&dir).expect("the fixture's broken.kicad_sym is no library");
+        assert_eq!(
+            message,
+            format!("Unable to read file '{}'\nExpecting 'kicad_symbol_lib' in '{}', line 1, offset 2.\n\nThe library cannot be saved until these errors are fixed manually.", broken.display(), broken.display())
+        );
+        let (text, errors) = read_symbol_library(&dir).unwrap();
+        assert_eq!(errors.as_deref(), Some(message.as_str()), "the read says the same");
+        assert_eq!(crate::scan_symbols(&text).len(), 4, "and the good files are read");
+        // a second file cut off in a symbol: both are named, in the order read; the symbols it closed before the cut are read
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let cut = dir.join("D_cut.kicad_sym");
+        std::fs::write(&cut, "(kicad_symbol_lib (version 20251024)\n\t(symbol \"D\" (property \"Reference\" \"D\"))\n\t(symbol \"E\" (pin").unwrap();
+        let both = symbol_library_load_errors(&dir).unwrap();
+        let (first, second) = (both.find("D_cut.kicad_sym").unwrap(), both.find("broken.kicad_sym").unwrap());
+        assert!(first < second, "{both}");
+        assert!(both.contains(&format!("Unable to read file '{}'\nExpecting ')' in '{}', line 3, offset 18.\n\nUnable to read file '{}'", cut.display(), cut.display(), broken.display())), "{both}");
+        assert!(read_symbol_library_text(&dir).unwrap().contains("(symbol \"D\""), "D closed before the cut");
+        // the files fixed: no error
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::remove_file(&cut).unwrap();
+        std::fs::remove_file(&broken).unwrap();
+        assert_eq!(symbol_library_load_errors(&dir), None);
+        // a file library: its own reason; a good one, none
+        let file = root.join("Bad.kicad_sym");
+        std::fs::write(&file, "(kicad_symbol_lib (symbol \"A\"").unwrap();
+        assert_eq!(symbol_library_load_errors(&file), Some(format!("Expecting ')' in '{}', line 1, offset 30.", file.display())));
+        std::fs::write(root.join("Good.kicad_sym"), lib("\t(symbol \"G\")")).unwrap();
+        assert_eq!(symbol_library_load_errors(&root.join("Good.kicad_sym")), None);
+        assert_eq!(symbol_library_load_errors(&root.join("Nothing.kicad_sym")), None);
+        assert_eq!(library_text_problem("  (kicad_sch)", "f"), Some("Expecting 'kicad_symbol_lib' in 'f', line 1, offset 4.".to_string()));
+        assert_eq!(library_text_problem("x", "f"), Some("Expecting '(' in 'f', line 1, offset 1.".to_string()));
+        assert_eq!(library_text_problem("(kicad_symbol_lib (symbol \"a)\"))", "f"), None, "a parenthesis in a string is text");
         let _ = std::fs::remove_dir_all(&root);
     }
 

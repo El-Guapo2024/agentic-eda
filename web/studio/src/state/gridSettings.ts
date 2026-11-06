@@ -3,7 +3,7 @@
 // hotkeys read. Plain module state with subscribers, kept in the browser's local storage like `state/commonOptions.ts` -- these are the user's preferences,
 // not the design's. The rules for them are kicad-port/gridSettings.ts.
 import { useSyncExternalStore } from "react";
-import { GRID_EDITORS, isDefaultGridSettings, normalizeGridSettings, parseStoredGridSettings, type GridEditor, type GridSettings } from "../kicad-port/gridSettings";
+import { GRID_EDITORS, gridAt, gridDefs, isDefaultGridSettings, normalizeGridSettings, parseStoredGridSettings, sameGrid, type GridEditor, type GridSettings } from "../kicad-port/gridSettings";
 
 /** The grids in nanometres. `OLD_STORAGE_KEY` held them in micrometres, before the design was in nanometres. */
 const STORAGE_KEY = "eda-studio.grid-settings.nm";
@@ -52,7 +52,7 @@ export function getGridSettings(editor: GridEditor): GridSettings {
 export function setGridSettings(editor: GridEditor, settings: GridSettings): void {
   const next = normalizeGridSettings(settings);
   const now = current[editor];
-  if (next.fast1 === now.fast1 && next.fast2 === now.fast2 && next.grids.length === now.grids.length && next.grids.every((g, i) => g === now.grids[i])) return;
+  if (next.fast1 === now.fast1 && next.fast2 === now.fast2 && next.grids.length === now.grids.length && gridDefs(next).every((g, i) => sameGrid(g, gridAt(now, i)))) return;
   current = { ...current, [editor]: next };
   try {
     const kept: Partial<Record<GridEditor, GridSettings>> = {};

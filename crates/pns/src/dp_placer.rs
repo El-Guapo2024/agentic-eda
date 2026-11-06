@@ -41,7 +41,7 @@ use crate::direction45::Direction45;
 use crate::item::{net_of, same_net, Item, ItemId, Kind, Net, Via};
 use crate::layer::LayerRange;
 use crate::line::Line;
-use crate::line_placer::{FixOutcome, SNAP_NM};
+use crate::line_placer::FixOutcome;
 use crate::node::{kind_mask, Node, QueryOpts};
 use crate::settings::{Mode, RoutingSettings};
 use crate::shove::{DisplacedLine, DisplacedVia, ShoveHead};
@@ -244,6 +244,9 @@ pub struct DpLeg {
     pub p: Vec<Point>,
     pub n: Vec<Point>,
     pub vias: Option<(Via, Via)>,
+    /// The type of the two vias (`m_sizes.ViaType()`, which `DIFF_PAIR_PLACER::makeVia` gives each `VIA`): a blind, buried or micro via commits
+    /// with its type (`PNS_KICAD_IFACE::AddItem`: `SetViaType( via->ViaType() )`).
+    pub via_kind: eda_model::via_extra::ViaKind,
 }
 
 /// Everything a finished route puts on the board.
@@ -352,6 +355,9 @@ pub struct DiffPairPlacer {
     /// `m_placingVia`, and the layer the route goes on to after the vias (`switchLayerOnViaPlacement`).
     placing_via: bool,
     via_to_layer: Option<i32>,
+    /// `m_sizes.ViaType()`: the type of the vias a fix places (`handleLayerSwitch`'s `sizes.SetViaType( viaType )`), a through via unless a
+    /// blind/buried or micro via command armed them.
+    via_kind: eda_model::via_extra::ViaKind,
     // ---- what the last Move left
     /// `m_currentTrace`, `m_currentTraceOk`, `m_fitOk`, `m_snapOnTarget`.
     current_trace: DiffPair,
@@ -457,6 +463,7 @@ impl DiffPairPlacer {
             current_layer: layer,
             placing_via: false,
             via_to_layer: None,
+            via_kind: eda_model::via_extra::ViaKind::Through,
             current_trace: DiffPair { net_p, net_n, ..DiffPair::default() },
             current_trace_ok: false,
             fit_ok: false,
@@ -551,14 +558,35 @@ impl DiffPairPlacer {
     /// or custom size; none is the net class's, the one the pair started with (`rule_via`; ours asks the rules at the start layer, not again at the
     /// layer being routed as the single track's V does).
     pub fn toggle_via(&mut self, enabled: bool, diameter: Option<Nm>, drill: Option<Nm>, to_layer: Option<i32>) {
+        self.toggle_via_typed(enabled, diameter, drill, to_layer, eda_model::via_extra::ViaKind::Through);
+    }
+
+    /// [`Self::toggle_via`] with the type of the vias, as `ROUTER_TOOL::handleLayerSwitch` arms them in the pair tool as in the single track's
+    /// (`sizes.SetViaType( viaType ); sizes.AddLayerPair( currentLayer, targetLayer ); m_router->UpdateSizes( sizes ); .. ToggleViaPlacement()`): the
+    /// blind/buried and micro via commands (UI-LEFT R2). `to_layer` is the target of the sizes' layer pair; `makeVia` spans `GetLayerTop()` ..
+    /// `GetLayerBottom()` of that pair whatever the type (a through via in the pair tool spans the pair too, as KiCad's, where
+    /// `PCB_VIA::SanitizeLayers` makes it F.Cu .. B.Cu on the board).
+    pub fn toggle_via_typed(&mut self, enabled: bool, diameter: Option<Nm>, drill: Option<Nm>, to_layer: Option<i32>, kind: eda_model::via_extra::ViaKind) {
         self.placing_via = enabled;
         if enabled {
             self.sizes.via_diameter = diameter.filter(|d| *d > Nm::ZERO).unwrap_or(self.rule_via.0);
             self.sizes.via_drill = drill.filter(|d| *d > Nm::ZERO).unwrap_or(self.rule_via.1);
             self.via_to_layer = to_layer.or_else(|| Some(if self.current_layer == self.all_layers.start() { self.all_layers.end() } else { self.all_layers.start() }));
+            self.via_kind = kind;
         } else {
             self.via_to_layer = None;
+            self.via_kind = eda_model::via_extra::ViaKind::Through;
         }
+    }
+
+    /// The type of the vias armed (`m_sizes.ViaType()`).
+    pub fn via_kind(&self) -> eda_model::via_extra::ViaKind {
+        self.via_kind
+    }
+
+    /// The layer the pair goes on to after the armed vias (`switchLayerOnViaPlacement`), if vias are armed.
+    pub fn via_to_layer(&self) -> Option<i32> {
+        self.placing_via.then_some(self.via_to_layer).flatten()
     }
 
     /// `makeVia`: a via of the pair's size on the layers between the current one and the one the route goes on to.
@@ -567,29 +595,14 @@ impl DiffPairPlacer {
         Via { net: net.clone(), layers: LayerRange::new(self.current_layer, to), pos, diameter: self.sizes.via_diameter, drill: self.sizes.via_drill, source_via: None, locked: false, is_virtual: false }
     }
 
-    /// The end item of a cursor (`TOOL_BASE::updateEndItem`, `pickSingleItem` for each net of the pair): a pad or via of either net near
-    /// it, else a track end, on the layer being routed (any while vias are placed). Not the items the route started on or has fixed.
-    fn pick_end_item(&self, at: Point) -> Option<ItemId> {
-        let layers = if self.placing_via { self.all_layers } else { LayerRange::single(self.current_layer) };
-        let own: HashSet<ItemId> = self.start_items.iter().chain(self.own_items.iter()).copied().collect();
-        let mut best: Option<((u8, Nm, ItemId), ItemId)> = None;
-        for (id, item) in self.world.iter() {
-            if own.contains(&id) || !item.layers().overlaps(&layers) {
-                continue;
-            }
-            if !(same_net(item.net(), &self.net_p) || same_net(item.net(), &self.net_n)) {
-                continue;
-            }
-            // pads and vias take priority over tracks (`prioritized[]`); then the nearest
-            let class = if matches!(item, Item::Segment(_)) { 1u8 } else { 0 };
-            let dist = item.anchors().iter().map(|a| vnorm(vsub(*a, at))).min();
-            let Some(dist) = dist.filter(|d| *d <= SNAP_NM) else { continue };
-            let key = (class, dist, id);
-            if best.as_ref().is_none_or(|(k, _)| key < *k) {
-                best = Some((key, id));
-            }
-        }
-        best.map(|(_, id)| id)
+    /// The end item of a cursor (`TOOL_BASE::updateEndItem`: `for( NET_HANDLE net : nets ) { endItem = pickSingleItem( mousePos, net, layer, false,
+    /// { m_startItem } ); if( endItem ) break; }`, P's net first): the item of either net under the cursor or within the grab radius (the grid,
+    /// [`RoutingSettings::grab_radius`], UI-LEFT R7) on the layer being routed (`aLayer` -1, any, while vias are placed), pads and vias before tracks
+    /// ([`Node::pick_single_item`]). Not the items the route started on or has fixed.
+    fn pick_end_item(&self, settings: &RoutingSettings, at: Point) -> Option<ItemId> {
+        let layer = if self.placing_via { None } else { Some(self.current_layer) };
+        let own: Vec<ItemId> = self.start_items.iter().chain(self.own_items.iter()).copied().collect();
+        [&self.net_p, &self.net_n].into_iter().find_map(|net| self.world.pick_single_item(at, Some(net), layer, self.current_layer, settings.grab_radius, &own))
     }
 
     /// `DIFF_PAIR_PLACER::propagateDpHeadForces`: the cursor, pushed off what the circle round the end of the pair (or of its vias) would
@@ -836,7 +849,7 @@ impl DiffPairPlacer {
         if self.idle {
             return false;
         }
-        self.current_end_item = self.pick_end_item(p);
+        self.current_end_item = self.pick_end_item(settings, p);
         self.fit_ok = false;
         self.last_node = None;
         self.shoved_lines.clear();
@@ -1070,7 +1083,8 @@ impl DiffPairPlacer {
         self.springback = Springback::new();
         self.history.push(was);
 
-        self.legs.push(DpLeg { layer: self.current_layer, width: trace.width, p: trace.p.clone(), n: trace.n.clone(), vias: vias.clone() });
+        let via_kind = if vias.is_some() { self.via_kind } else { eda_model::via_extra::ViaKind::Through };
+        self.legs.push(DpLeg { layer: self.current_layer, width: trace.width, p: trace.p.clone(), n: trace.n.clone(), vias: vias.clone(), via_kind });
         let ending = trace.ending_primitives();
         self.prev_pair = Some(ending);
         self.placement_correct = true;
@@ -1085,6 +1099,7 @@ impl DiffPairPlacer {
             self.start = self.prev_pair.clone().expect("just set");
             self.placing_via = false;
             self.via_to_layer = None;
+            self.via_kind = eda_model::via_extra::ViaKind::Through;
         }
         // `initPlacement`
         self.start_diagonal = self.initial_diagonal;
@@ -1144,6 +1159,7 @@ impl DiffPairPlacer {
         self.idle = false;
         self.placing_via = false;
         self.via_to_layer = None;
+        self.via_kind = eda_model::via_extra::ViaKind::Through;
         self.current_trace.p.clear();
         self.current_trace.n.clear();
         self.current_trace.remove_vias();
@@ -1419,6 +1435,53 @@ mod tests {
         assert!(!dp.move_to(&rules, &shove, p(mm(10.0), Nm::ZERO)));
         let pv = dp.preview();
         assert!(pv.head_a.pts.is_empty() && pv.colliding, "{pv:?}");
+    }
+
+    /// UI-LEFT R2 / findings p5 F4-2 (`DP_PRIMITIVE_PAIR::Directional` and `anchorDirection`, `DP_GATEWAYS::BuildFromPrimitivePair`: `SEGMENT_T |
+    /// ARC_T`): two concentric arc tracks of a pair, a pad joined at one end of each, are a start; the pair goes on from their free ends (before, a
+    /// pair of arcs had no gateways and no head). The ends' direction is the chord's, as KiCad's `DIRECTION_45( Anchor( 0 ) - Anchor( 1 ) )`.
+    #[test]
+    fn a_pair_goes_on_from_the_free_ends_of_two_arc_tracks() {
+        let mut node = Node::new();
+        let (r_p, r_n) = (mm(5.0), mm(5.45));
+        let at = |r: Nm, deg: f64| p(Nm::kiround(r.as_f64() * deg.to_radians().cos()), Nm::kiround(-r.as_f64() * deg.to_radians().sin()));
+        smd_pad(&mut node, "USB_DP", at(r_p, 0.0), mm(0.1));
+        smd_pad(&mut node, "USB_DN", at(r_n, 0.0), mm(0.1));
+        let arc = |net: &str, r: Nm| Item::Arc(crate::item::Arc::new(net_of(net), 0, mm(0.2), crate::arcs::ArcPts::new(at(r, 0.0), at(r, 45.0), at(r, 90.0)), Some(format!("arc_{net}")), false));
+        let start = node.add(arc("USB_DP", r_p));
+        node.add(arc("USB_DN", r_n));
+        let found = find_dp_primitive_pair(&node, start).expect("the arcs' free ends");
+        assert_eq!((found.pair.anchor_p, found.pair.anchor_n), (at(r_p, 90.0), at(r_n, 90.0)));
+        assert!(found.pair.directional(), "an arc has a heading, as a segment has");
+        // the chord from (5, 0) to (0, -5) points north-west
+        assert_eq!(found.pair.dir_p(), Direction45::from_vector(-r_p, -r_p));
+        let mut dp = DiffPairPlacer::start(&node, &rules(), &RoutingSettings::default(), start, found.pair.anchor_p, 0, LayerRange::new(0, 1), true).expect("starts on arcs");
+        assert!(dp.move_to(&rules(), &RoutingSettings::default(), p(mm(-4.0), mm(-5.2))), "the pair is fitted");
+        let pv = dp.preview();
+        assert!(pv.head_a.point_count() >= 2 && pv.head_b.point_count() >= 2, "{pv:?}");
+        assert_eq!((pv.head_a.first(), pv.head_b.first()), (Some(at(r_p, 90.0)), Some(at(r_n, 90.0))), "it starts where the arcs end");
+        assert!(!pv.colliding, "{pv:?}");
+    }
+
+    /// UI-LEFT R2 (`handleLayerSwitch` in the pair tool, `DIFF_PAIR_PLACER::makeVia`: `m_sizes.ViaType()`): a pair of blind vias armed from the blind
+    /// via command is fixed as blind vias of the sizes' layer pair, and the leg carries their type to the commit.
+    #[test]
+    fn a_pair_of_blind_vias_keeps_its_type_and_layer_pair() {
+        let (node, start) = two_pad_pairs();
+        let mut dp = DiffPairPlacer::start(&node, &rules(), &RoutingSettings::default(), start, p(Nm::ZERO, Nm::ZERO), 0, LayerRange::new(0, 3), true).expect("starts");
+        dp.toggle_via_typed(true, Some(mm(0.5)), Some(mm(0.2)), Some(1), eda_model::via_extra::ViaKind::Blind);
+        assert_eq!(dp.via_kind(), eda_model::via_extra::ViaKind::Blind);
+        let at = p(mm(5.0), mm(0.5));
+        assert!(dp.move_to(&rules(), &RoutingSettings::default(), at));
+        let pv = dp.preview();
+        assert_eq!(pv.vias.len(), 2, "{pv:?}");
+        assert!(pv.vias.iter().all(|v| v.layers == LayerRange::new(0, 1)), "the sizes' pair, F.Cu .. In1.Cu: {:?}", pv.vias);
+        assert!(matches!(dp.fix_route(&rules(), &RoutingSettings::default(), at, false), Some(FixOutcome::Fixed { real_end: false })));
+        assert_eq!(dp.current_layer(), 1, "on to the other layer of the pair");
+        let leg = dp.legs().last().unwrap();
+        assert!(leg.vias.is_some());
+        assert_eq!(leg.via_kind, eda_model::via_extra::ViaKind::Blind);
+        assert_eq!(dp.via_kind(), eda_model::via_extra::ViaKind::Through, "spent by the fix");
     }
 
     #[test]

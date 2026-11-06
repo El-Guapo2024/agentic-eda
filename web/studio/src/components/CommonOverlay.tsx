@@ -10,11 +10,13 @@ import { useEffect, useRef, useState } from "react";
 import { useStudioState } from "../state/store";
 import { useFpState } from "../state/footprintEditorStore";
 import { useSymState } from "../state/symbolEditorStore";
-import { useCommonOptions } from "../state/commonOptions";
+import { useCommonOptions, windowOptionsOf } from "../state/commonOptions";
 import { useCommonTool } from "../state/commonTool";
 import { crosshairSegments, cursorVisible } from "../kicad-port/crosshair";
 import { lassoContained } from "../kicad-port/lasso";
-import { measureLabel } from "../kicad-port/measureRuler";
+import { rulerDrawing } from "../kicad-port/rulerItem";
+import { paintRuler } from "./canvas/rulerPaint";
+import { measureStrokeText } from "./text/strokeFont";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { getSnapOrigin } from "./canvas/gridHelper";
 import { flipLocalX } from "../kicad-port/boardControl";
@@ -150,26 +152,20 @@ export function CommonOverlay() {
       ctx.setLineDash([]);
     }
 
-    // The measure tool's ruler in the library editors (`RULER_ITEM`): a dashed line from the first click to the second, or to the cursor on the grid while the
-    // second is still to come, with the distance and its extent at the middle.
+    // The measure tool's ruler in the library editors (`RULER_ITEM`, kicad-port/rulerItem.ts): from the first click to the second, or to the cursor on the grid while
+    // the second is still to come -- the line with its ticks, the back ticks and the x, y, r and θ next to its end, in the auxiliary items' colour.
     if (tool.measure && tool.measure.pts.length > 0) {
       const start = tool.measure.pts[0]!;
       const snapped = adapter.cursor ? alignToGrid({ x: adapter.cursor.x, y: adapter.cursor.y }, adapter.gridNm, getSnapOrigin(), { ctrlOrCmd: false }) : null;
       const end = tool.measure.pts.length >= 2 ? tool.measure.pts[1]! : snapped ? ([snapped.x, snapped.y] as const) : null;
-      if (end) {
-        ctx.strokeStyle = layerColor("selection");
-        ctx.fillStyle = layerColor("selection");
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([6, 4]);
-        ctx.beginPath();
-        ctx.moveTo(sx(start[0]), sy(start[1]));
-        ctx.lineTo(sx(end[0]), sy(end[1]));
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.font = "12px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(measureLabel(start, end, studio.units), sx((start[0] + end[0]) / 2), sy((start[1] + end[1]) / 2) - 8);
-        ctx.textAlign = "start";
+      const v = adapter.view;
+      if (end && v.scale > 0) {
+        const viewport: [number, number, number, number] = [-v.x / v.scale, -v.y / v.scale, (size.width - v.x) / v.scale, (size.height - v.y) / v.scale];
+        ctx.save();
+        ctx.translate(v.x, v.y);
+        ctx.scale(v.scale, v.scale);
+        paintRuler(ctx, rulerDrawing([start[0], start[1]], [end[0], end[1]], { scale: v.scale, viewport }, { units: studio.units }, measureStrokeText), layerColor("LAYER_AUX_ITEMS"), tab);
+        ctx.restore();
       }
     }
 
@@ -186,13 +182,15 @@ export function CommonOverlay() {
     }
 
     // `blitCursor`: at the cursor, in the chosen mode, when a tool wants it or the setting forces it.
-    if (adapter.cursor && cursorVisible(opts.alwaysShowCursor, !adapter.toolIdle || picker != null || tool.lasso != null || tool.zoomArea != null || tool.measure != null)) {
+    // the editor's own cursor settings (`WINDOW_SETTINGS::cursor`, one per frame)
+    const win = windowOptionsOf(opts, tab);
+    if (adapter.cursor && cursorVisible(win.alwaysShowCursor, !adapter.toolIdle || picker != null || tool.lasso != null || tool.zoomArea != null || tool.measure != null)) {
       const px = sx(adapter.cursor.x);
       const py = sy(adapter.cursor.y);
       ctx.strokeStyle = cursorColor(tab);
       ctx.lineWidth = 1;
       ctx.beginPath();
-      for (const [x0, y0, x1, y1] of crosshairSegments(opts.crossHairMode, px, py, size.width, size.height)) {
+      for (const [x0, y0, x1, y1] of crosshairSegments(win.crossHairMode, px, py, size.width, size.height)) {
         ctx.moveTo(x0, y0);
         ctx.lineTo(x1, y1);
       }

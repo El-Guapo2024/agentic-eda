@@ -38,7 +38,8 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
     const source = index === 0 ? (draw.sizes?.rule_width_source ?? draw.sizes?.width_source) : "user choice";
     const next = { ...draw, width: w, widthOverride: true, sizes: draw.sizes ? { ...draw.sizes, width_source: source } : undefined };
     d({ type: "SET_DRAW_STATE", draw: next });
-    void routeMove(cursor.x, cursor.y, undefined, w).then((preview) => {
+    // `UseNetClassTrack()` at entry 0, which `updateSizesAfterRouterEvent` reads (UI-LEFT R5)
+    void routeMove(cursor.x, cursor.y, undefined, w, index === 0).then((preview) => {
       if (preview.ok) d({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(next, preview) });
     });
   };
@@ -98,7 +99,7 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
       if (draw?.kind !== "diffpair") return;
       const cursor = state.cursorNm;
       const sizes = draw.sizes ? { ...draw.sizes, width_source: "user choice", gap_source: "user choice" } : undefined;
-      void dpSetDims(dims.width, dims.gap, dims.viaGap).then(() => cursor && dpMove(cursor.x, cursor.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview({ ...draw, sizes }, preview) })));
+      void dpSetDims(dims.width, dims.gap, dims.viaGap, i === 0).then(() => cursor && dpMove(cursor.x, cursor.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview({ ...draw, sizes }, preview) })));
     })
   );
   // "Use Custom Values..." of the pair menu (`DIFF_PAIR_MENU::eventHandler`, `ID_POPUP_PCB_SELECT_CUSTOM_DIFFPAIR`): "bds.UseCustomDiffPairDimensions(

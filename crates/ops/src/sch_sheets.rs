@@ -495,6 +495,14 @@ impl<'a> Board<'a> {
                 let inc = Incoming { placement: sh.clone(), screens: &fragment.sheet_screens, lib_symbols: &fragment.lib_symbols, fields };
                 self.add_sheet_tree(inc, (dx, dy), &name, None, &Numbering::Paste(mode))?;
             }
+            // the sheet's border, fill and attributes come with it (`SCH_SHEET`'s own, `SchExtras::sheet_props`)
+            if let Some(props) = fragment.section.extras.sheet_props.get(&sh.id).cloned() {
+                let sch = self.schematic_mut()?;
+                sch.assign_missing_ids();
+                if let Some(id) = sch.sheets.iter().rev().find(|s| s.name == name).map(|s| s.id.clone()) {
+                    sch.extras.sheet_props.insert(id, props);
+                }
+            }
             // the pins come with the sheet whole (`SCH_SHEET_PIN` is an `EDA_TEXT`): their text's size, bold and italic too
             let looks: Vec<Option<eda_model::sch_extras::LabelLook>> = sh.pins.iter().map(|p| fragment.section.extras.sheet_pin_looks.get(&p.id).copied()).collect();
             if looks.iter().any(Option::is_some) {
@@ -632,7 +640,12 @@ impl<'a> Board<'a> {
             let placement = SheetInstance { id: String::new(), name: name.to_string(), file: OWN.to_string(), at, size, pins: vec![], page: String::new() };
             let numbering = if keep_annotations { Numbering::Paste(PasteMode::Keep) } else { Numbering::Annotate { order, options: options.clone() } };
             let hint = (!file.is_empty()).then_some(file);
-            self.add_sheet_tree(Incoming { placement, screens: &screens, lib_symbols: &content.lib_symbols, fields: None }, (Nm::ZERO, Nm::ZERO), name, hint, &numbering)?;
+            // `DrawSheet` with `isDrawSheetFromDesignBlock`: "Copy default fields into the sheet" -- each of the block's fields a `FIELD_T::USER` field of the new
+            // sheet, `SetVisible( false )` (8303b2ad eeschema/tools/sch_drawing_tools.cpp). A plain file's sheet starts with none.
+            let fields = (!how.block.is_empty() && !how.block_fields.is_empty()).then(|| {
+                how.block_fields.iter().map(|(name, value)| eda_model::sch_extras::LabelField { name: name.clone(), text: value.clone(), visible: false, italic: false }).collect::<Vec<_>>()
+            });
+            self.add_sheet_tree(Incoming { placement, screens: &screens, lib_symbols: &content.lib_symbols, fields }, (Nm::ZERO, Nm::ZERO), name, hint, &numbering)?;
             // `DrawSheet`: `if( isDrawSheetFromDesignBlock && place_as_group )` the sheet alone goes in a group named and linked as the block
             if !how.block.is_empty() {
                 let new_sheet = self.schematic_mut()?.sheets.last().map(|s| s.id.clone());

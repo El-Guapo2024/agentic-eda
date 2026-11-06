@@ -133,7 +133,22 @@ export function changeToEntries(s: SchSelectionSummary): string[] {
   ];
 }
 
-export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
+/** What the standard submenus list (`EDA_DRAW_FRAME::AddStandardSubMenus`): each zoom of the editor's list and each grid, the current one checked (`ZOOM_MENU`, `GRID_MENU`). */
+export interface StandardSubmenus {
+  zoom: readonly { label: string; checked: boolean }[];
+  grid: readonly { label: string; checked: boolean }[];
+}
+
+/** `AddStandardSubMenus`: a separator, then Zoom ("Zoom: 1.00" ..., each `zoomPreset` with its entry, from 1: 0 is Zoom Auto) and Grid (Grid Origin..., a line, each grid as `gridPreset`). */
+export function standardSubmenus(std: StandardSubmenus): MenuNode[] {
+  return [
+    sep,
+    { type: "submenu", label: "Zoom", items: std.zoom.map((z, i): MenuNode => ({ type: "item", action: "common.Control.zoomPreset", label: z.label, arg: i + 1, checked: z.checked })) },
+    { type: "submenu", label: "Grid", items: [item("common.Control.editGridOrigin"), sep, ...std.grid.map((g, i): MenuNode => ({ type: "item", action: "common.Control.gridPreset", label: g.label, arg: i, checked: g.checked }))] },
+  ];
+}
+
+export function schContextMenu(s: SchSelectionSummary, std?: StandardSubmenus): MenuNode[] {
   const out: MenuNode[] = [];
   const add = (...nodes: (MenuNode | false)[]) => out.push(...nodes.filter((n): n is MenuNode => n !== false));
 
@@ -244,5 +259,7 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   // always (`S_C::Idle`), then Delete and Duplicate for a selection. Copy as Text (`canCopyText`) is not ported.
   const some = s.total > 0;
   add(sep, some && item("common.Interactive.cut"), some && item("common.Interactive.copy"), item("common.Interactive.paste"), item("common.Interactive.pasteSpecial"), some && item("common.Interactive.delete"), some && item("common.Interactive.duplicate"), sep, item("common.Interactive.selectAll"));
+  // `SCH_SELECTION_TOOL::Init`'s last call: `m_frame->AddStandardSubMenus( *m_menu.get() )` -- the Zoom and Grid submenus, on every menu (`ShowAlways`, order 1000)
+  if (std) add(...standardSubmenus(std));
   return out;
 }

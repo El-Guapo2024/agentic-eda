@@ -458,6 +458,10 @@ pub struct FootprintEdit {
     /// footprint with no 3D model at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub models3d: Option<Vec<Model3d>>,
+    /// The footprint's Extruded 3D Body, when the 3D Models tab's box set it (`PANEL_FP_PROPERTIES_3D_MODEL::TransferDataFromWindow`): `Some` of a body or of none (the box
+    /// off, `ClearExtrudedBody`); `None` is the body the footprint has from its board file ([`crate::ir::FootprintExtra::extruded_body`]). The layer is the top side's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extruded_body: Option<crate::extruded_body::ExtrudedBodyEdit>,
     /// The files the footprint embeds, when the Embedded Files tab set them: the whole list (`FOOTPRINT`'s `EMBEDDED_FILES`; see [`crate::embedded_files`]). `None` is the list the
     /// footprint has from its board file ([`crate::ir::FootprintExtra::embedded`]); `Some` of an empty list is a footprint that embeds nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -471,7 +475,7 @@ impl FootprintEdit {
 
     /// Whether nothing is edited (the entry is then dropped).
     pub fn is_empty(&self) -> bool {
-        self.reference.is_none() && self.value.is_none() && self.fields.is_empty() && self.attrs.is_none() && self.pads.is_empty() && self.models3d.is_none() && self.embedded.is_none()
+        self.reference.is_none() && self.value.is_none() && self.fields.is_empty() && self.attrs.is_none() && self.pads.is_empty() && self.models3d.is_none() && self.embedded.is_none() && self.extruded_body.is_none()
     }
 
     /// The edit of the `nth` pad numbered `number`.
@@ -493,6 +497,15 @@ impl Design {
     /// The edit of footprint `id`, if it has one.
     pub fn footprint_edit(&self, id: &str) -> Option<&FootprintEdit> {
         self.drawings.as_ref()?.footprint_edits.iter().find(|e| e.id == id)
+    }
+
+    /// The Extruded 3D Body of footprint `id` (`FOOTPRINT::GetExtrudedBody`): the one the 3D Models tab set, else the one its board file has; `None` for none. Its layer is the
+    /// footprint's on the top side ([`crate::extruded_body::ExtrudedBody::flipped`] is the back's).
+    pub fn extruded_body(&self, id: &str) -> Option<crate::extruded_body::ExtrudedBody> {
+        if let Some(set) = self.footprint_edit(id).and_then(|e| e.extruded_body.as_ref()) {
+            return set.body.clone();
+        }
+        self.drawings.as_ref()?.footprint_extras.iter().find(|e| e.id == id)?.extruded_body.clone()
     }
 
     /// The `DNP` and `Exclude from BOM` flags of the schematic symbol(s) of `id`: where the board's footprint takes them from

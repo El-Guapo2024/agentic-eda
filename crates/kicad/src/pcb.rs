@@ -1067,6 +1067,15 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
     if let Some(sch) = design.schematic.as_ref() {
         write_schematic_setup(&mut project["schematic"], &sch.extras);
     }
+    // Page Settings' drawing sheet files (`PROJECT_FILE`'s `pcbnew.page_layout_descr_file`, `SCHEMATIC_SETTINGS`' `schematic.page_layout_descr_file`), as the
+    // design keeps them: relative to the board's folder, or with a path variable. The derived project in `<board>/.kicad` has them made absolute
+    // (`eda_kicad_engine::write_project_with`), its folder not being the board's.
+    if let Some(path) = design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref()) {
+        project["pcbnew"]["page_layout_descr_file"] = serde_json::json!(path);
+    }
+    if let Some(path) = design.schematic.as_ref().and_then(|s| s.extras.drawing_sheet.as_deref()) {
+        project["schematic"]["page_layout_descr_file"] = serde_json::json!(path);
+    }
     // Project > Bus Alias Definitions (`PROJECT_FILE`'s `schematic.bus_aliases`, where KiCad 10 keeps them: `{ "<name>": ["<member>", ..] }`). The derived
     // schematic still carries them as legacy `(bus_alias ..)` blocks too, which KiCad reads into the same list (`SCH_SCREEN::AddBusAlias`, a definition
     // it already has being kept once).
@@ -1786,6 +1795,12 @@ pub(crate) fn write_footprint(
             let refs: Vec<&eda_model::embedded_files::EmbeddedFile> = listed.iter().collect();
             crate::embedded::write_block(out, &refs, 2, false);
         }
+    }
+
+    // The Extruded 3D Body ("Save extruded 3D body info."), after the embedded files and before the models as KiCad writes it: the one the 3D Models tab set, else the board file's
+    // (`Design::extruded_body`), its layer on the footprint's side (`FOOTPRINT::Flip` flips it: `ExtrudedBody::flipped`); none, or none with a height, is nothing.
+    if let Some(body) = design.extruded_body(&fp.id) {
+        crate::extruded_body_io::write(out, &if fp.side == Side::Bottom { body.flipped() } else { body }, 2);
     }
 
     // 3D models: every `(model ...)` the footprint has, with the placement it gives each (`Footprint::models3d`: a library footprint's, an imported
@@ -3638,6 +3653,46 @@ mod tests {
         };
         assert_eq!(held("U1"), vec![placed.clone()]);
         assert_eq!(held("C1"), vec![placed], "read back, the bottom footprint's model is the one it was written from (the reader undoes the frame)");
+    }
+
+    /// The Extruded 3D Body (`EXTRUDED_3D_BODY`) of a footprint on the board: written as `format( FOOTPRINT )` writes it, after the embedded files and before the models, a back
+    /// footprint's layer flipped as `FOOTPRINT::Flip` flips it, and read back to the same body; a footprint with none writes none.
+    #[test]
+    fn a_footprints_extruded_body_is_written_as_kicad_writes_it_and_read_back() {
+        use eda_model::extruded_body::{ExtrudedBody, ExtrusionMaterial};
+        use eda_model::footprint::Model3d;
+        let (mut design, mut model) = fixture();
+        let fp = model.footprint_of(model.part("U1").unwrap()).unwrap();
+        model.footprints.push(eda_model::Footprint { name: "U1_FP".into(), models3d: vec![Model3d::identity("${KICAD10_3DMODEL_DIR}/X.3dshapes/X.step")], ..fp });
+        model.parts.iter_mut().find(|p| p.reference == "U1").unwrap().footprint = Some("U1_FP".into());
+        let top = ExtrudedBody { height: Nm::from_mm(1.5), standoff: Nm::from_mm(0.1), layer: "F.Fab".into(), material: ExtrusionMaterial::Metal, color: Some([0.1, 0.2, 0.3, 1.0]), offset: [0.5, 0.0, 0.2], scale: [1.0, 2.0, 1.0], rotate: [0.0, 0.0, 15.0], show: true };
+        let bottom = ExtrudedBody { height: Nm::from_mm(2.0), layer: "F.CrtYd".into(), show: false, ..Default::default() };
+        assert_eq!(design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "C1").unwrap().side, Side::Bottom, "the fixture's C1 is on the back");
+        let extras = vec![
+            eda_model::ir::FootprintExtra { id: "U1".into(), extruded_body: Some(top.clone()), ..Default::default() },
+            eda_model::ir::FootprintExtra { id: "C1".into(), extruded_body: Some(bottom.clone()), ..Default::default() },
+        ];
+        design.drawings.get_or_insert_with(Default::default).footprint_extras.extend(extras);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let block = |reference: &str| -> String { out.split("\n\t(footprint ").find(|b| b.contains(&format!("(property \"Reference\" \"{reference}\""))).unwrap_or_else(|| panic!("{reference} in:\n{out}")).to_string() };
+        let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let u1 = block("U1");
+        assert!(
+            words(&u1).contains("(model (type extruded) (hide no) (overall_height 1.5) (body_pcb_gap 0.1) (layer \"F.Fab\") (material metal) (color 0.1 0.2 0.3 1) (offset (xyz 0.5 0 0.2) ) (scale (xyz 1 2 1) ) (rotate (xyz 0 0 15) ) )"),
+            "{u1}"
+        );
+        assert!(u1.find("(type extruded)").unwrap() < u1.find("(model \"${KICAD10_3DMODEL_DIR}").unwrap(), "before the models: {u1}");
+        let c1 = block("C1");
+        assert!(words(&c1).contains("(hide yes) (overall_height 2) (body_pcb_gap 0) (layer \"B.CrtYd\")"), "the back footprint's body names the back's courtyard: {c1}");
+        assert_eq!(out.matches("(type extruded)").count(), 2, "the footprints with none write none");
+
+        let (back, back_model, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(back.extruded_body("U1"), Some(top));
+        assert_eq!(back.extruded_body("C1"), Some(bottom), "read back in the footprint's top-side frame");
+        assert_eq!(back.extruded_body("R1"), None);
+        let again = export_kicad_pcb(&back, &back_model, &meta()).unwrap();
+        assert_eq!(again.matches("(type extruded)").count(), 2);
+        assert!(!again.contains("(model (type"), "no body is left among the kept tokens as well");
     }
 
     /// Two pads of one footprint on the same point with the same number (`complex_hierarchy`'s MIRE: crossed bars, every pad numbered "", two of them on one

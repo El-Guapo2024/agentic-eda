@@ -109,6 +109,24 @@ impl Board<'_> {
         Ok(())
     }
 
+    /// `Cmd::SetExtrudedBody` (`PANEL_FP_PROPERTIES_3D_MODEL::TransferDataFromWindow`'s Extruded 3D Body box): the body checked as the box checks it
+    /// (`eda_model::extruded_body::checked_body`, refused in its words: "Component height must be greater than zero.", "Standoff height must be less than the overall height."), or
+    /// none (`ClearExtrudedBody`). A body that comes to the one the board file gave the footprint takes the edit away, so the footprint is as it was read.
+    pub(crate) fn set_extruded_body(&mut self, part: &str, body: Option<&eda_model::extruded_body::ExtrudedBody>) -> Result<(), Vec<CheckResult>> {
+        self.require_placed(part)?;
+        let checked = match body {
+            Some(b) => Some(eda_model::extruded_body::checked_body(b).map_err(|p| refuse(part, ModelProblem { check: "ops_bad_extruded_body", reason: p.message().into() }))?),
+            None => None,
+        };
+        if self.design.extruded_body(part) == checked {
+            return Err(refuse(part, ModelProblem { check: "ops_nothing_to_change", reason: "the Extruded 3D Body is as it was".into() }));
+        }
+        let from_file = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == part)).and_then(|e| e.extruded_body.clone());
+        self.edit_slot(part).extruded_body = (checked != from_file).then_some(eda_model::extruded_body::ExtrudedBodyEdit { body: checked });
+        self.tidy_edit(part);
+        Ok(())
+    }
+
     /// `Cmd::EditBoardModel`.
     pub(crate) fn edit_board_model(&mut self, part: &str, index: usize, patch: &ModelPatch) -> Result<(), Vec<CheckResult>> {
         self.change_models(part, |list| fp_models::edit_model(list, index, patch))

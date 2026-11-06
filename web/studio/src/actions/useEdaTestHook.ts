@@ -5,6 +5,7 @@
 //   await __eda.run(id, args?) -> { ok, error?, revision, dialog?, toast? }   runs the action as a menu click does and waits for its /api/ round trips
 //   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], brightened, entered, counts, grid, gridOverrides, snap, dialogs, open, sheetPath, view, activeLayer, appearance, viewer3d, carry }
 //   __eda.viewer3dScreen(ref)  -> { x, y } | null   where a part is on the 3D canvas (CSS px from its top-left), for hovering it without guessing pixels
+//   __eda.viewer3dCamera()     -> the 3D camera as a saved viewport keeps it ({ pos, lookAt, auxDeg, zoom, quat }), or null when the 3D tab is not open
 //   __eda.errors(since?)       -> [{ time, message }]   console.error, uncaught errors, rejected promises, 5xx replies and the error toasts since the page loaded
 //
 // This file is the page glue: the capture that has to start at load (console.error, window errors, the fetch wrapper that counts the studio's requests and reads the
@@ -101,6 +102,8 @@ export interface EdaTestHook {
   errors(since?: number): ErrorEntry[];
   /** Where a part is on the 3D canvas, CSS pixels from the canvas's top-left (null when the 3D tab is not open or the part is not placed). */
   viewer3dScreen(ref: string): { x: number; y: number } | null;
+  /** The 3D camera's state (kicad-port/camera3d.ts `getView`), null when the 3D tab is not open. */
+  viewer3dCamera(): unknown;
 }
 
 declare global {
@@ -270,6 +273,10 @@ function build(latest: { current: Latest }): EdaTestHook {
 
     viewer3dScreen(ref) {
       return viewer3dProbe.screenOf(ref);
+    },
+
+    viewer3dCamera() {
+      return viewer3dProbe.cameraOf();
     },
 
     errors(since) {

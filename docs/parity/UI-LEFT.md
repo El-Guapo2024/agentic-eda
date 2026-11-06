@@ -226,20 +226,20 @@ Notes:
   - Only the Normal and De Morgan body styles exist.
   - Alternates are synced to the reference's units on the sheet in view only; the Symbol Unit submenu's Duplicate is not possible.
   - M. GAPS 12/19; PARITY-sch §48, §59; r5 D5-H3.
-- **S6 [BD] Text looks.**
-  - Font face, colour and hyperlink can't be edited.
-  - A free text's bold, italic and colour are kept but not drawn.
-  - A label's own fields can't be clicked or moved, and a hand-moved one is autoplaced again.
-  - M. GAPS 12; PARITY-sch §39, §52.
+- **S6 [BD] Text looks.** **done (task-u3-schtext)**: Text, Label and Text Box Properties edit the Font (KiCad's choices and the machine's families), the Color and, for a text and a text box, the Link (the hierarchy's pages, `ValidateHyperlink`'s message) and Exclude from simulation (`set_text_attrs`, `(face ..)` written and read); a free text's bold, italic and colour and a label's and a text box's colour are drawn; a label's fields (the Sheet References included) are items -- clicked, dragged, turned and edited on the canvas (Field Properties with Font and Color), and a field placed by hand stays (no `(fields_autoplaced ..)`, read back from KiCad) until Autoplace Fields; the Properties panel's Font row edits a text's and a label's face (PARITY-sch §60). Left:
+  - An outline font is drawn with the stroke font; a text placed with T or a text box being drawn takes its font, colour and link after it is placed.
+  - A label's field keeps no size, bold or shown name; a field added to a label placed by hand goes where Autoplace Fields puts it.
+  - (was: font, colour and link not editable; a free text's bold, italic and colour not drawn; a label's fields neither clicked nor kept where moved.)
+  - M. GAPS 12; PARITY-sch §39, §52, §60.
 - **S7 [BD] Properties panel.** **done (task-u1-props)**: every class lists KiCad's registered rows (a test replays the C++), and the symbol's and sheet's fields are rows as KiCad's panel adds them; a label's size, bold, italic, colour and justification, a text's bold, italic, colour and hyperlink, wire ends, Body Style, Exclude From Position Files and user fields are edited; Sheetfile shows the field's own text (B3-M1) (PARITY-sch §55). Left, read-only with the reason as the tooltip:
-  - Fonts; a symbol's pin display (one library symbol per lib_id). (Its Unit is `set_symbol_unit` since task-u2-symprops.)
-  - A sheet's border, fill and attributes (not kept: S8); a text box's margins, fill, colour and hyperlink; an image's transform offset.
+  - A text box's and a directive label's font; a symbol's pin display (one library symbol per lib_id). (Its Unit is `set_symbol_unit` since task-u2-symprops; a text's and a label's Font and a sheet's border, fill and attributes are editable since task-u3-schtext.)
+  - A text box's margins, fill, colour and hyperlink (its dialog edits the last three); an image's transform offset.
   - M. PARITY-sch §17, §30, §45, §55.
-- **S8 [FM] Hierarchy.**
-  - The Navigator has no Edit Page Number, Rename, New or Delete Top-Level Sheet, and no net highlight.
-  - A KiCad 10 project with several top-level sheets is folded under one root.
-  - A sheet's colours and DNP and BOM flags aren't kept or editable, and there is no Add Field on a sheet.
-  - M. PARITY-sch §30, §40, §50, §52; r2 B-L1, r6 C6-L2, r7 A7-L3.
+- **S8 [FM] Hierarchy.** **done (task-u3-schtext)**: the Navigator's right-click menu -- Edit Page Number, Rename in place, Delete Top-Level Sheet ("Delete top-level sheet '%s'?..." / "Cannot delete the last top-level sheet."), New Top-Level Sheet ("Enter name for new top-level sheet:"), Expand / Collapse All -- and its net highlight (the sheets holding the highlighted net in `LAYER_BRIGHTENED`); a KiCad 10 project's top-level sheets shown as roots of their own (`virtual_root`); a sheet's border width and colour, fill colour and Exclude from simulation / bill of materials / board and Do not populate kept, written, read, drawn (fill, DNP cross) and edited in Sheet Properties and the Properties panel; Add Field, Move and Delete of a sheet's user fields in Sheet Properties (PARITY-sch §60). Left:
+  - New Top-Level Sheet on a design whose root is its only top-level sheet (offered disabled); the derived files keep the root that places a project's top-level sheets.
+  - A sheet's attributes are its own on every path and variant and are not given to its symbols in the studio's own tables; a sheet with no style of its own is drawn unfilled (written with the old pale fill).
+  - The rows read "name file · page N" (A7-L3); a local net on a screen shown twice lights its first path's row only.
+  - M. PARITY-sch §30, §40, §50, §52, §60; r2 B-L1, r6 C6-L2, r7 A7-L3.
 - **S9 [BD] A shared screen (a sheet placed twice).**
   - Annotate numbers only that screen's references.
   - Every path shares one power reference.
@@ -250,12 +250,15 @@ Notes:
   - Ctrl+E edits the shared entry, so every placement changes.
   - A `lib_name` copy is traced as the lib_id's, which can give a wrong net.
   - L. PARITY-sch §48, §50.
-- **S11 [FM] Symbol Fields Table.**
-  - No scope selector, saved presets, field-name templates or "Add field from library".
-  - No Save/Discard question on close.
-  - The Description column may be done (§52 H3).
-  - M. PARITY-sch §7, §25; r5 C5-L9.
-- **S12 [FM] Find/Replace.** No regex, and it doesn't search sheet names, sheet files, pins or library metadata. S. GAPS 1/4; PARITY-sch §8.
+- **S11 [FM] Symbol Fields Table.** **done (task-u3-schtext)**: the scope (Entire Project, Current Sheet Only, Current Sheet and Down, and 25ec2335's Selection); the project's view presets (the box with the built-in and the project's in name order, "Save preset..." -- "BOM preset name:", built-in names refused, "Overwrite existing preset?" -- and "Delete preset...", in `schematic.bom_presets`; the box shows the preset the view is); the field name templates as hidden columns; the project's `bom_settings` view on open; "Save changes?" with Save / Discard Changes / Cancel on a close; Rename Field's and Remove's prompts; the variant columns kept (PARITY-sch §60). Left:
+  - "Add field from library" is not a KiCad feature (its only Add is "New field name:"); KiCad has no Rename of a preset either (save under the new name, delete the old).
+  - A preset is saved when saved (KiCad at the close) and the closing view is not kept as `bom_settings`; with no saved view the user fields are shown.
+  - The Description column, editable BOM Name labels, the grid's context menus, the Group By refusals, the format presets' Save / Delete, Set / Clear Variant Symbol.
+  - M. PARITY-sch §7, §25, §60; r5 C5-L9.
+- **S12 [FM] Find/Replace.** **done (task-u3-schtext)**: Regular Expression (in Find and Replace, Whole words only winning over it; `wxRegEx`'s syntax with `\N` and `&` in the replacement: `eda_model::wx_regex`, the one engine shared with the net class patterns, no crate); the search reaches sheets' names, files and user fields, sheet pins, power symbols' values, text boxes and directive labels' fields beside the symbols' fields and pins; Replace renames a sheet, a sheet pin, a power symbol's net, a text box, a field, not a sheet's file nor a symbol's pin (as KiCad); "Search the current selection only" in both modes (PARITY-sch §60). Left:
+  - Library metadata: KiCad's dialog has no box for `searchMetadata` either; groups and ERC markers are not searched.
+  - The engine's match is leftmost-first (POSIX: leftmost-longest), which shows only in Replace's span with alternations; it does not upper-case the pattern as KiCad does; a power symbol's Reference is found, not replaced.
+  - S. GAPS 1/4; PARITY-sch §8, §60.
 - **S13 [FM] Arcs.** Two clicks make a fixed 90° arc, and there is no arc point editor. M. PARITY-sch §12.
 - **S14 [BD] Annotation.**
   - Placing a unit never fills a free unit of an existing part (D-A1).
@@ -312,35 +315,39 @@ Notes:
   - ~~D on several tracks does nothing (MULTI_DRAGGER).~~ Done: the selected tracks drag together, in the three router modes.
   - Left: the multi-track Shove has no springback; the selection is not cleared at the start, restored on Esc, or set to the leader segments after a multi-track drag; the closest net is not highlighted while dragging; a footprint's own Edge.Cuts / Margin graphics stay (board shapes in this model).
   - L. GAPS 7 R7-R9; pns Stages 21-22.
-- **R2 [FM] Diff pairs.**
-  - No arcs in the pair router or the tuners (F4-2).
-  - The blind, buried and microvia commands do nothing in the pair tool.
-  - F finishes at the cursor.
-  - M. GAPS 7; pns Stages 11-12.
-- **R3 [BD] Length tuner.**
-  - No pad-to-die length or delay, and a time-domain rule gives no target.
-  - A pattern can't be moved or rotated.
-  - The corner style and single-sided settings are ignored.
-  - The status box sits at the cursor.
-  - M. GAPS 7; pns Stage 8; PARITY-pcb §35, §65.
-- **R4 [BD] Autoroute.** It routes inside the outline's summary polygon and ignores cutouts. M. GAPS 27.
-- **R5 [BD] Layers and vias.**
-  - V goes to the layer pair's other layer, not to the nearest ratsnest anchor's.
-  - The clearance isn't re-read after a layer switch.
-  - V armed before a route outlives the tool (R7-R6).
-  - Autoroute leaves the active layer changed (R7-R7).
-  - S. pns Stages 11-21.
+- **R2 [FM] Diff pairs. done (task-u3-router)** -- pns Stage 23.
+  - ~~No arcs in the pair router or the tuners (F4-2).~~ Done: a pair goes on from two arc track ends (`DP_PRIMITIVE_PAIR` / `BuildFromPrimitivePair` with `ARC_T`); the pair and skew tuners take an arc (`AssembleDiffPair` by centre and radius, `addCornersUntilIndex`'s `AddArc`). KiCad's pair placer itself draws mitered corners only.
+  - ~~The blind, buried and microvia commands do nothing in the pair tool.~~ Done: `DIFF_PAIR_PLACER::makeVia`'s via type, committed with it.
+  - ~~F finishes at the cursor.~~ Done: `ROUTER::Finish` with the P line, finished on the coupled pair at the nearest anchor, else the pair goes on.
+  - Left: from the arcs' ends a cursor steeply off their chord direction fits no head, in both modes (seen in the kicad-cli proof's setup; not compared with KiCad).
+  - M. GAPS 7; pns Stages 11-12, 23.
+- **R3 [BD] Length tuner. done (task-u3-router)** -- pns Stage 23 (branch `task-u3-router-tune`).
+  - ~~No pad-to-die length or delay, and a time-domain rule gives no target.~~ Done: the pads' `(die_length ..)` / `(die_delay ..)` count; a time-domain rule gives the target delay (`EditStart`).
+  - ~~A pattern can't be moved or rotated.~~ Done: moved, turned and flipped as a generator with other items; alone it slides along its track and is tuned again.
+  - ~~The corner style and single-sided settings are ignored.~~ Done: the tool's settings start from Board Setup's page each time it is entered.
+  - ~~The status box sits at the cursor.~~ Done: `TUNING_STATUS_VIEW_ITEM::ViewDraw`'s box at the mouse position.
+  - Left: the lone move previews rigidly (the slide is applied at the drop) and its start snaps to segments only; a pair pattern's merged outline; the pattern's message-panel lines; a lone pattern's Duplicate refusal; the time domain for a class whose profile has it off.
+  - M. GAPS 7; pns Stages 8, 23; PARITY-pcb §35, §65.
+- **R4 [BD] Autoroute. done (task-u3-router)**: the autoroute (Route, the FreeRouting port) routes round the board outline's cutouts, keep-outs on every copper layer as KiCad's DSN export writes them, the edge clearance kept from their rims; kicad-cli's DRC is clean. Left: the generated pours still cover the cutout (the fill clears it); FreeRouting's own reading of the cutout keep-out not re-dumped. M. GAPS 27.
+- **R5 [BD] Layers and vias. done (task-u3-router)** -- pns Stage 23.
+  - ~~V goes to the layer pair's other layer, not to the nearest ratsnest anchor's.~~ Done (`GetNearestRatnestAnchor`, the sizes' `PairedLayer`), for a route, a pair and V before a route.
+  - ~~The clearance isn't re-read after a layer switch.~~ Done: `updateSizesAfterRouterEvent` after every fix, via and layer switch (the width and a pair's gap too, as the placers' `UpdateSizes` allow); the message panel shows them.
+  - ~~V armed before a route outlives the tool (R7-R6).~~ Done.
+  - ~~Autoroute leaves the active layer changed (R7-R7).~~ Done.
+  - Left: the router sizes' layer pairs start afresh with each route (KiCad keeps the last route's via pair in `m_savedSizes`).
+  - S. pns Stages 11-21, 23.
 - **R6 [BD] The head's shape.**
   - A fan-out elbow isn't straightened (`optimizeTailHeadTransition`).
   - No hull snap in highlight-collisions mode.
   - `reduceTail` and `handlePullback` are not ported.
   - Earlier vias aren't shoved by a later leg.
   - M. pns Stages 2, 10, 12.
-- **R7 [BD] Grab radius and widths.**
-  - The start and end grab radius is a fixed 0.5 mm, not the grid size.
-  - Automatically Select Track Width stays on after a toolbar pick.
-  - The width keys cycle.
-  - S. pns Stage 12; PARITY-boardctl §4.
+- **R7 [BD] Grab radius and widths. done (task-u3-router)** -- pns Stage 23.
+  - ~~The start and end grab radius is a fixed 0.5 mm, not the grid size.~~ Done: the grid, measured to the copper (`pickSingleItem`'s `maxSlopRadius`, `snapToItem`), for routes, pairs and drags.
+  - ~~Automatically Select Track Width stays on after a toolbar pick.~~ Not KiCad's: at 8303b2ad a toolbar pick sets `m_TempOverrideTrackWidth` and leaves "Automatically select track width" on (`Tracks_and_Vias_Size_Event`'s `ID_AUX_TOOLBAR_PCB_TRACK_WIDTH`); the toolbar's Track Width and Via Size boxes, display-only before, now do exactly that.
+  - ~~The width keys cycle.~~ KiCad's already (Stage 18): the first press of a route at an inherited width overrides it, then the index steps and wraps, as `TrackWidthInc` / `Dec`.
+  - Left: `pickSingleItem`'s free-pad and no-net (Highlight collisions) special cases.
+  - S. pns Stages 12, 23; PARITY-boardctl §4.
 - **R8 [BD] Size dialogs.**
   - An extra Optimizer effort row, and "Use Custom Values…".
   - Pre-defined Sizes' Add isn't pre-filled, and a 0 width is refused.
@@ -490,48 +497,38 @@ Notes:
   - Save Library As has no "Do not update library tables" or global-table entry; KiCad 25ec2335's Save As Packed / Unpacked are not ported.
   - The library file is not watched for changes made outside the studio.
   - L. GAPS 5; PARITY-common §14, §16.
-- **L2 [FM] Manage Libraries.**
-  - No Reset or Migrate Libraries, and no Edit Options.
-  - The project table only.
-  - Non-KiCad formats are listed but not read.
-  - No 3D model search paths.
+- **L2 [FM] Manage Libraries.** **done (task-u4-libs)**: every tab of Manage Libraries is edited as KiCad's: the Global tab writes the global table into KiCad's configuration folder, a chained table's tab its own file; Reset Libraries (one row naming the installed table) and Migrate Libraries (kicad-cli's `sym upgrade` / `fp upgrade`, `ConvertLibrary`) with KiCad's questions; Edit Options... (`DIALOG_PLUGIN_OPTIONS`); Eagle, Altium, CADSTAR, EasyEDA, PADS Logic, gEDA, Sprint Layout and legacy libraries of the tables read through kicad-cli's conversion into a read-only cache; KiCad's path variables edited in Configure Paths and written to `kicad_common.json`, with the 3D model search paths listed (KiCad 8303b2ad has no page that edits them: they are the path variables). PARITY-common §14.
+  - Left: pasting table text into the grid; a row's options are not passed to the conversion (kicad-cli has no flag: a CADSTAR library that needs `csa` converts without it); Database and HTTP libraries are listed, not read; a system-environment variable is read only in Configure Paths (KiCad lets one override it for the session); Add Library's "global table" choice and Save Library As' global entry are not offered.
   - M. GAPS 5; PARITY-common §14.
-- **L3 [FM] Choosers.**
-  - No `/regex/` or relational (`voltage>3.3`) search.
-  - No footprint-selector list, and no "3D viewer in own window".
-  - Change Symbols lists only the design's libraries.
+- **L3 [FM] Choosers.** **done (task-u4-libs)**: `/regex/` (and `^...$`) and relational (`voltage>3.3`, `resistance<10k`) search words in the server's search (on `eda_model::wx_regex`) and the browser's groups; the Symbol Chooser's footprint selector (`FOOTPRINT_SELECT_WIDGET`, the chosen one drawn and placed); the Footprint Chooser's "Show 3D viewer in own window"; Change Symbols' browse buttons open the Symbol Chooser over every library of the tables, and a new id's definition goes in with the change. PARITY-sch §3a.
+  - Left: the browser's regex runs on JS RegExp, not `wx_regex`; the selector counts distinct pin numbers (KiCad: graphical pins) and lists the default footprint once; the picker's Recently Used is Place Symbol's.
   - M. GAPS 5/30; PARITY-sch §3a.
-- **L4 [FM] Assign Footprints (CvPcb).** No footprint preview and no equivalence files. M. PARITY-sch §13.
-- **L5 [BD] Design Blocks.**
-  - The pane is docked, not floating.
-  - A name with "." is refused.
-  - A placed sheet doesn't get the block's default fields.
+- **L4 [FM] Assign Footprints (CvPcb).** **done (task-u4-libs)**: CvPcb's footprint viewer as a pane of the dialog (the picked footprint, else the selected symbol's: `InitDisplay`, `GetFootprint`'s messages); the footprint association files (`.equ`, KiCad 25ec2335's cvpcb/): Manage Footprint Association Files... (`DIALOG_CONFIG_EQUFILES`, the list in the board folder's `cvpcb.json` and the derived `.kicad_pro`) and Automatically Assign Footprints (`AutomaticFootprintMatching`, staged with the dialog's assignments, one undo step). PARITY-sch §13.
+  - Left: the viewer is a pane, not a window of its own; a relative `.equ` path is read against the board's folder (KiCad's search stack is not searched); Edit opens no text editor; the CvPcb hotkeys.
+  - M. PARITY-sch §13.
+- **L5 [BD] Design Blocks.** **done (task-u4-libs)**: the pane docks on the left or the right and floats at KiCad's 800 x 600 (`defaultDesignBlocksPaneInfo`: not top or bottom); a name with a '.' is accepted as KiCad 25ec2335 lists it (`DesignBlockEnumerate`: `BeforeLast( '.' )`); a sheet drawn from a block gets the block's default fields, hidden (`DrawSheet`), and a block saved from a sheet opens with the sheet's fields.
+  - Left: the floating pane is a window inside the page; its dock or float, like the pinned libraries and check boxes, is kept in the browser (localStorage); a name starting with '.' is refused.
   - S. GAPS 32; PARITY-sch §34.
-- **L6 [BD] Library edge cases.**
-  - Placing a lib_id the design already holds uses the design's copy (unsure).
-  - A folder library skips a broken file silently.
-  - S. GAPS 33; PARITY-common §14.
+- **L6 [BD] Library edge cases.** **done (task-u4-libs)**:
+  - Placing a lib_id the design already holds: decided and documented (PARITY-common §14). KiCad places the library's symbol as it is now and, when it differs from the schematic's cache, keeps it under a new cache entry (`Name_1`) so the placed ones keep theirs; the studio's IR has one definition per lib_id and places the design's copy, which is KiCad's answer until the library changes. Left: a placement's own cache entry when the library changed, and an unsaved Symbol Editor edit is placed as edited.
+  - A folder library's broken file is reported in KiCad 25ec2335's words ("Unable to read file '%s'" ... "The library cannot be saved until these errors are fixed manually."): the chooser, the editors' tree, the status bar, `GET /api/library/load_errors` and the row's status in Manage Symbol Libraries; the good files are read. Left: a symbol KiCad's parser refuses inside a well-formed file is not found (the reader checks the header and the forms' closing).
+  - S. GAPS 5; PARITY-common §14.
 
 ## 3D viewer
 
-- **D1 [BD] The scene.**
-  - Trapezoid, chamfered and custom pads are drawn as boxes.
-  - NPTH holes aren't cut from the board.
-  - Inner copper takes the F/B colour.
-  - Paste-only pads are grown (V7-1).
-  - No per-layer ambient or specular.
-  - M. GAPS 23/27/31; PARITY-3d §3, §5.
-- **D2 [FM] Controls.**
-  - No right-click menu, 3D Navigator, layer presets, saved viewports or preferences page.
-  - The PCB selection isn't highlighted.
-  - M. PARITY-3d §1-§5.
-- **D3 [FM] Layer tree.** No Values, Footprint Text or Off-board Silkscreen rows. S. PARITY-3d §5.
-- **D4 [FM] Models.**
-  - No X3D or IGES, and no Extruded 3D Body.
-  - Migrate 3D Models doesn't run at load.
-  - KiCad 5 path aliases aren't used.
-  - A bottom-side footprint's tab shows top-side numbers.
-  - M. GAPS 30; PARITY-3d §6; PARITY-pcb §31.
+- **D1 [BD] The scene.** **done (task-u3-3d)**: every pad in its real shape (trapezoid, chamfered, custom, a turned one turned), the body less every through and non-plated hole (`GET /api/board3d`), vias as rings with barrels, inner copper drawn when the body does not hide it and in its own PCB editor colour, the pads' openings in the solder mask, no paste margin for a pad with no copper (V7-1), `render_3d_opengl`'s ambient, specular, shininess and transparency per layer (PARITY-3d §3, §9). Left:
+  - A track's, a shape's or an untented via's own mask opening (the pads' openings are done).
+  - Tracks and zones are not cut at the holes (a track stops where it ends in one).
+  - A custom pad's paste margin, the off-board pads, plated vs bare copper, counterbores and backdrills.
+  - The lights are three.js's: the shading is close to KiCad's, not the same.
+- **D2 [FM] Controls.** **done (task-u3-3d)**: the right-click menu with its Rotate Board and Move Board submenus, the 3D Navigator, layer presets (Follow PCB Editor, Follow PCB Plot Settings, "legacy colors", saved ones), saved viewports, Preferences > 3D Viewer > General and Realtime Rendering, the PCB selection drawn in the selection colour and a click in 3D selecting the footprint (PARITY-3d §2, §5, §9). Left:
+  - The presets' and viewports' Ctrl+Tab / Shift+Tab switchers.
+  - The Render Options and While Moving preferences (not offered).
+  - The viewports are not written into the derived `.kicad_pro`.
+- **D3 [FM] Layer tree.** **done (task-u3-3d)**: the Values, Footprint Text (KiCad's meta-control) and Off-board Silkscreen rows (the silkscreen clipped to the board while it is off), and the 3D Navigator row. Left: the silkscreen is not clipped at the holes or the mask. PARITY-3d §5.
+- **D4 [FM] Models.** **done (task-u3-3d)**: X3D, IGES and .wrz models through kicad-cli's conversion; the Extruded 3D Body read, written, drawn and set in the board's 3D Models tab; Migrate 3D Models when the board opens, with KiCad's notice; KiCad 5 aliases (`${KISYS3DMOD}`, `ALIAS:file`, a `3Dresolver.cfg` migrated into path variables); a bottom-side footprint's tab shows the file's numbers (PARITY-3d §6, GAPS 30). Left:
+  - The body's Export..., the body in the tab's preview and in the Footprint Editor's dialog.
+  - Migrate's folder picker over the whole disk.
 - **D5 [KO] Raytracing.** It is out of scope, and a part with no model shows its F.Fab box. XL. PARITY-3d §2, §6.
 
 ## Import
@@ -577,26 +574,23 @@ Notes:
 
 ## Common and app shell
 
-- **C1 [BD] Mouse and touchpad.**
-  - The drag-button preferences are ignored.
-  - No pinch zoom.
-  - The library canvases never auto-pan.
-  - No pointer warp (a browser limit).
+- **C1 [BD] Mouse and touchpad.** **done (task-u4-common)**: every canvas reads Left button drag (KiCad's three choices), Middle and Right button drag (Pan, Zoom, None) and Pan on mouse movement with key; the library editors draw the selection rectangle and auto-pan; a touchpad pinch zooms as `onMagnify` does (PARITY-common §3, §17). Left:
+  - The studio's Left button drag default is "Drag any object" (KiCad's is "Drag selected objects"): a decision for the lead.
+  - No pointer warp ("Center and warp cursor on zoom", the infinite drag at the edge): a browser limit.
+  - A pinch made with Control held reads as Ctrl and the wheel.
   - M. GAPS 20; PARITY-sch §27.
-- **C2 [FM] Grid.**
-  - Dots only.
-  - Edit Grids has no names and no separate X/Y.
-  - The schematic context menu has no Zoom or Grid submenu.
+- **C2 [FM] Grid.** **done (task-u4-common)**: Dots, Lines and Small crosses with the grid thickness and minimum spacing on each editor's Display Options page, one port of `DrawGrid` for the four canvases; Edit Grids has KiCad's Grid Settings (name, X, Linked, Y), drawn and snapped to with X and Y; the schematic context menu has its Zoom and Grid submenus (PARITY-common §10, §17). Left:
+  - "Snap to grid:" (Always / When grid shown / Never) is not offered.
+  - An editor keeps its grid by its X size: of two grids with the same X the first is current.
   - S. PARITY-pcb §1; PARITY-common §10.
-- **C3 [FM] Page Settings.**
-  - No custom drawing sheet (`.kicad_wks`).
-  - The board's drawing sheet starts off and has no zone letters.
+- **C3 [FM] Page Settings.** **done (task-u4-common)**: a port of the `.kicad_wks` reader and draw-item list draws KiCad's default sheet or a chosen one on the board and the sheet; Page Settings chooses, browses or uploads the file; the derived `.kicad_pro` names it and kicad-cli's plots get `--drawing-sheet`; the board's sheet is on by default with its zone references; a `User` paper is clamped and turned for portrait (PARITY-common §9). Left:
+  - The board's sheet now shows from the start, and the placer starts boards at the page corner, so the frame crosses them: a decision for the lead.
+  - Upload copies the file into the board's folder (KiCad never copies); the file choice is an undo step (in KiCad a project setting).
+  - Embedding the sheet, the schematic's "export to other sheets" boxes, `@{..}` expressions, outline fonts.
   - M. PARITY-common §9; GAPS 18.
-- **C4 [BD] Small differences.**
-  - Enter finishes a PCB route.
-  - The crosshair and polar coordinates are shared across editors.
-  - The Measure tool has no arrowheads.
+- **C4 [BD] Small differences.** **done (task-u4-common)**: Enter during a PCB route is `cursorClick` (fixes, End finishes); each editor keeps its own crosshair, Always Show Crosshairs and polar coordinates; the Measure tool's ruler is `RULER_ITEM` with its ticks and x, y, r and θ, and Interactive Offset's ruler its arrowhead (the Measure tool has none in 8303b2ad) (PARITY-common §2, §3, §17). Left:
   - About 310 handlers have never been compared with KiCad's code.
+  - The rulers' drop shadows.
   - S. GAPS 15; PARITY-common §2-§4.
 - **C5 [KO] Browser limits.**
   - The Ctrl+Tab and Alt+Tab switchers (the browser keeps those keys).

@@ -600,6 +600,11 @@ fn model_routes(stream: &mut TcpStream, method: &str, target: &str, body: &[u8],
             let r = crate::model3d_tab_api::migrate(dir, target);
             Some(respond(stream, r.status, r.kind, &r.body))
         }
+        // Migrate 3D Models' load-time half (`AutoMigrateByFilename`): the page asks it when it opens the board and sends the step it answers.
+        ("GET", "/api/3dmodel/automigrate") => {
+            let r = crate::model3d_tab_api::auto_migrate(dir, target);
+            Some(respond(stream, r.status, r.kind, &r.body))
+        }
         ("GET", "/api/3dmodel/preview") => {
             let r = crate::model3d_tab_api::preview(dir, target);
             Some(respond(stream, r.status, r.kind, &r.body))
@@ -716,6 +721,10 @@ fn handle(
         ("POST", "/api/sch/place_preview") => respond(stream, "200 OK", "application/json", crate::sch_place_api::place_preview(dir, &body).to_string().as_bytes()),
         // The font families the machine has, for Symbol Properties' Font column (`crate::fonts_api`).
         ("GET", "/api/fonts") => respond(stream, "200 OK", "application/json", crate::fonts_api::fonts().to_string().as_bytes()),
+        // Page Settings' drawing sheet file: a picked `.kicad_wks` read for the dialog, where to browse, and a file from the person's computer put in the board's folder
+        ("GET", "/api/drawing_sheet") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::pick(dir, &query_value(target, "path")).to_string().as_bytes()),
+        ("GET", "/api/drawing_sheet/folders") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::folders(dir).to_string().as_bytes()),
+        ("POST", "/api/drawing_sheet/upload") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::upload(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         // Annotate Schematic's message window and the other dialogs that work across sheets (`crate::sch_hierarchy_api`).
@@ -734,7 +743,7 @@ fn handle(
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),
         // The sheet tree (Next / Previous Sheet, Edit Sheet Page Number): `crate::sch_control_api`.
-        ("GET", "/api/sch/hierarchy") => respond(stream, "200 OK", "application/json", crate::sch_control_api::hierarchy(dir).to_string().as_bytes()),
+        ("GET", "/api/sch/hierarchy") => respond(stream, "200 OK", "application/json", crate::sch_control_api::hierarchy(dir, &query_value(target, "net")).to_string().as_bytes()),
         // Export Symbols...: the library symbols the schematic uses as one `.kicad_sym` (a read; the browser saves it).
         ("POST", "/api/sch/export_symbols") => respond(stream, "200 OK", "application/json", crate::sch_control_api::export_symbols(dir, &body).to_string().as_bytes()),
         ("GET", "/api/ratsnest") => {
@@ -820,6 +829,19 @@ fn handle(
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
+        // The Symbol Chooser's footprint selector (`FOOTPRINT_SELECT_WIDGET`, pcbnew's `filterFootprints`): the footprints of the symbol's pin count and filters.
+        ("GET", "/api/library/fp_select") => {
+            let filter = crate::library_search::Filter::parse(&query_value(target, "pins"), &query_value(target, "fp_filters"), "");
+            respond(stream, "200 OK", "application/json", crate::library_search::footprint_select(dir, &filter, query_value(target, "zero") == "1").to_string().as_bytes())
+        }
+        // The symbol libraries that load with errors (`GetLibraryLoadErrors`, KiCad's status bar warnings).
+        ("GET", "/api/library/load_errors") => {
+            let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
+                None => json!({ "error": "kind is footprint or symbol" }),
+                Some(kind) => crate::library_search::load_errors(dir, kind),
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
         ("GET", "/api/library/project") => respond(stream, "200 OK", "application/json", crate::library_api::project_symbols(dir).to_string().as_bytes()),
         // Save, Save Library As and Revert of the library editors into the libraries of the tables (`crate::library_save_api`): which libraries can be written,
         // which symbols differ from their file, what the file holds, and the two writes.
@@ -836,6 +858,9 @@ fn handle(
         ("POST", "/api/library_tables/check") => respond(stream, "200 OK", "application/json", crate::library_tables::check_rows(dir, &body).to_string().as_bytes()),
         ("GET", "/api/library_tables/normalize") => respond(stream, "200 OK", "application/json", crate::library_tables::normalize(dir, &query_value(target, "path")).to_string().as_bytes()),
         ("POST", "/api/library_tables/add") => respond(stream, "200 OK", "application/json", crate::library_tables::add_library(dir, &body).to_string().as_bytes()),
+        // Reset Libraries (the global table written anew) and Migrate Libraries (kicad-cli converts a library of another format into the KiCad one beside it)
+        ("POST", "/api/library_tables/reset") => respond(stream, "200 OK", "application/json", crate::library_tables::reset_global(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/library_tables/migrate") => respond(stream, "200 OK", "application/json", crate::library_tables::migrate_rows(dir, &body).to_string().as_bytes()),
         ("POST", "/api/path_variables") => respond(stream, "200 OK", "application/json", crate::library_tables::set_variables(dir, &body).to_string().as_bytes()),
         ("GET", "/api/fs/list") => respond(stream, "200 OK", "application/json", crate::library_tables::browse(dir, &query_value(target, "path"), &query_value(target, "what")).to_string().as_bytes()),
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
@@ -860,6 +885,8 @@ fn handle(
             Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
         },
+        // The 3D viewer's board body with its holes (`m_boardWithHoles`), polygon arithmetic done here (`crate::board3d_api`).
+        ("GET", "/api/board3d") => respond(stream, "200 OK", "application/json", crate::board3d_api::report(dir).to_string().as_bytes()),
         ("GET", "/api/fill") => {
             let v = crate::fill_api::report(dir, query_value(target, "polys") == "1").unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -886,6 +913,13 @@ fn handle(
         // The microwave tools' Complex Shape dialog: the scales and the point count of a shape description file (the shape itself is `Cmd::Microwave` with the file's text).
         ("POST", "/api/microwave/shape") => respond(stream, "200 OK", "application/json", crate::microwave_api::read_shape(&body).to_string().as_bytes()),
         ("POST", "/api/microwave/inductor") => respond(stream, "200 OK", "application/json", crate::microwave_api::check_inductor(&body).to_string().as_bytes()),
+        // Assign Footprints (CvPcb, `crate::cvpcb_api`): the footprint the preview pane draws, the project's footprint association files (Manage Footprint Association
+        // Files...) and Automatically Assign Footprints, which answers what to assign (the dialog applies it with its other assignments, one undo step).
+        ("GET", "/api/cvpcb/footprint") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::footprint(dir, &query_value(target, "id")).to_string().as_bytes()),
+        ("GET", "/api/cvpcb/equ_browse") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::equ_browse(dir, &query_value(target, "path")).to_string().as_bytes()),
+        ("GET", "/api/cvpcb/equ_files") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::equ_files(dir).to_string().as_bytes()),
+        ("POST", "/api/cvpcb/equ_files") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::set_equ_files(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/cvpcb/auto_associate") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::auto_associate(dir, &body).to_string().as_bytes()),
         // The Design Blocks panels (`crate::design_block_api`): the libraries and their blocks, a block's board file, its preview (kicad-cli, off the loop), and the dialogs'
         // reads and writes. Placing a block is `Cmd::ImportSheet` / `Cmd::PlaceDesignBlock`; the save also applies the link of a selection to the block (`LinkDesignBlock`).
         ("GET", "/api/design_blocks") => respond(stream, "200 OK", "application/json", crate::design_block_api::list(dir).to_string().as_bytes()),
@@ -1041,6 +1075,8 @@ fn handle(
         ("POST", "/api/route/dp_fix") => respond(stream, "200 OK", "application/json", route_api::dp_fix(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_via") => respond(stream, "200 OK", "application/json", route_api::dp_via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
+        ("POST", "/api/route/ratsnest_anchor") => respond(stream, "200 OK", "application/json", route_api::ratsnest_anchor(route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/dp_attempt_finish") => respond(stream, "200 OK", "application/json", route_api::dp_attempt_finish(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_continue_from_end") => respond(stream, "200 OK", "application/json", route_api::dp_continue_from_end(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_finish") => respond(stream, "200 OK", "application/json", route_api::dp_finish(dir, route_session, &body).to_string().as_bytes()),
         // 7 / 8 / 9 (P5c): length tuning -- KiCad's tuning pattern tool and its generator items; the session lives in tune_api's own thread-local, not in a cell passed here.
@@ -1282,6 +1318,13 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 p["kind3d"] = models["kind3d"].clone();
                 p["dnp"] = models["dnp"].clone();
                 p["not_in_pos"] = models["not_in_pos"].clone();
+                // its Extruded 3D Body, when it has one (crates/cli/src/extruded_body_api.rs)
+                if !models["extruded_body"].is_null() {
+                    p["extruded_body"] = models["extruded_body"].clone();
+                }
+                if models["models_turned"] == json!(true) {
+                    p["models_turned"] = json!(true);
+                }
             }
             p["pads"] = json!(pads);
             // The zone-connection facts a pad or footprint carries (Pad Properties and Footprint Properties' zone fields), only when
@@ -1576,6 +1619,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     state["board_rules"]["component_classes"] = json!(model.board.component_classes);
     // the design variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, which the board's `(variants ..)` gets from the schematic), set apart too
     state["variants"] = json!(design_variants_json(&design));
+    // Page Settings' drawing sheet file (`pcbnew.page_layout_descr_file`): the name kept, the file's text the board's sheet is drawn from and why it could not
+    // be read; null is KiCad's default sheet
+    state["drawing_sheet"] = crate::drawing_sheet_api::state_json(dir, design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref()));
     Ok(state)
 }
 
@@ -1873,7 +1919,10 @@ pub(crate) fn schematic_json(dir: &Path, sheet_path: &str, clock: eda_model::tex
         design.sheet_contents = derived.sheet_contents;
     }
     let project = crate::text_vars_json::project(dir, &meta.intent, clock);
-    Ok(schematic_json_with(&design, &model, sheet_path, Some((dir, project))))
+    let mut v = schematic_json_with(&design, &model, sheet_path, Some((dir, project)));
+    // Page Settings' drawing sheet file (`schematic.page_layout_descr_file`), as the board's is in `GET /api/state`
+    v["drawing_sheet"] = crate::drawing_sheet_api::state_json(dir, design.schematic.as_ref().and_then(|s| s.extras.drawing_sheet.as_deref()));
+    Ok(v)
 }
 
 /// [`schematic_json`] of a design that is already loaded (the schematic clipboard asks it of a design a paste has just been tried on).
@@ -2051,6 +2100,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_nm": l.width_nm, "stroke": sch.extras.strokes.get(&l.id) })).collect();
     // Drawn shapes, text boxes, rule areas, directive labels and images (`SchGraphic`, serialized as stored; an image is described, its pixels are `GET /api/sch_image`) and the ids of locked items.
     let graphics: Value = crate::image_api::sch_graphics_json(&sch.extras.graphics);
+    // a text box's (and a directive label's) font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id, for its Properties and
+    // its drawing: kept beside the graphics, which the edit verbs take back whole
+    let graphic_text_attrs: serde_json::Map<String, Value> = sch.extras.graphics.iter().filter_map(|g| Some((g.id.clone(), serde_json::to_value(sch.extras.text_attrs.get(&g.id)?).ok()?))).collect();
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
     let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
@@ -2095,7 +2147,15 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                         eda_model::kicad_font::HJustify::Right => "right",
                         eda_model::kicad_font::HJustify::Center => "center",
                     };
-                    json!({ "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "size_nm": 1_270_000 })
+                    let v = match f.v {
+                        eda_model::kicad_font::VJustify::Top => "top",
+                        eda_model::kicad_font::VJustify::Center => "center",
+                        eda_model::kicad_font::VJustify::Bottom => "bottom",
+                    };
+                    // the id the studio selects, moves and edits the field by (`fld:<label id>:<name>`, `eda_engine::fields_edit`), and the font and colour
+                    // Field Properties set (`SchExtras::field_looks` under the label's id)
+                    let look = sch.extras.field_look(&l.id, &f.name);
+                    json!({ "id": eda_engine::fields_edit::field_id(&l.id, &f.name), "owner": l.id, "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "v": v, "size_nm": 1_270_000, "font": look.and_then(|k| k.font.clone()), "color": look.and_then(|k| k.color) })
                 })
                 .collect();
             // the net the label is on, as the tracer named it (the wire under it): Highlight Net takes a label's connection, `conn->Name()`, not its text (r3 A3-M4)
@@ -2109,7 +2169,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     net_of_pin(&pin_net, &reference, &number).map(str::to_string)
                 })
             });
-            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields, "color": sch.extras.text_attrs.get(&l.id).and_then(|a| a.color) })
+            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields, "fields_hand_placed": eda_engine::label_fields::hand_placed(&sch, &l.id), "color": sch.extras.text_attrs.get(&l.id).and_then(|a| a.color), "font": sch.extras.text_attrs.get(&l.id).and_then(|a| a.font.clone()) })
         })
         .collect();
     let texts: Vec<Value> = sch
@@ -2204,6 +2264,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "id": s.id, "name": s.name, "file": s.file, "page": shown_page(s),
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &s.id),
+                // Sheet Properties' Style and Attributes (`SchExtras::sheet_props`; absent: the look the writer has always given a sheet) and the user fields
+                "props": sch.extras.sheet_props.get(&s.id),
+                "user_fields": sch.extras.sheet_fields.get(&s.id),
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
                 // a pin's text is set as Sheet Pin Properties set it (`SchExtras::sheet_pin_looks`): the size, bold and italic are sent when they are not the default's
                 "pins": s.pins.iter().map(|p| {
@@ -2231,7 +2294,16 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     let (paper_w, paper_h) = page.size_nm().unwrap_or((mm(297.0), mm(210.0)));
     let file = viewed_file(design, &breadcrumb);
     // the page of the sheet in view as a number (`GetPageNumberAsInt`), which a placed symbol's "sheet number x 100" numbering counts from (r3 D3-M3)
-    let page_number = eda_model::sheet_list::walk(design).iter().find(|e| e.path == sheet_ids).map_or(1, eda_model::sheet_list::SheetEntry::page_number_as_int);
+    let walk_all = eda_model::sheet_list::walk(design);
+    let page_number = walk_all.iter().find(|e| e.path == sheet_ids).map_or(1, eda_model::sheet_list::SheetEntry::page_number_as_int);
+    // what the drawing sheet shows of the page (`SCH_VIEW::DisplaySheet`): `${#}` the page as the sheet shows it (`SCH_SCREEN::GetPageNumber`), `${##}` the
+    // number of pages (`GetPageCount`), and whether this is the first page (`GetVirtualPageNumber() == 1`), which `page1only` / `notonpage1` items go by
+    let shown_entry = walk_all.iter().find(|e| e.path == sheet_ids);
+    let sheet_page = json!({
+        "number": shown_entry.map_or_else(|| "1".to_string(), eda_model::sheet_list::SheetEntry::effective_page),
+        "count": walk_all.len(),
+        "first": shown_entry.map_or(true, |e| e.virtual_page == 1),
+    });
 
     json!({
         "paper": { "name": page.paper, "width_nm": paper_w, "height_nm": paper_h },
@@ -2246,6 +2318,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "junctions": junctions,
         "lines": lines,
         "graphics": graphics,
+        "graphic_text_attrs": graphic_text_attrs,
         "tables": tables,
         "locked": locked,
         "groups": groups,
@@ -2255,6 +2328,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "sheets": sheets,
         "sheet_path": sheet_path,
         "page_number": page_number,
+        "sheet_page": sheet_page,
         // Schematic Setup > Formatting as the sheet is drawn by it (`eda_model::sch_setup::SchFormatting::effective`, the sizes KiCad reads back): the junction
         // dot's diameter (`SCHEMATIC_SETTINGS::GetJunctionSize`, from the Default class's wire width), the default line width, text and pin symbol sizes and the
         // dashed lines' ratios
@@ -2489,6 +2563,9 @@ pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir
         "italic": sch.extras.text_attrs.get(&t.id).is_some_and(|a| a.italic),
         "color": sch.extras.text_attrs.get(&t.id).and_then(|a| a.color),
         "href": sch.extras.text_attrs.get(&t.id).and_then(|a| a.href.clone()),
+        // the font Text Properties chose (absent: the default) and "Exclude from simulation"
+        "font": sch.extras.text_attrs.get(&t.id).and_then(|a| a.font.clone()),
+        "exclude_from_sim": sch.extras.text_attrs.get(&t.id).is_some_and(|a| a.exclude_from_sim),
     })
 }
 

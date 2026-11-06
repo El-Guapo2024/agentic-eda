@@ -84,12 +84,7 @@ fn angle_str(m: Millideg) -> String {
 }
 
 /// The `(effects ...)` of a free-standing schematic text: its size and how `j` justifies it, written as `EDA_TEXT::Format` does (centre is not named, so a
-/// centred text has no `(justify ...)`).
-pub(crate) fn text_effects_str(size_nm: Nm, j: eda_model::sch_extras::SchTextJustify) -> String {
-    text_effects_with(size_nm, j, &Default::default())
-}
-
-/// [`text_effects_str`] with a free text's bold, italic, colour and hyperlink ([`eda_model::sch_extras::TextAttrs`], r7 H4).
+/// centred text has no `(justify ...)`), with the text's bold, italic, font, colour and hyperlink ([`eda_model::sch_extras::TextAttrs`], r7 H4).
 pub(crate) fn text_effects_with(size_nm: Nm, j: eda_model::sch_extras::SchTextJustify, attrs: &eda_model::sch_extras::TextAttrs) -> String {
     use eda_model::ir::{TextJustify, TextVAlign};
     let h = match j.h {
@@ -102,7 +97,7 @@ pub(crate) fn text_effects_with(size_nm: Nm, j: eda_model::sch_extras::SchTextJu
         TextVAlign::Center => SchVAlign::Center,
         TextVAlign::Bottom => SchVAlign::Bottom,
     };
-    effects_with(size_nm, attrs.bold, attrs.italic, h, v, attrs.color, attrs.href.as_deref())
+    effects_with(size_nm, attrs.bold, attrs.italic, h, v, attrs.color, attrs.href.as_deref(), attrs.font.as_deref())
 }
 
 /// What a free-standing text's `(effects ...)` and `(at x y angle)` say about how it lies: the text's angle made upright (`KeepUpright`: along the sheet or up
@@ -131,8 +126,11 @@ pub(crate) fn read_text_lie(item: &[Sexpr], look: &EffectsLook) -> (Millideg, ed
 
 /// The `(effects ..)` of a text box or a directive label: its size, bold, italic and justification, with the font colour and the hyperlink (`EDA_TEXT::Format`: `(color r g b a)` last in `(font ..)` when the colour is not
 /// `UNSPECIFIED`, `(href "..")` after `(justify ..)`, r7 H4, M5).
-pub(crate) fn effects_with(size_nm: Nm, bold: bool, italic: bool, h: SchHAlign, v: SchVAlign, color: Option<SchColor>, href: Option<&str>) -> String {
-    let mut f = format!("(font (size {0} {0})", sch_mm(size_nm));
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn effects_with(size_nm: Nm, bold: bool, italic: bool, h: SchHAlign, v: SchVAlign, color: Option<SchColor>, href: Option<&str>, face: Option<&str>) -> String {
+    // `EDA_TEXT::Format`: `(face "..")` first in `(font ..)` when the text has a font of its own
+    let face = face.map(|n| format!("(face {}) ", sexpr_str(n))).unwrap_or_default();
+    let mut f = format!("(font {face}(size {0} {0})", sch_mm(size_nm));
     if bold {
         f.push_str(" (bold yes)");
     }
@@ -236,7 +234,7 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                     sch_mm(h),
                     stroke_str(g),
                     fill_str(g),
-                    effects_with(*size_nm, *bold, *italic, *h_align, *v_align, attrs.color, attrs.href.as_deref()),
+                    effects_with(*size_nm, *bold, *italic, *h_align, *v_align, attrs.color, attrs.href.as_deref(), attrs.font.as_deref()),
                     m = sch_mm(margin)
                 );
             }
@@ -275,7 +273,7 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                     sch_mm(at.x),
                     sch_mm(at.y),
                     angle_str(*orientation),
-                    effects_with(mm(1.27), false, false, SchHAlign::Left, SchVAlign::Bottom, attrs.color, None)
+                    effects_with(mm(1.27), false, false, SchHAlign::Left, SchVAlign::Bottom, attrs.color, None, None)
                 );
             }
         }
@@ -336,6 +334,8 @@ pub(crate) fn read_text_attrs(item: &[Sexpr]) -> eda_model::sch_extras::TextAttr
         bold: look.bold,
         italic: look.italic,
         color,
+        // `parseEDA_TEXT`'s `T_face`: the font the text is set in (`SetFont`); none is the default one
+        font: effects.and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "face")).and_then(|f| sexpr::txt(f, 1)).filter(|f| !f.is_empty()).map(String::from),
     }
 }
 

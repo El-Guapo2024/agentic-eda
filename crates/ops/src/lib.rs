@@ -809,6 +809,14 @@ pub enum Cmd {
     /// `common.Control.pageSettings` on the schematic (`SCH_EDITOR_CONTROL::PageSetup`): the same for the schematic -- see
     /// [`page_settings::set_schematic_page`].
     SetSchematicPage { page: eda_model::page::PageSettings, title_block: eda_model::ir::TitleBlock },
+    /// Page Settings' "Drawing sheet:" (`DIALOG_PAGES_SETTINGS::OnWksFileSelection`): the `.kicad_wks` file the board (`schematic` false) or the schematic
+    /// draws its frame and title block from, `None` for KiCad's default sheet -- see [`drawing_sheet::set_drawing_sheet`]. Refused when nothing changes.
+    SetDrawingSheet {
+        #[serde(default)]
+        schematic: bool,
+        #[serde(default)]
+        path: Option<String>,
+    },
     /// `pcbnew.Control.repairBoard` (`BOARD_EDITOR_CONTROL::RepairBoard`): see [`board_control::repair_board`].
     /// Refused when there is nothing to repair, so no empty undo step is pushed.
     RepairBoard,
@@ -1297,6 +1305,14 @@ pub enum Cmd {
     },
     /// "Remove 3D model" (`OnRemove3DModel`): the model at `index` (0-based) leaves the list. Refused for a position the list has none at.
     RemoveBoardModel { part: String, index: usize },
+    /// The 3D Models tab's Extruded 3D Body box (`PANEL_FP_PROPERTIES_3D_MODEL::TransferDataFromWindow`, [`fp_models`]): the footprint `part`'s body becomes `body` (`None`: the box
+    /// off, `ClearExtrudedBody`), its layer the top side's. Refused, in KiCad's words, for a height of zero or less and a standoff not below the height, and when nothing changes;
+    /// one undo step.
+    SetExtrudedBody {
+        part: String,
+        #[serde(default)]
+        body: Option<eda_model::extruded_body::ExtrudedBody>,
+    },
     /// Put the model at `from` where `to` is (0-based), the others keeping their order; refused for a position the list has none at.
     MoveBoardModel { part: String, from: usize, to: usize },
     /// Migrate 3D Models (`DIALOG_MIGRATE_3D_MODELS::OnReplaceClick`): every model of every footprint on the board whose file name is a key of `replacements` takes the name it maps to --
@@ -1498,6 +1514,10 @@ pub enum Cmd {
         /// linked to the block (`SetDesignBlockLibId`) and the power symbols are numbered anew too. Empty for a plain file.
         #[serde(default)]
         block: String,
+        /// The block's default fields (`DESIGN_BLOCK::GetFields()`, its `.json`'s `fields`, name and value in the file's order), which a sheet drawn from the block starts
+        /// with (`SCH_DRAWING_TOOLS::DrawSheet`: each a `FIELD_T::USER` field, `SetVisible( false )`). Ignored for the contents (`placeSheetContents` has no sheet).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        block_fields: Vec<(String, String)>,
     },
     /// Alt+S (`eeschema.InteractiveEdit.swap`, `SCH_EDIT_TOOL::Swap`): exchange the positions of two schematic
     /// items -- symbols (placed or power), labels and free texts, found by id -- and, for two symbols of the
@@ -1612,6 +1632,18 @@ pub enum Cmd {
         bom_presets: Vec<String>,
         #[serde(default)]
         bom_fmt_presets: Vec<String>,
+    },
+    /// The Symbol Fields Table's view presets (`DIALOG_SYMBOL_FIELDS_TABLE`, UI-LEFT S11): `save` a `BOM_PRESET` under its name ("Save preset...": a new one or one
+    /// of the project's replaced, "Overwrite existing preset?"), `delete` one of the project's ("Delete preset..."), and `view` the table's view as the project
+    /// keeps it (`savePresetsToSchematic`: `m_BomSettings`), in the `.kicad_pro`'s `schematic.bom_presets` / `bom_settings`. A built-in name is refused
+    /// ("Default presets cannot be modified.\nPlease use a different name."). One undo step; refused when nothing changes. See `sch_setup::set_bom_view`.
+    SetBomView {
+        #[serde(default)]
+        save: Option<serde_json::Value>,
+        #[serde(default)]
+        delete: Option<String>,
+        #[serde(default)]
+        view: Option<serde_json::Value>,
     },
     /// Schematic Setup > Project > Bus Alias Definitions (`panel_setup_buses.cpp`): every alias of the project with its members. One undo step.
     SetBusAliases { aliases: Vec<eda_model::ir::BusAlias> },
@@ -2341,6 +2373,7 @@ impl Cmd {
             Cmd::FpEditor(c) => c.domain(),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.domain(),
             Cmd::ReorganizeSheets => Domain::Schematic,
+            Cmd::SetDrawingSheet { schematic: true, .. } => Domain::Schematic,
             Cmd::Embedded(c) => c.domain(),
             Cmd::MoveSymbol { .. }
             | Cmd::DragSymbol { .. }
@@ -2376,6 +2409,7 @@ impl Cmd {
             | Cmd::SetAnnotationSettings { .. }
             | Cmd::SetFieldNameTemplates { .. }
             | Cmd::SetBomPresets { .. }
+            | Cmd::SetBomView { .. }
             | Cmd::SetBusAliases { .. }
             | Cmd::SetSimulator { .. }
             | Cmd::AddLabel { .. }
@@ -2479,7 +2513,7 @@ impl Cmd {
             Cmd::SetErcSeverities { .. } | Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions | Cmd::SetConnectionGrid { .. } | Cmd::SetIntersheetRefs { .. } | Cmd::SetSimulator { .. } => false,
             // Schematic Setup's sizes, field templates and BOM presets are how the sheet is drawn and listed, not what it connects (a bus alias does connect,
             // and the unit notation names the nets of a symbol's units: those two are traced again).
-            Cmd::SetSchFormatting { .. } | Cmd::SetFieldNameTemplates { .. } | Cmd::SetBomPresets { .. } => false,
+            Cmd::SetSchFormatting { .. } | Cmd::SetFieldNameTemplates { .. } | Cmd::SetBomPresets { .. } | Cmd::SetBomView { .. } => false,
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
@@ -2622,6 +2656,7 @@ impl Cmd {
             Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
+            Cmd::SetExtrudedBody { part, .. } => vec![part.as_str()],
             Cmd::MigrateBoardModels { replacements } => replacements.keys().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
@@ -2679,6 +2714,7 @@ impl Cmd {
             Cmd::SetIpc2581Bom { .. } => vec!["ipc2581_bom"],
             Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
             Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
+            Cmd::SetDrawingSheet { .. } => vec!["drawing_sheet"],
             Cmd::AddDesignVariant { name, .. } | Cmd::RemoveDesignVariant { name } | Cmd::EditDesignVariantDescription { name, .. } | Cmd::RenameDesignVariant { name, .. } | Cmd::CopyDesignVariant { name, .. } => vec![name],
             Cmd::RepairBoard => vec!["repair_board"],
             Cmd::ExportFootprintsToLibrary => vec!["export_footprints"],
@@ -2727,6 +2763,7 @@ impl Cmd {
             Cmd::SetAnnotationSettings { .. } => vec!["annotation"],
             Cmd::SetFieldNameTemplates { .. } => vec!["field_name_templates"],
             Cmd::SetBomPresets { .. } => vec!["bom_presets"],
+            Cmd::SetBomView { .. } => vec!["bom_settings"],
             Cmd::SetBusAliases { .. } => vec!["bus_aliases"],
             Cmd::SetSimulator { .. } => vec!["simulator"],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
@@ -3192,6 +3229,7 @@ impl<'a> Board<'a> {
             Cmd::SetAnnotationSettings { settings, subpart_first_id, subpart_id_separator } => sch_setup::set_annotation(&mut self.design, settings, *subpart_first_id, *subpart_id_separator),
             Cmd::SetFieldNameTemplates { fields } => sch_setup::set_field_name_templates(&mut self.design, fields),
             Cmd::SetBomPresets { bom_presets, bom_fmt_presets } => sch_setup::set_bom_presets(&mut self.design, bom_presets, bom_fmt_presets),
+            Cmd::SetBomView { save, delete, view } => sch_setup::set_bom_view(&mut self.design, save.as_ref(), delete.as_deref(), view.as_ref()),
             Cmd::SetBusAliases { aliases } => sch_setup::set_bus_aliases(&mut self.design, aliases),
             Cmd::SetSimulator { ngspice, workbook } => simulator::set_simulator(&mut self.design, ngspice.as_ref(), workbook.as_deref()),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
@@ -3218,6 +3256,7 @@ impl<'a> Board<'a> {
             Cmd::SetIpc2581Bom { bom } => board_control::set_ipc2581_bom(&mut self.design, bom),
             Cmd::SetGridOrigin { at } => board_control::set_grid_origin(&mut self.design, *at),
             Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
+            Cmd::SetDrawingSheet { schematic, path } => drawing_sheet::set_drawing_sheet(&mut self.design, *schematic, path.as_deref()),
             Cmd::SetSchematicPage { page, title_block } => page_settings::set_schematic_page(&mut self.design, page, title_block),
             Cmd::ExportFootprintsToLibrary => board_control::export_footprints_to_library(&mut self.design, self.model).map(|_| ()),
             Cmd::RepairBoard => {
@@ -3345,6 +3384,7 @@ impl<'a> Board<'a> {
             Cmd::SetBoardModels { part, models } => self.set_board_models(part, models),
             Cmd::AddBoardModel { part, model, at } => self.add_board_model(part, model, *at),
             Cmd::RemoveBoardModel { part, index } => self.remove_board_model(part, *index),
+            Cmd::SetExtrudedBody { part, body } => self.set_extruded_body(part, body.as_ref()),
             Cmd::MoveBoardModel { part, from, to } => self.move_board_model(part, *from, *to),
             Cmd::EditBoardModel { part, index, path, offset, scale, rotate, opacity, show } => {
                 self.edit_board_model(part, *index, &eda_model::fp_models::ModelPatch { path: path.clone(), offset: *offset, scale: *scale, rotate: *rotate, opacity: *opacity, show: *show })
@@ -3427,8 +3467,8 @@ impl<'a> Board<'a> {
             Cmd::AddSchLine { pts, width_nm } => self.add_sch_line(pts.clone(), *width_nm),
             Cmd::DeleteSchLine { id } => self.delete_sch_line(id),
             Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
-            Cmd::ImportSheet { source, content, as_sheet, name, file, at, size, keep_annotations, order, options, as_group, group_name, block } => match content {
-                Some(content) => self.import_sheet(content, *as_sheet, name, file, *at, *size, *keep_annotations, *order, options, &design_blocks::Placement { source, as_group: *as_group, group_name, block }),
+            Cmd::ImportSheet { source, content, as_sheet, name, file, at, size, keep_annotations, order, options, as_group, group_name, block, block_fields } => match content {
+                Some(content) => self.import_sheet(content, *as_sheet, name, file, *at, *size, *keep_annotations, *order, options, &design_blocks::Placement { source, as_group: *as_group, group_name, block, block_fields }),
                 None => Err(vec![CheckResult::fail("ops_sheet_file_not_read", source, format!("the file '{source}' was not read, so there is nothing to import"))]),
             },
             Cmd::ReplaceSchematic { content, name } => self.replace_schematic(content, name),
@@ -6114,6 +6154,12 @@ impl<'a> Board<'a> {
                         }
                     }
                     search::ItemKind::Pin => {} // SCH_PIN::Replace is a no-op in the schematic
+                    // a power symbol's fields, a sheet's fields and pins, a text box, a directive label's fields (UI-LEFT S12)
+                    search::ItemKind::PowerField | search::ItemKind::SheetField | search::ItemKind::SheetPin | search::ItemKind::TextBox | search::ItemKind::DirectiveField => {
+                        if search::replace_other(sch, h, &data) {
+                            replaced += 1;
+                        }
+                    }
                 }
             }
         }
@@ -7190,6 +7236,7 @@ mod sch_tables_tests;
 
 pub mod board_control;
 pub mod page_settings;
+pub mod drawing_sheet;
 pub mod build;
 pub mod fields_table;
 pub mod convert;

@@ -18,7 +18,8 @@ export function GridOriginDialog() {
   const [x, setX] = useState("");
   const [y, setY] = useState("");
 
-  const origin = state.tab === "footprint" ? footprintOrigin : originOf(state.board?.grid_origin);
+  // the schematic editors' grid origin is (0, 0) (`SCH_BASE_FRAME::GetGridOrigin`)
+  const origin = state.tab === "footprint" ? footprintOrigin : state.tab === "pcb" ? originOf(state.board?.grid_origin) : { x: 0, y: 0 };
 
   // Seed the entries when the dialog opens: where the origin is now.
   useEffect(() => {

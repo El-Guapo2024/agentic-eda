@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chosenDiffPair, chosenTrackWidthOf, diffPairLabel, routeWidthAfterChange, routerMessagePanel, stepDiffPairIndex, stepTrackWidth } from "./routerSizes";
+import { chosenDiffPair, chosenTrackWidthOf, diffPairLabel, routeWidthAfterChange, routerMessagePanel, stepDiffPairIndex, stepTrackWidth, comboBoxUnits, sizeBoxPick, trackWidthBoxLabels, viaSizeBoxLabels, withEventSizes, type RouteSizesInfo } from "./routerSizes";
 
 const mm = (nm: number) => `${nm / 1e6} mm`;
 
@@ -60,4 +60,41 @@ test("the router's message panel names the width, the clearance and the gap with
     { upper: "Corner Style", lower: "Free-angle" },
     { upper: "Mode", lower: "Highlight collisions" },
   ]);
+});
+
+// UI-LEFT R7: the auxiliary toolbar's Track Width and Via Size boxes (`UpdateTrackWidthSelectBox`, `UpdateViaSizeSelectBox`, `Tracks_and_Vias_Size_Event`).
+test("the toolbar's width and via boxes list KiCad's entries", () => {
+  assert.equal(comboBoxUnits("mm", 250_000), "0.250 mm");
+  assert.equal(comboBoxUnits("mil", 254_000), "10.00 mils");
+  assert.equal(comboBoxUnits("in", 254_000, false), "0.01000");
+  assert.deepEqual(trackWidthBoxLabels([200_000, 254_000], "mm"), ["Track: use netclass width", "Track: 0.200 mm (7.87 mils)", "Track: 0.254 mm (10.00 mils)", "---", "Edit Pre-defined Sizes..."]);
+  assert.deepEqual(viaSizeBoxLabels([{ diameter: 600_000, drill: 300_000 }, { diameter: 500_000, drill: 0 }], "mil"), [
+    "Via: use netclass sizes",
+    "Via: 23.62 / 11.81 mils (0.600 / 0.300 mm)",
+    "Via: 19.69 mils (0.500 mm)",
+    "---",
+    "Edit Pre-defined Sizes...",
+  ]);
+});
+
+test("a pick in a toolbar box is the list's index; the separator does nothing and the last entry edits the sizes", () => {
+  assert.deepEqual(sizeBoxPick(0, 5), { kind: "index", index: 0 });
+  assert.deepEqual(sizeBoxPick(2, 5), { kind: "index", index: 2 });
+  assert.deepEqual(sizeBoxPick(3, 5), { kind: "none" });
+  assert.deepEqual(sizeBoxPick(4, 5), { kind: "edit" });
+});
+
+// UI-LEFT R5: what `updateSizesAfterRouterEvent` left, folded into the draw state.
+test("the sizes asked again after a layer switch reach the message panel", () => {
+  const draw: { width: number; gap?: number; sizes?: RouteSizesInfo } = { width: 200_000, sizes: { width_source: "existing track", clearance: 200_000, clearance_source: "netclass 'Default'" } };
+  const kept = withEventSizes(draw, { clearance: 500_000, clearance_source: "bclr", width: 350_000, width_source: "bwidth", width_applied: false });
+  assert.equal(kept.width, 200_000, "the head keeps its width");
+  assert.deepEqual(kept.sizes, { width: 350_000, width_source: "bwidth", clearance: 500_000, clearance_source: "bclr" });
+  const items = routerMessagePanel({ pair: false, net: "SIG", width: kept.width }, kept.sizes, { mode: "walkaround", freeAngle: false }, (nm) => `${nm / 1e6} mm`);
+  assert.deepEqual(items.find((i) => i.upper.startsWith("Track Width")), { upper: "Track Width: 0.35 mm", lower: "(from bwidth)" }, "KiCad's panel shows `sizes.TrackWidth()`");
+  assert.deepEqual(items.find((i) => i.upper.startsWith("Min Clearance")), { upper: "Min Clearance: 0.5 mm", lower: "(from bclr)" });
+  const taken = withEventSizes(draw, { clearance: 200_000, clearance_source: "netclass 'Default'", width: 350_000, width_source: "bwidth", width_applied: true });
+  assert.equal(taken.width, 350_000);
+  assert.equal(taken.sizes?.width, null);
+  assert.equal(withEventSizes(draw, null), draw);
 });

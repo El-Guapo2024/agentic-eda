@@ -51,6 +51,7 @@ import { DEFAULT_SCH_DISPLAY, ercSeverityShown, type SchDisplayOptions } from ".
 import { bodyBoundsOf } from "./symbolMarkers";
 import { drawSymbolMarkers } from "./symbolMarkersDraw";
 import { dashPattern, drawSelectionBox, paintGraphics, paintImages, rgba } from "./schGraphicsPainter";
+import { dnpCross } from "./symbolMarkers";
 import { paintSchTables } from "./schTablePaint";
 import { drawGroups } from "./schGroupPainter";
 import type { SchStroke } from "../../api/schEditTypes";
@@ -775,7 +776,8 @@ function drawSelectedPin(ctx: CanvasRenderingContext2D, view: ViewTransform, pin
 // ------------------------------------------------------------- labels / no-connects
 
 function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: SchematicLabel, wires: SchematicWire[], on: boolean) {
-  const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : labelLayerColor(l.scope);
+  // `SCH_PAINTER::getRenderColor`: a label's own text colour (Label Properties' Color) overrides its layer's, for the text and the flag
+  const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : l.color && l.color.a > 0 ? rgba(l.color) : labelLayerColor(l.scope);
   const hair = 1 / view.scale;
   // the size, bold and italic Label Properties set (`EDA_TEXT`): a bold text is written with a fifth of its size for a pen, an italic one leans
   const sizeNm = l.size_nm && l.size_nm > 0 ? l.size_nm : LABEL_TEXT_SIZE_NM;
@@ -820,11 +822,15 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
  * and a text that runs up the sheet (`ANGLE_VERTICAL`) turned a quarter counter-clockwise about the anchor, the way `drawKicadText` sets a field.
  */
 function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText, on: boolean) {
-  const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_NOTES");
+  // `SCH_PAINTER::getRenderColor`: the text's own colour (Text Properties' Color) wins over `LAYER_NOTES`
+  const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : t.color && t.color.a > 0 ? rgba(t.color) : layerColor("LAYER_NOTES");
+  // its bold and italic (`EDA_TEXT::IsBold` / `IsItalic`): a bold text is written with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leans.
+  // **Differs**: an outline font's text (`font` naming a family) is drawn with the stroke font, as every text of the canvas is.
+  const look = { thicknessNm: t.bold ? Math.round(t.size_nm / 5) : undefined, italic: !!t.italic };
   ctx.save();
   ctx.translate(t.at[0], t.at[1]);
   if (textLie(t).vertical) ctx.rotate(-Math.PI / 2);
-  for (const line of schTextLines(t, measureStrokeText)) drawStrokeText(ctx, line.text, line.x, line.y, { sizeNm: t.size_nm, justify: "left", color });
+  for (const line of schTextLines(t, measureStrokeText)) drawStrokeText(ctx, line.text, line.x, line.y, { sizeNm: t.size_nm, justify: "left", color, ...look });
   ctx.restore();
 }
 
@@ -845,11 +851,37 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
   const hair = 1 / view.scale;
   const [x, y] = s.at;
   const [w, h] = s.size;
+  // `SCH_PAINTER::draw( SCH_SHEET )`: the background in the sheet's own colour when it has one with some alpha (`LAYER_SHEET_BACKGROUND`, transparent in the
+  // default theme, otherwise), the border in its own colour and width (`GetBorderColor`, `GetPenWidth`: 0 is the default line width), Sheet Properties' Style
+  // (`Sheet::props`). **Differs**: a sheet with no style of its own is drawn as before, unfilled (the file gives it a pale yellow fill).
+  const props = s.props ?? null;
+  const fill = props?.fill_color;
+  if (fill && fill.a > 0) {
+    ctx.save();
+    ctx.fillStyle = rgba(fill);
+    ctx.fillRect(x, y, w, h);
+    ctx.restore();
+  }
   ctx.save();
-  ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_SHEET");
-  ctx.lineWidth = Math.max(152_400, hair);
+  const border = props?.border_color && props.border_color.a > 0 ? rgba(props.border_color) : layerColor("LAYER_SHEET");
+  ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : border;
+  ctx.lineWidth = Math.max(props?.border_width_nm && props.border_width_nm > 0 ? props.border_width_nm : 152_400, hair);
   ctx.strokeRect(x, y, w, h);
   ctx.restore();
+  // "Do not populate": two diagonals over the sheet's box (`LAYER_DNP_MARKER`, 3 x `DEFAULT_LINE_WIDTH_MILS`)
+  if (props?.dnp) {
+    ctx.save();
+    ctx.strokeStyle = layerColor("LAYER_DNP_MARKER");
+    ctx.lineCap = "round";
+    ctx.lineWidth = 3 * 152_400;
+    ctx.beginPath();
+    for (const [a, b] of dnpCross({ minX: x, minY: y, maxX: x + w, maxY: y + h }, { minX: x, minY: y, maxX: x + w, maxY: y + h })) {
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(b[0], b[1]);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
 
   const nameSizeNm = 1_270_000;
   if (s.fields?.length) {
@@ -1098,7 +1130,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
 
   // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`).
   // `SCH_PAINTER::draw( SCH_DIRECTIVE_LABEL )`: with Show Directive Labels off, a directive label is drawn only while it is selected.
-  paintGraphics(ctx, view, display.showDirectiveLabels ? (sch.graphics ?? []) : (sch.graphics ?? []).filter((g) => g.shape.type !== "directive" || opts.selection.has(g.id)), opts.selection);
+  paintGraphics(ctx, view, display.showDirectiveLabels ? (sch.graphics ?? []) : (sch.graphics ?? []).filter((g) => g.shape.type !== "directive" || opts.selection.has(g.id)), opts.selection, sch.graphic_text_attrs);
 
   // Tables (`SCH_TABLE`): the cells' fills and text, then the border and separator lines.
   paintSchTables(ctx, view, sch.tables ?? [], opts.selection);
@@ -1118,11 +1150,14 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   }
   // Their fields where `AutoplaceFields` puts them (`SCH_PAINTER::draw( SCH_FIELD )` of a label): a net class in `LAYER_NETCLASS_REFS`, a global label's Sheet References in
   // `LAYER_INTERSHEET_REFS` (this palette has no colour of its own for it: the global label's), any other in `LAYER_FIELDS`; hidden ones only with Show Hidden Fields.
+  // A field is an item of its own (picked, moved, edited): drawn in the selection colour when picked, in its own colour when Field Properties gave it one.
   for (const l of sch.labels) {
     for (const f of l.fields ?? []) {
       if (!f.shown || (!f.visible && !paintedShowHiddenFields)) continue;
-      const color = !f.visible ? layerColor("LAYER_HIDDEN") : f.intersheet_refs ? layerColor("LAYER_GLOBLABEL") : f.name === "Netclass" ? layerColor("LAYER_NETCLASS_REFS") : layerColor("LAYER_FIELDS");
-      drawKicadText(ctx, f.shown, f.at, { sizeNm: f.size_nm || FIELD_SIZE_NM, h: f.h, v: "center", vertical: f.vertical, color, italic: f.italic });
+      const picked = f.id !== undefined && opts.selection.has(f.id);
+      const layer = !f.visible ? layerColor("LAYER_HIDDEN") : f.intersheet_refs ? layerColor("LAYER_GLOBLABEL") : f.name === "Netclass" ? layerColor("LAYER_NETCLASS_REFS") : layerColor("LAYER_FIELDS");
+      const color = picked ? layerColor("LAYER_SELECTION_SHADOWS") : f.visible && f.color && f.color.a > 0 ? rgba(f.color) : layer;
+      drawKicadText(ctx, f.shown, f.at, { sizeNm: f.size_nm || FIELD_SIZE_NM, h: f.h, v: f.v ?? "center", vertical: f.vertical, color, italic: f.italic });
     }
   }
 

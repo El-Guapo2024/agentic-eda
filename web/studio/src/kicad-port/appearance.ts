@@ -123,8 +123,8 @@ export function isObjectId(s: unknown): s is ObjectId {
 
 /**
  * `GAL_SET::DefaultVisible` restricted to the 24: everything is on except the DRC exclusions ("DRC exclusions hidden by default") and the board area
- * shadow ("currently hidden by default") -- and, unlike KiCad, the drawing sheet: the placer starts a board at the page's corner, where the sheet's frame (ten
- * and twelve millimetres in from the paper's edge) would cut straight through it, and the studio has never drawn one. One click on Drawing Sheet shows it.
+ * shadow ("currently hidden by default"). The drawing sheet (`LAYER_DRAWINGSHEET`) is on, as in KiCad (UI-LEFT C3, 2026-11-06; the studio kept it off
+ * before, because the placer starts a board at the page's corner, where the frame ten and twelve millimetres in from the paper's edge crosses it).
  */
 export const DEFAULT_OBJECT_VISIBILITY: Readonly<Record<ObjectId, boolean>> = {
   tracks: true,
@@ -149,7 +149,7 @@ export const DEFAULT_OBJECT_VISIBILITY: Readonly<Record<ObjectId, boolean>> = {
   locked_item_shadows: true,
   conflict_shadows: true,
   board_outline_area: false,
-  drawing_sheet: false,
+  drawing_sheet: true,
   grid: true,
 };
 

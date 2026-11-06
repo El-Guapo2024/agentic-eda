@@ -29,21 +29,52 @@ fn err(message: impl Into<String>) -> Value {
     json!({ "ok": false, "message": message.into() })
 }
 
-/// The dialog's initial view: `BOM_PRESET::DefaultEditing` plus one column
-/// per user field already present on any symbol
-/// (`DIALOG_SYMBOL_FIELDS_TABLE::LoadFieldNames`).
-fn default_spec(sch: &eda_model::ir::SchematicSection) -> TableSpec {
+/// The dialog's initial view: `BOM_PRESET::DefaultEditing` plus one column per user field already present on any symbol, then one hidden column per field
+/// name template no symbol has (`DIALOG_SYMBOL_FIELDS_TABLE::LoadFieldNames`: `for( const TEMPLATE_FIELDNAME& tfn : m_TemplateFieldNames.GetTemplateFieldNames() )
+/// AddField( tfn.m_Name, .., false, false )`), and then the view the project saved (`TransferDataToWindow`: `ApplyBomPreset( m_BomSettings )`, the `.kicad_pro`'s
+/// `schematic.bom_settings`). **Differs**: with no saved view the user fields are shown (KiCad's DefaultEditing hides every column it does not name).
+fn default_spec(sch: &eda_model::ir::SchematicSection, design: &eda_model::ir::Design) -> TableSpec {
     let mut spec = TableSpec::default_editing();
     for name in fields_table::user_field_names(sch) {
         spec.columns.push(Column { name: name.clone(), label: name, show: true, group_by: false });
     }
+    let root = design.schematic.as_ref();
+    for t in root.map(|r| r.extras.field_name_templates.as_slice()).unwrap_or(&[]) {
+        if !spec.columns.iter().any(|c| c.name.eq_ignore_ascii_case(&t.name)) {
+            spec.columns.push(Column { name: t.name.clone(), label: t.name.clone(), show: false, group_by: false });
+        }
+    }
+    if let Some(saved) = project_value(design, "bom_settings").as_ref().and_then(TableSpec::from_bom_preset) {
+        spec = spec.with_spec(saved);
+    }
     spec
 }
 
-fn parse_spec(req: &Value, sch: &eda_model::ir::SchematicSection) -> Result<TableSpec, String> {
+fn parse_spec(req: &Value, sch: &eda_model::ir::SchematicSection, design: &eda_model::ir::Design) -> Result<TableSpec, String> {
     match req.get("spec").filter(|v| !v.is_null()) {
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("bad table spec: {e}")),
-        None => Ok(default_spec(sch)),
+        None => Ok(default_spec(sch, design)),
+    }
+}
+
+/// A key of the project's schematic settings (`SchExtras::project_schematic`, the `.kicad_pro`'s `schematic` object): `bom_settings`, `bom_presets`, ...
+fn project_value(design: &eda_model::ir::Design, key: &str) -> Option<Value> {
+    design.schematic.as_ref()?.extras.project_schematic.as_ref()?.get(key).cloned()
+}
+
+/// The project's own view presets (`m_BomPresets`, `schematic.bom_presets`), by name, in the project's order.
+fn user_presets(design: &eda_model::ir::Design) -> Vec<(String, Value)> {
+    project_value(design, "bom_presets").and_then(|v| v.as_array().cloned()).unwrap_or_default().into_iter().filter_map(|p| Some((p.get("name")?.as_str()?.to_string(), p))).collect()
+}
+
+/// The table's scope (`scope`, `sheet_path`, `selection` of the request: [`fields_table::scope_refs`]) applied to the staged schematic and the one the filters read:
+/// the symbols out of scope go from both, so the rows are built from those in scope only (`RebuildRows`).
+fn apply_scope(req: &Value, design: &eda_model::ir::Design, sections: [&mut eda_model::ir::SchematicSection; 2]) {
+    let list = |k: &str| req.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default();
+    let scope = req.get("scope").and_then(Value::as_str).unwrap_or("all");
+    let Some(refs) = fields_table::scope_refs(design, scope, &list("sheet_path"), &list("selection")) else { return };
+    for sch in sections {
+        sch.symbols.retain(|s| refs.contains(&s.id));
     }
 }
 
@@ -104,20 +135,25 @@ pub fn fields_table(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return e,
     };
-    let (sch, base) = match staged_schematic(&req, &design) {
+    let (mut sch, mut base) = match staged_schematic(&req, &design) {
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    let mut spec = match parse_spec(&req, &sch) {
+    let mut spec = match parse_spec(&req, &sch, &design) {
         Ok(s) => s,
         Err(e) => return err(e),
     };
+    let users = user_presets(&design);
     if let Some(name) = req.get("preset").and_then(Value::as_str) {
-        spec = match spec.with_preset(name) {
+        // a built-in view, else one the project saved (`ApplyBomPreset`)
+        let user = users.iter().find(|(n, _)| n == name).and_then(|(_, p)| TableSpec::from_bom_preset(p));
+        spec = match spec.with_preset(name).or_else(|| user.map(|u| spec.with_spec(u))) {
             Some(s) => s,
-            None => return err(format!("no built-in preset named '{name}'")),
+            None => return err(format!("no preset named '{name}'")),
         };
     }
+    // the columns are the project's whatever the scope; the rows are the scope's
+    apply_scope(&req, &design, [&mut sch, &mut base]);
     let (variant, staged) = match staged_variant(&req, &design, &model, &sch) {
         Ok(v) => v,
         Err(e) => return err(e),
@@ -132,7 +168,10 @@ pub fn fields_table(dir: &Path, body: &[u8]) -> Value {
         t
     };
     let presets: Vec<&str> = TableSpec::built_in().into_iter().map(|(n, _)| n).collect();
-    json!({ "ok": true, "spec": spec, "presets": presets, "user_fields": fields_table::user_field_names(&sch), "rows": table.rows })
+    // the project's own presets, each with its view, so the dialog can tell which one the view is (`syncBomPresetSelection`)
+    let user: Vec<Value> = users.iter().filter_map(|(n, p)| Some(json!({ "name": n, "spec": TableSpec::from_bom_preset(p)? }))).collect();
+    let built_in: Vec<Value> = TableSpec::built_in().into_iter().map(|(n, s)| json!({ "name": n, "spec": s })).collect();
+    json!({ "ok": true, "spec": spec, "presets": presets, "built_in_presets": built_in, "user_presets": user, "user_fields": fields_table::user_field_names(&sch), "rows": table.rows })
 }
 
 fn fmt_of(req: &Value) -> Result<BomFmt, String> {
@@ -167,14 +206,16 @@ pub fn bom_export(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return e,
     };
-    let (sch, base) = match staged_schematic(&req, &design) {
+    let (mut sch, mut base) = match staged_schematic(&req, &design) {
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    let spec = match parse_spec(&req, &sch) {
+    let spec = match parse_spec(&req, &sch, &design) {
         Ok(s) => s,
         Err(e) => return err(e),
     };
+    // the rows of the table's scope (`OnExport` writes the data model's rows)
+    apply_scope(&req, &design, [&mut sch, &mut base]);
     let fmt = match fmt_of(&req) {
         Ok(f) => f,
         Err(e) => return err(e),

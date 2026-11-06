@@ -72,6 +72,7 @@ impl<'m> Scene<'m> {
             Item::Symbol(i) => field_key(&self.sch.symbols[i].id, self.sch.symbols[i].unit) == key,
             Item::Power(i) => self.sch.power_symbols[i].id == key,
             Item::Sheet(i) => self.sch.sheets[i].id == key,
+            Item::Label(i) => self.sch.labels[i].id == key,
             _ => false,
         })
     }
@@ -247,6 +248,9 @@ impl<'a> Board<'a> {
         if self.schematic()?.extras.is_locked(&owner_id(&ctx)) {
             return Err(fail("ops_locked", id, "the item is locked"));
         }
+        if ctx.kind == OwnerKind::Label {
+            return self.edit_label_field(&ctx, index, id, edit);
+        }
 
         // the text: each kind of field has its own way of changing it
         let mut key_now = key.clone();
@@ -291,6 +295,67 @@ impl<'a> Board<'a> {
             if let Some(ctx) = OwnerCtx::new(&snapshot, model, &key_now) {
                 sch.field_layout.insert(key_now.clone(), ctx.autoplace(&snapshot, model, algo));
             }
+        }
+        Ok(())
+    }
+
+    /// Field Properties of a label's field (`DIALOG_FIELD_PROPERTIES` on an `SCH_FIELD` of an `SCH_LABEL_BASE`): its text and whether it is shown and italic are
+    /// the label's (`SchExtras::label_fields`); a global label's Sheet References keeps its text (`${INTERSHEET_REFS}`) and is shown as Schematic Setup says
+    /// ("Intersheet reference visibility is controlled globally from Schematic Setup > General > Formatting"). A new place, orientation or justification
+    /// takes the label's fields out of the autoplaced ones (`UpdateField`: `parent->SetFieldsAutoplaced( AUTOPLACE_NONE )`): every field keeps the place it
+    /// has, this one the new one (`eda_engine::label_fields`). **Differs**: the text size and bold are not kept for a label's field (`LabelField` has
+    /// neither; the dialog does not offer them), and its font face and colour are Field Properties' Font and Color (`set_field_looks`).
+    fn edit_label_field(&mut self, ctx: &OwnerCtx, index: usize, id: &str, edit: &FieldEdit) -> Result<(), Vec<CheckResult>> {
+        let name = ctx.specs[index].name.clone();
+        let isr = name == eda_model::sch_extras::INTERSHEET_REFS_FIELD && ctx.label().is_some_and(|l| matches!(l.kind, eda_model::ir::LabelKind::Global { .. }));
+        if edit.size_nm.is_some_and(|s| s != eda_model::ir::DEFAULT_FIELD_SIZE_NM) || edit.bold == Some(true) || edit.name_shown == Some(true) {
+            return Err(fail("ops_bad_field", id, "a label's field keeps the default size, regular, without its name"));
+        }
+        let sch = self.schematic_mut()?;
+        let label_id = ctx.key.clone();
+        let mut fields = sch.extras.label_fields.get(&label_id).cloned().unwrap_or_default();
+        let mut text_changed = false;
+        if isr {
+            if edit.text.as_ref().is_some_and(|t| *t != ctx.specs[index].text) {
+                return Err(fail("ops_field_text_fixed", id, "the Sheet References of a global label show the pages its net is on"));
+            }
+            if edit.visible.is_some_and(|v| v != ctx.specs[index].visible) {
+                return Err(fail("ops_field_text_fixed", id, "Intersheet reference visibility is controlled globally from Schematic Setup > General > Formatting"));
+            }
+        } else if let Some(f) = fields.iter_mut().find(|f| f.name == name) {
+            if let Some(t) = &edit.text {
+                text_changed |= f.text != *t;
+                f.text = t.clone();
+            }
+            if let Some(v) = edit.visible {
+                text_changed |= f.visible != v;
+                f.visible = v;
+            }
+            if let Some(i) = edit.italic {
+                text_changed |= f.italic != i;
+                f.italic = i;
+            }
+        } else {
+            return Err(fail("ops_unknown_item", id, format!("the label has no field '{name}'")));
+        }
+        let mut placements = ctx.current(sch);
+        let old = placements[index].clone();
+        let now = ctx.page(&old, &ctx.specs[index].text);
+        let anchor = edit.at.map(|p| (p.x.as_f64(), p.y.as_f64())).unwrap_or(now.at);
+        let vertical = edit.vertical.unwrap_or(now.vertical);
+        let h = edit.h.map(hjustify).unwrap_or(now.h);
+        let v = edit.v.map(vjustify).unwrap_or(now.v);
+        // `positioningModified`: the position, the orientation or the justification
+        let moved = (anchor.0 - now.at.0).abs() > 50.0 || (anchor.1 - now.at.1).abs() > 50.0 || vertical != now.vertical || h != now.h || v != now.v;
+        if !moved && !text_changed {
+            return Err(fail("ops_field_unchanged", id, "the field already has these properties"));
+        }
+        if text_changed {
+            sch.extras.label_fields.insert(label_id.clone(), fields);
+        }
+        if moved {
+            placements[index] = ctx.placed_at(&old, anchor, vertical, h, v);
+            sch.field_layout.insert(label_id, placements);
         }
         Ok(())
     }
@@ -418,7 +483,7 @@ impl<'a> Board<'a> {
                 let units: Vec<String> = sch.symbols.iter().filter(|s| s.id == *id || field_key(&s.id, s.unit) == *id).map(|s| field_key(&s.id, s.unit)).collect();
                 if !units.is_empty() {
                     units
-                } else if sch.power_symbols.iter().any(|p| p.id == *id) || sch.sheets.iter().any(|s| s.id == *id) {
+                } else if sch.power_symbols.iter().any(|p| p.id == *id) || sch.sheets.iter().any(|s| s.id == *id) || sch.labels.iter().any(|l| l.id == *id && eda_engine::label_fields::has_fields(sch, l)) {
                     vec![id.clone()]
                 } else {
                     Vec::new()
@@ -439,6 +504,11 @@ impl<'a> Board<'a> {
             let snapshot = sch.clone();
             let Some(ctx) = OwnerCtx::new(&snapshot, model, &key) else { continue };
             if locked.contains(&owner_id(&ctx)) {
+                continue;
+            }
+            // a label's fields go back to the autoplaced ones (`SCH_LABEL_BASE::AutoplaceFields( screen, AUTOPLACE_MANUAL )`): placed live from now on
+            if ctx.kind == OwnerKind::Label {
+                changed |= sch.field_layout.remove(&key).is_some();
                 continue;
             }
             let before = ctx.current(&snapshot);

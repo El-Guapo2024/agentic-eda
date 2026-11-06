@@ -78,11 +78,8 @@ use eda_model::BoardRules;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
-/// `ANCHOR_SNAP_NM`-equivalent: how close the cursor must be to a same-net
-/// pad/via/track-end to snap onto it and offer to finish the route there.
-/// Matches the existing single-segment router's own snap radius
-/// (`web/studio/src/components/canvas/routing.ts`'s `findRouteAnchor`
-/// caller), so the two tools feel consistent.
+/// **INACTIVE since UI-LEFT R7:** the fixed 0.5 mm the route's end once snapped within. The grab radius is KiCad's, the grid
+/// ([`RoutingSettings::grab_radius`], `pickSingleItem`'s `maxSlopRadius`), measured to the copper ([`Node::pick_single_item`]); this is its default.
 pub const SNAP_NM: Nm = Nm::new(500_000);
 
 /// How far off a point may be and still be the point: the studio's own snapping (`PcbSnap.routePoint`) has put the cursor exactly on a
@@ -224,6 +221,9 @@ pub struct LinePlacer {
     /// (`SOLID`) and its layers, `Some(None)` for a track -- and `m_chainedPlacement` (a fix that did not end in a via: the route goes on from that segment).
     start_layers: Option<Option<LayerRange>>,
     chained: bool,
+    /// `m_startItem->Kind() == ITEM::SEGMENT_T`: the route started on a track segment (not an arc), so a size change before anything is placed
+    /// leaves its width alone (`UpdateSizes`).
+    pub start_on_segment: bool,
 }
 
 impl LinePlacer {
@@ -236,13 +236,19 @@ impl LinePlacer {
         // `m_startItem = aStartItem`: what `SetLayer` may switch from -- a via or a pad on the layer asked, or nothing
         let start_layers = start_item.and_then(|id| node.get(id)).map(|it| matches!(it, crate::item::Item::Via(_) | crate::item::Item::Solid(_)).then(|| it.layers()));
         let direction = Direction45::N;
+        let start_on_segment = start_item.and_then(|id| node.get(id)).is_some_and(|it| matches!(it, crate::item::Item::Segment(_)));
         // `LINE_PLACER::Start`: `m_mouseTrailTracer.Clear(); AddTrailPoint( aP ); SetTolerance( m_head.Width() ); SetDefaultDirections( m_initial_direction, UNDEFINED )`
         let mut trail = MouseTrailTracer::new();
         trail.clear();
         trail.add_trail_point(p);
         trail.set_tolerance(width);
         trail.set_default_directions(direction, Direction45::Undefined);
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false, start_on_segment }
+    }
+
+    /// `LINE_PLACER::HasPlacedAnything`: `m_placementCorrect || m_fixedTail.StageCount() > 1`.
+    pub fn has_placed_anything(&self) -> bool {
+        self.placement_correct || self.stages.len() > 1
     }
 
     pub fn fixed_start(&self) -> Point {
@@ -566,9 +572,14 @@ impl LinePlacer {
                 }
             }
         }
-        match node.nearest_anchor(p, layers, SNAP_NM, Some(&self.net)) {
-            Some((_, a)) => (Some(a), None),
-            None => (None, None),
+        // with nothing exactly there, what `pickSingleItem( mousePos, net, layer, false, { m_startItem } )` finds within the grab radius -- the grid
+        // (`maxSlopRadius`, UI-LEFT R7) -- by its copper, not its anchor; then `snapToItem` (a track's middle only with snap to tracks, `checkSnap`)
+        let layer = if self.placing_via { None } else { Some(self.current_layer) };
+        let Some(id) = node.pick_single_item(p, Some(&self.net), layer, self.current_layer, settings.grab_radius, &self.exclude_end) else { return (None, None) };
+        match node.snap_to_item(id, p) {
+            Some((at, None)) => (Some(at), None),
+            Some((at, Some(track))) if settings.snap_to_tracks => (Some(at), Some(track)),
+            _ => (None, None),
         }
     }
 

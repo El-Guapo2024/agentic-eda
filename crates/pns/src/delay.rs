@@ -4,7 +4,8 @@
 //! A net class that names a tuning profile gives the nets of the class a propagation delay: per copper layer, attoseconds per millimetre of
 //! track (`DELAY_PROFILE_TRACK_PROPAGATION_ENTRY::GetDelay`, zero unless the profile has "Enable time-domain tuning"); for a via, the profile's
 //! own delay per millimetre of the stackup the via crosses between the layers of the lines on either side of it, or the override for that
-//! layer pair. The delay of a tuning path is the delay of its lines and vias (the pad-to-die delay of the pads it ends on is not in the model).
+//! layer pair. The delay of a tuning path is the delay of its lines and vias, and the placers add the pad-to-die delay of the pads it ends on
+//! ([`TuningPath::full_delay`]).
 //! A time domain tuner is given a delay and turns it into the length it would have (`GetTrackLengthForPropagationDelay`: the delay over the
 //! track delay of the layer it tunes on), then tunes to that length.
 //!
@@ -89,6 +90,12 @@ impl DelayParams {
 }
 
 impl TuningPath {
+    /// `origPathDelay()` of a placer on this path: the pad-to-die delay of its pads (`m_padToDieDelay`, whatever the profile) plus `lineDelay` ([`Self::delay`],
+    /// zero without a tuning profile: `params` `None`). Attoseconds.
+    pub fn full_delay(&self, world: &Node, env: &LengthEnv, params: Option<&DelayParams>) -> i64 {
+        self.pad_to_die(world, env).1 + params.map_or(0, |p| self.delay(world, env, p))
+    }
+
     /// `lineDelay( path, startPad, endPad )` (`CalculateRoutedPathDelay`: `CalculateDelay`): the delay of the lines of the path (pad-clipped, as their
     /// length is) and of the vias between lines on different layers, with the height of the stackup they cross counted when the board uses height in
     /// its lengths. Attoseconds.
@@ -145,7 +152,7 @@ mod tests {
         let mut rules = eda_model::BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
         rules.tuning_profiles = TuningProfiles { profiles: vec![profile(enabled)], class_profiles: [("Default".to_string(), "USB".to_string())].into() };
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules }
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules, pad_to_die: Default::default() }
     }
 
     #[test]

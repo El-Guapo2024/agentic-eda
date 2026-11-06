@@ -360,8 +360,18 @@ pub(crate) fn items_in_for_tests(kind: Kind, src: &dyn LibSource, lib: &str) -> 
 
 /// `GET /api/library/items?kind=...&lib=Name`: `{"lib", "names": [..]}` -- the bare item names of one library, or `{"error"}`.
 pub fn items(dir: &Path, kind: Kind, lib: &str) -> Value {
-    match items_in(kind, &*crate::library_tables::libs(dir, kind), lib) {
-        Ok(names) => json!({ "lib": lib, "names": names.as_slice() }),
+    let libs = crate::library_tables::libs(dir, kind);
+    match items_in(kind, &*libs, lib) {
+        Ok(names) => {
+            let mut v = json!({ "lib": lib, "names": names.as_slice() });
+            // a folder library that loaded with errors: its tree row says so (KiCad 25ec2335's `LIB_STATUS::error`)
+            if kind == Kind::Symbol {
+                if let Some(e) = libs.lib_path(kind, lib).ok().and_then(|p| eda_kicad::symbol_library_load_errors(&p)) {
+                    v["load_error"] = json!(e);
+                }
+            }
+            v
+        }
         Err(e) => json!({ "error": e }),
     }
 }

@@ -71,6 +71,8 @@ export interface DpDrawState {
   originalActiveLayer?: string;
   /** What the message panel shows of the route's sizes (the start reply's `sizes`; kicad-port/routerSizes.ts). */
   sizes?: RouteSizesInfo;
+  /** The router's sizes' layer pairs (`PairedLayer`): see kicad-port/routeTool.ts. */
+  sizesPairs?: Record<string, string>;
 }
 
 function viaOf(v: NonNullable<DiffPairPreview["vias"]>[number]): DpDrawVia {

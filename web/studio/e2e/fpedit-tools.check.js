@@ -143,7 +143,7 @@
     if (!lineFp) return t(false, "no footprint");
     await __eda.run("common.SuiteControl.openPreferences");
     if (!t(await until(() => tid("preferences-dialog"), 3000), "Preferences opens")) return;
-    for (const id of ["fp_display", "fp_axes", "fp_edit", "fp_graphics"]) t(tid(`prefs-page-${id}`), `the tree has Footprint Editor > ${tid(`prefs-page-${id}`)?.textContent}`);
+    for (const id of ["display_footprint", "fp_axes", "fp_edit", "fp_graphics"]) t(tid(`prefs-page-${id}`), `the tree has Footprint Editor > ${tid(`prefs-page-${id}`)?.textContent}`);
     tid("prefs-page-fp_edit").click();
     await sleep(200);
     await type(tid("fp-prefs-rotation"), "45");

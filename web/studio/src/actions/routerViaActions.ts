@@ -9,14 +9,18 @@
 //                                                                     then onTrackViaSizeChanged
 //
 // The via's type, layers and size come from kicad-port/routerVia.ts; the router places it at the next click and the finished route commits it
-// with its type, one `Cmd::CommitRoute` (crates/cli/src/route_api.rs `via`, crates/ops `via_kinds`). Place Through Via (V) is the studio's
-// layerToggle (actions/pcbMenuActions.ts).
+// with its type, one `Cmd::CommitRoute` (crates/cli/src/route_api.rs `via`, crates/ops `via_kinds`). Place Through Via (V, `ACT_PlaceThroughVia`, which
+// wins over the global layerToggle while the router tool is active: `AS_CONTEXT`) is a via command too, with its implicit target the nearest ratsnest
+// anchor's layer (components/canvas/routerViaArm.ts, UI-LEFT R5). All of them work in the pair tool as in the single track's (`handleLayerSwitch` is the
+// router tool's in both modes; `DIFF_PAIR_PLACER::makeVia` takes the sizes' via type and layer pair), UI-LEFT R2.
 
 import { createElement } from "react";
 import { dpMove, dpToggleVia, routeMove, routeSwitchLayer, routeToggleVia } from "../api/client";
+import { withEventSizes } from "../kicad-port/routerSizes";
+import { planThroughVia } from "../components/canvas/routerViaArm";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
-import { chosenViaOf, pickableLayers, planViaCommand, routerLayerTarget, VIA_COMMANDS, type ViaChoice, type ViaCommand } from "../kicad-port/routerVia";
+import { chosenViaOf, layerPairMap, pickableLayers, planViaCommand, routerLayerTarget, VIA_COMMANDS, type ViaChoice, type ViaCommand, type ViaPlan, type ViaRefusal } from "../kicad-port/routerVia";
 import { SelectLayerDialog, TrackViaSizeDialog } from "../components/PcbRouterDialogs";
 import { openSweepDialog } from "./pcbSweepDialogs";
 import { layerPairsOf } from "./pcbRouterSweep";
@@ -40,27 +44,35 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
   const draw = state.drawState;
 
   // ------------------------------------------------------------------------------ via commands
-  // ROUTER_TOOL::onViaCommand: a via already armed is taken back (`ToggleViaPlacement()`, whichever command); else handleLayerSwitch arms one.
-  // Only a route of one track: `handleLayerSwitch` needs a route in progress for a picked layer, and the studio's pair placer places through
-  // vias alone (crates/pns/src/dp_placer.rs), so in the pair tool these do nothing.
+  // ROUTER_TOOL::onViaCommand: a via already armed is taken back (`ToggleViaPlacement()`, whichever command); else handleLayerSwitch arms one --
+  // for a route of one track and for a pair alike (`handleLayerSwitch` needs a route in progress for a picked layer).
   const viaCommand = (name: string) =>
     pcbOnly(() => {
       const cmd: ViaCommand | undefined = VIA_COMMANDS[name];
-      if (!board || !cmd || draw?.kind !== "route") return;
-      const cursor = state.cursorNm ?? { x: draw.pts[draw.pts.length - 1]?.[0] ?? 0, y: draw.pts[draw.pts.length - 1]?.[1] ?? 0 };
+      if (!board || !cmd || (draw?.kind !== "route" && draw?.kind !== "diffpair")) return;
+      const last = draw.kind === "route" ? draw.pts[draw.pts.length - 1] : draw.ptsA[draw.ptsA.length - 1];
+      const cursor = state.cursorNm ?? { x: last?.[0] ?? 0, y: last?.[1] ?? 0 };
       // the new state, then the head re-resolved at the cursor with the via armed or not (`m_router->Move( m_endSnapPoint, m_endItem )`)
-      const update = (next: typeof draw) => {
-        dispatch({ type: "SET_DRAW_STATE", draw: next });
-        void routeMove(cursor.x, cursor.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(next, preview) }));
+      const update = (patch: { placingVia: boolean; pendingViaLayer: string | undefined; sizesPairs?: Record<string, string> }) => {
+        if (draw.kind === "route") {
+          const next = { ...draw, ...patch };
+          dispatch({ type: "SET_DRAW_STATE", draw: next });
+          void routeMove(cursor.x, cursor.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(next, preview) }));
+        } else {
+          const next = { ...draw, ...patch };
+          dispatch({ type: "SET_DRAW_STATE", draw: next });
+          void dpMove(cursor.x, cursor.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(next, preview) }));
+        }
       };
       if (draw.placingVia) {
-        void routeToggleVia(false).then(() => update({ ...draw, placingVia: false, pendingViaLayer: undefined }));
+        // `ToggleViaPlacement()`, then `frame()->SetActiveLayer( m_router->GetCurrentLayer() )`
+        const off = draw.kind === "route" ? routeToggleVia(false) : dpToggleVia(false);
+        void off.then(() => update({ placingVia: false, pendingViaLayer: undefined }));
         return;
       }
       const copper = board.layers;
       const layerPair = layerPairsOf(board, state.pcbx.layerPairs).current;
-      const arm = (picked: string | null) => {
-        const plan = planViaCommand({ cmd, currentLayer: draw.layer, copper, layerPair, picked });
+      const armPlan = (plan: ViaPlan | ViaRefusal) => {
         if (!plan.ok) {
           if (plan.message) toast(plan.message, "error");
           return;
@@ -68,14 +80,22 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
         // the net class's sizes (or a microvia's): none sent, the server asks the rules for the route's net (`handleLayerSwitch`, r3 R3-4).
         // The choice is the via list's index (0 = net class), not the size (r4 R4-8).
         const size = chosenViaOf(plan.viaType, viaChoiceOf(state));
-        void routeToggleVia(true, size?.diameter, size?.drill, plan.toLayer, { viaType: plan.viaType, span: plan.span }).then((reply) => {
+        // a pair's vias span the sizes' layer pair whatever their type (`DIFF_PAIR_PLACER::makeVia`): the server spans them to `toLayer`
+        const armed = draw.kind === "route" ? routeToggleVia(true, size?.diameter, size?.drill, plan.toLayer, { viaType: plan.viaType, span: plan.span }) : dpToggleVia(true, plan.toLayer, size?.diameter, size?.drill, plan.viaType);
+        void armed.then((reply) => {
           if (!reply.ok) {
             if (reply.message) toast(reply.message, "error");
             return;
           }
-          update({ ...draw, placingVia: true, pendingViaLayer: plan.toLayer });
+          update({ placingVia: true, pendingViaLayer: plan.toLayer, sizesPairs: plan.sizesPairs });
         });
       };
+      const arm = (picked: string | null) => armPlan(planViaCommand({ cmd, currentLayer: draw.layer, copper, layerPair, picked, sizesPairs: draw.sizesPairs }));
+      if (cmd.type === "through" && !cmd.selectLayer) {
+        // Place Through Via: "Try to switch to the nearest ratnest item's layer if we have one" (`GetNearestRatnestAnchor`, UI-LEFT R5)
+        void planThroughVia(cursor, draw.layer, copper, layerPair, draw.sizesPairs).then(armPlan);
+        return;
+      }
       if (!cmd.selectLayer) {
         arm(null);
         return;
@@ -86,6 +106,11 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
         element: createElement(SelectLayerDialog, { layers: pickableLayers(cmd, copper, draw.layer), copper, current: draw.layer, onPick: (layer: string) => arm(layer), onCancel: () => arm(null) }),
       });
     });
+  // V while a route or a pair is drawn: `ACT_PlaceThroughVia` (`AS_CONTEXT`, the router tool's) wins over the global `layerToggle` on the same key
+  if (draw?.kind === "route" || draw?.kind === "diffpair") {
+    m.set("pcbnew.InteractiveRouter.PlaceVia", viaCommand("pcbnew.InteractiveRouter.PlaceVia"));
+    m.set("pcbnew.Control.layerToggle", viaCommand("pcbnew.InteractiveRouter.PlaceVia"));
+  }
   m.set("pcbnew.InteractiveRouter.PlaceBlindVia", viaCommand("pcbnew.InteractiveRouter.PlaceBlindVia"));
   m.set("pcbnew.InteractiveRouter.PlaceMicroVia", viaCommand("pcbnew.InteractiveRouter.PlaceMicroVia"));
   m.set("pcbnew.InteractiveRouter.SelLayerAndPlaceVia", viaCommand("pcbnew.InteractiveRouter.SelLayerAndPlaceVia"));
@@ -103,15 +128,16 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
         if (!target) return;
         const cursor = state.cursorNm ?? { x: draw.pts[draw.pts.length - 1]?.[0] ?? 0, y: draw.pts[draw.pts.length - 1]?.[1] ?? 0 };
         const refresh = (next: typeof draw) => void routeMove(cursor.x, cursor.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(next, preview) }));
-        void routeSwitchLayer(target).then((r) => {
+        void routeSwitchLayer(target, cursor).then((r) => {
           if (!r.ok) return;
-          // `updateEndItem( aEvent ); .. m_router->Move( m_endSnapPoint, m_endItem ); // refresh`
-          if (r.switched) return refresh(draw);
+          // `updateEndItem( aEvent ); updateSizesAfterRouterEvent( targetLayer, m_endSnapPoint ); m_router->Move( m_endSnapPoint, m_endItem ); // refresh`
+          if (r.switched) return refresh(withEventSizes(draw, r.sizes));
           // `if( !m_router->IsPlacingVia() ) m_router->ToggleViaPlacement();` with the target in the sizes' layer pair
           const size = chosenViaOf("through", viaChoiceOf(state));
           void routeToggleVia(true, size?.diameter, size?.drill, target).then((armed) => {
             if (!armed.ok) return;
-            const next = { ...draw, placingVia: true, pendingViaLayer: target };
+            // `sizes.ClearLayerPairs(); .. sizes.AddLayerPair( currentLayer, targetLayer )`
+            const next = { ...draw, placingVia: true, pendingViaLayer: target, sizesPairs: layerPairMap(draw.layer, target) };
             dispatch({ type: "SET_DRAW_STATE", draw: next });
             refresh(next);
           });
@@ -133,13 +159,14 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
         if (!target) return;
         const cursor = state.cursorNm ?? { x: draw.ptsA[draw.ptsA.length - 1]?.[0] ?? 0, y: draw.ptsA[draw.ptsA.length - 1]?.[1] ?? 0 };
         const refresh = (next: typeof draw) => void dpMove(cursor.x, cursor.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(next, preview) }));
-        void routeSwitchLayer(target).then((r) => {
+        void routeSwitchLayer(target, cursor).then((r) => {
           if (!r.ok) return;
-          if (r.switched) return refresh({ ...draw, layer: target });
+          if (r.switched) return refresh(withEventSizes({ ...draw, layer: target }, r.sizes));
           const size = chosenViaOf("through", viaChoiceOf(state));
           void dpToggleVia(true, target, size?.diameter, size?.drill).then((armed) => {
             if (!armed.ok) return;
-            const next = { ...draw, placingVia: true, pendingViaLayer: target };
+            // `sizes.ClearLayerPairs(); .. sizes.AddLayerPair( currentLayer, targetLayer )`
+            const next = { ...draw, placingVia: true, pendingViaLayer: target, sizesPairs: layerPairMap(draw.layer, target) };
             dispatch({ type: "SET_DRAW_STATE", draw: next });
             refresh(next);
           });

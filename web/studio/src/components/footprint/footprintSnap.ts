@@ -11,7 +11,7 @@ import { PcbGridHelper, type GridEnv, type LayerSel, type SnapOverlay, type Visi
 import { FOOTPRINT_EDITOR_MAGNETIC, footprintScene } from "../../kicad-port/fpSnapScene";
 import type { SnapScene } from "../../kicad-port/snapScene";
 import { computeVisibleGridSize } from "../../kicad-port/grid";
-import { gridSizeFor, type GridCategory, type GridOverrides } from "../../kicad-port/gridOverrides";
+import { gridEnvY, gridSizeFor, type GridCategory, type GridOverrides } from "../../kicad-port/gridOverrides";
 import { reportSnap } from "../../kicad-port/snapReport";
 import type { PcbMagnetic } from "../../kicad-port/snapAnchors";
 import type { Pt } from "../../kicad-port/snapGeom";
@@ -23,6 +23,8 @@ export interface FootprintSnapView {
   scale: number;
   gridNm: number;
   grids: readonly number[];
+  /** The grids' Y sizes beside `grids` (`GridSettings::ys`), when a grid is not square. */
+  gridYs?: readonly number[];
   overrides: GridOverrides | null;
   /** The grid origin of the Footprint Editor (`useFootprintGridOrigin`). */
   origin: Pt;
@@ -79,7 +81,7 @@ export class FootprintSnap {
   private env(): GridEnv {
     const v = this.view!;
     const scale = v.scale > 0 ? v.scale : 1;
-    return { scale, gridNm: v.gridNm, visibleGridNm: computeVisibleGridSize(v.gridNm, scale), origin: v.origin, gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides) };
+    return { scale, gridNm: v.gridNm, visibleGridNm: computeVisibleGridSize(v.gridNm, scale), origin: v.origin, gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides), ...gridEnvY(v) };
   }
 
   private visibility(): Visibility {

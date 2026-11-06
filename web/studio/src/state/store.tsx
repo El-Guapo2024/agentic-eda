@@ -9,6 +9,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
+import { slidePattern } from "../components/canvas/tuneRouting";
 import type { NewZoneSettings } from "../kicad-port/pcbDrawZone";
 import type { FpDimDraw } from "../kicad-port/fpDrawTools";
 import type { RouteSizesInfo } from "../kicad-port/routerSizes";
@@ -36,6 +37,7 @@ import { dragOriginFor, modificationSnapFor } from "./modificationSnap";
 import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, loadAngleSnapMode, saveAngleSnapMode, type PcbParityState } from "../kicad-port/pcbParityState";
+import { startWithViaAfterToolChange } from "../kicad-port/routerVia";
 import { strokeStepKept } from "../kicad-port/layerDefaults";
 import { substituteSelection } from "../kicad-port/groupTree";
 import { substituteSchSelection } from "../kicad-port/schGroups";
@@ -281,6 +283,8 @@ export type DrawState =
       sizes?: RouteSizesInfo;
       /** `m_TempOverrideTrackWidth`: see kicad-port/routeTool.ts. */
       widthOverride?: boolean;
+      /** The router's sizes' layer pairs (`PairedLayer`): see kicad-port/routeTool.ts. */
+      sizesPairs?: Record<string, string>;
     }
   /** `D` (gap #7 stage 5, `pcbnew.InteractiveRouter.Drag45Degree` ->
    * `eda_pns::dragger::Dragger`, driven through crates/cli/src/route_api.rs's
@@ -358,6 +362,8 @@ export type DrawState =
       originalActiveLayer?: string;
       /** The message panel's sizes: see kicad-port/dpTool.ts. */
       sizes?: RouteSizesInfo;
+      /** The router's sizes' layer pairs (`PairedLayer`): see kicad-port/dpTool.ts. */
+      sizesPairs?: Record<string, string>;
     }
   /** `settings`: what the zone takes when it is finished -- the zone dialog's OK at the first corner (kicad-port/pcbDrawZone.ts `NewZoneSettings`); absent for a cutout, a similar zone or a via stitching (their source's or their own dialog). */
   | { kind: "zone"; pts: [Nm, Nm][]; settings?: NewZoneSettings }
@@ -380,7 +386,8 @@ export type DrawState =
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
   | { kind: "wire"; pts: [Nm, Nm][] }
   /** `Ctrl+Shift+M` (common.Interactive.measureTool, pcb_viewer_tools.cpp): a client-side-only ruler, never committed to the backend. 1 point = still dragging the end (rubber-banded to the cursor); 2 = a finished measurement that stays on screen (not cleared) until Esc or a fresh click starts the next one. */
-  | { kind: "measure"; pts: [Nm, Nm][] };
+  /** `arrow`: Interactive Offset's ruler (`POSITION_RELATIVE_TOOL::InteractiveOffset`: the anchor colour, no ticks, an arrowhead at the end) rather than the Measure tool's. */
+  | { kind: "measure"; pts: [Nm, Nm][]; arrow?: boolean };
 
 export interface ViewTransform {
   /** Screen pixels per board µm. */
@@ -460,6 +467,8 @@ export interface Viewer3DOptions {
   orthographic: boolean;
   /** True = "exact export": show GET /api/board.glb's whole board as kicad-cli renders it (every model through OpenCascade, seconds to minutes) in place of the live scene. The live scene is the default: it loads each part's KiCad 3D model by itself (components/viewer3d/modelCache.ts, GET /api/3dmodel) and has them in seconds. Viewer3D falls back to the live scene when the GLB hasn't loaded (still being built, or failed). */
   kicadModels: boolean;
+  /** `m_CurrentPreset` (kicad-port/viewer3dSettings.ts): `follow_plot_settings` (what KiCad's viewer opens on), `follow_pcb_editor`, a preset of the person's by name, or "" (none matches). A "Follow" preset decides the board's rows. */
+  preset: string;
 }
 
 /**
@@ -479,6 +488,7 @@ export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
   flipped: false,
   orthographic: false,
   kicadModels: false,
+  preset: "follow_plot_settings",
 };
 
 /**
@@ -745,7 +755,6 @@ export interface StudioState {
   units: LengthUnit;
   /** `COMMON_TOOLS::m_imperialUnit` (`system.last_imperial_units`): the imperial unit Toggle Units returns to -- inches until mils were chosen, mils after. */
   lastImperialUnit: "in" | "mil";
-  polar: boolean;
   gridNm: number;
   /** The Schematic Editor's current grid (`GRID_SETTINGS::last_size_idx` of eeschema), um: one of its grid list (state/gridSettings.ts), 50 mil to start. */
   schGridNm: number;
@@ -1016,7 +1025,6 @@ const initialState: StudioState = {
   schematicView: { scale: 0, x: 0, y: 0 },
   units: "mm",
   lastImperialUnit: "in",
-  polar: false,
   gridNm: 1_000_000, // 1.0 mm; a placeholder until src/kicad/layers.json-adjacent grid defaults are extracted (KiCad's own default grid list is source-derived, see report)
   schGridNm: 1_270_000, // eeschema's default grid: 50 mil
   gridVisible: true,
@@ -1126,7 +1134,6 @@ export type Action =
   | { type: "SET_SCHEMATIC_VIEW"; view: ViewTransform }
   | { type: "MARK_VIEW_INITIALIZED" }
   | { type: "SET_UNITS"; units: LengthUnit }
-  | { type: "TOGGLE_POLAR" }
   | { type: "SET_GRID_NM"; um: number }
   | { type: "SET_SCH_GRID_NM"; um: number }
   | { type: "TOGGLE_GRID_VISIBLE" }
@@ -1499,9 +1506,13 @@ function reducer(state: StudioState, action: Action): StudioState {
       const board = p != null && p.kind !== "sch_move" && p.kind !== "sch_drag";
       return { ...state, movePreview: board ? { ...p, rotateStepDeg: state.prefs.rotationStepDeg, flipDirection: state.prefs.flipDirection } : p };
     }
-    case "SET_ACTIVE_TOOL":
+    case "SET_ACTIVE_TOOL": {
       // (the ends of the wires Pin Helpers handed to the Drag tool are the Drag tool's: they go when it does)
-      return { ...state, activeTool: action.tool, schSheetImport: action.tool === "sch_import_sheet" ? state.schSheetImport : null, schPickedEnds: action.tool === "drag" ? state.schPickedEnds : null };
+      // `MainLoop`'s `m_startWithVia = false` on entering the router tool (R7-R6)
+      const startWithVia = startWithViaAfterToolChange(state.activeTool, action.tool, state.pcbx.startWithVia);
+      const pcbx = startWithVia === state.pcbx.startWithVia ? state.pcbx : { ...state.pcbx, startWithVia };
+      return { ...state, activeTool: action.tool, pcbx, schSheetImport: action.tool === "sch_import_sheet" ? state.schSheetImport : null, schPickedEnds: action.tool === "drag" ? state.schPickedEnds : null };
+    }
     case "SET_VIEW":
       return { ...state, view: action.view };
     case "SET_SCHEMATIC_VIEW":
@@ -1511,8 +1522,6 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_UNITS":
       // `COMMON_TOOLS::SwitchUnits` remembers the imperial unit that was picked, so that Toggle Units (Ctrl+U) comes back to it.
       return { ...state, units: action.units, lastImperialUnit: rememberedImperial(state.lastImperialUnit, action.units) };
-    case "TOGGLE_POLAR":
-      return { ...state, polar: !state.polar };
     case "SET_GRID_NM":
       return { ...state, gridNm: action.um };
     case "SET_SCH_GRID_NM":
@@ -2403,6 +2412,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const settle = async (sent: boolean, ok: boolean) => {
         if (carrying && (!sent || !ok)) await postCarry("commit");
       };
+      // A tuning pattern moved on its own (`doMoveSelection` of a lone generator, `genStartEdit` / `genUpdateEdit` / `genFinishEdit`): it slides along its track
+      // and is tuned again there, not carried off it (components/canvas/tuneRouting.ts `slidePattern`)
+      if (kind === "pcb" && refs.length === 1 && !rotateQuarterTurns && !flipped && !(ops?.length) && !carrying && !(stateRef.current.pcbx.movingIndividually && stateRef.current.pcbx.moveQueue.length > 0)) {
+        const pattern = stateRef.current.board?.drawings?.tuning_patterns?.find((p) => p.id === refs[0]);
+        if (pattern) {
+          if (dxNm !== 0 || dyNm !== 0) await slidePattern(dispatch, api, pattern, dxNm, dyNm);
+          advanceMoveQueue();
+          return;
+        }
+      }
       // Any mix of PCB items: turned and flipped about where it was picked up, then moved, as one batch (`planCarry`).
       if (kind === "pcb") {
         const board = stateRef.current.board;

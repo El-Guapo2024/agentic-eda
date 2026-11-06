@@ -120,3 +120,9 @@ export function nearestZoomPreset(list: readonly number[], zoomFactor: number): 
   });
   return best;
 }
+
+/** `ZOOM_MENU::update`: "Zoom: %.2f" for each factor of the editor's list, checked where it is within 10 % of the zoom on screen (`rel_error < 0.1`). */
+export function zoomMenuEntries(list: readonly number[], scale: number): { label: string; checked: boolean }[] {
+  const zoom = scaleToZoomFactor(scale || 1);
+  return list.map((factor) => ({ label: `Zoom: ${factor.toFixed(2)}`, checked: Math.abs(factor - zoom) / zoom < 0.1 }));
+}

@@ -3,12 +3,14 @@
 // same split: thin client-side glue (turn a click/move into the right
 // `/api/route/dp_*` call and `DrawState` update), not a second copy of
 // `eda_pns::diff_pair`'s own geometry.
-import { dpContinueFromEnd, dpFinish, dpFix, dpMove, dpStart, dpToggleVia } from "../../api/client";
+import { dpAttemptFinish, dpContinueFromEnd, dpFinish, dpFix, dpMove, dpStart, dpToggleVia } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { dpStateFromPreview, dpViaRequest, type DpDrawState } from "../../kicad-port/dpTool";
 import type { RouterSettings } from "../../kicad-port/routerSettings";
-import { otherLayerOfPair, type LayerPair } from "../../kicad-port/layerPairs";
+import type { LayerPair } from "../../kicad-port/layerPairs";
+import { withEventSizes } from "../../kicad-port/routerSizes";
+import { planThroughVia } from "./routerViaArm";
 
 /** `6` / the first click after arming the diff-pair tool: start a session
  * from whatever pad/via/track-end is at `(x, y)`, on a net with a
@@ -18,8 +20,9 @@ import { otherLayerOfPair, type LayerPair } from "../../kicad-port/layerPairs";
  * Shows an error toast -- KiCad's own message -- and leaves `drawState`
  * untouched otherwise. */
 /** `startWithVia`: V was pressed before the pair started (`m_startWithVia`, R7-R3): the pair starts with its vias armed, sized as V sizes them
- *  (`size`: none for the net class's), to the other layer of the layer pair `pair` (`performRouting`: `handleLayerSwitch( ACT_PlaceThroughVia, true )`). */
-export async function startDiffPairRoute(x: number, y: number, layer: string, dispatch: Dispatch<Action>, dims?: { width: number; gap: number; viaGap?: number }, settings?: RouterSettings, autoTrackWidth?: boolean, startWithVia?: { size: { diameter: number; drill: number } | null; pair: LayerPair }): Promise<void> {
+ *  (`size`: none for the net class's), to Place Through Via's implicit target (`performRouting`: `handleLayerSwitch( ACT_PlaceThroughVia, true )`: the
+ *  nearest ratsnest anchor's layer of the P net, else the other layer of the layer pair `pair`, UI-LEFT R5). */
+export async function startDiffPairRoute(x: number, y: number, layer: string, dispatch: Dispatch<Action>, dims?: { width: number; gap: number; viaGap?: number }, settings?: RouterSettings, autoTrackWidth?: boolean, startWithVia?: { size: { diameter: number; drill: number } | null; pair: LayerPair; copper: readonly string[] }): Promise<void> {
   // `dims`: the "Differential Pair Dimensions..." dialog's custom width and gap, when it was used.
   const preview = await dpStart(x, y, layer, dims, settings, autoTrackWidth);
   if (!preview.ok) {
@@ -32,11 +35,14 @@ export async function startDiffPairRoute(x: number, y: number, layer: string, di
   draw.originalActiveLayer = layer;
   if (preview.layer && preview.layer !== layer) dispatch({ type: "SET_ACTIVE_LAYER", layer: preview.layer });
   if (startWithVia) {
-    const toLayer = otherLayerOfPair(startWithVia.pair, draw.layer);
-    const armed = await dpToggleVia(true, toLayer, startWithVia.size?.diameter, startWithVia.size?.drill);
-    if (armed.ok) {
-      draw.placingVia = true;
-      draw.pendingViaLayer = toLayer;
+    const plan = await planThroughVia({ x, y }, draw.layer, startWithVia.copper, startWithVia.pair, undefined);
+    if (plan.ok) {
+      const armed = await dpToggleVia(true, plan.toLayer, startWithVia.size?.diameter, startWithVia.size?.drill);
+      if (armed.ok) {
+        draw.placingVia = true;
+        draw.pendingViaLayer = plan.toLayer;
+        draw.sizesPairs = plan.sizesPairs;
+      }
     }
   }
   dispatch({ type: "SET_DRAW_STATE", draw });
@@ -70,7 +76,29 @@ export async function fixDiffPairRoute(x: number, y: number, draw: DpDrawState, 
     await finishDiffPairRoute(x, y, dispatch, api);
     return;
   }
-  if (reply.preview) dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(draw, reply.preview) });
+  // `updateSizesAfterRouterEvent` after the fix (UI-LEFT R5): the message panel's clearance, and the pair's width and gap when asked again
+  if (reply.preview) dispatch({ type: "SET_DRAW_STATE", draw: withEventSizes(dpStateFromPreview(draw, reply.preview), reply.sizes) });
+}
+
+/**
+ * `F` (AttemptFinish) while a pair is routed: `routerAttemptFinish` -> `ROUTER::Finish`, whose trace is the pair placer's first, the P line (UI-LEFT R2). The
+ * pair is finished on the coupled pair at the nearest unconnected anchor of the P net, one undo step; otherwise it goes on, and the cursor is warped to where
+ * its end got (`controls()->WarpMouseCursor( m_router->Placer()->CurrentEnd(), true, true )` -- here the preview there is shown). It is never finished at
+ * the cursor; Enter and the double-click still are (`finishInteractive`: `FixRoute( .., forceFinish = true, .. )`).
+ */
+export async function attemptFinishDiffPairRoute(x: number, y: number, draw: DpDrawState, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">): Promise<void> {
+  const reply = await dpAttemptFinish(x, y);
+  if (!reply.ok) {
+    if (reply.message) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
+    return;
+  }
+  if (reply.finished) {
+    dispatch({ type: "SET_DRAW_STATE", draw: null });
+    await api.refresh();
+    return;
+  }
+  if (reply.preview?.ok) dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(draw, reply.preview) });
+  // a fix at the anchor may have committed nothing yet but placed a leg (`FixRoute` returned false): the board is unchanged until the pair ends
 }
 
 /** Finish the pair at `(x, y)`. Shared by every finish entry point (a

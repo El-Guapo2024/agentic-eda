@@ -9,7 +9,7 @@
 import { libraryNicknameIllegalChar } from "./libraryNames";
 
 export type TableKind = "symbol" | "footprint" | "design_block";
-export type TableScope = "global" | "project";
+export type TableScope = "global" | "project" | "nested";
 
 /** One row of a library table, as the grid has it: `enabled` is the Enable box, `visible` the Show box (symbol libraries only). */
 export interface TableRow {
@@ -26,8 +26,8 @@ export interface TableRow {
   error?: string;
   /** The row's path with its variables replaced. */
   path?: string;
-  /** The rows of the table a `Table` row chains. */
-  table?: { path: string; rows: TableRow[] };
+  /** The rows of the table a `Table` row chains, and whether its file can be written (its tab is editable then). */
+  table?: { path: string; rows: TableRow[]; writable?: boolean };
 }
 
 /** The editable columns of the grid, in the order of `COL_ORDER` (the status column and the two check boxes come first). */
@@ -88,11 +88,13 @@ export function uniqueLibraryName(taken: readonly string[]): string {
   for (let i = 0; ; i++) if (!taken.includes(`${base}_${i}`)) return `${base}_${i}`;
 }
 
-/** `GuessPluginTypeFromLibPath` as far as the name goes: a library table file is a chained table, KiCad's own formats are told by their extension. */
+/** `GuessPluginTypeFromLibPath` as far as the name goes: a library table file is a chained table, KiCad's own formats are told by their extension -- for symbols the
+ *  `.kicad_symdir` folder of KiCad 10 too (`SCH_IO_KICAD_SEXPR::CanReadLibrary`: a folder of `.kicad_sym` files). */
 export function guessType(kind: TableKind, path: string): string | null {
   const name = baseName(path);
   if (name === "sym-lib-table" || name === "fp-lib-table" || name === "design-block-lib-table") return TABLE_TYPE;
   if (name.endsWith(libraryExtension(kind))) return KICAD_TYPE;
+  if (kind === "symbol" && name.endsWith(".kicad_symdir")) return KICAD_TYPE;
   return null;
 }
 
@@ -291,4 +293,135 @@ export function validateVariables(rows: readonly VariableValue[]): { variables: 
 
 export function sameVariables(a: readonly VariableValue[], b: readonly VariableValue[]): boolean {
   return a.length === b.length && a.every((v, i) => v.name === (b[i] as VariableValue).name && v.value === (b[i] as VariableValue).value);
+}
+
+// ------------------------------------------------------------------------------------------------ Edit Options (`DIALOG_PLUGIN_OPTIONS`)
+
+/** `LIBRARY_TABLE`'s `OPT_SEP`: the options of a row are `name=value` pairs joined by `|`, a `|` in a value escaped with `\`. */
+export const OPT_SEP = "|";
+
+/**
+ * `LIBRARY_TABLE::ParseOptions`: the pairs of a row's options -- white space before a pair skipped, `\|` a `|` of the value, the first `=` between the name and the value,
+ * a pair with no `=` an option present with no value. The answer is a `std::map`: sorted by name, a name given twice keeping its later value.
+ */
+export function parseOptions(list: string): [string, string][] {
+  const props = new Map<string, string>();
+  const s = [...list];
+  let i = 0;
+  while (i < s.length) {
+    let pair = "";
+    while (i < s.length && /\s/.test(s[i] as string)) i++;
+    while (i < s.length) {
+      if (s[i] === "\\" && i + 1 < s.length && s[i + 1] === OPT_SEP) {
+        i++;
+        pair += s[i++];
+      } else if (s[i] === OPT_SEP) {
+        i++;
+        break;
+      } else {
+        pair += s[i++];
+      }
+    }
+    if (pair !== "") {
+      const eq = pair.indexOf("=");
+      if (eq >= 0) props.set(pair.slice(0, eq), pair.slice(eq + 1));
+      else props.set(pair, "");
+    }
+  }
+  return [...props.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** `LIBRARY_TABLE::FormatOptions`: the pairs, sorted by name, `name=value` (a name alone when the value is empty), a `|` in a value escaped. */
+export function formatOptions(pairs: readonly (readonly [string, string])[]): string {
+  const props = new Map<string, string>();
+  for (const [k, v] of pairs) props.set(k, v);
+  return [...props.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => (v === "" ? k : `${k}=${v.split(OPT_SEP).join(`\\${OPT_SEP}`)}`))
+    .join(OPT_SEP);
+}
+
+/** `DIALOG_PLUGIN_OPTIONS::TransferDataFromWindow`: every grid row with a name (both cells trimmed) into the map, then `FormatOptions`. */
+export function optionsFromGrid(rows: readonly { name: string; value: string }[]): string {
+  return formatOptions(rows.map((r) => [r.name.trim(), r.value.trim()] as [string, string]).filter(([n]) => n !== ""));
+}
+
+export interface OptionChoice {
+  name: string;
+  /** The plugin's own help, in its markup (`<b>`). */
+  help: string;
+}
+
+/** `INITIAL_HELP` of `DIALOG_PLUGIN_OPTIONS`. */
+export const OPTIONS_INITIAL_HELP = "Select an <b>Option Choice</b> in the listbox above, and then click the <b>Append Selected Option</b> button.";
+
+/**
+ * The options a library format takes (`IO_BASE::GetLibraryOptions` and its overrides): the KiCad and most symbol formats none (`SCH_IO::GetLibraryOptions`), CADSTAR
+ * `csa` and `fplib` (`SCH_IO_CADSTAR_ARCHIVE::GetLibraryOptions`), and every footprint format the six of `PCB_IO::GetLibraryOptions`. In the order of the `std::map`
+ * KiCad lists them from.
+ */
+export function libraryOptionChoices(kind: TableKind, type: string): OptionChoice[] {
+  if (kind === "symbol") {
+    if (type !== "CADSTAR Schematic Archive") return [];
+    return [
+      {
+        name: "csa",
+        help: "Path to the CADSTAR schematic archive (*.csa) file related to this CADSTAR parts library. If none specified it is assumed to be 'symbol.csa' in the same folder.",
+      },
+      {
+        name: "fplib",
+        help: "Name of the footprint library related to the symbols in this library. You should create a separate entry for the CADSTAR PCB Archive (*.cpa) file in the footprint library tables. If none specified, 'cadstarpcblib' is assumed.",
+      },
+    ];
+  }
+  if (kind !== "footprint" || type === TABLE_TYPE) return [];
+  return [
+    { name: "debug_level", help: "Enable <b>debug</b> logging for Footprint*() functions in this PCB_IO." },
+    { name: "enable_transaction_logging", help: "Enable transaction logging. The mere presence of this option turns on the logging, no need to set a Value." },
+    { name: "password", help: "Password for <b>login</b> to some special library server." },
+    { name: "python_footprint_plugin", help: "Enter the python module which implements the PCB_IO::Footprint*() functions." },
+    { name: "read_filter_regex", help: "Regular expression <b>footprint name</b> filter." },
+    { name: "username", help: "User name for <b>login</b> to some special library server." },
+  ];
+}
+
+/** `LIB_TABLE_GRID_TRICKS::showPopupMenu`: "Edit Options..." is offered for one selected row that is not a chained table. */
+export function canEditOptions(rows: readonly TableRow[], selected: readonly number[]): boolean {
+  return selected.length === 1 && rows[selected[0] as number] !== undefined && (rows[selected[0] as number] as TableRow).type !== TABLE_TYPE;
+}
+
+// ------------------------------------------------------------------------------------------------ Reset Libraries, Migrate Libraries
+
+/** `PANEL_SYM_LIB_TABLE::onReset` / `PANEL_FP_LIB_TABLE::onReset`'s question, asked only when the global table has rows. */
+export const RESET_QUESTION = "This action will reset your global library table on disk and cannot be undone.";
+
+/** What Migrate Libraries says when none of the rows chosen is of another format. */
+export const MIGRATE_NONE = "Select one or more rows containing libraries to save as current KiCad format.";
+
+/**
+ * The rows Migrate Libraries works on: the selected ones (the row with the cursor when none is), less those already in KiCad's format -- and, for symbols, the Database ones
+ * (`onConvertLegacyLibraries`: `!= databaseType && != kicadType`; the footprint and design block panels skip only `kicadType`).
+ */
+export function migratableRows(kind: TableKind, rows: readonly TableRow[], selected: readonly number[], cursor: number): number[] {
+  const chosen = selected.length > 0 ? selected : cursor >= 0 ? [cursor] : [];
+  return chosen.filter((i) => {
+    const r = rows[i];
+    return r !== undefined && r.type !== KICAD_TYPE && !(kind === "symbol" && r.type === "Database");
+  });
+}
+
+/** The question before Migrate Libraries goes on (`IsOK`). */
+export function migrateQuestion(kind: TableKind, nicknames: readonly string[]): string {
+  if (kind === "symbol") {
+    return nicknames.length === 1
+      ? `Save '${nicknames[0]}' as current KiCad format (*.kicad_sym) and replace legacy entry in table?`
+      : `Save ${nicknames.length} libraries as current KiCad format (*.kicad_sym) and replace legacy entries in table?`;
+  }
+  return nicknames.length === 1 ? `Save '${nicknames[0]}' as current KiCad format and replace entry in table?` : `Save ${nicknames.length} libraries as current KiCad format and replace entries in table?`;
+}
+
+/** The question for a destination that is there already (title "Migrate Library", Yes / No / Cancel). */
+export function migrateOverwriteQuestion(kind: TableKind, dest: string): string {
+  if (kind === "symbol") return `File '${dest}' already exists. Do you want overwrite this file?`;
+  return `Folder '${dest}' already exists. Do you want overwrite any existing ${kind === "footprint" ? "footprints" : "design blocks"}?`;
 }

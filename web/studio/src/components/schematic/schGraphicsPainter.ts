@@ -150,7 +150,7 @@ function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: st
  * Paint every graphic, in drawing order. `selection`: ids drawn in the selection colour. Fills go first (a filled
  * shape's body, then its outline), the way `SCH_PAINTER::draw( SCH_SHAPE )` layers the background and the stroke.
  */
-export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform, graphics: readonly SchGraphic[], selection: ReadonlySet<string>): void {
+export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform, graphics: readonly SchGraphic[], selection: ReadonlySet<string>, textAttrs?: Readonly<Record<string, { color?: SchColor }>>): void {
   const hair = 1 / view.scale;
   for (const g of graphics) {
     // An image is painted under everything else (`paintImages`).
@@ -201,7 +201,9 @@ export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform
     tracePath(ctx, g);
     ctx.stroke();
     ctx.setLineDash([]);
-    if (g.shape.type === "text_box") drawTextBoxText(ctx, g, selected ? color : layerColor("LAYER_NOTES"));
+    // `SCH_PAINTER::getRenderColor` for an `SCH_TEXTBOX`: its own text colour (Text Box Properties' Color) wins over `LAYER_NOTES`
+    const own = textAttrs?.[g.id]?.color;
+    if (g.shape.type === "text_box") drawTextBoxText(ctx, g, selected ? color : own && own.a > 0 ? rgba(own) : layerColor("LAYER_NOTES"));
     ctx.restore();
   }
 }

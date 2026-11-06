@@ -6,7 +6,12 @@
 //   * the scroll-wheel gestures: which modifier key (none / Ctrl / Shift / Alt) zooms, pans left/right and pans
 //     up/down, one action per column, and whether zoom and left/right pan run reversed;
 //   * "Automatically pan while moving object" and its speed (`input.auto_pan`, `input.auto_pan_acceleration`);
-//   * what dragging with the middle and the right button does -- pan, zoom or nothing (`input.drag_middle`, `input.drag_right`), which the schematic canvas honours;
+//   * what dragging with the left button does in the selection tools -- draw the selection area, drag selected objects, or drag any object (`input.mouse_left`,
+//     `leftDragOutcome`), and with the middle and the right button -- pan, zoom or nothing (`input.drag_middle`, `input.drag_right`): every canvas honours them;
+//   * "Pan on mouse movement with key:" (`input.motion_pan_modifier`, `motionPan`), every canvas;
+//   * "Pan left/right with horizontal movement" (`input.horizontal_pan`): kept and set by the two Reset buttons as KiCad does, and, as in KiCad 8303b2ad, read by
+//     nothing -- `WX_VIEW_CONTROLS::onWheel` always pans on a horizontal wheel ("The m_horizontalPan setting only controls whether a keyboard modifier can convert
+//     vertical scroll into horizontal pan", and no code does);
 //   * "Use zoom acceleration" and the zoom speed with its "Automatic" switch (`input.zoom_acceleration`,
 //     `input.zoom_speed`, `input.zoom_speed_auto` -> `WX_VIEW_CONTROLS::LoadSettings`);
 //   * the board editor's magnetic points (`PCBNEW_SETTINGS::m_MagneticItems`, "Snap to Pads", "Snap to Tracks and Vias", "Snap to graphics": the board editor's
@@ -15,11 +20,9 @@
 //     `editing.flip_left_right`), which R / Shift+R and F (and the menu's Rotate and Flip) read (kicad-port/pcbTransform.ts);
 //   * the schematic editor's "Allow unconstrained pin swaps" (`EESCHEMA_SETTINGS::m_Input.allow_unconstrained_pin_swaps`), without which Swap Pins is not offered;
 //   * the symbol editor's Repeated Items, "Pitch of repeated pins" and "Label increment" (`SYMBOL_EDITOR_SETTINGS::m_Repeat`), which Repeat Pin (Insert) reads.
-// Not offered: "Center and warp cursor on zoom" (it moves the real pointer, which a page may not and this studio
-// never does), the left button's drag (box select, drag selected, drag any: the canvases' own handling is not configurable), the middle and right drags
-// on the board and the library canvases (they pan with both buttons), "Pan on mouse movement with key", and "Pan left/right with horizontal movement" (stored
-// by KiCad but never read by the wheel code).
-import { DEFAULT_VIEW_CONTROL_SETTINGS, type DragAction, type ScrollModifier, type ViewControlSettings } from "./viewControls";
+// Not offered: "Center and warp cursor on zoom" (`input.center_on_zoom`): it warps the real pointer to the middle of the canvas (`CenterOnCursor`), which a web page
+// cannot do -- the browser gives a page no way to move the pointer -- so the wheel always zooms about the pointer, KiCad's other branch.
+import { DEFAULT_LEFT_DRAG, DEFAULT_VIEW_CONTROL_SETTINGS, type DragAction, type LeftDragAction, type MotionPanModifier, type ScrollModifier, type ViewControlSettings } from "./viewControls";
 import type { MagneticOption, PcbMagnetic } from "./snapAnchors";
 import type { FlipDirection } from "./pcbTransform";
 import { AcceleratingZoomController, CONSTANT_SCALE, ConstantZoomController, pickDefaultZoomController, type ZoomController } from "./zoomController";
@@ -31,7 +34,7 @@ export function defaultZoomSpeed(isMacPlatform: boolean): number {
   return isMacPlatform ? 5 : 1;
 }
 
-export type { DragAction, ScrollModifier, FlipDirection };
+export type { DragAction, LeftDragAction, MotionPanModifier, ScrollModifier, FlipDirection };
 export type ScrollRow = "zoom" | "panH" | "panV";
 
 export interface Preferences {
@@ -49,6 +52,12 @@ export interface Preferences {
   /** `input.drag_middle` / `input.drag_right` (`MOUSE_DRAG_ACTION`): what dragging with that button does. Default pan for both. */
   dragMiddle: DragAction;
   dragRight: DragAction;
+  /** `input.mouse_left` ("Left button drag:"): what a left drag does in the selection tools (`leftDragOutcome`). The studio's default is `DEFAULT_LEFT_DRAG`. */
+  dragLeft: LeftDragAction;
+  /** `input.motion_pan_modifier` ("Pan on mouse movement with key:"), default none. */
+  motionPanModifier: MotionPanModifier;
+  /** `input.horizontal_pan` ("Pan left/right with horizontal movement"), default off; on with the trackpad defaults. Read by nothing, as in KiCad. */
+  horizontalPan: boolean;
   /** `input.zoom_acceleration`, default off (the platform controller ignores it on macOS, as in KiCad). */
   zoomAcceleration: boolean;
   /** `input.zoom_speed_auto`, default on; `input.zoom_speed` 1..10, default 5, used when it is off. */
@@ -118,6 +127,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
   autoPanAcceleration: 5,
   dragMiddle: "pan",
   dragRight: "pan",
+  dragLeft: DEFAULT_LEFT_DRAG,
+  motionPanModifier: "none",
+  horizontalPan: false,
   zoomAcceleration: false,
   zoomSpeedAuto: true,
   // `#ifdef __WXMAC__ default_zoom_speed = 5; #else default_zoom_speed = 1;` (common_settings.cpp, `input.zoom_speed`): a Zoom drag uses it whatever
@@ -140,12 +152,12 @@ export const DEFAULT_PREFERENCES: Preferences = {
   fpTextGraphics: null,
 };
 
-type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH">;
+type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH" | "horizontalPan">;
 
-/** `onMouseDefaults`: the wheel zooms, Ctrl pans left/right, Shift pans up/down, nothing reversed. */
-export const MOUSE_SCROLL_DEFAULTS: ScrollSet = { scrollModifierZoom: "none", scrollModifierPanH: "ctrl", scrollModifierPanV: "shift", reverseScrollZoom: false, reverseScrollPanH: false };
-/** `onTrackpadDefaults`: Ctrl+scroll (pinch) zooms, Shift pans left/right, the plain two-finger scroll pans up/down. */
-export const TRACKPAD_SCROLL_DEFAULTS: ScrollSet = { scrollModifierZoom: "ctrl", scrollModifierPanH: "shift", scrollModifierPanV: "none", reverseScrollZoom: false, reverseScrollPanH: false };
+/** `onMouseDefaults`: the wheel zooms, Ctrl pans left/right, Shift pans up/down, nothing reversed, "Pan left/right with horizontal movement" off. */
+export const MOUSE_SCROLL_DEFAULTS: ScrollSet = { scrollModifierZoom: "none", scrollModifierPanH: "ctrl", scrollModifierPanV: "shift", reverseScrollZoom: false, reverseScrollPanH: false, horizontalPan: false };
+/** `onTrackpadDefaults`: Ctrl+scroll zooms, Shift pans left/right, the plain two-finger scroll pans up/down, "Pan left/right with horizontal movement" on. */
+export const TRACKPAD_SCROLL_DEFAULTS: ScrollSet = { scrollModifierZoom: "ctrl", scrollModifierPanH: "shift", scrollModifierPanV: "none", reverseScrollZoom: false, reverseScrollPanH: false, horizontalPan: true };
 
 const KEYS: Record<ScrollRow, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV"> = { zoom: "scrollModifierZoom", panH: "scrollModifierPanH", panV: "scrollModifierPanV" };
 const ROWS: readonly ScrollRow[] = ["zoom", "panH", "panV"];
@@ -182,6 +194,8 @@ export function toViewControlSettings(p: Preferences): ViewControlSettings {
     autoPanAcceleration: p.autoPanAcceleration,
     dragMiddle: p.dragMiddle,
     dragRight: p.dragRight,
+    dragLeft: p.dragLeft,
+    motionPanModifier: p.motionPanModifier,
     scrollModifierZoom: p.scrollModifierZoom,
     scrollModifierPanH: p.scrollModifierPanH,
     reverseScrollZoom: p.reverseScrollZoom,
@@ -206,6 +220,8 @@ export const PREFERENCES_STORAGE_KEY = "eda-studio.preferences.v1";
 const MODIFIERS: readonly ScrollModifier[] = ["none", "ctrl", "shift", "alt"];
 const isModifier = (v: unknown): v is ScrollModifier => typeof v === "string" && (MODIFIERS as readonly string[]).includes(v);
 const dragAction = (v: unknown, fallback: DragAction): DragAction => (v === "pan" || v === "zoom" || v === "none" ? v : fallback);
+const leftDrag = (v: unknown, fallback: LeftDragAction): LeftDragAction => (v === "select" || v === "drag_selected" || v === "drag_any" ? v : fallback);
+const motionPanKey = (v: unknown, fallback: MotionPanModifier): MotionPanModifier => (v === "none" || v === "alt" || v === "ctrl" || v === "shift" ? v : fallback);
 const clampInt = (v: unknown, lo: number, hi: number, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : fallback);
 const bool = (v: unknown, fallback: boolean) => (typeof v === "boolean" ? v : fallback);
 const magnetic = (v: unknown, fallback: MagneticOption): MagneticOption => (v === "never" || v === "track-tool" || v === "always" ? v : fallback);
@@ -229,6 +245,9 @@ export function sanitizePreferences(raw: unknown): Preferences {
     autoPanAcceleration: clampInt(o.autoPanAcceleration, 1, 10, d.autoPanAcceleration),
     dragMiddle: dragAction(o.dragMiddle, d.dragMiddle),
     dragRight: dragAction(o.dragRight, d.dragRight),
+    dragLeft: leftDrag(o.dragLeft, d.dragLeft),
+    motionPanModifier: motionPanKey(o.motionPanModifier, d.motionPanModifier),
+    horizontalPan: bool(o.horizontalPan, d.horizontalPan),
     zoomAcceleration: bool(o.zoomAcceleration, d.zoomAcceleration),
     zoomSpeedAuto: bool(o.zoomSpeedAuto, d.zoomSpeedAuto),
     zoomSpeed: clampInt(o.zoomSpeed, 1, 10, d.zoomSpeed),

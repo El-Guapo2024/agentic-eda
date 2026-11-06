@@ -3,6 +3,15 @@ import assert from "node:assert/strict";
 import {
   appendRow,
   baseName,
+  canEditOptions,
+  formatOptions,
+  libraryOptionChoices,
+  MIGRATE_NONE,
+  migratableRows,
+  migrateOverwriteQuestion,
+  migrateQuestion,
+  optionsFromGrid,
+  parseOptions,
   deleteRows,
   emptyRow,
   fixNickname,
@@ -58,6 +67,8 @@ test("setting a path gives the row the format it says, a library table file is a
   assert.equal(guessType("symbol", "${KIPRJMOD}/libs/Mine.kicad_sym"), "KiCad");
   assert.equal(guessType("footprint", "/x/Mine.pretty"), "KiCad");
   assert.equal(guessType("symbol", "/x/Mine.pretty"), null);
+  assert.equal(guessType("symbol", "${KICAD10_SYMBOL_DIR}/Device.kicad_symdir"), "KiCad", "KiCad 10's folder library");
+  assert.equal(guessType("footprint", "/x/Device.kicad_symdir"), null);
   assert.equal(guessType("footprint", "/x/fp-lib-table"), "Table");
   assert.equal(guessType("symbol", "/x/sym-lib-table"), "Table");
   const checked: TableRow = { ...row("A", "/old"), status: "error", error: "gone", path: "/old" };
@@ -221,4 +232,60 @@ test("the design block table has no Show column: OK keeps no hidden flag, and th
     { name: "KICAD10_DESIGN_BLOCK_DIR", value: "/K/blocks" },
     { name: "KIPRJMOD", value: "/work/board" },
   ]);
+});
+
+// ------------------------------------------------------------------------------------------------ Edit Options, Reset, Migrate (UI-LEFT L2)
+
+test("ParseOptions: name=value pairs split on |, \\| kept in a value, a bare name, sorted, the later of two kept", () => {
+  assert.deepEqual(parseOptions(""), []);
+  assert.deepEqual(parseOptions("b=2| a=1|flag|c=x\\|y|a=3"), [
+    ["a", "3"],
+    ["b", "2"],
+    ["c", "x|y"],
+    ["flag", ""],
+  ]);
+  assert.deepEqual(parseOptions("k=v=w"), [["k", "v=w"]], "the first = separates");
+});
+
+test("FormatOptions: sorted pairs, a name alone when its value is empty, | escaped; ParseOptions reads it back", () => {
+  const text = formatOptions([
+    ["read_filter_regex", "R_*|C_*"],
+    ["debug_level", ""],
+  ]);
+  assert.equal(text, "debug_level|read_filter_regex=R_*\\|C_*");
+  assert.deepEqual(parseOptions(text), [
+    ["debug_level", ""],
+    ["read_filter_regex", "R_*|C_*"],
+  ]);
+  assert.equal(optionsFromGrid([{ name: " csa ", value: " a.csa " }, { name: "", value: "dropped" }, { name: "fplib", value: "" }]), "csa=a.csa|fplib");
+});
+
+test("the option choices are the plugin's: none for KiCad's symbols, csa and fplib for CADSTAR, PCB_IO's six for footprints", () => {
+  assert.deepEqual(libraryOptionChoices("symbol", "KiCad"), []);
+  assert.deepEqual(
+    libraryOptionChoices("symbol", "CADSTAR Schematic Archive").map((c) => c.name),
+    ["csa", "fplib"]
+  );
+  assert.deepEqual(
+    libraryOptionChoices("footprint", "KiCad").map((c) => c.name),
+    ["debug_level", "enable_transaction_logging", "password", "python_footprint_plugin", "read_filter_regex", "username"]
+  );
+  const rows = [{ ...emptyRow(), type: "KiCad" }, { ...emptyRow(), type: "Table" }];
+  assert.equal(canEditOptions(rows, [0]), true);
+  assert.equal(canEditOptions(rows, [1]), false, "not for a chained table");
+  assert.equal(canEditOptions(rows, [0, 1]), false, "one row only");
+});
+
+test("Migrate Libraries: the selected rows of another format (symbols: not Database), KiCad's questions", () => {
+  const row = (nickname: string, type: string) => ({ ...emptyRow(), nickname, type, uri: `/x/${nickname}` });
+  const rows = [row("A", "KiCad"), row("B", "Legacy"), row("C", "Database"), row("D", "EAGLE")];
+  assert.deepEqual(migratableRows("symbol", rows, [0, 1, 2, 3], -1), [1, 3]);
+  assert.deepEqual(migratableRows("footprint", rows, [2], -1), [2], "a footprint panel skips only KiCad rows");
+  assert.deepEqual(migratableRows("symbol", rows, [], 1), [1], "the cursor's row when nothing is selected");
+  assert.deepEqual(migratableRows("symbol", rows, [0], -1), []);
+  assert.equal(MIGRATE_NONE, "Select one or more rows containing libraries to save as current KiCad format.");
+  assert.equal(migrateQuestion("symbol", ["B"]), "Save 'B' as current KiCad format (*.kicad_sym) and replace legacy entry in table?");
+  assert.equal(migrateQuestion("footprint", ["B", "D"]), "Save 2 libraries as current KiCad format and replace entries in table?");
+  assert.equal(migrateOverwriteQuestion("symbol", "/x/B.kicad_sym"), "File '/x/B.kicad_sym' already exists. Do you want overwrite this file?");
+  assert.equal(migrateOverwriteQuestion("footprint", "/x/D.pretty"), "Folder '/x/D.pretty' already exists. Do you want overwrite any existing footprints?");
 });

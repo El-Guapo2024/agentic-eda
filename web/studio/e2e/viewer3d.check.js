@@ -29,7 +29,11 @@
   await waitFor("every model to settle", () => view().allModelsMs !== null);
   const v = view();
   check("the viewer draws the live scene", v.source === "live", v.source);
-  check("every model that was asked for is in", v.models.requested > 0 && v.models.ready === v.models.requested, v.models);
+  // A model whose file this machine's KiCad library does not have is the machine's, not the viewer's: the server answers "missing" for it (404, "no 3D model file for
+  // ..."). Those are skipped, with their names and the server's reason printed; every other model must be in, and none may have failed.
+  const missing = v.detail.filter((d) => d.status === "missing");
+  if (missing.length > 0) results.push({ name: `skipped ${missing.length} model(s) this machine's KiCad library lacks`, ok: true, notes: missing.map((d) => `${d.name}: ${d.error ?? "missing"}`) });
+  check("every model that was asked for is in (but those the machine lacks)", v.models.requested > 0 && v.models.failed === 0 && v.models.ready > 0 && v.models.ready === v.models.requested - missing.length, v.models);
   check("every part with models is drawn as its models", v.parts.total > 0 && v.parts.asModels + v.parts.asBoxes === v.parts.total && v.parts.asModels > 0, v.parts);
   check("the first real model came in seconds, not minutes", v.firstModelMs !== null && v.firstModelMs < 30000, v.firstModelMs);
   const state0 = __eda.state();
@@ -42,7 +46,7 @@
   check("the layer tree lists KiCad's rows", ["board", "plated_barrels", "copper_top", "copper_bottom", "adhesive", "solder_paste", "silkscreen_top", "silkscreen_bottom", "soldermask_top", "soldermask_bottom", "th_models", "smd_models", "virtual_models", "bounding_boxes", "zones"].every((id) => rows.includes(id)), rows);
   // What each row must take out of the scene when it is turned off, by the names scene.ts gives its pieces (kicad-port/appearance3d.ts has the rows).
   const gates = {
-    board: ["board-slab"], plated_barrels: ["via"], solder_paste: ["solder-paste"], soldermask_top: ["solder-mask-top"], soldermask_bottom: ["solder-mask-bottom"],
+    board: ["board-slab"], plated_barrels: ["plated-barrel"], solder_paste: ["solder-paste"], soldermask_top: ["solder-mask-top"], soldermask_bottom: ["solder-mask-bottom"],
     zones: ["zone-fill"], references: ["part-ref"], adhesive: ["adhesive-shape-line", "adhesive-shape-fill", "adhesive-text"],
     user_drawings: ["user_drawings-shape-line", "user_drawings-shape-fill", "user_drawings-text"], user_comments: ["user_comments-shape-line", "user_comments-shape-fill", "user_comments-text"],
     user_eco1: ["user_eco1-shape-line", "user_eco1-shape-fill", "user_eco1-text"], user_eco2: ["user_eco2-shape-line", "user_eco2-shape-fill", "user_eco2-text"],
