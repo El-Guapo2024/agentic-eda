@@ -973,10 +973,16 @@ export function Canvas() {
         if (r.draw) requestDimPreview(r.draw.dim, null);
         else setDimPreview(null);
         if (r.commit) {
-          void api.addDimension(r.commit).then((id) => {
-            if (!id) return;
-            dispatch({ type: "SET_SELECTION", refs: [id] });
-            if (kind === "leader") dispatch({ type: "SET_DIMENSION_EDIT_ID", id });
+          const before = new Set((board.drawings?.dimensions ?? []).map((d) => d.id));
+          void api.cmd({ op: "add_dimension", dimension: r.commit }).then((ok) => {
+            if (!ok) return;
+            // (the board as the backend has it now: the store's catches up on the next render)
+            void fetchState().then((now) => {
+              const made = (now.drawings?.dimensions ?? []).find((d) => !before.has(d.id));
+              if (!made) return;
+              dispatch({ type: "SET_SELECTION", refs: [made.id] });
+              if (kind === "leader") dispatch({ type: "SET_DIMENSION_EDIT_ID", id: made.id });
+            });
           });
         }
         return;
