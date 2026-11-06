@@ -53,12 +53,29 @@ export const HI_CONTRAST_FACTOR = 1 - 0.8;
  */
 export const EDGE_CUTS_DIM_FACTOR = Math.max(HI_CONTRAST_FACTOR, 0.3);
 
+/** The factor in use: `1.0f - hicontrast_dimming_factor` of the person's Preferences > Common ("High-contrast mode dimming factor:"), read by the painters. */
+let hiContrastFactorNow = HI_CONTRAST_FACTOR;
+
+/** `PCB_RENDER_SETTINGS::LoadColors`' `m_hiContrastFactor = 1.0f - Pgm().GetCommonSettings()->m_Appearance.hicontrast_dimming_factor`. */
+export function setHiContrastFactor(factor: number): void {
+  hiContrastFactorNow = Number.isFinite(factor) ? Math.min(1, Math.max(0, factor)) : HI_CONTRAST_FACTOR;
+}
+
+export function hiContrastFactor(): number {
+  return hiContrastFactorNow;
+}
+
+/** `std::max( m_hiContrastFactor, 0.3f )` of the factor in use. */
+export function edgeCutsDimFactor(): number {
+  return Math.max(hiContrastFactorNow, 0.3);
+}
+
 /**
  * High Contrast Mode's Dim of an item off the active layer (`HIGH_CONTRAST_MODE::DIMMED`): its colour mixed into the board's background, `factor` of the
  * colour kept, the alpha kept -- `color.Mix( backgroundColor, m_hiContrastFactor )`. An inactive item covers what lies under it as an item of that colour does;
  * it is not see-through. A colour that cannot be read is returned as it is.
  */
-export function hiContrastDim(css: string, background: string, factor = HI_CONTRAST_FACTOR): string {
+export function hiContrastDim(css: string, background: string, factor = hiContrastFactorNow): string {
   const c = parseColor(css);
   const bg = parseColor(background);
   if (!c || !bg) return css;

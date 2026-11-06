@@ -53,11 +53,15 @@ import { heldCursor } from "../../kicad-port/heldCursor";
 import { FootprintSnap, type FootprintPointOpts, type FootprintSnapMods } from "./footprintSnap";
 import { paintSnapOverlay } from "../canvas/snapOverlayPainter";
 import { layerColor } from "../canvas/layers";
+import { fpPointAt, fpPointDrag, fpPointEditTarget } from "../../kicad-port/fpPointEdit";
+import { shapeEditPoints, type EditPoint } from "../../kicad-port/pcbPointEdit";
+import type { Shape } from "../../api/types";
 import { fpEditTarget, fpFields, fpHitTest, fpItemKind, fpSelectionTarget, fpCanMirror, type FpEditTarget } from "../../kicad-port/fpItems";
 import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
 import { leaderModeOf, zoneClick, zoneFinish, zoneLeader } from "../../kicad-port/pcbDrawZone";
 import { isGroup } from "../../kicad-port/groupTree";
 import { fpItemToolClick, fpItemToolFinish, fpItemToolMotion, fpItemToolSnap, paintFpItemToolPreview } from "./fpItemTools";
+import { paintingIn, useColorThemeStamp } from "../../state/colorThemeStore";
 import "../../styles/canvas.css";
 
 const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier">> = {
@@ -129,7 +133,9 @@ type DragState =
   | { kind: "move"; refs: string[]; moveKind: string; startWorld: [number, number]; snapOrigin: [number, number] }
   /** `PCB_SELECTION_TOOL::SelectRectArea`: the selection rectangle from where the press was; `click` is the item the press was on, selected as a click when the release comes
    * without a drag ("Left button drag:" sent the drag to the rectangle). */
-  | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; modifiers: ClickModifiers; click: string | null };
+  | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; modifiers: ClickModifiers; click: string | null }
+  /** `PCB_POINT_EDITOR` on the one selected graphic (kicad-port/fpPointEdit.ts): the edit point pressed, the shape as it was at the press (UI-LEFT-2 FF7). */
+  | { kind: "point"; id: string; base: Shape; point: EditPoint };
 
 /** The shape a point-counted tool commits: the layer class's width and, for a polygon, KiCad's fill rule (kicad-port/fpDrawDefaults.ts). */
 function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier", pts: [number, number][], layer: string): CmdShape | null {
@@ -191,6 +197,8 @@ export function FootprintCanvas() {
   const userMovedRef = useRef(false);
   const [marquee, setMarquee] = useState<Marquee | null>(null);
   const studioPrefs = useStudioState().prefs;
+  /** The graphic as the point editor's drag has it so far (drawn in place of the graphic until the drop commits it). */
+  const [pointPreview, setPointPreview] = useState<CmdShape | null>(null);
   // The middle and right drags, the pan on movement with a key and the auto-pan (`WX_VIEW_CONTROLS`), as the board and the schematic have them.
   const viewCtl = useLibraryViewControls({
     containerRef,
@@ -308,8 +316,9 @@ export function FootprintCanvas() {
   const checker = useFootprintChecker();
   const checkMarkers = checker.name === state.name && checker.markers.length > 0 ? checker.markers.map((m, i) => ({ at: m.at as [number, number], severity: m.severity, selected: checker.selected === i })) : undefined;
 
-  // Render loop.
-  useEffect(() => {
+  // Render loop, in the Footprint Editor's own colour theme (Preferences > Footprint Editor > Colors), redrawn when it changes.
+  const themeStamp = useColorThemeStamp();
+  useEffect(() => paintingIn("footprint", () => {
     const canvas = canvasRef.current;
     if (!canvas || containerSize.width === 0) return;
     const dpr = window.devicePixelRatio || 1;
@@ -335,6 +344,7 @@ export function FootprintCanvas() {
     if (shown && carriedAt && state.activeTool === "pad") shown = { ...shown, pads: [...shown.pads, { ...carriedPadAt(carriedAt[0], carriedAt[1]), id: undefined }] };
     if (shown && carriedAt && state.carriedText) shown = { ...shown, texts: [...shown.texts, { ...state.carriedText, id: undefined, at: { x: carriedAt[0], y: carriedAt[1] } }] };
     // The fields (`PCB_FIELD`s) and the dimensions, zones, text boxes ... of the footprint (kicad-port/fpItems.ts), drawn by the board's painters.
+    if (shown && pointPreview) shown = { ...shown, graphics: shown.graphics.map((g) => (g.id === pointPreview.id ? pointPreview : g)) };
     const painted = shown && fp ? { ...shown, fieldsToDraw: fpFields(fp), display: fp.display } : shown;
     // the rubber band follows the cursor the grid helper gave (a snapped one), not the pointer -- and the line mode's constraint (`drawShape`, `DrawZone`)
     const rubber = placing && snap.lastPoint() ? { x: snap.lastPoint()![0], y: snap.lastPoint()![1] } : state.cursorNm;
@@ -360,6 +370,9 @@ export function FootprintCanvas() {
       layerVisible: state.layerVisible,
       layerOpacity: state.layerOpacity,
     });
+    // the point editor's edit points of the one selected graphic (`EDIT_POINTS::ViewDraw`), as the board draws a shape's handles
+    const editTarget = shown && state.activeTool === "select" ? fpPointEditTarget(shown.graphics, state.selection) : null;
+    if (editTarget) paintFpEditPoints(ctx, state.view.scale || 1, editTarget);
     // What the grid helper shows: the snap marker and its icon, the snap lines, the construction geometry.
     // what the dimension, table and reference image tools hold (components/footprint/fpItemTools.ts)
     paintFpItemToolPreview(ctx, state.view, state, rubber ? [rubber.x, rubber.y] : null);
@@ -372,7 +385,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden]);
+  }), [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview, themeStamp]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -583,6 +596,14 @@ export function FootprintCanvas() {
     }
 
     // Select tool.
+    // `PCB_POINT_EDITOR`: a press on an edit point of the one selected graphic drags that point (`EDIT_POINTS::FindPoint`; the drag starts at `IsDrag( BUT_LEFT )`).
+    const pointTarget = fp && state.activeTool === "select" ? fpPointEditTarget(fp.graphics, state.selection) : null;
+    const pressedPoint = pointTarget ? fpPointAt(pointTarget, [wx, wy], Math.max(100_000, 10 / (state.view.scale || 1))) : null;
+    if (pointTarget && pressedPoint) {
+      dragRef.current = { kind: "point", id: pointTarget.id, base: pointTarget, point: pressedPoint };
+      setPointPreview(null);
+      return;
+    }
     const hit = hitTest(wx, wy);
     const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
     const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
@@ -646,6 +667,11 @@ export function FootprintCanvas() {
       const x0 = drag.startScreen[0] - rect.left;
       const x1 = e.clientX - rect.left;
       setMarquee({ x0, y0: drag.startScreen[1] - rect.top, x1, y1: e.clientY - rect.top, crossing: isCrossingSelection(x0, x1) });
+    } else if (drag.kind === "point") {
+      if (!motion?.dragging) return;
+      // the point on the graphics grid or an anchor of another item (`BestSnapAnchor( cursor, layers, GRID_GRAPHICS, item )`), moved in the Footprint Editor's arc mode
+      const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set([drag.base.layer]), category: "graphics", skip: new Set([drag.id]) });
+      setPointPreview(fpPointDrag(drag.base, drag.point, [p[0], p[1]], studioPrefs.fpArcEditMode));
     } else if (drag.kind === "move") {
       // Nothing is picked up until the press has become a drag (tool_dispatcher.cpp: 8 px, or on macOS a motion after 300 ms held).
       if (!motion?.dragging) return;
@@ -677,6 +703,14 @@ export function FootprintCanvas() {
       const hits = fp ? [...new Set(rectSelectionHits(footprintItemBoxes(fp), drag.startWorld, [wx, wy]).map((id) => fpSelectionTarget(fp, id)))] : [];
       if (hits.length > 0 || hasModifier(drag.modifiers)) dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits, drag.modifiers) });
       else dispatch({ type: "CLEAR_SELECTION" });
+      return;
+    }
+    if (drag.kind === "point") {
+      // the drop: `commit.Modify( item )` -- `fp_item set_graphic`, one undo step, the shape's looks kept by id
+      const next = pointPreview;
+      setPointPreview(null);
+      const was = fp?.graphics.find((g) => g.id === drag.id);
+      if (next && was && JSON.stringify(next) !== JSON.stringify(was)) void api.setGraphic(drag.id, next);
       return;
     }
     if (drag.kind === "move" && state.movePreview) {
@@ -841,4 +875,29 @@ export function FootprintCanvas() {
       {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} entries={contextMenu.entries} onClose={() => setContextMenu(null)} />}
     </div>
   );
+}
+
+/** `EDIT_POINTS::ViewDraw` of a graphic's edit points, as the board draws them (`drawShapeHandles`): a square at a corner, a diamond at a middle; in world units. */
+function paintFpEditPoints(ctx: CanvasRenderingContext2D, scale: number, shape: Shape): void {
+  const r = 4 / scale;
+  ctx.save();
+  ctx.fillStyle = layerColor("selection");
+  ctx.strokeStyle = "rgba(0,0,0,0.6)";
+  ctx.lineWidth = 1 / scale;
+  for (const p of shapeEditPoints(shape)) {
+    const [x, y] = p.pos;
+    ctx.beginPath();
+    if (p.kind === "corner") ctx.rect(x - r, y - r, r * 2, r * 2);
+    else {
+      const d = r * 0.8;
+      ctx.moveTo(x, y - d);
+      ctx.lineTo(x + d, y);
+      ctx.lineTo(x, y + d);
+      ctx.lineTo(x - d, y);
+      ctx.closePath();
+    }
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
 }

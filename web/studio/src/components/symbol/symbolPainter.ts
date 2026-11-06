@@ -296,9 +296,11 @@ export function paintSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, 
 function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, symbol: PaintedSymbol, opts: SymPaintOptions) {
   // what `window.__edaText.sym` reports is what this paint draws
   beginTextRecord("sym");
-  if (opts.gridVisible) {
+  // the Symbol Editor's axes are always on (`SYMBOL_EDIT_FRAME`: `m_axesEnabled = true`), in its theme's `LAYER_SCHEMATIC_GRID_AXES`
+  // (`SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME` and `SwitchCanvas`: `SetAxesColor( m_colorSettings->GetColor( LAYER_SCHEMATIC_GRID_AXES ) )`); the grid itself only when shown
+  {
     const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
-    paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx }, layerColor("grid"), undefined, "symbol");
+    paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx, visible: opts.gridVisible, axes: d.axes ?? true }, layerColor("grid"), undefined, "symbol", layerColor("LAYER_SCHEMATIC_GRID_AXES"));
   }
   if (!symbol) {
     drawOrigin(ctx, view);

@@ -28,6 +28,8 @@ import type { FlipDirection } from "./pcbTransform";
 import { AcceleratingZoomController, CONSTANT_SCALE, ConstantZoomController, pickDefaultZoomController, type ZoomController } from "./zoomController";
 import { isMac } from "../platform";
 import type { TextGraphicsDefaults } from "../api/types";
+import { DEFAULT_ARC_EDIT_MODE, type ArcEditMode } from "./pcbPointEdit";
+import { DEFAULT_USER_LAYER_COUNT, sanitizeFpTextItems, sanitizeUserLayerNames, type FpTextItem } from "./fpFieldDefaults";
 
 /** `COMMON_SETTINGS`' default `input.zoom_speed`: 5 on macOS, 1 elsewhere. */
 export function defaultZoomSpeed(isMacPlatform: boolean): number {
@@ -99,6 +101,40 @@ export interface Preferences {
   /** `FOOTPRINT_EDITOR_SETTINGS::m_DesignSettings` (Preferences > Footprint Editor > Graphics Defaults: the line width and the text of each layer class); `null` is KiCad's
    *  factory table (`FACTORY_TEXT_GRAPHICS`). */
   fpTextGraphics: TextGraphicsDefaults | null;
+  /** `FOOTPRINT_EDITOR_SETTINGS::m_DesignSettings.m_DefaultFPTextItems` (Preferences > Footprint Editor > Footprint Defaults, `design_settings.default_footprint_text_items`):
+   *  the Reference's and Value's text, visibility and layer and the other texts a new footprint gets (kicad-port/fpFieldDefaults.ts); `null` is KiCad's own list. */
+  fpDefaultTextItems: FpTextItem[] | null;
+  /** `m_DesignSettings.GetUserDefinedLayerCount()` ("User layers:" of Preferences > Footprint Editor > User Layer Names, `design_settings.user_layer_count`), 0 .. 9.
+   *  Default 4. */
+  fpUserLayerCount: number;
+  /** `m_DesignSettings.m_UserLayerNames` (`design_settings.default_footprint_layer_names`): a user layer's name in the Footprint Editor, by its canonical name. */
+  fpUserLayerNames: Record<string, string>;
+  /** `PCBNEW_SETTINGS::m_ArcEditMode` ("Arc editing mode:", Preferences > PCB Editor > Editing Options; `cycleArcEditMode` sets it too): how the point editor drags an arc. */
+  pcbArcEditMode: ArcEditMode;
+  /** `EESCHEMA_SETTINGS::m_Drawing.arc_edit_mode` ("Arc editing mode:", Preferences > Schematic Editor > Editing Options). */
+  schArcEditMode: ArcEditMode;
+  /** `PCBNEW_SETTINGS::m_ESCClearsNetHighlight` ("<ESC> clears net highlighting", `editing.esc_clears_net_highlight`): the selection tool's last Escape tier. Default on. */
+  escClearsNetHighlight: boolean;
+  /** `PCBNEW_SETTINGS::m_ShowCourtyardCollisions` ("Show courtyard collisions when moving/dragging", `editing.show_courtyard_collisions`). Default on. */
+  showCourtyardCollisions: boolean;
+  /** `PCB_DISPLAY_OPTIONS::m_RatsnestThickness` ("Ratsnest line thickness:", `pcb_display.ratsnest_thickness`), pixels, 0.5 .. 10 by 0.5. Default 0.5. */
+  ratsnestThicknessPx: number;
+  /** `EESCHEMA_SETTINGS::m_Input.esc_clears_net_highlight` ("<ESC> clears net highlighting" of the Schematic Editor). Default on. */
+  schEscClearsNetHighlight: boolean;
+  /** `EESCHEMA_SETTINGS::m_Drawing.default_repeat_offset_x` / `_y` ("Horizontal pitch:" / "Vertical pitch:" of Repeated Items), mils: what Repeat Last Item moves a copy by.
+   *  Defaults 0 and 100. */
+  schRepeatOffsetXMils: number;
+  schRepeatOffsetYMils: number;
+  /** `EESCHEMA_SETTINGS::m_Drawing.repeat_label_increment` ("Label increment:"): what Repeat Last Item adds to a label's number. Default 1. */
+  schRepeatLabelIncrement: number;
+  /** `EESCHEMA_SETTINGS::m_Appearance.footprint_preview` ("Show footprint previews in Symbol Chooser"). Default on. */
+  schFootprintPreview: boolean;
+}
+
+/** The ratsnest thickness as `m_ratsnestThickness` (a `wxSpinCtrlDouble` of 0.5 .. 10 by 0.5) can hold it; anything else is the default 0.5. */
+export function sanitizeRatsnestThickness(v: unknown, fallback = 0.5): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  return Math.min(10, Math.max(0.5, Math.round(v * 2) / 2));
 }
 
 /** `PANEL_SYM_EDITING_OPTIONS::TransferDataFromWindow`: "Force pin_step to a grid multiple" of 25 mils (`MIN_GRID`), `KiROUND( pin_step / MIN_GRID ) * MIN_GRID`. */
@@ -154,6 +190,19 @@ export const DEFAULT_PREFERENCES: Preferences = {
   fpInvertXAxis: false,
   fpInvertYAxis: false,
   fpTextGraphics: null,
+  fpDefaultTextItems: null,
+  fpUserLayerCount: DEFAULT_USER_LAYER_COUNT,
+  fpUserLayerNames: {},
+  pcbArcEditMode: DEFAULT_ARC_EDIT_MODE,
+  schArcEditMode: DEFAULT_ARC_EDIT_MODE,
+  escClearsNetHighlight: true,
+  showCourtyardCollisions: true,
+  ratsnestThicknessPx: 0.5,
+  schEscClearsNetHighlight: true,
+  schRepeatOffsetXMils: 0,
+  schRepeatOffsetYMils: 100,
+  schRepeatLabelIncrement: 1,
+  schFootprintPreview: true,
 };
 
 type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH" | "horizontalPan">;
@@ -228,6 +277,9 @@ const leftDrag = (v: unknown, fallback: LeftDragAction): LeftDragAction => (v ==
 const motionPanKey = (v: unknown, fallback: MotionPanModifier): MotionPanModifier => (v === "none" || v === "alt" || v === "ctrl" || v === "shift" ? v : fallback);
 const clampInt = (v: unknown, lo: number, hi: number, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : fallback);
 const bool = (v: unknown, fallback: boolean) => (typeof v === "boolean" ? v : fallback);
+const finiteInt = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v) : fallback);
+const arcEditMode = (v: unknown, fallback: ArcEditMode): ArcEditMode =>
+  v === "keep_center_adjust_angle_radius" || v === "keep_center_ends_adjust_angle" || v === "keep_endpoints_or_start_direction" ? v : fallback;
 const magnetic = (v: unknown, fallback: MagneticOption): MagneticOption => (v === "never" || v === "track-tool" || v === "always" ? v : fallback);
 
 /** The magnetic settings the board editor's snapping reads, with `allLayers` (the toggle of `common.Control.magneticSnapToggle`, Shift+S, kept in the studio state). */
@@ -271,6 +323,19 @@ export function sanitizePreferences(raw: unknown): Preferences {
     fpInvertXAxis: bool(o.fpInvertXAxis, d.fpInvertXAxis),
     fpInvertYAxis: bool(o.fpInvertYAxis, d.fpInvertYAxis),
     fpTextGraphics: o.fpTextGraphics && typeof o.fpTextGraphics === "object" ? (o.fpTextGraphics as TextGraphicsDefaults) : d.fpTextGraphics,
+    fpDefaultTextItems: sanitizeFpTextItems(o.fpDefaultTextItems),
+    fpUserLayerCount: clampInt(o.fpUserLayerCount, 0, 9, d.fpUserLayerCount),
+    fpUserLayerNames: sanitizeUserLayerNames(o.fpUserLayerNames),
+    pcbArcEditMode: arcEditMode(o.pcbArcEditMode, d.pcbArcEditMode),
+    schArcEditMode: arcEditMode(o.schArcEditMode, d.schArcEditMode),
+    escClearsNetHighlight: bool(o.escClearsNetHighlight, d.escClearsNetHighlight),
+    showCourtyardCollisions: bool(o.showCourtyardCollisions, d.showCourtyardCollisions),
+    ratsnestThicknessPx: sanitizeRatsnestThickness(o.ratsnestThicknessPx, d.ratsnestThicknessPx),
+    schEscClearsNetHighlight: bool(o.schEscClearsNetHighlight, d.schEscClearsNetHighlight),
+    schRepeatOffsetXMils: finiteInt(o.schRepeatOffsetXMils, d.schRepeatOffsetXMils),
+    schRepeatOffsetYMils: finiteInt(o.schRepeatOffsetYMils, d.schRepeatOffsetYMils),
+    schRepeatLabelIncrement: clampInt(o.schRepeatLabelIncrement, -100000, 100000, d.schRepeatLabelIncrement),
+    schFootprintPreview: bool(o.schFootprintPreview, d.schFootprintPreview),
   };
   return scrollModSetValid(p) ? p : { ...p, ...MOUSE_SCROLL_DEFAULTS };
 }

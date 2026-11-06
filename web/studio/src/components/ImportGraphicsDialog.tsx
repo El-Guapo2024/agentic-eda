@@ -22,6 +22,7 @@ import { previewGraphics, readGraphics } from "../api/importClient";
 import { setImportPreview } from "../state/importPreview";
 import { pickPoint } from "../actions/pcbPicker";
 import { DXF_UNITS, buildImportCmd, buildSchImportCmd, defaultImportValues, defaultSchImportValues, describeInfo, graphicsFormatOf, importLayers, type GraphicsInfo, type ImportValues, type SchImportValues } from "../kicad-port/importGraphics";
+import { snapGridNm } from "./canvas/gridHelper";
 
 /** The dialog keeps what it was last set to while the page lives (KiCad saves a dialog's controls between runs). */
 let lastValues: ImportValues | null = null;
@@ -374,7 +375,8 @@ function SchImportGraphics({ editor, file }: { editor: "schematic" | "symbol"; f
     } else {
       // The Symbol Editor: the items go to the grid point under the cursor, and are selected once they are there.
       const st = symApi.getState();
-      const grid = st.gridNm > 0 ? st.gridNm : 1_270_000;
+      // (the cursor on the grid while the Symbol Editor snaps to it: `GetCursorPosition( true )`)
+      const grid = snapGridNm(st.gridNm > 0 ? st.gridNm : 1_270_000) || 1;
       const cursor = st.cursorNm && Number.isFinite(st.cursorNm.x) && Number.isFinite(st.cursorNm.y) ? st.cursorNm : null;
       const at = cursor ? { x: Math.round(cursor.x / grid) * grid, y: Math.round(cursor.y / grid) * grid } : { x: 0, y: 0 };
       const known = new Set((st.symbol?.graphics ?? []).map((g) => g.id));

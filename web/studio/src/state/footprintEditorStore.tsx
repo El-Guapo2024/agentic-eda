@@ -30,6 +30,9 @@ import { fpAllIds, fpGroupCmd, fpLeaves, fpMirrorCmd, fpMoveCmd, fpRotateCmd, fp
 import type { FpDimDraw, FpDimKind, FpDrawnTable } from "../kicad-port/fpDrawTools";
 import type { BoardTextBox, CmdBarcode } from "../api/pcbItemTypes";
 import type { CmdZone } from "../api/types";
+import { snapGridNm } from "../components/canvas/gridHelper";
+import { getFpDefaultTextItems, getFpGraphicsDefaults } from "./fpPrefs";
+import { isFactoryNewFootprint, newFootprintTexts } from "../kicad-port/fpFieldDefaults";
 
 export type FpToolId =
   | "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_bezier" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor" | "enumerate"
@@ -672,10 +675,33 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
         /* backend busy: Untitled is still very likely free; the verb refuses a duplicate name anyway */
       }
       const name = uniqueFootprintName(existing);
-      const reply = await postCmd({ op: "new_footprint", name }, false);
+      // `CreateNewFootprint`'s texts come from Preferences > Footprint Editor > Footprint Defaults and Graphics Defaults (kicad-port/fpFieldDefaults.ts, UI-LEFT-2 FF7). The
+      // backend makes KiCad's default ones; other settings are put on them in the same undo step (the carry: `new_footprint` begins it, the edits hold it, the end commits it).
+      const items = getFpDefaultTextItems();
+      const graphics = getFpGraphicsDefaults();
+      const own = !isFactoryNewFootprint(items, graphics, name);
+      const reply = await postCmd({ op: "new_footprint", name }, false, own ? "begin" : undefined);
       if (!reply.ok) {
         dispatch({ type: "TOAST", message: reply.message, kind: "error" });
         return;
+      }
+      if (own) {
+        const t = newFootprintTexts(items, graphics, name);
+        const made = await fetchFootprint(name).catch(() => null);
+        const cmds: Cmd[] = [
+          { op: "fp_item", verb: "edit_field", footprint: name, name: "Reference", text: t.reference.text, layout: t.reference.layout },
+          { op: "fp_item", verb: "edit_field", footprint: name, name: "Value", text: t.value.text, layout: t.value.layout },
+          ...(made?.texts ?? []).filter((x) => x.id).map((x): Cmd => ({ op: "delete_footprint_text", footprint: name, id: x.id! })),
+          ...t.texts.map((text): Cmd => ({ op: "add_footprint_text", footprint: name, text })),
+        ];
+        for (const cmd of cmds) {
+          const r = await postCmd(cmd, false, "hold");
+          if (!r.ok) {
+            dispatch({ type: "TOAST", message: r.message, kind: "error" });
+            break;
+          }
+        }
+        await postCarry("commit");
       }
       dispatch({ type: "SET_NAME", name });
       dispatch({ type: "FOOTPRINT_OK", footprint: await fetchFootprint(name) });
@@ -713,9 +739,9 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const name = st.name;
       const ids = [...st.selection];
       if (!name || ids.length === 0) return false;
-      // `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )`: here the cursor on the grid
+      // `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )`: here the cursor on the grid (while the editor snaps to it)
       const c = st.cursorNm ?? { x: 0, y: 0 };
-      const g = st.gridNm || 1;
+      const g = snapGridNm(st.gridNm) || 1;
       const reference = { x: Math.round(c.x / g) * g, y: Math.round(c.y / g) * g };
       const r = await fetch("/api/footprint/clipboard/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ footprint: name, ids, reference }) });
       const reply = (await r.json()) as { text?: string; error?: string };
@@ -742,7 +768,7 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const text = system != null && system !== "" ? system : clipboardRef.current;
       if (!text) return;
       const c = st.cursorNm ?? { x: 0, y: 0 };
-      const g = st.gridNm || 1;
+      const g = snapGridNm(st.gridNm) || 1;
       const at = { x: Math.round(c.x / g) * g, y: Math.round(c.y / g) * g };
       // KiCad's text (`CLIPBOARD_IO::Parse`) goes in as items; any other text as a text item on the active layer ("If it wasn't content, then paste as a text object")
       let cmd: Cmd;

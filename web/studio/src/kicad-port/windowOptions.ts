@@ -22,7 +22,15 @@ export interface WindowOptions {
   gridMinSpacing: number;
   /** `editing.polar_coords` (pcbnew and the Footprint Editor; the schematic editors have none) -- default off. */
   polarCoords: boolean;
+  /** `grid.snap` ("Snap to grid:" of the editor's Display Options, `PANEL_GAL_OPTIONS`): 0 always (default), 1 when the grid is shown, 2 never
+   *  (`GRID_SNAPPING`, read by `GAL::GetGridSnapping`). */
+  gridSnap: GridSnapping;
+  /** `grid.axes_enabled` -- default off (the Footprint Editor draws its axes whatever it says: `GetGalDisplayOptions().m_axesEnabled = true`). */
+  gridAxes: boolean;
 }
+
+/** `KIGFX::GRID_SNAPPING`: ALWAYS, WITH_GRID, NEVER. */
+export type GridSnapping = "always" | "with_grid" | "never";
 
 export const DEFAULT_WINDOW_OPTIONS: WindowOptions = {
   crossHairMode: "small",
@@ -31,6 +39,8 @@ export const DEFAULT_WINDOW_OPTIONS: WindowOptions = {
   gridLineWidth: DEFAULT_GRID_LINE_WIDTH_PX,
   gridMinSpacing: DEFAULT_GRID_MIN_SPACING_PX,
   polarCoords: false,
+  gridSnap: "always",
+  gridAxes: false,
 };
 
 const crossHair = (v: unknown, d: CrossHairMode): CrossHairMode => (v === "small" || v === "full" || v === "diag45" ? v : d);
@@ -45,6 +55,8 @@ export function parseWindowOptions(raw: unknown, base: WindowOptions = DEFAULT_W
     gridLineWidth: typeof j.gridLineWidth === "number" ? gridLineWidthChoice(j.gridLineWidth) : base.gridLineWidth,
     gridMinSpacing: typeof j.gridMinSpacing === "number" ? gridMinSpacingValue(j.gridMinSpacing) : base.gridMinSpacing,
     polarCoords: typeof j.polarCoords === "boolean" ? j.polarCoords : base.polarCoords,
+    gridSnap: j.gridSnap === "always" || j.gridSnap === "with_grid" || j.gridSnap === "never" ? j.gridSnap : base.gridSnap,
+    gridAxes: typeof j.gridAxes === "boolean" ? j.gridAxes : base.gridAxes,
   };
 }
 
@@ -53,3 +65,19 @@ export function editorWindowOf(tab: string): EditorWindow {
   return tab === "schematic" || tab === "footprint" || tab === "symbol" ? tab : "pcb";
 }
 
+/**
+ * Whether an editor draws its grid axes (`GAL_DISPLAY_OPTIONS::m_axesEnabled`): the Footprint Editor and the Symbol Editor always (`FOOTPRINT_EDIT_FRAME`'s and
+ * `SYMBOL_EDIT_FRAME`'s `GetGalDisplayOptions().m_axesEnabled = true` / `SetAxesEnabled( true )`), the schematic never ("For now, axes are forced off in Eeschema
+ * even if turned on in config", `SCH_EDIT_FRAME::LoadSettings`), the board as its window says (`grid.axes_enabled`, default off; KiCad 8303b2ad and 25ec2335 have
+ * no control for it).
+ */
+export function gridAxesEnabled(editor: EditorWindow, w: Pick<WindowOptions, "gridAxes">): boolean {
+  if (editor === "footprint" || editor === "symbol") return true;
+  if (editor === "schematic") return false;
+  return w.gridAxes;
+}
+
+/** `GAL::GetGridSnapping`: `m_gridSnapping == ALWAYS || ( m_gridVisibility && m_gridSnapping == WITH_GRID )`. */
+export function gridSnappingActive(mode: GridSnapping, gridVisible: boolean): boolean {
+  return mode === "always" || (gridVisible && mode === "with_grid");
+}

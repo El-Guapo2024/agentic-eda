@@ -36,7 +36,7 @@ import { itemPassesFilter, newFilterRejections, pickSelectionCandidates, pickToo
 import { flashSelectionFilter } from "../kicad-port/filterFlash";
 import { candidateLabel } from "../components/canvas/candidateLabel";
 import { shapeHitDistance } from "../components/canvas/itemHitTest";
-import { snapPoint } from "../components/canvas/gridHelper";
+import { getGridSnapping, snapPoint } from "../components/canvas/gridHelper";
 import { drawShapeStarted, drawZoneStarted, redoRefused, routerEditKey, takeBackLastLine, undoDropsDrawing, withoutLastCorner, type RouterEditKey } from "../kicad-port/drawingCancel";
 import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
@@ -1493,7 +1493,7 @@ export function useActionRunner() {
     });
     const cursorSnapped = (): [number, number] | null => {
       if (!state.cursorNm) return null;
-      const p = alignToGrid({ x: state.cursorNm.x, y: state.cursorNm.y }, state.schGridNm, { x: 0, y: 0 }, { ctrlOrCmd: false });
+      const p = alignToGrid({ x: state.cursorNm.x, y: state.cursorNm.y }, state.schGridNm, { x: 0, y: 0 }, { ctrlOrCmd: false, gridSnapping: getGridSnapping() });
       return [p.x, p.y];
     };
 
@@ -2519,12 +2519,12 @@ export function useActionRunner() {
           // a symbol or power symbol goes to the cursor and rides it with the Move tool until a click drops it (`RunSynchronousAction( SCH_ACTIONS::move )`)
           if (repeatMoves(state.schRepeat)) {
             void api.placeNewSchItems((at) => {
-              const cmds = repeatCmds(state.schRepeat, { cursor: [at.x, at.y], nextReference: nextRef });
+              const cmds = repeatCmds(state.schRepeat, { offsetNm: [state.prefs.schRepeatOffsetXMils * 25_400, state.prefs.schRepeatOffsetYMils * 25_400], labelIncrement: state.prefs.schRepeatLabelIncrement, cursor: [at.x, at.y], nextReference: nextRef });
               return cmds.length === 1 ? cmds[0]! : { op: "batch", cmds };
             }, true);
             return;
           }
-          const cmds = repeatCmds(state.schRepeat, { cursor: cursorSnapped(), nextReference: nextRef });
+          const cmds = repeatCmds(state.schRepeat, { offsetNm: [state.prefs.schRepeatOffsetXMils * 25_400, state.prefs.schRepeatOffsetYMils * 25_400], labelIncrement: state.prefs.schRepeatLabelIncrement, cursor: cursorSnapped(), nextReference: nextRef });
           if (cmds.length > 0) void api.cmdBatch(cmds);
         })
       );
@@ -2584,7 +2584,7 @@ export function useActionRunner() {
 
     // The frame-wide actions (zoom, grid, save, print, library tree, select) of those two editors, on their own canvas and store, and the unregistering of the toolbar actions they do not support.
     // After the shared actions above: on those two tabs the frame's own handler is the one that stands where both have one.
-    registerEditorFrameActions(m, { tab: state.tab, fpApi, fpDispatch, symApi, symDispatch, prefs: state.prefs });
+    registerEditorFrameActions(m, { tab: state.tab, fpApi, fpDispatch, symApi, symDispatch, prefs: state.prefs, setPrefs: (patch) => dispatch({ type: "PATCH_PREFERENCES", patch }) });
 
     // The schematic editor's control actions (eeschema.EditorControl / NavigateTool / InspectionTool / Interactive.increment*).
     registerSchControlActions(m, { tab: state.tab, state, api, dispatch, requestSelection, symApi, symDispatch, control: schControl, controlDispatch: schControlDispatch });

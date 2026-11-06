@@ -1185,6 +1185,8 @@ export type Action =
   | { type: "SET_LOCAL_ORIGIN"; at: { x: number; y: number } }
   | { type: "TOGGLE_AUTO_PAN" }
   | { type: "SET_PREFERENCES"; prefs: Preferences }
+  /** Some preferences changed, the rest as they are when the action runs (a Preferences page's OK after the dialog's own, the arc mode actions). */
+  | { type: "PATCH_PREFERENCES"; patch: Partial<Preferences> }
   | { type: "SET_PREFERENCES_DIALOG_OPEN"; open: boolean }
   | { type: "SCHEMATIC_OK"; schematic: Schematic }
   /** `SCH_EDIT_FRAME::SetCurrentVariant` / `PCB_EDIT_FRAME::SetCurrentVariant`: "" (or a name the design does not have) is the default. */
@@ -1499,7 +1501,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       if (state.enteredGroupId != null) {
         return { ...state, enteredGroupId: null };
       }
-      // Idle, nothing selected, no entered group: pcbnew_settings.cpp m_ESCClearsNetHighlight defaults true.
+      // Idle, nothing selected, no entered group: the net highlight goes when "<ESC> clears net highlighting" is on (Preferences > PCB Editor / Schematic Editor >
+      // Editing Options: `PCBNEW_SETTINGS::m_ESCClearsNetHighlight`, `EESCHEMA_SETTINGS::m_Input.esc_clears_net_highlight`, both on by default).
+      if (!(state.tab === "schematic" ? state.prefs.schEscClearsNetHighlight : state.prefs.escClearsNetHighlight)) return state;
       return { ...state, netHighlight: null, bcx: withHighlight(state.bcx, state.netHighlight, []) };
     }
     case "SET_HOT":
@@ -1609,6 +1613,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, prefs: { ...state.prefs, autoPan: !state.prefs.autoPan } };
     case "SET_PREFERENCES":
       return { ...state, prefs: action.prefs };
+    case "PATCH_PREFERENCES":
+      return { ...state, prefs: { ...state.prefs, ...action.patch } };
     case "SET_PREFERENCES_DIALOG_OPEN":
       return { ...state, preferencesDialogOpen: action.open };
     case "SCHEMATIC_OK": {

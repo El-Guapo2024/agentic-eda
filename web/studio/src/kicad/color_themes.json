@@ -3,7 +3,7 @@
     "generated": true,
     "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
     "kicadCommitDate": null,
-    "extractedAt": "2026-11-06T02:00:03.289Z",
+    "extractedAt": "2026-11-06T20:54:59.378Z",
     "sourceFiles": [
       "common/settings/color_settings.cpp",
       "common/settings/builtin_color_themes.h",
@@ -490,7 +490,242 @@
       "layer": "User_45"
     }
   ],
+  "schematicParams": [
+    {
+      "key": "schematic.anchor",
+      "layer": "LAYER_SCHEMATIC_ANCHOR"
+    },
+    {
+      "key": "schematic.aux_items",
+      "layer": "LAYER_SCHEMATIC_AUX_ITEMS"
+    },
+    {
+      "key": "schematic.background",
+      "layer": "LAYER_SCHEMATIC_BACKGROUND"
+    },
+    {
+      "key": "schematic.hovered",
+      "layer": "LAYER_HOVERED"
+    },
+    {
+      "key": "schematic.brightened",
+      "layer": "LAYER_BRIGHTENED"
+    },
+    {
+      "key": "schematic.bus",
+      "layer": "LAYER_BUS"
+    },
+    {
+      "key": "schematic.bus_junction",
+      "layer": "LAYER_BUS_JUNCTION"
+    },
+    {
+      "key": "schematic.component_body",
+      "layer": "LAYER_DEVICE_BACKGROUND"
+    },
+    {
+      "key": "schematic.component_outline",
+      "layer": "LAYER_DEVICE"
+    },
+    {
+      "key": "schematic.cursor",
+      "layer": "LAYER_SCHEMATIC_CURSOR"
+    },
+    {
+      "key": "schematic.dnp_marker",
+      "layer": "LAYER_DNP_MARKER"
+    },
+    {
+      "key": "schematic.excluded_from_sim",
+      "layer": "LAYER_EXCLUDED_FROM_SIM"
+    },
+    {
+      "key": "schematic.erc_error",
+      "layer": "LAYER_ERC_ERR"
+    },
+    {
+      "key": "schematic.erc_warning",
+      "layer": "LAYER_ERC_WARN"
+    },
+    {
+      "key": "schematic.erc_exclusion",
+      "layer": "LAYER_ERC_EXCLUSION"
+    },
+    {
+      "key": "schematic.fields",
+      "layer": "LAYER_FIELDS"
+    },
+    {
+      "key": "schematic.grid",
+      "layer": "LAYER_SCHEMATIC_GRID"
+    },
+    {
+      "key": "schematic.grid_axes",
+      "layer": "LAYER_SCHEMATIC_GRID_AXES"
+    },
+    {
+      "key": "schematic.hidden",
+      "layer": "LAYER_HIDDEN"
+    },
+    {
+      "key": "schematic.junction",
+      "layer": "LAYER_JUNCTION"
+    },
+    {
+      "key": "schematic.label_global",
+      "layer": "LAYER_GLOBLABEL"
+    },
+    {
+      "key": "schematic.label_hier",
+      "layer": "LAYER_HIERLABEL"
+    },
+    {
+      "key": "schematic.label_local",
+      "layer": "LAYER_LOCLABEL"
+    },
+    {
+      "key": "schematic.netclass_flag",
+      "layer": "LAYER_NETCLASS_REFS"
+    },
+    {
+      "key": "schematic.drag_net_collision",
+      "layer": "LAYER_DRAG_NET_COLLISION"
+    },
+    {
+      "key": "schematic.rule_area",
+      "layer": "LAYER_RULE_AREAS"
+    },
+    {
+      "key": "schematic.no_connect",
+      "layer": "LAYER_NOCONNECT"
+    },
+    {
+      "key": "schematic.note",
+      "layer": "LAYER_NOTES"
+    },
+    {
+      "key": "schematic.private_note",
+      "layer": "LAYER_PRIVATE_NOTES"
+    },
+    {
+      "key": "schematic.note_background",
+      "layer": "LAYER_NOTES_BACKGROUND"
+    },
+    {
+      "key": "schematic.pin",
+      "layer": "LAYER_PIN"
+    },
+    {
+      "key": "schematic.pin_name",
+      "layer": "LAYER_PINNAM"
+    },
+    {
+      "key": "schematic.pin_number",
+      "layer": "LAYER_PINNUM"
+    },
+    {
+      "key": "schematic.reference",
+      "layer": "LAYER_REFERENCEPART"
+    },
+    {
+      "key": "schematic.shadow",
+      "layer": "LAYER_SELECTION_SHADOWS"
+    },
+    {
+      "key": "schematic.sheet",
+      "layer": "LAYER_SHEET"
+    },
+    {
+      "key": "schematic.sheet_background",
+      "layer": "LAYER_SHEET_BACKGROUND"
+    },
+    {
+      "key": "schematic.sheet_filename",
+      "layer": "LAYER_SHEETFILENAME"
+    },
+    {
+      "key": "schematic.sheet_fields",
+      "layer": "LAYER_SHEETFIELDS"
+    },
+    {
+      "key": "schematic.sheet_label",
+      "layer": "LAYER_SHEETLABEL"
+    },
+    {
+      "key": "schematic.sheet_name",
+      "layer": "LAYER_SHEETNAME"
+    },
+    {
+      "key": "schematic.value",
+      "layer": "LAYER_VALUEPART"
+    },
+    {
+      "key": "schematic.wire",
+      "layer": "LAYER_WIRE"
+    },
+    {
+      "key": "schematic.worksheet",
+      "layer": "LAYER_SCHEMATIC_DRAWINGSHEET"
+    },
+    {
+      "key": "schematic.page_limits",
+      "layer": "LAYER_SCHEMATIC_PAGE_LIMITS"
+    },
+    {
+      "key": "schematic.op_voltages",
+      "layer": "LAYER_OP_VOLTAGES"
+    },
+    {
+      "key": "schematic.op_currents",
+      "layer": "LAYER_OP_CURRENTS"
+    }
+  ],
   "classic": {
+    "LAYER_SCHEMATIC_ANCHOR": "#0000ffff",
+    "LAYER_SCHEMATIC_AUX_ITEMS": "#000000ff",
+    "LAYER_SCHEMATIC_BACKGROUND": "#ffffffff",
+    "LAYER_HOVERED": "#000084ff",
+    "LAYER_BRIGHTENED": "#ff00ffff",
+    "LAYER_BUS": "#000084ff",
+    "LAYER_BUS_JUNCTION": "#000084ff",
+    "LAYER_DEVICE_BACKGROUND": "#ffffc2ff",
+    "LAYER_DEVICE": "#840000ff",
+    "LAYER_SCHEMATIC_CURSOR": "#000000ff",
+    "LAYER_DNP_MARKER": "#ff0000d9",
+    "LAYER_EXCLUDED_FROM_SIM": "#c2c2c2f2",
+    "LAYER_ERC_ERR": "#ff0000cc",
+    "LAYER_ERC_WARN": "#00ff00cc",
+    "LAYER_ERC_EXCLUSION": "#c2c2c2ff",
+    "LAYER_FIELDS": "#840084ff",
+    "LAYER_SCHEMATIC_GRID": "#848484ff",
+    "LAYER_SCHEMATIC_GRID_AXES": "#000084ff",
+    "LAYER_HIDDEN": "#c2c2c2ff",
+    "LAYER_JUNCTION": "#008400ff",
+    "LAYER_GLOBLABEL": "#840000ff",
+    "LAYER_HIERLABEL": "#848400ff",
+    "LAYER_LOCLABEL": "#000000ff",
+    "LAYER_NETCLASS_REFS": "#000000ff",
+    "LAYER_DRAG_NET_COLLISION": "#ff0000cc",
+    "LAYER_RULE_AREAS": "#840000ff",
+    "LAYER_NOCONNECT": "#000084ff",
+    "LAYER_NOTES": "#0000c2ff",
+    "LAYER_PRIVATE_NOTES": "#0000c2ff",
+    "LAYER_PIN": "#840000ff",
+    "LAYER_PINNAM": "#008484ff",
+    "LAYER_PINNUM": "#840000ff",
+    "LAYER_REFERENCEPART": "#008484ff",
+    "LAYER_SELECTION_SHADOWS": "#c7ebffcc",
+    "LAYER_SHEET": "#840084ff",
+    "LAYER_SHEET_BACKGROUND": "#ffffff00",
+    "LAYER_SHEETFILENAME": "#848400ff",
+    "LAYER_SHEETFIELDS": "#840084ff",
+    "LAYER_SHEETLABEL": "#008484ff",
+    "LAYER_SHEETNAME": "#008484ff",
+    "LAYER_VALUEPART": "#008484ff",
+    "LAYER_WIRE": "#008400ff",
+    "LAYER_SCHEMATIC_DRAWINGSHEET": "#840000ff",
+    "LAYER_OP_VOLTAGES": "#480048ff",
+    "LAYER_OP_CURRENTS": "#840000ff",
     "LAYER_ANCHOR": "#000084ff",
     "LAYER_LOCKED_ITEM_SHADOW": "#00008499",
     "LAYER_CONFLICTS_SHADOW": "#84000080",

@@ -11,9 +11,11 @@
 //
 // The rows and the menu are the board panel's (components/panels/appearance/LayersTab.tsx `LayerRowView`, `layerMenuEntries`, `ContrastModeRadios`; ObjectsTab.tsx
 // `ObjectRowView`), on the footprint editor's own store. Not here yet: KiCad's Presets and Viewports choosers under the pages (the footprint editor keeps them:
-// `FOOTPRINT_EDITOR_SETTINGS::m_LayerPresets`), the colour change of a swatch, and Flip board view (the footprint editor's canvas does not flip).
+// `FOOTPRINT_EDITOR_SETTINGS::m_LayerPresets`), the colour change of a swatch, and Flip board view (the footprint editor's canvas does not flip). The swatches show the Footprint Editor's own colour theme.
 import { useMemo, useState } from "react";
 import { useFpDispatch, useFpState } from "../../state/footprintEditorStore";
+import { useStudioState } from "../../state/store";
+import { useColorThemeStamp } from "../../state/colorThemeStore";
 import { ContrastModeRadios, LayerRowView, layerMenuEntries, type LayerMenuCommand } from "../panels/appearance/LayersTab";
 import { ObjectRowView } from "../panels/appearance/ObjectsTab";
 import { Pane } from "../panels/appearance/shared";
@@ -46,9 +48,12 @@ const PAGES: ReadonlyArray<{ id: Page; label: string }> = [
 
 function FpLayersPage() {
   const state = useFpState();
+  useColorThemeStamp(); // the swatches are the Footprint Editor's theme's (Preferences > Footprint Editor > Colors)
   const dispatch = useFpDispatch();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const layers = useMemo(() => fpPanelLayers(fpUsedLayers(state.footprint)), [state.footprint]);
+  // the user layers of Preferences > Footprint Editor > User Layer Names: so many of them, every named one, shown by its name (UI-LEFT-2 FF7)
+  const { fpUserLayerCount, fpUserLayerNames } = useStudioState().prefs;
+  const layers = useMemo(() => fpPanelLayers([...fpUsedLayers(state.footprint), ...Object.keys(fpUserLayerNames)], fpUserLayerCount), [state.footprint, fpUserLayerCount, fpUserLayerNames]);
   const mode = fpContrastMode(state.highContrast, state.contrastHidden);
   const run = (cmd: LayerMenuCommand) => {
     const next = fpLayerMenu(layers, state.layerVisible, state.activeLayer, cmd);
@@ -67,8 +72,9 @@ function FpLayersPage() {
         return (
           <LayerRowView
             key={name}
+            theme="footprint"
             layerKey={name}
-            label={fpLayerLabel(name)}
+            label={fpLayerLabel(name, fpUserLayerNames)}
             colorKey={isCopper(name) ? copperColorKey(name) : layerStateKey(name)}
             visible={visible}
             active={state.activeLayer === name}
@@ -90,6 +96,7 @@ function FpLayersPage() {
 
 function FpObjectsPage() {
   const state = useFpState();
+  useColorThemeStamp(); // the swatches are the Footprint Editor's theme's (Preferences > Footprint Editor > Colors)
   const dispatch = useFpDispatch();
   const toggle = (id: ObjectId, on: boolean) => {
     // `case LAYER_GRID: m_frame->SetGridVisibility( isVisible )`: the row is the frame's grid switch (View > Show Grid), so the toolbar's button follows it.
@@ -107,6 +114,7 @@ function FpObjectsPage() {
         return (
           <ObjectRowView
             key={row.id}
+            theme="footprint"
             row={row}
             checked={checked}
             opacity={row.opacity ? fpObjectOpacity(state.layerOpacity, row.id) : undefined}

@@ -36,6 +36,8 @@ export interface ModificationView {
   layerVisible: Record<string, boolean>;
   highContrast: boolean;
   activeLayer: string | null;
+  /** `GAL::GetGridSnapping()` of the board editor (its "Snap to grid:"); absent means on. */
+  gridSnapping?: boolean;
 }
 
 /** `BestSnapAnchor( refPt, nullptr )` on a helper made for the call: where `refPt` goes, in whole micrometres. */
@@ -47,9 +49,12 @@ export function modificationAnchor(view: ModificationView, refPt: readonly [numb
     visibleGridNm: computeVisibleGridSize(view.gridNm, scale),
     origin: [view.origin[0], view.origin[1]],
     gridSizeOf: (c) => gridSizeFor(c, view.gridNm, view.grids, view.overrides),
+    gridSnapping: view.gridSnapping,
   };
   const highContrastLayers = view.highContrast && view.activeLayer ? new Set([view.activeLayer]) : null;
   const helper = new PcbGridHelper(env, sceneOf(view.board), view.magnetic, { layerVisible: (layer) => view.layerVisible[layer] !== false, highContrastLayers });
+  // `grid.SetUseGrid( getView()->GetGAL()->GetGridSnapping() )`
+  helper.setUseGrid(view.gridSnapping !== false);
   const p = helper.bestSnapAnchor([refPt[0], refPt[1]], "all", "current", new Set());
   return [Math.round(p[0]), Math.round(p[1])];
 }
@@ -66,9 +71,12 @@ export function dragOriginAnchor(view: ModificationView, mouse: readonly [number
     visibleGridNm: computeVisibleGridSize(view.gridNm, scale),
     origin: [view.origin[0], view.origin[1]],
     gridSizeOf: (c) => gridSizeFor(c, view.gridNm, view.grids, view.overrides),
+    gridSnapping: view.gridSnapping,
   };
   const highContrastLayers = view.highContrast && view.activeLayer ? new Set([view.activeLayer]) : null;
   const helper = new PcbGridHelper(env, sceneOf(view.board), view.magnetic, { layerVisible: (layer) => view.layerVisible[layer] !== false, highContrastLayers });
+  // `grid.SetUseGrid( getView()->GetGAL()->GetGridSnapping() )`
+  helper.setUseGrid(view.gridSnapping !== false);
   const wanted = new Set(ids);
   const items = helper.scene.items.filter((i) => wanted.has(i.owner) || wanted.has(i.id));
   const p = helper.bestDragOrigin([mouse[0], mouse[1]], items);

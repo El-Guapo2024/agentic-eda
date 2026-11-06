@@ -14,6 +14,7 @@ import { allItems, itemBounds } from "./schItems";
 import { resolveLibSymbol, symbolBounds } from "./libSymbol";
 import { measureStrokeText } from "../text/strokeFont";
 import { reportSnap } from "../../kicad-port/snapReport";
+import { getGridSnapping } from "../canvas/gridHelper";
 
 /** What the snapping needs to know about the editor; the canvas hands it over on every render. */
 export interface SchSnapView {
@@ -196,7 +197,7 @@ export class SchSnap {
   private env(): GridEnv {
     const v = this.view!;
     const scale = v.scale > 0 ? v.scale : 1;
-    return { scale, gridNm: v.gridNm, visibleGridNm: computeVisibleGridSize(v.gridNm, scale), origin: [0, 0], gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides), ...gridEnvY(v) };
+    return { scale, gridNm: v.gridNm, visibleGridNm: computeVisibleGridSize(v.gridNm, scale), origin: [0, 0], gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides), ...gridEnvY(v), gridSnapping: getGridSnapping() };
   }
 
   private helperFor(tool: string): SchGridHelper {
@@ -214,7 +215,7 @@ export class SchSnap {
   point(tool: string, world: Pt, mods: SchSnapMods, category: GridCategory = "current", skip: ReadonlySet<string> = new Set()): Pt {
     if (!this.view) return world;
     const h = this.helperFor(tool);
-    h.setUseGrid(!mods.ctrl);
+    h.setUseGrid(getGridSnapping() && !mods.ctrl);
     h.setSnap(!mods.shift);
     const p = whole(h.bestSnapAnchor(world, category, skip));
     this.cachedOverlay = h.overlay();
@@ -233,7 +234,7 @@ export class SchSnap {
   align(world: Pt, mods: SchSnapMods, category: GridCategory = "current"): Pt {
     if (!this.view) return world;
     const h = this.helperFor("align");
-    h.setUseGrid(!mods.ctrl);
+    h.setUseGrid(getGridSnapping() && !mods.ctrl);
     return whole(h.align(world, category));
   }
 

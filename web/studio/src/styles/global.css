@@ -109,3 +109,10 @@ select {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* Preferences > Common's "Use alternating row colors in tables" (`appearance.grid_striping`, `WX_GRID`'s striping): every other row of a dialog's table in
+   another colour, set on the document by state/commonOptions.ts. */
+[data-grid-striping="1"] .dialog table tbody tr:nth-child(even),
+[data-grid-striping="1"] .panel table tbody tr:nth-child(even) {
+  background: var(--chrome-hover, rgba(127, 127, 127, 0.08));
+}

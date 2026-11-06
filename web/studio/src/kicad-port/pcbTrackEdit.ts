@@ -134,7 +134,8 @@ export function breakTrack(board: EditBoard, track: EditTrack, pointerNm: readon
   const pts = track.pts;
   if (pts.length < 2) return refuse(null);
   const pointer = toIU(pointerNm);
-  const aligned: V = [Math.round(pointerNm[0] / gridNm) * gridNm, Math.round(pointerNm[1] / gridNm) * gridNm];
+  // `m_gridHelper->SetUseGrid( gal->GetGridSnapping() && .. )`: a grid of 0 (the editor not snapping to its grid) leaves the pointer as it is
+  const aligned: V = gridNm > 0 ? [Math.round(pointerNm[0] / gridNm) * gridNm, Math.round(pointerNm[1] / gridNm) * gridNm] : [Math.round(pointerNm[0]), Math.round(pointerNm[1])];
   const halfWidthSq = (track.width / 2) ** 2;
 
   if (track.arc_mid) {

@@ -11,6 +11,7 @@ import { imageFor } from "../canvas/imageCache";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { defaultTextBoxMargin } from "../../kicad-port/schTextBox";
 import { layerColor } from "../canvas/layers";
+import { overrideSchItemColors } from "../../state/colorThemeStore";
 import { paintKicadText } from "../text/kicadTextPaint";
 import { resolveFont } from "../../kicad-port/kicadText";
 import { schDrawPen, schTextBoxDrawSpec, SCH_DEFAULT_PEN_NM } from "../../kicad-port/schTextSpecs";
@@ -45,7 +46,8 @@ export function dashPattern(style: SchLineStyle | undefined, w: number, ratios?:
 
 function strokeColor(g: SchGraphic, selected: boolean): string {
   if (selected) return layerColor("LAYER_SELECTION_SHADOWS");
-  if (g.color) return rgba(g.color);
+  // "Override individual item colors" (the theme's `schematic.override_item_colors`): the layer's colour, never the item's (`SCH_PAINTER::getRenderColor`)
+  if (g.color && !overrideSchItemColors()) return rgba(g.color);
   if (g.shape.type === "rule_area") return layerColor("LAYER_RULE_AREAS");
   if (g.shape.type === "directive") return layerColor("LAYER_NETCLASS_REFS");
   return layerColor("LAYER_NOTES");
@@ -186,7 +188,7 @@ export function paintGraphics(
       ctx.clip();
       const b = graphicBounds(g);
       const h = hatchLines(fill, [b.minX, b.minY, b.maxX, b.maxY], widthNm);
-      ctx.strokeStyle = g.fill_color ? rgba(g.fill_color) : strokeColor(g, false);
+      ctx.strokeStyle = g.fill_color && !overrideSchItemColors() ? rgba(g.fill_color) : strokeColor(g, false);
       ctx.lineWidth = Math.max(h.width, hair);
       ctx.beginPath();
       for (const [ax, ay, bx, by] of h.segments) {
@@ -217,7 +219,7 @@ export function paintGraphics(
     ctx.setLineDash([]);
     // `SCH_PAINTER::getRenderColor` for an `SCH_TEXTBOX`: its own text colour (Text Box Properties' Color) wins over `LAYER_NOTES`
     const own = textAttrs?.[g.id]?.color;
-    if (g.shape.type === "text_box") drawTextBoxText(ctx, g, selected ? color : own && own.a > 0 ? rgba(own) : layerColor("LAYER_NOTES"), shown?.[g.id], textAttrs?.[g.id]?.font, defaultPen);
+    if (g.shape.type === "text_box") drawTextBoxText(ctx, g, selected ? color : own && own.a > 0 && !overrideSchItemColors() ? rgba(own) : layerColor("LAYER_NOTES"), shown?.[g.id], textAttrs?.[g.id]?.font, defaultPen);
     ctx.restore();
   }
 }

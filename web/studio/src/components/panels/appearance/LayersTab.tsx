@@ -9,7 +9,8 @@ import { useAppearanceView } from "./useAppearanceView";
 import { Eye, Pane, Radios, Swatch } from "./shared";
 import { useThemeSwatchEdit } from "./themeSwatch";
 import { ContextMenu, type MenuEntry } from "../../canvas/ContextMenu";
-import { copperColorKey, layerColor } from "../../canvas/layers";
+import { copperColorKey, layerColor, layerColorIn } from "../../canvas/layers";
+import type { ThemeEditor } from "../../../kicad-port/colorTheme";
 import { layerStateKey, type LayerGroupOp, type MenuPresetKind } from "../../../kicad-port/layerPresets";
 import { enabledOptionalLayers, layerDisplayName } from "../../../kicad-port/boardLayers";
 import type { ContrastMode } from "../../../kicad-port/appearance";
@@ -31,6 +32,7 @@ export function LayerRowView({
   onToggle,
   onOpacity,
   onEditColor,
+  theme,
 }: {
   layerKey: string;
   label: string;
@@ -43,11 +45,13 @@ export function LayerRowView({
   onToggle: () => void;
   onOpacity?: (value: number) => void;
   onEditColor?: () => void;
+  /** The editor whose colour theme the swatch shows (the board editor's when not given). */
+  theme?: ThemeEditor;
 }) {
   return (
     <div className={`ap-row${active ? " active" : ""}`} data-layer={layerKey} onClick={onActivate}>
       <span className="ap-indicator" />
-      <Swatch css={layerColor(colorKey)} title={onEditColor ? "Double click or middle click for color change, right click for menu" : "Layer color"} onEdit={onEditColor} />
+      <Swatch css={theme ? layerColorIn(theme, colorKey) : layerColor(colorKey)} title={onEditColor ? "Double click or middle click for color change, right click for menu" : "Layer color"} onEdit={onEditColor} />
       <Eye on={visible} title="Show or hide this layer" onToggle={onToggle} />
       <span className="ap-name" title={nameTitle}>
         {label}

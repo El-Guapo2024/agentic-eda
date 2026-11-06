@@ -26,7 +26,7 @@ import { screenToWorld } from "../kicad-port/view";
 import { zoomToAreaView } from "../kicad-port/cursorControl";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { alignToGrid } from "../kicad-port/gridSnap";
-import { getSnapOrigin } from "./canvas/gridHelper";
+import { getGridSnapping, getSnapOrigin } from "./canvas/gridHelper";
 import { appendLassoPoint, applyAreaSelection, lassoContained, lassoHits } from "../kicad-port/lasso";
 
 /** A press that moves less than this many pixels is a click, not the start of a drag (KiCad starts a drag after 8 px of travel on most platforms; a lasso uses the same threshold). */
@@ -92,7 +92,7 @@ export function CommonToolHost() {
     };
     /** The click answered with the grid-snapped point and, for an item session, the item under it (`SelectPointInteractively` / `SelectItemInteractively`). */
     const answerPicker = (a: EditorAdapter, w: [number, number]) => {
-      const p = alignToGrid({ x: w[0], y: w[1] }, a.gridNm, getSnapOrigin(), { ctrlOrCmd: false });
+      const p = alignToGrid({ x: w[0], y: w[1] }, a.gridNm, getSnapOrigin(), { ctrlOrCmd: false, gridSnapping: getGridSnapping() });
       picker.click({ point: { x: p.x, y: p.y }, item: () => a.candidatesAt(w[0], w[1])[0]?.id ?? null });
     };
     /** The lasso as it stands, closed to the cursor, selects what it hits (`SelectMultiple`). */
@@ -126,7 +126,7 @@ export function CommonToolHost() {
       if (ruler && e.button === 0) {
         e.stopPropagation();
         e.preventDefault();
-        const p = alignToGrid({ x: w[0], y: w[1] }, a.gridNm, getSnapOrigin(), { ctrlOrCmd: false });
+        const p = alignToGrid({ x: w[0], y: w[1] }, a.gridNm, getSnapOrigin(), { ctrlOrCmd: false, gridSnapping: getGridSnapping() });
         setMeasure({ pts: measureClick(ruler.pts, [p.x, p.y]) });
         return;
       }

@@ -42,6 +42,7 @@ import { boardOutlineRings } from "../kicad-port/pcbOutline";
 import { breakTrack, filletTracks, type EditBoard, type EditTrack } from "../kicad-port/pcbTrackEdit";
 import { changeTrackWidthCmds } from "../kicad-port/changeTrackWidth";
 import { askConfirm } from "../components/library/libraryDialogs";
+import { snapGridNm } from "../components/canvas/gridHelper";
 
 /** Values the dialogs start from, remembered between invocations like the C++ `static`s. */
 const last = {
@@ -444,7 +445,7 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
       const track = board.routing?.tracks.find((t) => t.id === id);
       if (!track) return;
       dispatch({ type: "CLEAR_SELECTION" }); // `RunAction( ACTIONS::selectionClear )`, before anything else
-      const res = breakTrack(editBoardOf(board), { id: track.id, net: track.net, layer: track.layer, width: track.width, pts: track.pts, arc_mid: track.arc_mid }, [cursor.x, cursor.y], board.snap ?? state.gridNm);
+      const res = breakTrack(editBoardOf(board), { id: track.id, net: track.net, layer: track.layer, width: track.width, pts: track.pts, arc_mid: track.arc_mid }, [cursor.x, cursor.y], snapGridNm(board.snap ?? state.gridNm));
       if (!res.ok || !res.cmd) {
         toast(res.message ?? "Break Track: put the cursor on the track, away from its ends and joints.");
         return;

@@ -7,7 +7,8 @@
 //     (`m_RotationAngle`, which R and Shift+R turn by), "Arc editing mode:", the Magnetic Points' Snap to pads and Snap to graphics (`loadFPSettings` / `TransferDataFromWindow`);
 //   - Graphics Defaults: `PANEL_FP_EDITOR_GRAPHICS_DEFAULTS`' grid of the layer classes (line thickness, text width, height and thickness, italic, keep upright), which the
 //     drawing tools and the Text tool start from (kicad-port/fpDrawDefaults.ts, fpTextTool.ts); "Reset" puts KiCad's factory table back.
-// Not ported: the Grids, Colors, Toolbars, Footprint Defaults and User Layer Names pages; the arc editing mode is kept, not yet read by the point editor.
+// The Footprint Editor's other pages are elsewhere: Grids (components/GridsDialog.tsx), Colors (EditorColorsPages.tsx), Toolbars (ToolbarsPage.tsx), Footprint
+// Defaults and User Layer Names (FpDefaultsPages.tsx); the tree is components/PreferencesDialog.tsx's.
 import { TEXT_GRAPHICS_ROWS, textRowOf, validateTextGraphics, withLineWidth, withTextFields } from "../kicad-port/boardSetupRules";
 import { FACTORY_TEXT_GRAPHICS } from "../kicad-port/layerDefaults";
 import type { Preferences } from "../kicad-port/preferences";

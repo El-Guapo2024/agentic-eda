@@ -22,7 +22,6 @@ import { isTerminalPoint } from "../kicad-port/schTerminalPoint";
 import { existingSingleClickItem } from "../kicad-port/schSingleClick";
 import { arcMotion } from "../kicad-port/arcGeom";
 import { drawStrokeText } from "./text/strokeFont";
-import { schArcEditMode } from "../kicad-port/schArcEdit";
 import { ARC_DRAW_MODES } from "../kicad-port/arcGeom";
 import { ARC_MODE_ACTIONS, CYCLE_ARC_DRAW_MODE, schArcDrawMode } from "../kicad-port/schArcDraw";
 import { eeFindHandle, handlePos, POINT_SIZE_PX, type EeHandle } from "../kicad-port/eePointEdit";
@@ -120,6 +119,7 @@ import { isCarryTool, PREVIEW_AT } from "../kicad-port/schPlaceTool";
 import { beginItem, carrySymbol, placeCarried } from "../actions/schPlaceActions";
 import { imageSizeNm, SCALE_PPM } from "../kicad-port/refImage";
 import { useImageVersion } from "./canvas/imageCache";
+import { paintingIn, useColorThemeStamp } from "../state/colorThemeStore";
 import "../styles/canvas.css";
 
 /** `m_DefaultTextSize`: the glyph size of a sheet's text until Schematic Setup says another (50 mil), micrometres; Draw Table sizes its columns and rows by it. */
@@ -273,9 +273,9 @@ export function SchematicView() {
     if ((sch.locked ?? []).includes(id)) return null;
     const g = (sch.graphics ?? []).find((x) => x.id === id);
     if (!g) return null;
-    const ed = schPointEditor(g, pointDrag && pointDrag.id === id ? pointDrag : null, schArcEditMode(), measureStrokeText);
+    const ed = schPointEditor(g, pointDrag && pointDrag.id === id ? pointDrag : null, state.prefs.schArcEditMode, measureStrokeText);
     return ed ? { id, graphic: g, shown: ed.graphic, edit: ed.edit } : null;
-  }, [sch, state.activeTool, armedKind, state.selection, pointDrag]);
+  }, [sch, state.activeTool, armedKind, state.selection, pointDrag, state.prefs.schArcEditMode]);
 
   // The grid helper of the tool in force (kicad-port/schGridHelper.ts, schematic/schSnap.ts), fed with the sheet, the view, the grid list and its overrides.
   const snapRef = useRef<SchSnap | null>(null);
@@ -446,7 +446,9 @@ export function SchematicView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.activeTool, state.armedSymbol]);
 
-  useEffect(() => {
+  // the schematic editor's colour theme (Preferences > Schematic Editor > Colors): the sheet is painted in it, and again when it changes
+  const themeStamp = useColorThemeStamp();
+  useEffect(() => paintingIn("schematic", () => {
     const canvas = canvasRef.current;
     if (!canvas || !sch || !displaySch || containerSize.width === 0) return;
     const dpr = window.devicePixelRatio || 1;
@@ -580,7 +582,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, shapeEditor, pointDrag, gridDisplay, gridNm, gridSettingsList, state.gridVisible, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion]);
+  }), [sch, displaySch, shapeEditor, pointDrag, gridDisplay, gridNm, gridSettingsList, state.gridVisible, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion, themeStamp]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -1229,7 +1231,7 @@ export function SchematicView() {
         if (drag.kind === "editpoint") {
           // the drag ends: the graphic as its points have it, one undo step (`commit.Push( _( "Move Point" ) )`); a drag that changed nothing sends nothing
           const g = (sch?.graphics ?? []).find((x) => x.id === drag.id);
-          const moved = g && pointDrag ? schDrag(g, drag.handle, pointDrag.to, schArcEditMode(), measureStrokeText) : null;
+          const moved = g && pointDrag ? schDrag(g, drag.handle, pointDrag.to, state.prefs.schArcEditMode, measureStrokeText) : null;
           setPointDrag(null);
           const shape = g && moved ? schShapeFrom(moved.shape, g.shape) : null;
           if (g && shape && JSON.stringify(shape) !== JSON.stringify(g.shape)) {

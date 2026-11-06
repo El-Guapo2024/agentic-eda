@@ -33,12 +33,12 @@ import {
   type ConditionRow,
 } from "../../kicad-port/componentClasses";
 import { FootprintChooserDialog } from "../FootprintChooserDialog";
-import { useColorScheme } from "../../hooks/useColorScheme";
+import { useIconScheme } from "../../hooks/useColorScheme";
 import { Check, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
 
 /** One of KiCad's bitmaps (`KiBitmapBundle( BITMAPS::.. )`), in the colour scheme's set. */
 function Icon({ name }: { name: string }) {
-  const scheme = useColorScheme();
+  const scheme = useIconScheme();
   return <img src={`/icons/${scheme}/${name}.svg`} width={16} height={16} alt="" draggable={false} />;
 }
 

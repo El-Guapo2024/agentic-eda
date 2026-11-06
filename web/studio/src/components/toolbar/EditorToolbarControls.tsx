@@ -113,6 +113,9 @@ export function SymbolToolbarControl({ control }: { control: string }) {
   const state = useSymState();
   const dispatch = useSymDispatch();
   const sym = state.symbol;
+  // the grid and zoom boxes a customised toolbar can hold (`gridSelect`, `zoomSelect`: `SupportedFor( FRAME_SCH_SYMBOL_EDITOR )`)
+  if (control === "gridSelect") return <GridSelect editor="symbol" gridNm={state.gridNm} onChange={(um) => dispatch({ type: "SET_GRID_NM", um })} />;
+  if (control === "zoomSelect") return <ZoomSelect view={state.view} onView={(view) => dispatch({ type: "SET_VIEW", view })} />;
   if (control === "unitSelector") {
     const units = Array.from({ length: Math.max(1, sym?.unit_count ?? 1) }, (_, i) => i + 1);
     return (
