@@ -2738,6 +2738,12 @@ pub struct DrawingsSection {
     /// Update PCB from Schematic would remove a net nothing uses (`RemoveUnusedNets`), here it stays until the design is edited by hand.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub board_nets: Vec<String>,
+    /// The Net Inspector's renames and deletes of the board's nets (`PCB_NET_INSPECTOR_PANEL::onRenameSelectedNet`, `onDeleteSelectedNet`): laid over the nets
+    /// the schematic (or the intent) gives the board, last, each time the board is loaded (`crates/cli/src/board_net_edits.rs`) -- KiCad renames or removes the
+    /// board's `NETINFO_ITEM` and leaves the schematic as it is, until Update PCB from Schematic. `from` is the name the board would have without the edit,
+    /// `to` the name it has; an empty `to` is a deleted net (its pads on no net). Additive: absent reads as none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub net_renames: Vec<NetRename>,
     /// Board Setup's edits to the board's rules (net classes, constraints, solder mask and paste, text defaults,
     /// the stackup, violation severities, custom rules): laid over the intent's rules each time the board is
     /// loaded (`crate::rules::RulesOverlay::apply`, `crates/cli/src/board.rs::load`), the way `Design::nets` is.
@@ -2867,6 +2873,15 @@ pub struct DrawingsSection {
 /// `board::load` adds a [`crate::Part`] named `reference` to the model, joins its pads to the nets in `pad_nets` (a net the board
 /// does not have yet is created), and gives its footprint name `definition`'s pads when nothing else resolves that name. The pose
 /// is an ordinary `FootprintInstance` in `placement.footprints`; Delete removes the pose and this entry together.
+/// One of [`DrawingsSection::net_renames`]: the board's net `from` is called `to` (deleted when `to` is empty).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetRename {
+    pub from: String,
+    #[serde(default)]
+    pub to: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BoardPart {

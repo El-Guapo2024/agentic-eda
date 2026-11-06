@@ -1,6 +1,34 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_NET_INSPECTOR_OPTIONS, netInspectorCell, netInspectorColumns, netInspectorReport, netInspectorRows, netShown, type NetInspectorRow } from "./netInspector";
+import {
+  DEFAULT_NET_INSPECTOR_OPTIONS,
+  DEFAULT_NET_INSPECTOR_SETTINGS,
+  addGroupRule,
+  addNetStep,
+  deleteGroupQuestion,
+  deleteNetQuestion,
+  formatDelay,
+  lineKey,
+  netInspectorCell,
+  netInspectorColumns,
+  netInspectorConfigMenu,
+  netInspectorContextMenu,
+  netInspectorGroupCell,
+  netInspectorReport,
+  netInspectorRows,
+  netInspectorTree,
+  netShown,
+  parseNetInspectorSettings,
+  removeGroupRule,
+  renameParts,
+  renameStep,
+  sortBy,
+  toggleExpanded,
+  toggleSetting,
+  type NetInspectorMenuEntry,
+  type NetInspectorRow,
+  type NetInspectorSettings,
+} from "./netInspector";
 
 const row = (name: string, over: Partial<NetInspectorRow> = {}): NetInspectorRow => ({ name, netclass: "Default", total_length: 0, via_count: 0, via_length: 0, track_length: 0, die_length: 0, pad_count: 2, ...over });
 
@@ -53,4 +81,144 @@ test("names sort as ValueStringCompare sorts them; the netclass filter reads the
   const opts = { ...DEFAULT_NET_INSPECTOR_OPTIONS, filter: "and", filterByNetName: false };
   assert.equal(netShown(multi, opts), false, "the column's 'A and B' is not what the filter reads");
   assert.equal(netShown(multi, { ...opts, filter: "effective" }), true);
+});
+
+const S = (over: Partial<NetInspectorSettings> = {}): NetInspectorSettings => ({ ...DEFAULT_NET_INSPECTOR_SETTINGS, ...over });
+const labels = (m: readonly NetInspectorMenuEntry[]) => m.map((e) => (e.kind === "separator" ? "-" : e.kind === "submenu" ? `>${e.label}` : `${e.label}${e.enabled ? "" : " (off)"}${e.checked === undefined ? "" : e.checked ? " [x]" : " [ ]"}`));
+
+test("Group by Netclass: a group per class that has a listed net, before the nets, its numbers the sums; open only when expanded", () => {
+  const rows = [row("A", { netclass: "Power", track_length: 2, pad_count: 1 }), row("B", { netclass: "Power", track_length: 3, pad_count: 2 }), row("C", { netclass: "Default", track_length: 1 })];
+  const closed = netInspectorTree(rows, S({ groupByNetclass: true }));
+  assert.deepEqual(closed.map(lineKey), ["group:netclass:Default", "group:netclass:Power"], "the groups by name, nothing open");
+  const power = closed[1]!;
+  assert.equal(power.kind, "group");
+  if (power.kind !== "group") return;
+  assert.equal(netInspectorGroupCell(power.group, "name", "mm"), "Netclass: Power");
+  assert.equal(netInspectorGroupCell(power.group, "netclass", "mm"), "");
+  assert.equal(netInspectorGroupCell(power.group, "pad_count", "mm"), "3");
+  assert.equal(power.group.totals.track_length, 5);
+  const open = netInspectorTree(rows, S({ groupByNetclass: true, expandedRows: ["Power"] }));
+  assert.deepEqual(open.map(lineKey), ["group:netclass:Default", "group:netclass:Power", "net:A", "net:B"]);
+  // without grouping: the nets alone
+  assert.deepEqual(netInspectorTree(rows, S()).map(lineKey), ["net:A", "net:B", "net:C"]);
+});
+
+test("custom groups: every rule a group, shown when empty; a net in the first rule that finds it, before Group by Netclass", () => {
+  const rows = [row("/usb/D+", { netclass: "USB" }), row("/usb/D-", { netclass: "USB" }), row("GND", { netclass: "Power" }), row("VBUS", { netclass: "Power" })];
+  const s = S({ customGroupRules: ["/usb/", "NOPE", "/^V/"], groupByNetclass: true, expandedRows: ["/usb/", "/^V/", "Power"] });
+  const lines = netInspectorTree(rows, s);
+  assert.deepEqual(lines.map(lineKey), ["group:custom:/^V/", "net:VBUS", "group:custom:/usb/", "net:/usb/D+", "net:/usb/D-", "group:custom:NOPE", "group:netclass:Power", "net:GND"]);
+  const usb = lines.find((l) => l.kind === "group" && l.group.name === "/usb/");
+  assert.ok(usb && usb.kind === "group" && netInspectorGroupCell(usb.group, "name", "mm") === "Custom: /usb/");
+  assert.deepEqual(addGroupRule(s, "/usb/").customGroupRules, s.customGroupRules, "a rule already there is not added twice");
+  assert.deepEqual(addGroupRule(S(), "A{slash}B").customGroupRules, ["A/B"], "the pattern typed is unescaped");
+  assert.deepEqual(removeGroupRule(s, "NOPE").customGroupRules, ["/usb/", "/^V/"]);
+  assert.deepEqual(removeGroupRule(s, "Power").customGroupRules, s.customGroupRules, "a netclass group has no rule");
+});
+
+test("a heading's click sorts by its column (again: the other way); groups sort among themselves before the nets", () => {
+  const rows = [row("A", { netclass: "X", pad_count: 5 }), row("B", { netclass: "Y", pad_count: 1 }), row("C", { netclass: "Y", pad_count: 1 })];
+  let s = sortBy(S({ groupByNetclass: true }), "pad_count");
+  assert.deepEqual([s.sortingColumn, s.sortAscending], ["pad_count", true]);
+  assert.deepEqual(netInspectorTree(rows, s).map(lineKey), ["group:netclass:Y", "group:netclass:X"]);
+  s = sortBy(s, "pad_count");
+  assert.equal(s.sortAscending, false);
+  assert.deepEqual(netInspectorTree(rows, s).map(lineKey), ["group:netclass:X", "group:netclass:Y"]);
+  assert.deepEqual(toggleExpanded(toggleExpanded(s, "Y"), "Y").expandedRows, []);
+});
+
+test("Show Time Domain Details: the length columns are KiCad's delay columns, in picoseconds", () => {
+  const cols = netInspectorColumns(["F.Cu", "B.Cu"], true);
+  assert.deepEqual(cols.map((c) => c.label), ["Name", "Netclass", "Total Delay", "Via Count", "Via Delay", "Track Delay", "Die Delay", "Pad Count", "F.Cu", "B.Cu"]);
+  assert.deepEqual(cols.slice(2, 7).map((c) => c.csv), ["Net Delay", "Via Count", "Via Delay", "Track Delay", "Die Delay"]);
+  const r = row("N", { track_length: 10_000_000, track_delay: 61_234_000, total_delay: 62_000_000, layer_delays: { "F.Cu": 61_234_000 } });
+  assert.equal(netInspectorCell(r, "track_length", "mm", false, true), "61.23 ps");
+  assert.equal(netInspectorCell(r, "layer:F.Cu", "mm", false, true), "61.23 ps");
+  assert.equal(netInspectorCell(r, "total_length", "mm", true, true), "62.00", "the report has no unit label");
+  assert.equal(formatDelay(0), "0.00 ps");
+  assert.equal(formatDelay(1_000), "1.000e-03 ps", "shows only zeros: %.3e");
+  // the report keeps the user's length units in the header, as KiCad writes them
+  assert.ok(netInspectorReport([r], "mm", cols, true).startsWith('"Net Name";"Netclass";"Net Delay (mm)";'));
+  // sorted by the delays
+  const t = netInspectorTree([row("A", { track_delay: 5 }), row("B", { track_delay: 1 })], S({ showTimeDomainDetails: true, sortingColumn: "track_length" }));
+  assert.deepEqual(t.map(lineKey), ["net:B", "net:A"]);
+});
+
+test("the configure menu and the rows' menu, as KiCad builds them", () => {
+  const cols = netInspectorColumns(["F.Cu", "B.Cu"]);
+  const config = netInspectorConfigMenu(S({ customGroupRules: ["x"] }), { count: 1, oneIsGroup: true }, cols);
+  assert.deepEqual(labels(config), [
+    "Filter by Net Name [x]",
+    "Filter by Netclass [x]",
+    "-",
+    "Group by Netclass [ ]",
+    "-",
+    "Add Custom Group...",
+    "Remove Selected Custom Group",
+    "Remove All Custom Groups",
+    "-",
+    "Show Zero Pad Nets [ ]",
+    "Show Unconnected Nets [ ]",
+    "-",
+    "Show Time Domain Details [ ]",
+    "-",
+    "Save Net Inspector Report...",
+    "-",
+    ">Show / Hide Columns",
+  ]);
+  const sub = config[config.length - 1]!;
+  assert.ok(sub.kind === "submenu" && labels(sub.items).join("|") === "Netclass [x]|Total Length [x]|Via Count [x]|Via Length [x]|Track Length [x]|Die Length [x]|Pad Count [x]|-|F.Cu [x]|B.Cu [x]");
+  assert.deepEqual(labels(netInspectorConfigMenu(S(), { count: 0, oneIsGroup: false }, cols)).slice(6, 8), ["Remove Selected Custom Group (off)", "Remove All Custom Groups (off)"]);
+  assert.deepEqual(labels(netInspectorContextMenu({ count: 1, oneIsGroup: false }, false)), [
+    "Highlight Selected Net",
+    "Clear Net Highlighting (off)",
+    "-",
+    "Rename Selected Net...",
+    "Delete Selected Net",
+    "-",
+    "Add Net...",
+    "-",
+    "Remove Selected Custom Group (off)",
+  ]);
+  assert.deepEqual(labels(netInspectorContextMenu({ count: 2, oneIsGroup: false }, true)).slice(0, 5), ["Highlight Selected Nets", "Clear Net Highlighting", "-", "Rename Selected Net... (off)", "Delete Selected Nets"]);
+  assert.deepEqual(labels(netInspectorContextMenu({ count: 0, oneIsGroup: false }, false)).slice(0, 5), ["Highlight Selected Net (off)", "Clear Net Highlighting (off)", "-", "Rename Selected Net... (off)", "Delete Selected Net (off)"]);
+  assert.equal(toggleSetting(S(), "group_by_netclass")!.groupByNetclass, true);
+  assert.deepEqual(toggleSetting(S(), "hide_column:via_count")!.hiddenColumns, ["via_count"]);
+  assert.deepEqual(toggleSetting(S({ customGroupRules: ["a"] }), "remove_groups")!.customGroupRules, []);
+  assert.equal(toggleSetting(S(), "add_net"), null);
+});
+
+test("Rename Net: the short name in the dialog, the path kept, KiCad's messages and its loop", () => {
+  assert.deepEqual(renameParts("/power/V{slash}IN"), { path: "/power/", short: "V/IN" });
+  assert.deepEqual(renameParts("GND"), { path: "", short: "GND" });
+  const inUse = (n: string) => ["/power/VCC", "GND", "VDD"].includes(n);
+  assert.deepEqual(renameStep("/power/VIN", "VIN", "VIN", inUse), { kind: "done" });
+  assert.deepEqual(renameStep("/power/VIN", "", "VIN", inUse), { kind: "error", message: "Net name cannot be empty.", retry: "" });
+  assert.deepEqual(renameStep("/power/VIN", "VCC", "VIN", inUse), { kind: "error", message: "Net name 'VCC' is already in use.", retry: "" });
+  assert.deepEqual(renameStep("/power/VIN", "VDD", "VIN", inUse), { kind: "error", message: "Net name 'VDD' is already in use.", retry: "" }, "the short name is looked up too");
+  assert.deepEqual(renameStep("/power/VIN", "V/OUT", "VIN", inUse), { kind: "rename", to: "/power/V{slash}OUT" });
+  assert.deepEqual(renameStep("/power/VIN", "", "", inUse), { kind: "done" }, "after an error an empty name closes the dialog");
+  assert.deepEqual(addNetStep("", inUse), { kind: "done" });
+  assert.deepEqual(addNetStep("GND", inUse), { kind: "error", message: "Net name 'GND' is already in use.", retry: "" });
+  assert.deepEqual(addNetStep("NEW/1", inUse), { kind: "rename", to: "NEW/1" }, "Add Net keeps the name as typed");
+});
+
+test("Delete: a net with pads is asked about, a group asks for all of its nets", () => {
+  assert.equal(deleteNetQuestion(row("A{slash}B", { pad_count: 2 })), "Net 'A/B' is in use.  Delete anyway?");
+  assert.equal(deleteNetQuestion(row("X", { pad_count: 0 })), null);
+  const [g] = netInspectorTree([row("A", { netclass: "P" })], S({ groupByNetclass: true }));
+  assert.ok(g && g.kind === "group" && deleteGroupQuestion(g.group) === "Delete all nets in group 'P'?");
+  const [empty] = netInspectorTree([], S({ customGroupRules: ["Z"] }));
+  assert.ok(empty && empty.kind === "group" && deleteGroupQuestion(empty.group) === null);
+});
+
+test("the settings read back with KiCad's defaults; Show Unconnected Nets is not restored", () => {
+  assert.deepEqual(parseNetInspectorSettings(null), DEFAULT_NET_INSPECTOR_SETTINGS);
+  const back = parseNetInspectorSettings({ filter: "clk", groupByNetclass: true, showUnconnectedNets: true, sortingColumn: "layer:F.Cu", sortAscending: false, hiddenColumns: ["via_count", "bogus"], customGroupRules: ["a", "a", ""], expandedRows: ["a"] });
+  assert.equal(back.filter, "clk");
+  assert.equal(back.groupByNetclass, true);
+  assert.equal(back.showUnconnectedNets, false);
+  assert.equal(back.sortingColumn, "layer:F.Cu");
+  assert.deepEqual(back.hiddenColumns, ["via_count"]);
+  assert.deepEqual(back.customGroupRules, ["a"]);
 });

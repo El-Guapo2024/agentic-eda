@@ -40,7 +40,7 @@ import { ForeignImportDialogs } from "./components/ForeignImportDialogs";
 import { FileDropHost } from "./components/FileDropHost";
 import { BoardPadPropertiesDialog } from "./components/BoardPadPropertiesDialog";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
-import { NetInspectorDialog } from "./components/NetInspectorDialog";
+import { BottomDock } from "./components/panels/BottomDock";
 import { ZoneDialog } from "./components/ZoneDialog";
 import { TextDialog } from "./components/TextDialog";
 import { PcbItemDialogs } from "./components/PcbItemDialogs";
@@ -236,6 +236,12 @@ function StudioFrame() {
           {!is3d && <CommonToolHost />}
           <Toast />
         </div>
+        {/* The board editor's Net Inspector and Search panes (`.Bottom()`), under the canvas */}
+        {state.tab === "pcb" && (
+          <div className="bottom-dock-row">
+            <BottomDock />
+          </div>
+        )}
         {!hideBoardChrome && (
           <div className="drawing-toolbar-col">
             <Toolbar id="drawing" />
@@ -284,7 +290,6 @@ function StudioFrame() {
       <ZoomAreaOverlay />
       <FootprintPropertiesDialog />
       <BoardPadPropertiesDialog />
-      <NetInspectorDialog />
       <ZoneDialog />
       <TextDialog />
       <PcbItemDialogs />

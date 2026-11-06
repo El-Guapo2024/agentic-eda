@@ -16,10 +16,17 @@
 //!   as KiCad's does), Die Length the pads' Pad-to-die length, Pad Count the pads; Total Length is the three lengths
 //!   (`LIST_ITEM::GetTotalLength`).
 //!
-//! Where this differs: the pad-to-die length is read from the `(die_length ..)` a board file's pad had (the IR keeps it as one of the pad's
-//! tokens, `PadMaskInfo::tokens`; a pad made here has none); a via sits in a pad (`GetConnectedPads`) when the pad's copper touches the via's
-//! pad on a layer both have; a clipped end on an arc is measured along the arc's polygonisation (the 1 um `SHAPE_LINE_CHAIN` of it); the time
-//! domain columns ("Show Time Domain Details") are not offered.
+//! The time domain ("Show Time Domain Details", `LENGTH_DELAY_DOMAIN_OPT::WITH_DELAY_DETAIL`): `CalculateLengthDetails`' delays, each item's
+//! `TUNING_PROFILE_PARAMETERS_USER_DEFINED::GetPropagationDelays` over the tuning profile the net's effective class names (`eda_pns::delay`):
+//! a line's delay is its length times its layer's track delay (zero without "Enable time-domain tuning"), a via's (only with the stackup
+//! height in the lengths) the profile's override for its signal and via layers or its via delay times the stackup height between its signal
+//! layers, a pad's its Pad-to-die delay. Track Delay is summed by layer as Track Length is. A net with no profile has every delay zero. Every
+//! row carries both: the panel picks the columns.
+//!
+//! Where this differs: the pad-to-die length and delay are read from the `(die_length ..)` and `(die_delay ..)` a board file's pad had (the IR
+//! keeps them as the pad's tokens, `PadMaskInfo::tokens`; a pad made here has none; the delay is the file's number times `IU_PER_PS`, which
+//! both of the readings KiCad gives the token by file version agree on); a via sits in a pad (`GetConnectedPads`) when the pad's copper touches
+//! the via's pad on a layer both have; a clipped end on an arc is measured along the arc's polygonisation (the 1 um `SHAPE_LINE_CHAIN` of it).
 
 use eda_model::units::Nm;
 use crate::board;
@@ -28,6 +35,7 @@ use eda_drc::kimath::Shape;
 use eda_model::ir::{Design, Point};
 use eda_model::{ConstraintModel, PadKind};
 use eda_pns::chain::ShapeLineChain;
+use eda_pns::delay::{DelayParams, ATTOSECONDS_PER_PS};
 use eda_pns::kigeom::ShapeArc;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,12 +58,14 @@ struct LineItem {
     has_arc: bool,
 }
 
-/// A `LENGTH_DELAY_CALCULATION_ITEM` of type `VIA`, with the layers `optimiseVias` gives it.
+/// A `LENGTH_DELAY_CALCULATION_ITEM` of type `VIA`, with the layers `optimiseVias` gives it, and the layers the via spans
+/// (`Padstack().StartLayer()`, `EndLayer()`), which a tuning profile's via override is keyed by too.
 #[derive(Debug, Clone)]
 struct ViaItem {
     at: Point,
     radius: Nm,
     layers: (String, String),
+    span: (String, String),
 }
 
 /// What `CalculateLengthDetails` returns, the part the panel shows (`LENGTH_DELAY_STATS`).
@@ -68,6 +78,11 @@ pub(crate) struct LengthStats {
     pub pad_to_die_length: Nm,
     /// Track length per copper layer (`LayerLengths`).
     pub layer_lengths: BTreeMap<String, Nm>,
+    /// The delays (`WITH_DELAY_DETAIL`), attoseconds: `TrackDelay`, `ViaDelay`, `PadToDieDelay` and `LayerDelays`.
+    pub track_delay: i64,
+    pub via_delay: i64,
+    pub pad_to_die_delay: i64,
+    pub layer_delays: BTreeMap<String, i64>,
     /// How many tracks, arcs, vias and pads of the net there are (`relevantConnectivityItems`): a net with none has no row (`foundNets`).
     pub items: usize,
 }
@@ -76,6 +91,11 @@ impl LengthStats {
     /// `LIST_ITEM::GetTotalLength`.
     pub fn total(&self) -> Nm {
         self.track_length + self.via_length + self.pad_to_die_length
+    }
+
+    /// `LIST_ITEM::GetTotalDelay`.
+    pub fn total_delay(&self) -> i64 {
+        self.track_delay + self.via_delay + self.pad_to_die_delay
     }
 }
 
@@ -201,9 +221,9 @@ fn merge_lines(lines: &mut [LineItem]) {
 }
 
 /// `CalculateLengthDetails` of the items of `net` on `board` (see the module doc). `copper` is the board's copper layers in stack order,
-/// `die` the pad-to-die length of each pad of `board.pads` (0 where none), `height` the stackup height between two copper layers when the
-/// board uses it in its lengths (`None` when it does not).
-pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die: &[Nm], height: Option<&dyn Fn(&str, &str) -> Nm>) -> LengthStats {
+/// `die` the pad-to-die length and delay of each pad of `board.pads` (0 where none), `height` the stackup height between two copper layers when the
+/// board uses it in its lengths (`None` when it does not), `delay` the tuning profile of the net's class (`None`: no profile, every delay 0).
+pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die: &[(Nm, i64)], height: Option<&dyn Fn(&str, &str) -> Nm>, delay: Option<&DelayParams>) -> LengthStats {
     let on = |n: &Option<String>| n.as_deref() == Some(net);
     let pads: Vec<usize> = board.pads.iter().enumerate().filter(|(_, p)| on(&p.net)).map(|(i, _)| i).collect();
     let mut lines: Vec<LineItem> = board
@@ -254,7 +274,7 @@ pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die
             // "Nothing connects to this via": `pcbVia->GetLayer()` twice
             _ => (v.from_layer.clone(), v.from_layer.clone()),
         };
-        vias.push(ViaItem { at: v.at, radius, layers });
+        vias.push(ViaItem { at: v.at, radius, layers, span: (v.from_layer.clone(), v.to_layer.clone()) });
     }
 
     merge_lines(&mut lines);
@@ -301,32 +321,55 @@ pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die
         let length = l.line.length();
         stats.track_length += length;
         *stats.layer_lengths.entry(l.layer.clone()).or_default() += length;
+        // `getPropagationDelay` of a LINE: `delayUnit * ( Length() / PCB_IU_PER_MM )`, into `LayerDelays[ GetStartLayer() ]`
+        if let Some(d) = delay {
+            let t = d.track_delay(&l.layer, length);
+            stats.track_delay += t;
+            *stats.layer_delays.entry(l.layer.clone()).or_default() += t;
+        }
     }
     if let Some(height) = height {
         for v in &vias {
-            stats.via_length += height(&v.layers.0, &v.layers.1);
+            let h = height(&v.layers.0, &v.layers.1);
+            stats.via_length += h;
             stats.num_vias += 1;
+            // a VIA's delay counts only `&& useHeight`: the override for (signal start, signal end, via start, via end), else the via delay over the height
+            if let Some(d) = delay {
+                stats.via_delay += d.via_delay(&v.layers.0, &v.layers.1, &v.span.0, &v.span.1, h);
+            }
         }
     }
     for &i in &pads {
-        stats.pad_to_die_length += die.get(i).copied().unwrap_or(Nm::ZERO);
+        let (length, die_delay) = die.get(i).copied().unwrap_or((Nm::ZERO, 0));
+        stats.pad_to_die_length += length;
+        // a PAD's delay is `GetPadToDieDelay()` whatever the profile says
+        if delay.is_some() {
+            stats.pad_to_die_delay += die_delay;
+        }
         stats.num_pads += 1;
     }
     stats
 }
 
-/// The `(die_length ..)` a board file gave the pad, in nanometres (`PAD::GetPadToDieLength`): one of the pad's tokens the IR keeps.
-fn die_length_of(tokens: &[String]) -> Nm {
-    tokens
-        .iter()
-        .find_map(|t| t.trim().strip_prefix("(die_length").and_then(|r| r.trim().trim_end_matches(')').trim().parse::<f64>().ok()))
-        .map(eda_model::units::from_mm)
-        .unwrap_or(Nm::ZERO)
+/// The number of the pad's `(name ..)` token, if it has one.
+fn token_number(tokens: &[String], name: &str) -> Option<f64> {
+    tokens.iter().find_map(|t| t.trim().strip_prefix(name).filter(|r| r.starts_with(|c: char| c.is_whitespace())).and_then(|r| r.trim().trim_end_matches(')').trim().parse::<f64>().ok()))
 }
 
-/// The pad-to-die length of each of `board.pads`: the k-th pad numbered N of a footprint is the k-th pad numbered N of its footprint's pads,
-/// whose tokens are the footprint extra's pad at the same index.
-fn die_lengths(design: &Design, model: &ConstraintModel, board: &DrcBoard) -> Vec<Nm> {
+/// The `(die_length ..)` a board file gave the pad, in nanometres (`PAD::GetPadToDieLength`): one of the pad's tokens the IR keeps.
+fn die_length_of(tokens: &[String]) -> Nm {
+    token_number(tokens, "(die_length").map(eda_model::units::from_mm).unwrap_or(Nm::ZERO)
+}
+
+/// The `(die_delay ..)` a board file gave the pad, in attoseconds (`PAD::GetPadToDieDelay`): `parseBoardUnits( T_die_delay, EDA_DATA_TYPE::TIME )`,
+/// picoseconds times `IU_PER_PS` (a file before 20250926 reads it as a length, millimetres times `IU_PER_MM`: the same number).
+fn die_delay_of(tokens: &[String]) -> i64 {
+    token_number(tokens, "(die_delay").map(|ps| (ps * ATTOSECONDS_PER_PS as f64).round() as i64).unwrap_or(0)
+}
+
+/// The pad-to-die length and delay of each of `board.pads`: the k-th pad numbered N of a footprint is the k-th pad numbered N of its footprint's
+/// pads, whose tokens are the footprint extra's pad at the same index.
+fn die_lengths(design: &Design, model: &ConstraintModel, board: &DrcBoard) -> Vec<(Nm, i64)> {
     let extras = design.drawings.as_ref().map(|d| &d.footprint_extras);
     let mut seen: BTreeMap<(String, String), usize> = BTreeMap::new();
     board
@@ -336,14 +379,15 @@ fn die_lengths(design: &Design, model: &ConstraintModel, board: &DrcBoard) -> Ve
             let k = seen.entry((p.footprint_ref.clone(), p.number.clone())).or_insert(0);
             let nth = *k;
             *k += 1;
-            let Some(part) = model.part(&p.footprint_ref) else { return Nm::ZERO };
-            let Some(fp) = model.footprint_of(part) else { return Nm::ZERO };
-            let Some(extra) = extras.and_then(|e| e.iter().find(|e| e.id == p.footprint_ref)) else { return Nm::ZERO };
+            let none = (Nm::ZERO, 0);
+            let Some(part) = model.part(&p.footprint_ref) else { return none };
+            let Some(fp) = model.footprint_of(part) else { return none };
+            let Some(extra) = extras.and_then(|e| e.iter().find(|e| e.id == p.footprint_ref)) else { return none };
             if extra.pads.len() != fp.pads.len() {
-                return Nm::ZERO;
+                return none;
             }
             let idx = fp.pads.iter().enumerate().filter(|(_, q)| q.number == p.number).nth(nth).map(|(i, _)| i);
-            idx.and_then(|i| extra.pads.get(i)).map(|m| die_length_of(&m.tokens)).unwrap_or(Nm::ZERO)
+            idx.and_then(|i| extra.pads.get(i)).map(|m| (die_length_of(&m.tokens), die_delay_of(&m.tokens))).unwrap_or(none)
         })
         .collect()
 }
@@ -357,6 +401,14 @@ fn human_class_name(constituents: &[String]) -> String {
         [a, b, c] => format!("{a}, {b} and {c}"),
         [a, b, rest @ ..] => format!("{a}, {b} and {} more", rest.len()),
     }
+}
+
+/// The delays of the tuning profile `net`'s effective class names (`TUNING_PROFILE_PARAMETERS_USER_DEFINED::GetTuningProfile` of
+/// `GetEffectiveNetClass()->GetTuningProfile()`), `None` when it names none the project has.
+fn delay_params(model: &ConstraintModel, net: &str) -> Option<DelayParams> {
+    let p = model.board.tuning_profile_of(net)?;
+    let track_as_per_mm = p.layer_entries.iter().map(|e| (e.signal_layer.clone(), e.delay_as_per_mm)).collect();
+    Some(DelayParams { enabled: p.enable_time_domain_tuning, track_as_per_mm, via_as_per_mm: p.via_propagation_delay_as, via_overrides: p.via_overrides.clone() })
 }
 
 /// The rows of every net of the board (`calculateNets( .., true )`: the zero-pad nets too, the page filters them).
@@ -375,7 +427,8 @@ pub(crate) fn rows(design: &Design, model: &ConstraintModel) -> Vec<Value> {
     nets.remove("");
     nets.iter()
         .filter_map(|net| {
-            let s = length_details(&board, net, &copper, &die, height);
+            let delay = delay_params(model, net);
+            let s = length_details(&board, net, &copper, &die, height, delay.as_ref());
             // `calculateNets` walks the connectivity items: a net with no track, via or pad is not listed
             if s.items == 0 {
                 return None;
@@ -394,6 +447,12 @@ pub(crate) fn rows(design: &Design, model: &ConstraintModel) -> Vec<Value> {
                 "die_length": s.pad_to_die_length,
                 "pad_count": s.num_pads,
                 "layer_lengths": s.layer_lengths,
+                // `WITH_DELAY_DETAIL`, attoseconds (`formatDelay` shows picoseconds)
+                "total_delay": s.total_delay(),
+                "via_delay": s.via_delay,
+                "track_delay": s.track_delay,
+                "die_delay": s.pad_to_die_delay,
+                "layer_delays": s.layer_delays,
             }))
         })
         .collect()

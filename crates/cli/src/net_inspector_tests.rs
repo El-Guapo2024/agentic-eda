@@ -142,3 +142,55 @@ fn a_composite_net_class_has_kicads_human_readable_name() {
     assert_eq!(human_class_name(&names(&["A", "B", "C"])), "A, B and C");
     assert_eq!(human_class_name(&names(&["A", "B", "C", "D"])), "A, B and 2 more");
 }
+
+/// "Show Time Domain Details" (`CalculateLengthDetails( .., WITH_DELAY_DETAIL )`): the delays of the tuning profile the net's class names -- each line its
+/// length times its layer's delay per millimetre, the via (with the stackup height in the lengths) the profile's override for its layers, the pad its
+/// `(die_delay ..)`; a net with no profile has none, and neither has a profile without "Enable time-domain tuning" but for the pads.
+#[test]
+fn the_time_domain_columns_are_the_tuning_profiles_delays() {
+    use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile, ViaOverride};
+    let mut m = model();
+    let entry = |layer: &str, delay: i64| ProfileLayerEntry { signal_layer: layer.into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: mm(0.2), diff_pair_gap_nm: Nm::ZERO, delay_as_per_mm: delay };
+    m.board.tuning_profiles.profiles = vec![TuningProfile {
+        name: "Fast".into(),
+        profile_type: ProfileType::Single,
+        target_impedance: 50.0,
+        enable_time_domain_tuning: true,
+        layer_entries: vec![entry("F.Cu", 6_000_000), entry("B.Cu", 7_000_000)],
+        via_propagation_delay_as: 5_000_000,
+        via_overrides: vec![ViaOverride { signal_layer_from: "F.Cu".into(), signal_layer_to: "B.Cu".into(), via_layer_from: "F.Cu".into(), via_layer_to: "B.Cu".into(), delay_as: 12_345 }],
+    }];
+    m.board.tuning_profiles.class_profiles.insert("Default".into(), "Fast".into());
+    let tracks = vec![track("N", "F.Cu", &[p(11.0, 10.0), p(15.0, 10.0), p(15.0, 12.0)]), track("N", "B.Cu", &[p(15.2, 12.0), p(19.0, 12.0)])];
+    let mut d = design(tracks, vec![via(p(15.0, 12.0))]);
+    let pad_info = |tokens: Vec<String>| PadMaskInfo { tokens, ..Default::default() };
+    d.drawings = Some(eda_model::ir::DrawingsSection {
+        footprint_extras: vec![FootprintExtra { id: "R1".into(), pads: vec![pad_info(vec!["(die_delay 2.5)".into()]), pad_info(vec![])], ..Default::default() }],
+        ..Default::default()
+    });
+    let rows = rows(&d, &m);
+    let n = row(&rows, "N");
+    // 6 mm on the front at 6 ps/mm, 4 mm on the back at 7 ps/mm
+    let front = n["layer_delays"]["F.Cu"].as_i64().unwrap();
+    let back = n["layer_delays"]["B.Cu"].as_i64().unwrap();
+    assert!((front - 36_000_000).abs() <= 20, "{n}");
+    assert!((back - 28_000_000).abs() <= 20, "{n}");
+    assert_eq!(n["track_delay"].as_i64().unwrap(), front + back);
+    assert_eq!(n["via_delay"], 12_345, "the override for F.Cu to B.Cu through a through via");
+    assert_eq!(n["die_delay"], 2_500_000, "2.5 ps");
+    assert_eq!(n["total_delay"].as_i64().unwrap(), front + back + 12_345 + 2_500_000);
+    assert_eq!(die_delay_of(&["(die_delay 0.5)".to_string()]), 500_000);
+    // `(die_delay ..)` is not `(die_length ..)`
+    assert_eq!(die_length_of(&["(die_delay 0.5)".to_string()]), Nm::ZERO);
+
+    // the time domain off: the lines and the via take nothing, the pad keeps its own
+    m.board.tuning_profiles.profiles[0].enable_time_domain_tuning = false;
+    let rows = rows_of(&d, &m);
+    let n = row(&rows, "N");
+    assert_eq!((n["track_delay"].clone(), n["via_delay"].clone(), n["die_delay"].clone()), (json!(0), json!(0), json!(2_500_000)));
+
+    // no profile: no delay at all
+    m.board.tuning_profiles.class_profiles.clear();
+    let rows = rows_of(&d, &m);
+    assert_eq!(row(&rows, "N")["total_delay"], 0);
+}

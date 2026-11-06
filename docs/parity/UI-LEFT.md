@@ -70,16 +70,28 @@ Notes:
   - Add / remove / chamfer corner and Simplify empty the zone's fill (KiCad keeps the stale fill: only the corner drag `UnFill()`s).
   - The IR polygon has no holes, so a zone made a polygon is a slit ring (its holes come back when it is made a zone again).
   - M. PARITY-pcb §8, §11, §52, §68; GAPS 13.
-- **P9 [FM] Net Inspector.**
-  - It is a modal dialog, not a docked panel.
-  - No Group by Netclass or custom groups, no time-domain columns, and no Rename, Delete or Add Net.
-  - M. GAPS 29; PARITY-pcb §32d.
-- **P10 [FM] Search panel.** There is no docked panel: Show Search Panel and Interactive.search jump to the Activity tab. M. GAPS 21; PARITY-pcb §7a, §32b.
-- **P11 [FM] Colour theme.** It can't be edited: the swatches are read-only and Use Color from Schematic is dimmed. Renaming a net class loses its colour. M. GAPS 18; PARITY-pcb §24.
-- **P12 [FM] Global edits.**
-  - Edit Text & Graphics has no footprint reference, value, field or graphic scopes, no By-parent filters, and no font, bold, keep-upright or visible rows.
-  - Edit Track & Via has no microvia, annular-ring or IPC-4761 presets.
-  - M. GAPS 35; PARITY-pcb §13.
+- **P9 [FM] Net Inspector.** **done (task-u3-panels)**: a docked pane under the canvas (View > Panels > Net Inspector, checked; the Appearance panel's button), with the search box and the configure button; Group by Netclass and custom groups (`EDA_COMBINED_MATCHER`, KiCad's prompt), their sums, opened and closed; Show Time Domain Details (the tuning profiles' delays from `CalculateLengthDetails`); Show / Hide Columns; a double click or Enter highlights the rows' nets, the board's highlight selects their rows; Rename / Delete / Add Net with KiCad's prompts and messages, each one undo step (the board's net renamed or deleted on its pads and copper, the schematic's netlist left as it is); the settings kept per person. PARITY-pcb §73. Left:
+  - The columns cannot be dragged into another order or resized, so the header menu has no Auto-fit entries; the pane docks at the bottom only.
+  - With Strict on, a routed net cannot be deleted (its copper would short on no net); turn Strict off to delete it, as KiCad allows.
+  - A renamed net's class follows its new name's patterns, and a custom rule that names it is not rewritten. KiCad's rename and delete are not undoable, ours are.
+  - The report is a download (no file dialog).
+  - M. GAPS 29; PARITY-pcb §32d, §73.
+- **P10 [FM] Search panel.** **done (task-u3-panels)**: a docked pane under the canvas, shown by Search (Ctrl+G), View > Panels > Search and Find's "Show search panel" link, the box focused; the Footprints, Zones, Nets, Ratsnest, Text, Groups and Drills tabs with KiCad's columns and permissive matching; the sort and the heading clicks; selecting rows selects their items on the board and pans or zooms to them (the nets highlighted on Nets and Ratsnest); a double click opens the properties (Board Setup's Net Classes for a net); Ctrl+A, Ctrl+C, Copy; Search Hidden Fields and Search Metadata kept per person. The Activity tab is no longer involved. PARITY-pcb §74. Left:
+  - X and Y are from the page origin (no display-origin setting); the columns are fixed, not resizable.
+  - A net no item names is not on the Nets tab; the schematic has no Search pane.
+  - S. GAPS 21, 29; PARITY-pcb §7a, §32b, §74.
+- **P11 [FM] Colour theme.** **done (task-u3-panels)**: Preferences > PCB Editor > Colors (the theme list, New Theme... with KiCad's prompt and "Theme already exists!", each layer's swatch with Copy / Paste / Revert to saved color, Reset Colors to Defaults); the Appearance panel's layer and object swatches edit the editor's theme, and a read-only theme says KiCad's message; the board is drawn in the chosen theme; the themes are the person's, kept in the browser like the other preferences; Use Color from Schematic takes the class's schematic colour; a class renamed in Board Setup keeps its colour (PARITY-pcb §75). Left:
+  - KiCad has no Duplicate button: New Theme... starts from the shown theme's colours, which is the duplicate.
+  - No preview board (the page draws on the board while it is up) and no theme files in or out ("Open Theme Folder").
+  - The Footprint Editor uses the board editor's theme; the schematic and symbol editors have no Colors page.
+  - Undo of a net class rename does not bring the colour back to the old name (the colour is outside the undo history).
+  - S. GAPS 18; PARITY-pcb §24, §75.
+- **P12 [FM] Global edits.** **done (task-u3-panels)**: Edit Text & Graphics Properties walks the footprints first, as `TransferDataFromWindow` does: Reference designators, Values, Other footprint fields (and a `${REFERENCE}` / `${VALUE}` field or text with its box), Footprint graphic items and Footprint text items; By layer, By parent reference designator and By parent footprint library link (wildcards, remembered for the session), Selected items only through the footprint and its group; KiCad's Action rows -- Layer, Visible (fields only), Line thickness, Font ("KiCad Font" or a family; a field's face is now read and written), Bold, Italic, Text width and height apart, Text thickness with auto, Keep upright, Center on footprint -- each "-- leave unchanged --" to begin with, and Set to layer default values over the layer-class grid. Edit Track & Via Properties has the Microvias box (a via's own type), Via annular rings and Via protection features (KiCad's 19 IPC-4761 presets). Each OK is one undo step. PARITY-pcb §76. Left:
+  - Footprint dimensions picks nothing: a footprint's dimensions, text boxes, tables and barcodes are kept as the text of their forms (GAPS 25).
+  - A footprint's hidden texts and its courtyard's own graphics are not reached; a footprint graphic or text edited gives the instance its own copy of the footprint (the library's art is shared).
+  - The library link filter compares the part's footprint name (a built-in package's bare `0603`, not the KiCad footprint it is written as).
+  - A dimension's label: one size, no bold, italic or font, its "auto" thickness written as the pen; a value box takes a number, not an expression.
+  - S. GAPS 35; PARITY-pcb §13, §76.
 - **P13 [BD] Dimensions.** **done (task-u2-lines)**: each kind has `DrawDimension`'s click sequence (an aligned and an orthogonal one's height click, a centre mark, a radial one and a leader done at the second, a leader's dialog at once, the tool armed after) and a live preview of the whole dimension (`POST /api/dimension/preview`); a leader's text frame (none, rectangle, circle) is drawn, edited in the dialog and the Properties panel, and stops its lines; the point editor drags the feature points, the crossbar ends, a radial's knee and the text, a dragged text is placed by hand (`text_position_mode 2`, now read, kept and written; it was read as 0) and follows its crossbar; the dialog has KiCad's Position mode with Manual (PARITY-pcb §69). Left:
   - The height step of a slanted aligned dimension stays on the grid (KiCad turns the grid off); no width keys, layer change or Properties during the draw.
   - A manual text's left or right justification is not flipped past the crossbar's middle (the IR's dimension text is always centred); no font, bold, italic or mirror.

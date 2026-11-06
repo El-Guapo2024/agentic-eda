@@ -1,10 +1,12 @@
 // The board editor's Find dialog (pcbnew/dialogs/dialog_find.cpp over dialog_find_base.cpp): the search text with its history, Match case, Whole words only,
-// Wildcards, Wrap, the six "Search ..." checkboxes, Find Next, Find Previous, Restart Search and Close, and a status line ("Hit(s): 2 / 5", "No hits").
+// Wildcards, Wrap, the six "Search ..." checkboxes, Find Next, Find Previous, Restart Search and Close, a status line ("Hit(s): 2 / 5", "No hits") and the
+// "Show search panel" link (`onShowSearchPanel`).
 // Like KiCad's it is modeless -- a floating pane, so the board stays in reach and the hit it selects is in view -- and closing it only hides it: F3 and
 // Shift+F3 go on through the same list (state/pcbFind.ts). What a press does is actions/pcbFindActions.ts; the matching is kicad-port/pcbFind.ts.
 import { useEffect, useRef } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { setFindOptions, setPcbFind, usePcbFind } from "../state/pcbFind";
+import { focusSearchPane, toggleSearchPane } from "../state/searchPane";
 import { pcbFindStep } from "../actions/pcbFindActions";
 import type { PcbFindOptions } from "../kicad-port/pcbFind";
 
@@ -100,8 +102,24 @@ export function PcbFindDialog() {
             <button onClick={close}>Close</button>
           </div>
         </div>
-        <div data-testid="pcb-find-status" style={{ marginTop: 10, minHeight: 16, fontSize: 11, color: "var(--chrome-text-dim)" }}>
-          {find.status}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, marginTop: 10 }}>
+          <div data-testid="pcb-find-status" style={{ minHeight: 16, fontSize: 11, color: "var(--chrome-text-dim)" }}>
+            {find.status}
+          </div>
+          {/* `onShowSearchPanel`: `ACTIONS::showSearch` (a toggle), the dialog closed, the search box focused; the label carries the action's hotkey */}
+          <a
+            href="#"
+            data-testid="pcb-find-search-panel"
+            style={{ fontSize: 11, whiteSpace: "nowrap" }}
+            onClick={(e) => {
+              e.preventDefault();
+              toggleSearchPane();
+              close();
+              focusSearchPane();
+            }}
+          >
+            Show search panel (Ctrl+G)
+          </a>
         </div>
       </div>
     </div>

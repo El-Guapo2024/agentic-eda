@@ -228,7 +228,7 @@ impl Board<'_> {
     }
 
     /// `FOOTPRINT::GetBoundingBox( false )`: see the module doc.
-    fn mc_footprint_box(&self, pose: &FootprintInstance, part: &Part, footprint: Option<&Footprint>, extra: Option<&FootprintExtra>) -> Box4 {
+    pub(crate) fn mc_footprint_box(&self, pose: &FootprintInstance, part: &Part, footprint: Option<&Footprint>, extra: Option<&FootprintExtra>) -> Box4 {
         let r = Nm::new(250_000);
         let mut b: Box4 = (pose.at.x - r, pose.at.y - r, pose.at.x + r, pose.at.y + r);
         let Some(footprint) = footprint else { return b };
