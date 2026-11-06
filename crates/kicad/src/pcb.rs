@@ -1626,16 +1626,20 @@ pub(crate) fn write_footprint(
         // connectivity checks leave it be (`PAD::IsFreePad`). Written after the net, as `format( const PAD* )` does.
         // A pad of a footprint made here has its pin's (`updateComponentPadConnections`: `SetPinFunction( net.GetPinFunction() )`, `SetPinType( net.GetPinType() )`).
         let from_pin = link.filter(|_| pad_infos.is_none() && pad.kind != PadKind::NonPlatedHole).and_then(|l| l.pins.get(&pad.number));
-        let function = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_function.as_str()).or(from_pin.map(|(f, _)| f.as_str()));
+        // A pad edit's Pin Name and Pin Type (the Properties panel's, `PAD::SetPinFunction` / `SetPinType`) over what the file or the schematic pin gave.
+        let pad_edit = extra.edit.and_then(|e| e.pad(&pad.number, nth));
+        let function = pad_edit.and_then(|e| e.pin_function.as_deref()).or(pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_function.as_str())).or(from_pin.map(|(f, _)| f.as_str()));
         if let Some(function) = function.filter(|t| !t.is_empty()) {
             write!(out, " (pinfunction {})", sexpr_str(function)).unwrap();
         }
-        let pin_type = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_type.as_str()).or(from_pin.map(|(_, t)| t.as_str()));
+        let pin_type = pad_edit.and_then(|e| e.pin_type.as_deref()).or(pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_type.as_str())).or(from_pin.map(|(_, t)| t.as_str()));
         if let Some(pin_type) = pin_type.filter(|t| !t.is_empty()) {
             write!(out, " (pintype {})", sexpr_str(pin_type)).unwrap();
         }
-        // The pad's other tokens as the file had them (`remove_unused_layers`, `teardrops`, `tenting`, `property pad_prop_heatsink`, `die_length`, ..).
-        for token in pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.tokens.as_slice()).unwrap_or_default() {
+        // The pad's other tokens as the file had them (`remove_unused_layers`, `teardrops`, `tenting`, `property pad_prop_heatsink`, `die_length`, ..), with what a pad
+        // edit sets of them in their place (the fabrication property, the pad-to-die length and delay, the teardrop parameters).
+        let kept = crate::fp_fields::pad_kept_tokens(pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.tokens.as_slice()).unwrap_or_default(), pad_edit);
+        for token in &kept {
             // A design from before the padstack was modelled kept these as tokens; once the pad has a padstack of its own they are written from it.
             if stack_modelled && ["(remove_unused_layers", "(keep_end_layers", "(padstack"].iter().any(|t| token.starts_with(t)) {
                 continue;
@@ -4260,6 +4264,48 @@ mod tests {
         assert_eq!(strip(&design), strip(&back));
         // The tenting is still what the in-house checks read.
         assert!(design.drawings.as_ref().unwrap().via_tenting.iter().any(|t| (t.front, t.back) == (Some(false), Some(false))));
+    }
+
+    /// UI-LEFT P3: what Pad Properties and the Properties panel set on a pad goes in its place among the pad's tokens, as `format( const PAD* )` writes it: the
+    /// fabrication property (none for `pad_prop_none`), the pad-to-die length and delay (in picoseconds; nothing for 0), the teardrop parameters, and the pin name
+    /// and type over the board file's.
+    #[test]
+    fn a_pad_edits_property_die_length_delay_teardrops_and_pin_are_written_in_place_of_the_files() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (net 1 "N")
+  (footprint "Test:Heatsink" (layer "F.Cu") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (attr smd)
+    (fp_rect (start -5 -5) (end 5 5) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd rect (at -2 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 1 "N") (pinfunction "A") (teardrops (best_length_ratio 0.5) (enabled yes)) (die_length 0.25) (property pad_prop_heatsink))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+  )
+)"#;
+        let (mut design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let td = eda_model::teardrop_params::TeardropParams { enabled: true, best_length_ratio: 0.7, ..Default::default() };
+        let mut edit = eda_model::fp_edit::FootprintEdit::new("U1");
+        edit.set_pad(eda_model::fp_edit::PadEdit { property: Some("pad_prop_none".into()), die_length: Some(Nm::ZERO), die_delay: Some(12_500_000), teardrops: Some(td), pin_function: Some("B".into()), ..eda_model::fp_edit::PadEdit::none("1", 1) });
+        edit.set_pad(eda_model::fp_edit::PadEdit { property: Some("pad_prop_testpoint".into()), die_length: Some(Nm::new(1_500_000)), pin_type: Some("passive".into()), ..eda_model::fp_edit::PadEdit::none("2", 1) });
+        design.drawings.as_mut().unwrap().footprint_edits = vec![edit];
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let pad = |number: &str| out.lines().find(|l| l.contains(&format!("(pad \"{number}\" "))).unwrap_or_else(|| panic!("pad {number}")).trim().to_string();
+        let one = pad("1");
+        assert!(one.contains("(pinfunction \"B\")") && !one.contains("\"A\""), "{one}");
+        assert!(!one.contains("die_length") && !one.contains("(property"), "{one}");
+        assert!(one.contains(&format!("{} (die_delay 12.5)", td.format())), "{one}");
+        let two = pad("2");
+        assert!(two.contains("(pintype \"passive\")") && two.contains("(property pad_prop_testpoint)") && two.contains("(die_length 1.5)"), "{two}");
+        // kicad-cli's reader would see what our reader sees.
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let pads = &back.drawings.as_ref().unwrap().footprint_extras[0].pads;
+        assert_eq!(eda_model::teardrop_params::TeardropParams::from_tokens(&pads[0].tokens), Some(td));
+        assert_eq!((pads[0].pin_function.as_str(), pads[1].pin_type.as_str()), ("B", "passive"));
     }
 
     /// A pad keeps the tokens its fields do not stand for: the unconnected-layer mode (`remove_unused_layers`, `keep_end_layers`), `zone_layer_connections`, its teardrop

@@ -1248,6 +1248,13 @@ pub enum Cmd {
     SetCornerRadius { ids: Vec<String>, radius: Nm },
     /// A via's tenting, covering, plugging, capping, filling, backdrill and post-machining (`TRACK_VIA_DESC`'s rows past "Via Type"), all at once.
     SetViaProps { id: String, props: eda_model::via_extra::ViaProps },
+    /// The own teardrop parameters of vias and pads (`BOARD_CONNECTED_ITEM::GetTeardropParams`): Track & Via Properties', Pad Properties' and the Properties
+    /// panel's Teardrops rows; `None` gives the items back to Board Setup's block ([`eda_model::teardrop_params`]).
+    SetTeardropParams {
+        ids: Vec<String>,
+        #[serde(default)]
+        params: Option<eda_model::teardrop_params::TeardropParams>,
+    },
     /// "Solderpaste Margin Override" and "Solderpaste Margin Ratio Override" of a footprint (`FOOTPRINT::SetLocalSolderPasteMargin`, `..Ratio`); `None` is the board's.
     SetFootprintPasteMargin {
         part: String,
@@ -2645,7 +2652,7 @@ impl Cmd {
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::MirrorItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } | Cmd::EditTextStyle { id, .. } | Cmd::SetViaProps { id, .. } => vec![id.as_str()],
-            Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } | Cmd::SetTeardropParams { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
@@ -3392,6 +3399,7 @@ impl<'a> Board<'a> {
             Cmd::SetSolderMask { ids, solder_mask, margin } => self.set_solder_mask(ids, *solder_mask, *margin),
             Cmd::SetCornerRadius { ids, radius } => self.set_corner_radius(ids, *radius),
             Cmd::SetViaProps { id, props } => self.set_via_props(id, props),
+            Cmd::SetTeardropParams { ids, params } => self.set_teardrop_params(ids, params.as_ref()),
             Cmd::SetFootprintPasteMargin { part, margin, ratio } => self.set_footprint_paste_margin(part, *margin, *ratio),
             Cmd::Batch { cmds } => {
                 let saved = self.design.clone();

@@ -231,6 +231,29 @@ fn set_via_props_writes_the_tokens_kicad_writes_and_the_drcs_tenting_follows() {
 }
 
 #[test]
+fn set_teardrop_params_gives_vias_and_pads_their_own_and_none_gives_them_back_to_board_setup() {
+    use eda_model::teardrop_params::TeardropParams;
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let on = TeardropParams { enabled: true, best_length_ratio: 0.8, max_length: mm(2.0), ..Default::default() };
+    b.apply(&Cmd::SetTeardropParams { ids: ids(&["via_a", "U1.1"]), params: Some(on) }).unwrap();
+    assert_eq!(drawings(&b).via_extra("via_a").and_then(|e| e.teardrops()), Some(on), "the via's (teardrops ..) token");
+    assert_eq!(b.design().footprint_edit("U1").and_then(|e| e.pad("1", 1)).and_then(|p| p.teardrops), Some(on), "the pad's edit");
+    // KiCad's defaults (off) are still the item's own: Board Setup does not serve it any more.
+    b.apply(&Cmd::SetTeardropParams { ids: ids(&["via_a"]), params: Some(TeardropParams::default()) }).unwrap();
+    assert_eq!(drawings(&b).via_extra("via_a").and_then(|e| e.teardrops()), Some(TeardropParams::default()));
+    // None takes them away.
+    b.apply(&Cmd::SetTeardropParams { ids: ids(&["via_a", "U1.1"]), params: None }).unwrap();
+    assert!(drawings(&b).via_extra("via_a").is_none(), "a via left with nothing of its own keeps no extra");
+    assert!(b.design().footprint_edit("U1").is_none(), "nor a footprint an edit");
+    assert_eq!(b.apply(&Cmd::SetTeardropParams { ids: ids(&["via_a"]), params: None }).unwrap_err()[0].check, "ops_nothing_to_change");
+    assert_eq!(b.apply(&Cmd::SetTeardropParams { ids: ids(&["U1.9"]), params: Some(on) }).unwrap_err()[0].check, "ops_unknown_pad");
+    assert_eq!(b.apply(&Cmd::SetTeardropParams { ids: ids(&["nothing"]), params: Some(on) }).unwrap_err()[0].check, "ops_unknown_item");
+    let bad = TeardropParams { best_length_ratio: -0.1, ..on };
+    assert_eq!(b.apply(&Cmd::SetTeardropParams { ids: ids(&["via_a"]), params: Some(bad) }).unwrap_err()[0].check, "ops_bad_teardrops");
+}
+
+#[test]
 fn set_footprint_paste_margin_edits_a_board_files_footprint_tokens_and_refuses_one_placed_from_the_intent() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();

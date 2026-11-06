@@ -169,6 +169,42 @@ pub(crate) fn pad_json(design: &Design, model: &ConstraintModel, fp: &FootprintI
     })
 }
 
+/// What a pad has besides its shape that its Pad Properties and Properties rows edit (UI-LEFT P3): its own teardrop parameters (`teardrops`, absent when Board
+/// Setup's block serves it), its fabrication property (`property`, the file's word, absent for none), its pad-to-die length (`die_length`, nm) and delay
+/// (`die_delay`, attoseconds), absent for 0 -- each the pad edit's, else what its board file said -- and its pin name and type (`pin_function`, `pin_type`): the
+/// edit's, else the board file's, else the schematic pin's (`pad_json` put those).
+pub(crate) fn add_pad_facts(obj: &mut serde_json::Map<String, Value>, design: &Design, fp: &FootprintInstance, footprint: &eda_model::Footprint, pad: &Pad, nth: u32) {
+    let Some(index) = eda_model::fp_edit::pad_index(footprint, &pad.number, nth) else { return };
+    let edit = design.footprint_edit(&fp.id).and_then(|e| e.pad(&pad.number, nth));
+    let info = design.pad_mask_info(&fp.id, index, footprint.pads.len());
+    let tokens: &[String] = info.map(|i| i.tokens.as_slice()).unwrap_or_default();
+    let kept = |name: &str| tokens.iter().rev().find(|t| t.strip_prefix('(').and_then(|r| r.split_whitespace().next()) == Some(name)).and_then(|t| t.trim_end_matches(')').split_whitespace().nth(1)).map(str::to_string);
+    if let Some(t) = design.pad_teardrops(&fp.id, index, footprint.pads.len(), &pad.number, nth) {
+        obj.insert("teardrops".into(), json!(t));
+    }
+    let property = edit.and_then(|e| e.property.clone()).or_else(|| kept("property")).filter(|p| !p.is_empty() && p != "pad_prop_none");
+    if let Some(p) = property {
+        obj.insert("property".into(), json!(p));
+    }
+    let die_length = edit.and_then(|e| e.die_length).or_else(|| kept("die_length").and_then(|v| v.parse::<f64>().ok()).map(|mm| Nm::kiround(mm * 1_000_000.0))).filter(|l| *l != Nm::ZERO);
+    if let Some(l) = die_length {
+        obj.insert("die_length".into(), json!(l));
+    }
+    // `(die_delay ..)`: picoseconds since the file version that has it (attoseconds inside, `IU_PER_PS` 1e6)
+    let die_delay = edit.and_then(|e| e.die_delay).or_else(|| kept("die_delay").and_then(|v| v.parse::<f64>().ok()).map(|ps| (ps * 1e6).round() as i64)).filter(|d| *d != 0);
+    if let Some(d) = die_delay {
+        obj.insert("die_delay".into(), json!(d));
+    }
+    let function = edit.and_then(|e| e.pin_function.clone()).or_else(|| info.map(|i| i.pin_function.clone()).filter(|f| !f.is_empty()));
+    if let Some(f) = function {
+        obj.insert("pin_function".into(), if f.is_empty() { Value::Null } else { json!(f) });
+    }
+    let pin_type = edit.and_then(|e| e.pin_type.clone()).or_else(|| info.map(|i| i.pin_type.clone()).filter(|t| !t.is_empty()));
+    if let Some(t) = pin_type {
+        obj.insert("pin_type".into(), if t.is_empty() { Value::Null } else { json!(t) });
+    }
+}
+
 /// The copper shapes of a padstack pad on `fp`, each with the board's layers it is on: `{ layers, x, y, w, h, round, shape, ratio, outline }`, the keys of a pad's own
 /// (`x` and `y` the copper's centre on the board).
 fn stack_layers_json(model: &ConstraintModel, fp: &FootprintInstance, pad: &Pad, flashed: Option<&Vec<String>>) -> Vec<Value> {

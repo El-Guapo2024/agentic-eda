@@ -1273,6 +1273,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                             // The pad's own layers, for the 3D viewer's paste (r6 V6-5).
                             if let (Some(f), Some(obj)) = (footprint.as_ref(), v.as_object_mut()) {
                                 obj.insert("layers".into(), json!(crate::fp_json::pad_file_layers(&design, fp, f, pad)));
+                                // Its own teardrop parameters, fabrication property, pad-to-die length and delay, pin name and type (UI-LEFT P3).
+                                crate::fp_json::add_pad_facts(obj, &design, fp, f, pad, *nth);
                             }
                             v
                         }
@@ -1409,6 +1411,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     "flashed": flashed.vias.get(&v.id),
                     // The tenting, covering, plugging, capping, filling, backdrill and post-machining the via's tokens say (`eda_model::via_extra::ViaProps`); absent for none.
                     "props": extra.map(|e| e.props()).filter(|p| *p != eda_model::via_extra::ViaProps::default()),
+                    // Its own teardrop parameters (`PCB_VIA::GetTeardropParams`, `eda_model::teardrop_params`); absent when Board Setup's block serves it.
+                    "teardrops": extra.and_then(|e| e.teardrops()),
                 })
             }).collect::<Vec<_>>(),
             "zones": r.zones.iter().map(|z| json!({

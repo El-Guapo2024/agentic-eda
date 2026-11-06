@@ -31,9 +31,12 @@
 //!   limit; `computeChordThroughShape`'s graze test on the extended centreline, arcs exempt, in place of 8303b2ad's `computeEmergingTrackLength`) as well as
 //!   the arc geometry. Not ported from 25ec2335: `computeFittedTeardropPolygon` (a teardrop shrunk or dropped where it would come within clearance of
 //!   another net's copper, `collidesWithOtherNets`) and the solder-mask teardrops (`createAndAddTeardropWithMask`).
-//! - **One parameter block for every anchor**: Board Setup's ([`TeardropSettings`]). KiCad reads each via's and pad's own `TEARDROP_PARAMETERS`
-//!   (`via->GetTeardropParams()`, `pad->GetTeardropParams()`, which Board Setup's round and rect blocks only seed, `DIALOG_GLOBAL_EDIT_TEARDROPS::processItem`);
-//!   this model keeps an item's `(teardrops ..)` only as the file's tokens (`ViaExtra::tokens`, a pad's `ext.tokens`), unread.
+//! - **Each anchor's own parameters** (UI-LEFT P3, `task-u5-pcbfp`). KiCad 25ec2335's `UpdateTeardrops` reads each via's and pad's own `TEARDROP_PARAMETERS`
+//!   (`via->GetTeardropParams()`, `pad->GetTeardropParams()`: `m_Enabled`, the ratios, the maximum length and width, the filter), which Board Setup's round and
+//!   rect blocks only seed (`DIALOG_GLOBAL_EDIT_TEARDROPS::processItem`). Here an anchor with parameters of its own (`eda_model::teardrop_params`: a board file's
+//!   `(teardrops ..)`, or Pad Properties, Track & Via Properties and the Properties panel) is governed by them alone, whatever Board Setup says; an anchor without
+//!   them is Board Setup's ([`TeardropSettings`], which stands for the Edit Teardrops dialog: its enable and its target kinds). Proven against kicad-cli with
+//!   per-item parameters that differ from anchor to anchor (`crates/kicad/tests/teardrops_kicad_cli.rs`).
 //! - **Straight edges only** (`m_CurvedEdges` is not modeled -- always
 //!   `false`, which is also upstream's own factory default). No Bezier
 //!   curve, no multi-segment curve approximation.
@@ -50,6 +53,7 @@
 
 use eda_model::footprint::to_board;
 use eda_model::ir::{Design, FootprintInstance, Point, Side, TeardropSettings, Nm, Zone};
+use eda_model::teardrop_params::TeardropParams;
 use eda_model::{ConstraintModel, Pad, PadKind, PadShape};
 use eda_clipper2::Point64;
 use eda_shape_poly_set::basic_shapes::{circle_polygon, oval_polygon, round_chamfered_rect_polygon, trapezoid_polygon, ErrorLoc};
@@ -89,6 +93,8 @@ struct Anchor {
     /// The outline `findAnchorPointsOnTrack`, `computeChordThroughShape` and `computeAnchorPoints` build on: a round anchor's circle about its position
     /// (`TransformCircleToPolygon( .., aOtherPos, GetWidth( .. ) / 2, maxError, ERROR_INSIDE, 16 )`), any other pad's own polygon.
     outline: Vec<Point64>,
+    /// `pad->GetTeardropParams()` / `via->GetTeardropParams()`: the item's own parameters where it has them, else Board Setup's block.
+    settings: TeardropSettings,
 }
 
 enum AnchorKind {
@@ -203,42 +209,54 @@ fn pad_bounding_radius(lp: &Pad, poly: &[Point64], center: Point64) -> i64 {
     (far + if curved { MAX_ERROR } else { 0 }).max((drill as f64 / 2.0).round() as i64)
 }
 
+/// The parameters an anchor is built with: its own (`GetTeardropParams()`, which alone govern it, as in `UpdateTeardrops`), else Board Setup's block when the block is
+/// on and targets the anchor's kind (`DIALOG_GLOBAL_EDIT_TEARDROPS`, which writes the block into every targeted item). `None`: the anchor gets no teardrop.
+fn anchor_settings(own: Option<TeardropParams>, board: &TeardropSettings, targeted: bool) -> Option<TeardropSettings> {
+    match own {
+        Some(p) => p.enabled.then(|| p.as_settings()),
+        None => (board.enabled && targeted).then_some(*board),
+    }
+}
+
 fn collect_anchors(design: &Design, model: &ConstraintModel, settings: &TeardropSettings) -> Vec<Anchor> {
     let mut anchors = Vec::new();
     let round_outline = |c: Point64, w: i64| circle_polygon(c, w / 2, MAX_ERROR, ErrorLoc::Inside, 16);
 
-    if settings.target_vias {
-        if let Some(rt) = &design.routing {
-            for v in &rt.vias {
-                if v.net.is_empty() {
-                    continue;
-                }
-                let center = p64(v.at);
-                let width = v.diameter.get();
-                anchors.push(Anchor { center, width, net: v.net.clone(), reach: Reach::Span(v.from_layer.clone(), v.to_layer.clone()), kind: AnchorKind::Via, outline: round_outline(center, width) });
+    if let Some(rt) = &design.routing {
+        for v in &rt.vias {
+            if v.net.is_empty() {
+                continue;
             }
+            let own = design.drawings.as_ref().and_then(|d| d.via_extra(&v.id)).and_then(|e| e.teardrops());
+            let Some(anchor_settings) = anchor_settings(own, settings, settings.target_vias) else { continue };
+            let center = p64(v.at);
+            let width = v.diameter.get();
+            anchors.push(Anchor { center, width, net: v.net.clone(), reach: Reach::Span(v.from_layer.clone(), v.to_layer.clone()), kind: AnchorKind::Via, outline: round_outline(center, width), settings: anchor_settings });
         }
     }
 
-    if settings.target_pth_pads || settings.target_smd_pads {
+    {
         let net_of_pin = net_of_pin_map(model);
         if let Some(pl) = &design.placement {
             for fp in &pl.footprints {
                 let Some(part) = model.part(&fp.id) else { continue };
                 let Some(footprint) = model.footprint_of(part) else { continue };
-                for lp in &footprint.pads {
+                let mut seen: HashMap<&str, u32> = HashMap::new();
+                for (pad_idx, lp) in footprint.pads.iter().enumerate() {
+                    let nth = {
+                        let n = seen.entry(lp.number.as_str()).or_insert(0);
+                        *n += 1;
+                        *n
+                    };
                     let is_pth = lp.kind == PadKind::ThroughHole;
                     let is_npth = lp.kind == PadKind::NonPlatedHole;
                     if is_npth {
                         continue; // no copper connection to tear-drop at all
                     }
                     // `DIALOG_GLOBAL_EDIT_TEARDROPS::TransferDataFromWindow`: PTH pads by "PTH pads", SMD and edge connector pads by "SMD pads".
-                    if is_pth && !settings.target_pth_pads {
-                        continue;
-                    }
-                    if !is_pth && !settings.target_smd_pads {
-                        continue;
-                    }
+                    let targeted = if is_pth { settings.target_pth_pads } else { settings.target_smd_pads };
+                    let own = design.pad_teardrops(&fp.id, pad_idx, footprint.pads.len(), &lp.number, nth);
+                    let Some(anchor_settings) = anchor_settings(own, settings, targeted) else { continue };
                     let net = net_of_pin.get(&format!("{}.{}", fp.id, lp.number)).cloned().unwrap_or_default();
                     if net.is_empty() {
                         continue;
@@ -261,7 +279,7 @@ fn collect_anchors(design: &Design, model: &ConstraintModel, settings: &Teardrop
                     };
                     let bounding_radius = pad_bounding_radius(lp, &poly, center);
                     let outline = if round { round_outline(center, width) } else { poly.clone() };
-                    anchors.push(Anchor { center, width, net, reach, kind: AnchorKind::Pad { round, poly, bounding_radius }, outline });
+                    anchors.push(Anchor { center, width, net, reach, kind: AnchorKind::Pad { round, poly, bounding_radius }, outline, settings: anchor_settings });
                 }
             }
         }
@@ -1130,14 +1148,12 @@ fn teardrops_for(anchor: &Anchor, item: &TrackItem, settings: &TeardropSettings)
 /// UpdateTeardrops` run over the whole board. Returns `Zone`s with
 /// `teardrop: true`, fresh ids (empty, assigned by the caller's own
 /// `RoutingSection::assign_missing_ids`), ready to replace whatever
-/// teardrop zones currently exist. Empty immediately when `!settings.
-/// enabled`, matching `TEARDROP_PARAMETERS::m_Enabled` gating the whole
-/// feature upstream.
+/// teardrop zones currently exist. Each via and pad is built with its own
+/// parameters where it has them (their `m_Enabled` gates it, as
+/// `TEARDROP_PARAMETERS::m_Enabled` does upstream), else with `settings`,
+/// whose `enabled` and target kinds then decide.
 pub fn generate_teardrops(design: &Design, model: &ConstraintModel, settings: &TeardropSettings) -> Vec<Zone> {
     let mut out = Vec::new();
-    if !settings.enabled {
-        return out;
-    }
     let Some(rt) = &design.routing else { return out };
     let anchors = collect_anchors(design, model, settings);
 
@@ -1150,7 +1166,7 @@ pub fn generate_teardrops(design: &Design, model: &ConstraintModel, settings: &T
                 continue;
             }
             for item in TrackItem::of(t) {
-                for outline in teardrops_for(anchor, &item, settings) {
+                for outline in teardrops_for(anchor, &item, &anchor.settings) {
                     out.push(Zone { id: String::new(), net: anchor.net.clone(), layer: t.layer.clone(), outline: outline.into_iter().map(pt).collect(), teardrop: true, ..Default::default() });
                 }
             }
@@ -1179,6 +1195,55 @@ mod tests {
         design.routing.as_mut().unwrap().vias.push(Via { id: "v1".into(), net: "N1".into(), at: a, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![a, Point { x: a.x + mm(5.0), y: a.y }], arc_mid_offset: None });
         assert!(generate_teardrops(&design, &model, &TeardropSettings::default()).is_empty());
+    }
+
+    /// UI-LEFT P3: each via's and pad's own `TEARDROP_PARAMETERS` govern it (`UpdateTeardrops` reads `via->GetTeardropParams()`, `pad->GetTeardropParams()`);
+    /// Board Setup's block serves only the anchors that have none.
+    #[test]
+    fn an_anchors_own_teardrop_parameters_govern_it_whatever_board_setup_says() {
+        use eda_model::teardrop_params::TeardropParams;
+        use eda_model::via_extra::ViaExtra;
+        let (mut design, model) = two_pad_model();
+        let a = pad_center(&design, &model, "R1", "1");
+        let (v1, v2) = (Point { x: a.x + mm(3.0), y: a.y }, Point { x: a.x + mm(3.0), y: a.y + mm(6.0) });
+        let rt = design.routing.as_mut().unwrap();
+        for (id, at) in [("v1", v1), ("v2", v2)] {
+            rt.vias.push(Via { id: id.into(), net: "N1".into(), at, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+            rt.tracks.push(Track { id: format!("t{id}"), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![at, Point { x: at.x + mm(5.0), y: at.y }], arc_mid_offset: None });
+        }
+        let own = |p: TeardropParams| {
+            let mut e = ViaExtra { id: "v1".into(), ..Default::default() };
+            e.set_teardrops(Some(&p));
+            e
+        };
+        // Board Setup off, v1's own on: v1 alone gets one.
+        let on = TeardropParams { enabled: true, ..Default::default() };
+        design.drawings.get_or_insert_with(Default::default).via_extras = vec![own(on)];
+        let out = generate_teardrops(&design, &model, &TeardropSettings::default());
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(point_in_polygon(v1, &out[0].outline));
+        // Board Setup on, v1's own off: v2 alone gets one.
+        design.drawings.as_mut().unwrap().via_extras = vec![own(TeardropParams::default())];
+        let out = generate_teardrops(&design, &model, &enabled_settings());
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(point_in_polygon(v2, &out[0].outline));
+        // v1's own sizes: a longer teardrop than Board Setup's gives v2.
+        design.drawings.as_mut().unwrap().via_extras = vec![own(TeardropParams { enabled: true, best_length_ratio: 1.0, max_length: mm(5.0), ..Default::default() })];
+        let out = generate_teardrops(&design, &model, &enabled_settings());
+        assert_eq!(out.len(), 2);
+        let reach = |z: &Zone, from: Point| z.outline.iter().map(|p| p.x - from.x).max().unwrap();
+        let (z1, z2) = if point_in_polygon(v1, &out[0].outline) { (&out[0], &out[1]) } else { (&out[1], &out[0]) };
+        assert!(reach(z1, v1) > reach(z2, v2) + mm(0.3), "{:?} {:?}", reach(z1, v1), reach(z2, v2));
+        // A pad's own parameters, from its edit: R1.1 turned on while Board Setup is off.
+        design.drawings.as_mut().unwrap().via_extras.clear();
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "tp".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![a, Point { x: a.x, y: a.y - mm(5.0) }], arc_mid_offset: None });
+        assert!(generate_teardrops(&design, &model, &TeardropSettings::default()).is_empty());
+        let mut edit = eda_model::fp_edit::FootprintEdit::new("R1");
+        edit.set_pad(eda_model::fp_edit::PadEdit { teardrops: Some(on), ..eda_model::fp_edit::PadEdit::none("1", 1) });
+        design.drawings.as_mut().unwrap().footprint_edits = vec![edit];
+        let out = generate_teardrops(&design, &model, &TeardropSettings::default());
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(point_in_polygon(Point { x: a.x, y: a.y - mm(0.1) }, &out[0].outline) || point_in_polygon(a, &out[0].outline));
     }
 
     #[test]
