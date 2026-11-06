@@ -2,6 +2,21 @@
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
+## Start here (2026-11-07, late): round 2 in progress, pushed in a hurry (credits running out)
+
+- **Main 826222cc includes round 2's merged batches.** In `docs/parity/UI-LEFT-2.md`:
+  - v1: text, select, handles, schcarry.
+  - v2: prefs, pcbfp, teardrops.
+  - The Import Netlist and Place Footprint fixes.
+- **Not yet gated:** the full suite (`tools/check.sh full` and `tools/run-all-checks.sh -j 3`) was started on 826222cc and had not finished. Rerun it first, then fix what fails.
+- **In flight, pushed as branches, not merged:**
+  - `task-v2-libs` (LL1, LL2, LL3, LL6).
+  - `task-v3-schdlg` (SS6, SS7, SS8, SS11, SS13, SS14).
+  - `task-v3-pcbmisc` (PP8 to PP13).
+
+  Each may hold only part of its work. Merge main into each, gate it, then merge.
+- **The rest of the round-2 list** is in UI-LEFT-2.md: every entry not marked **done (task-…)**.
+
 ## Start here (2026-11-07): the UI list is done, apart from what needs the user
 
 - **The safety-power board is dropped (the user, 2026-11-07):** "we might not have to do this PCB after all". Do not work on `designs/safety-power/`. The studio may keep serving it as a demo board. The focus is the software itself.
