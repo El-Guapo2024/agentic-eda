@@ -291,10 +291,10 @@
     await settle();
     await E.run("pcbnew.Control.layerTop");
     await sleep(200);
-    // R1 selected (a click on its body), then Autoroute
-    // R1's body: between its two pads (a flip mirrors the pads about the footprint's position)
-    const at = [Math.round((padOf["R1.1"][0] + padOf["R1.2"][0]) / 2), Math.round((padOf["R1.1"][1] + padOf["R1.2"][1]) / 2)];
-    await clickAt(at[0], at[1]);
+    // R1 selected, then Autoroute. The scenario is about the layer the run gives back, not about picking: R1 is selected through the selection
+    // actions, as the other checks do (what a click on its reference text picks is the selection tool's business, UI-LEFT P22)
+    await E.run("common.InteractiveSelection.clear");
+    await E.run("common.InteractiveSelection.selectItems", ["R1"]);
     await sleep(300);
     t(E.state().selection.some((x) => x.id === "R1"), `R1 is selected: ${JSON.stringify(E.state().selection)}`);
     const n = replies.length;
