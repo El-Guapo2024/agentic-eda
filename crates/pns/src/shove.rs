@@ -542,11 +542,15 @@ struct Shove<'a> {
     /// The area of the springback frame this shove starts from (`m_nodeStack.back().m_affectedArea`): `totalAffectedArea()` is it
     /// merged with this shove's own, and that is where `runOptimizer` may straighten the shoved lines.
     prior_area: Option<Area>,
+    /// A head's policy without `SHP_DONT_LOCK_ENDPOINTS`: `SHOVE::Run` locks the joints at each head's ends once the head is in the node
+    /// (`m_currentNode->LockJoint( head.CPoint( 0 ), &head, true )`, and its last point unless it ends in a via), so a shove stops at them
+    /// (`pushOrShoveVia`'s `jt->IsLocked()`, `assembleLine`'s `aStopAtLockedJoints`). The multi-track drag's heads (`MULTI_DRAGGER::multidragShove`).
+    lock_head_ends: bool,
 }
 
 impl<'a> Shove<'a> {
     fn new(world: &'a Node, rules: &'a BoardRules, settings: &'a RoutingSettings) -> Self {
-        Shove { world, node: world.branch(), rules, settings, ranks: HashMap::new(), head_marked: HashSet::new(), line_stack: Vec::new(), optimizer_queue: Vec::new(), roots: Vec::new(), root_of: HashMap::new(), affected: None, via_archive: HashMap::new(), iter: 0, reversed_head: false, dragged_away: HashSet::new(), force_clearance: None, prior_area: None }
+        Shove { world, node: world.branch(), rules, settings, ranks: HashMap::new(), head_marked: HashSet::new(), line_stack: Vec::new(), optimizer_queue: Vec::new(), roots: Vec::new(), root_of: HashMap::new(), affected: None, via_archive: HashMap::new(), iter: 0, reversed_head: false, dragged_away: HashSet::new(), force_clearance: None, prior_area: None, lock_head_ends: false }
     }
 
     /// `m_currentNode->GetClearance( aA, aB, false )`: what the rules ask of the two (no epsilon).
@@ -1640,6 +1644,16 @@ impl<'a> Shove<'a> {
                 return None;
             }
             line.segment_ids = ids.clone();
+            // `if( !( headLineEntry.policy & SHP_DONT_LOCK_ENDPOINTS ) )`: "LockJoint( head.CPoint( 0 ), &head, true ); if( !head.EndsWithVia() )
+            // LockJoint( head.CLastPoint(), &head, true )", the head being in the node by now (so both joints are there)
+            if self.lock_head_ends {
+                if let Some(&first) = line.pts.first() {
+                    self.node.lock_joint(first, &line.net);
+                }
+                if let (None, Some(&last)) = (&via, line.pts.last()) {
+                    self.node.lock_joint(last, &line.net);
+                }
+            }
             let mut head_line = SLine::new(line);
             head_line.rank = HEAD_RANK;
             let head_root = self.new_root(RootEntry { root_line: Some(head_line.clone()), is_head: true, ..RootEntry::default() });
@@ -1859,6 +1873,16 @@ pub fn shove_heads_after(node: &Node, heads: Vec<ShoveHead>, rules: &BoardRules,
     shove.run_heads(heads)
 }
 
+/// [`shove_heads_after`] with each head's ends locked once it is in the node: heads added without `SHP_DONT_LOCK_ENDPOINTS`
+/// (`MULTI_DRAGGER::multidragShove`'s `AddHeads( l.draggedLine, SHP_SHOVE | SHP_DONT_OPTIMIZE )`), which `SHOVE::Run` locks
+/// (`LockJoint` of the head's first point, and of its last unless it ends in a via).
+pub fn shove_heads_locked_after(node: &Node, heads: Vec<ShoveHead>, rules: &BoardRules, settings: &RoutingSettings, prior_area: Option<Area>) -> Option<ShoveOutcome> {
+    let mut shove = Shove::new(node, rules, settings);
+    shove.prior_area = prior_area;
+    shove.lock_head_ends = true;
+    shove.run_heads(heads)
+}
+
 /// `SHOVE::ShoveObstacleLine( aCurLine, aObstacleLine, aResultLine )` after `ForceClearance( forced.is_some(), forced )`: the line
 /// `obstacle` re-walked around the hulls of `pusher` (and the via it ends in) so it keeps the clearance -- the forced one, if given, else
 /// the rules' -- from it, its ends where they were. The pair placer uses it to put one line of a pair at the gap from the other
@@ -1898,6 +1922,23 @@ mod tests {
         assert!(self_intersecting(&[p(Nm::ZERO, Nm::ZERO), p(Nm::new(10), Nm::ZERO), p(Nm::new(10), Nm::new(10)), p(Nm::new(5), Nm::new(-5))]));
         assert!(!self_intersecting(&[p(Nm::ZERO, Nm::ZERO), p(Nm::new(10), Nm::ZERO), p(Nm::new(10), Nm::new(10))]));
         assert!(!self_intersecting(&[p(Nm::ZERO, Nm::ZERO), p(Nm::new(10), Nm::ZERO), p(Nm::new(20), Nm::new(10)), p(Nm::new(30), Nm::new(10))]));
+    }
+
+    /// UI-LEFT-2 RR1: heads added without `SHP_DONT_LOCK_ENDPOINTS` (the multi-track drag's) have their ends locked once they are in the node
+    /// (`SHOVE::Run`: `LockJoint( head.CPoint( 0 ), &head, true )`, and the last point unless the head ends in a via): the joint of the via a head
+    /// starts on is locked in the world the shove leaves, so a later push stops there (`pushOrShoveVia`'s `jt->IsLocked()`); the pair placer's
+    /// heads, run with `shove_heads_after`, lock nothing of their own here.
+    #[test]
+    fn a_multi_head_shove_locks_the_joints_at_the_heads_ends() {
+        let origin = Point { x: Nm::ZERO, y: Nm::ZERO };
+        let mut node = Node::new();
+        node.add(Item::Via(Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: origin, diameter: mm(0.6), drill: mm(0.3), source_via: Some("vA".into()), locked: false, is_virtual: false }));
+        let head = || ShoveHead { line: Line::from_points(net_of("A"), 0, mm(0.2), vec![origin, Point { x: mm(3.0), y: Nm::ZERO }]), via: None };
+        let (rules, settings) = (rules(), RoutingSettings::default());
+        let locked = shove_heads_locked_after(&node, vec![head()], &rules, &settings, None).expect("nothing in the way");
+        assert!(locked.world.joint_at(origin, &net_of("A")).is_some_and(|j| j.locked), "the via's joint at the head's start is locked");
+        let free = shove_heads_after(&node, vec![head()], &rules, &settings, None).expect("nothing in the way");
+        assert!(free.world.joint_at(origin, &net_of("A")).is_some_and(|j| !j.locked));
     }
 
     /// findings p5 F1-2: `pushOrShoveVia` refuses a via whose joint is locked (`if( jt->IsLocked() ) return SH_INCOMPLETE;`) -- the via a

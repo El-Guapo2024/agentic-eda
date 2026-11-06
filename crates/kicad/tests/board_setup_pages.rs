@@ -132,8 +132,9 @@ fn a_profile_the_page_would_refuse_is_not_imported() {
 }
 
 /// F3 (round 7): Board Setup > Teardrops is `BOARD_DESIGN_SETTINGS`' `teardrop_options` and `teardrop_parameters` (`board_design_settings.cpp:526-660`). The
-/// reader takes the target kinds and the round block's sizes (this port's single block collapses KiCad's three, PARITY-pcb §15); the writer repeats it for the
-/// round and rectangular targets and keeps the track-end target at `TEARDROP_PARAMETERS()`'s constructor defaults.
+/// reader takes the target kinds and the round block's sizes, curved edges, two segments and zone preference (this port's one block for vias and pads collapses
+/// KiCad's round and rect ones, PARITY-pcb §15), and the track-end block (UI-LEFT-2 PP7); the writer repeats the one block for the round and rectangular targets
+/// and writes the track-end one.
 #[test]
 fn the_projects_teardrop_parameters_are_read_and_written() {
     let (mut design, model, _) = import_kicad_pcb(BOARD).expect("imports");
@@ -151,7 +152,12 @@ fn the_projects_teardrop_parameters_are_read_and_written() {
     assert_eq!((td.target_vias, td.target_pth_pads, td.target_smd_pads), (true, false, true));
     assert_eq!((td.best_length_ratio, td.best_width_ratio, td.width_to_size_filter_ratio), (0.2, 0.8, 0.6));
     assert_eq!((td.max_len_nm, td.max_width_nm), (mm(0.5), mm(2.5)));
-    assert_eq!(td, TeardropSettings { target_pth_pads: false, best_length_ratio: 0.2, best_width_ratio: 0.8, max_len_nm: mm(0.5), max_width_nm: mm(2.5), width_to_size_filter_ratio: 0.6, ..Default::default() }, "the rect and track entries do not feed the collapsed block");
+    let track_end = eda_model::teardrop_params::TeardropParams { max_length: mm(0.7), best_length_ratio: 0.3, ..Default::default() };
+    assert_eq!(
+        td,
+        TeardropSettings { target_pth_pads: false, best_length_ratio: 0.2, best_width_ratio: 0.8, max_len_nm: mm(0.5), max_width_nm: mm(2.5), width_to_size_filter_ratio: 0.6, curved_edges: true, track_end, ..Default::default() },
+        "the rect entry does not feed the collapsed block; `td_curve_segcount` 4 is curved; the track entry is the track-to-track block"
+    );
 
     let project: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
     let ds = &project["board"]["design_settings"];
@@ -161,8 +167,10 @@ fn the_projects_teardrop_parameters_are_read_and_written() {
         let e = entry(name);
         assert_eq!((e["td_maxlen"].as_f64(), e["td_maxheight"].as_f64(), e["td_length_ratio"].as_f64(), e["td_height_ratio"].as_f64(), e["td_width_to_size_filter_ratio"].as_f64()), (Some(0.5), Some(2.5), Some(0.2), Some(0.8), Some(0.6)), "{name}: {e}");
     }
+    assert_eq!(entry("td_round_shape")["td_curve_segcount"], 1);
     let track = entry("td_track_end");
-    assert_eq!((track["td_maxlen"].as_f64(), track["td_maxheight"].as_f64(), track["td_length_ratio"].as_f64(), track["td_height_ratio"].as_f64(), track["td_width_to_size_filter_ratio"].as_f64()), (Some(1.0), Some(2.0), Some(0.5), Some(1.0), Some(0.9)), "KiCad's constructor defaults: {track}");
+    assert_eq!((track["td_maxlen"].as_f64(), track["td_maxheight"].as_f64(), track["td_length_ratio"].as_f64(), track["td_height_ratio"].as_f64(), track["td_width_to_size_filter_ratio"].as_f64()), (Some(0.7), Some(2.0), Some(0.3), Some(1.0), Some(0.9)), "the track-to-track block: {track}");
+    assert_eq!((track["td_enabled"].as_bool(), track["td_allow_use_two_tracks"].as_bool()), (Some(false), Some(true)));
     assert_eq!(ds["teardrop_options"], serde_json::json!([{ "td_onvia": true, "td_onpthpad": false, "td_onsmdpad": true, "td_ontrackend": false, "td_onroundshapesonly": false }]));
 
     // Read back: the same block (the off-schema keys are KiCad's own defaults).

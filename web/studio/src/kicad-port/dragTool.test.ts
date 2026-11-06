@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dragStateFromPreview, type DragDrawState } from "./dragTool";
+import { dragHighlight, dragStateFromPreview, inlineDragBegin, inlineDragEnd, type DragDrawState } from "./dragTool";
 import type { DragPreview } from "../api/types";
 
 function baseDraw(overrides: Partial<DragDrawState> = {}): DragDrawState {
@@ -100,4 +100,35 @@ test("a component drag's preview keeps its footprints and start, takes the offse
   assert.deepEqual(next.start, [0, 0]);
   assert.equal(next.moved, true);
   assert.equal(next.fanout?.length, 1);
+});
+
+// UI-LEFT-2 RR1: `TOOL_BASE::highlightNets( true, nets )` -- the drag's net is shown; at the end the highlight goes back when it already held that net
+// ("we assume they want to keep them highlighted after routing"), else off; no net is no call.
+test("dragHighlight shows the dragged net and puts back what was highlighted only when it held that net", () => {
+  assert.deepEqual(dragHighlight([], ["SIG"]), { show: ["SIG"], restore: [] });
+  assert.deepEqual(dragHighlight(["GND"], ["SIG"]), { show: ["SIG"], restore: [] }, "another net's highlight goes when the drag ends");
+  assert.deepEqual(dragHighlight(["GND", "SIG"], ["SIG"]), { show: ["SIG"], restore: ["GND", "SIG"] }, "kept when it held the dragged net");
+  assert.equal(dragHighlight(["GND"], []), null);
+  assert.equal(dragHighlight(["GND"], [""]), null, "a track of no net");
+});
+
+// `ROUTER_TOOL::InlineDrag`: the selection tool's drag clears the selection at its start and Esc puts it back (`restoreSelection( selection )`);
+// a committed multi-track drag selects its leaders' tracks; the router tool's own drag (`performDragging`) leaves the selection alone.
+test("an inline drag clears the selection, Esc puts it back, a commit selects the leaders, the router tool's drag leaves it", () => {
+  const context = { selection: ["t1", "t2"], highlighted: ["GND"] };
+  const begun = inlineDragBegin(baseDraw({ dragKind: "multi" }), context, true, "SIG");
+  assert.equal(begun.clearSelection, true);
+  assert.deepEqual(begun.highlight, ["SIG"]);
+  assert.deepEqual(begun.draw.restoreSelection, ["t1", "t2"]);
+  assert.deepEqual(begun.draw.restoreHighlight, []);
+  assert.deepEqual(inlineDragEnd(begun.draw, { cancelled: true }), { highlight: [], selection: ["t1", "t2"] });
+  assert.deepEqual(inlineDragEnd(begun.draw, { cancelled: false, select: ["t9", "t10"] }), { highlight: [], selection: ["t9", "t10"] });
+  assert.deepEqual(inlineDragEnd(begun.draw, { cancelled: false }), { highlight: [], selection: null }, "a single drag's commit: the selection stays clear");
+  const router = inlineDragBegin(baseDraw(), { selection: [], highlighted: [] }, false, "SIG");
+  assert.equal(router.clearSelection, false);
+  assert.equal(router.draw.restoreSelection, undefined);
+  assert.deepEqual(inlineDragEnd(router.draw, { cancelled: true }), { highlight: [], selection: null });
+  // no context (a caller that knows nothing of the editor): nothing changes
+  assert.deepEqual(inlineDragBegin(baseDraw(), undefined, true, "SIG"), { draw: baseDraw(), clearSelection: false, highlight: null });
+  assert.deepEqual(inlineDragEnd(null, { cancelled: true }), { highlight: null, selection: null });
 });

@@ -9,7 +9,7 @@ import type { RouterSettings } from "../../kicad-port/routerSettings";
 import { routeDragFinish, routeDragStart, routeDragStartGroup } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
-import type { DragDrawState, GroupDragTarget } from "../../kicad-port/dragTool";
+import { inlineDragBegin, inlineDragEnd, type DragDrawState, type GroupDragTarget, type InlineDragContext } from "../../kicad-port/dragTool";
 import { pickSelectionCandidates, type SelectionFilter } from "./selectionCandidates";
 import { askConfirm } from "../library/libraryDialogs";
 
@@ -61,10 +61,28 @@ export function findDraggableAt(
   return null;
 }
 
+export type { InlineDragContext };
+
+/** `InlineDrag` once the router has started the drag (kicad-port/dragTool.ts `inlineDragBegin`): the selection cleared, the net highlighted. */
+function beginInlineDrag(draw: DragDrawState, context: InlineDragContext | undefined, clearsSelection: boolean, net: string | null | undefined, dispatch: Dispatch<Action>): DragDrawState {
+  const begun = inlineDragBegin(draw, context, clearsSelection, net);
+  if (begun.clearSelection) dispatch({ type: "SET_SELECTION", refs: [], raw: true });
+  if (begun.highlight) dispatch({ type: "SET_NET_HIGHLIGHT_SET", nets: begun.highlight });
+  return begun.draw;
+}
+
+/** The end of an `InlineDrag` (kicad-port/dragTool.ts `inlineDragEnd`): the highlight put back, and the leaders or (Esc) the old selection selected. */
+export function endInlineDrag(draw: DragDrawState | null | undefined, how: { cancelled: true } | { cancelled: false; select?: string[] }, dispatch: Dispatch<Action>): void {
+  const end = inlineDragEnd(draw, how);
+  if (end.highlight) dispatch({ type: "SET_NET_HIGHLIGHT_SET", nets: end.highlight });
+  if (end.selection) dispatch({ type: "SET_SELECTION", refs: end.selection, raw: true });
+}
+
 /** `D` on a selection (`ROUTER_TOOL::InlineDrag` -> `ROUTER::StartDragging( p, itemsToDrag )`): start the component or multi-track drag of `target`
  * with the cursor at `(x, y)` and arm the drag tool. The footprints of a component drag are drawn moved by its `offset` (the painter's move
- * preview); its cursor is held on where the drag started (`start`: one footprint's anchor, where KiCad warps the pointer). */
-export async function startGroupDrag(x: number, y: number, target: GroupDragTarget, board: BoardState, settings: RouterSettings, layer: string, dispatch: Dispatch<Action>): Promise<void> {
+ * preview); its cursor is held on where the drag started (`start`: one footprint's anchor, where KiCad warps the pointer). `context` is the
+ * selection and highlight the drag starts from: the selection is cleared and the net of the item nearest the cursor highlighted (`InlineDrag`). */
+export async function startGroupDrag(x: number, y: number, target: GroupDragTarget, board: BoardState, settings: RouterSettings, layer: string, dispatch: Dispatch<Action>, context?: InlineDragContext): Promise<void> {
   const group = target.kind === "footprints" ? { footprints: target.refs } : { tracks: target.ids };
   const preview = await routeDragStartGroup(x, y, layer, group, settings);
   if (!preview.ok) {
@@ -91,7 +109,7 @@ export async function startGroupDrag(x: number, y: number, target: GroupDragTarg
     moved: false,
     nets: target.kind === "tracks" ? [...new Set(target.ids.map((id) => board.routing?.tracks.find((t) => t.id === id)?.net).filter((n): n is string => !!n))] : undefined,
   };
-  dispatch({ type: "SET_DRAW_STATE", draw });
+  dispatch({ type: "SET_DRAW_STATE", draw: beginInlineDrag(draw, context, true, preview.highlight_net, dispatch) });
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "drag" });
 }
 
@@ -102,8 +120,10 @@ export async function startGroupDrag(x: number, y: number, target: GroupDragTarg
  * (`Ctrl+<`'s dialog) -- `Dragger` honors the same walkaround/shove/
  * mark-obstacles choice, and the rest of the router's settings, a route session does. `freeAngle` is `G`
  * (`PCB_ACTIONS::dragFreeAngle` -> `DM_ANY | DM_FREE_ANGLE`): the drag only
- * marks obstacles, whatever `mode` says. */
-export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, settings: RouterSettings, dispatch: Dispatch<Action>, freeAngle = false, fromRouterTool = false): Promise<void> {
+ * marks obstacles, whatever `mode` says. `context`: the selection and highlight the drag starts from -- `InlineDrag` (`D` from the selection tool)
+ * clears the selection, the router tool's `performDragging` leaves it (`context.selection` is then not put back); both highlight the dragged
+ * item's net (`highlightNets( true, { m_startItem->Net() } )`). */
+export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, settings: RouterSettings, dispatch: Dispatch<Action>, freeAngle = false, fromRouterTool = false, context?: InlineDragContext): Promise<void> {
   // `InlineDrag` drags the selected item (`itemsToDrag` from the selection), never one picked again at the point (UI-LEFT-2 RR2): the router is told which
   const item = hit.selected ? hit.id : undefined;
   let preview = await routeDragStart(x, y, hit.layer, settings, freeAngle, false, item);
@@ -143,7 +163,7 @@ export async function startInlineDrag(x: number, y: number, hit: DraggableHit, b
     displacedVias: preview.displaced_vias,
     fanout: preview.fanout,
   };
-  dispatch({ type: "SET_DRAW_STATE", draw });
+  dispatch({ type: "SET_DRAW_STATE", draw: beginInlineDrag(draw, context, !fromRouterTool, draw.net, dispatch) });
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "drag" });
   // `InlineDrag`: a drag whose first position is already a violation only marks obstacles from then on
   if (draw.forcedMark && draw.colliding) dispatch({ type: "TOAST", message: DRAG_VIOLATION_HINT, kind: "info" });
@@ -161,9 +181,10 @@ export const DRAG_VIOLATION_HINT = "Track violates DRC. (Ctrl+Click to commit an
  * persistently-armed tool the way the route tool's `X` is). A click where the
  * drag cannot be resolved commits the last position that could be
  * (`DRAGGER::FixRoute`); `forceCommit` (Ctrl+click) commits the violation of a
- * drag that only marks obstacles. */
-export async function finishInlineDrag(x: number, y: number, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">, forceCommit = false): Promise<void> {
-  const reply = (await routeDragFinish(x, y, forceCommit)) as CmdReply & { dragging?: boolean; refused?: boolean };
+ * drag that only marks obstacles. `draw` is the drag's draw state: the highlight it changed goes back, and a multi-track drag's leaders are
+ * selected (`select`, `InlineDrag`'s `selectItems` of `GetLastCommittedLeaderSegments()`). */
+export async function finishInlineDrag(x: number, y: number, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">, forceCommit = false, draw?: DragDrawState): Promise<void> {
+  const reply = (await routeDragFinish(x, y, forceCommit)) as CmdReply & { dragging?: boolean; refused?: boolean; select?: string[] };
   // `InlineDrag`: a component or multi-track drag the router refuses ends with nothing committed, and KiCad says nothing (`refused`)
   if (!reply.ok && !reply.refused) dispatch({ type: "TOAST", message: reply.message || "Can't drop it there -- still colliding.", kind: "error" });
   // `performDragging`: a click `FixRoute` refuses leaves the drag going (`if( m_router->FixRoute( .. ) ) break;`)
@@ -171,4 +192,5 @@ export async function finishInlineDrag(x: number, y: number, dispatch: Dispatch<
   dispatch({ type: "SET_DRAW_STATE", draw: null });
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
   await api.refresh();
+  endInlineDrag(draw, { cancelled: false, select: reply.select }, dispatch);
 }

@@ -47,8 +47,18 @@ export function footprintBox(part: FootprintBoxPart, includeText: boolean, textB
     !includeText && part.graphics?.some((g) => ANNOTATION_LAYERS.has(g.layer)) ? part.graphics.filter((g) => !ANNOTATION_LAYERS.has(g.layer)) : part.graphics;
   const art = artBounds({ graphics });
   if (art) box = merge(box, art);
-  // the text boxes and barcodes (`m_drawings`; a reference image only in the footprint editor), the annotations left out as the graphics are (UI-LEFT P17)
-  const items = part.items && !includeText ? { ...part.items, text_boxes: part.items.text_boxes?.filter((t) => !ANNOTATION_LAYERS.has(t.layer)), barcodes: part.items.barcodes?.filter((b) => !ANNOTATION_LAYERS.has(b.layer)) } : part.items;
+  // the text boxes, barcodes, tables and dimensions (`m_drawings`; a reference image only in the footprint editor), the annotations left out as the graphics are (UI-LEFT
+  // P17) and the dimensions with them (`BaseType( item->Type() ) == PCB_DIMENSION_T`, UI-LEFT PP14)
+  const items =
+    part.items && !includeText
+      ? {
+          ...part.items,
+          text_boxes: part.items.text_boxes?.filter((t) => !ANNOTATION_LAYERS.has(t.layer)),
+          barcodes: part.items.barcodes?.filter((b) => !ANNOTATION_LAYERS.has(b.layer)),
+          tables: part.items.tables?.filter((t) => !ANNOTATION_LAYERS.has(t.layer)),
+          dimensions: [],
+        }
+      : part.items;
   const own = items ? fpItemsBounds({ items }) : null;
   if (own) box = merge(box, own);
   for (const pad of part.pads ?? []) box = merge(box, [pad.x - pad.w / 2, pad.y - pad.h / 2, pad.x + pad.w / 2, pad.y + pad.h / 2]);

@@ -1,4 +1,4 @@
-//! A board footprint's text boxes, reference images, points and barcodes for the studio's state (UI-LEFT P17): `parts[].items`, in board space like the footprint's art
+//! A board footprint's text boxes, reference images, points and barcodes (UI-LEFT P17) and its dimensions and tables (UI-LEFT PP14) for the studio's state: `parts[].items`, in board space like the footprint's art
 //! (`crate::fp_art_json`), each in the JSON of the board's own item of its kind (`crate::pcb_items_json`) so the canvas draws it with the board's painters. The model holds them
 //! in the footprint's frame ([`eda_model::ir::FootprintExtra::items`]); [`eda_model::fp_items_place::placed`] takes them to the board for the pose the footprint is in, so a
 //! move, a turn or a flip needs nothing here. Each has the id [`eda_model::fp_items_place::board_id`] gives it (`U1~img_..`): an image's file
@@ -16,7 +16,9 @@ use serde_json::{json, Value};
 
 use crate::text_vars_json::PcbShown;
 
-/// Put the footprint's items into the part's JSON `p` (`items: { text_boxes, images, points, barcodes }`), absent when it has none.
+/// Put the footprint's items into the part's JSON `p` (`items: { text_boxes, images, points, barcodes, dimensions, tables }`), absent when it has none. A dimension is the
+/// board's dimension JSON (`crate::studio::dimension_json`: its lines and its text worked out where it is), a table the board's (`crate::table_json::table_json`: its
+/// borders and its cells' lines placed), each under the item's board id.
 pub(crate) fn add_items(p: &mut Value, design: &Design, model: &ConstraintModel, part: &Part, fp: &FootprintInstance, tv: &PcbShown) {
     let Some(items) = items_of(design, model, part) else { return };
     let on_board = placed(items, fp);
@@ -64,6 +66,18 @@ pub(crate) fn add_items(p: &mut Value, design: &Design, model: &ConstraintModel,
             v
         });
         out.insert("barcodes".into(), Value::Array(barcodes.collect()));
+    }
+    if !on_board.dimensions.is_empty() {
+        let dims = on_board.dimensions.iter().map(|d| {
+            let mut v = crate::studio::dimension_json(d);
+            v["id"] = json!(board_id(&part.reference, &d.id));
+            v
+        });
+        out.insert("dimensions".into(), Value::Array(dims.collect()));
+    }
+    if !on_board.tables.is_empty() {
+        let tables = on_board.tables.iter().map(|t| crate::table_json::table_json(&eda_model::table::Table { id: board_id(&part.reference, &t.id), ..t.clone() }, tv.board()));
+        out.insert("tables".into(), Value::Array(tables.collect()));
     }
     if !out.is_empty() {
         p["items"] = Value::Object(out);

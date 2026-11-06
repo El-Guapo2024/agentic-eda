@@ -340,8 +340,9 @@ fn an_exchange_keeps_what_kicad_sets_from_the_old_footprint_and_takes_the_new_on
         ..Default::default()
     };
     let library = FootprintItems { text_boxes: vec![TextBox::new("F.Fab", Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(3.0), y: mm(1.0) }, mm(1.0), mm(0.1))], ..Default::default() };
+    let lib = crate::fp_on_board::LibraryRecord::of_items(library.clone());
     // Update's defaults: the texts stay, the overrides and the models are the library's
-    let r = exchanged_record(Some(&old), true, "U1", &ExchangeOptions::update(), library.clone(), false, "Lib:Logo").record.unwrap();
+    let r = exchanged_record(Some(&old), true, "U1", &ExchangeOptions::update(), Some(&lib), false, "Lib:Logo").record.unwrap();
     assert_eq!((r.uuid.as_deref(), r.sheetname.as_deref(), r.sheetfile.as_deref(), r.component_classes.as_slice()), (Some("u-1"), Some("/"), Some("a.kicad_sch"), &["LOGO".to_string()][..]));
     assert_eq!(r.items, library, "the library's items, the board's own gone");
     assert_eq!(r.tokens, old.tokens[1..4].to_vec(), "the Datasheet and Description fields and the filters; the description and the paste margin are the library's");
@@ -350,24 +351,24 @@ fn an_exchange_keeps_what_kicad_sets_from_the_old_footprint_and_takes_the_new_on
     assert!(r.courtyard_items.is_empty(), "the courtyard is the new footprint's");
     // every option off: the overrides, the body and the model files stay too, and the paste margin with the file's form
     let off = ExchangeOptions { reset_clearance_overrides: false, reset_3d_models: false, ..ExchangeOptions::update() };
-    let r = exchanged_record(Some(&old), true, "U1", &off, FootprintItems::default(), false, "Lib:Logo").record.unwrap();
+    let r = exchanged_record(Some(&old), true, "U1", &off, None, false, "Lib:Logo").record.unwrap();
     assert_eq!((r.solder_mask_margin, r.clearance, r.allow_soldermask_bridges, r.extruded_body.is_some()), (Some(mm(0.05)), Some(mm(0.2)), true, true));
     assert_eq!(r.embedded.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["a.step"], "the model files, not the datasheet");
     assert_eq!(r.tokens.last().map(String::as_str), Some("(solder_paste_margin -0.03)"));
     assert!(r.items.is_empty());
     // "update/reset text content" on (Change's default): the file's fields go, and with them the record's file form -- the writer gives the symbol's fields
-    let changed = exchanged_record(Some(&old), true, "U1", &ExchangeOptions { reset_clearance_overrides: false, ..ExchangeOptions::change() }, library.clone(), true, "Lib:Other");
+    let changed = exchanged_record(Some(&old), true, "U1", &ExchangeOptions { reset_clearance_overrides: false, ..ExchangeOptions::change() }, Some(&lib), true, "Lib:Other");
     let r = changed.record.unwrap();
     assert!(r.tokens.is_empty() && !r.holds_file_form(), "{r:?}");
     assert_eq!(r.uuid.as_deref(), Some("u-1"));
     assert_eq!((changed.paste_margin, changed.paste_ratio), (Some(mm(-0.03)), None), "a paste margin kept goes into the footprint's edit");
     assert!(r.items_are_for("anything"), "a record of no file form: its items are the footprint's whatever it is on");
     // a record whose file form no longer describes the footprint (the part was put on another before) keeps none of its tokens
-    let r = exchanged_record(Some(&old), false, "U1", &ExchangeOptions::update(), FootprintItems::default(), false, "Lib:Logo").record.unwrap();
+    let r = exchanged_record(Some(&old), false, "U1", &ExchangeOptions::update(), None, false, "Lib:Logo").record.unwrap();
     assert!(r.tokens.is_empty() && !r.holds_file_form());
     // a footprint made here with nothing to hold has no record; with the library's items it has one, in the library's frame
-    assert_eq!(exchanged_record(None, false, "U1", &ExchangeOptions::change(), FootprintItems::default(), true, "Lib:Other").record, None);
-    let r = exchanged_record(None, false, "U1", &ExchangeOptions::change(), library.clone(), true, "Lib:Other").record.unwrap();
+    assert_eq!(exchanged_record(None, false, "U1", &ExchangeOptions::change(), None, true, "Lib:Other").record, None);
+    let r = exchanged_record(None, false, "U1", &ExchangeOptions::change(), Some(&lib), true, "Lib:Other").record.unwrap();
     assert_eq!((r.items == library, r.library_frame, r.holds_file_form()), (true, true, false));
 }
 

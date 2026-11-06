@@ -110,7 +110,7 @@ test("UI-LEFT P3: the via's protection, backdrill, post-machining and padstack a
   });
   const v2 = props[1] as unknown as { props: Record<string, unknown> };
   assert.equal(v2.props.tertiary_drill, undefined, "Top makes the tertiary drill go");
-  assert.deepEqual(out.cmds.filter((c) => c.op === "set_teardrop_params"), [{ op: "set_teardrop_params", ids: ["V1", "V2"], params: { enabled: true, allow_two_segments: false, prefer_zone_connections: true, best_length_ratio: 0.5, max_length: 1_000_000, best_width_ratio: 1, max_width: 2_000_000, curved_edges: false, filter_ratio: 0.9 } }]);
+  assert.deepEqual(out.cmds.filter((c) => c.op === "set_teardrop_params"), [{ op: "set_teardrop_params", ids: ["V1", "V2"], params: { enabled: true, allow_two_segments: true, prefer_zone_connections: true, best_length_ratio: 0.5, max_length: 1_000_000, best_width_ratio: 1, max_width: 2_000_000, curved_edges: false, filter_ratio: 0.9 } }]);
   // nothing changed sends nothing
   const none = trackViaCmds(vb, before, before, String);
   assert.ok("cmds" in none && none.cmds.length === 0);

@@ -914,8 +914,10 @@ pub fn merge_project_predefined_sizes(design: &mut Design, project_json: &str) {
 /// A `.kicad_pro`'s Board Setup > Teardrops (`BOARD_DESIGN_SETTINGS`' `teardrop_options` and `teardrop_parameters` `PARAM_LAMBDA`s, 8303b2ad
 /// `board_design_settings.cpp:526-660`): the target kinds from `teardrop_options` (`td_onvia`, `td_onpthpad`, `td_onsmdpad`) and the round target's sizes
 /// from `teardrop_parameters` (`td_target_name` `td_round_shape`: `td_maxlen` and `td_maxheight` in millimetres, `td_length_ratio`, `td_height_ratio` and
-/// `td_width_to_size_filter_ratio`). This port collapses KiCad's three parameter blocks into one round-shapes block (PARITY-pcb §15), so the entries for
-/// `td_rect_shape` and `td_track_end` are not read. An array entry that is empty, not an object or (for the parameters) names no target is skipped, as
+/// `td_width_to_size_filter_ratio`, and its curved edges, two segments and zone preference: `td_curve_segcount` above 0, `td_allow_use_two_tracks`,
+/// `td_on_pad_in_zone`). This port collapses KiCad's round and rectangle blocks into one (PARITY-pcb §15), so the `td_rect_shape` entry is not read; the
+/// `td_track_end` entry is the track-to-track block (`TeardropSettings::track_end`, its `td_enabled`; KiCad 25ec2335 `UpdateTeardrops` reads
+/// `GetParameters( TARGET_TRACK )->m_Enabled`). An array entry that is empty, not an object or (for the parameters) names no target is skipped, as
 /// KiCad's loader skips it; a key the entry does not have keeps what the design had. Absent `board.design_settings` or text that is not JSON is a no-op.
 pub fn merge_project_teardrops(design: &mut Design, project_json: &str) {
     let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else { return };
@@ -942,11 +944,54 @@ pub fn merge_project_teardrops(design: &mut Design, project_json: &str) {
         }
     }
     for entry in params.iter().filter(|e| e.is_object() && !e.as_object().is_some_and(|o| o.is_empty())) {
-        // `GetTeardropTargetTypeFromCanonicalName`: only the round target's block feeds this port's collapsed one.
-        if entry.get("td_target_name").and_then(|v| v.as_str()) != Some("td_round_shape") {
-            continue;
-        }
         let num = |key: &str| entry.get(key).and_then(|v| v.as_f64());
+        // `GetTeardropTargetTypeFromCanonicalName`: the round target's block feeds this port's collapsed one, the track end's the track-to-track block.
+        match entry.get("td_target_name").and_then(|v| v.as_str()) {
+            Some("td_round_shape") => {}
+            Some("td_track_end") => {
+                let p = &mut t.track_end;
+                if let Some(v) = flag(entry, "td_enabled") {
+                    p.enabled = v;
+                }
+                if let Some(v) = num("td_maxlen") {
+                    p.max_length = mm_to_nm(v);
+                }
+                if let Some(v) = num("td_maxheight") {
+                    p.max_width = mm_to_nm(v);
+                }
+                if let Some(v) = num("td_length_ratio") {
+                    p.best_length_ratio = v;
+                }
+                if let Some(v) = num("td_height_ratio") {
+                    p.best_width_ratio = v;
+                }
+                if let Some(v) = num("td_width_to_size_filter_ratio") {
+                    p.filter_ratio = v;
+                }
+                // `if( entry["td_curve_segcount"].get<int>() > 0 ) td_prm->m_CurvedEdges = true;`
+                if num("td_curve_segcount").is_some_and(|n| n > 0.0) {
+                    p.curved_edges = true;
+                }
+                if let Some(v) = flag(entry, "td_allow_use_two_tracks") {
+                    p.allow_two_segments = v;
+                }
+                read = true;
+                continue;
+            }
+            _ => continue,
+        }
+        if num("td_curve_segcount").is_some_and(|n| n > 0.0) {
+            t.curved_edges = true;
+            read = true;
+        }
+        if let Some(v) = flag(entry, "td_allow_use_two_tracks") {
+            t.allow_two_segments = v;
+            read = true;
+        }
+        if let Some(v) = flag(entry, "td_on_pad_in_zone") {
+            t.prefer_zone_connections = !v;
+            read = true;
+        }
         if let Some(v) = num("td_maxlen") {
             t.max_len_nm = mm_to_nm(v);
             read = true;
@@ -2346,15 +2391,16 @@ fn import_footprints(
                 }
             }
         }
-        // Its text boxes, images, points and barcodes (`crate::fp_board_items_io`), in the frame its definition is held in: a footprint on the back is held in the library's frame,
+        // Its text boxes, images, points, barcodes, dimensions and tables (`crate::fp_board_items_io`), in the frame its definition is held in: a footprint on the back is held in the library's frame,
         // half a turn from the file's orientation (below), and its items with it.
         {
             let held = FootprintInstance { id: reference.clone(), at: Point { x, y }, rot: if side == Side::Bottom { (rot + 180_000) % 360_000 } else { rot }, side, label: Default::default() };
-            let (items, uuids) = crate::fp_board_items_io::read_items(fp, file_version, &held, side == Side::Bottom);
-            for (id, u) in uuids {
+            let read = crate::fp_board_items_io::read_items(fp, file_version, &held, side == Side::Bottom);
+            for (id, u) in read.uuids {
                 slots.insert(u, format!("item:{id}"));
             }
-            extra.items = items;
+            extra.items = read.items;
+            extra.locked_items = read.locked;
         }
         // The footprint's own groups (`resolveGroups` makes them like a board's), each member by its place; a member that is not one of those is left out. A group
         // can hold a group (B-9): `resolveGroups` creates every group first and puts each footprint group in the footprint's item map ("Keep the footprint lookup
@@ -2497,8 +2543,8 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
             // KiCad 10's typed model, the Extruded 3D Body (`(model (type extruded) (overall_height ..) (body_pcb_gap ..) ..)`: `parseFOOTPRINT`'s `case T_model:` "Typed
             // model") is the footprint's body (`crate::extruded_body_io`, below); a typed model of another type has no path for `models_from` to take, and is kept as the file wrote it.
             Some("model") => sexpr::txt(item, 1).is_none() && !crate::extruded_body_io::is_extruded(item),
-            // A text box, an image, a point or a barcode is one of the footprint's items (`FootprintExtra::items`, UI-LEFT P17), read below once the pose is known; a locked one
-            // stays the text of its form.
+            // A text box, an image, a point, a barcode, a dimension or a table is one of the footprint's items (`FootprintExtra::items`, UI-LEFT P17, PP14), read below once
+            // the pose is known, a locked one with its lock; a form the item's reader refuses stays the text of its form.
             Some(t) if crate::fp_board_items_io::ITEM_TAGS.contains(&t) && crate::fp_board_items_io::is_read_item(item, file_version) => false,
             Some(t) => !OWN.contains(&t),
             None => false,
@@ -3368,6 +3414,8 @@ pub(crate) fn read_zone(z: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_l
     }
     if let Some(a) = sexpr::find(z, "attr") {
         zone.teardrop = sexpr::find(a, "teardrop").is_some();
+        // `(teardrop (type track_end))`: `TEARDROP_TYPE::TD_TRACKEND` (`parseZONE`'s `T_track_end`); `padvia` is `TD_VIAPAD`.
+        zone.teardrop_track_end = sexpr::find(a, "teardrop").and_then(|t| sexpr::find(t, "type")).and_then(|t| sexpr::txt(t, 1)) == Some("track_end");
     }
 
     // The zone keeps its whole layer set (`ZONE::SetLayerSet`): the copper layers the board has and the technical and user layers KiCad names. A copper layer the

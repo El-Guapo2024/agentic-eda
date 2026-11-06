@@ -46,7 +46,6 @@
 
 use super::Board;
 use eda_kicad::netlist_reader::{self, ComponentNet, Netlist, NetlistComponent};
-use eda_model::fp_items::FootprintItems;
 use eda_model::ir::{BoardPart, FootprintInstance, Group, LabelSide, LibraryFootprint, Point, Side};
 use eda_model::netlist_import::{ImportedFootprint, ImportedNetlist};
 use eda_model::units::Nm;
@@ -109,9 +108,10 @@ pub struct ImportNetlist {
     /// `Lib:Name` -> the same footprint as the engine reads it, for an exchange (`replaceFootprint`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub library: BTreeMap<String, Footprint>,
-    /// `Lib:Name` -> its text boxes, images, points and barcodes (`eda_model::fp_items::FootprintItems`), for an exchange.
+    /// `Lib:Name` -> the library footprint as the Footprint Editor reads it, for an exchange: what the engine's footprint does not carry (its pads' layer sets, its items,
+    /// its record: `crate::fp_on_board::LibraryRecord`, UI-LEFT PP5).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub library_items: BTreeMap<String, FootprintItems>,
+    pub library_items: BTreeMap<String, LibraryFootprint>,
     /// A bare footprint name (a legacy id, no library) -> the `Lib:Name` the libraries have it under (`LoadFootprintWithOptionalNickname`: the first library,
     /// alphabetically, that has it).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -769,7 +769,7 @@ impl<'c> Updater<'c> {
         // `ExchangeFootprint( aFootprint, newFootprint, m_commit, true )`: the studio's exchange, every option on. It changes the board and not the symbol.
         let kept = (b.design.schematic.clone(), b.design.sheet_contents.clone());
         let library: BTreeMap<String, Footprint> = [(name.clone(), new.clone())].into_iter().collect();
-        let items: BTreeMap<String, FootprintItems> = self.cmd.library_items.get(&name).map(|i| [(name.clone(), i.clone())].into_iter().collect()).unwrap_or_default();
+        let items: BTreeMap<String, LibraryFootprint> = self.cmd.library_items.get(&name).map(|i| [(name.clone(), i.clone())].into_iter().collect()).unwrap_or_default();
         if b.exchange_footprints(&[reference.to_string()], Some(&name), &crate::fp_exchange::ExchangeOptions::replace(), &library, &items).is_err() {
             self.error(format!("Cannot update {} (footprint '{}' not found).", c.reference, esc(&c.fpid)));
             return None;
@@ -822,7 +822,7 @@ impl<'c> Updater<'c> {
             if self.fpid_of(b, &reference) != name {
                 let kept = (b.design.schematic.clone(), b.design.sheet_contents.clone());
                 let library: BTreeMap<String, Footprint> = [(name.clone(), engine.clone())].into_iter().collect();
-                let items: BTreeMap<String, FootprintItems> = self.cmd.library_items.get(&name).map(|i| [(name.clone(), i.clone())].into_iter().collect()).unwrap_or_default();
+                let items: BTreeMap<String, LibraryFootprint> = self.cmd.library_items.get(&name).map(|i| [(name.clone(), i.clone())].into_iter().collect()).unwrap_or_default();
                 let _ = b.exchange_footprints(std::slice::from_ref(&reference), Some(&name), &crate::fp_exchange::ExchangeOptions::replace(), &library, &items);
                 (b.design.schematic, b.design.sheet_contents) = kept;
             }
@@ -835,7 +835,7 @@ impl<'c> Updater<'c> {
             }
         } else {
             let known = b.model.footprints.iter().any(|f| f.name == name);
-            let stored = if known { None } else { definition.clone().or_else(|| Some(LibraryFootprint::from_engine_footprint(&engine))) };
+            let stored = if known { None } else { definition.as_ref().map(crate::fp_on_board::with_copper_pads_only).or_else(|| Some(LibraryFootprint::from_engine_footprint(&engine))) };
             let dr = b.drawings_mut();
             dr.board_parts.retain(|p| p.reference != reference);
             dr.board_parts.push(BoardPart { reference: reference.clone(), value: Some(netlist_reader::split_lib_id(&name).1.to_string()), footprint: name.clone(), definition: stored, pad_nets: Vec::new() });
@@ -847,6 +847,12 @@ impl<'c> Updater<'c> {
         }
         b.design.placement.as_mut().expect("a Board always carries a placement section").footprints.push(FootprintInstance { id: reference.clone(), at, rot: 0, side: Side::Top, label: LabelSide::default() });
         b.sort_footprints();
+        // a footprint of its own is the library's whole (`LoadFootprint`'s footprint added): its pads' layers, record, items and zones (UI-LEFT PP5)
+        if !intent_part {
+            if let Some(lib) = self.cmd.library_items.get(&name).or(definition.as_ref()) {
+                b.put_library_record(&reference, &name, lib, &engine);
+            }
+        }
         self.fpid_now.insert(reference.clone(), name.clone());
         self.pads_now.insert(reference.clone(), engine);
         self.added.push(reference.clone());

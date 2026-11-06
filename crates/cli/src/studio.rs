@@ -1430,10 +1430,12 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             }
             // `FOOTPRINT_DESC`'s Library Description, Keywords, Component Class and the solder paste overrides: what the board file said of the footprint
             // (`FootprintExtra`: its `(descr ..)`, `(tags ..)`, `(component_classes ..)`, `(solder_paste_margin ..)`, `(solder_paste_margin_ratio ..)`).
-            if let Some(e) = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == part.reference)) {
-                // The footprint was read from a board file: its own tokens are kept (`set_footprint_paste_margin` edits them).
-                p["from_board_file"] = json!(true);
-                let facts = eda_kicad::footprint_file_facts(&e.tokens);
+            let record = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == part.reference));
+            if let Some(e) = record {
+                // The footprint was read from a board file: its own tokens are kept (`set_footprint_paste_margin` edits its paste margins there). A library footprint's
+                // record (UI-LEFT PP5) has its description and keywords there too, its paste margins in its edit, as a footprint made here.
+                p["from_board_file"] = json!(e.holds_file_form());
+                let facts = eda_kicad::footprint_file_facts(if e.source_name.is_empty() { &[] } else { &e.tokens });
                 if let Some(d) = facts.description {
                     p["lib_description"] = json!(d);
                 }
@@ -1443,14 +1445,18 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 if !e.component_classes.is_empty() {
                     p["component_classes"] = json!(e.component_classes);
                 }
-                if let Some(m) = facts.paste_margin {
-                    p["paste_margin"] = json!(m);
+                if e.holds_file_form() {
+                    if let Some(m) = facts.paste_margin {
+                        p["paste_margin"] = json!(m);
+                    }
+                    if let Some(r) = facts.paste_margin_ratio {
+                        p["paste_margin_ratio"] = json!(r);
+                    }
                 }
-                if let Some(r) = facts.paste_margin_ratio {
-                    p["paste_margin_ratio"] = json!(r);
-                }
-            } else if let Some(e) = design.footprint_edit(&part.reference) {
-                // a footprint placed from the intent: the paste margins Footprint Properties gave it (`FootprintEdit::solder_paste_margin`, `..ratio`; UI-LEFT P14)
+            }
+            if let Some(e) = design.footprint_edit(&part.reference).filter(|_| !record.is_some_and(|r| r.holds_file_form())) {
+                // a footprint placed from the intent or a library: the paste margins Footprint Properties or the library gave it (`FootprintEdit::solder_paste_margin`,
+                // `..ratio`; UI-LEFT P14, PP5)
                 if let Some(m) = e.solder_paste_margin {
                     p["paste_margin"] = json!(m);
                 }
@@ -1506,6 +1512,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             }).collect::<Vec<_>>(),
             "zones": r.zones.iter().map(|z| json!({
                 "id": z.id, "net": z.net, "layer": z.layer,
+                // The footprint the zone is a child of (`ZONE::GetParentFootprint`, UI-LEFT PP14): it moves with it and is picked in the Footprint Editor only.
+                "parent": z.parent_footprint,
                 // `ZONE::GetLayerSet()`: the zone's layers, `layer` first -- one for a zone on one layer.
                 "layers": z.layer_set(),
                 "outline": z.outline.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
@@ -1569,6 +1577,11 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "max_len_nm": r.teardrop_settings.max_len_nm,
                 "max_width_nm": r.teardrop_settings.max_width_nm,
                 "width_to_size_filter_ratio": r.teardrop_settings.width_to_size_filter_ratio,
+                // UI-LEFT-2 PP7: the block's curved edges, two segments and zone preference, and the track-to-track block.
+                "curved_edges": r.teardrop_settings.curved_edges,
+                "allow_two_segments": r.teardrop_settings.allow_two_segments,
+                "prefer_zone_connections": r.teardrop_settings.prefer_zone_connections,
+                "track_end": r.teardrop_settings.track_end,
             }),
         })
     });

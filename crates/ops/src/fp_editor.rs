@@ -19,6 +19,7 @@
 
 use super::fp_exchange::{board_footprint, footprint_name_of, ExchangeOptions};
 use super::{Board, Domain};
+use eda_model::ConstraintModel;
 use eda_model::fp_art::{flip_layer, is_side_specific};
 use eda_model::fp_edit::{default_reference_layout, default_value_layout, FieldLayout, FootprintAttrs, FootprintKind, UserField};
 use eda_model::ir::{BoardFootprintCopy, FootprintAttributes, FootprintExtra, FootprintField, FootprintZoneFacts, FootprintZoneOverrides, LibraryFootprint, PadZoneOverride, Side};
@@ -133,6 +134,149 @@ fn board_attrs(a: &FootprintAttributes) -> FootprintAttrs {
         dnp: a.dnp,
         allow_missing_courtyard: a.allow_missing_courtyard,
     }
+}
+
+/// The text of a kept `(property "<name>" "<text>" ..)` (`FootprintExtra::tokens`), unescaped; `None` for another token.
+fn kept_property_text(token: &str, name: &str) -> Option<String> {
+    let rest = token.strip_prefix(&format!("(property \"{name}\" \""))?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.push(chars.next()?),
+            '"' => return Some(out),
+            c => out.push(c),
+        }
+    }
+    None
+}
+
+/// The text the board shows for the footprint `reference`'s mandatory field `name` (`Datasheet`, `Description`): the footprint's own once Footprint Properties set it
+/// (`FootprintEdit::fields`), else what its board file gave it (`FootprintExtra::tokens`: a record of a board file's, or a library's when the symbol gives the field no text), else
+/// the symbol's (`updateFootprintParameters`). The state's Footprint Properties rows and Edit Footprint's copy show the same.
+pub fn board_footprint_field_text(design: &eda_model::ir::Design, model: &ConstraintModel, reference: &str, name: &str) -> String {
+    if let Some(f) = design.footprint_edit(reference).and_then(|e| e.fields.iter().find(|f| f.name == name)) {
+        return f.text.clone();
+    }
+    let linked = model.symbol_links.get(reference).and_then(|l| l.fields.iter().find(|(n, _)| n == name)).map(|(_, t)| t.clone());
+    // (a library's record gives a field the symbol gives no text: the writer's `library_field`)
+    let linked_text = linked.clone().filter(|t| !t.is_empty());
+    let record = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference));
+    let kept = record.filter(|e| e.holds_file_form() || linked_text.is_none()).and_then(|e| e.tokens.iter().find_map(|t| kept_property_text(t, name)));
+    kept.or(linked).unwrap_or_default()
+}
+
+/// The tags of the footprint's own forms Edit Footprint's copy edits beside its settings (`FOOTPRINT::GetLibDescription`, `GetKeywords`, `GetPrivateLayers`,
+/// `GetDuplicatePadNumbersAreJumpers`, `JumperPadGroups`): the forms the copy's [`library_forms`] give the record back (UI-LEFT FF4).
+const LIBRARY_FORM_TAGS: [&str; 5] = ["descr", "tags", "private_layers", "duplicate_pad_numbers_are_jumpers", "jumper_pad_groups"];
+
+/// The tag of a kept form (`(descr "..")` -> `descr`).
+fn form_tag(token: &str) -> Option<&str> {
+    token.strip_prefix('(').and_then(|r| r.split(|c: char| c.is_whitespace() || c == ')').next())
+}
+
+/// The forms of [`LIBRARY_FORM_TAGS`] of the copy `fp`, as `format( const FOOTPRINT* )` writes them: `(descr ..)`, `(tags ..)`, `(private_layers ..)`,
+/// `(duplicate_pad_numbers_are_jumpers yes)` (written when on), `(jumper_pad_groups ..)`.
+fn library_forms(fp: &LibraryFootprint) -> Vec<String> {
+    let q = eda_kicad::sexpr_str;
+    let st = &fp.settings;
+    let mut out = Vec::new();
+    if !fp.description.is_empty() {
+        out.push(format!("(descr {})", q(&fp.description)));
+    }
+    if !fp.keywords.is_empty() {
+        out.push(format!("(tags {})", q(&fp.keywords)));
+    }
+    if !st.private_layers.is_empty() {
+        out.push(format!("(private_layers {})", st.private_layers.iter().map(|l| q(l)).collect::<Vec<_>>().join(" ")));
+    }
+    if st.duplicate_pad_numbers_are_jumpers {
+        out.push("(duplicate_pad_numbers_are_jumpers yes)".to_string());
+    }
+    if !st.jumper_pad_groups.is_empty() {
+        let groups: Vec<String> = st.jumper_pad_groups.iter().map(|g| format!("({})", g.iter().map(|n| q(n)).collect::<Vec<_>>().join(" "))).collect();
+        out.push(format!("(jumper_pad_groups {})", groups.join(" ")));
+    }
+    out
+}
+
+/// A board footprint's groups (`FootprintExtra::groups`, each member by its place) as the copy's (`FootprintItems::groups`, by the copy's ids, once the copy's items have
+/// theirs): `art:<i>` is the i-th graphic of the copy (`from_engine_footprint` lists the art's shapes in order), `arttext:<i>` its i-th text, `pad:<n>#<k>` the k-th pad
+/// numbered `n`, `item:<id>` the item, `group:<i>` the i-th group (`resolveGroups` creates every group before it resolves the members). A member the copy has no place
+/// for (a field, a courtyard item kept as text) is left out, as KiCad leaves out of a group a member that is gone, and a group left with none is no group. A locked group's
+/// lock is the copy's kept lock of its id.
+fn copy_groups(groups: &[eda_model::ir::FootprintGroup], fp: &mut LibraryFootprint) {
+    let pad_id = |number: &str, k: usize| fp.pads.iter().filter(|p| p.number == number).nth(k.saturating_sub(1)).map(|p| p.id.clone());
+    let mut made: Vec<(eda_model::ir::Group, Vec<usize>)> = Vec::new();
+    for g in groups {
+        let mut members = Vec::new();
+        let mut inner = Vec::new();
+        for m in &g.members {
+            let Some((kind, rest)) = m.split_once(':') else { continue };
+            let id = match kind {
+                "art" => rest.parse::<usize>().ok().and_then(|i| fp.graphics.get(i)).map(|s| s.id().to_string()),
+                "arttext" => rest.parse::<usize>().ok().and_then(|i| fp.texts.get(i)).map(|t| t.id.clone()),
+                "pad" => rest.split_once('#').and_then(|(n, k)| pad_id(n, k.parse().ok()?)),
+                "item" => fp.items.has(rest).then(|| rest.to_string()),
+                "group" => {
+                    inner.extend(rest.parse::<usize>().ok());
+                    None
+                }
+                _ => None,
+            };
+            members.extend(id);
+        }
+        made.push((eda_model::ir::Group { id: String::new(), name: g.name.clone(), member_ids: members, design_block: String::new() }, inner));
+    }
+    // the ids, a group's from its members' (`Group::id_seed`), then the groups a group holds by theirs
+    let mut existing: std::collections::BTreeSet<String> = fp.items.ids().map(str::to_string).collect();
+    let ids: Vec<String> = made
+        .iter()
+        .map(|(g, _)| {
+            let id = eda_model::ir::next_item_id("grp", &g.id_seed(), &existing);
+            existing.insert(id.clone());
+            id
+        })
+        .collect();
+    for (i, (g, inner)) in made.iter_mut().enumerate() {
+        g.id = ids[i].clone();
+        g.member_ids.extend(inner.iter().filter_map(|k| ids.get(*k).filter(|_| *k != i).cloned()));
+    }
+    for (i, g) in groups.iter().enumerate() {
+        if g.locked {
+            fp.kicad.locked.insert(ids[i].clone());
+        }
+    }
+    fp.items.groups = made.into_iter().map(|(g, _)| g).filter(|g| !g.member_ids.is_empty()).collect();
+}
+
+/// The reverse of [`copy_groups`]: the copy's groups as the board footprint's, each member by its place in the footprint the copy becomes (`new`, the copy's engine
+/// footprint: the art's shapes are the copy's graphics on the art layers, in order). A member that has no place there is left out, and a group left with none is no group.
+fn board_groups(fp: &LibraryFootprint) -> Vec<eda_model::ir::FootprintGroup> {
+    let art_ids: Vec<&str> = fp.graphics.iter().filter(|g| eda_model::fp_art::is_art_layer(g.layer())).map(|g| g.id()).collect();
+    let index_of_group: std::collections::BTreeMap<&str, usize> = fp.items.groups.iter().enumerate().map(|(i, g)| (g.id.as_str(), i)).collect();
+    let place = |id: &str| -> Option<String> {
+        if let Some(i) = art_ids.iter().position(|a| *a == id) {
+            return Some(format!("art:{i}"));
+        }
+        if let Some(i) = fp.texts.iter().position(|t| t.id == id) {
+            return Some(format!("arttext:{i}"));
+        }
+        if let Some(i) = fp.pads.iter().position(|p| p.id == id) {
+            let number = &fp.pads[i].number;
+            let k = fp.pads[..=i].iter().filter(|p| &p.number == number).count();
+            return Some(format!("pad:{number}#{k}"));
+        }
+        if let Some(&g) = index_of_group.get(id) {
+            return Some(format!("group:{g}"));
+        }
+        eda_model::fp_items_place::placed_kinds(&fp.items).has(id).then(|| format!("item:{id}"))
+    };
+    fp.items
+        .groups
+        .iter()
+        .map(|g| eda_model::ir::FootprintGroup { name: g.name.clone(), locked: fp.kicad.locked.contains(&g.id), members: g.member_ids.iter().filter_map(|m| place(m)).collect() })
+        .collect()
 }
 
 impl Board<'_> {
@@ -276,9 +420,44 @@ impl Board<'_> {
                 pad.kicad.property = o.fabrication_property.clone();
             }
         }
-        // its text boxes, images, points and barcodes (the clone holds every child of the footprint), their ids kept: the board's are the copy's
+        // its text boxes, images, points, barcodes, dimensions and tables (the clone holds every child of the footprint), their ids and locks kept: the board's are the
+        // copy's; and its zones, taken off the board to its frame (UI-LEFT PP14, FF4)
         fp.items = eda_model::fp_items_place::items_of(&self.design, self.model, &part).map(eda_model::fp_items_place::placed_kinds).unwrap_or_default();
+        fp.items.zones = self.footprint_zones_in_frame(reference);
+        if let Some(e) = &extra {
+            fp.kicad.locked.extend(e.locked_items.iter().filter(|id| fp.items.has(id)).cloned());
+        }
+        // the description, keywords, private layers and jumpers its record's kept forms hold (`aFootprint->Clone()` keeps them), while they are the footprint's
+        let written = eda_model::fp_items_place::written_name(self.model, &part);
+        if let Some(e) = extra.as_ref().filter(|e| e.source_name == written) {
+            let facts = eda_kicad::footprint_file_facts(&e.tokens);
+            fp.description = facts.description.unwrap_or_default();
+            fp.keywords = facts.keywords.unwrap_or_default();
+            let mut forms: Vec<String> = e.tokens.iter().filter(|t| form_tag(t).is_some_and(|t| LIBRARY_FORM_TAGS.contains(&t))).cloned().collect();
+            let mut st = FootprintSettings::default();
+            st.absorb_kept(&mut forms);
+            fp.settings.private_layers = st.private_layers;
+            fp.settings.duplicate_pad_numbers_are_jumpers = st.duplicate_pad_numbers_are_jumpers;
+            fp.settings.jumper_pad_groups = st.jumper_pad_groups;
+        }
+        // the Datasheet and Description fields as the board shows them (the clone's)
+        for name in ["Datasheet", "Description"] {
+            let mut l = eda_model::fp_edit::default_library_datasheet_layout();
+            if let Some(f) = edit.as_ref().and_then(|e| e.fields.iter().find(|f| f.name == name)) {
+                l = turned(f.layout.clone(), pose.side);
+            }
+            l.text = Some(board_footprint_field_text(&self.design, self.model, reference, name));
+            if name == "Datasheet" {
+                fp.datasheet = Some(l);
+            } else {
+                fp.description_field = Some(l);
+            }
+        }
         fp.assign_missing_ids();
+        // its groups, by the copy's ids
+        if let Some(e) = extra.as_ref().filter(|e| !e.groups.is_empty() && e.source_name == written) {
+            copy_groups(&e.groups, &mut fp);
+        }
         let lib = self.footprint_library_mut();
         // the editor holds one footprint: a copy of another board footprint is gone (`Clear_Pcb`)
         lib.board_copies.clear();
@@ -305,12 +484,22 @@ impl Board<'_> {
         let old = self.model.footprint_of(&part).unwrap_or_default();
         // the board file's record of the footprint as it stands, and whether its file form is the footprint's (the writer writes its tokens)
         let old_record = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference)).cloned();
-        let live = old_record.as_ref().is_some_and(|e| e.holds_file_form() && e.source_name == eda_model::fp_items_place::written_name(self.model, &part));
+        let written = eda_model::fp_items_place::written_name(self.model, &part);
+        let live = old_record.as_ref().is_some_and(|e| e.holds_file_form() && e.source_name == written);
         let items = eda_model::fp_items_place::placed_kinds(&copy.footprint.items);
+        // (the footprint's zones as they are, so that a zone the copy left where it was keeps its uuid)
+        let old_zones: Vec<eda_model::ir::Zone> = self.design.routing.iter().flat_map(|r| r.zones.iter()).filter(|z| z.parent_footprint.as_deref() == Some(reference.as_str())).cloned().collect();
+        // the Datasheet and Description the board shows, before the exchange: a copy whose own differ was edited
+        let shown_fields: Vec<(&str, String)> = ["Datasheet", "Description"].into_iter().map(|n| (n, board_footprint_field_text(&self.design, self.model, &reference, n))).collect();
         // `ExchangeFootprint( sourceFootprint, newFootprint, commit, true )`: pad positions matched, every reset on, the pads matched as the exchange matches them
         // (`matchItemsBySimilarity<PAD>`, not the netlist's by number); the part keeps its symbol's footprint field
         let options = ExchangeOptions { pads_by_number: false, ..ExchangeOptions::replace() };
-        self.exchange_one(&reference, &fpid, &old, new.clone(), items.clone(), &options, false);
+        self.exchange_one(&reference, &fpid, &old, new.clone(), None, &options, false);
+        // (a board with no routing section is not given one: `fp_on_board::set_footprint_zones`)
+        if let Some(rt) = self.design.routing.as_mut() {
+            rt.zones.retain(|z| z.parent_footprint.as_deref() != Some(reference.as_str()));
+            rt.zones.extend(old_zones);
+        }
 
         // What the copy has beyond the engine's footprint, on the instance: its fields' layouts and user fields, its attributes, its overrides (the clone carries them all)
         let fp = &copy.footprint;
@@ -326,6 +515,7 @@ impl Board<'_> {
         value_layout.text = None;
         value_layout.visible = fp.value_visible;
         edit.value = Some(value_layout);
+        let own_mandatory: Vec<UserField> = edit.fields.iter().filter(|f| f.name == "Datasheet" || f.name == "Description").cloned().collect();
         edit.fields = fp
             .fields
             .iter()
@@ -335,6 +525,23 @@ impl Board<'_> {
                 UserField { name: f.name.clone(), text: f.value.clone(), layout }
             })
             .collect();
+        // the Datasheet and Description: the footprint's own (Footprint Properties') as they were, and the copy's where it edited them (UI-LEFT FF4)
+        for (name, shown) in &shown_fields {
+            let copied = if *name == "Datasheet" { fp.datasheet.as_ref() } else { fp.description_field.as_ref() };
+            let own = own_mandatory.iter().find(|f| f.name == *name).cloned();
+            let field = match copied.filter(|l| l.text.clone().unwrap_or_default() != *shown) {
+                Some(l) => {
+                    let mut layout = turned(l.clone(), side);
+                    let text = layout.text.take().unwrap_or_default();
+                    Some(UserField { name: name.to_string(), text, layout })
+                }
+                None => own,
+            };
+            if let Some(f) = field {
+                edit.fields.retain(|g| g.name != f.name);
+                edit.fields.push(f);
+            }
+        }
         let attrs = board_attrs(&fp.attributes);
         let (dnp, no_bom) = self.design.symbol_bom_flags(&reference);
         edit.attrs = (attrs != FootprintAttrs::derived(&copy.footprint.to_engine_footprint(), dnp, no_bom)).then_some(attrs);
@@ -386,6 +593,9 @@ impl Board<'_> {
         // footprint's file form only where the copy left that as it was.
         let mut extra = old_record.clone().unwrap_or_else(|| FootprintExtra { id: reference.clone(), library_frame: true, ..Default::default() });
         extra.items = items;
+        // the copy's items' locks (UI-LEFT PP14); its zones go on the board below
+        extra.locked_items = copy.footprint.kicad.locked.iter().filter(|id| extra.items.has(id)).cloned().collect();
+        extra.zones_pose = None;
         // the courtyard as the file drew it, while the copy's courtyard is the board's
         if new.courtyard != old.courtyard {
             extra.courtyard_items.clear();
@@ -399,9 +609,12 @@ impl Board<'_> {
         if !same_pads {
             extra.pads.clear();
         }
-        // (the board's art as the copy holds it, so a copy nothing was drawn in compares equal)
+        // (the board's art as the copy holds it, so a copy nothing was drawn in compares equal); the copy's own groups, each member by its place, when it has any (the copy
+        // shows the board's: UI-LEFT FF4)
         let old_art = LibraryFootprint::from_engine_footprint(&old).to_engine_footprint().art;
-        if !same_pads || new.art != old_art {
+        if !fp.items.groups.is_empty() {
+            extra.groups = board_groups(fp).into_iter().filter(|g| !g.members.is_empty()).collect();
+        } else if !same_pads || new.art != old_art || extra.source_name != written {
             extra.groups.clear();
         }
         // the footprint's mask margin, solder mask bridges, net ties, clearance and zone connection (a footprint with no pad writes its own) are the board file's facts
@@ -415,12 +628,27 @@ impl Board<'_> {
         if live {
             crate::pcb_props::set_paste_margin_tokens(&mut extra.tokens, fp.settings.solder_paste_margin, fp.settings.solder_paste_margin_ratio);
         }
+        // the copy's description, keywords, private layers and jumper settings (UI-LEFT FF4), in place of the record's own forms of them, while the record's forms are the
+        // footprint's (`source_name`): a record of a footprint made here becomes a library's (`from_library`, its fields still the symbol's and the edit's)
+        let forms = library_forms(fp);
+        if extra.source_name.is_empty() && (!forms.is_empty() || !extra.groups.is_empty()) {
+            extra.source_name = written.clone();
+            extra.from_library = true;
+        }
+        if extra.source_name == written {
+            extra.tokens.retain(|t| !form_tag(t).is_some_and(|t| LIBRARY_FORM_TAGS.contains(&t)));
+            for (i, f) in forms.into_iter().enumerate() {
+                extra.tokens.insert(i.min(extra.tokens.len()), f);
+            }
+        }
         dr.footprint_extras.retain(|e| e.id != reference);
         // (a record that says the footprint is in its file's frame is not empty: `FootprintExtra::library_frame`)
         if extra != (FootprintExtra { id: reference.clone(), library_frame: true, ..Default::default() }) {
             dr.footprint_extras.push(extra);
             dr.footprint_extras.sort_by(|a, b| a.id.cmp(&b.id));
         }
+        // the copy's zones are the footprint's, put where it is (UI-LEFT PP14, FF4)
+        self.set_footprint_zones(&reference, copy.footprint.items.zones.clone());
         // a DNP or BOM flag the copy changed reaches the symbol, as an edit of Footprint Properties on the board does
         if bom_changed {
             self.design.sync_symbol_bom_flags(&edits);

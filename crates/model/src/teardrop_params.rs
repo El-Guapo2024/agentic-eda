@@ -161,21 +161,26 @@ impl TeardropParams {
             max_len_nm: self.max_length,
             max_width_nm: self.max_width,
             width_to_size_filter_ratio: self.filter_ratio,
+            curved_edges: self.curved_edges,
+            allow_two_segments: self.allow_two_segments,
+            prefer_zone_connections: self.prefer_zone_connections,
+            track_end: TeardropParams::default(),
         }
     }
 
-    /// What Board Setup's block gives an anchor that has no parameters of its own (`DIALOG_GLOBAL_EDIT_TEARDROPS::processItem` copies the block's sizes and enable):
-    /// one segment and straight edges, as the studio's teardrops are made.
+    /// What Board Setup's block gives an anchor that has no parameters of its own (`DIALOG_GLOBAL_EDIT_TEARDROPS::processItem` copies the block into the item):
+    /// its enable, sizes, filter, curved edges, two segments and zone preference.
     pub fn of_settings(s: &crate::ir::TeardropSettings) -> TeardropParams {
         TeardropParams {
             enabled: s.enabled,
-            allow_two_segments: false,
+            allow_two_segments: s.allow_two_segments,
+            prefer_zone_connections: s.prefer_zone_connections,
             best_length_ratio: s.best_length_ratio,
             best_width_ratio: s.best_width_ratio,
             max_length: s.max_len_nm,
             max_width: s.max_width_nm,
+            curved_edges: s.curved_edges,
             filter_ratio: s.width_to_size_filter_ratio,
-            ..TeardropParams::default()
         }
     }
 }

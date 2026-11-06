@@ -83,6 +83,56 @@ export interface DragDrawState {
   moved?: boolean;
   /** `"multi"`: the dragged lines' nets (`MULTI_DRAGGER::CurrentNets`), the only ones the cursor snaps onto. */
   nets?: string[];
+  /** `InlineDrag` (`D` from the selection tool): the selection as it was when the drag started (`const PCB_SELECTION selection`), which the drag
+   * cleared (`ACTIONS::selectionClear`) and which Esc puts back (`restoreSelection( selection )`). Absent for the router tool's own drag
+   * (`performDragging`), which leaves the selection alone. */
+  restoreSelection?: string[];
+  /** The nets highlighted when the drag ends (`highlightNets( false )`: `m_startHighlightNetcodes`, see `dragHighlight`). Absent: the drag did not
+   * change the highlight. */
+  restoreHighlight?: string[];
+}
+
+/**
+ * `TOOL_BASE::highlightNets( true, nets )` at the start of a drag (pcbnew/router/pns_tool_base.cpp at 8303b2ad), with `current` the nets highlighted
+ * now: the drag shows `nets` highlighted (`rs->SetHighlight( netcodes, true )`), and at its end (`highlightNets( false )`) the highlight goes back
+ * to `current` when it already held one of them ("If the user has previously set some of the routed nets to be highlighted, we assume they want
+ * to keep them highlighted after routing"), else off. `null` when `nets` is empty (`if( closestItem->Net() )`: no call). **Differs:** with no net
+ * KiCad's `highlightNets( false )` at the end still puts back `m_startHighlightNetcodes` -- whatever an earlier route left there -- where the
+ * studio leaves the highlight as it was.
+ */
+export function dragHighlight(current: readonly string[], nets: readonly string[]): { show: string[]; restore: string[] } | null {
+  const shown = [...new Set(nets.filter((n) => n !== ""))];
+  if (shown.length === 0) return null;
+  const keep = current.some((n) => shown.includes(n));
+  return { show: shown, restore: keep ? [...current] : [] };
+}
+
+/** What `ROUTER_TOOL::InlineDrag` keeps of the editor as the drag starts (pcbnew/router/router_tool.cpp at 8303b2ad): the selection (`const
+ * PCB_SELECTION selection`, which `ACTIONS::selectionClear` then empties and Esc puts back) and the nets highlighted now (`highlightNets`). */
+export interface InlineDragContext {
+  selection: readonly string[];
+  highlighted: readonly string[];
+}
+
+/** `InlineDrag` once the router has started the drag: whether the selection is cleared (`m_toolMgr->RunAction( ACTIONS::selectionClear )`, the
+ * selection tool's drag; `clearsSelection`), the nets to highlight now (`highlightNets( true, { closestItem->Net() } )`, `net`), and the draw
+ * state with what the end puts back. Without `context` nothing changes. */
+export function inlineDragBegin(draw: DragDrawState, context: InlineDragContext | undefined, clearsSelection: boolean, net: string | null | undefined): { draw: DragDrawState; clearSelection: boolean; highlight: string[] | null } {
+  if (!context) return { draw, clearSelection: false, highlight: null };
+  const highlight = dragHighlight(context.highlighted, net ? [net] : []);
+  return { draw: { ...draw, restoreSelection: clearsSelection ? [...context.selection] : undefined, restoreHighlight: highlight?.restore }, clearSelection: clearsSelection, highlight: highlight?.show ?? null };
+}
+
+/** The end of an `InlineDrag` (Esc, or the click that ends it): the nets highlighted again (`highlightNets( false )`, `null`: unchanged), and the
+ * selection to make (`null`: none) -- `select` (`else if( leaderSegments.size() )`: `selectItems` of the leader segments' tracks), or with Esc the
+ * one the drag cleared (`if( itemsToDrag.Size() && hasMultidragCancelled ) restoreSelection( selection )`). A drag that is not the selection tool's
+ * (`restoreSelection` absent) leaves the selection alone; an empty one stays clear. */
+export function inlineDragEnd(draw: DragDrawState | null | undefined, how: { cancelled: true } | { cancelled: false; select?: readonly string[] }): { highlight: string[] | null; selection: string[] | null } {
+  if (!draw) return { highlight: null, selection: null };
+  const highlight = draw.restoreHighlight ? [...draw.restoreHighlight] : null;
+  if (!draw.restoreSelection) return { highlight, selection: null };
+  const next = how.cancelled ? draw.restoreSelection : [...(how.select ?? [])];
+  return { highlight, selection: next.length > 0 ? next : null };
 }
 
 /** The `DrawState` "drag" patch for a successful `DragPreview` reply,

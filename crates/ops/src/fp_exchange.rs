@@ -20,9 +20,11 @@
 //!   and paste margins and zone-connection overrides (`zone_overrides`, `footprint_extras`, `footprint_edits[].solder_paste_*`) go with "update/reset clearance overrides",
 //!   the 3D models and the Extruded 3D Body with "update/reset 3D models";
 //! * what the board file said of the footprint (`footprint_extras`, [`exchanged_record`]): the uuid, the sheet, the footprint filters and the component classes stay (KiCad
-//!   sets them on the new footprint from the old one), the Datasheet and Description fields the file gave it stay unless "update/reset text content" is on, and the rest --
-//!   its text boxes, images, points and barcodes among it -- is the new footprint's: those four are the library footprint's items (`library_items`, KiCad's `aNew` keeps
-//!   its own: they are no `PCB_TEXT`, which alone the exchange carries over), the board's own are gone;
+//!   sets them on the new footprint from the old one), the Datasheet and Description fields the file gave it stay unless "update/reset text content" is on, and the rest is
+//!   the new footprint's, the library footprint's record ([`crate::fp_on_board::LibraryRecord`], made of `library_items`, UI-LEFT PP5): its pads' layer sets, die lengths
+//!   and fabrication properties, its description, tags, jumper groups, private layers, margins, net ties and 3D body, its pads with no copper and its holes, its text
+//!   boxes, images, points, barcodes, dimensions and tables (KiCad's `aNew` keeps its own: they are no `PCB_TEXT`, which alone the exchange carries over) -- the board's
+//!   own are gone -- and its zones, which replace the old footprint's on the board;
 //! * the schematic's Footprint field follows the board in Change Footprint, as the back-annotation would carry it (the two editors are one design; the symbol is not left
 //!   naming a footprint the board does not have).
 //!
@@ -35,8 +37,8 @@ use eda_model::footprint::Footprint;
 use eda_model::fp_assign::FootprintAssignment;
 use eda_model::fp_compare::{FootprintOverrides, InstanceFacts, PadOverrides};
 use eda_model::fp_edit::{default_reference_layout, default_value_layout, FootprintAttrs, FootprintEdit};
+use super::fp_on_board::LibraryRecord;
 use eda_model::fp_exchange::{carry_layout, carry_text, keep_text, match_pads, match_texts, pad_alignment, TextReset};
-use eda_model::fp_items::FootprintItems;
 use eda_model::ir::{FootprintExtra, FootprintInstance, LabelSide, LibraryFootprint, Point, Side};
 use eda_model::{CheckResult, ConstraintModel, Part};
 use serde::{Deserialize, Serialize};
@@ -285,8 +287,9 @@ pub(crate) struct ExchangedRecord {
 
 /// The record of the footprint `reference` once it is exchanged (`PCB_EDIT_FRAME::ExchangeFootprint`, pcbnew/pcb_edit_frame.cpp at KiCad 8303b2ad): `old` is the record it
 /// had, `live` whether that record's file form is still the footprint's (its `source_name` is the name the board file gives the footprint the part is on, so the writer
-/// writes its tokens), `items` the new footprint's text boxes, images, points and barcodes (the library's: [`eda_model::fp_items_place::placed_kinds`]) and `written_name`
-/// the name the file gives the new footprint. `aNew` is the library's footprint, and KiCad sets on it from `aExisting`:
+/// writes its tokens), `library` the new footprint's own record (the library footprint's, [`LibraryRecord`]; `None` for one the engine resolves by itself, a built-in
+/// package, which has nothing of a file) and `written_name` the name the file gives the new footprint. `aNew` is the library's footprint, and KiCad sets on it from
+/// `aExisting`:
 ///
 /// * always: the uuid (`aNew->SetUuid( aExisting->m_Uuid )`), the sheet (`SetSheetfile`, `SetSheetname`), the footprint filters (`SetFilters`, the file's `ki_fp_filters`)
 ///   and the component class (`SetStaticComponentClass( aExisting->GetComponentClass() )`, the classes the file gave the footprint);
@@ -298,13 +301,23 @@ pub(crate) struct ExchangedRecord {
 ///   `PARITY-pcb.md`). With it on the record holds no file form (`source_name` empty): the writer gives the footprint the symbol's fields, which are what Update PCB from
 ///   Schematic sets after `replaceFootprint` (`updateFootprintParameters`), and the footprint filters go with the file's form.
 ///
-/// Everything else is the new footprint's: its text boxes, images, points and barcodes (no `PCB_TEXT`: `ExchangeFootprint` carries over the `PCB_TEXT` and `PCB_FIELD`s
-/// alone, every other child of `aNew` is the library's), its description, tags, jumper groups, private layers and kept items, its courtyard, groups, holes and pads'
-/// file facts, its gates. The record is in the library's frame (`library_frame`: the new footprint is the library's); `None` when nothing is left to hold.
-pub(crate) fn exchanged_record(old: Option<&FootprintExtra>, live: bool, reference: &str, options: &ExchangeOptions, items: FootprintItems, change: bool, written_name: &str) -> ExchangedRecord {
-    let mut ex = FootprintExtra { id: reference.to_string(), library_frame: true, items, ..Default::default() };
-    let (mut paste_margin, mut paste_ratio) = (None, None);
+/// Everything else is the new footprint's (UI-LEFT PP5): its text boxes, images, points, barcodes, dimensions and tables (no `PCB_TEXT`: `ExchangeFootprint` carries over
+/// the `PCB_TEXT` and `PCB_FIELD`s alone, every other child of `aNew` is the library's), its description, tags, jumper groups, private layers and kept items, its pads'
+/// layer sets, die lengths and properties, its courtyard, holes and pads with no copper, its margins, net ties and 3D body (with the options that reset them on), its
+/// gates; its zones are the caller's ([`Board::set_footprint_zones`]). The record is in the library's frame (`library_frame`: the new footprint is the library's), the
+/// library's ([`FootprintExtra::from_library`]) unless the file's fields stay; `None` when nothing is left to hold. With the clearance overrides reset, the paste margins
+/// returned are the library's (a footprint whose record holds no file form keeps them in its edit).
+pub(crate) fn exchanged_record(old: Option<&FootprintExtra>, live: bool, reference: &str, options: &ExchangeOptions, library: Option<&LibraryRecord>, change: bool, written_name: &str) -> ExchangedRecord {
+    let mut ex = match library {
+        Some(lib) => FootprintExtra { id: reference.to_string(), source_name: written_name.to_string(), ..lib.record.clone() },
+        None => FootprintExtra { id: reference.to_string(), library_frame: true, ..Default::default() },
+    };
+    // (a footprint with no record keeps its edit's paste margins with "update/reset clearance overrides" off: the exchange leaves the edit's)
+    let reset = options.reset_clearance_overrides;
+    let (mut paste_margin, mut paste_ratio) = (library.and_then(|l| l.paste_margin).filter(|_| reset), library.and_then(|l| l.paste_ratio).filter(|_| reset));
     if let Some(old) = old {
+        paste_margin = None;
+        paste_ratio = None;
         ex.uuid = old.uuid.clone();
         ex.sheetname = old.sheetname.clone();
         ex.sheetfile = old.sheetfile.clone();
@@ -326,20 +339,27 @@ pub(crate) fn exchanged_record(old: Option<&FootprintExtra>, live: bool, referen
         }
         let tokens: &[String] = if live { &old.tokens } else { &[] };
         if !options.reset_text_content && live {
-            // the file's fields stay (and with them the filters and, when kept, the paste margins, which the file's form holds)
-            ex.tokens = tokens
-                .iter()
-                .filter(|t| is_property(t, "Datasheet") || is_property(t, "Description") || is_property(t, "ki_fp_filters") || (keep_overrides && is_paste_margin(t)))
-                .cloned()
-                .collect();
+            // the file's fields stay (and with them the filters and, when kept, the paste margins, which the file's form holds): the record holds a file form again, the
+            // library's forms with the fields of the board's file in place of the library's
+            let library_forms = ex.tokens.iter().filter(|t| !(is_property(t, "Datasheet") || is_property(t, "Description") || is_property(t, "ki_fp_filters"))).cloned();
+            let kept = tokens.iter().filter(|t| is_property(t, "Datasheet") || is_property(t, "Description") || is_property(t, "ki_fp_filters") || (keep_overrides && is_paste_margin(t))).cloned();
+            ex.tokens = library_forms.chain(kept).collect();
+            if !keep_overrides {
+                crate::pcb_props::set_paste_margin_tokens(&mut ex.tokens, library.and_then(|l| l.paste_margin), library.and_then(|l| l.paste_ratio));
+            }
+            ex.from_library = false;
             ex.source_name = written_name.to_string();
         } else if keep_overrides {
             paste_margin = eda_model::lib_keep::kept_mm(tokens, "solder_paste_margin");
             paste_ratio = eda_model::lib_keep::kept_number(tokens, "solder_paste_margin_ratio").or_else(|| eda_model::lib_keep::kept_number(tokens, "solder_paste_ratio"));
+        } else {
+            paste_margin = library.and_then(|l| l.paste_margin);
+            paste_ratio = library.and_then(|l| l.paste_ratio);
         }
     }
     let empty = FootprintExtra { id: reference.to_string(), library_frame: true, ..Default::default() };
-    ExchangedRecord { record: (ex != empty).then_some(ex), paste_margin, paste_ratio }
+    let empty_library = FootprintExtra { id: reference.to_string(), library_frame: true, from_library: true, source_name: written_name.to_string(), ..Default::default() };
+    ExchangedRecord { record: (ex != empty && ex != empty_library).then_some(ex), paste_margin, paste_ratio }
 }
 
 impl Board<'_> {
@@ -347,7 +367,8 @@ impl Board<'_> {
     /// has the newest copy), else the one the command carries, and -- when the footprint is changed to another (`update` off) -- one the model already knows by that name
     /// (another part's, a built-in package).
     fn footprint_to_put(&self, name: &str, part: &Part, library: &BTreeMap<String, Footprint>, update: bool) -> Option<Footprint> {
-        let mut found = self.editor_entry(name, part, update).map(LibraryFootprint::to_engine_footprint).or_else(|| library.get(name).cloned());
+        // (an entry's pads with no copper are the record's, as the board's reader of the library file leaves them out: `fp_on_board::with_copper_pads_only`)
+        let mut found = self.editor_entry(name, part, update).map(|e| crate::fp_on_board::with_copper_pads_only(e).to_engine_footprint()).or_else(|| library.get(name).cloned());
         if found.is_none() && !update {
             let probe = Part { reference: part.reference.clone(), mpn: None, lcsc: None, value: part.value.clone(), package: None, footprint: Some(name.to_string()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
             found = self.model.footprint_of(&probe);
@@ -364,17 +385,17 @@ impl Board<'_> {
         lib.by_name(name).or_else(|| update.then(|| lib.by_name(&footprint_name_of(part))).flatten())
     }
 
-    /// The text boxes, images, points and barcodes of the library copy of footprint `name` (the same copy as [`Self::footprint_to_put`]'s: the Footprint Editor's entry,
-    /// else the one the command carries); none for a footprint the model resolves by itself (a built-in package has none).
-    fn items_to_put(&self, name: &str, part: &Part, library_items: &BTreeMap<String, FootprintItems>, update: bool) -> FootprintItems {
+    /// The library copy of footprint `name` as the Footprint Editor reads it, for what the engine's footprint does not carry (the same copy as [`Self::footprint_to_put`]'s:
+    /// the Footprint Editor's entry, else the one the command carries); none for a footprint the model resolves by itself (a built-in package has none).
+    fn library_to_put(&self, name: &str, part: &Part, library_items: &BTreeMap<String, LibraryFootprint>, update: bool) -> Option<LibraryFootprint> {
         match self.editor_entry(name, part, update) {
-            Some(entry) => eda_model::fp_items_place::placed_kinds(&entry.items),
-            None => library_items.get(name).map(eda_model::fp_items_place::placed_kinds).unwrap_or_default(),
+            Some(entry) => Some(entry.clone()),
+            None => library_items.get(name).cloned(),
         }
     }
 
     /// [`Cmd::ExchangeFootprints`]. All or nothing: a footprint that cannot be found, or a reference the board has no part for, refuses the whole command.
-    pub(crate) fn exchange_footprints(&mut self, references: &[String], footprint: Option<&str>, options: &ExchangeOptions, library: &BTreeMap<String, Footprint>, library_items: &BTreeMap<String, FootprintItems>) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn exchange_footprints(&mut self, references: &[String], footprint: Option<&str>, options: &ExchangeOptions, library: &BTreeMap<String, Footprint>, library_items: &BTreeMap<String, LibraryFootprint>) -> Result<(), Vec<CheckResult>> {
         let target = footprint.map(str::trim);
         if target == Some("") {
             return Err(fail("ops_bad_footprint", "footprint", "there is no footprint to change to"));
@@ -386,7 +407,7 @@ impl Board<'_> {
         }
         let update = target.is_none();
         // Everything that can be refused is refused before anything changes.
-        let mut plan: Vec<(String, String, Footprint, Footprint, FootprintItems)> = Vec::new();
+        let mut plan: Vec<(String, String, Footprint, Footprint, Option<LibraryFootprint>)> = Vec::new();
         for r in refs {
             let part = self.model.part(r).ok_or_else(|| fail("ops_unknown_part", r, "no footprint with this reference is on the board"))?;
             // An update reads the library copy of the footprint the board names (`GetFPID()`: a built-in `0603` is `Resistor_SMD:R_0603_1608Metric` on the board), and
@@ -399,18 +420,18 @@ impl Board<'_> {
             let mut new = self.footprint_to_put(&key, part, library, update).ok_or_else(|| fail("ops_unknown_footprint", &name, format!("library footprint '{name}' not found")))?;
             new.name = name.clone();
             let old = self.model.footprint_of(part).unwrap_or_default();
-            let items = self.items_to_put(&key, part, library_items, update);
-            plan.push((r.to_string(), name, old, new, items));
+            let lib = self.library_to_put(&key, part, library_items, update);
+            plan.push((r.to_string(), name, old, new, lib));
         }
-        for (reference, name, old, new, items) in plan {
-            self.exchange_one(&reference, &name, &old, new, items, options, !update);
+        for (reference, name, old, new, lib) in plan {
+            self.exchange_one(&reference, &name, &old, new, lib.as_ref(), options, !update);
         }
         Ok(())
     }
 
-    /// One footprint (`ExchangeFootprint`): `old` is the footprint the part is on as the board has it (pad edits laid on), `new` the one it is put on, `items` the new
-    /// footprint's text boxes, images, points and barcodes.
-    pub(crate) fn exchange_one(&mut self, reference: &str, name: &str, old: &Footprint, mut new: Footprint, items: FootprintItems, options: &ExchangeOptions, change: bool) {
+    /// One footprint (`ExchangeFootprint`): `old` is the footprint the part is on as the board has it (pad edits laid on), `new` the one it is put on, `lib` the library
+    /// footprint `new` is, as the Footprint Editor reads it (its record, [`LibraryRecord`]: what the engine's footprint does not carry), when it is known.
+    pub(crate) fn exchange_one(&mut self, reference: &str, name: &str, old: &Footprint, mut new: Footprint, lib: Option<&LibraryFootprint>, options: &ExchangeOptions, change: bool) {
         let placed_pose = self.pose_of(reference).cloned();
         let old_pose = placed_pose.clone().unwrap_or_else(|| FootprintInstance { id: reference.to_string(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: Side::Top, label: LabelSide::default() });
 
@@ -460,16 +481,22 @@ impl Board<'_> {
         if options.remove_extra_texts {
             edit.fields.clear();
         }
-        // the fabrication attributes: the new footprint's own, or the old footprint's as they stood
+        // the library footprint's own record (UI-LEFT PP5): its pads' file facts in the order of `new`, its kept forms, items, margins and zones
+        let library = lib.and_then(|l| LibraryRecord::of(l, &new, &self.model.board.layers));
+        // the fabrication attributes: the new footprint's own (the library file's `(attr ..)`, else the ones its pads give), or the old footprint's as they stood
         edit.attrs = if options.reset_fabrication_attrs {
-            None
+            let (dnp, no_bom) = self.design.symbol_bom_flags(reference);
+            library.as_ref().and_then(|l| l.attrs).filter(|a| *a != FootprintAttrs::derived(&new, dnp, no_bom))
         } else {
             let (dnp, no_bom) = self.design.symbol_bom_flags(reference);
             let kept = self.design.effective_attrs(reference, old);
             (kept != FootprintAttrs::derived(&new, dnp, no_bom)).then_some(kept)
         };
-        // the pads are the new footprint's (with the pin names and types a renumbered pad carries over)
+        // the pads are the new footprint's (with the pin names and types a renumbered pad carries over), each with the library pad's own margins
         edit.pads.clear();
+        for m in library.as_ref().map(|l| l.pad_margins.clone()).unwrap_or_default() {
+            edit.set_pad(m);
+        }
         // the 3D models are the new footprint's own; with "update/reset 3D models" off they are the footprint's as it stood (`new` carries them now), and a list the board had
         // set stays set -- an empty one too, which is a footprint with no model, not one that has the package's generic one
         edit.models3d = (!options.reset_3d_models && was.models3d.is_some()).then(|| new.models3d.clone());
@@ -504,7 +531,8 @@ impl Board<'_> {
             let function = old_infos.as_ref().map(|p| p[i].pin_function.clone()).filter(|f| !f.is_empty()).or_else(|| link.as_ref().and_then(|l| l.pins.get(a)).map(|(f, _)| f.clone()));
             let pin_type = old_infos.as_ref().map(|p| p[i].pin_type.clone()).filter(|t| !t.is_empty()).or_else(|| link.as_ref().and_then(|l| l.pins.get(a)).map(|(_, t)| t.clone()));
             let nth = new.pads[..j].iter().filter(|p| &p.number == b).count() as u32 + 1;
-            pin_edits.push(eda_model::fp_edit::PadEdit { pin_function: Some(function.unwrap_or_default()), pin_type: Some(pin_type.unwrap_or_default()), ..eda_model::fp_edit::PadEdit::none(b, nth) });
+            let base = edit.pad(b, nth).cloned().unwrap_or_else(|| eda_model::fp_edit::PadEdit::none(b, nth));
+            pin_edits.push(eda_model::fp_edit::PadEdit { pin_function: Some(function.unwrap_or_default()), pin_type: Some(pin_type.unwrap_or_default()), ..base });
         }
 
         // The footprint-level overrides stay with "update/reset clearance overrides" off; the pads' are the old pads'
@@ -529,7 +557,7 @@ impl Board<'_> {
             _ => false,
         };
         let written = self.model.part(reference).map(|p| eda_model::fp_items_place::written_name(self.model, &Part { footprint: Some(name.to_string()), package: None, ..p.clone() })).unwrap_or_else(|| name.to_string());
-        let exchanged = exchanged_record(old_record.as_ref(), live, reference, options, items, change, &written);
+        let exchanged = exchanged_record(old_record.as_ref(), live, reference, options, library.as_ref(), change, &written);
         if exchanged.paste_margin.is_some() || exchanged.paste_ratio.is_some() {
             edit.solder_paste_margin = exchanged.paste_margin;
             edit.solder_paste_ratio = exchanged.paste_ratio;
@@ -587,6 +615,8 @@ impl Board<'_> {
                 f.rot = new_pose.rot;
             }
         }
+        // the footprint's zones are the new footprint's (`aNew->Zones()`: the old footprint goes with its own), put where it now is
+        self.set_footprint_zones(reference, library.map(|l| l.zones).unwrap_or_default());
         // the symbol names the footprint the board has
         if change {
             for screen in self.design.schematic.iter_mut().chain(self.design.sheet_contents.iter_mut().flat_map(|c| c.values_mut())) {
