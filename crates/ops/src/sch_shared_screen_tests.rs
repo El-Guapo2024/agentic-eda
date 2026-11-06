@@ -220,3 +220,24 @@ fn a_rename_of_a_second_placements_reference_reaches_that_placement() {
     assert_eq!(refs_on(b.design(), &["sa"]), ["R11", "R2"]);
     assert_eq!(refs_on(b.design(), &["sb"]), ["R13", "R4"]);
 }
+
+/// Symbol Properties' Reference on the second placement renames that placement's reference only (`DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow`:
+/// `SetRef( &GetParent()->GetCurrentSheet(), .. )`); a reference only a path gives (the board's Footprint Properties of that path's part) is renamed on that
+/// path; a reference another placement holds is refused.
+#[test]
+fn a_reference_edited_on_the_second_placement_is_that_placements() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(channels(), &m, mm(0.1), mm(0.3));
+    b.apply(&on("sb", Cmd::RenameSymbol { id: "R1".into(), new_id: "R9".into() })).unwrap();
+    assert_eq!(refs_on(b.design(), &["sa"]), ["R1", "R2"], "the first placement keeps R1");
+    assert_eq!(refs_on(b.design(), &["sb"]), ["R4", "R9"]);
+    // by the path's own reference, from the root (the board names the part R4)
+    b.apply(&Cmd::RenameSymbol { id: "R4".into(), new_id: "R14".into() }).unwrap();
+    assert_eq!(refs_on(b.design(), &["sb"]), ["R14", "R9"]);
+    // R2 is the first placement's
+    assert!(b.apply(&on("sb", Cmd::RenameSymbol { id: "R1".into(), new_id: "R2".into() })).is_err());
+    // on the first placement the id itself is renamed, and the second keeps its own
+    b.apply(&on("sa", Cmd::RenameSymbol { id: "R1".into(), new_id: "R21".into() })).unwrap();
+    assert_eq!(refs_on(b.design(), &["sa"]), ["R2", "R21"]);
+    assert_eq!(refs_on(b.design(), &["sb"]), ["R14", "R9"]);
+}

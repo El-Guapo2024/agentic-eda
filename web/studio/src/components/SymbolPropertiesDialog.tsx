@@ -138,7 +138,8 @@ export function SymbolPropertiesDialog() {
 
   useEffect(() => {
     if (!symbol) return;
-    setReference(symbol.id);
+    // the reference the sheet path in view gives it (`GetRef( &GetParent()->GetCurrentSheet() )`; a screen shown by several sheets, UI-LEFT S9)
+    setReference(symbol.reference ?? symbol.id);
     setValue(symbol.value ?? "");
     setFootprint(symbol.footprint ?? "");
     setDatasheet(symbol.datasheet ?? "");
@@ -191,8 +192,9 @@ export function SymbolPropertiesDialog() {
       return false;
     }
     // `if( currentVariant.IsEmpty() ) m_symbol->SetRef( .. )`: a variant keeps the reference
-    const renamed = variant === "" && trimmedRef !== symbol.id;
-    if (renamed && api.symbolById(trimmedRef)) {
+    // `SetRef( &GetCurrentSheet(), .. )`: the path in view's reference (the server renames that path's alone on a screen shown twice)
+    const renamed = variant === "" && trimmedRef !== (symbol.reference ?? symbol.id);
+    if (renamed && (api.symbolById(trimmedRef) || (state.schematic?.symbols ?? []).some((s) => s.id !== symbol.id && (s.reference ?? s.id) === trimmedRef))) {
       setError(`"${trimmedRef}" is already used by another symbol.`);
       return false;
     }

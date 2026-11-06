@@ -449,11 +449,12 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       owner: "SCH_SYMBOL",
       name: "Reference",
       kind: "string",
-      get: (i) => i.symbol?.id ?? i.power?.id ?? "",
+      // the sheet path in view's (`GetRef( &Schematic()->CurrentSheet() )`, UI-LEFT S9)
+      get: (i) => i.symbol?.reference ?? i.symbol?.id ?? i.power?.reference ?? i.power?.id ?? "",
       writeable: (i, c) => isReal(i) && c.count === 1,
       readOnlyReason: (i) => (i.power ? "A power symbol's reference is not edited: its value is the net it stands for." : "Two symbols cannot share a reference: rename them one at a time."),
       validate: (v) => (String(v).trim() === "" ? "A reference cannot be empty." : null),
-      set: (i, v) => (!i.symbol || i.symbol.id === String(v).trim() ? [] : [{ op: "rename_symbol", id: i.symbol.id, new_id: String(v).trim() }]),
+      set: (i, v) => (!i.symbol || (i.symbol.reference ?? i.symbol.id) === String(v).trim() ? [] : [{ op: "rename_symbol", id: i.symbol.id, new_id: String(v).trim() }]),
     },
     FIELDS
   );

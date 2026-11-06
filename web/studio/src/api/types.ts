@@ -3079,6 +3079,8 @@ export interface DesignVariantInfo {
  */
 export interface PowerSymbol {
   id: string;
+  /** The reference this sheet's placement gives it (`GetRef( &sheetPath )`: a power symbol has one per sheet path, UI-LEFT S9); `id` unless the screen is shown twice. */
+  reference?: string;
   lib_id: string;
   at: [Nm, Nm];
   rot: Degrees;

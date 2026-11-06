@@ -6460,10 +6460,54 @@ impl<'a> Board<'a> {
             self.rename_part(&BTreeMap::from([(id.to_string(), new_id.to_string())]));
             return Ok(());
         }
+        // a reference one sheet path of a screen shown twice gives its symbol (`SCH_SYMBOL::SetRef( &GetCurrentSheet(), .. )`, Symbol Properties' and Field
+        // Properties' Reference; the board's Reference of that path's footprint): that path's alone (UI-LEFT S9)
+        if let Some(renames) = self.path_reference_renames(id, new_id)? {
+            self.annotate_apply(&renames, true);
+            return Ok(());
+        }
         if self.rename_symbol_in_schematic(id, new_id)? {
             self.rename_part(&BTreeMap::from([(id.to_string(), new_id.to_string())]));
         }
         Ok(())
+    }
+
+    /// The renames of [`Self::rename_symbol`] that are a sheet path's own (`sch_annotate::Rename::path`): `id` a symbol of the screen in view, which is shown
+    /// on several sheet paths, renamed on the path in view when that is not the path its id names; or `id` no symbol's own id but the reference some path
+    /// gives a symbol (a footprint of that path renamed on the board), renamed on every path that names it so. `None`: an ordinary rename of the id.
+    fn path_reference_renames(&self, id: &str, new_id: &str) -> Result<Option<Vec<sch_annotate::Rename>>, Vec<CheckResult>> {
+        if new_id.trim().is_empty() || new_id == id {
+            return Ok(None);
+        }
+        let paths_of = eda_model::sheet_list::paths_of_screens(&self.design);
+        let file = self.focus.clone().unwrap_or_default();
+        let path = self.focus_sheet_path();
+        let mut renames: Vec<sch_annotate::Rename> = Vec::new();
+        let own_somewhere = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).any(|sch| sch.symbols.iter().any(|s| s.id == id));
+        if own_somewhere {
+            let Some(paths) = paths_of.get(&file).filter(|p| p.len() > 1) else { return Ok(None) };
+            let Ok(sch) = self.schematic() else { return Ok(None) };
+            for (i, s) in sch.symbols.iter().enumerate().filter(|(_, s)| s.id == id) {
+                if eda_model::sheet_list::own_path(sch, s, paths) == Some(&path) {
+                    return Ok(None);
+                }
+                renames.push(sch_annotate::Rename { file: file.clone(), item: sch_annotate::Item::Symbol(i), old: eda_model::sheet_list::reference_under(sch, s, &path), unit: s.unit, new: new_id.to_string(), path: Some(path.clone()) });
+            }
+        } else {
+            renames = self.reference_renames(&BTreeMap::from([(id.to_string(), new_id.to_string())]));
+            if renames.is_empty() {
+                return Ok(None);
+            }
+        }
+        // the new reference is no other placement's (`SCH_REFERENCE_LIST` would hold two of it)
+        let olds: BTreeSet<&str> = renames.iter().map(|r| r.old.as_str()).collect();
+        for e in eda_model::sheet_list::walk(&self.design) {
+            let Some(sch) = eda_model::sheet_list::screen_of(&self.design, &e.path) else { continue };
+            if sch.symbols.iter().any(|s| s.id == new_id || (eda_model::sheet_list::reference_under(sch, s, &e.path) == new_id && !olds.contains(new_id))) {
+                return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a symbol with this reference is already on another sheet")]);
+            }
+        }
+        Ok(Some(renames))
     }
 
     /// Is `reference` a footprint of the board that no symbol of the schematic is for (a copy, one placed from a library, one whose symbol was deleted)? A
