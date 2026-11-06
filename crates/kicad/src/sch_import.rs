@@ -70,6 +70,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     // the root's own symbols' paths of its legacy `(symbol_instances ..)`: `/<symbol uuid>` (r5 D5-H1)
     let legacy = sexpr::parse(text).ok().and_then(|t| t.as_list().map(|root| legacy_instances_where(root, |sheets| sheets.is_empty()))).unwrap_or_default();
     let (mut design, model, notes) = import_screen(text, opts, None, &legacy)?;
+    // a symbol cross-reference stored by the symbol's path reads as KiCad shows it, by its reference (`ConvertKIIDsToRefs`)
+    crate::sch_crossref::kiids_to_refs_in(&mut design, &notes.item_ids);
     // the root's own page (`(sheet_instances (path "/" (page ..)))`, UI-LEFT S21), as the tree import reads it
     if let Some(root) = design.schematic.as_mut() {
         root.extras.root_page = root_page_of(text);
@@ -1189,6 +1191,8 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
     legacy_sheet_instances(&text, &mut design);
     // `SCH_SHEET_LIST::RepairPageNumbers`, which eeschema and kicad-cli run on a schematic just loaded with some page set (r2 B-M2)
     eda_model::sheet_list::repair_page_numbers(&mut design);
+    // the cross-references to the symbols of other sheets, now that every sheet is read
+    crate::sch_crossref::kiids_to_refs_in(&mut design, &notes.item_ids);
 
     Ok((design, model, notes))
 }

@@ -745,6 +745,7 @@ dependencies = [
  "eda-gates",
  "eda-kicad",
  "eda-model",
+ "eda-place",
  "eda-shape-poly-set",
  "serde",
  "serde_json",

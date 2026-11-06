@@ -228,6 +228,18 @@ impl<'a> Board<'a> {
             g.id.clear();
             translate_graphic(&mut g.shape, dx, dy);
         }
+        // Tables (`SCH_TABLE`): new ids and uuids, moved with the rest, unlocked (a lock is never pasted).
+        let pasted_tables: Vec<&eda_model::table::Table> = src.extras.tables.iter().filter(|t| t.is_well_formed()).collect();
+        let new_tables: Vec<eda_model::table::Table> = pasted_tables
+            .iter()
+            .map(|t| {
+                let mut c = (*t).clone();
+                super::pcb_tables::forget_uuids(&mut c);
+                c.layer.clear();
+                c.translate(dx, dy);
+                c
+            })
+            .collect();
 
         // ---- commit them to the sheet ----
         if !publish.is_empty() {
@@ -262,6 +274,8 @@ impl<'a> Board<'a> {
         }
         sch.junctions.sort_by_key(|j| j.at);
         sch.extras.graphics.extend(new_graphics);
+        let first_table = sch.extras.tables.len();
+        sch.extras.tables.extend(new_tables);
         for (reference, fields) in user_fields {
             sch.user_fields.entry(reference).or_insert(fields);
         }
@@ -314,6 +328,11 @@ impl<'a> Board<'a> {
         for (k, g) in src.extras.graphics.iter().enumerate() {
             if let Some(new) = sch.extras.graphics.get(first_graphic + k) {
                 remap.insert(g.id.clone(), new.id.clone());
+            }
+        }
+        for (k, t) in pasted_tables.iter().enumerate() {
+            if let Some(new) = sch.extras.tables.get(first_table + k) {
+                remap.insert(t.id.clone(), new.id.clone());
             }
         }
         // a junction the sheet already had is not a pasted one; one the pasted wires imply is not stored

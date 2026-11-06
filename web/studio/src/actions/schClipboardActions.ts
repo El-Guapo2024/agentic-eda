@@ -15,6 +15,7 @@ import type { Dispatch } from "react";
 import { fetchSchematic } from "../api/client";
 import { postSchCopy, postSchParse } from "../api/schClipboardClient";
 import { clipboardTextOrNull, newIdsAfter, pasteOffset, selectionAfterPaste, type SchPasteMode } from "../kicad-port/schClipboard";
+import { clipboardHasTable, hasTableCells } from "../kicad-port/tableCells";
 import { deleteCmds } from "../kicad-port/schDelete";
 import { pasteNumbering, rememberedAnnotateSettings } from "../kicad-port/schAnnotate";
 import { getSchPaste, openPasteSpecial, setSchPaste } from "../state/schPasteStore";
@@ -52,6 +53,8 @@ const toast = (dispatch: Dispatch<Action>, message: string, kind: "error" | "inf
 export interface SchPasteContext {
   state: StudioState;
   dispatch: Dispatch<Action>;
+  /** Sends Paste Cells; without it a paste with cells selected pastes the clipboard as it is. */
+  api?: Pick<StudioApi, "cmd">;
 }
 
 /**
@@ -63,6 +66,12 @@ export async function startPaste(ctx: SchPasteContext, opts: { mode: SchPasteMod
   const text = clipboardTextOrNull(opts.text) ?? (opts.duplicate ? clipboardTextOrNull(duplicateBuffer) : await readSystemClipboard());
   if (!text) {
     toast(dispatch, "The clipboard is empty.");
+    return;
+  }
+  // `hasTableCells`: with a table cell selected and a table on the clipboard, its cells go into the selected ones (`pasteCellsIntoSelection`, "Paste Cells"; Duplicate too,
+  // which pastes what it copied)
+  if (ctx.api && hasTableCells(state.selection, state.schematic?.tables ?? []) && clipboardHasTable(text, 0)) {
+    await ctx.api.cmd({ op: "sch_table", verb: "paste_cells", ids: [...state.selection], text });
     return;
   }
   let reply;
@@ -148,7 +157,12 @@ export function registerSchClipboardActions(registry: ActionMap, ctx: SchEditCon
   m.set("common.Interactive.paste", () => void startPaste(ctx, { mode: "unique", duplicate: false }));
 
   // Ctrl+Shift+V -- the same through DIALOG_PASTE_SPECIAL. The board editor's Paste Special (clear the nets of pasted copper) has no counterpart here: say so.
-  registry.set("common.Interactive.pasteSpecial", () => (state.tab === "schematic" ? openPasteSpecial() : toast(dispatch, "Paste Special is only offered on the Schematic tab.")));
+  // With table cells selected and a table on the clipboard, the cells are pasted into before the dialog would ask (`Paste`'s `hasTableCells` branch comes first).
+  registry.set("common.Interactive.pasteSpecial", () => {
+    if (state.tab !== "schematic") return toast(dispatch, "Paste Special is only offered on the Schematic tab.");
+    if (!hasTableCells(state.selection, state.schematic?.tables ?? [])) return openPasteSpecial();
+    void readSystemClipboard().then((text) => (text && clipboardHasTable(text, 0) ? startPaste(ctx, { mode: "unique", duplicate: false, text }) : openPasteSpecial()));
+  });
 
   // Ctrl+D -- SCH_EDITOR_CONTROL::Duplicate: `doCopy( true )` into the buffer of its own, then Paste. With nothing selected `RequestSelection` took the
   // item under the cursor: a hover selection, which is not left selected when the copy is dropped (r2 D-C8).

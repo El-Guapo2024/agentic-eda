@@ -165,6 +165,7 @@ pub(crate) fn tried_preview(meta: &board::Meta, design: Design, model: &mut Cons
         "junctions": new_items(&before, &after, "junctions", &by_id),
         "lines": new_items(&before, &after, "lines", &by_id),
         "graphics": new_items(&before, &after, "graphics", &by_id),
+        "tables": new_items(&before, &after, "tables", &by_id),
         "groups": new_items(&before, &after, "groups", &by_id),
         "lib_symbols": lib_symbols,
     }))

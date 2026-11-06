@@ -139,6 +139,8 @@ export type SchEditCmd =
   | { verb: "delete_graphic"; id: string }
   /** Replace a graphic in place (keeps its id, drawing order and lock). */
   | { verb: "edit_graphic"; id: string; graphic: SchGraphicInput }
+  /** An image's file replaced, its centre and scale kept: the pixels a turn or a mirror of the sheet sends (`SCH_BITMAP::Rotate`, `Mirror*`; UI-LEFT P17). */
+  | { verb: "set_image_data"; id: string; data: string }
   /** Delete a placed sheet (symbol and pins; the file's content stays in the project). */
   | { verb: "delete_sheet"; id: string }
   /** Put a pin on a sheet's border (`SCH_SHEET::AddPin`); `at` must be on the border (kicad-port/schSheetPins.ts `constrainOnEdge`). */

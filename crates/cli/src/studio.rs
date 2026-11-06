@@ -1130,6 +1130,8 @@ fn handle(
         ("POST", "/api/tune/regenerate") => respond(stream, "200 OK", "application/json", tune_api::regenerate(dir, &body).to_string().as_bytes()),
         // Inspect > Clearance Resolution / Constraints Resolution: read-only reports on which rule wins (`inspect_api`), no kicad-cli.
         ("GET", "/api/net_inspector") => respond(stream, "200 OK", "application/json", crate::net_inspector_api::net_inspector(dir).to_string().as_bytes()),
+        // KiCad 10's Drill Groups dialog: the board's holes grouped by its drill symbol profile, each with its mark (`drill_groups_api`).
+        ("GET", "/api/drill_groups") => respond(stream, "200 OK", "application/json", crate::drill_groups_api::drill_groups(dir).to_string().as_bytes()),
         ("POST", "/api/inspect/clearance") => respond(stream, "200 OK", "application/json", inspect_api::clearance(dir, &body).to_string().as_bytes()),
         ("POST", "/api/inspect/constraints") => respond(stream, "200 OK", "application/json", inspect_api::constraints(dir, &body).to_string().as_bytes()),
         // Find by Properties' Query tab: the expression language runs here, on the items the studio sends (`eda_drc::query`).
@@ -1330,6 +1332,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 }
                 // Its silkscreen, fab drawings and texts (`graphics`, `texts`), board space.
                 crate::fp_art_json::add_art(&mut p, part, fp, footprint);
+                // Its text boxes, images, points and barcodes (`items`), board space (UI-LEFT P17).
+                crate::fp_board_items_json::add_items(&mut p, &design, &model, part, fp, &tv);
                 // the board's variables in its texts (the title block's ..), and the lines of its hatched graphics (UI-LEFT P15)
                 tv.annotate_art_texts(&part.reference, footprint, &mut p["texts"]);
                 crate::fp_art_json::add_hatch_lines(&mut p, &design, &model, fp, footprint);

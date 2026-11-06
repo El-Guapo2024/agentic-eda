@@ -416,6 +416,34 @@ export interface CellDialogValues {
   vAlign: TableVAlign | null;
   /** left, top, right, bottom. */
   margins: [number | null, number | null, number | null, number | null];
+  /**
+   * A sheet's dialog only (eeschema `DIALOG_TABLECELL_PROPERTIES`; the board's has neither): the text colour and the background fill, each a swatch (`null` is
+   * `COLOR4D::UNSPECIFIED`, the swatch's default) or "mixed" when the cells disagree (the `-- mixed values --` popup, `m_textColorBook->SetSelection( 0 )`), which
+   * the dialog leaves alone.
+   */
+  textColor: CellColor | null | "mixed";
+  fillColor: CellColor | null | "mixed";
+}
+
+/** An RGBA colour of a cell, each channel 0..255. */
+export interface CellColor {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+
+const cellColor = (c: readonly [number, number, number, number] | null | undefined): CellColor | null => (c && c[3] > 0 ? { r: c[0], g: c[1], b: c[2], a: c[3] } : null);
+const sameColor = (a: CellColor | null, b: CellColor | null): boolean => (a == null || b == null ? a == b : a.r === b.r && a.g === b.g && a.b === b.b && a.a === b.a);
+
+/** `EDA_SHAPE::IsSolidFill`: filled with the outline's colour, the background's or a colour of its own. */
+export function isSolidFill(fill: BoardTableCell["fill"]): boolean {
+  return fill === "outline" || fill === "background" || fill === "color";
+}
+
+/** The fill swatch of a cell (`cell->IsSolidFill() ? cell->GetFillColor() : COLOR4D::UNSPECIFIED`). */
+export function fillSwatchOf(c: BoardTableCell): CellColor | null {
+  return isSolidFill(c.fill) ? cellColor(c.fill_color) : null;
 }
 
 /** `GetPenSizeForNormal` / `GetPenSizeForBold`. */
@@ -437,8 +465,12 @@ export function cellDialogValues(cells: readonly BoardTableCell[]): CellDialogVa
     hAlign: first.h_align,
     vAlign: first.v_align,
     margins: [first.margins[0], first.margins[1], first.margins[2], first.margins[3]],
+    textColor: cellColor(first.color),
+    fillColor: fillSwatchOf(first),
   };
   for (const c of cells.slice(1)) {
+    if (v.textColor !== "mixed" && !sameColor(cellColor(c.color), v.textColor)) v.textColor = "mixed";
+    if (v.fillColor !== "mixed" && !sameColor(fillSwatchOf(c), v.fillColor)) v.fillColor = "mixed";
     if (c.text !== v.text) v.text = null;
     if ((c.face ?? "") !== v.face) v.face = null;
     if (c.size_w !== v.width) v.width = null;
@@ -473,6 +505,24 @@ export function cellEditOf(v: CellDialogValues): TableCellEdit {
   if (v.hAlign !== null) e.h_align = v.hAlign;
   if (v.vAlign !== null) e.v_align = v.vAlign;
   if (v.margins.some((m) => m !== null)) e.margins = v.margins.map((m) => (m === null ? null : Math.round(m))) as [number | null, number | null, number | null, number | null];
+  return e;
+}
+
+/**
+ * The sheet dialog's colours (eeschema `DIALOG_TABLECELL_PROPERTIES::TransferDataFromWindow`): a swatch that is shown sets the text colour (`SetTextColor`, the
+ * default one taking it away) and the fill (`UNSPECIFIED`: `SetFillMode( FILL_T::NO_FILL )`; any other: `FILLED_WITH_COLOR` and `SetFillColor`); a "mixed" one
+ * leaves the cells as they are. As in KiCad, OK on a cell filled with the outline's or the background's colour and no colour of its own turns its fill off.
+ */
+export function cellColorEditOf(v: Pick<CellDialogValues, "textColor" | "fillColor">): TableCellEdit {
+  const e: TableCellEdit = {};
+  if (v.textColor !== "mixed") e.text_color = v.textColor ?? { r: 0, g: 0, b: 0, a: 0 };
+  if (v.fillColor !== "mixed") {
+    if (v.fillColor == null) e.fill = "none";
+    else {
+      e.fill = "color";
+      e.fill_color = v.fillColor;
+    }
+  }
   return e;
 }
 

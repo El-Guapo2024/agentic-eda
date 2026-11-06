@@ -10,7 +10,8 @@
 //! Poisson layout tiles a baked Poisson pattern; a guard walks the clearance envelope of the guarded net's tracks.
 //!
 //! Everything is in nanometres, as in KiCad and the design. Where this differs from KiCad: a pad whose copper is on a layer only when something is
-//! connected there (`UNCONNECTED_LAYER_MODE`'s `IfConnected`) counts as flashed; text on copper is no obstacle; zone fills are the ones kicad-cli made last (the canvas's).
+//! connected there (`UNCONNECTED_LAYER_MODE`'s `IfConnected`) counts as flashed; zone fills are the ones kicad-cli made last (the canvas's). Texts on copper -- the board's,
+//! a footprint's own and its fields -- are obstacles by their bounding hulls, as `PCB_TEXT::TransformShapeToPolygon` makes them.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -303,6 +304,35 @@ fn add_text_hull(out: &mut ShapePolySet, segs: &[crate::kimath::Seg], r: Nm, at:
     if near((bx0, by0, bx1, by1)) {
         out.add_outline(pts);
     }
+}
+
+/// The fields of the board's footprints that are on a copper layer (Reference, Value and the user fields, `FOOTPRINT::GetFields()`), as texts placed on the board with what
+/// each shows: what `forEachGeometryItem` puts in the copper R-tree for `PCB_FIELD_T`.
+fn fields_on_copper(design: &Design, model: &ConstraintModel) -> Vec<eda_model::ir::FootprintText> {
+    let mut out = Vec::new();
+    for fp in design.placement.iter().flat_map(|p| p.footprints.iter()) {
+        let Some(part) = model.part(&fp.id) else { continue };
+        let Some(footprint) = model.footprint_of(part) else { continue };
+        for (l, shown) in crate::hatch::footprint_fields(design, part, fp, &footprint) {
+            if shown.is_empty() || !l.layer.ends_with(".Cu") {
+                continue;
+            }
+            out.push(eda_model::ir::FootprintText {
+                text: shown,
+                layer: l.layer.clone(),
+                at: l.board_position(fp),
+                angle_file_mdeg: l.board_angle(fp),
+                size: l.size,
+                thickness: l.thickness,
+                halign: l.halign,
+                valign: l.valign,
+                mirror: l.mirror,
+                keep_upright: l.keep_upright,
+                bold: l.bold,
+            });
+        }
+    }
+    out
 }
 
 fn ring_set(pts: &[Point]) -> ShapePolySet {
@@ -637,6 +667,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
 
     let mut obstacles = ShapePolySet::default();
     let fp_copper = crate::fp_art::footprint_copper(design, inputs.model);
+    let fields = fields_on_copper(design, inputs.model);
     let same_net = |net: &Option<String>| net.as_deref() == Some(v.net.as_str());
     // Holes, once each: half the drill and the hole-to-hole clearance, or half the via and the hole clearance for another net.
     let mut hole_seen: BTreeSet<String> = BTreeSet::new();
@@ -714,6 +745,15 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
                     }
                 }
                 _ => {}
+            }
+        }
+        // A footprint's fields on copper (`PCB_FIELD`): the copper R-tree holds every field whose layer is a copper layer (`forEachGeometryItem`'s `PCB_FIELD_T`, whatever its
+        // visibility), and `TransformShapeToPolygon` is the text's bounding hull, as for any text.
+        for t in fields.iter().filter(|t| t.layer == *layer) {
+            let item = rb.text_item_of("fp_field", t);
+            let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+            if let Some(Shape::Strokes { segs, r }) = crate::board::footprint_text_shape(t) {
+                add_text_hull(&mut obstacles, &segs, r, t.at, crate::board::footprint_text_draw_rotation(t), margin, &near);
             }
         }
         for t in design.drawings.iter().flat_map(|d| d.copper_texts.iter()).filter(|t| t.layer == *layer) {

@@ -1,0 +1,395 @@
+//! The text boxes, reference images, points and barcodes of a footprint on the board (UI-LEFT P17): moved, turned and flipped with the footprint.
+//!
+//! KiCad keeps them on the `FOOTPRINT` (`m_drawings` holds the text boxes, images and barcodes, `m_points` the points), in board coordinates, and every
+//! transform of the footprint is passed on to each of them: `FOOTPRINT::SetPosition` moves them, `FOOTPRINT::SetOrientation` turns them about the footprint's
+//! position by the change of angle (`item->Rotate( rotationCenter, angleChange )`), and `FOOTPRINT::Flip` flips each one top to bottom about the footprint's
+//! position (`item->Flip( m_pos, FLIP_DIRECTION::TOP_BOTTOM )`) and then turns the whole footprint half a turn for a left-right flip.
+//!
+//! Here a placed footprint is a pose ([`FootprintInstance`]) and its items are held in the frame of its pads -- the footprint as seen from the top, un-rotated,
+//! as [`crate::fp_art`] holds the graphics -- in [`crate::ir::FootprintExtra::items`], the footprint's own (each footprint on a board owns its items, as
+//! KiCad's does). [`placed`] takes them to the board for the pose: a left-right flip about the origin when the footprint is on the back (`to_board` mirrors x),
+//! the turn of the pose about the origin, the move to its position -- each step the item's own `Flip`, `Rotate` and `Move`.
+//!
+//! The transforms themselves are the board's, ported once here and used by the board's verbs too (`eda_ops::pcb_items` hands its `Xform` over):
+//! `PCB_TEXTBOX::Move` / `Rotate` / `Flip` (with `EDA_SHAPE::rotate` / `flip`), `PCB_REFERENCE_IMAGE::Move` / `Rotate` / `Flip`, `PCB_POINT::Move` / `Rotate` /
+//! `Flip` and `PCB_BARCODE::Move` / `Rotate` / `Flip` at KiCad 8303b2ad. What they do to an image's pixels (`REFERENCE_IMAGE::Rotate` turns them a quarter
+//! at a time, `Flip` mirrors them: `BITMAP_BASE::Rotate`, `Mirror`) takes a decoder, which the workspace has not: [`image_quarter_turns`] says how many
+//! quarter turns a turn makes and the browser turns the pixels (see the doc of [`ImageXform`]).
+
+use crate::barcode::Barcode;
+use crate::fp_items::FootprintItems;
+use crate::ir::{FootprintInstance, Millideg, Nm, Point, Side};
+use crate::pcb_items::{PcbPoint, RefImage, TextBox};
+
+/// A transform of a board item: a move, a turn about `pivot` (clockwise-positive millidegrees on the screen, the board verbs' sense: KiCad's angle negated), or a flip about the
+/// axis through `pivot` (`FLIP_DIRECTION::LEFT_RIGHT`, x mirrored, or `TOP_BOTTOM`, y mirrored) that puts the item on the other side of the board.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemXform {
+    Move { dx: Nm, dy: Nm },
+    Rotate { pivot: Point, angle: i64 },
+    Flip { pivot: Point, top_bottom: bool },
+}
+
+impl ItemXform {
+    /// Where the transform takes `p` (`RotatePoint` rounds each coordinate, as `rotate_point_about` and `to_board` do).
+    pub fn point(self, p: Point) -> Point {
+        match self {
+            ItemXform::Move { dx, dy } => Point { x: p.x + dx, y: p.y + dy },
+            ItemXform::Rotate { pivot, angle } => {
+                let rad = (angle as f64) / 1000.0 * std::f64::consts::PI / 180.0;
+                let (sin, cos) = rad.sin_cos();
+                let (dx, dy) = ((p.x - pivot.x).as_f64(), (p.y - pivot.y).as_f64());
+                Point { x: pivot.x + Nm::kiround(dx * cos - dy * sin), y: pivot.y + Nm::kiround(dx * sin + dy * cos) }
+            }
+            ItemXform::Flip { pivot, top_bottom: false } => Point { x: 2 * pivot.x - p.x, y: p.y },
+            ItemXform::Flip { pivot, top_bottom: true } => Point { x: p.x, y: 2 * pivot.y - p.y },
+        }
+    }
+}
+
+fn norm360(a: i64) -> i64 {
+    a.rem_euclid(360_000)
+}
+
+/// Whether a text angle in millidegrees is a multiple of 90 degrees (`EDA_ANGLE::IsCardinal`).
+fn is_cardinal(angle: Millideg) -> bool {
+    angle % 90_000 == 0
+}
+
+/// `EDA_SHAPE::GetCornersInSequence( angle )` of a text box: the four corners in the order the text's frame has them (top left, top right, bottom right, bottom left of the
+/// text as it reads), for a rectangle (its bounding box turned to the angle's quadrant) and for a polygon (the corners that sit furthest left, up, right and down).
+pub fn corners_in_sequence(t: &TextBox, angle: Millideg) -> [Point; 4] {
+    let angle = angle % 360_000;
+    if t.pts.is_empty() || is_cardinal(angle) {
+        let [x0, y0, x1, y1] = t.bounds();
+        let (lt, rt, rb, lb) = (Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 });
+        return match angle {
+            90_000 => [lb, lt, rt, rb],
+            180_000 => [rb, lb, lt, rt],
+            270_000 => [rt, rb, lb, lt],
+            _ => [lt, rt, rb, lb],
+        };
+    }
+    let mut corners = t.pts.clone();
+    while corners.len() < 4 {
+        let last = *corners.last().unwrap_or(&Point { x: Nm::ZERO, y: Nm::ZERO });
+        corners.push(Point { x: last.x + Nm::new(10), y: last.y + Nm::new(10) });
+    }
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (corners[0], corners[0], corners[0], corners[0]);
+    for c in &corners {
+        if c.x < min_x.x {
+            min_x = *c;
+        }
+        if c.x > max_x.x {
+            max_x = *c;
+        }
+        if c.y < min_y.y {
+            min_y = *c;
+        }
+        if c.y > max_y.y {
+            max_y = *c;
+        }
+    }
+    if angle < 90_000 {
+        [min_x, min_y, max_x, max_y]
+    } else if angle < 180_000 {
+        [max_y, min_x, min_y, max_x]
+    } else if angle < 270_000 {
+        [max_x, max_y, min_x, min_y]
+    } else {
+        [min_y, max_x, max_y, min_x]
+    }
+}
+
+/// `PCB_TEXTBOX::Move` / `::Rotate` / `::Flip` (with `EDA_SHAPE::rotate` / `::flip`). `ItemXform::Rotate`'s angle is clockwise on the screen, so the text's own angle (KiCad's,
+/// counter-clockwise) loses it. A rectangle turned by anything but a quarter turn becomes the polygon of its four corners; a polygon whose text angle is again a multiple
+/// of 90 degrees becomes a rectangle again, started at the first corner of the text's frame. A flip puts the box on the other side's layer (`flip_layer`: the board's
+/// `FlipLayer`), negates (left-right) or reflects (top-bottom) the text angle, and mirrors the glyphs of a box on a layer that belongs to a side (`IsSideSpecific`).
+pub fn transform_text_box(t: &mut TextBox, x: ItemXform, flip_layer: &dyn Fn(&str) -> String) {
+    match x {
+        ItemXform::Move { .. } => {
+            t.start = x.point(t.start);
+            t.end = x.point(t.end);
+            for p in t.pts.iter_mut() {
+                *p = x.point(*p);
+            }
+        }
+        ItemXform::Rotate { angle, .. } => {
+            if t.pts.is_empty() {
+                if angle.rem_euclid(90_000) == 0 {
+                    t.start = x.point(t.start);
+                    t.end = x.point(t.end);
+                } else {
+                    // "Convert non-cardinally-rotated rect to a diamond"
+                    let (s, e) = (t.start, t.end);
+                    let corners = [s, Point { x: e.x, y: s.y }, e, Point { x: s.x, y: e.y }];
+                    t.pts = corners.iter().map(|c| x.point(*c)).collect();
+                    t.start = t.pts[0];
+                    t.end = t.pts[2];
+                }
+            } else {
+                for p in t.pts.iter_mut() {
+                    *p = x.point(*p);
+                }
+                t.start = t.pts[0];
+                t.end = t.pts[2];
+            }
+            t.angle = norm360(t.angle as i64 - angle) as Millideg;
+            if is_cardinal(t.angle) && !t.pts.is_empty() {
+                let corners = corners_in_sequence(t, t.angle);
+                let diag = Point { x: corners[2].x - corners[0].x, y: corners[2].y - corners[0].y };
+                let (dx, dy) = (diag.x.abs(), diag.y.abs());
+                let c0 = corners[0];
+                t.start = c0;
+                t.end = match t.angle {
+                    90_000 => Point { x: c0.x + dx, y: c0.y - dy },
+                    180_000 => Point { x: c0.x - dx, y: c0.y - dy },
+                    270_000 => Point { x: c0.x - dx, y: c0.y + dy },
+                    _ => Point { x: c0.x + dx, y: c0.y + dy },
+                };
+                t.pts.clear();
+            }
+        }
+        ItemXform::Flip { top_bottom, .. } => {
+            t.start = x.point(t.start);
+            t.end = x.point(t.end);
+            for p in t.pts.iter_mut() {
+                *p = x.point(*p);
+            }
+            t.angle = if top_bottom { norm360(180_000 - t.angle as i64) } else { norm360(-(t.angle as i64)) } as Millideg;
+            t.layer = flip_layer(&t.layer);
+            if crate::fp_art::is_side_specific(&t.layer) {
+                t.mirror = !t.mirror;
+            }
+        }
+    }
+}
+
+/// `PCB_REFERENCE_IMAGE::Move` / `::Rotate` / `::Flip` as far as the position and the layer go: the centre goes where the transform puts it, and a flip puts the image on
+/// the other side's layer (`SetLayer( GetBoard()->FlipLayer( GetLayer() ) )`). What `REFERENCE_IMAGE::Rotate` and `Flip` do to the pixels is [`ImageXform`]'s.
+pub fn transform_ref_image(i: &mut RefImage, x: ItemXform, flip_layer: &dyn Fn(&str) -> String) {
+    i.at = x.point(i.at);
+    if let ItemXform::Flip { .. } = x {
+        i.layer = flip_layer(&i.layer);
+    }
+}
+
+/// `PCB_POINT::Move` / `::Rotate` / `::Flip`: the position, and a flip's layer (`SetLayer( GetBoard()->FlipLayer( GetLayer() ) )`; `FOOTPRINT::Flip` says "Points move but
+/// don't flip layer" over a call to the point's own `Flip`, which does).
+pub fn transform_point(p: &mut PcbPoint, x: ItemXform, flip_layer: &dyn Fn(&str) -> String) {
+    p.at = x.point(p.at);
+    if let ItemXform::Flip { .. } = x {
+        p.layer = flip_layer(&p.layer);
+    }
+}
+
+/// `PCB_BARCODE::Move` / `::Rotate` / `::Flip`: the centre goes where the transform puts it, a turn adds to the barcode's own angle (`ItemXform::Rotate`'s is clockwise, the
+/// file's counter-clockwise, so it is taken off), a flip puts the barcode on the other side's layer and a top-bottom one turns it half a turn
+/// (`if( aFlipDirection == FLIP_DIRECTION::TOP_BOTTOM ) m_angle += ANGLE_180`); the symbol is mirrored on a back layer when it is drawn.
+pub fn transform_barcode(b: &mut Barcode, x: ItemXform, flip_layer: &dyn Fn(&str) -> String) {
+    b.at = x.point(b.at);
+    match x {
+        ItemXform::Move { .. } => {}
+        ItemXform::Rotate { angle, .. } => b.angle = norm360(b.angle as i64 - angle) as Millideg,
+        ItemXform::Flip { top_bottom, .. } => {
+            if top_bottom {
+                b.angle = norm360(b.angle as i64 + 180_000) as Millideg;
+            }
+            b.layer = flip_layer(&b.layer);
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------ the pixels of an image
+
+/// `REFERENCE_IMAGE::Rotate`'s quarter turns: "each call to m_bitmapBase->Rotate() rotates 90 degrees", once for every `ang` of 45, 135, 225 and 315 below the angle
+/// normalised to [0, 360) -- so a turn rounds to the nearest quarter, an eighth going down -- each counter-clockwise (`m_bitmapBase->Rotate( true )`). `angle_ccw` is KiCad's
+/// angle in millidegrees (counter-clockwise on the screen; a board verb's clockwise angle negated).
+pub fn image_quarter_turns(angle_ccw: i64) -> u8 {
+    let norm = angle_ccw.rem_euclid(360_000);
+    let mut n = 0u8;
+    let mut ang = 45_000;
+    while ang < norm {
+        n += 1;
+        ang += 90_000;
+    }
+    n % 4
+}
+
+/// What a transform does to an image's pixels (`BITMAP_BASE::Rotate`, `BITMAP_BASE::Mirror`): quarter turns counter-clockwise, or a mirror (`top_bottom`: upside down,
+/// else left to right). The workspace has no image codec, so the server does not do it: the browser decodes the file, turns it on a canvas and sends the file it encodes
+/// back with the verb (`set_ref_image_data` in the batch of the `rotate_items` or `flip_items`), as Convert to Greyscale does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageXform {
+    TurnCcw(u8),
+    Mirror { top_bottom: bool },
+}
+
+/// The pixel steps of `x` on an image that is a board item (`PCB_REFERENCE_IMAGE::Rotate` -> `REFERENCE_IMAGE::Rotate`, `PCB_REFERENCE_IMAGE::Flip` -> `REFERENCE_IMAGE::Flip`).
+pub fn image_steps(x: ItemXform) -> Vec<ImageXform> {
+    match x {
+        ItemXform::Move { .. } => vec![],
+        ItemXform::Rotate { angle, .. } => match image_quarter_turns(-angle) {
+            0 => vec![],
+            n => vec![ImageXform::TurnCcw(n)],
+        },
+        ItemXform::Flip { top_bottom, .. } => vec![ImageXform::Mirror { top_bottom }],
+    }
+}
+
+/// The pixel steps of an image of a footprint when the footprint is turned or flipped: a turn is passed on as it is (`SetOrientation`: `item->Rotate( .., angleChange )`); a
+/// flip is the item's top-bottom flip and, for a left-right flip, the half turn of the footprint after it (`FOOTPRINT::Flip`).
+pub fn footprint_image_steps(x: ItemXform) -> Vec<ImageXform> {
+    match x {
+        ItemXform::Flip { top_bottom: true, .. } => vec![ImageXform::Mirror { top_bottom: true }],
+        ItemXform::Flip { top_bottom: false, .. } => vec![ImageXform::Mirror { top_bottom: true }, ImageXform::TurnCcw(2)],
+        other => image_steps(other),
+    }
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------ the footprint's frame
+
+/// The steps that take an item of a footprint's frame to the board for the pose `fp` (as `to_board` takes a pad): a left-right flip about the origin when the footprint is
+/// on the back, the pose's turn about the origin, the move to its position.
+pub fn placement_steps(fp: &FootprintInstance) -> Vec<ItemXform> {
+    let origin = Point { x: Nm::ZERO, y: Nm::ZERO };
+    let mut steps = Vec::with_capacity(3);
+    if fp.side == Side::Bottom {
+        steps.push(ItemXform::Flip { pivot: origin, top_bottom: false });
+    }
+    if fp.rot != 0 {
+        steps.push(ItemXform::Rotate { pivot: origin, angle: fp.rot as i64 });
+    }
+    steps.push(ItemXform::Move { dx: fp.at.x, dy: fp.at.y });
+    steps
+}
+
+/// The steps that take an item on the board back into the frame of the footprint at `fp`: the inverse of [`placement_steps`].
+pub fn unplacement_steps(fp: &FootprintInstance) -> Vec<ItemXform> {
+    let origin = Point { x: Nm::ZERO, y: Nm::ZERO };
+    let mut steps = vec![ItemXform::Move { dx: -fp.at.x, dy: -fp.at.y }];
+    if fp.rot != 0 {
+        steps.push(ItemXform::Rotate { pivot: origin, angle: -(fp.rot as i64) });
+    }
+    if fp.side == Side::Bottom {
+        steps.push(ItemXform::Flip { pivot: origin, top_bottom: false });
+    }
+    steps
+}
+
+/// The footprint's items transformed by `steps`, one after the other; layers flip as a footprint's do ([`crate::fp_art::flip_layer`]: an inner copper layer is its own).
+pub fn transformed(items: &FootprintItems, steps: &[ItemXform]) -> FootprintItems {
+    let flip = |l: &str| crate::fp_art::flip_layer(l);
+    let mut out = items.clone();
+    for &x in steps {
+        out.text_boxes.iter_mut().for_each(|t| transform_text_box(t, x, &flip));
+        out.images.iter_mut().for_each(|i| transform_ref_image(i, x, &flip));
+        out.points.iter_mut().for_each(|p| transform_point(p, x, &flip));
+        out.barcodes.iter_mut().for_each(|b| transform_barcode(b, x, &flip));
+    }
+    out
+}
+
+/// The footprint's items on the board for the pose `fp` (see the module doc). An image keeps its pixels: they are held as the board has them (see
+/// [`crate::ir::FootprintExtra::items`]).
+pub fn placed(items: &FootprintItems, fp: &FootprintInstance) -> FootprintItems {
+    transformed(items, &placement_steps(fp))
+}
+
+/// The id the studio gives the item `id` of the footprint `reference` (an image's file, a barcode's shape and the pixels a turn sends are asked for by it): `U1~img_..`.
+pub fn board_id(reference: &str, id: &str) -> String {
+    format!("{reference}~{id}")
+}
+
+/// The reverse of [`board_id`]: the footprint's reference and the item's id, when `id` is one.
+pub fn parse_board_id(id: &str) -> Option<(&str, &str)> {
+    let (reference, item) = id.split_once('~')?;
+    let kind = item.split('_').next()?;
+    (!reference.is_empty() && matches!(kind, "tbx" | "img" | "pnt" | "bar")).then_some((reference, item))
+}
+
+/// The name the board file gives the footprint `part` is on (`write_footprint`'s `lib_name_written`): the link the derived symbol names (`footprint_lib_id`), else the
+/// definition's name, without the importer's `#2` slot.
+pub fn written_name(model: &crate::ConstraintModel, part: &crate::Part) -> String {
+    let name = Some(crate::footprint::footprint_lib_id(part)).filter(|n| !n.is_empty()).or_else(|| model.footprint_of(part).map(|f| f.name)).unwrap_or_default();
+    crate::footprint::without_import_slot(&name, &model.footprints)
+}
+
+/// The items of the footprint `part` is on, as the board has them (`FootprintExtra::items`): none while the part is on another footprint than the one they were read from
+/// (`FootprintExtra::source_name`), which the writer does not write them for either.
+pub fn items_of<'a>(design: &'a crate::ir::Design, model: &crate::ConstraintModel, part: &crate::Part) -> Option<&'a FootprintItems> {
+    let e = design.drawings.as_ref()?.footprint_extras.iter().find(|e| e.id == part.reference && !e.items.is_empty())?;
+    (e.source_name == written_name(model, part)).then_some(&e.items)
+}
+
+/// Whether the footprint's items are the four kinds this module places (and nothing else of [`FootprintItems`]).
+pub fn has_placed_kinds(items: &FootprintItems) -> bool {
+    !(items.text_boxes.is_empty() && items.images.is_empty() && items.points.is_empty() && items.barcodes.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::units::mm;
+
+    fn p(x: f64, y: f64) -> Point {
+        Point { x: mm(x), y: mm(y) }
+    }
+
+    fn pose(at: Point, rot: Millideg, side: Side) -> FootprintInstance {
+        FootprintInstance { id: "U1".into(), at, rot, side, label: Default::default() }
+    }
+
+    fn items() -> FootprintItems {
+        FootprintItems {
+            text_boxes: vec![TextBox::new("F.SilkS", p(1.0, 1.0), p(3.0, 2.0), mm(1.0), mm(0.1))],
+            images: vec![RefImage::new("F.SilkS", p(0.0, -2.0), "AAAA")],
+            points: vec![PcbPoint::new("F.Fab", p(2.0, 0.0))],
+            barcodes: vec![Barcode { id: String::new(), at: p(-2.0, 0.0), angle: 0, layer: "F.SilkS".into(), width_nm: mm(3.0), height_nm: mm(3.0), text: "x".into(), text_height_nm: mm(1.0), kind: Default::default(), ecc: Default::default(), show_text: true, knockout: false, margin_x_nm: Nm::ZERO, margin_y_nm: Nm::ZERO }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_quarter_turns_of_an_image_are_reference_images_loop() {
+        // 45 < norm, 135 < norm, ...: a turn rounds to the nearest quarter, an eighth down
+        assert_eq!([0, 45_000, 46_000, 90_000, 135_000, 136_000, 180_000, 270_000, 359_000].map(image_quarter_turns), [0, 0, 1, 1, 1, 2, 2, 3, 0]);
+        assert_eq!(image_quarter_turns(-90_000), 3, "a clockwise quarter is three counter-clockwise ones");
+        // a board verb's clockwise quarter
+        assert_eq!(image_steps(ItemXform::Rotate { pivot: p(0.0, 0.0), angle: 90_000 }), vec![ImageXform::TurnCcw(3)]);
+        assert_eq!(footprint_image_steps(ItemXform::Flip { pivot: p(0.0, 0.0), top_bottom: false }), vec![ImageXform::Mirror { top_bottom: true }, ImageXform::TurnCcw(2)]);
+    }
+
+    #[test]
+    fn placing_is_the_items_own_flip_turn_and_move_and_unplacing_takes_them_back() {
+        for (rot, side) in [(0, Side::Top), (90_000, Side::Top), (30_000, Side::Top), (0, Side::Bottom), (270_000, Side::Bottom)] {
+            let fp = pose(p(50.0, 40.0), rot, side);
+            let placed = placed(&items(), &fp);
+            // every position is where `to_board` puts the frame's point
+            assert_eq!(placed.points[0].at, crate::footprint::to_board(&fp, (mm(2.0), Nm::ZERO)));
+            assert_eq!(placed.images[0].at, crate::footprint::to_board(&fp, (Nm::ZERO, mm(-2.0))));
+            assert_eq!(placed.barcodes[0].at, crate::footprint::to_board(&fp, (mm(-2.0), Nm::ZERO)));
+            let back = transformed(&placed, &unplacement_steps(&fp));
+            assert_eq!(back.points, items().points, "{rot} {side:?}");
+            assert_eq!(back.barcodes, items().barcodes, "{rot} {side:?}");
+            if rot % 90_000 == 0 {
+                assert_eq!(back.text_boxes, items().text_boxes, "{rot} {side:?}");
+            }
+        }
+        let fp = pose(p(0.0, 0.0), 0, Side::Bottom);
+        let on_back = placed(&items(), &fp);
+        assert_eq!((on_back.text_boxes[0].layer.as_str(), on_back.text_boxes[0].mirror), ("B.SilkS", true), "a box on the back is on the back silkscreen, its text mirrored");
+        assert_eq!((on_back.points[0].layer.as_str(), on_back.barcodes[0].layer.as_str(), on_back.images[0].layer.as_str()), ("B.Fab", "B.SilkS", "B.SilkS"));
+        // a quarter turn clockwise on the screen takes 90 from the box's text angle and adds to nothing else's
+        let turned = placed(&items(), &pose(p(0.0, 0.0), 90_000, Side::Top));
+        assert_eq!((turned.text_boxes[0].angle, turned.barcodes[0].angle), (270_000, 270_000));
+    }
+
+    #[test]
+    fn a_board_id_names_the_footprint_and_the_item() {
+        assert_eq!(board_id("U1", "img_0123456789ab"), "U1~img_0123456789ab");
+        assert_eq!(parse_board_id("U1~img_0123456789ab"), Some(("U1", "img_0123456789ab")));
+        assert_eq!(parse_board_id("U1~t0"), None, "a footprint's text is no item of these kinds");
+        assert_eq!(parse_board_id("img_0123456789ab"), None);
+    }
+}

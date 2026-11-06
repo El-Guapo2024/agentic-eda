@@ -14,8 +14,10 @@
 //                      `RelativeItemSelectionMove`.
 //   place_footprint    pcbnew.EditorControl.placeFootprint ("A") -- the
 //                      Footprint Chooser: a footprint of KiCad's installed
-//                      libraries, or an unplaced part of the schematic, armed
-//                      for click-to-place.
+//                      libraries, carried on the cursor until a click puts it
+//                      down, or an unplaced part of the schematic, armed for
+//                      click-to-place; the tool then asks for the next one
+//                      (actions/placeFootprintTool.ts).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo } from "../state/units";
@@ -25,12 +27,26 @@ import { itemKind, padById } from "../kicad-port/pcbItems";
 import { itemPosition } from "../kicad-port/pcbReference";
 import { picker, pickItem, pickPoint } from "../actions/pcbPicker";
 import { FootprintChooserDialog } from "./FootprintChooserDialog";
+import { placeFootprintArmedDone, placeFootprintChooserCancelled, placeFootprintChosen } from "../actions/placeFootprintTool";
 
 export function PcbParityDialogs() {
   const which = useStudioState().pcbx.pcbDialog;
-  if (which === "find_move") return <FindMoveDialog />;
-  if (which === "position_relative") return <PositionRelativeDialog />;
-  if (which === "place_footprint") return <PlaceFootprintDialog />;
+  return (
+    <>
+      <PlaceFootprintLoop />
+      {which === "find_move" ? <FindMoveDialog /> : which === "position_relative" ? <PositionRelativeDialog /> : which === "place_footprint" ? <PlaceFootprintDialog /> : null}
+    </>
+  );
+}
+
+/** Place Footprint's loop after an unplaced part: once its click put it down (or Escape took the arming back) the tool waits for the next click. */
+function PlaceFootprintLoop() {
+  const armed = useStudioState().armed;
+  const was = useRef<string | null>(null);
+  useEffect(() => {
+    if (was.current !== null && armed === null) placeFootprintArmedDone();
+    was.current = armed;
+  }, [armed]);
   return null;
 }
 
@@ -362,12 +378,14 @@ function PositionRelativeDialog() {
 
 /**
  * `BOARD_EDITOR_CONTROL::PlaceFootprint` -- the Footprint Chooser (components/FootprintChooserDialog.tsx): pick a footprint of KiCad's installed libraries
- * (a mounting hole, a fiducial, a connector), then the next canvas click puts it on the board as a part of its own (`place_footprint`, Canvas.tsx's armed
- * path). The schematic's parts that are not on the board yet are the group at the top ("-- Unplaced --"): picking one arms it as before.
+ * (a mounting hole, a fiducial, a connector); it is put on the board as a part of its own (`place_footprint`) and carried on the cursor until a click puts
+ * it down, and the tool then waits for the click that opens the chooser again (actions/placeFootprintTool.ts). The schematic's parts that are not on the
+ * board yet are the group at the top ("-- Unplaced --"): picking one arms it for a click as before.
  */
 function PlaceFootprintDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
+  const api = useStudioApi();
   const close = useClose();
   const parts = state.board?.parts;
   const unplaced = useMemo(
@@ -381,16 +399,13 @@ function PlaceFootprintDialog() {
   return (
     <FootprintChooserDialog
       unplaced={unplaced}
-      onCancel={close}
+      onCancel={() => {
+        close();
+        placeFootprintChooserCancelled();
+      }}
       onChoose={(pick) => {
         close();
-        if (pick.kind === "unplaced") {
-          dispatch({ type: "SET_SELECTION", refs: [] });
-          dispatch({ type: "SET_ARMED", ref: pick.ref });
-        } else {
-          dispatch({ type: "SET_ARMED_FOOTPRINT", name: pick.name });
-          dispatch({ type: "TOAST", message: `Click on the board to place ${pick.name.slice(pick.name.indexOf(":") + 1)} (Esc cancels).`, kind: "info" });
-        }
+        placeFootprintChosen({ api, dispatch }, pick);
       }}
     />
   );

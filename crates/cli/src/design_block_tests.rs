@@ -266,6 +266,69 @@ fn a_selection_of_the_board_saved_as_a_block_is_grouped_and_linked_in_one_undo_s
     let _ = std::fs::remove_dir_all(&m.root);
 }
 
+/// P18-3: `saveSelectionToDesignBlock` keeps every selected group, whole and with the groups below it (`DeepClone()`); only a lone group is stripped to what is directly in it
+/// (`SaveSelectionAsDesignBlock`: "Don't recurse; if we have a group of groups the user probably intends the inner groups to be saved"). What was not selected -- a text box, a
+/// track -- is not in the block.
+#[test]
+fn a_group_in_a_larger_board_selection_stays_a_group_in_the_block() {
+    let (m, env, lib) = with_library("db_board_groups", setup);
+    let dir = m.board.clone();
+    let seg = |x: f64| eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: Point { x: mm(x), y: mm(12.0) }, end: Point { x: mm(x + 2.0), y: mm(12.0) } };
+    step(&dir, Cmd::AddShape { shape: seg(2.0) }, false, "ui").unwrap();
+    step(&dir, Cmd::AddShape { shape: seg(8.0) }, false, "ui").unwrap();
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.25), pts: vec![Point { x: mm(6.0), y: mm(5.0) }, Point { x: mm(14.0), y: mm(5.0) }] }, false, "ui").unwrap();
+    step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: mm(0.25), pts: vec![Point { x: mm(6.0), y: mm(8.0) }, Point { x: mm(14.0), y: mm(8.0) }] }, false, "ui").unwrap();
+    let (_, d, _) = load(&dir).unwrap();
+    let shapes: Vec<String> = d.drawings.as_ref().unwrap().shapes.iter().map(|s| s.id().to_string()).collect();
+    let tracks: Vec<String> = d.routing.as_ref().unwrap().tracks.iter().map(|t| t.id.clone()).collect();
+    let (gnd, vcc) = {
+        let rt = d.routing.as_ref().unwrap();
+        (rt.tracks.iter().find(|t| t.net == "GND").unwrap().id.clone(), rt.tracks.iter().find(|t| t.net == "VCC").unwrap().id.clone())
+    };
+    assert_eq!((shapes.len(), tracks.len()), (2, 2));
+    // G = the two footprints; H = G and the first mark
+    step(&dir, Cmd::Group { ids: vec!["U1".into(), "U2".into()] }, false, "ui").unwrap();
+    let g = board_groups_of(&dir)[0].id.clone();
+    step(&dir, Cmd::EditGroup { id: g.clone(), name: "G".into(), member_ids: vec!["U1".into(), "U2".into()], design_block: None }, false, "ui").unwrap();
+    step(&dir, Cmd::Group { ids: vec![g.clone(), shapes[0].clone()] }, false, "ui").unwrap();
+    let h = board_groups_of(&dir).iter().find(|x| x.id != g).unwrap().id.clone();
+    step(&dir, Cmd::EditGroup { id: h.clone(), name: "H".into(), member_ids: vec![g.clone(), shapes[0].clone()], design_block: None }, false, "ui").unwrap();
+    let block_groups = |name: &str| -> Vec<(String, usize)> {
+        let text = std::fs::read_to_string(lib.join(format!("{name}.kicad_block")).join(format!("{name}.kicad_pcb"))).unwrap();
+        let clip = eda_kicad::parse_pcb_clipboard(&text).unwrap();
+        let mut out: Vec<(String, usize)> = clip.groups.iter().map(|g| (g.name.clone(), g.members.len())).collect();
+        out.sort();
+        out
+    };
+
+    // H with the GND track: H is kept whole, G inside it; the VCC track and the second mark were not selected
+    let r = api::save_with(&env, &dir, &req(json!({ "what": "board_selection", "ids": [h.clone(), gnd.clone()], "lib": "Power", "name": "Both" })));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(block_groups("Both"), vec![("G".to_string(), 2), ("H".to_string(), 2)]);
+    let clip = eda_kicad::parse_pcb_clipboard(&std::fs::read_to_string(lib.join("Both.kicad_block").join("Both.kicad_pcb")).unwrap()).unwrap();
+    assert_eq!((clip.footprints.len(), clip.tracks.len(), clip.shapes.len()), (2, 1, 1), "only what was selected");
+    assert_eq!(clip.tracks[0].net, "GND");
+    // the link: a new group named after the block holds H (nested) and the track
+    let groups = board_groups_of(&dir);
+    let both = groups.iter().find(|x| x.name == "Both").expect("the block's group");
+    assert_eq!(both.design_block, "Power:Both");
+    assert!(both.member_ids.contains(&h) && both.member_ids.contains(&gnd), "{groups:?}");
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+
+    // H alone: stripped to what is directly in it, so G is a group of the block and H is not; H takes the link
+    let r = api::save_with(&env, &dir, &req(json!({ "what": "board_selection", "ids": [h.clone()], "lib": "Power", "name": "Inner" })));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(block_groups("Inner"), vec![("G".to_string(), 2)]);
+    let groups = board_groups_of(&dir);
+    assert_eq!(groups.iter().find(|x| x.id == h).map(|x| x.design_block.as_str()), Some("Power:Inner"));
+
+    // a selection of items picked out of a group (an entered group): no group in the block
+    let r = api::save_with(&env, &dir, &req(json!({ "what": "board_selection", "ids": ["U1", vcc.clone()], "lib": "Power", "name": "Loose" })));
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(block_groups("Loose").is_empty());
+    let _ = std::fs::remove_dir_all(&m.root);
+}
+
 // ------------------------------------------------------------------------------------------------ properties and delete
 
 #[test]

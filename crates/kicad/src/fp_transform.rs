@@ -2,9 +2,9 @@
 //!
 //! From file version 20260616 on (`FIRST_FP_AFFINE_TRANSFORM` in `pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.h`: "Footprint affine transform: lib-frame
 //! storage and (transform) block"), a board file places a footprint with `(transform (translate x y) (rotate a) (scale sx sy))` where older files
-//! wrote `(at x y a)`, and stores a footprint's own zones in the footprint's library frame where older files stored them in the board's
-//! (`PCB_IO_KICAD_SEXPR_PARSER::parseFOOTPRINT_unchecked`: the `T_transform` case, and "Legacy footprint zone outlines were in board frame. Convert to
-//! lib."). The rest of a footprint keeps its meaning across the change: pads and texts are footprint-relative positions with board-frame angles in
+//! wrote `(at x y a)`, and stores a footprint's own zones and points in the footprint's library frame where older files stored them in the board's
+//! (`PCB_IO_KICAD_SEXPR_PARSER::parseFOOTPRINT_unchecked`: the `T_transform` case, "Legacy footprint zone outlines were in board frame. Convert to
+//! lib.", and the `T_point` case's "Legacy files stored footprint points in board frame"). The rest of a footprint keeps its meaning across the change: pads and texts are footprint-relative positions with board-frame angles in
 //! both (`PCB_IO_KICAD_SEXPR::format( const PAD* )`, `format( const PCB_TEXT* )`), and the graphics are in the footprint's frame in both.
 //!
 //! [`normalize`] rewrites a newer tree into the older layout, so every reader of footprints in this crate works on either: the transform becomes an
@@ -89,6 +89,16 @@ fn normalize_footprint(fp: &mut Vec<Sexpr>, scaled: &mut Vec<String>) {
         if let Sexpr::List(zone) = child {
             if sexpr::tag(zone) == Some("zone") {
                 map_pts(zone, &apply);
+            }
+            // KiCad 25ec2335's points too ("Legacy files stored footprint points in board frame": `format( PCB_POINT )` writes `GetLibraryPosition()`; UI-LEFT P17)
+            if sexpr::tag(zone) == Some("point") {
+                for at in zone.iter_mut() {
+                    if let Sexpr::List(l) = at {
+                        if sexpr::tag(l) == Some("at") {
+                            map_xy(l, &apply);
+                        }
+                    }
+                }
             }
         }
     }
@@ -338,6 +348,17 @@ mod tests {
         let pad = sexpr::find(fp, "pad").unwrap();
         assert_eq!(sexpr::txt(sexpr::find(pad, "at").unwrap(), 3), Some("270"));
         assert!(scaled.is_empty());
+    }
+
+    /// KiCad 25ec2335 writes a footprint's point in its library frame (`GetLibraryPosition`); the older layout has it on the board -- the board position of `parsePCB_POINT`'s
+    /// legacy branch (`point->SetPosition( filePos )`). The numbers are kicad-cli 10.99's rewrite of a point at (3, 2) of a footprint turned 30 degrees and flipped.
+    #[test]
+    fn a_footprints_point_goes_to_the_board_frame() {
+        let mut tree = parse(r#"(kicad_pcb (version 20260901) (footprint "X" (layer "B.Cu") (transform (translate 55 37) (rotate -30) (scale 1 1)) (point (at -3 2) (size 1) (layer "B.Fab"))))"#);
+        normalize(&mut tree);
+        let fp = sexpr::find(tree.as_list().unwrap(), "footprint").unwrap();
+        let at = sexpr::find(sexpr::find(fp, "point").unwrap(), "at").unwrap();
+        assert_eq!((sexpr::txt(at, 1), sexpr::txt(at, 2)), (Some("51.401924"), Some("37.232051")));
     }
 
     #[test]

@@ -752,7 +752,7 @@ fn stitch() -> ViaStitch {
     let mut v = ViaStitch::new(vec![p(Nm::ZERO, Nm::ZERO), p(mm(10.0), Nm::ZERO), p(mm(10.0), mm(10.0)), p(Nm::ZERO, mm(10.0))]);
     v.net = "GND".into();
     v.pitch_nm = mm(2.0);
-    v.via = ViaTemplate { size_nm: mm(0.6), drill_nm: mm(0.3), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new() };
+    v.via = ViaTemplate { size_nm: mm(0.6), drill_nm: mm(0.3), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), ..Default::default() };
     v
 }
 

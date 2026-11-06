@@ -89,3 +89,46 @@ fn a_sheet_with_no_table_writes_none() {
     let file = eda_kicad::export_kicad_sch(&design_with(sch), &ConstraintModel::default(), &META).unwrap();
     assert!(!file.contains("(table"));
 }
+
+/// `Device:R` as a library symbol: two pins, 3.81 mm above and below its origin.
+fn resistor() -> eda_model::LibSymbol {
+    let pin = |number: &str, y: f64, angle: f64| eda_model::LibPin { number: number.into(), name: "~".into(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, y), angle_deg: angle, length_mm: 1.27, unit: 1, hidden: false };
+    eda_model::LibSymbol {
+        connectivity: Default::default(),
+        lib_id: "Device:R".into(),
+        graphics: vec![],
+        pins: vec![pin("1", 3.81, 270.0), pin("2", -3.81, 90.0)],
+        power: false,
+        in_bom: true,
+        on_board: true,
+        datasheet: String::new(),
+        description: String::new(),
+        reference_prefix: "R".into(),
+        unit_count: 1,
+        pin_names_hidden: false,
+        pin_numbers_hidden: false,
+        pin_name_offset_mm: 0.0,
+        alternate: None,
+    }
+}
+
+#[test]
+fn a_cross_reference_in_a_cell_is_written_by_the_symbols_path_and_read_back_by_its_reference() {
+    // `ConvertRefsToKIIDs` when the file is written, `ConvertKIIDsToRefs` when it is read (what KiCad's dialogs show): the cell names R1 again
+    let pin = |n: &str| eda_model::Pin { number: n.into(), name: None, kind: eda_model::PinKind::Passive };
+    let part = eda_model::Part { reference: "R1".into(), mpn: None, lcsc: None, value: Some("4k7".into()), package: None, footprint: None, symbol: Some("Device:R".into()), datasheet: None, pins: vec![pin("1"), pin("2")], body_nm: None, edge: None };
+    let m = ConstraintModel { parts: vec![part], symbols: vec![resistor()], ..Default::default() };
+    let mut sch = SchematicSection { imported_from_kicad: true, ..Default::default() };
+    sch.symbols.push(eda_model::ir::SymbolInstance { id: "R1".into(), at: Point { x: mm(50.8), y: mm(50.8) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "4k7".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false });
+    let mut t = Table::new_sch_grid(Point { x: mm(100.0), y: mm(50.0) }, 2, 1, mm(30.0), mm(6.0), mm(1.27));
+    t.cells[0].text = "${R1:VALUE}".into();
+    t.cells[1].text = "${R9:VALUE}".into();
+    sch.extras.tables.push(t);
+    sch.texts.push(SchematicText { id: "txt_x".into(), content: "R1 = ${R1:VALUE}".into(), at: Point { x: mm(10.0), y: mm(10.0) }, angle: 0, size_nm: mm(1.27) });
+    let file = eda_kicad::export_kicad_sch(&design_with(sch), &m, &META).expect("the sheet exports");
+    assert!(file.contains("(table_cell \"${/") && !file.contains("(table_cell \"${R1:VALUE}"), "the cell is written by the symbol's path: {file}");
+    let (design, _, _) = import_kicad_sch(&file).expect("the file reads back");
+    let back = design.schematic.as_ref().unwrap();
+    assert_eq!(back.extras.tables[0].texts(), vec![vec!["${R1:VALUE}", "<Unresolved: R9>"]]);
+    assert_eq!(back.texts.iter().find(|x| x.content.starts_with("R1 =")).map(|x| x.content.as_str()), Some("R1 = ${R1:VALUE}"));
+}

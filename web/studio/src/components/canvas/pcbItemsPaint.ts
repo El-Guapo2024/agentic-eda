@@ -5,7 +5,8 @@ import type { BoardGridItem } from "../../api/pcbItemTypes";
 import { sizeGridToCursor } from "../../kicad-port/gridItem";
 import { drawGridItemPreview } from "./gridItemPaint";
 import type { BoardState } from "../../api/types";
-import type { BoardBarcode, BoardRefImage, BoardTextBox } from "../../api/pcbItemTypes";
+import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../../api/pcbItemTypes";
+import { shownFootprintImages } from "../../kicad-port/fpBoardItems";
 import { barcodeShape, barcodeShapeKey, symbolCorners } from "../../kicad-port/barcodeShapes";
 import { centrelineRect, inductorEnd } from "../../kicad-port/microwave";
 import { requestBarcodeShape } from "./barcodeCache";
@@ -94,13 +95,23 @@ function paintRefImage(ctx: CanvasRenderingContext2D, view: ViewTransform, i: Bo
  */
 export function drawRefImages(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions): void {
   const images = board.drawings?.images ?? [];
-  if (images.length === 0 || !on(opts.layerVisible, "bitmaps")) return;
+  // and the footprints' own (UI-LEFT P17: `FOOTPRINT::m_drawings` are in the view as the footprint's children), drawn as selected with their footprint
+  const ofFootprints = shownFootprintImages(board, opts.layerVisible);
+  if ((images.length === 0 && ofFootprints.length === 0) || !on(opts.layerVisible, "bitmaps")) return;
   const opacity = opacityOf(opts.appearance, "images");
   if (opacity <= 0) return;
   for (const i of images) {
     if (!layerIsVisible(opts.layerVisible, i.layer)) continue;
     const dim = layerAlpha(opts, layerStateKey(i.layer));
     withAlpha(ctx, dim, () => paintRefImage(ctx, view, i, colourAlpha(i.layer) * opacity, opts.selection.has(i.id)));
+  }
+  for (const { image: i, part } of ofFootprints) {
+    const dim = layerAlpha(opts, layerStateKey(i.layer));
+    // a footprint in a preview that is not the carry (Pack and Move's block: painter.ts `drawFootprint` moves it by the preview's offset) takes its image along
+    const preview = opts.movePreview && opts.movePreview.kind !== "pcb" && opts.movePreview.refs.includes(part.ref) ? opts.movePreview : null;
+    const own = preview?.perRefOffsetNm?.[part.ref];
+    const shown = preview ? { ...i, x: i.x + preview.dxNm + (own?.[0] ?? 0), y: i.y + preview.dyNm + (own?.[1] ?? 0) } : i;
+    withAlpha(ctx, dim, () => paintRefImage(ctx, view, shown, colourAlpha(i.layer) * opacity, opts.selection.has(part.ref)));
   }
 }
 
@@ -114,28 +125,30 @@ export function drawRefImages(ctx: CanvasRenderingContext2D, view: ViewTransform
 export function drawPoints(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions): void {
   const points = board.drawings?.points ?? [];
   if (points.length === 0 || !on(opts.layerVisible, "ly_points")) return;
-  for (const p of points) {
-    if (!layerIsVisible(opts.layerVisible, p.layer)) continue;
-    const half = p.size / 2;
-    const selected = opts.selection.has(p.id);
-    withAlpha(ctx, layerAlpha(opts, layerStateKey(p.layer)), () => {
-      ctx.save();
-      ctx.lineWidth = hairlineNm(view, selected ? 2 : 1);
-      ctx.lineCap = "round";
-      ctx.strokeStyle = selected ? layerColor("selection") : layerColor("LAYER_POINTS");
-      ctx.beginPath();
-      ctx.moveTo(p.x - half, p.y - half);
-      ctx.lineTo(p.x + half, p.y + half);
-      ctx.moveTo(p.x + half, p.y - half);
-      ctx.lineTo(p.x - half, p.y + half);
-      ctx.stroke();
-      ctx.strokeStyle = selected ? layerColor("selection") : layerColor(layerKeyOf(p.layer));
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, half / 2, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    });
-  }
+  for (const p of points) drawPoint(ctx, view, p, opts.selection.has(p.id), opts);
+}
+
+/** One point (see [`drawPoints`]), when the Points object and its layer are shown. */
+export function drawPoint(ctx: CanvasRenderingContext2D, view: ViewTransform, p: BoardPoint, selected: boolean, opts: PaintOptions): void {
+  if (!on(opts.layerVisible, "ly_points") || !layerIsVisible(opts.layerVisible, p.layer)) return;
+  const half = p.size / 2;
+  withAlpha(ctx, layerAlpha(opts, layerStateKey(p.layer)), () => {
+    ctx.save();
+    ctx.lineWidth = hairlineNm(view, selected ? 2 : 1);
+    ctx.lineCap = "round";
+    ctx.strokeStyle = selected ? layerColor("selection") : layerColor("LAYER_POINTS");
+    ctx.beginPath();
+    ctx.moveTo(p.x - half, p.y - half);
+    ctx.lineTo(p.x + half, p.y + half);
+    ctx.moveTo(p.x + half, p.y - half);
+    ctx.lineTo(p.x - half, p.y + half);
+    ctx.stroke();
+    ctx.strokeStyle = selected ? layerColor("selection") : layerColor(layerKeyOf(p.layer));
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, half / 2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  });
 }
 
 /** Every item of the kinds this module draws that the board has, and the rubber band of the tool in progress. */

@@ -22,6 +22,7 @@ import { FormattingPage } from "./boardSetup/FormattingPage";
 import { CustomRulesPage } from "./boardSetup/CustomRulesPage";
 import { ComponentClassesPage } from "./boardSetup/ComponentClassesPage";
 import { MaskPastePage } from "./boardSetup/MaskPastePage";
+import { DrillChartPage } from "./boardSetup/DrillChartPage";
 import { NetClassesPage } from "./boardSetup/NetClassesPage";
 import { SeveritiesPage } from "./boardSetup/SeveritiesPage";
 import { StackupPage } from "./boardSetup/StackupPage";
@@ -37,6 +38,7 @@ export type Page =
   | "board_layers"
   | "stackup"
   | "mask_paste"
+  | "drill_chart"
   | "hatch_offsets"
   | "text_graphics"
   | "formatting"
@@ -61,6 +63,7 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
       { id: "board_layers", label: "Board Editor Layers" },
       { id: "stackup", label: "Physical Stackup" },
       { id: "mask_paste", label: "Solder Mask/Paste" },
+      { id: "drill_chart", label: "Drill Chart" },
       { id: "hatch_offsets", label: "Zone Hatch Offsets" },
     ],
   },
@@ -302,6 +305,7 @@ export function BoardSetupDialog() {
           <BoardLayersPage hidden={page !== "board_layers"} onDirty={markers.board_layers} />
           <StackupPage hidden={page !== "stackup"} onDirty={markers.stackup} />
           <MaskPastePage hidden={page !== "mask_paste"} onDirty={markers.mask_paste} />
+          <DrillChartPage hidden={page !== "drill_chart"} onDirty={markers.drill_chart} />
           <ZoneHatchOffsetsPage hidden={page !== "hatch_offsets"} onDirty={markers.hatch_offsets} />
           <TextGraphicsPage hidden={page !== "text_graphics"} onDirty={markers.text_graphics} />
           <FormattingPage hidden={page !== "formatting"} onDirty={markers.formatting} />

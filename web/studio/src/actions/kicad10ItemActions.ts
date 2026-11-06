@@ -9,11 +9,14 @@
 //                                                 layer that is enabled, built from the board and carried by the cursor until a click drops it ("Place Drill Chart")
 //   pcbnew.InteractiveDrawing.placeDrillMap       PCB_CONTROL::PlaceDrillMap: a map on the active layer, or the first documentation layer with none, at zero offset; it is then
 //                                                 selected ("Place Drill Map")
+//   pcbnew.InteractiveDrawing.showDrillGroups     PCB_CONTROL::ShowDrillGroups (Tools > Drill Groups...): the modeless Drill Groups dialog, raised when it is open
+//                                                 (components/DrillChartDialogs.tsx)
 import { hasExclusions, stitchesExcluding, viaStitchCmd, withoutExclusions } from "../kicad-port/viaStitch";
 import { pickDocumentationLayer } from "../kicad-port/drillChart";
 import { activeLayerName, layerIsVisible } from "../kicad-port/layerPresets";
 import { pcbContext } from "../kicad-port/pcbProperties";
 import { fetchState } from "../api/client";
+import { openDrillGroupsDialog } from "../state/kicad10Dialogs";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 
 export function registerKicad10ItemActions(m: Map<string, (param?: unknown) => void>, ctx: SweepCtx): void {
@@ -53,6 +56,10 @@ export function registerKicad10ItemActions(m: Map<string, (param?: unknown) => v
       const made = (fresh?.drawings?.drill_maps ?? []).find((x) => !before.has(x.id));
       dispatch({ type: "SET_SELECTION", refs: made ? [made.id] : [] });
     })
+  );
+  m.set(
+    "pcbnew.InteractiveDrawing.showDrillGroups",
+    pcbOnly(() => openDrillGroupsDialog())
   );
   m.set(
     "pcbnew.InteractiveDrawing.drawViaStitchArea",

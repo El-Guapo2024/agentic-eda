@@ -18,6 +18,8 @@
 import { useGridDisplay } from "../../state/commonOptions";
 import { gridYOf } from "../../kicad-port/gridSettings";
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";
+import { chartRowCells } from "../../kicad-port/drillChartDialog";
+import { carryFrameTurn } from "../../kicad-port/gridFrame";
 import { newViaStitch } from "../../kicad-port/viaStitchTool";
 import { chosenDiffPair, chosenTrackWidthOf } from "../../kicad-port/routerSizes";
 import { chosenViaOf, currentViaSize } from "../../kicad-port/routerVia";
@@ -69,6 +71,8 @@ import { finishEditPattern, fixTune, hoverTune, moveTune, startTune, TuneHandleD
 import { handleAt } from "../../kicad-port/tuneTool";
 import { dpStateFromPreview } from "../../kicad-port/dpTool";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
+import { MENU_LIMIT, clarificationRows } from "../../kicad-port/clarificationMenu";
+import { setMenuHighlight } from "../../state/commonTool";
 import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, leftDragOutcome, motionPan } from "../../kicad-port/viewControls";
 import { wheelInputOf } from "../../hooks/canvasWheel";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
@@ -89,6 +93,7 @@ import { boardDimensionStyle, dimensionPointAt, moveDimensionPoint, type DimPoin
 import { toCmdDimension } from "../../kicad-port/dimensionConvert";
 import { fetchDimensionPreview } from "../../api/dimensionPreview";
 import { cellAddress, cellById, drawTableSession, tableById } from "../../kicad-port/tables";
+import { cellsBetween, cellUnder, onlyCells } from "../../kicad-port/tableCells";
 import { openDrawnTableDialog } from "../../state/tableDialogs";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
 import { leaderModeOf, newZoneInitial, zoneClick, zoneCommitPlan, zoneFinish, zoneFirstCorner } from "../../kicad-port/pcbDrawZone";
@@ -185,6 +190,8 @@ type DragState =
   | { kind: "zoom"; button: 1 | 2; anchor: { x: number; y: number }; lastY: number; moved: boolean }
   | { kind: "move"; refs: string[]; pivotNm?: [number, number]; flipPivotNm?: [number, number]; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
+  /** `selectTableCells`: a drag from a cell of `table` selects the cells under it, from the selection it began with (`before`); `candidates` is what the press would have picked, for a release that is a click. */
+  | { kind: "cells"; table: string; startWorld: [number, number]; before: string[]; modifiers: ClickModifiers; candidates: SelectionCandidate[]; moved: boolean }
   /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
   | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][]; /** The zone's holes at drag-start: `cornerIndex` is a global vertex index over the outline then the holes (`CIterateWithHoles`). */ baseHoles: [number, number][][] }
   /** The same for a graphic shape's handle (kicad-port/pcbPointEdit.ts): `base` is the shape at drag-start, every move recomputes from it. */
@@ -262,7 +269,7 @@ export function Canvas() {
   };
   const moveMode = state.activeTool === "move";
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[]; clarification?: boolean } | null>(null);
   /** The right-click menu of whichever tool owns the click (kicad-port/pcbContextMenu.ts): nested, with the menu bar's own entries. */
   const [pcbMenu, setPcbMenu] = useState<{ x: number; y: number; nodes: MenuNode[] } | null>(null);
   const longPressRef = useRef<{ timer: ReturnType<typeof setTimeout>; startScreen: [number, number] } | null>(null);
@@ -373,7 +380,7 @@ export function Canvas() {
       // gate (plain idle hover near the edge in the Select tool never
       // autopans in real KiCad either).
       const drag = dragRef.current;
-      const interactive = drag?.kind === "box" || drag?.kind === "move" || s.drawState != null;
+      const interactive = drag?.kind === "box" || drag?.kind === "move" || drag?.kind === "cells" || s.drawState != null;
       const pointer = lastPointerScreenRef.current;
       if (!interactive || !pointer) return;
       const screenSize = containerSizeRef.current;
@@ -677,21 +684,42 @@ export function Canvas() {
    * always taking the topmost -- plus source's own "Select All" entry,
    * which applies the SAME click modifier to every candidate at once
    * rather than just the one eventually clicked.
+   *
+   * The rows are `SELECTION_TOOL::doSelectionMenu`'s (kicad-port/clarificationMenu.ts, UI-LEFT P22): the first nine numbered, each chosen by its number
+   * key, "Select All" by A, and -- when the guess left items out (`HasAdditionalItems()`: `more` gives every candidate) -- "Show More Choices..." (M), which
+   * opens the menu again with all of them (`aCollector->Combine()`). The row under the pointer brightens its item, "Select All" every item.
    */
   const disambiguate = useCallback(
-    (candidates: SelectionCandidate[], modifiers: ClickModifiers, screenX: number, screenY: number) => {
+    (candidates: SelectionCandidate[], modifiers: ClickModifiers, screenX: number, screenY: number, more?: () => SelectionCandidate[]) => {
       if (candidates.length === 0) return;
       if (candidates.length === 1) {
         dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, candidates[0]!.id, modifiers) });
         return;
       }
+      const shown = candidates.slice(0, MENU_LIMIT);
       const pick = (c: SelectionCandidate) => dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, c.id, modifiers) });
-      const entries: MenuEntry[] = candidates.map((c) => ({ label: candidateLabel(c), onSelect: () => pick(c) }));
-      entries.push({
-        label: "Select All",
-        onSelect: () => dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, candidates.map((c) => c.id), modifiers) }),
-      });
-      setContextMenu({ x: screenX, y: screenY, entries });
+      const all = more?.() ?? [];
+      const hasMore = all.length > candidates.length;
+      const rows = clarificationRows(shown.map(candidateLabel), { mac: isMac(), more: hasMore });
+      const entries: MenuEntry[] = [];
+      for (const row of rows) {
+        if (row.kind === "item") {
+          const c = shown[row.index]!;
+          entries.push({ label: row.label, accel: row.accel, onSelect: () => pick(c), onHover: (over) => setMenuHighlight(over ? [c.id] : []) });
+        } else if (row.kind === "all") {
+          entries.push({ label: "", onSelect: () => {}, separator: true });
+          entries.push({
+            label: row.label,
+            accel: row.accel,
+            onSelect: () => dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, candidates.map((c) => c.id), modifiers) }),
+            onHover: (over) => setMenuHighlight(over ? candidates.map((c) => c.id) : []),
+          });
+        } else {
+          // `showMoreChoices = true`: the menu again, every candidate in it, and no "Show More Choices..."
+          entries.push({ label: row.label, accel: row.accel, onSelect: () => setTimeout(() => disambiguate(all, modifiers, screenX, screenY), 0) });
+        }
+      }
+      setContextMenu({ x: screenX, y: screenY, entries, clarification: true });
     },
     [dispatch, state.selection, candidateLabel]
   );
@@ -739,7 +767,9 @@ export function Canvas() {
           void api.addZone(source.net, source.layer, outline, zoneSettingsOf(source), { layers: [...zoneLayers(source)] }).then(selectNew);
         } else if (plan.kind === "stitch") {
           // KiCad 10's `ZONE_MODE::STITCH` (zone_create_helper.cpp): a via stitching with the outline, its defaults filled in (`InitializeDefaults`), and its properties dialog before any via is made.
-          openViaStitchDialog(null, newViaStitch(outline, board?.board_rules?.via_diameter ?? 0, board?.board_rules?.via_drill ?? 0));
+          // `defaultViaSize` / `defaultViaDrill`: `GetCurrentViaSize()` / `GetCurrentViaDrill()`, the via size chosen in the toolbar (kicad-port/routerVia.ts `currentViaSize`).
+          const current = board ? currentViaSize(board, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia) : null;
+          openViaStitchDialog(null, newViaStitch(outline, current?.diameter ?? 0, current?.drill ?? 0));
         } else if (plan.kind === "add") {
           const z = plan.zone;
           void api.addZone(z.net, z.layers[0] ?? activeLayerName(state.activeLayer, "F.Cu"), outline, z.settings, { layers: z.layers, name: z.name, locked: z.locked }).then(selectNew);
@@ -1286,11 +1316,21 @@ export function Canvas() {
       }, LONG_PRESS_MS),
     };
 
+    // `PCB_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )`: a drag from a table cell (`hoverCells.Collect( board(), { PCB_TABLECELL_T }, DragOrigin )`, whatever lies over
+    // it) selects the cells under it (`selectTableCells`) when the selection is empty or only cells -- with any other selection it moves, as below. The press itself
+    // picks nothing: a release with no drag is the click (kicad-port/tableCells.ts).
+    const tablesNow = (board?.drawings?.tables ?? []).filter((t) => state.layerVisible[t.layer] !== false);
+    const under = state.activeTool === "select" && tablesNow.length > 0 ? cellUnder(tablesNow, wx, wy, 5 * onePixelNm) : null;
+    if (under && onlyCells(state.selection, board?.drawings?.tables ?? [])) {
+      dragRef.current = { kind: "cells", table: under.table.id, startWorld: [wx, wy], before: [...state.selection], modifiers, candidates: runPick(false), moved: false };
+      return;
+    }
+
     const candidates = runPick(false);
 
     if (candidates.length > 1) {
       clearLongPress();
-      disambiguate(candidates, modifiers, e.clientX, e.clientY);
+      disambiguate(candidates, modifiers, e.clientX, e.clientY, () => runPick(true));
       return;
     }
 
@@ -1487,7 +1527,11 @@ export function Canvas() {
       // (`perRefOffsetNm` is Pack and Move's per-footprint packed shift -- it rides along until the drop.)
       // The grab point (`BestDragOrigin`): what R turns the carried items about, before the move (kicad-port/pcbCarry.ts `carryPress`).
       const { rotateQuarterTurns, flipped, perRefOffsetNm, ops } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs, kind, dxNm: sx - ox, dyNm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetNm, ops, grabNm: [ox, oy], pivotNm: held?.pivotNm ?? start?.pivotNm, flipPivotNm: held?.flipPivotNm ?? start?.flipPivotNm } });
+      // KiCad 10's placement grids: a footprint carried into one turns to its frame (`applyMoveFrameOrientation`, kicad-port/gridFrame.ts).
+      // (A footprint fresh from Place Footprint starts from its own frame, `moveFrameStartDeg` = 0: `prevFrameAngle = ANGLE_0`.)
+      const frame = packing ? null : carryFrameTurn(board, refs, ops ?? [], sx - ox, sy - oy, [ox, oy], state.movePreview?.frameDeg ?? state.moveFrameStartDeg ?? undefined, state.prefs.rotationStepDeg);
+      const turned = frame && frame.ops.length !== (ops?.length ?? 0) ? frame.ops : ops;
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs, kind, dxNm: sx - ox, dyNm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetNm, ops: turned, frameDeg: frame?.frameDeg, grabNm: [ox, oy], pivotNm: held?.pivotNm ?? start?.pivotNm, flipPivotNm: held?.flipPivotNm ?? start?.flipPivotNm } });
       return;
     }
 
@@ -1511,7 +1555,9 @@ export function Canvas() {
       const dx = sx - drag.snapOrigin[0];
       const dy = sy - drag.snapOrigin[1];
       const { rotateQuarterTurns, flipped, ops } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "pcb", dxNm: dx, dyNm: dy, rotateQuarterTurns, flipped, ops, grabNm: [drag.snapOrigin[0], drag.snapOrigin[1]], pivotNm: drag.pivotNm, flipPivotNm: drag.flipPivotNm } });
+      const frame = board ? carryFrameTurn(board, drag.refs, ops ?? [], dx, dy, drag.snapOrigin, state.movePreview?.frameDeg, state.prefs.rotationStepDeg) : null;
+      const turned = frame && frame.ops.length !== (ops?.length ?? 0) ? frame.ops : ops;
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "pcb", dxNm: dx, dyNm: dy, rotateQuarterTurns, flipped, ops: turned, frameDeg: frame?.frameDeg, grabNm: [drag.snapOrigin[0], drag.snapOrigin[1]], pivotNm: drag.pivotNm, flipPivotNm: drag.flipPivotNm } });
     } else if (drag.kind === "zoneCorner") {
       if (!motion?.dragging) return; // PCB_POINT_EDITOR::Main starts editing at the drag (`evt->IsDrag`), not at the press
       // `grid.BestSnapAnchor( pos, snapLayers, grid.GetItemGrid( item ), { item } )`: on the zone's layer, not onto the zone itself.
@@ -1536,6 +1582,12 @@ export function Canvas() {
       const [sx, sy] = [p[0], p[1]];
       const next = moveShapePoint(drag.base, drag.point, [sx, sy], state.pcbx.arcEditMode);
       setShapePointPreview(next ? { id: drag.shapeId, shape: cmdShapeToShape(next, drag.shapeId) } : null);
+    } else if (drag.kind === "cells") {
+      if (!motion?.dragging) return;
+      if (!drag.moved) clearLongPress();
+      drag.moved = true;
+      const table = board?.drawings?.tables?.find((t) => t.id === drag.table);
+      if (table) dispatch({ type: "SET_SELECTION", refs: cellsBetween(table, drag.startWorld, [wx, wy], drag.before, drag.modifiers), raw: true });
     } else if (drag.kind === "box") {
       if (!motion?.dragging) return; // a click with a little jitter, not a rectangle
       const rect = containerRef.current!.getBoundingClientRect();
@@ -1573,6 +1625,13 @@ export function Canvas() {
         }
       }
       pendingClickRef.current = null;
+    } else if (drag.kind === "cells") {
+      // released where it was pressed: the click the press deferred (`selectPoint`)
+      if (!drag.moved) {
+        if (drag.candidates.length > 1) disambiguate(drag.candidates, drag.modifiers, e.clientX, e.clientY);
+        else if (drag.candidates.length === 1) dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, drag.candidates[0]!.id, drag.modifiers) });
+        else if (!hasModifier(drag.modifiers)) dispatch({ type: "CLEAR_SELECTION" });
+      }
     } else if (drag.kind === "box" && board) {
       if (!marquee) {
         // Truly zero movement (not even the sub-pixel jitter that
@@ -1780,6 +1839,11 @@ export function Canvas() {
         dispatch({ type: "ENTER_GROUP", id: hitGroup });
         return;
       }
+      // `selectChartRow`: a double click on a data row of the one selected drill chart selects that row's cells, not the chart's dialog (kicad-port/drillChartDialog.ts).
+      const chart = board.drawings?.drill_charts?.find((c) => c.table_id === refs[0]);
+      const chartTable = chart ? board.drawings?.tables?.find((t) => t.id === chart.table_id) : undefined;
+      const rowCells = chart && chartTable ? chartRowCells(chart, chartTable, ...worldAt(e)) : null;
+      if (rowCells) return dispatch({ type: "SET_SELECTION", refs: rowCells, raw: true });
       openPropertiesFor(refs[0]!, api, dispatch);
     }
   };
@@ -1799,7 +1863,18 @@ export function Canvas() {
     >
       <canvas ref={canvasRef} />
       {!board && <div className="pcb-canvas-empty">{state.boardError ?? "Loading board…"}</div>}
-      {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} entries={contextMenu.entries} onClose={() => setContextMenu(null)} />}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          entries={contextMenu.entries}
+          onClose={() => {
+            // `getView()->Remove( &highlightGroup )`: nothing stays brightened once the clarification menu is gone
+            if (contextMenu.clarification) setMenuHighlight([]);
+            setContextMenu(null);
+          }}
+        />
+      )}
       {pcbMenu && <SchContextMenu x={pcbMenu.x} y={pcbMenu.y} nodes={pcbMenu.nodes} onClose={() => setPcbMenu(null)} />}
     </div>
   );

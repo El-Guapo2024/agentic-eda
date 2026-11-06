@@ -18,12 +18,16 @@ import { defaultPitchNm, layoutOf, modeOf, MODE_CHOICES, movedStitch, PATTERN_CH
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 import { layerColor as layerColorOf } from "./canvas/layers";
+import { DrillChartPropertiesDialog, DrillGroupsDialog } from "./DrillChartDialogs";
+import { ViaTemplateDialog } from "./ViaTemplateDialog";
 
 export function Kicad10ItemDialogs() {
   return (
     <>
       <GridItemDialog />
       <ViaStitchDialog />
+      <DrillChartPropertiesDialog />
+      <DrillGroupsDialog />
     </>
   );
 }
@@ -290,9 +294,10 @@ function GridItemDialog() {
 
 /**
  * Via Stitching Properties (`DIALOG_VIA_STITCH_PROPERTIES`, pcbnew/dialogs/dialog_via_stitch_properties.cpp of KiCad 25ec2335): Stitch Net, Position X / Y (the outline's first corner:
- * a new one moves the outline there), Pattern, Pitch, Seed (the Poisson pattern's only), Via Properties (here the size, drill and layers of the template; KiCad's Configure opens the via
- * dialog on it), Mode and Guard Net (a guard's only), with the sample of the pattern the dialog draws (`buildStitchPreview`). OK is "Edit Via Stitching" (`ShowPropertiesDialog`'s
- * `EditStart`, `Update`, `EditFinish`), or, after Draw Via Stitch Area, "Create Via Stitch": one `set_via_stitch`, the vias placed by the server; Cancel drops a new one.
+ * a new one moves the outline there), Pattern, Pitch, Seed (the Poisson pattern's only), Via Properties (Configure: `OnViaConfigureClicked` opens Track & Via Properties on the
+ * template via, components/ViaTemplateDialog.tsx, and the preview redraws with it), Mode and Guard Net (a guard's only), with the sample of the pattern the dialog draws
+ * (`buildStitchPreview`). OK is "Edit Via Stitching" (`ShowPropertiesDialog`'s `EditStart`, `Update`, `EditFinish`), or, after Draw Via Stitch Area, "Create Via Stitch": one
+ * `set_via_stitch` with the template (`SetTemplateItem( "via", .. )`), the vias placed by the server, each a copy of the template; Cancel drops a new one.
  */
 function ViaStitchDialog() {
   const state = useStudioState();
@@ -300,8 +305,9 @@ function ViaStitchDialog() {
   const dispatch = useStudioDispatch();
   const { viaStitch: req } = useKicad10Dialogs();
   const units = state.units;
-  const [form, setForm] = useState<{ work: BoardViaStitch; x: string; y: string; pitch: string; seed: string; size: string; drill: string } | null>(null);
+  const [form, setForm] = useState<{ work: BoardViaStitch; x: string; y: string; pitch: string; seed: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [configuring, setConfiguring] = useState(false);
 
   useEffect(() => {
     if (!req) {
@@ -311,15 +317,17 @@ function ViaStitchDialog() {
     const w = req.stitch;
     const [x, y] = stitchPosition(w);
     const size = w.via?.size_nm ?? 0;
-    setForm({ work: w, x: fmt(x, units), y: fmt(y, units), pitch: fmt(w.pitch_nm || defaultPitchNm(size || 600_000), units), seed: String(w.seed ?? 0), size: fmt(size, units), drill: fmt(w.via?.drill_nm ?? 0, units) });
+    setForm({ work: w, x: fmt(x, units), y: fmt(y, units), pitch: fmt(w.pitch_nm || defaultPitchNm(size || 600_000), units), seed: String(w.seed ?? 0) });
     setError(null);
+    setConfiguring(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [req]);
 
   if (!req || !form || !state.board) return null;
   const board = state.board;
   const nets = pcbContext(board, units).nets;
-  const copper = board.layers ?? [];
+  const copper = (board.layers ?? []).filter((l) => l.endsWith(".Cu"));
+  const template = form.work.via ?? { size_nm: 600_000, drill_nm: 300_000, from_layer: copper[0] ?? "F.Cu", to_layer: copper[copper.length - 1] ?? "B.Cu" };
   const close = () => closeViaStitchDialog();
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
   const setWork = (patch: Partial<BoardViaStitch>) => setForm({ ...form, work: { ...form.work, ...patch } });
@@ -332,19 +340,13 @@ function ViaStitchDialog() {
 
   const ok = async () => {
     const pitch = u(form.pitch);
-    const size = u(form.size);
-    const drill = u(form.drill);
-    // The dialog takes any pitch (0 is `defaultPitch`); the via's fields stand in for `DIALOG_TRACK_VIA_PROPERTIES`, whose `PCB_VIA::ValidateViaParameters` says why a via
-    // will not do (`GEOMETRY_MIN_SIZE`, 1 um).
-    if (!(size >= 1)) return setError("Via diameter is too small.");
-    if (!(drill >= 1)) return setError("Via drill is too small.");
-    if (size <= drill) return setError("Via hole size must be smaller than via diameter");
+    // The dialog takes any pitch (0 is `defaultPitch`); the via was checked by its own dialog (Configure's `PCB_VIA::ValidateViaParameters`).
     // `ToULong`: a seed that is not a number leaves the seed as it was.
     const seed = /^\d+$/.test(form.seed.trim()) ? Number(form.seed.trim()) >>> 0 : (form.work.seed ?? 0);
     // "Position: translate the outline to land on the requested first vertex."
     const [x0, y0] = stitchPosition(form.work);
     const [nx, ny] = [u(form.x), u(form.y)];
-    let work: BoardViaStitch = { ...form.work, pitch_nm: Math.max(0, pitch || 0), seed, via: { from_layer: "F.Cu", to_layer: "B.Cu", ...form.work.via, size_nm: size, drill_nm: drill } };
+    let work: BoardViaStitch = { ...form.work, pitch_nm: Math.max(0, pitch || 0), seed, via: template };
     if (Number.isFinite(nx) && Number.isFinite(ny) && (nx !== x0 || ny !== y0)) work = movedStitch(work, nx - x0, ny - y0);
     const before = new Set((board.drawings?.via_stitches ?? []).map((v) => v.id));
     if (!(await api.cmdBatch([viaStitchCmd(req.id, work)]))) return setError("The board refused the via stitching.");
@@ -359,7 +361,7 @@ function ViaStitchDialog() {
 
   const scale = preview.extent > 0 ? 180 / (preview.extent + 2 * (u(form.pitch) || 1)) : 1;
   const margin = u(form.pitch) || 1;
-  const r = Math.max(1.5, ((u(form.size) || 600_000) / 2) * scale);
+  const r = Math.max(1.5, ((template.size_nm || 600_000) / 2) * scale);
   return (
     <div className="dialog-backdrop" onClick={close}>
       <div className="dialog" style={{ width: 560 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Via Stitching Properties" data-testid="via-stitch-properties">
@@ -394,20 +396,10 @@ function ViaStitchDialog() {
             <span>Seed:</span>
             <input value={form.seed} disabled={!poisson} onChange={(e) => set({ seed: e.target.value })} style={{ width: 100 }} data-testid="vst-seed" />
             <span>Via Properties:</span>
-            <span style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-              <input type="number" step="any" value={form.size} onChange={(e) => set({ size: e.target.value })} style={{ width: 70 }} title="Via size" data-testid="vst-size" />
-              <span>/</span>
-              <input type="number" step="any" value={form.drill} onChange={(e) => set({ drill: e.target.value })} style={{ width: 70 }} title="Via drill" data-testid="vst-drill" /> {units}
-              <select value={form.work.via?.from_layer ?? "F.Cu"} onChange={(e) => setWork({ via: { size_nm: 0, drill_nm: 0, to_layer: "B.Cu", ...form.work.via, from_layer: e.target.value } })} data-testid="vst-from">
-                {copper.map((l) => (
-                  <option key={l}>{l}</option>
-                ))}
-              </select>
-              <select value={form.work.via?.to_layer ?? "B.Cu"} onChange={(e) => setWork({ via: { size_nm: 0, drill_nm: 0, from_layer: "F.Cu", ...form.work.via, to_layer: e.target.value } })} data-testid="vst-to">
-                {copper.map((l) => (
-                  <option key={l}>{l}</option>
-                ))}
-              </select>
+            <span>
+              <button onClick={() => setConfiguring(true)} data-testid="vst-configure">
+                Configure
+              </button>
             </span>
             <span>Mode:</span>
             <select value={mode} onChange={(e) => setWork(withLayoutAndMode(form.work, layout, e.target.value as StitchMode))} data-testid="vst-mode">
@@ -437,6 +429,20 @@ function ViaStitchDialog() {
           <p style={{ color: "var(--chrome-danger)", margin: "8px 12px 0" }} data-testid="vst-error">
             {error}
           </p>
+        )}
+        {configuring && (
+          <ViaTemplateDialog
+            via={template}
+            copper={copper}
+            layerSetup={board.board_rules?.layer_setup}
+            units={units}
+            onCancel={() => setConfiguring(false)}
+            onOk={(via) => {
+              // `if( dlg.ShowModal() == wxID_OK ) redrawPreview()`: the working copy's template.
+              setWork({ via });
+              setConfiguring(false);
+            }}
+          />
         )}
         <div className="dialog-footer">
           <button onClick={close} data-testid="vst-cancel">

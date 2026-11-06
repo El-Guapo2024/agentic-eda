@@ -3273,17 +3273,28 @@ fn batch_applies_every_sub_command_and_rolls_back_whole_on_a_refusal() {
 }
 
 #[test]
-fn a_placement_snaps_to_the_grid_anchored_at_the_grid_origin() {
-    // The board snaps to 100 um steps. With no grid origin a position lands on whole steps from (0, 0); with one at (50, 30) it lands on whole steps
-    // from there, so a point the editor snapped to the grid it draws is the point the verb keeps.
-    let m = model(vec![part("R1", "0603")], &[], vec![]);
+fn a_placement_keeps_the_editors_point_and_the_cli_move_snaps_to_the_step_from_the_grid_origin() {
+    // UI-LEFT P19: `place_at` (the editor's click, and the CLI's `place --at`) keeps the point it is given, in whole nanometres -- the editor snapped
+    // the pointer to the grid it shows, and KiCad's commit stores `SetPosition( cursorPos )` with no grid of its own. A turn in place and a swap keep
+    // the positions as they are. The CLI's re-placement verb `move_to` still lands on the board's placement step (100 um), in whole steps from the
+    // grid origin, so a point the editor snapped to the grid it draws is the point the verb keeps.
+    let m = model(vec![part("R1", "0603"), part("R2", "0603")], &[], vec![]);
     let mut plain = board(&m);
     plain.apply(&Cmd::PlaceAt { part: "R1".into(), x: mm(10.234), y: mm(10.678) }).unwrap();
-    assert_eq!((plain.pose_of("R1").unwrap().at.x, plain.pose_of("R1").unwrap().at.y), (mm(10.2), mm(10.7)), "no grid origin: whole steps from (0, 0)");
+    assert_eq!((plain.pose_of("R1").unwrap().at.x, plain.pose_of("R1").unwrap().at.y), (mm(10.234), mm(10.678)), "the editor's point, as given");
+    plain.apply(&Cmd::Rotate { part: "R1".into(), quarter_turns: 1 }).unwrap();
+    assert_eq!(plain.pose_of("R1").unwrap().at, Point { x: mm(10.234), y: mm(10.678) }, "a turn in place does not move it to the step");
+    plain.apply(&Cmd::PlaceAt { part: "R2".into(), x: mm(20.005), y: mm(10.0) }).unwrap();
+    plain.apply(&Cmd::Swap { a: "R1".into(), b: "R2".into() }).unwrap();
+    assert_eq!(plain.pose_of("R1").unwrap().at, Point { x: mm(20.005), y: mm(10.0) }, "a swap takes the other's position exactly");
+    assert_eq!(plain.pose_of("R2").unwrap().at, Point { x: mm(10.234), y: mm(10.678) });
+    plain.apply(&Cmd::MoveTo { part: "R1".into(), x: mm(10.234), y: mm(10.678) }).unwrap();
+    assert_eq!((plain.pose_of("R1").unwrap().at.x, plain.pose_of("R1").unwrap().at.y), (mm(10.2), mm(10.7)), "move_to: whole steps from (0, 0)");
 
     let mut b = board(&m);
     b.apply(&Cmd::SetGridOrigin { at: Some(Point { x: mm(0.05), y: mm(0.03) }) }).unwrap();
-    b.apply(&Cmd::PlaceAt { part: "R1".into(), x: mm(10.234), y: mm(10.678) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "R1".into(), x: mm(5.0), y: mm(5.0) }).unwrap();
+    b.apply(&Cmd::MoveTo { part: "R1".into(), x: mm(10.234), y: mm(10.678) }).unwrap();
     assert_eq!((b.pose_of("R1").unwrap().at.x, b.pose_of("R1").unwrap().at.y), (mm(10.25), mm(10.63)), "a grid origin at (50, 30): 10234 -> 10250, 10678 -> 10630");
     b.apply(&Cmd::SetGridOrigin { at: None }).unwrap();
     assert!(b.design().drawings.as_ref().and_then(|d| d.grid_origin).is_none());

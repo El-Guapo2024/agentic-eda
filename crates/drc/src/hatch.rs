@@ -223,6 +223,16 @@ fn text_hull(spec: &TextSpec, margin: Nm) -> Option<(LineChain, [i64; 4])> {
 /// The knockout of a free board text.
 fn text_knockout(design: &Design, text: &Text, margin: Nm) -> Option<(LineChain, [i64; 4])> {
     let extra = design.drawings.as_ref().and_then(|d| d.text_extra(&text.id));
+    text_knockout_with(text, extra, margin)
+}
+
+/// `PCB_TEXT::TransformShapeToPolygon( aBuffer, layer, 0, .., ERROR_OUTSIDE )` of a free board text with its settings: `buildBoundingHull` of its strokes, no margin. The
+/// polygon `A.enclosedByArea( .. )` subtracts an area from (the multichannel tool, `eda_ops`' `multichannel_poly.rs`); `None` for a text with no ink.
+pub fn text_shape(text: &Text, extra: Option<&eda_model::board_text::TextExtra>) -> Option<LineChain> {
+    text_knockout_with(text, extra, Nm::ZERO).map(|(hull, _)| hull)
+}
+
+fn text_knockout_with(text: &Text, extra: Option<&eda_model::board_text::TextExtra>, margin: Nm) -> Option<(LineChain, [i64; 4])> {
     let spec = TextSpec {
         text: &text.content,
         pos: text.at,
@@ -261,7 +271,7 @@ fn text_box_knockout(out: &mut ShapePolySet, tb: &TextBox) {
 }
 
 /// The fields of a placed footprint that have a text and a place: Reference, Value and the user fields (`add_footprint_art` lists the same ones), with the text each shows.
-fn footprint_fields(design: &Design, part: &eda_model::Part, fp: &FootprintInstance, footprint: &eda_model::Footprint) -> Vec<(FieldLayout, String)> {
+pub(crate) fn footprint_fields(design: &Design, part: &eda_model::Part, fp: &FootprintInstance, footprint: &eda_model::Footprint) -> Vec<(FieldLayout, String)> {
     let value = part.value.as_deref().unwrap_or(&fp.id);
     let reference = effective_reference(design, fp, footprint);
     let value_layout = effective_value(design, fp);
