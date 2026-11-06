@@ -32,9 +32,9 @@ import { setSchArcEditMode } from "../kicad-port/schArcEdit";
 import { ARC_EDIT_MODE_LABEL, type ArcEditMode } from "../kicad-port/pcbPointEdit";
 import type { BreakMode } from "../kicad-port/schBreak";
 import { nextUnitToPlace, unitCountOf } from "../kicad-port/schUnits";
-import { addCorner, canAddCorner, canRemoveCorner, removeCorner } from "../kicad-port/schPolyCorners";
+import { schAddCorner, schCornerEntries, schRemoveCorner } from "../kicad-port/schPointEdit";
+import { POINT_SIZE_PX } from "../kicad-port/eePointEdit";
 import { planConvertStackedPins, planExplodeStackedPin } from "../kicad-port/stackedPins";
-import { polygonOutline } from "../components/schematic/schSelectionSummary";
 import type { Action, StudioApi, StudioState, ToolId } from "../state/store";
 import type { SymbolEditorApi, SymAction } from "../state/symbolEditorStore";
 
@@ -137,33 +137,34 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   m.set("eeschema.InteractiveDrawing.drawRuleArea", arm("sch_rule_area"));
   // (Place Directive Label, whose label rides the cursor, is actions/schPlaceActions.ts's.)
 
-  // Create Corner / Remove Corner -- SCH_POINT_EDITOR::addCorner / removeCorner on the single selected polygon or rule area (kicad-port/schPolyCorners.ts). Like the menu
-  // entries (`addCornerCondition` / `removeCornerCondition`) they exist only with the pointer on the outline / on one of its corners.
+  // Create Corner / Remove Corner -- SCH_POINT_EDITOR::addCorner / removeCorner on the single selected polyline or rule area, the Symbol Editor's port
+  // (kicad-port/schPointEdit.ts `schCornerEntries` over eePointEdit.ts; UI-LEFT-2 SS21: an open polyline's closing side is no candidate). Like the menu entries
+  // (`addCornerCondition` / `removeCornerCondition`) they exist only with the pointer on the outline / on one of its vertices (the edited point).
   const polyId = state.selection.size === 1 ? [...state.selection][0]! : null;
-  const poly = sch && polyId ? polygonOutline(sch, polyId) : null;
-  if (sch && polyId && poly && state.cursorNm) {
+  const polyGraphic = sch && polyId ? (sch.graphics ?? []).find((x) => x.id === polyId) : undefined;
+  if (sch && polyId && polyGraphic && state.cursorNm) {
+    const g = polyGraphic;
     const raw: [number, number] = [state.cursorNm.x, state.cursorNm.y];
-    const tol = 10 / (state.schematicView.scale || 1); // EDIT_POINT::POINT_SIZE
-    const replace = (pts: ReadonlyArray<readonly [number, number]>) => {
-      const g = (sch.graphics ?? []).find((x) => x.id === polyId);
-      if (!g || (g.shape.type !== "polygon" && g.shape.type !== "rule_area")) return;
-      void api.cmd({ op: "sch_edit", verb: "edit_graphic", id: polyId, graphic: { ...g, shape: { ...g.shape, pts: pts.map(([x, y]) => ({ x, y })) } } });
-    };
-    if (canAddCorner(poly.pts, raw, tol)) {
+    const tol = POINT_SIZE_PX / (state.schematicView.scale || 1); // `ToWorld( EDIT_POINT::POINT_SIZE )`
+    const corners = schCornerEntries(g, raw, tol);
+    const replace = (shape: NonNullable<ReturnType<typeof schAddCorner>>) => void api.cmd({ op: "sch_edit", verb: "edit_graphic", id: polyId, graphic: { ...g, shape } });
+    if (corners.canAdd) {
       m.set(
         "eeschema.PointEditor.addCorner",
         schematicOnly(() => {
+          // `GetCursorPosition( !aEvent.DisableGridSnapping() )`
           const at = ctx.cursorSnapped();
-          if (at) replace(addCorner(poly.pts, at));
+          const shape = at ? schAddCorner(g, at) : null;
+          if (shape) replace(shape);
         })
       );
     }
-    if (canRemoveCorner(poly.kind, poly.pts, raw, tol)) {
+    if (corners.removeIndex >= 0) {
       m.set(
         "eeschema.PointEditor.removeCorner",
         schematicOnly(() => {
-          const next = removeCorner(poly.kind, poly.pts, raw, tol);
-          if (next) replace(next);
+          const shape = schRemoveCorner(g, corners.removeIndex);
+          if (shape) replace(shape);
         })
       );
     }

@@ -9,6 +9,7 @@ import { arcFromThreePoints, directiveShape, graphicBounds, pt, rectCorners, sch
 import { hatchLines } from "../../kicad-port/schHatch";
 import { imageFor } from "../canvas/imageCache";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
+import { schPolyIsClosed, schPolyStrokePoints } from "../../kicad-port/schPolyline";
 import { defaultTextBoxMargin, layoutTextBox } from "../../kicad-port/schTextBox";
 import { layerColor } from "../canvas/layers";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
@@ -49,7 +50,11 @@ function strokeColor(g: SchGraphic, selected: boolean): string {
   return layerColor("LAYER_NOTES");
 }
 
-function tracePath(ctx: CanvasRenderingContext2D, g: SchGraphic): void {
+/**
+ * The graphic's path. `stroke`: the path its outline is stroked along -- a polyline's is its open chain, a rule area's its closed outline (`SCH_PAINTER::draw( SCH_SHAPE )`'s
+ * `SHAPE_T::POLY`, kicad-port/schPolyline.ts); a fill or a hatch clip is of the closed polygon either way.
+ */
+function tracePath(ctx: CanvasRenderingContext2D, g: SchGraphic, stroke = false): void {
   const s = g.shape;
   ctx.beginPath();
   switch (s.type) {
@@ -80,8 +85,13 @@ function tracePath(ctx: CanvasRenderingContext2D, g: SchGraphic): void {
     }
     case "polygon":
     case "rule_area":
-      s.pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-      ctx.closePath();
+      if (stroke) {
+        // UI-LEFT-2 SS21: the stroke runs along the chain as `SCH_PAINTER` gives it (kicad-port/schPolyline.ts): open for a polyline, as kicad-cli plots it
+        schPolyStrokePoints(s.pts.map((p): [number, number] => [p.x, p.y]), schPolyIsClosed(s.type)).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      } else {
+        s.pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+        ctx.closePath();
+      }
       break;
     case "directive":
       break;
@@ -199,7 +209,7 @@ export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform
     ctx.lineWidth = Math.max(selected ? widthNm * 1.6 : widthNm, hair * (selected ? 2.5 : 1));
     const dash = g.shape.type === "rule_area" && !g.line_style ? dashPattern("dash", widthNm) : dashPattern(g.line_style, widthNm);
     ctx.setLineDash(dash);
-    tracePath(ctx, g);
+    tracePath(ctx, g, true);
     ctx.stroke();
     ctx.setLineDash([]);
     // `SCH_PAINTER::getRenderColor` for an `SCH_TEXTBOX`: its own text colour (Text Box Properties' Color) wins over `LAYER_NOTES`
