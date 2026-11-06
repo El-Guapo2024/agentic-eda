@@ -6085,6 +6085,12 @@ impl<'a> Board<'a> {
                         }
                     }
                     search::ItemKind::Pin => {} // SCH_PIN::Replace is a no-op in the schematic
+                    // a power symbol's fields, a sheet's fields and pins, a text box, a directive label's fields (UI-LEFT S12)
+                    search::ItemKind::PowerField | search::ItemKind::SheetField | search::ItemKind::SheetPin | search::ItemKind::TextBox | search::ItemKind::DirectiveField => {
+                        if search::replace_other(sch, h, &data) {
+                            replaced += 1;
+                        }
+                    }
                 }
             }
         }

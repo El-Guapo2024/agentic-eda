@@ -38,7 +38,11 @@ use eda_model::text_vars::unescape_string;
 use eda_model::ConstraintModel;
 use serde::{Deserialize, Serialize};
 
-/// `EDA_SEARCH_MATCH_MODE` (minus `REGEX`/`PERMISSIVE`).
+mod wx_regex;
+pub use wx_regex::Regex;
+
+/// `EDA_SEARCH_MATCH_MODE` (minus `PERMISSIVE`, the search panel's): the dialog's Whole words only (`WHOLEWORD`, which wins over the Regular Expression
+/// box: `updateFlags`), Regular Expression (`REGEX`, [`wx_regex`]) and plain text; `WILDCARD` is no choice of the dialog's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchMode {
@@ -46,6 +50,7 @@ pub enum MatchMode {
     Plain,
     WholeWord,
     Wildcard,
+    Regex,
 }
 
 /// `EDA_SEARCH_DATA` + `SCH_SEARCH_DATA`.
@@ -163,8 +168,13 @@ pub fn matches_text(text: &str, data: &SearchData) -> bool {
     if data.find.is_empty() {
         return false;
     }
+    if data.mode == MatchMode::Regex {
+        // `regex.Compile( searchText, matchCase ? 0 : wxRE_ICASE )`, then `regex.Matches( text )`; a pattern that does not compile matches nothing
+        return Regex::new(&data.find, !data.match_case).is_ok_and(|re| re.is_match(text));
+    }
     let (t, s): (Vec<char>, Vec<char>) = if data.match_case { (text.chars().collect(), data.find.chars().collect()) } else { (upper(text), upper(&data.find)) };
     match data.mode {
+        MatchMode::Regex => unreachable!("handled above"),
         MatchMode::Wildcard => wild_match(&s.iter().collect::<String>(), &t.iter().collect::<String>()),
         MatchMode::WholeWord => {
             let mut ii = 0usize;
@@ -190,6 +200,10 @@ pub fn matches_text(text: &str, data: &SearchData) -> bool {
 /// upper-cased text but the output copies the original characters between
 /// hits, exactly like the source.
 pub fn replace_text(text: &str, data: &SearchData) -> Option<String> {
+    if data.mode == MatchMode::Regex {
+        // `regex.Replace( &text, aSearchData.replaceString )`: every match, `\N` and `&` in the replacement
+        return Regex::new(&data.find, !data.match_case).ok()?.replace_all(text, &data.replace);
+    }
     let orig: Vec<char> = text.chars().collect();
     let (t, s): (Vec<char>, Vec<char>) = if data.match_case { (orig.clone(), data.find.chars().collect()) } else { (upper(text), upper(&data.find)) };
     let mut result = String::new();
@@ -235,6 +249,16 @@ pub enum ItemKind {
     Pin,
     /// A label's own field (`SCH_LABEL_BASE::m_fields`, `SchExtras::label_fields`): `id` is the label id, `name` the field's name.
     LabelField,
+    /// A power symbol's field (it is an `SCH_SYMBOL`: `nextMatch` adds its fields): `id` is the power symbol's id, `name` `Value` (the net it asserts).
+    PowerField,
+    /// A sheet's field (`SCH_SHEET`'s `SHEET_NAME`, `SHEET_FILENAME` and user fields, `nextMatch`'s `addItem` for `SCH_SHEET_T`): `id` is the sheet's id.
+    SheetField,
+    /// A sheet's pin (`SCH_SHEET_PIN`, `addItem` adds `sheet->GetPins()`): `id` is the pin's id.
+    SheetPin,
+    /// A text box (`SCH_TEXTBOX::Matches`, the raw text): `id` is the graphic's id.
+    TextBox,
+    /// A directive label's field (`SCH_DIRECTIVE_LABEL` is an `SCH_LABEL_BASE`: its `Netclass` and `Component Class`): `id` is the graphic's id.
+    DirectiveField,
 }
 
 /// One match: what to select / pan to, and a stable key (`kind:id:name`)
@@ -262,6 +286,11 @@ pub fn hit_key(kind: ItemKind, id: &str, name: &str) -> String {
         ItemKind::Text => "text",
         ItemKind::Pin => "pin",
         ItemKind::LabelField => "label_field",
+        ItemKind::PowerField => "power_field",
+        ItemKind::SheetField => "sheet_field",
+        ItemKind::SheetPin => "sheet_pin",
+        ItemKind::TextBox => "text_box",
+        ItemKind::DirectiveField => "directive_field",
     };
     format!("{k}:{id}:{name}")
 }
@@ -389,8 +418,91 @@ pub fn find_items(sch: &SchematicSection, model: &ConstraintModel, data: &Search
             hits.push(Hit { kind: ItemKind::Text, id: t.id.clone(), name: String::new(), at: t.at, text: t.content.clone() });
         }
     }
+    // A power symbol is an `SCH_SYMBOL` (`addItem`: the symbol, then its fields): its Value is the net it asserts and shown, its Reference (`#PWR..`) hidden.
+    for ps in &sch.power_symbols {
+        if matches_text(&unescape_string(&ps.net), data) {
+            hits.push(Hit { kind: ItemKind::PowerField, id: ps.id.clone(), name: "Value".into(), at: ps.at, text: ps.net.clone() });
+        }
+        // **Differs**: its Reference is found, not replaced (the power symbol is keyed by it here)
+        if data.search_hidden_fields && !data.search_and_replace && matches_text(&ps.id, data) {
+            hits.push(Hit { kind: ItemKind::PowerField, id: ps.id.clone(), name: "Reference".into(), at: ps.at, text: ps.id.clone() });
+        }
+    }
+    // A sheet: `SCH_SHEET::Matches` is false ("Sheets are searchable via the child field and pin item text"), its fields and pins are items of their own.
+    for sh in &sch.sheets {
+        // `SCH_FIELD::IsReplaceable`: a sheet's file name is not (`SHEET_FILENAME`), so a Replace passes it by
+        let mut fields: Vec<(String, String, bool)> = vec![("Sheetname".into(), sh.name.clone(), true)];
+        if !data.search_and_replace {
+            fields.push(("Sheetfile".into(), sh.file.clone(), true));
+        }
+        for f in sch.extras.sheet_fields.get(&sh.id).into_iter().flatten() {
+            fields.push((f.name.clone(), f.text.clone(), f.visible));
+        }
+        for (name, text, visible) in fields {
+            if (visible || data.search_hidden_fields) && matches_text(&unescape_string(&text), data) {
+                hits.push(Hit { kind: ItemKind::SheetField, id: sh.id.clone(), name, at: sh.at, text });
+            }
+        }
+        // `SCH_SHEET_PIN::Matches`: the raw text
+        for p in &sh.pins {
+            if matches_text(&p.name, data) {
+                hits.push(Hit { kind: ItemKind::SheetPin, id: p.id.clone(), name: String::new(), at: p.at, text: p.name.clone() });
+            }
+        }
+    }
+    for g in &sch.extras.graphics {
+        match &g.shape {
+            eda_model::sch_extras::SchGraphicKind::TextBox { text, start, .. } if matches_text(text, data) => {
+                hits.push(Hit { kind: ItemKind::TextBox, id: g.id.clone(), name: String::new(), at: *start, text: text.clone() });
+            }
+            eda_model::sch_extras::SchGraphicKind::Directive { at, netclass, component_class, .. } => {
+                for (name, text) in [("Netclass", netclass), ("Component Class", component_class)] {
+                    if !text.is_empty() && matches_text(&unescape_string(text), data) {
+                        hits.push(Hit { kind: ItemKind::DirectiveField, id: g.id.clone(), name: name.into(), at: *at, text: text.clone() });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     hits.sort_by(|a, b| (a.at.x, a.at.y).cmp(&(b.at.x, b.at.y)));
     hits
+}
+
+/// `Replace` of the items [`find_items`] reaches beyond the symbols, labels and texts (`SCH_FIELD::Replace`, `EDA_TEXT::Replace`): a power symbol's Value (its
+/// net) or Reference, a sheet's name or user field, a sheet pin's name, a text box's text, a directive label's field. Returns whether `hit` changed.
+pub fn replace_other(sch: &mut SchematicSection, hit: &Hit, data: &SearchData) -> bool {
+    let swap = |text: &mut String| -> bool {
+        match replace_text(text, data) {
+            Some(new) => {
+                *text = new;
+                true
+            }
+            None => false,
+        }
+    };
+    match hit.kind {
+        ItemKind::PowerField => match sch.power_symbols.iter_mut().find(|p| p.id == hit.id) {
+            Some(p) if hit.name == "Value" => swap(&mut p.net),
+            _ => false,
+        },
+        ItemKind::SheetField => {
+            if hit.name == "Sheetname" {
+                return sch.sheets.iter_mut().find(|s| s.id == hit.id).is_some_and(|s| swap(&mut s.name));
+            }
+            sch.extras.sheet_fields.get_mut(&hit.id).and_then(|fs| fs.iter_mut().find(|f| f.name == hit.name)).is_some_and(|f| swap(&mut f.text))
+        }
+        ItemKind::SheetPin => sch.sheets.iter_mut().flat_map(|s| s.pins.iter_mut()).find(|p| p.id == hit.id).is_some_and(|p| swap(&mut p.name)),
+        ItemKind::TextBox | ItemKind::DirectiveField => {
+            let Some(g) = sch.extras.graphics.iter_mut().find(|g| g.id == hit.id) else { return false };
+            match &mut g.shape {
+                eda_model::sch_extras::SchGraphicKind::TextBox { text, .. } => swap(text),
+                eda_model::sch_extras::SchGraphicKind::Directive { netclass, component_class, .. } => swap(if hit.name == "Netclass" { netclass } else { component_class }),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -526,5 +638,45 @@ mod tests {
         assert!(find_items(&sch, &m, &whole).iter().all(|h| h.name != "Reference"));
         whole.search_pins = true;
         assert!(find_items(&sch, &m, &whole).iter().any(|h| h.name == "Reference"));
+    }
+
+    #[test]
+    fn a_regular_expression_matches_and_replaces_with_its_sub_expressions() {
+        let re = |find: &str, replace: &str| SearchData { find: find.into(), replace: replace.into(), mode: MatchMode::Regex, ..Default::default() };
+        assert!(matches_text("SDA_3", &re("^s[a-z]+_[0-9]$", "")), "not case-sensitive: wxRE_ICASE");
+        assert!(!matches_text("SDA_3", &SearchData { match_case: true, ..re("^s[a-z]+_[0-9]$", "") }));
+        assert!(!matches_text("x", &re("(", "")), "a pattern that does not compile matches nothing");
+        assert_eq!(replace_text("DATA_7 DATA_8", &re("DATA_([0-9])", "D\\1")).as_deref(), Some("D7 D8"));
+        // a label's strings are escaped as a net name first (`SCH_LABEL_BASE::Replace`)
+        assert_eq!(replace_label_text("A{slash}B", &re("A/B", "C")).as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn sheets_their_pins_power_symbols_and_text_boxes_are_found_and_replaced() {
+        use eda_model::ir::{PowerSymbol, SheetInstance, SheetPin};
+        let mut sch = SchematicSection::default();
+        let at = Point { x: eda_model::units::Nm::ZERO, y: eda_model::units::Nm::ZERO };
+        sch.sheets.push(SheetInstance { id: "sh1".into(), name: "Power_Supply".into(), file: "power.kicad_sch".into(), at, size: (eda_model::units::Nm::new(1000), eda_model::units::Nm::new(1000)), pins: vec![SheetPin { id: "shp1".into(), name: "VBUS_IN".into(), shape: Default::default(), at }], page: String::new() });
+        sch.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:VBUS".into(), at, rot: 0, net: "VBUS".into(), pin: String::new() });
+        sch.extras.graphics.push(eda_model::sch_extras::SchGraphic { id: "tbx1".into(), shape: eda_model::sch_extras::SchGraphicKind::TextBox { start: at, end: at, text: "VBUS rated 20 V".into(), angle: 0, size_nm: eda_model::units::Nm::new(1_270_000), bold: false, italic: false, h_align: Default::default(), v_align: Default::default(), margin_nm: eda_model::units::Nm::ZERO }, width_nm: eda_model::units::Nm::ZERO, line_style: Default::default(), color: None, fill: Default::default(), fill_color: None });
+        let model = ConstraintModel::default();
+        let data = SearchData { find: "VBUS".into(), replace: "VIN".into(), ..Default::default() };
+        let keys: Vec<String> = find_items(&sch, &model, &data).iter().map(Hit::key).collect();
+        for k in ["sheet_pin:shp1:", "power_field:#PWR01:Value", "text_box:tbx1:"] {
+            assert!(keys.contains(&k.to_string()), "{k} in {keys:?}");
+        }
+        let name = SearchData { find: "power".into(), ..Default::default() };
+        let keys: Vec<String> = find_items(&sch, &model, &name).iter().map(Hit::key).collect();
+        assert!(keys.contains(&"sheet_field:sh1:Sheetname".to_string()) && keys.contains(&"sheet_field:sh1:Sheetfile".to_string()), "{keys:?}");
+        // the file name is no replace target (`SCH_FIELD::IsReplaceable`)
+        let replacing = SearchData { search_and_replace: true, ..name.clone() };
+        assert!(!find_items(&sch, &model, &replacing).iter().any(|h| h.name == "Sheetfile"));
+        let replacing = SearchData { search_and_replace: true, ..data };
+        for h in find_items(&sch, &model, &replacing) {
+            assert!(replace_other(&mut sch, &h, &replacing), "{h:?}");
+        }
+        assert_eq!(sch.sheets[0].pins[0].name, "VIN_IN");
+        assert_eq!(sch.power_symbols[0].net, "VIN");
+        assert!(matches!(&sch.extras.graphics[0].shape, eda_model::sch_extras::SchGraphicKind::TextBox { text, .. } if text == "VIN rated 20 V"));
     }
 }

@@ -3776,7 +3776,9 @@ export interface SchSearchData {
   find: string;
   replace: string;
   match_case: boolean;
-  mode: "plain" | "whole_word" | "wildcard";
+  mode: "plain" | "whole_word" | "wildcard" | "regex";
+  /** The dialog's Regular Expression box, kept ticked under Whole words only (which wins: `updateFlags`); the server reads `mode`. */
+  regex_box?: boolean;
   search_hidden_fields: boolean;
   search_pins: boolean;
   search_net_names: boolean;
@@ -3796,7 +3798,7 @@ export interface FindMatch {
   page?: string;
   /** The sheet's place in the page order: matches come sorted by it. */
   sheet_rank?: number;
-  kind: "field" | "label" | "text" | "pin" | "label_field";
+  kind: "field" | "label" | "text" | "pin" | "label_field" | "power_field" | "sheet_field" | "sheet_pin" | "text_box" | "directive_field";
   /** Symbol reference / label id / text id that owns the match. */
   id: string;
   /** Field name or pin number (empty for labels/text). */
