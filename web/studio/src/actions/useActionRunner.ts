@@ -38,6 +38,7 @@ import { snapPoint } from "../components/canvas/gridHelper";
 import { drawShapeStarted, drawZoneStarted, redoRefused, routerEditKey, takeBackLastLine, undoDropsDrawing, withoutLastCorner, type RouterEditKey } from "../kicad-port/drawingCancel";
 import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
+import { flipCarriedText, rotateCarriedText } from "../kicad-port/carriedText";
 import { carryPress } from "../kicad-port/pcbCarry";
 import { itemKind, padById, padParent } from "../kicad-port/pcbItems";
 import { padsOnly } from "../kicad-port/gateSwap";
@@ -332,15 +333,31 @@ export function useActionRunner() {
       return true;
     };
 
+    /**
+     * R / Shift+R / F on the text Draw Text carries (`DRAWING_TOOL::PlaceText` passes them on to `EDIT_TOOL` with the text selected; kicad-port/carriedText.ts,
+     * r6 A6-6): it turns by the preferences' rotation step (the other way on a board viewed flipped) or flips, in place, and is still carried. False when no text
+     * is carried.
+     */
+    const tryCarriedTextTurn = (turn: "ccw" | "cw" | "flip"): boolean => {
+      const draw = state.drawState;
+      if (state.activeTool !== "text" || draw?.kind !== "text") return false;
+      const step = (turn === "cw" ? -1 : 1) * (state.bcx.boardFlipped ? -1 : 1) * state.prefs.rotationStepDeg;
+      const text = turn === "flip" ? flipCarriedText(draw.text, state.prefs.flipDirection, state.board?.layers.length ?? 2) : rotateCarriedText(draw.text, step);
+      dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, text } });
+      return true;
+    };
+
     m.set(
       "pcbnew.InteractiveEdit.rotateCcw",
       pcbOnly(() => {
+        if (tryCarriedTextTurn("ccw")) return;
         if (!tryTransformDuringMove(1, false)) void api.rotateSelection(1, requestSelection());
       })
     );
     m.set(
       "pcbnew.InteractiveEdit.rotateCw",
       pcbOnly(() => {
+        if (tryCarriedTextTurn("cw")) return;
         if (!tryTransformDuringMove(3, false)) void api.rotateSelection(3, requestSelection());
       })
     );
@@ -513,6 +530,7 @@ export function useActionRunner() {
       m.set(
         "pcbnew.InteractiveEdit.flip",
         pcbOnly(() => {
+          if (tryCarriedTextTurn("flip")) return;
           if (!tryTransformDuringMove(0, true)) void api.flipSelection(requestSelection());
         })
       );
@@ -972,6 +990,11 @@ export function useActionRunner() {
         const zoneDraw = state.drawState;
         if (state.activeTool === "zone" && zoneDraw?.kind === "zone" && zoneDraw.settings && zoneDraw.pts.length > 0) {
           dispatch({ type: "PCBX", patch: { zoneCreate: { at: null, initial: zoneDraw.settings } } });
+          return;
+        }
+        // `PlaceText`: `text && evt->IsAction( &PCB_ACTIONS::properties )` -> `OnEditItemRequest( text )`: Text Properties of the text being carried, which stays carried (r6 A6-6).
+        if (state.activeTool === "text" && zoneDraw?.kind === "text") {
+          dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "carried" } });
           return;
         }
         const ref = requestSelection()[0];

@@ -10,6 +10,7 @@ import type { FieldHAlign, FieldVAlign, LibraryFill, LibrarySymbolGraphic } from
 import { defaultPenNm } from "./schText";
 import { interlineNm } from "./schTextItem";
 import { layoutTextBox, type Measure, type TextBoxLayout } from "./schTextBox";
+import type { SchColor } from "../api/schEditTypes";
 
 export type LibTextBox = Extract<LibrarySymbolGraphic, { kind: "text_box" }>;
 
@@ -122,6 +123,9 @@ export interface LastTextBox {
   hAlign: FieldHAlign;
   fill: LibraryFill;
   strokeMm: number;
+  /** `m_lastStroke`'s colour and `m_lastFillColor`; absent: `COLOR4D::UNSPECIFIED`. */
+  strokeColor?: SchColor;
+  fillColor?: SchColor;
 }
 
 /** The tool's own start (`SYMBOL_EDITOR_DRAWING_TOOLS` constructor): upright, left, nothing bold, not filled, a border of the default width (`m_lastStroke( 0, ... )`). */
@@ -151,12 +155,15 @@ export function newTextBox(a: readonly [number, number], b: readonly [number, nu
     margin_mm: textBoxMarginMm({ size_mm: DEFAULT_TEXT_BOX_SIZE_MM }),
     stroke_mm: last.strokeMm,
     fill: last.fill,
+    // `item->SetStroke( m_lastStroke )`, `item->SetFillColor( m_lastFillColor )`
+    ...(last.strokeColor ? { stroke_color: last.strokeColor } : {}),
+    ...(last.fillColor ? { fill_color: last.fillColor } : {}),
   };
 }
 
 /** What the tool remembers once a box was accepted: its looks, for the next one. */
 export function lastOf(g: LibTextBox): LastTextBox {
-  return { bold: !!g.bold, italic: !!g.italic, vertical: isVertical(g), hAlign: g.h_align, fill: g.fill, strokeMm: g.stroke_mm };
+  return { bold: !!g.bold, italic: !!g.italic, vertical: isVertical(g), hAlign: g.h_align, fill: g.fill, strokeMm: g.stroke_mm, ...(g.stroke_color ? { strokeColor: g.stroke_color } : {}), ...(g.fill_color ? { fillColor: g.fill_color } : {}) };
 }
 
 /** The alignment buttons of the dialog: the three horizontal and the three vertical ones. */

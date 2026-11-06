@@ -23,6 +23,7 @@ import { allFields, isMandatoryField, wireField, type FieldRow } from "./symFiel
 import { libFieldId, libFieldName, unitLetters } from "./symFieldLayout";
 import { arcCenter } from "./symTransform";
 import { textBoxMarginMm } from "./symTextBox";
+import { bodyStyleCount, bodyStyleDescription, isMultiBodyStyle } from "./symBodyStyles";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -277,12 +278,9 @@ function build(): PropertyManager<SymItem, SymCtx, SymCmd> {
     name: "Body Style",
     kind: "enum",
     hiddenFromDesignEditors: true,
-    available: (_i, c) => !!c.sym.has_alternate_body_style,
-    choices: () => [
-      { label: "All body styles", value: 0 },
-      { label: "Standard", value: 1 },
-      { label: "Alternate", value: 2 },
-    ],
+    available: (_i, c) => isMultiBodyStyle(c.sym),
+    // `SCH_ITEM`'s Body Style choices: "All body styles", then each style by `GetBodyStyleDescription`
+    choices: (_i, c) => [{ label: "All body styles", value: 0 }, ...Array.from({ length: bodyStyleCount(c.sym) }, (_, k) => ({ label: bodyStyleDescription(c.sym, k + 1), value: k + 1 }))],
     get: styleOf,
     writeable: (i) => i.type !== "SCH_FIELD",
     readOnlyReason: (i) => (i.type === "SCH_FIELD" ? READ_ONLY.fieldUnit : null),
@@ -396,13 +394,10 @@ function build(): PropertyManager<SymItem, SymCtx, SymCmd> {
       owner: "LIB_SYMBOL",
       name: "Body Styles",
       kind: "enum",
-      available: (_i, c) => !!c.sym.has_alternate_body_style,
-      choices: () => [
-        { label: "Standard", value: "Standard" },
-        { label: "Alternate", value: "Alternate" },
-      ],
+      available: (_i, c) => isMultiBodyStyle(c.sym),
+      choices: (_i, c) => Array.from({ length: bodyStyleCount(c.sym) }, (_, k) => ({ label: bodyStyleDescription(c.sym, k + 1), value: bodyStyleDescription(c.sym, k + 1) })),
       // `GetBodyStyleProp`: `GetBodyStyleDescription( 1, false )`; its setter does nothing ("primarily for display purposes")
-      get: () => "Standard",
+      get: (_i, c) => bodyStyleDescription(c.sym, 1),
       readOnlyReason: READ_ONLY.bodyStyles,
     },
     UNITS

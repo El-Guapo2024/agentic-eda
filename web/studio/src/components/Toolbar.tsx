@@ -4,6 +4,7 @@
 // (tools/lib/toolbarIcons.test.js keeps that true); the 3D viewer's toolbar is components/viewer3d/Viewer3DToolbar.tsx, built on the same pieces.
 import { useState } from "react";
 import toolbarsData from "../kicad/toolbars.json";
+import { toolbarsWithoutAdvanced } from "../kicad/advancedConfig";
 import schToolbarsData from "../kicad/sch_toolbars.json";
 import fpToolbarsData from "../kicad/fp_toolbars.json";
 import symToolbarsData from "../kicad/sym_toolbars.json";
@@ -31,7 +32,8 @@ const scaleForZoomPercent = (pct: number) => (pct / 100) * 1e-5;
 export type ToolbarEditor = "pcb" | "schematic" | "footprint" | "symbol";
 
 const FILES: Record<ToolbarEditor, ToolbarsFile> = {
-  pcb: toolbarsData as ToolbarsFile,
+  // (without the buttons KiCad shows only with an advanced setting: kicad/advancedConfig.ts)
+  pcb: toolbarsWithoutAdvanced(toolbarsData as ToolbarsFile),
   // eeschema has no auxiliary toolbar at all (toolbars_sch_editor.cpp's TOOLBAR_LOC::TOP_AUX case returns std::nullopt) -- sch_toolbars.json only ever
   // has main/options/drawing, so an "auxiliary" lookup on it falls through to the "no such toolbar" empty state below, the honest thing to show.
   schematic: schToolbarsData as ToolbarsFile,

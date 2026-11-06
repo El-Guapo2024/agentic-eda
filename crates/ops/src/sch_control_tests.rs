@@ -205,6 +205,7 @@ fn a_symbol_of_the_project_library_is_a_link_target_even_when_it_was_put_there_a
         pin_name_offset_mm: 0.508,
         unit_count: 1,
         has_alternate_body_style: false,
+        body_style_names: Vec::new(),
         footprint_filters: vec![],
         graphics: vec![],
         pins: vec![],

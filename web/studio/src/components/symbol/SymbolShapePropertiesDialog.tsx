@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { BORDER_HELP, FILL_CHOICES, shapeEditOf, shapeFormOf, shapeTitle, type ShapeForm } from "../../kicad-port/symShapeProps";
+import { isMultiBodyStyle } from "../../kicad-port/symBodyStyles";
 
 export function SymbolShapePropertiesDialog() {
   const state = useSymState();
@@ -75,8 +76,8 @@ export function SymbolShapePropertiesDialog() {
           <label style={{ display: "block" }} title={symbol.unit_count > 1 ? undefined : "This symbol only has one unit. This control has no effect."}>
             <input type="checkbox" checked={form.commonUnits} disabled={symbol.unit_count <= 1} onChange={(e) => set("commonUnits", e.target.checked)} data-testid="shape-common-units" /> Common to all units in symbol
           </label>
-          <label style={{ display: "block" }} title={symbol.has_alternate_body_style ? undefined : "This symbol only has one body style. This control has no effect."}>
-            <input type="checkbox" checked={form.commonBodyStyles} disabled={!symbol.has_alternate_body_style} onChange={(e) => set("commonBodyStyles", e.target.checked)} data-testid="shape-common-styles" /> Common to all body styles
+          <label style={{ display: "block" }} title={isMultiBodyStyle(symbol) ? undefined : "This symbol only has one body style. This control has no effect."}>
+            <input type="checkbox" checked={form.commonBodyStyles} disabled={!isMultiBodyStyle(symbol)} onChange={(e) => set("commonBodyStyles", e.target.checked)} data-testid="shape-common-styles" /> Common to all body styles
           </label>
         </div>
         <div className="dialog-footer">

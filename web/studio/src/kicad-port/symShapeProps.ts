@@ -5,6 +5,7 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { LibraryFill, LibrarySymbolGraphic } from "../api/types";
+import { isMultiBodyStyle, type BodyStyled } from "./symBodyStyles";
 
 type Shape = Exclude<LibrarySymbolGraphic, { kind: "text" | "text_box" }>;
 
@@ -50,13 +51,13 @@ export interface ShapeForm {
   commonBodyStyles: boolean;
 }
 
-export function shapeFormOf(g: Pick<Shape, "stroke_mm" | "fill" | "unit" | "body_style">, symbol: { unit_count: number; has_alternate_body_style: boolean }): ShapeForm {
+export function shapeFormOf(g: Pick<Shape, "stroke_mm" | "fill" | "unit" | "body_style">, symbol: { unit_count: number } & BodyStyled): ShapeForm {
   return {
     border: g.stroke_mm >= 0,
     widthMm: g.stroke_mm >= 0 ? g.stroke_mm : 0,
     fill: g.fill,
     commonUnits: symbol.unit_count > 1 && g.unit === 0,
-    commonBodyStyles: symbol.has_alternate_body_style && g.body_style === 0,
+    commonBodyStyles: isMultiBodyStyle(symbol) && g.body_style === 0,
   };
 }
 

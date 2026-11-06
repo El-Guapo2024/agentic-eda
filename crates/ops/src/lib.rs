@@ -2244,6 +2244,24 @@ pub enum Cmd {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         exclude_from_pos_files: Option<bool>,
     },
+    /// The rest of Symbol Properties' Units & Body Styles tab and its Pin Connections tab (KiCad 25ec2335 `DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow`), sent
+    /// after [`Cmd::EditSymbolProperties`] in the dialog's one step: the unit display names (by unit, the grid's rows), the body styles (`demorgan`, or the names of
+    /// custom ones: none is a single body style), "All pins with duplicate numbers are jumpers" and the explicit jumper pin groups (the grid's rows, numbers separated by
+    /// commas or spaces). See [`library_editors::edit_units_and_connections`]. A root symbol's only.
+    EditSymbolUnitsAndConnections {
+        lib_id: String,
+        /// By unit number, as text (a JSON object's keys; `serde_json`'s `Value` will not read them as numbers here).
+        #[serde(default)]
+        unit_names: std::collections::BTreeMap<String, String>,
+        #[serde(default)]
+        demorgan: bool,
+        #[serde(default)]
+        body_style_names: Vec<String>,
+        #[serde(default)]
+        duplicate_pin_numbers_are_jumpers: bool,
+        #[serde(default)]
+        jumper_rows: Vec<String>,
+    },
     /// KiCad's "Update Symbol from Library": every schematic symbol/
     /// power-symbol instance naming `lib_id` starts resolving its
     /// graphics/pins from here (`crate::board::load`'s overlay, gated on
@@ -2531,6 +2549,7 @@ impl Cmd {
             | Cmd::RenameLibrarySymbol { .. }
             | Cmd::SetSymbolAnchor { .. }
             | Cmd::EditSymbolProperties { .. }
+            | Cmd::EditSymbolUnitsAndConnections { .. }
             | Cmd::UpdateSymbolOnBoard { .. }
             | Cmd::AddSymbolPin { .. }
             | Cmd::MoveSymbolPin { .. }
@@ -2871,7 +2890,7 @@ impl Cmd {
 
             Cmd::PutLibrarySymbol { symbol, .. } => vec![symbol.lib_id.as_str()],
             Cmd::RenameLibrarySymbol { lib_id, .. } | Cmd::SetSymbolAnchor { lib_id, .. } => vec![lib_id.as_str()],
-            Cmd::OpenSymbolForEdit { lib_id } | Cmd::NewSymbol { lib_id } | Cmd::DeleteLibrarySymbol { lib_id } | Cmd::EditSymbolProperties { lib_id, .. } | Cmd::UpdateSymbolOnBoard { lib_id } => vec![lib_id.as_str()],
+            Cmd::OpenSymbolForEdit { lib_id } | Cmd::NewSymbol { lib_id } | Cmd::DeleteLibrarySymbol { lib_id } | Cmd::EditSymbolProperties { lib_id, .. } | Cmd::EditSymbolUnitsAndConnections { lib_id, .. } | Cmd::UpdateSymbolOnBoard { lib_id } => vec![lib_id.as_str()],
             Cmd::AddSymbolPin { lib_id, .. }
             | Cmd::MoveSymbolPin { lib_id, .. }
             | Cmd::DeleteSymbolPin { lib_id, .. }
@@ -3702,6 +3721,11 @@ impl<'a> Board<'a> {
                 *has_alternate_body_style,
                 footprint_filters.clone(),
             ),
+            Cmd::EditSymbolUnitsAndConnections { lib_id, unit_names, demorgan, body_style_names, duplicate_pin_numbers_are_jumpers, jumper_rows } => {
+                let names: std::collections::BTreeMap<u32, String> = unit_names.iter().filter_map(|(u, n)| Some((u.parse::<u32>().ok()?, n.clone()))).collect();
+                let sym = self.library_symbol_mut(lib_id)?;
+                library_editors::edit_units_and_connections(sym, &names, *demorgan, body_style_names, *duplicate_pin_numbers_are_jumpers, jumper_rows)
+            }
             Cmd::UpdateSymbolOnBoard { lib_id } => self.update_symbol_on_board(lib_id),
 
             Cmd::AddSymbolPin { lib_id, pin } => self.add_symbol_pin(lib_id, pin.clone()),
@@ -7249,9 +7273,10 @@ impl<'a> Board<'a> {
         pin.alternates = map.into_values().collect();
     }
 
-    /// "Alternate pin assignments are not available for symbols with multiple body styles." (`DIALOG_PIN_PROPERTIES`: the alternates panel is disabled for them.)
+    /// "Alternate pin assignments are not available for symbols with multiple body styles." (`DIALOG_PIN_PROPERTIES`: the alternates panel is disabled for them,
+    /// `IsMultiBodyStyle`.)
     fn check_alternates_allowed(sym: &LibrarySymbol, pin: &LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
-        if !pin.alternates.is_empty() && sym.has_alternate_body_style {
+        if !pin.alternates.is_empty() && sym.is_multi_body_style() {
             return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, "Alternate pin assignments are not available for symbols with multiple body styles.")]);
         }
         Ok(())
@@ -7416,7 +7441,7 @@ impl<'a> Board<'a> {
             }
         }
         if let Some(b) = body_style {
-            if b > if sym.has_alternate_body_style { 2 } else { 1 } {
+            if b > sym.body_style_count() {
                 return Err(vec![CheckResult::fail("ops_bad_shape", id, format!("the symbol has no body style {b}"))]);
             }
         }

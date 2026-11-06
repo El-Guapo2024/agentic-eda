@@ -17,7 +17,7 @@ fn all_kinds() -> Vec<LibrarySymbolGraphic> {
         LibrarySymbolGraphic::Polyline { id: "sym_b".into(), unit: 2, body_style: 2, pts: vec![p(0.0, 0.5), p(1.27, 2.0), p(-3.81, 0.127)], stroke_mm: 0.1524, fill: LibraryFill::Background },
         LibrarySymbolGraphic::Circle { id: String::new(), unit: 1, body_style: 1, center: p(0.0, 0.0), radius_mm: 2.54, stroke_mm: 0.254, fill: LibraryFill::Outline },
         LibrarySymbolGraphic::Arc { id: "sym_d".into(), unit: 0, body_style: 1, start: p(1.0, 0.0), mid: p(0.7071, 0.7071), end: p(0.0, 1.0), stroke_mm: 0.254, fill: LibraryFill::None },
-        LibrarySymbolGraphic::Text { id: "sym_e".into(), unit: 0, body_style: 1, text: "TEXT".into(), at: p(1.27, -1.27), angle_deg: 90.0, size_mm: 1.27, bold: false, italic: false, h_align: Default::default(), v_align: Default::default() },
+        LibrarySymbolGraphic::Text { id: "sym_e".into(), unit: 0, body_style: 1, text: "TEXT".into(), at: p(1.27, -1.27), angle_deg: 90.0, size_mm: 1.27, bold: false, italic: false, h_align: Default::default(), v_align: Default::default(), private: false, font: None, text_color: None },
         LibrarySymbolGraphic::TextBox {
             id: "sym_f".into(),
             unit: 2,
@@ -34,8 +34,9 @@ fn all_kinds() -> Vec<LibrarySymbolGraphic> {
             margin_mm: 0.508,
             stroke_mm: -0.0001,
             fill: LibraryFill::Background,
+            private: false, font: None, text_color: None, stroke_color: None, fill_color: None,
         },
-        LibrarySymbolGraphic::Text { id: "sym_g".into(), unit: 1, body_style: 1, text: "L".into(), at: p(0.0, 2.54), angle_deg: 0.0, size_mm: 1.0, bold: true, italic: true, h_align: FieldHAlign::Left, v_align: FieldVAlign::Bottom },
+        LibrarySymbolGraphic::Text { id: "sym_g".into(), unit: 1, body_style: 1, text: "L".into(), at: p(0.0, 2.54), angle_deg: 0.0, size_mm: 1.0, bold: true, italic: true, h_align: FieldHAlign::Left, v_align: FieldVAlign::Bottom, private: false, font: None, text_color: None },
         LibrarySymbolGraphic::Bezier { id: "sym_h".into(), unit: 0, body_style: 1, start: p(0.0, 0.0), c1: p(1.27, 2.54), c2: p(2.54, -2.54), end: p(3.81, 0.0), stroke_mm: 0.254, fill: LibraryFill::None },
     ]
 }
@@ -65,6 +66,7 @@ fn a_whole_symbol_with_graphics_reads_back_from_text_as_the_design_file_holds_it
         pin_name_offset_mm: 0.508,
         unit_count: 1,
         has_alternate_body_style: false,
+        body_style_names: Vec::new(),
         footprint_filters: vec![],
         graphics: all_kinds(),
         pins: vec![],
@@ -88,7 +90,7 @@ fn the_defaults_are_the_ones_the_enum_had() {
     let g: LibrarySymbolGraphic = serde_json::from_str(r#"{"kind":"rectangle","start":{"x":-1.016,"y":-2.54},"end":{"x":1.016,"y":2.54},"stroke_mm":0.254}"#).unwrap();
     assert_eq!(g, LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 0, body_style: 1, start: p(-1.016, -2.54), end: p(1.016, 2.54), stroke_mm: 0.254, fill: LibraryFill::None });
     let t: LibrarySymbolGraphic = serde_json::from_str(r#"{"kind":"text","text":"x","at":{"x":0.5,"y":0.25},"size_mm":1.27}"#).unwrap();
-    assert_eq!(t, LibrarySymbolGraphic::Text { id: String::new(), unit: 0, body_style: 1, text: "x".into(), at: p(0.5, 0.25), angle_deg: 0.0, size_mm: 1.27, bold: false, italic: false, h_align: Default::default(), v_align: Default::default() });
+    assert_eq!(t, LibrarySymbolGraphic::Text { id: String::new(), unit: 0, body_style: 1, text: "x".into(), at: p(0.5, 0.25), angle_deg: 0.0, size_mm: 1.27, bold: false, italic: false, h_align: Default::default(), v_align: Default::default(), private: false, font: None, text_color: None });
     // a text is centred on both axes unless it says otherwise, and the looks it does not have are not written
     assert_eq!(serde_json::to_string(&t).unwrap(), r#"{"kind":"text","unit":0,"text":"x","at":{"x":0.5,"y":0.25},"angle_deg":0.0,"size_mm":1.27}"#);
 }
@@ -113,7 +115,8 @@ fn a_text_box_keeps_its_defaults_a_left_and_top_box_with_the_default_margin() {
             v_align: FieldVAlign::Top,
             margin_mm: 0.0,
             stroke_mm: 0.1524,
-            fill: LibraryFill::None
+            fill: LibraryFill::None,
+            private: false, font: None, text_color: None, stroke_color: None, fill_color: None,
         }
     );
     // what is false or zero is not written, and the rest is

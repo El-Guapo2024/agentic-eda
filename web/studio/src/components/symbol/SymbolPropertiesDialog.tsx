@@ -11,8 +11,13 @@
 // disabled when "Define as power symbol" is ticked, `onPowerCheckBox`, and enabled when the dialog opens, power symbol or not), Pin Text Options (Show pin number, Show pin name, Place pin names inside with its Position offset), Symbol Units (Number of units,
 // All units are interchangeable -- `LockUnits`) and Body Styles (single or De Morgan).
 //
-// Not ported: per-body-style custom names (KiCad's "Custom" body-style mode beyond plain DeMorgan Standard/Alternate), the unit display names grid (the names are kept in the
-// file, `LibrarySymbolKeep::unit_names`), the Pin Connections tab (jumper pin groups, kept in the file too) and embedded files.
+// The Units & Body Styles tab's "Unit display names (optional):" grid (a row per unit, its letters and its name: `updateUnitCount` adds and drops rows with the count) and
+// the "Custom body styles:" radio with its grid of names (Add, Move up, Move down, Delete; enabled only for custom styles, `syncBodyStyleControls`), and the Pin Connections
+// tab ("All pins with duplicate numbers are jumpers", "Explicit jumper pin groups:" with Add and Remove) are KiCad 25ec2335's (UI-LEFT Y4): `Validate`'s "The unit name '%s'
+// is already in use." and "Custom body styles must have at least 2 entries", `OnBodyStyle`'s refusal of several body styles on a symbol with alternate pin functions, and
+// `TransferDataFromWindow`'s order -- the names, the body styles (`SetBodyStyleCount` first), the jumper groups ("Pin '%s' in jumper pin group %d does not exist in this
+// symbol.") -- in `edit_symbol_units_and_connections`, after `edit_symbol_properties` in the same step. A derived symbol's are its parent's: hidden, as the lower panel is.
+// Not ported: embedded files, and KiCad 25ec2335's Pin Map tab (named pin-to-pad maps, a file format newer than this writer's).
 //
 // Named `LibrarySymbolPropertiesDialog` (not `SymbolPropertiesDialog`, already taken by the top-level placed-instance Reference/Value/Footprint/Datasheet dialog) -- same naming
 // split `components/footprint/FootprintPropertiesDialog.tsx`'s own `FootprintLibraryPropertiesDialog` already establishes for the Footprint Editor.
@@ -29,6 +34,73 @@ import { escapeLibIdName, joinLibName, PROJECT_LIBRARY, splitLibName, symbolName
 import { unescapeString } from "../../kicad-port/schNetName";
 import { symbolPropertiesQuestions } from "../../kicad-port/symUnits";
 import { SymbolFieldsGrid } from "./SymbolFieldsGrid";
+import { bodyStyleChoiceRefusal, bodyStyleCountOf, bodyStyleModeOf, jumperRowsOf, resizeUnitNameRows, unitNameRowsOf, unitsAndBodyStylesProblem, type BodyStyleMode } from "../../kicad-port/symBodyStyles";
+import { letterSubReference } from "../../kicad-port/unitLetter";
+import { PinNumbers } from "../../kicad-port/pinNumbersSummary";
+
+/** `PIN_NUMBERS::GetSummary` of some pin numbers. */
+function pinSummary(numbers: string[]): string {
+  const set = new PinNumbers();
+  for (const n of numbers) set.insert(n);
+  return set.summary();
+}
+
+/** A one-column grid of rows with the buttons KiCad gives it (`WX_GRID::OnAddRow`, `OnMoveRowUp` / `Down`, `OnDeleteRows`): the selected row moves or goes. */
+function RowsGrid({ rows, onChange, disabled, testid, buttons }: { rows: string[]; onChange: (rows: string[]) => void; disabled?: boolean; testid: string; buttons: "all" | "add-remove" }) {
+  const [sel, setSel] = useState<number | null>(null);
+  const swap = (a: number, b: number) => {
+    const next = [...rows];
+    [next[a], next[b]] = [next[b]!, next[a]!];
+    onChange(next);
+    setSel(b);
+  };
+  return (
+    <div style={{ opacity: disabled ? 0.5 : 1 }}>
+      <div style={{ border: "1px solid var(--chrome-border, #888)", minHeight: 48, maxHeight: 120, overflowY: "auto" }} data-testid={testid}>
+        {rows.map((r, i) => (
+          <input
+            key={i}
+            value={r}
+            disabled={disabled}
+            onFocus={() => setSel(i)}
+            onChange={(e) => onChange(rows.map((x, k) => (k === i ? e.target.value : x)))}
+            style={{ display: "block", width: "100%", boxSizing: "border-box", outline: sel === i ? "1px solid var(--chrome-accent, #48f)" : undefined }}
+            data-testid={`${testid}-row-${i}`}
+          />
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+        <button type="button" title="Add field" disabled={disabled} onClick={() => (onChange([...rows, ""]), setSel(rows.length))} data-testid={`${testid}-add`}>
+          +
+        </button>
+        {buttons === "all" && (
+          <>
+            <button type="button" title="Move up" disabled={disabled || sel === null || sel <= 0} onClick={() => sel !== null && swap(sel, sel - 1)} data-testid={`${testid}-up`}>
+              ↑
+            </button>
+            <button type="button" title="Move down" disabled={disabled || sel === null || sel >= rows.length - 1} onClick={() => sel !== null && swap(sel, sel + 1)} data-testid={`${testid}-down`}>
+              ↓
+            </button>
+          </>
+        )}
+        <span style={{ width: 20 }} />
+        <button
+          type="button"
+          title={buttons === "all" ? "Delete field" : "Remove group"}
+          disabled={disabled || sel === null || sel >= rows.length}
+          onClick={() => {
+            if (sel === null) return;
+            onChange(rows.filter((_, k) => k !== sel));
+            setSel(rows.length > 1 ? Math.min(sel, rows.length - 2) : null);
+          }}
+          data-testid={`${testid}-delete`}
+        >
+          🗑
+        </button>
+      </div>
+    </div>
+  );
+}
 
 const FORM_KEYS: (keyof SymbolPropertiesFields)[] = ["reference_prefix", "description", "keywords", "datasheet", "power", "in_bom", "on_board", "pin_numbers_hidden", "pin_names_hidden", "pin_name_offset_mm", "unit_count", "has_alternate_body_style", "footprint_filters"];
 /** The flags the backend leaves out of the JSON when they are off. */
@@ -67,6 +139,14 @@ export function LibrarySymbolPropertiesDialog() {
   /** The four "Exclude from" boxes are disabled by `onPowerCheckBox` only: `TransferDataToWindow` sets their values and leaves them enabled, so a power symbol
    *  opens with them editable, and ticking "Define as power symbol" checks and disables them (r7 E7-S9). */
   const [excludeLocked, setExcludeLocked] = useState(false);
+  /** "Unit display names (optional):" (`m_unitNamesGrid`): one row per unit. */
+  const [unitRows, setUnitRows] = useState<string[]>([]);
+  /** The Body Styles radio buttons and the "Custom body styles:" grid (`m_bodyStyleNamesGrid`). */
+  const [bodyMode, setBodyMode] = useState<BodyStyleMode>("single");
+  const [bodyNames, setBodyNames] = useState<string[]>([]);
+  /** The Pin Connections tab: `m_cbDuplicatePinsAreJumpers` and `m_jumperGroupsGrid`. */
+  const [dupJumpers, setDupJumpers] = useState(false);
+  const [jumperRows, setJumperRows] = useState<string[]>([]);
 
   useEffect(() => {
     if (!subject || !state.propertiesOpen) return;
@@ -79,6 +159,12 @@ export function LibrarySymbolPropertiesDialog() {
     setError(null);
     setParent(subject.extends ?? "");
     setRows(gridRowsFor(subject, null));
+    setUnitRows(unitNameRowsOf(subject));
+    const styles = bodyStyleModeOf(subject);
+    setBodyMode(styles.mode);
+    setBodyNames(styles.names);
+    setDupJumpers(!!(subject.kicad as { duplicate_pin_numbers_are_jumpers?: boolean } | undefined)?.duplicate_pin_numbers_are_jumpers);
+    setJumperRows(jumperRowsOf(subject));
     if (subject.extends) {
       // the parent's own fields join the grid as inherited rows (`addInheritedFields`)
       void fetchLibrarySymbolFlat(subject.extends)
@@ -105,12 +191,31 @@ export function LibrarySymbolPropertiesDialog() {
     setForm((f) => (f ? (power ? { ...f, power, exclude_from_sim: true, in_bom: false, on_board: false, exclude_from_pos_files: true } : { ...f, power }) : f));
   };
 
+  /** `OnBodyStyle` (KiCad 25ec2335): several body styles are refused while a pin has alternate functions, and the choice goes back to one. */
+  const chooseBodyStyle = (mode: BodyStyleMode) => {
+    const refusal = bodyStyleChoiceRefusal(mode, subject.pins, pinSummary);
+    if (refusal) {
+      setError(refusal);
+      setBodyMode("single");
+      return;
+    }
+    setError(null);
+    setBodyMode(mode);
+  };
+  /** What OK sets of the body styles: De Morgan's flag, or the grid's non-empty names. */
+  const demorganOut = bodyMode === "demorgan";
+  const namesOut = bodyMode === "custom" ? bodyNames.filter((n) => n !== "") : [];
+
   const submit = async () => {
     const problem = gridProblem(rows, !derived);
     if (problem) return setError(problem);
     if (derived && parent === "") return setError("Derived symbol must have a parent selected");
+    // KiCad 25ec2335 `Validate`: the unit names in use and the custom body styles' two entries
+    const unitsProblem = derived ? null : unitsAndBodyStylesProblem(unitRows, bodyMode, bodyNames);
+    if (unitsProblem) return setError(unitsProblem);
     // `Validate`: "Confirm destructive actions." -- the dropped units' and body styles' items are deleted (`SetUnitCount`, `SetBodyStyleCount`)
-    for (const question of symbolPropertiesQuestions(subject, form, derived)) {
+    const after = { ...form, has_alternate_body_style: demorganOut, body_style_names: namesOut };
+    for (const question of symbolPropertiesQuestions(subject, after, derived)) {
       if (!(await askConfirm({ title: "Confirmation", message: question, okLabel: "Yes", cancelLabel: "No" }))) return;
     }
     // `TransferDataFromWindow`: the name, escaped for a LIB_ID; an empty one, or one the library has (`SymbolNameInUse`, any case), is refused
@@ -146,7 +251,19 @@ export function LibrarySymbolPropertiesDialog() {
     // `UNDO_REDO::LIB_RENAME`: the rename comes first, so the fields the grid says (the Value among them) are set on the renamed symbol as typed
     if (renamed) cmds.push({ op: "rename_library_symbol", lib_id: subject.lib_id, new_lib_id: target, overwrite: false });
     if (derived && parent !== subject.extends) cmds.push({ op: "set_symbol_parent", lib_id: target, parent });
-    cmds.push({ op: "edit_symbol_properties", lib_id: target, ...props });
+    // the body styles go through `edit_symbol_units_and_connections` (`SetBodyStyleCount` from the symbol's own count): this one keeps the De Morgan flag as it is
+    cmds.push({ op: "edit_symbol_properties", lib_id: target, ...props, has_alternate_body_style: derived ? form.has_alternate_body_style : !!subject.has_alternate_body_style });
+    if (!derived) {
+      cmds.push({
+        op: "edit_symbol_units_and_connections",
+        lib_id: target,
+        unit_names: Object.fromEntries(resizeUnitNameRows(unitRows, form.unit_count).flatMap((n, i) => (n ? [[String(i + 1), n]] : []))),
+        demorgan: demorganOut,
+        body_style_names: namesOut,
+        duplicate_pin_numbers_are_jumpers: dupJumpers,
+        jumper_rows: jumperRows,
+      });
+    }
     cmds.push({ op: "edit_library_symbol_fields", lib_id: target, fields: savedFields(out).map(wireField) });
     setBusy(true);
     try {
@@ -155,7 +272,7 @@ export function LibrarySymbolPropertiesDialog() {
       if (ok && renamed) await api.openSymbol(target);
       // `RebuildSymbolUnitAndBodyStyleLists`: a unit or body style the symbol no longer has goes back to the first
       if (ok && !derived && state.activeUnit > form.unit_count) dispatch({ type: "SET_ACTIVE_UNIT", unit: 1 });
-      if (ok && !derived && !form.has_alternate_body_style && state.activeBodyStyle > 1) dispatch({ type: "SET_ACTIVE_BODY_STYLE", style: 1 });
+      if (ok && !derived && state.activeBodyStyle > bodyStyleCountOf(bodyMode, bodyNames)) dispatch({ type: "SET_ACTIVE_BODY_STYLE", style: 1 });
       // "if units are locked, graphic items are specific to each unit": `SetDrawSpecificUnit( symbol->UnitsLocked() )` after OK
       if (ok && !derived) dispatch({ type: "SET_DRAW_SPECIFIC", unit: units_locked });
       if (ok) close();
@@ -262,7 +379,21 @@ export function LibrarySymbolPropertiesDialog() {
               <fieldset>
                 <legend>Symbol Units</legend>
                 <label title="Enter the number of units for a symbol that contains more than one unit">
-                  Number of units: <input type="number" min={1} max={64} value={form.unit_count} onChange={(e) => set("unit_count", Math.max(1, Math.min(64, Math.round(Number(e.target.value) || 1))))} style={{ width: 60 }} data-testid="props-unit-count" />
+                  Number of units:{" "}
+                  <input
+                    type="number"
+                    min={1}
+                    max={64}
+                    value={form.unit_count}
+                    onChange={(e) => {
+                      const n = Math.max(1, Math.min(64, Math.round(Number(e.target.value) || 1)));
+                      set("unit_count", n);
+                      // `OnUnitSpinCtrl` -> `updateUnitCount`: the names grid follows the count
+                      setUnitRows((r) => resizeUnitNameRows(r, n));
+                    }}
+                    style={{ width: 60 }}
+                    data-testid="props-unit-count"
+                  />
                 </label>
                 <br />
                 <label
@@ -271,16 +402,40 @@ export function LibrarySymbolPropertiesDialog() {
                 >
                   <input type="checkbox" checked={!form.units_locked || form.unit_count === 1} disabled={form.unit_count <= 1} onChange={(e) => set("units_locked", !e.target.checked)} data-testid="props-interchangeable" /> All units are interchangeable
                 </label>
+                <div style={{ marginTop: 10 }}>Unit display names (optional):</div>
+                <div style={{ border: "1px solid var(--chrome-border, #888)", maxHeight: 120, overflowY: "auto" }} data-testid="props-unit-names">
+                  {unitRows.map((name, i) => (
+                    <div key={i} style={{ display: "grid", gridTemplateColumns: "36px 1fr" }}>
+                      <span style={{ padding: "0 4px" }}>{letterSubReference(i + 1)}</span>
+                      <input value={name} onChange={(e) => setUnitRows((r) => r.map((x, k) => (k === i ? e.target.value : x)))} aria-label={`Unit ${letterSubReference(i + 1)} display name`} data-testid={`props-unit-name-${i + 1}`} />
+                    </div>
+                  ))}
+                </div>
               </fieldset>
               <fieldset>
                 <legend>Body Styles</legend>
                 <label>
-                  <input type="radio" name="body-styles" checked={!form.has_alternate_body_style} onChange={() => set("has_alternate_body_style", false)} /> Single body style
+                  <input type="radio" name="body-styles" checked={bodyMode === "single"} onChange={() => chooseBodyStyle("single")} data-testid="props-single-style" /> Single body style
                 </label>
                 <br />
                 <label>
-                  <input type="radio" name="body-styles" checked={form.has_alternate_body_style} onChange={() => set("has_alternate_body_style", true)} data-testid="props-demorgan" /> ‘Standard’ and ‘Alternate’ De Morgan body styles
+                  <input type="radio" name="body-styles" checked={bodyMode === "demorgan"} onChange={() => chooseBodyStyle("demorgan")} data-testid="props-demorgan" /> ‘Standard’ and ‘Alternate’ De Morgan body styles
                 </label>
+                <br />
+                <label>
+                  <input type="radio" name="body-styles" checked={bodyMode === "custom"} onChange={() => chooseBodyStyle("custom")} data-testid="props-custom-styles" /> Custom body styles:
+                </label>
+                <div style={{ marginLeft: 20 }}>
+                  <RowsGrid rows={bodyNames} onChange={setBodyNames} disabled={bodyMode !== "custom"} testid="props-body-style-names" buttons="all" />
+                </div>
+              </fieldset>
+              <fieldset style={{ gridColumn: "1 / span 2" }} data-testid="props-pin-connections">
+                <legend>Pin Connections</legend>
+                <label title="When enabled, this symbol can have more than one pin with the same number.  Pins with the same number will be considered to be jumpered together internally.">
+                  <input type="checkbox" checked={dupJumpers} onChange={(e) => setDupJumpers(e.target.checked)} data-testid="props-duplicate-jumpers" /> All pins with duplicate numbers are jumpers
+                </label>
+                <div style={{ marginTop: 6 }}>Explicit jumper pin groups:</div>
+                <RowsGrid rows={jumperRows} onChange={setJumperRows} testid="props-jumper-groups" buttons="add-remove" />
               </fieldset>
             </div>
           )}

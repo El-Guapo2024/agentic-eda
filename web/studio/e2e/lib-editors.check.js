@@ -1266,7 +1266,7 @@
     await click(tid("tb-ok"), 1000);
     bs = await boxes();
     const e0 = bs[0];
-    t(bs.length === 1 && e0.id === b0.id && e0.text === "5k" && e0.angle_deg === 90 && e0.stroke_mm === -0.0001 && e0.fill === "background" && e0.h_align === "center" && e0.size_mm === 0.635, `the edit replaced the box and kept its id: ${JSON.stringify(e0)}`);
+    t(bs.length === 1 && e0.id === b0.id && e0.text === "5k" && e0.angle_deg === 90 && e0.stroke_mm === -0.0001 && e0.fill === "color" && !e0.fill_color && e0.h_align === "center" && e0.size_mm === 0.635, `the edit replaced the box and kept its id (Background fill is FILLED_WITH_COLOR in the default colour, UI-LEFT Y4): ${JSON.stringify(e0)}`);
     t(e0.margin_mm === 1.016, `and the margin it had: ${e0.margin_mm}`);
     // a size the dialog refuses
     await dbl(0, 2_500_000);

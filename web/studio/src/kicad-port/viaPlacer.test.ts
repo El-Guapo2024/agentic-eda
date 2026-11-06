@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { selectNetLabels, snapViaPosition, viaNet, type ViaFill, type ViaPlacerInput } from "./viaPlacer";
+import { inNetCodeOrder, selectNetLabels, snapViaPosition, viaNet, type ViaFill, type ViaPlacerInput } from "./viaPlacer";
 import type { SceneBoard } from "./snapScene";
 import type { Pt } from "./snapGeom";
 
@@ -81,4 +81,14 @@ test("a track on a hidden layer is not snapped to, gives no net and is not split
   assert.deepEqual(viaNet(hidden, [4 * MM, 5 * MM]), { kind: "net", net: "", track: null });
   // Shown again: snapped, its net, split.
   assert.deepEqual(viaNet(input(b), [4 * MM, 5 * MM]), { kind: "net", net: "GND", track: "t1" });
+});
+
+test("the Select Net entries are in net code order, no net first (std::set<int> netcodeList, round 6 C6-8)", () => {
+  const fills: ViaFill[] = [
+    { net: "VCC", layer: "F.Cu", fragments: [square(0, 0, 20 * MM, 20 * MM)] },
+    { net: "", layer: "F.Cu", fragments: [square(0, 0, 20 * MM, 20 * MM)] },
+    { net: "GND", layer: "B.Cu", fragments: [square(0, 0, 20 * MM, 20 * MM)] },
+  ];
+  assert.deepEqual(viaNet(input({}, fills), [5 * MM, 5 * MM]), { kind: "choose", nets: ["", "GND", "VCC"] });
+  assert.deepEqual(inNetCodeOrder(["b", "B", "", "a"]), ["", "B", "a", "b"], "the board file's byte order of names");
 });

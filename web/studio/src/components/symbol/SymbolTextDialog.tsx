@@ -4,14 +4,16 @@
 //   the canvas, where it follows the cursor until the click that places it; Cancel -- or a text with nothing printable in it -- drops it;
 // - on a text of the symbol (a double click, `E`, Properties in the context menu: `SYMBOL_EDITOR_EDIT_TOOL::editTextProperties`): OK is one undo step, "Edit Text Properties".
 //
-// The text, "Text size:", Bold and Italic, the horizontal and vertical justification, Horizontal or Vertical, and in the symbol editor "Common to all units" and "Common to all
-// body styles" (enabled for a symbol of several units / body styles). Not here: the font, the colour and "Private to symbol editor", which a library text does not keep
-// (kicad-port/symText.ts).
+// The text, the Font choice, "Text size:", Bold and Italic, the text colour, the horizontal and vertical justification, Horizontal or Vertical, and in the symbol editor
+// "Private to Symbol Editor", "Common to all units" and "Common to all body styles" (enabled for a symbol of several units / body styles). The hyperlink is the schematic's only
+// (`m_hyperlinkCb->Hide()` outside it). The font and colour are kept and written (UI-LEFT Y4); the canvas draws every text in the stroke font, as the schematic's does.
 import { useEffect, useRef, useState } from "react";
 import { drawTarget, useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { DEFAULT_SYMBOL_TEXT_SIZE_MM, noPrintableChars, textFormOf, textFromForm, type LibText, type TextForm } from "../../kicad-port/symText";
 import { H_ALIGNS, V_ALIGNS } from "../../kicad-port/symTextBox";
 import { nmPointToMm } from "./symbolPainter";
+import { isMultiBodyStyle } from "../../kicad-port/symBodyStyles";
+import { ColorSwatch, FontSelect, useFontFamilies } from "../TextLookControls";
 
 const H_TIPS: Record<string, string> = { left: "Align left", center: "Align horizontal center", right: "Align right" };
 const V_TIPS: Record<string, string> = { top: "Align top", center: "Align vertical center", bottom: "Align bottom" };
@@ -26,6 +28,7 @@ export function SymbolTextDialog() {
   const [form, setForm] = useState<TextForm | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const families = useFontFamilies();
 
   /** The text the dialog is on: the symbol's (by id), or the new one of the Text tool -- at the click, `DEFAULT_TEXT_SIZE`, `m_lastTextAngle`, on the unit and body style the
    * drawing tools put new items on (`m_drawSpecificUnit`, `m_drawSpecificBodyStyle`). */
@@ -121,17 +124,29 @@ export function SymbolTextDialog() {
             </label>
           </div>
           <div className="kv-grid" style={{ gridTemplateColumns: "150px 1fr", marginTop: 10 }}>
+            <span>Font:</span>
+            <span data-testid="text-font">
+              <FontSelect families={families} current={text.font} value={form.font} onChange={(v) => set("font", v)} />
+            </span>
             <span>Text size:</span>
             <span>
               <input type="number" step="0.01" value={form.size} onChange={(e) => set("size", e.target.value)} style={{ width: 90 }} data-testid="text-size" /> mm
             </span>
+            <span>Color:</span>
+            <span data-testid="text-color">
+              <ColorSwatch label="Text color" color={form.color} onChange={(c) => set("color", c)} />
+            </span>
+            <span>Private to symbol editor</span>
+            <label>
+              <input type="checkbox" checked={form.private} onChange={(e) => set("private", e.target.checked)} data-testid="text-private" />
+            </label>
             <span>Common to all units</span>
             <label title={symbol.unit_count > 1 ? undefined : "This symbol only has one unit. This control has no effect."}>
               <input type="checkbox" checked={form.commonUnits} disabled={symbol.unit_count <= 1} onChange={(e) => set("commonUnits", e.target.checked)} data-testid="text-common-units" />
             </label>
             <span>Common to all body styles</span>
-            <label title={symbol.has_alternate_body_style ? undefined : "This symbol only has one body style. This control has no effect."}>
-              <input type="checkbox" checked={form.commonStyles} disabled={!symbol.has_alternate_body_style} onChange={(e) => set("commonStyles", e.target.checked)} data-testid="text-common-styles" />
+            <label title={isMultiBodyStyle(symbol) ? undefined : "This symbol only has one body style. This control has no effect."}>
+              <input type="checkbox" checked={form.commonStyles} disabled={!isMultiBodyStyle(symbol)} onChange={(e) => set("commonStyles", e.target.checked)} data-testid="text-common-styles" />
             </label>
           </div>
           {error && (

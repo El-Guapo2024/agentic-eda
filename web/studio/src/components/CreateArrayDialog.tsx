@@ -10,7 +10,9 @@
 // through are kept for the next time (`s_arrayOptions`). The circular centre starts at `ARRAY_TOOL::CreateArray`'s `origin` -- the item, or the middle of the selection --
 // which the dialog of this KiCad version is handed and never uses; here it is the default.
 //
-// Not KiCad's: a small picture of where the items go, drawn from the entries as they are typed.
+// Not KiCad's: a small picture of where the items go, drawn from the entries as they are typed, and in the Footprint Editor a line of the numbers the pads will take.
+// KiCad has no preview of an array: `DIALOG_CREATE_ARRAY_BASE` (8303b2ad and 25ec2335 alike) holds no bitmap or canvas, and `ARRAY_TOOL::CreateArray` shows the
+// dialog and draws nothing on the board until `onDialogClosed` makes the copies. Both are kept as additions (UI-LEFT F10).
 //
 // The Footprint Editor opens the same dialog on the pads, graphics and texts of the open footprint (`FootprintCreateArrayDialog`, components/footprint/
 // FootprintArrayDialog.tsx; `enableArrayNumbering = m_isFootprintEditor`): there the "Footprint Annotation" box is gone and each tab gets its "Pad numbering" panel --
@@ -256,7 +258,9 @@ export function CreateArrayForm({ host }: { host: ArrayHost }) {
   // `setControlEnablement` for the Footprint Editor's pad numbering panels.
   const p = flags.pads;
   const useStartGrid = p.renumber && p.gridFromStart;
-  const useStartCirc = p.circFromStart;
+  // "disable the circular number offset in the same way": the Grid tab's "Renumber pads" counts here too, and only the start entry is
+  // touched -- the circle's alphabet and increment stay enabled whatever the radio says.
+  const useStartCirc = p.renumber && p.circFromStart;
   const padNumbers = fpe && parsed.ok ? (host.padNumbers?.(parsed.options) ?? []) : [];
 
   const submit = async () => {
@@ -449,12 +453,12 @@ export function CreateArrayForm({ host }: { host: ArrayHost }) {
                   <div data-testid="array-pad-numbering-circular">
                     <RadioBox title="Initial Pad Number:" choices={["Use first free number", "From start value"]} selected={p.circFromStart ? 1 : 0} onChange={(i) => pad({ circFromStart: i === 1 })} testid="array-circ-initial" />
                     <div>Pad Numbering:</div>
-                    <AlphabetChoice value={p.circular.kind} onChange={(k) => changeAlphabet("circular", k)} disabled={!useStartCirc} testid="array-circular-kind" label="Pad Numbering" />
+                    <AlphabetChoice value={p.circular.kind} onChange={(k) => changeAlphabet("circular", k)} testid="array-circular-kind" label="Pad Numbering" />
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 80px", gap: 4, alignItems: "center" }}>
-                      <span style={{ opacity: useStartCirc ? 1 : 0.5 }}>Pad numbering start:</span>
+                      <span>Pad numbering start:</span>
                       <input value={p.circular.start} disabled={!useStartCirc} onChange={(e) => axisPatch("circular")({ start: e.target.value })} aria-label="Pad numbering start" data-testid="array-circular-start" style={{ width: 72 }} />
-                      <span style={{ opacity: useStartCirc ? 1 : 0.5 }}>Pad numbering increment:</span>
-                      <input value={p.circular.step} disabled={!useStartCirc} onChange={(e) => axisPatch("circular")({ step: e.target.value })} aria-label="Pad numbering increment" data-testid="array-circular-step" style={{ width: 72 }} />
+                      <span>Pad numbering increment:</span>
+                      <input value={p.circular.step} onChange={(e) => axisPatch("circular")({ step: e.target.value })} aria-label="Pad numbering increment" data-testid="array-circular-step" style={{ width: 72 }} />
                     </div>
                   </div>
                 )}

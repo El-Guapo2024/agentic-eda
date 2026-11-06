@@ -17,6 +17,7 @@ import type { Cmd, LibrarySymbol, LibrarySymbolPin } from "../api/types";
 import { REPEAT_PIN_STEP_MM } from "./symEditItems";
 import { unitLetter } from "./unitLetter";
 import { angleDegToOrientation } from "./pinOrientation";
+import { bodyStyleCount, bodyStyleDescription, isMultiBodyStyle } from "./symBodyStyles";
 
 /** `UNITS_ALL` / `DEMORGAN_ALL` (symbol_edit_frame.h): `_HKI( "ALL" )`. */
 export const ALL = "ALL";
@@ -39,17 +40,20 @@ export function unitChoices(sym: Pick<LibrarySymbol, "unit_count" | "kicad">): C
   return out;
 }
 
-/** The Body Style cell's choices: "ALL" (0), then "Standard" (1) and "Alternate" (2) for a De Morgan symbol. */
-export function bodyStyleChoices(sym: Pick<LibrarySymbol, "has_alternate_body_style">): Choice[] {
-  return sym.has_alternate_body_style ? [{ value: 0, label: ALL }, { value: 1, label: "Standard" }, { value: 2, label: "Alternate" }] : [{ value: 0, label: ALL }];
+/** The Body Style cell's choices: "ALL" (0), then each body style by `GetBodyStyleDescription` -- "Standard" (1) and "Alternate" (2) of a De Morgan symbol, a
+ *  custom style's name (`for( int i = 1; i <= aSymbol->GetBodyStyleCount(); i++ )`). */
+export function bodyStyleChoices(sym: Pick<LibrarySymbol, "has_alternate_body_style" | "body_style_names">): Choice[] {
+  const out: Choice[] = [{ value: 0, label: ALL }];
+  if (isMultiBodyStyle(sym)) for (let s = 1; s <= bodyStyleCount(sym); s++) out.push({ value: s, label: bodyStyleDescription(sym, s) });
+  return out;
 }
 
 /** `IsMultiUnit()` / `IsMultiBodyStyle()`: whether the cell takes a value at all. */
 export function unitCellEditable(sym: Pick<LibrarySymbol, "unit_count">): boolean {
   return sym.unit_count > 1;
 }
-export function bodyStyleCellEditable(sym: Pick<LibrarySymbol, "has_alternate_body_style">): boolean {
-  return sym.has_alternate_body_style;
+export function bodyStyleCellEditable(sym: Pick<LibrarySymbol, "has_alternate_body_style" | "body_style_names">): boolean {
+  return isMultiBodyStyle(sym);
 }
 
 /** What the Unit cell shows (`PIN_INFO_FORMATTER::Format`, `COL_UNIT`): "ALL" on a symbol of one unit or for a pin common to all units. */

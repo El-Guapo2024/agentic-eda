@@ -12,7 +12,7 @@ import { drawStrokeText } from "../text/strokeFont";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { dashPattern } from "../../kicad-port/fpArt";
 import { layerColor } from "./layers";
-import { layerAlpha, realLayerKey, withAlpha, type PaintOptions } from "./painter";
+import { realLayerKey, withLayer, type PaintOptions } from "./painter";
 import { drawTableSession } from "../../kicad-port/tables";
 import { hairlineNm } from "./view";
 
@@ -20,7 +20,7 @@ import { hairlineNm } from "./view";
 export function drawTables(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Pick<BoardState, "drawings">, opts: PaintOptions): void {
   for (const t of board.drawings?.tables ?? []) {
     if (!layerIsVisible(opts.layerVisible, t.layer)) continue;
-    withAlpha(ctx, layerAlpha(opts, layerStateKey(t.layer)), () => drawTable(ctx, view, t, opts));
+    withLayer(ctx, opts, layerStateKey(t.layer), 1, () => drawTable(ctx, view, t, opts));
   }
 }
 

@@ -225,6 +225,14 @@ function insideFragment(p: Pt, pts: ReadonlyArray<readonly [number, number]>): b
   return inside;
 }
 
+/**
+ * The nets in net code order, as `std::set<int> netcodeList` holds them: net 0 (no net) first, then by name -- the board file the studio writes numbers its
+ * nets in the order of their names (crates/kicad/src/pcb.rs: `net_names.sort()`), so a net's code is its place in that order (round 6 C6-8).
+ */
+export function inNetCodeOrder(nets: Iterable<string>): string[] {
+  return [...nets].sort((a, b) => (a === b ? 0 : a === "" ? -1 : b === "" ? 1 : a < b ? -1 : 1));
+}
+
 /** `findStitchedZoneNet`: the nets of the zone fills under `pos` -- the active layer's alone in high-contrast mode when that is one net, else the visible layers'. */
 export function stitchedZoneNets(input: ViaPlacerInput, pos: Pt): string[] {
   const hit = (f: ViaFill) => f.fragments.some((frag) => insideFragment(pos, frag));
@@ -237,7 +245,8 @@ export function stitchedZoneNets(input: ViaPlacerInput, pos: Pt): string[] {
     if (f.ruleArea || !input.layers.includes(f.layer) || !input.isLayerVisible(f.layer)) continue;
     if (hit(f)) nets.add(f.net);
   }
-  return [...nets];
+  // the popup lists them as the set iterates: by net code
+  return inNetCodeOrder(nets);
 }
 
 /** What `PlaceItem` gives the via at `pos`: a net (empty for none) and the track it splits, or the nets to choose from. */
