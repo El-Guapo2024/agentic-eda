@@ -25,8 +25,7 @@
 // - Error boxes (`DisplayErrorMessage`) are shown in the info bar.
 import { useEffect, useMemo, useReducer, useState } from "react";
 import type { Cmd } from "../../api/types";
-import { fetchSimLibrary, fetchSimLibraryFiles, fetchSimModelSymbol, type SimModelSymbolReply } from "../../api/simModelClient";
-import simModelsUrl from "../../kicad/sim_models.json?url";
+import { fetchSimLibrary, fetchSimLibraryFiles, fetchSimModelSymbol, loadSimModelTables, type SimModelSymbolReply } from "../../api/simModelClient";
 import { removeUserFieldCmd } from "../../kicad-port/schFieldEdit";
 import {
   assignRow,
@@ -47,7 +46,7 @@ import {
   type LibraryModelInfo,
   type ModelPin,
 } from "../../kicad-port/sim/simModel";
-import { decodeTables, ibisComponentModel, referencePrefix, type Fields, type SimModel, type SimModelIbis, type SimModelsJson, type SimModelTables } from "../../kicad-port/sim/simModelBuiltin";
+import { ibisComponentModel, referencePrefix, type Fields, type SimModel, type SimModelIbis, type SimModelTables } from "../../kicad-port/sim/simModelBuiltin";
 import {
   builtinOk,
   chooseDevice,
@@ -86,14 +85,8 @@ interface Loaded {
   ibis: boolean;
 }
 
-let tablesPromise: Promise<SimModelTables> | null = null;
-/** The model tables (src/kicad/sim_models.json, 0.8 MB): fetched the first time the dialog opens. */
-function loadTables(): Promise<SimModelTables> {
-  tablesPromise ??= fetch(simModelsUrl)
-    .then((r) => r.json() as Promise<SimModelsJson>)
-    .then(decodeTables);
-  return tablesPromise;
-}
+/** The model tables (src/kicad/sim_models.json, 0.8 MB): fetched the first time the dialog opens (shared with the tuner's Save). */
+const loadTables = loadSimModelTables;
 
 const FIELD_ROWS = [SIM_FIELDS.library, SIM_FIELDS.name, SIM_FIELDS.device, SIM_FIELDS.type, SIM_FIELDS.enable, SIM_FIELDS.pins, SIM_FIELDS.params, "Sim.Ibis.Pin", "Sim.Ibis.Model", "Sim.Ibis.Diff"];
 

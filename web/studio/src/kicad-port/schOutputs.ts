@@ -177,3 +177,12 @@ export function summarizeOutputs(files: readonly string[]): string {
   if (files.length === 1) return `Wrote ${files[0]}`;
   return `Wrote ${files.length} files`;
 }
+
+/** An export dialog's Messages (`WX_HTML_REPORT_PANEL`): what kicad-cli's reporter said beyond the files it wrote (`warnings`, the server's
+ * `eda_kicad_engine::warnings_of`: a "Color theme '%s' not found, will use theme from PCB Editor.", a SPICE netlist's symbol without a model, a
+ * job's `JS_WARNING` message), in its order, then the dialog's own report. KiCad's dialogs show both in the one panel; a warning is no
+ * failure (UI-LEFT X5, r5 X5-1). */
+export function withWarnings(reply: { warnings?: readonly string[] }, report: string): string {
+  return [...(reply.warnings ?? []), report].filter((l) => l !== "").join("\n");
+}
+

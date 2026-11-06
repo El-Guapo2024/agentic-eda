@@ -56,7 +56,8 @@ export function PlotSchematicDialog() {
     try {
       const reply = await postSchPlot({ ...buildSchPlotRequest({ ...form, currentSheetIds }, scope), ...(variant ? { variant } : {}) });
       const files = reply.files ?? [];
-      setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? summarizeOutputs(files) : "Plot failed."), files });
+      // `SCH_PLOTTER`'s reporter ("Plotted to '%s'.", "Done.", and any warning) is what kicad-cli printed: the Messages panel shows it (r5 X5-1)
+      setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? (reply.log ?? summarizeOutputs(files)) : "Plot failed."), files });
     } finally {
       setBusy(false);
     }

@@ -3280,7 +3280,7 @@ impl<'a> Board<'a> {
             Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
             Cmd::SetDrawingSheet { schematic, path } => drawing_sheet::set_drawing_sheet(&mut self.design, *schematic, path.as_deref()),
             Cmd::SetSchematicPage { page, title_block } => page_settings::set_schematic_page(&mut self.design, page, title_block),
-            Cmd::ExportFootprintsToLibrary => board_control::export_footprints_to_library(&mut self.design, self.model).map(|_| ()),
+            Cmd::ExportFootprintsToLibrary => self.export_footprints().map(|_| ()),
             Cmd::RepairBoard => {
                 let report = board_control::repair_board(&mut self.design, &self.model.nets);
                 if report.repaired == 0 {

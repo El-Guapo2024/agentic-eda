@@ -834,8 +834,14 @@ impl Violation {
     /// sits (`DRC_TEST_PROVIDER_TRACK_WIDTH` reports `(start + end) / 2`). The report gives a track at its start only.
     fn add_design_anchors(&mut self, design: &Design) {
         let ids: Vec<String> = self.items.iter().filter_map(|i| i.id.clone()).collect();
-        for id in ids {
-            self.markers_nm.extend(track_anchors(design, &id));
+        for id in &ids {
+            self.markers_nm.extend(track_anchors(design, id));
+        }
+        // Two tracks or vias: the marker is where KiCad's collision of the two shapes puts it (`eda_kicad::drc_exclusions::contact_point`).
+        if let [Some(main), Some(aux)] = [self.items.first(), self.items.get(1)].map(|i| i.and_then(|i| i.id.as_deref()).and_then(|id| copper_of(design, id))) {
+            if let Some([x, y]) = eda_kicad::drc_exclusions::contact_point(&self.kind, main, aux) {
+                self.markers_nm.push(Point { x: Nm::new(x), y: Nm::new(y) });
+            }
         }
         self.markers_nm.sort_unstable();
         self.markers_nm.dedup();
@@ -885,6 +891,24 @@ fn track_anchors(design: &Design, id: &str) -> Vec<Point> {
         return Vec::new();
     };
     vec![*a, *b, Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }]
+}
+
+/// The copper shape the clearance test takes for the item `id` names, when it is one this port places markers for: a straight track segment
+/// (`<track id>#<n>`, as [`track_anchors`]; `PCB_TRACK::GetEffectiveShape`, its ends and width) or a via (`PCB_VIA::GetEffectiveShape`, a circle of
+/// its diameter). An arc track, anything else: `None`.
+fn copper_of(design: &Design, id: &str) -> Option<eda_kicad::drc_exclusions::Copper> {
+    use eda_kicad::drc_exclusions::Copper;
+    let routing = design.routing.as_ref()?;
+    if let Some(via) = routing.vias.iter().find(|v| v.id == id) {
+        return Some(Copper::Circle { centre: [via.at.x.get(), via.at.y.get()], radius: via.diameter.get() / 2 });
+    }
+    let (base, n) = match id.rsplit_once('#') {
+        Some((b, n)) if n.parse::<usize>().is_ok() => (b, n.parse::<usize>().unwrap_or(0)),
+        _ => (id, 0),
+    };
+    let track = routing.tracks.iter().find(|t| t.id == base).filter(|t| t.arc().is_none())?;
+    let (a, b) = (track.pts.get(n)?, track.pts.get(n + 1)?);
+    Some(Copper::Segment { a: [a.x.get(), a.y.get()], b: [b.x.get(), b.y.get()], width: track.width.get() })
 }
 
 fn counts_of<'a>(vs: impl Iterator<Item = &'a Violation>) -> BTreeMap<String, usize> {
@@ -1005,6 +1029,9 @@ pub struct DrcOptions {
     /// "Test for parity between PCB and schematic" (`--schematic-parity`): the derived schematic goes next to the derived board, where kicad-cli looks for
     /// it, and the report's `schematic_parity` holds what differs.
     pub schematic_parity: bool,
+    /// The options menu's "Report All Errors for Each Track" (`DIALOG_DRC::m_report_all_track_errors`, `--all-track-errors`): "If unchecked, only the first
+    /// error will be reported for each track" (`DRC_ENGINE::GetReportAllTrackErrors`, which the clearance providers ask before `return false`).
+    pub all_track_errors: bool,
 }
 
 /// `kicad-cli pcb drc` on `design` as it is.
@@ -1017,7 +1044,7 @@ pub struct DrcOptions {
 /// kicad-cli that cannot refill (9.0) gives the DRC of the board as it is. Every kicad-cli start costs a third of a second, so this neither asks for its version nor
 /// probes its options: the version comes off the report.
 pub fn drc(design: &Design, model: &ConstraintModel, work: &Path, refill_zones: bool) -> Result<DrcReport, Vec<CheckResult>> {
-    drc_with(design, model, work, DrcOptions { refill_zones, schematic_parity: false })
+    drc_with(design, model, work, DrcOptions { refill_zones, ..Default::default() })
 }
 
 /// [`drc`] with options. The violations the design waived (`design.drawings.drc_exclusions`) are in the derived project
@@ -1051,6 +1078,9 @@ pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: Drc
     cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm"]);
     if opts.schematic_parity {
         cmd.arg("--schematic-parity");
+    }
+    if opts.all_track_errors {
+        cmd.arg("--all-track-errors");
     }
     cmd.arg("-o").arg(&report).arg(&pcb);
     let (raw, said) = run_report_with_output(cmd, &report, "drc")?;
@@ -1343,7 +1373,7 @@ pub fn erc_report(design: &Design, model: &ConstraintModel, work: &Path, opts: &
 }
 
 /// The DRC report file of a dialog's "Save..." (`DRC_REPORT::WriteTextReport` / `WriteJsonReport`): `kicad-cli pcb drc` on the derived board, with the dialog's own
-/// options (`refill_zones`, `schematic_parity`) and `opts`' format, units and severities.
+/// options (`refill_zones`, `schematic_parity`, `all_track_errors`) and `opts`' format, units and severities.
 pub fn drc_report(design: &Design, model: &ConstraintModel, work: &Path, drc: DrcOptions, opts: &ReportOptions) -> Result<SavedReport, Vec<CheckResult>> {
     let cli = need_cli()?;
     let (pcb, _) = export_board(design, model, work, "board")?;
@@ -1361,6 +1391,9 @@ pub fn drc_report(design: &Design, model: &ConstraintModel, work: &Path, drc: Dr
     }
     if drc.schematic_parity {
         cmd.arg("--schematic-parity");
+    }
+    if drc.all_track_errors {
+        cmd.arg("--all-track-errors");
     }
     cmd.arg("-o").arg(&out).arg(&pcb);
     Ok(SavedReport { file_name: format!("DRC.{}", opts.extension()), text: run_saved_report(cmd, &out, "drc")? })
@@ -1772,10 +1805,31 @@ fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path
     // KiCad's STEP dialog shows the exporter's output in its log window (`DIALOG_EXPORT_STEP_LOG`): kept in the reply, not thrown away.
     let log = log.trim().to_string();
     let mut reply = json!({ "ok": true, "engine": engine, "files": files });
+    let warnings = warnings_of(&log, &files, root);
+    if !warnings.is_empty() {
+        reply["warnings"] = json!(warnings);
+    }
     if !log.is_empty() {
         reply["log"] = Value::String(log);
     }
     Ok(reply)
+}
+
+/// What kicad-cli said on a run that succeeded beyond its report of the files it wrote: the warnings and notes of the job's reporter (`CLI_REPORTER`
+/// prints every severity but an error to stdout, with no prefix: `common/reporter.cpp`), such as `PCB_PLOTTER::Plot`'s "Color theme '%s' not found, will
+/// use theme from PCB Editor." or a `JS_WARNING` job's message, which KiCad's dialogs show in their Messages panel (`WX_HTML_REPORT_PANEL`) with the
+/// report. A line is the report of a file when it names one of `files` (relative to `root`; kicad-cli names them by their full path: "Plotted to
+/// '%s'.", "Created file '%s'", "Wrote position data to '%s'.") or is one of the jobs' closing lines ("Done.", `JobExportIpcD356`'s "Successfully
+/// created IPC-D-356 file"); every other line is kept, in kicad-cli's order (UI-LEFT X5, r5 X5-1).
+pub fn warnings_of(log: &str, files: &[String], root: &Path) -> Vec<String> {
+    let paths: Vec<String> = files.iter().map(|f| root.join(f).to_string_lossy().into_owned()).chain(files.iter().cloned()).collect();
+    log.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .filter(|l| !matches!(*l, "Done." | "Successfully created IPC-D-356 file"))
+        .filter(|l| !paths.iter().any(|p| l.contains(p.as_str())))
+        .map(str::to_string)
+        .collect()
 }
 
 fn check_kind(kind: &str) -> Result<(), Vec<CheckResult>> {
@@ -1911,6 +1965,10 @@ pub fn export_pcb_placement_into(design: &Design, model: &ConstraintModel, work:
     }
     let log = log.trim().to_string();
     let mut reply = json!({ "ok": true, "engine": format!("kicad-cli {}{}", cli_version(&cli), if served { " (api-server)" } else { "" }), "files": files });
+    let warnings = warnings_of(&log, &files, root);
+    if !warnings.is_empty() {
+        reply["warnings"] = json!(warnings);
+    }
     if !log.is_empty() {
         reply["log"] = Value::String(log);
     }
@@ -2147,6 +2205,18 @@ mod tests {
         assert!(cli_has_export(&cli, "pcb", "gencad"));
         assert_eq!(std::fs::read_to_string(&count).unwrap().lines().count(), 1, "one probe per binary and scope");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_runs_warnings_are_the_lines_that_report_no_file_it_wrote() {
+        let root = Path::new("/b");
+        let files = vec!["export/kicad/gerbers/b-F_Cu.gbr".to_string(), "export/kicad/gerbers/b-job.gbrjob".to_string()];
+        let log = "Color theme 'mine' not found, will use theme from PCB Editor.\n\nPlotted to '/b/export/kicad/gerbers/b-F_Cu.gbr'.\nDone.";
+        assert_eq!(warnings_of(log, &files, root), ["Color theme 'mine' not found, will use theme from PCB Editor."]);
+        // a relative board folder: kicad-cli still names the file by its full path, which ends with the reply's
+        let drill = vec!["export/kicad/drill/b-PTH.drl".to_string()];
+        assert!(warnings_of("Created file '/home/u/b/export/kicad/drill/b-PTH.drl'\nDone.", &drill, Path::new("b")).is_empty());
+        assert!(warnings_of("Successfully created IPC-D-356 file", &[], root).is_empty());
     }
 
     #[test]

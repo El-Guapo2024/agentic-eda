@@ -28,7 +28,7 @@ import {
   type Rgb,
   type Scale,
 } from "../../kicad-port/sim/mathPlot";
-import { cursorValue, displayName, scaleOf, traceDotted, type Cursor, type PlotTab, type Trace } from "../../kicad-port/sim/simPlotTab";
+import { cursorRunLabel, cursorValue, displayName, nextCursorRun, scaleOf, snapCursorRun, traceDotted, type Cursor, type PlotTab, type Trace } from "../../kicad-port/sim/simPlotTab";
 import { moveCursor } from "../../kicad-port/sim/simFrame";
 import { getSimUi, touch, useSimUi } from "../../state/simulator";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
@@ -167,7 +167,7 @@ function paintTrace(ctx: CanvasRenderingContext2D, plot: PlotTab, tr: Trace): vo
 }
 
 /** `CURSOR::Plot`: the cross lines in the trace's colour mixed with the foreground, the triangle and the cursor's number above the plot. */
-function paintCursor(ctx: CanvasRenderingContext2D, plot: PlotTab, tr: Trace, id: number, c: Cursor, fg: Rgb): void {
+function paintCursor(ctx: CanvasRenderingContext2D, plot: PlotTab, tr: Trace, id: number, c: Cursor, fg: Rgb, dark: boolean): void {
   const sx = plot.x;
   const sy = scaleOf(plot, tr);
   if (!sx || !sy || tr.x.length <= 1) return;
@@ -203,6 +203,23 @@ function paintCursor(ctx: CanvasRenderingContext2D, plot: PlotTab, tr: Trace, id
     ctx.textBaseline = "top";
     const label = `${id}`;
     ctx.fillText(label, cx - textWidth(ctx, label) / 2 - (label === "1" ? 1 : 0), top - 4 - TEXT_H);
+    // A multi-run trace's cursor names its run right of the number: the run's tuned values in a box of the background, framed and written in the
+    // cursor's colour (`runRect`: after `textRect`, the "M"-wide box of the number, by 6 pixels, inflated by 3 and 1).
+    const run = cursorRunLabel(tr, c.sweep ?? 0);
+    if (run !== null) {
+      const m = textWidth(ctx, "M");
+      const textRight = cx + 1 - Math.trunc(m / 2) - (label === "1" ? 1 : 0) + m - 1;
+      const w = textWidth(ctx, run);
+      const rx = textRight + 6 - 3;
+      const ry = top - 4 - TEXT_H - 1;
+      ctx.fillStyle = cssRgb(colorList(dark)[0] as Rgb);
+      ctx.fillRect(rx, ry, w + 6, TEXT_H + 2);
+      ctx.strokeStyle = cssRgb(color);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(rx + 0.5, ry + 0.5, w + 6, TEXT_H + 2);
+      ctx.fillStyle = cssRgb(color);
+      ctx.fillText(run, rx + 3, ry + 1);
+    }
   }
   ctx.setLineDash([]);
 }
@@ -255,7 +272,7 @@ export function paintPlot(ctx: CanvasRenderingContext2D, plot: PlotTab, dark: bo
   const legend = paintLegend(ctx, plot, traces, fg);
   for (const tr of traces) {
     paintTrace(ctx, plot, tr);
-    for (const [id, c] of tr.cursors) paintCursor(ctx, plot, tr, id, c, fg);
+    for (const [id, c] of tr.cursors) paintCursor(ctx, plot, tr, id, c, fg, dark);
   }
   if (zoomBox) {
     ctx.strokeStyle = cssRgb(fg);
@@ -283,7 +300,9 @@ function cursorAt(plot: PlotTab, p: { x: number; y: number }): { tr: Trace; id: 
   return null;
 }
 
-type Drag = { kind: "zoom"; x0: number; y0: number; x1: number; y1: number } | { kind: "cursor"; tr: Trace; id: number } | { kind: "legend"; dx: number; dy: number } | { kind: "pan"; x: number; y: number };
+/** A cursor drag keeps where the cursor was and where the pointer went down (`mpInfoLayer::Move`: the reference plus the pointer's travel), for the
+ *  multi-run snap (`CURSOR::Move`). */
+type Drag = { kind: "zoom"; x0: number; y0: number; x1: number; y1: number } | { kind: "cursor"; tr: Trace; id: number; refY: number; downY: number } | { kind: "legend"; dx: number; dy: number } | { kind: "pan"; x: number; y: number };
 
 export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
   const ui = useSimUi();
@@ -369,7 +388,10 @@ export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
     }
     const c = cursorAt(plot, p);
     if (c) {
-      drag.current = { kind: "cursor", tr: c.tr, id: c.id };
+      const cur = c.tr.cursors.get(c.id);
+      const sy = scaleOf(plot, c.tr);
+      const refY = cur && sy ? y2p(plot.view, toPlot(sy, cursorValue(c.tr, cur.x, cur.sweep ?? 0))) : p.y;
+      drag.current = { kind: "cursor", tr: c.tr, id: c.id, refY, downY: p.y };
       return;
     }
     drag.current = { kind: "zoom", x0: p.x, y0: p.y, x1: p.x, y1: p.y };
@@ -396,6 +418,10 @@ export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
       paint();
     } else if (d.kind === "cursor" && plot.x) {
       moveCursor(getSimUi().frame, d.tr, d.id, fromPlot(plot.x, p2x(plot.view, p.x)));
+      // `CURSOR::Move` on a multi-run trace: the run nearest where the pointer took the cursor's horizontal line (`m_snapTargetY`)
+      const cur = d.tr.cursors.get(d.id);
+      const sy = scaleOf(plot, d.tr);
+      if (cur && sy) cur.sweep = snapCursorRun(d.tr, cur.x, fromPlot(sy, p2y(plot.view, d.refY + (p.y - d.downY))), cur.sweep ?? 0);
       touch();
     }
   };
@@ -443,7 +469,12 @@ export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
       const r = wrap.current!.getBoundingClientRect();
       setMenu({ x: e.clientX - r.left, y: e.clientY - r.top });
     }}>
-      <canvas ref={canvas} data-testid="sim-plot" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} />
+      <canvas ref={canvas} data-testid="sim-plot" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onDoubleClick={(e) => {
+        // `CURSOR::OnDoubleClick`: a multi-run trace's cursor goes on to the next run
+        const c = cursorAt(plot, pos(e));
+        const cur = c?.tr.cursors.get(c.id);
+        if (c && cur && nextCursorRun(c.tr, cur)) touch();
+      }} />
       {menu && (
         // `mpWindow`'s popup menu.
         <div className="menubar-dropdown sim-plot-menu" style={{ left: menu.x, top: menu.y }}>

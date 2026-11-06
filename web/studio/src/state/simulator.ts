@@ -21,8 +21,9 @@ import {
 } from "../kicad-port/sim/simCommand";
 import { SpiceValue } from "../kicad-port/sim/spiceValue";
 import { saveTextAs } from "../api/client";
-import { fetchSimModelSymbol } from "../api/simModelClient";
-import { tunerSaveEdit } from "../kicad-port/sim/simModel";
+import { fetchSimModelSymbol, loadSimModelTables } from "../api/simModelClient";
+import { fieldVerbs, tunerSaveEdit, tunerWrittenFields } from "../kicad-port/sim/simModel";
+import { removeUserFieldCmd } from "../kicad-port/schFieldEdit";
 import {
   addTrace,
   applyRun,
@@ -38,6 +39,7 @@ import {
   toWorkbook,
   tunedValue,
   multiRunSteps,
+  multiRunLabels,
   newTuner,
   type SimFrame,
   type SimTab,
@@ -634,23 +636,44 @@ export async function tunerChanged(): Promise<void> {
     tr.sweepCount = r.ys.length;
     tr.sweepSize = r.x.length;
     tr.multiRun = true;
+    tr.multiRunLabels = multiRunLabels(steps, r.ys.length);
   }
   emit();
 }
 
-/** `SIMULATOR_FRAME_UI::UpdateTunerValue` (the tuner's Save): the value written to the symbol -- its `Sim.Params` parameter when the symbol has one, else its
- *  Value field -- one undo step. The fields are read from the server (`POST /api/sim/model/symbol`: the instance's over the library symbol's), so a sheet
- *  read from a KiCad file, whose symbols the studio lists without fields, is saved too (r7 R7-SM-2); `symbolFields` is the caller's copy, used when the
- *  server cannot be asked. */
+/** `SIMULATOR_FRAME_UI::UpdateTunerValue` (the tuner's Save): the symbol's model given the tuned value and written back with `WriteFields`
+ *  (`tunerWrittenFields`: the Value of an inferred passive or DC source with its hidden `Sim.Device`, `Sim.Pins`, R7-SM-1; a `Sim.Params`
+ *  parameter of a model the fields name; a potentiometer's wiper), one undo step: the fields that change through the Symbol Fields Table's verb
+ *  (`set_symbol_fields`, which reaches a sheet read from a KiCad file too, r7 R7-SM-2), an emptied field of the instance's own removed. The fields
+ *  are the server's (`POST /api/sim/model/symbol`: the instance's over the library symbol's); when the server or the model tables cannot be had,
+ *  the caller's copy `symbolFields` is saved as before (the tuned parameter's text in `Sim.Params`, else the Value). */
 export async function saveTunerValue(t: Tuner, symbolFields: Record<string, string> | null): Promise<void> {
-  let fields = symbolFields ?? {};
+  let sym: Awaited<ReturnType<typeof fetchSimModelSymbol>> | null = null;
+  let tables: Awaited<ReturnType<typeof loadSimModelTables>> | null = null;
   try {
-    const r = await fetchSimModelSymbol(t.ref);
-    if (r.ok) fields = r.fields;
+    [sym, tables] = await Promise.all([fetchSimModelSymbol(t.ref), loadSimModelTables()]);
   } catch {
     /* the caller's copy */
   }
-  await host?.cmd({ op: "set_symbol_fields", edits: [tunerSaveEdit(t.ref, t.param, t.text, fields)] });
+  if (!sym?.ok || !tables) {
+    await host?.cmd({ op: "set_symbol_fields", edits: [tunerSaveEdit(t.ref, t.param, t.text, sym?.ok ? sym.fields : (symbolFields ?? {}))] });
+    return;
+  }
+  const before: Record<string, string> = { ...sym.fields, Value: sym.value };
+  const written = tunerWrittenFields(tables, t.ref, before, sym.pins, t.text);
+  if ("error" in written) {
+    // "Could not apply tuned value(s):" + " " + "%s is not tunable"
+    message("Simulator", `Could not apply tuned value(s): ${written.error}`);
+    return;
+  }
+  const after = written.fields;
+  const wanted: Record<string, string> = {};
+  for (const name of new Set([...Object.keys(before), ...Object.keys(after)])) if (name === "Value" || name.startsWith("Sim.")) wanted[name] = after[name] ?? "";
+  const { edits, removes } = fieldVerbs(t.ref, before, sym.own, wanted);
+  const cmds: import("../api/types").Cmd[] = [];
+  if (edits.length > 0) cmds.push({ op: "set_symbol_fields", edits });
+  for (const name of removes) cmds.push(removeUserFieldCmd(t.ref, name));
+  if (cmds.length > 0) await host?.cmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
 }
 
 /** The simulator's checks for the menus and the toolbar (`SIMULATOR_FRAME::setupUIConditions`). */

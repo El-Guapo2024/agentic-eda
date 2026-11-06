@@ -14,7 +14,7 @@ Notes:
 - These findings still have open parts:
   - E3-1 (high);
   - D-A1, B-M4/D3-M5/D4-M1, C3-M1, B3-M1, A-3, D-8, D-10, C-2 and R3-6 (medium, rounds 2-4).
-- `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor. **Footprint Editor: 2 left since task-u1-fpedit** (Create Footprint, the Properties pane); **1 since task-u3-fpedit2** (Create Footprint). **Symbol Editor: 3 left since task-u1-symedit** (Find, Find and Replace, the Symbol Checker).
+- `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor. **Footprint Editor: 2 left since task-u1-fpedit** (Create Footprint, the Properties pane); **1 since task-u3-fpedit2** (Create Footprint). **Symbol Editor: 3 left since task-u1-symedit** (Find, Find and Replace, the Symbol Checker); **0 left since task-u5-dialogs**.
 
 **Top 12, all areas:**
 1. X1: the Plot dialog is Gerber only -- **done (task-u1-plot)**
@@ -387,15 +387,17 @@ Notes:
   - ~~The editor uses its own clipboard, not `.kicad_sym` text.~~ Copy writes `.kicad_sym` text; Paste reads KiCad's.
   - ~~No increment of a pin's number or name.~~ Increment (Primary / Secondary, Shift+Alt / Ctrl+Alt wheel) of a pin's number or name and of a text; Repeat Pin's pitch and label increment in Preferences.
   - S. PARITY-symedit; PARITY-sch §13.
-- **Y6 [BD] Pin Table.** No summary, no Count or text-size columns, and raw type tokens (E7-S15). S.
-- **Y7 [BD] Small differences.**
-  - Pin Properties has an extra Delete Pin (E7-S4), and a power symbol's Exclude boxes are disabled too early (E7-S9).
-  - ~~Save As doesn't ask before overwriting, doesn't refuse a read-only library~~ **done (task-u1-libsave)** (E7-S19, S20); Duplicate still opens the first copy at unit 1 (E7-S21).
+- **Y6 [BD] Pin Table.** **done (task-u5-dialogs)**: the summary, the Count and text-size columns and the header's menu, KiCad's names and sort, Group by name with renumbering, the unit, body style and selection filters, Export (PARITY-symedit, the Pin Table section). Left: Group Selected Pins, Import, the cross-probe highlight.
+  - ~~No summary, no Count or text-size columns, and raw type tokens (E7-S15).~~ S.
+- **Y7 [BD] Small differences.** **done (task-u5-dialogs)**: E7-S4, E7-S9, E7-S21; Find and Replace (Replace All replaces, where KiCad's does nothing in the Symbol Editor); Export SVG's theme and hidden items (X11). Left: Duplicate and Paste into a read-only library are not refused; no highlight of every match; no schematic theme setting to follow.
+  - ~~Pin Properties has an extra Delete Pin (E7-S4), and a power symbol's Exclude boxes are disabled too early (E7-S9).~~
+  - ~~Save As doesn't ask before overwriting, doesn't refuse a read-only library~~ **done (task-u1-libsave)** (E7-S19, S20); ~~Duplicate still opens the first copy at unit 1 (E7-S21).~~
   - ~~Save Library As is a download.~~ **done (task-u1-libsave)**: a new `.kicad_sym` with a row of the project table, or the library's row pointed at it (PARITY-common §16).
-  - No Find/Replace.
-  - Export SVG uses kicad-cli's theme (X11).
+  - ~~No Find/Replace.~~
+  - ~~Export SVG uses kicad-cli's theme (X11).~~
   - S. r7 E7-S*; GAPS 37.
-- **Y8 [CO] Labels.** A derived symbol shows "derived from X" instead of nesting under its parent, and the Symbol Checker button is dimmed (unsure). S. PARITY-symedit.
+- **Y8 [CO] Labels.** **done (task-u5-dialogs)**: KiCad does not nest a derived symbol under its parent, it italicises it (`GetAttr`), and so does the studio now; the Symbol Checker button is live. Left: nothing known.
+  - ~~A derived symbol shows "derived from X" instead of nesting under its parent, and the Symbol Checker button is dimmed (unsure).~~ S. PARITY-symedit.
 
 ## Fab outputs and exports
 
@@ -405,11 +407,11 @@ Notes:
 - **X3 [FM] Schematic exports.** **done (task-u1-plot)**: Plot Schematic has PostScript, PDF, SVG, DXF, PNG, the colour theme, the PDF and PNG options, the output folder, Plot All / Current Page; Export Netlist has KiCad, OrcadPCB2, Allegro, CadStar, PADS, SPICE, SPICE Model (and XML). Left, disabled with the reason (no kicad-cli flag): page size, minimum line width, DXF units, the SPICE page's options, Open file after plot, custom exporters. (The variant is done: S2.)
   - S. PARITY-sch §10, §53.
 - **X4 [FM] Placement files.** **done (task-u1-plot)** as far as kicad-cli goes: kicad-cli 10.99 (4fe1ca2060) still has no Exclude from BOM flag for `pcb export pos` (disabled with the reason; the api-server's position job has `exclude_from_bom`, unused); the variant choice is `--variant` since S2 (task-u1-variants); the dialog's output folder is wired. S. GAPS 37; r2 X8.
-- **X5 [BD] Small differences.**
-  - Sketched fab pads at 0.1 mm (X3-9).
-  - An export with warnings shows none (X5-1).
-  - Export Footprints drops the instance's fields (X7-1).
-  - Plotting the current page plots both sheets of a duplicated page number (X4-2).
+- **X5 [BD] Small differences.** **done (task-u5-dialogs)** but for X3-9 (PARITY-boardctl §9): a run's kicad-cli warnings in the dialogs' messages and Plot Schematic's own report; Export Footprints writes the instance's fields and attributes; Plot Current Page plots one sheet of a duplicated page number. Left: the sketched fab pads (no kicad-cli flag, job parameter or API field in 4fe1ca2060); a footprint read from a board file keeps its file's fields only in its tokens.
+  - Sketched fab pads at 0.1 mm (X3-9). **Left: kicad-cli limit.**
+  - ~~An export with warnings shows none (X5-1).~~
+  - ~~Export Footprints drops the instance's fields (X7-1).~~
+  - ~~Plotting the current page plots both sheets of a duplicated page number (X4-2).~~
   - S.
 - **X6 [KO] Kept by decision.**
   - The board BOM is kicad-cli's.
@@ -433,21 +435,21 @@ Notes:
   - The Default class is first in the table (KiCad lists it last).
   - The transmission-line calculator is not ported (the Tuning Profiles grid's cells take typed values).
   - S. PARITY-pcb §9, §70.
-- **B5 [BD] Text variables.**
-  - No `@{}` math functions, VCSHASH or PIN_NAME(n).
-  - Not expanded in schematic text boxes or power-symbol fields.
+- **B5 [BD] Text variables.** **done (task-u5-dialogs)** (PARITY-sch §63): the board's `@{}` is the schematic's engine (kicad-cli proof); `${VCSHASH}`, `${VCSSHORTHASH}` and every `@{vcs..}` function from the git repository the board is in; PIN_NAME(n) with the pin's alternate, PIN_BASE_NAME, PIN_ALT_LIST, a pad's pin function, a footprint's DNP / EXCLUDE_FROM_* flags; text boxes and power-symbol fields expanded (kicad-cli proof). Left: the clock's functions and `random`.
+  - ~~No `@{}` math functions, VCSHASH or PIN_NAME(n).~~
+  - ~~Not expanded in schematic text boxes or power-symbol fields.~~
   - S. GAPS 3; PARITY-sch §19b.
-- **B6 [BD] Inspection.**
-  - In Find by Properties, intersectsCourtyard/Area, enclosedByArea and fromTo always return false, A.Net is the name, and there are no microvias.
-  - Clearance and Constraints Resolution lack tuning-profile rules and `${VAR}`.
+- **B6 [BD] Inspection.** **done (task-u5-dialogs)** (PARITY-pcb §79): the geometry functions on the board's shapes, courtyards and areas; fromTo on the board's copper paths (FROM_TO_CACHE), in Find by Properties and the rules; A.Net is the net code; microvias; the tuning profiles' implicit rules; the rules text's `${VAR}`. Left: zones in the from-to paths; a lone pin's net in the codes.
+  - ~~In Find by Properties, intersectsCourtyard/Area, enclosedByArea and fromTo always return false, A.Net is the name, and there are no microvias.~~
+  - ~~Clearance and Constraints Resolution lack tuning-profile rules and `${VAR}`.~~
   - M. GAPS 29; PARITY-pcb §32, §32c.
-- **B7 [BD] Exclusions.**
-  - Some DRC exclusions, and the ERC exclusions of about 15 check types, stay in the studio.
-  - A pin-to-pin Ignore isn't remembered (D3-M2).
+- **B7 [BD] Exclusions.** **done in part (task-u5-dialogs)** (PARITY-pcb §80, PARITY-sch §65): a DRC clearance, short or crossing between two tracks or vias reaches kicad-cli at KiCad's contact point (kicad-cli proof); `copper_sliver` and `starved_thermal` on each copper layer; the five similar-name and local/global-name ERC checks (one sheet); a pin-to-pin Ignore on an error is remembered (D3-M2). Left, DRC: pads, zones, arcs, holes, the edge, courtyard and silk overlaps. Left, ERC: `endpoint_off_grid`, `unconnected_wire_endpoint`, `four_way_junction`, `label_multiple_wires`, `no_connect_connected`, `hier_label_mismatch`, `bus_definition_conflict`, `duplicate_pins`, `field_name_whitespace`, `generic-*`, `unresolved_variable`, the name checks over several sheets; kicad-cli and Save... still report the pin-to-pin errors the studio ignores.
+  - ~~Some DRC exclusions~~ (in part), and the ERC exclusions of about 15 check types (in part), stay in the studio.
+  - ~~A pin-to-pin Ignore isn't remembered (D3-M2).~~
   - M. GAPS 11; PARITY-sch §28.
-- **B8 [FM] DRC dialog.**
-  - No "Report all errors for each track" and no cross-probe options.
-  - The Show boxes start ticked (R6-D9).
+- **B8 [FM] DRC dialog.** **done (task-u5-dialogs)** (PARITY-pcb §80): Report All Errors for Each Track (`--all-track-errors`), Cross-probe Selected Items and Center on Cross-probe behind the options button; the Show boxes start with Errors and Warnings and are kept between openings. Left: the ERC dialog's own options menu and Show boxes; Refill and Parity are not kept between openings.
+  - ~~No "Report all errors for each track" and no cross-probe options.~~
+  - ~~The Show boxes start ticked (R6-D9).~~
   - S. PARITY-pcb §9a.
 
 ## Libraries and choosers
@@ -527,12 +529,13 @@ Notes:
   - No live plot, and Stop throws the results away.
   - A measurement, Fourier or tuner change starts a new run.
   - L. PARITY-sch §38.
-- **M3 [FM] Signals, cursors and tuning.**
-  - No S-parameters, probe cursor, multi-run cursor labels, expression auto-completion or potentiometer tuning.
-  - The OP overlay ignores its format settings.
-  - Tune's Save skips Sim.Device (R7-SM-1).
+- **M3 [FM] Signals, cursors and tuning.** **done (task-u5-dialogs)** (PARITY-sch §64): S-parameter signals, the probe cursors and the net highlight, multi-run cursor labels (double click, snap), expression auto-completion and its Syntax Help, potentiometer tuning, the OP overlay's formats, Tune's Save through WriteFields (R7-SM-1). Left: verified against a stand-in for ngspice only (the box has none: see §64's list); a sheet pin is not brightened while probing.
+  - ~~No S-parameters, probe cursor, multi-run cursor labels, expression auto-completion or potentiometer tuning.~~
+  - ~~The OP overlay ignores its format settings.~~
+  - ~~Tune's Save skips Sim.Device (R7-SM-1).~~
   - M. PARITY-sch §38, §51.
-- **M4 [BD] Shared transforms.** Two copies of a library symbol at different angles share one transform (unsure). S. GAPS 34.
+- **M4 [BD] Shared transforms.** **done (task-u5-dialogs)**: settled, they do not share one: each turned copy has its own cache entry (since e825be38), and kicad-cli's SPICE netlist gives each its own nodes (slow `sch_orientations` test). Left: nothing.
+  - ~~Two copies of a library symbol at different angles share one transform (unsure).~~ S. GAPS 34.
 
 ## Common and app shell
 

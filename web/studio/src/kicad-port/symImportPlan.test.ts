@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parentsFirst, planImport, planPaste } from "./symImportPlan";
+import { duplicateLanding, parentsFirst, planImport, planPaste } from "./symImportPlan";
 import { ensureUniqueLibId, joinLibName } from "./libraryNames";
 import type { LibrarySymbol } from "../api/types";
 
@@ -33,4 +33,10 @@ test("a paste names every symbol freely and a child follows its parent's new nam
   // the parent is not in the clipboard: the child keeps linking the library's own
   const alone = planPaste([s("Kid", "Root")], "eda", taken, ensureUniqueLibId, joinLibName);
   assert.deepEqual([alone.puts[0]!.lib_id, alone.puts[0]!.extends], ["eda:Kid", "Root"]);
+});
+
+test("Duplicate and Paste show the last new symbol at the unit and body style being edited, the tree on the first (LoadOneLibrarySymbolAux, r7 E7-S21)", () => {
+  assert.deepEqual(duplicateLanding(["L:A_1", "L:B_1"], 3, 2), { open: "L:B_1", at: { unit: 3, bodyStyle: 2 }, select: "L:A_1" });
+  assert.deepEqual(duplicateLanding(["L:A_1"], 0, 0), { open: "L:A_1", at: { unit: 1, bodyStyle: 1 }, select: "L:A_1" }, "a unit or style of 0 is 1");
+  assert.equal(duplicateLanding([], 1, 1), null);
 });

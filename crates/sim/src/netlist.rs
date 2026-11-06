@@ -269,8 +269,13 @@ pub struct CircuitItem {
     pub pin_index: BTreeMap<String, usize>,
     /// `SPICE_GENERATOR::CurrentNames`, in the model's pin order where there is one per pin.
     pub currents: Vec<String>,
-    /// The tuner's parameter and its value (`SIM_MODEL::GetTunerParam`): `r`, `c` or `l` of an ideal passive, `dc` of a DC source.
+    /// The tuner's parameter and its value (`SIM_MODEL::GetTunerParam`): `r`, `c` or `l` of an ideal passive, `dc` of a DC source, `pos` of a
+    /// potentiometer (`SIM_MODEL_R_POT::GetTunerParam`: `FindParam( "pos" )`, its value the `position=` of the item's `.model` line, `""` when the
+    /// model line has none -- `SPICE_GENERATOR_R_POT::ModelLine` leaves it out then).
     pub tuner: Option<(String, String)>,
+    /// `FindParam( "portnum" )` of a voltage source (`SIM_MODEL_SOURCE::appendSpParamInfos`), as `SPICE_GENERATOR_SOURCE::ItemLine` writes it
+    /// (`portnum <n>` after the source's values): the port of an S-parameter analysis.
+    pub portnum: Option<String>,
     /// The item line as the netlist has it.
     pub line: String,
     /// `GetDeviceInfo().fieldValue` and `GetTypeInfo().fieldValue` of its model, as Tune's "has simulation model of type '%s %s'" names them:
@@ -363,9 +368,26 @@ pub fn circuit(parts: &NetlistParts, xml: &XmlNetlist, ports: &BTreeMap<String, 
         let field = |name: &str| comp.and_then(|c| c.fields.get(name)).filter(|v| !v.is_empty()).cloned();
         let sim_device = field("Sim.Device").unwrap_or_else(|| if letter == 'X' { "SUBCKT".to_string() } else { letter.to_string() });
         let sim_type = field("Sim.Type").unwrap_or_default();
-        out.push(CircuitItem { reference, name: item.name.clone(), device: letter, nodes, pin_count, pin_index, currents, tuner, line: item.tokens.join(" "), sim_device, sim_type });
+        // `SIM_MODEL_R_POT` (`Sim.Device` R, `Sim.Type` POT): an XSPICE `A` item on the `potentiometer` code model of its own `.model` line, tuned by
+        // its wiper's position (`GetTunerParam`: `pos`).
+        let tuner = if letter == 'A' && sim_device == "R" && sim_type == "POT" { Some(("pos".to_string(), pot_position(&parts.head, rest.last().copied().unwrap_or("")))) } else { tuner };
+        // `SIMULATOR_FRAME_UI::rebuildSignalsList` asks a voltage source's model for `portnum`; the line holds what `ItemLine` wrote of it.
+        let portnum = (letter == 'V').then(|| rest.windows(2).find(|w| w[0].eq_ignore_ascii_case("portnum")).map(|w| w[1].to_string())).flatten();
+        out.push(CircuitItem { reference, name: item.name.clone(), device: letter, nodes, pin_count, pin_index, currents, tuner, portnum, line: item.tokens.join(" "), sim_device, sim_type });
     }
     out
+}
+
+/// The wiper position of a potentiometer's model (`SPICE_GENERATOR_R_POT::ModelLine`: `.model <name> potentiometer( r=<r> position=<pos> )`, the
+/// position left out when the model has none): `model` is the item's model name, the last token of its line.
+fn pot_position(head: &[String], model: &str) -> String {
+    for l in head {
+        let t: Vec<&str> = l.split_whitespace().collect();
+        if t.len() >= 2 && t[0].eq_ignore_ascii_case(".model") && t[1].eq_ignore_ascii_case(model) {
+            return l.split_whitespace().find_map(|w| w.strip_prefix("position=")).unwrap_or("").to_string();
+        }
+    }
+    String::new()
 }
 
 /// `SPICE_CIRCUIT_MODEL::GetNets`: every net on an item's pin.
@@ -493,5 +515,22 @@ mod tests {
         assert_eq!(more[0].currents, vec!["I(AU2)"]);
         assert_eq!(more[1].currents, vec!["I(K1)"]);
         assert_eq!(more[1].pin_count, 0);
+    }
+
+    /// `rebuildSignalsList`'s S-parameter ports (`FindParam( "portnum" )` of a voltage source, written by `SPICE_GENERATOR_SOURCE::ItemLine` as
+    /// `portnum <n> z0 <z>`) and a potentiometer's tuner (`SIM_MODEL_R_POT::GetTunerParam`, the `position=` of its `.model` line, as kicad-cli
+    /// writes a `Device:R_Potentiometer`: `ARV1 VCC /W GND __RV1` on `.model __RV1 potentiometer( r=10k )`).
+    #[test]
+    fn a_source_s_port_and_a_potentiometer_s_wiper_are_read_from_the_lines() {
+        let cli = ".title KiCad schematic\n.model __RV1 potentiometer( r=10k position=0.3 )\n.model __RV2 potentiometer( r=1k )\nARV1 VCC /W GND __RV1\nARV2 VCC /X GND __RV2\nV1 /in GND DC 0 AC 1 0 portnum 1 z0 50\nV2 /out GND DC 0 AC 1 0 portnum 2\nV3 VCC GND DC 12\n.end\n";
+        let pot = |r: &str| comp(r, &["1", "2", "3"], &[("Sim.Device", "R"), ("Sim.Type", "POT"), ("Sim.Pins", "1=r0 2=wiper 3=r1")]);
+        let xml = XmlNetlist { comps: vec![pot("RV1"), pot("RV2")], nets: vec![] };
+        let items = circuit(&split_netlist(cli, &[]), &xml, &BTreeMap::new());
+        assert_eq!((items[0].reference.as_str(), items[0].pin_count), ("RV1", 3));
+        assert_eq!(items[0].tuner, Some(("pos".into(), "0.3".into())));
+        assert_eq!(items[1].tuner, Some(("pos".into(), "".into())), "no position: the tuner starts at 0.5 (TUNER_SLIDER)");
+        assert_eq!((items[2].portnum.as_deref(), items[3].portnum.as_deref(), items[4].portnum.as_deref()), (Some("1"), Some("2"), None));
+        assert_eq!(items[2].tuner, Some(("dc".into(), "0".into())));
+        assert_eq!((items[0].portnum.as_deref(), items[4].tuner.clone()), (None, Some(("dc".into(), "12".into()))));
     }
 }

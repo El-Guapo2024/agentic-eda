@@ -265,6 +265,8 @@ function build(latest: { current: Latest }): EdaTestHook {
         sheetPath: studio.tab === "schematic" ? [...studio.currentSheetPath] : [],
         view: studio.tab === "schematic" ? { ...studio.schematicView } : studio.tab === "pcb" ? { ...studio.view } : studio.tab === "footprint" ? { ...L.fp.view } : studio.tab === "symbol" ? { ...L.sym.view } : null,
         activeLayer: studio.tab === "pcb" ? studio.activeLayer : null,
+        // the Symbol Editor's open symbol and the unit and body style it shows (`GetCurSymbol`, `GetUnit`, `GetBodyStyle`)
+        symbolEditor: studio.tab === "symbol" ? { libId: L.sym.libId, unit: L.sym.activeUnit, bodyStyle: L.sym.activeBodyStyle } : null,
         appearance: appearanceSummary(studio),
         viewer3d: studio.tab === "3d" ? viewer3dProbe.snapshot() : null,
         carry: (() => {

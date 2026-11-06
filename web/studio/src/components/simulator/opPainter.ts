@@ -1,7 +1,7 @@
 // The operating point drawn on the schematic canvas (`SCH_PAINTER` on LAYER_OP_VOLTAGES and LAYER_OP_CURRENTS: the stroke font, demi-bold, knocked out of
 // the background). Where the labels go is kicad-port/sim/opOverlay.ts's.
 import type { Schematic } from "../../api/types";
-import { opLabels, opTextSize } from "../../kicad-port/sim/opOverlay";
+import { opFormatsOf, opLabels, opTextSize } from "../../kicad-port/sim/opOverlay";
 import { allPinItems } from "../../kicad-port/schPins";
 import { getSimUi } from "../../state/simulator";
 import { drawStrokeText } from "../text/strokeFont";
@@ -13,7 +13,7 @@ export function paintOperatingPoints(ctx: CanvasRenderingContext2D, scale: numbe
   if (ui.opPoints.size === 0 || (!ui.showOpVoltages && !ui.showOpCurrents)) return;
   // `RefreshOperatingPointDisplay`: `symbol->GetPins( &sheetPath )`, hidden pins included, for the two-pin test.
   const pins = allPinItems(sch).map((p) => ({ reference: p.reference, symbol: p.key, number: p.number, tip: p.tip, root: p.root, net: p.net, hidden: p.hidden }));
-  const labels = opLabels({ wires: sch.wires, pins, circuit: ui.frame.circuit, points: ui.opPoints, voltages: ui.showOpVoltages, currents: ui.showOpCurrents, scale });
+  const labels = opLabels({ wires: sch.wires, pins, circuit: ui.frame.circuit, points: ui.opPoints, voltages: ui.showOpVoltages, currents: ui.showOpCurrents, scale, formats: opFormatsOf(sch.setup) });
   const size = opTextSize(scale);
   // `GetPenSizeForDemiBold`: a sixth of the size.
   const thickness = size / 6;

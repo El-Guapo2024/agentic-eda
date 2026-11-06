@@ -36,6 +36,8 @@ export interface CircuitItem {
   pin_index: Record<string, number>;
   currents: string[];
   tuner: { param: string; value: string } | null;
+  /** A voltage source's `FindParam( "portnum" )`: its port of an S-parameter analysis (the server reads it from the item's line). */
+  portnum?: string | null;
   /** `GetDeviceInfo().fieldValue` / `GetTypeInfo().fieldValue` of the item's model (`Sim.Device`, `Sim.Type`; the server's). */
   sim_device?: string;
   sim_type?: string;
@@ -139,6 +141,15 @@ export function signalsList(simType: SimType, options: number, circuit: Circuit 
   if (t === "NOISE") {
     add("inoise_spectrum");
     add("onoise_spectrum");
+  }
+  // "We are only looking for voltage sources in .SP mode": each pair of the sources' ports is an S-parameter, `S_<a>_<b>`
+  if (t === "SP") {
+    const portnums: string[] = [];
+    for (const item of circuit.items) {
+      if (!item.name.startsWith("V")) continue;
+      if (item.portnum) portnums.push(item.portnum);
+    }
+    for (const a of portnums) for (const b of portnums) add(`S_${a}_${b}`);
   }
   // .SAVE and .PROBE directives
   for (const d of circuit.directives) {

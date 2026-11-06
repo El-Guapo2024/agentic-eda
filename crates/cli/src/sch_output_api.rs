@@ -34,11 +34,43 @@ fn bool_of(req: &Value, key: &str, default: bool) -> bool {
 ///
 /// KiCad's "Plot Current Page" plots `m_schematic->CurrentSheet()` itself (`SCH_PLOTTER::createSVGFiles` and the other formats:
 /// `sheetList.push_back( m_schematic->CurrentSheet() )`); kicad-cli has no sheet-path option, so its page number stands for it. The one
-/// difference: two sheets with the same page number are both plotted. (Round 4's X4-2: this used to be the sheet's place in the stored list,
-/// counted over sheets with a screen only, so a renumbered or reordered sheet plotted another page.)
+/// difference, that two sheets with the same page number would both be plotted, is undone by [`alone_on_its_page`]. (Round 4's X4-2: this used
+/// to be the sheet's place in the stored list, counted over sheets with a screen only, so a renumbered or reordered sheet plotted another page.)
 pub(crate) fn page_of(design: &Design, path: &[&str]) -> Option<String> {
     design.schematic.as_ref()?;
     eda_model::sheet_list::walk(design).into_iter().find(|e| e.path.iter().map(String::as_str).eq(path.iter().copied())).map(|e| e.effective_page())
+}
+
+/// Plot Current Page when another sheet has the current one's page number (an imported file, Edit Sheet Page Number): KiCad plots
+/// `CurrentSheet()` alone, and kicad-cli's `--pages` would keep every sheet of that number (`SCH_SHEET_LIST::TrimToPageNumbers`). So for the
+/// run the other sheets of that number are given numbers no sheet has (`SCH_SHEET_PATH::SetPageNumber` on a copy of the design), and the page
+/// plotted keeps its own. True when some sheet was renumbered. Differs: an intersheet reference on the page plotted that names one of those
+/// sheets shows its run-only number (`~2`, `~3` ..., `SCH_GLOBALLABEL`'s `${INTERSHEET_REFS}`).
+pub(crate) fn alone_on_its_page(design: &mut Design, path: &[&str]) -> bool {
+    let entries = eda_model::sheet_list::walk(design);
+    let Some(target) = entries.iter().find(|e| e.path.iter().map(String::as_str).eq(path.iter().copied())) else { return false };
+    let page = target.effective_page();
+    let mut taken: std::collections::BTreeSet<String> = entries.iter().map(|e| e.effective_page()).collect();
+    let mut k = 1;
+    let mut changed = false;
+    for other in entries.iter().filter(|e| e.path != target.path && e.effective_page() == page) {
+        let fresh = loop {
+            k += 1;
+            let p = format!("{page}~{k}");
+            if taken.insert(p.clone()) {
+                break p;
+            }
+        };
+        if other.path.is_empty() {
+            if let Some(root) = design.schematic.as_mut() {
+                root.extras.root_page = fresh;
+                changed = true;
+            }
+        } else {
+            changed |= eda_model::sheet_list::set_page(design, &other.path, &fresh);
+        }
+    }
+    changed
 }
 
 /// The colour themes kicad-cli plots with, in the order the dialog's "Color theme:" lists them (`SETTINGS_MANAGER::GetColorSettingsList`, sorted
@@ -130,19 +162,25 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
             None => return err(format!("unknown plot format {f:?} (expected ps, pdf, svg, dxf or png)")),
         },
     };
+    // Plot Current Page: the sheet's page number, with the other sheets of that number renumbered for the run (a design of its own then)
+    let mut renumbered = None;
     let page = if bool_of(&req, "plot_all", true) {
         None
     } else {
-        let (design, _) = match kicad_engine::load_with_schematic(dir) {
+        let (mut design, model) = match kicad_engine::load_with_schematic(dir) {
             Ok(v) => v,
             Err(e) => return err(crate::board::reasons(&e)),
         };
         let sheet_path = req.get("sheet_path").and_then(Value::as_str).unwrap_or("");
         let ids: Vec<&str> = sheet_path.split('/').filter(|s| !s.is_empty()).collect();
-        match page_of(&design, &ids) {
+        let page = match page_of(&design, &ids) {
             Some(p) => Some(p),
             None => return err(format!("no sheet at path {sheet_path:?}")),
+        };
+        if req.get("pages").and_then(Value::as_array).is_none_or(|a| a.is_empty()) && alone_on_its_page(&mut design, &ids) {
+            renumbered = Some((design, model));
         }
+        page
     };
     let out_dir = match output_dir_of(dir, &req, &format!("sch-{kind}")) {
         Ok(d) => d,
@@ -153,7 +191,10 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
     args.extend(crate::fab_api::variant_args(&req));
     // Page Settings' drawing sheet file (`schematic.page_layout_descr_file`): the plot draws the sheet the editor draws
     args.extend(crate::drawing_sheet_api::plot_args(dir, crate::drawing_sheet_api::schematic_sheet(dir).as_deref()));
-    let mut v = reply(kicad_engine::export_sch_into(dir, kind, &args, &out_dir));
+    let mut v = reply(match &renumbered {
+        Some((design, model)) => kicad_engine::export_sch_design_into(dir, design, model, kind, &args, &out_dir),
+        None => kicad_engine::export_sch_into(dir, kind, &args, &out_dir),
+    });
     if v["ok"].as_bool().unwrap_or(false) {
         v["format"] = Value::String(kind.into());
     }
@@ -270,5 +311,50 @@ mod tests {
         assert_eq!(page_of(&design, &[]).as_deref(), Some("1"));
         assert_eq!(page_of(&design, &["c"]), None);
         assert_eq!(plot_args_for("pdf", &json!({ "plot_all": false }), Some("5".into())), vec!["--pages", "5"]);
+    }
+
+    /// UI-LEFT X5 (r4 X4-2's leftover): Plot Current Page on a sheet whose page number another sheet has too plots it alone -- the others of that
+    /// number get a number no sheet has for the run -- and the page keeps its own.
+    #[test]
+    fn plot_current_page_renumbers_the_other_sheets_of_its_page_number_for_the_run() {
+        use eda_model::ir::{Point, Provenance, SchematicSection, SheetInstance};
+        use eda_model::units::Nm;
+        let placement = |id: &str, x_mm: f64, page: &str| SheetInstance {
+            id: id.into(),
+            name: id.to_uppercase(),
+            file: format!("{id}.kicad_sch"),
+            at: Point { x: Nm::from_mm(x_mm), y: Nm::ZERO },
+            size: (Nm::new(1000), Nm::new(1000)),
+            pins: vec![],
+            page: page.into(),
+        };
+        let root = SchematicSection { sheets: vec![placement("a", 50.0, "2"), placement("b", 100.0, "2"), placement("c", 150.0, "2~2")], ..Default::default() };
+        let contents = ["a", "b", "c"].map(|f| (format!("{f}.kicad_sch"), SchematicSection::default())).into_iter().collect();
+        let mut design = Design {
+            schema: eda_model::ir::SCHEMA_VERSION,
+            provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: Some(root),
+            nets: None,
+            placement: None,
+            routing: None,
+            drawings: None,
+            footprint_library: None,
+            sheet_contents: Some(contents),
+            bus_aliases: vec![],
+            symbol_library: None,
+        };
+        let untouched = design.clone();
+        assert!(alone_on_its_page(&mut design, &["b"]));
+        assert_eq!(page_of(&design, &["b"]).as_deref(), Some("2"), "the page plotted keeps its number");
+        assert_eq!(page_of(&design, &["a"]).as_deref(), Some("2~3"), "a number no sheet has (2~2 is c's)");
+        assert_eq!(page_of(&design, &["c"]).as_deref(), Some("2~2"));
+        // the root's own number too, when a sheet has it
+        let mut d = untouched.clone();
+        assert!(!alone_on_its_page(&mut d, &["c"]), "a page number no other sheet has: nothing to do");
+        assert_eq!(serde_json::to_value(&d).unwrap(), serde_json::to_value(&untouched).unwrap());
+        d.schematic.as_mut().unwrap().sheets[0].page = "1".into();
+        assert!(alone_on_its_page(&mut d, &["a"]));
+        assert_eq!(page_of(&d, &[]).as_deref(), Some("1~2"));
+        assert_eq!(page_of(&d, &["a"]).as_deref(), Some("1"));
     }
 }

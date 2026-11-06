@@ -35,8 +35,12 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The project of the board in `dir`: the name kicad-cli's derived project has (`PROJECTNAME`), and the variables the Text Variables page holds.
+/// The project of the board in `dir`: the name kicad-cli's derived project has (`PROJECTNAME`), and the variables the Text Variables page holds. The texts
+/// resolved on this thread from now on ask the git repository the board is in for `${VCSHASH}` and the `@{vcs..}` functions, as kicad-cli asks the one its
+/// derived project is in ([`crate::vcs::GitRepo`]; KiCad's `SETTINGS_MANAGER::LoadProject` sets `TEXT_EVAL_VCS`' context path), each answer kept for the
+/// request that made this project.
 pub(crate) fn project(dir: &Path, intent: &str, clock: Clock) -> Project {
+    eda_model::text_vars::set_vcs(Some(std::rc::Rc::new(crate::vcs::GitRepo::of_board(dir))));
     let stem = Path::new(intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board");
     Project { name: eda_kicad_engine::file_stem(stem), variables: crate::text_variables::project_variables(dir), clock }
 }
@@ -77,16 +81,31 @@ impl PcbShown {
                 let lib_id = Some(eda_model::footprint::footprint_lib_id(part)).filter(|n| !n.is_empty()).unwrap_or_else(|| footprint.name.clone());
                 let (nickname, item) = lib_id.split_once(':').unwrap_or(("", lib_id.as_str()));
                 let fields: Vec<PcbField> = crate::fp_json::fields_json(design, model, part, fp, &footprint).iter().map(field_of).collect();
+                // `PAD::GetPinFunction`: what Update PCB from Schematic gives the pad (`(pinfunction ..)`, the netlist's pin name), as the board file has it
+                let link = model.symbol_links.get(&part.reference);
                 let pads = footprint
                     .pads
                     .iter()
                     .map(|p| {
                         let net = net_of.get(format!("{}.{}", part.reference, p.number).as_str()).copied().unwrap_or("");
-                        PcbPad { number: p.number.clone(), net: net.to_string(), net_class: net_class_name(&model.board, net), pin_function: String::new() }
+                        let pin_function = link.and_then(|l| l.pins.get(&p.number)).map(|(f, _)| f.clone()).unwrap_or_default();
+                        PcbPad { number: p.number.clone(), net: net.to_string(), net_class: net_class_name(&model.board, net), pin_function }
                     })
                     .collect();
+                let attrs = design.effective_attrs(&part.reference, &footprint);
+                let exclude_from_sim = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.symbols.iter()).any(|s| s.id == part.reference && s.exclude_from_sim);
                 by_part.insert(part.reference.clone(), footprints.len());
-                footprints.push(PcbFootprint { layer: if fp.side == eda_model::ir::Side::Bottom { "B.Cu" } else { "F.Cu" }.into(), lib_nickname: nickname.into(), lib_item_name: item.into(), fields, pads });
+                footprints.push(PcbFootprint {
+                    layer: if fp.side == eda_model::ir::Side::Bottom { "B.Cu" } else { "F.Cu" }.into(),
+                    lib_nickname: nickname.into(),
+                    lib_item_name: item.into(),
+                    fields,
+                    pads,
+                    dnp: attrs.dnp,
+                    exclude_from_bom: attrs.exclude_from_bom,
+                    exclude_from_pos_files: attrs.exclude_from_pos_files,
+                    exclude_from_sim,
+                });
             }
         }
         let title_block = design.drawings.as_ref().and_then(|d| d.title_block.as_ref()).map(TitleBlockVars::of);
@@ -202,8 +221,13 @@ fn symbol_of(sch: &SchematicSection, model: &ConstraintModel, sym: &eda_model::i
                 .map(|pin| {
                     let key = format!("{}.{}", sym.id, pin.number);
                     let net = model.nets.iter().find(|n| n.pins.iter().any(|q| *q == key)).map_or("", |n| n.name.as_str());
-                    let unit = lib.as_ref().and_then(|l| l.pin_by_number(&pin.number)).map_or(0, |lp| lp.unit);
-                    SchPin { number: pin.number.clone(), name: pin.name.clone().unwrap_or_default(), net: net.to_string(), net_class: net_class_name(&model.board, net), unit }
+                    let lib_pin = lib.as_ref().and_then(|l| l.pin_by_number(&pin.number));
+                    let unit = lib_pin.map_or(0, |lp| lp.unit);
+                    // the alternate the placed pin keeps (`SCH_PIN::GetAlt`), and the library pin's alternates (`GetAlternates`)
+                    let kept = sch.extras.pin_alternates.get(&eda_model::ir::field_key(&sym.id, sym.unit)).and_then(|m| m.get(&pin.number)).map(String::as_str);
+                    let alt = lib.as_ref().zip(lib_pin).and_then(|(l, lp)| l.kept_alternate(lp, kept)).map(|a| a.name.clone()).unwrap_or_default();
+                    let alternates = lib.as_ref().and_then(|l| l.connectivity.pin_alternates.get(&pin.number)).map(|a| a.iter().map(|x| x.name.clone()).collect()).unwrap_or_default();
+                    SchPin { number: pin.number.clone(), name: pin.name.clone().unwrap_or_default(), alt, alternates, net: net.to_string(), net_class: net_class_name(&model.board, net), unit }
                 })
                 .collect()
         })
@@ -343,6 +367,29 @@ impl SchShown {
             }
         }
         (!out.is_empty()).then(|| Value::Object(out))
+    }
+
+    /// `SCH_FIELD::GetShownText` of a power symbol's fields: a power symbol is a symbol to KiCad, so its fields resolve through `SCH_SYMBOL::ResolveTextVar` --
+    /// its own fields by name, `${REFERENCE}`, `${VALUE}`, `${SYMBOL_NAME}` ... -- then the sheet's. `shown` on each field whose shown text is not its stored one
+    /// (UI-LEFT B5). `fields` are `{name, text}`s, the power symbol's as the state lists them.
+    pub(crate) fn annotate_power_fields(&self, p: &eda_model::ir::PowerSymbol, fields: &mut [Value]) {
+        let level = self.sheet.levels.len().saturating_sub(1);
+        let pairs: Vec<(String, String)> = fields.iter().map(|f| (f["name"].as_str().unwrap_or("").to_string(), f["text"].as_str().unwrap_or("").to_string())).collect();
+        let (nickname, item) = p.lib_id.split_once(':').unwrap_or(("", p.lib_id.as_str()));
+        let sym = SchSymbol { fields: pairs, reference: p.id.clone(), short_reference: p.id.clone(), lib_nickname: nickname.into(), lib_item_name: item.into(), ..Default::default() };
+        for f in fields {
+            if f["name"].as_str() == Some("Reference") {
+                continue;
+            }
+            let raw = f["text"].as_str().unwrap_or("").to_string();
+            if !eda_model::text_vars::has_text_vars(&raw) && !raw.contains('{') {
+                continue;
+            }
+            let shown = self.sheet.field_shown(level, Some(&sym), &raw, 0);
+            if shown != raw {
+                f["shown"] = json!(shown);
+            }
+        }
     }
 
     /// The same for the fields of a placed sheet (`Sheetname`, `Sheetfile`).

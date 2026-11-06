@@ -132,6 +132,7 @@ fn item_json(i: &CircuitItem) -> Value {
         "pin_index": i.pin_index,
         "currents": i.currents,
         "tuner": i.tuner.as_ref().map(|(p, v)| json!({ "param": p, "value": v })),
+        "portnum": i.portnum,
         "sim_device": i.sim_device,
         "sim_type": i.sim_type,
     })
@@ -228,7 +229,7 @@ pub(crate) fn prepare(dir: &Path, req: &Value) -> Result<Prepared, String> {
         let r = t.get("ref").and_then(Value::as_str).unwrap_or("");
         let value = t.get("value").and_then(Value::as_f64).unwrap_or(f64::NAN);
         match c.items.iter().find(|i| i.reference == r) {
-            Some(i) if i.tuner.is_some() => tuners.push(Tuner { item: i.name.clone(), value }),
+            Some(i) if i.tuner.is_some() => tuners.push(Tuner { item: i.name.clone(), value, position: i.tuner.as_ref().is_some_and(|(p, _)| p == "pos") }),
             Some(_) => tune_errors.push(format!("{r} is not tunable")),
             None => tune_errors.push(format!("{r} not found")),
         }
@@ -552,5 +553,46 @@ mod tests {
         let out = vector(&op, "v(/out)")[0];
         assert!((out - want_out).abs() < 1e-6, "V(/OUT) = {out}, by hand {want_out}; netlist {}", op["netlist"]);
         assert!(op["netlist"].as_str().unwrap().contains("XU1 /IN /FB VCC GND /OUT MYAMP"), "{}", op["netlist"]);
+    }
+
+    /// Slow tier (kicad-cli only; no ngspice): what the circuit tells the simulator window of an S-parameter port and of a potentiometer, read from
+    /// kicad-cli's own netlist. A `Simulation_SPICE:VDC` given `portnum=1 z0=50` (`SIM_MODEL_SOURCE::appendSpParamInfos`) is port 1 of an `.sp`
+    /// analysis, which `rebuildSignalsList` makes `S_1_1` of; a `Device:R_Potentiometer` (`Sim.Device` R, `Sim.Type` POT, `pos=0.3`) is tuned by its
+    /// wiper (`SIM_MODEL_R_POT::GetTunerParam`), and one with no position starts at 0.5 (`TUNER_SLIDER`).
+    #[test]
+    fn the_circuit_has_kicad_cli_s_s_parameter_ports_and_potentiometer_wipers() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        let yaml = "parts:\n  - { reference: V1, value: \"0\", symbol: \"Simulation_SPICE:VDC\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: RV1, value: 10k, symbol: \"Device:R_Potentiometer\", package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }, { number: \"3\", kind: passive }] }\n  - { reference: RV2, value: 1k, symbol: \"Device:R_Potentiometer\", package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }, { number: \"3\", kind: passive }] }\n  - { reference: R1, value: 50, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\nnets:\n  - { name: IN, pins: [V1.1, RV1.1, RV2.1] }\n  - { name: GND, pins: [V1.2, RV1.3, RV2.3, R1.2] }\n  - { name: W, pins: [RV1.2, RV2.2, R1.1] }\n";
+        let b = board("sp-pot", yaml);
+        let edit = |id: &str, field: &str, value: &str| eda_ops::fields_table::FieldEdit { id: id.into(), field: field.into(), value: value.into() };
+        let edits = vec![edit("V1", "Sim.Params", "dc=0 ac=1 portnum=1 z0=50"), edit("RV1", "Sim.Params", "r=10k pos=0.3")];
+        crate::board::step(&b, eda_ops::Cmd::SetSymbolFields { edits, add_fields: vec![], rename_fields: vec![], remove_fields: vec![] }, false, "test").unwrap();
+        let c = circuit_route(&b, json!({ "command": ".sp dec 10 1k 1Meg 1", "options": eda_sim::netlist::OPTION_DEFAULT_FLAGS }).to_string().as_bytes());
+        assert_eq!(c["ok"], true, "{c}");
+        let items = c["items"].as_array().unwrap();
+        let item = |r: &str| items.iter().find(|i| i["ref"] == r).unwrap_or_else(|| panic!("no {r} in {c}"));
+        let netlist = c["netlist"].as_str().unwrap();
+        assert!(netlist.contains("portnum 1 z0 50"), "{netlist}");
+        assert_eq!((item("V1")["portnum"].as_str(), item("R1")["portnum"].as_str()), (Some("1"), None));
+        assert_eq!(item("RV1")["name"], "ARV1");
+        assert_eq!(item("RV1")["tuner"], json!({ "param": "pos", "value": "0.3" }), "{netlist}");
+        assert_eq!(item("RV2")["tuner"], json!({ "param": "pos", "value": "" }), "{netlist}");
+    }
+
+    /// The operating-point overlay's formats reach the sheet the studio draws: Schematic Setup > Formatting's significant digits and ranges
+    /// (`SCHEMATIC_SETTINGS::m_OPO_*`, which `RefreshOperatingPointDisplay` passes `GetOperatingPoint`) are in `GET /api/schematic`'s `setup`.
+    #[test]
+    fn the_sheet_s_setup_carries_the_op_overlay_formats() {
+        let b = board("opo", RC);
+        let before = crate::studio::schematic_json(&b, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+        assert_eq!((before["setup"]["opo_v_precision"].as_u64(), before["setup"]["opo_v_range"].as_str(), before["setup"]["opo_i_range"].as_str()), (Some(3), Some("~V"), Some("~A")), "KiCad's defaults");
+        let settings = eda_model::sch_setup::SchFormatting { opo_v_precision: 5, opo_v_range: "mV".into(), opo_i_precision: 2, opo_i_range: "uA".into(), ..Default::default() };
+        crate::board::step(&b, eda_ops::Cmd::SetSchFormatting { settings }, false, "test").unwrap();
+        let after = crate::studio::schematic_json(&b, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+        let s = &after["setup"];
+        assert_eq!((s["opo_v_precision"].as_u64(), s["opo_v_range"].as_str(), s["opo_i_precision"].as_u64(), s["opo_i_range"].as_str()), (Some(5), Some("mV"), Some(2), Some("uA")));
     }
 }

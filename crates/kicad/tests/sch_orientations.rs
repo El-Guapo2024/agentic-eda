@@ -79,17 +79,24 @@ fn design_with(sch: SchematicSection) -> Design {
 /// and mirrored top-bottom, each pin with a wire out to a label `<REF>_<PIN>` where the tracer (`eda_engine::placed`) has the pin -- which is where the
 /// editor and the painter draw it (`sch_move_tests::the_editor_s_pins_of_a_turned_symbol_are_the_writer_s_in_every_orientation`).
 fn sheet(m: &ConstraintModel) -> SchematicSection {
+    sheet_of(m, "U", "test:GATE", "GATE")
+}
+
+/// [`sheet`] of `<prefix>1` .. `<prefix>6`, placed from `lib_id` with the value `value`.
+fn sheet_of(m: &ConstraintModel, prefix: &str, lib_id: &str, value: &str) -> SchematicSection {
     let mut sch = SchematicSection::default();
-    for (i, (reference, rot, mirrored, mirror_y)) in [("U1", 0, false, false), ("U2", 90_000, false, false), ("U3", 0, true, false), ("U4", 0, false, true), ("U5", 90_000, true, false), ("U6", 270_000, false, true)].into_iter().enumerate() {
+    for (i, (rot, mirrored, mirror_y)) in [(0, false, false), (90_000, false, false), (0, true, false), (0, false, true), (90_000, true, false), (270_000, false, true)].into_iter().enumerate() {
+        let reference = format!("{prefix}{}", i + 1);
+        let reference = reference.as_str();
         let sym = SymbolInstance {
             id: reference.into(),
             at: Point { x: mm(50.8) + mm(50.8) * i as i64, y: mm(76.2) },
             rot,
             mirrored,
             mirror_y,
-            lib_id: "test:GATE".into(),
+            lib_id: lib_id.into(),
             unit: 1,
-            value: "GATE".into(),
+            value: value.into(),
             footprint: String::new(),
             datasheet: String::new(),
             dnp: false,
@@ -192,5 +199,68 @@ fn kicad_cli_connects_each_turned_symbol_to_the_wires_on_its_own_pins() {
             assert_eq!(nets.get(&net).map(Vec::as_slice), Some(&[format!("{reference}.{pin}")][..]), "{net}: {nets:?}");
         }
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A two-pin resistor (pin 1 above, pin 2 below its body), from which kicad-cli's SPICE netlist infers an ideal R (`SIM_MODEL::InferSimModel`: the
+/// reference's `R` and the value, pins `1=+ 2=-`).
+fn resistor() -> LibSymbol {
+    LibSymbol {
+        lib_id: "test:R".into(),
+        graphics: vec![SymbolGraphic::Rectangle { unit: 1, start: SPoint::new(-1.016, 2.54), end: SPoint::new(1.016, -2.54), stroke_mm: 0.254, filled: false }],
+        pins: vec![pin("1", "~", "passive", 0.0, 3.81, 270.0), pin("2", "~", "passive", 0.0, -3.81, 90.0)],
+        reference_prefix: "R".into(),
+        ..gate()
+    }
+}
+
+fn resistor_model() -> ConstraintModel {
+    let pins = ["1", "2"].map(|n| Pin { number: n.into(), name: None, kind: PinKind::Passive }).to_vec();
+    let part = |reference: &str| Part {
+        reference: reference.into(),
+        mpn: None,
+        lcsc: None,
+        value: Some("1k".into()),
+        package: None,
+        footprint: Some("Foo:Bar".into()),
+        symbol: Some("test:R".into()),
+        datasheet: None,
+        pins: pins.clone(),
+        body_nm: None,
+        edge: None,
+    };
+    ConstraintModel { parts: ["R1", "R2", "R3", "R4", "R5", "R6"].map(part).to_vec(), symbols: vec![resistor()], ..Default::default() }
+}
+
+/// UI-LEFT M4 (GAPS.md item 34's "two symbols of one library symbol placed at different angles share one transform"): the simulator's netlist is
+/// kicad-cli's SPICE netlist of the derived sheet, so it is settled there. Six resistors of one library symbol, each turned or mirrored its own
+/// way, each pin wired to a label of its own: every `R<n>` line of `kicad-cli sch export netlist --format spice` names that resistor's own two
+/// labels, pin 1 first (no pin left on another resistor's transform, unconnected, or swapped).
+#[test]
+fn kicad_cli_s_spice_netlist_gives_each_turned_copy_of_a_library_symbol_its_own_nodes() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let m = resistor_model();
+    let text = export_kicad_sch(&design_with(sheet_of(&m, "R", "test:R", "1k")), &m, &META).expect("the sheet exports");
+    let dir = std::env::temp_dir().join(format!("eda_sch_orientations_spice_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("orientations.kicad_sch");
+    std::fs::write(&path, &text).unwrap();
+    let out = dir.join("orientations.cir");
+    let run = Command::new(&cli).args(["sch", "export", "netlist", "--format", "spice", "-o"]).arg(&out).arg(&path).output().expect("run kicad-cli");
+    assert!(run.status.success() && out.exists(), "kicad-cli could not read the file: {}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+    let netlist = std::fs::read_to_string(&out).unwrap();
+    for n in 1..=6 {
+        let want = format!("R{n} /R{n}_1 /R{n}_2 1k");
+        assert!(netlist.lines().any(|l| l.trim() == want), "{want} is not in kicad-cli's SPICE netlist:\n{netlist}");
+    }
+    // the turned ones are the cache copies of their own (`(lib_name "R_<n>")`), as the kicadxml test above has them
+    assert!(text.contains("(lib_name \"R_1\")"), "R2 has a cache copy of its own");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -55,6 +55,9 @@ export interface RuleTextEditorProps {
   onEscape?: () => boolean;
   /** Shift+Enter: the panel's `onAcceptFn` (none: a new line, as the DRC Rule Editor's panels do). */
   onAccept?: () => void;
+  /** `SCINTILLA_TRICKS`' `aSingleLine` (a grid cell's `GRID_CELL_STC_EDITOR`): Enter is `onAccept` without Shift and types no new line, and a
+   *  new line that comes in (a paste) is taken out (`onModified`). */
+  singleLine?: boolean;
   /** `OnContextMenu`: KiCad's right-click menu (else the browser's). */
   contextMenu?: boolean;
   ariaLabel?: string;
@@ -110,7 +113,7 @@ function positionFromLine(text: string, line: number): number {
 }
 
 export const RuleTextEditor = forwardRef<RuleTextEditorHandle, RuleTextEditorProps>(function RuleTextEditor(props, handle) {
-  const { value, onChange, onCharAdded, lineNumbers, onAccept, contextMenu, ariaLabel, testId, className, placeholder, invalid } = props;
+  const { value, onChange, onCharAdded, lineNumbers, onAccept, contextMenu, ariaLabel, testId, className, placeholder, invalid, singleLine } = props;
   const area = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const overlay = useRef<HTMLPreElement>(null);
@@ -355,6 +358,12 @@ export const RuleTextEditor = forwardRef<RuleTextEditorHandle, RuleTextEditorPro
 
   const onInput = (e: ChangeEvent<HTMLTextAreaElement>) => {
     const el = e.target;
+    if (singleLine && /[\r\n]/.test(el.value)) {
+      const caret = caretOf(el);
+      const before = el.value.slice(0, caret).replace(/[\r\n]/g, "").length;
+      el.value = el.value.replace(/[\r\n]/g, "");
+      el.setSelectionRange(before, before);
+    }
     onChange(el.value);
     reveal.current = true;
     readSel();
@@ -426,10 +435,10 @@ export const RuleTextEditor = forwardRef<RuleTextEditorHandle, RuleTextEditorPro
       applyEdit(el.value, tabIndent(el.value, anchorOf(el), caretOf(el)));
       return;
     }
-    if (e.key === "Enter" && e.shiftKey && onAccept) {
+    if (e.key === "Enter" && (e.shiftKey || singleLine) && onAccept) {
       e.preventDefault();
       onAccept();
-    }
+    } else if (e.key === "Enter" && singleLine) e.preventDefault();
   };
 
   // ------------------------------------------------------------------------------------------------------------ the highlights and the list

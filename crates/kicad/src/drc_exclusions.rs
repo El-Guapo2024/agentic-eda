@@ -19,7 +19,15 @@
 //! two items, the middle of a track). So an exclusion stored in `design.json` carries the positions worth trying
 //! ([`DrcExclusion::positions_nm`]) and one record is written for each; the one that is the marker's is the one kicad-cli matches. Where the
 //! marker sits at an item's position -- a via, a pad, a footprint, the start of an unconnected pair -- or in the middle of a track, that
-//! is the whole story. Where it sits somewhere else the exclusion holds in the studio's own report and not in kicad-cli's.
+//! is the whole story. Where it sits at the contact point of two tracks or vias (`clearance`, `shorting_items`, `tracks_crossing`), the point
+//! is KiCad's own arithmetic on the two shapes, ported here ([`contact_point`]). Where it sits somewhere else (a pad's or a zone's contact,
+//! a courtyard's overlap) the exclusion holds in the studio's own report and not in kicad-cli's.
+//!
+//! A record no marker matches costs nothing on a DRC run: kicad-cli's DRC job records the exclusions of the markers the load made, deletes every
+//! marker, runs the tests and then marks the new ones a record matches (`PCBNEW_JOBS_HANDLER::JobExportDrc`: `RecordDRCExclusions`, `DeleteMARKERs`,
+//! `RunTests`, `ResolveDRCExclusions( false )`), and a record that matched none is dropped without a marker of its own. So every position worth
+//! trying is written, and for the checks whose marker also names its layer (`copper_sliver`, `starved_thermal`: `PCB_MARKER`'s `ToProto` stores
+//! the layer of these, KiCad 25ec2335) each position on each copper layer of the board ([`markers_on`]).
 
 use eda_model::units::Nm;
 use eda_model::ir::DrcExclusion;
@@ -106,41 +114,220 @@ pub fn error_type(check: &str) -> Option<&'static str> {
 /// `DRCE_GENERIC_WARNING`, `DRCE_GENERIC_ERROR`) and the drawing-sheet variable check, whose items are not preserved between runs.
 const LAYERED: &[&str] = &["copper_sliver", "starved_thermal", "generic_warning", "generic_error", "unresolved_variable"];
 
+/// The layered checks a record can still be written for: one per copper layer the board has, as `PCB_MARKER`'s `ToProto` stores the marker's layer
+/// for them (KiCad 25ec2335 `pcb_marker.cpp`: `storeLayer` for `DRCE_COPPER_SLIVER` and `DRCE_STARVED_THERMAL`, `UNDEFINED_LAYER` written as `F_Cu`).
+/// The generic checks name no item a run keeps, and the drawing sheet's variable check is a marker of the drawing sheet.
+const LAYERED_BY_COPPER: &[&str] = &["copper_sliver", "starved_thermal"];
+
+/// `kiapi.board.types.BoardLayer` of a copper layer by its canonical name: `BL_F_Cu`, `BL_In1_Cu` .. `BL_In30_Cu`, `BL_B_Cu`
+/// (`api/proto/board/board_types.proto`, `ToProtoEnum<PCB_LAYER_ID, BoardLayer>`). `None` for any other layer.
+pub fn board_layer(name: &str) -> Option<String> {
+    match name {
+        "F.Cu" => Some("BL_F_Cu".into()),
+        "B.Cu" => Some("BL_B_Cu".into()),
+        _ => {
+            let n: u32 = name.strip_prefix("In")?.strip_suffix(".Cu")?.parse().ok()?;
+            (1..=30).contains(&n).then(|| format!("BL_In{n}_Cu"))
+        }
+    }
+}
+
 /// The markers (`kiapi.board.DrcMarker` as protobuf JSON) to list in the project for one exclusion, one for each position worth trying, sorted and
 /// listed once. Empty when the exclusion has no position to try, its check is not one the project can name, or its marker has a part (the layer) a
-/// report does not give.
+/// report does not give. [`markers_on`] with no copper layers.
 pub fn markers(e: &DrcExclusion) -> Vec<Value> {
-    let Some(error_type) = error_type(&e.check).filter(|_| !LAYERED.contains(&e.check.as_str())) else { return Vec::new() };
+    markers_on(e, &[]).into_iter().map(|(m, _)| m).collect()
+}
+
+/// [`markers`] on a board whose copper layers are `copper` (canonical names, `F.Cu` first): a check whose marker carries its layer
+/// ([`LAYERED_BY_COPPER`]) gets one marker per position per copper layer; each comes with the position it is at.
+pub fn markers_on(e: &DrcExclusion, copper: &[String]) -> Vec<(Value, [Nm; 2])> {
+    let Some(error_type) = error_type(&e.check) else { return Vec::new() };
+    let layers: Vec<Option<String>> = if LAYERED_BY_COPPER.contains(&e.check.as_str()) {
+        copper.iter().filter_map(|l| board_layer(l)).map(Some).collect()
+    } else if LAYERED.contains(&e.check.as_str()) {
+        Vec::new()
+    } else {
+        vec![None]
+    };
     let items: Vec<Value> = e.items.iter().map(|u| json!({ "value": u })).collect();
     let mut positions: Vec<[Nm; 2]> = e.positions_nm.clone();
     positions.sort_unstable();
     positions.dedup();
-    positions
-        .into_iter()
-        .map(|[x, y]| {
+    let mut out = Vec::new();
+    for [x, y] in positions {
+        for layer in &layers {
             // protobuf JSON prints a 64-bit integer as a string
-            json!({ "errorType": error_type, "position": { "xNm": x.to_string(), "yNm": y.to_string() }, "items": items })
-        })
-        .collect()
+            let mut m = json!({ "errorType": error_type, "position": { "xNm": x.to_string(), "yNm": y.to_string() }, "items": items });
+            if let Some(layer) = layer {
+                m["layer"] = json!(layer);
+            }
+            out.push((m, [x, y]));
+        }
+    }
+    out
 }
 
 /// The `drc_exclusions` array of the project's `board.design_settings`: `{ marker, comment }` for each marker of each exclusion
-/// (`kiapi.board.DrcExclusion` as protobuf JSON), in a fixed order -- by check, then position, then items.
+/// (`kiapi.board.DrcExclusion` as protobuf JSON), in a fixed order -- by check, then position, then items. [`project_entries_on`] with no copper layers.
 pub fn project_entries(exclusions: &[DrcExclusion]) -> Vec<Value> {
-    let mut entries: BTreeMap<(String, [Nm; 2], Vec<String>), Value> = BTreeMap::new();
+    project_entries_on(exclusions, &[])
+}
+
+/// [`project_entries`] on a board whose copper layers are `copper` (see [`markers_on`]).
+pub fn project_entries_on(exclusions: &[DrcExclusion], copper: &[String]) -> Vec<Value> {
+    let mut entries: BTreeMap<(String, [Nm; 2], Vec<String>, String), Value> = BTreeMap::new();
     for e in exclusions {
-        let mut positions = e.positions_nm.clone();
-        positions.sort_unstable();
-        positions.dedup();
-        for (marker, at) in markers(e).into_iter().zip(positions) {
+        for (marker, at) in markers_on(e, copper) {
+            let layer = marker["layer"].as_str().unwrap_or("").to_string();
             let mut entry = json!({ "marker": marker });
             if !e.comment.is_empty() {
                 entry["comment"] = json!(e.comment);
             }
-            entries.insert((e.check.clone(), at, e.items.clone()), entry);
+            entries.insert((e.check.clone(), at, e.items.clone(), layer), entry);
         }
     }
     entries.into_values().collect()
+}
+
+// ------------------------------------------------------------------------------------------------ where two copper items' marker sits
+
+/// A track segment or a via as the copper clearance test sees it on a layer: `PCB_TRACK::GetEffectiveShape` is a `SHAPE_SEGMENT` (the ends and the
+/// width), `PCB_VIA::GetEffectiveShape` a `SHAPE_CIRCLE` (the centre and half the layer's diameter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Copper {
+    Segment { a: [i64; 2], b: [i64; 2], width: i64 },
+    Circle { centre: [i64; 2], radius: i64 },
+}
+
+/// Where KiCad puts the marker of `check` between two copper items, `main` and `aux` in the order the report names them (the marker's own:
+/// `DRC_TEST_PROVIDER_COPPER_CLEARANCE::testSingleLayerItemAgainstItem` swaps the two so that `item->m_Uuid < other->m_Uuid` and then calls
+/// `SetItems( item, other )`), in nanometres. KiCad 25ec2335:
+/// - `tracks_crossing` (two tracks): `trackSeg.Intersect( otherSeg )`, the crossing;
+/// - `clearance` and `shorting_items`: the location `itemShape->Collide( otherShape, clearance, &actual, &pos )` gives (`shape_collisions.cpp`),
+///   which is `SHAPE_SEGMENT::Collide( SEG )`'s `m_seg.NearestPoint( aSeg )` for two tracks, `SHAPE_CIRCLE::Collide( SEG )`'s nearest point of the
+///   track to the via's centre for a via and a track (in either order: `CollCaseReversed`), and `( aA.GetCenter() + aB.GetCenter() ) / 2` for two vias.
+///   (The clearance value decides only whether they collide, not where.)
+///
+/// `None` for another check or pair. A via whose centre lies on the track takes the circle's first crossing of the track in KiCad
+/// (`m_circle.Intersect( aSeg )[0]`), which is not ported: the nearest point is given, and kicad-cli does not match it.
+pub fn contact_point(check: &str, main: Copper, aux: Copper) -> Option<[i64; 2]> {
+    use Copper::{Circle, Segment};
+    match (check, main, aux) {
+        ("tracks_crossing", Segment { a, b, .. }, Segment { a: c, b: d, .. }) => seg_intersect([a, b], [c, d]),
+        ("clearance" | "shorting_items", Segment { a, b, .. }, Segment { a: c, b: d, .. }) => {
+            // SHAPE_SEGMENT::Collide( const SEG& ): a zero-length other is a point, `m_seg.NearestPoint( aP )`
+            Some(if c == d { seg_nearest_point([a, b], c) } else { seg_nearest_to_seg([a, b], [c, d]) })
+        }
+        ("clearance" | "shorting_items", Circle { centre, .. }, Segment { a, b, .. }) | ("clearance" | "shorting_items", Segment { a, b, .. }, Circle { centre, .. }) => Some(seg_nearest_point([a, b], centre)),
+        // `VECTOR2I::operator/( double )`: `KiROUND` of each half
+        ("clearance" | "shorting_items", Circle { centre: p, .. }, Circle { centre: q, .. }) => Some([ki_round_half(p[0] + q[0]), ki_round_half(p[1] + q[1])]),
+        _ => None,
+    }
+}
+
+/// `KiROUND( v / 2.0 )`: half of `v`, rounded half away from zero.
+fn ki_round_half(v: i64) -> i64 {
+    if v >= 0 {
+        (v + 1) / 2
+    } else {
+        (v - 1) / 2
+    }
+}
+
+/// `rescale( aNumerator, aValue, aDenominator )` (`libs/kimath/src/math/util.cpp`, the `__int128` branch): `aNumerator * aValue / aDenominator`
+/// rounded to the nearest, half away from zero.
+fn rescale(numerator: i128, value: i128, denominator: i128) -> i128 {
+    let n = numerator * value;
+    if (n < 0) ^ (denominator < 0) {
+        (n - denominator / 2) / denominator
+    } else {
+        (n + denominator / 2) / denominator
+    }
+}
+
+fn cross(u: [i128; 2], v: [i128; 2]) -> i128 {
+    u[0] * v[1] - u[1] * v[0]
+}
+
+/// `SEG::NearestPoint( const VECTOR2I& aP )` (KiCad 25ec2335 `seg.cpp`).
+fn seg_nearest_point(s: [[i64; 2]; 2], p: [i64; 2]) -> [i64; 2] {
+    let [a, b] = s;
+    let d = [(b[0] - a[0]) as i128, (b[1] - a[1]) as i128];
+    let l_squared = d[0] * d[0] + d[1] * d[1];
+    if l_squared == 0 {
+        return a;
+    }
+    let pa = [(p[0] - a[0]) as i128, (p[1] - a[1]) as i128];
+    let t = d[0] * pa[0] + d[1] * pa[1];
+    if t < 0 {
+        return a;
+    } else if t > l_squared {
+        return b;
+    }
+    [a[0] + rescale(t, d[0], l_squared) as i64, a[1] + rescale(t, d[1], l_squared) as i64]
+}
+
+/// `SEG::NearestPoint( const SEG& aSeg )`: the crossing if they cross, else of the four end-to-segment distances the smallest, its point on this
+/// segment (this segment's own end, or the nearest point of this segment to the other's end), the first of equals.
+fn seg_nearest_to_seg(s: [[i64; 2]; 2], o: [[i64; 2]; 2]) -> [i64; 2] {
+    if let Some(p) = seg_intersect(s, o) {
+        return p;
+    }
+    let [a, b] = s;
+    let origin = [seg_nearest_point(o, a), seg_nearest_point(o, b), seg_nearest_point(s, o[0]), seg_nearest_point(s, o[1])];
+    let out = [a, b, origin[2], origin[3]];
+    let sq = |p: [i64; 2], q: [i64; 2]| ((p[0] - q[0]) as i128).pow(2) + ((p[1] - q[1]) as i128).pow(2);
+    let dist = [sq(origin[0], a), sq(origin[1], b), sq(origin[2], o[0]), sq(origin[3], o[1])];
+    let mut min_i = 0;
+    for i in 0..4 {
+        if dist[i] < dist[min_i] {
+            min_i = i;
+        }
+    }
+    out[min_i]
+}
+
+/// `SEG::Intersect( aSeg )` with its defaults (`aIgnoreEndpoints` and `aLines` false): `SEG::intersects`, KiCad 25ec2335 -- the bounding boxes, then
+/// the determinant `dir2.Cross( dir1 )`; parallel segments meet only on one line (`dir1.Cross( offset ) == 0`), where `checkCollinearOverlap` takes the
+/// middle of the overlap on the axis of the longer extent; otherwise both parameters must lie in the segments and the point is
+/// `aSeg.A + rescale( param1, dir2, determinant )`.
+fn seg_intersect(s: [[i64; 2]; 2], o: [[i64; 2]; 2]) -> Option<[i64; 2]> {
+    let [a, b] = s;
+    let [c, d] = o;
+    if a[0].max(b[0]) < c[0].min(d[0]) || c[0].max(d[0]) < a[0].min(b[0]) || a[1].max(b[1]) < c[1].min(d[1]) || c[1].max(d[1]) < a[1].min(b[1]) {
+        return None;
+    }
+    let dir1 = [(b[0] - a[0]) as i128, (b[1] - a[1]) as i128];
+    let dir2 = [(d[0] - c[0]) as i128, (d[1] - c[1]) as i128];
+    let offset = [(c[0] - a[0]) as i128, (c[1] - a[1]) as i128];
+    let determinant = cross(dir2, dir1);
+    if determinant == 0 {
+        if cross(dir1, offset) != 0 {
+            return None;
+        }
+        // checkCollinearOverlap( aSeg, use_x_axis, false, aPt )
+        let use_x = dir1[0].abs() >= dir1[1].abs();
+        let (ax, bx) = if use_x { (0, 1) } else { (1, 0) };
+        let (s1s, s1e, s2s, s2e, c1s, c1e) = (a[ax], b[ax], c[ax], d[ax], a[bx], b[bx]);
+        let (s1min, s1max, s2min, s2max) = (s1s.min(s1e), s1s.max(s1e), s2s.min(s2e), s2s.max(s2e));
+        if !(s1max >= s2min && s2max >= s1min) {
+            return None;
+        }
+        let proj = (s1min.max(s2min) + s1max.min(s2max)) / 2;
+        let other = if s1e != s1s { c1s + rescale((proj - s1s) as i128, (c1e - c1s) as i128, (s1e - s1s) as i128) as i64 } else { c1s };
+        return Some(if use_x { [proj, other] } else { [other, proj] });
+    }
+    let param2 = cross(dir2, offset);
+    let param1 = cross(dir1, offset);
+    if determinant > 0 {
+        if param1 < 0 || param1 > determinant || param2 < 0 || param2 > determinant {
+            return None;
+        }
+    } else if param1 > 0 || param1 < determinant || param2 > 0 || param2 < determinant {
+        return None;
+    }
+    Some([c[0] + rescale(param1, dir2[0], determinant) as i64, c[1] + rescale(param1, dir2[1], determinant) as i64])
 }
 
 /// One exclusion as a project lists it: the check's settings key, the file uuids of its items, the marker's position (nm) and the comment.
@@ -279,6 +466,50 @@ mod tests {
                 json!({ "marker": { "errorType": "DRCET_TRACK_WIDTH", "position": { "xNm": "5", "yNm": "5" }, "items": [{ "value": "t" }] }, "comment": "thin on purpose" }),
             ]
         );
+    }
+
+    #[test]
+    fn a_check_whose_marker_names_its_layer_is_listed_on_each_copper_layer() {
+        let copper: Vec<String> = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"].iter().map(|s| s.to_string()).collect();
+        let starved = waived("starved_thermal", &["zone", "pad"], &[[Nm::new(7), Nm::new(8)]], "few spokes");
+        let m = markers_on(&starved, &copper);
+        let layers: Vec<&str> = m.iter().map(|(v, _)| v["layer"].as_str().unwrap()).collect();
+        assert_eq!(layers, ["BL_F_Cu", "BL_In1_Cu", "BL_In2_Cu", "BL_B_Cu"], "one record per copper layer, named as `BoardLayer` names it");
+        assert!(m.iter().all(|(v, at)| v["errorType"] == "DRCET_STARVED_THERMAL" && *at == [Nm::new(7), Nm::new(8)]));
+        assert_eq!(project_entries_on(&[starved.clone()], &copper).len(), 4);
+        assert!(project_entries_on(&[starved], &copper).iter().all(|e| e["comment"] == "few spokes"));
+        // The rest carry no layer, whatever the board.
+        assert!(markers_on(&waived("clearance", &["a", "b"], &[[Nm::new(1), Nm::new(1)]], ""), &copper).iter().all(|(v, _)| v.get("layer").is_none()));
+        // The generic checks and the drawing sheet's variables are still the studio's own.
+        assert!(markers_on(&waived("generic_error", &["a"], &[[Nm::new(1), Nm::new(1)]], ""), &copper).is_empty());
+        assert_eq!(board_layer("In30.Cu").as_deref(), Some("BL_In30_Cu"));
+        assert_eq!(board_layer("F.SilkS"), None);
+    }
+
+    #[test]
+    fn the_marker_between_two_tracks_or_vias_is_where_kicads_collision_puts_it() {
+        let seg = |a: [i64; 2], b: [i64; 2]| Copper::Segment { a, b, width: 200 };
+        let via = |c: [i64; 2]| Copper::Circle { centre: c, radius: 300 };
+        // `trackSeg.Intersect( otherSeg )`: the crossing
+        assert_eq!(contact_point("tracks_crossing", seg([0, 0], [10, 10]), seg([0, 10], [10, 0])), Some([5, 5]));
+        assert_eq!(contact_point("tracks_crossing", seg([0, 0], [10, 0]), seg([0, 5], [10, 5])), None, "parallel tracks do not cross");
+        // two collinear overlapping tracks: the middle of the overlap (`checkCollinearOverlap`)
+        assert_eq!(contact_point("tracks_crossing", seg([0, 0], [10, 0]), seg([4, 0], [20, 0])), Some([7, 0]));
+        // `m_seg.NearestPoint( aSeg )`: of the four distances the least, the first of equals -- here the other's start seen from this one
+        assert_eq!(contact_point("clearance", seg([0, 0], [10, 0]), seg([2, 3], [8, 3])), Some([2, 0]));
+        assert_eq!(contact_point("clearance", seg([0, 0], [10, 0]), seg([12, 3], [20, 3])), Some([10, 0]), "this one's own end");
+        assert_eq!(contact_point("shorting_items", seg([0, 0], [10, 0]), seg([5, -5], [5, 5])), Some([5, 0]), "touching: the crossing");
+        // a via and a track, in either order: the track's nearest point to the via's centre (`SHAPE_CIRCLE::Collide( SEG )`)
+        assert_eq!(contact_point("clearance", via([5, 4]), seg([0, 0], [10, 0])), Some([5, 0]));
+        assert_eq!(contact_point("clearance", seg([0, 0], [10, 0]), via([12, 4])), Some([10, 0]));
+        // a slanted track: `rescale` rounds half away from zero
+        assert_eq!(contact_point("clearance", via([1, 0]), seg([0, 0], [3, 2])), Some([1, 0]), "t = 3, |d|^2 = 13: 9/13 and 6/13 round to 1 and 0");
+        // two vias: the middle, each half rounded away from zero (`VECTOR2I::operator/( double )`)
+        assert_eq!(contact_point("clearance", via([1, 1]), via([4, 2])), Some([3, 2]));
+        assert_eq!(contact_point("clearance", via([-1, 0]), via([-2, 0])), Some([-2, 0]));
+        // another check, or a pair this port does not place
+        assert_eq!(contact_point("hole_clearance", via([1, 1]), via([4, 2])), None);
+        assert_eq!(contact_point("tracks_crossing", via([1, 1]), seg([0, 0], [4, 4])), None);
     }
 
     #[test]

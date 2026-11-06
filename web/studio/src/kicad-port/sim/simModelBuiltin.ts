@@ -285,6 +285,10 @@ export class SimModel {
   hasPrimaryValue(): boolean {
     return false;
   }
+  /** `GetTunerParam`: the parameter the simulator's tuner changes; none by default. */
+  getTunerParam(): Param | null {
+    return null;
+  }
   /** `SetIsStoredInValue`: only a model with a primary value can be. */
   setIsStoredInValue(v: boolean): void {
     if (this.hasPrimaryValue()) this.storedInValue = v;
@@ -454,6 +458,10 @@ export class SimModelIdeal extends SimModel {
   override hasPrimaryValue() {
     return true;
   }
+  /** `SIM_MODEL_IDEAL::GetTunerParam`: `&GetParam( 0 )`. */
+  override getTunerParam(): Param | null {
+    return this.getParam(0);
+  }
   override getPinNames() {
     return ["+", "-"];
   }
@@ -467,6 +475,10 @@ export class SimModelRPot extends SimModel {
   }
   override hasPrimaryValue() {
     return true;
+  }
+  /** `SIM_MODEL_R_POT::GetTunerParam`: `FindParam( "pos" )`, the wiper. */
+  override getTunerParam(): Param | null {
+    return this.findParam("pos");
   }
   override getPinNames() {
     return ["r0", "wiper", "r1"];
@@ -528,6 +540,10 @@ export class SimModelSource extends SimModel {
   }
   override hasPrimaryValue() {
     return this.type === "V" || this.type === "I";
+  }
+  /** `SIM_MODEL_SOURCE::GetTunerParam`: a DC source's value (`GetParam( 0 )`); "other sources: unclear which parameter the user wants". */
+  override getTunerParam(): Param | null {
+    return this.type === "V" || this.type === "I" ? this.getParam(0) : null;
   }
   override getPinNames() {
     const d = this.deviceType();
