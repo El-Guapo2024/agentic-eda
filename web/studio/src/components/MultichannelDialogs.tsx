@@ -48,7 +48,7 @@ function GenerateDialog({ initial }: { initial: GenerateRow[] }) {
   const toggle = (row: GenerateRow, on: boolean) => setRows((all) => all.map((r) => (r === row ? { ...r, generate: on } : r)));
   const submit = async () => {
     const cmd = generateCommand(rows, flags.replace, flags.group, tab);
-    rememberGenerateFlags(flags);
+    rememberGenerateFlags(flags, tab);
     closeGenerateDialog();
     // `TransferDataFromWindow` with no row ticked leaves nothing to make
     if (!cmd) return;

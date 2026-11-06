@@ -194,3 +194,53 @@ export function anchorChoices(components: readonly string[]): string[] {
 export function chooseSourceFlags(flags: { replace: boolean; group: boolean }, change: Partial<{ replace: boolean; group: boolean }>): { replace: boolean; group: boolean } {
   return { ...flags, ...change };
 }
+
+// ------------------------------------------------------------------------------------------------------------------------------------- what the tool keeps
+
+/**
+ * `RULE_AREAS_DATA` as `MULTICHANNEL_TOOL` keeps it between its dialogs (`m_areas`): `m_replaceExisting` and `m_options`. KiCad writes it in no settings file and in no project:
+ * it lives in the tool, as long as the board editor is open. The two dialogs share `m_options.m_groupItems`: Generate's "Group footprints with their placement rule areas" and
+ * Repeat Layout's "Group items with their target rule areas" are one setting. The anchor is a footprint pointer that the dialog never opens on (`m_refAnchorFp->SetSelection( 0 )`).
+ */
+export interface McToolMemory {
+  replaceExisting: boolean;
+  options: RepeatOptions;
+}
+
+export const DEFAULT_TOOL_MEMORY: McToolMemory = { replaceExisting: false, options: { ...DEFAULT_REPEAT_OPTIONS } };
+
+/** Generate's two boxes as `DIALOG_MULTICHANNEL_GENERATE_RULE_AREAS::TransferDataToWindow` sets them: `m_cbGroupItems->SetValue( raData->m_options.m_groupItems ); m_cbReplaceExisting->SetValue( raData->m_replaceExisting )`. */
+export const generateFlagsOf = (m: McToolMemory): { replace: boolean; group: boolean } => ({ replace: m.replaceExisting, group: m.options.group_items });
+
+/** Repeat Layout's boxes as its `TransferDataToWindow` sets them, the anchor on its empty entry. */
+export const repeatOptionsOf = (m: McToolMemory): RepeatOptions => ({ ...m.options, anchor: null });
+
+/** Generate's OK (`TransferDataFromWindow`): `m_replaceExisting = m_cbReplaceExisting->GetValue()`, and "Don't allow grouping for groups": on the Groups tab `m_groupItems = false`, else the box. */
+export function afterGenerate(m: McToolMemory, flags: { replace: boolean; group: boolean }, tab: GenerateRow["kind"]): McToolMemory {
+  return { replaceExisting: flags.replace, options: { ...m.options, group_items: groupItemsAvailable(tab) ? flags.group : false } };
+}
+
+/** Repeat Layout's OK: the six boxes (`data->m_options.m_copyPlacement = m_cbCopyPlacement->GetValue()` ...); the anchor is not kept. */
+export function afterRepeat(m: McToolMemory, options: RepeatOptions): McToolMemory {
+  return { ...m, options: { ...options, anchor: null } };
+}
+
+/** The memory read back from storage: what is not a boolean of it takes KiCad's default. */
+export function parseToolMemory(raw: unknown): McToolMemory {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const opts = (o.options && typeof o.options === "object" ? o.options : {}) as Record<string, unknown>;
+  const bool = (v: unknown, d: boolean): boolean => (typeof v === "boolean" ? v : d);
+  const d = DEFAULT_REPEAT_OPTIONS;
+  return {
+    replaceExisting: bool(o.replaceExisting, false),
+    options: {
+      copy_placement: bool(opts.copy_placement, d.copy_placement),
+      copy_routing: bool(opts.copy_routing, d.copy_routing),
+      connected_routing_only: bool(opts.connected_routing_only, d.connected_routing_only),
+      copy_other_items: bool(opts.copy_other_items, d.copy_other_items),
+      group_items: bool(opts.group_items, d.group_items),
+      include_locked_items: bool(opts.include_locked_items, d.include_locked_items),
+      anchor: null,
+    },
+  };
+}
