@@ -412,7 +412,7 @@ Differs, by decision:
 - "Pads with duplicate numbers are jumpers" is written only when on (file version 20240108 has no `no`).
 
 Left, and why:
-- On the board: a library pad's layer set, die length and fabrication property are not carried onto a placed footprint (GAPS 26), and Update Footprint on Board does not carry the footprint's own paste margins, private layers or jumper groups (the board model has no place for them).
+- ~~On the board: a library pad's layer set, die length and fabrication property are not carried onto a placed footprint (GAPS 26), and Update Footprint on Board does not carry the footprint's own paste margins, private layers or jumper groups (the board model has no place for them).~~ Done: the paste margins in task-u6-fpkeep (PARITY-pcb section 89), the rest in section 24 below and PARITY-pcb section 94 (UI-LEFT-2 PP5, FF4).
 - ~~Duplicate does not copy the kept looks of the items it copies (`copy_looks` exists, not wired).~~ Done in section 23.
 - Preferences: the Grids, Colors, Toolbars, Footprint Defaults and User Layer Names pages; the arc editing mode is kept, not read by the point editor.
 - The Properties pane: a pad's type, shape and hole shape, its copper layers, post-machining, backdrill and teardrop rows, fonts, colours, line endings and a footprint's orientation are read-only with the reason as the tooltip (Pad Properties sets the first ones; the others are a board's).
@@ -454,6 +454,19 @@ Differs:
 Left: Paste Special (`pasteSpecial`) on this tab; Copy as Text; the clipboard's images; Paste of a table's cells into selected cells.
 
 Tests: `crates/ops/src/fp_copy_tests.rs` 5 (Duplicate's every kind, looks, group and no field; Create Array's dimension and dashed line at each point; Copy's clipboard footprint and its Paste back, moved, with the looks, mandatory fields left; a paste of KiCad's own clipboard text, a pad and a dotted line, new uuids; and, slow, kicad-cli's `fp upgrade` loads our clipboard footprint with the dashed line, the dimension and the text box), `fp_array_tests.rs` (as before), `kicad-port/fpClipboard.test.ts`; browser: `e2e/fpedit-clipboard-v1.check.js` (4 scenarios on `ldo`: Copy writes KiCad's clipboard footprint, Paste rides the cursor and is one undo step and Escape leaves nothing, a paste of a `.kicad_mod`'s text, Duplicate of a dimension and a dashed line keeping the line style and the dimension's style).
+
+## 24. The board link carries everything: Ctrl+E's copy holds a board footprint's dimensions, tables, zones, groups, locks, description, keywords, fields, private layers and jumpers, and Update Footprint on Board puts each back (UI-LEFT-2 FF4; 2026-11-06, `task-v2-pcbfp`; KiCad 8303b2ad `pcbnew/load_select_footprint.cpp::LoadFootprintFromBoard`, `pcbnew/footprint_libraries_utils.cpp::SaveFootprintToBoard`)
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Edit Footprint (Ctrl+E) on a board footprint: the copy | **holds the clone's every child and record field** (it held the text boxes, images, points and barcodes): the footprint's dimensions and tables (`FootprintExtra::items`), its zones taken off the board to its frame (`fp_on_board::footprint_zones_in_frame`), its groups by the copy's ids, the locks of its items (`LibraryFootprintKeep::locked`, which the library writer now writes for the items too), its description and keywords and its private layers and jumper settings (the board record's forms), its Datasheet and Description as the board shows them (the footprint's own, else the board file's, else the symbol's: `fp_editor::board_footprint_field_text`) | `LoadFootprintFromBoard` (`aFootprint->Clone()`) |
+| Update Footprint on Board | **puts back each of them** (a dimension, zone, table or group drawn in the copy was lost; the board's description, keywords, fields, private layers and jumpers came back whatever the copy said): the items and their locks become the footprint's, the zones the footprint's zones on the board where it is, the groups the footprint's (each member by its place); the description, keywords, private layers and jumper settings replace the record's forms of them; a Datasheet or Description the copy changed becomes the footprint's own (`FootprintEdit::fields`) | `SaveFootprintToBoard` -> `ExchangeFootprint` |
+
+The board's side of it, and the library footprint brought whole onto the board by Place, Update and Change Footprint, is PARITY-pcb section 94.
+
+Left: a group member the copy has no place for (a field, a courtyard item kept as text) is left out of the group; a locked item read from a library file is still kept as the text of its form by this editor's reader (FF6); the copy of a footprint on the back shows its zones turned to the front, as the other items.
+
+Tests: `crates/cli/src/fp_library_record_tests.rs` (`ctrl_e_shows_the_footprints_record_and_items_and_update_on_board_puts_back_what_was_drawn_and_edited`); browser `e2e/fp-record.check.js` (its fourth scenario), `e2e/fp-keep.check.js` and `e2e/fpedit-board.check.js` pass.
 
 ## Known gaps summary (ranked, highest first)
 
