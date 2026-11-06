@@ -2469,6 +2469,11 @@ fn schematic_setup_json(design: &eda_model::ir::Design, model: &eda_model::Const
         "default_line_width_nm": f.default_line_width_nm,
         "default_text_size_nm": f.default_text_size_nm,
         "pin_symbol_size_nm": f.pin_symbol_size_nm,
+        // the text ratios the painter lays labels and overbars out by (`SCH_RENDER_SETTINGS::m_TextOffsetRatio`, `m_LabelSizeRatio`,
+        // `m_FontMetrics.m_OverbarHeight`, which `SCH_EDIT_FRAME` copies from `SCHEMATIC_SETTINGS`)
+        "text_offset_ratio": f.text_offset_ratio,
+        "label_size_ratio": f.label_size_ratio,
+        "overbar_offset_ratio": f.overbar_offset_ratio,
         "dash_ratio": f.dash_ratio,
         "gap_ratio": f.gap_ratio,
         "hop_over_size_choice": f.hop_over_size_choice,

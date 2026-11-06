@@ -3427,6 +3427,11 @@ export interface SchematicSetupLook {
   default_line_width_nm: Nm;
   default_text_size_nm: Nm;
   pin_symbol_size_nm: Nm;
+  /** Formatting's Label offset ratio (`m_TextOffsetRatio`: `SCH_TEXT::GetTextOffset` is this times the text size), Global label margin ratio
+   *  (`m_LabelSizeRatio`: `SCH_LABEL_BASE::GetLabelBoxExpansion`) and Overbar offset ratio (`m_FontMetrics.m_OverbarHeight`); an older backend sends none. */
+  text_offset_ratio?: number;
+  label_size_ratio?: number;
+  overbar_offset_ratio?: number;
   dash_ratio: number;
   gap_ratio: number;
   hop_over_size_choice: number;

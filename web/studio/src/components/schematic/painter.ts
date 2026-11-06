@@ -60,6 +60,9 @@ import { fieldAnchors, isVerticalTwoPin, type FieldBox } from "../../kicad-port/
 import { isPinItemId, pinById, type PinItem } from "../../kicad-port/schPins";
 import { altIconStrokes, pinAltIcon, type PinAltIcon } from "../../kicad-port/symPinAltIcon";
 import { shownPinName } from "./pinText";
+import { strokeWireShape, wireHopShapes } from "../../kicad-port/schHopOver";
+import { pinDecoSizeNm, schFormattingLook, setSchFormattingLook, textOffsetNm } from "../../kicad-port/schFormattingLook";
+import { setStrokeOverbarHeight } from "../text/strokeFont";
 
 /**
  * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
@@ -112,19 +115,9 @@ const ERC_MARKER_RADIUS_NM = 450_000;
 const PIN_NC_HALF_NM = 381_000;
 const FIELD_FONT = 1.0; // footprint field: small, per the task's "footprint field in purple and small"
 
-/**
- * eeschema's `PinSymbolSize` (sch_render_settings.cpp: `DEFAULT_TEXT_SIZE
- * * IU_PER_MILS / 2` = 25 mil = 0.635mm) -- the one size every pin-shape
- * decoration (inversion bubble radius, clock-triangle leg, non-logic "X"
- * half-size) is drawn at by default. sch_painter.cpp's `r`/`c` locals
- * both resolve to this same constant whenever PinSymbolSize is set (which
- * it always is, there being no project-level override this app exposes),
- * so this app does not need the name/number-size-derived fallback branch
- * real KiCad falls back to only when PinSymbolSize is explicitly zeroed.
- */
-const PIN_DECOR_NM = 635_000;
-/** 2x PIN_DECOR_NM -- how far past the body-attachment point (R) an inverted/inverted-clock pin's bubble-to-tip line, or a low-input/low-clock/low-output wedge's leg, reaches. */
-const PIN_DECOR_D_NM = PIN_DECOR_NM * 2;
+// The pin decorations' size is Schematic Setup's Pin symbol size (kicad-port/schFormattingLook.ts `pinDecoSizeNm`: `SCH_PAINTER::externalPinDecoSize` /
+// `internalPinDecoSize`, 25 mils by default, half the pin's text size when it is set to 0); twice it is how far past the body-attachment point (R) an
+// inverted/inverted-clock pin's bubble-to-tip line, or a low-input/low-clock/low-output wedge's leg, reaches (`diam`).
 /** eeschema/default_values.h DEFAULT_PIN_NAME_OFFSET (20 mil) -- how far a pin's name sits past its body-attachment point, into the body ("inside" placement). This app's `LibSymbol` carries no per-symbol `(pin_names (offset ...))` override (not part of the coordinator's described contract), so every symbol uses KiCad's own factory default rather than varying per real library symbol -- real symbols that explicitly set `offset 0` (name drawn *outside*, past the pin's free end, as GND/power symbols typically do, though their pin is hidden anyway so it goes unseen) are the one case this simplification visibly diverges from. */
 const PIN_NAME_OFFSET_NM = 508_000;
 
@@ -549,8 +542,9 @@ function isHorizontalPin(dir: [number, number]): boolean {
 export function drawPinDecoration(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
   const { pin, tip: P, root: R, dir } = rp;
   const [dx, dy] = dir;
-  const r = PIN_DECOR_NM;
-  const d = PIN_DECOR_D_NM;
+  // `externalPinDecoSize` / `internalPinDecoSize`: Schematic Setup's Pin symbol size, else half the pin's text size
+  const r = pinDecoSizeNm();
+  const d = r * 2;
   const line = (a: [number, number], b: [number, number]) => {
     ctx.moveTo(a[0], a[1]);
     ctx.lineTo(b[0], b[1]);
@@ -911,7 +905,7 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
     ctx.stroke();
     // the name runs into the sheet from the flag (`SCH_HIERLABEL::GetSchematicTextOffset`: `GetTextOffset() + GetTextWidth()`, the text offset being 0.15 of the size), along the
     // sheet on the left and right borders and up it on the top and bottom ones (`SetSide`'s spin)
-    const dist = Math.round(0.15 * sizeNm) + sizeNm;
+    const dist = textOffsetNm(sizeNm) + sizeNm;
     if (edge === "left") drawStrokeText(ctx, p.name, px + dist, py + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "left", color: pinColor, ...look });
     else if (edge === "right") drawStrokeText(ctx, p.name, px - dist, py + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "right", color: pinColor, ...look });
     else if (edge === "top") drawStrokeText(ctx, p.name, px, py + dist, { sizeNm, angleRad: -Math.PI / 2, justify: "left", color: pinColor, ...look });
@@ -1048,6 +1042,18 @@ function drawLintMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch
 // not here, which would mean computing an inverse-transformed rect on
 // every repaint for no benefit.
 export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, opts: SchematicPaintOptions): void {
+  // Schematic Setup > Formatting's ratios the sheet's labels, pins and overbars are laid out by (kicad-port/schFormattingLook.ts; the hit tests on the sheet
+  // read the same), the overbar's height only while the sheet is drawn (the stroke font is every editor's)
+  setSchFormattingLook(sch.setup);
+  const overbar = setStrokeOverbarHeight(schFormattingLook().overbarRatio);
+  try {
+    paintSchematicSheet(ctx, view, sch, opts);
+  } finally {
+    setStrokeOverbarHeight(overbar);
+  }
+}
+
+function paintSchematicSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, opts: SchematicPaintOptions): void {
   const hair = 1 / view.scale;
   const display = opts.display ?? DEFAULT_SCH_DISPLAY;
   paintedSelection = opts.selection;
@@ -1062,6 +1068,8 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // previously only ever affected a symbol's own outline; a selected
   // wire drew no differently from an unselected one, so Del on a box- or
   // shift-selected wire had no visual confirmation it would do anything).
+  // Hop-overs (KiCad 25ec2335 `SCH_PAINTER::draw( const SCH_LINE* )`: `BuildWireWithHopShape` when `hopOverScale > 0.0`), Schematic Setup > Formatting's size
+  const hops = wireHopShapes(sch.wires, sch.setup?.hop_over_size_choice, sch.setup?.default_line_width_nm);
   for (const w of sch.wires) {
     const on = opts.netHighlight === w.net || opts.selection.has(w.id);
     // Bus wires (GAPS.md #20) are the same `SCH_LINE` shape as a plain
@@ -1071,6 +1079,11 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     const look = strokeLook(w.stroke, w.bus ? 304_800 : 152_400, w.class_look);
     ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : (look.color ?? layerColor(w.bus ? "LAYER_BUS" : "LAYER_WIRE"));
     ctx.lineWidth = Math.max(on ? Math.max(300_000, look.width * 2) : look.width, hair * (on ? 2.5 : 1));
+    const hopped = hops.get(w.id);
+    if (hopped) {
+      strokeWireShape(ctx, hopped, look.dash);
+      continue;
+    }
     ctx.setLineDash(look.dash);
     ctx.beginPath();
     w.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
