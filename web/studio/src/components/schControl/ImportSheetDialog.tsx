@@ -6,19 +6,16 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchSheetFileCheck, fetchSheetFiles } from "../../api/hierarchyClient";
 import type { SheetFileCheck, SheetFileEntry } from "../../api/hierarchyTypes";
-import { defaultImportOptions, describeCheck, looksLikeSchematic, type SheetImportPlan } from "../../kicad-port/schImportSheet";
+import { describeCheck, looksLikeSchematic, rememberImportOptions, rememberedImportOptions, type SheetImportPlan } from "../../kicad-port/schImportSheet";
 import { useStudioDispatch } from "../../state/store";
 import { SchDialogFrame } from "./SchDialogFrame";
-
-/** The checkboxes keep their state between openings, as KiCad keeps them in its settings (`TransferDataFromCustomControls`). */
-let remembered: Omit<SheetImportPlan, "path"> = defaultImportOptions();
 
 export function ImportSheetDialog({ forceSheet, initialPath, onClose }: { forceSheet?: boolean; initialPath?: string; onClose: () => void }) {
   const dispatch = useStudioDispatch();
   const [files, setFiles] = useState<SheetFileEntry[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [path, setPath] = useState(initialPath ?? "");
-  const [options, setOptions] = useState<Omit<SheetImportPlan, "path">>({ ...remembered, ...(forceSheet ? { asSheet: true } : {}) });
+  const [options, setOptions] = useState<Omit<SheetImportPlan, "path">>({ ...rememberedImportOptions(), ...(forceSheet ? { asSheet: true } : {}) });
   const [check, setCheck] = useState<SheetFileCheck | null>(null);
   const [checking, setChecking] = useState(false);
   /** Answers arrive in any order; only the last request counts. */
@@ -61,7 +58,7 @@ export function ImportSheetDialog({ forceSheet, initialPath, onClose }: { forceS
   const update = (patch: Partial<Omit<SheetImportPlan, "path">>) =>
     setOptions((o) => {
       const next = { ...o, ...patch };
-      remembered = next;
+      rememberImportOptions(next);
       return next;
     });
 

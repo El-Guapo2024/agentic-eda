@@ -729,6 +729,7 @@ fn handle(
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         // Annotate Schematic's message window and the other dialogs that work across sheets (`crate::sch_hierarchy_api`).
         ("POST", "/api/sch/annotate") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::annotate(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/sch/next_reference") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::next_reference(dir, &body).to_string().as_bytes()),
         // Import Sheet / Draw Sheet from File: the project's schematics, and the checks on one (`LoadSheetFromFile`) before it is taken in.
         ("GET", "/api/sch/sheet_files") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_files(dir).to_string().as_bytes()),
         ("POST", "/api/sch/sheet_file") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_file(dir, &body).to_string().as_bytes()),
@@ -2095,6 +2096,10 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if w.bus {
                 let text = if w.net.starts_with('/') { w.net.rsplit('/').next().unwrap_or(&w.net) } else { w.net.as_str() };
                 v["members"] = json!(eda_kicad::expand_bus_members(text, &design.bus_aliases).unwrap_or_default());
+                // the menu's items with their submenus: a bus of a group (a vector, an alias) lists its own members (UI-LEFT S19)
+                if let Some(tree) = eda_kicad::bus_member_tree(text, &design.bus_aliases) {
+                    v["member_tree"] = json!(tree.into_iter().map(|(name, members)| json!({ "name": name, "members": members })).collect::<Vec<_>>());
+                }
             }
             v
         })
@@ -2340,6 +2345,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         // the project's unit notation (the root's `SchExtras::subpart_*`, r7 H5), which the sheet draws a unit's reference by
         "subpart_id_separator": design.schematic.as_ref().and_then(|r| r.extras.subpart_id_separator),
         "subpart_first_id": design.schematic.as_ref().and_then(|r| r.extras.subpart_first_id),
+        // Schematic Setup > Annotation (`SCHEMATIC_SETTINGS::m_Annotate*`, the root's `SchExtras::annotation`; absent is KiCad's defaults): what placing, pasting and
+        // importing number symbols by and what the Annotate dialog starts from (UI-LEFT S14)
+        "annotation": design.schematic.as_ref().and_then(|r| r.extras.annotation.clone()),
         // the design variants (KiCad 25ec2335 `SCHEMATIC::GetVariantNames` with `GetVariantDescription`), the same on every sheet
         "variants": design_variants_json(design),
     })

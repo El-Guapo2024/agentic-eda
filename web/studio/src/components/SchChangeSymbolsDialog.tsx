@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { fetchSymbolLibrary } from "../api/client";
 import { fetchSymbolDetails } from "../api/libraryChooserClient";
 import type { SchToolDialog } from "../api/schEditTypes";
-import type { SymbolLibraryEntry } from "../api/types";
+import type { Cmd, SymbolLibraryEntry } from "../api/types";
 import { matchReferences, planChange, type LibInfo, type MatchBy, type SymbolRow } from "../kicad-port/schChangeSymbols";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
@@ -32,6 +32,10 @@ export function ChangeSymbolsDialog({ dialog }: { dialog: Extract<SchToolDialog,
   const [updateReference, setUpdateReference] = useState(false);
   const [updateValue, setUpdateValue] = useState(false);
   const [resetEmpty, setResetEmpty] = useState(false);
+  // the reset options (`DIALOG_CHANGE_SYMBOLS`'s constructor: checked to change a symbol, unchecked to update one; UI-LEFT S16)
+  const [resetVisibility, setResetVisibility] = useState(change);
+  const [resetEffects, setResetEffects] = useState(change);
+  const [resetPositions, setResetPositions] = useState(change);
   const [entries, setEntries] = useState<SymbolLibraryEntry[]>([]);
   const [report, setReport] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -49,6 +53,13 @@ export function ChangeSymbolsDialog({ dialog }: { dialog: Extract<SchToolDialog,
   }, []);
 
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
+  /** The references after the change's renames (a Reference updated to the new prefix). */
+  const renamedRefs = (refs: readonly string[], cmds: readonly Cmd[]) => refs.map((r) => (cmds.find((c) => c.op === "rename_symbol" && c.id === r) as { new_id?: string } | undefined)?.new_id ?? r);
+  /** The reset options (`processSymbol`: visibility, sizes and styles, positions): one `reset_symbol_fields` after the change; true when it changed something. */
+  const resetFields = async (refs: readonly string[]): Promise<boolean> => {
+    if (refs.length === 0 || (!resetVisibility && !resetEffects && !resetPositions)) return false;
+    return api.cmd({ op: "sch_edit", verb: "reset_symbol_fields", ids: [...refs], visibility: resetVisibility, effects: resetEffects, positions: resetPositions });
+  };
   const verb = change ? "Change" : "Update";
 
   const run = async () => {
@@ -66,12 +77,14 @@ export function ChangeSymbolsDialog({ dialog }: { dialog: Extract<SchToolDialog,
           : { found: entry !== undefined, unitCount: entry?.unit_count ?? 1, prefix: entry?.reference_prefix ?? "", value: id.includes(":") ? id.slice(id.indexOf(":") + 1) : id };
         const plan = planChange(refs, rows, lib, { newLibId: id, updateReference, updateValue, resetEmpty });
         if (plan.cmds.length > 0 && !(await api.cmdBatch(plan.cmds))) return setReport([...plan.report, "*** The change was refused; nothing was changed ***"]);
+        await resetFields(renamedRefs(refs, plan.cmds));
         return setReport(plan.report);
       }
       // Update: the project's edited library symbols take over for every library id among the matched symbols.
       const libIds = [...new Set(refs.flatMap((r) => rows.filter((s) => s.id === r && s.lib_id).map((s) => s.lib_id as string)))];
       const ok = await api.cmd({ op: "sch_edit", verb: "update_library_symbols", lib_ids: libIds });
-      setReport(ok ? libIds.map((id) => `${id}: updated from the project library`) : ["*** No edited library symbol of these symbols is waiting to be updated from ***"]);
+      const reset = await resetFields(refs);
+      setReport(ok || reset ? [...(ok ? libIds.map((id) => `${id}: updated from the project library`) : []), ...(reset ? ["Fields reset from the library symbol"] : [])] : ["*** No edited library symbol of these symbols is waiting to be updated from ***"]);
     } finally {
       setBusy(false);
     }
@@ -140,6 +153,15 @@ export function ChangeSymbolsDialog({ dialog }: { dialog: Extract<SchToolDialog,
         </label>
         <label style={{ display: "block" }}>
           <input type="checkbox" checked={resetEmpty} onChange={(e) => setResetEmpty(e.target.checked)} /> Reset fields if empty in new symbol
+        </label>
+        <label style={{ display: "block" }}>
+          <input type="checkbox" checked={resetVisibility} onChange={(e) => setResetVisibility(e.target.checked)} /> {change ? "Reset" : "Update"} field visibilities
+        </label>
+        <label style={{ display: "block" }}>
+          <input type="checkbox" checked={resetEffects} onChange={(e) => setResetEffects(e.target.checked)} /> {change ? "Reset" : "Update"} field sizes and styles
+        </label>
+        <label style={{ display: "block" }}>
+          <input type="checkbox" checked={resetPositions} onChange={(e) => setResetPositions(e.target.checked)} /> {change ? "Reset" : "Update"} field positions
         </label>
       </fieldset>
       {report.length > 0 && <pre style={{ margin: 0, maxHeight: 160, overflow: "auto", fontSize: 11, whiteSpace: "pre-wrap" }}>{report.join("\n")}</pre>}

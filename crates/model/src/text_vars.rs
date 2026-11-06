@@ -18,7 +18,7 @@
 //!   eeschema/sch_field.cpp, sch_text.cpp, sch_item.cpp   `GetShownText`, `ResolveText`: which resolvers an item's text goes through
 //!
 //! The `@{..}` math expressions (`common/text_eval`) are evaluated for their arithmetic after each pass, as 25ec2335's `ResolveTextVars` does
-//! ([`evaluate_math`]); their functions, strings and units are not ported.
+//! ([`evaluate_math`]), with the grammar's strings, units and the functions that do not read the clock or the version control.
 //! Not ported: `VCSHASH` / `VCSSHORTHASH` (the project's git hash: left as written) and design variants. Simulation `OP` values are left as written here and
 //! resolved by the studio, which holds the last run (`web/studio/src/kicad-port/sim/opVars.ts`).
 
@@ -235,11 +235,18 @@ pub fn resolve_text_vars(source: &str, resolver: &Resolver, depth: &mut usize) -
     text
 }
 
-/// `EXPRESSION_EVALUATOR::Evaluate` (KiCad 25ec2335 `common/text_eval`) for its arithmetic: each `@{..}` whose expression is numbers, `+ - * / % ^`, the six
-/// comparisons, signs and parentheses is replaced by its value, written as `VALUE_UTILS::ToString` writes a number (a whole number without a decimal
-/// point, else the shortest form). `text_eval.lemon`'s precedence: comparisons, then `+ -`, then `* / %`, then a sign, then `^` (right to left).
-/// **Differs**: the functions, strings, units and variables of the grammar are not ported, and an expression this cannot read (or a division by zero) is
-/// left as written, where KiCad reports an error.
+/// `EXPRESSION_EVALUATOR::Evaluate` (KiCad 25ec2335 `common/text_eval/text_eval_wrapper.cpp`, `text_eval_parser.cpp`, `text_eval.lemon`): each `@{..}` is
+/// evaluated on its own (`evaluateWithPartialErrorRecovery`) and replaced by its value written as `VALUE_UTILS::ToString` writes it (a whole number without a
+/// decimal point, else the shortest form). The grammar is `text_eval.lemon`'s: comparisons, then `+ -`, then `* / %`, then a sign, then `^` (right to
+/// left); numbers with an SI prefix (`4k7`, `2.2u`, `1m`), a unit (`1in`, `10mil`, `2 mm`: in millimetres, `EDA_UNITS::MM`, the evaluator's default) and an
+/// exponent; strings in `"` or `'` with their escapes; `+` joins when either side is a string, `==` and `!=` compare two strings; and the functions of
+/// `EVAL_VISITOR::evaluateFunction` that give the same answer on every machine (the arithmetic ones, `upper`, `lower`, `concat`, `beforefirst` ...,
+/// `replace`, `if`, `format`, `fixed`, `currency`, the E-series' `enearest`, `eup`, `edown`).
+///
+/// An expression that is not read, or whose evaluation fails (a division by zero, an unknown function, a string where a number is needed), is left as
+/// written, as KiCad leaves it ("If processing had any evaluation errors, return original input unchanged"; the error goes to its error collector only).
+/// **Differs**: the clock's (`today`, `now`, `dateformat`, `datestring`, `weekdayname`, `timeformat`), `random` and the version control's (`vcs..`) functions
+/// are not ported and leave their expression as written; a number with a fraction is written by Rust's shortest form, `fmt::format( "{}" )`'s for most.
 pub fn evaluate_math(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -266,8 +273,8 @@ pub fn evaluate_math(text: &str) -> String {
             out.push_str(&rest[at..]);
             return out;
         };
-        match MathParser::new(&body[..end]).parse() {
-            Some(v) => out.push_str(&format_number(v)),
+        match text_eval::evaluate(&body[..end]) {
+            Some(v) => out.push_str(&v.to_text()),
             None => out.push_str(&rest[at..at + 2 + end + 1]),
         }
         rest = &body[end + 1..];
@@ -281,135 +288,556 @@ fn format_number(v: f64) -> String {
     let rounded = v.round();
     if (v - rounded).abs() < 1e-10 && rounded.abs() < 1e15 {
         format!("{rounded:.0}")
+    } else if v.is_nan() {
+        "nan".into()
     } else {
         format!("{v}")
     }
 }
 
-/// A recursive descent reader of the arithmetic of `text_eval.lemon`.
-struct MathParser<'a> {
-    s: &'a [u8],
-    i: usize,
-}
+/// The reader and the evaluator of one `@{..}` (KiCad 25ec2335 `KIEVAL_TEXT_TOKENIZER`, `text_eval.lemon`, `EVAL_VISITOR`).
+mod text_eval {
+    use super::format_number;
 
-impl<'a> MathParser<'a> {
-    fn new(s: &'a str) -> Self {
-        MathParser { s: s.as_bytes(), i: 0 }
+    /// `calc_parser::VALUE`: a number or a string.
+    #[derive(Debug, Clone, PartialEq)]
+    pub(super) enum Value {
+        Num(f64),
+        Str(String),
     }
-    fn skip(&mut self) {
-        while self.i < self.s.len() && self.s[self.i].is_ascii_whitespace() {
+
+    impl Value {
+        /// `VALUE_UTILS::ToString`.
+        pub(super) fn to_text(&self) -> String {
+            match self {
+                Value::Num(n) => format_number(*n),
+                Value::Str(s) => s.clone(),
+            }
+        }
+        /// `VALUE_UTILS::ToDouble`: a number, or a string that is one number and nothing else (`fast_float::from_chars`).
+        fn num(&self) -> Option<f64> {
+            match self {
+                Value::Num(n) => Some(*n),
+                Value::Str(s) => (!s.starts_with('+') && !s.is_empty()).then(|| s.parse::<f64>().ok()).flatten(),
+            }
+        }
+        /// `VALUE_UTILS::ToChar`: the string's first character, a space for none.
+        fn first_char(&self) -> char {
+            self.to_text().chars().next().unwrap_or(' ')
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum Tok {
+        Num(f64),
+        Str(String),
+        Ident(String),
+        DollarOpen,
+        Close,
+        Op(&'static str),
+        Text,
+    }
+
+    /// `utf8_utils::CHARACTER_CLASSIFIER::is_alpha`: an ASCII letter or any code point past ASCII that is not white space.
+    fn is_alpha(c: char) -> bool {
+        c.is_ascii_alphabetic() || (c as u32 >= 0x80 && c != '\u{FFFD}' && !c.is_whitespace())
+    }
+
+    /// `SI_PREFIX_HANDLER::prefixes`.
+    fn si_multiplier(c: char) -> Option<f64> {
+        Some(match c {
+            'a' => 1e-18,
+            'f' => 1e-15,
+            'p' => 1e-12,
+            'n' => 1e-9,
+            'u' | 'µ' | 'μ' => 1e-6,
+            'm' => 1e-3,
+            'R' | 'F' => 1.0,
+            'k' | 'K' => 1e3,
+            'M' => 1e6,
+            'G' => 1e9,
+            'T' => 1e12,
+            'P' => 1e15,
+            'E' => 1e18,
+            _ => return None,
+        })
+    }
+
+    /// `text_eval_units::UnitRegistry`'s table (`parseUnit`) with each unit's millimetres (`conversionToMM`); the evaluator's default unit is the millimetre,
+    /// and a unit of time or angle is taken as it is.
+    fn unit_to_mm(unit: &str) -> Option<f64> {
+        Some(match unit {
+            "ps/mm" | "ps/cm" | "ps/in" | "deg" | "ps" | "fs" | "°" | "mm" => 1.0,
+            "thou" | "mil" | "mils" => 25.4 / 1000.0,
+            "cm" => 10.0,
+            "in" | "\"" => 25.4,
+            "um" => 1.0 / 1000.0,
+            _ => return None,
+        })
+    }
+
+    struct Lexer {
+        s: Vec<char>,
+        i: usize,
+    }
+
+    impl Lexer {
+        fn at(&self, k: usize) -> char {
+            self.s.get(self.i + k).copied().unwrap_or('\0')
+        }
+        fn at_exponent(&self) -> bool {
+            if !matches!(self.at(0), 'e' | 'E') {
+                return false;
+            }
+            let k = if matches!(self.at(1), '+' | '-') { 2 } else { 1 };
+            self.at(k).is_ascii_digit()
+        }
+        /// The letters (and quotes) from `from`: what a unit could be.
+        fn unit_run(&self, from: usize) -> String {
+            self.s[from..].iter().take_while(|&&c| is_alpha(c) || c == '"' || c == '\'').collect()
+        }
+        /// `canConsumePrefix`: R and F carry no scale, so they are RKM markers only when no letter follows.
+        fn can_consume_prefix(&self, c: char) -> bool {
+            si_multiplier(c).is_some() && (!matches!(c, 'R' | 'F') || !(is_alpha(self.at(1)) || self.at(1) == '_'))
+        }
+        /// `parse_number` in the expression context.
+        fn number(&mut self) -> Option<f64> {
+            let mut text = String::new();
+            let mut multiplier = 1.0;
+            let mut has_prefix = false;
+            while self.at(0).is_ascii_digit() {
+                text.push(self.at(0));
+                self.i += 1;
+            }
+            if self.i < self.s.len() {
+                let c = self.at(0);
+                if c == '.' {
+                    text.push('.');
+                    self.i += 1;
+                } else if self.at_exponent() {
+                } else if is_alpha(c) {
+                    // a unit is looked for before a prefix (unit strings are longer)
+                    if unit_to_mm(&self.unit_run(self.i)).is_none() && self.can_consume_prefix(c) {
+                        multiplier = si_multiplier(c)?;
+                        has_prefix = true;
+                        self.i += 1;
+                    }
+                }
+                // RKM notation (3k3, 4R7) puts the multiplier where the decimal point goes
+                if has_prefix && self.at(0).is_ascii_digit() {
+                    text.push('.');
+                }
+            }
+            while self.at(0).is_ascii_digit() {
+                text.push(self.at(0));
+                self.i += 1;
+            }
+            if self.at_exponent() {
+                text.push(self.at(0));
+                self.i += 1;
+                if matches!(self.at(0), '+' | '-') {
+                    text.push(self.at(0));
+                    self.i += 1;
+                }
+                while self.at(0).is_ascii_digit() {
+                    text.push(self.at(0));
+                    self.i += 1;
+                }
+            }
+            if !has_prefix && is_alpha(self.at(0)) && unit_to_mm(&self.unit_run(self.i)).is_none() && self.can_consume_prefix(self.at(0)) {
+                multiplier = si_multiplier(self.at(0))?;
+                self.i += 1;
+            }
+            let mut value = if text.is_empty() || text == "." { 0.0 } else { text.parse::<f64>().ok()? * multiplier };
+            if !value.is_finite() {
+                return None; // "Number out of range"
+            }
+            // a unit after it, white space allowed between
+            let back = self.i;
+            while self.at(0).is_whitespace() && self.i < self.s.len() {
+                self.i += 1;
+            }
+            let unit = self.unit_run(self.i);
+            match unit_to_mm(&unit) {
+                Some(f) if !unit.is_empty() => {
+                    value *= f;
+                    self.i += unit.chars().count();
+                }
+                _ => self.i = back,
+            }
+            Some(value)
+        }
+        /// `parse_string_literal`.
+        fn string(&mut self, quote: char) -> Option<String> {
             self.i += 1;
+            let mut out = String::new();
+            while self.i < self.s.len() && self.at(0) != quote {
+                let c = self.at(0);
+                if c == '\\' && self.i + 1 < self.s.len() {
+                    let e = self.at(1);
+                    self.i += 2;
+                    match e {
+                        'n' => out.push('\n'),
+                        't' => out.push('\t'),
+                        'r' => out.push('\r'),
+                        '\\' => out.push('\\'),
+                        '"' => out.push('"'),
+                        '\'' => out.push('\''),
+                        '0' => out.push('\0'),
+                        'x' => {
+                            let hex: String = self.s[self.i..].iter().take(2).take_while(|c| c.is_ascii_hexdigit()).collect();
+                            self.i += hex.len();
+                            if hex.is_empty() {
+                                out.push_str("\\x");
+                            } else {
+                                out.push(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32).unwrap_or('\u{FFFD}'));
+                            }
+                        }
+                        other => {
+                            out.push('\\');
+                            out.push(other);
+                        }
+                    }
+                } else if c == '\n' {
+                    return None; // "Unterminated string literal"
+                } else {
+                    out.push(c);
+                    self.i += 1;
+                }
+            }
+            if self.at(0) != quote {
+                return None; // "Missing closing quote in string literal"
+            }
+            self.i += 1;
+            Some(out)
+        }
+        /// `get_next_token` inside `@{..}`; `None` at the end.
+        fn next(&mut self) -> Option<Option<Tok>> {
+            while self.i < self.s.len() && self.at(0).is_whitespace() {
+                self.i += 1;
+            }
+            if self.i >= self.s.len() {
+                return Some(None);
+            }
+            let (c, n) = (self.at(0), self.at(1));
+            if c == '$' && n == '{' {
+                self.i += 2;
+                return Some(Some(Tok::DollarOpen));
+            }
+            if c == '}' {
+                self.i += 1;
+                return Some(Some(Tok::Close));
+            }
+            for two in ["<=", ">=", "==", "!="] {
+                if self.s[self.i..].starts_with(&two.chars().collect::<Vec<_>>()) {
+                    self.i += 2;
+                    return Some(Some(Tok::Op(two)));
+                }
+            }
+            if let Some(op) = ["(", ")", "+", "-", "*", "/", "%", "^", ",", "<", ">"].into_iter().find(|o| o.starts_with(c)) {
+                self.i += 1;
+                return Some(Some(Tok::Op(op)));
+            }
+            if c == '"' || c == '\'' {
+                return Some(Some(Tok::Str(self.string(c)?)));
+            }
+            if c.is_ascii_digit() || (c == '.' && n.is_ascii_digit()) {
+                return Some(Some(Tok::Num(self.number()?)));
+            }
+            if is_alpha(c) || c == '_' {
+                let id: String = self.s[self.i..].iter().take_while(|&&c| is_alpha(c) || c.is_ascii_digit() || c == '_').collect();
+                self.i += id.chars().count();
+                return Some(Some(Tok::Ident(id)));
+            }
+            self.i = self.s.len();
+            Some(Some(Tok::Text))
         }
     }
-    fn eat(&mut self, tok: &str) -> bool {
-        self.skip();
-        if self.s[self.i..].starts_with(tok.as_bytes()) {
-            self.i += tok.len();
-            true
-        } else {
-            false
+
+    /// The expression's tokens, or `None` when the reader stops on an error.
+    fn tokens(src: &str) -> Option<Vec<Tok>> {
+        let mut lx = Lexer { s: src.chars().collect(), i: 0 };
+        let mut out = Vec::new();
+        while let Some(t) = lx.next()? {
+            out.push(t);
         }
+        Some(out)
     }
-    fn parse(mut self) -> Option<f64> {
-        let v = self.comparison()?;
-        self.skip();
-        (self.i == self.s.len() && v.is_finite()).then_some(v)
+
+    struct Parser {
+        t: Vec<Tok>,
+        i: usize,
     }
-    fn comparison(&mut self) -> Option<f64> {
-        let mut l = self.sum()?;
-        loop {
-            let op = ["<=", ">=", "==", "!=", "<", ">"].into_iter().find(|t| self.eat(t));
-            let Some(op) = op else { return Some(l) };
-            let r = self.sum()?;
-            let b = match op {
-                "<=" => l <= r,
-                ">=" => l >= r,
-                "==" => l == r,
-                "!=" => l != r,
-                "<" => l < r,
-                _ => l > r,
-            };
-            l = if b { 1.0 } else { 0.0 };
+
+    impl Parser {
+        fn peek_op(&self, op: &str) -> bool {
+            matches!(self.t.get(self.i), Some(Tok::Op(o)) if *o == op)
         }
-    }
-    fn sum(&mut self) -> Option<f64> {
-        let mut l = self.term()?;
-        loop {
+        fn eat(&mut self, op: &str) -> bool {
+            let yes = self.peek_op(op);
+            if yes {
+                self.i += 1;
+            }
+            yes
+        }
+        fn comparison(&mut self) -> Option<Value> {
+            let mut l = self.sum()?;
+            loop {
+                let Some(op) = ["<=", ">=", "==", "!=", "<", ">"].into_iter().find(|o| self.eat(o)) else { return Some(l) };
+                let r = self.sum()?;
+                l = binop(&l, op, &r)?;
+            }
+        }
+        fn sum(&mut self) -> Option<Value> {
+            let mut l = self.term()?;
+            loop {
+                let Some(op) = ["+", "-"].into_iter().find(|o| self.eat(o)) else { return Some(l) };
+                let r = self.term()?;
+                l = binop(&l, op, &r)?;
+            }
+        }
+        fn term(&mut self) -> Option<Value> {
+            let mut l = self.unary()?;
+            loop {
+                let Some(op) = ["*", "/", "%"].into_iter().find(|o| self.eat(o)) else { return Some(l) };
+                let r = self.unary()?;
+                l = binop(&l, op, &r)?;
+            }
+        }
+        /// `factor ::= MINUS factor [UMINUS]` (`0 - R`) and `PLUS factor` (R as it is); `^` binds tighter (`%right POWER` above `%right UMINUS`).
+        fn unary(&mut self) -> Option<Value> {
+            if self.eat("-") {
+                let r = self.unary()?;
+                return binop(&Value::Num(0.0), "-", &r);
+            }
             if self.eat("+") {
-                l += self.term()?;
-            } else if self.eat("-") {
-                l -= self.term()?;
-            } else {
-                return Some(l);
+                return self.unary();
             }
+            self.power()
         }
-    }
-    fn term(&mut self) -> Option<f64> {
-        let mut l = self.unary()?;
-        loop {
-            if self.eat("*") {
-                l *= self.unary()?;
-            } else if self.eat("/") {
-                let r = self.unary()?;
-                if r == 0.0 {
-                    return None;
-                }
-                l /= r;
-            } else if self.eat("%") {
-                let r = self.unary()?;
-                if r == 0.0 {
-                    return None;
-                }
-                l %= r;
-            } else {
-                return Some(l);
+        fn power(&mut self) -> Option<Value> {
+            let base = self.atom()?;
+            if self.eat("^") {
+                let exp = self.unary()?;
+                return binop(&base, "^", &exp);
             }
+            Some(base)
         }
-    }
-    fn unary(&mut self) -> Option<f64> {
-        if self.eat("-") {
-            return Some(-self.unary()?);
-        }
-        if self.eat("+") {
-            return self.unary();
-        }
-        self.power()
-    }
-    fn power(&mut self) -> Option<f64> {
-        let base = self.atom()?;
-        if self.eat("^") {
-            // right to left, and a sign binds below it: `2^-1`
-            let exp = self.unary()?;
-            return Some(base.powf(exp));
-        }
-        Some(base)
-    }
-    fn atom(&mut self) -> Option<f64> {
-        if self.eat("(") {
-            let v = self.comparison()?;
-            return self.eat(")").then_some(v);
-        }
-        self.skip();
-        let start = self.i;
-        while self.i < self.s.len() && (self.s[self.i].is_ascii_digit() || self.s[self.i] == b'.') {
+        fn atom(&mut self) -> Option<Value> {
+            let t = self.t.get(self.i).cloned()?;
             self.i += 1;
+            match t {
+                Tok::Num(n) => Some(Value::Num(n)),
+                Tok::Str(s) => Some(Value::Str(s)),
+                Tok::Op("(") => {
+                    let v = self.comparison()?;
+                    self.eat(")").then_some(v)
+                }
+                // `function_call ::= IDENTIFIER LPAREN [arg_list] RPAREN`
+                Tok::Ident(name) => {
+                    if !self.eat("(") {
+                        return None;
+                    }
+                    let mut args = Vec::new();
+                    if !self.eat(")") {
+                        loop {
+                            args.push(self.comparison()?);
+                            if self.eat(")") {
+                                break;
+                            }
+                            if !self.eat(",") {
+                                return None;
+                            }
+                        }
+                    }
+                    function(&name, &args)
+                }
+                // `variable ::= DOLLAR_OPEN IDENTIFIER CLOSE_BRACE`: a variable still here was not resolved ("Undefined variable")
+                _ => None,
+            }
         }
-        // an exponent, `1e3`
-        if self.i > start && self.i < self.s.len() && (self.s[self.i] == b'e' || self.s[self.i] == b'E') {
-            let save = self.i;
-            self.i += 1;
-            if self.i < self.s.len() && (self.s[self.i] == b'+' || self.s[self.i] == b'-') {
-                self.i += 1;
-            }
-            let digits = self.i;
-            while self.i < self.s.len() && self.s[self.i].is_ascii_digit() {
-                self.i += 1;
-            }
-            if self.i == digits {
-                self.i = save;
-            }
+    }
+
+    /// `EVAL_VISITOR::operator()`'s `BinOp`: `+` joins when either side is a string, `==` / `!=` compare two strings, else `VALUE_UTILS::ArithmeticOp`.
+    fn binop(l: &Value, op: &str, r: &Value) -> Option<Value> {
+        let string = |v: &Value| matches!(v, Value::Str(_));
+        if op == "+" && (string(l) || string(r)) {
+            return Some(Value::Str(l.to_text() + &r.to_text()));
         }
-        std::str::from_utf8(&self.s[start..self.i]).ok().filter(|t| !t.is_empty()).and_then(|t| t.parse().ok())
+        if let (Value::Str(a), Value::Str(b), "==" | "!=") = (l, r, op) {
+            return Some(Value::Num(if (a == b) == (op == "==") { 1.0 } else { 0.0 }));
+        }
+        let (a, b) = (l.num()?, r.num()?);
+        let truth = |t: bool| Value::Num(if t { 1.0 } else { 0.0 });
+        Some(match op {
+            "+" => Value::Num(a + b),
+            "-" => Value::Num(a - b),
+            "*" => Value::Num(a * b),
+            "/" if b == 0.0 => return None, // "Division by zero"
+            "/" => Value::Num(a / b),
+            "%" if b == 0.0 => return None, // "Modulo by zero"
+            "%" => Value::Num(a % b),
+            "^" => Value::Num(a.powf(b)),
+            "<" => truth(a < b),
+            ">" => truth(a > b),
+            "<=" => truth(a <= b),
+            ">=" => truth(a >= b),
+            "==" => truth(a == b),
+            "!=" => truth(a != b),
+            _ => return None,
+        })
+    }
+
+    /// `ESERIES_UTILS`: the E24 and E192 values of one decade (E3 to E24 and E48 to E96 take every n-th of them).
+    const E24: [u16; 24] = [100, 110, 120, 130, 150, 160, 180, 200, 220, 240, 270, 300, 330, 360, 390, 430, 470, 510, 560, 620, 680, 750, 820, 910];
+    const E192: [u16; 192] = [
+        100, 101, 102, 104, 105, 106, 107, 109, 110, 111, 113, 114, 115, 117, 118, 120, 121, 123, 124, 126, 127, 129, 130, 132, 133, 135, 137, 138, 140, 142, 143, 145, 147, 149, 150, 152, 154, 156, 158, 160, 162, 164, 165,
+        167, 169, 172, 174, 176, 178, 180, 182, 184, 187, 189, 191, 193, 196, 198, 200, 203, 205, 208, 210, 213, 215, 218, 221, 223, 226, 229, 232, 234, 237, 240, 243, 246, 249, 252, 255, 258, 261, 264, 267, 271, 274, 277,
+        280, 284, 287, 291, 294, 298, 301, 305, 309, 312, 316, 320, 324, 328, 332, 336, 340, 344, 348, 352, 357, 361, 365, 370, 374, 379, 383, 388, 392, 397, 402, 407, 412, 417, 422, 427, 432, 437, 442, 448, 453, 459, 464,
+        470, 475, 481, 487, 493, 499, 505, 511, 517, 523, 530, 536, 542, 549, 556, 562, 569, 576, 583, 590, 597, 604, 612, 619, 626, 634, 642, 649, 657, 665, 673, 681, 690, 698, 706, 715, 723, 732, 741, 750, 759, 768, 777,
+        787, 796, 806, 816, 825, 835, 845, 856, 866, 876, 887, 898, 909, 920, 931, 942, 953, 965, 976, 988,
+    ];
+
+    /// `ESERIES_UTILS::FindNearest` / `FindUp` / `FindDown`: `how` is 0, 1 or -1.
+    fn e_series(value: f64, series: &str, how: i32) -> Option<f64> {
+        let n: usize = match series {
+            "E3" | "e3" => 3,
+            "E6" | "e6" => 6,
+            "E12" | "e12" => 12,
+            "E24" | "e24" => 24,
+            "E48" | "e48" => 48,
+            "E96" | "e96" => 96,
+            "E192" | "e192" => 192,
+            _ => return None,
+        };
+        if value <= 0.0 {
+            return None;
+        }
+        let val = |i: usize| -> f64 { f64::from(if n <= 24 { E24[i * (24 / n)] } else { E192[i * (192 / n)] }) };
+        let decade = value.log10().floor() as i32;
+        let normalized = value / 10f64.powi(decade) * 100.0;
+        let at = |v: f64, d: i32| v / 100.0 * 10f64.powi(d);
+        match how {
+            0 => {
+                let (mut best, mut diff) = (100.0, f64::MAX);
+                for i in 0..n {
+                    let d = (normalized - val(i)).abs();
+                    if d < diff {
+                        (best, diff) = (val(i), d);
+                    }
+                }
+                Some(at(best, decade))
+            }
+            1 => Some((0..n).map(val).find(|v| *v > normalized).map_or_else(|| at(val(0), decade + 1), |v| at(v, decade))),
+            _ => Some((0..n).rev().map(val).find(|v| *v < normalized).map_or_else(|| at(val(n - 1), decade - 1), |v| at(v, decade))),
+        }
+    }
+
+    /// `{:.{}f}`: a negative number of decimals is an error (`fmt` throws).
+    fn fixed(v: f64, decimals: f64) -> Option<String> {
+        let d = decimals as i64;
+        (d >= 0).then(|| format!("{v:.*}", d as usize))
+    }
+
+    /// `wxString::Upper` / `Lower`: each character by itself.
+    fn case(s: &str, upper: bool) -> String {
+        s.chars()
+            .map(|c| {
+                let mut m: Vec<char> = if upper { c.to_uppercase().collect() } else { c.to_lowercase().collect() };
+                if m.len() == 1 {
+                    m.pop().unwrap_or(c)
+                } else {
+                    c
+                }
+            })
+            .collect()
+    }
+
+    /// `EVAL_VISITOR::evaluateFunction`, but the clock's, `random` and the version control's functions.
+    fn function(name: &str, args: &[Value]) -> Option<Value> {
+        let argc = args.len();
+        let text = |i: usize| args[i].to_text();
+        match name {
+            "format" | "fixed" if argc >= 1 => {
+                let decimals = if argc > 1 { args[1].num().unwrap_or(2.0) } else { 2.0 };
+                return Some(Value::Str(fixed(args[0].num()?, decimals)?));
+            }
+            "currency" if argc >= 1 => {
+                let amount = args[0].num()?;
+                let symbol = if argc > 1 { text(1) } else { "$".into() };
+                return Some(Value::Str(format!("{symbol}{amount:.2}")));
+            }
+            "upper" if argc == 1 => return Some(Value::Str(case(&text(0), true))),
+            "lower" if argc == 1 => return Some(Value::Str(case(&text(0), false))),
+            "concat" if argc >= 2 => return Some(Value::Str(args.iter().map(Value::to_text).collect())),
+            // `wxString::BeforeFirst` / `BeforeLast` / `AfterFirst` / `AfterLast` of `ToChar`: the whole string, or none, where it has no such character
+            "beforefirst" if argc == 2 => {
+                let s = text(0);
+                return Some(Value::Str(s.split_once(args[1].first_char()).map_or(s.clone(), |(a, _)| a.to_string())));
+            }
+            "beforelast" if argc == 2 => return Some(Value::Str(text(0).rsplit_once(args[1].first_char()).map_or(String::new(), |(a, _)| a.to_string()))),
+            "afterfirst" if argc == 2 => return Some(Value::Str(text(0).split_once(args[1].first_char()).map_or(String::new(), |(_, b)| b.to_string()))),
+            "afterlast" if argc == 2 => {
+                let s = text(0);
+                return Some(Value::Str(s.rsplit_once(args[1].first_char()).map_or(s.clone(), |(_, b)| b.to_string())));
+            }
+            "replace" if argc == 3 => {
+                let (s, search) = (text(0), text(1));
+                return Some(Value::Str(if search.is_empty() { s } else { s.replace(&search, &text(2)) }));
+            }
+            "if" if argc == 3 => return Some(if args[0].num()? != 0.0 { args[1].clone() } else { args[2].clone() }),
+            "enearest" | "eup" | "edown" if (1..=2).contains(&argc) => {
+                let series = if argc > 1 { text(1) } else { "E24".into() };
+                let how = match name {
+                    "enearest" => 0,
+                    "eup" => 1,
+                    _ => -1,
+                };
+                return e_series(args[0].num()?, &series, how).map(Value::Num);
+            }
+            _ => {}
+        }
+        // the arithmetic ones take numbers
+        let n: Vec<f64> = args.iter().map(Value::num).collect::<Option<_>>()?;
+        let v = match (name, argc) {
+            ("abs", 1) => n[0].abs(),
+            ("sum", c) if c >= 1 => n.iter().sum(),
+            ("round", c) if c >= 1 => {
+                let m = 10f64.powi(if c > 1 { n[1] as i32 } else { 0 });
+                (n[0] * m).round() / m
+            }
+            ("sqrt", 1) if n[0] < 0.0 => return None, // "Square root of negative number"
+            ("sqrt", 1) => n[0].sqrt(),
+            ("pow", 2) => n[0].powf(n[1]),
+            ("floor", 1) => n[0].floor(),
+            ("ceil", 1) => n[0].ceil(),
+            ("min", c) if c >= 1 => n.iter().copied().fold(f64::INFINITY, f64::min),
+            ("max", c) if c >= 1 => n.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            ("avg", c) if c >= 1 => n.iter().sum::<f64>() / c as f64,
+            ("shunt", 2) => {
+                let sum = n[0] + n[1];
+                if sum > 0.0 {
+                    n[0] * n[1] / sum
+                } else {
+                    0.0
+                }
+            }
+            ("db", 1) if n[0] <= 0.0 => return None,
+            ("db", 1) => 10.0 * n[0].log10(),
+            ("dbv", 1) if n[0] <= 0.0 => return None,
+            ("dbv", 1) => 20.0 * n[0].log10(),
+            ("fromdb", 1) => 10f64.powf(n[0] / 10.0),
+            ("fromdbv", 1) => 10f64.powf(n[0] / 20.0),
+            _ => return None, // "Unknown function"
+        };
+        Some(Value::Num(v))
+    }
+
+    /// One `@{..}`'s body: its value, or `None` on any error.
+    pub(super) fn evaluate(body: &str) -> Option<Value> {
+        let mut p = Parser { t: tokens(body)?, i: 0 };
+        let v = p.comparison()?;
+        (p.i == p.t.len()).then_some(v)
     }
 }
 
@@ -964,6 +1392,30 @@ mod tests {
         assert_eq!(expand("@{7/2} @{2^3^2} @{-2^2} @{7%4} @{1+2*3} @{(1+2)*3} @{2>1} @{0.1+0.2}", &p), "3.5 512 -4 3 7 9 1 0.30000000000000004");
         assert_eq!(expand("@{1/0}", &p), "@{1/0}", "an error is left as written");
         assert_eq!(evaluate_math("a @{2*3} b @{x} c"), "a 6 b @{x} c");
+    }
+
+    /// UI-LEFT S22: the rest of `text_eval.lemon` and `EVAL_VISITOR::evaluateFunction` (KiCad 25ec2335): strings, `+` joining them, string comparisons,
+    /// SI prefixes and RKM notation, units in millimetres, and the functions -- each expression evaluated on its own, one that fails left as written.
+    #[test]
+    fn the_grammars_strings_units_and_functions_are_evaluated_as_kicad_does() {
+        let e = evaluate_math;
+        // strings
+        assert_eq!(e(r#"@{"Ch" + 3} @{'a' + "b"} @{"x" == "x"} @{"x" != 'x'} @{"a\tb"}"#), "Ch3 ab 1 0 a\tb");
+        assert_eq!(e(r#"@{upper("net_a")}/@{lower('LED')} @{concat("U", 1, "A")}"#), "NET_A/led U1A");
+        assert_eq!(e(r#"@{beforefirst("a.b.c", ".")} @{beforelast("a.b.c", ".")} @{afterfirst("a.b.c", ".")} @{afterlast("a.b.c", ".")}"#), "a a.b b.c c");
+        assert_eq!(e(r#"[@{beforefirst("abc", ".")}] [@{afterfirst("abc", ".")}] [@{beforelast("abc", ".")}] [@{afterlast("abc", ".")}]"#), "[abc] [] [] [abc]", "wxString's answers where the character is not there");
+        assert_eq!(e(r#"@{replace("R_1_2", "_", "-")} @{if(2 > 1, "yes", "no")} @{if(0, 1, 2)}"#), "R-1-2 yes 2");
+        // numbers: SI prefixes, RKM, exponents and units (millimetres)
+        assert_eq!(e("@{4k7} @{2.2u*1e6} @{1m*1000} @{3E3} @{4R7} @{1in} @{100mil} @{2 mm + 1cm} @{1.5M/1k}"), "4700 2.2 1 3000 4.7 25.4 2.54 12 1500");
+        // the arithmetic functions
+        assert_eq!(e("@{abs(-3)} @{sum(1,2,3)} @{round(2.345, 2)} @{round(2.5)} @{sqrt(16)} @{pow(2, 10)} @{floor(-1.5)} @{ceil(1.2)} @{min(3, 1, 2)} @{max(3, 1, 2)} @{avg(1, 2)}"), "3 6 2.35 3 4 1024 -2 2 1 3 1.5");
+        assert_eq!(e("@{shunt(10, 10)} @{db(100)} @{dbv(10)} @{fromdb(20)} @{fromdbv(20)}"), "5 20 20 100 10");
+        assert_eq!(e("@{format(3.14159)} @{fixed(2, 3)} @{currency(5)} @{currency(5, \"EUR \")}"), "3.14 2.000 $5.00 EUR 5.00");
+        assert_eq!(e("@{enearest(4800)} @{eup(4700)} @{edown(4700)} @{enearest(1234, \"E96\")}"), "4700 5100 4300 1240");
+        // what fails is left as written, the rest of the text evaluated
+        assert_eq!(e("@{sqrt(-1)} @{nope(1)} @{\"a\" - 1} @{1+} @{upper()} ok @{1+1}"), "@{sqrt(-1)} @{nope(1)} @{\"a\" - 1} @{1+} @{upper()} ok 2");
+        // a variable left unresolved is no value
+        assert_eq!(e("@{${X}+1}"), "@{${X}+1}");
     }
 
     #[test]

@@ -84,10 +84,14 @@ export function cutPieces(state: BreakState, cut: BreakCut, cursor: P): P[][] {
 }
 
 export interface BreakCmds {
-  cmds: Array<{ op: "delete_wire"; id: string } | { op: "add_wire"; pts: Array<{ x: number; y: number }>; bus: boolean } | { op: "delete_sch_line"; id: string } | { op: "add_sch_line"; pts: Array<{ x: number; y: number }>; width_nm?: number }>;
+  cmds: Array<{ op: "delete_wire"; id: string } | { op: "sch_edit"; verb: "add_wire_as"; pts: Array<{ x: number; y: number }>; bus: boolean; by: "break" } | { op: "delete_sch_line"; id: string } | { op: "add_sch_line"; pts: Array<{ x: number; y: number }>; width_nm?: number }>;
 }
 
-/** The verbs that replace each cut line by its pieces -- one batch, one undo step (`SCH_COMMIT::Push( "Break Wire" / "Slice Wire" )`). */
+/**
+ * The verbs that replace each cut line by its pieces -- one batch, one undo step (`SCH_COMMIT::Push( "Break Wire" / "Slice Wire" )`). A wire's pieces go in
+ * through `add_wire_as` with `by: "break"`: KiCad finishes a break as a move (`finalizeMoveOperation`), which never cuts a wire between a two-pin part's pins
+ * the way drawing one does (r3 C3-L1).
+ */
 export function breakCmds(state: BreakState, cursor: P): BreakCmds["cmds"] {
   const deletes: BreakCmds["cmds"] = [];
   const adds: BreakCmds["cmds"] = [];
@@ -96,7 +100,7 @@ export function breakCmds(state: BreakState, cursor: P): BreakCmds["cmds"] {
     const s = cut.source;
     deletes.push(s.kind === "wire" ? { op: "delete_wire", id: s.id } : { op: "delete_sch_line", id: s.id });
     for (const piece of cutPieces(state, cut, cursor)) {
-      adds.push(s.kind === "wire" ? { op: "add_wire", pts: piece.map(xy), bus: s.bus ?? false } : { op: "add_sch_line", pts: piece.map(xy), ...(s.widthNm ? { width_nm: s.widthNm } : {}) });
+      adds.push(s.kind === "wire" ? { op: "sch_edit", verb: "add_wire_as", pts: piece.map(xy), bus: s.bus ?? false, by: "break" } : { op: "add_sch_line", pts: piece.map(xy), ...(s.widthNm ? { width_nm: s.widthNm } : {}) });
     }
   }
   return [...deletes, ...adds];

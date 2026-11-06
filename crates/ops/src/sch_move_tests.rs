@@ -980,6 +980,121 @@ fn draw(sch: eda_model::ir::SchematicSection, pts: &[Point]) -> eda_model::ir::S
     b.design().schematic.clone().unwrap()
 }
 
+/// r3 C3-L1: a wire drawn across a two-pin part is cut between its pins (`finishSegments`' `TrimWire`); the same wire put down by Repeat or by Break
+/// (`SchCmd::AddWireAs`: `RepeatDrawItem`, `finalizeMoveOperation`) is not -- it shorts the part, as in KiCad. A bus drawn across one cuts no wire of it either way.
+#[test]
+fn a_wire_repeated_or_broken_across_a_two_pin_part_is_not_cut_between_its_pins() {
+    let across = |cmd: Cmd| {
+        let mut s = section();
+        let mut r = sym("R1", p(mm(20.32), mm(50.8)));
+        r.rot = 90_000;
+        s.symbols.push(r);
+        let m = ConstraintModel::default();
+        let mut design = empty_design();
+        design.schematic = Some(s);
+        let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+        b.apply(&cmd).unwrap_or_else(|e| panic!("{e:?}"));
+        let mut got = wire_pts(b.design().schematic.as_ref().unwrap());
+        got.sort();
+        got
+    };
+    let pts = vec![p(Nm::ZERO, mm(50.8)), p(mm(60.96), mm(50.8))];
+    // R1 turned a quarter has its pins at (16.51, 50.8) and (24.13, 50.8)
+    assert_eq!(across(Cmd::AddWire { pts: pts.clone(), bus: false }), vec![vec![p(Nm::ZERO, mm(50.8)), p(mm(16.51), mm(50.8))], vec![p(mm(24.13), mm(50.8)), p(mm(60.96), mm(50.8))]], "drawn: cut");
+    for by in [crate::sch_edit::WireOrigin::Repeat, crate::sch_edit::WireOrigin::Break] {
+        // one wire from end to end (with a vertex at each pin it passes): the part is shorted
+        let got = across(Cmd::sch(crate::sch_edit::SchCmd::AddWireAs { pts: pts.clone(), bus: false, by }));
+        assert_eq!(got.len(), 1, "{by:?}: one wire, not cut: {got:?}");
+        assert_eq!((got[0][0], *got[0].last().unwrap()), (pts[0], pts[1]), "{by:?}");
+    }
+    // the verb as the studio sends it
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({"op": "sch_edit", "verb": "add_wire_as", "pts": [{"x": 0, "y": 50_800_000}, {"x": 60_960_000, "y": 50_800_000}], "by": "repeat"})).unwrap();
+    assert_eq!(cmd, Cmd::sch(crate::sch_edit::SchCmd::AddWireAs { pts: pts.clone(), bus: false, by: crate::sch_edit::WireOrigin::Repeat }));
+}
+
+/// r3 C3-M1: a Swap and a Properties OK of connectable items are commits that hold them, so they clean the sheet up as every such commit does
+/// (`SCH_COMMIT::pushSchEdit`, `LOCAL_CLEANUP`): a junction that joins two wires in line goes and the wires merge.
+#[test]
+fn a_swap_and_a_properties_edit_clean_the_sheet_up() {
+    let stale = || {
+        let mut s = section();
+        s.wires.push(wire("wire_a", &[p(Nm::ZERO, Nm::ZERO), p(10 * G, Nm::ZERO)]));
+        s.wires.push(wire("wire_b", &[p(10 * G, Nm::ZERO), p(20 * G, Nm::ZERO)]));
+        s.junctions.push(Junction { id: "jct_a".into(), at: p(10 * G, Nm::ZERO) });
+        s.labels.push(label("lbl_a", "A", p(Nm::ZERO, 10 * G), LabelKind::Local));
+        s.labels.push(label("lbl_b", "B", p(10 * G, 10 * G), LabelKind::Local));
+        s
+    };
+    let after = |cmd: Cmd| {
+        let m = ConstraintModel::default();
+        let mut design = empty_design();
+        design.schematic = Some(stale());
+        let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+        b.apply(&cmd).unwrap_or_else(|e| panic!("{e:?}"));
+        b.design().schematic.clone().unwrap()
+    };
+    for cmd in [
+        Cmd::SwapSchItems { a: "lbl_a".into(), b: "lbl_b".into() },
+        Cmd::sch(crate::sch_edit::SchCmd::SetStroke { ids: vec!["wire_a".into()], width_nm: Some(Nm::new(254_000)), style: None, color: None, diameter_nm: None }),
+    ] {
+        let s = after(cmd.clone());
+        assert!(s.junctions.is_empty(), "{cmd:?}: the junction that joins nothing goes: {:?}", s.junctions);
+        if matches!(cmd, Cmd::SwapSchItems { .. }) {
+            assert_eq!(wire_pts(&s), vec![vec![p(Nm::ZERO, Nm::ZERO), p(20 * G, Nm::ZERO)]], "the wires in line merge");
+            assert_eq!(s.labels.iter().find(|l| l.id == "lbl_a").unwrap().at, p(10 * G, 10 * G), "and the swap is done");
+        }
+    }
+}
+
+/// UI-LEFT S19 (`SCH_EDIT_TOOL::Swap` over `SwappableItems`): Alt+S trades the places of two sheets (each carrying its pins), of a shape and a junction, of
+/// an arc (by its centre) and a no-connect; two labels of one type trade their spin and two texts their justification; a bus entry is not swappable.
+#[test]
+fn alt_s_swaps_sheets_shapes_junctions_and_no_connects_and_labels_trade_their_spin() {
+    use eda_model::sch_extras::SchTextJustify;
+    let mut s = section();
+    let sheet = |id: &str, at: Point| SheetInstance { id: id.into(), name: id.into(), file: format!("{id}.kicad_sch"), at, size: (mm(20.32), mm(10.16)), pins: vec![SheetPin { id: format!("{id}_pin"), name: "IN".into(), shape: LabelShape::Input, at: p(at.x, at.y + mm(5.08)) }], page: String::new() };
+    s.sheets.push(sheet("sa", p(mm(25.4), mm(25.4))));
+    s.sheets.push(sheet("sb", p(mm(101.6), mm(50.8))));
+    let gr = |id: &str, shape: SchGraphicKind| SchGraphic { id: id.into(), shape, width_nm: Nm::ZERO, line_style: Default::default(), color: None, fill: Default::default(), fill_color: None };
+    s.extras.graphics.push(gr("rect_a", SchGraphicKind::Rectangle { start: p(Nm::ZERO, Nm::ZERO), end: p(10 * G, 4 * G), corner_radius_nm: Nm::ZERO }));
+    s.extras.graphics.push(gr("arc_a", SchGraphicKind::Arc { start: p(20 * G, Nm::ZERO), mid: p(22 * G, 2 * G), end: p(20 * G, 4 * G) }));
+    s.junctions.push(Junction { id: "jct_a".into(), at: p(40 * G, 40 * G) });
+    s.no_connects.push(NoConnect { id: "nc_a".into(), at: p(60 * G, 60 * G), pin: String::new() });
+    s.bus_entries.push(BusEntry { id: "be_a".into(), at: p(80 * G, 80 * G), size: p(2 * G, 2 * G) });
+    s.labels.push(label("lbl_a", "A", p(Nm::ZERO, 50 * G), LabelKind::Local));
+    s.labels.push(label("lbl_b", "B", p(10 * G, 50 * G), LabelKind::Local));
+    s.extras.label_spins.insert("lbl_a".into(), LabelSpin::Up);
+    s.texts.push(SchematicText { id: "txt_a".into(), content: "a".into(), at: p(Nm::ZERO, 70 * G), angle: 0, size_nm: G });
+    s.texts.push(SchematicText { id: "txt_b".into(), content: "b".into(), at: p(10 * G, 70 * G), angle: 0, size_nm: G });
+    s.extras.text_justify.insert("txt_b".into(), SchTextJustify { h: eda_model::ir::TextJustify::Right, v: eda_model::ir::TextVAlign::Bottom });
+    let swap = |a: &str, b: &str| {
+        let m = ConstraintModel::default();
+        let mut design = empty_design();
+        design.schematic = Some(s.clone());
+        let mut b_ = Board::new(design, &m, mm(0.1), mm(0.3));
+        b_.apply(&Cmd::SwapSchItems { a: a.into(), b: b.into() }).map(|_| b_.design().schematic.clone().unwrap())
+    };
+    let out = swap("sa", "sb").unwrap();
+    assert_eq!((out.sheets[0].at, out.sheets[1].at), (p(mm(101.6), mm(50.8)), p(mm(25.4), mm(25.4))), "the sheets trade corners");
+    assert_eq!(out.sheets[0].pins[0].at, p(mm(101.6), mm(55.88)), "a sheet's pin goes with it");
+    // (a junction swapped away from its wires joins nothing there: the commit's clean-up takes it, as KiCad's does)
+    let out = swap("rect_a", "nc_a").unwrap();
+    assert_eq!(out.no_connects[0].at, p(Nm::ZERO, Nm::ZERO), "the no-connect takes the rectangle's start");
+    assert!(matches!(out.extras.graphics[0].shape, SchGraphicKind::Rectangle { start, end, .. } if start == p(60 * G, 60 * G) && end == p(70 * G, 64 * G)), "the rectangle moves whole");
+    // the arc through (20, 0), (22, 2), (20, 4) grid has its centre at (20, 2)
+    let out = swap("arc_a", "txt_a").unwrap();
+    assert_eq!(out.texts[0].at, p(20 * G, 2 * G), "an arc's position is its centre");
+    assert!(matches!(out.extras.graphics[1].shape, SchGraphicKind::Arc { start, .. } if start == p(Nm::ZERO, 68 * G)));
+    assert_eq!(swap("jct_a", "lbl_a").map(|o| o.labels[0].at).unwrap(), p(40 * G, 40 * G), "a junction is swappable");
+    let out = swap("lbl_a", "lbl_b").unwrap();
+    assert_eq!(out.extras.label_spins.get("lbl_b"), Some(&LabelSpin::Up), "the spins are traded");
+    assert_eq!(out.extras.label_spins.get("lbl_a"), None);
+    let out = swap("txt_a", "txt_b").unwrap();
+    assert_eq!(out.extras.text_justify.get("txt_a").map(|j| j.h), Some(eda_model::ir::TextJustify::Right), "and the texts' justifications");
+    assert!(!out.extras.text_justify.contains_key("txt_b"));
+    assert_eq!(swap("be_a", "jct_a").unwrap_err()[0].check, "ops_unknown_item", "a bus entry is not swappable");
+}
+
 /// `SCH_LINE_WIRE_BUS_TOOL::finishSegments`: the ends of a new wire, and the points of the sheet that lie on it, get the junction
 /// `IsExplicitJunctionNeeded` asks for (`AddJunction`, which breaks the wire passing through). A wire ending on another's middle is a T: a dot there.
 #[test]

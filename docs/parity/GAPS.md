@@ -232,6 +232,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   files and fields, sheet pins, power symbols' values, text boxes and directive labels' fields, with Replace where KiCad replaces. **Left**: library metadata
   (no box in KiCad's dialog either), groups and ERC markers in Find; a preset saved at once (KiCad at the close), the closing view not kept as `bom_settings`;
   with no saved view the user fields are shown; the Fields Table's Description column, BOM Name editing, grid menus, Group By refusals.
+- Done 2026-11-06 (`task-u4-schleft`, UI-LEFT S13, S16, S18, S19, S20, S22; `PARITY-sch.md` section 62): Draw Arc's three clicks (KiCad 25ec2335) and the arc
+  point editor; Edit Text & Graphics over fields, labels, wires, buses, junctions and sheet pins; Change / Update Symbols' field resets; Break and Repeat without
+  `TrimWire` (r3 C3-L1, done), the clean-up after Swap and the Properties verbs (C3-M1, done), C3-L3; the no-connect toggle; Alt+S over every swappable kind;
+  Unfold from Bus's submenus and label ghost (r6's leftover done); Find by a field's own visibility; Autoplace with swapped pins (the "Missing" line's item, done);
+  `${U1.1:FIELD}` in the project's notation both ways (r7's letter-form leftover, done) and `@{..}`'s full grammar. **Left**: which of two equal default net names
+  takes `_1` (the derived uuids are seeded with the net name); Copy / Paste of a user field's shown state and place; Edit Text & Graphics over the whole
+  hierarchy, colours and fonts; the other arc draw modes and the other shapes' point editor.
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
 ### 2. The KiCad files we write drop design data
@@ -461,6 +468,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   added in Sheet Properties (r2 B-L1's flags and look done). Find matches a sheet's name, file and pins (the "Left" below). **Left**: New Top-Level Sheet on a
   design whose root is its one top-level sheet (the root would have to become a sheet of its own); the derived files keep the root that places a project's
   top-level sheets; a sheet's attributes are not given to its symbols nor kept per variant; the navigator's rows read "name file · page N" (A7-L3).
+- Done 2026-11-06 (`task-u4-schleft`, UI-LEFT S14, S17, S21; `PARITY-sch.md` section 62): a name another sheet has is allowed and kicad-cli's ERC reports
+  `duplicate_sheet_names` (the old "a sheet name the sheet already has is refused" is gone); "Untitled Sheet" and "Link '%s' to this file?"; the root's page
+  number; Sync Sheet Pins' Add labels; Import Sheet's contents in the hand and a drop placed with no chooser, each file of it in turn; a placed unit joins a part
+  of the same symbol and value that has it free (r2 D-A1, done); `R?` shown and written for a placeholder; the Annotate dialog's numbering kept in the project.
+  **Left**: a screen shown twice (UI-LEFT S9); an unplaced screen is linked without the question; the bus-to-bus entry needs nothing (legacy `.sch` only, which
+  the box's kicad-cli cannot import).
 - Port from: `eeschema/sch_sheet_path.cpp`, `sch_screen.cpp`, `connection_graph.cpp`, `tools/sch_navigate_tool.cpp`,
   `tools/sch_editor_control.cpp`, `dialogs/dialog_annotate.cpp`.
 
@@ -745,6 +758,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   given to the bus's members; the
   fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on and Autoplace Fields ignores swapped pins; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
   label's spin; only the normal and the De Morgan body style are modelled.
+- Done 2026-11-06 (`task-u4-schleft`, UI-LEFT S16, S19, S20; `PARITY-sch.md` section 62): Autoplace Fields reads the swapped pin places (done); an imported
+  power symbol keeps its hand-placed Reference and Value and its flags (r4 D4-L2, done); Change / Update Symbols reset a symbol's field visibility, sizes and
+  styles and places; Reorganize keeps the groups (a label's spin after it stays the layout's: its wires are new). **Left**: Copy / Paste keep a user field's text
+  only; a mirrored power symbol's fields are read unmirrored.
 - Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`, `dialog_symbol_properties.cpp`.
 
 ### 13. Zones: the fill is KiCad's, and the zone settings

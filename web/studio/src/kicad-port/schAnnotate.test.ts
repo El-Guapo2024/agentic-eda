@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Schematic } from "../api/types";
 import { annotateCmd, annotateRequest, annotateSelectionOf, defaultAnnotateSettings, pasteNumbering, scopeOnOpen, startNumber } from "./schAnnotate";
+import { adoptProjectAnnotation, rememberAnnotateSettings, rememberedAnnotateSettings } from "./schAnnotate";
 
 const none = { symbols: [], sheets: [] };
 
@@ -75,4 +76,14 @@ test("r3 D3-L1: a sheet inside a selected group is not one of the selected sheet
 test("a paste is numbered by the settings Annotate last saved (r2 D-C3: Paste reads m_AnnotateMethod, m_AnnotateStartNum, m_AnnotateSortOrder)", () => {
   assert.deepEqual(pasteNumbering(defaultAnnotateSettings()), { algo: "first_free", start: 0, order: "by_x" });
   assert.deepEqual(pasteNumbering({ sort: "y", algo: "sheet_x100", start: "10" }), { algo: "sheet_x100", start: 10, order: "by_y" });
+});
+
+test("UI-LEFT S14: the order, numbering and start number are the project's (adoptProjectAnnotation); the scope and options are the user's and are kept", () => {
+  adoptProjectAnnotation({ sort_order: 1, method: 2, start_num: 7 });
+  const s = rememberedAnnotateSettings();
+  assert.deepEqual([s.sort, s.algo, s.start], ["y", "sheet_x1000", "7"]);
+  rememberAnnotateSettings({ ...s, scope: "current_sheet", reset: true });
+  adoptProjectAnnotation(null);
+  const t = rememberedAnnotateSettings();
+  assert.deepEqual([t.sort, t.algo, t.start, t.scope, t.reset], ["x", "first_free", "0", "current_sheet", true], "KiCad's defaults for the project's part; the user's part as it was");
 });

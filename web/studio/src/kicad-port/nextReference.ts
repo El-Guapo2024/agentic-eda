@@ -20,8 +20,8 @@ const REF_RE = /^(.*?)(\d+)$/;
  * The reference a symbol placed with `A`, or repeated, gets: the first number of its prefix no symbol of the design holds, from `minRefId` up (r2 D-A1:
  * `SCH_DRAWING_TOOLS::PlaceSymbol` annotates the new symbol with `ReannotateByOptions` against every reference of the hierarchy, and
  * `SCH_REFERENCE_LIST::FindFirstUnusedReference` takes the first free one -- with R1 and R3 placed, a resistor is R2). `minRefId` is
- * [`placementMinRef`]'s. **Differs**: a unit of a multi-unit part does not join a part that has the unit free (`areUnitsAvailable`); it takes a number of
- * its own.
+ * [`placementMinRef`]'s. This is the page's first guess, from the sheet in view and the board's parts: the reference the symbol takes is the server's
+ * (`POST /api/sch/next_reference`, over every sheet), which also joins a unit of a multi-unit part to a part that has the unit free (`areUnitsAvailable`, UI-LEFT S14).
  */
 export function nextReference(symbols: readonly { readonly id: string }[], prefix: string, others: readonly string[] = [], minRefId = 1): string {
   const used = new Set<number>();

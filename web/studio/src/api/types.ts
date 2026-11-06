@@ -3080,6 +3080,8 @@ export interface SchematicWire {
   bus: boolean;
   /** A bus's member nets (`D[0..3]` -> D0..D3, aliases and groups expanded) -- only sent for a bus wire; what the Unfold from Bus menu lists. */
   members?: string[];
+  /** The Unfold from Bus menu's items (`BUS_UNFOLD_MENU::update`): each member, with its own members for a bus in a group (its submenu). Absent from an older backend. */
+  member_tree?: Array<{ name: string; members: string[] }>;
   /** The stroke Wire/Bus Properties set (width, style, colour); absent when the wire has the default one. */
   stroke?: SchStroke;
   /** What the wire's net class draws it with where its own stroke says nothing (`SCH_LINE::GetPenWidth` / `GetLineColor` / `GetEffectiveLineStyle`): the class's
@@ -3325,6 +3327,8 @@ export interface Schematic {
    *  no separator and 'A' (`SCHEMATIC_SETTINGS::SubReference`). */
   subpart_id_separator?: number | null;
   subpart_first_id?: number | null;
+  /** Schematic Setup > Annotation (`SCHEMATIC_SETTINGS::m_Annotate*`); absent or null is KiCad's defaults. */
+  annotation?: AnnotationSettings | null;
   /** The design's variants (KiCad 25ec2335 `SCHEMATIC::GetVariantNames`, with the project file's descriptions), in name order; the same list on every sheet. Absent: none. */
   variants?: DesignVariantInfo[];
   /** Schematic Setup > Formatting as the sheet is drawn by it (the sizes as KiCad reads them back); absent from an older backend. */

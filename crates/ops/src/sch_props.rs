@@ -286,23 +286,19 @@ impl<'a> Board<'a> {
             other => other.map(str::to_string),
         };
         let new_file = file.map(sheet_file_name).transpose()?;
-        let (cur_name, cur_file, taken) = {
+        let (cur_name, cur_file) = {
             let sch = self.schematic()?;
             let Some(s) = sch.sheets.iter().find(|s| s.id == id) else {
                 return Err(fail("ops_unknown_sheet", id, "no sheet with this id"));
             };
-            (s.name.clone(), s.file.clone(), sch.sheets.iter().filter(|o| o.id != id).map(|o| o.name.clone()).collect::<Vec<_>>())
+            (s.name.clone(), s.file.clone())
         };
         let renamed = new_name.as_ref().is_some_and(|n| *n != cur_name);
         let relinked = new_file.as_ref().is_some_and(|f| *f != cur_file);
         if !renamed && !relinked {
             return Err(fail("ops_sheet_unchanged", id, "the sheet already has these properties"));
         }
-        if let Some(n) = new_name.as_ref().filter(|_| renamed) {
-            if taken.contains(n) {
-                return Err(fail("ops_sheet_name_taken", n, format!("a sheet named '{n}' already exists on this sheet")));
-            }
-        }
+        // a name another sheet of the page has is allowed (`DIALOG_SHEET_PROPERTIES` has no such check; ERC's `duplicate_sheet_names` reports it, UI-LEFT S21)
         if let Some(new) = new_file.as_ref().filter(|_| relinked) {
             // `SCH_EDIT_FRAME::ChangeSheetFile`: a sheet may not show a file that shows this sheet's own screen back.
             if let Some(here) = &self.focus {

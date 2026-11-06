@@ -43,6 +43,18 @@ export function defaultImportOptions(): Omit<SheetImportPlan, "path"> {
   return { asSheet: true, keepAnnotations: false, repeated: false, asGroup: true };
 }
 
+/** The chooser's checkboxes keep their state between openings, as KiCad keeps them in its settings (`TransferDataFromCustomControls`, `m_DesignBlockChooserPanel`);
+ *  a file given to Import Sheet (a drop, `DdAppendFile`) is placed with them, no chooser asked (UI-LEFT S17). */
+let rememberedOptions: Omit<SheetImportPlan, "path"> = defaultImportOptions();
+
+export function rememberedImportOptions(): Omit<SheetImportPlan, "path"> {
+  return rememberedOptions;
+}
+
+export function rememberImportOptions(options: Omit<SheetImportPlan, "path">): void {
+  rememberedOptions = options;
+}
+
 /** The last component of a path, either separator. */
 export function fileOfPath(path: string): string {
   const parts = path.trim().split(/[\\/]/);

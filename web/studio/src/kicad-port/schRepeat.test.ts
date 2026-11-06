@@ -42,7 +42,10 @@ test("repeatCmds: every point of a wire or line, a text, a no-connect and a bus 
     ],
     ctx,
   );
-  assert.deepEqual(out[0], { op: "add_wire", pts: [{ x: 0, y: 2_540_000 }, { x: 5_080_000, y: 2_540_000 }], bus: true });
+  // a wire repeats through `add_wire_as` (r3 C3-L1: `RepeatDrawItem` does not cut it between a two-pin part's pins), and so does its repeat
+  assert.deepEqual(out[0], { op: "sch_edit", verb: "add_wire_as", pts: [{ x: 0, y: 2_540_000 }, { x: 5_080_000, y: 2_540_000 }], bus: true, by: "repeat" });
+  assert.deepEqual(repeatCmds([out[0]!], ctx)[0], { op: "sch_edit", verb: "add_wire_as", pts: [{ x: 0, y: 5_080_000 }, { x: 5_080_000, y: 5_080_000 }], bus: true, by: "repeat" });
+  assert.deepEqual(repeatSource(out[0]!), [out[0]]);
   assert.deepEqual(out[1], { op: "add_sch_line", pts: [{ x: 0, y: 2_540_000 }, { x: 1_000_000, y: 3_540_000 }], width_nm: 254_000 });
   assert.deepEqual(out[2], { op: "add_sch_text", content: "note", at: { x: 100_000, y: 2_740_000 }, angle_millideg: 0, size_nm: 1_270_000 });
   assert.deepEqual(out[3], { op: "add_no_connect", at: { x: 5000, y: 2_545_000 } });

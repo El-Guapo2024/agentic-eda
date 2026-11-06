@@ -69,7 +69,27 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
     // the root's own symbols' paths of its legacy `(symbol_instances ..)`: `/<symbol uuid>` (r5 D5-H1)
     let legacy = sexpr::parse(text).ok().and_then(|t| t.as_list().map(|root| legacy_instances_where(root, |sheets| sheets.is_empty()))).unwrap_or_default();
-    import_screen(text, opts, None, &legacy)
+    let (mut design, model, notes) = import_screen(text, opts, None, &legacy)?;
+    // the root's own page (`(sheet_instances (path "/" (page ..)))`, UI-LEFT S21), as the tree import reads it
+    if let Some(root) = design.schematic.as_mut() {
+        root.extras.root_page = root_page_of(text);
+    }
+    Ok((design, model, notes))
+}
+
+/// The page a file's `(sheet_instances (path "/" (page ..)))` gives the root (`SCH_SHEET_PATH::SetPageNumber` on the root path; UI-LEFT S21), empty when it is
+/// 1 or not given (the page the walk gives the root anyway).
+fn root_page_of(text: &str) -> String {
+    let Ok(tree) = sexpr::parse(text) else { return String::new() };
+    let Some(root) = tree.as_list() else { return String::new() };
+    let Some(instances) = sexpr::find(root, "sheet_instances") else { return String::new() };
+    for path in sexpr::find_all(instances, "path") {
+        if sexpr::txt(path, 1).is_some_and(|p| p.split('/').all(|c| c.is_empty())) {
+            let page = sexpr::find(path, "page").and_then(|p| sexpr::txt(p, 1)).map_or_else(|| "#".to_string(), kicad_page);
+            return if page == "1" || page == "#" { String::new() } else { page };
+        }
+    }
+    String::new()
 }
 
 /// One `(path ..)` of a KiCad 6 / early-7 root's `(symbol_instances ..)`, as `SCH_IO_KICAD_SEXPR_PARSER::parseSchSymbolInstances` reads it into a
@@ -241,6 +261,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut power_props_read: Vec<(String, eda_model::sch_extras::PowerProps)> = Vec::new();
     // each power symbol's `(uuid ..)`, parallel to `power_symbols`
     let mut power_uuid: Vec<Option<String>> = Vec::new();
+    // where a power symbol's Reference and Value are when the file has them placed by hand (no `(fields_autoplaced ..)`), by id (`field_layout`, r4 D4-L2)
+    let mut power_field_places: Vec<(String, Vec<eda_model::ir::FieldPlacement>)> = Vec::new();
     let mut locked_refs: BTreeSet<String> = BTreeSet::new();
     // `SCH_SYMBOL_INSTANCE`-style per-sheet-instance overrides -- only ever
     // non-empty when this screen is placed by more than one `SheetInstance`
@@ -351,6 +373,19 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             let looks = field_font_looks(item);
             if !looks.is_empty() {
                 field_look_entries.push((reference.clone(), looks));
+            }
+            // `SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol` reads each field's own `(at ..)` (`parseSchField`), and `saveSymbol` writes it back: a Value placed
+            // by hand stays where it is; only `(fields_autoplaced yes)` lets `AutoplaceFields` place it again (r4 D4-L2). The frame is the writer's
+            // (`eda_engine::fields::power_placements`: from the symbol's `at`, through its turn, never mirrored).
+            if !crate::sch_extras_io::parse_bool(item, "fields_autoplaced").unwrap_or(false) {
+                let places: Vec<eda_model::ir::FieldPlacement> = ["Reference", "Value"]
+                    .iter()
+                    .filter_map(|name| standard_field_of(item, name))
+                    .map(|f| f.placement_on(at_pin, rot, false, 0.0))
+                    .collect();
+                if !places.is_empty() {
+                    power_field_places.push((reference.clone(), places));
+                }
             }
             power_symbols.push(PowerSymbol { id: reference, lib_id: lib_id.to_string(), at: at_pin, rot, net: value, pin: String::new() });
             power_uuid.push(uuid_of(item));
@@ -861,6 +896,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         sch.extras.pin_alternates.extend(pin_alternate_entries);
         sch.extras.field_looks.extend(field_look_entries);
         sch.extras.power_props.extend(power_props_read);
+        sch.field_layout.extend(power_field_places);
         sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
         sch.extras.sheet_pages.extend(sheet_pages);
         // the local power symbols of the file's library cache (`(power local)`, `parseSymbol`'s `T_power`)
@@ -1018,6 +1054,10 @@ pub fn import_kicad_sch_tree(path: &Path) -> Result<(Design, ConstraintModel, Sc
 /// [`import_kicad_sch_tree`] with the choices of [`ImportOptions`], applied to every file of the tree.
 pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
     let text = std::fs::read_to_string(path).map_err(|e| vec![CheckResult::fail("kicad_import.read", path.display().to_string(), format!("{e}"))])?;
+    // The symbol cross-references the files store by path (`${/<sheet path>/<uuid>:FIELD}`), as the references the model keeps them by
+    // (`SCHEMATIC::ConvertKIIDsToRefs`, `crate::sch_crossref::kiids_to_refs`): every file of the tree first, since a text may name a symbol of any sheet.
+    let tree_texts = tree_texts_with_refs(path, &text);
+    let text = tree_texts.get(path).cloned().unwrap_or(text);
     let (mut design, mut model, mut notes) = import_kicad_sch_with(&text, opts)?;
     let Some(dir) = path.parent() else { return Ok((design, model, notes)) };
     // the project's root sheet, whose uuid every instance path of this project starts with
@@ -1070,7 +1110,7 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
         }
         let child_path = dir.join(&file);
         let resolve_dir = child_path.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
-        let Ok(child_text) = std::fs::read_to_string(&child_path) else { continue };
+        let Some(child_text) = tree_texts.get(&child_path).cloned().or_else(|| std::fs::read_to_string(&child_path).ok()) else { continue };
         let Ok((child_design, child_model, child_notes)) = import_screen(&child_text, opts, Some(&root_uuid), &legacy_on_sheets) else { continue };
         symbol_places.insert(file.clone(), symbol_places_of(&child_text));
         notes.unresolved_symbols += child_notes.unresolved_symbols;
@@ -1145,6 +1185,40 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
 /// The key of the screen a sheet in a file of the folder `resolve_dir` names as `text`: the file's path from the root's folder `root_dir`, `/`-separated,
 /// with `.` and `..` worked out (`ampli_ht/filter.kicad_sch`). A file outside the root's folder keeps its path from it with the `..` in front, and an
 /// absolute name stays absolute. (The derived tree writes either inside its work folder: `crate::sheet_file_in_work`.)
+/// The text of every file of the tree rooted at `path` (whose text is `root_text`), by the path the tree walk reads it from (`dir.join( key )`, the key as
+/// [`sheet_file_key`] makes it), with their symbol cross-references turned from paths into references in the project's unit notation.
+fn tree_texts_with_refs(path: &Path, root_text: &str) -> BTreeMap<std::path::PathBuf, String> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut texts: BTreeMap<std::path::PathBuf, String> = BTreeMap::new();
+    texts.insert(path.to_path_buf(), root_text.to_string());
+    let mut queue: Vec<(std::path::PathBuf, String)> = vec![(path.to_path_buf(), root_text.to_string())];
+    while let Some((file, text)) = queue.pop() {
+        let resolve_dir = file.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
+        for child in crate::sheet_file::referenced_sheet_files(&text) {
+            let child_path = dir.join(sheet_file_key(dir, &resolve_dir, &child));
+            if texts.contains_key(&child_path) {
+                continue;
+            }
+            let Ok(child_text) = std::fs::read_to_string(&child_path) else { continue };
+            texts.insert(child_path.clone(), child_text.clone());
+            queue.push((child_path, child_text));
+        }
+    }
+    if texts.values().any(|t| t.contains("${/")) {
+        // the project's unit notation (`SCHEMATIC_SETTINGS::m_SubpartIdSeparator`, `m_SubpartFirstId`), which `GetRef( &aPath, true )` names a unit by
+        let pro: serde_json::Value = std::fs::read_to_string(path.with_extension("kicad_pro")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let (separator, first_id) = eda_model::annotate::SubpartIds::from_project(&pro["schematic"]);
+        let d = eda_model::annotate::SubpartIds::default();
+        let ids = eda_model::annotate::SubpartIds { separator: separator.unwrap_or(d.separator), first_id: first_id.unwrap_or(d.first_id) };
+        let mut files: Vec<(String, String)> = texts.iter().map(|(p, t)| (p.display().to_string(), t.clone())).collect();
+        crate::sch_crossref::kiids_to_refs(&mut files, &ids);
+        for ((_, text), (_, rewritten)) in texts.iter_mut().zip(files) {
+            *text = rewritten;
+        }
+    }
+    texts
+}
+
 pub fn sheet_file_key(root_dir: &Path, resolve_dir: &Path, text: &str) -> String {
     use std::path::Component;
     let normal = |p: &Path| -> Vec<String> {
@@ -1275,8 +1349,16 @@ fn legacy_sheet_instances(root_text: &str, design: &mut Design) {
         if ids.first() == Some(&root_uuid) {
             ids.remove(0);
         }
-        let Some((sheet_id, parent)) = ids.split_last() else { continue };
         let page = sexpr::find(path, "page").and_then(|p| sexpr::txt(p, 1)).map_or_else(|| "#".to_string(), kicad_page);
+        let Some((sheet_id, parent)) = ids.split_last() else {
+            // `(path "/" (page ..))`: the root's own page (`SCH_SHEET_PATH::SetPageNumber` on the root, UI-LEFT S21); 1 is what the walk gives it anyway
+            if page != "1" && page != "#" {
+                if let Some(root) = design.schematic.as_mut() {
+                    root.extras.root_page = page;
+                }
+            }
+            continue;
+        };
         if page == "1" {
             continue;
         }
@@ -1395,6 +1477,11 @@ impl RawUserField {
     /// The field as a placement in the frame of `sym` (`SCH_FIELD::SetPosition`: the page position taken back through the symbol's transform; `eda_engine::fields::
     /// local_placement_on_page`), `width` being the box a mirror is about.
     fn placement(&self, sym: &SymbolInstance, width: f64) -> eda_model::ir::FieldPlacement {
+        self.placement_on(sym.at, sym.rot, sym.mirrored, width)
+    }
+
+    /// [`Self::placement`] in the frame of a symbol at `at`, turned `rot`, mirrored about a box `width` wide.
+    fn placement_on(&self, at: Point, rot: Millideg, mirrored: bool, width: f64) -> eda_model::ir::FieldPlacement {
         use eda_model::ir::{TextJustify, TextVAlign};
         let has = |w: &str| self.look.justify.iter().any(|j| j == w);
         let h = if has("left") {
@@ -1413,7 +1500,7 @@ impl RawUserField {
         };
         // a field is along the sheet or up it (`keepUpright`)
         let vertical = eda_model::kicad_geom::keep_upright_is_vertical(self.angle_deg);
-        let mut p = eda_engine::fields::local_placement_on_page(sym.at, sym.rot, sym.mirrored, width, &self.name, (self.at_nm.x.as_f64(), self.at_nm.y.as_f64()), vertical, h, v, !self.hidden);
+        let mut p = eda_engine::fields::local_placement_on_page(at, rot, mirrored, width, &self.name, (self.at_nm.x.as_f64(), self.at_nm.y.as_f64()), vertical, h, v, !self.hidden);
         p.size_nm = if self.look.size_nm == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { self.look.size_nm };
         p.bold = self.look.bold;
         p.italic = self.look.italic;
@@ -1436,23 +1523,37 @@ fn user_fields_of(item: &[Sexpr]) -> Vec<RawUserField> {
         if name.is_empty() || ["Reference", "Value", "Footprint", "Datasheet"].iter().any(|m| m.eq_ignore_ascii_case(name)) || out.iter().any(|f| f.name == name) {
             continue;
         }
-        let at = sexpr::find(p, "at");
-        let at_nm = at.and_then(|a| Some(Point { x: crate::import::sch_mm_to_nm(sexpr::num(a, 1)?), y: crate::import::sch_mm_to_nm(sexpr::num(a, 2)?) })).unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
-        let effects = sexpr::find(p, "effects");
-        // `(hide yes)`: KiCad 9 writes it in the property, before `(effects ...)`, and in it for a file we wrote; a bare `hide` is older still
-        let hidden = parse_bool(p, "hide").unwrap_or(false) || effects.is_some_and(|e| parse_bool(e, "hide").unwrap_or(false) || e.iter().skip(1).any(|c| c.text() == Some("hide")));
-        out.push(RawUserField {
-            name: name.to_string(),
-            text: text.to_string(),
-            at_nm,
-            angle_deg: at.and_then(|a| sexpr::num(a, 3)).unwrap_or(0.0),
-            look: read_effects(p),
-            hidden,
-            show_name: parse_bool(p, "show_name").unwrap_or(false),
-            do_not_autoplace: parse_bool(p, "do_not_autoplace").unwrap_or(false),
-        });
+        out.push(raw_field(p, name, text));
     }
     out
+}
+
+/// One `(property ..)` of a placed symbol as [`RawUserField`] reads it (`parseSchField`): its place, angle, look and flags.
+fn raw_field(p: &[Sexpr], name: &str, text: &str) -> RawUserField {
+    let at = sexpr::find(p, "at");
+    let at_nm = at.and_then(|a| Some(Point { x: crate::import::sch_mm_to_nm(sexpr::num(a, 1)?), y: crate::import::sch_mm_to_nm(sexpr::num(a, 2)?) })).unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
+    let effects = sexpr::find(p, "effects");
+    // `(hide yes)`: KiCad 9 writes it in the property, before `(effects ...)`, and in it for a file we wrote; a bare `hide` is older still
+    let hidden = parse_bool(p, "hide").unwrap_or(false) || effects.is_some_and(|e| parse_bool(e, "hide").unwrap_or(false) || e.iter().skip(1).any(|c| c.text() == Some("hide")));
+    RawUserField {
+        name: name.to_string(),
+        text: text.to_string(),
+        at_nm,
+        angle_deg: at.and_then(|a| sexpr::num(a, 3)).unwrap_or(0.0),
+        look: read_effects(p),
+        hidden,
+        show_name: parse_bool(p, "show_name").unwrap_or(false),
+        do_not_autoplace: parse_bool(p, "do_not_autoplace").unwrap_or(false),
+    }
+}
+
+/// The mandatory field `name` of a placed symbol (`Reference`, `Value`, matched without regard to case as `parseSchField` does), named as the model names it.
+fn standard_field_of(item: &[Sexpr], name: &str) -> Option<RawUserField> {
+    sexpr::find_all(item, "property").find_map(|p| {
+        let shift = usize::from(sexpr::txt(p, 1) == Some("private") && p.get(3).is_some_and(|n| n.text().is_some()));
+        let (field, text) = (sexpr::txt(p, 1 + shift)?, sexpr::txt(p, 2 + shift)?);
+        field.eq_ignore_ascii_case(name).then(|| raw_field(p, name, text))
+    })
 }
 
 /// The font face and colour of each `(property ..)` of a placed symbol that has one (`SCH_IO_KICAD_SEXPR_PARSER::parseEDA_TEXT`: `T_face`, `T_color` in
@@ -1937,6 +2038,53 @@ mod tests {
 
     /// r4 B4-H1 (`parseSchematicSymbol`'s `T_lib_name`, `SCH_SYMBOL::GetSchSymbolLibraryName`): a symbol whose cache entry is its `(lib_name ..)`, the library id
     /// having none, is drawn and traced from that entry, not left out.
+    /// r4 D4-L2: QA `ground_pin_test_ok`'s `#PWR01` with its flags flipped -- a power symbol's own `exclude_from_sim`, `in_bom`, `on_board`, `in_pos_files` and
+    /// `dnp`, and its Value placed by hand (no `fields_autoplaced`), are read and written back as the file has them (`parseSchematicSymbol`, `saveSymbol`);
+    /// one with `(fields_autoplaced yes)` is autoplaced again.
+    #[test]
+    fn a_power_symbols_flags_and_value_position_are_kept() {
+        let gnd = r##"(symbol "power:GND" (power global) (pin_names (offset 0)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+   (property "Reference" "#PWR" (at 0 -6.35 0) (hide yes) (effects (font (size 1.27 1.27)))) (property "Value" "GND" (at 0 -3.81 0) (effects (font (size 1.27 1.27))))
+   (symbol "GND_0_1" (polyline (pts (xy 0 0) (xy 0 -1.27) (xy 1.27 -1.27) (xy 0 -2.54) (xy -1.27 -1.27) (xy 0 -1.27)) (stroke (width 0) (type default)) (fill (type none))))
+   (symbol "GND_1_1" (pin power_in line (at 0 0 270) (length 0) (hide yes) (name "" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))))"##;
+        let instance = |r: &str, x: f64, flags: &str, auto: &str, value_y: f64| {
+            format!(
+                r#"(symbol (lib_id "power:GND") (at {x} 95.25 0) (unit 1) {flags} {auto} (uuid "19d8a70f-fdaa-401b-b7db-c26505f6cf9{}")
+  (property "Reference" "{r}" (at {x} 101.6 0) (hide yes) (effects (font (size 1.27 1.27)))) (property "Value" "GND" (at {x} {value_y} 0) (effects (font (size 1.27 1.27))))
+  (pin "1" (uuid "28fa0626-4efd-41ee-9e7f-2a5364d0ca3{}")))"#,
+                &r[r.len() - 1..],
+                &r[r.len() - 1..]
+            )
+        };
+        let text = format!(
+            r#"(kicad_sch (version 20250114) (generator "eeschema") (uuid "12345678-1234-1234-1234-123456789def") (paper "A4") (lib_symbols {gnd}) {} {})"#,
+            instance("#PWR01", 135.89, "(exclude_from_sim yes) (in_bom no) (on_board no) (in_pos_files no) (dnp yes)", "", 99.06),
+            instance("#PWR02", 160.02, "(exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)", "(fields_autoplaced yes)", 105.0)
+        );
+        let (design, model, _) = import_kicad_sch(&text).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        let props = sch.extras.power_props.get("#PWR01").expect("the flags of #PWR01");
+        assert!(props.exclude_from_sim && props.exclude_from_bom && props.exclude_from_board && props.exclude_from_pos_files && props.dnp, "{props:?}");
+        assert!(!sch.extras.power_props.contains_key("#PWR02"), "the default flags keep no entry");
+        assert!(sch.field_layout.contains_key("#PWR01"), "a Value placed by hand is kept");
+        assert!(!sch.field_layout.contains_key("#PWR02"), "an autoplaced one is not");
+        let value_y = |text: &str, r: &str| -> f64 {
+            let tree = sexpr::parse(text).unwrap();
+            let root = tree.as_list().unwrap();
+            let sym = sexpr::find_all(root, "symbol").filter(|s| sexpr::find(s, "lib_id").is_some()).find(|s| property_text(s, "Reference").as_deref() == Some(r)).unwrap();
+            let v = sexpr::find_all(sym, "property").find(|p| sexpr::txt(p, 1) == Some("Value")).unwrap();
+            sexpr::num(sexpr::find(v, "at").unwrap(), 2).unwrap()
+        };
+        let written = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "pw" }).unwrap();
+        assert!((value_y(&written, "#PWR01") - 99.06).abs() < 1e-6, "the Value stays where the file has it: {}", value_y(&written, "#PWR01"));
+        let w01 = written.split("(lib_id \"power:GND\") (at 135.89").nth(1).unwrap();
+        assert!(w01.contains("(exclude_from_sim yes) (in_bom no) (on_board no) (in_pos_files no) (dnp yes)"), "{w01}");
+        // and a second round trip keeps it
+        let (again, again_model, _) = import_kicad_sch(&written).unwrap();
+        let rewritten = export_kicad_sch(&again, &again_model, &ExportMeta { date: "2026-01-01", title: "pw" }).unwrap();
+        assert!((value_y(&rewritten, "#PWR01") - 99.06).abs() < 1e-6);
+    }
+
     #[test]
     fn a_symbol_is_resolved_by_its_lib_name() {
         let text = r#"(kicad_sch (version 20250114) (generator "eeschema") (uuid "00000000-0000-0000-0000-0000000000a1") (paper "A4")

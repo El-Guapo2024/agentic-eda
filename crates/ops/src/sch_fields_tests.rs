@@ -398,3 +398,30 @@ fn deleting_a_symbol_takes_its_field_layout_with_it() {
     assert!(!sch.field_layout.contains_key(&field_key("R1", 1)) && sch.extras.fields_autoplaced.is_empty());
     let _ = FieldPlacement::at_origin("x");
 }
+
+/// UI-LEFT S16 (`DIALOG_CHANGE_SYMBOLS::processSymbol`'s reset options): a symbol's fields take the library symbol's visibility, size and styles, and are placed
+/// again; nothing to change is refused.
+#[test]
+fn change_symbols_resets_the_fields_visibility_size_and_style_and_place_from_the_library() {
+    use eda_model::sym_fields::LibrarySymbolField;
+    let m = model();
+    let mut design = empty_design();
+    design.schematic = Some(sheet(0, false));
+    let mut lib = eda_model::ir::LibrarySymbol { lib_id: "Device:R".into(), reference_prefix: "R".into(), published: true, ..Default::default() };
+    lib.set_fields(vec![LibrarySymbolField { name: "Value".into(), text: "R".into(), size_mm: 2.0, bold: true, hidden: true, ..LibrarySymbolField::default() }]);
+    design.symbol_library = Some(eda_model::ir::SymbolLibrarySection { symbols: vec![lib], ..Default::default() });
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+    let value = field_id(&field_key("R1", 1), "Value");
+    b.apply(&edit(&value, |e| e.size_nm = Some(mm(1.5)))).unwrap();
+    let reset = |visibility: bool, effects: bool, positions: bool| Cmd::sch(SchCmd::ResetSymbolFields { ids: ids(&["R1"]), visibility, effects, positions });
+    b.apply(&reset(false, true, false)).unwrap();
+    let f = field_named(b.design().schematic.as_ref().unwrap(), "Value");
+    assert_eq!((f.size_nm, f.bold, f.visible), (2_000_000.0, true, true), "sizes and styles, not the visibility");
+    b.apply(&reset(true, false, false)).unwrap();
+    assert!(!field_named(b.design().schematic.as_ref().unwrap(), "Value").visible, "the library's Value is hidden");
+    assert_eq!(b.apply(&reset(true, true, false)).unwrap_err()[0].check, "ops_field_unchanged", "nothing left to change");
+    assert_eq!(b.apply(&reset(false, false, false)).unwrap_err()[0].check, "ops_nothing_to_reset");
+    // the verb as the dialog sends it
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({"op": "sch_edit", "verb": "reset_symbol_fields", "ids": ["R1"], "positions": true})).unwrap();
+    assert_eq!(cmd, reset(false, false, true));
+}

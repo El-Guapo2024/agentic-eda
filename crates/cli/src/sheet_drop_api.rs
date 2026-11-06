@@ -12,7 +12,8 @@
 //! the same of a sheet it cannot find); a file dropped and not placed by the one imported is in `left_out` (KiCad would run Import Sheet for each of the files in turn).
 //!
 //! Request: `{ "files": [{ "name": "main.kicad_sch", "text": "<the file>" }, ..] }`. Reply: `{ "ok": true, "path": "<the file to import, on the server>", "root": "main.kicad_sch",
-//! "files": ["main.kicad_sch", "sub/power.kicad_sch"], "missing": [{ "file": "adc.kicad_sch", "placed_by": "main.kicad_sch" }], "left_out": ["notes.kicad_sch"] }`, or
+//! "files": ["main.kicad_sch", "sub/power.kicad_sch"], "paths": ["<each dropped file, in the drop's order, on the server>", ..], "missing": [{ "file": "adc.kicad_sch",
+//! "placed_by": "main.kicad_sch" }], "left_out": ["notes.kicad_sch"] }`, or
 //! `{ "ok": false, "message": ".." }`. The folder of the previous drops that are a day old is removed as a new one is made.
 
 use serde_json::{json, Value};
@@ -113,6 +114,8 @@ pub fn put(body: &[u8]) -> Value {
     };
     // The files where their placements say, parents first; a file the root reaches by two paths is written at both.
     let mut written: Vec<PathBuf> = Vec::new();
+    // where each dropped file was first written, for `paths`
+    let mut first_at: BTreeMap<usize, PathBuf> = BTreeMap::new();
     let mut reached: BTreeSet<usize> = BTreeSet::new();
     let mut missing: Vec<Value> = Vec::new();
     let mut queue: VecDeque<(usize, PathBuf)> = VecDeque::from([(root, PathBuf::from(&files[root].name))]);
@@ -130,6 +133,7 @@ pub fn put(body: &[u8]) -> Value {
             return bad(format!("could not write {}: {e}", rel.display()));
         }
         written.push(rel.clone());
+        first_at.entry(i).or_insert_with(|| rel.clone());
         reached.insert(i);
         let folder = rel.parent().map(Path::to_path_buf).unwrap_or_default();
         for r in &refs[i] {
@@ -144,11 +148,30 @@ pub fn put(body: &[u8]) -> Value {
         }
     }
     let left_out: Vec<&str> = files.iter().enumerate().filter(|(i, _)| !reached.contains(i)).map(|(_, f)| f.name.as_str()).collect();
+    // `EDA_BASE_FRAME::DoWithAcceptedFiles` runs Import Sheet for every file of the drop in turn (UI-LEFT S17): a file the imported one does not reach is written
+    // too, beside it under its own name (or in a folder of its own when that name is taken), so that each has a path to import from
+    for (i, f) in files.iter().enumerate().filter(|(i, _)| !reached.contains(i)) {
+        let mut rel = PathBuf::from(&f.name);
+        if written.contains(&rel) {
+            rel = PathBuf::from(format!("drop{i}")).join(&f.name);
+        }
+        let target = scratch.join(&rel);
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return bad(format!("could not write {}: {e}", rel.display()));
+            }
+        }
+        if let Err(e) = std::fs::write(&target, &f.text) {
+            return bad(format!("could not write {}: {e}", rel.display()));
+        }
+        first_at.insert(i, rel);
+    }
     json!({
         "ok": true,
         "path": scratch.join(&files[root].name).to_string_lossy(),
         "root": files[root].name,
         "files": written.iter().map(|p| p.to_string_lossy().replace('\\', "/")).collect::<Vec<_>>(),
+        "paths": (0..files.len()).filter_map(|i| first_at.get(&i)).map(|rel| scratch.join(rel).to_string_lossy().to_string()).collect::<Vec<_>>(),
         "missing": missing,
         "left_out": left_out,
     })
@@ -208,6 +231,10 @@ mod tests {
         let r = put(&drop_of(&[("a.kicad_sch", placing(&[("B", "b.kicad_sch")])), ("b.kicad_sch", placing(&[])), ("other.kicad_sch", placing(&[]))]));
         assert_eq!(r["root"], json!("a.kicad_sch"), "the first the others do not place");
         assert_eq!(r["left_out"], json!(["other.kicad_sch"]));
+        // UI-LEFT S17 (`DoWithAcceptedFiles`: Import Sheet for every file of the drop in turn): each dropped file has a path, in the drop's order, the one left out too
+        let paths: Vec<PathBuf> = r["paths"].as_array().unwrap().iter().map(|p| PathBuf::from(p.as_str().unwrap())).collect();
+        assert_eq!(paths.iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect::<Vec<_>>(), ["a.kicad_sch", "b.kicad_sch", "other.kicad_sch"]);
+        assert!(paths.iter().all(|p| p.is_file()), "{paths:?}");
         let _ = std::fs::remove_dir_all(Path::new(r["path"].as_str().unwrap()).parent().unwrap());
     }
 
