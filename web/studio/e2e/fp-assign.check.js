@@ -303,7 +303,9 @@
     t(added.length === 1 && added[0].footprint === name && added[0].placed, `a part of its own: ${added.map((p) => p.ref + " on " + p.footprint).join(", ")}`);
     t(added[0] && added[0].pads.length === 2, "with the footprint's pads");
     t(__eda.state().tab === "pcb" && __eda.state().selection.some((s) => s.id === added[0]?.ref), "the board is shown with it selected");
-    t(/inserted into the board as/.test(run.toast ?? ""), `the toast: ${run.toast}`);
+    // No "inserted into the board as" toast since task-u5-pcbitems (UI-LEFT P19): the insert hands the footprint to Place Footprint's carry, as KiCad's
+    // `SaveFootprintToBoard` insert branch does with no message; `run` is kept for its error, if any.
+    t(run.ok !== false, `the insert ran (${run.error ?? "ok"})`);
     await undo();
     t(!(await state()).parts.some((p) => p.ref === added[0]?.ref), "one Ctrl+Z takes the part away");
   });
