@@ -68,14 +68,16 @@ pub struct LibraryFacts {
 }
 
 impl LibraryFacts {
-    /// The library footprint's own values, as `FootprintNeedsUpdate` reads them off `aLibFP`.
+    /// The library footprint's own values, as `FootprintNeedsUpdate` reads them off `aLibFP`: its Clearance Overrides (`LibraryFootprint::settings`, where the reader puts
+    /// them; an older `design.json` kept them among `kicad.tokens`).
     pub fn of_library_footprint(lib: &LibraryFootprint) -> Self {
         let tokens = &lib.kicad.tokens;
+        let st = &lib.settings;
         let overrides = FootprintOverrides {
-            clearance: crate::lib_keep::kept_mm(tokens, "clearance"),
-            solder_mask_margin: crate::lib_keep::kept_mm(tokens, "solder_mask_margin"),
-            solder_paste_margin: crate::lib_keep::kept_mm(tokens, "solder_paste_margin"),
-            solder_paste_margin_ratio: crate::lib_keep::kept_number(tokens, "solder_paste_margin_ratio").or_else(|| crate::lib_keep::kept_number(tokens, "solder_paste_ratio")),
+            clearance: st.clearance.or_else(|| crate::lib_keep::kept_mm(tokens, "clearance")),
+            solder_mask_margin: st.solder_mask_margin.or_else(|| crate::lib_keep::kept_mm(tokens, "solder_mask_margin")),
+            solder_paste_margin: st.solder_paste_margin.or_else(|| crate::lib_keep::kept_mm(tokens, "solder_paste_margin")),
+            solder_paste_margin_ratio: st.solder_paste_margin_ratio.or_else(|| crate::lib_keep::kept_number(tokens, "solder_paste_margin_ratio").or_else(|| crate::lib_keep::kept_number(tokens, "solder_paste_ratio"))),
             zone_connection: lib.zone_connection,
         };
         let pad_overrides = lib

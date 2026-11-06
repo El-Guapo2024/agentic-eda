@@ -1369,10 +1369,12 @@ pub(crate) fn write_footprint(
     // fields, the user's. A field the footprint has of its own (Footprint Properties) is the footprint's. A footprint whose record holds what its board file said
     // has the file's fields instead (`FootprintExtra::holds_file_form`: a record of facts the board gave a footprint made here holds none).
     let link = model.symbol_links.get(&fp.id);
+    // A library footprint's record (`FootprintExtra::from_library`) holds the library's fields: one the symbol gives no text is the library's (UI-LEFT PP5).
+    let library_field = |name: &str| own_extra.is_some_and(|e| e.from_library && e.source_name == lib_name_written && e.tokens.iter().any(|t| t.starts_with(&format!("(property {} ", sexpr_str(name)))));
     if let Some(link) = link.filter(|_| own_extra.is_none_or(|e| !e.holds_file_form())) {
         let fab = if fp.side == Side::Bottom { "B.Fab" } else { "F.Fab" };
         for (name, text) in &link.fields {
-            if extra.edit.is_some_and(|e| e.fields.iter().any(|f| f.name == *name)) {
+            if extra.edit.is_some_and(|e| e.fields.iter().any(|f| f.name == *name)) || (text.is_empty() && library_field(name)) {
                 continue;
             }
             let mut layout = eda_model::fp_edit::FieldLayout::new(eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, fab);
@@ -1389,7 +1391,9 @@ pub(crate) fn write_footprint(
             // a field the footprint now has of its own (Footprint Properties' Datasheet or Description, a user field) is written from the edit, not from the file's
             // `(property ..)`: KiCad's reader would take the later of two (`parseFOOTPRINT_unchecked`'s `HasField`)
             let own_field = |t: &str| extra.edit.is_some_and(|ed| ed.fields.iter().any(|f| t.starts_with(&format!("(property {} ", sexpr_str(&f.name)))));
-            for token in e.tokens.iter().filter(|t| !crate::variant_io::superseded(design, t) && !own_field(t)) {
+            // a library footprint's record (`FootprintExtra::from_library`): a field the symbol gives is the symbol's, written above (`updateFootprintParameters`)
+            let symbol_field = |t: &str| e.from_library && link.is_some_and(|l| l.fields.iter().any(|(n, text)| !text.is_empty() && t.starts_with(&format!("(property {} ", sexpr_str(n)))));
+            for token in e.tokens.iter().filter(|t| !crate::variant_io::superseded(design, t) && !own_field(t) && !symbol_field(t)) {
                 writeln!(out, "\t\t{token}").unwrap();
             }
         }
@@ -1504,10 +1508,10 @@ pub(crate) fn write_footprint(
     // The footprint's silkscreen, fab drawings and texts (`fp_line`, `fp_arc`, ..., `fp_text user`), in its own frame -- a bottom-side footprint's mirrored
     // like its pads and on the other side's layers: after the fields and before the pads, where `format( FOOTPRINT )` writes the drawings.
     crate::fp_art_io::write_art(out, &footprint.art, fp);
-    // Its text boxes, images, barcodes and points (`FootprintExtra::items`, UI-LEFT P17), while the part is on the footprint they were read from (or, on a footprint made here,
-    // the ones Update Footprint on Board or an exchange put there: `FootprintExtra::items_are_for`).
+    // Its text boxes, images, tables, barcodes, dimensions and points (`FootprintExtra::items`, UI-LEFT P17, PP14), while the part is on the footprint they were read from
+    // (or, on a footprint made here, the ones Update Footprint on Board or an exchange put there: `FootprintExtra::items_are_for`), each with its lock.
     if let Some(e) = own_extra.filter(|e| !e.items.is_empty() && e.items_are_for(&lib_name_written)) {
-        crate::fp_board_items_io::write_items(out, &e.items, as_placed, turn);
+        crate::fp_board_items_io::write_items(out, &e.items, as_placed, turn, &|id| e.item_locked(id));
     }
 
     // Net assignment: look up which net (if any) this pad's "REF.PIN" belongs to.
