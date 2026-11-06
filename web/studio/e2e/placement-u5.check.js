@@ -168,12 +168,13 @@
       await E.run("pcbnew.EditorControl.placeFootprint");
       const err = await choose("TestPoint_Pad_D1.0mm", TP);
       if (!t(err === null, err ?? "a test point chosen")) return;
-      await until(() => S().placeFootprint === "carrying", 15000);
+      // carried once the Move tool holds it (the tool's stage says "carrying" from the pick, before the footprint is made and picked up)
+      await until(() => S().placeFootprint === "carrying" && S().tool === "move", 15000);
       await hover(FREE[2][0], FREE[2][1]);
-      t((await tps()).length === before.length + 1, "the footprint is carried");
+      await until(() => S().moving, 4000);
+      t((await tps()).length === before.length + 1 && !!S().moving, "the footprint is carried");
       await escape();
-      await sleep(600);
-      t((await tps()).length === before.length, "Escape takes it away (`commit.Revert()`)");
+      t(!!(await until(async () => (await tps()).length === before.length, 6000)), "Escape takes it away (`commit.Revert()`)");
       t(!!(await until(() => S().placeFootprint === "waiting", 4000)), `the tool goes on (${S().placeFootprint})`);
       await escape();
       t(S().placeFootprint === "idle", "a second Escape ends it");
