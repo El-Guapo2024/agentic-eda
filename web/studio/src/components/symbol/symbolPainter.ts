@@ -24,7 +24,7 @@ import { drawPinDecoration, drawPinText, drawRealGraphic } from "../schematic/pa
 import type { ResolvedGraphic } from "../schematic/libSymbol";
 import { resolveLibPoint, resolvePin, symbolTransformMatrix } from "../schematic/transform";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_DISPLAY, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO, type GridDisplay } from "../../kicad-port/grid";
-import { paintEditorGrid } from "../canvas/gridPaint";
+import { GAL_DEFAULT_AXES_COLOR, paintEditorGrid } from "../canvas/gridPaint";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 import { defaultPenNm, textOrigin, FIELD_SIZE_NM } from "../../kicad-port/schText";
 import { shownText } from "../../kicad-port/schFieldEdit";
@@ -299,9 +299,11 @@ export function paintSymbol(
   symbol: { graphics: LibrarySymbolGraphic[]; pins: LibrarySymbolPin[]; pin_names_hidden?: boolean; pin_numbers_hidden?: boolean; pin_name_offset_mm?: number } | null,
   opts: SymPaintOptions
 ) {
-  if (opts.gridVisible) {
+  // the Symbol Editor's axes are always on (`SYMBOL_EDIT_FRAME`: `m_axesEnabled = true`), in the GAL's own axes colour, `COLOR4D( BLUE )` -- nothing in the Symbol Editor sets
+  // `SetAxesColor` (the symbol viewer alone gives it `LAYER_SCHEMATIC_GRID_AXES`)
+  {
     const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
-    paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx }, layerColor("grid"), undefined, "symbol");
+    paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx, visible: opts.gridVisible, axes: d.axes ?? true }, layerColor("grid"), undefined, "symbol", GAL_DEFAULT_AXES_COLOR);
   }
   if (!symbol) {
     drawOrigin(ctx, view);

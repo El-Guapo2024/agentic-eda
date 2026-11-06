@@ -23,6 +23,29 @@ export function getSnapOrigin(): Origin {
   return snapOrigin;
 }
 
+// `GAL::GetGridSnapping()` of the editor on screen (UI-LEFT-2 CC5): its Display Options' "Snap to grid:" -- Always, When grid shown (while its grid is shown) or
+// Never (kicad-port/windowOptions.ts `gridSnappingActive`). `actions/useSnapOrigin.ts` keeps it current with the snap origin; `snapPoint` and the four editors' grid
+// helpers (`GridEnv.gridSnapping`, `SetUseGrid( GetGridSnapping() && !DisableGridSnapping() )`) read it, as KiCad's tools and `GetCursorPosition` read the GAL's.
+let gridSnapping = true;
+
+export function setGridSnapping(on: boolean): void {
+  gridSnapping = on;
+}
+
+export function getGridSnapping(): boolean {
+  return gridSnapping;
+}
+
+/**
+ * The grid point of the editor on screen nearest a point (`GetCursorPosition( true )`: `GetGridPoint` when `GetGridSnapping()`), anchored at the snap origin. With the
+ * editor's grid snapping off (Snap to grid: Never, or When grid shown with the grid hidden) the point itself, in whole units.
+ */
 export function snapPoint(xNm: number, yNm: number, gridNm: number): [number, number] {
+  if (!gridSnapping) return [Math.round(xNm), Math.round(yNm)];
   return [snapAxis(xNm, gridNm, snapOrigin.x), snapAxis(yNm, gridNm, snapOrigin.y)];
+}
+
+/** The grid an editor's own rounding should use: `gridNm` while the editor on screen snaps to its grid, else 0 (no grid: `computeNearest` leaves a point as it is). */
+export function snapGridNm(gridNm: number): number {
+  return gridSnapping ? gridNm : 0;
 }

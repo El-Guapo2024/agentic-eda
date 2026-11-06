@@ -141,13 +141,17 @@ export function visibleGridSize2(size: GridSize2, scale: number, style: GridStyl
 export type GridMark =
   | { kind: "rect"; x: number; y: number; w: number; h: number }
   | { kind: "cross"; x: number; y: number; len: number; width: number }
-  | { kind: "line"; x0: number; y0: number; x1: number; y1: number; width: number };
+  | { kind: "line"; x0: number; y0: number; x1: number; y1: number; width: number }
+  /** One of the two axes through the world's origin (`m_axesEnabled`), drawn in the axes colour, not the grid's. */
+  | { kind: "axis"; x0: number; y0: number; x1: number; y1: number; width: number };
 
 /** How an editor draws its grid (Display Options > Grid Display): `grid.style`, `grid.line_width`, `grid.min_spacing`. */
 export interface GridDisplay {
   style: GridStyle;
   lineWidthPx: number;
   minSpacingPx: number;
+  /** `grid.axes_enabled` of the editor's window (`GAL_DISPLAY_OPTIONS::m_axesEnabled`); an editor that forces its axes on or off says so itself. */
+  axes?: boolean;
 }
 
 export const DEFAULT_GRID_DISPLAY: GridDisplay = { style: DEFAULT_GRID_STYLE, lineWidthPx: DEFAULT_GRID_LINE_WIDTH_PX, minSpacingPx: DEFAULT_GRID_MIN_SPACING_PX };
@@ -161,6 +165,10 @@ export interface GridDrawSpec {
   /** `grid.min_spacing`, pixels. */
   minSpacingPx: number;
   tick?: number;
+  /** `m_gridVisibility`: the grid itself is drawn (absent: yes). The axes are drawn either way (`DrawGrid` draws them before it returns on a hidden grid). */
+  visible?: boolean;
+  /** `m_axesEnabled`: the two axes through the world's origin, and none of the grid's lines (or dots) on them. */
+  axes?: boolean;
 }
 
 /**
@@ -171,18 +179,30 @@ export interface GridDrawSpec {
  *   - DOTS: the horizontal lines (`j`, as wide as row `j` is) and the vertical lines (`i`) drawn through a stencil that keeps only where they cross -- so each dot is a
  *     rectangle `width( i )` wide and `width( j )` high;
  *   - LINES: the same lines, all of them;
- *   - SMALL_CROSS: at each crossing two strokes of `2 * width` each way, `width` being the major one only where both `i` and `j` are ticks.
+ *   - SMALL_CROSS: at each crossing two strokes of `2 * width` each way, `width` being the major one only where both `i` and `j` are ticks;
+ *   - the axes (`m_axesEnabled`): first, whether the grid is shown or not, a line `minorLineWidth` wide along y = 0 from the screen's left to its right and one along
+ *     x = 0 from its top to its bottom (`DrawLine( VECTOR2D( worldStartPoint.x, 0 ), VECTOR2D( worldEndPoint.x, 0 ) )` -- the world's origin, not the grid's); then
+ *     "If axes are drawn, skip the lines that would cover them": the grid's horizontal line at y == 0 and vertical line at x == 0 are left out, so in the Dots
+ *     style no dot lies on an axis (a dot is where two drawn lines cross). Small crosses skip nothing.
  */
 export function gridMarks(view: { x: number; y: number; scale: number }, widthPx: number, heightPx: number, spec: GridDrawSpec): GridMark[] {
   const tick = spec.tick ?? DEFAULT_GRID_TICK;
-  if (!(view.scale > 0) || !(spec.size.x > 0) || !(spec.size.y > 0)) return [];
-  const g = visibleGridSize2(spec.size, view.scale, spec.style, spec.minSpacingPx, tick);
+  if (!(view.scale > 0)) return [];
   const px = 1 / view.scale;
   const minor = Math.max(1, spec.lineWidthPx) * px;
   const major = minor * MAJOR_GRID_LINE_WIDTH_RATIO;
-  const [ox, oy] = spec.origin;
   const worldStart = [(0 - view.x) / view.scale, (0 - view.y) / view.scale];
   const worldEnd = [(widthPx - view.x) / view.scale, (heightPx - view.y) / view.scale];
+  const out: GridMark[] = [];
+  const axes = spec.axes === true;
+  if (axes) {
+    out.push({ kind: "axis", x0: worldStart[0]!, y0: 0, x1: worldEnd[0]!, y1: 0, width: minor });
+    out.push({ kind: "axis", x0: 0, y0: worldStart[1]!, x1: 0, y1: worldEnd[1]!, width: minor });
+  }
+  // `if( !m_gridVisibility || m_gridSize.x == 0 || m_gridSize.y == 0 ) return;`
+  if (spec.visible === false || !(spec.size.x > 0) || !(spec.size.y > 0)) return out;
+  const g = visibleGridSize2(spec.size, view.scale, spec.style, spec.minSpacingPx, tick);
+  const [ox, oy] = spec.origin;
   const kiRound = (v: number) => (v < 0 ? -Math.round(-v) : Math.round(v));
   let sx = kiRound((worldStart[0]! - ox) / g.x);
   let ex = kiRound((worldEnd[0]! - ox) / g.x);
@@ -195,7 +215,8 @@ export function gridMarks(view: { x: number; y: number; scale: number }, widthPx
   sy--;
   ey++;
   const isTick = (n: number) => n % tick === 0;
-  const out: GridMark[] = [];
+  // `if( m_axesEnabled && y == 0.0 ) continue;` / `x == 0.0`: the grid's line on an axis is not drawn
+  const onAxis = (v: number) => axes && v === 0;
   if (spec.style === "small-cross") {
     for (let j = sy; j <= ey; j++) {
       const y = j * g.y + oy;
@@ -209,20 +230,25 @@ export function gridMarks(view: { x: number; y: number; scale: number }, widthPx
   if (spec.style === "lines") {
     for (let j = sy; j <= ey; j++) {
       const y = j * g.y + oy;
+      if (onAxis(y)) continue;
       out.push({ kind: "line", x0: sx * g.x + ox, y0: y, x1: ex * g.x + ox, y1: y, width: isTick(j) ? major : minor });
     }
     for (let i = sx; i <= ex; i++) {
       const x = i * g.x + ox;
+      if (onAxis(x)) continue;
       out.push({ kind: "line", x0: x, y0: sy * g.y + oy, x1: x, y1: ey * g.y + oy, width: isTick(i) ? major : minor });
     }
     return out;
   }
   for (let i = sx; i <= ex; i++) {
     const x = i * g.x + ox;
+    if (onAxis(x)) continue;
     const w = isTick(i) ? major : minor;
     for (let j = sy; j <= ey; j++) {
+      const y = j * g.y + oy;
+      if (onAxis(y)) continue;
       const h = isTick(j) ? major : minor;
-      out.push({ kind: "rect", x: x - w / 2, y: j * g.y + oy - h / 2, w, h });
+      out.push({ kind: "rect", x: x - w / 2, y: y - h / 2, w, h });
     }
   }
   return out;

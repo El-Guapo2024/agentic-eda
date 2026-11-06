@@ -18,7 +18,7 @@ import { rulerDrawing } from "../kicad-port/rulerItem";
 import { paintRuler } from "./canvas/rulerPaint";
 import { measureStrokeText } from "./text/strokeFont";
 import { alignToGrid } from "../kicad-port/gridSnap";
-import { getSnapOrigin } from "./canvas/gridHelper";
+import { getGridSnapping, getSnapOrigin } from "./canvas/gridHelper";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { usePickerSession } from "../actions/pcbPicker";
 import { makeEditorAdapter, isCanvasTab } from "../actions/editorAdapter";
@@ -168,7 +168,7 @@ export function CommonOverlay() {
     // the second is still to come -- the line with its ticks, the back ticks and the x, y, r and θ next to its end, in the auxiliary items' colour.
     if (tool.measure && tool.measure.pts.length > 0) {
       const start = tool.measure.pts[0]!;
-      const snapped = adapter.cursor ? alignToGrid({ x: adapter.cursor.x, y: adapter.cursor.y }, adapter.gridNm, getSnapOrigin(), { ctrlOrCmd: false }) : null;
+      const snapped = adapter.cursor ? alignToGrid({ x: adapter.cursor.x, y: adapter.cursor.y }, adapter.gridNm, getSnapOrigin(), { ctrlOrCmd: false, gridSnapping: getGridSnapping() }) : null;
       const end = tool.measure.pts.length >= 2 ? tool.measure.pts[1]! : snapped ? ([snapped.x, snapped.y] as const) : null;
       const v = adapter.view;
       if (end && v.scale > 0) {

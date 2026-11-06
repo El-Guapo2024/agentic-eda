@@ -48,6 +48,7 @@ import { askConfirm } from "../components/library/libraryDialogs";
 import { INITIAL_LAST_TEXT_BOX, type LastTextBox, type LibTextBox } from "../kicad-port/symTextBox";
 import type { ViewTransform } from "./store";
 import { carriedItems, pastedText, rebased, snappedOrigin, type SymCarry } from "../kicad-port/symCarry";
+import { snapGridNm } from "../components/canvas/gridHelper";
 
 export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_lines" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "draw_bezier" | "draw_textbox" | "text" | "anchor";
 
@@ -870,7 +871,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const d = duplicateItems([...st.selection], sym.pins, sym.graphics);
       if (d.pins.length + d.graphics.length === 0) return;
       dispatch({ type: "CLEAR_SELECTION" });
-      dispatch({ type: "SET_CARRY", carry: { kind: "duplicate", pins: d.pins, graphics: d.graphics, originNm: snappedOrigin(st.cursorNm, st.gridNm), deltaNm: [0, 0] } });
+      dispatch({ type: "SET_CARRY", carry: { kind: "duplicate", pins: d.pins, graphics: d.graphics, originNm: snappedOrigin(st.cursorNm, snapGridNm(st.gridNm)), deltaNm: [0, 0] } });
     },
     copySelection: async (cut) => {
       const st = stateRef.current;
@@ -918,7 +919,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const placed = pastedItems(items, st.activeUnit, st.activeBodyStyle);
       if (placed.pins.length + placed.graphics.length === 0) return;
       dispatch({ type: "CLEAR_SELECTION" });
-      dispatch({ type: "SET_CARRY", carry: { kind: "paste", pins: placed.pins, graphics: placed.graphics, originNm: snappedOrigin(st.cursorNm, st.gridNm), deltaNm: [0, 0] } });
+      dispatch({ type: "SET_CARRY", carry: { kind: "paste", pins: placed.pins, graphics: placed.graphics, originNm: snappedOrigin(st.cursorNm, snapGridNm(st.gridNm)), deltaNm: [0, 0] } });
     },
     carryPin: (pin) => {
       // `TwoClickPlace`: after `CreatePin`'s dialog the pin follows the cursor (`item->SetPosition( cursorPos )`) until the click that places it

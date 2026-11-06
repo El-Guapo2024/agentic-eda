@@ -30,6 +30,7 @@ import { measureStrokeText } from "../text/strokeFont";
 import { SymbolSnap, type SymbolSnapMods } from "./symbolSnap";
 import { paintSnapOverlay } from "../canvas/snapOverlayPainter";
 import { layerColor } from "../canvas/layers";
+import { snapGridNm } from "../canvas/gridHelper";
 import { handleWheel, leftDragOutcome } from "../../kicad-port/viewControls";
 import { wheelInputOf } from "../../hooks/canvasWheel";
 import { useLibraryViewControls } from "../libraryViewControls";
@@ -703,8 +704,8 @@ export function SymbolEditorCanvas() {
         const shape = g.kind === "polyline" ? symEditShape(g, measureStrokeText) : null;
         if (shape?.kind !== "polygon") return [];
         const tol = POINT_SIZE_PX / (state.view.scale || 1);
-        const grid = state.gridNm || 1;
-        // `GetCursorPosition( !DisableGridSnapping() )`: the cursor on the grid
+        const grid = snapGridNm(state.gridNm) || 1;
+        // `GetCursorPosition( !DisableGridSnapping() )`: the cursor on the grid (while the editor snaps to it)
         const at: [number, number] = [Math.round(wx / grid) * grid, Math.round(wy / grid) * grid];
         const ed = pointEditor && pointEditor.id === g.id ? pointEditor.edit : null;
         const handle = ed ? eeFindHandle(ed, [wx, wy], tol) : null;

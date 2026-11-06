@@ -36,7 +36,7 @@ import { itemPassesFilter, newFilterRejections, pickSelectionCandidates, pickToo
 import { flashSelectionFilter } from "../kicad-port/filterFlash";
 import { candidateLabel } from "../components/canvas/candidateLabel";
 import { shapeHitDistance } from "../components/canvas/itemHitTest";
-import { snapPoint } from "../components/canvas/gridHelper";
+import { getGridSnapping, snapPoint } from "../components/canvas/gridHelper";
 import { drawShapeStarted, drawZoneStarted, redoRefused, routerEditKey, takeBackLastLine, undoDropsDrawing, withoutLastCorner, type RouterEditKey } from "../kicad-port/drawingCancel";
 import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
@@ -1493,7 +1493,7 @@ export function useActionRunner() {
     });
     const cursorSnapped = (): [number, number] | null => {
       if (!state.cursorNm) return null;
-      const p = alignToGrid({ x: state.cursorNm.x, y: state.cursorNm.y }, state.schGridNm, { x: 0, y: 0 }, { ctrlOrCmd: false });
+      const p = alignToGrid({ x: state.cursorNm.x, y: state.cursorNm.y }, state.schGridNm, { x: 0, y: 0 }, { ctrlOrCmd: false, gridSnapping: getGridSnapping() });
       return [p.x, p.y];
     };
 

@@ -30,6 +30,7 @@ import { fpAllIds, fpGroupCmd, fpLeaves, fpMirrorCmd, fpMoveCmd, fpRotateCmd, fp
 import type { FpDimDraw, FpDimKind, FpDrawnTable } from "../kicad-port/fpDrawTools";
 import type { BoardTextBox, CmdBarcode } from "../api/pcbItemTypes";
 import type { CmdZone } from "../api/types";
+import { snapGridNm } from "../components/canvas/gridHelper";
 
 export type FpToolId =
   | "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_bezier" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor" | "enumerate"
@@ -713,9 +714,9 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const name = st.name;
       const ids = [...st.selection];
       if (!name || ids.length === 0) return false;
-      // `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )`: here the cursor on the grid
+      // `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )`: here the cursor on the grid (while the editor snaps to it)
       const c = st.cursorNm ?? { x: 0, y: 0 };
-      const g = st.gridNm || 1;
+      const g = snapGridNm(st.gridNm) || 1;
       const reference = { x: Math.round(c.x / g) * g, y: Math.round(c.y / g) * g };
       const r = await fetch("/api/footprint/clipboard/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ footprint: name, ids, reference }) });
       const reply = (await r.json()) as { text?: string; error?: string };
@@ -742,7 +743,7 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const text = system != null && system !== "" ? system : clipboardRef.current;
       if (!text) return;
       const c = st.cursorNm ?? { x: 0, y: 0 };
-      const g = st.gridNm || 1;
+      const g = snapGridNm(st.gridNm) || 1;
       const at = { x: Math.round(c.x / g) * g, y: Math.round(c.y / g) * g };
       // KiCad's text (`CLIPBOARD_IO::Parse`) goes in as items; any other text as a text item on the active layer ("If it wasn't content, then paste as a text object")
       let cmd: Cmd;

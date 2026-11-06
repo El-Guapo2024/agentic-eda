@@ -18,7 +18,7 @@ import { reportSnap } from "../../kicad-port/snapReport";
 import type { DragFilter, PcbMagnetic } from "../../kicad-port/snapAnchors";
 import { dist, type Pt } from "../../kicad-port/snapGeom";
 import { pickRouteItem } from "../../kicad-port/routePick";
-import { getSnapOrigin } from "./gridHelper";
+import { getGridSnapping, getSnapOrigin } from "./gridHelper";
 
 /** Everything about the editor the snapping depends on; the canvas hands it over on every render. */
 export interface PcbSnapView {
@@ -89,6 +89,7 @@ export class PcbSnap {
       origin: [getSnapOrigin().x, getSnapOrigin().y],
       gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides),
       ...gridEnvY(v),
+      gridSnapping: getGridSnapping(),
     };
   }
 
@@ -141,7 +142,7 @@ export class PcbSnap {
   point(tool: string, world: Pt, mods: SnapMods, opts: PointOpts = {}): Pt {
     if (!this.view) return world;
     const h = this.helperFor(tool);
-    h.setUseGrid(!mods.ctrl);
+    h.setUseGrid(getGridSnapping() && !mods.ctrl);
     h.setSnap(!mods.shift);
     if (opts.skipPoint === null) h.clearSkipPoint();
     else if (opts.skipPoint) h.setSkipPoint(opts.skipPoint);
@@ -185,7 +186,7 @@ export class PcbSnap {
   align(tool: string, world: Pt, mods: SnapMods, category: GridCategory = "current"): Pt {
     if (!this.view) return world;
     const h = this.helperFor(tool);
-    h.setUseGrid(!mods.ctrl);
+    h.setUseGrid(getGridSnapping() && !mods.ctrl);
     const p = whole(h.align(world, category));
     this.last = p;
     return p;
@@ -195,7 +196,7 @@ export class PcbSnap {
   alignToSegment(tool: string, world: Pt, a: Pt, b: Pt, mods: SnapMods): Pt {
     if (!this.view) return world;
     const h = this.helperFor(tool);
-    h.setUseGrid(!mods.ctrl);
+    h.setUseGrid(getGridSnapping() && !mods.ctrl);
     h.setSnap(!mods.shift);
     return whole(h.alignToSegment(world, a, b));
   }
@@ -242,7 +243,7 @@ export class PcbSnap {
   routePoint(world: Pt, mods: SnapMods, opts: { net?: string | null; isEnd: boolean; placingVia?: boolean; skip?: ReadonlySet<string>; layer?: { top: string; only?: boolean } }): Pt {
     if (!this.view?.board) return world;
     const h = this.helperFor("route");
-    h.setUseGrid(!mods.ctrl);
+    h.setUseGrid(getGridSnapping() && !mods.ctrl);
     h.setSnap(!mods.shift);
     const category: GridCategory = opts.placingVia ? "vias" : "wires";
     const align = (): Pt => h.align(world, category);

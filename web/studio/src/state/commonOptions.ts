@@ -13,7 +13,7 @@
 //   include/tool/selection_tool.h     SELECTION_MODE (the selection tool's rectangle / lasso mode)
 import { useMemo, useSyncExternalStore } from "react";
 import type { GridDisplay } from "../kicad-port/grid";
-import { DEFAULT_WINDOW_OPTIONS, editorWindowOf, parseWindowOptions, type EditorWindow, type WindowOptions } from "../kicad-port/windowOptions";
+import { DEFAULT_WINDOW_OPTIONS, editorWindowOf, gridAxesEnabled, parseWindowOptions, type EditorWindow, type WindowOptions } from "../kicad-port/windowOptions";
 
 export { DEFAULT_WINDOW_OPTIONS, EDITOR_WINDOWS, editorWindowOf, parseWindowOptions, type EditorWindow, type WindowOptions } from "../kicad-port/windowOptions";
 
@@ -110,8 +110,9 @@ export function useCommonOptions(): CommonOptions {
   return useSyncExternalStore(subscribe, getCommonOptions, getCommonOptions);
 }
 
-/** How the editor draws its grid (its Display Options > Grid Display), re-rendering the caller when that changes. */
+/** How the editor draws its grid (its Display Options > Grid Display, and its axes: `gridAxesEnabled`), re-rendering the caller when that changes. */
 export function useGridDisplay(editor: EditorWindow): GridDisplay {
   const w = useCommonOptions().window[editor];
-  return useMemo(() => ({ style: w.gridStyle, lineWidthPx: w.gridLineWidth, minSpacingPx: w.gridMinSpacing }), [w.gridStyle, w.gridLineWidth, w.gridMinSpacing]);
+  const axes = gridAxesEnabled(editor, w);
+  return useMemo(() => ({ style: w.gridStyle, lineWidthPx: w.gridLineWidth, minSpacingPx: w.gridMinSpacing, axes }), [w.gridStyle, w.gridLineWidth, w.gridMinSpacing, axes]);
 }

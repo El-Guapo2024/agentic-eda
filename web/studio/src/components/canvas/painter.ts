@@ -1700,11 +1700,12 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     // The editor grid and KiCad 10's grid items (`drawGridSources`), the one leaving out what the others cover.
     grid: () => {
       const grids = shownGridItems(board, opts.layerVisible);
-      if (opts.gridVisible) {
+      const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
+      // the axes of the board's window (`grid.axes_enabled`) are drawn whether the grid is shown or not
+      if (opts.gridVisible || d.axes) {
         // A grid item's coverage hides the editor grid (`drawGridSource`'s wash): see gridItemPaint.ts.
         const covered = grids.map(gridGeometry);
-        const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
-        paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: opts.gridOrigin ?? [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx }, layerColor("grid"), covered.length > 0 ? (x, y) => gridItemCovers(covered, x, y) : undefined, "pcb");
+        paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: opts.gridOrigin ?? [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx, visible: opts.gridVisible, axes: d.axes === true }, layerColor("grid"), covered.length > 0 ? (x, y) => gridItemCovers(covered, x, y) : undefined, "pcb", layerColor("grid_axes"));
       }
       const box: [number, number, number, number] = [-view.x / view.scale, -view.y / view.scale, (widthPx - view.x) / view.scale, (heightPx - view.y) / view.scale];
       drawGridItems(ctx, view, board, opts.layerVisible, opts.selection, DEFAULT_GRID_STYLE, box);

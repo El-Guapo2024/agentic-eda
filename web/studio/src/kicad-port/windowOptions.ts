@@ -65,3 +65,19 @@ export function editorWindowOf(tab: string): EditorWindow {
   return tab === "schematic" || tab === "footprint" || tab === "symbol" ? tab : "pcb";
 }
 
+/**
+ * Whether an editor draws its grid axes (`GAL_DISPLAY_OPTIONS::m_axesEnabled`): the Footprint Editor and the Symbol Editor always (`FOOTPRINT_EDIT_FRAME`'s and
+ * `SYMBOL_EDIT_FRAME`'s `GetGalDisplayOptions().m_axesEnabled = true` / `SetAxesEnabled( true )`), the schematic never ("For now, axes are forced off in Eeschema
+ * even if turned on in config", `SCH_EDIT_FRAME::LoadSettings`), the board as its window says (`grid.axes_enabled`, default off; KiCad 8303b2ad and 25ec2335 have
+ * no control for it).
+ */
+export function gridAxesEnabled(editor: EditorWindow, w: Pick<WindowOptions, "gridAxes">): boolean {
+  if (editor === "footprint" || editor === "symbol") return true;
+  if (editor === "schematic") return false;
+  return w.gridAxes;
+}
+
+/** `GAL::GetGridSnapping`: `m_gridSnapping == ALWAYS || ( m_gridVisibility && m_gridSnapping == WITH_GRID )`. */
+export function gridSnappingActive(mode: GridSnapping, gridVisible: boolean): boolean {
+  return mode === "always" || (gridVisible && mode === "with_grid");
+}

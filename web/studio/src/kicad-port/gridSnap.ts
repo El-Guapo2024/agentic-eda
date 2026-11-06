@@ -31,8 +31,12 @@ export interface GridSnapModifiers {
   shiftKey: boolean;
 }
 
-/** grid_helper.cpp GRID_HELPER::Align minus the aux-axis special case (this app has no "auxiliary axis" origin marker) -- the grid half of the decision, before any anchor is considered. */
-export function alignToGrid(point: Point, gridNm: number, origin: Point, modifiers: Pick<GridSnapModifiers, "ctrlOrCmd">): Point {
-  if (modifiers.ctrlOrCmd || gridNm <= 0) return point;
+/**
+ * grid_helper.cpp GRID_HELPER::Align minus the aux-axis special case (this app has no "auxiliary axis" origin marker) -- the grid half of the decision, before any anchor is
+ * considered. `gridSnapping` is the editor's `GAL::GetGridSnapping()` (its "Snap to grid:", `gridSnappingActive`): off, nothing is rounded, as `canUseGrid` /
+ * `GetCursorPosition( true )` round nothing then. Absent means on.
+ */
+export function alignToGrid(point: Point, gridNm: number, origin: Point, modifiers: Pick<GridSnapModifiers, "ctrlOrCmd"> & { gridSnapping?: boolean }): Point {
+  if (modifiers.ctrlOrCmd || modifiers.gridSnapping === false || gridNm <= 0) return point;
   return computeNearest(point, { x: gridNm, y: gridNm }, origin);
 }
