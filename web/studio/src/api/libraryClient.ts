@@ -4,6 +4,7 @@
 import type { LibraryFootprint, LibrarySymbol } from "./types";
 import { ApiError, postCmd } from "./client";
 import { withDefaults } from "../kicad-port/libraryDefaults";
+import { ensureInProject, UNKNOWN_SYMBOL } from "../kicad-port/libraryEnsure";
 
 export interface ParsedSymbols {
   symbols: LibrarySymbol[];
@@ -179,16 +180,23 @@ export async function ensureFootprintInProject(name: string): Promise<string | n
   return problem;
 }
 
-/** The symbol sibling of [`ensureFootprintInProject`]: an installed `Lib:Name` is put into the project library before the editor opens it. */
-export async function ensureSymbolInProject(libId: string): Promise<void> {
-  if (!libId.includes(":")) return;
-  try {
-    const { symbol, inProject } = await fetchAnySymbol(libId);
-    if (inProject) return;
-    await postCmd({ op: "put_library_symbol", symbol, overwrite: true }, false);
-  } catch {
-    /* nothing installed or known under this id: the open verb starts a blank symbol */
-  }
+/**
+ * The symbol sibling of [`ensureFootprintInProject`]: an installed `Lib:Name` is put into the project library before the editor opens it. Null when it is there now
+ * or nothing knows the id (the open verb then starts a blank symbol); else why it could not be copied in -- the caller opens nothing and says it
+ * (kicad-port/libraryEnsure.ts: a read error used to be taken for "unknown" and the put's refusal ignored, so a library's symbol could open blank).
+ */
+export async function ensureSymbolInProject(libId: string): Promise<string | null> {
+  return ensureInProject(
+    libId,
+    {
+      fetchAny: async (id) => {
+        const { symbol, inProject } = await fetchAnySymbol(id);
+        return { item: symbol, inProject };
+      },
+      put: (symbol) => postCmd({ op: "put_library_symbol", symbol, overwrite: true }, false),
+    },
+    UNKNOWN_SYMBOL
+  );
 }
 
 /** `GET /api/symbol/export?lib_id=` text (the derived `.kicad_sym`), for Copy and Export. */

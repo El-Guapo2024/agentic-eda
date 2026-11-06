@@ -26,6 +26,7 @@ import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymb
 import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolEditorNames, fetchSymbolForEditor, postCmd, postRedo, postUndo } from "../api/client";
 import { ensureSymbolInProject, parseSymbolText, readClipboardText, symbolItemsText, writeClipboardText } from "../api/libraryClient";
 import { bareSymbolForms } from "../kicad-port/symClipboard";
+import { symbolNotLoaded } from "../kicad-port/libraryEnsure";
 import { joinLibName } from "../kicad-port/libraryNames";
 import { PROJECT_SYMBOL_LIB } from "../kicad-port/symEditActions";
 import { allFields, wireField } from "../kicad-port/symFields";
@@ -664,8 +665,14 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
   const api: SymbolEditorApi = {
     getState: () => stateRef.current,
     openSymbol: async (libId, at) => {
+      // an installed KiCad symbol is copied into the project library first, or the verb below would open a blank one; when that fails nothing is opened and the
+      // symbol being edited stays (`LoadSymbol`: "Error loading symbol %s from library '%s'.", then `return false`)
+      const problem = await ensureSymbolInProject(libId);
+      if (problem) {
+        dispatch({ type: "TOAST", message: symbolNotLoaded(libId, problem), kind: "error" });
+        return;
+      }
       dispatch({ type: "SET_LIB_ID", libId });
-      await ensureSymbolInProject(libId); // an installed KiCad symbol is copied into the project library first, or the verb below would open a blank one
       // a symbol the project library has is opened as it is: the verb would change nothing and still be an undo step, so Undo after a rename (which opens the
       // renamed symbol) would undo the opening and not the rename
       const inProject = await fetchSymbolEditorNames()
