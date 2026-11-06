@@ -6067,8 +6067,8 @@ pub(crate) mod tests {
             Cmd::SchMove(V::Rotate { ids: vec![field_id("R1", "Value")], vertices: Default::default(), ccw: true, about: None, grid: Nm::ZERO }),
             Cmd::SchMove(V::Mirror { ids: vec![field_id("R1", "Value")], vertices: Default::default(), vertical: false, about: None, grid: Nm::ZERO }),
             Cmd::SchMove(V::Rotate { ids: vec!["R1".into()], vertices: Default::default(), ccw: true, about: None, grid: Nm::ZERO }),
-            Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_nm: Some(mm(2.0)), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None }),
-            Cmd::SchEdit(E::EditField { id: field_id("R1", "Footprint"), text: None, at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible: Some(true), name_shown: None, allow_autoplace: None }),
+            Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_nm: Some(mm(2.0)), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None, local_at: None, local_vertical: None, keep_autoplaced: false }),
+            Cmd::SchEdit(E::EditField { id: field_id("R1", "Footprint"), text: None, at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible: Some(true), name_shown: None, allow_autoplace: None, local_at: None, local_vertical: None, keep_autoplaced: false }),
             Cmd::SchEdit(E::AutoplaceFields { ids: vec!["R1".into()] }),
             Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_nm: Some(mm(2.0)), bold: Some(true), italic: Some(true), auto_rotate: None, fields: None }),
         ];
@@ -6901,7 +6901,7 @@ pub(crate) mod tests {
         let edit = |f: &dyn Fn(&mut Option<String>, &mut Option<bool>)| {
             let (mut text, mut visible) = (None, None);
             f(&mut text, &mut visible);
-            Cmd::SchEdit(V::EditField { id: "fld:R1:MPN".into(), text, at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible, name_shown: None, allow_autoplace: None })
+            Cmd::SchEdit(V::EditField { id: "fld:R1:MPN".into(), text, at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible, name_shown: None, allow_autoplace: None, local_at: None, local_vertical: None, keep_autoplaced: false })
         };
         let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
         let start = sheet_of(&load(&dir).unwrap().1);

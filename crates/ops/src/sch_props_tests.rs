@@ -549,7 +549,7 @@ fn a_labels_field_moved_by_hand_stays_and_takes_the_label_out_of_autoplace() {
 fn field_properties_of_a_labels_field_edits_its_text_and_place_and_keeps_the_sheet_references_text() {
     let (m, d) = board(with_label_field());
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-    let field = |id: &str, text: Option<&str>, at: Option<Point>, visible: Option<bool>| SchCmd::EditField { id: id.into(), text: text.map(str::to_string), at, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible, name_shown: None, allow_autoplace: None };
+    let field = |id: &str, text: Option<&str>, at: Option<Point>, visible: Option<bool>| SchCmd::EditField { id: id.into(), text: text.map(str::to_string), at, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible, name_shown: None, allow_autoplace: None, local_at: None, local_vertical: None, keep_autoplaced: false };
     ok(&mut b, field("fld:lbl_g:Netclass", Some("LV"), None, None));
     assert_eq!(sch_of(&b).extras.label_fields["lbl_g"][0].text, "LV");
     assert!(!eda_engine::label_fields::hand_placed(sch_of(&b), "lbl_g"), "a new text alone keeps the fields autoplaced");

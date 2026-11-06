@@ -191,6 +191,35 @@ pub enum SchCmd {
         name_shown: Option<bool>,
         #[serde(default)]
         allow_autoplace: Option<bool>,
+        /// Symbol Properties' X Position and Y Position (`FIELDS_GRID_TABLE`'s `FDC_POSX`, `FDC_POSY`): the anchor in the item's own unturned frame, from its origin.
+        #[serde(default)]
+        local_at: Option<Point>,
+        /// Symbol Properties' Orientation (`FDC_ORIENTATION`): the text's angle before the item turns it (vertical or horizontal).
+        #[serde(default)]
+        local_vertical: Option<bool>,
+        /// The edit is Symbol Properties' (`DIALOG_SYMBOL_PROPERTIES`), not Field Properties': the item's fields stay autoplaced and are placed again, if at all,
+        /// by the [`SchCmd::AutoplaceFieldsKept`] that ends the dialog's step.
+        #[serde(default)]
+        keep_autoplaced: bool,
+    },
+    /// What `SCH_EDIT_TOOL::Properties` does after Symbol Properties' OK: the items `keys` names (a placed unit's key `<reference>[#<unit>]`, a power symbol's id)
+    /// whose fields Autoplace Fields put where they are have them placed again in the way they were (`AutoplaceFields( screen, GetFieldsAutoplaced() )`); the
+    /// others keep theirs. Placing nothing is no error (the dialog's batch is the step).
+    AutoplaceFieldsKept { keys: Vec<String> },
+    /// Symbol Properties' Move Up / Move Down (`DIALOG_SYMBOL_PROPERTIES::OnMoveUp` / `OnMoveDown`): the user-defined fields of the placed unit `key` take the
+    /// order of `names` (the mandatory fields stay first), which they are listed, autoplaced and written in. Refused when nothing moves.
+    ReorderFields { key: String, names: Vec<String> },
+    /// Symbol Properties' Angle and Mirror (`DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow`: `SetOrientation( SYM_ORIENT_0 / 90 / 270 / 180 )`, then
+    /// `SetOrientation( SYM_MIRROR_X / SYM_MIRROR_Y )`): the placed symbol `id` (`unit`, as `MoveSymbol` takes it) or the power symbol `id` takes the
+    /// orientation `angle` (degrees counter-clockwise: 0, 90, 180, 270) mirrored about `mirror` ("x": "Around X axis", "y": "Around Y axis", none: "Not
+    /// mirrored"), whatever it had. A power symbol folds a mirror into a turn (it has no mirror flag here). Refused when it has that orientation.
+    SetSymbolOrientation {
+        id: String,
+        #[serde(default)]
+        unit: Option<u32>,
+        angle: u32,
+        #[serde(default)]
+        mirror: Option<String>,
     },
     /// Autoplace Fields (`SCH_EDIT_TOOL::AutoplaceFields`): the fields of each listed symbol, power symbol or sheet (or of the item a listed field belongs to)
     /// are placed by the manual routine (`AUTOPLACE_MANUAL`: beside the symbol, on a side that has no pins, clear of what is drawn around it) and stay
@@ -472,6 +501,9 @@ impl SchCmd {
             SchCmd::PlaceLabel { net, .. } => vec![net.as_str()],
             SchCmd::PlaceText { content, .. } => vec![content.as_str()],
             SchCmd::AutoplaceFields { ids } => ids.iter().map(String::as_str).collect(),
+            SchCmd::AutoplaceFieldsKept { keys } => keys.iter().map(String::as_str).collect(),
+            SchCmd::ReorderFields { key, .. } => vec![key.as_str()],
+            SchCmd::SetSymbolOrientation { id, .. } => vec![id.as_str()],
             SchCmd::AddUserField { id, .. } | SchCmd::RemoveUserField { id, .. } => vec![id.as_str()],
             SchCmd::PinHelper { pins, .. } => pins.iter().map(String::as_str).collect(),
             SchCmd::SetStroke { ids, .. } | SchCmd::SetTextAttrs { ids, .. } | SchCmd::SetExcludeFromPosFiles { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -513,6 +545,9 @@ impl SchCmd {
             SchCmd::EditLabel { id, .. } => format!("schematic edit-label {id}"),
             SchCmd::EditField { id, .. } => format!("schematic edit-field {id}"),
             SchCmd::AutoplaceFields { ids } => format!("schematic autoplace-fields {}", ids.join(" ")),
+            SchCmd::AutoplaceFieldsKept { keys } => format!("schematic autoplace-fields-kept {}", keys.join(" ")),
+            SchCmd::ReorderFields { key, names } => format!("schematic field-order {key} {}", names.join(",")),
+            SchCmd::SetSymbolOrientation { id, angle, mirror, .. } => format!("schematic orientation {id} {angle}{}", mirror.as_deref().map(|m| format!(" --mirror {m}")).unwrap_or_default()),
             SchCmd::PinHelper { what, pins, .. } => format!("schematic pin-helper {} {}", serde_json::to_value(what).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default(), pins.join(" ")),
             SchCmd::AddUserField { id, name, .. } => format!("schematic field-add {id} {name:?}"),
             SchCmd::RemoveUserField { id, name } => format!("schematic field-remove {id} {name:?}"),
@@ -563,6 +598,8 @@ impl SchCmd {
             SchCmd::EditLabel { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } => "schematic-text",
             SchCmd::PlaceLabel { .. } => "schematic-label",
             SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => "schematic-fields",
+            SchCmd::AutoplaceFieldsKept { .. } | SchCmd::ReorderFields { .. } => "schematic-fields",
+            SchCmd::SetSymbolOrientation { .. } => "schematic-symbol",
             SchCmd::EditSheet { .. } | SchCmd::SetSheetProps { .. } | SchCmd::SetSheetFields { .. } | SchCmd::AddTopLevelSheet { .. } | SchCmd::DeleteTopLevelSheet { .. } => "schematic-sheet",
             SchCmd::SetStroke { .. } => "schematic-stroke",
             SchCmd::SetTextAttrs { .. } => "schematic-text",
@@ -587,6 +624,8 @@ impl SchCmd {
             SchCmd::SetStroke { .. } | SchCmd::SetTextAttrs { .. } | SchCmd::SetExcludeFromPosFiles { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => false,
             // a field's font and colour are its look; a power symbol's footprint, datasheet, flags and user fields name no net
             SchCmd::SetFieldLooks { .. } | SchCmd::SetPowerProps { .. } | SchCmd::ResetSymbolFields { .. } => false,
+            // the fields' places and order are layout
+            SchCmd::AutoplaceFieldsKept { .. } | SchCmd::ReorderFields { .. } => false,
             // a sheet's style and attributes name no net; its user fields are text variables of what it shows (`SCH_SHEET::ResolveTextVar`), which a label's
             // `${..}` may read, so they are read from the drawing again
             SchCmd::SetSheetProps { .. } => false,
@@ -649,7 +688,7 @@ impl<'a> Board<'a> {
                 self.place_label(net, *at, kind, &crate::sch_labels::PlacedLabel { spin: *spin, size_nm: *size_nm, bold: *bold, italic: *italic, auto_rotate: *auto_rotate }).and_then(|_| self.commit_clean_up())
             }
             SchCmd::PlaceText { content, at, angle, size_nm, h, v } => self.place_text(content, *at, *angle, *size_nm, *h, *v),
-            SchCmd::EditField { id, text, at, vertical, h, v, size_nm, bold, italic, visible, name_shown, allow_autoplace } => self.edit_sch_field(
+            SchCmd::EditField { id, text, at, vertical, h, v, size_nm, bold, italic, visible, name_shown, allow_autoplace, local_at, local_vertical, keep_autoplaced } => self.edit_sch_field(
                 id,
                 &crate::sch_fields::FieldEdit {
                     text: text.clone(),
@@ -663,9 +702,16 @@ impl<'a> Board<'a> {
                     visible: *visible,
                     name_shown: *name_shown,
                     allow_autoplace: *allow_autoplace,
+                    local_at: *local_at,
+                    local_vertical: *local_vertical,
+                    keep_autoplaced: *keep_autoplaced,
                 },
             ),
             SchCmd::AutoplaceFields { ids } => self.autoplace_sch_fields(ids),
+            SchCmd::AutoplaceFieldsKept { keys } => self.autoplace_fields_kept(keys),
+            SchCmd::ReorderFields { key, names } => self.reorder_sch_fields(key, names),
+            // a symbol's pins turn with it: the commit's clean-up (`SCH_COMMIT::pushSchEdit`), as a turn's
+            SchCmd::SetSymbolOrientation { id, unit, angle, mirror } => self.set_symbol_orientation(id, *unit, *angle, mirror.as_deref()).and_then(|_| self.commit_clean_up()),
             SchCmd::PinHelper { what, pins, grid } => self.pin_helper(*what, pins, *grid),
             SchCmd::AddUserField { id, name, text } => self.add_user_field(id, name, text),
             SchCmd::RemoveUserField { id, name } => self.remove_user_field(id, name),

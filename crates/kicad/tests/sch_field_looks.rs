@@ -102,3 +102,33 @@ fn a_power_symbols_footprint_datasheet_flags_and_user_fields_are_read_and_writte
     assert!(property(gnd, "Datasheet").contains("\"https://example.com/gnd\""), "{gnd}");
     assert!(property(gnd, "MPN").contains("(hide yes)"), "{gnd}");
 }
+
+/// UI-LEFT-2 SS7: a power symbol's user field is an item of the sheet: shown, it is drawn and written where the file has it (`parseSchField`'s `(at ..)`, `saveField`),
+/// not at the symbol's anchor, and read back there; with the symbol's fields autoplaced it goes where Autoplace Fields stacks it with the Value.
+#[test]
+fn a_power_symbols_shown_user_field_is_written_where_the_sheet_draws_it_and_read_back_there() {
+    let file = FILE.replace(
+        "(property \"MPN\" \"none\" (at 100 120 0) (effects (font (size 1.27 1.27)) (hide yes)))",
+        "(property \"Rating\" \"1A\" (at 104.14 123.81 0) (effects (font (size 1.27 1.27)) (justify left)))",
+    );
+    let (design, model, _) = import_kicad_sch(&file).unwrap_or_else(|e| panic!("{e:?}"));
+    let sch = design.schematic.as_ref().unwrap();
+    let ps = &sch.power_symbols[0];
+    let fields = eda_engine::fields::power_fields(sch, ps);
+    let rating = fields.iter().find(|f| f.name == "Rating").expect("the user field is a field of the sheet");
+    assert!(rating.visible);
+    assert_eq!((rating.at.0.round(), rating.at.1.round()), (104_140_000.0, 123_810_000.0), "where the file has it");
+    let out = export_kicad_sch(&design, &model, &META).unwrap();
+    let gnd = item(&out, "(symbol (lib_id \"power:GND\")");
+    let p = property(gnd, "Rating");
+    assert!(p.contains("(at 104.14 123.81 0)") && !p.contains("hide"), "{p}");
+    let (again, model2, _) = import_kicad_sch(&out).unwrap();
+    assert_eq!(export_kicad_sch(&again, &model2, &META).unwrap(), out, "a second round trip writes the same file");
+    // autoplaced: under the Value, on its own line (`AUTOPLACER` stacks every shown field)
+    let auto = file.replace("(uuid \"41111111-1111-1111-1111-111111111111\")", "(fields_autoplaced yes) (uuid \"41111111-1111-1111-1111-111111111111\")");
+    let (design, _, _) = import_kicad_sch(&auto).unwrap();
+    let sch = design.schematic.as_ref().unwrap();
+    let fields = eda_engine::fields::power_fields(sch, &sch.power_symbols[0]);
+    let (value, rating) = (fields.iter().find(|f| f.name == "Value").unwrap(), fields.iter().find(|f| f.name == "Rating").unwrap());
+    assert!((rating.at.1 - value.at.1).abs() >= 1_000_000.0, "stacked: {value:?} {rating:?}");
+}

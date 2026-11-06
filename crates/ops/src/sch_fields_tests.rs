@@ -93,7 +93,7 @@ fn mirror(v: &[&str], vertical: bool) -> Cmd {
 fn edit(id: &str, f: impl FnOnce(&mut Edit)) -> Cmd {
     let mut e = Edit::default();
     f(&mut e);
-    Cmd::SchEdit(SchCmd::EditField { id: id.into(), text: e.text, at: e.at, vertical: e.vertical, h: e.h, v: e.v, size_nm: e.size_nm, bold: e.bold, italic: e.italic, visible: e.visible, name_shown: e.name_shown, allow_autoplace: e.allow_autoplace })
+    Cmd::SchEdit(SchCmd::EditField { id: id.into(), text: e.text, at: e.at, vertical: e.vertical, h: e.h, v: e.v, size_nm: e.size_nm, bold: e.bold, italic: e.italic, visible: e.visible, name_shown: e.name_shown, allow_autoplace: e.allow_autoplace, local_at: None, local_vertical: None, keep_autoplaced: false })
 }
 
 #[derive(Default)]

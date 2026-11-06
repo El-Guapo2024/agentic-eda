@@ -7647,6 +7647,8 @@ mod sch_symbol_props;
 #[cfg(test)]
 mod sch_symbol_props_tests;
 #[cfg(test)]
+mod sch_symbol_dialog_tests;
+#[cfg(test)]
 mod sch_move_tests;
 #[cfg(test)]
 mod sch_groups_tests;

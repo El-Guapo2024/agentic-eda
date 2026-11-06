@@ -593,13 +593,11 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             let (ox, oy) = eda_engine::symgeom::bake(ps.rot, false, 0.0, p.dx.as_f64(), p.dy.as_f64());
             write_field_text(&mut out, &p.name, &text, (ps.at.x.as_f64() + ox, ps.at.y.as_f64() + oy), p.angle == 90_000, eda_engine::fields::to_hj(p.h), eda_engine::fields::to_vj(p.v), !p.visible, &FieldLook::of(&p).with_font_look(sch, &ps.id, &p.name));
         }
-        // its Footprint, Datasheet and user fields (`SchExtras::power_props`), at its anchor
+        // its Footprint and Datasheet (`SchExtras::power_props`), hidden, at its anchor; its user fields are written above, where they are drawn (`power_placements`,
+        // UI-LEFT-2 SS7)
         let (px, py) = (ps.at.x.mm(), ps.at.y.mm());
         write_property(&mut out, "Footprint", &props.footprint, px, py, true);
         write_property(&mut out, "Datasheet", &props.datasheet, px, py, true);
-        for f in &props.fields {
-            write_property(&mut out, &f.name, &f.text, px, py, !f.visible);
-        }
         let pin_uuid = duid_for(&format!("pwrpin:{}", ps.id), &ps.id);
         writeln!(out, "\t\t(pin \"1\" (uuid \"{pin_uuid}\"))").unwrap();
         writeln!(out, "\t\t(instances").unwrap();

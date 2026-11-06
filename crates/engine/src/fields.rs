@@ -274,10 +274,20 @@ pub fn symbol_specs(sym: &SymbolInstance, part: Option<&Part>, datasheet_of_lib:
 /// (`SchematicSection::user_fields`: by name, the text each shows), each hidden until a placement says otherwise
 /// (`FIELDS_EDITOR_GRID_DATA_MODEL::ApplyData` makes a field it adds with `SetVisible( false )`, as `DIALOG_SYMBOL_PROPERTIES::OnAddField` does). A user field named
 /// like a standard one is not a field of its own (the standard one has that name) and is left out.
+///
+/// The user fields come in the order the placed unit keeps them: a placed `SCH_SYMBOL`'s fields are a list (`m_fields`), the mandatory ones first and the others
+/// in the order Symbol Properties' Move Up / Move Down left them (`DIALOG_SYMBOL_PROPERTIES::OnMoveUp` / `OnMoveDown`, `TransferDataFromWindow`'s `SetOrdinal`)
+/// or the file had them (`parseSchematicSymbol` reads them in order, `saveSymbol` writes them so). Here that order is the order of the unit's stored placements
+/// (`SchematicSection::field_layout`); a field the unit keeps no placement for comes after them, by name (UI-LEFT-2 SS7).
 pub fn symbol_specs_in(sch: &SchematicSection, sym: &SymbolInstance, part: Option<&Part>, datasheet_of_lib: &str) -> Vec<FieldSpec> {
     let mut specs = symbol_specs(sym, part, datasheet_of_lib);
     if let Some(user) = sch.user_fields.get(&sym.id) {
-        specs.extend(user.iter().filter(|(name, _)| !is_standard_field(name)).map(|(name, text)| FieldSpec::new(name, text.clone(), false)));
+        let stored = sch.field_layout.get(&field_key(&sym.id, sym.unit));
+        let rank = |name: &str| stored.and_then(|s| s.iter().position(|p| p.name == name)).unwrap_or(usize::MAX);
+        let mut own: Vec<FieldSpec> = user.iter().filter(|(name, _)| !is_standard_field(name)).map(|(name, text)| FieldSpec::new(name, text.clone(), false)).collect();
+        // stable: the fields with no placement keep the name order the map gives them
+        own.sort_by_key(|s| rank(&s.name));
+        specs.extend(own);
     }
     specs
 }
@@ -779,13 +789,53 @@ pub fn power_value_placement(ps: &PowerSymbol, lib_id: &str) -> FieldPlacement {
     place_fields_of(ps.at, ps.rot, false, false, &geom, &specs, &[], None, None).into_iter().next().unwrap_or_else(|| FieldPlacement::at_origin("Value"))
 }
 
-/// The placements of a power symbol's fields in its own frame (origin at its pin), with the text each shows: the Reference, hidden, and
-/// the Value, the net it asserts. What the `.kicad_sch` file keeps for a power symbol it writes turned.
+/// The user-defined fields of a power symbol (`SchExtras::power_props`: Symbol Properties' rows after the mandatory ones), as specs in their order: the text, and
+/// whether the field is shown and italic as the power symbol keeps them; the rest of the look is the stored placement's.
+pub fn power_user_specs(sch: &SchematicSection, ps: &PowerSymbol) -> Vec<FieldSpec> {
+    sch.extras.power_props.get(&ps.id).map(|p| p.fields.iter().filter(|f| !is_standard_field(&f.name)).map(|f| FieldSpec { italic: f.italic, ..FieldSpec::new(&f.name, f.text.clone(), f.visible) }).collect()).unwrap_or_default()
+}
+
+/// Autoplace Fields of a power symbol over `specs` (`SCH_SYMBOL::AutoplaceFields`, the power case of `AUTOPLACER::getPreferredSides`): the placements in the
+/// order of `specs`; a hidden field, or one with no text, takes the first placed field's place, as [`place_fields_of`] gives it.
+pub fn power_autoplaced(ps: &PowerSymbol, specs: &[FieldSpec]) -> Vec<FieldPlacement> {
+    let Some(lib) = eda_model::symbol::builtin(&ps.lib_id) else { return specs.iter().map(|s| FieldPlacement { visible: s.visible, ..FieldPlacement::at_origin(&s.name) }).collect() };
+    let geom = SymbolGeom::of_origin_symbol(ps.at, ps.rot, &lib);
+    place_fields_of(ps.at, ps.rot, false, false, &geom, specs, &[], None, None)
+}
+
+/// The placements of a power symbol's fields in its own frame (origin at its pin), with the text each shows: the Reference, hidden, the Value, the net it
+/// asserts, and its user-defined fields (`SchExtras::power_props`). What the `.kicad_sch` file keeps for a power symbol it writes turned. A user field the sheet
+/// keeps no placement for is where Autoplace Fields puts it beside the Value (`DIALOG_SYMBOL_PROPERTIES`' OK runs `AutoplaceFields` on a symbol whose fields are
+/// autoplaced, as a placed power symbol's are: `PlaceSymbol`'s `AUTOPLACE_AUTO`); it is shown and italic as the power symbol keeps it (UI-LEFT-2 SS7: the user
+/// fields were written at the anchor and never drawn).
 pub fn power_placements(sch: &SchematicSection, ps: &PowerSymbol) -> Vec<(FieldPlacement, String)> {
     let stored = sch.field_layout.get(&ps.id);
-    let value = stored.and_then(|s| s.iter().find(|p| p.name == "Value")).cloned().unwrap_or_else(|| power_value_placement(ps, &ps.lib_id));
-    let reference = stored.and_then(|s| s.iter().find(|p| p.name == "Reference")).cloned().unwrap_or(FieldPlacement { visible: false, ..FieldPlacement::at_origin("Reference") });
-    vec![(reference, ps.id.clone()), (value, ps.net.clone())]
+    let stored_of = |name: &str| stored.and_then(|s| s.iter().find(|p| p.name == name)).cloned();
+    let users = power_user_specs(sch, ps);
+    let value = stored_of("Value").unwrap_or_else(|| power_value_placement(ps, &ps.lib_id));
+    let reference = stored_of("Reference").unwrap_or(FieldPlacement { visible: false, ..FieldPlacement::at_origin("Reference") });
+    if users.is_empty() {
+        return vec![(reference, ps.id.clone()), (value, ps.net.clone())];
+    }
+    // Autoplace Fields over the Value as it is shown and the user fields (`AUTOPLACER` stacks every shown field), each styled as the sheet keeps it
+    let styled = |sp: FieldSpec| match stored_of(&sp.name) {
+        Some(p) => FieldSpec { visible: sp.visible, italic: sp.italic, ..sp.styled_by(&p) },
+        None => sp,
+    };
+    let mut specs = vec![FieldSpec::new("Value", ps.net.clone(), true).styled_by(&value)];
+    specs.extend(users.into_iter().map(styled));
+    let auto = power_autoplaced(ps, &specs);
+    let mut out = vec![(reference, ps.id.clone())];
+    for (sp, home) in specs.iter().zip(auto) {
+        let mut p = stored_of(&sp.name).unwrap_or(home);
+        p.name = sp.name.clone();
+        p.visible = sp.visible;
+        if sp.name != "Value" {
+            p.italic = sp.italic;
+        }
+        out.push((p, sp.text.clone()));
+    }
+    out
 }
 
 /// The fields of a power symbol on the sheet: its Value (the net it asserts) where the placements put it, its Reference hidden.

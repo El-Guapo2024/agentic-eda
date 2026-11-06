@@ -366,3 +366,51 @@ fn put_unit_keys(sch: &mut eda_model::ir::SchematicSection, key: &str, v: UnitKe
         sch.extras.excluded_from_pos_files.insert(key);
     }
 }
+
+impl<'a> Board<'a> {
+    /// [`crate::sch_edit::SchCmd::SetSymbolOrientation`]: Symbol Properties' Angle and Mirror (`DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow`:
+    /// `SetOrientation( SYM_ORIENT_0 | SYM_ORIENT_90 | SYM_ORIENT_270 | SYM_ORIENT_180 )`, which starts again from the unturned symbol, then
+    /// `SetOrientation( SYM_MIRROR_X | SYM_MIRROR_Y )` for "Around X axis" / "Around Y axis"), kept as `GetOrientation` reads the matrix back (the first of its
+    /// twelve forms, `Matrix::orientation`). Its fields turn with it, as they are in its frame. **Differs**: the symbol keeps its `at` (the corner of its box here,
+    /// as the Properties panel's Orientation and Mirror rows and the canvas's lone X / Y keep it), where `SetOrientation` turns it about the library symbol's
+    /// origin. A power symbol has no mirror flag here (it is symmetric about its own vertical axis): a mirror that leaves the picture mirrored
+    /// is folded into a turn, as the canvas's X and Y fold it (`sch_move::mirror_item`). Refused when the orientation is the one it has.
+    pub(crate) fn set_symbol_orientation(&mut self, id: &str, unit: Option<u32>, angle: u32, mirror: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        use crate::sch_scene::Matrix;
+        if angle % 90 != 0 {
+            return Err(fail("ops_bad_orientation", id, format!("the angle is 0, 90, 180 or 270 degrees, not {angle}")));
+        }
+        let turned = Matrix::of(((angle % 360) * 1000) as eda_model::ir::Millideg, false, false);
+        let m = match mirror {
+            None | Some("") => turned,
+            Some("x") => turned.then(Matrix::MIRROR_X),
+            Some("y") => turned.then(Matrix::MIRROR_Y),
+            Some(other) => return Err(fail("ops_bad_orientation", id, format!("the mirror is \"x\" or \"y\", not \"{other}\""))),
+        };
+        let sch = self.schematic_mut()?;
+        if sch.extras.is_locked(id) {
+            return Err(fail("ops_locked", id, "the symbol is locked"));
+        }
+        if let Some(p) = sch.power_symbols.iter_mut().find(|p| p.id == id) {
+            let m = if m.x1 * m.y2 - m.y1 * m.x2 < 0 { crate::sch_move::mul(m, Matrix::MIRROR_Y) } else { m };
+            let rot = m.orientation().0;
+            if rot == p.rot {
+                return Err(fail("ops_nothing_to_change", id, "the power symbol already has this orientation"));
+            }
+            p.rot = rot;
+            return Ok(());
+        }
+        let i = match unit {
+            Some(u) => sch.symbols.iter().position(|s| s.id == id && s.unit == u),
+            None => sch.symbols.iter().position(|s| s.id == id),
+        }
+        .ok_or_else(|| fail("ops_unknown_symbol", id, "no symbol or power symbol with this reference on the sheet"))?;
+        let s = &mut sch.symbols[i];
+        let now = m.orientation();
+        if now == (s.rot, s.mirrored, s.mirror_y) {
+            return Err(fail("ops_nothing_to_change", id, "the symbol already has this orientation"));
+        }
+        (s.rot, s.mirrored, s.mirror_y) = now;
+        Ok(())
+    }
+}

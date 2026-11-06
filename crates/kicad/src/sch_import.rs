@@ -381,10 +381,12 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             // `SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol` reads each field's own `(at ..)` (`parseSchField`), and `saveSymbol` writes it back: a Value placed
             // by hand stays where it is; only `(fields_autoplaced yes)` lets `AutoplaceFields` place it again (r4 D4-L2). The frame is the writer's
             // (`eda_engine::fields::power_placements`: from the symbol's `at`, through its turn, never mirrored).
+            // Its user fields too (`SchExtras::power_props`' list): drawn where the file has them (UI-LEFT-2 SS7).
             if !crate::sch_extras_io::parse_bool(item, "fields_autoplaced").unwrap_or(false) {
                 let places: Vec<eda_model::ir::FieldPlacement> = ["Reference", "Value"]
                     .iter()
                     .filter_map(|name| standard_field_of(item, name))
+                    .chain(user_fields_of(item))
                     .map(|f| f.placement_on(at_pin, rot, false, 0.0))
                     .collect();
                 if !places.is_empty() {

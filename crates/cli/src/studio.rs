@@ -2308,7 +2308,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         .power_symbols
         .iter()
         .map(|p| {
-            let mut fields: Vec<Value> = eda_engine::fields::power_fields(&sch, p).iter().map(|f| page_field_json_in(&sch, &p.id, f)).collect();
+            let places = eda_engine::fields::power_placements(&sch, p);
+            let mut fields: Vec<Value> = eda_engine::fields::power_fields(&sch, p).iter().zip(places.iter()).map(|(f, (place, _))| with_local_place(page_field_json_in(&sch, &p.id, f), place)).collect();
             if let Some(sh) = &shown {
                 sh.annotate_power_fields(p, &mut fields);
             }
@@ -2760,9 +2761,18 @@ pub(crate) fn page_field_json(owner: &str, f: &eda_engine::fields::PageField) ->
 /// fields of (a part the model does not know, a schematic read from a KiCad file).
 pub(crate) fn owner_fields_json(sch: &eda_model::ir::SchematicSection, model: &eda_model::ConstraintModel, owner: &str) -> Vec<Value> {
     match eda_engine::fields_edit::OwnerCtx::new(sch, model, owner) {
-        Some(ctx) => ctx.page_fields(sch).iter().map(|f| page_field_json_in(sch, owner, f)).collect(),
+        Some(ctx) => ctx.current(sch).iter().zip(ctx.page_fields(sch).iter()).map(|(p, f)| with_local_place(page_field_json_in(sch, owner, f), p)).collect(),
         None => Vec::new(),
     }
+}
+
+/// A field's place in its item's own unturned frame, beside where it is on the sheet: Symbol Properties' X Position, Y Position and Orientation columns
+/// (`FIELDS_GRID_TABLE::GetValue`: `FDC_POSX` / `FDC_POSY`, the text position offset from the symbol's, `field.Offset( -m_symbol->GetPosition() )`, and
+/// `FDC_ORIENTATION`, `GetTextAngle()`), nanometres from the item's origin (UI-LEFT-2 SS7).
+pub(crate) fn with_local_place(mut v: Value, p: &eda_model::ir::FieldPlacement) -> Value {
+    v["local"] = json!([p.dx, p.dy]);
+    v["local_vertical"] = json!(p.angle == 90_000);
+    v
 }
 
 /// `"auto"`, `"manual"` or null: whether Autoplace Fields put the fields of the item `key` where they are (`SCH_ITEM::GetFieldsAutoplaced`).
