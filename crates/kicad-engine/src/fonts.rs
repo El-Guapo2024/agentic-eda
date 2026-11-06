@@ -201,6 +201,124 @@ pub fn find_font(face: &str, bold: bool, italic: bool) -> Option<FoundFont> {
     found
 }
 
+/// `FONTCONFIG::FF_RESULT` of a match that found a file: the face asked for, another in its place, or it without the bold or the italic asked for (which
+/// `OUTLINE_FONT::LoadFont` then fakes: `SetFakeBold`, `SetFakeItal`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindResult {
+    Ok,
+    Substitute,
+    MissingBold,
+    MissingItal,
+    MissingBoldItal,
+}
+
+impl FindResult {
+    pub fn word(self) -> &'static str {
+        match self {
+            FindResult::Ok => "ok",
+            FindResult::Substitute => "substitute",
+            FindResult::MissingBold => "missing_bold",
+            FindResult::MissingItal => "missing_ital",
+            FindResult::MissingBoldItal => "missing_bold_ital",
+        }
+    }
+
+    /// `if( retval == FF_MISSING_BOLD || retval == FF_MISSING_BOLD_ITAL ) font->SetFakeBold();`
+    pub fn fake_bold(self) -> bool {
+        matches!(self, FindResult::MissingBold | FindResult::MissingBoldItal)
+    }
+
+    /// `if( retval == FF_MISSING_ITAL || retval == FF_MISSING_BOLD_ITAL ) font->SetFakeItal();`
+    pub fn fake_ital(self) -> bool {
+        matches!(self, FindResult::MissingItal | FindResult::MissingBoldItal)
+    }
+}
+
+/// What `FONTCONFIG::FindFont` makes of fontconfig's match: the file, its family names (`getAllFamilyStrings`), its style, and the result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontMatch {
+    pub found: FoundFont,
+    pub families: Vec<String>,
+    pub style: String,
+    pub result: FindResult,
+}
+
+/// `FONTCONFIG::FindFont`'s verdict on a match of `families` in `style` for `face` (bold and italic as asked, "bold" in the name making it bold): the style's words say
+/// whether the face is bold ("thin", "light", "regular", "roman" and "book" are not; "medium", "semibold" and "demibold" are what was asked; "bold", "heavy", "black",
+/// "thick" and "dark" are) and italic ("italic", "oblique", "slant"); a family starting with the name asked for gives `FF_MISSING_*`, `FF_SUBSTITUTE` or `FF_OK`;
+/// none of them is a substitute -- unless the family and style written out are the name asked for, case aside ("If we missed a case but the matching found the original
+/// font name, then we are not substituting").
+pub fn classify_match(face: &str, bold: bool, italic: bool, families: &[String], style: &str) -> FindResult {
+    let lower = face.to_lowercase();
+    let bold = bold || ["bold", "heavy", "black", "thick", "dark"].iter().any(|w| lower.contains(w));
+    let s = style.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| s.contains(w));
+    let has_bold = if has(&["thin", "light", "regular", "roman", "book"]) {
+        false
+    } else if has(&["medium", "semibold", "demibold"]) {
+        bold
+    } else {
+        has(&["bold", "heavy", "black", "thick", "dark"])
+    };
+    let has_ital = has(&["italic", "oblique", "slant"]);
+    let mut result = FindResult::Substitute;
+    if families.iter().any(|f| f.to_lowercase().starts_with(&lower)) {
+        result = if bold && !has_bold && italic && !has_ital {
+            FindResult::MissingBoldItal
+        } else if bold && !has_bold {
+            FindResult::MissingBold
+        } else if italic && !has_ital {
+            FindResult::MissingItal
+        } else if bold != has_bold || italic != has_ital {
+            FindResult::Substitute
+        } else {
+            FindResult::Ok
+        };
+    }
+    if result == FindResult::Substitute {
+        // `fontName` is the first family and the style, ':' between (`styleStr.Replace( ' ', ':' )`), written back with spaces
+        let mut name = families.first().cloned().unwrap_or_default();
+        if !style.is_empty() {
+            name = format!("{name} {style}");
+        }
+        if name.to_lowercase() == face.to_lowercase() {
+            result = FindResult::Ok;
+        }
+    }
+    result
+}
+
+/// The comma-separated values of a fontconfig format's element (`%{family}`), a `\,` kept in its value.
+fn fc_values(s: &str) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.last_mut().expect("one").extend(chars.next()),
+            ',' => out.push(String::new()),
+            _ => out.last_mut().expect("one").push(c),
+        }
+    }
+    out.into_iter().filter(|v| !v.is_empty()).collect()
+}
+
+/// `FONTCONFIG::FindFont` through `fc-match`: the file fontconfig matches the pattern `FindFont` builds to, its families and style, and the verdict; `None` for no
+/// file (`FF_ERROR`: `FONT::GetFont` then falls back to the stroke font).
+pub fn match_font(face: &str, bold: bool, italic: bool) -> Option<FontMatch> {
+    let pattern = find_font_pattern(face, bold, italic);
+    let bin = std::env::var("EDA_FC_MATCH").unwrap_or_else(|_| "fc-match".to_string());
+    let out = Command::new(bin).arg("-f").arg("%{file}\t%{index}\t%{family}\t%{style[0]}\n").arg(&pattern).output().ok().filter(|o| o.status.success())?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let line = text.lines().next()?.to_string();
+    let mut parts = line.split('\t');
+    let path = parts.next().filter(|p| !p.is_empty())?;
+    let index = parts.next().and_then(|i| i.trim().parse().ok()).unwrap_or(0);
+    let families = fc_values(parts.next().unwrap_or(""));
+    let style = parts.next().unwrap_or("").to_string();
+    let result = classify_match(face, bold, italic, &families, &style);
+    Some(FontMatch { found: FoundFont { path: PathBuf::from(path), index, family: families.first().cloned().unwrap_or_default() }, families, style, result })
+}
+
 /// `FONT::GetFont`'s stroke test: no face, or one that names the stroke font.
 fn is_stroke(face: Option<&str>) -> bool {
     match face {
@@ -387,6 +505,26 @@ mod tests {
         assert_eq!(find_font_pattern("DejaVu Sans", true, true), "DejaVu Sans:style=Bold,Italic");
         assert_eq!(find_font_pattern("Arial Black", false, true), "Arial Black:style=Bold,Italic");
         assert_eq!(find_font_pattern("A-B:C,D", false, false), "A\\-B\\:C\\,D");
+    }
+
+    /// `FONTCONFIG::FindFont`'s verdicts: the face found (DejaVu Sans is "Book"), its bold asked of a regular file, italic asked of a bold one (fontconfig's `style=Bold,Italic`
+    /// matches DejaVu Sans Bold first), a name not found at all, a "semibold" style.
+    #[test]
+    fn find_fonts_verdicts() {
+        let dejavu = vec!["DejaVu Sans".to_string()];
+        assert_eq!(classify_match("DejaVu Sans", false, false, &dejavu, "Book"), FindResult::Ok);
+        assert_eq!(classify_match("dejavu sans", true, false, &dejavu, "Bold"), FindResult::Ok);
+        assert_eq!(classify_match("DejaVu Sans", true, false, &dejavu, "Book"), FindResult::MissingBold);
+        assert_eq!(classify_match("DejaVu Sans", true, true, &dejavu, "Bold"), FindResult::MissingItal);
+        assert_eq!(classify_match("DejaVu Sans", true, true, &dejavu, "Book"), FindResult::MissingBoldItal);
+        assert_eq!(classify_match("DejaVu Sans", false, false, &dejavu, "Bold"), FindResult::Substitute, "a bold face for a regular one");
+        assert_eq!(classify_match("Arial", false, false, &["Liberation Sans".to_string()], "Regular"), FindResult::Substitute);
+        assert_eq!(classify_match("Arial Black", false, false, &["Arial".to_string()], "Black"), FindResult::Ok, "a bold name is asked bold");
+        assert_eq!(classify_match("Foo", true, false, &["Foo".to_string()], "SemiBold"), FindResult::Ok);
+        assert_eq!(classify_match("Foo Bold", false, false, &["Foo".to_string()], "Bold"), FindResult::Ok);
+        assert!(FindResult::MissingBoldItal.fake_bold() && FindResult::MissingBoldItal.fake_ital() && !FindResult::MissingBold.fake_ital());
+        assert_eq!(fc_values("WenQuanYi Zen Hei,文泉驛正黑"), ["WenQuanYi Zen Hei", "文泉驛正黑"]);
+        assert_eq!(fc_values("A\\,B,C"), ["A,B", "C"]);
     }
 
     /// `FONT::GetFont`: no face and the stroke font's name are the stroke font, nothing to embed; a text box's face counts as a text's.

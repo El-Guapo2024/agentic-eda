@@ -625,8 +625,15 @@ test("a text: every edit is an edit_text with the rest of the text as it was", (
   assert.deepEqual(edit(b, ["txt_a"], "Vertical Justification", "bottom"), style({ valign: "bottom" }));
   assert.deepEqual(edit(b, ["txt_a"], "Knockout", true), style({ knockout: true }));
   assert.deepEqual(edit(b, ["txt_a"], "Auto Thickness", true), style({ auto_thickness: true }));
+  // The Font row (`SetFontProp`, UI-LEFT-2 CC1): a face through edit_text_style; "KiCad Font" again is the stroke font ("" in the verb).
   assert.equal(rowOf(b, ["txt_a"], "Font")!.value, "KiCad Font");
-  assert.equal(rowOf(b, ["txt_a"], "Font")!.writable, false);
+  assert.equal(rowOf(b, ["txt_a"], "Font")!.writable, true);
+  assert.deepEqual(edit(b, ["txt_a"], "Font", "DejaVu Sans"), style({ face: "DejaVu Sans" }));
+  assert.deepEqual(edit(b, ["txt_a"], "Font", "KiCad Font"), []);
+  b.drawings!.texts[0]!.face = "DejaVu Sans";
+  assert.equal(rowOf(b, ["txt_a"], "Font")!.value, "DejaVu Sans");
+  assert.deepEqual(edit(b, ["txt_a"], "Font", "KiCad Font"), style({ face: "" }));
+  b.drawings!.texts[0]!.face = null;
   // A text with an automatic width: a thickness typed ends it (`SetTextThickness`).
   const t = b.drawings!.texts[0]!;
   t.auto_thickness = true;

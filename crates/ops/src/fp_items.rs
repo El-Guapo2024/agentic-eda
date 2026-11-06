@@ -155,6 +155,9 @@ pub struct TextLook {
     pub knockout: bool,
     #[serde(default = "yes")]
     pub keep_upright: bool,
+    /// The font (`SetFont`, UI-LEFT-2 CC1): a face, or "" (or "KiCad Font") for the stroke font; left out, the text keeps the one it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<String>,
 }
 
 fn yes() -> bool {
@@ -569,6 +572,10 @@ impl Board<'_> {
                     };
                     e.width_nm = l.width_nm.filter(|w| *w != text.size_nm);
                     e.knockout = l.knockout;
+                    if let Some(f) = &l.face {
+                        let f = f.trim();
+                        e.face = (!f.is_empty() && !f.starts_with("KiCad Font")).then(|| f.to_string());
+                    }
                     fp.kicad.text_extras.retain(|x| &x.id != id);
                     if !e.is_default() {
                         fp.kicad.text_extras.push(e);

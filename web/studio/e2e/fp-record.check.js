@@ -1,4 +1,4 @@
-// A library footprint on the board whole, UI-LEFT PP5, PP14 and FF4 (PARITY-pcb.md section 94): a footprint placed from a library of the tables, or a part changed to it,
+// A library footprint on the board whole, UI-LEFT PP5, PP14 and FF4 (PARITY-pcb.md section 95): a footprint placed from a library of the tables, or a part changed to it,
 // keeps the library's pads' layer sets, die lengths and fabrication properties, its description and its dimension, table and keepout (`PCB_BASE_FRAME::LoadFootprint`'s
 // footprint added whole, `ExchangeFootprint` keeping `aNew`'s children), so Compare with Library finds nothing; the dimension and the table are drawn with the footprint and a click
 // on one picks the footprint; R and F turn and flip the dimension, the table and the keepout with it (`FOOTPRINT::SetOrientation`, `Flip`); Edit Footprint's copy (Ctrl+E) shows

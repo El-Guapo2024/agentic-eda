@@ -567,21 +567,21 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     },
     TEXT_PROPS
   );
-  // "Font" (`GetFontProp` / `SetFontProp`): eeschema's "Default Font" first; a free text's and a label's face is its `text_attrs` (`set_text_attrs`, UI-LEFT S6).
-  // A text box's and a directive label's are edited in their dialogs.
+  // "Font" (`GetFontProp` / `SetFontProp`): eeschema's "Default Font" first; a free text's, a label's and a text box's face is its `text_attrs` (`set_text_attrs`, UI-LEFT S6;
+  // a text box's is the sheet's `graphic_text_attrs`). A directive label has none.
+  const faceOf = (i: SchItem, c: SchCtx): string => i.text?.font ?? i.label?.font ?? (isTextBox(i) ? c.sch.graphic_text_attrs?.[i.id]?.font : undefined) ?? "";
   add(
     {
       owner: "EDA_TEXT",
       name: "Font",
       kind: "string",
-      get: (i) => i.text?.font ?? i.label?.font ?? "Default Font",
-      writeable: (i) => !!(i.text || i.label),
-      readOnlyReason: "A text box's font is set in Text Box Properties; a directive label has none.",
-      set: (i, v) => {
+      get: (i, c) => faceOf(i, c) || "Default Font",
+      writeable: (i) => !!(i.text || i.label || isTextBox(i)),
+      readOnlyReason: "A directive label has no text of its own, and so no font.",
+      set: (i, v, c) => {
         const next = String(v).trim();
         const font = next === "Default Font" ? "" : next;
-        const now = i.text?.font ?? i.label?.font ?? "";
-        return font === now ? [] : [{ op: "sch_edit", verb: "set_text_attrs", ids: [i.id], font } as Cmd];
+        return font === faceOf(i, c) ? [] : [{ op: "sch_edit", verb: "set_text_attrs", ids: [i.id], font } as Cmd];
       },
     },
     TEXT_PROPS

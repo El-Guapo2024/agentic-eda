@@ -150,6 +150,18 @@ const SUPER_HEIGHT_OFFSET = 0.35;
 const SUB_HEIGHT_OFFSET = 0.15;
 /** font_metrics.h METRICS::m_OverbarHeight -- distance above the baseline, as a fraction of glyph size. */
 const OVERBAR_HEIGHT = 1.23;
+/** The overbar's height now: the default, or the schematic's Overbar offset ratio while a sheet is drawn (`SCH_ITEM::GetFontMetrics`: `m_FontMetrics`). */
+let overbarHeight = OVERBAR_HEIGHT;
+
+/** The overbar's height now (kicad-port/kicadText.ts draws its overbars at it too). */
+export const strokeOverbarHeight = (): number => overbarHeight;
+
+/** Set the overbar's height (a fraction of the size; null for the default); returns the one it replaces, to put back. */
+export function setStrokeOverbarHeight(h: number | null): number {
+  const was = overbarHeight;
+  overbarHeight = h ?? OVERBAR_HEIGHT;
+  return was;
+}
 
 interface PlacedGlyph {
   glyph: Glyph;
@@ -191,7 +203,7 @@ function layout(text: string, sizeNm: number): Layout {
     if (tok.style.overbar) {
       if (overbarStart === null) {
         overbarStart = cursorX;
-        overbarY = yOffset - scaled * OVERBAR_HEIGHT;
+        overbarY = yOffset - scaled * overbarHeight;
       }
     } else {
       flushOverbar(cursorX);

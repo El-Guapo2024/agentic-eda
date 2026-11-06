@@ -10,12 +10,14 @@
 // A label's field (UI-LEFT S6: its net class, a global label's Sheet References, any other) opens here too: moved, turned or justified by hand it stays where it was
 // put (the label's fields are no longer autoplaced). **Differs**: its size, bold and shown name are not offered (`LabelField` keeps none of them); the Sheet
 // References keep their text and Schematic Setup's visibility.
+import { schematicWithCarry, useSchCarry } from "../state/schCarryStore";
+import { editCarried } from "../actions/schPlaceActions";
 import { useState } from "react";
 import { fieldDialogCaption, fieldSizeNm, fieldEditCmd, findField, isStandardSymbolField, FIELD_SIZE_MAX_NM, FIELD_SIZE_MIN_NM, type FieldChanges } from "../kicad-port/schFieldEdit";
 import { mmToNm, nmToMm } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
-import type { SchField } from "../api/types";
+import type { Cmd, SchField } from "../api/types";
 import type { FieldOwnerKind } from "../kicad-port/schFieldEdit";
 import { chosenFont, DEFAULT_FONT, oneStep } from "../kicad-port/textLooks";
 import { ColorSwatch, FontSelect, useFontFamilies } from "./TextLookControls";
@@ -31,13 +33,16 @@ const V_ALIGN: Array<{ value: SchField["v"]; label: string }> = [
   { value: "bottom", label: "Bottom" },
 ];
 
-export function FieldPropertiesDialog({ id }: { id: string }) {
-  const sch = useStudioState().schematic;
+/** `carried`: a field of the symbol or power symbol a placing tool holds (U, V, F while it rides): read off the page's drawing of it, and OK changes the item in the hand. */
+export function FieldPropertiesDialog({ id, carried }: { id: string; carried?: boolean }) {
+  const base = useStudioState().schematic;
+  const carry = useSchCarry();
+  const sch = carried && base && carry ? schematicWithCarry(base, carry) : base;
   const item = sch ? findField(sch, id) : null;
-  return item ? <FieldForm key={id} owner={item.ownerKind} field={item.field} /> : null;
+  return item ? <FieldForm key={id} owner={item.ownerKind} field={item.field} carried={!!carried} /> : null;
 }
 
-function FieldForm({ owner, field }: { owner: FieldOwnerKind; field: SchField & { id: string } }) {
+function FieldForm({ owner, field, carried }: { owner: FieldOwnerKind; field: SchField & { id: string }; carried: boolean }) {
   const api = useStudioApi();
   const dispatch = useStudioDispatch();
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
@@ -87,6 +92,13 @@ function FieldForm({ owner, field }: { owner: FieldOwnerKind; field: SchField & 
     const looks = fontChanged || colorChanged ? ({ op: "sch_edit", verb: "set_field_looks", ids: [field.id], ...(fontChanged ? { font: nextFont } : {}), ...(colorChanged ? { color: color ?? { r: 0, g: 0, b: 0, a: 0 } } : {}) } as never) : null;
     const cmd = oneStep([fieldEditCmd(field, changes), looks]);
     if (!cmd) return close();
+    if (carried) {
+      // the item in the hand takes the edit (actions/schPlaceActions.ts `editCarried`); its place is Autoplace Fields' once the click puts it down
+      // (`AutoplaceFields( screen, AUTOPLACE_AUTO )`), so a position typed here is not kept
+      const parts = (cmd.op === "batch" ? cmd.cmds : [cmd]).map((c) => Object.fromEntries(Object.entries(c).filter(([k]) => k !== "at")) as unknown as Cmd);
+      editCarried(parts.filter((c) => Object.keys(c).some((k) => !["op", "verb", "id"].includes(k))));
+      return close();
+    }
     void api.cmd(cmd).then((ok) => ok && close());
   };
   return (

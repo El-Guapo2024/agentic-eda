@@ -1566,9 +1566,7 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
             // 2..N as well).
             let (width, _height) = eda_engine::geometry::node_size(part, resolved, corner_unit.unwrap_or(1));
             let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(sym_data, corner_unit.unwrap_or(1));
-            for g in sym_data.graphics.iter().filter(|g| g.unit() == 0) {
-                write_symbol_graphic(out, &baked_graphic(g, default_baker, width as f64, x0, y1));
-            }
+            write_unit_graphics(out, sym_data, 0, style, default_baker, width as f64, x0, y1);
         }
         None => {
             let (width, height) = eda_engine::geometry::node_size(part, None, 1);
@@ -1613,9 +1611,7 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
         // array) -- unit 1 of a single-unit part has none of these beyond
         // what `_0_1` already drew, same as before this loop existed.
         if let Some(sym_data) = resolved {
-            for g in sym_data.graphics.iter().filter(|g| g.unit() == u) {
-                write_symbol_graphic(out, &baked_graphic(g, baker, width as f64, x0, y1));
-            }
+            write_unit_graphics(out, sym_data, u, style, baker, width as f64, x0, y1);
         }
         for (port_idx, port) in ports.iter().enumerate() {
             let Some(pin_idx) = pin_of_port[port_idx] else { continue };
@@ -1710,6 +1706,32 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
             .unwrap();
         }
         writeln!(out, "\t\t\t)").unwrap();
+    }
+}
+
+/// The graphics of unit `unit` (0: the ones every unit shares) of `sym`, the library symbol as body style `style` draws it, baked through `baker`'s turn and mirror
+/// ([`baked_graphic`]), for its `(symbol "<name>_<unit>_<style>" ..)` block. A library text box is written as KiCad's `(text_box ..)`
+/// (`SCH_IO_KICAD_SEXPR_LIB_CACHE::saveTextBox`, [`crate::symbol_lib::write_symbol_graphic`]) in place of the rectangle the engine draws its border and fill with
+/// (`LibConnectivity::text_boxes`), so kicad-cli's plots have its text: its corners baked like every other point, its text running the way `SCH_TEXTBOX::Plot` runs
+/// it for a symbol placed so ([`eda_model::sym_textbox::plotted_text_box`]: the other way after a quarter turn, the justification the library's), as the symbol itself
+/// is written unturned. Its line style is the default one (the engine keeps none for any graphic).
+#[allow(clippy::too_many_arguments)]
+fn write_unit_graphics(out: &mut String, sym: &eda_model::LibSymbol, unit: u32, style: u32, baker: &SymbolInstance, width: f64, x0: f64, y1: f64) {
+    let boxes: Vec<&eda_model::ir::LibrarySymbolGraphic> = sym.connectivity.text_boxes_of_style(style).filter(|t| t.unit() == unit).collect();
+    // the rectangles that are those boxes' borders, one for each
+    let mut borders: Vec<eda_model::SymbolGraphic> = boxes.iter().flat_map(|t| t.to_engine_graphics()).collect();
+    for g in sym.graphics.iter().filter(|g| g.unit() == unit) {
+        if let Some(i) = borders.iter().position(|b| b == g) {
+            borders.swap_remove(i);
+            continue;
+        }
+        write_symbol_graphic(out, &baked_graphic(g, baker, width, x0, y1));
+    }
+    let (rot, _) = eda_engine::symgeom::kicad_turn(baker.rot, baker.mirrored, baker.mirror_y);
+    let quarter_turn = eda_model::sym_textbox::turns_a_quarter(rot);
+    for t in boxes {
+        let placed = eda_model::sym_textbox::plotted_text_box(t, quarter_turn, |p| baked_real_point(baker, width, x0, y1, p));
+        crate::symbol_lib::write_symbol_graphic(out, &placed, None, None);
     }
 }
 

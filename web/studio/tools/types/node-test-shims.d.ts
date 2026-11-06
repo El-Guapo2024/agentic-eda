@@ -28,8 +28,15 @@ declare module "node:assert/strict" {
 // Reading a fixture file shared with the Rust tests (src/kicad/*.json): the unit-test build has no JSON module import.
 declare module "node:fs" {
   export function readFileSync(path: string, encoding: "utf8"): string;
+  export function readFileSync(path: string): Uint8Array;
   export function writeFileSync(path: string, data: string): void;
   export function existsSync(path: string): boolean;
+  export function mkdtempSync(prefix: string): string;
+}
+
+// Running kicad-cli and fontconfig in a slow proof (kicad-port/kicadTextProof.test.ts, `EDA_SLOW_TESTS=1`).
+declare module "node:child_process" {
+  export function execFileSync(file: string, args: readonly string[], options?: { encoding?: "utf8"; stdio?: unknown }): string;
 }
 
 // `process.env` (a test that rewrites its golden file when asked: pcbQuery.test.ts).

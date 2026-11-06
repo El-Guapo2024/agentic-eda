@@ -8,6 +8,7 @@
 import type { LabelShape, Schematic, Sheet } from "../api/types";
 import type { Box, P } from "./schItemGeom";
 import { defaultPenNm } from "./schText";
+import { textOffsetNm } from "./schFormattingLook";
 
 export type SheetSide = "left" | "right" | "top" | "bottom";
 
@@ -15,8 +16,6 @@ export type SheetSide = "left" | "right" | "top" | "bottom";
 export const SHEET_PIN_TEXT_SIZE_NM = 1_270_000;
 /** `DANGLING_SYMBOL_SIZE`: 12 mils. */
 const DANGLING_NM = 304_800;
-/** `m_textOffsetRatio` (0.15) of the text size: `EDA_TEXT`'s margin around a label's text. */
-const TEXT_OFFSET_RATIO = 0.15;
 
 /** The border of its sheet a pin at `at` is on (the order the writer and the painter use: left, right, top, then bottom). */
 export function sheetPinSide(sheet: { at: readonly [number, number]; size: readonly [number, number] }, at: readonly [number, number]): SheetSide {
@@ -28,7 +27,8 @@ export function sheetPinSide(sheet: { at: readonly [number, number]; size: reado
 /** `SCH_HIERLABEL::GetBodyBoundingBox` of a sheet pin on `side`: the flag and the name, from the pin's own point (`widthNm` is the name's width in the font). */
 export function sheetPinBodyBox(at: readonly [number, number], side: SheetSide, widthNm: number, sizeNm = SHEET_PIN_TEXT_SIZE_NM): Box {
   const pen = defaultPenNm(sizeNm);
-  const margin = Math.round(sizeNm * TEXT_OFFSET_RATIO);
+  // `GetTextOffset()`: Schematic Setup's Label offset ratio (`m_TextOffsetRatio`) of the size
+  const margin = textOffsetNm(sizeNm);
   const height = sizeNm + pen + margin;
   const length = widthNm + height; // "add height for triangular shapes"
   let x = at[0];

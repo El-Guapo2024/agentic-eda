@@ -722,6 +722,12 @@ fn handle(
         ("POST", "/api/sch/place_preview") => respond(stream, "200 OK", "application/json", crate::sch_place_api::place_preview(dir, &body).to_string().as_bytes()),
         // The font families the machine has, for Symbol Properties' Font column (`crate::fonts_api`).
         ("GET", "/api/fonts") => respond(stream, "200 OK", "application/json", crate::fonts_api::fonts().to_string().as_bytes()),
+        // The outline font a text's face is drawn with (`FONTCONFIG::FindFont`'s file and verdict) and the file itself, for the canvas (`crate::fonts_api`, UI-LEFT-2 CC1).
+        ("GET", "/api/fonts/match") => respond(stream, "200 OK", "application/json", crate::fonts_api::font_match(target).to_string().as_bytes()),
+        ("GET", "/api/fonts/file") => match crate::fonts_api::font_file(target) {
+            Some((bytes, kind)) => respond(stream, "200 OK", kind, &bytes),
+            None => respond(stream, "404 Not Found", "text/plain", b"no font file"),
+        },
         // Page Settings' drawing sheet file: a picked `.kicad_wks` read for the dialog, where to browse, and a file from the person's computer put in the board's folder
         ("GET", "/api/drawing_sheet") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::pick(dir, &query_value(target, "path")).to_string().as_bytes()),
         ("GET", "/api/drawing_sheet/folders") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::folders(dir).to_string().as_bytes()),
@@ -2137,6 +2143,10 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if let Some(shown) = shown.as_ref().and_then(|sh| sh.symbol_shown_json(&owner)) {
                 symbol["shown"] = shown;
             }
+            // the shown texts of its library text boxes where a variable changes one (`expandLibItemTextVars`), by the box's `index` in `lib_symbols`
+            if let Some(boxes) = shown.as_ref().zip(resolved.as_ref()).and_then(|(sh, lib)| sh.text_box_shown_json(&owner, lib)) {
+                symbol["text_box_shown"] = boxes;
+            }
             if path_unit != s.unit {
                 symbol["path_unit"] = json!(path_unit);
             }
@@ -2479,6 +2489,11 @@ fn schematic_setup_json(design: &eda_model::ir::Design, model: &eda_model::Const
         "default_line_width_nm": f.default_line_width_nm,
         "default_text_size_nm": f.default_text_size_nm,
         "pin_symbol_size_nm": f.pin_symbol_size_nm,
+        // the text ratios the painter lays labels and overbars out by (`SCH_RENDER_SETTINGS::m_TextOffsetRatio`, `m_LabelSizeRatio`,
+        // `m_FontMetrics.m_OverbarHeight`, which `SCH_EDIT_FRAME` copies from `SCHEMATIC_SETTINGS`)
+        "text_offset_ratio": f.text_offset_ratio,
+        "label_size_ratio": f.label_size_ratio,
+        "overbar_offset_ratio": f.overbar_offset_ratio,
         "dash_ratio": f.dash_ratio,
         "gap_ratio": f.gap_ratio,
         "hop_over_size_choice": f.hop_over_size_choice,
@@ -2790,6 +2805,19 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
     if let Some(a) = alt {
         graphics.extend(a.0.iter().filter(|g| !normal.0.contains(g)).map(|g| graphic(g, 2)));
         pins.extend(a.1.iter().filter(|p| !normal.1.contains(p)).map(|p| pin(p, 2)));
+    }
+    // the text in each library text box (`SCH_PAINTER::draw( SCH_TEXTBOX )` of the placed symbol's temp copy, `eda_model::sym_textbox`): its border and fill are the
+    // rectangle above. `index` is the box's place in `LibConnectivity::text_boxes`, by which a placed symbol's `text_box_shown` gives its shown text; `margin_mm`
+    // the margin it has (`GetLegacyTextMargin` when it says none)
+    for (i, t) in s.connectivity.text_boxes.iter().enumerate() {
+        if let eda_model::ir::LibrarySymbolGraphic::TextBox { unit, body_style, text, start, end, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, text_color, .. } = t {
+            let style = if alt.is_none() { 0 } else { *body_style };
+            let mut j = json!({ "kind": "text_box", "index": i, "unit": unit, "body_style": style, "text": text, "start": pt(*start), "end": pt(*end), "angle_deg": angle_deg, "size_mm": size_mm, "bold": bold, "italic": italic, "h_align": h_align, "v_align": v_align, "margin_mm": eda_model::ir::text_box_margin_mm(*size_mm, *margin_mm) });
+            if let Some(c) = text_color {
+                j["text_color"] = json!(c);
+            }
+            graphics.push(j);
+        }
     }
     // how the symbol's pins show their texts (`(pin_names (hide yes) (offset x))`, `(pin_numbers (hide yes))`)
     json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "keywords": s.connectivity.keywords, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })

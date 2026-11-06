@@ -43,8 +43,8 @@ export function useLinkChoices(): LinkChoice[] {
  * The Font choice: `value` is the font's name ("Default Font" for none), `onChange` gets the name picked. A font the machine's list lacks is shown "<not found>"
  * (`SetFontSelection`), and picking it again keeps the font as it is (`HaveFontSelection` is false for it).
  */
-export function FontSelect({ families, current, value, onChange, label = "Font" }: { families: readonly string[]; current: string | null | undefined; value: string; onChange: (v: string) => void; label?: string }) {
-  const { choices } = fontChoices(families, current);
+export function FontSelect({ families, current, value, onChange, label = "Font", withDefault = true }: { families: readonly string[]; current: string | null | undefined; value: string; onChange: (v: string) => void; label?: string; withDefault?: boolean }) {
+  const { choices } = fontChoices(families, current, withDefault);
   const shown = choices.includes(value) ? value : `${value}${NOT_FOUND}`;
   const all = choices.includes(shown) ? choices : [...choices, shown];
   return (

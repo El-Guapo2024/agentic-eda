@@ -6,7 +6,7 @@
 //
 // The text, the Font choice, "Text size:", Bold and Italic, the text colour, the horizontal and vertical justification, Horizontal or Vertical, and in the symbol editor
 // "Private to Symbol Editor", "Common to all units" and "Common to all body styles" (enabled for a symbol of several units / body styles). The hyperlink is the schematic's only
-// (`m_hyperlinkCb->Hide()` outside it). The font and colour are kept and written (UI-LEFT Y4); the canvas draws every text in the stroke font, as the schematic's does.
+// (`m_hyperlinkCb->Hide()` outside it). The font and colour are kept and written (UI-LEFT Y4); the canvas draws the text in its face (UI-LEFT-2 CC1: kicad-port/schTextSpecs.ts, an outline font once the browser has it).
 import { useEffect, useRef, useState } from "react";
 import { drawTarget, useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { DEFAULT_SYMBOL_TEXT_SIZE_MM, noPrintableChars, textFormOf, textFromForm, type LibText, type TextForm } from "../../kicad-port/symText";

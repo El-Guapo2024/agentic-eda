@@ -399,6 +399,20 @@ export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: 
     },
     TEXT
   );
+  // "Font" (`EDA_TEXT_DESC`'s, after Text): KiCad's stroke font or a face, wrapped and drawn in it (UI-LEFT-2 CC1).
+  row(
+    {
+      name: "Font",
+      kind: "string",
+      get: (i) => own(i).face || "KiCad Font",
+      set: (i, v) => {
+        const next = String(v).trim();
+        const face = next === "" || next.startsWith("KiCad Font") ? null : next;
+        return (own(i).face ?? null) === face ? [] : boxCmd(own(i), { face });
+      },
+    },
+    TEXT
+  );
   row(
     {
       name: "Thickness",

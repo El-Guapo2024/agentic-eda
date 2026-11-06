@@ -9,7 +9,7 @@ import type { ShapeLook, TextLook } from "../api/fpEditorTypes";
 interface Keep {
   stroke_types?: Record<string, string>;
   hatches?: Record<string, ShapeLook["hatch"]>;
-  text_extras?: { id: string; width_nm?: number | null; valign?: "top" | "center" | "bottom"; bold?: boolean; italic?: boolean; knockout?: boolean }[];
+  text_extras?: { id: string; width_nm?: number | null; valign?: "top" | "center" | "bottom"; bold?: boolean; italic?: boolean; knockout?: boolean; face?: string | null }[];
   unlocked_texts?: string[];
   locked?: string[];
   hidden_texts?: string[];
@@ -42,6 +42,11 @@ export function textLookOf(fp: WithKeep, id: string): TextLook {
 /** `PCB_TEXT::IsVisible`: a text of the footprint read hidden (`(hide yes)`) is not drawn and not picked (`ViewGetLOD`). */
 export function isHiddenText(fp: WithKeep, id: string | undefined): boolean {
   return !!id && (keepOf(fp).hidden_texts ?? []).includes(id);
+}
+
+/** The outline face a text of the footprint is set in (`TextExtra::face`, the file's `(font (face ..))`); null for KiCad's stroke font. */
+export function textFaceOf(fp: WithKeep, id: string | undefined): string | null {
+  return (id && keepOf(fp).text_extras?.find((x) => x.id === id)?.face) || null;
 }
 
 /** `BOARD_ITEM::IsLocked` of a graphic or text of the footprint. */

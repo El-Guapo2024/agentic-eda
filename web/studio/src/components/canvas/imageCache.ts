@@ -36,6 +36,11 @@ export function imageFor(url: string): HTMLImageElement | null {
   return img.complete && img.naturalWidth > 0 ? img : null;
 }
 
+/** Something else a canvas draws has arrived (an outline font's file, components/text/outlineFonts.ts): the canvases that list `useImageVersion` repaint. */
+export function noteAssetArrived(): void {
+  bump();
+}
+
 /** An image the caller made itself (the one following the cursor while an image is placed): never the cache's, never evicted. */
 export function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {

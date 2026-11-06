@@ -38,19 +38,21 @@ import { layerColor } from "../canvas/layers";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
 import { resolveLibSymbol, symbolBounds as libSymbolBounds, type ResolvedGraphic } from "./libSymbol";
 import { resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
-import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLabelTextPlacement, inferSpin, LABEL_TEXT_SIZE_NM, localLabelTextPlacement, type LabelSpin } from "./labelShape";
+import { globalLabelOutline, hierLabelOutline, inferSpin, LABEL_TEXT_SIZE_NM, type LabelSpin } from "./labelShape";
 import { DEFAULT_PIN_TEXTS, PIN_TEXT_PEN_NM, PIN_TEXT_SIZE_NM, pinTextPlacements, type PinTexts } from "./pinText";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { beginTextRecord, paintKicadText } from "../text/kicadTextPaint";
+import { resolveFont } from "../../kicad-port/kicadText";
+import { deviceTextDrawSpec, labelTextBoxWidth, schFieldDrawSpec, schLabelDrawSpec, schTextDrawSpec, SCH_DEFAULT_PEN_NM } from "../../kicad-port/schTextSpecs";
 import { defaultPenNm, FIELD_SIZE_NM, textOrigin, type SchField } from "../../kicad-port/schText";
 import { shownText } from "../../kicad-port/schFieldEdit";
-import { schTextLines, textLie } from "../../kicad-port/schTextItem";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
 import { drawnUnit, referenceUnitSuffix, subpartIdsOf } from "../../kicad-port/schUnits";
 import { DEFAULT_SCH_DISPLAY, ercSeverityShown, type SchDisplayOptions } from "./displayOptions";
 import { bodyBoundsOf } from "./symbolMarkers";
 import { drawSymbolMarkers } from "./symbolMarkersDraw";
-import { dashPattern, drawSelectionBox, paintGraphics, paintImages, rgba } from "./schGraphicsPainter";
+import { dashPattern, drawSelectionBox, drawTextBoxText, paintGraphics, paintImages, rgba } from "./schGraphicsPainter";
 import { dnpCross } from "./symbolMarkers";
 import { paintSchTables } from "./schTablePaint";
 import { drawGroups } from "./schGroupPainter";
@@ -60,6 +62,9 @@ import { fieldAnchors, isVerticalTwoPin, type FieldBox } from "../../kicad-port/
 import { isPinItemId, pinById, type PinItem } from "../../kicad-port/schPins";
 import { altIconStrokes, pinAltIcon, type PinAltIcon } from "../../kicad-port/symPinAltIcon";
 import { shownPinName } from "./pinText";
+import { strokeWireShape, wireHopShapes } from "../../kicad-port/schHopOver";
+import { pinDecoSizeNm, schFormattingLook, setSchFormattingLook } from "../../kicad-port/schFormattingLook";
+import { setStrokeOverbarHeight } from "../text/strokeFont";
 
 /**
  * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
@@ -112,19 +117,9 @@ const ERC_MARKER_RADIUS_NM = 450_000;
 const PIN_NC_HALF_NM = 381_000;
 const FIELD_FONT = 1.0; // footprint field: small, per the task's "footprint field in purple and small"
 
-/**
- * eeschema's `PinSymbolSize` (sch_render_settings.cpp: `DEFAULT_TEXT_SIZE
- * * IU_PER_MILS / 2` = 25 mil = 0.635mm) -- the one size every pin-shape
- * decoration (inversion bubble radius, clock-triangle leg, non-logic "X"
- * half-size) is drawn at by default. sch_painter.cpp's `r`/`c` locals
- * both resolve to this same constant whenever PinSymbolSize is set (which
- * it always is, there being no project-level override this app exposes),
- * so this app does not need the name/number-size-derived fallback branch
- * real KiCad falls back to only when PinSymbolSize is explicitly zeroed.
- */
-const PIN_DECOR_NM = 635_000;
-/** 2x PIN_DECOR_NM -- how far past the body-attachment point (R) an inverted/inverted-clock pin's bubble-to-tip line, or a low-input/low-clock/low-output wedge's leg, reaches. */
-const PIN_DECOR_D_NM = PIN_DECOR_NM * 2;
+// The pin decorations' size is Schematic Setup's Pin symbol size (kicad-port/schFormattingLook.ts `pinDecoSizeNm`: `SCH_PAINTER::externalPinDecoSize` /
+// `internalPinDecoSize`, 25 mils by default, half the pin's text size when it is set to 0); twice it is how far past the body-attachment point (R) an
+// inverted/inverted-clock pin's bubble-to-tip line, or a low-input/low-clock/low-output wedge's leg, reaches (`diam`).
 /** eeschema/default_values.h DEFAULT_PIN_NAME_OFFSET (20 mil) -- how far a pin's name sits past its body-attachment point, into the body ("inside" placement). This app's `LibSymbol` carries no per-symbol `(pin_names (offset ...))` override (not part of the coordinator's described contract), so every symbol uses KiCad's own factory default rather than varying per real library symbol -- real symbols that explicitly set `offset 0` (name drawn *outside*, past the pin's free end, as GND/power symbols typically do, though their pin is hidden anyway so it goes unseen) are the one case this simplification visibly diverges from. */
 const PIN_NAME_OFFSET_NM = 508_000;
 
@@ -347,7 +342,8 @@ function drawPassiveGlyph(ctx: CanvasRenderingContext2D, kind: NonNullable<Resol
 
 /**
  * One line of text where KiCad puts it: `anchor` and the justification in the text's own axes, a vertical text turned a quarter
- * counter-clockwise about the anchor (`kicad-port/schText.ts`, `FONT::Draw`'s placement).
+ * counter-clockwise about the anchor (`kicad-port/schText.ts`, `FONT::Draw`'s placement). A pin's name and number (`drawPinText`), which have no face of their own;
+ * the fields, labels and texts are drawn by the shared layout (`drawField`, `drawLabel`, `drawSchText`: kicad-port/schTextSpecs.ts).
  */
 function drawKicadText(ctx: CanvasRenderingContext2D, text: string, anchor: [number, number], o: { sizeNm: number; h: "left" | "center" | "right"; v: "top" | "center" | "bottom"; vertical: boolean; color: string; thicknessNm?: number; italic?: boolean }) {
   if (!text) return;
@@ -383,25 +379,29 @@ function fieldColor(name: string): string {
   }
 }
 
+/** The schematic's default pen (Schematic Setup's default line width, `SCH_RENDER_SETTINGS::GetDefaultPenWidth`) while the sheet is being painted: a text with no pen of its own is drawn with it. */
+let paintedPen = SCH_DEFAULT_PEN_NM;
+
+/**
+ * One field where KiCad draws it (`SCH_PAINTER::draw( SCH_FIELD )`, kicad-port/schTextSpecs.ts `schFieldDrawSpec`): centred at the centre of its box, in its face -- an outline font's
+ * once the browser has it (UI-LEFT-2 CC1), the stroke font for none -- a bold one with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leaning.
+ */
+function drawField(ctx: CanvasRenderingContext2D, text: string, f: Pick<SchField, "at" | "h" | "vertical" | "size_nm" | "bold" | "italic" | "font" | "id"> & { v?: SchField["v"] }, color: string): void {
+  if (!text) return;
+  const look = { at: f.at, h: f.h, v: f.v ?? "center", vertical: f.vertical, size_nm: f.size_nm || FIELD_SIZE_NM, bold: !!f.bold, italic: !!f.italic };
+  const spec = schFieldDrawSpec(text, look, resolveFont(f.font, look.bold, look.italic), paintedPen);
+  paintKicadText(ctx, spec, f.font, { color, record: f.id ? { tag: "sch", id: f.id } : undefined });
+}
+
 /** The fields of one item where the server says they are (`SchField`): every visible one (and, with Show Hidden Fields, the hidden ones that have a text, in the hidden-items colour), a Reference with its unit letter, in the item's own field colours (or `color`, when it is drawn selected). */
 function drawSchFields(ctx: CanvasRenderingContext2D, fields: SchField[], unitSuffix = "", color?: string) {
   for (const f of fields) {
     if (!f.text || (!f.visible && !paintedShowHiddenFields)) continue;
-    const sizeNm = f.size_nm && f.size_nm > 0 ? f.size_nm : FIELD_SIZE_NM;
     // `f.shown` is what `${NAME}` in the text stands for (`SCH_FIELD::GetShownText`); a Reference has none, it is written with its unit letter.
     const text = shownText({ name: f.name, text: f.name === "Reference" ? f.text + unitSuffix : (f.shown ?? f.text), name_shown: f.name_shown });
     const picked = f.id !== undefined && paintedSelection.has(f.id);
-    drawKicadText(ctx, text, f.at, {
-      sizeNm,
-      h: f.h,
-      v: f.v,
-      vertical: f.vertical,
-      // a field's own text colour (`EDA_TEXT::GetTextColor`, Symbol Properties' Color column) wins over its layer's (`SCH_PAINTER::getRenderColor`)
-      color: picked ? layerColor("LAYER_SELECTION_SHADOWS") : !f.visible ? layerColor("LAYER_HIDDEN") : f.color && f.color.a > 0 ? rgba(f.color) : (color ?? fieldColor(f.name)),
-      // a bold text is written with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leans
-      thicknessNm: f.bold ? Math.round(sizeNm / 5) : undefined,
-      italic: f.italic,
-    });
+    // a field's own text colour (`EDA_TEXT::GetTextColor`, Symbol Properties' Color column) wins over its layer's (`SCH_PAINTER::getRenderColor`)
+    drawField(ctx, text, f, picked ? layerColor("LAYER_SELECTION_SHADOWS") : !f.visible ? layerColor("LAYER_HIDDEN") : f.color && f.color.a > 0 ? rgba(f.color) : (color ?? fieldColor(f.name)));
   }
 }
 
@@ -479,7 +479,15 @@ function applyFill(ctx: CanvasRenderingContext2D, mode: "none" | "outline" | "ba
 /** Exported for `components/symbol/symbolPainter.ts` (the Symbol Editor tab): the exact same resolved-graphic drawing logic applies there -- a library symbol's own graphics are this same `ResolvedGraphic` shape, just resolved with an identity transform/no instance offset instead of a placed instance's. */
 export function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphic, strokeColor: string) {
   if (g.kind === "text") {
-    drawStrokeText(ctx, g.content, g.at[0], g.at[1], { sizeNm: g.sizeNm, angleRad: -(g.angleDeg * Math.PI) / 180, justify: "center", color: strokeColor });
+    // `SCH_PAINTER::draw( SCH_TEXT )` on `LAYER_DEVICE`: a symbol's text (centred both ways here: the library graphic keeps no justification) at the centre of its box, centred
+    // vertically (kicad-port/schTextSpecs.ts `deviceTextDrawSpec`); a text at 90 degrees runs up the sheet
+    const vertical = Math.abs(Math.round(g.angleDeg)) % 180 === 90;
+    paintKicadText(ctx, deviceTextDrawSpec(g.content, { at: g.at, h: "center", v: "center", vertical, size_nm: g.sizeNm }, undefined, paintedPen), null, { color: strokeColor });
+    return;
+  }
+  if (g.kind === "text_box") {
+    // a library text box's text, drawn as a sheet text box's (`SCH_PAINTER::draw( SCH_TEXTBOX )`): its own text colour, else the symbol's; the border and fill are a rectangle
+    drawTextBoxText(ctx, { id: "", shape: g.shape }, g.color && g.color.a > 0 ? rgba(g.color) : strokeColor);
     return;
   }
 
@@ -549,8 +557,9 @@ function isHorizontalPin(dir: [number, number]): boolean {
 export function drawPinDecoration(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
   const { pin, tip: P, root: R, dir } = rp;
   const [dx, dy] = dir;
-  const r = PIN_DECOR_NM;
-  const d = PIN_DECOR_D_NM;
+  // `externalPinDecoSize` / `internalPinDecoSize`: Schematic Setup's Pin symbol size, else half the pin's text size
+  const r = pinDecoSizeNm();
+  const d = r * 2;
   const line = (a: [number, number], b: [number, number]) => {
     ctx.moveTo(a[0], a[1]);
     ctx.lineTo(b[0], b[1]);
@@ -775,63 +784,40 @@ function drawSelectedPin(ctx: CanvasRenderingContext2D, view: ViewTransform, pin
 
 // ------------------------------------------------------------- labels / no-connects
 
+/**
+ * A label (`SCH_PAINTER::draw( SCH_LABEL / SCH_GLOBALLABEL / SCH_HIERLABEL )`): a global or hierarchical label's flag (`CreateGraphicShape`; a global one as long as its
+ * text's box in its face, `GetTextBox( aRenderSettings ).GetWidth()`), then its text at the anchor plus `GetSchematicTextOffset`, with the spin's angle and justification
+ * (`SetSpinStyle`), in the label's face (kicad-port/schTextSpecs.ts `schLabelDrawSpec`).
+ */
 function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: SchematicLabel, wires: SchematicWire[], on: boolean) {
   // `SCH_PAINTER::getRenderColor`: a label's own text colour (Label Properties' Color) overrides its layer's, for the text and the flag
   const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : l.color && l.color.a > 0 ? rgba(l.color) : labelLayerColor(l.scope);
   const hair = 1 / view.scale;
-  // the size, bold and italic Label Properties set (`EDA_TEXT`): a bold text is written with a fifth of its size for a pen, an italic one leans
+  // the size, bold and italic Label Properties set (`EDA_TEXT`)
   const sizeNm = l.size_nm && l.size_nm > 0 ? l.size_nm : LABEL_TEXT_SIZE_NM;
-  const look = { thicknessNm: l.bold ? Math.round(sizeNm / 5) : undefined, italic: l.italic };
-
-  if (l.scope === "local" || !l.shape) {
-    const spin = l.spin ?? inferSpin(wires, l.at);
-    const { pos, justify } = localLabelTextPlacement(spin, l.at, sizeNm);
-    // V BOTTOM: stroke text has no native top/bottom baseline (see this
-    // file's CAP_HEIGHT comment) -- a local label's text sits just above
-    // its anchor, so the baseline itself (no cap-height push needed,
-    // unlike the box-renderer's generic top/bottom approximation) lands
-    // close enough.
-    if (spin === "up" || spin === "bottom") {
-      drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeNm, angleRad: -Math.PI / 2, justify, color, ...look });
-    } else {
-      drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeNm, justify, color, ...look });
-    }
-    return;
-  }
-
   const spin = l.spin ?? inferSpin(wires, l.at);
-  const shape: LabelShape = l.shape;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = Math.max(l.scope === "global" ? 159_000 : 159_000, hair);
-  ctx.beginPath();
-  const outline = l.scope === "global" ? globalLabelOutline(l.net, shape, spin, l.at, sizeNm) : hierLabelOutline(shape, spin, l.at, sizeNm);
-  outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-  ctx.stroke();
+  const shape: LabelShape | null = l.scope === "local" ? null : l.shape;
 
-  const { pos, justify } = l.scope === "global" ? globalLabelTextPlacement(shape, spin, l.at, sizeNm) : hierLabelTextPlacement(l.net, spin, l.at, sizeNm);
-  if (spin === "up" || spin === "bottom") {
-    drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeNm, angleRad: -Math.PI / 2, justify, color, ...look });
-  } else {
-    drawStrokeText(ctx, l.net, pos[0], pos[1] + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify, color, ...look });
+  if (shape) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(159_000, hair);
+    ctx.beginPath();
+    const outline = l.scope === "global" ? globalLabelOutline(l.net, shape, spin, l.at, sizeNm, labelTextBoxWidth(l, resolveFont(l.font, !!l.bold, !!l.italic))) : hierLabelOutline(shape, spin, l.at, sizeNm);
+    outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.stroke();
   }
+  paintKicadText(ctx, schLabelDrawSpec({ ...l, shape }, spin, paintedPen), l.font, { color, record: { tag: "sch", id: l.id } });
 }
 
 /**
- * `T`: free-standing text -- `SCH_TEXT`'s own render, drawn with the Newstroke font like every other schematic text (labels, pin names, fields): justified about its anchor in
- * its own axes (`EDA_TEXT::GetHorizJustify` / `GetVertJustify`, left and bottom for a text that was never justified), one line after another (`FONT::getLinePositions`),
- * and a text that runs up the sheet (`ANGLE_VERTICAL`) turned a quarter counter-clockwise about the anchor, the way `drawKicadText` sets a field.
+ * `T`: free-standing text -- `SCH_PAINTER::draw( SCH_TEXT )`: at its anchor with its own justification (`EDA_TEXT::GetHorizJustify` / `GetVertJustify`, left and bottom for a
+ * text that was never justified), one line after another (`FONT::getLinePositions`), a text that runs up the sheet (`ANGLE_VERTICAL`) turned a quarter counter-clockwise about
+ * the anchor, in its face (UI-LEFT-2 CC1: an outline font's once the browser has it).
  */
 function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText, on: boolean) {
   // `SCH_PAINTER::getRenderColor`: the text's own colour (Text Properties' Color) wins over `LAYER_NOTES`
   const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : t.color && t.color.a > 0 ? rgba(t.color) : layerColor("LAYER_NOTES");
-  // its bold and italic (`EDA_TEXT::IsBold` / `IsItalic`): a bold text is written with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leans.
-  // **Differs**: an outline font's text (`font` naming a family) is drawn with the stroke font, as every text of the canvas is.
-  const look = { thicknessNm: t.bold ? Math.round(t.size_nm / 5) : undefined, italic: !!t.italic };
-  ctx.save();
-  ctx.translate(t.at[0], t.at[1]);
-  if (textLie(t).vertical) ctx.rotate(-Math.PI / 2);
-  for (const line of schTextLines(t, measureStrokeText)) drawStrokeText(ctx, line.text, line.x, line.y, { sizeNm: t.size_nm, justify: "left", color, ...look });
-  ctx.restore();
+  paintKicadText(ctx, schTextDrawSpec(t, paintedPen), t.font, { color, record: { tag: "sch", id: t.id } });
 }
 
 /**
@@ -905,17 +891,14 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
     const spin: LabelSpin = edge === "left" ? "right" : edge === "right" ? "left" : edge === "top" ? "bottom" : "up";
     // the size, bold and italic Sheet Pin Properties set (`SCH_SHEET_PIN` is an `EDA_TEXT`): a bold text is written with a fifth of its size for a pen, an italic one leans
     const sizeNm = p.size_nm && p.size_nm > 0 ? p.size_nm : LABEL_TEXT_SIZE_NM;
-    const look = { thicknessNm: p.bold ? Math.round(sizeNm / 5) : undefined, italic: p.italic };
     ctx.beginPath();
     hierLabelOutline(p.shape, spin, [px, py], sizeNm).forEach(([ox, oy], i) => (i === 0 ? ctx.moveTo(ox, oy) : ctx.lineTo(ox, oy)));
     ctx.stroke();
-    // the name runs into the sheet from the flag (`SCH_HIERLABEL::GetSchematicTextOffset`: `GetTextOffset() + GetTextWidth()`, the text offset being 0.15 of the size), along the
-    // sheet on the left and right borders and up it on the top and bottom ones (`SetSide`'s spin)
-    const dist = Math.round(0.15 * sizeNm) + sizeNm;
-    if (edge === "left") drawStrokeText(ctx, p.name, px + dist, py + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "left", color: pinColor, ...look });
-    else if (edge === "right") drawStrokeText(ctx, p.name, px - dist, py + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "right", color: pinColor, ...look });
-    else if (edge === "top") drawStrokeText(ctx, p.name, px, py + dist, { sizeNm, angleRad: -Math.PI / 2, justify: "left", color: pinColor, ...look });
-    else drawStrokeText(ctx, p.name, px, py - dist, { sizeNm, angleRad: -Math.PI / 2, justify: "right", color: pinColor, ...look });
+    // the name runs into the sheet from the flag (an `SCH_SHEET_PIN` is an `SCH_HIERLABEL`: `GetSchematicTextOffset` is `GetTextOffset() + GetTextWidth()`, the text offset
+    // being Formatting's ratio of the size), along the sheet on the left and right borders and up it on the top and bottom ones (`SetSide`'s spin), centred on the flag; its size, bold
+    // and italic are Sheet Pin Properties'
+    const spec = schLabelDrawSpec({ net: p.name, at: [px, py], scope: "hierarchical", shape: p.shape, size_nm: sizeNm, bold: p.bold, italic: p.italic }, spin, paintedPen);
+    paintKicadText(ctx, spec, null, { color: pinColor, record: p.id ? { tag: "sch", id: p.id } : undefined });
   }
   ctx.restore();
 }
@@ -1048,11 +1031,27 @@ function drawLintMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch
 // not here, which would mean computing an inverse-transformed rect on
 // every repaint for no benefit.
 export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, opts: SchematicPaintOptions): void {
+  // Schematic Setup > Formatting's ratios the sheet's labels, pins and overbars are laid out by (kicad-port/schFormattingLook.ts; the hit tests on the sheet
+  // read the same), the overbar's height only while the sheet is drawn (the stroke font is every editor's)
+  setSchFormattingLook(sch.setup);
+  const overbar = setStrokeOverbarHeight(schFormattingLook().overbarRatio);
+  try {
+    paintSchematicSheet(ctx, view, sch, opts);
+  } finally {
+    setStrokeOverbarHeight(overbar);
+  }
+}
+
+function paintSchematicSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, opts: SchematicPaintOptions): void {
   const hair = 1 / view.scale;
   const display = opts.display ?? DEFAULT_SCH_DISPLAY;
   paintedSelection = opts.selection;
   paintedShowHiddenFields = display.showHiddenFields;
   paintedSetup = sch.setup;
+  // Schematic Setup's default line width is every text's pen when it has none of its own (`getTextThickness`)
+  paintedPen = sch.setup?.default_line_width_nm && sch.setup.default_line_width_nm > 0 ? sch.setup.default_line_width_nm : SCH_DEFAULT_PEN_NM;
+  // what `window.__edaText.sch` reports is what this paint draws
+  beginTextRecord("sch");
 
   // The images lie under everything else on the sheet (`LAYER_DRAW_BITMAPS`).
   paintImages(ctx, view, sch.graphics ?? [], opts.selection, (sch.sheet_path ?? []).map((c) => c.id).join("/"));
@@ -1062,6 +1061,8 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // previously only ever affected a symbol's own outline; a selected
   // wire drew no differently from an unselected one, so Del on a box- or
   // shift-selected wire had no visual confirmation it would do anything).
+  // Hop-overs (KiCad 25ec2335 `SCH_PAINTER::draw( const SCH_LINE* )`: `BuildWireWithHopShape` when `hopOverScale > 0.0`), Schematic Setup > Formatting's size
+  const hops = wireHopShapes(sch.wires, sch.setup?.hop_over_size_choice, sch.setup?.default_line_width_nm);
   for (const w of sch.wires) {
     const on = opts.netHighlight === w.net || opts.selection.has(w.id);
     // Bus wires (GAPS.md #20) are the same `SCH_LINE` shape as a plain
@@ -1071,6 +1072,11 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     const look = strokeLook(w.stroke, w.bus ? 304_800 : 152_400, w.class_look);
     ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : (look.color ?? layerColor(w.bus ? "LAYER_BUS" : "LAYER_WIRE"));
     ctx.lineWidth = Math.max(on ? Math.max(300_000, look.width * 2) : look.width, hair * (on ? 2.5 : 1));
+    const hopped = hops.get(w.id);
+    if (hopped) {
+      strokeWireShape(ctx, hopped, look.dash);
+      continue;
+    }
     ctx.setLineDash(look.dash);
     ctx.beginPath();
     w.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
@@ -1130,10 +1136,10 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
 
   // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`).
   // `SCH_PAINTER::draw( SCH_DIRECTIVE_LABEL )`: with Show Directive Labels off, a directive label is drawn only while it is selected.
-  paintGraphics(ctx, view, display.showDirectiveLabels ? (sch.graphics ?? []) : (sch.graphics ?? []).filter((g) => g.shape.type !== "directive" || opts.selection.has(g.id)), opts.selection, sch.graphic_text_attrs, sch.graphic_shown);
+  paintGraphics(ctx, view, display.showDirectiveLabels ? (sch.graphics ?? []) : (sch.graphics ?? []).filter((g) => g.shape.type !== "directive" || opts.selection.has(g.id)), opts.selection, sch.graphic_text_attrs, sch.graphic_shown, paintedPen);
 
   // Tables (`SCH_TABLE`): the cells' fills and text, then the border and separator lines.
-  paintSchTables(ctx, view, sch.tables ?? [], opts.selection);
+  paintSchTables(ctx, view, sch.tables ?? [], opts.selection, paintedPen);
 
   // Hierarchical sheets (GAPS.md #6) -- drawn early, like the wires/
   // junctions pass above, so a sheet's own local wires/labels/symbols
@@ -1157,7 +1163,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
       const picked = f.id !== undefined && opts.selection.has(f.id);
       const layer = !f.visible ? layerColor("LAYER_HIDDEN") : f.intersheet_refs ? layerColor("LAYER_GLOBLABEL") : f.name === "Netclass" ? layerColor("LAYER_NETCLASS_REFS") : layerColor("LAYER_FIELDS");
       const color = picked ? layerColor("LAYER_SELECTION_SHADOWS") : f.visible && f.color && f.color.a > 0 ? rgba(f.color) : layer;
-      drawKicadText(ctx, f.shown, f.at, { sizeNm: f.size_nm || FIELD_SIZE_NM, h: f.h, v: f.v ?? "center", vertical: f.vertical, color, italic: f.italic });
+      drawField(ctx, f.shown, f, color);
     }
   }
 

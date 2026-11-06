@@ -209,6 +209,13 @@ impl SchFormatting {
         let iu = crate::units::kiround((default_wire_width.get() as f64 / 100.0) * mult);
         Nm::new(iu.max(1) * 100)
     }
+
+    /// KiCad 25ec2335 `SCHEMATIC_SETTINGS::GetHopOverScale`: `hopover_size_mult_list[ m_HopOverSizeChoice ]`, the hop-over arc's radius as a multiple
+    /// of the default line width (`SCH_PAINTER::draw( const SCH_LINE* )` and `SCH_SCREEN::Plot`: `arcRadius = defaultLineWidth * hopOverScale`). A
+    /// choice past the six reads as None (`PARAM<int>( "drawing.hop_over_size_choice", .., 0, 5 )` gives its default for a value out of range).
+    pub fn hop_over_scale(&self) -> f64 {
+        HOP_OVER_SIZE_MULT.get(self.hop_over_size_choice as usize).copied().unwrap_or(0.0)
+    }
 }
 
 /// General > Annotation (`PANEL_EESCHEMA_ANNOTATION_OPTIONS`) but the symbol unit notation, which `SchExtras` keeps as `subpart_id_separator` /
@@ -451,6 +458,14 @@ mod tests {
         assert_eq!(f.junction_diameter(wire), Nm::new(1_828_800), "Largest: 12 times");
         f.junction_size_choice = 1;
         assert_eq!(f.junction_diameter(wire), Nm::new(259_100), "Smallest: 1.7 times, rounded to the 100 nm unit");
+    }
+
+    /// `GetHopOverScale`: None draws no hop (KiCad's Plot dialog then plots none, `m_plotHopOver = GetHopOverScale() > 0.0`), Largest is 12 line widths.
+    #[test]
+    fn the_hop_over_scale_is_the_choice_s_multiplier() {
+        let scale = |c: u32| SchFormatting { hop_over_size_choice: c, ..SchFormatting::default() }.hop_over_scale();
+        assert_eq!([0, 1, 2, 3, 4, 5].map(scale), [0.0, 1.7, 4.0, 6.0, 9.0, 12.0]);
+        assert_eq!(scale(6), 0.0, "past the six: the default, None");
     }
 
     #[test]

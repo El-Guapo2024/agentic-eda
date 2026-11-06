@@ -16,9 +16,10 @@ export const NOT_FOUND = " <not found>";
  * The Font choice of a text (`FONT_CHOICE`: "Default Font", "KiCad Font", then the machine's families, sorted) with the text's own font selected
  * (`SetFontSelection`: no font is the first entry; a font the list does not have is appended with " <not found>").
  */
-export function fontChoices(families: readonly string[], current: string | null | undefined): { choices: string[]; selected: string } {
-  const choices = [DEFAULT_FONT, KICAD_FONT, ...[...new Set(families)].filter((f) => f !== DEFAULT_FONT && f !== KICAD_FONT).sort()];
-  if (!current) return { choices, selected: DEFAULT_FONT };
+export function fontChoices(families: readonly string[], current: string | null | undefined, withDefault = true): { choices: string[]; selected: string } {
+  // `if( m_systemFontCount > 1 ) Append( _( "Default Font" ) )`: eeschema's dialogs give the choice two system entries, pcbnew's none ("KiCad Font" is first)
+  const choices = [...(withDefault ? [DEFAULT_FONT] : []), KICAD_FONT, ...[...new Set(families)].filter((f) => f !== DEFAULT_FONT && f !== KICAD_FONT).sort()];
+  if (!current) return { choices, selected: withDefault ? DEFAULT_FONT : KICAD_FONT };
   if (choices.includes(current)) return { choices, selected: current };
   const missing = current + NOT_FOUND;
   return { choices: [...choices, missing], selected: missing };

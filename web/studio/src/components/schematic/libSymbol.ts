@@ -10,6 +10,8 @@ import type { LibFill, LibGraphic, LibPin, LibSymbols, Mm, SchematicSymbol } fro
 import { resolveSymbol } from "./layout";
 import { DEFAULT_PIN_TEXTS, type PinTexts } from "./pinText";
 import { resolveLibPoint, resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
+import type { SchColor, SchGraphicShape } from "../../api/schEditTypes";
+import { isVerticalAngle, itemOrientationOf, orientedText } from "../../kicad-port/symTextBoxPlaced";
 
 export type ResolvedGraphic =
   | { kind: "rectangle"; start: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill }
@@ -18,7 +20,9 @@ export type ResolvedGraphic =
   | { kind: "arc"; start: [number, number]; mid: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill }
   | { kind: "text"; content: string; at: [number, number]; angleDeg: number; sizeNm: number }
   /** A library symbol's bezier (the Symbol Editor's; a placed symbol's engine drawing has its polyline instead): `SCH_PAINTER`'s `DrawCurve( start, c1, c2, end )`. */
-  | { kind: "bezier"; start: [number, number]; c1: [number, number]; c2: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill };
+  | { kind: "bezier"; start: [number, number]; c1: [number, number]; c2: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill }
+  /** The text of a library text box on the placed symbol (kicad-port/symTextBoxPlaced.ts), as a sheet text box's shape -- corners on the sheet, the shown text, the direction and justification the symbol's orientation gives it -- with its own text colour when it has one. Its border and fill are a `rectangle`. */
+  | { kind: "text_box"; shape: Extract<SchGraphicShape, { type: "text_box" }>; color?: SchColor };
 
 export interface ResolvedLibSymbol {
   graphics: ResolvedGraphic[];
@@ -85,7 +89,7 @@ export function resolveLibSymbol(instance: SchematicSymbol, lib: LibSymbols): Re
   const graphics: ResolvedGraphic[] = [];
   for (const g of sym.graphics) {
     if (!visibleFor(g.unit, g.body_style, unit, bodyStyle)) continue;
-    graphics.push(resolveGraphic(g, m, at, grow));
+    graphics.push(resolveGraphic(g, m, at, grow, instance.text_box_shown));
   }
 
   const pins: ResolvedPin[] = [];
@@ -118,7 +122,7 @@ export function resolveLibSymbol(instance: SchematicSymbol, lib: LibSymbols): Re
   return { graphics, pins, bbox: { minX, minY, maxX, maxY }, texts };
 }
 
-function resolveGraphic(g: LibGraphic, m: ReturnType<typeof symbolTransformMatrix>, at: [number, number], grow: (p: [number, number]) => void): ResolvedGraphic {
+function resolveGraphic(g: LibGraphic, m: ReturnType<typeof symbolTransformMatrix>, at: [number, number], grow: (p: [number, number]) => void, textBoxShown?: Record<string, string>): ResolvedGraphic {
   const pt = (p: [Mm, Mm]) => {
     const r = resolveLibPoint(p, m, at);
     grow(r);
@@ -135,6 +139,27 @@ function resolveGraphic(g: LibGraphic, m: ReturnType<typeof symbolTransformMatri
       return { kind: "arc", start: pt(g.start), mid: pt(g.mid), end: pt(g.end), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill };
     case "text":
       return { kind: "text", content: g.content, at: pt(g.at), angleDeg: g.angle_deg, sizeNm: mmToNm(g.size_mm) };
+    case "text_box": {
+      // `SCH_PAINTER::draw( SCH_SYMBOL )`'s temp copy: the corners where the transform puts them, the text turned and justified by `OrientAndMirrorSymbolItems`, and
+      // its variables the symbol's (`text_box_shown`)
+      const [sx, sy] = pt(g.start);
+      const [ex, ey] = pt(g.end);
+      const text = orientedText(isVerticalAngle(g.angle_deg), g.h_align, itemOrientationOf(m));
+      const shape: Extract<SchGraphicShape, { type: "text_box" }> = {
+        type: "text_box",
+        start: { x: sx, y: sy },
+        end: { x: ex, y: ey },
+        text: textBoxShown?.[String(g.index)] ?? g.text,
+        angle: text.vertical ? 90_000 : 0,
+        size_nm: mmToNm(g.size_mm),
+        bold: !!g.bold,
+        italic: !!g.italic,
+        h_align: text.hAlign,
+        v_align: g.v_align,
+        margin_nm: mmToNm(g.margin_mm),
+      };
+      return g.text_color ? { kind: "text_box", shape, color: g.text_color } : { kind: "text_box", shape };
+    }
   }
 }
 
