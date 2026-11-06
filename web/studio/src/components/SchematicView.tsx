@@ -36,12 +36,16 @@ import { resolveLibSymbol, symbolBounds as libSymbolBounds } from "./schematic/l
 import { SchSnap, SCH_PLACING_TOOLS, toolCategory, type SchSnapMods } from "./schematic/schSnap";
 import { useGridOverrides } from "../state/gridOverrides";
 import { useGridSettings } from "../state/gridSettings";
-import { computeVisibleGridSize } from "../kicad-port/grid";
 import { heldCursor } from "../kicad-port/heldCursor";
-import { shownTitleBlock } from "../kicad-port/pageSettings";
 import { paintSnapOverlay } from "./canvas/snapOverlayPainter";
 import { layerColor } from "./canvas/layers";
-import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots, pageOf } from "./schematic/drawingSheet";
+import { drawPaper, drawSchematicDrawingSheet, pageOf } from "./schematic/drawingSheet";
+import { schematicSheetPage } from "./drawingSheet/sheetInfo";
+import { paintEditorGrid } from "./canvas/gridPaint";
+import { useGridDisplay } from "../state/commonOptions";
+import { gridMenuEntries, gridYOf } from "../kicad-port/gridSettings";
+import { zoomListFor, zoomMenuEntries } from "../kicad-port/zoomFit";
+import { formatLength } from "../state/units";
 import { computeClickModifiers, applySingleClickModifier, isCrossingSelection, applyBoxSelectionModifiers, hasModifier } from "../kicad-port/selection";
 import { isMac } from "../platform";
 import { ClickDragGesture, dragRuleFor } from "../kicad-port/dragThreshold";
@@ -241,17 +245,17 @@ export function SchematicView() {
   const snapRef = useRef<SchSnap | null>(null);
   if (!snapRef.current) snapRef.current = new SchSnap();
   const snap = snapRef.current;
-  const gridList = useGridSettings("schematic").grids;
+  const gridSettingsList = useGridSettings("schematic");
+  const gridList = gridSettingsList.grids;
   const gridOverrides = useGridOverrides("schematic");
   const gridNm = state.schGridNm;
-  snap.update({ sch, scale: state.schematicView.scale, gridNm, grids: gridList, overrides: gridOverrides });
+  const gridDisplay = useGridDisplay("schematic");
+  snap.update({ sch, scale: state.schematicView.scale, gridNm, grids: gridList, gridYs: gridSettingsList.ys, overrides: gridOverrides });
   // A tool of its own starts a helper of its own: the anchor snapped to and the snap line go with the last one.
   useEffect(() => snap.reset(), [snap, state.activeTool]);
   /** The modifiers of the last pointer event (Ctrl, Cmd on a Mac, turns the grid off; Shift the anchors): the click handlers below snap through `snapToGrid` without an event. */
   const modsRef = useRef<SchSnapMods>({ ctrl: false, shift: false });
   const NO_MODS: SchSnapMods = { ctrl: false, shift: false };
-  /** The grid the view draws: the current grid, coarsened while it is too fine to see (`GAL::GetVisibleGridSize`). */
-  const visibleGridNm = computeVisibleGridSize(gridNm, state.schematicView.scale);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -388,25 +392,11 @@ export function SchematicView() {
     ctx.scale(state.schematicView.scale || 1, state.schematicView.scale || 1);
     // The paper this sheet is laid out for (A4 unless the sheet says otherwise), and where in the hierarchy it is.
     const page = pageOf(sch.paper);
-    drawPageAndFrame(ctx, state.schematicView, page);
-    if (state.gridVisible) drawGridDots(ctx, state.schematicView, width, height, visibleGridNm, page);
-    drawZoneReferences(ctx, state.schematicView, page);
-    const tb = shownTitleBlock(sch.title_block);
-    const crumbs = sch.sheet_path ?? [];
-    drawTitleBlock(
-      ctx,
-      state.schematicView,
-      {
-        title: tb?.title || state.board?.name || "untitled",
-        date: tb?.date ?? new Date().toISOString().slice(0, 10),
-        rev: tb?.rev ?? "",
-        company: tb?.company,
-        comments: tb?.comments,
-        fileName: sch.file || `${state.board?.name || "schematic"}.kicad_sch`,
-        sheetPath: crumbs.length === 0 ? "/" : `/${crumbs.map((c) => c.name).join("/")}/`,
-      },
-      page
-    );
+    drawPaper(ctx, page);
+    // `GAL::DrawGrid` over the whole canvas (eeschema clips it to nothing), in the Schematic Editor's Display Options > Grid Display style
+    if (state.gridVisible) paintEditorGrid(ctx, state.schematicView, width, height, { size: { x: gridNm, y: gridYOf(gridSettingsList, gridNm) }, origin: [0, 0], style: gridDisplay.style, lineWidthPx: gridDisplay.lineWidthPx, minSpacingPx: gridDisplay.minSpacingPx }, layerColor("LAYER_SCHEMATIC_GRID"));
+    // The drawing sheet (`SCH_VIEW::DisplaySheet`): the `.kicad_wks` Page Settings chose, else KiCad's default, on this sheet's page
+    drawSchematicDrawingSheet(ctx, state.schematicView, schematicSheetPage(sch, state.board?.name), sch.drawing_sheet?.text);
     // `SCH_DRAG_NET_COLLISION_MONITOR`: where the held selection would short two nets or pull a connection apart (the server sends it with the preview)
     const collisionOverlay = held && patch ? patch.net_collision : undefined;
     // `${OP}` in a symbol's field or a label: the last operating point's values (kicad-port/sim/opVars.ts), resolved in what is drawn.
@@ -503,7 +493,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion]);
+  }, [sch, displaySch, gridDisplay, gridNm, gridSettingsList, state.gridVisible, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -1010,7 +1000,10 @@ export function SchematicView() {
         if (ids.length !== state.selection.size || ids.some((id) => !state.selection.has(id))) dispatch({ type: "SET_SELECTION", refs: ids });
         // a reference's placed units are one item: the Symbol Unit submenu is for the one under the pointer (else the first)
         const underPointer = ids.length === 1 ? sch.symbols.filter((x) => x.id === ids[0]).find((x) => { const b = libSymbolBounds(x, sch.lib_symbols); return wx >= b.minX && wx <= b.maxX && wy >= b.minY && wy <= b.maxY; })?.unit : undefined;
-        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps, inGroup: state.schEnteredGroupId != null, unit: underPointer })) });
+        // `AddStandardSubMenus`: the Zoom submenu over the eeschema zoom list, the Grid submenu over the Schematic Editor's grids
+        const other = state.units === "mm" ? "mil" : "mm";
+        const std = { zoom: zoomMenuEntries(zoomListFor("schematic"), state.schematicView.scale), grid: gridMenuEntries(gridSettingsList, gridNm, (nm) => formatLength(nm, state.units), (nm) => formatLength(nm, other)) };
+        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps, inGroup: state.schEnteredGroupId != null, unit: underPointer }), std) });
       }}
       onDoubleClick={(e) => {
         // A double-click on a hierarchical sheet enters it (`SCH_SELECTION_TOOL` -> `SCH_ACTIONS::enterSheet`); on any other item it opens its Properties
