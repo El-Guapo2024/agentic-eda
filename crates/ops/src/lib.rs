@@ -2932,6 +2932,11 @@ pub struct Board<'a> {
     /// The screen the schematic verbs act on: the `Design::sheet_contents` key of the sheet [`Cmd::OnSheet`] named, or `None` for
     /// the root (`design.schematic`) -- KiCad's "current sheet". Only ever set while one `OnSheet` runs.
     focus: Option<String>,
+    /// The sheet path in view (`SCH_EDIT_FRAME::GetCurrentSheet()`, a `SCH_SHEET_PATH`): the placement ids from the root down to the sheet
+    /// [`Cmd::OnSheet`] named, set while it runs, `None` for the root or when the focus was set otherwise ([`Self::focus_sheet_path`] then takes the
+    /// first path that shows [`Self::focus`]). A screen shown on several paths has a reference, a unit and the attributes of a variant per path; the
+    /// verbs that act on the current sheet's instance read it (UI-LEFT S9).
+    focus_path: Option<Vec<String>>,
     /// The intent's own nets, when the caller supplied them (`Board::with_intent_nets`): lets Reorganize give a net its declared
     /// name back. `None` for every board built without them.
     intent_nets: Option<Vec<eda_model::Net>>,
@@ -2986,7 +2991,7 @@ impl<'a> Board<'a> {
             decoupling.entry(cap.clone()).or_default().insert(ic.clone());
             decoupling.entry(ic).or_default().insert(cap);
         }
-        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None, net_collision: None, pending_clean_up: None, pending_junction_merges: Vec::new() }
+        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, focus_path: None, intent_nets: None, net_collision: None, pending_clean_up: None, pending_junction_merges: Vec::new() }
     }
 
     /// The net-collision overlay of the last Move or Drag applied (see `sch_net_collision.rs`); `None` when none was.
@@ -3028,6 +3033,7 @@ impl<'a> Board<'a> {
             spacing: self.spacing,
             decoupling: Arc::clone(&self.decoupling),
             focus: self.focus.clone(),
+            focus_path: self.focus_path.clone(),
             intent_nets: self.intent_nets.clone(),
             net_collision: None,
             pending_clean_up: None,
@@ -5351,6 +5357,21 @@ impl<'a> Board<'a> {
         Ok(file)
     }
 
+    /// The sheet path in view (`GetCurrentSheet()`): [`Self::focus_path`] while it names a path that shows the focused screen, else the first path, in
+    /// walk order, that shows [`Self::focus`] (the root, `[]`, when the focus is the root).
+    pub(crate) fn focus_sheet_path(&self) -> Vec<String> {
+        let file = self.focus.clone().unwrap_or_default();
+        if let Some(p) = &self.focus_path {
+            if eda_model::sheet_list::screen_key_at(&self.design, p) == file && (p.is_empty() || eda_model::sheet_list::placement_at(&self.design, p).is_some()) {
+                return p.clone();
+            }
+        }
+        if file.is_empty() {
+            return Vec::new();
+        }
+        eda_model::sheet_list::walk(&self.design).into_iter().find(|e| e.file == file).map(|e| e.path).unwrap_or_default()
+    }
+
     /// [`Cmd::OnSheet`]: run one command with the schematic verbs pointed at another sheet. All or nothing, like a `Batch`.
     fn on_sheet(&mut self, sheet: &str, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
         // Only a schematic edit has a sheet to act on. The studio addresses everything it sends from the Schematic tab to the sheet in
@@ -5360,9 +5381,14 @@ impl<'a> Board<'a> {
         }
         let target = self.screen_at(sheet)?;
         let saved_design = self.design.clone();
+        // the sheet path in view: the path named, from the sheet path the verbs act on now (the root, unless one `OnSheet` runs inside another)
+        let mut path = self.focus_sheet_path();
+        path.extend(sheet.split('/').filter(|s| !s.is_empty()).map(String::from));
+        let saved_path = std::mem::replace(&mut self.focus_path, Some(path));
         let saved_focus = std::mem::replace(&mut self.focus, target);
         let r = self.apply(cmd);
         self.focus = saved_focus;
+        self.focus_path = saved_path;
         if r.is_err() {
             self.design = saved_design;
         }
@@ -6054,8 +6080,8 @@ impl<'a> Board<'a> {
     /// number no symbol of that prefix holds on any sheet (`existingRefs` is `GetSymbols( .., SYMBOL_FILTER_ALL )`, `FindFirstUnusedReference`), from the
     /// method's first number up (r3 D3-M5): the start number + 1, or the page of the sheet in view x 100 / x 1000 + 1 (`SetSheetNumber(
     /// GetPageNumberAsInt() )`, the first of the screen's sheet paths in page order). `SCH_REFERENCE::formatRefStr` writes it after a "0" (`#PWR01`,
-    /// `#PWR0201`). **Differs**: a screen shown on several sheet paths gives the symbol one reference for all of them (a power symbol has no per-path
-    /// reference here); KiCad numbers each path's anew.
+    /// `#PWR0201`). On a screen shown on several sheet paths this is the first path's reference; every later path gets its own number
+    /// (`FindAllSheetsForScreen`, `Board::tidy_shared_screens`, `SchExtras::power_path_refs`; UI-LEFT S9).
     fn add_power_symbol(&mut self, lib_id: &str, at: Point, rot: Millideg, net: &str, pin: &str, annotate: Option<&AnnotateOptions>) -> Result<(), Vec<CheckResult>> {
         if net.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_power_symbol", "power_symbol", "a power symbol needs a net name")]);
@@ -6063,7 +6089,10 @@ impl<'a> Board<'a> {
         let prefix = self.design_symbol(lib_id).map(|s| s.reference_prefix).filter(|p| !p.is_empty()).unwrap_or_else(|| "#PWR".to_string());
         let screens = || self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values()));
         let number_of = |id: &str| id.strip_prefix(prefix.as_str()).filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse::<i64>().ok());
-        let used: BTreeSet<i64> = screens().flat_map(|s| s.power_symbols.iter().map(|p| p.id.as_str()).chain(s.symbols.iter().map(|x| x.id.as_str())).chain(s.instance_overrides.iter().map(|o| o.reference.as_str()))).filter_map(number_of).collect();
+        let used: BTreeSet<i64> = screens()
+            .flat_map(|s| s.power_symbols.iter().map(|p| p.id.as_str()).chain(s.symbols.iter().map(|x| x.id.as_str())).chain(s.instance_overrides.iter().map(|o| o.reference.as_str())).chain(s.extras.power_path_refs.values().flat_map(|m| m.values().map(String::as_str))))
+            .filter_map(number_of)
+            .collect();
         let algo = annotate.map(|a| a.algo).unwrap_or_default();
         let min = match algo {
             eda_model::annotate::Algo::FirstFree => annotate.map_or(0, |a| a.start_number.max(0)) + 1,
@@ -7401,6 +7430,8 @@ mod fp_exchange_tests;
 mod fp_editor_tests;
 #[cfg(test)]
 mod sch_hierarchy_tests;
+#[cfg(test)]
+mod sch_shared_screen_tests;
 #[cfg(test)]
 mod pcb_edit_details_tests;
 #[cfg(test)]

@@ -41,6 +41,13 @@ impl<'a> Board<'a> {
                     out.push(UsedRef { reference, unit: s.unit, lib_id: s.lib_id.clone(), value: s.value.clone() });
                 }
             }
+            // and the references its paths give its power symbols (UI-LEFT S9)
+            for p in &sec.power_symbols {
+                let reference = eda_model::sheet_list::power_reference_under(sec, p, &e.path);
+                if reference != p.id {
+                    out.push(UsedRef { reference, unit: 1, lib_id: p.lib_id.clone(), value: p.net.clone() });
+                }
+            }
         }
         out
     }

@@ -96,6 +96,14 @@ impl<'a> Board<'a> {
             return Err(fail("ops_nothing_to_change", id, "This symbol has only one unit."));
         }
         let target = new_unit.clamp(1, count);
+        // a screen shown on several sheet paths: the unit is the one of the path in view (`SCH_EDIT_FRAME::SelectUnit`: `SetUnitSelection(
+        // &GetCurrentSheet(), aUnit )`), every other path keeps the unit it draws (UI-LEFT S9)
+        let file = self.focus.clone().unwrap_or_default();
+        let paths = eda_model::sheet_list::paths_of_screens(&self.design).remove(&file).unwrap_or_default();
+        if paths.len() > 1 {
+            let path = self.focus_sheet_path();
+            return self.set_symbol_unit_on_path(i, &path, target, swap, &unit_name);
+        }
         if target == sym.unit {
             return Err(fail("ops_nothing_to_change", id, "the symbol already draws this unit"));
         }
@@ -137,6 +145,49 @@ impl<'a> Board<'a> {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// [`Self::set_symbol_unit`] on a screen shown on several sheet paths: `SCH_EDIT_FRAME::SelectUnit` with the current sheet `path`. The symbol at `i`
+    /// draws `target` on that path only (`SetUnitSelection( &sheetPath, aUnit )`, `SchExtras::path_units`); a symbol of the same reference on that path
+    /// that draws `target` already (`FindSymbolByRefAndUnit( .., GetRef( &sheetPath ), aUnit )`) is refused, or, with `swap`, takes the unit this one had
+    /// there ("Swap '%s' and '%s'": `otherSymbol->SetUnitSelection( &otherSymbolRef->GetSheetPath(), currentUnit )`). The symbol's own unit, which tells it
+    /// apart on the screen, stays. **Differs**: the fields are not autoplaced again for the new unit (they are the symbol's, shared by every path; KiCad
+    /// autoplaces the shared object for the unit of the sheet in view, which moves them on the other path too); the other unit is looked for on this
+    /// sheet path only, as [`Self::set_symbol_unit`] looks on this sheet only.
+    fn set_symbol_unit_on_path(&mut self, i: usize, path: &[String], target: u32, swap: bool, unit_name: &dyn Fn(u32) -> String) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let sym = sch.symbols[i].clone();
+        let current = eda_model::sheet_list::unit_under(sch, &sym, path);
+        if target == current {
+            return Err(fail("ops_nothing_to_change", &sym.id, "the symbol already draws this unit"));
+        }
+        let reference = eda_model::sheet_list::reference_under(sch, &sym, path);
+        let other = sch
+            .symbols
+            .iter()
+            .enumerate()
+            .find(|(j, t)| *j != i && t.lib_id == sym.lib_id && eda_model::sheet_list::reference_under(sch, t, path) == reference && eda_model::sheet_list::unit_under(sch, t, path) == target)
+            .map(|(j, _)| j);
+        let key = path.join("/");
+        let set = |sch: &mut eda_model::ir::SchematicSection, k: usize, unit: u32| {
+            let s = sch.symbols[k].clone();
+            let units = sch.extras.path_units.entry(field_key(&s.id, s.unit)).or_default();
+            if unit == s.unit {
+                units.remove(&key);
+            } else {
+                units.insert(key.clone(), unit);
+            }
+            if units.is_empty() {
+                sch.extras.path_units.remove(&field_key(&s.id, s.unit));
+            }
+        };
+        match other {
+            Some(j) if swap => set(sch, j, current),
+            Some(_) => return Err(fail("ops_unit_placed", &sym.id, format!("Symbol unit '{}' is already placed on this sheet; swap the two units instead", unit_name(target)))),
+            None => {}
+        }
+        set(sch, i, target);
         Ok(())
     }
 
@@ -277,7 +328,8 @@ struct UnitKeyed {
 }
 
 fn take_unit_keys(sch: &mut eda_model::ir::SchematicSection, key: &str) -> UnitKeyed {
-    // the unit each sheet path drew goes: the symbol draws the new unit on every path (`SchExtras::path_units`' documented difference)
+    // the unit each sheet path drew goes with a change of the symbol's own unit (a screen shown once; on a screen shown twice the edit is the path's own,
+    // `set_symbol_unit_on_path`, and the own unit stays)
     sch.extras.path_units.remove(key);
     UnitKeyed {
         layout: sch.field_layout.remove(key),

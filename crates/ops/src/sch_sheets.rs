@@ -99,9 +99,10 @@ fn tree_of(file: &str, screen_of: &dyn Fn(&str) -> Option<SchematicSection>, ord
     Ok(())
 }
 
-/// The symbols of the shared screens before a command ([`Board::shared_screens_before`]): file -> ((reference, unit), place).
+/// The symbols of the shared screens before a command ([`Board::shared_screens_before`]): file -> ((reference, unit), place); and the ids of their
+/// power symbols (file -> ids).
 #[derive(Default)]
-pub(crate) struct SharedScreens(BTreeMap<String, Vec<((String, u32), Point)>>);
+pub(crate) struct SharedScreens(BTreeMap<String, Vec<((String, u32), Point)>>, BTreeMap<String, BTreeSet<String>>);
 
 impl<'a> Board<'a> {
     /// `LoadSheetFromFile`'s checks on a file that is to be a sheet: what stops it, what KiCad asks "Continue Load?" about, and what will happen to the
@@ -310,6 +311,7 @@ impl<'a> Board<'a> {
         for (file, sec) in self.design.sheet_contents.iter().flatten() {
             if counts.get(file).copied().unwrap_or(0) > 1 || !sec.instance_overrides.is_empty() {
                 out.0.insert(file.clone(), sec.symbols.iter().map(|s| ((s.id.clone(), s.unit), s.at)).collect());
+                out.1.insert(file.clone(), sec.power_symbols.iter().map(|p| p.id.clone()).collect());
             }
         }
         out
@@ -332,6 +334,13 @@ impl<'a> Board<'a> {
             }
         }
         let mut new_symbols: BTreeMap<String, BTreeSet<(String, u32)>> = BTreeMap::new();
+        // the power symbols new on a screen that was shown more than once (a power symbol is a symbol with a reference per path, UI-LEFT S9)
+        let mut new_power: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (file, ids) in &before.1 {
+            if let Some(sec) = self.design.sheet_contents.as_ref().and_then(|c| c.get(file)) {
+                new_power.insert(file.clone(), sec.power_symbols.iter().map(|p| p.id.clone()).filter(|id| !ids.contains(id)).collect());
+            }
+        }
         for (file, sec) in self.design.sheet_contents.iter_mut().flatten() {
             let was: &[((String, u32), Point)] = before.0.get(file).map(Vec::as_slice).unwrap_or(&[]);
             let now: BTreeMap<(String, u32), Point> = sec.symbols.iter().map(|s| ((s.id.clone(), s.unit), s.at)).collect();
@@ -359,6 +368,7 @@ impl<'a> Board<'a> {
 
         // the new symbols of a screen shown more than once, on each sheet path past the first
         let entries = eda_model::sheet_list::walk(&self.design);
+        self.number_new_power_on_later_paths(&entries, &new_power, numbering);
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for e in entries.iter().skip(1) {
             let Some(fresh) = new_symbols.get(&e.file).filter(|n| !n.is_empty()) else { continue };
@@ -385,6 +395,38 @@ impl<'a> Board<'a> {
             for (s, reference) in symbols.iter().zip(numbered) {
                 if reference != s.id {
                     sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, sheet_path: e.path.clone(), reference, unit: s.unit });
+                }
+            }
+        }
+    }
+
+    /// The power symbols new on a screen shown more than once, on each sheet path past the first (`SCH_DRAWING_TOOLS::PlaceSymbol`'s `annotate` loops over
+    /// `FindAllSheetsForScreen` sorted by page, and `AlwaysAnnotate` numbers a power symbol on each: `ReannotateByOptions( order, method, start,
+    /// existingRefs, .. )` with the path's page, `existingRefs` holding every reference of the hierarchy and the paths numbered before it; Paste's
+    /// `updatePastedSymbol` does the same per path): the path's reference filed in `SchExtras::power_path_refs` (UI-LEFT S9). The first path, in walk
+    /// order, keeps the power symbol's own id.
+    fn number_new_power_on_later_paths(&mut self, entries: &[eda_model::sheet_list::SheetEntry], new_power: &BTreeMap<String, BTreeSet<String>>, numbering: eda_model::sch_clipboard::PasteNumbering) {
+        if new_power.values().all(BTreeSet::is_empty) {
+            return;
+        }
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        for e in entries.iter().skip(1) {
+            let Some(fresh) = new_power.get(&e.file).filter(|n| !n.is_empty()) else { continue };
+            if seen.insert(e.file.clone()) {
+                continue; // the first placement: the power symbol's own id
+            }
+            let Some(screen) = self.design.sheet_contents.as_ref().and_then(|c| c.get(&e.file)).cloned() else { continue };
+            let key = e.path.join("/");
+            let mine: Vec<&eda_model::ir::PowerSymbol> = screen.power_symbols.iter().filter(|p| fresh.contains(&p.id) && !screen.extras.power_path_refs.get(&p.id).is_some_and(|m| m.contains_key(&key))).collect();
+            if mine.is_empty() {
+                continue;
+            }
+            let pasted: Vec<PastedRef> = mine.iter().map(|p| PastedRef { reference: p.id.clone(), unit: 1, unit_count: 1, lib_id: p.lib_id.clone(), value: p.net.clone(), at: (p.at.x, p.at.y), power: true }).collect();
+            let numbered = annotate_paste(&self.used_references(), &pasted, PasteMode::Unique, numbering, e.page_number_as_int());
+            let Some(sec) = self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(&e.file)) else { continue };
+            for (p, reference) in mine.iter().zip(numbered) {
+                if reference != p.id {
+                    sec.extras.power_path_refs.entry(p.id.clone()).or_default().insert(key.clone(), reference);
                 }
             }
         }
@@ -431,7 +473,7 @@ impl<'a> Board<'a> {
     /// symbol of them is numbered afresh, against everything else in the design. Power symbols are numbered apart (a sheet from a file keeps
     /// its power symbols, but two of one id cannot stay).
     fn annotate_new_screens(&mut self, files: &[String], order: AnnotateOrder, options: &AnnotateOptions) {
-        let scopes: Vec<ScreenScope> = files.iter().map(|f| ScreenScope { file: f.clone(), symbols: Take::All, power: false }).collect();
+        let scopes: Vec<ScreenScope> = files.iter().map(|f| ScreenScope { file: f.clone(), path: None, symbols: Take::All, power: false }).collect();
         let opts = AnnotateOptions { scope: Some(AnnotateScope::Selection), ..options.clone() };
         let (_, renames, _) = self.annotate_plan_in(&scopes, true, order, &opts);
         self.annotate_apply(&renames, false);
