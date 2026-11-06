@@ -66,6 +66,7 @@ mod via_layers;
 pub mod via_place;
 pub use via_layers::ViaLayerEdit;
 mod pad_nets;
+mod net_edit;
 mod fp_lib_fields;
 pub mod fp_items;
 mod sym_derive;
@@ -966,6 +967,15 @@ pub enum Cmd {
         #[serde(default)]
         change_pads: Option<bool>,
     },
+    /// The Net Inspector's Rename Selected Net... (`PCB_NET_INSPECTOR_PANEL::onRenameSelectedNet`) -- see `net_edit.rs`: the board's net `from` (its escaped
+    /// name) is called `to`, its pads (`DrawingsSection::net_renames`) and its copper; the schematic's netlist is left as it is. Refused for a name in use. One
+    /// undo step (KiCad's has none).
+    RenameNet { from: String, to: String },
+    /// The Net Inspector's Delete Selected Net(s) (`onDeleteSelectedNet`, `BOARD::Remove( NETINFO_ITEM )`): every pad and copper item of the nets `names`
+    /// onto no net, the nets gone from the board. One undo step for them all.
+    DeleteNets { names: Vec<String> },
+    /// The Net Inspector's Add Net... (`onAddNet`): a net with no item (`DrawingsSection::board_nets`); refused for a name in use. One undo step.
+    AddNet { name: String },
 
     /// `EDIT_TOOL::Duplicate` (the studio's Cmd+D): exact copies of the named items in place, under fresh ids -- placed footprints,
     /// tracks, vias, zones, shapes, texts, dimensions and groups (a group with copies of its members). A copied footprint is a new
@@ -2615,6 +2625,9 @@ impl Cmd {
             }
             Cmd::RemoveUnusedPads { selected, .. } => selected.iter().flatten().map(String::as_str).collect(),
             Cmd::SwapPadNets { ids, .. } | Cmd::SwapGateNets { ids, .. } | Cmd::TrackViaNets { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::RenameNet { from, to } => vec![from.as_str(), to.as_str()],
+            Cmd::DeleteNets { names } => names.iter().map(String::as_str).collect(),
+            Cmd::AddNet { name } => vec![name.as_str()],
             Cmd::SetTeardropSettings { .. } => vec!["teardrop_settings"],
             Cmd::AddAllTeardrops | Cmd::RemoveAllTeardrops => vec!["teardrops"],
             Cmd::Group { ids } | Cmd::Ungroup { ids } | Cmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
@@ -3292,6 +3305,9 @@ impl<'a> Board<'a> {
             Cmd::SwapPadNets { ids, connected_pads } => self.swap_pad_nets(ids, *connected_pads),
             Cmd::SwapGateNets { ids, target, connected_pads } => self.swap_gate_nets(ids, target.as_deref(), *connected_pads),
             Cmd::TrackViaNets { ids, net, apply_anyway, change_pads } => self.track_via_nets(ids, net.as_deref(), *apply_anyway, *change_pads),
+            Cmd::RenameNet { from, to } => self.rename_net(from, to),
+            Cmd::DeleteNets { names } => self.delete_nets(names),
+            Cmd::AddNet { name } => self.add_net(name),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, layer, line_width, text_size, text_thickness, footprint, rows } => {
                 self.edit_text_and_graphics(&pcb_global_edit::GlobalTextEdit { shape_ids, text_ids, dimension_ids, layer_defaults: *layer_defaults, layer: layer.as_deref(), line_width: *line_width, text_size: *text_size, text_thickness: *text_thickness, footprint, rows })
             }
@@ -7096,6 +7112,8 @@ mod pad_edit_tests;
 mod unused_pads_tests;
 #[cfg(test)]
 mod pad_nets_tests;
+#[cfg(test)]
+mod net_edit_tests;
 #[cfg(test)]
 mod sym_derive_tests;
 #[cfg(test)]

@@ -2059,6 +2059,10 @@ export type Cmd =
   | { op: "set_item_net"; ids: string[]; net: string }
   /** Track & Via Properties' net and its questions (crates/ops/src/pad_nets.rs `track_via_nets`): `net` null leaves every net; the answers left out make a question a refusal. */
   | { op: "track_via_nets"; ids: string[]; net: string | null; apply_anyway?: boolean; change_pads?: boolean }
+  /** The Net Inspector's Rename Selected Net, Delete Selected Net(s) and Add Net (`PCB_NET_INSPECTOR_PANEL`; crates/ops/src/net_edit.rs). Net names are the stored (escaped) ones. */
+  | { op: "rename_net"; from: string; to: string }
+  | { op: "delete_nets"; names: string[] }
+  | { op: "add_net"; name: string }
   | { op: "set_zone_name"; id: string; name: string }
   | { op: "replace_shape"; id: string; shape: CmdShape }
   /** The Properties panel's text style rows of a board text (crates/ops/src/pcb_props.rs `edit_text_style`): a key left out is unchanged. */
