@@ -114,7 +114,8 @@ function AttributeCell({ text, mixed, label, onToggle }: { text: string; mixed: 
 /** A right-button menu where it was asked for (`wxMenu` / `PopupMenu`): items, separators and check items; a click outside closes it. */
 function PopupMenu({ at, items, onPick, onClose }: { at: { x: number; y: number }; items: MenuItem[]; onPick: (id: string) => void; onClose: () => void }) {
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 2000 }} onClick={onClose} onContextMenu={(e) => (e.preventDefault(), onClose())}>
+    // a click outside closes the menu only (not the table under it, whose backdrop closes the table)
+    <div style={{ position: "fixed", inset: 0, zIndex: 2000 }} onClick={(e) => (e.stopPropagation(), onClose())} onContextMenu={(e) => (e.preventDefault(), e.stopPropagation(), onClose())}>
       <div className="context-menu" role="menu" data-testid="fields-table-menu" style={{ position: "fixed", left: at.x, top: at.y, background: "var(--chrome-bg-raised)", border: "1px solid var(--chrome-border)", borderRadius: 4, padding: "4px 0", minWidth: 180, fontSize: 12 }} onClick={(e) => e.stopPropagation()}>
         {items.map((it, i) =>
           it.kind === "separator" ? (
@@ -448,22 +449,22 @@ export function SymbolFieldsTableDialog() {
   /** A text cell the grid can write (`!isReadOnly && isTextEntry`): not the Reference, not a generated count, not an attribute's check box. */
   const writable = (name: string) => isEditableColumn(name) && !isAttributeColumn(name);
   /** The selected cells, top to bottom, left to right: the right-clicked one, or every shown cell (Select All). */
-  const selectedCells = (): Array<{ row: FieldsTableRow; c: (typeof shown)[number]["c"]; i: number }> => {
-    if (!table || !sel) return [];
-    if (sel === "all") return table.rows.flatMap((row) => shown.map(({ c, i }) => ({ row, c, i })));
-    const row = table.rows.find((r) => rowKey(r) === sel.row);
-    const col = shown.find(({ c }) => c.name === sel.col);
+  const selectedCells = (target: CellSel): Array<{ row: FieldsTableRow; c: (typeof shown)[number]["c"]; i: number }> => {
+    if (!table || !target) return [];
+    if (target === "all") return table.rows.flatMap((row) => shown.map(({ c, i }) => ({ row, c, i })));
+    const row = table.rows.find((r) => rowKey(r) === target.row);
+    const col = shown.find(({ c }) => c.name === target.col);
     return row && col ? [{ row, c: col.c, i: col.i }] : [];
   };
   const cellText = (row: FieldsTableRow, i: number) => (row.mixed[i] ? "" : (row.cells[i] ?? ""));
-  const copyCells = () => {
-    const cells = selectedCells();
+  const copyCells = (target: CellSel) => {
+    const cells = selectedCells(target);
     const byRow = new Map<FieldsTableRow, string[]>();
     for (const { row, i } of cells) byRow.set(row, [...(byRow.get(row) ?? []), cellText(row, i)]);
     gridClipboard = cellsAsText([...byRow.values()]);
     void navigator.clipboard?.writeText(gridClipboard).catch(() => undefined);
   };
-  const clearCells = () => stageCells(selectedCells().filter(({ c }) => writable(c.name)).map(({ row, c }) => ({ row, field: c.name, value: "" })));
+  const clearCells = (target: CellSel) => stageCells(selectedCells(target).filter(({ c }) => writable(c.name)).map(({ row, c }) => ({ row, field: c.name, value: "" })));
   const pasteCells = async (row: FieldsTableRow, colName: string) => {
     let text = gridClipboard;
     try {
@@ -488,7 +489,9 @@ export function SymbolFieldsTableDialog() {
   const onCellMenu = (e: React.MouseEvent, row: FieldsTableRow, colName: string) => {
     e.preventDefault();
     const keepAll = sel === "all";
-    if (!keepAll) setSel({ row: rowKey(row), col: colName });
+    // the cells the menu acts on: every one after Select All, else the one clicked (which becomes the selection)
+    const target: CellSel = keepAll ? "all" : { row: rowKey(row), col: colName };
+    setSel(target);
     const anyWritable = keepAll ? shown.some(({ c }) => writable(c.name)) : writable(colName);
     const text = (() => {
       const i = columns.findIndex((c) => c.name === colName);
@@ -502,9 +505,9 @@ export function SymbolFieldsTableDialog() {
         else if (id === "show_datasheet") {
           // `GetAssociatedDocument`: a URL opens in the browser
           if (text.trim() !== "") window.open(text.trim(), "_blank", "noopener");
-        } else if (id === "copy") copyCells();
-        else if (id === "cut") (copyCells(), clearCells());
-        else if (id === "delete") clearCells();
+        } else if (id === "copy") copyCells(target);
+        else if (id === "cut") (copyCells(target), clearCells(target));
+        else if (id === "delete") clearCells(target);
         else if (id === "paste") void pasteCells(row, colName);
         else if (id === "select_all") setSel("all");
       },

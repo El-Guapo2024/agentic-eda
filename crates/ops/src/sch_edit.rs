@@ -433,7 +433,9 @@ pub enum SchCmd {
     /// autoplaced, Autoplace Fields in the way they were (`if( fieldsAutoplaced == AUTOPLACE_AUTO || fieldsAutoplaced == AUTOPLACE_MANUAL ) symbol->AutoplaceFields(
     /// screen, fieldsAutoplaced )`). The library symbol is the project's definition of the symbol's library id (what a placement embeds). Refused when nothing
     /// changes, unless `allow_unchanged` (the dialog sends the reset in the change's own step, `processSymbols`' one commit, where a symbol already as the library
-    /// has it is no refusal). **Differs**: a symbol with no library symbol of its own (a generic box) has its fields placed by Autoplace Fields.
+    /// has it is no refusal). **Differs**: a symbol whose library symbol the project keeps no copy of (one the installed libraries draw: the studio's model
+    /// keeps no field layout of those), or with no library symbol at all (a generic box), has its fields placed by Autoplace Fields, and its styles and
+    /// visibility are a new symbol's defaults.
     ResetSymbolFields {
         ids: Vec<String>,
         #[serde(default)]
@@ -759,14 +761,16 @@ impl<'a> Board<'a> {
         }
         let mut changed = false;
         for (reference, lib_id, unit) in &units {
-            let lib = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).cloned().unwrap_or_else(|| eda_model::ir::LibrarySymbol { lib_id: lib_id.clone(), ..Default::default() });
+            let held = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).cloned();
+            let has_copy = held.is_some();
+            let lib = held.unwrap_or_else(|| eda_model::ir::LibrarySymbol { lib_id: lib_id.clone(), ..Default::default() });
             let key = eda_model::ir::field_key(reference, *unit);
             let sch = self.schematic()?;
             // a sheet read from a KiCad file keeps no places for its symbols' fields: nothing to reset there
             let Some(ctx) = eda_engine::fields_edit::OwnerCtx::new(sch, model, &key) else { continue };
-            // where the library's own frame is in the symbol's: the corner of its box the sheet places it by (`eda_engine::placed::corner_symbol`), when it
-            // has a library symbol to speak for it
-            let corner = ctx.symbol().and_then(|sym| {
+            // where the library's own frame is in the symbol's: the corner of its box the sheet places it by (`eda_engine::placed::corner_symbol`), when the
+            // project keeps the library symbol's fields (its copy: what a placement embeds, what Change Symbols puts in) and its drawing speaks for it
+            let corner = ctx.symbol().filter(|_| has_copy).and_then(|sym| {
                 let part = model.part(&sym.id)?;
                 let resolved = model.real_symbol_of_instance(sch, sym, part)?;
                 let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&resolved, sym.unit);
