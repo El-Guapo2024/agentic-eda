@@ -1055,6 +1055,9 @@ pub struct EditCtx {
     pub end: Point,
     pub pattern: TuningPattern,
     pub settings: Value,
+    /// The cursor the last move of the whole pattern was at (`EDIT_TOOL::doMoveSelection`'s `prevPos`): a move of the pattern alone moves its start and end by
+    /// how far the cursor went since ([`EditCtx::moved_ends`]).
+    pub move_from: Option<Point>,
 }
 
 /// A pattern being tuned again.
@@ -1077,6 +1080,7 @@ fn tuner_for(after: Rc<Scene>, pattern: &TuningPattern, settings: &Value, origin
     let start = segment_near(&after, origin, &pattern.layer, &pattern.base_line).ok_or("Unable to find the track the tuning pattern starts on.")?;
     let (net, width) = match after.world.get(start) {
         Some(Item::Segment(s)) => (Scene::net_name(&s.net), s.width),
+        Some(Item::Arc(a)) => (Scene::net_name(&a.net), a.width),
         _ => return Err("Unable to find the track the tuning pattern starts on.".into()),
     };
     let pk = Pick { item: start, track_id: String::new(), net, layer: pattern.layer.clone(), width, at: origin };
@@ -1105,10 +1109,26 @@ pub fn begin_retune(scene: &Scene, pattern: &TuningPattern, settings: &Value) ->
     let origin = point_setting(settings, "origin").unwrap_or(pattern.origin);
     let end = point_setting(settings, "end").unwrap_or(pattern.end);
     let tuner = tuner_for(after.clone(), pattern, settings, origin)?;
-    Ok(Retune { ctx: EditCtx { reset, after, end, pattern: pattern.clone(), settings: settings.clone() }, tuner })
+    let move_from = point_setting(settings, "move_from");
+    Ok(Retune { ctx: EditCtx { reset, after, end, pattern: pattern.clone(), settings: settings.clone(), move_from }, tuner })
 }
 
 impl EditCtx {
+    /// A pattern moved on its own (`EDIT_TOOL::doMoveSelection` of a lone generator: `genStartEdit`, then per move `item->Move( movement )` -- which in an edit
+    /// moves only `m_origin` and `m_end`, `PCB_TUNING_PATTERN::Move` -- and `genUpdateEdit`): its start and end, moved by the cursor's way since the last move,
+    /// come back onto the line the pattern is on, each to its nearest point (`resetToBaseline`: `m_origin = straightChain.NearestPoint( m_origin )`), and when they
+    /// end up closer than 0.1 mm the pattern keeps its own baseline's ends ("Don't allow points too close"). So the pattern slides along its track. `None` when the
+    /// line is no longer on the board.
+    pub fn moved_ends(&self, origin: Point, end: Point) -> Option<(Point, Point)> {
+        let line = line_of_baseline(&self.after, &self.pattern.base_line, &self.pattern.layer)?;
+        let chain = chain_of(&line);
+        let (o, e) = (chain.nearest_point(origin, true), chain.nearest_point(end, true));
+        if eda_pns::chain::distance(o, e) < um(100.0) {
+            return Some((*self.pattern.base_line.first()?, *self.pattern.base_line.last()?));
+        }
+        Some((o, e))
+    }
+
     /// The start of the pattern moved (its first edit point): the placer is started again at the new origin, on the same board, with the settings the tuner has now.
     pub fn tuner_at(&self, origin: Point, now: &TuningPattern) -> Result<Tuner, String> {
         let mut settings = if self.settings.is_object() { self.settings.clone() } else { json!({}) };

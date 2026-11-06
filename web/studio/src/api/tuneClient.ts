@@ -54,6 +54,8 @@ export const tuneRemove = (id: string) => postJson<{ ok: boolean; message?: stri
 export const tuneRegenerate = (ids?: string[]) => postJson<{ ok: boolean; message?: string; regenerated?: number; failed?: string[] }>("/api/tune/regenerate", ids ? { ids } : {});
 
 /** `genStartEdit`: a pattern of the board is edited through its four edit points. */
-export const tuneEditStart = (id: string, settings?: TuneSettings) => postJson<TuneSessionReply>("/api/tune/edit_start", { id, settings });
-/** `genUpdateEdit`: an edit point is at (x, y) (0 the start, 1 the end, 2 the width of the meanders and their side, 3 the spacing), or the settings change. */
+/** `genStartEdit`. `settings.move_from`: a pattern moved on its own, picked up there (edit point 4 moves its start and end by the cursor's way from it). */
+export const tuneEditStart = (id: string, settings?: TuneSettings & { move_from?: { x: Nm; y: Nm } }) => postJson<TuneSessionReply>("/api/tune/edit_start", { id, settings });
+/** `genUpdateEdit`: an edit point is at (x, y) (0 the start, 1 the end, 2 the width of the meanders and their side, 3 the spacing, 4 the whole pattern moved on its
+ *  own, (x, y) the cursor), or the settings change. */
 export const tuneEditMove = (move: { handle: number; x: Nm; y: Nm } | { settings: TuneSettings }) => postJson<TuneSessionReply>("/api/tune/edit_move", "settings" in move ? move : { handle: move.handle, x: round(move.x), y: round(move.y) });

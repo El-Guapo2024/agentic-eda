@@ -178,6 +178,27 @@ export class TuneHandleDrag {
   }
 }
 
+/**
+ * A tuning pattern moved on its own (`EDIT_TOOL::doMoveSelection` of a lone generator): `genStartEdit`, the pattern's start and end moved by `(dx, dy)` and put
+ * back on its track (`PCB_TUNING_PATTERN::Move` in an edit, then `genUpdateEdit`'s `resetToBaseline`: edit point 4 of `/api/tune/edit_move`), `genFinishEdit` -- so
+ * it slides along the track and is tuned again there, one undo step. Resolves to whether it was changed.
+ */
+export async function slidePattern(dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">, pattern: TuningPattern, dx: number, dy: number): Promise<boolean> {
+  const from = { x: pattern.origin.x, y: pattern.origin.y };
+  const started = await tuneEditStart(pattern.id, { move_from: from });
+  if (!started.ok) {
+    dispatch({ type: "TOAST", message: started.message ?? "The tuning pattern could not be moved.", kind: "error" });
+    return false;
+  }
+  const moved = await tuneEditMove({ handle: 4, x: from.x + dx, y: from.y + dy });
+  if (!moved.ok) {
+    void tuneCancel();
+    dispatch({ type: "TOAST", message: moved.message ?? "The tuning pattern could not be moved.", kind: "error" });
+    return false;
+  }
+  return finishEditPattern(dispatch, api);
+}
+
 /** Delete on tuning patterns (`PCB_TUNING_PATTERN::Remove`): the pattern's tracks go back to the baseline, one undo step for each pattern. Resolves to how many were removed. */
 export async function removeTuningPatterns(ids: readonly string[], api: Pick<StudioApi, "refresh">, dispatch: Dispatch<Action>): Promise<number> {
   let n = 0;

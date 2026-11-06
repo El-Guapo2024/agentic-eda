@@ -189,3 +189,50 @@ fn swap_layers_chained_moves_a_pattern_twice() {
         assert_eq!(routing(&b).tracks.iter().find(|t| &t.id == member).unwrap().layer, "In2.Cu");
     }
 }
+
+/// `PCB_TUNING_PATTERN::Move` outside an edit (the pattern moved with other items, `PCB_GROUP::Move`): its tracks, origin, end and base line all move by the vector;
+/// the tracks that are not its own stay where they are.
+#[test]
+fn move_items_takes_a_tuning_pattern_with_its_tracks_origin_end_and_base_line() {
+    let mut b = tuned_on_four_layers();
+    let pat = drawings(&b).tuning_patterns[0].clone();
+    let others: Vec<Track> = routing(&b).tracks.iter().filter(|t| !pat.member_ids.contains(&t.id)).cloned().collect();
+    let member_before = routing(&b).tracks.iter().find(|t| t.id == pat.member_ids[0]).unwrap().clone();
+    b.apply(&Cmd::MoveItems { ids: vec![pat.id.clone()], dx: mm(5.0), dy: mm(-1.0) }).unwrap();
+    let now = drawings(&b).tuning_patterns[0].clone();
+    assert_eq!((now.origin, now.end), (p(mm(6.0), mm(1.0)), p(mm(14.0), mm(1.0))));
+    assert_eq!(now.base_line, vec![p(mm(6.0), mm(1.0)), p(mm(14.0), mm(1.0))]);
+    let member = routing(&b).tracks.iter().find(|t| t.id == pat.member_ids[0]).unwrap();
+    assert_eq!(member.pts, member_before.pts.iter().map(|q| p(q.x + mm(5.0), q.y - mm(1.0))).collect::<Vec<_>>());
+    for t in &others {
+        assert_eq!(routing(&b).tracks.iter().find(|x| x.id == t.id).unwrap().pts, t.pts, "a track that is not the pattern's stays");
+    }
+    // the reverse move puts it all back
+    b.apply(&Cmd::MoveItems { ids: vec![pat.id.clone()], dx: mm(-5.0), dy: mm(1.0) }).unwrap();
+    assert_eq!(drawings(&b).tuning_patterns[0], pat);
+}
+
+/// `PCB_TUNING_PATTERN::Rotate` (`PCB_GENERATOR::Rotate`, `RotatePoint( m_end, .. )`, the base lines rotated) and `Flip`: turned over, the pattern is mirrored where it
+/// is and stays on its layer, its tracks too (`SetLayer( FlipLayer(..) )` then each track's own `Flip` back), its first meander on the other side.
+#[test]
+fn rotate_and_flip_items_turn_a_tuning_pattern_as_kicad_does() {
+    let mut b = tuned_on_four_layers();
+    let pat = drawings(&b).tuning_patterns[0].clone();
+    b.apply(&Cmd::RotateItems { ids: vec![pat.id.clone()], pivot: p(mm(1.0), mm(2.0)), angle_millideg: 90_000 }).unwrap();
+    let now = drawings(&b).tuning_patterns[0].clone();
+    assert_eq!(now.origin, p(mm(1.0), mm(2.0)), "the pivot");
+    assert_eq!(now.base_line[0], now.origin);
+    assert_eq!(now.base_line[1], now.end);
+    assert_eq!((now.end.x - mm(1.0)).abs() + (now.end.y - mm(2.0)).abs(), mm(8.0), "the end turned a quarter about the origin: {:?}", now.end);
+    assert!(now.end.x == mm(1.0), "{:?}", now.end);
+    let member = routing(&b).tracks.iter().find(|t| t.id == pat.member_ids[0]).unwrap();
+    assert!(member.pts.iter().all(|q| q.x <= mm(1.0) && q.x >= Nm::ZERO), "the meander turned with it, on the left of the base line now: {:?}", member.pts);
+    let mut b = tuned_on_four_layers();
+    b.apply(&Cmd::FlipItems { ids: vec![pat.id.clone()], pivot: p(mm(0.0), mm(0.0)), direction: FlipDirection::LeftRight }).unwrap();
+    let now = drawings(&b).tuning_patterns[0].clone();
+    assert_eq!((now.origin, now.end), (p(mm(-1.0), mm(2.0)), p(mm(-9.0), mm(2.0))));
+    assert_ne!(now.initial_side, pat.initial_side);
+    let member = routing(&b).tracks.iter().find(|t| t.id == pat.member_ids[0]).unwrap();
+    assert_eq!(member.layer, "F.Cu", "the pattern's tracks stay on their layer");
+    assert!(member.pts.iter().all(|q| q.x <= Nm::ZERO), "mirrored: {:?}", member.pts);
+}

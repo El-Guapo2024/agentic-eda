@@ -301,7 +301,9 @@ pub fn edit_start(dir: &Path, body: &[u8]) -> Value {
 }
 
 /// `POST /api/tune/edit_move` `{handle, x, y}` or `{settings}`: `genUpdateEdit` -- an edit point (0 the start, 1 the end, 2 the width of the meanders and the side
-/// they start on, 3 their spacing) is at `(x, y)`, or the dialog's settings change; the pattern is fitted again.
+/// they start on, 3 their spacing) is at `(x, y)`, or the dialog's settings change; the pattern is fitted again. Handle 4 is the whole pattern moved on its own
+/// (`EDIT_TOOL::doMoveSelection`): `(x, y)` is the cursor, and the start and end move by its way since the last one (`edit_start`'s `settings.move_from` the first
+/// time), back onto the pattern's line ([`tune_edit::EditCtx::moved_ends`]).
 pub fn edit_move(dir: &Path, body: &[u8]) -> Value {
     let req = body_json(body);
     with_session(dir, |s| {
@@ -318,6 +320,20 @@ pub fn edit_move(dir: &Path, body: &[u8]) -> Value {
                     Err(m) => return err(m),
                 },
                 1 => ctx.end = moved.end,
+                4 => {
+                    let from = ctx.move_from.unwrap_or(at);
+                    ctx.move_from = Some(at);
+                    let (dx, dy) = (at.x - from.x, at.y - from.y);
+                    let now = &s.tuner.pattern;
+                    let Some((origin, end)) = ctx.moved_ends(Point { x: now.origin.x + dx, y: now.origin.y + dy }, Point { x: ctx.end.x + dx, y: ctx.end.y + dy }) else {
+                        return err("Unable to find the tracks this tuning pattern was made on: they have been moved or edited since.");
+                    };
+                    match ctx.tuner_at(origin, &s.tuner.pattern) {
+                        Ok(t) => s.tuner = t,
+                        Err(m) => return err(m),
+                    }
+                    ctx.end = end;
+                }
                 _ => {
                     s.tuner.pattern.max_amplitude = moved.max_amplitude;
                     s.tuner.pattern.spacing = moved.spacing;
@@ -1032,6 +1048,36 @@ mod tests {
         assert_eq!(cancel(&dir)["had_session"], json!(true));
         assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned));
         assert_eq!(edit_move(&dir, &body(json!({ "handle": 1, "x": 15_000_000, "y": 9_500_000 })))["ok"], json!(false), "the session is over");
+    }
+
+    /// A pattern moved on its own (`EDIT_TOOL::doMoveSelection` of a lone generator: `genStartEdit`, `PCB_TUNING_PATTERN::Move` in an edit moving only its start
+    /// and end, `genUpdateEdit`'s `resetToBaseline` putting them back on the line): it slides along its track and is tuned again there, one undo step; a move
+    /// across the track takes it nowhere.
+    #[test]
+    fn a_pattern_moved_on_its_own_slides_along_its_track() {
+        let dir = scratch("slide");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
+        mv(&dir, &body(json!({ "x": 16_000_000, "y": 9_000_000 })));
+        let id = fix(&dir, &body(json!({})))["pattern_id"].as_str().unwrap().to_string();
+        let tuned = design_of(&dir);
+        // picked up at (12, 9.5) mm and carried 4 mm along and 1.5 mm off the track
+        let e = edit_start(&dir, &body(json!({ "id": id, "settings": { "move_from": { "x": 12_000_000, "y": 9_500_000 } } })));
+        assert_eq!(e["ok"], json!(true), "{e}");
+        let m = edit_move(&dir, &body(json!({ "handle": 4, "x": 14_000_000, "y": 10_250_000 })));
+        assert_eq!(m["ok"], json!(true), "{m}");
+        assert_eq!((m["pattern"]["origin"].clone(), m["pattern"]["end"].clone()), (json!({ "x": 10_000_000, "y": 9_500_000 }), json!({ "x": 18_000_000, "y": 9_500_000 })), "{m}");
+        let m = edit_move(&dir, &body(json!({ "handle": 4, "x": 16_000_000, "y": 11_000_000 })));
+        assert_eq!((m["pattern"]["origin"].clone(), m["pattern"]["end"].clone()), (json!({ "x": 12_000_000, "y": 9_500_000 }), json!({ "x": 20_000_000, "y": 9_500_000 })), "{m}");
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        let f = fix(&dir, &body(json!({})));
+        assert_eq!(f["ok"], json!(true), "{f}");
+        let pats = tune_edit::patterns_of(&design_of(&dir));
+        assert_eq!(pats.len(), 1);
+        assert_eq!((pats[0].id.as_str(), pats[0].origin, pats[0].end), (id.as_str(), p(mm(12.0), mm(9.5)), p(mm(20.0), mm(9.5))));
+        assert!((net_mm(&dir, "/SIG") - 22.0).abs() < 0.1, "{}", net_mm(&dir, "/SIG"));
+        board::undo(&dir, "test", None).expect("one undo puts the pattern back where it was");
+        assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned));
     }
 
     #[test]
