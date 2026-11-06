@@ -23,7 +23,7 @@
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
 # examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), padstacks-3d (KiCad's padstacks_normal.kicad_pcb with an
 # outline, through replace_board; $KICAD_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), tuner-arcs (tuner-arcs.check.js's), cutout-board (autoroute-cutout.check.js's), multichannel and
-# simulator and sim-model (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
+# simulator, sim-model and sim-left (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
 # copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR). `kicad_config=fresh` serves the check with a KiCad
 # configuration folder of its own, empty (`EDA_KICAD_CONFIG_DIR`): a check that writes the global library tables or KiCad's path variables never touches the
 # machine's. `fixtures=library-formats` puts two of KiCad's QA libraries in other formats in the board's folder, `legacy.lib` (a legacy symbol library) and
@@ -181,6 +181,8 @@ print(json.dumps({"cmd": {"op": "replace_board", "text": t[:-1] + edge + ")\n"},
             "$eda" board new "$e2e/multichannel-board.yaml" -o "$d" ;;
         simulator)
             "$eda" board new "$e2e/simulator-board.yaml" -o "$d" ;;
+        sim-left) # sim-left-u5.check.js (UI-LEFT M3): a source with an S-parameter port, a potentiometer, a tuned R
+            "$eda" board new "$e2e/sim-left-board.yaml" -o "$d" ;;
         sim-model) # sim-model.check.js: the built-in models, and an IBIS file in the board folder
             "$eda" board new "$e2e/sim-model-board.yaml" -o "$d" && mkdir -p "$d/models" && cp "$e2e/sim-model-io.ibs" "$d/models/io.ibs" && cp "$e2e/sim-model-diode.lib" "$d/models/diode.lib" ;;
         *) echo "unknown board kind $kind"; return 1 ;;
