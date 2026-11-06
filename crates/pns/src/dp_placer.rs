@@ -41,7 +41,7 @@ use crate::direction45::Direction45;
 use crate::item::{net_of, same_net, Item, ItemId, Kind, Net, Via};
 use crate::layer::LayerRange;
 use crate::line::Line;
-use crate::line_placer::{FixOutcome, SNAP_NM};
+use crate::line_placer::FixOutcome;
 use crate::node::{kind_mask, Node, QueryOpts};
 use crate::settings::{Mode, RoutingSettings};
 use crate::shove::{DisplacedLine, DisplacedVia, ShoveHead};
@@ -595,29 +595,14 @@ impl DiffPairPlacer {
         Via { net: net.clone(), layers: LayerRange::new(self.current_layer, to), pos, diameter: self.sizes.via_diameter, drill: self.sizes.via_drill, source_via: None, locked: false, is_virtual: false }
     }
 
-    /// The end item of a cursor (`TOOL_BASE::updateEndItem`, `pickSingleItem` for each net of the pair): a pad or via of either net near
-    /// it, else a track end, on the layer being routed (any while vias are placed). Not the items the route started on or has fixed.
-    fn pick_end_item(&self, at: Point) -> Option<ItemId> {
-        let layers = if self.placing_via { self.all_layers } else { LayerRange::single(self.current_layer) };
-        let own: HashSet<ItemId> = self.start_items.iter().chain(self.own_items.iter()).copied().collect();
-        let mut best: Option<((u8, Nm, ItemId), ItemId)> = None;
-        for (id, item) in self.world.iter() {
-            if own.contains(&id) || !item.layers().overlaps(&layers) {
-                continue;
-            }
-            if !(same_net(item.net(), &self.net_p) || same_net(item.net(), &self.net_n)) {
-                continue;
-            }
-            // pads and vias take priority over tracks, segments and arcs alike (`prioritized[]`: `ITEM::SEGMENT_T | ITEM::ARC_T`); then the nearest
-            let class = if item.is_track() { 1u8 } else { 0 };
-            let dist = item.anchors().iter().map(|a| vnorm(vsub(*a, at))).min();
-            let Some(dist) = dist.filter(|d| *d <= SNAP_NM) else { continue };
-            let key = (class, dist, id);
-            if best.as_ref().is_none_or(|(k, _)| key < *k) {
-                best = Some((key, id));
-            }
-        }
-        best.map(|(_, id)| id)
+    /// The end item of a cursor (`TOOL_BASE::updateEndItem`: `for( NET_HANDLE net : nets ) { endItem = pickSingleItem( mousePos, net, layer, false,
+    /// { m_startItem } ); if( endItem ) break; }`, P's net first): the item of either net under the cursor or within the grab radius (the grid,
+    /// [`RoutingSettings::grab_radius`], UI-LEFT R7) on the layer being routed (`aLayer` -1, any, while vias are placed), pads and vias before tracks
+    /// ([`Node::pick_single_item`]). Not the items the route started on or has fixed.
+    fn pick_end_item(&self, settings: &RoutingSettings, at: Point) -> Option<ItemId> {
+        let layer = if self.placing_via { None } else { Some(self.current_layer) };
+        let own: Vec<ItemId> = self.start_items.iter().chain(self.own_items.iter()).copied().collect();
+        [&self.net_p, &self.net_n].into_iter().find_map(|net| self.world.pick_single_item(at, Some(net), layer, self.current_layer, settings.grab_radius, &own))
     }
 
     /// `DIFF_PAIR_PLACER::propagateDpHeadForces`: the cursor, pushed off what the circle round the end of the pair (or of its vias) would
@@ -864,7 +849,7 @@ impl DiffPairPlacer {
         if self.idle {
             return false;
         }
-        self.current_end_item = self.pick_end_item(p);
+        self.current_end_item = self.pick_end_item(settings, p);
         self.fit_ok = false;
         self.last_node = None;
         self.shoved_lines.clear();

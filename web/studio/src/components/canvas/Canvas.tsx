@@ -57,7 +57,7 @@ import { SELECT_NET_TITLE, selectNetLabels, snapViaPosition, viaNet, type ViaPla
 import { startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { clearRouteQueue } from "./routeQueue";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
-import { routeMove, routeDragMove, dpMove, fetchState, setRouterEnteredGroup } from "../../api/client";
+import { routeMove, routeDragMove, dpMove, fetchState, setRouterEnteredGroup, setRouterGrid } from "../../api/client";
 import { finishInlineDrag } from "./dragging";
 import { dragStateFromPreview } from "../../kicad-port/dragTool";
 import { startDiffPairRoute, fixDiffPairRoute, finishDiffPairRoute } from "./diffPairRouting";
@@ -314,6 +314,8 @@ export function Canvas() {
   useEffect(() => () => snap.reset(), [snap]);
   // the router's sessions start with the entered group, which their new items join (r5 R5-2)
   useEffect(() => setRouterEnteredGroup(state.enteredGroupId), [state.enteredGroupId]);
+  // the router's grab radius is the grid (`pickSingleItem`'s `maxSlopRadius`, UI-LEFT R7)
+  useEffect(() => setRouterGrid(state.gridNm), [state.gridNm]);
 
   // The canvas's backing size tracks its container's actual box, not a
   // value computed once at mount -- a side panel opening/closing or the

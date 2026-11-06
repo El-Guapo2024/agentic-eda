@@ -620,6 +620,19 @@ export function setRouterEnteredGroup(group: string | null): void {
   routerEnteredGroup = group;
 }
 
+/** The board editor's grid, sent as the router's grab radius with each session's settings (`TOOL_BASE::pickSingleItem`: `maxSlopRadius = std::max(
+ *  m_gridHelper->GetGrid().x, m_gridHelper->GetGrid().y )`, UI-LEFT R7): what a route or a drag starts or ends on may be this far from the cursor. The
+ *  canvas keeps it current. */
+let routerGrabRadius: number | null = null;
+export function setRouterGrid(gridNm: number | null): void {
+  routerGrabRadius = gridNm != null && gridNm > 0 ? Math.round(gridNm) : null;
+}
+
+/** `routerSettingsToWire` with the grab radius. */
+function routerWire(settings: RouterSettings): Record<string, string | boolean | number> {
+  return { ...routerSettingsToWire(settings), ...(routerGrabRadius != null ? { grab_radius: routerGrabRadius } : {}) };
+}
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return (await r.json()) as T;
@@ -631,12 +644,12 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 /** `width` undefined: the width list is on "use net class" (`UseNetClassTrack()`), and the server takes the start net's width through the rules (`ImportSizes`). */
 /** `autoTrackWidth`: "Use Starting Track Width" (`m_UseConnectedTrackWidth`): the width of the track the start is on or joined to wins over `width` (the server's default: on). */
 export function routeStart(x: Nm, y: Nm, layer: string, width: Nm | undefined, settings: RouterSettings, autoTrackWidth?: boolean): Promise<RoutePreview> {
-  return postJson("/api/route/start", { x, y, layer, width, auto_track_width: autoTrackWidth, settings: routerSettingsToWire(settings), group: routerEnteredGroup ?? undefined });
+  return postJson("/api/route/start", { x, y, layer, width, auto_track_width: autoTrackWidth, settings: routerWire(settings), group: routerEnteredGroup ?? undefined });
 }
 
 /** `OK` in Interactive Router Settings while a route, drag or diff pair is running: the new `ROUTING_SETTINGS` apply from the next move (`ok: false` when none is: the studio keeps them for the next one). */
 export function routeSetSettings(settings: RouterSettings): Promise<{ ok: boolean }> {
-  return postJson("/api/route/settings", { settings: routerSettingsToWire(settings) });
+  return postJson("/api/route/settings", { settings: routerWire(settings) });
 }
 
 /** `flipPosture`/`width` fold in the `/` and `W` hotkeys -- see
@@ -725,14 +738,14 @@ export function routeSetMode(mode: RouteMode): Promise<{ ok: boolean }> {
  * (`ROUTER_TOOL::performDragging`'s dialog): without it the backend refuses one, with `locked: true` in the reply. */
 export function routeDragStart(x: Nm, y: Nm, layer: string, settings?: RouterSettings, freeAngle?: boolean, dragLocked?: boolean): Promise<DragPreview> {
   // The backend reads whole nanometres (`as_i64`): a fractional cursor position would silently become (0, 0) there -- "nothing to drag there".
-  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerSettingsToWire(settings) : undefined, free_angle: freeAngle ? true : undefined, drag_locked: dragLocked ? true : undefined, group: routerEnteredGroup ?? undefined });
+  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerWire(settings) : undefined, free_angle: freeAngle ? true : undefined, drag_locked: dragLocked ? true : undefined, group: routerEnteredGroup ?? undefined });
 }
 
 /** `ROUTER::StartDragging( aP, ITEM_SET )` of a selection (`ROUTER_TOOL::InlineDrag`): `footprints` is `COMPONENT_DRAGGER` -- the footprints move, the tracks on
  * their pads follow; `warp` ("Warp mouse to origin of moved object", on by default) starts a drag of one footprint at its anchor -- and `tracks` (two or more)
  * `MULTI_DRAGGER`. The reply's `start` is where the drag starts. */
 export function routeDragStartGroup(x: Nm, y: Nm, layer: string, group: { footprints?: string[]; tracks?: string[]; warp?: boolean }, settings?: RouterSettings): Promise<DragPreview> {
-  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerSettingsToWire(settings) : undefined, footprints: group.footprints, tracks: group.tracks, warp: group.warp === false ? false : undefined, group: routerEnteredGroup ?? undefined });
+  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerWire(settings) : undefined, footprints: group.footprints, tracks: group.tracks, warp: group.warp === false ? false : undefined, group: routerEnteredGroup ?? undefined });
 }
 
 export function routeDragMove(x: Nm, y: Nm): Promise<DragPreview> {
@@ -758,7 +771,7 @@ export function dpStart(x: Nm, y: Nm, layer: string, dims?: { width: Nm; gap: Nm
     gap: dims ? Math.round(dims.gap) : undefined,
     via_gap: dims?.viaGap !== undefined ? Math.round(dims.viaGap) : undefined,
     auto_track_width: autoTrackWidth,
-    settings: settings ? routerSettingsToWire(settings) : undefined,
+    settings: settings ? routerWire(settings) : undefined,
     group: routerEnteredGroup ?? undefined,
   });
 }

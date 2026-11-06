@@ -78,11 +78,8 @@ use eda_model::BoardRules;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
-/// `ANCHOR_SNAP_NM`-equivalent: how close the cursor must be to a same-net
-/// pad/via/track-end to snap onto it and offer to finish the route there.
-/// Matches the existing single-segment router's own snap radius
-/// (`web/studio/src/components/canvas/routing.ts`'s `findRouteAnchor`
-/// caller), so the two tools feel consistent.
+/// **INACTIVE since UI-LEFT R7:** the fixed 0.5 mm the route's end once snapped within. The grab radius is KiCad's, the grid
+/// ([`RoutingSettings::grab_radius`], `pickSingleItem`'s `maxSlopRadius`), measured to the copper ([`Node::pick_single_item`]); this is its default.
 pub const SNAP_NM: Nm = Nm::new(500_000);
 
 /// How far off a point may be and still be the point: the studio's own snapping (`PcbSnap.routePoint`) has put the cursor exactly on a
@@ -575,9 +572,14 @@ impl LinePlacer {
                 }
             }
         }
-        match node.nearest_anchor(p, layers, SNAP_NM, Some(&self.net)) {
-            Some((_, a)) => (Some(a), None),
-            None => (None, None),
+        // with nothing exactly there, what `pickSingleItem( mousePos, net, layer, false, { m_startItem } )` finds within the grab radius -- the grid
+        // (`maxSlopRadius`, UI-LEFT R7) -- by its copper, not its anchor; then `snapToItem` (a track's middle only with snap to tracks, `checkSnap`)
+        let layer = if self.placing_via { None } else { Some(self.current_layer) };
+        let Some(id) = node.pick_single_item(p, Some(&self.net), layer, self.current_layer, settings.grab_radius, &self.exclude_end) else { return (None, None) };
+        match node.snap_to_item(id, p) {
+            Some((at, None)) => (Some(at), None),
+            Some((at, Some(track))) if settings.snap_to_tracks => (Some(at), Some(track)),
+            _ => (None, None),
         }
     }
 

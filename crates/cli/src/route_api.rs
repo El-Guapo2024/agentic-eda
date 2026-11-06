@@ -120,6 +120,10 @@ fn settings_over(req: &Value, base: RoutingSettings) -> RoutingSettings {
     if let Some(m) = get("corner_mode").and_then(Value::as_str).and_then(eda_pns::direction45::CornerMode::from_name) {
         s.corner_mode = m;
     }
+    // the board editor's grid, `pickSingleItem`'s `maxSlopRadius` (UI-LEFT R7): what a route starts or ends on may be this far from the cursor
+    if let Some(r) = get("grab_radius").and_then(Value::as_i64).filter(|r| *r >= 0) {
+        s.grab_radius = Nm::new(r);
+    }
     limit("shove_iteration_limit", &mut s.shove_iteration_limit);
     limit("shove_time_limit", &mut s.shove_time_limit_ms);
     limit("walkaround_iteration_limit", &mut s.walkaround_iteration_limit);
@@ -1217,10 +1221,14 @@ mod tests {
         let started = start(&dir, &cell, &body(json!({ "x": 5_000_000, "y": 5_000_000, "layer": "F.Cu", "width": 200_000, "auto_track_width": false })));
         assert_eq!(started["ok"], json!(true), "{started}");
         mv(&cell, &body(json!({ "x": 9_000_000, "y": 5_000_000 })));
-        assert_eq!(layer(&cell, &body(json!({ "layer": "B.Cu" }))), json!({ "ok": true, "switched": true }), "a through via is on every layer");
+        let switched = layer(&cell, &body(json!({ "layer": "B.Cu" })));
+        assert_eq!((switched["ok"].clone(), switched["switched"].clone()), (json!(true), json!(true)), "a through via is on every layer: {switched}");
+        // `updateSizesAfterRouterEvent( targetLayer, .. )` after the switch (UI-LEFT R5): the clearance asked again on B.Cu
+        assert_eq!((switched["sizes"]["clearance"].clone(), switched["sizes"]["clearance_source"].clone()), (json!(200_000), json!("netclass 'Default'")), "{switched}");
         assert_eq!(mv(&cell, &body(json!({ "x": 9_000_000, "y": 5_000_000 })))["layer"], json!("B.Cu"));
         assert_eq!(fix(&cell, &body(json!({ "x": 9_000_000, "y": 5_000_000 })))["ok"], json!(true));
-        assert_eq!(layer(&cell, &body(json!({ "layer": "In1.Cu" }))), json!({ "ok": true, "switched": false }), "chained to the fixed segment");
+        let refused = layer(&cell, &body(json!({ "layer": "In1.Cu" })));
+        assert_eq!((refused["ok"].clone(), refused["switched"].clone(), refused["sizes"].clone()), (json!(true), json!(false), Value::Null), "chained to the fixed segment: {refused}");
         // a start on a track's end is held to the track's layer
         let started = start(&dir, &cell, &body(json!({ "x": 12_000_000, "y": 15_000_000, "layer": "F.Cu", "width": 200_000 })));
         assert_eq!(started["ok"], json!(true), "{started}");

@@ -141,3 +141,33 @@ fn the_clearance_is_read_again_on_the_layer_a_via_goes_to() {
     let class = router.update_sizes_after_router_event(back, at).expect("routing");
     assert!(class.width_applied && router.current_width() == Some(mm(0.35)), "{class:?}");
 }
+
+/// UI-LEFT R7 (findings p5 F2-11, `TOOL_BASE::pickSingleItem`'s `maxSlopRadius = std::max( grid.x, grid.y )`): with nothing exactly under the cursor, a
+/// route starts and ends on what is within the grid of it, measured to the copper -- not on what is within a fixed 0.5 mm of its anchor. A point 0.3 mm
+/// beside R2.1's copper is empty space on a 0.25 mm grid and R2.1 on a 0.5 mm one, for the start and for the end.
+#[test]
+fn the_grab_radius_is_the_grid_measured_to_the_copper() {
+    let (design, model) = board(vec![]);
+    let (r2, _) = pad_at(&design, &model, "R2.1");
+    let (node, _) = build_node(&design, &model);
+    let top = node.iter().find_map(|(_, it)| match it {
+        Item::Solid(s) if s.source == "R2.1" => Some(s.shape.bbox(Nm::ZERO).3),
+        _ => None,
+    });
+    let beside = p(r2.x, top.expect("R2.1's copper") + mm(0.3));
+    for (grid, grabbed) in [(mm(0.25), false), (mm(0.5), true)] {
+        let mut router = Router::new(&design, &model);
+        router.settings.grab_radius = grid;
+        router.start(beside, "F.Cu", mm(0.2)).expect("starts");
+        assert_eq!(router.current_net().as_deref() == Some("SIG"), grabbed, "start on a {grid} grid");
+        // and the end, of a route of SIG (`pickSingleItem( mousePos, net, layer, .. )`: a route of no net has no end item, `updateEndItem`), from the free
+        // end of a SIG stub on F.Cu
+        let (stubbed, model) = board(vec![track("stub", "SIG", "F.Cu", &[p(mm(30.0), mm(25.0)), p(mm(28.0), mm(25.0))])]);
+        let mut router = Router::new(&stubbed, &model);
+        router.settings.grab_radius = grid;
+        router.start(p(mm(28.0), mm(25.0)), "F.Cu", mm(0.2)).expect("the stub's end");
+        assert_eq!(router.current_net().as_deref(), Some("SIG"));
+        let pv = router.preview(beside).expect("routing");
+        assert_eq!(pv.snapped_end.is_some(), grabbed, "end on a {grid} grid: {pv:?}");
+    }
+}

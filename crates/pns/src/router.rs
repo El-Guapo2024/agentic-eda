@@ -30,8 +30,9 @@ use eda_model::via_extra::ViaKind;
 use eda_model::ConstraintModel;
 use std::collections::HashMap;
 
-/// `ANCHOR_SNAP_NM`-equivalent used for picking a *start* item -- see
-/// `line_placer::SNAP_NM` for the same radius used at the route's end.
+/// **INACTIVE since UI-LEFT R7:** the fixed 0.5 mm a route's start was once picked within; [`RoutingSettings::grab_radius`] (the grid, `pickSingleItem`'s
+/// `maxSlopRadius`) is used, and this is its default.
+#[allow(dead_code)]
 const START_SNAP_NM: Nm = Nm::new(500_000);
 
 /// A track cut in two where a route starts or ends in the middle of one (`SplitAdjacentSegments`, `SplitAdjacentArcs`): the commit gives the IR
@@ -462,7 +463,7 @@ impl Router {
     /// `TOOL_BASE::pickSingleItem( pos, nullptr, -1 )` ranks what is there: first what is exactly under the point (`QueryHoverItems( aWhere, 0 )`),
     /// a pad, via or track end on the active layer `layer` (`prioritized[0]`), then a track there whose copper the point is in (`prioritized[1]`),
     /// then the same on any copper layer (`prioritized[2]`, `[3]`: "the same kinds on any layer"); only with nothing there, what is within the
-    /// slop (`maxSlopRadius`, here [`START_SNAP_NM`]: a point that was not snapped, a script's, the API's), on the active layer and then on any. A
+    /// slop (`maxSlopRadius`, the grid: [`RoutingSettings::grab_radius`], UI-LEFT R7; a point that was not snapped, a script's, the API's), by the copper. A
     /// track is taken at the end nearer the point if that is within half the track's width (`snapToItem`), else at the point on its centre line, in
     /// the middle of the track. The route then starts on the item's layer when it is not on the active one ([`Self::start_layer`], r5 R5-1).
     /// **Differs:** the layers' visibility (`IsAnyLayerVisible`) and high contrast are the studio's, not asked here; on any layer the track
@@ -482,8 +483,15 @@ impl Router {
         if let Some(pick) = any_layer_track() {
             return Some(pick);
         }
-        let (item, pos) = self.world.nearest_anchor(at, LayerRange::single(layer), START_SNAP_NM, None).or_else(|| self.world.nearest_anchor(at, all, START_SNAP_NM, None))?;
-        Some(StartPick { item, pos, split: None })
+        // `for( int slopRadius : { 0, maxSlopRadius } )`: with nothing exactly there, what is within the grab radius -- the grid (UI-LEFT R7) -- by its
+        // copper, ranked as above, then `snapToItem` (a track in its middle is split there, as `track_pick`'s)
+        let item = self.world.pick_single_item(at, None, None, layer, self.settings.grab_radius, &[])?;
+        let (pos, split) = self.world.snap_to_item(item, at)?;
+        let split = split.filter(|id| self.world.get(*id).and_then(Item::source_track_id).is_some());
+        if split.is_none() && self.world.get(item).is_some_and(Item::is_track) && !self.world.get(item).and_then(Item::track_ends).is_some_and(|(a, b)| a == pos || b == pos) {
+            return None;
+        }
+        Some(StartPick { item, pos, split })
     }
 
     /// The track on `layer` whose copper `at` is in, as [`Self::pick_start`] takes it: at its end when `at` is within half its width of it, else
@@ -1356,7 +1364,8 @@ impl Router {
             })
             .min()
             .map(|(_, id)| id);
-        let item_id = via.or_else(|| self.world.item_at(at, LayerRange::single(layer), START_SNAP_NM)).ok_or("nothing to drag there")?;
+        // `updateStartItem( *evt, true )`: within the grab radius, the grid (`maxSlopRadius`, UI-LEFT R7)
+        let item_id = via.or_else(|| self.world.item_at(at, LayerRange::single(layer), self.settings.grab_radius)).ok_or("nothing to drag there")?;
         if drag_locked {
             self.world.set_locked(item_id, false);
         }
@@ -1661,7 +1670,7 @@ impl Router {
     // vias. See that module's own doc comment for what differs from KiCad.
 
     /// `DIFF_PAIR_PLACER::Start` plus `ROUTER::isStartingPointRoutable`'s checks for a pair: resolve whatever is at `at` the same
-    /// way [`Self::start`] does (a real pad/via/track-end within [`START_SNAP_NM`]), then find its differential-pair partner net's
+    /// way [`Self::start`] does ([`Self::pick_start`]: exactly there, then within the grab radius), then find its differential-pair partner net's
     /// nearest item of the same kind ([`crate::dp_placer::find_dp_primitive_pair`]). Replaces any route/drag/diff-pair session already
     /// in progress. The error is KiCad's own message.
     pub fn start_diff_pair(&mut self, at: Point, layer_name: &str) -> Result<(), String> {
@@ -1670,8 +1679,8 @@ impl Router {
         // `FindDpPrimitivePair` then finds its free end, or says "Can't find a suitable starting point. ..."), else nothing (findings p5 F4-6);
         // with nothing on the active layer, what `pickSingleItem` finds on another (`prioritized[2]`, `[3]`), and the pair starts on its layer
         // (`getStartLayer`, r5 R5-1)
-        let hit = self.world.nearest_anchor(at, LayerRange::single(active), START_SNAP_NM, None).map(|(id, _)| id).or_else(|| self.world.segment_at(at, active, None, None, &[]));
-        let Some(start_item) = hit.or_else(|| self.pick_start(at, active).map(|p| p.item)) else {
+        // `pickSingleItem( pos, nullptr, -1 )` (`updateStartItem`): exactly there first, then within the grab radius -- the grid, UI-LEFT R7
+        let Some(start_item) = self.pick_start(at, active).map(|p| p.item) else {
             return Err("Cannot start a differential pair in the middle of nowhere.".into());
         };
         let layer = match self.world.get(start_item) {
@@ -2311,7 +2320,9 @@ mod tests {
         let c = Point { x: mm(53.0), y: mm(53.0) };
         let pv = router.preview(c).unwrap();
         assert!(!pv.colliding && pv.head.first() == Some(b), "{pv:?}");
-        // a route of no net along it, 100 um away: no collision
+        // a route of no net along it, 100 um away: no collision. On a 0.1 mm grid (the grab radius, `maxSlopRadius`, UI-LEFT R7) the start is in empty
+        // space; with the 0.5 mm the start and end once snapped within whatever the grid, the track's copper 0.2 mm away is grabbed, as KiCad grabs it
+        router.settings.grab_radius = mm(0.1);
         router.start(Point { x: mm(50.0), y: mm(50.3) }, "F.Cu", mm(0.2)).expect("empty space");
         let pv = router.preview(Point { x: mm(53.0), y: mm(50.3) }).unwrap();
         assert!(!pv.colliding && pv.head.pts.len() == 2, "{pv:?}");

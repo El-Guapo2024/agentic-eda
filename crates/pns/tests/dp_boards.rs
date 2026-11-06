@@ -175,7 +175,9 @@ fn route_from_other_end_restarts_the_pair_at_the_far_end_and_commits_what_was_fi
     let (node, _) = build_node(&design, &model);
     let before = violations(&node, &model.board);
     for mode in [Mode::MarkObstacles, Mode::Walkaround] {
-        let settings = RoutingSettings { mode, can_violate_drc: true, ..RoutingSettings::default() };
+        // on a 0.25 mm grid (the grab radius, `pickSingleItem`'s `maxSlopRadius`, UI-LEFT R7): on a 0.5 mm one the U1 stub's copper, 0.48 mm from the next
+        // leg's cursor, is grabbed and that leg ends on the stubs, as KiCad's does
+        let settings = RoutingSettings { mode, can_violate_drc: true, grab_radius: mm(0.25), ..RoutingSettings::default() };
         for fix_first in [false, true] {
             let mut router = Router::new(&design, &model);
             router.settings = settings.clone();
