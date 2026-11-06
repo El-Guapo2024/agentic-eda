@@ -1541,6 +1541,8 @@ pub(crate) fn write_footprint(
             *n
         };
         let pad_extra = pad_text(extra.edit.and_then(|e| e.pad(&pad.number, nth)));
+        // An edit's Pad Type over the file's: "Edge connector" (`PAD::SetAttribute( PAD_ATTRIB::CONN )`) or a plain SMD pad again (`PadEdit::connector`).
+        let connector = extra.edit.and_then(|e| e.pad(&pad.number, nth)).and_then(|e| e.connector).unwrap_or(connector);
         // Our local frame is the part seen from the top; a bottom-side
         // part's x is mirrored before it is rotated (footprint::to_board,
         // which the placer, router and gates all go through). KiCad

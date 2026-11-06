@@ -92,6 +92,10 @@ export interface Pad {
   /** `PAD::GetPadToDieLength`, nm, and `GetPadToDieDelay`, attoseconds; absent for 0. */
   die_length?: Nm | null;
   die_delay?: number | null;
+  /** An edge connector pad (`PAD_ATTRIB::CONN`, the file's `connect`): an SMD pad; absent for any other. */
+  connector?: boolean;
+  /** Its backdrill and post-machining (KiCad 10), the edit's else the board file's; absent for none. */
+  drill_props?: PadDrillProps | null;
 }
 
 /** `eda_model::padstack::PadStackMode` (`PADSTACK::MODE`). */
@@ -1864,7 +1868,14 @@ export interface PadEditCmd {
   pin_function?: string;
   /** `PAD::SetPinType` (Pin Type); "" for none. */
   pin_type?: string;
+  /** `PAD::SetAttribute( PAD_ATTRIB::CONN )` (Pad Type "Edge connector") on an SMD pad; false makes it a plain SMD pad again. */
+  connector?: boolean;
+  /** The pad's backdrill and post-machining (KiCad 10's `PADSTACK::SecondaryDrill` ..), replaced whole (`eda_model::via_extra::PadDrillProps`). */
+  drill_props?: PadDrillProps;
 }
+
+/** A pad's backdrill and post-machining: the four of a via's `ViaProps` a pad has (`eda_model::via_extra::PadDrillProps`). */
+export type PadDrillProps = Pick<ViaProps, "backdrill" | "tertiary_drill" | "front_post_machining" | "back_post_machining">;
 
 /**
  * File > Import > Graphics... (`DRAWING_TOOL::PlaceImportedGraphics`): a DXF or SVG file (its `text`) as the board's own lines, arcs, circles, polygons, curves and text on `layer`,
@@ -2215,6 +2226,8 @@ export type Cmd =
   | { op: "edit_board_footprint"; part: string; reference?: FieldLayoutCmd; value?: FieldLayoutCmd; fields?: UserFieldCmd[]; attrs?: FootprintAttrsCmd }
   | { op: "edit_board_field"; part: string; name: string; layout?: FieldLayoutCmd; text?: string }
   | { op: "edit_board_pad"; part: string; edit: PadEditCmd }
+  /** The Properties panel's "Pad Number" (`PAD::SetNumber`): the pad `pad` (`REF.NUM[#k]`) renamed, keeping its net (crates/ops/src/pad_renumber.rs). */
+  | { op: "set_pad_number"; pad: string; number: string }
   /**
    * The 3D Models tab of Footprint Properties (crates/ops/src/fp_models.rs): `set_board_models` makes the footprint's whole list the one given (the dialog's OK; an empty list is a
    * footprint with no model); the others are the tab's Add, Remove and cell edits and the order of the rows, one at a time, by 0-based position (`edit_board_model` leaves a key

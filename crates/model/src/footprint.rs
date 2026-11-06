@@ -518,7 +518,7 @@ impl Footprint {
     /// commonly four physical pads named the same pin), and an empty
     /// number (a mounting hole) is normal too.
     pub fn validate(&self) -> Vec<crate::CheckResult> {
-        self.validate_with(true)
+        self.validate_with(true, false)
     }
 
     /// [`Footprint::validate`] as the Footprint Editor's Pad Properties judges a pad (`DIALOG_PAD_PROPERTIES::padValuesOK` over `PAD::doCheckPad`): a plated
@@ -526,11 +526,18 @@ impl Footprint {
     /// copper)"), which the dialog shows and then applies, so it is not refused here; the studio shows the warning (`kicad-port/fpFields.ts::padCheck`). A
     /// missing hole (`DRCE_PAD_TH_WITH_NO_HOLE`) and the shape errors (`DRCE_PADSTACK_INVALID`) still are.
     pub fn validate_pad_values(&self) -> Vec<crate::CheckResult> {
-        self.validate_with(false)
+        self.validate_with(false, false)
     }
 
-    /// `annular`: refuse a plated hole that leaves no annular ring (the generated footprints' rule; KiCad's dialog only warns).
-    fn validate_with(&self, annular: bool) -> Vec<crate::CheckResult> {
+    /// [`Footprint::validate_pad_values`] for an edit of the board's Properties panel, which sets a pad's size without `PAD::CheckPad` (`PAD_DESC`'s "Size X" and
+    /// "Size Y" have no validator, and `PGPROPERTY_SIZE` is a `wxUIntProperty`): a size of 0 is taken, a negative one is not.
+    pub fn validate_pad_values_zero_size_ok(&self) -> Vec<crate::CheckResult> {
+        self.validate_with(false, true)
+    }
+
+    /// `annular`: refuse a plated hole that leaves no annular ring (the generated footprints' rule; KiCad's dialog only warns). `zero_size_ok`: a pad of size 0
+    /// is no problem (a negative size still is).
+    fn validate_with(&self, annular: bool, zero_size_ok: bool) -> Vec<crate::CheckResult> {
         let mut out = Vec::new();
         let mut bad = |what: &str, why: String| {
             out.push(crate::CheckResult::fail("footprint", format!("{}.{what}", self.name), why));
@@ -539,7 +546,7 @@ impl Footprint {
             bad("pads", "footprint has no pads; nothing connects it to the board".into());
         }
         for p in &self.pads {
-            if p.size.0 <= Nm::ZERO || p.size.1 <= Nm::ZERO {
+            if (p.size.0 <= Nm::ZERO || p.size.1 <= Nm::ZERO) && !(zero_size_ok && p.size.0 >= Nm::ZERO && p.size.1 >= Nm::ZERO) {
                 bad(&format!("pad {}", p.number), format!("pad is {} x {} nm", p.size.0, p.size.1));
             }
             // Each copper layer's own shape (`PAD::CheckPad` runs `doCheckPad` for every unique layer of the padstack).
@@ -581,12 +588,12 @@ impl Footprint {
                         "a through-hole or non-plated pad with no drill is not a hole; the hole is a dimension of the lead or fastener, not something an exporter can derive from the copper".into(),
                     ),
                     (Some(_), Some(_)) => bad(&format!("pad {}", p.number), "a pad cannot have both a round drill and a slot drill".into()),
-                    (Some(d), None) if d <= Nm::ZERO => bad(&format!("pad {}", p.number), format!("drills a {d} nm hole")),
+                    (Some(d), None) if d < Nm::ZERO || (d == Nm::ZERO && !zero_size_ok) => bad(&format!("pad {}", p.number), format!("drills a {d} nm hole")),
                     (Some(d), None) if plated && d >= p.size.0.min(p.size.1) => bad(
                         &format!("pad {}", p.number),
                         format!("drill {d} nm is not smaller than the {} x {} nm pad, so there is no annular ring", p.size.0, p.size.1),
                     ),
-                    (None, Some((w, h))) if w <= Nm::ZERO || h <= Nm::ZERO => bad(&format!("pad {}", p.number), format!("slot drill is {w} x {h} nm")),
+                    (None, Some((w, h))) if w < Nm::ZERO || h < Nm::ZERO || ((w == Nm::ZERO || h == Nm::ZERO) && !zero_size_ok) => bad(&format!("pad {}", p.number), format!("slot drill is {w} x {h} nm")),
                     (None, Some((w, h))) if plated && (w >= p.size.0 || h >= p.size.1) => bad(
                         &format!("pad {}", p.number),
                         format!("slot drill {w} x {h} nm is not smaller than the {} x {} nm pad, so there is no annular ring", p.size.0, p.size.1),

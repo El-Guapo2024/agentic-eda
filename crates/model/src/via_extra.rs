@@ -459,38 +459,7 @@ impl ViaExtra {
     /// `(teardrops ..)` token and after everything else. A side KiCad would write as `none` with the other side unset is not written at all (`has_value()` on neither).
     pub fn set_props(&mut self, props: &ViaProps) {
         self.tokens.retain(|t| !tag_of(t).is_some_and(|tag| PROPS_TAGS.contains(&tag)));
-        let mut head = Vec::new();
-        let drill = |name: &str, d: &ViaDrillProps| format!("({name} (size {}) (layers {} {}))", fmt_mm(d.size), quoted(&d.start), quoted(&d.end));
-        if let Some(d) = props.backdrill.as_ref().filter(|d| d.size > crate::units::Nm::ZERO) {
-            head.push(drill("backdrill", d));
-        }
-        if let Some(d) = props.tertiary_drill.as_ref().filter(|d| d.size > crate::units::Nm::ZERO) {
-            head.push(drill("tertiary_drill", d));
-        }
-        let pm = |name: &str, p: &PostMachiningProps| {
-            let mut t = format!("({name} {}", match p.mode {
-                PostMachiningMode::Counterbore => "counterbore",
-                PostMachiningMode::Countersink => "countersink",
-            });
-            if p.size > crate::units::Nm::ZERO {
-                t.push_str(&format!(" (size {})", fmt_mm(p.size)));
-            }
-            if p.depth > crate::units::Nm::ZERO {
-                t.push_str(&format!(" (depth {})", fmt_mm(p.depth)));
-            }
-            if p.angle_ddeg > 0 {
-                let a = format!("{:.4}", p.angle_ddeg as f64 / 10.0);
-                t.push_str(&format!(" (angle {})", a.trim_end_matches('0').trim_end_matches('.')));
-            }
-            t.push(')');
-            t
-        };
-        if let Some(p) = &props.front_post_machining {
-            head.push(pm("front_post_machining", p));
-        }
-        if let Some(p) = &props.back_post_machining {
-            head.push(pm("back_post_machining", p));
-        }
+        let head = drill_tokens(props.backdrill.as_ref(), props.tertiary_drill.as_ref(), props.front_post_machining.as_ref(), props.back_post_machining.as_ref());
         let mut tail = Vec::new();
         let pair = |name: &str, front: Option<bool>, back: Option<bool>| (front.is_some() || back.is_some()).then(|| format!("({name} {} {})", fmt_opt_bool("front", front), fmt_opt_bool("back", back)));
         tail.extend(pair("tenting", props.front_tenting, props.back_tenting));
@@ -516,6 +485,88 @@ impl ViaExtra {
             let at = at.or_else(|| self.tokens.iter().position(|t| tag_of(t) == Some("teardrops"))).unwrap_or(self.tokens.len()).min(self.tokens.len());
             self.tokens.insert(at, token);
         }
+    }
+}
+
+/// The `(backdrill ..)`, `(tertiary_drill ..)`, `(front_post_machining ..)` and `(back_post_machining ..)` tokens of a padstack, in the order and the words
+/// `PCB_IO_KICAD_SEXPR::format( const PCB_TRACK* )` and `format( const PAD* )` write them: a drill only with a size (`SecondaryDrill().size.x > 0`), a post-machining
+/// only when it is one (`NOT_POST_MACHINED` is written as nothing), its size, depth and angle only when above 0.
+fn drill_tokens(backdrill: Option<&ViaDrillProps>, tertiary: Option<&ViaDrillProps>, front_pm: Option<&PostMachiningProps>, back_pm: Option<&PostMachiningProps>) -> Vec<String> {
+    let mut head = Vec::new();
+    let drill = |name: &str, d: &ViaDrillProps| format!("({name} (size {}) (layers {} {}))", fmt_mm(d.size), quoted(&d.start), quoted(&d.end));
+    if let Some(d) = backdrill.filter(|d| d.size > crate::units::Nm::ZERO) {
+        head.push(drill("backdrill", d));
+    }
+    if let Some(d) = tertiary.filter(|d| d.size > crate::units::Nm::ZERO) {
+        head.push(drill("tertiary_drill", d));
+    }
+    let pm = |name: &str, p: &PostMachiningProps| {
+        let mut t = format!("({name} {}", match p.mode {
+            PostMachiningMode::Counterbore => "counterbore",
+            PostMachiningMode::Countersink => "countersink",
+        });
+        if p.size > crate::units::Nm::ZERO {
+            t.push_str(&format!(" (size {})", fmt_mm(p.size)));
+        }
+        if p.depth > crate::units::Nm::ZERO {
+            t.push_str(&format!(" (depth {})", fmt_mm(p.depth)));
+        }
+        if p.angle_ddeg > 0 {
+            let a = format!("{:.4}", p.angle_ddeg as f64 / 10.0);
+            t.push_str(&format!(" (angle {})", a.trim_end_matches('0').trim_end_matches('.')));
+        }
+        t.push(')');
+        t
+    };
+    if let Some(p) = front_pm {
+        head.push(pm("front_post_machining", p));
+    }
+    if let Some(p) = back_pm {
+        head.push(pm("back_post_machining", p));
+    }
+    head
+}
+
+/// A pad's backdrill and post-machining (KiCad 10's `PADSTACK::SecondaryDrill`, `TertiaryDrill`, `FrontPostMachining` and `BackPostMachining` of a `PAD`; the Properties
+/// panel's "Backdrill Properties" and "Post-machining Properties" of `PAD_DESC`): the same four a via has ([`ViaProps`]), read from and written to the pad's own tokens in
+/// the words `PCB_IO_KICAD_SEXPR::format( const PAD* )` writes (`(backdrill (size ..) (layers "B.Cu" "In2.Cu"))`, `(front_post_machining countersink (size ..) (angle ..))`)
+/// and `PCB_IO_KICAD_SEXPR_PARSER::parsePAD` reads. Additive: a pad edit without it keeps what the file said.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PadDrillProps {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backdrill: Option<ViaDrillProps>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tertiary_drill: Option<ViaDrillProps>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front_post_machining: Option<PostMachiningProps>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back_post_machining: Option<PostMachiningProps>,
+}
+
+/// The tags of the tokens [`PadDrillProps`] reads and writes.
+const PAD_DRILL_TAGS: &[&str] = &["backdrill", "tertiary_drill", "front_post_machining", "back_post_machining"];
+
+impl PadDrillProps {
+    /// What a pad's tokens say of its drills and post-machining (`parsePAD`'s `T_backdrill`, `T_tertiary_drill`, `T_front_post_machining`, `T_back_post_machining`).
+    pub fn from_tokens(tokens: &[String]) -> PadDrillProps {
+        let props = ViaExtra { tokens: tokens.to_vec(), ..Default::default() }.props();
+        PadDrillProps { backdrill: props.backdrill, tertiary_drill: props.tertiary_drill, front_post_machining: props.front_post_machining, back_post_machining: props.back_post_machining }
+    }
+
+    /// Nothing drilled or machined beyond the hole.
+    pub fn is_none(&self) -> bool {
+        self.backdrill.is_none() && self.tertiary_drill.is_none() && self.front_post_machining.is_none() && self.back_post_machining.is_none()
+    }
+
+    /// `tokens` with these in place of what they said of the drills and the post-machining, where the first of them stood (else first, where `format( const PAD* )`
+    /// writes them: after the hole, before the layers).
+    pub fn set_in_tokens(&self, tokens: &mut Vec<String>) {
+        let at = tokens.iter().position(|t| tag_of(t).is_some_and(|tag| PAD_DRILL_TAGS.contains(&tag))).unwrap_or(0);
+        tokens.retain(|t| !tag_of(t).is_some_and(|tag| PAD_DRILL_TAGS.contains(&tag)));
+        let head = drill_tokens(self.backdrill.as_ref(), self.tertiary_drill.as_ref(), self.front_post_machining.as_ref(), self.back_post_machining.as_ref());
+        let at = at.min(tokens.len());
+        tokens.splice(at..at, head);
     }
 }
 

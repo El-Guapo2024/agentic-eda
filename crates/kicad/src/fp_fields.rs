@@ -203,6 +203,10 @@ pub(crate) fn pad_kept_tokens(tokens: &[String], edit: Option<&PadEdit>) -> Vec<
     if let Some(t) = &e.teardrops {
         eda_model::teardrop_params::set_in_tokens(&mut out, Some(t));
     }
+    // The backdrill and post-machining the Properties panel set (`PAD::SetBackdrillMode` .., `format( const PAD* )`'s `(backdrill ..)` and `(front_post_machining ..)`).
+    if let Some(d) = &e.drill_props {
+        d.set_in_tokens(&mut out);
+    }
     out
 }
 

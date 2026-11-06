@@ -1169,7 +1169,9 @@ fn edit_shape_changes_layer_width_and_filled_but_not_geometry() {
 
     let e = b.apply(&Cmd::EditShape { id: id.clone(), layer: "".into(), stroke_width: mm(0.3), filled: true }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_shape");
-    let e = b.apply(&Cmd::EditShape { id, layer: "F.Fab".into(), stroke_width: Nm::ZERO, filled: true }).unwrap_err();
+    // A width of 0 is the Properties panel's to set (`EDA_SHAPE_DESC`'s "Line Width" has no validator); below 0 is refused.
+    b.apply(&Cmd::EditShape { id: id.clone(), layer: "F.Fab".into(), stroke_width: Nm::ZERO, filled: true }).unwrap();
+    let e = b.apply(&Cmd::EditShape { id, layer: "F.Fab".into(), stroke_width: Nm::new(-1), filled: true }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_shape");
 
     assert_eq!(b.apply(&Cmd::EditShape { id: "shape_nope".into(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false }).unwrap_err()[0].check, "ops_unknown_shape");

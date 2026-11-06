@@ -558,6 +558,13 @@ fn library_pad_with_edit(pad: &eda_model::ir::LibraryPad, e: &eda_model::fp_edit
     if let Some(r) = e.solder_paste_margin_ratio {
         out.kicad.solder_paste_margin_ratio = Some(r);
     }
+    // The edit's Pad Type "Edge connector" (an SMD pad only) and its backdrill and post-machining, in the library pad's own words.
+    if let Some(c) = e.connector {
+        out.kicad.connector = c && out.kind == eda_model::PadKind::Smd;
+    }
+    if let Some(d) = &e.drill_props {
+        d.set_in_tokens(&mut out.kicad.tokens);
+    }
     out
 }
 

@@ -218,7 +218,7 @@ test("a footprint's Clearance Override (empty: none) and Zone Connection Style g
   assert.equal(rowOf(b, ["U1"], "Zone Connection Style")!.value, "Full");
 });
 
-test("a pad: where it is, and what it is; its number and net are read-only, its type, shape, size and hole are edited", () => {
+test("a pad: where it is, and what it is; its net is read-only, its type, shape, number, size, hole, backdrill and post-machining are edited", () => {
   const b = board();
   assert.deepEqual(names(b, ["U1.1"]), [
     ["Basic Properties", ["Position X", "Position Y", "Net", "Orientation"]],
@@ -232,12 +232,12 @@ test("a pad: where it is, and what it is; its number and net are read-only, its 
   const writable = pcbGrid(b, ["U1.1"], "mm").groups.flatMap((g) => g.rows).filter((r) => r.writable).map((r) => r.name);
   // UI-LEFT P3: the pin name and type, the fabrication property, the pad-to-die length and delay and the teardrop rows are edited too
   const TEARDROP_ROWS = ["Enable Teardrops", "Best Length Ratio", "Max Length", "Best Width Ratio", "Max Width", "Curved Teardrops", "Prefer Zone Connections", "Allow Teardrops To Span Two Tracks", "Max Width Ratio"];
-  assert.deepEqual(writable, ["Position X", "Position Y", "Orientation", "Pad Type", "Pad Shape", "Pin Name", "Pin Type", "Size X", "Size Y", "Fabrication Property", "Copper Layers", "Pad To Die Length", "Pad To Die Delay", ...OVERRIDES, ...TEARDROP_ROWS], "an SMD pad has no hole to edit; its net and number have no verb");
+  // UI-LEFT-2 PP8: the number (`set_pad_number`) and the backdrill (the pad's `drill_props`) too; an SMD pad has no hole to post-machine (`padCanHaveHole`)
+  assert.deepEqual(writable, ["Position X", "Position Y", "Orientation", "Pad Type", "Pad Shape", "Pad Number", "Pin Name", "Pin Type", "Size X", "Size Y", "Fabrication Property", "Copper Layers", "Pad To Die Length", "Pad To Die Delay", "Backdrill Mode", ...OVERRIDES, ...TEARDROP_ROWS], "an SMD pad has no hole to edit; its net has no verb");
   const th = pcbGrid(b, ["U1.2"], "mm").groups.flatMap((g) => g.rows).filter((r) => r.writable).map((r) => r.name);
-  assert.deepEqual(th, ["Position X", "Position Y", "Orientation", "Pad Type", "Pad Shape", "Pin Name", "Pin Type", "Size X", "Hole Shape", "Hole Size X", "Fabrication Property", "Copper Layers", "Pad To Die Length", "Pad To Die Delay", ...OVERRIDES, ...TEARDROP_ROWS], "a through-hole pad can edit its hole");
+  assert.deepEqual(th, ["Position X", "Position Y", "Orientation", "Pad Type", "Pad Shape", "Pad Number", "Pin Name", "Pin Type", "Size X", "Hole Shape", "Hole Size X", "Fabrication Property", "Copper Layers", "Pad To Die Length", "Pad To Die Delay", "Top Post-machining", "Bottom Post-machining", "Backdrill Mode", ...OVERRIDES, ...TEARDROP_ROWS], "a through-hole pad can edit its hole");
   // A read-only row says why in its tooltip.
   assert.match(rowOf(b, ["U1.1"], "Net")!.note ?? "", /from the schematic/);
-  assert.match(rowOf(b, ["U1.1"], "Backdrill Mode")!.note ?? "", /not modelled/);
   // A pad that does not say its kind and shape (an older backend) is read from its flags.
   assert.equal(rowOf(b, ["U1.2"], "Pad Type")!.value, "through_hole");
   assert.equal(rowOf(b, ["U1.2"], "Pad Shape")!.value, "circle");
@@ -671,7 +671,10 @@ test("shape rows send a replace_shape for the geometry and an edit_shape for lin
   assert.deepEqual(edit(b, ["shp_rect"], "Fill", 1), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_rect"], fill: "solid" }]);
   assert.deepEqual(edit(b, ["shp_poly"], "Position X", 1_000), [{ op: "move_items", ids: ["shp_poly"], dx: 1_000, dy: 0 }]);
   assert.equal(edit(b, ["shp_rect"], "Width", 10_000).length, 0, "the width it already has");
-  assert.equal(pcbEdit(b, ["shp_circle"], "Radius", 0, "mm").ok, false);
+  // `SetRadius( 0 )` is taken (no validator; UI-LEFT-2 PP8), a negative radius is not
+  assert.equal(pcbEdit(b, ["shp_circle"], "Radius", 0, "mm").ok, true);
+  assert.equal(pcbEdit(b, ["shp_circle"], "Radius", -1_000, "mm").ok, false);
+  assert.deepEqual(edit(b, ["shp_seg"], "Line Width", 0), [{ op: "edit_shape", id: "shp_seg", layer: "F.SilkS", stroke_width: 0, filled: false }]);
 });
 
 test("the Fill row offers the five fills of UI_FILL_MODE and sends one set_shape_style; the choice that is already there sends nothing", () => {
@@ -819,7 +822,9 @@ test("a field: position, layer, orientation, then its text properties; a user fi
     ["Basic Properties", ["Position X", "Position Y", "Layer", "Locked", "Orientation"]],
     ["Text Properties", ["Text", "Font", "Auto Thickness", "Thickness", "Italic", "Bold", "Mirrored", "Visible", "Width", "Height", "Horizontal Justification", "Vertical Justification", "Knockout", "Keep Upright"]],
   ]);
-  assert.equal(rowOf(b, ["U1:Reference"], "Locked")!.writable, false, "a field is locked with its footprint here");
+  // a field has a lock of its own (UI-LEFT-2 PP8)
+  assert.equal(rowOf(b, ["U1:Reference"], "Locked")!.writable, true);
+  assert.deepEqual(edit(b, ["U1:Reference"], "Locked", true), [{ op: "set_locked", ids: ["U1:Reference"], locked: true }]);
   assert.equal(rowOf(b, ["U1:Reference"], "Text")!.writable, false, "the reference comes from the schematic");
   assert.equal(rowOf(b, ["U1:Value"], "Text")!.writable, false);
   assert.equal(rowOf(b, ["U1:Vendor"], "Text")!.writable, true);
@@ -898,4 +903,60 @@ test("a pad: type, shape, size, corner radius and hole are edit_board_pad comman
   assert.deepEqual(edit(b, ["U1.1"], "Pad Type", "through_hole"), pad({ kind: "through_hole", drill: 300_000 }));
   // Several pads: one command each.
   assert.equal(edit(b, ["U1.1", "U1.3"], "Size X", 700_000).length, 2);
+});
+
+// ------------------------------------------------------------------------------------------------ UI-LEFT-2 PP8: the rows that were read-only
+
+test("PP8: a pad's Pad Type offers Edge connector (an SMD pad with the connector flag) and its number is renamed by set_pad_number", () => {
+  const b = edited();
+  assert.deepEqual(rowOf(b, ["U1.1"], "Pad Type")!.choices!.map((c) => c.label), ["Through-hole", "SMD", "Edge connector", "NPTH, mechanical"]);
+  assert.deepEqual(edit(b, ["U1.1"], "Pad Type", "conn"), [{ op: "edit_board_pad", part: "U1", edit: { number: "1", nth: 1, kind: "smd", connector: true } }]);
+  b.parts[0]!.pads![0]!.connector = true;
+  assert.equal(rowOf(b, ["U1.1"], "Pad Type")!.value, "conn");
+  assert.deepEqual(edit(b, ["U1.1"], "Pad Type", "smd"), [{ op: "edit_board_pad", part: "U1", edit: { number: "1", nth: 1, kind: "smd", connector: false } }]);
+  assert.deepEqual(edit(b, ["U1.1"], "Pad Number", "7"), [{ op: "set_pad_number", pad: "U1.1", number: "7" }]);
+  assert.deepEqual(edit(b, ["U1.1"], "Pad Number", "1"), [], "the number it has");
+  // A size or a hole of 0 is taken (`PAD_DESC`: no validator / `PositiveIntValidator`); below 0 is not.
+  assert.equal(pcbEdit(b, ["U1.1"], "Size X", 0, "mm").ok, true);
+  assert.equal(pcbEdit(b, ["U1.1"], "Size X", -1_000, "mm").ok, false);
+  assert.equal(pcbEdit(b, ["U1.2"], "Hole Size X", 0, "mm").ok, true);
+});
+
+test("PP8: a pad's backdrill and post-machining are its drill_props, set whole with the one change PADSTACK's setters make", () => {
+  const b = edited();
+  assert.equal(rowOf(b, ["U1.2"], "Backdrill Mode")!.value, "no_backdrill");
+  const [bd] = edit(b, ["U1.2"], "Backdrill Mode", "bottom");
+  // `SetBackdrillMode`: a new backdrill is 1.1 times the hole, from B.Cu
+  assert.deepEqual(bd, { op: "edit_board_pad", part: "U1", edit: { number: "2", nth: 1, drill_props: { backdrill: { size: 440_000, start: "B.Cu", end: "B.Cu" } } } });
+  const p2 = b.parts[0]!.pads![1]!;
+  p2.drill_props = { backdrill: { size: 440_000, start: "B.Cu", end: "B.Cu" } };
+  assert.equal(rowOf(b, ["U1.2"], "Bottom Backdrill Size")!.value, 440_000);
+  assert.equal(rowOf(b, ["U1.2"], "Top Backdrill Size"), undefined, "a bottom backdrill has no top rows");
+  const [cut] = edit(b, ["U1.2"], "Bottom Backdrill Must-Cut", "F.Cu");
+  assert.deepEqual(cut && cut.op === "edit_board_pad" && cut.edit.drill_props, { backdrill: { size: 440_000, start: "B.Cu", end: "F.Cu" } });
+  const [pm] = edit(b, ["U1.2"], "Top Post-machining", "countersink");
+  assert.ok(pm && pm.op === "edit_board_pad" && pm.edit.drill_props?.front_post_machining?.mode === "countersink", JSON.stringify(pm));
+  assert.ok(pm && pm.op === "edit_board_pad" && pm.edit.drill_props?.backdrill?.size === 440_000, "the backdrill stays");
+  // An SMD pad has no hole to post-machine: the rows are there, read-only (`padCanHaveHole`).
+  assert.equal(rowOf(b, ["U1.1"], "Top Post-machining")!.writable, false);
+});
+
+test("PP8: a copper shape's net is set_item_net, <no net> included; a field's Auto Thickness is a thickness of 0", () => {
+  const b = edited();
+  b.drawings!.shapes.push({ id: "shp_cu", kind: "rect", layer: "F.Cu", stroke_width: 100, filled: true, start: [0, 0], end: [4_000, 2_000], net: "GND" } as never);
+  assert.equal(rowOf(b, ["shp_cu"], "Net")!.writable, true);
+  assert.deepEqual(edit(b, ["shp_cu"], "Net", "VCC"), [{ op: "set_item_net", ids: ["shp_cu"], net: "VCC" }]);
+  assert.deepEqual(edit(b, ["shp_cu"], "Net", ""), [{ op: "set_item_net", ids: ["shp_cu"], net: "" }]);
+  // A field: Auto Thickness on is a thickness of 0, off the pen it is drawn with (`GetEffectiveTextPenWidth`: an eighth of the 1 mm width).
+  assert.equal(rowOf(b, ["U1:Reference"], "Auto Thickness")!.writable, true);
+  const [auto] = edit(b, ["U1:Reference"], "Auto Thickness", true);
+  assert.ok(auto && auto.op === "edit_board_field" && auto.layout?.thickness === 0, JSON.stringify(auto));
+  b.parts[0]!.fields![0]!.thickness = 0;
+  assert.equal(rowOf(b, ["U1:Reference"], "Thickness")!.value, 125, "the pen it is drawn with");
+  const [off] = edit(b, ["U1:Reference"], "Auto Thickness", false);
+  assert.ok(off && off.op === "edit_board_field" && off.layout?.thickness === 125, JSON.stringify(off));
+  // A text size of 0 is taken and clamped to `TEXT_MIN_SIZE_MM` (`SetTextWidth`).
+  b.parts[0]!.fields![0]!.w = 1_500;
+  const [w] = edit(b, ["U1:Reference"], "Width", 0);
+  assert.ok(w && w.op === "edit_board_field" && w.layout?.size?.[0] === 1_000, JSON.stringify(w));
 });

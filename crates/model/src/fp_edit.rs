@@ -361,6 +361,16 @@ pub struct PadEdit {
     /// `PAD::SetPinType` (the Properties panel's "Pin Type"): the electrical type's canonical name (`passive`, `bidirectional` ..); empty is none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_type: Option<String>,
+    /// `PAD::SetAttribute( PAD_ATTRIB::CONN )` (the Properties panel's Pad Type "Edge connector", Pad Properties' "Edge Connector"): `Some(true)` makes an SMD pad an
+    /// edge connector pad (written `connect`: copper on its side, the mask on both, no paste), `Some(false)` a plain SMD pad again; `None` keeps what the board file
+    /// or the library said (`PadMaskInfo::connector`). Only an SMD pad is one ([`PadKind::Smd`]: the model holds an edge connector pad as an SMD pad).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connector: Option<bool>,
+    /// The pad's backdrill and post-machining (KiCad 10's `PAD::SetBackdrillMode`, `SetBottomBackdrillSize` .., `SetFrontPostMachiningMode` ..; the Properties panel's
+    /// "Backdrill Properties" and "Post-machining Properties"), replaced whole: written as the pad's `(backdrill ..)`, `(tertiary_drill ..)`, `(front_post_machining ..)`
+    /// and `(back_post_machining ..)` in place of the ones a board file gave it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drill_props: Option<crate::via_extra::PadDrillProps>,
 }
 
 impl PadEdit {
@@ -393,6 +403,8 @@ impl PadEdit {
             && self.die_delay.is_none()
             && self.pin_function.is_none()
             && self.pin_type.is_none()
+            && self.connector.is_none()
+            && self.drill_props.is_none()
     }
 
     /// Whether this edit changes the pad's geometry the engine knows (shape, size, hole, type, rotation, corner radius, the copper's
