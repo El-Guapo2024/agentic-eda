@@ -839,6 +839,10 @@ pub(crate) fn check_rows_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
             if error.is_none() && r.is_table() && !r.uri.trim().is_empty() {
                 error = std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| Table::parse(&t).map_err(|e| e.message)).err();
             }
+            // a library of another format: KiCad's check loads it with its plugin (`CheckTableRow`), so here kicad-cli converts it, and a failure is its status
+            if error.is_none() && lt::convertible(kind, &r.lib_type) && !r.uri.trim().is_empty() {
+                error = crate::library_convert::readable(kind, &path).err();
+            }
             json!({ "error": error.unwrap_or_default(), "path": path.display().to_string(), "guess": guess_type(kind, &path) })
         })
         .collect();
