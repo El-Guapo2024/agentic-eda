@@ -118,17 +118,26 @@ impl Board<'_> {
             reference.trim().to_string()
         };
         let value = if value.trim().is_empty() { name.rsplit(':').next().unwrap_or(name).to_string() } else { value.trim().to_string() };
-        let stored = if known { None } else { definition.cloned() };
+        // (the pads with no copper are the record's, `put_library_record` below: `fp_on_board::with_copper_pads_only`)
+        let stored = if known { None } else { definition.map(crate::fp_on_board::with_copper_pads_only) };
         // `at` is where the editor put it, in whole nanometres (`fp->SetPosition( cursorPos )`): the pointer was snapped to the grid on screen, so it is
         // not rounded again to the board's placement step (UI-LEFT P19).
 
         let dr = self.drawings_mut();
-        dr.board_parts.push(BoardPart { reference: reference.clone(), value: Some(value), footprint: name.to_string(), definition: stored, pad_nets: Vec::new() });
+        dr.board_parts.push(BoardPart { reference: reference.clone(), value: Some(value), footprint: name.to_string(), definition: stored.clone(), pad_nets: Vec::new() });
         dr.board_parts.sort_by(|a, b| a.reference.cmp(&b.reference));
         let fps = &mut self.design.placement.as_mut().expect("a Board always carries a placement section").footprints;
         fps.push(FootprintInstance { id: reference.clone(), at, rot: 0, side: Side::Top, label: LabelSide::default() });
         self.sort_footprints();
         self.apply_board_defaults(&reference, name);
+        // What the board's footprint has of the library's beyond the engine's footprint (UI-LEFT PP5): KiCad adds the library's footprint whole, so its pads keep their
+        // layer sets, die lengths and properties, and it keeps its description, tags, margins, 3D body, dimensions, zones, tables ... The library's is the Footprint
+        // Editor's entry where the project edited one, else the one the command brought.
+        let lib = self.design.footprint_library.as_ref().and_then(|l| l.by_name(name)).cloned().or_else(|| definition.cloned());
+        let target = self.model.footprint_of(&probe).or_else(|| stored.as_ref().map(LibraryFootprint::to_engine_footprint));
+        if let (Some(lib), Some(target)) = (lib, target) {
+            self.put_library_record(&reference, name, &lib, &target);
+        }
         Ok(())
     }
 
@@ -316,10 +325,14 @@ mod tests {
         model.board.text_graphics.fab.text_width_nm = mm(0.8);
         model.board.text_graphics.fab.line_width_nm = mm(0.09);
 
-        // Nothing ticked: the footprint as its library has it, with no edit of its fields.
+        // Nothing ticked: the footprint as its library has it, with no edit of its fields (its edit holds the library's attributes, `(attr exclude_from_pos_files
+        // exclude_from_bom)`, which its pads do not give: UI-LEFT PP5).
         let b = place(&model);
         let dr = b.design().drawings.as_ref().unwrap();
-        assert!(dr.footprint_edits.is_empty());
+        let fields_edited = |dr: &eda_model::ir::DrawingsSection| dr.footprint_edits.iter().any(|e| e.reference.is_some() || e.value.is_some() || !e.fields.is_empty());
+        assert!(!fields_edited(dr));
+        let attrs = dr.footprint_edits.iter().find(|e| e.id == "H1").and_then(|e| e.attrs).expect("the library's attributes");
+        assert!(attrs.exclude_from_pos_files && attrs.exclude_from_bom);
         let def = dr.board_parts[0].definition.as_ref().unwrap();
         let width_on = |def: &LibraryFootprint, layer: &str| def.graphics.iter().find(|g| g.layer() == layer).map(|g| g.stroke_width());
         assert_eq!((width_on(def, "F.SilkS"), width_on(def, "F.Fab"), def.texts[0].size_nm), (Some(mm(0.12)), Some(mm(0.1)), mm(1.0)));
@@ -338,7 +351,7 @@ mod tests {
         model.board.formatting = eda_model::setup_pages::FormattingSettings { apply_to_fp_text: true, apply_to_fp_shapes: true, ..Default::default() };
         let b = place(&model);
         let dr = b.design().drawings.as_ref().unwrap();
-        assert!(dr.footprint_edits.is_empty(), "the fields were not ticked");
+        assert!(!fields_edited(dr), "the fields were not ticked");
         let def = dr.board_parts[0].definition.as_ref().unwrap();
         assert_eq!((width_on(def, "F.SilkS"), width_on(def, "F.Fab"), width_on(def, "F.CrtYd")), (Some(mm(0.18)), Some(mm(0.09)), Some(mm(0.05))), "each shape by its layer's class; the courtyard's 0.05 mm is the Courtyard class's default");
         assert_eq!((def.texts[0].size_nm, def.texts[0].stroke_width), (mm(0.8), mm(0.15)));
