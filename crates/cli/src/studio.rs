@@ -2323,6 +2323,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         // the project's unit notation (the root's `SchExtras::subpart_*`, r7 H5), which the sheet draws a unit's reference by
         "subpart_id_separator": design.schematic.as_ref().and_then(|r| r.extras.subpart_id_separator),
         "subpart_first_id": design.schematic.as_ref().and_then(|r| r.extras.subpart_first_id),
+        // Schematic Setup > Annotation (`SCHEMATIC_SETTINGS::m_Annotate*`, the root's `SchExtras::annotation`; absent is KiCad's defaults): what placing, pasting and
+        // importing number symbols by and what the Annotate dialog starts from (UI-LEFT S14)
+        "annotation": design.schematic.as_ref().and_then(|r| r.extras.annotation.clone()),
         // the design variants (KiCad 25ec2335 `SCHEMATIC::GetVariantNames` with `GetVariantDescription`), the same on every sheet
         "variants": design_variants_json(design),
     })

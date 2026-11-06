@@ -63,7 +63,7 @@ import { LINE_MODE_FREE } from "../kicad-port/schLineMode";
 import { postMovePreview, postPlacePreview } from "../api/client";
 import type { SchPastePreview } from "../kicad-port/schClipboard";
 import { importContentsCmd, importNumbering } from "../kicad-port/schImportSheet";
-import { rememberedAnnotateSettings } from "../kicad-port/schAnnotate";
+import { adoptProjectAnnotation, rememberedAnnotateSettings } from "../kicad-port/schAnnotate";
 import { droppedLeft } from "../kicad-port/sheetDrop";
 import { placeNextDropped } from "../actions/schSheetFileActions";
 import type { SchMovePatch } from "../api/schEditTypes";
@@ -386,6 +386,13 @@ export function SchematicView() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importKey, state.version]);
+  // Schematic Setup > Annotation, as the schematic has it now: what placing, pasting and Import Sheet number by (`PlaceSymbol`, `Paste` and `ImportSheet` read
+  // `SCHEMATIC_SETTINGS::m_Annotate*`; UI-LEFT S14)
+  const annotationKey = JSON.stringify(sch?.annotation ?? null);
+  useEffect(() => {
+    if (sch) adoptProjectAnnotation(sch.annotation);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [annotationKey, !!sch]);
   // A drop of several schematics places each in turn (`DoWithAcceptedFiles`): when one file's placement ends -- placed, or dropped with Esc -- the next is in the hand
   const hadImport = useRef(false);
   useEffect(() => {

@@ -3273,6 +3273,8 @@ export interface Schematic {
    *  no separator and 'A' (`SCHEMATIC_SETTINGS::SubReference`). */
   subpart_id_separator?: number | null;
   subpart_first_id?: number | null;
+  /** Schematic Setup > Annotation (`SCHEMATIC_SETTINGS::m_Annotate*`); absent or null is KiCad's defaults. */
+  annotation?: AnnotationSettings | null;
   /** The design's variants (KiCad 25ec2335 `SCHEMATIC::GetVariantNames`, with the project file's descriptions), in name order; the same list on every sheet. Absent: none. */
   variants?: DesignVariantInfo[];
   /** Schematic Setup > Formatting as the sheet is drawn by it (the sizes as KiCad reads them back); absent from an older backend. */
