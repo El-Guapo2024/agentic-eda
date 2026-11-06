@@ -19,34 +19,20 @@
 //!   (`crates/model/src/ir.rs`'s `Track::pts`, and `crates/kicad`'s
 //!   im/exporter already treats a multi-point `Track` as N-1 consecutive
 //!   `(segment ...)`s). Every pass works on segments, as KiCad does: a polyline the cleanup may change is cut into its segments
-//!   first, and a polyline that loses one comes back as the runs of segments that stay (`explode`, `finish`). The runs and a
-//!   merged track are new tracks (new ids, no `pins`); KiCad keeps the uuid of what it does not delete, and modifies the first of
-//!   two merged segments in place.
+//!   first, and a polyline that loses or changes one comes back as the runs of segments that stay (`explode`, `finish`): the first
+//!   run under the polyline's id, the others new tracks that take its mask opening and group. A merged track is the first of the two
+//!   segments modified in place, under its id (`mergeCollinearSegments`: `*aSeg1 = dummy_seg`), as KiCad keeps the uuid of what it
+//!   does not delete.
 //! - "Track in pad" measures the track's width against the pad's copper (`PlacedPad::signed_distance`, see
 //!   `track_inside_pad`) rather than KiCad's `SHAPE_POLY_SET` boolean subtract; the same for a plain pad, sampled for a pad
 //!   made of pieces, and an oval is its inscribed ellipse.
-//! - Collinearity is an exact integer cross-product test over this
-//!   model's already-integer nm coordinates, not KiCad's
-//!   `ApproxCollinear` angular-tolerance test over floating geometry --
-//!   stricter, never looser, than upstream.
-//! - The merge pass's "is the shared joint a node" check
-//!   ([`is_node`]) does not model `testTrackEndpointIsNode`'s "elide
-//!   other collinear tracks" exception for a true 3-way star junction
-//!   (two collinear arms plus a third, non-collinear one, all meeting at
-//!   exactly one point): this port simply declines to merge there rather
-//!   than risk mis-handling a real node. A rare case, and the safer of
-//!   the two failure directions (a missed merge, not a wrongly-merged
-//!   short).
-//! - The items at the joint are asked as `testMergeCollinearSegments` asks
-//!   them ([`is_node`]): a track's or via's end there, a pad's copper or a
-//!   zone's outline (`ZONE::HitTest`: a corner or an edge, not its inside,
-//!   round 4 A-5) within `( width + 1 ) / 2` of it, a zone only when its
-//!   fill touches the segments. A segment with a straight track of another
-//!   width attached is not merged (`mergeSegments`' necking-down rule).
-//!   A track the dialog's filter skips is not counted as attached, a locked
-//!   one is (`!filterItem( candidate )`, R6-Z4). Not ported: the merge of overlapping or
-//!   folded-back collinear segments into their bounding span, and
-//!   `ApproxCollinear`'s 1 nm tolerance.
+//! - Collinearity is `SEG::ApproxCollinear`'s, on the nanometre counts (the shorter segment's ends within 1 nm of the longer one's line).
+//! - The merge is `testMergeCollinearSegments` ([`test_merge`]): two touching straight segments of one width, collinear, merge into the span of
+//!   their four ends -- end to end, overlapping, folded back or one inside the other -- unless an end that another item meets would not be an end
+//!   of the merged segment, or more than two ends are met. The items at the ends are asked as KiCad asks them: a track's or via's end there,
+//!   a pad's copper or a zone's outline (`ZONE::HitTest`: a corner or an edge, not its inside, round 4 A-5) within `( width + 1 ) / 2` of it,
+//!   a zone only when its fill touches the segment. A segment with a straight track of another width attached is not merged (`mergeSegments`'
+//!   necking-down rule). A track the dialog's filter skips is not counted as attached, a locked one is (`!filterItem( candidate )`, R6-Z4).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -134,8 +120,13 @@ pub struct CleanupReport {
     /// The board's tracks the cleanup removes: those removed outright, and each polyline a segment of which goes (its other
     /// segments come back in [`CleanupReport::added`]).
     pub removed_tracks: Vec<String>,
-    /// The tracks the cleanup adds: merged tracks, and the runs of a polyline's segments that stay when another segment of it goes.
+    /// The tracks the cleanup adds: a track a merge changed, under its own id (it is in [`CleanupReport::removed_tracks`] too: the board's track
+    /// of that id, modified in place), and the runs of a polyline's segments that stay when another segment of it goes or changes (the first
+    /// under the polyline's id, the others with none).
     pub added: Vec<Track>,
+    /// The new tracks of [`CleanupReport::added`] (indices into it) that stand for a removed polyline, as (index, the polyline's id): each takes its
+    /// mask opening and group (`Cmd::CommitRoute`'s `track_sources`).
+    pub sources: Vec<(usize, String)>,
 }
 
 impl CleanupReport {
@@ -151,6 +142,10 @@ impl CleanupReport {
     }
     pub fn add_tracks(&self) -> Vec<Track> {
         self.added.clone()
+    }
+    /// The indices into [`CleanupReport::add_tracks`] of the tracks that keep their id (`Cmd::CommitRoute`'s `keep_track_ids`).
+    pub fn kept_track_indices(&self) -> Vec<usize> {
+        self.added.iter().enumerate().filter(|(_, t)| !t.id.is_empty()).map(|(i, _)| i).collect()
     }
 }
 
@@ -211,11 +206,6 @@ fn piece_id(id: &str, k: usize) -> String {
     format!("{id}~{k}")
 }
 
-/// The working list's name for the `n`th merged track (never a board id: board ids have no `~`).
-fn merged_id(n: usize) -> String {
-    format!("~merged{n}")
-}
-
 /// KiCad's `PCB_TRACK` is one segment; this model's `Track` is a polyline. Every pass works on segments, as KiCad does
 /// (`deleteDanglingTracks` and `removeShortingTrackSegments` remove the one `PCB_TRACK` at fault, not what it is drawn with), so each
 /// polyline of three or more points the cleanup may touch is cut into its segments first ([`piece_id`]); [`finish`] puts back the
@@ -237,45 +227,82 @@ fn explode(tracks: &[Track], prot: &Protected) -> (Vec<Track>, BTreeMap<String, 
     (out, pieces)
 }
 
-/// What the board loses and gains once every pass has run over the working list `work` (see [`explode`]): a polyline whose
-/// segments all stay is left as it is; one that lost a segment is removed, and each run of its consecutive segments that stay
-/// comes back as a track (with no `pins`, as a merged track). A merged track still in `work` is added. The changes' own ids
-/// are mapped back to the board's: a segment to its polyline; a merged track removed again by a later pass to nothing.
-fn finish(original: &[Track], work: &[Track], pieces: &BTreeMap<String, (String, usize)>, changes: &mut [CleanupChange]) -> (Vec<String>, Vec<Track>) {
-    let alive: BTreeSet<&str> = work.iter().map(|t| t.id.as_str()).collect();
+/// The runs of consecutive segments of a cut polyline that stay, in its order: segment `k + 1` goes on the run when one of its ends is the run's
+/// last point (or, for a run of one segment, either of its points: a merge may have turned the segment round, `testMergeCollinearSegments`' dummy
+/// runs the way its bounding box does).
+fn runs_of(segs: &[Option<&Track>]) -> Vec<Vec<Point>> {
+    let mut runs: Vec<Vec<Point>> = Vec::new();
+    let mut cur: Vec<Point> = Vec::new();
+    for s in segs {
+        let Some(s) = s else {
+            if cur.len() >= 2 {
+                runs.push(std::mem::take(&mut cur));
+            }
+            cur.clear();
+            continue;
+        };
+        let (a, b) = (s.pts[0], s.pts[1]);
+        if cur.len() == 2 && (cur[0] == a || cur[0] == b) && cur[1] != a && cur[1] != b {
+            cur.reverse();
+        }
+        match cur.last() {
+            Some(&l) if l == a => cur.push(b),
+            Some(&l) if l == b => cur.push(a),
+            _ => {
+                if cur.len() >= 2 {
+                    runs.push(std::mem::take(&mut cur));
+                }
+                cur = vec![a, b];
+            }
+        }
+    }
+    if cur.len() >= 2 {
+        runs.push(cur);
+    }
+    runs
+}
+
+/// What the board loses and gains once every pass has run over the working list `work` (see [`explode`]):
+/// - a track that is gone is removed;
+/// - a track a merge changed (`mergeCollinearSegments` modifies the first segment in place) is removed and added back under its own id, so it
+///   keeps its mask opening, group and lock;
+/// - a polyline whose segments all stay as they were is left as it is; one that lost or changed a segment is removed, and each run of its
+///   consecutive segments that stay comes back as a track: the first under the polyline's id (KiCad keeps the uuid of every segment it does not
+///   delete, and this model has one id for the whole line), the others as new tracks taking its mask opening and group (`sources`).
+///
+/// The changes' own ids are mapped back to the board's: a segment to its polyline.
+fn finish(original: &[Track], work: &[Track], pieces: &BTreeMap<String, (String, usize)>, changes: &mut [CleanupChange]) -> (Vec<String>, Vec<Track>, Vec<(usize, String)>) {
+    let by_id: BTreeMap<&str, &Track> = work.iter().map(|t| (t.id.as_str(), t)).collect();
     let mut removed = BTreeSet::new();
-    let mut added = Vec::new();
+    let mut added: Vec<Track> = Vec::new();
+    let mut sources: Vec<(usize, String)> = Vec::new();
     for t in original {
         let cut = pieces.contains_key(&piece_id(&t.id, 0));
         if !cut {
-            if !alive.contains(t.id.as_str()) {
-                removed.insert(t.id.clone());
+            match by_id.get(t.id.as_str()) {
+                None => {
+                    removed.insert(t.id.clone());
+                }
+                Some(w) if w.pts != t.pts || w.pins != t.pins => {
+                    removed.insert(t.id.clone());
+                    added.push((*w).clone());
+                }
+                Some(_) => {}
             }
             continue;
         }
-        let kept: Vec<bool> = (0..t.pts.len() - 1).map(|k| alive.contains(piece_id(&t.id, k).as_str())).collect();
-        if kept.iter().all(|&k| k) {
+        let segs: Vec<Option<&Track>> = (0..t.pts.len() - 1).map(|k| by_id.get(piece_id(&t.id, k).as_str()).copied()).collect();
+        if segs.iter().enumerate().all(|(k, s)| s.is_some_and(|s| s.pts[..] == t.pts[k..=k + 1])) {
             continue;
         }
         removed.insert(t.id.clone());
-        let mut k = 0;
-        while k < kept.len() {
-            if !kept[k] {
-                k += 1;
-                continue;
+        for (n, pts) in runs_of(&segs).into_iter().enumerate() {
+            if n > 0 {
+                sources.push((added.len(), t.id.clone()));
             }
-            let start = k;
-            while k < kept.len() && kept[k] {
-                k += 1;
-            }
-            added.push(Track { id: String::new(), net: t.net.clone(), pins: Vec::new(), layer: t.layer.clone(), width: t.width, pts: t.pts[start..=k].to_vec(), arc_mid_offset: None });
-        }
-    }
-    for t in work {
-        if t.id.starts_with('~') {
-            let mut t = t.clone();
-            t.id.clear();
-            added.push(t);
+            // the pads the polyline ends on stay with the run that keeps its id (`pins` names no end; the merges' pads are the segments')
+            let pins = if n == 0 { t.pins.clone() } else { Vec::new() };
+            added.push(Track { id: if n == 0 { t.id.clone() } else { String::new() }, net: t.net.clone(), pins, layer: t.layer.clone(), width: t.width, pts, arc_mid_offset: None });
         }
     }
     for c in changes.iter_mut() {
@@ -283,7 +310,6 @@ fn finish(original: &[Track], work: &[Track], pieces: &BTreeMap<String, (String,
         for id in &c.remove_track_ids {
             let shown = match pieces.get(id) {
                 Some((orig, _)) => orig.clone(),
-                None if id.starts_with('~') => continue,
                 None => id.clone(),
             };
             if !ids.contains(&shown) {
@@ -292,10 +318,12 @@ fn finish(original: &[Track], work: &[Track], pieces: &BTreeMap<String, (String,
         }
         c.remove_track_ids = ids;
         if let Some(t) = c.add_track.as_mut() {
-            t.id.clear();
+            if let Some((orig, _)) = pieces.get(&t.id) {
+                t.id = orig.clone();
+            }
         }
     }
-    (removed.into_iter().collect(), added)
+    (removed.into_iter().collect(), added, sources)
 }
 
 fn is_zero_length(t: &Track) -> bool {
@@ -536,32 +564,6 @@ fn remove_dangling(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, 
     deleted_any
 }
 
-fn collinear(a: Point, b: Point, c: Point) -> bool {
-    let cross = (b.x - a.x).area(c.y - a.y) - (b.y - a.y).area(c.x - a.x);
-    cross == 0
-}
-
-/// If straight tracks `a`/`b` share exactly one endpoint, `Some((shared,
-/// far_a, far_b))`.
-fn shared_endpoint(a: &Track, b: &Track) -> Option<(Point, Point, Point)> {
-    if a.pts.len() != 2 || b.pts.len() != 2 {
-        return None;
-    }
-    let (a0, a1) = (a.pts[0], a.pts[1]);
-    let (b0, b1) = (b.pts[0], b.pts[1]);
-    if a1 == b0 && a0 != b1 {
-        Some((a1, a0, b1))
-    } else if a1 == b1 && a0 != b0 {
-        Some((a1, a0, b0))
-    } else if a0 == b0 && a1 != b1 {
-        Some((a0, a1, b1))
-    } else if a0 == b1 && a1 != b0 {
-        Some((a0, a1, b0))
-    } else {
-        None
-    }
-}
-
 /// The copper layer range of a via (`from_layer`..`to_layer` in the board's stack order, either way round).
 fn via_spans(v: &Via, layer: &str, stack: &[String]) -> bool {
     let at = |l: &str| stack.iter().position(|s| s == l);
@@ -577,44 +579,100 @@ fn fill_touches_segment(ring: &[Point], a: Point, b: Point, hw: f64) -> bool {
     crate::geom::touches(&ItemShape::Zone { outline: ring.to_vec() }, ring, &ItemShape::Segment { a, b, half_width: hw }, &[a, b])
 }
 
-/// `testMergeCollinearSegments`' flags at the joint `p` of two merge candidates (named by `exclude`), from the items connectivity joins to either
-/// segment (`getConnectedItems( aSeg )`): any flag there keeps the segments apart (the merged segment would not end on it). Each item is asked as KiCad
-/// asks it:
-/// - a track, an arc or a via: `IsPointOnEnds( p )`, an end exactly at the joint -- a via only when it reaches the segments' layer (connected);
-/// - a pad: `PAD::HitTest( p, ( width + 1 ) / 2 )`, its copper on the layer within half the width of the joint;
+/// `SEG::mutualDistanceSquared` and `SEG::ApproxCollinear( aSeg, 1 )` (`libs/kimath/src/geometry/seg.cpp`), on the nanometre counts: the shorter
+/// segment's ends within 1 nm of the line through the longer one, `rescale`'s rounding to nearest kept. A zero-length longer segment is not collinear.
+fn approx_collinear(s1: (Point, Point), s2: (Point, Point)) -> bool {
+    let sq = |s: (Point, Point)| (s.1.x - s.0.x).area(s.1.x - s.0.x) + (s.1.y - s.0.y).area(s.1.y - s.0.y);
+    let (a, b) = if sq(s1) < sq(s2) { (s2, s1) } else { (s1, s2) };
+    let p = (a.0.y.get() - a.1.y.get()) as i128;
+    let q = (a.1.x.get() - a.0.x.get()) as i128;
+    let r = -p * a.0.x.get() as i128 - q * a.0.y.get() as i128;
+    let l = p * p + q * q;
+    if l == 0 {
+        return false;
+    }
+    let det1 = p * b.0.x.get() as i128 + q * b.0.y.get() as i128 + r;
+    let det2 = p * b.1.x.get() as i128 + q * b.1.y.get() as i128 + r;
+    // `rescale( det, det, l )`: the product is never negative and `l` is positive, so it rounds up from the half
+    let dsq = |d: i128| (d * d + l / 2) / l;
+    dsq(det1) <= 1 && dsq(det2) <= 1
+}
+
+/// `PCB_TRACK::IsPointOnEnds( p )` with no distance: an end of one of a polyline's segments (a vertex) exactly at `p`.
+fn has_end_at(t: &Track, p: Point) -> bool {
+    t.pts.contains(&p)
+}
+
+/// `TRACKS_CLEANER::testMergeCollinearSegments( aSeg1, aSeg2, aDummySeg )`: the merged segment of the straight tracks `seg1` and `seg2`, or `None`
+/// when they may not merge. Locked tracks never merge (the caller skips them: `IsLocked()`). The four ends are flagged where another item
+/// connected to the segment meets them (`collectPtsSeg1` / `collectPtsSeg2`, every item but the two):
+/// - a track, an arc or a via: `IsPointOnEnds( p )`, an end exactly there -- a via only when it reaches the segments' layer (connected);
+/// - a pad: `PAD::HitTest( p, ( width + 1 ) / 2 )`, its copper on the layer within half the width of the end;
 /// - a zone: `ZONE::HitTest( p, ( width + 1 ) / 2 )` -- `accuracy = std::max( aAccuracy, mmToIU( 0.1 ) )`, `HitTestForCorner( p, accuracy * 2 ) ||
-///   HitTestForEdge( p, accuracy )`, the outline's corners and edges, holes included, not its inside -- of a zone whose **fill** on the layer touches
-///   one of the segments (connectivity joins a zone by its fill, `checkZoneItemConnection`); an unfilled zone joins nothing.
+///   HitTestForEdge( p, accuracy )`, the outline's corners and edges, holes included, not its inside -- of a zone whose **fill** on the layer
+///   touches the segment (connectivity joins a zone by its fill, `checkZoneItemConnection`); an unfilled zone joins nothing.
 ///
-/// See the module doc for the "elide a 3-way collinear junction" gap this simplifies away.
+/// More than two flags is "a node in the center". The merged segment spans the four ends' bounding box (its diagonal, the way `aSeg1` runs: `min`
+/// to `max` when its x and y fall together, else `( min_x, max_y )` to `( max_x, min_y )`), and every flagged end must be one of its ends. So two
+/// segments that overlap, or one folded back over the other, or one inside the other, merge into their span as two meeting end to end do.
+/// `testTrackEndpointIsNode( aSeg1, .. )` comes last: it counts only an anchor at both of `aSeg1`'s ends at once, which a segment of non-zero
+/// length (the null segments go first when merging is on) never has, so it never refuses here.
 #[allow(clippy::too_many_arguments)]
-fn is_node(p: Point, segs: [(Point, Point); 2], layer: &str, width: Nm, exclude: (&str, &str), tracks: &[Track], vias: &[Via], pads: &[PadGeom], zones: &[Zone], copper: &ZoneCopper, stack: &[String]) -> bool {
-    if tracks.iter().any(|t| t.id != exclude.0 && t.id != exclude.1 && t.layer == layer && t.pts.contains(&p)) {
-        return true;
-    }
-    if vias.iter().any(|v| v.at == p && via_spans(v, layer, stack)) {
-        return true;
-    }
-    let accuracy = ((width.get() + 1) / 2) as f64;
-    if pads.iter().any(|pg| pad_covers_layer(pg, layer) && pg.pad.signed_distance(p) <= accuracy) {
-        return true;
-    }
-    let zone_accuracy = accuracy.max(100_000.0);
-    let hits = |ring: &[Point]| {
-        let n = ring.len();
-        ring.iter().any(|c| ((c.x - p.x).as_f64()).hypot((c.y - p.y).as_f64()) <= 2.0 * zone_accuracy) || (0..n).any(|i| crate::geom::point_seg_distance(p, ring[i], ring[(i + 1) % n]) <= zone_accuracy)
-    };
-    let hw = width.as_f64() / 2.0;
-    zones.iter().any(|z| {
-        if !z.is_on_layer(layer) || z.outline.len() < 3 || !(hits(&z.outline) || z.holes.iter().any(|h| h.len() >= 2 && hits(h))) {
-            return false;
+fn test_merge(seg1: &Track, seg2: &Track, tracks: &[Track], vias: &[Via], pads: &[PadGeom], zones: &[Zone], copper: &ZoneCopper, stack: &[String]) -> Option<[Point; 2]> {
+    let layer = seg1.layer.as_str();
+    let ends = [seg1.pts[0], seg1.pts[1], seg2.pts[0], seg2.pts[1]];
+    let flagged_by = |seg: &Track, p: Point| -> bool {
+        let (a, b) = (seg.pts[0], seg.pts[1]);
+        let accuracy = ((seg.width.get() + 1) / 2) as f64;
+        if tracks.iter().any(|t| t.id != seg1.id && t.id != seg2.id && t.layer == layer && has_end_at(t, p)) {
+            return true;
         }
-        let Some(fill) = copper.get(&z.id, layer) else { return false };
-        fill.polys.iter().filter_map(|poly| poly.first()).any(|chain| {
-            let ring: Vec<Point> = chain.iter().map(|q| Point { x: Nm::new(q.x), y: Nm::new(q.y) }).collect();
-            ring.len() >= 3 && segs.iter().any(|&(a, b)| fill_touches_segment(&ring, a, b, hw))
+        if vias.iter().any(|v| v.at == p && via_spans(v, layer, stack)) {
+            return true;
+        }
+        if pads.iter().any(|pg| pad_covers_layer(pg, layer) && pg.pad.signed_distance(p) <= accuracy) {
+            return true;
+        }
+        let zone_accuracy = accuracy.max(100_000.0);
+        let hits = |ring: &[Point]| {
+            let n = ring.len();
+            ring.iter().any(|c| ((c.x - p.x).as_f64()).hypot((c.y - p.y).as_f64()) <= 2.0 * zone_accuracy) || (0..n).any(|i| crate::geom::point_seg_distance(p, ring[i], ring[(i + 1) % n]) <= zone_accuracy)
+        };
+        let hw = seg.width.as_f64() / 2.0;
+        zones.iter().any(|z| {
+            if !z.is_on_layer(layer) || z.outline.len() < 3 || !(hits(&z.outline) || z.holes.iter().any(|h| h.len() >= 2 && hits(h))) {
+                return false;
+            }
+            let Some(fill) = copper.get(&z.id, layer) else { return false };
+            fill.polys.iter().filter_map(|poly| poly.first()).any(|chain| {
+                let ring: Vec<Point> = chain.iter().map(|q| Point { x: Nm::new(q.x), y: Nm::new(q.y) }).collect();
+                ring.len() >= 3 && fill_touches_segment(&ring, a, b, hw)
+            })
         })
-    })
+    };
+    let flags: Vec<bool> = (0..4).map(|i| flagged_by(if i < 2 { seg1 } else { seg2 }, ends[i])).collect();
+    if flags.iter().filter(|&&f| f).count() > 2 {
+        return None;
+    }
+    let min_x = ends.iter().map(|p| p.x).min().unwrap();
+    let min_y = ends.iter().map(|p| p.y).min().unwrap();
+    let max_x = ends.iter().map(|p| p.x).max().unwrap();
+    let max_y = ends.iter().map(|p| p.y).max().unwrap();
+    let (s, e) = (seg1.pts[0], seg1.pts[1]);
+    let dummy = if (s.x > e.x) == (s.y > e.y) {
+        [Point { x: min_x, y: min_y }, Point { x: max_x, y: max_y }]
+    } else {
+        [Point { x: min_x, y: max_y }, Point { x: max_x, y: min_y }]
+    };
+    if (0..4).any(|i| flags[i] && !dummy.contains(&ends[i])) {
+        return None;
+    }
+    Some(dummy)
+}
+
+/// Do the straight segments `a` and `b` touch (connectivity's `Collide` of their effective shapes, the widths included)?
+fn segments_touch(a: &Track, b: &Track) -> bool {
+    crate::geom::seg_seg_distance(a.pts[0], a.pts[1], b.pts[0], b.pts[1]) <= (a.width.as_f64() + b.width.as_f64()) / 2.0
 }
 
 /// `TRACKS_CLEANER::cleanup`'s `mergeSegments`: "Do not merge an end which has different width tracks attached -- it's a common use-case for
@@ -634,60 +692,55 @@ fn has_different_width_attached(seg: &Track, tracks: &[Track], prot: &Protected)
     })
 }
 
-/// `TRACKS_CLEANER::cleanup`'s merge pass, run to a fixed point (matches
-/// source's own `do { ... } while (mergeSegments(...))`).
+/// `TRACKS_CLEANER::cleanup`'s merge pass (`mergeSegments`), run to a fixed point as source's own `do { ... } while( mergeSegments( .. ) )`. Each pass
+/// first finds, for every straight segment in the board's order (KiCad's `candidate < segment` on the items' addresses), the first later straight
+/// segment of the same width it touches that is `ApproxCollinear` with it and may merge with it (`testMergeCollinearSegments`); then merges the
+/// pairs in that order, each tested again on the board as the earlier merges left it, a pair one of whose segments an earlier merge removed
+/// skipped (`IS_DELETED`). A merge is `mergeCollinearSegments`: the first segment is modified in place (`*aSeg1 = dummy_seg`: it keeps its id,
+/// so its mask opening, its group and its lock stay; the pads it ends on are both segments'), the second goes.
+///
+/// Differs: the two segments must be of one net; KiCad's candidates are whatever connectivity joins to the segment, and a track can change net there
+/// (`CN_ITEM( track, true )`), so two touching collinear tracks of two nets would merge before "Delete tracks connecting different nets" sees the short.
 #[allow(clippy::too_many_arguments)]
-fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zones: &[Zone], copper: &ZoneCopper, stack: &[String], prot: &Protected, merged_count: &mut usize, changes: &mut Vec<CleanupChange>) -> bool {
+fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zones: &[Zone], copper: &ZoneCopper, stack: &[String], prot: &Protected, changes: &mut Vec<CleanupChange>) -> bool {
     let mut changed_any = false;
     loop {
-        let mut found: Option<(usize, usize, Point, Point)> = None;
-        'outer: for i in 0..tracks.len() {
-            // `filterItem( segment )` and `filterItem( candidate )`, and `testMergeCollinearSegments`'s `IsLocked()` for both
-            if prot.track(&tracks[i].id) {
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for i in 0..tracks.len() {
+            let seg = &tracks[i];
+            // `filterItem( segment )`, and `testMergeCollinearSegments`'s `IsLocked()` ("one can merge only collinear segments, not vias or arcs")
+            if prot.track(&seg.id) || seg.pts.len() != 2 || seg.arc().is_some() || has_different_width_attached(seg, tracks, prot) {
                 continue;
             }
-            // the board's order stands for KiCad's `candidate < segment` (the items' addresses): the pair is tried from its first segment, whose
-            // attached tracks decide
-            // ("one can merge only collinear segments, not vias or arcs")
-            if tracks[i].pts.len() != 2 || tracks[i].arc().is_some() || has_different_width_attached(&tracks[i], tracks, prot) {
-                continue;
-            }
-            for j in (i + 1)..tracks.len() {
-                if prot.track(&tracks[j].id) || tracks[j].arc().is_some() {
+            for cand in &tracks[i + 1..] {
+                if prot.track(&cand.id) || cand.pts.len() != 2 || cand.arc().is_some() || cand.width != seg.width || cand.net != seg.net || cand.layer != seg.layer || !segments_touch(seg, cand) {
                     continue;
                 }
-                if tracks[i].net != tracks[j].net || tracks[i].layer != tracks[j].layer || tracks[i].width != tracks[j].width {
-                    continue;
+                if approx_collinear((seg.pts[0], seg.pts[1]), (cand.pts[0], cand.pts[1])) && test_merge(seg, cand, tracks, vias, pads, zones, copper, stack).is_some() {
+                    pairs.push((seg.id.clone(), cand.id.clone()));
+                    break;
                 }
-                let Some((shared, far_i, far_j)) = shared_endpoint(&tracks[i], &tracks[j]) else { continue };
-                if !collinear(far_i, shared, far_j) {
-                    continue;
-                }
-                // Reject a fold-back: the shared point must genuinely sit
-                // between the two far ends, not coincide with one of
-                // them pointing back the way it came.
-                let d1 = (shared.x - far_i.x, shared.y - far_i.y);
-                let d2 = (far_j.x - shared.x, far_j.y - shared.y);
-                if d1.0.get() * d2.0.get() + d1.1.get() * d2.1.get() <= 0 {
-                    continue;
-                }
-                let segs = [(tracks[i].pts[0], tracks[i].pts[1]), (tracks[j].pts[0], tracks[j].pts[1])];
-                if is_node(shared, segs, &tracks[i].layer, tracks[i].width, (tracks[i].id.as_str(), tracks[j].id.as_str()), tracks, vias, pads, zones, copper, stack) {
-                    continue;
-                }
-                found = Some((i, j, far_i, far_j));
-                break 'outer;
             }
         }
-        let Some((i, j, far_i, far_j)) = found else { break };
-        let (lo, hi) = (i.min(j), i.max(j));
-        let b = tracks.remove(hi);
-        let a = tracks.remove(lo);
-        *merged_count += 1;
-        let merged = Track { id: merged_id(*merged_count), net: a.net.clone(), pins: Vec::new(), layer: a.layer.clone(), width: a.width, pts: vec![far_i, far_j], arc_mid_offset: None };
-        changes.push(CleanupChange { kind: CleanupKind::MergedTracks, net: a.net.clone(), remove_track_ids: vec![a.id.clone(), b.id.clone()], remove_via_ids: vec![], add_track: Some(merged.clone()) });
-        tracks.push(merged);
+        if pairs.is_empty() {
+            break;
+        }
         changed_any = true;
+        for (id1, id2) in pairs {
+            let (Some(i), Some(j)) = (tracks.iter().position(|t| t.id == id1), tracks.iter().position(|t| t.id == id2)) else { continue };
+            let Some(dummy) = test_merge(&tracks[i], &tracks[j], tracks, vias, pads, zones, copper, stack) else { continue };
+            let b = tracks.remove(j);
+            let i = if j < i { i - 1 } else { i };
+            let a = &mut tracks[i];
+            let before = a.clone();
+            a.pts = dummy.to_vec();
+            for pin in &b.pins {
+                if !a.pins.contains(pin) {
+                    a.pins.push(pin.clone());
+                }
+            }
+            changes.push(CleanupChange { kind: CleanupKind::MergedTracks, net: a.net.clone(), remove_track_ids: vec![before.id.clone(), b.id.clone()], remove_via_ids: vec![], add_track: Some(a.clone()) });
+        }
     }
     changed_any
 }
@@ -715,12 +768,11 @@ pub fn compute_cleanup_filtered(design: &Design, model: &ConstraintModel, copper
     let pads = pad_geoms(design, model);
 
     let mut changes = Vec::new();
-    let mut merged = 0usize;
 
     remove_redundant(&mut tracks, &mut vias, design, model, copper, &opts, &prot, &mut changes);
 
     if opts.merge_segments {
-        merge_collinear(&mut tracks, &vias, &pads, &zones, copper, &model.board.layers, &prot, &mut merged, &mut changes);
+        merge_collinear(&mut tracks, &vias, &pads, &zones, copper, &model.board.layers, &prot, &mut changes);
     }
 
     if opts.delete_shorting {
@@ -738,11 +790,11 @@ pub fn compute_cleanup_filtered(design: &Design, model: &ConstraintModel, copper
     };
 
     if deleted_any && opts.merge_segments {
-        merge_collinear(&mut tracks, &vias, &pads, &zones, copper, &model.board.layers, &prot, &mut merged, &mut changes);
+        merge_collinear(&mut tracks, &vias, &pads, &zones, copper, &model.board.layers, &prot, &mut changes);
     }
 
-    let (removed_tracks, added) = finish(&original, &tracks, &pieces, &mut changes);
-    CleanupReport { changes, removed_tracks, added }
+    let (removed_tracks, added, sources) = finish(&original, &tracks, &pieces, &mut changes);
+    CleanupReport { changes, removed_tracks, added, sources }
 }
 
 #[cfg(test)]
@@ -936,6 +988,88 @@ mod tests {
         assert_eq!(merge.remove_track_ids.len(), 2);
         let merged = report.add_tracks().into_iter().next().expect("a merged track");
         assert_eq!(merged.pts, vec![a, b]);
+        // `mergeCollinearSegments`: the first segment is modified in place, the second goes
+        assert_eq!((merged.id.as_str(), report.remove_track_ids()), ("t1", vec!["t1".to_string(), "t2".to_string()]));
+        assert_eq!(report.kept_track_indices(), vec![0]);
+    }
+
+    /// `testMergeCollinearSegments`' span of the four ends: two collinear segments of one width that overlap merge into the span, under the first's
+    /// id; one inside the other with nothing at its ends goes, the outer one unchanged; one folded back over the other merges too (the old pass
+    /// took only two segments meeting end to end).
+    #[test]
+    fn overlapping_contained_and_folded_back_collinear_segments_merge_into_their_span() {
+        let (design, model) = two_pad_model();
+        let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
+        let at = |f: f64| Point { x: a.x + Nm::new(((b.x - a.x).get() as f64 * f) as i64), y: a.y };
+        let opts = CleanupOptions { merge_segments: true, ..Default::default() };
+        let run = |tracks: Vec<Track>| {
+            let mut d = design.clone();
+            d.routing.as_mut().unwrap().tracks = tracks;
+            compute_cleanup(&d, &model, &ZoneCopper::default(), opts)
+        };
+        // overlapping: a..0.6 and 0.4..b
+        let r = run(vec![trk("t1", "N1", mm(0.2), vec![a, at(0.6)]), trk("t2", "N1", mm(0.2), vec![at(0.4), b])]);
+        assert_eq!(r.remove_track_ids(), vec!["t1".to_string(), "t2".to_string()]);
+        assert_eq!(r.add_tracks().iter().map(|t| (t.id.clone(), t.pts.clone())).collect::<Vec<_>>(), vec![("t1".to_string(), vec![a, b])]);
+        // the second inside the first: it goes, the first stays as it is (nothing to re-add)
+        let r = run(vec![trk("t1", "N1", mm(0.2), vec![a, b]), trk("t2", "N1", mm(0.2), vec![at(0.3), at(0.7)])]);
+        assert_eq!((r.remove_track_ids(), r.add_tracks().len()), (vec!["t2".to_string()], 0));
+        // folded back at a free end: a..0.6, then back to 0.4
+        let r = run(vec![trk("t1", "N1", mm(0.2), vec![a, at(0.6)]), trk("t2", "N1", mm(0.2), vec![at(0.6), at(0.4)])]);
+        assert_eq!((r.remove_track_ids(), r.add_tracks().len()), (vec!["t2".to_string()], 0));
+        // folded back at the pad of R2: a pad there meets two ends (seg1's and seg2's), three with R1's, "a node in the center"
+        let r = run(vec![trk("t1", "N1", mm(0.2), vec![a, b]), trk("t2", "N1", mm(0.2), vec![b, at(0.5)])]);
+        assert!(r.changes.iter().all(|c| !matches!(c.kind, CleanupKind::MergedTracks)));
+        // a track ending at the inner segment's end is a flag the span would not keep: no merge
+        let off = Point { x: at(0.7).x, y: a.y + mm(3.0) };
+        let r = run(vec![trk("t1", "N1", mm(0.2), vec![a, b]), trk("t2", "N1", mm(0.2), vec![at(0.3), at(0.7)]), trk("t3", "N1", mm(0.2), vec![at(0.7), off])]);
+        assert!(r.changes.iter().all(|c| !matches!(c.kind, CleanupKind::MergedTracks)));
+        // 1 nm off the line is `ApproxCollinear`; 3 nm is not
+        let nudge = |dy: i64| Point { x: b.x, y: b.y + Nm::new(dy) };
+        let r = run(vec![trk("t1", "N1", mm(0.2), vec![a, at(0.5)]), trk("t2", "N1", mm(0.2), vec![at(0.5), nudge(1)])]);
+        assert_eq!(r.changes.iter().filter(|c| matches!(c.kind, CleanupKind::MergedTracks)).count(), 1);
+        let r = run(vec![trk("t1", "N1", mm(0.2), vec![a, at(0.5)]), trk("t2", "N1", mm(0.2), vec![at(0.5), nudge(3)])]);
+        assert_eq!(r.changes.iter().filter(|c| matches!(c.kind, CleanupKind::MergedTracks)).count(), 0);
+    }
+
+    /// A polyline whose middle vertex is on the line through its ends: its two segments merge, and the line comes back under its own id.
+    #[test]
+    fn a_polyline_with_a_collinear_vertex_merges_and_keeps_its_id() {
+        let (mut design, model) = two_pad_model();
+        let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
+        let mid = Point { x: (a.x + b.x) / 2, y: a.y };
+        let mut line = trk("p1", "N1", mm(0.2), vec![a, mid, b]);
+        line.pins = vec!["R1.1".into(), "R2.1".into()];
+        design.routing.as_mut().unwrap().tracks.push(line);
+        let r = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { merge_segments: true, ..Default::default() });
+        assert_eq!(r.remove_track_ids(), vec!["p1".to_string()]);
+        let added = r.add_tracks();
+        assert_eq!(added.iter().map(|t| (t.id.clone(), t.pts.clone(), t.pins.clone())).collect::<Vec<_>>(), vec![("p1".to_string(), vec![a, b], vec!["R1.1".to_string(), "R2.1".to_string()])]);
+        assert!(r.sources.is_empty());
+    }
+
+    /// A dangling middle segment of a polyline goes: the run before it keeps the line's id, the one after is new and takes the line's mask and
+    /// group (`sources`).
+    #[test]
+    fn the_runs_of_a_cut_polyline_keep_its_id_and_its_mask_and_group() {
+        let (mut design, model) = two_pad_model();
+        let a = pad_center(&design, &model, "R1", "1");
+        let p = |dx: f64, dy: f64| Point { x: a.x + mm(dx), y: a.y + mm(dy) };
+        // a duplicate of the polyline's middle segment, which the duplicate pass always removes (the earlier of the two)
+        let line = trk("p1", "N1", mm(0.2), vec![a, p(0.0, 2.0), p(2.0, 2.0), p(2.0, 4.0)]);
+        let dup = trk("d1", "N1", mm(0.2), vec![p(0.0, 2.0), p(2.0, 2.0)]);
+        design.routing.as_mut().unwrap().tracks = vec![dup, line];
+        let r = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions::default());
+        // the earlier of the two duplicates goes: `d1`, a whole track
+        assert_eq!(r.remove_track_ids(), vec!["d1".to_string()]);
+        let mut design2 = design.clone();
+        design2.routing.as_mut().unwrap().tracks.reverse();
+        let r = compute_cleanup(&design2, &model, &ZoneCopper::default(), CleanupOptions::default());
+        assert_eq!(r.remove_track_ids(), vec!["p1".to_string()]);
+        let added = r.add_tracks();
+        assert_eq!(added.iter().map(|t| (t.id.clone(), t.pts.clone())).collect::<Vec<_>>(), vec![("p1".to_string(), vec![a, p(0.0, 2.0)]), (String::new(), vec![p(2.0, 2.0), p(2.0, 4.0)])]);
+        assert_eq!(r.sources, vec![(1, "p1".to_string())]);
+        assert_eq!(r.kept_track_indices(), vec![0]);
     }
 
     #[test]

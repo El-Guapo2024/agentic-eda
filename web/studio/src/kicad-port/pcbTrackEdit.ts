@@ -113,6 +113,18 @@ export function alignToSegment(pointer: V, aligned: V, seg: Seg, snap: boolean):
 }
 
 /**
+ * Both halves of a broken track stand for it: `LINE_PLACER::SplitAdjacentSegments` / `SplitAdjacentArcs` make them as `Clone( *s_old )`, which keeps
+ * the old item's source, so `PNS_KICAD_IFACE::createBoardItem` gives each its solder-mask opening (`SetHasSolderMask( sourceTrack->HasSolderMask() )`,
+ * the margin too) and `Commit` files each in its group (`m_replacementMap[src]`). R6-R8 / UI-LEFT R8.
+ */
+function halvesOf(id: string): [number, string][] {
+  return [
+    [0, id],
+    [1, id],
+  ];
+}
+
+/**
  * `ROUTER_TOOL::InlineBreakTrack`: split `track` where the pointer is (`pointerNm`; `gridNm` for
  * the snap). Refused -- like `SplitAdjacentSegments` returning false -- when the point is an end
  * point or a vertex, or anything else (a track end, a via, a pad) is joined exactly there.
@@ -145,7 +157,7 @@ export function breakTrack(board: EditBoard, track: EditTrack, pointerNm: readon
     return {
       ok: true,
       message: null,
-      cmd: { op: "commit_route", remove_track_ids: [track.id], remove_via_ids: [], tracks: [arcRouteTrack(track.net, track.layer, track.width, first.start, first.mid, first.end), arcRouteTrack(track.net, track.layer, track.width, second.start, second.mid, second.end)] },
+      cmd: { op: "commit_route", remove_track_ids: [track.id], remove_via_ids: [], tracks: [arcRouteTrack(track.net, track.layer, track.width, first.start, first.mid, first.end), arcRouteTrack(track.net, track.layer, track.width, second.start, second.mid, second.end)], track_sources: halvesOf(track.id) },
     };
   }
 
@@ -180,7 +192,7 @@ export function breakTrack(board: EditBoard, track: EditTrack, pointerNm: readon
   return {
     ok: true,
     message: null,
-    cmd: { op: "commit_route", remove_track_ids: [track.id], remove_via_ids: [], tracks: [lineRouteTrack(track.net, track.layer, track.width, left), lineRouteTrack(track.net, track.layer, track.width, right)] },
+    cmd: { op: "commit_route", remove_track_ids: [track.id], remove_via_ids: [], tracks: [lineRouteTrack(track.net, track.layer, track.width, left), lineRouteTrack(track.net, track.layer, track.width, right)], track_sources: halvesOf(track.id) },
   };
 }
 
