@@ -103,6 +103,20 @@ pub(crate) fn add_art(p: &mut Value, part: &Part, fp: &FootprintInstance, footpr
     }
 }
 
+/// The lines of each hatched graphic of the footprint (`EDA_SHAPE::UpdateHatching`, as a board graphic's: `hatch_lines`, `[x1, y1, x2, y2]` nm, and `hatch_width`), on
+/// the board as it is now: the footprint's other items and the board's knock out of it (`eda_drc::hatch::footprint_art_hatching`; UI-LEFT P15). `p["graphics"]`
+/// has one entry for each of the art's shapes, in order ([`add_art`]).
+pub(crate) fn add_hatch_lines(p: &mut Value, design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, fp: &FootprintInstance, footprint: &Footprint) {
+    let Some(Value::Array(graphics)) = p.get_mut("graphics") else { return };
+    for (k, (s, g)) in footprint.art.shapes.iter().zip(graphics.iter_mut()).enumerate() {
+        let Some(kind) = s.hatch.filter(|_| !s.shape.is_filled()) else { continue };
+        let placed = s.placed(fp);
+        let h = eda_drc::hatch::footprint_art_hatching(design, model, &fp.id, k, &placed.shape, kind);
+        g["hatch_width"] = json!(h.width);
+        g["hatch_lines"] = Value::Array(h.lines.iter().map(|(a, b)| json!([a.x, a.y, b.x, b.y])).collect());
+    }
+}
+
 /// The part's body in board space, `(x0, y0, x1, y1)`: the box of its footprint's `F.Fab` drawings, the four corners of the local box through the pose and boxed
 /// again. `None` when the footprint has no fab drawing or only a line of one (the caller then looks the footprint up in the libraries, or falls back to the
 /// courtyard).

@@ -489,6 +489,14 @@ pub struct FootprintEdit {
     /// off, `ClearExtrudedBody`); `None` is the body the footprint has from its board file ([`crate::ir::FootprintExtra::extruded_body`]). The layer is the top side's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extruded_body: Option<crate::extruded_body::ExtrudedBodyEdit>,
+    /// `FOOTPRINT::SetLocalSolderPasteMargin` (Footprint Properties' "Solder paste absolute clearance", the Properties panel's "Solderpaste Margin Override") of a
+    /// footprint placed from the intent; a footprint read from a board file keeps its own among its tokens (`FootprintExtra::tokens`). `None` is the board's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::units::de")]
+    pub solder_paste_margin: Option<Nm>,
+    /// `FOOTPRINT::SetLocalSolderPasteMarginRatio` ("Solder paste relative clearance"), likewise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solder_paste_ratio: Option<f64>,
     /// The files the footprint embeds, when the Embedded Files tab set them: the whole list (`FOOTPRINT`'s `EMBEDDED_FILES`; see [`crate::embedded_files`]). `None` is the list the
     /// footprint has from its board file ([`crate::ir::FootprintExtra::embedded`]); `Some` of an empty list is a footprint that embeds nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -502,7 +510,7 @@ impl FootprintEdit {
 
     /// Whether nothing is edited (the entry is then dropped).
     pub fn is_empty(&self) -> bool {
-        self.reference.is_none() && self.value.is_none() && self.fields.is_empty() && self.attrs.is_none() && self.pads.is_empty() && self.models3d.is_none() && self.embedded.is_none() && self.extruded_body.is_none()
+        self.reference.is_none() && self.value.is_none() && self.fields.is_empty() && self.attrs.is_none() && self.pads.is_empty() && self.models3d.is_none() && self.embedded.is_none() && self.extruded_body.is_none() && self.solder_paste_margin.is_none() && self.solder_paste_ratio.is_none()
     }
 
     /// The edit of the `nth` pad numbered `number`.

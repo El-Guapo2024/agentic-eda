@@ -781,9 +781,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     "Overrides"
   );
   // "Solderpaste Margin Override" and "Solderpaste Margin Ratio Override": the footprint's own `(solder_paste_margin ..)` / `(solder_paste_margin_ratio ..)`,
-  // `set_footprint_paste_margin` (each keeping the other). The board writes them from a board file's tokens of the footprint only: a footprint placed from the
-  // intent has none to set.
-  const PASTE_REASON = "A footprint placed from the intent has no footprint-level paste margin here: set its pads' margins (Pad Properties, or a pad's Overrides).";
+  // `set_footprint_paste_margin` (each keeping the other): a board file's tokens of the footprint, or the edit of one placed from the intent (UI-LEFT P14).
   const pasteCmd = (part: Part, margin: number | null, ratio: number | null): Cmd => ({ op: "set_footprint_paste_margin", part: part.ref, margin, ratio });
   add(
     {
@@ -793,8 +791,6 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       display: "size",
       optional: true,
       get: (i) => i.part!.paste_margin ?? "",
-      writeable: (i) => !!i.part!.from_board_file,
-      readOnlyReason: PASTE_REASON,
       set: (i, v) => {
         const next = v === "" ? null : Math.round(num(v));
         return (i.part!.paste_margin ?? null) === next ? [] : [pasteCmd(i.part!, next, i.part!.paste_margin_ratio ?? null)];
@@ -810,8 +806,6 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       display: "ratio",
       optional: true,
       get: (i) => i.part!.paste_margin_ratio ?? "",
-      writeable: (i) => !!i.part!.from_board_file,
-      readOnlyReason: PASTE_REASON,
       set: (i, v) => {
         const next = v === "" ? null : num(v);
         return (i.part!.paste_margin_ratio ?? null) === next ? [] : [pasteCmd(i.part!, i.part!.paste_margin ?? null, next)];

@@ -6000,6 +6000,14 @@ impl<'a> Board<'a> {
     /// never itself introduce a `unit_value_mismatch`/`different_unit_
     /// footprint` ERC finding the way a hand-edited `.kicad_sch` can.
     fn edit_symbol_fields(&mut self, id: &str, value: Option<&str>, footprint: Option<&str>, datasheet: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        // A footprint no symbol is for: its own Value (Footprint Properties' Value row, `FOOTPRINT::SetValue`; UI-LEFT P14).
+        if let (Some(v), true) = (value, self.board_part_without_symbol(id)) {
+            let Some(bp) = self.drawings_mut().board_parts.iter_mut().find(|b| b.reference == id) else {
+                return Err(vec![CheckResult::fail("ops_unknown_symbol", id, "no footprint of the board has its own value to edit")]);
+            };
+            bp.value = Some(v.to_string());
+            return Ok(());
+        }
         self.find_symbol(id)?;
         let sch = self.schematic_mut()?;
         for s in sch.symbols.iter_mut().filter(|s| s.id == id) {
@@ -6260,6 +6268,22 @@ impl<'a> Board<'a> {
         // be two parts under one key
         if new_id != id && self.board_part_without_symbol(new_id) {
             return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a footprint with this reference is already on the board")]);
+        }
+        // A footprint no symbol is for (Footprint Properties' Reference of a board-only footprint, `FOOTPRINT::SetReference`): the board's part alone is renamed
+        // (UI-LEFT P14).
+        if self.board_part_without_symbol(id) {
+            if new_id.trim().is_empty() {
+                return Err(vec![CheckResult::fail("ops_bad_symbol", id, "a footprint needs a reference designator")]);
+            }
+            let taken = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).any(|s| s.symbols.iter().any(|x| x.id == new_id));
+            if new_id != id && taken {
+                return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a symbol with this reference is already on the sheet")]);
+            }
+            if new_id == id {
+                return Err(vec![CheckResult::fail("ops_nothing_to_change", id, "the footprint already has this reference")]);
+            }
+            self.rename_part(&BTreeMap::from([(id.to_string(), new_id.to_string())]));
+            return Ok(());
         }
         if self.rename_symbol_in_schematic(id, new_id)? {
             self.rename_part(&BTreeMap::from([(id.to_string(), new_id.to_string())]));

@@ -47,7 +47,7 @@ fn field_json(id: String, name: &str, text: &str, l: &FieldLayout, fp: &Footprin
 }
 
 /// The Reference, the Value and the user fields of the footprint `fp`, in the order the dialog's grid lists them.
-pub(crate) fn fields_json(design: &Design, part: &Part, fp: &FootprintInstance, footprint: &Footprint) -> Vec<Value> {
+pub(crate) fn fields_json(design: &Design, model: &ConstraintModel, part: &Part, fp: &FootprintInstance, footprint: &Footprint) -> Vec<Value> {
     let edit = design.footprint_edit(&fp.id);
     let mut out = Vec::new();
     let reference = edit.and_then(|e| e.reference.clone());
@@ -56,10 +56,44 @@ pub(crate) fn fields_json(design: &Design, part: &Part, fp: &FootprintInstance, 
     let value = edit.and_then(|e| e.value.clone());
     let l = value.clone().unwrap_or_else(|| default_value_layout(fp));
     out.push(field_json(field_id(&fp.id, VALUE), VALUE, l.shown(part.value.as_deref().unwrap_or(&fp.id)), &l, fp, value.is_some()));
-    for f in edit.map(|e| e.fields.as_slice()).unwrap_or_default() {
+    // The other two mandatory fields (`PCB_FIELD::IsMandatory`: `FIELD_T::DATASHEET`, `FIELD_T::DESCRIPTION`; UI-LEFT P14): the footprint's own, once
+    // Footprint Properties set them, else what the board file gave it or the symbol gives it (`updateFootprintParameters`), hidden at the origin on the
+    // fabrication layer, as the writer writes them.
+    for name in [MANDATORY_DATASHEET, MANDATORY_DESCRIPTION] {
+        if let Some(f) = edit.and_then(|e| e.fields.iter().find(|f| f.name == name)) {
+            out.push(field_json(field_id(&fp.id, name), name, &f.text, &f.layout, fp, true));
+            continue;
+        }
+        let kept = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id)).and_then(|e| e.tokens.iter().find_map(|t| kept_property_text(t, name)));
+        let linked = model.symbol_links.get(&fp.id).and_then(|l| l.fields.iter().find(|(n, _)| n == name)).map(|(_, t)| t.clone());
+        let text = kept.or(linked).unwrap_or_default();
+        let mut l = FieldLayout::new(Point { x: Nm::ZERO, y: Nm::ZERO }, if fp.side == eda_model::ir::Side::Bottom { "B.Fab" } else { "F.Fab" });
+        l.visible = false;
+        out.push(field_json(field_id(&fp.id, name), name, &text, &l, fp, false));
+    }
+    for f in edit.map(|e| e.fields.as_slice()).unwrap_or_default().iter().filter(|f| f.name != MANDATORY_DATASHEET && f.name != MANDATORY_DESCRIPTION) {
         out.push(field_json(field_id(&fp.id, &f.name), &f.name, &f.text, &f.layout, fp, true));
     }
     out
+}
+
+/// `FIELD_T::DATASHEET` and `FIELD_T::DESCRIPTION`'s canonical names.
+pub(crate) const MANDATORY_DATASHEET: &str = "Datasheet";
+pub(crate) const MANDATORY_DESCRIPTION: &str = "Description";
+
+/// The text of a board file's kept `(property "<name>" "<text>" ..)`, unescaped.
+fn kept_property_text(token: &str, name: &str) -> Option<String> {
+    let rest = token.strip_prefix(&format!("(property \"{name}\" \""))?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.push(chars.next()?),
+            '"' => return Some(out),
+            c => out.push(c),
+        }
+    }
+    None
 }
 
 /// The attributes in effect: the edit's, else derived from the pads and the schematic symbol.

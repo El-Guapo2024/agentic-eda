@@ -1383,7 +1383,10 @@ pub(crate) fn write_footprint(
         // Its description, tags, jumper pad groups, Datasheet and Description fields ..., as the file had them, while the part is on the footprint they describe.
         if e.source_name == lib_name_written {
             // a footprint variant the file had is the schematic's to say when the design has one (`crate::variant_io`)
-            for token in e.tokens.iter().filter(|t| !crate::variant_io::superseded(design, t)) {
+            // a field the footprint now has of its own (Footprint Properties' Datasheet or Description, a user field) is written from the edit, not from the file's
+            // `(property ..)`: KiCad's reader would take the later of two (`parseFOOTPRINT_unchecked`'s `HasField`)
+            let own_field = |t: &str| extra.edit.is_some_and(|ed| ed.fields.iter().any(|f| t.starts_with(&format!("(property {} ", sexpr_str(&f.name)))));
+            for token in e.tokens.iter().filter(|t| !crate::variant_io::superseded(design, t) && !own_field(t)) {
                 writeln!(out, "\t\t{token}").unwrap();
             }
         }
@@ -1455,6 +1458,16 @@ pub(crate) fn write_footprint(
     // The footprint's own solder mask margin (`FOOTPRINT::SetLocalSolderMaskMargin`), which the pads that have none of their own take (`PAD::GetSolderMaskExpansion`).
     if let Some(m) = own_extra.and_then(|e| e.solder_mask_margin) {
         writeln!(out, "\t\t(solder_mask_margin {})", mm(m)).unwrap();
+    }
+    // A footprint placed from the intent: the paste margins Footprint Properties set (`FootprintEdit::solder_paste_margin`, `..ratio`; one from a board file has them
+    // among its tokens), after the mask margin as `format( FOOTPRINT )` writes them.
+    if own_extra.is_none() {
+        if let Some(m) = extra.edit.and_then(|e| e.solder_paste_margin) {
+            writeln!(out, "\t\t(solder_paste_margin {})", mm(m)).unwrap();
+        }
+        if let Some(r) = extra.edit.and_then(|e| e.solder_paste_ratio) {
+            writeln!(out, "\t\t(solder_paste_margin_ratio {})", crate::fmt_double_2_str(r)).unwrap();
+        }
     }
     if let Some(&(first, first_pad)) = pads.first() {
         let facts = design.pad_zone_facts(&fp.id, &footprint.name, first, footprint.pads.len(), &first_pad.number);
@@ -4444,6 +4457,23 @@ mod tests {
         let swapped = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(!swapped.contains("(tags \"jumper solder\")") && !swapped.contains("duplicate_pad_numbers_are_jumpers"), "{swapped}");
         assert!(swapped.contains("(gr_text_box"), "the board's items stay");
+        // UI-LEFT P14: a Datasheet the footprint was given its own (Footprint Properties) is written once, from the edit, not also as the file had it.
+        let (mut edited, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let mut l = eda_model::fp_edit::FieldLayout::new(eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, "F.Fab");
+        l.visible = false;
+        let field = eda_model::fp_edit::UserField { name: "Datasheet".into(), text: "https://example.com/jp.pdf".into(), layout: l };
+        let edits = &mut edited.drawings.as_mut().unwrap().footprint_edits;
+        match edits.iter_mut().find(|e| e.id == "JP1") {
+            Some(e) => e.fields.push(field),
+            None => {
+                let mut e = eda_model::fp_edit::FootprintEdit::new("JP1");
+                e.fields.push(field);
+                edits.push(e);
+            }
+        }
+        let out = export_kicad_pcb(&edited, &model, &meta()).unwrap();
+        assert_eq!(out.matches("(property \"Datasheet\"").count(), 1, "{out}");
+        assert!(out.contains("(property \"Datasheet\" \"https://example.com/jp.pdf\"") && out.contains("(property \"Description\" \"Jumper\""), "{out}");
     }
 
     /// A footprint's courtyard is written as the file had it, so a courtyard of four lines or a circle is still that and the footprint matches the library's copy (a courtyard

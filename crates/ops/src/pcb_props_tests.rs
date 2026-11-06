@@ -254,7 +254,7 @@ fn set_teardrop_params_gives_vias_and_pads_their_own_and_none_gives_them_back_to
 }
 
 #[test]
-fn set_footprint_paste_margin_edits_a_board_files_footprint_tokens_and_refuses_one_placed_from_the_intent() {
+fn set_footprint_paste_margin_edits_a_board_files_footprint_tokens_and_a_footprint_placed_from_the_intent_its_edit() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().footprint_extras.push(eda_model::ir::FootprintExtra { id: "U1".into(), tokens: vec!["(descr \"x\")".into(), "(solder_paste_margin -0.1)".into()], ..Default::default() });
@@ -266,7 +266,14 @@ fn set_footprint_paste_margin_edits_a_board_files_footprint_tokens_and_refuses_o
     assert_eq!(facts, (Some(um(-50.0)), Some(-0.05)));
     b.apply(&Cmd::SetFootprintPasteMargin { part: "U1".into(), margin: None, ratio: None }).unwrap();
     assert_eq!(drawings(&b).footprint_extras[0].tokens, ["(descr \"x\")"]);
-    assert_eq!(b.apply(&Cmd::SetFootprintPasteMargin { part: "U2".into(), margin: Some(um(10.0)), ratio: None }).unwrap_err()[0].check, "ops_no_board_file_footprint");
+    // UI-LEFT P14: a footprint placed from the intent keeps them in its edit, which the writer writes
+    b.apply(&Cmd::SetFootprintPasteMargin { part: "U2".into(), margin: Some(um(10.0)), ratio: Some(-0.1) }).unwrap();
+    let e = b.design().footprint_edit("U2").unwrap();
+    assert_eq!((e.solder_paste_margin, e.solder_paste_ratio), (Some(um(10.0)), Some(-0.1)));
+    assert_eq!(b.apply(&Cmd::SetFootprintPasteMargin { part: "U2".into(), margin: Some(um(10.0)), ratio: Some(-0.1) }).unwrap_err()[0].check, "ops_nothing_to_change");
+    assert_eq!(b.apply(&Cmd::SetFootprintPasteMargin { part: "U2".into(), margin: None, ratio: Some(-0.6) }).unwrap_err()[0].check, "ops_bad_footprint");
+    b.apply(&Cmd::SetFootprintPasteMargin { part: "U2".into(), margin: None, ratio: None }).unwrap();
+    assert!(b.design().footprint_edit("U2").is_none(), "nothing left of the edit");
 }
 
 /// `(solder_paste_margin ..)` and `(solder_paste_margin_ratio ..)` read back the way `eda_kicad::footprint_file_facts` reads them (millimetres to nanometres).

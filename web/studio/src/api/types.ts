@@ -210,6 +210,9 @@ interface FpGraphicCommon {
   filled?: boolean;
   dash?: FpDash;
   hatch?: FpHatch;
+  /** A hatched fill's lines (`EDA_SHAPE::UpdateHatching`, board nm) and the width they are drawn at, as a board graphic's (UI-LEFT P15). */
+  hatch_lines?: HatchLine[];
+  hatch_width?: Nm;
   /** Every layer of a shape that is on several (`layer` is the first). */
   layers?: string[];
 }

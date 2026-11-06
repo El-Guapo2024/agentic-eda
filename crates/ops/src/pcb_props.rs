@@ -381,16 +381,35 @@ impl Board<'_> {
         Ok(())
     }
 
-    /// `Cmd::SetFootprintPasteMargin`: `FOOTPRINT::SetLocalSolderPasteMargin` / `SetLocalSolderPasteMarginRatio` (`None` takes the board's). The board writes them
-    /// only from a footprint's tokens of a board read from a file (`FootprintExtra::tokens`, `(solder_paste_margin ..)` and `(solder_paste_margin_ratio ..)`), so a
-    /// footprint placed from the intent, which has none, is refused.
+    /// `Cmd::SetFootprintPasteMargin`: `FOOTPRINT::SetLocalSolderPasteMargin` / `SetLocalSolderPasteMarginRatio` (`None` takes the board's). A footprint of a board
+    /// read from a file keeps them among its tokens (`FootprintExtra::tokens`, `(solder_paste_margin ..)` and `(solder_paste_margin_ratio ..)`); one placed from the
+    /// intent in its edit (`FootprintEdit::solder_paste_margin`, `..ratio`; UI-LEFT P14), which the writer writes.
     pub(crate) fn set_footprint_paste_margin(&mut self, part: &str, margin: Option<Nm>, ratio: Option<f64>) -> Result<(), Vec<CheckResult>> {
         let fmt = |v: f64| {
             let s = format!("{v:.6}");
             s.trim_end_matches('0').trim_end_matches('.').to_string()
         };
+        if let Some(r) = ratio {
+            // `MARGIN_OFFSET_BINDER`: the ratio is a percentage the dialog limits like a pad's (`padValuesOK`: -50% .. +100%)
+            if !(-0.5..=1.0).contains(&r) {
+                return Err(fail("ops_bad_footprint", part, "The solder paste margin ratio must be between -50% and 100%."));
+            }
+        }
+        let from_file = self.design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == part));
+        if !from_file {
+            self.require_placed(part)?;
+            let before = self.design.footprint_edit(part).map(|e| (e.solder_paste_margin, e.solder_paste_ratio)).unwrap_or_default();
+            if before == (margin, ratio) {
+                return Err(fail("ops_nothing_to_change", part, "the footprint already has these paste margins"));
+            }
+            let slot = self.edit_slot(part);
+            slot.solder_paste_margin = margin;
+            slot.solder_paste_ratio = ratio;
+            self.tidy_edit(part);
+            return Ok(());
+        }
         let d = self.design.drawings.as_mut().ok_or_else(|| fail("ops_no_board_file_footprint", part, "this footprint was not read from a board file"))?;
-        let e = d.footprint_extras.iter_mut().find(|e| e.id == part).ok_or_else(|| fail("ops_no_board_file_footprint", part, "a footprint placed from the intent has no footprint-level paste margin; set the pads' margins"))?;
+        let e = d.footprint_extras.iter_mut().find(|e| e.id == part).ok_or_else(|| fail("ops_no_board_file_footprint", part, "this footprint was not read from a board file"))?;
         let before = e.tokens.clone();
         let tag = |t: &str| t.strip_prefix('(').and_then(|r| r.split_whitespace().next()).map(str::to_string);
         let mut set = |name: &str, aliases: &[&str], value: Option<String>| {

@@ -1286,7 +1286,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 .collect();
             if let Some(footprint) = &footprint {
                 // The footprint's fields as laid out on the board, and its attributes.
-                p["fields"] = json!(crate::fp_json::fields_json(&design, part, fp, footprint));
+                p["fields"] = json!(crate::fp_json::fields_json(&design, &model, part, fp, footprint));
                 tv.annotate_fields(&part.reference, &mut p["fields"]);
                 p["attrs"] = crate::fp_json::attrs_json(&design, fp, footprint);
                 // A multi-gate footprint's units (`FOOTPRINT::GetUnitInfo`), for Swap Gate Nets' menu: absent for fewer than two.
@@ -1296,6 +1296,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 }
                 // Its silkscreen, fab drawings and texts (`graphics`, `texts`), board space.
                 crate::fp_art_json::add_art(&mut p, part, fp, footprint);
+                // the board's variables in its texts (the title block's ..), and the lines of its hatched graphics (UI-LEFT P15)
+                tv.annotate_art_texts(&part.reference, footprint, &mut p["texts"]);
+                crate::fp_art_json::add_hatch_lines(&mut p, &design, &model, fp, footprint);
             }
             p["at"] = json!([fp.at.x, fp.at.y]);
             p["rot"] = json!(fp.rot as f64 / 1000.0);
@@ -1368,6 +1371,14 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     p["paste_margin"] = json!(m);
                 }
                 if let Some(r) = facts.paste_margin_ratio {
+                    p["paste_margin_ratio"] = json!(r);
+                }
+            } else if let Some(e) = design.footprint_edit(&part.reference) {
+                // a footprint placed from the intent: the paste margins Footprint Properties gave it (`FootprintEdit::solder_paste_margin`, `..ratio`; UI-LEFT P14)
+                if let Some(m) = e.solder_paste_margin {
+                    p["paste_margin"] = json!(m);
+                }
+                if let Some(r) = e.solder_paste_ratio {
                     p["paste_margin_ratio"] = json!(r);
                 }
             }
