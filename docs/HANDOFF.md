@@ -10,7 +10,7 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
   - The Import Netlist and Place Footprint fixes.
 - **Not yet gated:** the full suite (`tools/check.sh full` and `tools/run-all-checks.sh -j 3`) was started on 826222cc and had not finished. Rerun it first, then fix what fails.
 - **In flight, pushed as branches, not merged:**
-  - `task-v2-libs` (LL1, LL2, LL3, LL6).
+  - `task-v2-libs` (LL1, LL2, LL3, LL6): **complete**. Main is merged into it at 1cc9f5bb and its gates pass (cargo 0 warnings; ops, kicad, cli and model tests; slow `library_save` 4/4; web 3499; browser library-buffer, library-save, lib-edit, library-manage and lib-editors). It is ready to merge after main's full suite.
   - `task-v3-schdlg` (SS6, SS7, SS8, SS11, SS13, SS14).
   - `task-v3-pcbmisc` (PP8 to PP13).
 
