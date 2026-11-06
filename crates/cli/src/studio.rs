@@ -1563,6 +1563,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     // Schematic Setup > Net Classes' columns of the board's classes (wire and bus widths, colour, line style), by class name -- set apart, the `json!` above being
     // at the macro's recursion limit
     state["board_rules"]["net_class_schematic"] = json!(model.board.net_class_schematic);
+    // the design variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, which the board's `(variants ..)` gets from the schematic), set apart too
+    state["variants"] = json!(design_variants_json(&design));
     Ok(state)
 }
 
@@ -1984,6 +1986,11 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if let Some(shown) = shown.as_ref().and_then(|sh| sh.symbol_shown_json(&owner)) {
                 symbol["shown"] = shown;
             }
+            // Its records of the design variants (KiCad 25ec2335 `SCH_SYMBOL_INSTANCE::m_Variants`, `SchExtras::symbol_variants`), which the studio lays over the
+            // symbol while one is the current variant: by name, each flag it sets and each field text.
+            if let Some(records) = sch.extras.symbol_variants.get(&s.id) {
+                symbol["variants"] = json!(records);
+            }
             symbol
         })
         .collect();
@@ -2229,7 +2236,16 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         // the project's unit notation (the root's `SchExtras::subpart_*`, r7 H5), which the sheet draws a unit's reference by
         "subpart_id_separator": design.schematic.as_ref().and_then(|r| r.extras.subpart_id_separator),
         "subpart_first_id": design.schematic.as_ref().and_then(|r| r.extras.subpart_first_id),
+        // the design variants (KiCad 25ec2335 `SCHEMATIC::GetVariantNames` with `GetVariantDescription`), the same on every sheet
+        "variants": design_variants_json(design),
     })
+}
+
+/// The design variants as the studio's state lists them (`[{ name, description }]`, by name): KiCad 25ec2335 `SCHEMATIC::GetVariantNames` with each one's
+/// `GetVariantDescription` (`eda_model::variants`).
+fn design_variants_json(design: &eda_model::ir::Design) -> Vec<Value> {
+    let descriptions = design.schematic.as_ref().map(|r| &r.extras.variants);
+    eda_model::variants::names(design).into_iter().map(|n| json!({ "description": descriptions.and_then(|d| d.get(&n)).cloned().unwrap_or_default(), "name": n })).collect()
 }
 
 /// The schematic JSON's `setup`: Schematic Setup > Formatting's sizes the sheet is drawn with -- see [`schematic_json_with`].

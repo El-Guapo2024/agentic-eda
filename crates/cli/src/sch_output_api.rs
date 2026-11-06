@@ -64,7 +64,7 @@ pub(crate) const FORMATS: [&str; 5] = ["ps", "pdf", "svg", "dxf", "png"];
 ///
 /// Differs (no kicad-cli flag; the dialog shows each disabled with the reason): "Page size:" (kicad-cli plots at the schematic's size,
 /// `m_pageSizeSelect = PAGE_SIZE_AUTO`), "Minimum line width:", DXF's "Export units:" (kicad-cli always exports in mm, as KiCad's own comment
-/// in `onPlotFormatSelection` says), "Open file after plot" and the design variant (the studio has none). The hop-over and the default font
+/// in `onPlotFormatSelection` says), "Open file after plot". The design variant is `--variant` ([`crate::fab_api::variant_args`]). The hop-over and the default font
 /// are the defaults of both (no hop-over scale, the KiCad font).
 pub(crate) fn plot_args_for(format: &str, req: &Value, page: Option<String>) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
@@ -148,7 +148,10 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
         Ok(d) => d,
         Err(why) => return err(why),
     };
-    let mut v = reply(kicad_engine::export_sch_into(dir, kind, &plot_args_for(kind, &req, page), &out_dir));
+    // "Design variant:" (`SCH_PLOT_OPTS::m_variant`, `SCH_PLOTTER` sets the schematic's current variant around the plot)
+    let mut args = plot_args_for(kind, &req, page);
+    args.extend(crate::fab_api::variant_args(&req));
+    let mut v = reply(kicad_engine::export_sch_into(dir, kind, &args, &out_dir));
     if v["ok"].as_bool().unwrap_or(false) {
         v["format"] = Value::String(kind.into());
     }
@@ -188,7 +191,10 @@ pub fn netlist(dir: &Path, body: &[u8]) -> Value {
     let Some((_, format)) = NETLIST_FORMATS.iter().find(|(n, cli)| *n == name || *cli == name) else {
         return err(format!("unknown netlist format {name:?} (expected kicad, orcadpcb2, allegro, cadstar, pads, spice, spicemodel or xml)"));
     };
-    reply(kicad_engine::export_sch(dir, "netlist", &["--format".to_string(), format.to_string()]))
+    let mut args = vec!["--format".to_string(), format.to_string()];
+    // the netlist of a design variant (`kicad-cli sch export netlist --variant`, `JOB_EXPORT_SCH_NETLIST::m_variant`)
+    args.extend(crate::fab_api::variant_args(&req));
+    reply(kicad_engine::export_sch(dir, "netlist", &args))
 }
 
 #[cfg(test)]

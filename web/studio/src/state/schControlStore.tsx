@@ -19,7 +19,13 @@ export type SchControlDialog =
   /** Compare a placed symbol (by reference) with its library symbol. */
   | { kind: "symbol_diff"; ref: string }
   /** Import Sheet... (`SCH_DRAWING_TOOLS::ImportSheet`): the file chooser; `forceSheet` is Draw Sheet from File, which only places a sheet; `initialPath` is the file a drop brought (`DdAppendFile`). */
-  | { kind: "import_sheet"; forceSheet?: boolean; initialPath?: string };
+  | { kind: "import_sheet"; forceSheet?: boolean; initialPath?: string }
+  /** A design variant dialog (KiCad 25ec2335 `SCH_EDIT_FRAME::ShowAddVariantDialog`, `RemoveVariant`, `EditVariantDescription`, `RenameVariant`, `CopyVariant`): `name` skips
+   * the choice of the variant (the Symbol Fields Table's buttons act on the variant its list has selected); `fromTable` is the table's own copy check. */
+  | { kind: "variant"; action: VariantDialogAction; name?: string; fromTable?: boolean };
+
+/** The design variant dialogs. */
+export type VariantDialogAction = "add" | "remove" | "describe" | "rename" | "copy";
 
 export interface SchControlState {
   display: SchDisplayOptions;

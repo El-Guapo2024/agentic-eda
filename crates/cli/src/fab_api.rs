@@ -521,7 +521,9 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
             return err(format!("Zones not filled before plotting: {why}"));
         }
     }
-    let args = plot_args(format, &layers, &plot, &PlotSession::of_request(&req));
+    let mut args = plot_args(format, &layers, &plot, &PlotSession::of_request(&req));
+    // "Design variant:" (`DIALOG_PLOT::getSelectedVariant`, `board->SetCurrentVariant( .. )` around the plot)
+    args.extend(variant_args(&req));
     let mut v = reply(kicad_engine::export_into(dir, format.kind(), &args, &out_dir));
     if v["ok"].as_bool().unwrap_or(false) {
         let mut files: Vec<String> = v["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
@@ -838,6 +840,16 @@ pub(crate) fn drill_report(files: &[String]) -> String {
     lines.join("\n")
 }
 
+/// The design variant an export is for (KiCad 25ec2335's Plot, Footprint Position and Plot Schematic dialogs' "Design variant:" choice, `getSelectedVariant`):
+/// `--variant <name>` for a request's `variant` that names one, nothing for the default variant (absent, empty or `< Default >`), as kicad-cli outputs the
+/// default variant "when no --variant argument is provided".
+pub(crate) fn variant_args(req: &Value) -> Vec<String> {
+    match req.get("variant").and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case(eda_model::variants::DEFAULT_VARIANT_NAME)) {
+        Some(v) => vec!["--variant".into(), v.into()],
+        None => Vec::new(),
+    }
+}
+
 /// `POST /api/fab/pos`: `{"format": "csv"|"ascii", "side": "front"|"back"|"both",
 /// "units_mm": bool, "smd_only": bool, "exclude_fp_th": bool, "exclude_dnp": bool, "single_file": bool, "output_directory": ".."}`. A footprint marked "exclude from position files" is never
 /// in the file; the other three options leave out SMD-less, through-hole and Do-Not-Populate footprints. `single_file` is the dialog's
@@ -860,6 +872,8 @@ pub fn pos(dir: &Path, body: &[u8]) -> Value {
     if flag("board_edge") && gerber {
         args.push("--gerber-board-edge".into());
     }
+    // "Design variant:" (`DIALOG_GEN_FOOTPRINT_POSITION::getSelectedVariant`, `exporter.SetVariant( .. )`)
+    args.extend(variant_args(&req));
     let single_file = req.get("single_file").and_then(Value::as_bool).unwrap_or(true);
     let args = if gerber { args } else { with_aux_origin("pos", args, &req) };
     // "Output directory:" (`m_outputDirectoryName`, the dialog's own).

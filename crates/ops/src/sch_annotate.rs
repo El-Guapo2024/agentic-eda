@@ -638,6 +638,14 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
         }
     }
     sch.user_fields.extend(fields);
+    // its records of the design variants too (`SCH_SYMBOL_INSTANCE::m_Variants`)
+    let mut records = Vec::new();
+    for (old, new) in &whole {
+        if let Some(r) = sch.extras.symbol_variants.remove(old) {
+            records.push((new.clone(), r));
+        }
+    }
+    sch.extras.symbol_variants.extend(records);
     for l in sch.extras.locked.iter_mut() {
         if let Some(new) = whole.get(l.as_str()) {
             *l = new.clone();

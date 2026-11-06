@@ -397,6 +397,8 @@ impl<'a> Board<'a> {
             sch.user_fields.remove(id);
         }
         drop_field_placements(sch, &[id.to_string()], name);
+        // `SCH_SYMBOL::RemoveField`: "This will remove it from all variants"
+        eda_model::variants::rename_field(sch, Some(id), name, None);
         Ok(())
     }
 
@@ -511,6 +513,8 @@ pub(crate) fn rename_field_placements(sch: &mut SchematicSection, refs: &[String
 pub(crate) fn rename_symbol_keys(sch: &mut SchematicSection, id: &str, new_id: &str) {
     // the groups that list the reference list the new one
     crate::sch_groups::rename_member(sch, id, new_id);
+    // its records of the design variants are its instances' (`SCH_SYMBOL_INSTANCE::m_Variants`)
+    eda_model::variants::rename_reference(sch, id, new_id);
     for old in keys_of(sch, id) {
         let new = format!("{new_id}{}", &old[id.len()..]);
         if let Some(v) = sch.field_layout.remove(&old) {
