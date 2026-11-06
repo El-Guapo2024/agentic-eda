@@ -717,7 +717,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Exclude From Position Files; the field rows; the Sheetfile as its own text (B3-M1). Five board verbs and three schematic ones were added (`pcb_props.rs`, `sch_props.rs`).
 - Done 2026-11-06 (`task-u5-pcbfp`, `PARITY-pcb.md` section 78): every teardrop row of a pad and a via, a pad's Pin Name, Pin Type, Fabrication Property and Pad To Die
   Length and Delay, and a footprint's paste margins for any footprint are edited.
-- Left (read-only with the reason as the row's tooltip): fonts; a pad's number, post-machining and backdrill; a dimension's italic, bold, mirror and justification (a shape's Line Style and a leader's Text Frame are edited since 2026-11-06, UI-LEFT P5, P13); a symbol's pin display (one library symbol per lib_id), a sheet's border, background and attributes; a text box's margins, fill, colour and hyperlink; an image's transform offset.
+- Left (read-only with the reason as the row's tooltip): a dimension's font and a Symbol Editor field's (a text's, a field's, a text box's and a library text's are edited since 2026-11-06, item 40); a pad's number, post-machining and backdrill; a dimension's italic, bold, mirror and justification (a shape's Line Style and a leader's Text Frame are edited since 2026-11-06, UI-LEFT P5, P13); a symbol's pin display (one library symbol per lib_id), a sheet's border, background and attributes; a text box's margins, fill, colour and hyperlink; an image's transform offset.
   The grid is not in the Footprint Editor; a footprint's position lands on the placement grid like every pose.
 - **The Symbol Editor's pane (2026-11-05, `task-u1-symedit`, UI-LEFT Y3; PARITY-symedit "Rotate, Mirror, beziers, the Properties pane and the carried items"):** below the Libraries tree, the rows
   KiCad registers for a library pin, shape, text, text box and field, and with nothing selected the symbol's own (`LIB_SYMBOL_DESC`), as a library editor lists them (Unit, Body Style and Private
@@ -786,14 +786,14 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-11-06 (`task-u2-symprops`, UI-LEFT S4, `PARITY-sch.md` section 59): **a field's font face and colour** (`SchExtras::field_looks`, by the item's key and the
   field's name): set in Symbol Properties' fields grid (`set_field_looks`), carried with the key (rename, unit change, paste, delete), drawn (the colour), written
   in `(effects (font (face ..) .. (color ..)))` and read back. **A power symbol's** Footprint, Datasheet, flags and user fields (`SchExtras::power_props`). The canvas
-  draws an outline font's field with the stroke font.
+  draws an outline font's field in its face since 2026-11-06 (item 40).
 - Done 2026-11-06 (`task-u3-schtext`, UI-LEFT S6, `PARITY-sch.md` section 60): **a text's font face, colour and link** edited in Text, Label and Text Box
   Properties (`TextAttrs::font`, `set_text_attrs` with the font, the link check and Exclude from simulation, text boxes too; `(face ..)` written and read); a
   free text's bold, italic and colour, a label's and a text box's colour drawn; **a label's fields are items**: picked, dragged, turned, mirrored and edited
   (Field Properties with Font and Color) on the canvas, and a field placed by hand takes the label out of the autoplaced ones (`field_layout` under the label's
   id, no `(fields_autoplaced yes)`, read back from a KiCad file that has no such token), turning and mirroring with the label until Autoplace Fields.
 - Missing: ~~a label's field moved by hand is placed by `AutoplaceFields` again~~ (done 2026-11-06); a field added to a label placed by hand goes where
-  Autoplace Fields would put it; a label's field keeps no size, bold or shown name; an outline font is drawn with the stroke font; the net class of a label on a bus is not
+  Autoplace Fields would put it; a label's field keeps no size, bold or shown name; ~~an outline font is drawn with the stroke font~~ (drawn in its face since 2026-11-06, item 40); the net class of a label on a bus is not
   given to the bus's members; the
   fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on and Autoplace Fields ignores swapped pins; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
   label's spin; only the normal and the De Morgan body style are modelled.
@@ -1102,7 +1102,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   the 3D view draws them, the Fill row of the Properties panel and the Fill choice of Shape Properties have the five fills (`set_shape_style`), and Duplicate, Paste, Create Array, Move, Rotate, Flip and a handle drag keep the hatch. kicad-cli plots the same hatch polygons, to 2 micrometres, and a lattice of the same area for a cross-hatch (slow tier).
   Step 4, the barcode (`(barcode ..)`, a data item since P23): Add Barcode and Barcode Properties (with a preview), `add_barcode`, `edit_barcode` and `delete_barcode`, Move, Rotate, Flip, Lock and Delete, the Properties rows of `PCB_BARCODE_DESC`, drawn and picked; its shape is what kicad-cli plots of it (KiCad uses zint, which this studio has not and may not add): a board of the barcode alone is plotted and the polygons kept, by the barcode's parameters,
   and they are the board's own plot to 2 micrometres for every kind and for a turned, a mirrored and a knocked-out one (slow tier). Every step has Rust tests, `node --test` cases and scenarios of `web/studio/e2e/pcb-items.check.js` through `window.__eda`.
-- Missing (updated 2026-11-06, `task-u5-pcbitems`): outline fonts and `render_cache` of a text box; a footprint's hatched graphic drawn with its lines (it is read and written hatched and drawn as the outline); the 3D view of a barcode and of a footprint's text box; the shape of a barcode without kicad-cli (the box of the symbol, crossed); an image's pixels when a turn is not sent by the browser (the CLI, agents, a circular array's Rotate items, Repeat Layout); a footprint's text boxes, images, points and barcodes kept through Ctrl+E and Update / Change Footprint (P21); a footprint's dimensions and tables on the board, still text.
+- Missing (updated 2026-11-06, `task-u5-pcbitems`): ~~outline fonts~~ (drawn since 2026-11-06, item 40) and `render_cache` of a text box; a footprint's hatched graphic drawn with its lines (it is read and written hatched and drawn as the outline); the 3D view of a barcode and of a footprint's text box; the shape of a barcode without kicad-cli (the box of the symbol, crossed); an image's pixels when a turn is not sent by the browser (the CLI, agents, a circular array's Rotate items, Repeat Layout); a footprint's text boxes, images, points and barcodes kept through Ctrl+E and Update / Change Footprint (P21); a footprint's dimensions and tables on the board, still text.
 - Still open from the original list (tables are done, below): the symbol text box (done in P17), derived symbols (done in P17), alternate pin
   functions (done in P17), design variants, generators, padstacks, component classes, tuning profiles, embedded files (done 2026-10-23, P26: `zstd` is the one dependency the user approved; `PARITY-pcb.md` section 47), each with its reason in
   `ui-parity-missing.json`. Add one when a work package needs it. Custom-shape pads left this list: they are item 31.
@@ -1920,3 +1920,17 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   own items have them).
 - Not done: the SPICE value parser (`crates/sim/src/value.rs` and `web/studio/src/kicad-port/sim/spiceValue.ts`): the TS copy formats every plot
   tick, cursor readout and typed value in the simulator as you type and pan; a round trip per label is not the same simple change.
+
+### 40. Texts on the canvases: where KiCad draws them, and in their outline fonts
+**Done 2026-11-06 on `task-v1-text` (UI-LEFT-2 PP1, CC1; `PARITY-pcb.md` section 93, `PARITY-sch.md` section 70, PARITY-symedit "Texts in their faces").** Hit: every text. Blocks: no.
+- Done: one layout of KiCad's (`web/studio/src/kicad-port/kicadText.ts`: `getLinePositions`, `GetTextAsGlyphs` of both fonts, the markup, `GetTextBox`, the pens, the knockout box)
+  that every painter and the footprint texts' hit test read: board texts, footprint fields and texts, dimensions' labels, table cells, text boxes, the Footprint Editor's texts,
+  the sheet's fields, texts, labels and text boxes, the Symbol Editor's texts, fields and text boxes. kicad-cli's plot of 24 texts is the layout's (the slow
+  `kicadTextProof.test.ts`). An outline face is the file the server's fontconfig matches as `FONTCONFIG::FindFont` does (`GET /api/fonts/match`, `/api/fonts/file`), loaded with
+  `FontFace`, measured by the canvas, its metrics and glyph boxes read from the file; a fake italic is slanted glyph by glyph. A knockout text or field is drawn (its box is
+  what is drawn, grown by `GetKnockoutTextMargin`). The Font rows of a board text, a field, a text box, the Footprint Editor's texts and fields and the Symbol Editor's texts and
+  text boxes, and the Font choice of the board's and the Footprint Editor's Text Properties, set the face.
+- Left: the server measures texts in the stroke font whatever their face (the hatch knockouts, a via's clearance to a text, the dimension crossbar's cut, a table cell's line
+  breaks); a fake bold is not drawn (1/358 of the em); a collection's face is its first; the hit tests and boxes of a board text (UI-LEFT-2 PP2), a sheet's texts and fields,
+  and a text box's minimum size keep the stroke font's metrics; a dimension's label has no face (UI-LEFT-2 PP11); pins, pad numbers and the 3D view's silkscreen texts are as before.
+- Port from: `common/font/*.cpp`, `common/eda_text.cpp`, `pcbnew/pcb_painter.cpp`, `pcbnew/pcb_text.cpp`, `eeschema/sch_painter.cpp`, `eeschema/sch_label.cpp`.
