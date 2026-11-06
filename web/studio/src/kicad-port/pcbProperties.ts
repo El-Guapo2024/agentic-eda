@@ -33,6 +33,7 @@ import { registerTableProperties, tableItemOf, tableItemsOf } from "./pcbTablePr
 import { PLACEMENT_SOURCE_CHOICES } from "./multichannel";
 import { zoneEditCmd as zoneCmd } from "./zoneCmd";
 import { padZoneForm, setPadZoneCmd, type PadZoneForm } from "./padZone";
+import { LINE_STYLE_CHOICES } from "./strokeDash";
 import {
   BACKDRILL_MODE_CHOICES,
   backdrillEnd,
@@ -1932,21 +1933,19 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     SHAPE
   );
-  // "Line Style" (`ENUM_MAP<LINE_STYLE>`): a board shape is drawn and written solid here (`(stroke (type solid))`), its file's style not kept (UI-LEFT P5).
+  // "Line Style" (`ENUM_MAP<LINE_STYLE>`, `EDA_SHAPE::SetLineStyle` / `GetLineStyle`): the shape's style (the board's `shape_styles`), `set_shape_style`'s
+  // `line_style` (UI-LEFT P5). A file's `default` is none of the five; it shows as Solid, as the dialog shows it.
   add(
     {
       owner: "EDA_SHAPE",
       name: "Line Style",
       kind: "enum",
-      choices: () => [
-        { label: "Solid", value: "solid" },
-        { label: "Dashed", value: "dash" },
-        { label: "Dotted", value: "dot" },
-        { label: "Dash-Dot", value: "dash_dot" },
-        { label: "Dash-Dot-Dot", value: "dash_dot_dot" },
-      ],
-      get: () => "solid",
-      readOnlyReason: "A board shape is drawn and written solid: the model has no line style for it yet (a board file's dashes are not kept).",
+      choices: () => LINE_STYLE_CHOICES.map((c) => ({ label: c.label, value: c.value })),
+      get: (i) => i.shape!.dash ?? "solid",
+      set: (i, v) => {
+        const style = LINE_STYLE_CHOICES.find((c) => c.value === String(v))?.value;
+        return style === undefined || style === (i.shape!.dash ?? "solid") ? [] : [{ op: "pcb_item", verb: "set_shape_style", ids: [i.id], line_style: style }];
+      },
     },
     SHAPE
   );

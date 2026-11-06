@@ -26,6 +26,7 @@ import type { LengthUnit } from "../../state/units";
 import { measureLabel } from "../../kicad-port/measureRuler";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { endingInks, hasEndings, kicadArc, shortenArc, shortenBezier, shortenSegment } from "../../kicad-port/lineEnding";
+import { DEFAULT_DASH_RATIOS, dashPieces, isDashStyle, strokeArc, strokeSegment, type DashPiece, type DashRatios, type DashSpec } from "../../kicad-port/strokeDash";
 import { drawArcPreview } from "./arcPreview";
 import { drawBezierPreview } from "./bezierPreview";
 import { BEZIER_MAX_ERROR_NM } from "./itemHitTest";
@@ -148,6 +149,8 @@ export interface PaintOptions {
   zoneCornerPreview: { zoneId: string; outline: [Nm, Nm][]; /** The zone's holes as the drag has them (a hole's corner can be the one dragged). */ holes?: [Nm, Nm][][] } | null;
   /** The same for a graphic shape's handle drag (kicad-port/pcbPointEdit.ts): the shape as it would be once dropped, drawn instead of the committed one. */
   shapePointPreview: { id: string; shape: Shape } | null;
+  /** The board's Dashed lines ratios (`boardDashRatios`) a dashed graphic is cut with; KiCad's 12 and 3 when absent. */
+  dashRatios?: DashRatios;
   /** Index into `drcViolations` the dialog's list currently has clicked/focused, drawn with LAYER_DRC_HIGHLIGHTED instead of its own severity color -- null when the dialog hasn't focused one (every marker then just shows its own error/warning color). */
   drcSelected: number | null;
   /** The group being worked in (`PCB_SELECTION_TOOL::m_enteredGroup`): drawn in a frame with its name, and everything outside it dimmed. */
@@ -804,16 +807,61 @@ function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: B
     ctx.lineWidth = Math.max(s.stroke_width, hairlineNm(view, selected ? 2 : 1));
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    drawShapeGeometry(ctx, s, !!opts.sketchGraphics);
+    drawShapeGeometry(ctx, s, !!opts.sketchGraphics, shapeDash(s, ctx.lineWidth, opts.dashRatios ?? boardDashRatios(board)));
     ctx.restore();
   }
 }
 
-/** `sketch` is `pcbnew.Control.graphicOutlines` ("Sketch Graphic Items", `m_DisplayGraphicsFill` off): a filled shape is drawn as its outline only. */
-export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketch = false) {
+/**
+ * The dashes of a shape whose line style is not solid (`PCB_PAINTER::draw( PCB_SHAPE )`: `STROKE_PARAMS::Stroke( shape, lineStyle, getLineThickness( GetWidth() ),
+ * &m_pcbSettings, .. )`), measured by its width -- the drawn width for a hairline (`getLineThickness`: `m_outlineWidth` for 0) -- and the board's Dashed lines
+ * ratios (Board Setup > Formatting, `PCB_BASE_FRAME`'s `SetDashLengthRatio`); undefined for a solid one.
+ */
+export function shapeDash(s: Pick<Shape, "dash" | "stroke_width">, drawnWidth: number, ratios?: DashRatios): DashSpec | undefined {
+  if (!isDashStyle(s.dash)) return undefined;
+  return { style: s.dash, width: s.stroke_width > 0 ? s.stroke_width : drawnWidth, ratios: ratios ?? DEFAULT_DASH_RATIOS };
+}
+
+/** Board Setup > Formatting's Dashed lines ratios of `board` (`dashed_line_dash_ratio`, `dashed_line_gap_ratio`), KiCad's 12 and 3 when it says none. */
+export function boardDashRatios(board: Pick<BoardState, "board_rules"> | null | undefined): DashRatios {
+  const f = board?.board_rules?.formatting;
+  return f ? { dash: f.dash_length_ratio, gap: f.gap_length_ratio } : DEFAULT_DASH_RATIOS;
+}
+
+/** A dashed shape's strokes, each a round-capped segment of the pen the caller set (`m_gal->DrawSegment( a, b, thickness )`). */
+function strokeDashPieces(ctx: CanvasRenderingContext2D, pieces: DashPiece[]) {
+  if (pieces.length === 0) return;
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  for (const [[ax, ay], [bx, by]] of pieces) {
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * `sketch` is `pcbnew.Control.graphicOutlines` ("Sketch Graphic Items", `m_DisplayGraphicsFill` off): a filled shape is drawn as its outline only. `dash` is a line
+ * style that is not solid (`shapeDash`): `PCB_PAINTER::draw( PCB_SHAPE )` then fills a solid-filled shape without its outline (`SetIsStroke( lineStyle == SOLID
+ * .. )`) and draws the line as `STROKE_PARAMS::Stroke` cuts it (kicad-port/strokeDash.ts), the hatch over it.
+ */
+export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketch = false, dash?: DashSpec) {
   // KiCad 10's line endings: the body stops short of an arrow, a circle or a square, and the endings are drawn after it in the same colour (`PCB_PAINTER::draw( PCB_SHAPE )`).
   if ((s.kind === "segment" || s.kind === "arc" || s.kind === "bezier") && hasEndings(s)) {
-    drawShapeWithEndings(ctx, s);
+    drawShapeWithEndings(ctx, s, dash);
+    return;
+  }
+  if (dash) {
+    if (s.filled && !sketch && (s.kind === "rect" || s.kind === "circle" || s.kind === "polygon")) {
+      ctx.beginPath();
+      traceClosedShape(ctx, s);
+      ctx.fill();
+    }
+    strokeDashPieces(ctx, dashPieces(s, dash, BEZIER_MAX_ERROR_NM));
+    drawHatchLines(ctx, s);
     return;
   }
   ctx.beginPath();
@@ -873,15 +921,59 @@ export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketc
   drawHatchLines(ctx, s);
 }
 
+/** The path of a rectangle (its corners rounded by its radius), a circle or a polygon, as `drawShapeGeometry` traces it. */
+function traceClosedShape(ctx: CanvasRenderingContext2D, s: Extract<Shape, { kind: "rect" | "circle" | "polygon" }>) {
+  if (s.kind === "rect") {
+    const [x0, y0] = [Math.min(s.start[0], s.end[0]), Math.min(s.start[1], s.end[1])];
+    const [w, h] = [Math.abs(s.end[0] - s.start[0]), Math.abs(s.end[1] - s.start[1])];
+    const r = Math.min(s.corner_radius ?? 0, Math.min(w, h) / 2);
+    if (r > 0) ctx.roundRect(x0, y0, w, h, r);
+    else ctx.rect(s.start[0], s.start[1], s.end[0] - s.start[0], s.end[1] - s.start[1]);
+  } else if (s.kind === "circle") {
+    ctx.arc(s.center[0], s.center[1], Math.hypot(s.end[0] - s.center[0], s.end[1] - s.center[1]), 0, Math.PI * 2);
+  } else {
+    s.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.closePath();
+  }
+}
+
 /**
  * A line, an arc or a curve with line endings, as `PCB_PAINTER::draw( PCB_SHAPE )` draws it: `ShortenSegmentForEndings` / `ShortenArcForEndings` / `ShortenedBezierCurve` take off what
  * the endings cover (nothing is drawn of a body they cover whole), then each ending is drawn at its end (`LINE_ENDING::Draw`): filled, and stroked at its own outline width when it has
  * one; an open arrow is a polyline stroked at its outline width or the line's. The pen colour is the one the caller set.
  */
-function drawShapeWithEndings(ctx: CanvasRenderingContext2D, s: Extract<Shape, { kind: "segment" | "arc" | "bezier" }>) {
+function drawShapeWithEndings(ctx: CanvasRenderingContext2D, s: Extract<Shape, { kind: "segment" | "arc" | "bezier" }>, dash?: DashSpec) {
   const lw = s.stroke_width;
   ctx.beginPath();
-  if (s.kind === "segment") {
+  if (dash) {
+    // The shortened body takes the line style (`STROKE_PARAMS::Stroke` of its effective shape), the endings stay solid.
+    const pieces: DashPiece[] = [];
+    if (s.kind === "segment") {
+      const body = shortenSegment(s.start, s.end, s.start_ending, s.end_ending, lw);
+      if (body) strokeSegment(body[0], body[1], dash.style, dash.width, dash.ratios, pieces);
+    } else if (s.kind === "arc") {
+      const k = kicadArc(s.start, s.mid, s.end);
+      if (k) {
+        const r = Math.hypot(k.start[0] - k.centre[0], k.start[1] - k.centre[1]);
+        const a0 = (Math.atan2(k.start[1] - k.centre[1], k.start[0] - k.centre[0]) * 180) / Math.PI;
+        let a1 = (Math.atan2(k.end[1] - k.centre[1], k.end[0] - k.centre[0]) * 180) / Math.PI;
+        if (a1 === a0) a1 = a0 + 360;
+        while (a1 < a0) a1 += 360;
+        const body = shortenArc(a0, a1 - a0, r, s.start_ending, s.end_ending, lw);
+        if (body) {
+          const from: [number, number] = [Math.round(k.centre[0] + r * Math.cos((body[0] * Math.PI) / 180)), Math.round(k.centre[1] + r * Math.sin((body[0] * Math.PI) / 180))];
+          strokeArc([Math.round(k.centre[0]), Math.round(k.centre[1])], from, body[1], dash.style, dash.width, dash.ratios, pieces);
+        }
+      }
+    } else {
+      const body = shortenBezier({ start: s.start, c1: s.c1, c2: s.c2, end: s.end }, s.start_ending, s.end_ending, lw);
+      if (body) {
+        const pts = bezierPolyline(body.start, body.c1, body.c2, body.end, BEZIER_MAX_ERROR_NM);
+        for (let i = 1; i < pts.length; i++) strokeSegment(pts[i - 1]!, pts[i]!, dash.style, dash.width, dash.ratios, pieces);
+      }
+    }
+    strokeDashPieces(ctx, pieces);
+  } else if (s.kind === "segment") {
     const body = shortenSegment(s.start, s.end, s.start_ending, s.end_ending, lw);
     if (body) {
       ctx.moveTo(body[0][0], body[0][1]);

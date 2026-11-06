@@ -3,7 +3,7 @@
 // `DIALOG_TRACK_VIA_PROPERTIES` on every selected track and via when the
 // selection holds only those (`EDIT_TOOL::Properties`' `OnlyTypes( { PCB_TRACE_T,
 // PCB_ARC_T, PCB_VIA_T } )`): TrackViaPropertiesDialog.tsx. A shape gets its
-// layer, line width, fill and endings here (`edit_shape`); its geometry and net
+// layer, line width, line style, fill and endings here (`edit_shape`, `set_shape_style`); its geometry and net
 // are the Properties panel's (not this dialog's yet).
 import { useEffect, useState } from "react";
 import type { Cmd } from "../api/types";
@@ -11,6 +11,7 @@ import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { canFill, fillOf, fillWidthError, SHAPE_FILL_CHOICES, type ShapeFill } from "../kicad-port/shapeFill";
 import { LINE_ENDING_CHOICES, LINE_ENDING_HELP, NO_ENDING, type LineEnding, type LineEndingStyle } from "../kicad-port/lineEnding";
 import type { CmdLineEnding } from "../api/pcbItemTypes";
+import { LINE_STYLE_CHOICES } from "../kicad-port/strokeDash";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo } from "../state/units";
 import { TrackViaPropertiesDialog } from "./TrackViaPropertiesDialog";
@@ -30,6 +31,8 @@ export function ItemPropertiesDialog() {
   const [shapeLayer, setShapeLayer] = useState("");
   const [shapeWidth, setShapeWidth] = useState(0);
   const [shapeFill, setShapeFill] = useState<ShapeFill>("none");
+  // "Line style:" (`m_lineStyleCombo`, `lineTypeNames`): a `default` stroke shows as Solid.
+  const [shapeLineStyle, setShapeLineStyle] = useState<(typeof LINE_STYLE_CHOICES)[number]["value"]>("solid");
   const [shapeError, setShapeError] = useState("");
   // The line endings of a line, an arc or a curve (KiCad 10's Start and End rows of DIALOG_SHAPE_PROPERTIES): the style and the three sizes, in the dialog's units.
   const [startEnding, setStartEnding] = useState<EndingFields>(endingFields(NO_ENDING, units));
@@ -43,6 +46,7 @@ export function ItemPropertiesDialog() {
       setShapeLayer(shape.layer);
       setShapeWidth(nmTo(shape.stroke_width, units));
       setShapeFill(fillOf(shape));
+      setShapeLineStyle(shape.dash ?? "solid");
       setShapeError("");
       setStartEnding(endingFields(shape.start_ending ?? NO_ENDING, units));
       setEndEnding(endingFields(shape.end_ending ?? NO_ENDING, units));
@@ -90,6 +94,16 @@ export function ItemPropertiesDialog() {
                 <span>
                   <input type="number" step="any" value={shapeWidth} onChange={(e) => setShapeWidth(Number(e.target.value) || 0)} style={{ width: 90 }} /> {units}
                 </span>
+                <span>Line style:</span>
+                <span>
+                  <select value={shapeLineStyle} onChange={(e) => setShapeLineStyle(e.target.value as typeof shapeLineStyle)} data-testid="shape-line-style">
+                    {LINE_STYLE_CHOICES.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </span>
                 {isOpenKind(shape.kind) && (
                   <>
                     <EndingRows label="Start" value={startEnding} onChange={setStartEnding} units={units} testid="start" />
@@ -133,6 +147,8 @@ export function ItemPropertiesDialog() {
                 // The layer and the line width as before, then the fill as one of the five choices: one undo step.
                 const cmds: Cmd[] = [{ op: "edit_shape", id, layer: shapeLayer, stroke_width, filled: shapeFill === "solid" }];
                 if (canFill(shape.kind) && shapeFill !== fillOf(shape)) cmds.push({ op: "pcb_item", verb: "set_shape_style", ids: [id], fill: shapeFill });
+                // `m_item->SetLineStyle( it->first )`: OK writes the style the combo shows, so a file's `default` comes back `solid`, as KiCad's dialog leaves it.
+                cmds.push({ op: "pcb_item", verb: "set_shape_style", ids: [id], line_style: shapeLineStyle });
                 // The endings of an open shape, as `TransferDataFromWindow` sets them (`SetStartEndingStyle`, the sizes at 0 or more), when they changed.
                 if (isOpenKind(shape.kind)) {
                   const start = endingCmd(startEnding, units);

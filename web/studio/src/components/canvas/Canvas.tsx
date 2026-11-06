@@ -38,7 +38,7 @@ import { reshapeCmds } from "../../kicad-port/shapeFill";
 import { applyCommands } from "../../actions/pcbSweepKit";
 import { picker } from "../../actions/pcbPicker";
 import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
-import { paintBoard, type PaintOptions } from "./painter";
+import { boardDashRatios, paintBoard, type PaintOptions } from "./painter";
 import { buildPaintAppearance } from "./appearancePaint";
 import { netsContext } from "../../kicad-port/appearanceNets";
 import { isStale } from "../../kicad-port/checkRevision";
@@ -416,6 +416,7 @@ export function Canvas() {
       units: state.units,
       zoneCornerPreview,
       shapePointPreview,
+      dashRatios: boardDashRatios(board),
       layerVisible: state.layerVisible,
       layerOpacity: state.layerOpacity,
       activeLayer: state.activeLayer,

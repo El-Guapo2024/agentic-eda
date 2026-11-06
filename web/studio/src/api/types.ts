@@ -653,6 +653,9 @@ interface ShapeCommon {
   /** A solder-mask opening of a shape on outer copper (`PCB_SHAPE::HasSolderMask`), and its own margin (absent: the board's). */
   solder_mask?: boolean;
   solder_mask_margin?: Nm;
+  /** The stroke's line style when it is not solid (`STROKE_PARAMS::GetLineStyle`: the board's `shape_styles`, a footprint graphic's own); absent for a solid or
+   *  `default` one. Drawn as kicad-port/strokeDash.ts cuts it (UI-LEFT P5). */
+  dash?: FpDash;
 }
 
 export type Shape =
